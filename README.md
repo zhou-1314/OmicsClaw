@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/images/OmicsClaw_logo.png" alt="OmicsClaw Logo" width="400"/>
+  <img src="docs/images/OmicsClaw_logo.jpeg" alt="OmicsClaw Logo" width="400"/>
 
   <h3>🧬 OmicsClaw</h3>
   <p><strong>Multi-omics analysis platform with 40+ specialized skills.</strong></p>
@@ -340,9 +340,9 @@ If you use OmicsClaw in your research, please cite:
 ```bibtex
 @software{omicsclaw2026,
   title = {OmicsClaw: Multi-omics Analysis Platform},
-  author = {OmicsClaw Team},
+  author = {Zhou weige},
   year = {2026},
-  url = {https://github.com/OmicsClaw/OmicsClaw}
+  url = {https://github.com/zhou-1314/OmicsClaw}
 }
 ```
 
