@@ -71,7 +71,7 @@ python omicsclaw.py run spatial-preprocessing --demo
 
 ### Spatial Transcriptomics (15 skills)
 
-- **Foundation:** `spatial-preprocessing` — QC, normalization, clustering, UMAP
+- **Basic:** `spatial-preprocessing` — QC, normalization, clustering, UMAP
 - **Analysis:** `spatial-domain-identification`, `spatial-cell-annotation`, `spatial-deconvolution`, `spatial-statistics`, `spatial-svg-detection`, `spatial-de`, `spatial-condition-comparison`
 - **Advanced:** `spatial-cell-communication`, `spatial-velocity`, `spatial-trajectory`, `spatial-enrichment`, `spatial-cnv`
 - **Integration:** `spatial-integration`, `spatial-registration`
@@ -101,19 +101,95 @@ python omicsclaw.py run spatial-preprocessing --demo
 
 ### Single-Cell Omics (9 skills)
 
-`sc-preprocessing` • `sc-doublet-detection` • `sc-trajectory` • `sc-cell-annotation` • `sc-batch-integration` • `sc-de` • `sc-grn` • `sc-cell-communication` • `sc-multiome`
+- **Basic:** `sc-preprocessing`, `sc-doublet-detection`
+- **Analysis:** `sc-cell-annotation`, `sc-de`
+- **Advanced:** `sc-trajectory`, `sc-grn`, `sc-cell-communication`
+- **Integration:** `sc-batch-integration`, `sc-multiome`
+
+<details>
+<summary>View all single-cell skills</summary>
+
+| Skill | Description | Key Methods |
+|-------|-------------|-------------|
+| `sc-preprocessing` | QC, normalization, HVG, PCA, UMAP | Scanpy, Seurat |
+| `sc-doublet-detection` | Identify and remove doublets | Scrublet, DoubletFinder |
+| `sc-cell-annotation` | Cell type annotation | CellTypist, SingleR |
+| `sc-de` | Differential expression | Wilcoxon, MAST, DESeq2 |
+| `sc-trajectory` | Pseudo-time & trajectory inference | Monocle3, Slingshot |
+| `sc-grn` | Gene regulatory networks | SCENIC, CellOracle |
+| `sc-cell-communication` | Ligand-receptor interactions | CellPhoneDB, CellChat |
+| `sc-batch-integration` | Multi-sample integration | Harmony, scVI, Seurat v4 |
+| `sc-multiome` | Multi-omics joint analysis | MOFA+, WNN |
+
+</details>
 
 ### Genomics (10 skills)
 
-`genomics-vcf-operations` • `genomics-variant-calling` • `genomics-qc` • `genomics-alignment` • `genomics-variant-annotation` • `genomics-sv-detection` • `genomics-assembly` • `genomics-phasing` • `genomics-cnv-calling` • `genomics-epigenomics`
+- **Basic:** `genomics-qc`, `genomics-alignment`, `genomics-vcf-operations`
+- **Analysis:** `genomics-variant-calling`, `genomics-variant-annotation`, `genomics-sv-detection`, `genomics-cnv-calling`
+- **Advanced:** `genomics-assembly`, `genomics-phasing`, `genomics-epigenomics`
+
+<details>
+<summary>View all genomics skills</summary>
+
+| Skill | Description | Key Methods |
+|-------|-------------|-------------|
+| `genomics-qc` | Sequencing quality control | FastQC, MultiQC |
+| `genomics-alignment` | Read mapping & alignment | BWA, Bowtie2, STAR |
+| `genomics-vcf-operations` | VCF filtering and manipulation | bcftools, GATK |
+| `genomics-variant-calling` | SNV and INDEL calling | GATK HaplotypeCaller, FreeBayes |
+| `genomics-variant-annotation` | Annotate variants with effects | SnpEff, VEP |
+| `genomics-sv-detection` | Structural variant detection | Delly, Manta, Lumpy |
+| `genomics-cnv-calling` | Copy number variation calling | CNVkit, Control-FREEC |
+| `genomics-assembly` | De novo genome assembly | SPAdes, Megahit |
+| `genomics-phasing` | Haplotype phasing | SHAPEIT, Whatshap |
+| `genomics-epigenomics` | ATAC-seq/ChIP-seq analysis | MACS2, HOMER |
+
+</details>
 
 ### Proteomics (8 skills)
 
-`proteomics-ms-qc` • `proteomics-data-import` • `proteomics-identification` • `proteomics-quantification` • `proteomics-de` • `proteomics-ptm` • `proteomics-enrichment` • `proteomics-structural`
+- **Basic:** `proteomics-data-import`, `proteomics-ms-qc`
+- **Analysis:** `proteomics-identification`, `proteomics-quantification`, `proteomics-de`
+- **Advanced:** `proteomics-ptm`, `proteomics-enrichment`, `proteomics-structural`
+
+<details>
+<summary>View all proteomics skills</summary>
+
+| Skill | Description | Key Methods |
+|-------|-------------|-------------|
+| `proteomics-data-import` | RAW to open format conversion | ThermoRawFileParser, msconvert |
+| `proteomics-ms-qc` | Mass spectrometry QC | PTXQC, rawtools |
+| `proteomics-identification` | Peptide and protein ID | MaxQuant, MSFragger, Comet |
+| `proteomics-quantification` | Label-free or isobaric quant | DIA-NN, Skyline, FlashLFQ |
+| `proteomics-de` | Differential abundance analysis | MSstats, limma |
+| `proteomics-ptm` | Post-translational modifications | PTM-prophet, MaxQuant |
+| `proteomics-enrichment` | Protein pathway enrichment | Perseus, clusterProfiler |
+| `proteomics-structural` | 3D structure & cross-linking | AlphaFold, xQuest |
+
+</details>
 
 ### Metabolomics (8 skills)
 
-`metabolomics-peak-detection` • `metabolomics-xcms-preprocessing` • `metabolomics-annotation` • `metabolomics-normalization` • `metabolomics-de` • `metabolomics-pathway-enrichment` • `metabolomics-statistics` • `metabolomics-quantification`
+- **Basic:** `metabolomics-peak-detection`, `metabolomics-xcms-preprocessing`, `metabolomics-normalization`
+- **Analysis:** `metabolomics-annotation`, `metabolomics-quantification`, `metabolomics-statistics`, `metabolomics-de`
+- **Advanced:** `metabolomics-pathway-enrichment`
+
+<details>
+<summary>View all metabolomics skills</summary>
+
+| Skill | Description | Key Methods |
+|-------|-------------|-------------|
+| `metabolomics-peak-detection` | Extract peaks from MS data | XCMS, MZmine |
+| `metabolomics-xcms-preprocessing` | Alignment & feature grouping | XCMS |
+| `metabolomics-normalization` | Signal drift correction | NOREVA, MetaboAnalyst |
+| `metabolomics-annotation` | Metabolite ID & adduct matching | MS-DIAL, SIRIUS |
+| `metabolomics-quantification` | Feature quantification | OpenMS, XCMS |
+| `metabolomics-statistics` | Multivariate statistics | MetaboAnalyst, ropls |
+| `metabolomics-de` | Differential metabolite analysis | t-test, ANOVA |
+| `metabolomics-pathway-enrichment` | Pathway and network analysis | MSEA, MetaboAnalyst |
+
+</details>
 
 ### Orchestrator (1 skill)
 
@@ -371,4 +447,4 @@ If you use OmicsClaw in your research, please cite:
 
 ---
 
-**Questions?** Open an issue on [GitHub](https://github.com/OmicsClaw/OmicsClaw/issues)
+**Questions?** Open an issue on [GitHub](https://github.com/zhou-1314/OmicsClaw/issues)
