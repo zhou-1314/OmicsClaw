@@ -129,6 +129,31 @@ pending_text: list[str] = []
 
 BOT_START_TIME = time.time()
 
+# Memory system (optional)
+memory_store = None
+session_manager = None
+
+
+# ---------------------------------------------------------------------------
+# Session Manager
+# ---------------------------------------------------------------------------
+
+class SessionManager:
+    """Manages user sessions with memory persistence."""
+
+    def __init__(self, store):
+        self.store = store
+
+    async def get_or_create(self, user_id: str, platform: str, chat_id: str):
+        """Get existing session or create new one."""
+        session_id = f"{platform}:{user_id}:{chat_id}"
+        session = await self.store.get_session(session_id)
+        if not session:
+            session = await self.store.create_session(user_id, platform, chat_id)
+        else:
+            await self.store.update_session(session_id, {"last_activity": datetime.utcnow()})
+        return session
+
 
 def init(
     api_key: str,
@@ -141,7 +166,7 @@ def init(
     ``provider`` selects a preset (deepseek, gemini, openai, custom).
     Explicit ``base_url`` / ``model`` override the preset.
     """
-    global llm, OMICSCLAW_MODEL, LLM_PROVIDER_NAME
+    global llm, OMICSCLAW_MODEL, LLM_PROVIDER_NAME, memory_store, session_manager
 
     resolved_url, resolved_model = resolve_provider(
         provider=provider,
@@ -160,6 +185,31 @@ def init(
         f"LLM initialised: provider={LLM_PROVIDER_NAME}, "
         f"model={OMICSCLAW_MODEL}, base_url={resolved_url or '(default)'}"
     )
+
+    # Optional memory initialization
+    if os.getenv("OMICSCLAW_MEMORY_BACKEND") == "sqlite":
+        try:
+            from bot.memory import SQLiteBackend, SecureFieldEncryptor
+
+            db_path = os.getenv("OMICSCLAW_MEMORY_DB_PATH", "bot/data/memory.db")
+            encryption_key = os.getenv("OMICSCLAW_MEMORY_ENCRYPTION_KEY")
+
+            if not encryption_key:
+                import secrets
+                encryption_key = secrets.token_urlsafe(32)[:32].ljust(32, '0')
+                logger.warning("No encryption key set, using temporary key")
+
+            encryptor = SecureFieldEncryptor(encryption_key.encode()[:32])
+            store = SQLiteBackend(db_path, encryptor)
+            asyncio.create_task(store.initialize())
+
+            memory_store = store
+            session_manager = SessionManager(store)
+            logger.info("Memory system initialized")
+        except ImportError:
+            logger.warning("Memory dependencies not installed, skipping memory init")
+        except Exception as e:
+            logger.error(f"Memory init failed: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -1394,7 +1444,7 @@ MAX_TOOL_ITERATIONS = 10
 # ---------------------------------------------------------------------------
 
 
-async def llm_tool_loop(chat_id: int | str, user_content: str | list) -> str:
+async def llm_tool_loop(chat_id: int | str, user_content: str | list, user_id: str = None, platform: str = None) -> str:
     """
     Run the LLM tool-use loop:
     1. Append user message to history
@@ -1409,6 +1459,12 @@ async def llm_tool_loop(chat_id: int | str, user_content: str | list) -> str:
         if cmd == "/clear" or cmd == "/new":
             if chat_id in conversations:
                 del conversations[chat_id]
+
+            # Clear memory session if enabled
+            if session_manager and user_id and platform:
+                session_id = f"{platform}:{user_id}:{chat_id}"
+                await memory_store.delete_session(session_id)
+
             return "✓ New conversation started." if cmd == "/new" else "✓ Conversation history cleared."
 
         elif cmd == "/files":
