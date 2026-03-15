@@ -135,6 +135,37 @@ session_manager = None
 
 
 # ---------------------------------------------------------------------------
+# Memory Auto-Capture Helpers
+# ---------------------------------------------------------------------------
+
+async def _auto_capture_analysis(session_id: str, skill: str, args: dict, output_dir: Path, success: bool):
+    """Auto-capture analysis memory after skill execution."""
+    if not session_manager or not session_id:
+        return
+
+    try:
+        from bot.memory.models import AnalysisMemory
+
+        # Extract key parameters
+        method = args.get("method", "default")
+        input_path = args.get("file_path", "")
+
+        memory = AnalysisMemory(
+            source_dataset_id="",  # Will link later if needed
+            skill=skill,
+            method=method,
+            parameters={"input": input_path} if input_path else {},
+            output_path=str(output_dir) if output_dir else "",
+            status="completed" if success else "failed"
+        )
+
+        await memory_store.save_memory(session_id, memory)
+        logger.debug(f"Auto-captured analysis: {skill} ({method})")
+    except Exception as e:
+        logger.error(f"Auto-capture failed: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Session Manager
 # ---------------------------------------------------------------------------
 
@@ -727,7 +758,7 @@ def discover_file(filename_or_pattern: str) -> list[Path]:
 # ---------------------------------------------------------------------------
 
 
-async def execute_omicsclaw(args: dict) -> str:
+async def execute_omicsclaw(args: dict, session_id: str = None) -> str:
     """Execute an OmicsClaw skill via subprocess."""
     skill_key = args.get("skill", "auto")
     mode = args.get("mode", "demo")
@@ -922,6 +953,10 @@ async def execute_omicsclaw(args: dict) -> str:
             continue
         if not skip:
             keep_lines.append(line)
+
+    # Auto-capture analysis memory
+    if session_id:
+        await _auto_capture_analysis(session_id, skill_key, args, out_dir, True)
 
     return "\n".join(keep_lines).strip()
 
@@ -1741,7 +1776,12 @@ For more info: https://github.com/zhou-1314/OmicsClaw"""
                 audit("tool_call", chat_id=str(chat_id), tool=func_name,
                       args_preview=json.dumps(func_args, default=str)[:300])
                 try:
-                    result = await executor(func_args)
+                    # Pass session_id to omicsclaw executor for auto-capture
+                    if func_name == "omicsclaw" and user_id and platform:
+                        session_id = f"{platform}:{user_id}:{chat_id}"
+                        result = await executor(func_args, session_id)
+                    else:
+                        result = await executor(func_args)
                 except Exception as tool_err:
                     logger.error(f"Tool {func_name} raised: {tool_err}", exc_info=True)
                     audit("tool_error", chat_id=str(chat_id), tool=func_name,
