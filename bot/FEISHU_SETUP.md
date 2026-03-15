@@ -53,15 +53,21 @@
 
 ### 第二步：飞书后台补全权限与事件订阅
 1. 登录 [飞书开发者后台](https://open.feishu.cn/app)，点击进入你的应用。
-2. **添加机器人能力**：在左侧导航树 -> **添加应用能力** 中，确认你已经成功开启了 **“机器人”** 功能。
-3. **配置权限管理**：在左侧导航树 -> **权限管理** 中，搜索并添加以下必备权限：
-   - 接收单聊、群聊消息 (`im:message.p2p_msg` / `im:message.receive_v1`)
-   - 获取与发送单聊、群组消息 / 以应用身份发送消息 (`im:message:send_as_bot`)
-   - 接收群聊中@机器人消息事件
-   - 获取与上传图片或文件资源 (`im:resource`)，用于读取用户发送的数据和图片文件
-   - 获取群组信息 (`im:chat`)
-4. **开启长连接**：在左侧导航树 -> **事件与回调** 中。由于我们第一步运行的代码使用的是 WebSocket 长连接，**不要在页面上配置请求网址 (Webhook)**，而是直接开启右上角的 **“长连接（云端到本地设备）”** 或客户端模式。
-5. **添加事件订阅**：在“事件与回调 / 事件订阅”页面，点击“添加事件”，搜索并添加 **接收消息** (`im.message.receive_v1`) 事件。
+2. **添加机器人能力**：在左侧导航树 -> **添加应用能力** 中，确认你已经成功开启了 **”机器人”** 功能。
+3. **配置权限管理**：在左侧导航树 -> **权限管理** 中，搜索并添加以下必备权限（**权限类型必须选择”应用权限”**）：
+   - ✅ 接收单聊、群聊消息 (`im:message.p2p_msg` / `im:message.receive_v1`)
+   - ✅ 获取与发送单聊、群组消息 / 以应用身份发送消息 (`im:message:send_as_bot`)
+   - ✅ 接收群聊中@机器人消息事件
+   - ⚠️ **获取群组中所有消息** (`im:message.group_msg`) - **关键权限，缺少此权限将无法接收群聊消息**
+   - ✅ 获取与上传图片或文件资源 (`im:resource`)，用于读取用户发送的数据和图片文件
+   - ✅ 获取群组信息 (`im:chat`)，用于判断群成员数量
+
+   > ⚠️ **重要提示**：
+   > - 所有权限的”权限类型”必须选择 **”应用权限”**（不是”用户权限”）
+   > - `im:message.group_msg` 是接收群聊消息的关键权限，90% 的群聊消息接收问题都是因为缺少此权限
+
+4. **开启长连接**：在左侧导航树 -> **事件与回调** 中。由于我们第一步运行的代码使用的是 WebSocket 长连接，**不要在页面上配置请求网址 (Webhook)**，而是直接开启右上角的 **”长连接（云端到本地设备）”** 或客户端模式。
+5. **添加事件订阅**：在”事件与回调 / 事件订阅”页面，点击”添加事件”，搜索并添加 **接收消息** (`im.message.receive_v1`) 事件。
 
 ### 第三步：发布新版本（极其关键的易错点）
 > ⚠️ **核心机制警示**：飞书机制规定，你在后台修改的任何权限、事件订阅配置，**点击保存后都不会立刻生效！必须创建一个全新的应用版本并走完发布流程。** 90% 的初学者都会卡在这里，导致发消息没反应。
@@ -129,12 +135,18 @@ Before diving into console configuration, run the basic connection test script a
 ### Step 2: Configure Permissions and Event Subscriptions
 1. Log in to the [Feishu Developer Console](https://open.feishu.cn/app) and enter your app.
 2. **Add Bot Capability**: Navigate to **Add Features** on the left menu and confirm you have successfully enabled the **"Bot"** feature.
-3. **Manage Permissions**: Go to **Permissions** on the left menu, search for, and add the following required permissions:
-   - Read single/group chat messages (`im:message.p2p_msg` / `im:message.receive_v1`)
-   - Receive @bot events in groups
-   - Send messages as bot (`im:message:send_as_bot`)
-   - Upload and download resource files (`im:resource`)
-   - Read group info (`im:chat`)
+3. **Manage Permissions**: Go to **Permissions** on the left menu, search for, and add the following required permissions (**Permission type must be "Application Permission"**):
+   - ✅ Read single/group chat messages (`im:message.p2p_msg` / `im:message.receive_v1`)
+   - ✅ Receive @bot events in groups
+   - ✅ Send messages as bot (`im:message:send_as_bot`)
+   - ⚠️ **Get all messages in group chat** (`im:message.group_msg`) - **Critical permission, without this you cannot receive group messages**
+   - ✅ Upload and download resource files (`im:resource`)
+   - ✅ Read group info (`im:chat`) - Used to determine group member count
+
+   > ⚠️ **Important Notes**:
+   > - All permissions must be **"Application Permission"** type (not "User Permission")
+   > - `im:message.group_msg` is the key permission for receiving group messages - 90% of group message issues are caused by missing this permission
+
 4. **Enable Long Connection**: Go to **Event Subscriptions** on the left menu. Since our terminal script actively uses a WebSocket, **do not configure a Request URL (Webhook)**. Instead, directly enable the **"Long Connection"** option.
 5. **Add Event Subscriptions**: Still in "Event Subscriptions" settings, click "Add events", then search and add the **Receive message** (`im.message.receive_v1`) event.
 

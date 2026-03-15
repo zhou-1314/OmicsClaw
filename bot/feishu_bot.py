@@ -39,6 +39,7 @@ from lark_oapi.api.im.v1 import (
     DeleteMessageRequest,
     CreateFileRequest,
     CreateFileRequestBody,
+    GetChatRequest,
 )
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -130,6 +131,45 @@ def _is_duplicate(message_id: str) -> bool:
         return True
     _seen[message_id] = now
     return False
+
+
+# ---------------------------------------------------------------------------
+# Group member count cache
+# ---------------------------------------------------------------------------
+
+_group_member_count: dict[str, tuple[int, float]] = {}
+_MEMBER_COUNT_TTL = 3600  # Cache for 1 hour
+
+
+def _get_group_member_count(chat_id: str) -> int:
+    """Get group member count with caching."""
+    now = time.time()
+
+    # Check cache
+    if chat_id in _group_member_count:
+        count, timestamp = _group_member_count[chat_id]
+        if now - timestamp < _MEMBER_COUNT_TTL:
+            return count
+
+    # Fetch from API
+    try:
+        request = GetChatRequest.builder().chat_id(chat_id).build()
+        response = _lark_client.im.v1.chat.get(request)
+
+        if response.success() and response.data:
+            # Get user_count and bot_count (both are strings)
+            user_count = int(response.data.user_count or 0)
+            bot_count = int(response.data.bot_count or 0)
+            member_count = user_count + bot_count
+
+            _group_member_count[chat_id] = (member_count, now)
+            logger.info(f"Group {chat_id} has {member_count} members ({user_count} users + {bot_count} bots)")
+            return member_count
+    except Exception as e:
+        logger.warning(f"Failed to get group member count: {e}")
+
+    # Default to 3+ (assume normal group) if API fails
+    return 3
 
 
 # ---------------------------------------------------------------------------
@@ -597,11 +637,20 @@ def _handle_feishu_event(data: lark.im.v1.P2ImMessageReceiveV1):
             has_attachment = len(attachments) > 0
             mentioned = len(mentions) > 0
 
-            if has_attachment and not mentioned and cleaned in ("[image]", "[attachment]", ""):
-                return
-            if not has_attachment and not _should_respond_in_group(cleaned, mentions):
-                return
-            text = cleaned
+            # Check if it's a 2-person group (bot + user)
+            member_count = _get_group_member_count(chat_id)
+            is_two_person_group = member_count == 2
+
+            # In 2-person groups, always respond (no need to @)
+            if is_two_person_group:
+                text = cleaned
+            else:
+                # Normal group: apply filters
+                if has_attachment and not mentioned and cleaned in ("[image]", "[attachment]", ""):
+                    return
+                if not has_attachment and not _should_respond_in_group(cleaned, mentions):
+                    return
+                text = cleaned
 
         session_key = f"feishu:{sender_id if chat_type == 'p2p' else chat_id}"
 
@@ -647,6 +696,9 @@ def _handle_feishu_event(data: lark.im.v1.P2ImMessageReceiveV1):
                 except Exception:
                     pass
             return
+
+        # Add Feishu emoji to reply
+        reply_text = reply_text.strip() + " [看]"
 
         # Send pending media first
         media_items = core.pending_media.get(0, [])
