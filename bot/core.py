@@ -1402,6 +1402,160 @@ async def llm_tool_loop(chat_id: int | str, user_content: str | list) -> str:
     3. If tool_calls -> execute -> append results -> call again
     4. Return final text
     """
+    # Handle commands before LLM call
+    if isinstance(user_content, str) and user_content.strip().startswith("/"):
+        cmd = user_content.strip().lower()
+
+        if cmd == "/clear" or cmd == "/new":
+            if chat_id in conversations:
+                del conversations[chat_id]
+            return "✓ New conversation started." if cmd == "/new" else "✓ Conversation history cleared."
+
+        elif cmd == "/files":
+            try:
+                items = []
+                for item in sorted(DATA_DIR.iterdir()):
+                    if item.is_file():
+                        size_mb = item.stat().st_size / (1024 * 1024)
+                        ext = item.suffix
+                        items.append(f"📄 {item.name} ({size_mb:.2f} MB)")
+                if not items:
+                    return f"📁 Data directory is empty: {DATA_DIR}"
+                return f"📁 Data files ({DATA_DIR}):\n" + "\n".join(items[:20])
+            except Exception as e:
+                return f"Error listing files: {e}"
+
+        elif cmd == "/outputs":
+            try:
+                items = []
+                if OUTPUT_DIR.exists():
+                    for item in sorted(OUTPUT_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+                        if item.is_dir():
+                            mtime = datetime.fromtimestamp(item.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+                            items.append(f"📊 {item.name} ({mtime})")
+                if not items:
+                    return f"📂 No analysis outputs yet: {OUTPUT_DIR}"
+                return f"📂 Recent outputs ({OUTPUT_DIR}):\n" + "\n".join(items[:10])
+            except Exception as e:
+                return f"Error listing outputs: {e}"
+
+        elif cmd == "/skills":
+            skill_list = []
+            for alias, info in registry.skills.items():
+                desc = info.get("description", alias).split("—")[0].strip()
+                skill_list.append(f"• {alias}: {desc}")
+            return f"🔬 Available Skills ({len(skill_list)}):\n" + "\n".join(skill_list)
+
+        elif cmd == "/recent":
+            try:
+                items = []
+                if OUTPUT_DIR.exists():
+                    for item in sorted(OUTPUT_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True)[:3]:
+                        if item.is_dir():
+                            mtime = datetime.fromtimestamp(item.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+                            report = item / "report.md"
+                            summary = "No report"
+                            if report.exists():
+                                lines = report.read_text(encoding="utf-8").split("\n")
+                                summary = next((l.strip("# ") for l in lines if l.startswith("# ")), "Analysis complete")
+                            items.append(f"📊 {item.name}\n   {mtime} - {summary}")
+                if not items:
+                    return "📂 No recent analyses found"
+                return "📂 Last 3 Analyses:\n\n" + "\n\n".join(items)
+            except Exception as e:
+                return f"Error: {e}"
+
+        elif cmd == "/demo":
+            return """🎬 Quick Demo Options:
+
+Run any of these for instant results:
+• "run preprocess demo"
+• "run spatial-domain-identification demo"
+• "run spatial-de demo"
+• "run ms-qc demo"
+
+Or try: "show me a spatial transcriptomics demo" """
+
+        elif cmd == "/examples":
+            return """📚 Usage Examples:
+
+**Literature Analysis:**
+• "Parse this paper: https://pubmed.ncbi.nlm.nih.gov/12345"
+• "Fetch GEO metadata for GSE204716"
+• Upload a PDF file directly
+
+**Data Analysis:**
+• "Run spatial-preprocessing on brain_visium.h5ad"
+• "Analyze data/sample.h5ad with spatial-domain-identification"
+• "Run ms-qc on proteomics_data.mzML"
+
+**File Operations:**
+• "List files in data directory"
+• "Show first 20 lines of results.csv"
+• "Download https://example.com/data.h5ad"
+
+**Path Mode (for large files):**
+• "分析 data/brain_visium.h5ad"
+• "对 /mnt/nas/exp1.mzML 做质量控制" """
+
+        elif cmd == "/status":
+            uptime = int(time.time() - BOT_START_TIME)
+            hours = uptime // 3600
+            minutes = (uptime % 3600) // 60
+            return f"""🤖 Bot Status:
+
+• Uptime: {hours}h {minutes}m
+• LLM Provider: {LLM_PROVIDER_NAME}
+• Model: {OMICSCLAW_MODEL}
+• Active Conversations: {len(conversations)}
+• Tools Available: {len(TOOL_EXECUTORS)}
+• Skills Loaded: {len(registry.skills)}
+• Data Directory: {DATA_DIR}
+• Output Directory: {OUTPUT_DIR}"""
+
+        elif cmd == "/version":
+            return f"""ℹ️ OmicsClaw Version:
+
+• Project: OmicsClaw Multi-Omics Analysis Platform
+• Domains: Spatial Transcriptomics, Single-Cell, Genomics, Proteomics, Metabolomics
+• Skills: {len(registry.skills)} analysis skills
+• Tools: {len(TOOL_EXECUTORS)} bot tools
+• Repository: https://github.com/zhou-1314/OmicsClaw
+
+For updates and documentation, visit the GitHub repository."""
+
+        elif cmd == "/help":
+            return """# OmicsClaw Bot Commands
+
+**Quick Commands:**
+- `/new` - Start new conversation
+- `/clear` - Clear conversation history
+- `/help` - Show this help message
+- `/files` - List data files
+- `/outputs` - Show recent analysis results
+- `/skills` - List all available analysis skills
+- `/recent` - Show last 3 analyses
+- `/demo` - Run a quick demo
+- `/examples` - Show usage examples
+- `/status` - Bot status and uptime
+- `/version` - Show version info
+
+**Literature Analysis:**
+- Upload PDF or send article URL/DOI
+- "Fetch GEO metadata for GSE123456"
+- "Parse this paper: https://..."
+
+**File Operations:**
+- "List files in data directory"
+- "Show contents of file.csv"
+- "Download file from URL"
+
+**Data Analysis:**
+- "Run spatial-preprocessing on data.h5ad"
+- "Analyze GSE123456 dataset"
+
+For more info: https://github.com/zhou-1314/OmicsClaw"""
+
     _ensure_system_prompt()
     if llm is None:
         return "Error: LLM client not initialised. Call core.init() first."
