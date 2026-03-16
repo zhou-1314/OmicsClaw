@@ -72,11 +72,18 @@ def _run_liana(
     """Run LIANA+ multi-method consensus ranking."""
     li = require("liana", feature="LIANA+ cell communication")
 
-    logger.info("Running LIANA+ rank_aggregate (n_perms=%d) ...", n_perms)
+    # LIANA expects raw counts in adata.raw when use_raw=True (default).
+    # If .raw is not available, fall back to .X (typically log-normalized).
+    use_raw = adata.raw is not None
+
+    logger.info(
+        "Running LIANA+ rank_aggregate (n_perms=%d, use_raw=%s) ...",
+        n_perms, use_raw,
+    )
     li.mt.rank_aggregate(
         adata,
         groupby=cell_type_key,
-        use_raw=False,
+        use_raw=use_raw,
         n_perms=n_perms,
         verbose=True,
     )
@@ -102,13 +109,18 @@ def _run_liana(
     else:
         df["score"] = 0.0
 
-    df["pvalue"] = df.get("specificity_rank", 0.5)
+    # specificity_rank is a proper p-value proxy (lower = more specific)
+    if "specificity_rank" in df.columns:
+        df["pvalue"] = df["specificity_rank"]
+    else:
+        df["pvalue"] = 0.5
 
     for col in ["ligand", "receptor", "source", "target", "score", "pvalue"]:
         if col not in df.columns:
             df[col] = ""
 
-    return df[["ligand", "receptor", "source", "target", "score", "pvalue"]].copy()
+    out = df[["ligand", "receptor", "source", "target", "score", "pvalue"]].copy()
+    return out.sort_values("score", ascending=False).reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
@@ -124,13 +136,29 @@ def _run_cellphonedb(
     n_perms: int = 1000,
 ) -> pd.DataFrame:
     """Run CellPhoneDB statistical method."""
-    require("cellphonedb", feature="CellPhoneDB cell communication")
+    cpdb = require("cellphonedb", feature="CellPhoneDB cell communication")
     from cellphonedb.src.core.methods import cpdb_statistical_analysis_method
 
     if species != "human":
         raise ValueError("CellPhoneDB supports human data only. Use '--method liana' for mouse.")
 
     logger.info("Running CellPhoneDB (n_perms=%d) ...", n_perms)
+
+    # Locate the built-in CellPhoneDB database
+    cpdb_db_path = None
+    try:
+        import cellphonedb
+        cpdb_pkg_dir = Path(cellphonedb.__file__).parent
+        # CellPhoneDB v5 stores db as .zip in src/core/data/
+        for candidate in [
+            cpdb_pkg_dir / "src" / "core" / "data" / "cellphonedb.zip",
+            cpdb_pkg_dir / "data" / "cellphonedb.zip",
+        ]:
+            if candidate.exists():
+                cpdb_db_path = str(candidate)
+                break
+    except Exception:
+        pass
 
     import tempfile as _tf
     with _tf.TemporaryDirectory(prefix="cpdb_") as tmp:
@@ -156,7 +184,7 @@ def _run_cellphonedb(
         meta_df.to_csv(meta_path, sep="\t", index=False)
 
         result = cpdb_statistical_analysis_method.call(
-            cpdb_file_path=None,
+            cpdb_file_path=cpdb_db_path,
             meta_file_path=str(meta_path),
             counts_file_path=str(counts_path),
             counts_data="hgnc_symbol",
@@ -246,7 +274,6 @@ def _run_fastccc(
 
 def _run_cellchat_r(adata, *, cell_type_key: str = "leiden", species: str = "human") -> pd.DataFrame:
     """Run CellChat via rpy2 (requires R package CellChat)."""
-    validate_r_environment(required_r_packages=["CellChat"])
     robjects, pandas2ri, numpy2ri, importr, localconverter, default_converter, openrlib, anndata2ri = (
         validate_r_environment(required_r_packages=["CellChat"])
     )

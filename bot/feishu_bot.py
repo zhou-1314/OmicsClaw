@@ -118,6 +118,7 @@ def _run_async(coro, timeout=300):
 
 _seen: dict[str, float] = {}
 _SEEN_TTL = 600
+_FEISHU_MAX_TEXT_LEN = 4000  # Safe limit for Feishu text messages
 
 
 def _is_duplicate(message_id: str) -> bool:
@@ -131,6 +132,27 @@ def _is_duplicate(message_id: str) -> bool:
         return True
     _seen[message_id] = now
     return False
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
+
+RATE_LIMIT_PER_HOUR = int(os.environ.get("FEISHU_RATE_LIMIT_PER_HOUR", "60"))
+_rate_buckets: dict[str, list[float]] = {}
+
+
+def _check_rate_limit(sender_id: str) -> bool:
+    """Return True if the sender is within rate limits."""
+    if RATE_LIMIT_PER_HOUR <= 0:
+        return True
+    now = time.time()
+    bucket = _rate_buckets.setdefault(sender_id, [])
+    bucket[:] = [t for t in bucket if now - t < 3600]
+    if len(bucket) >= RATE_LIMIT_PER_HOUR:
+        return False
+    bucket.append(now)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -405,8 +427,10 @@ def _should_respond_in_group(text: str, mentions: list) -> bool:
 # Feishu sending
 # ---------------------------------------------------------------------------
 
-def _send_text(chat_id: str, text: str) -> str | None:
-    """Send a text message. Returns message_id or None."""
+def _send_text(chat_id: str, text: str, retries: int = 3) -> str | None:
+    """Send a text message with retry for transient network errors. Returns message_id or None."""
+    import requests as _requests
+
     request = CreateMessageRequest.builder() \
         .receive_id_type("chat_id") \
         .request_body(
@@ -417,14 +441,26 @@ def _send_text(chat_id: str, text: str) -> str | None:
             .build()
         ).build()
 
-    response = _lark_client.im.v1.message.create(request)
-    if not response.success():
-        logger.error(f"Send text failed: {response.code} {response.msg}")
-        return None
-    return response.data.message_id if response.data else None
+    for attempt in range(1, retries + 1):
+        try:
+            response = _lark_client.im.v1.message.create(request)
+            if not response.success():
+                logger.error(f"Send text failed: {response.code} {response.msg}")
+                return None
+            return response.data.message_id if response.data else None
+        except (_requests.exceptions.SSLError,
+                _requests.exceptions.ConnectionError) as e:
+            if attempt < retries:
+                wait = attempt * 2
+                logger.warning(f"Send text attempt {attempt}/{retries} failed ({e}), retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                logger.error(f"Send text failed after {retries} attempts: {e}")
+                return None
 
 
-def _update_text(message_id: str, text: str):
+def _update_text(message_id: str, text: str) -> bool:
+    """Update an existing message. Returns True on success."""
     request = UpdateMessageRequest.builder() \
         .message_id(message_id) \
         .request_body(
@@ -433,7 +469,15 @@ def _update_text(message_id: str, text: str):
             .content(json.dumps({"text": text}))
             .build()
         ).build()
-    _lark_client.im.v1.message.update(request)
+    try:
+        response = _lark_client.im.v1.message.update(request)
+        if not response.success():
+            logger.warning(f"Update text failed: {response.code} {response.msg}")
+            return False
+        return True
+    except Exception as e:
+        logger.warning(f"Update text error: {e}")
+        return False
 
 
 def _delete_message(message_id: str):
@@ -443,8 +487,34 @@ def _delete_message(message_id: str):
     _lark_client.im.v1.message.delete(request)
 
 
+def _send_long_text(chat_id: str, text: str) -> str | None:
+    """Send a text message, splitting into chunks if it exceeds Feishu limits."""
+    if len(text) <= _FEISHU_MAX_TEXT_LEN:
+        return _send_text(chat_id, text)
+
+    first_mid = None
+    while text:
+        if len(text) <= _FEISHU_MAX_TEXT_LEN:
+            chunk = text
+            text = ""
+        else:
+            split_at = text.rfind("\n\n", 0, _FEISHU_MAX_TEXT_LEN)
+            if split_at == -1:
+                split_at = text.rfind("\n", 0, _FEISHU_MAX_TEXT_LEN)
+            if split_at == -1:
+                split_at = _FEISHU_MAX_TEXT_LEN
+            chunk = text[:split_at]
+            text = text[split_at:].lstrip("\n")
+        if chunk.strip():
+            mid = _send_text(chat_id, chunk.strip())
+            if first_mid is None:
+                first_mid = mid
+    return first_mid
+
+
 def _send_image_file(chat_id: str, filepath: str, caption: str | None = None):
     """Upload a local image file and send it to the chat."""
+    import requests as _requests
     try:
         with open(filepath, "rb") as f:
             upload_req = CreateImageRequest.builder() \
@@ -474,12 +544,15 @@ def _send_image_file(chat_id: str, filepath: str, caption: str | None = None):
 
         if caption and caption.strip():
             _send_text(chat_id, caption.strip())
+    except (_requests.exceptions.SSLError, _requests.exceptions.ConnectionError):
+        raise  # Let caller handle retries
     except Exception as e:
         logger.error(f"Send image failed: {e}")
 
 
 def _send_document_file(chat_id: str, filepath: str, caption: str | None = None):
     """Upload and send a non-image file."""
+    import requests as _requests
     try:
         fname = Path(filepath).name
         with open(filepath, "rb") as f:
@@ -511,27 +584,49 @@ def _send_document_file(chat_id: str, filepath: str, caption: str | None = None)
 
         if caption and caption.strip():
             _send_text(chat_id, caption.strip())
+    except (_requests.exceptions.SSLError, _requests.exceptions.ConnectionError):
+        raise  # Let caller handle retries
     except Exception as e:
         logger.error(f"Send file failed: {e}")
 
 
-def _send_pending_media(chat_id: str):
-    """Send any queued media items to the Feishu chat."""
-    items = core.pending_media.pop(chat_id, [])
+def _send_media_items(chat_id: str, items: list[dict]):
+    """Send media items (figures, reports) to the Feishu chat."""
+    import requests as _requests
+
+    sent = 0
     for item in items:
+        fpath = item.get("path", "")
+        if not fpath or not Path(fpath).exists():
+            logger.warning(f"Media file not found, skipping: {fpath}")
+            continue
         try:
-            fpath = item.get("path", "")
-            if not fpath or not Path(fpath).exists():
-                continue
             if item["type"] == "photo":
                 _send_image_file(chat_id, fpath, caption=Path(fpath).stem.replace("_", " ").title())
+                sent += 1
             elif item["type"] == "document":
                 if fpath.endswith(".png"):
                     _send_image_file(chat_id, fpath)
+                    sent += 1
                 else:
                     _send_document_file(chat_id, fpath)
+                    sent += 1
+        except (_requests.exceptions.SSLError,
+                _requests.exceptions.ConnectionError) as e:
+            logger.warning(f"Network error sending media {fpath}, retrying: {e}")
+            time.sleep(2)
+            try:
+                if item["type"] == "photo" or fpath.endswith(".png"):
+                    _send_image_file(chat_id, fpath)
+                else:
+                    _send_document_file(chat_id, fpath)
+                sent += 1
+            except Exception as e2:
+                logger.error(f"Retry failed for media {fpath}: {e2}")
         except Exception as e:
-            logger.warning(f"Failed to send media {item.get('path')}: {e}")
+            logger.error(f"Failed to send media {fpath}: {e}")
+
+    logger.info(f"Sent {sent}/{len(items)} media items to {chat_id}")
 
 
 # ---------------------------------------------------------------------------
@@ -600,7 +695,14 @@ async def _process_message_async(
         reply = "\n\n".join(core.pending_text)
         core.pending_text.clear()
 
-    return reply
+    # Capture media items atomically here (same async context as the tool execution)
+    # to prevent race conditions when multiple messages are processed concurrently
+    media_items = core.pending_media.pop(0, [])
+    if media_items:
+        logger.info(f"Captured {len(media_items)} pending media items: "
+                     f"{[item.get('path', '?') for item in media_items]}")
+
+    return reply, media_items
 
 
 def _handle_feishu_event(data: lark.im.v1.P2ImMessageReceiveV1):
@@ -620,6 +722,11 @@ def _handle_feishu_event(data: lark.im.v1.P2ImMessageReceiveV1):
         if _is_duplicate(message_id):
             return
         if not message.content:
+            return
+
+        # Rate limiting (after dedup to avoid counting retries)
+        if not _check_rate_limit(sender_id):
+            _send_text(chat_id, f"Rate limit reached ({RATE_LIMIT_PER_HOUR} messages/hour). Please try again later.")
             return
 
         msg_dict = {
@@ -654,17 +761,13 @@ def _handle_feishu_event(data: lark.im.v1.P2ImMessageReceiveV1):
 
         session_key = f"feishu:{sender_id if chat_type == 'p2p' else chat_id}"
 
-        # Rate limiting
-        if not core.check_rate_limit(sender_id):
-            _send_text(chat_id, f"Rate limit reached ({core.RATE_LIMIT_PER_HOUR} messages/hour). Please try again later.")
-            return
-
         logger.info(f"Feishu message: chat_type={chat_type} text={text[:100]}")
         core.audit("message", platform="feishu", chat_id=chat_id,
                     text_preview=text[:200])
 
-        # Thinking placeholder
+        # Thinking placeholder (thread-safe)
         placeholder_id = ""
+        placeholder_lock = threading.Lock()
         done_event = threading.Event()
 
         def _send_thinking():
@@ -673,7 +776,8 @@ def _handle_feishu_event(data: lark.im.v1.P2ImMessageReceiveV1):
                 return
             mid = _send_text(chat_id, "正在分析…")
             if mid:
-                placeholder_id = mid
+                with placeholder_lock:
+                    placeholder_id = mid
 
         timer = None
         if THINKING_THRESHOLD_MS > 0:
@@ -681,12 +785,13 @@ def _handle_feishu_event(data: lark.im.v1.P2ImMessageReceiveV1):
             timer.start()
 
         try:
-            reply = _run_async(
+            reply, media_items = _run_async(
                 _process_message_async(chat_id, session_key, text, attachments, sender_id),
                 timeout=300,
             )
         except Exception as e:
             reply = f"(system error) {e}"
+            media_items = []
         finally:
             done_event.set()
             if timer:
@@ -695,39 +800,41 @@ def _handle_feishu_event(data: lark.im.v1.P2ImMessageReceiveV1):
         reply_text = core.strip_markup(reply or "")
 
         if not reply_text.strip():
-            if placeholder_id:
-                try:
-                    _delete_message(placeholder_id)
-                except Exception:
-                    pass
+            with placeholder_lock:
+                if placeholder_id:
+                    try:
+                        _delete_message(placeholder_id)
+                    except Exception:
+                        pass
             return
 
         # Add Feishu emoji to reply
         reply_text = reply_text.strip() + " [看]"
 
-        # Send pending media first
-        media_items = core.pending_media.get(chat_id, [])
+        # Send media items first (captured atomically from _process_message_async)
         if media_items:
-            if placeholder_id:
-                try:
-                    _delete_message(placeholder_id)
-                except Exception:
-                    pass
-                placeholder_id = ""
-            _send_pending_media(chat_id)
+            with placeholder_lock:
+                if placeholder_id:
+                    try:
+                        _delete_message(placeholder_id)
+                    except Exception:
+                        pass
+                    placeholder_id = ""
+            _send_media_items(chat_id, media_items)
             if reply_text.strip():
-                _send_text(chat_id, reply_text)
+                _send_long_text(chat_id, reply_text)
             return
 
         # Text-only reply
-        if placeholder_id:
-            try:
-                _update_text(placeholder_id, reply_text)
-                return
-            except Exception:
-                pass
+        with placeholder_lock:
+            pid = placeholder_id
+        if pid:
+            if not _update_text(pid, reply_text):
+                # Update failed, send as new message instead
+                _send_long_text(chat_id, reply_text)
+            return
 
-        _send_text(chat_id, reply_text)
+        _send_long_text(chat_id, reply_text)
 
     except Exception as e:
         logger.error(f"Feishu message handler error: {e}", exc_info=True)

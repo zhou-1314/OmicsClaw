@@ -387,6 +387,15 @@ Operational constraints:
    - User: "分析 data/brain_visium.h5ad" → mode='path', file_path='data/brain_visium.h5ad'
    - User: "run preprocess on my_data.h5ad" → mode='path', file_path='my_data.h5ad'
    - User: "对 /mnt/nas/exp1.mzML 做质量控制" → mode='path', file_path='/mnt/nas/exp1.mzML', skill='ms-qc'
+10. NO CODE GENERATION (STRICT): You are an analysis assistant, NOT a code generator.
+   - NEVER proactively create Python scripts, shell scripts, or code files.
+   - NEVER use write_file to generate .py, .sh, .r, .R, or other script files.
+   - All analysis MUST go through the omicsclaw tool — the skills already implement
+     the code. Your role is to route user requests to the right skill, not to write code.
+   - Only use write_file/create_csv_file/create_json_file when the user EXPLICITLY
+     asks to save or export specific data. All such files go to the output/ directory.
+   - Do NOT use list_directory to browse output directories after an omicsclaw call —
+     the tool result already contains all the information you need.
 """
 
 def build_system_prompt(memory_context: str = "") -> str:
@@ -430,7 +439,12 @@ def get_tools() -> list[dict]:
                     f"Run an OmicsClaw multi-omics analysis skill. Available skills: {skill_desc_text}. "
                     "Use mode='demo' to run with built-in synthetic data. "
                     "Use mode='file' when the user has sent an omics data file. "
-                    "IMPORTANT: When this tool returns results, relay the output VERBATIM."
+                    "IMPORTANT: When this tool returns results, relay the output VERBATIM. "
+                    "By default only a text summary is returned (return_media omitted or empty). "
+                    "Set return_media ONLY when the user explicitly asks for figures/plots/tables. "
+                    "Use 'all' to send everything, or a keyword to filter "
+                    "(e.g. 'umap' for UMAP plots, 'qc' for QC violin, 'cluster' for cluster tables). "
+                    "Multiple keywords can be comma-separated (e.g. 'umap,qc')."
                 ),
                 "parameters": {
                     "type": "object",
@@ -446,6 +460,17 @@ def get_tools() -> list[dict]:
                                 "'demo' = built-in synthetic data; "
                                 "'file' = user uploaded a file via messaging; "
                                 "'path' = user provided a file path on the server."
+                            ),
+                        },
+                        "return_media": {
+                            "type": "string",
+                            "description": (
+                                "Filter for which figures/tables to send back. "
+                                "Omit or leave empty for text summary only (default). "
+                                "'all' = send all figures and tables. "
+                                "Otherwise a comma-separated list of keywords to match filenames "
+                                "(e.g. 'umap', 'qc', 'violin', 'cluster', 'umap,qc'). "
+                                "Only set when the user explicitly asks for visual results."
                             ),
                         },
                         "file_path": {
@@ -493,7 +518,7 @@ def get_tools() -> list[dict]:
             "type": "function",
             "function": {
                 "name": "write_file",
-                "description": "Create or overwrite a file on the filesystem with the given content.",
+                "description": "Create or overwrite a file with the given content. Files are saved to the output/ directory by default. ONLY use when user explicitly asks to create/save a file.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -617,7 +642,7 @@ def get_tools() -> list[dict]:
             "type": "function",
             "function": {
                 "name": "create_json_file",
-                "description": "Create a JSON file from structured data. Use when user wants to save data as JSON.",
+                "description": "Create a JSON file from structured data. Saved to output/ by default. ONLY use when user explicitly asks to save data as JSON.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -633,7 +658,7 @@ def get_tools() -> list[dict]:
             "type": "function",
             "function": {
                 "name": "create_csv_file",
-                "description": "Create a CSV file from tabular data. Use when user wants to save data as CSV.",
+                "description": "Create a CSV file from tabular data. Saved to output/ by default. ONLY use when user explicitly asks to save data as CSV.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -649,7 +674,7 @@ def get_tools() -> list[dict]:
             "type": "function",
             "function": {
                 "name": "make_directory",
-                "description": "Create a new directory. Use when user wants to create a folder.",
+                "description": "Create a new directory under output/. ONLY use when user explicitly asks to create a folder.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -663,7 +688,7 @@ def get_tools() -> list[dict]:
             "type": "function",
             "function": {
                 "name": "move_file",
-                "description": "Move or rename a file. Use when user wants to move or rename files.",
+                "description": "Move or rename a file. ONLY use when user explicitly asks to move or rename files.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -678,7 +703,7 @@ def get_tools() -> list[dict]:
             "type": "function",
             "function": {
                 "name": "remove_file",
-                "description": "Delete a file or directory. Use when user wants to remove files/folders.",
+                "description": "Delete a file or directory. ONLY use when user explicitly asks to remove files/folders.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -718,8 +743,9 @@ def sanitize_filename(filename: str) -> str:
     return filename or "unnamed_file"
 
 
-def resolve_dest(folder: str | None) -> Path:
-    dest = Path(folder) if folder else DATA_DIR
+def resolve_dest(folder: str | None, default: Path | None = None) -> Path:
+    fallback = default if default is not None else DATA_DIR
+    dest = Path(folder) if folder else fallback
     if not dest.is_absolute():
         dest = OMICSCLAW_DIR / dest
     try:
@@ -727,7 +753,7 @@ def resolve_dest(folder: str | None) -> Path:
     except ValueError:
         logger.warning(f"Path escape blocked: {dest}")
         audit("security", severity="HIGH", detail="path_escape_blocked", attempted_path=str(dest))
-        dest = DATA_DIR
+        dest = fallback
     dest.mkdir(parents=True, exist_ok=True)
     return dest
 
@@ -991,6 +1017,10 @@ async def execute_omicsclaw(args: dict, session_id: str = None, chat_id: int | s
         return f"{skill_key} failed (exit {proc.returncode}):\n{err}"
 
     # Collect report + figures from output directory
+    return_media = str(args.get("return_media", "")).strip().lower()
+    figure_names = []
+    table_names = []
+    sent_names = []
     if out_dir.exists():
         media_items = []
         for f in sorted(out_dir.rglob("*")):
@@ -1000,8 +1030,24 @@ async def execute_omicsclaw(args: dict, session_id: str = None, chat_id: int | s
                 media_items.append({"type": "document", "path": str(f)})
             elif f.suffix == ".png":
                 media_items.append({"type": "photo", "path": str(f)})
-        if media_items:
-            pending_media[chat_id] = pending_media.get(chat_id, []) + media_items
+                figure_names.append(f.name)
+            elif f.suffix == ".csv":
+                media_items.append({"type": "document", "path": str(f)})
+                table_names.append(f.name)
+
+        if return_media and media_items:
+            if return_media == "all":
+                filtered = media_items
+            else:
+                keywords = [k.strip() for k in return_media.split(",") if k.strip()]
+                filtered = [
+                    item for item in media_items
+                    if any(kw in Path(item["path"]).stem.lower() for kw in keywords)
+                ]
+            if filtered:
+                pending_media[0] = pending_media.get(0, []) + filtered
+                sent_names = [Path(item["path"]).name for item in filtered]
+                logger.info(f"return_media='{return_media}': sending {len(filtered)}/{len(media_items)} items")
 
     # Read report for chat display
     report_text = ""
@@ -1035,7 +1081,36 @@ async def execute_omicsclaw(args: dict, session_id: str = None, chat_id: int | s
     if session_id:
         await _auto_capture_analysis(session_id, skill_key, args, out_dir, True)
 
-    return "\n".join(keep_lines).strip()
+    result_text = "\n".join(keep_lines).strip()
+
+    # Append media delivery status so the LLM knows what happened
+    # and does NOT attempt to browse output directories itself.
+    all_names = figure_names + table_names
+    if sent_names:
+        result_text += (
+            "\n\n---\n"
+            f"[MEDIA DELIVERY: {len(sent_names)} file(s) already queued for the user: "
+            f"{', '.join(sent_names)}. DO NOT use list_directory or other tools to find/send "
+            "these files — they will be delivered automatically.]"
+        )
+        unsent = [n for n in all_names if n not in sent_names]
+        if unsent:
+            result_text += (
+                f"\n[Other available outputs not requested: {', '.join(unsent)}.]"
+            )
+    elif not return_media and all_names:
+        hints = []
+        if figure_names:
+            hints.append(f"Figures: {', '.join(figure_names)}")
+        if table_names:
+            hints.append(f"Tables: {', '.join(table_names)}")
+        result_text += (
+            "\n\n---\n"
+            f"[Available outputs: {'; '.join(hints)}. "
+            "Tell the user they can request specific figures or tables by name if interested.]"
+        )
+
+    return result_text
 
 
 # ---------------------------------------------------------------------------
@@ -1085,7 +1160,7 @@ async def execute_write_file(args: dict) -> str:
     if not filename:
         return "Error: 'filename' is required."
 
-    dest = resolve_dest(args.get("destination_folder"))
+    dest = resolve_dest(args.get("destination_folder"), default=OUTPUT_DIR)
     filename = sanitize_filename(filename)
     filepath = dest / filename
 
@@ -1432,7 +1507,8 @@ async def execute_create_json_file(args: dict) -> str:
     if not filename.endswith(".json"):
         filename += ".json"
 
-    dest_dir = resolve_dest(dest_arg) if dest_arg else DATA_DIR
+    dest_dir = resolve_dest(dest_arg, default=OUTPUT_DIR) if dest_arg else OUTPUT_DIR
+    dest_dir.mkdir(parents=True, exist_ok=True)
     filepath = dest_dir / filename
 
     try:
@@ -1462,7 +1538,8 @@ async def execute_create_csv_file(args: dict) -> str:
     if not filename.endswith(".csv"):
         filename += ".csv"
 
-    dest_dir = resolve_dest(dest_arg) if dest_arg else DATA_DIR
+    dest_dir = resolve_dest(dest_arg, default=OUTPUT_DIR) if dest_arg else OUTPUT_DIR
+    dest_dir.mkdir(parents=True, exist_ok=True)
     filepath = dest_dir / filename
 
     try:
@@ -1494,7 +1571,7 @@ async def execute_make_directory(args: dict) -> str:
 
     target_path = Path(path_arg)
     if not target_path.is_absolute():
-        target_path = DATA_DIR / target_path
+        target_path = OUTPUT_DIR / target_path
 
     # Validate against trusted directories
     _ensure_trusted_dirs()
@@ -1917,17 +1994,41 @@ For more info: https://github.com/zhou-1314/OmicsClaw"""
 
 
 def strip_markup(text: str) -> str:
-    """Remove markdown/emoji formatting for plain-text messaging."""
-    text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+    """Remove markdown/emoji formatting for plain-text messaging.
+
+    Preserves structural elements like list bullets and code content
+    while stripping decorative formatting.
+    """
+    # Strip internal system annotations (not meant for end-users)
+    text = re.sub(r"\n*-{3}\n*", "\n", text)  # Strip --- separators
+    text = re.sub(
+        r"\[(?:MEDIA DELIVERY|Available outputs|Other available outputs)[^\]]*\]\n*",
+        "", text,
+    )
+
+    # Convert code blocks to indented text (keep content, remove fences)
+    text = re.sub(r"```\w*\n?(.*?)```", r"\1", text, flags=re.DOTALL)
+
+    # Inline formatting → plain text
     text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
     text = re.sub(r"__(.+?)__", r"\1", text)
     text = re.sub(r"(?<!\w)\*(.+?)\*(?!\w)", r"\1", text)
     text = re.sub(r"(?<!\w)_(.+?)_(?!\w)", r"\1", text)
     text = re.sub(r"`(.+?)`", r"\1", text)
+
+    # Markdown links → text only
     text = re.sub(r"\[(.+?)\]\(.+?\)", r"\1", text)
+
+    # Heading markers → plain text
     text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+
+    # Block quotes → plain text (keep content)
     text = re.sub(r"^>\s?", "", text, flags=re.MULTILINE)
-    text = re.sub(r"^[\s]*[-*]\s+", "", text, flags=re.MULTILINE)
+
+    # List bullets: normalise to "- " (keep structure)
+    text = re.sub(r"^[\s]*[*]\s+", "- ", text, flags=re.MULTILINE)
+
+    # Strip emojis
     text = re.sub(
         r"[\U0001F300-\U0001F9FF\U00002702-\U000027B0\U0000FE00-\U0000FE0F"
         r"\U0001FA00-\U0001FA6F\U0001FA70-\U0001FAFF\U00002600-\U000026FF"
