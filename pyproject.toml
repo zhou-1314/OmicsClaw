@@ -131,12 +131,51 @@ metabolomics = []
 # Tier 4: full — all optional analysis methods across all domains             #
 # --------------------------------------------------------------------------- #
 full = [
-    "omicsclaw[spatial,spatial-domains,singlecell,genomics,proteomics,metabolomics]"
+    "omicsclaw[spatial,spatial-domains,spatial-velocity,spatial-cnv,spatial-enrichment,spatial-communication,spatial-integration,spatial-registration,spatial-r-bridge,singlecell,genomics,proteomics,metabolomics]"
 ]
 
 # --------------------------------------------------------------------------- #
-# Tier 3b: banksy — isolated because pybanksy requires numpy<2.0, which       #
-# conflicts with pydeseq2, jax, and other packages in the full tier.          #
+# Standalone Layers — individually installable subsets for specific skills.    #
+# Each layer is isolated to avoid pulling in the entire `spatial` tier.        #
+# --------------------------------------------------------------------------- #
+spatial-velocity = [
+    "scvelo>=0.2.5",                  # RNA velocity (scVelo)
+]
+
+spatial-cnv = [
+    "infercnvpy>=0.4.0",             # Copy number variation inference (inferCNVpy)
+]
+
+spatial-enrichment = [
+    "gseapy>=1.0.0",                 # Gene set enrichment analysis (GSEApy)
+]
+
+spatial-communication = [
+    "liana",                          # Ligand-receptor analysis (LIANA+)
+    "cellphonedb>=5.0.0,<6.0",        # CellPhoneDB
+    "fastccc>=0.1.0",                 # FastCCC (requires Python >=3.11)
+]
+
+spatial-integration = [
+    "harmonypy>=0.0.9",              # Harmony batch correction
+    "bbknn>=1.5.0",                  # BBKNN batch correction
+    "scanorama>=1.7.0",              # Scanorama batch correction
+]
+
+spatial-registration = [
+    "POT>=0.9.0",                     # Optimal transport
+    "paste-bio>=1.0.0",               # PASTE spatial registration
+]
+
+spatial-r-bridge = [
+    "rpy2>=3.5.0,<3.7",              # R language bridge
+    "anndata2ri>=1.3.0",              # AnnData <-> R sparse matrix bridge
+    "pydeseq2>=0.4.0",                # PyDESeq2 (Python-native DESeq2)
+]
+
+# --------------------------------------------------------------------------- #
+# banksy — isolated because pybanksy requires numpy<2.0, which conflicts with #
+# pydeseq2, jax, and other packages in the full tier.                         #
 # Install in a separate environment or before installing full.                #
 # --------------------------------------------------------------------------- #
 banksy = [

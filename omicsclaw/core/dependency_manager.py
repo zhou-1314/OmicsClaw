@@ -12,38 +12,54 @@ DOMAIN_TIERS = {
     "pandas": "core",
     "scipy": "core",
     "scikit-learn": "core",
-    
-    # Spatial domain dependencies
+
+    # Spatial-domains standalone (deep learning domain methods)
     "SpaGCN": "spatial-domains",
     "torch": "spatial-domains",
+
+    # Spatial-velocity standalone
+    "scvelo": "spatial-velocity",
+
+    # Spatial-cnv standalone
+    "infercnvpy": "spatial-cnv",
+
+    # Spatial-enrichment standalone
+    "gseapy": "spatial-enrichment",
+
+    # Spatial-communication standalone
+    "liana": "spatial-communication",
+    "cellphonedb": "spatial-communication",
+    "fastccc": "spatial-communication",
+
+    # Spatial-integration standalone
+    "harmonypy": "spatial-integration",
+    "bbknn": "spatial-integration",
+    "scanorama": "spatial-integration",
+
+    # Spatial-registration standalone
+    "ot": "spatial-registration",  # POT
+    "paste": "spatial-registration",
+
+    # Spatial-r-bridge standalone
+    "rpy2": "spatial-r-bridge",
+    "anndata2ri": "spatial-r-bridge",
+    "pydeseq2": "spatial-r-bridge",
+
+    # Spatial domain dependencies (remaining in spatial tier)
     "torch_geometric": "spatial",
     "scvi": "spatial",
     "tangram": "spatial",
     "cell2location": "spatial",
-    "scvelo": "spatial",
-    "liana": "spatial",
-    "cellphonedb": "spatial",
-    "fastccc": "spatial",
     "cellrank": "spatial",
     "palantir": "spatial",
-    "gseapy": "spatial",
     "SpatialDE": "spatial",
     "esda": "spatial",
     "libpysal": "spatial",
     "pysal": "spatial",
-    "infercnvpy": "spatial",
-    "harmonypy": "spatial",
-    "bbknn": "spatial",
-    "scanorama": "spatial",
-    "ot": "spatial",  # POT
-    "paste": "spatial",
-    "pydeseq2": "spatial",
-    "rpy2": "spatial",
-    "anndata2ri": "spatial",
-    
+
     # Single-cell domain dependencies
     "scrublet": "singlecell",
-    
+
     # Other domains can be added here as the software grows
 }
 
@@ -92,6 +108,15 @@ def get_installed_tiers() -> dict[str, bool]:
         "genomics": False, # Genomics currently uses external CLI tools generally, placeholders for now
         "proteomics": False,
         "metabolomics": False,
+        # Standalone layers
+        "spatial-velocity": importlib.util.find_spec("scvelo") is not None,
+        "spatial-cnv": importlib.util.find_spec("infercnvpy") is not None,
+        "spatial-enrichment": importlib.util.find_spec("gseapy") is not None,
+        "spatial-communication": importlib.util.find_spec("liana") is not None,
+        "spatial-integration": importlib.util.find_spec("harmonypy") is not None or importlib.util.find_spec("bbknn") is not None,
+        "spatial-registration": importlib.util.find_spec("paste") is not None,
+        "spatial-r-bridge": importlib.util.find_spec("rpy2") is not None,
+        "banksy": importlib.util.find_spec("pybanksy") is not None,
     }
     return tiers_status
     

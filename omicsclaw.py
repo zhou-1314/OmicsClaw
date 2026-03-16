@@ -539,9 +539,21 @@ def main():
             print(f"- {tier.capitalize():<15} {status}")
             
         print(f"\n{BOLD}Standalone Layer:{RESET}")
-        sd_installed = tiers.get("spatial-domains", False)
-        sd_status = f"{GREEN}✅ Installed{RESET}" if sd_installed else f"{RED}❌ Missing{RESET} (Run: pip install -e \".[spatial-domains]\")"
-        print(f"- Spatial-Domains {sd_status} (Deep learning spatial domain methods, e.g., SpaGCN)")
+        standalone_layers = [
+            ("Spatial-Domains",   "spatial-domains",   "Deep learning spatial domain methods, e.g., SpaGCN"),
+            ("Spatial-Velocity",  "spatial-velocity",  "RNA velocity analysis, e.g., scVelo"),
+            ("Spatial-CNV",       "spatial-cnv",       "Copy number variation inference, e.g., inferCNVpy"),
+            ("Spatial-Enrichment","spatial-enrichment", "Pathway enrichment, e.g., GSEApy"),
+            ("Spatial-Comm",      "spatial-communication", "Cell communication, e.g., LIANA+, CellPhoneDB"),
+            ("Spatial-Integrate", "spatial-integration","Multi-sample integration, e.g., Harmony, BBKNN"),
+            ("Spatial-Register",  "spatial-registration","Spatial registration, e.g., PASTE"),
+            ("Spatial-R-Bridge",  "spatial-r-bridge",  "R language bridge, e.g., rpy2, PyDESeq2"),
+            ("BANKSY",            "banksy",            "BANKSY spatial domains (requires numpy<2.0, isolated env)"),
+        ]
+        for label, tier_key, desc in standalone_layers:
+            sl_installed = tiers.get(tier_key, False)
+            sl_status = f"{GREEN}✅ Installed{RESET}" if sl_installed else f"{RED}❌ Missing{RESET} (Run: pip install -e \".[{tier_key}]\")"
+            print(f"- {label:<18} {sl_status} ({desc})")
         
         print(f"\nTo install all complete functionalities:\n  pip install -e \".[full]\"\n")
         sys.exit(0)
