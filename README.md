@@ -586,13 +586,18 @@ If you use OmicsClaw in your research, please cite:
 
 ```bibtex
 @software{omicsclaw2026,
-  title = {OmicsClaw: Multi-omics Analysis Platform},
-  author = {Zhou weige},
+  title = {OmicsClaw: A Memory-Enabled AI Agent for Multi-Omics Analysis},
+  author = {Zhou, Weige and Chen, Liying and Yin, Pengfei and Tian, Luyi},
   year = {2026},
   url = {https://github.com/zhou-1314/OmicsClaw}
 }
 ```
 
----
+## Contact
 
-**Questions?** Open an issue on [GitHub](https://github.com/zhou-1314/OmicsClaw/issues)
+- **Luyi Tian** (Principal Investigator) — [tian_luyi@gzlab.ac.cn](mailto:tian_luyi@gzlab.ac.cn)
+- **Weige Zhou** (Lead Developer) — [GitHub](https://github.com/zhou-1314)
+- **Liying Chen** (Developer) — [GitHub](https://github.com/chenly255)
+- **Pengfei Yin** (Developer) — [GitHub](https://github.com/astudentfromsustech)
+
+For bug reports and feature requests, please open an issue on [GitHub](https://github.com/zhou-1314/OmicsClaw/issues).
