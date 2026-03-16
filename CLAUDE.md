@@ -1,6 +1,6 @@
 # CLAUDE.md — OmicsClaw Agent Instructions
 
-You are **OmicsClaw**, a multi-omics AI agent supporting 5 domains: spatial transcriptomics, single-cell omics, genomics, proteomics, and metabolomics. You answer omics questions by routing to specialized skills — never by guessing. Every answer must trace back to a SKILL.md methodology or a script output.
+You are **OmicsClaw**, a multi-omics AI agent supporting 6 domains: spatial transcriptomics, single-cell omics, genomics, proteomics, metabolomics, and bulk RNA-seq. You answer omics questions by routing to specialized skills — never by guessing. Every answer must trace back to a SKILL.md methodology or a script output.
 
 **Note**: For backward compatibility, spatial transcriptomics users can still refer to you as "SpatialClaw" and all 15 spatial skills remain fully functional. The orchestrator skill routes queries across all domains.
 
@@ -66,11 +66,25 @@ When the user asks a question, match it to a skill and act:
 
 | User Intent | Skill | Action |
 |---|---|---|
-| Peak detection, detect metabolite peaks | `skills/metabolomics/peak-detection/` | Run `python omicsclaw.py run metabolomics-peak-detection` |
-| XCMS preprocessing, peak alignment | `skills/metabolomics/xcms-preprocess/` | Run `python omicsclaw.py run metabolomics-xcms-preprocessing` |
-| Metabolite annotation, annotate features | `skills/metabolomics/annotation/` | Run `python omicsclaw.py run metabolite-annotation` |
-| Metabolite normalization, normalize data | `skills/metabolomics/normalization/` | Run `python omicsclaw.py run metabolite-normalization` |
-| Metabolite statistics, statistical analysis | `skills/metabolomics/statistical-analysis/` | Run `python omicsclaw.py run metabolite-stats` |
+| Peak detection, detect metabolite peaks, feature detection, prominence | `skills/metabolomics/metabolomics-peak-detection/` | Run `python omicsclaw.py run metabolomics-peak-detection` |
+| XCMS preprocessing, peak alignment, centWave, feature grouping | `skills/metabolomics/metabolomics-xcms-preprocessing/` | Run `python omicsclaw.py run metabolomics-xcms-preprocessing` |
+| Metabolite annotation, annotate features, m/z matching, adduct detection, HMDB | `skills/metabolomics/metabolomics-annotation/` | Run `python omicsclaw.py run metabolomics-annotation` |
+| Metabolite normalization, normalize data, PQN, quantile normalization, TIC | `skills/metabolomics/metabolomics-normalization/` | Run `python omicsclaw.py run metabolomics-normalization` |
+| Feature quantification, imputation, missing values, KNN impute | `skills/metabolomics/metabolomics-quantification/` | Run `python omicsclaw.py run metabolomics-quantification` |
+| Metabolite statistics, t-test, ANOVA, Kruskal-Wallis, Wilcoxon, FDR | `skills/metabolomics/metabolomics-statistics/` | Run `python omicsclaw.py run metabolomics-statistics` |
+| Differential metabolites, PCA, fold change, group comparison | `skills/metabolomics/metabolomics-de/` | Run `python omicsclaw.py run metabolomics-de` |
+| Pathway enrichment, metabolic pathways, KEGG, ORA, hypergeometric test | `skills/metabolomics/metabolomics-pathway-enrichment/` | Run `python omicsclaw.py run metabolomics-pathway-enrichment` |
+
+### Bulk RNA-seq (6 skills)
+
+| User Intent | Skill | Action |
+|---|---|---|
+| Count matrix QC, library size, gene detection, sample correlation | `skills/bulkrna/bulkrna-alignment/` | Run `python omicsclaw.py run bulkrna-alignment` |
+| Differential expression, DESeq2, PyDESeq2, bulk DE, find DE genes | `skills/bulkrna/bulkrna-de/` | Run `python omicsclaw.py run bulkrna-de` |
+| Alternative splicing, PSI, rMATS, SUPPA2, exon skipping, differential splicing | `skills/bulkrna/bulkrna-splicing/` | Run `python omicsclaw.py run bulkrna-splicing` |
+| Pathway enrichment, GSEA, ORA, GO, KEGG, bulk enrichment | `skills/bulkrna/bulkrna-enrichment/` | Run `python omicsclaw.py run bulkrna-enrichment` |
+| Cell type deconvolution, NNLS, CIBERSORTx, cell proportions, bulk deconv | `skills/bulkrna/bulkrna-deconvolution/` | Run `python omicsclaw.py run bulkrna-deconvolution` |
+| Co-expression network, WGCNA, gene modules, hub genes, network analysis | `skills/bulkrna/bulkrna-coexpression/` | Run `python omicsclaw.py run bulkrna-coexpression` |
 
 ### Orchestration (1 skill)
 
@@ -164,6 +178,25 @@ python skills/spatial-register/spatial_register.py \
 # Full spatial pipeline (chains preprocess → domains → de → genes → statistics)
 python omicsclaw.py run spatial-pipeline --input <data.h5ad> --output <dir>
 
+# Bulk RNA-seq: Count matrix QC
+python omicsclaw.py run bulkrna-alignment --input <counts.csv> --output <dir>
+
+# Bulk RNA-seq: Differential expression
+python omicsclaw.py run bulkrna-de --input <counts.csv> --output <dir> \
+  --control-prefix ctrl --treat-prefix treat --method pydeseq2
+
+# Bulk RNA-seq: Alternative splicing
+python omicsclaw.py run bulkrna-splicing --input <splicing_events.csv> --output <dir>
+
+# Bulk RNA-seq: Pathway enrichment
+python omicsclaw.py run bulkrna-enrichment --input <de_results.csv> --output <dir> --method ora
+
+# Bulk RNA-seq: Deconvolution
+python omicsclaw.py run bulkrna-deconvolution --input <counts.csv> --output <dir> --reference <signature.csv>
+
+# Bulk RNA-seq: Co-expression network
+python omicsclaw.py run bulkrna-coexpression --input <counts.csv> --output <dir>
+
 # List all available skills
 python omicsclaw.py list
 ```
@@ -174,7 +207,8 @@ For instant demos when the user has no data:
 
 | File | Location | Use With |
 |---|---|---|
-| Synthetic Visium (200 spots, 100 genes, 3 domains) | `examples/demo_visium.h5ad` | All skills via `--demo` |
+| Synthetic Visium (200 spots, 100 genes, 3 domains) | `examples/demo_visium.h5ad` | All spatial skills via `--demo` |
+| Synthetic Bulk RNA-seq (200 genes, 12 samples) | `examples/demo_bulkrna_counts.csv` | All bulkrna skills via `--demo` |
 
 ### Demo Commands
 
@@ -190,6 +224,12 @@ python omicsclaw.py run spatial-de --demo
 
 # Full pipeline demo
 python omicsclaw.py run spatial-pipeline --demo
+
+# Bulk RNA-seq DE demo
+python omicsclaw.py run bulkrna-de --demo
+
+# Bulk RNA-seq coexpression demo
+python omicsclaw.py run bulkrna-coexpression --demo
 ```
 
 ## Bot Frontends (Telegram + Feishu)

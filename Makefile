@@ -1,4 +1,4 @@
-.PHONY: demo test list demo-all catalog demo-orchestrator \
+.PHONY: demo test list demo-all catalog demo-orchestrator demo-bulkrna \
         install install-spatial-domains install-full install-dev \
         bot-telegram bot-feishu
 
@@ -62,6 +62,14 @@ demo-all:
 	python omicsclaw.py run integrate --demo --output /tmp/sc_integrate
 	python omicsclaw.py run register --demo --output /tmp/sc_register
 	python omicsclaw.py run orchestrator --demo --output /tmp/sc_orchestrator
+
+demo-bulkrna:
+	python omicsclaw.py run bulkrna-alignment --demo --output /tmp/bulkrna_alignment
+	python omicsclaw.py run bulkrna-de --demo --output /tmp/bulkrna_de
+	python omicsclaw.py run bulkrna-splicing --demo --output /tmp/bulkrna_splicing
+	python omicsclaw.py run bulkrna-enrichment --demo --output /tmp/bulkrna_enrichment
+	python omicsclaw.py run bulkrna-deconvolution --demo --output /tmp/bulkrna_deconv
+	python omicsclaw.py run bulkrna-coexpression --demo --output /tmp/bulkrna_coexpr
 
 ## ── Bot targets ─────────────────────────────────────────────────────────────
 

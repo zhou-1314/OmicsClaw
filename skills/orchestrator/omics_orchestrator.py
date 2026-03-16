@@ -2,7 +2,7 @@
 """Multi-Domain Omics Orchestrator — query routing across all omics domains.
 
 Routes queries and files to the correct skill across spatial, single-cell,
-genomics, proteomics, and metabolomics domains.
+genomics, proteomics, metabolomics, and bulk RNA-seq domains.
 
 Usage:
     python omics_orchestrator.py --query "find spatially variable genes" --output <dir>
@@ -107,6 +107,42 @@ DOMAIN_KEYWORD_MAPS = {
         "differential": "metabolomics-de",
         "pathway": "metabolomics-pathway-enrichment",
         "statistical": "metabolomics-statistics",
+    },
+    "bulkrna": {
+        "bulk rna qc": "bulkrna-alignment",
+        "library size": "bulkrna-alignment",
+        "gene detection": "bulkrna-alignment",
+        "count matrix qc": "bulkrna-alignment",
+        "bulk differential expression": "bulkrna-de",
+        "bulk de": "bulkrna-de",
+        "deseq2": "bulkrna-de",
+        "bulk rna de": "bulkrna-de",
+        "differentially expressed genes": "bulkrna-de",
+        "alternative splicing": "bulkrna-splicing",
+        "splicing analysis": "bulkrna-splicing",
+        "psi": "bulkrna-splicing",
+        "rmats": "bulkrna-splicing",
+        "suppa": "bulkrna-splicing",
+        "exon skipping": "bulkrna-splicing",
+        "differential splicing": "bulkrna-splicing",
+        "bulk enrichment": "bulkrna-enrichment",
+        "bulk pathway": "bulkrna-enrichment",
+        "gsea": "bulkrna-enrichment",
+        "ora": "bulkrna-enrichment",
+        "go enrichment": "bulkrna-enrichment",
+        "kegg": "bulkrna-enrichment",
+        "bulk deconvolution": "bulkrna-deconvolution",
+        "cell type proportion": "bulkrna-deconvolution",
+        "nnls": "bulkrna-deconvolution",
+        "cibersortx": "bulkrna-deconvolution",
+        "bulk deconv": "bulkrna-deconvolution",
+        "cell fraction": "bulkrna-deconvolution",
+        "coexpression": "bulkrna-coexpression",
+        "wgcna": "bulkrna-coexpression",
+        "gene network": "bulkrna-coexpression",
+        "co-expression modules": "bulkrna-coexpression",
+        "hub genes": "bulkrna-coexpression",
+        "gene modules": "bulkrna-coexpression",
     },
 }
 
@@ -231,6 +267,14 @@ DEMO_QUERIES = {
         "map metabolites to pathways",
         "run statistical analysis on features",
     ],
+    "bulkrna": [
+        "check library size and gene detection in bulk RNA-seq",
+        "find differentially expressed genes with DESeq2",
+        "analyze alternative splicing events",
+        "run pathway enrichment on DE genes",
+        "deconvolve cell type proportions from bulk",
+        "detect co-expression modules with WGCNA",
+    ],
 }
 
 
@@ -302,7 +346,8 @@ def main():
             "singlecell": "sc-preprocess",
             "genomics": "genomics-qc",
             "proteomics": "ms-qc",
-            "metabolomics": "xcms-preprocess"
+            "metabolomics": "xcms-preprocess",
+            "bulkrna": "bulkrna-alignment",
         }
         skill = defaults.get(domain, "preprocess")
         confidence = 0.5

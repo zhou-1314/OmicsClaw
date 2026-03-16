@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "omicsclaw"
 version = "0.1.0"
-description = "OmicsClaw: Multi-omics analysis platform with 350+ skills across spatial, single-cell, genomics, proteomics, and metabolomics domains"
+description = "OmicsClaw: Multi-omics analysis platform with skills across spatial, single-cell, genomics, proteomics, metabolomics, and bulk RNA-seq domains"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
@@ -18,6 +18,7 @@ keywords = [
     "genomics",
     "proteomics",
     "metabolomics",
+    "bulk-rna-seq",
     "bioinformatics",
     "scanpy",
     "squidpy",
@@ -127,11 +128,16 @@ proteomics = []
 
 metabolomics = []
 
+bulkrna = [
+    "pydeseq2>=0.4.0",                # bulkrna-de: PyDESeq2 differential expression
+    "gseapy>=1.0.0",                   # bulkrna-enrichment: GSEA/ORA enrichment
+]
+
 # --------------------------------------------------------------------------- #
 # Tier 4: full — all optional analysis methods across all domains             #
 # --------------------------------------------------------------------------- #
 full = [
-    "omicsclaw[spatial,spatial-domains,spatial-velocity,spatial-cnv,spatial-enrichment,spatial-communication,spatial-integration,spatial-registration,spatial-r-bridge,singlecell,genomics,proteomics,metabolomics]"
+    "omicsclaw[spatial,spatial-domains,spatial-velocity,spatial-cnv,spatial-enrichment,spatial-communication,spatial-integration,spatial-registration,spatial-r-bridge,singlecell,genomics,proteomics,metabolomics,bulkrna]"
 ]
 
 # --------------------------------------------------------------------------- #
@@ -242,6 +248,12 @@ testpaths = [
     "skills/spatial-integrate/tests",
     "skills/spatial-register/tests",
     "skills/spatial-orchestrator/tests",
+    "skills/bulkrna/bulkrna-alignment/tests",
+    "skills/bulkrna/bulkrna-de/tests",
+    "skills/bulkrna/bulkrna-splicing/tests",
+    "skills/bulkrna/bulkrna-enrichment/tests",
+    "skills/bulkrna/bulkrna-deconvolution/tests",
+    "skills/bulkrna/bulkrna-coexpression/tests",
 ]
 markers = [
     "slow: tests requiring full optional deps or significant runtime (excluded by default)",

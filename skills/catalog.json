@@ -1,13 +1,134 @@
 {
   "version": "1.0.0",
   "generated_by": "scripts/generate_catalog.py",
-  "skill_count": 51,
+  "skill_count": 58,
   "skills": [
     {
-      "name": "align",
-      "cli_alias": "genomics-alignment",
-      "description": "Short/long read alignment to reference genome using BWA-MEM, Bowtie2, or Minimap2.",
+      "name": "bulkrna-alignment",
+      "cli_alias": "bulkrna-alignment",
+      "description": "Bulk RNA-seq count matrix QC \u2014 library size, gene detection rates, and sample correlation.",
       "version": "0.1.0",
+      "status": "mvp",
+      "has_script": true,
+      "has_tests": true,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run bulkrna-alignment --demo",
+      "tags": [
+        "bulkrna",
+        "qc",
+        "library-size",
+        "gene-detection",
+        "alignment-stats"
+      ],
+      "trigger_keywords": []
+    },
+    {
+      "name": "bulkrna-coexpression",
+      "cli_alias": "bulkrna-coexpression",
+      "description": "WGCNA-style weighted gene co-expression network analysis \u2014 module detection, soft thresholding, hub genes.",
+      "version": "0.1.0",
+      "status": "mvp",
+      "has_script": true,
+      "has_tests": true,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run bulkrna-coexpression --demo",
+      "tags": [
+        "bulkrna",
+        "coexpression",
+        "WGCNA",
+        "network",
+        "modules",
+        "hub-genes"
+      ],
+      "trigger_keywords": []
+    },
+    {
+      "name": "bulkrna-de",
+      "cli_alias": "bulkrna-de",
+      "description": "Bulk RNA-seq differential expression analysis using PyDESeq2 with optional edgeR/limma-voom via rpy2.",
+      "version": "0.1.0",
+      "status": "mvp",
+      "has_script": true,
+      "has_tests": true,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run bulkrna-de --demo",
+      "tags": [
+        "bulkrna",
+        "differential-expression",
+        "DESeq2",
+        "PyDESeq2",
+        "edgeR",
+        "limma"
+      ],
+      "trigger_keywords": []
+    },
+    {
+      "name": "bulkrna-deconvolution",
+      "cli_alias": "bulkrna-deconvolution",
+      "description": "Bulk RNA-seq cell type deconvolution using NNLS (built-in), with optional CIBERSORTx and MuSiC bridges.",
+      "version": "0.1.0",
+      "status": "mvp",
+      "has_script": true,
+      "has_tests": true,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run bulkrna-deconvolution --demo",
+      "tags": [
+        "bulkrna",
+        "deconvolution",
+        "NNLS",
+        "CIBERSORTx",
+        "MuSiC",
+        "cell-type-proportion"
+      ],
+      "trigger_keywords": []
+    },
+    {
+      "name": "bulkrna-enrichment",
+      "cli_alias": "bulkrna-enrichment",
+      "description": "Pathway enrichment analysis for bulk RNA-seq \u2014 ORA and GSEA via GSEApy, with built-in hypergeometric fallback.",
+      "version": "0.1.0",
+      "status": "mvp",
+      "has_script": true,
+      "has_tests": true,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run bulkrna-enrichment --demo",
+      "tags": [
+        "bulkrna",
+        "enrichment",
+        "GSEA",
+        "ORA",
+        "GO",
+        "KEGG",
+        "Reactome",
+        "pathway"
+      ],
+      "trigger_keywords": []
+    },
+    {
+      "name": "bulkrna-splicing",
+      "cli_alias": "bulkrna-splicing",
+      "description": "Alternative splicing analysis \u2014 PSI quantification, differential splicing event detection from rMATS/SUPPA2 output.",
+      "version": "0.1.0",
+      "status": "mvp",
+      "has_script": true,
+      "has_tests": true,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run bulkrna-splicing --demo",
+      "tags": [
+        "bulkrna",
+        "splicing",
+        "alternative-splicing",
+        "PSI",
+        "rMATS",
+        "SUPPA2"
+      ],
+      "trigger_keywords": []
+    },
+    {
+      "name": "genomics-alignment",
+      "cli_alias": "genomics-alignment",
+      "description": "Alignment statistics from SAM/BAM files: mapping rate, MAPQ distribution, insert size, duplicate rate, proper pair rate. Mirrors samtools-flagstat.",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": false,
@@ -23,10 +144,10 @@
       "trigger_keywords": []
     },
     {
-      "name": "assemble",
+      "name": "genomics-assembly",
       "cli_alias": "genomics-assembly",
-      "description": "De novo genome assembly using SPAdes, Megahit, Flye, or Canu.",
-      "version": "0.1.0",
+      "description": "Genome assembly quality assessment: N50/N90/L50/L90 (QUAST-compatible), GC content, contig length distribution, completeness estimation. Wraps SPAdes, Megahit, Flye, Canu.",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": false,
@@ -42,10 +163,10 @@
       "trigger_keywords": []
     },
     {
-      "name": "cnv-calling",
+      "name": "genomics-cnv-calling",
       "cli_alias": "genomics-cnv-calling",
       "description": "Copy number variant detection from exome/WGS data using CNVkit, Control-FREEC, or GATK gCNV. Supports tumor-normal pairs, tumor-only, and germline modes.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": false,
@@ -61,10 +182,10 @@
       "trigger_keywords": []
     },
     {
-      "name": "epigenomics",
+      "name": "genomics-epigenomics",
       "cli_alias": "genomics-epigenomics",
       "description": "Epigenomics analysis including ATAC-seq peak calling with MACS3, ChIP-seq analysis, motif enrichment, and chromatin accessibility.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": false,
@@ -82,10 +203,10 @@
       "trigger_keywords": []
     },
     {
-      "name": "phase",
+      "name": "genomics-phasing",
       "cli_alias": "genomics-phasing",
-      "description": "Haplotype phasing using WhatsHap, SHAPEIT, or Eagle.",
-      "version": "0.1.0",
+      "description": "Haplotype phasing analysis: phase block N50, phased fraction, PS (Phase Set) field parsing, pipe-delimited genotype detection. Wraps WhatsHap, SHAPEIT5, Eagle2.",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": false,
@@ -103,8 +224,8 @@
     {
       "name": "genomics-qc",
       "cli_alias": "genomics-qc",
-      "description": "Sequencing reads quality control and adapter trimming using FastQC, MultiQC, or fastp.",
-      "version": "0.1.0",
+      "description": "FASTQ quality control: Phred quality scores, GC/N content, Q20/Q30 rates, per-base quality profiles, read length distribution, and adapter contamination detection.",
+      "version": "0.3.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": false,
@@ -120,10 +241,10 @@
       "trigger_keywords": []
     },
     {
-      "name": "sv-detect",
+      "name": "genomics-sv-detection",
       "cli_alias": "genomics-sv-detection",
-      "description": "Structural variant calling using Manta, Lumpy, Delly, or Sniffles.",
-      "version": "0.1.0",
+      "description": "Structural variant detection (DEL/DUP/INV/TRA): SV VCF parsing with BND notation, size classification (50bp-10Mb), evidence types. Wraps Manta, Lumpy, Delly, Sniffles.",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": false,
@@ -139,10 +260,10 @@
       "trigger_keywords": []
     },
     {
-      "name": "variant-annotate",
-      "cli_alias": null,
-      "description": "Variant annotation and functional effect prediction using VEP, snpEff, or ANNOVAR.",
-      "version": "0.1.0",
+      "name": "genomics-variant-annotation",
+      "cli_alias": "genomics-variant-annotation",
+      "description": "Variant functional impact prediction: VEP consequence types (HIGH/MODERATE/LOW/MODIFIER), SIFT, PolyPhen-2, and CADD scoring. Rule-based annotation engine for demo, wraps VEP/snpEff/ANNOVAR.",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": false,
@@ -158,10 +279,10 @@
       "trigger_keywords": []
     },
     {
-      "name": "variant-call",
+      "name": "genomics-variant-calling",
       "cli_alias": "genomics-variant-calling",
       "description": "Germline and somatic variant calling (SNVs, Indels) using GATK HaplotypeCaller, Mutect2, DeepVariant, or FreeBayes. Includes GVCF workflow, VQSR, and hard filtering.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": false,
@@ -178,10 +299,10 @@
       "trigger_keywords": []
     },
     {
-      "name": "vcf-ops",
+      "name": "genomics-vcf-operations",
       "cli_alias": "genomics-vcf-operations",
-      "description": "VCF file operations \u2014 filtering, merging, statistics using bcftools and GATK.",
-      "version": "0.1.0",
+      "description": "VCF operations: multi-allelic parsing, variant classification (SNP/MNP/INS/DEL/COMPLEX), Ti/Tv ratio, QUAL/DP filtering, INFO field parsing. Mirrors bcftools stats.",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": false,
@@ -196,8 +317,21 @@
       "trigger_keywords": []
     },
     {
-      "name": "met-annotate",
+      "name": "literature",
       "cli_alias": null,
+      "description": "",
+      "version": "0.1.0",
+      "status": "mvp",
+      "has_script": true,
+      "has_tests": false,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run literature --demo",
+      "tags": [],
+      "trigger_keywords": []
+    },
+    {
+      "name": "metabolomics-annotation",
+      "cli_alias": "metabolomics-annotation",
       "description": "Metabolite annotation and structural identification using SIRIUS, CSI:FingerID, GNPS, or MetFrag.",
       "version": "0.1.0",
       "status": "mvp",
@@ -215,7 +349,7 @@
       "trigger_keywords": []
     },
     {
-      "name": "met-diff",
+      "name": "metabolomics-de",
       "cli_alias": "metabolomics-de",
       "description": "Metabolomics differential analysis using univariate tests (t-test, FDR), multivariate methods (PCA, PLS-DA, OPLS-DA, sPLS-DA), Random Forest, and ROC analysis for biomarker discovery.",
       "version": "0.1.0",
@@ -235,7 +369,7 @@
       "trigger_keywords": []
     },
     {
-      "name": "met-normalize",
+      "name": "metabolomics-normalization",
       "cli_alias": "metabolomics-normalization",
       "description": "Metabolomics data normalization, scaling and transformation.",
       "version": "0.1.0",
@@ -252,7 +386,7 @@
       "trigger_keywords": []
     },
     {
-      "name": "met-pathway",
+      "name": "metabolomics-pathway-enrichment",
       "cli_alias": "metabolomics-pathway-enrichment",
       "description": "Metabolomics pathway analysis using MetaboAnalystR (KEGG, Reactome), pathview visualization, MSEA, mummichog, and network-based topology analysis.",
       "version": "0.1.0",
@@ -272,7 +406,7 @@
       "trigger_keywords": []
     },
     {
-      "name": "peak-detect",
+      "name": "metabolomics-peak-detection",
       "cli_alias": "metabolomics-peak-detection",
       "description": "Peak picking, feature detection, alignment and grouping using XCMS, MZmine 3, or MS-DIAL.",
       "version": "0.1.0",
@@ -291,7 +425,7 @@
       "trigger_keywords": []
     },
     {
-      "name": "met-quantify",
+      "name": "metabolomics-quantification",
       "cli_alias": "metabolomics-quantification",
       "description": "Feature quantification, missing value imputation, and normalization for metabolomics data.",
       "version": "0.1.0",
@@ -309,7 +443,7 @@
       "trigger_keywords": []
     },
     {
-      "name": "met-stat",
+      "name": "metabolomics-statistics",
       "cli_alias": "metabolomics-statistics",
       "description": "Statistical analysis for metabolomics \u2014 PCA, PLS-DA, clustering, and univariate tests.",
       "version": "0.1.0",
@@ -327,7 +461,7 @@
       "trigger_keywords": []
     },
     {
-      "name": "xcms-preprocess",
+      "name": "metabolomics-xcms-preprocessing",
       "cli_alias": "metabolomics-xcms-preprocessing",
       "description": "XCMS3 workflow for LC-MS/GC-MS metabolomics preprocessing. Peak detection (CentWave/MatchedFilter), RT alignment (Obiwarp), correspondence, gap filling, and CAMERA adduct/isotope annotation.",
       "version": "0.1.0",
@@ -347,7 +481,25 @@
       "trigger_keywords": []
     },
     {
-      "name": "data-import",
+      "name": "orchestrator",
+      "cli_alias": "orchestrator",
+      "description": "Multi-omics query routing and pipeline orchestration across all OmicsClaw domains. Routes natural language queries to the correct analysis skill across spatial transcriptomics, single-cell omics, genomics, proteomics, and metabolomics.",
+      "version": "1.0.0",
+      "status": "mvp",
+      "has_script": true,
+      "has_tests": false,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run orchestrator --demo",
+      "tags": [
+        "orchestrator",
+        "routing",
+        "pipeline",
+        "multi-omics"
+      ],
+      "trigger_keywords": []
+    },
+    {
+      "name": "proteomics-data-import",
       "cli_alias": "proteomics-data-import",
       "description": "Import and convert proteomics data formats between MaxQuant, DIA-NN, Spectronaut, and standard CSV.",
       "version": "0.1.0",
@@ -365,7 +517,7 @@
       "trigger_keywords": []
     },
     {
-      "name": "differential-abundance",
+      "name": "proteomics-de",
       "cli_alias": "proteomics-de",
       "description": "Differential protein abundance testing using MSstats, limma, proDA, and scipy/statsmodels for Python. Multiple testing correction with BH FDR.",
       "version": "0.1.0",
@@ -384,7 +536,7 @@
       "trigger_keywords": []
     },
     {
-      "name": "prot-enrichment",
+      "name": "proteomics-enrichment",
       "cli_alias": "proteomics-enrichment",
       "description": "Pathway, network, and functional enrichment for proteomics using STRING, DAVID, or g:Profiler.",
       "version": "0.1.0",
@@ -403,7 +555,7 @@
       "trigger_keywords": []
     },
     {
-      "name": "peptide-id",
+      "name": "proteomics-identification",
       "cli_alias": "proteomics-identification",
       "description": "Database search for peptide/protein identification using MaxQuant, MS-GF+, Comet, or Mascot.",
       "version": "0.1.0",
@@ -422,7 +574,7 @@
       "trigger_keywords": []
     },
     {
-      "name": "ms-qc",
+      "name": "proteomics-ms-qc",
       "cli_alias": "proteomics-ms-qc",
       "description": "Mass spectrometry raw data quality control using PTXQC, rawTools, or MSstatsQC.",
       "version": "0.1.0",
@@ -440,7 +592,7 @@
       "trigger_keywords": []
     },
     {
-      "name": "ptm",
+      "name": "proteomics-ptm",
       "cli_alias": "proteomics-ptm",
       "description": "Post-translational modification analysis including phosphorylation, acetylation, and ubiquitination. Site localization, motif analysis, and quantitative PTM analysis with MSstatsPTM.",
       "version": "0.1.0",
@@ -459,7 +611,7 @@
       "trigger_keywords": []
     },
     {
-      "name": "quantification",
+      "name": "proteomics-quantification",
       "cli_alias": "proteomics-quantification",
       "description": "Protein/peptide quantification (LFQ, TMT, DIA) using MaxQuant LFQ, DIA-NN, or Skyline.",
       "version": "0.1.0",
@@ -479,7 +631,7 @@
       "trigger_keywords": []
     },
     {
-      "name": "struct-proteomics",
+      "name": "proteomics-structural",
       "cli_alias": "proteomics-structural",
       "description": "Structural proteomics and cross-linking MS analysis using XlinkX, pLink, or xiSEARCH.",
       "version": "0.1.0",
@@ -499,7 +651,68 @@
       "trigger_keywords": []
     },
     {
-      "name": "sc-de",
+      "name": "sc-batch-integration",
+      "cli_alias": "sc-batch-integration",
+      "description": "Batch integration for multi-sample scRNA-seq using Harmony, scVI, Seurat CCA/RPCA, BBKNN, and fastMNN. Remove technical variation while preserving biological differences.",
+      "version": "0.1.0",
+      "status": "mvp",
+      "has_script": true,
+      "has_tests": false,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run sc-batch-integration --demo",
+      "tags": [
+        "singlecell",
+        "batch-integration",
+        "Harmony",
+        "scVI",
+        "Seurat",
+        "BBKNN"
+      ],
+      "trigger_keywords": []
+    },
+    {
+      "name": "sc-cell-annotation",
+      "cli_alias": "sc-cell-annotation",
+      "description": "Automated cell type annotation using marker genes, CellTypist, SingleR, or scmap. Supports custom references and marker gene lists.",
+      "version": "0.1.0",
+      "status": "mvp",
+      "has_script": true,
+      "has_tests": false,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run sc-cell-annotation --demo",
+      "tags": [
+        "singlecell",
+        "annotation",
+        "cell-type",
+        "CellTypist",
+        "SingleR",
+        "scmap"
+      ],
+      "trigger_keywords": []
+    },
+    {
+      "name": "sc-communication",
+      "cli_alias": "sc-cell-communication",
+      "description": "Cell-cell communication analysis via ligand-receptor interaction scoring using CellChat (R), NicheNet (R), LIANA (Python), or built-in L-R database.",
+      "version": "0.1.0",
+      "status": "mvp",
+      "has_script": true,
+      "has_tests": false,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run sc-cell-communication --demo",
+      "tags": [
+        "singlecell",
+        "communication",
+        "ligand-receptor",
+        "CellPhoneDB",
+        "LIANA",
+        "NicheNet",
+        "CellChat"
+      ],
+      "trigger_keywords": []
+    },
+    {
+      "name": "spatial-de",
       "cli_alias": "sc-de",
       "description": "Differential expression analysis for single-cell data \u2014 marker gene discovery using Wilcoxon, t-test, MAST, or DESeq2 pseudo-bulk analysis.",
       "version": "0.1.0",
@@ -515,6 +728,26 @@
         "Wilcoxon",
         "MAST",
         "pseudo-bulk"
+      ],
+      "trigger_keywords": []
+    },
+    {
+      "name": "sc-doublet-detection",
+      "cli_alias": "sc-doublet-detection",
+      "description": "Doublet detection and removal using Scrublet (Python), DoubletFinder (R), and scDblFinder (R). Essential QC step before clustering.",
+      "version": "0.1.0",
+      "status": "mvp",
+      "has_script": true,
+      "has_tests": false,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run sc-doublet-detection --demo",
+      "tags": [
+        "singlecell",
+        "doublet",
+        "Scrublet",
+        "DoubletFinder",
+        "scDblFinder",
+        "QC"
       ],
       "trigger_keywords": []
     },
@@ -558,88 +791,7 @@
       "trigger_keywords": []
     },
     {
-      "name": "sc-integrate",
-      "cli_alias": "sc-batch-integration",
-      "description": "Batch integration for multi-sample scRNA-seq using Harmony, scVI, Seurat CCA/RPCA, BBKNN, and fastMNN. Remove technical variation while preserving biological differences.",
-      "version": "0.1.0",
-      "status": "mvp",
-      "has_script": true,
-      "has_tests": false,
-      "has_demo": true,
-      "demo_command": "python omicsclaw.py run sc-batch-integration --demo",
-      "tags": [
-        "singlecell",
-        "batch-integration",
-        "Harmony",
-        "scVI",
-        "Seurat",
-        "BBKNN"
-      ],
-      "trigger_keywords": []
-    },
-    {
-      "name": "sc-annotate",
-      "cli_alias": "sc-cell-annotation",
-      "description": "Automated cell type annotation using marker genes, CellTypist, SingleR, or scmap. Supports custom references and marker gene lists.",
-      "version": "0.1.0",
-      "status": "mvp",
-      "has_script": true,
-      "has_tests": false,
-      "has_demo": true,
-      "demo_command": "python omicsclaw.py run sc-cell-annotation --demo",
-      "tags": [
-        "singlecell",
-        "annotation",
-        "cell-type",
-        "CellTypist",
-        "SingleR",
-        "scmap"
-      ],
-      "trigger_keywords": []
-    },
-    {
-      "name": "sc-communication",
-      "cli_alias": null,
-      "description": "Cell-cell communication analysis via ligand-receptor interaction scoring using CellChat (R), NicheNet (R), LIANA (Python), or built-in L-R database.",
-      "version": "0.1.0",
-      "status": "mvp",
-      "has_script": true,
-      "has_tests": false,
-      "has_demo": true,
-      "demo_command": "python omicsclaw.py run sc-cell-communication --demo",
-      "tags": [
-        "singlecell",
-        "communication",
-        "ligand-receptor",
-        "CellPhoneDB",
-        "LIANA",
-        "NicheNet",
-        "CellChat"
-      ],
-      "trigger_keywords": []
-    },
-    {
-      "name": "sc-doublet",
-      "cli_alias": "sc-doublet-detection",
-      "description": "Doublet detection and removal using Scrublet (Python), DoubletFinder (R), and scDblFinder (R). Essential QC step before clustering.",
-      "version": "0.1.0",
-      "status": "mvp",
-      "has_script": true,
-      "has_tests": false,
-      "has_demo": true,
-      "demo_command": "python omicsclaw.py run sc-doublet-detection --demo",
-      "tags": [
-        "singlecell",
-        "doublet",
-        "Scrublet",
-        "DoubletFinder",
-        "scDblFinder",
-        "QC"
-      ],
-      "trigger_keywords": []
-    },
-    {
-      "name": "sc-preprocess",
+      "name": "sc-preprocessing",
       "cli_alias": "sc-preprocessing",
       "description": "Single-cell RNA-seq QC, normalization, HVG selection, PCA, UMAP, and Leiden clustering. Supports both Scanpy (Python) and Seurat (R) workflows.",
       "version": "0.1.0",
@@ -658,7 +810,7 @@
       "trigger_keywords": []
     },
     {
-      "name": "sc-trajectory",
+      "name": "spatial-trajectory",
       "cli_alias": "sc-trajectory",
       "description": "Trajectory inference and pseudotime analysis using DPT, Monocle3, Slingshot, scVelo for RNA velocity, and PAGA for abstracted graph analysis.",
       "version": "0.1.0",
@@ -680,68 +832,10 @@
       "trigger_keywords": []
     },
     {
-      "name": "spatial-cnv",
-      "cli_alias": "spatial-cnv",
-      "description": "Copy number variation inference from spatial transcriptomics expression data.",
-      "version": "0.1.0",
-      "status": "mvp",
-      "has_script": true,
-      "has_tests": true,
-      "has_demo": true,
-      "demo_command": "python omicsclaw.py run spatial-cnv --demo",
-      "tags": [
-        "spatial",
-        "CNV",
-        "copy number",
-        "inferCNV",
-        "cancer"
-      ],
-      "trigger_keywords": []
-    },
-    {
-      "name": "spatial-enrichment",
-      "cli_alias": "spatial-enrichment",
-      "description": "Pathway and gene set enrichment analysis for spatial transcriptomics data.",
-      "version": "0.1.0",
-      "status": "mvp",
-      "has_script": true,
-      "has_tests": true,
-      "has_demo": true,
-      "demo_command": "python omicsclaw.py run spatial-enrichment --demo",
-      "tags": [
-        "spatial",
-        "enrichment",
-        "GSEA",
-        "ORA",
-        "pathway",
-        "GO",
-        "KEGG"
-      ],
-      "trigger_keywords": []
-    },
-    {
-      "name": "spatial-orchestrator",
-      "cli_alias": null,
-      "description": "Query routing and pipeline orchestration for SpatialClaw skills.",
-      "version": "0.1.0",
-      "status": "mvp",
-      "has_script": true,
-      "has_tests": true,
-      "has_demo": true,
-      "demo_command": "python omicsclaw.py run orchestrator --demo",
-      "tags": [
-        "spatial",
-        "orchestrator",
-        "routing",
-        "pipeline"
-      ],
-      "trigger_keywords": []
-    },
-    {
       "name": "spatial-annotate",
       "cli_alias": "spatial-cell-annotation",
       "description": "Cell type annotation for spatial transcriptomics data using marker-based scoring, Tangram mapping, scANVI transfer, or CellAssign probabilistic models.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": true,
@@ -759,10 +853,29 @@
       "trigger_keywords": []
     },
     {
+      "name": "spatial-cnv",
+      "cli_alias": "spatial-cnv",
+      "description": "Copy number variation inference from spatial transcriptomics expression data.",
+      "version": "0.2.0",
+      "status": "mvp",
+      "has_script": true,
+      "has_tests": true,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run spatial-cnv --demo",
+      "tags": [
+        "spatial",
+        "CNV",
+        "copy number",
+        "inferCNV",
+        "cancer"
+      ],
+      "trigger_keywords": []
+    },
+    {
       "name": "spatial-communication",
       "cli_alias": "spatial-cell-communication",
-      "description": "Cell-cell communication analysis via ligand-receptor interaction scoring in spatial transcriptomics data.",
-      "version": "0.1.0",
+      "description": "Cell-cell communication analysis via ligand-receptor interaction scoring using LIANA, CellPhoneDB, FastCCC, or CellChat.",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": true,
@@ -772,7 +885,11 @@
         "spatial",
         "communication",
         "ligand-receptor",
-        "cell-cell interaction"
+        "cell-cell-interaction",
+        "liana",
+        "cellphonedb",
+        "fastccc",
+        "cellchat"
       ],
       "trigger_keywords": []
     },
@@ -780,7 +897,7 @@
       "name": "spatial-condition",
       "cli_alias": "spatial-condition-comparison",
       "description": "Experimental condition comparison using pseudobulk differential expression with proper multi-sample statistics.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": true,
@@ -797,9 +914,9 @@
     },
     {
       "name": "spatial-de",
-      "cli_alias": null,
-      "description": "Differential expression analysis \u2014 find marker genes for clusters or compare two groups. Supports Wilcoxon rank-sum and t-test methods with publication-ready figures and CSV tables.",
-      "version": "0.1.0",
+      "cli_alias": "spatial-de",
+      "description": "Differential expression analysis \u2014 find marker genes for clusters or compare two groups. Supports Wilcoxon rank-sum, t-test, and PyDESeq2 methods with publication-ready figures and CSV tables.",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": true,
@@ -809,15 +926,17 @@
         "spatial",
         "differential-expression",
         "markers",
-        "Wilcoxon"
+        "wilcoxon",
+        "t-test",
+        "pydeseq2"
       ],
       "trigger_keywords": []
     },
     {
       "name": "spatial-deconv",
       "cli_alias": "spatial-deconvolution",
-      "description": "Cell type deconvolution for spatial transcriptomics \u2014 estimates per-spot cell type proportions using NNLS, Cell2Location, RCTD, Tangram, or CARD.",
-      "version": "0.1.0",
+      "description": "Cell type deconvolution for spatial transcriptomics \u2014 estimates per-spot cell type proportions using FlashDeconv, Cell2Location, RCTD, DestVI, Stereoscope, Tangram, SPOTlight, or CARD.",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": true,
@@ -827,9 +946,13 @@
         "spatial",
         "deconvolution",
         "cell-proportion",
+        "flashdeconv",
         "cell2location",
         "rctd",
+        "destvi",
+        "stereoscope",
         "tangram",
+        "spotlight",
         "card"
       ],
       "trigger_keywords": []
@@ -837,8 +960,8 @@
     {
       "name": "spatial-domains",
       "cli_alias": "spatial-domain-identification",
-      "description": "Identify tissue regions and spatial niches from preprocessed spatial transcriptomics data using Leiden graph clustering, SpaGCN, STAGATE, or GraphST.",
-      "version": "0.1.0",
+      "description": "Identify tissue regions and spatial niches from preprocessed spatial transcriptomics data using Leiden, Louvain, SpaGCN, STAGATE, GraphST, or BANKSY.",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": true,
@@ -851,8 +974,53 @@
         "tissue-region",
         "clustering",
         "leiden",
+        "louvain",
         "spagcn",
-        "stagate"
+        "stagate",
+        "graphst",
+        "banksy"
+      ],
+      "trigger_keywords": []
+    },
+    {
+      "name": "spatial-enrichment",
+      "cli_alias": "spatial-enrichment",
+      "description": "Pathway and gene set enrichment analysis for spatial transcriptomics data.",
+      "version": "0.2.0",
+      "status": "mvp",
+      "has_script": true,
+      "has_tests": true,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run spatial-enrichment --demo",
+      "tags": [
+        "spatial",
+        "enrichment",
+        "GSEA",
+        "ORA",
+        "pathway",
+        "GO",
+        "KEGG"
+      ],
+      "trigger_keywords": []
+    },
+    {
+      "name": "spatial-genes",
+      "cli_alias": "spatial-svg-detection",
+      "description": "Find genes with spatially variable expression patterns using Moran's I, SpatialDE, SPARK-X, or FlashS. Identifies genes whose expression is non-randomly distributed across tissue coordinates.",
+      "version": "0.2.0",
+      "status": "mvp",
+      "has_script": true,
+      "has_tests": true,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run spatial-svg-detection --demo",
+      "tags": [
+        "spatial",
+        "SVG",
+        "spatially-variable-genes",
+        "morans",
+        "spatialde",
+        "sparkx",
+        "flashs"
       ],
       "trigger_keywords": []
     },
@@ -860,7 +1028,7 @@
       "name": "spatial-integrate",
       "cli_alias": "spatial-integration",
       "description": "Multi-sample integration and batch correction for spatial transcriptomics data.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": true,
@@ -880,7 +1048,7 @@
       "name": "spatial-preprocess",
       "cli_alias": "spatial-preprocessing",
       "description": "Load spatial transcriptomics data (Visium, Xenium, MERFISH, Slide-seq, generic h5ad), perform QC filtering, normalization, HVG selection, PCA, UMAP, and Leiden clustering.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": true,
@@ -901,7 +1069,7 @@
       "name": "spatial-register",
       "cli_alias": "spatial-registration",
       "description": "Spatial registration and multi-slice alignment for spatial transcriptomics data.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": true,
@@ -920,8 +1088,8 @@
     {
       "name": "spatial-statistics",
       "cli_alias": "spatial-statistics",
-      "description": "Spatial statistics and autocorrelation analysis \u2014 Moran's I, Ripley's functions, neighborhood enrichment, and co-occurrence analysis for spatial transcriptomics data.",
-      "version": "0.1.0",
+      "description": "Comprehensive spatial statistics toolkit \u2014 cluster-level (neighborhood enrichment, Ripley, co-occurrence), gene-level (Moran's I, Geary's C, local Moran, Getis-Ord), and network-level analysis.",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": true,
@@ -930,28 +1098,11 @@
       "tags": [
         "spatial",
         "statistics",
-        "Moran",
-        "Ripley",
-        "neighborhood-enrichment"
-      ],
-      "trigger_keywords": []
-    },
-    {
-      "name": "spatial-genes",
-      "cli_alias": "spatial-svg-detection",
-      "description": "Find genes with spatially variable expression patterns using Moran's I and SpatialDE. Identifies genes whose expression is non-randomly distributed across tissue coordinates.",
-      "version": "0.1.0",
-      "status": "mvp",
-      "has_script": true,
-      "has_tests": true,
-      "has_demo": true,
-      "demo_command": "python omicsclaw.py run spatial-svg-detection --demo",
-      "tags": [
-        "spatial",
-        "SVG",
-        "spatially-variable-genes",
-        "Moran",
-        "SpatialDE"
+        "moran",
+        "geary",
+        "ripley",
+        "neighborhood-enrichment",
+        "getis-ord"
       ],
       "trigger_keywords": []
     },
@@ -959,7 +1110,7 @@
       "name": "spatial-trajectory",
       "cli_alias": "spatial-trajectory",
       "description": "Trajectory inference and pseudotime analysis for spatial transcriptomics data.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": true,
@@ -979,7 +1130,7 @@
       "name": "spatial-velocity",
       "cli_alias": "spatial-velocity",
       "description": "RNA velocity and cellular dynamics analysis for spatial transcriptomics data.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "status": "mvp",
       "has_script": true,
       "has_tests": true,

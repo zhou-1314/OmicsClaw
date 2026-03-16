@@ -26,7 +26,7 @@
 - 🔄 **Workflow continuity** — Resume interrupted analyses, track lineage, avoid redundant computation
 - 🔒 **Privacy-first** — All processing local, memory stores metadata only (no raw data)
 - 🎯 **Smart routing** — Natural language → appropriate analysis automatically
-- 🧬 **Multi-omics coverage** — 50+ skills across spatial, single-cell, genomics, proteomics, metabolomics
+- 🧬 **Multi-omics coverage** — 56+ skills across spatial, single-cell, genomics, proteomics, metabolomics, and bulk RNA-seq
 
 **What makes it different:**
 
@@ -91,9 +91,9 @@ python omicsclaw.py run spatial-preprocessing --input data.h5ad --output results
 
 **Installation tiers:**
 - `pip install -e .` — Core system operations
-- `pip install -e ".[<domain>]"` — Where `<domain>` is `spatial`, `singlecell`, `genomics`, `proteomics`, or `metabolomics`
+- `pip install -e ".[<domain>]"` — Where `<domain>` is `spatial`, `singlecell`, `genomics`, `proteomics`, `metabolomics`, or `bulkrna`
 - `pip install -e ".[spatial-domains]"` — Standalone Deep Learning Layer for `SpaGCN` and `STAGATE`
-- `pip install -e ".[full]"` — All 50+ optional methods across all domains
+- `pip install -e ".[full]"` — All 56+ optional methods across all domains
 
 *Check your installation status anytime with `python omicsclaw.py env`.*
 
@@ -131,8 +131,9 @@ OmicsClaw's memory system transforms it from a stateless tool into a persistent 
 | **Genomics** | 10 | Variant calling, alignment, annotation, structural variants, assembly, phasing, CNV |
 | **Proteomics** | 8 | MS QC, peptide ID, quantification, differential abundance, PTM analysis |
 | **Metabolomics** | 8 | Peak detection, XCMS preprocessing, annotation, normalization, statistical analysis |
+| **Bulk RNA-seq** | 6 | Count matrix QC, differential expression, splicing, enrichment, deconvolution, co-expression |
 
-**Platforms:** Visium, Xenium, MERFISH, Slide-seq, 10x scRNA-seq, Illumina/PacBio, LC-MS/MS
+**Platforms:** Visium, Xenium, MERFISH, Slide-seq, 10x scRNA-seq, Illumina/PacBio, LC-MS/MS, bulk RNA-seq (CSV/TSV)
 
 > 📋 **Full skill catalog:** See [Skills Overview](#skills-overview) section below for complete list with methods
 
@@ -201,18 +202,18 @@ OmicsClaw's memory system transforms it from a stateless tool into a persistent 
 <details>
 <summary>View all genomics skills</summary>
 
-| Skill | Description | Key Methods |
-|-------|-------------|-------------|
-| `genomics-qc` | Sequencing quality control | FastQC, MultiQC |
-| `genomics-alignment` | Read mapping & alignment | BWA, Bowtie2, STAR |
-| `genomics-vcf-operations` | VCF filtering and manipulation | bcftools, GATK |
-| `genomics-variant-calling` | SNV and INDEL calling | GATK HaplotypeCaller, FreeBayes |
-| `genomics-variant-annotation` | Annotate variants with effects | SnpEff, VEP |
-| `genomics-sv-detection` | Structural variant detection | Delly, Manta, Lumpy |
-| `genomics-cnv-calling` | Copy number variation calling | CNVkit, Control-FREEC |
-| `genomics-assembly` | De novo genome assembly | SPAdes, Megahit |
-| `genomics-phasing` | Haplotype phasing | SHAPEIT, Whatshap |
-| `genomics-epigenomics` | ATAC-seq/ChIP-seq analysis | MACS2, HOMER |
+| Skill | Description | Key Methods / Metrics |
+|-------|-------------|----------------------|
+| `genomics-qc` | FASTQ quality control: Phred scores, GC/N content, Q20/Q30 rates, adapter detection | FastQC, fastp, MultiQC |
+| `genomics-alignment` | Alignment statistics: MAPQ, mapping rate, insert size, duplicate rate (SAM flagstat) | BWA-MEM2, Bowtie2, Minimap2 |
+| `genomics-vcf-operations` | VCF parsing, multi-allelic handling, Ti/Tv, QUAL/DP filtering | bcftools, GATK SelectVariants |
+| `genomics-variant-calling` | Variant classification (SNP/MNP/INS/DEL/COMPLEX), Ti/Tv ratio, quality assessment | GATK HaplotypeCaller, DeepVariant, FreeBayes |
+| `genomics-variant-annotation` | Functional impact prediction: VEP consequences, SIFT, PolyPhen-2, CADD scores | VEP, SnpEff, ANNOVAR |
+| `genomics-sv-detection` | Structural variant calling (DEL/DUP/INV/TRA), BND notation, size classification | Manta, Delly, Lumpy, Sniffles |
+| `genomics-cnv-calling` | Copy number variation: CBS segmentation, log2 ratio thresholds, 5-tier CN classification | CNVkit, Control-FREEC, GATK gCNV |
+| `genomics-assembly` | Assembly quality: N50/N90/L50/L90 (QUAST-compatible), GC content, completeness | SPAdes, Megahit, Flye, Canu |
+| `genomics-phasing` | Haplotype phasing: phase block N50, PS field parsing, phased fraction | WhatsHap, SHAPEIT5, Eagle2 |
+| `genomics-epigenomics` | Peak analysis: narrowPeak/BED parsing, ENCODE QC, assay-specific metrics | MACS2/MACS3, Homer, Genrich |
 
 </details>
 
@@ -249,14 +250,34 @@ OmicsClaw's memory system transforms it from a stateless tool into a persistent 
 
 | Skill | Description | Key Methods |
 |-------|-------------|-------------|
-| `metabolomics-peak-detection` | Extract peaks from MS data | XCMS, MZmine |
-| `metabolomics-xcms-preprocessing` | Alignment & feature grouping | XCMS |
-| `metabolomics-normalization` | Signal drift correction | NOREVA, MetaboAnalyst |
-| `metabolomics-annotation` | Metabolite ID & adduct matching | MS-DIAL, SIRIUS |
-| `metabolomics-quantification` | Feature quantification | OpenMS, XCMS |
-| `metabolomics-statistics` | Multivariate statistics | MetaboAnalyst, ropls |
-| `metabolomics-de` | Differential metabolite analysis | t-test, ANOVA |
-| `metabolomics-pathway-enrichment` | Pathway and network analysis | MSEA, MetaboAnalyst |
+| `metabolomics-peak-detection` | Peak detection with prominence/height/distance filtering | `scipy.signal.find_peaks`, peak widths |
+| `metabolomics-xcms-preprocessing` | LC-MS/GC-MS peak picking, alignment & feature grouping | XCMS centWave (Python simulation) |
+| `metabolomics-normalization` | Normalization & scaling (5 methods) | Median, Quantile (Bolstad 2003), TIC, PQN (Dieterle 2006), Log2 |
+| `metabolomics-annotation` | Metabolite annotation with multi-adduct support | HMDB m/z matching, [M+H]⁺/[M-H]⁻/[M+Na]⁺ adducts |
+| `metabolomics-quantification` | Feature quantification, imputation & normalization | Min/2, median, KNN imputation (`sklearn`); TIC/median/log norm |
+| `metabolomics-statistics` | Univariate statistical testing with FDR correction | Welch's t-test, Wilcoxon, ANOVA, Kruskal-Wallis + BH FDR |
+| `metabolomics-de` | Differential metabolite analysis with PCA | Welch's t-test + BH FDR, PCA visualization |
+| `metabolomics-pathway-enrichment` | Pathway enrichment via over-representation analysis | Hypergeometric test (ORA), KEGG pathways, BH FDR |
+
+</details>
+
+### Bulk RNA-seq (6 skills)
+
+- **QC:** `bulkrna-alignment` — library size, gene detection, sample correlation
+- **Analysis:** `bulkrna-de`, `bulkrna-splicing`, `bulkrna-enrichment`
+- **Advanced:** `bulkrna-deconvolution`, `bulkrna-coexpression`
+
+<details>
+<summary>View all bulk RNA-seq skills</summary>
+
+| Skill | Description | Key Methods |
+|-------|-------------|-------------|
+| `bulkrna-alignment` | Count matrix QC — library size, gene detection, sample correlation | pandas, matplotlib |
+| `bulkrna-de` | Differential expression analysis | PyDESeq2, t-test fallback |
+| `bulkrna-splicing` | Alternative splicing analysis — PSI, event detection | rMATS/SUPPA2 parsing, delta-PSI |
+| `bulkrna-enrichment` | Pathway enrichment — ORA/GSEA | GSEApy, hypergeometric fallback |
+| `bulkrna-deconvolution` | Cell type deconvolution from bulk | NNLS (scipy), CIBERSORTx bridge |
+| `bulkrna-coexpression` | WGCNA-style co-expression network | Soft thresholding, hierarchical clustering, TOM |
 
 </details>
 
@@ -313,9 +334,65 @@ python omicsclaw.py run sc-doublet-detection --input pbmc.h5ad --output output/s
 python omicsclaw.py run sc-cell-annotation --input output/sc-preprocess/processed.h5ad --output output/sc-annotate
 ```
 
-**Genomics:**
+**Genomics — variant calling pipeline:**
 ```bash
-python omicsclaw.py run genomics-vcf-operations --input variants.vcf.gz --output output/vcf-ops
+# 1. Quality control
+python omicsclaw.py run genomics-qc --input reads.fastq.gz --output output/genomics-qc
+
+# 2. Alignment statistics
+python omicsclaw.py run genomics-alignment --input aligned.sam --output output/genomics-alignment
+
+# 3. Variant calling
+python omicsclaw.py run genomics-variant-calling --demo --output output/genomics-variants
+
+# 4. VCF operations (filter by quality)
+python omicsclaw.py run genomics-vcf-operations --input variants.vcf --output output/vcf-ops --min-qual 30 --min-dp 10
+
+# 5. Variant annotation
+python omicsclaw.py run genomics-variant-annotation --demo --output output/genomics-annotation
+
+# 6. CNV calling (with CBS segmentation)
+python omicsclaw.py run genomics-cnv-calling --demo --output output/genomics-cnv
+
+# 7. Assembly quality assessment
+python omicsclaw.py run genomics-assembly --input contigs.fasta --output output/genomics-assembly --genome-size 5000000
+```
+
+**Metabolomics — LC-MS analysis pipeline:**
+```bash
+# 1. XCMS preprocessing (peak detection & alignment)
+python omicsclaw.py run metabolomics-xcms-preprocessing --demo --output output/met-xcms
+
+# 2. Normalization (PQN with median reference spectrum)
+python omicsclaw.py run metabolomics-normalization --input output/met-xcms/tables/peak_table.csv --output output/met-norm --method pqn
+
+# 3. Quantification with KNN imputation
+python omicsclaw.py run metabolomics-quantification --input output/met-norm/tables/normalized.csv --output output/met-quant --impute knn
+
+# 4. Statistical analysis (Welch's t-test + BH FDR)
+python omicsclaw.py run metabolomics-statistics --input output/met-quant/tables/quantified_features.csv --output output/met-stats --method ttest
+
+# 5. Pathway enrichment (hypergeometric ORA)
+python omicsclaw.py run metabolomics-pathway-enrichment --input output/met-stats/tables/significant.csv --output output/met-pathway
+```
+
+**Bulk RNA-seq — differential expression pipeline:**
+```bash
+# 1. Count matrix QC (library size, gene detection, sample correlation)
+python omicsclaw.py run bulkrna-alignment --input counts.csv --output output/bulk-qc
+
+# 2. Differential expression (PyDESeq2 or t-test fallback)
+python omicsclaw.py run bulkrna-de --input counts.csv --output output/bulk-de \
+  --control-prefix ctrl --treat-prefix treat
+
+# 3. Pathway enrichment (ORA with hypergeometric test)
+python omicsclaw.py run bulkrna-enrichment --input output/bulk-de/tables/de_results.csv --output output/bulk-enrich
+
+# 4. Cell type deconvolution (NNLS)
+python omicsclaw.py run bulkrna-deconvolution --input counts.csv --output output/bulk-deconv
+
+# 5. Co-expression network analysis (WGCNA-style)
+python omicsclaw.py run bulkrna-coexpression --input counts.csv --output output/bulk-wgcna
 ```
 
 ### Smart Orchestration
@@ -352,6 +429,7 @@ python omicsclaw.py run orchestrator \
 # Automatically detects file type and runs appropriate preprocessing
 python omicsclaw.py run orchestrator --input data.h5ad --output output
 python omicsclaw.py run orchestrator --input variants.vcf.gz --output output
+python omicsclaw.py run orchestrator --input counts.csv --output output
 ```
 
 **Named pipelines:**
@@ -377,7 +455,7 @@ Every skill generates standardized output:
 output_dir/
 ├── report.md              # Human-readable analysis report
 ├── result.json            # Machine-readable structured results
-├── processed.h5ad         # Updated data (if applicable)
+├── processed.h5ad         # Updated data (spatial/single-cell skills)
 ├── figures/               # Visualizations (PNG/SVG)
 ├── tables/                # Result tables (CSV)
 └── reproducibility/       # Version info, run command
@@ -399,13 +477,15 @@ OmicsClaw/
 │   ├── singlecell/           # Single-cell omics utilities
 │   ├── genomics/             # Genomics utilities
 │   ├── proteomics/           # Proteomics utilities
-│   └── metabolomics/         # Metabolomics utilities
+│   ├── metabolomics/         # Metabolomics utilities
+│   └── bulkrna/              # Bulk RNA-seq utilities
 ├── skills/                   # Self-contained analysis modules
 │   ├── spatial/              # 15 spatial transcriptomics skills
 │   ├── singlecell/           # 9 single-cell omics skills
 │   ├── genomics/             # 10 genomics skills
 │   ├── proteomics/           # 8 proteomics skills
 │   ├── metabolomics/         # 8 metabolomics skills
+│   ├── bulkrna/              # 6 bulk RNA-seq skills
 │   └── orchestrator/         # Multi-domain routing
 ├── bot/                      # Telegram + Feishu messaging interfaces
 ├── docs/                     # Documentation (installation, methods, architecture)
@@ -424,7 +504,7 @@ skills/<domain>/<skill>/
 └── tests/                    # Unit and integration tests
 ```
 
-Skills communicate via standardized formats (`.h5ad`, `.vcf`, `.mzML`) and can be chained into pipelines.
+Skills communicate via standardized formats (`.h5ad`, `.vcf`, `.mzML`, `.csv`) and can be chained into pipelines.
 
 ## Bot Integration — Memory-Enabled Conversational Interface
 
@@ -446,7 +526,7 @@ python bot/feishu_bot.py      # Feishu (WebSocket, no public IP needed)
 **Key Features:**
 - 🧠 **Persistent memory** — Remembers datasets, analyses, preferences across sessions
 - 💬 **Natural language** — "Find spatial domains" → automatic skill routing
-- 📁 **Multi-omics upload** — Supports `.h5ad`, `.vcf`, `.mzML` files
+- 📁 **Multi-omics upload** — Supports `.h5ad`, `.vcf`, `.mzML`, `.csv`/`.tsv` files
 - 🖼️ **Image recognition** — Analyzes tissue section photos (H&E, fluorescence)
 - 📊 **Auto-delivery** — Reports and figures sent directly to chat
 - 🔒 **Privacy-first** — Local processing, metadata-only storage

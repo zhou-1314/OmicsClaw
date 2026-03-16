@@ -508,6 +508,15 @@ def main():
     run_p.add_argument("--window-size", type=int)
     run_p.add_argument("--step", type=int)
     run_p.add_argument("--reference-cat", nargs="+")
+    # bulkrna-specific
+    run_p.add_argument("--control-prefix", dest="control_prefix")
+    run_p.add_argument("--treat-prefix", dest="treat_prefix")
+    run_p.add_argument("--padj-cutoff", type=float)
+    run_p.add_argument("--lfc-cutoff", type=float)
+    run_p.add_argument("--dpsi-cutoff", type=float)
+    run_p.add_argument("--gene-set-file")
+    run_p.add_argument("--power", type=int)
+    run_p.add_argument("--min-module-size", type=int)
 
     args = parser.parse_args()
 
@@ -530,7 +539,7 @@ def main():
         print(f"Core System:      {core_status}")
         
         print(f"\n{BOLD}Domain Tiers:{RESET}")
-        for tier in ["spatial", "singlecell", "genomics", "proteomics", "metabolomics"]:
+        for tier in ["spatial", "singlecell", "genomics", "proteomics", "metabolomics", "bulkrna"]:
             is_installed = tiers.get(tier, False)
             if is_installed:
                 status = f"{GREEN}✅ Installed{RESET}"
@@ -623,6 +632,15 @@ def main():
             # cnv-specific
             "window_size": "--window-size",
             "step": "--step",
+            # bulkrna-specific
+            "control_prefix": "--control-prefix",
+            "treat_prefix": "--treat-prefix",
+            "padj_cutoff": "--padj-cutoff",
+            "lfc_cutoff": "--lfc-cutoff",
+            "dpsi_cutoff": "--dpsi-cutoff",
+            "gene_set_file": "--gene-set-file",
+            "power": "--power",
+            "min_module_size": "--min-module-size",
         }
         # flags whose values are file paths — resolve to absolute so subprocess cwd doesn't matter
         _FILE_PATH_FLAGS = {"reference", "reference_slice", "model"}
