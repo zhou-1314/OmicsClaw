@@ -36,7 +36,6 @@ import sys
 import tempfile
 import warnings
 from pathlib import Path
-from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -106,7 +105,8 @@ def run_neighborhood_enrichment(
     """Compute spatial neighbors and neighborhood enrichment z-scores."""
     _ensure_categorical(adata, cluster_key)
 
-    _ensure_spatial_graph(adata)
+    logger.info("Building spatial neighbor graph ...")
+    sq.gr.spatial_neighbors(adata)
 
     logger.info("Computing neighborhood enrichment (cluster_key='%s') ...", cluster_key)
     sq.gr.nhood_enrichment(adata, cluster_key=cluster_key)
@@ -152,9 +152,8 @@ def run_ripley(
     """Compute Ripley's L function per cluster."""
     _ensure_categorical(adata, cluster_key)
 
-    spatial_key = get_spatial_key(adata) or "spatial"
     logger.info("Computing Ripley's L function (cluster_key='%s') ...", cluster_key)
-    result = sq.gr.ripley(adata, cluster_key=cluster_key, mode="L", spatial_key=spatial_key)
+    result = sq.gr.ripley(adata, cluster_key=cluster_key, mode="L")
 
     categories = list(adata.obs[cluster_key].cat.categories)
 
@@ -189,9 +188,8 @@ def run_co_occurrence(
     """Compute pairwise cluster co-occurrence across spatial distances."""
     _ensure_categorical(adata, cluster_key)
 
-    spatial_key = get_spatial_key(adata) or "spatial"
     logger.info("Computing co-occurrence (cluster_key='%s') ...", cluster_key)
-    result = sq.gr.co_occurrence(adata, cluster_key=cluster_key, spatial_key=spatial_key)
+    result = sq.gr.co_occurrence(adata, cluster_key=cluster_key)
 
     categories = list(adata.obs[cluster_key].cat.categories)
 
@@ -245,8 +243,7 @@ def _select_genes(adata, genes: list[str] | None, n_top: int = 20) -> list[str]:
 def _ensure_spatial_graph(adata, n_neighs: int = 6) -> None:
     """Build squidpy spatial graph if not already present."""
     if "spatial_connectivities" not in adata.obsp:
-        spatial_key = get_spatial_key(adata) or "spatial"
-        sq.gr.spatial_neighbors(adata, n_neighs=n_neighs, coord_type="generic", spatial_key=spatial_key)
+        sq.gr.spatial_neighbors(adata, n_neighs=n_neighs, coord_type="generic")
 
 
 def _get_gene_expression(adata, gene: str) -> np.ndarray:
@@ -489,8 +486,8 @@ def run_getis_ord(
 
         p_values = 2 * (1 - norm.cdf(np.abs(gi_star)))
         sig = p_values < 0.05
-        n_hot = int(np.sum(sig & (gi_star > 0)))
-        n_cold = int(np.sum(sig & (gi_star < 0)))
+        n_hot = int((sig & (gi_star > 0)).sum())
+        n_cold = int((sig & (gi_star < 0)).sum())
 
         all_results[gene] = {
             "n_hotspots": n_hot,
@@ -637,33 +634,57 @@ def run_spatial_centrality(
     n_neighs: int = 6,
     sample_size: int = 2000,
 ) -> dict:
-    """Betweenness and closeness centrality per cluster using squidpy.
-    Computes centrality on the cluster-level spatial graph.
+    """Betweenness and closeness centrality per cluster in the spatial graph.
+
+    For large graphs (>sample_size nodes), centrality is estimated on a
+    random subsample for performance.
     """
     require_spatial_coords(adata)
     _ensure_spatial_graph(adata, n_neighs=n_neighs)
     _ensure_categorical(adata, cluster_key)
 
-    logger.info("Computing spatial centrality for clusters (cluster_key='%s') ...", cluster_key)
-    sq.gr.centrality_scores(adata, cluster_key=cluster_key)
+    try:
+        import networkx as nx
+    except ImportError:
+        raise ImportError("spatial_centrality requires networkx: pip install networkx")
 
-    uns_key = f"{cluster_key}_centrality_scores"
-    df = adata.uns.get(uns_key)
-    
+    conn = adata.obsp["spatial_connectivities"]
+    if sparse.issparse(conn):
+        G = nx.from_scipy_sparse_array(conn)
+    else:
+        G = nx.from_numpy_array(conn)
+
+    n_nodes = G.number_of_nodes()
+    logger.info("Computing spatial centrality for %d nodes ...", n_nodes)
+
+    if n_nodes > sample_size:
+        k = sample_size
+        betweenness = nx.betweenness_centrality(G, k=k, seed=42)
+        logger.info("Used sampled betweenness (k=%d) for performance", k)
+    else:
+        betweenness = nx.betweenness_centrality(G)
+
+    closeness = nx.closeness_centrality(G)
+
     per_cluster = {}
-    if df is not None:
-        for cat in df.index:
-            per_cluster[str(cat)] = {
-                "betweenness_centrality": float(df.loc[cat, "betweenness_centrality"]) if "betweenness_centrality" in df.columns else 0.0,
-                "closeness_centrality": float(df.loc[cat, "closeness_centrality"]) if "closeness_centrality" in df.columns else 0.0,
-                "degree_centrality": float(df.loc[cat, "degree_centrality"]) if "degree_centrality" in df.columns else 0.0,
-            }
+    for cat in adata.obs[cluster_key].cat.categories:
+        mask = adata.obs[cluster_key] == cat
+        nodes = np.where(mask.values)[0]
+        bet_vals = [betweenness.get(int(n), 0) for n in nodes]
+        clo_vals = [closeness.get(int(n), 0) for n in nodes]
+        per_cluster[str(cat)] = {
+            "n_cells": int(mask.sum()),
+            "mean_betweenness": float(np.mean(bet_vals)) if bet_vals else 0,
+            "mean_closeness": float(np.mean(clo_vals)) if clo_vals else 0,
+        }
 
     return {
         "analysis_type": "spatial_centrality",
         "cluster_key": cluster_key,
-        "n_clusters": len(df.index) if df is not None else 0,
+        "n_nodes": n_nodes,
         "per_cluster": per_cluster,
+        "global_mean_betweenness": float(np.mean(list(betweenness.values()))),
+        "global_mean_closeness": float(np.mean(list(closeness.values()))),
     }
 
 
@@ -672,7 +693,7 @@ def run_spatial_centrality(
 # ---------------------------------------------------------------------------
 
 
-_ANALYSIS_REGISTRY: dict[str, Callable] = {
+_ANALYSIS_REGISTRY: dict[str, callable] = {
     "neighborhood_enrichment": lambda adata, **kw: run_neighborhood_enrichment(adata, cluster_key=kw.get("cluster_key", "leiden")),
     "ripley": lambda adata, **kw: run_ripley(adata, cluster_key=kw.get("cluster_key", "leiden")),
     "co_occurrence": lambda adata, **kw: run_co_occurrence(adata, cluster_key=kw.get("cluster_key", "leiden")),
@@ -702,7 +723,7 @@ def generate_figures(adata, output_dir: Path, summary: dict) -> list[str]:
         "co_occurrence": ("co_occurrence", "co_occurrence.png"),
         "ripley": ("ripley", "ripley.png"),
         "moran": ("moran", "moran_ranking.png"),
-        "spatial_centrality": ("centrality", "centrality_scores.png"),
+        "centrality": ("centrality", "centrality_scores.png"),
     }
 
     if analysis_type in viz_subtype_map:

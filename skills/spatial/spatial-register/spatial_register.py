@@ -150,6 +150,11 @@ def run_registration(
         reference_slice=reference_slice, spatial_key=spatial_key,
     )
 
+    store_analysis_metadata(
+        adata, SKILL_NAME, result["method"],
+        params={"method": method, "slice_key": slice_key, "reference_slice": reference_slice},
+    )
+
     return {"n_cells": n_cells, "n_genes": n_genes, "slice_key": slice_key, **result}
 
 
@@ -307,16 +312,14 @@ def write_report(
 
     repro_dir = output_dir / "reproducibility"
     repro_dir.mkdir(exist_ok=True)
-    cmd_parts: list[str] = [f"python spatial_register.py --input <input.h5ad> --output {output_dir}"]
+    cmd = f"python spatial_register.py --input <input.h5ad> --output {output_dir}"
     for k, v in params.items():
         if v is not None:
-            cmd_parts.append(f"--{str(k).replace('_', '-')} {v}")
-    
-    cmd_str = " ".join(cmd_parts)
-    (repro_dir / "commands.sh").write_text(f"#!/bin/bash\n{cmd_str}\n")
+            cmd += f" --{k.replace('_', '-')} {v}"
+    (repro_dir / "commands.sh").write_text(f"#!/bin/bash\n{cmd}\n")
 
     import pkg_resources
-    env_lines: list[str] = []
+    env_lines = []
     for pkg in ["scanpy", "anndata", "scipy", "numpy", "pandas", "matplotlib"]:
         try:
             ver = pkg_resources.get_distribution(pkg).version
@@ -334,7 +337,7 @@ def write_report(
 def get_demo_data() -> tuple:
     """Run spatial-preprocess --demo and synthesize multi-slice data."""
     preprocess_script = (
-        _PROJECT_ROOT / "skills" / "spatial" / "spatial-preprocess" / "spatial_preprocess.py"
+        _PROJECT_ROOT / "skills" / "spatial" / "preprocess" / "spatial_preprocess.py"
     )
     if not preprocess_script.exists():
         raise FileNotFoundError(f"spatial-preprocess not found at {preprocess_script}")
@@ -423,11 +426,6 @@ def main():
 
     generate_figures(adata, output_dir, summary)
     write_report(output_dir, summary, input_file, params)
-
-    store_analysis_metadata(
-        adata, SKILL_NAME, summary["method"],
-        params=params,
-    )
 
     h5ad_path = output_dir / "processed.h5ad"
     adata.write_h5ad(h5ad_path)
