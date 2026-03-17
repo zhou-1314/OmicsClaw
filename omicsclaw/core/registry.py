@@ -342,6 +342,36 @@ _HARDCODED_SKILLS: dict[str, dict[str, Any]] = {
     # -----------------------------------------------------------------------
     # Single-cell domain
     # -----------------------------------------------------------------------
+    "sc-qc": {
+        "domain": "singlecell",
+        "alias": "sc-qc",
+        "script": SKILLS_DIR / "singlecell" / "sc-qc" / "sc_qc.py",
+        "demo_args": ["--demo"],
+        "description": "Calculate and visualize QC metrics for scRNA-seq data",
+        "allowed_extra_flags": {"--species"},
+        "saves_h5ad": True,
+    },
+    "sc-filter": {
+        "domain": "singlecell",
+        "alias": "sc-filter",
+        "script": SKILLS_DIR / "singlecell" / "sc-filter" / "sc_filter.py",
+        "demo_args": ["--demo"],
+        "description": "Filter cells and genes based on QC metrics with tissue-specific presets",
+        "allowed_extra_flags": {
+            "--min-genes", "--max-genes", "--min-counts", "--max-counts",
+            "--max-mt-percent", "--min-cells", "--tissue",
+        },
+        "saves_h5ad": True,
+    },
+    "sc-ambient-removal": {
+        "domain": "singlecell",
+        "alias": "sc-ambient-removal",
+        "script": SKILLS_DIR / "singlecell" / "sc-ambient-removal" / "sc_ambient.py",
+        "demo_args": ["--demo"],
+        "description": "Remove ambient RNA contamination using CellBender or simple subtraction",
+        "allowed_extra_flags": {"--method", "--expected-cells", "--raw-h5", "--contamination"},
+        "saves_h5ad": True,
+    },
     "sc-preprocessing": {
         "domain": "singlecell",
         "alias": "sc-preprocessing",
@@ -375,13 +405,28 @@ _HARDCODED_SKILLS: dict[str, dict[str, Any]] = {
         "allowed_extra_flags": {"--method", "--reference", "--species"},
         "saves_h5ad": True,
     },
-    "sc-trajectory": {
+    # sc-trajectory: replaced by sc-pseudotime and sc-velocity
+    "sc-pseudotime": {
         "domain": "singlecell",
-        "alias": "sc-trajectory",
-        "script": SKILLS_DIR / "singlecell" / "sc-trajectory" / "sc_trajectory.py",
+        "alias": "sc-pseudotime",
+        "script": SKILLS_DIR / "singlecell" / "sc-pseudotime" / "sc_pseudotime.py",
         "demo_args": ["--demo"],
-        "description": "Trajectory inference and pseudotime (Monocle3, Slingshot, CellRank, scVelo)",
-        "allowed_extra_flags": {"--method", "--root-cluster"},
+        "description": "Pseudotime analysis with PAGA, Diffusion Map, and DPT (scanpy)",
+        "allowed_extra_flags": {
+            "--cluster-key", "--root-cluster", "--root-cell", "--n-dcs",
+            "--n-genes", "--method",
+        },
+        "requires_preprocessed": True,
+        "saves_h5ad": True,
+    },
+    "sc-velocity": {
+        "domain": "singlecell",
+        "alias": "sc-velocity",
+        "script": SKILLS_DIR / "singlecell" / "sc-velocity" / "sc_velocity.py",
+        "demo_args": ["--demo"],
+        "description": "RNA velocity analysis with scVelo (requires spliced/unspliced layers)",
+        "allowed_extra_flags": {"--mode", "--n-jobs"},
+        "requires_preprocessed": True,
         "saves_h5ad": True,
     },
     "sc-batch-integration": {
@@ -406,36 +451,30 @@ _HARDCODED_SKILLS: dict[str, dict[str, Any]] = {
         "requires_preprocessed": True,
         "saves_h5ad": True,
     },
+    "sc-markers": {
+        "domain": "singlecell",
+        "alias": "sc-markers",
+        "script": SKILLS_DIR / "singlecell" / "sc-markers" / "sc_markers.py",
+        "demo_args": ["--demo"],
+        "description": "Find marker genes for cell clusters using Wilcoxon, t-test, or logistic regression",
+        "allowed_extra_flags": {"--groupby", "--method", "--n-genes", "--n-top"},
+        "requires_preprocessed": True,
+        "saves_h5ad": True,
+    },
     "sc-grn": {
         "domain": "singlecell",
         "alias": "sc-grn",
         "script": SKILLS_DIR / "singlecell" / "sc-grn" / "sc_grn.py",
         "demo_args": ["--demo"],
-        "description": "Gene regulatory network inference (pySCENIC, CellOracle)",
-        "allowed_extra_flags": {"--method", "--n-top-targets"},
+        "description": "Gene regulatory network inference with pySCENIC (GRNBoost2, cisTarget, AUCell)",
+        "allowed_extra_flags": {
+            "--tf-list", "--db", "--motif", "--n-top-targets", "--n-jobs", "--seed",
+        },
         "requires_preprocessed": True,
-        "saves_h5ad": False,
-    },
-    "sc-cell-communication": {
-        "domain": "singlecell",
-        "alias": "sc-cell-communication",
-        "legacy_aliases": ["sc-communication"],
-        "script": SKILLS_DIR / "singlecell" / "sc-cell-communication" / "sc_communication.py",
-        "demo_args": ["--demo"],
-        "description": "Cell-cell communication (CellPhoneDB, LIANA+, NicheNet)",
-        "allowed_extra_flags": {"--method", "--species", "--cell-type-key", "--n-perms"},
-        "requires_preprocessed": True,
-        "saves_h5ad": False,
-    },
-    "sc-multiome": {
-        "domain": "singlecell",
-        "alias": "sc-multiome",
-        "script": SKILLS_DIR / "singlecell" / "sc-multiome" / "sc_multiome.py",
-        "demo_args": ["--demo"],
-        "description": "Paired multi-omics integration — scRNA+scATAC, CITE-seq (WNN, MOFA+, scVI-tools)",
-        "allowed_extra_flags": {"--method"},
         "saves_h5ad": True,
     },
+    # sc-cell-communication: script not yet implemented
+    # sc-multiome: script not yet implemented
     # -----------------------------------------------------------------------
     # Genomics domain
     # -----------------------------------------------------------------------
