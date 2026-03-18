@@ -333,7 +333,8 @@ def main():
     top_markers = {}
     for cluster in markers['group'].unique():
         cluster_markers = markers[markers['group'] == cluster]
-        top_markers[str(cluster)] = cluster_markers.sort_values('pvals_adj')
+        sort_col = 'pvals_adj' if 'pvals_adj' in cluster_markers.columns else 'scores'
+        top_markers[str(cluster)] = cluster_markers.sort_values(sort_col)
 
     # Generate figures
     logger.info("Generating figures...")

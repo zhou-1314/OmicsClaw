@@ -33,28 +33,38 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "orchestrator"
-SKILL_VERSION = "0.1.0"
+SKILL_VERSION = "0.2.0"
 
 KEYWORD_MAP: dict[str, str] = {
+    # QC
+    "qc": "sc-qc",
+    "quality control": "sc-qc",
+    "qc metrics": "sc-qc",
+    # Filtering
+    "filter cells": "sc-filter",
+    "filter genes": "sc-filter",
+    "cell filtering": "sc-filter",
     # Preprocessing
     "preprocess": "sc-preprocessing",
-    "qc": "sc-preprocessing",
-    "quality control": "sc-preprocessing",
     "normalize": "sc-preprocessing",
     "clustering": "sc-preprocessing",
     "scrna-seq": "sc-preprocessing",
     "single cell": "sc-preprocessing",
+    "hvg": "sc-preprocessing",
+    "pca": "sc-preprocessing",
+    "umap": "sc-preprocessing",
+    "leiden": "sc-preprocessing",
+    # Ambient RNA
+    "ambient": "sc-ambient-removal",
+    "ambient rna": "sc-ambient-removal",
+    "cellbender": "sc-ambient-removal",
+    "soupx": "sc-ambient-removal",
+    "soup": "sc-ambient-removal",
     # Doublet detection
     "doublet": "sc-doublet-detection",
     "scrublet": "sc-doublet-detection",
     "doubletfinder": "sc-doublet-detection",
     "remove doublets": "sc-doublet-detection",
-    # Trajectory
-    "trajectory": "sc-trajectory",
-    "pseudotime": "sc-trajectory",
-    "monocle": "sc-trajectory",
-    "slingshot": "sc-trajectory",
-    "cellrank": "sc-trajectory",
     # Annotation
     "cell type": "sc-cell-annotation",
     "annotation": "sc-cell-annotation",
@@ -67,49 +77,60 @@ KEYWORD_MAP: dict[str, str] = {
     "harmony": "sc-batch-integration",
     "scvi": "sc-batch-integration",
     "integrate": "sc-batch-integration",
+    "bbknn": "sc-batch-integration",
+    "scanorama": "sc-batch-integration",
     # Differential expression
     "differential expression": "sc-de",
     "de analysis": "sc-de",
-    "marker genes": "sc-de",
-    "wilcoxon": "sc-de",
+    "differentially expressed": "sc-de",
+    # Markers
+    "marker genes": "sc-markers",
+    "find markers": "sc-markers",
+    "cluster markers": "sc-markers",
+    # Pseudotime / Trajectory
+    "trajectory": "sc-pseudotime",
+    "pseudotime": "sc-pseudotime",
+    "diffusion pseudotime": "sc-pseudotime",
+    "dpt": "sc-pseudotime",
+    "paga": "sc-pseudotime",
+    "cell fate": "sc-pseudotime",
+    # Velocity
+    "velocity": "sc-velocity",
+    "rna velocity": "sc-velocity",
+    "scvelo": "sc-velocity",
+    "spliced unspliced": "sc-velocity",
     # GRN
     "grn": "sc-grn",
     "gene regulatory": "sc-grn",
     "scenic": "sc-grn",
-    "celloracle": "sc-grn",
-    # Communication
-    "cell communication": "sc-cell-communication",
-    "ligand receptor": "sc-cell-communication",
-    "cellphonedb": "sc-cell-communication",
-    "nichenet": "sc-cell-communication",
-    # Multiome
-    "multiome": "sc-multiome",
-    "cite-seq": "sc-multiome",
-    "atac": "sc-multiome",
-    "wnn": "sc-multiome",
+    "pyscenic": "sc-grn",
+    "regulon": "sc-grn",
 }
 
 SKILL_DESCRIPTIONS: dict[str, str] = {
+    "sc-qc": "QC metrics calculation and visualization",
+    "sc-filter": "Cell/gene filtering with tissue-specific presets",
     "sc-preprocessing": "scRNA-seq QC, normalization, HVG, PCA/UMAP, Leiden clustering",
+    "sc-ambient-removal": "Ambient RNA removal (CellBender, SoupX, simple)",
     "sc-doublet-detection": "Doublet detection and removal (Scrublet, scDblFinder, DoubletFinder)",
-    "sc-cell-annotation": "Cell type annotation (CellTypist, SingleR, scmap, GARNET, scANVI)",
-    "sc-trajectory": "Trajectory inference and pseudotime (Monocle3, Slingshot, CellRank)",
-    "sc-batch-integration": "Multi-sample integration and batch correction (Harmony, scVI, BBKNN)",
-    "sc-de": "Differential expression analysis (Wilcoxon, MAST, pseudobulk PyDESeq2)",
-    "sc-grn": "Gene regulatory network inference (pySCENIC, CellOracle)",
-    "sc-cell-communication": "Cell-cell communication (CellPhoneDB, LIANA+, NicheNet)",
-    "sc-multiome": "Paired multi-omics integration (WNN, MOFA+, scVI-tools)",
+    "sc-cell-annotation": "Cell type annotation (marker-based, CellTypist, SingleR, scmap)",
+    "sc-batch-integration": "Batch correction (Harmony, scVI, BBKNN, Scanorama)",
+    "sc-de": "Differential expression (Wilcoxon, t-test, MAST, DESeq2)",
+    "sc-markers": "Marker gene identification (Wilcoxon, t-test, logistic regression)",
+    "sc-pseudotime": "Pseudotime and trajectory (PAGA, DPT)",
+    "sc-velocity": "RNA velocity (scVelo stochastic/dynamical)",
+    "sc-grn": "Gene regulatory network inference (pySCENIC)",
 }
 
 def route_query(query: str) -> dict:
     """Route a natural language query to the best skill."""
     query_lower = query.lower().strip()
-    
+
     scores: dict[str, int] = {}
     for kw, skill in KEYWORD_MAP.items():
         if kw in query_lower:
             scores[skill] = scores.get(skill, 0) + len(kw)
-    
+
     if scores:
         best_skill = max(scores, key=lambda s: scores[s])
         confidence = min(1.0, scores[best_skill] / 20.0)
@@ -120,13 +141,13 @@ def route_query(query: str) -> dict:
             "confidence": round(confidence, 2),
             "matched_keywords": matched_kws,
         }
-    
+
     return {
         "matched": False,
-        "skill": "sc-preprocess",
+        "skill": "sc-preprocessing",
         "confidence": 0.0,
         "matched_keywords": [],
-        "fallback_reason": "No keywords matched; defaulting to sc-preprocess",
+        "fallback_reason": "No keywords matched; defaulting to sc-preprocessing",
     }
 
 def route_query_with_mode(query: str, routing_mode: str = "keyword") -> dict:
@@ -153,18 +174,20 @@ def main():
         example_queries = [
             "remove doublets from single cell data",
             "annotate cell types in my scRNA-seq",
-            "infer trajectory and pseudotime",
-            "integrate multiple single cell samples",
+            "compute pseudotime and trajectory",
+            "integrate multiple single cell samples with harmony",
             "find differentially expressed genes",
             "analyze gene regulatory networks",
+            "run RNA velocity analysis",
+            "find marker genes for each cluster",
         ]
         print("\nSingle-Cell Orchestrator Demo — Query Routing\n")
-        print(f"{'Query':<50} {'→ Skill':<20} Confidence")
-        print("-" * 80)
+        print(f"{'Query':<55} {'→ Skill':<22} Confidence")
+        print("-" * 90)
         demo_routes = []
         for q in example_queries:
             r = route_query_with_mode(q, args.routing_mode)
-            print(f"  {q[:48]:<50} → {r['skill']:<20} {r['confidence']:.2f}")
+            print(f"  {q[:53]:<55} → {r['skill']:<22} {r['confidence']:.2f}")
             demo_routes.append({
                 "query": q,
                 "skill": r["skill"],
@@ -189,7 +212,7 @@ def main():
         for r in demo_routes:
             q_short = r["query"][:45]
             body_lines.append(f"| {q_short} | `{r['skill']}` | {r['confidence']:.2f} |")
-        
+
         body_lines.extend([
             "",
             "## All Skills\n",
@@ -198,11 +221,11 @@ def main():
         ])
         for alias, desc in SKILL_DESCRIPTIONS.items():
             body_lines.append(f"| `{alias}` | {desc} |")
-        
+
         footer = generate_report_footer()
         report_md = out_dir / "report.md"
         report_md.write_text(header + "\n".join(body_lines) + "\n" + footer)
-        
+
         write_result_json(
             out_dir,
             skill=SKILL_NAME,
@@ -210,7 +233,7 @@ def main():
             summary={"demo_routes": len(demo_routes), "total_skills": len(SKILL_DESCRIPTIONS)},
             data={"demo_routes": demo_routes},
         )
-        
+
         print(f"Demo report written to {out_dir}\n")
         return
 

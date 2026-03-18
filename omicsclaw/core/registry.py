@@ -392,7 +392,7 @@ _HARDCODED_SKILLS: dict[str, dict[str, Any]] = {
         "script": SKILLS_DIR / "singlecell" / "sc-doublet-detection" / "sc_doublet.py",
         "demo_args": ["--demo"],
         "description": "Doublet detection and removal (Scrublet, scDblFinder, DoubletFinder)",
-        "allowed_extra_flags": {"--expected-doublet-rate", "--threshold"},
+        "allowed_extra_flags": {"--method", "--expected-doublet-rate", "--threshold"},
         "saves_h5ad": True,
     },
     "sc-cell-annotation": {
@@ -425,7 +425,7 @@ _HARDCODED_SKILLS: dict[str, dict[str, Any]] = {
         "script": SKILLS_DIR / "singlecell" / "sc-velocity" / "sc_velocity.py",
         "demo_args": ["--demo"],
         "description": "RNA velocity analysis with scVelo (requires spliced/unspliced layers)",
-        "allowed_extra_flags": {"--mode", "--n-jobs"},
+        "allowed_extra_flags": {"--method", "--n-jobs"},
         "requires_preprocessed": True,
         "saves_h5ad": True,
     },
@@ -435,8 +435,8 @@ _HARDCODED_SKILLS: dict[str, dict[str, Any]] = {
         "legacy_aliases": ["sc-integrate"],
         "script": SKILLS_DIR / "singlecell" / "sc-batch-integration" / "sc_integrate.py",
         "demo_args": ["--demo"],
-        "description": "Multi-sample integration and batch correction (Harmony, scVI, BBKNN, Seurat CCA/RPCA)",
-        "allowed_extra_flags": {"--method", "--batch-key"},
+        "description": "Multi-sample integration and batch correction (Harmony, scVI, BBKNN, Scanorama)",
+        "allowed_extra_flags": {"--method", "--batch-key", "--n-epochs", "--no-gpu"},
         "saves_h5ad": True,
     },
     "sc-de": {
