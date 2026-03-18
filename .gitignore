@@ -109,3 +109,6 @@ htmlcov/
 coverage.xml
 *.cover
 bot/data/
+
+# Feishu bot manual test scripts
+tests/feishu_manual/
