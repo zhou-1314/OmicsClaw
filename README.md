@@ -32,13 +32,13 @@
   </tr>
   <tr>
     <td align="center">
-      <video src="docs/videos/OmicsClaw_CLI.mov" autoplay loop muted playsinline width="100%">
-        <a href="docs/videos/OmicsClaw_CLI.mov">View CLI demo</a>
+      <video src="https://github.com/user-attachments/assets/a24b16b8-dc72-439a-8fcd-d0c0623a4c8a" autoplay loop muted playsinline width="100%">
+        <a href="https://github.com/user-attachments/assets/a24b16b8-dc72-439a-8fcd-d0c0623a4c8a">View CLI demo</a>
       </video>
     </td>
     <td align="center">
-      <video src="docs/videos/Feishu_bot.MP4" width="100%" autoplay loop muted playsinline>
-        <a href="docs/videos/Feishu_bot.MP4">View mobile demo</a>
+      <video src="https://github.com/user-attachments/assets/0ccb21f8-6aa9-45ec-b50d-44146566e64e" width="100%" autoplay loop muted playsinline>
+        <a href="https://github.com/user-attachments/assets/0ccb21f8-6aa9-45ec-b50d-44146566e64e">View mobile demo</a>
       </video>
     </td>
   </tr>
