@@ -113,3 +113,13 @@ bot/data/*
 
 # Feishu bot manual test scripts
 tests/feishu_manual/
+
+# Large files & papers
+*.pdf
+
+# Web frontend dependencies
+node_modules/
+.next/
+
+# Agent/Research execution artifact folders
+nature_new_insight/

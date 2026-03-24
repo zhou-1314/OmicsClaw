@@ -1,404 +1,97 @@
-# Memory System — Core Value & Comparison
+# Memory System
 
-## Executive Summary
+OmicsClaw features a built-in memory system that maintains context across different conversational sessions, eliminating the need to repeatedly provide the same data and background information.
 
-OmicsClaw bot's memory system transforms it from a **stateless Q&A tool** into a **persistent research assistant** that remembers your data, analyses, and preferences across conversations.
+## How It Works
 
----
+OmicsClaw uses a **Graph Database Engine** (backed by SQLite/PostgreSQL) to store and connect different entities:
 
-## Without Memory vs With Memory
+- **`session://`**: Conversation history, active context, and pipeline results.
+- **`dataset://`**: Metadata about files (paths, dimensions, formats, preprocessing states).
+- **`preference://`**: User-specific habits (e.g., preferred clustering methods).
+- **`insight://`**: Biological knowledge deduced during analysis (e.g., "Cluster 3 = T-cells").
 
-### Scenario: Multi-Step Spatial Analysis
+These memory nodes form a tree connected via edges (e.g., `ROOT` → `session://user1` → `session://user1/dataset_abc123`). This allows the agent to traverse relationships, like finding all datasets used in a specific session or tracing the lineage of a clustering result.
 
-#### ❌ Without Memory (Stateless Bot)
+> **Privacy Note:** The memory system strictly stores *metadata* and *analysis parameters*. It **does not** store raw gene expression matrices or absolute system paths.
 
-```
-User: "Preprocess my Visium data"
-Bot: ✅ Runs preprocessing
-     📊 Shows QC plots
+## What It Solves
 
-[User closes chat, reopens next day]
+| Stateless Tool (Without Memory) | OmicsClaw (With Memory) |
+| :--- | :--- |
+| Re-upload data for every session | **Zero re-uploads** (remembers file metadata) |
+| Re-explain context repeatedly | **Automatic context restoration** |
+| No analysis lineage tracking | **Tracks lineage** (preprocessing → clustering → DE) |
+| Loses user preferences | **Learns habits** (e.g., auto-applies `leiden`) |
+| Cannot resume workflows | **Resumes interrupted work** seamlessly |
 
-User: "Find spatial domains"
-Bot: ❓ "Which dataset? Please upload again"
-User: [Re-uploads 2GB file]
-Bot: ❓ "Has it been preprocessed?"
-User: "Yes, yesterday"
-Bot: ⚠️  "I don't remember. Let me preprocess again..."
-     [Wastes 10 minutes re-running QC]
+## Managing Memory via Dashboard
 
-User: "What clustering method did I use last time?"
-Bot: 🤷 "I don't have access to previous conversations"
-```
+You can visually inspect, search, and manage stored memories using the built-in React dashboard.
 
-**Pain Points:**
-- Re-upload data every session
-- Re-explain context repeatedly
-- No analysis lineage tracking
-- Cannot resume interrupted workflows
-- Loses user preferences
+### 1. Start the Backend API
+Start the REST API server via the CLI (runs on port `8766` by default):
 
----
-
-#### ✅ With Memory (Persistent Bot)
-
-```
-User: "Preprocess my Visium data"
-Bot: ✅ Runs preprocessing
-     💾 Saves: DatasetMemory(file_path, platform=Visium, n_obs=5000, state=normalized)
-     💾 Saves: AnalysisMemory(skill=preprocessing, method=scanpy, duration=45s)
-
-[User closes chat, reopens next day]
-
-User: "Find spatial domains"
-Bot: 🧠 Loads context:
-     - Current Dataset: visium_sample.h5ad (Visium, 5000 obs, normalized)
-     - Recent: preprocessing (scanpy) - completed
-
-     ✅ "Using your preprocessed Visium data (5000 spots, normalized yesterday).
-         Running spatial domain detection..."
-     💾 Saves: AnalysisMemory(skill=domains, parent=preprocessing_id)
-
-User: "Use the same clustering as last time"
-Bot: 🧠 Recalls: PreferenceMemory(key=clustering_method, value=leiden, resolution=0.8)
-     ✅ "Applying leiden clustering (resolution=0.8) as before"
+```bash
+oc memory-server
+# or: make memory-server
 ```
 
-**Benefits:**
-- Zero re-uploads (remembers file paths)
-- Automatic context restoration
-- Tracks analysis lineage (preprocessing → domains → ...)
-- Learns user preferences
-- Resumes interrupted work
+### 2. Start the Frontend Dashboard
+Launch the web interface (runs on port `3000` by default):
 
----
-
-## Core Differences
-
-| Aspect | Without Memory | With Memory |
-|--------|----------------|-------------|
-| **Session Continuity** | Every chat starts from zero | Persistent across restarts |
-| **Data Handling** | Re-upload every time | Remember file paths & metadata |
-| **Analysis Tracking** | No history | Full lineage (parent → child) |
-| **User Preferences** | Forget after chat ends | Learn & apply automatically |
-| **Context Awareness** | "Which dataset?" | "Using your Visium data from yesterday" |
-| **Workflow Resume** | Cannot resume | Pick up where you left off |
-| **Multi-Step Pipelines** | Manual coordination | Automatic dependency tracking |
-
----
-
-## Memory Types & Use Cases
-
-### 1. DatasetMemory
-**Stores:** File path, platform (Visium/Xenium), dimensions, preprocessing state
-
-**Value:**
-- No re-uploads (bot remembers `data/visium_brain.h5ad`)
-- Knows preprocessing status (raw → QC → normalized → clustered)
-- Prevents redundant QC runs
-
-**Example:**
-```python
-DatasetMemory(
-    file_path="data/visium_brain.h5ad",
-    platform="Visium",
-    n_obs=5000,
-    n_vars=2000,
-    preprocessing_state="normalized"
-)
+```bash
+cd frontend
+npm install   # First time only
+npm run dev
 ```
 
----
+Open `http://localhost:3000` in your browser. From here, you can:
+- **Search:** Full-text and semantic search across all memories.
+- **Browse:** Navigate the graph tree to view sessions, datasets, and insights.
+- **Manage:** Delete outdated context to keep the agent's memory clean.
 
-### 2. AnalysisMemory
-**Stores:** Skill, method, parameters, parent analysis, output path, duration
+### 3. Remote Access (SSH Port Forwarding)
 
-**Value:**
-- Reproducibility (exact parameters logged)
-- Lineage tracking (preprocessing → clustering → DE)
-- Performance monitoring (duration trends)
-- Resume interrupted pipelines
+If OmicsClaw is deployed on a remote server, use SSH port forwarding to access the dashboard locally:
 
-**Example:**
-```python
-AnalysisMemory(
-    skill="spatial-domains",
-    method="leiden",
-    parameters={"resolution": 0.8, "n_neighbors": 15},
-    parent_analysis_id="preprocessing_abc123",
-    duration_seconds=120.5
-)
+```bash
+ssh -N -L 3000:localhost:3000 -L 8766:localhost:8766 <user>@<remote-ip>
 ```
 
----
+Then visit `http://localhost:3000` on your local machine.
 
-### 3. PreferenceMemory
-**Stores:** User habits (clustering method, plot style, species)
+*(Tip: For convenience, you can add `LocalForward` rules to your `~/.ssh/config`).*
 
-**Value:**
-- Auto-apply preferred methods
-- Reduce repetitive parameter input
-- Personalized defaults
+## Developer Guide
 
-**Example:**
-```python
-PreferenceMemory(
-    domain="spatial-preprocessing",
-    key="clustering_method",
-    value="leiden",
-    is_strict=False  # Soft preference, can override
-)
-```
-
----
-
-### 4. InsightMemory
-**Stores:** Biological interpretations (cluster = "T cells", domain = "tumor boundary")
-
-**Value:**
-- Preserve domain knowledge across sessions
-- Build project-specific ontology
-- Avoid re-annotating same clusters
-
-**Example:**
-```python
-InsightMemory(
-    source_analysis_id="clustering_xyz",
-    entity_type="cluster",
-    entity_id="cluster_3",
-    biological_label="CD8+ T cells",
-    confidence="user_confirmed"
-)
-```
-
----
-
-### 5. ProjectContextMemory
-**Stores:** Global scientific context (species, tissue, disease model)
-
-**Value:**
-- Contextual analysis suggestions
-- Species-specific parameter defaults
-- Tissue-aware interpretation
-
-**Example:**
-```python
-ProjectContextMemory(
-    project_goal="Characterize tumor microenvironment in PDAC",
-    species="mouse",
-    tissue_type="pancreas",
-    disease_model="KPC"
-)
-```
-
----
-
-## Real-World Impact
-
-### Use Case 1: Interrupted Analysis
-**Without Memory:**
-```
-Day 1: Preprocess → Cluster → [Bot crashes]
-Day 2: Start over from preprocessing
-```
-
-**With Memory:**
-```
-Day 1: Preprocess → Cluster → [Bot crashes]
-Day 2: Bot: "You completed clustering yesterday. Next: differential expression?"
-```
-
----
-
-### Use Case 2: Parameter Consistency
-**Without Memory:**
-```
-User: "Cluster with leiden, resolution 0.8"
-[Next week]
-User: "What resolution did I use?"
-Bot: "I don't know"
-```
-
-**With Memory:**
-```
-User: "Cluster with leiden, resolution 0.8"
-[Next week]
-User: "Cluster this new sample the same way"
-Bot: "Applying leiden (resolution=0.8) as before"
-```
-
----
-
-### Use Case 3: Multi-Sample Projects
-**Without Memory:**
-```
-User: "Analyze sample A" → [Upload, preprocess, cluster]
-User: "Analyze sample B" → [Upload, preprocess, cluster]
-User: "Compare A and B" → Bot: "Which samples? Upload both"
-```
-
-**With Memory:**
-```
-User: "Analyze sample A" → [Saved as dataset_A]
-User: "Analyze sample B" → [Saved as dataset_B]
-User: "Compare A and B" → Bot: "Loading your two Visium samples..."
-```
-
----
-
-## Privacy & Security
-
-### What Memory Does NOT Store
-- ❌ Raw gene expression matrices
-- ❌ Absolute file paths (only relative)
-- ❌ Personally identifiable information
-- ❌ Unencrypted biological labels
-
-### What Memory DOES Store
-- ✅ File metadata (dimensions, platform)
-- ✅ Analysis parameters & methods
-- ✅ Relative file paths (`data/sample.h5ad`)
-- ✅ Sanitized biological labels (encrypted)
-
----
-
-## Technical Architecture
-
-```
-┌─────────────────────────────────────────────┐
-│  User: "Find spatial domains"               │
-└──────────────────┬──────────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────┐
-│  SessionManager.load_context()              │
-│  ├─ Get ProjectContextMemory (last 1)       │
-│  ├─ Get DatasetMemory (last 2)              │
-│  ├─ Get AnalysisMemory (last 3)             │
-│  ├─ Get PreferenceMemory (last 5)           │
-│  └─ Get InsightMemory (last 3)              │
-└──────────────────┬──────────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────┐
-│  LLM Context Injection                      │
-│  "Project: TME in TNBC (Homo sapiens)       │
-│   Current Dataset: visium.h5ad (normalized) │
-│   Recent: preprocessing (scanpy) - done     │
-│   Preference: clustering_method=leiden      │
-│   Insight: cluster_3 = CD8+ T cells"       │
-└──────────────────┬──────────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────┐
-│  LLM Decision                               │
-│  "User wants domains on preprocessed data.  │
-│   Use leiden (their preference)"            │
-└──────────────────┬──────────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────┐
-│  Execute Skill + Save New Memories          │
-│  ├─ Run spatial-domains skill               │
-│  └─ Save AnalysisMemory(skill=domains)      │
-└─────────────────────────────────────────────┘
-```
-
----
-
-## Memory Features
-
-### TTL / Automatic Expiration
-
-Sessions and their memories are automatically expired after a configurable period (default: 30 days). Set `OMICSCLAW_MEMORY_TTL_DAYS` in `.env`:
-
-```env
-OMICSCLAW_MEMORY_TTL_DAYS=30  # Default. Set 0 to disable TTL.
-```
-
-Cleanup runs on startup and periodically (every 100 memory operations).
-
-### Memory Search
-
-Search across all memory content for a session:
+For developers building new agents or workflows, interacting with the memory graph is done via the `MemoryClient`:
 
 ```python
-results = await store.search_memories(session_id, "brain")
-# Finds all memories containing "brain" (case-insensitive)
-# Works across encrypted fields (decrypt → search → return)
+import asyncio
+from omicsclaw.memory import MemoryClient, SessionContext
 
-# Filter by type
-datasets = await store.search_memories(session_id, "visium", memory_type="dataset")
+async def main():
+    # 1. Initialize client
+    client = MemoryClient("sqlite+aiosqlite:///bot/data/memory.db")
+    await client.boot()
+    
+    # 2. Define memory context
+    context = SessionContext(domain="session", path="user123/agent_pipeline")
+
+    # 3. Store a memory
+    await client.remember(
+        context=context,
+        name="pipeline_result",
+        content={"status": "success", "file": "output.h5ad"},
+        metadata={"skill": "spatial-preprocessing"}
+    )
+
+    # 4. Recall or search memories
+    result = await client.recall(context, "pipeline_result")
+    search_results = await client.search(context, query="pipeline_result")
+
+asyncio.run(main())
 ```
 
-### Deduplication
-
-The memory system prevents duplicate entries:
-
-- **DatasetMemory**: Deduplicated by `file_path`. Saving the same file path updates the existing record.
-- **PreferenceMemory**: Deduplicated by `domain` + `key`. Changing a preference updates the value in-place.
-
-### Update Re-encryption
-
-When updating memory fields via `update_memory()`, the system:
-1. Decrypts existing data
-2. Merges in the updates
-3. Re-encrypts the entire object
-
-This prevents plaintext leakage of sensitive fields during partial updates.
-
-### Connection Pooling
-
-The SQLite backend maintains a persistent connection with WAL journaling and foreign key enforcement. PRAGMAs are set once on connection creation, not per-operation.
-
----
-
-## Performance Considerations
-
-### Memory Overhead
-- **Storage:** ~1KB per memory node (SQLite)
-- **Retrieval:** <10ms for context loading
-- **Context Size:** ~500 tokens (2 datasets + 3 analyses + 5 prefs)
-
-### Scalability
-- **Per-user isolation:** Each session has independent memory
-- **Automatic cleanup:** Old sessions can be pruned
-- **Efficient queries:** Indexed by session_id + memory_type
-
----
-
-## Migration Path
-
-### Enabling Memory (Already Done)
-```python
-# bot/core.py
-from bot.memory.backends.sqlite import SQLiteMemoryStore
-
-store = SQLiteMemoryStore("bot_memory.db")
-await store.initialize()
-session_mgr = SessionManager(store)
-```
-
-### Disabling Memory (Fallback)
-```python
-# Use NullMemoryStore (no-op implementation)
-class NullMemoryStore(MemoryStore):
-    async def save_memory(self, *args): pass
-    async def get_memories(self, *args): return []
-```
-
----
-
-## Conclusion
-
-**Memory transforms OmicsClaw from a tool into a collaborator.**
-
-| Metric | Without Memory | With Memory |
-|--------|----------------|-------------|
-| Re-uploads per week | 10-20 | 0 |
-| Context re-explanation | Every chat | Once |
-| Analysis reproducibility | Manual notes | Automatic |
-| Workflow interruption cost | Restart from scratch | Resume instantly |
-| User frustration | High | Low |
-
-**Bottom line:** Memory is the difference between a chatbot and a research partner.
+> **Note:** For legacy chatbots (Telegram/Feishu), the `CompatMemoryStore` transparently maps old Pydantic memory interfaces to graph URIs.

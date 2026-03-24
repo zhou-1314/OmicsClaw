@@ -525,10 +525,11 @@ class OmicsClawParser(argparse.ArgumentParser):
         print(f"  {GREEN}run        {RESET}  Execute a specific skill (e.g., 'oc run preprocess')", file=file)
 
         print(f"\n{BOLD}{BLUE}🔧 Utility Commands{RESET}", file=file)
-        print(f"  {GREEN}mcp        {RESET}  Manage external Model Context Protocol (MCP) servers", file=file)
-        print(f"  {GREEN}env        {RESET}  Check installed Python dependencies and system tiers", file=file)
-        print(f"  {GREEN}onboard    {RESET}  Interactive setup wizard to configure API keys", file=file)
-        print(f"  {GREEN}upload     {RESET}  Upload/initialize session from existing .h5ad data", file=file)
+        print(f"  {GREEN}mcp           {RESET}  Manage external Model Context Protocol (MCP) servers", file=file)
+        print(f"  {GREEN}memory-server {RESET}  Start the graph memory REST API server", file=file)
+        print(f"  {GREEN}env           {RESET}  Check installed Python dependencies and system tiers", file=file)
+        print(f"  {GREEN}onboard       {RESET}  Interactive setup wizard to configure API keys", file=file)
+        print(f"  {GREEN}upload        {RESET}  Upload/initialize session from existing .h5ad data", file=file)
 
         print(f"\n{BOLD}{MAGENTA}⚙  Global Options{RESET}", file=file)
         print(f"  {GREEN}-m, --mode {RESET}  Workspace mode: {CYAN}daemon{RESET} (persistent) | {CYAN}run{RESET} (isolated per-session)", file=file)
@@ -541,6 +542,15 @@ class OmicsClawParser(argparse.ArgumentParser):
 
 
 def main():
+    # Ensure .env is loaded for all subcommands (memory-server, etc.)
+    try:
+        from dotenv import load_dotenv as _load_dotenv
+        _env_path = OMICSCLAW_DIR / ".env"
+        if _env_path.exists():
+            _load_dotenv(str(_env_path), override=False)
+    except ImportError:
+        pass
+
     parser = OmicsClawParser(
         description="OmicsClaw — Multi-Omics Skills Runner",
         formatter_class=argparse.RawTextHelpFormatter,
@@ -612,6 +622,12 @@ def main():
     mcp_rm_p.add_argument("name", help="Server name to remove")
     # mcp config — show config file path
     mcp_sub.add_parser("config", help="Show MCP config file path")
+
+    # memory-server — start graph memory REST API
+    mem_p = sub.add_parser("memory-server", help="Start the graph memory REST API server")
+    mem_p.add_argument("--host", default=None, help="Host to bind (default: 0.0.0.0)")
+    mem_p.add_argument("--port", type=int, default=None, help="Port to bind (default: 8766)")
+
     
     # run
     run_p = sub.add_parser("run", help="Run a skill")
@@ -805,6 +821,16 @@ def main():
         else:
             print(f"Usage: python omicsclaw.py mcp [list|add|remove|config]")
             sys.exit(1)
+
+    if args.command == "memory-server":
+        import os
+        if getattr(args, "host", None):
+            os.environ["OMICSCLAW_MEMORY_HOST"] = args.host
+        if getattr(args, "port", None):
+            os.environ["OMICSCLAW_MEMORY_PORT"] = str(args.port)
+        from omicsclaw.memory.server import main as _mem_main
+        _mem_main()
+        sys.exit(0)
 
     if args.command == "env":
         from omicsclaw.core.dependency_manager import get_installed_tiers
