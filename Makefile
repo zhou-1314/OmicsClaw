@@ -1,7 +1,8 @@
 .PHONY: demo test list demo-all catalog demo-orchestrator demo-bulkrna \
         install install-spatial-domains install-full install-dev \
         install-oc oc-link \
-        bot-telegram bot-feishu bot-multi bot-list
+        bot-telegram bot-feishu bot-multi bot-list \
+        memory-server
 
 ## ── Virtual-environment + installation targets ──────────────────────────────
 
@@ -105,4 +106,9 @@ bot-multi:
 
 bot-list:
 	python -m bot.run --list
+
+## ── Memory server ───────────────────────────────────────────────────────────
+
+memory-server:
+	python omicsclaw.py memory-server
 

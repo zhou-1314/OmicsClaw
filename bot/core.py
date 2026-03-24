@@ -403,7 +403,7 @@ async def _auto_capture_dataset(session_id: str, input_path: str, data_type: str
         return
 
     try:
-        from bot.memory.models import DatasetMemory
+        from omicsclaw.memory.compat import DatasetMemory
 
         # Make path relative to project dir if possible
         try:
@@ -448,7 +448,7 @@ async def _auto_capture_analysis(session_id: str, skill: str, args: dict, output
         return
 
     try:
-        from bot.memory.models import AnalysisMemory
+        from omicsclaw.memory.compat import AnalysisMemory
 
         # Extract key parameters
         method = args.get("method", "default")
@@ -493,7 +493,7 @@ class SessionManager:
         session_id = f"{platform}:{user_id}:{chat_id}"
         session = await self.store.get_session(session_id)
         if not session:
-            session = await self.store.create_session(user_id, platform, chat_id)
+            session = await self.store.create_session(user_id, platform, chat_id, session_id=session_id)
         else:
             await self.store.update_session(session_id, {"last_activity": datetime.now(timezone.utc)})
         return session
@@ -630,32 +630,23 @@ def init(
         f"model={OMICSCLAW_MODEL}, base_url={resolved_url or '(default)'}"
     )
 
-    # Optional memory initialization
-    if os.getenv("OMICSCLAW_MEMORY_BACKEND") == "sqlite":
+    # Memory initialization — uses the new graph-based memory system
+    # Enabled by default; disable with OMICSCLAW_MEMORY_ENABLED=false
+    if os.getenv("OMICSCLAW_MEMORY_ENABLED", "true").lower() not in ("false", "0", "no"):
         try:
-            from bot.memory import SQLiteBackend, SecureFieldEncryptor
+            from omicsclaw.memory.compat import CompatMemoryStore
 
-            db_path = os.getenv("OMICSCLAW_MEMORY_DB_PATH", "bot/data/memory.db")
-            encryption_key = os.getenv("ENCRYPTION_KEY")
+            db_url = os.getenv("OMICSCLAW_MEMORY_DB_URL")  # None = use default (~/.config/omicsclaw/memory.db)
 
-            if not encryption_key:
-                import secrets
-                encryption_key = secrets.token_hex(32)
-                logger.warning("No ENCRYPTION_KEY set, using temporary key (memories lost on restart)")
-
-            # NOTE: We use ASCII encoding of the hex string then truncate to 32 bytes.
-            # This gives 128-bit effective entropy (only 16 unique hex chars in first
-            # 32 positions), not full AES-256. Switching to bytes.fromhex() would
-            # break decryption of existing data. A future migration can fix this.
-            encryptor = SecureFieldEncryptor(encryption_key.encode()[:32])
-            store = SQLiteBackend(db_path, encryptor)
+            store = CompatMemoryStore(
+                database_url=db_url,
+            )
             # NOTE: initialize() is called lazily on first async operation
-            # via _ensure_initialized(), since init() runs in sync context
-            # where asyncio.create_task() may not have a running loop.
+            # from MemoryClient._ensure_init(), since init() runs in sync context.
 
             memory_store = store
             session_manager = SessionManager(store)
-            logger.info("Memory system initialized")
+            logger.info("Graph memory system initialized (omicsclaw.memory)")
         except ImportError:
             logger.warning("Memory dependencies not installed, skipping memory init")
         except Exception as e:
@@ -2185,7 +2176,7 @@ async def execute_remember(args: dict, session_id: str = None) -> str:
 
     try:
         if mem_type == "preference":
-            from bot.memory.models import PreferenceMemory
+            from omicsclaw.memory.compat import PreferenceMemory
 
             key = args.get("key", "")
             value = args.get("value", "")
@@ -2205,7 +2196,7 @@ async def execute_remember(args: dict, session_id: str = None) -> str:
             return f"✓ Preference saved: {key} = {value} (scope: {domain})"
 
         elif mem_type == "insight":
-            from bot.memory.models import InsightMemory
+            from omicsclaw.memory.compat import InsightMemory
 
             entity_id = args.get("key", "")
             label = args.get("value", "")
@@ -2228,7 +2219,7 @@ async def execute_remember(args: dict, session_id: str = None) -> str:
             return f"✓ Insight saved: {entity_type} '{entity_id}' → {label} ({confidence})"
 
         elif mem_type == "project_context":
-            from bot.memory.models import ProjectContextMemory
+            from omicsclaw.memory.compat import ProjectContextMemory
 
             ctx = ProjectContextMemory(
                 project_goal=args.get("project_goal", ""),

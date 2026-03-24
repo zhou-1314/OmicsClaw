@@ -462,9 +462,12 @@ if _HAS_TEXTUAL:
                     self._add_system_message(f"  [dim]↳ ✓ [green]Result:[/green] {result_preview}[/dim]")
 
                 # llm_tool_loop returns the final assistant reply as a plain string.
+                # Pass user_id and platform so graph memory is active.
                 final_text = await core.llm_tool_loop(
                     _USER,
                     last_user_msg,
+                    user_id="tui_user",
+                    platform="tui",
                     on_tool_call=tui_on_tool_call,
                     on_tool_result=tui_on_tool_result,
                 )

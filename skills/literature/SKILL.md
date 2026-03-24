@@ -1,3 +1,38 @@
+---
+name: literature
+description: >-
+  Parse scientific literature (PDFs, URLs, DOIs) to extract GEO accessions,
+  metadata, and datasets. Use when users provide a paper and want to
+  automatically extract data sources for downstream omics analysis.
+version: 0.1.0
+author: OmicsClaw
+license: MIT
+tags: [literature, pdf-parsing, geo, pubmed, data-download]
+metadata:
+  omicsclaw:
+    domain: literature
+    requires:
+      bins:
+        - python3
+      env: []
+      config: []
+    emoji: "📄"
+    homepage: https://github.com/OmicsClaw/OmicsClaw
+    os: [macos, linux, windows]
+    install:
+      - kind: pip
+        package: pypdf
+        bins: []
+    trigger_keywords:
+      - parse paper
+      - literature
+      - GEO accession
+      - download dataset
+      - PDF extract
+      - PubMed
+      - DOI
+---
+
 # Literature Parsing Skill
 
 ## Purpose

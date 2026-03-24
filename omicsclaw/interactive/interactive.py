@@ -603,6 +603,136 @@ def _handle_install_skill(arg: str) -> None:
         console.print(f"[yellow]Registry refresh failed (skill files are in place): {e}[/yellow]")
 
 
+async def _handle_research(arg: str, state: dict[str, Any]) -> None:
+    """Start multi-agent research pipeline.
+
+    Usage:
+        /research --idea "..."                                        # Mode C (idea only)
+        /research paper.pdf --idea "..."                              # Mode A (PDF + idea)
+        /research paper.pdf --idea "..." --h5ad d.h5ad                # Mode B (PDF + idea + h5ad)
+        /research --idea "..." --output /path/to/output               # with custom output dir
+    """
+    tokens = shlex.split(arg.strip()) if arg.strip() else []
+    if not tokens:
+        console.print(
+            "[yellow]Usage:[/yellow]\n"
+            "[dim]  Mode A: /research paper.pdf --idea \"explore TME heterogeneity\"              (PDF + idea)\n"
+            "  Mode B: /research paper.pdf --idea \"...\" --h5ad data.h5ad                   (PDF + idea + h5ad)\n"
+            "  Mode C: /research --idea \"explore TME heterogeneity\"                    (idea only)\n"
+            "  All modes support: --output <dir> to specify the output directory[/dim]"
+        )
+        return
+
+    # Parse arguments — first positional token is PDF if it doesn't start with --
+    pdf_path = None
+    idea = ""
+    h5ad_path = None
+    output_dir = None
+    i = 0
+    # Check if first token is a file path (not a flag)
+    if tokens[0] and not tokens[0].startswith("--"):
+        pdf_path = tokens[0]
+        i = 1
+
+    while i < len(tokens):
+        t = tokens[i]
+        if t == "--idea" and i + 1 < len(tokens):
+            idea = tokens[i + 1]; i += 2
+        elif t == "--h5ad" and i + 1 < len(tokens):
+            h5ad_path = tokens[i + 1]; i += 2
+        elif t == "--output" and i + 1 < len(tokens):
+            output_dir = tokens[i + 1]; i += 2
+        else:
+            i += 1
+
+    if not idea:
+        console.print("[red]--idea is required. Describe your research idea.[/red]")
+        return
+
+    if pdf_path and not Path(pdf_path).exists():
+        console.print(f"[red]PDF not found: {pdf_path}[/red]")
+        return
+
+    if h5ad_path and not Path(h5ad_path).exists():
+        console.print(f"[red]h5ad file not found: {h5ad_path}[/red]")
+        return
+
+    # Check research dependencies
+    try:
+        from omicsclaw.agents import _check_research_deps
+        _check_research_deps()
+    except ImportError as e:
+        console.print(f'[red]{e}[/red]')
+        console.print('[yellow]Install with: pip install -e ".[research]"[/yellow]')
+        return
+
+    # Determine mode
+    if pdf_path and h5ad_path:
+        mode = "B"
+    elif pdf_path:
+        mode = "A"
+    else:
+        mode = "C"
+
+    # Resolve output directory
+    if output_dir:
+        workspace_path = str(Path(output_dir).resolve())
+    else:
+        workspace_path = str(Path(state.get("workspace_dir", ".")) / "research_workspace")
+
+    console.print(f"\n[bold cyan]🔬 Starting Research Pipeline (Mode {mode})[/bold cyan]")
+    if pdf_path:
+        console.print(f"  [dim]PDF:[/dim]    {pdf_path}")
+    console.print(f"  [dim]Idea:[/dim]   {idea}")
+    if h5ad_path:
+        console.print(f"  [dim]Data:[/dim]   {h5ad_path}")
+    console.print(f"  [dim]Output:[/dim] {workspace_path}")
+    if mode == "C":
+        console.print("  [dim]Mode:[/dim]   Idea only — research-agent will find literature & data")
+    console.print()
+
+    def on_stage(stage: str, status: str):
+        console.print(f"  [cyan]▸ [{stage}][/cyan] {status}")
+
+    try:
+        from omicsclaw.agents.pipeline import ResearchPipeline
+
+        pipeline = ResearchPipeline(
+            workspace_dir=workspace_path,
+        )
+        result = await pipeline.run(
+            idea=idea,
+            pdf_path=pdf_path,
+            h5ad_path=h5ad_path,
+            on_stage=on_stage,
+        )
+
+        if result.get("success"):
+            console.print(f"\n[bold green]✓ Research pipeline completed![/bold green]")
+            console.print(f"  [dim]Workspace:[/dim] {result.get('workspace', '')}")
+            if result.get("report_path"):
+                console.print(f"  [dim]Report:[/dim]    {result['report_path']}")
+            if result.get("review_path"):
+                console.print(f"  [dim]Review:[/dim]    {result['review_path']}")
+        else:
+            console.print(f"\n[red]✗ Research pipeline failed: {result.get('error', 'unknown')}[/red]")
+
+        # Inject into conversation
+        state["messages"].append({
+            "role": "user",
+            "content": f"[Research pipeline Mode {mode}] Idea: {idea}" + (f", PDF: {pdf_path}" if pdf_path else ""),
+        })
+        state["messages"].append({
+            "role": "assistant",
+            "content": f"Research pipeline {'completed' if result.get('success') else 'failed'}. "
+                       f"Workspace: {result.get('workspace', '')}",
+        })
+    except Exception as e:
+        console.print(f"[red]Research pipeline error: {e}[/red]")
+        import traceback
+        console.print(f"[dim]{traceback.format_exc()[:500]}[/dim]")
+
+
 def _handle_uninstall_skill(arg: str) -> None:
     """Remove a user-installed skill by name.
 
@@ -755,9 +885,13 @@ async def _stream_llm_response(messages: list[dict]) -> str:
                 console.print(f"  [dim]↳ ✓ [green]Result:[/green] {result_preview}[/dim]")
 
             # llm_tool_loop returns the final assistant reply as a plain string.
+            # Pass user_id and platform so the graph memory system is activated
+            # (core.py gates memory load/save on these being non-empty).
             final_text = await core.llm_tool_loop(
                 _INTERACTIVE_USER,
                 user_text,
+                user_id="cli_user",
+                platform="cli",
                 on_tool_call=sync_on_tool_call,
                 on_tool_result=sync_on_tool_result,
             )
@@ -959,6 +1093,12 @@ async def _async_interactive_loop(
                         model=resolved_model,
                         workspace=state["workspace_dir"],
                     )
+                _print_separator()
+                continue
+
+            elif low.startswith("/research"):
+                arg = user_input[len("/research"):].strip()
+                await _handle_research(arg, state)
                 _print_separator()
                 continue
 

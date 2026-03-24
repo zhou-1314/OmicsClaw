@@ -115,6 +115,37 @@ Skills are registered in `omicsclaw/core/registry.py` and dynamically discovered
 7. Add test path to `pytest.ini`
 8. Regenerate catalog: `python scripts/generate_catalog.py`
 
+## Graph Memory System
+
+OmicsClaw uses a centralized graph-based memory system to persist context across sessions, agents, and tool invocations. The core system is located in `omicsclaw/memory/`.
+
+### Architecture
+
+The memory system is backed by SQLite/PostgreSQL and is built as a graph database overlay using SQLAlchemy.
+
+- **Nodes & Edges**: Every entity (session, dataset, user preference) is a node connected via edges to a central root node (`ROOT_NODE_UUID`). Nodes are addressed by URIs (e.g., `session://user123/cli`).
+- **MemoryClient**: High-level abstract client (`omicsclaw/memory/memory_client.py`) used by multi-agent pipelines to `remember()`, `recall()`, and `search()`.
+- **Compat Layer**: To maintain backward compatibility with old bot memory, `omicsclaw/memory/compat.py` implements the old interface but routes it through the graph engine.
+- **REST API**: A FastAPI backend provides management capabilities, accessible via `oc memory-server`.
+
+### Running the Dashboard API
+
+You can spin up the backend API to inspect and manage memories. **Note**: `fastapi` and `uvicorn` are optional dependencies, you must install them first:
+
+```bash
+# Install memory API dependencies
+pip install fastapi uvicorn
+# OR: pip install -e ".[memory]"
+
+# Starts the FastAPI server on port 8766
+oc memory-server
+```
+
+### Configuration (Environment Variables)
+
+- `OMICSCLAW_MEMORY_DB_URL`: SQLAlchemy connection URL (`sqlite+aiosqlite:///bot/data/memory.db`)
+- `OMICSCLAW_MEMORY_API_TOKEN`: Optional Bearer token for the API.
+
 ## Bot Integration
 
 OmicsClaw includes dual-channel messaging bots in `bot/`:
