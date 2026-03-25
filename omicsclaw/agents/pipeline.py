@@ -319,9 +319,40 @@ class ResearchPipeline:
         # Unified API key: provider-specific env → LLM_API_KEY fallback
         api_key = os.getenv("LLM_API_KEY", "")
 
+        from langchain_openai import ChatOpenAI
+        from langchain_core.messages import BaseMessage
+        import json
+
+        class SafeChatOpenAI(ChatOpenAI):
+            """Wraps ChatOpenAI to ensure message content is strictly a string.
+            Some API endpoints (like DeepSeek) reject requests with 400 'invalid type: sequence'
+            if ToolMessage content is a JSON array instead of a string.
+            """
+            def _sanitize(self, messages: list[BaseMessage]) -> list[BaseMessage]:
+                for m in messages:
+                    if isinstance(m.content, list):
+                        try:
+                            text_parts = []
+                            for block in m.content:
+                                if isinstance(block, dict) and block.get("type") == "text":
+                                    text_parts.append(block.get("text", ""))
+                                else:
+                                    text_parts.append(json.dumps(block, ensure_ascii=False))
+                            m.content = "\n".join(text_parts)
+                        except Exception:
+                            m.content = json.dumps(m.content, ensure_ascii=False)
+                    elif m.content is None:
+                        m.content = ""
+                return messages
+
+            async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+                return super()._astream(self._sanitize(messages), stop=stop, run_manager=run_manager, **kwargs)
+
+            async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+                return await super()._agenerate(self._sanitize(messages), stop=stop, run_manager=run_manager, **kwargs)
+
         if provider == "deepseek":
-            from langchain_openai import ChatOpenAI
-            return ChatOpenAI(
+            return SafeChatOpenAI(
                 model=model or "deepseek-chat",
                 openai_api_key=os.getenv("DEEPSEEK_API_KEY") or api_key,
                 openai_api_base=os.getenv(
@@ -331,8 +362,7 @@ class ResearchPipeline:
                 temperature=0.3,
             )
         elif provider in ("openai", ""):
-            from langchain_openai import ChatOpenAI
-            return ChatOpenAI(
+            return SafeChatOpenAI(
                 model=model or "gpt-4o",
                 openai_api_key=os.getenv("OPENAI_API_KEY") or api_key or None,
                 temperature=0.3,
@@ -346,8 +376,7 @@ class ResearchPipeline:
             )
         else:
             # Generic OpenAI-compatible
-            from langchain_openai import ChatOpenAI
-            return ChatOpenAI(
+            return SafeChatOpenAI(
                 model=model or "gpt-4o",
                 openai_api_key=api_key or None,
                 openai_api_base=os.getenv("LLM_BASE_URL"),

@@ -762,9 +762,10 @@ async def _handle_research(arg: str, state: dict[str, Any]) -> None:
             stages = result.get("completed_stages", [])
             if stages:
                 console.print(f"  [dim]Completed stages before failure:[/dim] {', '.join(stages)}")
+                idea_part = f' --idea "{idea}"' if idea else ''
                 console.print(
                     f"  [dim]To resume: /research --resume --output {workspace_path}"
-                    f"{' --idea \"' + idea + '\"' if idea else ''}[/dim]"
+                    f"{idea_part}[/dim]"
                 )
 
         # Inject into conversation
