@@ -53,6 +53,29 @@ Expression-based survival analysis for clinical bulk RNA-seq datasets. Stratifie
 - **Median split**: Divide at median expression value
 - **Optimal cutoff**: Maximize log-rank statistic across all possible cutpoints
 
+## Landmark Survival
+
+When median survival is not reached (KM curve never crosses 50%), landmark survival rates are more robust. The system automatically computes S(t) with 95% CI at fixed time points (e.g., 1yr, 3yr, 5yr).
+
+## Clinical Validity Checks
+
+| Check | Threshold | Action |
+|-------|-----------|--------|
+| **Events Per Variable (EPV)** | < 10 | Warns about potential overfitting in multi-gene models |
+| **Heavy censoring** | > 80% censored | Warns that KM tail estimates are unreliable |
+| **Median not reached** | KM never crosses 50% | Reports "Not reached" and uses landmark survival instead |
+
+### EPV Guideline
+
+| EPV | Reliability |
+|-----|-------------|
+| >= 20 | Very stable estimates |
+| 10-20 | Adequate for most analyses |
+| 5-10 | Interpret with caution |
+| < 5 | Potentially severely overfitted |
+
+Rule of thumb: no more than 1 gene per 10 events in the dataset.
+
 ## Input Formats
 
 | Format | Extension | Description |

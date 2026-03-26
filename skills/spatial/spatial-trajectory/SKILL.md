@@ -2,7 +2,7 @@
 name: spatial-trajectory
 description: >-
   Trajectory inference and pseudotime analysis for spatial transcriptomics data.
-version: 0.2.0
+version: 0.3.0
 author: SpatialClaw Team
 license: MIT
 tags: [spatial, trajectory, pseudotime, DPT, CellRank, Palantir]
@@ -52,9 +52,35 @@ You are **Spatial Trajectory**, a specialised OmicsClaw agent for trajectory inf
 ## Core Capabilities
 
 1. **Diffusion pseudotime (DPT)**: Built-in scanpy DPT — always available, no extra dependencies
-2. **Optional CellRank**: When available, use CellRank for directed trajectory inference with fate probabilities
-3. **Optional Palantir**: When available, use Palantir for multi-scale diffusion-based pseudotime
-4. **Root cell selection**: Automatic or user-specified root cell for trajectory anchoring
+2. **Root cell selection**: By specific barcode, by cell type (progenitor), or automatic (max/min DC1)
+3. **Trajectory gene correlation**: Spearman correlation with FDR correction to find pseudotime-associated genes
+4. **Enhanced CellRank**: Multi-kernel support (Velocity+Connectivity, Pseudotime+Connectivity), terminal state identification, fate probabilities, driver gene detection
+5. **Optional Palantir**: When available, use Palantir for multi-scale diffusion-based pseudotime
+
+## Root Cell Selection Strategies
+
+| Strategy | Parameter | Method | Best for |
+|----------|-----------|--------|----------|
+| Automatic | (default) | Max DC1 value | Quick exploration |
+| By cell type | `--root-cell-type` | Min DC1 within specified cell type | When progenitor type is known |
+| By barcode | `--root-cell` | Exact cell barcode | Precise control |
+
+**Root cell type selection** picks the cell with the minimum diffusion component 1 value within the specified cluster/cell type, which typically represents the most stem-like or progenitor-like cell in that group.
+
+## Trajectory Gene Correlation
+
+After pseudotime computation, the system automatically identifies genes whose expression changes along the trajectory:
+- **Spearman rank correlation** between each gene's expression and pseudotime
+- **FDR correction** (Benjamini-Hochberg) for multiple testing
+- Returns top genes with direction (increasing or decreasing along trajectory)
+
+## CellRank Kernel Options
+
+| Kernel combination | When to use |
+|---|---|
+| VelocityKernel(0.8) + ConnectivityKernel(0.2) | When RNA velocity (spliced/unspliced) data is available |
+| PseudotimeKernel(0.8) + ConnectivityKernel(0.2) | When DPT pseudotime is available but not velocity |
+| ConnectivityKernel only | Fallback when neither velocity nor pseudotime is available |
 
 ## Input Formats
 

@@ -35,8 +35,8 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "bulkrna-de"
-SKILL_VERSION = "0.3.0"
-SUPPORTED_METHODS = ("pydeseq2", "ttest")
+SKILL_VERSION = "0.5.0"
+SUPPORTED_METHODS = ("deseq2", "ttest")
 
 
 def get_demo_data() -> tuple[pd.DataFrame, Path]:
@@ -47,39 +47,6 @@ def get_demo_data() -> tuple[pd.DataFrame, Path]:
     df = pd.read_csv(demo_path)
     logger.info("Loaded demo data: %s (%d genes, %d columns)", demo_path, len(df), len(df.columns))
     return df, demo_path
-
-
-def _run_pydeseq2(counts: pd.DataFrame, condition: list[str]) -> pd.DataFrame:
-    """Run DE via PyDESeq2. *counts*: samples-as-rows, genes-as-columns int matrix.
-    Raises ImportError if pydeseq2 is not installed."""
-    from pydeseq2.dds import DeseqDataSet
-    from pydeseq2.ds import DeseqStats
-
-    metadata = pd.DataFrame({"condition": condition}, index=counts.index)
-    dds = DeseqDataSet(counts=counts, metadata=metadata, design_factors="condition")
-    dds.deseq2()
-    stat_res = DeseqStats(dds, contrast=("condition", "treat", "ctrl"))
-    stat_res.summary()
-
-    res = stat_res.results_df.reset_index()
-    res.columns = [c if c != "index" else "gene" for c in res.columns]
-    rename_map = {}
-    for col in res.columns:
-        lc = col.lower()
-        if lc == "basemean":
-            rename_map[col] = "baseMean"
-        elif lc in ("log2foldchange", "log2_fold_change"):
-            rename_map[col] = "log2FoldChange"
-        elif lc == "pvalue":
-            rename_map[col] = "pvalue"
-        elif lc == "padj":
-            rename_map[col] = "padj"
-    res = res.rename(columns=rename_map)
-    keep = ["gene", "baseMean", "log2FoldChange", "pvalue", "padj"]
-    for c in keep:
-        if c not in res.columns:
-            res[c] = np.nan
-    return res[keep]
 
 
 def _benjamini_hochberg(pvalues: np.ndarray) -> np.ndarray:
@@ -108,6 +75,59 @@ def _benjamini_hochberg(pvalues: np.ndarray) -> np.ndarray:
     result = np.full(n, np.nan)
     result[non_nan_indices] = result_clean
     return result
+
+
+def _run_deseq2_r(
+    counts: pd.DataFrame,
+    gene_col: str,
+    control_prefix: str,
+    treat_prefix: str,
+) -> pd.DataFrame:
+    """Run real DESeq2 in R via subprocess. Raises ImportError if R/DESeq2 unavailable."""
+    import tempfile
+    from omicsclaw.core.dependency_manager import validate_r_environment
+    from omicsclaw.core.r_script_runner import RScriptRunner
+
+    validate_r_environment(required_r_packages=["DESeq2"])
+
+    scripts_dir = Path(__file__).resolve().parents[3] / "omicsclaw" / "r_scripts"
+    runner = RScriptRunner(scripts_dir=scripts_dir)
+
+    with tempfile.TemporaryDirectory(prefix="omicsclaw_bulkde_") as tmpdir:
+        tmpdir = Path(tmpdir)
+        # Write counts with gene names as row index
+        counts_for_r = counts.set_index(gene_col)
+        counts_for_r.to_csv(tmpdir / "counts.csv")
+
+        output_dir = tmpdir / "output"
+        output_dir.mkdir()
+
+        runner.run_script(
+            "bulkrna_deseq2.R",
+            args=[str(tmpdir / "counts.csv"), str(output_dir),
+                  control_prefix, treat_prefix],
+            expected_outputs=["deseq2_results.csv"],
+            output_dir=output_dir,
+        )
+
+        de_df = pd.read_csv(output_dir / "deseq2_results.csv")
+
+    # Standardize column names
+    rename_map = {}
+    for col in de_df.columns:
+        lc = col.lower()
+        if lc == "basemean":
+            rename_map[col] = "baseMean"
+        elif lc in ("log2foldchange", "log2_fold_change"):
+            rename_map[col] = "log2FoldChange"
+        elif lc == "pvalue":
+            rename_map[col] = "pvalue"
+        elif lc == "padj":
+            rename_map[col] = "padj"
+    if rename_map:
+        de_df = de_df.rename(columns=rename_map)
+
+    return de_df
 
 
 def _run_ttest(counts: pd.DataFrame, ctrl_cols: list[str], treat_cols: list[str]) -> pd.DataFrame:
@@ -161,6 +181,7 @@ def core_analysis(
     treat_prefix: str = "treat",
     padj_cutoff: float = 0.05,
     lfc_cutoff: float = 1.0,
+    min_count: int = 10,
 ) -> dict:
     """Run DE analysis and return a summary dict."""
     gene_col = counts.columns[0]
@@ -172,16 +193,44 @@ def core_analysis(
     if not treat_cols:
         raise ValueError(f"No columns matching treatment prefix '{treat_prefix}'")
 
+    # Design validation (from Biomni basic_workflow.R best practices)
+    n_ctrl, n_treat = len(ctrl_cols), len(treat_cols)
+    if n_ctrl < 2 or n_treat < 2:
+        logger.warning(
+            "Insufficient replicates: %d control, %d treatment. "
+            "DESeq2 requires >= 2 replicates per condition (>= 3 recommended).",
+            n_ctrl, n_treat,
+        )
+    elif n_ctrl < 3 or n_treat < 3:
+        logger.info(
+            "Low replication: %d control, %d treatment. "
+            "Consider >= 3 replicates per condition for reliable dispersion estimation.",
+            n_ctrl, n_treat,
+        )
+    else:
+        logger.info("Design: %d control, %d treatment samples", n_ctrl, n_treat)
+
+    # Gene pre-filtering: remove low-count genes (from Biomni basic_workflow.R)
+    n_genes_raw = len(counts)
+    numeric_cols = ctrl_cols + treat_cols
+    row_sums = counts[numeric_cols].sum(axis=1)
+    counts_filtered = counts[row_sums >= min_count].copy()
+    n_genes_filtered = len(counts_filtered)
+    n_removed = n_genes_raw - n_genes_filtered
+    if n_removed > 0:
+        logger.info(
+            "Pre-filtered genes: %d → %d (removed %d with rowSum < %d)",
+            n_genes_raw, n_genes_filtered, n_removed, min_count,
+        )
+    counts = counts_filtered
     method_used = method
-    if method == "pydeseq2":
+    if method == "deseq2":
         try:
-            mat = counts.set_index(gene_col).T.copy().astype(int)
-            condition = ["ctrl" if c in ctrl_cols else "treat" for c in mat.index]
-            de_df = _run_pydeseq2(mat, condition)
-            method_used = "pydeseq2"
-            logger.info("PyDESeq2 completed successfully.")
-        except ImportError:
-            logger.warning("PyDESeq2 not installed; falling back to t-test.")
+            de_df = _run_deseq2_r(counts, gene_col, control_prefix, treat_prefix)
+            method_used = "deseq2"
+            logger.info("R DESeq2 completed successfully.")
+        except Exception as exc:
+            logger.warning("R DESeq2 failed (%s); falling back to t-test.", exc)
             de_df = _run_ttest(counts, ctrl_cols, treat_cols)
             method_used = "ttest"
     elif method == "ttest":
@@ -194,13 +243,22 @@ def core_analysis(
     sig = sig[(sig["padj"] < padj_cutoff) & (sig["log2FoldChange"].abs() > lfc_cutoff)]
     n_up = int((sig["log2FoldChange"] > 0).sum())
     n_down = int((sig["log2FoldChange"] < 0).sum())
+    n_tested = int(de_df["padj"].notna().sum())
+    frac_sig = len(sig) / max(n_tested, 1)
 
     return {
-        "n_genes": len(de_df), "n_samples": len(ctrl_cols) + len(treat_cols),
+        "n_genes": len(de_df), "n_genes_raw": n_genes_raw,
+        "n_genes_filtered": n_genes_filtered, "n_genes_prefiltered": n_removed,
+        "n_samples": len(ctrl_cols) + len(treat_cols),
         "n_ctrl": len(ctrl_cols), "n_treat": len(treat_cols),
         "method_used": method_used, "n_de_genes": len(sig),
         "n_up": n_up, "n_down": n_down,
+        "n_tested": n_tested, "frac_significant": round(frac_sig, 4),
         "padj_cutoff": padj_cutoff, "lfc_cutoff": lfc_cutoff,
+        "lfc_note": (
+            "LFCs are unshrunk (suitable for hypothesis testing). "
+            "For visualization/ranking, consider apeglm or ashr shrinkage."
+        ),
         "de_df": de_df,
     }
 
@@ -294,12 +352,16 @@ def write_report(output_dir: Path, summary: dict, input_file: str | None, params
     )
     body_lines = [
         "## Summary\n",
-        f"- **Total genes**: {summary['n_genes']}",
+        f"- **Total genes (raw)**: {summary.get('n_genes_raw', summary['n_genes'])}",
+        f"- **Genes after pre-filtering**: {summary['n_genes']} (removed {summary.get('n_genes_prefiltered', 0)} low-count genes)",
         f"- **Samples**: {summary['n_samples']} ({summary['n_ctrl']} control, {summary['n_treat']} treatment)",
         f"- **Method**: {summary['method_used']}",
         f"- **DE genes (padj < {summary['padj_cutoff']}, |log2FC| > {summary['lfc_cutoff']})**: {summary['n_de_genes']}",
         f"  - Up-regulated: {summary['n_up']}",
         f"  - Down-regulated: {summary['n_down']}",
+        f"- **Fraction significant**: {summary.get('frac_significant', 0):.1%}",
+        "",
+        f"> **Note**: {summary.get('lfc_note', '')}",
         "", "## Parameters\n",
     ]
     for k, v in params.items():
@@ -341,7 +403,7 @@ def main():
     parser.add_argument("--input", dest="input_path", help="Path to counts CSV (gene x sample)")
     parser.add_argument("--output", dest="output_dir", required=True, help="Output directory")
     parser.add_argument("--demo", action="store_true", help="Run with bundled demo data")
-    parser.add_argument("--method", default="pydeseq2", choices=SUPPORTED_METHODS, help="DE method")
+    parser.add_argument("--method", default="deseq2", choices=SUPPORTED_METHODS, help="DE method (deseq2=R DESeq2, ttest=fallback)")
     parser.add_argument("--control-prefix", default="ctrl", help="Column prefix for control samples")
     parser.add_argument("--treat-prefix", default="treat", help="Column prefix for treatment samples")
     parser.add_argument("--padj-cutoff", type=float, default=0.05, help="Adjusted p-value cutoff")

@@ -2,6 +2,12 @@
 # OmicsClaw R Dependencies Installation Script
 #
 # Installs all R packages required for OmicsClaw's R-based analysis methods:
+#   • DESeq2      — differential expression (with apeglm/ashr LFC shrinkage)
+#   • WGCNA       — weighted gene co-expression network analysis
+#   • sva         — ComBat batch effect correction
+#   • survival    — Kaplan-Meier, Cox PH, log-rank test
+#   • clusterProfiler — GSEA / ORA pathway enrichment
+#   • msigdbr     — MSigDB gene set database access
 #   • RCTD        — robust cell type decomposition (spacexr)
 #   • SPOTlight   — NMF-based deconvolution (SPOTlight + Bioc deps)
 #   • CARD        — conditional autoregressive deconvolution
@@ -12,7 +18,6 @@
 #   • scDblFinder — doublet detection
 #   • SoupX       — ambient RNA removal
 #   • batchelor   — fastMNN integration
-#   • DESeq2      — pseudobulk differential expression
 #
 # Prerequisites:
 #   R >= 4.3.0 on PATH
@@ -107,7 +112,10 @@ cran_pkgs <- c(
   "Seurat",       # single-cell analysis framework (RCTD, Numbat)
   "NMF",          # non-negative matrix factorisation (SPOTlight)
   "harmony",      # Harmony integration in Seurat
-  "SoupX"         # ambient RNA removal
+  "SoupX",        # ambient RNA removal
+  "survival",     # Kaplan-Meier, Cox PH, log-rank (bulkrna-survival)
+  "msigdbr",      # MSigDB gene set database (bulkrna-enrichment)
+  "ashr"          # adaptive shrinkage for DESeq2 LFC (bulkrna-de)
 )
 
 for (pkg in cran_pkgs) {
@@ -126,6 +134,8 @@ bioc_pkgs <- list(
        cmd  = "BiocManager::install('SingleCellExperiment', update=FALSE, ask=FALSE)"),
   list(name = "SpatialExperiment",
        cmd  = "BiocManager::install('SpatialExperiment',   update=FALSE, ask=FALSE)"),
+  list(name = "zellkonverter",
+       cmd  = "BiocManager::install('zellkonverter',       update=FALSE, ask=FALSE)"),
   list(name = "scran",
        cmd  = "BiocManager::install('scran',               update=FALSE, ask=FALSE)"),
   list(name = "scuttle",
@@ -142,12 +152,20 @@ bioc_pkgs <- list(
        cmd  = "BiocManager::install('batchelor',           update=FALSE, ask=FALSE)"),
   list(name = "DESeq2",
        cmd  = "BiocManager::install('DESeq2',              update=FALSE, ask=FALSE)"),
+  list(name = "apeglm",
+       cmd  = "BiocManager::install('apeglm',              update=FALSE, ask=FALSE)"),
   list(name = "muscat",
        cmd  = "BiocManager::install('muscat',              update=FALSE, ask=FALSE)"),
   list(name = "edgeR",
        cmd  = "BiocManager::install('edgeR',               update=FALSE, ask=FALSE)"),
   list(name = "limma",
-       cmd  = "BiocManager::install('limma',               update=FALSE, ask=FALSE)")
+       cmd  = "BiocManager::install('limma',               update=FALSE, ask=FALSE)"),
+  list(name = "WGCNA",
+       cmd  = "BiocManager::install('WGCNA',               update=FALSE, ask=FALSE)"),
+  list(name = "sva",
+       cmd  = "BiocManager::install('sva',                 update=FALSE, ask=FALSE)"),
+  list(name = "clusterProfiler",
+       cmd  = "BiocManager::install('clusterProfiler',     update=FALSE, ask=FALSE)")
 )
 
 for (info in bioc_pkgs) {
@@ -238,21 +256,29 @@ if (length(failed_packages) > 0) {
 } else {
   cat("\nAll R dependencies installed successfully!\n\n")
   cat("Enabled OmicsClaw R-based methods:\n")
-  cat("  omicsclaw.py run deconv  --method rctd        (spacexr)\n")
-  cat("  omicsclaw.py run deconv  --method card        (CARD)\n")
-  cat("  omicsclaw.py run deconv  --method spotlight   (SPOTlight)\n")
-  cat("  omicsclaw.py run comm    --method cellchat    (CellChat via rpy2)\n")
-  cat("  omicsclaw.py run cnv     --method numbat      (Numbat)\n")
-  cat("  omicsclaw.py run genes   --method sparkx      (SPARK-X)\n")
-  cat("  omicsclaw.py run sc-cell-annotation --method singler        (SingleR)\n")
-  cat("  omicsclaw.py run sc-doublet-detection --method scdblfinder  (scDblFinder)\n")
-  cat("  omicsclaw.py run sc-doublet-detection --method doubletfinder (DoubletFinder)\n")
-  cat("  omicsclaw.py run sc-ambient-removal --method soupx          (SoupX)\n")
-  cat("  omicsclaw.py run sc-batch-integration --method fastmnn      (batchelor)\n")
-  cat("  omicsclaw.py run sc-batch-integration --method seurat_cca   (Seurat CCA)\n")
-  cat("  omicsclaw.py run sc-batch-integration --method seurat_rpca  (Seurat RPCA)\n")
-  cat("  omicsclaw.py run sc-de --method deseq2_r                    (DESeq2 pseudobulk)\n")
-  cat("  omicsclaw.py run sc-cell-communication --method cellchat_r  (CellChat)\n\n")
+  cat("\n  Bulk RNA-seq:\n")
+  cat("  omicsclaw.py run bulkrna-de             --method deseq2     (DESeq2 + apeglm shrinkage)\n")
+  cat("  omicsclaw.py run bulkrna-coexpression   --method wgcna      (WGCNA)\n")
+  cat("  omicsclaw.py run bulkrna-enrichment     --method gsea       (clusterProfiler GSEA)\n")
+  cat("  omicsclaw.py run bulkrna-enrichment     --method ora        (clusterProfiler ORA)\n")
+  cat("  omicsclaw.py run bulkrna-survival                           (survival + Cox PH)\n")
+  cat("  omicsclaw.py run bulkrna-batch-correction                   (sva::ComBat)\n")
+  cat("\n  Spatial Transcriptomics:\n")
+  cat("  omicsclaw.py run spatial-deconvolution  --method rctd       (spacexr)\n")
+  cat("  omicsclaw.py run spatial-deconvolution  --method card       (CARD)\n")
+  cat("  omicsclaw.py run spatial-deconvolution  --method spotlight  (SPOTlight)\n")
+  cat("  omicsclaw.py run spatial-cell-communication --method cellchat (CellChat)\n")
+  cat("  omicsclaw.py run spatial-cnv            --method numbat     (Numbat)\n")
+  cat("  omicsclaw.py run spatial-svg-detection  --method sparkx     (SPARK-X)\n")
+  cat("\n  Single-Cell:\n")
+  cat("  omicsclaw.py run sc-cell-annotation     --method singler    (SingleR)\n")
+  cat("  omicsclaw.py run sc-doublet-detection   --method scdblfinder (scDblFinder)\n")
+  cat("  omicsclaw.py run sc-doublet-detection   --method doubletfinder (DoubletFinder)\n")
+  cat("  omicsclaw.py run sc-ambient-removal     --method soupx      (SoupX)\n")
+  cat("  omicsclaw.py run sc-batch-integration   --method fastmnn    (batchelor)\n")
+  cat("  omicsclaw.py run sc-batch-integration   --method seurat_cca (Seurat CCA)\n")
+  cat("  omicsclaw.py run sc-de                  --method deseq2_r   (DESeq2 pseudobulk)\n")
+  cat("  omicsclaw.py run sc-cell-communication  --method cellchat_r (CellChat)\n\n")
   cat("Python-only methods (no R needed):\n")
   cat("  omicsclaw.py run deconv  --method flashdeconv (default, fastest)\n")
   cat("  omicsclaw.py run deconv  --method cell2location\n")

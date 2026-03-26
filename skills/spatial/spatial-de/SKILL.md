@@ -3,8 +3,8 @@ name: spatial-de
 description: >-
   Differential expression analysis — find marker genes for clusters or compare two groups.
   Supports Wilcoxon rank-sum, t-test, and PyDESeq2 methods with publication-ready figures and CSV tables.
-version: 0.2.0
-author: SpatialClaw
+version: 0.3.0
+author: OmicsClaw
 license: MIT
 tags: [spatial, differential-expression, markers, wilcoxon, t-test, pydeseq2]
 metadata:
@@ -48,9 +48,41 @@ You are **Spatial DE**, the differential expression and marker gene discovery sk
 1. **Cluster-vs-rest markers**: Rank genes per cluster using Wilcoxon, t-test, or PyDESeq2
 2. **Two-group comparison**: Compare any two groups within a groupby column
 3. **Multiple methods**: Wilcoxon (default, non-parametric), t-test (parametric, fast), PyDESeq2 (pseudobulk, gold standard)
-4. **Dot plot**: Top marker genes per cluster
-5. **Volcano plot**: Log2 fold-change vs. −log10 p-value for two-group comparisons
-6. **Marker table**: CSV of top N markers per cluster with scores, p-values, and log fold-changes
+4. **Marker filtering**: Removes non-specific markers using min_in_group_fraction (25%), min_fold_change (1.0), max_out_group_fraction (50%)
+5. **Pseudobulk validation**: Validates that conditions have sufficient replicates before running DESeq2
+6. **Dot plot**: Top marker genes per cluster
+7. **Volcano plot**: Log2 fold-change vs. −log10 p-value for two-group comparisons
+8. **Marker table**: CSV of top N markers per cluster with scores, p-values, and log fold-changes
+
+## Input Matrix Convention
+
+| Method | Input Matrix Type | Uses raw counts | Requires normalized / log | Notes |
+|--------|----------------|---------------:|------------------------:|-------|
+| `wilcoxon` | `AnnData` expression matrix | No | **Yes, requires log expression** | Scanpy `rank_genes_groups` |
+| `t-test` | `AnnData` expression matrix | No | **Yes, requires log expression** | Scanpy Welch's t-test |
+| `pydeseq2` | sample × gene matrix after pseudobulk | **Yes** | No | Requires non-negative integer counts |
+
+* **`wilcoxon` & `t-test`**: Uses `adata.X`. Expects **logarithmized data** (e.g., `normalize_total` + `log1p`). Do not input raw counts or pseudobulk counts directly.
+* **`pydeseq2`**: Uses **pseudobulk raw integer counts**. Extracted from `adata.layers["counts"]` or `adata.raw`, aggregated per sample, and passed to PyDESeq2. Cannot use log-normalized or scaled matrices.
+
+## Marker Filtering
+
+By default, markers are filtered to retain only biologically meaningful genes:
+
+| Filter | Default | Purpose |
+|--------|---------|---------|
+| `min_in_group_fraction` | 0.25 | Gene must be in >= 25% of cluster cells |
+| `min_fold_change` | 1.0 | Natural log fold change >= 1 |
+| `max_out_group_fraction` | 0.5 | Gene in < 50% of other clusters |
+
+Filtering removes housekeeping genes and non-specific markers that pass statistical tests but lack biological specificity. Disable with `--no-filter-markers` if needed.
+
+## Pseudobulk DE Requirements
+
+When using `--method pydeseq2`:
+- Each condition requires at least 2 pseudobulk replicates for valid dispersion estimation
+- Conditions with very few cells (< 20) will produce unreliable results
+- The system warns when conditions have insufficient replication
 
 ## Input Formats
 
@@ -72,28 +104,30 @@ You are **Spatial DE**, the differential expression and marker gene discovery sk
 ## CLI Reference
 
 ```bash
-# Cluster-vs-rest markers (default: Wilcoxon)
-python skills/spatial-de/spatial_de.py \
+# Cluster-vs-rest markers (default: Wilcoxon, uses log-normalized data)
+oc run spatial-de \
   --input <processed.h5ad> --output <report_dir>
 
 # Two-group comparison
-python skills/spatial-de/spatial_de.py \
-  --input <processed.h5ad> --output <dir> --group1 0 --group2 1
+oc run spatial-de \
+  --input <processed.h5ad> --output <dir> \
+  --group1 0 --group2 1
 
 # Use t-test method
-python skills/spatial-de/spatial_de.py \
-  --input <file> --method t-test --output <dir>
+oc run spatial-de \
+  --input <file> --output <dir> --method t-test
 
-# Use PyDESeq2 for pseudobulk DE
-python skills/spatial-de/spatial_de.py \
-  --input <file> --method pydeseq2 --group1 0 --group2 1 --output <dir>
+# Use PyDESeq2 for pseudobulk DE (requires raw integer counts)
+oc run spatial-de \
+  --input <file> --output <dir> \
+  --method pydeseq2 --group1 0 --group2 1 
 
-# Demo mode
-python skills/spatial-de/spatial_de.py --demo --output /tmp/de_demo
+# Run the internally generated demo scenario
+oc run spatial-de --demo --output /tmp/de_demo
 
-# Via OmicsClaw runner
-python omicsclaw.py run spatial-de --input <file> --output <dir>
-python omicsclaw.py run spatial-de --demo
+# --- Direct Script Execution (Alternative) ---
+python skills/spatial/spatial-de/spatial_de.py --demo --output /tmp/de_demo
+python skills/spatial/spatial-de/spatial_de.py --input <processed.h5ad> --output <dir>
 ```
 
 ## Algorithm / Methodology

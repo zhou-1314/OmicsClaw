@@ -92,7 +92,53 @@ def get_demo_data() -> tuple[pd.DataFrame, pd.DataFrame, Path]:
 
 
 # ---------------------------------------------------------------------------
-# ComBat implementation (pure Python, parametric EB)
+# R sva::ComBat integration (primary method)
+# ---------------------------------------------------------------------------
+
+def _run_combat_r(
+    expr_df: pd.DataFrame,
+    batch_df: pd.DataFrame,
+    parametric: bool = True,
+) -> pd.DataFrame:
+    """Run ComBat via R sva package.
+
+    Returns corrected expression DataFrame (same shape as input).
+    """
+    import tempfile
+    from omicsclaw.core.dependency_manager import validate_r_environment
+    from omicsclaw.core.r_script_runner import RScriptRunner
+
+    validate_r_environment(required_r_packages=["sva"])
+
+    scripts_dir = Path(__file__).resolve().parents[3] / "omicsclaw" / "r_scripts"
+    runner = RScriptRunner(scripts_dir=scripts_dir)
+
+    with tempfile.TemporaryDirectory(prefix="omicsclaw_combat_") as tmpdir:
+        tmpdir = Path(tmpdir)
+        expr_df.to_csv(tmpdir / "counts.csv")
+        batch_df.to_csv(tmpdir / "batch_info.csv", index=False)
+
+        output_dir = tmpdir / "output"
+        output_dir.mkdir()
+
+        runner.run_script(
+            "bulkrna_combat.R",
+            args=[
+                str(tmpdir / "counts.csv"),
+                str(tmpdir / "batch_info.csv"),
+                str(output_dir),
+                str(parametric).upper(),
+            ],
+            expected_outputs=["corrected_counts.csv"],
+            output_dir=output_dir,
+        )
+
+        corrected = pd.read_csv(output_dir / "corrected_counts.csv", index_col=0)
+        return corrected
+
+
+# ---------------------------------------------------------------------------
+# ComBat implementation (Python fallback, parametric EB)
 # ---------------------------------------------------------------------------
 
 def _combat_correct(data: pd.DataFrame, batch_labels: pd.Series) -> pd.DataFrame:
@@ -366,12 +412,20 @@ def main() -> None:
     batch_df = batch_df.set_index("sample")
     batch_labels = batch_df.loc[expr_df.columns, "batch"]
 
-    # Correction
+    # Correction: try R sva::ComBat first, fall back to Python
     logger.info("Running ComBat (%s mode) on %d genes x %d samples, %d batches",
                 args.mode, expr_df.shape[0], expr_df.shape[1],
                 batch_labels.nunique())
 
-    corrected_df = _combat_correct(expr_df, batch_labels)
+    try:
+        corrected_df = _run_combat_r(
+            expr_df, batch_df.reset_index(),
+            parametric=(args.mode == "parametric"),
+        )
+        logger.info("R sva::ComBat completed successfully.")
+    except Exception as exc:
+        logger.warning("R ComBat not available (%s); using Python fallback.", exc)
+        corrected_df = _combat_correct(expr_df, batch_labels)
 
     # Metrics
     pc_before = _run_pca(expr_df)

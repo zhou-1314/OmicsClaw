@@ -35,8 +35,37 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "bulkrna-enrichment"
-SKILL_VERSION = "0.3.0"
-SUPPORTED_METHODS = ("ora", "gsea")
+SKILL_VERSION = "0.4.0"
+SUPPORTED_METHODS = ("ora", "gsea", "ora_r", "gsea_r")
+
+# Ranking metric preference order (from Biomni prepare_gene_lists.R)
+RANKING_METRIC_PREFERENCE = ("stat", "scores", "logfoldchanges", "log2FoldChange")
+
+
+def _resolve_ranking_metric(de_df: pd.DataFrame, requested: str | None = None) -> tuple[str, pd.Series]:
+    """Resolve the best ranking metric for GSEA.
+
+    Preference order: stat > scores > logfoldchanges > log2FoldChange.
+    Fallback: signed_pvalue = -log10(pvalue) * sign(log2FC).
+
+    Returns (metric_name, ranked_series indexed by gene).
+    """
+    if requested and requested in de_df.columns:
+        logger.info("Using requested ranking metric: '%s'", requested)
+        return requested, de_df.set_index("gene")[requested].sort_values(ascending=False)
+
+    for metric in RANKING_METRIC_PREFERENCE:
+        if metric in de_df.columns:
+            logger.info("Auto-detected ranking metric: '%s'", metric)
+            return metric, de_df.set_index("gene")[metric].sort_values(ascending=False)
+
+    if "pvalue" in de_df.columns and "log2FoldChange" in de_df.columns:
+        signed_p = -np.log10(de_df["pvalue"].clip(lower=1e-300)) * np.sign(de_df["log2FoldChange"])
+        logger.info("Using computed ranking metric: signed -log10(pvalue)")
+        return "signed_pvalue", pd.Series(signed_p.values, index=de_df["gene"]).sort_values(ascending=False)
+
+    logger.warning("No suitable ranking metric found; using log2FoldChange")
+    return "log2FoldChange", de_df.set_index("gene")["log2FoldChange"].sort_values(ascending=False)
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +369,15 @@ def core_analysis(
     if method not in SUPPORTED_METHODS:
         raise ValueError(f"Unknown method '{method}'. Choose from: {SUPPORTED_METHODS}")
 
+    # R-backed clusterProfiler methods (primary)
+    if method in ("gsea_r", "ora_r", "gsea", "ora"):
+        r_method = method.replace("_r", "")
+        try:
+            return _run_enrichment_r(de_df, method=r_method,
+                                     padj_cutoff=padj_cutoff, lfc_cutoff=lfc_cutoff)
+        except Exception as exc:
+            logger.warning("R clusterProfiler not available (%s); falling back to GSEApy/built-in.", exc)
+
     if gene_sets is None:
         gene_sets = _build_demo_gene_sets()
         logger.info("Using built-in demo gene sets (%d pathways).", len(gene_sets))
@@ -353,12 +391,18 @@ def core_analysis(
         sig = sig[(sig["padj"] < padj_cutoff) & (sig["log2FoldChange"].abs() > lfc_cutoff)]
         sig_genes = sig["gene"].tolist()
         n_significant = len(sig_genes)
-        background_size = n_input
 
+        # Use all tested genes as background (from Biomni run_ora.R best practice)
+        background_size = n_input
         logger.info(
-            "ORA: %d significant genes (padj < %s, |log2FC| > %s) out of %d.",
-            n_significant, padj_cutoff, lfc_cutoff, n_input,
+            "ORA: %d significant genes (padj < %s, |log2FC| > %s) out of %d background genes.",
+            n_significant, padj_cutoff, lfc_cutoff, background_size,
         )
+
+        # Separate up/down gene lists (from Biomni run_ora.R)
+        sig_up = sig[sig["log2FoldChange"] > 0]["gene"].tolist()
+        sig_down = sig[sig["log2FoldChange"] < 0]["gene"].tolist()
+        logger.info("  Up-regulated: %d, Down-regulated: %d", len(sig_up), len(sig_down))
 
         # Try gseapy first, fall back to built-in hypergeometric
         try:
@@ -397,11 +441,13 @@ def core_analysis(
         n_significant = 0  # GSEA uses all genes, not pre-filtered
         logger.info("GSEA: ranking %d genes.", n_input)
 
+        # Resolve ranking metric (from Biomni prepare_gene_lists.R)
+        metric_name, rnk = _resolve_ranking_metric(de_df)
+
         # Try gseapy first, fall back to built-in rank-based method
         try:
             import gseapy as gp
-            logger.info("Using gseapy for pre-ranked GSEA.")
-            rnk = de_df.set_index("gene")["log2FoldChange"].sort_values(ascending=False)
+            logger.info("Using gseapy for pre-ranked GSEA (metric: %s).", metric_name)
             pre_res = gp.prerank(
                 rnk=rnk,
                 gene_sets=gene_sets,

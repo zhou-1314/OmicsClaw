@@ -1,0 +1,110 @@
+#!/usr/bin/env Rscript
+# OmicsClaw: Seurat integration (CCA, RPCA, fastMNN)
+#
+# Usage:
+#   Rscript sc_seurat_integrate.R <h5ad_file> <output_dir> <method> <batch_key>
+#     [n_features] [n_pcs]
+#
+# method: seurat_cca | seurat_rpca | fastmnn
+
+args <- commandArgs(trailingOnly = TRUE)
+
+if (length(args) < 4) {
+    cat("Usage: Rscript sc_seurat_integrate.R <h5ad_file> <output_dir>",
+        "<method> <batch_key> [n_features] [n_pcs]\n")
+    quit(status = 1)
+}
+
+h5ad_file  <- args[1]
+output_dir <- args[2]
+method     <- args[3]
+batch_key  <- args[4]
+n_features <- if (length(args) >= 5) as.integer(args[5]) else 2000L
+n_pcs      <- if (length(args) >= 6) as.integer(args[6]) else 30L
+
+suppressPackageStartupMessages({
+    library(SingleCellExperiment)
+    library(zellkonverter)
+})
+
+if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
+
+tryCatch({
+    cat(sprintf("Loading data from %s...\n", h5ad_file))
+    sce <- readH5AD(h5ad_file)
+    meta <- as.data.frame(SummarizedExperiment::colData(sce))
+
+    if (!batch_key %in% colnames(meta))
+        stop(sprintf("Batch key '%s' not found in metadata", batch_key))
+
+    cat(sprintf("Running %s integration (batch_key=%s)...\n", method, batch_key))
+
+    if (method == "fastmnn") {
+        suppressPackageStartupMessages(library(batchelor))
+
+        SummarizedExperiment::assay(sce, "counts") <- SummarizedExperiment::assay(sce, "X")
+        SummarizedExperiment::assay(sce, "logcounts") <- log1p(SummarizedExperiment::assay(sce, "X"))
+
+        split_idx <- split(seq_len(ncol(sce)), meta[[batch_key]])
+        sce_list  <- lapply(split_idx, function(idx) sce[, idx])
+
+        mnn <- do.call(batchelor::fastMNN, c(sce_list, list(d = n_pcs)))
+
+        embedding <- reducedDim(mnn, "corrected")
+        write.csv(embedding, file.path(output_dir, "embedding.csv"), quote = FALSE)
+        write.csv(data.frame(row.names = colnames(mnn)),
+            file.path(output_dir, "obs.csv"), quote = FALSE)
+
+        cat(sprintf("Done. fastMNN embedding: %d cells x %d dims\n",
+            nrow(embedding), ncol(embedding)))
+
+    } else {
+        suppressPackageStartupMessages(library(Seurat))
+
+        counts <- SummarizedExperiment::assay(sce, "X")
+        seurat_obj <- CreateSeuratObject(counts = counts, meta.data = meta)
+        seurat_list <- SplitObject(seurat_obj, split.by = batch_key)
+
+        seurat_list <- lapply(seurat_list, function(x) {
+            x <- NormalizeData(x, verbose = FALSE)
+            x <- FindVariableFeatures(x, nfeatures = n_features, verbose = FALSE)
+            x
+        })
+
+        features <- SelectIntegrationFeatures(seurat_list, nfeatures = n_features)
+        reduction_name <- if (method == "seurat_rpca") "rpca" else "cca"
+
+        if (method == "seurat_rpca") {
+            seurat_list <- lapply(seurat_list, function(x) {
+                x <- ScaleData(x, features = features, verbose = FALSE)
+                x <- RunPCA(x, features = features, npcs = n_pcs, verbose = FALSE)
+                x
+            })
+        }
+
+        anchors <- FindIntegrationAnchors(
+            object.list     = seurat_list,
+            anchor.features = features,
+            reduction       = reduction_name,
+            dims            = seq_len(n_pcs)
+        )
+        integrated <- IntegrateData(anchorset = anchors, dims = seq_len(n_pcs))
+        DefaultAssay(integrated) <- "integrated"
+        integrated <- ScaleData(integrated, verbose = FALSE)
+        integrated <- RunPCA(integrated, npcs = n_pcs, verbose = FALSE)
+        integrated <- RunUMAP(integrated, dims = seq_len(n_pcs), verbose = FALSE)
+
+        write.csv(Embeddings(integrated, "pca"),
+            file.path(output_dir, "embedding.csv"), quote = FALSE)
+        write.csv(Embeddings(integrated, "umap"),
+            file.path(output_dir, "umap.csv"), quote = FALSE)
+        write.csv(integrated@meta.data,
+            file.path(output_dir, "obs.csv"), quote = FALSE)
+
+        cat(sprintf("Done. %s integration: %d cells\n", method, ncol(integrated)))
+    }
+
+}, error = function(e) {
+    cat(sprintf("ERROR: %s\n", e$message), file = stderr())
+    quit(status = 1)
+})

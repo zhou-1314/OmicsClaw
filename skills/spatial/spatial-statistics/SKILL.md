@@ -3,7 +3,7 @@ name: spatial-statistics
 description: >-
   Comprehensive spatial statistics toolkit — cluster-level (neighborhood enrichment, Ripley, co-occurrence),
   gene-level (Moran's I, Geary's C, local Moran, Getis-Ord), and network-level analysis.
-version: 0.2.0
+version: 0.3.0
 author: SpatialClaw
 license: MIT
 tags: [spatial, statistics, moran, geary, ripley, neighborhood-enrichment, getis-ord]
@@ -171,6 +171,46 @@ python omicsclaw.py run spatial-statistics --demo
 **Network properties**: Degree distribution, clustering coefficient, path length from spatial graph.
 
 **Spatial centrality**: Betweenness and closeness centrality per cluster.
+
+## Interpretation Guide
+
+### Neighborhood Enrichment Z-scores
+
+| Z-score range | Interpretation |
+|---|---|
+| z > 2 | Clusters are **significantly co-localized** (neighbors more than expected by chance) |
+| -2 < z < 2 | No significant spatial association |
+| z < -2 | Clusters are **significantly segregated** (avoid each other spatially) |
+| Diagonal values | Cluster self-cohesion (how tightly a cluster's cells are grouped) |
+
+### Moran's I Values
+
+| Moran's I | Interpretation |
+|---|---|
+| > 0.3 | Strong positive spatial autocorrelation (gene expression is spatially clustered) |
+| 0.1 to 0.3 | Moderate spatial clustering |
+| -0.1 to 0.1 | Weak or random spatial distribution |
+| -0.3 to -0.1 | Moderate spatial dispersion |
+| < -0.3 | Strong negative autocorrelation (expression is highly dispersed) |
+
+### Geary's C Values
+
+| Geary's C | Interpretation |
+|---|---|
+| < 0.5 | Strong positive autocorrelation (spatially clustered) |
+| 0.5 to 0.8 | Moderate positive autocorrelation |
+| 0.8 to 1.2 | Random spatial distribution |
+| 1.2 to 1.5 | Moderate negative autocorrelation (dispersed) |
+| > 1.5 | Strong negative autocorrelation |
+
+**Moran's I vs Geary's C**: Moran's I is more sensitive to global patterns; Geary's C is more sensitive to local differences. Use both when spatial patterns are ambiguous.
+
+### Spatial Graph Construction
+
+The system automatically detects the spatial data layout:
+- **Visium (grid)**: Uses ``coord_type='grid'``, ``n_neighs=6`` (hexagonal pattern), supports ``n_rings`` for extended neighborhoods
+- **Non-Visium (generic)**: Uses ``coord_type='generic'``, ``n_neighs`` as specified
+- **Custom**: Users can pre-build the spatial graph before running analyses
 
 ## Parameters
 

@@ -1,5 +1,6 @@
 import importlib
 import importlib.util
+import subprocess
 import sys
 
 # Mappings of packages to their respective domain tiers.
@@ -40,10 +41,8 @@ DOMAIN_TIERS = {
     "ot": "spatial-registration",  # POT
     "paste": "spatial-registration",
 
-    # Spatial-r-bridge standalone
-    "rpy2": "spatial-r-bridge",
-    "anndata2ri": "spatial-r-bridge",
-    "pydeseq2": "spatial-r-bridge",
+    # R-based methods (require Rscript on PATH, no Python package needed)
+    "pydeseq2": "spatial-condition",
 
     # Spatial domain dependencies (remaining in spatial tier)
     "torch_geometric": "spatial",
@@ -103,7 +102,7 @@ def get_installed_tiers() -> dict[str, bool]:
     tiers_status = {
         "core": importlib.util.find_spec("scanpy") is not None,
         "spatial-domains": importlib.util.find_spec("SpaGCN") is not None and importlib.util.find_spec("torch") is not None,
-        "spatial": importlib.util.find_spec("rpy2") is not None or importlib.util.find_spec("scvi") is not None,
+        "spatial": importlib.util.find_spec("scvi") is not None,
         "singlecell": importlib.util.find_spec("scrublet") is not None,
         "genomics": importlib.util.find_spec("pandas") is not None,  # Uses core deps only
         "proteomics": importlib.util.find_spec("pandas") is not None,  # Uses core deps only
@@ -122,8 +121,65 @@ def get_installed_tiers() -> dict[str, bool]:
         "spatial-communication": importlib.util.find_spec("liana") is not None,
         "spatial-integration": importlib.util.find_spec("harmonypy") is not None or importlib.util.find_spec("bbknn") is not None,
         "spatial-registration": importlib.util.find_spec("paste") is not None,
-        "spatial-r-bridge": importlib.util.find_spec("rpy2") is not None,
+        "r-bridge": _check_r_available(),
         "banksy": importlib.util.find_spec("pybanksy") is not None,
     }
     return tiers_status
+
+
+def _check_r_available() -> bool:
+    """Check if Rscript is on PATH (cached)."""
+    try:
+        result = subprocess.run(
+            ["Rscript", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def validate_r_environment(
+    required_r_packages: list[str] | None = None,
+) -> bool:
+    """Check that R is available and required packages are installed.
+
+    Uses subprocess (not rpy2) — no Python-side R dependency needed.
+
+    Parameters
+    ----------
+    required_r_packages : list[str], optional
+        R packages that must be installed.
+
+    Returns
+    -------
+    True if all checks pass.
+
+    Raises
+    ------
+    ImportError
+        If R is not on PATH or required packages are missing.
+    """
+    if not _check_r_available():
+        raise ImportError(
+            "[OmicsClaw] R is not available.\n"
+            "Install R (>= 4.3) and ensure 'Rscript' is on your PATH.\n"
+            "Then run: Rscript install_r_dependencies.R"
+        )
+
+    if required_r_packages:
+        from .r_script_runner import RScriptRunner
+
+        runner = RScriptRunner(verbose=False)
+        missing = runner.get_missing_packages(required_r_packages)
+        if missing:
+            raise ImportError(
+                f"[OmicsClaw] Missing R packages: {', '.join(missing)}.\n"
+                f"Install with: Rscript install_r_dependencies.R\n"
+                f"Or manually: Rscript -e 'BiocManager::install(c({', '.join(repr(p) for p in missing)}))'"
+            )
+
+    return True
     

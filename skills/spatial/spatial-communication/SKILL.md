@@ -2,12 +2,12 @@
 name: spatial-communication
 description: >-
   Cell-cell communication analysis via ligand-receptor interaction scoring using LIANA, CellPhoneDB, FastCCC, or CellChat.
-version: 0.2.0
-author: SpatialClaw Team
+version: 0.3.0
+author: OmicsClaw Team
 license: MIT
 tags: [spatial, communication, ligand-receptor, cell-cell-interaction, liana, cellphonedb, fastccc, cellchat]
 metadata:
-  spatialclaw:
+  omicsclaw:
     requires:
       bins:
         - python3
@@ -41,18 +41,68 @@ You are **Spatial Communication**, a specialised SpatialClaw agent for cell-cell
 
 ## Core Capabilities
 
-1. **LIANA+**: Multi-method consensus ranking (default, combines multiple L-R methods)
-2. **CellPhoneDB**: Statistical permutation test for L-R interactions
-3. **FastCCC**: FFT-based communication (no permutation, fastest)
-4. **CellChat (R)**: CellChat via R (requires rpy2 + R CellChat package)
-5. **Spatial-aware filtering**: Restrict interactions to spatially proximal cell type pairs
-6. **Built-in L-R database**: Curated database for human/mouse
+1. **LIANA+** (default): Multi-method consensus ranking. Uses `adata.X` (log-normalized); reads `adata.raw` for full gene set when available
+2. **CellPhoneDB**: Statistical permutation test for L-R interactions. Uses `adata.X` (log-normalized); do NOT use z-scored matrix
+3. **FastCCC**: FFT-based communication (no permutation, fastest). Uses `adata.X` (log-normalized)
+4. **CellChat (R)**: CellChat via R subprocess with triMean aggregation. Uses `adata.X` (log-normalized); exports centrality scores and pathway-level results
+5. **Pathway-level aggregation**: Groups L-R interactions by cell type pairs for pathway-level statistics
+6. **Signaling role classification**: Classifies each cell type as sender, receiver, or balanced hub
+7. **Centrality metrics** (CellChat): Sender, receiver, mediator, and influencer scores per pathway
+8. **Spatial-aware filtering**: Restrict interactions to spatially proximal cell type pairs
+9. **Built-in L-R database**: Curated database for human/mouse
+
+## Signaling Role Classification
+
+After L-R scoring, each cell type is classified by its communication role:
+
+| Role | Definition | Score |
+|------|-----------|-------|
+| **Sender** | Predominantly sends signals (outgoing >> incoming) | Sum of scores as source |
+| **Receiver** | Predominantly receives signals (incoming >> outgoing) | Sum of scores as target |
+| **Balanced** | Both sends and receives signals equally | Similar sender/receiver scores |
+| **Hub** | Highly connected (high combined score) | Sender + receiver score |
+
+## Pathway-Level Aggregation
+
+Interactions are aggregated by source-target cell type pairs to provide:
+- Number of L-R interactions per cell type pair
+- Mean interaction score per pair
+- Top ligand-receptor pair per pathway
 
 ## Input Formats
 
 | Format | Extension | Required Fields | Example |
 |--------|-----------|-----------------|---------|
-| AnnData (preprocessed) | `.h5ad` | `X`, `obsm["spatial"]`, `obs["leiden"]` or cell type column | `preprocessed.h5ad` |
+| AnnData (preprocessed) | `.h5ad` | `X` (log-normalized), `obsm["spatial"]`, `obs["leiden"]` or cell type column | `preprocessed.h5ad` |
+
+### Input Matrix Convention
+
+All four CCC methods use **log-normalized expression** (`adata.X`), NOT raw counts. These methods compute mean L-R co-expression scores, permutation statistics, or consensus rankings on continuous expression values — none assume a count-based probabilistic model.
+
+| Method | Input Matrix | Notes |
+|--------|-------------|-------|
+| `liana` | `adata.X` (log-normalized) | Also reads `adata.raw` (log-normalized full gene set) when available for broader L-R matching |
+| `cellphonedb` | `adata.X` (log-normalized) | Do NOT use z-scored/scaled matrix — CellPhoneDB v5 explicitly warns against transforms that change zeros to non-zero |
+| `fastccc` | `adata.X` (log-normalized) | Standard CCC mode; reference-based mode (future) may accept raw counts |
+| `cellchat_r` | `adata.X` (log-normalized) | CellChat requires "normalized, log-transformed" input; `raw.use=TRUE` in R refers to CellChat's internal signaling gene subset, not raw UMI counts |
+
+**Data layout requirement**:
+
+```python
+adata.layers["counts"] = adata.X.copy()   # before normalize_total + log1p
+adata.X = lognorm_expr                     # after normalize_total + log1p
+adata.obs["cell_type"] = labels            # cell type annotations required
+```
+
+### CellChat Signaling Categories
+
+CellChat classifies L-R interactions into three signaling categories from CellChatDB:
+
+| Category | Examples | Description |
+|----------|---------|-------------|
+| **Secreted Signaling** | TNF, IL-6, CCL/CXCL chemokines | Long-range soluble factors |
+| **ECM-Receptor** | Collagen, Laminin, Fibronectin | Structural matrix interactions |
+| **Cell-Cell Contact** | MHC-I/II, Notch, CD80-CD28 | Direct membrane-bound interactions |
 
 ## Workflow
 
@@ -66,31 +116,31 @@ You are **Spatial Communication**, a specialised SpatialClaw agent for cell-cell
 
 ```bash
 # LIANA+ (default, multi-method consensus)
-python skills/spatial-communication/spatial_communication.py \
+python skills/spatial/spatial-communication/spatial_communication.py \
   --input <preprocessed.h5ad> --output <report_dir>
 
 # CellPhoneDB method
-python skills/spatial-communication/spatial_communication.py \
+python skills/spatial/spatial-communication/spatial_communication.py \
   --input <data.h5ad> --method cellphonedb --output <dir>
 
 # FastCCC (fastest, no permutation)
-python skills/spatial-communication/spatial_communication.py \
+python skills/spatial/spatial-communication/spatial_communication.py \
   --input <data.h5ad> --method fastccc --output <dir>
 
 # CellChat via R
-python skills/spatial-communication/spatial_communication.py \
+python skills/spatial/spatial-communication/spatial_communication.py \
   --input <data.h5ad> --method cellchat_r --output <dir>
 
 # Custom parameters
-python skills/spatial-communication/spatial_communication.py \
+python skills/spatial/spatial-communication/spatial_communication.py \
   --input <data.h5ad> --method liana --cell-type-key cell_type --species human --output <dir>
 
 # Demo mode
-python skills/spatial-communication/spatial_communication.py --demo --output /tmp/comm_demo
+python skills/spatial/spatial-communication/spatial_communication.py --demo --output /tmp/comm_demo
 
-# Via OmicsClaw runner
-python omicsclaw.py run spatial-cell-communication --input <file> --output <dir>
-python omicsclaw.py run spatial-cell-communication --demo
+# Via CLI (using 'oc' short alias or 'python omicsclaw.py run')
+oc run spatial-communication --input <file> --output <dir>
+oc run spatial-communication --demo
 ```
 
 ## Example Queries
@@ -120,23 +170,36 @@ output_directory/
 ├── processed.h5ad
 ├── figures/
 │   ├── lr_dotplot.png
-│   └── communication_network.png
+│   ├── lr_heatmap.png
+│   └── lr_spatial.png
 ├── tables/
-│   ├── lr_scores.csv
-│   └── top_interactions.csv
+│   ├── lr_interactions.csv
+│   ├── top_interactions.csv
+│   ├── cellchat_pathways.csv          # (CellChat only) pathway-level results
+│   ├── cellchat_centrality.csv        # (CellChat only) sender/receiver/mediator/influencer scores
+│   ├── cellchat_count_matrix.csv      # (CellChat only) interaction count matrix
+│   └── cellchat_weight_matrix.csv     # (CellChat only) interaction weight matrix
 └── reproducibility/
     ├── commands.sh
-    └── environment.yml
+    └── environment.txt
 ```
 
 ## Dependencies
 
-**Required** (in `requirements.txt`):
+**Required (Python)**:
 - `scanpy` >= 1.9
 - `squidpy` >= 1.2
 
-**Optional**:
-- `liana` — multi-method consensus L-R scoring (graceful fallback to built-in scoring)
+**Optional (Python)**:
+- `liana` — multi-method consensus L-R scoring (LIANA+)
+- `cellphonedb` — CellPhoneDB statistical permutation test
+- `fastccc` — FFT-based cell communication without permutation
+
+**Optional (R Environment / Subprocess)**:
+- R system installation
+- `CellChat` (R package) — CellChat communication analysis with centrality metrics
+- `SingleCellExperiment`, `zellkonverter` (R packages) — data interchange
+- `presto` (R package, optional) — fast Wilcoxon test for overexpressed gene detection
 
 ## Safety
 
@@ -156,6 +219,8 @@ output_directory/
 
 ## Citations
 
-- [CellPhoneDB](https://www.cellphonedb.org/) — curated ligand-receptor database
 - [LIANA+](https://github.com/saezlab/liana-py) — multi-method L-R framework
+- [CellPhoneDB](https://www.cellphonedb.org/) — curated ligand-receptor database
+- [FastCCC](https://github.com/Svvord/FastCCC) — permutation-free framework for CCC analysis
+- [CellChat](https://github.com/jinworks/CellChat) — Jin et al., *Nature Communications* 2021
 - [Squidpy](https://squidpy.readthedocs.io/) — spatial neighborhood analysis

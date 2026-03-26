@@ -60,8 +60,28 @@ You are **Spatial Genes**, the spatially variable gene (SVG) discovery skill for
 
 | Format | Extension | Required Fields | Example |
 |--------|-----------|-----------------|---------|
-| AnnData (preprocessed) | `.h5ad` | `X` (normalised), `obsm["spatial"]` | `processed.h5ad` |
+| AnnData (preprocessed) | `.h5ad` | `X` (normalised), `layers["counts"]` (raw), `obsm["spatial"]` | `processed.h5ad` |
 | Demo | n/a | `--demo` flag | Runs spatial-preprocess demo first |
+
+### Input Matrix Convention
+
+Different SVG methods have different statistical assumptions. The skill automatically selects the correct input matrix per method:
+
+| Method | Input Matrix | Rationale |
+|--------|-------------|-----------|
+| `morans` | `adata.X` (log-normalized) | Squidpy `spatial_autocorr` computes autocorrelation on continuous expression values; not a count-distribution model |
+| `spatialde` | `adata.layers["counts"]` (raw) | NaiveDE.stabilize() applies its own variance-stabilizing transform; feeding already-normalized data breaks assumptions |
+| `sparkx` | `adata.layers["counts"]` (raw) | SPARK-X directly inputs the raw count matrix for kernel-based testing |
+| `flashs` | `adata.layers["counts"]` (raw) | FlashS exploits sparsity and count structure (binary presence + rank + count) |
+
+**Data layout requirement**: Preprocessing must store raw counts before normalization:
+
+```python
+adata.layers["counts"] = adata.X.copy()   # before normalize_total + log1p
+adata.X = lognorm_expr                     # after normalize_total + log1p
+```
+
+If `layers["counts"]` is missing, the skill will fall back to `adata.raw` (if available) or `adata.X` with a warning.
 
 ## Workflow
 
@@ -76,31 +96,31 @@ You are **Spatial Genes**, the spatially variable gene (SVG) discovery skill for
 
 ```bash
 # Standard usage (Moran's I, default)
-python skills/spatial-genes/spatial_genes.py \
+python skills/spatial/spatial-genes/spatial_genes.py \
   --input <processed.h5ad> --output <report_dir>
 
 # Custom parameters
-python skills/spatial-genes/spatial_genes.py \
+python skills/spatial/spatial-genes/spatial_genes.py \
   --input <processed.h5ad> --method morans --n-top-genes 30 --fdr-threshold 0.01 --output <dir>
 
 # SpatialDE method
-python skills/spatial-genes/spatial_genes.py \
+python skills/spatial/spatial-genes/spatial_genes.py \
   --input <processed.h5ad> --method spatialde --output <dir>
 
-# SPARK-X method (requires R + rpy2)
-python skills/spatial-genes/spatial_genes.py \
+# SPARK-X method (requires R + SPARK package)
+python skills/spatial/spatial-genes/spatial_genes.py \
   --input <processed.h5ad> --method sparkx --output <dir>
 
 # FlashS method (fast on large data)
-python skills/spatial-genes/spatial_genes.py \
+python skills/spatial/spatial-genes/spatial_genes.py \
   --input <processed.h5ad> --method flashs --output <dir>
 
 # Demo mode
-python skills/spatial-genes/spatial_genes.py --demo --output /tmp/svg_demo
+python skills/spatial/spatial-genes/spatial_genes.py --demo --output /tmp/svg_demo
 
-# Via OmicsClaw runner
-python omicsclaw.py run spatial-svg-detection --input <file> --output <dir>
-python omicsclaw.py run spatial-svg-detection --demo
+# Via CLI (using 'oc' short alias or 'python omicsclaw.py run')
+oc run spatial-svg-detection --input <file> --output <dir>
+oc run spatial-svg-detection --demo
 ```
 
 ## Example Queries
@@ -112,11 +132,12 @@ python omicsclaw.py run spatial-svg-detection --demo
 
 ### Moran's I (default)
 
-1. **Spatial graph**: `squidpy.gr.spatial_neighbors(n_neighs=6, coord_type="generic")` builds a k-NN spatial graph from `obsm["spatial"]`
-2. **Autocorrelation**: `squidpy.gr.spatial_autocorr(adata, mode="moran", n_perms=100, n_jobs=1)` computes Moran's I for every gene
-3. **Moran's I range**: −1 (perfect dispersion) to +1 (perfect clustering); 0 = random
-4. **Filtering**: Retain genes with `moranI > 0` and `pval_norm < fdr_threshold`
-5. **Ranking**: Sort by descending Moran's I statistic
+1. **Input**: `adata.X` (log-normalized expression)
+2. **Spatial graph**: `squidpy.gr.spatial_neighbors(n_neighs=6, coord_type="generic")` builds a k-NN spatial graph from `obsm["spatial"]`
+3. **Autocorrelation**: `squidpy.gr.spatial_autocorr(adata, mode="moran", n_perms=100, n_jobs=1)` computes Moran's I for every gene
+4. **Moran's I range**: -1 (perfect dispersion) to +1 (perfect clustering); 0 = random
+5. **Filtering**: Retain genes with `moranI > 0` and `pval_norm < fdr_threshold`
+6. **Ranking**: Sort by descending Moran's I statistic
 
 **Key parameters**:
 
@@ -130,21 +151,25 @@ python omicsclaw.py run spatial-svg-detection --demo
 
 ### SpatialDE
 
-1. **Dependency**: Requires `SpatialDE` package
-2. **Test**: Gaussian process regression comparing spatially-aware vs spatially-unaware models
-3. **Output**: Genes ranked by likelihood ratio test
+1. **Input**: `adata.layers["counts"]` (raw counts)
+2. **Dependency**: Requires `SpatialDE` + `NaiveDE` packages
+3. **Preprocessing**: NaiveDE.stabilize() applies variance-stabilizing transform on raw counts, then regresses out total counts
+4. **Test**: Gaussian process regression comparing spatially-aware vs spatially-unaware models
+5. **Output**: Genes ranked by likelihood ratio test
 
 ### SPARK-X
 
-1. **Dependency**: Requires R + rpy2 + SPARK R package
-2. **Test**: Non-parametric kernel-based test
-3. **Advantage**: Robust to non-linear spatial patterns
+1. **Input**: `adata.layers["counts"]` (raw counts)
+2. **Dependency**: Requires R + SPARK R package
+3. **Test**: Non-parametric kernel-based test directly on count matrix
+4. **Advantage**: Robust to non-linear spatial patterns
 
 ### FlashS
 
-1. **Dependency**: Python native (no R required)
-2. **Method**: Randomized kernel approximation
-3. **Advantage**: Fast on large datasets (>10k spots)
+1. **Input**: `adata.layers["counts"]` (raw counts)
+2. **Dependency**: Python native (no R required)
+3. **Method**: Randomized kernel approximation exploiting sparsity and count structure
+4. **Advantage**: Fast on large datasets (>10k spots)
 
 ## Output Structure
 
@@ -165,16 +190,19 @@ output_dir/
 
 ## Dependencies
 
-**Required** (in `requirements.txt`):
+**Required (Python)**:
 - `scanpy` >= 1.9 — single-cell/spatial analysis
 - `squidpy` >= 1.2 — spatial autocorrelation and neighbor graphs
 - `matplotlib` — plotting
 - `numpy`, `pandas` — numerics
 
-**Optional**:
-- `SpatialDE` — Gaussian process-based SVG detection
-- `rpy2` + R package `SPARK` — SPARK-X kernel test
+**Optional (Python)**:
+- `SpatialDE` & `NaiveDE` — Gaussian process-based SVG detection
 - `flashs` — FlashS randomized kernel approximation
+
+**Optional (R Environment / Subprocess)**:
+- R system installation (no `rpy2` required)
+- `SPARK` (R package) — SPARK-X kernel test
 
 ## Safety
 
@@ -199,4 +227,5 @@ output_dir/
 - [Squidpy](https://squidpy.readthedocs.io/) — spatial autocorrelation (Moran's I)
 - [SpatialDE](https://doi.org/10.1038/nmeth.4636) — Svensson et al., *Nature Methods* 2018
 - [SPARK-X](https://doi.org/10.1186/s13059-021-02404-0) — Zhu et al., *Genome Biology* 2021
+- [FlashS](https://github.com/cafferychen777/FlashS) — frequency-domain kernel testing for SVGs
 - [Moran's I](https://en.wikipedia.org/wiki/Moran%27s_I) — spatial autocorrelation statistic

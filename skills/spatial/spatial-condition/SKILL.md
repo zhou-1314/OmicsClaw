@@ -3,7 +3,7 @@ name: spatial-condition
 description: >-
   Experimental condition comparison using pseudobulk differential expression with proper multi-sample statistics.
 version: 0.2.0
-author: SpatialClaw Team
+author: OmicsClaw Team
 license: MIT
 tags: [spatial, condition, pseudobulk, DESeq2, differential expression]
 metadata:
@@ -49,16 +49,42 @@ You are **Spatial Condition**, a specialised OmicsClaw agent for comparing exper
 
 ## Core Capabilities
 
-1. **Pseudobulk aggregation**: Aggregate counts per sample × cell type (or cluster) to create proper biological replicates
-2. **DESeq2-style testing**: When `pydeseq2` is available, run proper negative binomial GLM
-3. **Wilcoxon fallback**: When only 2-3 samples per condition, use non-parametric tests on pseudobulk values
-4. **Per-cluster analysis**: Run condition comparison within each cluster to find cluster-specific responses
+1. **Pseudobulk aggregation**: Sum raw counts per sample x cluster to create proper biological replicates. Uses `adata.layers["counts"]` (raw)
+2. **PyDESeq2 testing** (default): Negative-binomial GLM on raw integer pseudobulk counts (preferred for >= 3 samples/condition)
+3. **Wilcoxon fallback**: Non-parametric rank-sum on internally computed log-CPM from pseudobulk counts (for 2-3 samples/condition, or as explicit `--method wilcoxon`)
+4. **Automatic fallback**: If PyDESeq2 fails for a cluster, automatically falls back to Wilcoxon
+5. **Per-cluster analysis**: Run condition comparison within each cluster to find cluster-specific responses
 
 ## Input Formats
 
 | Format | Extension | Required Fields | Example |
 |--------|-----------|-----------------|---------|
-| AnnData (preprocessed) | `.h5ad` | `X`, `obs[condition_key]`, `obs[sample_key]` | `multi_sample.h5ad` |
+| AnnData (preprocessed) | `.h5ad` | `X` (normalised), `layers["counts"]` (raw), `obs[condition_key]`, `obs[sample_key]` | `multi_sample.h5ad` |
+
+### Input Matrix Convention
+
+This skill has a multi-step pipeline where different steps use different input matrices:
+
+| Component | Input Matrix | Rationale |
+|-----------|-------------|-----------|
+| **Pseudobulk aggregation** | `adata.layers["counts"]` (raw) | Sum aggregation requires raw integer counts; summing log-normalized values is invalid (log(a)+log(b) != log(a+b)) |
+| **PyDESeq2** | Pseudobulk raw integer counts | NB/GLM model validates non-negative integers; do NOT pass CPM/TPM/log values |
+| **Wilcoxon** | Pseudobulk raw counts (internally → log-CPM) | Function receives raw counts and internally computes log-CPM before the rank test |
+
+**Key insight**: Pseudobulk is always computed from raw counts, then the DE method operates on the pseudobulk matrix:
+- PyDESeq2 works directly on raw pseudobulk counts (preferred, proper statistical model)
+- Wilcoxon internally normalizes to log-CPM (fallback for low sample counts)
+
+**Data layout requirement**:
+
+```python
+adata.layers["counts"] = adata.X.copy()   # before normalize_total + log1p
+adata.X = lognorm_expr                     # after normalize_total + log1p
+adata.obs["condition"] = condition_labels  # e.g. "treatment" / "control"
+adata.obs["sample_id"] = sample_labels     # biological replicate IDs
+```
+
+If `layers["counts"]` is missing, falls back to `adata.raw` (if available) or `adata.X` with a warning.
 
 ## Workflow
 
@@ -70,15 +96,19 @@ You are **Spatial Condition**, a specialised OmicsClaw agent for comparing exper
 ## CLI Reference
 
 ```bash
-python skills/spatial-condition/spatial_condition.py \
+# Basic condition comparison using default DE method (PyDESeq2)
+oc run spatial-condition \
   --input <data.h5ad> --output <dir> \
   --condition-key treatment --sample-key sample_id
 
-python skills/spatial-condition/spatial_condition.py \
+# Explicitly set the reference condition and DE method (e.g., wilcoxon fallback)
+oc run spatial-condition \
   --input <data.h5ad> --output <dir> \
-  --condition-key treatment --sample-key sample_id --reference-condition control
+  --condition-key treatment --sample-key sample_id \
+  --reference-condition control --method wilcoxon
 
-python skills/spatial-condition/spatial_condition.py --demo --output /tmp/cond_demo
+# Run the internally generated demo scenario
+oc run spatial-condition --demo --output /tmp/cond_demo
 ```
 
 ## Example Queries
@@ -95,6 +125,7 @@ python skills/spatial-condition/spatial_condition.py --demo --output /tmp/cond_d
 5. **Per-cluster**: Repeat steps 1-4 within each cluster for cluster-specific condition effects
 
 **Key parameters**:
+- `--method`: DE method — `pydeseq2` (NB GLM, preferred) or `wilcoxon` (non-parametric fallback)
 - `--condition-key`: obs column with condition labels (e.g. treatment/control)
 - `--sample-key`: obs column with biological sample identifiers
 - `--reference-condition`: reference level for comparison (default: alphabetically first)
