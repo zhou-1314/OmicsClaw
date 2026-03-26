@@ -40,6 +40,7 @@ from omicsclaw.common.report import (
 )
 from skills.spatial._lib.adata_utils import get_spatial_key, store_analysis_metadata
 from skills.spatial._lib.annotation import (
+    COUNT_BASED_METHODS,
     SUPPORTED_METHODS,
     annotate_cellassign,
     annotate_marker_based,
@@ -216,6 +217,21 @@ def main():
         sys.exit(1)
 
     params = {"method": args.method, "species": args.species}
+
+    # Validate input matrix availability for count-based methods (scanvi, cellassign).
+    if args.method in COUNT_BASED_METHODS and "counts" not in adata.layers:
+        if adata.raw is not None:
+            logger.warning(
+                "Method '%s' expects raw counts in adata.layers['counts']. "
+                "Found adata.raw — will copy to layers['counts'].", args.method,
+            )
+        else:
+            logger.warning(
+                "Method '%s' expects raw counts in adata.layers['counts'], but none found. "
+                "Falling back to adata.X — if this is log-normalized, results will be incorrect. "
+                "Ensure preprocessing saves raw counts: adata.layers['counts'] = adata.X.copy()",
+                args.method,
+            )
 
     if args.method == "marker_based":
         summary = annotate_marker_based(adata, cluster_key=args.cluster_key, species=args.species)

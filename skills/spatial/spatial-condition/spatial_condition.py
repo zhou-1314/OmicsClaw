@@ -37,7 +37,7 @@ from omicsclaw.common.report import (
     write_result_json,
 )
 from skills.spatial._lib.adata_utils import store_analysis_metadata
-from skills.spatial._lib.condition import run_condition_comparison
+from skills.spatial._lib.condition import run_condition_comparison, SUPPORTED_METHODS
 from skills.spatial._lib.viz_utils import save_figure
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -286,6 +286,8 @@ def main():
     parser.add_argument("--input", dest="input_path")
     parser.add_argument("--output", dest="output_dir", required=True)
     parser.add_argument("--demo", action="store_true")
+    parser.add_argument("--method", default="pydeseq2", choices=list(SUPPORTED_METHODS),
+                        help="DE method: pydeseq2 (NB GLM, preferred) or wilcoxon (non-parametric fallback)")
     parser.add_argument("--condition-key", default="condition")
     parser.add_argument("--sample-key", default="sample_id")
     parser.add_argument("--reference-condition", default=None)
@@ -323,10 +325,26 @@ def main():
         sc.tl.leiden(adata, resolution=1.0, flavor="igraph")
 
     params = {
+        "method": args.method,
         "condition_key": args.condition_key,
         "sample_key": args.sample_key,
         "reference_condition": args.reference_condition,
     }
+
+    # Pseudobulk aggregation requires raw counts.
+    if "counts" not in adata.layers:
+        if adata.raw is not None:
+            logger.warning(
+                "Pseudobulk requires raw counts in adata.layers['counts']. "
+                "Found adata.raw — will use it for aggregation."
+            )
+        else:
+            logger.warning(
+                "Pseudobulk requires raw counts in adata.layers['counts'], but none found. "
+                "Falling back to adata.X — if this is log-normalized, pseudobulk sums "
+                "will be statistically invalid (log(a)+log(b) != log(a+b)). "
+                "Ensure preprocessing saves raw counts: adata.layers['counts'] = adata.X.copy()"
+            )
 
     summary = run_condition_comparison(
         adata,
@@ -334,6 +352,7 @@ def main():
         sample_key=args.sample_key,
         reference_condition=args.reference_condition,
         cluster_key=cluster_key,
+        method=args.method,
     )
 
     generate_figures(output_dir, summary)

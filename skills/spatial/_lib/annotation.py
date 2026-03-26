@@ -6,6 +6,12 @@ Provides multiple methods for cell type annotation:
   - scanvi:       Semi-supervised VAE transfer learning (scvi-tools)
   - cellassign:   Probabilistic marker-based assignment (scvi-tools)
 
+Input matrix convention (per-method):
+  - marker_based: adata.X (log-normalized) — scoring on continuous expression values
+  - tangram:      adata.X (log-normalized) — both ref & spatial must be normalized
+  - scanvi:       adata.layers["counts"] (raw) — NB/ZINB generative model
+  - cellassign:   adata.layers["counts"] (raw) — NB likelihood model
+
 Usage::
 
     from skills.spatial._lib.annotation import (
@@ -25,12 +31,34 @@ import logging
 import numpy as np
 import pandas as pd
 import scanpy as sc
+from scipy import sparse
 
 from .adata_utils import get_spatial_key
 
 logger = logging.getLogger(__name__)
 
 SUPPORTED_METHODS = ("marker_based", "tangram", "scanvi", "cellassign")
+
+# Methods whose generative models assume raw counts (NB / ZINB likelihood).
+COUNT_BASED_METHODS = ("scanvi", "cellassign")
+
+# Methods that operate on continuous log-normalized expression values.
+NORMALIZED_METHODS = ("marker_based", "tangram")
+
+
+def _get_counts_layer(adata) -> str | None:
+    """Return the name of the raw-counts layer, or None if unavailable.
+
+    Looks for ``layers["counts"]`` (standard convention set by preprocessing).
+    Falls back to ``adata.raw`` by copying into a temporary layer.
+    """
+    if "counts" in adata.layers:
+        return "counts"
+    if adata.raw is not None:
+        logger.info("No 'counts' layer found; copying from adata.raw")
+        adata.layers["counts"] = adata.raw.X.copy()
+        return "counts"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +106,13 @@ def annotate_marker_based(
     adata, *, cluster_key: str = "leiden", species: str = "human",
     n_top_markers: int = 5,
 ) -> dict:
-    """Score-based cell type annotation using cluster marker genes."""
+    """Score-based cell type annotation using cluster marker genes.
+
+    Uses ``adata.X`` (log-normalized) — ``rank_genes_groups`` and marker scoring
+    operate on continuous expression values where gene magnitudes are comparable.
+    Do not pass raw counts; the Wilcoxon test results and overlap scores depend
+    on normalized, log-transformed expression.
+    """
     if cluster_key not in adata.obs.columns:
         raise ValueError(f"Cluster key '{cluster_key}' not in adata.obs")
 
@@ -130,10 +164,20 @@ def annotate_marker_based(
 def annotate_tangram(
     adata, *, reference_path: str, cell_type_key: str = "cell_type", n_epochs: int = 500,
 ) -> dict:
-    """Transfer cell type labels from scRNA-seq reference using Tangram."""
+    """Transfer cell type labels from scRNA-seq reference using Tangram.
+
+    Uses ``adata.X`` (log-normalized) for both scRNA-seq reference and spatial
+    data.  Tangram optimizes a mapping from sc → spatial by comparing expression
+    values directly; both sides must be on the same normalized scale.  Feeding
+    raw counts causes scale mismatch and mapping failure.
+
+    Robust to device availability (CUDA/CPU), and rigorously intersects
+    overlapping training genes to avoid crashes.
+    """
     from .dependency_manager import require
     require("tangram", feature="Tangram cell type annotation")
     import tangram as tg
+    import torch
 
     logger.info("Loading reference data: %s", reference_path)
     adata_ref = sc.read_h5ad(reference_path)
@@ -144,22 +188,42 @@ def annotate_tangram(
     if "highly_variable" in adata_ref.var.columns:
         training_genes = list(adata_ref.var_names[adata_ref.var["highly_variable"]])
     else:
-        sc.pp.highly_variable_genes(adata_ref, n_top_genes=2000)
+        logger.info("Computing highly variable genes for reference...")
+        try:
+            sc.pp.highly_variable_genes(adata_ref, n_top_genes=2000, flavor="seurat_v3")
+        except Exception:
+            sc.pp.highly_variable_genes(adata_ref, n_top_genes=2000)
         training_genes = list(adata_ref.var_names[adata_ref.var["highly_variable"]])
 
-    adata_sp = adata.raw.to_adata() if adata.raw is not None else adata.copy()
+    # Tangram needs log-normalized expression for both ref and spatial.
+    # Use adata.X directly (should be normalize_total + log1p).
+    adata_sp = adata.copy()
+    logger.info("Tangram: using adata.X (log-normalized) for spatial mapping")
+
     spatial_key = get_spatial_key(adata)
     if spatial_key and spatial_key not in adata_sp.obsm:
         adata_sp.obsm[spatial_key] = adata.obsm[spatial_key].copy()
 
-    tg.pp_adatas(adata_ref, adata_sp, genes=training_genes)
-    logger.info("Running Tangram mapping (%d epochs) ...", n_epochs)
-    ad_map = tg.map_cells_to_space(adata_ref, adata_sp, mode="cells", num_epochs=n_epochs, device="cpu")
+    common_genes = list(set(training_genes) & set(adata_sp.var_names))
+    if len(common_genes) < 50:
+        raise ValueError(f"Too few overlapping HVGs ({len(common_genes)}) between reference and spatial data")
+
+    tg.pp_adatas(adata_ref, adata_sp, genes=common_genes)
+    
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    logger.info("Running Tangram mapping (%d epochs) on device '%s' ...", n_epochs, device)
+    ad_map = tg.map_cells_to_space(adata_ref, adata_sp, mode="cells", num_epochs=n_epochs, device=device)
+    
+    logger.info("Projecting cell type annotations ...")
     tg.project_cell_annotations(ad_map, adata_sp, annotation=cell_type_key)
 
     if "tangram_ct_pred" in adata_sp.obsm:
         ct_pred = adata_sp.obsm["tangram_ct_pred"]
-        ct_prob = ct_pred.div(ct_pred.sum(axis=1), axis=0)
+        # Safe division to avoid NaN probabilities
+        row_sums = ct_pred.sum(axis=1)
+        row_sums[row_sums == 0] = 1.0
+        ct_prob = ct_pred.div(row_sums, axis=0)
+        
         adata.obs["cell_type"] = pd.Categorical(ct_prob.idxmax(axis=1))
         adata.obsm["tangram_ct_pred"] = ct_pred
     else:
@@ -168,7 +232,8 @@ def annotate_tangram(
     counts = adata.obs["cell_type"].value_counts().to_dict()
     return {
         "method": "tangram", "n_cell_types": adata.obs["cell_type"].nunique(),
-        "cell_type_counts": counts, "n_training_genes": len(training_genes), "n_epochs": n_epochs,
+        "cell_type_counts": counts, "n_training_genes": len(common_genes), "n_epochs": n_epochs,
+        "device": device,
     }
 
 
@@ -181,7 +246,13 @@ def annotate_scanvi(
     adata, *, reference_path: str, cell_type_key: str = "cell_type",
     n_latent: int = 10, n_epochs: int = 100,
 ) -> dict:
-    """Transfer cell type labels using scANVI semi-supervised VAE."""
+    """Transfer cell type labels using scANVI semi-supervised VAE.
+
+    Uses raw counts from ``adata.layers["counts"]`` — scANVI's generative model
+    assumes a negative-binomial / ZINB likelihood over integer counts.  Passing
+    log-normalized values as "counts" will produce silently wrong results.
+    Falls back to ``adata.X`` with a warning if no counts layer is available.
+    """
     from .dependency_manager import require
     require("scvi", feature="scANVI cell type annotation")
     import scvi
@@ -196,36 +267,72 @@ def annotate_scanvi(
     if len(common_genes) < 100:
         raise ValueError(f"Insufficient gene overlap: {len(common_genes)} common genes")
 
-    logger.info("Gene overlap: %d common genes", len(common_genes))
+    # Filter to highly variable genes to vastly improve VAE speed and accuracy
+    if "highly_variable" in adata_ref.var.columns:
+        ref_hvgs = set(adata_ref.var_names[adata_ref.var["highly_variable"]])
+        common_hvgs = list(set(common_genes) & ref_hvgs)
+        if len(common_hvgs) > 500:
+            logger.info("Restricting scANVI to %d overlapping highly variable genes", len(common_hvgs))
+            common_genes = common_hvgs
+        else:
+            logger.info("Only %d overlapping HVGs found; using all %d common genes", len(common_hvgs), len(common_genes))
+    else:
+        logger.info("No 'highly_variable' flag in reference; using all %d common genes", len(common_genes))
+
     adata_ref_sub = adata_ref[:, common_genes].copy()
     adata_sub = adata[:, common_genes].copy()
 
-    if "counts" not in adata_ref_sub.layers:
-        adata_ref_sub.layers["counts"] = adata_ref_sub.X.copy()
-    if "counts" not in adata_sub.layers:
-        adata_sub.layers["counts"] = adata_sub.X.copy()
+    # Ensure raw counts are in layers["counts"] for both reference and query.
+    # scANVI's NB model requires integer-like counts — do NOT use log-normalized.
+    for label, ad in [("reference", adata_ref_sub), ("spatial", adata_sub)]:
+        counts_layer = _get_counts_layer(ad)
+        if counts_layer is not None:
+            logger.info("scANVI %s: using layers['%s'] (raw counts)", label, counts_layer)
+        else:
+            logger.warning(
+                "scANVI %s: no 'counts' layer or adata.raw found; copying adata.X. "
+                "If adata.X is log-normalized, results will be incorrect. "
+                "Ensure preprocessing saves raw counts: adata.layers['counts'] = adata.X.copy()",
+                label,
+            )
+            ad.layers["counts"] = ad.X.copy()
+
+    train_kwargs = {"early_stopping": True, "early_stopping_patience": 15, "check_val_every_n_epoch": 1, "max_epochs": 200}
 
     scvi.model.SCVI.setup_anndata(adata_ref_sub, labels_key=cell_type_key, layer="counts")
     scvi_model = scvi.model.SCVI(adata_ref_sub, n_latent=n_latent)
-    scvi_model.train(max_epochs=200, early_stopping=True)
+    logger.info("Training SCVI on reference...")
+    scvi_model.train(**train_kwargs)
 
     scanvi_model = scvi.model.SCANVI.from_scvi_model(scvi_model, "Unknown")
-    scanvi_model.train(max_epochs=n_epochs, early_stopping=True)
+    logger.info("Training SCANVI from SCVI...")
+    scanvi_model.train(max_epochs=n_epochs, early_stopping=True, early_stopping_patience=10)
 
     adata_sub.obs[cell_type_key] = "Unknown"
     scvi.model.SCANVI.setup_anndata(adata_sub, labels_key=cell_type_key, unlabeled_category="Unknown", layer="counts")
+    
+    logger.info("Loading query data and adapting SCANVI model...")
     query_model = scvi.model.SCANVI.load_query_data(adata_sub, scanvi_model)
-    query_model.train(max_epochs=100, early_stopping=True)
+    query_model.train(max_epochs=n_epochs, early_stopping=True, early_stopping_patience=10)
 
     predictions = query_model.predict()
     adata.obs["cell_type"] = pd.Categorical(predictions)
+    
+    # Store probability matrix in obsm for downstream confidence evaluation
+    probabilities = query_model.predict(soft=True)
+    adata.obsm["scanvi_probabilities"] = probabilities.values if hasattr(probabilities, "values") else probabilities
+    
+    # Calculate confidence per cell
+    confidence = adata.obsm["scanvi_probabilities"].max(axis=1)
+    adata.obs["scanvi_confidence"] = confidence
 
     counts = adata.obs["cell_type"].value_counts().to_dict()
-    logger.info("scANVI: %d cell types predicted", len(counts))
+    mean_conf = float(np.mean(confidence))
+    logger.info("scANVI: %d cell types predicted (Mean confidence: %.3f)", len(counts), mean_conf)
 
     return {
         "method": "scanvi", "n_cell_types": len(counts), "cell_type_counts": counts,
-        "n_common_genes": len(common_genes), "n_latent": n_latent,
+        "n_common_genes": len(common_genes), "n_latent": n_latent, "mean_confidence": round(mean_conf, 4),
     }
 
 
@@ -238,7 +345,13 @@ def annotate_cellassign(
     adata, *, marker_genes: dict[str, list[str]], max_epochs: int = 400,
     batch_key: str | None = None, layer: str | None = None,
 ) -> dict:
-    """Assign cell types using CellAssign probabilistic model."""
+    """Assign cell types using CellAssign probabilistic model.
+
+    Uses raw counts from ``adata.layers["counts"]`` (or the explicit ``layer``
+    argument) — CellAssign assumes a negative-binomial count likelihood.
+    Feeding log-normalized data will produce completely wrong assignments.
+    Size factors are computed from the same raw-count matrix.
+    """
     from .dependency_manager import require
     require("scvi", feature="CellAssign cell type annotation")
     from scvi.external import CellAssign
@@ -276,9 +389,25 @@ def annotate_cellassign(
         for g in genes:
             marker_matrix.loc[g, ct] = 1.0
 
-    # size factors
-    data_for_libsize = adata.layers[layer] if layer else adata.X
+    # Determine the counts layer for CellAssign (NB model needs raw counts).
+    if layer is not None and layer in adata.layers:
+        counts_layer_name = layer
+        logger.info("CellAssign: using explicit layer='%s'", layer)
+    else:
+        counts_layer_name = _get_counts_layer(adata)
+        if counts_layer_name is not None:
+            logger.info("CellAssign: using layers['%s'] (raw counts)", counts_layer_name)
+        else:
+            logger.warning(
+                "CellAssign: no 'counts' layer or adata.raw found; using adata.X. "
+                "If adata.X is log-normalized, results will be completely wrong. "
+                "Ensure preprocessing saves raw counts: adata.layers['counts'] = adata.X.copy()"
+            )
+
+    # Compute size factors from the counts matrix (not log-normalized).
+    data_for_libsize = adata.layers[counts_layer_name] if counts_layer_name else adata.X
     lib_size = np.asarray(data_for_libsize.sum(axis=1)).flatten().astype(np.float64)
+    
     mean_lib = np.mean(lib_size)
     if mean_lib == 0:
         raise ValueError("All cells have zero total counts")
@@ -292,13 +421,20 @@ def annotate_cellassign(
         if batch_key not in adata_sub.obs.columns:
             raise ValueError(f"batch_key '{batch_key}' not found in adata.obs")
         setup_kwargs["batch_key"] = batch_key
-    if layer is not None and layer in adata_sub.layers:
-        setup_kwargs["layer"] = layer
+    if counts_layer_name is not None and counts_layer_name in adata_sub.layers:
+        setup_kwargs["layer"] = counts_layer_name
 
     CellAssign.setup_anndata(adata_sub, **setup_kwargs)
     model = CellAssign(adata_sub, marker_matrix)
+    
+    train_kwargs = {
+        "early_stopping": True, 
+        "early_stopping_patience": 15, 
+        "check_val_every_n_epoch": 1,
+        "max_epochs": max_epochs
+    }
     logger.info("Training CellAssign (max_epochs=%d) ...", max_epochs)
-    model.train(max_epochs=max_epochs, early_stopping=True)
+    model.train(**train_kwargs)
 
     predictions = model.predict()
     labels = predictions.idxmax(axis=1).values
@@ -306,14 +442,19 @@ def annotate_cellassign(
 
     adata.obs["cell_type"] = pd.Categorical(labels)
     adata.obs["cellassign_confidence"] = confidence
-    adata.obsm["cellassign_probabilities"] = predictions.values
+    
+    # Store probability matrix in obsm safely
+    adata.obsm["cellassign_probabilities"] = predictions.values if hasattr(predictions, "values") else predictions
 
     counts = adata.obs["cell_type"].value_counts().to_dict()
-    mean_confidence = float(np.mean(confidence))
-    logger.info("CellAssign: %d cell types, mean confidence %.3f", len(counts), mean_confidence)
+    mean_conf = float(np.mean(confidence))
+    logger.info("CellAssign: %d cell types, mean confidence %.3f", len(counts), mean_conf)
+
+    # Avoid Pyre lint issue with round() on float by using string formatting
+    mean_conf_rounded = float(f"{mean_conf:.4f}")
 
     return {
         "method": "cellassign", "n_cell_types": len(counts), "cell_type_counts": counts,
-        "n_marker_genes": len(marker_gene_list), "mean_confidence": round(mean_confidence, 4),
+        "n_marker_genes": len(marker_gene_list), "mean_confidence": mean_conf_rounded,
         "cell_type_names": cell_types,
     }

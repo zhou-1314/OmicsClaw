@@ -32,6 +32,58 @@ VALID_ANALYSIS_TYPES = CLUSTER_ANALYSES + GENE_ANALYSES + NETWORK_ANALYSES
 
 
 # ---------------------------------------------------------------------------
+# Interpretation helpers (from Biomni spatial-analysis-guide.md)
+# ---------------------------------------------------------------------------
+
+ENRICHMENT_THRESHOLDS = {
+    "co_localized": 2.0,
+    "segregated": -2.0,
+}
+
+
+def interpret_enrichment_zscore(zscore: float) -> str:
+    """Return human-readable interpretation of a neighborhood enrichment z-score."""
+    if zscore > ENRICHMENT_THRESHOLDS["co_localized"]:
+        return "significantly co-localized (clusters are neighbors more than expected)"
+    elif zscore < ENRICHMENT_THRESHOLDS["segregated"]:
+        return "significantly segregated (clusters avoid each other)"
+    else:
+        return "no significant spatial association"
+
+
+def interpret_moran_I(I_value: float) -> str:
+    """Return interpretation of a global Moran's I value."""
+    if I_value > 0.3:
+        return "strong positive spatial autocorrelation (spatially clustered)"
+    elif I_value > 0.1:
+        return "moderate positive spatial autocorrelation"
+    elif I_value > -0.1:
+        return "weak or random spatial distribution"
+    elif I_value > -0.3:
+        return "moderate negative spatial autocorrelation (dispersed)"
+    else:
+        return "strong negative spatial autocorrelation (highly dispersed)"
+
+
+def interpret_geary_C(C_value: float) -> str:
+    """Return interpretation of a global Geary's C value.
+
+    Geary's C ranges from 0 to ~2: C < 1 = positive autocorrelation,
+    C = 1 = random, C > 1 = negative autocorrelation.
+    """
+    if C_value < 0.5:
+        return "strong positive spatial autocorrelation (spatially clustered)"
+    elif C_value < 0.8:
+        return "moderate positive spatial autocorrelation"
+    elif C_value < 1.2:
+        return "weak or random spatial distribution"
+    elif C_value < 1.5:
+        return "moderate negative spatial autocorrelation (dispersed)"
+    else:
+        return "strong negative spatial autocorrelation (highly dispersed)"
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -45,13 +97,41 @@ def _ensure_categorical(adata, column: str) -> None:
         adata.obs[column] = pd.Categorical(adata.obs[column].astype(str))
 
 
-def _ensure_spatial_graph(adata, n_neighs: int = 6) -> None:
-    """Build squidpy spatial graph if not already present."""
-    if "spatial_connectivities" not in adata.obsp:
-        require("squidpy", feature="Spatial Graph Toolkit")
-        import squidpy as sq
-        spatial_key = get_spatial_key(adata) or "spatial"
-        sq.gr.spatial_neighbors(adata, n_neighs=n_neighs, coord_type="generic", spatial_key=spatial_key)
+def _detect_visium(adata) -> bool:
+    """Detect if data is from 10x Visium (grid layout)."""
+    if "spatial" in adata.uns:
+        for lib_info in adata.uns["spatial"].values():
+            if isinstance(lib_info, dict) and "scalefactors" in lib_info:
+                return True
+    return False
+
+
+def _ensure_spatial_graph(adata, n_neighs: int = 6, n_rings: int = 1) -> None:
+    """Build squidpy spatial graph if not already present.
+
+    Automatically detects Visium (grid) vs generic coordinate layouts.
+    - Visium: ``coord_type='grid'``, ``n_neighs=6`` (hexagonal), supports ``n_rings``
+    - Other: ``coord_type='generic'``, ``n_neighs`` as specified
+    """
+    if "spatial_connectivities" in adata.obsp:
+        return
+
+    require("squidpy", feature="Spatial Graph Toolkit")
+    import squidpy as sq
+    spatial_key = get_spatial_key(adata) or "spatial"
+
+    if _detect_visium(adata):
+        sq.gr.spatial_neighbors(
+            adata, n_neighs=n_neighs, coord_type="grid",
+            n_rings=n_rings, spatial_key=spatial_key,
+        )
+        logger.info("Built Visium grid spatial graph (n_neighs=%d, n_rings=%d)", n_neighs, n_rings)
+    else:
+        sq.gr.spatial_neighbors(
+            adata, n_neighs=n_neighs, coord_type="generic",
+            spatial_key=spatial_key,
+        )
+        logger.info("Built generic spatial graph (n_neighs=%d)", n_neighs)
 
 
 def _select_genes(adata, genes: list[str] | None, n_top: int = 20) -> list[str]:
@@ -116,6 +196,21 @@ def run_neighborhood_enrichment(adata, *, cluster_key: str = "leiden") -> dict:
     max_zscore = float(np.nanmax(zscore_matrix))
     min_zscore = float(np.nanmin(zscore_matrix))
 
+    # Interpret top interactions
+    significant_pairs = []
+    for i, cat_i in enumerate(categories):
+        for j, cat_j in enumerate(categories):
+            if i >= j:
+                continue
+            z = zscore_matrix[i, j]
+            if abs(z) > ENRICHMENT_THRESHOLDS["co_localized"]:
+                significant_pairs.append({
+                    "cluster_a": cat_i, "cluster_b": cat_j,
+                    "zscore": float(z),
+                    "interpretation": interpret_enrichment_zscore(z),
+                })
+    significant_pairs.sort(key=lambda x: abs(x["zscore"]), reverse=True)
+
     return {
         "analysis_type": "neighborhood_enrichment",
         "cluster_key": cluster_key,
@@ -125,6 +220,7 @@ def run_neighborhood_enrichment(adata, *, cluster_key: str = "leiden") -> dict:
         "max_zscore": max_zscore,
         "min_zscore": min_zscore,
         "zscore_df": zscore_df,
+        "significant_pairs": significant_pairs[:20],
     }
 
 

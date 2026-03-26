@@ -1,4 +1,7 @@
-"""Tests for the bulkrna-coexpression skill."""
+"""Tests for the bulkrna-coexpression skill.
+
+Requires R with WGCNA package installed. Tests are skipped if R/WGCNA is unavailable.
+"""
 
 from __future__ import annotations
 
@@ -12,11 +15,30 @@ import pytest
 SKILL_SCRIPT = Path(__file__).resolve().parent.parent / "bulkrna_coexpression.py"
 
 
+def _r_wgcna_available() -> bool:
+    """Check if R and WGCNA package are available."""
+    try:
+        result = subprocess.run(
+            ["Rscript", "-e", "cat(requireNamespace('WGCNA', quietly=TRUE))"],
+            capture_output=True, text=True, timeout=30,
+        )
+        return result.returncode == 0 and "TRUE" in result.stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+_skip_no_wgcna = pytest.mark.skipif(
+    not _r_wgcna_available(),
+    reason="R WGCNA package not available",
+)
+
+
 @pytest.fixture
 def tmp_output(tmp_path):
     return tmp_path / "coexpr_out"
 
 
+@_skip_no_wgcna
 def test_demo_mode(tmp_output):
     """bulkrna-coexpression --demo should run without error."""
     result = subprocess.run(
@@ -33,6 +55,7 @@ def test_demo_mode(tmp_output):
     assert (tmp_output / "tables" / "module_assignments.csv").exists()
 
 
+@_skip_no_wgcna
 def test_demo_report_content(tmp_output):
     """Report should contain expected sections."""
     subprocess.run(
@@ -47,6 +70,7 @@ def test_demo_report_content(tmp_output):
     assert "Disclaimer" in report
 
 
+@_skip_no_wgcna
 def test_demo_result_json(tmp_output):
     """result.json should contain expected keys."""
     subprocess.run(

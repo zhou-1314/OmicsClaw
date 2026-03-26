@@ -2,9 +2,15 @@
 
 Provides multiple methods for identifying genes with spatial patterns:
   - morans:    Moran's I spatial autocorrelation via Squidpy (default)
-  - spatialde: Gaussian process regression via SpatialDE2
+  - spatialde: Gaussian process regression via SpatialDE (old) / SpatialDE2
   - sparkx:    Non-parametric kernel test via SPARK-X in R
   - flashs:    Randomized kernel approximation (Python native, fast)
+
+Input matrix convention (per-method):
+  - morans:    adata.X (log-normalized) — spatial autocorrelation on continuous values
+  - spatialde: adata.layers["counts"] (raw) — NaiveDE stabilizes counts internally
+  - sparkx:    adata.layers["counts"] (raw) — count-based kernel test
+  - flashs:    adata.layers["counts"] (raw) — designed for sparse count matrices
 
 Usage::
 
@@ -27,15 +33,39 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_METHODS = ("morans", "spatialde", "sparkx", "flashs")
 
+# Methods that require raw counts rather than log-normalized expression.
+COUNT_BASED_METHODS = ("spatialde", "sparkx", "flashs")
 
-def _get_dense_expression(adata, gene_mask=None) -> np.ndarray:
-    """Return a dense (n_obs, n_genes) array, optionally subsetting columns."""
-    X = adata.X
+
+def _get_dense_expression(adata, gene_mask=None, *, layer: str | None = None) -> np.ndarray:
+    """Return a dense (n_obs, n_genes) array, optionally subsetting columns.
+
+    Parameters
+    ----------
+    layer : str or None
+        If given, read from ``adata.layers[layer]``; otherwise read ``adata.X``.
+    """
+    X = adata.layers[layer] if layer is not None else adata.X
     if gene_mask is not None:
         X = X[:, gene_mask]
     if sparse.issparse(X):
         return X.toarray()
     return np.asarray(X)
+
+
+def _get_counts_layer(adata) -> str | None:
+    """Return the name of the raw-counts layer, or None if unavailable.
+
+    Looks for ``layers["counts"]`` (standard convention set by preprocessing).
+    Falls back to ``adata.raw`` by copying into a temporary layer.
+    """
+    if "counts" in adata.layers:
+        return "counts"
+    if adata.raw is not None:
+        logger.info("No 'counts' layer found; copying from adata.raw")
+        adata.layers["counts"] = adata.raw.X.copy()
+        return "counts"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -47,11 +77,15 @@ def run_morans(
     adata, *, n_top_genes: int = 20, fdr_threshold: float = 0.05,
     n_neighs: int = 6, n_perms: int = 100,
 ) -> tuple[pd.DataFrame, dict]:
-    """Compute Moran's I for all genes and return ranked SVG table + summary."""
+    """Compute Moran's I for all genes and return ranked SVG table + summary.
+
+    Uses ``adata.X`` (log-normalized) — Squidpy's ``spatial_autocorr`` computes
+    spatial autocorrelation on continuous expression values, not raw counts.
+    """
     import squidpy as sq
 
     spatial_key = require_spatial_coords(adata)
-    logger.info("Computing spatial autocorrelation (Moran's I) for %d genes ...", adata.n_vars)
+    logger.info("Computing spatial autocorrelation (Moran's I) on adata.X (log-normalized) for %d genes ...", adata.n_vars)
 
     sq.gr.spatial_neighbors(adata, n_neighs=n_neighs, coord_type="generic", spatial_key=spatial_key)
     sq.gr.spatial_autocorr(adata, mode="moran", n_perms=n_perms, n_jobs=1)
@@ -87,7 +121,13 @@ def run_morans(
 def run_spatialde(
     adata, *, n_top_genes: int = 20, fdr_threshold: float = 0.05, omnibus: bool = True,
 ) -> tuple[pd.DataFrame, dict]:
-    """SpatialDE SVG detection with Gaussian process regression."""
+    """SpatialDE SVG detection with Gaussian process regression.
+
+    Uses raw counts from ``adata.layers["counts"]`` — NaiveDE.stabilize()
+    performs variance-stabilizing transformation internally, which requires
+    integer-like counts as input (not already log-normalized values).
+    Falls back to ``adata.X`` with a warning if no counts layer is available.
+    """
     from .dependency_manager import require
 
     # scipy compat shims for SpatialDE 1.x
@@ -124,11 +164,24 @@ def run_spatialde(
     coords = adata.obsm[spatial_key]
     logger.info("Running SpatialDE on %d genes ...", adata.n_vars)
 
-    adata_work = adata.copy()
-    if sparse.issparse(adata_work.X):
-        adata_work.X = adata_work.X.toarray()
+    # Use raw counts for NaiveDE stabilize — it expects integer-like values.
+    counts_layer = _get_counts_layer(adata)
+    if counts_layer is not None:
+        logger.info("SpatialDE: using adata.layers['%s'] (raw counts)", counts_layer)
+        X_input = adata.layers[counts_layer]
+    else:
+        logger.warning(
+            "SpatialDE: no 'counts' layer found; falling back to adata.X. "
+            "Results may be suboptimal — NaiveDE.stabilize() expects raw counts."
+        )
+        X_input = adata.X
 
-    counts = pd.DataFrame(adata_work.X, index=adata_work.obs_names, columns=adata_work.var_names)
+    if sparse.issparse(X_input):
+        X_input = X_input.toarray()
+    else:
+        X_input = np.asarray(X_input)
+
+    counts = pd.DataFrame(X_input, index=adata.obs_names, columns=adata.var_names)
     gene_totals = counts.sum(axis=0)
     counts = counts.T[gene_totals >= 3].T
     if counts.shape[1] == 0:
@@ -137,7 +190,7 @@ def run_spatialde(
 
     sample_info = pd.DataFrame(
         {"x": coords[:, 0], "y": coords[:, 1], "total_counts": counts.sum(axis=1)},
-        index=adata_work.obs_names,
+        index=adata.obs_names,
     )
 
     norm_expr = NaiveDE.stabilize(counts.T).T
@@ -193,24 +246,33 @@ def run_spatialde(
 def run_sparkx(
     adata, *, n_top_genes: int = 20, fdr_threshold: float = 0.05, n_max_genes: int = 5000,
 ) -> tuple[pd.DataFrame, dict]:
-    """SPARK-X non-parametric kernel test for SVG detection (R via rpy2)."""
-    from .dependency_manager import require
-    require("rpy2", feature="SPARK-X SVG detection (R interface)")
+    """SPARK-X non-parametric kernel test for SVG detection (R via subprocess).
 
-    import rpy2.robjects as ro
-    from rpy2.robjects import numpy2ri, pandas2ri
-    from rpy2.robjects.packages import importr
+    Uses raw counts from ``adata.layers["counts"]`` — SPARK-X is designed to
+    operate on a count matrix directly (not log-normalized expression).
+    Falls back to ``adata.X`` with a warning if no counts layer is available.
+    """
+    import tempfile
+    from pathlib import Path
+    from omicsclaw.core.dependency_manager import validate_r_environment
+    from omicsclaw.core.r_script_runner import RScriptRunner
+    from omicsclaw.core.r_utils import read_r_result_csv
 
-    numpy2ri.activate()
-    pandas2ri.activate()
-
-    try:
-        spark = importr("SPARK")
-    except Exception:
-        raise ImportError("R package 'SPARK' is not installed")
+    validate_r_environment(required_r_packages=["SPARK"])
 
     spatial_key = require_spatial_coords(adata)
     coords = adata.obsm[spatial_key][:, :2]
+
+    # Determine raw-counts layer for SPARK-X input.
+    counts_layer = _get_counts_layer(adata)
+    if counts_layer is not None:
+        logger.info("SPARK-X: using adata.layers['%s'] (raw counts)", counts_layer)
+    else:
+        logger.warning(
+            "SPARK-X: no 'counts' layer found; falling back to adata.X. "
+            "SPARK-X expects raw count data for proper statistical modeling."
+        )
+        counts_layer = None  # _get_dense_expression will read adata.X
 
     if adata.n_vars > n_max_genes:
         logger.info("Subsetting to top %d HVGs for SPARK-X", n_max_genes)
@@ -221,7 +283,7 @@ def run_sparkx(
                 hvg_mask = np.zeros(adata.n_vars, dtype=bool)
                 hvg_mask[hvg_idx] = True
         else:
-            gene_var = np.var(_get_dense_expression(adata), axis=0)
+            gene_var = np.var(_get_dense_expression(adata, layer=counts_layer), axis=0)
             top_idx = np.argsort(gene_var)[-n_max_genes:]
             hvg_mask = np.zeros(adata.n_vars, dtype=bool)
             hvg_mask[top_idx] = True
@@ -229,23 +291,46 @@ def run_sparkx(
     else:
         adata_sub = adata
 
-    X_dense = _get_dense_expression(adata_sub)
+    X_dense = _get_dense_expression(adata_sub, layer=counts_layer)
     gene_names = list(adata_sub.var_names)
-    logger.info("Running SPARK-X on %d genes ...", len(gene_names))
+    logger.info("Running SPARK-X on %d genes (raw counts) ...", len(gene_names))
 
-    r_counts = ro.r["matrix"](ro.FloatVector(X_dense.T.flatten()), nrow=len(gene_names), ncol=adata_sub.n_obs)
-    r_counts.rownames = ro.StrVector(gene_names)
-    r_coords = ro.r["matrix"](ro.FloatVector(coords.flatten()), nrow=coords.shape[0], ncol=2)
+    scripts_dir = Path(__file__).resolve().parents[3] / "omicsclaw" / "r_scripts"
+    runner = RScriptRunner(scripts_dir=scripts_dir)
 
-    sparkx_result = spark.sparkx(r_counts, r_coords, numCores=1, option="mixture")
-    res_df = pandas2ri.rpy2py(sparkx_result.rx2("res_mtest"))
-    res_df["gene"] = gene_names
-    res_df = res_df.rename(columns={"combinedPval": "pval_norm", "adjustedPval": "qval"})
+    with tempfile.TemporaryDirectory(prefix="omicsclaw_sparkx_") as tmpdir:
+        tmpdir = Path(tmpdir)
+
+        # Write counts (genes x spots) and coords
+        counts_df = pd.DataFrame(X_dense.T, index=gene_names, columns=adata_sub.obs_names)
+        counts_df.to_csv(tmpdir / "counts.csv")
+
+        coords_df = pd.DataFrame(coords, index=adata_sub.obs_names, columns=["x", "y"])
+        coords_df.to_csv(tmpdir / "coords.csv")
+
+        output_dir = tmpdir / "output"
+        output_dir.mkdir()
+
+        runner.run_script(
+            "sp_sparkx.R",
+            args=[str(tmpdir / "counts.csv"), str(tmpdir / "coords.csv"), str(output_dir)],
+            expected_outputs=["sparkx_results.csv"],
+            output_dir=output_dir,
+        )
+
+        res_df = read_r_result_csv(output_dir / "sparkx_results.csv")
+
+    # Ensure expected columns
+    if "pval" not in res_df.columns and "combinedPval" in res_df.columns:
+        res_df = res_df.rename(columns={"combinedPval": "pval"})
+    if "qval" not in res_df.columns and "adjustedPval" in res_df.columns:
+        res_df = res_df.rename(columns={"adjustedPval": "qval"})
+    if "gene" not in res_df.columns:
+        res_df["gene"] = res_df.index
+
+    res_df = res_df.rename(columns={"pval": "pval_norm"})
     res_df["I"] = -np.log10(res_df["pval_norm"].clip(lower=1e-300))
     res_df = res_df.set_index("gene", drop=False).sort_values("pval_norm")
-
-    numpy2ri.deactivate()
-    pandas2ri.deactivate()
 
     sig = res_df[res_df["pval_norm"] < fdr_threshold].copy()
     top = sig.head(n_top_genes)
@@ -267,7 +352,13 @@ def run_sparkx(
 def run_flashs(
     adata, *, n_top_genes: int = 20, fdr_threshold: float = 0.05, n_rand_features: int = 500,
 ) -> tuple[pd.DataFrame, dict]:
-    """FlashS randomized-kernel SVG detection (Python native, fast)."""
+    """FlashS randomized-kernel SVG detection (Python native, fast).
+
+    Uses raw counts from ``adata.layers["counts"]`` — FlashS is designed to
+    exploit sparsity and count structure of ST data for its three-part test
+    (binary presence, rank intensity, raw count).
+    Falls back to ``adata.X`` with a warning if no counts layer is available.
+    """
     from scipy.stats import chi2
 
     spatial_key = require_spatial_coords(adata)
@@ -287,7 +378,16 @@ def run_flashs(
     Z = np.sqrt(2.0 / m) * np.cos(coords @ omega + phase)
     Z = Z - Z.mean(axis=0)
 
-    X_dense = _get_dense_expression(adata)
+    # Use raw counts for FlashS — designed for sparse count matrices.
+    counts_layer = _get_counts_layer(adata)
+    if counts_layer is not None:
+        logger.info("FlashS: using adata.layers['%s'] (raw counts)", counts_layer)
+    else:
+        logger.warning(
+            "FlashS: no 'counts' layer found; falling back to adata.X. "
+            "FlashS is designed for raw sparse count matrices."
+        )
+    X_dense = _get_dense_expression(adata, layer=counts_layer)
     X_centered = X_dense - X_dense.mean(axis=0)
     XtZ = X_centered.T @ Z
     stat = np.sum(XtZ ** 2, axis=1) / n_obs

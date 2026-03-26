@@ -36,7 +36,8 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "bulkrna-coexpression"
-SKILL_VERSION = "0.3.0"
+SKILL_VERSION = "0.4.0"
+SUPPORTED_METHODS = ("python", "wgcna")
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +64,7 @@ def get_demo_data() -> tuple[pd.DataFrame, Path]:
 
 
 # ---------------------------------------------------------------------------
-# Soft threshold selection
+# R WGCNA integration
 # ---------------------------------------------------------------------------
 
 def _select_soft_threshold(
@@ -272,10 +273,11 @@ def _find_hub_genes(
     power: int,
     n_hubs: int = 5,
 ) -> dict:
-    """Identify hub genes per module by intra-module connectivity.
+    """Identify hub genes per module by combined kWithin and module membership.
 
-    For each module, compute the mean adjacency of each gene to all other
-    genes in the same module (approximation of kME).
+    Hub gene score = |module_membership| * kWithin_normalized, following
+    Biomni/WGCNA best practices. Module membership (MM) is the Pearson
+    correlation between gene expression and the module eigengene.
 
     Parameters
     ----------
@@ -310,12 +312,27 @@ def _find_hub_genes(
             hub_genes[mod_id] = [gene_names[i] for i in indices]
             continue
 
-        # Intra-module connectivity: mean adjacency to other module members
+        # Intra-module connectivity (kWithin)
         sub_adj = adjacency[np.ix_(indices, indices)]
         intra_k = sub_adj.mean(axis=1)
+        kWithin_norm = intra_k / (intra_k.max() + 1e-10)
 
-        # Sort by descending connectivity, take top n_hubs
-        top_idx = np.argsort(-intra_k)[: min(n_hubs, len(indices))]
+        # Module membership: cor(gene_expr, module_eigengene)
+        # Module eigengene = first PC of module expression
+        sub_cor = cor_matrix[np.ix_(indices, indices)]
+        try:
+            eigvals, eigvecs = np.linalg.eigh(sub_cor)
+            eigengene = eigvecs[:, -1]  # first PC
+            mm = np.abs(eigengene)
+            mm_norm = mm / (mm.max() + 1e-10)
+        except np.linalg.LinAlgError:
+            mm_norm = np.ones(len(indices))
+
+        # Combined hub score
+        hub_score = mm_norm * kWithin_norm
+
+        # Sort by descending hub score
+        top_idx = np.argsort(-hub_score)[: min(n_hubs, len(indices))]
         hub_genes[mod_id] = [gene_names[indices[i]] for i in top_idx]
 
     return hub_genes
@@ -330,8 +347,9 @@ def core_analysis(
     *,
     power: int | None = None,
     min_module_size: int = 10,
+    method: str = "wgcna",
 ) -> dict:
-    """Run WGCNA-style co-expression analysis.
+    """Run WGCNA co-expression analysis via R.
 
     Parameters
     ----------
@@ -342,6 +360,8 @@ def core_analysis(
         Soft-thresholding power.  Auto-selected if None.
     min_module_size : int
         Minimum genes per module.
+    method : str
+        "wgcna" for R WGCNA (primary and recommended).
 
     Returns
     -------
@@ -349,72 +369,99 @@ def core_analysis(
         Summary with keys: n_genes_used, n_samples, soft_power, n_modules,
         module_sizes, hub_genes, module_assignments, threshold_fit_df.
     """
+    # Sample size validation (from Biomni wgcna-best-practices.md)
     gene_col = counts.columns[0]
     sample_cols = [c for c in counts.columns if c != gene_col]
-    gene_names = counts[gene_col].tolist()
-
     n_samples = len(sample_cols)
-    logger.info("Input: %d genes, %d samples", len(gene_names), n_samples)
+    if n_samples < 8:
+        raise ValueError(
+            f"WGCNA requires >= 8 samples (got {n_samples}). "
+            "Co-expression networks are unreliable with too few samples."
+        )
+    elif n_samples < 15:
+        logger.warning(
+            "Low sample count (%d). WGCNA recommends >= 15 samples for "
+            "reliable module detection.", n_samples,
+        )
 
-    # Log2 transform
-    expr = counts[sample_cols].values.astype(float)
-    expr = np.log2(expr + 1)
+    try:
+        return _run_wgcna_r(counts, min_module_size=min_module_size)
+    except Exception as exc:
+        raise RuntimeError(
+            f"R WGCNA failed: {exc}. "
+            "Ensure R is installed with WGCNA package: "
+            "BiocManager::install('WGCNA')"
+        ) from exc
 
-    # Filter low-variance genes (keep top 80%)
-    variances = np.var(expr, axis=1)
-    threshold = np.percentile(variances, 20)
-    keep_mask = variances >= threshold
-    expr_filt = expr[keep_mask]
-    gene_names_filt = [g for g, m in zip(gene_names, keep_mask) if m]
 
-    n_genes_used = len(gene_names_filt)
-    logger.info("After variance filter: %d genes retained", n_genes_used)
+def _run_wgcna_r(counts: pd.DataFrame, *, min_module_size: int = 30) -> dict:
+    """Run real WGCNA in R via subprocess."""
+    import json
+    import tempfile
+    from omicsclaw.core.dependency_manager import validate_r_environment
+    from omicsclaw.core.r_script_runner import RScriptRunner
 
-    # Pearson correlation matrix
-    cor_matrix = np.corrcoef(expr_filt)
-    # Handle NaN from constant rows (shouldn't happen after variance filter)
-    cor_matrix = np.nan_to_num(cor_matrix, nan=0.0)
+    validate_r_environment(required_r_packages=["WGCNA"])
 
-    # Soft threshold selection
-    if power is None:
-        best_power, fit_df = _select_soft_threshold(cor_matrix)
-    else:
-        best_power = power
-        _, fit_df = _select_soft_threshold(cor_matrix)
-        logger.info("Using user-specified power=%d", best_power)
+    scripts_dir = Path(__file__).resolve().parents[3] / "omicsclaw" / "r_scripts"
+    runner = RScriptRunner(scripts_dir=scripts_dir)
 
-    # Module detection
-    modules = _detect_modules(cor_matrix, best_power, min_module_size)
+    gene_col = counts.columns[0]
+    counts_for_r = counts.set_index(gene_col)
 
-    # Module sizes
-    unique_mods, mod_counts = np.unique(modules, return_counts=True)
-    module_sizes: dict[int, int] = {}
-    for mod_id, count in zip(unique_mods, mod_counts):
-        module_sizes[int(mod_id)] = int(count)
+    with tempfile.TemporaryDirectory(prefix="omicsclaw_wgcna_") as tmpdir:
+        tmpdir = Path(tmpdir)
+        counts_for_r.to_csv(tmpdir / "counts.csv")
 
-    n_modules = len([m for m in unique_mods if m > 0])
+        output_dir = tmpdir / "output"
+        output_dir.mkdir()
 
-    # Hub genes
-    hub_genes = _find_hub_genes(
-        cor_matrix, modules, gene_names_filt, best_power, n_hubs=5,
-    )
+        runner.run_script(
+            "bulkrna_wgcna.R",
+            args=[str(tmpdir / "counts.csv"), str(output_dir),
+                  str(min_module_size)],
+            expected_outputs=["gene_modules.csv", "hub_genes.csv"],
+            output_dir=output_dir,
+        )
 
-    # Module assignments as dict
-    module_assignments = {
-        gene: int(mod) for gene, mod in zip(gene_names_filt, modules)
-    }
+        gene_modules = pd.read_csv(output_dir / "gene_modules.csv")
+        hub_genes_df = pd.read_csv(output_dir / "hub_genes.csv")
+
+        info = {}
+        info_path = output_dir / "wgcna_info.json"
+        if info_path.exists():
+            with open(info_path) as f:
+                info = json.load(f)
+
+        # Build module assignments dict
+        module_assignments = dict(zip(gene_modules["gene"], gene_modules["module"]))
+
+        # Module sizes
+        mod_counts = gene_modules["module"].value_counts()
+        module_sizes = {str(m): int(c) for m, c in mod_counts.items() if m != "grey"}
+
+        # Hub genes per module
+        hub_genes = {}
+        for mod, grp in hub_genes_df.groupby("module"):
+            hub_genes[mod] = grp["gene"].tolist()
+
+        # Read threshold fit if available
+        fit_df = None
+        fit_path = output_dir / "soft_power_table.csv"
+        if fit_path.exists():
+            fit_df = pd.read_csv(fit_path)
 
     return {
-        "n_genes_used": n_genes_used,
-        "n_samples": n_samples,
-        "soft_power": best_power,
-        "n_modules": n_modules,
+        "n_genes_used": len(gene_modules),
+        "n_samples": info.get("n_samples", counts_for_r.shape[1]),
+        "soft_power": info.get("soft_power", 0),
+        "n_modules": info.get("n_modules", len(module_sizes)),
         "module_sizes": module_sizes,
-        "hub_genes": {int(k): v for k, v in hub_genes.items()},
+        "hub_genes": hub_genes,
         "module_assignments": module_assignments,
         "threshold_fit_df": fit_df,
+        "method_used": "wgcna",
     }
-
 
 # ---------------------------------------------------------------------------
 # Figures

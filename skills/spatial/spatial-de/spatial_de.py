@@ -225,6 +225,11 @@ def main():
     params = {"groupby": args.groupby, "method": args.method, "n_top_genes": args.n_top_genes,
               "group1": args.group1, "group2": args.group2}
 
+    if args.method in ("wilcoxon", "t-test"):
+        logger.info(f"Method '{args.method}': Expecting log-normalized expression in adata.X.")
+    elif args.method == "pydeseq2":
+        logger.info("Method 'pydeseq2': Expecting raw integer counts for pseudobulk aggregation.")
+
     if args.method == "pydeseq2":
         if args.group1 is None or args.group2 is None:
             groups = sorted(adata.obs[args.groupby].unique().tolist(), key=str)

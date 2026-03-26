@@ -2,8 +2,8 @@
 name: spatial-enrichment
 description: >-
   Pathway and gene set enrichment analysis for spatial transcriptomics data.
-version: 0.2.0
-author: SpatialClaw Team
+version: 0.3.0
+author: OmicsClaw Team
 license: MIT
 tags: [spatial, enrichment, GSEA, ORA, pathway, GO, KEGG]
 metadata:
@@ -55,23 +55,70 @@ You are **Spatial Enrichment**, a specialised OmicsClaw agent for pathway and ge
 2. **Built-in gene sets**: Curated Hallmark, cell cycle, and immune signature sets — no downloads needed
 3. **Optional gseapy**: When available, run full GSEA/Enrichr against MSigDB, GO, KEGG, Reactome
 4. **Per-cluster enrichment**: Run enrichment on each cluster's marker genes
+5. **Ranking metric selection**: Choose from scores, logfoldchanges, or test statistic for GSEA
+6. **Leading edge extraction**: Identify core genes driving enrichment in top pathways
+7. **Multiple databases**: GO BP/MF/CC, KEGG, Reactome, MSigDB Hallmark/Oncogenic/Immunologic
+
+## GSEA Ranking Metrics
+
+When running GSEA, the ranking metric determines how genes are ordered. Preference order:
+
+| Metric | Column | When to use |
+|--------|--------|-------------|
+| Test statistic | `stat` | Best: accounts for both effect size and significance |
+| Wilcoxon scores | `scores` | Good default: from scanpy's rank_genes_groups |
+| Log fold change | `logfoldchanges` | Avoid if possible: ignores significance |
+
+## GSEA vs ORA Decision Guide
+
+| Criterion | GSEA | ORA (Enrichr) |
+|-----------|------|---------------|
+| Input | Full ranked gene list | Significant gene list only |
+| Cutoff needed? | No | Yes (padj < 0.05, logFC > 1) |
+| Detects subtle changes? | Yes (coordinated changes) | No (only strong individual changes) |
+| Direction-aware? | Yes (NES > 0 = activated, NES < 0 = suppressed) | Partial (run separately for up/down) |
+| Default recommendation | **Preferred** | Good for validation or quick checks |
+
+## Available Databases
+
+| Database key | Description | License |
+|---|---|---|
+| `GO_Biological_Process` | GO BP terms (2023/2025) | CC-BY |
+| `GO_Molecular_Function` | GO MF terms | CC-BY |
+| `GO_Cellular_Component` | GO CC terms | CC-BY |
+| `KEGG_Pathways` | KEGG pathway maps | Commercial license required |
+| `Reactome_Pathways` | Reactome pathways | CC-BY |
+| `MSigDB_Hallmark` | 50 hallmark signatures | CC-BY |
+| `MSigDB_Oncogenic` | Cancer oncogenic signatures | CC-BY |
+| `MSigDB_Immunologic` | Immune cell signatures | CC-BY |
 
 ## Input Formats
 
-| Format | Extension | Required Fields | Example |
-|--------|-----------|-----------------|---------|
-| AnnData (preprocessed) | `.h5ad` | `X`, `obs["leiden"]` | `preprocessed.h5ad` |
+| Format | Extension | Required Data | Notes |
+|--------|-----------|---------------|-------|
+| Target AnnData | `.h5ad` | `X` (counts/normalized), `obs[<groupby>]` | Must contain clustered regions/annotations (e.g., `leiden`, `spatial_domain`). If missing during `--demo`, fast Leiden clustering is auto-generated. ssGSEA uses robust pseudobulk averages to prevent memory collapse. |
 
 ## CLI Reference
 
+OmicsClaw provides the `oc` alias for unified skill execution (or use `python omicsclaw.py run`).
+
 ```bash
-python skills/spatial-enrichment/spatial_enrichment.py \
-  --input <preprocessed.h5ad> --output <report_dir>
+# General pathway enrichment (Enrichr, uses GO_Biological_Process by default)
+oc run spatial-enrichment \
+  --input ./data/clustered.h5ad \
+  --output ./results/enrichment \
+  --groupby spatial_domain
 
-python skills/spatial-enrichment/spatial_enrichment.py \
-  --input <data.h5ad> --output <dir> --method gsea --source KEGG_2021_Human
+# Run GSEA using a specific MSigDB library and output to a custom directory
+oc run spatial-enrichment \
+  --input ./data/data.h5ad \
+  --output ./results/gsea \
+  --method gsea \
+  --source KEGG_2021_Human \
+  --species human
 
-python skills/spatial-enrichment/spatial_enrichment.py --demo --output /tmp/enrich_demo
+# Safe ssGSEA Demo (auto-generates required clusters and runs pseudobulk)
+oc run spatial-enrichment --demo --method ssgsea --output /tmp/enrich_demo
 ```
 
 ## Example Queries

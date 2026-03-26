@@ -12,7 +12,7 @@
 > **AI research assistant that remembers.** OmicsClaw transforms multi-omics analysis from repetitive command execution into natural conversations with a persistent partner that tracks your datasets, learns your methods, and resumes interrupted workflows across sessions.
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![CI](https://img.shields.io/badge/CI-passing-brightgreen.svg)](https://github.com/TianGzlab/OmicsClaw/actions)
 
@@ -768,7 +768,7 @@ See [AGENTS.md](AGENTS.md) for detailed development guidelines.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+Apache-2.0 License - see [LICENSE](LICENSE) for details.
 
 ## Citation
 

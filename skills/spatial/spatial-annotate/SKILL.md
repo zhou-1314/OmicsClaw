@@ -4,7 +4,7 @@ description: >-
   Cell type annotation for spatial transcriptomics data using marker-based
   scoring, Tangram mapping, scANVI transfer, or CellAssign probabilistic models.
 version: 0.2.0
-author: SpatialClaw
+author: OmicsClaw
 license: MIT
 tags: [spatial, annotation, cell-type, tangram, scanvi, cellassign, marker-genes]
 metadata:
@@ -51,35 +51,61 @@ You are **Spatial Annotate**, a specialised OmicsClaw agent for cell type annota
 
 ## Core Capabilities
 
-1. **Marker-based**: No reference needed — scores cluster markers against built-in cell type signatures (default, fast)
-2. **Tangram**: Maps single-cell reference to spatial data via deep learning (tangram-sc)
-3. **scANVI**: Semi-supervised variational inference for label transfer (scvi-tools)
-4. **CellAssign**: Probabilistic assignment using predefined marker gene panels (scvi-tools)
+1. **Marker-based** (default, fast): No reference needed — scores cluster markers against built-in cell type signatures. Uses `adata.X` (log-normalized)
+2. **Tangram**: Maps single-cell reference to spatial data via deep learning. Uses `adata.X` (log-normalized) for both reference and spatial
+3. **scANVI**: Semi-supervised variational inference for label transfer. Uses `adata.layers["counts"]` (raw counts, NB model)
+4. **CellAssign**: Probabilistic assignment using predefined marker gene panels. Uses `adata.layers["counts"]` (raw counts, NB model)
 
 ## Input Formats
 
 | Format | Extension | Required Fields | Example |
 |--------|-----------|-----------------|---------|
-| AnnData (preprocessed) | `.h5ad` | `X`, `obsm["spatial"]`, clusters | `preprocessed.h5ad` |
+| AnnData (preprocessed) | `.h5ad` | `X` (normalised), `layers["counts"]` (raw), `obsm["spatial"]`, clusters | `preprocessed.h5ad` |
 | Reference (for tangram/scanvi) | `.h5ad` | `X`, `obs["cell_type"]` | `reference_sc.h5ad` |
+
+### Input Matrix Convention
+
+Different annotation methods have different statistical assumptions about the input expression data:
+
+| Method | Input Matrix | Rationale |
+|--------|-------------|-----------|
+| `marker_based` | `adata.X` (log-normalized) | Marker scoring and Wilcoxon test operate on continuous expression where gene magnitudes are comparable |
+| `tangram` | `adata.X` (log-normalized) | Both scRNA-seq and spatial must be on the same normalized scale for the mapping optimization |
+| `scanvi` | `adata.layers["counts"]` (raw) | VAE generative model assumes negative-binomial / ZINB count likelihood |
+| `cellassign` | `adata.layers["counts"]` (raw) | Probabilistic model assumes negative-binomial count likelihood; size factors computed from raw counts |
+
+**Core principle**: Whether a method uses counts or normalized data depends on whether it has a count-based probabilistic model (NB/ZINB/GLM) internally.
+
+**Data layout requirement**: Preprocessing must store raw counts before normalization:
+
+```python
+adata.layers["counts"] = adata.X.copy()   # before normalize_total + log1p
+adata.X = lognorm_expr                     # after normalize_total + log1p
+```
+
+If `layers["counts"]` is missing, count-based methods (scanvi, cellassign) will fall back to `adata.raw` (if available) or `adata.X` with a warning.
 
 ## CLI Reference
 
 ```bash
 # Marker-based (default, no reference needed)
-python skills/spatial-annotate/spatial_annotate.py \
+python skills/spatial/spatial-annotate/spatial_annotate.py \
   --input <preprocessed.h5ad> --output <dir>
 
 # Tangram transfer
-python skills/spatial-annotate/spatial_annotate.py \
+python skills/spatial/spatial-annotate/spatial_annotate.py \
   --input <file> --method tangram --reference <sc_ref.h5ad> --output <dir>
 
 # scANVI transfer
-python skills/spatial-annotate/spatial_annotate.py \
+python skills/spatial/spatial-annotate/spatial_annotate.py \
   --input <file> --method scanvi --reference <sc_ref.h5ad> --output <dir>
 
 # Demo
-python skills/spatial-annotate/spatial_annotate.py --demo --output /tmp/annotate_demo
+python skills/spatial/spatial-annotate/spatial_annotate.py --demo --output /tmp/annotate_demo
+
+# Via CLI (using 'oc' short alias or 'python omicsclaw.py run')
+oc run spatial-annotate --input <file> --output <dir>
+oc run spatial-annotate --demo
 ```
 
 ## Example Queries

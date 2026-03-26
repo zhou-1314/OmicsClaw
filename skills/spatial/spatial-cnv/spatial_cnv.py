@@ -40,7 +40,7 @@ from omicsclaw.common.report import (
     write_result_json,
 )
 from skills.spatial._lib.adata_utils import store_analysis_metadata
-from skills.spatial._lib.cnv import run_cnv, SUPPORTED_METHODS
+from skills.spatial._lib.cnv import COUNT_BASED_METHODS, run_cnv, SUPPORTED_METHODS
 from skills.spatial._lib.viz_utils import save_figure
 from skills.spatial._lib.viz import VizParams, plot_cnv, plot_features
 
@@ -151,7 +151,10 @@ def get_demo_data() -> tuple:
         adata.var["start"] = starts
         adata.var["end"] = ends
         
-        return adata, None# ---------------------------------------------------------------------------
+        return adata, None
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -182,6 +185,21 @@ def main():
 
     params = {"method": args.method, "reference_key": reference_key, "reference_cat": reference_cat,
               "window_size": args.window_size, "step": args.step}
+
+    # Validate input matrix availability per method.
+    if args.method in COUNT_BASED_METHODS and "counts" not in adata.layers:
+        if adata.raw is not None:
+            logger.warning(
+                "Method '%s' expects raw integer counts in adata.layers['counts']. "
+                "Found adata.raw — will copy to layers['counts'].", args.method,
+            )
+        else:
+            logger.warning(
+                "Method '%s' expects raw integer counts in adata.layers['counts'], but none found. "
+                "Falling back to adata.X — if this is log-normalized, results will be incorrect. "
+                "Ensure preprocessing saves raw counts: adata.layers['counts'] = adata.X.copy()",
+                args.method,
+            )
 
     summary = run_cnv(adata, method=args.method, reference_key=reference_key,
                       reference_cat=reference_cat, window_size=args.window_size, step=args.step)

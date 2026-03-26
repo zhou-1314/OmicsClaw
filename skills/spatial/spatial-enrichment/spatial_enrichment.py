@@ -2,7 +2,7 @@
 """Spatial Enrichment — pathway and gene set enrichment analysis.
 
 Usage:
-    python spatial_enrichment.py --input <preprocessed.h5ad> --output <dir>
+    python spatial_enrichment.py --input <preprocessed.h5ad> --output <dir> --groupby <cluster_col>
     python spatial_enrichment.py --input <data.h5ad> --output <dir> --method gsea
     python spatial_enrichment.py --demo --output <dir>
 """
@@ -63,6 +63,7 @@ def generate_figures(adata, output_dir: Path, summary: dict) -> list[str]:
             fig = plot_enrichment(adata, VizParams(), subtype="barplot", top_n=20)
             p = save_figure(fig, output_dir, "enrichment_barplot.png")
             figures.append(str(p))
+            logger.info("Generated enrichment_barplot.png")
         except Exception as exc:
             logger.warning("Could not generate enrichment barplot: %s", exc)
 
@@ -70,6 +71,7 @@ def generate_figures(adata, output_dir: Path, summary: dict) -> list[str]:
             fig = plot_enrichment(adata, VizParams(), subtype="dotplot", top_n=20)
             p = save_figure(fig, output_dir, "enrichment_dotplot.png")
             figures.append(str(p))
+            logger.info("Generated enrichment_dotplot.png")
         except Exception as exc:
             logger.warning("Could not generate enrichment dotplot: %s", exc)
 
@@ -84,6 +86,7 @@ def generate_figures(adata, output_dir: Path, summary: dict) -> list[str]:
             fig = plot_enrichment(adata, VizParams(), subtype="spatial", top_n=6)
             p = save_figure(fig, output_dir, "enrichment_spatial.png")
             figures.append(str(p))
+            logger.info("Generated enrichment_spatial.png")
         except Exception as exc:
             logger.warning("Could not generate spatial enrichment map: %s", exc)
 
@@ -117,14 +120,15 @@ def write_report(
         "## Summary\n",
         f"- **Cells**: {summary['n_cells']}",
         f"- **Genes**: {summary['n_genes']}",
-        f"- **Clusters**: {summary['n_clusters']}",
+        f"- **Clusters/Groups based on**: `{summary.get('groupby', 'unknown')}`",
+        f"- **Unique Clusters Evaluated**: {summary['n_clusters']}",
         f"- **Method**: {summary['method']}",
         f"- **Terms tested**: {summary['n_terms_tested']}",
         f"- **Significant (padj < 0.05)**: {summary['n_significant']}",
     ]
 
-    enrich_df = summary["enrich_df"]
-    if not enrich_df.empty:
+    enrich_df = summary.get("enrich_df", pd.DataFrame())
+    if not enrich_df.empty and "pvalue_adj" in enrich_df.columns:
         sig = enrich_df[enrich_df["pvalue_adj"] < 0.05].head(15)
         if not sig.empty:
             body_lines.extend(["", "### Top Enriched Terms\n"])
@@ -159,6 +163,7 @@ def write_report(
     tables_dir.mkdir(exist_ok=True)
     if not enrich_df.empty:
         enrich_df.to_csv(tables_dir / "enrichment_results.csv", index=False)
+        logger.info("Wrote enrichment_results.csv")
 
     repro_dir = output_dir / "reproducibility"
     repro_dir.mkdir(exist_ok=True)
@@ -176,12 +181,13 @@ def write_report(
     except ImportError:
         from importlib_metadata import version as _ver  # type: ignore
     env_lines: list[str] = []
-    for pkg in ["scanpy", "anndata", "scipy", "numpy", "pandas", "matplotlib"]:
+    for pkg in ["scanpy", "anndata", "scipy", "numpy", "pandas", "matplotlib", "gseapy"]:
         try:
             env_lines.append(f"{pkg}=={_ver(pkg)}")
         except Exception:
-            env_lines.append(f"{pkg}=?")
-    (repro_dir / "environment.yml").write_text("\n".join(env_lines) + "\n")
+            pass
+    # Write as standard requirements.txt
+    (repro_dir / "requirements.txt").write_text("\n".join(env_lines) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +195,7 @@ def write_report(
 # ---------------------------------------------------------------------------
 
 
-def get_demo_data() -> tuple:
+def get_demo_data(groupby: str) -> tuple:
     """Run spatial-preprocess --demo and load the resulting processed.h5ad."""
     preprocess_script = (
         _PROJECT_ROOT / "skills" / "spatial" / "spatial-preprocess" / "spatial_preprocess.py"
@@ -214,6 +220,15 @@ def get_demo_data() -> tuple:
             raise FileNotFoundError(f"Expected {processed}")
         adata = sc.read_h5ad(processed)
         logger.info("Loaded demo: %d cells x %d genes", adata.n_obs, adata.n_vars)
+        
+        # Enrichment requires clustering annotations
+        if groupby not in adata.obs.columns:
+            logger.info("Demo missing '%s' metadata. Generating fast leiden clusters...", groupby)
+            if "pca" not in adata.obsm:
+                sc.pp.pca(adata)
+            sc.pp.neighbors(adata)
+            sc.tl.leiden(adata, key_added=groupby, flavor="igraph", n_iterations=2)
+            
         return adata, None
 
 
@@ -232,6 +247,9 @@ def main():
     parser.add_argument(
         "--method", default="enrichr", choices=["enrichr", "gsea", "ssgsea"],
     )
+    parser.add_argument(
+        "--groupby", default="leiden", help="Column name containing discrete regions/clusters for enrichment"
+    )
     parser.add_argument("--gene-set", default=None, help="Custom gene set name")
     parser.add_argument("--species", default="human", choices=["human", "mouse"])
     parser.add_argument(
@@ -244,7 +262,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if args.demo:
-        adata, input_file = get_demo_data()
+        adata, input_file = get_demo_data(args.groupby)
     elif args.input_path:
         input_path = Path(args.input_path)
         if not input_path.exists():
@@ -258,6 +276,7 @@ def main():
 
     params = {
         "method": args.method,
+        "groupby": args.groupby,
         "gene_set": args.gene_set,
         "species": args.species,
         "source": args.source,
@@ -266,10 +285,17 @@ def main():
     summary = run_enrichment(
         adata,
         method=args.method,
+        groupby=args.groupby,
         source=args.source,
         species=args.species,
         gene_set=args.gene_set,
     )
+
+    # VERY IMPORTANT: Inject data back into AnnData representation so plotting and future steps can use it!
+    enrich_df = summary.get("enrich_df")
+    if enrich_df is not None and not enrich_df.empty:
+        adata.uns["enrichment_results"] = enrich_df  # type: ignore
+        adata.uns[f"{args.method}_results"] = enrich_df  # type: ignore
 
     generate_figures(adata, output_dir, summary)
     write_report(output_dir, summary, input_file, params)
@@ -283,11 +309,11 @@ def main():
 
     h5ad_path = output_dir / "processed.h5ad"
     adata.write_h5ad(h5ad_path)
-    logger.info("Saved processed data: %s", h5ad_path)
+    logger.info("Saved enriched AnnData: %s", h5ad_path)
 
     print(
         f"Enrichment complete ({summary['method']}): "
-        f"{summary['n_terms_tested']} terms tested, {summary['n_significant']} significant"
+        f"{summary.get('n_terms_tested', 0)} terms tested, {summary.get('n_significant', 0)} significant"
     )
 
 

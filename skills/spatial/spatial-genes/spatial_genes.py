@@ -37,7 +37,7 @@ from omicsclaw.common.report import (
     generate_report_footer, generate_report_header, write_result_json,
 )
 from skills.spatial._lib.adata_utils import get_spatial_key, store_analysis_metadata
-from skills.spatial._lib.genes import METHOD_DISPATCH, SUPPORTED_METHODS
+from skills.spatial._lib.genes import COUNT_BASED_METHODS, METHOD_DISPATCH, SUPPORTED_METHODS
 from skills.spatial._lib.viz import VizParams, plot_features, plot_spatial_stats
 from skills.spatial._lib.viz_utils import save_figure
 
@@ -205,6 +205,21 @@ def main():
         print("ERROR: Provide --input or --demo", file=sys.stderr); sys.exit(1)
 
     params = {"method": args.method, "n_top_genes": args.n_top_genes, "fdr_threshold": args.fdr_threshold}
+
+    # Validate input matrix availability for count-based methods.
+    if args.method in COUNT_BASED_METHODS and "counts" not in adata.layers:
+        if adata.raw is not None:
+            logger.warning(
+                "Method '%s' expects raw counts in adata.layers['counts']. "
+                "Found adata.raw — will copy to layers['counts'].", args.method,
+            )
+        else:
+            logger.warning(
+                "Method '%s' expects raw counts in adata.layers['counts'], but none found. "
+                "Falling back to adata.X — results may be suboptimal. "
+                "Ensure preprocessing saves raw counts with: adata.layers['counts'] = adata.X.copy()",
+                args.method,
+            )
 
     run_fn = METHOD_DISPATCH[args.method]
     svg_df, summary = run_fn(adata, n_top_genes=args.n_top_genes, fdr_threshold=args.fdr_threshold)

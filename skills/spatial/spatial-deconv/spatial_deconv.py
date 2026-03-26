@@ -251,6 +251,14 @@ def main() -> None:
         kwargs["imputation"] = args.card_imputation
 
     logger.info("Running deconvolution: method=%s", args.method)
+
+    if args.method in ["cell2location", "rctd", "destvi", "stereoscope", "card"]:
+        logger.info(f"Method '{args.method}': Strictly expecting RAW COUNTS in .X or .layers['counts'].")
+    elif args.method in ["tangram", "spotlight"]:
+        logger.info(f"Method '{args.method}': Typically expects NORMALIZED, non-negative expression matrices.")
+    elif args.method == "flashdeconv":
+        logger.info(f"Method '{args.method}': Input format is flexible (counts or normalized).")
+
     prop_df, stats = run_fn(adata, **kwargs)
 
     prop_key = f"deconvolution_{args.method}"

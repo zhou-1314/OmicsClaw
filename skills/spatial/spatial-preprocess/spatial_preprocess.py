@@ -117,11 +117,21 @@ def write_report(output_dir: Path, summary: dict, input_file: str | None, params
         f"- **HVG selected**: {summary['n_hvg']}",
         f"- **Leiden clusters**: {summary['n_clusters']}",
         f"- **Spatial coordinates**: {'Yes' if summary['has_spatial'] else 'No'}",
-        "",
-        "### Cluster sizes\n",
-        "| Cluster | Cells |",
-        "|---------|-------|",
+        f"- **Suggested PCs**: {summary.get('n_pcs_suggested', 'N/A')}",
     ]
+    if summary.get("tissue_preset"):
+        body_lines.append(f"- **Tissue preset**: {summary['tissue_preset']}")
+    if summary.get("multi_resolution"):
+        body_lines.append("")
+        body_lines.append("### Multi-resolution clustering\n")
+        body_lines.append("| Resolution | Clusters |")
+        body_lines.append("|------------|----------|")
+        for res, n_cl in summary["multi_resolution"].items():
+            body_lines.append(f"| {res} | {n_cl} |")
+    body_lines.append("")
+    body_lines.append("### Cluster sizes\n")
+    body_lines.append("| Cluster | Cells |")
+    body_lines.append("|---------|-------|")
     for cluster, size in sorted(summary["cluster_sizes"].items(), key=lambda x: int(x[0])):
         body_lines.append(f"| {cluster} | {size} |")
 
@@ -195,10 +205,17 @@ def main():
     parser.add_argument("--min-genes", type=int, default=0)
     parser.add_argument("--min-cells", type=int, default=0)
     parser.add_argument("--max-mt-pct", type=float, default=20.0)
+    parser.add_argument("--max-genes", type=int, default=0,
+                        help="Max genes per cell (0=no limit, auto-set by --tissue)")
+    parser.add_argument("--tissue", default=None,
+                        help="Tissue type for QC presets: pbmc, brain, heart, tumor, "
+                             "liver, kidney, lung, gut, skin, muscle")
     parser.add_argument("--n-top-hvg", type=int, default=2000)
     parser.add_argument("--n-pcs", type=int, default=30)
     parser.add_argument("--n-neighbors", type=int, default=15)
     parser.add_argument("--leiden-resolution", type=float, default=0.5)
+    parser.add_argument("--resolutions", default=None,
+                        help="Comma-separated resolutions to explore (e.g., 0.4,0.6,0.8,1.0)")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -219,17 +236,25 @@ def main():
         print("ERROR: Provide --input or --demo", file=sys.stderr)
         sys.exit(1)
 
+    # Parse resolutions
+    resolutions = None
+    if args.resolutions:
+        resolutions = [float(r.strip()) for r in args.resolutions.split(",")]
+
     params = {
         "data_type": args.data_type, "species": args.species,
         "min_genes": args.min_genes, "min_cells": args.min_cells,
-        "max_mt_pct": args.max_mt_pct, "n_top_hvg": args.n_top_hvg,
-        "n_pcs": args.n_pcs, "n_neighbors": args.n_neighbors,
+        "max_mt_pct": args.max_mt_pct, "max_genes": args.max_genes,
+        "tissue": args.tissue,
+        "n_top_hvg": args.n_top_hvg, "n_pcs": args.n_pcs,
+        "n_neighbors": args.n_neighbors,
         "leiden_resolution": args.leiden_resolution,
     }
 
     # Run pipeline via _lib
     adata, summary = preprocess(
         adata,
+        resolutions=resolutions,
         **{k: v for k, v in params.items() if k not in ("data_type",)},
     )
 

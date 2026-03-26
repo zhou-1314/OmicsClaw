@@ -62,6 +62,34 @@ python bulkrna_de.py --input counts.csv --output results/ --padj-cutoff 0.01 --l
 ### Key Parameters
 - **padj_cutoff**: Adjusted p-value threshold (default: 0.05)
 - **lfc_cutoff**: Absolute log2FC threshold (default: 1.0)
+- **min_count**: Gene pre-filtering threshold — genes with total counts < 10 across all samples are removed before testing (improves statistical power and PyDESeq2 performance)
+
+## Design Validation
+
+Before running DE, the system validates:
+- **Replication**: At least 2 replicates per condition required (>= 3 recommended)
+- **Gene pre-filtering**: Removes genes with total counts < 10 (reduces multiple testing burden, improves dispersion estimation)
+- **Sample counts**: Logs per-condition sample counts for transparency
+
+## LFC Shrinkage Guidance
+
+| Method | Purpose | When to use |
+|--------|---------|-------------|
+| Unshrunk (default) | Hypothesis testing | Statistical significance thresholds (padj < 0.05) |
+| apeglm | Visualization/ranking | Shrinks large LFCs of low-expression genes; best for MA/volcano plots |
+| ashr | Adaptive shrinkage | When some genes have very large true effects |
+
+> **Note**: Current output uses unshrunk LFCs (suitable for hypothesis testing). For visualization/ranking, consider applying shrinkage externally.
+
+## Transformation Guidance
+
+| Transform | When to use | Speed |
+|-----------|-------------|-------|
+| VST (variance stabilizing) | > 30 samples, PCA/clustering | Fast |
+| rlog (regularized log) | < 30 samples, PCA/heatmaps | Slow |
+| log2(count + 1) | Quick exploration | Instant |
+
+> **Important**: Transformations are for visualization only — always use raw counts for DE testing.
 
 ## Input Formats
 

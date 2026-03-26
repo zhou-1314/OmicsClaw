@@ -234,58 +234,71 @@ def _run_deseq2_rpy2(
     formula: str,
     contrast: list[str],
 ) -> pd.DataFrame | None:
-    """Run DESeq2 via rpy2 + R."""
-    dm.require("rpy2", feature="DESeq2 via rpy2")
+    """Run DESeq2 via R subprocess."""
+    import tempfile
+    from pathlib import Path
+    from omicsclaw.core.dependency_manager import validate_r_environment
+    from omicsclaw.core.r_script_runner import RScriptRunner
 
-    import rpy2.robjects as ro
-    from rpy2.robjects import pandas2ri as _p2r
-    from rpy2.robjects.packages import importr as _importr
+    validate_r_environment(required_r_packages=["DESeq2"])
 
-    _p2r.activate()
-    try:
-        _importr("DESeq2")
-    except Exception as exc:
-        raise ImportError(
-            f"DESeq2 not found in R.  Install: BiocManager::install('DESeq2')\n{exc}"
-        ) from exc
+    scripts_dir = Path(__file__).resolve().parents[3] / "omicsclaw" / "r_scripts"
+    runner = RScriptRunner(scripts_dir=scripts_dir)
 
-    r_counts = _p2r.py2rpy(counts.astype(int))
-    r_metadata = _p2r.py2rpy(metadata)
+    with tempfile.TemporaryDirectory(prefix="omicsclaw_deseq2_pb_") as tmpdir:
+        tmpdir = Path(tmpdir)
 
-    ro.globalenv["counts_matrix"] = r_counts
-    ro.globalenv["col_data"] = r_metadata
+        # Write counts (genes x samples) and metadata
+        counts.astype(int).to_csv(tmpdir / "counts.csv")
+        metadata.to_csv(tmpdir / "metadata.csv")
 
-    ro.r(
-        f"""
-    dds <- DESeqDataSetFromMatrix(
-        countData = counts_matrix,
-        colData = col_data,
-        design = {formula}
-    )
+        output_dir = tmpdir / "output"
+        output_dir.mkdir()
+
+        # Write a one-shot R script for this specific DESeq2 call
+        r_script = tmpdir / "run_deseq2.R"
+        contrast_str = f"c('{contrast[0]}', '{contrast[1]}', '{contrast[2]}')"
+        r_script.write_text(f"""
+suppressPackageStartupMessages(library(DESeq2))
+
+counts <- read.csv("{tmpdir / 'counts.csv'}", row.names=1, check.names=FALSE)
+metadata <- read.csv("{tmpdir / 'metadata.csv'}", row.names=1)
+counts <- as.matrix(round(counts))
+
+tryCatch({{
+    dds <- DESeqDataSetFromMatrix(countData=counts, colData=metadata, design={formula})
     keep <- rowSums(counts(dds) >= 10) >= 3
     dds <- dds[keep,]
     dds <- DESeq(dds, quiet=TRUE)
-    """
-    )
+    res <- results(dds, contrast={contrast_str})
 
-    contrast_str = f"c('{contrast[0]}', '{contrast[1]}', '{contrast[2]}')"
-    ro.r(f"res <- results(dds, contrast={contrast_str})")
-    ro.r(
-        f"""
-    res_shrunk <- lfcShrink(dds,
-                            contrast={contrast_str},
-                            res=res,
-                            type="ashr",
-                            quiet=TRUE)
-    """
-    )
+    ashr_ok <- requireNamespace("ashr", quietly=TRUE)
+    if (ashr_ok) {{
+        res_shrunk <- lfcShrink(dds, contrast={contrast_str}, res=res, type="ashr", quiet=TRUE)
+    }} else {{
+        res_shrunk <- res
+    }}
 
-    results_df: pd.DataFrame = _p2r.rpy2py(ro.r("as.data.frame(res_shrunk)"))
-    results_df.index.name = "gene"
-    results_df = results_df.reset_index()
+    out <- as.data.frame(res_shrunk)
+    out$gene <- rownames(out)
+    write.csv(out, "{output_dir / 'deseq2_results.csv'}", quote=FALSE)
+    cat("Done\\n")
+}}, error = function(e) {{
+    cat(sprintf("ERROR: %s\\n", e$message), file=stderr())
+    quit(status=1)
+}})
+""")
 
-    _p2r.deactivate()
-    return results_df
+        runner.run_script(
+            r_script,
+            expected_outputs=["deseq2_results.csv"],
+            output_dir=output_dir,
+        )
+
+        results_df = pd.read_csv(output_dir / "deseq2_results.csv", index_col=0)
+        results_df.index.name = "gene"
+        results_df = results_df.reset_index()
+        return results_df
 
 
 def _run_deseq2_pydeseq2(

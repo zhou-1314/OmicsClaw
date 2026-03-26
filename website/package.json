@@ -1,0 +1,37 @@
+{
+  "name": "omicsclaw-website",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Official landing page for the OmicsClaw multi-omics analysis platform",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:host": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "framer-motion": "^12.38.0",
+    "lucide-react": "^1.7.0",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^3.5.0",
+    "react-countup": "^6.5.3"
+  },
+  "devDependencies": {
+    "vite": "^8.0.1",
+    "@vitejs/plugin-react": "^6.0.1",
+    "tailwindcss": "^3.4.17",
+    "postcss": "^8.5.8",
+    "autoprefixer": "^10.4.27",
+    "eslint": "^9.39.4",
+    "@eslint/js": "^9.39.4",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.4.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3"
+  }
+}

@@ -23,3 +23,24 @@ class DependencyError(SpatialClawError):
 
 class PreprocessingRequiredError(SpatialClawError):
     """Data has not been preprocessed; run spatial-preprocess first."""
+
+
+class RScriptError(ProcessingError):
+    """An R subprocess call failed."""
+
+    def __init__(self, script: str, returncode: int, stderr: str = ""):
+        self.script = script
+        self.returncode = returncode
+        self.stderr = stderr
+        stderr_tail = stderr[-500:] if stderr else "(empty)"
+        super().__init__(
+            f"R script '{script}' failed (exit code {returncode}): {stderr_tail}"
+        )
+
+
+class RScriptTimeoutError(RScriptError):
+    """R subprocess exceeded its timeout."""
+
+    def __init__(self, script: str, timeout: int):
+        self.timeout = timeout
+        super().__init__(script, -1, f"Timed out after {timeout}s")

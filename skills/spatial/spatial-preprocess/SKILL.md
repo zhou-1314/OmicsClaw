@@ -3,8 +3,8 @@ name: spatial-preprocess
 description: >-
   Load spatial transcriptomics data (Visium, Xenium, MERFISH, Slide-seq, generic h5ad),
   perform QC filtering, normalization, HVG selection, PCA, UMAP, and Leiden clustering.
-version: 0.2.0
-author: SpatialClaw
+version: 0.3.0
+author: OmicsClaw
 license: MIT
 tags: [spatial, preprocessing, QC, normalization, clustering, visium, xenium]
 metadata:
@@ -60,11 +60,46 @@ You are **Spatial Preprocess**, the foundation skill of OmicsClaw spatial analys
 ## Core Capabilities
 
 1. **Multi-platform loading**: Visium (directory/H5/H5AD), Xenium (Zarr/H5), MERFISH, Slide-seq, seqFISH, generic H5AD
-2. **QC filtering**: Mitochondrial %, min genes/cells thresholds
-3. **Normalization**: Library-size normalization + log1p
-4. **HVG selection**: Seurat-flavored highly variable gene detection
-5. **Embedding**: PCA, neighbor graph, UMAP
-6. **Clustering**: Leiden community detection
+2. **QC filtering**: Mitochondrial %, min/max genes thresholds, tissue-specific presets
+3. **Normalization**: Library-size normalization + log1p, raw counts preserved in `layers['counts']`
+4. **HVG selection**: Seurat v3 highly variable gene detection on raw counts
+5. **Embedding**: PCA with data-driven component suggestion, neighbor graph, UMAP
+6. **Clustering**: Leiden community detection with optional multi-resolution exploration
+7. **Tissue presets**: Pre-configured QC thresholds for 10 tissue types
+
+## Tissue-Specific QC Presets
+
+When ``--tissue`` is specified, QC thresholds are automatically applied. Explicit parameters override preset values.
+
+| Tissue | max_mt_pct | min_genes | max_genes | Notes |
+|--------|-----------|-----------|-----------|-------|
+| pbmc | 5% | 200 | 2500 | Low MT in blood cells |
+| brain | 10% | 200 | 6000 | Neurons have many genes |
+| heart | 50% | 200 | 5000 | Cardiomyocytes are MT-rich |
+| tumor | 20% | 200 | 5000 | Heterogeneous tissue |
+| liver | 15% | 200 | 4000 | Hepatocytes are large |
+| kidney | 15% | 200 | 4000 | Tubular cells are MT-active |
+| lung | 15% | 200 | 5000 | Mixed cell types |
+| gut | 20% | 200 | 5000 | Epithelial turnover |
+| skin | 10% | 200 | 4000 | Keratinocyte-rich |
+| muscle | 30% | 200 | 5000 | High mitochondrial content |
+
+## PC Selection Guidance
+
+After PCA, the system automatically suggests an optimal number of PCs based on cumulative variance (85% threshold, clamped to [15, 30]). This is logged as a recommendation:
+
+- **< 15 PCs**: Risk of underfitting (losing biological signal)
+- **15-30 PCs**: Typical range for most spatial datasets
+- **> 30 PCs**: Rarely needed; may include noise
+
+## Multi-Resolution Clustering
+
+Use ``--resolutions 0.4,0.6,0.8,1.0`` to explore multiple Leiden resolutions. All results are stored in ``adata.obs['leiden_res_X']`` columns and reported in the summary table.
+
+**Resolution selection guidance:**
+- **0.2-0.4**: Coarse clustering (few large clusters, broad tissue regions)
+- **0.6-0.8**: Moderate (typical for spatial domain identification)
+- **1.0-2.0**: Fine-grained (many small clusters, subtypes)
 
 ## Input Formats
 
@@ -77,7 +112,7 @@ You are **Spatial Preprocess**, the foundation skill of OmicsClaw spatial analys
 
 ## Workflow
 
-1. **Load**: Detect platform type and load data via `spatialclaw.spatial.loader`
+1. **Load**: Detect platform type and load data via `skills.spatial._lib.loader`
 2. **QC**: Compute metrics (n_genes, total_counts, pct_counts_mt), filter cells/genes
 3. **Normalize**: `normalize_total` → `log1p`; store raw counts in `adata.raw`
 4. **HVG**: Select highly variable genes
@@ -88,13 +123,24 @@ You are **Spatial Preprocess**, the foundation skill of OmicsClaw spatial analys
 ## CLI Reference
 
 ```bash
-python skills/spatial-preprocess/spatial_preprocess.py \
+# Basic usage
+python skills/spatial/spatial-preprocess/spatial_preprocess.py \
   --input <data.h5ad> --output <report_dir> [--data-type visium] [--species human]
 
-python skills/spatial-preprocess/spatial_preprocess.py --demo --output /tmp/demo
+# With tissue preset
+python skills/spatial/spatial-preprocess/spatial_preprocess.py \
+  --input <data.h5ad> --output <report_dir> --tissue brain --species human
 
-python omicsclaw.py run spatial-preprocessing --input <file> --output <dir>
-python omicsclaw.py run spatial-preprocessing --demo
+# Multi-resolution exploration
+python skills/spatial/spatial-preprocess/spatial_preprocess.py \
+  --input <data.h5ad> --output <report_dir> --resolutions 0.4,0.6,0.8,1.0
+
+# Demo
+python skills/spatial/spatial-preprocess/spatial_preprocess.py --demo --output /tmp/demo
+
+# Via CLI (using 'oc' short alias or 'python omicsclaw.py run')
+oc run spatial-preprocess --input <file> --output <dir>
+oc run spatial-preprocess --demo
 ```
 
 ## Example Queries
@@ -104,15 +150,17 @@ python omicsclaw.py run spatial-preprocessing --demo
 
 ## Algorithm / Methodology
 
-1. **QC metrics**: `sc.pp.calculate_qc_metrics` with `qc_vars=["mt"]`
-2. **Filter**: cells with `n_genes_by_counts >= min_genes`, genes in `>= min_cells` cells, `pct_counts_mt <= max_mt_pct`
-3. **Normalize**: `sc.pp.normalize_total(target_sum=1e4)` → `sc.pp.log1p()`
-4. **HVG**: `sc.pp.highly_variable_genes(n_top_genes=n_top_hvg, flavor="seurat")`
-5. **Scale**: `sc.pp.scale(max_value=10)` on HVG subset
-6. **PCA**: `sc.tl.pca(n_comps=n_pcs)`
-7. **Neighbors**: `sc.pp.neighbors(n_neighbors=n_neighbors, n_pcs=n_pcs)`
-8. **UMAP**: `sc.tl.umap()`
-9. **Leiden**: `sc.tl.leiden(resolution=leiden_resolution)`
+1. **Tissue presets** (optional): Apply tissue-specific QC thresholds if `--tissue` specified
+2. **QC metrics**: `sc.pp.calculate_qc_metrics` with `qc_vars=["mt"]`
+3. **Filter**: cells with `n_genes_by_counts >= min_genes` and `< max_genes`, genes in `>= min_cells` cells, `pct_counts_mt <= max_mt_pct`
+4. **Preserve counts**: Store raw counts in `adata.layers['counts']` and `adata.raw`
+5. **Normalize**: `sc.pp.normalize_total(target_sum=1e4)` → `sc.pp.log1p()`
+6. **HVG**: `sc.pp.highly_variable_genes(n_top_genes=n_top_hvg, flavor="seurat_v3")`
+7. **Scale**: `sc.pp.scale(max_value=10)` on HVG subset
+8. **PCA**: `sc.tl.pca(n_comps=n_pcs)` + data-driven PC suggestion
+9. **Neighbors**: `sc.pp.neighbors(n_neighbors=n_neighbors, n_pcs=min(n_comps, 30))`
+10. **UMAP**: `sc.tl.umap()`
+11. **Leiden**: `sc.tl.leiden(resolution=leiden_resolution)` + optional multi-resolution
 
 ## Output Structure
 
@@ -141,7 +189,7 @@ output_dir/
 - **Local-first**: Strict offline processing without external upload.
 - **Disclaimer**: Requires OmicsClaw reporting structures and disclaimers.
 - **Audit trail**: Hyperparameters and operational flow states are logged fully.
-- **Raw preservation**: Original counts saved in `adata.raw`
+- **Raw preservation**: Original counts saved in both `adata.raw` and `adata.layers['counts']`
 
 ## Integration with Orchestrator
 

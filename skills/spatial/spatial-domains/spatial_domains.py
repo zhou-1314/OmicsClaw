@@ -52,7 +52,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "spatial-domains"
-SKILL_VERSION = "0.3.0"
+SKILL_VERSION = "0.4.0"
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +155,8 @@ def write_report(output_dir: Path, summary: dict, input_file: str | None, params
     body_lines.append("")
     body_lines.append("## Parameters\n")
     for k, v in params.items():
-        body_lines.append(f"- `{k}`: {v}")
+        if v is not None:
+            body_lines.append(f"- `{k}`: {v}")
 
     footer = generate_report_footer()
     (output_dir / "report.md").write_text(header + "\n".join(body_lines) + "\n" + footer)
@@ -176,7 +177,10 @@ def write_report(output_dir: Path, summary: dict, input_file: str | None, params
     repro_dir.mkdir(exist_ok=True)
     cmd = f"python spatial_domains.py --input <input.h5ad> --output {output_dir}"
     for k, v in params.items():
-        cmd += f" --{k.replace('_', '-')} {v}"
+        if v is not None and not isinstance(v, bool):
+            cmd += f" --{k.replace('_', '-')} {v}"
+        elif isinstance(v, bool) and v:
+            cmd += f" --{k.replace('_', '-')}"
     (repro_dir / "commands.sh").write_text(f"#!/bin/bash\n{cmd}\n")
 
     try:
@@ -184,7 +188,7 @@ def write_report(output_dir: Path, summary: dict, input_file: str | None, params
     except ImportError:
         from importlib_metadata import version as _get_version  # type: ignore
     env_lines = []
-    for pkg in ["scanpy", "anndata", "squidpy", "numpy", "pandas", "matplotlib"]:
+    for pkg in ["scanpy", "anndata", "squidpy", "numpy", "pandas", "matplotlib", "torch", "banksy", "SpaGCN"]:
         try:
             env_lines.append(f"{pkg}=={_get_version(pkg)}")
         except Exception:
@@ -225,7 +229,10 @@ def main():
     parser.add_argument("--n-domains", type=int, default=None)
     parser.add_argument("--resolution", type=float, default=1.0)
     parser.add_argument("--spatial-weight", type=float, default=0.3)
-    parser.add_argument("--rad-cutoff", type=float, default=50.0)
+    # STAGATE network params
+    parser.add_argument("--rad-cutoff", type=float, default=None)
+    parser.add_argument("--k-nn", type=int, default=6)
+    # BANKSY param
     parser.add_argument("--lambda-param", type=float, default=0.2)
     parser.add_argument("--refine", action="store_true", default=False)
     args = parser.parse_args()
@@ -239,9 +246,9 @@ def main():
         adata = sc.read_h5ad(args.input_path)
         input_file = args.input_path
         if "X_pca" not in adata.obsm:
-            raise ValueError(
-                "Input data is missing required preprocessing. "
-                "Expected 'X_pca' in adata.obsm but not found."
+            logger.warning(
+                "Input data lacks 'X_pca' in obsm. "
+                "Some internal spatial domain tools require dimension reduction first."
             )
     else:
         print("ERROR: Provide --input or --demo", file=sys.stderr)
@@ -252,8 +259,9 @@ def main():
         args.method, adata,
         resolution=args.resolution,
         spatial_weight=args.spatial_weight,
-        n_domains=args.n_domains or 7,
+        n_domains=args.n_domains,  # Critical: Do NOT mask with 'or 7'
         rad_cutoff=args.rad_cutoff,
+        k_nn=args.k_nn,
         lambda_param=args.lambda_param,
     )
 
@@ -271,6 +279,7 @@ def main():
         params["n_domains"] = args.n_domains
     if args.method == "stagate":
         params["rad_cutoff"] = args.rad_cutoff
+        params["k_nn"] = args.k_nn
     if args.method == "banksy":
         params["lambda_param"] = args.lambda_param
 

@@ -5,7 +5,7 @@ Supported methods:
   liana        LIANA+ multi-method consensus ranking (default)
   cellphonedb  CellPhoneDB statistical permutation test
   fastccc      FastCCC FFT-based communication (no permutation, fastest)
-  cellchat_r   CellChat via R (requires rpy2 + R CellChat package)
+  cellchat_r   CellChat via R
 
 Core analysis functions are in skills.spatial._lib.communication.
 

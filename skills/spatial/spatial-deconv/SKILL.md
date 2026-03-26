@@ -4,7 +4,7 @@ description: >-
   Cell type deconvolution for spatial transcriptomics — estimates per-spot
   cell type proportions using FlashDeconv, Cell2Location, RCTD, DestVI, Stereoscope, Tangram, SPOTlight, or CARD.
 version: 0.2.0
-author: SpatialClaw
+author: OmicsClaw
 license: MIT
 tags: [spatial, deconvolution, cell-proportion, flashdeconv, cell2location, rctd, destvi, stereoscope, tangram, spotlight, card]
 metadata:
@@ -51,8 +51,8 @@ You are **Spatial Deconv**, a specialised OmicsClaw agent for cell type deconvol
 
 ## Core Capabilities
 
-1. **FlashDeconv**: Ultra-fast O(N) sketching-based deconvolution (default, CPU, no GPU needed)
-2. **Cell2Location**: Bayesian deep learning with spatial priors (scvi-tools, GPU-accelerated)
+1. **Cell2Location**: Bayesian deep learning with spatial priors (default, scvi-tools, GPU-accelerated)
+2. **FlashDeconv**: Ultra-fast O(N) sketching-based deconvolution (CPU, no GPU needed)
 3. **RCTD**: Robust Cell Type Decomposition (R / spacexr)
 4. **DestVI**: Multi-resolution VAE deconvolution (scvi-tools, GPU-accelerated)
 5. **Stereoscope**: Two-stage probabilistic deconvolution (scvi-tools, GPU-accelerated)
@@ -67,46 +67,64 @@ You are **Spatial Deconv**, a specialised OmicsClaw agent for cell type deconvol
 | Spatial data | `.h5ad` | `X`, `obsm["spatial"]` | `preprocessed.h5ad` |
 | Reference | `.h5ad` | `X`, `obs["cell_type"]` | `reference_sc.h5ad` |
 
+## Input Matrix Convention
+
+| Method | Main Expression Input | Requires raw counts? | Requires normalized/log? | Extra Required Inputs |
+|--------|-----------------------|---------------------:|-------------------------:|-----------------------|
+| **Cell2Location** | scRNA reference + spatial counts | **Yes** | No | scRNA cell types; shared genes; expected cells/spot prior |
+| **FlashDeconv** | spatial + scRNA reference | **TBD (Flexible)** | **TBD** | scRNA cell type information |
+| **RCTD** | scRNA counts + spatial counts | **Yes** | No | spatial coordinates; scRNA cell types; nUMI/total counts |
+| **DestVI** | scRNA counts + spatial counts | **Yes** | No (model uses counts) | scRNA cell types; shared genes |
+| **Stereoscope** | scRNA counts + spatial counts | **Yes** | No | scRNA cell types; shared genes |
+| **Tangram** | scRNA + spatial expression | No | **Yes, typically normalized** | shared genes; training genes; scRNA cell types |
+| **SPOTlight** | scRNA reference + spatial matrix | **No (Flexible)** | **Typically normalized** | marker genes/weights; scRNA cell types |
+| **CARD** | scRNA counts + spatial counts | **Yes** | No | spatial coordinates; scRNA cell type & sample info |
+
+* **Count-based models** (Cell2Location, RCTD, DestVI, Stereoscope, CARD): Strictly require **raw counts**.
+* **Expression mapping / NMF** (Tangram, SPOTlight): Typically use **normalized, non-negative expression matrices**. Do not supply z-scored or scaled data containing negative values.
+* **FlashDeconv**: Currently flexible; official documentation TBD. Do not harden to raw counts-only.
+
 ## CLI Reference
 
 ```bash
-# FlashDeconv (default, ultra-fast)
-python skills/spatial-deconv/spatial_deconv.py \
+# Cell2Location (default, Bayesian, GPU-accelerated, requires raw counts)
+oc run spatial-deconv \
   --input <spatial.h5ad> --reference <sc_ref.h5ad> --output <dir>
 
-# Cell2Location (Bayesian, GPU-accelerated)
-python skills/spatial-deconv/spatial_deconv.py \
-  --input <file> --method cell2location --reference <ref.h5ad> --output <dir>
+# FlashDeconv (ultra-fast, CPU-friendly)
+oc run spatial-deconv \
+  --input <file> --method flashdeconv --reference <ref.h5ad> --output <dir>
 
-# RCTD (R-based, robust)
-python skills/spatial-deconv/spatial_deconv.py \
+# RCTD (R-based, robust, requires raw counts)
+oc run spatial-deconv \
   --input <file> --method rctd --reference <ref.h5ad> --output <dir>
 
-# DestVI (multi-resolution VAE)
-python skills/spatial-deconv/spatial_deconv.py \
+# DestVI (multi-resolution VAE, requires raw counts)
+oc run spatial-deconv \
   --input <file> --method destvi --reference <ref.h5ad> --output <dir>
 
-# Stereoscope (two-stage probabilistic)
-python skills/spatial-deconv/spatial_deconv.py \
+# Stereoscope (two-stage probabilistic, requires raw counts)
+oc run spatial-deconv \
   --input <file> --method stereoscope --reference <ref.h5ad> --output <dir>
 
-# Tangram (deep learning mapping)
-python skills/spatial-deconv/spatial_deconv.py \
+# Tangram (deep learning mapping, expects normalized non-negative matrices)
+oc run spatial-deconv \
   --input <file> --method tangram --reference <ref.h5ad> --output <dir>
 
-# SPOTlight (NMF-based, R)
-python skills/spatial-deconv/spatial_deconv.py \
+# SPOTlight (NMF-based, R-based)
+oc run spatial-deconv \
   --input <file> --method spotlight --reference <ref.h5ad> --output <dir>
 
-# CARD (spatial correlation, R)
-python skills/spatial-deconv/spatial_deconv.py \
+# CARD (spatial correlation, R-based, requires raw counts)
+oc run spatial-deconv \
   --input <file> --method card --reference <ref.h5ad> --output <dir>
 
-# Demo (synthetic proportions)
-python skills/spatial-deconv/spatial_deconv.py --demo --output /tmp/deconv_demo
+# Demo (runs internal simulation pipeline)
+oc run spatial-deconv --demo --output /tmp/deconv_demo
 
-# Via OmicsClaw runner
-python omicsclaw.py run spatial-deconvolution --input <file> --reference <ref> --output <dir>
+# --- Direct Script Execution (Alternative) ---
+python skills/spatial/spatial-deconv/spatial_deconv.py --demo --output /tmp/deconv_demo
+python skills/spatial/spatial-deconv/spatial_deconv.py --input <file> --reference <ref.h5ad> --method rctd --output <dir>
 ```
 
 ## Example Queries
@@ -140,7 +158,7 @@ output_dir/
 - `cell2location` + `scvi-tools` — Cell2Location Bayesian method
 - `scvi-tools` + `torch` — DestVI and Stereoscope (GPU-accelerated)
 - `tangram-sc` — Tangram mapping (GPU-accelerated)
-- `rpy2` + R packages `spacexr`, `SPOTlight`, `CARD` — RCTD, SPOTlight, and CARD
+- `R environment` + packages `spacexr`, `SPOTlight`, `CARD` — Executed as isolated memory-safe subprocesses via OmicsClaw `RScriptRunner` (no `rpy2` required)
 
 ## Safety
 
@@ -160,6 +178,10 @@ output_dir/
 ## Citations
 
 - [Cell2Location](https://doi.org/10.1038/s41587-021-01139-4) — Kleshchevnikov et al., *Nat Biotechnol* 2022
+- [FlashDeconv](https://www.biorxiv.org/content/10.64898/2025.12.22.696108v2) — Preprint, *bioRxiv*
 - [RCTD](https://doi.org/10.1038/s41587-021-00830-w) — Cable et al., *Nat Biotechnol* 2022
-- [CARD](https://doi.org/10.1038/s41587-022-01273-7) — Ma & Zhou, *Nat Biotechnol* 2022
+- [DestVI](https://doi.org/10.1038/s41587-022-01272-8) — Lopez et al., *Nat Biotechnol* 2022
+- [Stereoscope](https://doi.org/10.1038/s42003-020-01247-y) — Andersson et al., *Commun Biol* 2020
 - [Tangram](https://doi.org/10.1038/s41592-021-01264-7) — Biancalani et al., *Nat Methods* 2021
+- [SPOTlight](https://doi.org/10.1093/nar/gkab043) — Elosua-Bayes et al., *Nucleic Acids Res* 2021
+- [CARD](https://doi.org/10.1038/s41587-022-01273-7) — Ma & Zhou, *Nat Biotechnol* 2022
