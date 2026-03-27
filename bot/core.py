@@ -1015,7 +1015,14 @@ def get_tools() -> list[dict]:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "data": {"type": "array", "description": "Array of row objects"},
+                        "data": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": {},
+                            },
+                            "description": "Array of row objects",
+                        },
                         "filename": {"type": "string", "description": "Filename (without extension)"},
                         "destination": {"type": "string", "description": "Destination folder (optional)"}
                     },
