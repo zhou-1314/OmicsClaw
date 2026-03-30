@@ -28,9 +28,18 @@ def test_demo_mode(tmp_output):
         cwd=str(SKILL_SCRIPT.parent),
     )
     assert result.returncode == 0, f"stderr: {result.stderr}"
+    assert (tmp_output / "README.md").exists()
     assert (tmp_output / "report.md").exists()
     assert (tmp_output / "result.json").exists()
-    assert (tmp_output / "figures").exists()
+    assert (tmp_output / "figures" / "manifest.json").exists()
+    assert (tmp_output / "figure_data" / "manifest.json").exists()
+    assert (tmp_output / "tables" / "preprocess_summary.csv").exists()
+    assert (tmp_output / "tables" / "cluster_summary.csv").exists()
+    assert (tmp_output / "tables" / "qc_metrics_per_cell.csv").exists()
+    assert (tmp_output / "processed.h5ad").exists()
+    assert (tmp_output / "reproducibility" / "analysis_notebook.ipynb").exists()
+    assert (tmp_output / "reproducibility" / "requirements.txt").exists()
+    assert not (tmp_output / "reproducibility" / "environment.txt").exists()
 
 
 def test_demo_report_content(tmp_output):
@@ -44,6 +53,7 @@ def test_demo_report_content(tmp_output):
     )
     report = (tmp_output / "report.md").read_text()
     assert "Preprocessing" in report or "preprocessing" in report
+    assert "Default Gallery" in report
     assert "Disclaimer" in report
 
 
@@ -57,8 +67,16 @@ def test_demo_result_json(tmp_output):
         cwd=str(SKILL_SCRIPT.parent),
     )
     data = json.loads((tmp_output / "result.json").read_text())
-    assert data["skill"] == "singlecell-preprocessing"
+    assert data["skill"] == "sc-preprocessing"
     assert "summary" in data
+    assert data["data"]["params"]["method"] == "scanpy"
+    assert data["data"]["effective_params"]["method"] == "scanpy"
+    assert data["data"]["effective_params"]["hvg_flavor"] == "seurat"
+    assert data["data"]["effective_params"]["raw_available"] is True
+    assert data["data"]["visualization"]["recipe_id"] == "standard-sc-preprocessing-gallery"
+    assert "cluster_summary" in data["data"]["visualization"]["available_figure_data"]
+    command_text = (tmp_output / "reproducibility" / "commands.sh").read_text()
+    assert "--method scanpy" in command_text
 
 
 def test_seurat_backend_function_is_defined():
@@ -124,3 +142,4 @@ def test_demo_mode_seurat(tmp_output):
     assert result.returncode == 0, f"stderr: {result.stderr}"
     payload = json.loads((tmp_output / "result.json").read_text())
     assert payload["summary"]["method"] == "seurat"
+    assert payload["data"]["visualization"]["recipe_id"] == "standard-sc-preprocessing-gallery"

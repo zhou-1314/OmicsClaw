@@ -115,7 +115,10 @@ def write_output_readme(
 
     payload = result_payload or load_result_json(output_dir) or {}
     summary = payload.get("summary", {}) if isinstance(payload, dict) else {}
-    params = payload.get("data", {}).get("params", {}) if isinstance(payload, dict) else {}
+    params = {}
+    if isinstance(payload, dict):
+        data_block = payload.get("data", {})
+        params = data_block.get("effective_params") or data_block.get("params", {})
     method = extract_method_name(payload, fallback=preferred_method) or "not recorded"
     completed_at = payload.get("completed_at", "")
     report_exists = (output_dir / "report.md").exists()

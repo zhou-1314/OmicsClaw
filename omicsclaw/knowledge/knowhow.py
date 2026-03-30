@@ -225,6 +225,46 @@ _KH_SKILL_MAP: dict[str, dict] = {
         ],
         "domains": ["spatial"],
     },
+    "KH-sc-qc-guardrails.md": {
+        "label": "Single-Cell QC Guardrails",
+        "critical_rule": "MUST inspect matrix type, gene naming convention, and explain that sc-qc is diagnostic-only before running single-cell QC",
+        "skills": [
+            "sc-qc",
+        ],
+        "keywords": [
+            "scrna qc", "single-cell qc", "single cell qc", "quality control",
+            "mitochondrial percentage", "ribosomal percentage", "genes per cell",
+            "library size", "线粒体比例", "核糖体比例", "质量控制", "调参",
+        ],
+        "domains": ["singlecell"],
+    },
+    "KH-sc-preprocessing-guardrails.md": {
+        "label": "Single-Cell Preprocessing Guardrails",
+        "critical_rule": "MUST inspect whether the input is raw-count-like, explain the chosen preprocessing backend plus effective QC and graph parameters, and never silently swap an explicitly requested method",
+        "skills": [
+            "sc-preprocessing", "sc-preprocess",
+        ],
+        "keywords": [
+            "single-cell preprocessing", "single cell preprocessing", "scrna preprocessing",
+            "scanpy preprocessing", "seurat preprocessing", "sctransform preprocessing",
+            "qc filter normalize cluster", "hvg", "umap", "pca", "leiden",
+            "单细胞预处理", "归一化", "聚类", "调参",
+        ],
+        "domains": ["singlecell"],
+    },
+    "KH-scatac-preprocessing-guardrails.md": {
+        "label": "scATAC Preprocessing Guardrails",
+        "critical_rule": "MUST inspect whether the input is a raw-count-like peak matrix, explain the effective sparsity, TF-IDF, and graph parameters, and never claim fragment-aware preprocessing when the current wrapper does not implement it",
+        "skills": [
+            "scatac-preprocessing", "scatac-preprocess",
+        ],
+        "keywords": [
+            "scatac preprocessing", "single-cell atac preprocessing", "atac tfidf",
+            "lsi preprocessing", "chromatin accessibility clustering", "atac umap",
+            "单细胞atac预处理", "染色质可及性", "调参",
+        ],
+        "domains": ["singlecell"],
+    },
     "KH-bulk-rnaseq-differential-expression.md": {
         "label": "Bulk RNA-Seq Differential Expression",
         "critical_rule": "MUST use padj (not pvalue) for DEG filtering; MUST NOT confuse log2FC sign direction",

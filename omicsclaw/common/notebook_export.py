@@ -39,6 +39,31 @@ def _visible_files(paths: list[Path], base_dir: Path, limit: int = 12) -> list[s
     return [str(path.relative_to(base_dir)) for path in sorted(paths)[:limit]]
 
 
+def _read_requirements_bundle(repro_dir: Path) -> str:
+    """Read the best available environment description from reproducibility output."""
+    for filename in ("requirements.txt", "environment.txt"):
+        text = _read_text(repro_dir / filename)
+        if text:
+            return text
+    return ""
+
+
+def _find_primary_h5ad(output_dir: Path) -> Path | None:
+    """Return the most likely AnnData output for notebook inspection."""
+    preferred = [
+        output_dir / "processed.h5ad",
+        output_dir / "qc_checked.h5ad",
+    ]
+    for path in preferred:
+        if path.exists():
+            return path
+
+    h5ad_files = sorted(output_dir.glob("*.h5ad"))
+    if h5ad_files:
+        return h5ad_files[0]
+    return None
+
+
 def write_analysis_notebook(
     output_dir: str | Path,
     *,
@@ -58,14 +83,17 @@ def write_analysis_notebook(
 
     payload = result_payload or load_result_json(output_dir) or {}
     summary = payload.get("summary", {}) if isinstance(payload, dict) else {}
-    params = payload.get("data", {}).get("params", {}) if isinstance(payload, dict) else {}
+    params = {}
+    if isinstance(payload, dict):
+        data_block = payload.get("data", {})
+        params = data_block.get("effective_params") or data_block.get("params", {})
     method = extract_method_name(payload, fallback=preferred_method) or "not recorded"
     report_text = _trim_text(_read_text(output_dir / "report.md"))
     commands_text = _trim_text(_read_text(repro_dir / "commands.sh"))
-    requirements_text = _trim_text(_read_text(repro_dir / "requirements.txt"))
+    requirements_text = _trim_text(_read_requirements_bundle(repro_dir))
     figure_paths = [p for p in (output_dir / "figures").glob("*") if p.is_file()] if (output_dir / "figures").exists() else []
     table_paths = [p for p in (output_dir / "tables").glob("*") if p.is_file()] if (output_dir / "tables").exists() else []
-    processed_h5ad = output_dir / "processed.h5ad"
+    primary_h5ad = _find_primary_h5ad(output_dir)
     params_json = json.dumps(params, indent=2, ensure_ascii=False, default=str)
     actual_cmd_str = _shell_join(actual_command) if actual_command else ""
     script_path_str = str(Path(script_path).resolve()) if script_path else ""
@@ -94,8 +122,8 @@ def write_analysis_notebook(
         "- `reproducibility/commands.sh`: shell rerun command",
         "- `reproducibility/analysis_notebook.ipynb`: this notebook",
     ]
-    if processed_h5ad.exists():
-        key_file_lines.append("- `processed.h5ad`: processed AnnData for downstream analysis")
+    if primary_h5ad is not None:
+        key_file_lines.append(f"- `{primary_h5ad.name}`: primary AnnData output for downstream analysis")
     if figure_paths:
         key_file_lines.append(f"- `figures/`: {len(figure_paths)} generated figure(s)")
     if table_paths:
@@ -157,6 +185,7 @@ REQUIREMENTS_PATH = REPRO_DIR / "requirements.txt"
 SKILL_NAME = {json.dumps(skill_alias)}
 METHOD = {json.dumps(method)}
 SKILL_SCRIPT = Path({json.dumps(script_path_str)}) if {json.dumps(bool(script_path_str))} else None
+PRIMARY_H5AD_PATH = Path({json.dumps(str(primary_h5ad))}) if {json.dumps(primary_h5ad is not None)} else None
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -250,12 +279,13 @@ if COMMAND_TEMPLATE:
             )
         )
 
-    if processed_h5ad.exists():
+    if primary_h5ad is not None:
         nb.cells.append(
             new_code_cell(
                 """import scanpy as sc
 
-adata = sc.read_h5ad(OUTPUT_DIR / "processed.h5ad")
+adata = sc.read_h5ad(PRIMARY_H5AD_PATH)
+print("Loaded AnnData from:", PRIMARY_H5AD_PATH)
 print(adata)
 adata
 """

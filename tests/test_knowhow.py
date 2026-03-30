@@ -160,3 +160,45 @@ def test_spatial_trajectory_constraints_use_guardrail_doc():
 
     assert "Spatial Trajectory Guardrails" in constraints
     assert "knowledge_base/skill-guides/spatial/spatial-trajectory.md" in constraints
+
+
+def test_sc_qc_guardrail_is_registered_for_skill():
+    injector = KnowHowInjector(knowhows_dir=KNOWHOW_DIR)
+
+    matched = injector.get_kh_for_skill("sc-qc")
+
+    assert "KH-sc-qc-guardrails.md" in matched
+
+
+def test_sc_qc_constraints_use_guardrail_doc():
+    injector = KnowHowInjector(knowhows_dir=KNOWHOW_DIR)
+
+    constraints = injector.get_constraints(
+        skill="sc-qc",
+        query="Please run single-cell QC and explain mitochondrial percentage interpretation first.",
+        domain="singlecell",
+    )
+
+    assert "Single-Cell QC Guardrails" in constraints
+    assert "knowledge_base/skill-guides/singlecell/sc-qc.md" in constraints
+
+
+def test_sc_preprocessing_guardrail_is_registered_for_skill():
+    injector = KnowHowInjector(knowhows_dir=KNOWHOW_DIR)
+
+    matched = injector.get_kh_for_skill("sc-preprocessing")
+
+    assert "KH-sc-preprocessing-guardrails.md" in matched
+
+
+def test_sc_preprocessing_constraints_use_guardrail_doc():
+    injector = KnowHowInjector(knowhows_dir=KNOWHOW_DIR)
+
+    constraints = injector.get_constraints(
+        skill="sc-preprocessing",
+        query="Please preprocess this single-cell dataset with SCTransform and explain QC thresholds first.",
+        domain="singlecell",
+    )
+
+    assert "Single-Cell Preprocessing Guardrails" in constraints
+    assert "knowledge_base/skill-guides/singlecell/sc-preprocessing.md" in constraints
