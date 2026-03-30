@@ -7,8 +7,13 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-import nbformat as nbf
-from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
+try:
+    import nbformat as nbf
+    from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
+    _NBFORMAT_AVAILABLE = True
+except ImportError:
+    nbf = None  # type: ignore[assignment]
+    _NBFORMAT_AVAILABLE = False
 
 from omicsclaw.common.report import extract_method_name, load_result_json
 
@@ -75,6 +80,10 @@ def write_analysis_notebook(
     actual_command: list[str] | None = None,
 ) -> Path:
     """Create a reproducibility notebook for a completed analysis run."""
+    if not _NBFORMAT_AVAILABLE:
+        import warnings
+        warnings.warn("nbformat is not installed; skipping notebook export.", stacklevel=2)
+        return Path(output_dir) / "reproducibility" / f"{skill_alias}_analysis.ipynb"
     output_dir = Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     repro_dir = output_dir / "reproducibility"

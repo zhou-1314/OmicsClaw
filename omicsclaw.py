@@ -73,7 +73,9 @@ from omicsclaw.common.report import (
     load_result_json,
     write_output_readme,
 )
-from omicsclaw.common.notebook_export import write_analysis_notebook
+def _get_write_analysis_notebook():
+    from omicsclaw.common.notebook_export import write_analysis_notebook  # noqa: PLC0415
+    return write_analysis_notebook
 from omicsclaw.core.registry import registry
 registry.load_all()
 SKILLS = registry.skills
@@ -278,7 +280,7 @@ def _finalize_output_directory(
                 notebook_command[idx + 1] = str(final_dir)
                 break
 
-    notebook_path = write_analysis_notebook(
+    notebook_path = _get_write_analysis_notebook()(
         final_dir,
         skill_alias=skill_name,
         description=skill_info.get("description", ""),

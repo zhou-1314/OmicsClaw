@@ -24,8 +24,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import nbformat as nbf
-from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook, new_output
+try:
+    import nbformat as nbf
+    from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook, new_output
+    _NBFORMAT_AVAILABLE = True
+except ImportError:
+    nbf = None  # type: ignore[assignment]
+    _NBFORMAT_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
