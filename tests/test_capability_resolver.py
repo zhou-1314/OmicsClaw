@@ -36,6 +36,14 @@ def test_resolve_capability_marks_skill_creation_requests():
     assert decision.should_create_skill is True
 
 
+def test_resolve_capability_detects_domain_from_multi_suffix_file_path():
+    decision = resolve_capability(
+        "run variant analysis",
+        file_path="/tmp/sample.vcf.gz",
+    )
+    assert decision.domain == "genomics"
+
+
 def test_resolve_capability_detects_spatial_microenvironment_subset_skill():
     decision = resolve_capability(
         "Extract a tumor microenvironment neighborhood subset within 50 microns around tumor cells"

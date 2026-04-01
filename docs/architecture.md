@@ -21,15 +21,18 @@ Standardized Output (reports, data, figures)
 OmicsClaw/
 ├── omicsclaw.py              # Main CLI entrypoint
 ├── omicsclaw/                # Core utilities
-│   ├── core/                 # Registry, skill discovery
-│   ├── routing/              # Query routing, orchestration
-│   ├── loaders/              # Multi-omics data loading
-│   ├── common/               # Shared utilities (reports, viz)
-│   ├── spatial/              # Spatial transcriptomics utils
-│   ├── singlecell/           # Single-cell utils
-│   ├── genomics/             # Genomics utils
-│   ├── proteomics/           # Proteomics utils
-│   └── metabolomics/         # Metabolomics utils
+│   ├── agents/               # Agent pipeline, intake, notebook session
+│   ├── common/               # Shared utilities (reports, manifests, runtime)
+│   ├── core/                 # Registry, lazy metadata, dependency helpers
+│   ├── execution/            # Autonomous analysis execution helpers
+│   ├── extensions/           # Extension manifests and validation
+│   ├── interactive/          # Interactive CLI / TUI frontends
+│   ├── knowledge/            # Know-how indexing and retrieval
+│   ├── loaders/              # File extension / domain detection helpers
+│   ├── memory/               # Graph memory system
+│   ├── research/             # Web research helpers
+│   ├── routing/              # Query routing and orchestration
+│   └── runtime/              # Prompt/context/tool runtime stack
 ├── skills/                   # Analysis modules
 │   ├── spatial/              # 16 spatial skills
 │   ├── singlecell/           # 5 single-cell skills
@@ -38,7 +41,7 @@ OmicsClaw/
 │   ├── metabolomics/         # 5 metabolomics skills
 │   ├── orchestrator/         # Multi-domain routing
 │   └── catalog.json          # Auto-generated skill index
-├── bot/                      # Messaging interfaces
+├── bot/                      # Multi-channel messaging interfaces
 │   ├── core.py               # LLM engine + tool loop
 │   ├── run.py                # Unified bot runner
 │   └── channels/             # Channel implementations
@@ -157,7 +160,7 @@ All tests use `--demo` mode with synthetic data (< 3 min total).
 
 ## Bot Integration
 
-OmicsClaw includes messaging bot interfaces for Telegram and Feishu:
+OmicsClaw includes messaging bot interfaces for multiple channels:
 
 ```
 User Message
@@ -175,7 +178,7 @@ Results delivered via messaging
 
 - **core.py** - Platform-agnostic LLM engine, tool execution, security, audit logging
 - **run.py** - Unified bot runner
-- **channels/** - Platform implementations (telegram, feishu, etc.)
+- **channels/** - Platform implementations (telegram, feishu, dingtalk, discord, slack, wechat, qq, email, imessage)
 - **SOUL.md** - Bot persona definition
 
 Both frontends delegate to `core.llm_tool_loop()` which executes skills as subprocesses and returns results for delivery.

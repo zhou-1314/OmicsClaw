@@ -159,7 +159,7 @@ source .venv/bin/activate
 git clone https://github.com/TianGzlab/OmicsClaw.git
 cd OmicsClaw
 pip install -e ".[tui]"
-pip install -r bot/requirements.txt  # If you want Telegram/Feishu bots
+pip install -r bot/requirements.txt  # If you want messaging channels
 
 # Configure (interactive setup wizard)
 omicsclaw onboard  # or use short alias: oc onboard
@@ -169,11 +169,11 @@ omicsclaw onboard  # or use short alias: oc onboard
 omicsclaw interactive  # or: omicsclaw chat
 omicsclaw tui          # or: oc tui
 
-# OR Start Telegram/Feishu bots as background channels
+# OR start messaging channels as background frontends
 python -m bot.run --channels telegram,feishu
 ```
 
-> 📖 **Bot Configuration Guide:** See [bot/README.md](bot/README.md) for detailed step-by-step instructions on obtaining API keys and configuring `.env` for Telegram/Feishu bots.
+> 📖 **Bot Configuration Guide:** See [bot/README.md](bot/README.md) for detailed step-by-step instructions on configuring `.env` and channel-specific credentials.
 
 **Chat with your data:**
 ```
@@ -677,7 +677,7 @@ OmicsClaw/
 ├── omicsclaw/                # Domain-agnostic framework package
 │   ├── core/                 # Registry, skill discovery, dependency management
 │   ├── routing/              # Query routing and orchestration logic
-│   ├── loaders/              # Unified data loading across domains
+│   ├── loaders/              # File extension / domain detection helpers
 │   ├── common/               # Shared utilities (reports, checksums)
 │   ├── memory/               # Graph memory system
 │   ├── interactive/          # Interactive CLI / TUI interfaces
@@ -693,7 +693,7 @@ OmicsClaw/
 │   ├── bulkrna/              # 13 bulk RNA-seq skills + _lib
 │   └── orchestrator/         # Multi-domain routing
 ├── knowledge_base/           # Guardrails, guides, and reusable know-how
-├── bot/                      # Telegram + Feishu messaging interfaces
+├── bot/                      # Multi-channel messaging interfaces
 ├── docs/                     # Documentation (installation, methods, architecture)
 ├── examples/                 # Example datasets
 ├── scripts/                  # Utility scripts (catalog generation, etc.)
