@@ -16,6 +16,7 @@ from omicsclaw.runtime.query_engine import (
     QueryEngineContext,
     run_query_engine,
 )
+from omicsclaw.runtime.context_compaction import ContextCompactionConfig
 from omicsclaw.runtime.events import (
     EVENT_SESSION_START,
     EVENT_TOOL_AFTER,
@@ -58,14 +59,17 @@ class _FakeChoice:
 
 
 class _FakeResponse:
-    def __init__(self, message):
-        self.usage = None
+    def __init__(self, message, usage=None):
+        self.usage = usage
         self.choices = [_FakeChoice(message)]
 
 
 class _FakeLLM:
-    def __init__(self, responses=None, error=None):
-        self._responses = list(responses or [])
+    def __init__(self, responses=None, error=None, events=None):
+        if events is not None:
+            self._responses = list(events)
+        else:
+            self._responses = list(responses or [])
         self._error = error
         self.calls = []
         self.chat = self
@@ -75,11 +79,27 @@ class _FakeLLM:
         self.calls.append(kwargs)
         if self._error is not None:
             raise self._error
-        return self._responses.pop(0)
+        next_item = self._responses.pop(0)
+        if isinstance(next_item, Exception):
+            raise next_item
+        return next_item
 
 
 class _FakeAPIError(Exception):
     pass
+
+
+class _FakePromptTooLongError(_FakeAPIError):
+    def __init__(self, message="prompt too long", *, status_code=413):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class _FakeUsage:
+    def __init__(self, *, prompt_tokens=0, completion_tokens=0, total_tokens=0):
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
+        self.total_tokens = total_tokens or (prompt_tokens + completion_tokens)
 
 
 def test_run_query_engine_executes_tools_and_records_transcript(tmp_path):
@@ -688,3 +708,146 @@ def test_run_query_engine_extension_tool_execution_hook_can_require_approval(tmp
     assert len(records) == 1
     assert records[0].policy_action == TOOL_POLICY_REQUIRE_APPROVAL
     assert "Confirm writer access for cli." in (records[0].policy_reason or "")
+
+
+def test_run_query_engine_retries_once_with_reactive_compact_on_prompt_too_long(tmp_path):
+    llm = _FakeLLM(
+        events=[
+            _FakePromptTooLongError(),
+            _FakeResponse(_FakeMessage(content="done after retry", tool_calls=None)),
+        ]
+    )
+    transcript_store = TranscriptStore(sanitizer=sanitize_tool_history)
+    transcript_store.messages_by_chat["chat-reactive"] = [
+        {"role": "user", "content": "older context " + ("A" * 1200)},
+        {"role": "assistant", "content": "older answer " + ("B" * 1200)},
+        {"role": "user", "content": "another question " + ("C" * 1200)},
+        {"role": "assistant", "content": "another answer " + ("D" * 1200)},
+    ]
+    result_store = ToolResultStore(storage_dir=tmp_path / "tool_results")
+    runtime = ToolRegistry([]).build_runtime({})
+
+    result = asyncio.run(
+        run_query_engine(
+            llm=llm,
+            context=QueryEngineContext(
+                chat_id="chat-reactive",
+                session_id="session-reactive",
+                system_prompt="SYSTEM",
+                user_message_content="latest request",
+            ),
+            tool_runtime=runtime,
+            transcript_store=transcript_store,
+            tool_result_store=result_store,
+            config=QueryEngineConfig(
+                model="fake-model",
+                llm_error_types=(_FakeAPIError,),
+                context_compaction=ContextCompactionConfig(
+                    max_prompt_chars=50_000,
+                    reactive_preserve_messages=2,
+                    reactive_preserve_chars=240,
+                    protected_tail_messages=1,
+                ),
+            ),
+        )
+    )
+
+    assert result == "done after retry"
+    assert len(llm.calls) == 2
+    assert "## Reactive Compact Context" not in llm.calls[0]["messages"][0]["content"]
+    assert "## Reactive Compact Context" in llm.calls[1]["messages"][0]["content"]
+    assert len(llm.calls[1]["messages"]) < len(llm.calls[0]["messages"])
+
+
+def test_run_query_engine_reactive_compact_only_attempts_once(tmp_path):
+    llm = _FakeLLM(
+        events=[
+            _FakePromptTooLongError("prompt too long first"),
+            _FakePromptTooLongError("prompt too long second"),
+        ]
+    )
+    transcript_store = TranscriptStore(sanitizer=sanitize_tool_history)
+    transcript_store.messages_by_chat["chat-reactive-once"] = [
+        {"role": "user", "content": "older context " + ("A" * 1200)},
+        {"role": "assistant", "content": "older answer " + ("B" * 1200)},
+        {"role": "user", "content": "another question " + ("C" * 1200)},
+    ]
+    result_store = ToolResultStore(storage_dir=tmp_path / "tool_results")
+    runtime = ToolRegistry([]).build_runtime({})
+
+    result = asyncio.run(
+        run_query_engine(
+            llm=llm,
+            context=QueryEngineContext(
+                chat_id="chat-reactive-once",
+                session_id="session-reactive-once",
+                system_prompt="SYSTEM",
+                user_message_content="latest request",
+            ),
+            tool_runtime=runtime,
+            transcript_store=transcript_store,
+            tool_result_store=result_store,
+            config=QueryEngineConfig(
+                model="fake-model",
+                llm_error_types=(_FakeAPIError,),
+                context_compaction=ContextCompactionConfig(
+                    max_prompt_chars=50_000,
+                    reactive_preserve_messages=2,
+                    reactive_preserve_chars=240,
+                ),
+            ),
+            callbacks=QueryEngineCallbacks(
+                on_llm_error=lambda exc: f"handled: {exc}"
+            ),
+        )
+    )
+
+    assert result == "handled: prompt too long second"
+    assert len(llm.calls) == 2
+
+
+def test_run_query_engine_injects_token_budget_nudge_and_merges_final_response(tmp_path):
+    llm = _FakeLLM(
+        responses=[
+            _FakeResponse(
+                _FakeMessage(content="phase one", tool_calls=None),
+                usage=_FakeUsage(prompt_tokens=20, completion_tokens=200, total_tokens=220),
+            ),
+            _FakeResponse(
+                _FakeMessage(content="phase two", tool_calls=None),
+                usage=_FakeUsage(prompt_tokens=25, completion_tokens=850, total_tokens=875),
+            ),
+        ]
+    )
+    transcript_store = TranscriptStore(sanitizer=sanitize_tool_history)
+    result_store = ToolResultStore(storage_dir=tmp_path / "tool_results")
+    runtime = ToolRegistry([]).build_runtime({})
+
+    result = asyncio.run(
+        run_query_engine(
+            llm=llm,
+            context=QueryEngineContext(
+                chat_id="chat-budget",
+                session_id="session-budget",
+                system_prompt="SYSTEM",
+                user_message_content="finish the task",
+                token_budget="+1000",
+            ),
+            tool_runtime=runtime,
+            transcript_store=transcript_store,
+            tool_result_store=result_store,
+            config=QueryEngineConfig(
+                model="fake-model",
+                llm_error_types=(_FakeAPIError,),
+            ),
+        )
+    )
+
+    assert result == "phase one\n\nphase two"
+    assert len(llm.calls) == 2
+    history = transcript_store.get_history("chat-budget")
+    assert history[0] == {"role": "user", "content": "finish the task"}
+    assert history[1] == {"role": "assistant", "content": "phase one"}
+    assert history[2]["role"] == "user"
+    assert "Continue working on the same request." in history[2]["content"]
+    assert history[3] == {"role": "assistant", "content": "phase two"}

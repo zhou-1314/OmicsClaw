@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import inspect
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from .context_compaction import ContextCompactionConfig, prepare_model_messages
 from .events import (
     EVENT_SESSION_RESUME,
     EVENT_SESSION_START,
@@ -25,6 +26,11 @@ from .tool_orchestration import ToolExecutionRequest, ToolExecutionResult, execu
 from .tool_registry import ToolRuntime
 from .tool_result_store import ToolResultRecord, ToolResultStore
 from .transcript_store import TranscriptStore
+from .token_budget import (
+    check_token_budget,
+    create_token_budget_tracker,
+    record_completion_tokens,
+)
 
 
 async def _maybe_await(value):
@@ -69,6 +75,7 @@ class QueryEngineContext:
     policy_state: ToolPolicyState | None = None
     hook_runtime: LifecycleHookRuntime | None = None
     tool_runtime_context: dict[str, Any] | None = None
+    token_budget: int | str | None = None
 
 
 @dataclass(slots=True)
@@ -86,6 +93,65 @@ class QueryEngineConfig:
     max_iterations: int = 20
     max_tokens: int = 8192
     llm_error_types: tuple[type[BaseException], ...] = (Exception,)
+    context_compaction: ContextCompactionConfig = field(
+        default_factory=ContextCompactionConfig
+    )
+
+
+def _extract_completion_tokens(response_usage, delta) -> int:
+    if isinstance(delta, dict):
+        try:
+            value = int(delta.get("completion_tokens", 0) or 0)
+        except (TypeError, ValueError):
+            value = 0
+        if value > 0:
+            return value
+
+    try:
+        return int(getattr(response_usage, "completion_tokens", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _record_usage(
+    response_usage,
+    callbacks: QueryEngineCallbacks,
+    *,
+    on_usage_delta: Callable[[Any, Any], None] | None = None,
+) -> None:
+    delta = None
+    if callbacks.accumulate_usage:
+        delta = callbacks.accumulate_usage(response_usage)
+    if on_usage_delta is not None:
+        on_usage_delta(response_usage, delta)
+
+
+def _is_prompt_too_long_error(exc: BaseException) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 413:
+        return True
+    http_status = getattr(exc, "http_status", None)
+    if http_status == 413:
+        return True
+
+    message = str(exc).lower()
+    patterns = (
+        "prompt too long",
+        "context length",
+        "maximum context",
+        "too many tokens",
+        "request too large",
+        "request entity too large",
+        "413",
+    )
+    return any(pattern in message for pattern in patterns)
+
+
+def _merge_response_segments(segments: list[str], current: str) -> str:
+    merged = [segment.strip() for segment in [*segments, current] if segment and segment.strip()]
+    if not merged:
+        return "(no response)"
+    return "\n\n".join(merged)
 
 
 def _materialize_message_from_choice_message(message) -> MaterializedMessage:
@@ -105,14 +171,23 @@ def _materialize_message_from_choice_message(message) -> MaterializedMessage:
     )
 
 
-async def _materialize_message_from_stream(response, callbacks: QueryEngineCallbacks) -> MaterializedMessage:
+async def _materialize_message_from_stream(
+    response,
+    callbacks: QueryEngineCallbacks,
+    *,
+    on_usage_delta: Callable[[Any, Any], None] | None = None,
+) -> MaterializedMessage:
     final_content = ""
     tool_calls_dict: dict[int, MaterializedToolCall] = {}
 
     async for chunk in response:
         if not chunk.choices:
-            if chunk.usage and callbacks.accumulate_usage:
-                callbacks.accumulate_usage(chunk.usage)
+            if chunk.usage:
+                _record_usage(
+                    chunk.usage,
+                    callbacks,
+                    on_usage_delta=on_usage_delta,
+                )
             continue
 
         delta = chunk.choices[0].delta
@@ -145,12 +220,25 @@ async def _materialize_message_from_stream(response, callbacks: QueryEngineCallb
     )
 
 
-async def _materialize_message(response, callbacks: QueryEngineCallbacks) -> MaterializedMessage:
+async def _materialize_message(
+    response,
+    callbacks: QueryEngineCallbacks,
+    *,
+    on_usage_delta: Callable[[Any, Any], None] | None = None,
+) -> MaterializedMessage:
     if callbacks.on_stream_content is not None:
-        return await _materialize_message_from_stream(response, callbacks)
+        return await _materialize_message_from_stream(
+            response,
+            callbacks,
+            on_usage_delta=on_usage_delta,
+        )
 
-    if callbacks.accumulate_usage and getattr(response, "usage", None):
-        callbacks.accumulate_usage(response.usage)
+    if getattr(response, "usage", None):
+        _record_usage(
+            response.usage,
+            callbacks,
+            on_usage_delta=on_usage_delta,
+        )
     return _materialize_message_from_choice_message(response.choices[0].message)
 
 
@@ -204,22 +292,90 @@ async def run_query_engine(
     transcript_store.append_user_message(context.chat_id, context.user_message_content)
     transcript_store.prepare_history(context.chat_id)
 
+    budget_tracker = create_token_budget_tracker(context.token_budget)
+    accumulated_response_segments: list[str] = []
+    has_attempted_reactive_compact = False
+    pipeline_workspace = str(
+        (tool_runtime_context or {}).get("pipeline_workspace", "") or ""
+    ).strip()
+    workspace = str((tool_runtime_context or {}).get("workspace", "") or "").strip()
+    compaction_metadata = (
+        {"pipeline_workspace": pipeline_workspace}
+        if pipeline_workspace
+        else None
+    )
+    compaction_workspace = pipeline_workspace or workspace or None
+
+    def _observe_usage_delta(response_usage, delta) -> None:
+        completion_tokens = _extract_completion_tokens(response_usage, delta)
+        if completion_tokens > 0:
+            record_completion_tokens(budget_tracker, completion_tokens)
+
     last_message: MaterializedMessage | None = None
     for _ in range(config.max_iterations):
         history = transcript_store.prepare_history(context.chat_id)
+        prepared_messages = prepare_model_messages(
+            system_prompt=system_prompt,
+            history=history,
+            chat_id=context.chat_id,
+            tool_result_store=tool_result_store,
+            config=config.context_compaction,
+            metadata=compaction_metadata,
+            workspace=compaction_workspace,
+        )
+        request_system_prompt = prepared_messages.system_prompt
+        request_messages = prepared_messages.messages
         try:
-            kwargs = {}
-            if callbacks.on_stream_content is not None:
-                kwargs = {"stream": True, "stream_options": {"include_usage": True}}
+            while True:
+                kwargs = {}
+                if callbacks.on_stream_content is not None:
+                    kwargs = {"stream": True, "stream_options": {"include_usage": True}}
 
-            response = await llm.chat.completions.create(
-                model=config.model,
-                max_tokens=config.max_tokens,
-                messages=[{"role": "system", "content": system_prompt}] + history,
-                tools=list(tool_runtime.openai_tools),
-                **kwargs,
-            )
-            last_message = await _materialize_message(response, callbacks)
+                try:
+                    response = await llm.chat.completions.create(
+                        model=config.model,
+                        max_tokens=config.max_tokens,
+                        messages=[{"role": "system", "content": request_system_prompt}]
+                        + request_messages,
+                        tools=list(tool_runtime.openai_tools),
+                        **kwargs,
+                    )
+                    last_message = await _materialize_message(
+                        response,
+                        callbacks,
+                        on_usage_delta=_observe_usage_delta,
+                    )
+                    break
+                except config.llm_error_types as exc:
+                    if not (
+                        not has_attempted_reactive_compact
+                        and config.context_compaction.enabled
+                        and _is_prompt_too_long_error(exc)
+                    ):
+                        raise
+
+                    reactive_messages = prepare_model_messages(
+                        system_prompt=system_prompt,
+                        history=history,
+                        chat_id=context.chat_id,
+                        tool_result_store=tool_result_store,
+                        config=config.context_compaction,
+                        metadata=compaction_metadata,
+                        workspace=compaction_workspace,
+                        force_reactive_compact=True,
+                    )
+                    has_attempted_reactive_compact = True
+                    if (
+                        reactive_messages.applied_stages
+                        and (
+                            reactive_messages.system_prompt != request_system_prompt
+                            or reactive_messages.messages != request_messages
+                        )
+                    ):
+                        request_system_prompt = reactive_messages.system_prompt
+                        request_messages = reactive_messages.messages
+                        continue
+                    raise
         except config.llm_error_types as exc:
             if callbacks.on_llm_error is not None:
                 return await _maybe_await(callbacks.on_llm_error(exc))
@@ -245,7 +401,17 @@ async def run_query_engine(
         )
 
         if not last_message.tool_calls:
-            return last_message.content or "(no response)"
+            current_response = last_message.content or ""
+            budget_decision = check_token_budget(budget_tracker)
+            if budget_decision.action == "continue":
+                if current_response.strip():
+                    accumulated_response_segments.append(current_response)
+                transcript_store.append_user_message(
+                    context.chat_id,
+                    budget_decision.nudge_message,
+                )
+                continue
+            return _merge_response_segments(accumulated_response_segments, current_response)
 
         execution_requests: list[ToolExecutionRequest] = []
         tool_states: dict[str, Any] = {}
@@ -376,4 +542,6 @@ async def run_query_engine(
                 content=result_record.content,
             )
 
-    return last_message.content if last_message and last_message.content else "(max tool iterations reached)"
+    if last_message and last_message.content:
+        return _merge_response_segments(accumulated_response_segments, last_message.content)
+    return "(max tool iterations reached)"
