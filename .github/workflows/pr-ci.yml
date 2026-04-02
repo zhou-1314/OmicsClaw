@@ -98,6 +98,8 @@ jobs:
             tests/test_bot_core_import_behavior.py \
             tests/test_bot_completion_messages.py \
             tests/test_channels.py \
+            tests/test_provider_registry.py \
+            tests/test_pipeline_provider_resolution.py \
             -v
 
   spatial-test:

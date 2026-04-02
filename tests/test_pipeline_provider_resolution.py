@@ -115,3 +115,30 @@ def test_pipeline_custom_provider_keeps_global_base_url_override(monkeypatch):
     assert captured["openai_api_key"] == "custom-key"
     assert captured["openai_api_base"] == "https://gateway.example.test/v1"
     assert captured["model"] == "custom-model"
+
+
+def test_pipeline_delegates_llm_construction_to_provider_factory(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def _fake_factory(**kwargs):
+        captured.update(kwargs)
+        return "llm-sentinel"
+
+    monkeypatch.setattr(
+        "omicsclaw.agents.pipeline.get_langchain_llm",
+        _fake_factory,
+    )
+    monkeypatch.setenv("OMICSCLAW_LLM_TIMEOUT_SECONDS", "33")
+    monkeypatch.setenv("OMICSCLAW_LLM_CONNECT_TIMEOUT_SECONDS", "6")
+    monkeypatch.setenv("LLM_BASE_URL", "https://gateway.example.test/v1")
+
+    llm = ResearchPipeline._get_llm(_build_pipeline(provider="custom", model="m1"))
+
+    assert llm == "llm-sentinel"
+    assert captured["provider"] == "custom"
+    assert captured["model"] == "m1"
+    assert captured["base_url"] == "https://gateway.example.test/v1"
+    assert captured["temperature"] == 0.3
+    assert captured["timeout"].connect == 6.0
+    assert captured["timeout"].read == 33.0
+    assert captured["anthropic_timeout"] == 33.0

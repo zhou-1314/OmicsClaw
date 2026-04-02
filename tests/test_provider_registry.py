@@ -5,6 +5,7 @@ from omicsclaw.core.provider_registry import (
     PROVIDER_DETECT_ORDER,
     PROVIDER_PRESETS,
     detect_provider_from_env,
+    get_langchain_llm,
     resolve_provider,
 )
 
@@ -65,3 +66,50 @@ def test_resolve_provider_custom_preserves_explicit_endpoint(monkeypatch):
     assert resolved_url == "https://custom.example.com/v1"
     assert resolved_model == "custom-model"
     assert resolved_key == "generic-key"
+
+
+def test_get_langchain_llm_uses_openai_compatible_kwargs(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _FakeOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+
+    llm = get_langchain_llm(
+        provider="openrouter",
+        timeout="timeout-token",
+        openai_cls=_FakeOpenAI,
+    )
+
+    assert isinstance(llm, _FakeOpenAI)
+    assert captured["openai_api_key"] == "openrouter-key"
+    assert captured["openai_api_base"] == PROVIDER_PRESETS["openrouter"][0]
+    assert captured["model"] == PROVIDER_PRESETS["openrouter"][1]
+    assert captured["timeout"] == "timeout-token"
+    assert captured["temperature"] == 0.3
+
+
+def test_get_langchain_llm_uses_anthropic_kwargs(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _FakeAnthropic:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://anthropic.example.test/v1")
+
+    llm = get_langchain_llm(
+        provider="anthropic",
+        anthropic_timeout=42.0,
+        anthropic_cls=_FakeAnthropic,
+    )
+
+    assert isinstance(llm, _FakeAnthropic)
+    assert captured["anthropic_api_key"] == "anthropic-key"
+    assert captured["anthropic_api_url"] == "https://anthropic.example.test/v1"
+    assert captured["model"] == PROVIDER_PRESETS["anthropic"][1]
+    assert captured["timeout"] == 42.0
+    assert captured["temperature"] == 0.3

@@ -7,8 +7,9 @@ heavier runtime modules.
 
 from __future__ import annotations
 
+import json
 import os
-from typing import Mapping
+from typing import Any, Mapping
 
 ProviderPreset = tuple[str, str, str]
 
@@ -156,3 +157,111 @@ def resolve_provider(
         )
 
     return resolved_url, resolved_model, resolved_key
+
+
+def _build_sanitized_chat_openai_class(base_cls: type[Any]) -> type[Any]:
+    from langchain_core.messages import BaseMessage
+
+    class SanitizedChatOpenAI(base_cls):
+        """Ensure message content is a plain string for OpenAI-compatible APIs."""
+
+        def _sanitize(self, messages: list[BaseMessage]) -> list[BaseMessage]:
+            for message in messages:
+                if isinstance(message.content, list):
+                    try:
+                        text_parts: list[str] = []
+                        for block in message.content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                text_parts.append(block.get("text", ""))
+                            else:
+                                text_parts.append(json.dumps(block, ensure_ascii=False))
+                        message.content = "\n".join(text_parts)
+                    except Exception:
+                        message.content = json.dumps(message.content, ensure_ascii=False)
+                elif message.content is None:
+                    message.content = ""
+            return messages
+
+        async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+            return super()._astream(
+                self._sanitize(messages),
+                stop=stop,
+                run_manager=run_manager,
+                **kwargs,
+            )
+
+        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+            return await super()._agenerate(
+                self._sanitize(messages),
+                stop=stop,
+                run_manager=run_manager,
+                **kwargs,
+            )
+
+    return SanitizedChatOpenAI
+
+
+def get_langchain_llm(
+    provider: str = "",
+    model: str = "",
+    *,
+    base_url: str = "",
+    api_key: str = "",
+    temperature: float = 0.3,
+    timeout: Any = None,
+    anthropic_timeout: float | None = None,
+    env: Mapping[str, str] | None = None,
+    openai_cls: type[Any] | None = None,
+    anthropic_cls: type[Any] | None = None,
+) -> Any:
+    """Build a LangChain chat model from centralized provider settings.
+
+    The module stays dependency-light at import time. Optional LangChain
+    providers are imported lazily only when this factory is called.
+    """
+    source = os.environ if env is None else env
+    provider_key = str(provider or "").strip().lower()
+    if not provider_key:
+        provider_key = detect_provider_from_env(env=source) or "deepseek"
+
+    resolved_url, resolved_model, resolved_key = resolve_provider(
+        provider=provider_key,
+        base_url=base_url,
+        model=model,
+        api_key=api_key,
+        env=source,
+    )
+
+    if provider_key == "anthropic":
+        if anthropic_cls is None:
+            from langchain_anthropic import ChatAnthropic as anthropic_cls
+
+        anthropic_kwargs: dict[str, Any] = {
+            "model": resolved_model,
+            "anthropic_api_key": resolved_key or None,
+            "temperature": temperature,
+        }
+        effective_anthropic_timeout = (
+            anthropic_timeout if anthropic_timeout is not None else timeout
+        )
+        if effective_anthropic_timeout is not None:
+            anthropic_kwargs["timeout"] = effective_anthropic_timeout
+        if resolved_url:
+            anthropic_kwargs["anthropic_api_url"] = resolved_url
+        return anthropic_cls(**anthropic_kwargs)
+
+    if openai_cls is None:
+        from langchain_openai import ChatOpenAI as _ChatOpenAI
+
+        openai_cls = _build_sanitized_chat_openai_class(_ChatOpenAI)
+
+    openai_kwargs: dict[str, Any] = {
+        "model": resolved_model,
+        "openai_api_key": resolved_key or None,
+        "temperature": temperature,
+    }
+    if timeout is not None:
+        openai_kwargs["timeout"] = timeout
+    if resolved_url:
+        openai_kwargs["openai_api_base"] = resolved_url
+    return openai_cls(**openai_kwargs)

@@ -36,10 +36,7 @@ from omicsclaw.agents.pipeline_result import (
     PipelineRunResult,
     PlanRunResult,
 )
-from omicsclaw.core.provider_registry import (
-    detect_provider_from_env,
-    resolve_provider,
-)
+from omicsclaw.core.provider_registry import get_langchain_llm
 from omicsclaw.core.llm_timeout import build_llm_timeout_policy
 from omicsclaw.runtime.task_store import (
     TASK_STATUS_COMPLETED,
@@ -815,72 +812,15 @@ class ResearchPipeline:
             or os.getenv("OC_LLM_MODEL")
             or os.getenv("OMICSCLAW_MODEL")
         )
-        provider = str(requested_provider or "").strip().lower()
-        if not provider:
-            provider = detect_provider_from_env() or "deepseek"
-
-        resolved_url, resolved_model, resolved_key = resolve_provider(
-            provider=provider,
-            base_url=str(os.getenv("LLM_BASE_URL", "") or ""),
-            model=requested_model or "",
-        )
         timeout_policy = build_llm_timeout_policy(log=logger)
-        openai_timeout = timeout_policy.as_httpx_timeout()
-        anthropic_timeout = timeout_policy.as_anthropic_timeout()
-
-        from langchain_openai import ChatOpenAI
-        from langchain_core.messages import BaseMessage
-        import json
-
-        class SafeChatOpenAI(ChatOpenAI):
-            """Wraps ChatOpenAI to ensure message content is strictly a string.
-            Some API endpoints (like DeepSeek) reject requests with 400 'invalid type: sequence'
-            if ToolMessage content is a JSON array instead of a string.
-            """
-            def _sanitize(self, messages: list[BaseMessage]) -> list[BaseMessage]:
-                for m in messages:
-                    if isinstance(m.content, list):
-                        try:
-                            text_parts = []
-                            for block in m.content:
-                                if isinstance(block, dict) and block.get("type") == "text":
-                                    text_parts.append(block.get("text", ""))
-                                else:
-                                    text_parts.append(json.dumps(block, ensure_ascii=False))
-                            m.content = "\n".join(text_parts)
-                        except Exception:
-                            m.content = json.dumps(m.content, ensure_ascii=False)
-                    elif m.content is None:
-                        m.content = ""
-                return messages
-
-            async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
-                return super()._astream(self._sanitize(messages), stop=stop, run_manager=run_manager, **kwargs)
-
-            async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
-                return await super()._agenerate(self._sanitize(messages), stop=stop, run_manager=run_manager, **kwargs)
-
-        if provider == "anthropic":
-            from langchain_anthropic import ChatAnthropic
-            anthropic_kwargs: dict[str, Any] = {
-                "model": resolved_model,
-                "anthropic_api_key": resolved_key or None,
-                "timeout": anthropic_timeout,
-                "temperature": 0.3,
-            }
-            if resolved_url:
-                anthropic_kwargs["anthropic_api_url"] = resolved_url
-            return ChatAnthropic(**anthropic_kwargs)
-
-        openai_kwargs: dict[str, Any] = {
-            "model": resolved_model,
-            "openai_api_key": resolved_key or None,
-            "timeout": openai_timeout,
-            "temperature": 0.3,
-        }
-        if resolved_url:
-            openai_kwargs["openai_api_base"] = resolved_url
-        return SafeChatOpenAI(**openai_kwargs)
+        return get_langchain_llm(
+            provider=requested_provider or "",
+            model=requested_model or "",
+            base_url=str(os.getenv("LLM_BASE_URL", "") or ""),
+            temperature=0.3,
+            timeout=timeout_policy.as_httpx_timeout(),
+            anthropic_timeout=timeout_policy.as_anthropic_timeout(),
+        )
 
     def _build_agent(self):
         """Build the deepagents agent with OmicsClaw sub-agents.
