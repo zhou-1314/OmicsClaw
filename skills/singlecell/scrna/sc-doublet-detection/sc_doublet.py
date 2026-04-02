@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import logging
+import tempfile
 import sys
 from pathlib import Path
+import h5py
 
 import matplotlib
 matplotlib.use("Agg")
@@ -20,17 +22,74 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from omicsclaw.common.checksums import sha256_file
-from omicsclaw.common.report import generate_report_header, generate_report_footer, write_result_json
+from omicsclaw.common.report import (
+    generate_report_header,
+    generate_report_footer,
+    load_result_json,
+    write_output_readme,
+    write_result_json,
+)
+from skills.singlecell._lib import io as sc_io
 from skills.singlecell._lib.adata_utils import store_analysis_metadata
 from skills.singlecell._lib.method_config import MethodConfig, validate_method_choice
+from omicsclaw.core.dependency_manager import validate_r_environment
+from omicsclaw.core.r_script_runner import RScriptRunner
 
 from skills.singlecell._lib.viz_utils import save_figure
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-SKILL_NAME = "sc-doublet"
+SKILL_NAME = "sc-doublet-detection"
 SKILL_VERSION = "0.4.0"
+
+
+def _write_repro_requirements(repro_dir: Path, packages: list[str]) -> None:
+    try:
+        from importlib.metadata import PackageNotFoundError, version as get_version
+    except ImportError:  # pragma: no cover
+        PackageNotFoundError = Exception
+        from importlib_metadata import version as get_version  # type: ignore
+
+    lines: list[str] = []
+    for pkg in packages:
+        try:
+            lines.append(f"{pkg}=={get_version(pkg)}")
+        except PackageNotFoundError:
+            continue
+        except Exception:
+            continue
+    (repro_dir / "requirements.txt").write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
+
+def write_standard_run_artifacts(output_dir: Path, result_payload: dict, summary: dict) -> None:
+    notebook_path = None
+    try:
+        from omicsclaw.common.notebook_export import write_analysis_notebook
+
+        notebook_path = write_analysis_notebook(
+            output_dir,
+            skill_alias=SKILL_NAME,
+            description="Doublet detection and scoring for single-cell RNA-seq data.",
+            result_payload=result_payload,
+            preferred_method=summary.get("method", "scrublet"),
+            script_path=Path(__file__).resolve(),
+            actual_command=[sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]],
+        )
+    except Exception as exc:
+        logger.warning("Failed to write analysis notebook: %s", exc)
+
+    try:
+        write_output_readme(
+            output_dir,
+            skill_alias=SKILL_NAME,
+            description="Doublet detection and scoring for single-cell RNA-seq data.",
+            result_payload=result_payload,
+            preferred_method=summary.get("method", "scrublet"),
+            notebook_path=notebook_path,
+        )
+    except Exception as exc:
+        logger.warning("Failed to write README.md: %s", exc)
 
 METHOD_REGISTRY: dict[str, MethodConfig] = {
     "scrublet": MethodConfig(
@@ -51,11 +110,88 @@ METHOD_REGISTRY: dict[str, MethodConfig] = {
 }
 
 
+def _matrix_looks_count_like(matrix) -> bool:
+    sample = matrix
+    if hasattr(sample, "toarray"):
+        sample = sample[: min(200, sample.shape[0]), : min(200, sample.shape[1])].toarray()
+    else:
+        sample = np.asarray(sample[: min(200, sample.shape[0]), : min(200, sample.shape[1])])
+    if sample.size == 0:
+        return True
+    if np.nanmin(sample) < 0:
+        return False
+    frac_integer = float(np.mean(np.isclose(sample, np.round(sample), atol=1e-6)))
+    return frac_integer > 0.98
+
+
+def _get_count_like_matrix(adata):
+    if "counts" in adata.layers:
+        return adata.layers["counts"], "layers.counts"
+    if _matrix_looks_count_like(adata.X):
+        return adata.X, "adata.X"
+    raise ValueError("Doublet detection requires raw count-like input; provide adata.layers['counts'] or count-like adata.X")
+
+
+def _build_count_like_export_adata(adata):
+    matrix, source = _get_count_like_matrix(adata)
+    export = sc.AnnData(X=matrix.copy(), obs=adata.obs.copy(), var=adata.var.copy())
+    export.obs_names = adata.obs_names.copy()
+    export.var_names = adata.var_names.copy()
+    return export, source
+
+
+def _run_r_doublet_script(adata, *, script_name: str, output_csv: str, expected_doublet_rate: float, required_packages: list[str]):
+    validate_r_environment(required_r_packages=required_packages)
+    scripts_dir = _PROJECT_ROOT / "omicsclaw" / "r_scripts"
+    runner = RScriptRunner(scripts_dir=scripts_dir, timeout=1800)
+    export, source = _build_count_like_export_adata(adata)
+    with tempfile.TemporaryDirectory(prefix="omicsclaw_doublet_r_") as tmpdir:
+        tmpdir = Path(tmpdir)
+        input_h5ad = tmpdir / "input.h5ad"
+        output_dir = tmpdir / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        export.write_h5ad(input_h5ad)
+        with h5py.File(input_h5ad, "a") as handle:
+            if "layers" in handle and len(handle["layers"].keys()) == 0:
+                del handle["layers"]
+        runner.run_script(
+            script_name,
+            args=[str(input_h5ad), str(output_dir), str(expected_doublet_rate)],
+            expected_outputs=[output_csv],
+            output_dir=output_dir,
+        )
+        df = pd.read_csv(output_dir / output_csv, index_col=0)
+    return df, source
+
+
+def run_doubletfinder(adata, expected_doublet_rate=0.06):
+    df, _ = _run_r_doublet_script(
+        adata,
+        script_name="sc_doubletfinder.R",
+        output_csv="doubletfinder_results.csv",
+        expected_doublet_rate=expected_doublet_rate,
+        required_packages=["Seurat", "DoubletFinder", "SingleCellExperiment", "zellkonverter"],
+    )
+    return df
+
+
+def run_scdblfinder(adata, expected_doublet_rate=0.06):
+    df, _ = _run_r_doublet_script(
+        adata,
+        script_name="sc_scdblfinder.R",
+        output_csv="scdblfinder_results.csv",
+        expected_doublet_rate=expected_doublet_rate,
+        required_packages=["scDblFinder", "SingleCellExperiment", "zellkonverter"],
+    )
+    return df
+
+
 def detect_doublets_scrublet(adata, expected_doublet_rate=0.06, threshold=None):
     import scrublet as scr
 
-    logger.info("Running Scrublet (expected_rate=%s)", expected_doublet_rate)
-    scrub = scr.Scrublet(adata.X, expected_doublet_rate=expected_doublet_rate)
+    counts_matrix, source = _get_count_like_matrix(adata)
+    logger.info("Running Scrublet (expected_rate=%s, source=%s)", expected_doublet_rate, source)
+    scrub = scr.Scrublet(counts_matrix, expected_doublet_rate=expected_doublet_rate)
     doublet_scores, predicted_doublets = scrub.scrub_doublets(
         min_counts=2, min_cells=3, min_gene_variability_pctl=85, n_prin_comps=30
     )
@@ -73,6 +209,7 @@ def detect_doublets_scrublet(adata, expected_doublet_rate=0.06, threshold=None):
         "n_doublets": n_doublets,
         "doublet_rate": float(n_doublets / adata.n_obs),
         "expected_rate": expected_doublet_rate,
+        "expression_source": source,
     }
 
 
@@ -190,6 +327,10 @@ def write_report(output_dir: Path, summary: dict, input_file: str | None, params
     for k, v in params.items():
         cmd += f" --{k.replace('_', '-')} {v}"
     (repro_dir / "commands.sh").write_text(f"#!/bin/bash\n{cmd}\n")
+    _write_repro_requirements(
+        repro_dir,
+        ["scanpy", "anndata", "numpy", "pandas", "matplotlib"],
+    )
 
 
 def main():
@@ -206,12 +347,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if args.demo:
-        demo_path = _PROJECT_ROOT / "examples" / "pbmc3k.h5ad"
-        if demo_path.exists():
-            adata = sc.read_h5ad(demo_path)
-        else:
-            logger.warning("Local demo data not found, downloading from scanpy")
-            adata = sc.datasets.pbmc3k()
+        adata = sc_io.load_repo_demo_data("pbmc3k_raw")[0]
         input_file = None
     else:
         if not args.input_path:
@@ -231,13 +367,20 @@ def main():
     generate_figures(adata, output_dir)
     write_report(output_dir, summary, input_file, params)
 
+    store_analysis_metadata(adata, SKILL_NAME, method, params)
     output_h5ad = output_dir / "processed.h5ad"
     adata.write_h5ad(output_h5ad)
     logger.info("Saved to %s", output_h5ad)
 
     checksum = sha256_file(input_file) if input_file and Path(input_file).exists() else ""
-    write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, {"params": params}, checksum)
-    store_analysis_metadata(adata, SKILL_NAME, method, params)
+    result_data = {"params": params}
+    write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
+    result_payload = load_result_json(output_dir) or {
+        "skill": SKILL_NAME,
+        "summary": summary,
+        "data": result_data,
+    }
+    write_standard_run_artifacts(output_dir, result_payload, summary)
 
     print(f"Success: {SKILL_NAME}")
     print(f"  Output: {output_dir}")

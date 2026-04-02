@@ -7,6 +7,7 @@ import argparse
 import json
 import logging
 import shlex
+import tempfile
 import sys
 from pathlib import Path
 
@@ -23,13 +24,22 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from omicsclaw.common.checksums import sha256_file
-from omicsclaw.common.report import generate_report_header, generate_report_footer, write_result_json
+from omicsclaw.common.report import (
+    generate_report_header,
+    generate_report_footer,
+    load_result_json,
+    write_output_readme,
+    write_result_json,
+)
+from skills.singlecell._lib import io as sc_io
 from skills.singlecell._lib.adata_utils import ensure_pca, store_analysis_metadata
 from skills.singlecell._lib import dimred as sc_dimred_utils
 from skills.singlecell._lib import integration as sc_integration_utils
 from skills.singlecell._lib.export import save_h5ad
 from skills.singlecell._lib.gallery import PlotSpec, VisualizationRecipe, render_plot_specs
 from skills.singlecell._lib.method_config import MethodConfig, validate_method_choice, check_data_requirements
+from omicsclaw.core.dependency_manager import validate_r_environment
+from omicsclaw.core.r_script_runner import RScriptRunner
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -86,6 +96,57 @@ METHOD_REGISTRY: dict[str, MethodConfig] = {
 DEFAULT_METHOD = "harmony"
 
 
+def _write_repro_requirements(repro_dir: Path, packages: list[str]) -> None:
+    try:
+        from importlib.metadata import PackageNotFoundError, version as get_version
+    except ImportError:  # pragma: no cover
+        PackageNotFoundError = Exception
+        from importlib_metadata import version as get_version  # type: ignore
+
+    lines: list[str] = []
+    for pkg in packages:
+        try:
+            lines.append(f"{pkg}=={get_version(pkg)}")
+        except PackageNotFoundError:
+            continue
+        except Exception:
+            continue
+    (repro_dir / "requirements.txt").write_text(
+        "\n".join(lines) + ("\n" if lines else ""),
+        encoding="utf-8",
+    )
+
+
+def write_standard_run_artifacts(output_dir: Path, result_payload: dict, summary: dict) -> None:
+    notebook_path = None
+    try:
+        from omicsclaw.common.notebook_export import write_analysis_notebook
+
+        notebook_path = write_analysis_notebook(
+            output_dir,
+            skill_alias=SKILL_NAME,
+            description="Batch integration for multi-sample scRNA-seq datasets.",
+            result_payload=result_payload,
+            preferred_method=summary.get("method", DEFAULT_METHOD),
+            script_path=Path(__file__).resolve(),
+            actual_command=[sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]],
+        )
+    except Exception as exc:
+        logger.warning("Failed to write analysis notebook: %s", exc)
+
+    try:
+        write_output_readme(
+            output_dir,
+            skill_alias=SKILL_NAME,
+            description="Batch integration for multi-sample scRNA-seq datasets.",
+            result_payload=result_payload,
+            preferred_method=summary.get("method", DEFAULT_METHOD),
+            notebook_path=notebook_path,
+        )
+    except Exception as exc:
+        logger.warning("Failed to write README.md: %s", exc)
+
+
 def integrate_harmony(adata, batch_key="batch", **kwargs):
     adata = sc_integration_utils.run_harmony_integration(
         adata,
@@ -114,7 +175,10 @@ def integrate_scanvi(adata, batch_key="batch", n_epochs=None, use_gpu=True, **kw
     labels_key = "cell_type" if "cell_type" in adata.obs.columns else "leiden" if "leiden" in adata.obs.columns else None
     if labels_key is None:
         logger.warning("scANVI requires labels; falling back to scVI latent integration")
-        return integrate_scvi(adata, batch_key=batch_key, n_epochs=n_epochs, use_gpu=use_gpu, **kwargs)
+        result = integrate_scvi(adata, batch_key=batch_key, n_epochs=n_epochs, use_gpu=use_gpu, **kwargs)
+        result["method"] = "scanvi_fallback_scvi"
+        result["requested_method"] = "scanvi"
+        return result
     adata = sc_integration_utils.run_scanvi_integration(
         adata,
         batch_key=batch_key,
@@ -145,17 +209,76 @@ def integrate_scanorama(adata, batch_key="batch", **kwargs):
     for batch in adata.obs[batch_key].unique():
         batches.append(adata[adata.obs[batch_key] == batch].copy())
     corrected = scanorama.correct_scanpy(batches, return_dimred=True)
-    adata.obsm["X_scanorama"] = np.concatenate(corrected[1])
+    embedding_frames = []
+    for corrected_batch in corrected:
+        embedding = corrected_batch.obsm.get("X_scanorama")
+        if embedding is None:
+            raise RuntimeError("Scanorama did not produce 'X_scanorama' embeddings")
+        frame = pd.DataFrame(embedding, index=corrected_batch.obs_names)
+        embedding_frames.append(frame)
+    combined = pd.concat(embedding_frames, axis=0)
+    combined = combined.loc[adata.obs_names]
+    adata.obsm["X_scanorama"] = combined.to_numpy(dtype=float)
     sc.pp.neighbors(adata, use_rep="X_scanorama")
     sc.tl.umap(adata)
     return {"method": "scanorama", "embedding_key": "X_scanorama", "n_batches": int(adata.obs[batch_key].nunique())}
 
 
+def _build_r_integration_export_adata(adata):
+    if "counts" in adata.layers:
+        matrix = adata.layers["counts"]
+    elif adata.raw is not None and adata.raw.shape == adata.shape:
+        matrix = adata.raw.X
+    else:
+        matrix = adata.X
+    export = sc.AnnData(X=matrix.copy(), obs=adata.obs.copy(), var=adata.var.copy())
+    export.obs_names = adata.obs_names.copy()
+    export.var_names = adata.var_names.copy()
+    return export
+
+
 def integrate_r_method(adata, *, method: str, batch_key: str):
-    raise RuntimeError(
-        f"R-backed integration method '{method}' is declared but not bundled in the current wrapper. "
-        "Use harmony, scvi, scanvi, bbknn, or scanorama in this build."
-    )
+    if method == "fastmnn":
+        required_packages = ["batchelor", "SingleCellExperiment", "zellkonverter"]
+    else:
+        required_packages = ["Seurat", "SingleCellExperiment", "zellkonverter"]
+    validate_r_environment(required_r_packages=required_packages)
+    scripts_dir = _PROJECT_ROOT / "omicsclaw" / "r_scripts"
+    runner = RScriptRunner(scripts_dir=scripts_dir, timeout=1800)
+    export = _build_r_integration_export_adata(adata)
+    with tempfile.TemporaryDirectory(prefix="omicsclaw_sc_integrate_r_") as tmpdir:
+        tmpdir = Path(tmpdir)
+        input_h5ad = tmpdir / "input.h5ad"
+        output_dir = tmpdir / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        export.write_h5ad(input_h5ad)
+        expected = ["embedding.csv", "obs.csv"] if method == "fastmnn" else ["embedding.csv", "umap.csv", "obs.csv"]
+        runner.run_script(
+            "sc_seurat_integrate.R",
+            args=[str(input_h5ad), str(output_dir), method, batch_key, "2000", "30"],
+            expected_outputs=expected,
+            output_dir=output_dir,
+        )
+        embedding = pd.read_csv(output_dir / "embedding.csv", index_col=0)
+        obs_df = pd.read_csv(output_dir / "obs.csv", index_col=0)
+        obs_df.index = obs_df.index.astype(str)
+        ordered = [cell for cell in adata.obs_names if str(cell) in obs_df.index and str(cell) in embedding.index.astype(str)]
+        if not ordered:
+            raise RuntimeError(f"R integration method '{method}' returned no overlapping cells")
+        embedding.index = embedding.index.astype(str)
+        adata = adata[ordered].copy()
+        adata.obs = adata.obs.join(obs_df, how="left", rsuffix="_r")
+        key = f"X_{method}"
+        adata.obsm[key] = embedding.loc[ordered].to_numpy(dtype=float)
+        if method != "fastmnn":
+            umap_df = pd.read_csv(output_dir / "umap.csv", index_col=0)
+            umap_df.index = umap_df.index.astype(str)
+            adata.obsm["X_umap"] = umap_df.loc[ordered].to_numpy(dtype=float)
+        else:
+            sc.pp.neighbors(adata, use_rep=key)
+            sc.tl.umap(adata)
+        sc.pp.neighbors(adata, use_rep=key)
+        return adata, {"method": method, "embedding_key": key, "n_batches": int(adata.obs[batch_key].nunique())}
 
 
 _METHOD_DISPATCH = {
@@ -547,6 +670,10 @@ def write_reproducibility(output_dir: Path, params: dict, *, demo_mode: bool = F
     for key, value in params.items():
         command += f" --{key.replace('_', '-')} {shlex.quote(str(value))}"
     (repro_dir / "commands.sh").write_text(f"#!/bin/bash\n{command}\n", encoding="utf-8")
+    _write_repro_requirements(
+        repro_dir,
+        ["scanpy", "anndata", "numpy", "pandas", "matplotlib", "seaborn"],
+    )
 
 
 def main():
@@ -564,15 +691,12 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if args.demo:
-        demo_path = _PROJECT_ROOT / "examples" / "pbmc3k.h5ad"
-        if demo_path.exists():
-            adata = sc.read_h5ad(demo_path)
-        else:
-            logger.warning("Local demo data not found, downloading from scanpy")
-            adata = sc.datasets.pbmc3k()
+        adata, _ = sc_io.load_repo_demo_data("pbmc3k_raw")
+        adata.layers["counts"] = adata.X.copy()
         sc.pp.normalize_total(adata)
         sc.pp.log1p(adata)
-        sc.pp.highly_variable_genes(adata, n_top_genes=2000)
+        adata.raw = adata.copy()
+        sc.pp.highly_variable_genes(adata, n_top_genes=2000, layer="counts", flavor="seurat_v3")
         sc.pp.pca(adata)
         adata.obs[args.batch_key] = np.random.choice(["batch1", "batch2"], adata.n_obs)
         input_file = None
@@ -586,6 +710,7 @@ def main():
     method = validate_method_choice(args.method, METHOD_REGISTRY, fallback=DEFAULT_METHOD)
     cfg = METHOD_REGISTRY[method]
     check_data_requirements(adata, cfg)
+    sc_integration_utils.setup_for_integration(adata, batch_key=args.batch_key, inplace=True)
 
     kwargs = {"batch_key": args.batch_key}
     if cfg.supports_gpu:
@@ -599,7 +724,7 @@ def main():
         summary = _METHOD_DISPATCH[method](adata, **kwargs)
 
     summary["n_cells"] = int(adata.n_obs)
-    params = {"method": method, "batch_key": args.batch_key}
+    params = {"method": method, "batch_key": args.batch_key, "counts_layer": "counts" if "counts" in adata.layers else None, "raw_available": adata.raw is not None}
     if args.n_epochs is not None:
         params["n_epochs"] = args.n_epochs
 
@@ -629,6 +754,12 @@ def main():
         },
     }
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
+    result_payload = load_result_json(output_dir) or {
+        "skill": SKILL_NAME,
+        "summary": summary,
+        "data": result_data,
+    }
+    write_standard_run_artifacts(output_dir, result_payload, summary)
 
     print(f"Success: {SKILL_NAME}")
     print(f"  Output: {output_dir}")
