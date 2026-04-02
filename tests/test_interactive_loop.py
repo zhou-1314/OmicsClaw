@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from rich.console import Console
 
+from omicsclaw.core.registry import OmicsRegistry
 from omicsclaw.interactive import interactive
 from omicsclaw.interactive._session_command_support import (
     SessionCommandView,
@@ -91,6 +92,35 @@ async def test_stream_llm_response_uses_explicit_workspace_context(monkeypatch):
         {"role": "user", "content": "介绍你自己"},
         {"role": "assistant", "content": "I am OmicsClaw."},
     ]
+
+
+def test_init_llm_does_not_force_registry_load(monkeypatch):
+    calls: list[tuple[tuple, dict]] = []
+    real_load_all = OmicsRegistry.load_all
+
+    def spy(self, *args, **kwargs):
+        calls.append((args, kwargs))
+        return real_load_all(self, *args, **kwargs)
+
+    for name in (
+        "bot.core",
+        "omicsclaw.runtime.context_assembler",
+        "omicsclaw.runtime.context_layers",
+    ):
+        sys.modules.pop(name, None)
+
+    monkeypatch.setattr(OmicsRegistry, "load_all", spy)
+    monkeypatch.setenv("OMICSCLAW_MEMORY_ENABLED", "false")
+    monkeypatch.setenv("LLM_PROVIDER", "custom")
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    monkeypatch.setenv("OMICSCLAW_MODEL", "test-model")
+    monkeypatch.setenv("LLM_BASE_URL", "https://example.com/v1")
+
+    model, provider = interactive._init_llm({})
+
+    assert model == "test-model"
+    assert provider == "custom"
+    assert calls == []
 
 
 @pytest.mark.asyncio
