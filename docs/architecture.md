@@ -122,7 +122,7 @@ Important CLI entrypoints:
 - `oc tui`
 - `oc mcp list|add|remove|config`
 - `oc memory-server`
-- `oc onboard`
+- `oc onboard` for project `.env` bootstrap across LLM, runtime, memory, and bot-channel configuration
 
 ### Interactive CLI / TUI
 

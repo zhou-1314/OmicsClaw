@@ -51,10 +51,9 @@
 
 ## ✨ Features
 - **🧠 Persistent Memory** — Context, preferences, and analysis history survive across sessions.
-- **🤖 Multi-Agent Pipeline** — Advanced reasoning via planner, researcher, coder, and reviewer agents.
+- **🛠️ Extensibility (MCP & Skill Builder)** — Natively integrates Model Context Protocol (MCP) servers and features `omics-skill-builder` to automate custom analysis deployment.
 - **🌐 Multi-Provider** — Anthropic, OpenAI, DeepSeek, or local LLMs — one config to switch.
 - **📱 Multi-Channel** — CLI as the hub; Telegram, Feishu, and more — one agent session.
-- **🔌 MCP & Skills** — Plug in MCP servers or install skills from GitHub on the fly.
 - **🔄 Workflow Continuity** — Resume interrupted analyses, track lineage, and avoid redundant computation.
 - **🔒 Privacy-First** — All processing is local; memory stores metadata only (no raw data uploads).
 - **🎯 Smart Routing** — Natural language routed to the appropriate analysis automatically.
@@ -72,14 +71,78 @@
 
 > 📖 **Deep dive:** See [docs/MEMORY_SYSTEM.md](docs/MEMORY_SYSTEM.md) for detailed comparison of memory vs. stateless workflows.
 
+## 📦 Installation
+
+To prevent dependency conflicts, we strongly recommend installing OmicsClaw inside a virtual environment. You can use either the standard `venv` or the ultra-fast `uv`.
+
+<details open>
+<summary> 🪛 Setup Virtual Environment (Highly Recommended)</summary>
+
+**Option A: Using standard venv**
+```bash
+# 1. Create a virtual environment
+python3 -m venv .venv
+
+# 2. Activate it
+source .venv/bin/activate
+```
+
+**Option B: Using uv (Ultrafast)**
+```bash
+# 1. Install uv (if you don't have it)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2. Create and activate virtual environment
+uv venv
+source .venv/bin/activate
+```
+
+</details>
+
+```bash
+# Clone the repository
+git clone https://github.com/TianGzlab/OmicsClaw.git
+cd OmicsClaw
+
+# Install core system operations
+pip install -e .
+
+# Optional: Install Interactive TUI & Bot capabilities
+# Includes prompt-toolkit/Textual plus the LLM client stack used by interactive mode
+pip install -e ".[tui]"
+pip install -r bot/requirements.txt  # If you want messaging channels
+```
+
+**Advanced installation tiers:**
+- `pip install -e .` — Core system operations
+- `pip install -e ".[<domain>]"` — Where `<domain>` is `spatial`, `singlecell`, `genomics`, `proteomics`, `metabolomics`, or `bulkrna`
+- `pip install -e ".[spatial-domains]"` — Standalone Deep Learning Layer for `SpaGCN` and `STAGATE`
+- `pip install -e ".[full]"` — All domain extras and optional method backends across all domains
+
+*Check your installation status anytime with `python omicsclaw.py env`.*
+
 ## 🔑 Configuration
 
+**The Easiest Way (Interactive Setup):**
+OmicsClaw provides a built-in interactive wizard that walks through LLM setup, shared runtime settings, graph memory options, and messaging channel credentials in one flow.
+```bash
+omicsclaw onboard  # or use short alias: oc onboard
+```
+
+The wizard writes the project-root `.env` used by CLI, TUI, routing, and bot entrypoints.
+
+<div align="center">
+  <img src="docs/images/OmicsClaw_configure_fast.png" alt="OmicsClaw Interactive Setup Wizard" width="85%"/>
+</div>
+
 <details>
-<summary>View instructions for configuring DeepSeek, Anthropic, OpenAI, or Local LLMs</summary>
+<summary><b>Option B: Manual Configuration (.env)</b></summary>
 
-OmicsClaw supports switching between multiple LLM engines with a single config change. You can configure this interactively via `oc onboard` or by manually editing the `.env` file in the project root.
+OmicsClaw supports switching between multiple LLM engines with a single config change. It automatically loads the project-root `.env` file for CLI, TUI, routing, and bot entrypoints. If `python-dotenv` is not installed, it falls back to a built-in `.env` parser, so standard key/value configuration still works in lean installs.
 
-OmicsClaw automatically loads the project-root `.env` file for CLI, TUI, routing, and bot entrypoints. If `python-dotenv` is not installed, it falls back to a built-in `.env` parser, so standard key/value configuration still works in lean installs.
+For hosted providers, you can configure either:
+- `LLM_API_KEY`
+- a provider-specific key such as `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`
 
 **1. DeepSeek (Default):**
 ```env
@@ -114,50 +177,16 @@ LLM_API_KEY=sk-xxxxxxxxxxxxxxxx
 ```
 
 > 📖 **Full Provider List:** See `.env.example` for instructions on configuring other engines like NVIDIA NIM, OpenRouter, DashScope, and custom endpoints.
+>
+> 📖 **Bot / channel config:** See [bot/README.md](bot/README.md) and [bot/CHANNELS_SETUP.md](bot/CHANNELS_SETUP.md) for messaging channel credentials, allowlists, and runtime controls.
 
 </details>
 
 ## ⚡ Quick Start
 
-<details open>
-<summary> 🪛 Setup Virtual Environment (Highly Recommended)</summary>
-
-To prevent dependency conflicts, we strongly recommend installing OmicsClaw inside a virtual environment. You can use either the standard `venv` or the ultra-fast `uv`.
-
-**Option A: Using standard venv**
-```bash
-# 1. Create a virtual environment
-python3 -m venv .venv
-
-# 2. Activate it
-source .venv/bin/activate
-```
-
-**Option B: Using uv (Ultrafast)**
-```bash
-# 1. Install uv (if you don't have it)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 2. Create and activate virtual environment
-uv venv
-source .venv/bin/activate
-```
-
-</details>
-
-### Option 1: Chat Interface (Recommended)
+### 1. Chat Interface (Recommended)
 
 ```bash
-# Clone and setup
-git clone https://github.com/TianGzlab/OmicsClaw.git
-cd OmicsClaw
-# Includes prompt-toolkit/Textual plus the LLM client stack used by interactive mode
-pip install -e ".[tui]"
-pip install -r bot/requirements.txt  # If you want messaging channels
-
-# Configure (interactive setup wizard)
-omicsclaw onboard  # or use short alias: oc onboard
-# or manually edit .env
 
 # Start the Interactive Terminal Chat
 omicsclaw interactive  # or: omicsclaw chat
@@ -229,23 +258,12 @@ Bot: 🧠 "Using your Visium data from yesterday (5000 spots, normalized).
 ### Option 2: Command Line
 
 ```bash
-# Install
-pip install -e .
-
 # Try a demo (no data needed)
 python omicsclaw.py run spatial-preprocess --demo
 
 # Run with your data
 python omicsclaw.py run spatial-preprocess --input data.h5ad --output results/
 ```
-
-**Installation tiers:**
-- `pip install -e .` — Core system operations
-- `pip install -e ".[<domain>]"` — Where `<domain>` is `spatial`, `singlecell`, `genomics`, `proteomics`, `metabolomics`, or `bulkrna`
-- `pip install -e ".[spatial-domains]"` — Standalone Deep Learning Layer for `SpaGCN` and `STAGATE`
-- `pip install -e ".[full]"` — All domain extras and optional method backends across all domains
-
-*Check your installation status anytime with `python omicsclaw.py env`.*
 
 > 📚 **Documentation:** [INSTALLATION.md](docs/INSTALLATION.md) • [METHODS.md](docs/METHODS.md) • [MEMORY_SYSTEM.md](docs/MEMORY_SYSTEM.md)
 
@@ -278,6 +296,13 @@ The memory API now binds to `127.0.0.1:8766` by default. If you need to expose i
 - 🔬 **Project context** — Species, tissue type, disease model, research goals
 
 > 📖 **Full comparison:** [docs/MEMORY_SYSTEM.md](docs/MEMORY_SYSTEM.md) — Detailed scenarios, privacy model, technical architecture
+
+## 🔌 Extensibility: MCP & Skill Builder
+
+OmicsClaw is designed to be highly interoperable and extensible for advanced bioinformatics agentic workflows:
+
+- **Model Context Protocol (MCP)**: Safely plug any standard MCP server directly into OmicsClaw. This allows you to give the assistant instant access to external APIs, academic databases, custom execution environments, or enterprise data warehouses on the fly. Manage MCP servers via the in-session `/mcp` command.
+- **`omics-skill-builder`**: Found within `skills/orchestrator/`, this is a built-in capabilities multiplier. Instead of writing boilerplate code, `omics-skill-builder` automates the generation of reusable OmicsClaw skill scaffolds (including Python wrappers, SKILL.md definition files, and registries) directly from your conversational intent or Python snippets.
 
 ## Supported Domains
 

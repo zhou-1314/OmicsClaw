@@ -846,7 +846,7 @@ class OmicsClawParser(argparse.ArgumentParser):
         print(f"  {GREEN}doctor        {RESET}  Run environment and runtime diagnostics", file=file)
         print(f"  {GREEN}memory-server {RESET}  Start the graph memory REST API server", file=file)
         print(f"  {GREEN}env           {RESET}  Check installed Python dependencies and system tiers", file=file)
-        print(f"  {GREEN}onboard       {RESET}  Interactive setup wizard to configure API keys", file=file)
+        print(f"  {GREEN}onboard       {RESET}  Interactive setup wizard for LLM, runtime, memory, and channels", file=file)
         print(f"  {GREEN}upload        {RESET}  Upload/initialize session from existing .h5ad data", file=file)
 
         print(f"\n{BOLD}{MAGENTA}⚙  Global Options{RESET}", file=file)
@@ -885,7 +885,7 @@ def main():
     upload_p.add_argument("--species", default="human")
 
     # onboard
-    onboard_p = sub.add_parser("onboard", help="Run interactive setup wizard to configure API keys and channels")
+    onboard_p = sub.add_parser("onboard", help="Run interactive setup wizard for LLM, runtime, memory, and channel configuration")
 
     # interactive / chat
     interactive_p = sub.add_parser("interactive", aliases=["chat"], help="Start interactive terminal chat with LLM and skills")
