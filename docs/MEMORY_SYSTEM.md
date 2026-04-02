@@ -140,7 +140,8 @@ oc memory-server
 # or: make memory-server
 ```
 
-By default the API listens on port `8766`.
+By default the API listens on `127.0.0.1:8766`.
+If you want to bind it to a non-local interface, you must also set `OMICSCLAW_MEMORY_API_TOKEN`.
 
 ### 2. Start the frontend dashboard
 
@@ -180,7 +181,10 @@ Common environment variables:
 - `OMICSCLAW_MEMORY_DB_URL`
   - database URL, for example `sqlite+aiosqlite:///bot/data/memory.db`
 - `OMICSCLAW_MEMORY_API_TOKEN`
-  - optional bearer token for the REST API
+  - bearer token for the REST API when exposing it beyond localhost
+  - also protects `/docs` and `/openapi.json` when enabled
+- `OMICSCLAW_MEMORY_HOST`
+  - optional bind host, default `127.0.0.1`
 - `OMICSCLAW_MEMORY_PORT`
   - optional API port override
 

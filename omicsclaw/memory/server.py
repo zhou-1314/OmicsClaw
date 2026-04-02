@@ -8,6 +8,7 @@ Start with: python -m omicsclaw.memory.server
 Requires: pip install fastapi uvicorn
 """
 
+import ipaddress
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -21,6 +22,33 @@ try:
     _HAS_FASTAPI = True
 except ImportError:
     _HAS_FASTAPI = False
+
+
+DEFAULT_MEMORY_API_HOST = "127.0.0.1"
+DEFAULT_MEMORY_API_PORT = 8766
+
+
+def _is_local_bind_host(host: str) -> bool:
+    value = str(host or "").strip()
+    if not value:
+        return True
+    if value.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
+def _validate_server_security(host: str, api_token: str) -> None:
+    if _is_local_bind_host(host):
+        return
+    if str(api_token or "").strip():
+        return
+    raise SystemExit(
+        "Refusing to expose the memory API on a non-local interface without "
+        "OMICSCLAW_MEMORY_API_TOKEN. Bind to 127.0.0.1/localhost or set a bearer token."
+    )
 
 
 def _build_app():
@@ -65,7 +93,7 @@ def _build_app():
     async def auth_middleware(request: Request, call_next):
         if not _api_token:
             return await call_next(request)
-        if request.url.path in ("/health", "/docs", "/openapi.json", "/redoc"):
+        if request.url.path == "/health":
             return await call_next(request)
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
@@ -122,11 +150,16 @@ def main():
 
     import uvicorn
 
-    host = os.getenv("OMICSCLAW_MEMORY_HOST", "0.0.0.0")
-    port = int(os.getenv("OMICSCLAW_MEMORY_PORT", "8766"))
+    host = os.getenv("OMICSCLAW_MEMORY_HOST", DEFAULT_MEMORY_API_HOST)
+    port = int(os.getenv("OMICSCLAW_MEMORY_PORT", str(DEFAULT_MEMORY_API_PORT)))
+    api_token = os.getenv("OMICSCLAW_MEMORY_API_TOKEN", "")
+    _validate_server_security(host, api_token)
 
     print(f"OmicsClaw Memory API starting on http://{host}:{port}")
-    print(f"API docs: http://{host}:{port}/docs")
+    if api_token:
+        print("API docs/OpenAPI are protected by the configured bearer token.")
+    else:
+        print(f"API docs: http://{host}:{port}/docs")
 
     uvicorn.run(
         "omicsclaw.memory.server:app",

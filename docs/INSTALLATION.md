@@ -218,6 +218,8 @@ If you installed memory support:
 oc memory-server
 ```
 
+By default this binds to `127.0.0.1:8766`. If you bind the memory API to a non-local interface, you must also set `OMICSCLAW_MEMORY_API_TOKEN`.
+
 ## Interactive and Workspace Features
 
 After installing `.[interactive]`, you can use:

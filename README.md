@@ -268,6 +268,8 @@ oc memory-server
 cd frontend && npm install && npm run dev
 ```
 
+The memory API now binds to `127.0.0.1:8766` by default. If you need to expose it beyond localhost, set both `OMICSCLAW_MEMORY_HOST` and `OMICSCLAW_MEMORY_API_TOKEN`.
+
 **What it remembers:**
 - 📁 **Datasets** — File paths, platforms (Visium/Xenium), dimensions, preprocessing state
 - 📊 **Analyses** — Methods used, parameters, execution time, lineage (parent → child)

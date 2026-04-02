@@ -177,10 +177,12 @@ pip install fastapi uvicorn
 oc memory-server
 ```
 
+The memory API binds to `127.0.0.1:8766` by default. If you bind it to a non-local interface, set `OMICSCLAW_MEMORY_API_TOKEN` as well.
+
 ### Configuration (Environment Variables)
 
 - `OMICSCLAW_MEMORY_DB_URL`: SQLAlchemy connection URL (`sqlite+aiosqlite:///bot/data/memory.db`)
-- `OMICSCLAW_MEMORY_API_TOKEN`: Optional Bearer token for the API.
+- `OMICSCLAW_MEMORY_API_TOKEN`: Bearer token required when exposing the API beyond localhost.
 
 ## Bot Integration
 

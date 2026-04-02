@@ -939,7 +939,7 @@ def main():
 
     # memory-server — start graph memory REST API
     mem_p = sub.add_parser("memory-server", help="Start the graph memory REST API server")
-    mem_p.add_argument("--host", default=None, help="Host to bind (default: 0.0.0.0)")
+    mem_p.add_argument("--host", default=None, help="Host to bind (default: 127.0.0.1)")
     mem_p.add_argument("--port", type=int, default=None, help="Port to bind (default: 8766)")
 
     doctor_p = sub.add_parser("doctor", help="Run environment and runtime diagnostics")
