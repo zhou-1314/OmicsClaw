@@ -26,6 +26,11 @@ from pathlib import Path
 from openai import AsyncOpenAI, APIError
 
 from omicsclaw.common.runtime_env import load_project_dotenv
+from omicsclaw.core.llm_timeout import (
+    DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+    DEFAULT_LLM_TIMEOUT_SECONDS,
+    build_llm_timeout_policy,
+)
 from omicsclaw.core.provider_registry import (
     PROVIDER_DETECT_ORDER,
     PROVIDER_PRESETS,
@@ -598,6 +603,7 @@ def init(
     kw: dict = {"api_key": resolved_key or api_key}
     if resolved_url:
         kw["base_url"] = resolved_url
+    kw["timeout"] = _build_llm_timeout()
     llm = AsyncOpenAI(**kw)
 
     logger.info(
@@ -657,6 +663,11 @@ def _build_bot_tool_context() -> BotToolContext:
 
 def get_tool_registry():
     return build_bot_tool_registry(_build_bot_tool_context())
+
+
+def _build_llm_timeout():
+    """Build the shared timeout policy for the AsyncOpenAI client."""
+    return build_llm_timeout_policy(log=logger).as_httpx_timeout()
 
 # ---------------------------------------------------------------------------
 # Security helpers

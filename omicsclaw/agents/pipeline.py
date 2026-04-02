@@ -36,6 +36,7 @@ from omicsclaw.agents.pipeline_result import (
     PipelineRunResult,
     PlanRunResult,
 )
+from omicsclaw.core.llm_timeout import build_llm_timeout_policy
 from omicsclaw.runtime.task_store import (
     TASK_STATUS_COMPLETED,
     TASK_STATUS_FAILED,
@@ -811,6 +812,9 @@ class ResearchPipeline:
         )
         # Unified API key: provider-specific env → LLM_API_KEY fallback
         api_key = os.getenv("LLM_API_KEY", "")
+        timeout_policy = build_llm_timeout_policy(log=logger)
+        openai_timeout = timeout_policy.as_httpx_timeout()
+        anthropic_timeout = timeout_policy.as_anthropic_timeout()
 
         from langchain_openai import ChatOpenAI
         from langchain_core.messages import BaseMessage
@@ -852,12 +856,14 @@ class ResearchPipeline:
                     "DEEPSEEK_BASE_URL",
                     "https://api.deepseek.com/v1",
                 ),
+                timeout=openai_timeout,
                 temperature=0.3,
             )
         elif provider in ("openai", ""):
             return SafeChatOpenAI(
                 model=model or "gpt-4o",
                 openai_api_key=os.getenv("OPENAI_API_KEY") or api_key or None,
+                timeout=openai_timeout,
                 temperature=0.3,
             )
         elif provider == "anthropic":
@@ -865,6 +871,7 @@ class ResearchPipeline:
             return ChatAnthropic(
                 model=model or "claude-sonnet-4-20250514",
                 anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or api_key or None,
+                timeout=anthropic_timeout,
                 temperature=0.3,
             )
         else:
@@ -873,6 +880,7 @@ class ResearchPipeline:
                 model=model or "gpt-4o",
                 openai_api_key=api_key or None,
                 openai_api_base=os.getenv("LLM_BASE_URL"),
+                timeout=openai_timeout,
                 temperature=0.3,
             )
 

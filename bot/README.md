@@ -186,6 +186,8 @@ cp .env.example .env
 | `LLM_API_KEY` | API key (generic) — *optional if provider-specific key is set* | All |
 | `LLM_BASE_URL` | Override endpoint URL (optional, auto-set by provider) | All |
 | `OMICSCLAW_MODEL` | Override model name (optional, auto-set by provider) | All |
+| `OMICSCLAW_LLM_TIMEOUT_SECONDS` | Total timeout for shared LLM requests in seconds (default: `120`) | All |
+| `OMICSCLAW_LLM_CONNECT_TIMEOUT_SECONDS` | Connection timeout for shared LLM requests in seconds (default: `10`) | All |
 | `TELEGRAM_BOT_TOKEN` | From @BotFather on Telegram | Telegram |
 | `TELEGRAM_CHAT_ID` | Admin chat ID (optional) | Telegram |
 | `FEISHU_APP_ID` | From Feishu developer console | Feishu |
@@ -212,6 +214,8 @@ cp .env.example .env
 | `IMESSAGE_CLI_PATH` | Path to `imsg` CLI binary (macOS only) | iMessage |
 | `IMESSAGE_ALLOWED_SENDERS` | Comma-separated allow-list (phones/emails) | iMessage |
 | `RATE_LIMIT_PER_HOUR` | Max messages/user/hour (default: 10) | All |
+
+`bot/core.py` applies these timeout settings to the shared `AsyncOpenAI` client. This prevents a stalled upstream provider from hanging the full conversation path indefinitely.
 
 ### LLM Provider Quick Start
 
