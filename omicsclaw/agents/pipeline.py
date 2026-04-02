@@ -36,6 +36,10 @@ from omicsclaw.agents.pipeline_result import (
     PipelineRunResult,
     PlanRunResult,
 )
+from omicsclaw.core.provider_registry import (
+    detect_provider_from_env,
+    resolve_provider,
+)
 from omicsclaw.core.llm_timeout import build_llm_timeout_policy
 from omicsclaw.runtime.task_store import (
     TASK_STATUS_COMPLETED,
@@ -787,7 +791,8 @@ class ResearchPipeline:
 
         Global:
             3. ``LLM_PROVIDER`` / ``OMICSCLAW_MODEL``
-            4. Provider-specific default
+            4. Auto-detect from provider-specific API key env vars
+            5. Provider-specific default
         """
         # --- per-agent env vars ---
         agent_provider = None
@@ -798,20 +803,27 @@ class ResearchPipeline:
             agent_provider = os.getenv(f"OC_{tag}_PROVIDER")
             agent_model = os.getenv(f"OC_{tag}_MODEL")
 
-        provider = (
+        requested_provider = (
             agent_provider
             or self.provider
             or os.getenv("OC_LLM_PROVIDER")
-            or os.getenv("LLM_PROVIDER", "deepseek")
+            or os.getenv("LLM_PROVIDER", "")
         )
-        model = (
+        requested_model = (
             agent_model
             or self.model
             or os.getenv("OC_LLM_MODEL")
             or os.getenv("OMICSCLAW_MODEL")
         )
-        # Unified API key: provider-specific env → LLM_API_KEY fallback
-        api_key = os.getenv("LLM_API_KEY", "")
+        provider = str(requested_provider or "").strip().lower()
+        if not provider:
+            provider = detect_provider_from_env() or "deepseek"
+
+        resolved_url, resolved_model, resolved_key = resolve_provider(
+            provider=provider,
+            base_url=str(os.getenv("LLM_BASE_URL", "") or ""),
+            model=requested_model or "",
+        )
         timeout_policy = build_llm_timeout_policy(log=logger)
         openai_timeout = timeout_policy.as_httpx_timeout()
         anthropic_timeout = timeout_policy.as_anthropic_timeout()
@@ -848,41 +860,27 @@ class ResearchPipeline:
             async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
                 return await super()._agenerate(self._sanitize(messages), stop=stop, run_manager=run_manager, **kwargs)
 
-        if provider == "deepseek":
-            return SafeChatOpenAI(
-                model=model or "deepseek-chat",
-                openai_api_key=os.getenv("DEEPSEEK_API_KEY") or api_key,
-                openai_api_base=os.getenv(
-                    "DEEPSEEK_BASE_URL",
-                    "https://api.deepseek.com/v1",
-                ),
-                timeout=openai_timeout,
-                temperature=0.3,
-            )
-        elif provider in ("openai", ""):
-            return SafeChatOpenAI(
-                model=model or "gpt-4o",
-                openai_api_key=os.getenv("OPENAI_API_KEY") or api_key or None,
-                timeout=openai_timeout,
-                temperature=0.3,
-            )
-        elif provider == "anthropic":
+        if provider == "anthropic":
             from langchain_anthropic import ChatAnthropic
-            return ChatAnthropic(
-                model=model or "claude-sonnet-4-20250514",
-                anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or api_key or None,
-                timeout=anthropic_timeout,
-                temperature=0.3,
-            )
-        else:
-            # Generic OpenAI-compatible
-            return SafeChatOpenAI(
-                model=model or "gpt-4o",
-                openai_api_key=api_key or None,
-                openai_api_base=os.getenv("LLM_BASE_URL"),
-                timeout=openai_timeout,
-                temperature=0.3,
-            )
+            anthropic_kwargs: dict[str, Any] = {
+                "model": resolved_model,
+                "anthropic_api_key": resolved_key or None,
+                "timeout": anthropic_timeout,
+                "temperature": 0.3,
+            }
+            if resolved_url:
+                anthropic_kwargs["anthropic_api_url"] = resolved_url
+            return ChatAnthropic(**anthropic_kwargs)
+
+        openai_kwargs: dict[str, Any] = {
+            "model": resolved_model,
+            "openai_api_key": resolved_key or None,
+            "timeout": openai_timeout,
+            "temperature": 0.3,
+        }
+        if resolved_url:
+            openai_kwargs["openai_api_base"] = resolved_url
+        return SafeChatOpenAI(**openai_kwargs)
 
     def _build_agent(self):
         """Build the deepagents agent with OmicsClaw sub-agents.

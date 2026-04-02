@@ -5,6 +5,7 @@ import pytest
 
 import bot.core as core
 from omicsclaw.agents.pipeline import ResearchPipeline
+from omicsclaw.core.provider_registry import PROVIDER_PRESETS
 
 
 def test_build_llm_timeout_uses_defaults(monkeypatch):
@@ -80,7 +81,7 @@ def test_pipeline_openai_path_receives_shared_timeout(monkeypatch):
     assert isinstance(captured["timeout"], httpx.Timeout)
     assert captured["timeout"].connect == 4.0
     assert captured["timeout"].read == 25.0
-    assert captured["openai_api_base"] == "https://api.deepseek.com/v1"
+    assert captured["openai_api_base"] == PROVIDER_PRESETS["deepseek"][0]
 
 
 def test_pipeline_anthropic_path_receives_total_timeout(monkeypatch):
