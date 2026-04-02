@@ -142,6 +142,71 @@ Operational guardrails:
 """.strip()
 
 
+def get_execution_discipline(
+    *,
+    surface: str = "bot",
+    workspace: str = "",
+    pipeline_workspace: str = "",
+    plan_context_present: bool = False,
+) -> str:
+    normalized_surface = str(surface or "bot").strip().lower() or "bot"
+    workspace_present = bool(
+        _normalize_path_text(workspace) or _normalize_path_text(pipeline_workspace)
+    )
+
+    sections = [
+        """
+Execution discipline:
+1. Scope Control
+   - Fulfil the user's stated request first.
+   - Do not add extra analyses, exports, files, refactors, or follow-on steps unless the user asks.
+   - For exploratory questions, inspect or explain first; do not trigger expensive runs by default.
+
+2. Existing-First Work
+   - Read relevant files, plans, current outputs, and exact errors before changing code or rerunning analysis.
+   - Prefer existing OmicsClaw skills, workspace artifacts, and built-in utilities over ad hoc scripts or new abstractions.
+   - In workspace-oriented tasks, use `tool_search`, `file_read`, `glob_files`, and `grep_files` to inspect before `file_edit` or `file_write`.
+
+3. Minimal Changes
+   - Choose the smallest clear change that solves the present task.
+   - Do not introduce speculative abstractions, future-proof frameworks, or broad cleanups without a concrete need.
+   - Avoid new files, notebooks, helper scripts, and fallback branches unless they are required for the requested outcome.
+
+4. Failure Diagnosis
+   - If a step fails, inspect the exact error, inputs, and surrounding context before retrying.
+   - Do not loop the same failing action with unchanged inputs.
+   - Do not silently switch methods, references, parameters, or datasets after a failure.
+
+5. Reporting Integrity
+   - Report exactly what you inspected, executed, changed, and verified.
+   - Never claim a test, command, file, figure, or output exists unless you directly observed it.
+   - Do not give time estimates; when relevant, describe relative cost or note that a step may be long-running.
+""".strip()
+    ]
+
+    if normalized_surface == "bot":
+        sections.append(
+            """
+6. Chat Mode Discipline
+   - If the user only needs explanation, interpretation, or translation, answer directly instead of calling tools.
+   - Do not create saved artifacts unless the user explicitly asks for a file, export, or workspace change.
+""".strip()
+        )
+
+    if normalized_surface in {"interactive", "pipeline"} or workspace_present or plan_context_present:
+        sections.append(
+            """
+7. Workspace Continuity
+   - Treat the active workspace or pipeline workspace as the source of truth for `plan.md`, `todos.md`, reports, and run artifacts.
+   - Before rerunning a stage or editing outputs, check whether the relevant artifact already exists and whether the user asked to refresh it.
+   - Use `todo_write` and task tools only when the work is genuinely multi-step; do not create busywork task lists.
+   - Keep writes inside the active workspace or the declared `output/` contract; do not scatter temporary files across the repo.
+""".strip()
+        )
+
+    return "\n\n".join(section for section in sections if section).strip()
+
+
 def get_skill_contract(*, capability_context_present: bool = False) -> str:
     capability_rule = (
         "- A `## Deterministic Capability Assessment` block is already present below. "
@@ -436,6 +501,7 @@ class ContextAssemblyRequest:
     mcp_servers: tuple[str, ...] = ()
     soul_md: Path = DEFAULT_SOUL_MD
     include_role_guardrails: bool = True
+    include_execution_discipline: bool = True
     include_skill_contract: bool = True
     include_knowhow: bool | None = None
     include_knowledge_guidance: bool | None = None
@@ -444,6 +510,7 @@ class ContextAssemblyRequest:
     transcript_context_placement: str = "message"
     base_persona_loader: Callable[[Path], str] | None = None
     role_guardrails_builder: Callable[..., str] | None = None
+    execution_discipline_builder: Callable[..., str] | None = None
     skill_contract_builder: Callable[..., str] | None = None
     knowhow_loader: KnowhowLoader | None = None
     knowledge_loader: Callable[..., str] | None = None
@@ -519,6 +586,18 @@ def _build_role_guardrails_layer(request: ContextAssemblyRequest) -> str | None:
         return None
     builder = request.role_guardrails_builder or get_role_guardrails
     return builder(capability_context_present=bool(request.capability_context)).strip()
+
+
+def _build_execution_discipline_layer(request: ContextAssemblyRequest) -> str | None:
+    if not request.include_execution_discipline:
+        return None
+    builder = request.execution_discipline_builder or get_execution_discipline
+    return builder(
+        surface=request.surface,
+        workspace=request.workspace,
+        pipeline_workspace=request.pipeline_workspace,
+        plan_context_present=bool(request.plan_context),
+    ).strip()
 
 
 def _build_skill_contract_layer(request: ContextAssemblyRequest) -> str | None:
@@ -682,6 +761,13 @@ DEFAULT_CONTEXT_LAYER_INJECTORS = (
         builder=_build_role_guardrails_layer,
     ),
     ContextLayerInjector(
+        name="execution_discipline",
+        order=25,
+        placement="system",
+        surfaces=("bot", "interactive", "pipeline"),
+        builder=_build_execution_discipline_layer,
+    ),
+    ContextLayerInjector(
         name="skill_contract",
         order=30,
         placement="system",
@@ -787,6 +873,7 @@ __all__ = [
     "build_transcript_context_block",
     "build_workspace_context_block",
     "get_default_context_injectors",
+    "get_execution_discipline",
     "get_role_guardrails",
     "get_skill_contract",
     "load_base_persona",

@@ -4,7 +4,10 @@ import asyncio
 import json
 
 from omicsclaw.extensions import write_extension_state, write_install_record
-from omicsclaw.runtime.context_layers import should_prefetch_knowledge_guidance
+from omicsclaw.runtime.context_layers import (
+    get_execution_discipline,
+    should_prefetch_knowledge_guidance,
+)
 from omicsclaw.runtime.context_assembler import (
     ContextAssemblyRequest,
     assemble_chat_context,
@@ -71,6 +74,7 @@ def test_assemble_prompt_context_layers_are_ordered_and_accounted():
         "base_persona",
         "output_format",
         "role_guardrails",
+        "execution_discipline",
         "skill_contract",
         "memory_context",
         "capability_assessment",
@@ -86,6 +90,7 @@ def test_assemble_prompt_context_layers_are_ordered_and_accounted():
     assert "## Output Style Profile" in assembly.system_prompt
     assert "preferred language: Chinese" in assembly.system_prompt
     assert "seq-think" in assembly.system_prompt
+    assert "Execution discipline:" in assembly.system_prompt
     assert assembly.message_context == ""
 
 
@@ -109,6 +114,38 @@ def test_assemble_prompt_context_can_route_workspace_to_message_context():
     assert assembly.message_context.startswith("## Workspace Context")
     assert "/tmp/session" in assembly.message_context
     assert assembly.layer_stats["workspace_context"]["placement"] == "message"
+
+
+def test_get_execution_discipline_adapts_to_surface_and_workspace():
+    bot_rules = get_execution_discipline(surface="bot")
+    interactive_rules = get_execution_discipline(
+        surface="interactive",
+        workspace="/tmp/session",
+        pipeline_workspace="/tmp/pipeline",
+        plan_context_present=True,
+    )
+
+    assert "Chat Mode Discipline" in bot_rules
+    assert "Workspace Continuity" not in bot_rules
+    assert "Workspace Continuity" in interactive_rules
+    assert "`plan.md`" in interactive_rules
+    assert "`tool_search`" in interactive_rules
+
+
+def test_assemble_prompt_context_can_disable_execution_discipline():
+    assembly = assemble_prompt_context(
+        request=ContextAssemblyRequest(
+            surface="interactive",
+            base_persona="BASE PERSONA",
+            include_execution_discipline=False,
+            include_role_guardrails=False,
+            include_skill_contract=False,
+            include_knowhow=False,
+        )
+    )
+
+    assert "execution_discipline" not in assembly.layer_stats
+    assert "Execution discipline:" not in assembly.system_prompt
 
 
 def test_assemble_chat_context_loads_memory_and_builds_prompt():

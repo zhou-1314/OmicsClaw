@@ -24,6 +24,7 @@ from .context_layers import (
     ContextLayer,
     ContextLayerInjector,
     get_default_context_injectors,
+    get_execution_discipline,
     get_skill_contract,
     load_base_persona,
 )
@@ -310,6 +311,7 @@ __all__ = [
     "format_policy_block_message",
     "get_builtin_output_style_profiles",
     "get_default_context_injectors",
+    "get_execution_discipline",
     "get_output_style_profiles",
     "get_role_guardrails",
     "get_skill_contract",
