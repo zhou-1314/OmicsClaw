@@ -58,7 +58,7 @@ MAX_PHOTO_BYTES = 20 * 1024 * 1024
 if str(OMICSCLAW_DIR) not in sys.path:
     sys.path.insert(0, str(OMICSCLAW_DIR))
 from omicsclaw.common.report import build_output_dir_name
-from omicsclaw.core.registry import registry
+from omicsclaw.core.registry import ensure_registry_loaded, registry
 from omicsclaw.runtime.bot_tools import BotToolContext, build_bot_tool_registry
 from omicsclaw.runtime.context_assembler import assemble_chat_context as _assemble_chat_context
 from omicsclaw.runtime.engineering_tools import build_engineering_tool_executors
@@ -84,7 +84,6 @@ from omicsclaw.runtime.transcript_store import (
 )
 from omicsclaw.runtime.tool_spec import PROGRESS_POLICY_ANALYSIS
 from omicsclaw.runtime.verification import format_completion_mapping_summary
-registry.load_all()
 
 OMICS_EXTENSIONS = {
     f".{ext.lstrip('.')}"
@@ -100,6 +99,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("omicsclaw.bot")
 
+
+def _skill_registry():
+    return ensure_registry_loaded()
+
 # ---------------------------------------------------------------------------
 # Skills table formatter (for /skills command in bot)
 # ---------------------------------------------------------------------------
@@ -112,19 +115,21 @@ def format_skills_table(plain: bool = False) -> str:
         plain: If True, use ASCII markers instead of emoji (for platforms
                like Feishu where emoji gets stripped by strip_markup).
     """
+    skill_registry = _skill_registry()
+
     # Group skills by domain
     domain_skills: dict[str, list[tuple[str, dict]]] = {}
-    for alias, info in registry.skills.items():
+    for alias, info in skill_registry.skills.items():
         d = info.get("domain", "other")
         domain_skills.setdefault(d, []).append((alias, info))
 
-    total = len(registry.skills)
+    total = len(skill_registry.skills)
     if plain:
         lines = [f"OmicsClaw Skills ({total} total)", "=" * 40, ""]
     else:
         lines = [f"🔬 OmicsClaw Skills ({total} total)", ""]
 
-    for domain_key, domain_info in registry.domains.items():
+    for domain_key, domain_info in skill_registry.domains.items():
         skills_in_domain = domain_skills.get(domain_key, [])
         if not skills_in_domain:
             continue
@@ -155,8 +160,12 @@ def format_skills_table(plain: bool = False) -> str:
         lines.append("")
 
     # Dynamically discovered skills not in known domains
-    known = set(registry.domains.keys())
-    extra = [(a, i) for a, i in registry.skills.items() if i.get("domain", "other") not in known]
+    known = set(skill_registry.domains.keys())
+    extra = [
+        (a, i)
+        for a, i in skill_registry.skills.items()
+        if i.get("domain", "other") not in known
+    ]
     if extra:
         if plain:
             lines.append("[Other] (Dynamically Discovered)")
@@ -185,9 +194,10 @@ def format_skills_table(plain: bool = False) -> str:
 
 def _iter_primary_skill_entries() -> list[tuple[str, dict]]:
     """Return canonical skill entries only, excluding alias pointers."""
+    skill_registry = _skill_registry()
     items = [
         (alias, info)
-        for alias, info in registry.skills.items()
+        for alias, info in skill_registry.skills.items()
         if alias == info.get("alias", alias)
     ]
     items.sort(key=lambda pair: (str(pair[1].get("domain", "")), pair[0]))
@@ -646,11 +656,11 @@ def _ensure_system_prompt():
 # ---------------------------------------------------------------------------
 
 def get_tools() -> list[dict]:
-    return get_tool_registry().to_openai_tools()
+    return list(get_tool_runtime().openai_tools)
 
 
 def _build_bot_tool_context() -> BotToolContext:
-    skill_names = tuple(list(registry.skills.keys()) + ["auto"])
+    skill_names = tuple(list(_skill_registry().skills.keys()) + ["auto"])
     skill_descriptions = [
         f"{alias} ({info.get('description', alias)})"
         for alias, info in _iter_primary_skill_entries()
@@ -824,20 +834,19 @@ DEEP_LEARNING_METHODS = {
 }
 
 def _lookup_skill_info(skill_key: str, force_reload: bool = False) -> dict:
-    from omicsclaw.core.registry import registry
-
+    skill_registry = registry
     if force_reload:
-        registry._loaded = False
-        registry.skills.clear()
-        registry.lazy_skills.clear()
-    registry.load_all()
+        skill_registry._loaded = False
+        skill_registry.skills.clear()
+        skill_registry.lazy_skills.clear()
+    skill_registry.load_all()
 
-    info = registry.skills.get(skill_key)
+    info = skill_registry.skills.get(skill_key)
     if info:
         return info
 
     # Fallback: find by canonical alias stored in metadata.
-    for _k, meta in registry.skills.items():
+    for _k, meta in skill_registry.skills.items():
         if meta.get("alias") == skill_key:
             return meta
     return {}
@@ -880,11 +889,10 @@ def _infer_skill_for_method(method: str, preferred_domain: str = "") -> str:
     if not method_lower:
         return ""
     try:
-        from omicsclaw.core.registry import registry
-        registry.load_all()
+        skill_registry = _skill_registry()
 
         candidates: list[str] = []
-        for alias, info in registry.skills.items():
+        for alias, info in skill_registry.skills.items():
             # Only keep canonical aliases (skip legacy alias duplicates).
             if alias != info.get("alias", alias):
                 continue
@@ -1376,8 +1384,7 @@ async def execute_omicsclaw(args: dict, session_id: str = None, chat_id: int | s
         # Determine domain from skill registry
         _skill_domain = "general"
         try:
-            from omicsclaw.core.registry import registry
-            skill_info = registry.skills.get(skill_key, {})
+            skill_info = _lookup_skill_info(skill_key)
             _skill_domain = skill_info.get("domain", "general")
         except Exception:
             pass
@@ -2531,13 +2538,28 @@ def _build_tool_runtime():
     return get_tool_registry().build_runtime(_available_tool_executors())
 
 
+_TOOL_RUNTIME_CACHE = None
+
+
+def get_tool_runtime():
+    global _TOOL_RUNTIME_CACHE
+    if _TOOL_RUNTIME_CACHE is None:
+        _TOOL_RUNTIME_CACHE = _build_tool_runtime()
+    return _TOOL_RUNTIME_CACHE
+
+
 def get_tool_executors() -> dict[str, object]:
-    return _build_tool_runtime().executors
+    return dict(get_tool_runtime().executors)
 
 
-TOOL_RUNTIME = _build_tool_runtime()
-TOOLS = list(TOOL_RUNTIME.openai_tools)
-TOOL_EXECUTORS = dict(TOOL_RUNTIME.executors)
+def __getattr__(name: str):
+    if name == "TOOL_RUNTIME":
+        return get_tool_runtime()
+    if name == "TOOLS":
+        return get_tools()
+    if name == "TOOL_EXECUTORS":
+        return get_tool_executors()
+    raise AttributeError(name)
 
 MAX_TOOL_ITERATIONS = int(os.getenv("OMICSCLAW_MAX_TOOL_ITERATIONS", "20"))  # Increased from 10, configurable
 
@@ -2917,7 +2939,7 @@ For more info: https://github.com/TianGzlab/OmicsClaw"""
         platform=platform,
         session_manager=session_manager,
         system_prompt_builder=build_system_prompt,
-        skill_aliases=tuple(registry.skills.keys()),
+        skill_aliases=tuple(_skill_registry().skills.keys()),
         plan_context=plan_context,
         transcript_context=transcript_context,
         omicsclaw_dir=str(OMICSCLAW_DIR),

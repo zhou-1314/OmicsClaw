@@ -95,6 +95,7 @@ jobs:
       - name: Run bot core tests
         run: |
           python -m pytest \
+            tests/test_bot_core_import_behavior.py \
             tests/test_bot_completion_messages.py \
             tests/test_channels.py \
             -v

@@ -8,9 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from omicsclaw.core.registry import registry
-
-registry.load_all()
+from omicsclaw.core.registry import ensure_registry_loaded, registry
 
 LOGGER = logging.getLogger("omicsclaw.runtime.context_layers")
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -479,7 +477,7 @@ def load_skill_context(
     ):
         return ""
 
-    registry.load_all()
+    ensure_registry_loaded()
     selected_skill = str(skill or "").strip()
     candidate_list = [
         str(name).strip()

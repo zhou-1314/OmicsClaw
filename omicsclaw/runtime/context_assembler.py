@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from omicsclaw.core.registry import registry
+from omicsclaw.core.registry import ensure_registry_loaded
 
 from .context_layers import (
     ContextAssemblyRequest,
@@ -15,8 +15,6 @@ from .context_layers import (
     ContextLayerInjector,
     get_default_context_injectors,
 )
-
-registry.load_all()
 
 LOGGER = logging.getLogger("omicsclaw.runtime.context")
 
@@ -148,7 +146,7 @@ def should_attach_capability_context(
         return False
 
     lower = text.lower()
-    aliases = skill_aliases or tuple(registry.skills.keys())
+    aliases = skill_aliases or tuple(ensure_registry_loaded().skills.keys())
     if any(message_mentions_term(lower, alias.lower()) for alias in aliases):
         return True
 
@@ -188,7 +186,7 @@ def extract_analysis_hints(
         return "", ""
 
     text_lower = text.lower()
-    aliases = skill_aliases or tuple(registry.skills.keys())
+    aliases = skill_aliases or tuple(ensure_registry_loaded().skills.keys())
 
     skill_hint = ""
     for alias in aliases:

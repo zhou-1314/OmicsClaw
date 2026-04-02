@@ -370,7 +370,10 @@ class OmicsRegistry:
         return keyword_map
 
 
-
+def ensure_registry_loaded(skills_dir: Path | None = None) -> OmicsRegistry:
+    """Return the shared registry after ensuring full skill metadata is loaded."""
+    registry.load_all(skills_dir)
+    return registry
 
 
 # ---------------------------------------------------------------------------
