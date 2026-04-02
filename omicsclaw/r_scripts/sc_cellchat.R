@@ -47,6 +47,12 @@ tryCatch({
     if (!"samples" %in% colnames(meta))
         meta$samples <- "sample1"
 
+    meta[[cell_type_key]] <- as.character(meta[[cell_type_key]])
+    meta[[cell_type_key]] <- ifelse(grepl("^[0-9]", meta[[cell_type_key]]),
+        paste0("cluster_", meta[[cell_type_key]]),
+        meta[[cell_type_key]])
+    meta[[cell_type_key]] <- factor(meta[[cell_type_key]])
+
     cat(sprintf("  %d cells, %d cell types, species=%s\n",
         ncol(counts), length(unique(meta[[cell_type_key]])), species))
 
@@ -70,10 +76,20 @@ tryCatch({
     cellchat <- aggregateNet(cellchat)
 
     cat("Computing network centrality metrics...\n")
-    cellchat <- netAnalysis_computeCentrality(cellchat)
+    tryCatch({
+        cellchat <- netAnalysis_computeCentrality(cellchat)
+    }, error = function(e) {
+        cat(sprintf("  Note: centrality computation skipped (%s)\n", e$message))
+    })
 
     # --- Export L-R pair interactions ---
-    df <- subsetCommunication(cellchat)
+    df <- tryCatch(
+        subsetCommunication(cellchat),
+        error = function(e) {
+            cat(sprintf("  Note: interaction export returned no significant hits (%s)\n", e$message))
+            data.frame()
+        }
+    )
 
     if (!nrow(df)) {
         cat("WARNING: No significant interactions found\n")

@@ -803,11 +803,8 @@ def write_standard_run_artifacts(output_dir: Path, result_payload: dict, summary
 
 def get_demo_data():
     logger.info("Generating demo single-cell data")
-    demo_path = _PROJECT_ROOT / "examples" / "pbmc3k.h5ad"
-    if demo_path.exists():
-        return sc.read_h5ad(demo_path), None
-    logger.warning("Local demo data not found, downloading from scanpy")
-    return sc.datasets.pbmc3k(), None
+    adata, demo_path = sc_io.load_repo_demo_data("pbmc3k_raw")
+    return adata, demo_path
 
 
 def build_summary(adata, method: str) -> dict:
@@ -899,6 +896,14 @@ def main():
             n_neighbors=int(effective_params["n_neighbors"]),
             leiden_resolution=float(effective_params["leiden_resolution"]),
         )
+
+    adata.uns["omicsclaw_matrix_contract"] = {
+        "X": "scaled_expression" if method == "scanpy" else "normalized_expression",
+        "raw": "log1p_normalized_expression" if adata.raw is not None else None,
+        "layers": {"counts": "raw_counts" if "counts" in adata.layers else None},
+        "primary_cluster_key": "leiden",
+        "preprocess_method": method,
+    }
 
     summary = build_summary(adata, method)
     effective_params = finalize_effective_params(adata, effective_params, summary)

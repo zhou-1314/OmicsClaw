@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import tempfile
 import logging
 import sys
 from pathlib import Path
@@ -14,15 +15,25 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scanpy as sc
+from pandas.errors import EmptyDataError
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from omicsclaw.common.checksums import sha256_file
-from omicsclaw.common.report import generate_report_footer, generate_report_header, write_result_json
+from omicsclaw.common.report import (
+    generate_report_footer,
+    generate_report_header,
+    load_result_json,
+    write_output_readme,
+    write_result_json,
+)
+from skills.singlecell._lib import io as sc_io
 from skills.singlecell._lib.adata_utils import store_analysis_metadata
 from skills.singlecell._lib.method_config import MethodConfig, validate_method_choice
+from omicsclaw.core.dependency_manager import validate_r_environment
+from omicsclaw.core.r_script_runner import RScriptRunner
 
 from skills.singlecell._lib.viz_utils import save_figure
 
@@ -52,6 +63,54 @@ METHOD_REGISTRY: dict[str, MethodConfig] = {
 
 DEFAULT_METHOD = "builtin"
 
+
+def _write_repro_requirements(repro_dir: Path, packages: list[str]) -> None:
+    try:
+        from importlib.metadata import PackageNotFoundError, version as get_version
+    except ImportError:  # pragma: no cover
+        PackageNotFoundError = Exception
+        from importlib_metadata import version as get_version  # type: ignore
+
+    lines: list[str] = []
+    for pkg in packages:
+        try:
+            lines.append(f"{pkg}=={get_version(pkg)}")
+        except PackageNotFoundError:
+            continue
+        except Exception:
+            continue
+    (repro_dir / "requirements.txt").write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
+
+def write_standard_run_artifacts(output_dir: Path, result_payload: dict, summary: dict) -> None:
+    notebook_path = None
+    try:
+        from omicsclaw.common.notebook_export import write_analysis_notebook
+
+        notebook_path = write_analysis_notebook(
+            output_dir,
+            skill_alias=SKILL_NAME,
+            description="Cell-cell communication analysis for annotated scRNA-seq data.",
+            result_payload=result_payload,
+            preferred_method=summary.get("method", DEFAULT_METHOD),
+            script_path=Path(__file__).resolve(),
+            actual_command=[sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]],
+        )
+    except Exception as exc:
+        logger.warning("Failed to write analysis notebook: %s", exc)
+
+    try:
+        write_output_readme(
+            output_dir,
+            skill_alias=SKILL_NAME,
+            description="Cell-cell communication analysis for annotated scRNA-seq data.",
+            result_payload=result_payload,
+            preferred_method=summary.get("method", DEFAULT_METHOD),
+            notebook_path=notebook_path,
+        )
+    except Exception as exc:
+        logger.warning("Failed to write README.md: %s", exc)
+
 BUILTIN_LR = [
     ("TGFB1", "TGFBR1"),
     ("TGFB1", "TGFBR2"),
@@ -66,6 +125,41 @@ BUILTIN_LR = [
     ("JAG1", "NOTCH1"),
     ("DLL4", "NOTCH1"),
 ]
+
+
+def _build_cellchat_input_adata(adata):
+    if adata.raw is not None and adata.raw.shape == adata.shape:
+        export = sc.AnnData(X=adata.raw.X.copy(), obs=adata.obs.copy(), var=adata.raw.var.copy())
+        export.obs_names = adata.obs_names.copy()
+        export.var_names = adata.raw.var_names.copy()
+        return export, "adata.raw"
+    return adata.copy(), "adata.X"
+
+
+def run_cellchat(adata, *, cell_type_key: str, species: str) -> pd.DataFrame:
+    validate_r_environment(required_r_packages=["CellChat", "SingleCellExperiment", "zellkonverter"])
+    scripts_dir = _PROJECT_ROOT / "omicsclaw" / "r_scripts"
+    runner = RScriptRunner(scripts_dir=scripts_dir, timeout=7200)
+    export, source = _build_cellchat_input_adata(adata)
+    with tempfile.TemporaryDirectory(prefix="omicsclaw_cellchat_") as tmpdir:
+        tmpdir = Path(tmpdir)
+        input_h5ad = tmpdir / "input.h5ad"
+        output_dir = tmpdir / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        export.write_h5ad(input_h5ad)
+        runner.run_script(
+            "sc_cellchat.R",
+            args=[str(input_h5ad), str(output_dir), cell_type_key, species],
+            expected_outputs=["cellchat_results.csv"],
+            output_dir=output_dir,
+        )
+        try:
+            df = pd.read_csv(output_dir / "cellchat_results.csv")
+        except EmptyDataError:
+            df = pd.DataFrame(columns=["ligand", "receptor", "source", "target", "score", "pvalue", "pathway"])
+    if not df.empty:
+        df["expression_source"] = source
+    return df
 
 
 def _group_means(adata, cell_type_key: str) -> pd.DataFrame:
@@ -270,6 +364,10 @@ def write_report(output_dir: Path, summary: dict, input_file: str | None, params
         f" --species {params.get('species', 'human')}"
     )
     (repro_dir / "commands.sh").write_text(f"#!/bin/bash\n{cmd}\n")
+    _write_repro_requirements(
+        repro_dir,
+        ["scanpy", "anndata", "numpy", "pandas", "matplotlib"],
+    )
 
 
 def main():
@@ -286,7 +384,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if args.demo:
-        adata = sc.datasets.pbmc3k_processed()
+        adata, _ = sc_io.load_repo_demo_data("pbmc3k_processed")
         if args.cell_type_key not in adata.obs.columns:
             fallback_key = "louvain" if "louvain" in adata.obs else "leiden"
             adata.obs[args.cell_type_key] = adata.obs[fallback_key].astype(str)
@@ -308,14 +406,21 @@ def main():
     adata.write_h5ad(output_h5ad)
 
     checksum = sha256_file(input_file) if input_file and Path(input_file).exists() else ""
+    result_data = {"params": params}
     write_result_json(
         output_dir,
         SKILL_NAME,
         SKILL_VERSION,
         {k: v for k, v in summary.items() if k not in {"lr_df", "top_df"}},
-        {"params": params},
+        result_data,
         checksum,
     )
+    result_payload = load_result_json(output_dir) or {
+        "skill": SKILL_NAME,
+        "summary": {k: v for k, v in summary.items() if k not in {"lr_df", "top_df"}},
+        "data": result_data,
+    }
+    write_standard_run_artifacts(output_dir, result_payload, summary)
     store_analysis_metadata(adata, SKILL_NAME, method, params)
 
     print(f"Success: {SKILL_NAME}")

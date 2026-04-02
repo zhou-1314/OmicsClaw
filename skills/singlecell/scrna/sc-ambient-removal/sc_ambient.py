@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+import tempfile
 import sys
 from pathlib import Path
 
@@ -20,16 +22,73 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from omicsclaw.common.checksums import sha256_file
-from omicsclaw.common.report import generate_report_header, generate_report_footer, write_result_json
+from omicsclaw.common.report import (
+    generate_report_header,
+    generate_report_footer,
+    load_result_json,
+    write_output_readme,
+    write_result_json,
+)
+from skills.singlecell._lib import io as sc_io
 from skills.singlecell._lib import ambient as sc_ambient_utils
 from skills.singlecell._lib.method_config import MethodConfig, validate_method_choice
+from omicsclaw.core.dependency_manager import validate_r_environment
+from omicsclaw.core.r_script_runner import RScriptRunner
 
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-SKILL_NAME = "singlecell-ambient-removal"
+SKILL_NAME = "sc-ambient-removal"
 SKILL_VERSION = "0.4.0"
+
+
+def _write_repro_requirements(repro_dir: Path, packages: list[str]) -> None:
+    try:
+        from importlib.metadata import PackageNotFoundError, version as get_version
+    except ImportError:  # pragma: no cover
+        PackageNotFoundError = Exception
+        from importlib_metadata import version as get_version  # type: ignore
+
+    lines: list[str] = []
+    for pkg in packages:
+        try:
+            lines.append(f"{pkg}=={get_version(pkg)}")
+        except PackageNotFoundError:
+            continue
+        except Exception:
+            continue
+    (repro_dir / "requirements.txt").write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
+
+def write_standard_run_artifacts(output_dir: Path, result_payload: dict, summary: dict) -> None:
+    notebook_path = None
+    try:
+        from omicsclaw.common.notebook_export import write_analysis_notebook
+
+        notebook_path = write_analysis_notebook(
+            output_dir,
+            skill_alias=SKILL_NAME,
+            description="Ambient RNA contamination correction for droplet-based scRNA-seq.",
+            result_payload=result_payload,
+            preferred_method=summary.get("method", "simple"),
+            script_path=Path(__file__).resolve(),
+            actual_command=[sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]],
+        )
+    except Exception as exc:
+        logger.warning("Failed to write analysis notebook: %s", exc)
+
+    try:
+        write_output_readme(
+            output_dir,
+            skill_alias=SKILL_NAME,
+            description="Ambient RNA contamination correction for droplet-based scRNA-seq.",
+            result_payload=result_payload,
+            preferred_method=summary.get("method", "simple"),
+            notebook_path=notebook_path,
+        )
+    except Exception as exc:
+        logger.warning("Failed to write README.md: %s", exc)
 
 METHOD_REGISTRY: dict[str, MethodConfig] = {
     "cellbender": MethodConfig(
@@ -49,6 +108,49 @@ METHOD_REGISTRY: dict[str, MethodConfig] = {
         dependencies=("scanpy",),
     ),
 }
+
+
+def _matrix_looks_count_like(matrix) -> bool:
+    sample = matrix
+    if hasattr(sample, "toarray"):
+        sample = sample[: min(200, sample.shape[0]), : min(200, sample.shape[1])].toarray()
+    else:
+        sample = np.asarray(sample[: min(200, sample.shape[0]), : min(200, sample.shape[1])])
+    if sample.size == 0:
+        return True
+    if np.nanmin(sample) < 0:
+        return False
+    frac_integer = float(np.mean(np.isclose(sample, np.round(sample), atol=1e-6)))
+    return frac_integer > 0.98
+
+
+def _get_count_like_matrix(adata):
+    if "counts" in adata.layers:
+        return adata.layers["counts"], "layers.counts"
+    if _matrix_looks_count_like(adata.X):
+        return adata.X, "adata.X"
+    raise ValueError("Ambient RNA removal requires raw count-like input; provide adata.layers['counts'] or count-like adata.X")
+
+
+def run_soupx(raw_matrix_dir: str, filtered_matrix_dir: str):
+    validate_r_environment(required_r_packages=["Seurat", "SoupX"])
+    scripts_dir = _PROJECT_ROOT / "omicsclaw" / "r_scripts"
+    runner = RScriptRunner(scripts_dir=scripts_dir, timeout=1800)
+    with tempfile.TemporaryDirectory(prefix="omicsclaw_soupx_") as tmpdir:
+        tmpdir = Path(tmpdir)
+        output_dir = tmpdir / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        runner.run_script(
+            "sc_soupx.R",
+            args=[raw_matrix_dir, filtered_matrix_dir, str(output_dir)],
+            expected_outputs=["corrected_counts.csv", "cells.csv", "genes.csv", "contamination.json"],
+            output_dir=output_dir,
+        )
+        corrected = pd.read_csv(output_dir / "corrected_counts.csv", index_col=0)
+        cells = pd.read_csv(output_dir / "cells.csv")["cell"].astype(str).tolist()
+        genes = pd.read_csv(output_dir / "genes.csv")["gene"].astype(str).tolist()
+        contamination = json.loads((output_dir / "contamination.json").read_text(encoding="utf-8"))["contamination"]
+    return corrected.T.to_numpy(dtype=np.float32), cells, genes, contamination
 
 
 def generate_ambient_figures(adata_before, adata_after, output_dir: Path) -> list[str]:
@@ -180,7 +282,8 @@ def main():
     if args.demo:
         logger.info("Generating synthetic demo data with ambient RNA...")
         try:
-            adata = sc.datasets.pbmc3k()
+            adata, demo_path = sc_io.load_repo_demo_data("pbmc3k_raw")
+            logger.info("Loaded demo dataset: %s", demo_path or "scanpy-pbmc3k")
         except Exception:
             np.random.seed(42)
             counts = np.random.negative_binomial(2, 0.02, size=(500, 1000))
@@ -207,6 +310,7 @@ def main():
     params = {
         "method": method,
         "expected_cells": args.expected_cells,
+        "raw_h5": args.raw_h5,
         "contamination": args.contamination,
         "raw_matrix_dir": args.raw_matrix_dir,
         "filtered_matrix_dir": args.filtered_matrix_dir,
@@ -214,19 +318,19 @@ def main():
 
     contamination_estimate = args.contamination
 
-    if method == "cellbender" and args.raw_h5:
+    if method == "cellbender":
+        if not args.raw_h5:
+            raise ValueError("CellBender requires --raw-h5 pointing to a raw 10x .h5 file.")
+        raw_h5 = Path(args.raw_h5)
+        if raw_h5.suffix.lower() != ".h5":
+            raise ValueError("CellBender only accepts raw 10x .h5 input in this wrapper; processed .h5ad is not supported.")
         logger.info("Running CellBender...")
-        try:
-            adata = sc_ambient_utils.run_cellbender(
-                raw_h5=args.raw_h5,
-                expected_cells=args.expected_cells or adata.n_obs,
-                output_dir=output_dir / "cellbender_output",
-            )
-            contamination_estimate = estimate_contamination_simple(adata)
-        except Exception as exc:
-            logger.warning("CellBender failed: %s. Falling back to simple subtraction.", exc)
-            method = "simple"
-            params["method"] = method
+        adata = sc_ambient_utils.run_cellbender(
+            raw_h5=raw_h5,
+            expected_cells=args.expected_cells or adata.n_obs,
+            output_dir=output_dir / "cellbender_output",
+        )
+        contamination_estimate = estimate_contamination_simple(adata)
 
     elif method == "soupx":
         if args.raw_matrix_dir and args.filtered_matrix_dir:
@@ -242,14 +346,15 @@ def main():
 
     if method == "simple":
         logger.info("Applying simple ambient subtraction (contamination=%s)", args.contamination)
-        ambient_profile = np.array(adata.X.mean(axis=0)).flatten()
+        count_matrix, expression_source = _get_count_like_matrix(adata)
+        ambient_profile = np.array(count_matrix.mean(axis=0)).flatten()
         ambient_profile = ambient_profile / max(ambient_profile.sum(), 1e-8)
-        corrected = adata.X.toarray() if hasattr(adata.X, "toarray") else np.asarray(adata.X).copy()
+        corrected = count_matrix.toarray() if hasattr(count_matrix, "toarray") else np.asarray(count_matrix).copy()
         corrected = corrected - args.contamination * ambient_profile
         corrected = np.maximum(corrected, 0)
-        adata.layers["counts"] = adata.X.copy()
+        adata.layers["counts"] = count_matrix.copy()
         adata.X = corrected.astype(np.float32)
-        adata.uns["ambient_correction"] = {"method": "simple", "contamination_fraction": args.contamination}
+        adata.uns["ambient_correction"] = {"method": "simple", "contamination_fraction": args.contamination, "expression_source": expression_source}
         contamination_estimate = args.contamination
 
     mean_after = np.array(adata.X.sum(axis=1)).flatten().mean()
@@ -265,12 +370,42 @@ def main():
     generate_ambient_figures(adata_before, adata, output_dir)
     write_ambient_report(output_dir, summary, params, input_file)
 
+    repro_dir = output_dir / "reproducibility"
+    repro_dir.mkdir(exist_ok=True)
+    cmd = f"python sc_ambient.py --output {output_dir} --method {method}"
+    if input_file:
+        cmd += f" --input {input_file}"
+    if args.raw_h5:
+        cmd += f" --raw-h5 {args.raw_h5}"
+    if args.raw_matrix_dir:
+        cmd += f" --raw-matrix-dir {args.raw_matrix_dir}"
+    if args.filtered_matrix_dir:
+        cmd += f" --filtered-matrix-dir {args.filtered_matrix_dir}"
+    if args.expected_cells is not None:
+        cmd += f" --expected-cells {args.expected_cells}"
+    if args.contamination is not None:
+        cmd += f" --contamination {args.contamination}"
+    (repro_dir / "commands.sh").write_text(f"#!/bin/bash\n{cmd}\n")
+    _write_repro_requirements(
+        repro_dir,
+        ["scanpy", "anndata", "numpy", "pandas", "matplotlib"],
+    )
+
     output_h5ad = output_dir / "corrected.h5ad"
+    from skills.singlecell._lib.adata_utils import store_analysis_metadata
+    store_analysis_metadata(adata, SKILL_NAME, method, params)
     adata.write_h5ad(output_h5ad)
     logger.info("Saved to %s", output_h5ad)
 
     checksum = sha256_file(input_file) if input_file and Path(input_file).exists() else ""
-    write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, {"params": params}, checksum)
+    result_data = {"params": params}
+    write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
+    result_payload = load_result_json(output_dir) or {
+        "skill": SKILL_NAME,
+        "summary": summary,
+        "data": result_data,
+    }
+    write_standard_run_artifacts(output_dir, result_payload, summary)
 
     print(f"Success: {SKILL_NAME}")
     print(f"  Output: {output_dir}")

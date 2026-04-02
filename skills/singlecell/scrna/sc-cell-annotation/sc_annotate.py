@@ -7,6 +7,7 @@ import argparse
 import json
 import logging
 import shlex
+import tempfile
 import sys
 from pathlib import Path
 
@@ -22,12 +23,21 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from omicsclaw.common.checksums import sha256_file
-from omicsclaw.common.report import generate_report_footer, generate_report_header, write_result_json
+from omicsclaw.common.report import (
+    generate_report_footer,
+    generate_report_header,
+    load_result_json,
+    write_output_readme,
+    write_result_json,
+)
+from skills.singlecell._lib import io as sc_io
 from skills.singlecell._lib.adata_utils import store_analysis_metadata
 from skills.singlecell._lib import annotation as sc_annotation_utils
 from skills.singlecell._lib.export import save_h5ad
 from skills.singlecell._lib.gallery import PlotSpec, VisualizationRecipe, render_plot_specs
 from skills.singlecell._lib.method_config import MethodConfig, validate_method_choice
+from omicsclaw.core.dependency_manager import validate_r_environment
+from omicsclaw.core.r_script_runner import RScriptRunner
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -35,6 +45,57 @@ logger = logging.getLogger(__name__)
 SKILL_NAME = "sc-cell-annotation"
 SKILL_VERSION = "0.4.0"
 SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-cell-annotation/sc_annotate.py"
+
+
+def _write_repro_requirements(repro_dir: Path, packages: list[str]) -> None:
+    try:
+        from importlib.metadata import PackageNotFoundError, version as get_version
+    except ImportError:  # pragma: no cover
+        PackageNotFoundError = Exception
+        from importlib_metadata import version as get_version  # type: ignore
+
+    lines: list[str] = []
+    for pkg in packages:
+        try:
+            lines.append(f"{pkg}=={get_version(pkg)}")
+        except PackageNotFoundError:
+            continue
+        except Exception:
+            continue
+    (repro_dir / "requirements.txt").write_text(
+        "\n".join(lines) + ("\n" if lines else ""),
+        encoding="utf-8",
+    )
+
+
+def write_standard_run_artifacts(output_dir: Path, result_payload: dict, summary: dict) -> None:
+    notebook_path = None
+    try:
+        from omicsclaw.common.notebook_export import write_analysis_notebook
+
+        notebook_path = write_analysis_notebook(
+            output_dir,
+            skill_alias=SKILL_NAME,
+            description="Cell type annotation for preprocessed scRNA-seq datasets.",
+            result_payload=result_payload,
+            preferred_method=summary.get("method", "markers"),
+            script_path=Path(__file__).resolve(),
+            actual_command=[sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]],
+        )
+    except Exception as exc:
+        logger.warning("Failed to write analysis notebook: %s", exc)
+
+    try:
+        write_output_readme(
+            output_dir,
+            skill_alias=SKILL_NAME,
+            description="Cell type annotation for preprocessed scRNA-seq datasets.",
+            result_payload=result_payload,
+            preferred_method=summary.get("method", "markers"),
+            notebook_path=notebook_path,
+        )
+    except Exception as exc:
+        logger.warning("Failed to write README.md: %s", exc)
 
 METHOD_REGISTRY: dict[str, MethodConfig] = {
     "markers": MethodConfig(
@@ -54,7 +115,7 @@ METHOD_REGISTRY: dict[str, MethodConfig] = {
     ),
     "scmap": MethodConfig(
         name="scmap",
-        description="scmap-compatible R annotation path",
+        description="scmap cluster projection (R)",
         dependencies=(),
     ),
 }
@@ -75,10 +136,58 @@ PBMC_MARKERS = {
 # ---------------------------------------------------------------------------
 
 
+def _record_annotation_execution(
+    adata,
+    *,
+    requested_method: str,
+    actual_method: str,
+    fallback_reason: str = "",
+) -> None:
+    adata.obs["annotation_requested_method"] = requested_method
+    adata.obs["annotation_actual_method"] = actual_method
+    adata.obs["annotation_method"] = actual_method
+    adata.uns["annotation_runtime"] = {
+        "requested_method": requested_method,
+        "actual_method": actual_method,
+        "used_fallback": bool(fallback_reason),
+        "fallback_reason": fallback_reason,
+    }
+
+
+def _annotation_summary(
+    adata,
+    *,
+    requested_method: str,
+    actual_method: str,
+    fallback_reason: str = "",
+    expression_source: str | None = None,
+) -> dict:
+    counts = adata.obs["cell_type"].astype(str).value_counts().to_dict()
+    summary = {
+        "method": actual_method,
+        "requested_method": requested_method,
+        "actual_method": actual_method,
+        "used_fallback": bool(fallback_reason),
+        "fallback_reason": fallback_reason,
+        "n_cell_types": len(counts),
+        "cell_type_counts": {str(k): int(v) for k, v in counts.items()},
+    }
+    if expression_source:
+        summary["expression_source"] = expression_source
+    return summary
+
+
+def _marker_expression_source(adata) -> tuple[str, object]:
+    if adata.raw is not None and adata.raw.shape == adata.shape:
+        return "adata.raw", adata.raw
+    return "adata.X", adata
+
+
 def annotate_markers(adata, markers=None, cluster_key: str = "leiden"):
     """Marker-based annotation."""
     if markers is None:
         markers = PBMC_MARKERS
+    expression_source, expr = _marker_expression_source(adata)
 
     if cluster_key not in adata.obs:
         logger.warning("No %s found, running clustering", cluster_key)
@@ -87,6 +196,7 @@ def annotate_markers(adata, markers=None, cluster_key: str = "leiden"):
         cluster_key = "leiden"
 
     cluster_annotations = {}
+    expr_var_names = expr.var_names
     for cluster in adata.obs[cluster_key].astype(str).unique():
         cluster_mask = adata.obs[cluster_key].astype(str) == cluster
         cluster_data = adata[cluster_mask]
@@ -94,10 +204,13 @@ def annotate_markers(adata, markers=None, cluster_key: str = "leiden"):
         best_type = "Unknown"
         best_score = 0.0
         for cell_type, marker_genes in markers.items():
-            available = [g for g in marker_genes if g in adata.var_names]
+            available = [g for g in marker_genes if g in expr_var_names]
             if not available:
                 continue
-            scores = np.asarray(cluster_data[:, available].X.mean()).item()
+            if expression_source == "adata.raw":
+                scores = np.asarray(cluster_data.raw[:, available].X.mean()).item()
+            else:
+                scores = np.asarray(cluster_data[:, available].X.mean()).item()
             if scores > best_score:
                 best_score = float(scores)
                 best_type = cell_type
@@ -105,81 +218,152 @@ def annotate_markers(adata, markers=None, cluster_key: str = "leiden"):
         cluster_annotations[cluster] = best_type
 
     adata.obs["cell_type"] = adata.obs[cluster_key].astype(str).map(cluster_annotations)
-    adata.obs["annotation_method"] = "markers"
+    adata.obs["annotation_score"] = np.nan
+    _record_annotation_execution(
+        adata,
+        requested_method="markers",
+        actual_method="markers",
+    )
     logger.info("Annotated %d clusters", len(cluster_annotations))
-
-    cell_type_counts = adata.obs["cell_type"].value_counts().to_dict()
-    return {
-        "method": "markers",
-        "n_cell_types": len(cell_type_counts),
-        "cell_type_counts": {str(k): int(v) for k, v in cell_type_counts.items()},
-    }
+    return _annotation_summary(
+        adata,
+        requested_method="markers",
+        actual_method="markers",
+        expression_source=expression_source,
+    )
 
 
 def annotate_celltypist(adata, model: str = "Immune_All_Low"):
-    """CellTypist annotation."""
+    """CellTypist annotation with explicit fallback recording."""
+    celltypist_input, expression_source = sc_annotation_utils.build_celltypist_input_adata(adata)
+    is_valid, reason = sc_annotation_utils.validate_celltypist_input_matrix(celltypist_input)
+    if not is_valid:
+        logger.warning("CellTypist input validation failed: %s", reason)
+        annotate_markers(adata)
+        _record_annotation_execution(
+            adata,
+            requested_method="celltypist",
+            actual_method="markers",
+            fallback_reason=reason,
+        )
+        summary = _annotation_summary(
+            adata,
+            requested_method="celltypist",
+            actual_method="markers",
+            fallback_reason=reason,
+            expression_source=expression_source,
+        )
+        return summary
+
     try:
         model_name = model if model.endswith(".pkl") else f"{model}.pkl"
         sc_annotation_utils.annotate_with_celltypist(
-            adata,
+            celltypist_input,
             model=model_name,
             annotation_key="cell_type",
             inplace=True,
         )
-        adata.obs["annotation_method"] = "celltypist"
-        counts = adata.obs["cell_type"].astype(str).value_counts().to_dict()
-        return {
-            "method": "celltypist",
-            "n_cell_types": len(counts),
-            "cell_type_counts": {str(k): int(v) for k, v in counts.items()},
-        }
+        adata.obs["cell_type"] = celltypist_input.obs["cell_type"].values
+        if "cell_type_score" in celltypist_input.obs.columns:
+            adata.obs["annotation_score"] = pd.to_numeric(celltypist_input.obs["cell_type_score"], errors="coerce").values
+        if "cell_type_prob" in celltypist_input.obsm:
+            adata.obsm["cell_type_prob"] = celltypist_input.obsm["cell_type_prob"]
+        _record_annotation_execution(
+            adata,
+            requested_method="celltypist",
+            actual_method="celltypist",
+        )
+        return _annotation_summary(
+            adata,
+            requested_method="celltypist",
+            actual_method="celltypist",
+            expression_source=expression_source,
+        )
     except Exception as exc:
+        reason = str(exc)
         logger.warning("CellTypist annotation unavailable (%s); falling back to marker-based annotation", exc)
-        summary = annotate_markers(adata)
-        summary["method"] = "celltypist"
-        adata.obs["annotation_method"] = "celltypist"
+        annotate_markers(adata)
+        _record_annotation_execution(
+            adata,
+            requested_method="celltypist",
+            actual_method="markers",
+            fallback_reason=reason,
+        )
+        summary = _annotation_summary(
+            adata,
+            requested_method="celltypist",
+            actual_method="markers",
+            fallback_reason=reason,
+            expression_source=expression_source,
+        )
         return summary
 
 
-def _apply_r_annotations(adata, df: pd.DataFrame, *, method_name: str) -> dict:
+def _apply_r_annotations(adata, df: pd.DataFrame, *, requested_method: str, actual_method: str) -> dict:
     df = df.copy()
     if df.empty:
-        raise RuntimeError(f"R annotation method '{method_name}' returned no predictions")
+        raise RuntimeError(f"R annotation method '{requested_method}' returned no predictions")
     df.index = df.index.astype(str)
     df = df.reindex(adata.obs_names)
     labels = df["pruned_label"].fillna(df["cell_type"]).astype(str)
     adata.obs["cell_type"] = labels.values
     if "score" in df.columns:
         adata.obs["annotation_score"] = pd.to_numeric(df["score"], errors="coerce").values
-    adata.obs["annotation_method"] = method_name
-    counts = adata.obs["cell_type"].value_counts().to_dict()
-    return {
-        "method": method_name,
-        "n_cell_types": len(counts),
-        "cell_type_counts": {str(k): int(v) for k, v in counts.items()},
-    }
+    _record_annotation_execution(
+        adata,
+        requested_method=requested_method,
+        actual_method=actual_method,
+    )
+    return _annotation_summary(adata, requested_method=requested_method, actual_method=actual_method)
 
 
 def annotate_singler(adata, reference: str = "HPCA"):
     """SingleR annotation via the shared R bridge."""
-    logger.warning("SingleR bridge is not bundled in the current wrapper; using marker-based fallback")
-    summary = annotate_markers(adata)
-    summary["method"] = "singler"
-    adata.obs["annotation_method"] = "singler"
+    validate_r_environment(required_r_packages=["SingleR", "celldex", "SingleCellExperiment", "zellkonverter"])
+    export_adata, expression_source = sc_annotation_utils.build_celltypist_input_adata(adata)
+    scripts_dir = _PROJECT_ROOT / "omicsclaw" / "r_scripts"
+    runner = RScriptRunner(scripts_dir=scripts_dir, timeout=1800)
+    with tempfile.TemporaryDirectory(prefix="omicsclaw_singler_") as tmpdir:
+        tmpdir = Path(tmpdir)
+        input_h5ad = tmpdir / "input.h5ad"
+        output_dir = tmpdir / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        export_adata.write_h5ad(input_h5ad)
+        runner.run_script(
+            "sc_singler_annotate.R",
+            args=[str(input_h5ad), str(output_dir), reference],
+            expected_outputs=["singler_results.csv"],
+            output_dir=output_dir,
+        )
+        df = pd.read_csv(output_dir / "singler_results.csv", index_col=0)
+    summary = _apply_r_annotations(adata, df, requested_method="singler", actual_method="singler")
+    summary["expression_source"] = expression_source
+    summary["reference"] = reference
     return summary
 
 
 def annotate_scmap(adata, reference: str = "HPCA"):
-    """scmap-compatible R annotation path.
-
-    The provided reference bundle includes SingleR helpers but not scmap itself, so
-    this uses the same Seurat/celldex-backed bridge while keeping the method name
-    exposed to the CLI.
-    """
-    logger.warning("scmap bridge is not bundled in the current wrapper; using marker-based fallback")
-    summary = annotate_markers(adata)
-    summary["method"] = "scmap"
-    adata.obs["annotation_method"] = "scmap"
+    """scmap annotation via the shared R bridge."""
+    validate_r_environment(required_r_packages=["scmap", "celldex", "SingleCellExperiment", "zellkonverter"])
+    export_adata, expression_source = sc_annotation_utils.build_celltypist_input_adata(adata)
+    scripts_dir = _PROJECT_ROOT / "omicsclaw" / "r_scripts"
+    runner = RScriptRunner(scripts_dir=scripts_dir, timeout=1800)
+    with tempfile.TemporaryDirectory(prefix="omicsclaw_scmap_") as tmpdir:
+        tmpdir = Path(tmpdir)
+        input_h5ad = tmpdir / "input.h5ad"
+        output_dir = tmpdir / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        export_adata.write_h5ad(input_h5ad)
+        runner.run_script(
+            "sc_scmap_annotate.R",
+            args=[str(input_h5ad), str(output_dir), reference],
+            expected_outputs=["scmap_results.csv"],
+            output_dir=output_dir,
+        )
+        df = pd.read_csv(output_dir / "scmap_results.csv", index_col=0)
+    summary = _apply_r_annotations(adata, df, requested_method="scmap", actual_method="scmap")
+    summary["expression_source"] = expression_source
+    summary["reference"] = reference
     return summary
 
 
@@ -481,6 +665,10 @@ def write_reproducibility(output_dir: Path, params: dict, *, demo_mode: bool = F
     for key, value in params.items():
         command += f" --{key.replace('_', '-')} {shlex.quote(str(value))}"
     (repro_dir / "commands.sh").write_text(f"#!/bin/bash\n{command}\n", encoding="utf-8")
+    _write_repro_requirements(
+        repro_dir,
+        ["scanpy", "anndata", "numpy", "pandas", "matplotlib"],
+    )
 
 
 def main():
@@ -498,12 +686,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if args.demo:
-        demo_path = _PROJECT_ROOT / "examples" / "pbmc3k.h5ad"
-        if demo_path.exists():
-            adata = sc.read_h5ad(demo_path)
-        else:
-            logger.warning("Local demo data not found, downloading from scanpy")
-            adata = sc.datasets.pbmc3k_processed()
+        adata, _ = sc_io.load_repo_demo_data("pbmc3k_processed")
         input_file = None
     else:
         if not args.input_path:
@@ -526,14 +709,22 @@ def main():
     write_report(output_dir, summary, input_file, params, gallery_context=gallery_context)
     write_reproducibility(output_dir, params, demo_mode=args.demo)
 
-    store_analysis_metadata(adata, SKILL_NAME, method, params)
+    params["requested_method"] = method
+    params["actual_method"] = summary.get("actual_method", method)
+    if summary.get("fallback_reason"):
+        params["fallback_reason"] = summary["fallback_reason"]
+    store_analysis_metadata(adata, SKILL_NAME, summary.get("actual_method", method), params)
     output_h5ad = output_dir / "processed.h5ad"
     save_h5ad(adata, output_h5ad)
     logger.info("Saved to %s", output_h5ad)
 
     checksum = sha256_file(input_file) if input_file and Path(input_file).exists() else ""
     result_data = {
-        "method": method,
+        "method": summary.get("actual_method", method),
+        "requested_method": summary.get("requested_method", method),
+        "actual_method": summary.get("actual_method", method),
+        "used_fallback": summary.get("used_fallback", False),
+        "fallback_reason": summary.get("fallback_reason", ""),
         "params": params,
         **summary,
         "visualization": {
@@ -545,6 +736,12 @@ def main():
         },
     }
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
+    result_payload = load_result_json(output_dir) or {
+        "skill": SKILL_NAME,
+        "summary": summary,
+        "data": result_data,
+    }
+    write_standard_run_artifacts(output_dir, result_payload, summary)
 
     print(f"Success: {SKILL_NAME}")
     print(f"  Output: {output_dir}")
