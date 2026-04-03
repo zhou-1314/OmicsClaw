@@ -613,9 +613,20 @@ make bot-multi CHANNELS=telegram,discord
 
 > “我会优先使用 OmicsClaw 内置的技能注册表和记忆系统来完成任务，以保证执行的稳定性和一致性。”
 
-## 贡献
+## 👥 团队
 
-欢迎提交改进。如果要添加一个新技能，可以按下面的步骤进行：
+| 角色 | 姓名 | 联系方式 |
+|------|------|---------|
+| 负责人（PI） | **Luyi Tian** | [tian_luyi@gzlab.ac.cn](mailto:tian_luyi@gzlab.ac.cn) |
+| 主导开发者 | **Weige Zhou** | [GitHub](https://github.com/zhou-1314) |
+| 开发者 | **Liying Chen** | [GitHub](https://github.com/chenly255) |
+| 开发者 | **Pengfei Yin** | [GitHub](https://github.com/astudentfromsustech) |
+
+问题反馈和功能建议请通过 [GitHub Issues](https://github.com/TianGzlab/OmicsClaw/issues) 提交。
+
+## 🤝 贡献
+
+欢迎生物信息学研究者、计算生物学家以及 AI 开发者参与贡献。如果要添加一个新技能，可以按下面的步骤进行：
 
 1. 新建技能目录：`skills/<domain>/<skill-name>/`
 2. 添加 `SKILL.md`，写明方法说明和接口约定
@@ -625,7 +636,33 @@ make bot-multi CHANNELS=telegram,discord
 
 详细开发规范请参见 [AGENTS.md](AGENTS.md)。
 
-## 文档
+### 🌐 社区
+
+欢迎加入 OmicsClaw 用户社区，分享分析经验、反馈问题，一起推动多组学 AI 分析工具的发展。
+
+<table>
+  <tr>
+    <td align="center" width="220">
+      <b>微信交流群</b><br/>
+      <sub>OmicsClaw 体验交流群</sub><br/><br/>
+      <img src="docs/images/IMG_3729.JPG" alt="OmicsClaw 微信交流群" width="200"/><br/>
+      <sub>扫码加入，加群后二维码自动更新</sub>
+    </td>
+    <td valign="top">
+      <b>📋 <a href="https://github.com/TianGzlab/OmicsClaw/issues">GitHub Issues</a></b> — 问题反馈与功能建议<br/><br/>
+      <b>💬 <a href="https://github.com/TianGzlab/OmicsClaw/discussions">GitHub Discussions</a></b> — 想法交流与工作流分享
+    </td>
+  </tr>
+</table>
+
+## 📚 致谢
+
+OmicsClaw 的设计和实现受到了以下开源项目的重要启发：
+
+- **[ClawBio](https://github.com/ClawBio/ClawBio)**：生物信息学场景下较早的原生 AI agent 技能库之一。OmicsClaw 的技能架构、本地优先理念、可复现性设计和 Bot 集成模式都受到了它的启发。
+- **[Nocturne Memory](https://github.com/Dataojitori/nocturne_memory)**：一个轻量、支持回溯的长时记忆服务。OmicsClaw 的持久记忆系统借鉴了其图结构记忆和 MCP 集成思路。
+
+## 📖 文档
 
 - [docs/INSTALLATION.md](docs/INSTALLATION.md)：安装说明和依赖层级
 - [docs/METHODS.md](docs/METHODS.md)：算法参考与参数说明
@@ -633,17 +670,17 @@ make bot-multi CHANNELS=telegram,discord
 - [CLAUDE.md](CLAUDE.md)：AI Agent 路由说明
 - [bot/README.md](bot/README.md)：Bot 配置与运行说明
 
-## 安全与免责声明
+## ⚠️ 安全与免责声明
 
 - **本地优先处理**：数据默认保留在本机
 - **仅供科研使用**：本项目不是医疗器械，不提供临床诊断结论
 - **请由领域专家复核**：重要结论应结合专业判断进行确认
 
-## 许可证
+## 📜 许可证
 
 Apache-2.0，详见 [LICENSE](LICENSE)。
 
-## 引用
+## 📝 引用
 
 如果你在研究中使用了 OmicsClaw，欢迎引用：
 
@@ -655,19 +692,3 @@ Apache-2.0，详见 [LICENSE](LICENSE)。
   url = {https://github.com/TianGzlab/OmicsClaw}
 }
 ```
-
-## 致谢
-
-OmicsClaw 的设计和实现受到了以下开源项目的重要启发：
-
-- **[ClawBio](https://github.com/ClawBio/ClawBio)**：生物信息学场景下较早的原生 AI agent 技能库之一。OmicsClaw 的技能架构、本地优先理念、可复现性设计和 Bot 集成模式都受到了它的启发。
-- **[Nocturne Memory](https://github.com/Dataojitori/nocturne_memory)**：一个轻量、支持回溯的长时记忆服务。OmicsClaw 的持久记忆系统借鉴了其图结构记忆和 MCP 集成思路。
-
-## 联系方式
-
-- **Luyi Tian**（Principal Investigator）— [tian_luyi@gzlab.ac.cn](mailto:tian_luyi@gzlab.ac.cn)
-- **Weige Zhou**（Lead Developer）— [GitHub](https://github.com/zhou-1314)
-- **Liying Chen**（Developer）— [GitHub](https://github.com/chenly255)
-- **Pengfei Yin**（Developer）— [GitHub](https://github.com/astudentfromsustech)
-
-问题反馈和功能建议请通过 [GitHub Issues](https://github.com/TianGzlab/OmicsClaw/issues) 提交。
