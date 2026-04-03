@@ -44,6 +44,21 @@ def test_build_bot_tool_specs_includes_curated_engineering_tools():
     assert "mcp_list" in names
 
 
+def test_omicsclaw_tool_description_mentions_sc_batch_auto_prepare():
+    specs = build_bot_tool_specs(
+        BotToolContext(
+            skill_names=("auto", "sc-batch-integration"),
+            skill_desc_text="auto (auto route), sc-batch-integration",
+        )
+    )
+
+    omics_spec = next(spec for spec in specs if spec.name == "omicsclaw")
+
+    assert "auto_prepare=true" in omics_spec.description
+    assert "sc-standardize-input" in omics_spec.description
+    assert "sc-preprocessing" in omics_spec.description
+
+
 def test_tool_search_reports_engineering_and_existing_tools(tmp_path: Path):
     executors = _build_executors(tmp_path)
 

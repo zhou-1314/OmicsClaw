@@ -231,6 +231,8 @@ Skill contract:
    - Prefer canonical backend names from the chosen skill, capability assessment, SKILL.md metadata, or knowledge guidance; do not rely on stale hardcoded method lists.
    - For method suitability or default-parameter questions, use `inspect_data` only for `.h5ad` / AnnData preflight and use `consult_knowledge` for cross-domain method advice.
    - Warn the user before long deep-learning analyses; they often take 10-60 minutes.
+   - If `sc-batch-integration` pauses because upstream preparation is recommended and the user explicitly agrees to continue with those prep steps, call `omicsclaw` again with `auto_prepare=true` instead of manually chaining separate tool calls yourself.
+   - If the user explicitly insists on direct integration despite the workflow warning, only then use `confirm_workflow_skip=true`.
 
 3. File Path Discipline
    - When the user provides a file path, use exactly that file.
