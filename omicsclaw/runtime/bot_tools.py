@@ -33,6 +33,9 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                 "Legacy aliases are also accepted and resolved automatically. "
                 "Use mode='demo' to run with built-in synthetic data. "
                 "Use mode='file' when the user has sent an omics data file. "
+                "If `sc-batch-integration` recommends upstream preparation and the user explicitly agrees, "
+                "rerun this tool with `auto_prepare=true` so OmicsClaw performs the recommended "
+                "`sc-standardize-input` / `sc-preprocessing` steps before the final integration call. "
                 "IMPORTANT: Preserve exact numerical values, warnings, errors, and file paths when relaying results. "
                 "By default only a text summary is returned (return_media omitted or empty). "
                 "Set return_media ONLY when the user explicitly asks for figures/plots/tables. "
@@ -83,6 +86,31 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                     "method": {
                         "type": "string",
                         "description": "Analysis method override passed as --method.",
+                    },
+                    "batch_key": {
+                        "type": "string",
+                        "description": (
+                            "Batch/sample metadata column passed as --batch-key. "
+                            "Especially important for sc-batch-integration. "
+                            "If omitted for sc-batch-integration, OmicsClaw will inspect the AnnData object "
+                            "and ask the user to choose before running."
+                        ),
+                    },
+                    "confirm_workflow_skip": {
+                        "type": "boolean",
+                        "description": (
+                            "Only for explicit user overrides. "
+                            "If true, bypasses the standardize/preprocess workflow pause for sc-batch-integration "
+                            "and runs direct integration anyway."
+                        ),
+                    },
+                    "auto_prepare": {
+                        "type": "boolean",
+                        "description": (
+                            "Only when the user explicitly agrees to preparatory steps. "
+                            "For sc-batch-integration, automatically runs the recommended upstream workflow "
+                            "(`sc-standardize-input` and/or `sc-preprocessing`) before the final integration step."
+                        ),
                     },
                     "n_epochs": {
                         "type": "integer",
