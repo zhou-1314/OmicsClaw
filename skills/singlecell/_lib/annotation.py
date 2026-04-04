@@ -8,6 +8,7 @@ annotation visualization, summary statistics, and cross-method comparison.
 from __future__ import annotations
 
 import logging
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
@@ -17,6 +18,8 @@ from anndata import AnnData
 
 if TYPE_CHECKING:
     pass
+
+from .adata_utils import select_count_like_expression_source
 
 logger = logging.getLogger(__name__)
 
@@ -747,6 +750,130 @@ def _infer_reference_label_key(adata: AnnData) -> str:
     )
 
 
+def _apply_cluster_consensus(
+    adata: AnnData,
+    predictions: pd.DataFrame,
+    *,
+    cluster_key: str,
+    annotation_key: str,
+    prediction_key: str,
+    consensus_key: str,
+) -> None:
+    if cluster_key in adata.obs.columns:
+        cluster_series = adata.obs[cluster_key].astype(str)
+        predictions[cluster_key] = cluster_series.values
+        consensus_map: dict[str, str] = {}
+        for cluster, group in predictions.groupby(cluster_key):
+            counts = group[prediction_key].value_counts()
+            consensus_label = counts.index[0]
+            consensus_map[str(cluster)] = consensus_label
+        consensus_labels = cluster_series.map(consensus_map)
+        missing = consensus_labels.isna()
+        if missing.any():
+            consensus_labels[missing] = predictions.loc[missing, prediction_key].values
+        adata.obs[consensus_key] = consensus_labels
+        final_labels = consensus_labels
+    else:
+        adata.obs[consensus_key] = predictions[prediction_key]
+        final_labels = predictions[prediction_key]
+
+    adata.obs[prediction_key] = predictions[prediction_key].astype(str).to_numpy()
+    adata.obs[annotation_key] = pd.Categorical(final_labels.astype(str))
+    adata.obs["annotation_score"] = predictions["popv_score"].astype(float).to_numpy()
+    predictions["cell_type"] = adata.obs[annotation_key].astype(str).values
+
+
+def _count_like_adata_for_popv(adata: AnnData) -> tuple[AnnData, str]:
+    matrix, expression_source, _warnings = select_count_like_expression_source(adata, preferred_layer="counts")
+    copied = matrix.copy() if hasattr(matrix, "copy") else np.asarray(matrix).copy()
+    count_adata = AnnData(copied)
+    count_adata.obs_names = adata.obs_names.copy()
+    count_adata.var_names = adata.var_names.copy()
+    count_adata.obs = adata.obs.copy()
+    count_adata.var = adata.var.copy()
+    return count_adata, expression_source
+
+
+def _apply_popv_annotation_official(
+    adata: AnnData,
+    reference_file: Path,
+    *,
+    cluster_key: str,
+    annotation_key: str,
+    prediction_key: str,
+    consensus_key: str,
+) -> dict:
+    import scanpy as sc
+    from popv import annotation as popv_annotation
+    from popv.preprocessing import Process_Query
+
+    reference_adata = sc.read_h5ad(reference_file)
+    reference_label_key = _infer_reference_label_key(reference_adata)
+
+    query_counts, expression_source = _count_like_adata_for_popv(adata)
+    ref_counts, _ = _count_like_adata_for_popv(reference_adata)
+
+    query_counts.obs["_popv_batch"] = "query_batch"
+    ref_counts.obs["_popv_batch"] = "reference_batch"
+
+    common_genes = pd.Index(query_counts.var_names).intersection(pd.Index(ref_counts.var_names))
+    if common_genes.empty:
+        raise ValueError("PopV official mode requires overlapping genes between query and reference.")
+
+    methods = ["Random_Forest", "Support_Vector", "XGboost"]
+    with tempfile.TemporaryDirectory(prefix="omicsclaw_popv_") as tmpdir:
+        proc = Process_Query(
+            query_adata=query_counts,
+            ref_adata=ref_counts,
+            ref_labels_key=reference_label_key,
+            ref_batch_key="_popv_batch",
+            query_batch_key="_popv_batch",
+            cl_obo_folder=False,
+            prediction_mode="retrain",
+            save_path_trained_models=tmpdir,
+            hvg=min(4000, len(common_genes)),
+        )
+        popv_annotation.annotate_data(proc.adata, methods=methods, save_path=tmpdir)
+
+        query_obs = proc.adata.obs.loc[proc.adata.obs["_dataset"] == "query"].copy()
+        query_obs = query_obs.reindex(adata.obs_names)
+        predictions = pd.DataFrame(
+            {
+                "cell_id": adata.obs_names.astype(str),
+                prediction_key: query_obs["popv_majority_vote_prediction"].astype(str).values,
+                "popv_score": pd.to_numeric(query_obs["popv_majority_vote_score"], errors="coerce").fillna(0.0).values,
+            },
+            index=adata.obs_names.copy(),
+        )
+
+    _apply_cluster_consensus(
+        adata,
+        predictions,
+        cluster_key=cluster_key,
+        annotation_key=annotation_key,
+        prediction_key=prediction_key,
+        consensus_key=consensus_key,
+    )
+    adata.uns["popv_predictions"] = predictions.copy()
+
+    logger.info(
+        "Official PopV mapped %d cells using methods %s and %d overlapping genes.",
+        adata.n_obs,
+        ", ".join(methods),
+        len(common_genes),
+    )
+
+    return {
+        "backend": "popv_official",
+        "expression_source": expression_source,
+        "reference_label_key": reference_label_key,
+        "reference_cell_types": int(reference_adata.obs[reference_label_key].astype(str).nunique()),
+        "reference_gene_overlap": len(common_genes),
+        "reference_path": str(reference_file),
+        "popv_methods": methods,
+    }
+
+
 def apply_popv_annotation(
     adata: AnnData,
     reference_path: str,
@@ -768,6 +895,19 @@ def apply_popv_annotation(
         import scanpy as sc
     except ImportError as exc:
         raise ImportError("scanpy is required for PopV reference mapping") from exc
+
+    try:
+        metadata = _apply_popv_annotation_official(
+            adata,
+            reference_file,
+            cluster_key=cluster_key,
+            annotation_key=annotation_key,
+            prediction_key=prediction_key,
+            consensus_key=consensus_key,
+        )
+        return metadata
+    except Exception as exc:
+        logger.warning("Official PopV path failed, falling back to lightweight reference mapping: %s", exc)
 
     reference_adata = sc.read_h5ad(reference_file)
     reference_label_key = _infer_reference_label_key(reference_adata)
@@ -824,30 +964,14 @@ def apply_popv_annotation(
         prediction_key: predicted_labels,
         "popv_score": best_scores.astype(float),
     }, index=adata.obs_names.copy())
-
-    if cluster_key in adata.obs.columns:
-        cluster_series = adata.obs[cluster_key].astype(str)
-        predictions[cluster_key] = cluster_series.values
-        consensus_map: dict[str, str] = {}
-        for cluster, group in predictions.groupby(cluster_key):
-            counts = group[prediction_key].value_counts()
-            consensus_label = counts.index[0]
-            consensus_map[str(cluster)] = consensus_label
-        consensus_labels = cluster_series.map(consensus_map)
-        missing = consensus_labels.isna()
-        if missing.any():
-            consensus_labels[missing] = predictions.loc[missing, prediction_key].values
-        adata.obs[consensus_key] = consensus_labels
-        final_labels = consensus_labels
-    else:
-        adata.obs[consensus_key] = predictions[prediction_key]
-        final_labels = predictions[prediction_key]
-
-    adata.obs[prediction_key] = predictions[prediction_key].astype(str).to_numpy()
-    adata.obs[annotation_key] = pd.Categorical(final_labels.astype(str))
-    adata.obs["annotation_score"] = predictions["popv_score"].astype(float).to_numpy()
-
-    predictions["cell_type"] = adata.obs[annotation_key].astype(str).values
+    _apply_cluster_consensus(
+        adata,
+        predictions,
+        cluster_key=cluster_key,
+        annotation_key=annotation_key,
+        prediction_key=prediction_key,
+        consensus_key=consensus_key,
+    )
     adata.uns["popv_predictions"] = predictions.copy()
 
     logger.info(
@@ -864,6 +988,7 @@ def apply_popv_annotation(
         )
 
     return {
+        "backend": "popv_lightweight",
         "expression_source": expression_source,
         "reference_label_key": reference_label_key,
         "reference_cell_types": n_centroids,

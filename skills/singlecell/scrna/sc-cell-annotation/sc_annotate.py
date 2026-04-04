@@ -312,24 +312,27 @@ def annotate_popv(adata, reference: str = "HPCA", cluster_key: str = "leiden"):
         reference,
         cluster_key=cluster_key,
     )
+    actual_method = metadata.get("backend", "popv")
     _record_annotation_execution(
         adata,
         requested_method="popv",
-        actual_method="popv",
+        actual_method=actual_method,
     )
     summary = _annotation_summary(
         adata,
         requested_method="popv",
-        actual_method="popv",
+        actual_method=actual_method,
         expression_source=metadata.get("expression_source"),
     )
     summary.update(
         {
+            "backend": metadata.get("backend"),
             "reference": reference,
             "reference_label_key": metadata.get("reference_label_key"),
             "reference_cell_types": metadata.get("reference_cell_types"),
             "reference_gene_overlap": metadata.get("reference_gene_overlap"),
             "reference_path": metadata.get("reference_path"),
+            "popv_methods": metadata.get("popv_methods"),
         }
     )
     return summary
