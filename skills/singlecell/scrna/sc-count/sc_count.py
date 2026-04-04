@@ -260,14 +260,14 @@ def _write_report(
         [
             "",
             "## Output Files\n",
-            "- `standardized_input.h5ad` — downstream-ready AnnData with `layers['counts']`",
+            "- `processed.h5ad` — downstream-ready AnnData with `layers['counts']`",
             "- `figures/barcode_rank.png` — barcode-rank curve for filtered and optional raw counts",
             "- `figures/count_distributions.png` — total-count and detected-gene distributions",
             "- `tables/count_summary.csv` — compact run-level summary",
             "- `tables/barcode_metrics.csv` — per-barcode count summary",
             "",
             "## Recommended Next Step\n",
-            "- Continue with `sc-qc` or `sc-preprocessing` on `standardized_input.h5ad`.",
+            "- Continue with `sc-qc` or `sc-preprocessing` on `processed.h5ad`.",
         ]
     )
     if artifacts is not None and getattr(artifacts, "method", "") == "cellranger" and getattr(artifacts, "bam_path", None):
@@ -477,7 +477,7 @@ def main() -> None:
     plot_barcode_rank(barcode_metrics["total_counts"].to_numpy(), output_dir, raw_counts=raw_counts)
 
     _write_reproducibility(output_dir, args, demo_mode=args.demo)
-    output_h5ad = output_dir / "standardized_input.h5ad"
+    output_h5ad = output_dir / "processed.h5ad"
     save_h5ad(standardized, output_h5ad)
 
     summary = {

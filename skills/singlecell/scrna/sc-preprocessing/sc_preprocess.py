@@ -31,7 +31,7 @@ from omicsclaw.common.report import (
 )
 from omicsclaw.core.dependency_manager import validate_r_environment
 from omicsclaw.core.r_script_runner import RScriptRunner
-from skills.singlecell._lib.adata_utils import store_analysis_metadata
+from skills.singlecell._lib.adata_utils import record_matrix_contract, store_analysis_metadata
 from skills.singlecell._lib import dimred as sc_dimred_utils
 from skills.singlecell._lib import io as sc_io
 from skills.singlecell._lib import preprocessing as sc_preproc_utils
@@ -63,6 +63,11 @@ METHOD_REGISTRY: dict[str, MethodConfig] = {
         name="sctransform",
         description="Seurat SCTransform workflow (R)",
         dependencies=(),
+    ),
+    "pearson_residuals": MethodConfig(
+        name="pearson_residuals",
+        description="Scanpy Pearson residual workflow",
+        dependencies=("scanpy", "igraph", "leidenalg"),
     ),
 }
 
@@ -115,6 +120,18 @@ METHOD_PARAM_DEFAULTS: dict[str, dict[str, object]] = {
         "leiden_resolution": 0.8,
         "sctransform_regress_mt": True,
     },
+    "pearson_residuals": {
+        "method": "pearson_residuals",
+        "min_genes": 200,
+        "min_cells": 3,
+        "max_mt_pct": 20.0,
+        "n_top_hvg": 2000,
+        "n_pcs": 50,
+        "n_neighbors": 15,
+        "leiden_resolution": 1.0,
+        "hvg_flavor": "seurat_v3",
+        "pearson_theta": 100.0,
+    },
 }
 
 
@@ -140,23 +157,17 @@ def preprocess_scanpy(
     sc.pp.calculate_qc_metrics(adata, qc_vars=["mt"], percent_top=None, log1p=False, inplace=True)
     adata = adata[adata.obs.pct_counts_mt < max_mt_pct, :].copy()
     adata.layers["counts"] = adata.X.copy()
+    adata.raw = adata.copy()
 
     adata = sc_preproc_utils.run_standard_normalization(
         adata,
         target_sum=float(METHOD_PARAM_DEFAULTS["scanpy"]["normalization_target_sum"]),
         inplace=True,
     )
-    # Preserve log-normalized expression before scaling for downstream reuse.
-    adata.raw = adata.copy()
     adata = sc_preproc_utils.find_highly_variable_genes(
         adata,
         n_top_genes=n_top_hvg,
         flavor=str(METHOD_PARAM_DEFAULTS["scanpy"]["hvg_flavor"]),
-        inplace=True,
-    )
-    adata = sc_dimred_utils.scale_data(
-        adata,
-        max_value=float(METHOD_PARAM_DEFAULTS["scanpy"]["scale_max_value"]),
         inplace=True,
     )
     adata = sc_dimred_utils.run_pca_analysis(
@@ -179,6 +190,59 @@ def preprocess_scanpy(
         inplace=True,
     )
 
+    return adata
+
+
+def preprocess_pearson_residuals(
+    adata,
+    *,
+    min_genes: int = 200,
+    min_cells: int = 3,
+    max_mt_pct: float = 20.0,
+    n_top_hvg: int = 2000,
+    n_pcs: int = 50,
+    n_neighbors: int = 15,
+    leiden_resolution: float = 1.0,
+):
+    """Scanpy preprocessing pipeline using Pearson residual normalization."""
+    logger.info("Input: %d cells x %d genes", adata.n_obs, adata.n_vars)
+
+    adata.layers["counts"] = adata.X.copy()
+    sc.pp.filter_cells(adata, min_genes=min_genes)
+    sc.pp.filter_genes(adata, min_cells=min_cells)
+
+    adata.var["mt"] = adata.var_names.str.startswith("MT-") | adata.var_names.str.startswith("mt-")
+    sc.pp.calculate_qc_metrics(adata, qc_vars=["mt"], percent_top=None, log1p=False, inplace=True)
+    adata = adata[adata.obs.pct_counts_mt < max_mt_pct, :].copy()
+    adata.layers["counts"] = adata.X.copy()
+
+    # Keep a conventional log-normalized view for downstream wrappers that expect it.
+    adata_for_raw = adata.copy()
+    adata_for_raw = sc_preproc_utils.run_standard_normalization(adata_for_raw, inplace=True)
+    adata.layers["lognorm"] = adata_for_raw.X.copy()
+    adata.raw = adata.copy()
+
+    adata = sc_preproc_utils.find_highly_variable_genes(
+        adata,
+        n_top_genes=n_top_hvg,
+        flavor=str(METHOD_PARAM_DEFAULTS["pearson_residuals"]["hvg_flavor"]),
+        inplace=True,
+    )
+    adata = sc_preproc_utils.run_pearson_residuals(
+        adata,
+        theta=float(METHOD_PARAM_DEFAULTS["pearson_residuals"]["pearson_theta"]),
+        inplace=True,
+    )
+    adata.layers["pearson_residuals"] = adata.X.copy()
+    adata = sc_dimred_utils.run_pca_analysis(adata, n_pcs=n_pcs, svd_solver="arpack", inplace=True)
+    adata = sc_dimred_utils.build_neighbor_graph(adata, n_neighbors=n_neighbors, n_pcs=n_pcs, inplace=True)
+    adata = sc_dimred_utils.run_umap_reduction(adata, inplace=True)
+    adata = sc_dimred_utils.cluster_leiden(
+        adata,
+        resolution=leiden_resolution,
+        key_added="leiden",
+        inplace=True,
+    )
     return adata
 
 
@@ -283,8 +347,10 @@ def _load_seurat_result(
         )
 
     result.uns["seurat_info"] = info
-    # Preserve the returned normalized expression matrix for downstream inspection.
-    result.raw = result.copy()
+    # Keep the raw-count snapshot in .raw and normalized expression in .X.
+    raw_snapshot = result.copy()
+    raw_snapshot.X = result.layers["counts"].copy()
+    result.raw = raw_snapshot
     return result
 
 
@@ -893,6 +959,17 @@ def main():
             n_neighbors=int(effective_params["n_neighbors"]),
             leiden_resolution=float(effective_params["leiden_resolution"]),
         )
+    elif method == "pearson_residuals":
+        adata = preprocess_pearson_residuals(
+            adata,
+            min_genes=int(effective_params["min_genes"]),
+            min_cells=int(effective_params["min_cells"]),
+            max_mt_pct=float(effective_params["max_mt_pct"]),
+            n_top_hvg=int(effective_params["n_top_hvg"]),
+            n_pcs=int(effective_params["n_pcs"]),
+            n_neighbors=int(effective_params["n_neighbors"]),
+            leiden_resolution=float(effective_params["leiden_resolution"]),
+        )
     else:
         adata = run_seurat_preprocessing(
             adata,
@@ -906,13 +983,15 @@ def main():
             leiden_resolution=float(effective_params["leiden_resolution"]),
         )
 
-    adata.uns["omicsclaw_matrix_contract"] = {
-        "X": "scaled_expression" if method == "scanpy" else "normalized_expression",
-        "raw": "log1p_normalized_expression" if adata.raw is not None else None,
-        "layers": {"counts": "raw_counts" if "counts" in adata.layers else None},
-        "primary_cluster_key": "leiden",
-        "preprocess_method": method,
-    }
+    record_matrix_contract(
+        adata,
+        x_kind="normalized_expression",
+        raw_kind="raw_counts_snapshot" if adata.raw is not None else None,
+        layers={"counts": "raw_counts" if "counts" in adata.layers else None},
+        primary_cluster_key="leiden",
+        preprocess_method=method,
+        producer_skill=SKILL_NAME,
+    )
 
     summary = build_summary(adata, method)
     effective_params = finalize_effective_params(adata, effective_params, summary)

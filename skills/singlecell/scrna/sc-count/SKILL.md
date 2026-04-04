@@ -98,7 +98,7 @@ FASTQ input into standardized count matrices and a downstream-ready AnnData.
 
 1. **Four counting backends**: Cell Ranger, STARsolo, SimpleAF / Alevin-fry, and kb-python.
 2. **Direct import path**: can also standardize existing backend output directories without rerunning them.
-3. **Stable downstream contract**: writes `standardized_input.h5ad` with
+3. **Stable downstream contract**: writes `processed.h5ad` with
    `layers['counts']` and OmicsClaw input-contract metadata.
 4. **Standard output layer**: barcode-rank and count-distribution figures plus
    machine-readable tables.
@@ -230,7 +230,7 @@ output_directory/
 ├── README.md
 ├── report.md
 ├── result.json
-├── standardized_input.h5ad
+├── processed.h5ad
 ├── figures/
 │   ├── barcode_rank.png
 │   └── count_distributions.png

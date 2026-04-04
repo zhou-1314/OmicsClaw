@@ -144,7 +144,7 @@ The current wrapper uses `skills.singlecell._lib.io.smart_load(...)`.
 
 ### Input Expectations
 
-- The most reliable input is a **raw-count-like matrix in `adata.X`**.
+- The most reliable input is a **raw-count-like matrix in `adata.X`, `layers["counts"]`, or aligned `adata.raw`**.
 - If `layers["counts"]` or `adata.raw` already exists, the wrapper will still
   export a standardized `processed.h5ad`, but preprocessing assumptions should
   be checked before rerunning on already-normalized data.
@@ -160,10 +160,10 @@ The current wrapper uses `skills.singlecell._lib.io.smart_load(...)`.
    - filter genes by `min_cells`
    - compute mitochondrial QC and filter by `max_mt_pct`
 4. **Branch by backend**:
-   - `scanpy`: `normalize_total → log1p → highly_variable_genes(flavor='seurat') → scale → PCA → neighbors → UMAP → Leiden`
+   - `scanpy`: `normalize_total → log1p → highly_variable_genes(flavor='seurat') → PCA → neighbors → UMAP → Leiden`
    - `seurat`: `CreateSeuratObject → NormalizeData(LogNormalize) → FindVariableFeatures(vst) → ScaleData → RunPCA → FindNeighbors → FindClusters → RunUMAP`
    - `sctransform`: `CreateSeuratObject → SCTransform → RunPCA → FindNeighbors → FindClusters → RunUMAP`
-5. **Write standard outputs**: `processed.h5ad`, report, result JSON, gallery, figure-data CSVs, summary tables, README, and notebook.
+5. **Write standard outputs**: `processed.h5ad`, report, result JSON, gallery, figure-data CSVs, summary tables, README, and notebook. The public output contract keeps `X = normalized_expression`, `layers["counts"] = raw_counts`, and `adata.raw = raw_counts_snapshot`.
 
 ## CLI Reference
 

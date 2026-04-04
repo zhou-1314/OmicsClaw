@@ -20,7 +20,7 @@ single-cell preprocessing variations are already exposed in OmicsClaw.
 Use this guide when you need to decide:
 
 - whether the input is suitable for preprocessing right now
-- which of `scanpy`, `seurat`, or `sctransform` fits the user's goal
+- which of `scanpy`, `pearson_residuals`, `seurat`, or `sctransform` fits the user's goal
 - how to explain and tune QC, HVG, PCA, graph, and clustering settings without
   overclaiming what the wrapper does
 
@@ -36,7 +36,7 @@ Before running preprocessing, check:
 - **Count preservation**:
   - if counts already exist in `layers["counts"]` or `adata.raw`, note that, but do not assume the whole object is already preprocessing-ready
 - **Input provenance**:
-  - if the count source is unclear, recommend `sc-standardize-input` first
+  - if the count source is unclear, allow the shared canonicalization helper to fix it automatically; use `sc-standardize-input` only when the user wants the explicit exported canonical object
 - **Gene naming**:
   - mitochondrial tagging depends on `MT-` or `mt-` prefix detection
 - **Dataset size and heterogeneity**:
@@ -52,6 +52,7 @@ Important implementation notes in current OmicsClaw:
 - The Seurat branch currently uses `NormalizeData(LogNormalize)` and `FindVariableFeatures(selection.method='vst')`.
 - The SCTransform branch currently maps `n_top_hvg` to `SCTransform(variable.features.n=...)`.
 - For `seurat` and `sctransform`, if neither `layers["counts"]` nor aligned `adata.raw` exists, the wrapper may fall back to using `adata.X` as the raw-count source.
+- The public output contract should end as `X = normalized_expression`, `layers["counts"] = raw_counts`, and `adata.raw = raw_counts_snapshot`.
 
 ## Step 2: Choose The Method Deliberately
 
@@ -68,7 +69,17 @@ Wrapper behavior:
 - uses `normalize_total(target_sum=10000)`
 - uses `log1p`
 - uses HVG flavor `seurat`
-- scales data and runs PCA, neighbors, UMAP, and Leiden in Scanpy
+- runs PCA, neighbors, UMAP, and Leiden in Scanpy while keeping the public output matrix as normalized expression rather than persisting a scaled matrix
+
+### `pearson_residuals`
+
+Use this when you want analytic Pearson residual normalization in a Python-native workflow but still need a conventional log-normalized view preserved for downstream wrappers.
+
+Current wrapper behavior:
+- keeps raw counts in `layers["counts"]`
+- derives HVGs with `seurat_v3` on raw counts
+- computes Scanpy analytic Pearson residuals on the working matrix
+- still should preserve the public contract as count snapshot in `adata.raw` plus an explicitly declared active `X`
 
 ### `seurat`
 
@@ -133,7 +144,7 @@ Tune in this order:
 
 Guidance:
 
-- start around 2000 for `scanpy` and `seurat`
+- start around 2000 for `scanpy`, `pearson_residuals`, and `seurat`
 - start around 3000 for `sctransform` if the user has not specified a value
 - increase for larger or more heterogeneous datasets
 - reduce for small or noisy datasets if the graph is becoming unstable

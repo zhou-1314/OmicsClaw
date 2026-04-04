@@ -44,7 +44,7 @@ def test_demo_mode(tmp_output):
     assert (tmp_output / "README.md").exists()
     assert (tmp_output / "report.md").exists()
     assert (tmp_output / "result.json").exists()
-    assert (tmp_output / "standardized_input.h5ad").exists()
+    assert (tmp_output / "processed.h5ad").exists()
     assert (tmp_output / "figures" / "barcode_rank.png").exists()
     assert (tmp_output / "figures" / "count_distributions.png").exists()
     assert (tmp_output / "figure_data" / "manifest.json").exists()

@@ -62,7 +62,7 @@ Recommended route:
 
 1. run `sc-fastq-qc`
 2. if quality is acceptable, run `sc-count`
-3. pass the resulting `standardized_input.h5ad` into `sc-qc`
+3. pass the resulting `processed.h5ad` into `sc-qc`
 4. then run `sc-preprocessing`
 
 If the user explicitly wants:
@@ -157,16 +157,16 @@ Then explain the rule in simple words:
 ```bash
 oc run sc-fastq-qc --input fastqs/ --output output/sc_fastq_qc
 oc run sc-count --input fastqs/ --method cellranger --reference /path/to/refdata-gex-GRCh38-2020-A --output output/sc_count
-oc run sc-qc --input output/sc_count/standardized_input.h5ad --output output/sc_qc
-oc run sc-preprocessing --input output/sc_count/standardized_input.h5ad --output output/sc_preprocessing
+oc run sc-qc --input output/sc_count/processed.h5ad --output output/sc_qc
+oc run sc-preprocessing --input output/sc_count/processed.h5ad --output output/sc_preprocessing
 ```
 
 ### Existing `.h5ad` route
 
 ```bash
 oc run sc-standardize-input --input data.h5ad --output output/sc_standardize
-oc run sc-qc --input output/sc_standardize/standardized_input.h5ad --output output/sc_qc
-oc run sc-preprocessing --input output/sc_standardize/standardized_input.h5ad --output output/sc_preprocessing
+oc run sc-qc --input output/sc_standardize/processed.h5ad --output output/sc_qc
+oc run sc-preprocessing --input output/sc_standardize/processed.h5ad --output output/sc_preprocessing
 ```
 
 ### Velocity route

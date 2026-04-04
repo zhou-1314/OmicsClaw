@@ -16,8 +16,8 @@ use this route:
 ```bash
 oc run sc-fastq-qc --input fastqs/ --output output/sc_fastq_qc
 oc run sc-count --input fastqs/ --method cellranger --reference /path/to/refdata-gex-GRCh38-2020-A --output output/sc_count
-oc run sc-qc --input output/sc_count/standardized_input.h5ad --output output/sc_qc
-oc run sc-preprocessing --input output/sc_count/standardized_input.h5ad --output output/sc_preprocessing
+oc run sc-qc --input output/sc_count/processed.h5ad --output output/sc_qc
+oc run sc-preprocessing --input output/sc_count/processed.h5ad --output output/sc_preprocessing
 ```
 
 Use `sc-count` with a different `--method` only when you explicitly want:
@@ -29,16 +29,16 @@ Use `sc-count` with a different `--method` only when you explicitly want:
 
 ```bash
 oc run sc-count --input sample_count/ --method cellranger --output output/sc_count
-oc run sc-qc --input output/sc_count/standardized_input.h5ad --output output/sc_qc
-oc run sc-preprocessing --input output/sc_count/standardized_input.h5ad --output output/sc_preprocessing
+oc run sc-qc --input output/sc_count/processed.h5ad --output output/sc_qc
+oc run sc-preprocessing --input output/sc_count/processed.h5ad --output output/sc_preprocessing
 ```
 
 ### Route C: I already have an external `.h5ad`
 
 ```bash
 oc run sc-standardize-input --input data.h5ad --output output/sc_standardize
-oc run sc-qc --input output/sc_standardize/standardized_input.h5ad --output output/sc_qc
-oc run sc-preprocessing --input output/sc_standardize/standardized_input.h5ad --output output/sc_preprocessing
+oc run sc-qc --input output/sc_standardize/processed.h5ad --output output/sc_qc
+oc run sc-preprocessing --input output/sc_standardize/processed.h5ad --output output/sc_preprocessing
 ```
 
 ### Route D: I want RNA velocity
