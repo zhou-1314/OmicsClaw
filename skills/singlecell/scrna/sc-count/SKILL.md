@@ -124,6 +124,25 @@ FASTQ input into standardized count matrices and a downstream-ready AnnData.
 | 10x chemistry contract | `--chemistry`, `--whitelist` | required for STARsolo barcode/UMI parsing |
 | Transcript-to-gene map | `--t2g` | required for kb-python runs |
 
+## Beginner Setup Hint
+
+If the user is missing reference assets, guide them to either:
+
+1. pass explicit local paths such as `--reference`, `--whitelist`, or `--t2g`
+2. or place files under:
+   - `resources/singlecell/references/cellranger/`
+   - `resources/singlecell/references/starsolo/`
+   - `resources/singlecell/references/simpleaf/`
+   - `resources/singlecell/references/kb/`
+   - `resources/singlecell/references/whitelists/`
+
+Download guidance:
+
+- Cell Ranger reference: official 10x reference release pages
+- STARsolo: build a STAR genome directory from a matching FASTA / GTF
+- STARsolo whitelist: official 10x Cell Ranger barcode files such as `3M-february-2018.txt`
+- kb-python: keep both the kallisto index and the matching `t2g`
+
 ## Workflow
 
 1. **Load**: detect whether the input is FASTQ or an existing count-output directory.

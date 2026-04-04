@@ -40,17 +40,23 @@ from skills.singlecell._lib import io as sc_io
 from skills.singlecell._lib.adata_utils import record_standardized_input_contract, store_analysis_metadata
 from skills.singlecell._lib.export import save_h5ad
 from skills.singlecell._lib.upstream import (
+    auto_gtf_path,
+    auto_reference_path,
     choose_fastq_sample,
     detect_cellranger_bam_and_barcodes,
     detect_starsolo_output,
     discover_fastq_samples,
+    ensure_existing_path,
     find_starsolo_velocyto_dir,
+    gtf_setup_guidance,
     guess_starsolo_whitelist,
     load_loom_velocity,
     load_starsolo_velocyto_dir,
     merge_velocity_layers,
+    reference_setup_guidance,
     run_starsolo_count,
     run_velocyto_from_bam,
+    whitelist_setup_guidance,
 )
 from skills.singlecell._lib.viz import plot_velocity_gene_balance, plot_velocity_layer_summary
 
@@ -60,6 +66,13 @@ logger = logging.getLogger(__name__)
 SKILL_NAME = "sc-velocity-prep"
 SKILL_VERSION = "0.1.0"
 SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-velocity-prep/sc_velocity_prep.py"
+
+
+def _recommended_velocity_reference_dir(method: str) -> Path:
+    return {
+        "velocyto": Path("resources/singlecell/references/gtf"),
+        "starsolo": Path("resources/singlecell/references/starsolo"),
+    }[method]
 
 
 def _demo_velocity_adata():
@@ -243,6 +256,9 @@ def main() -> None:
 
     execution = None
     artifact_info: dict[str, object] = {}
+    used_reference = ""
+    used_gtf = ""
+    used_whitelist = ""
 
     if args.demo:
         velocity_adata, input_file = _demo_velocity_adata()
@@ -260,14 +276,31 @@ def main() -> None:
                 velocity_adata = load_loom_velocity(input_path)
                 artifact_info = {"loom_path": str(input_path)}
             else:
-                if not args.gtf:
-                    raise ValueError("BAM-backed velocyto preparation requires `--gtf`.")
+                if args.gtf:
+                    gtf_path = ensure_existing_path(
+                        args.gtf,
+                        flag="--gtf",
+                        label="GTF annotation",
+                        recommended_dir=_recommended_velocity_reference_dir("velocyto"),
+                        expect_directory=False,
+                    )
+                else:
+                    gtf_path = auto_gtf_path()
+                    if gtf_path is not None:
+                        logger.info("Using project-local GTF annotation: %s", gtf_path)
+                if gtf_path is None:
+                    raise ValueError(
+                        "BAM-backed velocyto preparation requires a GTF file. "
+                        "Pass `--gtf /abs/path/to/genes.gtf`, or keep one under `resources/singlecell/references/gtf/`.\n\n"
+                        f"{gtf_setup_guidance()}"
+                    )
+                used_gtf = str(gtf_path)
                 bam_path, barcode_path = detect_cellranger_bam_and_barcodes(input_path)
                 sample_id = args.sample or input_path.name
                 loom_path, execution = run_velocyto_from_bam(
                     bam_path=bam_path,
                     barcode_path=barcode_path,
-                    gtf_path=args.gtf,
+                    gtf_path=gtf_path,
                     output_dir=output_dir,
                     sample_id=sample_id,
                     threads=args.threads,
@@ -283,20 +316,50 @@ def main() -> None:
                 velocity_adata, velo_dir = load_starsolo_velocyto_dir(input_path)
                 artifact_info = {"starsolo_velocyto_dir": str(velo_dir)}
             else:
-                if not args.reference:
-                    raise ValueError("FASTQ-backed STARsolo velocity preparation requires `--reference`.")
+                if args.reference:
+                    reference_path = ensure_existing_path(
+                        args.reference,
+                        flag="--reference",
+                        label="STARsolo genome directory",
+                        recommended_dir=_recommended_velocity_reference_dir("starsolo"),
+                        expect_directory=True,
+                    )
+                else:
+                    reference_path = auto_reference_path("starsolo")
+                    if reference_path is not None:
+                        logger.info("Using project-local STARsolo reference: %s", reference_path)
+                if reference_path is None:
+                    raise ValueError(
+                        "FASTQ-backed STARsolo velocity preparation requires a STAR genome directory. "
+                        "Pass `--reference /abs/path/to/star_index`, or keep one under `resources/singlecell/references/starsolo/`.\n\n"
+                        f"{reference_setup_guidance('starsolo')}"
+                    )
+                used_reference = str(reference_path)
                 if args.chemistry == "auto":
                     raise ValueError("FASTQ-backed STARsolo velocity preparation requires an explicit `--chemistry`.")
                 samples = discover_fastq_samples(input_path, read2=args.read2, sample=args.sample)
                 sample = choose_fastq_sample(samples, sample=args.sample)
-                whitelist = Path(args.whitelist) if args.whitelist else guess_starsolo_whitelist(args.reference, args.chemistry)
+                if args.whitelist:
+                    whitelist = ensure_existing_path(
+                        args.whitelist,
+                        flag="--whitelist",
+                        label="STARsolo barcode whitelist",
+                        recommended_dir=Path("resources/singlecell/references/whitelists"),
+                        expect_directory=False,
+                    )
+                else:
+                    whitelist = guess_starsolo_whitelist(reference_path, args.chemistry)
                 if whitelist is None:
                     raise ValueError(
-                        "Could not infer a compatible STARsolo whitelist. Pass `--whitelist <barcode_whitelist.txt>` explicitly."
+                        "Could not infer a compatible STARsolo whitelist. "
+                        "Pass `--whitelist /abs/path/to/3M-february-2018.txt`, or keep the whitelist under "
+                        "`resources/singlecell/references/whitelists/`.\n\n"
+                        f"{whitelist_setup_guidance()}"
                     )
+                used_whitelist = str(whitelist)
                 artifacts, execution = run_starsolo_count(
                     sample,
-                    reference=args.reference,
+                    reference=reference_path,
                     output_dir=output_dir,
                     threads=args.threads,
                     chemistry=args.chemistry,
@@ -355,12 +418,12 @@ def main() -> None:
         "method": args.method if not args.demo else "demo",
         "params": {
             "base_h5ad": args.base_h5ad or "",
-            "gtf": args.gtf or "",
-            "reference": args.reference or "",
+            "gtf": used_gtf,
+            "reference": used_reference,
             "sample": args.sample or "",
             "threads": int(args.threads),
             "chemistry": args.chemistry,
-            "whitelist": args.whitelist or "",
+            "whitelist": used_whitelist,
         },
         "input_contract": contract,
         "artifacts": artifact_info,

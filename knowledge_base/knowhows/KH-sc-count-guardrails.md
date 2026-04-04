@@ -22,6 +22,7 @@ source_urls:
 - **Do not overstate Cell Ranger coverage**: upstream `cellranger count` can also handle Feature Barcode modes, but the current OmicsClaw wrapper is intentionally scoped to the core count workflow and stable matrix import path.
 - **Use STARsolo conservatively**: require an explicit supported chemistry (`10xv2`, `10xv3`, `10xv4`) for real FASTQ-backed STARsolo runs unless the user is importing an existing STARsolo output.
 - **Be careful with whitelist language**: STARsolo whitelist auto-detection is best-effort only; if the correct whitelist is not obvious, ask for it or stop clearly rather than guessing.
+- **When reference assets are missing, be actionable**: tell the user both where to download them from official docs and where to place them locally under `resources/singlecell/references/...`; do not stop at “missing --reference”.
 - **Preserve upstream artifacts for downstream skills**: raw `.h5` outputs matter for CellBender-like ambient correction, and BAM / Velocyto outputs matter for RNA velocity preparation.
 - **Explain the hand-off artifact**: `standardized_input.h5ad` is the downstream OmicsClaw contract, but it does not mean all upstream backend details have been discarded.
 - **For detailed operator guidance**: see `knowledge_base/skill-guides/singlecell/sc-count.md`.

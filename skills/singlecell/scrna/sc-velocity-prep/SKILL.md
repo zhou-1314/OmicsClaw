@@ -104,6 +104,21 @@ velocity-ready `spliced` and `unspliced` layers before running `sc-velocity`.
 | Spliced/unspliced source | BAM + GTF, STARsolo Velocyto output, or loom | required to construct RNA velocity layers |
 | Optional base object | `--base-h5ad` | useful when velocity layers should be merged back into an existing AnnData |
 
+## Beginner Setup Hint
+
+If the user is missing upstream assets, guide them to either:
+
+1. pass explicit local paths such as `--gtf`, `--reference`, or `--whitelist`
+2. or place files under:
+   - `resources/singlecell/references/gtf/`
+   - `resources/singlecell/references/starsolo/`
+   - `resources/singlecell/references/whitelists/`
+
+Beginner rule of thumb:
+
+- for `--method velocyto`, the safest `genes.gtf` is usually the one that matches the reference used during counting
+- for `--method starsolo`, users need a STAR genome directory plus the matching barcode whitelist
+
 ## Workflow
 
 1. **Load**: detect whether the input is a Cell Ranger directory, STARsolo output, FASTQ input, or loom file.

@@ -21,6 +21,7 @@ source_urls:
 - **Do not pretend standardization creates biology**: `sc-standardize-input` can stabilize an AnnData contract, but it cannot fabricate `spliced` / `unspliced` layers.
 - **Use velocyto with the right inputs**: when running from a Cell Ranger BAM, require a GTF and a filtered barcode set. The official velocyto docs explicitly warn that omitting barcode filtering is not recommended because runtime and memory can explode.
 - **Use STARsolo Velocyto honestly**: the current wrapper supports import of existing Velocyto matrices and a narrow 10x-oriented FASTQ path with `--soloFeatures Gene Velocyto`; do not imply generic support for every custom chemistry.
+- **When GTF or STAR references are missing, be actionable**: tell the user where to download or reuse them, and where to place them locally under `resources/singlecell/references/...`; do not stop at “missing --gtf”.
 - **Explain merge behavior**: `--base-h5ad` is a convenience merge, not a magic reconciliation step. The current merge only keeps shared cells and shared genes.
 - **Do not overpromise velocity quality**: preparing layers successfully does not guarantee that downstream velocity inference will be biologically meaningful.
 - **For detailed operator guidance**: see `knowledge_base/skill-guides/singlecell/sc-velocity-prep.md`.
