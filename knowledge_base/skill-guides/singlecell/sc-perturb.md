@@ -16,6 +16,7 @@ Use this guide to decide:
 - when perturbation-aware classification is more informative than raw guide grouping
 - how to provide controls and replicates for Mixscape
 - how to interpret responder versus non-responder perturbation classes
+- when to stop and run upstream perturbation preparation before Mixscape
 
 ## Method Selection
 
@@ -37,6 +38,7 @@ Use this guide to decide:
 - Mixscape first computes perturbation signatures, then separates cells into perturbation responders versus non-responders.
 - `mixscape_class_global` is the simplest first summary when explaining overall perturbation effects.
 - Posterior probabilities should be interpreted as confidence for perturbed-class assignment, not as causal effect sizes.
+- If the AnnData lacks perturbation labels entirely, the analysis is not ready yet; prepare barcode-to-guide assignments first.
 
 ## Official References
 

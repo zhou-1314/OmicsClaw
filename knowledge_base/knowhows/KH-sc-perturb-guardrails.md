@@ -15,6 +15,7 @@ source_urls:
 # Single-Cell Perturbation Guardrails
 
 - **Inspect first**: confirm the perturbation column, control label, and replicate structure before running Mixscape.
+- **Stop for missing metadata**: if the user only has expression data without perturbation labels, send them to upstream guide-assignment preparation first instead of guessing labels.
 - **Do not equate guide identity with effect**: a cell carrying a perturbation can still be classified as non-perturbed by Mixscape.
 - **Prefer replicate-aware signatures**: when replicate labels exist, use them via `split_by` rather than pooling everything immediately.
 - **Interpret classes carefully**: `NT`, `NP`, and perturbation-specific responder classes capture different biological states.

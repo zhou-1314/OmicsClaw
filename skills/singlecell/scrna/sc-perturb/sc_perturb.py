@@ -95,6 +95,17 @@ def main() -> int:
         input_checksum = sha256_file(args.input)
         input_path = args.input
 
+    if args.pert_key not in adata.obs.columns:
+        raise SystemExit(
+            f"Perturbation column '{args.pert_key}' not found in adata.obs. "
+            "Prepare barcode-to-guide assignments first, for example with `sc-perturb-prep`."
+        )
+    if args.control not in set(adata.obs[args.pert_key].astype(str)):
+        raise SystemExit(
+            f"Control label '{args.control}' not found in adata.obs['{args.pert_key}']. "
+            "Confirm the perturbation column and control label before running Mixscape."
+        )
+
     if "X_pca" not in adata.obsm:
         sc.pp.pca(adata)
 

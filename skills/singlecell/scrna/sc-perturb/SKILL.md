@@ -57,6 +57,7 @@ metadata:
 
 - This wrapper uses the official `pertpy.tools.Mixscape` workflow.
 - Mixscape is best suited for Perturb-seq or CRISPR perturbation screens with a clear control population.
+- If the input AnnData does not already contain perturbation labels in `adata.obs`, prepare them upstream first; OmicsClaw now provides `sc-perturb-prep` for expression data plus barcode-to-guide mapping files.
 
 ## Outputs
 
