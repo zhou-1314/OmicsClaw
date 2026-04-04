@@ -332,6 +332,7 @@ def main() -> None:
     execution = None
     artifacts = None
     backend_summary: dict[str, object] = {}
+    standardization_warnings: list[str] = []
     used_reference = ""
     used_t2g = ""
     used_whitelist = ""
@@ -463,7 +464,17 @@ def main() -> None:
             raw_adata = adata.copy()
             backend_summary = {}
         else:
-            adata = load_count_adata_from_artifacts(artifacts)
+            try:
+                adata = load_count_adata_from_artifacts(artifacts)
+            except FileNotFoundError:
+                raw_fallback = load_raw_count_adata_from_artifacts(artifacts)
+                if raw_fallback is None:
+                    raise
+                adata = raw_fallback.copy()
+                standardization_warnings.append(
+                    "Filtered matrix was unavailable; using the raw count matrix as the downstream hand-off. "
+                    "This usually means cell calling retained zero filtered cells."
+                )
             raw_adata = load_raw_count_adata_from_artifacts(artifacts) or adata.copy()
             backend_summary = parse_summary_table(artifacts.summary_csv or artifacts.log_path)
         standardized, contract = standardize_count_adata(
@@ -471,7 +482,7 @@ def main() -> None:
             skill_name=SKILL_NAME,
             method=args.method,
             source_label=f"{args.method}.filtered_matrix",
-            warnings=[],
+            warnings=standardization_warnings,
         )
         if args.method in {"simpleaf", "kb_python"}:
             standardized.uns["omicsclaw_count_artifacts"] = {
