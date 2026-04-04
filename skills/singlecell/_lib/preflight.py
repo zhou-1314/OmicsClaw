@@ -373,6 +373,11 @@ def preflight_sc_cell_communication(
     cell_type_key: str,
     species: str,
     counts_data: str | None = None,
+    condition_key: str | None = None,
+    condition_oi: str | None = None,
+    condition_ref: str | None = None,
+    receiver: str | None = None,
+    senders: list[str] | None = None,
     source_path: str | None = None,
 ) -> PreflightDecision:
     decision = PreflightDecision("sc-cell-communication")
@@ -407,6 +412,54 @@ def preflight_sc_cell_communication(
         decision.require_confirmation(
             "`cellchat_r` expects log-normalized expression; the current `adata.X` still looks count-like. Run `sc-preprocessing` first or confirm the matrix state."
         )
+
+    if method == "nichenet_r":
+        if species != "human":
+            decision.block("The current NicheNet wrapper only supports `--species human`.")
+        if condition_key not in adata.obs.columns:
+            candidates = _obs_candidates(adata, "condition") + _obs_candidates(adata, "group")
+            if candidates:
+                decision.require_field(
+                    "condition_key",
+                    f"`--condition-key {condition_key}` was not found. Confirm the perturbation/condition column: {_format_candidates(candidates)}.",
+                    aliases=["condition_key", "condition", "group_key"],
+                    flag="--condition-key",
+                )
+            else:
+                decision.block(
+                    "NicheNet requires a condition column in `adata.obs` so the receiver cell type can be compared between two conditions."
+                )
+        if not receiver:
+            decision.require_field(
+                "receiver",
+                "NicheNet requires one receiver cell type via `--receiver`.",
+                aliases=["receiver", "receiver_celltype"],
+                flag="--receiver",
+            )
+        elif cell_type_key in adata.obs.columns and receiver not in set(adata.obs[cell_type_key].astype(str)):
+            decision.block(
+                f"`--receiver {receiver}` was not found in `adata.obs['{cell_type_key}']`."
+            )
+        if not senders:
+            decision.require_field(
+                "senders",
+                "NicheNet requires one or more sender cell types via `--senders sender1,sender2`.",
+                aliases=["senders", "sender", "sender_celltypes"],
+                flag="--senders",
+            )
+        elif cell_type_key in adata.obs.columns:
+            known = set(adata.obs[cell_type_key].astype(str))
+            missing = [sender for sender in senders if sender not in known]
+            if missing:
+                decision.block(
+                    f"`--senders` contains labels not found in `adata.obs['{cell_type_key}']`: {', '.join(missing)}."
+                )
+        if condition_key and condition_key in adata.obs.columns:
+            values = set(adata.obs[condition_key].astype(str))
+            if condition_oi and condition_oi not in values:
+                decision.block(f"`--condition-oi {condition_oi}` was not found in `adata.obs['{condition_key}']`.")
+            if condition_ref and condition_ref not in values:
+                decision.block(f"`--condition-ref {condition_ref}` was not found in `adata.obs['{condition_key}']`.")
 
     return decision
 

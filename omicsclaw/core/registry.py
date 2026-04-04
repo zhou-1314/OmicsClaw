@@ -1026,6 +1026,16 @@ _HARDCODED_SKILLS: dict[str, dict[str, Any]] = {
         "requires_preprocessed": True,
         "saves_h5ad": True,
     },
+    "sc-perturb-prep": {
+        "domain": "singlecell",
+        "alias": "sc-perturb-prep",
+        "script": SKILLS_DIR / "singlecell" / "scrna" / "sc-perturb-prep" / "sc_perturb_prep.py",
+        "demo_args": ["--demo"],
+        "description": "Prepare perturbation-ready AnnData objects from expression data plus sgRNA assignments",
+        "allowed_extra_flags": {"--mapping-file", "--barcode-column", "--sgrna-column", "--target-column", "--sep", "--delimiter", "--gene-position", "--pert-key", "--sgrna-key", "--target-key", "--control-patterns", "--control-label", "--keep-multi-guide", "--species"},
+        "requires_preprocessed": False,
+        "saves_h5ad": True,
+    },
     "sc-in-silico-perturbation": {
         "domain": "singlecell",
         "alias": "sc-in-silico-perturbation",
