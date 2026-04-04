@@ -4,7 +4,7 @@ title: OmicsClaw Skill Guide — SC Pseudotime
 doc_type: method-reference
 domains: [singlecell]
 related_skills: [sc-pseudotime]
-search_terms: [pseudotime, DPT, PAGA, diffusion map, root cluster, trajectory genes, tuning]
+search_terms: [pseudotime, DPT, PAGA, diffusion map, Palantir, VIA, root cluster, trajectory genes, tuning]
 priority: 0.8
 ---
 
@@ -34,7 +34,7 @@ Key properties to check:
   - if the object is external, recommend `sc-standardize-input` first, but make clear that standardization does not choose the root for pseudotime
 
 Important implementation notes in current OmicsClaw:
-- trajectory `method` is currently only `dpt`
+- trajectory `method` is currently `dpt`, `palantir`, or `via`
 - `corr_method` is not a trajectory algorithm; it only ranks trajectory genes after pseudotime is inferred
 - the wrapper bundles PAGA, diffusion map, and DPT into one execution path
 - the wrapper now uses shared preflight checks, so missing cluster columns or missing root choice should be clarified before the run rather than left to opaque failures
@@ -44,12 +44,14 @@ Important implementation notes in current OmicsClaw:
 | Method | Best first use | Strong starting parameters | Main caveat |
 |--------|----------------|----------------------------|-------------|
 | **dpt** | Classic Scanpy pseudotime after clustering and graph construction | `cluster_key`, `root_cluster`, `n_dcs`, `corr_method` | Root choice still governs directionality |
+| **palantir** | waypoint-based pseudotime with entropy and fate probabilities | `root_cluster`/`root_cell`, `palantir_knn`, `palantir_num_waypoints` | heavier dependency and explicit root required |
+| **via** | graph-based pseudotime with automatic terminal-state discovery | `root_cluster`/`root_cell`, `via_knn` | optional pyVIA dependency and embedding-quality sensitivity |
 
 ## Step 3: Always Show A Parameter Summary Before Running
 
 ```text
 About to run pseudotime analysis
-  Method: dpt
+  Method: via
   Parameters: cluster_key=leiden, root_cluster=0, n_dcs=10, n_genes=50, corr_method=pearson
   Note: corr_method only affects trajectory-gene ranking after DPT is computed.
 ```
@@ -71,6 +73,7 @@ Guidance:
 
 Important warnings:
 - do not describe `pearson` or `spearman` as pseudotime methods
+- do not describe VIA as diffusion pseudotime; it is a separate graph-based trajectory framework
 - do not imply Palantir or CellRank are implemented in this wrapper
 - do not expose Scanpy parameters that the wrapper does not currently forward
 
@@ -91,4 +94,6 @@ Important warnings:
 - https://scanpy.readthedocs.io/en/stable/generated/scanpy.tl.paga.html
 - https://scanpy.readthedocs.io/en/stable/generated/scanpy.tl.diffmap.html
 - https://scanpy.readthedocs.io/en/stable/generated/scanpy.tl.dpt.html
+- https://github.com/ShobiStassen/VIA
+- https://pypi.org/project/pyVIA/
 - https://scanpy.readthedocs.io/en/latest/tutorials/trajectories/paga-paul15.html

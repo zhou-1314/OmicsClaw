@@ -698,3 +698,175 @@ def build_celltypist_input_adata(adata: AnnData):
     tmp.obs_names = adata.obs_names.copy()
     tmp.var_names = adata.var_names.copy()
     return tmp, "adata.X"
+
+
+# ---------------------------------------------------------------------------
+# PopV reference mapping utilities
+# ---------------------------------------------------------------------------
+
+
+def _dense_expression_matrix(adata: AnnData, prefer_raw: bool = True) -> tuple[np.ndarray, pd.Index, str]:
+    use_raw = prefer_raw and adata.raw is not None and adata.raw.shape == adata.shape
+    if use_raw:
+        matrix = adata.raw.X
+        obs_source = "adata.raw"
+        var_names = adata.raw.var_names
+    else:
+        matrix = adata.X
+        obs_source = "adata.X"
+        var_names = adata.var_names
+
+    if hasattr(matrix, "toarray"):
+        matrix = matrix.toarray()
+    else:
+        matrix = np.asarray(matrix)
+
+    return matrix.astype(float, copy=False), pd.Index(var_names), obs_source
+
+
+def _infer_reference_label_key(adata: AnnData) -> str:
+    candidates = [
+        "cell_type",
+        "celltype",
+        "label",
+        "annotation",
+        "cell_type_label",
+        "celltype_label",
+        "annotation_label",
+    ]
+    lower_candidates = {name.lower(): name for name in candidates}
+    existing = {name.lower(): name for name in adata.obs.columns}
+    for key in candidates:
+        if key in adata.obs.columns:
+            return key
+    for lower_name, original in lower_candidates.items():
+        if lower_name in existing:
+            return existing[lower_name]
+    raise ValueError(
+        "Reference data must contain a cell-type label column such as cell_type or annotation."
+    )
+
+
+def apply_popv_annotation(
+    adata: AnnData,
+    reference_path: str,
+    *,
+    cluster_key: str = "leiden",
+    annotation_key: str = "cell_type",
+    prediction_key: str = "popv_label",
+    consensus_key: str = "popv_cluster_consensus",
+) -> dict:
+    """Project query cells to a labeled reference and derive consensus labels."""
+    reference_file = Path(reference_path)
+    if not reference_file.exists():
+        raise FileNotFoundError(
+            f"PopV reference file {reference_file} does not exist. "
+            "Provide a labeled reference in H5AD format via --reference."
+        )
+
+    try:
+        import scanpy as sc
+    except ImportError as exc:
+        raise ImportError("scanpy is required for PopV reference mapping") from exc
+
+    reference_adata = sc.read_h5ad(reference_file)
+    reference_label_key = _infer_reference_label_key(reference_adata)
+
+    query_matrix, query_vars, expression_source = _dense_expression_matrix(adata)
+    ref_matrix, ref_vars, _ = _dense_expression_matrix(reference_adata)
+
+    common_genes = query_vars.intersection(ref_vars)
+    if common_genes.empty:
+        raise ValueError(
+            "PopV requires overlapping genes between query and reference; "
+            "none were found."
+        )
+    sorted_genes = common_genes.sort_values()
+    query_idx = [query_vars.get_loc(gene) for gene in sorted_genes]
+    ref_idx = [ref_vars.get_loc(gene) for gene in sorted_genes]
+    query_view = query_matrix[:, query_idx]
+    ref_view = ref_matrix[:, ref_idx]
+
+    ref_labels = reference_adata.obs[reference_label_key].astype(str)
+    label_centroids = []
+    centroid_labels: list[str] = []
+    for label in sorted(ref_labels.unique(), key=str):
+        mask = ref_labels == label
+        if not mask.any():
+            continue
+        centroid = np.asarray(ref_view[mask.values].mean(axis=0)).reshape(-1)
+        label_centroids.append(centroid)
+        centroid_labels.append(label)
+
+    if not label_centroids:
+        raise ValueError("Reference needs at least one labeled cell type for PopV mapping.")
+
+    centroids = np.vstack(label_centroids)
+    n_cells = query_view.shape[0]
+    n_centroids = centroids.shape[0]
+
+    query_norm = np.linalg.norm(query_view, axis=1)
+    centroid_norm = np.linalg.norm(centroids, axis=1)
+    centroid_norm = np.where(centroid_norm == 0, 1.0, centroid_norm)
+
+    scores = query_view @ centroids.T
+    norm_product = np.outer(np.where(query_norm == 0, 1.0, query_norm), centroid_norm)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        scores = np.divide(scores, norm_product)
+    scores = np.nan_to_num(scores, nan=0.0, posinf=0.0, neginf=0.0)
+
+    pick_idx = np.argmax(scores, axis=1)
+    best_scores = scores[np.arange(n_cells), pick_idx]
+    predicted_labels = [centroid_labels[idx] for idx in pick_idx]
+
+    predictions = pd.DataFrame({
+        "cell_id": adata.obs_names.astype(str),
+        prediction_key: predicted_labels,
+        "popv_score": best_scores.astype(float),
+    }, index=adata.obs_names.copy())
+
+    if cluster_key in adata.obs.columns:
+        cluster_series = adata.obs[cluster_key].astype(str)
+        predictions[cluster_key] = cluster_series.values
+        consensus_map: dict[str, str] = {}
+        for cluster, group in predictions.groupby(cluster_key):
+            counts = group[prediction_key].value_counts()
+            consensus_label = counts.index[0]
+            consensus_map[str(cluster)] = consensus_label
+        consensus_labels = cluster_series.map(consensus_map)
+        missing = consensus_labels.isna()
+        if missing.any():
+            consensus_labels[missing] = predictions.loc[missing, prediction_key].values
+        adata.obs[consensus_key] = consensus_labels
+        final_labels = consensus_labels
+    else:
+        adata.obs[consensus_key] = predictions[prediction_key]
+        final_labels = predictions[prediction_key]
+
+    adata.obs[prediction_key] = predictions[prediction_key].astype(str).to_numpy()
+    adata.obs[annotation_key] = pd.Categorical(final_labels.astype(str))
+    adata.obs["annotation_score"] = predictions["popv_score"].astype(float).to_numpy()
+
+    predictions["cell_type"] = adata.obs[annotation_key].astype(str).values
+    adata.uns["popv_predictions"] = predictions.copy()
+
+    logger.info(
+        "PopV mapped %d cells to %d reference labels using %d overlapping genes.",
+        n_cells,
+        n_centroids,
+        len(sorted_genes),
+    )
+
+    if cluster_key not in adata.obs.columns:
+        logger.warning(
+            "Cluster key %s not found; PopV labels remain on a per-cell basis.",
+            cluster_key,
+        )
+
+    return {
+        "expression_source": expression_source,
+        "reference_label_key": reference_label_key,
+        "reference_cell_types": n_centroids,
+        "reference_gene_overlap": len(sorted_genes),
+        "reference_path": str(reference_file),
+    }

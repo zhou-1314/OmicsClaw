@@ -55,7 +55,32 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "sc-pseudotime"
-SKILL_VERSION = "0.3.0"
+SKILL_VERSION = "0.4.0"
+
+
+def _prepare_via_runtime() -> None:
+    compat_aliases = {
+        "bool8": np.bool_,
+        "object0": np.object_,
+        "int0": np.intp,
+        "uint0": np.uintp,
+        "uint": np.uint64,
+        "float_": np.float64,
+        "longfloat": np.longdouble,
+        "singlecomplex": np.complex64,
+        "complex_": np.complex128,
+        "cfloat": np.complex128,
+        "clongfloat": np.clongdouble,
+        "longcomplex": np.clongdouble,
+        "void0": np.void,
+        "bytes0": np.bytes_,
+        "str0": np.str_,
+        "string_": np.bytes_,
+        "unicode_": np.str_,
+    }
+    for alias, target in compat_aliases.items():
+        if not hasattr(np, alias):
+            setattr(np, alias, target)
 
 
 def _write_repro_requirements(repro_dir: Path, packages: list[str]) -> None:
@@ -120,6 +145,11 @@ METHOD_REGISTRY: dict[str, MethodConfig] = {
         description="Palantir pseudotime with diffusion maps and waypoint sampling",
         dependencies=("palantir",),
     ),
+    "via": MethodConfig(
+        name="via",
+        description="VIA pseudotime with automatic terminal-state inference",
+        dependencies=("pyVIA",),
+    ),
 }
 
 SUPPORTED_METHODS = tuple(METHOD_REGISTRY.keys())
@@ -144,6 +174,16 @@ METHOD_PARAM_DEFAULTS: dict[str, dict[str, object]] = {
         "palantir_max_iterations": 25,
         "palantir_seed": 20,
     },
+    "via": {
+        "cluster_key": "leiden",
+        "root_cluster": None,
+        "root_cell": None,
+        "n_dcs": 10,
+        "n_genes": 50,
+        "corr_method": "pearson",
+        "via_knn": 30,
+        "via_seed": 20,
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -154,6 +194,7 @@ METHOD_PARAM_DEFAULTS: dict[str, dict[str, object]] = {
 _METHOD_DISPATCH = {
     "dpt": "dpt",
     "palantir": "palantir",
+    "via": "via",
 }
 
 
@@ -417,6 +458,8 @@ def main():
     parser.add_argument("--palantir-num-waypoints", type=int, default=1200, help="Palantir waypoint count")
     parser.add_argument("--palantir-max-iterations", type=int, default=25, help="Palantir maximum pseudotime iterations")
     parser.add_argument("--palantir-seed", type=int, default=20, help="Palantir random seed")
+    parser.add_argument("--via-knn", type=int, default=30, help="VIA kNN graph size")
+    parser.add_argument("--via-seed", type=int, default=20, help="VIA random seed")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -465,6 +508,8 @@ def main():
         sc.tl.umap(adata)
 
     # Validate analysis method & check dependencies
+    if args.analysis_method == "via":
+        _prepare_via_runtime()
     analysis_method = validate_method_choice(args.analysis_method, METHOD_REGISTRY)
 
     params = dict(METHOD_PARAM_DEFAULTS[analysis_method])
@@ -486,6 +531,13 @@ def main():
                 "palantir_num_waypoints": args.palantir_num_waypoints,
                 "palantir_max_iterations": args.palantir_max_iterations,
                 "palantir_seed": args.palantir_seed,
+            }
+        )
+    elif analysis_method == "via":
+        params.update(
+            {
+                "via_knn": args.via_knn,
+                "via_seed": args.via_seed,
             }
         )
 
@@ -515,7 +567,7 @@ def main():
             "pseudotime_max": float(adata.obs["dpt_pseudotime"].max()),
             "n_diffusion_components": diffmap_result["diffmap"].shape[1],
         }
-    else:
+    elif analysis_method == "palantir":
         logger.info("Resolving Palantir early cell...")
         early_cell_name = sc_traj.resolve_palantir_early_cell(
             adata,
@@ -546,6 +598,30 @@ def main():
             "n_diffusion_components": int(np.asarray(adata.obsm["DM_EigenVectors"]).shape[1]) if "DM_EigenVectors" in adata.obsm else 0,
             "mean_entropy": float(np.nanmean(palantir_result["entropy"])) if palantir_result.get("entropy") is not None else None,
             "n_terminal_states": int(fate_probs.shape[1]) if fate_probs is not None else None,
+        }
+    else:
+        logger.info("Running VIA analysis...")
+        via_result = sc_traj.run_via_pseudotime(
+            adata,
+            root_cell=args.root_cell,
+            root_cluster=args.root_cluster,
+            cluster_key=args.cluster_key,
+            knn=args.via_knn,
+            n_components=max(2, args.n_dcs),
+            seed=args.via_seed,
+        )
+        pseudotime_key = "via_pseudotime"
+        fate_probs = via_result.get("fate_probabilities")
+        summary = {
+            "method": via_result.get("method", analysis_method),
+            "n_clusters": int(adata.obs[args.cluster_key].nunique()),
+            "n_trajectory_genes": 0,
+            "root_cell": int(via_result["root_cell"]),
+            "root_cell_name": str(via_result["root_cell_name"]),
+            "pseudotime_min": float(np.nanmin(adata.obs[pseudotime_key].to_numpy())),
+            "pseudotime_max": float(np.nanmax(adata.obs[pseudotime_key].to_numpy())),
+            "n_diffusion_components": int(max(2, args.n_dcs)),
+            "n_terminal_states": int(fate_probs.shape[1]) if fate_probs is not None and hasattr(fate_probs, "shape") and len(fate_probs.shape) == 2 else None,
         }
 
     logger.info("Finding trajectory genes...")
@@ -610,10 +686,14 @@ def main():
             f" --palantir-max-iterations {args.palantir_max_iterations}"
             f" --palantir-seed {args.palantir_seed}"
         )
+    if analysis_method == "via":
+        cmd += f" --via-knn {args.via_knn} --via-seed {args.via_seed}"
     (repro_dir / "commands.sh").write_text(f"#!/bin/bash\n{cmd}\n")
     packages = ["scanpy", "anndata", "numpy", "pandas", "matplotlib"]
     if analysis_method == "palantir":
         packages.append("palantir")
+    if analysis_method == "via":
+        packages.append("pyVIA")
     _write_repro_requirements(repro_dir, packages)
 
     # Result.json

@@ -192,6 +192,224 @@ def run_dpt_pseudotime(
     return result
 
 
+def run_palantir_pseudotime(
+    adata,
+    *,
+    early_cell: str,
+    terminal_states: dict[str, str] | None = None,
+    knn: int = 30,
+    n_components: int = 10,
+    num_waypoints: int = 1200,
+    max_iterations: int = 25,
+    seed: int = 20,
+    copy: bool = False,
+) -> dict[str, Any]:
+    """Run Palantir pseudotime analysis using the official AnnData workflow."""
+    import palantir
+
+    if copy:
+        adata = adata.copy()
+
+    if early_cell not in adata.obs_names:
+        raise ValueError(f"Palantir early_cell '{early_cell}' not found in adata.obs_names")
+
+    if "DM_EigenVectors" not in adata.obsm:
+        logger.info("Running Palantir diffusion maps with n_components=%s", n_components)
+        palantir.utils.run_diffusion_maps(adata, n_components=n_components)
+    if "DM_EigenVectors_multiscaled" not in adata.obsm:
+        logger.info("Determining Palantir multiscale space")
+        palantir.utils.determine_multiscale_space(adata)
+
+    result = palantir.core.run_palantir(
+        adata,
+        early_cell=early_cell,
+        terminal_states=terminal_states,
+        knn=knn,
+        num_waypoints=num_waypoints,
+        max_iterations=max_iterations,
+        seed=seed,
+    )
+    return {
+        "pseudotime": adata.obs["palantir_pseudotime"].values.copy(),
+        "entropy": adata.obs["palantir_entropy"].values.copy() if "palantir_entropy" in adata.obs else None,
+        "fate_probabilities": adata.obsm["palantir_fate_probabilities"].copy()
+        if "palantir_fate_probabilities" in adata.obsm
+        else None,
+        "result": result,
+    }
+
+
+def run_via_pseudotime(
+    adata,
+    *,
+    root_cell: int | None = None,
+    root_cluster: str | None = None,
+    cluster_key: str = "leiden",
+    knn: int = 30,
+    n_components: int = 10,
+    seed: int = 20,
+    copy: bool = False,
+) -> dict[str, Any]:
+    """Run pyVIA pseudotime analysis on a PCA-like embedding."""
+    import scanpy as sc
+
+    # pyVIA depends on nptyping aliases that were removed in NumPy 2.x.
+    compat_aliases = {
+        "bool8": np.bool_,
+        "object0": np.object_,
+        "int0": np.intp,
+        "uint0": np.uintp,
+        "uint": np.uint64,
+        "float_": np.float64,
+        "longfloat": np.longdouble,
+        "singlecomplex": np.complex64,
+        "complex_": np.complex128,
+        "cfloat": np.complex128,
+        "clongfloat": np.clongdouble,
+        "longcomplex": np.clongdouble,
+        "void0": np.void,
+        "bytes0": np.bytes_,
+        "str0": np.str_,
+        "string_": np.bytes_,
+        "unicode_": np.str_,
+    }
+    for alias, target in compat_aliases.items():
+        if not hasattr(np, alias):
+            setattr(np, alias, target)
+    try:
+        import pyVIA.core as via
+    except ImportError as exc:
+        raise ImportError("pyVIA is required for method='via'. Install with `pip install pyVIA`.") from exc
+
+    if copy:
+        adata = adata.copy()
+
+    if root_cell is not None:
+        if root_cell < 0 or root_cell >= adata.n_obs:
+            raise ValueError(f"root_cell index {root_cell} is out of range for {adata.n_obs} cells")
+        root_idx = int(root_cell)
+    else:
+        if root_cluster is None:
+            raise ValueError("VIA requires an explicit root choice via --root-cell or --root-cluster.")
+        if cluster_key not in adata.obs.columns:
+            raise ValueError(f"Cluster key '{cluster_key}' not found in adata.obs")
+        cluster_values = adata.obs[cluster_key].astype(str)
+        root_cluster_text = str(root_cluster)
+        if root_cluster_text not in set(cluster_values):
+            raise ValueError(f"Root cluster '{root_cluster_text}' not found in {cluster_key}")
+        root_idx = int(np.where(cluster_values == root_cluster_text)[0][0])
+
+    if "X_pca" in adata.obsm:
+        embedding = np.asarray(adata.obsm["X_pca"][:, : max(2, n_components)], dtype=float)
+        embedding_key = "X_pca"
+    else:
+        matrix = adata.X.toarray() if hasattr(adata.X, "toarray") else np.asarray(adata.X)
+        embedding = np.asarray(matrix[:, : max(2, n_components)], dtype=float)
+        embedding_key = "X"
+
+    labels = adata.obs[cluster_key].astype(str).tolist() if cluster_key in adata.obs.columns else ["unknown"] * adata.n_obs
+    logger.info("Running VIA with knn=%s, n_components=%s, root_idx=%s", knn, n_components, root_idx)
+    try:
+        model = via.VIA(
+            embedding,
+            labels,
+            knn=knn,
+            root_user=[root_idx],
+            dataset="OmicsClaw",
+            random_seed=seed,
+        )
+        model.run_VIA()
+
+        pseudotime = np.asarray(model.single_cell_pt_markov, dtype=float)
+        adata.obs["via_pseudotime"] = pseudotime
+
+        branch_probs = None
+        if hasattr(model, "single_cell_bp") and model.single_cell_bp is not None:
+            branch_probs = np.asarray(model.single_cell_bp, dtype=float)
+            if branch_probs.shape[0] == adata.n_obs:
+                adata.obsm["via_fate_probabilities"] = branch_probs
+
+        terminal_clusters = [str(x) for x in getattr(model, "terminal_clusters", [])]
+        method_name = "via"
+        fallback_reason = None
+    except Exception as exc:  # pragma: no cover - validated through smoke tests
+        logger.warning("pyVIA failed; falling back to a diffusion-pseudotime compatible path: %s", exc)
+        if "X_diffmap" not in adata.obsm:
+            sc.tl.diffmap(adata, n_comps=max(15, n_components + 5))
+        adata.uns["iroot"] = root_idx
+        sc.tl.dpt(adata, n_dcs=max(2, min(n_components, adata.obsm["X_diffmap"].shape[1] - 1)))
+        pseudotime = np.asarray(adata.obs["dpt_pseudotime"], dtype=float)
+        adata.obs["via_pseudotime"] = pseudotime
+        branch_probs = None
+        if cluster_key in adata.obs.columns:
+            cluster_means = (
+                pd.DataFrame({cluster_key: adata.obs[cluster_key].astype(str), "pt": pseudotime})
+                .groupby(cluster_key, observed=False)["pt"]
+                .mean()
+                .sort_values()
+            )
+            terminal_clusters = [str(x) for x in cluster_means.tail(2).index.tolist()]
+        else:
+            terminal_clusters = []
+        model = None
+        method_name = "via_compatible"
+        fallback_reason = str(exc)
+
+    adata.uns["via_trajectory"] = {
+        "root_cell": root_idx,
+        "root_cell_name": str(adata.obs_names[root_idx]),
+        "terminal_clusters": terminal_clusters,
+        "embedding_key": embedding_key,
+        "knn": knn,
+        "n_components": n_components,
+        "seed": seed,
+        "method": method_name,
+        "fallback_reason": fallback_reason,
+    }
+    return {
+        "method": method_name,
+        "pseudotime": pseudotime.copy(),
+        "root_cell": root_idx,
+        "root_cell_name": str(adata.obs_names[root_idx]),
+        "fate_probabilities": branch_probs.copy() if branch_probs is not None else None,
+        "terminal_clusters": terminal_clusters,
+        "model": model,
+    }
+
+
+def resolve_palantir_early_cell(
+    adata,
+    *,
+    root_cell: int | None = None,
+    root_cluster: str | None = None,
+    cluster_key: str = "leiden",
+) -> str:
+    """Resolve an explicit early cell for the Palantir workflow."""
+    import palantir
+
+    if root_cell is not None:
+        if root_cell < 0 or root_cell >= adata.n_obs:
+            raise ValueError(f"root_cell index {root_cell} is out of range for {adata.n_obs} cells")
+        return str(adata.obs_names[root_cell])
+
+    if root_cluster is None:
+        raise ValueError("Palantir requires an explicit root choice via --root-cell or --root-cluster.")
+    if cluster_key not in adata.obs.columns:
+        raise ValueError(f"Cluster key '{cluster_key}' not found in adata.obs")
+
+    labels = adata.obs[cluster_key].astype(str)
+    root_cluster_text = str(root_cluster)
+    if root_cluster_text not in set(labels):
+        raise ValueError(f"Root cluster '{root_cluster_text}' not found in {cluster_key}")
+
+    if "DM_EigenVectors" not in adata.obsm:
+        palantir.utils.run_diffusion_maps(adata, n_components=10)
+    if "DM_EigenVectors_multiscaled" not in adata.obsm:
+        palantir.utils.determine_multiscale_space(adata)
+
+    return str(palantir.utils.early_cell(adata, celltype=root_cluster_text, celltype_column=cluster_key))
+
+
 def find_trajectory_genes(
     adata,
     pseudotime_key: str = "dpt_pseudotime",
@@ -423,6 +641,11 @@ def plot_pseudotime_umap(
             logger.warning(f"{pseudotime_key} not found in adata.obs")
             return None
 
+        if "X_umap" not in adata.obsm:
+            logger.info("X_umap not found; recomputing UMAP for plotting")
+            sc.pp.neighbors(adata)
+            sc.tl.umap(adata)
+
         fig, ax = plt.subplots(figsize=(8, 6))
         sc.pl.umap(
             adata,
@@ -465,12 +688,23 @@ def plot_diffusion_components(
     figures = []
 
     try:
-        if "X_diffmap" not in adata.obsm:
-            logger.warning("X_diffmap not found in adata.obsm")
+        if "X_diffmap" in adata.obsm:
+            diffmap = adata.obsm["X_diffmap"]
+            start_component = 1
+        elif "DM_EigenVectors" in adata.obsm:
+            diffmap = np.asarray(adata.obsm["DM_EigenVectors"])
+            start_component = 0
+        else:
+            logger.warning("No diffusion embedding found in adata.obsm")
             return figures
 
-        diffmap = adata.obsm["X_diffmap"]
-        n_components = min(n_components, diffmap.shape[1] - 1)
+        if diffmap.shape[1] < 2:
+            logger.warning("Diffusion embedding has fewer than 2 components")
+            return figures
+
+        n_components = min(n_components, diffmap.shape[1] - start_component)
+        if n_components < 2:
+            return figures
 
         # Pairwise scatter plots
         fig, axes = plt.subplots(1, n_components - 1, figsize=(5 * (n_components - 1), 4))
@@ -479,10 +713,12 @@ def plot_diffusion_components(
 
         for i in range(1, n_components):
             ax = axes[i - 1]
-            ax.scatter(diffmap[:, 1], diffmap[:, i + 1], s=1, alpha=0.5)
-            ax.set_xlabel("DC1")
-            ax.set_ylabel(f"DC{i + 1}")
-            ax.set_title(f"Diffusion Component {i + 1}")
+            x_idx = start_component
+            y_idx = start_component + i
+            ax.scatter(diffmap[:, x_idx], diffmap[:, y_idx], s=1, alpha=0.5)
+            ax.set_xlabel(f"DC{x_idx + 1}")
+            ax.set_ylabel(f"DC{y_idx + 1}")
+            ax.set_title(f"Diffusion Components {x_idx + 1} vs {y_idx + 1}")
 
         fig.tight_layout()
         fig_path = output_dir / "diffusion_components.png"
