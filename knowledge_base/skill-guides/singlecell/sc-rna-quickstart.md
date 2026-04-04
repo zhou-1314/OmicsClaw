@@ -127,6 +127,29 @@ If a user explicitly wants pseudoalignment, keep them on `sc-count` and switch:
 For a beginner who says nothing special, `sc-count --method cellranger` is the
 more natural first default.
 
+## Where Should A Beginner Put References?
+
+If the user does not want to keep typing long absolute paths, recommend this
+layout:
+
+```text
+resources/singlecell/references/
+├── cellranger/
+├── starsolo/
+├── simpleaf/
+├── kb/
+├── whitelists/
+└── gtf/
+```
+
+Then explain the rule in simple words:
+
+- if there is only one obvious reference in the right directory, OmicsClaw can auto-detect it
+- if there are multiple versions, the user should pass `--reference`, `--t2g`, `--gtf`, or `--whitelist` explicitly
+- Cell Ranger references come from 10x official reference releases
+- STARsolo usually reuses the same FASTA / GTF plus a STAR-built genome directory
+- `sc-velocity-prep --method velocyto` usually reuses the same `genes.gtf` as the counting reference
+
 ## A Beginner-Friendly Command Sequence
 
 ### Standard 10x FASTQ route

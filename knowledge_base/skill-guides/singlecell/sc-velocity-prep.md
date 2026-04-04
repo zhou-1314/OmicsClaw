@@ -128,6 +128,46 @@ If `--base-h5ad` is used:
 
 Do not promise that every upstream object can be reconciled automatically.
 
+## Step 5.5: If The User Is Missing GTF Or STAR References, Guide Them Gently
+
+Recommended project-local layout:
+
+- `resources/singlecell/references/gtf/`
+- `resources/singlecell/references/starsolo/`
+- `resources/singlecell/references/whitelists/`
+
+### BAM + velocyto path
+
+Tell the user:
+
+- the safest GTF is the one that matches the reference used upstream
+- if they ran Cell Ranger, the easiest choice is usually the same `genes.gtf` from that reference package
+- place it under `resources/singlecell/references/gtf/`, or pass it directly with `--gtf`
+
+Beginner-friendly example:
+
+```bash
+mkdir -p resources/singlecell/references/gtf
+cp /path/to/refdata-gex-GRCh38-2020-A/genes/genes.gtf resources/singlecell/references/gtf/
+oc run sc-velocity-prep --input sample_count/ --method velocyto --gtf resources/singlecell/references/gtf/genes.gtf --output output/sc_velocity_prep
+```
+
+### FASTQ + STARsolo velocity path
+
+Tell the user:
+
+- build or reuse a STAR genome directory under `resources/singlecell/references/starsolo/`
+- download the matching barcode whitelist under `resources/singlecell/references/whitelists/`
+- pass both explicitly if there are multiple versions on disk
+
+Beginner-friendly example:
+
+```bash
+mkdir -p resources/singlecell/references/whitelists
+curl -L -o resources/singlecell/references/whitelists/3M-february-2018.txt.gz https://github.com/10XGenomics/cellranger/raw/master/lib/python/cellranger/barcodes/3M-february-2018.txt.gz
+gunzip -f resources/singlecell/references/whitelists/3M-february-2018.txt.gz
+```
+
 ## Step 6: Know The Biological Caveat
 
 Successful preparation does **not** imply successful biology.
@@ -171,3 +211,4 @@ After the run:
 - scVelo getting started: https://scvelo.readthedocs.io/en/stable/getting_started.html
 - scVelo velocity basics: https://scvelo.readthedocs.io/en/stable/VelocityBasics.html
 - STARsolo official docs: https://github.com/alexdobin/STAR/blob/master/docs/STARsolo.md
+- Cell Ranger reference release notes: https://www.10xgenomics.com/support/software/cell-ranger/latest/release-notes/cr-reference-release-notes

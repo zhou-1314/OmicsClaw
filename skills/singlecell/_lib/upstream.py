@@ -8,19 +8,20 @@ import os
 import re
 import shutil
 import subprocess
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
-import scanpy as sc
-from scipy import sparse
-from scipy.io import mmread
 
 from .adata_utils import record_standardized_input_contract, store_analysis_metadata
 
 logger = logging.getLogger(__name__)
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_RESOURCE_ROOT = _PROJECT_ROOT / "resources" / "singlecell" / "references"
 
 _FASTQ_SUFFIXES = (".fastq.gz", ".fq.gz", ".fastq", ".fq")
 _COMMON_ADAPTER_SEEDS = (
@@ -37,6 +38,12 @@ _STARSOLO_CHEMISTRY = {
 _STARSOLO_DEFAULT_WHITELIST = {
     "10xv2": ("737K-august-2016.txt", "737K-august-2016.txt.gz"),
     "10xv3": ("3M-february-2018.txt", "3M-february-2018.txt.gz"),
+}
+_REFERENCE_SUBDIRS = {
+    "cellranger": "cellranger",
+    "starsolo": "starsolo",
+    "simpleaf": "simpleaf",
+    "kb_python": "kb",
 }
 
 
@@ -81,6 +88,190 @@ class CountArtifacts:
     html_summary: Path | None
     bam_path: Path | None
     log_path: Path | None
+
+
+def _import_scanpy():
+    import scanpy as sc
+
+    return sc
+
+
+def _import_sparse_helpers():
+    from scipy import sparse
+    from scipy.io import mmread
+
+    return sparse, mmread
+
+
+def recommended_resource_dir(kind: str) -> Path:
+    """Return the conventional project-local resource directory for one upstream asset type."""
+    if kind in _REFERENCE_SUBDIRS:
+        return _RESOURCE_ROOT / _REFERENCE_SUBDIRS[kind]
+    if kind == "whitelist":
+        return _RESOURCE_ROOT / "whitelists"
+    if kind == "gtf":
+        return _RESOURCE_ROOT / "gtf"
+    if kind == "t2g":
+        return _RESOURCE_ROOT / "kb"
+    return _RESOURCE_ROOT
+
+
+def _find_single_candidate(directory: Path, predicate) -> Path | None:
+    if not directory.exists():
+        return None
+    candidates = sorted(path for path in directory.iterdir() if predicate(path))
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def auto_reference_path(method: str) -> Path | None:
+    """Auto-detect exactly one project-local reference for a given backend."""
+    directory = recommended_resource_dir(method)
+    if method in {"cellranger", "starsolo"}:
+        return _find_single_candidate(directory, lambda path: path.is_dir())
+    return _find_single_candidate(directory, lambda path: path.exists())
+
+
+def auto_t2g_path() -> Path | None:
+    """Auto-detect exactly one project-local transcript-to-gene map."""
+    directory = recommended_resource_dir("t2g")
+    return _find_single_candidate(directory, lambda path: path.is_file() and "t2g" in path.name.lower())
+
+
+def auto_gtf_path() -> Path | None:
+    """Auto-detect exactly one project-local GTF file."""
+    directory = recommended_resource_dir("gtf")
+    return _find_single_candidate(directory, lambda path: path.is_file() and path.name.lower().endswith((".gtf", ".gtf.gz")))
+
+
+def ensure_existing_path(
+    path: str | Path,
+    *,
+    flag: str,
+    label: str,
+    recommended_dir: str | Path | None = None,
+    expect_directory: bool | None = None,
+) -> Path:
+    """Validate a user-supplied path and raise a user-facing error with a concrete local-storage hint."""
+    resolved = Path(path).expanduser()
+    if not resolved.exists():
+        message = [f"{label} not found: {resolved}."]
+        message.append(f"Pass `{flag}` to an existing local path.")
+        if recommended_dir is not None:
+            message.append(f"Recommended project-local location: `{Path(recommended_dir)}`.")
+        raise FileNotFoundError(" ".join(message))
+    if expect_directory is True and not resolved.is_dir():
+        raise ValueError(f"{label} must be a directory: {resolved}")
+    if expect_directory is False and not resolved.is_file():
+        raise ValueError(f"{label} must be a file: {resolved}")
+    return resolved.resolve()
+
+
+def reference_setup_guidance(method: str) -> str:
+    """Return a beginner-facing setup hint for one counting reference type."""
+    local_dir = recommended_resource_dir(method)
+    if method == "cellranger":
+        return textwrap.dedent(
+            f"""
+            Download guidance:
+            - Official docs: https://www.10xgenomics.com/support/software/cell-ranger/latest/analysis/running-pipelines/cr-gex-count
+            - Official reference pages: https://www.10xgenomics.com/support/software/cell-ranger/latest/release-notes/cr-reference-release-notes
+            - Recommended local directory: `{local_dir}`
+            - Easiest workflow: manually download a matching 10x transcriptome reference tarball, then unpack it into `{local_dir}`.
+            - Example:
+              mkdir -p {local_dir}
+              tar -xf refdata-gex-GRCh38-2020-A.tar.gz -C {local_dir}
+            - Or pass the unpacked reference directly with `--reference /abs/path/to/refdata-gex-...`.
+            """
+        ).strip()
+    if method == "starsolo":
+        return textwrap.dedent(
+            f"""
+            Download guidance:
+            - STARsolo docs: https://github.com/alexdobin/STAR/blob/master/docs/STARsolo.md
+            - Recommended local directory: `{local_dir}`
+            - Easiest workflow: reuse the same FASTA and GTF you used for Cell Ranger or downloaded from 10x, then build a STAR genome directory.
+            - Example:
+              mkdir -p {local_dir}/GRCh38_star
+              STAR --runMode genomeGenerate --runThreadN 16 --genomeDir {local_dir}/GRCh38_star --genomeFastaFiles /path/to/genome.fa --sjdbGTFfile /path/to/genes.gtf
+            - Or pass an existing STAR genome directory directly with `--reference /abs/path/to/star_index`.
+            """
+        ).strip()
+    if method == "simpleaf":
+        return textwrap.dedent(
+            f"""
+            Download guidance:
+            - simpleaf docs: https://simpleaf.readthedocs.io/en/latest/quant-command.html
+            - Recommended local directory: `{local_dir}`
+            - If your lab already has a simpleaf index, move or symlink it into `{local_dir}`.
+            - Otherwise build one following the official simpleaf indexing workflow, then pass it with `--reference` or keep it under `{local_dir}` for auto-detection.
+            """
+        ).strip()
+    if method == "kb_python":
+        return textwrap.dedent(
+            f"""
+            Download guidance:
+            - kb-python docs: https://kb-python.readthedocs.io/en/stable/autoapi/kb_python/count/
+            - kb-python repository: https://github.com/pachterlab/kb_python
+            - Recommended local directory: `{local_dir}`
+            - If you already have a kallisto index, move or symlink it into `{local_dir}`.
+            - You will also need a transcript-to-gene map (`t2g`), either from your existing kb reference prep or from the official kb reference-building workflow.
+            """
+        ).strip()
+    return f"Recommended local directory: `{local_dir}`"
+
+
+def whitelist_setup_guidance() -> str:
+    """Return a beginner-facing setup hint for STARsolo barcode whitelist files."""
+    local_dir = recommended_resource_dir("whitelist")
+    return textwrap.dedent(
+        f"""
+        Whitelist guidance:
+        - STARsolo docs: https://github.com/alexdobin/STAR/blob/master/docs/STARsolo.md
+        - Recommended local directory: `{local_dir}`
+        - For 10x v3 / v4, a common whitelist is `3M-february-2018.txt`.
+        - Example download:
+          mkdir -p {local_dir}
+          curl -L -o {local_dir}/3M-february-2018.txt.gz https://github.com/10XGenomics/cellranger/raw/master/lib/python/cellranger/barcodes/3M-february-2018.txt.gz
+          gunzip -f {local_dir}/3M-february-2018.txt.gz
+        - For 10x v2, use `737K-august-2016.txt` from the same Cell Ranger barcode directory.
+        - Or pass a local whitelist directly with `--whitelist /abs/path/to/barcodes.txt`.
+        """
+    ).strip()
+
+
+def t2g_setup_guidance() -> str:
+    """Return a beginner-facing setup hint for kb transcript-to-gene maps."""
+    local_dir = recommended_resource_dir("t2g")
+    return textwrap.dedent(
+        f"""
+        Transcript-to-gene guidance:
+        - kb-python docs: https://kb-python.readthedocs.io/en/stable/autoapi/kb_python/count/
+        - kb-python repository: https://github.com/pachterlab/kb_python
+        - Recommended local directory: `{local_dir}`
+        - Easiest workflow: reuse a `t2g` file generated during kb reference preparation, then move it into `{local_dir}`.
+        - Example:
+          mkdir -p {local_dir}
+          mv t2g.txt {local_dir}/
+        - Or pass it directly with `--t2g /abs/path/to/t2g.txt`.
+        """
+    ).strip()
+
+
+def gtf_setup_guidance() -> str:
+    """Return a beginner-facing setup hint for GTF annotation files."""
+    local_dir = recommended_resource_dir("gtf")
+    return textwrap.dedent(
+        f"""
+        GTF guidance:
+        - velocyto docs: https://velocyto.org/velocyto.py/tutorial/cli.html
+        - Recommended local directory: `{local_dir}`
+        - Easiest workflow: reuse the same `genes.gtf` that matches your Cell Ranger or STAR reference.
+        - Example:
+          mkdir -p {local_dir}
+          cp /path/to/refdata-gex-.../genes/genes.gtf {local_dir}/
+        - Or pass it directly with `--gtf /abs/path/to/genes.gtf`.
+        """
+    ).strip()
 
 
 def _strip_fastq_suffix(name: str) -> str:
@@ -427,6 +618,7 @@ def load_count_output_directory(path: str | Path):
 
 
 def _read_10x_mtx(path: Path):
+    sc = _import_scanpy()
     try:
         return sc.read_10x_mtx(path, var_names="gene_symbols", cache=False)
     except Exception:
@@ -478,6 +670,7 @@ def inspect_starsolo_run(run_dir: str | Path) -> CountArtifacts:
 
 def load_count_adata_from_artifacts(artifacts: CountArtifacts):
     """Load the filtered matrix AnnData for a counting backend run."""
+    sc = _import_scanpy()
     if artifacts.filtered_h5 and artifacts.filtered_h5.exists():
         adata = sc.read_10x_h5(artifacts.filtered_h5)
     elif artifacts.filtered_matrix_dir and artifacts.filtered_matrix_dir.exists():
@@ -489,6 +682,7 @@ def load_count_adata_from_artifacts(artifacts: CountArtifacts):
 
 def load_raw_count_adata_from_artifacts(artifacts: CountArtifacts):
     """Load the raw matrix AnnData for a counting backend run when present."""
+    sc = _import_scanpy()
     if artifacts.raw_h5 and artifacts.raw_h5.exists():
         return sc.read_10x_h5(artifacts.raw_h5)
     if artifacts.raw_matrix_dir and artifacts.raw_matrix_dir.exists():
@@ -584,6 +778,7 @@ def guess_starsolo_whitelist(reference: str | Path, chemistry: str) -> Path | No
         ref / "barcodes",
         ref.parent / "barcodes",
         ref.parent.parent / "barcodes",
+        recommended_resource_dir("whitelist"),
     ]
     cellranger_bin = shutil.which("cellranger")
     if cellranger_bin:
@@ -724,6 +919,7 @@ def find_starsolo_velocyto_dir(path: str | Path) -> Path | None:
 def load_starsolo_velocyto_dir(path: str | Path):
     """Load STARsolo Velocyto matrices into an AnnData object."""
     import anndata as ad
+    sparse, mmread = _import_sparse_helpers()
 
     velo_dir = find_starsolo_velocyto_dir(path)
     if velo_dir is None:
@@ -762,6 +958,7 @@ def load_starsolo_velocyto_dir(path: str | Path):
 
 def load_loom_velocity(path: str | Path):
     """Load a velocyto loom file using Scanpy's loom reader."""
+    sc = _import_scanpy()
     loom_path = Path(path)
     if not loom_path.exists():
         raise FileNotFoundError(f"Loom file not found: {loom_path}")

@@ -45,19 +45,25 @@ from skills.singlecell._lib.pseudoalign import (
     run_simpleaf_quant,
 )
 from skills.singlecell._lib.upstream import (
+    auto_reference_path,
+    auto_t2g_path,
     choose_fastq_sample,
     detect_cellranger_outs,
     detect_starsolo_output,
     discover_fastq_samples,
+    ensure_existing_path,
     guess_starsolo_whitelist,
     inspect_cellranger_run,
     inspect_starsolo_run,
     load_count_adata_from_artifacts,
     load_raw_count_adata_from_artifacts,
     parse_summary_table,
+    reference_setup_guidance,
     run_cellranger_count,
     run_starsolo_count,
     standardize_count_adata,
+    t2g_setup_guidance,
+    whitelist_setup_guidance,
 )
 from skills.singlecell._lib.viz import plot_barcode_rank, plot_count_distributions
 
@@ -67,6 +73,30 @@ logger = logging.getLogger(__name__)
 SKILL_NAME = "sc-count"
 SKILL_VERSION = "0.1.0"
 SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-count/sc_count.py"
+
+
+def _recommended_reference_dir(method: str) -> Path:
+    return {
+        "cellranger": Path("resources/singlecell/references/cellranger"),
+        "starsolo": Path("resources/singlecell/references/starsolo"),
+        "simpleaf": Path("resources/singlecell/references/simpleaf"),
+        "kb_python": Path("resources/singlecell/references/kb"),
+    }[method]
+
+
+def _resolve_reference_arg(method: str, reference: str | None) -> Path | None:
+    if reference:
+        return ensure_existing_path(
+            reference,
+            flag="--reference",
+            label=f"{method} reference",
+            recommended_dir=_recommended_reference_dir(method),
+            expect_directory=method in {"cellranger", "starsolo"},
+        )
+    inferred = auto_reference_path(method)
+    if inferred is not None:
+        logger.info("Using project-local %s reference: %s", method, inferred)
+    return inferred
 
 
 def _write_figure_data_manifest(output_dir: Path, manifest: dict) -> None:
@@ -240,9 +270,9 @@ def _write_report(
             "- Continue with `sc-qc` or `sc-preprocessing` on `standardized_input.h5ad`.",
         ]
     )
-    if artifacts is not None and artifacts.method == "cellranger" and artifacts.bam_path:
+    if artifacts is not None and getattr(artifacts, "method", "") == "cellranger" and getattr(artifacts, "bam_path", None):
         lines.append("- For RNA velocity from Cell Ranger outputs, continue with `sc-velocity-prep --method velocyto`.")
-    if artifacts is not None and artifacts.raw_h5:
+    if artifacts is not None and getattr(artifacts, "raw_h5", None):
         lines.append("- For ambient RNA removal with CellBender, preserve the raw `.h5` path shown above.")
 
     (output_dir / "report.md").write_text(header + "\n".join(lines) + "\n" + generate_report_footer(), encoding="utf-8")
@@ -279,6 +309,9 @@ def main() -> None:
     execution = None
     artifacts = None
     backend_summary: dict[str, object] = {}
+    used_reference = ""
+    used_t2g = ""
+    used_whitelist = ""
 
     if args.demo:
         adata, input_file = _demo_adata()
@@ -298,6 +331,36 @@ def main() -> None:
             raise FileNotFoundError(f"Input path not found: {input_path}")
         input_file = str(input_path)
 
+        reference_path = _resolve_reference_arg(args.method, args.reference)
+        used_reference = str(reference_path) if reference_path is not None else ""
+        t2g_path = None
+        if args.method == "kb_python":
+            if args.t2g:
+                t2g_path = ensure_existing_path(
+                    args.t2g,
+                    flag="--t2g",
+                    label="kb transcript-to-gene map",
+                    recommended_dir=Path("resources/singlecell/references/kb"),
+                    expect_directory=False,
+                )
+            else:
+                t2g_path = auto_t2g_path()
+                if t2g_path is not None:
+                    logger.info("Using project-local kb t2g map: %s", t2g_path)
+            used_t2g = str(t2g_path) if t2g_path is not None else ""
+
+        if args.whitelist:
+            whitelist_path = ensure_existing_path(
+                args.whitelist,
+                flag="--whitelist",
+                label="STARsolo barcode whitelist",
+                recommended_dir=Path("resources/singlecell/references/whitelists"),
+                expect_directory=False,
+            )
+        else:
+            whitelist_path = None
+        used_whitelist = str(whitelist_path) if whitelist_path is not None else ""
+
         if args.method == "cellranger" and detect_cellranger_outs(input_path):
             artifacts = inspect_cellranger_run(input_path)
         elif args.method == "starsolo" and detect_starsolo_output(input_path):
@@ -308,8 +371,12 @@ def main() -> None:
             except Exception:
                 artifacts = None
         else:
-            if not args.reference:
-                raise ValueError("`sc-count` requires `--reference` for real backend runs.")
+            if reference_path is None:
+                raise ValueError(
+                    f"`sc-count --method {args.method}` requires a local reference path. "
+                    f"Pass `--reference /abs/path/...`, or keep one under `{_recommended_reference_dir(args.method)}` so OmicsClaw can auto-detect it.\n\n"
+                    f"{reference_setup_guidance(args.method)}"
+                )
             samples = discover_fastq_samples(input_path, read2=args.read2, sample=args.sample)
             sample = choose_fastq_sample(samples, sample=args.sample)
 
@@ -317,7 +384,7 @@ def main() -> None:
                 artifacts, execution = run_cellranger_count(
                     sample,
                     fastq_dir=input_path.parent if input_path.is_file() else input_path,
-                    reference=args.reference,
+                    reference=reference_path,
                     output_dir=output_dir,
                     threads=args.threads,
                     chemistry=args.chemistry,
@@ -325,14 +392,18 @@ def main() -> None:
             elif args.method == "starsolo":
                 if args.chemistry == "auto":
                     raise ValueError("STARsolo runs require an explicit `--chemistry` value such as `10xv3`.")
-                whitelist = Path(args.whitelist) if args.whitelist else guess_starsolo_whitelist(args.reference, args.chemistry)
+                whitelist = whitelist_path or guess_starsolo_whitelist(reference_path, args.chemistry)
                 if whitelist is None:
                     raise ValueError(
-                        "Could not infer a compatible STARsolo whitelist. Pass `--whitelist <barcode_whitelist.txt>` explicitly."
+                        "Could not infer a compatible STARsolo whitelist. "
+                        "Pass `--whitelist /abs/path/to/3M-february-2018.txt`, or keep the whitelist under "
+                        "`resources/singlecell/references/whitelists/`.\n\n"
+                        f"{whitelist_setup_guidance()}"
                     )
+                used_whitelist = str(whitelist)
                 artifacts, execution = run_starsolo_count(
                     sample,
-                    reference=args.reference,
+                    reference=reference_path,
                     output_dir=output_dir,
                     threads=args.threads,
                     chemistry=args.chemistry,
@@ -342,18 +413,22 @@ def main() -> None:
             elif args.method == "simpleaf":
                 artifacts, execution = run_simpleaf_quant(
                     sample,
-                    index_path=args.reference,
+                    index_path=reference_path,
                     chemistry="10xv3" if args.chemistry == "auto" else args.chemistry,
                     output_dir=output_dir,
                     threads=args.threads,
                 )
             else:
-                if not args.t2g:
-                    raise ValueError("kb-python runs require `--t2g`.")
+                if t2g_path is None:
+                    raise ValueError(
+                        "kb-python runs require a transcript-to-gene map. "
+                        "Pass `--t2g /abs/path/to/t2g.tsv`, or keep one under `resources/singlecell/references/kb/`.\n\n"
+                        f"{t2g_setup_guidance()}"
+                    )
                 artifacts, execution = run_kb_count(
                     sample,
-                    index_path=args.reference,
-                    t2g_path=args.t2g,
+                    index_path=reference_path,
+                    t2g_path=t2g_path,
                     technology="10xv3" if args.chemistry == "auto" else args.chemistry,
                     output_dir=output_dir,
                     threads=args.threads,
@@ -418,12 +493,12 @@ def main() -> None:
     result_data = {
         "method": args.method if not args.demo else "demo",
         "params": {
-            "reference": args.reference or "",
-            "t2g": args.t2g or "",
+            "reference": used_reference,
+            "t2g": used_t2g,
             "sample": args.sample or "",
             "threads": int(args.threads),
             "chemistry": args.chemistry,
-            "whitelist": args.whitelist or "",
+            "whitelist": used_whitelist,
         },
         "backend_summary": backend_summary,
         "input_contract": contract,

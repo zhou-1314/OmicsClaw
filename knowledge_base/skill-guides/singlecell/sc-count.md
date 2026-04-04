@@ -55,6 +55,77 @@ Current wrapper decision rule:
 - default to **Cell Ranger** when the user is on a standard 10x path and has the tool installed
 - use **STARsolo** when the user explicitly wants the open route or already has STARsolo outputs
 
+## Step 2.5: If The User Is Missing Reference Files, Tell Them Exactly What To Do
+
+Recommended project-local layout:
+
+- `resources/singlecell/references/cellranger/`
+- `resources/singlecell/references/starsolo/`
+- `resources/singlecell/references/simpleaf/`
+- `resources/singlecell/references/kb/`
+- `resources/singlecell/references/whitelists/`
+
+OmicsClaw can auto-detect a reference only when there is exactly one obvious
+candidate in the matching directory. Otherwise the user should pass an explicit
+path such as `--reference`, `--t2g`, or `--whitelist`.
+
+### Cell Ranger reference
+
+Tell the user:
+
+- go to the official 10x Cell Ranger reference release notes and download a matching transcriptome reference
+- unpack it under `resources/singlecell/references/cellranger/`
+- or pass the unpacked directory directly with `--reference`
+
+Beginner-friendly example:
+
+```bash
+mkdir -p resources/singlecell/references/cellranger
+tar -xf refdata-gex-GRCh38-2020-A.tar.gz -C resources/singlecell/references/cellranger
+oc run sc-count --input fastqs/ --method cellranger --reference resources/singlecell/references/cellranger/refdata-gex-GRCh38-2020-A --output output/sc_count
+```
+
+### STARsolo reference + whitelist
+
+Tell the user:
+
+- easiest path is to reuse the same FASTA / GTF as the 10x reference, then build a STAR genome directory
+- place that STAR genome directory under `resources/singlecell/references/starsolo/`
+- place the barcode whitelist under `resources/singlecell/references/whitelists/`
+
+Beginner-friendly example:
+
+```bash
+mkdir -p resources/singlecell/references/starsolo/GRCh38_star
+STAR --runMode genomeGenerate --runThreadN 16 --genomeDir resources/singlecell/references/starsolo/GRCh38_star --genomeFastaFiles /path/to/genome.fa --sjdbGTFfile /path/to/genes.gtf
+
+mkdir -p resources/singlecell/references/whitelists
+curl -L -o resources/singlecell/references/whitelists/3M-february-2018.txt.gz https://github.com/10XGenomics/cellranger/raw/master/lib/python/cellranger/barcodes/3M-february-2018.txt.gz
+gunzip -f resources/singlecell/references/whitelists/3M-february-2018.txt.gz
+```
+
+### simpleaf index
+
+Tell the user:
+
+- if they already have a simpleaf index, move or symlink it into `resources/singlecell/references/simpleaf/`
+- otherwise build one according to the official simpleaf indexing workflow, then pass it with `--reference`
+
+### kb-python index + t2g
+
+Tell the user:
+
+- if they already have a kallisto index and `t2g`, move them into `resources/singlecell/references/kb/`
+- otherwise follow the official kb reference-building workflow first
+
+Beginner-friendly example:
+
+```bash
+mkdir -p resources/singlecell/references/kb
+mv kallisto.idx resources/singlecell/references/kb/
+mv t2g.txt resources/singlecell/references/kb/
+```
+
 ## Step 3: Know The Stable Outputs
 
 ### Cell Ranger
@@ -161,8 +232,12 @@ Typical next steps:
 ## Official References
 
 - Cell Ranger count pipeline: https://www.10xgenomics.com/support/software/cell-ranger/latest/analysis/running-pipelines/cr-gex-count
+- Cell Ranger reference release notes: https://www.10xgenomics.com/support/software/cell-ranger/latest/release-notes/cr-reference-release-notes
 - Cell Ranger gene expression outputs: https://www.10xgenomics.com/support/software/cell-ranger/latest/analysis/outputs/cr-outputs-gex-overview
 - FASTQ generation / BCL Convert note: https://www.10xgenomics.com/support/software/cell-ranger/latest/analysis/inputs/cr-direct-demultiplexing
 - Cell Ranger FASTQ selection: https://www.10xgenomics.com/support/software/cell-ranger/9.0/analysis/inputs/cr-specifying-fastqs
 - STARsolo official docs: https://github.com/alexdobin/STAR/blob/master/docs/STARsolo.md
+- simpleaf quant docs: https://simpleaf.readthedocs.io/en/latest/quant-command.html
+- kb-python count docs: https://kb-python.readthedocs.io/en/stable/autoapi/kb_python/count/
+- kb-python repository: https://github.com/pachterlab/kb_python
 - nf-core/scrnaseq usage: https://nf-co.re/scrnaseq/dev/docs/usage

@@ -13,7 +13,7 @@ import scanpy as sc
 from scipy import sparse
 from scipy.io import mmread
 
-from .upstream import FastqSample, run_command, tool_available
+from .upstream import CommandExecution, FastqSample, run_command, tool_available
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ def run_simpleaf_quant(
     chemistry: str,
     output_dir: str | Path,
     threads: int = 8,
-) -> tuple[PseudoalignArtifacts, tuple[str, ...]]:
+) -> tuple[PseudoalignArtifacts, CommandExecution]:
     """Run `simpleaf quant` with direct AnnData export."""
     if not tool_available("simpleaf"):
         raise RuntimeError("`simpleaf` is not installed or not on PATH.")
@@ -134,7 +134,7 @@ def run_simpleaf_quant(
         "--anndata-out",
     ]
     execution = run_command(command, cwd=out_dir)
-    return inspect_pseudoalign_output(out_dir, method="simpleaf"), execution.command
+    return inspect_pseudoalign_output(out_dir, method="simpleaf"), execution
 
 
 def run_kb_count(
@@ -145,7 +145,7 @@ def run_kb_count(
     technology: str,
     output_dir: str | Path,
     threads: int = 8,
-) -> tuple[PseudoalignArtifacts, tuple[str, ...]]:
+) -> tuple[PseudoalignArtifacts, CommandExecution]:
     """Run `kb count` with H5AD export when available."""
     if not tool_available("kb"):
         raise RuntimeError("`kb` is not installed or not on PATH.")
@@ -174,5 +174,4 @@ def run_kb_count(
     command.extend(str(path.resolve()) for path in sample.read1_files)
     command.extend(str(path.resolve()) for path in sample.read2_files)
     execution = run_command(command, cwd=out_dir)
-    return inspect_pseudoalign_output(out_dir, method="kb_python"), execution.command
-
+    return inspect_pseudoalign_output(out_dir, method="kb_python"), execution
