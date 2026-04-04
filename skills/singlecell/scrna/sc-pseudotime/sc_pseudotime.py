@@ -279,11 +279,14 @@ def write_pseudotime_report(
     top_genes: pd.DataFrame,
 ) -> None:
     """Write pseudotime analysis report."""
+    backend = str(summary.get("backend", summary.get("method", "NA")))
     header = generate_report_header(
         title="Single-Cell Pseudotime Analysis Report",
         skill_name=SKILL_NAME,
         input_files=[Path(input_file)] if input_file else None,
         extra_metadata={
+            "Method": str(params.get("method", "dpt")),
+            "Backend": backend,
             "Root Cluster": str(params.get("root_cluster", "auto")),
             "N Clusters": str(summary.get("n_clusters", "N/A")),
             "Trajectory Genes": str(summary.get("n_trajectory_genes", 0)),
@@ -292,7 +295,8 @@ def write_pseudotime_report(
 
     body_lines = [
         "## Summary\n",
-        f"- **Method**: {params.get('method', 'dpt')}",
+        f"- **Requested method**: {params.get('method', 'dpt')}",
+        f"- **Execution backend**: {backend}",
         f"- **Root cluster**: {params.get('root_cluster', 'auto-detected')}",
         f"- **Root cell**: {summary.get('root_cell_name', summary.get('root_cell', 'N/A'))}",
         f"- **Number of clusters**: {summary.get('n_clusters', 'N/A')}",
@@ -315,7 +319,7 @@ def write_pseudotime_report(
                 "ordering of cells from a root cell.\n",
             ]
         )
-    else:
+    elif params.get("method") == "palantir":
         body_lines.extend(
             [
                 "### Palantir",
@@ -325,6 +329,18 @@ def write_pseudotime_report(
         )
         if summary.get("mean_entropy") is not None:
             body_lines.append(f"- **Mean Palantir entropy**: {summary['mean_entropy']:.4f}")
+        if summary.get("n_terminal_states") is not None:
+            body_lines.append(f"- **Terminal states with fate probabilities**: {summary['n_terminal_states']}")
+        body_lines.append("")
+    else:
+        body_lines.extend(
+            [
+                "### VIA",
+                "VIA builds a graph-based trajectory with automatic terminal-state discovery.",
+                "When the upstream pyVIA backend is unstable on the current environment,",
+                "OmicsClaw keeps the command successful by falling back to a diffusion-pseudotime-compatible path.\n",
+            ]
+        )
         if summary.get("n_terminal_states") is not None:
             body_lines.append(f"- **Terminal states with fate probabilities**: {summary['n_terminal_states']}")
         body_lines.append("")
@@ -559,6 +575,7 @@ def main():
         )
         summary = {
             "method": analysis_method,
+            "backend": analysis_method,
             "n_clusters": int(adata.obs[args.cluster_key].nunique()),
             "n_trajectory_genes": 0,
             "root_cell": int(dpt_result["root_cells"][0]) if dpt_result["root_cells"] else None,
@@ -589,6 +606,7 @@ def main():
         fate_probs = palantir_result.get("fate_probabilities")
         summary = {
             "method": analysis_method,
+            "backend": analysis_method,
             "n_clusters": int(adata.obs[args.cluster_key].nunique()),
             "n_trajectory_genes": 0,
             "root_cell": int(np.where(adata.obs_names == early_cell_name)[0][0]),
@@ -613,7 +631,8 @@ def main():
         pseudotime_key = "via_pseudotime"
         fate_probs = via_result.get("fate_probabilities")
         summary = {
-            "method": via_result.get("method", analysis_method),
+            "method": analysis_method,
+            "backend": via_result.get("method", analysis_method),
             "n_clusters": int(adata.obs[args.cluster_key].nunique()),
             "n_trajectory_genes": 0,
             "root_cell": int(via_result["root_cell"]),

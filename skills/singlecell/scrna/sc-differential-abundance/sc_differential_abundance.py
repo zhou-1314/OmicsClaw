@@ -64,12 +64,14 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _write_report(output_dir: Path, summary: dict, params: dict, input_path: str | None) -> None:
+    backend = str(summary.get("backend", summary.get("method", "NA")))
     header = generate_report_header(
         title="Single-Cell Differential Abundance Report",
         skill_name=SKILL_NAME,
         input_files=[Path(input_path)] if input_path else None,
         extra_metadata={
-            "Method": str(summary.get("method", "NA")),
+            "Method": str(params.get("method", "NA")),
+            "Backend": backend,
             "Condition key": str(params.get("condition_key", "condition")),
             "Sample key": str(params.get("sample_key", "sample")),
             "Cell type key": str(params.get("cell_type_key", "cell_type")),
@@ -79,7 +81,7 @@ def _write_report(output_dir: Path, summary: dict, params: dict, input_path: str
         "## Summary",
         "",
         f"- Requested method: `{params.get('method')}`",
-        f"- Executed method: `{summary.get('method')}`",
+        f"- Execution backend: `{backend}`",
         f"- Samples: `{summary.get('n_samples', 'NA')}`",
         f"- Cell types: `{summary.get('n_cell_types', 'NA')}`",
         f"- Significant hits: `{summary.get('n_significant', 'NA')}`",
@@ -125,9 +127,9 @@ def main() -> int:
     save_heatmap(props, figures_dir / "sample_celltype_proportions.png", "Sample-by-cell-type proportions")
 
     result_tables = {}
-    executed_method = args.method
     summary = {
-        "method": executed_method,
+        "method": args.method,
+        "backend": args.method,
         "n_samples": int(counts.shape[0]),
         "n_cell_types": int(counts.shape[1]),
     }
@@ -159,8 +161,7 @@ def main() -> int:
             n_neighbors=args.n_neighbors,
             contrast=args.contrast,
         )
-        executed_method = _extract_backend(mdata, args.method)
-        summary["method"] = executed_method
+        summary["backend"] = _extract_backend(mdata, args.method)
         nhood.to_csv(tables_dir / "milo_nhood_results.csv", index=False)
         result_tables["milo_nhood_results"] = str(tables_dir / "milo_nhood_results.csv")
         if {"nhood_annotation", "SpatialFDR", "logFC"}.issubset(nhood.columns):
@@ -190,8 +191,7 @@ def main() -> int:
             reference_cell_type=args.reference_cell_type,
             fdr=args.fdr,
         )
-        executed_method = _extract_backend(mdata, args.method)
-        summary["method"] = executed_method
+        summary["backend"] = _extract_backend(mdata, args.method)
         effect_df.to_csv(tables_dir / "sccoda_effects.csv", index=False)
         result_tables["sccoda_effects"] = str(tables_dir / "sccoda_effects.csv")
         if "log2-fold change" in effect_df.columns:

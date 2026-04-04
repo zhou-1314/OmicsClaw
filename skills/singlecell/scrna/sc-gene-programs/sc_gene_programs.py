@@ -44,12 +44,14 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _write_report(output_dir: Path, summary: dict, params: dict, input_path: str | None) -> None:
+    backend = str(summary.get("backend", summary.get("method", "NA")))
     header = generate_report_header(
         title="Single-Cell Gene Programs Report",
         skill_name=SKILL_NAME,
         input_files=[Path(input_path)] if input_path else None,
         extra_metadata={
-            "Method": str(summary.get("method", "NA")),
+            "Method": str(params.get("method", "NA")),
+            "Backend": backend,
             "Programs": str(params.get("n_programs", 0)),
         },
     )
@@ -57,7 +59,7 @@ def _write_report(output_dir: Path, summary: dict, params: dict, input_path: str
         "## Summary",
         "",
         f"- Requested method: `{params.get('method')}`",
-        f"- Executed method: `{summary.get('method')}`",
+        f"- Execution backend: `{backend}`",
         f"- Programs inferred: `{summary.get('n_programs', 'NA')}`",
         f"- Reconstruction error: `{summary.get('reconstruction_err', 'NA')}`",
         "",
@@ -133,7 +135,8 @@ def main() -> int:
     adata.write_h5ad(annotated_h5ad)
 
     summary = {
-        "method": result.get("method", args.method),
+        "method": args.method,
+        "backend": result.get("method", args.method),
         "n_programs": int(usage_df.shape[1]),
         "reconstruction_err": float(result.get("reconstruction_err", float("nan"))),
     }
