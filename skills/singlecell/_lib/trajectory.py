@@ -278,8 +278,29 @@ def run_via_pseudotime(
             setattr(np, alias, target)
     try:
         import pyVIA.core as via
+        import pyVIA.utils_via as via_utils
+        from scipy.sparse import csr_matrix
     except ImportError as exc:
         raise ImportError("pyVIA is required for method='via'. Install with `pip install pyVIA`.") from exc
+
+    def _patched_get_sparse_from_igraph(graph, weight_attr=None):
+        edges = graph.get_edgelist()
+        weights = list(graph.es[weight_attr]) if weight_attr else [1] * len(edges)
+        if not graph.is_directed():
+            reverse_edges = [(v, u) for u, v in edges]
+            edges = edges + reverse_edges
+            weights = weights + weights[: len(reverse_edges)]
+        shape = (graph.vcount(), graph.vcount())
+        if edges:
+            rows, cols = zip(*edges)
+            return csr_matrix((weights, (rows, cols)), shape=shape)
+        return csr_matrix(shape)
+
+    # pyVIA 0.2.4 still builds sparse matrices via `csr_matrix((weights, zip(*edges)))`,
+    # which breaks on newer SciPy because `zip(*edges)` is an iterator instead of a
+    # concrete `(rows, cols)` tuple. Patch both modules before model creation.
+    via_utils.get_sparse_from_igraph = _patched_get_sparse_from_igraph
+    via.get_sparse_from_igraph = _patched_get_sparse_from_igraph
 
     if copy:
         adata = adata.copy()

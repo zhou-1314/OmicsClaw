@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import logging
 import os
+import importlib.util
+import sys
+import types
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +16,48 @@ import scanpy as sc
 from anndata import AnnData
 
 logger = logging.getLogger(__name__)
+
+
+def _load_pertpy_milo_class():
+    """Load the official pertpy Milo implementation, even if `pertpy.__init__` pulls optional extras."""
+    try:
+        from pertpy.tools._milo import Milo
+        return Milo
+    except Exception:
+        pass
+
+    spec = importlib.util.find_spec("pertpy")
+    if spec is None or spec.origin is None:
+        raise ImportError("pertpy is not installed; install it to use the official Milo implementation.")
+
+    base = Path(spec.origin).parent
+    sys.modules.pop("pertpy", None)
+    sys.modules.pop("pertpy.tools", None)
+    sys.modules.pop("pertpy._doc", None)
+    sys.modules.pop("pertpy.tools._milo", None)
+
+    pertpy_pkg = types.ModuleType("pertpy")
+    pertpy_pkg.__path__ = [str(base)]
+    sys.modules["pertpy"] = pertpy_pkg
+
+    doc_spec = importlib.util.spec_from_file_location("pertpy._doc", base / "_doc.py")
+    if doc_spec is None or doc_spec.loader is None:
+        raise ImportError("Unable to locate pertpy._doc while preparing Milo import.")
+    doc_module = importlib.util.module_from_spec(doc_spec)
+    sys.modules["pertpy._doc"] = doc_module
+    doc_spec.loader.exec_module(doc_module)
+
+    tools_pkg = types.ModuleType("pertpy.tools")
+    tools_pkg.__path__ = [str(base / "tools")]
+    sys.modules["pertpy.tools"] = tools_pkg
+
+    milo_spec = importlib.util.spec_from_file_location("pertpy.tools._milo", base / "tools" / "_milo.py")
+    if milo_spec is None or milo_spec.loader is None:
+        raise ImportError("Unable to locate pertpy.tools._milo for Milo import.")
+    milo_module = importlib.util.module_from_spec(milo_spec)
+    sys.modules["pertpy.tools._milo"] = milo_module
+    milo_spec.loader.exec_module(milo_module)
+    return milo_module.Milo
 
 
 def make_demo_da_adata(seed: int = 0) -> AnnData:
@@ -178,7 +223,7 @@ def run_milo_da(
     n_neighbors: int = 30,
     contrast: str | None = None,
 ) -> tuple[Any, pd.DataFrame]:
-    """Run Milo differential abundance via the local Milo wrapper."""
+    """Run Milo differential abundance via the official pertpy implementation."""
     if sample_key not in adata.obs:
         raise ValueError(f"Missing sample key: {sample_key}")
     if condition_key not in adata.obs:
@@ -187,11 +232,13 @@ def run_milo_da(
         raise ValueError(f"Missing cell type key: {celltype_key}")
     if "neighbors" not in adata.uns:
         sc.pp.neighbors(adata, n_neighbors=n_neighbors)
+    if "X_umap" not in adata.obsm:
+        sc.tl.umap(adata)
 
     try:
-        from skills.singlecell._lib._milo_dev import Milo
+        Milo = _load_pertpy_milo_class()
     except Exception as exc:  # pragma: no cover - exercised via smoke tests instead
-        logger.warning("Falling back to internal Milo-like neighborhood DA because the Milo wrapper is unavailable: %s", exc)
+        logger.warning("Falling back to internal Milo-like neighborhood DA because official Milo import failed: %s", exc)
         return _run_internal_milo_like_da(
             adata,
             sample_key=sample_key,
@@ -202,23 +249,39 @@ def run_milo_da(
             contrast=contrast,
         )
 
+    working = adata.copy()
+    if contrast:
+        group_a, group_b = _resolve_condition_groups(
+            working.obs[[sample_key, condition_key]].drop_duplicates().set_index(sample_key),
+            condition_key,
+            contrast,
+        )
+        keep_conditions = {group_a, group_b}
+        working = working[working.obs[condition_key].astype(str).isin(keep_conditions)].copy()
+        if "neighbors" not in working.uns:
+            sc.pp.neighbors(working, n_neighbors=n_neighbors)
+        if "X_umap" not in working.obsm:
+            sc.tl.umap(working)
+        working.obs[condition_key] = pd.Categorical(working.obs[condition_key].astype(str), categories=[group_a, group_b])
+    else:
+        working.obs[condition_key] = pd.Categorical(working.obs[condition_key].astype(str))
+
     milo = Milo()
-    mdata = milo.load(adata)
+    mdata = milo.load(working)
     milo.make_nhoods(mdata["rna"], prop=prop)
     mdata = milo.count_nhoods(mdata, sample_col=sample_key)
     milo.add_covariate_to_nhoods_var(mdata, [condition_key], feature_key="rna")
-    if contrast:
-        parts = [x.strip() for x in contrast.split("vs")]
-        model_contrasts = f"{condition_key}[{parts[1]}] - {condition_key}[{parts[0]}]"
-    else:
-        model_contrasts = None
-    milo.da_nhoods(mdata, design=f"~ {condition_key}", model_contrasts=model_contrasts)
+    milo.da_nhoods(mdata, design=f"~ {condition_key}", solver="pydeseq2")
     milo.annotate_nhoods(mdata, anno_col=celltype_key)
     milo.build_nhood_graph(mdata)
     nhood = mdata["milo"].var.copy()
     nhood.index.name = "nhood"
     if hasattr(mdata["milo"], "uns"):
         mdata["milo"].uns["backend"] = "milo"
+        mdata["milo"].uns["solver"] = "pydeseq2"
+    if hasattr(mdata, "uns"):
+        mdata.uns["backend"] = "milo"
+        mdata.uns["solver"] = "pydeseq2"
     return mdata, nhood.reset_index()
 
 

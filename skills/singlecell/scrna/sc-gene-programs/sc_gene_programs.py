@@ -113,6 +113,7 @@ def main() -> int:
     usage_df = result["usage"]
     weights_df = result["weights"]
     top_df = result["top_genes"]
+    spectra_tpm_df = result.get("spectra_tpm")
     adata.obsm["X_gene_programs"] = usage_df.to_numpy()
     adata.uns["gene_programs"] = {
         "method": result.get("method", args.method),
@@ -122,6 +123,8 @@ def main() -> int:
     usage_df.to_csv(tables_dir / "program_usage.csv")
     weights_df.to_csv(tables_dir / "program_weights.csv")
     top_df.to_csv(tables_dir / "top_program_genes.csv", index=False)
+    if spectra_tpm_df is not None:
+        spectra_tpm_df.to_csv(tables_dir / "program_tpm.csv")
 
     if not usage_df.empty:
         fig, ax = plt.subplots(figsize=(8, 4))
@@ -159,6 +162,7 @@ def main() -> int:
                 "program_usage": str(tables_dir / "program_usage.csv"),
                 "program_weights": str(tables_dir / "program_weights.csv"),
                 "top_program_genes": str(tables_dir / "top_program_genes.csv"),
+                "program_tpm": str(tables_dir / "program_tpm.csv") if spectra_tpm_df is not None else None,
                 "annotated_h5ad": str(annotated_h5ad),
             },
         },
