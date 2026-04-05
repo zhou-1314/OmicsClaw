@@ -166,7 +166,7 @@ Current OmicsClaw `sc-count` does:
 1. detect FASTQ samples or existing backend outputs
 2. run the selected counting backend when needed
 3. import the filtered matrix
-4. standardize it into `standardized_input.h5ad`
+4. standardize it into `processed.h5ad`
 5. preserve backend artifact paths in the result object
 
 Current OmicsClaw `sc-count` does **not** yet promise:
@@ -211,7 +211,7 @@ About to run single-cell counting
   Method: cellranger
   Input: FASTQ directory
   Sample: PBMC_1
-  Output hand-off: standardized_input.h5ad
+  Output hand-off: processed.h5ad
   Preserved artifacts: filtered matrix, raw matrix when available, backend BAM/logs
 ```
 
@@ -219,7 +219,7 @@ About to run single-cell counting
 
 After the run:
 
-- `standardized_input.h5ad` is the main downstream hand-off to OmicsClaw
+- `processed.h5ad` is the main downstream hand-off to OmicsClaw
 - but backend artifacts are still important
 
 Typical next steps:

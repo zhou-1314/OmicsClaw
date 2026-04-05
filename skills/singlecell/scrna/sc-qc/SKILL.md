@@ -185,6 +185,7 @@ species-specific feature tagging.
 - `smart_load(...)` is now loader-only: it reads the object and records a minimal input contract.
 - User-facing standardization advice is emitted by shared `preflight`, not by the loader.
 - `prepare_count_like_adata(...)` then selects `layers["counts"]` → aligned `adata.raw` → count-like `adata.X` in that order.
+- The saved `processed.h5ad` declares matrix semantics explicitly in `adata.uns["omicsclaw_matrix_contract"]`: here `adata.X` is raw count-like, `adata.layers["counts"]` is the canonical raw layer, and `adata.raw` is a count-like snapshot.
 - If no mitochondrial or ribosomal genes match the selected species convention, the run continues with warnings and counts-based QC metrics remain available.
 
 ### Guaranteed Metric Columns After Success
