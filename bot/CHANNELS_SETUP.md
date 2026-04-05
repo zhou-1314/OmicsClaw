@@ -2,6 +2,18 @@
 
 This document provides detailed, step-by-step configuration guides for all supported messaging platforms in OmicsClaw.
 
+Before configuring a channel, make sure your `.env` already contains a working LLM credential. You can do this either by:
+
+```bash
+oc onboard
+```
+
+or by copying `.env.example` to `.env` and filling in the required keys manually.
+
+At runtime, OmicsClaw accepts either:
+- `LLM_API_KEY`
+- A provider-specific key such as `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`
+
 ## Table of Contents
 - [Telegram (Recommended for quick start)](#1-telegram)
 - [Feishu / Lark (Recommended for enterprise)](#2-feishu-lark)
@@ -48,9 +60,12 @@ Send these commands to @BotFather to customize your bot:
 ```bash
 TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz1234567890
 
-# Optional: Admin chat ID to bypass rate limits
+# Optional: Admin chat ID to bypass Telegram rate limits
 # Get your chat ID by sending /start to @userinfobot
 # TELEGRAM_CHAT_ID=123456789
+
+# Optional: per-user rate limit for Telegram (default: 10, 0 = unlimited)
+# RATE_LIMIT_PER_HOUR=10
 ```
 
 ---
@@ -98,6 +113,14 @@ Your bot will only be able to receive messages properly **after** the version st
 ```bash
 FEISHU_APP_ID=cli_xxxxxxx
 FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxx
+
+# Optional tuning
+# FEISHU_THINKING_THRESHOLD_MS=2500
+# FEISHU_MAX_INBOUND_IMAGE_MB=12
+# FEISHU_MAX_INBOUND_FILE_MB=40
+# FEISHU_MAX_ATTACHMENTS=4
+# FEISHU_RATE_LIMIT_PER_HOUR=60
+# FEISHU_BRIDGE_DEBUG=0
 ```
 
 ---
@@ -112,6 +135,9 @@ FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxx
    ```bash
    DINGTALK_CLIENT_ID=ding...
    DINGTALK_CLIENT_SECRET=xxxxxxxxxxxxxxxxxx
+
+   # Optional
+   # DINGTALK_RATE_LIMIT_PER_HOUR=60
    ```
 
 ---
@@ -128,6 +154,10 @@ FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxx
 5. Set variables in `.env`:
    ```bash
    DISCORD_BOT_TOKEN=MTIzNDU2Nzg5.xxxx.xxxxx
+
+   # Optional
+   # DISCORD_RATE_LIMIT_PER_HOUR=60
+   # DISCORD_PROXY=http://127.0.0.1:7890
    ```
 
 ---
@@ -144,6 +174,9 @@ FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxx
    ```bash
    SLACK_BOT_TOKEN=xoxb-xxxx-xxxx-xxxx
    SLACK_APP_TOKEN=xapp-1-xxxx-xxxx
+
+   # Optional
+   # SLACK_RATE_LIMIT_PER_HOUR=60
    ```
 
 ---
@@ -165,6 +198,7 @@ WeChat requires a publicly accessible webhook URL (port `9001` by default). For 
    WECOM_SECRET=xxxxxxxxxxxxxxxxxx
    WECOM_TOKEN=xxxxxxxxxxxxxxxxxx          
    WECOM_ENCODING_AES_KEY=xxxxxxxxxxxxxxxxxx 
+   WECOM_WEBHOOK_PORT=9001
    ```
 
 ### Option B: WeChat Official Account (微信公众号)
@@ -175,6 +209,9 @@ WeChat requires a publicly accessible webhook URL (port `9001` by default). For 
    ```bash
    WECHAT_APP_ID=wx...
    WECHAT_APP_SECRET=xxxxxxxxxxxxxxxxxx
+   WECHAT_TOKEN=xxxxxxxxxxxxxxxxxx
+   WECHAT_ENCODING_AES_KEY=xxxxxxxxxxxxxxxxxx
+   WECHAT_WEBHOOK_PORT=9001
    ```
 
 ---
@@ -190,6 +227,10 @@ WeChat requires a publicly accessible webhook URL (port `9001` by default). For 
    ```bash
    QQ_APP_ID=xxxxxxxxxx
    QQ_APP_SECRET=xxxxxxxxxxxxxxxxxx
+
+   # Optional
+   # QQ_ALLOWED_SENDERS=12345678,87654321
+   # QQ_RATE_LIMIT_PER_HOUR=60
    ```
 
 ---
@@ -214,6 +255,14 @@ Email operates as a channel by polling an IMAP inbox and responding via SMTP.
    EMAIL_SMTP_PASSWORD=your-app-password
    
    EMAIL_FROM_ADDRESS=your-bot@gmail.com
+
+   # Optional
+   # EMAIL_IMAP_MAILBOX=INBOX
+   # EMAIL_IMAP_USE_SSL=1
+   # EMAIL_SMTP_STARTTLS=1
+   # EMAIL_POLL_INTERVAL=30
+   # EMAIL_MARK_SEEN=1
+   # EMAIL_ALLOWED_SENDERS=alice@example.com,bob@example.com
    ```
 
 ---
@@ -233,5 +282,9 @@ iMessage integration relies on the `imsg` CLI and requires a macOS host natively
    ```bash
    IMESSAGE_CLI_PATH=/opt/homebrew/bin/imsg    # Or $(which imsg)
    IMESSAGE_ALLOWED_SENDERS=+1234567890,user@icloud.com
+
+   # Optional
+   # IMESSAGE_SERVICE=auto
+   # IMESSAGE_REGION=US
    ```
    > Recommended: Always set an allowlist for iMessage to prevent the bot from responding to unintended personal messages.

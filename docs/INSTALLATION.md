@@ -162,6 +162,14 @@ This adds test and lint tooling such as `pytest`, `ruff`, `black`, and `mypy`.
 pip install -e ".[interactive]"
 ```
 
+After installation, the fastest way to configure the runtime is:
+
+```bash
+oc onboard
+```
+
+This writes the project `.env` and can configure LLM credentials, shared runtime settings, memory options, and messaging channels.
+
 Example custom endpoint configuration:
 
 ```env
@@ -169,6 +177,12 @@ LLM_PROVIDER=custom
 LLM_BASE_URL=https://your-endpoint.example.com/v1
 OMICSCLAW_MODEL=your-model-name
 LLM_API_KEY=sk-xxxxxxxxxxxxxxxx
+```
+
+Provider-specific keys also work without setting `LLM_API_KEY`, for example:
+
+```env
+DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
 ### Interactive + TUI + memory

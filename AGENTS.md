@@ -52,7 +52,7 @@ python omicsclaw.py run spatial-preprocess --demo
 | `oc mcp add <name> <cmd> [args]` | Add an MCP server |
 | `oc mcp remove <name>` | Remove an MCP server |
 | `oc mcp config` | Show MCP config file path |
-| `oc onboard` | Run interactive setup wizard |
+| `oc onboard` | Run interactive setup wizard for LLM, runtime, memory, and channels |
 | `python -m pytest -v` | Run all tests |
 | `make test` | Alias for pytest |
 | `make demo` | Run preprocess demo |

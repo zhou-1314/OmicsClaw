@@ -180,6 +180,8 @@ cp .env.example .env
 
 ### 2. Environment Variables
 
+For a guided setup, run `oc onboard`. The wizard writes `.env` using the same variables documented below.
+
 | Variable | Purpose | Required by |
 |---|---|---|
 | `LLM_PROVIDER` | Provider preset (see table below) — *optional if provider-specific key is set* | All |
@@ -214,6 +216,13 @@ cp .env.example .env
 | `IMESSAGE_CLI_PATH` | Path to `imsg` CLI binary (macOS only) | iMessage |
 | `IMESSAGE_ALLOWED_SENDERS` | Comma-separated allow-list (phones/emails) | iMessage |
 | `RATE_LIMIT_PER_HOUR` | Max messages/user/hour (default: 10) | All |
+| `ALLOWED_SENDERS` | Global sender allowlist applied by runner middleware | All |
+| `GLOBAL_RATE_LIMIT` | Global inbound middleware rate limit per hour (default: 120) | All |
+| `OMICSCLAW_DATA_DIRS` | Extra trusted data directories (comma-separated absolute paths) | All |
+| `OMICSCLAW_MEMORY_DB_URL` | Persistent graph memory database URL | All |
+| `OMICSCLAW_MAX_HISTORY` | Max messages kept in transcript history (default: 50) | All |
+| `OMICSCLAW_MAX_HISTORY_CHARS` | Optional transcript character cap (default: 0 = disabled) | All |
+| `OMICSCLAW_MAX_TOOL_ITERATIONS` | Max tool iterations per request (default: 20) | All |
 
 `bot/core.py` applies these timeout settings to the shared `AsyncOpenAI` client. This prevents a stalled upstream provider from hanging the full conversation path indefinitely.
 
@@ -621,19 +630,18 @@ Both platforms support:
 
 ### Sender Allowlist
 
-Every channel supports restricting who can interact with the bot via `allowed_senders`:
+The runner supports one global allowlist plus several channel-native allowlists:
 
 ```bash
-TELEGRAM_CHAT_ID=123456789                   # Telegram user IDs
-DISCORD_ALLOWED_SENDERS=111222333444555666   # Discord user IDs
-SLACK_ALLOWED_SENDERS=U0123ABCDEF            # Slack Member IDs
-FEISHU_ALLOWED_SENDERS=ou_xxxxxxxxxxxx       # Feishu open_ids
+ALLOWED_SENDERS=user1,user2                  # Global middleware allowlist
 EMAIL_ALLOWED_SENDERS=alice@example.com      # Email addresses
 IMESSAGE_ALLOWED_SENDERS=+1234567890         # Phone or email
 QQ_ALLOWED_SENDERS=12345678                  # QQ user IDs
 ```
 
-> **For production deployments, always set an allowlist.** When the allowlist is empty, the channel accepts messages from anyone.
+`TELEGRAM_CHAT_ID` is an admin override for Telegram rate limits, not a general allowlist.
+
+> **For production deployments, always set an allowlist.** When no allowlist is configured, the bot accepts messages from any sender the channel exposes to it.
 
 ### Data Security
 

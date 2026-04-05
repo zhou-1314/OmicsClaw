@@ -33,8 +33,10 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Mapping
 
 from omicsclaw.common.runtime_env import load_env_file
+from omicsclaw.core.provider_registry import detect_provider_from_env, resolve_provider
 
 # Ensure project root on sys.path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -58,6 +60,25 @@ from bot.channels.middleware import (  # noqa: E402
 )
 
 logger = logging.getLogger("omicsclaw.runner")
+
+
+def _resolve_bootstrap_llm_config(
+    env: Mapping[str, str] | None = None,
+) -> tuple[str, str | None, str, str]:
+    """Resolve the effective LLM bootstrap config from environment variables."""
+    source = os.environ if env is None else env
+    explicit_provider = str(source.get("LLM_PROVIDER", "") or "").strip().lower()
+    detected_provider = detect_provider_from_env(env=source)
+    effective_provider = explicit_provider or detected_provider
+
+    resolved_url, resolved_model, resolved_key = resolve_provider(
+        provider=explicit_provider,
+        base_url=str(source.get("LLM_BASE_URL", "") or ""),
+        model=str(source.get("OMICSCLAW_MODEL", source.get("SPATIALCLAW_MODEL", "")) or ""),
+        api_key=str(source.get("LLM_API_KEY", "") or ""),
+        env=source,
+    )
+    return effective_provider, resolved_url, resolved_model, resolved_key
 
 
 def _build_telegram_channel():
@@ -284,16 +305,19 @@ async def _run_channels(channel_names: list[str], health_port: int = 0) -> None:
     from bot.channels.manager import ChannelManager
 
     # Initialize core LLM engine
-    api_key = os.environ.get("LLM_API_KEY", os.environ.get("OPENAI_API_KEY", ""))
-    if not api_key:
-        print("Error: LLM_API_KEY not set. See bot/README.md for setup.")
+    provider, base_url, model, api_key = _resolve_bootstrap_llm_config()
+    if not api_key and provider != "ollama":
+        print(
+            "Error: no LLM API key resolved. Set LLM_API_KEY or a provider-specific key "
+            "(for example DEEPSEEK_API_KEY). See bot/README.md for setup."
+        )
         sys.exit(1)
 
     core.init(
         api_key=api_key,
-        base_url=os.environ.get("LLM_BASE_URL") or None,
-        model=os.environ.get("OMICSCLAW_MODEL", os.environ.get("SPATIALCLAW_MODEL", "")),
-        provider=os.environ.get("LLM_PROVIDER", ""),
+        base_url=base_url,
+        model=model,
+        provider=provider,
     )
 
     # Build manager with middleware
