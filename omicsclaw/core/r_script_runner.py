@@ -316,7 +316,27 @@ class RScriptRunner:
             r_libs_user = Path(conda_prefix) / "lib" / "R" / "omicsclaw-library"
             r_libs_user.mkdir(parents=True, exist_ok=True)
             env.setdefault("OMICSCLAW_R_LIBS", str(r_libs_user))
-            env.setdefault("R_LIBS_USER", str(r_libs_user))
+            # Prefer the active conda environment's private R library first so
+            # skill-specific packages shadow any user/system-wide installs.
+            lib_paths: list[str] = [str(r_libs_user)]
+            existing_r_libs_user = env.get("R_LIBS_USER", "").strip()
+            if existing_r_libs_user:
+                lib_paths.append(existing_r_libs_user)
+            else:
+                try:
+                    probe = subprocess.run(
+                        [self.r_executable, "-e", 'cat(path.expand(Sys.getenv("R_LIBS_USER")))'],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        env={k: v for k, v in env.items() if k != "R_LIBS_USER"},
+                    )
+                    default_r_libs_user = probe.stdout.strip()
+                    if probe.returncode == 0 and default_r_libs_user:
+                        lib_paths.append(default_r_libs_user)
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    pass
+            env["R_LIBS_USER"] = os.pathsep.join(dict.fromkeys(p for p in lib_paths if p))
 
         # Disable reticulate's managed ephemeral Python selection when possible.
         env.setdefault("RETICULATE_USE_MANAGED_VENV", "no")
