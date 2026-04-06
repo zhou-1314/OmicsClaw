@@ -12,6 +12,10 @@ Use this checklist before saying a single-cell skill is aligned with OmicsClaw.
 - [ ] normalized-only methods do not silently accept count-oriented `X`
 - [ ] count-based methods do not silently sum normalized values
 - [ ] `SKILL.md` states the matrix expectations honestly
+- [ ] method-specific parameters are mapped honestly when multiple methods exist
+- [ ] critical selector parameters such as `use_rep` / `groupby` / `batch_key` are treated as first-class user-facing parameters when they change the analysis result
 - [ ] guardrail and skill-guide mention the same matrix expectations
+- [ ] guardrail and skill-guide explain upstream step, key defaults, and usual next step in beginner-friendly language
+- [ ] preflight guidance is good enough for a user who does not already know the scRNA workflow
 - [ ] figures, tables, `figure_data`, and `result.json` match the same analysis result
 - [ ] tests cover at least one contract-success path and one contract-mismatch path

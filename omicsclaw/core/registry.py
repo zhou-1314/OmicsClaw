@@ -903,6 +903,10 @@ _HARDCODED_SKILLS: dict[str, dict[str, Any]] = {
         "allowed_extra_flags": {
             "--method", "--min-genes", "--min-cells", "--max-mt-pct",
             "--n-top-hvg", "--n-pcs",
+            "--normalization-target-sum", "--scanpy-hvg-flavor",
+            "--pearson-hvg-flavor", "--pearson-theta",
+            "--seurat-normalize-method", "--seurat-scale-factor", "--seurat-hvg-method",
+            "--sctransform-regress-mt", "--no-sctransform-regress-mt",
         },
         "saves_h5ad": True,
     },
@@ -912,9 +916,11 @@ _HARDCODED_SKILLS: dict[str, dict[str, Any]] = {
         "legacy_aliases": ["sc-dimred-cluster"],
         "script": SKILLS_DIR / "singlecell" / "scrna" / "sc-clustering" / "sc_cluster.py",
         "demo_args": ["--demo"],
-        "description": "Single-cell neighbors, UMAP, and graph clustering from normalized or integrated embeddings",
+        "description": "Single-cell neighbors, low-dimensional embedding, and graph clustering from normalized or integrated embeddings",
         "allowed_extra_flags": {
-            "--cluster-method", "--use-rep", "--n-neighbors", "--n-pcs", "--resolution",
+            "--embedding-method", "--cluster-method", "--use-rep", "--n-neighbors", "--n-pcs", "--resolution",
+            "--umap-min-dist", "--umap-spread", "--tsne-perplexity", "--tsne-metric", "--diffmap-n-comps",
+            "--phate-knn", "--phate-decay",
         },
         "saves_h5ad": True,
         "requires_preprocessed": True,
@@ -973,7 +979,7 @@ _HARDCODED_SKILLS: dict[str, dict[str, Any]] = {
         "script": SKILLS_DIR / "singlecell" / "scrna" / "sc-batch-integration" / "sc_integrate.py",
         "demo_args": ["--demo"],
         "description": "Multi-sample integration and batch correction (Harmony, scVI, BBKNN, Scanorama, fastMNN, Seurat CCA/RPCA)",
-        "allowed_extra_flags": {"--method", "--batch-key", "--n-epochs", "--no-gpu"},
+        "allowed_extra_flags": {"--method", "--batch-key", "--n-epochs", "--no-gpu", "--n-latent", "--labels-key", "--harmony-theta", "--bbknn-neighbors-within-batch", "--scanorama-knn", "--integration-features", "--integration-pcs"},
         "saves_h5ad": True,
     },
     "sc-de": {

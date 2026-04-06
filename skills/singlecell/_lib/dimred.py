@@ -450,7 +450,9 @@ def run_umap_reduction(
 def run_tsne_reduction(
     adata: AnnData,
     n_pcs: Optional[int] = None,
+    use_rep: Optional[str] = None,
     perplexity: float = 30,
+    metric: str = "euclidean",
     random_state: int = 0,
     inplace: bool = True,
 ) -> AnnData:
@@ -462,8 +464,12 @@ def run_tsne_reduction(
         AnnData with PCA computed.
     n_pcs
         Number of PCs to use.  ``None`` uses scanpy default.
+    use_rep
+        Key in ``adata.obsm`` to use instead of PCA.
     perplexity
         t-SNE perplexity.
+    metric
+        Distance metric for t-SNE.
     random_state
         Random seed.
     inplace
@@ -474,12 +480,28 @@ def run_tsne_reduction(
     if not inplace:
         adata = adata.copy()
 
-    if "X_pca" not in adata.obsm:
+    if use_rep is not None and use_rep not in adata.obsm:
+        raise ValueError(f"{use_rep} not found in adata.obsm")
+
+    if use_rep is None and "X_pca" not in adata.obsm:
         logger.warning("PCA not found. Computing PCA with 50 components first.")
         sc.tl.pca(adata, n_comps=min(50, adata.n_vars - 1))
 
-    logger.info("Computing t-SNE (perplexity=%.1f, n_pcs=%s)", perplexity, n_pcs)
-    sc.tl.tsne(adata, n_pcs=n_pcs, perplexity=perplexity, random_state=random_state)
+    logger.info(
+        "Computing t-SNE (perplexity=%.1f, n_pcs=%s, use_rep=%s, metric=%s)",
+        perplexity,
+        n_pcs,
+        use_rep,
+        metric,
+    )
+    sc.tl.tsne(
+        adata,
+        n_pcs=n_pcs,
+        use_rep=use_rep,
+        perplexity=perplexity,
+        metric=metric,
+        random_state=random_state,
+    )
     logger.info("t-SNE complete. Shape: %s", adata.obsm["X_tsne"].shape)
 
     return adata
@@ -515,6 +537,37 @@ def run_diffmap(
     sc.tl.diffmap(adata, n_comps=n_comps)
     logger.info("Diffusion map complete. Shape: %s", adata.obsm["X_diffmap"].shape)
 
+    return adata
+
+
+def run_phate_reduction(
+    adata: AnnData,
+    *,
+    use_rep: Optional[str] = None,
+    knn: int = 15,
+    decay: int = 40,
+    random_state: int = 0,
+    inplace: bool = True,
+) -> AnnData:
+    """Compute PHATE embedding from a chosen representation."""
+    import phate
+
+    if not inplace:
+        adata = adata.copy()
+
+    if use_rep is not None:
+        if use_rep not in adata.obsm:
+            raise ValueError(f"{use_rep} not found in adata.obsm")
+        data = np.asarray(adata.obsm[use_rep])
+    elif "X_pca" in adata.obsm:
+        data = np.asarray(adata.obsm["X_pca"])
+    else:
+        data = np.asarray(adata.X)
+
+    logger.info("Computing PHATE (use_rep=%s, knn=%d, decay=%d)", use_rep, knn, decay)
+    operator = phate.PHATE(knn=knn, decay=decay, random_state=random_state, n_jobs=1, verbose=False)
+    adata.obsm["X_phate"] = operator.fit_transform(data)
+    logger.info("PHATE complete. Shape: %s", adata.obsm["X_phate"].shape)
     return adata
 
 
