@@ -80,6 +80,12 @@ def preflight_sc_clustering(
     use_rep: str | None,
     tsne_perplexity: float,
     diffmap_n_comps: int,
+    n_neighbors: int,
+    n_pcs: int,
+    resolution: float,
+    umap_min_dist: float,
+    umap_spread: float,
+    tsne_metric: str,
     source_path: str | None = None,
 ) -> PreflightDecision:
     decision = PreflightDecision(SKILL_NAME)
@@ -92,6 +98,10 @@ def preflight_sc_clustering(
             "`sc-clustering` expects normalized expression from `sc-preprocessing` or an integrated embedding workflow."
         )
         return decision
+
+    decision.add_guidance(
+        "`sc-clustering` is the stage after base preprocessing. It builds a neighbor graph, renders a low-dimensional view, and writes cluster labels."
+    )
 
     candidates = _candidate_embeddings(adata)
     if use_rep:
@@ -136,6 +146,25 @@ def preflight_sc_clustering(
         decision.add_guidance(
             f"Potential batch/sample columns were detected: {_format_candidates(batch_candidates)}. If batch effects are expected, consider `sc-batch-integration` before clustering."
         )
+
+    decision.add_guidance(
+        f"Current first-pass settings: `embedding_method={embedding_method}`, `cluster_method={cluster_method}`, `n_neighbors={n_neighbors}`, `n_pcs={n_pcs}`, `resolution={resolution}`."
+    )
+    if embedding_method == "umap":
+        decision.add_guidance(
+            f"`umap`-specific settings: `umap_min_dist={umap_min_dist}`, `umap_spread={umap_spread}`."
+        )
+    elif embedding_method == "tsne":
+        decision.add_guidance(
+            f"`tsne`-specific settings: `tsne_perplexity={tsne_perplexity}`, `tsne_metric={tsne_metric}`."
+        )
+    else:
+        decision.add_guidance(
+            f"`diffmap`-specific settings: `diffmap_n_comps={diffmap_n_comps}`."
+        )
+    decision.add_guidance(
+        "After clustering, the usual next steps are `sc-markers` for marker discovery, `sc-cell-annotation` for label transfer, or `sc-de` for group-level comparison."
+    )
 
     return decision
 
@@ -487,6 +516,11 @@ def write_report(output_dir: Path, summary: dict, params: dict, input_file: str 
         f"- `n_pcs`: {params['n_pcs']}",
         f"- `resolution`: {params['resolution']}",
         "",
+        "## Beginner Notes\n",
+        "- This skill assumes base preprocessing has already produced a normalized, PCA-ready object.",
+        "- If likely batch/sample effects are present, consider `sc-batch-integration` before trusting the clusters.",
+        "- If you did not override the defaults, this run used the first-pass settings listed above.",
+        "",
         "## Recommended Next Steps\n",
         "- Inspect `tables/cluster_summary.csv` and the embedding gallery to judge whether clusters are too coarse or too fragmented.",
         "- If marker discovery is next: run `sc-markers`.",
@@ -588,6 +622,12 @@ def main():
             use_rep=args.use_rep,
             tsne_perplexity=args.tsne_perplexity,
             diffmap_n_comps=args.diffmap_n_comps,
+            n_neighbors=args.n_neighbors,
+            n_pcs=args.n_pcs,
+            resolution=args.resolution,
+            umap_min_dist=args.umap_min_dist,
+            umap_spread=args.umap_spread,
+            tsne_metric=args.tsne_metric,
             source_path=input_file,
         ),
         logger,

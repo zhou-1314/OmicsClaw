@@ -12,6 +12,11 @@ priority: 0.8
 
 Use this guide when the user already has a normalized, PCA-ready single-cell object and now needs the graph / embedding / clustering stage.
 
+If the user only says “do clustering”:
+- explain that this is the stage after `sc-preprocessing`
+- state the first-pass defaults before using them
+- remind them to consider `sc-batch-integration` first when batch effects are likely
+
 ## When To Run This Skill
 
 Recommended path:
