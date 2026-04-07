@@ -296,6 +296,62 @@ async def test_chat_stream_emits_protocol_events_and_usage(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_chat_stream_emits_structured_tool_timeout_events(monkeypatch):
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.app import server
+
+    async def fake_llm_tool_loop(**kwargs):
+        await kwargs["on_tool_call"]("notebook_add_execute", {"source": "sleep(999)"})
+        await kwargs["on_tool_result"](
+            "notebook_add_execute",
+            "Cell execution timed out after 91s",
+            {
+                "success": False,
+                "is_error": True,
+                "timed_out": True,
+                "elapsed_seconds": 91,
+            },
+        )
+        return ""
+
+    fake_core = SimpleNamespace(
+        init=lambda **kwargs: None,
+        llm_tool_loop=fake_llm_tool_loop,
+        LLM_PROVIDER_NAME="env",
+        OMICSCLAW_MODEL="gpt-test",
+        OUTPUT_DIR=ROOT / "output",
+        _skill_registry=lambda: SimpleNamespace(skills={}),
+        get_tool_executors=lambda: {"notebook_add_execute": object()},
+        _accumulate_usage=lambda response_usage: {},
+        _get_token_price=lambda model: (0.0, 0.0),
+    )
+
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
+
+    response = await server.chat_stream(
+        server.ChatRequest(session_id="session-timeout", content="run cell")
+    )
+    payload = await _read_streaming_response(response)
+    events = _parse_sse_events(payload)
+
+    tool_result = next(event for event in events if event["type"] == "tool_result")
+    tool_timeout = next(event for event in events if event["type"] == "tool_timeout")
+
+    assert any(
+        event["type"] == "tool_output"
+        and event["data"] == "notebook_add_execute timed out after 91s"
+        for event in events
+    )
+    assert tool_result["data"]["is_error"] is True
+    assert tool_timeout["data"] == {
+        "tool_name": "notebook_add_execute",
+        "elapsed_seconds": 91,
+    }
+
+
+@pytest.mark.asyncio
 async def test_chat_permission_endpoint_resumes_pending_request(monkeypatch):
     pytest.importorskip("fastapi")
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import inspect
 import json
 import logging
 import os
@@ -3381,13 +3382,103 @@ def _sanitize_tool_history(history: list[dict], warn: bool = True) -> list[dict]
     return _runtime_sanitize_tool_history(history, warn=warn)
 
 
+def _normalize_tool_callback_args(callback, args: tuple) -> tuple:
+    try:
+        signature = inspect.signature(callback)
+    except (TypeError, ValueError):
+        return args
+
+    positional_capacity = 0
+    for parameter in signature.parameters.values():
+        if parameter.kind == inspect.Parameter.VAR_POSITIONAL:
+            return args
+        if parameter.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        ):
+            positional_capacity += 1
+    return args[:positional_capacity]
+
+
 async def _emit_tool_callback(callback, *args) -> None:
     if not callback:
         return
+    callback_args = _normalize_tool_callback_args(callback, args)
     if asyncio.iscoroutinefunction(callback):
-        await callback(*args)
+        await callback(*callback_args)
     else:
-        callback(*args)
+        callback(*callback_args)
+
+
+def _coerce_timeout_seconds(value) -> int | None:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    if seconds <= 0:
+        return None
+    return max(1, round(seconds))
+
+
+def _extract_timeout_seconds_from_text(text: str) -> int | None:
+    if not text:
+        return None
+
+    patterns = (
+        r"timed out after (?P<seconds>\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds)\b",
+        r"timeout after (?P<seconds>\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds)\b",
+    )
+    lowered = text.lower()
+    for pattern in patterns:
+        match = re.search(pattern, lowered, re.IGNORECASE)
+        if not match:
+            continue
+        seconds = _coerce_timeout_seconds(match.group("seconds"))
+        if seconds is not None:
+            return seconds
+    return None
+
+
+def _extract_tool_timeout_seconds(execution_result, display_output) -> int | None:
+    error = getattr(execution_result, "error", None)
+    if error is not None:
+        for attr_name in (
+            "timeout",
+            "timeout_seconds",
+            "elapsed_seconds",
+            "elapsed_time_seconds",
+            "seconds",
+        ):
+            seconds = _coerce_timeout_seconds(getattr(error, attr_name, None))
+            if seconds is not None:
+                return seconds
+
+        seconds = _extract_timeout_seconds_from_text(str(error))
+        if seconds is not None:
+            return seconds
+
+    display_text = str(display_output or "")
+    if "timed out" in display_text.lower() or "timeout" in display_text.lower():
+        return _extract_timeout_seconds_from_text(display_text)
+
+    return None
+
+
+def _build_tool_result_callback_metadata(execution_result, display_output) -> dict[str, object]:
+    timeout_seconds = _extract_tool_timeout_seconds(execution_result, display_output)
+    metadata: dict[str, object] = {
+        "status": getattr(execution_result, "status", ""),
+        "success": bool(getattr(execution_result, "success", False)),
+        "is_error": bool(not getattr(execution_result, "success", False) or timeout_seconds),
+    }
+
+    error = getattr(execution_result, "error", None)
+    if error is not None:
+        metadata["error_type"] = type(error).__name__
+    if timeout_seconds is not None:
+        metadata["timed_out"] = True
+        metadata["elapsed_seconds"] = timeout_seconds
+    return metadata
 
 
 def _build_bot_query_engine_callbacks(
@@ -3519,7 +3610,12 @@ def _build_bot_query_engine_callbacks(
                         display_output = f"{notice}\n{display_output}"
                 except Exception:
                     pass
-            await _emit_tool_callback(on_tool_result, func_name, display_output)
+            await _emit_tool_callback(
+                on_tool_result,
+                func_name,
+                display_output,
+                _build_tool_result_callback_metadata(execution_result, display_output),
+            )
 
     def on_llm_error(exc: Exception) -> str:
         logger_obj.error(f"LLM API error: {exc}")

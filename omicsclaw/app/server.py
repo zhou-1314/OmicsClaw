@@ -80,6 +80,7 @@ def _get_core():
 _active_sessions: dict[str, asyncio.Task] = {}
 _pending_permission_requests: dict[str, dict[str, Any]] = {}
 _session_policy_states: dict[str, ToolPolicyState] = {}
+_session_permission_profiles: dict[str, str] = {}
 
 # Cached MCP server entries for prompt injection
 _mcp_entries: tuple = ()
@@ -242,6 +243,12 @@ class PermissionResponseRequest(BaseModel):
     decision: dict[str, Any]
 
 
+class SessionPermissionProfileRequest(BaseModel):
+    """POST /chat/session-permission-profile body."""
+    session_id: str
+    permission_profile: str = "default"
+
+
 class SkillInstallRequest(BaseModel):
     """POST /skills/install body."""
     source: str
@@ -360,6 +367,29 @@ def _permission_profile_to_policy_state(
         surface="app",
         approved_tool_names=persisted.approved_tool_names,
     )
+
+
+def _normalize_permission_profile(permission_profile: str) -> str:
+    profile = str(permission_profile or "default").strip().lower()
+    return "full_access" if profile == "full_access" else "default"
+
+
+def _effective_permission_profile(session_id: str, fallback: str = "default") -> str:
+    return _session_permission_profiles.get(
+        session_id,
+        _normalize_permission_profile(fallback),
+    )
+
+
+def _set_session_permission_profile(
+    session_id: str,
+    permission_profile: str,
+) -> ToolPolicyState:
+    normalized = _normalize_permission_profile(permission_profile)
+    _session_permission_profiles[session_id] = normalized
+    next_state = _permission_profile_to_policy_state(session_id, normalized)
+    _session_policy_states[session_id] = next_state
+    return next_state
 
 
 def _with_approved_tools(
@@ -626,6 +656,7 @@ async def chat_stream(req: ChatRequest):
       - {"type": "tool_use",           "data": "{...}"} — tool call start
       - {"type": "tool_output",        "data": "..."}   — tool progress/output
       - {"type": "tool_result",        "data": "{...}"} — tool result
+      - {"type": "tool_timeout",       "data": "{...}"} — tool timed out
       - {"type": "permission_request", "data": "{...}"} — approval required
       - {"type": "task_update",        "data": "{...}"} — task/todo sync
       - {"type": "result",             "data": "{...}"} — final usage summary
@@ -705,7 +736,7 @@ async def chat_stream(req: ChatRequest):
         "cache_creation_input_tokens": 0.0,
     }
     usage_payload: dict[str, Any] | None = None
-    current_policy_state = _permission_profile_to_policy_state(
+    current_policy_state = _set_session_permission_profile(
         session_id,
         req.permission_profile,
     )
@@ -971,12 +1002,27 @@ async def chat_stream(req: ChatRequest):
             _emit_tool_progress(tool_name, tool_use_id)
         )
 
-    async def on_tool_result(tool_name: str, display_output: Any):
+    def _tool_timeout_seconds(metadata: Any) -> int | None:
+        if not isinstance(metadata, dict) or not metadata.get("timed_out"):
+            return None
+        raw_seconds = metadata.get("elapsed_seconds")
+        if not isinstance(raw_seconds, (int, float)):
+            return None
+        return max(1, round(raw_seconds))
+
+    def _tool_result_is_error(metadata: Any) -> bool:
+        return isinstance(metadata, dict) and bool(metadata.get("is_error"))
+
+    async def on_tool_result(tool_name: str, display_output: Any, metadata: Any = None):
         content_str = str(display_output) if display_output is not None else ""
         pending_ids = tool_call_ids_by_name.get(tool_name)
         tool_use_id = pending_ids.popleft() if pending_ids else ""
         _finish_tool_progress(tool_use_id)
-        await _queue_event("tool_output", f"Completed {tool_name}")
+        timeout_seconds = _tool_timeout_seconds(metadata)
+        if timeout_seconds is not None:
+            await _queue_event("tool_output", f"{tool_name} timed out after {timeout_seconds}s")
+        else:
+            await _queue_event("tool_output", f"Completed {tool_name}")
 
         media = _extract_media_from_display_output(tool_name, display_output)
 
@@ -985,6 +1031,8 @@ async def chat_stream(req: ChatRequest):
             "tool_name": tool_name,
             "content": content_str,
         }
+        if _tool_result_is_error(metadata):
+            result_data["is_error"] = True
         if media:
             result_data["media"] = media
 
@@ -992,6 +1040,18 @@ async def chat_stream(req: ChatRequest):
             "tool_result",
             json.dumps(result_data, ensure_ascii=False, default=str),
         )
+        if timeout_seconds is not None:
+            await _queue_event(
+                "tool_timeout",
+                json.dumps(
+                    {
+                        "tool_name": tool_name,
+                        "elapsed_seconds": timeout_seconds,
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                ),
+            )
         if tool_name in {"task_create", "task_update", "todo_write"}:
             await _queue_event(
                 "task_update",
@@ -1024,6 +1084,24 @@ async def chat_stream(req: ChatRequest):
         tool_use_id = _current_tool_use_id(request.name)
         if tool_use_id:
             _finish_tool_progress(tool_use_id)
+
+        current_policy_state = _permission_profile_to_policy_state(
+            session_id,
+            _effective_permission_profile(session_id, req.permission_profile),
+        )
+        _session_policy_states[session_id] = current_policy_state
+
+        if current_policy_state.trusted:
+            if tool_use_id:
+                tool_progress_tasks[tool_use_id] = asyncio.create_task(
+                    _emit_tool_progress(request.name, tool_use_id)
+                )
+            return {
+                "behavior": "allow",
+                "updated_input": None,
+                "policy_state": current_policy_state.to_dict(),
+                "persist": False,
+            }
 
         permission_request_id = f"perm_{uuid.uuid4().hex[:10]}"
         suggestions = [
@@ -1074,6 +1152,12 @@ async def chat_stream(req: ChatRequest):
         finally:
             permission_request_ids.discard(permission_request_id)
             _pending_permission_requests.pop(permission_request_id, None)
+
+        current_policy_state = _permission_profile_to_policy_state(
+            session_id,
+            _effective_permission_profile(session_id, req.permission_profile),
+        )
+        _session_policy_states[session_id] = current_policy_state
 
         behavior = str(decision.get("behavior", "deny") or "deny").strip().lower()
         updated_input = decision.get("updated_input")
@@ -1298,6 +1382,40 @@ async def chat_permission(req: PermissionResponseRequest):
         "permissionRequestId": req.permissionRequestId,
         "behavior": payload["behavior"],
         "session_id": pending.get("session_id", ""),
+    }
+
+
+@app.post("/chat/session-permission-profile")
+async def chat_session_permission_profile(req: SessionPermissionProfileRequest):
+    """Update the live permission profile for a session and release pending approvals."""
+    policy_state = _set_session_permission_profile(req.session_id, req.permission_profile)
+    profile = _effective_permission_profile(req.session_id, req.permission_profile)
+    auto_approved_requests = 0
+
+    if profile == "full_access":
+        for pending in list(_pending_permission_requests.values()):
+            if pending.get("session_id") != req.session_id:
+                continue
+
+            future = pending.get("future")
+            if future is None or future.done():
+                continue
+
+            future.set_result({
+                "behavior": "allow",
+                "updated_input": None,
+                "updated_permissions": [],
+                "message": "",
+            })
+            auto_approved_requests += 1
+
+    return {
+        "ok": True,
+        "session_id": req.session_id,
+        "permission_profile": profile,
+        "active": req.session_id in _active_sessions,
+        "auto_approved_requests": auto_approved_requests,
+        "policy_state": policy_state.to_dict(),
     }
 
 
