@@ -844,6 +844,7 @@ class OmicsClawParser(argparse.ArgumentParser):
         print(f"\n{BOLD}{BLUE}🔧 Utility Commands{RESET}", file=file)
         print(f"  {GREEN}mcp           {RESET}  Manage external Model Context Protocol (MCP) servers", file=file)
         print(f"  {GREEN}doctor        {RESET}  Run environment and runtime diagnostics", file=file)
+        print(f"  {GREEN}app-server    {RESET}  Start the desktop/web FastAPI backend for OmicsClaw-App", file=file)
         print(f"  {GREEN}memory-server {RESET}  Start the graph memory REST API server", file=file)
         print(f"  {GREEN}env           {RESET}  Check installed Python dependencies and system tiers", file=file)
         print(f"  {GREEN}onboard       {RESET}  Interactive setup wizard for LLM, runtime, memory, and channels", file=file)
@@ -941,6 +942,11 @@ def main():
     mem_p = sub.add_parser("memory-server", help="Start the graph memory REST API server")
     mem_p.add_argument("--host", default=None, help="Host to bind (default: 127.0.0.1)")
     mem_p.add_argument("--port", type=int, default=None, help="Port to bind (default: 8766)")
+
+    app_p = sub.add_parser("app-server", help="Start the desktop/web FastAPI backend for OmicsClaw-App")
+    app_p.add_argument("--host", default=None, help="Host to bind (default: 127.0.0.1)")
+    app_p.add_argument("--port", type=int, default=None, help="Port to bind (default: 8765)")
+    app_p.add_argument("--reload", action="store_true", help="Enable uvicorn reload mode")
 
     doctor_p = sub.add_parser("doctor", help="Run environment and runtime diagnostics")
     doctor_p.add_argument(
@@ -1172,6 +1178,18 @@ def main():
             os.environ["OMICSCLAW_MEMORY_PORT"] = str(args.port)
         from omicsclaw.memory.server import main as _mem_main
         _mem_main()
+        sys.exit(0)
+
+    if args.command == "app-server":
+        app_args: list[str] = []
+        if getattr(args, "host", None):
+            app_args.extend(["--host", args.host])
+        if getattr(args, "port", None):
+            app_args.extend(["--port", str(args.port)])
+        if getattr(args, "reload", False):
+            app_args.append("--reload")
+        from omicsclaw.app.server import main as _app_main
+        _app_main(app_args)
         sys.exit(0)
 
     if args.command == "env":

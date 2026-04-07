@@ -51,7 +51,44 @@ OMICSCLAW_PY = OMICSCLAW_DIR / "omicsclaw.py"
 OUTPUT_DIR = OMICSCLAW_DIR / "output"
 DATA_DIR = OMICSCLAW_DIR / "data"
 EXAMPLES_DIR = OMICSCLAW_DIR / "examples"
-PYTHON = sys.executable
+
+
+def get_skill_runner_python() -> str:
+    """Return the Python executable used for skill subprocesses.
+
+    By default this is the current interpreter, but advanced deployments can
+    override it with ``OMICSCLAW_RUN_PYTHON`` when the app server itself runs
+    in a lighter environment than the scientific analysis stack.
+    """
+    candidate = str(os.getenv("OMICSCLAW_RUN_PYTHON", "") or "").strip()
+    if not candidate:
+        return sys.executable
+
+    expanded = os.path.expanduser(candidate)
+    if os.path.sep in expanded or (os.path.altsep and os.path.altsep in expanded):
+        resolved_path = Path(expanded)
+        if resolved_path.exists():
+            return str(resolved_path.resolve())
+        logging.getLogger("omicsclaw.bot").warning(
+            "OMICSCLAW_RUN_PYTHON=%s does not exist; falling back to sys.executable=%s",
+            candidate,
+            sys.executable,
+        )
+        return sys.executable
+
+    resolved = shutil.which(expanded)
+    if resolved:
+        return resolved
+
+    logging.getLogger("omicsclaw.bot").warning(
+        "OMICSCLAW_RUN_PYTHON=%s was not found on PATH; falling back to sys.executable=%s",
+        candidate,
+        sys.executable,
+    )
+    return sys.executable
+
+
+PYTHON = get_skill_runner_python()
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_PHOTO_BYTES = 20 * 1024 * 1024
@@ -1446,7 +1483,7 @@ async def _run_omics_skill_step(
         unique_suffix=uuid.uuid4().hex[:8],
     )
 
-    cmd = [PYTHON, str(OMICSCLAW_PY), "run", skill_key]
+    cmd = [get_skill_runner_python(), str(OMICSCLAW_PY), "run", skill_key]
     if mode == "demo":
         cmd.append("--demo")
     elif input_path:
@@ -1940,7 +1977,7 @@ async def execute_omicsclaw(args: dict, session_id: str = None, chat_id: int | s
     )
 
     # Build command
-    cmd = [PYTHON, str(OMICSCLAW_PY), "run"]
+    cmd = [get_skill_runner_python(), str(OMICSCLAW_PY), "run"]
     if skill_key == "pipeline":
         cmd.append("spatial-pipeline")
     else:
@@ -2351,7 +2388,7 @@ async def execute_parse_literature(args: dict) -> str:
     if not lit_script.exists():
         return "Error: literature parsing skill not found."
 
-    cmd = [PYTHON, str(lit_script)]
+    cmd = [get_skill_runner_python(), str(lit_script)]
     cmd.extend(["--input", input_value])
     cmd.extend(["--input-type", input_type])
     cmd.extend(["--output", str(out_dir)])
@@ -3361,6 +3398,8 @@ def _build_bot_query_engine_callbacks(
     on_tool_call,
     on_tool_result,
     on_stream_content,
+    on_stream_reasoning,
+    request_tool_approval,
     logger_obj,
     audit_fn,
     deep_learning_methods: set[str],
@@ -3489,8 +3528,10 @@ def _build_bot_query_engine_callbacks(
     return QueryEngineCallbacks(
         accumulate_usage=usage_accumulator,
         on_stream_content=on_stream_content,
+        on_stream_reasoning=on_stream_reasoning,
         before_tool=before_tool,
         after_tool=after_tool,
+        request_tool_approval=request_tool_approval,
         on_llm_error=on_llm_error,
     )
 
@@ -3551,6 +3592,16 @@ async def llm_tool_loop(
     on_tool_call=None,
     on_tool_result=None,
     on_stream_content=None,
+    on_stream_reasoning=None,
+    # Per-request runtime overrides (desktop app frontend)
+    model_override: str = "",
+    extra_api_params: dict | None = None,
+    max_tokens_override: int = 0,
+    system_prompt_append: str = "",
+    mode: str = "",
+    usage_accumulator=None,
+    request_tool_approval=None,
+    policy_state=None,
 ) -> str:
     """
     Run the LLM tool-use loop:
@@ -3785,6 +3836,18 @@ For more info: https://github.com/TianGzlab/OmicsClaw"""
     session_id = chat_context.session_id
     system_prompt = chat_context.system_prompt
 
+    # Apply per-request system prompt additions
+    if system_prompt_append:
+        system_prompt = system_prompt.rstrip() + "\n\n" + system_prompt_append.strip()
+    if mode and mode != "ask":
+        _mode_hints = {
+            "code": "You are in code mode. Prefer writing and editing code to accomplish the user's goals.",
+            "plan": "You are in plan mode. Create detailed plans and explain your reasoning before taking action.",
+        }
+        hint = _mode_hints.get(mode, "")
+        if hint:
+            system_prompt = system_prompt.rstrip() + "\n\n## Mode\n" + hint
+
     tool_runtime = _build_tool_runtime()
     hook_runtime = build_default_lifecycle_hook_runtime(OMICSCLAW_DIR)
     callbacks = _build_bot_query_engine_callbacks(
@@ -3794,10 +3857,16 @@ For more info: https://github.com/TianGzlab/OmicsClaw"""
         on_tool_call=on_tool_call,
         on_tool_result=on_tool_result,
         on_stream_content=on_stream_content,
+        on_stream_reasoning=on_stream_reasoning,
+        request_tool_approval=request_tool_approval,
         logger_obj=logger,
         audit_fn=audit,
         deep_learning_methods=DEEP_LEARNING_METHODS,
-        usage_accumulator=_accumulate_usage,
+        usage_accumulator=usage_accumulator or _accumulate_usage,
+    )
+    resolved_policy_state = ToolPolicyState.from_mapping(
+        policy_state,
+        surface=platform or "bot",
     )
     return await run_query_engine(
         llm=llm,
@@ -3807,7 +3876,7 @@ For more info: https://github.com/TianGzlab/OmicsClaw"""
             system_prompt=system_prompt,
             user_message_content=chat_context.user_message_content,
             surface=platform or "bot",
-            policy_state=ToolPolicyState(surface=platform or "bot"),
+            policy_state=resolved_policy_state,
             hook_runtime=hook_runtime,
             tool_runtime_context={
                 "omicsclaw_dir": str(OMICSCLAW_DIR),
@@ -3819,10 +3888,11 @@ For more info: https://github.com/TianGzlab/OmicsClaw"""
         transcript_store=transcript_store,
         tool_result_store=tool_result_store,
         config=QueryEngineConfig(
-            model=OMICSCLAW_MODEL,
+            model=model_override or OMICSCLAW_MODEL,
             max_iterations=MAX_TOOL_ITERATIONS,
-            max_tokens=8192,
+            max_tokens=max_tokens_override if max_tokens_override > 0 else 8192,
             llm_error_types=(APIError,),
+            extra_api_params=extra_api_params or {},
         ),
         callbacks=callbacks,
     )
