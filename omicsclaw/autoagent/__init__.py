@@ -1,8 +1,16 @@
-"""OmicsClaw AutoAgent — LLM-driven parameter optimization.
+"""OmicsClaw AutoAgent — LLM-driven self-evolution.
 
-Inspired by AutoAgent's self-evolution architecture: a meta-agent reads
-a directive, diagnoses trial results, suggests parameter changes, and
-loops with keep/discard decisions.
+Two operating modes:
+
+1. **Parameter optimization** (``run_optimization``):
+   A meta-agent reads a directive, diagnoses trial results, suggests
+   parameter changes, and loops with keep/discard decisions.
+
+2. **Harness evolution** (``run_harness_evolution``):
+   A meta-agent modifies source code within a bounded editable surface,
+   tests patches in a sandbox, and keeps/reverts based on hard gates
+   and quality metrics.  Inspired by AutoAgent's program.md + bounded
+   edit surface principle.
 """
 
 from __future__ import annotations
@@ -224,7 +232,7 @@ def run_optimization(
     # Note: _finalize_result now emits the error event itself when
     # success=False, so we no longer need to emit it here.
 
-    # 6. Build return summary
+    # 6. Build return summary  (param_loop)
     summary: dict[str, Any] = {
         "success": result.success,
         "skill": skill_name,
@@ -251,5 +259,192 @@ def run_optimization(
             input_path=input_path,
             demo=demo,
         )
+
+    return summary
+
+
+# ---------------------------------------------------------------------------
+# Harness evolution entry point
+# ---------------------------------------------------------------------------
+
+
+def run_harness_evolution(
+    skill_name: str,
+    method: str,
+    input_path: str = "",
+    cwd: str = "",
+    output_dir: str = "",
+    max_iterations: int = 10,
+    fixed_params: dict[str, Any] | None = None,
+    evolution_goal: str = "",
+    surface_level: int = 2,
+    explicit_files: list[str] | None = None,
+    llm_provider: str = "",
+    llm_model: str = "",
+    llm_provider_config: dict[str, str] | None = None,
+    demo: bool = False,
+    on_event: Callable[[str, dict[str, Any]], None] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> dict[str, Any]:
+    """Run the harness evolution loop — code-level skill improvement.
+
+    Unlike ``run_optimization`` which only tunes parameters, this modifies
+    source code within a bounded editable surface.
+
+    Parameters
+    ----------
+    skill_name, method:
+        Target skill and method to evolve.
+    evolution_goal:
+        Human-readable objective (e.g. "Upgrade QC from fixed thresholds
+        to MAD-based adaptive filtering").
+    surface_level:
+        Max editable surface level (1=SKILL.md, 2=code, 3=config, 4=generated).
+    explicit_files:
+        Optional explicit file whitelist. Paths must stay inside the
+        project root and cannot include frozen infrastructure.
+
+    Returns a summary dict compatible with the optimization API.
+    """
+    from omicsclaw.autoagent.edit_surface import EditSurface, build_sc_preprocessing_surface
+    from omicsclaw.autoagent.evaluator import Evaluator
+    from omicsclaw.autoagent.harness_loop import HarnessLoop
+    from omicsclaw.autoagent.metrics_registry import get_metrics_for_skill
+    from omicsclaw.autoagent.search_space import SearchSpace, build_method_surface
+
+    # 1. Resolve project root
+    project_root = Path(__file__).resolve().parents[2]
+
+    # 2. Resolve metrics
+    metrics = get_metrics_for_skill(skill_name, method)
+    if metrics is None:
+        error_message = f"No metrics registered for skill '{skill_name}'."
+        _emit_error_event(on_event, error_message)
+        return {"success": False, "error": error_message}
+
+    # 3. Build search space (for trial execution with default params)
+    try:
+        from omicsclaw.core.registry import registry
+
+        registry.load_all()
+        skill_info = registry.skills.get(skill_name)
+        if skill_info is None:
+            error_message = f"Unknown skill: {skill_name}"
+            _emit_error_event(on_event, error_message)
+            return {"success": False, "error": error_message}
+
+        param_hints = skill_info.get("param_hints", {}).get(method)
+        if param_hints is None:
+            error_message = f"No param_hints for method '{method}' in '{skill_name}'."
+            _emit_error_event(on_event, error_message)
+            return {"success": False, "error": error_message}
+    except Exception as e:
+        error_message = f"Failed to load skill registry: {e}"
+        _emit_error_event(on_event, error_message)
+        return {"success": False, "error": error_message}
+
+    normalized_fixed = {
+        k: v for k, v in (fixed_params or {}).items()
+        if not _is_missing_fixed_value(v)
+    }
+    search_space = SearchSpace.from_param_hints(
+        skill_name, method, param_hints, normalized_fixed,
+    )
+
+    # 4. Build editable surface
+    try:
+        if skill_name == "sc-preprocessing" and explicit_files is None:
+            surface = build_sc_preprocessing_surface(project_root)
+        elif explicit_files:
+            surface = EditSurface(
+                max_level=surface_level,
+                project_root=project_root,
+                explicit_files=explicit_files,
+            )
+        else:
+            surface = EditSurface(
+                max_level=surface_level,
+                project_root=project_root,
+            )
+    except ValueError as e:
+        error_message = str(e)
+        _emit_error_event(on_event, error_message)
+        return {"success": False, "error": error_message}
+
+    # 5. Resolve input path
+    if input_path:
+        input_path_obj = Path(input_path).expanduser()
+        if input_path_obj.is_absolute():
+            input_path = str(input_path_obj.resolve())
+        elif cwd:
+            input_path = str(
+                (Path(cwd).expanduser().resolve() / input_path_obj).resolve()
+            )
+
+    # 6. Build evaluator
+    evaluator = Evaluator(metrics, skill_name=skill_name, method=method)
+
+    # 7. Resolve output directory
+    try:
+        output_root = _resolve_optimization_output_root(
+            skill_name=skill_name,
+            method=method,
+            cwd=cwd,
+            output_dir=output_dir,
+        )
+    except Exception as e:
+        _emit_error_event(on_event, str(e))
+        return {"success": False, "error": str(e)}
+
+    # 8. Run harness loop
+    loop = HarnessLoop(
+        skill_name=skill_name,
+        method=method,
+        input_path=input_path,
+        output_root=output_root,
+        surface=surface,
+        evaluator=evaluator,
+        search_space=search_space,
+        max_iterations=max_iterations,
+        evolution_goal=evolution_goal,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
+        llm_provider_config=llm_provider_config,
+        demo=demo,
+        cancel_event=cancel_event,
+    )
+
+    result = loop.run(on_event=on_event)
+
+    # 9. Build return summary
+    summary: dict[str, Any] = {
+        "success": result.success,
+        "mode": "harness_evolution",
+        "skill": skill_name,
+        "method": method,
+        "evolution_goal": evolution_goal,
+        "total_iterations": result.total_iterations,
+        "patches_accepted": result.patches_accepted,
+        "patches_rejected": result.patches_rejected,
+        "improvement_pct": result.improvement_pct,
+        "converged": result.converged,
+        "output_dir": str(output_root),
+        "accepted_files": result.accepted_patch_files,
+        "accepted_patches": [patch.to_dict() for patch in result.accepted_patches],
+        "accepted_patch_commits": [
+            patch.commit_hash for patch in result.accepted_patches
+        ],
+        "accepted_patch_artifacts": [
+            patch.artifact_path for patch in result.accepted_patches
+        ],
+        "promotion": result.promotion,
+        "sandbox_repo": result.sandbox_repo,
+        "source_project_commit": result.source_project_commit,
+    }
+    if not result.success:
+        summary["error"] = result.error_message or "Harness evolution failed"
+    if result.best_trial:
+        summary["best_score"] = result.best_trial.composite_score
+        summary["best_metrics"] = result.best_trial.raw_metrics
 
     return summary

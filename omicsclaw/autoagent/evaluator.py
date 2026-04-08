@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from omicsclaw.autoagent.metrics_registry import MetricDef
+from omicsclaw.autoagent.result_contract import normalize_result_payload
 
 logger = logging.getLogger(__name__)
 
@@ -206,7 +207,9 @@ def _read_from_result_json(output_dir: Path, source: str) -> float | None:
     if not result_path.exists():
         return None
     try:
-        data = json.loads(result_path.read_text(encoding="utf-8"))
+        data = normalize_result_payload(
+            json.loads(result_path.read_text(encoding="utf-8"))
+        )
     except (OSError, json.JSONDecodeError):
         return None
     dot_path = source.split(":", 1)[1]

@@ -3070,6 +3070,99 @@ async def execute_remember(args: dict, session_id: str = None) -> str:
         return f"Error saving memory: {e}"
 
 
+async def execute_recall(args: dict, session_id: str = None) -> str:
+    """Retrieve memories from persistent storage."""
+    if not memory_store:
+        return "Memory system not enabled."
+
+    try:
+        mem_type = args.get("memory_type", "")
+        query = args.get("query", "")
+
+        if query:
+            # Full-text search across memories
+            memories = await memory_store.search_memories(
+                session_id or "", query, memory_type=mem_type or None
+            )
+        elif mem_type:
+            # List by type
+            memories = await memory_store.get_memories(
+                session_id or "", mem_type, limit=int(args.get("limit", 10))
+            )
+        else:
+            # Return all recent memories
+            memories = await memory_store.get_memories(
+                session_id or "", limit=int(args.get("limit", 10))
+            )
+
+        if not memories:
+            return "No memories found."
+
+        parts = []
+        for m in memories:
+            if hasattr(m, "memory_type"):
+                if m.memory_type == "preference":
+                    parts.append(f"[preference] {m.key}: {m.value} (scope: {m.domain})")
+                elif m.memory_type == "insight":
+                    confidence = "confirmed" if m.confidence == "user_confirmed" else "predicted"
+                    parts.append(f"[insight] {m.entity_type} {m.entity_id}: {m.biological_label} ({confidence})")
+                elif m.memory_type == "project_context":
+                    ctx_parts = []
+                    if m.project_goal:
+                        ctx_parts.append(f"Goal: {m.project_goal}")
+                    if m.species:
+                        ctx_parts.append(f"Species: {m.species}")
+                    if m.tissue_type:
+                        ctx_parts.append(f"Tissue: {m.tissue_type}")
+                    if m.disease_model:
+                        ctx_parts.append(f"Disease: {m.disease_model}")
+                    parts.append(f"[project_context] {' | '.join(ctx_parts)}")
+                elif m.memory_type == "dataset":
+                    parts.append(f"[dataset] {m.file_path} ({m.preprocessing_state})")
+                elif m.memory_type == "analysis":
+                    parts.append(f"[analysis] {m.skill} ({m.method}) - {m.status}")
+                else:
+                    parts.append(f"[{m.memory_type}] {m.model_dump_json()}")
+
+        return f"Found {len(parts)} memories:\n" + "\n".join(parts)
+
+    except Exception as e:
+        logger.error(f"Memory recall failed: {e}", exc_info=True)
+        return f"Error recalling memory: {e}"
+
+
+async def execute_forget(args: dict, session_id: str = None) -> str:
+    """Delete a specific memory by searching for it."""
+    if not memory_store:
+        return "Memory system not enabled."
+
+    memory_id = args.get("memory_id", "")
+    query = args.get("query", "")
+
+    if not memory_id and not query:
+        return "Error: provide either 'memory_id' or 'query' to identify the memory to forget."
+
+    try:
+        search_term = memory_id or query
+        memories = await memory_store.search_memories(session_id or "", search_term)
+
+        if not memories:
+            return f"No memory found matching '{search_term}'."
+
+        # Delete the first match
+        target = memories[0]
+        from omicsclaw.memory.compat import _TYPE_TO_DOMAIN, _memory_to_uri_path
+        domain = _TYPE_TO_DOMAIN.get(target.memory_type, "core")
+        path = _memory_to_uri_path(target)
+        uri = f"{domain}://{path}"
+        await memory_store._client.forget(uri)
+        return f"✓ Forgotten: {uri}"
+
+    except Exception as e:
+        logger.error(f"Memory forget failed: {e}", exc_info=True)
+        return f"Error forgetting memory: {e}"
+
+
 async def execute_consult_knowledge(args: dict, **kwargs) -> str:
     """Query the OmicsClaw knowledge base for analysis guidance."""
     try:
@@ -3337,6 +3430,8 @@ def _available_tool_executors() -> dict[str, object]:
         "remove_file": execute_remove_file,
         "get_file_size": execute_get_file_size,
         "remember": execute_remember,
+        "recall": execute_recall,
+        "forget": execute_forget,
         "consult_knowledge": execute_consult_knowledge,
         "resolve_capability": execute_resolve_capability,
         "create_omics_skill": execute_create_omics_skill,

@@ -42,6 +42,7 @@ def execute_trial(
     output_dir: Path,
     params: dict[str, Any],
     search_space: SearchSpace,
+    project_root: str | Path | None = None,
     demo: bool = False,
     cancel_event: threading.Event | None = None,
 ) -> TrialExecution:
@@ -53,8 +54,13 @@ def execute_trial(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Find the omicsclaw.py CLI script
-    omicsclaw_dir = Path(__file__).resolve().parents[2]
+    # Default to the live repository, but allow harness sandboxes to provide
+    # an isolated project snapshot that should be executed instead.
+    omicsclaw_dir = (
+        Path(project_root).expanduser().resolve()
+        if project_root is not None
+        else Path(__file__).resolve().parents[2]
+    )
     cli_script = omicsclaw_dir / "omicsclaw.py"
 
     python = sys.executable

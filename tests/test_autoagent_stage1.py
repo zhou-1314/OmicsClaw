@@ -17,6 +17,7 @@ import pytest
 from omicsclaw.autoagent.metrics_registry import (
     INTEGRATION_METRICS,
     MetricDef,
+    SC_PREPROCESSING_METRICS,
     get_metrics_for_skill,
     list_optimizable_skills,
 )
@@ -447,6 +448,35 @@ class TestEvaluator:
         }
         assert "n_batches" not in result.raw_metrics
         assert round(result.composite_score, 2) == 0.59
+
+    def test_sc_preprocessing_result_json_aliases_are_normalized(self, tmp_path):
+        out = self._make_output_dir(tmp_path, {
+            "skill": "sc-preprocessing",
+            "summary": {
+                "method": "scanpy",
+                "n_cells": 4250,
+                "n_genes": 18000,
+                "n_hvg": 2000,
+                "n_cells_before_filter": 5000,
+                "n_genes_before_filter": 20000,
+                "cells_retained_pct": 85.0,
+            },
+            "data": {
+                "effective_params": {"method": "scanpy"},
+            },
+        })
+        ev = Evaluator(
+            SC_PREPROCESSING_METRICS,
+            skill_name="sc-preprocessing",
+            method="scanpy",
+        )
+        result = ev.evaluate(out)
+
+        assert result.success
+        assert result.raw_metrics["cell_retention"] == 0.85
+        assert result.raw_metrics["n_hvgs"] == 2000
+        assert result.raw_metrics["n_genes_after"] == 18000
+        assert result.missing_metrics == []
 
 
 # ---------------------------------------------------------------------------

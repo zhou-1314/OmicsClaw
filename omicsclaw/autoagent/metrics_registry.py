@@ -218,6 +218,27 @@ SC_CLUSTERING_METRICS: dict[str, MetricDef] = {
     ),
 }
 
+SC_PREPROCESSING_METRICS: dict[str, MetricDef] = {
+    "cell_retention": MetricDef(
+        source="result.json:summary.cell_retention_rate",
+        direction="maximize",
+        weight=0.4,
+        description="Fraction of cells retained after QC filtering (higher = less aggressive)",
+    ),
+    "n_hvgs": MetricDef(
+        source="result.json:summary.n_hvgs",
+        direction="maximize",
+        weight=0.3,
+        description="Number of highly variable genes selected",
+    ),
+    "n_genes_after": MetricDef(
+        source="result.json:summary.n_genes",
+        direction="maximize",
+        weight=0.3,
+        description="Number of genes remaining after filtering",
+    ),
+}
+
 COEXPRESSION_METRICS: dict[str, MetricDef] = {
     "n_modules": MetricDef(
         source="result.json:summary.n_modules",
@@ -248,6 +269,7 @@ SKILL_METRICS_MAP: dict[tuple[str, str], dict[str, MetricDef]] = {
     ("sc-batch-integration", "*"): INTEGRATION_METRICS,
     ("sc-cell-annotation", "*"): ANNOTATION_CONFIDENCE_METRICS,
     ("sc-clustering", "*"): SC_CLUSTERING_METRICS,
+    ("sc-preprocessing", "*"): SC_PREPROCESSING_METRICS,
     ("sc-markers", "*"): SC_MARKERS_METRICS,
     # Spatial
     ("spatial-integrate", "*"): BATCH_MIXING_METRICS,

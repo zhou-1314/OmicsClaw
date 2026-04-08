@@ -1225,6 +1225,7 @@ async def chat_stream(req: ChatRequest):
             result = await core.llm_tool_loop(
                 chat_id=session_id,
                 user_content=user_content,
+                user_id="desktop_user",
                 workspace=req.workspace,
                 pipeline_workspace=req.pipeline_workspace,
                 output_style=req.output_style,

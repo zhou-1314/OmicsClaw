@@ -33,6 +33,7 @@ class TrialRecord:
     error_output: str = ""  # stderr/stdout excerpt on crash (for diagnostics)
     evaluation_success: bool | None = None
     missing_metrics: list[str] = field(default_factory=list)
+    code_state: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.timestamp:
@@ -169,6 +170,20 @@ class ExperimentLedger:
                 )
             if r.reasoning:
                 lines.append(f"       Reasoning: {r.reasoning}")
+            if r.code_state:
+                commit_hash = str(
+                    r.code_state.get("commit_hash")
+                    or r.code_state.get("sandbox_commit")
+                    or ""
+                ).strip()
+                artifact_path = str(r.code_state.get("artifact_path") or "").strip()
+                details: list[str] = []
+                if commit_hash:
+                    details.append(f"commit={commit_hash}")
+                if artifact_path:
+                    details.append(f"artifact={artifact_path}")
+                if details:
+                    lines.append("       Code: " + ", ".join(details))
         return "\n".join(lines)
 
     # ----- internal -----
