@@ -30,12 +30,10 @@ def test_package_exports_single_version_source():
     assert __version__ == module_version
 
 
-def test_pyproject_uses_dynamic_project_version():
+def test_pyproject_version_matches_version_module():
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
-    assert "version" not in pyproject["project"]
-    assert "version" in pyproject["project"]["dynamic"]
-    assert pyproject["tool"]["setuptools"]["dynamic"]["version"]["attr"] == "omicsclaw.__version__"
+    assert pyproject["project"]["version"] == __version__
 
 
 def test_version_subcommand_prints_project_version(monkeypatch, capsys):
