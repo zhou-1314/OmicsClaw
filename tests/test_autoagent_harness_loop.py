@@ -188,6 +188,7 @@ class TestHarnessLoopEvolution:
             search_space=_make_search_space(),
             demo=True,
             max_iterations=1,
+            auto_promote=True,
         )
 
         source_file = tmp_path / "project" / "skills" / "test" / "test.py"
@@ -248,6 +249,7 @@ class TestHarnessLoopEvolution:
             search_space=_make_search_space(),
             demo=True,
             max_iterations=2,
+            auto_promote=True,
         )
 
         call_count = [0]

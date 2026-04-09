@@ -122,6 +122,7 @@ class HarnessLoop:
         *,
         max_iterations: int = 10,
         evolution_goal: str = "",
+        auto_promote: bool = False,
         llm_provider: str = "",
         llm_model: str = "",
         llm_provider_config: dict[str, str] | None = None,
@@ -137,6 +138,7 @@ class HarnessLoop:
         self.search_space = search_space
         self.max_iterations = max_iterations
         self.evolution_goal = evolution_goal
+        self.auto_promote = auto_promote
         self.llm_provider = llm_provider
         self.llm_model = llm_model
         self.llm_provider_config = dict(llm_provider_config or {})
@@ -750,6 +752,26 @@ class HarnessLoop:
         workspace: HarnessWorkspace,
         accepted_files: list[str],
     ) -> PromotionResult:
+        if not accepted_files:
+            return PromotionResult(
+                status="not_needed",
+                message="No accepted files to promote.",
+                journal_path=str(workspace.promotion_journal_path),
+            )
+        if not self.auto_promote:
+            logger.info(
+                "Promotion skipped (auto_promote=False). "
+                "Accepted patches remain in sandbox: %s",
+                workspace.repo_root,
+            )
+            return PromotionResult(
+                status="skipped",
+                message=(
+                    "Automatic promotion disabled. Use the Promote action "
+                    "in the UI to apply accepted patches to the source tree."
+                ),
+                journal_path=str(workspace.promotion_journal_path),
+            )
         try:
             return workspace.promote_accepted_state(accepted_files)
         except Exception as exc:

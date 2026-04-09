@@ -604,14 +604,14 @@ async def test_optimize_abort_preserves_session_and_reports_cancelled(monkeypatc
 
     started = threading.Event()
 
-    def fake_run_optimization(**kwargs):
+    def fake_run_harness_evolution(**kwargs):
         cancel_event = kwargs["cancel_event"]
         started.set()
         while not cancel_event.is_set():
             cancel_event.wait(0.01)
         raise OptimizationCancelled("Optimization cancelled")
 
-    monkeypatch.setattr(autoagent_pkg, "run_optimization", fake_run_optimization)
+    monkeypatch.setattr(autoagent_pkg, "run_harness_evolution", fake_run_harness_evolution)
 
     response = await api.optimize_start(
         api.OptimizeRequest(
@@ -701,7 +701,7 @@ async def test_optimize_start_streams_worker_thread_events(monkeypatch):
     api._sessions.clear()
     captured: dict[str, object] = {}
 
-    def fake_run_optimization(**kwargs):
+    def fake_run_harness_evolution(**kwargs):
         captured.update(kwargs)
         on_event = kwargs["on_event"]
         on_event("trial_start", {"trial_id": 0, "params": {"alpha": 1.0}})
@@ -719,7 +719,7 @@ async def test_optimize_start_streams_worker_thread_events(monkeypatch):
             "output_dir": "output/test-session",
         }
 
-    monkeypatch.setattr(autoagent_pkg, "run_optimization", fake_run_optimization)
+    monkeypatch.setattr(autoagent_pkg, "run_harness_evolution", fake_run_harness_evolution)
 
     response = await api.optimize_start(
         api.OptimizeRequest(
@@ -1181,7 +1181,7 @@ def test_optimization_loop_emits_terminal_progress_when_converged_early(monkeypa
     assert int(done_events[0]["total_trials"]) == 1
 
 
-def test_run_optimization_returns_failure_summary_when_loop_fails(monkeypatch, tmp_path):
+def test_run_harness_evolution_returns_failure_summary_when_loop_fails(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
     import omicsclaw.autoagent as autoagent_pkg
@@ -1245,7 +1245,7 @@ def test_run_optimization_returns_failure_summary_when_loop_fails(monkeypatch, t
     monkeypatch.setattr("omicsclaw.autoagent.optimization_loop.OptimizationLoop", FakeLoop)
 
     events: list[tuple[str, dict[str, object]]] = []
-    result = autoagent_pkg.run_optimization(
+    result = autoagent_pkg.run_harness_evolution(
         skill_name="test-skill",
         method="method",
         cwd=str(tmp_path),
@@ -1269,7 +1269,7 @@ async def test_optimize_start_keeps_single_error_terminal_when_worker_returns_fa
 
     api._sessions.clear()
 
-    def fake_run_optimization(**kwargs):
+    def fake_run_harness_evolution(**kwargs):
         on_event = kwargs["on_event"]
         on_event("progress", {"completed": 1, "total": 3})
         on_event("error", {"message": "LLM returned no suggestion"})
@@ -1278,7 +1278,7 @@ async def test_optimize_start_keeps_single_error_terminal_when_worker_returns_fa
             "error": "LLM returned no suggestion",
         }
 
-    monkeypatch.setattr(autoagent_pkg, "run_optimization", fake_run_optimization)
+    monkeypatch.setattr(autoagent_pkg, "run_harness_evolution", fake_run_harness_evolution)
 
     response = await api.optimize_start(
         api.OptimizeRequest(

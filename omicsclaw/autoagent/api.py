@@ -1,10 +1,12 @@
-"""FastAPI Router for autoagent optimization.
+"""FastAPI Router for autoagent harness evolution.
 
-Provides SSE-based streaming endpoints for the parameter optimization loop.
+Provides SSE-based streaming endpoints for the harness evolution loop.
+All endpoints are prefixed with ``/autoagent``.
+
 Mount this router in the main app server with a single line:
 
-    from omicsclaw.autoagent.api import router as optimize_router
-    app.include_router(optimize_router)
+    from omicsclaw.autoagent.api import router as autoagent_router
+    app.include_router(autoagent_router)
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ from omicsclaw.autoagent.search_space import build_method_surface
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/optimize", tags=["optimize"])
+router = APIRouter(prefix="/autoagent", tags=["autoagent"])
 
 _sessions: dict[str, "OptimizeSessionRuntime"] = {}
 
@@ -192,17 +194,21 @@ def _reap_finished_sessions() -> int:
 
 
 def _run_optimization_session(runtime: OptimizeSessionRuntime, req: "OptimizeRequest") -> None:
-    from omicsclaw.autoagent import run_optimization
+    from omicsclaw.autoagent import run_harness_evolution
 
     try:
-        result = run_optimization(
+        result = run_harness_evolution(
             skill_name=req.skill,
             method=req.method,
             input_path=req.input_path,
             cwd=req.cwd,
             output_dir=req.output_dir,
-            max_trials=req.max_trials,
+            max_iterations=req.max_iterations,
             fixed_params=req.fixed_params if req.fixed_params else None,
+            evolution_goal=req.evolution_goal,
+            surface_level=req.surface_level,
+            explicit_files=req.explicit_files if req.explicit_files else None,
+            auto_promote=req.auto_promote,
             llm_provider=req.provider_id or req.provider,
             llm_model=req.llm_model,
             llm_provider_config=(
@@ -223,7 +229,7 @@ def _run_optimization_session(runtime: OptimizeSessionRuntime, req: "OptimizeReq
         return
 
     if result.get("success") is False:
-        runtime.mark_error(str(result.get("error") or "Optimization failed"))
+        runtime.mark_error(str(result.get("error") or "Harness evolution failed"))
         return
 
     runtime.mark_done(result)
@@ -256,13 +262,29 @@ class OptimizeRequest(BaseModel):
     input_path: str = ""
     cwd: str = ""
     output_dir: str = ""
-    max_trials: int = Field(default=20, ge=1, le=100)
+    max_iterations: int = Field(default=10, ge=1, le=100)
+    max_trials: int | None = Field(default=None, exclude=True)  # deprecated alias
     fixed_params: dict[str, Any] = Field(default_factory=dict)
+    evolution_goal: str = ""
+    surface_level: int = Field(default=2, ge=1, le=4)
+    explicit_files: list[str] = Field(default_factory=list)
+    auto_promote: bool = False
     provider: str = ""  # legacy fallback
     provider_id: str = ""
     provider_config: ProviderConfig | None = None
     llm_model: str = ""
     demo: bool = False
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.max_trials is not None:
+            logger.warning(
+                "Deprecated field 'max_trials=%d' received; "
+                "use 'max_iterations' instead. Mapping to max_iterations.",
+                self.max_trials,
+            )
+            # Only apply if max_iterations was left at the default
+            if self.max_iterations == 10:
+                self.max_iterations = min(max(self.max_trials, 1), 100)
 
 
 class OptimizeStatusResponse(BaseModel):
@@ -276,10 +298,12 @@ class SaveConfigRequest(BaseModel):
     cwd: str
     skill: str
     method: str
-    best_params: dict[str, Any] = Field(default_factory=dict)
-    best_metrics: dict[str, Any] = Field(default_factory=dict)
     best_score: float | None = None
     improvement_pct: float = 0.0
+    patches_accepted: int = 0
+    accepted_files: list[str] = Field(default_factory=list)
+    accepted_patch_commits: list[str] = Field(default_factory=list)
+    evolution_goal: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +369,7 @@ def _collect_skill_aliases(
 
 @router.post("/start")
 async def optimize_start(req: OptimizeRequest):
-    """Start a parameter optimization run.
+    """Start a harness evolution run.
 
     Returns an SSE stream with events:
     - trial_start, trial_complete, trial_judgment, reasoning, progress, done, error
@@ -452,15 +476,106 @@ async def optimize_results(session_id: str):
     return result
 
 
+@router.post("/promote/{session_id}")
+async def promote_session(session_id: str):
+    """Manually promote accepted patches from sandbox to source tree.
+
+    Only works for completed sessions whose promotion was skipped.
+    Refuses to promote onto a protected branch.
+    """
+    from pathlib import Path
+    from omicsclaw.autoagent import _check_protected_branch
+    from omicsclaw.autoagent.harness_workspace import HarnessWorkspace, PromotionResult
+
+    # Branch safety — check *before* touching any files
+    project_root = Path(__file__).resolve().parents[2]
+    branch_error = _check_protected_branch(project_root)
+    if branch_error:
+        raise HTTPException(403, detail=branch_error)
+
+    _reap_finished_sessions()
+    runtime = _sessions.get(session_id)
+    if runtime is None:
+        raise HTTPException(404, detail=f"Session '{session_id}' not found")
+
+    status, result, error = runtime.snapshot()
+    if status != "done" or result is None:
+        raise HTTPException(
+            409,
+            detail=f"Session must be in 'done' state to promote (current: {status})",
+        )
+
+    promotion = result.get("promotion", {})
+    if isinstance(promotion, dict) and promotion.get("status") not in ("skipped",):
+        raise HTTPException(
+            409,
+            detail=f"Promotion status is '{promotion.get('status', 'unknown')}'; "
+                   f"only 'skipped' sessions can be manually promoted.",
+        )
+
+    output_dir = result.get("output_dir", "")
+    accepted_files = result.get("accepted_files", [])
+    if not output_dir or not accepted_files:
+        return PromotionResult(
+            status="not_needed",
+            message="No accepted files to promote.",
+        ).to_dict()
+
+    sandbox_repo = Path(output_dir) / "sandbox_repo"
+    if not sandbox_repo.is_dir():
+        raise HTTPException(
+            404,
+            detail=f"Sandbox repo not found at {sandbox_repo}",
+        )
+
+    # Reconstruct a minimal workspace for promotion
+    project_root = Path(__file__).resolve().parents[2]
+    workspace = HarnessWorkspace(project_root, Path(output_dir))
+    workspace._created = True
+    workspace.repo_root = sandbox_repo
+
+    # Recover accepted commit from sandbox
+    try:
+        import subprocess
+        accepted_commit = subprocess.run(
+            ["git", "rev-parse", "accepted"],
+            capture_output=True, text=True, cwd=sandbox_repo, timeout=5,
+        ).stdout.strip()
+        workspace.accepted_commit = accepted_commit
+
+        baseline_commit = subprocess.run(
+            ["git", "rev-list", "--max-parents=0", "HEAD"],
+            capture_output=True, text=True, cwd=sandbox_repo, timeout=5,
+        ).stdout.strip().split("\n")[0]
+        workspace.baseline_commit = baseline_commit
+    except Exception as exc:
+        raise HTTPException(500, detail=f"Failed to read sandbox state: {exc}")
+
+    try:
+        promo_result = workspace.promote_accepted_state(accepted_files)
+    except Exception as exc:
+        raise HTTPException(500, detail=f"Promotion failed: {exc}")
+
+    # Update the session result with new promotion state
+    result["promotion"] = promo_result.to_dict()
+
+    return promo_result.to_dict()
+
+
 @router.post("/save-config")
 async def save_evolved_config(req: SaveConfigRequest):
-    """Write evolved parameters to .omicsclaw/evolved/<skill>_<method>.json."""
+    """Write harness evolution summary to .omicsclaw/evolved/<skill>_<method>.json."""
     from datetime import datetime, timezone
     from pathlib import Path
+    from omicsclaw.autoagent import _check_protected_branch
 
     cwd = Path(req.cwd).resolve()
     if not cwd.is_dir():
         raise HTTPException(400, detail=f"Directory does not exist: {cwd}")
+
+    branch_error = _check_protected_branch(cwd)
+    if branch_error:
+        raise HTTPException(403, detail=branch_error)
 
     config_dir = cwd / ".omicsclaw" / "evolved"
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -469,10 +584,12 @@ async def save_evolved_config(req: SaveConfigRequest):
     config_data = {
         "skill": req.skill,
         "method": req.method,
-        "best_params": req.best_params,
-        "best_metrics": req.best_metrics,
         "best_score": req.best_score,
         "improvement_pct": req.improvement_pct,
+        "patches_accepted": req.patches_accepted,
+        "accepted_files": req.accepted_files,
+        "accepted_patch_commits": req.accepted_patch_commits,
+        "evolution_goal": req.evolution_goal,
         "evolved_at": datetime.now(timezone.utc).isoformat(),
     }
     config_path.write_text(json.dumps(config_data, indent=2, default=str) + "\n")
@@ -526,3 +643,38 @@ async def optimizable_skills():
         })
 
     return {"skills": skills, "total": len(skills)}
+
+
+@router.get("/branch-status")
+async def branch_status():
+    """Return the source project's git branch and protection status.
+
+    The frontend must use this instead of checking its own workingDirectory,
+    because harness evolution operates on the OmicsClaw source tree — which
+    may be a different repo from the user's data project.
+    """
+    from pathlib import Path
+    from omicsclaw.autoagent import _check_protected_branch
+
+    project_root = Path(__file__).resolve().parents[2]
+    git_dir = project_root / ".git"
+    if not git_dir.exists():
+        return {"is_repo": False, "branch": "", "protected": False, "reason": "", "project_root": str(project_root)}
+
+    try:
+        import subprocess
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, cwd=project_root, timeout=5,
+        ).stdout.strip()
+    except Exception:
+        return {"is_repo": True, "branch": "", "protected": False, "reason": "", "project_root": str(project_root)}
+
+    error = _check_protected_branch(project_root)
+    return {
+        "is_repo": True,
+        "branch": branch,
+        "protected": error is not None,
+        "reason": error or "",
+        "project_root": str(project_root),
+    }

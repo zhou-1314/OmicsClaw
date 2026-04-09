@@ -182,6 +182,7 @@ class TestHarnessLoopIntegration:
                 "Upgrade QC from fixed thresholds to data-driven MAD-based "
                 "adaptive filtering strategy."
             ),
+            auto_promote=True,
             demo=True,
         )
 

@@ -15,10 +15,75 @@ Two operating modes:
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 import re
+import subprocess
 import threading
 from typing import Any, Callable
+
+_logger = logging.getLogger(__name__)
+
+# Branch names that are always considered protected.
+_PROTECTED_BRANCH_NAMES = frozenset({
+    "main", "master", "develop", "release", "production", "prod",
+})
+
+
+def _check_protected_branch(project_root: Path) -> str | None:
+    """Return an error message if *project_root* is on a protected branch.
+
+    Checks:
+    1. Detached HEAD (no branch at all)
+    2. Hardcoded protected names (main, master, develop, …)
+    3. The remote default branch (``origin/HEAD``)
+
+    Returns ``None`` when safe to proceed.
+    """
+    git_dir = project_root / ".git"
+    if not git_dir.exists():
+        return None  # not a git repo — nothing to protect
+
+    try:
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, cwd=project_root,
+            timeout=5,
+        ).stdout.strip()
+    except Exception:
+        return None  # git not available — skip check
+
+    if branch == "HEAD":
+        return (
+            "Harness evolution cannot run on a detached HEAD. "
+            "Please checkout or create a working branch first."
+        )
+
+    if branch.lower() in _PROTECTED_BRANCH_NAMES:
+        return (
+            f"Harness evolution refused to run on protected branch '{branch}'. "
+            f"Create a feature branch (e.g. autoagent/{branch}-evolution) first."
+        )
+
+    # Check if this branch is the remote default branch
+    try:
+        default_ref = subprocess.run(
+            ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
+            capture_output=True, text=True, cwd=project_root,
+            timeout=5,
+        ).stdout.strip()
+        # refs/remotes/origin/HEAD → refs/remotes/origin/main → "main"
+        if default_ref:
+            default_branch = default_ref.rsplit("/", 1)[-1]
+            if branch == default_branch:
+                return (
+                    f"Harness evolution refused to run on the remote default "
+                    f"branch '{branch}'. Create a feature branch first."
+                )
+    except Exception:
+        pass  # no remote configured — skip
+
+    return None
 
 
 def _emit_error_event(
@@ -279,6 +344,7 @@ def run_harness_evolution(
     evolution_goal: str = "",
     surface_level: int = 2,
     explicit_files: list[str] | None = None,
+    auto_promote: bool = False,
     llm_provider: str = "",
     llm_model: str = "",
     llm_provider_config: dict[str, str] | None = None,
@@ -314,6 +380,12 @@ def run_harness_evolution(
 
     # 1. Resolve project root
     project_root = Path(__file__).resolve().parents[2]
+
+    # 1b. Branch safety check — refuse to run on protected branches
+    branch_error = _check_protected_branch(project_root)
+    if branch_error:
+        _emit_error_event(on_event, branch_error)
+        return {"success": False, "error": branch_error}
 
     # 2. Resolve metrics
     metrics = get_metrics_for_skill(skill_name, method)
@@ -407,6 +479,7 @@ def run_harness_evolution(
         search_space=search_space,
         max_iterations=max_iterations,
         evolution_goal=evolution_goal,
+        auto_promote=auto_promote,
         llm_provider=llm_provider,
         llm_model=llm_model,
         llm_provider_config=llm_provider_config,
