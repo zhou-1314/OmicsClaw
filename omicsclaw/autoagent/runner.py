@@ -141,14 +141,22 @@ def execute_trial(
 
     duration = time.time() - t0
 
-    # The run command may rename the output dir — check result for actual path
+    # The run command may rename the output dir — check result for actual path.
+    # In harness mode the subprocess cwd is the sandbox, so the skill may
+    # write its outputs inside the sandbox tree rather than the requested
+    # output_dir.  Search for the actual output and symlink key artifacts
+    # back so the evaluator finds them.
     actual_output = str(output_dir)
-    # Look for result.json in the output dir or any subdirectory
     if not (output_dir / "result.json").exists():
+        # 1. Check direct subdirectories of output_dir
         for sub in output_dir.iterdir():
             if sub.is_dir() and (sub / "result.json").exists():
                 actual_output = str(sub)
                 break
+        else:
+            # 2. Search inside the sandbox cwd for our trial directory name
+            if project_root is not None:
+                _recover_sandbox_output(Path(project_root), output_dir)
 
     return TrialExecution(
         success=proc.returncode == 0,
@@ -261,3 +269,35 @@ def _collect_terminated_output(proc: subprocess.Popen[str]) -> tuple[str, str]:
         return proc.communicate(timeout=1)
     except Exception:
         return "", ""
+
+
+_RECOVER_ARTIFACTS = ("processed.h5ad", "result.json")
+
+
+def _recover_sandbox_output(sandbox_root: Path, output_dir: Path) -> None:
+    """Search for trial artifacts inside the sandbox and symlink them back.
+
+    In harness mode the subprocess cwd is the sandbox repo, so skills may
+    write outputs into a mirrored path inside the sandbox instead of the
+    requested ``output_dir``.  This function finds those files and creates
+    symlinks so the evaluator can locate them at the expected path.
+    """
+    trial_name = output_dir.name  # e.g. "trial_0000"
+    for candidate in sandbox_root.rglob(trial_name):
+        if not candidate.is_dir():
+            continue
+        has_artifact = any((candidate / a).exists() for a in _RECOVER_ARTIFACTS)
+        if not has_artifact:
+            continue
+        # Found the actual output — symlink each artifact back
+        for artifact in _RECOVER_ARTIFACTS:
+            src = candidate / artifact
+            dst = output_dir / artifact
+            if src.exists() and not dst.exists():
+                try:
+                    dst.symlink_to(src)
+                except OSError:
+                    import shutil
+                    shutil.copy2(src, dst)
+        logger.info("Recovered sandbox output from %s → %s", candidate, output_dir)
+        return
