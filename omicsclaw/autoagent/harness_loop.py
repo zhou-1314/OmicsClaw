@@ -468,7 +468,10 @@ class HarnessLoop:
                         gate_failures=[g.name for g in gate_result.failed_gates],
                         error_summary=gate_result.summary(),
                     )
-                    consecutive_failures += 1
+                    # Patch was successfully applied and executed — reset the
+                    # "cannot produce a valid patch" counter.  Gate failures
+                    # are quality issues, not patch authoring failures.
+                    consecutive_failures = 0
                     patches_rejected += 1
                     self.ledger.append(trial)
 
@@ -484,9 +487,6 @@ class HarnessLoop:
                         "score": trial.composite_score,
                         "status": trial.status,
                     })
-
-                    if consecutive_failures >= CONSECUTIVE_CRASH_LIMIT:
-                        break
                     continue
 
                 prior_best_score = best.composite_score
@@ -549,7 +549,9 @@ class HarnessLoop:
                         prior_best_score, trial.composite_score,
                     )
                 else:
-                    consecutive_failures += 1
+                    # Patch applied, executed, and scored — just didn't improve.
+                    # This is NOT a patch authoring failure; reset the counter.
+                    consecutive_failures = 0
                     patches_rejected += 1
                     self._record_failure(
                         iteration, patch,
