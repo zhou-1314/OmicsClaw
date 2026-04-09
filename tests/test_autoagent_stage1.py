@@ -82,8 +82,8 @@ class TestListOptimizable:
         assert "sc-integrate" not in names
         assert "spatial-integrate" in names
         assert "spatial-integration" not in names
-        assert "sc-clustering" not in names
-        assert "sc-cell-annotation" not in names
+        assert "sc-clustering" in names
+        assert "sc-cell-annotation" in names
 
 
 # ---------------------------------------------------------------------------

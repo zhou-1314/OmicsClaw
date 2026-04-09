@@ -15,8 +15,8 @@ def test_optimize_skills_catalog_is_canonical_and_launchable():
     assert "sc-integrate" not in names
     assert "spatial-integrate" in names
     assert "spatial-integration" not in names
-    assert "sc-clustering" not in names
-    assert "sc-cell-annotation" not in names
+    assert "sc-clustering" in names
+    assert "sc-cell-annotation" in names
 
     for item in result["skills"]:
         assert item["skill"] == item["canonical_skill"]
