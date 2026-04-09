@@ -481,17 +481,13 @@ async def promote_session(session_id: str):
     """Manually promote accepted patches from sandbox to source tree.
 
     Only works for completed sessions whose promotion was skipped.
-    Refuses to promote onto a protected branch.
     """
     from pathlib import Path
     from omicsclaw.autoagent import _check_protected_branch
     from omicsclaw.autoagent.harness_workspace import HarnessWorkspace, PromotionResult
 
-    # Branch safety — check *before* touching any files
     project_root = Path(__file__).resolve().parents[2]
-    branch_error = _check_protected_branch(project_root)
-    if branch_error:
-        raise HTTPException(403, detail=branch_error)
+    branch_warning = _check_protected_branch(project_root) or ""
 
     _reap_finished_sessions()
     runtime = _sessions.get(session_id)
@@ -559,7 +555,10 @@ async def promote_session(session_id: str):
     # Update the session result with new promotion state
     result["promotion"] = promo_result.to_dict()
 
-    return promo_result.to_dict()
+    response = promo_result.to_dict()
+    if branch_warning:
+        response["branch_warning"] = branch_warning
+    return response
 
 
 @router.post("/save-config")
@@ -567,15 +566,10 @@ async def save_evolved_config(req: SaveConfigRequest):
     """Write harness evolution summary to .omicsclaw/evolved/<skill>_<method>.json."""
     from datetime import datetime, timezone
     from pathlib import Path
-    from omicsclaw.autoagent import _check_protected_branch
 
     cwd = Path(req.cwd).resolve()
     if not cwd.is_dir():
         raise HTTPException(400, detail=f"Directory does not exist: {cwd}")
-
-    branch_error = _check_protected_branch(cwd)
-    if branch_error:
-        raise HTTPException(403, detail=branch_error)
 
     config_dir = cwd / ".omicsclaw" / "evolved"
     config_dir.mkdir(parents=True, exist_ok=True)

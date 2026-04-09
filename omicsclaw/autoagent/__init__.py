@@ -381,11 +381,9 @@ def run_harness_evolution(
     # 1. Resolve project root
     project_root = Path(__file__).resolve().parents[2]
 
-    # 1b. Branch safety check — refuse to run on protected branches
-    branch_error = _check_protected_branch(project_root)
-    if branch_error:
-        _emit_error_event(on_event, branch_error)
-        return {"success": False, "error": branch_error}
+    # NOTE: No branch check here — the sandbox fully isolates all trial
+    # modifications from the source tree.  Promotion (file copy back) is
+    # a separate, explicit step that has its own conflict detection.
 
     # 2. Resolve metrics
     metrics = get_metrics_for_skill(skill_name, method)
