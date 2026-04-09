@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from omicsclaw.autoagent.edit_surface import EditSurface
+from omicsclaw.autoagent.edit_surface import EditSurface, build_spatial_domains_surface
 from omicsclaw.autoagent.patch_engine import (
     FileDiff,
     Hunk,
@@ -19,6 +19,48 @@ from omicsclaw.autoagent.patch_engine import (
     revert_files,
     validate_patch,
 )
+
+
+def _write_spatial_domains_fixture(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "spatial" / "spatial-domains"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    lib_dir = tmp_path / "skills" / "spatial" / "_lib"
+    lib_dir.mkdir(parents=True, exist_ok=True)
+
+    (skill_dir / "SKILL.md").write_text("### CellCharter\n", encoding="utf-8")
+    (skill_dir / "spatial_domains.py").write_text(
+        "def main():\n    summary = dispatch_method(args.method, adata)\n",
+        encoding="utf-8",
+    )
+    (lib_dir / "domains.py").write_text(
+        """def identify_domains_leiden(adata):
+    marker = "leiden"
+    return marker
+
+
+def identify_domains_stagate(adata):
+    marker = "stagate"
+    return marker
+
+
+def identify_domains_cellcharter(adata):
+    marker = "cellcharter"
+    return marker
+
+
+def _cluster_fixed_k():
+    return "fixed"
+
+
+def _cluster_auto_k():
+    return "auto"
+
+
+def dispatch_method(method, adata):
+    return method
+""",
+        encoding="utf-8",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +228,34 @@ class TestValidatePatch:
         result = validate_patch(patch, surface)
         assert result.valid is False
         assert "escapes project root" in result.errors[0]
+
+    def test_rejects_non_target_method_patch_for_spatial_domains(self, tmp_path):
+        _write_spatial_domains_fixture(tmp_path)
+        surface = build_spatial_domains_surface(tmp_path, method="cellcharter")
+        patch = PatchPlan(diffs=[
+            FileDiff("skills/spatial/_lib/domains.py", [
+                Hunk('marker = "stagate"', 'marker = "stagate_v2"')
+            ])
+        ])
+
+        result = validate_patch(patch, surface)
+
+        assert result.valid is False
+        assert "non-target method code" in result.errors[0]
+        assert "cellcharter" in result.errors[0]
+
+    def test_allows_target_helper_patch_for_spatial_domains(self, tmp_path):
+        _write_spatial_domains_fixture(tmp_path)
+        surface = build_spatial_domains_surface(tmp_path, method="cellcharter")
+        patch = PatchPlan(diffs=[
+            FileDiff("skills/spatial/_lib/domains.py", [
+                Hunk('return "fixed"', 'return "fixed_v2"')
+            ])
+        ])
+
+        result = validate_patch(patch, surface)
+
+        assert result.valid is True
 
 
 # ---------------------------------------------------------------------------

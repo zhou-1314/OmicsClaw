@@ -15,6 +15,7 @@ Patch lifecycle:
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import re
@@ -196,16 +197,27 @@ def validate_patch(
             continue
 
         for i, hunk in enumerate(diff.hunks):
-            if hunk.old_code not in content:
-                # Try with normalized whitespace
-                normalized_content = _normalize_ws(content)
-                normalized_old = _normalize_ws(hunk.old_code)
-                if normalized_old not in normalized_content:
+            match_positions = _find_all_occurrences(content, hunk.old_code)
+            if not match_positions:
+                normalized_match = _find_normalized(content, hunk.old_code)
+                if normalized_match is None:
                     errors.append(
                         f"{surface_path.rel_path} hunk #{i}: "
                         "old_code not found in file "
                         f"(first 80 chars: {hunk.old_code[:80]!r})"
                     )
+                    continue
+                match_positions = [normalized_match]
+
+            method_scope_error = _validate_method_scope_hunk(
+                surface=surface,
+                rel_path=surface_path.rel_path,
+                content=content,
+                hunk_index=i,
+                match_positions=match_positions,
+            )
+            if method_scope_error:
+                errors.append(method_scope_error)
 
     return ValidationResult(valid=len(errors) == 0, errors=errors)
 
@@ -306,6 +318,50 @@ def backup_files(
 # ---------------------------------------------------------------------------
 
 
+def _validate_method_scope_hunk(
+    *,
+    surface: EditSurface,
+    rel_path: str,
+    content: str,
+    hunk_index: int,
+    match_positions: list[tuple[int, int]],
+) -> str | None:
+    method_focus = surface.metadata.get("method_focus")
+    if not isinstance(method_focus, dict):
+        return None
+
+    blocked_map = method_focus.get("blocked_functions")
+    if not isinstance(blocked_map, dict):
+        return None
+
+    blocked_functions = blocked_map.get(rel_path)
+    if not blocked_functions:
+        return None
+
+    blocked_regions = _resolve_python_function_regions(content, blocked_functions)
+    if not blocked_regions:
+        return None
+
+    if any(
+        not _region_intersects_any(match, blocked_regions)
+        for match in match_positions
+    ):
+        return None
+
+    blocked_names = sorted({
+        name
+        for name, start, end in blocked_regions
+        for match in match_positions
+        if _ranges_intersect(match, (start, end))
+    })
+    focus_method = str(method_focus.get("method", "") or "current").strip()
+    blocked_text = ", ".join(blocked_names) if blocked_names else "non-target method code"
+    return (
+        f"{rel_path} hunk #{hunk_index}: targets non-target method code "
+        f"({blocked_text}) while optimizing method '{focus_method}'."
+    )
+
+
 def _parse_json(text: str) -> dict[str, Any] | None:
     """Parse JSON, handling edge cases.
 
@@ -320,6 +376,64 @@ def _parse_json(text: str) -> dict[str, Any] | None:
 def _normalize_ws(s: str) -> str:
     """Normalize whitespace for fuzzy matching."""
     return " ".join(s.split())
+
+
+def _find_all_occurrences(content: str, old_code: str) -> list[tuple[int, int]]:
+    if not old_code:
+        return []
+
+    matches: list[tuple[int, int]] = []
+    start = 0
+    while True:
+        index = content.find(old_code, start)
+        if index == -1:
+            break
+        matches.append((index, index + len(old_code)))
+        start = index + 1
+    return matches
+
+
+def _resolve_python_function_regions(
+    content: str,
+    function_names: list[str],
+) -> list[tuple[str, int, int]]:
+    if not function_names:
+        return []
+
+    try:
+        module = ast.parse(content)
+    except SyntaxError:
+        return []
+
+    line_offsets = [0]
+    for line in content.splitlines(keepends=True):
+        line_offsets.append(line_offsets[-1] + len(line))
+
+    regions: list[tuple[str, int, int]] = []
+    wanted = set(function_names)
+    for node in module.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name not in wanted or node.end_lineno is None:
+            continue
+        start = line_offsets[node.lineno - 1]
+        end = line_offsets[node.end_lineno]
+        regions.append((node.name, start, end))
+    return regions
+
+
+def _ranges_intersect(
+    left: tuple[int, int],
+    right: tuple[int, int],
+) -> bool:
+    return left[0] < right[1] and left[1] > right[0]
+
+
+def _region_intersects_any(
+    match: tuple[int, int],
+    regions: list[tuple[str, int, int]],
+) -> bool:
+    return any(_ranges_intersect(match, (start, end)) for _name, start, end in regions)
 
 
 def _find_normalized(content: str, old_code: str) -> tuple[int, int] | None:

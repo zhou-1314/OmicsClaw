@@ -20,6 +20,90 @@ from omicsclaw.autoagent.edit_surface import (
 )
 
 
+def _write_spatial_domains_fixture(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "spatial" / "spatial-domains"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    lib_dir = tmp_path / "skills" / "spatial" / "_lib"
+    lib_dir.mkdir(parents=True, exist_ok=True)
+
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: spatial-domains
+param_hints:
+  methods:
+    leiden:
+      defaults: {}
+    cellcharter:
+      defaults: {}
+---
+
+### Leiden
+Leiden details.
+oc run spatial-domains --method leiden
+
+### STAGATE
+STAGATE details.
+oc run spatial-domains --method stagate
+
+### CellCharter
+CellCharter details.
+oc run spatial-domains --method cellcharter
+""",
+        encoding="utf-8",
+    )
+    (skill_dir / "spatial_domains.py").write_text(
+        """def main():
+    parser.add_argument("--method")
+    parser.add_argument("--resolution")
+    parser.add_argument("--spatial-weight")
+    # CellCharter params
+    parser.add_argument("--auto-k")
+    parser.add_argument("--n-layers")
+    parser.add_argument("--use-rep")
+    param_tips = {
+        "leiden": "resolution",
+        "stagate": "gpu",
+        "cellcharter": "auto_k",
+    }
+    if args.method in ["leiden", "louvain"]:
+        current_params["resolution"] = args.resolution
+    if args.method == "cellcharter":
+        current_params["auto_k"] = args.auto_k
+    summary = dispatch_method(args.method, adata)
+""",
+        encoding="utf-8",
+    )
+    (lib_dir / "domains.py").write_text(
+        """def identify_domains_leiden(adata):
+    marker = "leiden"
+    return marker
+
+
+def identify_domains_stagate(adata):
+    marker = "stagate"
+    return marker
+
+
+def identify_domains_cellcharter(adata):
+    marker = "cellcharter"
+    return marker
+
+
+def _cluster_fixed_k():
+    return "fixed"
+
+
+def _cluster_auto_k():
+    return "auto"
+
+
+def dispatch_method(method, adata):
+    return method
+""",
+        encoding="utf-8",
+    )
+
+
 class TestEditLevel:
     def test_level1_matches_skill_md(self):
         assert LEVEL_1.matches("skills/singlecell/scrna/sc-preprocessing/SKILL.md")
@@ -183,6 +267,7 @@ class TestMVPSurface:
         assert not surface.is_editable("omicsclaw/autoagent/judge.py")
 
     def test_spatial_domains_surface(self, tmp_path):
+        _write_spatial_domains_fixture(tmp_path)
         surface = build_spatial_domains_surface(tmp_path, method="cellcharter")
 
         assert surface.max_level == 2
@@ -197,3 +282,9 @@ class TestMVPSurface:
         assert surface.is_editable("skills/spatial/_lib/domains.py")
         assert not surface.is_editable("skills/spatial/_lib/dependency_manager.py")
         assert not surface.is_editable("skills/spatial-domains/cellcharter/SKILL.md")
+        prompt_view = surface.read_prompt_file("skills/spatial/_lib/domains.py")
+        assert "identify_domains_cellcharter" in prompt_view
+        assert "_cluster_auto_k" in prompt_view
+        assert "identify_domains_stagate" not in prompt_view
+        assert surface.has_prompt_view("skills/spatial/_lib/domains.py")
+        assert surface.metadata["method_focus"]["method"] == "cellcharter"

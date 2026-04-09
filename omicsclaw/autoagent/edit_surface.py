@@ -15,6 +15,8 @@ Frozen infrastructure (never editable by Meta-Agent):
 
 from __future__ import annotations
 
+import ast
+from copy import deepcopy
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -85,6 +87,8 @@ class EditSurface:
     max_level: int
     project_root: Path
     explicit_files: list[str] = field(default_factory=list)
+    prompt_views: dict[str, str] = field(default_factory=dict, repr=False)
+    metadata: dict[str, Any] = field(default_factory=dict, repr=False)
     _resolved_levels: list[EditLevel] = field(
         default_factory=list, repr=False
     )
@@ -98,6 +102,8 @@ class EditSurface:
             lv for lv in ALL_LEVELS if lv.level <= self.max_level
         ]
         self.explicit_files = self._normalize_explicit_files(self.explicit_files)
+        self.prompt_views = self._normalize_prompt_views(self.prompt_views)
+        self.metadata = deepcopy(self.metadata)
         self._explicit_file_set = frozenset(self.explicit_files)
 
     @property
@@ -119,6 +125,15 @@ class EditSurface:
                 normalized.append(surface_path.rel_path)
                 seen.add(surface_path.rel_path)
 
+        return normalized
+
+    def _normalize_prompt_views(self, views: dict[str, str]) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for file_path, content in views.items():
+            if not content:
+                continue
+            surface_path = resolve_path_within_root(self.project_root, file_path)
+            normalized[surface_path.rel_path] = str(content)
         return normalized
 
     def _is_rel_path_editable(self, rel_path: str) -> bool:
@@ -210,17 +225,43 @@ class EditSurface:
         path = self.resolve_editable_path(rel_path).abs_path
         return path.read_text(encoding="utf-8")
 
+    def has_prompt_view(self, rel_path: str | Path) -> bool:
+        try:
+            surface_path = self.resolve_editable_path(rel_path)
+        except (PermissionError, ValueError):
+            return False
+        return surface_path.rel_path in self.prompt_views
+
+    def read_prompt_file(self, rel_path: str | Path) -> str:
+        """Read a method-focused prompt view when available."""
+        surface_path = self.resolve_editable_path(rel_path)
+        prompt_view = self.prompt_views.get(surface_path.rel_path)
+        if prompt_view is not None:
+            return prompt_view
+        return surface_path.abs_path.read_text(encoding="utf-8")
+
     def clone_for_project_root(self, project_root: str | Path) -> EditSurface:
         """Clone this surface against another project root."""
         return EditSurface(
             max_level=self.max_level,
             project_root=Path(project_root),
             explicit_files=list(self.explicit_files),
+            prompt_views=dict(self.prompt_views),
+            metadata=deepcopy(self.metadata),
         )
 
     def describe(self) -> str:
         """Human-readable description of the editable surface."""
         lines = [f"Editable surface (max level {self.max_level}):"]
+        method_focus = self.metadata.get("method_focus")
+        if isinstance(method_focus, dict):
+            focus_method = str(method_focus.get("method", "") or "").strip()
+            if focus_method:
+                lines.append(f"  Method focus: {focus_method}")
+                lines.append(
+                    "  Shared multi-method files must stay scoped to the target method."
+                )
+                lines.append("")
 
         if self.explicit_files:
             lines.append("  Explicit file list:")
@@ -330,6 +371,321 @@ def _is_frozen(rel_path: str) -> bool:
     return any(fnmatch(rel_path, pat) for pat in FROZEN_PATTERNS)
 
 
+_SPATIAL_DOMAINS_METHOD_DISPLAY = {
+    "leiden": "Leiden",
+    "louvain": "Louvain",
+    "spagcn": "SpaGCN",
+    "stagate": "STAGATE",
+    "graphst": "GraphST",
+    "banksy": "BANKSY",
+    "cellcharter": "CellCharter",
+}
+
+_SPATIAL_DOMAINS_METHOD_FUNCTIONS = {
+    "leiden": ["identify_domains_leiden"],
+    "louvain": ["identify_domains_louvain"],
+    "spagcn": ["identify_domains_spagcn"],
+    "stagate": ["identify_domains_stagate"],
+    "graphst": ["identify_domains_graphst"],
+    "banksy": ["identify_domains_banksy"],
+    "cellcharter": [
+        "identify_domains_cellcharter",
+        "_cluster_fixed_k",
+        "_cluster_auto_k",
+    ],
+}
+
+_SPATIAL_DOMAINS_WRAPPER_PATTERNS = {
+    "leiden": [
+        'parser.add_argument("--method"',
+        'parser.add_argument("--resolution"',
+        'parser.add_argument("--spatial-weight"',
+        '"leiden":',
+        'if args.method in ["leiden", "louvain"]',
+        "summary = dispatch_method(",
+    ],
+    "louvain": [
+        'parser.add_argument("--method"',
+        'parser.add_argument("--resolution"',
+        'parser.add_argument("--spatial-weight"',
+        '"louvain":',
+        'if args.method in ["leiden", "louvain"]',
+        "summary = dispatch_method(",
+    ],
+    "spagcn": [
+        'parser.add_argument("--method"',
+        'parser.add_argument("--n-domains"',
+        'parser.add_argument("--epochs"',
+        "# SpaGCN",
+        '"spagcn":',
+        'if args.method == "spagcn"',
+        "summary = dispatch_method(",
+    ],
+    "stagate": [
+        'parser.add_argument("--method"',
+        'parser.add_argument("--n-domains"',
+        'parser.add_argument("--epochs"',
+        "# STAGATE network params",
+        '"stagate":',
+        'if args.method == "stagate"',
+        "summary = dispatch_method(",
+    ],
+    "graphst": [
+        'parser.add_argument("--method"',
+        'parser.add_argument("--n-domains"',
+        'parser.add_argument("--epochs"',
+        "# GraphST",
+        '"graphst":',
+        'if args.method == "graphst"',
+        "summary = dispatch_method(",
+    ],
+    "banksy": [
+        'parser.add_argument("--method"',
+        'parser.add_argument("--resolution"',
+        'parser.add_argument("--n-domains"',
+        "# BANKSY param",
+        '"banksy":',
+        'if args.method == "banksy"',
+        "summary = dispatch_method(",
+    ],
+    "cellcharter": [
+        'parser.add_argument("--method"',
+        'parser.add_argument("--n-domains"',
+        "# CellCharter params",
+        'parser.add_argument("--auto-k"',
+        'parser.add_argument("--auto-k-min"',
+        'parser.add_argument("--auto-k-max"',
+        'parser.add_argument("--n-layers"',
+        'parser.add_argument("--use-rep"',
+        '"cellcharter":',
+        'if args.method == "cellcharter"',
+        "summary = dispatch_method(",
+    ],
+}
+
+
+def _extract_python_functions(path: Path, function_names: list[str]) -> str:
+    if not path.exists():
+        return ""
+
+    source = path.read_text(encoding="utf-8")
+    try:
+        module = ast.parse(source)
+    except SyntaxError:
+        return ""
+
+    lines = source.splitlines()
+    by_name = {
+        node.name: node
+        for node in module.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    blocks: list[str] = []
+    for name in function_names:
+        node = by_name.get(name)
+        if node is None or node.end_lineno is None:
+            continue
+        block = "\n".join(lines[node.lineno - 1 : node.end_lineno]).rstrip()
+        if block:
+            blocks.append(block)
+    return "\n\n\n".join(blocks)
+
+
+def _extract_context_windows(
+    path: Path,
+    patterns: list[str],
+    *,
+    before: int = 1,
+    after: int = 10,
+) -> str:
+    if not path.exists():
+        return ""
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if not lines:
+        return ""
+
+    ranges: list[tuple[int, int]] = []
+    for index, line in enumerate(lines):
+        if any(pattern in line for pattern in patterns):
+            ranges.append((max(0, index - before), min(len(lines), index + after + 1)))
+
+    if not ranges:
+        return ""
+
+    merged: list[list[int]] = []
+    for start, end in sorted(ranges):
+        if not merged or start > merged[-1][1]:
+            merged.append([start, end])
+        else:
+            merged[-1][1] = max(merged[-1][1], end)
+
+    separator = (
+        "\n# ... omitted unrelated sections ...\n\n"
+        if path.suffix == ".py"
+        else "\n...\n\n"
+    )
+    excerpts = [
+        "\n".join(lines[start:end]).rstrip()
+        for start, end in merged
+    ]
+    return separator.join(excerpt for excerpt in excerpts if excerpt)
+
+
+def _extract_markdown_section(path: Path, heading: str) -> str:
+    if not path.exists():
+        return ""
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    start = None
+    for index, line in enumerate(lines):
+        if line.strip() == heading:
+            start = index
+            break
+
+    if start is None:
+        return ""
+
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        if lines[index].startswith("### "):
+            end = index
+            break
+    return "\n".join(lines[start:end]).rstrip()
+
+
+def _join_nonempty_excerpts(excerpts: list[str], *, python_like: bool = False) -> str:
+    items = [excerpt for excerpt in excerpts if excerpt]
+    if not items:
+        return ""
+    separator = (
+        "\n# ... omitted unrelated sections ...\n\n"
+        if python_like
+        else "\n...\n\n"
+    )
+    return separator.join(items)
+
+
+def _build_spatial_domains_skill_view(path: Path, method: str) -> str:
+    display_name = _SPATIAL_DOMAINS_METHOD_DISPLAY[method]
+    return _join_nonempty_excerpts([
+        _extract_context_windows(
+            path,
+            [f"{method}:"],
+            before=1,
+            after=6,
+        ),
+        _extract_context_windows(
+            path,
+            [f"--method {method}"],
+            before=1,
+            after=2,
+        ),
+        _extract_markdown_section(path, f"### {display_name}"),
+    ])
+
+
+def _build_spatial_domains_wrapper_view(path: Path, method: str) -> str:
+    excerpts: list[str]
+    if method == "cellcharter":
+        excerpts = [
+            _extract_context_windows(path, ["# CellCharter params"], before=0, after=5),
+            _extract_context_windows(path, ['"cellcharter":'], before=0, after=1),
+            _extract_context_windows(
+                path,
+                ['if args.method == "cellcharter"'],
+                before=0,
+                after=8,
+            ),
+        ]
+    elif method == "leiden":
+        excerpts = [
+            _extract_context_windows(path, ['parser.add_argument("--resolution"'], before=0, after=0),
+            _extract_context_windows(path, ['parser.add_argument("--spatial-weight"'], before=0, after=0),
+            _extract_context_windows(path, ['"leiden":'], before=0, after=0),
+            _extract_context_windows(
+                path,
+                ['if args.method in ["leiden", "louvain"]'],
+                before=0,
+                after=1,
+            ),
+        ]
+    else:
+        excerpts = [
+            _extract_context_windows(
+                path,
+                _SPATIAL_DOMAINS_WRAPPER_PATTERNS[method],
+                before=0,
+                after=6,
+            ),
+        ]
+    return _join_nonempty_excerpts(excerpts, python_like=True)
+
+
+def _build_spatial_domains_prompt_views(
+    project_root: Path,
+    method: str,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    normalized_method = str(method or "").strip().lower()
+    if normalized_method not in _SPATIAL_DOMAINS_METHOD_FUNCTIONS:
+        return {}, {}
+
+    skill_doc = Path(project_root) / "skills" / "spatial" / "spatial-domains" / "SKILL.md"
+    wrapper = (
+        Path(project_root)
+        / "skills"
+        / "spatial"
+        / "spatial-domains"
+        / "spatial_domains.py"
+    )
+    shared = Path(project_root) / "skills" / "spatial" / "_lib" / "domains.py"
+
+    display_name = _SPATIAL_DOMAINS_METHOD_DISPLAY[normalized_method]
+    prompt_views = {
+        "skills/spatial/spatial-domains/SKILL.md": _build_spatial_domains_skill_view(
+            skill_doc,
+            normalized_method,
+        ),
+        "skills/spatial/spatial-domains/spatial_domains.py": _build_spatial_domains_wrapper_view(
+            wrapper,
+            normalized_method,
+        ),
+        "skills/spatial/_lib/domains.py": _extract_python_functions(
+            shared,
+            _SPATIAL_DOMAINS_METHOD_FUNCTIONS[normalized_method],
+        ),
+    }
+
+    blocked_methods = [
+        method_name
+        for method_name in _SPATIAL_DOMAINS_METHOD_FUNCTIONS
+        if method_name != normalized_method
+    ]
+    metadata = {
+        "method_focus": {
+            "skill_name": "spatial-domains",
+            "method": normalized_method,
+            "focus_targets": {
+                "skills/spatial/spatial-domains/SKILL.md": [
+                    f"{display_name} method documentation and usage examples",
+                ],
+                "skills/spatial/spatial-domains/spatial_domains.py": [
+                    "main() method-specific CLI branches and dispatch call",
+                ],
+                "skills/spatial/_lib/domains.py": list(_SPATIAL_DOMAINS_METHOD_FUNCTIONS[normalized_method]),
+            },
+            "blocked_functions": {
+                "skills/spatial/_lib/domains.py": [
+                    f"identify_domains_{method_name}"
+                    for method_name in blocked_methods
+                ],
+            },
+        }
+    }
+    return prompt_views, metadata
+
+
 # ---------------------------------------------------------------------------
 # Factory for MVP
 # ---------------------------------------------------------------------------
@@ -366,7 +722,10 @@ def build_spatial_domains_surface(
     Exposing these canonical files prevents the Meta-Agent from hallucinating
     non-existent paths like ``skills/spatial-domains/cellcharter/...``.
     """
-    _ = method.strip().lower()
+    prompt_views, metadata = _build_spatial_domains_prompt_views(
+        Path(project_root),
+        method,
+    )
     return EditSurface(
         max_level=2,
         project_root=Path(project_root),
@@ -375,4 +734,6 @@ def build_spatial_domains_surface(
             "skills/spatial/spatial-domains/spatial_domains.py",
             "skills/spatial/_lib/domains.py",
         ],
+        prompt_views=prompt_views,
+        metadata=metadata,
     )

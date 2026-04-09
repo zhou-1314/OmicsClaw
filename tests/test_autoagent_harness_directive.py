@@ -61,6 +61,106 @@ def sample_trace():
     )
 
 
+@pytest.fixture
+def spatial_domains_surface(tmp_path):
+    skill_dir = tmp_path / "skills" / "spatial" / "spatial-domains"
+    skill_dir.mkdir(parents=True)
+    lib_dir = tmp_path / "skills" / "spatial" / "_lib"
+    lib_dir.mkdir(parents=True)
+
+    (skill_dir / "SKILL.md").write_text(
+        """### STAGATE
+STAGATE docs.
+
+### CellCharter
+CellCharter docs.
+oc run spatial-domains --method cellcharter
+""",
+        encoding="utf-8",
+    )
+    (skill_dir / "spatial_domains.py").write_text(
+        """def main():
+    parser.add_argument("--method")
+    # CellCharter params
+    parser.add_argument("--auto-k")
+    param_tips = {
+        "stagate": "gpu",
+        "cellcharter": "auto_k",
+    }
+    if args.method == "cellcharter":
+        current_params["auto_k"] = args.auto_k
+    summary = dispatch_method(args.method, adata)
+""",
+        encoding="utf-8",
+    )
+    (lib_dir / "domains.py").write_text(
+        """def identify_domains_stagate(adata):
+    marker = "stagate"
+    return marker
+
+
+def identify_domains_cellcharter(adata):
+    marker = "cellcharter"
+    return marker
+
+
+def _cluster_fixed_k():
+    return "fixed"
+
+
+def _cluster_auto_k():
+    return "auto"
+
+
+def dispatch_method(method, adata):
+    return method
+""",
+        encoding="utf-8",
+    )
+
+    return EditSurface(
+        max_level=2,
+        project_root=tmp_path,
+        explicit_files=[
+            "skills/spatial/spatial-domains/SKILL.md",
+            "skills/spatial/spatial-domains/spatial_domains.py",
+            "skills/spatial/_lib/domains.py",
+        ],
+        prompt_views={
+            "skills/spatial/spatial-domains/SKILL.md": "### CellCharter\nCellCharter docs.",
+            "skills/spatial/spatial-domains/spatial_domains.py": (
+                "if args.method == \"cellcharter\":\n"
+                "    current_params[\"auto_k\"] = args.auto_k\n"
+                "summary = dispatch_method(args.method, adata)"
+            ),
+            "skills/spatial/_lib/domains.py": (
+                "def identify_domains_cellcharter(adata):\n"
+                "    marker = \"cellcharter\"\n"
+                "    return marker\n\n"
+                "def _cluster_fixed_k():\n"
+                "    return \"fixed\"\n\n"
+                "def _cluster_auto_k():\n"
+                "    return \"auto\"\n\n"
+                "def dispatch_method(method, adata):\n"
+                "    return method"
+            ),
+        },
+        metadata={
+            "method_focus": {
+                "method": "cellcharter",
+                "focus_targets": {
+                    "skills/spatial/_lib/domains.py": [
+                        "identify_domains_cellcharter",
+                        "_cluster_fixed_k",
+                        "_cluster_auto_k",
+                        "dispatch_method",
+                    ],
+                },
+            }
+        },
+    )
+
+
 class TestBuildHarnessDirective:
     def test_basic_structure(self, surface_with_files, sample_trace):
         directive = build_harness_directive(
@@ -209,3 +309,18 @@ class TestBuildHarnessDirective:
         assert "Trial #4" in directive
         assert "Trial #3" in directive
         assert "Trial #2" in directive
+
+    def test_method_focused_excerpt_hides_unrelated_algorithms(
+        self,
+        spatial_domains_surface,
+    ):
+        directive = build_harness_directive(
+            skill_name="spatial-domains",
+            method="cellcharter",
+            surface=spatial_domains_surface,
+            traces=[],
+        )
+        assert "## Method Scope" in directive
+        assert "identify_domains_cellcharter" in directive
+        assert "identify_domains_stagate" not in directive
+        assert "Method-focused excerpt" in directive

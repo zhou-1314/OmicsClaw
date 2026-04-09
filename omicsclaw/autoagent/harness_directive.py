@@ -64,6 +64,10 @@ def build_harness_directive(
         _section_trace_diagnostics(traces),
     ]
 
+    method_scope = _section_method_scope(surface)
+    if method_scope:
+        sections.insert(1, method_scope)
+
     if gate_verdict is not None:
         sections.append(_section_hard_gates(gate_verdict))
 
@@ -122,6 +126,34 @@ your patch.  If you need to change frozen infrastructure, explain why
 in your reasoning and the system will flag it for human review."""
 
 
+def _section_method_scope(surface: EditSurface) -> str:
+    method_focus = surface.metadata.get("method_focus")
+    if not isinstance(method_focus, dict):
+        return ""
+
+    focus_method = str(method_focus.get("method", "") or "").strip()
+    focus_targets = method_focus.get("focus_targets", {})
+    if not focus_method or not isinstance(focus_targets, dict):
+        return ""
+
+    lines = [
+        "## Method Scope",
+        "",
+        f"Current target method: **{focus_method}**.",
+        "",
+        "Keep edits centered on these regions:",
+    ]
+    for rel_path, targets in focus_targets.items():
+        if not targets:
+            continue
+        lines.append(f"- `{rel_path}`: {', '.join(str(t) for t in targets)}")
+    lines.append(
+        "- In shared multi-method files, do not modify unrelated algorithm "
+        "implementations unless a shared helper directly affects the target method."
+    )
+    return "\n".join(lines)
+
+
 def _section_source_code(surface: EditSurface) -> str:
     """Include the current content of each editable file."""
     lines = ["## Current Source Code", ""]
@@ -139,7 +171,12 @@ def _section_source_code(surface: EditSurface) -> str:
         lines.append(f"### `{rel_path}`")
         lines.append("")
         try:
-            content = surface.read_file(rel_path)
+            content = surface.read_prompt_file(rel_path)
+            if surface.has_prompt_view(rel_path):
+                lines.append(
+                    "*Method-focused excerpt for the current target. "
+                    "Unrelated sections omitted.*"
+                )
             # Truncate very large files to avoid blowing up the prompt
             if len(content) > 15000:
                 content = content[:15000] + "\n\n... (truncated at 15000 chars)"
@@ -212,7 +249,10 @@ def _section_constraints() -> str:
    New parameters should have sensible defaults.
 5. **Logging**: Use ``logger.info()`` / ``logger.warning()`` for
    significant decisions (especially fallbacks).
-6. **Type safety**: Add type hints to new code."""
+6. **Type safety**: Add type hints to new code.
+7. **Method focus**: When a skill file contains multiple algorithms,
+   optimize only the requested method and shared helpers that directly
+   affect it."""
 
 
 def _section_output_format() -> str:
