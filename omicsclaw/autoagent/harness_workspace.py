@@ -27,6 +27,7 @@ from omicsclaw.autoagent.patch_engine import PatchPlan
 logger = logging.getLogger(__name__)
 
 _IGNORED_TOP_LEVEL_DIRS = {
+    # VCS / caches
     ".git",
     ".pytest_cache",
     ".ruff_cache",
@@ -35,9 +36,19 @@ _IGNORED_TOP_LEVEL_DIRS = {
     ".tox",
     ".venv",
     "__pycache__",
+    # Build / output artifacts
     "build",
     "output",
     "workspace",
+    # Large data & non-code directories — these are never part of the
+    # editable surface and copying them would take hours on big projects.
+    "data",
+    "examples",
+    "frontend",
+    "website",
+    ".benchmarks",
+    "node_modules",
+    ".claude",
 }
 _IGNORED_NAMES = {".DS_Store"}
 
