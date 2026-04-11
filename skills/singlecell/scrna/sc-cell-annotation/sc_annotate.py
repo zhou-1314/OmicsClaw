@@ -67,6 +67,34 @@ SKILL_NAME = "sc-cell-annotation"
 SKILL_VERSION = "0.7.0"
 SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-cell-annotation/sc_annotate.py"
 
+# R Enhanced renderers for this skill.
+# Key   = renderer name registered in viz/r/registry.R R_PLOT_REGISTRY
+# Value = output filename (written to figures/r_enhanced/)
+R_ENHANCED_PLOTS: dict[str, str] = {
+    "plot_embedding_discrete": "r_embedding_discrete.png",
+    "plot_embedding_feature": "r_embedding_feature.png",
+}
+
+
+def _render_r_enhanced(
+    output_dir: Path,
+    figure_data_dir: Path,
+    r_enhanced: bool,
+) -> list[str]:
+    """Run R Enhanced rendering pass. Always called after Python figures are complete."""
+    if not r_enhanced:
+        return []
+    from skills.singlecell._lib.viz.r import call_r_plot
+    r_figures_dir = output_dir / "figures" / "r_enhanced"
+    r_figures_dir.mkdir(parents=True, exist_ok=True)
+    r_figure_paths: list[str] = []
+    for renderer, filename in R_ENHANCED_PLOTS.items():
+        out_path = r_figures_dir / filename
+        call_r_plot(renderer, figure_data_dir, out_path)
+        if out_path.exists():
+            r_figure_paths.append(str(out_path))
+    return r_figure_paths
+
 
 def _write_repro_requirements(repro_dir: Path, packages: list[str]) -> None:
     try:
@@ -1508,6 +1536,10 @@ def main():
     parser.add_argument("--tissue", default="All", help="SCSA tissue filter (e.g. Blood, Brain, All)")
     parser.add_argument("--scsa-foldchange", type=float, default=1.5, help="SCSA DE fold-change threshold")
     parser.add_argument("--scsa-pvalue", type=float, default=0.05, help="SCSA DE p-value threshold")
+    parser.add_argument(
+        "--r-enhanced", action="store_true",
+        help="Generate R Enhanced ggplot2 figures in addition to standard Python plots."
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -1675,6 +1707,15 @@ def main():
         "data": result_data,
     }
     write_standard_run_artifacts(output_dir, result_payload, summary)
+
+    # R Enhanced figures (only when --r-enhanced flag is set)
+    r_enhanced_figures = _render_r_enhanced(
+        output_dir=output_dir,
+        figure_data_dir=output_dir / "figure_data",
+        r_enhanced=args.r_enhanced,
+    )
+    if r_enhanced_figures:
+        result_data["r_enhanced_figures"] = r_enhanced_figures
 
     # ---- User-facing stdout summary (small-white-friendly) ----
     n_types = summary["n_cell_types"]
