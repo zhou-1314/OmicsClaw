@@ -227,11 +227,15 @@ Plans:
 **Depends on**: Phase 16, Phase 17
 **Requirements**: SK-11
 **Success Criteria** (what must be TRUE):
-  1. Running any of the 12 targeted skills with `--r-enhanced` flag generates figures in figures/r_enhanced/ without disrupting figures/ Python outputs
+  1. Running any of the 19 targeted skills with `--r-enhanced` flag generates figures in figures/r_enhanced/ without disrupting figures/ Python outputs
   2. Running without `--r-enhanced` flag produces identical output to pre-milestone behavior (no regression)
   3. An R plotting failure during `--r-enhanced` run prints a warning to stdout and continues — result.json still written as success
-  4. Demo mode with `--r-enhanced` runs end-to-end without manual intervention on all 12 targeted skills
-**Plans**: TBD
+  4. Demo mode with `--r-enhanced` runs end-to-end without manual intervention on all 19 targeted skills
+**Plans**: 3 plans
+Plans:
+- [ ] 18-01-PLAN.md — Group A: 8 skills with dedicated R renderers (sc-cell-annotation, sc-de, sc-markers, sc-enrichment, sc-pseudotime, sc-cell-communication, sc-velocity, sc-differential-abundance)
+- [ ] 18-02-PLAN.md — Group B first half: 6 skills with shared embedding renderers (sc-preprocessing, sc-batch-integration, sc-clustering, sc-doublet-detection, sc-qc, sc-pathway-scoring)
+- [ ] 18-03-PLAN.md — Group B second half: 5 skills (sc-grn, sc-gene-programs, sc-metacell, sc-perturb, sc-cytotrace) + docs/R-DEPENDENCIES.md
 
 ---
 
@@ -256,7 +260,7 @@ Plans:
 | 15. R Analysis Methods | v2.0 | 2/4 | In Progress|  |
 | 16. Trajectory and Enrichment R Enhanced Plots | v2.0 | 2/2 | Complete   | 2026-04-11 |
 | 17. CCC, Velocity, and DE R Enhanced Plots | v2.0 | 3/3 | Complete   | 2026-04-11 |
-| 18. Skill Wiring --r-enhanced Flag | v2.0 | 0/? | Not started | - |
+| 18. Skill Wiring --r-enhanced Flag | v2.0 | 0/3 | Not started | - |
 
 ---
-*Last updated: 2026-04-11 after Phase 16 plan creation*
+*Last updated: 2026-04-11 after Phase 18 plan creation*
