@@ -60,6 +60,11 @@ SKILL_NAME = "sc-pathway-scoring"
 SKILL_VERSION = "0.2.0"
 DEFAULT_METHOD = "aucell_r"
 SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-pathway-scoring/sc_pathway_scoring.py"
+
+R_ENHANCED_PLOTS = {
+    "plot_embedding_discrete": "r_embedding_discrete.png",
+    "plot_embedding_feature": "r_embedding_feature.png",
+}
 R_SCRIPTS_DIR = Path(__file__).resolve().parent / "rscripts"
 SHARED_PARAM_KEYS = ("method", "gene_sets", "groupby", "top_pathways")
 GENE_SET_DB_ALIASES = {
@@ -804,6 +809,21 @@ def _next_step_guidance(groupby: str | None) -> list[str]:
     ]
 
 
+def _render_r_enhanced(output_dir, figure_data_dir, r_enhanced):
+    if not r_enhanced:
+        return []
+    from skills.singlecell._lib.viz.r import call_r_plot
+    r_figures_dir = output_dir / "figures" / "r_enhanced"
+    r_figures_dir.mkdir(parents=True, exist_ok=True)
+    r_figure_paths = []
+    for renderer, filename in R_ENHANCED_PLOTS.items():
+        out_path = r_figures_dir / filename
+        call_r_plot(renderer, figure_data_dir, out_path)
+        if out_path.exists():
+            r_figure_paths.append(str(out_path))
+    return r_figure_paths
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Single-cell pathway and gene-set scoring")
     parser.add_argument("--input", dest="input_path")
@@ -821,6 +841,7 @@ def main() -> None:
     # AUCell Python-specific
     parser.add_argument("--aucell-py-auc-threshold", type=float, default=0.05,
                         help="AUCell (Python) fraction of ranked genome for AUC (default 0.05)")
+    parser.add_argument("--r-enhanced", action="store_true", default=False, help="Generate R-enhanced figures via ggplot2 renderers")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -1019,6 +1040,8 @@ def main() -> None:
     }
     result_data = {"params": params}
     result_data["next_steps"] = []
+    r_enhanced_figures = _render_r_enhanced(output_dir, output_dir / "figure_data", args.r_enhanced)
+    result_data["r_enhanced_figures"] = r_enhanced_figures
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary_json, result_data, checksum)
     result_payload = load_result_json(output_dir) or {
         "skill": SKILL_NAME,

@@ -51,6 +51,10 @@ logger = logging.getLogger(__name__)
 SKILL_NAME = "sc-qc"
 SKILL_VERSION = "0.2.0"
 SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-qc/sc_qc.py"
+
+R_ENHANCED_PLOTS = {
+    "plot_embedding_discrete": "r_embedding_discrete.png",
+}
 QC_METHOD = "qc_metrics"
 METHOD_PARAM_DEFAULTS = {
     QC_METHOD: {
@@ -598,6 +602,21 @@ def generate_demo_data(species: str = "human"):
 
 
 
+def _render_r_enhanced(output_dir, figure_data_dir, r_enhanced):
+    if not r_enhanced:
+        return []
+    from skills.singlecell._lib.viz.r import call_r_plot
+    r_figures_dir = output_dir / "figures" / "r_enhanced"
+    r_figures_dir.mkdir(parents=True, exist_ok=True)
+    r_figure_paths = []
+    for renderer, filename in R_ENHANCED_PLOTS.items():
+        out_path = r_figures_dir / filename
+        call_r_plot(renderer, figure_data_dir, out_path)
+        if out_path.exists():
+            r_figure_paths.append(str(out_path))
+    return r_figure_paths
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Single-Cell QC — Quality control metrics and visualization"
@@ -611,6 +630,7 @@ def main():
         choices=["human", "mouse"],
         help="Species for mitochondrial gene detection (default: human)",
     )
+    parser.add_argument("--r-enhanced", action="store_true", default=False, help="Generate R-enhanced figures via ggplot2 renderers")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -738,6 +758,8 @@ def main():
         {"skill": "sc-doublet-detection", "reason": "Optional: detect doublets before filtering", "priority": "optional"},
     ]
     result_data["preprocessing_state_after"] = "qc_computed"
+    r_enhanced_figures = _render_r_enhanced(output_dir, output_dir / "figure_data", args.r_enhanced)
+    result_data["r_enhanced_figures"] = r_enhanced_figures
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
     result_payload = load_result_json(output_dir) or {
         "skill": SKILL_NAME,
