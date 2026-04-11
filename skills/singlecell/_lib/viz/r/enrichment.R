@@ -323,3 +323,187 @@ plot_gsea_nes_heatmap <- function(data_dir, out_path, params) {
     quit(status = 1)
   })
 }
+
+
+# ---------------------------------------------------------------------------
+# Function 4: plot_enrichment_dotplot
+# ---------------------------------------------------------------------------
+#' Enrichment dotplot (size = gene count, color = -log10 padj).
+#'
+#' Reads enrichment_results.csv or top_terms.csv. Shows top terms per group
+#' as a bubble chart: x = gene ratio, y = term, size = overlap count.
+#'
+#' @param data_dir Character. Directory containing enrichment CSVs.
+#' @param out_path Character. Output PNG path.
+#' @param params Named list. Optional: top_n (default 8), group.
+plot_enrichment_dotplot <- function(data_dir, out_path, params) {
+  tryCatch({
+    csv_path <- file.path(data_dir, "enrichment_results.csv")
+    if (!file.exists(csv_path)) {
+      csv_path <- file.path(data_dir, "top_terms.csv")
+    }
+    if (!file.exists(csv_path)) {
+      stop("No enrichment CSV found in ", data_dir)
+    }
+
+    df <- read.csv(csv_path, stringsAsFactors = FALSE)
+    top_n <- as.integer(params[["top_n"]] %||% 8)
+
+    # Standardize column names
+    if ("pvalue_adj" %in% colnames(df) && !"p.adjust" %in% colnames(df)) {
+      df$p.adjust <- df$pvalue_adj
+    }
+    if ("gene_count" %in% colnames(df) && !"Count" %in% colnames(df)) {
+      df$Count <- df$gene_count
+    }
+    if ("overlap" %in% colnames(df) && !"GeneRatio" %in% colnames(df)) {
+      # Parse overlap like "5/9"
+      df$GeneRatio <- sapply(df$overlap, function(x) {
+        sp <- strsplit(as.character(x), "/")[[1]]
+        if (length(sp) == 2) as.numeric(sp[1]) / as.numeric(sp[2]) else NA
+      })
+      if (!"Count" %in% colnames(df)) {
+        df$Count <- sapply(df$overlap, function(x) {
+          sp <- strsplit(as.character(x), "/")[[1]]
+          if (length(sp) >= 1) as.numeric(sp[1]) else NA
+        })
+      }
+    }
+
+    # Filter significant and take top N
+    df <- df[!is.na(df$p.adjust) & df$p.adjust < 1, ]
+    if (nrow(df) == 0) {
+      cat("WARNING: No significant terms found\n", file = stderr())
+      return(invisible(NULL))
+    }
+
+    # Select group if specified, otherwise use first or all
+    if ("group" %in% colnames(df)) {
+      group_use <- params[["group"]] %||% unique(df$group)[1]
+      df <- df[df$group == group_use, ]
+    }
+
+    df <- head(df[order(df$p.adjust), ], top_n)
+    df$neg_log10_padj <- -log10(df$p.adjust + 1e-300)
+    df$term <- factor(df$term, levels = rev(df$term))
+
+    has_ratio <- "GeneRatio" %in% colnames(df) && !all(is.na(df$GeneRatio))
+
+    if (has_ratio) {
+      p <- ggplot(df, aes(x = GeneRatio, y = term)) +
+        geom_point(aes(size = Count, fill = neg_log10_padj),
+                   shape = 21, color = "black", stroke = 0.3) +
+        scale_fill_gradientn(
+          name = "-log10(padj)",
+          colours = c("#FEE8C8", "#FDBB84", "#E34A33"),
+          guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")
+        ) +
+        scale_size_continuous(range = c(3, 8), name = "Gene count",
+                              breaks = scales::breaks_extended(n = 4)) +
+        labs(x = "Gene ratio", y = "", title = "Enrichment dotplot") +
+        theme_omics() +
+        theme(panel.grid.major.x = element_line(colour = "grey85", linetype = 2))
+    } else {
+      p <- ggplot(df, aes(x = neg_log10_padj, y = term)) +
+        geom_point(aes(size = Count, fill = neg_log10_padj),
+                   shape = 21, color = "black", stroke = 0.3) +
+        scale_fill_gradientn(
+          name = "-log10(padj)",
+          colours = c("#FEE8C8", "#FDBB84", "#E34A33"),
+          guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")
+        ) +
+        scale_size_continuous(range = c(3, 8), name = "Gene count") +
+        labs(x = "-log10(adj. p-value)", y = "", title = "Enrichment dotplot") +
+        theme_omics() +
+        theme(panel.grid.major.x = element_line(colour = "grey85", linetype = 2))
+    }
+
+    height <- max(4, nrow(df) * 0.4 + 2)
+    ggsave_standard(p, out_path, width = 8, height = height)
+  }, error = function(e) {
+    cat("ERROR:", conditionMessage(e), "\n", file = stderr())
+    quit(status = 1)
+  })
+}
+
+
+# ---------------------------------------------------------------------------
+# Function 5: plot_enrichment_lollipop
+# ---------------------------------------------------------------------------
+#' Enrichment lollipop plot (stem = fold enrichment, dot = gene ratio).
+#'
+#' @param data_dir Character. Directory containing enrichment CSVs.
+#' @param out_path Character. Output PNG path.
+#' @param params Named list. Optional: top_n (default 10), group.
+plot_enrichment_lollipop <- function(data_dir, out_path, params) {
+  tryCatch({
+    csv_path <- file.path(data_dir, "enrichment_results.csv")
+    if (!file.exists(csv_path)) {
+      csv_path <- file.path(data_dir, "top_terms.csv")
+    }
+    if (!file.exists(csv_path)) {
+      stop("No enrichment CSV found in ", data_dir)
+    }
+
+    df <- read.csv(csv_path, stringsAsFactors = FALSE)
+    top_n <- as.integer(params[["top_n"]] %||% 10)
+
+    # Standardize columns
+    if ("pvalue_adj" %in% colnames(df) && !"p.adjust" %in% colnames(df)) {
+      df$p.adjust <- df$pvalue_adj
+    }
+    if ("score" %in% colnames(df) && !"odds_ratio" %in% colnames(df)) {
+      df$odds_ratio <- df$score
+    }
+
+    df <- df[!is.na(df$p.adjust) & df$p.adjust < 1, ]
+    if (nrow(df) == 0) {
+      cat("WARNING: No significant terms\n", file = stderr())
+      return(invisible(NULL))
+    }
+
+    if ("group" %in% colnames(df)) {
+      group_use <- params[["group"]] %||% unique(df$group)[1]
+      df <- df[df$group == group_use, ]
+    }
+
+    # Use odds_ratio or score as the stem length
+    metric_col <- intersect(c("odds_ratio", "score", "nes"), colnames(df))
+    if (length(metric_col) == 0) {
+      df$metric <- -log10(df$p.adjust + 1e-300)
+      metric_name <- "-log10(padj)"
+    } else {
+      df$metric <- as.numeric(df[[metric_col[1]]])
+      metric_name <- metric_col[1]
+    }
+
+    df <- head(df[order(-abs(df$metric)), ], top_n)
+    df$neg_log10_padj <- -log10(df$p.adjust + 1e-300)
+    df$term <- factor(df$term, levels = df$term[order(df$metric)])
+
+    p <- ggplot(df, aes(x = term, y = metric)) +
+      geom_segment(aes(y = 0, xend = term, yend = metric),
+                   color = "grey40", linewidth = 1.5) +
+      geom_segment(aes(y = 0, xend = term, yend = metric, color = neg_log10_padj),
+                   linewidth = 1) +
+      geom_point(aes(fill = neg_log10_padj), size = 4,
+                 shape = 21, color = "black", stroke = 0.3) +
+      scale_fill_gradientn(
+        name = "-log10(padj)",
+        colours = c("#FEE8C8", "#FDBB84", "#E34A33"),
+        aesthetics = c("colour", "fill"),
+        guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")
+      ) +
+      coord_flip() +
+      labs(x = "", y = metric_name, title = "Enrichment lollipop") +
+      theme_omics() +
+      theme(panel.grid.major.y = element_blank(),
+            panel.grid.major.x = element_line(colour = "grey85", linetype = 2))
+
+    height <- max(4, nrow(df) * 0.35 + 2)
+    ggsave_standard(p, out_path, width = 8, height = height)
+  }, error = function(e) {
+    cat("ERROR:", conditionMessage(e), "\n", file = stderr())
+    quit(status = 1)
+  })
+}

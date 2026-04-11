@@ -73,6 +73,8 @@ SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-cell-annotation/sc_annotate.py"
 R_ENHANCED_PLOTS: dict[str, str] = {
     "plot_embedding_discrete": "r_embedding_discrete.png",
     "plot_embedding_feature": "r_embedding_feature.png",
+    "plot_cell_barplot": "r_cell_barplot.png",
+    "plot_cell_proportion": "r_cell_proportion.png",
 }
 
 

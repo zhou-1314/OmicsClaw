@@ -64,6 +64,7 @@ SCRIPT_REL_PATH = 'skills/singlecell/scrna/sc-markers/sc_markers.py'
 # Value = output filename (written to figures/r_enhanced/)
 R_ENHANCED_PLOTS: dict[str, str] = {
     "plot_marker_heatmap": "r_marker_heatmap.png",
+    "plot_feature_violin": "r_feature_violin.png",
 }
 
 

@@ -28,6 +28,7 @@ source(file.path(script_dir, "enrichment.R"))
 source(file.path(script_dir, "velocity.R"))
 source(file.path(script_dir, "communication.R"))
 source(file.path(script_dir, "de.R"))
+source(file.path(script_dir, "stat.R"))
 
 # ---- Test stub renderer ----
 # Minimal ggplot2 scatter that proves the Python -> R round-trip works.
@@ -66,8 +67,14 @@ R_PLOT_REGISTRY <- list(
   plot_velocity           = plot_velocity,
   plot_de_volcano         = plot_de_volcano,
   plot_de_heatmap         = plot_de_heatmap,
-  plot_ccc_heatmap        = plot_ccc_heatmap,
-  plot_ccc_network        = plot_ccc_network
+  plot_ccc_heatmap           = plot_ccc_heatmap,
+  plot_ccc_network           = plot_ccc_network,
+  plot_feature_violin        = plot_feature_violin,
+  plot_feature_boxplot       = plot_feature_boxplot,
+  plot_cell_barplot          = plot_cell_barplot,
+  plot_cell_proportion       = plot_cell_proportion,
+  plot_enrichment_dotplot    = plot_enrichment_dotplot,
+  plot_enrichment_lollipop   = plot_enrichment_lollipop
 )
 
 # ---- CLI dispatcher (runs only when script is invoked directly) ----
