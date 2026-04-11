@@ -131,3 +131,100 @@ Do not do these:
 - write error messages that say "file not found" without telling the user where to get the file
 - fall back to a different method silently without logging and recording the fallback
 - set `NUMBA_DISABLE_JIT=1` in any module that may be imported after scanpy/numba — this is the #1 cause of cold-start crashes
+
+## R Enhanced Plot Support (Phase 14+)
+
+Skills that support `--r-enhanced` follow a three-step pattern:
+
+### 1. Declare renderers (at module level in the skill Python script)
+
+```python
+# R Enhanced renderers for this skill.
+# Key   = renderer name registered in viz/r/registry.R  R_PLOT_REGISTRY
+# Value = output filename (written to figures/r_enhanced/)
+R_ENHANCED_PLOTS: dict[str, str] = {
+    "plot_cell_dim":     "r_cell_dim.png",       # example: CellDimPlot equivalent
+    "plot_feature_dim":  "r_feature_dim.png",    # example: FeatureDimPlot equivalent
+}
+```
+
+### 2. Add the CLI flag
+
+```python
+parser.add_argument(
+    "--r-enhanced", action="store_true",
+    help="Generate R Enhanced ggplot2 figures in addition to standard Python plots."
+)
+```
+
+### 3. Add the rendering pass after Python figures are complete
+
+```python
+def _render_r_enhanced(
+    output_dir: Path,
+    figure_data_dir: Path,
+    r_enhanced: bool,
+) -> list[str]:
+    """Run R Enhanced rendering pass. Always called after _render_figures()."""
+    if not r_enhanced:
+        return []
+    from skills.singlecell._lib.viz.r import call_r_plot
+    r_figures_dir = output_dir / "figures" / "r_enhanced"
+    r_figures_dir.mkdir(parents=True, exist_ok=True)
+    r_figure_paths: list[str] = []
+    for renderer, filename in R_ENHANCED_PLOTS.items():
+        out_path = r_figures_dir / filename
+        call_r_plot(renderer, figure_data_dir, out_path)
+        if out_path.exists():
+            r_figure_paths.append(str(out_path))
+    return r_figure_paths
+```
+
+Call it in `main()`:
+
+```python
+# In main(), after _render_figures():
+r_enhanced_figures = _render_r_enhanced(
+    output_dir=output_dir,
+    figure_data_dir=output_dir / "figure_data",
+    r_enhanced=args.r_enhanced,
+)
+```
+
+### 4. Tag R Enhanced figures in result.json
+
+```python
+all_figures = (
+    [{"filename": f, "backend": "python"} for f in python_figures]
+    + [{"filename": f, "backend": "r_enhanced"} for f in r_enhanced_figures]
+)
+```
+
+### R script registration
+
+Before adding a new renderer to `R_ENHANCED_PLOTS`, register the corresponding function in
+`skills/singlecell/_lib/viz/r/registry.R`:
+
+```r
+# In registry.R, add to R_PLOT_REGISTRY:
+R_PLOT_REGISTRY <- list(
+  plot_test_scatter = plot_test_scatter,   # Phase 13 stub
+  plot_cell_dim     = plot_cell_dim,       # Phase 14 — add after implementing in embedding.R
+)
+```
+
+The R function signature is always:
+```r
+plot_cell_dim <- function(data_dir, out_path, params) {
+  # data_dir: path to figure_data/ directory
+  # out_path: absolute path for output PNG
+  # params: named list from key=value CLI args
+}
+```
+
+### Invariants
+
+- Python figures are ALWAYS generated regardless of `--r-enhanced`
+- `call_r_plot()` never raises — only `warnings.warn()`
+- R Enhanced figures go to `figures/r_enhanced/` — never mixed into `figures/`
+- If an R renderer is not yet implemented, omit it from `R_ENHANCED_PLOTS` (don't add stubs)
