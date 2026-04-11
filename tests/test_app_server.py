@@ -104,6 +104,62 @@ def test_app_server_main_reports_missing_uvicorn(monkeypatch, capsys):
     assert 'pip install -e ".[desktop]"' in captured.err
 
 
+def test_register_optional_kg_router_mounts_embedded_routes(monkeypatch, tmp_path):
+    pytest.importorskip("fastapi")
+
+    from fastapi import APIRouter, Depends, FastAPI
+    from fastapi.testclient import TestClient
+
+    from omicsclaw.app import server
+
+    kg_root = ModuleType("omicsclaw_kg")
+    kg_config = ModuleType("omicsclaw_kg.config")
+    kg_http_api = ModuleType("omicsclaw_kg.http_api")
+
+    def resolve(path):
+        return {"workspace": str(Path(path).resolve())}
+
+    def get_kg_config():
+        raise AssertionError("dependency override should supply KG config")
+
+    router = APIRouter()
+
+    @router.get("/status")
+    def status(config=Depends(get_kg_config)):
+        return {"workspace": config["workspace"]}
+
+    kg_config.resolve = resolve
+    kg_http_api.build_router = lambda enable_writes=True: router
+    kg_http_api.get_kg_config = get_kg_config
+    kg_root.config = kg_config
+
+    monkeypatch.setitem(sys.modules, "omicsclaw_kg", kg_root)
+    monkeypatch.setitem(sys.modules, "omicsclaw_kg.config", kg_config)
+    monkeypatch.setitem(sys.modules, "omicsclaw_kg.http_api", kg_http_api)
+
+    real_find_spec = importlib.util.find_spec
+
+    def fake_find_spec(name, *args, **kwargs):
+        if name == "omicsclaw_kg":
+            return object()
+        return real_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
+
+    app = FastAPI()
+    server._register_optional_kg_router(app)
+    client = TestClient(app)
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    response = client.get("/kg/status", headers={"X-OmicsClaw-Workspace": str(workspace_root)})
+    assert response.status_code == 200
+    assert response.json() == {
+        "workspace": str((workspace_root / ".omicsclaw" / "knowledge").resolve())
+    }
+
+
 def test_resolve_backend_init_config_prefers_documented_llm_namespace(monkeypatch):
     pytest.importorskip("fastapi")
 
@@ -866,5 +922,72 @@ async def test_memory_review_clear_restores_previous_memory_content(monkeypatch,
         assert restored["id"] == update_result["old_memory_id"]
         assert restored["content"] == "original content"
         assert restored["node_uuid"] == update_result["node_uuid"]
+    finally:
+        await memory_pkg.close_db()
+
+
+@pytest.mark.asyncio
+async def test_memory_review_integrate_accepts_selected_keys(monkeypatch, tmp_path):
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.memory.api import review
+
+    graph, store, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
+    monkeypatch.setattr(review, "get_changeset_store", lambda: store)
+
+    try:
+        create_result = await graph.create_memory(
+            parent_path="",
+            content="draft content",
+            priority=0,
+            title="draft-note",
+            domain="core",
+        )
+        store.record_many(
+            before_state=create_result.get("rows_before", {}),
+            after_state=create_result.get("rows_after", {}),
+        )
+
+        keys = sorted(store.get_all_rows_dict())
+        result = await review.integrate_changes(review.IntegrateRequest(keys=[keys[0]]))
+
+        assert result["integrated"] == [keys[0]]
+        assert result["errors"] == []
+        assert result["remaining"] == len(keys) - 1
+        assert keys[0] not in store.get_all_rows_dict()
+    finally:
+        await memory_pkg.close_db()
+
+
+@pytest.mark.asyncio
+async def test_memory_review_integrate_reports_missing_keys(monkeypatch, tmp_path):
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.memory.api import review
+
+    graph, store, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
+    monkeypatch.setattr(review, "get_changeset_store", lambda: store)
+
+    try:
+        create_result = await graph.create_memory(
+            parent_path="",
+            content="draft content",
+            priority=0,
+            title="draft-note",
+            domain="core",
+        )
+        store.record_many(
+            before_state=create_result.get("rows_before", {}),
+            after_state=create_result.get("rows_after", {}),
+        )
+
+        keys = sorted(store.get_all_rows_dict())
+        result = await review.integrate_changes(
+            review.IntegrateRequest(keys=[keys[0], "missing:key"])
+        )
+
+        assert result["integrated"] == [keys[0]]
+        assert result["errors"] == [{"key": "missing:key", "error": "Not found"}]
+        assert result["remaining"] == len(keys) - 1
     finally:
         await memory_pkg.close_db()

@@ -300,7 +300,9 @@ pip install -e ".[desktop]"
 oc app-server --host 127.0.0.1 --port 8765
 ```
 
-该后端默认监听 `127.0.0.1:8765`，提供 OmicsClaw-App 所使用的 HTTP / SSE 接口。
+该后端默认监听 `127.0.0.1:8765`，提供 OmicsClaw-App 所使用的 HTTP / SSE 接口。`desktop` extra 现在也会安装 notebook 运行时依赖，因此同一个 `oc app-server` 进程会直接暴露嵌入式 notebook 所需的原生 `/notebook/*` 路由。
+
+如果环境里已经安装 `omicsclaw_kg`，或者通过 `OMICSCLAW_KG_SOURCE_DIR=/path/to/OmicsClaw-KG` 提供源码目录，那么同一个 `oc app-server` 进程也会挂载 KG Explorer 所需的 `/kg/*` 路由。前端开发服务器现在默认把 `/kg` 代理到 `app-server`，不再默认依赖单独的 `omicsclaw-kg http serve` 进程。
 
 **系统会记录的内容包括：**
 

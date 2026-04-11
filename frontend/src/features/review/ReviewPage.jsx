@@ -183,13 +183,15 @@ export default function ReviewPage() {
 
   const handleReject = async (item) => {
     if (!confirm(`Reject alterations to ${item.display_uri}?`)) return;
-    try { await rollbackGroup(item.node_uuid); loadChanges(); }
+    try { await rollbackGroup(item.node_uuid); }
     catch (err) { alert("Rejection failed: " + err.message); }
+    finally { loadChanges(); }
   };
 
   const handleApprove = async (item) => {
-    try { await approveGroup(item.node_uuid); loadChanges(); }
+    try { await approveGroup(item.node_uuid); }
     catch (err) { alert("Integration failed: " + err.message); }
+    finally { loadChanges(); }
   };
 
   const handleClearAll = async () => {

@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -53,6 +53,12 @@ logger = logging.getLogger("omicsclaw.app_server")
 DEFAULT_APP_API_HOST = "127.0.0.1"
 DEFAULT_APP_API_PORT = 8765
 _APP_SERVER_INSTALL_HINT = 'pip install -e ".[desktop]"'
+_DEFAULT_APP_CORS_ORIGINS: tuple[str, ...] = (
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+)
 
 # ---------------------------------------------------------------------------
 # Lazy references to bot.core — resolved once at startup via lifespan
@@ -75,6 +81,70 @@ def _read_first_config_value(*keys: str) -> str:
         if value:
             return value
     return ""
+
+
+def _app_cors_origins() -> list[str]:
+    raw = str(os.getenv("OMICSCLAW_APP_CORS_ORIGINS", "") or "").strip()
+    if not raw:
+        return list(_DEFAULT_APP_CORS_ORIGINS)
+    values = [item.strip() for item in raw.split(",") if item.strip()]
+    return values or list(_DEFAULT_APP_CORS_ORIGINS)
+
+
+def _coerce_kg_home(candidate: str) -> Path:
+    """Accept either a project root or a concrete `.omicsclaw/knowledge` path."""
+    value = str(candidate or "").strip()
+    path = Path(value).expanduser()
+    if path.name == "knowledge" and path.parent.name == ".omicsclaw":
+        return path
+    return path / ".omicsclaw" / "knowledge"
+
+
+def _register_optional_kg_router(app: FastAPI) -> None:
+    """Mount OmicsClaw-KG under `/kg` when the optional package is available."""
+    kg_source_dir = str(os.getenv("OMICSCLAW_KG_SOURCE_DIR", "") or "").strip()
+    if kg_source_dir and kg_source_dir not in sys.path:
+        sys.path.insert(0, kg_source_dir)
+
+    if importlib.util.find_spec("omicsclaw_kg") is None:
+        logger.info("OmicsClaw-KG package not available; skipping embedded KG routes")
+        return
+
+    try:
+        from omicsclaw_kg import config as kg_config
+        from omicsclaw_kg.http_api import build_router as build_kg_router
+        from omicsclaw_kg.http_api import get_kg_config as kg_workspace_dependency
+    except ImportError as exc:
+        logger.info("OmicsClaw-KG import failed; skipping embedded KG routes: %s", exc)
+        return
+
+    def _embedded_kg_config(
+        x_omicsclaw_workspace: str | None = Header(None, alias="X-OmicsClaw-Workspace"),
+        workspace: str | None = Query(None),
+    ):
+        explicit = str(x_omicsclaw_workspace or workspace or "").strip()
+        if explicit:
+            return kg_config.resolve(_coerce_kg_home(explicit))
+
+        explicit_kg = str(os.getenv("OMICSCLAW_KG_HOME", "") or "").strip()
+        if explicit_kg:
+            return kg_config.resolve(explicit_kg)
+
+        workspace_root = _resolve_scoped_memory_workspace("")
+        if workspace_root:
+            return kg_config.resolve(_coerce_kg_home(workspace_root))
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "missing workspace: pass X-OmicsClaw-Workspace, "
+                "or configure OMICSCLAW_WORKSPACE / OMICSCLAW_KG_HOME"
+            ),
+        )
+
+    app.dependency_overrides[kg_workspace_dependency] = _embedded_kg_config
+    app.include_router(build_kg_router(enable_writes=True), prefix="/kg")
+    logger.info("Mounted embedded OmicsClaw-KG routes under /kg")
 
 
 def _resolve_backend_init_config() -> dict[str, str]:
@@ -312,7 +382,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_app_cors_origins(),
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -323,6 +394,8 @@ try:
     app.include_router(optimize_router)
 except ImportError:
     pass  # autoagent module not available
+
+_register_optional_kg_router(app)
 
 
 # ---------------------------------------------------------------------------

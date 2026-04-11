@@ -300,7 +300,9 @@ pip install -e ".[desktop]"
 oc app-server --host 127.0.0.1 --port 8765
 ```
 
-The app backend binds to `127.0.0.1:8765` by default and provides the HTTP/SSE contract used by OmicsClaw-App.
+The app backend binds to `127.0.0.1:8765` by default and provides the HTTP/SSE contract used by OmicsClaw-App. The `desktop` extra now includes the notebook runtime, so the same `oc app-server` process also exposes the native `/notebook/*` routes used by the embedded notebook UI.
+
+If `omicsclaw_kg` is installed or available from a source checkout via `OMICSCLAW_KG_SOURCE_DIR=/path/to/OmicsClaw-KG`, the same `oc app-server` process also mounts the embedded `/kg/*` routes used by the KG Explorer. The frontend dev server now proxies `/kg` to the app backend by default instead of a separate `omicsclaw-kg http serve` process.
 
 **What it remembers:**
 - 📁 **Datasets** — File paths, platforms (Visium/Xenium), dimensions, preprocessing state

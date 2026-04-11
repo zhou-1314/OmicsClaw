@@ -1,32 +1,68 @@
 import axios from 'axios';
 
 export const AUTH_ERROR_EVENT = 'omicsclaw:auth-error';
+const KG_WORKSPACE_KEY = 'omicsclaw_kg_workspace';
+
+const getApiToken = () => localStorage.getItem('api_token');
+
+export const normalizeKgWorkspace = (value) => {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return '';
+  const normalized = trimmed.replace(/[\\/]+$/, '');
+  if (normalized.endsWith('/.omicsclaw/knowledge') || normalized.endsWith('\\.omicsclaw\\knowledge')) {
+    return normalized;
+  }
+  return `${normalized}/.omicsclaw/knowledge`;
+};
+
+export const getKgWorkspace = () => normalizeKgWorkspace(localStorage.getItem(KG_WORKSPACE_KEY));
+
+export const setKgWorkspace = (value) => {
+  const normalized = normalizeKgWorkspace(value);
+  if (normalized) localStorage.setItem(KG_WORKSPACE_KEY, normalized);
+  else localStorage.removeItem(KG_WORKSPACE_KEY);
+  return normalized;
+};
+
+const attachCommonInterceptors = (client, { withKgWorkspace = false } = {}) => {
+  client.interceptors.request.use((config) => {
+    const token = getApiToken();
+    if (token) {
+      config.headers = config.headers ?? {};
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    if (withKgWorkspace) {
+      const workspace = getKgWorkspace();
+      if (workspace) {
+        config.headers = config.headers ?? {};
+        config.headers['X-OmicsClaw-Workspace'] = workspace;
+      }
+    }
+    return config;
+  });
+
+  client.interceptors.response.use(
+    (response) => response,
+    (error) => {
+      if (error.response && error.response.status === 401) {
+        localStorage.removeItem('api_token');
+        window.dispatchEvent(new CustomEvent(AUTH_ERROR_EVENT));
+      }
+      return Promise.reject(error);
+    }
+  );
+};
 
 export const api = axios.create({
   baseURL: '/api'
 });
 
-// Request interceptor: auto-attach Bearer Token
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('api_token');
-  if (token) {
-    config.headers = config.headers ?? {};
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
+export const kgApi = axios.create({
+  baseURL: '/kg'
 });
 
-// Response interceptor: clear token on 401
-api.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    if (error.response && error.response.status === 401) {
-      localStorage.removeItem('api_token');
-      window.dispatchEvent(new CustomEvent(AUTH_ERROR_EVENT));
-    }
-    return Promise.reject(error);
-  }
-);
+attachCommonInterceptors(api);
+attachCommonInterceptors(kgApi, { withKgWorkspace: true });
 
 const encodeId = (id) => encodeURIComponent(id);
 
@@ -43,6 +79,9 @@ export const getDiff = (key) =>
 
 export const rollbackChanges = (keys) =>
   api.post('/review/rollback', { keys }).then(res => res.data);
+
+export const integrateChanges = (keys) =>
+  api.post('/review/integrate', { keys }).then(res => res.data);
 
 export const integrateAll = () =>
   api.post('/review/integrate-all').then(res => res.data);
@@ -188,40 +227,41 @@ export const rollbackGroup = async (nodeUuid) => {
   const keys = entries.map(e => e.key).filter(Boolean);
 
   if (keys.length === 0) {
-    return { success: false, message: 'No rollback keys found for this group' };
+    throw new Error('No rollback keys found for this group');
   }
 
-  return rollbackChanges(keys);
+  const result = await rollbackChanges(keys);
+  if (result.errors?.length) {
+    const error = new Error(
+      `Rollback partially failed: ${result.errors.map(e => `${e.key}: ${e.error}`).join('; ')}`
+    );
+    error.reviewResult = result;
+    throw error;
+  }
+  return result;
 };
 
 /**
- * Approve (integrate) all changes for a specific node group by removing
- * them from the changeset store.
- * Since the backend has no per-group approve endpoint, we remove these keys
- * via rollback with an empty action — or simply re-fetch after integrate.
- * For now, we call integrate-all if this is the only group, or just clear
- * the keys from the store.
+ * Approve (integrate) all changes belonging to a specific node group.
  */
 export const approveGroup = async (nodeUuid) => {
-  // The backend doesn't have a per-group integrate endpoint.
-  // We POST to integrate-all — but first check if there's only this group.
-  // A more precise approach: call a custom endpoint or just integrate all.
-  // For now, integrate-all is acceptable since the UI can reload.
   const { groups } = await getChanges();
-  const allGroupIds = Object.keys(groups);
+  const entries = groups[nodeUuid] || [];
+  const keys = entries.map(e => e.key).filter(Boolean);
 
-  if (allGroupIds.length <= 1) {
-    // Only one group (or none), safe to integrate all
-    return integrateAll();
+  if (keys.length === 0) {
+    throw new Error('No approval keys found for this group');
   }
 
-  // Multiple groups — we need a targeted approach.
-  // Since the backend doesn't support per-group integrate, we'll use
-  // rollback endpoint but with a "no-op" approach — removing keys from store.
-  // Actually, for approve we just want to clear these entries from the
-  // changeset store. Let's POST integrate-all for now and document that
-  // a per-group integrate endpoint should be added to the backend.
-  return integrateAll();
+  const result = await integrateChanges(keys);
+  if (result.errors?.length) {
+    const error = new Error(
+      `Approve partially failed: ${result.errors.map(e => `${e.key}: ${e.error}`).join('; ')}`
+    );
+    error.reviewResult = result;
+    throw error;
+  }
+  return result;
 };
 
 /**
@@ -299,5 +339,34 @@ export const rebuildSearchIndex = () =>
 
 export const getHealth = () =>
   api.get('/health').then(res => res.data);
+
+// ============ KG API ============
+
+export const getKgStatus = () =>
+  kgApi.get('/status').then(res => res.data);
+
+export const getKgHealth = () =>
+  kgApi.get('/health').then(res => res.data);
+
+export const searchKg = (query, { pageType, status, state, limit = 20 } = {}) => {
+  const params = new URLSearchParams({ q: query, limit: String(limit) });
+  if (pageType) params.append('type', pageType);
+  if (status) params.append('status', status);
+  if (state) params.append('state', state);
+  return kgApi.get(`/search?${params}`).then(res => res.data);
+};
+
+export const listKgPages = (pageType, { status, state, limit = 50 } = {}) => {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (status) params.append('status', status);
+  if (state) params.append('state', state);
+  return kgApi.get(`/pages/${encodeURIComponent(pageType)}?${params}`).then(res => res.data);
+};
+
+export const getKgPage = (pageType, slug, { includeNotes = false } = {}) => {
+  const params = includeNotes ? '?include_notes=true' : '';
+  return kgApi.get(`/pages/${encodeURIComponent(pageType)}/${encodeURIComponent(slug)}${params}`)
+    .then(res => res.data);
+};
 
 export default api;

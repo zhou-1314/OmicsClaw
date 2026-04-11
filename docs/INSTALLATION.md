@@ -146,6 +146,10 @@ pip install -e ".[desktop]"
 oc app-server --host 127.0.0.1 --port 8765
 ```
 
+The `desktop` extra includes the notebook runtime dependencies, so this same
+server process also serves the native `/notebook/*` routes used by the
+embedded notebook UI. No separate notebook bridge is required.
+
 ### 8. Research and autonomous extras
 
 For research-pipeline or notebook-style auxiliary workflows:
@@ -249,7 +253,12 @@ If you installed desktop frontend support:
 oc app-server
 ```
 
-By default this binds to `127.0.0.1:8765`.
+By default this binds to `127.0.0.1:8765` and includes the notebook routes
+consumed by OmicsClaw-App.
+
+If `omicsclaw_kg` is importable, or you set
+`OMICSCLAW_KG_SOURCE_DIR=/path/to/OmicsClaw-KG`, the same `oc app-server`
+process also exposes the embedded `/kg/*` routes used by the KG Explorer.
 
 ## Interactive and Workspace Features
 
