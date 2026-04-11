@@ -157,8 +157,8 @@
   4. SC-DEVELOPMENT-CHECKLIST.md and SC-SKILL-TEMPLATE.md contain R Enhanced checklist items
 **Plans**: 2 plans
 Plans:
-- [ ] 13-01-PLAN.md — ggplot2 pin + viz/r/ R layer (common.R, registry.R) + Python call_r_plot() wrapper + round-trip test
-- [ ] 13-02-PLAN.md — SC-DEVELOPMENT-CHECKLIST.md and SC-SKILL-TEMPLATE.md R Enhanced sections
+- [x] 13-01-PLAN.md — ggplot2 pin + viz/r/ R layer (common.R, registry.R) + Python call_r_plot() wrapper + round-trip test
+- [x] 13-02-PLAN.md — SC-DEVELOPMENT-CHECKLIST.md and SC-SKILL-TEMPLATE.md R Enhanced sections
 
 ### Phase 14: Shared Embedding and Marker Plots
 **Goal**: All skills that produce embeddings or marker gene results can generate publication-quality R plots from their figure_data CSVs
@@ -238,7 +238,7 @@ Plans:
 | 10. 标准化上游 QC | v1.0 | - | Complete | 2026-04-10 |
 | 11. 标准化 sc-standardize-input | v1.0 | - | Complete | 2026-04-10 |
 | 12. 最终验证 | v1.0 | - | Complete | 2026-04-10 |
-| 13. R Enhanced Framework Foundation | v2.0 | 0/2 | Not started | - |
+| 13. R Enhanced Framework Foundation | v2.0 | 2/2 | Complete   | 2026-04-11 |
 | 14. Shared Embedding and Marker Plots | v2.0 | 0/? | Not started | - |
 | 15. R Analysis Methods | v2.0 | 0/? | Not started | - |
 | 16. Trajectory and Enrichment R Enhanced Plots | v2.0 | 0/? | Not started | - |
