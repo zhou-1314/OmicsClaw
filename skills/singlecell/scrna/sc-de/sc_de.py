@@ -646,6 +646,7 @@ def main():
             pseudobulk_min_counts=args.pseudobulk_min_counts,
         ),
         logger,
+        demo_mode=args.demo,
     )
     _validate_runtime_dependencies(method)
 
@@ -738,7 +739,12 @@ def main():
         "fallback_used": bool(summary.get("fallback_used")),
         "fallback_reason": summary.get("fallback_reason"),
         "params": params,
+        "input_contract": adata.uns.get("omicsclaw_input_contract", {}),
+        "matrix_contract": adata.uns.get("omicsclaw_matrix_contract", {}),
     }
+    result_data["next_steps"] = [
+        {"skill": "sc-enrichment", "reason": "Pathway enrichment analysis on DE genes", "priority": "recommended"},
+    ]
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
     result_payload = load_result_json(output_dir) or {
         "skill": SKILL_NAME,
@@ -753,6 +759,11 @@ def main():
         f"DE complete: {summary['n_groups']} groups, "
         f"requested={summary['requested_method']}, executed={summary['executed_method']}"
     )
+
+    # --- Next-step guidance ---
+    print()
+    print("▶ Next step: Run sc-enrichment for pathway enrichment on DE results")
+    print(f"  python omicsclaw.py run sc-enrichment --input {output_dir}/processed.h5ad --output <dir>")
 
 
 if __name__ == "__main__":

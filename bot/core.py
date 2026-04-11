@@ -693,6 +693,77 @@ async def _auto_capture_analysis(session_id: str, skill: str, args: dict, output
         logger.warning(f"Auto-capture analysis failed: {e}")
 
 
+def _read_result_json(out_dir: Path) -> dict | None:
+    """Read result.json from the skill output directory, return parsed dict or None."""
+    result_path = out_dir / "result.json"
+    if not result_path.exists():
+        return None
+    try:
+        import json as _json
+        return _json.loads(result_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.debug(f"Failed to read result.json: {e}")
+        return None
+
+
+async def _update_preprocessing_state(session_id: str, result_data: dict):
+    """Update the current dataset's preprocessing_state from result.json data.
+
+    Looks for ``preprocessing_state_after`` in the result's ``data`` dict.
+    Updates the most recent DatasetMemory for this session.
+    """
+    if not memory_store or not session_id:
+        return
+    new_state = result_data.get("preprocessing_state_after")
+    if not new_state:
+        return
+    try:
+        datasets = await memory_store.get_memories(session_id, "dataset", limit=1)
+        if not datasets:
+            return
+        ds = datasets[0]
+        if ds.preprocessing_state == new_state:
+            return  # Already up to date
+        ds.preprocessing_state = new_state
+        await memory_store.save_memory(session_id, ds)
+        logger.info(f"Updated preprocessing_state: {new_state} for {ds.file_path}")
+    except Exception as e:
+        logger.warning(f"Failed to update preprocessing_state: {e}")
+
+
+def _format_next_steps(result_data: dict) -> str:
+    """Format next_steps from result.json data into a user-friendly recommendation block.
+
+    Returns empty string if no next_steps are available.
+    """
+    next_steps = result_data.get("next_steps")
+    if not next_steps:
+        return ""
+    if isinstance(next_steps, list) and all(isinstance(s, str) for s in next_steps):
+        # Simple list of strings — render as bullet points
+        lines = ["\n**Suggested next steps:**"]
+        for step in next_steps:
+            lines.append(f"- {step}")
+        return "\n".join(lines)
+    if isinstance(next_steps, list) and all(isinstance(s, dict) for s in next_steps):
+        # Structured list: [{skill, description, priority}, ...]
+        lines = ["\n**Suggested next steps:**"]
+        for step in next_steps:
+            skill_name = step.get("skill", "")
+            desc = step.get("description", "")
+            priority = step.get("priority", "")
+            tag = f" ({priority})" if priority else ""
+            if skill_name and desc:
+                lines.append(f"- **{skill_name}** — {desc}{tag}")
+            elif skill_name:
+                lines.append(f"- **{skill_name}**{tag}")
+            else:
+                lines.append(f"- {desc}{tag}")
+        lines.append("\nTell me which one you'd like to run!")
+        return "\n".join(lines)
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Session Manager
 # ---------------------------------------------------------------------------
@@ -769,7 +840,7 @@ class SessionManager:
             # Dataset context
             if datasets:
                 ds = datasets[0]
-                parts.append(f"**Current Dataset**: {ds.file_path} ({ds.platform or 'unknown'}, {ds.n_obs or '?'} obs, {ds.preprocessing_state})")
+                parts.append(f"**Current Dataset**: {ds.file_path} ({ds.platform or 'unknown'}, {ds.n_obs or '?'} obs, preprocessed={ds.preprocessing_state})")
 
             # Recent analyses
             if analyses:
@@ -2150,6 +2221,17 @@ async def execute_omicsclaw(args: dict, session_id: str = None, chat_id: int | s
             await _auto_capture_dataset(session_id, input_path, data_type)
         await _auto_capture_analysis(session_id, skill_key, args, out_dir, True)
 
+    # Read result.json for preprocessing_state update and next_steps
+    result_json = _read_result_json(out_dir)
+    result_data = result_json.get("data", {}) if result_json else {}
+
+    # Update per-dataset preprocessing_state if the skill provides it
+    if session_id and result_data.get("preprocessing_state_after"):
+        await _update_preprocessing_state(session_id, result_data)
+
+    # Format next_steps recommendation block
+    next_steps_block = _format_next_steps(result_data)
+
     result_text = "\n".join(keep_lines).strip()
     if guidance_block:
         result_text = guidance_block + "\n\n---\n" + result_text
@@ -2231,6 +2313,10 @@ async def execute_omicsclaw(args: dict, session_id: str = None, chat_id: int | s
                             skill_key, len(advice))
     except Exception as e:
         logger.debug("Post-execution advisory skipped: %s", e)
+
+    # Append next_steps recommendations from result.json (if available)
+    if next_steps_block:
+        result_text += f"\n\n{next_steps_block}"
 
     return result_text
 
@@ -3118,7 +3204,7 @@ async def execute_recall(args: dict, session_id: str = None) -> str:
                         ctx_parts.append(f"Disease: {m.disease_model}")
                     parts.append(f"[project_context] {' | '.join(ctx_parts)}")
                 elif m.memory_type == "dataset":
-                    parts.append(f"[dataset] {m.file_path} ({m.preprocessing_state})")
+                    parts.append(f"[dataset] {m.file_path} (preprocessed={m.preprocessing_state})")
                 elif m.memory_type == "analysis":
                     parts.append(f"[analysis] {m.skill} ({m.method}) - {m.status}")
                 else:

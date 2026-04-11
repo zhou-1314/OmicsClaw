@@ -30,10 +30,13 @@ When the user asks a question, match it to a skill and act:
 | multi-sample integration, batch correction, Harmony, BBKNN, Scanorama, merge samples | `skills/spatial/spatial-integrate/` | Run `python omicsclaw.py run spatial-integration` |
 | spatial registration, slice alignment, PASTE, STalign, multi-slice, coordinate alignment | `skills/spatial/spatial-register/` | Run `python omicsclaw.py run spatial-registration` |
 
-### Single-Cell Omics (13 skills)
+### Single-Cell Omics (17 skills)
 
 | User Intent | Skill | Action |
 |---|---|---|
+| FASTQ QC, raw read quality, FastQC, MultiQC, read-level QC, scRNA FASTQ | `skills/singlecell/scrna/sc-fastq-qc/` | Run `python omicsclaw.py run sc-fastq-qc` |
+| count matrix, Cell Ranger, STARsolo, FASTQ to adata, generate count, simpleaf, kb-python | `skills/singlecell/scrna/sc-count/` | Run `python omicsclaw.py run sc-count` |
+| multi-sample count, merge count matrices, aggregate samples, combine count outputs | `skills/singlecell/scrna/sc-multi-count/` | Run `python omicsclaw.py run sc-multi-count` |
 | QC metrics, quality control, calculate QC, QC visualization, violin plots QC, mitochondrial percentage, n genes per cell | `skills/singlecell/scrna/sc-qc/` | Run `python omicsclaw.py run sc-qc` |
 | filter cells, cell filtering, gene filtering, remove low quality, QC filtering, tissue-specific thresholds | `skills/singlecell/scrna/sc-filter/` | Run `python omicsclaw.py run sc-filter` |
 | ambient RNA, ambient removal, cellbender, contamination, background RNA | `skills/singlecell/scrna/sc-ambient-removal/` | Run `python omicsclaw.py run sc-ambient-removal` |
@@ -47,6 +50,7 @@ When the user asks a question, match it to a skill and act:
 | marker genes, find markers, differential expression, cluster markers, cell type markers | `skills/singlecell/scrna/sc-markers/` | Run `python omicsclaw.py run sc-markers` |
 | grn, gene regulatory, scenic, pyscenic, regulon, transcription factor, grnboost | `skills/singlecell/scrna/sc-grn/` | Run `python omicsclaw.py run sc-grn` |
 | cell communication, cell-cell communication, ligand receptor, cellchat, liana | `skills/singlecell/scrna/sc-cell-communication/` | Run `python omicsclaw.py run sc-cell-communication` |
+| drug response, drug sensitivity, CaDRReS, pharmacogenomics, IC50, scDrug | `skills/singlecell/scrna/sc-drug-response/` | Run `python omicsclaw.py run sc-drug-response` |
 
 ### Genomics (10 skills)
 

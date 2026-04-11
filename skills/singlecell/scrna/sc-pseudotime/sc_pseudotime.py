@@ -924,6 +924,12 @@ def main() -> None:
     if args.demo:
         adata = get_demo_data()
         input_file = None
+        # Auto-select root cluster for demo mode if not explicitly provided
+        if args.root_cluster is None and args.root_cell is None:
+            cluster_col = args.cluster_key
+            if cluster_col in adata.obs.columns:
+                args.root_cluster = str(adata.obs[cluster_col].value_counts().idxmax())
+                logger.info("[demo] Auto-selected root cluster: %s", args.root_cluster)
     else:
         if not args.input_path:
             parser.error("--input is required unless --demo is used")
@@ -948,6 +954,7 @@ def main() -> None:
             source_path=input_file,
         ),
         logger,
+        demo_mode=args.demo,
     )
 
     if args.cluster_key not in adata.obs.columns:
@@ -1167,6 +1174,10 @@ def main() -> None:
             "pseudotime_key": pseudotime_key,
         },
     }
+    result_data["next_steps"] = [
+        {"skill": "sc-velocity", "reason": "RNA velocity analysis for dynamic trajectories", "priority": "optional"},
+        {"skill": "sc-gene-programs", "reason": "Discover gene programs along the trajectory", "priority": "optional"},
+    ]
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
     result_payload = load_result_json(output_dir) or {"skill": SKILL_NAME, "summary": summary, "data": result_data}
     write_standard_run_artifacts(output_dir, result_payload, summary)
@@ -1179,6 +1190,12 @@ def main() -> None:
     print(f"  Display embedding: {display_embedding}")
     print(f"  Trajectory genes: {len(trajectory_genes)}")
     print(f"  Output: {output_dir}")
+
+    # --- Next-step guidance ---
+    print()
+    print("▶ Next steps:")
+    print(f"  • sc-velocity:      python omicsclaw.py run sc-velocity --input {output_dir}/processed.h5ad --output <dir>")
+    print(f"  • sc-gene-programs: python omicsclaw.py run sc-gene-programs --input {output_dir}/processed.h5ad --output <dir>")
 
 
 if __name__ == "__main__":

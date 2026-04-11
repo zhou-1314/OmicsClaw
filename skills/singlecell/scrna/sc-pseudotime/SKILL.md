@@ -203,3 +203,8 @@ Common figures include:
 
 For short guardrails see `knowledge_base/knowhows/KH-sc-pseudotime-guardrails.md`.  
 For longer method guidance see `knowledge_base/skill-guides/singlecell/sc-pseudotime.md`.
+
+## Workflow Position
+
+**Upstream:** sc-clustering
+**Downstream:** sc-velocity (RNA velocity), sc-gene-programs (temporal gene programs)

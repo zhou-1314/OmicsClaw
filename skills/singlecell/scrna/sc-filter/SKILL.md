@@ -187,3 +187,9 @@ The current wrapper writes a standard recipe-driven gallery:
 - This skill filters cells and genes only; it does not normalize, cluster, or remove doublets automatically.
 - For short execution guardrails, see `knowledge_base/knowhows/KH-sc-filter-guardrails.md`.
 - For longer method and interpretation guidance, see `knowledge_base/skill-guides/singlecell/sc-filter.md`.
+
+## Workflow Position
+
+- **Upstream step**: `sc-qc` for QC visualization (recommended), or directly from `sc-count` / `sc-multi-count`
+- **Usual next step**: `sc-preprocessing` for normalization, HVG selection, and PCA
+- **Optional before preprocessing**: `sc-doublet-detection` or `sc-ambient-removal`

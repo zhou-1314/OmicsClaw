@@ -1027,6 +1027,11 @@ def main():
             "available_figure_data": gallery_context.get("figure_data_files", {}),
         },
     }
+    result_data["next_steps"] = [
+        {"skill": "sc-batch-integration", "reason": "Correct batch effects if multiple batches present", "priority": "optional"},
+        {"skill": "sc-clustering", "reason": "Identify cell clusters in the preprocessed data", "priority": "recommended"},
+    ]
+    result_data["preprocessing_state_after"] = "normalized"
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
     result_payload = load_result_json(output_dir) or {
         "skill": SKILL_NAME,
@@ -1038,6 +1043,12 @@ def main():
     print(f"Success: {SKILL_NAME}")
     print(f"  Output: {output_dir}")
     print(f"Preprocessing complete: {summary['n_cells']} cells, {summary['n_hvg']} HVGs, PCA ready")
+    print()
+    print("▶ Next step:")
+    print("  - Multiple batches? → sc-batch-integration")
+    print(f"    python omicsclaw.py run sc-batch-integration --input {output_h5ad} --output <dir>")
+    print("  - Single batch? → sc-clustering")
+    print(f"    python omicsclaw.py run sc-clustering --input {output_h5ad} --output <dir>")
 
 
 if __name__ == "__main__":

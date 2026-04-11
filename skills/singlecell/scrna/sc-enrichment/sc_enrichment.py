@@ -907,6 +907,7 @@ def main() -> None:
             demo=args.demo,
         ),
         logger,
+        demo_mode=args.demo,
     )
 
     gene_sets, resolved_gene_sets_path, gene_set_meta = _resolve_gene_sets(
@@ -1085,6 +1086,10 @@ def main() -> None:
         "visualization": {"available_figure_data": figure_data_files},
         "ranking_source": source_meta,
     }
+    result_data["next_steps"] = [
+        {"skill": "sc-cell-communication", "reason": "Explore ligand-receptor interactions between cell types", "priority": "optional"},
+        {"skill": "sc-grn", "reason": "Infer gene regulatory networks", "priority": "optional"},
+    ]
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
     result_payload = load_result_json(output_dir) or {"skill": SKILL_NAME, "summary": summary, "data": result_data}
     write_standard_run_artifacts(output_dir, result_payload, summary)
@@ -1092,6 +1097,12 @@ def main() -> None:
     print(f"Success: {SKILL_NAME}")
     print(f"  Output: {output_dir}")
     print(f"Statistical enrichment complete: method={method}, groups={summary['n_groups']}, significant_terms={summary['n_significant_terms']}")
+
+    # --- Next-step guidance ---
+    print()
+    print("▶ Analysis complete. Further exploration:")
+    print(f"  • sc-cell-communication: python omicsclaw.py run sc-cell-communication --input {output_dir}/processed.h5ad --output <dir>")
+    print(f"  • sc-grn:                python omicsclaw.py run sc-grn --input {output_dir}/processed.h5ad --output <dir>")
 
 
 if __name__ == "__main__":

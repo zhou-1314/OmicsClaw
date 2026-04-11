@@ -45,6 +45,16 @@ Use `processed.h5ad` as the standard output object name.
 - ensure preflight follows `templates/singlecell/SC-PREFLIGHT-RULES.md`
 - if multiple methods exist, map method-specific CLI parameters explicitly instead of hiding them behind one generic parameter set
 - make novice-facing guidance part of preflight/runtime behavior, not only prose in `SKILL.md`
+- write `next_steps` to result_data before `write_result_json()`:
+  ```python
+  result_data["next_steps"] = [
+      {"skill": "sc-xxx", "reason": "purpose", "priority": "recommended"},
+      {"skill": "sc-yyy", "reason": "purpose", "priority": "optional"},
+  ]
+  ```
+- if the skill changes preprocessing state, write `preprocessing_state_after` to result_data (one of: `"standardized"`, `"qc_computed"`, `"filtered"`, `"normalized"`, `"clustered"`, `"annotated"`, `"integrated"`)
+- print `▶ Next step:` guidance to stdout after the success banner with copy-pasteable commands
+- pass `demo_mode=args.demo` to `apply_preflight()` so demo mode auto-accepts `needs_user_input` confirmations
 
 ## Required Additions For Companion Docs
 

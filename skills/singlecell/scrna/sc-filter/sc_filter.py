@@ -565,6 +565,11 @@ def main():
             species=species,
             standardizer_skill=SKILL_NAME,
         )
+    if not had_qc_metrics:
+        print()
+        print("ℹ No QC metrics found. Computing automatically.")
+        print("  Tip: Run sc-qc first for detailed QC visualization.")
+        print()
     working_adata = sc_qc_utils.ensure_qc_metrics(working_adata, species=species, inplace=True)
     adata_before = working_adata.copy()
 
@@ -641,6 +646,11 @@ def main():
             "qc_metric_columns": gallery_context.get("metric_columns", []),
         },
     }
+    result_data["next_steps"] = [
+        {"skill": "sc-preprocessing", "reason": "Normalize, select HVGs, and reduce dimensions", "priority": "recommended"},
+        {"skill": "sc-ambient-removal", "reason": "Optional: remove ambient RNA contamination", "priority": "optional"},
+    ]
+    result_data["preprocessing_state_after"] = "filtered"
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
     result_payload = load_result_json(output_dir) or {
         "skill": SKILL_NAME,
@@ -656,6 +666,11 @@ def main():
     print(f"  Cells: {summary['n_cells_before']:,} → {summary['n_cells_after']:,} ({summary['cells_retained_pct']}%)")
     print(f"  Genes: {summary['n_genes_before']:,} → {summary['n_genes_after']:,} ({summary['genes_retained_pct']}%)")
     print(f"  Output: {output_dir}")
+    print()
+    print("▶ Next step: Run sc-preprocessing for normalization, HVG selection, and PCA")
+    print(f"  python omicsclaw.py run sc-preprocessing --input {output_h5ad} --output <dir>")
+    print()
+    print("ℹ Optional: Run sc-doublet-detection or sc-ambient-removal before preprocessing")
 
 
 if __name__ == "__main__":

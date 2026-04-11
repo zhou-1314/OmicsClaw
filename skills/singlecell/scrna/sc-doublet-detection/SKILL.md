@@ -146,3 +146,8 @@ Successful runs write:
 - After inspection, keep singlets and rerun preprocessing / clustering if the final downstream object should exclude doublets.
 
 For concise execution guardrails, see `knowledge_base/knowhows/KH-sc-doublet-detection-guardrails.md`. For longer interpretation guidance, see `knowledge_base/skill-guides/singlecell/sc-doublet-detection.md`.
+
+## Workflow Position
+
+**Upstream:** sc-preprocessing or raw count matrix
+**Downstream:** sc-filter (to remove flagged doublets)

@@ -303,3 +303,8 @@ The standard gallery focuses on:
 - `sc-de`
 - `sc-pathway-scoring`
 - `sc-cell-annotation`
+
+## Workflow Position
+
+**Upstream:** sc-de or sc-markers
+**Downstream:** Terminal analysis. Consider: sc-cell-communication, sc-grn for further insights

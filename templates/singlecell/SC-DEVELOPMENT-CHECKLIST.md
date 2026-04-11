@@ -43,6 +43,15 @@ Use this checklist before saying a single-cell skill is aligned with OmicsClaw.
 - [ ] figures, tables, `figure_data`, and `result.json` match the same analysis result
 - [ ] tests cover at least one contract-success path and one contract-mismatch path
 
+## Workflow Guidance
+
+- [ ] **stdout**: success banner后打印 `▶ Next step:` + copy-pasteable 命令，告诉用户下一步该跑什么 skill
+- [ ] **result.json**: 包含 `next_steps` 字段（`[{"skill": "sc-xxx", "reason": "...", "priority": "recommended|optional"}]`），供 bot/LLM 自动推荐
+- [ ] **result.json**: 包含 `preprocessing_state_after` 字段（如 `"qc_computed"`, `"filtered"`, `"normalized"`, `"clustered"`, `"annotated"`），供 bot 追踪数据集状态（仅改变数据预处理状态的 skill 需要）
+- [ ] **SKILL.md**: 包含 `## Workflow Position` 段，写明 **Upstream**（通常的上游 skill）和 **Downstream**（通常的下游 skill）
+- [ ] **preflight/runtime**: 对新手的引导是运行时行为（print 到 stdout），不只是写在 SKILL.md 文档里
+- [ ] **demo 模式**: `apply_preflight(decision, logger, demo_mode=args.demo)` — demo 模式下 `needs_user_input` 降级为 guidance 但 `blocked` 不降级
+
 ## User Experience (see SC-USER-EXPERIENCE-RULES.md)
 
 - [ ] skill detects feature/gene overlap with defaults before running analysis

@@ -100,7 +100,10 @@ class DatasetMemory(BaseMemory):
     platform: str | None = None
     n_obs: int | None = None
     n_vars: int | None = None
-    preprocessing_state: Literal["raw", "qc", "normalized", "clustered"] = "raw"
+    preprocessing_state: Literal[
+        "raw", "qc", "qc_computed", "filtered", "normalized",
+        "clustered", "annotated", "integrated", "preprocessed",
+    ] = "raw"
     file_exists: bool = True
 
     @field_validator("file_path")

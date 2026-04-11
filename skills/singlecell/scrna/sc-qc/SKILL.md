@@ -343,3 +343,9 @@ stack when available.
   `knowledge_base/knowhows/KH-sc-qc-guardrails.md`.
 - For longer method and interpretation guidance, see
   `knowledge_base/skill-guides/singlecell/sc-qc.md`.
+
+## Workflow Position
+
+- **Upstream step**: Input should come from `sc-count`, `sc-multi-count`, or `sc-standardize-input`
+- **Usual next step**: `sc-filter` to remove low-quality cells based on the QC metrics visualized here
+- **Optional**: Run `sc-doublet-detection` before or after filtering

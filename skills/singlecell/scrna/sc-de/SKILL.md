@@ -243,3 +243,8 @@ The current wrapper writes direct figure outputs rather than a recipe-driven gal
 - Treat `sample_key` and `celltype_key` as part of the statistical design for `deseq2_r`, not as cosmetic metadata.
 - For short execution guardrails, see `knowledge_base/knowhows/KH-sc-de-guardrails.md`.
 - For longer method and interpretation guidance, see `knowledge_base/skill-guides/singlecell/sc-de.md`.
+
+## Workflow Position
+
+**Upstream:** sc-clustering, sc-cell-annotation, or sc-markers
+**Downstream:** sc-enrichment (pathway enrichment on DE results)

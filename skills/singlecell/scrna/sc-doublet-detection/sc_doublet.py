@@ -906,6 +906,9 @@ def main():
             "available_figure_data": gallery_context.get("figure_data_files", {}),
         },
     }
+    result_data["next_steps"] = [
+        {"skill": "sc-filter", "reason": "Filter out detected doublets along with low-quality cells", "priority": "recommended"},
+    ]
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
     result_payload = load_result_json(output_dir) or {
         "skill": SKILL_NAME,
@@ -921,6 +924,11 @@ def main():
         f"({summary['doublet_rate'] * 100:.1f}%), requested={summary['requested_method']}, "
         f"executed={summary['executed_method']}"
     )
+
+    # --- Next-step guidance ---
+    print()
+    print("▶ Next step: Run sc-filter to remove flagged doublets")
+    print(f"  python omicsclaw.py run sc-filter --input {output_dir}/processed.h5ad --output <dir>")
 
 
 if __name__ == "__main__":

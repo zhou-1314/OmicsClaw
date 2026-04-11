@@ -733,6 +733,11 @@ def main():
             "available_figure_data": gallery_context.get("figure_data_files", {}),
         },
     }
+    result_data["next_steps"] = [
+        {"skill": "sc-filter", "reason": "Remove low-quality cells based on QC metrics", "priority": "recommended"},
+        {"skill": "sc-doublet-detection", "reason": "Optional: detect doublets before filtering", "priority": "optional"},
+    ]
+    result_data["preprocessing_state_after"] = "qc_computed"
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
     result_payload = load_result_json(output_dir) or {
         "skill": SKILL_NAME,
@@ -771,7 +776,13 @@ def main():
     print(f"  - tables/barcode_rank_curve.csv")
     print(f"  - tables/qc_metric_correlations.csv")
     print(f"  - reproducibility/analysis_notebook.ipynb")
-    print(f"\nNote: No cells were filtered. Use sc-preprocessing skill for filtering.")
+    print(f"\nNote: No cells were filtered. Use sc-filter or sc-preprocessing skill for filtering.")
+    print()
+    print("▶ Next step: Run sc-filter to remove low-quality cells")
+    print(f"  python omicsclaw.py run sc-filter --input {output_h5ad} --output <dir>")
+    print()
+    print("ℹ Optional: Run sc-doublet-detection before filtering")
+    print(f"  python omicsclaw.py run sc-doublet-detection --input {output_h5ad} --output <dir>")
 
 
 if __name__ == "__main__":

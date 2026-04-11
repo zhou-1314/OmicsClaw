@@ -161,3 +161,8 @@ Successful runs write:
 - `tables/pca_variance_ratio.csv`
 - `tables/pca_embedding.csv`
 - `tables/qc_metrics_per_cell.csv`
+
+## Workflow Position
+
+- **Upstream step**: `sc-filter` (recommended) or directly from `sc-count` / `sc-qc`
+- **Usual next step**: `sc-batch-integration` (multiple batches) or `sc-clustering` (single batch)
