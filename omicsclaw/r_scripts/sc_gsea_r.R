@@ -126,13 +126,20 @@ tryCatch({
 
   # --- 7. Build TERM2GENE for the requested database ---
   build_go_bp_term2gene <- function(species) {
-    if (species == "Mus_musculus") {
-      suppressPackageStartupMessages(library(org.Mm.eg.db))
-      orgDb <- org.Mm.eg.db::org.Mm.eg.db
-    } else {
-      suppressPackageStartupMessages(library(org.Hs.eg.db))
-      orgDb <- org.Hs.eg.db::org.Hs.eg.db
-    }
+    orgDb <- tryCatch({
+      if (species == "Mus_musculus") {
+        suppressPackageStartupMessages(library(org.Mm.eg.db))
+        org.Mm.eg.db::org.Mm.eg.db
+      } else {
+        suppressPackageStartupMessages(library(org.Hs.eg.db))
+        org.Hs.eg.db::org.Hs.eg.db
+      }
+    }, error = function(e) {
+      cat(sprintf("WARNING: Organism annotation DB not available: %s\n", conditionMessage(e)),
+          file = stderr())
+      return(NULL)
+    })
+    if (is.null(orgDb)) return(NULL)
     # Map gene symbols to entrez IDs
     all_genes <- unique(de_df[[gene_col]])
     gene2entrez <- tryCatch({

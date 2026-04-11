@@ -81,7 +81,8 @@ logger = logging.getLogger(__name__)
 SKILL_NAME = "sc-enrichment"
 SKILL_VERSION = "0.1.0"
 SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-enrichment/sc_enrichment.py"
-R_SCRIPTS_DIR = Path(__file__).resolve().parent / "rscripts"
+R_SCRIPTS_DIR = Path(__file__).resolve().parent / "rscripts"  # local R scripts for engine=r
+R_SCRIPTS_PROJECT_DIR = _PROJECT_ROOT / "omicsclaw" / "r_scripts"  # project-level R bridge scripts
 
 METHOD_REGISTRY: dict[str, MethodConfig] = {
     "ora": MethodConfig(
@@ -92,6 +93,11 @@ METHOD_REGISTRY: dict[str, MethodConfig] = {
     "gsea": MethodConfig(
         name="gsea",
         description="Preranked gene set enrichment on full marker / DE rankings",
+        dependencies=(),
+    ),
+    "gsea_r": MethodConfig(
+        name="gsea_r",
+        description="Gene set enrichment analysis via clusterProfiler + fgsea (R bridge)",
         dependencies=(),
     ),
 }
@@ -585,6 +591,102 @@ def _run_clusterprofiler_engine(
     }
 
 
+def _run_gsea_r(adata, ranking_df: pd.DataFrame, output_dir: Path, params: dict) -> tuple[pd.DataFrame, dict]:
+    """Run clusterProfiler GSEA via R bridge. Returns (enrichment_df, summary_dict)."""
+    import warnings
+
+    from omicsclaw.core.r_script_runner import RScriptError, RScriptRunner
+
+    r_script = R_SCRIPTS_PROJECT_DIR / "sc_gsea_r.R"
+    if not r_script.exists():
+        raise FileNotFoundError(f"R script not found: {r_script}")
+
+    # Export ranking table for R
+    r_work_dir = output_dir / "r_work"
+    r_work_dir.mkdir(parents=True, exist_ok=True)
+    de_csv = r_work_dir / "de_for_gsea_r.csv"
+
+    # Prepare DE table with columns R script expects
+    export_df = ranking_df.copy()
+    # Ensure we have the right column names
+    col_map = {}
+    if "names" in export_df.columns and "gene" not in export_df.columns:
+        col_map["names"] = "gene"
+    if "logfoldchanges" in export_df.columns and "avg_log2FC" not in export_df.columns:
+        col_map["logfoldchanges"] = "avg_log2FC"
+    elif "scores" in export_df.columns and "avg_log2FC" not in export_df.columns:
+        col_map["scores"] = "avg_log2FC"
+    elif "stat" in export_df.columns and "avg_log2FC" not in export_df.columns:
+        col_map["stat"] = "avg_log2FC"
+    if col_map:
+        export_df = export_df.rename(columns=col_map)
+    export_df.to_csv(de_csv, index=False)
+
+    species_map = {"human": "Homo_sapiens", "mouse": "Mus_musculus"}
+    species = species_map.get(params.get("species", "human"), params.get("species", "Homo_sapiens"))
+    db = params.get("gene_set_db", "GO_BP") or "GO_BP"
+    # Map common db names
+    db_map = {"go_bp": "GO_BP", "kegg": "KEGG", "reactome": "Reactome"}
+    db = db_map.get(db.lower(), db)
+    score_type = params.get("score_type", "std")
+
+    runner = RScriptRunner(timeout=600)
+    result_csv = r_work_dir / "gsea_r_results.csv"
+    r_success = True
+    try:
+        runner.run_script(
+            r_script,
+            args=[str(de_csv), str(r_work_dir), species, db, score_type],
+            expected_outputs=["gsea_r_results.csv"],
+            output_dir=r_work_dir,
+        )
+    except (RScriptError, FileNotFoundError) as exc:
+        warnings.warn(f"gsea_r R script failed (Python figures unaffected): {exc}")
+        r_success = False
+
+    enrichment_df = pd.DataFrame()
+    if r_success and result_csv.exists():
+        try:
+            enrichment_df = pd.read_csv(result_csv)
+        except Exception as exc:
+            warnings.warn(f"Could not read gsea_r results CSV: {exc}")
+
+    # Store in adata.uns
+    if not enrichment_df.empty:
+        adata.uns["gsea_r_results"] = enrichment_df.to_dict(orient="list")
+
+    # Standardize columns for the common enrichment pipeline
+    standardized = pd.DataFrame()
+    if not enrichment_df.empty:
+        standardized = enrichment_df.copy()
+        standardized = standardized.rename(columns={
+            "Description": "term",
+            "ID": "gene_set",
+            "NES": "nes",
+            "pvalue": "pvalue",
+            "p.adjust": "pvalue_adj",
+            "core_enrichment": "leading_edge",
+            "Group": "group",
+            "Database": "database",
+        })
+        standardized["term"] = standardized.get("term", standardized.get("gene_set", "")).astype(str)
+        standardized["gene_set"] = standardized.get("gene_set", standardized.get("term", "")).astype(str)
+        standardized["score"] = pd.to_numeric(standardized.get("nes"), errors="coerce")
+        standardized["source"] = "clusterProfiler_gsea_r"
+        standardized["library_mode"] = "r_gsea_r"
+        standardized["engine"] = "r.gsea_r"
+        standardized["method_used"] = "gsea_r"
+
+    return standardized, {
+        "method": "gsea_r",
+        "r_success": r_success,
+        "n_terms": len(standardized),
+        "species": species,
+        "db": db,
+        "warnings": [] if r_success else [f"R gsea_r script did not succeed; Python plots may be empty."],
+    }
+
+
 def _build_group_summary(enrich_df: pd.DataFrame, *, fdr_threshold: float) -> pd.DataFrame:
     if enrich_df.empty:
         return pd.DataFrame(columns=["group", "n_terms", "n_significant", "top_term", "top_abs_score", "best_pvalue_adj"])
@@ -948,57 +1050,65 @@ def main() -> None:
     }
 
     ranking_df = normalize_ranking_table(ranking_df)
-    resolved_engine, missing_r_packages = _resolve_engine(args.engine)
-    if resolved_engine == "r":
-        enrich_df, method_meta = _run_clusterprofiler_engine(
-            method=method,
-            ranking_df=ranking_df,
-            background_genes=adata.var_names.astype(str).tolist(),
-            gene_sets_path=resolved_gene_sets_path,
-            output_dir=output_dir,
-            top_terms=args.top_terms,
-            ora_padj_cutoff=args.ora_padj_cutoff,
-            ora_log2fc_cutoff=args.ora_log2fc_cutoff,
-            ora_max_genes=args.ora_max_genes,
-            gsea_ranking_metric=args.gsea_ranking_metric,
-            gsea_min_size=args.gsea_min_size,
-            gsea_max_size=args.gsea_max_size,
-            gsea_permutation_num=args.gsea_permutation_num,
-            gsea_seed=args.gsea_seed,
-        )
+
+    # --- gsea_r: dedicated R bridge path (bypasses engine resolution) ---
+    if method == "gsea_r":
+        enrich_df, method_meta = _run_gsea_r(adata, ranking_df, output_dir, params)
         ranking_by_group = None
+        resolved_engine = "r.gsea_r"
+        missing_r_packages = []
     else:
-        if args.engine == "auto" and missing_r_packages:
-            logger.info(
-                "R clusterProfiler stack is not fully available (%s); using Python enrichment engine.",
-                ", ".join(missing_r_packages),
-            )
-        if method == "ora":
-            enrich_df, method_meta = run_ora(
-                ranking_df,
-                source=str(gene_set_meta["resolved_source"]),
-                library_mode=str(gene_set_meta["library_mode"]),
-                gene_sets=gene_sets,
+        resolved_engine, missing_r_packages = _resolve_engine(args.engine)
+        if resolved_engine == "r":
+            enrich_df, method_meta = _run_clusterprofiler_engine(
+                method=method,
+                ranking_df=ranking_df,
                 background_genes=adata.var_names.astype(str).tolist(),
+                gene_sets_path=resolved_gene_sets_path,
+                output_dir=output_dir,
+                top_terms=args.top_terms,
                 ora_padj_cutoff=args.ora_padj_cutoff,
                 ora_log2fc_cutoff=args.ora_log2fc_cutoff,
                 ora_max_genes=args.ora_max_genes,
-            )
-            ranking_by_group = None
-        else:
-            enrich_df, method_meta = run_gsea(
-                ranking_df,
-                source=str(gene_set_meta["resolved_source"]),
-                library_mode=str(gene_set_meta["library_mode"]),
-                gene_sets=gene_sets,
-                ranking_metric=args.gsea_ranking_metric,
+                gsea_ranking_metric=args.gsea_ranking_metric,
                 gsea_min_size=args.gsea_min_size,
                 gsea_max_size=args.gsea_max_size,
                 gsea_permutation_num=args.gsea_permutation_num,
-                gsea_weight=args.gsea_weight,
                 gsea_seed=args.gsea_seed,
             )
-            ranking_by_group = method_meta.get("ranking_by_group")
+            ranking_by_group = None
+        else:
+            if args.engine == "auto" and missing_r_packages:
+                logger.info(
+                    "R clusterProfiler stack is not fully available (%s); using Python enrichment engine.",
+                    ", ".join(missing_r_packages),
+                )
+            if method == "ora":
+                enrich_df, method_meta = run_ora(
+                    ranking_df,
+                    source=str(gene_set_meta["resolved_source"]),
+                    library_mode=str(gene_set_meta["library_mode"]),
+                    gene_sets=gene_sets,
+                    background_genes=adata.var_names.astype(str).tolist(),
+                    ora_padj_cutoff=args.ora_padj_cutoff,
+                    ora_log2fc_cutoff=args.ora_log2fc_cutoff,
+                    ora_max_genes=args.ora_max_genes,
+                )
+                ranking_by_group = None
+            else:
+                enrich_df, method_meta = run_gsea(
+                    ranking_df,
+                    source=str(gene_set_meta["resolved_source"]),
+                    library_mode=str(gene_set_meta["library_mode"]),
+                    gene_sets=gene_sets,
+                    ranking_metric=args.gsea_ranking_metric,
+                    gsea_min_size=args.gsea_min_size,
+                    gsea_max_size=args.gsea_max_size,
+                    gsea_permutation_num=args.gsea_permutation_num,
+                    gsea_weight=args.gsea_weight,
+                    gsea_seed=args.gsea_seed,
+                )
+                ranking_by_group = method_meta.get("ranking_by_group")
 
     enrich_df = sort_results(enrich_df)
     if args.engine == "auto" and resolved_engine == "python" and missing_r_packages:

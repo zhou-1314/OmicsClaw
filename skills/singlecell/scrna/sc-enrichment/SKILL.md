@@ -223,13 +223,28 @@ python omicsclaw.py run sc-enrichment \
   --output <dir>
 
 python omicsclaw.py run sc-enrichment --demo --method ora --output <dir>
+
+# gsea_r: clusterProfiler + fgsea via R bridge
+python omicsclaw.py run sc-enrichment --demo --method gsea_r --output /tmp/gsea_r_demo
+python omicsclaw.py run sc-enrichment \
+  --input <sc-de-output-dir> \
+  --method gsea_r \
+  --output <dir>
 ```
+
+## Methods
+
+| Method | Description | Dependencies |
+|--------|-------------|--------------|
+| `ora` | Over-representation analysis on positive markers / DE genes. | gseapy (Python) |
+| `gsea` | Preranked gene set enrichment on full marker / DE rankings. | gseapy (Python) |
+| `gsea_r` | Gene set enrichment analysis via clusterProfiler + fgsea R bridge. Requires ranked DE/marker input. Produces NES scores per group. | fgsea 1.32.4, clusterProfiler 4.14.0 (pre-installed in conda env) |
 
 ## Public Parameters
 
 | Parameter | Role |
 |-----------|------|
-| `--method` | `ora` or `gsea` |
+| `--method` | `ora`, `gsea`, or `gsea_r` |
 | `--engine` | `auto`, `python`, or `r` |
 | `--gene-sets` | local GMT/JSON gene-set file |
 | `--gene-set-db` | built-in library key (`hallmark`, `kegg`, `go_bp`, `reactome`, …) |
