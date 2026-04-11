@@ -83,19 +83,24 @@ SKILL_VERSION = "0.1.0"
 SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-enrichment/sc_enrichment.py"
 
 # R Enhanced renderers for this skill.
-# Key   = renderer name registered in viz/r/registry.R R_PLOT_REGISTRY
-# Value = output filename (written to figures/r_enhanced/)
-R_ENHANCED_PLOTS: dict[str, str] = {
+# Shared renderers always run; GSEA-specific renderers only run for gsea method.
+_R_ENHANCED_SHARED: dict[str, str] = {
     "plot_enrichment_bar": "r_enrichment_bar.png",
+}
+_R_ENHANCED_GSEA: dict[str, str] = {
     "plot_gsea_mountain": "r_gsea_mountain.png",
     "plot_gsea_nes_heatmap": "r_gsea_nes_heatmap.png",
 }
+# Full dict kept for template compatibility
+R_ENHANCED_PLOTS: dict[str, str] = {**_R_ENHANCED_SHARED, **_R_ENHANCED_GSEA}
 
 
 def _render_r_enhanced(
     output_dir: Path,
     figure_data_dir: Path,
     r_enhanced: bool,
+    *,
+    method: str = "ora",
 ) -> list[str]:
     """Run R Enhanced rendering pass. Always called after Python figures are complete."""
     if not r_enhanced:
@@ -103,8 +108,11 @@ def _render_r_enhanced(
     from skills.singlecell._lib.viz.r import call_r_plot
     r_figures_dir = output_dir / "figures" / "r_enhanced"
     r_figures_dir.mkdir(parents=True, exist_ok=True)
+    plots = dict(_R_ENHANCED_SHARED)
+    if method == "gsea":
+        plots.update(_R_ENHANCED_GSEA)
     r_figure_paths: list[str] = []
-    for renderer, filename in R_ENHANCED_PLOTS.items():
+    for renderer, filename in plots.items():
         out_path = r_figures_dir / filename
         call_r_plot(renderer, figure_data_dir, out_path)
         if out_path.exists():
@@ -1284,6 +1292,7 @@ def main() -> None:
             output_dir=output_dir,
             figure_data_dir=output_dir / "figure_data",
             r_enhanced=args.r_enhanced,
+            method="gsva",
         )
         if r_enhanced_figures:
             result_data["r_enhanced_figures"] = r_enhanced_figures
@@ -1490,6 +1499,7 @@ def main() -> None:
         output_dir=output_dir,
         figure_data_dir=output_dir / "figure_data",
         r_enhanced=args.r_enhanced,
+        method=args.method,
     )
     if r_enhanced_figures:
         result_data["r_enhanced_figures"] = r_enhanced_figures
