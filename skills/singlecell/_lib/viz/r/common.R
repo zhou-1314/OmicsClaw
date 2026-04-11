@@ -12,6 +12,11 @@ suppressPackageStartupMessages({
 .HAS_VIRIDIS <- requireNamespace("viridis", quietly = TRUE)
 if (.HAS_VIRIDIS) suppressPackageStartupMessages(library(viridis))
 
+# ---- Null-coalescing operator ----
+if (!exists("%||%", mode = "function")) {
+  `%||%` <- function(a, b) if (!is.null(a)) a else b
+}
+
 # ---- Theme ----
 
 #' Clean publication theme for OmicsClaw R Enhanced plots.

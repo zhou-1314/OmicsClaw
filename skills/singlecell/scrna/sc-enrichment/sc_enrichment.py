@@ -86,6 +86,8 @@ SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-enrichment/sc_enrichment.py"
 # Shared renderers always run; GSEA-specific renderers only run for gsea method.
 _R_ENHANCED_SHARED: dict[str, str] = {
     "plot_enrichment_bar": "r_enrichment_bar.png",
+    "plot_enrichment_dotplot": "r_enrichment_dotplot.png",
+    "plot_enrichment_lollipop": "r_enrichment_lollipop.png",
 }
 _R_ENHANCED_GSEA: dict[str, str] = {
     "plot_gsea_mountain": "r_gsea_mountain.png",

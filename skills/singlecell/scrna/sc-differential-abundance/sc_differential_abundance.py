@@ -72,6 +72,7 @@ R_SCRIPTS_DIR = _PROJECT_ROOT / "omicsclaw" / "r_scripts"
 # Value = output filename (written to figures/r_enhanced/)
 R_ENHANCED_PLOTS: dict[str, str] = {
     "plot_embedding_discrete": "r_embedding_discrete.png",
+    "plot_cell_barplot": "r_cell_barplot.png",
 }
 
 
