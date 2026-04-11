@@ -1288,6 +1288,31 @@ def main() -> None:
         curves_df=curves_df,
     )
 
+    # Write gene_expression.csv for R DynamicPlot (top trajectory genes x all cells)
+    try:
+        import scipy.sparse as sp
+
+        top_genes_list = trajectory_genes.head(10)["gene"].tolist()
+        if top_genes_list and hasattr(working, "X"):
+            gene_idx = [i for i, g in enumerate(working.var_names) if g in top_genes_list]
+            if gene_idx:
+                X_sub = working.X[:, gene_idx]
+                if sp.issparse(X_sub):
+                    X_sub = X_sub.toarray()
+                gene_names = [working.var_names[i] for i in gene_idx]
+                gene_expr_rows = []
+                for ci, cell_id in enumerate(working.obs_names):
+                    for gi, gene_name in enumerate(gene_names):
+                        gene_expr_rows.append(
+                            {"cell_id": str(cell_id), "gene": gene_name, "expression": float(X_sub[ci, gi])}
+                        )
+                gene_expr_df = pd.DataFrame(gene_expr_rows)
+                gene_expr_path = output_dir / "figure_data" / "gene_expression.csv"
+                gene_expr_df.to_csv(gene_expr_path, index=False)
+                figure_data_files["gene_expression"] = "gene_expression.csv"
+    except Exception as _exc:
+        logger.warning("Could not write gene_expression.csv for R DynamicPlot: %s", _exc)
+
     propagate_singlecell_contracts(
         adata,
         working,
