@@ -67,6 +67,33 @@ SKILL_VERSION = "0.3.0"
 SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-differential-abundance/sc_differential_abundance.py"
 R_SCRIPTS_DIR = _PROJECT_ROOT / "omicsclaw" / "r_scripts"
 
+# R Enhanced renderers for this skill.
+# Key   = renderer name registered in viz/r/registry.R R_PLOT_REGISTRY
+# Value = output filename (written to figures/r_enhanced/)
+R_ENHANCED_PLOTS: dict[str, str] = {
+    "plot_embedding_discrete": "r_embedding_discrete.png",
+}
+
+
+def _render_r_enhanced(
+    output_dir: Path,
+    figure_data_dir: Path,
+    r_enhanced: bool,
+) -> list[str]:
+    """Run R Enhanced rendering pass. Always called after Python figures are complete."""
+    if not r_enhanced:
+        return []
+    from skills.singlecell._lib.viz.r import call_r_plot
+    r_figures_dir = output_dir / "figures" / "r_enhanced"
+    r_figures_dir.mkdir(parents=True, exist_ok=True)
+    r_figure_paths: list[str] = []
+    for renderer, filename in R_ENHANCED_PLOTS.items():
+        out_path = r_figures_dir / filename
+        call_r_plot(renderer, figure_data_dir, out_path)
+        if out_path.exists():
+            r_figure_paths.append(str(out_path))
+    return r_figure_paths
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -507,6 +534,10 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--n-neighbors", type=int, default=30)
     p.add_argument("--min-count", type=int, default=10)
     p.add_argument("--n-permutations", type=int, default=1000, help="Permutations for proportion_test_r")
+    p.add_argument(
+        "--r-enhanced", action="store_true",
+        help="Generate R Enhanced ggplot2 figures in addition to standard Python plots."
+    )
     return p.parse_args()
 
 
@@ -807,6 +838,15 @@ def main() -> int:
         script_path=Path(__file__).resolve(),
         actual_command=[sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]],
     )
+
+    # R Enhanced figures (only when --r-enhanced flag is set)
+    r_enhanced_figures = _render_r_enhanced(
+        output_dir=output_dir,
+        figure_data_dir=output_dir / "figure_data",
+        r_enhanced=args.r_enhanced,
+    )
+    if r_enhanced_figures:
+        result_data["r_enhanced_figures"] = r_enhanced_figures
 
     # ---- Final stdout summary ----
     print(f"\n{'='*60}")

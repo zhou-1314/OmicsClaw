@@ -72,6 +72,34 @@ SKILL_VERSION = "0.5.0"
 SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-pseudotime/sc_pseudotime.py"
 R_SCRIPTS_DIR = _PROJECT_ROOT / "omicsclaw" / "r_scripts"
 
+# R Enhanced renderers for this skill.
+# Key   = renderer name registered in viz/r/registry.R R_PLOT_REGISTRY
+# Value = output filename (written to figures/r_enhanced/)
+R_ENHANCED_PLOTS: dict[str, str] = {
+    "plot_pseudotime_lineage": "r_pseudotime_lineage.png",
+    "plot_pseudotime_dynamic": "r_pseudotime_dynamic.png",
+}
+
+
+def _render_r_enhanced(
+    output_dir: Path,
+    figure_data_dir: Path,
+    r_enhanced: bool,
+) -> list[str]:
+    """Run R Enhanced rendering pass. Always called after Python figures are complete."""
+    if not r_enhanced:
+        return []
+    from skills.singlecell._lib.viz.r import call_r_plot
+    r_figures_dir = output_dir / "figures" / "r_enhanced"
+    r_figures_dir.mkdir(parents=True, exist_ok=True)
+    r_figure_paths: list[str] = []
+    for renderer, filename in R_ENHANCED_PLOTS.items():
+        out_path = r_figures_dir / filename
+        call_r_plot(renderer, figure_data_dir, out_path)
+        if out_path.exists():
+            r_figure_paths.append(str(out_path))
+    return r_figure_paths
+
 METHOD_REGISTRY: dict[str, MethodConfig] = {
     "dpt": MethodConfig(
         name="dpt",
@@ -1053,6 +1081,10 @@ def main() -> None:
     parser.add_argument("--cellrank-schur-components", type=int, default=20)
     parser.add_argument("--cellrank-frac-to-keep", type=float, default=0.3)
     parser.add_argument("--cellrank-use-velocity", action="store_true")
+    parser.add_argument(
+        "--r-enhanced", action="store_true",
+        help="Generate R Enhanced ggplot2 figures in addition to standard Python plots."
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -1351,6 +1383,15 @@ def main() -> None:
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
     result_payload = load_result_json(output_dir) or {"skill": SKILL_NAME, "summary": summary, "data": result_data}
     write_standard_run_artifacts(output_dir, result_payload, summary)
+
+    # R Enhanced figures (only when --r-enhanced flag is set)
+    r_enhanced_figures = _render_r_enhanced(
+        output_dir=output_dir,
+        figure_data_dir=output_dir / "figure_data",
+        r_enhanced=args.r_enhanced,
+    )
+    if r_enhanced_figures:
+        result_data["r_enhanced_figures"] = r_enhanced_figures
 
     print(f"\n{'=' * 60}")
     print(f"Success: {SKILL_NAME} v{SKILL_VERSION}")

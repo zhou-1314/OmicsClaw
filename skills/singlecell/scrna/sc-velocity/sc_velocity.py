@@ -71,6 +71,33 @@ SKILL_NAME = "sc-velocity"
 SKILL_VERSION = "0.3.0"
 SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-velocity/sc_velocity.py"
 
+# R Enhanced renderers for this skill.
+# Key   = renderer name registered in viz/r/registry.R R_PLOT_REGISTRY
+# Value = output filename (written to figures/r_enhanced/)
+R_ENHANCED_PLOTS: dict[str, str] = {
+    "plot_velocity": "r_velocity.png",
+}
+
+
+def _render_r_enhanced(
+    output_dir: Path,
+    figure_data_dir: Path,
+    r_enhanced: bool,
+) -> list[str]:
+    """Run R Enhanced rendering pass. Always called after Python figures are complete."""
+    if not r_enhanced:
+        return []
+    from skills.singlecell._lib.viz.r import call_r_plot
+    r_figures_dir = output_dir / "figures" / "r_enhanced"
+    r_figures_dir.mkdir(parents=True, exist_ok=True)
+    r_figure_paths: list[str] = []
+    for renderer, filename in R_ENHANCED_PLOTS.items():
+        out_path = r_figures_dir / filename
+        call_r_plot(renderer, figure_data_dir, out_path)
+        if out_path.exists():
+            r_figure_paths.append(str(out_path))
+    return r_figure_paths
+
 # ---------------------------------------------------------------------------
 # Method registry
 # ---------------------------------------------------------------------------
@@ -628,6 +655,10 @@ def main():
         help="Velocity method; accepts full backend ids or shorthand modes such as 'dynamical'",
     )
     parser.add_argument("--n-jobs", type=int, default=4, help="Number of parallel jobs")
+    parser.add_argument(
+        "--r-enhanced", action="store_true",
+        help="Generate R Enhanced ggplot2 figures in addition to standard Python plots."
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -861,6 +892,16 @@ def main():
         script_path=Path(__file__).resolve(),
         actual_command=[sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]],
     )
+
+    # R Enhanced figures (only when --r-enhanced flag is set)
+    # NOTE: Must run BEFORE the os.killpg self-termination at module level.
+    r_enhanced_figures = _render_r_enhanced(
+        output_dir=output_dir,
+        figure_data_dir=output_dir / "figure_data",
+        r_enhanced=args.r_enhanced,
+    )
+    if r_enhanced_figures:
+        result_data["r_enhanced_figures"] = r_enhanced_figures
 
     # Summary
     print(f"\n{'='*60}")
