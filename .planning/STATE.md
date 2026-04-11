@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: R Enhanced Gallery
 status: executing
-stopped_at: Completed 18-03-PLAN.md (Group B second half + R-DEPENDENCIES.md)
-last_updated: "2026-04-11T10:09:09.233Z"
+stopped_at: Completed 18-01-PLAN.md (Wire --r-enhanced into 8 Group A skills)
+last_updated: "2026-04-11T10:11:44.790Z"
 last_activity: 2026-04-11 — Phase 15 Plan 03 complete (gsva_r method for sc-enrichment)
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 16
-  completed_plans: 13
-  percent: 81
+  completed_plans: 14
+  percent: 88
 ---
 
 # Project State
@@ -59,6 +59,7 @@ Progress: [██████████] 100%
 | Phase 17 P01 | 161 | 2 tasks | 2 files |
 | Phase 17 P02 | 215s | 2 tasks | 2 files |
 | Phase 18 P03 | 475 | 2 tasks | 7 files |
+| Phase 18 P01 | 608 | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -85,6 +86,7 @@ Progress: [██████████] 100%
 - [Phase 17]: Dual CSV schema detection as shared helper for DE renderers (scanpy vs pseudobulk)
 - [Phase 17]: Used ggplot2 geom_curve for CCC arc network instead of circlize (clean PNG, no fragile dep)
 - [Phase 18]: R_ENHANCED_PLOTS wiring complete for all 19 targeted skills (Plans 01-03)
+- [Phase 18]: R_ENHANCED_PLOTS dict + _render_r_enhanced() pattern applied to all 8 Group A skills; lazy import of call_r_plot
 
 ### Pending Todos
 
@@ -98,6 +100,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-11T10:09:09.228Z
-Stopped at: Completed 18-03-PLAN.md (Group B second half + R-DEPENDENCIES.md)
+Last session: 2026-04-11T10:11:44.785Z
+Stopped at: Completed 18-01-PLAN.md (Wire --r-enhanced into 8 Group A skills)
 Resume file: None
