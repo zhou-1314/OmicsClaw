@@ -678,7 +678,9 @@ def _run_gsea_r(adata, ranking_df: pd.DataFrame, output_dir: Path, params: dict)
     try:
         runner.run_script(
             r_script,
-            args=[str(de_csv), str(r_work_dir), species, db, score_type],
+            args=[str(de_csv), str(r_work_dir), species, db, score_type,
+                  str(params.get("gsea_min_size", 10)),
+                  str(params.get("gsea_max_size", 500))],
             expected_outputs=["gsea_r_results.csv"],
             output_dir=r_work_dir,
         )
@@ -773,7 +775,9 @@ def _run_gsva_r(adata, groupby: str, output_dir: Path, params: dict) -> tuple[pd
     try:
         runner.run_script(
             r_script,
-            args=[str(group_expr_csv), str(r_work_dir), species, db, gsva_method, groupby],
+            args=[str(group_expr_csv), str(r_work_dir), species, db, gsva_method, groupby,
+                  str(params.get("gsea_min_size", 5)),
+                  str(params.get("gsea_max_size", 500))],
             expected_outputs=["gsva_r_scores.csv"],
             output_dir=r_work_dir,
         )
