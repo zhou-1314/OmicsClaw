@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""Tests for sc-drug-response skill."""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from skills.singlecell.scrna.sc_drug_response import sc_drug_response as dr
+
+
+class TestDemoDataGeneration:
+    """Test synthetic demo data generation."""
+
+    def test_demo_data_shape(self):
+        adata = dr._generate_demo_data()
+        assert adata.n_obs == 500
+        assert adata.n_vars > 50
+        assert "cluster" in adata.obs.columns
+        assert adata.obs["cluster"].nunique() == 4
+
+    def test_demo_data_has_umap(self):
+        adata = dr._generate_demo_data()
+        assert "X_umap" in adata.obsm
+
+    def test_demo_data_has_counts_layer(self):
+        adata = dr._generate_demo_data()
+        assert "counts" in adata.layers
+
+    def test_demo_data_has_contracts(self):
+        adata = dr._generate_demo_data()
+        assert "omicsclaw_input_contract" in adata.uns
+        assert "omicsclaw_matrix_contract" in adata.uns
+
+
+class TestSimpleCorrelation:
+    """Test simple_correlation method."""
+
+    def test_produces_scores(self):
+        adata = dr._generate_demo_data()
+        scores = dr.run_simple_correlation(adata, "cluster", n_drugs=10)
+        assert not scores.empty
+        assert "Drug" in scores.columns
+        assert "Cluster" in scores.columns
+        assert "Score" in scores.columns
+        assert "Rank" in scores.columns
+
+    def test_scores_have_all_clusters(self):
+        adata = dr._generate_demo_data()
+        scores = dr.run_simple_correlation(adata, "cluster", n_drugs=10)
+        expected_clusters = set(adata.obs["cluster"].unique().astype(str))
+        actual_clusters = set(scores["Cluster"].unique())
+        assert actual_clusters == expected_clusters
+
+    def test_scores_are_numeric(self):
+        adata = dr._generate_demo_data()
+        scores = dr.run_simple_correlation(adata, "cluster", n_drugs=5)
+        assert scores["Score"].dtype in (np.float64, np.float32, float)
+        assert not scores["Score"].isna().any()
+
+    def test_ranks_are_correct(self):
+        adata = dr._generate_demo_data()
+        scores = dr.run_simple_correlation(adata, "cluster", n_drugs=10)
+        # Within each cluster, rank 1 should have the highest score
+        for cluster in scores["Cluster"].unique():
+            cluster_df = scores[scores["Cluster"] == cluster]
+            max_score_idx = cluster_df["Score"].idxmax()
+            assert cluster_df.loc[max_score_idx, "Rank"] == 1
+
+    def test_empty_when_no_gene_overlap(self):
+        """When no target genes are in the data, result should be empty."""
+        adata = dr._generate_demo_data()
+        # Replace all gene names with non-matching names
+        adata.var_names = [f"FAKE_GENE_{i}" for i in range(adata.n_vars)]
+        scores = dr.run_simple_correlation(adata, "cluster", n_drugs=10)
+        assert scores.empty
+
+
+class TestSpeciesDetection:
+    """Test species auto-detection."""
+
+    def test_detect_human(self):
+        genes = ["BRCA1", "TP53", "EGFR", "KRAS", "MYC"] * 100
+        assert dr._detect_species_hint(genes) == "human"
+
+    def test_detect_mouse(self):
+        genes = ["Brca1", "Tp53", "Egfr", "Kras", "Myc"] * 100
+        assert dr._detect_species_hint(genes) == "mouse"
+
+    def test_adapt_gene_case_mouse(self):
+        adapted = dr._adapt_gene_case(["BRCA1", "TP53"], "mouse")
+        assert adapted == ["Brca1", "Tp53"]
+
+    def test_adapt_gene_case_human(self):
+        adapted = dr._adapt_gene_case(["BRCA1", "TP53"], "human")
+        assert adapted == ["BRCA1", "TP53"]
+
+
+class TestDemoCadrresScores:
+    """Test synthetic CaDRReS score generation."""
+
+    def test_gdsc_scores(self):
+        adata = dr._generate_demo_data()
+        scores = dr._generate_demo_cadrres_scores(adata, "cluster", "gdsc", 10)
+        assert not scores.empty
+        assert "Drug" in scores.columns
+        assert "Score" in scores.columns
+        assert scores["Drug"].nunique() >= 10
+
+    def test_prism_scores(self):
+        adata = dr._generate_demo_data()
+        scores = dr._generate_demo_cadrres_scores(adata, "cluster", "prism", 10)
+        assert not scores.empty
+        assert all(d.startswith("BRD-") for d in scores["Drug"].unique())
+
+
+class TestPreflightCadrres:
+    """Test CaDRReS preflight checks."""
+
+    def test_missing_model_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError, match="Missing CaDRReS model"):
+            dr.preflight_cadrres(tmp_path, "gdsc")
+
+    def test_missing_model_shows_instructions(self, tmp_path):
+        with pytest.raises(FileNotFoundError, match="git clone"):
+            dr.preflight_cadrres(tmp_path, "gdsc")
+
+
+class TestPreflightData:
+    """Test data preflight checks."""
+
+    def test_missing_cluster_key_raises(self):
+        adata = dr._generate_demo_data()
+        with pytest.raises(ValueError, match="not found"):
+            dr.preflight_data(adata, "nonexistent_key")
+
+
+class TestVisualization:
+    """Test visualization functions."""
+
+    def test_bar_chart(self, tmp_path):
+        scores = pd.DataFrame({
+            "Drug": ["DrugA", "DrugA", "DrugB", "DrugB"],
+            "Cluster": ["0", "1", "0", "1"],
+            "Score": [0.5, 0.3, 0.8, 0.2],
+            "Rank": [2, 2, 1, 1],
+        })
+        path = dr.plot_top_drugs_bar(scores, tmp_path, n_drugs=5)
+        assert path is not None
+        assert path.exists()
+
+    def test_heatmap(self, tmp_path):
+        scores = pd.DataFrame({
+            "Drug": ["DrugA", "DrugA", "DrugB", "DrugB"],
+            "Cluster": ["0", "1", "0", "1"],
+            "Score": [0.5, 0.3, 0.8, 0.2],
+            "Rank": [2, 2, 1, 1],
+        })
+        path = dr.plot_drug_cluster_heatmap(scores, tmp_path)
+        assert path is not None
+        assert path.exists()
+
+    def test_empty_scores_no_crash(self, tmp_path):
+        empty = pd.DataFrame(columns=["Drug", "Cluster", "Score", "Rank"])
+        assert dr.plot_top_drugs_bar(empty, tmp_path) is None
+        assert dr.plot_drug_cluster_heatmap(empty, tmp_path) is None
+
+
+class TestEndToEnd:
+    """End-to-end test via CLI entry point."""
+
+    def test_demo_mode(self, tmp_path):
+        """Full demo run should succeed and produce all expected outputs."""
+        import subprocess
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(dr.__file__)),
+                "--demo",
+                "--output", str(tmp_path / "demo_out"),
+                "--method", "simple_correlation",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert result.returncode == 0, f"STDERR:\n{result.stderr}\nSTDOUT:\n{result.stdout}"
+        out_dir = tmp_path / "demo_out"
+        assert (out_dir / "processed.h5ad").exists()
+        assert (out_dir / "tables" / "drug_rankings.csv").exists()
+        assert (out_dir / "report.md").exists()
+        assert (out_dir / "result.json").exists()
+        assert (out_dir / "figures" / "top_drugs_bar.png").exists()
+        assert (out_dir / "figures" / "drug_cluster_heatmap.png").exists()
+
+        # Check result.json structure
+        with open(out_dir / "result.json") as f:
+            rj = json.load(f)
+        assert rj["skill"] == "sc-drug-response"
+        assert rj["summary"]["n_drugs_scored"] > 0

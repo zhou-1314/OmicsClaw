@@ -225,3 +225,8 @@ Sources for labeled references:
 - Use normalized expression for public annotation workflows.
 - If CellTypist falls back to `markers`, report both requested and executed methods.
 - If `singler` / `scmap` use celldex atlases, remember they may still fail in restricted-network or empty-cache environments even when R packages are installed.
+
+## Workflow Position
+
+**Upstream:** sc-clustering
+**Downstream:** sc-markers, sc-de, sc-cell-communication, sc-differential-abundance

@@ -92,6 +92,11 @@ METHOD_REGISTRY: dict[str, MethodConfig] = {
         description="Scanorama — panoramic stitching integration",
         dependencies=("scanorama",),
     ),
+    "simba": MethodConfig(
+        name="simba",
+        description="SIMBA — graph embedding batch integration via PBG",
+        dependencies=("simba",),
+    ),
 }
 
 DEFAULT_METHOD = "harmony"
@@ -102,6 +107,7 @@ METHOD_PARAM_DEFAULTS: dict[str, dict[str, object]] = {
     "scanvi": {"method": "scanvi", "batch_key": "batch", "n_epochs": 200, "no_gpu": False, "n_latent": 30, "labels_key": None},
     "bbknn": {"method": "bbknn", "batch_key": "batch", "bbknn_neighbors_within_batch": 3},
     "scanorama": {"method": "scanorama", "batch_key": "batch", "scanorama_knn": 20},
+    "simba": {"method": "simba", "batch_key": "batch", "simba_n_top_genes": 3000, "simba_n_components": 15, "simba_k": 15, "simba_num_workers": 4},
     "fastmnn": {"method": "fastmnn", "batch_key": "batch", "integration_features": 2000, "integration_pcs": 30},
     "seurat_cca": {"method": "seurat_cca", "batch_key": "batch", "integration_features": 2000, "integration_pcs": 30},
     "seurat_rpca": {"method": "seurat_rpca", "batch_key": "batch", "integration_features": 2000, "integration_pcs": 30},
@@ -112,6 +118,7 @@ METHOD_PARAM_KEYS: dict[str, tuple[str, ...]] = {
     "scanvi": ("n_epochs", "no_gpu", "n_latent", "labels_key"),
     "bbknn": ("bbknn_neighbors_within_batch",),
     "scanorama": ("scanorama_knn",),
+    "simba": ("simba_n_top_genes", "simba_n_components", "simba_k", "simba_num_workers"),
     "fastmnn": ("integration_features", "integration_pcs"),
     "seurat_cca": ("integration_features", "integration_pcs"),
     "seurat_rpca": ("integration_features", "integration_pcs"),
@@ -234,6 +241,116 @@ def integrate_bbknn(adata, batch_key="batch", **kwargs):
     return {"method": "bbknn", "embedding_key": "X_pca", "n_batches": int(adata.obs[batch_key].nunique())}
 
 
+def _check_simba_available() -> bool:
+    """Check if the simba package is importable."""
+    try:
+        import simba  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def integrate_simba(adata, batch_key="batch", **kwargs):
+    """SIMBA batch integration via graph embedding and PBG training.
+
+    SIMBA learns a unified graph representation across batches using
+    PyTorch-BigGraph (PBG) and produces a corrected low-dimensional
+    embedding in ``adata.obsm['X_simba']``.
+
+    Requires the ``simba`` Python package.
+    """
+    if not _check_simba_available():
+        raise ImportError(
+            "SIMBA integration requires the 'simba' package.\n"
+            "\n"
+            "How to install:\n"
+            "  Option 1: pip install simba\n"
+            "  Option 2: conda install -c bioconda simba\n"
+            "  Option 3 (from source): pip install git+https://github.com/huidongchen/simba\n"
+            "\n"
+            "You may also need: pip install git+https://github.com/pinellolab/simba_pbg\n"
+            "\n"
+            "If SIMBA has dependency conflicts with your environment, consider\n"
+            "using an alternative method:\n"
+            "  --method harmony  (lightweight, no extra deps)\n"
+            "  --method scanorama  (panoramic stitching)"
+        )
+
+    import simba as si
+
+    n_top_genes = int(kwargs.get("n_top_genes", 3000))
+    n_components = int(kwargs.get("n_components", 15))
+    k = int(kwargs.get("k", 15))
+    num_workers = int(kwargs.get("num_workers", 4))
+
+    logger.info("Running SIMBA integration on %d batches", adata.obs[batch_key].nunique())
+
+    # Ensure batch column is categorical
+    adata.obs[batch_key] = adata.obs[batch_key].astype("category")
+    batches = adata.obs[batch_key].cat.categories.tolist()
+
+    # Per-batch preprocessing
+    adata_dict = {}
+    for batch in batches:
+        batch_adata = adata[adata.obs[batch_key] == batch].copy()
+        si.pp.filter_genes(batch_adata, min_n_cells=3)
+        si.pp.cal_qc_rna(batch_adata)
+        si.pp.normalize(batch_adata, method="lib_size")
+        si.pp.log_transform(batch_adata)
+        si.pp.select_variable_genes(batch_adata, n_top_genes=n_top_genes)
+        si.tl.discretize(batch_adata, n_bins=5)
+        adata_dict[batch] = batch_adata
+
+    # Find largest batch as reference
+    batch_sizes = {b: adata_dict[b].n_obs for b in batches}
+    ref_batch = max(batch_sizes, key=batch_sizes.get)
+
+    # Infer inter-batch edges
+    edge_dict = {}
+    for batch in batches:
+        if batch == ref_batch:
+            continue
+        edge_dict[batch] = si.tl.infer_edges(
+            adata_dict[ref_batch], adata_dict[batch],
+            n_components=n_components, k=k,
+        )
+
+    # Generate graph
+    si.tl.gen_graph(
+        list_CG=[adata_dict[b] for b in batches],
+        list_CC=[edge_dict[b] for b in batches if b != ref_batch],
+        copy=False,
+        dirname="graph0",
+    )
+
+    # Train PBG model
+    dict_config = si.settings.pbg_params.copy()
+    dict_config["workers"] = num_workers
+    si.tl.pbg_train(pbg_params=dict_config, auto_wd=True, save_wd=True, output="model")
+
+    # Load and embed
+    si.load_graph_stats()
+    si.load_pbg_config()
+    dict_adata = si.read_embedding()
+
+    # Merge embeddings
+    dict_adata2 = {k: v for k, v in dict_adata.items() if k != "G"}
+    embed_sizes = {k: v.shape[0] for k, v in dict_adata2.items()}
+    max_label = max(embed_sizes, key=embed_sizes.get)
+    adata_ref = dict_adata2[max_label]
+    list_query = [v for k, v in dict_adata2.items() if k != max_label]
+    adata_all = si.tl.embed(adata_ref=adata_ref, list_adata_query=list_query, use_precomputed=False)
+
+    # Map embeddings back
+    cell_idx = [c for c in adata_all.obs.index if c in adata.obs.index]
+    adata = adata[cell_idx].copy()
+    adata.obsm["X_simba"] = adata_all[cell_idx].to_df().values
+
+    sc.pp.neighbors(adata, use_rep="X_simba")
+    sc.tl.umap(adata)
+    return {"method": "simba", "embedding_key": "X_simba", "n_batches": int(adata.obs[batch_key].nunique())}
+
+
 def integrate_scanorama(adata, batch_key="batch", **kwargs):
     import scanorama
 
@@ -324,6 +441,7 @@ _METHOD_DISPATCH = {
     "scanvi": integrate_scanvi,
     "bbknn": integrate_bbknn,
     "scanorama": integrate_scanorama,
+    "simba": integrate_simba,
 }
 
 
@@ -565,12 +683,22 @@ def _render_integration_metrics_barplot(_adata, spec: PlotSpec, context: dict) -
     if not records:
         return None
     plot_df = pd.DataFrame(records)
+    _metric_colors = {
+        "mean_ilisi": "#4c72b0",
+        "median_ilisi": "#55a868",
+        "batch_asw": "#c44e52",
+        "celltype_asw": "#8172b2",
+    }
+    bar_colors = [_metric_colors.get(m, "#4c72b0") for m in plot_df["metric"]]
     fig, ax = plt.subplots(figsize=(8, 4))
-    ax.bar(plot_df["metric"], plot_df["value"], color="#4c72b0")
-    ax.set_xlabel("Metric")
-    ax.set_ylabel("Value")
-    ax.set_title("Integration diagnostics")
-    plt.xticks(rotation=30, ha="right")
+    bars = ax.bar(plot_df["metric"], plot_df["value"], color=bar_colors, edgecolor="white", linewidth=0.8)
+    for bar, val in zip(bars, plot_df["value"]):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02,
+                f"{val:.3f}", ha="center", va="bottom", fontsize=10, fontweight="bold")
+    ax.set_xlabel("Metric", fontsize=11)
+    ax.set_ylabel("Value", fontsize=11)
+    ax.set_title("Integration diagnostics", fontsize=13, fontweight="bold")
+    plt.xticks(rotation=30, ha="right", fontsize=10)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     fig.tight_layout()
@@ -760,6 +888,10 @@ def main():
     parser.add_argument("--scanorama-knn", type=int, default=None)
     parser.add_argument("--integration-features", type=int, default=None)
     parser.add_argument("--integration-pcs", type=int, default=None)
+    parser.add_argument("--simba-n-top-genes", type=int, default=None)
+    parser.add_argument("--simba-n-components", type=int, default=None)
+    parser.add_argument("--simba-k", type=int, default=None)
+    parser.add_argument("--simba-num-workers", type=int, default=None)
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -816,6 +948,7 @@ def main():
             source_path=input_file,
         ),
         logger,
+        demo_mode=args.demo,
     )
     cfg = METHOD_REGISTRY[method]
     check_data_requirements(adata, cfg)
@@ -836,6 +969,11 @@ def main():
         kwargs["neighbors_within_batch"] = int(effective_params["bbknn_neighbors_within_batch"])
     if method == "scanorama":
         kwargs["knn"] = int(effective_params["scanorama_knn"])
+    if method == "simba":
+        kwargs["n_top_genes"] = int(effective_params["simba_n_top_genes"])
+        kwargs["n_components"] = int(effective_params["simba_n_components"])
+        kwargs["k"] = int(effective_params["simba_k"])
+        kwargs["num_workers"] = int(effective_params["simba_num_workers"])
 
     if method in {"fastmnn", "seurat_cca", "seurat_rpca"}:
         adata, summary = integrate_r_method(
@@ -897,6 +1035,10 @@ def main():
             "use_rep": summary.get("embedding_key"),
         },
     }
+    result_data["next_steps"] = [
+        {"skill": "sc-clustering", "reason": "Identify cell clusters on integrated embedding", "priority": "recommended"},
+    ]
+    result_data["preprocessing_state_after"] = "normalized"
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
     result_payload = load_result_json(output_dir) or {
         "skill": SKILL_NAME,
@@ -911,6 +1053,11 @@ def main():
         f"Integration complete: requested={summary['requested_method']}, "
         f"executed={summary['executed_method']} on {summary['n_batches']} batches"
     )
+
+    # --- Next-step guidance ---
+    print()
+    print("▶ Next step: Run sc-clustering on the integrated object")
+    print(f"  python omicsclaw.py run sc-clustering --input {output_dir}/processed.h5ad --output <dir>")
 
 
 if __name__ == "__main__":

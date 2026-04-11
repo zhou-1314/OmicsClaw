@@ -82,6 +82,11 @@ METHOD_REGISTRY: dict[str, MethodConfig] = {
         description="Scanpy/Seurat-style module scoring on normalized expression",
         dependencies=(),
     ),
+    "aucell_py": MethodConfig(
+        name="aucell_py",
+        description="Pure Python AUCell gene-set scoring (no R required)",
+        dependencies=(),
+    ),
 }
 
 METHOD_PARAM_DEFAULTS: dict[str, dict[str, object]] = {
@@ -98,11 +103,18 @@ METHOD_PARAM_DEFAULTS: dict[str, dict[str, object]] = {
         "score_genes_ctrl_size": 50,
         "score_genes_n_bins": 25,
     },
+    "aucell_py": {
+        "method": "aucell_py",
+        "groupby": None,
+        "top_pathways": 20,
+        "aucell_py_auc_threshold": 0.05,
+    },
 }
 
 METHOD_PARAM_KEYS: dict[str, tuple[str, ...]] = {
     "aucell_r": ("aucell_auc_max_rank",),
     "score_genes_py": ("score_genes_ctrl_size", "score_genes_n_bins"),
+    "aucell_py": ("aucell_py_auc_threshold",),
 }
 
 
@@ -446,6 +458,158 @@ def run_score_genes_py(
     return scores_df, skipped
 
 
+def _rank_genes_per_cell(X, seed: int = 42) -> "np.ndarray":
+    """Rank genes per cell in descending expression order (0 = highest).
+
+    Pure numpy/scipy implementation adapted from omicverse AUCell.
+    Returns an integer rank matrix of shape (n_cells, n_genes).
+    """
+    import numpy as np
+    from scipy.sparse import issparse
+
+    rng = np.random.default_rng(seed)
+    n_cells, n_genes = X.shape
+
+    # Shuffle columns to break ties randomly
+    shuffle_order = rng.permutation(n_genes)
+
+    rank_matrix = np.empty((n_cells, n_genes), dtype=np.int32)
+    for i in range(n_cells):
+        if issparse(X):
+            row = X.getrow(i).toarray().ravel()
+        else:
+            row = np.asarray(X[i]).ravel()
+        shuffled_row = row[shuffle_order]
+        # argsort descending: highest expression gets rank 0
+        sort_idx = np.argsort(-shuffled_row, kind="mergesort")
+        ranks = np.empty(n_genes, dtype=np.int32)
+        ranks[sort_idx] = np.arange(n_genes, dtype=np.int32)
+        rank_matrix[i, shuffle_order] = ranks
+
+    return rank_matrix
+
+
+def _compute_auc_for_gene_set(
+    rank_matrix: "np.ndarray",
+    gene_indices: list[int],
+    auc_threshold: float,
+    n_genes: int,
+) -> "np.ndarray":
+    """Compute AUC of recovery curve for a single gene set across all cells.
+
+    For each cell, the recovery curve is built by walking through the ranked
+    gene list and accumulating hits from the gene set. The AUC is computed
+    up to the rank cutoff determined by auc_threshold.
+
+    Returns a 1D array of AUC values (one per cell).
+    """
+    import numpy as np
+
+    n_cells = rank_matrix.shape[0]
+    rank_cutoff = max(1, round(auc_threshold * n_genes))
+
+    # Maximum possible AUC (all gene-set genes ranked at top)
+    n_set = len(gene_indices)
+    if n_set == 0:
+        return np.zeros(n_cells, dtype=np.float64)
+
+    # For each cell, count how many gene-set genes have rank < rank_cutoff
+    # and compute recovery AUC
+    aucs = np.empty(n_cells, dtype=np.float64)
+    for cell_idx in range(n_cells):
+        # Get ranks of gene-set genes in this cell
+        gene_ranks = rank_matrix[cell_idx, gene_indices]
+        # Only consider genes within the rank cutoff
+        hits_within_cutoff = gene_ranks[gene_ranks < rank_cutoff]
+
+        if len(hits_within_cutoff) == 0:
+            aucs[cell_idx] = 0.0
+            continue
+
+        # Build recovery curve: at each position in the ranking,
+        # how many gene-set genes have been recovered
+        recovery = np.zeros(rank_cutoff, dtype=np.float64)
+        for rank in hits_within_cutoff:
+            recovery[rank] += 1.0
+        recovery = np.cumsum(recovery)
+
+        # Normalize by number of gene-set genes
+        recovery = recovery / n_set
+
+        # AUC = sum of recovery values / rank_cutoff (normalize to [0,1])
+        aucs[cell_idx] = float(np.sum(recovery)) / rank_cutoff
+
+    return aucs
+
+
+def run_aucell_py(
+    adata,
+    *,
+    gene_sets: dict[str, list[str]],
+    feature_label_mapping: dict[str, str],
+    auc_threshold: float = 0.05,
+) -> tuple[pd.DataFrame, list[str]]:
+    """Pure Python AUCell implementation.
+
+    Adapted from omicverse's AUCell. Ranks genes per cell by expression,
+    then computes recovery curve AUC for each gene set.
+
+    Parameters
+    ----------
+    adata
+        AnnData with expression data.
+    gene_sets
+        Dict mapping gene-set name -> list of gene labels.
+    feature_label_mapping
+        Dict mapping gene label -> feature ID in adata.var_names.
+    auc_threshold
+        Fraction of ranked genome for AUC calculation (default 0.05).
+
+    Returns
+    -------
+    tuple[pd.DataFrame, list[str]]
+        Scores DataFrame (cells x gene_sets) and list of skipped gene sets.
+    """
+    import numpy as np
+
+    X = adata.X
+    n_cells, n_genes = X.shape
+
+    logger.info("AUCell (Python): ranking %d genes across %d cells ...", n_genes, n_cells)
+    rank_matrix = _rank_genes_per_cell(X, seed=42)
+
+    # Build feature-name-to-index mapping
+    var_names = list(adata.var_names.astype(str))
+    var_to_idx = {name: idx for idx, name in enumerate(var_names)}
+
+    scores_df = pd.DataFrame(index=adata.obs_names.astype(str))
+    skipped: list[str] = []
+
+    for gene_set_name, members in gene_sets.items():
+        # Map gene labels to feature indices
+        matched_ids = [feature_label_mapping[gene] for gene in members if gene in feature_label_mapping]
+        gene_indices = [var_to_idx[fid] for fid in matched_ids if fid in var_to_idx]
+
+        if not gene_indices:
+            skipped.append(gene_set_name)
+            continue
+
+        aucs = _compute_auc_for_gene_set(rank_matrix, gene_indices, auc_threshold, n_genes)
+        scores_df[gene_set_name] = aucs
+
+    if scores_df.empty:
+        raise ValueError(
+            "No gene sets had any overlap with the input features. "
+            "AUCell (Python) cannot compute scores."
+        )
+
+    logger.info(
+        "AUCell (Python): scored %d gene sets (%d skipped).",
+        scores_df.shape[1], len(skipped),
+    )
+    return scores_df, skipped
+
+
 def attach_scores_to_adata(adata, scores_df: pd.DataFrame, *, method: str) -> list[str]:
     aligned = scores_df.reindex(adata.obs_names.astype(str))
     if aligned.isna().all().all():
@@ -654,6 +818,9 @@ def main() -> None:
     parser.add_argument("--aucell-auc-max-rank", type=int, default=None)
     parser.add_argument("--score-genes-ctrl-size", type=int, default=50)
     parser.add_argument("--score-genes-n-bins", type=int, default=25)
+    # AUCell Python-specific
+    parser.add_argument("--aucell-py-auc-threshold", type=float, default=0.05,
+                        help="AUCell (Python) fraction of ranked genome for AUC (default 0.05)")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -727,13 +894,17 @@ def main() -> None:
         "gene_set_db": args.gene_set_db,
         "species": args.species,
     }
-    method_params = {
+    method_params_map = {
         "aucell_r": {"aucell_auc_max_rank": args.aucell_auc_max_rank},
         "score_genes_py": {
             "score_genes_ctrl_size": args.score_genes_ctrl_size,
             "score_genes_n_bins": args.score_genes_n_bins,
         },
-    }[method]
+        "aucell_py": {
+            "aucell_py_auc_threshold": args.aucell_py_auc_threshold,
+        },
+    }
+    method_params = method_params_map[method]
     params = dict(METHOD_PARAM_DEFAULTS[method])
     params.update(shared_params)
     params.update(method_params)
@@ -747,6 +918,14 @@ def main() -> None:
             feature_labels=feature_labels,
             auc_max_rank=args.aucell_auc_max_rank,
         )
+    elif method == "aucell_py":
+        scores_df, skipped_gene_sets = run_aucell_py(
+            adata,
+            gene_sets=gene_sets,
+            feature_label_mapping=feature_label_mapping,
+            auc_threshold=args.aucell_py_auc_threshold,
+        )
+        expression_source = "adata.X"
     else:
         scores_df, skipped_gene_sets = run_score_genes_py(
             adata,
@@ -839,6 +1018,7 @@ def main() -> None:
         }
     }
     result_data = {"params": params}
+    result_data["next_steps"] = []
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary_json, result_data, checksum)
     result_payload = load_result_json(output_dir) or {
         "skill": SKILL_NAME,
@@ -850,6 +1030,11 @@ def main() -> None:
     print(f"Success: {SKILL_NAME}")
     print(f"  Output: {output_dir}")
     print(f"  Gene sets scored: {summary['n_gene_sets']}")
+
+    # --- Next-step guidance ---
+    print()
+    print("▶ Analysis complete. Consider sc-de to compare scores between groups:")
+    print(f"  python omicsclaw.py run sc-de --input {output_dir}/processed.h5ad --output <dir>")
 
 
 if __name__ == "__main__":

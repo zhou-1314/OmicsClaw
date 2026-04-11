@@ -81,7 +81,28 @@ Main tuning knobs:
 - `--use-rep`: which embedding in `adata.obsm` should drive the neighbor graph
 - `--n-neighbors`: local neighborhood size
 - `--n-pcs`: number of PCA dimensions when the neighbor graph is built from `X_pca`
-- `--resolution`: cluster granularity
+- `--resolution`: cluster granularity (numeric value or `auto`)
+
+## Auto Resolution Selection
+
+When `--resolution auto` is specified, the skill automatically searches for the
+optimal clustering resolution using bootstrap subsampling and silhouette scoring:
+
+1. Candidate resolutions (0.4, 0.6, 0.8, 1.0, 1.2, 1.4) are evaluated.
+2. For each resolution, the data is subsampled 5 times (80% of cells each).
+3. Each subsample is clustered, and a co-clustering distance matrix is built.
+4. The silhouette score of the full-data clustering against the co-clustering
+   distances is computed.
+5. The resolution with the highest silhouette score is selected.
+
+The search results (resolution vs silhouette score) are saved as
+`figures/auto_resolution_search.png` and in `result.json` under the
+`auto_resolution` key.
+
+**Example:**
+```bash
+python omicsclaw.py run sc-clustering --demo --resolution auto --output /tmp/clustering_auto
+```
 
 Method-specific parameters:
 - `umap`: `--umap-min-dist`, `--umap-spread`
@@ -101,3 +122,8 @@ Standard output:
 - `figure_data/`
 - `report.md`
 - `result.json`
+
+## Workflow Position
+
+**Upstream:** sc-preprocessing (single batch) or sc-batch-integration (multi-batch)
+**Downstream:** sc-cell-annotation, sc-markers, sc-pseudotime, sc-velocity-prep, sc-cell-communication, sc-grn

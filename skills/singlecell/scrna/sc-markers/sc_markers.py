@@ -63,6 +63,7 @@ METHOD_REGISTRY: dict[str, MethodConfig] = {
     'wilcoxon': MethodConfig(name='wilcoxon', description='Wilcoxon rank-sum cluster marker ranking', dependencies=('scanpy',)),
     't-test': MethodConfig(name='t-test', description="Welch's t-test cluster marker ranking", dependencies=('scanpy',)),
     'logreg': MethodConfig(name='logreg', description='Logistic-regression marker ranking', dependencies=('scanpy',)),
+    'cosg': MethodConfig(name='cosg', description='COSG cosine-similarity specificity scoring (no p-values, fast)', dependencies=('scanpy', 'sklearn')),
 }
 
 
@@ -285,6 +286,8 @@ def main():
     parser.add_argument('--min-in-group-fraction', type=float, default=0.25)
     parser.add_argument('--min-fold-change', type=float, default=0.25)
     parser.add_argument('--max-out-group-fraction', type=float, default=0.5)
+    # COSG-specific parameters
+    parser.add_argument('--mu', type=float, default=1.0, help='COSG specificity penalty (0-1, default 1)')
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -316,16 +319,25 @@ def main():
     )
 
     resolved_groupby = _resolve_groupby(adata, args.groupby)
-    markers = sc_markers_utils.find_all_cluster_markers(
-        adata,
-        cluster_key=resolved_groupby,
-        method=method,
-        n_genes=args.n_genes,
-        min_in_group_fraction=args.min_in_group_fraction,
-        min_fold_change=args.min_fold_change,
-        max_out_group_fraction=args.max_out_group_fraction,
-        use_raw=False,
-    )
+    if method == 'cosg':
+        markers = sc_markers_utils.find_cosg_markers(
+            adata,
+            cluster_key=resolved_groupby,
+            n_genes=args.n_genes if args.n_genes is not None else 50,
+            mu=args.mu,
+            use_raw=False,
+        )
+    else:
+        markers = sc_markers_utils.find_all_cluster_markers(
+            adata,
+            cluster_key=resolved_groupby,
+            method=method,
+            n_genes=args.n_genes,
+            min_in_group_fraction=args.min_in_group_fraction,
+            min_fold_change=args.min_fold_change,
+            max_out_group_fraction=args.max_out_group_fraction,
+            use_raw=False,
+        )
 
     cluster_summary_df, top_markers_df = _build_cluster_summary(markers, n_top=args.n_top)
     summary = {
@@ -343,6 +355,7 @@ def main():
         'min_fold_change': args.min_fold_change,
         'max_out_group_fraction': args.max_out_group_fraction,
         'expression_source': 'adata.X',
+        'mu': args.mu if method == 'cosg' else None,
     }
 
     generate_marker_figures(adata, markers, output_dir, groupby=resolved_groupby, n_top=args.n_top, cluster_summary_df=cluster_summary_df)
@@ -379,6 +392,10 @@ def main():
         'matrix_contract': matrix_contract,
         'visualization': {'available_figure_data': figure_data_files},
     }
+    result_data["next_steps"] = [
+        {"skill": "sc-de", "reason": "Perform detailed differential expression analysis", "priority": "optional"},
+        {"skill": "sc-enrichment", "reason": "Pathway enrichment analysis on marker genes", "priority": "optional"},
+    ]
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
     result_payload = load_result_json(output_dir) or {'skill': SKILL_NAME, 'summary': summary, 'data': result_data}
     write_standard_run_artifacts(output_dir, result_payload, summary)
@@ -386,6 +403,12 @@ def main():
     print(f"Success: {SKILL_NAME}")
     print(f"  Output: {output_dir}")
     print(f"Marker discovery complete: {summary['n_markers']} rows across {summary['n_clusters']} groups using {method}")
+
+    # --- Next-step guidance ---
+    print()
+    print("▶ Next steps:")
+    print(f"  • sc-de:         python omicsclaw.py run sc-de --input {output_dir}/processed.h5ad --output <dir>")
+    print(f"  • sc-enrichment: python omicsclaw.py run sc-enrichment --input {output_dir}/processed.h5ad --output <dir>")
 
 
 if __name__ == '__main__':

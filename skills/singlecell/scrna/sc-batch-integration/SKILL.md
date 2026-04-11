@@ -128,6 +128,10 @@ Actively implemented methods in this wrapper:
 4. `bbknn`
 5. `scanorama`
 
+Graph-embedding methods (require additional packages):
+
+1. `simba` — SIMBA graph-embedding integration via PBG (requires `simba` package)
+
 R-backed methods (require corresponding R packages):
 
 1. `fastmnn`
@@ -185,6 +189,10 @@ python skills/singlecell/scrna/sc-batch-integration/sc_integrate.py \
 | `--scanorama-knn` | panorama neighbor count | used by `scanorama` |
 | `--integration-features` | integration features | used by `fastmnn`, `seurat_cca`, `seurat_rpca` |
 | `--integration-pcs` | integration PCs | used by `harmony`, `fastmnn`, `seurat_cca`, `seurat_rpca` |
+| `--simba-n-top-genes` | variable genes per batch | used by `simba` (default 3000) |
+| `--simba-n-components` | components for edge inference | used by `simba` (default 15) |
+| `--simba-k` | neighbors for edge inference | used by `simba` (default 15) |
+| `--simba-num-workers` | PBG training workers | used by `simba` (default 4) |
 
 ## Algorithm / Methodology
 
@@ -253,3 +261,8 @@ The current standard Python gallery is recipe-based and uses:
 
 - `fastmnn`, `seurat_cca`, and `seurat_rpca` require a working R environment with batchelor or Seurat plus the H5AD bridge packages.
 - This skill writes `README.md` and notebook-style reproducibility artifacts when notebook export dependencies are available.
+
+## Workflow Position
+
+**Upstream:** sc-preprocessing (when multiple batches are present)
+**Downstream:** sc-clustering

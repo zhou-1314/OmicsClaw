@@ -154,6 +154,11 @@ METHOD_REGISTRY: dict[str, MethodConfig] = {
         description="scmap cluster projection (R)",
         dependencies=(),
     ),
+    "scsa": MethodConfig(
+        name="scsa",
+        description="SCSA marker-database annotation via Fisher exact test scoring",
+        dependencies=("scanpy",),
+    ),
 }
 
 SUPPORTED_METHODS = tuple(METHOD_REGISTRY.keys())
@@ -713,6 +718,315 @@ def annotate_scmap(adata, reference: str = "HPCA"):
     return summary
 
 
+def annotate_scsa(
+    adata,
+    cluster_key: str = "leiden",
+    species: str = "Human",
+    tissue: str = "All",
+    foldchange: float = 1.5,
+    pvalue: float = 0.05,
+):
+    """SCSA-style annotation: marker DE -> CellMarker database Fisher exact test scoring.
+
+    Adapted from pySCSA (Cao et al.). Runs Wilcoxon DE per cluster, then scores
+    each cluster against the CellMarker database using Fisher's exact test and
+    Z-score ranking.
+    """
+    from scipy.stats import fisher_exact
+
+    if cluster_key not in adata.obs.columns:
+        raise ValueError(
+            f"SCSA requires a cluster column. '{cluster_key}' not found in adata.obs."
+        )
+
+    # ---- 1. Run Wilcoxon DE to get markers per cluster ----
+    logger.info("SCSA: running Wilcoxon DE for cluster markers (key=%s)", cluster_key)
+    sc.tl.rank_genes_groups(adata, cluster_key, method="wilcoxon", use_raw=False)
+    result = adata.uns["rank_genes_groups"]
+    groups = result["names"].dtype.names
+
+    # Extract significant markers per cluster
+    cluster_markers: dict[str, list[str]] = {}
+    for group in groups:
+        names = result["names"][group]
+        logfcs = result["logfoldchanges"][group]
+        pvals = result["pvals_adj"][group]
+        sig_genes = []
+        for name, lfc, pval in zip(names, logfcs, pvals):
+            if abs(float(lfc)) >= foldchange and float(pval) <= pvalue:
+                sig_genes.append(str(name))
+        cluster_markers[str(group)] = sig_genes
+
+    # ---- 2. Load or build CellMarker database ----
+    cellmarker_db = _load_scsa_cellmarker_db(species=species, tissue=tissue)
+    if not cellmarker_db:
+        logger.error(
+            "SCSA: CellMarker database is empty for species=%s, tissue=%s. "
+            "This means no cell type entries matched. Try:\n"
+            "  1. --species Human or --species Mouse\n"
+            "  2. --tissue All (to search all tissues)\n"
+            "  3. --method markers (with custom --marker-file)\n",
+            species, tissue,
+        )
+        # Fall back to Unknown
+        adata.obs["cell_type"] = "Unknown"
+        adata.obs["annotation_score"] = 0.0
+        _record_annotation_execution(adata, requested_method="scsa", actual_method="scsa")
+        return _annotation_summary(adata, requested_method="scsa", actual_method="scsa")
+
+    # ---- 3. Score each cluster using Fisher exact test ----
+    all_detected_genes = set(adata.var_names)
+    n_total_genes = len(all_detected_genes)
+
+    cluster_annotations: dict[str, str] = {}
+    cluster_scores: dict[str, float] = {}
+
+    for cluster_id, sig_genes in cluster_markers.items():
+        sig_set = set(sig_genes) & all_detected_genes
+        if not sig_set:
+            cluster_annotations[cluster_id] = "Unknown"
+            cluster_scores[cluster_id] = 0.0
+            continue
+
+        best_type = "Unknown"
+        best_zscore = -np.inf
+        n_sig = len(sig_set)
+
+        for cell_type, db_genes in cellmarker_db.items():
+            db_set = set(db_genes) & all_detected_genes
+            if not db_set:
+                continue
+
+            # Overlap between cluster markers and cell-type markers
+            overlap = sig_set & db_set
+            n_overlap = len(overlap)
+            if n_overlap == 0:
+                continue
+
+            # Fisher exact test (one-sided, greater)
+            n_db = len(db_set)
+            contingency = [
+                [n_overlap, n_sig - n_overlap],
+                [n_db - n_overlap, n_total_genes - n_sig - n_db + n_overlap],
+            ]
+            # Ensure no negative values
+            contingency = [[max(0, x) for x in row] for row in contingency]
+            try:
+                _, p_val = fisher_exact(contingency, alternative="greater")
+            except Exception:
+                continue
+
+            # Convert to Z-score-like measure: -log10(p) * sign(enrichment)
+            zscore = -np.log10(max(p_val, 1e-300)) * (n_overlap / max(n_sig, 1))
+
+            if zscore > best_zscore:
+                best_zscore = zscore
+                best_type = cell_type
+
+        cluster_annotations[cluster_id] = best_type
+        cluster_scores[cluster_id] = float(best_zscore) if best_zscore > -np.inf else 0.0
+
+    # ---- 4. Apply annotations ----
+    adata.obs["cell_type"] = adata.obs[cluster_key].astype(str).map(cluster_annotations)
+    adata.obs["annotation_score"] = adata.obs[cluster_key].astype(str).map(cluster_scores).astype(float)
+    _record_annotation_execution(adata, requested_method="scsa", actual_method="scsa")
+
+    # ---- 5. Detect degenerate output ----
+    unknown_clusters = [c for c, t in cluster_annotations.items() if t == "Unknown"]
+    if len(unknown_clusters) == len(cluster_annotations):
+        logger.error(
+            "  *** ALL %d clusters were labeled 'Unknown' by SCSA. ***\n"
+            "  This usually means no marker genes overlapped with the CellMarker database.\n"
+            "  How to fix:\n"
+            "    Option 1 -- Adjust DE thresholds:\n"
+            "      --scsa-foldchange 1.0 --scsa-pvalue 0.1\n"
+            "    Option 2 -- Widen tissue filter:\n"
+            "      --tissue All --species Human\n"
+            "    Option 3 -- Use a different method:\n"
+            "      --method markers --marker-file custom_markers.json\n"
+            "      --method celltypist --model <model>.pkl",
+            len(cluster_annotations),
+        )
+    elif unknown_clusters:
+        logger.warning(
+            "SCSA: %d/%d clusters annotated as 'Unknown' (clusters: %s).",
+            len(unknown_clusters), len(cluster_annotations),
+            ", ".join(unknown_clusters[:10]),
+        )
+
+    logger.info(
+        "SCSA: annotated %d clusters (%d cell types, %d Unknown). "
+        "Species=%s, tissue=%s.",
+        len(cluster_annotations),
+        len(set(cluster_annotations.values()) - {"Unknown"}),
+        len(unknown_clusters),
+        species, tissue,
+    )
+    return _annotation_summary(
+        adata,
+        requested_method="scsa",
+        actual_method="scsa",
+        expression_source="adata.X",
+    )
+
+
+def _load_scsa_cellmarker_db(
+    species: str = "Human",
+    tissue: str = "All",
+) -> dict[str, list[str]]:
+    """Load a CellMarker-style database for SCSA annotation.
+
+    Downloads and caches CellMarker2.0 data, then filters by species/tissue.
+    Returns dict mapping cell_type -> list of marker gene symbols.
+    """
+    cache_dir = Path.home() / ".cache" / "omicsclaw" / "scsa"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    db_path = cache_dir / "cellmarker2_markers.csv"
+
+    if not db_path.exists():
+        logger.info("SCSA: downloading CellMarker 2.0 database...")
+        try:
+            _download_cellmarker_db(db_path)
+        except Exception as exc:
+            logger.warning("Failed to download CellMarker database: %s", exc)
+            logger.info("SCSA: falling back to built-in compact marker database.")
+            return _builtin_scsa_markers(species)
+
+    # Parse the database
+    try:
+        db_df = pd.read_csv(db_path, sep=",", encoding="utf-8", on_bad_lines="skip")
+    except Exception:
+        try:
+            db_df = pd.read_csv(db_path, sep="\t", encoding="utf-8", on_bad_lines="skip")
+        except Exception as exc:
+            logger.warning("Failed to parse CellMarker database: %s", exc)
+            return _builtin_scsa_markers(species)
+
+    # Detect column names (CellMarker 2.0 format)
+    species_col = None
+    tissue_col = None
+    celltype_col = None
+    marker_col = None
+
+    for col in db_df.columns:
+        col_lower = col.lower().strip()
+        if "species" in col_lower or "specie" in col_lower:
+            species_col = col
+        elif "tissue" in col_lower and "sub" not in col_lower:
+            tissue_col = col
+        elif "cell_name" in col_lower or "cell_type" in col_lower or col_lower == "cellname" or "cell name" in col_lower:
+            celltype_col = col
+        elif "marker" in col_lower or "symbol" in col_lower or "gene" in col_lower:
+            marker_col = col
+
+    if not celltype_col or not marker_col:
+        logger.warning(
+            "SCSA: CellMarker CSV columns not recognized (%s). Using built-in markers.",
+            list(db_df.columns),
+        )
+        return _builtin_scsa_markers(species)
+
+    # Filter by species
+    if species_col:
+        species_norm = species.strip().lower()
+        db_df = db_df[db_df[species_col].astype(str).str.lower().str.contains(species_norm, na=False)]
+
+    # Filter by tissue
+    if tissue_col and tissue.lower() != "all":
+        tissue_norm = tissue.strip().lower()
+        db_df = db_df[db_df[tissue_col].astype(str).str.lower().str.contains(tissue_norm, na=False)]
+
+    # Build marker dict
+    result: dict[str, list[str]] = {}
+    for _, row in db_df.iterrows():
+        ct = str(row[celltype_col]).strip()
+        markers_raw = str(row[marker_col]).strip()
+        if not ct or ct == "nan" or not markers_raw or markers_raw == "nan":
+            continue
+        # Markers can be comma-separated, semicolon-separated, or space-separated
+        genes = [g.strip() for g in markers_raw.replace(";", ",").replace("/", ",").split(",") if g.strip()]
+        if ct in result:
+            result[ct].extend(genes)
+        else:
+            result[ct] = genes
+
+    # Deduplicate
+    for ct in result:
+        result[ct] = list(set(result[ct]))
+
+    logger.info("SCSA: loaded %d cell types from CellMarker database.", len(result))
+    return result
+
+
+def _download_cellmarker_db(db_path: Path) -> None:
+    """Download CellMarker 2.0 database."""
+    import urllib.request
+
+    urls = [
+        "http://bio-bigdata.hrbmu.edu.cn/CellMarker/CellMarker_download_files/file/Cell_marker_All.csv",
+        "http://117.50.127.228/CellMarker/CellMarker_download_files/file/Cell_marker_All.csv",
+    ]
+
+    for url in urls:
+        try:
+            logger.info("  Trying %s ...", url)
+            urllib.request.urlretrieve(url, str(db_path))
+            if db_path.exists() and db_path.stat().st_size > 1000:
+                logger.info("  Download successful: %s (%d bytes)", db_path, db_path.stat().st_size)
+                return
+        except Exception as exc:
+            logger.warning("  Failed: %s", exc)
+            continue
+
+    raise RuntimeError(
+        "Could not download CellMarker database from any URL.\n"
+        "  Please download manually from http://bio-bigdata.hrbmu.edu.cn/CellMarker/\n"
+        "  and place it at: %s" % db_path
+    )
+
+
+def _builtin_scsa_markers(species: str = "Human") -> dict[str, list[str]]:
+    """Compact built-in markers as fallback when CellMarker DB is unavailable."""
+    if species.lower() in ("mouse", "mm", "mus musculus"):
+        # Mouse markers in Title case
+        return {
+            "T cell": ["Cd3d", "Cd3e", "Cd3g"],
+            "B cell": ["Cd79a", "Cd79b", "Ms4a1", "Cd19"],
+            "NK cell": ["Nkg7", "Klrb1c", "Gzma"],
+            "Monocyte": ["Cd14", "Lyz2", "Csf1r"],
+            "Macrophage": ["Cd68", "Adgre1", "Mrc1"],
+            "Dendritic cell": ["Itgax", "Flt3", "H2-Aa"],
+            "Neutrophil": ["S100a8", "S100a9", "Ly6g"],
+            "Epithelial": ["Epcam", "Krt18", "Krt19"],
+            "Fibroblast": ["Col1a1", "Col1a2", "Dcn"],
+            "Endothelial": ["Pecam1", "Cdh5", "Vwf"],
+        }
+    # Human markers (UPPER)
+    return {
+        "T cell": ["CD3D", "CD3E", "CD3G", "CD2"],
+        "CD4+ T cell": ["CD3D", "CD4", "IL7R"],
+        "CD8+ T cell": ["CD3D", "CD8A", "CD8B"],
+        "B cell": ["CD79A", "CD79B", "MS4A1", "CD19"],
+        "Plasma cell": ["MZB1", "SDC1", "IGHA1", "JCHAIN"],
+        "NK cell": ["GNLY", "NKG7", "KLRD1", "NCAM1"],
+        "CD14+ Monocyte": ["CD14", "LYZ", "S100A9", "S100A8"],
+        "CD16+ Monocyte": ["FCGR3A", "MS4A7"],
+        "Macrophage": ["CD68", "CD163", "MRC1"],
+        "Dendritic cell": ["FCER1A", "CD1C", "CLEC10A"],
+        "Mast cell": ["KIT", "TPSAB1", "TPSB2"],
+        "Platelet": ["PPBP", "PF4"],
+        "Neutrophil": ["S100A8", "S100A9", "FCGR3B", "CSF3R"],
+        "Epithelial": ["EPCAM", "KRT18", "KRT19"],
+        "Fibroblast": ["COL1A1", "COL1A2", "DCN", "LUM"],
+        "Endothelial": ["PECAM1", "VWF", "CDH5"],
+        "Smooth muscle cell": ["ACTA2", "TAGLN", "MYH11"],
+        "Neuron": ["SNAP25", "SYT1", "RBFOX3"],
+        "Astrocyte": ["AQP4", "GFAP", "SLC1A3"],
+        "Oligodendrocyte": ["MBP", "PLP1", "MOG"],
+        "Microglia": ["CX3CR1", "P2RY12", "CSF1R"],
+    }
+
+
 _METHOD_DISPATCH = {
     "manual": lambda adata, args: annotate_manual(
         adata,
@@ -726,6 +1040,14 @@ _METHOD_DISPATCH = {
     "knnpredict": lambda adata, args: annotate_knnpredict(adata, args.reference, cluster_key=args.cluster_key),
     "singler": lambda adata, args: annotate_singler(adata, args.reference),
     "scmap": lambda adata, args: annotate_scmap(adata, args.reference),
+    "scsa": lambda adata, args: annotate_scsa(
+        adata,
+        cluster_key=args.cluster_key,
+        species=getattr(args, "species", "Human"),
+        tissue=getattr(args, "tissue", "All"),
+        foldchange=getattr(args, "scsa_foldchange", 1.5),
+        pvalue=getattr(args, "scsa_pvalue", 0.05),
+    ),
 }
 
 
@@ -1181,6 +1503,11 @@ def main():
         default=False,
         help="Enable CellTypist majority voting when running the celltypist backend",
     )
+    # SCSA-specific parameters
+    parser.add_argument("--species", default="Human", help="SCSA species (Human/Mouse)")
+    parser.add_argument("--tissue", default="All", help="SCSA tissue filter (e.g. Blood, Brain, All)")
+    parser.add_argument("--scsa-foldchange", type=float, default=1.5, help="SCSA DE fold-change threshold")
+    parser.add_argument("--scsa-pvalue", type=float, default=0.05, help="SCSA DE p-value threshold")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -1210,6 +1537,30 @@ def main():
 
     logger.info("Input: %d cells x %d genes", adata.n_obs, adata.n_vars)
     method = validate_method_choice(args.method, METHOD_REGISTRY, fallback="markers")
+
+    # --- Demo-mode: generate a synthetic reference for methods that need one ---
+    if args.demo and method in {"popv", "knnpredict"} and args.reference == "HPCA":
+        import tempfile
+        # Build a small labelled reference from the demo data itself:
+        # use the cluster labels as pseudo cell-type annotations.
+        ref_adata = adata.copy()
+        cluster_col = "louvain" if "louvain" in ref_adata.obs.columns else "leiden"
+        _demo_label_map = {
+            str(i): name
+            for i, name in enumerate(
+                ["CD4+ T", "CD14+ Mono", "B cell", "CD8+ T", "NK", "FCGR3A+ Mono", "DC", "Platelet"]
+            )
+        }
+        ref_adata.obs["cell_type"] = (
+            ref_adata.obs[cluster_col]
+            .astype(str)
+            .map(lambda x: _demo_label_map.get(x, f"Unknown_{x}"))
+        )
+        demo_ref_path = Path(tempfile.mktemp(suffix="_demo_ref.h5ad"))
+        ref_adata.write_h5ad(demo_ref_path)
+        args.reference = str(demo_ref_path)
+        logger.info("[demo] Generated synthetic reference at %s", demo_ref_path)
+
     apply_preflight(
         preflight_sc_cell_annotation(
             adata,
@@ -1223,6 +1574,7 @@ def main():
             source_path=input_file,
         ),
         logger,
+        demo_mode=args.demo,
     )
     resolved_cluster_key = _resolve_cluster_key(adata, args.cluster_key)
     args.cluster_key = resolved_cluster_key
@@ -1242,6 +1594,11 @@ def main():
         params["celltypist_majority_voting"] = args.celltypist_majority_voting
     elif method in {"popv", "knnpredict", "singler", "scmap"}:
         params["reference"] = args.reference
+    elif method == "scsa":
+        params["species"] = args.species
+        params["tissue"] = args.tissue
+        params["scsa_foldchange"] = args.scsa_foldchange
+        params["scsa_pvalue"] = args.scsa_pvalue
 
     gallery_context = _prepare_annotation_gallery_context(adata, summary, params, output_dir)
     generate_figures(adata, output_dir, summary, gallery_context=gallery_context)
@@ -1306,6 +1663,11 @@ def main():
             "available_figure_data": gallery_context.get("figure_data_files", {}),
         },
     }
+    result_data["next_steps"] = [
+        {"skill": "sc-markers", "reason": "Find marker genes for annotated cell types", "priority": "recommended"},
+        {"skill": "sc-de", "reason": "Differential expression between cell types", "priority": "recommended"},
+    ]
+    result_data["preprocessing_state_after"] = "annotated"
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
     result_payload = load_result_json(output_dir) or {
         "skill": SKILL_NAME,
@@ -1350,6 +1712,12 @@ def main():
         print()
     elif unk_count:
         print(f"  WARNING: {unk_count}/{total_types} cell types are 'Unknown'. Consider providing more specific markers via --marker-file.")
+
+    # --- Next-step guidance ---
+    print()
+    print("▶ Next steps:")
+    print(f"  • sc-markers: python omicsclaw.py run sc-markers --input {output_dir}/processed.h5ad --output <dir>")
+    print(f"  • sc-de:      python omicsclaw.py run sc-de --input {output_dir}/processed.h5ad --output <dir>")
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ metadata:
       - "--aucell-auc-max-rank"
       - "--score-genes-ctrl-size"
       - "--score-genes-n-bins"
+      - "--aucell-py-auc-threshold"
     param_hints:
       aucell_r:
         priority: "gene_sets/gene_set_db -> groupby -> aucell_auc_max_rank -> top_pathways"
@@ -38,6 +39,15 @@ metadata:
           - "--method score_genes_py: lightweight Python module-score path for normalized adata.X."
           - "--score-genes-ctrl-size: number of control genes used for background subtraction."
           - "--score-genes-n-bins: expression binning granularity for control-gene matching."
+      aucell_py:
+        priority: "gene_sets/gene_set_db -> groupby -> aucell_py_auc_threshold -> top_pathways"
+        params: ["gene_sets", "gene_set_db", "species", "groupby", "aucell_py_auc_threshold", "top_pathways"]
+        defaults: {groupby: "auto-detect cluster/cell_type label when omitted", top_pathways: 20, aucell_py_auc_threshold: 0.05, species: "human"}
+        requires: ["local_gmt_or_gene_set_db"]
+        tips:
+          - "--method aucell_py: pure Python AUCell implementation -- no R required."
+          - "--aucell-py-auc-threshold: fraction of ranked genome for AUC calculation (default 0.05)."
+          - "AUCell ranks genes per cell by expression, then measures gene-set recovery curve AUC."
     saves_h5ad: true
     requires_preprocessed: false
     trigger_keywords:

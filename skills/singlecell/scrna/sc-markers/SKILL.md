@@ -19,6 +19,7 @@ metadata:
       - "--min-in-group-fraction"
       - "--min-fold-change"
       - "--max-out-group-fraction"
+      - "--mu"
     param_hints:
       wilcoxon:
         priority: "groupby -> n_genes -> n_top"
@@ -41,6 +42,15 @@ metadata:
         requires: ["normalized_expression", "group_labels_in_obs"]
         tips:
           - "--method logreg: classification-style ranking for discriminative genes."
+      cosg:
+        priority: "groupby -> n_genes -> mu"
+        params: ["groupby", "n_genes", "n_top", "mu"]
+        defaults: {n_genes: 50, n_top: 10, mu: 1.0}
+        requires: ["normalized_expression", "group_labels_in_obs"]
+        tips:
+          - "--method cosg: fast cosine-similarity specificity scoring without p-values."
+          - "--mu: specificity penalty (0-1). Higher values penalize non-target expression more."
+          - "COSG is especially useful for large datasets where Wilcoxon is slow."
     saves_h5ad: true
     requires_preprocessed: true
 ---
@@ -60,6 +70,7 @@ Implemented methods:
 1. `wilcoxon`
 2. `t-test`
 3. `logreg`
+4. `cosg` -- COSG cosine-similarity specificity scoring (fast, no p-values)
 
 This skill is for cluster or label marker ranking. For treated-vs-control or replicate-aware DE, use `sc-de`.
 
@@ -113,3 +124,8 @@ Successful runs write:
 - After marker review, the usual next step is `sc-cell-annotation`.
 
 For concise execution rules, see `knowledge_base/knowhows/KH-sc-markers-guardrails.md`. For longer interpretation guidance, see `knowledge_base/skill-guides/singlecell/sc-markers.md`.
+
+## Workflow Position
+
+**Upstream:** sc-clustering or sc-cell-annotation
+**Downstream:** sc-de (formal DE testing), sc-enrichment (pathway enrichment on markers)
