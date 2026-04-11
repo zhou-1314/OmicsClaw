@@ -1,0 +1,82 @@
+# registry.R -- CLI entry point for all OmicsClaw R Enhanced plots
+#
+# Invocation from Python:
+#   Rscript registry.R <renderer_name> <data_dir> <output_png_path> [key=value ...]
+#
+# All renderers are registered in R_PLOT_REGISTRY (named list).
+# Python always calls this single entry point via RScriptRunner.
+
+# ---- Script-directory resolution ----
+# Must work when called as: Rscript /abs/path/to/registry.R
+.get_script_dir <- function() {
+  args <- commandArgs(FALSE)
+  file_flag <- grep("--file=", args, value = TRUE)
+  if (length(file_flag) > 0) {
+    return(dirname(normalizePath(sub("--file=", "", file_flag[1]))))
+  }
+  # Fallback: use current working directory
+  getwd()
+}
+script_dir <- .get_script_dir()
+
+# ---- Source common.R first (absolute path) ----
+source(file.path(script_dir, "common.R"))
+
+# ---- Test stub renderer ----
+# Minimal ggplot2 scatter that proves the Python -> R round-trip works.
+# Does NOT read any CSV -- generates synthetic data.
+plot_test_scatter <- function(data_dir, out_path, params) {
+  set.seed(42)
+  df <- data.frame(
+    x     = rnorm(50),
+    y     = rnorm(50),
+    group = sample(letters[1:3], 50, replace = TRUE)
+  )
+  p <- ggplot(df, aes(x = x, y = y, color = group)) +
+    geom_point(size = 2, alpha = 0.8) +
+    scale_color_manual(values = omics_palette(3)) +
+    theme_omics() +
+    labs(
+      title = "R Enhanced round-trip test",
+      x     = "X",
+      y     = "Y",
+      color = "Group"
+    )
+  ggsave_standard(p, out_path)
+}
+
+# ---- Registry ----
+R_PLOT_REGISTRY <- list(
+  plot_test_scatter = plot_test_scatter
+)
+
+# ---- CLI dispatcher (runs only when script is invoked directly) ----
+if (!interactive()) {
+  args <- commandArgs(trailingOnly = TRUE)
+  if (length(args) < 3) {
+    cat("Usage: Rscript registry.R <renderer> <data_dir> <out_path> [key=value ...]\n",
+        file = stderr())
+    quit(status = 1)
+  }
+  renderer_name <- args[1]
+  data_dir      <- args[2]
+  out_path      <- args[3]
+  params        <- if (length(args) >= 4) parse_kv(args[4:length(args)]) else list()
+
+  fn <- R_PLOT_REGISTRY[[renderer_name]]
+  if (is.null(fn)) {
+    cat("ERROR: Unknown renderer '", renderer_name, "'. Available: ",
+        paste(names(R_PLOT_REGISTRY), collapse = ", "), "\n",
+        sep = "", file = stderr())
+    quit(status = 1)
+  }
+
+  tryCatch({
+    fn(data_dir, out_path, params)
+    cat("SUCCESS:", renderer_name, "->", out_path, "\n")
+  }, error = function(e) {
+    cat("ERROR in ", renderer_name, ": ", conditionMessage(e), "\n",
+        sep = "", file = stderr())
+    quit(status = 1)
+  })
+}
