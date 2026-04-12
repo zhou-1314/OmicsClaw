@@ -21,6 +21,7 @@ metadata:
       - "--score-genes-ctrl-size"
       - "--score-genes-n-bins"
       - "--aucell-py-auc-threshold"
+      - "--r-enhanced"
     param_hints:
       aucell_r:
         priority: "gene_sets/gene_set_db -> groupby -> aucell_auc_max_rank -> top_pathways"
@@ -165,6 +166,35 @@ Stable AnnData outputs:
 
 - `adata.obs["enrich__*"]` score columns
 - `adata.uns["sc_pathway_scoring"]`
+
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | str | — | Input `.h5ad` file | required unless `--demo` |
+| `--output` | str | — | Output directory | required |
+| `--demo` | flag | off | Run with bundled demo data | — |
+| `--method` | str | `score_genes_py` | Scoring backend: `aucell_r`, `score_genes_py`, `aucell_py` | validated against METHOD_REGISTRY |
+| `--gene-sets` | str | None | Path to local GMT gene-set file | required unless `--gene-set-db` or `--demo` |
+| `--gene-set-db` | str | None | Built-in library key: `hallmark`, `kegg`, `go_bp`, `go_cc`, `go_mf`, `reactome` | — |
+| `--species` | str | `human` | Organism for gene-set library resolution | — |
+| `--groupby` | str | None | Grouping column for summaries; auto-detected when omitted | — |
+| `--top-pathways` | int | 20 | Number of top pathways to export/plot | — |
+| `--aucell-auc-max-rank` | int | None | AUCell `aucMaxRank` override (default: 5% of detected genes) | aucell_r only |
+| `--score-genes-ctrl-size` | int | 50 | Control gene count for background subtraction | score_genes_py only |
+| `--score-genes-n-bins` | int | 25 | Expression binning granularity for control-gene matching | score_genes_py only |
+| `--aucell-py-auc-threshold` | float | 0.05 | Fraction of ranked genome for AUC calculation | aucell_py only |
+| `--seed` | int | 42 | Random seed for AUCell ranking | aucell_py only |
+| `--r-enhanced` | flag | off | Also render R Enhanced ggplot2 figures | — |
+
+## R Enhanced Plots
+
+Activated by `--r-enhanced`. Files written to `figures/r_enhanced/`.
+
+| Renderer | Output file | figure_data CSV | Plot description | Required R packages |
+|----------|-------------|-----------------|------------------|---------------------|
+| `plot_embedding_discrete` | `r_embedding_discrete.png` | `embedding_points.csv` | UMAP/embedding colored by cluster/cell type labels | ggplot2 |
+| `plot_embedding_feature` | `r_embedding_feature.png` | `embedding_points.csv` | UMAP/embedding colored by top pathway score | ggplot2 |
 
 ## Current Limitations
 

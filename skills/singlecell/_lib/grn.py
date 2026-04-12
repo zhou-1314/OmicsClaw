@@ -726,7 +726,7 @@ def plot_regulon_heatmap(
 
         # Group by cluster if provided
         if cluster_labels is not None:
-            mean_auc = auc_subset.groupby(cluster_labels).mean()
+            mean_auc = auc_subset.groupby(cluster_labels, observed=False).mean()
         else:
             mean_auc = auc_subset.T
 

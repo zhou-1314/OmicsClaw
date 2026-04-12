@@ -142,3 +142,4 @@ resources/
 # Codex config (local only)
 .codex
 .planning/
+e2e_test

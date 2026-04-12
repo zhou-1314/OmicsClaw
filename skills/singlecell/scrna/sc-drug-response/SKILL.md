@@ -154,6 +154,27 @@ python omicsclaw.py run sc-drug-response \
   --method simple_correlation --cluster-key cell_type
 ```
 
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | str | — | Input `.h5ad` file | required unless `--demo` |
+| `--output` | str | — | Output directory | required |
+| `--demo` | flag | off | Run with synthetic demo data | — |
+| `--method` | str | `simple_correlation` | Prediction method: `simple_correlation`, `cadrres` | validated against METHOD_REGISTRY |
+| `--model-dir` | path | `~/.cache/omicsclaw/drug_response/` | Directory containing CaDRReS model files | cadrres only |
+| `--drug-db` | str | `gdsc` | Drug database: `gdsc` or `prism` | choices: gdsc, prism |
+| `--n-drugs` | int | 10 | Number of top drugs to report/visualize | — |
+| `--cluster-key` | str | None | `.obs` column with cluster labels; auto-detected when omitted | — |
+| `--r-enhanced` | flag | off | Accepted for CLI consistency; no R Enhanced plots available | no-op |
+
+## Methods
+
+| Method | Description | Required packages | Fallback |
+|--------|-------------|-------------------|---------|
+| `simple_correlation` | Mean expression of known drug-target genes per cluster. Covers 15 built-in drugs (Cisplatin, Paclitaxel, Doxorubicin, etc.). No model download needed. Fast and interpretable. | scanpy, numpy, pandas | None (always available) |
+| `cadrres` | CaDRReS-Sc pretrained pharmacogenomic model predicting IC50 (GDSC) or AUC (PRISM) from cluster expression profiles. Requires ~500 MB model download. Human-only. | scanpy, numpy, pandas + pretrained model files | Falls back to `simple_correlation` with a warning if model files are missing |
+
 ## Workflow Position
 
 **Upstream:** sc-clustering or sc-cell-annotation

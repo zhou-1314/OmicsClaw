@@ -22,6 +22,11 @@ metadata:
       - "--scanorama-knn"
       - "--integration-features"
       - "--integration-pcs"
+      - "--simba-n-top-genes"
+      - "--simba-n-components"
+      - "--simba-k"
+      - "--simba-num-workers"
+      - "--r-enhanced"
     param_hints:
       harmony:
         priority: "batch_key"
@@ -266,3 +271,36 @@ The current standard Python gallery is recipe-based and uses:
 
 **Upstream:** sc-preprocessing (when multiple batches are present)
 **Downstream:** sc-clustering
+
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | path | — | Input AnnData file; required unless `--demo` | — |
+| `--output` | path | — | Output directory (required) | — |
+| `--demo` | flag | `false` | Run with built-in demo data | — |
+| `--method` | enum | `harmony` | Integration backend: `harmony`, `scvi`, `scanvi`, `bbknn`, `scanorama`, `simba`, `fastmnn`, `seurat_cca`, `seurat_rpca` | — |
+| `--batch-key` | str | `batch` | Obs column containing batch/sample labels | — |
+| `--n-epochs` | int | none | Training epochs (scvi, scanvi; defaults: scvi=400, scanvi=200) | — |
+| `--no-gpu` | flag | `false` | Force CPU execution for scvi/scanvi | — |
+| `--n-latent` | int | none | Latent space dimension (scvi, scanvi; default: 30) | — |
+| `--labels-key` | str | none | Obs column with cell type labels (scanvi only) | — |
+| `--harmony-theta` | float | none | Harmony diversity penalty (harmony; default: 2.0) | — |
+| `--bbknn-neighbors-within-batch` | int | none | Neighbors per batch for BBKNN (bbknn; default: 3) | — |
+| `--scanorama-knn` | int | none | Panorama neighbor count (scanorama; default: 20) | — |
+| `--integration-features` | int | none | Number of integration features (fastmnn, seurat_cca, seurat_rpca; default: 2000) | — |
+| `--integration-pcs` | int | none | Integration PCs (harmony, fastmnn, seurat_cca, seurat_rpca; default: 50/30) | — |
+| `--simba-n-top-genes` | int | none | Variable genes per batch for SIMBA (simba; default: 3000) | — |
+| `--simba-n-components` | int | none | Components for SIMBA edge inference (simba; default: 15) | — |
+| `--simba-k` | int | none | Neighbors for SIMBA edge inference (simba; default: 15) | — |
+| `--simba-num-workers` | int | none | PBG training workers for SIMBA (simba; default: 4) | — |
+| `--r-enhanced` | flag | `false` | Generate R Enhanced figures via ggplot2 renderers | — |
+
+## R Enhanced Plots
+
+| Renderer | Output file | What it shows | R packages |
+|----------|-------------|---------------|------------|
+| `plot_embedding_discrete` | `r_embedding_discrete.png` | Cell embedding scatter colored by batch/cluster labels post-integration | ggplot2, ggrepel, cowplot |
+| `plot_embedding_feature` | `r_embedding_feature.png` | Cell embedding scatter with continuous feature expression overlay | ggplot2, viridis, cowplot |
+| `plot_cell_barplot` | `r_cell_barplot.png` | Cell count bar chart per batch/sample | ggplot2, cowplot |
+| `plot_cell_sankey` | `r_cell_sankey.png` | Sankey diagram of cell type transitions across batches (CellStatPlot sankey equivalent) | ggplot2, ggalluvial, cowplot |

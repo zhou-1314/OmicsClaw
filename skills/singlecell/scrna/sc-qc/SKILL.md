@@ -13,6 +13,7 @@ metadata:
     domain: singlecell
     allowed_extra_flags:
       - "--species"
+      - "--r-enhanced"
     param_hints:
       qc_metrics:
         priority: "species"
@@ -349,3 +350,22 @@ stack when available.
 - **Upstream step**: Input should come from `sc-count`, `sc-multi-count`, or `sc-standardize-input`
 - **Usual next step**: `sc-filter` to remove low-quality cells based on the QC metrics visualized here
 - **Optional**: Run `sc-doublet-detection` before or after filtering
+
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | path | — | Input AnnData file (`.h5ad`); required unless `--demo` | — |
+| `--output` | path | — | Output directory (required) | — |
+| `--demo` | flag | `false` | Run with built-in PBMC3K demo data | — |
+| `--species` | enum | `human` | Species for MT/ribosomal gene prefix detection: `human`, `mouse` | — |
+| `--r-enhanced` | flag | `false` | Generate R Enhanced figures via ggplot2 renderers | — |
+
+Note: `calculate_ribo=True` is fixed and not exposed as a CLI parameter.
+
+## R Enhanced Plots
+
+| Renderer | Output file | What it shows | R packages |
+|----------|-------------|---------------|------------|
+| `plot_embedding_discrete` | `r_embedding_discrete.png` | Cell scatter colored by discrete group/cluster label | ggplot2, ggrepel, cowplot |
+| `plot_cell_barplot` | `r_cell_barplot.png` | Cell count bar chart per group/sample | ggplot2, cowplot |

@@ -33,6 +33,7 @@ metadata:
       - "--ranking-method"
       - "--species"
       - "--top-terms"
+      - "--r-enhanced"
     param_hints:
       ora:
         priority: "gene_sets/gene_set_db/gene_set_from_markers -> engine -> upstream ranking source -> groupby/ranking_method -> ora thresholds"
@@ -320,6 +321,57 @@ The standard gallery focuses on:
 - After clustering and marker discovery, use `sc-enrichment` to ask “what biology do these groups represent?”
 - If you instead want “where is this pathway active in the embedding?”, use `sc-pathway-scoring`.
 - If you need stronger condition-aware rankings first, run `sc-de` before enrichment.
+
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | str | — | Input `.h5ad`, or sc-markers/sc-de output dir | required unless `--demo` |
+| `--output` | str | — | Output directory | required |
+| `--demo` | flag | off | Run with bundled PBMC3k demo | — |
+| `--method` | str | `ora` | Enrichment method: `ora`, `gsea`, `gsea_r`, `gsva_r` | validated against METHOD_REGISTRY |
+| `--engine` | str | `auto` | Execution engine: `auto`, `python`, `r` | — |
+| `--groupby` | str | None | Grouping column when auto-ranking from h5ad | — |
+| `--ranking-method` | str | `wilcoxon` | Marker ranking method for auto-generated rankings | choices: wilcoxon, t-test, logreg |
+| `--gene-sets` | str | None | Path to local GMT or JSON gene-set file | — |
+| `--gene-set-db` | str | None | Built-in library key (`hallmark`, `kegg`, `go_bp`, `go_cc`, `go_mf`, `reactome`) | — |
+| `--gene-set-from-markers` | str | None | sc-markers output dir or marker table to derive gene sets | — |
+| `--marker-group` | str | None | Comma-separated marker groups to convert into gene sets | — |
+| `--marker-top-n` | str | `100` | How many marker genes to keep per group, or `all` | — |
+| `--species` | str | `human` | Organism for gene-set library resolution | choices: human, mouse |
+| `--top-terms` | int | 18 | Number of terms to emphasize in figures/reports | — |
+| `--ora-padj-cutoff` | float | 0.05 | ORA significance filter on the input ranking | — |
+| `--ora-log2fc-cutoff` | float | 0.25 | ORA effect-size filter when fold change exists | — |
+| `--ora-max-genes` | int | 200 | Maximum input genes per group for ORA | — |
+| `--gsea-ranking-metric` | str | `auto` | Column driving preranked GSEA | choices: auto, stat, scores, logfoldchanges, log2FoldChange |
+| `--gsea-min-size` | int | 5 | Minimum gene-set size for GSEA | — |
+| `--gsea-max-size` | int | 500 | Maximum gene-set size for GSEA | — |
+| `--gsea-permutation-num` | int | 100 | Permutation count for GSEA | — |
+| `--gsea-weight` | float | 1.0 | Weighting exponent for GSEA | — |
+| `--gsea-seed` | int | 123 | Deterministic seed for GSEA | — |
+| `--fdr-threshold` | float | 0.05 | FDR threshold for group-level summary | — |
+| `--r-enhanced` | flag | off | Also render R Enhanced ggplot2 figures | — |
+
+## R Enhanced Plots
+
+Activated by `--r-enhanced`. Files written to `figures/r_enhanced/`.
+
+Shared renderers (all methods):
+
+| Renderer | Output file | figure_data CSV | Plot description | Required R packages |
+|----------|-------------|-----------------|------------------|---------------------|
+| `plot_enrichment_bar` | `r_enrichment_bar.png` | `enrichment_results.csv` | Bar chart of top enriched terms by adjusted p-value | ggplot2 |
+| `plot_enrichment_dotplot` | `r_enrichment_dotplot.png` | `enrichment_results.csv` | Dotplot with gene ratio and significance | ggplot2 |
+| `plot_enrichment_lollipop` | `r_enrichment_lollipop.png` | `enrichment_results.csv` | Lollipop chart of top enriched terms | ggplot2 |
+| `plot_enrichment_network` | `r_enrichment_network.png` | `enrichment_results.csv` | Term-gene network graph | ggplot2, igraph |
+| `plot_enrichment_enrichmap` | `r_enrichment_enrichmap.png` | `enrichment_results.csv` | Enrichment map showing term-term overlap | ggplot2, igraph |
+
+GSEA-only renderers (added when `--method gsea`):
+
+| Renderer | Output file | figure_data CSV | Plot description | Required R packages |
+|----------|-------------|-----------------|------------------|---------------------|
+| `plot_gsea_mountain` | `r_gsea_mountain.png` | `gsea_running_scores.csv` | Mountain/running-score plot for top GSEA terms | ggplot2 |
+| `plot_gsea_nes_heatmap` | `r_gsea_nes_heatmap.png` | `gsea_nes_matrix.csv` | NES heatmap across groups and terms | ggplot2 |
 
 ## Related Skills
 

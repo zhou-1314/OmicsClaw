@@ -34,6 +34,7 @@ metadata:
       - "--read2"
       - "--sample"
       - "--threads"
+      - "--r-enhanced"
     legacy_aliases: [scrna-fastq-qc]
     saves_h5ad: false
     requires_preprocessed: false
@@ -209,6 +210,55 @@ Recommended user guidance:
 - Do not auto-download these tools during a normal skill run.
 - If `fastqc` or `multiqc` is missing, tell the user how to install them in the active environment or on `PATH`.
 - For shared lab machines, recommend a dedicated scRNA upstream environment rather than mixing these tools into every OmicsClaw workflow environment.
+
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | str | None | FASTQ file (`.fastq`, `.fq`, `.fastq.gz`, `.fq.gz`) or directory of FASTQs | Required unless `--demo` |
+| `--output` | str | — | Output directory | Required |
+| `--demo` | flag | off | Run with built-in demo data | — |
+| `--read2` | str | None | Optional read-2 FASTQ when `--input` points to a single read-1 file | — |
+| `--sample` | str | None | Choose one sample from a multi-sample FASTQ directory | — |
+| `--threads` | int | 4 | Thread count forwarded to external FastQC runs | — |
+| `--max-reads` | int | 20000 | Per-FASTQ read sampling depth for the Python fallback summary | — |
+| `--r-enhanced` | flag | off | Accepted for CLI consistency; no R Enhanced plots for this skill | No-op |
+
+## R Enhanced Plots
+
+This skill has **no R Enhanced plots**. The `--r-enhanced` flag is accepted for CLI consistency but produces no additional output.
+
+## Special Requirements
+
+### FASTQ Input Formats
+
+This skill accepts raw scRNA-seq FASTQ input only — it does not accept AnnData or count matrices.
+
+| Input type | Example |
+|------------|---------|
+| Single FASTQ file (R1) | `--input sample_R1.fastq.gz` |
+| Paired-end (R1 + R2) | `--input sample_R1.fastq.gz --read2 sample_R2.fastq.gz` |
+| Directory of FASTQs | `--input fastqs/` |
+| Multi-sample directory (pick one) | `--input fastqs/ --sample PBMC_1` |
+
+For 10x Chromium data, R1 carries the cell barcode + UMI (typically 28 bp) and R2 carries the cDNA read (typically 91 bp+). Both files should be assessed.
+
+### External Tools (Optional)
+
+FastQC and MultiQC are used when available on `PATH`. The wrapper always produces a stable Python fallback summary even if they are absent.
+
+```bash
+# Assess a FASTQ directory
+python omicsclaw.py run sc-fastq-qc --input fastqs/ --output results/
+
+# Explicit paired-end input
+python omicsclaw.py run sc-fastq-qc \
+  --input sample_R1.fastq.gz --read2 sample_R2.fastq.gz --output results/
+
+# Multi-sample directory — choose one sample
+python omicsclaw.py run sc-fastq-qc \
+  --input fastqs/ --sample PBMC_1 --threads 8 --output results/
+```
 
 ## Workflow Position
 

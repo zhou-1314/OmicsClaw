@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scanpy as sc
+import scipy.sparse as sp
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
@@ -759,6 +760,23 @@ def main():
         logger,
         demo_mode=args.demo,
     )
+    # For simple method on raw/unfiltered input (e.g. 10x raw_feature_bc_matrix.h5),
+    # the matrix can contain millions of empty droplets.  Filter to cells with at
+    # least 1 detected gene so downstream dense-chunk operations stay memory-safe.
+    # The ambient profile is estimated from all barcodes (before filtering) for
+    # CellBender/SoupX; for simple we use what's already loaded here which is fine
+    # because empty droplets barely affect the mean profile and we're not
+    # doing proper background modelling anyway.
+    if method == "simple" and adata.n_obs > 500_000:
+        n_before_filter = adata.n_obs
+        sc.pp.filter_cells(adata, min_genes=1)
+        logger.info(
+            "Filtered raw/unfiltered matrix from %d to %d barcodes (min_genes=1) "
+            "before simple subtraction to avoid OOM.",
+            n_before_filter,
+            adata.n_obs,
+        )
+
     adata_before = adata.copy()
     mean_before = np.array(adata.X.sum(axis=1)).flatten().mean()
 
@@ -840,12 +858,33 @@ def main():
         simple_input_warnings.extend(count_warnings)
         ambient_profile = np.array(count_matrix.mean(axis=0)).flatten()
         ambient_profile = ambient_profile / max(ambient_profile.sum(), 1e-8)
-        corrected = count_matrix.toarray() if hasattr(count_matrix, "toarray") else np.asarray(count_matrix).copy()
-        cell_totals = corrected.sum(axis=1, keepdims=True)
-        corrected = corrected - (args.contamination * cell_totals * ambient_profile[np.newaxis, :])
-        corrected = np.maximum(corrected, 0)
-        adata.layers["counts"] = count_matrix.copy()
-        adata.X = corrected.astype(np.float32)
+        # Use chunk-wise sparse arithmetic to avoid OOM on large raw/unfiltered matrices.
+        # The correction is: corrected[i,j] = max(0, X[i,j] - contamination * sum(X[i,:]) * ambient_profile[j])
+        # Processing in row-chunks keeps peak memory proportional to chunk_size * n_genes, not n_cells * n_genes.
+        if sp.issparse(count_matrix):
+            csr = count_matrix.tocsr().astype(np.float32)
+            n_cells, n_genes = csr.shape
+            chunk_size = max(1, min(50_000, n_cells))
+            corrected_chunks: list[sp.csr_matrix] = []
+            ambient_profile_f32 = ambient_profile.astype(np.float32)
+            for start in range(0, n_cells, chunk_size):
+                chunk = csr[start : start + chunk_size].toarray()  # shape: (chunk, n_genes) — safe size
+                cell_totals_chunk = chunk.sum(axis=1, keepdims=True)
+                chunk -= args.contamination * cell_totals_chunk * ambient_profile_f32[np.newaxis, :]
+                np.maximum(chunk, 0, out=chunk)
+                corrected_chunks.append(sp.csr_matrix(chunk, dtype=np.float32))
+                del chunk
+            corrected_sparse = sp.vstack(corrected_chunks, format="csr")
+            del corrected_chunks
+            adata.layers["counts"] = count_matrix.copy()
+            adata.X = corrected_sparse
+        else:
+            corrected = np.asarray(count_matrix, dtype=np.float32).copy()
+            cell_totals = corrected.sum(axis=1, keepdims=True)
+            corrected = corrected - (args.contamination * cell_totals * ambient_profile[np.newaxis, :])
+            corrected = np.maximum(corrected, 0)
+            adata.layers["counts"] = count_matrix.copy()
+            adata.X = corrected.astype(np.float32)
         adata.uns["ambient_correction"] = {"method": "simple", "contamination_fraction": args.contamination, "expression_source": expression_source}
         contamination_estimate = args.contamination
 

@@ -29,6 +29,7 @@ metadata:
       - "--receiver"
       - "--senders"
       - "--species"
+      - "--r-enhanced"
     param_hints:
       builtin:
         priority: "cell_type_key -> species"
@@ -282,6 +283,55 @@ The current wrapper writes direct figure outputs rather than a recipe-driven gal
 - State clearly that `cellphonedb` is human-only in the current wrapper.
 - For short execution guardrails, see `knowledge_base/knowhows/KH-sc-cell-communication-guardrails.md`.
 - For longer method and interpretation guidance, see `knowledge_base/skill-guides/singlecell/sc-cell-communication.md`.
+
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | str | — | Input `.h5ad` file | required unless `--demo` |
+| `--output` | str | — | Output directory | required |
+| `--demo` | flag | off | Run with bundled annotated demo data | — |
+| `--method` | str | `builtin` | Communication backend: `builtin`, `liana`, `cellphonedb`, `cellchat_r`, `nichenet_r` | validated against METHOD_REGISTRY |
+| `--cell-type-key` | str | `cell_type` | Cell type column in `obs` | — |
+| `--species` | str | `human` | Organism for L-R resource selection | choices: human, mouse |
+| `--cellphonedb-counts-data` | str | `hgnc_symbol` | Gene ID format for CellPhoneDB | choices: ensembl, gene_name, hgnc_symbol |
+| `--cellphonedb-iterations` | int | 1000 | Permutation iterations for CellPhoneDB | cellphonedb only |
+| `--cellphonedb-threshold` | float | 0.1 | Minimum expression fraction for CellPhoneDB | cellphonedb only |
+| `--cellphonedb-threads` | int | 4 | Parallel threads for CellPhoneDB | cellphonedb only |
+| `--cellphonedb-pvalue` | float | 0.05 | P-value cutoff for CellPhoneDB results | cellphonedb only |
+| `--cellchat-prob-type` | str | `triMean` | Aggregation method for CellChat | choices: triMean, truncatedMean, thresholdedMean, median |
+| `--cellchat-min-cells` | int | 10 | Minimum cells per cell type for CellChat | cellchat_r only |
+| `--condition-key` | str | `condition` | Condition column for NicheNet | nichenet_r only |
+| `--condition-oi` | str | `stim` | Condition of interest label | nichenet_r only |
+| `--condition-ref` | str | `ctrl` | Reference condition label | nichenet_r only |
+| `--receiver` | str | `` | Receiver cell type for NicheNet | nichenet_r only |
+| `--senders` | str | `` | Comma-separated sender cell types for NicheNet | nichenet_r only |
+| `--nichenet-top-ligands` | int | 20 | Number of top ligands to report | nichenet_r only |
+| `--nichenet-expression-pct` | float | 0.10 | Minimum expression fraction for ligand filtering | nichenet_r only |
+| `--nichenet-lfc-cutoff` | float | 0.25 | log2FC cutoff for receiver DE gene set | nichenet_r only |
+| `--r-enhanced` | flag | off | Also render R Enhanced ggplot2 figures | — |
+
+## R Enhanced Plots
+
+Activated by `--r-enhanced`. Files written to `figures/r_enhanced/`.
+
+| Renderer | Output file | figure_data CSV | Plot description | Required R packages |
+|----------|-------------|-----------------|------------------|---------------------|
+| `plot_ccc_heatmap` | `r_ccc_heatmap.png` | `sender_receiver_summary.csv` | Sender-receiver interaction strength heatmap | ggplot2 |
+| `plot_ccc_network` | `r_ccc_network.png` | `sender_receiver_summary.csv` | Network graph of cell-cell interactions | ggplot2, igraph |
+| `plot_ccc_bubble` | `r_ccc_bubble.png` | `top_interactions.csv` | Bubble plot of top ligand-receptor pairs | ggplot2 |
+| `plot_ccc_stat_bar` | `r_ccc_stat_bar.png` | `group_role_summary.csv` | Bar chart of interaction counts per cell type role | ggplot2 |
+| `plot_ccc_stat_violin` | `r_ccc_stat_violin.png` | `top_interactions.csv` | Violin plot of interaction scores per cell type | ggplot2 |
+| `plot_ccc_stat_scatter` | `r_ccc_stat_scatter.png` | `top_interactions.csv` | Scatter plot of L-R pair scores | ggplot2 |
+| `plot_ccc_bipartite` | `r_ccc_bipartite.png` | `top_interactions.csv` | Bipartite graph of sender-ligand-receptor-receiver | ggplot2, igraph |
+| `plot_ccc_diff_network` | `r_ccc_diff_network.png` | `sender_receiver_summary.csv` | Differential interaction network between conditions | ggplot2, igraph |
+
+## Method Fallback Behavior
+
+- `liana`: falls back to `builtin` if the `liana` Python package is not installed. The fallback uses the built-in heuristic scorer (5 curated L-R pairs only). The report records both the requested and executed methods.
+- `cellchat_r`: requires R environment with CellChat, SingleCellExperiment, and zellkonverter. Fails with an actionable error if the R stack is missing.
+- `nichenet_r`: requires R environment with nichenetr, Seurat, and supporting packages. Human-only in the current wrapper.
+- `cellphonedb`: human-only in the current wrapper. Requires `cellphonedb` Python package.
 
 ## Workflow Position
 

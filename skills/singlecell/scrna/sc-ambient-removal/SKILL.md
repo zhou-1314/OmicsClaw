@@ -18,6 +18,7 @@ metadata:
       - "--method"
       - "--raw-h5"
       - "--raw-matrix-dir"
+      - "--r-enhanced"
     param_hints:
       simple:
         priority: "contamination"
@@ -239,6 +240,71 @@ The current wrapper writes direct figure outputs rather than a recipe-driven gal
 - Enforce the real input contract: `cellbender` needs `--raw-h5`, and `soupx` needs both raw and filtered matrix directories.
 - For short execution guardrails, see `knowledge_base/knowhows/KH-sc-ambient-removal-guardrails.md`.
 - For longer method and interpretation guidance, see `knowledge_base/skill-guides/singlecell/sc-ambient-removal.md`.
+
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | str | None | Input AnnData file (`.h5ad`, 10x `.h5`, loom, CSV/TSV, or 10x dir) | Optional — see method-specific rules below |
+| `--output` | str | — | Output directory | Required |
+| `--demo` | flag | off | Run with built-in demo data | — |
+| `--method` | str | `simple` | Ambient removal backend: `simple`, `cellbender`, or `soupx` | Choices: `simple`, `cellbender`, `soupx`; falls back to `simple` if requested method is unavailable |
+| `--contamination` | float | 0.05 | Ambient contamination fraction used by the `simple` path | Must be in [0, 1) |
+| `--expected-cells` | int | None | CellBender size prior (number of real cells expected) | Required for `cellbender` when no `--input` is provided; must be > 0 |
+| `--raw-h5` | str | None | Raw 10x HDF5 file from `cellranger count` | Required for `cellbender` path |
+| `--raw-matrix-dir` | str | None | 10x `raw_feature_bc_matrix/` directory for SoupX | Used with `--method soupx` |
+| `--filtered-matrix-dir` | str | None | 10x `filtered_feature_bc_matrix/` directory for SoupX | Used with `--method soupx` |
+| `--r-enhanced` | flag | off | Generate R Enhanced plots (requires R + ggplot2) | — |
+
+## R Enhanced Plots
+
+| Renderer | Output file | Description |
+|----------|-------------|-------------|
+| `plot_embedding_discrete` | `figures/r_enhanced/r_embedding_discrete.png` | UMAP colored by discrete cluster labels |
+| `plot_embedding_feature` | `figures/r_enhanced/r_embedding_feature.png` | UMAP colored by a continuous feature (e.g., total counts after correction) |
+
+## Special Requirements
+
+### Input Matrix Must Be Raw / Unfiltered Counts
+
+Ambient RNA removal operates on **raw count-like matrices**. The wrapper requires one of:
+- `adata.layers["counts"]` (preferred — preserved by `sc-count` and `sc-standardize-input`)
+- aligned `adata.raw` with count-like values
+- count-like `adata.X` (integer values, no negatives)
+
+Scaled or log-normalized-only AnnData objects (no counts layer) will cause the `simple` path to raise an error. If provenance is unclear, run `sc-standardize-input` first.
+
+### Method-Specific Input Requirements
+
+| Method | Required inputs | Notes |
+|--------|----------------|-------|
+| `simple` | `--input` with a count-like matrix | Fastest; no extra dependencies |
+| `cellbender` | `--raw-h5` (raw 10x HDF5) | `--expected-cells` strongly recommended; `--input` optional for diagnostics |
+| `soupx` | `--raw-matrix-dir` + `--filtered-matrix-dir` | Both 10x matrix directories required; falls back to `simple` if absent |
+
+### Large Matrix Chunked Processing
+
+The `simple` subtraction path uses chunk-wise sparse arithmetic to handle large matrices without materializing the full dense array in memory. No special flags are needed — this is automatic.
+
+```bash
+# simple path (default)
+python omicsclaw.py run sc-ambient-removal \
+  --input filtered.h5ad --output results/
+
+# CellBender path
+python omicsclaw.py run sc-ambient-removal \
+  --method cellbender \
+  --raw-h5 raw_feature_bc_matrix.h5 \
+  --expected-cells 8000 \
+  --output results/
+
+# SoupX path
+python omicsclaw.py run sc-ambient-removal \
+  --method soupx \
+  --raw-matrix-dir raw_feature_bc_matrix/ \
+  --filtered-matrix-dir filtered_feature_bc_matrix/ \
+  --output results/
+```
 
 ## Workflow Position
 

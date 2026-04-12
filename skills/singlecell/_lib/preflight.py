@@ -1283,7 +1283,7 @@ def preflight_sc_preprocessing(
     decision = PreflightDecision("sc-preprocessing")
     params = effective_params or {}
 
-    has_qc_metrics = {"n_genes_by_counts", "total_counts", "pct_counts_mt"}.issubset(set(adata.obs.columns))
+    has_qc_metrics = {"n_genes_by_counts", "total_counts"}.issubset(set(adata.obs.columns))
     if not has_qc_metrics and source_path and (
         min_genes in {None, 200}
         and max_mt_pct in {None, 20.0}

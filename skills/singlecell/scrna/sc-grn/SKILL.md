@@ -12,12 +12,15 @@ metadata:
   omicsclaw:
     domain: singlecell
     allowed_extra_flags:
+      - "--allow-simplified-grn"
+      - "--cluster-key"
       - "--db"
       - "--motif"
       - "--n-jobs"
       - "--n-top-targets"
       - "--seed"
       - "--tf-list"
+      - "--r-enhanced"
     param_hints:
       pyscenic_workflow:
         priority: "tf_list -> db -> motif -> n_top_targets -> n_jobs"
@@ -174,6 +177,64 @@ The current wrapper writes direct figure outputs rather than a recipe-driven gal
 - Do not present `n_top_targets` as a full pySCENIC science parameter; it is a wrapper-level export control.
 - For short execution guardrails, see `knowledge_base/knowhows/KH-sc-grn-guardrails.md`.
 - For longer method and interpretation guidance, see `knowledge_base/skill-guides/singlecell/sc-grn.md`.
+
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | str | None | Input AnnData file (`.h5ad`) | Required unless `--demo` |
+| `--output` | str | — | Output directory | Required |
+| `--demo` | flag | off | Run with built-in demo data (GRNBoost2 only) | — |
+| `--tf-list` | str | None | TF list file (one TF gene symbol per line) | Optional; required for full pySCENIC run |
+| `--db` | str | None | cisTarget database glob pattern | Optional; required for motif pruning |
+| `--motif` | str | None | Motif annotations file (`.tbl`) | Optional; required for motif pruning |
+| `--n-top-targets` | int | 50 | Maximum targets exported per regulon | Wrapper-level cap, not a pySCENIC science knob |
+| `--n-jobs` | int | 4 | Number of parallel jobs for pySCENIC steps | — |
+| `--seed` | int | 42 | Random seed for reproducibility | — |
+| `--cluster-key` | str | `leiden` | `adata.obs` column for cell grouping in figures | — |
+| `--allow-simplified-grn` | flag | off | Accept correlation-based GRN fallback when no TF/database/motif files are provided | Enables `demo_mode` logic without `--demo` |
+| `--r-enhanced` | flag | off | Generate R Enhanced plots (requires R + ggplot2) | — |
+
+## R Enhanced Plots
+
+| Renderer | Output file | Description |
+|----------|-------------|-------------|
+| `plot_embedding_discrete` | `figures/r_enhanced/r_embedding_discrete.png` | UMAP colored by discrete cluster labels |
+| `plot_embedding_feature` | `figures/r_enhanced/r_embedding_feature.png` | UMAP colored by a continuous feature (AUC score) |
+
+## Special Requirements
+
+### External pySCENIC Database Files
+
+A full pySCENIC run with motif enrichment requires three external resource files that OmicsClaw does **not** download automatically:
+
+| Resource | Flag | Example download |
+|----------|------|-----------------|
+| TF list (one TF per line) | `--tf-list` | `wget https://raw.githubusercontent.com/aertslab/pySCENIC/master/resources/hs_hgnc_tfs.txt` |
+| cisTarget database (`.feather`) | `--db` | See `https://resources.aertslab.org/cistarget/` |
+| Motif annotations (`.tbl`) | `--motif` | `wget https://resources.aertslab.org/cistarget/motif2tf/motifs-v9-nr.hgnc-m0.001-o0.0.tbl` |
+
+Store downloaded files under `examples/databases/motifs/` or provide explicit paths via the flags above.
+
+### Simplified / Fallback Mode
+
+When `--tf-list`, `--db`, and `--motif` are all absent **and** `--allow-simplified-grn` is passed, the wrapper accepts a correlation-based fallback GRN (no motif pruning). This is useful for quick exploratory analysis or when pySCENIC databases are not yet available.
+
+```bash
+# Full pySCENIC run
+python omicsclaw.py run sc-grn \
+  --input processed.h5ad \
+  --tf-list hs_hgnc_tfs.txt \
+  --db 'databases/*.feather' \
+  --motif motifs-v9-nr.hgnc-m0.001-o0.0.tbl \
+  --output results/
+
+# Simplified fallback (no external databases needed)
+python omicsclaw.py run sc-grn \
+  --input processed.h5ad \
+  --allow-simplified-grn \
+  --output results/
+```
 
 ## Workflow Position
 

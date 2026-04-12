@@ -33,6 +33,7 @@ metadata:
       - "--cellrank-schur-components"
       - "--cellrank-frac-to-keep"
       - "--cellrank-use-velocity"
+      - "--r-enhanced"
     param_hints:
       dpt:
         priority: "cluster_key -> use_rep -> root_cluster/root_cell -> n_neighbors -> n_pcs -> n_dcs -> corr_method"
@@ -229,6 +230,50 @@ Common figures include:
 
 For short guardrails see `knowledge_base/knowhows/KH-sc-pseudotime-guardrails.md`.  
 For longer method guidance see `knowledge_base/skill-guides/singlecell/sc-pseudotime.md`.
+
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | str | — | Input `.h5ad` file | required unless `--demo` |
+| `--output` | str | — | Output directory | required |
+| `--demo` | flag | off | Run with bundled PBMC3k data | — |
+| `--method` | str | `dpt` | Trajectory method: `dpt`, `palantir`, `via`, `cellrank`, `slingshot_r`, `monocle3_r` | validated against METHOD_REGISTRY |
+| `--cluster-key` | str | `leiden` | Cluster/label column in `obs` | — |
+| `--use-rep` | str | None | Embedding to use (e.g., `X_pca`, `X_harmony`) | auto-detected when omitted |
+| `--root-cluster` | str | None | Cluster name to use as trajectory root | — |
+| `--root-cell` | str | None | Specific cell (obs_name or integer index) to use as root | — |
+| `--end-clusters` | str | None | Comma-separated terminal cluster names | slingshot_r only |
+| `--n-neighbors` | int | 15 | KNN size for graph construction | dpt only |
+| `--n-pcs` | int | 50 | PCs to use for diffusion map | dpt only |
+| `--n-dcs` | int | 10 | Number of diffusion components | dpt only |
+| `--n-genes` | int | 50 | Number of trajectory-correlated genes to rank | — |
+| `--corr-method` | str | `pearson` | Gene-pseudotime correlation method | choices: pearson, spearman |
+| `--palantir-knn` | int | 30 | KNN for Palantir graph | palantir only |
+| `--palantir-n-components` | int | 10 | Diffusion components for Palantir | palantir only |
+| `--palantir-num-waypoints` | int | 1200 | Waypoints for Palantir | palantir only |
+| `--palantir-max-iterations` | int | 25 | Max Palantir iterations | palantir only |
+| `--palantir-seed` | int | 20 | Palantir random seed | palantir only |
+| `--via-knn` | int | 30 | KNN for VIA graph | via only |
+| `--via-seed` | int | 20 | VIA random seed | via only |
+| `--cellrank-n-states` | int | 3 | Number of macrostates | cellrank only |
+| `--cellrank-schur-components` | int | 20 | Schur decomposition components | cellrank only |
+| `--cellrank-frac-to-keep` | float | 0.3 | Fraction of cells to keep for macrostate estimation | cellrank only |
+| `--cellrank-use-velocity` | flag | off | Use velocity kernel in CellRank | cellrank only |
+| `--r-enhanced` | flag | off | Also render R Enhanced ggplot2 figures | — |
+
+## R Enhanced Plots
+
+Activated by `--r-enhanced`. Files written to `figures/r_enhanced/`.
+
+| Renderer | Output file | figure_data CSV | Plot description | Required R packages |
+|----------|-------------|-----------------|------------------|---------------------|
+| `plot_pseudotime_lineage` | `r_pseudotime_lineage.png` | `pseudotime_points.csv` | Pseudotime lineage scatter with loess trajectory curves | ggplot2 |
+| `plot_pseudotime_dynamic` | `r_pseudotime_dynamic.png` | `trajectory_genes.csv` | Dynamic gene expression trends along pseudotime | ggplot2 |
+| `plot_pseudotime_heatmap` | `r_pseudotime_heatmap.png` | `gene_expression.csv` | Heatmap of top trajectory genes ordered by pseudotime | ggplot2, ComplexHeatmap |
+| `plot_embedding_discrete` | `r_embedding_discrete.png` | `embedding_points.csv` | UMAP/embedding colored by cluster labels | ggplot2 |
+| `plot_embedding_feature` | `r_embedding_feature.png` | `embedding_points.csv` | UMAP/embedding colored by pseudotime score | ggplot2 |
+| `plot_cell_density` | `r_cell_density.png` | `embedding_points.csv` | 2D density overlay on embedding | ggplot2, ggdensity |
 
 ## Workflow Position
 
