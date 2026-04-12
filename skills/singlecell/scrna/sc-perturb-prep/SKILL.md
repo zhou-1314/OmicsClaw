@@ -26,6 +26,7 @@ metadata:
       - "--control-label"
       - "--keep-multi-guide"
       - "--species"
+      - "--r-enhanced"
     saves_h5ad: true
     requires_preprocessed: false
 ---

@@ -13,6 +13,7 @@ metadata:
     domain: singlecell
     allowed_extra_flags:
       - "--species"
+      - "--r-enhanced"
     param_hints:
       qc_metrics:
         priority: "species"

@@ -33,6 +33,7 @@ metadata:
       - "--ranking-method"
       - "--species"
       - "--top-terms"
+      - "--r-enhanced"
     param_hints:
       ora:
         priority: "gene_sets/gene_set_db/gene_set_from_markers -> engine -> upstream ranking source -> groupby/ranking_method -> ora thresholds"

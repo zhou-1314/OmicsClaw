@@ -21,6 +21,7 @@ metadata:
       - "--doubletdetection-standard-scaling"
       - "--no-doubletdetection-standard-scaling"
       - "--scds-mode"
+      - "--r-enhanced"
     param_hints:
       scrublet:
         priority: "expected_doublet_rate -> batch_key -> threshold"

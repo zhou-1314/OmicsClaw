@@ -24,6 +24,7 @@ metadata:
       - "--diffmap-n-comps"
       - "--phate-knn"
       - "--phate-decay"
+      - "--r-enhanced"
     param_hints:
       umap:
         priority: "use_rep -> cluster_method -> n_neighbors/resolution"

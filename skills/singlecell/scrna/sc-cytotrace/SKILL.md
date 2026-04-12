@@ -13,6 +13,7 @@ metadata:
     allowed_extra_flags:
       - "--method"
       - "--n-neighbors"
+      - "--r-enhanced"
     param_hints:
       cytotrace_simple:
         priority: "n_neighbors"

@@ -15,6 +15,7 @@ metadata:
       - "--method"
       - "--mode"
       - "--n-jobs"
+      - "--r-enhanced"
     param_hints:
       scvelo_stochastic:
         priority: "n_jobs"

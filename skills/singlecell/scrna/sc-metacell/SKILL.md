@@ -17,6 +17,7 @@ metadata:
       - "--celltype-key"
       - "--min-iter"
       - "--max-iter"
+      - "--r-enhanced"
     saves_h5ad: true
     requires_preprocessed: true
 ---

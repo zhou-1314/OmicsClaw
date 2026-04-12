@@ -19,6 +19,7 @@ metadata:
       - "--logfc-threshold"
       - "--pval-cutoff"
       - "--perturbation-type"
+      - "--r-enhanced"
     saves_h5ad: true
 ---
 

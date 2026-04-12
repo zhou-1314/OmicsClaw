@@ -22,6 +22,7 @@ metadata:
       - "--scanorama-knn"
       - "--integration-features"
       - "--integration-pcs"
+      - "--r-enhanced"
     param_hints:
       harmony:
         priority: "batch_key"

@@ -18,6 +18,7 @@ metadata:
       - "--n-top-targets"
       - "--seed"
       - "--tf-list"
+      - "--r-enhanced"
     param_hints:
       pyscenic_workflow:
         priority: "tf_list -> db -> motif -> n_top_targets -> n_jobs"

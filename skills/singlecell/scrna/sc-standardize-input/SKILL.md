@@ -12,6 +12,7 @@ metadata:
     domain: singlecell
     allowed_extra_flags:
       - "--species"
+      - "--r-enhanced"
     saves_h5ad: true
     requires_preprocessed: false
     emoji: "🧱"

@@ -34,6 +34,7 @@ metadata:
       - "--read2"
       - "--sample"
       - "--threads"
+      - "--r-enhanced"
     legacy_aliases: [scrna-fastq-qc]
     saves_h5ad: false
     requires_preprocessed: false

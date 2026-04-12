@@ -487,6 +487,7 @@ def run_skill(
     skill_name: str,
     *,
     input_path: str | None = None,
+    input_paths: list[str] | None = None,
     output_dir: str | None = None,
     demo: bool = False,
     session_path: str | None = None,
@@ -513,9 +514,14 @@ def run_skill(
     if not script_path.exists():
         return _err(skill_name, f"Script not found: {script_path}")
 
+    # Resolve multi-input list (e.g. sc-multi-count)
+    resolved_input_paths: list[str] | None = None
+    if input_paths and len(input_paths) >= 2:
+        resolved_input_paths = [str(Path(p).resolve()) for p in input_paths]
+
     # Resolve input from session if needed
     resolved_input = input_path
-    if session_path and not input_path and not demo:
+    if session_path and not input_path and not demo and not resolved_input_paths:
         if str(OMICSCLAW_DIR) not in sys.path:
             sys.path.insert(0, str(OMICSCLAW_DIR))
         from omicsclaw.common.session import SpatialSession
@@ -543,6 +549,10 @@ def run_skill(
     cmd = [PYTHON, str(script_path)]
     if demo:
         cmd.extend(skill_info["demo_args"])
+    elif resolved_input_paths:
+        # Multi-input path (e.g. sc-multi-count): expand each as a separate --input flag
+        for p in resolved_input_paths:
+            cmd.extend(["--input", p])
     elif resolved_input:
         cmd.extend(["--input", str(resolved_input)])
     else:
@@ -553,7 +563,12 @@ def run_skill(
     # Print execution info with domain
     domain = skill_info.get("domain", "unknown")
     domain_display = DOMAINS.get(domain, {}).get("name", domain.title())
-    mode_str = f"{CYAN}demo mode{RESET}" if demo else f"input: {resolved_input}"
+    if demo:
+        mode_str = f"{CYAN}demo mode{RESET}"
+    elif resolved_input_paths:
+        mode_str = f"inputs: {', '.join(resolved_input_paths)}"
+    else:
+        mode_str = f"input: {resolved_input}"
     print(f"\n{BOLD}Running {domain_display} skill:{RESET} {GREEN}{skill_name}{RESET} ({mode_str})")
     print(f"{BOLD}Output:{RESET} {out_dir}\n")
 
@@ -1074,7 +1089,12 @@ def main():
     run_p = sub.add_parser("run", help="Run a skill")
     run_p.add_argument("skill", help="Skill alias (e.g. preprocess, domains) or 'spatial-pipeline'")
     run_p.add_argument("--demo", action="store_true")
-    run_p.add_argument("--input", dest="input_path")
+    run_p.add_argument("--input", dest="input_paths", action="append", default=[],
+                       metavar="INPUT",
+                       help="Input file path (repeat for multi-sample skills, e.g. sc-multi-count)")
+    run_p.add_argument("--sample-id", dest="sample_ids", action="append", default=[],
+                       metavar="SAMPLE_ID",
+                       help="Sample ID label (repeat once per --input for sc-multi-count)")
     run_p.add_argument("--output", dest="output_dir")
     run_p.add_argument("--session", dest="session_path")
     # Skill-specific flags (forwarded to the skill script)
@@ -1132,6 +1152,13 @@ def main():
     run_p.add_argument("--window-size", type=int)
     run_p.add_argument("--step", type=int)
     run_p.add_argument("--reference-cat", nargs="+")
+    # sc-perturb-specific
+    run_p.add_argument("--control", dest="control_label")
+    run_p.add_argument("--pert-key", dest="pert_key")
+    run_p.add_argument("--split-by", dest="split_by")
+    run_p.add_argument("--logfc-threshold", type=float, dest="logfc_threshold")
+    run_p.add_argument("--pval-cutoff", type=float, dest="pval_cutoff")
+    run_p.add_argument("--perturbation-type", dest="perturbation_type")
     # bulkrna-specific
     run_p.add_argument("--control-prefix", dest="control_prefix")
     run_p.add_argument("--treat-prefix", dest="treat_prefix")
@@ -1571,6 +1598,13 @@ def main():
             # cnv-specific
             "window_size": "--window-size",
             "step": "--step",
+            # sc-perturb-specific
+            "control_label": "--control",
+            "pert_key": "--pert-key",
+            "split_by": "--split-by",
+            "logfc_threshold": "--logfc-threshold",
+            "pval_cutoff": "--pval-cutoff",
+            "perturbation_type": "--perturbation-type",
             # bulkrna-specific
             "control_prefix": "--control-prefix",
             "treat_prefix": "--treat-prefix",
@@ -1615,9 +1649,19 @@ def main():
         if unknown_args:
             extra.extend(unknown_args)
 
+        # --sample-id flags (used by sc-multi-count)
+        for sid in getattr(args, "sample_ids", []):
+            extra.extend(["--sample-id", sid])
+
+        # Resolve single vs multi input
+        input_paths_list: list[str] = getattr(args, "input_paths", [])
+        single_input = input_paths_list[0] if len(input_paths_list) == 1 else None
+        multi_inputs = input_paths_list if len(input_paths_list) >= 2 else None
+
         result = run_skill(
             args.skill,
-            input_path=args.input_path,
+            input_path=single_input,
+            input_paths=multi_inputs,
             output_dir=args.output_dir,
             demo=args.demo,
             session_path=args.session_path,

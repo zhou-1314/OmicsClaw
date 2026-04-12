@@ -291,21 +291,33 @@ def run_mixscape_workflow(
     pval_cutoff: float = 0.05,
     perturbation_type: str = "KO",
 ) -> dict[str, Any]:
+    import inspect
+
     import pertpy as pt
+    from packaging.version import Version
 
     matrix_source = prepare_perturbation_matrix(adata)
     mixscape = pt.tl.Mixscape()
-    mixscape.perturbation_signature(
-        adata,
+
+    # pertpy < 0.9 does not support ref_selection_mode in perturbation_signature
+    _pt_version = Version(pt.__version__)
+    _ps_sig = inspect.signature(mixscape.perturbation_signature)
+    _ps_kwargs: dict = dict(
         pert_key=pert_key,
         control=control,
-        ref_selection_mode="split_by" if split_by else "nn",
         split_by=split_by,
         n_neighbors=n_neighbors,
     )
+    if "ref_selection_mode" in _ps_sig.parameters:
+        _ps_kwargs["ref_selection_mode"] = "split_by" if split_by else "nn"
+    mixscape.perturbation_signature(adata, **_ps_kwargs)
+
+    # pertpy < 0.9 uses `labels` instead of `pert_key` in mixscape()
+    _mx_sig = inspect.signature(mixscape.mixscape)
+    _pert_key_param = "pert_key" if "pert_key" in _mx_sig.parameters else "labels"
     mixscape.mixscape(
         adata,
-        pert_key=pert_key,
+        **{_pert_key_param: pert_key},
         control=control,
         split_by=split_by,
         logfc_threshold=logfc_threshold,

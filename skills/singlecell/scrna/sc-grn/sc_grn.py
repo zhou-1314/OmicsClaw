@@ -716,6 +716,12 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--cluster-key", dest="cluster_key", default="leiden", help="Cluster key for grouping (default: leiden)")
     parser.add_argument("--r-enhanced", action="store_true", help="Generate R Enhanced plots (requires R + ggplot2)")
+    parser.add_argument(
+        "--allow-simplified-grn",
+        dest="allow_simplified_grn",
+        action="store_true",
+        help="Accept correlation-based GRN fallback when no TF/database/motif files are provided",
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -746,10 +752,11 @@ def main():
             tf_list=args.tf_list,
             database_glob=args.database_glob,
             motif_annotations=args.motif_annotations,
-            demo_mode=args.demo,
+            demo_mode=args.demo or args.allow_simplified_grn,
             source_path=input_file,
         ),
         logger,
+        demo_mode=args.demo or args.allow_simplified_grn,
     )
 
     # Parameters

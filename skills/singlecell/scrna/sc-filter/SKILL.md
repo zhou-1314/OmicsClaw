@@ -19,6 +19,7 @@ metadata:
       - "--min-counts"
       - "--min-genes"
       - "--tissue"
+      - "--r-enhanced"
     param_hints:
       threshold_filtering:
         priority: "tissue -> min_genes/max_mt_percent -> min_cells -> count caps"

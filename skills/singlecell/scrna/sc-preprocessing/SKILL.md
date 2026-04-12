@@ -26,6 +26,7 @@ metadata:
       - "--seurat-hvg-method"
       - "--sctransform-regress-mt"
       - "--no-sctransform-regress-mt"
+      - "--r-enhanced"
     param_hints:
       scanpy:
         priority: "min_genes/max_mt_pct -> n_top_hvg -> n_pcs"

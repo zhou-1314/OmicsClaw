@@ -631,6 +631,7 @@ def run_harmony_integration(
         *adata* with ``obsm['X_harmony']`` added.
     """
     hm = dm.require("harmonypy", feature="Harmony integration")
+    import numpy as np
     import scanpy as sc  # lazy
 
     logger.info("=== Harmony Integration ===")
@@ -650,10 +651,15 @@ def run_harmony_integration(
         logger.info("Using existing PCA (shape: %s)", adata.obsm["X_pca"].shape)
 
     # -- Harmony --------------------------------------------------------------
+    # Call hm.run_harmony directly. harmonypy >=0.1.0 returns Z_corr in
+    # (cells, PCs) order; older versions return (PCs, cells).  We detect
+    # the shape and transpose only when necessary so this works with any
+    # installed version.
     logger.info("Running Harmony (theta=%.1f, max_iter=%d) ...", theta, max_iter_harmony)
 
+    pca_matrix = adata.obsm["X_pca"].astype(np.float64)
     harmony_out = hm.run_harmony(
-        adata.obsm["X_pca"],
+        pca_matrix,
         adata.obs,
         batch_key,
         theta=theta,
@@ -662,8 +668,12 @@ def run_harmony_integration(
         verbose=False,
     )
 
-    # harmonypy already returns (n_cells, n_components); do not transpose.
-    adata.obsm["X_harmony"] = harmony_out.Z_corr
+    z = np.array(harmony_out.Z_corr)
+    # Normalise to (cells, PCs): if the first dim equals n_cells we are done;
+    # otherwise the matrix is (PCs, cells) — transpose it.
+    if z.ndim == 2 and z.shape[0] != adata.n_obs:
+        z = z.T
+    adata.obsm["X_harmony"] = z
     logger.info("Added 'X_harmony' to obsm (shape: %s)", adata.obsm["X_harmony"].shape)
 
     adata.uns["harmony_integration"] = {

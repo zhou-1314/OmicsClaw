@@ -20,6 +20,7 @@ metadata:
       - "--min-fold-change"
       - "--max-out-group-fraction"
       - "--mu"
+      - "--r-enhanced"
     param_hints:
       wilcoxon:
         priority: "groupby -> n_genes -> n_top"

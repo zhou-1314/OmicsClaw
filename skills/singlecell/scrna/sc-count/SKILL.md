@@ -38,6 +38,7 @@ metadata:
       - "--t2g"
       - "--threads"
       - "--whitelist"
+      - "--r-enhanced"
     legacy_aliases: [scrna-count, sc-pseudoalign-count, scrna-pseudoalign-count]
     saves_h5ad: true
     requires_preprocessed: false

@@ -38,6 +38,7 @@ metadata:
       - "--sample"
       - "--threads"
       - "--whitelist"
+      - "--r-enhanced"
     legacy_aliases: [scrna-velocity-prep]
     saves_h5ad: true
     requires_preprocessed: false

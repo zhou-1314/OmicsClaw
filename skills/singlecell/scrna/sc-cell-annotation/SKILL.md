@@ -21,6 +21,7 @@ metadata:
       - "--marker-file"
       - "--celltypist-majority-voting"
       - "--no-celltypist-majority-voting"
+      - "--r-enhanced"
     param_hints:
       manual:
         priority: "cluster_key -> manual_map/manual_map_file"

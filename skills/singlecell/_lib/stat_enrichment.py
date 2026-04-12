@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 GENE_SET_DB_ALIASES = {
     "hallmark": {"human": "MSigDB_Hallmark_2020", "mouse": "MSigDB_Hallmark_2020"},
-    "kegg": {"human": "KEGG_2021_Human", "mouse": "KEGG_2021_Mouse"},
+    "kegg": {"human": "KEGG_2021_Human", "mouse": "KEGG_2019_Mouse"},
     "reactome": {"human": "Reactome_2022", "mouse": "Reactome_2022"},
     "go_bp": {"human": "GO_Biological_Process_2023", "mouse": "GO_Biological_Process_2023"},
     "go_cc": {"human": "GO_Cellular_Component_2023", "mouse": "GO_Cellular_Component_2023"},
@@ -120,13 +120,31 @@ def fetch_gene_sets_from_library(gene_set_db: str, *, species: str) -> tuple[dic
 
 
 def canonicalize_gene_sets(gene_sets: dict[str, list[str]], universe: pd.Index | list[str]) -> dict[str, list[str]]:
-    """Restrict gene sets to the observed gene universe."""
-    universe_set = {str(gene) for gene in universe}
+    """Restrict gene sets to the observed gene universe.
+
+    Matching is case-insensitive so that databases with uppercase symbols
+    (e.g. KEGG_2019_Mouse) work correctly with mouse title-case data.
+    Genes are returned using the casing found in *universe* so that downstream
+    overlap arithmetic (query intersection) stays consistent.
+    """
+    universe_list = [str(gene) for gene in universe]
+    universe_set = set(universe_list)
+    # Build uppercase -> original-casing lookup (last occurrence wins for dups)
+    upper_to_canonical: dict[str, str] = {g.upper(): g for g in universe_list}
     out: dict[str, list[str]] = {}
     for term, genes in gene_sets.items():
-        overlap = list(dict.fromkeys(str(gene) for gene in genes if str(gene) in universe_set))
-        if overlap:
-            out[str(term)] = overlap
+        seen: dict[str, None] = {}
+        for raw_gene in genes:
+            g = str(raw_gene)
+            if g in universe_set:
+                # exact match
+                seen[g] = None
+            else:
+                canonical = upper_to_canonical.get(g.upper())
+                if canonical is not None:
+                    seen[canonical] = None
+        if seen:
+            out[str(term)] = list(seen.keys())
     return out
 
 

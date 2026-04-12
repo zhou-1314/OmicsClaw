@@ -21,6 +21,7 @@ metadata:
       - "--prop"
       - "--n-neighbors"
       - "--min-count"
+      - "--r-enhanced"
     saves_h5ad: true
     requires_preprocessed: true
 ---

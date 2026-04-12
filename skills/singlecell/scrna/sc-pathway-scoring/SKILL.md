@@ -21,6 +21,7 @@ metadata:
       - "--score-genes-ctrl-size"
       - "--score-genes-n-bins"
       - "--aucell-py-auc-threshold"
+      - "--r-enhanced"
     param_hints:
       aucell_r:
         priority: "gene_sets/gene_set_db -> groupby -> aucell_auc_max_rank -> top_pathways"

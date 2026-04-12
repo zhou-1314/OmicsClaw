@@ -29,6 +29,7 @@ metadata:
       - "--receiver"
       - "--senders"
       - "--species"
+      - "--r-enhanced"
     param_hints:
       builtin:
         priority: "cell_type_key -> species"

@@ -25,6 +25,7 @@ metadata:
       - "--td-k"
       - "--ma-dim"
       - "--n-cores"
+      - "--r-enhanced"
 ---
 
 # In-Silico Perturbation

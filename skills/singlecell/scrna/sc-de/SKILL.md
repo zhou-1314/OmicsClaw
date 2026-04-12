@@ -24,6 +24,7 @@ metadata:
       - "--pseudobulk-min-cells"
       - "--pseudobulk-min-counts"
       - "--sample-key"
+      - "--r-enhanced"
     param_hints:
       wilcoxon:
         priority: "groupby -> n_top_genes -> group1/group2"

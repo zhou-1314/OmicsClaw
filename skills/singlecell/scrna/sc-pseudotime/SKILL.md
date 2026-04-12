@@ -33,6 +33,7 @@ metadata:
       - "--cellrank-schur-components"
       - "--cellrank-frac-to-keep"
       - "--cellrank-use-velocity"
+      - "--r-enhanced"
     param_hints:
       dpt:
         priority: "cluster_key -> use_rep -> root_cluster/root_cell -> n_neighbors -> n_pcs -> n_dcs -> corr_method"

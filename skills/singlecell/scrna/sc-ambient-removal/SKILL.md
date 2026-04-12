@@ -18,6 +18,7 @@ metadata:
       - "--method"
       - "--raw-h5"
       - "--raw-matrix-dir"
+      - "--r-enhanced"
     param_hints:
       simple:
         priority: "contamination"

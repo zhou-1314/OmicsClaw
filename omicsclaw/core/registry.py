@@ -1148,7 +1148,7 @@ _HARDCODED_SKILLS: dict[str, dict[str, Any]] = {
         "script": SKILLS_DIR / "singlecell" / "scrna" / "sc-drug-response" / "sc_drug_response.py",
         "demo_args": ["--demo"],
         "description": "Drug response prediction from scRNA-seq (CaDRReS-Sc, simple correlation)",
-        "allowed_extra_flags": {"--method", "--model-dir", "--drug-db", "--n-drugs", "--cluster-key"},
+        "allowed_extra_flags": {"--method", "--model-dir", "--drug-db", "--n-drugs", "--cluster-key", "--r-enhanced"},
         "requires_preprocessed": True,
         "saves_h5ad": True,
     },

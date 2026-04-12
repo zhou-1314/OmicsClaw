@@ -17,6 +17,7 @@ metadata:
       - "--seed"
       - "--layer"
       - "--top-genes"
+      - "--r-enhanced"
     saves_h5ad: true
     requires_preprocessed: true
 ---
