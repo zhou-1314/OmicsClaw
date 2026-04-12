@@ -899,7 +899,17 @@ def init(
     if resolved_url:
         kw["base_url"] = resolved_url
     kw["timeout"] = _build_llm_timeout()
-    llm = AsyncOpenAI(**kw)
+    try:
+        llm = AsyncOpenAI(**kw)
+    except ImportError as exc:
+        if "socksio" in str(exc) or "socks" in str(exc).lower():
+            raise ImportError(
+                "A SOCKS proxy is configured (HTTPS_PROXY / ALL_PROXY) but "
+                "the 'socksio' package is not installed. Run:\n\n"
+                '  pip install "httpx[socks]"\n\n'
+                "then restart the backend."
+            ) from exc
+        raise
 
     logger.info(
         f"LLM initialised: provider={LLM_PROVIDER_NAME}, "
