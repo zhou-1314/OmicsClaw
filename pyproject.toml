@@ -71,6 +71,22 @@ dependencies = [
 
     # ========== pkg_resources fallback for older packages ==========
     "setuptools>=64",
+
+    # ========== Server / notebook runtime ==========
+    # Required by omicsclaw.app.server for notebook support.
+    # Previously in [desktop] extras only, causing ModuleNotFoundError
+    # when users installed with plain `pip install -e .`.
+    "nbformat>=5.9",
+    "jupyter_client>=8.0",
+    "ipykernel>=6.0",
+
+    # ========== Server runtime essentials ==========
+    # greenlet: required by SQLAlchemy async bridge (aiosqlite)
+    # rich: required by MCP module at import time
+    # socksio: required when SOCKS proxy is configured (HTTPS_PROXY)
+    "greenlet>=3.0.0",
+    "rich>=13.0.0",
+    "socksio>=1.0.0",
 ]
 
 [project.optional-dependencies]
