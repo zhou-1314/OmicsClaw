@@ -698,6 +698,8 @@ def main() -> None:
     parser.add_argument("--drug-db", choices=["gdsc", "prism"], default="gdsc", help="Drug database (GDSC or PRISM)")
     parser.add_argument("--n-drugs", type=int, default=DEFAULT_N_DRUGS, help="Number of top drugs to report")
     parser.add_argument("--cluster-key", default=None, help="obs column for cluster labels")
+    parser.add_argument("--r-enhanced", action="store_true",
+        help="(Accepted for CLI consistency; no R Enhanced plots available for this skill.)")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)

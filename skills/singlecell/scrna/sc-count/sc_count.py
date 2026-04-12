@@ -324,6 +324,8 @@ def main() -> None:
     parser.add_argument("--threads", type=int, default=8, help="Backend thread count")
     parser.add_argument("--chemistry", default="auto", help="Chemistry hint; STARsolo currently supports 10xv2, 10xv3, and 10xv4")
     parser.add_argument("--whitelist", help="STARsolo barcode whitelist file")
+    parser.add_argument("--r-enhanced", action="store_true",
+        help="(Accepted for CLI consistency; no R Enhanced plots available for this skill.)")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)

@@ -248,6 +248,8 @@ def main() -> None:
     parser.add_argument("--output", dest="output_dir", required=True, help="Output directory")
     parser.add_argument("--demo", action="store_true", help="Run with demo data")
     parser.add_argument("--species", default="auto", choices=["human", "mouse", "auto"], help="Species hint (default: auto-detect from gene names)")
+    parser.add_argument("--r-enhanced", action="store_true",
+        help="(Accepted for CLI consistency; no R Enhanced plots available for this skill.)")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)

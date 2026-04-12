@@ -67,6 +67,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--control-label", type=str, default="NT", help="Canonical control label stored in the perturbation column")
     parser.add_argument("--keep-multi-guide", action="store_true", help="Keep cells with multiple sgRNA assignments instead of dropping them")
     parser.add_argument("--species", type=str, default="human", choices=["human", "mouse"], help="Species hint for canonicalization")
+    parser.add_argument("--r-enhanced", action="store_true",
+        help="(Accepted for CLI consistency; no R Enhanced plots available for this skill.)")
     return parser.parse_args()
 
 
