@@ -1223,8 +1223,13 @@ def main():
         sys.exit(0)
 
     if args.command == "replot":
-        from skills.singlecell._lib.viz.r import call_r_plot
-        from skills.singlecell._lib.viz.r.renderer_params import RENDERER_PARAMS, SKILL_RENDERERS
+        try:
+            from skills.singlecell._lib.viz.r import call_r_plot
+            from skills.singlecell._lib.viz.r.renderer_params import RENDERER_PARAMS, SKILL_RENDERERS
+        except ImportError:
+            print(f"{RED}Error:{RESET} R Enhanced plotting dependencies not available.", file=sys.stderr)
+            print("Replot is currently supported for single-cell (scRNA) skills only.", file=sys.stderr)
+            sys.exit(1)
 
         skill_alias = resolve_skill_alias(args.skill)
 
