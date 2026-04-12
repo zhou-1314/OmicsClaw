@@ -72,6 +72,10 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--min-iter", type=int, default=10)
     p.add_argument("--max-iter", type=int, default=30)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--n-neighbors", type=int, default=15,
+                    help="Number of neighbors for SEACells graph construction (default: 15)")
+    p.add_argument("--n-pcs", type=int, default=20,
+                    help="Number of PCs for SEACells neighbor computation (default: 20)")
     p.add_argument("--r-enhanced", action="store_true", help="Generate R Enhanced plots (requires R + ggplot2)")
     return p.parse_args()
 
@@ -80,7 +84,7 @@ def _parse_args() -> argparse.Namespace:
 # Preflight checks
 # ---------------------------------------------------------------------------
 
-def _preflight(adata, *, use_rep: str, n_metacells: int, method: str) -> list[str]:
+def _preflight(adata, *, use_rep: str, n_metacells: int, method: str, n_neighbors: int = 15, n_pcs: int = 20) -> list[str]:
     """Validate inputs before running metacell construction.
 
     Returns a list of warnings (empty if everything looks fine).
@@ -136,7 +140,7 @@ def _preflight(adata, *, use_rep: str, n_metacells: int, method: str) -> list[st
     if method == "seacells" and "neighbors" not in adata.uns:
         logger.info("Computing neighbors graph (required by SEACells)...")
         import scanpy as sc
-        sc.pp.neighbors(adata, n_neighbors=15, n_pcs=min(20, adata.obsm[use_rep].shape[1]))
+        sc.pp.neighbors(adata, n_neighbors=n_neighbors, n_pcs=min(n_pcs, adata.obsm[use_rep].shape[1]))
 
     return warnings
 
@@ -319,6 +323,8 @@ def main() -> int:
         use_rep=args.use_rep,
         n_metacells=args.n_metacells,
         method=args.method,
+        n_neighbors=args.n_neighbors,
+        n_pcs=args.n_pcs,
     )
 
     # -- Run method --

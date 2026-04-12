@@ -554,6 +554,7 @@ def run_aucell_py(
     gene_sets: dict[str, list[str]],
     feature_label_mapping: dict[str, str],
     auc_threshold: float = 0.05,
+    seed: int = 42,
 ) -> tuple[pd.DataFrame, list[str]]:
     """Pure Python AUCell implementation.
 
@@ -582,7 +583,7 @@ def run_aucell_py(
     n_cells, n_genes = X.shape
 
     logger.info("AUCell (Python): ranking %d genes across %d cells ...", n_genes, n_cells)
-    rank_matrix = _rank_genes_per_cell(X, seed=42)
+    rank_matrix = _rank_genes_per_cell(X, seed=seed)
 
     # Build feature-name-to-index mapping
     var_names = list(adata.var_names.astype(str))
@@ -842,6 +843,8 @@ def main() -> None:
     # AUCell Python-specific
     parser.add_argument("--aucell-py-auc-threshold", type=float, default=0.05,
                         help="AUCell (Python) fraction of ranked genome for AUC (default 0.05)")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed for AUCell ranking (default: 42)")
     parser.add_argument("--r-enhanced", action="store_true", default=False, help="Generate R-enhanced figures via ggplot2 renderers")
     args = parser.parse_args()
 
@@ -946,6 +949,7 @@ def main() -> None:
             gene_sets=gene_sets,
             feature_label_mapping=feature_label_mapping,
             auc_threshold=args.aucell_py_auc_threshold,
+            seed=args.seed,
         )
         expression_source = "adata.X"
     else:

@@ -1174,6 +1174,8 @@ def main() -> None:
     parser.add_argument("--gsea-permutation-num", type=int, default=100)
     parser.add_argument("--gsea-weight", type=float, default=1.0)
     parser.add_argument("--gsea-seed", type=int, default=123)
+    parser.add_argument("--fdr-threshold", type=float, default=0.05,
+                        help="FDR threshold for group-level summary (default: 0.05)")
     parser.add_argument(
         "--r-enhanced", action="store_true",
         help="Generate R Enhanced ggplot2 figures in addition to standard Python plots."
@@ -1413,7 +1415,7 @@ def main() -> None:
             f"Missing R packages: {', '.join(missing_r_packages)}"
         )
     top_terms_df = select_top_terms(enrich_df, top_terms=args.top_terms)
-    group_summary_df = _build_group_summary(enrich_df, fdr_threshold=0.05)
+    group_summary_df = _build_group_summary(enrich_df, fdr_threshold=args.fdr_threshold)
     _render_figures(
         output_dir,
         enrich_df=enrich_df,
