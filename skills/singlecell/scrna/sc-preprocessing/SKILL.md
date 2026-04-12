@@ -167,3 +167,33 @@ Successful runs write:
 
 - **Upstream step**: `sc-filter` (recommended) or directly from `sc-count` / `sc-qc`
 - **Usual next step**: `sc-batch-integration` (multiple batches) or `sc-clustering` (single batch)
+
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | path | — | Input AnnData file (`.h5ad`); required unless `--demo` | — |
+| `--output` | path | — | Output directory (required) | — |
+| `--demo` | flag | `false` | Run with built-in demo data | — |
+| `--method` | enum | `scanpy` | Preprocessing backend: `scanpy`, `seurat`, `sctransform`, `pearson_residuals` | — |
+| `--min-genes` | int | `200` (per method default) | Minimum detected genes per retained cell | Must be >= 0 |
+| `--min-cells` | int | `3` (per method default) | Minimum cells expressing a retained gene | Must be >= 0 |
+| `--max-mt-pct` | float | `20.0` (per method default) | Maximum mitochondrial percentage | Must be in [0, 100] |
+| `--n-top-hvg` | int | `2000` (per method default) | Number of highly variable genes to select | Must be >= 1 |
+| `--n-pcs` | int | `50` (per method default) | Number of principal components | Must be >= 1 |
+| `--normalization-target-sum` | float | `10000.0` | Total counts per cell after normalization (scanpy only) | Must be >= 1 |
+| `--scanpy-hvg-flavor` | enum | `seurat` | HVG selection flavor: `seurat`, `cell_ranger`, `seurat_v3` (scanpy only) | — |
+| `--pearson-hvg-flavor` | enum | `seurat_v3` | HVG flavor for Pearson residuals: `seurat_v3`, `seurat` (pearson_residuals only) | — |
+| `--pearson-theta` | float | `100.0` | Negative binomial theta for Pearson residuals (pearson_residuals only) | — |
+| `--seurat-normalize-method` | enum | `LogNormalize` | Seurat normalization method: `LogNormalize`, `CLR`, `RC` (seurat only) | — |
+| `--seurat-scale-factor` | float | `10000.0` | Seurat scale factor (seurat only) | — |
+| `--seurat-hvg-method` | enum | `vst` | Seurat HVG method: `vst`, `mvp`, `disp` (seurat only) | — |
+| `--sctransform-regress-mt` / `--no-sctransform-regress-mt` | bool | `true` | Regress out mitochondrial percentage in SCTransform (sctransform only) | — |
+| `--r-enhanced` | flag | `false` | Generate R Enhanced figures via ggplot2 renderers | — |
+
+## R Enhanced Plots
+
+| Renderer | Output file | What it shows | R packages |
+|----------|-------------|---------------|------------|
+| `plot_embedding_discrete` | `r_embedding_discrete.png` | Cell embedding scatter colored by discrete cluster labels (CellDimPlot equivalent) | ggplot2, ggrepel, cowplot |
+| `plot_embedding_feature` | `r_embedding_feature.png` | Cell embedding scatter with continuous feature expression overlay (FeatureDimPlot equivalent) | ggplot2, viridis, cowplot |

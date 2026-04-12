@@ -104,6 +104,30 @@ metadata:
 - For short execution guardrails, see `knowledge_base/knowhows/KH-sc-gene-programs-guardrails.md`.
 - For longer method and interpretation guidance, see `knowledge_base/skill-guides/singlecell/sc-gene-programs.md`.
 
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | str | None | Input AnnData file (`.h5ad`) | Required unless `--demo` |
+| `--output` | str | — | Output directory | Required |
+| `--demo` | flag | off | Run with built-in demo data | — |
+| `--method` | str | `cnmf` | Factorization method: `cnmf` or `nmf` | Choices: `cnmf`, `nmf` |
+| `--n-programs` | int | 6 | Number of latent gene programs to infer | Must be >= 2 |
+| `--n-iter` | int | 400 | Factorization iteration budget | Must be >= 1 |
+| `--seed` | int | 0 | Random seed for reproducibility | — |
+| `--layer` | str | None | Expression layer to use (e.g., `counts`); auto-detected for cNMF if absent | Must exist in `adata.layers` if specified |
+| `--top-genes` | int | 30 | Top genes reported per program (ranked by weight) | Must be >= 1 |
+| `--r-enhanced` | flag | off | Generate R Enhanced plots (requires R + ggplot2) | — |
+
+## R Enhanced Plots
+
+| Renderer | Output file | Description |
+|----------|-------------|-------------|
+| `plot_embedding_discrete` | `figures/r_enhanced/r_embedding_discrete.png` | UMAP colored by discrete cluster labels |
+| `plot_embedding_feature` | `figures/r_enhanced/r_embedding_feature.png` | UMAP colored by program usage score |
+| `plot_feature_violin` | `figures/r_enhanced/r_feature_violin.png` | Violin plot of program usage per cell group |
+| `plot_feature_cor` | `figures/r_enhanced/r_feature_cor.png` | Program correlation heatmap (R-rendered) |
+
 ## Workflow Position
 
 **Upstream:** sc-clustering or sc-pseudotime

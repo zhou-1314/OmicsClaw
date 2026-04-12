@@ -106,6 +106,33 @@ After this skill, run `sc-perturb` for Mixscape perturbation analysis, or `sc-pr
 - `reproducibility/commands.sh`
 - `result.json` and `report.md`
 
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | str | None | Input expression file (`.h5ad`, 10x `.h5`, or 10x matrix dir) | Required unless `--demo` |
+| `--output` | str | — | Output directory | Required |
+| `--demo` | flag | off | Run with built-in demo data | — |
+| `--mapping-file` | str | None | Cell barcode to sgRNA mapping TSV/CSV file | Required for real runs |
+| `--barcode-column` | str | None | Barcode column name in the mapping file | Auto-detected if not set |
+| `--sgrna-column` | str | None | sgRNA / guide column name in the mapping file | Auto-detected if not set |
+| `--target-column` | str | None | Optional target-gene column name in the mapping file | Inferred from sgRNA IDs if absent |
+| `--sep` | str | None | Explicit mapping-file field separator (e.g. `\t` or `,`) | Auto-detected if not set |
+| `--delimiter` | str | `_` | Delimiter used to infer target genes from sgRNA IDs | — |
+| `--gene-position` | int | 0 | Token index used when inferring target genes from sgRNA IDs | — |
+| `--pert-key` | str | `perturbation` | Output `adata.obs` column name for perturbation labels | — |
+| `--sgrna-key` | str | `sgRNA` | Output `adata.obs` column name for sgRNA labels | — |
+| `--target-key` | str | `target_gene` | Output `adata.obs` column name for target gene labels | — |
+| `--control-patterns` | str | (built-in defaults) | Comma-separated patterns identifying non-targeting controls | — |
+| `--control-label` | str | `NT` | Canonical control label stored in the perturbation column | — |
+| `--keep-multi-guide` | flag | off | Keep cells with multiple sgRNA assignments instead of dropping them | — |
+| `--species` | str | `human` | Species hint for AnnData canonicalization | Choices: `human`, `mouse` |
+| `--r-enhanced` | flag | off | Accepted for CLI consistency; no R Enhanced plots for this skill | No-op |
+
+## R Enhanced Plots
+
+This skill has **no R Enhanced plots**. The `--r-enhanced` flag is accepted for CLI consistency but produces no additional output.
+
 ## Workflow Position
 
 **Upstream:** Raw perturbation data (expression + sgRNA assignments)

@@ -194,3 +194,26 @@ The current wrapper writes a standard recipe-driven gallery:
 - **Upstream step**: `sc-qc` for QC visualization (recommended), or directly from `sc-count` / `sc-multi-count`
 - **Usual next step**: `sc-preprocessing` for normalization, HVG selection, and PCA
 - **Optional before preprocessing**: `sc-doublet-detection` or `sc-ambient-removal`
+
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | path | — | Input AnnData file (`.h5ad`); required unless `--demo` | — |
+| `--output` | path | — | Output directory (required) | — |
+| `--demo` | flag | `false` | Run with built-in demo data | — |
+| `--min-genes` | int | `200` | Minimum detected genes per retained cell | Must be >= 0; must be <= `--max-genes` when both set |
+| `--max-genes` | int | none | Maximum detected genes per cell (optional upper cap) | Must be >= 0 |
+| `--min-counts` | int | none | Minimum UMI counts per cell (optional lower cap) | Must be >= 0; must be <= `--max-counts` when both set |
+| `--max-counts` | int | none | Maximum UMI counts per cell (optional upper cap) | Must be >= 0 |
+| `--max-mt-percent` | float | `20.0` | Maximum mitochondrial percentage per cell | Must be in [0, 100] |
+| `--min-cells` | int | `3` | Minimum cells expressing a retained gene | Must be >= 0 |
+| `--tissue` | enum | none | OmicsClaw tissue preset: `pbmc`, `brain`, `tumor`, `heart`, `kidney`, `liver`, `lung` | — |
+| `--r-enhanced` | flag | `false` | Generate R Enhanced figures via ggplot2 renderers | — |
+
+## R Enhanced Plots
+
+| Renderer | Output file | What it shows | R packages |
+|----------|-------------|---------------|------------|
+| `plot_feature_violin` | `r_feature_violin.png` | Violin plots of QC metrics (genes, counts, MT%) before/after filtering | ggplot2, ggridges, cowplot |
+| `plot_cell_barplot` | `r_cell_barplot.png` | Cell count bar chart showing retained vs removed cells | ggplot2, cowplot |

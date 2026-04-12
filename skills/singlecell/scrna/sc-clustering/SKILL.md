@@ -128,3 +128,34 @@ Standard output:
 
 **Upstream:** sc-preprocessing (single batch) or sc-batch-integration (multi-batch)
 **Downstream:** sc-cell-annotation, sc-markers, sc-pseudotime, sc-velocity-prep, sc-cell-communication, sc-grn
+
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | path | — | Input AnnData file; required unless `--demo` | — |
+| `--output` | path | — | Output directory (required) | — |
+| `--demo` | flag | `false` | Run with built-in demo data | — |
+| `--embedding-method` | enum | `umap` | Low-dimensional embedding: `umap`, `tsne`, `diffmap`, `phate` | — |
+| `--cluster-method` | enum | `leiden` | Graph clustering algorithm: `leiden`, `louvain` | — |
+| `--use-rep` | str | auto | Embedding key in `adata.obsm` to drive the neighbor graph (e.g. `X_pca`, `X_harmony`) | — |
+| `--n-neighbors` | int | `15` | Number of nearest neighbors for the neighbor graph | Must be >= 2 |
+| `--n-pcs` | int | `50` | PCA dimensions used when building the neighbor graph from `X_pca` | Must be >= 1 |
+| `--resolution` | str | `1.0` | Clustering resolution; use `auto` for silhouette-based search | Must be > 0 and <= 50 when numeric |
+| `--umap-min-dist` | float | `0.5` | UMAP minimum distance between embedded points (umap only) | — |
+| `--umap-spread` | float | `1.0` | UMAP effective scale of embedded points (umap only) | — |
+| `--tsne-perplexity` | float | `30.0` | t-SNE perplexity (tsne only) | Must be >= 1 |
+| `--tsne-metric` | str | `euclidean` | Distance metric for t-SNE (tsne only) | — |
+| `--diffmap-n-comps` | int | `15` | Number of diffusion map components (diffmap only) | Must be >= 2 |
+| `--phate-knn` | int | `15` | Number of nearest neighbors for PHATE (phate only) | Must be >= 2 |
+| `--phate-decay` | int | `40` | Alpha decay for PHATE kernel (phate only) | — |
+| `--r-enhanced` | flag | `false` | Generate R Enhanced figures via ggplot2 renderers | — |
+
+## R Enhanced Plots
+
+| Renderer | Output file | What it shows | R packages |
+|----------|-------------|---------------|------------|
+| `plot_embedding_discrete` | `r_embedding_discrete.png` | Cell embedding scatter colored by cluster labels (CellDimPlot equivalent) | ggplot2, ggrepel, cowplot |
+| `plot_embedding_feature` | `r_embedding_feature.png` | Cell embedding scatter with continuous feature expression overlay (FeatureDimPlot equivalent) | ggplot2, viridis, cowplot |
+| `plot_cell_barplot` | `r_cell_barplot.png` | Cell count bar chart per cluster (CellStatPlot bar equivalent) | ggplot2, cowplot |
+| `plot_cell_proportion` | `r_cell_proportion.png` | Cell proportion stacked bar across groups (CellStatPlot proportion equivalent) | ggplot2, cowplot |

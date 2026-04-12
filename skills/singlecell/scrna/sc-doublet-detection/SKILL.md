@@ -152,3 +152,28 @@ For concise execution guardrails, see `knowledge_base/knowhows/KH-sc-doublet-det
 
 **Upstream:** sc-preprocessing or raw count matrix
 **Downstream:** sc-filter (to remove flagged doublets)
+
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | path | — | Input AnnData file; required unless `--demo` | — |
+| `--output` | path | — | Output directory (required) | — |
+| `--demo` | flag | `false` | Run with built-in demo data | — |
+| `--method` | enum | `scrublet` | Doublet detection backend: `scrublet`, `doubletdetection`, `doubletfinder`, `scdblfinder`, `scds` | — |
+| `--expected-doublet-rate` | float | `0.06` | Expected fraction of doublets (used by scrublet, doubletfinder, scdblfinder, scds) | — |
+| `--threshold` | float | none | Manual doublet score cutoff; overrides Scrublet's automatic threshold (scrublet only) | — |
+| `--batch-key` | str | none | Obs column to split cells into batches before calling (scrublet only) | — |
+| `--doubletdetection-n-iters` | int | `10` | Number of bootstrap iterations (doubletdetection only) | — |
+| `--doubletdetection-standard-scaling` / `--no-doubletdetection-standard-scaling` | bool | `false` | Whether to apply standard scaling in DoubletDetection (doubletdetection only) | — |
+| `--scds-mode` | enum | `cxds` | Score type to use as the public call surface: `hybrid`, `cxds`, `bcds` (scds only) | — |
+| `--random-state` | int | `0` | Random seed for DoubletDetection reproducibility (doubletdetection only) | — |
+| `--r-enhanced` | flag | `false` | Generate R Enhanced figures via ggplot2 renderers | — |
+
+## R Enhanced Plots
+
+| Renderer | Output file | What it shows | R packages |
+|----------|-------------|---------------|------------|
+| `plot_embedding_discrete` | `r_embedding_discrete.png` | Cell embedding scatter colored by doublet call labels | ggplot2, ggrepel, cowplot |
+| `plot_embedding_feature` | `r_embedding_feature.png` | Cell embedding scatter with continuous doublet score overlay | ggplot2, viridis, cowplot |
+| `plot_feature_violin` | `r_feature_violin.png` | Violin plot of doublet scores by group/sample | ggplot2, ggridges, cowplot |

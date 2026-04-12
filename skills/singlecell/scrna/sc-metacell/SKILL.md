@@ -99,6 +99,32 @@ After metacell construction, common next steps include:
 - For short execution guardrails, see `knowledge_base/knowhows/KH-sc-metacell-guardrails.md`.
 - For longer method and interpretation guidance, see `knowledge_base/skill-guides/singlecell/sc-metacell.md`.
 
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | str | None | Input AnnData file (`.h5ad`) | Required unless `--demo` |
+| `--output` | str | — | Output directory | Required |
+| `--demo` | flag | off | Run with built-in demo data | — |
+| `--method` | str | `seacells` | Metacell construction method: `seacells` or `kmeans` | Choices: `seacells`, `kmeans`; falls back to `kmeans` if SEACells not installed |
+| `--use-rep` | str | `X_pca` | Embedding in `adata.obsm` to use for aggregation | Must exist in `adata.obsm` |
+| `--n-metacells` | int | 30 | Target number of metacells | Must be >= 2 and < n_cells |
+| `--celltype-key` | str | `leiden` | `adata.obs` column used for dominant-type summary (SEACells) | — |
+| `--min-iter` | int | 10 | Minimum SEACells optimization iterations | Must be >= 1; must be <= `--max-iter` |
+| `--max-iter` | int | 30 | Maximum SEACells optimization iterations | Must be >= `--min-iter` |
+| `--seed` | int | 0 | Random seed for reproducibility | — |
+| `--n-neighbors` | int | 15 | Neighbors for SEACells graph construction | Must be >= 2 |
+| `--n-pcs` | int | 20 | PCs used for SEACells neighbor computation | Must be >= 1 |
+| `--r-enhanced` | flag | off | Generate R Enhanced plots (requires R + ggplot2) | — |
+
+## R Enhanced Plots
+
+| Renderer | Output file | Description |
+|----------|-------------|-------------|
+| `plot_embedding_discrete` | `figures/r_enhanced/r_embedding_discrete.png` | Embedding colored by metacell assignment |
+| `plot_embedding_feature` | `figures/r_enhanced/r_embedding_feature.png` | Embedding colored by a continuous feature |
+| `plot_cell_barplot` | `figures/r_enhanced/r_cell_barplot.png` | Bar chart of cells per metacell |
+
 ## Workflow Position
 
 **Upstream:** sc-clustering or sc-cell-annotation

@@ -132,6 +132,72 @@ After identifying perturbed genes, consider:
 - `sc-enrichment` -- pathway enrichment on the top perturbed genes
 - `sc-grn` -- full gene regulatory network inference for deeper analysis
 
+## CLI Parameters
+
+### Shared parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | str | None | Input AnnData file (`.h5ad`) | Required unless `--demo` |
+| `--output` | str | — | Output directory | Required |
+| `--demo` | flag | off | Run with built-in demo data | — |
+| `--method` | str | `grn_ko` | Analysis method: `grn_ko` (Python) or `sctenifoldknk` (R) | Choices: `grn_ko`, `sctenifoldknk` |
+| `--ko-gene` | str | `G10` | Target gene to virtually knock out | Must exist in `adata.var_names`; raises error if absent |
+| `--r-enhanced` | flag | off | Generate R Enhanced plots (requires R + ggplot2) | — |
+
+### grn_ko parameters (Python, default)
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--n-top-genes` | int | 2000 | Number of HVGs used for GRN construction |
+| `--corr-threshold` | float | 0.05 | Minimum absolute Pearson correlation for GRN edges |
+
+### sctenifoldknk parameters (R only)
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--qc` | flag | off | Enable official scTenifoldKnk internal QC |
+| `--qc-min-lib-size` | int | 0 | Minimum library size for internal QC |
+| `--qc-min-cells` | int | 10 | Minimum cells per gene after QC |
+| `--n-net` | int | 2 | Number of subnetworks to construct |
+| `--n-cells` | int | 100 | Cells subsampled per network |
+| `--n-comp` | int | 3 | Principal components for network construction |
+| `--q` | float | 0.8 | Top-edge quantile retained |
+| `--td-k` | int | 2 | CP tensor rank |
+| `--ma-dim` | int | 2 | Manifold alignment dimensions |
+| `--n-cores` | int | 1 | Parallel cores used by the R backend |
+
+## R Enhanced Plots
+
+| Renderer | Output file | Description |
+|----------|-------------|-------------|
+| `plot_embedding_discrete` | `figures/r_enhanced/r_embedding_discrete.png` | UMAP colored by discrete cluster labels |
+| `plot_embedding_feature` | `figures/r_enhanced/r_embedding_feature.png` | UMAP colored by perturbation score |
+
+## Special Requirements
+
+### KO Gene Must Exist in the Data
+
+`--ko-gene` must match a gene symbol in `adata.var_names`. The preflight check raises a `SystemExit` with the first 5 available gene names if the specified gene is not found.
+
+```bash
+# Check available gene names first
+python -c "import scanpy as sc; a = sc.read_h5ad('data.h5ad'); print(list(a.var_names[:10]))"
+
+# Then run with the correct gene name
+python omicsclaw.py run sc-in-silico-perturbation \
+  --input data.h5ad \
+  --ko-gene TP53 \
+  --output results/
+
+# R-backed method (requires R + scTenifoldKnk)
+python omicsclaw.py run sc-in-silico-perturbation \
+  --input data.h5ad \
+  --method sctenifoldknk \
+  --ko-gene TP53 \
+  --output results/
+```
+
 ## Workflow Position
 
 **Upstream:** sc-clustering or sc-cell-annotation

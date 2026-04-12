@@ -299,6 +299,75 @@ Recommended user guidance:
 - If a backend binary is missing, prompt the user to install it explicitly in the active environment or module system.
 - Reference files are also user-managed resources; OmicsClaw should guide users to `resources/singlecell/references/...` or accept explicit local paths, but should not silently download large references during execution.
 
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | str | None | FASTQ path or existing Cell Ranger / STARsolo output directory | Required unless `--demo` |
+| `--output` | str | — | Output directory | Required |
+| `--demo` | flag | off | Run with built-in demo data | — |
+| `--method` | str | `cellranger` | Counting backend | Choices: `cellranger`, `starsolo`, `simpleaf`, `kb_python` |
+| `--reference` | str | None | Backend reference path (Cell Ranger transcriptome, STAR genome dir, simpleaf index, or kallisto index) | Required for real backend runs |
+| `--t2g` | str | None | Transcript-to-gene map for kb-python runs | Required for `kb_python` method |
+| `--sample` | str | None | Choose one sample from a multi-sample FASTQ directory | — |
+| `--read2` | str | None | Explicit mate FASTQ when `--input` points to one file | — |
+| `--threads` | int | 8 | Backend thread count | — |
+| `--chemistry` | str | `auto` | Chemistry hint; STARsolo supports `10xv2`, `10xv3`, `10xv4`; Cell Ranger auto-detects | — |
+| `--whitelist` | str | None | STARsolo barcode whitelist file | Strongly recommended for STARsolo real runs |
+| `--r-enhanced` | flag | off | Accepted for CLI consistency; no R Enhanced plots for this skill | No-op |
+
+## R Enhanced Plots
+
+This skill has **no R Enhanced plots**. The `--r-enhanced` flag is accepted for CLI consistency but produces no additional output.
+
+## Special Requirements
+
+### Reference Files
+
+Each backend requires its own reference assets. OmicsClaw does **not** download references automatically.
+
+| Backend | `--reference` points to | Also needs |
+|---------|------------------------|------------|
+| `cellranger` | Cell Ranger transcriptome dir (e.g., `refdata-gex-GRCh38-2020-A`) | — |
+| `starsolo` | STAR genome directory (built from FASTA + GTF) | `--whitelist` (10x barcode list), `--chemistry` |
+| `simpleaf` | simpleaf index directory | `--chemistry` |
+| `kb_python` | kallisto index file (`.idx`) | `--t2g` (transcript-to-gene map), `--chemistry` |
+
+Place reference assets under `resources/singlecell/references/<backend>/` for auto-detection, or pass explicit paths via `--reference`.
+
+### Direct Import (No Re-run)
+
+If a Cell Ranger or STARsolo run has already completed, pass the existing output directory as `--input` and omit `--reference`. The wrapper imports the filtered matrix directly without re-running the backend.
+
+```bash
+# Cell Ranger — run from FASTQ
+python omicsclaw.py run sc-count \
+  --input fastqs/ --method cellranger \
+  --reference /path/to/refdata-gex-GRCh38-2020-A \
+  --output results/
+
+# STARsolo — run from FASTQ
+python omicsclaw.py run sc-count \
+  --input fastqs/ --method starsolo \
+  --reference /path/to/star_index \
+  --chemistry 10xv3 \
+  --whitelist /path/to/3M-february-2018.txt \
+  --output results/
+
+# kb-python — run from FASTQ
+python omicsclaw.py run sc-count \
+  --input fastqs/ --method kb_python \
+  --reference /path/to/kallisto.idx \
+  --t2g /path/to/t2g.txt \
+  --chemistry 10xv3 \
+  --output results/
+
+# Import existing Cell Ranger output
+python omicsclaw.py run sc-count \
+  --input sample_count/ --method cellranger \
+  --output results/
+```
+
 ## Workflow Position
 
 - **Optional upstream step**: `sc-fastq-qc` for read-level quality assessment before counting

@@ -249,6 +249,73 @@ Recommended user guidance:
 - If users want BAM-backed or STARsolo-backed velocity preparation, tell them to install these tools explicitly into their active environment and verify they are on `PATH`.
 - Large annotation and reference assets such as `genes.gtf` and STAR genome directories should be user-managed under `resources/singlecell/references/...` or provided by explicit local paths.
 
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | str | None | Cell Ranger output dir, STARsolo output dir, FASTQ path, or loom file | Required unless `--demo` |
+| `--output` | str | — | Output directory | Required |
+| `--demo` | flag | off | Run with built-in demo data | — |
+| `--method` | str | `velocyto` | Velocity preparation backend | Choices: `velocyto`, `starsolo` |
+| `--gtf` | str | None | GTF annotation file required for BAM-backed velocyto runs | Required when input is a Cell Ranger BAM directory |
+| `--base-h5ad` | str | None | Existing AnnData to merge velocity layers into | Optional — useful to align velocity layers with a preprocessed object |
+| `--reference` | str | None | STAR genome directory for FASTQ-backed STARsolo runs | Required for STARsolo FASTQ runs |
+| `--sample` | str | None | Choose one sample from a multi-sample FASTQ directory | — |
+| `--read2` | str | None | Explicit mate FASTQ when `--input` points to one file | — |
+| `--threads` | int | 8 | Backend thread count | — |
+| `--chemistry` | str | `auto` | STARsolo chemistry; real FASTQ runs require `10xv2`, `10xv3`, or `10xv4` | — |
+| `--whitelist` | str | None | STARsolo barcode whitelist file | Strongly recommended for STARsolo real FASTQ runs |
+| `--r-enhanced` | flag | off | Accepted for CLI consistency; no R Enhanced plots for this skill | No-op |
+
+## R Enhanced Plots
+
+This skill has **no R Enhanced plots**. The `--r-enhanced` flag is accepted for CLI consistency but produces no additional output.
+
+## Special Requirements
+
+### Input Sources and Required Assets
+
+| Input source | `--method` | Also needs |
+|-------------|-----------|------------|
+| Cell Ranger BAM directory | `velocyto` | `--gtf` (matching annotation GTF) |
+| Existing loom file | `velocyto` | — (imported directly) |
+| STARsolo Velocyto output dir | `starsolo` | — (imported directly) |
+| FASTQ directory (STARsolo) | `starsolo` | `--reference` (STAR genome dir), `--chemistry`, `--whitelist` |
+
+### GTF File
+
+When running velocyto from a Cell Ranger BAM, `--gtf` must point to the same annotation GTF used during the original Cell Ranger run. This ensures splicing boundaries are consistent.
+
+Place GTF files under `resources/singlecell/references/gtf/` for auto-detection, or pass the path explicitly via `--gtf`.
+
+### Merging into an Existing AnnData
+
+Use `--base-h5ad` to merge the extracted `spliced`/`unspliced`/`ambiguous` layers back into a preprocessed AnnData (e.g., one that already has UMAP and clustering). The wrapper aligns cells and genes by intersection.
+
+```bash
+# Cell Ranger BAM + velocyto
+python omicsclaw.py run sc-velocity-prep \
+  --input sample_count/ \
+  --method velocyto \
+  --gtf genes.gtf \
+  --output results/
+
+# STARsolo Velocyto output (import only)
+python omicsclaw.py run sc-velocity-prep \
+  --input starsolo_pbmc/ \
+  --method starsolo \
+  --base-h5ad processed.h5ad \
+  --output results/
+
+# STARsolo run from FASTQ
+python omicsclaw.py run sc-velocity-prep \
+  --input fastqs/ --method starsolo \
+  --reference /path/to/star_index \
+  --chemistry 10xv3 \
+  --whitelist /path/to/3M-february-2018.txt \
+  --output results/
+```
+
 ## Workflow Position
 
 **Upstream:** sc-clustering (plus BAM/loom files for spliced/unspliced counts)
