@@ -277,6 +277,8 @@ def main() -> None:
     parser.add_argument("--sample", help="Choose one sample from a multi-sample FASTQ directory")
     parser.add_argument("--threads", type=int, default=4, help="Thread count for external FastQC runs")
     parser.add_argument("--max-reads", type=int, default=20000, help="Per-FASTQ read sampling depth for the Python fallback summary")
+    parser.add_argument("--r-enhanced", action="store_true",
+        help="(Accepted for CLI consistency; no R Enhanced plots available for this skill.)")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)

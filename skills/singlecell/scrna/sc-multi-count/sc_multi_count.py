@@ -322,6 +322,8 @@ def main() -> None:
         "--sample-id", dest="sample_ids", action="append", default=[],
         help="Sample ID for the corresponding --input (repeat for each sample, same order)",
     )
+    parser.add_argument("--r-enhanced", action="store_true",
+        help="(Accepted for CLI consistency; no R Enhanced plots available for this skill.)")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
