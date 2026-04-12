@@ -32,6 +32,7 @@ from omicsclaw.common.report import (
     load_result_json,
     write_output_readme,
     write_result_json,
+    write_replot_hint,
 )
 from omicsclaw.core.dependency_manager import validate_r_environment
 from omicsclaw.core.r_script_runner import RScriptRunner
@@ -1308,6 +1309,7 @@ def main() -> None:
             {"skill": "sc-cell-communication", "reason": "Explore ligand-receptor interactions between cell types", "priority": "optional"},
         ]
         write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
+        write_replot_hint(output_dir, SKILL_NAME, R_ENHANCED_PLOTS)
         result_payload = load_result_json(output_dir) or {"skill": SKILL_NAME, "summary": summary, "data": result_data}
         write_standard_run_artifacts(output_dir, result_payload, summary)
 
@@ -1515,6 +1517,7 @@ def main() -> None:
         {"skill": "sc-grn", "reason": "Infer gene regulatory networks", "priority": "optional"},
     ]
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
+    write_replot_hint(output_dir, SKILL_NAME, R_ENHANCED_PLOTS)
     result_payload = load_result_json(output_dir) or {"skill": SKILL_NAME, "summary": summary, "data": result_data}
     write_standard_run_artifacts(output_dir, result_payload, summary)
 

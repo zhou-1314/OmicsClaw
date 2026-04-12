@@ -45,6 +45,7 @@ from omicsclaw.common.report import (
     load_result_json,
     write_output_readme,
     write_result_json,
+    write_replot_hint,
 )
 from omicsclaw.common.checksums import sha256_file
 from skills.singlecell._lib.viz_utils import save_figure
@@ -990,6 +991,7 @@ def main():
     if r_enhanced_figures:
         result_data["r_enhanced_figures"] = r_enhanced_figures
         write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
+    write_replot_hint(output_dir, SKILL_NAME, R_ENHANCED_PLOTS)
 
     # Summary
     print(f"\n{'='*60}")

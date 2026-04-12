@@ -28,6 +28,7 @@ from omicsclaw.common.report import (
     load_result_json,
     write_output_readme,
     write_result_json,
+    write_replot_hint,
 )
 from skills.singlecell._lib.adata_utils import (
     ensure_input_contract,
@@ -1003,6 +1004,7 @@ def main():
     r_enhanced_figures = _render_r_enhanced(output_dir, output_dir / "figure_data", args.r_enhanced)
     result_data["r_enhanced_figures"] = r_enhanced_figures
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
+    write_replot_hint(output_dir, SKILL_NAME, R_ENHANCED_PLOTS)
     result_payload = load_result_json(output_dir) or {"skill": SKILL_NAME, "summary": summary, "data": result_data}
     write_output_readme(
         output_dir,

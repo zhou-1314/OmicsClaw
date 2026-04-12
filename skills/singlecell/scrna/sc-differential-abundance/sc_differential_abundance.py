@@ -42,6 +42,7 @@ from omicsclaw.common.report import (
     write_output_readme,
     write_repro_requirements,
     write_result_json,
+    write_replot_hint,
     write_standard_run_artifacts,
 )
 from skills.singlecell._lib import io as sc_io
@@ -837,6 +838,7 @@ def main() -> int:
         {"skill": "sc-de", "reason": "Differential expression in abundance-changed populations", "priority": "optional"},
     ]
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, input_checksum)
+    write_replot_hint(output_dir, SKILL_NAME, R_ENHANCED_PLOTS)
 
     # ---- report.md ----
     _write_report(output_dir, summary, params, input_path, diagnostics)
