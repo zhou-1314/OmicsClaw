@@ -510,7 +510,13 @@ target-version = "py311"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["omicsclaw", "omicsclaw.*", "skills.*._lib", "skills.*._lib.*"]
+# `bot` is included so the shared LLM/agent engine (bot.core, used by
+# omicsclaw.app.server's lifespan at startup) ships with pip installs.
+# Without this, `pip install omicsclaw` gives you the server shell but
+# `import bot.core` fails at startup — specifically biting the
+# OmicsClaw-App desktop bundled runtime, which uses `--no-deps` pip
+# installs and has no source-tree sibling `bot/` to fall back on.
+include = ["omicsclaw", "omicsclaw.*", "bot", "bot.*", "skills.*._lib", "skills.*._lib.*"]
 exclude = ["tests", "tests.*", "output", "sessions"]
 
 [tool.setuptools.package-data]
