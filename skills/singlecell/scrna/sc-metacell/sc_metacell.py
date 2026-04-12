@@ -287,6 +287,18 @@ def _write_report(
 
 def main() -> int:
     args = _parse_args()
+
+    # -- Parameter validation --
+    from skills.singlecell._lib.param_validators import ParamValidator
+    v = ParamValidator(SKILL_NAME)
+    v.positive("n_metacells", args.n_metacells, min_val=2)
+    v.positive("n_neighbors", args.n_neighbors, min_val=2)
+    v.positive("n_pcs", args.n_pcs, min_val=1)
+    v.positive("min_iter", args.min_iter, min_val=1)
+    v.positive("max_iter", args.max_iter, min_val=1)
+    v.min_max_consistent("min_iter", args.min_iter, "max_iter", args.max_iter)
+    v.check()
+
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
     figures_dir = output_dir / "figures"

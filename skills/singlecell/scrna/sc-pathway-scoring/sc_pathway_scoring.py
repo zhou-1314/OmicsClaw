@@ -848,6 +848,15 @@ def main() -> None:
     parser.add_argument("--r-enhanced", action="store_true", default=False, help="Generate R-enhanced figures via ggplot2 renderers")
     args = parser.parse_args()
 
+    # -- Parameter validation --
+    from skills.singlecell._lib.param_validators import ParamValidator
+    v = ParamValidator(SKILL_NAME)
+    v.positive("top_pathways", args.top_pathways, min_val=1)
+    v.positive("score_genes_ctrl_size", args.score_genes_ctrl_size, min_val=1)
+    v.positive("score_genes_n_bins", args.score_genes_n_bins, min_val=1)
+    v.in_range("aucell_py_auc_threshold", args.aucell_py_auc_threshold, low=0, high=1, low_exclusive=True)
+    v.check()
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
