@@ -30,6 +30,7 @@ from omicsclaw.common.report import (
     load_result_json,
     write_output_readme,
     write_result_json,
+    write_replot_hint,
 )
 from skills.singlecell._lib import io as sc_io
 from skills.singlecell._lib import ambient as sc_ambient_utils
@@ -1040,6 +1041,7 @@ def main():
     result_data["output_bundle"] = summary.get("output_bundle", {})
     write_ambient_report(output_dir, summary, params, input_file, degenerate_diag=degenerate_diag)
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
+    write_replot_hint(output_dir, SKILL_NAME, R_ENHANCED_PLOTS)
 
     # --- Degenerate output stdout guidance ---
     if degenerate_diag.get("degenerate"):

@@ -45,6 +45,7 @@ from omicsclaw.common.report import (
     load_result_json,
     write_output_readme,
     write_result_json,
+    write_replot_hint,
 )
 from omicsclaw.common.checksums import sha256_file
 from skills.singlecell._lib.viz_utils import save_figure
@@ -191,6 +192,7 @@ def _write_figure_data(
     adjacencies: pd.DataFrame,
     regulons: list[dict],
     auc_matrix: pd.DataFrame,
+    cluster_labels: pd.Series | None = None,
 ) -> dict[str, str]:
     """Write figure_data/ with plot-ready CSVs and a manifest."""
     figure_data_dir = output_dir / "figure_data"
@@ -218,13 +220,23 @@ def _write_figure_data(
 
         # Write gene_expression.csv in long format for plot_feature_violin/plot_feature_cor.
         # Pivots AUC matrix wide -> long, treating each regulon/TF as a "gene" feature.
+        # Includes cluster/cell-type column so the violin plot groups by cluster, not "All".
         try:
             sample_n = min(len(auc_matrix), 1000)
             sampled = auc_matrix.sample(n=sample_n, random_state=42) if len(auc_matrix) > sample_n else auc_matrix
+            # Build cluster lookup for sampled cells
+            cluster_lookup: dict[str, str] = {}
+            if cluster_labels is not None:
+                for cell_id in sampled.index:
+                    if cell_id in cluster_labels.index:
+                        cluster_lookup[str(cell_id)] = str(cluster_labels[cell_id])
             long_rows = []
             for tf in sampled.columns:
                 for cell_id, val in sampled[tf].items():
-                    long_rows.append({"cell_id": str(cell_id), "gene": tf, "expression": float(val)})
+                    row = {"cell_id": str(cell_id), "gene": tf, "expression": float(val)}
+                    if cluster_lookup:
+                        row["cluster"] = cluster_lookup.get(str(cell_id), "Unknown")
+                    long_rows.append(row)
             pd.DataFrame(long_rows).to_csv(figure_data_dir / "gene_expression.csv", index=False)
             files["gene_expression"] = "gene_expression.csv"
         except Exception:
@@ -903,11 +915,13 @@ def main():
     )
 
     # Write figure_data
+    cluster_labels_series = adata.obs[args.cluster_key] if args.cluster_key in adata.obs.columns else None
     figure_data_files = _write_figure_data(
         output_dir,
         adjacencies=adjacencies,
         regulons=regulons,
         auc_matrix=auc_matrix,
+        cluster_labels=cluster_labels_series,
     )
 
     # Sort regulons by target count
@@ -990,6 +1004,7 @@ def main():
     if r_enhanced_figures:
         result_data["r_enhanced_figures"] = r_enhanced_figures
         write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
+    write_replot_hint(output_dir, SKILL_NAME, R_ENHANCED_PLOTS)
 
     # Summary
     print(f"\n{'='*60}")

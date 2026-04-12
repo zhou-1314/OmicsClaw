@@ -40,6 +40,7 @@ from omicsclaw.common.report import (
     load_result_json,
     write_output_readme,
     write_result_json,
+    write_replot_hint,
 )
 from omicsclaw.core.r_dependency_manager import check_r_tier, suggest_r_install
 from omicsclaw.core.r_script_runner import RScriptRunner
@@ -1397,6 +1398,7 @@ def main() -> None:
         {"skill": "sc-gene-programs", "reason": "Discover gene programs along the trajectory", "priority": "optional"},
     ]
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
+    write_replot_hint(output_dir, SKILL_NAME, R_ENHANCED_PLOTS)
     result_payload = load_result_json(output_dir) or {"skill": SKILL_NAME, "summary": summary, "data": result_data}
     write_standard_run_artifacts(output_dir, result_payload, summary)
 

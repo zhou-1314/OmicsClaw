@@ -43,6 +43,7 @@ from omicsclaw.common.report import (
     load_result_json,
     write_repro_requirements,
     write_result_json,
+    write_replot_hint,
     write_standard_run_artifacts,
 )
 from omicsclaw.common.checksums import sha256_file
@@ -880,6 +881,7 @@ def main():
     }
     result_data["next_steps"] = []
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
+    write_replot_hint(output_dir, SKILL_NAME, R_ENHANCED_PLOTS)
     result_payload = load_result_json(output_dir) or {
         "skill": SKILL_NAME,
         "summary": summary,

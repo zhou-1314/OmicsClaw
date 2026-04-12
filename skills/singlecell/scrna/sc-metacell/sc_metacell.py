@@ -20,7 +20,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from omicsclaw.common.checksums import sha256_file
-from omicsclaw.common.report import generate_report_footer, generate_report_header, write_output_readme, write_result_json
+from omicsclaw.common.report import generate_report_footer, generate_report_header, write_output_readme, write_result_json, write_replot_hint
 from skills.singlecell._lib import io as sc_io
 from skills.singlecell._lib.adata_utils import (
     ensure_input_contract,
@@ -511,6 +511,7 @@ def main() -> int:
             output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data,
             input_checksum=input_checksum,
         )
+    write_replot_hint(output_dir, SKILL_NAME, R_ENHANCED_PLOTS)
 
     # -- Report --
     _write_report(output_dir, summary, params, input_path, diagnostics, preflight_warnings)
