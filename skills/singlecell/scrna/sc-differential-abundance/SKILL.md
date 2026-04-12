@@ -88,6 +88,35 @@ python omicsclaw.py run sc-differential-abundance --demo --method milo --output 
 - `figures/sample_celltype_proportions.png`
 - `result.json` and `report.md`
 
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | str | — | Input `.h5ad` file | required unless `--demo` |
+| `--output` | str | — | Output directory | required |
+| `--demo` | flag | off | Run with bundled demo data | — |
+| `--method` | str | `milo` | DA method: `milo`, `sccoda`, `simple`, `proportion_test_r` | choices validated |
+| `--condition-key` | str | `condition` | Condition/treatment column in `obs` | — |
+| `--sample-key` | str | `sample` | Biological replicate column in `obs` | — |
+| `--cell-type-key` | str | `cell_type` | Cell type or cluster column in `obs` | — |
+| `--contrast` | str | None | Explicit comparison string, e.g. `control vs stim` | — |
+| `--reference-cell-type` | str | `automatic` | scCODA reference cell type | sccoda only |
+| `--fdr` | float | 0.05 | FDR cutoff for reporting | — |
+| `--prop` | float | 0.1 | Milo neighborhood sampling fraction | milo only |
+| `--n-neighbors` | int | 30 | KNN size if graph must be rebuilt | — |
+| `--min-count` | int | 10 | Minimum cell count per neighborhood | milo only |
+| `--n-permutations` | int | 1000 | Monte Carlo permutations for proportion_test_r | proportion_test_r only |
+| `--r-enhanced` | flag | off | Also render R Enhanced ggplot2 figures | — |
+
+## R Enhanced Plots
+
+Activated by `--r-enhanced`. Files written to `figures/r_enhanced/`.
+
+| Renderer | Output file | figure_data CSV | Plot description | Required R packages |
+|----------|-------------|-----------------|------------------|---------------------|
+| `plot_embedding_discrete` | `r_embedding_discrete.png` | `embedding_points.csv` | UMAP/embedding colored by condition or DA result | ggplot2 |
+| `plot_cell_barplot` | `r_cell_barplot.png` | `sample_by_celltype_proportions.csv` | Stacked bar of cell type proportions per sample | ggplot2 |
+
 ## References Inside OmicsClaw
 
 - For short execution guardrails, see `knowledge_base/knowhows/KH-sc-differential-abundance-guardrails.md`.

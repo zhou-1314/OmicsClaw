@@ -122,6 +122,28 @@ Successful runs write:
   which holds for most but not all biological systems.
 - Very small datasets (<50 cells) may produce unreliable scores.
 
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | str | — | Input `.h5ad` file | required unless `--demo` |
+| `--output` | str | — | Output directory | required |
+| `--demo` | flag | off | Run with bundled demo data | — |
+| `--method` | str | `cytotrace_simple` | Potency method (only `cytotrace_simple` currently) | fixed choice |
+| `--n-neighbors` | int | 30 | KNN neighbors for score smoothing | — |
+| `--r-enhanced` | flag | off | Also render R Enhanced ggplot2 figures | — |
+
+## R Enhanced Plots
+
+Activated by `--r-enhanced`. Files written to `figures/r_enhanced/`.
+
+| Renderer | Output file | figure_data CSV | Plot description | Required R packages |
+|----------|-------------|-----------------|------------------|---------------------|
+| `plot_embedding_discrete` | `r_embedding_discrete.png` | `cytotrace_embedding.csv` | UMAP/embedding colored by cell type labels | ggplot2 |
+| `plot_embedding_feature` | `r_embedding_feature.png` | `cytotrace_embedding.csv` | UMAP/embedding colored by CytoTRACE score | ggplot2 |
+
+Note: The plan listed 1 R renderer (`plot_feature_boxplot`) for sc-cytotrace, but the actual `R_ENHANCED_PLOTS` dict contains `plot_embedding_discrete` and `plot_embedding_feature`. The cytotrace boxplot renderer (`plot_cytotrace_boxplot`) is registered in the R registry but not wired into the skill's `R_ENHANCED_PLOTS` dict.
+
 ## Workflow Position
 
 **Upstream:** sc-clustering or sc-cell-annotation

@@ -126,6 +126,32 @@ Successful runs write:
 
 For concise execution rules, see `knowledge_base/knowhows/KH-sc-markers-guardrails.md`. For longer interpretation guidance, see `knowledge_base/skill-guides/singlecell/sc-markers.md`.
 
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | str | — | Input `.h5ad` file | required unless `--demo` |
+| `--output` | str | — | Output directory | required |
+| `--demo` | flag | off | Run with bundled PBMC3k data | — |
+| `--groupby` | str | None | Grouping column in `obs` | auto-detected from leiden/louvain/cell_type if omitted |
+| `--method` | str | `wilcoxon` | Ranking method: `wilcoxon`, `t-test`, `logreg`, `cosg` | validated against METHOD_REGISTRY |
+| `--n-genes` | int | None (all) | Total genes to test per group | — |
+| `--n-top` | int | 10 | Top genes to export per group | — |
+| `--min-in-group-fraction` | float | 0.25 | Minimum fraction of cells expressing the gene in the group | — |
+| `--min-fold-change` | float | 0.25 | Minimum log fold-change threshold | — |
+| `--max-out-group-fraction` | float | 0.5 | Maximum fraction of cells expressing the gene outside the group | — |
+| `--mu` | float | 1.0 | COSG specificity penalty (0–1); higher = more specific | COSG only |
+| `--r-enhanced` | flag | off | Also render R Enhanced ggplot2 figures | — |
+
+## R Enhanced Plots
+
+Activated by `--r-enhanced`. Files written to `figures/r_enhanced/`.
+
+| Renderer | Output file | figure_data CSV | Plot description | Required R packages |
+|----------|-------------|-----------------|------------------|---------------------|
+| `plot_marker_heatmap` | `r_marker_heatmap.png` | `marker_top_genes.csv` | Heatmap of top marker genes per cluster | ggplot2, ComplexHeatmap |
+| `plot_feature_violin` | `r_feature_violin.png` | `feature_expression.csv` | Violin plots of top marker expression per group | ggplot2 |
+
 ## Workflow Position
 
 **Upstream:** sc-clustering or sc-cell-annotation

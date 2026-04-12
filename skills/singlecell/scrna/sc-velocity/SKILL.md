@@ -232,6 +232,26 @@ Recommended user guidance:
 - Do not auto-install scVelo during a normal skill run; if it is missing, ask the user to install the velocity extra explicitly.
 - If `spliced` / `unspliced` layers are missing, direct users to `sc-velocity-prep` and clearly state that upstream BAM/STAR tools remain manual installs.
 
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | str | — | Input `.h5ad` file with spliced/unspliced layers | required unless `--demo` |
+| `--output` | str | — | Output directory | required |
+| `--demo` | flag | off | Run with bundled velocity-ready demo data | — |
+| `--method` / `--mode` | str | `scvelo_stochastic` | Velocity backend: `scvelo_stochastic`, `scvelo_dynamical`, `scvelo_steady_state` (or shorthand `stochastic`, `dynamical`, `steady_state`) | validated against METHOD_REGISTRY |
+| `--n-jobs` | int | 4 | Parallel jobs for scVelo fitting | — |
+| `--r-enhanced` | flag | off | Also render R Enhanced ggplot2 figures | — |
+
+## R Enhanced Plots
+
+Activated by `--r-enhanced`. Files written to `figures/r_enhanced/`.
+
+| Renderer | Output file | figure_data CSV | Plot description | Required R packages |
+|----------|-------------|-----------------|------------------|---------------------|
+| `plot_velocity` | `r_velocity.png` | `velocity_cells.csv` | Velocity stream/arrow overlay on embedding | ggplot2 |
+| `plot_embedding_discrete` | `r_embedding_discrete.png` | `embedding_points.csv` | UMAP/embedding colored by cluster labels | ggplot2 |
+
 ## Workflow Position
 
 **Upstream:** sc-velocity-prep

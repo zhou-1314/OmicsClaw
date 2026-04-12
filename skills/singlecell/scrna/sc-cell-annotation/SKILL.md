@@ -227,6 +227,39 @@ Sources for labeled references:
 - If CellTypist falls back to `markers`, report both requested and executed methods.
 - If `singler` / `scmap` use celldex atlases, remember they may still fail in restricted-network or empty-cache environments even when R packages are installed.
 
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | str | — | Input `.h5ad` file | required unless `--demo` |
+| `--output` | str | — | Output directory | required |
+| `--demo` | flag | off | Run with bundled PBMC3k data | — |
+| `--method` | str | `markers` | Annotation method: `manual`, `markers`, `celltypist`, `popv`, `knnpredict`, `singler`, `scmap` | validated against METHOD_REGISTRY |
+| `--model` | str | `Immune_All_Low` | CellTypist model name or file stem | celltypist only |
+| `--reference` | str | `HPCA` | SingleR/scmap atlas key or path to labeled H5AD (popv/knnpredict) | — |
+| `--cluster-key` | str | None | Cluster/label column for marker summaries; auto-detected when omitted | — |
+| `--manual-map` | str | None | Inline cluster-to-label mapping, e.g. `0=T cell;1,2=Myeloid` | manual only |
+| `--manual-map-file` | str | None | Path to mapping file (json/csv/tsv/txt) | manual only |
+| `--marker-file` | str | None | Path to custom marker gene file (JSON or CSV) | markers only |
+| `--celltypist-majority-voting` | flag | off | Enable CellTypist neighborhood majority-voting smoothing | celltypist only |
+| `--species` | str | `Human` | SCSA species filter (`Human`/`Mouse`) | scsa only |
+| `--tissue` | str | `All` | SCSA tissue filter (e.g. `Blood`, `Brain`, `All`) | scsa only |
+| `--scsa-foldchange` | float | 1.5 | SCSA DE fold-change threshold | scsa only |
+| `--scsa-pvalue` | float | 0.05 | SCSA DE p-value threshold | scsa only |
+| `--r-enhanced` | flag | off | Also render R Enhanced ggplot2 figures | — |
+
+## R Enhanced Plots
+
+Activated by `--r-enhanced`. Files written to `figures/r_enhanced/`.
+
+| Renderer | Output file | figure_data CSV | Plot description | Required R packages |
+|----------|-------------|-----------------|------------------|---------------------|
+| `plot_embedding_discrete` | `r_embedding_discrete.png` | `annotation_embedding_points.csv` | UMAP/embedding colored by annotated cell types | ggplot2 |
+| `plot_embedding_feature` | `r_embedding_feature.png` | `annotation_embedding_points.csv` | UMAP/embedding colored by annotation confidence score | ggplot2 |
+| `plot_cell_barplot` | `r_cell_barplot.png` | `cell_type_counts.csv` | Bar chart of cell type counts | ggplot2 |
+| `plot_cell_proportion` | `r_cell_proportion.png` | `cell_type_counts.csv` | Stacked proportion bar chart per sample or cluster | ggplot2 |
+| `plot_cell_sankey` | `r_cell_sankey.png` | `cluster_annotation_matrix.csv` | Sankey/alluvial diagram from cluster to cell type | ggplot2, ggalluvial |
+
 ## Workflow Position
 
 **Upstream:** sc-clustering

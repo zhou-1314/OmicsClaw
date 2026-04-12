@@ -245,6 +245,39 @@ The current wrapper writes direct figure outputs rather than a recipe-driven gal
 - For short execution guardrails, see `knowledge_base/knowhows/KH-sc-de-guardrails.md`.
 - For longer method and interpretation guidance, see `knowledge_base/skill-guides/singlecell/sc-de.md`.
 
+## CLI Parameters
+
+| Flag | Type | Default | Description | Validation |
+|------|------|---------|-------------|------------|
+| `--input` | str | — | Input `.h5ad` file | required unless `--demo` |
+| `--output` | str | — | Output directory | required |
+| `--demo` | flag | off | Run with bundled PBMC3k data | — |
+| `--groupby` | str | `leiden` | Group/condition column in `obs` | must exist in `obs` |
+| `--method` | str | `wilcoxon` | DE backend: `wilcoxon`, `t-test`, `logreg`, `mast`, `deseq2_r` | validated against METHOD_REGISTRY |
+| `--n-top-genes` | int | 10 | Number of top genes to export per group | min 1 |
+| `--logreg-solver` | str | `lbfgs` | Logistic-regression optimizer | choices: lbfgs, liblinear, newton-cg, sag, saga |
+| `--group1` | str | None | Comparison group (vs `--group2`) | — |
+| `--group2` | str | None | Reference group (vs `--group1`) | — |
+| `--sample-key` | str | None | Sample/replicate column for pseudobulk | used by `deseq2_r` |
+| `--celltype-key` | str | `cell_type` | Cell type column for pseudobulk aggregation | used by `deseq2_r` |
+| `--pseudobulk-min-cells` | int | 10 | Minimum cells per pseudobulk bin | non-negative |
+| `--pseudobulk-min-counts` | int | 1000 | Minimum total counts per pseudobulk bin | non-negative |
+| `--padj-threshold` | float | 0.05 | Adjusted p-value cutoff for summary figures | 0.0–1.0 |
+| `--log2fc-threshold` | float | 1.0 | log2FC cutoff for volcano/summary figures | non-negative |
+| `--r-enhanced` | flag | off | Also render R Enhanced ggplot2 figures | — |
+
+## R Enhanced Plots
+
+Activated by `--r-enhanced`. Files written to `figures/r_enhanced/`.
+
+| Renderer | Output file | figure_data CSV | Plot description | Required R packages |
+|----------|-------------|-----------------|------------------|---------------------|
+| `plot_de_volcano` | `r_de_volcano.png` | `de_top_markers.csv` | Volcano plot with up/down/NS coloring and gene labels | ggplot2, ggrepel |
+| `plot_de_heatmap` | `r_de_heatmap.png` | `de_top_markers.csv` | Expression heatmap of top DE genes across groups | ggplot2, ComplexHeatmap |
+| `plot_feature_violin` | `r_feature_violin.png` | `feature_expression.csv` | Violin plots of top DE gene expression per group | ggplot2 |
+| `plot_feature_cor` | `r_feature_cor.png` | `feature_correlation.csv` | Gene-gene expression correlation scatter | ggplot2 |
+| `plot_de_manhattan` | `r_de_manhattan.png` | `de_top_markers.csv` | Manhattan-style plot of DE significance by gene rank | ggplot2 |
+
 ## Workflow Position
 
 **Upstream:** sc-clustering, sc-cell-annotation, or sc-markers
