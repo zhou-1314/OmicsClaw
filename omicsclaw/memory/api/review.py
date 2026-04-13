@@ -19,6 +19,11 @@ class RollbackRequest(BaseModel):
     keys: List[str]
 
 
+class IntegrateRequest(BaseModel):
+    """Request to accept specific pending changes."""
+    keys: List[str]
+
+
 # ------------------------------------------------------------------
 # Endpoints
 # ------------------------------------------------------------------
@@ -223,6 +228,38 @@ async def rollback_changes(req: RollbackRequest):
 
     return {
         "rolled_back": rolled_back,
+        "errors": errors,
+        "remaining": store.get_change_count(),
+    }
+
+
+@router.post("/integrate")
+async def integrate_changes(req: IntegrateRequest):
+    """Accept specific pending changes by removing them from the changeset."""
+    store = get_changeset_store()
+    all_rows = store.get_all_rows_dict()
+
+    errors = []
+    accepted = []
+
+    for key in req.keys:
+        entry = all_rows.get(key)
+        if not entry:
+            errors.append({"key": key, "error": "Not found"})
+            continue
+        table = entry.get("table", "")
+        before = entry.get("before")
+        after = entry.get("after")
+        if _rows_equal(table, before, after):
+            errors.append({"key": key, "error": "No pending change"})
+            continue
+        accepted.append(key)
+
+    if accepted:
+        store.remove_keys(accepted)
+
+    return {
+        "integrated": accepted,
         "errors": errors,
         "remaining": store.get_change_count(),
     }

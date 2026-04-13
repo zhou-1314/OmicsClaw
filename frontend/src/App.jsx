@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
-import { ShieldCheck, Database, LayoutGrid, Sparkles } from 'lucide-react';
+import { ShieldCheck, Database, LayoutGrid, Sparkles, Workflow } from 'lucide-react';
 import clsx from 'clsx';
 
 import ReviewPage from './features/review/ReviewPage';
+import KgPage from './features/kg/KgPage';
 import MemoryBrowser from './features/memory/MemoryBrowser';
 import MaintenancePage from './features/maintenance/MaintenancePage';
 import TokenAuth from './components/TokenAuth';
@@ -29,6 +30,17 @@ function Layout() {
           >
             <ShieldCheck size={16} />
             Review & Audit
+          </NavLink>
+
+          <NavLink
+            to="/kg"
+            className={({ isActive }) => clsx(
+              "h-full flex items-center gap-2 px-4 text-sm font-medium border-b-2 transition-colors",
+              isActive ? "border-cyan-500 text-cyan-300 bg-slate-800/50" : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/30"
+            )}
+          >
+            <Workflow size={16} />
+            KG Explorer
           </NavLink>
 
           <NavLink
@@ -61,6 +73,8 @@ function Layout() {
           <Route path="/" element={<Navigate to="/review" replace />} />
 
           <Route path="/review" element={<ReviewPage />} />
+
+          <Route path="/kg" element={<KgPage />} />
 
           <Route path="/memory" element={<MemoryBrowser />} />
 

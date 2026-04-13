@@ -47,7 +47,45 @@ _PROVIDER_DETECT_ORDER = PROVIDER_DETECT_ORDER
 # Paths (relative to OmicsClaw project root)
 # ---------------------------------------------------------------------------
 
-OMICSCLAW_DIR = Path(__file__).resolve().parent.parent
+
+def _resolve_omicsclaw_dir() -> Path:
+    """Find a writable OmicsClaw workspace directory.
+
+    The historical assumption was that bot/ sits directly next to
+    ``omicsclaw.py`` in a source tree, so ``Path(__file__).parent.parent``
+    was always correct. That breaks for two newer install shapes:
+
+    1. **Pip-installed** (e.g. ``pip install omicsclaw``): bot/ lives
+       under site-packages/, so ``parent.parent`` resolves to
+       site-packages — not a meaningful project dir, and usually
+       read-only inside a packaged app bundle.
+    2. **OmicsClaw-App bundled runtime**: a signed/notarized .app bundle
+       on macOS puts site-packages under
+       ``/Applications/.../Contents/Resources``, which is strictly
+       read-only. ``_AUDIT_LOG_DIR.mkdir(...)`` a few lines down would
+       raise ``PermissionError`` at import time.
+
+    Resolution priority:
+      1. ``OMICSCLAW_DIR`` env var (explicit override — honoured first
+         so operators can point at a shared or external workspace).
+      2. Source-tree layout (``bot/`` sibling of ``omicsclaw.py``) —
+         preserves every existing dev install behavior unchanged.
+      3. ``~/.omicsclaw`` — the per-user writable fallback used by
+         pip-installed / bundled-runtime deployments. Mirrors the
+         convention used by jupyter / matplotlib / mypy.
+    """
+    env = os.getenv("OMICSCLAW_DIR", "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+
+    source_tree = Path(__file__).resolve().parent.parent
+    if (source_tree / "omicsclaw.py").is_file():
+        return source_tree
+
+    return (Path.home() / ".omicsclaw").resolve()
+
+
+OMICSCLAW_DIR = _resolve_omicsclaw_dir()
 load_project_dotenv(OMICSCLAW_DIR, override=False)
 OMICSCLAW_PY = OMICSCLAW_DIR / "omicsclaw.py"
 OUTPUT_DIR = OMICSCLAW_DIR / "output"
@@ -260,7 +298,20 @@ def _primary_skill_count() -> int:
 # ---------------------------------------------------------------------------
 
 _AUDIT_LOG_DIR = OMICSCLAW_DIR / "bot" / "logs"
-_AUDIT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    _AUDIT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+except OSError as _exc:
+    # mkdir can fail when OMICSCLAW_DIR resolves to a read-only location
+    # (e.g. a signed .app bundle's Resources/ dir on macOS, or an NFS
+    # mount without write perms). The audit() helper below already tolerates
+    # missing directories via its own OSError handler, so we log and
+    # continue — a missing audit log is strictly better than crashing the
+    # whole process at module load time.
+    logger.warning(
+        "Could not create audit log dir %s (%s) — audit events will be dropped",
+        _AUDIT_LOG_DIR,
+        _exc,
+    )
 _AUDIT_LOG_PATH = _AUDIT_LOG_DIR / "audit.jsonl"
 
 
@@ -919,7 +970,17 @@ def init(
     if resolved_url:
         kw["base_url"] = resolved_url
     kw["timeout"] = _build_llm_timeout()
-    llm = AsyncOpenAI(**kw)
+    try:
+        llm = AsyncOpenAI(**kw)
+    except ImportError as exc:
+        if "socksio" in str(exc) or "socks" in str(exc).lower():
+            raise ImportError(
+                "A SOCKS proxy is configured (HTTPS_PROXY / ALL_PROXY) but "
+                "the 'socksio' package is not installed. Run:\n\n"
+                '  pip install "httpx[socks]"\n\n'
+                "then restart the backend."
+            ) from exc
+        raise
 
     logger.info(
         f"LLM initialised: provider={LLM_PROVIDER_NAME}, "

@@ -33,10 +33,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+try:
+    from omicsclaw.app.notebook.kernel_manager import get_kernel_manager
+    from omicsclaw.app.notebook.live_session import install_live_session_support
+    from omicsclaw.app.notebook.router import router as notebook_router
+    _NOTEBOOK_AVAILABLE = True
+except ImportError as _nb_err:
+    _NOTEBOOK_AVAILABLE = False
+    get_kernel_manager = None  # type: ignore[assignment]
+    install_live_session_support = None  # type: ignore[assignment]
+    notebook_router = None  # type: ignore[assignment]
 from omicsclaw.runtime.policy_state import ToolPolicyState
 from omicsclaw.version import __version__
 
@@ -53,6 +63,12 @@ logger = logging.getLogger("omicsclaw.app_server")
 DEFAULT_APP_API_HOST = "127.0.0.1"
 DEFAULT_APP_API_PORT = 8765
 _APP_SERVER_INSTALL_HINT = 'pip install -e ".[desktop]"'
+_DEFAULT_APP_CORS_ORIGINS: tuple[str, ...] = (
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+)
 
 # ---------------------------------------------------------------------------
 # Lazy references to bot.core — resolved once at startup via lifespan
@@ -75,6 +91,70 @@ def _read_first_config_value(*keys: str) -> str:
         if value:
             return value
     return ""
+
+
+def _app_cors_origins() -> list[str]:
+    raw = str(os.getenv("OMICSCLAW_APP_CORS_ORIGINS", "") or "").strip()
+    if not raw:
+        return list(_DEFAULT_APP_CORS_ORIGINS)
+    values = [item.strip() for item in raw.split(",") if item.strip()]
+    return values or list(_DEFAULT_APP_CORS_ORIGINS)
+
+
+def _coerce_kg_home(candidate: str) -> Path:
+    """Accept either a project root or a concrete `.omicsclaw/knowledge` path."""
+    value = str(candidate or "").strip()
+    path = Path(value).expanduser()
+    if path.name == "knowledge" and path.parent.name == ".omicsclaw":
+        return path
+    return path / ".omicsclaw" / "knowledge"
+
+
+def _register_optional_kg_router(app: FastAPI) -> None:
+    """Mount OmicsClaw-KG under `/kg` when the optional package is available."""
+    kg_source_dir = str(os.getenv("OMICSCLAW_KG_SOURCE_DIR", "") or "").strip()
+    if kg_source_dir and kg_source_dir not in sys.path:
+        sys.path.insert(0, kg_source_dir)
+
+    if importlib.util.find_spec("omicsclaw_kg") is None:
+        logger.info("OmicsClaw-KG package not available; skipping embedded KG routes")
+        return
+
+    try:
+        from omicsclaw_kg import config as kg_config
+        from omicsclaw_kg.http_api import build_router as build_kg_router
+        from omicsclaw_kg.http_api import get_kg_config as kg_workspace_dependency
+    except ImportError as exc:
+        logger.info("OmicsClaw-KG import failed; skipping embedded KG routes: %s", exc)
+        return
+
+    def _embedded_kg_config(
+        x_omicsclaw_workspace: str | None = Header(None, alias="X-OmicsClaw-Workspace"),
+        workspace: str | None = Query(None),
+    ):
+        explicit = str(x_omicsclaw_workspace or workspace or "").strip()
+        if explicit:
+            return kg_config.resolve(_coerce_kg_home(explicit))
+
+        explicit_kg = str(os.getenv("OMICSCLAW_KG_HOME", "") or "").strip()
+        if explicit_kg:
+            return kg_config.resolve(explicit_kg)
+
+        workspace_root = _resolve_scoped_memory_workspace("")
+        if workspace_root:
+            return kg_config.resolve(_coerce_kg_home(workspace_root))
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "missing workspace: pass X-OmicsClaw-Workspace, "
+                "or configure OMICSCLAW_WORKSPACE / OMICSCLAW_KG_HOME"
+            ),
+        )
+
+    app.dependency_overrides[kg_workspace_dependency] = _embedded_kg_config
+    app.include_router(build_kg_router(enable_writes=True), prefix="/kg")
+    logger.info("Mounted embedded OmicsClaw-KG routes under /kg")
 
 
 def _resolve_backend_init_config() -> dict[str, str]:
@@ -247,6 +327,10 @@ async def lifespan(app: FastAPI):
         core.LLM_PROVIDER_NAME,
         core.OMICSCLAW_MODEL,
     )
+    if _NOTEBOOK_AVAILABLE:
+        install_live_session_support()
+    else:
+        logger.info("Notebook module not available (non-fatal): %s", _nb_err)
 
     # Optionally expose MemoryClient for browse/search endpoints
     try:
@@ -296,6 +380,12 @@ async def lifespan(app: FastAPI):
         task.cancel()
     _active_sessions.clear()
 
+    if _NOTEBOOK_AVAILABLE:
+        try:
+            await get_kernel_manager().shutdown_all()
+        except Exception as exc:
+            logger.warning("Notebook kernel shutdown failed during app shutdown: %s", exc)
+
     if _memory_client:
         await _memory_client.close()
 
@@ -312,7 +402,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_app_cors_origins(),
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -323,6 +414,11 @@ try:
     app.include_router(optimize_router)
 except ImportError:
     pass  # autoagent module not available
+
+_register_optional_kg_router(app)
+
+if _NOTEBOOK_AVAILABLE:
+    app.include_router(notebook_router, prefix="/notebook", tags=["notebook"])
 
 
 # ---------------------------------------------------------------------------
@@ -1566,6 +1662,23 @@ async def chat_session_permission_profile(req: SessionPermissionProfileRequest):
 
 
 # ---------------------------------------------------------------------------
+# GET /workspace — current runtime workspace configuration
+# ---------------------------------------------------------------------------
+
+@app.get("/workspace")
+async def get_workspace():
+    core = _get_core()
+    trusted_dirs = [str(d) for d in getattr(core, "TRUSTED_DATA_DIRS", [])]
+    workspace = str(os.environ.get("OMICSCLAW_WORKSPACE", "") or "").strip()
+    if not workspace and trusted_dirs:
+        workspace = trusted_dirs[0]
+    return {
+        "workspace": workspace or None,
+        "trusted_dirs": trusted_dirs,
+    }
+
+
+# ---------------------------------------------------------------------------
 # PUT /workspace — sync default project directory from frontend
 # ---------------------------------------------------------------------------
 
@@ -2536,6 +2649,45 @@ async def get_settings():
     }
 
 
+def _claude_settings_path() -> Path:
+    return Path.home() / ".claude" / "settings.json"
+
+
+def _read_claude_settings() -> dict[str, Any]:
+    settings_path = _claude_settings_path()
+    try:
+        if not settings_path.exists():
+            return {}
+        parsed = json.loads(settings_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _write_claude_settings(settings: dict[str, Any]) -> None:
+    settings_path = _claude_settings_path()
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        json.dumps(settings, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+class ClaudeSettingsRequest(BaseModel):
+    settings: dict[str, Any]
+
+
+@app.get("/claude/settings")
+async def get_claude_settings():
+    return {"settings": _read_claude_settings()}
+
+
+@app.put("/claude/settings")
+async def put_claude_settings(req: ClaudeSettingsRequest):
+    _write_claude_settings(req.settings)
+    return {"success": True}
+
+
 # ---------------------------------------------------------------------------
 # GET /providers — list all supported LLM providers
 # ---------------------------------------------------------------------------
@@ -2741,6 +2893,7 @@ async def mcp_list_servers():
             "extra_args": srv.get("args", []),
             "args": srv.get("args", []),
             "env": srv.get("env", {}),
+            "headers": srv.get("headers", {}),
             "header_keys": sorted((srv.get("headers") or {}).keys()),
             "tools": srv.get("tools"),
         })
@@ -2798,19 +2951,12 @@ async def mcp_remove_server(name: str):
         raise HTTPException(500, detail=str(exc))
 
 
-@app.post("/mcp/sync")
-async def mcp_sync_from_frontend(request: Request):
-    """
-    Sync MCP servers from frontend config files into OmicsClaw's mcp.yaml.
-    Accepts the merged config from the frontend and reconciles.
-    """
+def _reconcile_mcp_servers(incoming: Any) -> dict[str, Any]:
     try:
         from omicsclaw.interactive._mcp import add_mcp_server, list_mcp_servers, remove_mcp_server
     except ImportError:
         raise HTTPException(503, detail="MCP module not available")
 
-    body = await request.json()
-    incoming = body.get("mcpServers")
     if incoming is None:
         raise HTTPException(400, detail="mcpServers is required")
     if not isinstance(incoming, dict):
@@ -2873,6 +3019,24 @@ async def mcp_sync_from_frontend(request: Request):
         synced += 1
 
     return {"ok": True, "synced": synced, "removed": removed}
+
+
+class McpReplaceRequest(BaseModel):
+    mcpServers: dict[str, Any]
+
+
+@app.put("/mcp/servers")
+async def mcp_replace_servers(req: McpReplaceRequest):
+    return _reconcile_mcp_servers(req.mcpServers)
+
+
+@app.post("/mcp/sync")
+async def mcp_sync_from_frontend(request: Request):
+    """
+    Backward-compatible bulk MCP replace endpoint.
+    """
+    body = await request.json()
+    return _reconcile_mcp_servers(body.get("mcpServers"))
 
 
 # ---------------------------------------------------------------------------

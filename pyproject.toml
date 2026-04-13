@@ -71,6 +71,22 @@ dependencies = [
 
     # ========== pkg_resources fallback for older packages ==========
     "setuptools>=64",
+
+    # ========== Server / notebook runtime ==========
+    # Required by omicsclaw.app.server for notebook support.
+    # Previously in [desktop] extras only, causing ModuleNotFoundError
+    # when users installed with plain `pip install -e .`.
+    "nbformat>=5.9",
+    "jupyter_client>=8.0",
+    "ipykernel>=6.0",
+
+    # ========== Server runtime essentials ==========
+    # greenlet: required by SQLAlchemy async bridge (aiosqlite)
+    # rich: required by MCP module at import time
+    # socksio: required when SOCKS proxy is configured (HTTPS_PROXY)
+    "greenlet>=3.0.0",
+    "rich>=13.0.0",
+    "socksio>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -346,11 +362,24 @@ desktop = [
     "sqlalchemy>=1.4.0",
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
+    # python-multipart is required by FastAPI's File / Form parsing.
+    # The /notebook/files/upload endpoint in omicsclaw.app.notebook.router
+    # uses `File(...)`, so without this import omicsclaw.app.server
+    # crashes at MODULE LOAD TIME (not first request time). Caught by
+    # the bundled-runtime smoke test: `python -m omicsclaw.app.server
+    # --help` imports the module, which imports the notebook router,
+    # which decorates /files/upload, which eagerly validates that
+    # multipart is installed. See OmicsClaw-App/scripts/build-backend-
+    # runtime.py for the smoke test that caught this.
+    "python-multipart>=0.0.9",
     "cryptography>=41.0.0",
     "requests>=2.31.0",
     "openai>=1.0.0",
     "python-dotenv>=1.0.0",
     "pyyaml>=6.0",
+    "nbformat>=5.9",
+    "jupyter_client>=8.0",
+    "ipykernel>=6.0",
 ]
 
 # --------------------------------------------------------------------------- #
@@ -507,7 +536,13 @@ target-version = "py311"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["omicsclaw", "omicsclaw.*", "skills.*._lib", "skills.*._lib.*"]
+# `bot` is included so the shared LLM/agent engine (bot.core, used by
+# omicsclaw.app.server's lifespan at startup) ships with pip installs.
+# Without this, `pip install omicsclaw` gives you the server shell but
+# `import bot.core` fails at startup — specifically biting the
+# OmicsClaw-App desktop bundled runtime, which uses `--no-deps` pip
+# installs and has no source-tree sibling `bot/` to fall back on.
+include = ["omicsclaw", "omicsclaw.*", "bot", "bot.*", "skills.*._lib", "skills.*._lib.*"]
 exclude = ["tests", "tests.*", "output", "sessions"]
 
 [tool.setuptools.package-data]
