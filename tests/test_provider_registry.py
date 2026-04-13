@@ -66,7 +66,7 @@ def test_resolve_provider_auto_detects_specific_key(monkeypatch):
     resolved_url, resolved_model, resolved_key = resolve_provider()
 
     assert resolved_url is None
-    assert resolved_model == "gpt-4o"
+    assert resolved_model == "gpt-5.4"
     assert resolved_key == "openai-key"
 
 

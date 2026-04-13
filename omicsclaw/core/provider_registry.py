@@ -38,10 +38,10 @@ class ProviderRegistryEntry(TypedDict):
 PROVIDER_PRESETS: dict[str, ProviderPreset] = {
     # --- Tier 1: Primary providers ---
     "deepseek": ("https://api.deepseek.com", "deepseek-chat", "DEEPSEEK_API_KEY"),
-    "openai": ("", "gpt-4o", "OPENAI_API_KEY"),
+    "openai": ("", "gpt-5.4", "OPENAI_API_KEY"),
     "anthropic": (
         "https://api.anthropic.com/v1/",
-        "claude-sonnet-4-5-20250514",
+        "claude-sonnet-4-6",
         "ANTHROPIC_API_KEY",
     ),
     "gemini": (
@@ -51,23 +51,23 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
     ),
     "nvidia": (
         "https://integrate.api.nvidia.com/v1",
-        "deepseek-ai/deepseek-r1",
+        "nvidia/nemotron-3-super-120b-a12b",
         "NVIDIA_API_KEY",
     ),
     # --- Tier 2: Third-party aggregators ---
     "siliconflow": (
         "https://api.siliconflow.cn/v1",
-        "deepseek-ai/DeepSeek-V3",
+        "Pro/MiniMaxAI/MiniMax-M2.5",
         "SILICONFLOW_API_KEY",
     ),
     "openrouter": (
         "https://openrouter.ai/api/v1",
-        "deepseek/deepseek-chat-v3-0324",
+        "anthropic/claude-sonnet-4.6",
         "OPENROUTER_API_KEY",
     ),
     "volcengine": (
         "https://ark.cn-beijing.volces.com/api/v3",
-        "doubao-1.5-pro-256k",
+        "doubao-seed-2-0-pro-260215",
         "VOLCENGINE_API_KEY",
     ),
     "dashscope": (
@@ -75,9 +75,14 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         "qwen-max",
         "DASHSCOPE_API_KEY",
     ),
+    "moonshot": (
+        "https://api.moonshot.cn/v1",
+        "kimi-k2.5",
+        "MOONSHOT_API_KEY",
+    ),
     "zhipu": (
         "https://open.bigmodel.cn/api/paas/v4",
-        "glm-4-flash",
+        "glm-5",
         "ZHIPU_API_KEY",
     ),
     # --- Tier 3: Local & custom ---
@@ -95,24 +100,24 @@ PROVIDER_DISPLAY_METADATA: dict[str, ProviderDisplayMetadata] = {
     },
     "openai": {
         "display_name": "OpenAI",
-        "description": "GPT-4o and o-series models",
-        "description_zh": "GPT-4o 及 o 系列模型",
+        "description": "GPT-5 and Codex series models",
+        "description_zh": "GPT-5 及 Codex 系列模型",
         "tier": "primary",
-        "models": ("gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "o3", "o3-mini", "o4-mini"),
+        "models": ("gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex", "gpt-5", "gpt-5-mini"),
     },
     "anthropic": {
         "display_name": "Anthropic",
-        "description": "Claude Sonnet and Opus",
-        "description_zh": "Claude Sonnet 和 Opus",
+        "description": "Claude Opus, Sonnet and Haiku",
+        "description_zh": "Claude Opus、Sonnet 和 Haiku",
         "tier": "primary",
-        "models": ("claude-sonnet-4-5-20250514", "claude-opus-4-20250514", "claude-haiku-4-5-20251001"),
+        "models": ("claude-opus-4-6", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5"),
     },
     "gemini": {
         "display_name": "Google Gemini",
-        "description": "Gemini Flash and Pro",
-        "description_zh": "Gemini Flash 和 Pro",
+        "description": "Gemini 3 and 2.5 series",
+        "description_zh": "Gemini 3 和 2.5 系列",
         "tier": "primary",
-        "models": ("gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"),
+        "models": ("gemini-3.1-pro", "gemini-3-flash", "gemini-2.5-flash", "gemini-2.5-pro"),
     },
     "nvidia": {
         "display_name": "NVIDIA NIM",
@@ -120,9 +125,10 @@ PROVIDER_DISPLAY_METADATA: dict[str, ProviderDisplayMetadata] = {
         "description_zh": "NVIDIA 基础设施托管推理",
         "tier": "primary",
         "models": (
-            "deepseek-ai/deepseek-r1",
-            "meta/llama-3.3-70b-instruct",
-            "nvidia/llama-3.1-nemotron-70b-instruct",
+            "nvidia/nemotron-3-super-120b-a12b",
+            "deepseek-ai/deepseek-v3.2",
+            "moonshotai/kimi-k2.5",
+            "qwen/qwen3.5-397b-a17b",
         ),
     },
     "siliconflow": {
@@ -130,7 +136,7 @@ PROVIDER_DISPLAY_METADATA: dict[str, ProviderDisplayMetadata] = {
         "description": "China-optimized multi-model hosting",
         "description_zh": "国内优化的多模型托管平台",
         "tier": "aggregator",
-        "models": ("deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1", "Qwen/Qwen2.5-72B-Instruct"),
+        "models": ("Pro/MiniMaxAI/MiniMax-M2.5", "Pro/zai-org/GLM-5", "Pro/moonshotai/Kimi-K2.5", "Pro/zai-org/GLM-4.7"),
     },
     "openrouter": {
         "display_name": "OpenRouter",
@@ -138,32 +144,40 @@ PROVIDER_DISPLAY_METADATA: dict[str, ProviderDisplayMetadata] = {
         "description_zh": "多模型网关",
         "tier": "aggregator",
         "models": (
-            "deepseek/deepseek-chat-v3-0324",
-            "anthropic/claude-sonnet-4",
-            "openai/gpt-4o",
-            "google/gemini-2.5-flash",
+            "anthropic/claude-sonnet-4.6",
+            "openai/gpt-5.4",
+            "google/gemini-3.1-pro-preview",
+            "moonshotai/kimi-k2.5",
+            "minimax/minimax-m2.7",
         ),
     },
     "volcengine": {
         "display_name": "Volcengine",
-        "description": "ByteDance Doubao models",
-        "description_zh": "字节跳动豆包模型",
+        "description": "ByteDance Doubao Seed models",
+        "description_zh": "字节跳动豆包 Seed 模型",
         "tier": "aggregator",
-        "models": ("doubao-1.5-pro-256k", "doubao-1.5-pro-32k", "doubao-lite-32k"),
+        "models": ("doubao-seed-2-0-pro-260215", "doubao-seed-2-0-lite-260215", "doubao-1.5-pro-256k", "doubao-1.5-thinking-pro"),
     },
     "dashscope": {
         "display_name": "DashScope",
-        "description": "Alibaba Qwen models",
-        "description_zh": "阿里巴巴通义千问模型",
+        "description": "Alibaba Qwen 3 models",
+        "description_zh": "阿里巴巴通义千问 Qwen3 模型",
         "tier": "aggregator",
-        "models": ("qwen-max", "qwen-plus", "qwen-turbo", "qwen-long"),
+        "models": ("qwen3-coder-plus", "qwen3-235b-a22b", "qwen-max", "qwq-plus"),
+    },
+    "moonshot": {
+        "display_name": "Moonshot",
+        "description": "Kimi K2 series models",
+        "description_zh": "月之暗面 Kimi K2 系列模型",
+        "tier": "aggregator",
+        "models": ("kimi-k2.5", "kimi-k2-thinking", "kimi-k2-thinking-turbo", "moonshot-v1-auto"),
     },
     "zhipu": {
         "display_name": "Zhipu AI",
-        "description": "GLM-4 series models",
-        "description_zh": "GLM-4 系列模型",
+        "description": "GLM-5 series models",
+        "description_zh": "智谱 GLM-5 系列模型",
         "tier": "aggregator",
-        "models": ("glm-4-flash", "glm-4-plus", "glm-4-long", "glm-4-air"),
+        "models": ("glm-5.1", "glm-5", "glm-5-turbo", "glm-4.7"),
     },
     "ollama": {
         "display_name": "Ollama",
@@ -200,6 +214,7 @@ PROVIDER_DETECT_ORDER: tuple[str, ...] = (
     "openrouter",
     "volcengine",
     "dashscope",
+    "moonshot",
     "zhipu",
 )
 
