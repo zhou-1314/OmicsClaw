@@ -962,16 +962,35 @@ async def chat_stream(req: ChatRequest):
     # NOTE: In a production multi-tenant setup you would scope this per-request
     # with a separate AsyncOpenAI client. For the desktop-app (single user) this
     # is acceptable.
-    if req.provider_config and req.provider_config.provider:
-        pc = req.provider_config
-        core.init(
-            api_key=pc.api_key,
-            base_url=pc.base_url or None,
-            model=pc.model,
-            provider=pc.provider,
+    try:
+        if req.provider_config and req.provider_config.provider:
+            pc = req.provider_config
+            core.init(
+                api_key=pc.api_key,
+                base_url=pc.base_url or None,
+                model=pc.model,
+                provider=pc.provider,
+            )
+        elif req.provider_id and req.provider_id.lower() != core.LLM_PROVIDER_NAME.lower():
+            _apply_chat_provider_switch(core, req.provider_id, req.model or "")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        requested_provider = (
+            (req.provider_config.provider if req.provider_config else None)
+            or req.provider_id
+            or ""
         )
-    elif req.provider_id and req.provider_id.lower() != core.LLM_PROVIDER_NAME.lower():
-        _apply_chat_provider_switch(core, req.provider_id, req.model or "")
+        logger.warning(
+            "Provider switch to %s failed: %s", requested_provider or "<unspecified>", exc
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Failed to switch provider to {requested_provider!r}: {exc}. "
+                "Check the provider credentials and try again."
+            ),
+        )
 
     # --- Build per-request runtime overrides from frontend controls ---
     model_override = req.model or ""
@@ -3828,12 +3847,13 @@ def _apply_chat_provider_switch(core: Any, provider_id: str, model: str) -> None
     ``LLM_AUTH_MODE=oauth`` / ``CCPROXY_PORT`` in ``.env`` that belonged to
     a prior OAuth session, otherwise a restart would rebuild an invalid
     ``new_provider + oauth`` combination.
+
+    Raises the original ``core.init`` exception on failure — the caller must
+    surface it to the user. Silently falling back to the previous provider
+    would let the chat run against the old model while the UI reports the
+    requested one.
     """
-    try:
-        core.init(provider=provider_id, model=model)
-    except Exception as exc:
-        logger.warning("Provider switch to %s failed: %s", provider_id, exc)
-        return
+    core.init(provider=provider_id, model=model)
 
     env_path = _get_omicsclaw_env_path()
     if env_path:

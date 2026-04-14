@@ -379,9 +379,11 @@ def test_chat_provider_switch_clears_stale_oauth_env(monkeypatch, tmp_path):
     assert "OMICSCLAW_MODEL=deepseek-chat" in body
 
 
-def test_chat_provider_switch_failure_leaves_env_untouched(monkeypatch, tmp_path):
-    """If core.init raises, .env must not be partially rewritten — the
-    previous provider config stays intact so the user can retry."""
+def test_chat_provider_switch_failure_raises_and_leaves_env_untouched(monkeypatch, tmp_path):
+    """If core.init raises, propagate the error to the caller and leave .env
+    untouched. The chat_stream endpoint needs the exception to stop the request
+    — silently swallowing it would make the UI show a stream that kept using
+    the old provider, with no indication the switch failed."""
     from omicsclaw.app import server
 
     env_path = tmp_path / ".env"
@@ -400,7 +402,8 @@ def test_chat_provider_switch_failure_leaves_env_untouched(monkeypatch, tmp_path
         def init(self, **kwargs):
             raise RuntimeError("provider unreachable")
 
-    server._apply_chat_provider_switch(FailingCore(), "deepseek", "")
+    with pytest.raises(RuntimeError, match="provider unreachable"):
+        server._apply_chat_provider_switch(FailingCore(), "deepseek", "")
 
     assert env_path.read_text(encoding="utf-8") == original
 

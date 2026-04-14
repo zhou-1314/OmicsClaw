@@ -984,6 +984,49 @@ async def test_chat_stream_emits_protocol_events_and_usage(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_chat_stream_surfaces_provider_switch_failure(monkeypatch):
+    """When provider switch fails, chat_stream must raise HTTPException instead
+    of silently falling back to the previous provider. Without this the UI
+    shows a ``status`` event naming the old provider — the user thinks the
+    switch succeeded while the chat actually runs against the previous model.
+    """
+    pytest.importorskip("fastapi")
+
+    from fastapi import HTTPException
+
+    from omicsclaw.app import server
+
+    class FailingCore:
+        LLM_PROVIDER_NAME = "anthropic"
+        OMICSCLAW_MODEL = "claude-sonnet-4-6"
+
+        def init(self, **kwargs):
+            raise RuntimeError("deepseek unreachable: connection refused")
+
+        _skill_registry = staticmethod(lambda: SimpleNamespace(skills={}))
+        get_tool_executors = staticmethod(lambda: {})
+        _accumulate_usage = staticmethod(lambda response_usage: {})
+        _get_token_price = staticmethod(lambda model: (0.0, 0.0))
+
+    monkeypatch.setattr(server, "_core", FailingCore(), raising=False)
+    monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
+
+    with pytest.raises(HTTPException) as excinfo:
+        await server.chat_stream(
+            server.ChatRequest(
+                session_id="session-switch-fail",
+                content="hello",
+                provider_id="deepseek",
+            )
+        )
+
+    assert excinfo.value.status_code == 400
+    detail = str(excinfo.value.detail)
+    assert "deepseek" in detail
+    assert "connection refused" in detail
+
+
+@pytest.mark.asyncio
 async def test_chat_stream_omits_adaptive_thinking_for_siliconflow(monkeypatch):
     """SiliconFlow gateway rejects non-standard thinking types — adaptive must omit."""
     pytest.importorskip("fastapi")
