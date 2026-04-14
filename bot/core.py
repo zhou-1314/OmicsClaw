@@ -552,41 +552,86 @@ _usage: dict[str, int] = {
     "api_calls": 0,
 }
 
-# Approximate pricing per 1M tokens (USD) — keyed by provider:model fragment.
-# These are reference values; override via LLM_INPUT_PRICE / LLM_OUTPUT_PRICE env vars.
+# Approximate pricing per 1M tokens (USD, input/output) — keyed by a substring
+# of the (lower-cased) model id. Override via LLM_INPUT_PRICE / LLM_OUTPUT_PRICE
+# env vars. Missing models fall through to (0.0, 0.0), which the chat UI treats
+# as "no estimate available" and omits from the cost line.
 _TOKEN_PRICES: dict[str, tuple[float, float]] = {
-    # (input $/1M, output $/1M)
-    "deepseek-chat":        (0.27,  1.10),
+    # DeepSeek
     "deepseek-reasoner":    (0.55,  2.19),
-    "gpt-4o":               (2.50, 10.00),
-    "gpt-4o-mini":          (0.15,  0.60),
-    "gpt-4-turbo":          (10.0, 30.00),
-    "gpt-3.5-turbo":        (0.50,  1.50),
+    "deepseek-chat":        (0.27,  1.10),
+    "deepseek-v3":          (0.27,  1.10),
+    # Anthropic Claude
+    "claude-opus-4":        (15.00, 75.00),
+    "claude-sonnet-4":      (3.00, 15.00),
+    "claude-haiku-4":       (1.00,  5.00),
     "claude-3-5-sonnet":    (3.00, 15.00),
     "claude-3-5-haiku":     (0.80,  4.00),
-    "claude-3-opus":        (15.0, 75.00),
+    "claude-3-opus":        (15.00, 75.00),
+    "claude-3-sonnet":      (3.00, 15.00),
+    "claude-3-haiku":       (0.25,  1.25),
+    # OpenAI
+    "gpt-5.4-mini":         (0.25,  2.00),
+    "gpt-5.4":              (2.50, 10.00),
+    "gpt-5.3-codex":        (2.50, 10.00),
+    "gpt-5-mini":           (0.25,  2.00),
+    "gpt-5":                (2.50, 10.00),
+    "gpt-4.1-mini":         (0.40,  1.60),
+    "gpt-4.1":              (2.00,  8.00),
+    "o4-mini":              (1.10,  4.40),
+    "o3-mini":              (1.10,  4.40),
+    "gpt-4o-mini":          (0.15,  0.60),
+    "gpt-4o":               (2.50, 10.00),
+    "gpt-4-turbo":          (10.00, 30.00),
+    "gpt-3.5-turbo":        (0.50,  1.50),
+    # Google Gemini
+    "gemini-3.1-pro":       (1.25, 10.00),
+    "gemini-3-flash":       (0.15,  0.60),
+    "gemini-2.5-pro":       (1.25, 10.00),
+    "gemini-2.5-flash":     (0.15,  0.60),
+    "gemini-2.0-flash":     (0.10,  0.40),
     "gemini-1.5-pro":       (1.25,  5.00),
     "gemini-1.5-flash":     (0.075, 0.30),
-    "gemini-2.0-flash":     (0.10,  0.40),
+    # Moonshot / Kimi
+    "kimi-k2-thinking":     (0.60,  2.50),
+    "kimi-k2":              (0.60,  2.50),
+    "moonshot-v1":          (0.30,  1.00),
+    # Zhipu GLM
+    "glm-5":                (0.60,  2.20),
+    "glm-4.7":              (0.50,  1.80),
+    "glm-4":                (0.50,  1.50),
+    # Doubao (Volcengine)
+    "doubao-seed-2":        (0.40,  1.00),
+    "doubao-1.5-pro":       (0.50,  1.20),
+    # Qwen / DashScope
+    "qwen3-coder-plus":     (0.30,  1.20),
+    "qwq-plus":             (0.35,  1.40),
+    "qwen-max":             (1.60,  6.40),
     "qwen-plus":            (0.40,  1.20),
     "qwen-long":            (0.05,  0.20),
 }
 
+# Longest-first so sub-version ids (e.g. "gpt-5.4-mini") match their specific
+# entry before falling back to a shorter family prefix (e.g. "gpt-5").
+_TOKEN_PRICE_KEYS_BY_LENGTH: tuple[str, ...] = tuple(
+    sorted(_TOKEN_PRICES, key=len, reverse=True)
+)
+
 
 def _get_token_price(model: str) -> tuple[float, float]:
     """Return (input_price, output_price) per 1M tokens for the current model."""
-    # Allow explicit override via env vars
     try:
-        inp = float(os.environ.get("LLM_INPUT_PRICE", ""))
-        out = float(os.environ.get("LLM_OUTPUT_PRICE", ""))
-        return inp, out
-    except (ValueError, TypeError):
+        return (
+            float(os.environ["LLM_INPUT_PRICE"]),
+            float(os.environ["LLM_OUTPUT_PRICE"]),
+        )
+    except (KeyError, ValueError, TypeError):
         pass
     model_lower = model.lower()
-    for key, prices in _TOKEN_PRICES.items():
+    for key in _TOKEN_PRICE_KEYS_BY_LENGTH:
         if key in model_lower:
-            return prices
-    return (0.0, 0.0)  # Unknown model — no cost estimate
+            return _TOKEN_PRICES[key]
+    return (0.0, 0.0)
 
 
 def _accumulate_usage(response_usage) -> dict[str, int]:

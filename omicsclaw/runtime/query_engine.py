@@ -305,14 +305,15 @@ async def _materialize_message_from_stream(
 ) -> MaterializedMessage:
     final_content = ""
     tool_calls_dict: dict[int, MaterializedToolCall] = {}
+    # Some OpenAI-compatible proxies (ccproxy, LiteLLM, some Gemini transports)
+    # emit cumulative `chunk.usage` on every chunk, not just the terminal one.
+    # Record the last snapshot once, after the stream ends, to avoid inflating
+    # accumulated totals for those providers.
+    last_usage: Any = None
 
     async for chunk in response:
         if chunk.usage:
-            _record_usage(
-                chunk.usage,
-                callbacks,
-                on_usage_delta=on_usage_delta,
-            )
+            last_usage = chunk.usage
         if not chunk.choices:
             continue
 
@@ -342,6 +343,9 @@ async def _materialize_message_from_stream(
                         name=existing.name + (tc_chunk.function.name or ""),
                         arguments=existing.arguments + (tc_chunk.function.arguments or ""),
                     )
+
+    if last_usage is not None:
+        _record_usage(last_usage, callbacks, on_usage_delta=on_usage_delta)
 
     tool_calls = [tool_calls_dict[idx] for idx in sorted(tool_calls_dict)] or None
     return MaterializedMessage(
