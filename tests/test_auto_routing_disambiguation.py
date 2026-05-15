@@ -1,4 +1,4 @@
-"""Tests for Stage 3 auto-routing helpers in ``bot.core``.
+"""Tests for Stage 3 auto-routing helpers in ``omicsclaw.runtime.agent.state``.
 
 Covers the two output-shaping functions that were added to make the ``auto``
 path interact with the LLM safely:
@@ -49,7 +49,7 @@ def _decision(
 
 
 def test_auto_route_banner_shows_chosen_and_confidence():
-    from bot.core import _format_auto_route_banner
+    from omicsclaw.runtime.agent.state import _format_auto_route_banner
 
     dec = _decision(
         chosen="sc-de",
@@ -71,7 +71,7 @@ def test_auto_route_banner_shows_chosen_and_confidence():
 
 
 def test_auto_route_banner_without_alternatives():
-    from bot.core import _format_auto_route_banner
+    from omicsclaw.runtime.agent.state import _format_auto_route_banner
 
     dec = _decision(
         chosen="spatial-preprocess",
@@ -92,7 +92,7 @@ def test_auto_route_banner_without_alternatives():
 
 
 def test_disambiguation_lists_top_three_candidates():
-    from bot.core import _format_auto_disambiguation
+    from omicsclaw.runtime.agent.state import _format_auto_disambiguation
 
     dec = _decision(
         chosen="bulkrna-de",
@@ -118,7 +118,7 @@ def test_disambiguation_lists_top_three_candidates():
 
 
 def test_disambiguation_handles_empty_candidate_list():
-    from bot.core import _format_auto_disambiguation
+    from omicsclaw.runtime.agent.state import _format_auto_disambiguation
 
     dec = _decision(chosen="", confidence=0.0, candidates=[])
     block = _format_auto_disambiguation(dec, query_text="nothing matches")
@@ -130,8 +130,8 @@ def test_disambiguation_handles_empty_candidate_list():
 
 
 def test_disambiguation_truncates_long_description():
-    from bot.core import _format_auto_disambiguation
-    import bot.core as bc
+    from omicsclaw.runtime.agent.state import _format_auto_disambiguation
+    import omicsclaw.runtime.agent.state as bc
 
     # Monkey-patch the registry lookup so this test doesn't depend on the
     # live SKILL.md content (which changes as the repo grows).
@@ -173,6 +173,6 @@ def test_disambiguate_gap_is_calibrated():
     high and we refuse to execute on most queries. The scorer typically
     gives 0.85 per trigger-keyword hit and ~10 for alias hits, so 2.0 is a
     reasonable dead-zone between "one extra keyword" and "clearly better"."""
-    from bot.core import _AUTO_DISAMBIGUATE_GAP
+    from omicsclaw.runtime.agent.state import _AUTO_DISAMBIGUATE_GAP
 
     assert 1.0 <= _AUTO_DISAMBIGUATE_GAP <= 4.0

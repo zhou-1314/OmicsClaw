@@ -1,0 +1,202 @@
+File: /data/beifen/zhouwg_data/project/OmicsClaw/bot/logs/tool_results/interactive/20260513T064803Z_file_read_call_00_Tm6vLJeJ9zLce0lmUitG3125.txt
+Lines: 1-199 of 202
+
+1: File: /data/beifen/zhouwg_data/project/OmicsClaw/bot/logs/tool_results/interactive/20260513T064731Z_file_read_call_00_aYucHv2hFEoi9uSUd8BK4079.txt
+2: Lines: 1-199 of 301
+3: 
+4: 1: File: /data/beifen/zhouwg_data/project/OmicsClaw/skills/spatial/spatial-preprocess/spatial_preprocess.py
+5: 2: Lines: 1-1109 of 1109
+6: 3: Truncated to 12000 characters
+7: 4: 
+8: 5: 1: #!/usr/bin/env python3
+9: 6: 2: """Spatial Preprocess — load, QC, normalize, embed, and cluster spatial data."""
+10: 7: 3: 
+11: 8: 4: from __future__ import annotations
+12: 9: 5: 
+13: 10: 6: import argparse
+14: 11: 7: import json
+15: 12: 8: import logging
+16: 13: 9: import shlex
+17: 14: 10: import sys
+18: 15: 11: import warnings
+19: 16: 12: from importlib.metadata import PackageNotFoundError
+20: 17: 13: from pathlib import Path
+21: 18: 14: from typing import Any
+22: 19: 15: 
+23: 20: 16: import numpy as np
+24: 21: 17: import pandas as pd
+25: 22: 18: 
+26: 23: 19: warnings.filterwarnings("ignore", category=FutureWarning)
+27: 24: 20: 
+28: 25: 21: _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+29: 26: 22: if str(_PROJECT_ROOT) not in sys.path:
+30: 27: 23:     sys.path.insert(0, str(_PROJECT_ROOT))
+31: 28: 24: 
+32: 29: 25: from omicsclaw.common.runtime_env import ensure_runtime_cache_dirs
+33: 30: 26: 
+34: 31: 27: ensure_runtime_cache_dirs("omicsclaw")
+35: 32: 28: 
+36: 33: 29: import scanpy as sc
+37: 34: 30: 
+38: 35: 31: from omicsclaw.common.checksums import sha256_file
+39: 36: 32: from omicsclaw.common.report import (
+40: 37: 33:     generate_report_footer,
+41: 38: 34:     generate_report_header,
+42: 39: 35:     write_result_json,
+43: 40: 36: )
+44: 41: 37: from skills.spatial._lib.adata_utils import get_spatial_key
+45: 42: 38: from skills.spatial._lib.loader import SUPPORTED_SPATIAL_PLATFORMS, load_spatial_data
+46: 43: 39: from skills.spatial._lib.preprocessing import (
+47: 44: 40:     METHOD_PARAM_DEFAULTS,
+48: 45: 41:     PREPROCESS_METHOD,
+49: 46: 42:     SUPPORTED_SPECIES,
+50: 47: 43:     TISSUE_PRESETS,
+51: 48: 44:     preprocess,
+52: 49: 45: )
+53: 50: 46: from skills.spatial._lib.viz import (
+54: 51: 47:     PlotSpec,
+55: 52: 48:     VisualizationRecipe,
+56: 53: 49:     VizParams,
+57: 54: 50:     plot_features,
+58: 55: 51:     render_plot_specs,
+59: 56: 52: )
+60: 57: 53: 
+61: 58: 54: logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+62: 59: 55: logger = logging.getLogger(__name__)
+63: 60: 56: 
+64: 61: 57: SKILL_NAME = "spatial-preprocess"
+65: 62: 58: SKILL_VERSION = "0.5.0"
+66: 63: 59: SCRIPT_REL_PATH = "skills/spatial/spatial-preprocess/spatial_preprocess.py"
+67: 64: 60: 
+68: 65: 61: 
+69: 66: 62: # ---------------------------------------------------------------------------
+70: 67: 63: # Gallery helpers
+71: 68: 64: # ---------------------------------------------------------------------------
+72: 69: 65: 
+73: 70: 66: 
+74: 71: 67: def _parse_resolutions(value: str | None) -> list[float] | None:
+75: 72: 68:     if value in (None, ""):
+76: 73: 69:         return None
+77: 74: 70:     parsed: list[float] = []
+78: 75: 71:     for raw in value.split(","):
+79: 76: 72:         item = raw.strip()
+80: 77: 73:         if not item:
+81: 78: 74:             continue
+82: 79: 75:         parsed.append(float(item))
+83: 80: 76:     return parsed or None
+84: 81: 77: 
+85: 82: 78: 
+86: 83: 79: def _append_cli_flag(command: str, key: str, value: Any) -> str:
+87: 84: 80:     flag = f"--{key.replace('_', '-')}"
+88: 85: 81:     if isinstance(value, bool):
+89: 86: 82:         return f"{command} {flag}" if value else command
+90: 87: 83:     if value in (None, ""):
+91: 88: 84:         return command
+92: 89: 85:     return f"{command} {flag} {shlex.quote(str(value))}"
+93: 90: 86: 
+94: 91: 87: 
+95: 92: 88: def _prepare_preprocess_plot_state(adata) -> str | None:
+96: 93: 89:     spatial_key = get_spatial_key(adata)
+97: 94: 90:     if spatial_key == "X_spatial" and "spatial" not in adata.obsm:
+98: 95: 91:         adata.obsm["spatial"] = np.asarray(adata.obsm["X_spatial"]).copy()
+99: 96: 92:         spatial_key = "spatial"
+100: 97: 93:     elif spatial_key == "spatial" and "X_spatial" not in adata.obsm:
+101: 98: 94:         adata.obsm["X_spatial"] = np.asarray(adata.obsm["spatial"]).copy()
+102: 99: 95: 
+103: 100: 96:     cluster_columns = ["leiden"] + [
+104: 101: 97:         column for column in adata.obs.columns if str(column).startswith("leiden_res_")
+105: 102: 98:     ]
+106: 103: 99:     for column in cluster_columns:
+107: 104: 100:         if column in adata.obs.columns and not isinstance(adata.obs[column].dtype, pd.CategoricalDtype):
+108: 105: 101:             adata.obs[column] = pd.Categorical(adata.obs[column].astype(str))
+109: 106: 102: 
+110: 107: 103:     return spatial_key
+111: 108: 104: 
+112: 109: 105: 
+113: 110: 106: def _build_cluster_summary_table(summary: dict[str, Any]) -> pd.DataFrame:
+114: 111: 107:     rows = [
+115: 112: 108:         {"cluster": str(cluster), "n_cells": int(size)}
+116: 113: 109:         for cluster, size in summary.get("cluster_sizes", {}).items()
+117: 114: 110:     ]
+118: 115: 111:     if not rows:
+119: 116: 112:         return pd.DataFrame(columns=["cluster", "n_cells"])
+120: 117: 113:     return pd.DataFrame(rows).sort_values(
+121: 118: 114:         by=["n_cells", "cluster"],
+122: 119: 115:         ascending=[False, True],
+123: 120: 116:         kind="mergesort",
+124: 121: 117:     ).reset_index(drop=True)
+125: 122: 118: 
+126: 123: 119: 
+127: 124: 120: def _build_qc_distribution_table(adata) -> pd.DataFrame:
+128: 125: 121:     qc_columns = [
+129: 126: 122:         column
+130: 127: 123:         for column in ("n_genes_by_counts", "total_counts", "pct_counts_mt", "leiden")
+131: 128: 124:         if column in adata.obs.columns
+132: 129: 125:     ]
+133: 130: 126:     if not qc_columns:
+134: 131: 127:         return pd.DataFrame(columns=["observation"])
+135: 132: 128:     qc_df = adata.obs.loc[:, qc_columns].copy()
+136: 133: 129:     qc_df.insert(0, "observation", adata.obs_names.astype(str))
+137: 134: 130:     return qc_df.reset_index(drop=True)
+138: 135: 131: 
+139: 136: 132: 
+140: 137: 133: def _build_pca_variance_table(adata) -> pd.DataFrame:
+141: 138: 134:     pca_info = adata.uns.get("pca", {})
+142: 139: 135:     variance_ratio = pca_info.get("variance_ratio")
+143: 140: 136:     variance = pca_info.get("variance")
+144: 141: 137:     if variance_ratio is None:
+145: 142: 138:         return pd.DataFrame(columns=["pc", "variance_ratio", "cumulative_variance_ratio", "variance"])
+146: 143: 139: 
+147: 144: 140:     ratio = np.asarray(variance_ratio, dtype=float)
+148: 145: 141:     cumulative = np.cumsum(ratio)
+149: 146: 142:     if variance is None:
+150: 147: 143:         variance = np.repeat(np.nan, len(ratio))
+151: 148: 144:     else:
+152: 149: 145:         variance = np.asarray(variance, dtype=float)
+153: 150: 146: 
+154: 151: 147:     return pd.DataFrame(
+155: 152: 148:         {
+156: 153: 149:             "pc": np.arange(1, len(ratio) + 1),
+157: 154: 150:             "variance_ratio": ratio,
+158: 155: 151:             "cumulative_variance_ratio": cumulative,
+159: 156: 152:             "variance": variance,
+160: 157: 153:         }
+161: 158: 154:     )
+162: 159: 155: 
+163: 160: 156: 
+164: 161: 157: def _build_multi_resolution_table(summary: dict[str, Any]) -> pd.DataFrame:
+165: 162: 158:     rows = []
+166: 163: 159:     for resolution, n_clusters in summary.get("multi_resolution", {}).items():
+167: 164: 160:         try:
+168: 165: 161:             resolution_value: float | str = float(resolution)
+169: 166: 162:         except (TypeError, ValueError):
+170: 167: 163:             resolution_value = str(resolution)
+171: 168: 164:         rows.append(
+172: 169: 165:             {
+173: 170: 166:                 "resolution": resolution_value,
+174: 171: 167:                 "n_clusters": int(n_clusters),
+175: 172: 168:             }
+176: 173: 169:         )
+177: 174: 170:     if not rows:
+178: 175: 171:         return pd.DataFrame(columns=["resolution", "n_clusters"])
+179: 176: 172:     return pd.DataFrame(rows).sort_values(by="resolution", kind="mergesort").reset_index(drop=True)
+180: 177: 173: 
+181: 178: 174: 
+182: 179: 175: def _build_run_summary_table(summary: dict[str, Any], context: dict[str, Any]) -> pd.DataFrame:
+183: 180: 176:     effective_params = summary.get("effective_params", {})
+184: 181: 177:     rows = [
+185: 182: 178:         {"metric": "method", "value": summary.get("method")},
+186: 183: 179:         {"metric": "n_cells_raw", "value": summary.get("n_cells_raw")},
+187: 184: 180:         {"metric": "n_genes_raw", "value": summary.get("n_genes_raw")},
+188: 185: 181:         {"metric": "n_cells_filtered", "value": summary.get("n_cells_filtered")},
+189: 186: 182:         {"metric": "n_genes_filtered", "value": summary.get("n_genes_filtered")},
+190: 187: 183:         {"metric": "n_hvg", "value": summary.get("n_hvg")},
+191: 188: 184:         {"metric": "n_clusters", "value": summary.get("n_clusters")},
+192: 189: 185:         {"metric": "has_spatial", "value": summary.get("has_spatial")},
+193: 190: 186:         {"metric": "cluster_column", "value": context.get("cluster_col")},
+194: 191: 187:         {"metric": "spatial_key", "value": context.get("spatial_key")},
+195: 192: 188:         {"metric": "umap_key", "value": "X_umap" if "X_umap" in context.get("obsm_keys", set()) else None},
+196: 193: 189:         {"metric": "counts_layer", "value": "counts" if "counts" in context.get("layer_keys", set()) else None},
+197: 194: 190:         {"metric": "hvg_column", "value": "highly_variable" if "highly_variable" in context.get("var_keys", set()) else None},
+198: 195: 191:         {"metric": "n_pcs_requested", "value": effective_params.get("n_pcs_requested")},
+199: 196: 192:         {"metric": "n_pcs_computed", "value": summary.get("n_pcs_computed")},

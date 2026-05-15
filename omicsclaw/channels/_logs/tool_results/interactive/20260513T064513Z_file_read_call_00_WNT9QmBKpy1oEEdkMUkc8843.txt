@@ -1,0 +1,154 @@
+File: /data/beifen/zhouwg_data/project/OmicsClaw/skills/singlecell/scrna/sc-preprocessing/sc_preprocess.py
+Lines: 900-1050 of 1138
+
+900:     if "n_cells_after" in filter_summary:
+901:         merged["n_cells_after"] = int(filter_summary["n_cells_after"])
+902:     if "n_genes_after" in filter_summary:
+903:         merged["n_genes_after"] = int(filter_summary["n_genes_after"])
+904:     if "cell_retention_rate" in filter_summary:
+905:         merged["cell_retention_rate"] = float(filter_summary["cell_retention_rate"])
+906:     elif n_cells_before > 0:
+907:         merged["cell_retention_rate"] = merged["n_cells"] / n_cells_before
+908:     if "cells_retained_pct" in filter_summary:
+909:         merged["cells_retained_pct"] = float(filter_summary["cells_retained_pct"])
+910:     elif "cell_retention_rate" in merged:
+911:         merged["cells_retained_pct"] = round(
+912:             float(merged["cell_retention_rate"]) * 100, 2
+913:         )
+914:     if "gene_retention_rate" in filter_summary:
+915:         merged["gene_retention_rate"] = float(filter_summary["gene_retention_rate"])
+916:     elif n_genes_before > 0:
+917:         merged["gene_retention_rate"] = merged["n_genes"] / n_genes_before
+918:     if "genes_retained_pct" in filter_summary:
+919:         merged["genes_retained_pct"] = float(filter_summary["genes_retained_pct"])
+920:     elif "gene_retention_rate" in merged:
+921:         merged["genes_retained_pct"] = round(
+922:             float(merged["gene_retention_rate"]) * 100, 2
+923:         )
+924:     merged["filter_stats"] = dict(filter_summary.get("filter_stats", {}))
+925:     merged["qc_metrics_reused"] = bool(filter_summary.get("qc_metrics_reused", False))
+926:     if "input_preparation" in filter_summary:
+927:         merged["input_preparation"] = filter_summary["input_preparation"]
+928:     return merged
+929: 
+930: 
+931: def finalize_effective_params(adata, effective_params: dict, summary: dict) -> dict:
+932:     """Augment effective parameters with runtime-resolved values."""
+933:     finalized = dict(effective_params)
+934:     finalized["n_pcs_used"] = summary.get("n_pcs_used")
+935:     finalized["counts_layer"] = "counts" if "counts" in adata.layers else None
+936:     finalized["raw_available"] = adata.raw is not None
+937: 
+938:     if finalized.get("method") in {"seurat", "sctransform"}:
+939:         info = adata.uns.get("seurat_info", {})
+940:         if isinstance(info, dict):
+941:             finalized["default_assay"] = info.get("default_assay")
+942:     return finalized
+943: 
+944: 
+945: def _render_r_enhanced(output_dir, figure_data_dir, r_enhanced):
+946:     if not r_enhanced:
+947:         return []
+948:     from skills.singlecell._lib.viz.r import call_r_plot
+949:     r_figures_dir = output_dir / "figures" / "r_enhanced"
+950:     r_figures_dir.mkdir(parents=True, exist_ok=True)
+951:     r_figure_paths = []
+952:     for renderer, filename in R_ENHANCED_PLOTS.items():
+953:         out_path = r_figures_dir / filename
+954:         call_r_plot(renderer, figure_data_dir, out_path)
+955:         if out_path.exists():
+956:             r_figure_paths.append(str(out_path))
+957:     return r_figure_paths
+958: 
+959: 
+960: def main():
+961:     parser = argparse.ArgumentParser(description="Single-Cell Preprocessing")
+962:     parser.add_argument("--input", dest="input_path")
+963:     parser.add_argument("--output", dest="output_dir", required=True)
+964:     parser.add_argument("--demo", action="store_true")
+965:     parser.add_argument("--method", choices=list(METHOD_REGISTRY.keys()), default=DEFAULT_METHOD)
+966:     parser.add_argument("--min-genes", type=int, default=None)
+967:     parser.add_argument("--min-cells", type=int, default=None)
+968:     parser.add_argument("--max-mt-pct", type=float, default=None)
+969:     parser.add_argument("--n-top-hvg", type=int, default=None)
+970:     parser.add_argument("--n-pcs", type=int, default=None)
+971:     parser.add_argument("--normalization-target-sum", type=float, default=None)
+972:     parser.add_argument("--scanpy-hvg-flavor", choices=["seurat", "cell_ranger", "seurat_v3"], default=None)
+973:     parser.add_argument("--pearson-hvg-flavor", choices=["seurat_v3", "seurat"], default=None)
+974:     parser.add_argument("--pearson-theta", type=float, default=None)
+975:     parser.add_argument("--seurat-normalize-method", choices=["LogNormalize", "CLR", "RC"], default=None)
+976:     parser.add_argument("--seurat-scale-factor", type=float, default=None)
+977:     parser.add_argument("--seurat-hvg-method", choices=["vst", "mvp", "disp"], default=None)
+978:     parser.add_argument("--sctransform-regress-mt", action=argparse.BooleanOptionalAction, default=None)
+979:     parser.add_argument("--no-remove-doublets", dest="remove_doublets", action="store_false",
+980:                         default=True,
+981:                         help="Disable automatic doublet removal (active when predicted_doublet / doublet_score "
+982:                              "columns from sc-doublet-detection are present)")
+983:     parser.add_argument("--doublet-score-threshold", type=float, default=None,
+984:                         help="Score cutoff for doublet removal when only doublet_score is available (default: 0.25)")
+985:     parser.add_argument("--r-enhanced", action="store_true", default=False, help="Generate R-enhanced figures via ggplot2 renderers")
+986:     parser.add_argument(
+987:         "--confirmed-preflight",
+988:         action="store_true",
+989:         default=False,
+990:         help=argparse.SUPPRESS,
+991:     )
+992:     args = parser.parse_args()
+993: 
+994:     # -- Parameter validation --
+995:     from skills.singlecell._lib.param_validators import ParamValidator
+996:     v = ParamValidator(SKILL_NAME)
+997:     v.non_negative("min_genes", args.min_genes)
+998:     v.non_negative("min_cells", args.min_cells)
+999:     v.percentage("max_mt_pct", args.max_mt_pct)
+1000:     v.positive("n_top_hvg", args.n_top_hvg, min_val=1)
+1001:     v.positive("n_pcs", args.n_pcs, min_val=1)
+1002:     v.positive("normalization_target_sum", args.normalization_target_sum, min_val=1)
+1003:     v.check()
+1004: 
+1005:     output_dir = Path(args.output_dir)
+1006:     output_dir.mkdir(parents=True, exist_ok=True)
+1007: 
+1008:     if args.demo:
+1009:         adata, _ = get_demo_data()
+1010:         input_file = None
+1011:     else:
+1012:         if not args.input_path:
+1013:             raise ValueError("--input required when not using --demo")
+1014:         adata = sc_io.smart_load(args.input_path, skill_name=SKILL_NAME, preserve_all=True)
+1015:         input_file = args.input_path
+1016: 
+1017:     method = validate_method_choice(args.method, METHOD_REGISTRY)
+1018:     effective_params = build_effective_params(method, args)
+1019:     apply_preflight(
+1020:         preflight_sc_preprocessing(
+1021:             adata,
+1022:             method=method,
+1023:             min_genes=effective_params.get("min_genes"),
+1024:             max_mt_pct=effective_params.get("max_mt_pct"),
+1025:             min_cells=effective_params.get("min_cells"),
+1026:             n_top_hvg=effective_params.get("n_top_hvg"),
+1027:             n_pcs=effective_params.get("n_pcs"),
+1028:             effective_params=effective_params,
+1029:             source_path=input_file,
+1030:         ),
+1031:         logger,
+1032:         confirmed=args.confirmed_preflight,
+1033:     )
+1034:     public_params = build_public_params(effective_params)
+1035:     adata, filter_summary, filter_params, input_contract = prepare_preprocessing_input(
+1036:         adata,
+1037:         method=method,
+1038:         effective_params=effective_params,
+1039:     )
+1040: 
+1041:     if method == "scanpy":
+1042:         adata = preprocess_scanpy(
+1043:             adata,
+1044:             n_top_hvg=int(effective_params["n_top_hvg"]),
+1045:             n_pcs=int(effective_params["n_pcs"]),
+1046:             normalization_target_sum=float(effective_params["normalization_target_sum"]),
+1047:             scanpy_hvg_flavor=str(effective_params["scanpy_hvg_flavor"]),
+1048:         )
+1049:     elif method == "pearson_residuals":
+1050:         adata = preprocess_pearson_residuals(

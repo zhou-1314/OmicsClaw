@@ -8,7 +8,7 @@ import httpx
 import pytest
 from openai import OpenAIError
 
-import bot.core as core
+import omicsclaw.runtime.agent.state as core
 from omicsclaw.agents.pipeline import ResearchPipeline
 from omicsclaw.providers.registry import PROVIDER_PRESETS
 

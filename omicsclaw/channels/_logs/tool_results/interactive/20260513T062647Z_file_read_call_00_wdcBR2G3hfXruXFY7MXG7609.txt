@@ -1,0 +1,204 @@
+File: /data/beifen/zhouwg_data/project/OmicsClaw/omicsclaw.py
+Lines: 450-650 of 1450
+
+450: 
+451:     # Explicit --workspace always wins
+452:     if workspace_dir:
+453:         ws = os.path.abspath(os.path.expanduser(workspace_dir))
+454:         os.makedirs(ws, exist_ok=True)
+455:         return ws
+456: 
+457:     if mode == "run":
+458:         if run_name:
+459:             session_id = _deduplicate_run_name(run_name)
+460:         else:
+461:             session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+462:         ws = str(RUNS_DIR / session_id)
+463:         os.makedirs(ws, exist_ok=True)
+464:         return ws
+465: 
+466:     if mode == "daemon":
+467:         # Daemon mode: use project root (persistent)
+468:         return str(OMICSCLAW_DIR)
+469: 
+470:     # No mode specified: return None (let downstream use default)
+471:     return None
+472: 
+473: 
+474: # ---------------------------------------------------------------------------
+475: # CLI
+476: # ---------------------------------------------------------------------------
+477: 
+478: 
+479: class OmicsClawParser(argparse.ArgumentParser):
+480:     """Custom parser for beautiful OmicsClaw CLI help output.
+481: 
+482:     Only the root parser renders the curated top-level help. Subparsers created
+483:     via ``add_subparsers`` inherit this class (argparse copies the parser
+484:     class), so without the ``is_root`` gate ``oc <command> --help`` would
+485:     re-render the top-level help instead of the subcommand's own options.
+486:     """
+487: 
+488:     def __init__(self, *args, is_root: bool = False, **kwargs):
+489:         super().__init__(*args, **kwargs)
+490:         self._is_root = is_root
+491: 
+492:     def print_help(self, file=None):
+493:         if not self._is_root:
+494:             return super().print_help(file=file)
+495: 
+496:         if file is None:
+497:             file = sys.stdout
+498: 
+499:         print(
+500:             f"\n{BOLD}{CYAN}OmicsClaw{RESET} v{__version__} -- "
+501:             "AI-powered Multi-Omics Analysis Platform\n",
+502:             file=file,
+503:         )
+504:         print(f"{BOLD}Usage:{RESET} oc <command> [options]\n", file=file)
+505: 
+506:         print(f"{BOLD}{YELLOW}Core Commands{RESET}", file=file)
+507:         print(f"  {GREEN}interactive{RESET}  AI interactive terminal (CLI mode) | Alias: {GREEN}chat{RESET}", file=file)
+508:         print(f"  {GREEN}tui        {RESET}  Advanced full-screen Textual interface", file=file)
+509:         print(f"  {GREEN}list       {RESET}  List all 89 available analysis skills", file=file)
+510:         print(f"  {GREEN}run        {RESET}  Execute a specific skill (e.g., 'oc run preprocess')", file=file)
+511:         print(f"  {GREEN}version    {RESET}  Show the current OmicsClaw version", file=file)
+512: 
+513:         print(f"\n{BOLD}{BLUE}Utility Commands{RESET}", file=file)
+514:         print(f"  {GREEN}mcp           {RESET}  Manage external Model Context Protocol (MCP) servers", file=file)
+515:         print(f"  {GREEN}doctor        {RESET}  Run environment and runtime diagnostics", file=file)
+516:         print(f"  {GREEN}app-server    {RESET}  Start the desktop/web FastAPI backend for OmicsClaw-App", file=file)
+517:         print(f"  {GREEN}memory-server {RESET}  Start the graph memory REST API server", file=file)
+518:         print(f"  {GREEN}env           {RESET}  Check installed Python dependencies and system tiers", file=file)
+519:         print(f"  {GREEN}onboard       {RESET}  Interactive setup wizard for LLM, runtime, memory, and channels", file=file)
+520:         print(f"  {GREEN}upload        {RESET}  Upload/initialize session from existing .h5ad data", file=file)
+521: 
+522:         print(f"\n{BOLD}{MAGENTA}Global Options{RESET}", file=file)
+523:         print(f"  {GREEN}-m, --mode {RESET}  Workspace mode: {CYAN}daemon{RESET} (persistent) | {CYAN}run{RESET} (isolated per-session)", file=file)
+524:         print(f"  {GREEN}-n, --name {RESET}  Name for run session directory (requires --mode run)", file=file)
+525:         print(f"  {GREEN}--workspace{RESET}  Override workspace directory for this session", file=file)
+526:         print(f"  {GREEN}-V, --version{RESET}  Show the current OmicsClaw version", file=file)
+527: 
+528:         print(f"\n{BOLD}For specific command help, use:{RESET} oc <command> --help\n", file=file)
+529: 
+530:         print(f"{DIM}OmicsClaw project is under active development.{RESET}\n", file=file)
+531: 
+532: 
+533: def main():
+534:     _configure_stdio_error_handling()
+535:     # Ensure .env is loaded for all subcommands (memory-server, etc.)
+536:     from omicsclaw.common.runtime_env import load_project_dotenv
+537: 
+538:     load_project_dotenv(OMICSCLAW_DIR, override=False)
+539: 
+540:     parser = OmicsClawParser(
+541:         description="OmicsClaw -- Multi-Omics Skills Runner",
+542:         formatter_class=argparse.RawTextHelpFormatter,
+543:         is_root=True,
+544:     )
+545:     parser.add_argument(
+546:         "-V",
+547:         "--version",
+548:         action="version",
+549:         version=f"OmicsClaw {__version__}",
+550:     )
+551:     sub = parser.add_subparsers(dest="command")
+552: 
+553:     sub.add_parser("version", help="Show the current OmicsClaw version")
+554: 
+555:     # list
+556:     list_p = sub.add_parser("list", help="List available skills")
+557:     list_p.add_argument("--domain", help="Filter by domain (e.g., spatial, singlecell, genomics)")
+558: 
+559:     # env
+560:     env_p = sub.add_parser("env", help="Check installed OmicsClaw dependency tiers")
+561: 
+562:     # upload
+563:     upload_p = sub.add_parser("upload", help="Create a spatial session from h5ad data")
+564:     upload_p.add_argument("--input", required=True, dest="input_path")
+565:     upload_p.add_argument("--data-type", default="generic")
+566:     upload_p.add_argument("--species", default="human")
+567: 
+568:     # onboard
+569:     onboard_p = sub.add_parser("onboard", help="Run interactive setup wizard for LLM, runtime, memory, and channel configuration")
+570: 
+571:     # interactive / chat
+572:     interactive_p = sub.add_parser("interactive", aliases=["chat"], help="Start interactive terminal chat with LLM and skills")
+573:     interactive_p.add_argument("--session", dest="session_id", default=None,
+574:                                help="Resume a saved session by ID (or prefix)")
+575:     interactive_p.add_argument("-p", "--prompt", dest="prompt", default=None,
+576:                                help="Single-shot prompt (non-interactive, print response and exit)")
+577:     interactive_p.add_argument("--ui", choices=["cli", "tui"], default="cli",
+578:                                help="UI backend: cli (default, prompt_toolkit) or tui (Textual full-screen)")
+579:     interactive_p.add_argument("--model", default="", help="Override LLM model name")
+580:     interactive_p.add_argument("--provider", default="", help="Override LLM provider (deepseek, openai, gemini, ...)")
+581:     interactive_p.add_argument("--workspace", dest="workspace_dir", default=None,
+582:                                help="Working directory for this session (default: project root)")
+583:     interactive_p.add_argument("-m", "--mode", dest="mode", default=None,
+584:                                choices=["daemon", "run"],
+585:                                help="Workspace mode: 'daemon' (persistent, default) or 'run' (isolated per-session)")
+586:     interactive_p.add_argument("-n", "--name", dest="run_name", default=None,
+587:                                help="Name for this run session (used as directory name; requires --mode run)")
+588: 
+589:     # tui
+590:     tui_p = sub.add_parser("tui", help="Start advanced full-screen Textual User Interface")
+591:     tui_p.add_argument("--session", dest="session_id", default=None,
+592:                        help="Resume a saved session by ID")
+593:     tui_p.add_argument("--model", default="", help="Override LLM model name")
+594:     tui_p.add_argument("--provider", default="", help="Override LLM provider")
+595:     tui_p.add_argument("--workspace", dest="workspace_dir", default=None,
+596:                        help="Working directory for this session")
+597:     tui_p.add_argument("-m", "--mode", dest="mode", default=None,
+598:                        choices=["daemon", "run"],
+599:                        help="Workspace mode: 'daemon' (persistent) or 'run' (isolated per-session)")
+600:     tui_p.add_argument("-n", "--name", dest="run_name", default=None,
+601:                        help="Name for this run session (requires --mode run)")
+602: 
+603:     # mcp — manage external MCP servers
+604:     mcp_p = sub.add_parser("mcp", help="Manage external MCP (Model Context Protocol) servers")
+605:     mcp_sub = mcp_p.add_subparsers(dest="mcp_command")
+606:     # mcp list
+607:     mcp_sub.add_parser("list", help="List configured MCP servers")
+608:     # mcp add
+609:     mcp_add_p = mcp_sub.add_parser("add", help="Add an MCP server")
+610:     mcp_add_p.add_argument("name", help="Server name")
+611:     mcp_add_p.add_argument("command", help="Command or URL")
+612:     mcp_add_p.add_argument("args", nargs="*", help="Additional args for stdio transport")
+613:     mcp_add_p.add_argument("--transport", choices=["stdio", "http", "sse", "websocket"], default=None)
+614:     mcp_add_p.add_argument("--env", nargs="+", metavar="KEY=VAL", help="Environment variables")
+615:     # mcp remove
+616:     mcp_rm_p = mcp_sub.add_parser("remove", help="Remove an MCP server")
+617:     mcp_rm_p.add_argument("name", help="Server name to remove")
+618:     # mcp config — show config file path
+619:     mcp_sub.add_parser("config", help="Show MCP config file path")
+620: 
+621:     # auth — manage OAuth login for Claude Pro/Max and OpenAI Codex via ccproxy
+622:     auth_p = sub.add_parser(
+623:         "auth",
+624:         help="Manage OAuth login for Claude Pro/Max and OpenAI Codex (via ccproxy)",
+625:     )
+626:     auth_sub = auth_p.add_subparsers(dest="auth_command")
+627:     for _op in ("login", "logout", "status"):
+628:         _p = auth_sub.add_parser(_op, help=f"{_op.capitalize()} OAuth credentials")
+629:         _p.add_argument(
+630:             "provider",
+631:             nargs="?",
+632:             # Accept any alias of any OAuth-capable provider. Derived from
+633:             # the ``OAUTH_PROVIDERS`` single source of truth in
+634:             # ccproxy_manager, so adding a new row there auto-extends CLI.
+635:             choices=_oauth_cli_choices(),
+636:             help="Target provider (claude|anthropic|openai|codex; omit for `status` to show both)",
+637:         )
+638: 
+639:     # memory-server — start graph memory REST API
+640:     mem_p = sub.add_parser("memory-server", help="Start the graph memory REST API server")
+641:     mem_p.add_argument("--host", default=None, help="Host to bind (default: 127.0.0.1)")
+642:     mem_p.add_argument("--port", type=int, default=None, help="Port to bind (default: 8766)")
+643: 
+644:     app_p = sub.add_parser("app-server", help="Start the desktop/web FastAPI backend for OmicsClaw-App")
+645:     app_p.add_argument("--host", default=None, help="Host to bind (default: 127.0.0.1)")
+646:     app_p.add_argument("--port", type=int, default=None, help="Port to bind (default: 8765)")
+647:     app_p.add_argument("--reload", action="store_true", help="Enable uvicorn reload mode")
+648: 
+649:     doctor_p = sub.add_parser("doctor", help="Run environment and runtime diagnostics")
+650:     doctor_p.add_argument(

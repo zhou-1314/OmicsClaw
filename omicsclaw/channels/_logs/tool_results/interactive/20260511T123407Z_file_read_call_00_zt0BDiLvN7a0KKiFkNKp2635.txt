@@ -1,0 +1,135 @@
+File: /data/beifen/zhouwg_data/project/OmicsClaw/bot/logs/tool_results/interactive/20260511T123402Z_file_read_call_00_GbFpx3orbSUgOm4lB3bi2866.txt
+Lines: 1-132 of 132
+
+1: File: /data/beifen/zhouwg_data/project/OmicsClaw/knowledge_base/scrnaseq-scanpy-core-analysis/SKILL.md
+2: Lines: 1-289 of 289
+3: Truncated to 8000 characters
+4: 
+5: 1: ---
+6: 2: id: scrnaseq-scanpy-core-analysis
+7: 3: name: Single-Cell RNA-seq Core Analysis (Scanpy)
+8: 4: category: transcriptomics
+9: 5: short-description: "Complete single-cell RNA-seq analysis using Scanpy from raw data to cell type annotation with clustering and visualization."
+10: 6: detailed-description: "Complete single-cell RNA-seq analysis using Scanpy from raw data to cell type annotation. Use when you have 10X Chromium, Drop-seq, or other scRNA-seq data requiring QC, normalization, clustering, and visualization. Implements current best practices including ambient RNA correction (CellBender), batch-aware adaptive QC (MAD), doublet detection (Scrublet), standard or Pearson residuals normalization, batch integration (scVI/Harmony), multi-resolution Leiden clustering, and pseudobulk differential expression for condition comparisons. Best for human or mouse data with 500+ cells per sample. Produces publication-ready plots and annotated AnnData objects."
+11: 7: starting-prompt: "Analyze single-cell RNA-seq data with Scanpy from QC through cell type annotation. Generate a PDF report with an intro, methods, results, conclusions and figures from all of the analyses you perform."
+12: 8: ---
+13: 9: 
+14: 10: # Single-Cell RNA-seq Core Analysis (Scanpy)
+15: 11: 
+16: 12: Complete workflow for single-cell RNA-seq analysis using Scanpy and the scverse ecosystem. Process raw data through quality control, normalization, clustering, and cell type annotation with publication-ready visualizations.
+17: 13: 
+18: 14: ## When to Use This Skill
+19: 15: 
+20: 16: - **Analyze 10X Chromium data** (CellRanger output, H5 files, raw/filtered matrices)
+21: 17: - **Process Drop-seq, Smart-seq2, or inDrop** single-cell RNA-seq data
+22: 18: - **Integrate multi-batch data** using scVI, scANVI, or Harmony
+23: 19: - **Annotate cell types** manually or with automated reference-based methods
+24: 20: - **Compare conditions** using pseudobulk differential expression (multi-sample data)
+25: 21: 
+26: 22: **Don't use for:** Bulk RNA-seq (use bulk-rnaseq-counts-to-de-deseq2), R-based scRNA-seq (use scrnaseq-seurat-core-analysis), Spatial transcriptomics (coming soon)
+27: 23: 
+28: 24: ## Installation
+29: 25: 
+30: 26: | Package | Version | License | Commercial Use | Installation |
+31: 27: |---------|---------|---------|----------------|--------------|
+32: 28: | scanpy | ≥1.9 | BSD-3-Clause | Permitted | `pip install scanpy` |
+33: 29: | anndata | ≥0.8 | BSD-3-Clause | Permitted | `pip install anndata` |
+34: 30: | numpy | ≥1.20 | BSD-3-Clause | Permitted | `pip install numpy` |
+35: 31: | pandas | ≥1.3 | BSD-3-Clause | Permitted | `pip install pandas` |
+36: 32: | matplotlib | ≥3.4 | PSF | Permitted | `pip install matplotlib` |
+37: 33: | seaborn | ≥0.12 | BSD-3-Clause | Permitted | `pip install seaborn` |
+38: 34: | adjustText | ≥0.8 | MIT | Permitted | `pip install adjustText` |
+39: 35: | scrublet | ≥0.2.3 | MIT | Permitted | `pip install scrublet` |
+40: 36: | scvi-tools | ≥1.0 | BSD-3-Clause | Permitted | `pip install scvi-tools` |
+41: 37: | harmonypy | ≥0.0.9 | GPL-3 | Permitted | `pip install harmonypy` |
+42: 38: | celltypist | ≥1.0 | MIT | Permitted | `pip install celltypist` |
+43: 39: | pydeseq2 | ≥0.4 | MIT | Permitted | `pip install pydeseq2` |
+44: 40: 
+45: 41: **Install all:** `pip install scanpy anndata numpy pandas matplotlib seaborn adjustText scrublet`
+46: 42: 
+47: 43: **Minimum versions:** Python ≥3.8, scanpy ≥1.9, anndata ≥0.8
+48: 44: 
+49: 45: ## Inputs
+50: 46: 
+51: 47: **Required:**
+52: 48: - **Raw or filtered count matrix:** CellRanger output (`filtered_feature_bc_matrix/`), H5 files (`.h5`), AnnData (`.h5ad`), or count matrices (CSV/TSV)
+53: 49: 
+54: 50: **Optional:** Sample metadata (CSV/TSV) with sample IDs, conditions, batches, donor IDs
+55: 51: 
+56: 52: **Data requirements:** Min 500 cells/sample (1000+ recommended), Human or Mouse, UMI-based or read counts. See [references/qc_guidelines.md](references/qc_guidelines.md) for tissue-specific thresholds.
+57: 53: 
+58: 54: ## Outputs
+59: 55: 
+60: 56: **Analysis objects:**
+61: 57: - `adata_processed.h5ad` - Complete annotated AnnData object
+62: 58:   - **Load with:** `import scanpy as sc; adata = sc.read_h5ad('adata_processed.h5ad')`
+63: 59:   - Contains: raw counts, normalized data, QC metrics, clusters, cell types, UMAP/PCA
+64: 60:   - **Note:** `adata.X` contains log-normalized (not scaled) data. Scaled data is used internally for PCA but not stored in .X. This is correct for downstream analysis (DE, visualization).
+65: 61:   - **Required for:** trajectory inference, cell-cell communication, downstream analyses
+66: 62: 
+67: 63: **Reports:**
+68: 64: - `scrna_analysis_report.pdf` - Agent-generated comprehensive PDF with Methods, Results, Figures, Conclusions
+69: 65: - `analysis_summary.txt` - Text summary of dataset, QC, clustering, integration (generated by `export_anndata_results()`)
+70: 66: 
+71: 67: **⚠️ PDF style rules:**
+72: 68: - **US Letter page size (8.5 × 11 in)** — always set page dimensions explicitly; do not rely on library defaults
+73: 69: - **No Unicode superscripts** — use `3.36e-06` or `3.36 × 10^(-6)`, not Unicode superscript chars (they render as ■ in PDF fonts)
+74: 70: - **No half-empty pages** — group headings with their content; only page-break before major sections (Results, Conclusions)
+75: 71: - **Figures ≥80% page width** — multi-panel figures must be large enough to read; never embed below 50% width
+76: 72: 
+77: 73: **Tables:** `cell_metadata.csv`, `expression_matrix_counts.csv`, `expression_matrix_normalized.csv`, `pca_coordinates.csv`, `umap_coordinates.csv`, `cluster_markers_all.csv`, `{celltype}_deseq2_results.csv`
+78: 74: 
+79: 75: **Visualizations (PNG + SVG at 300 DPI):** QC violins, UMAP plots, marker heatmaps, dot plots, volcano/MA plots
+80: 76: 
+81: 77: ## Clarification Questions
+82: 78: 
+83: 79: **Default settings (use unless user specifies otherwise):**
+84: 80: - Format: Filtered 10X CellRanger output | Species: Human | Tissue: PBMC
+85: 81: - Normalization: Standard (target sum + log1p) | Clustering: Test 0.4, 0.6, 0.8, 1.0
+86: 82: 
+87: 83: ### 1. **Input Files** (ASK THIS FIRST):
+88: 84:    - Do you have specific single-cell data file(s) to analyze?
+89: 85:    - Expected: CellRanger output, H5, H5AD, or count matrix
+90: 86:    - **Or use example/demo data?** (PBMC 3k dataset available)
+91: 87: 
+92: 88: ### 2. **Data format and species:**
+93: 89:    - *(If using your own data)* What format? Filtered 10X (default), Raw 10X, H5, H5AD? Human or Mouse? Tissue type?
+94: 90:    - *(If using example data)* Defaults apply: filtered 10X, human, PBMC — skip to Q3
+95: 91: 
+96: 92: ### 3. **Batch structure:**
+97: 93:    - a) Single sample (no integration needed)
+98: 94:    - b) Multiple batches (scVI recommended, Harmony for speed)
+99: 95: 
+100: 96: ### 4. **Analysis scope:**
+101: 97:    - a) Standard: QC + normalize + cluster + annotate (recommended)
+102: 98:    - b) Standard + pseudobulk DE (requires ≥2 samples per condition)
+103: 99:    - c) Custom: specify which steps
+104: 100: 
+105: 101: ### 5. **Clustering granularity:**
+106: 102:    - a) Coarse (0.3-0.5) — major cell types only
+107: 103:    - b) Standard (0.6-0.8) — recommended
+108: 104:    - c) Fine (1.0-1.5) — subtypes
+109: 105:    - d) Test multiple: 0.4, 0.6, 0.8, 1.0 (recommended)
+110: 106: 
+111: 107: ## Standard Workflow
+112: 108: 
+113: 109: > **Note:** Run from the OmicsClaw root directory and add the workflow scripts to `sys.path`:
+114: 110: > ```python
+115: 111: > import sys; import os; sys.path.insert(0, os.path.abspath('knowledge_base/scripts/scrnaseq-scanpy-core-analysis'))
+116: 112: > ```
+117: 113: 
+118: 114: 🚨 **MANDATORY: USE SCRIPTS EXACTLY AS SHOWN - DO NOT WRITE INLINE CODE** 🚨
+119: 115: 
+120: 116: **Detailed step-by-step code:** [references/workflow-details.md](references/workflow-details.md)
+121: 117: 
+122: 118: **CRITICAL - DO NOT:**
+123: 119: - Write inline analysis code → **STOP: Use the script functions**
+124: 120: - Write custom export code → **STOP: Use `export_anndata_results()`**
+125: 121: - Skip verification messages → **STOP: Check for "✓" messages after each step**
+126: 122: 
+127: 123: **IF SCRIPTS FAIL - Script Failure Hierarchy:**
+128: 124: 1. **Fix and Retry (90%)** - Install missing package, re-run script
+129: 125: 2. **Modify Script (5%)** - Edit the script file itself, document changes
+130: 126: 3. **Use as Reference (4%)** - Read script, adapt approach, cite source
+131: 127: 4. **Write from Scratch (1%)** - Only if genuinely
+132: ... [truncated]

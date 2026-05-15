@@ -43,7 +43,7 @@ SCAN_ROOT = REPO_ROOT / "omicsclaw"
 GRANDFATHERED_LAZY_IMPORTS: frozenset[tuple[str, int]] = frozenset(
     {
         # omicsclaw/app/server.py — desktop /bridge/* endpoints reach
-        # into bot.channels / bot.run for channel orchestration.
+        # into omicsclaw.channels / omicsclaw.run_channels for channel orchestration.
         # Future fix: move CHANNEL_REGISTRY + ChannelManager into
         # omicsclaw/channels/.
         ("omicsclaw/app/server.py", 351),
@@ -53,7 +53,7 @@ GRANDFATHERED_LAZY_IMPORTS: frozenset[tuple[str, int]] = frozenset(
         ("omicsclaw/app/server.py", 4813),
         ("omicsclaw/app/server.py", 4814),
         # omicsclaw/interactive/{interactive,tui}.py — both surfaces
-        # call bot.core.llm_tool_loop directly. Future fix: expose a
+        # call omicsclaw.runtime.agent.state.llm_tool_loop directly. Future fix: expose a
         # surface-agnostic entry from omicsclaw.engine.
         ("omicsclaw/interactive/interactive.py", 1379),
         ("omicsclaw/interactive/interactive.py", 1422),

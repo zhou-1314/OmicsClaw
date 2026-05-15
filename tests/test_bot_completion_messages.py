@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from bot.core import (
+from omicsclaw.runtime.agent.state import (
     _build_bot_query_engine_callbacks,
     execute_create_omics_skill,
     execute_custom_analysis_execute,

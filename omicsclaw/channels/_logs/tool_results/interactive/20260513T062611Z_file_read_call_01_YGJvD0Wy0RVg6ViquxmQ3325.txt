@@ -1,0 +1,279 @@
+File: /data/beifen/zhouwg_data/project/OmicsClaw/skills/singlecell/scrna/sc-qc/sc_qc.py
+Lines: 1-796 of 796
+Truncated to 12000 characters
+
+1: #!/usr/bin/env python3
+2: """Single-Cell QC - Quality control metrics and visualization.
+3: 
+4: Usage:
+5:     python sc_qc.py --input <data.h5ad> --output <dir>
+6:     python sc_qc.py --demo --output <dir>
+7: """
+8: from __future__ import annotations
+9: 
+10: import argparse
+11: import json
+12: import logging
+13: import shlex
+14: import sys
+15: from pathlib import Path
+16: 
+17: import matplotlib
+18: matplotlib.use("Agg")
+19: import numpy as np
+20: import pandas as pd
+21: 
+22: # Fix for anndata >= 0.11 with StringArray
+23: try:
+24:     import anndata
+25:     anndata.settings.allow_write_nullable_strings = True
+26: except Exception:
+27:     pass
+28: 
+29: _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
+30: if str(_PROJECT_ROOT) not in sys.path:
+31:     sys.path.insert(0, str(_PROJECT_ROOT))
+32: 
+33: from omicsclaw.common.report import (
+34:     generate_report_header,
+35:     generate_report_footer,
+36:     load_result_json,
+37:     write_result_json,
+38:     write_replot_hint,
+39: )
+40: from omicsclaw.common.checksums import sha256_file
+41: from skills.singlecell._lib.adata_utils import canonicalize_singlecell_adata, ensure_input_contract, store_analysis_metadata
+42: from skills.singlecell._lib.export import save_h5ad
+43: from skills.singlecell._lib.gallery import PlotSpec, VisualizationRecipe, render_plot_specs
+44: from skills.singlecell._lib import io as sc_io
+45: from skills.singlecell._lib.preflight import apply_preflight, preflight_sc_qc
+46: from skills.singlecell._lib import qc as sc_qc_utils
+47: 
+48: logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+49: logger = logging.getLogger(__name__)
+50: 
+51: SKILL_NAME = "sc-qc"
+52: SKILL_VERSION = "0.2.0"
+53: SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-qc/sc_qc.py"
+54: 
+55: R_ENHANCED_PLOTS: dict[str, str] = {
+56:     # sc-qc runs before clustering — no embeddings or cell-type compositions yet.
+57:     # plot_feature_violin reads qc_metrics_per_cell.csv written by _export_figure_data.
+58:     "plot_feature_violin": "r_qc_violin.png",
+59: }
+60: QC_METHOD = "qc_metrics"
+61: METHOD_PARAM_DEFAULTS = {
+62:     QC_METHOD: {
+63:         "species": "human",
+64:         "calculate_ribo": True,
+65:     }
+66: }
+67: PUBLIC_PARAM_KEYS = ("species",)
+68: 
+69: 
+70: def generate_qc_summary_table(adata) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
+71:     """Build QC metric summaries for report, tables, and figure_data."""
+72:     metrics = ["n_genes_by_counts", "total_counts", "pct_counts_mt"]
+73:     if "pct_counts_ribo" in adata.obs.columns:
+74:         metrics.append("pct_counts_ribo")
+75:     metrics = [metric for metric in metrics if metric in adata.obs.columns]
+76: 
+77:     summary_data = []
+78:     summary_stats = {}
+79: 
+80:     for metric in metrics:
+81:         if metric not in adata.obs.columns:
+82:             continue
+83: 
+84:         values = adata.obs[metric]
+85:         stats = {
+86:             "metric": metric,
+87:             "min": float(values.min()),
+88:             "max": float(values.max()),
+89:             "mean": float(values.mean()),
+90:             "median": float(values.median()),
+91:             "std": float(values.std()),
+92:             "q25": float(values.quantile(0.25)),
+93:             "q75": float(values.quantile(0.75)),
+94:         }
+95:         summary_data.append(stats)
+96:         summary_stats[metric] = {
+97:             "median": stats["median"],
+98:             "mean": stats["mean"],
+99:             "min": stats["min"],
+100:             "max": stats["max"],
+101:         }
+102:     summary_df = pd.DataFrame(summary_data)
+103:     qc_obs = adata.obs.loc[:, metrics].copy()
+104:     qc_obs.insert(0, "cell_id", adata.obs_names.astype(str))
+105:     return summary_stats, summary_df, qc_obs.reset_index(drop=True)
+106: 
+107: 
+108: def _build_highest_expr_genes_table(adata, n_top: int = 20) -> pd.DataFrame:
+109:     matrix = adata.X
+110:     mean_expression = np.asarray(matrix.mean(axis=0)).ravel()
+111:     df = pd.DataFrame({"gene": adata.var_names.astype(str), "mean_expression": mean_expression})
+112:     return df.sort_values("mean_expression", ascending=False).head(n_top).reset_index(drop=True)
+113: 
+114: 
+115: def _build_barcode_rank_table(adata) -> pd.DataFrame:
+116:     counts = np.sort(np.asarray(adata.obs["total_counts"], dtype=float))[::-1]
+117:     return pd.DataFrame({
+118:         "rank": np.arange(1, len(counts) + 1),
+119:         "total_counts": counts,
+120:         "log10_rank": np.log10(np.arange(1, len(counts) + 1)),
+121:         "log10_total_counts": np.log10(counts + 1),
+122:     })
+123: 
+124: 
+125: def _build_qc_correlation_table(adata, metrics: list[str]) -> pd.DataFrame:
+126:     corr = adata.obs.loc[:, metrics].corr(numeric_only=True)
+127:     corr.index.name = "metric"
+128:     return corr.reset_index()
+129: 
+130: 
+131: def _prepare_qc_gallery_context(adata, summary: dict, effective_params: dict, output_dir: Path) -> dict:
+132:     summary_stats, summary_df, qc_metrics_df = generate_qc_summary_table(adata)
+133:     summary["qc_metrics"] = summary_stats
+134:     qc_metric_columns = [column for column in qc_metrics_df.columns if column != "cell_id"]
+135:     return {
+136:         "output_dir": Path(output_dir),
+137:         "qc_metric_columns": qc_metric_columns,
+138:         "qc_summary_df": summary_df,
+139:         "qc_metrics_df": qc_metrics_df,
+140:         "highest_expr_df": _build_highest_expr_genes_table(adata),
+141:         "barcode_rank_df": _build_barcode_rank_table(adata),
+142:         "qc_correlation_df": _build_qc_correlation_table(adata, qc_metric_columns),
+143:         "qc_run_summary_df": pd.DataFrame(
+144:             [
+145:                 {"metric": "method", "value": "qc_metrics"},
+146:                 {"metric": "n_cells", "value": int(summary.get("n_cells", 0))},
+147:                 {"metric": "n_genes", "value": int(summary.get("n_genes", 0))},
+148:                 {"metric": "species", "value": effective_params.get("species", "human")},
+149:                 {"metric": "calculate_ribo", "value": effective_params.get("calculate_ribo", True)},
+150:                 {"metric": "expression_source", "value": summary.get("expression_source", "adata.X")},
+151:                 {"metric": "gene_name_source", "value": summary.get("gene_name_source", "var_names")},
+152:             ]
+153:         ),
+154:     }
+155: 
+156: 
+157: def _build_qc_visualization_recipe(_adata, _summary: dict, _context: dict) -> VisualizationRecipe:
+158:     qc_metric_columns = _context.get("qc_metric_columns", [])
+159:     return VisualizationRecipe(
+160:         recipe_id="standard-sc-qc-gallery",
+161:         skill_name=SKILL_NAME,
+162:         title="Single-cell QC gallery",
+163:         description="Default OmicsClaw QC diagnostic gallery for scRNA-seq quality assessment.",
+164:         plots=[
+165:             PlotSpec(
+166:                 plot_id="qc_violin",
+167:                 role="overview",
+168:                 renderer="qc_violin",
+169:                 filename="qc_violin.png",
+170:                 title="QC violin plots",
+171:                 description="Distribution of core QC metrics across cells.",
+172:                 required_obs=["n_genes_by_counts", "total_counts"],
+173:                 params={"metrics": qc_metric_columns},
+174:             ),
+175:             PlotSpec(
+176:                 plot_id="qc_scatter",
+177:                 role="diagnostic",
+178:                 renderer="qc_scatter",
+179:                 filename="qc_scatter.png",
+180:                 title="QC scatter plots",
+181:                 description="Pairwise relationships among counts, detected genes, and mitochondrial content.",
+182:                 required_obs=["n_genes_by_counts", "total_counts"],
+183:             ),
+184:             PlotSpec(
+185:                 plot_id="qc_histograms",
+186:                 role="diagnostic",
+187:                 renderer="qc_histograms",
+188:                 filename="qc_histograms.png",
+189:                 title="QC histograms",
+190:                 description="Metric distributions with median indicators.",
+191:                 required_obs=["n_genes_by_counts", "total_counts"],
+192:                 params={"metrics": qc_metric_columns},
+193:             ),
+194:             PlotSpec(
+195:                 plot_id="highest_expr_genes",
+196:                 role="supporting",
+197:                 renderer="highest_expr_genes",
+198:                 filename="highest_expr_genes.png",
+199:                 title="Highest expressed genes",
+200:                 description="Top genes by mean expression to reveal dominant features or contaminants.",
+201:             ),
+202:             PlotSpec(
+203:                 plot_id="barcode_rank",
+204:                 role="diagnostic",
+205:                 renderer="barcode_rank",
+206:                 filename="barcode_rank.png",
+207:                 title="Barcode-rank curve",
+208:                 description="Ranked library-size curve to inspect capture complexity and tail behavior.",
+209:                 required_obs=["total_counts"],
+210:             ),
+211:             PlotSpec(
+212:                 plot_id="qc_correlation_heatmap",
+213:                 role="supporting",
+214:                 renderer="qc_correlation_heatmap",
+215:                 filename="qc_correlation_heatmap.png",
+216:                 title="QC correlation heatmap",
+217:                 description="Pairwise Pearson correlations among QC metrics.",
+218:                 required_obs=["n_genes_by_counts", "total_counts"],
+219:             ),
+220:         ],
+221:     )
+222: 
+223: 
+224: def _gallery_figure_path(output_dir: Path, filename: str) -> Path:
+225:     return Path(output_dir) / "figures" / filename
+226: 
+227: 
+228: def _render_qc_violin(adata, spec: PlotSpec, context: dict) -> object:
+229:     output_dir = Path(context["output_dir"])
+230:     sc_qc_utils.plot_qc_violin(adata, output_dir, metrics=spec.params.get("metrics"))
+231:     path = _gallery_figure_path(output_dir, spec.filename)
+232:     return path if path.exists() else None
+233: 
+234: 
+235: def _render_qc_scatter(adata, spec: PlotSpec, context: dict) -> object:
+236:     output_dir = Path(context["output_dir"])
+237:     sc_qc_utils.plot_qc_scatter(adata, output_dir)
+238:     path = _gallery_figure_path(output_dir, spec.filename)
+239:     return path if path.exists() else None
+240: 
+241: 
+242: def _render_qc_histograms(adata, spec: PlotSpec, context: dict) -> object:
+243:     output_dir = Path(context["output_dir"])
+244:     sc_qc_utils.plot_qc_histograms(adata, output_dir, metrics=spec.params.get("metrics"))
+245:     path = _gallery_figure_path(output_dir, spec.filename)
+246:     return path if path.exists() else None
+247: 
+248: 
+249: def _render_highest_expr_genes(adata, spec: PlotSpec, context: dict) -> object:
+250:     output_dir = Path(context["output_dir"])
+251:     sc_qc_utils.plot_highest_expr_genes(adata, output_dir, n_top=20)
+252:     path = _gallery_figure_path(output_dir, spec.filename)
+253:     return path if path.exists() else None
+254: 
+255: 
+256: def _render_barcode_rank(adata, spec: PlotSpec, context: dict) -> object:
+257:     output_dir = Path(context["output_dir"])
+258:     sc_qc_utils.plot_barcode_rank(adata, output_dir)
+259:     path = _gallery_figure_path(output_dir, spec.filename)
+260:     return path if path.exists() else None
+261: 
+262: 
+263: def _render_qc_correlation_heatmap(adata, spec: PlotSpec, context: dict) -> object:
+264:     output_dir = Path(context["output_dir"])
+265:     sc_qc_utils.plot_qc_correlation_heatmap(adata, output_dir, metrics=context.get("qc_metric_columns"))
+266:     path = _gallery_figure_path(output_dir, spec.filename)
+267:     return path if path.exists() else None
+268: 
+269: 
+270: QC_GALLERY_RENDERERS = {
+271:     "qc_violin": _render_qc_violin,
+272:     "qc_scatter": _render_qc_scatter,
+273:     "qc_histograms": _render_qc_histograms,
+274:     "highest_expr_genes": _render_hig
+... [truncated]

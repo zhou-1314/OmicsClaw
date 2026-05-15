@@ -1,0 +1,152 @@
+# Single-Cell QC Report
+
+**Date**: 2026-05-05 06:05 UTC
+**Skill**: sc-qc
+**Method**: qc_metrics
+**Cells**: 2700
+**Genes**: 32738
+**Species**: human
+**Expression source**: adata.X
+**Input files**:
+- `pbmc3k_raw.h5ad`: `89a96f1beaa2dd83a687666d3f19a4513ac27a2a2d12581fcd77afed7ea653a1`
+
+---
+## Summary
+
+- **Method**: qc_metrics
+- **Total cells**: 2,700
+- **Total genes**: 32,738
+- **Species**: human
+- **Expression source used for QC**: adata.X
+- **Gene identifiers used for QC**: var_names
+- **Output object standardization**: Yes; `processed.h5ad` is saved in the OmicsClaw scRNA contract for downstream reuse.
+- **Filtering performed**: No; this skill is diagnostic only.
+
+## Input Validation
+
+- Input matrix and gene identifiers passed QC preparation checks.
+
+## QC Metrics Overview
+
+### N Genes By Counts
+
+- **Median**: 817.00
+- **Mean**: 846.99
+- **Range**: [212.00, 3422.00]
+
+### Total Counts
+
+- **Median**: 2197.00
+- **Mean**: 2366.90
+- **Range**: [548.00, 15844.00]
+
+### Pct Counts Mt
+
+- **Median**: 2.03
+- **Mean**: 2.22
+- **Range**: [0.00, 22.57]
+
+### Pct Counts Ribo
+
+- **Median**: 36.77
+- **Mean**: 34.95
+- **Range**: [1.06, 59.44]
+
+## Gene Detection
+
+- **Median genes per cell**: 817.0
+- **Median UMIs per cell**: 2197.0
+
+## Mitochondrial Content
+
+- **Median MT%**: 2.03%
+- **Mean MT%**: 2.22%
+- **Range**: [0.00%, 22.57%]
+
+## Ribosomal Content
+
+- **Median Ribosomal%**: 36.77%
+- **Mean Ribosomal%**: 34.95%
+
+## Effective Parameters
+
+- `species`: human
+- `calculate_ribo`: True (fixed current wrapper behavior)
+
+## Output Files
+
+- `figures/manifest.json` — Standard Python gallery manifest
+- `figure_data/` — Figure-ready CSV exports for downstream customization
+- `tables/qc_metrics_summary.csv` — Summary statistics for all QC metrics
+- `tables/qc_metrics_per_cell.csv` — Per-cell QC metric values
+- `tables/highest_expr_genes.csv` — Top genes by mean expression
+- `processed.h5ad` — AnnData object with QC metrics added to `.obs`, feature tags added to `.var`, and OmicsClaw analysis metadata added to `.uns`
+
+## Interpretation Guidance
+
+### N Genes by Counts
+- Low values (< 200) may indicate empty droplets or low-quality cells
+- High values (> 5000-6000) may indicate doublets
+
+### Total Counts (UMIs)
+- Low counts may indicate poor capture efficiency
+- Very high counts may indicate doublets
+
+### Mitochondrial Percentage
+- High MT% (> 10-20%) indicates stressed or dying cells
+- Thresholds vary by tissue type:
+  PBMC: < 5%
+  Tumor: < 20%
+  Heart/Kidney/Liver: < 15%
+
+**Note**: This skill only calculates and visualizes QC metrics. Use `sc-preprocessing` skill to apply filtering.
+
+
+---
+
+## Disclaimer
+
+*OmicsClaw is a research and educational tool for multi-omics analysis. It is not a medical device and does not provide clinical diagnoses. Consult a domain expert before making decisions based on these results.*
+
+---
+[Reproducibility notebook available: /data/beifen/zhouwg_data/omicsclaw-workspace/output/sc-qc__20260505_140511__3a8707d1/reproducibility/analysis_notebook.ipynb. Tell the user they can open it in Jupyter to inspect code, outputs, and rerun the analysis.]
+
+---
+[Available outputs (absolute paths):
+Figures:
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/sc-qc__20260505_140511__3a8707d1/barcode_rank.png`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/sc-qc__20260505_140511__3a8707d1/highest_expr_genes.png`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/sc-qc__20260505_140511__3a8707d1/qc_correlation_heatmap.png`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/sc-qc__20260505_140511__3a8707d1/qc_histograms.png`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/sc-qc__20260505_140511__3a8707d1/qc_scatter.png`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/sc-qc__20260505_140511__3a8707d1/qc_violin.png`
+Tables:
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/sc-qc__20260505_140511__3a8707d1/barcode_rank_curve.csv`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/sc-qc__20260505_140511__3a8707d1/gene_expression.csv`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/sc-qc__20260505_140511__3a8707d1/highest_expr_genes.csv`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/sc-qc__20260505_140511__3a8707d1/qc_metric_correlations.csv`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/sc-qc__20260505_140511__3a8707d1/qc_metrics_per_cell.csv`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/sc-qc__20260505_140511__3a8707d1/qc_metrics_summary.csv`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/sc-qc__20260505_140511__3a8707d1/qc_run_summary.csv`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/sc-qc__20260505_140511__3a8707d1/barcode_rank_curve.csv`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/sc-qc__20260505_140511__3a8707d1/highest_expr_genes.csv`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/sc-qc__20260505_140511__3a8707d1/qc_metric_correlations.csv`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/sc-qc__20260505_140511__3a8707d1/qc_metrics_per_cell.csv`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/sc-qc__20260505_140511__3a8707d1/qc_metrics_summary.csv`
+Notebooks:
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/sc-qc__20260505_140511__3a8707d1/analysis_notebook.ipynb`
+
+When the user asks to see a figure, quote its backtick path verbatim (e.g. `/abs/path/to/figure.png`) in your reply — the UI renders any backtick-quoted image path as an inline preview. Do NOT call list_directory or other tools to locate these files.]
+
+💡 **Status**: implementation-aligned guide derived from the current OmicsClaw
+`sc-qc` skill. Use this guide when you need to decide:
+
+- whether `sc-qc` is the right skill before filtering
+- how to explain the current `qc_metrics` implementatio…
+
+
+**Suggested next steps:**
+- **sc-filter** (recommended)
+- **sc-doublet-detection** (optional)
+
+Tell me which one you'd like to run!

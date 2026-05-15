@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bot import run
+from omicsclaw import run_channels as run
 from omicsclaw.providers.registry import PROVIDER_PRESETS
 
 

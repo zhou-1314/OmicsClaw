@@ -1,4 +1,4 @@
-"""Shared bridge helpers between interactive surfaces and bot.core."""
+"""Shared bridge helpers between interactive surfaces and omicsclaw.runtime.agent.state."""
 
 from __future__ import annotations
 

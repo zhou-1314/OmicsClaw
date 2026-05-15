@@ -16,7 +16,7 @@ if "openai" not in sys.modules:
         OpenAIError=Exception,
     )
 
-import bot.core as core
+import omicsclaw.runtime.agent.state as core
 
 
 def _write_test_h5ad(

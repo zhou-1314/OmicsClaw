@@ -11,7 +11,7 @@ Feishu bot channels already use:
 
 * save the file to disk under an ``.uploads`` directory,
 * fire a caller-supplied callback with the saved metadata so the caller
-  can register the file in ``bot.core.received_files`` (or its
+  can register the file in ``omicsclaw.runtime.agent.state.received_files`` (or its
   per-surface equivalent),
 * inline only obviously text-like content (with a size cap),
 * otherwise emit a structured ``[Attached file: <abs-path> (<mime>)]``
@@ -73,7 +73,7 @@ def safe_attachment_filename(name: str) -> str:
     """Return ``name`` reduced to a safe basename component.
 
     Strips path separators, collapses unsafe chars to ``_``, and never
-    returns an empty string. Mirrors ``bot.core.sanitize_filename`` but
+    returns an empty string. Mirrors ``omicsclaw.runtime.agent.state.sanitize_filename`` but
     is duplicated here to keep this module dependency-free.
     """
     if not isinstance(name, str):

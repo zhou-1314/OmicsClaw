@@ -69,7 +69,7 @@ class _DummyPanel:
 
 
 def _load_onboard(monkeypatch, tmp_path: Path, fake_questionary: _FakeQuestionary):
-    sys.modules.pop("bot.onboard", None)
+    sys.modules.pop("omicsclaw.setup_wizard", None)
 
     rich_module = types.ModuleType("rich")
     rich_console = types.ModuleType("rich.console")
@@ -82,7 +82,7 @@ def _load_onboard(monkeypatch, tmp_path: Path, fake_questionary: _FakeQuestionar
     monkeypatch.setitem(sys.modules, "rich.console", rich_console)
     monkeypatch.setitem(sys.modules, "rich.panel", rich_panel)
 
-    import bot.onboard as onboard
+    import omicsclaw.setup_wizard as onboard
 
     onboard = importlib.reload(onboard)
     monkeypatch.setattr(onboard, "_ENV_PATH", tmp_path / ".env")

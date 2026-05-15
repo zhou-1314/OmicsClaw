@@ -1,0 +1,93 @@
+Knowledge base results for: "GraphST method for spatial domain identification with GPU acceleration best practices"
+
+--- Result 1 ---
+Source: skill-guides/spatial/spatial-domains.md
+Title: OmicsClaw Skill Guide — Spatial Domains
+Section: Step 2: Pick The Method Deliberately
+Domain: spatial | Type: reference
+
+Use this quick guide when the user has not explicitly chosen a method:
+
+| Method | Best first use | Strong starting parameters | Main caveat |
+|--------|----------------|----------------------------|-------------|
+| **Leiden** | Fast baseline for almost all datasets | `resolution=0.8~1.2`, `spatial_weight=0.2~0.4` | Can under-use spatial context if `spatial_weight` is too low |
+| **Louvain** | Legacy / parity with older workflows | `resolution=0.8~1.2`, `spatial_weight=0.2~0.4` | Usually choose Leiden unless user specifically wants Louvain |
+| **CellCharter** | Strong general-purpose spatial domains, especially when K is unknown | `auto_k=true`, `auto_k_min=2`, `auto_k_max=8~12`, `n_layers=3`, `use_rep=X_pca` | Higher `n_layers` increases memory and broadens neighborhoods |
+| **BANKSY** | Explicit control over fine niches vs broad domains | `lambda_param=0.2` for niches, `0.8` for broad domains | `lambda_param` strongly changes the biological meaning of clusters |
+| **SpaGCN** | Spatially smooth domains when user explicitly wants a GNN-style method | `n_domains=7`, `spagcn_p=0.5`, `epochs=100~200` | Slower on large data; current wrapper is coordinate-based, not histology-aware |
+| **STAGATE** | Deep spatial autoencoder with adaptive KNN graph | `n_domains=7`, `k_nn=6`, `epochs=100~200` | Radius mode is fragile if coordinate scales are inconsistent |
+| **GraphST** | Self-supervised deep model when raw counts are available | `n_domains=7`, `epochs=50~100` on large data, `dim_ou
+[...truncated]
+
+--- Result 2 ---
+Source: skill-guides/spatial/spatial-domains.md
+Title: OmicsClaw Skill Guide — Spatial Domains
+Section: Step 3: Always Show A Parameter Summary Before Running
+Domain: spatial | Type: reference
+
+Before execution, tell the user what will be run in a short, concrete block:
+
+```text
+About to run spatial domain identification
+  Method: CellCharter
+  Parameters: auto_k=true, auto_k_min=2, auto_k_max=10, n_layers=3, use_rep=X_pca
+  Dataset size: 41,786 spots
+  Note: This is a large dataset, so CellCharter is a safer first pass than GraphST/SpaGCN.
+```
+
+--- Result 3 ---
+Source: skill-guides/spatial/spatial-domains.md
+Title: OmicsClaw Skill Guide — Spatial Domains
+Section: Step 1: Inspect The Data First
+Domain: spatial | Type: reference
+
+If the dataset has not been inspected yet in this conversation, call
+`inspect_data` first.
+
+Key properties to check:
+- **Spot / cell count**:
+  - `<= 5k`: small
+  - `5k - 30k`: medium
+  - `> 30k`: large
+- **Spatial coordinates**: `obsm["spatial"]` or equivalent must exist for all methods.
+- **Embedding availability**: `obsm["X_pca"]` is strongly preferred for Leiden, Louvain, and CellCharter.
+- **Raw counts availability**: `layers["counts"]` or `adata.raw` is especially important for GraphST and BANKSY.
+- **Platform / coordinate scale**: Visium, Slide-seqV2, Stereo-seq, Xenium-like data affect `rad_cutoff`, runtime, and neighborhood choices.
+
+Important implementation notes in current OmicsClaw:
+- If `X_pca` is missing, the CLI wrapper will auto-compute PCA before running.
+- For `spagcn`, `stagate`, and `graphst`, if `--n-domains` is omitted, OmicsClaw defaults it to `7`.
+- `SpaGCN` in the current wrapper runs with `histology=False`; do not promise H&E-aware segmentation in this workflow.
+- The standard Python result layer is now a recipe-driven gallery under `figures/`, and downstream visualization contracts are exported under `figure_data/`.
+
+--- Result 4 ---
+Source: skill-guides/spatial/spatial-domains.md
+Title: OmicsClaw Skill Guide — Spatial Domains
+Section: GraphST
+Domain: spatial | Type: reference
+
+Tune in this order:
+1. `epochs`
+2. `dim_output`
+3. `n_domains`
+
+Guidance:
+- For large datasets (`>30k` spots), start with `epochs=50~100`.
+- For medium datasets, `epochs=100~200` is a reasonable range.
+- Keep `dim_output=64` unless there is a clear reason to increase it.
+- Use `--refine` when labels look speckled or spatially noisy.
+
+Important warnings:
+- GraphST is not a good first-pass choice for very large datasets unless the user explicitly requests it.
+- If raw counts are unavailable, the wrapper falls back to `adata.X`, which is less ideal.
+
+--- Result 5 ---
+Source: skill-guides/spatial/spatial-domains.md
+Title: OmicsClaw Skill Guide — Spatial Domains
+Section: Purpose
+Domain: spatial | Type: reference
+
+Use this guide when you need to decide:
+- which spatial domain method is the best first pass for a given dataset
+- which parameters matter first for OmicsClaw's current wrapper
+- how to explain tradeoffs without over-claiming that every setting is equally validated

@@ -1,7 +1,7 @@
-"""Unit tests for ``bot.session`` — SessionManager + LRU eviction.
+"""Unit tests for ``omicsclaw.runtime.agent.session`` — SessionManager + LRU eviction.
 
 The module owns chat-session state plus the ``init()`` lifecycle that
-binds the LLM client and provider config onto ``bot.core``'s globals.
+binds the LLM client and provider config onto ``omicsclaw.runtime.agent.state``'s globals.
 These tests drive the SessionManager and the LRU eviction in isolation —
 ``init()`` itself is exercised through the existing ``tests/test_oauth_
 regressions.py`` and ``tests/test_bot_core_timeout.py`` files (the
@@ -57,7 +57,7 @@ def fake_store():
 @pytest.mark.asyncio
 async def test_session_manager_creates_session_when_missing(fake_store):
     """First call for a (platform, user, chat) triple constructs the session."""
-    from bot.session import SessionManager
+    from omicsclaw.runtime.agent.session import SessionManager
 
     mgr = SessionManager(fake_store)
     session = await mgr.get_or_create("alice", "telegram", "12345")
@@ -72,7 +72,7 @@ async def test_session_manager_creates_session_when_missing(fake_store):
 async def test_session_manager_updates_existing_session(fake_store):
     """Second call for the same triple touches last_activity instead of
     re-creating — preserves session state across reconnects."""
-    from bot.session import SessionManager
+    from omicsclaw.runtime.agent.session import SessionManager
 
     mgr = SessionManager(fake_store)
     await mgr.get_or_create("bob", "feishu", "777")
@@ -90,7 +90,7 @@ async def test_session_manager_updates_existing_session(fake_store):
 @pytest.mark.asyncio
 async def test_session_manager_load_context_returns_empty_when_no_memories(fake_store):
     """No stored memories → empty string (chat surface omits the context block)."""
-    from bot.session import SessionManager
+    from omicsclaw.runtime.agent.session import SessionManager
 
     mgr = SessionManager(fake_store)
     await mgr.get_or_create("carol", "slack", "abc")
@@ -103,7 +103,7 @@ async def test_session_manager_load_context_returns_empty_when_no_memories(fake_
 @pytest.mark.asyncio
 async def test_session_manager_load_context_renders_dataset_block(fake_store):
     """A dataset memory surfaces as the labelled "Current Dataset" block."""
-    from bot.session import SessionManager
+    from omicsclaw.runtime.agent.session import SessionManager
 
     fake_store.get_memories = _make_get_memories({
         "dataset": [SimpleNamespace(
@@ -130,7 +130,7 @@ async def test_session_manager_load_context_swallows_per_kind_errors(fake_store)
     """A failing dataset fetch must not block analyses / preferences from
     rendering — each ``get_memories`` call is wrapped individually in the
     production loader, so this test pins that behaviour."""
-    from bot.session import SessionManager
+    from omicsclaw.runtime.agent.session import SessionManager
 
     async def _flaky_get_memories(session_id, kind, *, limit):
         if kind == "dataset":
@@ -150,18 +150,18 @@ async def test_session_manager_load_context_swallows_per_kind_errors(fake_store)
 
 
 def test_received_files_is_module_dict():
-    """``bot.session.received_files`` is the canonical dict; ``bot.core``
+    """``omicsclaw.runtime.agent.session.received_files`` is the canonical dict; ``omicsclaw.runtime.agent.state``
     re-exports it. ``omicsclaw/app/_attachments.py`` reads via
-    ``bot.core.received_files`` — both paths must point at the same object."""
-    import bot.core
-    import bot.session
+    ``omicsclaw.runtime.agent.state.received_files`` — both paths must point at the same object."""
+    import omicsclaw.runtime.agent.state
+    import omicsclaw.runtime.agent.session
 
-    assert bot.core.received_files is bot.session.received_files
-    bot.session.received_files["sentinel"] = {"chat_id": "test"}
+    assert omicsclaw.runtime.agent.state.received_files is omicsclaw.runtime.agent.session.received_files
+    omicsclaw.runtime.agent.session.received_files["sentinel"] = {"chat_id": "test"}
     try:
-        assert bot.core.received_files["sentinel"]["chat_id"] == "test"
+        assert omicsclaw.runtime.agent.state.received_files["sentinel"]["chat_id"] == "test"
     finally:
-        bot.session.received_files.pop("sentinel", None)
+        omicsclaw.runtime.agent.session.received_files.pop("sentinel", None)
 
 
 def test_evict_lru_conversations_clears_tool_results_for_evicted_chats(monkeypatch):
@@ -179,12 +179,12 @@ def test_evict_lru_conversations_clears_tool_results_for_evicted_chats(monkeypat
         clear=lambda chat_id: cleared.append(chat_id),
     )
 
-    import bot.core as _core
+    import omicsclaw.runtime.agent.state as _core
     monkeypatch.setattr(_core, "transcript_store", fake_transcript_store, raising=False)
     monkeypatch.setattr(_core, "tool_result_store", fake_tool_result_store, raising=False)
     monkeypatch.setattr(_core, "MAX_CONVERSATIONS", 50, raising=False)
 
-    from bot.session import _evict_lru_conversations
+    from omicsclaw.runtime.agent.session import _evict_lru_conversations
 
     _evict_lru_conversations()
 

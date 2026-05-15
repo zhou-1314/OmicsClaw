@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from bot.core import _TOKEN_PRICES, _get_token_price  # noqa: F401
+from omicsclaw.runtime.agent.state import _TOKEN_PRICES, _get_token_price  # noqa: F401
 
 
 CURRENT_GENERATION_MODELS = [

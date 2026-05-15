@@ -1,7 +1,7 @@
 """Unit tests for ``omicsclaw.skill.preflight.sc_batch``.
 
 The module owns sc-batch-integration's batch-key detection + workflow
-plan logic — single-cell domain business logic carved out of bot.core
+plan logic — single-cell domain business logic carved out of omicsclaw.runtime.agent.state
 per ADR 0001. These tests construct small AnnData fixtures so we can
 drive the candidate scorer, the readiness inspector, and the
 clarification renderer without touching a real h5ad file from disk.

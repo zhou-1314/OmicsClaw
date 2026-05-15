@@ -1,0 +1,301 @@
+File: /data/beifen/zhouwg_data/project/OmicsClaw/skills/spatial/spatial-preprocess/spatial_preprocess.py
+Lines: 1-1109 of 1109
+Truncated to 12000 characters
+
+1: #!/usr/bin/env python3
+2: """Spatial Preprocess — load, QC, normalize, embed, and cluster spatial data."""
+3: 
+4: from __future__ import annotations
+5: 
+6: import argparse
+7: import json
+8: import logging
+9: import shlex
+10: import sys
+11: import warnings
+12: from importlib.metadata import PackageNotFoundError
+13: from pathlib import Path
+14: from typing import Any
+15: 
+16: import numpy as np
+17: import pandas as pd
+18: 
+19: warnings.filterwarnings("ignore", category=FutureWarning)
+20: 
+21: _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+22: if str(_PROJECT_ROOT) not in sys.path:
+23:     sys.path.insert(0, str(_PROJECT_ROOT))
+24: 
+25: from omicsclaw.common.runtime_env import ensure_runtime_cache_dirs
+26: 
+27: ensure_runtime_cache_dirs("omicsclaw")
+28: 
+29: import scanpy as sc
+30: 
+31: from omicsclaw.common.checksums import sha256_file
+32: from omicsclaw.common.report import (
+33:     generate_report_footer,
+34:     generate_report_header,
+35:     write_result_json,
+36: )
+37: from skills.spatial._lib.adata_utils import get_spatial_key
+38: from skills.spatial._lib.loader import SUPPORTED_SPATIAL_PLATFORMS, load_spatial_data
+39: from skills.spatial._lib.preprocessing import (
+40:     METHOD_PARAM_DEFAULTS,
+41:     PREPROCESS_METHOD,
+42:     SUPPORTED_SPECIES,
+43:     TISSUE_PRESETS,
+44:     preprocess,
+45: )
+46: from skills.spatial._lib.viz import (
+47:     PlotSpec,
+48:     VisualizationRecipe,
+49:     VizParams,
+50:     plot_features,
+51:     render_plot_specs,
+52: )
+53: 
+54: logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+55: logger = logging.getLogger(__name__)
+56: 
+57: SKILL_NAME = "spatial-preprocess"
+58: SKILL_VERSION = "0.5.0"
+59: SCRIPT_REL_PATH = "skills/spatial/spatial-preprocess/spatial_preprocess.py"
+60: 
+61: 
+62: # ---------------------------------------------------------------------------
+63: # Gallery helpers
+64: # ---------------------------------------------------------------------------
+65: 
+66: 
+67: def _parse_resolutions(value: str | None) -> list[float] | None:
+68:     if value in (None, ""):
+69:         return None
+70:     parsed: list[float] = []
+71:     for raw in value.split(","):
+72:         item = raw.strip()
+73:         if not item:
+74:             continue
+75:         parsed.append(float(item))
+76:     return parsed or None
+77: 
+78: 
+79: def _append_cli_flag(command: str, key: str, value: Any) -> str:
+80:     flag = f"--{key.replace('_', '-')}"
+81:     if isinstance(value, bool):
+82:         return f"{command} {flag}" if value else command
+83:     if value in (None, ""):
+84:         return command
+85:     return f"{command} {flag} {shlex.quote(str(value))}"
+86: 
+87: 
+88: def _prepare_preprocess_plot_state(adata) -> str | None:
+89:     spatial_key = get_spatial_key(adata)
+90:     if spatial_key == "X_spatial" and "spatial" not in adata.obsm:
+91:         adata.obsm["spatial"] = np.asarray(adata.obsm["X_spatial"]).copy()
+92:         spatial_key = "spatial"
+93:     elif spatial_key == "spatial" and "X_spatial" not in adata.obsm:
+94:         adata.obsm["X_spatial"] = np.asarray(adata.obsm["spatial"]).copy()
+95: 
+96:     cluster_columns = ["leiden"] + [
+97:         column for column in adata.obs.columns if str(column).startswith("leiden_res_")
+98:     ]
+99:     for column in cluster_columns:
+100:         if column in adata.obs.columns and not isinstance(adata.obs[column].dtype, pd.CategoricalDtype):
+101:             adata.obs[column] = pd.Categorical(adata.obs[column].astype(str))
+102: 
+103:     return spatial_key
+104: 
+105: 
+106: def _build_cluster_summary_table(summary: dict[str, Any]) -> pd.DataFrame:
+107:     rows = [
+108:         {"cluster": str(cluster), "n_cells": int(size)}
+109:         for cluster, size in summary.get("cluster_sizes", {}).items()
+110:     ]
+111:     if not rows:
+112:         return pd.DataFrame(columns=["cluster", "n_cells"])
+113:     return pd.DataFrame(rows).sort_values(
+114:         by=["n_cells", "cluster"],
+115:         ascending=[False, True],
+116:         kind="mergesort",
+117:     ).reset_index(drop=True)
+118: 
+119: 
+120: def _build_qc_distribution_table(adata) -> pd.DataFrame:
+121:     qc_columns = [
+122:         column
+123:         for column in ("n_genes_by_counts", "total_counts", "pct_counts_mt", "leiden")
+124:         if column in adata.obs.columns
+125:     ]
+126:     if not qc_columns:
+127:         return pd.DataFrame(columns=["observation"])
+128:     qc_df = adata.obs.loc[:, qc_columns].copy()
+129:     qc_df.insert(0, "observation", adata.obs_names.astype(str))
+130:     return qc_df.reset_index(drop=True)
+131: 
+132: 
+133: def _build_pca_variance_table(adata) -> pd.DataFrame:
+134:     pca_info = adata.uns.get("pca", {})
+135:     variance_ratio = pca_info.get("variance_ratio")
+136:     variance = pca_info.get("variance")
+137:     if variance_ratio is None:
+138:         return pd.DataFrame(columns=["pc", "variance_ratio", "cumulative_variance_ratio", "variance"])
+139: 
+140:     ratio = np.asarray(variance_ratio, dtype=float)
+141:     cumulative = np.cumsum(ratio)
+142:     if variance is None:
+143:         variance = np.repeat(np.nan, len(ratio))
+144:     else:
+145:         variance = np.asarray(variance, dtype=float)
+146: 
+147:     return pd.DataFrame(
+148:         {
+149:             "pc": np.arange(1, len(ratio) + 1),
+150:             "variance_ratio": ratio,
+151:             "cumulative_variance_ratio": cumulative,
+152:             "variance": variance,
+153:         }
+154:     )
+155: 
+156: 
+157: def _build_multi_resolution_table(summary: dict[str, Any]) -> pd.DataFrame:
+158:     rows = []
+159:     for resolution, n_clusters in summary.get("multi_resolution", {}).items():
+160:         try:
+161:             resolution_value: float | str = float(resolution)
+162:         except (TypeError, ValueError):
+163:             resolution_value = str(resolution)
+164:         rows.append(
+165:             {
+166:                 "resolution": resolution_value,
+167:                 "n_clusters": int(n_clusters),
+168:             }
+169:         )
+170:     if not rows:
+171:         return pd.DataFrame(columns=["resolution", "n_clusters"])
+172:     return pd.DataFrame(rows).sort_values(by="resolution", kind="mergesort").reset_index(drop=True)
+173: 
+174: 
+175: def _build_run_summary_table(summary: dict[str, Any], context: dict[str, Any]) -> pd.DataFrame:
+176:     effective_params = summary.get("effective_params", {})
+177:     rows = [
+178:         {"metric": "method", "value": summary.get("method")},
+179:         {"metric": "n_cells_raw", "value": summary.get("n_cells_raw")},
+180:         {"metric": "n_genes_raw", "value": summary.get("n_genes_raw")},
+181:         {"metric": "n_cells_filtered", "value": summary.get("n_cells_filtered")},
+182:         {"metric": "n_genes_filtered", "value": summary.get("n_genes_filtered")},
+183:         {"metric": "n_hvg", "value": summary.get("n_hvg")},
+184:         {"metric": "n_clusters", "value": summary.get("n_clusters")},
+185:         {"metric": "has_spatial", "value": summary.get("has_spatial")},
+186:         {"metric": "cluster_column", "value": context.get("cluster_col")},
+187:         {"metric": "spatial_key", "value": context.get("spatial_key")},
+188:         {"metric": "umap_key", "value": "X_umap" if "X_umap" in context.get("obsm_keys", set()) else None},
+189:         {"metric": "counts_layer", "value": "counts" if "counts" in context.get("layer_keys", set()) else None},
+190:         {"metric": "hvg_column", "value": "highly_variable" if "highly_variable" in context.get("var_keys", set()) else None},
+191:         {"metric": "n_pcs_requested", "value": effective_params.get("n_pcs_requested")},
+192:         {"metric": "n_pcs_computed", "value": summary.get("n_pcs_computed")},
+193:         {"metric": "n_pcs_used", "value": summary.get("n_pcs_used")},
+194:         {"metric": "n_pcs_suggested", "value": summary.get("n_pcs_suggested")},
+195:         {"metric": "n_neighbors", "value": effective_params.get("n_neighbors")},
+196:         {"metric": "leiden_resolution", "value": effective_params.get("leiden_resolution")},
+197:         {"metric": "tissue_preset", "value": summary.get("tissue_preset")},
+198:     ]
+199:     return pd.DataFrame(rows)
+200: 
+201: 
+202: def _build_observation_export_table(
+203:     adata,
+204:     basis: str,
+205:     *,
+206:     cluster_col: str | None,
+207:     qc_metric_cols: list[str],
+208:     multi_resolution_cols: list[str],
+209: ) -> pd.DataFrame | None:
+210:     if basis == "spatial":
+211:         if "spatial" not in adata.obsm:
+212:             return None
+213:         coords = np.asarray(adata.obsm["spatial"])
+214:         df = pd.DataFrame(
+215:             {
+216:                 "observation": adata.obs_names.astype(str),
+217:                 "x": coords[:, 0],
+218:                 "y": coords[:, 1],
+219:             }
+220:         )
+221:     elif basis == "umap":
+222:         if "X_umap" not in adata.obsm:
+223:             return None
+224:         coords = np.asarray(adata.obsm["X_umap"])
+225:         if coords.shape[1] < 2:
+226:             return None
+227:         df = pd.DataFrame(
+228:             {
+229:                 "observation": adata.obs_names.astype(str),
+230:                 "umap_1": coords[:, 0],
+231:                 "umap_2": coords[:, 1],
+232:             }
+233:         )
+234:     else:
+235:         raise ValueError(f"Unsupported basis '{basis}'")
+236: 
+237:     export_columns = []
+238:     if cluster_col:
+239:         export_columns.append(cluster_col)
+240:     export_columns.extend(qc_metric_cols)
+241:     export_columns.extend(multi_resolution_cols)
+242: 
+243:     seen: set[str] = set()
+244:     for column in export_columns:
+245:         if not column or column in seen or column not in adata.obs.columns:
+246:             continue
+247:         seen.add(column)
+248:         series = adata.obs[column]
+249:         if pd.api.types.is_numeric_dtype(series):
+250:             df[column] = pd.to_numeric(series, errors="coerce").fillna(0.0).to_numpy()
+251:         else:
+252:             df[column] = series.astype(str).to_numpy()
+253:     return df
+254: 
+255: 
+256: def _prepare_preprocess_gallery_context(adata, summary: dict[str, Any]) -> dict[str, Any]:
+257:     spatial_key = _prepare_preprocess_plot_state(adata)
+258:     cluster_col = "leiden" if "leiden" in adata.obs.columns else None
+259:     qc_metric_cols = [
+260:         column
+261:         for column in ("n_genes_by_counts", "total_counts", "pct_counts_mt")
+262:         if column in adata.obs.columns
+263:     ]
+264:     multi_resolution_cols = sorted(
+265:         [column for column in adata.obs.columns if str(column).startswith("leiden_res_")]
+266:     )
+267: 
+268:     context = {
+269:         "spatial_key": spatial_key,
+270:         "cluster_col": cluster_col,
+271:         "qc_metric_cols": qc_metric_cols,
+272:         "multi_resolution_columns": multi_resolution_cols,
+273:         "cluster_summary_df": _build_cluster_summary_table(summary),
+274:         "qc_distribution_df": _build_qc_distribution_table(adata),
+275:         "pca_variance_df": _build_pca_variance_table(adata),
+276:         "multi_resolution_df": _build_multi_resolution_table(summary),
+277:         "obsm_keys": set(adata.obsm.keys()),
+278:         "layer_keys": set(adata.layers.keys()),
+279:         "var_keys": set(adata.var.columns),
+280:     }
+281:     return context
+282: 
+283: 
+284: def _build_preprocess_visualization_recipe(adata, summary: dict[str, Any], context: dict[str, Any]) -> VisualizationRecipe:
+285:     plots: list[PlotSpec] = []
+286:     cluster_col = context.get("cluster_col")
+287:     qc_metric_cols = context.get("qc_metric_cols", [])
+288: 
+289:     if cluster_col and context.get("spatial_key"):
+290:         plots.append(
+291:             PlotSpec(
+292:                 plot_id="preprocess_spatial_clusters",
+293:                 role="overview",
+294:                 renderer="feature_map",
+295:                 filename="spatial_leiden.png",
+296:
+... [truncated]

@@ -96,7 +96,7 @@ class TestReplaceHistory:
 
 @pytest.fixture
 def bot_core(monkeypatch):
-    """Import bot.core with stubs for optional heavy deps so the slash branch
+    """Import omicsclaw.runtime.agent.state with stubs for optional heavy deps so the slash branch
     can run without LLM clients or external libraries."""
     if "httpx" not in sys.modules:
         httpx_stub = types.ModuleType("httpx")
@@ -123,9 +123,9 @@ def bot_core(monkeypatch):
         sys.modules["openai"].AsyncOpenAI = _FakeAsyncOpenAI  # type: ignore[attr-defined]
         sys.modules["openai"].APIError = _FakeAPIError  # type: ignore[attr-defined]
     try:
-        return importlib.import_module("bot.core")
+        return importlib.import_module("omicsclaw.runtime.agent.state")
     except ImportError as exc:
-        pytest.skip(f"bot.core unavailable in this environment: {exc}")
+        pytest.skip(f"omicsclaw.runtime.agent.state unavailable in this environment: {exc}")
 
 
 def test_compact_slash_replaces_history_with_summary_and_tail(bot_core):

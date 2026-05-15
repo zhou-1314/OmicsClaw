@@ -94,7 +94,7 @@ async def test_stream_llm_response_uses_explicit_workspace_context(monkeypatch):
             await on_stream_content("OmicsClaw.")
         return "I am OmicsClaw."
 
-    core_module = ModuleType("bot.core")
+    core_module = ModuleType("omicsclaw.runtime.agent.state")
     core_module.conversations = {}
     core_module._conversation_access = {}
     core_module.get_usage_snapshot = lambda: {}
@@ -104,7 +104,9 @@ async def test_stream_llm_response_uses_explicit_workspace_context(monkeypatch):
     bot_package.core = core_module
 
     monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "bot.core", core_module)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
+    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
+    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 
@@ -139,7 +141,7 @@ def test_init_llm_does_not_force_registry_load(monkeypatch):
         return real_load_all(self, *args, **kwargs)
 
     for name in (
-        "bot.core",
+        "omicsclaw.runtime.agent.state",
         "omicsclaw.runtime.context.assembler",
         "omicsclaw.runtime.context.layers",
     ):
@@ -161,7 +163,7 @@ def test_init_llm_does_not_force_registry_load(monkeypatch):
 
 def test_init_llm_prefers_explicit_config_over_environment(monkeypatch):
     captured: dict[str, str | None] = {}
-    core_module = ModuleType("bot.core")
+    core_module = ModuleType("omicsclaw.runtime.agent.state")
     core_module.OMICSCLAW_MODEL = "config-model"
     core_module.LLM_PROVIDER_NAME = "custom"
 
@@ -175,7 +177,9 @@ def test_init_llm_prefers_explicit_config_over_environment(monkeypatch):
     bot_package.core = core_module
 
     monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "bot.core", core_module)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
+    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
+    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("LLM_API_KEY", "env-key")
     monkeypatch.setenv("OMICSCLAW_MODEL", "env-model")
@@ -264,7 +268,7 @@ async def test_stream_llm_response_formats_markdown_for_cli(monkeypatch):
             await on_stream_content("转录组学**")
         return "**空间转录组学**"
 
-    core_module = ModuleType("bot.core")
+    core_module = ModuleType("omicsclaw.runtime.agent.state")
     core_module.conversations = {}
     core_module._conversation_access = {}
     core_module.get_usage_snapshot = lambda: {}
@@ -274,7 +278,9 @@ async def test_stream_llm_response_formats_markdown_for_cli(monkeypatch):
     bot_package.core = core_module
 
     monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "bot.core", core_module)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
+    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
+    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 
@@ -309,7 +315,7 @@ async def test_stream_llm_response_passes_plan_context(monkeypatch):
             await on_stream_content("Plan-aware reply.")
         return "Plan-aware reply."
 
-    core_module = ModuleType("bot.core")
+    core_module = ModuleType("omicsclaw.runtime.agent.state")
     core_module.conversations = {}
     core_module._conversation_access = {}
     core_module.get_usage_snapshot = lambda: {}
@@ -319,7 +325,9 @@ async def test_stream_llm_response_passes_plan_context(monkeypatch):
     bot_package.core = core_module
 
     monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "bot.core", core_module)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
+    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
+    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 
@@ -433,7 +441,7 @@ async def test_stream_llm_response_formats_sectioned_markdown_lists(monkeypatch)
             await on_stream_content(markdown_text)
         return markdown_text
 
-    core_module = ModuleType("bot.core")
+    core_module = ModuleType("omicsclaw.runtime.agent.state")
     core_module.conversations = {}
     core_module._conversation_access = {}
     core_module.get_usage_snapshot = lambda: {}
@@ -443,7 +451,9 @@ async def test_stream_llm_response_formats_sectioned_markdown_lists(monkeypatch)
     bot_package.core = core_module
 
     monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "bot.core", core_module)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
+    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
+    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 
@@ -491,7 +501,7 @@ async def test_stream_llm_response_separates_tool_log_from_response(monkeypatch)
             await on_stream_content("Analysis ready.")
         return "Analysis ready."
 
-    core_module = ModuleType("bot.core")
+    core_module = ModuleType("omicsclaw.runtime.agent.state")
     core_module.conversations = {}
     core_module._conversation_access = {}
     core_module.get_usage_snapshot = lambda: {}
@@ -501,7 +511,9 @@ async def test_stream_llm_response_separates_tool_log_from_response(monkeypatch)
     bot_package.core = core_module
 
     monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "bot.core", core_module)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
+    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
+    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 
@@ -548,7 +560,7 @@ async def test_stream_llm_response_does_not_repeat_final_text_after_tool_interlu
             await on_stream_content("Final answer.")
         return "Final answer."
 
-    core_module = ModuleType("bot.core")
+    core_module = ModuleType("omicsclaw.runtime.agent.state")
     core_module.conversations = {}
     core_module._conversation_access = {}
     core_module.get_usage_snapshot = lambda: {}
@@ -558,7 +570,9 @@ async def test_stream_llm_response_does_not_repeat_final_text_after_tool_interlu
     bot_package.core = core_module
 
     monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "bot.core", core_module)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
+    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
+    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 
@@ -613,7 +627,7 @@ async def test_stream_llm_response_marks_followup_tool_batches_as_updates(monkey
             await on_stream_content("Done.")
         return "Done."
 
-    core_module = ModuleType("bot.core")
+    core_module = ModuleType("omicsclaw.runtime.agent.state")
     core_module.conversations = {}
     core_module._conversation_access = {}
     core_module.get_usage_snapshot = lambda: {}
@@ -623,7 +637,9 @@ async def test_stream_llm_response_marks_followup_tool_batches_as_updates(monkey
     bot_package.core = core_module
 
     monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "bot.core", core_module)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
+    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
+    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 

@@ -1,0 +1,214 @@
+File: /data/beifen/zhouwg_data/project/OmicsClaw/knowledge_base/cell-cell-communication/SKILL.md
+Lines: 1-212 of 212
+Truncated to 12000 characters
+
+1: ---
+2: id: cell-cell-communication
+3: name: Cell-Cell Communication Analysis (CellChat)
+4: category: transcriptomics
+5: short-description: "Infer and visualize cell-cell communication networks from scRNA-seq data using CellChat v2 ligand-receptor interaction analysis."
+6: detailed-description: "Analyze intercellular communication from annotated single-cell RNA-seq data using CellChat v2. Infers ligand-receptor interactions between cell populations, builds communication probability networks, computes signaling pathway activity, and identifies dominant sender/receiver/mediator roles. Generates chord diagrams, network plots, bubble plots, and signaling role heatmaps. Accepts Seurat objects directly — chains from scrnaseq-seurat-core-analysis."
+7: starting-prompt: Analyze cell-cell communication from my scRNA-seq data using CellChat to identify ligand-receptor interactions and signaling networks between cell types.
+8: ---
+9: 
+10: # Cell-Cell Communication Analysis (CellChat v2)
+11: 
+12: ## When to Use This Skill
+13: 
+14: ✅ **Use when:**
+15: - You have an annotated scRNA-seq dataset (Seurat object with cell type labels)
+16: - You want to identify ligand-receptor interactions between cell types
+17: - You want to visualize communication networks (chord diagrams, bubble plots)
+18: - You want to find dominant sender/receiver cell populations
+19: - **Chains from** `scrnaseq-seurat-core-analysis` output (`seurat_processed.rds`)
+20: 
+21: ❌ **Don't use when:**
+22: - Data is not annotated (run `scrnaseq-seurat-core-analysis` first)
+23: - You need spatial cell-cell communication (CellChat v2 supports this but requires spatial coordinates)
+24: - You want gene regulatory networks (use `grn-pyscenic` instead)
+25: - You have bulk RNA-seq data
+26: 
+27: ## Installation
+28: 
+29: | Package | Version | License | Commercial Use | Installation |
+30: |---------|---------|---------|----------------|--------------|
+31: | CellChat | ≥2.0.0 | GPL-3 | ✅ Permitted | `devtools::install_github("jinworks/CellChat")` |
+32: | Seurat | ≥5.0.0 | MIT | ✅ Permitted | `install.packages('Seurat')` |
+33: | SeuratData | ≥0.2.1 | GPL-3 | ✅ Permitted | `devtools::install_github('satijalab/seurat-data')` |
+34: | NMF | ≥0.23.0 | GPL-2+ | ✅ Permitted | `install.packages('NMF')` |
+35: | circlize | ≥0.4.12 | MIT | ✅ Permitted | `install.packages('circlize')` |
+36: | ComplexHeatmap | ≥2.12.0 | MIT | ✅ Permitted | `BiocManager::install('ComplexHeatmap')` |
+37: | ggprism | ≥1.0.3 | GPL-3 | ✅ Permitted | `install.packages('ggprism')` |
+38: | presto | ≥1.0.0 | GPL-3 | ✅ Permitted | `remotes::install_github('immunogenomics/presto')` |
+39: | ggalluvial | ≥0.12.0 | GPL-2 | ✅ Permitted | `install.packages('ggalluvial')` |
+40: | rmarkdown | ≥2.20 | GPL-3 | ✅ Permitted | `install.packages('rmarkdown')` |
+41: 
+42: ⚠️ **CellChat must be installed from GitHub** (not CRAN). Use the **jinworks** repository (active), not sqjin (archived).
+43: 
+44: ## Inputs
+45: 
+46: **Required:**
+47: - **Seurat object (.rds)** with:
+48:   - Normalized expression data (`@assays$RNA@data`)
+49:   - Cell type annotations in metadata (e.g., `celltype` column)
+50:   - Minimum 3 cell types, ≥10 cells per type recommended
+51: 
+52: **Accepted sources:**
+53: - `seurat_processed.rds` from `scrnaseq-seurat-core-analysis` (chains directly)
+54: - Any annotated Seurat v5 object
+55: - Example PBMC data (auto-loaded if no file provided)
+56: 
+57: ## Outputs
+58: 
+59: **CSV tables:**
+60: - `significant_interactions.csv` — All significant L-R pairs with source, target, pathway, probability
+61: - `pathway_summary.csv` — Pathway-level communication summary
+62: - `interaction_count_matrix.csv` — Cell type × cell type interaction counts
+63: - `interaction_strength_matrix.csv` — Cell type × cell type communication weights
+64: - `signaling_roles.csv` — Centrality scores (sender, receiver, mediator, influencer per pathway)
+65: - `top_interactions.csv` — Top 20 interactions ranked by probability
+66: 
+67: **Visualizations (PNG + SVG):**
+68: - `interaction_count_network` — Circle plot of interaction counts
+69: - `interaction_strength_network` — Circle plot of communication strength
+70: - `chord_aggregated` — Chord diagram of the full communication network
+71: - `bubble_ligand_receptor` — Bubble plot of L-R pairs by cell type pairs
+72: - `signaling_outgoing_heatmap` — Outgoing signaling patterns by cell type
+73: - `signaling_incoming_heatmap` — Incoming signaling patterns by cell type
+74: - `signaling_role_scatter` — Dominant senders vs receivers scatter
+75: 
+76: **Analysis objects (RDS):**
+77: - `cellchat_object.rds` — Complete CellChat object for downstream use
+78:   - Load with: `cellchat <- readRDS('cellchat_object.rds')`
+79:   - Required for: multi-condition comparison, pathway-specific deep dives
+80: 
+81: **Reports:**
+82: - `analysis_report.md` — Markdown report (always generated)
+83: - `analysis_report.pdf` — PDF report (requires rmarkdown + LaTeX)
+84: 
+85: ## Clarification Questions
+86: 
+87: 🚨 **ALWAYS ask Question 1 FIRST. Do not proceed before the user answers.**
+88: 
+89: ### 1. Input Files (ASK THIS FIRST):
+90: - **Do you have an annotated Seurat object (.rds) from scRNA-seq analysis?**
+91:   - If yes: provide the path to the `.rds` file
+92:   - Expected: Seurat v5 object with cell type labels in metadata
+93: - **Or use example data?** — PBMC 3k dataset (human immune cells, 2,638 cells, 8 cell types)
+94:   - Uses `source("scripts/load_data.R"); seurat_obj <- load_example_pbmc()`
+95: 
+96: > 🚨 **IF EXAMPLE DATA SELECTED:** Parameters are pre-defined. Skip to Question 4 (or proceed directly to Step 1). Do NOT ask questions 2-3.
+97: 
+98: ### 2. Species (own data only):
+99: - a) Human (CellChatDB.human) — default
+100: - b) Mouse (CellChatDB.mouse)
+101: 
+102: ### 3. Cell Type Column (own data only):
+103: - Which metadata column contains cell type annotations?
+104:   - Common: `celltype`, `singler_labels`, `cell_type`, `predicted.celltype.l2`
+105:   - Check with: `colnames(seurat_obj@meta.data)`
+106: 
+107: ### 4. Analysis Scope (structured — works for demo and own data):
+108: - a) **All signaling types** (Secreted + ECM-Receptor + Cell-Cell Contact) — ✅ recommended
+109: - b) Secreted signaling only
+110: - c) Cell-Cell Contact only
+111: 
+112: ## Standard Workflow
+113: 
+114: > **Note:** Run from the OmicsClaw root directory and add the workflow scripts to `sys.path`:
+115: > ```python
+116: > import sys; import os; sys.path.insert(0, os.path.abspath('knowledge_base/scripts/cell-cell-communication'))
+117: > ```
+118: 
+119: 🚨 **MANDATORY: USE SCRIPTS EXACTLY AS SHOWN — DO NOT WRITE INLINE CODE** 🚨
+120: 
+121: **Step 1 — Load data:**
+122: ```r
+123: source("scripts/load_data.R")
+124: seurat_obj <- load_cellchat_data()  # example PBMC data
+125: # OR: seurat_obj <- load_cellchat_data("path/to/seurat_processed.rds")
+126: ```
+127: 
+128: **Step 2 — Run CellChat analysis:**
+129: ```r
+130: source("scripts/run_cellchat.R")
+131: cellchat <- run_cellchat_analysis(seurat_obj, species = "human", group.by = "celltype")
+132: ```
+133: **DO NOT write inline CellChat code. Just source the script and call the function.**
+134: 
+135: **Step 3 — Generate visualizations:**
+136: ```r
+137: source("scripts/cellchat_plots.R")
+138: generate_all_plots(cellchat, output_dir = "results")
+139: ```
+140: 🚨 **DO NOT write inline plotting code. Just use the script.** 🚨
+141: 
+142: **Step 4 — Export results:**
+143: ```r
+144: source("scripts/export_results.R")
+145: export_all(cellchat, seurat_obj = seurat_obj, output_dir = "results")
+146: ```
+147: **DO NOT write custom export code. Use export_all().**
+148: 
+149: **✅ VERIFICATION — You should see:**
+150: - After Step 1: `"✓ Data loaded successfully! [N] cells, [M] cell types"`
+151: - After Step 2: `"✓ CellChat analysis completed! [N] significant interactions across [M] pathways"`
+152: - After Step 3: `"✓ All plots generated successfully! [6] visualizations saved"`
+153: - After Step 4: `"=== Export Complete ==="`
+154: 
+155: **❌ IF YOU DON'T SEE THESE:** You wrote inline code. Stop and use source().
+156: 
+157: ⚠️ **CRITICAL — DO NOT:**
+158: - ❌ **Write inline CellChat code** → **STOP: Use `source("scripts/run_cellchat.R")`**
+159: - ❌ **Write inline plotting code** → **STOP: Use `generate_all_plots()`**
+160: - ❌ **Write custom export code** → **STOP: Use `export_all()`**
+161: - ❌ **Try to install system-level dependencies** → CellChat handles its own deps
+162: 
+163: **⚠️ IF SCRIPTS FAIL — Script Failure Hierarchy:**
+164: 1. **Fix and Retry (90%)** — Install missing package, re-run script
+165: 2. **Modify Script (5%)** — Edit the script file itself, document changes
+166: 3. **Use as Reference (4%)** — Read script, adapt approach, cite source
+167: 4. **Write from Scratch (1%)** — Only if genuinely impossible, explain why
+168: 
+169: **NEVER skip directly to writing inline code without trying the script first.**
+170: 
+171: ## Common Issues
+172: 
+173: | Issue | Cause | Solution |
+174: |-------|-------|----------|
+175: | **CellChat not found** | Not installed from GitHub | `devtools::install_github("jinworks/CellChat")` — must use **jinworks** repo (not sqjin) |
+176: | **"presto" required for Wilcoxon test** | Missing presto package | `remotes::install_github('immunogenomics/presto')` — script falls back to standard test if unavailable |
+177: | **No significant interactions** | Too few cells per type or stringent filtering | Lower `min.cells` parameter or merge rare cell types |
+178: | **Memory error on large datasets** | >50k cells uses substantial RAM | Subsample or increase memory; see [references/cellchat-guide.md](references/cellchat-guide.md) |
+179: | **Chord diagram error** | Missing circlize package | `install.packages('circlize')` |
+180: | **SVG export error "svglite required"** | Missing optional dependency | Use `generate_all_plots()` — it handles fallback automatically. DO NOT try to install svglite manually. |
+181: | **svglite dependency conflict** | System library version mismatch | Normal — `generate_all_plots()` falls back to base R svg() device automatically. Both PNG and SVG will be created. |
+182: | **"group.by not found"** | Wrong column name for cell types | Check: `colnames(seurat_obj@meta.data)` |
+183: | **Seurat v5 slot error ("no slot of name images")** | Old Seurat object from v3/v4 | Script handles this — `UpdateSeuratObject()` is called automatically |
+184: | **NMF not available** | NMF package not installed | `install.packages('NMF')` |
+185: | **PDF report skipped** | No LaTeX installation | `install.packages('tinytex'); tinytex::install_tinytex()` — markdown report still available |
+186: 
+187: ## Suggested Next Steps
+188: 
+189: After cell-cell communication analysis, consider:
+190: 
+191: 1. **Multi-condition comparison** — Compare communication between disease vs healthy, treated vs untreated
+192:    - See [references/cellchat-guide.md](references/cellchat-guide.md) for `mergeCellChat()` workflow
+193: 2. **Pathway deep dive** — Examine specific pathways (e.g., TNF, MHC-II) with hierarchy plots
+194: 3. **Gene regulatory networks** — Use `grn-pyscenic` to find transcription factors driving the communication
+195: 4. **Functional enrichment** — Run pathway analysis on sender/receiver gene sets
+196: 
+197: ## Related Skills
+198: 
+199: | Skill | Relationship |
+200: |-------|-------------|
+201: | `scrnaseq-seurat-core-analysis` | **Upstream** — produces the annotated Seurat object input |
+202: | `scrnaseq-scanpy-core-analysis` | Alternative upstream (Python-based, convert to Seurat for CellChat) |
+203: | `grn-pyscenic` | Complementary — gene regulatory networks from same scRNA-seq data |
+204: 
+205: ## References
+206: 
+207: - Jin S, et al. **Inference and analysis of cell-cell communication using CellChat.** *Nature Communications*. 2021;12:1088.
+208: - Jin S, et al. **CellChat for systematic analysis of cell-cell communication from single-cell and spatially resolved transcriptomics.** *Nature Protocols*. 2024.
+209: - [CellChat v2 GitHub (active)](https://github.com/
+... [truncated]

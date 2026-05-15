@@ -1,9 +1,9 @@
-"""Backward-compat contract for bot.tool_executors.
+"""Backward-compat contract for omicsclaw.runtime.tools.builders.agent_executors.
 
 The module collects the 24 ``execute_*`` async tool implementations + the
 dispatch table builder, carved out of bot/core.py per ADR 0001 (#120).
 External tests (``tests/test_bot_completion_messages.py``,
-``tests/test_skill_listing.py``) import these names from ``bot.core``;
+``tests/test_skill_listing.py``) import these names from ``omicsclaw.runtime.agent.state``;
 this identity test guarantees the two paths point at the same callable.
 """
 
@@ -46,29 +46,29 @@ TOOL_EXECUTORS_REEXPORTS = (
 
 def test_tool_executors_re_exports_share_identity_with_bot_core():
     """Every previously-public symbol must resolve to the *same object*
-    when looked up via ``bot.core`` or via ``bot.tool_executors``."""
-    import bot.core
-    import bot.tool_executors
+    when looked up via ``omicsclaw.runtime.agent.state`` or via ``omicsclaw.runtime.tools.builders.agent_executors``."""
+    import omicsclaw.runtime.agent.state
+    import omicsclaw.runtime.tools.builders.agent_executors
 
     missing_on_tool_exec = [
         name for name in TOOL_EXECUTORS_REEXPORTS
-        if not hasattr(bot.tool_executors, name)
+        if not hasattr(omicsclaw.runtime.tools.builders.agent_executors, name)
     ]
     assert not missing_on_tool_exec, (
-        f"Missing on bot.tool_executors: {missing_on_tool_exec}"
+        f"Missing on omicsclaw.runtime.tools.builders.agent_executors: {missing_on_tool_exec}"
     )
 
     missing_on_core = [
         name for name in TOOL_EXECUTORS_REEXPORTS
-        if not hasattr(bot.core, name)
+        if not hasattr(omicsclaw.runtime.agent.state, name)
     ]
     assert not missing_on_core, (
-        f"Missing on bot.core (re-export): {missing_on_core}"
+        f"Missing on omicsclaw.runtime.agent.state (re-export): {missing_on_core}"
     )
 
     mismatched_identity = [
         name for name in TOOL_EXECUTORS_REEXPORTS
-        if getattr(bot.core, name) is not getattr(bot.tool_executors, name)
+        if getattr(omicsclaw.runtime.agent.state, name) is not getattr(omicsclaw.runtime.tools.builders.agent_executors, name)
     ]
     assert not mismatched_identity, (
         f"Parallel copies (must be same object): {mismatched_identity}"
@@ -87,19 +87,19 @@ import sqlalchemy as sa
 
 @pytest_asyncio.fixture
 async def memory_store(tmp_path, monkeypatch):
-    """A real CompatMemoryStore wired to ``bot.core.memory_store``.
+    """A real CompatMemoryStore wired to ``omicsclaw.runtime.agent.state.memory_store``.
 
     The bot tool ``execute_remember`` reads ``_core.memory_store`` (late
-    binding from bot.core's module-level global), so the test must mutate
+    binding from omicsclaw.runtime.agent.state's module-level global), so the test must mutate
     that global to inject a temp-DB store. ``monkeypatch`` restores it
     cleanly.
     """
     from omicsclaw.memory.compat import CompatMemoryStore
-    import bot.core
+    import omicsclaw.runtime.agent.state
 
     store = CompatMemoryStore(database_url=f"sqlite+aiosqlite:///{tmp_path}/t.db")
     await store.initialize()
-    monkeypatch.setattr(bot.core, "memory_store", store)
+    monkeypatch.setattr(omicsclaw.runtime.agent.state, "memory_store", store)
     try:
         yield store
     finally:
@@ -115,7 +115,7 @@ async def test_execute_remember_lands_in_session_namespace(memory_store):
     preferences. This test exercises the real bot→CompatMemoryStore→
     MemoryEngine→DB path; the only thing it skips is the LLM emitting
     the tool call."""
-    from bot.tool_executors import execute_remember
+    from omicsclaw.runtime.tools.builders.agent_executors import execute_remember
     from omicsclaw.memory.models import Path
 
     session = await memory_store.create_session("alice", "telegram")
@@ -177,7 +177,7 @@ async def test_execute_remember_preference_update_versions_existing_value(
     if the path's edge_id never repoints to the new active memory, the
     panel keeps showing the stale value.
     """
-    from bot.tool_executors import execute_remember
+    from omicsclaw.runtime.tools.builders.agent_executors import execute_remember
     from omicsclaw.memory.models import Edge, Memory, Path
 
     session = await memory_store.create_session("alice", "telegram")
@@ -278,11 +278,11 @@ async def test_execute_remember_preference_update_versions_existing_value(
 async def test_memory_tools_disabled_message_names_real_env_vars(
     executor_name, kwargs, monkeypatch
 ):
-    import bot.core
-    import bot.tool_executors
+    import omicsclaw.runtime.agent.state
+    import omicsclaw.runtime.tools.builders.agent_executors
 
-    monkeypatch.setattr(bot.core, "memory_store", None)
-    executor = getattr(bot.tool_executors, executor_name)
+    monkeypatch.setattr(omicsclaw.runtime.agent.state, "memory_store", None)
+    executor = getattr(omicsclaw.runtime.tools.builders.agent_executors, executor_name)
 
     result = await executor(**kwargs)
 
@@ -304,13 +304,13 @@ async def test_memory_tools_disabled_message_names_real_env_vars(
 
 def test_tool_executors_dispatch_table_lists_all_24_executors():
     """``_available_tool_executors()`` returns the full dispatch map.
-    The lazy ``bot.core.TOOL_EXECUTORS`` attribute also adds the
+    The lazy ``omicsclaw.runtime.agent.state.TOOL_EXECUTORS`` attribute also adds the
     engineering tool executors (file_read / write_file / list_directory /
     edit_file / shell). Pin the count so an accidental dropped registration
     (e.g. typo on ``execute_X.__name__``) is caught."""
-    import bot.tool_executors
+    import omicsclaw.runtime.tools.builders.agent_executors
 
-    table = bot.tool_executors._available_tool_executors()
+    table = omicsclaw.runtime.tools.builders.agent_executors._available_tool_executors()
     # 24 native executors are mapped; engineering tools are added on top
     # by ``executors.update(build_engineering_tool_executors(...))``.
     assert len(table) >= 24
@@ -320,7 +320,7 @@ def test_tool_executors_dispatch_table_lists_all_24_executors():
 
 
 # ---------------------------------------------------------------------------
-# Regression: path_validation helpers must be importable from bot.tool_executors
+# Regression: path_validation helpers must be importable from omicsclaw.runtime.tools.builders.agent_executors
 # ---------------------------------------------------------------------------
 
 
@@ -337,17 +337,17 @@ PATH_VALIDATION_SYMBOLS = (
 )
 
 
-# Symbols from bot.core / bot.skill_orchestration / preflight.sc_batch that
+# Symbols from omicsclaw.runtime.agent.state / omicsclaw.skill.orchestration / preflight.sc_batch that
 # the carve-out left as bare references inside ``execute_*`` bodies. Each
 # one is an unexercised NameError waiting for the right tool call. Pinning
 # them at module level catches the whole class of bug, not just the
 # _ensure_trusted_dirs incident.
 CARVED_OUT_SIBLING_SYMBOLS = (
-    # bot.core
+    # omicsclaw.runtime.agent.state
     "DEEP_LEARNING_METHODS",
     "OMICSCLAW_PY",
     "_path_names",
-    # bot.skill_orchestration
+    # omicsclaw.skill.orchestration
     "_infer_skill_for_method",
     "_run_skill_via_shared_runner",
     # omicsclaw.skill.preflight.sc_batch
@@ -356,45 +356,45 @@ CARVED_OUT_SIBLING_SYMBOLS = (
 
 
 def test_tool_executors_imports_path_validation_helpers():
-    """bot.tool_executors uses ``_ensure_trusted_dirs`` / ``TRUSTED_DATA_DIRS``
+    """omicsclaw.runtime.tools.builders.agent_executors uses ``_ensure_trusted_dirs`` / ``TRUSTED_DATA_DIRS``
     / ``validate_input_path`` / ``discover_file`` in several executors (lines
     ~140, 224, 1012, 1057, 1088, 1277, 1307, 1334, 1361, 1666, 1786, 1788 at
-    the time of writing). When the module was carved out of bot.core per
-    ADR 0001, the import of these names was left behind in bot.core. Every
+    the time of writing). When the module was carved out of omicsclaw.runtime.agent.state per
+    ADR 0001, the import of these names was left behind in omicsclaw.runtime.agent.state. Every
     call into ``execute_omicsclaw`` with ``mode='file'`` (no staged input)
     fires ``_ensure_trusted_dirs()`` and raises ``NameError`` instead of
     returning the friendly 'place your file in a data directory' message.
 
     Pin the contract: the four names must resolve as module-level
-    attributes on bot.tool_executors."""
-    import bot.core  # noqa: F401 — load bot.core first (production order)
-    import bot.tool_executors
+    attributes on omicsclaw.runtime.tools.builders.agent_executors."""
+    import omicsclaw.runtime.agent.state  # noqa: F401 — load omicsclaw.runtime.agent.state first (production order)
+    import omicsclaw.runtime.tools.builders.agent_executors
 
     missing = [
         name for name in PATH_VALIDATION_SYMBOLS
-        if not hasattr(bot.tool_executors, name)
+        if not hasattr(omicsclaw.runtime.tools.builders.agent_executors, name)
     ]
     assert not missing, (
-        f"bot.tool_executors is missing path_validation symbols: {missing}. "
-        f"Add them to the `from bot.path_validation import ...` block."
+        f"omicsclaw.runtime.tools.builders.agent_executors is missing path_validation symbols: {missing}. "
+        f"Add them to the `from omicsclaw.services.path_validation import ...` block."
     )
 
 
 def test_tool_executors_imports_carved_out_sibling_helpers():
     """Same bug class as ``test_tool_executors_imports_path_validation_helpers``,
-    but covers the carve-out leftovers from bot.core / bot.skill_orchestration
+    but covers the carve-out leftovers from omicsclaw.runtime.agent.state / omicsclaw.skill.orchestration
     / preflight.sc_batch. Each is referenced bare inside an ``execute_*``
     body and would raise NameError on the first call that exercises it
     (pyflakes audit on 2026-05-13)."""
-    import bot.core  # noqa: F401 — load bot.core first (production order)
-    import bot.tool_executors
+    import omicsclaw.runtime.agent.state  # noqa: F401 — load omicsclaw.runtime.agent.state first (production order)
+    import omicsclaw.runtime.tools.builders.agent_executors
 
     missing = [
         name for name in CARVED_OUT_SIBLING_SYMBOLS
-        if not hasattr(bot.tool_executors, name)
+        if not hasattr(omicsclaw.runtime.tools.builders.agent_executors, name)
     ]
     assert not missing, (
-        f"bot.tool_executors is missing carve-out sibling symbols: {missing}. "
+        f"omicsclaw.runtime.tools.builders.agent_executors is missing carve-out sibling symbols: {missing}. "
         f"Each one is an unexercised NameError waiting for the right tool "
         f"call. Add them to the existing per-module import blocks at the "
         f"top of bot/tool_executors.py."
@@ -402,9 +402,9 @@ def test_tool_executors_imports_carved_out_sibling_helpers():
 
 
 def test_trusted_data_dirs_mutation_visible_to_tool_executors():
-    """``_ensure_trusted_dirs()`` populates ``bot.path_validation.TRUSTED_DATA_DIRS``,
+    """``_ensure_trusted_dirs()`` populates ``omicsclaw.services.path_validation.TRUSTED_DATA_DIRS``,
     but if it *rebinds* the global instead of mutating in place, modules
-    that imported the name (bot.tool_executors, bot.core,
+    that imported the name (omicsclaw.runtime.tools.builders.agent_executors, omicsclaw.runtime.agent.state,
     omicsclaw.app.server) stay stuck on the original empty list.
 
     Symptom observed via the executor probe on 2026-05-13:
@@ -412,33 +412,33 @@ def test_trusted_data_dirs_mutation_visible_to_tool_executors():
         Access denied: /.../data is not in trusted directories ()  (tool_executors)
 
     omicsclaw/app/server.py:686-691 also relies on appending to
-    ``bot.core.TRUSTED_DATA_DIRS`` being visible to ``validate_input_path``
+    ``omicsclaw.runtime.agent.state.TRUSTED_DATA_DIRS`` being visible to ``validate_input_path``
     — same root cause.
 
     Contract: after the helper runs, every module's view is non-empty and
-    is the *same list object* as ``bot.path_validation.TRUSTED_DATA_DIRS``."""
-    import bot.core
-    import bot.path_validation
-    import bot.tool_executors
+    is the *same list object* as ``omicsclaw.services.path_validation.TRUSTED_DATA_DIRS``."""
+    import omicsclaw.runtime.agent.state
+    import omicsclaw.services.path_validation
+    import omicsclaw.runtime.tools.builders.agent_executors
 
-    bot.path_validation._ensure_trusted_dirs()
+    omicsclaw.services.path_validation._ensure_trusted_dirs()
 
-    pv = bot.path_validation.TRUSTED_DATA_DIRS
+    pv = omicsclaw.services.path_validation.TRUSTED_DATA_DIRS
     assert pv, "Sanity: path_validation.TRUSTED_DATA_DIRS unexpectedly empty after _ensure"
 
-    assert bot.tool_executors.TRUSTED_DATA_DIRS, (
-        "bot.tool_executors.TRUSTED_DATA_DIRS is empty after _ensure_trusted_dirs() "
-        "ran in bot.path_validation. The helper rebinds the global instead of "
+    assert omicsclaw.runtime.tools.builders.agent_executors.TRUSTED_DATA_DIRS, (
+        "omicsclaw.runtime.tools.builders.agent_executors.TRUSTED_DATA_DIRS is empty after _ensure_trusted_dirs() "
+        "ran in omicsclaw.services.path_validation. The helper rebinds the global instead of "
         "mutating in place — fix it with `TRUSTED_DATA_DIRS[:] = _build_trusted_dirs()`."
     )
-    assert bot.tool_executors.TRUSTED_DATA_DIRS is pv, (
-        "bot.tool_executors.TRUSTED_DATA_DIRS diverged from "
-        "bot.path_validation.TRUSTED_DATA_DIRS — they must be the same list "
+    assert omicsclaw.runtime.tools.builders.agent_executors.TRUSTED_DATA_DIRS is pv, (
+        "omicsclaw.runtime.tools.builders.agent_executors.TRUSTED_DATA_DIRS diverged from "
+        "omicsclaw.services.path_validation.TRUSTED_DATA_DIRS — they must be the same list "
         "object so server.py's runtime append() is visible to validate_input_path."
     )
-    assert bot.core.TRUSTED_DATA_DIRS is pv, (
-        "bot.core.TRUSTED_DATA_DIRS diverged from path_validation. server.py "
-        "appends workspace dirs to bot.core.TRUSTED_DATA_DIRS — that mutation "
+    assert omicsclaw.runtime.agent.state.TRUSTED_DATA_DIRS is pv, (
+        "omicsclaw.runtime.agent.state.TRUSTED_DATA_DIRS diverged from path_validation. server.py "
+        "appends workspace dirs to omicsclaw.runtime.agent.state.TRUSTED_DATA_DIRS — that mutation "
         "must propagate to validate_input_path."
     )
 
@@ -450,10 +450,10 @@ async def test_execute_list_directory_allows_data_dir_after_ensure():
     directories ()' because its module-local TRUSTED_DATA_DIRS view is still
     the empty list. Once the helper mutates in place, DATA_DIR is trusted
     and the listing proceeds."""
-    import bot.core
-    from bot.tool_executors import execute_list_directory
+    import omicsclaw.runtime.agent.state
+    from omicsclaw.runtime.tools.builders.agent_executors import execute_list_directory
 
-    result = await execute_list_directory({"path": str(bot.core.DATA_DIR)})
+    result = await execute_list_directory({"path": str(omicsclaw.runtime.agent.state.DATA_DIR)})
     assert "Access denied" not in result, (
         f"execute_list_directory denied access to DATA_DIR — the trusted-dirs "
         f"check is reading a stale empty list. Got: {result!r}"
@@ -470,8 +470,8 @@ async def test_execute_omicsclaw_file_mode_without_input_returns_friendly_error(
     Contract: when ``mode='file'`` and nothing is staged for the session,
     the executor returns a human-readable error string starting with
     'No input file available' — never raises NameError."""
-    import bot.core  # noqa: F401 — load bot.core first (production order)
-    from bot.tool_executors import execute_omicsclaw
+    import omicsclaw.runtime.agent.state  # noqa: F401 — load omicsclaw.runtime.agent.state first (production order)
+    from omicsclaw.runtime.tools.builders.agent_executors import execute_omicsclaw
 
     result = await execute_omicsclaw(
         args={"mode": "file", "skill": "sc-standardize-input"},

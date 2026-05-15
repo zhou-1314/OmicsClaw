@@ -245,7 +245,7 @@ def test_disambiguation_gate_architecturally_intact():
     once we have real bot logs it'll be worth re-tuning
     ``_AUTO_DISAMBIGUATE_GAP`` against observed top1/top2 distributions.
     """
-    from bot.core import _AUTO_DISAMBIGUATE_GAP, _format_auto_disambiguation
+    from omicsclaw.runtime.agent.state import _AUTO_DISAMBIGUATE_GAP, _format_auto_disambiguation
     from omicsclaw.skill.capability_resolver import (
         CapabilityCandidate,
         CapabilityDecision,

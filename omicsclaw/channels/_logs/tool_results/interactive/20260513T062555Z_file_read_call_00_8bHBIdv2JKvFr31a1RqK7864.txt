@@ -1,0 +1,324 @@
+File: /data/beifen/zhouwg_data/project/OmicsClaw/omicsclaw.py
+Lines: 1-1450 of 1450
+Truncated to 12000 characters
+
+1: #!/usr/bin/env python3
+2: """OmicsClaw — Multi-Omics Analysis Skills Runner.
+3: 
+4: Usage:
+5:     python omicsclaw.py list
+6:     python omicsclaw.py run <skill> --demo
+7:     python omicsclaw.py run <skill> --input <data> --output <dir>
+8:     python omicsclaw.py run spatial-pipeline --input <h5ad> --output <dir>
+9:     python omicsclaw.py upload --input <data> --data-type <type>
+10: 
+11: Interactive CLI/TUI:
+12:     python omicsclaw.py interactive               # Rich CLI (prompt_toolkit)
+13:     python omicsclaw.py interactive --ui tui      # Full-screen Textual TUI
+14:     python omicsclaw.py interactive -p "..."      # Single-shot mode
+15:     python omicsclaw.py interactive --session <id> # Resume session
+16:     python omicsclaw.py tui                       # Alias for --ui tui
+17: 
+18: MCP Server Management:
+19:     python omicsclaw.py mcp list
+20:     python omicsclaw.py mcp add <name> <command> [args]
+21:     python omicsclaw.py mcp remove <name>
+22:     python omicsclaw.py mcp config
+23: """
+24: 
+25: from __future__ import annotations
+26: 
+27: import argparse
+28: import importlib.util
+29: import json
+30: import os
+31: import re
+32: import subprocess
+33: import sys
+34: import time
+35: from datetime import datetime, timezone
+36: from pathlib import Path
+37: from typing import Any
+38: 
+39: 
+40: def _configure_stdio_error_handling(*streams: Any) -> None:
+41:     """Avoid hard failures when a terminal cannot encode Unicode output."""
+42:     targets = streams if streams else (sys.stdout, sys.stderr)
+43:     for stream in targets:
+44:         reconfigure = getattr(stream, "reconfigure", None)
+45:         if not callable(reconfigure):
+46:             continue
+47:         try:
+48:             reconfigure(errors="backslashreplace")
+49:         except (OSError, ValueError):
+50:             continue
+51: 
+52: # ---------------------------------------------------------------------------
+53: # Paths
+54: # ---------------------------------------------------------------------------
+55: 
+56: OMICSCLAW_DIR = Path(__file__).resolve().parent
+57: SKILLS_DIR = OMICSCLAW_DIR / "skills"
+58: EXAMPLES_DIR = OMICSCLAW_DIR / "examples"
+59: DEFAULT_OUTPUT_ROOT = OMICSCLAW_DIR / "output"
+60: SESSIONS_DIR = OMICSCLAW_DIR / "sessions"
+61: PYTHON = sys.executable
+62: 
+63: # ---------------------------------------------------------------------------
+64: # Terminal colours
+65: # ---------------------------------------------------------------------------
+66: 
+67: _COLOUR = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+68: BOLD = "\033[1m" if _COLOUR else ""
+69: DIM = "\033[2m" if _COLOUR else ""
+70: GREEN = "\033[32m" if _COLOUR else ""
+71: YELLOW = "\033[33m" if _COLOUR else ""
+72: BLUE = "\033[34m" if _COLOUR else ""
+73: MAGENTA = "\033[35m" if _COLOUR else ""
+74: RED = "\033[31m" if _COLOUR else ""
+75: CYAN = "\033[36m" if _COLOUR else ""
+76: RESET = "\033[0m" if _COLOUR else ""
+77: 
+78: _APP_SERVER_INSTALL_HINT = 'pip install -e ".[desktop]"'
+79: _MEMORY_SERVER_INSTALL_HINT = 'pip install -e ".[memory]"'
+80: 
+81: # ---------------------------------------------------------------------------
+82: # Skills and Domain metadata registry
+83: # ---------------------------------------------------------------------------
+84: 
+85: if str(OMICSCLAW_DIR) not in sys.path:
+86:     sys.path.insert(0, str(OMICSCLAW_DIR))
+87: 
+88: from omicsclaw import __version__
+89: from omicsclaw.common.report import (
+90:     build_output_dir_name,
+91: )
+92: from omicsclaw.core.skill_runner import (
+93:     resolve_skill_alias,
+94:     run_skill,
+95: )
+96: from omicsclaw.core.registry import ensure_registry_loaded, registry
+97: 
+98: 
+99: def _module_available(module_name: str) -> bool:
+100:     """Return True when a Python module is importable in this environment."""
+101:     try:
+102:         return importlib.util.find_spec(module_name) is not None
+103:     except (ImportError, AttributeError, ValueError):
+104:         return False
+105: 
+106: 
+107: def _ensure_server_dependencies(
+108:     *,
+109:     command_name: str,
+110:     requirements: list[tuple[str, str]],
+111:     install_hint: str,
+112: ) -> None:
+113:     """Fail fast with a clear install hint for optional server dependencies."""
+114:     missing = [pip_name for module_name, pip_name in requirements if not _module_available(module_name)]
+115:     if not missing:
+116:         return
+117: 
+118:     print(
+119:         f"{RED}Error:{RESET} `{command_name}` requires optional dependencies that are not installed: "
+120:         f"{', '.join(missing)}",
+121:         file=sys.stderr,
+122:     )
+123:     print(f"Install with: {install_hint}", file=sys.stderr)
+124:     print("Minimal alternative: pip install fastapi uvicorn", file=sys.stderr)
+125:     raise SystemExit(1)
+126: 
+127: 
+128: def _oauth_cli_choices() -> list[str]:
+129:     """argparse ``choices`` for the ``auth`` subcommand's provider argument.
+130: 
+131:     Derived from ``OAUTH_PROVIDERS`` at parser-build time. Falls back to a
+132:     minimal hardcoded set if ccproxy_manager is unavailable (the command
+133:     will then error out gracefully inside the handler).
+134:     """
+135:     try:
+136:         from omicsclaw.core.ccproxy_manager import oauth_cli_aliases
+137:         return oauth_cli_aliases()
+138:     except Exception:
+139:         return ["claude", "anthropic", "openai", "codex"]
+140: 
+141: 
+142: def _handle_auth_command(args) -> None:
+143:     """Dispatch ``omicsclaw auth {login,logout,status} [claude|openai]``.
+144: 
+145:     Thin wrapper over the ``ccproxy`` CLI: we only handle provider-name
+146:     aliasing (``claude`` -> ``claude_api``, ``openai`` -> ``codex``) and a
+147:     multi-provider status view. All OAuth flow logic lives in ccproxy.
+148:     """
+149:     try:
+150:         from omicsclaw.core.ccproxy_manager import (
+151:             OAUTH_PROVIDERS,
+152:             ccproxy_diagnostic_hint,
+153:             ccproxy_executable,
+154:             check_ccproxy_auth,
+155:             get_oauth_provider,
+156:             is_ccproxy_available,
+157:             oauth_install_hint,
+158:         )
+159:     except Exception as exc:
+160:         print(f"{RED}Error importing ccproxy_manager: {exc}{RESET}", file=sys.stderr)
+161:         sys.exit(2)
+162: 
+163:     if not is_ccproxy_available():
+164:         print(
+165:             f"{RED}ccproxy is not installed (from this Python's perspective).{RESET}",
+166:             file=sys.stderr,
+167:         )
+168:         print(ccproxy_diagnostic_hint(), file=sys.stderr)
+169:         print(f"Install: {CYAN}{oauth_install_hint()}{RESET}", file=sys.stderr)
+170:         sys.exit(2)
+171: 
+172:     op = getattr(args, "auth_command", None)
+173:     target_alias = getattr(args, "provider", None)
+174: 
+175:     if op is None:
+176:         print(
+177:             f"Usage: {CYAN}python omicsclaw.py auth [login|logout|status] "
+178:             f"[claude|openai]{RESET}"
+179:         )
+180:         sys.exit(1)
+181: 
+182:     if op == "status" and not target_alias:
+183:         print(f"\n{BOLD}ccproxy OAuth status{RESET}")
+184:         print(f"{BOLD}{'=' * 50}{RESET}")
+185:         for p in OAUTH_PROVIDERS.values():
+186:             ok, msg = check_ccproxy_auth(p.ccproxy_target)
+187:             mark = f"{GREEN}OK{RESET}" if ok else f"{YELLOW}--{RESET}"
+188:             print(f"  [{mark}] {p.omics_name:<10} {msg}")
+189:         sys.exit(0)
+190: 
+191:     if not target_alias:
+192:         print(
+193:             f"{RED}Error:{RESET} `{op}` requires a provider "
+194:             f"(one of: claude, openai).",
+195:             file=sys.stderr,
+196:         )
+197:         sys.exit(1)
+198: 
+199:     # Look up the full provider row from any alias (claude/anthropic/codex/
+200:     # openai/claude_api). get_oauth_provider raises ValueError for unknown
+201:     # aliases — the argparse choices already reject those, but belt-and-
+202:     # braces is cheap here.
+203:     try:
+204:         provider = get_oauth_provider(target_alias)
+205:     except ValueError as exc:
+206:         print(f"{RED}Error:{RESET} {exc}", file=sys.stderr)
+207:         sys.exit(1)
+208: 
+209:     import subprocess as _sp
+210: 
+211:     rc = _sp.call([ccproxy_executable(), "auth", op, provider.ccproxy_target])
+212:     sys.exit(rc)
+213: 
+214: # Canonical workflow order per domain — skills are displayed in this sequence.
+215: # Skills not listed here appear at the end in alphabetical order.
+216: _WORKFLOW_ORDER: dict[str, list[str]] = {
+217:     "spatial": [
+218:         "spatial-preprocess",
+219:         "spatial-integrate",
+220:         "spatial-register",
+221:         "spatial-domains",
+222:         "spatial-annotate",
+223:         "spatial-deconv",
+224:         "spatial-de",
+225:         "spatial-condition",
+226:         "spatial-genes",
+227:         "spatial-statistics",
+228:         "spatial-enrichment",
+229:         "spatial-communication",
+230:         "spatial-trajectory",
+231:         "spatial-velocity",
+232:         "spatial-cnv",
+233:     ],
+234:     "singlecell": [
+235:         "sc-qc",
+236:         "sc-ambient-removal",
+237:         "sc-doublet-detection",
+238:         "sc-filter",
+239:         "sc-preprocessing",
+240:         "sc-batch-integration",
+241:         "sc-cell-annotation",
+242:         "sc-markers",
+243:         "sc-de",
+244:         "sc-pathway-scoring",
+245:         "sc-cell-communication",
+246:         "sc-grn",
+247:         "sc-pseudotime",
+248:         "sc-velocity",
+249:     ],
+250:     "genomics": [
+251:         "genomics-qc",
+252:         "genomics-alignment",
+253:         "genomics-variant-calling",
+254:         "genomics-sv-detection",
+255:         "genomics-cnv-calling",
+256:         "genomics-vcf-operations",
+257:         "genomics-variant-annotation",
+258:         "genomics-assembly",
+259:         "genomics-epigenomics",
+260:         "genomics-phasing",
+261:     ],
+262:     "proteomics": [
+263:         "proteomics-data-import",
+264:         "proteomics-ms-qc",
+265:         "proteomics-identification",
+266:         "proteomics-quantification",
+267:         "proteomics-de",
+268:         "proteomics-ptm",
+269:         "proteomics-enrichment",
+270:         "proteomics-structural",
+271:     ],
+272:     "metabolomics": [
+273:         "metabolomics-xcms-preprocessing",
+274:         "metabolomics-peak-detection",
+275:         "metabolomics-annotation",
+276:         "metabolomics-quantification",
+277:         "metabolomics-normalization",
+278:         "metabolomics-de",
+279:         "metabolomics-pathway-enrichment",
+280:         "metabolomics-statistics",
+281:     ],
+282:     "bulkrna": [
+283:         "bulkrna-read-qc",
+284:         "bulkrna-read-alignment",
+285:         "bulkrna-qc",
+286:         "bulkrna-geneid-mapping",
+287:         "bulkrna-batch-correction",
+288:         "bulkrna-de",
+289:         "bulkrna-splicing",
+290:         "bulkrna-enrichment",
+291:         "bulkrna-deconvolution",
+292:         "bulkrna-coexpression",
+293:         "bulkrna-ppi-network",
+294:         "bulkrna-survival",
+295:         "bulkrna-trajblend",
+296:     ],
+297: }
+298: # ---------------------------------------------------------------------------
+299: # Helpers
+300: # ---------------------------------------------------------------------------
+301: 
+302: 
+303: def list_skills(domain_filter: str | None = None) -> dict:
+304:     """按 Domain 分组打印所有可用技能，并返回 skills 字典。"""
+305:     print(f"\n{BOLD}OmicsClaw Skills{RESET}")
+306:     if domain_filter:
+307:         print(f"{BOLD}{'=' * 60}{RESET}")
+308:         print(f"Filtering by domain: {CYAN}{domain_filter}{RESET}\n")
+309:     else:
+310:         print(f"{BOLD}{'=' * 60}{RESET}\n")
+311: 
+312:     skills = ensure_registry_loaded().skills
+313:     domains = registry.domains
+314: 
+315:     # 1. 按 domain 分组构建索引（跳过 legacy alias 条目，避免重复显示）
+316:     domain_skills: dict[str, list[tuple[str, dict]]] = {}
+317:     for alias, info in skills.items():
+318:         # Legacy aliases point to the same dict but under a different key; skip them.
+319:
+... [truncated]

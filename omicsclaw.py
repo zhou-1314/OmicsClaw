@@ -1022,7 +1022,7 @@ def main():
         sys.exit(0)
 
     if args.command == "onboard":
-        from bot.onboard import run_onboard
+        from omicsclaw.setup_wizard import run_onboard
         run_onboard()
         sys.exit(0)
 

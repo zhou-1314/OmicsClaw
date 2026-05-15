@@ -10,7 +10,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-import bot.core as bot_core
+import omicsclaw.runtime.agent.state as bot_core
 
 
 ROOT = Path(__file__).resolve().parent.parent

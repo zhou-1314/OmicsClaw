@@ -1,6 +1,6 @@
 """Behavior of ``_validate_omicsclaw_args``.
 
-The validator runs at the top of ``bot.tool_executors.execute_omicsclaw``
+The validator runs at the top of ``omicsclaw.runtime.tools.builders.agent_executors.execute_omicsclaw``
 to catch the documented LLM hallucination of nesting tool args under a
 ``params`` key (instead of using the schema's top-level ``file_path``).
 Each test pins one observable behavior of the helper.
@@ -8,14 +8,14 @@ Each test pins one observable behavior of the helper.
 
 from __future__ import annotations
 
-# bot.core must load first so its forward-declared symbols are in place
-# before bot.tool_executors completes import (the two modules are
+# omicsclaw.runtime.agent.state must load first so its forward-declared symbols are in place
+# before omicsclaw.runtime.tools.builders.agent_executors completes import (the two modules are
 # mutually recursive at module scope — see bot/tool_executors.py:11-25).
 import asyncio
 
-import bot.core  # noqa: F401  (load order, see docstring)
+import omicsclaw.runtime.agent.state  # noqa: F401  (load order, see docstring)
 
-from bot.tool_executors import _validate_omicsclaw_args, execute_omicsclaw
+from omicsclaw.runtime.tools.builders.agent_executors import _validate_omicsclaw_args, execute_omicsclaw
 
 
 def test_minimal_valid_args_returns_empty_string() -> None:

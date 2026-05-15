@@ -364,7 +364,7 @@ def test_chat_provider_switch_clears_stale_oauth_env(monkeypatch, tmp_path):
 
         def init(self, **kwargs):
             # Chat path never passes auth_mode, so we default to api_key,
-            # mirroring the production bot.core.init() contract.
+            # mirroring the production omicsclaw.runtime.agent.state.init() contract.
             assert "auth_mode" not in kwargs
             self.LLM_PROVIDER_NAME = kwargs["provider"]
             self.OMICSCLAW_MODEL = kwargs.get("model") or "deepseek-chat"

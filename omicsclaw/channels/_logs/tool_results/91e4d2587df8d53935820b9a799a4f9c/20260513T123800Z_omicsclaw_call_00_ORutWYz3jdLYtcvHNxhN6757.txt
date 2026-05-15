@@ -1,0 +1,132 @@
+## Skill execution preamble (read before this tool's result)
+- Pass method names lowercase via the `method` parameter.
+- Prefer canonical backend names / canonical skill aliases; legacy aliases work but are not preferred.
+- Warn the user before deep-learning analyses (10-60 minutes).
+- Outputs land in a per-analysis subdirectory under `output/`.
+
+# Spatial Preprocessing Report
+
+**Date**: 2026-05-13 12:37 UTC
+**Skill**: spatial-preprocess
+**Method**: scanpy_standard
+**Species**: human
+**Data type**: generic
+**Input files**:
+- `slideseqv2_mouse_hippocampus.h5ad`: `5d1de3351ae316bbee5fb0663c9fcbec3f109ac1a852c62d229e15390627bab5`
+
+---
+## Summary
+
+- **Method**: scanpy_standard
+- **Raw**: 41786 cells x 4000 genes
+- **After QC**: 41786 cells x 4000 genes
+- **HVG selected**: 2000
+- **Leiden clusters**: 12
+- **Spatial coordinates**: Yes
+- **Requested PCs**: 30
+- **Computed PCs**: 30
+- **Neighbor graph PCs used**: 30
+- **Suggested PCs**: 30
+- **Primary Leiden resolution**: 0.5
+- **Cluster column**: `leiden`
+- **Spatial key**: `spatial`
+
+### Cluster sizes
+
+| Cluster | Cells |
+|---------|-------|
+| 0 | 3784 |
+| 1 | 317 |
+| 10 | 1278 |
+| 11 | 1712 |
+| 2 | 3294 |
+| 3 | 1592 |
+| 4 | 10067 |
+| 5 | 2133 |
+| 6 | 2507 |
+| 7 | 6501 |
+| 8 | 5947 |
+| 9 | 2654 |
+
+## Parameters
+
+- `data_type`: generic
+- `species`: human
+- `min_genes`: 0
+- `min_cells`: 0
+- `max_mt_pct`: 20.0
+- `max_genes`: 0
+- `n_top_hvg`: 2000
+- `n_pcs`: 30
+- `n_neighbors`: 15
+- `leiden_resolution`: 0.5
+
+### Effective Method Parameters
+
+- `species`: human
+- `tissue_preset`: None
+- `min_genes`: 0
+- `min_cells`: 0
+- `max_mt_pct`: 20.0
+- `max_genes`: 0
+- `n_top_hvg`: 2000
+- `n_hvg_selected`: 2000
+- `n_pcs_requested`: 30
+- `n_pcs_computed`: 30
+- `n_pcs_used`: 30
+- `n_pcs_suggested`: 30
+- `n_neighbors`: 15
+- `leiden_resolution`: 0.5
+- `normalize_target_sum`: 10000.0
+- `hvg_flavor`: seurat_v3
+- `leiden_flavor`: igraph
+
+## Interpretation Notes
+
+- `processed.h5ad` preserves raw counts in both `adata.layers['counts']` and `adata.raw`, while `adata.X` is the log-normalized matrix used by downstream exploratory workflows.
+- OmicsClaw reports requested, computed, used, and suggested PC counts separately so graph construction choices stay auditable instead of being hidden behind Scanpy internals.
+- The Python gallery is the canonical preprocessing narrative. Optional downstream R styling should consume `figure_data/` instead of recomputing QC, clustering, or embeddings.
+
+## Visualization Outputs
+
+- `figures/manifest.json`: Standard Python gallery manifest
+- `figure_data/`: Figure-ready CSV exports for downstream customization
+- `reproducibility/r_visualization.sh`: Optional R visualization entrypoint
+
+---
+
+## Disclaimer
+
+*OmicsClaw is a research and educational tool for multi-omics analysis. It is not a medical device and does not provide clinical diagnoses. Consult a domain expert before making decisions based on these results.*
+
+---
+[Reproducibility notebook available: /data/beifen/zhouwg_data/omicsclaw-workspace/output/spatial-preprocessing__20260513_203639__bdb4c9e3/reproducibility/analysis_notebook.ipynb. Tell the user they can open it in Jupyter to inspect code, outputs, and rerun the analysis.]
+
+---
+[Available outputs (absolute paths):
+Figures:
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/spatial-preprocessing__20260513_203639__bdb4c9e3/figures/cluster_size_barplot.png`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/spatial-preprocessing__20260513_203639__bdb4c9e3/figures/pca_variance_curve.png`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/spatial-preprocessing__20260513_203639__bdb4c9e3/figures/qc_metric_distributions.png`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/spatial-preprocessing__20260513_203639__bdb4c9e3/figures/qc_metrics_spatial.png`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/spatial-preprocessing__20260513_203639__bdb4c9e3/figures/spatial_leiden.png`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/spatial-preprocessing__20260513_203639__bdb4c9e3/figures/umap_leiden.png`
+Tables:
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/spatial-preprocessing__20260513_203639__bdb4c9e3/figure_data/cluster_summary.csv`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/spatial-preprocessing__20260513_203639__bdb4c9e3/figure_data/pca_variance_ratio.csv`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/spatial-preprocessing__20260513_203639__bdb4c9e3/figure_data/preprocess_run_summary.csv`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/spatial-preprocessing__20260513_203639__bdb4c9e3/figure_data/preprocess_spatial_points.csv`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/spatial-preprocessing__20260513_203639__bdb4c9e3/figure_data/preprocess_umap_points.csv`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/spatial-preprocessing__20260513_203639__bdb4c9e3/figure_data/qc_metric_distributions.csv`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/spatial-preprocessing__20260513_203639__bdb4c9e3/tables/cluster_summary.csv`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/spatial-preprocessing__20260513_203639__bdb4c9e3/tables/pca_variance_ratio.csv`
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/spatial-preprocessing__20260513_203639__bdb4c9e3/tables/qc_summary.csv`
+Notebooks:
+  - `/data/beifen/zhouwg_data/omicsclaw-workspace/output/spatial-preprocessing__20260513_203639__bdb4c9e3/reproducibility/analysis_notebook.ipynb`
+
+When the user asks to see a figure, quote its backtick path verbatim (e.g. `/abs/path/to/figure.png`) in your reply — the UI renders any backtick-quoted image path as an inline preview. Do NOT call list_directory or other tools to locate these files.]
+
+💡 When summarizing results:
+- describe `raw_counts. 🚨 **MANDATORY: USE SCRIPTS EXACTLY AS SHOWN — DO NOT WRITE INLINE CODE** 🚨
+
+> **Note:** Run from the OmicsClaw root directory and add the workflow scr…
