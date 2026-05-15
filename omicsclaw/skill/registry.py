@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from omicsclaw.core.lazy_metadata import LazySkillMetadata
+from .lazy_metadata import LazySkillMetadata
 
 logger = logging.getLogger(__name__)
 

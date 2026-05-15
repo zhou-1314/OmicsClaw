@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib
 import sys
 
-from omicsclaw.core.registry import OmicsRegistry
+from omicsclaw.skill.registry import OmicsRegistry
 
 
 def _fresh_import_bot_core():

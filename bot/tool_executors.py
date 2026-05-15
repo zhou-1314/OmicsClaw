@@ -19,7 +19,7 @@ Cross-module access pattern:
   values ``bot.session.init()`` writes after the modules finish
   loading.
 * Helpers from sibling modules (``bot.skill_orchestration``,
-  ``omicsclaw.runtime.preflight.sc_batch``) are imported from their
+  ``omicsclaw.skill.preflight.sc_batch``) are imported from their
   canonical home, not via the bot.core re-export — a clearer
   dependency graph.
 """
@@ -93,7 +93,7 @@ from omicsclaw.common.user_guidance import (
     render_guidance_block,
     strip_user_guidance_lines,
 )
-from omicsclaw.core.registry import ensure_registry_loaded, registry
+from omicsclaw.skill.registry import ensure_registry_loaded, registry
 from omicsclaw.runtime.bot_tools import build_bot_tool_registry, BotToolContext
 from omicsclaw.runtime.engineering_tools import build_engineering_tool_executors
 from omicsclaw.runtime.verification import format_completion_mapping_summary
@@ -120,7 +120,7 @@ from bot.skill_orchestration import (
     _update_preprocessing_state,
     OutputMediaPaths,
 )
-from omicsclaw.runtime.preflight.sc_batch import (
+from omicsclaw.skill.preflight.sc_batch import (
     _auto_prepare_sc_batch_integration,
     _maybe_require_batch_integration_workflow,
     _maybe_require_batch_key_selection,
@@ -254,7 +254,7 @@ async def execute_omicsclaw(args: dict, session_id: str = None, chat_id: int | s
 
     # --- Auto-routing via capability resolver ---
     if skill_key == "auto":
-        from omicsclaw.core.capability_resolver import resolve_capability
+        from omicsclaw.skill.capability_resolver import resolve_capability
 
         capability_input = query
         if resolved_path:
@@ -1760,7 +1760,7 @@ async def execute_consult_knowledge(args: dict, **kwargs) -> str:
 async def execute_resolve_capability(args: dict, **kwargs) -> str:
     """Resolve whether a request maps to an existing skill or needs fallback."""
     try:
-        from omicsclaw.core.capability_resolver import resolve_capability
+        from omicsclaw.skill.capability_resolver import resolve_capability
 
         query = args.get("query", "")
         if not query:
@@ -1787,7 +1787,7 @@ async def execute_list_skills_in_domain(args: dict, **kwargs) -> str:
     actually needs it.
     """
     try:
-        from omicsclaw.runtime.skill_listing import list_skills_in_domain
+        from omicsclaw.skill.listing import list_skills_in_domain
 
         domain = args.get("domain", "")
         if not domain:
@@ -1806,7 +1806,7 @@ async def execute_list_skills_in_domain(args: dict, **kwargs) -> str:
 async def execute_create_omics_skill(args: dict, **kwargs) -> str:
     """Create a new OmicsClaw skill scaffold inside the repository."""
     try:
-        from omicsclaw.core.skill_scaffolder import create_skill_scaffold
+        from omicsclaw.skill.scaffolder import create_skill_scaffold
 
         request = args.get("request", "")
         domain = args.get("domain", "")
@@ -1875,7 +1875,7 @@ async def execute_web_method_search(args: dict, **kwargs) -> str:
 async def execute_custom_analysis_execute(args: dict, **kwargs) -> str:
     """Run custom analysis code in a restricted notebook sandbox."""
     try:
-        from omicsclaw.core.capability_resolver import resolve_capability
+        from omicsclaw.skill.capability_resolver import resolve_capability
         from omicsclaw.execution import run_autonomous_analysis
 
         goal = args.get("goal", "")

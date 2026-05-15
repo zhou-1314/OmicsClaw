@@ -12,7 +12,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from omicsclaw.core.skill_scaffolder import create_skill_scaffold
+from omicsclaw.skill.scaffolder import create_skill_scaffold
 
 SKILL_NAME = "omics-skill-builder"
 SKILL_VERSION = "0.1.0"

@@ -1,4 +1,4 @@
-"""Unit tests for ``omicsclaw.runtime.preflight.sc_batch``.
+"""Unit tests for ``omicsclaw.skill.preflight.sc_batch``.
 
 The module owns sc-batch-integration's batch-key detection + workflow
 plan logic — single-cell domain business logic carved out of bot.core
@@ -25,7 +25,7 @@ import pytest
 
 
 def test_normalize_obs_key_collapses_punctuation_and_lowers():
-    from omicsclaw.runtime.preflight.sc_batch import _normalize_obs_key
+    from omicsclaw.skill.preflight.sc_batch import _normalize_obs_key
 
     assert _normalize_obs_key("Sample_ID") == "sample id"
     assert _normalize_obs_key("orig.ident") == "orig ident"
@@ -35,7 +35,7 @@ def test_normalize_obs_key_collapses_punctuation_and_lowers():
 def test_resolve_requested_batch_key_prefers_direct_arg_over_extra_flag():
     """When ``args["batch_key"]`` is set, it wins over a ``--batch-key``
     flag in extra_args. This pin the precedence rule."""
-    from omicsclaw.runtime.preflight.sc_batch import _resolve_requested_batch_key
+    from omicsclaw.skill.preflight.sc_batch import _resolve_requested_batch_key
 
     args = {"batch_key": "sample", "extra_args": ["--batch-key", "donor"]}
     assert _resolve_requested_batch_key(args) == "sample"
@@ -44,7 +44,7 @@ def test_resolve_requested_batch_key_prefers_direct_arg_over_extra_flag():
 def test_resolve_requested_batch_key_falls_back_to_extra_flag():
     """When ``args["batch_key"]`` is missing, parse ``--batch-key`` /
     ``--batch-key=…`` from ``extra_args``."""
-    from omicsclaw.runtime.preflight.sc_batch import _resolve_requested_batch_key
+    from omicsclaw.skill.preflight.sc_batch import _resolve_requested_batch_key
 
     assert _resolve_requested_batch_key({"extra_args": ["--batch-key", "donor"]}) == "donor"
     assert _resolve_requested_batch_key({"extra_args": ["--batch-key=patient"]}) == "patient"
@@ -64,7 +64,7 @@ def pandas_module():
 def test_score_batch_candidate_rejects_excluded_columns(pandas_module):
     """Cluster / annotation / QC columns must never score as batch keys —
     even if their cardinality looks right, they're scientifically wrong."""
-    from omicsclaw.runtime.preflight.sc_batch import _score_batch_key_candidate
+    from omicsclaw.skill.preflight.sc_batch import _score_batch_key_candidate
 
     series = pandas_module.Series(["A", "B", "C", "A", "B", "C"] * 5)
     for excluded in ("leiden", "cluster", "cell_type", "doublet_score", "barcode"):
@@ -74,7 +74,7 @@ def test_score_batch_candidate_rejects_excluded_columns(pandas_module):
 def test_score_batch_candidate_high_score_for_exact_preference_match(pandas_module):
     """A column literally named ``sample`` with a sensible group count
     must score high — that's the canonical happy path."""
-    from omicsclaw.runtime.preflight.sc_batch import _score_batch_key_candidate
+    from omicsclaw.skill.preflight.sc_batch import _score_batch_key_candidate
 
     series = pandas_module.Series(["S1", "S2", "S3", "S4"] * 10)
     result = _score_batch_key_candidate("sample", series, n_obs=40)
@@ -89,7 +89,7 @@ def test_score_batch_candidate_high_score_for_exact_preference_match(pandas_modu
 def test_score_batch_candidate_rejects_singleton_or_unique_per_cell(pandas_module):
     """``nunique == 1`` (constant) or ``nunique >= n_obs`` (cell-id-like)
     are not batch columns."""
-    from omicsclaw.runtime.preflight.sc_batch import _score_batch_key_candidate
+    from omicsclaw.skill.preflight.sc_batch import _score_batch_key_candidate
 
     constant = pandas_module.Series(["only"] * 50)
     cell_ids = pandas_module.Series([f"cell_{i}" for i in range(50)])
@@ -101,7 +101,7 @@ def test_score_batch_candidate_rejects_singleton_or_unique_per_cell(pandas_modul
 def test_score_batch_candidate_includes_preview_examples(pandas_module):
     """Preview is the first ~5 unique values — used in the clarification
     message so the user sees what they'd be choosing."""
-    from omicsclaw.runtime.preflight.sc_batch import _score_batch_key_candidate
+    from omicsclaw.skill.preflight.sc_batch import _score_batch_key_candidate
 
     series = pandas_module.Series(["donor_1", "donor_2", "donor_3", "donor_1"] * 10)
     result = _score_batch_key_candidate("donor", series, n_obs=40)
@@ -117,7 +117,7 @@ def test_score_batch_candidate_includes_preview_examples(pandas_module):
 
 
 def test_format_batch_key_clarification_lists_candidates_when_available():
-    from omicsclaw.runtime.preflight.sc_batch import _format_batch_key_clarification
+    from omicsclaw.skill.preflight.sc_batch import _format_batch_key_clarification
 
     text = _format_batch_key_clarification(
         file_path=Path("/tmp/sample.h5ad"),
@@ -146,7 +146,7 @@ def test_format_batch_key_clarification_lists_candidates_when_available():
 def test_format_batch_key_clarification_explains_when_requested_key_not_found():
     """When the user passed a ``batch_key`` but it doesn't exist in
     ``adata.obs``, the message must say so explicitly."""
-    from omicsclaw.runtime.preflight.sc_batch import _format_batch_key_clarification
+    from omicsclaw.skill.preflight.sc_batch import _format_batch_key_clarification
 
     text = _format_batch_key_clarification(
         file_path=Path("/tmp/x.h5ad"),

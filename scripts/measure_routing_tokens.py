@@ -58,7 +58,7 @@ def _bot_tool_sizes() -> tuple[int, int, int, int, int]:
     (description_chars, skill_enum_chars, omicsclaw_spec_json_chars,
      all_bot_tools_json_chars, bot_tool_count)
     """
-    from omicsclaw.core.registry import OmicsRegistry
+    from omicsclaw.skill.registry import OmicsRegistry
     from omicsclaw.runtime.bot_tools import BotToolContext, build_bot_tool_specs
 
     reg = OmicsRegistry()

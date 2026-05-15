@@ -10,8 +10,8 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from omicsclaw.core.registry import OmicsRegistry, SKILLS_DIR
-from omicsclaw.core.skill_protocol import validate_skill_module, ValidationResult
+from omicsclaw.skill.registry import OmicsRegistry, SKILLS_DIR
+from omicsclaw.skill.protocol import validate_skill_module, ValidationResult
 
 
 def _find_all_skill_scripts() -> list[Path]:

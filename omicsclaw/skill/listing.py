@@ -3,7 +3,7 @@
 Purpose
 -------
 The bot's ``omicsclaw`` tool description carries a compact 8-domain briefing
-(``omicsclaw.core.domain_briefing``) — intentionally small so every turn pays
+(``omicsclaw.skill.domain_briefing``) — intentionally small so every turn pays
 ~500 tokens instead of ~4,000. When the briefing isn't enough for the LLM to
 pick a skill, it calls ``list_skills_in_domain(domain=...)`` to page in the
 full listing for a single domain. This keeps always-loaded context small and
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from omicsclaw.core.registry import registry
+from .registry import registry
 
 _MAX_TRIGGERS_SHOWN = 8
 _MAX_DESC_CHARS = 180

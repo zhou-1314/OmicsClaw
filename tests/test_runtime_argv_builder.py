@@ -1,4 +1,4 @@
-"""Unit tests for the carved-out ``omicsclaw.core.runtime.argv_builder`` module.
+"""Unit tests for the carved-out ``omicsclaw.skill.execution.argv_builder`` module.
 
 The forwarded-flag filter logic used to be inline in ``run_skill`` and was
 only exercised via integration tests. After OMI-12 P1.4 it lives in its
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from omicsclaw.core.runtime.argv_builder import (
+from omicsclaw.skill.execution.argv_builder import (
     build_skill_argv,
     build_user_run_command,
     extract_flag_value,

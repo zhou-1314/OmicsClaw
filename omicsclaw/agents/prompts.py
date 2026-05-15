@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from omicsclaw.core.registry import OMICSCLAW_DIR
+from omicsclaw.skill.registry import OMICSCLAW_DIR
 from omicsclaw.runtime.system_prompt import build_system_prompt
 
 # =============================================================================

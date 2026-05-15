@@ -391,7 +391,7 @@ class TestHarnessEvolutionEntryPoint:
             "omicsclaw.autoagent.metrics_registry.get_metrics_for_skill",
             lambda *_args, **_kwargs: SC_PREPROCESSING_METRICS,
         )
-        monkeypatch.setattr("omicsclaw.core.registry.registry", fake_registry)
+        monkeypatch.setattr("omicsclaw.skill.registry.registry", fake_registry)
         monkeypatch.setattr("omicsclaw.autoagent.harness_loop.HarnessLoop", FakeLoop)
 
         result = run_harness_evolution(
@@ -426,7 +426,7 @@ class TestHarnessEvolutionEntryPoint:
             "omicsclaw.autoagent.metrics_registry.get_metrics_for_skill",
             return_value={},
         ), mock_patch(
-            "omicsclaw.core.registry.registry",
+            "omicsclaw.skill.registry.registry",
             fake_registry,
         ):
             result = run_harness_evolution(

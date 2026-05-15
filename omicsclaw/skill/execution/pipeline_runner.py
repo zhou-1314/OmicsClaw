@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from omicsclaw.common.report import build_output_dir_name
-from omicsclaw.core.skill_result import SkillRunResult, build_skill_run_result
+from ..result import SkillRunResult, build_skill_run_result
 
 from .output_finalize import write_pipeline_readme
 from .pipeline_config import (
@@ -79,7 +79,7 @@ def run_pipeline(
 
     # Late import keeps this module a leaf in the dependency DAG: skill_runner
     # imports pipeline_runner, not the other way around.
-    from omicsclaw.core.skill_runner import run_skill
+    from ..runner import run_skill
 
     if output_dir:
         out_dir = Path(output_dir)

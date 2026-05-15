@@ -23,7 +23,7 @@ import yaml
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from omicsclaw.core.parameters_md import render_parameters_md  # noqa: E402
+from omicsclaw.skill.parameters_md import render_parameters_md  # noqa: E402
 
 REQUIRED_SECTIONS = (
     "## When to use",
@@ -486,7 +486,7 @@ def main() -> int:
     if args.all == bool(args.skill_dir):
         parser.error("provide either <skill_dir> or --all")
 
-    from omicsclaw.core.registry import SKILLS_DIR
+    from omicsclaw.skill.registry import SKILLS_DIR
 
     targets = discover_skills(SKILLS_DIR) if args.all else [args.skill_dir]
 

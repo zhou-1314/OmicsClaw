@@ -15,7 +15,7 @@ that would require a live subprocess and demo data. Instead we build the
 
 from __future__ import annotations
 
-from omicsclaw.core.capability_resolver import (
+from omicsclaw.skill.capability_resolver import (
     CapabilityCandidate,
     CapabilityDecision,
 )

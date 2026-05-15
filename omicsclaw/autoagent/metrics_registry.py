@@ -378,7 +378,7 @@ def get_metrics_for_skill(
 def list_optimizable_skills() -> list[dict[str, str]]:
     """Return canonical skills that have both metrics and optimizable methods."""
     try:
-        from omicsclaw.core.registry import registry
+        from omicsclaw.skill.registry import registry
 
         registry.load_all()
         primary_skills = registry.iter_primary_skills()
@@ -416,7 +416,7 @@ def list_optimizable_skills() -> list[dict[str, str]]:
 
 def _canonicalize_skill_name(skill_name: str) -> str:
     try:
-        from omicsclaw.core.registry import registry
+        from omicsclaw.skill.registry import registry
 
         registry.load_all()
         info = registry.skills.get(skill_name)

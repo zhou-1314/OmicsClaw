@@ -17,7 +17,7 @@ SKILLS_DIR = OMICSCLAW_DIR / "skills"
 def parse_yaml_frontmatter(text: str) -> dict:
     """Extract YAML frontmatter from a SKILL.md file via ``yaml.safe_load``.
 
-    Uses the same parser as ``omicsclaw.core.lazy_metadata`` so the catalog
+    Uses the same parser as ``omicsclaw.skill.lazy_metadata`` so the catalog
     cannot diverge from the runtime registry on nested structures, folded
     scalars, or list/dict shapes.
     """
@@ -37,7 +37,7 @@ def build_cli_alias_map() -> dict[str, str]:
     """Build {absolute_skill_dir_path: canonical_cli_alias} from the Omics registry."""
     if str(OMICSCLAW_DIR) not in sys.path:
         sys.path.insert(0, str(OMICSCLAW_DIR))
-    from omicsclaw.core.registry import registry
+    from omicsclaw.skill.registry import registry
 
     registry.load_all()
     alias_map: dict[str, str] = {}

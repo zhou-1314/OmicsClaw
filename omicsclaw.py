@@ -89,11 +89,11 @@ from omicsclaw import __version__
 from omicsclaw.common.report import (
     build_output_dir_name,
 )
-from omicsclaw.core.skill_runner import (
+from omicsclaw.skill.runner import (
     resolve_skill_alias,
     run_skill,
 )
-from omicsclaw.core.registry import ensure_registry_loaded, registry
+from omicsclaw.skill.registry import ensure_registry_loaded, registry
 
 
 def _module_available(module_name: str) -> bool:

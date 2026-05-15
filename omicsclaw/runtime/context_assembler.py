@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from omicsclaw.core.registry import ensure_registry_loaded
+from omicsclaw.skill.registry import ensure_registry_loaded
 
 from .context_layers import (
     ContextAssemblyRequest,
@@ -252,7 +252,7 @@ def build_user_message_content(
 
 
 def _default_capability_resolver(query: str, *, domain_hint: str = ""):
-    from omicsclaw.core.capability_resolver import resolve_capability
+    from omicsclaw.skill.capability_resolver import resolve_capability
 
     return resolve_capability(query, domain_hint=domain_hint)
 

@@ -9,7 +9,7 @@ debug paths).
 
 from __future__ import annotations
 
-from omicsclaw.core.registry import registry
+from .registry import registry
 
 
 def lookup_skill_info(skill_key: str, force_reload: bool = False) -> dict:

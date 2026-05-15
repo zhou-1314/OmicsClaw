@@ -535,11 +535,11 @@ a renderer is added under `r_visualization/<name>_publication_template.R`.
 def _render_parameters_md_from_sidecar(sidecar: dict) -> str:
     """Render parameters.md using the canonical shared renderer.
 
-    Uses `omicsclaw.core.parameters_md.render_parameters_md` — the same
+    Uses `omicsclaw.skill.parameters_md.render_parameters_md` — the same
     function `scripts/skill_lint.py` reads from — so the scaffolder's output
     stays byte-for-byte consistent with `_check_references`'s freshness check.
     """
-    from omicsclaw.core.parameters_md import render_parameters_md
+    from .parameters_md import render_parameters_md
     return render_parameters_md(sidecar)
 
 
@@ -1000,7 +1000,7 @@ def find_latest_autonomous_analysis(output_root: Path | None = None) -> Path | N
 
 def refresh_registry() -> bool:
     try:
-        from omicsclaw.core.registry import registry
+        from .registry import registry
 
         registry._loaded = False
         registry.skills.clear()

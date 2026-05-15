@@ -21,7 +21,7 @@ import json
 import re
 from typing import Any
 
-from omicsclaw.core.registry import OmicsRegistry, ensure_registry_loaded
+from .registry import OmicsRegistry, ensure_registry_loaded
 
 try:
     from omicsclaw.loaders import detect_domain_from_path

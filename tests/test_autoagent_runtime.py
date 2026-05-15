@@ -1212,7 +1212,7 @@ def test_run_harness_evolution_returns_failure_summary_when_loop_fails(monkeypat
             }
         },
     )
-    monkeypatch.setattr("omicsclaw.core.registry.registry", fake_registry)
+    monkeypatch.setattr("omicsclaw.skill.registry.registry", fake_registry)
 
     class FakeLoop:
         def __init__(self, *args, **kwargs):

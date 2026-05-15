@@ -1,4 +1,4 @@
-from omicsclaw.core.registry import OmicsRegistry
+from omicsclaw.skill.registry import OmicsRegistry
 
 def test_registry_load_lightweight():
     registry = OmicsRegistry()

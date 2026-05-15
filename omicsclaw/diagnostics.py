@@ -790,7 +790,7 @@ def _collect_skill_catalog_check(
 
     if registry_obj is None:
         try:
-            from omicsclaw.core.registry import OmicsRegistry
+            from omicsclaw.skill.registry import OmicsRegistry
 
             registry_obj = OmicsRegistry()
             registry_obj.load_all(root / "skills")
@@ -1411,7 +1411,7 @@ def build_context_report(
     warnings: list[str] = []
     if should_attach_capability_context(normalized_query):
         try:
-            from omicsclaw.core.capability_resolver import resolve_capability
+            from omicsclaw.skill.capability_resolver import resolve_capability
 
             decision = resolve_capability(normalized_query, domain_hint=domain_hint)
             capability_context = str(decision.to_prompt_block() or "").strip()

@@ -7,12 +7,12 @@ via ``validate_skill_module()``, not for inheritance.
 
 Usage for static checking::
 
-    from omicsclaw.core.skill_protocol import SkillModule
+    from .protocol import SkillModule
     mod: SkillModule = importlib.import_module("skills.spatial.spatial_preprocess")
 
 Usage for runtime validation::
 
-    from omicsclaw.core.skill_protocol import validate_skill_module
+    from .protocol import validate_skill_module
     report = validate_skill_module(Path("skills/spatial/spatial-preprocess/spatial_preprocess.py"))
 """
 

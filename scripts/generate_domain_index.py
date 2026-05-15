@@ -2,7 +2,7 @@
 """Generate ``skills/<domain>/INDEX.md`` — the lazy-load detail file.
 
 The ``omicsclaw`` bot tool description contains a compact 7-domain briefing
-(see ``omicsclaw.core.domain_briefing``). When the LLM needs the full skill
+(see ``omicsclaw.skill.domain_briefing``). When the LLM needs the full skill
 list for one domain, it follows the briefing's hint and reads
 ``skills/<domain>/INDEX.md`` — which this script regenerates from the
 registry. Keeping INDEX files on disk (vs. returning from a tool call) lets
@@ -29,7 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from omicsclaw.core.registry import OmicsRegistry, SKILLS_DIR  # noqa: E402
+from omicsclaw.skill.registry import OmicsRegistry, SKILLS_DIR  # noqa: E402
 
 _MAX_TRIGGERS_PER_SKILL = 8
 

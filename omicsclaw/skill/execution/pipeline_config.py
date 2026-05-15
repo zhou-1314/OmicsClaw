@@ -27,7 +27,7 @@ from pathlib import Path
 
 import yaml
 
-from omicsclaw.core.registry import OMICSCLAW_DIR
+from ..registry import OMICSCLAW_DIR
 
 
 _DEFAULT_CHAIN_OUTPUT = "processed.h5ad"

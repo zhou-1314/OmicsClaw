@@ -24,7 +24,7 @@ class BotToolContext:
     # ``skill_desc_text`` is retained for backward compatibility with older
     # callers/tests, but is no longer embedded verbatim in the tool
     # description. The LLM now receives a compact 7-domain briefing built
-    # from ``omicsclaw.core.domain_briefing`` instead.
+    # from ``omicsclaw.skill.domain_briefing`` instead.
     skill_desc_text: str = ""
     domain_briefing: str = ""
 
@@ -40,8 +40,8 @@ def build_default_bot_tool_context() -> BotToolContext:
     tool's ``skill`` parameter is restricted to two enums and the
     ``"auto"`` routing path is missing — fatal for routing parity.
     """
-    from omicsclaw.core.domain_briefing import build_domain_briefing
-    from omicsclaw.core.registry import ensure_registry_loaded
+    from omicsclaw.skill.domain_briefing import build_domain_briefing
+    from omicsclaw.skill.registry import ensure_registry_loaded
 
     registry = ensure_registry_loaded()
     skill_names = tuple(list(registry.skills.keys()) + ["auto"])
@@ -76,7 +76,7 @@ def _resolve_domain_briefing(context: BotToolContext) -> str:
     if context.domain_briefing:
         return context.domain_briefing
     try:
-        from omicsclaw.core.domain_briefing import build_domain_briefing
+        from omicsclaw.skill.domain_briefing import build_domain_briefing
         return build_domain_briefing(
             lead_in=(
                 "OmicsClaw dispatches multi-omics analysis across 8 domains. "

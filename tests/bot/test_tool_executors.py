@@ -350,7 +350,7 @@ CARVED_OUT_SIBLING_SYMBOLS = (
     # bot.skill_orchestration
     "_infer_skill_for_method",
     "_run_skill_via_shared_runner",
-    # omicsclaw.runtime.preflight.sc_batch
+    # omicsclaw.skill.preflight.sc_batch
     "_resolve_requested_batch_key",
 )
 

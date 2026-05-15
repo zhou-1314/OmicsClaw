@@ -1,7 +1,7 @@
 """Shared OmicsClaw skill execution runner.
 
 The public surface here is ``run_skill`` (and a few legacy aliases). The
-heavy lifting was carved out of this module into ``omicsclaw.core.runtime``
+heavy lifting was carved out of this module into ``omicsclaw.skill.execution``
 during OMI-12 P1.4:
 
 - ``runtime.argv_builder``    — argv + filtered LLM-supplied flags
@@ -28,26 +28,26 @@ from pathlib import Path
 from typing import Any, Callable
 
 from omicsclaw.common.report import build_output_dir_name
-from omicsclaw.core.registry import ensure_registry_loaded, registry
-from omicsclaw.core.runtime.argv_builder import (
+from .registry import ensure_registry_loaded, registry
+from .execution.argv_builder import (
     build_skill_argv,
     build_user_run_command,
     extract_flag_value,
     filter_forwarded_args,
 )
-from omicsclaw.core.runtime.async_subprocess_driver import adrive_subprocess
-from omicsclaw.core.runtime.output_finalize import (
+from .execution.async_subprocess_driver import adrive_subprocess
+from .execution.output_finalize import (
     deduplicate_path,
     finalize_output_directory,
     write_pipeline_readme,
 )
-from omicsclaw.core.runtime.pipeline_runner import (
+from .execution.pipeline_runner import (
     SPATIAL_PIPELINE,
     run_pipeline_by_name,
     run_spatial_pipeline,
 )
-from omicsclaw.core.runtime.subprocess_driver import drive_subprocess
-from omicsclaw.core.skill_result import SkillRunResult, build_skill_run_result
+from .execution.subprocess_driver import drive_subprocess
+from .result import SkillRunResult, build_skill_run_result
 
 
 OMICSCLAW_DIR = Path(__file__).resolve().parents[2]
@@ -407,7 +407,7 @@ async def arun_skill(
     - Cancellation flows via :class:`asyncio.CancelledError` instead of
       a ``threading.Event`` — propagating the cancel through the
       awaiting task is enough; the underlying
-      :func:`omicsclaw.core.runtime.async_subprocess_driver.adrive_subprocess`
+      :func:`omicsclaw.skill.execution.async_subprocess_driver.adrive_subprocess`
       SIGTERM/SIGKILLs the process group on its way out.
     """
     skill_name = resolve_skill_alias(skill_name)

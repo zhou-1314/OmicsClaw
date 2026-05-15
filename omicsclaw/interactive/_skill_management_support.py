@@ -1182,7 +1182,7 @@ def build_refresh_skills_statuses(
 
 def refresh_skill_registry() -> str:
     try:
-        from omicsclaw.core.registry import registry
+        from omicsclaw.skill.registry import registry
 
         registry._loaded = False
         registry.skills.clear()

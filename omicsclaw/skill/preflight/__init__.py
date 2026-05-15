@@ -13,7 +13,7 @@ of code (~390 LOC) was sitting in ``bot/core.py`` despite being
 single-cell domain business logic, not entry-layer infrastructure.
 
 No exported API in this package: callers should import directly from
-the per-Skill submodule (``omicsclaw.runtime.preflight.sc_batch``).
+the per-Skill submodule (``omicsclaw.skill.preflight.sc_batch``).
 """
 
 from __future__ import annotations

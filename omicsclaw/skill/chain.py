@@ -1,7 +1,7 @@
 """Skill execution helpers for chaining runs from a single tool call.
 
 ``run_skill_via_shared_runner`` is the core async wrapper around
-``omicsclaw.core.skill_runner.run_skill`` — it composes forwarded
+``omicsclaw.skill.runner.run_skill`` — it composes forwarded
 CLI args, streams stdout/stderr through callbacks, surfaces
 user-guidance blocks extracted from skill output, and returns a
 uniform result dict that callers (bot tool dispatch, auto-prepare
@@ -29,9 +29,9 @@ from omicsclaw.common.user_guidance import (
     render_guidance_block,
     strip_user_guidance_lines,
 )
-from omicsclaw.runtime.skill_lookup import lookup_skill_info
+from .lookup import lookup_skill_info
 
-logger = logging.getLogger("omicsclaw.runtime.skill_chain")
+logger = logging.getLogger("omicsclaw.skill.chain")
 
 
 def normalize_extra_args(extra_args) -> list[str]:
@@ -72,8 +72,8 @@ async def run_skill_via_shared_runner(
     extra_args: list[str] | None = None,
     out_dir: Path,
 ) -> dict:
-    from omicsclaw.core import skill_runner
-    from omicsclaw.core.skill_result import SkillRunResult
+    from . import runner as skill_runner
+    from .result import SkillRunResult
 
     runner_skill = "spatial-pipeline" if skill_key == "pipeline" else skill_key
     skill_info = lookup_skill_info(runner_skill)

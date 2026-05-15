@@ -53,7 +53,7 @@ def test_argv_builder_still_rewrites_n_epochs_for_spatial_domains():
     allow-lists ``--epochs``, the bot's ``--n-epochs`` argv is rewritten
     correctly. If this stops working, the dead-branch deletion would
     silently strip the flag and skills would run with default epochs."""
-    from omicsclaw.core.runtime.argv_builder import filter_forwarded_args
+    from omicsclaw.skill.execution.argv_builder import filter_forwarded_args
 
     out = filter_forwarded_args(
         ["--n-epochs", "50"], allowed_extra_flags={"--epochs"}
@@ -66,7 +66,7 @@ def test_spatial_domains_canonical_alias_makes_branch_unreachable():
     ``spatial-domain-identification`` is ``spatial-domains``. Pin that so a
     future SKILL.md edit that renames the canonical alias back to
     ``spatial-domain-identification`` re-introduces the bug visibly."""
-    from omicsclaw.core.registry import ensure_registry_loaded
+    from omicsclaw.skill.registry import ensure_registry_loaded
 
     registry = ensure_registry_loaded()
     legacy_view = registry.skills.get("spatial-domain-identification")

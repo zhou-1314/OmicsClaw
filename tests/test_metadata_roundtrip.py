@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from omicsclaw.core.lazy_metadata import LazySkillMetadata
+from omicsclaw.skill.lazy_metadata import LazySkillMetadata
 
 # Each spec is the *runtime contract* — the fields that move between
 # frontmatter.metadata.omicsclaw and parameters.yaml.  Identity fields (name,

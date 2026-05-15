@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from omicsclaw.core.capability_resolver import resolve_capability
+from omicsclaw.skill.capability_resolver import resolve_capability
 
 
 @dataclass(frozen=True)
@@ -246,7 +246,7 @@ def test_disambiguation_gate_architecturally_intact():
     ``_AUTO_DISAMBIGUATE_GAP`` against observed top1/top2 distributions.
     """
     from bot.core import _AUTO_DISAMBIGUATE_GAP, _format_auto_disambiguation
-    from omicsclaw.core.capability_resolver import (
+    from omicsclaw.skill.capability_resolver import (
         CapabilityCandidate,
         CapabilityDecision,
     )

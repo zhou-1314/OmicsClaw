@@ -5,8 +5,8 @@ from typing import Any
 
 import yaml
 
-from omicsclaw.core.registry import OmicsRegistry
-from omicsclaw.core.skill_runner import resolve_skill_alias
+from omicsclaw.skill.registry import OmicsRegistry
+from omicsclaw.skill.runner import resolve_skill_alias
 
 
 ROOT = Path(__file__).resolve().parent.parent

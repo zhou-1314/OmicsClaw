@@ -5,7 +5,7 @@ used to live in the bot ``omicsclaw`` tool description. A domain briefing is
 cheaper (~300 tokens vs ~4,000) and more stable — it changes only when a new
 domain is added, which keeps the Anthropic prompt cache warm across turns.
 
-Single source of truth: ``_HARDCODED_DOMAINS`` in ``omicsclaw.core.registry``
+Single source of truth: ``_HARDCODED_DOMAINS`` in ``omicsclaw.skill.registry``
 (``summary`` + ``representative_skills`` fields). Skill counts are refreshed
 at runtime by ``registry._refresh_domain_skill_counts``.
 
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from omicsclaw.core.registry import registry
+from .registry import registry
 
 _DOMAIN_DISPLAY_ORDER = (
     "spatial",

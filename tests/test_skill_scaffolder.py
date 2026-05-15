@@ -7,8 +7,8 @@ import time
 
 import pytest
 
-from omicsclaw.core.registry import OmicsRegistry
-from omicsclaw.core.skill_scaffolder import (
+from omicsclaw.skill.registry import OmicsRegistry
+from omicsclaw.skill.scaffolder import (
     create_skill_scaffold,
     find_latest_autonomous_analysis,
     infer_skill_name,
@@ -26,7 +26,7 @@ import importlib
 import omicsclaw
 
 omicsclaw.__file__ = None
-scaffolder = importlib.import_module("omicsclaw.core.skill_scaffolder")
+scaffolder = importlib.import_module("omicsclaw.skill.scaffolder")
 assert scaffolder.OMICSCLAW_DIR.name == "OmicsClaw"
 assert scaffolder.SKILLS_DIR.name == "skills"
 """

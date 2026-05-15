@@ -138,13 +138,13 @@ from omicsclaw.common.user_guidance import (
     render_guidance_block,
     strip_user_guidance_lines,
 )
-from omicsclaw.core.registry import registry
-from omicsclaw.runtime.skill_chain import (
+from omicsclaw.skill.registry import registry
+from omicsclaw.skill.chain import (
     normalize_extra_args as _normalize_extra_args,
     run_omics_skill_step,
     run_skill_via_shared_runner as _run_skill_via_shared_runner,
 )
-from omicsclaw.runtime.skill_lookup import lookup_skill_info
+from omicsclaw.skill.lookup import lookup_skill_info
 
 logger = logging.getLogger("omicsclaw.bot.skill_orchestration")
 
@@ -412,7 +412,7 @@ async def _run_omics_skill_step(**kwargs) -> dict:
     return await run_omics_skill_step(**kwargs)
 
 
-# Re-export from the canonical home (omicsclaw.runtime.skill_lookup) so
+# Re-export from the canonical home (omicsclaw.skill.lookup) so
 # existing ``bot.skill_orchestration._lookup_skill_info`` / ``bot.core``
 # call sites keep working without churn.
 _lookup_skill_info = lookup_skill_info

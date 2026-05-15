@@ -19,9 +19,9 @@ import json
 import textwrap
 from pathlib import Path
 
-from omicsclaw.core.runtime import pipeline_runner
-from omicsclaw.core.runtime.pipeline_config import load_pipeline_config
-from omicsclaw.core.skill_result import SkillRunResult, build_skill_run_result
+from omicsclaw.skill.execution import pipeline_runner
+from omicsclaw.skill.execution.pipeline_config import load_pipeline_config
+from omicsclaw.skill.result import SkillRunResult, build_skill_run_result
 
 
 def _write_pipeline(tmp_path: Path, name: str, body: str) -> None:
@@ -60,7 +60,7 @@ def _stub_run_skill_chain(
             method=None,
         )
 
-    monkeypatch.setattr("omicsclaw.core.skill_runner.run_skill", fake_run_skill)
+    monkeypatch.setattr("omicsclaw.skill.runner.run_skill", fake_run_skill)
     return calls
 
 
@@ -240,8 +240,8 @@ def test_run_skill_dispatches_unknown_pipeline_alias_back_to_unknown_skill(monke
     or fabricate a pipeline — they fall through to the regular
     ``Unknown skill`` error path. That's the only way a typo like
     ``spatail-pipeline`` produces a sensible message."""
-    from omicsclaw.core import skill_runner
-    import omicsclaw.core.runtime.pipeline_config as pipeline_config
+    from omicsclaw.skill import runner as skill_runner
+    import omicsclaw.skill.execution.pipeline_config as pipeline_config
 
     monkeypatch.setattr(pipeline_config, "PIPELINES_DIR", tmp_path, raising=False)
     # No YAML exists in tmp_path → run_pipeline_by_name returns None and the
@@ -258,8 +258,8 @@ def test_run_skill_dispatcher_routes_pipeline_alias_to_run_pipeline_by_name(
     ``run_pipeline_by_name`` before the skill registry lookup. Verified by
     intercepting that helper directly so we don't need to stand up real
     skill scripts."""
-    from omicsclaw.core import skill_runner
-    from omicsclaw.core.skill_result import build_skill_run_result
+    from omicsclaw.skill import runner as skill_runner
+    from omicsclaw.skill.result import build_skill_run_result
 
     captured: dict[str, object] = {}
     sentinel = build_skill_run_result(

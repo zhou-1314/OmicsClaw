@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from omicsclaw.core.registry import ensure_registry_loaded, registry
+from omicsclaw.skill.registry import ensure_registry_loaded, registry
 
 LOGGER = logging.getLogger("omicsclaw.runtime.context_layers")
 PROJECT_ROOT = Path(__file__).resolve().parents[3]

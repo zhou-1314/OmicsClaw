@@ -5,7 +5,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from omicsclaw.core.registry import registry
+from omicsclaw.skill.registry import registry
 
 
 def test_registry_import_does_not_require_package_file():
@@ -15,7 +15,7 @@ import importlib
 import omicsclaw
 
 omicsclaw.__file__ = None
-registry = importlib.import_module("omicsclaw.core.registry")
+registry = importlib.import_module("omicsclaw.skill.registry")
 assert registry.OMICSCLAW_DIR.name == "OmicsClaw"
 assert registry.SKILLS_DIR.name == "skills"
 """
@@ -89,13 +89,13 @@ def test_registry_loads_top_level_literature_skill():
 def test_skill_runner_sees_registry_invalidate_after_load():
     """``registry.invalidate()`` must affect subsequent reads by the runner.
 
-    Pre-fix ``omicsclaw.core.skill_runner`` cached ``SKILLS = registry.skills``
+    Pre-fix ``omicsclaw.skill.runner`` cached ``SKILLS = registry.skills``
     at module-import time, so calls to ``registry.invalidate()`` /
     ``registry.reload()`` left the runner pointing at a stale dict and
     operators saw "skill not found" errors that did not match the live
     filesystem.
     """
-    from omicsclaw.core import skill_runner
+    from omicsclaw.skill import runner as skill_runner
 
     registry.load_all()
     assert "spatial-preprocess" in registry.skills, "preconditions failed"
@@ -103,7 +103,7 @@ def test_skill_runner_sees_registry_invalidate_after_load():
     try:
         registry.invalidate()
         # After invalidate the live dict is empty and the runner must see it.
-        from omicsclaw.core.registry import ensure_registry_loaded as _ensure
+        from omicsclaw.skill.registry import ensure_registry_loaded as _ensure
 
         # Re-bind the live view the runner reads from; the runner accesses
         # ``ensure_registry_loaded().skills`` per call, not a frozen snapshot.
@@ -125,8 +125,8 @@ def test_registry_reload_clears_stale_entries_for_runner():
     """``registry.reload()`` must let the runner pick up filesystem changes
     rather than continuing to return entries from a stale dict snapshot.
     """
-    from omicsclaw.core import skill_runner
-    from omicsclaw.core.registry import ensure_registry_loaded
+    from omicsclaw.skill import runner as skill_runner
+    from omicsclaw.skill.registry import ensure_registry_loaded
 
     registry.load_all()
     assert "spatial-preprocess" in registry.skills

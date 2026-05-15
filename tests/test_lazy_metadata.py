@@ -1,5 +1,5 @@
 from pathlib import Path
-from omicsclaw.core.lazy_metadata import LazySkillMetadata
+from omicsclaw.skill.lazy_metadata import LazySkillMetadata
 
 def test_lazy_metadata_loads_basic_info():
     skill_path = Path("skills/spatial/spatial-preprocess")

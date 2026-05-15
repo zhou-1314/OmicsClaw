@@ -10,7 +10,7 @@ from bot.core import (
     execute_create_omics_skill,
     execute_custom_analysis_execute,
 )
-from omicsclaw.core.skill_scaffolder import SkillScaffoldResult
+from omicsclaw.skill.scaffolder import SkillScaffoldResult
 from omicsclaw.knowledge.retriever import _push_runtime_notice, clear_runtime_notices
 from omicsclaw.runtime.policy import TOOL_POLICY_REQUIRE_APPROVAL, ToolPolicyDecision
 from omicsclaw.runtime.tool_orchestration import (
@@ -24,7 +24,7 @@ from omicsclaw.runtime.tool_spec import APPROVAL_MODE_ASK, ToolSpec
 @pytest.mark.asyncio
 async def test_execute_create_omics_skill_includes_gate_summary(monkeypatch):
     monkeypatch.setattr(
-        "omicsclaw.core.skill_scaffolder.create_skill_scaffold",
+        "omicsclaw.skill.scaffolder.create_skill_scaffold",
         lambda **_kwargs: SkillScaffoldResult(
             skill_name="demo-skill",
             domain="spatial",
@@ -64,7 +64,7 @@ class _FakeCapabilityDecision:
 @pytest.mark.asyncio
 async def test_execute_custom_analysis_execute_includes_gate_summary(monkeypatch):
     monkeypatch.setattr(
-        "omicsclaw.core.capability_resolver.resolve_capability",
+        "omicsclaw.skill.capability_resolver.resolve_capability",
         lambda *_args, **_kwargs: _FakeCapabilityDecision(),
     )
     monkeypatch.setattr(

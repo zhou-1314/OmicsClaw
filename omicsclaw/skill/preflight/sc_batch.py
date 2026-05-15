@@ -14,8 +14,8 @@ hard-coded helpers; for now the module owns its own scoring rules and
 clarification-message rendering.
 
 Skill registry metadata is resolved via
-``omicsclaw.runtime.skill_lookup.lookup_skill_info`` and chain steps
-run through ``omicsclaw.runtime.skill_chain.run_omics_skill_step`` —
+``omicsclaw.skill.lookup.lookup_skill_info`` and chain steps
+run through ``omicsclaw.skill.chain.run_omics_skill_step`` —
 both top-level imports. ``_auto_prepare_sc_batch_integration`` returns
 a control-signal dict so the user-facing tool entry can run the final
 ``sc-batch-integration`` step itself; this module never reaches back
@@ -28,10 +28,10 @@ import logging
 import re
 from pathlib import Path
 
-from omicsclaw.runtime.skill_chain import run_omics_skill_step
-from omicsclaw.runtime.skill_lookup import lookup_skill_info
+from ..chain import run_omics_skill_step
+from ..lookup import lookup_skill_info
 
-logger = logging.getLogger("omicsclaw.runtime.preflight.sc_batch")
+logger = logging.getLogger("omicsclaw.skill.preflight.sc_batch")
 
 
 # ---------------------------------------------------------------------------

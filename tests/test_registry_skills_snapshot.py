@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from omicsclaw.core.registry import OmicsRegistry
+from omicsclaw.skill.registry import OmicsRegistry
 
 
 # Fields every skill entry must expose with the documented type.

@@ -158,7 +158,7 @@ from omicsclaw.common.user_guidance import (
     render_guidance_block,
     strip_user_guidance_lines,
 )
-from omicsclaw.core.registry import ensure_registry_loaded, registry
+from omicsclaw.skill.registry import ensure_registry_loaded, registry
 from omicsclaw.runtime.tool_result_store import ToolResultStore
 from omicsclaw.runtime.transcript_store import (
     TranscriptStore,
@@ -450,8 +450,8 @@ DEEP_LEARNING_METHODS = {
     "scanvi", "cellassign",
 }
 
-# sc-batch-integration preflight — extracted to omicsclaw.runtime.preflight.sc_batch per ADR 0001.
-from omicsclaw.runtime.preflight.sc_batch import (
+# sc-batch-integration preflight — extracted to omicsclaw.skill.preflight.sc_batch per ADR 0001.
+from omicsclaw.skill.preflight.sc_batch import (
     _BATCH_KEY_EXACT_PREFERENCES,
     _BATCH_KEY_EXCLUDED_COLUMNS,
     _BATCH_KEY_HINT_TERMS,

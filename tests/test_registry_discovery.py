@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from omicsclaw.core.registry import OmicsRegistry
+from omicsclaw.skill.registry import OmicsRegistry
 
 
 def _write_skill(

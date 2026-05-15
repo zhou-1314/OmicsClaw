@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 from rich.console import Console
 
-from omicsclaw.core.registry import OmicsRegistry
+from omicsclaw.skill.registry import OmicsRegistry
 from omicsclaw.interactive import interactive
 from omicsclaw.interactive._session_state import SessionState
 from omicsclaw.interactive._session_command_support import (

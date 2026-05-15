@@ -20,7 +20,7 @@ sys.path.insert(0, str(_ROOT / "scripts"))
 
 import migrate_skill  # noqa: E402
 
-from omicsclaw.core.lazy_metadata import LazySkillMetadata  # noqa: E402
+from omicsclaw.skill.lazy_metadata import LazySkillMetadata  # noqa: E402
 
 
 LEGACY_FRONTMATTER = {
