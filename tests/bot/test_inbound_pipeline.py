@@ -81,7 +81,7 @@ def test_run_py_does_not_build_middleware() -> None:
     """``bot/run.py`` and ``omicsclaw/app/server.py`` must not reference
     ``_build_middleware`` (deleted in Phase 1 P0-A Slice A)."""
     offenders: list[str] = []
-    for rel in ("bot/run.py", "omicsclaw/app/server.py"):
+    for rel in ("omicsclaw/run_channels.py", "omicsclaw/app/server.py"):
         path = REPO_ROOT / rel
         if not path.exists():
             continue
