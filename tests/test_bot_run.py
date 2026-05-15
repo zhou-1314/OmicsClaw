@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from bot import run
-from omicsclaw.core.provider_registry import PROVIDER_PRESETS
+from omicsclaw.providers.registry import PROVIDER_PRESETS
 
 
 def test_resolve_bootstrap_llm_config_uses_provider_specific_key():

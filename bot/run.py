@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Mapping
 
 from omicsclaw.common.runtime_env import load_env_file
-from omicsclaw.core.provider_registry import detect_provider_from_env, resolve_provider
+from omicsclaw.providers.registry import detect_provider_from_env, resolve_provider
 
 # Ensure project root on sys.path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent

@@ -133,7 +133,7 @@ def _oauth_cli_choices() -> list[str]:
     will then error out gracefully inside the handler).
     """
     try:
-        from omicsclaw.core.ccproxy_manager import oauth_cli_aliases
+        from omicsclaw.providers.ccproxy import oauth_cli_aliases
         return oauth_cli_aliases()
     except Exception:
         return ["claude", "anthropic", "openai", "codex"]
@@ -147,7 +147,7 @@ def _handle_auth_command(args) -> None:
     multi-provider status view. All OAuth flow logic lives in ccproxy.
     """
     try:
-        from omicsclaw.core.ccproxy_manager import (
+        from omicsclaw.providers.ccproxy import (
             OAUTH_PROVIDERS,
             ccproxy_diagnostic_hint,
             ccproxy_executable,

@@ -255,7 +255,7 @@ DEPRECATED_PROVIDER_DEFAULT_MODELS: dict[str, frozenset[str]] = {
 
 # --------------------------------------------------------------------------- #
 # OAuth support was previously declared here. It now lives entirely in
-# ``omicsclaw.core.ccproxy_manager`` (the only module that actually runs
+# ``omicsclaw.providers.ccproxy`` (the only module that actually runs
 # ccproxy) — see the ``OAUTH_PROVIDERS`` table there. This module stays
 # dependency-light and OAuth-agnostic per its original design.
 
@@ -278,7 +278,7 @@ def get_provider_display_metadata(provider_name: str) -> ProviderDisplayMetadata
 def build_provider_registry_entries(
     provider_presets: Mapping[str, ProviderPreset] = PROVIDER_PRESETS,
 ) -> list[ProviderRegistryEntry]:
-    from omicsclaw.core.llm_models import get_context_window
+    from .models import get_context_window
 
     entries: list[ProviderRegistryEntry] = []
     for name, (base_url, default_model, env_key) in provider_presets.items():
@@ -559,7 +559,7 @@ def get_langchain_llm(
     )
 
     # Lazy import — keep this module dependency-light at import time.
-    from omicsclaw.core.llm_models import get_default_features
+    from .models import get_default_features
 
     default_features = get_default_features(
         provider_key, resolved_model, base_url=resolved_url or "",

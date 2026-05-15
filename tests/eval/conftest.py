@@ -66,7 +66,7 @@ def eval_runtime_config() -> EvalRuntimeConfig:
     """Effective eval runtime config (model + base_url + key) for this run.
 
     Delegates to ``resolve_eval_config`` so eval and production both
-    consume ``omicsclaw.core.provider_registry.resolve_provider``.
+    consume ``omicsclaw.providers.registry.resolve_provider``.
 
     Function-scoped so ``monkeypatch.setenv`` in any future test sees a
     freshly-resolved config — caching is cheap (dict lookups), so there

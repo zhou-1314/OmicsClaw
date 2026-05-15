@@ -78,7 +78,7 @@ from bot.tool_executors import (
 )
 
 from omicsclaw.common.user_guidance import strip_user_guidance_lines
-from omicsclaw.core.llm_timeout import build_llm_timeout_policy
+from omicsclaw.providers.timeout import build_llm_timeout_policy
 from omicsclaw.engine import (
     EngineDependencies,
     apply_model_identity_anchor,
@@ -166,7 +166,7 @@ def _format_llm_api_error_message(exc: Exception) -> str:
     provider = (_core.LLM_PROVIDER_NAME or "").strip().lower()
     base_url = ""
     try:
-        from omicsclaw.core.provider_runtime import get_active_provider_runtime
+        from omicsclaw.providers.runtime import get_active_provider_runtime
 
         runtime = get_active_provider_runtime()
         base_url = str(getattr(runtime, "base_url", "") or "").strip()

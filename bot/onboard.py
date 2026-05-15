@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-from omicsclaw.core.provider_registry import (
+from omicsclaw.providers.registry import (
     PROVIDER_CHOICES,
     PROVIDER_PRESETS,
     detect_provider_from_env,

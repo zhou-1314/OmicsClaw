@@ -9,7 +9,7 @@ from omicsclaw.common.user_guidance import (
     extract_user_guidance_payloads,
     render_guidance_block,
 )
-from omicsclaw.core.llm_patches import apply_deepseek_reasoning_passback
+from omicsclaw.providers.patches import apply_deepseek_reasoning_passback
 
 from .context_budget import estimate_message_size
 from .context_compaction import (

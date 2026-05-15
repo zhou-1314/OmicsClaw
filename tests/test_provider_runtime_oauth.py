@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-from omicsclaw.core import provider_runtime as pr
-from omicsclaw.core.ccproxy_manager import (
+from omicsclaw.providers import runtime as pr
+from omicsclaw.providers.ccproxy import (
     OAUTH_PROVIDERS,
     provider_supports_oauth,
 )

@@ -1,9 +1,9 @@
-"""Tests for omicsclaw.core.llm_models — the LLM model catalog."""
+"""Tests for omicsclaw.providers.models — the LLM model catalog."""
 from __future__ import annotations
 
 import pytest
 
-from omicsclaw.core.llm_models import (
+from omicsclaw.providers.models import (
     MODEL_CATALOG,
     ModelInfo,
     all_short_names,

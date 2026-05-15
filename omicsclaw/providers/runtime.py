@@ -10,21 +10,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping
 
-from omicsclaw.core.provider_registry import (
+from .registry import (
     PROVIDER_PRESETS,
     detect_provider_from_env,
     resolve_provider,
 )
-# OAuth identity lives in ccproxy_manager (the only module that actually
-# runs ccproxy). provider_runtime just needs the two small helpers to
-# rewrite base_url / validate provider support when auth_mode="oauth".
-from omicsclaw.core.ccproxy_manager import (
+from .ccproxy import (
     oauth_base_url,
     provider_supports_oauth,
 )
 
 # Default port used when ``auth_mode="oauth"`` but no explicit port is given.
-# Kept in sync with ``omicsclaw.core.ccproxy_manager.DEFAULT_CCPROXY_PORT``.
+# Kept in sync with ``omicsclaw.providers.ccproxy.DEFAULT_CCPROXY_PORT``.
 # Deliberately avoids 8765 (OmicsClaw app-server default) to prevent the
 # ccproxy subprocess from trying to bind the same port as the app-server.
 DEFAULT_CCPROXY_PORT: int = 11435

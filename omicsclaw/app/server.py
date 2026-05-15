@@ -3557,7 +3557,7 @@ async def list_providers():
     core = _get_core()
 
     try:
-        from omicsclaw.core.provider_registry import (
+        from omicsclaw.providers.registry import (
             PROVIDER_PRESETS,
             build_provider_registry_entries,
         )
@@ -3589,7 +3589,7 @@ async def list_providers():
         ]
 
     try:
-        from omicsclaw.core.ccproxy_manager import provider_supports_oauth
+        from omicsclaw.providers.ccproxy import provider_supports_oauth
     except ImportError:
         def provider_supports_oauth(_name: str) -> bool:  # type: ignore[no-redef]
             return False
@@ -3654,7 +3654,7 @@ def _cached_oauth_statuses() -> dict[str, dict[str, object]]:
 
     result: dict[str, dict[str, object]] = {}
     try:
-        from omicsclaw.core.ccproxy_manager import (
+        from omicsclaw.providers.ccproxy import (
             OAUTH_PROVIDERS,
             check_ccproxy_auth,
             is_ccproxy_available,
@@ -3727,8 +3727,8 @@ async def switch_provider(req: ProviderSwitchRequest):
 
     # Validate provider name
     try:
-        from omicsclaw.core.provider_registry import PROVIDER_PRESETS
-        from omicsclaw.core.ccproxy_manager import provider_supports_oauth
+        from omicsclaw.providers.registry import PROVIDER_PRESETS
+        from omicsclaw.providers.ccproxy import provider_supports_oauth
         if req.provider not in PROVIDER_PRESETS and req.provider != "custom":
             raise HTTPException(400, detail=f"Unknown provider: {req.provider}")
     except ImportError:
@@ -3843,7 +3843,7 @@ async def test_provider(req: ProviderTestRequest):
     )
 
     try:
-        from omicsclaw.core.provider_runtime import (
+        from omicsclaw.providers.runtime import (
             provider_requires_api_key,
             resolve_provider_runtime,
         )
@@ -3923,7 +3923,7 @@ def _resolve_oauth_provider_alias(name: str) -> str:
     Delegates to ``ccproxy_manager.normalize_oauth_provider`` (the single
     source of truth) and re-raises as HTTP 400 for FastAPI callers.
     """
-    from omicsclaw.core.ccproxy_manager import normalize_oauth_provider
+    from omicsclaw.providers.ccproxy import normalize_oauth_provider
     try:
         return normalize_oauth_provider(name)
     except ValueError as exc:
@@ -3964,7 +3964,7 @@ def _wrap_with_env_unset(command: str, vars_to_unset: list[str]) -> str:
 
 def _require_ccproxy_available() -> None:
     try:
-        from omicsclaw.core.ccproxy_manager import (
+        from omicsclaw.providers.ccproxy import (
             ccproxy_diagnostic_hint,
             is_ccproxy_available,
             oauth_install_hint,
@@ -3993,7 +3993,7 @@ async def oauth_status(provider: str):
     """
     omics_name = _resolve_oauth_provider_alias(provider)
     _require_ccproxy_available()
-    from omicsclaw.core.ccproxy_manager import check_ccproxy_auth
+    from omicsclaw.providers.ccproxy import check_ccproxy_auth
     # check_ccproxy_auth accepts any alias; pass canonical for clarity.
     ok, msg = check_ccproxy_auth(omics_name)
     # invalidate cache so the next /providers poll reflects this probe
@@ -4016,7 +4016,7 @@ async def oauth_login(provider: str):
     """
     omics_name = _resolve_oauth_provider_alias(provider)
     _require_ccproxy_available()
-    from omicsclaw.core.ccproxy_manager import get_oauth_provider
+    from omicsclaw.providers.ccproxy import get_oauth_provider
 
     target = get_oauth_provider(omics_name).ccproxy_target
     empty_proxies = _empty_proxy_env_vars()
@@ -4050,12 +4050,12 @@ async def oauth_logout(provider: str):
     """Invoke ``ccproxy auth logout`` for the given provider."""
     omics_name = _resolve_oauth_provider_alias(provider)
     _require_ccproxy_available()
-    from omicsclaw.core.ccproxy_manager import (
+    from omicsclaw.providers.ccproxy import (
         ccproxy_executable,
         clear_ccproxy_env,
         get_oauth_provider,
     )
-    from omicsclaw.core.provider_runtime import (
+    from omicsclaw.providers.runtime import (
         clear_active_provider_runtime,
         get_active_provider_runtime,
     )

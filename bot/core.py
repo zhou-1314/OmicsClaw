@@ -31,18 +31,18 @@ from pathlib import Path
 from openai import APIError, AsyncOpenAI, OpenAIError  # APIError + OpenAIError kept for bot.session.init() monkeypatch + bot.session error-handling
 
 from omicsclaw.common.runtime_env import load_project_dotenv
-from omicsclaw.core.llm_timeout import (
+from omicsclaw.providers.timeout import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     DEFAULT_LLM_TIMEOUT_SECONDS,
     build_llm_timeout_policy,
 )
-from omicsclaw.core.provider_registry import (
+from omicsclaw.providers.registry import (
     PROVIDER_DETECT_ORDER,
     PROVIDER_PRESETS,
     normalize_model_for_provider,
     resolve_provider,
 )
-from omicsclaw.core.provider_runtime import (
+from omicsclaw.providers.runtime import (
     provider_requires_api_key,
     set_active_provider_runtime,
 )

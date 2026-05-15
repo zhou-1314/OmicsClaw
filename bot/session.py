@@ -20,12 +20,12 @@ import logging
 import os
 from datetime import datetime, timezone
 
-from omicsclaw.core.provider_registry import (
+from omicsclaw.providers.registry import (
     PROVIDER_PRESETS,
     normalize_model_for_provider,
     resolve_provider,
 )
-from omicsclaw.core.provider_runtime import (
+from omicsclaw.providers.runtime import (
     provider_requires_api_key,
     set_active_provider_runtime,
 )
@@ -157,7 +157,7 @@ def init(
     auth_mode_normalized = str(auth_mode or "api_key").strip().lower() or "api_key"
 
     try:
-        from omicsclaw.core.ccproxy_manager import clear_ccproxy_env
+        from omicsclaw.providers.ccproxy import clear_ccproxy_env
         clear_ccproxy_env()
     except Exception:
         pass
@@ -200,7 +200,7 @@ def init(
     effective_base_url = str(resolved_url or "")
 
     if auth_mode_normalized == "oauth":
-        from omicsclaw.core.ccproxy_manager import (
+        from omicsclaw.providers.ccproxy import (
             OAUTH_PROVIDERS,
             maybe_start_ccproxy,
             provider_supports_oauth,

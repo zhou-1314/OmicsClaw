@@ -18,8 +18,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from omicsclaw.core import ccproxy_manager as ccm
-from omicsclaw.core import provider_runtime as pr
+from omicsclaw.providers import ccproxy as ccm
+from omicsclaw.providers import runtime as pr
 
 
 @pytest.fixture(autouse=True)
@@ -133,7 +133,7 @@ def test_bug3_clear_ccproxy_env_no_provider_clears_both():
 
 def test_bug3_api_key_mode_after_oauth_sees_clean_env(monkeypatch):
     """Full reproducer: OAuth session → api_key resolve must hit cloud URL."""
-    from omicsclaw.core.provider_registry import resolve_provider
+    from omicsclaw.providers.registry import resolve_provider
 
     # Simulate a prior OAuth session leaving env polluted.
     ccm.setup_ccproxy_env("anthropic", 9999)
@@ -340,7 +340,7 @@ def test_oauth_providers_table_is_self_consistent():
     break, it means someone added a row without filling all required
     fields, or the backwards-compat views drifted from the table.
     """
-    from omicsclaw.core.ccproxy_manager import (
+    from omicsclaw.providers.ccproxy import (
         CCPROXY_PROVIDER_MAP,
         CLI_PROVIDER_ALIASES,
         OAUTH_PROVIDERS,
@@ -409,7 +409,7 @@ def test_bug7_bootstrap_degrades_for_unsupported_provider(monkeypatch, caplog):
 def test_bug8_core_init_normalizes_stale_cross_provider_model(monkeypatch, caplog):
     """provider remains authoritative; stale foreign default model is repaired."""
     from bot import core as botcore
-    from omicsclaw.core.provider_registry import PROVIDER_PRESETS
+    from omicsclaw.providers.registry import PROVIDER_PRESETS
 
     monkeypatch.setattr(botcore, "AsyncOpenAI", MagicMock())
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from omicsclaw.core.provider_registry import (
+from omicsclaw.providers.registry import (
     PROVIDER_PRESETS,
     detect_provider_from_env,
     resolve_provider,

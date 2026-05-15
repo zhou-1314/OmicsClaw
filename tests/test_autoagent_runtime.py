@@ -274,7 +274,7 @@ def test_call_llm_reuses_active_provider_runtime(monkeypatch, tmp_path):
     from omicsclaw.autoagent.metrics_registry import MetricDef
     from omicsclaw.autoagent.optimization_loop import OptimizationLoop
     from omicsclaw.autoagent.search_space import ParameterDef, SearchSpace
-    from omicsclaw.core.provider_runtime import (
+    from omicsclaw.providers.runtime import (
         clear_active_provider_runtime,
         set_active_provider_runtime,
     )

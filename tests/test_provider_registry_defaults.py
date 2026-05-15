@@ -1,11 +1,11 @@
 """Tests verifying default-model upgrades and llm_models integration in
-omicsclaw.core.provider_registry.
+omicsclaw.providers.registry.
 """
 from __future__ import annotations
 
 import pytest
 
-from omicsclaw.core.provider_registry import (
+from omicsclaw.providers.registry import (
     PROVIDER_PRESETS,
     get_langchain_llm,
 )

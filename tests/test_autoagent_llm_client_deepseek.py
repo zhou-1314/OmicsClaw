@@ -45,11 +45,11 @@ def test_deepseek_provider_applies_passback(monkeypatch, fake_openai_client):
     runtime = _stub_runtime("deepseek")
 
     monkeypatch.setattr(
-        "omicsclaw.core.provider_runtime.resolve_provider_runtime",
+        "omicsclaw.providers.runtime.resolve_provider_runtime",
         lambda **_: runtime,
     )
     monkeypatch.setattr(
-        "omicsclaw.core.provider_runtime.provider_requires_api_key",
+        "omicsclaw.providers.runtime.provider_requires_api_key",
         lambda *_: True,
     )
 
@@ -66,11 +66,11 @@ def test_non_deepseek_provider_skips_passback(monkeypatch, fake_openai_client):
     runtime = _stub_runtime("openai", model="gpt-5.5")
 
     monkeypatch.setattr(
-        "omicsclaw.core.provider_runtime.resolve_provider_runtime",
+        "omicsclaw.providers.runtime.resolve_provider_runtime",
         lambda **_: runtime,
     )
     monkeypatch.setattr(
-        "omicsclaw.core.provider_runtime.provider_requires_api_key",
+        "omicsclaw.providers.runtime.provider_requires_api_key",
         lambda *_: True,
     )
 
@@ -88,11 +88,11 @@ def test_deepseek_extra_body_forwarded_from_catalog(monkeypatch, fake_openai_cli
     runtime = _stub_runtime("deepseek", model="deepseek-v4-pro")
 
     monkeypatch.setattr(
-        "omicsclaw.core.provider_runtime.resolve_provider_runtime",
+        "omicsclaw.providers.runtime.resolve_provider_runtime",
         lambda **_: runtime,
     )
     monkeypatch.setattr(
-        "omicsclaw.core.provider_runtime.provider_requires_api_key",
+        "omicsclaw.providers.runtime.provider_requires_api_key",
         lambda *_: True,
     )
 

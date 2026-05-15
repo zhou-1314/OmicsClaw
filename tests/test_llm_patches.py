@@ -1,4 +1,4 @@
-"""Tests for omicsclaw.core.llm_patches — runtime helpers."""
+"""Tests for omicsclaw.providers.patches — runtime helpers."""
 from __future__ import annotations
 
 import asyncio
@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 
-from omicsclaw.core.llm_patches import (
+from omicsclaw.providers.patches import (
     apply_deepseek_reasoning_passback,
     discover_ollama_models,
     discover_ollama_models_async,

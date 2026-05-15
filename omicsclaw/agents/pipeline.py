@@ -36,8 +36,8 @@ from omicsclaw.agents.pipeline_result import (
     PipelineRunResult,
     PlanRunResult,
 )
-from omicsclaw.core.provider_registry import get_langchain_llm
-from omicsclaw.core.llm_timeout import build_llm_timeout_policy
+from omicsclaw.providers.registry import get_langchain_llm
+from omicsclaw.providers.timeout import build_llm_timeout_policy
 from omicsclaw.runtime.task_store import (
     TASK_STATUS_COMPLETED,
     TASK_STATUS_FAILED,
