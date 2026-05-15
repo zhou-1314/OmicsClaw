@@ -13,8 +13,8 @@ from typing import Any
 from omicsclaw.common.manifest import StepRecord
 from omicsclaw.common.report import build_output_dir_name
 from omicsclaw.agents.notebook_session import NotebookSession
-from omicsclaw.runtime.hooks import build_default_lifecycle_hook_runtime
-from omicsclaw.runtime.verification import (
+from omicsclaw.runtime.tools.hooks import build_default_lifecycle_hook_runtime
+from omicsclaw.runtime.policy.verification import (
     COMPLETION_STATUS_FAILED,
     WORKSPACE_KIND_ANALYSIS_RUN,
     ArtifactRequirement,

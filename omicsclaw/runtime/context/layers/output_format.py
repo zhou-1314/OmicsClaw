@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from ..context_layers import ContextAssemblyRequest
-from ..output_styles import render_output_style_layer
+from . import ContextAssemblyRequest
+from ...output_styles import render_output_style_layer
 
 
 def build_output_format_layer(request: ContextAssemblyRequest) -> str | None:

@@ -9,8 +9,8 @@ from omicsclaw.skill.registry import OmicsRegistry
 def _fresh_import_bot_core():
     for module_name in (
         "bot.core",
-        "omicsclaw.runtime.context_assembler",
-        "omicsclaw.runtime.context_layers",
+        "omicsclaw.runtime.context.assembler",
+        "omicsclaw.runtime.context.layers",
     ):
         sys.modules.pop(module_name, None)
     return importlib.import_module("bot.core")

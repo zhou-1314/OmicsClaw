@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .engineering_tools import build_engineering_tool_specs
-from .tool_registry import ToolRegistry
-from .tool_spec import (
+from .engineering import build_engineering_tool_specs
+from ..registry import ToolRegistry
+from ..spec import (
     APPROVAL_MODE_ASK,
     PROGRESS_POLICY_ANALYSIS,
     RESULT_POLICY_INSPECTION_REFERENCE,
@@ -1002,7 +1002,7 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
     # are absent from the map and keep predicate=None. The runtime
     # ``select_tool_specs`` filter then drops the lazy tools whose
     # predicate doesn't fire for the current request.
-    from .tool_predicates import attach_predicates as _attach_predicates
+    from ..predicates import attach_predicates as _attach_predicates
 
     return list(_attach_predicates(tuple(specs)))
 

@@ -11,40 +11,40 @@ from omicsclaw.common.user_guidance import (
 )
 from omicsclaw.providers.patches import apply_deepseek_reasoning_passback
 
-from .context_budget import estimate_message_size
-from .context_compaction import (
+from ..context.budget import estimate_message_size
+from ..context.compaction import (
     CompactionEvent,
     ContextCompactionConfig,
     PreparedModelMessages,
     prepare_model_messages,
     wrap_compaction_summary,
 )
-from .events import (
+from ..tools.hooks import (
     EVENT_SESSION_RESUME,
     EVENT_SESSION_START,
     EVENT_TOOL_AFTER,
     EVENT_TOOL_BEFORE,
     EVENT_TOOL_FAILURE,
 )
-from .hook_payloads import SessionHookPayload, ToolHookPayload
-from .hooks import HOOK_MODE_CONTEXT, HOOK_MODE_NOTICE
-from .policy import TOOL_POLICY_REQUIRE_APPROVAL, evaluate_tool_policy
-from .hooks import LifecycleHookRuntime
-from .policy_state import ToolPolicyState
-from .tool_execution_hooks import (
+from ..tools.hooks import SessionHookPayload, ToolHookPayload
+from ..tools.hooks import HOOK_MODE_CONTEXT, HOOK_MODE_NOTICE
+from ..policy.policy import TOOL_POLICY_REQUIRE_APPROVAL, evaluate_tool_policy
+from ..tools.hooks import LifecycleHookRuntime
+from ..policy.state import ToolPolicyState
+from ..tools.execution_hooks import (
     build_default_tool_execution_hooks,
     merge_tool_execution_hooks,
 )
-from .tool_orchestration import (
+from ..tools.orchestration import (
     EXECUTION_STATUS_POLICY_BLOCKED,
     ToolExecutionRequest,
     ToolExecutionResult,
     execute_tool_requests,
 )
-from .tool_registry import ToolRuntime
-from .tool_result_store import ToolResultRecord, ToolResultStore
-from .transcript_store import TranscriptStore
-from .token_budget import (
+from ..tools.registry import ToolRuntime
+from ..storage.tool_result import ToolResultRecord, ToolResultStore
+from ..storage.transcript import TranscriptStore
+from ..context.budget import (
     check_token_budget,
     create_token_budget_tracker,
     record_completion_tokens,
@@ -883,7 +883,7 @@ async def run_query_engine(
             # right before it reasons about the result. This is the
             # runtime wiring of ``PreCallRuleInjector`` —
             # ``build_pre_call_rule_text`` is otherwise dead abstraction.
-            from .tool_execution_hooks import (
+            from ..tools.execution_hooks import (
                 DEFAULT_PRE_CALL_RULE_INJECTORS,
                 build_pre_call_rule_text,
             )

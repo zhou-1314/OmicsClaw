@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from omicsclaw.skill.registry import OMICSCLAW_DIR
-from omicsclaw.runtime.system_prompt import build_system_prompt
+from omicsclaw.runtime.context.system_prompt import build_system_prompt
 
 # =============================================================================
 # Main orchestrator workflow

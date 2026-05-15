@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .events import EVENT_TASK_COMPLETED, EVENT_TASK_STARTED
-from .hook_payloads import TaskHookPayload
+from ..tools.hooks import EVENT_TASK_COMPLETED, EVENT_TASK_STARTED
+from ..tools.hooks import TaskHookPayload
 
 TASK_STATUS_PENDING = "pending"
 TASK_STATUS_IN_PROGRESS = "in_progress"

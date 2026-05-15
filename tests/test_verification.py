@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 
 from omicsclaw.common.manifest import read_manifest
-from omicsclaw.runtime.events import EVENT_VERIFICATION_COMPLETED
-from omicsclaw.runtime.hooks import LifecycleHookRuntime, LifecycleHookSpec
-from omicsclaw.runtime.verification import (
+from omicsclaw.runtime.tools.hooks import EVENT_VERIFICATION_COMPLETED
+from omicsclaw.runtime.tools.hooks import LifecycleHookRuntime, LifecycleHookSpec
+from omicsclaw.runtime.policy.verification import (
     ArtifactRequirement,
     COMPLETION_STATUS_COMPLETE,
     COMPLETION_STATUS_INCOMPLETE,

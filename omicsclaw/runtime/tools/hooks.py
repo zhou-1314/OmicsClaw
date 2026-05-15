@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from string import Formatter
 from typing import Any, Callable, Mapping
@@ -9,8 +10,9 @@ from typing import Any, Callable, Mapping
 from omicsclaw.extensions.loader import list_installed_extensions
 from omicsclaw.extensions.manifest import discover_extension_manifest, load_extension_manifest
 
-from .events import LifecycleEvent, VALID_LIFECYCLE_EVENTS
-from .hook_payloads import payload_to_dict
+# ``LifecycleEvent`` / ``VALID_LIFECYCLE_EVENTS`` / event-name constants /
+# ``payload_to_dict`` are defined further down in this file (merged in from
+# the former ``events.py`` and ``hook_payloads.py`` modules).
 
 HOOK_MODE_NOTICE = "notice"
 HOOK_MODE_CONTEXT = "context"
@@ -383,17 +385,192 @@ def format_hook_notice_block(notices: list[str] | tuple[str, ...]) -> str:
     return "\n".join(f"Hook notice: {line}" for line in lines)
 
 
+# --------------------------------------------------------------------------- #
+# Lifecycle event constants (was events.py — merged here so the hook system's
+# event names, payload helpers, and dispatch live in one place).
+# --------------------------------------------------------------------------- #
+
+
+EVENT_SESSION_START = "session_start"
+EVENT_SESSION_RESUME = "session_resume"
+EVENT_PLAN_CREATED = "plan_created"
+EVENT_PLAN_APPROVED = "plan_approved"
+EVENT_TASK_STARTED = "task_started"
+EVENT_TASK_COMPLETED = "task_completed"
+EVENT_TOOL_BEFORE = "tool_before"
+EVENT_TOOL_AFTER = "tool_after"
+EVENT_TOOL_FAILURE = "tool_failure"
+EVENT_VERIFICATION_COMPLETED = "verification_completed"
+EVENT_EXTENSION_INSTALLED = "extension_installed"
+EVENT_PREDICATE_HIT = "predicate_hit"
+EVENT_PREDICATE_MISS = "predicate_miss"
+
+VALID_LIFECYCLE_EVENTS = frozenset(
+    {
+        EVENT_SESSION_START,
+        EVENT_SESSION_RESUME,
+        EVENT_PLAN_CREATED,
+        EVENT_PLAN_APPROVED,
+        EVENT_TASK_STARTED,
+        EVENT_TASK_COMPLETED,
+        EVENT_TOOL_BEFORE,
+        EVENT_TOOL_AFTER,
+        EVENT_TOOL_FAILURE,
+        EVENT_VERIFICATION_COMPLETED,
+        EVENT_EXTENSION_INSTALLED,
+        EVENT_PREDICATE_HIT,
+        EVENT_PREDICATE_MISS,
+    }
+)
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+@dataclass(frozen=True, slots=True)
+class LifecycleEvent:
+    name: str
+    payload: dict[str, Any]
+    surface: str = ""
+    session_id: str = ""
+    chat_id: str = ""
+    workspace: str = ""
+    source: str = ""
+    timestamp: str = field(default_factory=_utcnow_iso)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "payload": dict(self.payload),
+            "surface": self.surface,
+            "session_id": self.session_id,
+            "chat_id": self.chat_id,
+            "workspace": self.workspace,
+            "source": self.source,
+            "timestamp": self.timestamp,
+        }
+
+
+# --------------------------------------------------------------------------- #
+# Hook payload helpers (was hook_payloads.py).
+# --------------------------------------------------------------------------- #
+
+
+def payload_to_dict(payload: Any) -> dict[str, Any]:
+    if payload is None:
+        return {}
+    if isinstance(payload, Mapping):
+        return {str(key): value for key, value in payload.items()}
+    if is_dataclass(payload):
+        return asdict(payload)
+    raise TypeError(f"Unsupported hook payload type: {type(payload)!r}")
+
+
+@dataclass(frozen=True, slots=True)
+class SessionHookPayload:
+    chat_id: str
+    session_id: str = ""
+    surface: str = ""
+    resumed: bool = False
+    message_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class PlanHookPayload:
+    request: str
+    plan_kind: str
+    status: str
+    task_count: int
+    workspace: str = ""
+    session_id: str = ""
+    source: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class TaskHookPayload:
+    task_id: str
+    title: str
+    status: str
+    owner: str = ""
+    summary: str = ""
+    workspace: str = ""
+    plan_kind: str = ""
+    source: str = ""
+    artifact_refs: tuple[str, ...] = ()
+    previous_status: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ToolHookPayload:
+    tool_name: str
+    call_id: str = ""
+    status: str = ""
+    success: bool = False
+    surface: str = ""
+    session_id: str = ""
+    chat_id: str = ""
+    policy_action: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationHookPayload:
+    workspace: str
+    workspace_kind: str
+    workspace_purpose: str
+    status: str
+    completed: bool
+    missing_required_artifacts: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+    errors: tuple[str, ...] = ()
+    report_path: str = ""
+    manifest_path: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ExtensionHookPayload:
+    extension_name: str
+    extension_type: str
+    source_kind: str
+    install_path: str
+    enabled: bool = True
+    trusted_capabilities: tuple[str, ...] = ()
+    manifest_version: str = ""
+
+
 __all__ = [
+    "EVENT_EXTENSION_INSTALLED",
+    "EVENT_PLAN_APPROVED",
+    "EVENT_PLAN_CREATED",
+    "EVENT_PREDICATE_HIT",
+    "EVENT_PREDICATE_MISS",
+    "EVENT_SESSION_RESUME",
+    "EVENT_SESSION_START",
+    "EVENT_TASK_COMPLETED",
+    "EVENT_TASK_STARTED",
+    "EVENT_TOOL_AFTER",
+    "EVENT_TOOL_BEFORE",
+    "EVENT_TOOL_FAILURE",
+    "EVENT_VERIFICATION_COMPLETED",
+    "ExtensionHookPayload",
     "HOOK_MODE_CONTEXT",
     "HOOK_MODE_NOTICE",
     "HOOK_MODE_RECORD",
     "HOOKS_TRUSTED_CAPABILITY",
     "HookExecutionRecord",
     "LifecycleDispatchRecord",
+    "LifecycleEvent",
     "LifecycleHookRuntime",
     "LifecycleHookSpec",
     "PendingHookMessage",
+    "PlanHookPayload",
+    "SessionHookPayload",
+    "TaskHookPayload",
+    "ToolHookPayload",
+    "VALID_LIFECYCLE_EVENTS",
+    "VerificationHookPayload",
     "build_default_lifecycle_hook_runtime",
     "format_hook_notice_block",
     "load_extension_hook_specs",
+    "payload_to_dict",
 ]

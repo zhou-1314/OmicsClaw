@@ -159,8 +159,8 @@ from omicsclaw.common.user_guidance import (
     strip_user_guidance_lines,
 )
 from omicsclaw.skill.registry import ensure_registry_loaded, registry
-from omicsclaw.runtime.tool_result_store import ToolResultStore
-from omicsclaw.runtime.transcript_store import (
+from omicsclaw.runtime.storage.tool_result import ToolResultStore
+from omicsclaw.runtime.storage.transcript import (
     TranscriptStore,
     build_selective_replay_context,
     sanitize_tool_history as _runtime_sanitize_tool_history,

@@ -9,7 +9,7 @@ from typing import Any
 
 from omicsclaw.skill.registry import ensure_registry_loaded
 
-from .context_layers import (
+from ..context.layers import (
     ContextAssemblyRequest,
     ContextLayer,
     ContextLayerInjector,
@@ -418,7 +418,7 @@ async def assemble_chat_context(
         skill_candidates = (skill_hint,)
     if skill_hint or skill_candidates:
         def _load_skill_context() -> str:
-            from .context_layers import load_skill_context
+            from .layers import load_skill_context
 
             return load_skill_context(
                 skill=skill_hint,

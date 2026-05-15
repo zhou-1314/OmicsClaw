@@ -29,7 +29,7 @@ import builtins
 from pathlib import Path
 
 from bot import agent_loop
-from omicsclaw.runtime.transcript_store import build_selective_replay_context
+from omicsclaw.runtime.storage.transcript import build_selective_replay_context
 
 
 # --------------------------------------------------------------------------- #
@@ -43,7 +43,7 @@ def test_llm_tool_loop_resolves_build_selective_replay_context():
     )
     assert resolved is build_selective_replay_context, (
         "bot.agent_loop must import build_selective_replay_context from "
-        "omicsclaw.runtime.transcript_store — llm_tool_loop calls it "
+        "omicsclaw.runtime.storage.transcript — llm_tool_loop calls it "
         "unqualified when assembling transcript_context"
     )
 

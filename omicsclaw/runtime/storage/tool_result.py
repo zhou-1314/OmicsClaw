@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .policy import ToolPolicyDecision
-from .tool_spec import (
+from ..policy.policy import ToolPolicyDecision
+from ..tools.spec import (
     RESULT_POLICY_INLINE,
     RESULT_POLICY_INSPECTION_REFERENCE,
     RESULT_POLICY_KNOWLEDGE_REFERENCE,

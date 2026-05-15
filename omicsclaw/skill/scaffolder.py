@@ -15,8 +15,8 @@ from typing import Iterable
 import yaml
 
 from omicsclaw.common.manifest import StepRecord
-from omicsclaw.runtime.hooks import build_default_lifecycle_hook_runtime
-from omicsclaw.runtime.verification import (
+from omicsclaw.runtime.tools.hooks import build_default_lifecycle_hook_runtime
+from omicsclaw.runtime.policy.verification import (
     COMPLETION_REPORT_FILENAME,
     WORKSPACE_KIND_ANALYSIS_RUN,
     ArtifactRequirement,

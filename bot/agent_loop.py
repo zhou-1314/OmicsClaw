@@ -85,29 +85,29 @@ from omicsclaw.engine import (
     resolve_effective_model_provider,
     run_engine_loop,
 )
-from omicsclaw.runtime.bot_tools import (
+from omicsclaw.runtime.tools.builders.agent import (
     BotToolContext,
     build_bot_tool_registry,
 )
-from omicsclaw.runtime.context_assembler import (
+from omicsclaw.runtime.context.assembler import (
     assemble_chat_context as _assemble_chat_context,
 )
-from omicsclaw.runtime.hooks import build_default_lifecycle_hook_runtime
-from omicsclaw.runtime.policy import TOOL_POLICY_ALLOW
-from omicsclaw.runtime.policy_state import ToolPolicyState
-from omicsclaw.runtime.query_engine import (
+from omicsclaw.runtime.tools.hooks import build_default_lifecycle_hook_runtime
+from omicsclaw.runtime.policy.policy import TOOL_POLICY_ALLOW
+from omicsclaw.runtime.policy.state import ToolPolicyState
+from omicsclaw.runtime.agent.query_engine import (
     QueryEngineCallbacks,
     QueryEngineConfig,
     QueryEngineContext,
     run_query_engine,
 )
-from omicsclaw.runtime.system_prompt import build_system_prompt
-from omicsclaw.runtime.tool_orchestration import (
+from omicsclaw.runtime.context.system_prompt import build_system_prompt
+from omicsclaw.runtime.tools.orchestration import (
     EXECUTION_STATUS_POLICY_BLOCKED,
     ToolExecutionRequest,
 )
-from omicsclaw.runtime.tool_spec import PROGRESS_POLICY_ANALYSIS
-from omicsclaw.runtime.transcript_store import (
+from omicsclaw.runtime.tools.spec import PROGRESS_POLICY_ANALYSIS
+from omicsclaw.runtime.storage.transcript import (
     build_selective_replay_context,
     sanitize_tool_history as _runtime_sanitize_tool_history,
 )
@@ -139,7 +139,7 @@ def _build_bot_tool_context() -> BotToolContext:
     in ``omicsclaw/runtime/bot_tools.py``. Kept as a module-private hook
     so other bot/core.py callers can monkeypatch in tests if needed —
     do not inline this call site away."""
-    from omicsclaw.runtime.bot_tools import build_default_bot_tool_context
+    from omicsclaw.runtime.tools.builders.agent import build_default_bot_tool_context
 
     return build_default_bot_tool_context()
 

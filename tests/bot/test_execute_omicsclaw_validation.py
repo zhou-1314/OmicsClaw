@@ -120,7 +120,7 @@ def test_omicsclaw_tool_description_includes_file_path_example() -> None:
         * the explicit anti-``params`` warning (anchors the LLM
           against the documented hallucination).
     """
-    from omicsclaw.runtime.bot_tools import BotToolContext, build_bot_tool_specs
+    from omicsclaw.runtime.tools.builders.agent import BotToolContext, build_bot_tool_specs
 
     specs = build_bot_tool_specs(BotToolContext(skill_names=()))
     omicsclaw_spec = next(s for s in specs if s.name == "omicsclaw")

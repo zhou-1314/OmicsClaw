@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .context_assembler import assemble_prompt_context
-from .context_layers import (
+from ..context.assembler import assemble_prompt_context
+from ..context.layers import (
     DEFAULT_SOUL_MD,
     ContextAssemblyRequest,
     load_base_persona,

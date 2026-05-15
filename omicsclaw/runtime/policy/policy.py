@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from .approval import is_tool_approval_satisfied
-from .policy_state import ToolPolicyState
-from .tool_spec import (
+from ..policy.approval import is_tool_approval_satisfied
+from ..policy.state import ToolPolicyState
+from ..tools.spec import (
     APPROVAL_MODE_ASK,
     APPROVAL_MODE_AUTO,
     APPROVAL_MODE_DENY_UNLESS_TRUSTED,

@@ -1,7 +1,7 @@
 """Tests for the SSE compaction-status payload helper."""
 from __future__ import annotations
 
-from omicsclaw.runtime.context_compaction import (
+from omicsclaw.runtime.context.compaction import (
     CompactionEvent,
     build_compaction_status_payload,
 )

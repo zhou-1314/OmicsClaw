@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from omicsclaw.runtime.tool_execution_hooks import (
+from omicsclaw.runtime.tools.execution_hooks import (
     PreCallRuleInjector,
     build_pre_call_rule_text,
 )

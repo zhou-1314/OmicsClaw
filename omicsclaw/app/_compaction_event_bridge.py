@@ -9,7 +9,7 @@ import json
 import logging
 from typing import Any, Callable
 
-from omicsclaw.runtime.context_compaction import (
+from omicsclaw.runtime.context.compaction import (
     CompactionEvent,
     build_compaction_status_payload,
 )

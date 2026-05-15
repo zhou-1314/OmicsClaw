@@ -8,7 +8,7 @@ faithful port of the pre-refactor if-elif chain — the test
 pins the full set so future refactors cannot silently drop one.
 
 The handlers reach into ``bot.core`` / ``bot.tool_executors`` /
-``omicsclaw.runtime.context_compaction`` directly because they are
+``omicsclaw.runtime.context.compaction`` directly because they are
 themselves bot-side code; only request-scoped values arrive via
 ``SlashCommandContext``.
 """
@@ -103,7 +103,7 @@ async def _cmd_compact(ctx: SlashCommandContext) -> str:
     template-based collapse logic — no LLM call. Tracked as a
     boundary so subsequent /compact calls only summarise the new
     tail."""
-    from omicsclaw.runtime.context_compaction import (
+    from omicsclaw.runtime.context.compaction import (
         ContextCompactionConfig,
         compact_history,
         is_compaction_summary_message,

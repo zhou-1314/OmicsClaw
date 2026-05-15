@@ -94,9 +94,9 @@ from omicsclaw.common.user_guidance import (
     strip_user_guidance_lines,
 )
 from omicsclaw.skill.registry import ensure_registry_loaded, registry
-from omicsclaw.runtime.bot_tools import build_bot_tool_registry, BotToolContext
-from omicsclaw.runtime.engineering_tools import build_engineering_tool_executors
-from omicsclaw.runtime.verification import format_completion_mapping_summary
+from omicsclaw.runtime.tools.builders.agent import build_bot_tool_registry, BotToolContext
+from omicsclaw.runtime.tools.builders.engineering import build_engineering_tool_executors
+from omicsclaw.runtime.policy.verification import format_completion_mapping_summary
 
 # Helpers from canonical homes (post-decomposition siblings).
 from bot.skill_orchestration import (
@@ -159,7 +159,7 @@ def _compute_omicsclaw_schema_arg_keys() -> frozenset[str]:
     tool spec auto-extends what the validator accepts and surfaces in
     error messages — no parallel hardcoded list to drift.
     """
-    from omicsclaw.runtime.bot_tools import BotToolContext, build_bot_tool_specs
+    from omicsclaw.runtime.tools.builders.agent import BotToolContext, build_bot_tool_specs
 
     for spec in build_bot_tool_specs(BotToolContext(skill_names=())):
         if spec.name == "omicsclaw":

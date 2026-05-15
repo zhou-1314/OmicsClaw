@@ -4,13 +4,13 @@ import asyncio
 
 import pytest
 
-from omicsclaw.runtime.policy import (
+from omicsclaw.runtime.policy.policy import (
     TOOL_POLICY_DENY,
     TOOL_POLICY_REQUIRE_APPROVAL,
     evaluate_tool_policy,
 )
-from omicsclaw.runtime.tool_executor import build_executor_kwargs, invoke_tool
-from omicsclaw.runtime.tool_orchestration import (
+from omicsclaw.runtime.tools.executor import build_executor_kwargs, invoke_tool
+from omicsclaw.runtime.tools.orchestration import (
     EXECUTION_STATUS_FAILED,
     EXECUTION_STATUS_HOOK_BLOCKED,
     EXECUTION_STATUS_INPUT_SCHEMA_INVALID,
@@ -21,14 +21,14 @@ from omicsclaw.runtime.tool_orchestration import (
     ToolExecutionRequest,
     execute_tool_requests,
 )
-from omicsclaw.runtime.tool_registry import ToolRegistry
-from omicsclaw.runtime.tool_spec import (
+from omicsclaw.runtime.tools.registry import ToolRegistry
+from omicsclaw.runtime.tools.spec import (
     APPROVAL_MODE_ASK,
     APPROVAL_MODE_DENY_UNLESS_TRUSTED,
     RISK_LEVEL_HIGH,
     ToolSpec,
 )
-from omicsclaw.runtime.tool_validation import ToolInputValidationResult
+from omicsclaw.runtime.tools.validation import ToolInputValidationResult
 
 
 def test_tool_registry_builds_openai_tools_and_executors_from_same_specs():

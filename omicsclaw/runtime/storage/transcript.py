@@ -5,7 +5,7 @@ from pathlib import Path
 import time
 from typing import Any, Callable
 
-from .context_budget import trim_history_to_budget
+from ..context.budget import trim_history_to_budget
 
 def sanitize_tool_history(history: list[dict], warn: bool = True) -> list[dict]:
     """Drop orphaned or incomplete tool-call bundles from history."""

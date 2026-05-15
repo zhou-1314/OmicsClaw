@@ -140,8 +140,8 @@ def test_init_llm_does_not_force_registry_load(monkeypatch):
 
     for name in (
         "bot.core",
-        "omicsclaw.runtime.context_assembler",
-        "omicsclaw.runtime.context_layers",
+        "omicsclaw.runtime.context.assembler",
+        "omicsclaw.runtime.context.layers",
     ):
         sys.modules.pop(name, None)
 

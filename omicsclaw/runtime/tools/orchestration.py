@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from .policy import (
+from ..policy.policy import (
     TOOL_POLICY_ALLOW,
     TOOL_POLICY_DENY,
     TOOL_POLICY_REQUIRE_APPROVAL,
@@ -14,9 +14,9 @@ from .policy import (
     evaluate_tool_policy,
     format_policy_block_message,
 )
-from .tool_executor import ToolCallable, invoke_tool
-from .tool_spec import ToolSpec
-from .tool_validation import (
+from ..tools.executor import ToolCallable, invoke_tool
+from ..tools.spec import ToolSpec
+from ..tools.validation import (
     ToolInputValidationResult,
     normalize_input_validation_result,
     validate_arguments_against_schema,

@@ -11,8 +11,8 @@ from typing import Any, Callable
 
 from omicsclaw.skill.registry import ensure_registry_loaded, registry
 
-LOGGER = logging.getLogger("omicsclaw.runtime.context_layers")
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+LOGGER = logging.getLogger("omicsclaw.runtime.context.layers")
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_SOUL_MD = PROJECT_ROOT / "SOUL.md"
 
 _KNOWLEDGE_GUIDANCE_MARKERS = (
@@ -613,7 +613,7 @@ def _emit_predicate_event(
     """
     if not _predicate_event_sinks:
         return
-    from .. import events as _events_mod  # local import to avoid cycles at module load
+    from ...tools import hooks as _events_mod  # local import to avoid cycles at module load
 
     evt = _events_mod.LifecycleEvent(
         name=event_name,
@@ -654,7 +654,7 @@ class ContextLayerInjector:
                 exc,
             )
             return False
-        from .. import events as _events_mod
+        from ...tools import hooks as _events_mod
 
         _emit_predicate_event(
             _events_mod.EVENT_PREDICATE_HIT if decision else _events_mod.EVENT_PREDICATE_MISS,
@@ -978,14 +978,14 @@ def _make_predicate_rule_builder(rule_name: str) -> LayerBuilder:
 
 
 def _predicate(name: str) -> Callable[[ContextAssemblyRequest], bool]:
-    """Lazy-import a predicate function from ``omicsclaw.runtime.predicates``
+    """Lazy-import a predicate function from ``omicsclaw.runtime.policy.conditions``
     so the import only triggers when ``ContextLayerInjector.applies`` is
-    called — avoids the circular import between ``predicates`` (which
+    called — avoids the circular import between ``conditions`` (which
     imports ``ContextAssemblyRequest`` from this module) and the
     injector definitions below.
     """
     def _call(req: ContextAssemblyRequest) -> bool:
-        from .. import predicates as _pred_mod
+        from ...policy import conditions as _pred_mod
 
         fn = getattr(_pred_mod, name)
         return bool(fn(req))

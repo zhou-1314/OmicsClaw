@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from omicsclaw.runtime.transcript_store import sanitize_tool_history
+from omicsclaw.runtime.storage.transcript import sanitize_tool_history
 
 
 @dataclass(frozen=True, slots=True)

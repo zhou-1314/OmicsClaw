@@ -21,17 +21,17 @@ from omicsclaw.providers.registry import (
     detect_provider_from_env,
     resolve_provider,
 )
-from omicsclaw.runtime.context_assembler import (
+from omicsclaw.runtime.context.assembler import (
     assemble_prompt_context,
     extract_analysis_hints,
     extract_user_text,
     should_attach_capability_context,
 )
-from omicsclaw.runtime.context_layers import (
+from omicsclaw.runtime.context.layers import (
     ContextAssemblyRequest,
     should_prefetch_knowledge_guidance,
 )
-from omicsclaw.runtime.transcript_store import (
+from omicsclaw.runtime.storage.transcript import (
     build_selective_replay_summary,
     build_transcript_summary,
 )

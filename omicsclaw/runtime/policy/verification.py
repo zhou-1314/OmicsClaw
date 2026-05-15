@@ -21,9 +21,9 @@ from omicsclaw.common.manifest import (
     read_manifest,
     save_manifest,
 )
-from .events import EVENT_VERIFICATION_COMPLETED
-from .hook_payloads import VerificationHookPayload
-from .hooks import LifecycleHookRuntime
+from ..tools.hooks import EVENT_VERIFICATION_COMPLETED
+from ..tools.hooks import VerificationHookPayload
+from ..tools.hooks import LifecycleHookRuntime
 
 WORKSPACE_KIND_CONVERSATION = "conversation"
 WORKSPACE_KIND_ANALYSIS_RUN = "analysis_run"

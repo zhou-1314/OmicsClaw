@@ -11,7 +11,7 @@ import asyncio
 
 import pytest
 
-from omicsclaw.runtime.bot_tools import BotToolContext, build_bot_tool_specs
+from omicsclaw.runtime.tools.builders.agent import BotToolContext, build_bot_tool_specs
 from omicsclaw.skill.listing import list_skills_in_domain
 
 

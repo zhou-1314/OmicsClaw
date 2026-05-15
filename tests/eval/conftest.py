@@ -114,13 +114,13 @@ def real_llm_runner(
     ) -> LLMRoundResult:
         from openai import AsyncOpenAI
 
-        from omicsclaw.runtime.bot_tools import (
+        from omicsclaw.runtime.tools.builders.agent import (
             build_bot_tool_specs,
             build_default_bot_tool_context,
         )
-        from omicsclaw.runtime.context_layers import ContextAssemblyRequest
-        from omicsclaw.runtime.system_prompt import build_system_prompt
-        from omicsclaw.runtime.tool_registry import select_tool_specs
+        from omicsclaw.runtime.context.layers import ContextAssemblyRequest
+        from omicsclaw.runtime.context.system_prompt import build_system_prompt
+        from omicsclaw.runtime.tools.registry import select_tool_specs
 
         # Build the production-shape system prompt.
         system_prompt = build_system_prompt(

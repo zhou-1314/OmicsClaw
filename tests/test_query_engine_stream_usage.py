@@ -11,15 +11,15 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from omicsclaw.runtime.query_engine import (
+from omicsclaw.runtime.agent.query_engine import (
     QueryEngineCallbacks,
     QueryEngineConfig,
     QueryEngineContext,
     run_query_engine,
 )
-from omicsclaw.runtime.tool_registry import ToolRegistry
-from omicsclaw.runtime.tool_result_store import ToolResultStore
-from omicsclaw.runtime.transcript_store import TranscriptStore, sanitize_tool_history
+from omicsclaw.runtime.tools.registry import ToolRegistry
+from omicsclaw.runtime.storage.tool_result import ToolResultStore
+from omicsclaw.runtime.storage.transcript import TranscriptStore, sanitize_tool_history
 
 
 class _FakeStreamChunk:

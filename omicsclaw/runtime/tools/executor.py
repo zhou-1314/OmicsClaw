@@ -4,7 +4,7 @@ import inspect
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
-from .tool_spec import ToolSpec
+from ..tools.spec import ToolSpec
 
 ToolCallable = Callable[..., Any]
 

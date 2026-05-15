@@ -36,7 +36,7 @@ def test_handler_pushes_status_frame_to_queue() -> None:
         import pytest
         pytest.skip(f"server bridge unavailable: {exc}")
 
-    from omicsclaw.runtime.context_compaction import CompactionEvent
+    from omicsclaw.runtime.context.compaction import CompactionEvent
 
     queue = MagicMock()
     handler = make_compaction_event_handler(queue)

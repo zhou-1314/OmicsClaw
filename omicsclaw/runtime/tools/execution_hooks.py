@@ -6,7 +6,7 @@ from fnmatch import fnmatchcase
 from string import Formatter
 from typing import Any, Callable, Mapping
 
-_LOGGER = logging.getLogger("omicsclaw.runtime.tool_execution_hooks")
+_LOGGER = logging.getLogger("omicsclaw.runtime.tools.execution_hooks")
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,12 +124,12 @@ from omicsclaw.extensions.runtime import (
     load_active_tool_execution_hook_extensions,
 )
 
-from .policy import (
+from ..policy.policy import (
     TOOL_POLICY_ALLOW,
     TOOL_POLICY_DENY,
     TOOL_POLICY_REQUIRE_APPROVAL,
 )
-from .tool_orchestration import (
+from ..tools.orchestration import (
     ToolExecutionHook,
     ToolExecutionHookResult,
     ToolExecutionRequest,

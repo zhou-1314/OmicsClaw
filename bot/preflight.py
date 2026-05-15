@@ -17,7 +17,7 @@ from __future__ import annotations
 import copy
 import re
 
-from omicsclaw.runtime.query_engine import (
+from omicsclaw.runtime.agent.query_engine import (
     extract_user_guidance_payloads,
     render_guidance_block,
 )

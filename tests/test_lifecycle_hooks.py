@@ -6,9 +6,9 @@ from omicsclaw.extensions import (
     write_extension_state,
     write_install_record,
 )
-from omicsclaw.runtime.events import EVENT_SESSION_START
-from omicsclaw.runtime.hook_payloads import SessionHookPayload
-from omicsclaw.runtime.hooks import (
+from omicsclaw.runtime.tools.hooks import EVENT_SESSION_START
+from omicsclaw.runtime.tools.hooks import SessionHookPayload
+from omicsclaw.runtime.tools.hooks import (
     HOOK_MODE_CONTEXT,
     build_default_lifecycle_hook_runtime,
 )

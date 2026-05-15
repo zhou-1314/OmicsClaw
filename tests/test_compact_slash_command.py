@@ -14,11 +14,11 @@ import types
 
 import pytest
 
-from omicsclaw.runtime.context_compaction import (
+from omicsclaw.runtime.context.compaction import (
     ContextCompactionConfig,
     compact_history,
 )
-from omicsclaw.runtime.transcript_store import TranscriptStore, sanitize_tool_history
+from omicsclaw.runtime.storage.transcript import TranscriptStore, sanitize_tool_history
 
 
 def _seed_long_history(store: TranscriptStore, chat_id: str, *, turns: int = 10) -> None:

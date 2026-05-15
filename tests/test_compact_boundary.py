@@ -15,12 +15,12 @@ import types
 
 import pytest
 
-from omicsclaw.runtime.context_compaction import (
+from omicsclaw.runtime.context.compaction import (
     is_compaction_summary_message,
     unwrap_compaction_summary,
     wrap_compaction_summary,
 )
-from omicsclaw.runtime.transcript_store import TranscriptStore, sanitize_tool_history
+from omicsclaw.runtime.storage.transcript import TranscriptStore, sanitize_tool_history
 
 
 # ---------------------------------------------------------------------------

@@ -201,7 +201,7 @@ def _configure_cli_loggers() -> None:
         "omicsclaw.memory.snapshot",
         "omicsclaw.runtime",
         "omicsclaw.runtime.context",
-        "omicsclaw.runtime.context_layers",
+        "omicsclaw.runtime.context.layers",
         "httpx",
         "httpcore",
         "openai",

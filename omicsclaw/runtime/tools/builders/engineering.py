@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
-from .task_store import (
+from ...storage.task import (
     TASK_STATUS_BLOCKED,
     TASK_STATUS_COMPLETED,
     TASK_STATUS_FAILED,
@@ -16,12 +16,12 @@ from .task_store import (
     TaskRecord,
     TaskStore,
 )
-from .tool_spec import (
+from ..spec import (
     RESULT_POLICY_WEB_REFERENCE,
     RISK_LEVEL_MEDIUM,
     ToolSpec,
 )
-from .tool_validation import ToolInputValidationResult
+from ..validation import ToolInputValidationResult
 
 _TASK_STATUSES = (
     TASK_STATUS_PENDING,

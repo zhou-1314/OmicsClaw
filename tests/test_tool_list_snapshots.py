@@ -32,7 +32,7 @@ from typing import Any
 
 import pytest
 
-from omicsclaw.runtime.bot_tools import BotToolContext, build_bot_tool_specs
+from omicsclaw.runtime.tools.builders.agent import BotToolContext, build_bot_tool_specs
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "tool_list"
 UPDATE = os.environ.get("UPDATE_SNAPSHOTS", "").strip() not in ("", "0", "false", "False")
@@ -103,8 +103,8 @@ def _build_specs(scenario: Scenario):
     """Return the per-request *selected* specs (the payload the LLM
     actually sees), mirroring what ``ToolRegistry.to_openai_tools_for_request``
     produces in production."""
-    from omicsclaw.runtime.context_layers import ContextAssemblyRequest
-    from omicsclaw.runtime.tool_registry import select_tool_specs
+    from omicsclaw.runtime.context.layers import ContextAssemblyRequest
+    from omicsclaw.runtime.tools.registry import select_tool_specs
 
     skills = (scenario.skill,) if scenario.skill else ("sc-de",)
     ctx = BotToolContext(skill_names=skills, domain_briefing="(test)")

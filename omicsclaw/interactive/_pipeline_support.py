@@ -22,9 +22,9 @@ from omicsclaw.agents.plan_validation import (
 from omicsclaw.interactive._history_support import (
     build_research_history_messages as _build_research_history_messages,
 )
-from omicsclaw.runtime.events import EVENT_PLAN_APPROVED, EVENT_TASK_COMPLETED
-from omicsclaw.runtime.hook_payloads import PlanHookPayload
-from omicsclaw.runtime.hooks import (
+from omicsclaw.runtime.tools.hooks import EVENT_PLAN_APPROVED, EVENT_TASK_COMPLETED
+from omicsclaw.runtime.tools.hooks import PlanHookPayload
+from omicsclaw.runtime.tools.hooks import (
     HOOK_MODE_NOTICE,
     LifecycleHookRuntime,
     build_default_lifecycle_hook_runtime,

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 
-from .context_layers import ContextAssemblyRequest
+from ..context.layers import ContextAssemblyRequest
 
 # --- Shared regex constants --------------------------------------------------
 

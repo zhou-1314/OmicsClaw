@@ -53,7 +53,7 @@ except ImportError as _nb_err:
     get_kernel_manager = None  # type: ignore[assignment]
     install_live_session_support = None  # type: ignore[assignment]
     notebook_router = None  # type: ignore[assignment]
-from omicsclaw.runtime.policy_state import ToolPolicyState
+from omicsclaw.runtime.policy.state import ToolPolicyState
 from omicsclaw.remote.routers.jobs import (
     append_job_stdout_line,
     bind_chat_stream_job,

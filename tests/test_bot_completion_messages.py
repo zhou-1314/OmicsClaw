@@ -12,13 +12,13 @@ from bot.core import (
 )
 from omicsclaw.skill.scaffolder import SkillScaffoldResult
 from omicsclaw.knowledge.retriever import _push_runtime_notice, clear_runtime_notices
-from omicsclaw.runtime.policy import TOOL_POLICY_REQUIRE_APPROVAL, ToolPolicyDecision
-from omicsclaw.runtime.tool_orchestration import (
+from omicsclaw.runtime.policy.policy import TOOL_POLICY_REQUIRE_APPROVAL, ToolPolicyDecision
+from omicsclaw.runtime.tools.orchestration import (
     EXECUTION_STATUS_POLICY_BLOCKED,
     ToolExecutionRequest,
     ToolExecutionResult,
 )
-from omicsclaw.runtime.tool_spec import APPROVAL_MODE_ASK, ToolSpec
+from omicsclaw.runtime.tools.spec import APPROVAL_MODE_ASK, ToolSpec
 
 
 @pytest.mark.asyncio

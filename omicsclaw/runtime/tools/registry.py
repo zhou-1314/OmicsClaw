@@ -4,10 +4,10 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from .tool_executor import ToolCallable, build_executor_map
-from .tool_spec import ToolSpec
+from ..tools.executor import ToolCallable, build_executor_map
+from ..tools.spec import ToolSpec
 
-_LOGGER = logging.getLogger("omicsclaw.runtime.tool_registry")
+_LOGGER = logging.getLogger("omicsclaw.runtime.tools.registry")
 
 
 def select_tool_specs(
@@ -37,8 +37,8 @@ def select_tool_specs(
     surface = str(getattr(request, "surface", "") or "").strip()
     selected: list[ToolSpec] = []
 
-    from .context_layers import _emit_predicate_event  # type: ignore[attr-defined]
-    from . import events as _events_mod
+    from ..context.layers import _emit_predicate_event  # type: ignore[attr-defined]
+    from . import hooks as _events_mod
 
     for spec in specs:
         if spec.surfaces and surface and surface not in spec.surfaces:

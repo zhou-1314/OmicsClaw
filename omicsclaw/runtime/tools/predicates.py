@@ -18,9 +18,9 @@ import dataclasses
 import re
 from typing import Callable
 
-from . import predicates as _pred
-from .context_layers import ContextAssemblyRequest
-from .tool_spec import ToolSpec
+from ..policy import conditions as _pred
+from ..context.layers import ContextAssemblyRequest
+from .spec import ToolSpec
 
 # --- Custom narrow predicates for niche tools --------------------------------
 
