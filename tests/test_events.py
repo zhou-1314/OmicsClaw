@@ -8,7 +8,7 @@ fired or were skipped.
 
 from __future__ import annotations
 
-from omicsclaw.runtime import events
+from omicsclaw.runtime.tools import hooks as events
 
 
 def test_predicate_hit_event_constant_exists() -> None:

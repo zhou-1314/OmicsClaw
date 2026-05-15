@@ -14,7 +14,7 @@ if "openai" not in sys.modules:
         OpenAIError=Exception,
     )
 
-import bot.core as core
+import omicsclaw.runtime.agent.state as core
 
 
 def _function_tree(func) -> ast.FunctionDef | ast.AsyncFunctionDef:
@@ -96,12 +96,12 @@ def test_bot_run_skill_via_shared_runner_streams_lines_to_bot_logger(
     """The bot must subscribe to runner stdout/stderr callbacks so long
     skills produce visible operator-console logs in real time instead of
     going silent until completion."""
-    import omicsclaw.core.skill_runner as runner_module
+    import omicsclaw.skill.runner as runner_module
 
     out_dir = tmp_path / "bot_streaming_out"
     out_dir.mkdir()
 
-    from omicsclaw.core.skill_result import build_skill_run_result
+    from omicsclaw.skill.result import build_skill_run_result
 
     def fake_run_skill(skill_name=None, *, stdout_callback=None, stderr_callback=None, **kwargs):
         if stdout_callback is not None:
@@ -149,13 +149,13 @@ def test_bot_run_skill_via_shared_runner_propagates_asyncio_cancel(tmp_path, mon
     after the user is gone and continues to consume CPU/GPU.
     """
     import threading
-    import omicsclaw.core.skill_runner as runner_module
+    import omicsclaw.skill.runner as runner_module
 
     out_dir = tmp_path / "bot_cancel_out"
     out_dir.mkdir()
     captured_events: list[threading.Event] = []
 
-    from omicsclaw.core.skill_result import build_skill_run_result
+    from omicsclaw.skill.result import build_skill_run_result
 
     def fake_run_skill(skill_name=None, *, cancel_event=None, **kwargs):
         assert cancel_event is not None, (

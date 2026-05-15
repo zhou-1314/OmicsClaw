@@ -1,7 +1,7 @@
 """
 server.py -- OmicsClaw desktop/web FastAPI backend
 ==================================================
-Wraps bot.core (OmicsClaw query engine) as a streaming HTTP API consumed by
+Wraps omicsclaw.runtime.agent.state (OmicsClaw query engine) as a streaming HTTP API consumed by
 the Electron and Next.js frontends.
 
 Start:
@@ -53,7 +53,7 @@ except ImportError as _nb_err:
     get_kernel_manager = None  # type: ignore[assignment]
     install_live_session_support = None  # type: ignore[assignment]
     notebook_router = None  # type: ignore[assignment]
-from omicsclaw.runtime.policy_state import ToolPolicyState
+from omicsclaw.runtime.policy.state import ToolPolicyState
 from omicsclaw.remote.routers.jobs import (
     append_job_stdout_line,
     bind_chat_stream_job,
@@ -96,15 +96,15 @@ _FILE_TREE_IGNORED_DIRS: frozenset[str] = frozenset({
 })
 
 # ---------------------------------------------------------------------------
-# Lazy references to bot.core — resolved once at startup via lifespan
+# Lazy references to omicsclaw.runtime.agent.state — resolved once at startup via lifespan
 # ---------------------------------------------------------------------------
 
-_core = None  # bot.core module
+_core = None  # omicsclaw.runtime.agent.state module
 _memory_client = None  # MemoryClient instance (optional)
 
 
 def _get_core():
-    """Return the bot.core module, raising if not initialised."""
+    """Return the omicsclaw.runtime.agent.state module, raising if not initialised."""
     if _core is None:
         raise RuntimeError("OmicsClaw core not initialised. Server startup failed?")
     return _core
@@ -348,11 +348,11 @@ async def lifespan(app: FastAPI):
             sys.path.insert(0, omicsclaw_dir)
 
     try:
-        import bot.core as core
+        import omicsclaw.runtime.agent.state as core
         _core = core
     except ImportError as exc:
         logger.error(
-            "Cannot import bot.core — is OmicsClaw on sys.path or "
+            "Cannot import omicsclaw.runtime.agent.state — is OmicsClaw on sys.path or "
             "OMICSCLAW_DIR set? Error: %s", exc,
         )
         raise
@@ -877,7 +877,7 @@ def _resolve_uploads_dir(workspace: str) -> Path:
 
 def _register_attachment_for_session(session_id: str, meta: dict) -> None:
     """Mirror the Telegram/Feishu pattern: stash the saved path in the
-    shared ``bot.core.received_files`` registry so existing tools
+    shared ``omicsclaw.runtime.agent.state.received_files`` registry so existing tools
     (parse_literature, the omicsclaw skill runner with mode='file') can
     pick it up without the model having to specify the path explicitly.
     """
@@ -1536,7 +1536,7 @@ async def chat_stream(req: ChatRequest):
     def _tool_result_preflight_payload(metadata: Any) -> dict | None:
         """Return the preflight ``needs_user_input`` payload when present.
 
-        ``bot.agent_loop`` tags tool results that ended in a preflight
+        ``omicsclaw.runtime.agent.loop`` tags tool results that ended in a preflight
         confirmation request with ``preflight_pending=True`` and the
         original payload. The desktop surface uses this to render a
         dedicated prompt rather than collapsing the result as an error.
@@ -3557,7 +3557,7 @@ async def list_providers():
     core = _get_core()
 
     try:
-        from omicsclaw.core.provider_registry import (
+        from omicsclaw.providers.registry import (
             PROVIDER_PRESETS,
             build_provider_registry_entries,
         )
@@ -3589,7 +3589,7 @@ async def list_providers():
         ]
 
     try:
-        from omicsclaw.core.ccproxy_manager import provider_supports_oauth
+        from omicsclaw.providers.ccproxy import provider_supports_oauth
     except ImportError:
         def provider_supports_oauth(_name: str) -> bool:  # type: ignore[no-redef]
             return False
@@ -3654,7 +3654,7 @@ def _cached_oauth_statuses() -> dict[str, dict[str, object]]:
 
     result: dict[str, dict[str, object]] = {}
     try:
-        from omicsclaw.core.ccproxy_manager import (
+        from omicsclaw.providers.ccproxy import (
             OAUTH_PROVIDERS,
             check_ccproxy_auth,
             is_ccproxy_available,
@@ -3727,8 +3727,8 @@ async def switch_provider(req: ProviderSwitchRequest):
 
     # Validate provider name
     try:
-        from omicsclaw.core.provider_registry import PROVIDER_PRESETS
-        from omicsclaw.core.ccproxy_manager import provider_supports_oauth
+        from omicsclaw.providers.registry import PROVIDER_PRESETS
+        from omicsclaw.providers.ccproxy import provider_supports_oauth
         if req.provider not in PROVIDER_PRESETS and req.provider != "custom":
             raise HTTPException(400, detail=f"Unknown provider: {req.provider}")
     except ImportError:
@@ -3843,7 +3843,7 @@ async def test_provider(req: ProviderTestRequest):
     )
 
     try:
-        from omicsclaw.core.provider_runtime import (
+        from omicsclaw.providers.runtime import (
             provider_requires_api_key,
             resolve_provider_runtime,
         )
@@ -3945,7 +3945,7 @@ def _resolve_oauth_provider_alias(name: str) -> str:
     Delegates to ``ccproxy_manager.normalize_oauth_provider`` (the single
     source of truth) and re-raises as HTTP 400 for FastAPI callers.
     """
-    from omicsclaw.core.ccproxy_manager import normalize_oauth_provider
+    from omicsclaw.providers.ccproxy import normalize_oauth_provider
     try:
         return normalize_oauth_provider(name)
     except ValueError as exc:
@@ -3986,7 +3986,7 @@ def _wrap_with_env_unset(command: str, vars_to_unset: list[str]) -> str:
 
 def _require_ccproxy_available() -> None:
     try:
-        from omicsclaw.core.ccproxy_manager import (
+        from omicsclaw.providers.ccproxy import (
             ccproxy_diagnostic_hint,
             is_ccproxy_available,
             oauth_install_hint,
@@ -4015,7 +4015,7 @@ async def oauth_status(provider: str):
     """
     omics_name = _resolve_oauth_provider_alias(provider)
     _require_ccproxy_available()
-    from omicsclaw.core.ccproxy_manager import check_ccproxy_auth
+    from omicsclaw.providers.ccproxy import check_ccproxy_auth
     # check_ccproxy_auth accepts any alias; pass canonical for clarity.
     ok, msg = check_ccproxy_auth(omics_name)
     # invalidate cache so the next /providers poll reflects this probe
@@ -4038,7 +4038,7 @@ async def oauth_login(provider: str):
     """
     omics_name = _resolve_oauth_provider_alias(provider)
     _require_ccproxy_available()
-    from omicsclaw.core.ccproxy_manager import get_oauth_provider
+    from omicsclaw.providers.ccproxy import get_oauth_provider
 
     target = get_oauth_provider(omics_name).ccproxy_target
     empty_proxies = _empty_proxy_env_vars()
@@ -4072,12 +4072,12 @@ async def oauth_logout(provider: str):
     """Invoke ``ccproxy auth logout`` for the given provider."""
     omics_name = _resolve_oauth_provider_alias(provider)
     _require_ccproxy_available()
-    from omicsclaw.core.ccproxy_manager import (
+    from omicsclaw.providers.ccproxy import (
         ccproxy_executable,
         clear_ccproxy_env,
         get_oauth_provider,
     )
-    from omicsclaw.core.provider_runtime import (
+    from omicsclaw.providers.runtime import (
         clear_active_provider_runtime,
         get_active_provider_runtime,
     )
@@ -4711,10 +4711,10 @@ def _get_omicsclaw_env_path() -> Path:
     omicsclaw_dir = os.getenv("OMICSCLAW_DIR", "")
     if omicsclaw_dir:
         return Path(omicsclaw_dir).resolve() / ".env"
-    # Fallback: try parent of the bot package location
+    # Fallback: try parent of the omicsclaw package location
     try:
-        import bot
-        return Path(bot.__file__).resolve().parent.parent / ".env"
+        import omicsclaw
+        return Path(omicsclaw.__file__).resolve().parent.parent / ".env"
     except Exception:
         return Path.cwd() / ".env"
 
@@ -4864,7 +4864,7 @@ async def bridge_list_channels():
     global _channel_manager
 
     try:
-        from bot.channels import CHANNEL_REGISTRY
+        from omicsclaw.channels import CHANNEL_REGISTRY
     except ImportError:
         raise HTTPException(503, detail="OmicsClaw channel system not available")
 
@@ -4911,7 +4911,7 @@ async def bridge_start(req: BridgeStartRequest):
 
     # Validate channel names
     try:
-        from bot.channels import CHANNEL_REGISTRY
+        from omicsclaw.channels import CHANNEL_REGISTRY
     except ImportError:
         raise HTTPException(503, detail="OmicsClaw channel system not available")
 
@@ -4924,8 +4924,8 @@ async def bridge_start(req: BridgeStartRequest):
         )
 
     try:
-        from bot.run import CHANNEL_BUILDERS
-        from bot.channels.manager import ChannelManager
+        from omicsclaw.run_channels import CHANNEL_BUILDERS
+        from omicsclaw.channels.manager import ChannelManager
     except ImportError as exc:
         raise HTTPException(503, detail=f"Cannot import channel system: {exc}")
 

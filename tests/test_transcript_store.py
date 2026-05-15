@@ -1,11 +1,11 @@
 """Tests for transcript and tool-result storage boundaries."""
 
-from omicsclaw.runtime.tool_result_store import ToolResultStore
-from omicsclaw.runtime.tool_spec import (
+from omicsclaw.runtime.storage.tool_result import ToolResultStore
+from omicsclaw.runtime.tools.spec import (
     RESULT_POLICY_KNOWLEDGE_REFERENCE,
     ToolSpec,
 )
-from omicsclaw.runtime.transcript_store import (
+from omicsclaw.runtime.storage.transcript import (
     AdvisoryEventRef,
     CompactedToolResultRef,
     PlanReference,

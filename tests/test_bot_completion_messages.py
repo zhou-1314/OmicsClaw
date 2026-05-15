@@ -5,26 +5,26 @@ from types import SimpleNamespace
 
 import pytest
 
-from bot.core import (
+from omicsclaw.runtime.agent.state import (
     _build_bot_query_engine_callbacks,
     execute_create_omics_skill,
     execute_custom_analysis_execute,
 )
-from omicsclaw.core.skill_scaffolder import SkillScaffoldResult
+from omicsclaw.skill.scaffolder import SkillScaffoldResult
 from omicsclaw.knowledge.retriever import _push_runtime_notice, clear_runtime_notices
-from omicsclaw.runtime.policy import TOOL_POLICY_REQUIRE_APPROVAL, ToolPolicyDecision
-from omicsclaw.runtime.tool_orchestration import (
+from omicsclaw.runtime.policy.policy import TOOL_POLICY_REQUIRE_APPROVAL, ToolPolicyDecision
+from omicsclaw.runtime.tools.orchestration import (
     EXECUTION_STATUS_POLICY_BLOCKED,
     ToolExecutionRequest,
     ToolExecutionResult,
 )
-from omicsclaw.runtime.tool_spec import APPROVAL_MODE_ASK, ToolSpec
+from omicsclaw.runtime.tools.spec import APPROVAL_MODE_ASK, ToolSpec
 
 
 @pytest.mark.asyncio
 async def test_execute_create_omics_skill_includes_gate_summary(monkeypatch):
     monkeypatch.setattr(
-        "omicsclaw.core.skill_scaffolder.create_skill_scaffold",
+        "omicsclaw.skill.scaffolder.create_skill_scaffold",
         lambda **_kwargs: SkillScaffoldResult(
             skill_name="demo-skill",
             domain="spatial",
@@ -64,7 +64,7 @@ class _FakeCapabilityDecision:
 @pytest.mark.asyncio
 async def test_execute_custom_analysis_execute_includes_gate_summary(monkeypatch):
     monkeypatch.setattr(
-        "omicsclaw.core.capability_resolver.resolve_capability",
+        "omicsclaw.skill.capability_resolver.resolve_capability",
         lambda *_args, **_kwargs: _FakeCapabilityDecision(),
     )
     monkeypatch.setattr(

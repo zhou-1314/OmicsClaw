@@ -190,7 +190,7 @@ def list_skills_text(domain_filter: str | None = None) -> str:
 
 
 def list_registered_skill_names() -> list[str]:
-    from omicsclaw.core.registry import registry
+    from omicsclaw.skill.registry import registry
 
     if not getattr(registry, "_loaded", False):
         registry.load_all()
@@ -198,7 +198,7 @@ def list_registered_skill_names() -> list[str]:
 
 
 def run_skill_command(command: SkillRunCommandArgs) -> dict[str, Any]:
-    from omicsclaw.core.skill_runner import run_skill
+    from omicsclaw.skill.runner import run_skill
 
     # Interactive display helpers (``build_skill_run_display_view``) consume
     # the legacy dict shape; ``.to_legacy_dict()`` translates here so the

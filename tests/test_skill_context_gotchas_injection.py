@@ -16,14 +16,14 @@ from unittest.mock import patch
 
 import pytest
 
-from omicsclaw.runtime.context_layers import load_skill_context
+from omicsclaw.runtime.context.layers import load_skill_context
 
 
 def _stub_skill(monkeypatch, *, alias: str, gotchas: list[str], **extra) -> None:
     """Replace the registry lookup so the test does not depend on the
     on-disk skill catalogue."""
-    from omicsclaw.runtime.context_layers import __init__ as ctx_module  # noqa: F401
-    from omicsclaw.runtime import context_layers as ctx_pkg
+    from omicsclaw.runtime.context.layers import __init__ as ctx_module  # noqa: F401
+    from omicsclaw.runtime.context import layers as ctx_pkg
 
     info = {
         "domain": "spatial",
@@ -84,7 +84,7 @@ def test_load_skill_context_logs_telemetry_with_count_and_tokens(monkeypatch, ca
         alias="spatial-de",
         gotchas=["First.", "Second.", "Third."],
     )
-    with caplog.at_level(logging.INFO, logger="omicsclaw.runtime.context_layers"):
+    with caplog.at_level(logging.INFO, logger="omicsclaw.runtime.context.layers"):
         load_skill_context(skill="spatial-de")
     matched = [
         rec for rec in caplog.records

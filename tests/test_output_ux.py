@@ -85,14 +85,14 @@ def test_build_output_dir_name_includes_method_when_available():
 
 def test_run_skill_generates_readme_and_human_readable_dir(monkeypatch, tmp_path):
     oc = _load_omicsclaw_script()
-    from omicsclaw.core import skill_runner
+    from omicsclaw.skill import runner as skill_runner
 
     fake_script = tmp_path / "fake_skill.py"
     fake_script.write_text("print('fake')\n", encoding="utf-8")
 
     monkeypatch.setattr(skill_runner, "DEFAULT_OUTPUT_ROOT", tmp_path)
 
-    from omicsclaw.core.registry import SKILLS_DIR, registry
+    from omicsclaw.skill.registry import SKILLS_DIR, registry
 
     monkeypatch.setattr(
         registry,
@@ -162,7 +162,7 @@ def test_run_skill_generates_readme_and_human_readable_dir(monkeypatch, tmp_path
 
 
 def test_pipeline_readme_lists_step_methods(tmp_path):
-    from omicsclaw.core.skill_runner import _write_pipeline_readme
+    from omicsclaw.skill.runner import _write_pipeline_readme
 
     readme_path = _write_pipeline_readme(
         tmp_path,

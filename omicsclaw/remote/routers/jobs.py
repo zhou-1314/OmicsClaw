@@ -3,7 +3,7 @@
 Jobs are persisted as JSON sidecars on disk so they survive process
 restarts. Each queued job is driven to a terminal state by the active
 ``Executor`` (``omicsclaw.execution.executors``); the default calls the shared
-``omicsclaw.core.skill_runner.run_skill`` contract in process.
+``omicsclaw.skill.runner.run_skill`` contract in process.
 
 Critical constraints:
 - ``GET /jobs/{id}/events`` is read-only — streaming must never rewrite

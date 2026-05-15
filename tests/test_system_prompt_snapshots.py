@@ -32,8 +32,8 @@ from typing import Any
 
 import pytest
 
-from omicsclaw.runtime.context_assembler import assemble_prompt_context
-from omicsclaw.runtime.context_layers import ContextAssemblyRequest
+from omicsclaw.runtime.context.assembler import assemble_prompt_context
+from omicsclaw.runtime.context.layers import ContextAssemblyRequest
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "system_prompt"
 UPDATE = os.environ.get("UPDATE_SNAPSHOTS", "").strip() not in ("", "0", "false", "False")

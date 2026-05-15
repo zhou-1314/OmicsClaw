@@ -12,7 +12,7 @@ relevant code path executes — bubbled to the user as
 These tests pin two contracts:
 
 1. The dynamic guard: every Load-Name referenced inside any function in
-   ``bot.agent_loop`` resolves to a real object via the module's globals
+   ``omicsclaw.runtime.agent.loop`` resolves to a real object via the module's globals
    (or builtins). A static AST scan would also catch this, but pinning
    it to the live module dict matches what Python actually checks at
    runtime.
@@ -28,8 +28,8 @@ import ast
 import builtins
 from pathlib import Path
 
-from bot import agent_loop
-from omicsclaw.runtime.transcript_store import build_selective_replay_context
+from omicsclaw.runtime.agent import loop as agent_loop
+from omicsclaw.runtime.storage.transcript import build_selective_replay_context
 
 
 # --------------------------------------------------------------------------- #
@@ -42,15 +42,15 @@ def test_llm_tool_loop_resolves_build_selective_replay_context():
         "build_selective_replay_context"
     )
     assert resolved is build_selective_replay_context, (
-        "bot.agent_loop must import build_selective_replay_context from "
-        "omicsclaw.runtime.transcript_store — llm_tool_loop calls it "
+        "omicsclaw.runtime.agent.loop must import build_selective_replay_context from "
+        "omicsclaw.runtime.storage.transcript — llm_tool_loop calls it "
         "unqualified when assembling transcript_context"
     )
 
 
 def test_agent_loop_module_exposes_build_selective_replay_context():
     assert hasattr(agent_loop, "build_selective_replay_context"), (
-        "bot.agent_loop must expose build_selective_replay_context at "
+        "omicsclaw.runtime.agent.loop must expose build_selective_replay_context at "
         "module scope so llm_tool_loop's unqualified reference resolves"
     )
 
@@ -201,7 +201,7 @@ def test_agent_loop_has_no_undefined_globals():
     source = Path(agent_loop.__file__)
     undefined = _scan_undefined_names(source)
     assert not undefined, (
-        "bot/agent_loop.py references names that aren't imported or defined "
+        "omicsclaw/runtime/agent/loop.py references names that aren't imported or defined "
         "at module scope — they will raise NameError when their code path "
         "runs:\n  " + "\n  ".join(
             f"{name!r} used at {sites}" for name, sites in sorted(undefined.items())
@@ -219,6 +219,6 @@ def test_agent_loop_runtime_globals_match_static_scan():
     live = vars(agent_loop)
     missing_runtime = sorted(n for n in module_names if n not in live)
     assert not missing_runtime, (
-        f"AST-bound names not present in the live bot.agent_loop module: "
+        f"AST-bound names not present in the live omicsclaw.runtime.agent.loop module: "
         f"{missing_runtime}"
     )

@@ -1,4 +1,4 @@
-from omicsclaw.runtime.context_compaction import (
+from omicsclaw.runtime.context.compaction import (
     STAGE_AUTO_COMPACT,
     STAGE_CONTEXT_COLLAPSE,
     STAGE_MICRO_COMPACT,
@@ -6,7 +6,7 @@ from omicsclaw.runtime.context_compaction import (
     ContextCompactionConfig,
     prepare_model_messages,
 )
-from omicsclaw.runtime.tool_result_store import ToolResultStore
+from omicsclaw.runtime.storage.tool_result import ToolResultStore
 
 
 def test_prepare_model_messages_applies_snip_and_micro_before_heavy_stages(tmp_path):

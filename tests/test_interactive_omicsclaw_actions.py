@@ -117,7 +117,7 @@ def test_format_skills_catalog_plain_renders_sections():
 
 
 def test_run_skill_command_forwards_skill_run_args(monkeypatch):
-    from omicsclaw.core.skill_result import build_skill_run_result
+    from omicsclaw.skill.result import build_skill_run_result
 
     calls: list[tuple[str, str | None, str | None, bool, list[str] | None]] = []
 
@@ -137,7 +137,7 @@ def test_run_skill_command_forwards_skill_run_args(monkeypatch):
             output_dir=output_dir,
         )
 
-    monkeypatch.setattr("omicsclaw.core.skill_runner.run_skill", _run_skill)
+    monkeypatch.setattr("omicsclaw.skill.runner.run_skill", _run_skill)
 
     result = run_skill_command(
         SkillRunCommandArgs(
@@ -173,7 +173,7 @@ def test_list_registered_skill_names_loads_registry_once(monkeypatch):
 
     monkeypatch.setitem(
         sys.modules,
-        "omicsclaw.core.registry",
+        "omicsclaw.skill.registry",
         SimpleNamespace(registry=registry),
     )
 

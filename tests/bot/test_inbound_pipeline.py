@@ -69,19 +69,19 @@ def test_no_production_publish_inbound_callers() -> None:
 
 def test_message_bus_module_deleted() -> None:
     """``bot/channels/bus.py`` was deleted in Phase 1 P0-A Slice C."""
-    assert find_spec("bot.channels.bus") is None
+    assert find_spec("omicsclaw.channels.bus") is None
 
 
 def test_middleware_module_deleted() -> None:
     """``bot/channels/middleware.py`` was deleted in Phase 1 P0-A Slice C."""
-    assert find_spec("bot.channels.middleware") is None
+    assert find_spec("omicsclaw.channels.middleware") is None
 
 
 def test_run_py_does_not_build_middleware() -> None:
     """``bot/run.py`` and ``omicsclaw/app/server.py`` must not reference
     ``_build_middleware`` (deleted in Phase 1 P0-A Slice A)."""
     offenders: list[str] = []
-    for rel in ("bot/run.py", "omicsclaw/app/server.py"):
+    for rel in ("omicsclaw/run_channels.py", "omicsclaw/app/server.py"):
         path = REPO_ROOT / rel
         if not path.exists():
             continue

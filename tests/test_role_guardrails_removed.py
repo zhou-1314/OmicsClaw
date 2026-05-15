@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from omicsclaw.runtime.context_layers import (
+from omicsclaw.runtime.context.layers import (
     DEFAULT_CONTEXT_LAYER_INJECTORS,
     ContextAssemblyRequest,
 )
@@ -34,7 +34,7 @@ def test_get_role_guardrails_no_longer_exported_from_runtime() -> None:
 
 
 def test_get_role_guardrails_no_longer_exported_from_context_layers() -> None:
-    from omicsclaw.runtime import context_layers
+    from omicsclaw.runtime.context import layers as context_layers
 
     assert "get_role_guardrails" not in getattr(context_layers, "__all__", [])
 
@@ -53,7 +53,7 @@ def test_build_system_prompt_does_not_accept_include_role_guardrails_kwarg() -> 
     """The kwarg is removed from build_system_prompt."""
     import inspect
 
-    from omicsclaw.runtime.system_prompt import build_system_prompt
+    from omicsclaw.runtime.context.system_prompt import build_system_prompt
 
     sig = inspect.signature(build_system_prompt)
     assert "include_role_guardrails" not in sig.parameters

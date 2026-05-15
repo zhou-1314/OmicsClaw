@@ -21,10 +21,10 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from omicsclaw.core.capability_resolver import resolve_capability
+from omicsclaw.skill.capability_resolver import resolve_capability
 from omicsclaw.loaders import detect_domain_from_path
 from omicsclaw.routing.router import route_keyword, route_query_unified
-from omicsclaw.core.registry import registry
+from omicsclaw.skill.registry import registry
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)

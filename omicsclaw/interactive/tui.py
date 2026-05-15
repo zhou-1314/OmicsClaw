@@ -577,7 +577,7 @@ if _HAS_TEXTUAL:
         async def _init_llm_async(self) -> None:
             try:
                 sys.path.insert(0, str(_OMICSCLAW_DIR))
-                import bot.core as core
+                import omicsclaw.runtime.agent.state as core
                 load_project_dotenv(_OMICSCLAW_DIR, override=False)
                 provider = os.environ.get("LLM_PROVIDER", self._config.get("provider", ""))
                 api_key = os.environ.get("LLM_API_KEY", self._config.get("api_key", ""))
@@ -853,7 +853,7 @@ if _HAS_TEXTUAL:
 
         def _clear_core_conversation(self) -> None:
             try:
-                import bot.core as core
+                import omicsclaw.runtime.agent.state as core
 
                 core.conversations.pop("__tui__", None)
             except Exception:
@@ -869,7 +869,7 @@ if _HAS_TEXTUAL:
                 self._session_stats[key] = 0
             self._session_start = _time.time()
             try:
-                import bot.core as core
+                import omicsclaw.runtime.agent.state as core
 
                 core.reset_usage()
             except Exception:
@@ -1013,7 +1013,7 @@ if _HAS_TEXTUAL:
             t0 = _time.time()
             try:
                 sys.path.insert(0, str(_OMICSCLAW_DIR))
-                import bot.core as core
+                import omicsclaw.runtime.agent.state as core
 
                 _USER = "__tui__"
                 last_user_msg = seed_core_conversation(core, _USER, self._messages)

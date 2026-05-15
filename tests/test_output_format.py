@@ -8,8 +8,8 @@ from omicsclaw.extensions import (
     write_extension_state,
     write_install_record,
 )
-from omicsclaw.runtime.context_layers import ContextAssemblyRequest
-from omicsclaw.runtime.context_layers.output_format import build_output_format_layer
+from omicsclaw.runtime.context.layers import ContextAssemblyRequest
+from omicsclaw.runtime.context.layers.output_format import build_output_format_layer
 
 
 def test_default_interactive_style_instructions_use_registry_and_surface_adapter():

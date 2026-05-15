@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import pytest
 
-from omicsclaw.runtime.tool_execution_hooks import (
+from omicsclaw.runtime.tools.execution_hooks import (
     DEFAULT_PRE_CALL_RULE_INJECTORS,
     build_pre_call_rule_text,
 )
@@ -123,7 +123,7 @@ def test_query_engine_actually_calls_build_pre_call_rule_text() -> None:
     """
     import inspect
 
-    from omicsclaw.runtime import query_engine as qe_mod
+    from omicsclaw.runtime.agent import query_engine as qe_mod
 
     source = inspect.getsource(qe_mod)
     assert "build_pre_call_rule_text" in source, (
@@ -148,7 +148,7 @@ def test_query_engine_prepends_preamble_to_tool_record_output_observably() -> No
     production prepend pattern changes (e.g. swap to "append" or use a
     different separator), this test catches it.
     """
-    from omicsclaw.runtime.tool_execution_hooks import (
+    from omicsclaw.runtime.tools.execution_hooks import (
         DEFAULT_PRE_CALL_RULE_INJECTORS,
         build_pre_call_rule_text,
     )

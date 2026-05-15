@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from omicsclaw.core.lazy_metadata import LazySkillMetadata
+from omicsclaw.skill.lazy_metadata import LazySkillMetadata
 
 # Each spec is the *runtime contract* — the fields that move between
 # frontmatter.metadata.omicsclaw and parameters.yaml.  Identity fields (name,
@@ -547,7 +547,7 @@ def test_spatial_de_real_skill_roundtrips(tmp_path: Path) -> None:
 
 
 def test_param_hints_preserve_advanced_params(tmp_path: Path) -> None:
-    """bot/skill_orchestration.py reads tip_info['advanced_params'] — make
+    """omicsclaw/skill/orchestration.py reads tip_info['advanced_params'] — make
     sure roundtrip preserves it byte-for-byte (not coerced to a different
     container type)."""
     spec = RUNTIME_SPECS["multi_method"]

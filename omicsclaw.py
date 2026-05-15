@@ -89,11 +89,11 @@ from omicsclaw import __version__
 from omicsclaw.common.report import (
     build_output_dir_name,
 )
-from omicsclaw.core.skill_runner import (
+from omicsclaw.skill.runner import (
     resolve_skill_alias,
     run_skill,
 )
-from omicsclaw.core.registry import ensure_registry_loaded, registry
+from omicsclaw.skill.registry import ensure_registry_loaded, registry
 
 
 def _module_available(module_name: str) -> bool:
@@ -133,7 +133,7 @@ def _oauth_cli_choices() -> list[str]:
     will then error out gracefully inside the handler).
     """
     try:
-        from omicsclaw.core.ccproxy_manager import oauth_cli_aliases
+        from omicsclaw.providers.ccproxy import oauth_cli_aliases
         return oauth_cli_aliases()
     except Exception:
         return ["claude", "anthropic", "openai", "codex"]
@@ -147,7 +147,7 @@ def _handle_auth_command(args) -> None:
     multi-provider status view. All OAuth flow logic lives in ccproxy.
     """
     try:
-        from omicsclaw.core.ccproxy_manager import (
+        from omicsclaw.providers.ccproxy import (
             OAUTH_PROVIDERS,
             ccproxy_diagnostic_hint,
             ccproxy_executable,
@@ -1022,7 +1022,7 @@ def main():
         sys.exit(0)
 
     if args.command == "onboard":
-        from bot.onboard import run_onboard
+        from omicsclaw.setup_wizard import run_onboard
         run_onboard()
         sys.exit(0)
 

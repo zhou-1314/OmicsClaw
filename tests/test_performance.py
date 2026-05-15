@@ -1,5 +1,5 @@
 import time
-from omicsclaw.core.registry import OmicsRegistry
+from omicsclaw.skill.registry import OmicsRegistry
 
 def test_lightweight_faster_than_full():
     # Test lightweight loading

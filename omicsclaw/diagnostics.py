@@ -16,22 +16,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from omicsclaw.core.provider_registry import (
+from omicsclaw.providers.registry import (
     PROVIDER_PRESETS,
     detect_provider_from_env,
     resolve_provider,
 )
-from omicsclaw.runtime.context_assembler import (
+from omicsclaw.runtime.context.assembler import (
     assemble_prompt_context,
     extract_analysis_hints,
     extract_user_text,
     should_attach_capability_context,
 )
-from omicsclaw.runtime.context_layers import (
+from omicsclaw.runtime.context.layers import (
     ContextAssemblyRequest,
     should_prefetch_knowledge_guidance,
 )
-from omicsclaw.runtime.transcript_store import (
+from omicsclaw.runtime.storage.transcript import (
     build_selective_replay_summary,
     build_transcript_summary,
 )
@@ -204,7 +204,7 @@ def _collect_provider_check() -> DiagnosticCheck:
     env_provider = str(os.environ.get("LLM_PROVIDER", "") or "").strip()
     env_model = str(os.environ.get("OMICSCLAW_MODEL", "") or "").strip()
     env_base_url = str(os.environ.get("LLM_BASE_URL", "") or "").strip()
-    bot_core = _safe_import("bot.core")
+    bot_core = _safe_import("omicsclaw.runtime.agent.state")
     provider_presets = getattr(bot_core, "PROVIDER_PRESETS", PROVIDER_PRESETS)
     detected_provider = detect_provider_from_env(provider_presets=provider_presets)
     provider_name = env_provider or detected_provider
@@ -790,7 +790,7 @@ def _collect_skill_catalog_check(
 
     if registry_obj is None:
         try:
-            from omicsclaw.core.registry import OmicsRegistry
+            from omicsclaw.skill.registry import OmicsRegistry
 
             registry_obj = OmicsRegistry()
             registry_obj.load_all(root / "skills")
@@ -1189,7 +1189,7 @@ def _context_warning_threshold() -> int:
 
 
 def _resolve_usage_snapshot() -> dict[str, Any]:
-    bot_core = _safe_import("bot.core")
+    bot_core = _safe_import("omicsclaw.runtime.agent.state")
     if bot_core is None or not hasattr(bot_core, "get_usage_snapshot"):
         return {}
     try:
@@ -1364,7 +1364,7 @@ def _resolve_scoped_memory_context(
 
 
 def _resolve_context_budget_defaults() -> tuple[int, int | None]:
-    bot_core = _safe_import("bot.core")
+    bot_core = _safe_import("omicsclaw.runtime.agent.state")
     if bot_core is None:
         return 50, None
     max_history = int(getattr(bot_core, "MAX_HISTORY", 50) or 50)
@@ -1411,7 +1411,7 @@ def build_context_report(
     warnings: list[str] = []
     if should_attach_capability_context(normalized_query):
         try:
-            from omicsclaw.core.capability_resolver import resolve_capability
+            from omicsclaw.skill.capability_resolver import resolve_capability
 
             decision = resolve_capability(normalized_query, domain_hint=domain_hint)
             capability_context = str(decision.to_prompt_block() or "").strip()

@@ -13,8 +13,8 @@ from rich.markup import escape
 from omicsclaw.extensions import list_installed_extensions
 from omicsclaw.memory.scoped_memory import normalize_scoped_memory_scope
 from omicsclaw.runtime.output_styles import normalize_output_style_name
-from omicsclaw.runtime.transcript_store import build_transcript_summary
-from omicsclaw.runtime.verification import (
+from omicsclaw.runtime.storage.transcript import build_transcript_summary
+from omicsclaw.runtime.policy.verification import (
     WORKSPACE_KIND_ANALYSIS_RUN,
     WORKSPACE_KIND_CONVERSATION,
 )

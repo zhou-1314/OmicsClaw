@@ -37,7 +37,7 @@ def test_oauth_status_rejects_unknown_provider():
 
 def test_oauth_status_fails_when_ccproxy_missing(monkeypatch):
     from omicsclaw.app import server
-    from omicsclaw.core import ccproxy_manager as ccm
+    from omicsclaw.providers import ccproxy as ccm
 
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: False)
 
@@ -49,7 +49,7 @@ def test_oauth_status_fails_when_ccproxy_missing(monkeypatch):
 
 def test_oauth_status_returns_authenticated(monkeypatch):
     from omicsclaw.app import server
-    from omicsclaw.core import ccproxy_manager as ccm
+    from omicsclaw.providers import ccproxy as ccm
 
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: True)
     monkeypatch.setattr(
@@ -66,7 +66,7 @@ def test_oauth_status_returns_authenticated(monkeypatch):
 
 def test_oauth_status_accepts_both_aliases(monkeypatch):
     from omicsclaw.app import server
-    from omicsclaw.core import ccproxy_manager as ccm
+    from omicsclaw.providers import ccproxy as ccm
 
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: True)
     monkeypatch.setattr(ccm, "check_ccproxy_auth", lambda p: (False, "no"))
@@ -84,7 +84,7 @@ def test_oauth_status_accepts_both_aliases(monkeypatch):
 
 def test_oauth_login_returns_client_side_command(monkeypatch):
     from omicsclaw.app import server
-    from omicsclaw.core import ccproxy_manager as ccm
+    from omicsclaw.providers import ccproxy as ccm
 
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: True)
 
@@ -110,7 +110,7 @@ def test_oauth_login_adds_env_unset_when_empty_proxies_detected(monkeypatch):
     copy-paste works from any shell that has the same poisoned env.
     """
     from omicsclaw.app import server
-    from omicsclaw.core import ccproxy_manager as ccm
+    from omicsclaw.providers import ccproxy as ccm
 
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: True)
     # Simulate a server process whose env has HTTPS_PROXY="" (the toxic case)
@@ -137,7 +137,7 @@ def test_oauth_login_leaves_command_clean_when_env_is_ok(monkeypatch):
     """Default case: no proxy env hygiene issues → command has no prefix
     and no warning key is emitted."""
     from omicsclaw.app import server
-    from omicsclaw.core import ccproxy_manager as ccm
+    from omicsclaw.providers import ccproxy as ccm
 
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: True)
     # Ensure clean env by removing any inherited proxy vars
@@ -166,7 +166,7 @@ def test_oauth_login_rejects_unsupported_provider(monkeypatch):
 
 def test_oauth_logout_invokes_ccproxy(monkeypatch):
     from omicsclaw.app import server
-    from omicsclaw.core import ccproxy_manager as ccm
+    from omicsclaw.providers import ccproxy as ccm
 
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: True)
     monkeypatch.setattr(ccm, "ccproxy_executable", lambda: "/opt/venv/bin/ccproxy")
@@ -189,8 +189,8 @@ def test_oauth_logout_invokes_ccproxy(monkeypatch):
 
 def test_oauth_logout_clears_active_oauth_runtime(monkeypatch):
     from omicsclaw.app import server
-    from omicsclaw.core import ccproxy_manager as ccm
-    from omicsclaw.core.provider_runtime import (
+    from omicsclaw.providers import ccproxy as ccm
+    from omicsclaw.providers.runtime import (
         clear_active_provider_runtime,
         get_active_provider_runtime,
         set_active_provider_runtime,
@@ -233,8 +233,8 @@ def test_oauth_logout_persists_api_key_fallback_to_env(monkeypatch, tmp_path):
     session against a now-unauthenticated ccproxy.
     """
     from omicsclaw.app import server
-    from omicsclaw.core import ccproxy_manager as ccm
-    from omicsclaw.core.provider_runtime import (
+    from omicsclaw.providers import ccproxy as ccm
+    from omicsclaw.providers.runtime import (
         clear_active_provider_runtime,
         set_active_provider_runtime,
     )
@@ -291,8 +291,8 @@ def test_oauth_logout_non_active_provider_does_not_touch_env(monkeypatch, tmp_pa
     """Logout of a provider that isn't the active OAuth provider is a no-op
     on .env — we must not wipe the other provider's OAuth config."""
     from omicsclaw.app import server
-    from omicsclaw.core import ccproxy_manager as ccm
-    from omicsclaw.core.provider_runtime import (
+    from omicsclaw.providers import ccproxy as ccm
+    from omicsclaw.providers.runtime import (
         clear_active_provider_runtime,
         set_active_provider_runtime,
     )
@@ -364,7 +364,7 @@ def test_chat_provider_switch_clears_stale_oauth_env(monkeypatch, tmp_path):
 
         def init(self, **kwargs):
             # Chat path never passes auth_mode, so we default to api_key,
-            # mirroring the production bot.core.init() contract.
+            # mirroring the production omicsclaw.runtime.agent.state.init() contract.
             assert "auth_mode" not in kwargs
             self.LLM_PROVIDER_NAME = kwargs["provider"]
             self.OMICSCLAW_MODEL = kwargs.get("model") or "deepseek-chat"
@@ -415,7 +415,7 @@ def test_chat_provider_switch_failure_raises_and_leaves_env_untouched(monkeypatc
 
 def test_cached_oauth_statuses_handles_missing_ccproxy(monkeypatch):
     from omicsclaw.app import server
-    from omicsclaw.core import ccproxy_manager as ccm
+    from omicsclaw.providers import ccproxy as ccm
 
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: False)
     # Reset cache
@@ -427,7 +427,7 @@ def test_cached_oauth_statuses_handles_missing_ccproxy(monkeypatch):
 
 def test_cached_oauth_statuses_queries_both_providers(monkeypatch):
     from omicsclaw.app import server
-    from omicsclaw.core import ccproxy_manager as ccm
+    from omicsclaw.providers import ccproxy as ccm
 
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: True)
     calls: list[str] = []

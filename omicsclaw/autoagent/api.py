@@ -601,7 +601,7 @@ async def optimizable_skills():
 
     # Load skill registry for param_hints
     try:
-        from omicsclaw.core.registry import registry
+        from omicsclaw.skill.registry import registry
 
         registry.load_all()
         primary_skills = registry.iter_primary_skills()

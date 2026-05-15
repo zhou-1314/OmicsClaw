@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from omicsclaw.core.registry import OmicsRegistry
+from omicsclaw.skill.registry import OmicsRegistry
 
 
 ROOT = Path(__file__).resolve().parent.parent

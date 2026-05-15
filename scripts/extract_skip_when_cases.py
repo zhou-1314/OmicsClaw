@@ -144,7 +144,7 @@ Rules:
 
 def _resolve_llm_config(model_override: str | None) -> tuple[str, str, str]:
     """Reuse the project's provider registry to resolve API key/url/model."""
-    from omicsclaw.core.provider_registry import resolve_provider
+    from omicsclaw.providers.registry import resolve_provider
     base_url, model, api_key = resolve_provider(
         provider=os.getenv("LLM_PROVIDER", ""),
         base_url=os.getenv("LLM_BASE_URL", ""),

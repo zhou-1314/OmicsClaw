@@ -17,8 +17,8 @@ from omicsclaw.autoagent.constants import (
     LLM_MAX_RETRIES,
     LLM_RETRY_BASE_SECONDS,
 )
-from omicsclaw.core.llm_models import get_default_features
-from omicsclaw.core.llm_patches import apply_deepseek_reasoning_passback
+from omicsclaw.providers.models import get_default_features
+from omicsclaw.providers.patches import apply_deepseek_reasoning_passback
 
 try:
     from openai import OpenAI
@@ -68,7 +68,7 @@ def call_llm(
     RuntimeError
         If no usable model or API key can be resolved.
     """
-    from omicsclaw.core.provider_runtime import (
+    from omicsclaw.providers.runtime import (
         provider_requires_api_key,
         resolve_provider_runtime,
     )

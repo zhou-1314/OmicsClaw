@@ -11,29 +11,29 @@ from omicsclaw.extensions import (
     write_install_record,
 )
 
-from omicsclaw.runtime.query_engine import (
+from omicsclaw.runtime.agent.query_engine import (
     QueryEngineCallbacks,
     QueryEngineConfig,
     QueryEngineContext,
     run_query_engine,
 )
-from omicsclaw.runtime.context_compaction import ContextCompactionConfig
-from omicsclaw.runtime.events import (
+from omicsclaw.runtime.context.compaction import ContextCompactionConfig
+from omicsclaw.runtime.tools.hooks import (
     EVENT_SESSION_START,
     EVENT_TOOL_AFTER,
     EVENT_TOOL_FAILURE,
 )
-from omicsclaw.runtime.hooks import (
+from omicsclaw.runtime.tools.hooks import (
     HOOK_MODE_CONTEXT,
     HOOK_MODE_NOTICE,
     LifecycleHookRuntime,
     LifecycleHookSpec,
 )
-from omicsclaw.runtime.policy import TOOL_POLICY_REQUIRE_APPROVAL
-from omicsclaw.runtime.tool_registry import ToolRegistry
-from omicsclaw.runtime.tool_result_store import ToolResultStore
-from omicsclaw.runtime.tool_spec import APPROVAL_MODE_ASK, ToolSpec
-from omicsclaw.runtime.transcript_store import TranscriptStore, sanitize_tool_history
+from omicsclaw.runtime.policy.policy import TOOL_POLICY_REQUIRE_APPROVAL
+from omicsclaw.runtime.tools.registry import ToolRegistry
+from omicsclaw.runtime.storage.tool_result import ToolResultStore
+from omicsclaw.runtime.tools.spec import APPROVAL_MODE_ASK, ToolSpec
+from omicsclaw.runtime.storage.transcript import TranscriptStore, sanitize_tool_history
 from omicsclaw.common.user_guidance import format_user_guidance_payload
 
 

@@ -15,12 +15,12 @@ import types
 
 import pytest
 
-from omicsclaw.runtime.context_compaction import (
+from omicsclaw.runtime.context.compaction import (
     is_compaction_summary_message,
     unwrap_compaction_summary,
     wrap_compaction_summary,
 )
-from omicsclaw.runtime.transcript_store import TranscriptStore, sanitize_tool_history
+from omicsclaw.runtime.storage.transcript import TranscriptStore, sanitize_tool_history
 
 
 # ---------------------------------------------------------------------------
@@ -84,9 +84,9 @@ def bot_core():
         sys.modules["openai"].AsyncOpenAI = _FakeAsyncOpenAI  # type: ignore[attr-defined]
         sys.modules["openai"].APIError = _FakeAPIError  # type: ignore[attr-defined]
     try:
-        return importlib.import_module("bot.core")
+        return importlib.import_module("omicsclaw.runtime.agent.state")
     except ImportError as exc:
-        pytest.skip(f"bot.core unavailable: {exc}")
+        pytest.skip(f"omicsclaw.runtime.agent.state unavailable: {exc}")
 
 
 def _seed_long_history(store: TranscriptStore, chat_id: str, *, turns: int = 10) -> None:

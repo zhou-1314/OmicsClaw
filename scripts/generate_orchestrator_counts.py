@@ -27,7 +27,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from omicsclaw.core.registry import OmicsRegistry  # noqa: E402
+from omicsclaw.skill.registry import OmicsRegistry  # noqa: E402
 
 SKILL_MD = _ROOT / "skills" / "orchestrator" / "SKILL.md"
 

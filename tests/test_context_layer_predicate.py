@@ -19,8 +19,8 @@ import logging
 
 import pytest
 
-from omicsclaw.runtime import events
-from omicsclaw.runtime.context_layers import (
+from omicsclaw.runtime.tools import hooks as events
+from omicsclaw.runtime.context.layers import (
     ContextAssemblyRequest,
     ContextLayer,
     ContextLayerInjector,
@@ -102,7 +102,7 @@ def test_predicate_raising_exception_is_fail_closed_and_logged(caplog) -> None:
 def test_predicate_evaluation_emits_hit_and_miss_events() -> None:
     """When a predicate-evaluation event sink is registered, ``applies`` emits
     EVENT_PREDICATE_HIT on True and EVENT_PREDICATE_MISS on False."""
-    from omicsclaw.runtime.context_layers import (
+    from omicsclaw.runtime.context.layers import (
         register_predicate_event_sink,
         unregister_predicate_event_sink,
     )

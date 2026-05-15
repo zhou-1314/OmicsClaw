@@ -1,4 +1,4 @@
-from omicsclaw.runtime.task_store import (
+from omicsclaw.runtime.storage.task import (
     TASK_STATUS_COMPLETED,
     TASK_STATUS_IN_PROGRESS,
     TaskRecord,

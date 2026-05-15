@@ -23,11 +23,11 @@ import yaml
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from omicsclaw.core.parameters_md import (  # noqa: E402
+from omicsclaw.skill.parameters_md import (  # noqa: E402
     AUTOGEN_HEADER,
     render_parameters_md,
 )
-from omicsclaw.core.registry import SKILLS_DIR  # noqa: E402
+from omicsclaw.skill.registry import SKILLS_DIR  # noqa: E402
 
 __all__ = ["AUTOGEN_HEADER", "render_parameters_md"]
 

@@ -11,8 +11,8 @@ import asyncio
 
 import pytest
 
-from omicsclaw.runtime.bot_tools import BotToolContext, build_bot_tool_specs
-from omicsclaw.runtime.skill_listing import list_skills_in_domain
+from omicsclaw.runtime.tools.builders.agent import BotToolContext, build_bot_tool_specs
+from omicsclaw.skill.listing import list_skills_in_domain
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +108,7 @@ def test_list_skills_in_domain_literature_returns_registered_skill():
 
 
 def test_executor_returns_error_when_domain_missing():
-    from bot.core import execute_list_skills_in_domain
+    from omicsclaw.runtime.agent.state import execute_list_skills_in_domain
 
     out = asyncio.run(execute_list_skills_in_domain({}))
     assert out.startswith("Error:")
@@ -116,7 +116,7 @@ def test_executor_returns_error_when_domain_missing():
 
 
 def test_executor_runs_end_to_end():
-    from bot.core import execute_list_skills_in_domain
+    from omicsclaw.runtime.agent.state import execute_list_skills_in_domain
 
     out = asyncio.run(
         execute_list_skills_in_domain({"domain": "bulkrna", "filter": "survival"})

@@ -21,9 +21,9 @@ import logging
 
 import pytest
 
-from omicsclaw.runtime.context_layers import ContextAssemblyRequest
-from omicsclaw.runtime.tool_registry import ToolRegistry, select_tool_specs
-from omicsclaw.runtime.tool_spec import ToolSpec
+from omicsclaw.runtime.context.layers import ContextAssemblyRequest
+from omicsclaw.runtime.tools.registry import ToolRegistry, select_tool_specs
+from omicsclaw.runtime.tools.spec import ToolSpec
 
 
 def _spec(name: str, predicate=None) -> ToolSpec:
@@ -124,11 +124,11 @@ def test_predicate_emits_predicate_hit_event_via_existing_sink() -> None:
     """Reuse the Phase 1 ``register_predicate_event_sink`` so tool-list
     selection telemetry flows through the same channel as context-layer
     predicates. Closes the Phase 4 review's "sink unused" leftover."""
-    from omicsclaw.runtime.context_layers import (
+    from omicsclaw.runtime.context.layers import (
         register_predicate_event_sink,
         unregister_predicate_event_sink,
     )
-    from omicsclaw.runtime import events
+    from omicsclaw.runtime.tools import hooks as events
 
     captured = []
     sink_id = register_predicate_event_sink(captured.append)
@@ -152,7 +152,7 @@ def test_predicate_event_distinguishes_tool_from_layer_source() -> None:
     + ``kind='tool'`` so consumers can disambiguate from context-layer
     predicate events that share the sink (avoids ambiguous events when a
     layer and a tool happen to share a predicate name)."""
-    from omicsclaw.runtime.context_layers import (
+    from omicsclaw.runtime.context.layers import (
         register_predicate_event_sink,
         unregister_predicate_event_sink,
     )

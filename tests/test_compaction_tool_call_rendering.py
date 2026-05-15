@@ -7,7 +7,7 @@ structural metadata and not reproduced. (Same lesson as CodePilot's fix.)
 """
 from __future__ import annotations
 
-from omicsclaw.runtime.context_compaction import (
+from omicsclaw.runtime.context.compaction import (
     ContextCompactionConfig,
     compact_history,
 )

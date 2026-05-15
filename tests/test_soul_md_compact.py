@@ -128,7 +128,7 @@ def test_soul_md_does_not_carry_full_expertise_list() -> None:
 
 def test_soul_md_is_loaded_by_load_base_persona() -> None:
     """Sanity: the runtime loader returns the file content unchanged."""
-    from omicsclaw.runtime.context_layers import load_base_persona
+    from omicsclaw.runtime.context.layers import load_base_persona
 
     loaded = load_base_persona()
     assert loaded == _soul_text().rstrip() or loaded.startswith(_soul_text()[:200])

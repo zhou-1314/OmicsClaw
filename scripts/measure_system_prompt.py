@@ -15,8 +15,8 @@ from __future__ import annotations
 import argparse
 import sys
 
-from omicsclaw.runtime.context_assembler import assemble_prompt_context
-from omicsclaw.runtime.context_layers import ContextAssemblyRequest
+from omicsclaw.runtime.context.assembler import assemble_prompt_context
+from omicsclaw.runtime.context.layers import ContextAssemblyRequest
 
 
 def _build_request(args: argparse.Namespace) -> ContextAssemblyRequest:

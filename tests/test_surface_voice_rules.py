@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import pytest
 
-from omicsclaw.runtime.context_assembler import assemble_prompt_context
-from omicsclaw.runtime.context_layers import (
+from omicsclaw.runtime.context.assembler import assemble_prompt_context
+from omicsclaw.runtime.context.layers import (
     DEFAULT_CONTEXT_LAYER_INJECTORS,
     ContextAssemblyRequest,
 )

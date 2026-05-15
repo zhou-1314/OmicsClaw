@@ -18,8 +18,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from omicsclaw.core import ccproxy_manager as ccm
-from omicsclaw.core import provider_runtime as pr
+from omicsclaw.providers import ccproxy as ccm
+from omicsclaw.providers import runtime as pr
 
 
 @pytest.fixture(autouse=True)
@@ -133,7 +133,7 @@ def test_bug3_clear_ccproxy_env_no_provider_clears_both():
 
 def test_bug3_api_key_mode_after_oauth_sees_clean_env(monkeypatch):
     """Full reproducer: OAuth session → api_key resolve must hit cloud URL."""
-    from omicsclaw.core.provider_registry import resolve_provider
+    from omicsclaw.providers.registry import resolve_provider
 
     # Simulate a prior OAuth session leaving env polluted.
     ccm.setup_ccproxy_env("anthropic", 9999)
@@ -238,7 +238,7 @@ def test_bug5_ccproxy_executable_falls_back_to_literal(monkeypatch):
 def test_bug6_core_init_rejects_oauth_for_unsupported_provider(monkeypatch):
     """LLM_AUTH_MODE=oauth + LLM_PROVIDER=deepseek should raise — not
     silently try to start ccproxy with both flags False."""
-    from bot import core as botcore
+    from omicsclaw.runtime.agent import state as botcore
 
     # Keep us from hitting AsyncOpenAI construction
     monkeypatch.setattr(botcore, "AsyncOpenAI", MagicMock())
@@ -256,7 +256,7 @@ def test_bug6_core_init_rejects_oauth_for_unsupported_provider(monkeypatch):
 
 def test_bug6_core_init_allows_oauth_for_anthropic(monkeypatch):
     """Happy path: anthropic + oauth should proceed to maybe_start_ccproxy."""
-    from bot import core as botcore
+    from omicsclaw.runtime.agent import state as botcore
 
     monkeypatch.setattr(botcore, "AsyncOpenAI", MagicMock())
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: True)
@@ -292,7 +292,7 @@ def test_bug7_core_init_bootstrap_degrades_when_ccproxy_missing(
     whenever ``.env`` had ``LLM_AUTH_MODE=oauth`` but ccproxy wasn't
     installed. The server should start and log a warning instead.
     """
-    from bot import core as botcore
+    from omicsclaw.runtime.agent import state as botcore
 
     monkeypatch.setattr(botcore, "AsyncOpenAI", MagicMock())
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: False)
@@ -319,7 +319,7 @@ def test_bug7_core_init_bootstrap_degrades_when_ccproxy_missing(
 
 def test_bug7_core_init_strict_raises_when_ccproxy_missing(monkeypatch):
     """Default strict_oauth=True preserves fail-fast for explicit callers."""
-    from bot import core as botcore
+    from omicsclaw.runtime.agent import state as botcore
 
     monkeypatch.setattr(botcore, "AsyncOpenAI", MagicMock())
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: False)
@@ -340,7 +340,7 @@ def test_oauth_providers_table_is_self_consistent():
     break, it means someone added a row without filling all required
     fields, or the backwards-compat views drifted from the table.
     """
-    from omicsclaw.core.ccproxy_manager import (
+    from omicsclaw.providers.ccproxy import (
         CCPROXY_PROVIDER_MAP,
         CLI_PROVIDER_ALIASES,
         OAUTH_PROVIDERS,
@@ -386,7 +386,7 @@ def test_oauth_providers_table_is_self_consistent():
 
 def test_bug7_bootstrap_degrades_for_unsupported_provider(monkeypatch, caplog):
     """stale LLM_AUTH_MODE=oauth + LLM_PROVIDER=deepseek → warn, not raise."""
-    from bot import core as botcore
+    from omicsclaw.runtime.agent import state as botcore
 
     monkeypatch.setattr(botcore, "AsyncOpenAI", MagicMock())
     # Even if ccproxy IS installed, deepseek isn't OAuth-capable.
@@ -408,8 +408,8 @@ def test_bug7_bootstrap_degrades_for_unsupported_provider(monkeypatch, caplog):
 
 def test_bug8_core_init_normalizes_stale_cross_provider_model(monkeypatch, caplog):
     """provider remains authoritative; stale foreign default model is repaired."""
-    from bot import core as botcore
-    from omicsclaw.core.provider_registry import PROVIDER_PRESETS
+    from omicsclaw.runtime.agent import state as botcore
+    from omicsclaw.providers.registry import PROVIDER_PRESETS
 
     monkeypatch.setattr(botcore, "AsyncOpenAI", MagicMock())
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")

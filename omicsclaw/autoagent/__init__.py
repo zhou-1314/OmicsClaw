@@ -180,7 +180,7 @@ def run_optimization(
 
     # 2. Build search space from skill registry
     try:
-        from omicsclaw.core.registry import registry
+        from omicsclaw.skill.registry import registry
 
         registry.load_all()
         skill_info = registry.skills.get(skill_name)
@@ -399,7 +399,7 @@ def run_harness_evolution(
 
     # 3. Build search space (for trial execution with default params)
     try:
-        from omicsclaw.core.registry import registry
+        from omicsclaw.skill.registry import registry
 
         registry.load_all()
         skill_info = registry.skills.get(skill_name)

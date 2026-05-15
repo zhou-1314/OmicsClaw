@@ -68,9 +68,11 @@ skills/singlecell/data/databases/*
 !skills/singlecell/data/databases/*/.gitkeep
 skills/singlecell/data/demo/*.h5ad
 
-# Bot logs and audit
+# Runtime logs and audit (bot/ folded into omicsclaw/ in ADR 0004 but the
+# runtime still writes to OMICSCLAW_DIR/bot/logs/ for backwards compatibility)
 bot/logs/
 bot/audit/
+omicsclaw/channels/_logs/
 *.jsonl
 
 # Jupyter

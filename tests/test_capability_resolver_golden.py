@@ -1,7 +1,7 @@
 """Golden routing snapshot for ``capability_resolver`` (OMI-12 P2.9).
 
 The resolver's scoring weights and decision thresholds (now lifted to
-module-level constants in ``omicsclaw.core.capability_resolver``) drive
+module-level constants in ``omicsclaw.skill.capability_resolver``) drive
 which skill a natural-language query gets routed to. Adjusting any of
 those weights — even reasonably — risks silently re-ranking real queries.
 Without a fixed corpus to diff against, weight tuning becomes a guessing
@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-from omicsclaw.core.capability_resolver import resolve_capability
+from omicsclaw.skill.capability_resolver import resolve_capability
 
 
 GOLDEN_PATH = Path(__file__).parent / "fixtures" / "golden_routing" / "snapshot.json"

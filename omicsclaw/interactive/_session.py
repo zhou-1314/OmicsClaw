@@ -20,7 +20,7 @@ try:
 except ImportError:
     _HAS_AIOSQLITE = False
 
-from omicsclaw.runtime.transcript_store import (
+from omicsclaw.runtime.storage.transcript import (
     build_transcript_summary,
     sanitize_tool_history,
 )

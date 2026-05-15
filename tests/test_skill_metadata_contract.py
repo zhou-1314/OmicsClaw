@@ -5,7 +5,7 @@ from typing import Any
 
 import yaml
 
-from omicsclaw.core.registry import OmicsRegistry
+from omicsclaw.skill.registry import OmicsRegistry
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -25,7 +25,7 @@ def _runtime_contract(skill_dir: Path) -> dict[str, Any]:
     """Return the runtime metadata block, regardless of whether the skill
     is in legacy (frontmatter `metadata.omicsclaw`) or v2 (sidecar
     `parameters.yaml`) form.  Mirrors the priority used by
-    omicsclaw.core.lazy_metadata."""
+    omicsclaw.skill.lazy_metadata."""
     sidecar = skill_dir / "parameters.yaml"
     if sidecar.exists():
         return yaml.safe_load(sidecar.read_text(encoding="utf-8")) or {}

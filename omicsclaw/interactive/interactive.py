@@ -201,7 +201,7 @@ def _configure_cli_loggers() -> None:
         "omicsclaw.memory.snapshot",
         "omicsclaw.runtime",
         "omicsclaw.runtime.context",
-        "omicsclaw.runtime.context_layers",
+        "omicsclaw.runtime.context.layers",
         "httpx",
         "httpcore",
         "openai",
@@ -1376,7 +1376,7 @@ def _init_llm(config: dict) -> tuple[str, str]:
     """Initialize bot/core LLM. Returns (model, provider)."""
     try:
         sys.path.insert(0, str(_OMICSCLAW_DIR))
-        import bot.core as core
+        import omicsclaw.runtime.agent.state as core
         load_project_dotenv(_OMICSCLAW_DIR, override=False)
 
         provider = str(config.get("provider", "") or os.environ.get("LLM_PROVIDER", "") or "")
@@ -1419,7 +1419,7 @@ async def _stream_llm_response(
     """
     try:
         sys.path.insert(0, str(_OMICSCLAW_DIR))
-        import bot.core as core
+        import omicsclaw.runtime.agent.state as core
 
         # Use the existing LLM tool loop from core.py.
         # core.llm_tool_loop manages its own per-chat conversation history

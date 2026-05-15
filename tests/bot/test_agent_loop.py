@@ -1,12 +1,12 @@
-"""Unit tests for ``bot.agent_loop`` — the multi-round LLM dispatch loop.
+"""Unit tests for ``omicsclaw.runtime.agent.loop`` — the multi-round LLM dispatch loop.
 
 The agent loop is the central path every User-facing entry walks through:
 ``bot/`` channels, ``omicsclaw/app/server.py``, and ``omicsclaw/interactive
 /interactive.py`` all delegate to ``llm_tool_loop``. These tests pin its
 observable contract:
 
-* The function lives at ``bot.agent_loop`` (canonical home) and is also
-  re-exported through ``bot.core`` for backward-compat.
+* The function lives at ``omicsclaw.runtime.agent.loop`` (canonical home) and is also
+  re-exported through ``omicsclaw.runtime.agent.state`` for backward-compat.
 * Its signature accepts the call sites that production uses (`chat_id`
   / `user_content` plus the keyword-only override knobs).
 
@@ -21,30 +21,30 @@ import inspect
 
 
 def test_llm_tool_loop_lives_in_bot_agent_loop():
-    """Tracer bullet: the canonical home is ``bot.agent_loop``."""
-    import bot.agent_loop  # noqa: F401
+    """Tracer bullet: the canonical home is ``omicsclaw.runtime.agent.loop``."""
+    import omicsclaw.runtime.agent.loop  # noqa: F401
 
-    assert hasattr(bot.agent_loop, "llm_tool_loop")
-    assert inspect.iscoroutinefunction(bot.agent_loop.llm_tool_loop)
+    assert hasattr(omicsclaw.runtime.agent.loop, "llm_tool_loop")
+    assert inspect.iscoroutinefunction(omicsclaw.runtime.agent.loop.llm_tool_loop)
 
 
 def test_bot_core_re_exports_llm_tool_loop_with_identity():
     """Backward-compat: ``omicsclaw/app/server.py`` and
     ``omicsclaw/interactive/interactive.py`` invoke ``core.llm_tool_loop``;
     the symbol must resolve to the same coroutine on both modules."""
-    import bot.agent_loop
-    import bot.core
+    import omicsclaw.runtime.agent.loop
+    import omicsclaw.runtime.agent.state
 
-    assert bot.core.llm_tool_loop is bot.agent_loop.llm_tool_loop
+    assert omicsclaw.runtime.agent.state.llm_tool_loop is omicsclaw.runtime.agent.loop.llm_tool_loop
 
 
 def test_llm_tool_loop_signature_matches_production_call_sites():
     """Pin the kwargs that ``omicsclaw/app/server.py:1740`` and
     ``omicsclaw/interactive/interactive.py:1505`` actually pass —
     a renamed kwarg would break those entries silently."""
-    import bot.agent_loop
+    import omicsclaw.runtime.agent.loop
 
-    sig = inspect.signature(bot.agent_loop.llm_tool_loop)
+    sig = inspect.signature(omicsclaw.runtime.agent.loop.llm_tool_loop)
     params = sig.parameters
     # Required positional arg
     assert "chat_id" in params
@@ -84,7 +84,7 @@ def test_coerce_timeout_seconds_accepts_int_and_numeric_strings():
     ``None`` for unparseable inputs so the caller knows to skip the
     override. Float values round to the nearest second (``round`` not
     truncate) — so ``45.7`` → 46."""
-    from bot.agent_loop import _coerce_timeout_seconds
+    from omicsclaw.runtime.agent.loop import _coerce_timeout_seconds
 
     assert _coerce_timeout_seconds(60) == 60
     assert _coerce_timeout_seconds("120") == 120
@@ -102,7 +102,7 @@ def test_extract_timeout_seconds_from_text_recognises_timeout_phrases():
     next-iteration override. The matcher is intentionally narrow — only
     explicit timeout phrases trigger, so unrelated numeric stderr text
     doesn't trip the override."""
-    from bot.agent_loop import _extract_timeout_seconds_from_text
+    from omicsclaw.runtime.agent.loop import _extract_timeout_seconds_from_text
 
     assert _extract_timeout_seconds_from_text("timed out after 60 seconds") == 60
     assert _extract_timeout_seconds_from_text("Job timeout after 90s") == 90
@@ -115,15 +115,15 @@ def test_extract_timeout_seconds_from_text_recognises_timeout_phrases():
 
 
 def test_llm_tool_loop_returns_actionable_message_when_llm_uninitialised():
-    """If ``bot.core.llm`` is ``None`` (e.g. ``oc chat`` started without an
+    """If ``omicsclaw.runtime.agent.state.llm`` is ``None`` (e.g. ``oc chat`` started without an
     API key), sending a message must return an actionable hint — naming
     the env var to set and the onboard command — rather than the cryptic
     ``Error: LLM client not initialised. Call core.init() first.`` that
     blames the user for not running a function they cannot reach.
     """
     import asyncio
-    import bot.agent_loop as agent_loop
-    import bot.core as core
+    import omicsclaw.runtime.agent.loop as agent_loop
+    import omicsclaw.runtime.agent.state as core
 
     saved = core.llm
     core.llm = None
@@ -154,7 +154,7 @@ def test_format_llm_api_error_message_provides_actionable_text_for_common_errors
     a user-facing message with hints (rate limit, auth, network). The
     chat surface displays the formatted string verbatim — must be
     non-empty and reference the exception class name."""
-    from bot.agent_loop import _format_llm_api_error_message
+    from omicsclaw.runtime.agent.loop import _format_llm_api_error_message
 
     # Plain Exception fallback
     msg = _format_llm_api_error_message(RuntimeError("kaboom"))
@@ -180,7 +180,7 @@ def test_build_tool_result_callback_metadata_marks_failure_as_error():
     """Baseline: a non-success tool result without a preflight payload
     is reported as ``is_error=True`` so UIs can collapse it as a
     failure tile."""
-    from bot.agent_loop import _build_tool_result_callback_metadata
+    from omicsclaw.runtime.agent.loop import _build_tool_result_callback_metadata
 
     metadata = _build_tool_result_callback_metadata(
         _FakeExecutionResult(success=False), display_output="boom"
@@ -205,7 +205,7 @@ def test_build_tool_result_callback_metadata_demotes_preflight_pending_from_erro
         the run did fail at the process level; only the UX classification
         changes
     """
-    from bot.agent_loop import _build_tool_result_callback_metadata
+    from omicsclaw.runtime.agent.loop import _build_tool_result_callback_metadata
 
     payload = {
         "kind": "preflight",
@@ -242,8 +242,8 @@ def test_after_tool_forwards_pending_preflight_payload_to_on_tool_result(monkeyp
     import json
     from types import SimpleNamespace
 
-    import bot.agent_loop as agent_loop
-    import bot.core as core
+    import omicsclaw.runtime.agent.loop as agent_loop
+    import omicsclaw.runtime.agent.state as core
 
     # Isolate the global stash so we don't leak across tests.
     monkeypatch.setattr(core, "pending_preflight_requests", {}, raising=False)
@@ -329,8 +329,8 @@ def test_after_tool_does_not_mark_preflight_pending_for_normal_failure(monkeypat
     import asyncio
     from types import SimpleNamespace
 
-    import bot.agent_loop as agent_loop
-    import bot.core as core
+    import omicsclaw.runtime.agent.loop as agent_loop
+    import omicsclaw.runtime.agent.state as core
 
     monkeypatch.setattr(core, "pending_preflight_requests", {}, raising=False)
 
@@ -390,7 +390,7 @@ def test_build_tool_result_callback_metadata_timeout_overrides_preflight_demotio
     """If the tool genuinely timed out, that is an error regardless of
     any preflight payload — don't let a stale payload mask a hung run.
     """
-    from bot.agent_loop import _build_tool_result_callback_metadata
+    from omicsclaw.runtime.agent.loop import _build_tool_result_callback_metadata
 
     metadata = _build_tool_result_callback_metadata(
         _FakeExecutionResult(success=False),

@@ -22,9 +22,9 @@ from omicsclaw.extensions import (
     write_install_record,
 )
 from omicsclaw.interactive._session import format_relative_time
-from omicsclaw.runtime.events import EVENT_EXTENSION_INSTALLED
-from omicsclaw.runtime.hook_payloads import ExtensionHookPayload
-from omicsclaw.runtime.hooks import (
+from omicsclaw.runtime.tools.hooks import EVENT_EXTENSION_INSTALLED
+from omicsclaw.runtime.tools.hooks import ExtensionHookPayload
+from omicsclaw.runtime.tools.hooks import (
     HOOK_MODE_NOTICE,
     build_default_lifecycle_hook_runtime,
     format_hook_notice_block,
@@ -1182,7 +1182,7 @@ def build_refresh_skills_statuses(
 
 def refresh_skill_registry() -> str:
     try:
-        from omicsclaw.core.registry import registry
+        from omicsclaw.skill.registry import registry
 
         registry._loaded = False
         registry.skills.clear()

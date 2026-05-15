@@ -1,4 +1,4 @@
-"""Shared bridge helpers between interactive surfaces and bot.core."""
+"""Shared bridge helpers between interactive surfaces and omicsclaw.runtime.agent.state."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from omicsclaw.runtime.transcript_store import sanitize_tool_history
+from omicsclaw.runtime.storage.transcript import sanitize_tool_history
 
 
 @dataclass(frozen=True, slots=True)

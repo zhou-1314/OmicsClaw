@@ -5,12 +5,12 @@ import json
 
 from omicsclaw.interactive import _mcp
 from omicsclaw.extensions import write_extension_state, write_install_record
-from omicsclaw.runtime.context_layers import (
+from omicsclaw.runtime.context.layers import (
     build_mcp_instructions_block,
     should_prefetch_knowledge_guidance,
     should_prefetch_skill_context,
 )
-from omicsclaw.runtime.context_assembler import (
+from omicsclaw.runtime.context.assembler import (
     ContextAssemblyRequest,
     assemble_chat_context,
     assemble_prompt_context,
@@ -476,7 +476,7 @@ def test_assemble_chat_context_forwards_knowledge_guidance_to_prompt_builder(mon
         return "PROMPT"
 
     monkeypatch.setattr(
-        "omicsclaw.runtime.context_layers.load_knowledge_guidance",
+        "omicsclaw.runtime.context.layers.load_knowledge_guidance",
         lambda **_: "## Preloaded Knowledge Guidance\n\nPrefer Harmony for batch correction.",
     )
 

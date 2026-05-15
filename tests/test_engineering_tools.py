@@ -2,8 +2,8 @@ import asyncio
 import json
 from pathlib import Path
 
-from omicsclaw.runtime.bot_tools import BotToolContext, build_bot_tool_specs
-from omicsclaw.runtime.engineering_tools import (
+from omicsclaw.runtime.tools.builders.agent import BotToolContext, build_bot_tool_specs
+from omicsclaw.runtime.tools.builders.engineering import (
     build_engineering_tool_executors,
     build_engineering_tool_specs,
 )

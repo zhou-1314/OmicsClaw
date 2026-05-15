@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from omicsclaw.agents.pipeline import ResearchPipeline
-from omicsclaw.core.provider_registry import PROVIDER_PRESETS
+from omicsclaw.providers.registry import PROVIDER_PRESETS
 
 
 def _build_pipeline(provider: str = "", model: str = "") -> ResearchPipeline:

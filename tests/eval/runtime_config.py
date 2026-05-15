@@ -1,7 +1,7 @@
 """Eval runtime config resolver.
 
 Single source of truth for the eval suite's effective LLM endpoint, model,
-and API key. Delegates to ``omicsclaw.core.provider_registry.resolve_provider``
+and API key. Delegates to ``omicsclaw.providers.registry.resolve_provider``
 so the same env semantics that drive ``bot/run.py`` also drive the eval
 fixtures — when production runs DeepSeek v4-flash, eval measures DeepSeek
 v4-flash, not a hard-coded foreign default.
@@ -17,7 +17,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from omicsclaw.core.provider_registry import PROVIDER_PRESETS, resolve_provider
+from omicsclaw.providers.registry import PROVIDER_PRESETS, resolve_provider
 
 
 @dataclass(frozen=True, slots=True)

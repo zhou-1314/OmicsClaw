@@ -10,7 +10,7 @@ while pinning the four critical gotchas in each.
 
 from __future__ import annotations
 
-from omicsclaw.runtime.bot_tools import BotToolContext, build_bot_tool_specs
+from omicsclaw.runtime.tools.builders.agent import BotToolContext, build_bot_tool_specs
 
 
 def _spec_by_name(name: str):

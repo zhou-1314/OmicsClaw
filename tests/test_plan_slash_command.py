@@ -41,9 +41,9 @@ def bot_core(monkeypatch):
         sys.modules["openai"].AsyncOpenAI = _FakeAsyncOpenAI  # type: ignore[attr-defined]
         sys.modules["openai"].APIError = _FakeAPIError  # type: ignore[attr-defined]
     try:
-        return importlib.import_module("bot.core")
+        return importlib.import_module("omicsclaw.runtime.agent.state")
     except ImportError as exc:
-        pytest.skip(f"bot.core unavailable: {exc}")
+        pytest.skip(f"omicsclaw.runtime.agent.state unavailable: {exc}")
 
 
 def test_plan_returns_file_when_pipeline_workspace_has_plan(bot_core, tmp_path):
