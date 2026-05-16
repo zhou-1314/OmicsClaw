@@ -321,7 +321,7 @@ def _build_thinking_extra_body(
 # Active session tracking (for abort support)
 # ---------------------------------------------------------------------------
 
-# Maps session_id -> asyncio.Task running llm_tool_loop
+# Maps session_id -> asyncio.Task running dispatch() per ADR 0006
 _active_sessions: dict[str, asyncio.Task] = {}
 _pending_permission_requests: dict[str, dict[str, Any]] = {}
 _session_policy_states: dict[str, ToolPolicyState] = {}
@@ -1046,7 +1046,7 @@ async def _handle_slash_command(command: str, arg: str, session_id: str) -> str 
 @app.post("/chat/stream")
 async def chat_stream(req: ChatRequest):
     """
-    Run llm_tool_loop and stream events via SSE.
+    Run dispatch(envelope) and stream events via SSE (per ADR 0006).
 
     Events emitted:
       - {"type": "status",             "data": "{...}"} — init/status metadata
@@ -1177,8 +1177,11 @@ async def chat_stream(req: ChatRequest):
             workspace=req.workspace,
         )
 
-    # asyncio.Queue bridges callbacks (invoked inside llm_tool_loop's task)
-    # to the SSE generator running in the response.
+    # asyncio.Queue bridges the dispatch() event loop (driving the
+    # callbacks defined below) to the SSE generator running in the
+    # response. The callbacks are still parameterless functions —
+    # dispatch() yields typed events, this _run_loop dispatches each
+    # event to the matching callback.
     queue: asyncio.Queue[dict | None] = asyncio.Queue()
     streamed_text = ""
     streamed_text_chunks = 0
@@ -1782,30 +1785,53 @@ async def chat_stream(req: ChatRequest):
             on_context_compacted = make_compaction_event_handler(queue)
 
             from omicsclaw.memory import desktop_chat_user_id
-            result = await core.llm_tool_loop(
+            from omicsclaw.runtime.agent.dispatcher import dispatch
+            from omicsclaw.runtime.agent.envelope import MessageEnvelope
+            from omicsclaw.runtime.agent.events import (
+                ContextCompacted as _DispatchContextCompacted,
+                Error as _DispatchError,
+                Final as _DispatchFinal,
+                StreamContent as _DispatchStreamContent,
+                StreamReasoning as _DispatchStreamReasoning,
+                ToolCall as _DispatchToolCall,
+                ToolResult as _DispatchToolResult,
+            )
+
+            envelope = MessageEnvelope(
                 chat_id=session_id,
-                user_content=user_content,
+                content=user_content,
                 user_id=desktop_chat_user_id(),
+                platform="app",
                 workspace=req.workspace,
                 pipeline_workspace=req.pipeline_workspace,
                 output_style=req.output_style,
-                platform="app",
                 mcp_servers=mcp_servers,
-                on_tool_call=on_tool_call,
-                on_tool_result=on_tool_result,
-                on_stream_content=on_stream_content,
-                on_stream_reasoning=on_stream_reasoning,
-                on_context_compacted=on_context_compacted,
                 usage_accumulator=usage_accumulator,
                 request_tool_approval=request_tool_approval,
                 policy_state=current_policy_state.to_dict(),
-                # Per-request runtime overrides
                 model_override=model_override,
                 extra_api_params=extra_api_params if extra_api_params else None,
                 max_tokens_override=max_tokens_override,
                 system_prompt_append=req.system_prompt_append,
                 mode=req.mode,
             )
+
+            result = ""
+            async for event in dispatch(envelope):
+                if isinstance(event, _DispatchToolCall):
+                    await on_tool_call(event.tool, event.arguments)
+                elif isinstance(event, _DispatchToolResult):
+                    await on_tool_result(event.tool, event.result, event.metadata)
+                elif isinstance(event, _DispatchStreamContent):
+                    await on_stream_content(event.chunk)
+                elif isinstance(event, _DispatchStreamReasoning):
+                    await on_stream_reasoning(event.chunk)
+                elif isinstance(event, _DispatchContextCompacted):
+                    await on_context_compacted(event.payload)
+                elif isinstance(event, _DispatchFinal):
+                    result = event.text
+                elif isinstance(event, _DispatchError):
+                    raise event.exception
             # If the result contains text that was NOT streamed (non-streaming
             # path, or slash-command response), emit only the missing suffix.
             # queue.qsize() is not reliable here because the SSE consumer may
@@ -1841,7 +1867,7 @@ async def chat_stream(req: ChatRequest):
             await _queue_event("error", "Session aborted")
             _finalize_bound_remote_job("canceled", error="session_aborted")
         except Exception as exc:
-            logger.exception("llm_tool_loop error for session %s", session_id)
+            logger.exception("dispatch() error for session %s", session_id)
             await _queue_event("error", str(exc))
             _finalize_bound_remote_job("failed", error=str(exc))
         finally:
@@ -1905,7 +1931,7 @@ async def chat_stream(req: ChatRequest):
 
 @app.post("/chat/abort")
 async def chat_abort(req: AbortRequest):
-    """Cancel a running llm_tool_loop session."""
+    """Cancel a running dispatch() session."""
     task = _active_sessions.get(req.session_id)
     if task is None:
         raise HTTPException(404, detail="No active session with that ID")

@@ -110,27 +110,46 @@ with `run.events` + `run.final_reply`) were considered and rejected as
 non-uniform across Surfaces — Channel would await the future, Desktop
 and CLI would iterate the stream, two code shapes for one operation.
 
-**Q6 — Event taxonomy: exactly ten events, one-to-one with the existing
-seven callbacks + return + exception + `pending_media`.** The union:
+**Q6 — Event taxonomy: nine events, one-to-one with the existing
+seven callbacks + return + exception.** The union:
 
     ProgressStart(progress_id, text)
     ProgressUpdate(progress_id, text)
     ToolCall(tool, arguments)
-    ToolResult(tool, result)
+    ToolResult(tool, result, metadata)
     StreamContent(chunk)
     StreamReasoning(chunk)
     ContextCompacted(payload)
-    PendingMedia(items)
     Final(text, kind: "normal" | "preflight")
     Error(exception)
 
 No new capability is added at this layer; the contract is a one-to-one
-recast of what `llm_tool_loop` already produces. Adding richer or
-fewer events is a follow-up. `Final.kind` is the only discriminator a
-Surface uses to branch behaviour (Desktop renders preflight ask as a
-button UI; Channel renders it as plain text). `pending_text` does not
-appear in the event union — its content is folded into `Final.text` by
-the dispatcher, which is how problem (1) is closed.
+recast of what `llm_tool_loop` already produces. `Final.kind` is the
+only discriminator a Surface uses to branch behaviour (Desktop renders
+preflight ask as a button UI; Channel renders it as plain text).
+`pending_text` does not appear in the event union — its content is
+folded into `Final.text` by the dispatcher, which is how problem (1) is
+closed.
+
+`ToolResult.metadata` was added during L2 implementation: the real
+`on_tool_result` callback fires with three arguments (the loop's
+`_emit_tool_callback` passes `name, display_output, metadata`); a two-
+field event would have silently dropped the metadata Desktop already
+consumes (preflight tags, timeout flags). This is a faithful refinement
+of the v1 contract, not a deviation.
+
+The originally-proposed tenth event `PendingMedia(items)` was dropped
+during L2. Both live Surfaces (Channel, Desktop) already drain the
+`pending_media` side-channel themselves — Channel at end-of-loop via
+`_drain_pending_media`, Desktop mid-loop inside each `on_tool_result`
+via `_consume_pending_media_for_session`. A dispatcher-level emit
+forced a race: the dispatcher would pop `pending_media[chat_id]` at
+end-of-loop, then Desktop's mid-loop `on_tool_result` (running on the
+consumer side, after the dispatcher's background task had already
+finished) would see an empty dict. The simplest fix was to keep the
+side-channel intact and let each Surface drain natively. The
+`pending_media` state global stays in `runtime/agent/state.py` for the
+foreseeable future; collapsing it is out of scope for this ADR.
 
 **Q7 — Module shape: a free function, not a class.** The per-request
 state is constructed inside `dispatch(envelope)` and discarded when the
@@ -285,10 +304,9 @@ Tracked but not resolved here:
   enough to motivate the contract. Revisit when a real cross-Surface
   cancel concern emerges.
 
-- **`pending_media` event vs return field.** This ADR keeps
-  `PendingMedia` as a discrete event for symmetry with the 10-event
-  taxonomy, but only the Channel Surface consumes it; Desktop and
-  CLI ignore it. If a future Surface lands that needs media, the
-  contract is ready; if no such Surface lands within a quarter,
-  revisit whether `PendingMedia` should be folded back into
-  `Final.attachments` to shrink the taxonomy.
+- **`pending_media` event resurrection.** Dropped during L2 (see Q6
+  for the race that motivated removal). If a future Surface lands that
+  cannot drain the side-channel natively and needs media surfaced in
+  the event stream, reintroduce `PendingMedia` with explicit ordering
+  guarantees (emit before `Final`, but only on a copy — let the
+  Surface decide whether to pop the side-channel).

@@ -273,6 +273,7 @@ def test_notebook_file_routes_round_trip_through_backend_router(monkeypatch, tmp
     workspace.mkdir()
     fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[workspace])
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(workspace))
 
     app = FastAPI()
@@ -343,6 +344,7 @@ def test_notebook_open_rejects_untrusted_absolute_path_when_workspace_is_omitted
 
     fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[trusted_workspace])
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(trusted_workspace))
 
     app = FastAPI()
@@ -376,6 +378,7 @@ def test_notebook_delete_rejects_live_pipeline_notebook(monkeypatch, tmp_path):
 
     fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[workspace])
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(workspace))
 
     notebook_router_module = importlib.import_module("omicsclaw.surfaces.desktop.notebook.router")
@@ -426,6 +429,7 @@ def test_notebook_delete_route_rejects_live_pipeline_notebook(monkeypatch, tmp_p
 
     fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[workspace])
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(workspace))
 
     seen = {"stop_calls": 0}
@@ -487,6 +491,7 @@ def test_notebook_kernel_routes_accept_workspace_file_contract(monkeypatch, tmp_
     )
     fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[workspace])
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(workspace))
 
     seen: dict[str, dict[str, object]] = {}
@@ -650,6 +655,7 @@ def test_notebook_execute_route_accepts_workspace_file_contract(monkeypatch, tmp
     )
     fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[workspace])
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(workspace))
 
     seen: dict[str, object] = {}
@@ -862,6 +868,7 @@ async def test_set_workspace_updates_workspace_env_and_persistence(monkeypatch, 
     workspace_dir.mkdir()
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_get_omicsclaw_env_path", lambda: tmp_path / ".env", raising=False)
     monkeypatch.setattr(
         server,
@@ -927,6 +934,7 @@ async def test_chat_stream_request_workspace_updates_output_dir_before_tool_loop
             return "done"
 
     monkeypatch.setattr(server, "_core", FakeCore, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", FakeCore)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
     monkeypatch.delenv("OMICSCLAW_DATA_DIRS", raising=False)
     monkeypatch.delenv("OMICSCLAW_WORKSPACE", raising=False)
@@ -967,6 +975,7 @@ async def test_outputs_latest_marks_stale_incomplete_run_failed(monkeypatch, tmp
 
     fake_core = SimpleNamespace(OUTPUT_DIR=output_dir)
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
 
     result = await server.outputs_latest(limit=10)
 
@@ -1013,6 +1022,7 @@ async def test_files_serve_returns_trusted_workspace_file(monkeypatch, tmp_path)
 
     fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[workspace], OUTPUT_DIR=workspace / "output")
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
 
     response = await server.files_serve(path=str(figure))
 
@@ -1034,6 +1044,7 @@ async def test_files_serve_rejects_untrusted_path(monkeypatch, tmp_path):
 
     fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[workspace], OUTPUT_DIR=workspace / "output")
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
 
     with pytest.raises(server.HTTPException) as exc:
         await server.files_serve(path=str(outside))
@@ -1076,6 +1087,7 @@ async def test_health_reports_runtime_python_and_dependency_status(monkeypatch):
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(
         server,
         "_module_available",
@@ -1114,6 +1126,7 @@ def test_health_echoes_desktop_launch_id(monkeypatch):
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setenv("OMICSCLAW_DESKTOP_LAUNCH_ID", "launch-123")
 
     payload = asyncio.run(server.health())
@@ -1172,6 +1185,7 @@ async def test_chat_stream_emits_protocol_events_and_usage(monkeypatch):
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -1270,6 +1284,7 @@ async def test_chat_stream_emits_preflight_pending_event_for_omicsclaw_tool(monk
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -1349,6 +1364,7 @@ async def test_chat_stream_updates_bound_remote_chat_job_lifecycle(monkeypatch, 
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -1405,6 +1421,7 @@ async def test_chat_stream_cost_uses_requested_model_override(monkeypatch):
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -1463,6 +1480,7 @@ async def test_chat_stream_delivers_pending_media_as_tool_result_media(monkeypat
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -1520,6 +1538,7 @@ async def test_chat_stream_merges_pending_media_without_duplicates(monkeypatch, 
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -1579,6 +1598,7 @@ async def test_chat_stream_delivers_pending_documents_as_file_media(monkeypatch,
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -1654,6 +1674,7 @@ async def test_chat_stream_rejects_bind_when_job_already_canceled(monkeypatch, t
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     with pytest.raises(HTTPException) as excinfo:
@@ -1750,7 +1771,9 @@ async def test_chat_stream_reapplies_provider_when_model_changes(monkeypatch):
             captured["model_override"] = kwargs.get("model_override")
             return "ok"
 
-    monkeypatch.setattr(server, "_core", FakeCore(), raising=False)
+    _fake_core_instance = FakeCore()
+    monkeypatch.setattr(server, "_core", _fake_core_instance, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", _fake_core_instance)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
     monkeypatch.setattr(server, "_get_omicsclaw_env_path", lambda: None, raising=False)
     monkeypatch.setenv("LLM_BASE_URL", "https://api.example.com/v1")
@@ -1799,7 +1822,9 @@ async def test_chat_stream_provider_config_preserves_custom_env_base_url(monkeyp
         async def llm_tool_loop(self, **kwargs):
             return "ok"
 
-    monkeypatch.setattr(server, "_core", FakeCore(), raising=False)
+    _fake_core_instance = FakeCore()
+    monkeypatch.setattr(server, "_core", _fake_core_instance, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", _fake_core_instance)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
     monkeypatch.setattr(server, "_get_omicsclaw_env_path", lambda: None, raising=False)
     monkeypatch.setenv("LLM_BASE_URL", "https://api.example.com/v1")
@@ -1840,7 +1865,9 @@ async def test_chat_stream_provider_config_rejects_incomplete_custom_endpoint(mo
         def init(self, **kwargs):
             raise AssertionError("incomplete custom provider should fail before core.init")
 
-    monkeypatch.setattr(server, "_core", FakeCore(), raising=False)
+    _fake_core_instance = FakeCore()
+    monkeypatch.setattr(server, "_core", _fake_core_instance, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", _fake_core_instance)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
     monkeypatch.setenv("LLM_BASE_URL", "https://api.example.com/v1")
 
@@ -1961,6 +1988,7 @@ async def test_list_providers_reflects_active_custom_endpoint(monkeypatch):
         OMICSCLAW_MODEL = "qwen-plus"
 
     monkeypatch.setattr(server, "_core", FakeCore, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", FakeCore)
     monkeypatch.setenv("LLM_PROVIDER", "custom")
     monkeypatch.setenv("LLM_BASE_URL", "https://api.example.com/v1")
     monkeypatch.setenv("LLM_API_KEY", "sk-test")
@@ -2050,7 +2078,7 @@ async def test_provider_test_accepts_reasoning_only_response(monkeypatch):
     chain-of-thought — that must still count as PASSED, not empty."""
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     class FakeAsyncOpenAI:
         def __init__(self, **kwargs):
@@ -2103,7 +2131,7 @@ async def test_provider_test_empty_response_includes_finish_reason(monkeypatch):
     tell e.g. content_filter from length cap."""
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     class FakeAsyncOpenAI:
         def __init__(self, **kwargs):
@@ -2175,6 +2203,7 @@ async def test_chat_stream_omits_adaptive_thinking_for_siliconflow(monkeypatch):
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -2216,6 +2245,7 @@ async def test_chat_stream_enables_adaptive_thinking_for_deepseek(monkeypatch):
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -2352,6 +2382,7 @@ async def test_chat_stream_emits_structured_tool_timeout_events(monkeypatch):
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -2413,6 +2444,7 @@ async def test_chat_permission_endpoint_resumes_pending_request(monkeypatch):
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(

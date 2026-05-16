@@ -1,9 +1,16 @@
 """Typed event union emitted by ``dispatch()``.
 
-Per ADR 0006 Q6. The ten event types correspond 1:1 to what
-``llm_tool_loop`` already produces — its seven positional callbacks plus
-its return value, its exception path, and the ``pending_media`` side-
-channel that tools mutate during execution.
+Per ADR 0006 Q6. The nine event types correspond 1:1 to what
+``llm_tool_loop`` already produces — its seven positional callbacks
+plus its return value plus its exception path.
+
+The ``pending_media`` side-channel that the ADR originally listed as a
+tenth event was dropped during L2 because both live Surfaces consume it
+out-of-band (Channel pops it at end-of-loop, Desktop drains it inside
+each ``on_tool_result``) and a dispatcher-level emit forced a race
+between the dispatcher's end-of-loop pop and Desktop's mid-loop pop.
+Tools continue to mutate ``state.pending_media`` directly; Surfaces
+continue to read it directly.
 
 Surfaces iterate ``dispatch(envelope)`` and render the subset of events
 relevant to their output channel. The dispatcher guarantees that exactly
@@ -42,10 +49,18 @@ class ToolCall:
 
 @dataclass(frozen=True)
 class ToolResult:
-    """A tool finished. ``result`` is the raw return value."""
+    """A tool finished. ``result`` is the raw return value.
+
+    ``metadata`` carries the loop's per-result tags (timed_out, is_error,
+    preflight_pending, preflight_payload, ...) that
+    ``_build_tool_result_callback_metadata`` assembles before invoking the
+    ``on_tool_result`` callback. Surfaces that do not need it can ignore
+    the field.
+    """
 
     tool: str
     result: Any
+    metadata: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -67,13 +82,6 @@ class ContextCompacted:
     """The conversation history was compacted mid-loop."""
 
     payload: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class PendingMedia:
-    """Media that tools queued for delivery after the loop returns."""
-
-    items: list[dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -99,7 +107,6 @@ Event = Union[
     StreamContent,
     StreamReasoning,
     ContextCompacted,
-    PendingMedia,
     Final,
     Error,
 ]
@@ -113,7 +120,6 @@ __all__ = [
     "StreamContent",
     "StreamReasoning",
     "ContextCompacted",
-    "PendingMedia",
     "Final",
     "Error",
     "Event",

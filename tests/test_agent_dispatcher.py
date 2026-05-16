@@ -21,7 +21,6 @@ from omicsclaw.runtime.agent.events import (
     ContextCompacted,
     Error,
     Final,
-    PendingMedia,
     ProgressStart,
     ProgressUpdate,
     StreamContent,
@@ -113,8 +112,27 @@ async def test_tool_callbacks_translate_to_events(monkeypatch):
     _patch_llm_tool_loop(monkeypatch, fake_loop)
     events = await _collect(MessageEnvelope(chat_id="c1", content="hi"))
     assert events[0] == ToolCall(tool="run_skill", arguments={"name": "preprocess"})
-    assert events[1] == ToolResult(tool="run_skill", result={"status": "ok"})
+    assert events[1] == ToolResult(tool="run_skill", result={"status": "ok"}, metadata=None)
     assert events[2] == Final(text="done", kind="normal")
+
+
+@pytest.mark.asyncio
+async def test_tool_result_metadata_is_captured(monkeypatch):
+    async def fake_loop(**kwargs):
+        await kwargs["on_tool_result"](
+            "run_skill",
+            "report.md",
+            {"timed_out": True, "elapsed_seconds": 30},
+        )
+        return "done"
+
+    _patch_llm_tool_loop(monkeypatch, fake_loop)
+    events = await _collect(MessageEnvelope(chat_id="c1", content="hi"))
+    assert events[0] == ToolResult(
+        tool="run_skill",
+        result="report.md",
+        metadata={"timed_out": True, "elapsed_seconds": 30},
+    )
 
 
 @pytest.mark.asyncio
@@ -160,31 +178,18 @@ async def test_exception_lands_as_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pending_media_drained_into_event(monkeypatch):
+async def test_pending_media_left_for_surface_to_drain(monkeypatch):
+    """The dispatcher must not touch ``pending_media`` — Surfaces drain it
+    themselves (per the rationale captured in ``events.py``)."""
     async def fake_loop(**_kwargs):
         _core.pending_media["c1"] = [{"path": "/tmp/x.png", "filename": "x.png"}]
         return "done"
 
     _patch_llm_tool_loop(monkeypatch, fake_loop)
     events = await _collect(MessageEnvelope(chat_id="c1", content="hi"))
-    assert isinstance(events[0], PendingMedia)
-    assert events[0].items == [{"path": "/tmp/x.png", "filename": "x.png"}]
-    assert events[1] == Final(text="done", kind="normal")
-    assert "c1" not in _core.pending_media
-
-
-@pytest.mark.asyncio
-async def test_pending_media_str_key_fallback(monkeypatch):
-    async def fake_loop(**_kwargs):
-        _core.pending_media["42"] = [{"path": "/tmp/y.png", "filename": "y.png"}]
-        return "done"
-
-    _patch_llm_tool_loop(monkeypatch, fake_loop)
-    events = await _collect(MessageEnvelope(chat_id=42, content="hi"))
-    media = [e for e in events if isinstance(e, PendingMedia)]
-    assert len(media) == 1
-    assert media[0].items[0]["filename"] == "y.png"
-    assert "42" not in _core.pending_media
+    assert events == [Final(text="done", kind="normal")]
+    assert _core.pending_media["c1"] == [{"path": "/tmp/x.png", "filename": "x.png"}]
+    _core.pending_media.pop("c1", None)
 
 
 @pytest.mark.asyncio

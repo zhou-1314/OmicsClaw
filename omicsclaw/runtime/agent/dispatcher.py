@@ -22,7 +22,6 @@ from omicsclaw.runtime.agent.events import (
     Error,
     Event,
     Final,
-    PendingMedia,
     ProgressStart,
     ProgressUpdate,
     StreamContent,
@@ -55,8 +54,9 @@ async def dispatch(envelope: MessageEnvelope) -> AsyncIterator[Event]:
         args_dict = dict(arguments) if arguments else {}
         await queue.put(ToolCall(tool=tool, arguments=args_dict))
 
-    async def _on_tool_result(tool: str, result) -> None:
-        await queue.put(ToolResult(tool=tool, result=result))
+    async def _on_tool_result(tool: str, result, metadata=None) -> None:
+        meta = dict(metadata) if isinstance(metadata, dict) else None
+        await queue.put(ToolResult(tool=tool, result=result, metadata=meta))
 
     async def _on_stream_content(chunk: str) -> None:
         await queue.put(StreamContent(chunk=chunk))
@@ -104,18 +104,11 @@ async def dispatch(envelope: MessageEnvelope) -> AsyncIterator[Event]:
                 policy_state=envelope.policy_state,
             )
 
-            chat_id = envelope.chat_id
-            pending_media = getattr(_core, "pending_media", None) or {}
-            media_items = list(pending_media.pop(chat_id, []) or [])
-            if not media_items and chat_id is not None:
-                alt_key = str(chat_id)
-                if alt_key != chat_id:
-                    media_items = list(pending_media.pop(alt_key, []) or [])
-            if media_items:
-                await queue.put(PendingMedia(items=media_items))
-
+            # ``pending_media`` is deliberately not touched here — see
+            # docstring of ``events.py`` for the rationale. Surfaces keep
+            # their existing per-surface drain.
             pending_preflight = getattr(_core, "pending_preflight_requests", None) or {}
-            kind = "preflight" if chat_id in pending_preflight else "normal"
+            kind = "preflight" if envelope.chat_id in pending_preflight else "normal"
             await queue.put(Final(text=final_text or "", kind=kind))
         except asyncio.CancelledError:
             raise
