@@ -326,6 +326,7 @@ def _build_bot_query_engine_callbacks(
     deep_learning_methods: set[str],
     usage_accumulator,
     on_context_compacted=None,
+    on_pathology_signal=None,
 ):
     notified_methods: set[str] = set()
 
@@ -465,6 +466,7 @@ def _build_bot_query_engine_callbacks(
         request_tool_approval=request_tool_approval,
         on_llm_error=on_llm_error,
         on_context_compacted=on_context_compacted,
+        on_pathology_signal=on_pathology_signal,
     )
 
 
@@ -534,6 +536,7 @@ async def llm_tool_loop(
     on_stream_content=None,
     on_stream_reasoning=None,
     on_context_compacted=None,
+    on_pathology_signal=None,
     # Per-request runtime overrides (desktop app frontend)
     model_override: str = "",
     extra_api_params: dict | None = None,
@@ -630,6 +633,7 @@ async def llm_tool_loop(
         on_stream_content=on_stream_content,
         on_stream_reasoning=on_stream_reasoning,
         on_context_compacted=on_context_compacted,
+        on_pathology_signal=on_pathology_signal,
         model_override=model_override,
         extra_api_params=extra_api_params,
         max_tokens_override=max_tokens_override,

@@ -99,6 +99,24 @@ class Error:
     exception: BaseException
 
 
+@dataclass(frozen=True)
+class PathologyDetected:
+    """The decision loop tripped a pathology threshold (ADR 0007).
+
+    Emitted in-stream when ``loop_pathology.detect`` returns a new
+    ``PathologySignal``. Non-terminal — the loop continues with a
+    corrective tool-result injected into the next LLM call; this event
+    exists so Surfaces can render a short notice that the agent has
+    entered self-correction.
+    """
+
+    kind: Literal["pingpong", "repeated_failure"]
+    tool_name: str | None
+    iteration: int
+    count: int
+    reason: str
+
+
 Event = Union[
     ProgressStart,
     ProgressUpdate,
@@ -107,6 +125,7 @@ Event = Union[
     StreamContent,
     StreamReasoning,
     ContextCompacted,
+    PathologyDetected,
     Final,
     Error,
 ]
@@ -120,6 +139,7 @@ __all__ = [
     "StreamContent",
     "StreamReasoning",
     "ContextCompacted",
+    "PathologyDetected",
     "Final",
     "Error",
     "Event",

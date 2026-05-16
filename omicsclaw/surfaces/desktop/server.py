@@ -1791,6 +1791,7 @@ async def chat_stream(req: ChatRequest):
                 ContextCompacted as _DispatchContextCompacted,
                 Error as _DispatchError,
                 Final as _DispatchFinal,
+                PathologyDetected as _DispatchPathologyDetected,
                 StreamContent as _DispatchStreamContent,
                 StreamReasoning as _DispatchStreamReasoning,
                 ToolCall as _DispatchToolCall,
@@ -1828,6 +1829,19 @@ async def chat_stream(req: ChatRequest):
                     await on_stream_reasoning(event.chunk)
                 elif isinstance(event, _DispatchContextCompacted):
                     await on_context_compacted(event.payload)
+                elif isinstance(event, _DispatchPathologyDetected):
+                    await queue.put(
+                        {
+                            "type": "pathology_detected",
+                            "data": {
+                                "kind": event.kind,
+                                "tool_name": event.tool_name,
+                                "iteration": event.iteration,
+                                "count": event.count,
+                                "reason": event.reason,
+                            },
+                        }
+                    )
                 elif isinstance(event, _DispatchFinal):
                     result = event.text
                 elif isinstance(event, _DispatchError):

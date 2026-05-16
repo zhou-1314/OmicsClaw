@@ -22,6 +22,7 @@ from omicsclaw.runtime.agent.events import (
     Error,
     Event,
     Final,
+    PathologyDetected,
     ProgressStart,
     ProgressUpdate,
     StreamContent,
@@ -67,6 +68,17 @@ async def dispatch(envelope: MessageEnvelope) -> AsyncIterator[Event]:
     async def _on_context_compacted(payload) -> None:
         await queue.put(ContextCompacted(payload=dict(payload) if payload else {}))
 
+    async def _on_pathology_signal(signal) -> None:
+        await queue.put(
+            PathologyDetected(
+                kind=signal.kind,
+                tool_name=signal.tool_name,
+                iteration=signal.iteration,
+                count=signal.count,
+                reason=signal.reason,
+            )
+        )
+
     async def _run() -> None:
         # Late import so tests that swap ``sys.modules['omicsclaw.runtime.agent.state']``
         # or patch ``state.llm_tool_loop`` are honoured on every call. The
@@ -94,6 +106,7 @@ async def dispatch(envelope: MessageEnvelope) -> AsyncIterator[Event]:
                 on_stream_content=_on_stream_content,
                 on_stream_reasoning=_on_stream_reasoning,
                 on_context_compacted=_on_context_compacted,
+                on_pathology_signal=_on_pathology_signal,
                 model_override=envelope.model_override,
                 extra_api_params=envelope.extra_api_params,
                 max_tokens_override=envelope.max_tokens_override,

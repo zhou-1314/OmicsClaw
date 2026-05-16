@@ -21,6 +21,7 @@ from omicsclaw.runtime.agent.events import (
     ContextCompacted,
     Error,
     Final,
+    PathologyDetected,
     ProgressStart,
     ProgressUpdate,
     StreamContent,
@@ -28,6 +29,7 @@ from omicsclaw.runtime.agent.events import (
     ToolCall,
     ToolResult,
 )
+from omicsclaw.runtime.agent.loop_state import PathologySignal
 
 
 def _patch_llm_tool_loop(monkeypatch, fake):
@@ -237,6 +239,32 @@ async def test_envelope_fields_passed_through(monkeypatch):
     assert captured["model_override"] == "claude-opus-4-7"
     assert captured["max_tokens_override"] == 4096
     assert captured["mode"] == "ask"
+
+
+@pytest.mark.asyncio
+async def test_pathology_signal_translates_to_event(monkeypatch):
+    signal = PathologySignal(
+        kind="pingpong",
+        tool_name="read_file",
+        iteration=4,
+        count=4,
+        reason="tool 'read_file' called 4 times with same arguments in last 6 tool invocations",
+    )
+
+    async def fake_loop(**kwargs):
+        await kwargs["on_pathology_signal"](signal)
+        return "done"
+
+    _patch_llm_tool_loop(monkeypatch, fake_loop)
+    events = await _collect(MessageEnvelope(chat_id="c1", content="hi"))
+    assert events[0] == PathologyDetected(
+        kind="pingpong",
+        tool_name="read_file",
+        iteration=4,
+        count=4,
+        reason=signal.reason,
+    )
+    assert events[1] == Final(text="done", kind="normal")
 
 
 @pytest.mark.asyncio

@@ -102,6 +102,7 @@ async def run_engine_loop(
     on_stream_content: Any = None,
     on_stream_reasoning: Any = None,
     on_context_compacted: Any = None,
+    on_pathology_signal: Any = None,
     model_override: str = "",
     extra_api_params: dict | None = None,
     max_tokens_override: int = 0,
@@ -180,6 +181,7 @@ async def run_engine_loop(
         deep_learning_methods=deps.deep_learning_methods,
         usage_accumulator=deps.usage_accumulator,
         on_context_compacted=on_context_compacted,
+        on_pathology_signal=on_pathology_signal,
     )
 
     # Surface flows into audit/metrics; an absent platform is caller misuse,

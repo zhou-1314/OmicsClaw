@@ -329,6 +329,7 @@ class TelegramChannel(Channel):
         from omicsclaw.runtime.agent.events import (
             Error as _DispatchError,
             Final as _DispatchFinal,
+            PathologyDetected as _DispatchPathologyDetected,
             ProgressStart as _DispatchProgressStart,
             ProgressUpdate as _DispatchProgressUpdate,
         )
@@ -350,6 +351,14 @@ class TelegramChannel(Channel):
                 handle = progress_handles.get(event.progress_id)
                 if handle is not None:
                     await progress_update_fn(handle, event.text)
+            elif isinstance(event, _DispatchPathologyDetected):
+                logger.warning(
+                    "Loop detector fired (%s) on tool %s × %d: %s",
+                    event.kind,
+                    event.tool_name,
+                    event.count,
+                    event.reason,
+                )
             elif isinstance(event, _DispatchFinal):
                 reply = event.text
             elif isinstance(event, _DispatchError):

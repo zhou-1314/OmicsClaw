@@ -1508,6 +1508,7 @@ async def _stream_llm_response(
                 from omicsclaw.runtime.agent.events import (
                     Error as _DispatchError,
                     Final as _DispatchFinal,
+                    PathologyDetected as _DispatchPathologyDetected,
                     StreamContent as _DispatchStreamContent,
                     ToolCall as _DispatchToolCall,
                     ToolResult as _DispatchToolResult,
@@ -1536,6 +1537,11 @@ async def _stream_llm_response(
                             sync_on_tool_result(event.tool, event.result)
                         elif isinstance(event, _DispatchStreamContent):
                             await sync_on_stream_content(event.chunk)
+                        elif isinstance(event, _DispatchPathologyDetected):
+                            console.print(
+                                f"[yellow]⚠ Loop detector ({event.kind}): "
+                                f"{event.reason}[/yellow]"
+                            )
                         elif isinstance(event, _DispatchFinal):
                             final_text_value = event.text
                         elif isinstance(event, _DispatchError):
