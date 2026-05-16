@@ -265,7 +265,7 @@ class TestSlashCommand:
     """Test that pipeline commands are registered in SLASH_COMMANDS."""
 
     def test_pipeline_commands_in_slash_commands(self):
-        from omicsclaw.interactive._constants import SLASH_COMMANDS
+        from omicsclaw.surfaces.cli._constants import SLASH_COMMANDS
         cmd_names = [cmd for cmd, _ in SLASH_COMMANDS]
         assert "/research" in cmd_names
         assert "/resume-task" in cmd_names

@@ -266,23 +266,23 @@ python omicsclaw.py run bulkrna-coexpression --demo
 
 ## Bot Frontends (Telegram + Feishu)
 
-OmicsClaw includes dual-channel bot frontends in `bot/`:
+OmicsClaw's IM bot frontends live under the Channel Surface at `omicsclaw/surfaces/channels/`:
 
 | Component | File | Purpose |
 |---|---|---|
-| Shared core | `bot/core.py` | LLM tool-use loop, skill execution, security, audit |
-| Telegram | `bot/channels/telegram.py` | Telegram frontend (python-telegram-bot) |
-| Feishu | `bot/channels/feishu.py` | Feishu frontend (lark-oapi WebSocket) |
+| Shared core | `omicsclaw/runtime/agent/state.py` | LLM tool-use loop, skill execution, security, audit |
+| Telegram | `omicsclaw/surfaces/channels/telegram.py` | Telegram frontend (python-telegram-bot) |
+| Feishu | `omicsclaw/surfaces/channels/feishu.py` | Feishu frontend (lark-oapi WebSocket) |
 | Persona | `SOUL.md` | OmicsBot persona (inspired by ClawBio) |
 
 ### Running the bots
 
 ```bash
 # Telegram bot
-python -m bot.run --channels telegram
+python -m omicsclaw.surfaces.channels --channels telegram
 
 # Feishu bot
-python -m bot.run --channels feishu
+python -m omicsclaw.surfaces.channels --channels feishu
 
 # Or via Makefile
 make bot-telegram
@@ -314,24 +314,24 @@ OmicsClaw includes dual-channel messaging bot frontends. Both share a common LLM
 
 | User Intent | Component | Action |
 |---|---|---|
-| Telegram bot, chat interface, messaging | `bot/channels/telegram.py` | Run `python -m bot.run --channels telegram` |
-| Feishu bot, Lark bot, 飞书机器人 | `bot/channels/feishu.py` | Run `python -m bot.run --channels feishu` |
+| Telegram bot, chat interface, messaging | `omicsclaw/surfaces/channels/telegram.py` | Run `python -m omicsclaw.surfaces.channels --channels telegram` |
+| Feishu bot, Lark bot, 飞书机器人 | `omicsclaw/surfaces/channels/feishu.py` | Run `python -m omicsclaw.surfaces.channels --channels feishu` |
 
 ### Bot Commands
 
 ```bash
 # Start Telegram bot
-python -m bot.run --channels telegram
+python -m omicsclaw.surfaces.channels --channels telegram
 
 # Start Feishu bot
-python -m bot.run --channels feishu
+python -m omicsclaw.surfaces.channels --channels feishu
 
 # Or via Makefile
 make bot-telegram
 make bot-feishu
 ```
 
-Configuration is via `.env` file at the project root. See `bot/README.md` for full setup.
+Configuration is via `.env` file at the project root. See `omicsclaw/surfaces/channels/README.md` for full setup.
 
 ## Safety Rules
 

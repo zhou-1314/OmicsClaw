@@ -187,7 +187,7 @@ PR #1 ─ MemoryURI + namespace_policy
 #### Checkpoint: PR #2 merged
 
 - [ ] **Backup verified**: `cp ~/.config/omicsclaw/memory.db ~/.config/omicsclaw/memory.db.pre001.bak` documented in PR description
-- [ ] Production DB migrated successfully on dev machine (`oc app-server` starts, hits `/health`, queries memory)
+- [ ] Production DB migrated successfully on dev machine (`oc desktop-server` starts, hits `/health`, queries memory)
 - [ ] Migration test suite green
 - [ ] All previously passing tests still pass
 - [ ] PR description includes: "rollback recipe = `cp memory.db.pre001.bak memory.db`"
@@ -466,7 +466,7 @@ PR #1 ─ MemoryURI + namespace_policy
 
 #### Task 5.1: CLI/TUI namespace = workspace path ✅ landed 2026-05-11
 
-- **Files**: `omicsclaw/interactive/_memory_command_support.py` (added `build_graph_memory_command_view` + `is_graph_memory_subcommand`); `omicsclaw/interactive/interactive.py` and `omicsclaw/interactive/tui.py` (dispatch graph subcommands)
+- **Files**: `omicsclaw/surfaces/cli/_memory_command_support.py` (added `build_graph_memory_command_view` + `is_graph_memory_subcommand`); `omicsclaw/surfaces/cli/interactive.py` and `omicsclaw/surfaces/cli/tui.py` (dispatch graph subcommands)
 - **Acceptance**:
   - [x] `/memory remember|recall|search` resolves the workspace (cwd or `--workspace`) via `cli_namespace_from_workspace(workspace_dir)` and binds a per-call `MemoryClient` to that namespace
   - [x] Each response echoes the active namespace so users can confirm isolation without log scraping (`Remembered <uri> (namespace=...)`, `Namespace: <path>` in recall/search output)
@@ -478,7 +478,7 @@ PR #1 ─ MemoryURI + namespace_policy
 
 #### Task 5.2: Desktop FastAPI per-request namespace
 
-- **Files**: `omicsclaw/app/server.py` (modify `_get_graph_service` and similar helpers)
+- **Files**: `omicsclaw/surfaces/desktop/server.py` (modify `_get_graph_service` and similar helpers)
 - **Acceptance**:
   - [ ] Memory route handlers extract workspace from request (via Desktop's `OMICSCLAW_DESKTOP_LAUNCH_ID` or workspace picker context)
   - [ ] Inject as namespace into MemoryClient
@@ -499,7 +499,7 @@ PR #1 ─ MemoryURI + namespace_policy
 
 #### Task 5.4: `/memory/review/*` routes use ReviewLog
 
-- **Files**: `omicsclaw/app/server.py` (modify review/maintenance routes around 2925-3000)
+- **Files**: `omicsclaw/surfaces/desktop/server.py` (modify review/maintenance routes around 2925-3000)
 - **Acceptance**:
   - [ ] `_get_review_log()` helper added (parallel to `_get_graph_service()`)
   - [ ] Review endpoints call ReviewLog instead of GraphService where the verb maps cleanly (orphans, version chains, rollback)

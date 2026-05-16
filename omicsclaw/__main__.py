@@ -1,6 +1,6 @@
 """Allow ``python -m omicsclaw``."""
 
-from omicsclaw.cli import main
+from omicsclaw.surfaces.cli.launcher import main
 
 
 if __name__ == "__main__":

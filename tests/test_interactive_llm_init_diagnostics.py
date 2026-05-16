@@ -25,7 +25,7 @@ def test_init_llm_surfaces_actionable_message_when_core_init_fails(
     to set and the onboard remediation. The fallback ``(model, provider)``
     return is still ``("unknown", ...)`` so the banner can keep rendering.
     """
-    import omicsclaw.interactive.interactive as interactive
+    import omicsclaw.surfaces.cli.interactive as interactive
 
     sys.path.insert(0, str(interactive._OMICSCLAW_DIR))
     import omicsclaw.runtime.agent.state as core

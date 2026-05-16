@@ -189,13 +189,13 @@ def _format_text(value: Any, *, markup: bool) -> str:
 
 
 def _get_session_db_path() -> Path:
-    from omicsclaw.interactive._session import get_db_path
+    from omicsclaw.surfaces.cli._session import get_db_path
 
     return get_db_path()
 
 
 def _get_mcp_config_path() -> Path:
-    from omicsclaw.interactive._mcp import MCP_CONFIG_PATH
+    from omicsclaw.surfaces.cli._mcp import MCP_CONFIG_PATH
 
     return MCP_CONFIG_PATH
 

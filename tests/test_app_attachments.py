@@ -15,7 +15,7 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 
-from omicsclaw.app._attachments import (
+from omicsclaw.surfaces.desktop._attachments import (
     build_chat_content,
     is_text_like_mime,
     safe_attachment_filename,

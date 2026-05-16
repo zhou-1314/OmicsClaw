@@ -8,7 +8,7 @@ from types import ModuleType
 
 from omicsclaw.common import runtime_env
 from omicsclaw.common.runtime_env import ensure_runtime_cache_dirs
-from omicsclaw.interactive import interactive
+from omicsclaw.surfaces.cli import interactive
 
 
 def test_ensure_numba_cache_dir_sets_writable_default(monkeypatch):

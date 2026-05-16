@@ -21,7 +21,7 @@ from omicsclaw.extensions import (
     write_extension_state,
     write_install_record,
 )
-from omicsclaw.interactive._session import format_relative_time
+from omicsclaw.surfaces.cli._session import format_relative_time
 from omicsclaw.runtime.tools.hooks import EVENT_EXTENSION_INSTALLED
 from omicsclaw.runtime.tools.hooks import ExtensionHookPayload
 from omicsclaw.runtime.tools.hooks import (

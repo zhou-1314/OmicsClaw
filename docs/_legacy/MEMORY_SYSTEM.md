@@ -235,7 +235,7 @@ print(record.path)
 
 ### Interactive access
 
-Interactive CLI and TUI sessions expose scoped-memory management through slash-command support in `omicsclaw/interactive/_memory_command_support.py`.
+Interactive CLI and TUI sessions expose scoped-memory management through slash-command support in `omicsclaw/surfaces/cli/_memory_command_support.py`.
 
 That lets users:
 

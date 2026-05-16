@@ -513,7 +513,7 @@ class OmicsClawParser(argparse.ArgumentParser):
         print(f"\n{BOLD}{BLUE}Utility Commands{RESET}", file=file)
         print(f"  {GREEN}mcp           {RESET}  Manage external Model Context Protocol (MCP) servers", file=file)
         print(f"  {GREEN}doctor        {RESET}  Run environment and runtime diagnostics", file=file)
-        print(f"  {GREEN}app-server    {RESET}  Start the desktop/web FastAPI backend for OmicsClaw-App", file=file)
+        print(f"  {GREEN}desktop-server{RESET}  Start the desktop/web FastAPI backend for OmicsClaw-App", file=file)
         print(f"  {GREEN}memory-server {RESET}  Start the graph memory REST API server", file=file)
         print(f"  {GREEN}env           {RESET}  Check installed Python dependencies and system tiers", file=file)
         print(f"  {GREEN}onboard       {RESET}  Interactive setup wizard for LLM, runtime, memory, and channels", file=file)
@@ -641,7 +641,7 @@ def main():
     mem_p.add_argument("--host", default=None, help="Host to bind (default: 127.0.0.1)")
     mem_p.add_argument("--port", type=int, default=None, help="Port to bind (default: 8766)")
 
-    app_p = sub.add_parser("app-server", help="Start the desktop/web FastAPI backend for OmicsClaw-App")
+    app_p = sub.add_parser("desktop-server", help="Start the desktop/web FastAPI backend for OmicsClaw-App")
     app_p.add_argument("--host", default=None, help="Host to bind (default: 127.0.0.1)")
     app_p.add_argument("--port", type=int, default=None, help="Port to bind (default: 8765)")
     app_p.add_argument("--reload", action="store_true", help="Enable uvicorn reload mode")
@@ -1022,7 +1022,7 @@ def main():
         sys.exit(0)
 
     if args.command == "onboard":
-        from omicsclaw.setup_wizard import run_onboard
+        from omicsclaw.surfaces.cli.setup_wizard import run_onboard
         run_onboard()
         sys.exit(0)
 
@@ -1031,7 +1031,7 @@ def main():
         _run_name = getattr(args, "run_name", None)
         _ws = getattr(args, "workspace_dir", None)
         _ws = _resolve_workspace(_ws, _mode, _run_name)
-        from omicsclaw.interactive.interactive import run_interactive
+        from omicsclaw.surfaces.cli.interactive import run_interactive
         run_interactive(
             workspace_dir=_ws,
             session_id=getattr(args, "session_id", None),
@@ -1049,7 +1049,7 @@ def main():
         _run_name = getattr(args, "run_name", None)
         _ws = getattr(args, "workspace_dir", None)
         _ws = _resolve_workspace(_ws, _mode, _run_name)
-        from omicsclaw.interactive.interactive import run_interactive
+        from omicsclaw.surfaces.cli.interactive import run_interactive
         run_interactive(
             workspace_dir=_ws,
             session_id=getattr(args, "session_id", None),
@@ -1062,7 +1062,7 @@ def main():
         sys.exit(0)
 
     if args.command == "mcp":
-        from omicsclaw.interactive._mcp import (
+        from omicsclaw.surfaces.cli._mcp import (
             list_mcp_servers,
             add_mcp_server,
             remove_mcp_server,
@@ -1103,7 +1103,7 @@ def main():
             sys.exit(0)
 
         elif mcp_cmd == "remove":
-            from omicsclaw.interactive._mcp import remove_mcp_server
+            from omicsclaw.surfaces.cli._mcp import remove_mcp_server
             if remove_mcp_server(args.name):
                 print(f"{GREEN}Removed:{RESET} {args.name}")
             else:
@@ -1137,9 +1137,9 @@ def main():
         _mem_main()
         sys.exit(0)
 
-    if args.command == "app-server":
+    if args.command == "desktop-server":
         _ensure_server_dependencies(
-            command_name="app-server",
+            command_name="desktop-server",
             requirements=[
                 ("fastapi", "fastapi"),
                 ("uvicorn", "uvicorn"),
@@ -1156,7 +1156,7 @@ def main():
             app_args.extend(["--port", str(args.port)])
         if getattr(args, "reload", False):
             app_args.append("--reload")
-        from omicsclaw.app.server import main as _app_main
+        from omicsclaw.surfaces.desktop.server import main as _app_main
         _app_main(app_args)
         sys.exit(0)
 

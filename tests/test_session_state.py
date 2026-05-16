@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from omicsclaw.interactive._session_state import SessionState
+from omicsclaw.surfaces.cli._session_state import SessionState
 
 
 # --- Construction & defaults --------------------------------------------------

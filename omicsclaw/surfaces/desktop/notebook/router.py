@@ -1,6 +1,6 @@
 """FastAPI router exposing the notebook kernel manager.
 
-Mounted under the `/notebook` prefix by `omicsclaw.app.server`. The Next.js
+Mounted under the `/notebook` prefix by `omicsclaw.surfaces.desktop.server`. The Next.js
 layer proxies requests here from `src/app/api/notebook/*/route.ts`.
 """
 

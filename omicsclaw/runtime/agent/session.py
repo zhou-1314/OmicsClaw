@@ -257,7 +257,7 @@ def init(
         _core.llm = None
         logger.warning(
             "LLM client not initialised because no credentials are "
-            "configured yet: provider=%s model=%s. The app-server remains "
+            "configured yet: provider=%s model=%s. The desktop-server remains "
             "available so the frontend can finish provider setup.",
             _core.LLM_PROVIDER_NAME,
             _core.OMICSCLAW_MODEL,
@@ -270,7 +270,7 @@ def init(
                 _core.llm = None
                 logger.warning(
                     "LLM client not initialised because no credentials are "
-                    "configured yet: provider=%s model=%s. The app-server remains "
+                    "configured yet: provider=%s model=%s. The desktop-server remains "
                     "available so the frontend can finish provider setup.",
                     _core.LLM_PROVIDER_NAME,
                     _core.OMICSCLAW_MODEL,

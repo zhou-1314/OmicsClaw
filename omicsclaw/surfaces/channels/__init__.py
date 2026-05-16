@@ -16,7 +16,7 @@ Components:
     - Channel ABC:          base interface for all channels
     - ChannelCapabilities:  feature declaration per channel
     - ChannelManager:       multi-channel lifecycle + health
-    - run.py:               CLI entry ``python -m omicsclaw.run_channels --channels telegram,feishu``
+    - run.py:               CLI entry ``python -m omicsclaw.surfaces.channels.__main__ --channels telegram,feishu``
 """
 
 from .base import Channel, chunk_text, DedupCache, RateLimiter, TypingManager
@@ -26,15 +26,15 @@ from .config import BaseChannelConfig
 # Channel registry: maps channel name → (module_path, class_name)
 # Channels are lazy-imported to avoid pulling in platform SDKs unless needed.
 CHANNEL_REGISTRY: dict[str, tuple[str, str]] = {
-    "telegram": ("omicsclaw.channels.telegram",  "TelegramChannel"),
-    "feishu":   ("omicsclaw.channels.feishu",    "FeishuChannel"),
-    "dingtalk": ("omicsclaw.channels.dingtalk",  "DingTalkChannel"),
-    "discord":  ("omicsclaw.channels.discord",   "DiscordChannel"),
-    "slack":    ("omicsclaw.channels.slack",     "SlackChannel"),
-    "wechat":   ("omicsclaw.channels.wechat",    "WeChatChannel"),
-    "qq":       ("omicsclaw.channels.qq",        "QQChannel"),
-    "email":    ("omicsclaw.channels.email",     "EmailChannel"),
-    "imessage": ("omicsclaw.channels.imessage",  "IMessageChannel"),
+    "telegram": ("omicsclaw.surfaces.channels.telegram",  "TelegramChannel"),
+    "feishu":   ("omicsclaw.surfaces.channels.feishu",    "FeishuChannel"),
+    "dingtalk": ("omicsclaw.surfaces.channels.dingtalk",  "DingTalkChannel"),
+    "discord":  ("omicsclaw.surfaces.channels.discord",   "DiscordChannel"),
+    "slack":    ("omicsclaw.surfaces.channels.slack",     "SlackChannel"),
+    "wechat":   ("omicsclaw.surfaces.channels.wechat",    "WeChatChannel"),
+    "qq":       ("omicsclaw.surfaces.channels.qq",        "QQChannel"),
+    "email":    ("omicsclaw.surfaces.channels.email",     "EmailChannel"),
+    "imessage": ("omicsclaw.surfaces.channels.imessage",  "IMessageChannel"),
 }
 
 

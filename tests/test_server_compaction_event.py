@@ -29,7 +29,7 @@ def _stub_optional_modules() -> None:
 def test_handler_pushes_status_frame_to_queue() -> None:
     _stub_optional_modules()
     try:
-        from omicsclaw.app._compaction_event_bridge import (
+        from omicsclaw.surfaces.desktop._compaction_event_bridge import (
             make_compaction_event_handler,
         )
     except ImportError as exc:

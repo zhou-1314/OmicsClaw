@@ -24,7 +24,7 @@ acceleration and `epochs=1`.
 - OmicsClaw App currently proxies `/chat/stream` with a 600s budget and expects
   ongoing SSE activity for long-running turns.
 - The real backend runtime may differ from the current shell interpreter, so
-  evidence must come from the interpreter actually running `oc app-server`.
+  evidence must come from the interpreter actually running `oc desktop-server`.
 - GraphST preprocessing/graph construction can dominate runtime before the
   actual training epochs start, especially on large Slide-seq-like datasets.
 
@@ -41,8 +41,8 @@ acceleration and `epochs=1`.
 
 # Ordered Implementation Tasks
 
-1. Capture root-cause evidence from the real app-server runtime.
-   - Verify the actual Python interpreter used by `oc app-server`.
+1. Capture root-cause evidence from the real desktop-server runtime.
+   - Verify the actual Python interpreter used by `oc desktop-server`.
    - Inspect installed GraphST source to confirm how `epochs` and `datatype`
      are consumed.
    - Confirm the App/backend timeout boundary and whether SSE heartbeats exist.

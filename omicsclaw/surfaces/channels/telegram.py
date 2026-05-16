@@ -97,7 +97,7 @@ class TelegramChannel(Channel):
         ))
 
         # ── Start the polling loop ───────────────────────────────────
-        # When launched via ChannelManager (python -m omicsclaw.run_channels), only
+        # When launched via ChannelManager (python -m omicsclaw.surfaces.channels.__main__), only
         # start() is called. We must begin polling here, otherwise
         # the bot is connected but deaf — no messages are received.
         await self._app.initialize()

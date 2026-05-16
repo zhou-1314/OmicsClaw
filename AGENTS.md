@@ -81,7 +81,7 @@ python omicsclaw.py run spatial-preprocess --demo
 | `oc interactive -p "<prompt>"` | **Single-shot mode (non-interactive)** |
 | `oc interactive --session <id>` | **Resume a previous session** |
 | `oc tui` | Alias for `interactive --ui tui` |
-| `oc app-server` | Start the FastAPI backend used by OmicsClaw-App / web frontends |
+| `oc desktop-server` | Start the FastAPI backend used by OmicsClaw-App / web frontends |
 | `oc mcp list` | List configured MCP servers |
 | `oc mcp add <name> <cmd> [args]` | Add an MCP server |
 | `oc mcp remove <name>` | Remove an MCP server |
@@ -283,7 +283,7 @@ OmicsClaw also exposes a FastAPI backend for desktop and browser frontends such 
 pip install -e ".[desktop]"
 
 # Start the app backend on the shared frontend contract port
-oc app-server --host 127.0.0.1 --port 8765
+oc desktop-server --host 127.0.0.1 --port 8765
 ```
 
 The app backend binds to `127.0.0.1:8765` by default and serves chat streaming, skills, providers, MCP, outputs, bridge control, and memory proxy endpoints for the frontend.
@@ -320,8 +320,8 @@ bot/
 
 | Command | Purpose |
 |---------|---------|
-| `python -m bot.run --channels <names>` | Start one or more configured messaging channels |
-| `python -m bot.run --list` | List available channel integrations |
+| `python -m omicsclaw.surfaces.channels --channels <names>` | Start one or more configured messaging channels |
+| `python -m omicsclaw.surfaces.channels --list` | List available channel integrations |
 | `make bot-telegram` | Makefile alias for Telegram |
 | `make bot-feishu` | Makefile alias for Feishu |
 
@@ -346,9 +346,9 @@ OmicsClaw includes multi-channel bot frontends in `bot/`. They all import `bot/c
 
 ```bash
 pip install -r bot/requirements.txt
-python -m bot.run --channels telegram   # Telegram
-python -m bot.run --channels feishu     # Feishu
-python -m bot.run --channels telegram,slack,email
+python -m omicsclaw.surfaces.channels --channels telegram   # Telegram
+python -m omicsclaw.surfaces.channels --channels feishu     # Feishu
+python -m omicsclaw.surfaces.channels --channels telegram,slack,email
 ```
 
 Configuration is via `.env` at the project root. See `bot/README.md` for required environment variables.
@@ -368,14 +368,14 @@ OmicsClaw features a full interactive terminal interface (referencing EvoScienti
 
 ```
 omicsclaw.py interactive
-    └── omicsclaw/interactive/interactive.py   # prompt_toolkit REPL
+    └── omicsclaw/surfaces/cli/interactive.py   # prompt_toolkit REPL
            ├── bot/core.py                     # LLM engine (reused)
            ├── _session.py                     # SQLite session persistence
            ├── _mcp.py                         # MCP server management
            └── _constants.py                   # Banner, slash commands
 
 omicsclaw.py tui  (or --ui tui)
-    └── omicsclaw/interactive/tui.py           # Textual full-screen TUI
+    └── omicsclaw/surfaces/cli/tui.py           # Textual full-screen TUI
 ```
 
 ### Interactive Mode Commands
@@ -481,4 +481,4 @@ Interactive CLI provider changes share the runtime resolution path with the app 
 
 ### TUI Implementation Notes
 
-TUI helpers under `omicsclaw/interactive/_tui_support.py` stay dependency-light so support tests can run without optional memory or Textual installs. When adding Textual containers, mount the parent widget into the live tree before mounting child widgets.
+TUI helpers under `omicsclaw/surfaces/cli/_tui_support.py` stay dependency-light so support tests can run without optional memory or Textual installs. When adding Textual containers, mount the parent widget into the live tree before mounting child widgets.

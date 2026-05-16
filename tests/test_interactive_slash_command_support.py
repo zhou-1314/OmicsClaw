@@ -1,4 +1,4 @@
-from omicsclaw.interactive._slash_command_support import (
+from omicsclaw.surfaces.cli._slash_command_support import (
     CLI_SLASH_COMMAND_SPECS,
     TUI_SLASH_COMMAND_SPECS,
     complete_run_skill_names,

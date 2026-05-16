@@ -1,6 +1,6 @@
 """Regression tests for the 6 OAuth / ccproxy bugs reported after Stage 1-4:
 
-1. Critical: app-server + ccproxy both defaulted to port 8765 → conflict.
+1. Critical: desktop-server + ccproxy both defaulted to port 8765 → conflict.
 2. High: ``omicsclaw auth login claude`` raised KeyError('claude').
 3. High: OAuth-injected env vars polluted subsequent api_key mode.
 4. High: resolve_provider_runtime reused active runtime across auth_mode switches.
@@ -49,8 +49,8 @@ def _isolate_env_and_runtime():
 
 def test_bug1_ccproxy_default_port_differs_from_app_server():
     """Regression for Bug 1 (Critical): ccproxy default port was 8765 =
-    app-server default, so switching to OAuth would deadlock on bind."""
-    from omicsclaw.app.server import DEFAULT_APP_API_PORT
+    desktop-server default, so switching to OAuth would deadlock on bind."""
+    from omicsclaw.surfaces.desktop.server import DEFAULT_APP_API_PORT
 
     assert ccm.DEFAULT_CCPROXY_PORT != DEFAULT_APP_API_PORT
     assert pr.DEFAULT_CCPROXY_PORT != DEFAULT_APP_API_PORT
@@ -278,7 +278,7 @@ def test_bug6_core_init_allows_oauth_for_anthropic(monkeypatch):
 
 # ---------------------------------------------------------------------------
 # Bug 7 (post-Stage-4): bootstrap resilience — stale LLM_AUTH_MODE=oauth in
-# .env combined with a missing ccproxy must not block app-server startup.
+# .env combined with a missing ccproxy must not block desktop-server startup.
 # ---------------------------------------------------------------------------
 
 

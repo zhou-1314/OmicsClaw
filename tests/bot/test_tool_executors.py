@@ -405,7 +405,7 @@ def test_trusted_data_dirs_mutation_visible_to_tool_executors():
     """``_ensure_trusted_dirs()`` populates ``omicsclaw.services.path_validation.TRUSTED_DATA_DIRS``,
     but if it *rebinds* the global instead of mutating in place, modules
     that imported the name (omicsclaw.runtime.tools.builders.agent_executors, omicsclaw.runtime.agent.state,
-    omicsclaw.app.server) stay stuck on the original empty list.
+    omicsclaw.surfaces.desktop.server) stay stuck on the original empty list.
 
     Symptom observed via the executor probe on 2026-05-13:
         Trusted data dirs: ['/.../data', '/.../examples', ...]   (path_validation)

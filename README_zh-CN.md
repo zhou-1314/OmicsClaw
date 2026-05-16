@@ -85,9 +85,9 @@ oc interactive
 | 🧪 技能运行器 | `oc run <skill> --demo` | 可复现的分析 |
 | 💬 交互式 CLI | `oc interactive` | 自然语言驱动工作流 |
 | 🖥️ 全屏 TUI | `oc tui` | 终端式工作区会话 |
-| 🌐 App 后端 | `oc app-server` | 桌面/Web 前端 |
-| 📡 远程服务器 | SSH 上跑 `oc app-server` | 服务端数据与任务 |
-| 🤖 Bots | `python -m bot.run --channels ...` | Telegram、飞书等 |
+| 🌐 App 后端 | `oc desktop-server` | 桌面/Web 前端 |
+| 📡 远程服务器 | SSH 上跑 `oc desktop-server` | 服务端数据与任务 |
+| 🤖 Bots | `python -m omicsclaw.surfaces.channels --channels ...` | Telegram、飞书等 |
 | 🔌 MCP | `oc mcp add ...` | 接入外部工具 |
 
 远程模式使用 `127.0.0.1` + SSH 隧道 + `OMICSCLAW_REMOTE_AUTH_TOKEN`。详见 [remote execution](docs/engineering/remote-execution.mdx) 与 [legacy remote guide](docs/_legacy/remote-connection-guide.md)。
@@ -98,7 +98,7 @@ oc interactive
 |---|---|---|
 | 🥇 **完整 conda** | 用 Python + R + 生信 CLI 的真实分析 | `bash 0_setup_env.sh` |
 | 🪶 **轻量 venv** | 对话、路由、开发、纯 Python 技能 | `pip install -e ".[interactive]"` |
-| 🖥️ **桌面/Web 后端** | OmicsClaw-App 或浏览器前端 | `oc app-server --host 127.0.0.1 --port 8765` |
+| 🖥️ **桌面/Web 后端** | OmicsClaw-App 或浏览器前端 | `oc desktop-server --host 127.0.0.1 --port 8765` |
 | 🧠 **记忆 API** | 通过 HTTP 检视图记忆 | `pip install -e ".[memory]"` 然后 `oc memory-server` |
 
 📖 详细见 [安装指南](docs/_legacy/INSTALLATION.md) 与 [快速上手](docs/introduction/quickstart.mdx)。依赖分别由 [`pyproject.toml`](pyproject.toml)、[`environment.yml`](environment.yml)、[`0_setup_env.sh`](0_setup_env.sh) 管理。
@@ -150,7 +150,7 @@ oc interactive
 <details>
 <summary><b>桌面 App 能在服务器上跑任务吗？</b></summary>
 
-可以。在远程 Linux 上运行 `oc app-server`，绑定 `127.0.0.1`，再通过 App 的 SSH 隧道运行时连接过来。
+可以。在远程 Linux 上运行 `oc desktop-server`，绑定 `127.0.0.1`，再通过 App 的 SSH 隧道运行时连接过来。
 
 </details>
 

@@ -8,7 +8,7 @@ from omicsclaw.runtime.tools.hooks import (
     EVENT_TASK_STARTED,
 )
 from omicsclaw.runtime.tools.hooks import LifecycleHookRuntime, LifecycleHookSpec
-from omicsclaw.interactive._plan_mode_support import (
+from omicsclaw.surfaces.cli._plan_mode_support import (
     PLAN_KIND_GENERIC_ANALYSIS,
     PLAN_KIND_SKILL_CREATION,
     build_approve_plan_command_view,

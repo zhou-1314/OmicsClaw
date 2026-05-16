@@ -24,8 +24,8 @@ import pytest
 
 pytest.importorskip("jupyter_client")
 
-from omicsclaw.app.notebook import kernel_manager as km_module
-from omicsclaw.app.notebook.kernel_manager import KernelHandle, NotebookKernelManager
+from omicsclaw.surfaces.desktop.notebook import kernel_manager as km_module
+from omicsclaw.surfaces.desktop.notebook.kernel_manager import KernelHandle, NotebookKernelManager
 
 
 # ---------------------------------------------------------------------------

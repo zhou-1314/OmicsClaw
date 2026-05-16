@@ -22,8 +22,8 @@ from .ccproxy import (
 
 # Default port used when ``auth_mode="oauth"`` but no explicit port is given.
 # Kept in sync with ``omicsclaw.providers.ccproxy.DEFAULT_CCPROXY_PORT``.
-# Deliberately avoids 8765 (OmicsClaw app-server default) to prevent the
-# ccproxy subprocess from trying to bind the same port as the app-server.
+# Deliberately avoids 8765 (OmicsClaw desktop-server default) to prevent the
+# ccproxy subprocess from trying to bind the same port as the desktop-server.
 DEFAULT_CCPROXY_PORT: int = 11435
 
 # Sentinel API key that tells downstream OpenAI/Anthropic SDK clients the

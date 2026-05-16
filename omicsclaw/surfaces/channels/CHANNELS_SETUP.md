@@ -80,7 +80,7 @@ Before diving into console configuration, you must have the long connection scri
 
 ```bash
 # Start the bot locally first!
-python -m bot.run --channels feishu
+python -m omicsclaw.surfaces.channels --channels feishu
 ```
 If you see debugging messages indicating WebSocket connection success, leave the terminal running and proceed to the next step.
 

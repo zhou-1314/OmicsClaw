@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from omicsclaw.interactive._session_command_support import (
+from omicsclaw.surfaces.cli._session_command_support import (
     build_clear_conversation_command_view,
     build_current_session_command_view,
     build_delete_session_command_view,
@@ -42,11 +42,11 @@ async def test_build_session_list_view_uses_session_rows(monkeypatch):
         ]
 
     monkeypatch.setattr(
-        "omicsclaw.interactive._session_command_support.list_sessions",
+        "omicsclaw.surfaces.cli._session_command_support.list_sessions",
         _list_sessions,
     )
     monkeypatch.setattr(
-        "omicsclaw.interactive._session_command_support.format_relative_time",
+        "omicsclaw.surfaces.cli._session_command_support.format_relative_time",
         lambda _: "2h ago",
     )
 
@@ -155,7 +155,7 @@ def test_build_export_session_command_view_reports_failure(monkeypatch, tmp_path
         raise RuntimeError("disk full")
 
     monkeypatch.setattr(
-        "omicsclaw.interactive._session_command_support.export_conversation_to_markdown",
+        "omicsclaw.surfaces.cli._session_command_support.export_conversation_to_markdown",
         _fail,
     )
 
@@ -237,11 +237,11 @@ def test_session_title_and_tag_command_views_update_metadata():
 
 def test_enrich_session_metadata_derives_runtime_state(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "omicsclaw.interactive._session_command_support.resolve_pipeline_workspace",
+        "omicsclaw.surfaces.cli._session_command_support.resolve_pipeline_workspace",
         lambda _arg, workspace: Path(workspace),
     )
     monkeypatch.setattr(
-        "omicsclaw.interactive._session_command_support.load_pipeline_workspace_snapshot",
+        "omicsclaw.surfaces.cli._session_command_support.load_pipeline_workspace_snapshot",
         lambda workspace: SimpleNamespace(
             has_pipeline_state=True,
             workspace=Path(workspace),
@@ -249,7 +249,7 @@ def test_enrich_session_metadata_derives_runtime_state(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        "omicsclaw.interactive._session_command_support.list_installed_extensions",
+        "omicsclaw.surfaces.cli._session_command_support.list_installed_extensions",
         lambda _root: [
             SimpleNamespace(
                 state=SimpleNamespace(enabled=True),
@@ -341,7 +341,7 @@ async def test_build_resume_session_command_view_loads_and_formats_history(monke
         }
 
     monkeypatch.setattr(
-        "omicsclaw.interactive._session_command_support.load_session",
+        "omicsclaw.surfaces.cli._session_command_support.load_session",
         _load_session,
     )
 
@@ -381,7 +381,7 @@ async def test_build_resume_session_command_view_reports_missing_session(monkeyp
         return None
 
     monkeypatch.setattr(
-        "omicsclaw.interactive._session_command_support.load_session",
+        "omicsclaw.surfaces.cli._session_command_support.load_session",
         _load_session,
     )
 
@@ -393,11 +393,11 @@ async def test_build_resume_session_command_view_reports_missing_session(monkeyp
 
 def test_build_current_session_command_view_includes_pipeline_snapshot(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "omicsclaw.interactive._session_command_support.resolve_pipeline_workspace",
+        "omicsclaw.surfaces.cli._session_command_support.resolve_pipeline_workspace",
         lambda _arg, workspace: Path(workspace),
     )
     monkeypatch.setattr(
-        "omicsclaw.interactive._session_command_support.load_pipeline_workspace_snapshot",
+        "omicsclaw.surfaces.cli._session_command_support.load_pipeline_workspace_snapshot",
         lambda workspace: SimpleNamespace(
             has_pipeline_state=True,
             workspace=workspace,
@@ -405,7 +405,7 @@ def test_build_current_session_command_view_includes_pipeline_snapshot(monkeypat
         ),
     )
     monkeypatch.setattr(
-        "omicsclaw.interactive._session_command_support.build_pipeline_display_from_snapshot",
+        "omicsclaw.surfaces.cli._session_command_support.build_pipeline_display_from_snapshot",
         lambda snapshot: SimpleNamespace(
             current_stage="review",
             plan=SimpleNamespace(status="pending_approval"),
@@ -520,7 +520,7 @@ async def test_build_session_list_view_filters_by_metadata_query(monkeypatch):
         ]
 
     monkeypatch.setattr(
-        "omicsclaw.interactive._session_command_support.list_sessions",
+        "omicsclaw.surfaces.cli._session_command_support.list_sessions",
         _list_sessions,
     )
 
@@ -552,11 +552,11 @@ async def test_build_delete_session_command_view_deletes_loaded_session(monkeypa
         return True
 
     monkeypatch.setattr(
-        "omicsclaw.interactive._session_command_support.load_session",
+        "omicsclaw.surfaces.cli._session_command_support.load_session",
         _load_session,
     )
     monkeypatch.setattr(
-        "omicsclaw.interactive._session_command_support.delete_session",
+        "omicsclaw.surfaces.cli._session_command_support.delete_session",
         _delete_session,
     )
 

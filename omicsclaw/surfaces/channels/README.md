@@ -61,7 +61,7 @@ User (Telegram / Feishu / DingTalk / Discord / Slack / WeChat / QQ / Email / iMe
 | `channels/qq.py` | QQChannel (qq-botpy, WebSocket Gateway) |
 | `channels/email.py` | EmailChannel (IMAP + SMTP, stdlib only) |
 | `channels/imessage.py` | IMessageChannel (imsg CLI, macOS only) |
-| `run.py` | Unified CLI runner — `python -m bot.run` |
+| `run.py` | Unified CLI runner — `python -m omicsclaw.surfaces.channels` |
 
 ## Capability Matrix
 
@@ -549,18 +549,18 @@ IMESSAGE_REGION=US                          # Optional: phone number region
 
 ```bash
 # Multi-channel runner (runs any combination in one process)
-python -m bot.run --channels telegram
-python -m bot.run --channels feishu
-python -m bot.run --channels telegram,feishu
-python -m bot.run --channels dingtalk
-python -m bot.run --channels discord
-python -m bot.run --channels slack
-python -m bot.run --channels wechat
-python -m bot.run --channels qq
-python -m bot.run --channels email
-python -m bot.run --channels imessage        # macOS only
-python -m bot.run --channels telegram,feishu,dingtalk --health-port 8080
-python -m bot.run --list  # list all 9 available channels
+python -m omicsclaw.surfaces.channels --channels telegram
+python -m omicsclaw.surfaces.channels --channels feishu
+python -m omicsclaw.surfaces.channels --channels telegram,feishu
+python -m omicsclaw.surfaces.channels --channels dingtalk
+python -m omicsclaw.surfaces.channels --channels discord
+python -m omicsclaw.surfaces.channels --channels slack
+python -m omicsclaw.surfaces.channels --channels wechat
+python -m omicsclaw.surfaces.channels --channels qq
+python -m omicsclaw.surfaces.channels --channels email
+python -m omicsclaw.surfaces.channels --channels imessage        # macOS only
+python -m omicsclaw.surfaces.channels --channels telegram,feishu,dingtalk --health-port 8080
+python -m omicsclaw.surfaces.channels --list  # list all 9 available channels
 
 # Makefile shortcuts
 make bot-telegram
@@ -660,7 +660,7 @@ QQ_ALLOWED_SENDERS=12345678                  # QQ user IDs
 1. Check that the channel is configured correctly (bot token, app ID, etc.)
 2. If using `allowed_senders`, ensure your user/chat ID is listed
 3. For group chats, ensure the bot is @mentioned (default behavior)
-4. Check logs for errors: `python -m bot.run --channels <name> --verbose`
+4. Check logs for errors: `python -m omicsclaw.surfaces.channels --channels <name> --verbose`
 
 ### "channel X not found" or import errors
 
@@ -683,7 +683,7 @@ Add your server's public IP to the WeCom app's **Trusted IP** list in the admin 
 
 ### Feishu "event loop already running" error
 
-This is a known issue with `lark_oapi` — it uses a module-level event loop variable. OmicsClaw patches this automatically when running via `python -m bot.run`. If you see this error, ensure you're using the latest version of `bot/channels/feishu.py`.
+This is a known issue with `lark_oapi` — it uses a module-level event loop variable. OmicsClaw patches this automatically when running via `python -m omicsclaw.surfaces.channels`. If you see this error, ensure you're using the latest version of `bot/channels/feishu.py`.
 
 ### Token refresh failures
 
@@ -696,7 +696,7 @@ This is a known issue with `lark_oapi` — it uses a module-level event loop var
 Enable verbose mode for detailed channel logs:
 
 ```bash
-python -m bot.run --channels telegram --verbose
+python -m omicsclaw.surfaces.channels --channels telegram --verbose
 # or set environment variable:
 export LOG_LEVEL=DEBUG
 ```

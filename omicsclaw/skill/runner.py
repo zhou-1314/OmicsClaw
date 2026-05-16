@@ -383,7 +383,7 @@ async def arun_skill(
     OMI-12 audit P1 #4: ``SkillRunnerExecutor`` used to wrap the blocking
     ``run_skill`` in ``asyncio.to_thread``, which parked one
     ``ThreadPoolExecutor`` worker for every active skill. With the default
-    32-worker pool, busy app-server traffic could exhaust the pool and
+    32-worker pool, busy desktop-server traffic could exhaust the pool and
     stall unrelated async work. This async-native entry point spawns the
     skill subprocess via :func:`asyncio.create_subprocess_exec` instead,
     so concurrent skills only cost one async task each, not one OS thread.

@@ -1,12 +1,12 @@
 # Interactive Session State Inventory
 
 Task 2.1 of the Phase 2 deepening plan. Enumerates every site that reads or
-writes the `state: dict[str, Any]` used by `omicsclaw/interactive/interactive.py`,
+writes the `state: dict[str, Any]` used by `omicsclaw/surfaces/cli/interactive.py`,
 as the discovery basis for the typed `SessionState` module that replaces it.
 
 ## Scope
 
-- **Files using the dict-as-state pattern**: 1 (`omicsclaw/interactive/interactive.py`).
+- **Files using the dict-as-state pattern**: 1 (`omicsclaw/surfaces/cli/interactive.py`).
 - **Files NOT using it**: `tui.py`, `_session.py`, `_session_command_support.py`,
   `_skill_run_support.py`, `_skill_management_support.py`, `_pipeline_support.py`,
   `_plan_mode_support.py`, `_memory_command_support.py`, `_omicsclaw_actions.py`,

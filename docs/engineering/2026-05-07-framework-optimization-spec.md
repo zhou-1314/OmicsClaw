@@ -32,7 +32,7 @@ and how a change is verified.
 - OmicsClaw runtime registry: `omicsclaw/core/registry.py`
 - CLI entrypoint: `omicsclaw.py`
 - App/remote execution layer: `omicsclaw/execution/`
-- Bot/interactive surfaces: `bot/`, `omicsclaw/interactive/`
+- Bot/interactive surfaces: `bot/`, `omicsclaw/surfaces/cli/`
 - Documentation: `README.md`, `AGENTS.md`, `docs/architecture/`,
   `docs/engineering/`, `docs/superpowers/plans/`
 
@@ -68,7 +68,7 @@ omicsclaw/core/
 omicsclaw/execution/
   Job/executor abstractions for app and remote execution.
 
-bot/ and omicsclaw/interactive/
+bot/ and omicsclaw/surfaces/cli/
   User-facing surfaces that should call the shared runner contract.
 
 docs/engineering/
