@@ -328,7 +328,6 @@ _conversation_access = transcript_store.access_by_chat  # LRU tracking
 
 # received_files moved to omicsclaw.runtime.agent.session (re-exported via the SessionManager import below).
 pending_media: dict[int | str, list[dict]] = {}
-pending_text: list[str] = []
 pending_preflight_requests: dict[int | str, dict] = {}
 
 BOT_START_TIME = time.time()

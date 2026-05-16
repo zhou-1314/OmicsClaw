@@ -395,9 +395,6 @@ class TelegramChannel(Channel):
                 update,
                 f"Run the {skill} demo using the omicsclaw tool with mode='demo'.",
             )
-            if core.pending_text:
-                reply = "\n\n".join(core.pending_text)
-                core.pending_text.clear()
             await self._send_long_message(update, reply)
             await self._drain_pending_media(update, context)
         except Exception as e:
@@ -496,9 +493,6 @@ class TelegramChannel(Channel):
         try:
             await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
             reply = await self._run_dispatch(update, user_text)
-            if core.pending_text:
-                reply = "\n\n".join(core.pending_text)
-                core.pending_text.clear()
             await self._send_long_message(update, reply)
             await self._drain_pending_media(update, context)
         except Exception as e:
@@ -584,9 +578,6 @@ class TelegramChannel(Channel):
                 })
 
             reply = await self._run_dispatch(update, content_blocks)
-            if core.pending_text:
-                reply = "\n\n".join(core.pending_text)
-                core.pending_text.clear()
             await self._send_long_message(update, reply)
 
         except Exception as e:
@@ -676,9 +667,6 @@ class TelegramChannel(Channel):
                 )
 
             reply = await self._run_dispatch(update, "\n\n".join(parts))
-            if core.pending_text:
-                reply = "\n\n".join(core.pending_text)
-                core.pending_text.clear()
             await self._send_long_message(update, reply)
             await self._drain_pending_media(update, context)
 

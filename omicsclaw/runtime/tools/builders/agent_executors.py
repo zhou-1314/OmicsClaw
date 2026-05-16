@@ -66,7 +66,6 @@ from omicsclaw.runtime.agent.state import (
     get_skill_runner_python,
     pending_media,
     pending_preflight_requests,
-    pending_text,
     received_files,
 )
 

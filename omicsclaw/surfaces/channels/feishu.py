@@ -787,10 +787,6 @@ class FeishuChannel(Channel):
             elif isinstance(event, _DispatchError):
                 raise event.exception
 
-        if core.pending_text:
-            reply = "\n\n".join(core.pending_text)
-            core.pending_text.clear()
-
         return reply
 
     # ── Event handler ────────────────────────────────────────────────
