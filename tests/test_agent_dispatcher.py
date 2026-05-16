@@ -32,12 +32,18 @@ from omicsclaw.runtime.agent.events import (
 
 
 def _patch_llm_tool_loop(monkeypatch, fake):
-    """Replace the ``llm_tool_loop`` symbol the dispatcher imports lazily."""
-    monkeypatch.setattr(
-        "omicsclaw.runtime.agent.loop.llm_tool_loop",
-        fake,
-        raising=True,
-    )
+    """Replace the ``llm_tool_loop`` symbol the dispatcher resolves via state.
+
+    The dispatcher reads ``state.llm_tool_loop`` (a lazy re-export from
+    ``loop``) so tests must patch the attribute on the state module, not
+    on the loop module — state memoises the re-export and would not pick
+    up a later patch to loop.
+    """
+    import omicsclaw.runtime.agent.loop as _loop
+    import omicsclaw.runtime.agent.state as _state
+
+    monkeypatch.setattr(_loop, "llm_tool_loop", fake, raising=True)
+    monkeypatch.setattr(_state, "llm_tool_loop", fake, raising=False)
 
 
 async def _collect(envelope: MessageEnvelope):

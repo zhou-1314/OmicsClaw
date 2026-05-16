@@ -12,10 +12,9 @@ events relevant to their output channel.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import uuid
 from typing import AsyncIterator
-
-import omicsclaw.runtime.agent.state as _core
 
 from omicsclaw.runtime.agent.envelope import MessageEnvelope
 from omicsclaw.runtime.agent.events import (
@@ -69,10 +68,15 @@ async def dispatch(envelope: MessageEnvelope) -> AsyncIterator[Event]:
         await queue.put(ContextCompacted(payload=dict(payload) if payload else {}))
 
     async def _run() -> None:
-        try:
-            from omicsclaw.runtime.agent.loop import llm_tool_loop
+        # Late import so tests that swap ``sys.modules['omicsclaw.runtime.agent.state']``
+        # or patch ``state.llm_tool_loop`` are honoured on every call. The
+        # real ``state`` module lazy-re-exports ``loop.llm_tool_loop``
+        # through its ``__getattr__`` (memoised in module globals), so this
+        # adds one ``sys.modules`` dict lookup per dispatch — negligible.
+        _core = importlib.import_module("omicsclaw.runtime.agent.state")
 
-            final_text = await llm_tool_loop(
+        try:
+            final_text = await _core.llm_tool_loop(
                 chat_id=envelope.chat_id,
                 user_content=envelope.content,
                 user_id=envelope.user_id,
@@ -101,19 +105,17 @@ async def dispatch(envelope: MessageEnvelope) -> AsyncIterator[Event]:
             )
 
             chat_id = envelope.chat_id
-            media_items = list(_core.pending_media.pop(chat_id, []) or [])
+            pending_media = getattr(_core, "pending_media", None) or {}
+            media_items = list(pending_media.pop(chat_id, []) or [])
             if not media_items and chat_id is not None:
                 alt_key = str(chat_id)
                 if alt_key != chat_id:
-                    media_items = list(_core.pending_media.pop(alt_key, []) or [])
+                    media_items = list(pending_media.pop(alt_key, []) or [])
             if media_items:
                 await queue.put(PendingMedia(items=media_items))
 
-            kind = (
-                "preflight"
-                if chat_id in _core.pending_preflight_requests
-                else "normal"
-            )
+            pending_preflight = getattr(_core, "pending_preflight_requests", None) or {}
+            kind = "preflight" if chat_id in pending_preflight else "normal"
             await queue.put(Final(text=final_text or "", kind=kind))
         except asyncio.CancelledError:
             raise

@@ -1049,30 +1049,43 @@ if _HAS_TEXTUAL:
                     self._current_reasoning.mount(Static(msg, classes="msg-system"))
                     self.call_after_refresh(self.query_one("#chat-area", ScrollableContainer).scroll_end)
 
-                # llm_tool_loop returns the final assistant reply as a plain string.
-                # Pass user_id and platform so graph memory is active.
+                # Iterate dispatch() to render tool activity, then capture the
+                # Final.text as the assistant reply (per ADR 0006).
                 active_mcp_servers = await load_active_mcp_server_entries_for_prompt()
-                loop_kwargs = {
-                    "user_id": "tui_user",
-                    "platform": "tui",
-                    "plan_context": self._interactive_plan_context(),
-                    "workspace": self._workspace,
-                    "pipeline_workspace": self._active_pipeline_workspace() or "",
-                    "mcp_servers": active_mcp_servers,
-                    "on_tool_call": tui_on_tool_call,
-                    "on_tool_result": tui_on_tool_result,
-                }
-                active_memory_scope = self._active_scoped_memory_scope()
-                if active_memory_scope:
-                    loop_kwargs["scoped_memory_scope"] = active_memory_scope
-                active_style = self._active_output_style() or ""
-                if active_style:
-                    loop_kwargs["output_style"] = active_style
-                final_text = await core.llm_tool_loop(
-                    _USER,
-                    last_user_msg,
-                    **loop_kwargs,
+                from omicsclaw.runtime.agent.dispatcher import dispatch
+                from omicsclaw.runtime.agent.envelope import MessageEnvelope
+                from omicsclaw.runtime.agent.events import (
+                    Error as _DispatchError,
+                    Final as _DispatchFinal,
+                    ToolCall as _DispatchToolCall,
+                    ToolResult as _DispatchToolResult,
                 )
+
+                active_memory_scope = self._active_scoped_memory_scope() or ""
+                active_style = self._active_output_style() or ""
+                envelope = MessageEnvelope(
+                    chat_id=_USER,
+                    content=last_user_msg,
+                    user_id="tui_user",
+                    platform="tui",
+                    plan_context=self._interactive_plan_context(),
+                    workspace=self._workspace,
+                    pipeline_workspace=self._active_pipeline_workspace() or "",
+                    mcp_servers=active_mcp_servers,
+                    scoped_memory_scope=active_memory_scope,
+                    output_style=active_style,
+                )
+
+                final_text = ""
+                async for event in dispatch(envelope):
+                    if isinstance(event, _DispatchToolCall):
+                        await tui_on_tool_call(event.tool, event.arguments)
+                    elif isinstance(event, _DispatchToolResult):
+                        await tui_on_tool_result(event.tool, event.result)
+                    elif isinstance(event, _DispatchFinal):
+                        final_text = event.text
+                    elif isinstance(event, _DispatchError):
+                        raise event.exception
                 elapsed = _time.time() - t0
 
                 # Collect usage snapshot from core

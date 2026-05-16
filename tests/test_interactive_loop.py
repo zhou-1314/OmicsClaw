@@ -60,9 +60,9 @@ async def test_stream_llm_response_uses_explicit_workspace_context(monkeypatch):
     output = io.StringIO()
 
     async def _fake_llm_tool_loop(
-        conversation_id,
-        user_text,
         *,
+        chat_id,
+        user_content,
         user_id="",
         platform="",
         plan_context="",
@@ -73,11 +73,12 @@ async def test_stream_llm_response_uses_explicit_workspace_context(monkeypatch):
         on_tool_call=None,
         on_tool_result=None,
         on_stream_content=None,
+        **_extra,
     ):
         captured.update(
             {
-                "conversation_id": conversation_id,
-                "user_text": user_text,
+                "chat_id": chat_id,
+                "user_content": user_content,
                 "plan_context": plan_context,
                 "workspace": workspace,
                 "pipeline_workspace": pipeline_workspace,
@@ -85,8 +86,8 @@ async def test_stream_llm_response_uses_explicit_workspace_context(monkeypatch):
                 "output_style": output_style,
             }
         )
-        core_module.conversations[conversation_id] = [
-            {"role": "user", "content": user_text},
+        core_module.conversations[chat_id] = [
+            {"role": "user", "content": user_content},
             {"role": "assistant", "content": "I am OmicsClaw."},
         ]
         if on_stream_content is not None:
@@ -119,7 +120,7 @@ async def test_stream_llm_response_uses_explicit_workspace_context(monkeypatch):
     )
 
     assert result == "I am OmicsClaw."
-    assert captured["user_text"] == "介绍你自己"
+    assert captured["user_content"] == "介绍你自己"
     assert captured["plan_context"] == ""
     assert captured["workspace"] == "/tmp/workspace"
     assert captured["pipeline_workspace"] == "/tmp/pipeline"
@@ -254,12 +255,13 @@ async def test_stream_llm_response_formats_markdown_for_cli(monkeypatch):
     output = io.StringIO()
 
     async def _fake_llm_tool_loop(
-        conversation_id,
-        user_text,
+        *,
+        chat_id,
+        user_content,
         **kwargs,
     ):
-        core_module.conversations[conversation_id] = [
-            {"role": "user", "content": user_text},
+        core_module.conversations[chat_id] = [
+            {"role": "user", "content": user_content},
             {"role": "assistant", "content": "**空间转录组学**"},
         ]
         on_stream_content = kwargs.get("on_stream_content")
@@ -301,13 +303,14 @@ async def test_stream_llm_response_passes_plan_context(monkeypatch):
     output = io.StringIO()
 
     async def _fake_llm_tool_loop(
-        conversation_id,
-        user_text,
+        *,
+        chat_id,
+        user_content,
         **kwargs,
     ):
         captured["plan_context"] = kwargs.get("plan_context", "")
-        core_module.conversations[conversation_id] = [
-            {"role": "user", "content": user_text},
+        core_module.conversations[chat_id] = [
+            {"role": "user", "content": user_content},
             {"role": "assistant", "content": "Plan-aware reply."},
         ]
         on_stream_content = kwargs.get("on_stream_content")
@@ -428,12 +431,13 @@ async def test_stream_llm_response_formats_sectioned_markdown_lists(monkeypatch)
 3. **参数解释**：需要明确说明关键参数"""
 
     async def _fake_llm_tool_loop(
-        conversation_id,
-        user_text,
+        *,
+        chat_id,
+        user_content,
         **kwargs,
     ):
-        core_module.conversations[conversation_id] = [
-            {"role": "user", "content": user_text},
+        core_module.conversations[chat_id] = [
+            {"role": "user", "content": user_content},
             {"role": "assistant", "content": markdown_text},
         ]
         on_stream_content = kwargs.get("on_stream_content")
@@ -478,12 +482,13 @@ async def test_stream_llm_response_separates_tool_log_from_response(monkeypatch)
     output = io.StringIO()
 
     async def _fake_llm_tool_loop(
-        conversation_id,
-        user_text,
+        *,
+        chat_id,
+        user_content,
         **kwargs,
     ):
-        core_module.conversations[conversation_id] = [
-            {"role": "user", "content": user_text},
+        core_module.conversations[chat_id] = [
+            {"role": "user", "content": user_content},
             {"role": "assistant", "content": "Analysis ready."},
         ]
         on_tool_call = kwargs.get("on_tool_call")
@@ -535,12 +540,13 @@ async def test_stream_llm_response_does_not_repeat_final_text_after_tool_interlu
     output = io.StringIO()
 
     async def _fake_llm_tool_loop(
-        conversation_id,
-        user_text,
+        *,
+        chat_id,
+        user_content,
         **kwargs,
     ):
-        core_module.conversations[conversation_id] = [
-            {"role": "user", "content": user_text},
+        core_module.conversations[chat_id] = [
+            {"role": "user", "content": user_content},
             {"role": "assistant", "content": "Final answer."},
         ]
         on_tool_call = kwargs.get("on_tool_call")
@@ -593,12 +599,13 @@ async def test_stream_llm_response_marks_followup_tool_batches_as_updates(monkey
     output = io.StringIO()
 
     async def _fake_llm_tool_loop(
-        conversation_id,
-        user_text,
+        *,
+        chat_id,
+        user_content,
         **kwargs,
     ):
-        core_module.conversations[conversation_id] = [
-            {"role": "user", "content": user_text},
+        core_module.conversations[chat_id] = [
+            {"role": "user", "content": user_content},
             {"role": "assistant", "content": "Done."},
         ]
         on_tool_call = kwargs.get("on_tool_call")

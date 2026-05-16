@@ -1413,7 +1413,7 @@ async def _stream_llm_response(
     scoped_memory_scope: str = "",
     output_style: str = "",
 ) -> str:
-    """Call bot/core.py llm_tool_loop and print the response to the console.
+    """Iterate ``dispatch(envelope)`` and render events to the console.
 
     Returns the final assistant text response.
     """
@@ -1421,11 +1421,10 @@ async def _stream_llm_response(
         sys.path.insert(0, str(_OMICSCLAW_DIR))
         import omicsclaw.runtime.agent.state as core
 
-        # Use the existing LLM tool loop from core.py.
-        # core.llm_tool_loop manages its own per-chat conversation history
-        # internally via core.conversations[chat_id].  We seed it from our
-        # local messages list (excluding the last user message which
-        # llm_tool_loop will append itself), then sync back after the call.
+        # The agent loop manages per-chat conversation history internally via
+        # ``core.conversations[chat_id]``. We seed it from our local messages
+        # list (excluding the last user message, which the loop will append
+        # itself) and sync back after the dispatch stream completes.
         _INTERACTIVE_USER = "__interactive__"
         user_text = seed_core_conversation(core, _INTERACTIVE_USER, messages)
 
@@ -1503,26 +1502,47 @@ async def _stream_llm_response(
 
             try:
                 active_mcp_servers = await load_active_mcp_server_entries_for_prompt()
-                loop_kwargs = {
-                    "user_id": "cli_user",
-                    "platform": "cli",
-                    "plan_context": plan_context,
-                    "workspace": workspace_dir or "",
-                    "pipeline_workspace": pipeline_workspace or "",
-                    "mcp_servers": active_mcp_servers,
-                    "on_tool_call": sync_on_tool_call,
-                    "on_tool_result": sync_on_tool_result,
-                    "on_stream_content": sync_on_stream_content,
-                }
-                if scoped_memory_scope:
-                    loop_kwargs["scoped_memory_scope"] = scoped_memory_scope
-                if output_style:
-                    loop_kwargs["output_style"] = output_style
-                llm_task = asyncio.create_task(core.llm_tool_loop(
-                    _INTERACTIVE_USER,
-                    user_text,
-                    **loop_kwargs,
-                ))
+
+                from omicsclaw.runtime.agent.dispatcher import dispatch
+                from omicsclaw.runtime.agent.envelope import MessageEnvelope
+                from omicsclaw.runtime.agent.events import (
+                    Error as _DispatchError,
+                    Final as _DispatchFinal,
+                    StreamContent as _DispatchStreamContent,
+                    ToolCall as _DispatchToolCall,
+                    ToolResult as _DispatchToolResult,
+                )
+
+                envelope = MessageEnvelope(
+                    chat_id=_INTERACTIVE_USER,
+                    content=user_text,
+                    user_id="cli_user",
+                    platform="cli",
+                    plan_context=plan_context,
+                    workspace=workspace_dir or "",
+                    pipeline_workspace=pipeline_workspace or "",
+                    mcp_servers=active_mcp_servers,
+                    scoped_memory_scope=scoped_memory_scope or "",
+                    output_style=output_style or "",
+                )
+
+                async def _consume_dispatch_stream() -> str:
+                    """Iterate dispatch(envelope), drive renderers, return Final text."""
+                    final_text_value = ""
+                    async for event in dispatch(envelope):
+                        if isinstance(event, _DispatchToolCall):
+                            sync_on_tool_call(event.tool, event.arguments)
+                        elif isinstance(event, _DispatchToolResult):
+                            sync_on_tool_result(event.tool, event.result)
+                        elif isinstance(event, _DispatchStreamContent):
+                            await sync_on_stream_content(event.chunk)
+                        elif isinstance(event, _DispatchFinal):
+                            final_text_value = event.text
+                        elif isinstance(event, _DispatchError):
+                            raise event.exception
+                    return final_text_value
+
+                llm_task = asyncio.create_task(_consume_dispatch_stream())
 
                 async def _watch_escape():
                     import sys
