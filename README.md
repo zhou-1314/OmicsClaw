@@ -45,7 +45,7 @@ OmicsClaw turns local multi-omics tools into AI-callable skills. The LLM plans a
   <a href="https://github.com/TianGzlab/OmicsClaw/releases/latest"><b>📥 Download the OmicsClaw Desktop App</b></a>
 </p>
 
-The **[Releases](https://github.com/TianGzlab/OmicsClaw/releases)** tab hosts the prebuilt desktop installers — same `oc app-server` the CLI ships, wrapped in a chat-ready Electron UI.
+The **[Releases](https://github.com/TianGzlab/OmicsClaw/releases)** tab hosts the prebuilt desktop installers — same `oc desktop-server` the CLI ships, wrapped in a chat-ready Electron UI.
 
 | Platform | Asset |
 |---|---|
