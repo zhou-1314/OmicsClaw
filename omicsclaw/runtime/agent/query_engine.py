@@ -49,6 +49,14 @@ from ..context.budget import (
     create_token_budget_tracker,
     record_completion_tokens,
 )
+from .loop_pathology import detect as detect_loop_pathology
+from .loop_state import (
+    LoopState,
+    PathologySignal,
+    ToolCallRecord,
+    ToolErrorRecord,
+    compute_args_digest,
+)
 
 
 async def _maybe_await(value):
@@ -117,6 +125,7 @@ class QueryEngineCallbacks:
     ) = None
     on_llm_error: Callable[[Exception], Any] | None = None
     on_context_compacted: Callable[["CompactionEvent"], Any] | None = None
+    on_pathology_signal: Callable[[PathologySignal], Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -477,6 +486,37 @@ def _persist_prepared_compaction(
     transcript_store.replace_history(chat_id, compacted_history)
 
 
+def _format_pathology_correction(signal: PathologySignal) -> str:
+    if signal.kind == "pingpong":
+        return (
+            f"Loop detector: tool '{signal.tool_name}' was called "
+            f"{signal.count} times with the same arguments in this loop. "
+            "Reconsider your approach or finalize with current information."
+        )
+    if signal.kind == "repeated_failure":
+        return (
+            f"Loop detector: tool '{signal.tool_name}' has failed "
+            f"{signal.count} times in this loop. "
+            "Reconsider your approach or finalize with current information."
+        )
+    return f"Loop detector: {signal.reason}"
+
+
+def _is_new_pathology(signal: PathologySignal, state: LoopState) -> bool:
+    """Return True when this (kind, tool_name) hasn't been recorded yet.
+
+    Once the LLM has been warned about pingpong on tool A, repeating the
+    same warning every iteration is spam — the LLM already saw it.
+    ``MAX_TOOL_ITERATIONS`` remains the terminal backstop if the LLM
+    ignores the warning. A *different* (kind, tool_name) — e.g. tool A
+    recovers, then tool B starts pingponging — does fire a fresh signal.
+    """
+    if not state.signals:
+        return True
+    last = state.signals[-1]
+    return (last.kind, last.tool_name) != (signal.kind, signal.tool_name)
+
+
 async def run_query_engine(
     *,
     llm,
@@ -548,7 +588,9 @@ async def run_query_engine(
             record_completion_tokens(budget_tracker, completion_tokens)
 
     last_message: MaterializedMessage | None = None
-    for _ in range(config.max_iterations):
+    state = LoopState()
+    for iteration_index in range(config.max_iterations):
+        state.iteration = iteration_index
         history = transcript_store.prepare_history(context.chat_id)
         pre_chars = sum(estimate_message_size(m) for m in history)
         prepared_messages = prepare_model_messages(
@@ -926,6 +968,27 @@ async def run_query_engine(
                 content=result_record.content,
             )
 
+            state.tool_calls.append(
+                ToolCallRecord(
+                    name=request.name,
+                    args_digest=compute_args_digest(request.arguments),
+                    iteration=state.iteration,
+                    succeeded=execution_result.success,
+                )
+            )
+            if not execution_result.success:
+                error_obj = execution_result.error
+                state.errors.append(
+                    ToolErrorRecord(
+                        tool_name=request.name,
+                        iteration=state.iteration,
+                        error_class=type(error_obj).__name__
+                        if error_obj is not None
+                        else "ToolFailure",
+                        message_head=(str(error_obj) if error_obj is not None else "")[:200],
+                    )
+                )
+
             if not interruption_message:
                 interruption_message = _build_preflight_interruption_message(
                     result_record.content
@@ -937,6 +1000,16 @@ async def run_query_engine(
                 content=interruption_message,
             )
             return interruption_message
+
+        pathology_signal = detect_loop_pathology(state)
+        if pathology_signal is not None and _is_new_pathology(pathology_signal, state):
+            state.signals.append(pathology_signal)
+            if callbacks.on_pathology_signal is not None:
+                await _maybe_await(callbacks.on_pathology_signal(pathology_signal))
+            transcript_store.append_user_message(
+                context.chat_id,
+                _format_pathology_correction(pathology_signal),
+            )
 
     if last_message and last_message.content:
         return _merge_response_segments(
