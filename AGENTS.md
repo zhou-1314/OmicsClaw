@@ -97,79 +97,66 @@ python omicsclaw.py run spatial-preprocess --demo
 
 ## Project Structure
 
+Boundary-led layout (see ADRs 0004 + 0005 for the design history). Each
+top-level sub-package of `omicsclaw/` corresponds to one architectural
+boundary; new code lands in the sub-package whose name matches its
+concern.
+
 ```
 OmicsClaw/
-├── omicsclaw.py                # Main CLI runner (SKILLS dict, DOMAINS registry)
-├── omicsclaw/                  # Core framework (domain-agnostic)
-│   ├── common/                 # report.py, session.py, checksums.py
-│   ├── core/                   # registry.py, dependency_manager.py
-│   ├── loaders/                # File-extension → domain detection helpers
-│   ├── memory/                 # Graph memory system
+├── omicsclaw.py                # Main CLI script (SKILLS dict, DOMAINS registry, `oc list`/`oc run`/`oc desktop-server`)
+├── omicsclaw/                  # The single top-level Python package
+│   ├── surfaces/               # ← Ingress layer (ADR 0005). The three user-facing entry points.
+│   │   ├── channels/           #   Channel Surface — 10 IM adapters + ChannelManager + `python -m`
+│   │   ├── desktop/            #   Desktop Surface — FastAPI server for Electron / Next.js frontends
+│   │   └── cli/                #   CLI Surface — prompt_toolkit REPL, Textual TUI, setup wizard, `oc` launcher
+│   ├── runtime/                # Agent loop, context assembly, tool registry, policy, transcript storage (ADR 0004 P3)
+│   │   ├── agent/, context/, tools/, policy/, storage/
+│   ├── skill/                  # Skill registry, runner, lookup, subprocess execution (ADR 0004 P2)
+│   ├── providers/              # LLM provider registry + OpenAI/ccproxy adapters (ADR 0004 P1)
+│   ├── memory/                 # Graph memory system (MemoryEngine, MemoryClient, ReviewLog)
+│   ├── services/               # Cross-cutting: audit, billing, rate_limit, path_validation
+│   ├── core/                   # Thin base layer: dependency_manager, external_env, r_* helpers
+│   ├── loaders/                # File-extension → domain detection
 │   ├── routing/                # Multi-agent routing
 │   ├── agents/                 # Agent definitions
-│   └── interactive/            # Interactive CLI/TUI package
-│       ├── __init__.py         # Package entry: run_interactive(), main()
-│       ├── _constants.py       # Banner, LOGO, slash commands, slogans
-│       ├── _session.py         # SQLite session persistence (aiosqlite)
-│       ├── _mcp.py             # MCP server config / YAML management
-│       ├── interactive.py      # prompt_toolkit REPL loop (CLI mode)
-│       └── tui.py              # Textual full-screen TUI (TUI mode)
+│   ├── remote/                 # Remote runtime (jobs, workspace resolution)
+│   ├── knowledge/              # Knowhow / semantic index
+│   ├── extensions/             # MCP integration etc.
+│   ├── engine/                 # Shared engine primitives
+│   ├── execution/              # Execution helpers
+│   ├── interactive/ ⛔          # MOVED → surfaces/cli/ (ADR 0005)
+│   ├── channels/    ⛔          # MOVED → surfaces/channels/ (ADR 0005)
+│   ├── app/         ⛔          # MOVED → surfaces/desktop/ (ADR 0005)
+│   └── __main__.py             # `python -m omicsclaw` entry hook (stays at package root)
 ├── skills/                     # Domain-organized skills + shared utilities
-│   ├── spatial/                # 17 spatial transcriptomics skills
-│   │   ├── _lib/               # ★ Shared spatial utilities (adata_utils, viz, loader, etc.)
-│   │   │   ├── viz/            # Unified visualization package (13 modules)
-│   │   │   ├── adata_utils.py  # AnnData helper functions
-│   │   │   ├── loader.py       # Multi-platform data loader
-│   │   │   ├── dependency_manager.py  # Lazy import manager
-│   │   │   ├── exceptions.py   # Domain-specific exceptions
-│   │   │   └── viz_utils.py    # Figure saving utilities
-│   │   ├── spatial-preprocess/ # QC + normalization + embedding
-│   │   ├── spatial-domains/    # Tissue region identification
-│   │   ├── spatial-annotate/   # Cell type annotation
-│   │   └── ...
-│   ├── singlecell/             # 30 single-cell omics skills
-│   │   ├── _lib/               # ★ Shared single-cell utilities (19 modules)
-│   │   │   ├── io.py, qc.py, preprocessing.py, markers.py, ...
-│   │   │   ├── r_bridge.py     # R/Seurat integration bridge
-│   │   │   ├── method_config.py # Method configuration & validation
-│   │   │   └── annotation.py, trajectory.py, grn.py, ...
-│   │   ├── sc-qc/              # Quality control
-│   │   ├── sc-preprocessing/   # Normalization & filtering
-│   │   └── ...
-│   ├── genomics/               # 10 genomics skills
-│   │   └── _lib/               # Shared genomics utilities
-│   ├── proteomics/             # 8 proteomics skills
-│   │   └── _lib/               # Shared proteomics utilities
-│   ├── metabolomics/           # 8 metabolomics skills
-│   │   └── _lib/               # Shared metabolomics utilities
-│   ├── bulkrna/                # 13 bulk RNA skills
-│   │   └── _lib/               # Shared bulk RNA utilities
+│   ├── spatial/                # 17 spatial transcriptomics skills (+ _lib/)
+│   ├── singlecell/             # 30 single-cell omics skills (+ _lib/)
+│   ├── genomics/               # 10 genomics skills (+ _lib/)
+│   ├── proteomics/             # 8 proteomics skills (+ _lib/)
+│   ├── metabolomics/           # 8 metabolomics skills (+ _lib/)
+│   ├── bulkrna/                # 13 bulk RNA skills (+ _lib/)
 │   ├── orchestrator/           # 2 orchestration skills
 │   └── literature/             # 1 literature skill
-├── bot/                        # Messaging bot frontends
-│   ├── core.py                 # Shared LLM engine + tool loop (reused by interactive)
-│   ├── run.py                  # Unified bot runner
-│   ├── channels/               # Platform-specific channel implementations
-│   ├── onboard.py              # Interactive setup wizard
-│   ├── requirements.txt        # Bot-specific dependencies
-│   ├── README.md               # Bot setup guide
-│   └── logs/                   # Audit logs (auto-created)
-├── docs/                       # Project docs and Mintlify site content
-├── SOUL.md                     # Bot/CLI persona (OmicsBot)
+├── docs/                       # Project docs (CONTEXT.md vocabulary, adr/ history)
+│   ├── CONTEXT.md              # Authoritative glossary for Surfaces, Memory, Namespaces, etc.
+│   └── adr/                    # Architecture Decision Records (0001..0005)
+├── tests/                      # Test suite (mirrors omicsclaw/ structure)
+├── SOUL.md                     # OmicsBot persona used by the Channel Surface
 ├── SPEC.md                     # Repository maintenance + AI development contract
 ├── templates/skill/            # v2 scaffold for new skills (copy whole dir)
 ├── examples/                   # Shared demo data
-├── sessions/                   # SpatialSession JSONs
-├── CLAUDE.md                   # Agent routing instructions
+├── CLAUDE.md                   # Agent routing instructions (Claude Code entry)
 └── AGENTS.md                   # This file
 ```
 
-> **Import convention**: Domain-specific utilities are imported via
+> **Import convention**: domain-specific skill utilities live in
+> `skills/<domain>/_lib/` and are imported via
 > `from skills.<domain>._lib.<module> import <name>`. The `_lib/` directories
-> are internal shared packages — they are **not** registered as skills
-> (the registry ignores directories starting with `_`).
-> `omicsclaw/` contains only domain-agnostic framework code (core, loaders,
-> memory, interactive, routing).
+> are internal shared packages and are not registered as skills (the registry
+> ignores directories starting with `_`). The `omicsclaw/` package contains
+> only domain-agnostic framework code; ingress lives in `surfaces/`, agent
+> machinery in `runtime/`, skill machinery in `skill/`.
 
 ## Skill Architecture
 
@@ -268,109 +255,80 @@ oc memory-server
 
 The memory API binds to `127.0.0.1:8766` by default. If you bind it to a non-local interface, set `OMICSCLAW_MEMORY_API_TOKEN` as well.
 
-## Desktop / Web App Backend
+## Surfaces (Ingress Layer)
 
-OmicsClaw also exposes a FastAPI backend for desktop and browser frontends such as OmicsClaw-App.
+OmicsClaw exposes three user-facing **Surfaces** — Channel, Desktop, CLI —
+that all live under `omicsclaw/surfaces/` and dispatch into the same
+agent entry, `omicsclaw.runtime.agent.state.llm_tool_loop`. Authoritative
+vocabulary is in [`docs/CONTEXT.md`](docs/CONTEXT.md) §"Surfaces"; the
+restructure history is in [ADR 0005](docs/adr/0005-surfaces-umbrella-for-ingress.md).
+
+| Surface | Location | Primary entry |
+|---|---|---|
+| **Channel Surface** | `omicsclaw/surfaces/channels/` | `python -m omicsclaw.surfaces.channels --channels <names>` |
+| **Desktop Surface** | `omicsclaw/surfaces/desktop/` | `oc desktop-server --host 127.0.0.1 --port 8765` |
+| **CLI Surface** | `omicsclaw/surfaces/cli/` | `oc interactive` (REPL) / `oc tui` (TUI) |
+
+### Desktop Surface — FastAPI backend for desktop / web frontends
 
 ```bash
-# Install the frontend/backend bridge dependencies
 pip install -e ".[desktop]"
-
-# Start the app backend on the shared frontend contract port
 oc desktop-server --host 127.0.0.1 --port 8765
 ```
 
-The app backend binds to `127.0.0.1:8765` by default and serves chat streaming, skills, providers, MCP, outputs, bridge control, and memory proxy endpoints for the frontend.
+Binds `127.0.0.1:8765` by default and serves chat streaming, skills,
+providers, MCP, outputs, bridge control, and memory proxy endpoints
+for the OmicsClaw-App Electron/Next.js frontend.
 
-### Configuration (Environment Variables)
+**Environment variables**:
+- `OMICSCLAW_MEMORY_DB_URL` — SQLAlchemy connection URL (e.g. `sqlite+aiosqlite:///~/.omicsclaw/memory.db`).
+- `OMICSCLAW_MEMORY_API_TOKEN` — Bearer token required when exposing the API beyond localhost.
 
-- `OMICSCLAW_MEMORY_DB_URL`: SQLAlchemy connection URL (`sqlite+aiosqlite:///bot/data/memory.db`)
-- `OMICSCLAW_MEMORY_API_TOKEN`: Bearer token required when exposing the API beyond localhost.
-
-### Provider Backend Contract
-
-Desktop provider changes must preserve the OmicsClaw-App backend contract:
-
+**Provider backend contract** (must hold across provider changes):
 - `/providers` reports the active provider, model, and endpoint.
 - `/providers/test` performs a short live LLM connectivity probe.
 - `/chat/stream` reinitializes the provider runtime when a request changes model, even if the provider id is unchanged.
 
-## Bot Integration
-
-OmicsClaw includes multi-channel messaging frontends in `bot/`:
-
-```
-bot/
-├── __init__.py
-├── core.py           # Shared LLM tool loop, skill execution, security
-├── run.py            # Unified bot runner
-├── channels/         # Platform implementations (telegram, feishu, dingtalk, discord, slack, wechat, qq, email, imessage)
-├── requirements.txt  # Bot-specific dependencies
-├── README.md         # Setup and configuration guide
-└── logs/             # Audit logs (audit.jsonl)
-```
-
-### Bot Commands
-
-| Command | Purpose |
-|---------|---------|
-| `python -m omicsclaw.surfaces.channels --channels <names>` | Start one or more configured messaging channels |
-| `python -m omicsclaw.surfaces.channels --list` | List available channel integrations |
-| `make bot-telegram` | Makefile alias for Telegram |
-| `make bot-feishu` | Makefile alias for Feishu |
-
-### Bot Architecture
-
-All channels share `bot/core.py` which contains:
-- LLM tool-use loop (OpenAI function calling)
-- TOOLS definition (omicsclaw, save_file, write_file, generate_audio)
-- `execute_omicsclaw()` — executes normal skills via the shared runner contract
-- Security helpers (path sanitization, file size limits)
-- Audit logging (JSONL)
-
-The persona is defined in `SOUL.md` (OmicsBot, the OmicsClaw AI assistant).
-
-### Configuration
-
-Bot environment variables go in `.env` at the project root. See `bot/README.md` for the full list.
-
-## Bot Integration
-
-OmicsClaw includes multi-channel bot frontends in `bot/`. They all import `bot/core.py`, which provides the shared LLM tool-use loop, skill execution, security helpers, and audit logging. Each frontend handles platform-specific message handling, media upload/download, and rate limiting.
+### Channel Surface — 10 IM platform adapters + `ChannelManager`
 
 ```bash
-pip install -r bot/requirements.txt
-python -m omicsclaw.surfaces.channels --channels telegram   # Telegram
-python -m omicsclaw.surfaces.channels --channels feishu     # Feishu
-python -m omicsclaw.surfaces.channels --channels telegram,slack,email
+pip install -e ".[channels]"     # platform SDKs are extras
+python -m omicsclaw.surfaces.channels --channels telegram
+python -m omicsclaw.surfaces.channels --channels telegram,feishu,slack
+python -m omicsclaw.surfaces.channels --list
+make bot-telegram                # Makefile alias
+make bot-feishu
 ```
 
-Configuration is via `.env` at the project root. See `bot/README.md` for required environment variables.
+Wired adapters: Telegram, Feishu, Slack, Discord, WeChat, WeCom,
+DingTalk, iMessage, Email, QQ. Lifecycle is managed by
+`omicsclaw/surfaces/channels/manager.py:ChannelManager`; each adapter
+calls `core.llm_tool_loop` directly (per ADR 0003 — there is no
+middleware pipeline). Cross-cutting concerns (rate limit, dedup,
+audit) live in `omicsclaw/services/`.
 
-## Safety Boundaries
+The OmicsBot persona used across all Channel adapters is in `SOUL.md`.
+Configuration goes in `.env` at the project root — see
+`omicsclaw/surfaces/channels/README.md` for the per-platform variables.
 
-1. **Local-first**: No data upload
-2. **Disclaimer required**: Every report must include the OmicsClaw disclaimer
-3. **No hallucinated science**: All parameters trace to SKILL.md or cited tools
-4. **Security filtering**: `omicsclaw.py` enforces `allowed_extra_flags` whitelists
-
-## Interactive CLI/TUI
-
-OmicsClaw features a full interactive terminal interface (referencing EvoScientist's architecture).
-
-### Architecture
+### CLI Surface — prompt_toolkit REPL + Textual TUI
 
 ```
 omicsclaw.py interactive
     └── omicsclaw/surfaces/cli/interactive.py   # prompt_toolkit REPL
-           ├── bot/core.py                     # LLM engine (reused)
+           ├── omicsclaw/runtime/agent/state.py # LLM tool loop (shared with other Surfaces)
            ├── _session.py                     # SQLite session persistence
            ├── _mcp.py                         # MCP server management
            └── _constants.py                   # Banner, slash commands
 
-omicsclaw.py tui  (or --ui tui)
+omicsclaw.py tui   (or --ui tui)
     └── omicsclaw/surfaces/cli/tui.py           # Textual full-screen TUI
 ```
+
+The CLI Surface also hosts the one-shot interactive setup wizard
+(`omicsclaw/surfaces/cli/setup_wizard.py`) reached via `oc onboard`,
+and the `oc` console-script launcher (`omicsclaw/surfaces/cli/launcher.py`)
+that loads the repo-root `omicsclaw.py` skill runner.
 
 ### Interactive Mode Commands
 
@@ -476,3 +434,10 @@ Interactive CLI provider changes share the runtime resolution path with the app 
 ### TUI Implementation Notes
 
 TUI helpers under `omicsclaw/surfaces/cli/_tui_support.py` stay dependency-light so support tests can run without optional memory or Textual installs. When adding Textual containers, mount the parent widget into the live tree before mounting child widgets.
+
+## Safety Boundaries
+
+1. **Local-first**: No data upload
+2. **Disclaimer required**: Every report must include the OmicsClaw disclaimer
+3. **No hallucinated science**: All parameters trace to SKILL.md or cited tools
+4. **Security filtering**: `omicsclaw.py` enforces `allowed_extra_flags` whitelists

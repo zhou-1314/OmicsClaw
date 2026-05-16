@@ -52,7 +52,7 @@ OmicsClaw turns local multi-omics tools into AI-callable skills. The LLM plans a
 | | | | |
 |---|---|---|---|
 | 🧠 **Memory**<br/>Sessions, preferences, lineage | 🔒 **Local-first**<br/>Raw data stays in your runtime | 🧰 **89 skills**<br/>Generated catalog + demos | 🧭 **Smart routing**<br/>Natural language to tools |
-| 🖥️ **CLI / TUI**<br/>`oc interactive`, `oc tui` | 🌐 **App backend**<br/>FastAPI for desktop/web | 🔌 **MCP-ready**<br/>Attach external tools | 📡 **Remote mode**<br/>SSH tunnel to Linux servers |
+| 🖥️ **CLI Surface**<br/>`oc interactive`, `oc tui` | 🌐 **Desktop Surface**<br/>FastAPI for desktop/web | 📨 **Channel Surface**<br/>10 IM adapters (Telegram, Feishu, …) | 📡 **Remote mode**<br/>SSH tunnel to Linux servers |
 
 ## ⚡ Quick Start
 
@@ -80,15 +80,17 @@ If `oc` is not on `PATH`, use `python omicsclaw.py <command>`.
 
 ## 🧭 Interfaces
 
+Three Surfaces, one agent loop. All entries below dispatch into the same
+backend (see [ADR 0005](docs/adr/0005-surfaces-umbrella-for-ingress.md)).
+
 | Surface | Entry point | Use it for |
 |---|---|---|
-| 🧪 Skill runner | `oc run <skill> --demo` | Reproducible analysis |
-| 💬 Interactive CLI | `oc interactive` | Natural-language workflows |
-| 🖥️ Full-screen TUI | `oc tui` | Terminal workspace sessions |
-| 🌐 App backend | `oc desktop-server` | Desktop/web frontends |
-| 📡 Remote server | `oc desktop-server` over SSH | Server-side data and jobs |
-| 🤖 Bots | `python -m omicsclaw.surfaces.channels --channels ...` | Telegram, Feishu, and more |
-| 🔌 MCP | `oc mcp add ...` | External tool integration |
+| 💬 **CLI Surface** | `oc interactive` / `oc tui` | Natural-language workflows in the terminal (REPL + full-screen TUI) |
+| 🌐 **Desktop Surface** | `oc desktop-server` | FastAPI backend consumed by OmicsClaw-App and browser frontends |
+| 📨 **Channel Surface** | `python -m omicsclaw.surfaces.channels --channels <names>` | Telegram, Feishu, Slack, Discord, WeChat, WeCom, DingTalk, iMessage, Email, QQ |
+| 🧪 Skill runner (non-Surface) | `oc run <skill> --demo` | Reproducible one-shot analysis |
+| 🔌 MCP (non-Surface) | `oc mcp add ...` | External tool integration |
+| 📡 Remote mode | `oc desktop-server` over SSH | Server-side data and jobs |
 
 Remote mode uses `127.0.0.1`, SSH tunneling, and `OMICSCLAW_REMOTE_AUTH_TOKEN`. See [remote execution](docs/engineering/remote-execution.mdx) and the [legacy remote guide](docs/_legacy/remote-connection-guide.md).
 
