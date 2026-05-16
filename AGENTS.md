@@ -211,16 +211,10 @@ evidence.
 ### Contract Tests
 
 Framework optimization guardrails are enforced by targeted contract tests:
-`tests/test_documentation_facts.py`, `tests/test_skill_runner_contract.py`, `tests/test_skill_metadata_contract.py`, `tests/test_skill_help_contract.py`, `tests/test_registry_alias_contract.py`, `tests/test_output_ownership_contract.py`, and `tests/test_bot_runner_contract.py`.
+`tests/test_documentation_facts.py`, `tests/test_skill_runner_contract.py`, `tests/test_skill_metadata_contract.py`, `tests/test_skill_help_contract.py`, `tests/test_registry_alias_contract.py`, and `tests/test_output_ownership_contract.py`.
 
 ### Architecture Contracts
 
-- [framework roadmap](docs/engineering/2026-05-07-framework-optimization-spec.md)
-- [skill runner](docs/engineering/2026-05-07-skill-runner-contract.md)
-- [output ownership](docs/engineering/2026-05-07-output-ownership-contract.md)
-- [alias ownership](docs/engineering/2026-05-07-alias-ownership-contract.md)
-- [bot runner](docs/engineering/2026-05-07-bot-runner-contract.md)
-- [skill help](docs/engineering/2026-05-07-skill-help-contract.md)
 - [domain input contracts](docs/engineering/domain-input-contracts.md)
 
 ## Graph Memory System
