@@ -5,12 +5,12 @@ Provides an extensible interface for different messaging channels
 to communicate with the OmicsClaw LLM engine.
 
 Architecture:
-    Channel handler → core.llm_tool_loop → reply via channel.send
+    Channel handler → ``runtime.agent.dispatcher.dispatch`` → reply via channel.send
 
-Each channel calls ``omicsclaw.runtime.agent.state.llm_tool_loop`` directly from its
-platform handler. Cross-cutting concerns (rate limit, dedup, audit)
-live in ``omicsclaw.runtime.agent.state`` / ``omicsclaw.services.rate_limit`` rather than a separate
-middleware pipeline.
+Each channel iterates ``dispatch(envelope)`` from its platform handler
+(per ADR 0006). Cross-cutting concerns (rate limit, dedup, audit) live
+in ``omicsclaw.runtime.agent.state`` / ``omicsclaw.services.rate_limit``
+rather than a separate middleware pipeline.
 
 Components:
     - Channel ABC:          base interface for all channels

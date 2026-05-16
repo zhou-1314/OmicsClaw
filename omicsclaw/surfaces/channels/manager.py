@@ -2,9 +2,10 @@
 Channel manager that coordinates multiple chat channels.
 
 Manages channel lifecycle (start/stop) and per-channel health
-monitoring. Each channel handles its own inbound flow by calling
-``core.llm_tool_loop`` directly from its platform handler — the
-manager does not own a message bus or middleware pipeline.
+monitoring. Each channel handles its own inbound flow by iterating
+``runtime.agent.dispatcher.dispatch`` from its platform handler (per
+ADR 0006) — the manager does not own a message bus or middleware
+pipeline.
 
 Run multiple channels in one process::
 
@@ -65,9 +66,9 @@ class ChannelManager:
     2. Starts/stops channels concurrently
     3. Provides a health check endpoint
 
-    Channels handle their own inbound flow by calling
-    ``core.llm_tool_loop`` directly from their platform handlers; the
-    manager only owns lifecycle and health.
+    Channels handle their own inbound flow by iterating
+    ``runtime.agent.dispatcher.dispatch`` from their platform handlers;
+    the manager only owns lifecycle and health.
     """
 
     def __init__(self) -> None:

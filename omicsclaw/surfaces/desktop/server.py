@@ -928,7 +928,7 @@ async def _handle_slash_command(command: str, arg: str, session_id: str) -> str 
     """
     Handle slash commands locally without going through the LLM.
     Returns the text response, or None if the command is not handled
-    (falls through to llm_tool_loop).
+    (falls through to ``dispatch``).
     """
     core = _get_core()
 

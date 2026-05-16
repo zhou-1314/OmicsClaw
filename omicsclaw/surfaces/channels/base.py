@@ -9,9 +9,10 @@ DingTalk, Discord, etc.) must implement. Provides common functionality:
 - Message deduplication
 - Typing indicator management
 
-Channels call ``core.llm_tool_loop()`` directly from their platform
-handlers; cross-cutting concerns (rate limit, dedup, audit) live in
-``omicsclaw.runtime.agent.state`` / ``omicsclaw.services.rate_limit`` rather than a separate pipeline.
+Channels iterate ``runtime.agent.dispatcher.dispatch`` from their
+platform handlers (per ADR 0006); cross-cutting concerns (rate limit,
+dedup, audit) live in ``omicsclaw.runtime.agent.state`` /
+``omicsclaw.services.rate_limit`` rather than a separate pipeline.
 """
 
 from __future__ import annotations
@@ -393,7 +394,7 @@ class Channel(ABC):
         """Check if sender is an admin (bypasses rate limits). Override as needed."""
         return False
 
-    # ── Process message (bridge to core.py) ──────────────────────────
+    # ── Process message (bridge to dispatch()) ───────────────────────
 
     async def process_message(
         self,
@@ -405,17 +406,45 @@ class Channel(ABC):
         progress_fn=None,
         progress_update_fn=None,
     ) -> str:
-        """Process an inbound message through the OmicsClaw LLM tool loop.
+        """Process an inbound message through the agent dispatch pipeline.
 
-        This bridges the Channel abstraction to bot/core.py's LLM engine.
+        Iterates ``dispatch(envelope)`` and routes the events that need
+        per-channel handling (progress messages) to the supplied
+        ``progress_fn`` / ``progress_update_fn``. Returns the ``Final.text``.
+
+        Shared by Slack, Discord, WeChat, WeCom, DingTalk, iMessage, Email,
+        and QQ — Telegram and Feishu open-code their own per-handler
+        envelope construction because they need richer event handling.
         """
-        from omicsclaw.runtime.agent import state as core
+        from omicsclaw.runtime.agent.dispatcher import dispatch
+        from omicsclaw.runtime.agent.envelope import MessageEnvelope
+        from omicsclaw.runtime.agent.events import (
+            Error as _DispatchError,
+            Final as _DispatchFinal,
+            ProgressStart as _DispatchProgressStart,
+            ProgressUpdate as _DispatchProgressUpdate,
+        )
 
-        return await core.llm_tool_loop(
-            int(chat_id) if chat_id.isdigit() else chat_id,
-            content,
+        envelope = MessageEnvelope(
+            chat_id=int(chat_id) if chat_id.isdigit() else chat_id,
+            content=content,
             user_id=user_id,
             platform=platform or self.name,
-            progress_fn=progress_fn,
-            progress_update_fn=progress_update_fn,
         )
+
+        progress_handles: dict[str, object] = {}
+        reply = ""
+        async for event in dispatch(envelope):
+            if isinstance(event, _DispatchProgressStart):
+                if progress_fn is not None:
+                    progress_handles[event.progress_id] = await progress_fn(event.text)
+            elif isinstance(event, _DispatchProgressUpdate):
+                if progress_update_fn is not None:
+                    handle = progress_handles.get(event.progress_id)
+                    if handle is not None:
+                        await progress_update_fn(handle, event.text)
+            elif isinstance(event, _DispatchFinal):
+                reply = event.text
+            elif isinstance(event, _DispatchError):
+                raise event.exception
+        return reply

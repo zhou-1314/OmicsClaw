@@ -757,14 +757,35 @@ class FeishuChannel(Channel):
             if handle:
                 self._update_text(handle, core.strip_markup(msg))
 
-        reply = await core.llm_tool_loop(
-            pure_chat_id,
-            user_content,
+        from omicsclaw.runtime.agent.dispatcher import dispatch
+        from omicsclaw.runtime.agent.envelope import MessageEnvelope
+        from omicsclaw.runtime.agent.events import (
+            Error as _DispatchError,
+            Final as _DispatchFinal,
+            ProgressStart as _DispatchProgressStart,
+            ProgressUpdate as _DispatchProgressUpdate,
+        )
+
+        envelope = MessageEnvelope(
+            chat_id=pure_chat_id,
+            content=user_content,
             user_id=user_id,
             platform="feishu",
-            progress_fn=_progress,
-            progress_update_fn=_progress_update,
         )
+
+        progress_handles: dict[str, object] = {}
+        reply = ""
+        async for event in dispatch(envelope):
+            if isinstance(event, _DispatchProgressStart):
+                progress_handles[event.progress_id] = await _progress(event.text)
+            elif isinstance(event, _DispatchProgressUpdate):
+                handle = progress_handles.get(event.progress_id)
+                if handle is not None:
+                    await _progress_update(handle, event.text)
+            elif isinstance(event, _DispatchFinal):
+                reply = event.text
+            elif isinstance(event, _DispatchError):
+                raise event.exception
 
         if core.pending_text:
             reply = "\n\n".join(core.pending_text)

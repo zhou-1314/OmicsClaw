@@ -37,7 +37,7 @@ class TelegramChannel(Channel):
     """Telegram channel using python-telegram-bot with long polling.
 
     Handles text messages, photos, documents, and bot commands.
-    Bridges to core.llm_tool_loop() for LLM processing.
+    Bridges to ``runtime.agent.dispatcher.dispatch()`` for LLM processing.
     """
 
     name = "telegram"
@@ -302,7 +302,7 @@ class TelegramChannel(Channel):
                 logger.warning(f"Failed to send media {item['path']}: {e}")
 
     def _make_progress_fns(self, update):
-        """Create progress callback functions for the LLM tool loop."""
+        """Create progress callback functions for the agent dispatch stream."""
         from omicsclaw.runtime.agent import state as core
 
         async def _progress(msg: str):
@@ -315,6 +315,46 @@ class TelegramChannel(Channel):
                 pass
 
         return _progress, _progress_update
+
+    async def _run_dispatch(self, update, content) -> str:
+        """Iterate ``dispatch(envelope)`` for one inbound message; return Final.text.
+
+        Per ADR 0006 — the four ``_cmd_demo`` / ``_handle_message`` /
+        ``_handle_photo`` / ``_handle_document`` paths all use this. The
+        ProgressStart / ProgressUpdate events are routed through the
+        per-update progress callbacks ``_make_progress_fns`` builds.
+        """
+        from omicsclaw.runtime.agent.dispatcher import dispatch
+        from omicsclaw.runtime.agent.envelope import MessageEnvelope
+        from omicsclaw.runtime.agent.events import (
+            Error as _DispatchError,
+            Final as _DispatchFinal,
+            ProgressStart as _DispatchProgressStart,
+            ProgressUpdate as _DispatchProgressUpdate,
+        )
+
+        progress_fn, progress_update_fn = self._make_progress_fns(update)
+        envelope = MessageEnvelope(
+            chat_id=update.effective_chat.id,
+            content=content,
+            user_id=str(update.effective_user.id),
+            platform="telegram",
+        )
+
+        progress_handles: dict[str, object] = {}
+        reply = ""
+        async for event in dispatch(envelope):
+            if isinstance(event, _DispatchProgressStart):
+                progress_handles[event.progress_id] = await progress_fn(event.text)
+            elif isinstance(event, _DispatchProgressUpdate):
+                handle = progress_handles.get(event.progress_id)
+                if handle is not None:
+                    await progress_update_fn(handle, event.text)
+            elif isinstance(event, _DispatchFinal):
+                reply = event.text
+            elif isinstance(event, _DispatchError):
+                raise event.exception
+        return reply
 
     # ── Command handlers ─────────────────────────────────────────────
 
@@ -351,14 +391,9 @@ class TelegramChannel(Channel):
         await update.message.reply_text(f"Running {skill} demo -- this may take a moment...")
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
         try:
-            progress_fn, progress_update_fn = self._make_progress_fns(update)
-            reply = await core.llm_tool_loop(
-                update.effective_chat.id,
+            reply = await self._run_dispatch(
+                update,
                 f"Run the {skill} demo using the omicsclaw tool with mode='demo'.",
-                user_id=str(update.effective_user.id),
-                platform="telegram",
-                progress_fn=progress_fn,
-                progress_update_fn=progress_update_fn,
             )
             if core.pending_text:
                 reply = "\n\n".join(core.pending_text)
@@ -460,15 +495,7 @@ class TelegramChannel(Channel):
 
         try:
             await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-            progress_fn, progress_update_fn = self._make_progress_fns(update)
-            reply = await core.llm_tool_loop(
-                update.effective_chat.id,
-                user_text,
-                user_id=str(update.effective_user.id),
-                platform="telegram",
-                progress_fn=progress_fn,
-                progress_update_fn=progress_update_fn,
-            )
+            reply = await self._run_dispatch(update, user_text)
             if core.pending_text:
                 reply = "\n\n".join(core.pending_text)
                 core.pending_text.clear()
@@ -556,15 +583,7 @@ class TelegramChannel(Channel):
                     ),
                 })
 
-            progress_fn, progress_update_fn = self._make_progress_fns(update)
-            reply = await core.llm_tool_loop(
-                update.effective_chat.id,
-                content_blocks,
-                user_id=str(update.effective_user.id),
-                platform="telegram",
-                progress_fn=progress_fn,
-                progress_update_fn=progress_update_fn,
-            )
+            reply = await self._run_dispatch(update, content_blocks)
             if core.pending_text:
                 reply = "\n\n".join(core.pending_text)
                 core.pending_text.clear()
@@ -656,15 +675,7 @@ class TelegramChannel(Channel):
                     f"If unsure, use skill='auto'."
                 )
 
-            progress_fn, progress_update_fn = self._make_progress_fns(update)
-            reply = await core.llm_tool_loop(
-                update.effective_chat.id,
-                "\n\n".join(parts),
-                user_id=str(update.effective_user.id),
-                platform="telegram",
-                progress_fn=progress_fn,
-                progress_update_fn=progress_update_fn,
-            )
+            reply = await self._run_dispatch(update, "\n\n".join(parts))
             if core.pending_text:
                 reply = "\n\n".join(core.pending_text)
                 core.pending_text.clear()
