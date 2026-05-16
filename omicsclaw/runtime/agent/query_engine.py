@@ -517,6 +517,80 @@ def _is_new_pathology(signal: PathologySignal, state: LoopState) -> bool:
     return (last.kind, last.tool_name) != (signal.kind, signal.tool_name)
 
 
+async def _build_execution_requests(
+    *,
+    tool_calls: list,
+    context: "QueryEngineContext",
+    callbacks: "QueryEngineCallbacks",
+    tool_runtime: "ToolRuntime",
+    tool_runtime_context: dict | None,
+    current_policy_state: "ToolPolicyState | None",
+    hook_runtime,
+) -> tuple[list["ToolExecutionRequest"], dict[str, Any]]:
+    """Parse assistant tool_calls into ToolExecutionRequest list (ADR 0008 L4).
+
+    For each tc: resolves executor + spec, parses JSON args, builds
+    runtime_context, evaluates tool policy, emits EVENT_TOOL_BEFORE
+    hook, and runs before_tool callback. Returns (requests,
+    tool_states_by_call_id) — tool_states is later threaded into
+    after_tool via _record_tool_outcome.
+    """
+    execution_requests: list[ToolExecutionRequest] = []
+    tool_states: dict[str, Any] = {}
+    for tc in tool_calls:
+        executor = tool_runtime.executors.get(tc.name)
+        tool_spec = tool_runtime.specs_by_name.get(tc.name)
+        try:
+            func_args = json.loads(tc.arguments) if executor else {}
+        except json.JSONDecodeError:
+            func_args = {}
+
+        runtime_context = {
+            "session_id": context.session_id,
+            "chat_id": context.chat_id,
+            "surface": context.surface,
+            "policy_state": current_policy_state,
+        }
+        if tool_runtime_context:
+            runtime_context.update(tool_runtime_context)
+        request = ToolExecutionRequest(
+            call_id=tc.id,
+            name=tc.name,
+            arguments=func_args,
+            spec=tool_spec,
+            executor=executor,
+            runtime_context=runtime_context,
+            policy_decision=evaluate_tool_policy(
+                tc.name,
+                tool_spec,
+                runtime_context=runtime_context,
+            ),
+        )
+        if hook_runtime is not None:
+            hook_runtime.emit(
+                EVENT_TOOL_BEFORE,
+                ToolHookPayload(
+                    tool_name=tc.name,
+                    call_id=tc.id,
+                    status="pending",
+                    success=False,
+                    surface=context.surface,
+                    session_id=str(context.session_id or ""),
+                    chat_id=str(context.chat_id),
+                    policy_action=(
+                        request.policy_decision.action
+                        if request.policy_decision is not None
+                        else ""
+                    ),
+                ),
+                context=runtime_context,
+            )
+        if executor and callbacks.before_tool is not None:
+            tool_states[tc.id] = await _maybe_await(callbacks.before_tool(request))
+        execution_requests.append(request)
+    return execution_requests, tool_states
+
+
 async def _record_tool_outcome(
     *,
     execution_result: "ToolExecutionResult",
@@ -1013,59 +1087,15 @@ async def run_query_engine(
                 accumulated_response_segments, current_response
             )
 
-        execution_requests: list[ToolExecutionRequest] = []
-        tool_states: dict[str, Any] = {}
-        for tc in last_message.tool_calls:
-            executor = tool_runtime.executors.get(tc.name)
-            tool_spec = tool_runtime.specs_by_name.get(tc.name)
-            try:
-                func_args = json.loads(tc.arguments) if executor else {}
-            except json.JSONDecodeError:
-                func_args = {}
-
-            runtime_context = {
-                "session_id": context.session_id,
-                "chat_id": context.chat_id,
-                "surface": context.surface,
-                "policy_state": current_policy_state,
-            }
-            if tool_runtime_context:
-                runtime_context.update(tool_runtime_context)
-            request = ToolExecutionRequest(
-                call_id=tc.id,
-                name=tc.name,
-                arguments=func_args,
-                spec=tool_spec,
-                executor=executor,
-                runtime_context=runtime_context,
-                policy_decision=evaluate_tool_policy(
-                    tc.name,
-                    tool_spec,
-                    runtime_context=runtime_context,
-                ),
-            )
-            if hook_runtime is not None:
-                hook_runtime.emit(
-                    EVENT_TOOL_BEFORE,
-                    ToolHookPayload(
-                        tool_name=tc.name,
-                        call_id=tc.id,
-                        status="pending",
-                        success=False,
-                        surface=context.surface,
-                        session_id=str(context.session_id or ""),
-                        chat_id=str(context.chat_id),
-                        policy_action=(
-                            request.policy_decision.action
-                            if request.policy_decision is not None
-                            else ""
-                        ),
-                    ),
-                    context=runtime_context,
-                )
-            if executor and callbacks.before_tool is not None:
-                tool_states[tc.id] = await _maybe_await(callbacks.before_tool(request))
-            execution_requests.append(request)
+        execution_requests, tool_states = await _build_execution_requests(
+            tool_calls=last_message.tool_calls,
+            context=context,
+            callbacks=callbacks,
+            tool_runtime=tool_runtime,
+            tool_runtime_context=tool_runtime_context,
+            current_policy_state=current_policy_state,
+            hook_runtime=hook_runtime,
+        )
 
         execution_results = await execute_tool_requests(execution_requests)
         if callbacks.request_tool_approval is not None:
