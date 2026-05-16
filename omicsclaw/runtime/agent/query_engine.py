@@ -517,6 +517,99 @@ def _is_new_pathology(signal: PathologySignal, state: LoopState) -> bool:
     return (last.kind, last.tool_name) != (signal.kind, signal.tool_name)
 
 
+async def _resolve_tool_approval_flow(
+    *,
+    execution_results: list["ToolExecutionResult"],
+    callbacks: "QueryEngineCallbacks",
+    context: "QueryEngineContext",
+    current_policy_state: "ToolPolicyState | None",
+) -> tuple[list["ToolExecutionResult"], "ToolPolicyState | None"]:
+    """Drive request_tool_approval for any REQUIRE_APPROVAL results (ADR 0008 L2).
+
+    Returns (resolved_results, possibly_updated_policy_state). The
+    caller mirrors the returned policy_state back into its own local so
+    the next iteration's tool-request build sees the updated state.
+    """
+    resolved_execution_results: list[ToolExecutionResult] = []
+    for execution_result in execution_results:
+        request = execution_result.request
+        if (
+            execution_result.status == EXECUTION_STATUS_POLICY_BLOCKED
+            and execution_result.policy_decision is not None
+            and execution_result.policy_decision.action
+            == TOOL_POLICY_REQUIRE_APPROVAL
+        ):
+            resolution = await _maybe_await(
+                callbacks.request_tool_approval(request, execution_result)
+            )
+            (
+                approval_behavior,
+                updated_arguments,
+                updated_policy_state,
+                deny_message,
+                approval_persist,
+            ) = _normalize_permission_resolution(
+                resolution,
+                request=request,
+                fallback_surface=context.surface,
+            )
+            if approval_behavior == "allow":
+                base_policy_state = ToolPolicyState.from_mapping(
+                    (request.runtime_context or {}).get("policy_state"),
+                    surface=context.surface,
+                )
+                effective_policy_state = updated_policy_state
+                if effective_policy_state is None:
+                    effective_policy_state = ToolPolicyState(
+                        surface=base_policy_state.surface or context.surface,
+                        trusted=base_policy_state.trusted,
+                        background=base_policy_state.background,
+                        auto_approve_ask=base_policy_state.auto_approve_ask,
+                        approved_tool_names=(
+                            base_policy_state.approved_tool_names
+                            | frozenset({request.name})
+                        ),
+                    )
+                approved_runtime_context = dict(request.runtime_context or {})
+                approved_runtime_context["policy_state"] = (
+                    effective_policy_state
+                )
+                approved_request = ToolExecutionRequest(
+                    call_id=request.call_id,
+                    name=request.name,
+                    arguments=(
+                        updated_arguments
+                        if updated_arguments is not None
+                        else request.arguments
+                    ),
+                    spec=request.spec,
+                    executor=request.executor,
+                    runtime_context=approved_runtime_context,
+                    policy_decision=evaluate_tool_policy(
+                        request.name,
+                        request.spec,
+                        runtime_context=approved_runtime_context,
+                    ),
+                )
+                execution_result = (
+                    await execute_tool_requests([approved_request])
+                )[0]
+                if updated_policy_state is not None and approval_persist:
+                    current_policy_state = updated_policy_state
+            elif deny_message:
+                execution_result = ToolExecutionResult(
+                    request=request,
+                    output=deny_message,
+                    success=False,
+                    error=execution_result.error,
+                    status=execution_result.status,
+                    policy_decision=execution_result.policy_decision,
+                    trace=execution_result.trace,
+                )
+        resolved_execution_results.append(execution_result)
+    return resolved_execution_results, current_policy_state
+
+
 async def _call_llm_with_reactive_compact_retry(
     *,
     llm,
@@ -840,84 +933,14 @@ async def run_query_engine(
 
         execution_results = await execute_tool_requests(execution_requests)
         if callbacks.request_tool_approval is not None:
-            resolved_execution_results: list[ToolExecutionResult] = []
-            for execution_result in execution_results:
-                request = execution_result.request
-                if (
-                    execution_result.status == EXECUTION_STATUS_POLICY_BLOCKED
-                    and execution_result.policy_decision is not None
-                    and execution_result.policy_decision.action
-                    == TOOL_POLICY_REQUIRE_APPROVAL
-                ):
-                    resolution = await _maybe_await(
-                        callbacks.request_tool_approval(request, execution_result)
-                    )
-                    (
-                        approval_behavior,
-                        updated_arguments,
-                        updated_policy_state,
-                        deny_message,
-                        approval_persist,
-                    ) = _normalize_permission_resolution(
-                        resolution,
-                        request=request,
-                        fallback_surface=context.surface,
-                    )
-                    if approval_behavior == "allow":
-                        base_policy_state = ToolPolicyState.from_mapping(
-                            (request.runtime_context or {}).get("policy_state"),
-                            surface=context.surface,
-                        )
-                        effective_policy_state = updated_policy_state
-                        if effective_policy_state is None:
-                            effective_policy_state = ToolPolicyState(
-                                surface=base_policy_state.surface or context.surface,
-                                trusted=base_policy_state.trusted,
-                                background=base_policy_state.background,
-                                auto_approve_ask=base_policy_state.auto_approve_ask,
-                                approved_tool_names=(
-                                    base_policy_state.approved_tool_names
-                                    | frozenset({request.name})
-                                ),
-                            )
-                        approved_runtime_context = dict(request.runtime_context or {})
-                        approved_runtime_context["policy_state"] = (
-                            effective_policy_state
-                        )
-                        approved_request = ToolExecutionRequest(
-                            call_id=request.call_id,
-                            name=request.name,
-                            arguments=(
-                                updated_arguments
-                                if updated_arguments is not None
-                                else request.arguments
-                            ),
-                            spec=request.spec,
-                            executor=request.executor,
-                            runtime_context=approved_runtime_context,
-                            policy_decision=evaluate_tool_policy(
-                                request.name,
-                                request.spec,
-                                runtime_context=approved_runtime_context,
-                            ),
-                        )
-                        execution_result = (
-                            await execute_tool_requests([approved_request])
-                        )[0]
-                        if updated_policy_state is not None and approval_persist:
-                            current_policy_state = updated_policy_state
-                    elif deny_message:
-                        execution_result = ToolExecutionResult(
-                            request=request,
-                            output=deny_message,
-                            success=False,
-                            error=execution_result.error,
-                            status=execution_result.status,
-                            policy_decision=execution_result.policy_decision,
-                            trace=execution_result.trace,
-                        )
-                resolved_execution_results.append(execution_result)
-            execution_results = resolved_execution_results
+            execution_results, current_policy_state = (
+                await _resolve_tool_approval_flow(
+                    execution_results=execution_results,
+                    callbacks=callbacks,
+                    context=context,
+                    current_policy_state=current_policy_state,
+                )
+            )
 
         interruption_message = ""
         for execution_result in execution_results:
