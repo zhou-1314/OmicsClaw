@@ -517,6 +517,142 @@ def _is_new_pathology(signal: PathologySignal, state: LoopState) -> bool:
     return (last.kind, last.tool_name) != (signal.kind, signal.tool_name)
 
 
+async def _record_tool_outcome(
+    *,
+    execution_result: "ToolExecutionResult",
+    context: "QueryEngineContext",
+    callbacks: "QueryEngineCallbacks",
+    tool_result_store: "ToolResultStore",
+    transcript_store: "TranscriptStore",
+    hook_runtime,
+    tool_state: Any,
+    state: "LoopState",
+) -> str:
+    """Persist one tool result + record into LoopState (ADR 0008 L3).
+
+    Fires hook_runtime AFTER/FAILURE events, injects pre-call rule
+    preamble, records into tool_result_store, invokes after_tool
+    callback, appends to transcript, and stamps ToolCallRecord /
+    ToolErrorRecord into ``state``. Returns the per-result candidate
+    interruption_message ('' if this result is not preflight-pending).
+    """
+    request = execution_result.request
+    record_output = execution_result.output
+    if hook_runtime is not None:
+        event_name = EVENT_TOOL_AFTER
+        if not execution_result.success:
+            event_name = EVENT_TOOL_FAILURE
+        hook_runtime.emit(
+            event_name,
+            ToolHookPayload(
+                tool_name=request.name,
+                call_id=request.call_id,
+                status=execution_result.status,
+                success=execution_result.success,
+                surface=context.surface,
+                session_id=str(context.session_id or ""),
+                chat_id=str(context.chat_id),
+                policy_action=(
+                    execution_result.policy_decision.action
+                    if execution_result.policy_decision is not None
+                    else ""
+                ),
+            ),
+            context={
+                "session_id": context.session_id,
+                "chat_id": context.chat_id,
+                "surface": context.surface,
+                "workspace": str(
+                    (request.runtime_context or {}).get("pipeline_workspace")
+                    or (request.runtime_context or {}).get("workspace")
+                    or ""
+                ).strip(),
+            },
+        )
+        notices = hook_runtime.consume_pending_messages(
+            mode=HOOK_MODE_NOTICE,
+            event_names=(
+                EVENT_TOOL_BEFORE,
+                EVENT_TOOL_AFTER,
+                EVENT_TOOL_FAILURE,
+            ),
+            call_id=request.call_id,
+        )
+        if notices:
+            record_output = "\n".join([*notices, str(record_output)]).strip()
+    # Phase 4 (system-prompt-compression refactor): prepend the
+    # matched pre-call rule preamble (engineering / skill-execution
+    # discipline) to the tool result so the model sees the rule
+    # right before it reasons about the result. This is the
+    # runtime wiring of ``PreCallRuleInjector`` —
+    # ``build_pre_call_rule_text`` is otherwise dead abstraction.
+    from ..tools.execution_hooks import (
+        DEFAULT_PRE_CALL_RULE_INJECTORS,
+        build_pre_call_rule_text,
+    )
+
+    preamble_text = build_pre_call_rule_text(
+        tool_name=request.name,
+        tool_args=request.arguments or {},
+        injectors=DEFAULT_PRE_CALL_RULE_INJECTORS,
+    )
+    if preamble_text:
+        record_output = f"{preamble_text}\n\n{record_output}".strip()
+    result_record = tool_result_store.record(
+        chat_id=context.chat_id,
+        tool_call_id=request.call_id,
+        tool_name=request.name,
+        output=record_output,
+        success=execution_result.success,
+        error=execution_result.error,
+        spec=request.spec,
+        policy_decision=execution_result.policy_decision,
+        execution_trace=(
+            execution_result.trace.to_dict()
+            if execution_result.trace is not None
+            else None
+        ),
+    )
+
+    if callbacks.after_tool is not None:
+        await _maybe_await(
+            callbacks.after_tool(
+                execution_result,
+                result_record,
+                tool_state,
+            )
+        )
+
+    transcript_store.append_tool_message(
+        context.chat_id,
+        tool_call_id=request.call_id,
+        content=result_record.content,
+    )
+
+    state.tool_calls.append(
+        ToolCallRecord(
+            name=request.name,
+            args_digest=compute_args_digest(request.arguments),
+            iteration=state.iteration,
+            succeeded=execution_result.success,
+        )
+    )
+    if not execution_result.success:
+        error_obj = execution_result.error
+        state.errors.append(
+            ToolErrorRecord(
+                tool_name=request.name,
+                iteration=state.iteration,
+                error_class=type(error_obj).__name__
+                if error_obj is not None
+                else "ToolFailure",
+                message_head=(str(error_obj) if error_obj is not None else "")[:200],
+            )
+        )
+
+    return _build_preflight_interruption_message(result_record.content)
+
+
 async def _resolve_tool_approval_flow(
     *,
     execution_results: list["ToolExecutionResult"],
@@ -944,124 +1080,18 @@ async def run_query_engine(
 
         interruption_message = ""
         for execution_result in execution_results:
-            request = execution_result.request
-            record_output = execution_result.output
-            if hook_runtime is not None:
-                event_name = EVENT_TOOL_AFTER
-                if not execution_result.success:
-                    event_name = EVENT_TOOL_FAILURE
-                hook_runtime.emit(
-                    event_name,
-                    ToolHookPayload(
-                        tool_name=request.name,
-                        call_id=request.call_id,
-                        status=execution_result.status,
-                        success=execution_result.success,
-                        surface=context.surface,
-                        session_id=str(context.session_id or ""),
-                        chat_id=str(context.chat_id),
-                        policy_action=(
-                            execution_result.policy_decision.action
-                            if execution_result.policy_decision is not None
-                            else ""
-                        ),
-                    ),
-                    context={
-                        "session_id": context.session_id,
-                        "chat_id": context.chat_id,
-                        "surface": context.surface,
-                        "workspace": str(
-                            (request.runtime_context or {}).get("pipeline_workspace")
-                            or (request.runtime_context or {}).get("workspace")
-                            or ""
-                        ).strip(),
-                    },
-                )
-                notices = hook_runtime.consume_pending_messages(
-                    mode=HOOK_MODE_NOTICE,
-                    event_names=(
-                        EVENT_TOOL_BEFORE,
-                        EVENT_TOOL_AFTER,
-                        EVENT_TOOL_FAILURE,
-                    ),
-                    call_id=request.call_id,
-                )
-                if notices:
-                    record_output = "\n".join([*notices, str(record_output)]).strip()
-            # Phase 4 (system-prompt-compression refactor): prepend the
-            # matched pre-call rule preamble (engineering / skill-execution
-            # discipline) to the tool result so the model sees the rule
-            # right before it reasons about the result. This is the
-            # runtime wiring of ``PreCallRuleInjector`` —
-            # ``build_pre_call_rule_text`` is otherwise dead abstraction.
-            from ..tools.execution_hooks import (
-                DEFAULT_PRE_CALL_RULE_INJECTORS,
-                build_pre_call_rule_text,
+            candidate = await _record_tool_outcome(
+                execution_result=execution_result,
+                context=context,
+                callbacks=callbacks,
+                tool_result_store=tool_result_store,
+                transcript_store=transcript_store,
+                hook_runtime=hook_runtime,
+                tool_state=tool_states.get(execution_result.request.call_id),
+                state=state,
             )
-
-            preamble_text = build_pre_call_rule_text(
-                tool_name=request.name,
-                tool_args=request.arguments or {},
-                injectors=DEFAULT_PRE_CALL_RULE_INJECTORS,
-            )
-            if preamble_text:
-                record_output = f"{preamble_text}\n\n{record_output}".strip()
-            result_record = tool_result_store.record(
-                chat_id=context.chat_id,
-                tool_call_id=request.call_id,
-                tool_name=request.name,
-                output=record_output,
-                success=execution_result.success,
-                error=execution_result.error,
-                spec=request.spec,
-                policy_decision=execution_result.policy_decision,
-                execution_trace=(
-                    execution_result.trace.to_dict()
-                    if execution_result.trace is not None
-                    else None
-                ),
-            )
-
-            if callbacks.after_tool is not None:
-                await _maybe_await(
-                    callbacks.after_tool(
-                        execution_result,
-                        result_record,
-                        tool_states.get(request.call_id),
-                    )
-                )
-
-            transcript_store.append_tool_message(
-                context.chat_id,
-                tool_call_id=request.call_id,
-                content=result_record.content,
-            )
-
-            state.tool_calls.append(
-                ToolCallRecord(
-                    name=request.name,
-                    args_digest=compute_args_digest(request.arguments),
-                    iteration=state.iteration,
-                    succeeded=execution_result.success,
-                )
-            )
-            if not execution_result.success:
-                error_obj = execution_result.error
-                state.errors.append(
-                    ToolErrorRecord(
-                        tool_name=request.name,
-                        iteration=state.iteration,
-                        error_class=type(error_obj).__name__
-                        if error_obj is not None
-                        else "ToolFailure",
-                        message_head=(str(error_obj) if error_obj is not None else "")[:200],
-                    )
-                )
-
             if not interruption_message:
-                interruption_message = _build_preflight_interruption_message(
-                    result_record.content
-                )
+                interruption_message = candidate
 
         if interruption_message:
             transcript_store.append_assistant_message(
