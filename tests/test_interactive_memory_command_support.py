@@ -1,4 +1,4 @@
-from omicsclaw.interactive._memory_command_support import (
+from omicsclaw.surfaces.cli._memory_command_support import (
     build_memory_command_view,
     resolve_active_scoped_memory_scope,
 )

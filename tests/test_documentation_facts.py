@@ -76,7 +76,7 @@ def test_public_docs_do_not_claim_legacy_framework_facts():
         "omicsclaw.py": [
             "List all 50+ available analysis skills",
         ],
-        "omicsclaw/interactive/_constants.py": [
+        "omicsclaw/surfaces/cli/_constants.py": [
             "50+ analysis skills",
         ],
         "tests/test_execution_default_executor.py": [

@@ -19,7 +19,7 @@ from omicsclaw.agents.plan_validation import (
     PlanValidationResult,
     resolve_plan_validation_result,
 )
-from omicsclaw.interactive._history_support import (
+from omicsclaw.surfaces.cli._history_support import (
     build_research_history_messages as _build_research_history_messages,
 )
 from omicsclaw.runtime.tools.hooks import EVENT_PLAN_APPROVED, EVENT_TASK_COMPLETED

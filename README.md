@@ -70,7 +70,7 @@ Verify with `SHA256SUMS.txt` next to the installers. The desktop client and the 
 | | | | |
 |---|---|---|---|
 | 🧠 **Memory**<br/>Sessions, preferences, lineage | 🔒 **Local-first**<br/>Raw data stays in your runtime | 🧰 **89 skills**<br/>Generated catalog + demos | 🧭 **Smart routing**<br/>Natural language to tools |
-| 🖥️ **CLI / TUI**<br/>`oc interactive`, `oc tui` | 🌐 **App backend**<br/>FastAPI for desktop/web | 🔌 **MCP-ready**<br/>Attach external tools | 📡 **Remote mode**<br/>SSH tunnel to Linux servers |
+| 🖥️ **CLI Surface**<br/>`oc interactive`, `oc tui` | 🌐 **Desktop Surface**<br/>FastAPI for desktop/web | 📨 **Channel Surface**<br/>10 IM adapters (Telegram, Feishu, …) | 📡 **Remote mode**<br/>SSH tunnel to Linux servers |
 
 ## ⚡ Quick Start
 
@@ -98,15 +98,17 @@ If `oc` is not on `PATH`, use `python omicsclaw.py <command>`.
 
 ## 🧭 Interfaces
 
+Three Surfaces, one agent loop. All entries below dispatch into the same
+backend (see [ADR 0005](docs/adr/0005-surfaces-umbrella-for-ingress.md)).
+
 | Surface | Entry point | Use it for |
 |---|---|---|
-| 🧪 Skill runner | `oc run <skill> --demo` | Reproducible analysis |
-| 💬 Interactive CLI | `oc interactive` | Natural-language workflows |
-| 🖥️ Full-screen TUI | `oc tui` | Terminal workspace sessions |
-| 🌐 App backend | `oc app-server` | Desktop/web frontends |
-| 📡 Remote server | `oc app-server` over SSH | Server-side data and jobs |
-| 🤖 Bots | `python -m bot.run --channels ...` | Telegram, Feishu, and more |
-| 🔌 MCP | `oc mcp add ...` | External tool integration |
+| 💬 **CLI Surface** | `oc interactive` / `oc tui` | Natural-language workflows in the terminal (REPL + full-screen TUI) |
+| 🌐 **Desktop Surface** | `oc desktop-server` | FastAPI backend consumed by OmicsClaw-App and browser frontends |
+| 📨 **Channel Surface** | `python -m omicsclaw.surfaces.channels --channels <names>` | Telegram, Feishu, Slack, Discord, WeChat, WeCom, DingTalk, iMessage, Email, QQ |
+| 🧪 Skill runner (non-Surface) | `oc run <skill> --demo` | Reproducible one-shot analysis |
+| 🔌 MCP (non-Surface) | `oc mcp add ...` | External tool integration |
+| 📡 Remote mode | `oc desktop-server` over SSH | Server-side data and jobs |
 
 Remote mode uses `127.0.0.1`, SSH tunneling, and `OMICSCLAW_REMOTE_AUTH_TOKEN`. See [remote execution](docs/engineering/remote-execution.mdx) and the [legacy remote guide](docs/_legacy/remote-connection-guide.md).
 
@@ -116,7 +118,7 @@ Remote mode uses `127.0.0.1`, SSH tunneling, and `OMICSCLAW_REMOTE_AUTH_TOKEN`. 
 |---|---|---|
 | 🥇 **Full conda** | Real analysis with Python + R + bioinformatics CLIs | `bash 0_setup_env.sh` |
 | 🪶 **Lightweight venv** | Chat, routing, dev, Python-only skills | `pip install -e ".[interactive]"` |
-| 🖥️ **Desktop/web backend** | OmicsClaw-App or browser frontends | `oc app-server --host 127.0.0.1 --port 8765` |
+| 🖥️ **Desktop/web backend** | OmicsClaw-App or browser frontends | `oc desktop-server --host 127.0.0.1 --port 8765` |
 | 🧠 **Memory API** | Inspect graph memory over HTTP | `pip install -e ".[memory]"` then `oc memory-server` |
 
 📖 Details: [installation guide](docs/_legacy/INSTALLATION.md), [quickstart](docs/introduction/quickstart.mdx). Dependencies live in [`pyproject.toml`](pyproject.toml), [`environment.yml`](environment.yml), and [`0_setup_env.sh`](0_setup_env.sh).
@@ -168,7 +170,7 @@ Use `bash 0_setup_env.sh` for real analysis. Use the lightweight venv only for c
 <details>
 <summary><b>Can the desktop App run jobs on a server?</b></summary>
 
-Yes. Run `oc app-server` on the remote Linux host, keep it bound to `127.0.0.1`, and connect through the App's SSH tunnel runtime.
+Yes. Run `oc desktop-server` on the remote Linux host, keep it bound to `127.0.0.1`, and connect through the App's SSH tunnel runtime.
 
 </details>
 

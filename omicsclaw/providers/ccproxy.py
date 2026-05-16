@@ -77,8 +77,8 @@ _OAUTH_ALIAS_MAP: dict[str, str] = {
 }
 
 
-# Default ccproxy port. Deliberately NOT 8765 (the OmicsClaw app-server's
-# default) to avoid a startup-time self-conflict when the app-server
+# Default ccproxy port. Deliberately NOT 8765 (the OmicsClaw desktop-server's
+# default) to avoid a startup-time self-conflict when the desktop-server
 # switches to OAuth mode. 11434 is reserved for Ollama, so use 11435.
 DEFAULT_CCPROXY_PORT: int = 11435
 

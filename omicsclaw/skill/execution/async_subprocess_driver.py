@@ -3,7 +3,7 @@
 OMI-12 audit P1 #4: ``SkillRunnerExecutor`` used to wrap the blocking
 ``run_skill`` call in ``asyncio.to_thread``, which parked one
 ThreadPoolExecutor worker per active skill. With the default 32-worker
-pool, a busy app-server running long skills (velocity, pseudotime, …)
+pool, a busy desktop-server running long skills (velocity, pseudotime, …)
 could exhaust the pool and stall unrelated async work.
 
 This module replaces that thread-blocking path with a native

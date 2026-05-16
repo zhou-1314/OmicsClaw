@@ -13,9 +13,9 @@ import pytest
 from rich.console import Console
 
 from omicsclaw.skill.registry import OmicsRegistry
-from omicsclaw.interactive import interactive
-from omicsclaw.interactive._session_state import SessionState
-from omicsclaw.interactive._session_command_support import (
+from omicsclaw.surfaces.cli import interactive
+from omicsclaw.surfaces.cli._session_state import SessionState
+from omicsclaw.surfaces.cli._session_command_support import (
     SessionCommandView,
     SessionListEntry,
     SessionListView,
@@ -36,7 +36,7 @@ def guarded_import(name, *args, **kwargs):
     return original_import(name, *args, **kwargs)
 
 builtins.__import__ = guarded_import
-import omicsclaw.interactive.interactive
+import omicsclaw.surfaces.cli.interactive
 print("ok")
 """
     result = subprocess.run(

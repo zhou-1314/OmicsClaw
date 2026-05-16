@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 
-from omicsclaw.channels.commands import (
+from omicsclaw.surfaces.channels.commands import (
     SlashCommandContext,
     dispatch,
     registered_commands,

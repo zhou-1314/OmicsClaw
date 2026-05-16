@@ -1,6 +1,6 @@
 import json
 
-from omicsclaw.interactive._skill_management_support import (
+from omicsclaw.surfaces.cli._skill_management_support import (
     SkillCommandStatus,
     SkillEnablementPlan,
     SkillInstallPlan,
@@ -70,7 +70,7 @@ def test_finalize_installed_skill_reports_validation_and_refresh(monkeypatch, tm
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "omicsclaw.interactive._skill_management_support.refresh_skill_registry",
+        "omicsclaw.surfaces.cli._skill_management_support.refresh_skill_registry",
         lambda: "",
     )
 
@@ -107,7 +107,7 @@ def test_install_extension_from_source_installs_local_prompt_pack(monkeypatch, t
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "omicsclaw.interactive._skill_management_support.refresh_skill_registry",
+        "omicsclaw.surfaces.cli._skill_management_support.refresh_skill_registry",
         lambda: "",
     )
 
@@ -145,7 +145,7 @@ def test_install_extension_from_source_rejects_untrusted_prompt_pack(monkeypatch
     )
 
     monkeypatch.setattr(
-        "omicsclaw.interactive._skill_management_support._stage_github_source",
+        "omicsclaw.surfaces.cli._skill_management_support._stage_github_source",
         lambda _plan, _staging_root: (source, SkillCommandStatus("success", "cloned")),
     )
 
@@ -186,7 +186,7 @@ def test_install_extension_from_source_emits_extension_hook_notice(monkeypatch, 
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "omicsclaw.interactive._skill_management_support.refresh_skill_registry",
+        "omicsclaw.surfaces.cli._skill_management_support.refresh_skill_registry",
         lambda: "",
     )
 
@@ -237,7 +237,7 @@ def test_finalize_uninstalled_skill_warns_when_refresh_fails(monkeypatch, tmp_pa
         extension_type="skill-pack",
     )
     monkeypatch.setattr(
-        "omicsclaw.interactive._skill_management_support.refresh_skill_registry",
+        "omicsclaw.surfaces.cli._skill_management_support.refresh_skill_registry",
         lambda: "registry locked",
     )
 
@@ -262,7 +262,7 @@ def test_prepare_extension_enablement_plan_and_finalize(monkeypatch, tmp_path):
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "omicsclaw.interactive._skill_management_support.refresh_skill_registry",
+        "omicsclaw.surfaces.cli._skill_management_support.refresh_skill_registry",
         lambda: "",
     )
 
@@ -421,7 +421,7 @@ def test_format_installed_skill_list_plain_preserves_header():
 
 def test_build_refresh_extensions_statuses_reports_inventory(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "omicsclaw.interactive._skill_management_support.refresh_skill_registry",
+        "omicsclaw.surfaces.cli._skill_management_support.refresh_skill_registry",
         lambda: "",
     )
     user_skill = tmp_path / "skills" / "user" / "tracked-skill"
@@ -474,7 +474,7 @@ def test_install_extension_from_source_tracks_hook_pack_as_disabled(monkeypatch,
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "omicsclaw.interactive._skill_management_support.refresh_skill_registry",
+        "omicsclaw.surfaces.cli._skill_management_support.refresh_skill_registry",
         lambda: "",
     )
 
@@ -491,7 +491,7 @@ def test_install_extension_from_source_tracks_hook_pack_as_disabled(monkeypatch,
 
 def test_build_refresh_skills_statuses_reports_detected_user_packs(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "omicsclaw.interactive._skill_management_support.refresh_skill_registry",
+        "omicsclaw.surfaces.cli._skill_management_support.refresh_skill_registry",
         lambda: "",
     )
     user_skill = tmp_path / "skills" / "user" / "tracked-skill"

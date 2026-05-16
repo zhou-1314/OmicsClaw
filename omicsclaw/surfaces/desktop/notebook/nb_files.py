@@ -435,7 +435,7 @@ def _trusted_workspace_roots() -> list[Path]:
                 roots.append(Path(text))
 
     try:
-        from omicsclaw.app import server as app_server
+        from omicsclaw.surfaces.desktop import server as app_server
 
         core = getattr(app_server, "_core", None)
         if core is not None:

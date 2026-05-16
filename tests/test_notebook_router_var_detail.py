@@ -28,14 +28,14 @@ pytest.importorskip("fastapi")
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from omicsclaw.app.notebook import var_inspector
-from omicsclaw.app.notebook.router import router
+from omicsclaw.surfaces.desktop.notebook import var_inspector
+from omicsclaw.surfaces.desktop.notebook.router import router
 
 # The package __init__ re-exports ``router`` (the APIRouter object), which
 # shadows the submodule name at the package level. Grab the actual module
 # out of sys.modules so monkeypatch targets the real ``get_kernel_manager``
 # symbol the route handlers reference.
-notebook_router_module = sys.modules["omicsclaw.app.notebook.router"]
+notebook_router_module = sys.modules["omicsclaw.surfaces.desktop.notebook.router"]
 
 
 def _make_client() -> TestClient:

@@ -272,7 +272,7 @@ If you expose the memory API beyond localhost, set
 ### Desktop / web app backend
 
 ```bash
-oc app-server --host 127.0.0.1 --port 8765
+oc desktop-server --host 127.0.0.1 --port 8765
 ```
 
 The app backend serves chat streaming, skills, providers, MCP, outputs, bridge

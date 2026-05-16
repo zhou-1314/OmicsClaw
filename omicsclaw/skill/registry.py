@@ -369,7 +369,7 @@ class OmicsRegistry:
     def invalidate(self) -> None:
         """Reset the in-memory registry so the next ``load_all`` rescans disk.
 
-        Long-running surfaces (``oc app-server``, interactive REPL) can call
+        Long-running surfaces (``oc desktop-server``, interactive REPL) can call
         this after editing ``SKILL.md`` / ``parameters.yaml`` to pick up the
         change without restarting the process.
         """

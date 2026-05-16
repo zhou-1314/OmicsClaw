@@ -61,7 +61,7 @@ def test_global_version_flag_prints_project_version(monkeypatch, capsys):
 def test_app_and_memory_servers_share_project_version():
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server as app_server
+    from omicsclaw.surfaces.desktop import server as app_server
     from omicsclaw.memory.server import _build_app
 
     assert app_server.__version__ == __version__

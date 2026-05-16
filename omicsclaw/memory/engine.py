@@ -7,9 +7,7 @@ It owns the canonical CRUD verbs over Node/Memory/Edge/Path and is the
 only layer that touches those tables directly.
 
 Above it sits ``MemoryClient`` (strategy: which namespace, version vs.
-overwrite); below it sits the ORM. The legacy ``GraphService`` is
-unaffected during PR #3a/#3b — see ``docs/2026-05-09-memory-refactor-plan.md``
-for the full migration path.
+overwrite); below it sits the ORM.
 
 Write verbs (PR #3a):
     - upsert(uri, content, namespace, ...)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from omicsclaw import run_channels as run
+from omicsclaw.surfaces.channels import __main__ as run
 from omicsclaw.providers.registry import PROVIDER_PRESETS
 
 
@@ -53,5 +53,5 @@ def test_resolve_bootstrap_llm_config_defaults_to_api_key():
         {"DEEPSEEK_API_KEY": "x"}
     )
     assert auth_mode == "api_key"
-    # Default must differ from the app-server's 8765 (Bug 1 regression).
+    # Default must differ from the desktop-server's 8765 (Bug 1 regression).
     assert ccproxy_port == 11435

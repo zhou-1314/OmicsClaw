@@ -2,7 +2,7 @@ import sqlite3
 
 import pytest
 
-from omicsclaw.interactive import _session as session_store
+from omicsclaw.surfaces.cli import _session as session_store
 
 
 @pytest.mark.asyncio

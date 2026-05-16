@@ -5,8 +5,8 @@ Wraps omicsclaw.runtime.agent.state (OmicsClaw query engine) as a streaming HTTP
 the Electron and Next.js frontends.
 
 Start:
-    python -m omicsclaw.app.server --host 127.0.0.1 --port 8765
-    oc app-server --host 127.0.0.1 --port 8765
+    python -m omicsclaw.surfaces.desktop.server --host 127.0.0.1 --port 8765
+    oc desktop-server --host 127.0.0.1 --port 8765
 
 The server expects the OmicsClaw source tree to be importable, either from a
 source checkout / editable install or from a Python environment where the
@@ -39,9 +39,9 @@ from fastapi.responses import FileResponse, StreamingResponse
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 try:
-    from omicsclaw.app.notebook.kernel_manager import get_kernel_manager
-    from omicsclaw.app.notebook.live_session import install_live_session_support
-    from omicsclaw.app.notebook.router import router as notebook_router
+    from omicsclaw.surfaces.desktop.notebook.kernel_manager import get_kernel_manager
+    from omicsclaw.surfaces.desktop.notebook.live_session import install_live_session_support
+    from omicsclaw.surfaces.desktop.notebook.router import router as notebook_router
     _NOTEBOOK_AVAILABLE = True
     _NOTEBOOK_IMPORT_ERROR: str = ""
 except ImportError as _nb_err:
@@ -70,7 +70,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
-logger = logging.getLogger("omicsclaw.app_server")
+logger = logging.getLogger("omicsclaw.desktop_server")
 
 DEFAULT_APP_API_HOST = "127.0.0.1"
 DEFAULT_APP_API_PORT = 8765
@@ -202,7 +202,7 @@ def _resolve_backend_init_config() -> dict[str, str]:
 
 
 def _current_app_server_port() -> int:
-    """Return the effective app-server port for this process."""
+    """Return the effective desktop-server port for this process."""
     raw = str(os.getenv("OMICSCLAW_APP_PORT", "") or "").strip()
     try:
         return int(raw or DEFAULT_APP_API_PORT)
@@ -213,7 +213,7 @@ def _current_app_server_port() -> int:
 def _oauth_port_conflict_message(ccproxy_port: int, app_port: int) -> str:
     return (
         f"ccproxy_port ({ccproxy_port}) conflicts with the OmicsClaw "
-        f"app-server port ({app_port}). Pick a different port "
+        f"desktop-server port ({app_port}). Pick a different port "
         f"(default: 11435) via the CCPROXY_PORT env var or the "
         f"ccproxy_port field in the request body."
     )
@@ -329,7 +329,7 @@ _session_permission_profiles: dict[str, str] = {}
 
 # Cached MCP server entries for prompt injection
 _mcp_entries: tuple = ()
-_mcp_load_fn = None  # lazy reference to omicsclaw.interactive._mcp
+_mcp_load_fn = None  # lazy reference to omicsclaw.surfaces.cli._mcp
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +434,7 @@ async def lifespan(app: FastAPI):
     # Optionally load MCP server support
     global _mcp_load_fn
     try:
-        from omicsclaw.interactive._mcp import (
+        from omicsclaw.surfaces.cli._mcp import (
             load_active_mcp_server_entries_for_prompt,
             list_mcp_servers,
             add_mcp_server,
@@ -900,14 +900,14 @@ def _build_multimodal_content(
 ) -> str | list[dict]:
     """Convert text + FileAttachment list to OpenAI multimodal content.
 
-    Delegates to :mod:`omicsclaw.app._attachments`. Non-image files are
+    Delegates to :mod:`omicsclaw.surfaces.desktop._attachments`. Non-image files are
     saved to disk and referenced by absolute path in the user message
     so the model can use ``parse_literature`` / ``inspect_file`` /
     ``omicsclaw`` skill tools to open them. Images are forwarded inline
     as multimodal ``image_url`` blocks (and also saved to disk for tool
     access).
     """
-    from omicsclaw.app._attachments import build_chat_content
+    from omicsclaw.surfaces.desktop._attachments import build_chat_content
 
     uploads_dir = _resolve_uploads_dir(workspace)
     return build_chat_content(
@@ -997,7 +997,7 @@ async def _handle_slash_command(command: str, arg: str, session_id: str) -> str 
 
     elif command == "/help":
         try:
-            from omicsclaw.interactive._constants import SLASH_COMMANDS
+            from omicsclaw.surfaces.cli._constants import SLASH_COMMANDS
             lines = ["## Available Commands\n"]
             for cmd, desc in SLASH_COMMANDS:
                 lines.append(f"- `{cmd}` — {desc}")
@@ -1009,7 +1009,7 @@ async def _handle_slash_command(command: str, arg: str, session_id: str) -> str 
         if _mcp_load_fn is None:
             return "MCP module not available."
         try:
-            from omicsclaw.interactive._mcp import list_mcp_servers
+            from omicsclaw.surfaces.cli._mcp import list_mcp_servers
             servers = list_mcp_servers()
             if not servers:
                 return "No MCP servers configured."
@@ -1207,7 +1207,7 @@ async def chat_stream(req: ChatRequest):
 
     slash_commands: list[dict[str, str]] = []
     try:
-        from omicsclaw.interactive._constants import SLASH_COMMANDS
+        from omicsclaw.surfaces.cli._constants import SLASH_COMMANDS
 
         slash_commands = [
             {"command": str(command), "description": str(description)}
@@ -1219,7 +1219,7 @@ async def chat_stream(req: ChatRequest):
     mcp_servers_meta: list[dict[str, Any]] = []
     if _mcp_load_fn is not None:
         try:
-            from omicsclaw.interactive._mcp import list_mcp_servers
+            from omicsclaw.surfaces.cli._mcp import list_mcp_servers
 
             mcp_servers_meta = list_mcp_servers()
         except Exception:
@@ -1775,7 +1775,7 @@ async def chat_stream(req: ChatRequest):
                 except Exception as mcp_exc:
                     logger.warning("Failed to load MCP servers: %s", mcp_exc)
 
-            from omicsclaw.app._compaction_event_bridge import (
+            from omicsclaw.surfaces.desktop._compaction_event_bridge import (
                 make_compaction_event_handler,
             )
 
@@ -2450,7 +2450,7 @@ async def install_skill(req: SkillInstallRequest):
         raise HTTPException(400, detail="source is required")
 
     try:
-        from omicsclaw.interactive._skill_management_support import install_skill_from_source
+        from omicsclaw.surfaces.cli._skill_management_support import install_skill_from_source
 
         statuses = await asyncio.to_thread(
             install_skill_from_source,
@@ -2480,7 +2480,7 @@ async def uninstall_skill(req: SkillUninstallRequest):
         raise HTTPException(400, detail="name is required")
 
     try:
-        from omicsclaw.interactive._skill_management_support import uninstall_extension
+        from omicsclaw.surfaces.cli._skill_management_support import uninstall_extension
 
         statuses = await asyncio.to_thread(
             uninstall_extension,
@@ -3755,8 +3755,8 @@ async def switch_provider(req: ProviderSwitchRequest):
         base_url=req.base_url,
     )
 
-    # Reject ccproxy_port == app-server's own port: ccproxy serve would
-    # fail to bind (the app-server already owns the port), leaving the
+    # Reject ccproxy_port == desktop-server's own port: ccproxy serve would
+    # fail to bind (the desktop-server already owns the port), leaving the
     # switch attempt in a broken half-state.
     requested_port = int(req.ccproxy_port or 11435)
     if auth_mode == "oauth":
@@ -4138,7 +4138,7 @@ async def oauth_logout(provider: str):
 async def mcp_list_servers():
     """List all configured MCP servers and their active/probe status."""
     try:
-        from omicsclaw.interactive._mcp import list_mcp_servers
+        from omicsclaw.surfaces.cli._mcp import list_mcp_servers
         servers = list_mcp_servers()
     except ImportError:
         return {"servers": [], "error": "MCP module not available"}
@@ -4200,7 +4200,7 @@ class McpAddRequest(BaseModel):
 async def mcp_add_server(req: McpAddRequest):
     """Add or update an MCP server in OmicsClaw config."""
     try:
-        from omicsclaw.interactive._mcp import add_mcp_server
+        from omicsclaw.surfaces.cli._mcp import add_mcp_server
         add_mcp_server(
             name=req.name,
             target=req.target,
@@ -4222,7 +4222,7 @@ async def mcp_add_server(req: McpAddRequest):
 async def mcp_remove_server(name: str):
     """Remove an MCP server from OmicsClaw config."""
     try:
-        from omicsclaw.interactive._mcp import remove_mcp_server
+        from omicsclaw.surfaces.cli._mcp import remove_mcp_server
         removed = remove_mcp_server(name)
         if not removed:
             raise HTTPException(404, detail=f"Server '{name}' not found")
@@ -4237,7 +4237,7 @@ async def mcp_remove_server(name: str):
 
 def _reconcile_mcp_servers(incoming: Any) -> dict[str, Any]:
     try:
-        from omicsclaw.interactive._mcp import add_mcp_server, list_mcp_servers, remove_mcp_server
+        from omicsclaw.surfaces.cli._mcp import add_mcp_server, list_mcp_servers, remove_mcp_server
     except ImportError:
         raise HTTPException(503, detail="MCP module not available")
 
@@ -4864,7 +4864,7 @@ async def bridge_list_channels():
     global _channel_manager
 
     try:
-        from omicsclaw.channels import CHANNEL_REGISTRY
+        from omicsclaw.surfaces.channels import CHANNEL_REGISTRY
     except ImportError:
         raise HTTPException(503, detail="OmicsClaw channel system not available")
 
@@ -4911,7 +4911,7 @@ async def bridge_start(req: BridgeStartRequest):
 
     # Validate channel names
     try:
-        from omicsclaw.channels import CHANNEL_REGISTRY
+        from omicsclaw.surfaces.channels import CHANNEL_REGISTRY
     except ImportError:
         raise HTTPException(503, detail="OmicsClaw channel system not available")
 
@@ -4924,8 +4924,8 @@ async def bridge_start(req: BridgeStartRequest):
         )
 
     try:
-        from omicsclaw.run_channels import CHANNEL_BUILDERS
-        from omicsclaw.channels.manager import ChannelManager
+        from omicsclaw.surfaces.channels.__main__ import CHANNEL_BUILDERS
+        from omicsclaw.surfaces.channels.manager import ChannelManager
     except ImportError as exc:
         raise HTTPException(503, detail=f"Cannot import channel system: {exc}")
 
@@ -5275,7 +5275,7 @@ def main(argv: list[str] | None = None):
 
     logger.info("Starting OmicsClaw app backend on %s:%d", args.host, args.port)
     uvicorn.run(
-        "omicsclaw.app.server:app",
+        "omicsclaw.surfaces.desktop.server:app",
         host=args.host,
         port=args.port,
         reload=args.reload,

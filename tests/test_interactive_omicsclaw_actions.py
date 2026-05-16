@@ -2,13 +2,13 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-from omicsclaw.interactive._omicsclaw_actions import (
+from omicsclaw.surfaces.cli._omicsclaw_actions import (
     build_skills_catalog_view,
     format_skills_catalog_plain,
     list_registered_skill_names,
     run_skill_command,
 )
-from omicsclaw.interactive._skill_run_support import SkillRunCommandArgs
+from omicsclaw.surfaces.cli._skill_run_support import SkillRunCommandArgs
 
 
 def test_build_skills_catalog_view_uses_root_script_metadata(monkeypatch, tmp_path):
@@ -43,7 +43,7 @@ def test_build_skills_catalog_view_uses_root_script_metadata(monkeypatch, tmp_pa
         },
     )
     monkeypatch.setattr(
-        "omicsclaw.interactive._omicsclaw_actions.load_omicsclaw_script",
+        "omicsclaw.surfaces.cli._omicsclaw_actions.load_omicsclaw_script",
         lambda: fake_script,
     )
 
@@ -61,7 +61,7 @@ def test_build_skills_catalog_view_uses_root_script_metadata(monkeypatch, tmp_pa
 
 
 def test_format_skills_catalog_plain_renders_filter_and_missing_state():
-    from omicsclaw.interactive._omicsclaw_actions import SkillsCatalogView
+    from omicsclaw.surfaces.cli._omicsclaw_actions import SkillsCatalogView
 
     text = format_skills_catalog_plain(
         SkillsCatalogView(
@@ -77,7 +77,7 @@ def test_format_skills_catalog_plain_renders_filter_and_missing_state():
 
 
 def test_format_skills_catalog_plain_renders_sections():
-    from omicsclaw.interactive._omicsclaw_actions import (
+    from omicsclaw.surfaces.cli._omicsclaw_actions import (
         SkillsCatalogEntry,
         SkillsCatalogSection,
         SkillsCatalogView,

@@ -21,7 +21,7 @@ import pytest
 
 class TestBuildVarDetailScript:
     def test_embeds_variable_name_as_literal(self):
-        from omicsclaw.app.notebook.var_inspector import build_var_detail_script
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import build_var_detail_script
 
         script = build_var_detail_script("my_df")
 
@@ -30,7 +30,7 @@ class TestBuildVarDetailScript:
         assert "my_df" in script
 
     def test_embeds_row_and_col_limits(self):
-        from omicsclaw.app.notebook.var_inspector import build_var_detail_script
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import build_var_detail_script
 
         script = build_var_detail_script("x", max_rows=7, max_cols=3)
 
@@ -38,7 +38,7 @@ class TestBuildVarDetailScript:
         assert "3" in script
 
     def test_rejects_names_with_quotes_or_backslashes(self):
-        from omicsclaw.app.notebook.var_inspector import build_var_detail_script
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import build_var_detail_script
 
         # Strict policy: any non-identifier character is rejected outright,
         # not "safely escaped". This is a defense-in-depth choice — keeping
@@ -48,7 +48,7 @@ class TestBuildVarDetailScript:
             build_var_detail_script('bad"name\\here')
 
     def test_rejects_non_identifier_variable(self):
-        from omicsclaw.app.notebook.var_inspector import build_var_detail_script
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import build_var_detail_script
 
         # We only allow dotted-identifier paths (e.g. "adata.obs") — arbitrary
         # expressions would be a code injection vector.
@@ -56,13 +56,13 @@ class TestBuildVarDetailScript:
             build_var_detail_script("__import__('os').system('rm -rf /')")
 
     def test_allows_dotted_paths(self):
-        from omicsclaw.app.notebook.var_inspector import build_var_detail_script
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import build_var_detail_script
 
         script = build_var_detail_script("adata.obs")
         assert "adata.obs" in script or "adata" in script
 
     def test_uses_shared_payload_delimiters(self):
-        from omicsclaw.app.notebook.var_inspector import (
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import (
             PAYLOAD_BEGIN,
             PAYLOAD_END,
             build_var_detail_script,
@@ -80,7 +80,7 @@ class TestBuildVarDetailScript:
 
 class TestBuildAdataSlotScript:
     def test_supports_obs_slot_with_key(self):
-        from omicsclaw.app.notebook.var_inspector import build_adata_slot_script
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import build_adata_slot_script
 
         script = build_adata_slot_script("adata", "obs", "cluster")
 
@@ -89,7 +89,7 @@ class TestBuildAdataSlotScript:
         assert "cluster" in script
 
     def test_supports_obsm_slot(self):
-        from omicsclaw.app.notebook.var_inspector import build_adata_slot_script
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import build_adata_slot_script
 
         script = build_adata_slot_script("adata", "obsm", "X_umap")
 
@@ -98,26 +98,26 @@ class TestBuildAdataSlotScript:
         assert "X_umap" in script
 
     def test_allows_empty_key_for_obs(self):
-        from omicsclaw.app.notebook.var_inspector import build_adata_slot_script
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import build_adata_slot_script
 
         script = build_adata_slot_script("adata", "obs", "")
 
         compile(script, "<adata_slot>", "exec")
 
     def test_rejects_unsupported_slot(self):
-        from omicsclaw.app.notebook.var_inspector import build_adata_slot_script
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import build_adata_slot_script
 
         with pytest.raises(ValueError):
             build_adata_slot_script("adata", "bogus_slot", "")
 
     def test_rejects_non_identifier_var_name(self):
-        from omicsclaw.app.notebook.var_inspector import build_adata_slot_script
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import build_adata_slot_script
 
         with pytest.raises(ValueError):
             build_adata_slot_script("1+1", "obs", "")
 
     def test_key_with_quotes_is_safely_escaped(self):
-        from omicsclaw.app.notebook.var_inspector import build_adata_slot_script
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import build_adata_slot_script
 
         script = build_adata_slot_script("adata", "obs", 'evil"key')
 
@@ -131,26 +131,26 @@ class TestBuildAdataSlotScript:
 
 
 def _wrap(payload: dict) -> str:
-    from omicsclaw.app.notebook.var_inspector import PAYLOAD_BEGIN, PAYLOAD_END
+    from omicsclaw.surfaces.desktop.notebook.var_inspector import PAYLOAD_BEGIN, PAYLOAD_END
 
     return f"noise before\n{PAYLOAD_BEGIN}{json.dumps(payload)}{PAYLOAD_END}\nafter\n"
 
 
 class TestParseVarDetailPayload:
     def test_returns_missing_for_empty_stdout(self):
-        from omicsclaw.app.notebook.var_inspector import parse_var_detail_payload
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import parse_var_detail_payload
 
         result = parse_var_detail_payload("")
         assert result["type"] == "missing"
 
     def test_returns_missing_when_delimiters_absent(self):
-        from omicsclaw.app.notebook.var_inspector import parse_var_detail_payload
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import parse_var_detail_payload
 
         result = parse_var_detail_payload("just some random stdout\n")
         assert result["type"] == "missing"
 
     def test_parses_dataframe_payload(self):
-        from omicsclaw.app.notebook.var_inspector import parse_var_detail_payload
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import parse_var_detail_payload
 
         payload = {
             "type": "dataframe",
@@ -173,7 +173,7 @@ class TestParseVarDetailPayload:
         assert result["table"]["columns"] == ["a", "b", "c"]
 
     def test_parses_anndata_payload(self):
-        from omicsclaw.app.notebook.var_inspector import parse_var_detail_payload
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import parse_var_detail_payload
 
         payload = {
             "type": "anndata",
@@ -195,7 +195,7 @@ class TestParseVarDetailPayload:
         assert result["summary"]["shape"] == [200, 500]
 
     def test_parses_scalar_payload(self):
-        from omicsclaw.app.notebook.var_inspector import parse_var_detail_payload
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import parse_var_detail_payload
 
         payload = {"type": "scalar", "name": "x", "content": "42"}
         result = parse_var_detail_payload(_wrap(payload))
@@ -204,7 +204,7 @@ class TestParseVarDetailPayload:
         assert result["content"] == "42"
 
     def test_propagates_error_payload(self):
-        from omicsclaw.app.notebook.var_inspector import parse_var_detail_payload
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import parse_var_detail_payload
 
         payload = {"type": "error", "error": "variable not found: foo"}
         result = parse_var_detail_payload(_wrap(payload))
@@ -213,7 +213,7 @@ class TestParseVarDetailPayload:
         assert "not found" in result["error"]
 
     def test_returns_missing_on_corrupt_json(self):
-        from omicsclaw.app.notebook.var_inspector import (
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import (
             PAYLOAD_BEGIN,
             PAYLOAD_END,
             parse_var_detail_payload,
@@ -250,7 +250,7 @@ class TestScriptExecutionSafety:
     def test_var_detail_dataframe_roundtrip(self):
         import pandas as pd
 
-        from omicsclaw.app.notebook.var_inspector import (
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import (
             build_var_detail_script,
             parse_var_detail_payload,
         )
@@ -268,7 +268,7 @@ class TestScriptExecutionSafety:
     def test_var_detail_series_roundtrip(self):
         import pandas as pd
 
-        from omicsclaw.app.notebook.var_inspector import (
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import (
             build_var_detail_script,
             parse_var_detail_payload,
         )
@@ -284,7 +284,7 @@ class TestScriptExecutionSafety:
         assert result["shape"][0] == 3
 
     def test_var_detail_scalar_roundtrip(self):
-        from omicsclaw.app.notebook.var_inspector import (
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import (
             build_var_detail_script,
             parse_var_detail_payload,
         )
@@ -298,7 +298,7 @@ class TestScriptExecutionSafety:
         assert "42" in result["content"]
 
     def test_var_detail_missing_variable(self):
-        from omicsclaw.app.notebook.var_inspector import (
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import (
             build_var_detail_script,
             parse_var_detail_payload,
         )
@@ -315,7 +315,7 @@ class TestScriptExecutionSafety:
         import pandas as pd
         from anndata import AnnData
 
-        from omicsclaw.app.notebook.var_inspector import (
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import (
             build_adata_slot_script,
             parse_var_detail_payload,
         )
@@ -339,7 +339,7 @@ class TestScriptExecutionSafety:
         import pandas as pd
         from anndata import AnnData
 
-        from omicsclaw.app.notebook.var_inspector import (
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import (
             build_adata_slot_script,
             parse_var_detail_payload,
         )
@@ -368,7 +368,7 @@ class TestScriptExecutionSafety:
         import numpy as np
         from anndata import AnnData
 
-        from omicsclaw.app.notebook.var_inspector import (
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import (
             build_adata_slot_script,
             parse_var_detail_payload,
         )
@@ -391,7 +391,7 @@ class TestScriptExecutionSafety:
         from anndata import AnnData
         from types import SimpleNamespace
 
-        from omicsclaw.app.notebook.var_inspector import (
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import (
             build_adata_slot_script,
             parse_var_detail_payload,
         )
@@ -412,7 +412,7 @@ class TestScriptExecutionSafety:
         import numpy as np
         from anndata import AnnData
 
-        from omicsclaw.app.notebook.var_inspector import (
+        from omicsclaw.surfaces.desktop.notebook.var_inspector import (
             build_adata_slot_script,
             parse_var_detail_payload,
         )

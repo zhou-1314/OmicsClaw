@@ -725,7 +725,7 @@ def run_onboard() -> None:
     console.print("\n[dim]Configured provider:[/dim] " + provider)
     if selected_channels:
         console.print("[dim]Start the configured channels with:[/dim]")
-        console.print(f"    python -m omicsclaw.run_channels --channels {','.join(selected_channels)}")
+        console.print(f"    python -m omicsclaw.surfaces.channels.__main__ --channels {','.join(selected_channels)}")
     else:
         console.print("[yellow]No channels were selected. Core runtime settings were still saved.[/yellow]")
 

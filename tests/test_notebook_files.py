@@ -35,7 +35,7 @@ def _make_ipynb_bytes(cells: list[dict]) -> bytes:
 
 class TestParseIpynbBytes:
     def test_returns_code_and_markdown_cells(self):
-        from omicsclaw.app.notebook.nb_files import parse_ipynb_bytes
+        from omicsclaw.surfaces.desktop.notebook.nb_files import parse_ipynb_bytes
 
         raw = _make_ipynb_bytes(
             [
@@ -53,7 +53,7 @@ class TestParseIpynbBytes:
         assert cells[1]["source"] == "x = 1"
 
     def test_drops_raw_cells(self):
-        from omicsclaw.app.notebook.nb_files import parse_ipynb_bytes
+        from omicsclaw.surfaces.desktop.notebook.nb_files import parse_ipynb_bytes
 
         raw = _make_ipynb_bytes(
             [
@@ -68,7 +68,7 @@ class TestParseIpynbBytes:
         assert "code" in types
 
     def test_each_cell_includes_empty_outputs_list(self):
-        from omicsclaw.app.notebook.nb_files import parse_ipynb_bytes
+        from omicsclaw.surfaces.desktop.notebook.nb_files import parse_ipynb_bytes
 
         raw = _make_ipynb_bytes([{"cell_type": "code", "source": "1+1"}])
         cells = parse_ipynb_bytes(raw)
@@ -76,19 +76,19 @@ class TestParseIpynbBytes:
         assert cells[0]["outputs"] == []
 
     def test_raises_on_non_json_bytes(self):
-        from omicsclaw.app.notebook.nb_files import parse_ipynb_bytes
+        from omicsclaw.surfaces.desktop.notebook.nb_files import parse_ipynb_bytes
 
         with pytest.raises(ValueError):
             parse_ipynb_bytes(b"\x00\x01\x02 not json")
 
     def test_raises_on_json_that_is_not_a_notebook(self):
-        from omicsclaw.app.notebook.nb_files import parse_ipynb_bytes
+        from omicsclaw.surfaces.desktop.notebook.nb_files import parse_ipynb_bytes
 
         with pytest.raises(ValueError):
             parse_ipynb_bytes(json.dumps({"hello": "world"}).encode("utf-8"))
 
     def test_handles_utf8_with_bom(self):
-        from omicsclaw.app.notebook.nb_files import parse_ipynb_bytes
+        from omicsclaw.surfaces.desktop.notebook.nb_files import parse_ipynb_bytes
 
         raw = _make_ipynb_bytes([{"cell_type": "code", "source": "a = 1"}])
         cells = parse_ipynb_bytes(b"\xef\xbb\xbf" + raw)
@@ -102,7 +102,7 @@ class TestParseIpynbBytes:
 
 class TestListIpynbFiles:
     def test_returns_sorted_ipynb_names(self, tmp_path: Path):
-        from omicsclaw.app.notebook.nb_files import list_ipynb_files
+        from omicsclaw.surfaces.desktop.notebook.nb_files import list_ipynb_files
 
         (tmp_path / "b.ipynb").write_text("{}")
         (tmp_path / "a.ipynb").write_text("{}")
@@ -113,7 +113,7 @@ class TestListIpynbFiles:
         assert files == ["a.ipynb", "b.ipynb"]
 
     def test_ignores_directories_with_ipynb_suffix(self, tmp_path: Path):
-        from omicsclaw.app.notebook.nb_files import list_ipynb_files
+        from omicsclaw.surfaces.desktop.notebook.nb_files import list_ipynb_files
 
         (tmp_path / "not_a_file.ipynb").mkdir()
         (tmp_path / "real.ipynb").write_text("{}")
@@ -122,13 +122,13 @@ class TestListIpynbFiles:
         assert files == ["real.ipynb"]
 
     def test_returns_empty_for_missing_directory(self, tmp_path: Path):
-        from omicsclaw.app.notebook.nb_files import list_ipynb_files
+        from omicsclaw.surfaces.desktop.notebook.nb_files import list_ipynb_files
 
         missing = tmp_path / "does_not_exist"
         assert list_ipynb_files(str(missing)) == []
 
     def test_returns_empty_for_file_path_instead_of_dir(self, tmp_path: Path):
-        from omicsclaw.app.notebook.nb_files import list_ipynb_files
+        from omicsclaw.surfaces.desktop.notebook.nb_files import list_ipynb_files
 
         f = tmp_path / "x.ipynb"
         f.write_text("{}")
@@ -142,7 +142,7 @@ class TestListIpynbFiles:
 
 class TestResolveIpynbPath:
     def test_resolves_simple_filename(self, tmp_path: Path):
-        from omicsclaw.app.notebook.nb_files import resolve_ipynb_path
+        from omicsclaw.surfaces.desktop.notebook.nb_files import resolve_ipynb_path
 
         target = tmp_path / "a.ipynb"
         target.write_text("{}")
@@ -151,19 +151,19 @@ class TestResolveIpynbPath:
         assert Path(resolved).resolve() == target.resolve()
 
     def test_rejects_parent_directory_escape(self, tmp_path: Path):
-        from omicsclaw.app.notebook.nb_files import resolve_ipynb_path
+        from omicsclaw.surfaces.desktop.notebook.nb_files import resolve_ipynb_path
 
         with pytest.raises(ValueError):
             resolve_ipynb_path(str(tmp_path), "../etc/passwd.ipynb")
 
     def test_rejects_absolute_path(self, tmp_path: Path):
-        from omicsclaw.app.notebook.nb_files import resolve_ipynb_path
+        from omicsclaw.surfaces.desktop.notebook.nb_files import resolve_ipynb_path
 
         with pytest.raises(ValueError):
             resolve_ipynb_path(str(tmp_path), "/tmp/evil.ipynb")
 
     def test_rejects_non_ipynb_extension(self, tmp_path: Path):
-        from omicsclaw.app.notebook.nb_files import resolve_ipynb_path
+        from omicsclaw.surfaces.desktop.notebook.nb_files import resolve_ipynb_path
 
         with pytest.raises(ValueError):
             resolve_ipynb_path(str(tmp_path), "a.txt")
@@ -176,7 +176,7 @@ class TestResolveIpynbPath:
 
 class TestCreateEmptyNotebook:
     def test_creates_valid_empty_notebook_file(self, tmp_path: Path):
-        from omicsclaw.app.notebook.nb_files import create_empty_notebook, parse_ipynb_bytes
+        from omicsclaw.surfaces.desktop.notebook.nb_files import create_empty_notebook, parse_ipynb_bytes
 
         path = create_empty_notebook(str(tmp_path), "new.ipynb")
 
@@ -185,21 +185,21 @@ class TestCreateEmptyNotebook:
         assert cells == []
 
     def test_creates_parent_directory_if_missing(self, tmp_path: Path):
-        from omicsclaw.app.notebook.nb_files import create_empty_notebook
+        from omicsclaw.surfaces.desktop.notebook.nb_files import create_empty_notebook
 
         root = tmp_path / "nested" / "sub"
         path = create_empty_notebook(str(root), "x.ipynb")
         assert Path(path).exists()
 
     def test_refuses_to_overwrite_existing(self, tmp_path: Path):
-        from omicsclaw.app.notebook.nb_files import create_empty_notebook
+        from omicsclaw.surfaces.desktop.notebook.nb_files import create_empty_notebook
 
         (tmp_path / "x.ipynb").write_text("{}")
         with pytest.raises(FileExistsError):
             create_empty_notebook(str(tmp_path), "x.ipynb")
 
     def test_rejects_path_escape(self, tmp_path: Path):
-        from omicsclaw.app.notebook.nb_files import create_empty_notebook
+        from omicsclaw.surfaces.desktop.notebook.nb_files import create_empty_notebook
 
         with pytest.raises(ValueError):
             create_empty_notebook(str(tmp_path), "../escape.ipynb")
@@ -207,7 +207,7 @@ class TestCreateEmptyNotebook:
 
 class TestSaveNotebook:
     def test_round_trip_code_and_markdown_cells(self, tmp_path: Path):
-        from omicsclaw.app.notebook.nb_files import (
+        from omicsclaw.surfaces.desktop.notebook.nb_files import (
             create_empty_notebook,
             parse_ipynb_bytes,
             save_notebook,
@@ -227,7 +227,7 @@ class TestSaveNotebook:
         assert cells_out[1]["source"] == "print('hi')"
 
     def test_creates_file_if_missing(self, tmp_path: Path):
-        from omicsclaw.app.notebook.nb_files import save_notebook
+        from omicsclaw.surfaces.desktop.notebook.nb_files import save_notebook
 
         save_notebook(
             str(tmp_path),
@@ -237,7 +237,7 @@ class TestSaveNotebook:
         assert (tmp_path / "fresh.ipynb").exists()
 
     def test_rejects_invalid_cell_type(self, tmp_path: Path):
-        from omicsclaw.app.notebook.nb_files import save_notebook
+        from omicsclaw.surfaces.desktop.notebook.nb_files import save_notebook
 
         with pytest.raises(ValueError):
             save_notebook(
@@ -247,7 +247,7 @@ class TestSaveNotebook:
             )
 
     def test_rejects_path_escape(self, tmp_path: Path):
-        from omicsclaw.app.notebook.nb_files import save_notebook
+        from omicsclaw.surfaces.desktop.notebook.nb_files import save_notebook
 
         with pytest.raises(ValueError):
             save_notebook(
@@ -259,7 +259,7 @@ class TestSaveNotebook:
 
 class TestDeleteNotebook:
     def test_removes_existing_file(self, tmp_path: Path):
-        from omicsclaw.app.notebook.nb_files import delete_notebook
+        from omicsclaw.surfaces.desktop.notebook.nb_files import delete_notebook
 
         f = tmp_path / "doomed.ipynb"
         f.write_text("{}")
@@ -267,13 +267,13 @@ class TestDeleteNotebook:
         assert not f.exists()
 
     def test_missing_file_raises_file_not_found(self, tmp_path: Path):
-        from omicsclaw.app.notebook.nb_files import delete_notebook
+        from omicsclaw.surfaces.desktop.notebook.nb_files import delete_notebook
 
         with pytest.raises(FileNotFoundError):
             delete_notebook(str(tmp_path), "ghost.ipynb")
 
     def test_rejects_path_escape(self, tmp_path: Path):
-        from omicsclaw.app.notebook.nb_files import delete_notebook
+        from omicsclaw.surfaces.desktop.notebook.nb_files import delete_notebook
 
         with pytest.raises(ValueError):
             delete_notebook(str(tmp_path), "../../etc/passwd.ipynb")
@@ -281,8 +281,8 @@ class TestDeleteNotebook:
 
 class TestResolveWorkspaceNotebookTarget:
     def test_rejects_untrusted_absolute_path_without_workspace(self, monkeypatch, tmp_path: Path):
-        from omicsclaw.app import server
-        from omicsclaw.app.notebook.nb_files import resolve_workspace_notebook_target
+        from omicsclaw.surfaces.desktop import server
+        from omicsclaw.surfaces.desktop.notebook.nb_files import resolve_workspace_notebook_target
 
         trusted = tmp_path / "trusted"
         trusted.mkdir()
@@ -309,7 +309,7 @@ def _import_client():
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from omicsclaw.app.notebook.router import router
+    from omicsclaw.surfaces.desktop.notebook.router import router
 
     app = FastAPI()
     app.include_router(router, prefix="/notebook")
@@ -333,8 +333,8 @@ class TestWorkspaceScopeEnforcement:
     def test_validate_workspace_fails_closed_when_no_trusted_roots_configured(
         self, monkeypatch, tmp_path: Path
     ):
-        from omicsclaw.app import server
-        from omicsclaw.app.notebook.nb_files import _validate_workspace
+        from omicsclaw.surfaces.desktop import server
+        from omicsclaw.surfaces.desktop.notebook.nb_files import _validate_workspace
 
         monkeypatch.delenv("OMICSCLAW_WORKSPACE", raising=False)
         monkeypatch.delenv("OMICSCLAW_DATA_DIRS", raising=False)
@@ -346,8 +346,8 @@ class TestWorkspaceScopeEnforcement:
     def test_resolve_workspace_and_target_fails_closed_without_trust(
         self, monkeypatch, tmp_path: Path
     ):
-        from omicsclaw.app import server
-        from omicsclaw.app.notebook.nb_files import _resolve_workspace_and_target
+        from omicsclaw.surfaces.desktop import server
+        from omicsclaw.surfaces.desktop.notebook.nb_files import _resolve_workspace_and_target
 
         rogue = tmp_path / "rogue.ipynb"
         rogue.write_text("{}")
@@ -363,8 +363,8 @@ class TestListWorkspaceNotebooks:
     def test_reports_lower_bound_total_when_hard_cap_truncates_walk(
         self, monkeypatch, tmp_path: Path
     ):
-        from omicsclaw.app import server
-        from omicsclaw.app.notebook import nb_files
+        from omicsclaw.surfaces.desktop import server
+        from omicsclaw.surfaces.desktop.notebook import nb_files
 
         monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(tmp_path))
         monkeypatch.setattr(
@@ -489,7 +489,7 @@ class TestNotebookWorkspaceCrudRouter:
         assert resp.status_code == 409
 
     def test_open_endpoint_returns_notebook(self, tmp_path: Path):
-        from omicsclaw.app.notebook.nb_files import save_workspace_notebook
+        from omicsclaw.surfaces.desktop.notebook.nb_files import save_workspace_notebook
 
         target = tmp_path / "o.ipynb"
         save_workspace_notebook(

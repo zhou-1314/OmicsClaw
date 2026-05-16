@@ -1,4 +1,4 @@
-"""Tests for the OAuth endpoints added to omicsclaw.app.server.
+"""Tests for the OAuth endpoints added to omicsclaw.surfaces.desktop.server.
 
 These call the FastAPI route handlers directly (as coroutines) to avoid
 firing the full server lifespan on each test. ccproxy is mocked so no
@@ -27,7 +27,7 @@ def _run(coro):
 
 
 def test_oauth_status_rejects_unknown_provider():
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     with pytest.raises(HTTPException) as exc:
         _run(server.oauth_status("deepseek"))
@@ -36,7 +36,7 @@ def test_oauth_status_rejects_unknown_provider():
 
 
 def test_oauth_status_fails_when_ccproxy_missing(monkeypatch):
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.providers import ccproxy as ccm
 
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: False)
@@ -48,7 +48,7 @@ def test_oauth_status_fails_when_ccproxy_missing(monkeypatch):
 
 
 def test_oauth_status_returns_authenticated(monkeypatch):
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.providers import ccproxy as ccm
 
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: True)
@@ -65,7 +65,7 @@ def test_oauth_status_returns_authenticated(monkeypatch):
 
 
 def test_oauth_status_accepts_both_aliases(monkeypatch):
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.providers import ccproxy as ccm
 
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: True)
@@ -83,7 +83,7 @@ def test_oauth_status_accepts_both_aliases(monkeypatch):
 
 
 def test_oauth_login_returns_client_side_command(monkeypatch):
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.providers import ccproxy as ccm
 
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: True)
@@ -109,7 +109,7 @@ def test_oauth_login_adds_env_unset_when_empty_proxies_detected(monkeypatch):
     command returned to the frontend must prepend ``env -u ...`` so
     copy-paste works from any shell that has the same poisoned env.
     """
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.providers import ccproxy as ccm
 
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: True)
@@ -136,7 +136,7 @@ def test_oauth_login_adds_env_unset_when_empty_proxies_detected(monkeypatch):
 def test_oauth_login_leaves_command_clean_when_env_is_ok(monkeypatch):
     """Default case: no proxy env hygiene issues → command has no prefix
     and no warning key is emitted."""
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.providers import ccproxy as ccm
 
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: True)
@@ -152,7 +152,7 @@ def test_oauth_login_leaves_command_clean_when_env_is_ok(monkeypatch):
 
 
 def test_oauth_login_rejects_unsupported_provider(monkeypatch):
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     with pytest.raises(HTTPException) as exc:
         _run(server.oauth_login("gemini"))
@@ -165,7 +165,7 @@ def test_oauth_login_rejects_unsupported_provider(monkeypatch):
 
 
 def test_oauth_logout_invokes_ccproxy(monkeypatch):
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.providers import ccproxy as ccm
 
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: True)
@@ -188,7 +188,7 @@ def test_oauth_logout_invokes_ccproxy(monkeypatch):
 
 
 def test_oauth_logout_clears_active_oauth_runtime(monkeypatch):
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.providers import ccproxy as ccm
     from omicsclaw.providers.runtime import (
         clear_active_provider_runtime,
@@ -232,7 +232,7 @@ def test_oauth_logout_persists_api_key_fallback_to_env(monkeypatch, tmp_path):
     would re-read LLM_AUTH_MODE=oauth and try to reconstruct the OAuth
     session against a now-unauthenticated ccproxy.
     """
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.providers import ccproxy as ccm
     from omicsclaw.providers.runtime import (
         clear_active_provider_runtime,
@@ -290,7 +290,7 @@ def test_oauth_logout_persists_api_key_fallback_to_env(monkeypatch, tmp_path):
 def test_oauth_logout_non_active_provider_does_not_touch_env(monkeypatch, tmp_path):
     """Logout of a provider that isn't the active OAuth provider is a no-op
     on .env — we must not wipe the other provider's OAuth config."""
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.providers import ccproxy as ccm
     from omicsclaw.providers.runtime import (
         clear_active_provider_runtime,
@@ -346,7 +346,7 @@ def test_chat_provider_switch_clears_stale_oauth_env(monkeypatch, tmp_path):
     """Switching provider through the chat request must reset LLM_AUTH_MODE
     and drop CCPROXY_PORT; otherwise a restart re-enters the bad
     (new_provider + oauth) combination."""
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     env_path = tmp_path / ".env"
     env_path.write_text(
@@ -384,7 +384,7 @@ def test_chat_provider_switch_failure_raises_and_leaves_env_untouched(monkeypatc
     untouched. The chat_stream endpoint needs the exception to stop the request
     — silently swallowing it would make the UI show a stream that kept using
     the old provider, with no indication the switch failed."""
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     env_path = tmp_path / ".env"
     original = (
@@ -414,7 +414,7 @@ def test_chat_provider_switch_failure_raises_and_leaves_env_untouched(monkeypatc
 
 
 def test_cached_oauth_statuses_handles_missing_ccproxy(monkeypatch):
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.providers import ccproxy as ccm
 
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: False)
@@ -426,7 +426,7 @@ def test_cached_oauth_statuses_handles_missing_ccproxy(monkeypatch):
 
 
 def test_cached_oauth_statuses_queries_both_providers(monkeypatch):
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.providers import ccproxy as ccm
 
     monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: True)
@@ -451,15 +451,15 @@ def test_cached_oauth_statuses_queries_both_providers(monkeypatch):
 
 
 def test_provider_switch_request_defaults_to_api_key():
-    from omicsclaw.app.server import ProviderSwitchRequest
+    from omicsclaw.surfaces.desktop.server import ProviderSwitchRequest
 
     req = ProviderSwitchRequest(provider="deepseek")
     assert req.auth_mode == "api_key"
-    assert req.ccproxy_port == 11435  # must differ from app-server default 8765
+    assert req.ccproxy_port == 11435  # must differ from desktop-server default 8765
 
 
 def test_provider_switch_request_accepts_oauth():
-    from omicsclaw.app.server import ProviderSwitchRequest
+    from omicsclaw.surfaces.desktop.server import ProviderSwitchRequest
 
     req = ProviderSwitchRequest(
         provider="anthropic", auth_mode="oauth", ccproxy_port=9000
@@ -469,7 +469,7 @@ def test_provider_switch_request_accepts_oauth():
 
 
 def test_switch_provider_rejects_conflict_with_nondefault_app_port(monkeypatch):
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     monkeypatch.setenv("OMICSCLAW_APP_PORT", "9000")
     monkeypatch.setattr(server, "_get_core", lambda: MagicMock())
@@ -485,11 +485,11 @@ def test_switch_provider_rejects_conflict_with_nondefault_app_port(monkeypatch):
             )
         )
     assert exc.value.status_code == 400
-    assert "conflicts with the OmicsClaw app-server port (9000)" in exc.value.detail
+    assert "conflicts with the OmicsClaw desktop-server port (9000)" in exc.value.detail
 
 
 def test_switch_provider_clears_stale_base_url_and_persists_resolved_model(monkeypatch, tmp_path):
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     env_path = tmp_path / ".env"
     env_path.write_text(

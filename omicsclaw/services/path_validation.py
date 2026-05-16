@@ -82,7 +82,7 @@ def _build_trusted_dirs() -> list[Path]:
 
 
 def _ensure_trusted_dirs():
-    # Mutate in place — omicsclaw.runtime.agent.state / omicsclaw.runtime.tools.builders.agent_executors / omicsclaw.app.server
+    # Mutate in place — omicsclaw.runtime.agent.state / omicsclaw.runtime.tools.builders.agent_executors / omicsclaw.surfaces.desktop.server
     # all import ``TRUSTED_DATA_DIRS`` by reference at module load time.
     # A rebind here would leave those importers stuck on the original empty
     # list, defeating the trusted-dir check (and silently breaking server.py's

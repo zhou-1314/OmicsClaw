@@ -6,19 +6,19 @@ Unified entry point for running one or more bot channels concurrently.
 
 Usage:
     # Run Telegram only:
-    python -m omicsclaw.run_channels --channels telegram
+    python -m omicsclaw.surfaces.channels.__main__ --channels telegram
 
     # Run Feishu only:
-    python -m omicsclaw.run_channels --channels feishu
+    python -m omicsclaw.surfaces.channels.__main__ --channels feishu
 
     # Run both in one process:
-    python -m omicsclaw.run_channels --channels telegram,feishu
+    python -m omicsclaw.surfaces.channels.__main__ --channels telegram,feishu
 
     # Run with health check server:
-    python -m omicsclaw.run_channels --channels telegram --health-port 8080
+    python -m omicsclaw.surfaces.channels.__main__ --channels telegram --health-port 8080
 
     # List available channels:
-    python -m omicsclaw.run_channels --list
+    python -m omicsclaw.surfaces.channels.__main__ --list
 
 Environment:
     All channel configs are read from .env (same as standalone scripts).
@@ -49,7 +49,7 @@ for _p in [_PROJECT_ROOT / ".env", Path.cwd() / ".env"]:
         break
 
 from omicsclaw.runtime.agent import state as core  # noqa: E402
-from omicsclaw.channels import CHANNEL_REGISTRY, get_channel_class  # noqa: E402
+from omicsclaw.surfaces.channels import CHANNEL_REGISTRY, get_channel_class  # noqa: E402
 
 logger = logging.getLogger("omicsclaw.runner")
 
@@ -97,7 +97,7 @@ def _resolve_bootstrap_llm_config(
 
 def _build_telegram_channel():
     """Build a TelegramChannel from environment variables."""
-    from omicsclaw.channels.telegram import TelegramChannel, TelegramConfig
+    from omicsclaw.surfaces.channels.telegram import TelegramChannel, TelegramConfig
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
@@ -110,7 +110,7 @@ def _build_telegram_channel():
 
 def _build_feishu_channel():
     """Build a FeishuChannel from environment variables."""
-    from omicsclaw.channels.feishu import FeishuChannel, FeishuConfig
+    from omicsclaw.surfaces.channels.feishu import FeishuChannel, FeishuConfig
     app_id = os.environ.get("FEISHU_APP_ID", "")
     app_secret = os.environ.get("FEISHU_APP_SECRET", "")
     if not app_id or not app_secret:
@@ -129,7 +129,7 @@ def _build_feishu_channel():
 
 def _build_dingtalk_channel():
     """Build a DingTalkChannel from environment variables."""
-    from omicsclaw.channels.dingtalk import DingTalkChannel, DingTalkConfig
+    from omicsclaw.surfaces.channels.dingtalk import DingTalkChannel, DingTalkConfig
     client_id = os.environ.get("DINGTALK_CLIENT_ID", "")
     client_secret = os.environ.get("DINGTALK_CLIENT_SECRET", "")
     if not client_id or not client_secret:
@@ -143,7 +143,7 @@ def _build_dingtalk_channel():
 
 def _build_discord_channel():
     """Build a DiscordChannel from environment variables."""
-    from omicsclaw.channels.discord import DiscordChannel, DiscordConfig
+    from omicsclaw.surfaces.channels.discord import DiscordChannel, DiscordConfig
     token = os.environ.get("DISCORD_BOT_TOKEN", "")
     if not token:
         raise RuntimeError("DISCORD_BOT_TOKEN not set")
@@ -156,7 +156,7 @@ def _build_discord_channel():
 
 def _build_slack_channel():
     """Build a SlackChannel from environment variables."""
-    from omicsclaw.channels.slack import SlackChannel, SlackConfig
+    from omicsclaw.surfaces.channels.slack import SlackChannel, SlackConfig
     bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
     app_token = os.environ.get("SLACK_APP_TOKEN", "")
     if not bot_token or not app_token:
@@ -179,7 +179,7 @@ def _build_wechat_channel():
     wechat_app_id = os.environ.get("WECHAT_APP_ID", "")
 
     if wecom_corp_id:
-        from omicsclaw.channels.wechat import WeChatChannel, WeComConfig
+        from omicsclaw.surfaces.channels.wechat import WeChatChannel, WeComConfig
         return WeChatChannel(
             WeComConfig(
                 corp_id=wecom_corp_id,
@@ -192,7 +192,7 @@ def _build_wechat_channel():
             backend="wecom",
         )
     elif wechat_app_id:
-        from omicsclaw.channels.wechat import WeChatChannel, WeChatMPConfig
+        from omicsclaw.surfaces.channels.wechat import WeChatChannel, WeChatMPConfig
         return WeChatChannel(
             WeChatMPConfig(
                 app_id=wechat_app_id,
@@ -212,7 +212,7 @@ def _build_wechat_channel():
 
 def _build_qq_channel():
     """Build a QQChannel from environment variables."""
-    from omicsclaw.channels.qq import QQChannel, QQConfig
+    from omicsclaw.surfaces.channels.qq import QQChannel, QQConfig
     app_id = os.environ.get("QQ_APP_ID", "")
     app_secret = os.environ.get("QQ_APP_SECRET", "")
     if not app_id or not app_secret:
@@ -229,7 +229,7 @@ def _build_qq_channel():
 
 def _build_email_channel():
     """Build an EmailChannel from environment variables."""
-    from omicsclaw.channels.email import EmailChannel, EmailConfig
+    from omicsclaw.surfaces.channels.email import EmailChannel, EmailConfig
     imap_host = os.environ.get("EMAIL_IMAP_HOST", "")
     imap_user = os.environ.get("EMAIL_IMAP_USERNAME", "")
     smtp_host = os.environ.get("EMAIL_SMTP_HOST", "")
@@ -265,7 +265,7 @@ def _build_imessage_channel():
     import sys
     if sys.platform != "darwin":
         raise RuntimeError("iMessage channel requires macOS")
-    from omicsclaw.channels.imessage import IMessageChannel, IMessageConfig
+    from omicsclaw.surfaces.channels.imessage import IMessageChannel, IMessageConfig
     allowed_raw = os.environ.get("IMESSAGE_ALLOWED_SENDERS", "")
     allowed = {s.strip() for s in allowed_raw.split(",") if s.strip()} or None
     return IMessageChannel(IMessageConfig(
@@ -293,7 +293,7 @@ CHANNEL_BUILDERS = {
 
 async def _run_channels(channel_names: list[str], health_port: int = 0) -> None:
     """Start and run the specified channels."""
-    from omicsclaw.channels.manager import ChannelManager
+    from omicsclaw.surfaces.channels.manager import ChannelManager
 
     # Initialize core LLM engine
     provider, base_url, model, api_key, auth_mode, ccproxy_port = (
@@ -369,10 +369,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  python -m omicsclaw.run_channels --channels telegram\n"
-            "  python -m omicsclaw.run_channels --channels telegram,feishu\n"
-            "  python -m omicsclaw.run_channels --channels telegram --health-port 8080\n"
-            "  python -m omicsclaw.run_channels --list\n"
+            "  python -m omicsclaw.surfaces.channels.__main__ --channels telegram\n"
+            "  python -m omicsclaw.surfaces.channels.__main__ --channels telegram,feishu\n"
+            "  python -m omicsclaw.surfaces.channels.__main__ --channels telegram --health-port 8080\n"
+            "  python -m omicsclaw.surfaces.channels.__main__ --list\n"
         ),
     )
     parser.add_argument(

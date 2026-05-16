@@ -3,7 +3,7 @@
 import asyncio
 import json
 
-from omicsclaw.interactive import _mcp
+from omicsclaw.surfaces.cli import _mcp
 from omicsclaw.extensions import write_extension_state, write_install_record
 from omicsclaw.runtime.context.layers import (
     build_mcp_instructions_block,

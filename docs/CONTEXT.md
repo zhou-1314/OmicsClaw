@@ -2,7 +2,7 @@
 
 The graph-backed agent memory at `omicsclaw/memory/`. It records what each user (or workspace) has told OmicsClaw — sessions, preferences, dataset / analysis / insight lineage — and replays that context across runs and surfaces (CLI, Desktop, Telegram, Feishu) so the agent acts with continuity.
 
-> **Scope.** This file currently documents the Memory System only. If the Skills system, Bot orchestration, or other subsystems acquire enough domain vocabulary to warrant their own CONTEXT, split via a top-level `CONTEXT-MAP.md` per [CONTEXT-FORMAT.md §"Single vs multi-context repos"].
+> **Scope.** This file documents the Memory System and the Ingress / Surface layer (the three user-facing entry points that all dispatch into `core.llm_tool_loop`). If the Skills system or other subsystems acquire enough domain vocabulary to warrant their own CONTEXT, split via a top-level `CONTEXT-MAP.md` per [CONTEXT-FORMAT.md §"Single vs multi-context repos"].
 
 ## Language
 
@@ -43,7 +43,7 @@ _Avoid_: "audit log", "history"
 **MemoryClient**: The strategy layer between Surfaces and `MemoryEngine`. Decides Namespace via `resolve_namespace()` and version policy via `should_version()`; the only handle Surfaces should hold.
 _Avoid_: "MemoryAPI", "MemoryFacade"
 
-**ScopedMemory**: The filesystem-backed memory layer at `.omicsclaw/scoped_memory/` (markdown + frontmatter). Holds workspace-local hints. Live consumers: the `/memory` slash command in `omicsclaw/interactive/` (CLI/TUI) and `omicsclaw/diagnostics.py`. ScopedMemory now coexists with graph memory on the CLI/TUI Surface — markdown notes (`scope`/`list`/`add`/`prune`) stay on disk while `remember`/`recall`/`search` route to `MemoryEngine`.
+**ScopedMemory**: The filesystem-backed memory layer at `.omicsclaw/scoped_memory/` (markdown + frontmatter). Holds workspace-local hints. Live consumers: the `/memory` slash command in `omicsclaw/surfaces/cli/` (CLI/TUI) and `omicsclaw/diagnostics.py`. ScopedMemory now coexists with graph memory on the CLI/TUI Surface — markdown notes (`scope`/`list`/`add`/`prune`) stay on disk while `remember`/`recall`/`search` route to `MemoryEngine`.
 _Avoid_: "workspace memory" (would clash with `Namespace=workspace`)
 
 ### Write Modes
@@ -59,8 +59,18 @@ _Avoid_: "global write", "broadcast"
 
 ### Surfaces
 
-**Surface**: A user-facing entry point. The wired Surfaces that host a graph `MemoryClient` are: Desktop app (`oc app-server` + `app/server.py`), Telegram bot, Feishu bot, and CLI/TUI (`oc interactive` — via `build_graph_memory_command_view`, wired 2026-05).
-_Avoid_: "channel" (the Bot subsystem already uses "channel" for Telegram-vs-Feishu)
+**Surface**: A user-facing entry point. Three Surfaces today: **Channel Surface**, **Desktop Surface**, **CLI Surface**. All Surfaces dispatch into the same engine entry `core.llm_tool_loop` and host one `MemoryClient` per request context.
+_Avoid_: "entry" (overloaded with engine entry-point); "front-end" (overloaded with the Vue project under `frontend/`).
+
+**Channel Surface**: The Surface that fans out to all IM platforms. Holds N **Channel Adapter** instances and is lifecycle-managed by `omicsclaw/surfaces/channels/manager.py:ChannelManager`. Today the wired adapters are Telegram, Feishu, Slack, Discord, WeChat, WeCom, DingTalk, iMessage, Email, QQ.
+_Avoid_: "Bot Surface" (overloaded with the OmicsBot persona in `SOUL.md`), "IM Surface" (only some of the 10 adapters are IM in the strict sense — Email isn't).
+
+**Channel Adapter**: The per-platform implementation that lives inside the Channel Surface. One file per platform under `omicsclaw/surfaces/channels/<name>.py`. Each adapter today calls `core.llm_tool_loop` directly (per ADR 0003).
+_Avoid_: "channel" (the bare word now denotes the Surface, not its adapters), "gateway" (cellclaw's word, not ours), "backend" (clashes with LLM/storage/queue backend).
+
+**Desktop Surface**: The Surface served by `omicsclaw/surfaces/desktop/server.py` (FastAPI). Today streams intermediate events via SSE plus an `asyncio.Queue` callback bridge; supports cancel via `pending_preflight_requests`.
+
+**CLI Surface**: The Surface served by `omicsclaw/surfaces/cli/interactive.py` and `tui.py` (`oc interactive` — graph memory wired 2026-05 via `build_graph_memory_command_view`). Dispatches in-process: `asyncio.create_task(core.llm_tool_loop(...))` and prints/streams to the terminal.
 
 ### Surface namespace defaults
 
@@ -68,12 +78,12 @@ The wired Surfaces derive their Namespace string consistently:
 
 | Surface | Helper | Namespace |
 |---|---|---|
-| CLI / TUI | `cli_namespace_from_workspace(workspace_dir)` | absolute workspace path (cwd if unset) |
-| Desktop | `desktop_namespace()` | `app/<OMICSCLAW_DESKTOP_LAUNCH_ID>` or `app/desktop_user` |
-| Telegram / Feishu bot | `CompatMemoryStore` per-session | `f"{platform}/{user_id}"` |
+| CLI Surface | `cli_namespace_from_workspace(workspace_dir)` | absolute workspace path (cwd if unset) |
+| Desktop Surface | `desktop_namespace()` | `app/<OMICSCLAW_DESKTOP_LAUNCH_ID>` or `app/desktop_user` |
+| Channel Surface (per Channel Adapter) | `CompatMemoryStore` per-session | `f"{platform}/{user_id}"` where `platform` is the adapter name (e.g. `telegram`, `feishu`, `slack`, ...) |
 | System / boot scripts | constant | `__shared__` |
 
-The `app/`, `telegram/`, `feishu/` prefixes are structural — they prevent any cross-surface collision with absolute filesystem paths used by the CLI/TUI Surface.
+The `app/`, `<platform>/` prefixes are structural — they prevent any cross-surface collision with absolute filesystem paths used by the CLI Surface.
 
 ## Relationships
 

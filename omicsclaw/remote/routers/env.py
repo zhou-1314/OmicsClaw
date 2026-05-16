@@ -25,7 +25,7 @@ def build_env_doctor_report_payload(*, workspace_dir: str = "") -> EnvDoctorRepo
 
     # ``omicsclaw_dir`` mirrors what server.py exposes via /health.
     try:
-        from omicsclaw.app.server import _omicsclaw_project_dir
+        from omicsclaw.surfaces.desktop.server import _omicsclaw_project_dir
         omicsclaw_dir = str(_omicsclaw_project_dir())
     except Exception:
         omicsclaw_dir = ""

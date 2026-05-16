@@ -59,8 +59,8 @@ from omicsclaw.runtime.agent.state import (
     transcript_store,
 )
 from omicsclaw.services.billing import accumulate_usage as _accumulate_usage
-from omicsclaw.channels.commands import SlashCommandContext
-from omicsclaw.channels.commands import dispatch as _dispatch_slash_command
+from omicsclaw.surfaces.channels.commands import SlashCommandContext
+from omicsclaw.surfaces.channels.commands import dispatch as _dispatch_slash_command
 from omicsclaw.runtime.agent.parameter_loop import (
     _apply_preflight_answers,
     _build_pending_preflight_message,
@@ -557,7 +557,7 @@ async def llm_tool_loop(
     on_tool_result: async callable(tool.name, result: Any). Called after a tool completes.
     on_stream_content: async callable(chunk: str). Called as final text streams in.
     """
-    # Slash-command dispatch — registry lives in omicsclaw.channels.commands.
+    # Slash-command dispatch — registry lives in omicsclaw.surfaces.channels.commands.
     # Unknown / commands return None and fall through to the LLM,
     # preserving the original if-elif behaviour.
     if isinstance(user_content, str) and user_content.strip().startswith("/"):

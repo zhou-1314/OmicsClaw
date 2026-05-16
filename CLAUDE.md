@@ -264,74 +264,70 @@ python omicsclaw.py run bulkrna-de --demo
 python omicsclaw.py run bulkrna-coexpression --demo
 ```
 
-## Bot Frontends (Telegram + Feishu)
+## Surfaces (Channel / Desktop / CLI)
 
-OmicsClaw includes dual-channel bot frontends in `bot/`:
+OmicsClaw's three user-facing entry points all live under `omicsclaw/surfaces/`
+and dispatch into the same agent loop (`omicsclaw.runtime.agent.state.llm_tool_loop`).
+See [ADR 0005](docs/adr/0005-surfaces-umbrella-for-ingress.md) and
+[`docs/CONTEXT.md`](docs/CONTEXT.md) §"Surfaces" for the architecture.
 
-| Component | File | Purpose |
-|---|---|---|
-| Shared core | `bot/core.py` | LLM tool-use loop, skill execution, security, audit |
-| Telegram | `bot/channels/telegram.py` | Telegram frontend (python-telegram-bot) |
-| Feishu | `bot/channels/feishu.py` | Feishu frontend (lark-oapi WebSocket) |
-| Persona | `SOUL.md` | OmicsBot persona (inspired by ClawBio) |
+| Surface | Code | Primary entry | Audience |
+|---|---|---|---|
+| **Channel Surface** | `omicsclaw/surfaces/channels/` | `python -m omicsclaw.surfaces.channels --channels <names>` | IM users (Telegram / Feishu / Slack / Discord / WeChat / WeCom / DingTalk / iMessage / Email / QQ) |
+| **Desktop Surface** | `omicsclaw/surfaces/desktop/` | `oc desktop-server --host 127.0.0.1 --port 8765` | OmicsClaw-App Electron / Next.js frontends |
+| **CLI Surface** | `omicsclaw/surfaces/cli/` | `oc interactive` (REPL) or `oc tui` (full-screen TUI) | Terminal users |
 
-### Running the bots
+### Channel Surface — IM bots
 
 ```bash
-# Telegram bot
-python -m bot.run --channels telegram
+# Single platform
+python -m omicsclaw.surfaces.channels --channels telegram
+python -m omicsclaw.surfaces.channels --channels feishu
 
-# Feishu bot
-python -m bot.run --channels feishu
+# Multiple platforms in one process
+python -m omicsclaw.surfaces.channels --channels telegram,feishu,slack
 
-# Or via Makefile
+# Makefile aliases
 make bot-telegram
 make bot-feishu
+
+# List available channel integrations
+python -m omicsclaw.surfaces.channels --list
 ```
 
-Required environment variables (in `.env`):
+Per-platform adapter files: `omicsclaw/surfaces/channels/<platform>.py`.
+The persona shared by all adapters is in `SOUL.md`. Configuration is via
+`.env` at the project root — see `omicsclaw/surfaces/channels/README.md`
+for the full per-platform variable list.
+
+Required env vars (typical Telegram + Feishu setup):
 - `LLM_API_KEY` — OpenAI-compatible API key
 - `LLM_BASE_URL` — LLM endpoint (if not OpenAI)
 - `TELEGRAM_BOT_TOKEN` — from @BotFather (Telegram only)
 - `FEISHU_APP_ID` + `FEISHU_APP_SECRET` — from Feishu dev console (Feishu only)
 
-### Bot skill routing
+Photos sent to a Channel are routed through tissue-section analysis (H&E,
+fluorescence, spatial barcodes); the bot identifies tissue type and
+staining method and suggests appropriate analysis skills.
 
-The bot routes to the same 16 skills as the CLI, using tool function calling:
-- `skill='preprocess'` — QC, normalization, HVG, PCA/UMAP, clustering
-- `skill='domains'` — tissue region/niche identification
-- `skill='auto'` — let the orchestrator detect the right skill
-- `mode='demo'` — run with built-in synthetic data
-- `mode='file'` — run with user-uploaded spatial data
-
-### Image handling
-
-Photos sent to the bot are analysed for tissue section content (H&E, fluorescence, spatial barcodes). The bot identifies the tissue type, staining method, and spatial platform, then suggests appropriate analysis skills.
-
-## Bot Integration (Telegram + Feishu)
-
-OmicsClaw includes dual-channel messaging bot frontends. Both share a common LLM-powered core engine.
-
-| User Intent | Component | Action |
-|---|---|---|
-| Telegram bot, chat interface, messaging | `bot/channels/telegram.py` | Run `python -m bot.run --channels telegram` |
-| Feishu bot, Lark bot, 飞书机器人 | `bot/channels/feishu.py` | Run `python -m bot.run --channels feishu` |
-
-### Bot Commands
+### Desktop Surface — FastAPI backend
 
 ```bash
-# Start Telegram bot
-python -m bot.run --channels telegram
-
-# Start Feishu bot
-python -m bot.run --channels feishu
-
-# Or via Makefile
-make bot-telegram
-make bot-feishu
+pip install -e ".[desktop]"
+oc desktop-server --host 127.0.0.1 --port 8765
 ```
 
-Configuration is via `.env` file at the project root. See `bot/README.md` for full setup.
+Serves chat streaming (SSE), skills, providers, MCP, outputs, bridge
+control, and memory proxy endpoints. Default bind is `127.0.0.1:8765`.
+
+### CLI Surface — terminal REPL + TUI
+
+```bash
+oc interactive              # prompt_toolkit REPL (default)
+oc tui                      # Textual full-screen TUI
+oc interactive --session <id>  # resume a saved session
+oc onboard                  # one-shot interactive setup wizard
+```
 
 ## Safety Rules
 

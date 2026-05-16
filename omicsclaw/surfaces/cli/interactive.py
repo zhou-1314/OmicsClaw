@@ -4,7 +4,7 @@ Provides a rich terminal chat interface powered by OmicsClaw's existing
 bot/core.py LLM engine (AsyncOpenAI + function calling).
 
 Usage:
-    from omicsclaw.interactive.interactive import run_interactive
+    from omicsclaw.surfaces.cli.interactive import run_interactive
     run_interactive()
 """
 

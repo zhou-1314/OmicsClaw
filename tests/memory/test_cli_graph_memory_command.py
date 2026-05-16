@@ -27,7 +27,7 @@ async def test_recall_on_empty_namespace_returns_clean_miss(
     isolated_memory_db, tmp_path
 ):
     """Tracer bullet: a recall against an empty graph reports a clean miss."""
-    from omicsclaw.interactive._memory_command_support import (
+    from omicsclaw.surfaces.cli._memory_command_support import (
         build_graph_memory_command_view,
     )
     from omicsclaw.memory import close_db, get_engine_db
@@ -50,7 +50,7 @@ async def test_recall_on_empty_namespace_returns_clean_miss(
 @pytest.mark.asyncio
 async def test_remember_then_recall_round_trip(isolated_memory_db, tmp_path):
     """`remember` writes to the workspace namespace; `recall` reads it back."""
-    from omicsclaw.interactive._memory_command_support import (
+    from omicsclaw.surfaces.cli._memory_command_support import (
         build_graph_memory_command_view,
     )
     from omicsclaw.memory import close_db, get_engine_db
@@ -80,7 +80,7 @@ async def test_remember_then_recall_round_trip(isolated_memory_db, tmp_path):
 @pytest.mark.asyncio
 async def test_recall_isolated_across_workspaces(isolated_memory_db, tmp_path):
     """Two different workspaces map to two namespaces — no cross-read."""
-    from omicsclaw.interactive._memory_command_support import (
+    from omicsclaw.surfaces.cli._memory_command_support import (
         build_graph_memory_command_view,
     )
     from omicsclaw.memory import close_db, get_engine_db
@@ -112,7 +112,7 @@ async def test_recall_isolated_across_workspaces(isolated_memory_db, tmp_path):
 @pytest.mark.asyncio
 async def test_search_finds_remembered_content(isolated_memory_db, tmp_path):
     """`search` returns FTS hits within the workspace namespace."""
-    from omicsclaw.interactive._memory_command_support import (
+    from omicsclaw.surfaces.cli._memory_command_support import (
         build_graph_memory_command_view,
     )
     from omicsclaw.memory import close_db, get_engine_db
@@ -138,7 +138,7 @@ async def test_search_finds_remembered_content(isolated_memory_db, tmp_path):
 @pytest.mark.asyncio
 async def test_remember_rejects_malformed_uri(isolated_memory_db, tmp_path):
     """A bad URI fails fast with an actionable error, not a stacktrace."""
-    from omicsclaw.interactive._memory_command_support import (
+    from omicsclaw.surfaces.cli._memory_command_support import (
         build_graph_memory_command_view,
     )
     from omicsclaw.memory import close_db, get_engine_db
@@ -160,7 +160,7 @@ async def test_remember_rejects_malformed_uri(isolated_memory_db, tmp_path):
 @pytest.mark.asyncio
 async def test_recall_missing_arg_shows_usage(isolated_memory_db, tmp_path):
     """`recall` with no URI prints usage rather than crashing."""
-    from omicsclaw.interactive._memory_command_support import (
+    from omicsclaw.surfaces.cli._memory_command_support import (
         build_graph_memory_command_view,
     )
     from omicsclaw.memory import close_db, get_engine_db
@@ -181,7 +181,7 @@ async def test_recall_missing_arg_shows_usage(isolated_memory_db, tmp_path):
 
 def test_bare_memory_help_lists_graph_subcommands(tmp_path):
     """Bare `/memory` help text mentions the new graph subcommands."""
-    from omicsclaw.interactive._memory_command_support import (
+    from omicsclaw.surfaces.cli._memory_command_support import (
         build_memory_command_view,
     )
 
