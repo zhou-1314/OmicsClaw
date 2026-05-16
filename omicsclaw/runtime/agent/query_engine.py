@@ -517,6 +517,110 @@ def _is_new_pathology(signal: PathologySignal, state: LoopState) -> bool:
     return (last.kind, last.tool_name) != (signal.kind, signal.tool_name)
 
 
+async def _call_llm_with_reactive_compact_retry(
+    *,
+    llm,
+    context: QueryEngineContext,
+    tool_runtime: ToolRuntime,
+    config: QueryEngineConfig,
+    callbacks: QueryEngineCallbacks,
+    system_prompt: str,
+    history: list,
+    request_system_prompt: str,
+    request_messages: list,
+    transcript_store: TranscriptStore,
+    tool_result_store: ToolResultStore,
+    compaction_metadata: dict | None,
+    compaction_workspace: str | None,
+    on_usage_delta,
+    has_attempted_reactive_compact: bool,
+) -> tuple["MaterializedMessage", bool]:
+    """One LLM turn with on-demand reactive compaction (ADR 0008 L1).
+
+    Returns the materialised assistant message plus the (possibly flipped)
+    ``has_attempted_reactive_compact`` flag. Raises the underlying LLM
+    error if reactive compaction cannot recover; the caller is
+    responsible for routing the exception through ``on_llm_error``.
+    """
+    while True:
+        kwargs = {}
+        if callbacks.on_stream_content is not None:
+            kwargs = {"stream": True, "stream_options": {"include_usage": True}}
+        if config.extra_api_params:
+            kwargs.update(config.extra_api_params)
+
+        try:
+            # Phase 1 (tool-list-compression): use per-request tool
+            # list when caller provided one (via
+            # ``QueryEngineContext.request_tools``). Falls back to
+            # the full registry payload for backward compatibility.
+            request_tools = (
+                list(context.request_tools)
+                if context.request_tools is not None
+                else list(tool_runtime.openai_tools)
+            )
+            response = await llm.chat.completions.create(
+                model=config.model,
+                max_tokens=config.max_tokens,
+                messages=[{"role": "system", "content": request_system_prompt}]
+                + request_messages,
+                tools=request_tools,
+                **kwargs,
+            )
+            last_message = await _materialize_message(
+                response,
+                callbacks,
+                on_usage_delta=on_usage_delta,
+            )
+            return last_message, has_attempted_reactive_compact
+        except config.llm_error_types as exc:
+            if not (
+                not has_attempted_reactive_compact
+                and config.context_compaction.enabled
+                and _is_prompt_too_long_error(exc)
+            ):
+                raise
+
+            reactive_pre_chars = sum(estimate_message_size(m) for m in history)
+            reactive_messages = prepare_model_messages(
+                system_prompt=system_prompt,
+                history=history,
+                chat_id=context.chat_id,
+                tool_result_store=tool_result_store,
+                config=config.context_compaction,
+                metadata=compaction_metadata,
+                workspace=compaction_workspace,
+                force_reactive_compact=True,
+            )
+            has_attempted_reactive_compact = True
+            if reactive_messages.applied_stages and (
+                reactive_messages.system_prompt != request_system_prompt
+                or reactive_messages.messages != request_messages
+            ):
+                request_system_prompt = reactive_messages.system_prompt
+                request_messages = reactive_messages.messages
+                if config.deepseek_reasoning_passback:
+                    request_messages = apply_deepseek_reasoning_passback(
+                        request_messages
+                    )
+                _persist_prepared_compaction(
+                    transcript_store=transcript_store,
+                    chat_id=context.chat_id,
+                    prepared_messages=reactive_messages,
+                )
+                if callbacks.on_context_compacted:
+                    await _emit_compaction_event(
+                        callbacks=callbacks,
+                        pre_chars=reactive_pre_chars,
+                        post_chars=reactive_messages.estimated_chars,
+                        history_len=len(history),
+                        kept_len=len(reactive_messages.messages),
+                        applied_stages=reactive_messages.applied_stages,
+                    )
+                continue
+            raise
+
+
 async def run_query_engine(
     *,
     llm,
@@ -621,83 +725,25 @@ async def run_query_engine(
                 applied_stages=prepared_messages.applied_stages,
             )
         try:
-            while True:
-                kwargs = {}
-                if callbacks.on_stream_content is not None:
-                    kwargs = {"stream": True, "stream_options": {"include_usage": True}}
-                if config.extra_api_params:
-                    kwargs.update(config.extra_api_params)
-
-                try:
-                    # Phase 1 (tool-list-compression): use per-request tool
-                    # list when caller provided one (via
-                    # ``QueryEngineContext.request_tools``). Falls back to
-                    # the full registry payload for backward compatibility.
-                    request_tools = (
-                        list(context.request_tools)
-                        if context.request_tools is not None
-                        else list(tool_runtime.openai_tools)
-                    )
-                    response = await llm.chat.completions.create(
-                        model=config.model,
-                        max_tokens=config.max_tokens,
-                        messages=[{"role": "system", "content": request_system_prompt}]
-                        + request_messages,
-                        tools=request_tools,
-                        **kwargs,
-                    )
-                    last_message = await _materialize_message(
-                        response,
-                        callbacks,
-                        on_usage_delta=_observe_usage_delta,
-                    )
-                    break
-                except config.llm_error_types as exc:
-                    if not (
-                        not has_attempted_reactive_compact
-                        and config.context_compaction.enabled
-                        and _is_prompt_too_long_error(exc)
-                    ):
-                        raise
-
-                    reactive_pre_chars = sum(estimate_message_size(m) for m in history)
-                    reactive_messages = prepare_model_messages(
-                        system_prompt=system_prompt,
-                        history=history,
-                        chat_id=context.chat_id,
-                        tool_result_store=tool_result_store,
-                        config=config.context_compaction,
-                        metadata=compaction_metadata,
-                        workspace=compaction_workspace,
-                        force_reactive_compact=True,
-                    )
-                    has_attempted_reactive_compact = True
-                    if reactive_messages.applied_stages and (
-                        reactive_messages.system_prompt != request_system_prompt
-                        or reactive_messages.messages != request_messages
-                    ):
-                        request_system_prompt = reactive_messages.system_prompt
-                        request_messages = reactive_messages.messages
-                        if config.deepseek_reasoning_passback:
-                            request_messages = apply_deepseek_reasoning_passback(
-                                request_messages
-                            )
-                        _persist_prepared_compaction(
-                            transcript_store=transcript_store,
-                            chat_id=context.chat_id,
-                            prepared_messages=reactive_messages,
-                        )
-                        if callbacks.on_context_compacted:
-                            await _emit_compaction_event(
-                                callbacks=callbacks,
-                                pre_chars=reactive_pre_chars,
-                                post_chars=reactive_messages.estimated_chars,
-                                history_len=len(history),
-                                kept_len=len(reactive_messages.messages),
-                                applied_stages=reactive_messages.applied_stages,
-                            )
-                        continue
-                    raise
+            last_message, has_attempted_reactive_compact = (
+                await _call_llm_with_reactive_compact_retry(
+                    llm=llm,
+                    context=context,
+                    tool_runtime=tool_runtime,
+                    config=config,
+                    callbacks=callbacks,
+                    system_prompt=system_prompt,
+                    history=history,
+                    request_system_prompt=request_system_prompt,
+                    request_messages=request_messages,
+                    transcript_store=transcript_store,
+                    tool_result_store=tool_result_store,
+                    compaction_metadata=compaction_metadata,
+                    compaction_workspace=compaction_workspace,
+                    on_usage_delta=_observe_usage_delta,
+                    has_attempted_reactive_compact=has_attempted_reactive_compact,
+                )
+            )
         except config.llm_error_types as exc:
             if callbacks.on_llm_error is not None:
                 return await _maybe_await(callbacks.on_llm_error(exc))
