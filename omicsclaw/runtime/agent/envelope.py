@@ -11,6 +11,7 @@ mutating an envelope after dispatch starts) fails loudly.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -39,3 +40,16 @@ class MessageEnvelope:
     usage_accumulator: Any = None
     request_tool_approval: Any = None
     policy_state: Any = None
+
+    cancel_event: threading.Event | None = None
+    """Set by the Surface to request mid-flight cancellation (ADR 0009).
+
+    The dataclass is frozen, but ``threading.Event`` is a mutable
+    object — only its internal flag changes via ``.set()``, never
+    the field's reference. This preserves the frozen contract
+    (no reassignment) while allowing the live cancel signal.
+
+    ``None`` means cancellation is not wired by the calling Surface
+    (today: Channel Surface). The dispatch chain treats ``None`` as
+    "never cancelled" and skips all cancel-check logic.
+    """
