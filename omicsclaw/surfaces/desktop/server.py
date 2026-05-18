@@ -323,6 +323,12 @@ def _build_thinking_extra_body(
 
 # Maps session_id -> asyncio.Task running dispatch() per ADR 0006
 _active_sessions: dict[str, asyncio.Task] = {}
+# ADR 0009 — parallel registry of MessageEnvelopes keyed by session_id.
+# ``/chat/abort`` sets the envelope's ``cancel_event`` *before* cancelling
+# the task so the SIGTERM signal reaches the skill subprocess via
+# ``tool_runtime_context["cancel_event"]`` → ``run_skill(cancel_event=…)``
+# instead of stopping at the outer asyncio CancelledError boundary.
+_active_envelopes: dict[str, Any] = {}
 _pending_permission_requests: dict[str, dict[str, Any]] = {}
 _session_policy_states: dict[str, ToolPolicyState] = {}
 _session_permission_profiles: dict[str, str] = {}
@@ -464,10 +470,16 @@ async def lifespan(app: FastAPI):
         _channel_manager = None
         _bridge_task = None
 
-    # Shutdown: cancel any active sessions
+    # Shutdown: cancel any active sessions (ADR 0009 — set cancel_event
+    # first so subprocesses get SIGTERM'd through subprocess_driver, not
+    # just stranded as orphans of the cancelled asyncio Task).
+    for sid, envelope in list(_active_envelopes.items()):
+        if envelope is not None and envelope.cancel_event is not None:
+            envelope.cancel_event.set()
     for task in _active_sessions.values():
         task.cancel()
     _active_sessions.clear()
+    _active_envelopes.clear()
 
     if _NOTEBOOK_AVAILABLE:
         try:
@@ -1798,6 +1810,12 @@ async def chat_stream(req: ChatRequest):
                 ToolResult as _DispatchToolResult,
             )
 
+            # ADR 0009 — wire a per-session cancel_event. ``/chat/abort``
+            # will set this before cancelling the task so the SIGTERM
+            # signal reaches subprocess_driver._cancel_watcher.
+            import threading as _threading
+
+            cancel_event = _threading.Event()
             envelope = MessageEnvelope(
                 chat_id=session_id,
                 content=user_content,
@@ -1815,7 +1833,9 @@ async def chat_stream(req: ChatRequest):
                 max_tokens_override=max_tokens_override,
                 system_prompt_append=req.system_prompt_append,
                 mode=req.mode,
+                cancel_event=cancel_event,
             )
+            _active_envelopes[session_id] = envelope
 
             result = ""
             async for event in dispatch(envelope):
@@ -1898,6 +1918,7 @@ async def chat_stream(req: ChatRequest):
             tool_progress_tasks.clear()
             await queue.put(_DONE)
             _active_sessions.pop(session_id, None)
+            _active_envelopes.pop(session_id, None)
 
     # ---- SSE generator ----
 
@@ -1927,6 +1948,7 @@ async def chat_stream(req: ChatRequest):
             yield _sse_done()
         finally:
             _active_sessions.pop(session_id, None)
+            _active_envelopes.pop(session_id, None)
 
     return StreamingResponse(
         event_generator(),
@@ -1945,12 +1967,26 @@ async def chat_stream(req: ChatRequest):
 
 @app.post("/chat/abort")
 async def chat_abort(req: AbortRequest):
-    """Cancel a running dispatch() session."""
+    """Cancel a running dispatch() session.
+
+    Per ADR 0009, set the envelope's ``cancel_event`` *before* cancelling
+    the task so the SIGTERM signal propagates through
+    ``tool_runtime_context["cancel_event"]`` to
+    ``subprocess_driver._cancel_watcher`` — otherwise ``task.cancel()``
+    only raises ``CancelledError`` at the outermost await in dispatch()
+    and the skill subprocess keeps running in its detached process group.
+    """
     task = _active_sessions.get(req.session_id)
     if task is None:
         raise HTTPException(404, detail="No active session with that ID")
+
+    envelope = _active_envelopes.get(req.session_id)
+    if envelope is not None and envelope.cancel_event is not None:
+        envelope.cancel_event.set()
+
     task.cancel()
     _active_sessions.pop(req.session_id, None)
+    _active_envelopes.pop(req.session_id, None)
     return {"status": "aborted", "session_id": req.session_id}
 
 
