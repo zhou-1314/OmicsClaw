@@ -9,9 +9,8 @@ Accepted (2026-05-18).
 A grilling session on 2026-05-18 (`/grill-with-docs`, 9 rounds) examined
 whether SACCELERATOR's expert-in-the-loop consensus methodology
 (`/home/weige/project/repo_learn/SACCELERATOR`) could be lifted into
-OmicsClaw as a cross-omics paradigm, drawing the sub-agent runtime from
-CellClaw (`/home/weige/project/repo_learn/cellclaw_source/agent/subagent_runtime.py`,
-`subagent_team_runtime.py`).
+OmicsClaw as a cross-omics paradigm, with an in-process sub-agent
+runtime layered underneath.
 
 The session surfaced three findings that together cross the "real
 concern emerged" bar for a new architectural layer:
@@ -67,19 +66,20 @@ Three rejected alternatives are worth remembering:
   contract that landed three days ago (ADR 0006), and because no
   Surface today needs fan-out as a first-class concept.
 
-### Why not import CellClaw's full SubagentRuntime
+### Why not "complete LLM agent per member"
 
-CellClaw's `SubagentRuntime` (`agent/subagent_runtime.py:29-120+`)
-assumes each member is a **complete LLM agent** with a prompt loop,
-tool-use, `AgentProfile`, and up to 12 iterations. For categorical
-consensus v1 each member is deterministic — `python spatial_domains.py
---method <X> --output <dir>` produces a fixed-schema `labels.tsv` and
-exits. Per-member LLM cost ×N is wasted; the only valuable parts of
-CellClaw's runtime are the `asyncio.gather(_run_member)` parallel
-skeleton (~50 lines) and the `cancel_event` propagation pattern.
-Both can be lifted as **inspiration**, not as a vendored dependency.
+An alternative subagent runtime pattern would treat each member as a
+**complete LLM agent** with a prompt loop, tool-use, and per-member
+agent profile / iteration budget. For categorical consensus v1 every
+member is deterministic — `python spatial_domains.py --method <X>
+--output <dir>` produces a fixed-schema `labels.tsv` and exits.
+Per-member LLM cost ×N is wasted; the only valuable parts of an
+external sub-agent runtime are the `asyncio.gather(_run_member)`
+parallel skeleton (~50 lines) and the `cancel_event` propagation
+pattern. Both can be lifted as **inspiration**, not as a vendored
+dependency.
 
-### Why not the CellClaw `Gateway → Redis → Worker → EventBus` pipeline
+### Why not a `Gateway → Redis → Worker → EventBus` pipeline
 
 ADR 0003 and ADR 0006 §3 already rejected this shape twice for being
 "speculative infrastructure that no caller required" on a single-machine
@@ -157,8 +157,9 @@ both paths but does different jobs).
 **Consensus member**:
 A `(skill, params, expected_artifact, intrinsic_quality_key)` tuple
 representing one fan-out target. Each member runs as a deterministic
-skill subprocess; not a CellClaw-style LLM sub-agent.
-_Avoid_: "sub-agent" (overloaded with CellClaw's LLM-agent connotation).
+skill subprocess; not an LLM sub-agent.
+_Avoid_: "sub-agent" (overloaded with the LLM-agent connotation common
+in other agent frameworks).
 
 **Evaluation chair**:
 The LLM role responsible for (i) picking which members to fan out
@@ -200,7 +201,7 @@ _Avoid_: collapsing the two; using `analysis://` without a sub-prefix.
 | Operator language | kmode + weighted in Python (scipy); LCA via R subprocess (port from SACCELERATOR) |
 | Failure semantics | <2 surviving members → error; ≥2 → continue and annotate "N/M members failed" |
 | Concurrency | `max_parallel = min(N, os.cpu_count() // 2, 4)` |
-| Per-member timeout | 600s (inherited from CellClaw default) |
+| Per-member timeout | 600s |
 | Cancellation | `envelope.cancel_event` from ADR 0009 propagates into `team.run()` and on into each subprocess via `skill.runner.run_skill()` |
 | Failure → B fallback | **Off**. A path is allowed to fail loudly; never silently downgrade to narrative |
 | Output banner | Reports start with `[A: Verified consensus]` or `[B: Exploratory synthesis — NOT statistical consensus]`; not configurable |
@@ -236,8 +237,8 @@ _Avoid_: collapsing the two; using `analysis://` without a sub-prefix.
   research finding requires diceR-fidelity.
 - LCA path adds an R subprocess dependency (3-5s cold start). Mitigated
   by being the rare-path operator — kmode and weighted are pure Python.
-- CellClaw's `SubagentRuntime` is inspiration, not vendored — we own
-  ~50 lines of asyncio.gather skeleton.
+- External sub-agent runtimes were considered as inspiration, not
+  vendored — we own ~50 lines of asyncio.gather skeleton outright.
 - Desktop and Channel Surfaces lose the interactive post-run BC picker
   in v1 (they fall back to top-K by score). v1.x will add this back
   via a new `consensus_plan_proposed` dispatch event type per ADR 0006.

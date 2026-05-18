@@ -1,7 +1,7 @@
 """Consensus member — one ``(skill, params)`` fan-out target.
 
-A member is a *deterministic skill subprocess*, not a CellClaw-style LLM
-sub-agent. The fan-out runtime (``team.py``) invokes ``skill.runner.run_skill``
+A member is a *deterministic skill subprocess* — NOT an LLM sub-agent.
+The fan-out runtime (``team.py``) invokes ``skill.runner.run_skill``
 once per member; cancel_event propagates via the existing ADR 0009 chain
 (threading.Event → killpg).
 """

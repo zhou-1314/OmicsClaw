@@ -233,7 +233,7 @@ Error              # 异常
 
 ### 4.3 设计意图
 
-ADR 0006 在 ACP（CellClaw 用的 JSON-RPC 线协议）和"typed Python events"之间选了后者。**理由**：OmicsClaw 没有第三方 IDE 客户端接入需求；类型化事件让三个 surface 各自挑需要的事件渲染，**无需协议版本协商**。
+ADR 0006 在第三方 JSON-RPC 线协议（如 ACP）和"typed Python events"之间选了后者。**理由**：OmicsClaw 没有第三方 IDE 客户端接入需求；类型化事件让三个 surface 各自挑需要的事件渲染，**无需协议版本协商**。
 
 ---
 
@@ -365,7 +365,7 @@ class QueryEngineCallbacks:
     on_pathology_signal:  Callable[[PathologySignal], Any] | None
 ```
 
-ADR 0007 / 0008 选择**组合**（这个 dataclass）而非**继承**（CellClaw 的 Template Method），核心论据：OmicsClaw 只有单一执行模式，子类层级没有承载需求。
+ADR 0007 / 0008 选择**组合**（这个 dataclass）而非**继承**（Template Method 风格的类层级备选），核心论据：OmicsClaw 只有单一执行模式，子类层级没有承载需求。
 
 ### 6.6 `parameter_loop.py`（preflight 参数补全）
 
@@ -376,7 +376,7 @@ _parse_preflight_reply, _preflight_payload_needs_reply,
 _remember_pending_preflight_request
 ```
 
-skill 在执行前如果发现关键参数缺失，会先 emit "需要确认的参数"，转化为 LLM 的下一轮提示，等用户回答后再实际执行。这是 OmicsClaw 的 **clarification-as-tool-result** 模式实现（ADR 0007 §"Already present"指出这等价于 CellClaw 的 `DecisionType.ASK_USER`）。
+skill 在执行前如果发现关键参数缺失，会先 emit "需要确认的参数"，转化为 LLM 的下一轮提示，等用户回答后再实际执行。这是 OmicsClaw 的 **clarification-as-tool-result** 模式实现（ADR 0007 §"Already present" 指出这等价于其他 agent 框架里常见的 `ASK_USER` 决策类型）。
 
 ---
 
@@ -849,10 +849,10 @@ tests/runtime/consensus/
 | 0004  | boundary-restructure-fold-bot           | Accepted | 把 bot/ 折叠进 surfaces/channels/ 与 runtime/，消除 bot 边界                                                     |
 | 0005  | surfaces-umbrella-for-ingress           | Accepted | CLI / Desktop / Channels 三个 surface 统一在 `surfaces/` 雨伞下                                                |
 | 0006  | agent-dispatch-event-stream             | Accepted | `dispatch(envelope) → AsyncIterator[Event]`；用 typed events 代替 ACP 线协议；关闭 Redis queue / worker 路径       |
-| 0007  | loop-state-and-pathology-detection      | Accepted | 引入 `LoopState` + `loop_pathology.detect()`（从 CellClaw 借鉴）；显式拒绝 CellClaw 的类层级、DecisionType、worker queue |
+| 0007  | loop-state-and-pathology-detection      | Accepted | 引入 `LoopState` + `loop_pathology.detect()`（参考外部 agent runtime 实现）；显式拒绝复杂类层级、DecisionType enum、跨进程 worker queue |
 | 0008  | decompose-run-query-engine-into-helpers | Accepted | 把 `run_query_engine` 491 行 body 拆成主体 ~250 行 + 4 个 `_`-前缀 helper                                        |
 | 0009  | wire-cancel-event-through-dispatch      | Accepted | `MessageEnvelope.cancel_event`（`threading.Event`）从 dispatch 一路串到 `skill.runner.run_skill` 的 `killpg` 链 |
-| 0010  | consensus-runtime-layer                 | Accepted | 引入 `runtime/consensus/`；typed-then-narrative 双路径；in-process asyncio fan-out（**拒绝** cellclaw Gateway/queue/worker） |
+| 0010  | consensus-runtime-layer                 | Accepted | 引入 `runtime/consensus/`；typed-then-narrative 双路径；in-process asyncio fan-out（**拒绝**跨进程 Gateway / queue / worker 四层模型） |
 | 0011  | consensus-evaluation-protocol           | Accepted (amended) | 复合 BC 分数 + DLPFC 151673 hero benchmark + self-consistency；2026-05-18 amend：task-targeted metric panel（ARI 单 metric → 4 hard + 4 report-only）|
 
 
@@ -911,7 +911,7 @@ tests/runtime/consensus/
 
 ### 11.3 与同类 system 的对比
 
-| | **SACCELERATOR** | **nichecompass benchmarking** | **cellclaw `SubagentTeam`** | **OmicsClaw consensus** |
+| | **SACCELERATOR** | **nichecompass benchmarking** | **通用 LLM sub-agent fan-out 框架** | **OmicsClaw consensus** |
 |---|---|---|---|---|
 | **应用范畴** | spatial clustering only | spatial latent representation 基准 | LLM sub-agent fan-out（通用 agent runtime） | spatial + sc clustering（v2 DE / v3 intervals） |
 | **共识算法** | iterative R: `diceR::k_modes` + LCA + EnSDD | N/A（评测工具） | LLM-based narrative synthesis | typed: Python kmode / weighted + R LCA；B 路径：narrative |
@@ -919,7 +919,7 @@ tests/runtime/consensus/
 | **评估面板** | 17 R-only metrics（全跑） | 10 multi-axis（CAS/MLAMI/CLISIS/GCS/NASW/+batch）| N/A | **task-targeted**：hero panel = ARI+AMI+V+MLAMI；self-consistency = AMI；BC ranking = α·NMI+β·intrinsic |
 | **LLM 在范式中** | 不用 | 不用 | LLM 是整个 sub-agent，包括统计 | LLM 只在两端（plan + narrate），统计交确定性 operator |
 | **验证 vs 探索 边界** | 隐式 | 隐式（只评测，不混结果）| 隐式 | **显式 banner + namespace** |
-| **跨进程 vs in-process** | R 子进程链 | Python in-process | Redis queue / worker 多进程 | in-process asyncio.gather（ADR 0010 明确**拒绝** cellclaw 跨进程） |
+| **跨进程 vs in-process** | R 子进程链 | Python in-process | Redis queue / worker 多进程 | in-process asyncio.gather（ADR 0010 明确**拒绝**跨进程模型） |
 | **可扩展性** | R 模块化（dataset / method / metric 三类）| 评测函数级别 | 任意 sub-agent | TYPED_CONSENSUS_REGISTRY allowlist + thin skill 模板 |
 
 ### 11.4 关键技术选型（带"为什么不"）
@@ -954,9 +954,9 @@ BC ranking (无 GT):
 
 **为什么**：与 SACCELERATOR R operator 走 vendor 同一 pattern（ADR 0010）。default install 不膨胀；用户随时可以 `pip install nichecompass` 自己跑原版做交叉验证。
 
-#### 11.4.4 fan-out 走 in-process `asyncio.gather`，**不**用 cellclaw 跨进程
+#### 11.4.4 fan-out 走 in-process `asyncio.gather`，**不**用跨进程队列模型
 
-ADR 0010 + 0006 + 0003 三次重申拒绝 cellclaw 的 `Gateway → Redis → Worker → EventBus` 四层进程模型。**为什么**：OmicsClaw 是**单机单用户研究工具**（CLAUDE.md §Safety Rules: 基因数据不出本机）。跨进程伸缩 / 持久队列 / 多租户调度都不是要解决的问题。in-process asyncio + `Semaphore` 并发预算（`min(N, cpu//2, 4)`）就够。
+ADR 0010 + 0006 + 0003 三次重申拒绝 `Gateway → Redis → Worker → EventBus` 四层跨进程模型。**为什么**：OmicsClaw 是**单机单用户研究工具**（CLAUDE.md §Safety Rules: 基因数据不出本机）。跨进程伸缩 / 持久队列 / 多租户调度都不是要解决的问题。in-process asyncio + `Semaphore` 并发预算（`min(N, cpu//2, 4)`）就够。
 
 #### 11.4.5 Per-member timeout **不**广播 `cancel_event`（C1 fix）
 

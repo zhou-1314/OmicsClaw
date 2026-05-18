@@ -1,10 +1,10 @@
 """Consensus team runtime — parallel skill-subprocess fan-out.
 
-Adapted from the asyncio.gather pattern in CellClaw's ``SubagentTeamRuntime``
-(``cellclaw/agent/subagent_team_runtime.py``); ~50 lines of inspiration, not
-a vendored dependency. Each member is a deterministic
-``omicsclaw.skill.runner.run_skill`` call, NOT an LLM sub-agent. Cancellation
-flows via the ADR 0009 ``threading.Event`` chain straight into killpg.
+In-process ``asyncio.gather`` orchestration of N independent skill
+subprocesses, ~50 lines of dedicated runtime code. Each member is a
+deterministic ``omicsclaw.skill.runner.run_skill`` call, NOT an LLM
+sub-agent. Cancellation flows via the ADR 0009 ``threading.Event`` chain
+straight into killpg.
 """
 
 from __future__ import annotations
