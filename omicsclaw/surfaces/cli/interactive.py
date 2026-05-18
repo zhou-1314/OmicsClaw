@@ -1514,6 +1514,14 @@ async def _stream_llm_response(
                     ToolResult as _DispatchToolResult,
                 )
 
+                # ADR 0009 — wire a per-turn cancel_event. The ESC/Ctrl+C
+                # watcher below sets this before cancelling the dispatch
+                # task so the SIGTERM signal propagates through
+                # tool_runtime_context → run_skill → subprocess_driver,
+                # killing the skill process group instead of orphaning it.
+                import threading as _threading
+
+                cancel_event = _threading.Event()
                 envelope = MessageEnvelope(
                     chat_id=_INTERACTIVE_USER,
                     content=user_text,
@@ -1525,6 +1533,7 @@ async def _stream_llm_response(
                     mcp_servers=active_mcp_servers,
                     scoped_memory_scope=scoped_memory_scope or "",
                     output_style=output_style or "",
+                    cancel_event=cancel_event,
                 )
 
                 async def _consume_dispatch_stream() -> str:
@@ -1586,7 +1595,13 @@ async def _stream_llm_response(
                 done, pending = await asyncio.wait([llm_task, watcher_task], return_when=asyncio.FIRST_COMPLETED)
 
                 if watcher_task in done and watcher_task.result() is True:
-                    # User interrupted via ESC or Ctrl+C
+                    # User interrupted via ESC or Ctrl+C.
+                    # ADR 0009 — set cancel_event before cancelling the
+                    # task. Cancelling alone stops the dispatch coroutine
+                    # at its next await, not the skill subprocess in its
+                    # own process group; the event reaches that subprocess
+                    # via tool_runtime_context -> run_skill.
+                    cancel_event.set()
                     llm_task.cancel()
                     try:
                         await llm_task
