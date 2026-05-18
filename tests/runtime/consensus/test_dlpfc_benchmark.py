@@ -22,13 +22,35 @@ _EXPECTED = _BENCH_DIR / "expected_metrics.json"
 
 
 def test_expected_metrics_json_is_well_formed() -> None:
+    """ADR 0011 task-targeted panel schema:
+
+    - ``hard_metrics``: list of entries, each with ``name``, ``rule``,
+      ``noise_floor``, optional ``min_absolute``, optional ``applies_to``
+      in ``{"all", "spatial_only"}``.
+    - ``report_only_metrics``: list of metric names computed but not gated.
+    - ``pass_rule``: currently always ``"all_hard_pass"``.
+    """
     data = json.loads(_EXPECTED.read_text())
-    assert "consensus_ari_noise_floor" in data
-    assert "consensus_ari_min_absolute" in data
     assert "members_required" in data
     assert "operator" in data
     assert set(data["members_required"]) >= {"banksy", "graphst", "sedr", "leiden", "spagcn"}
-    assert 0 < float(data["consensus_ari_noise_floor"]) < 0.2
+
+    assert "hard_metrics" in data and isinstance(data["hard_metrics"], list)
+    hard_names = {entry["name"] for entry in data["hard_metrics"]}
+    # Task-targeted base panel; spatial path adds MLAMI.
+    assert {"ARI", "AMI", "V_measure"}.issubset(hard_names)
+    assert "MLAMI" in hard_names, "spatial path must include MLAMI as a hard metric"
+
+    for entry in data["hard_metrics"]:
+        assert entry["rule"] == "noise_floor"
+        assert 0.0 < float(entry["noise_floor"]) < 0.2
+        assert "applies_to" in entry and entry["applies_to"] in {"all", "spatial_only"}
+
+    assert "report_only_metrics" in data and isinstance(data["report_only_metrics"], list)
+    # H + C must be present for over-merge/over-split diagnosis.
+    assert {"Homogeneity", "Completeness"}.issubset(set(data["report_only_metrics"]))
+
+    assert data.get("pass_rule") == "all_hard_pass"
 
 
 def test_dry_run_succeeds_without_network() -> None:

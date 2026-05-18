@@ -2,7 +2,11 @@
 
 ## Status
 
-Accepted (2026-05-18).
+Accepted (2026-05-18). Amended (2026-05-18) per the metric-panel
+grilling session: ARI alone is task-targeted-replaced by a panel
+(ARI + AMI + V-measure + MLAMI for spatial), self-consistency moved
+from ARI to AMI, ported MLAMI/CHAOS/PAS added to the runtime layer.
+See "Metric panel rationale" below.
 
 ## Context
 
@@ -139,6 +143,119 @@ published tables), making divergence easy to detect.
 - Does **not** publish updated weights or a learned scoring model.
   α/β stay at SACCELERATOR's published defaults until a v2
   ablation study justifies otherwise.
+
+## Metric panel rationale (amendment, 2026-05-18)
+
+A code-review pass surfaced that the v1 evaluation contract leaned on
+**ARI alone** in three distinct places — DLPFC hero benchmark assertion,
+self-consistency stability check, and the implied "score" the LLM
+evaluation chair narrates. ARI has well-documented biases (preference
+for few clusters, no over-merge / over-split signal, no spatial
+awareness), and SACCELERATOR itself ships 17 metrics rather than one.
+
+We adopt a **task-targeted** metric policy: the metric panel at each
+use-site is the smallest set that covers what *that* axis is asking.
+
+### Three axes, three metric sets
+
+| Use site                    | What axis it measures           | Has GT? | Metric set                                                 |
+|---                          |---                              |---      |---                                                         |
+| **DLPFC hero benchmark**    | Agreement with truth + structure| ✓       | ARI + AMI + V (+ MLAMI for spatial); H, C, CHAOS, PAS report-only |
+| **Self-consistency test**   | Stability across seeds          | ✗       | AMI (chance-corrected; ARI reserved for GT axis)           |
+| **Composite member score**  | Member quality for BC ranking   | ✗       | α·cross_NMI + β·intrinsic — unchanged (already 2-axis)     |
+
+The hero benchmark is the only place a panel-and-AND-pass-rule
+applies. Self-consistency and member-score both target a single
+deterministic signal at a time.
+
+### Why this exact hero-benchmark panel
+
+Three of the four hard metrics (ARI, AMI, V-measure) are sklearn
+one-liners that are zero-cost to compute and cover three distinct
+concerns:
+
+- **ARI** — most-cited spatial-clustering metric; keep for community
+  comparability with BANKSY / GraphST / SEDR / SpaGCN reports.
+- **AMI** — chance-corrected mutual information; the de-biased
+  ARI/NMI replacement. Less sensitive to cluster count than ARI.
+- **V-measure** — harmonic mean of homogeneity (H) and completeness (C).
+  H and C are exposed report-only so a failure direction (over-merge
+  vs over-split) is immediately legible.
+
+The fourth, **MLAMI**, is the spatial-only addition: it builds a
+spatial k-NN graph, runs Leiden at multiple resolutions, and reports
+the maximum AMI between the consensus labels and those spatial-graph
+clusterings. Unlike CHAOS/PAS (1-hop only), MLAMI captures multi-scale
+spatial coherence. Importantly, it is **unsupervised** — it does not
+require the GT annotation, so it cross-checks consensus quality
+against the spatial signal even when the GT itself is biased
+(SACCELERATOR's published concern about DLPFC layer annotations).
+
+CHAOS and PAS join the report-only diagnostic set: 1-hop spatial
+agreement aggregates that complement MLAMI's multi-scale view.
+
+### Why each metric is hard vs report-only
+
+| Metric        | Tier         | Why                                                                                      |
+|---            |---           |---                                                                                       |
+| ARI           | hard         | Community baseline; PR must not silently regress it.                                     |
+| AMI           | hard         | De-biased replacement for ARI; must not regress.                                         |
+| V_measure     | hard         | Composite of H+C; sensitive to both directions of failure.                               |
+| MLAMI         | hard (spatial)| Multi-scale spatial coherence; unsupervised so GT bias does not influence pass.         |
+| Homogeneity   | report-only  | Diagnostic — exposes over-merge direction when consensus disagrees with GT.              |
+| Completeness  | report-only  | Diagnostic — exposes over-split direction.                                               |
+| CHAOS         | report-only  | 1-hop label agreement; useful for spotting salt-and-pepper outputs.                      |
+| PAS           | report-only  | 1-hop abnormal-spot fraction; complement to CHAOS.                                       |
+
+AND across the four hard metrics is the pass rule. K-of-N voting
+would only mask regressions: the four hard metrics are correlated
+enough that a genuinely better consensus passes all four, while a
+regression usually breaks several together.
+
+### Why ported, not depended-on
+
+MLAMI is ported from **nichecompass v1.x** (Sebastian Birk · Carlos
+Talavera-López · Mohammad Lotfollahi, BSD 3-Clause) and CHAOS/PAS are
+SACCELERATOR-equivalent Python re-implementations. We **do not** add
+``nichecompass[benchmarking]`` as a dependency because it pulls jax /
+mlflow / scib-metrics transitively. The port lives in a single new
+file ``omicsclaw/runtime/consensus/spatial_metrics.py`` (~150 lines
+including attribution), depends only on numpy / scipy / scanpy /
+sklearn (already in the OmicsClaw core), and preserves the BSD-3
+copyright notice + disclaimer per redistribution clauses.
+
+This mirrors the same pattern used for SACCELERATOR's R consensus
+operators in ADR 0010 (vendor + attribute, do not depend).
+
+### Updated test matrix
+
+The test files that anchor this contract are unchanged in identity but
+their assertions tighten:
+
+| File                          | Asserts                                                                                                                                                                                          |
+|---                            |---                                                                                                                                                                                               |
+| `test_alignment.py`           | (unchanged) Hungarian permutation recovery on hand-constructed inputs.                                                                                                                            |
+| `test_categorical_operators.py` | (unchanged) Deterministic kmode/weighted output on synthetic inputs; tiebreak is deterministic earliest-column wins; `seed` is traceability-only for these two operators.                       |
+| `test_member_scoring.py`      | (unchanged) Class-imbalance hard filter; α/β weighting; mismatched-shape sibling raises ValueError.                                                                                              |
+| `test_team_runtime.py`        | (unchanged) Per-member timeout does not cascade-cancel siblings; cancel_event propagates only on real user cancel.                                                                                |
+| `test_spatial_metrics.py`     | **new** — MLAMI/CHAOS/PAS on synthetic data: perfect spatial alignment scores at the metric's "good" extreme; uniform random labels score at the "bad" extreme; bounded in unit interval.        |
+| `test_self_consistency.py`    | **amended** — stdev across seeds via **AMI** rather than ARI. ARI is retained only for the GT-comparison sanity assertion.                                                                       |
+| `test_dlpfc_benchmark.py`     | **amended** — schema validation enforces the list-of-metrics shape (`hard_metrics` + `report_only_metrics` + `pass_rule="all_hard_pass"`); dry-run reports panel sizes.                          |
+
+### Updated `expected_metrics.json` schema
+
+```jsonc
+{
+  "hard_metrics": [
+    {"name": "ARI",       "rule": "noise_floor", "noise_floor": 0.02, "min_absolute": 0.45, "applies_to": "all"},
+    {"name": "AMI",       "rule": "noise_floor", "noise_floor": 0.02, "min_absolute": 0.40, "applies_to": "all"},
+    {"name": "V_measure", "rule": "noise_floor", "noise_floor": 0.02, "min_absolute": 0.45, "applies_to": "all"},
+    {"name": "MLAMI",     "rule": "noise_floor", "noise_floor": 0.03, "min_absolute": 0.30, "applies_to": "spatial_only"}
+  ],
+  "report_only_metrics": ["Homogeneity", "Completeness", "CHAOS", "PAS"],
+  "pass_rule": "all_hard_pass"
+}
+```
 
 ## Consequences
 

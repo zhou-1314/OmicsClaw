@@ -1,8 +1,15 @@
 """Self-consistency regression test (ADR 0011).
 
 Asserts that consensus labels are MORE stable across random seeds than any
-single member's labels — operationally, ``stdev(ARI(consensus_seed_i, consensus_seed_0))``
-is no larger than ``stdev(ARI(best_member_seed_i, best_member_seed_0))``.
+single member's labels — operationally, ``stdev(AMI(consensus_seed_i,
+consensus_seed_0))`` is no larger than ``stdev(AMI(best_member_seed_i,
+best_member_seed_0))``.
+
+We use **AMI** rather than ARI for the stability axis: AMI is the
+chance-corrected mutual-information variant and is the metric the
+ADR 0011 task-targeted protocol nominates for the no-ground-truth path
+(self-consistency is a stability check, not an agreement-with-truth check).
+ARI is reserved for the hero-benchmark GT-comparison panel.
 
 This protects the core claim of the typed consensus path. A code change that
 silently weakens the operator should make this test fail.
@@ -19,7 +26,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
-from sklearn.metrics import adjusted_rand_score
+from sklearn.metrics import adjusted_mutual_info_score, adjusted_rand_score
 
 from omicsclaw.runtime.consensus.operators.categorical import kmode_consensus
 
@@ -75,22 +82,22 @@ def test_consensus_more_stable_than_any_single_method() -> None:
         consensus = kmode_consensus(member_df, seed=s)
         consensus_labels_by_seed[s] = consensus.labels.to_numpy()
 
-    # Compute ARIs against the seed=0 reference for each path.
+    # Compute AMI against the seed=0 reference for each path.
     ref_consensus = consensus_labels_by_seed[seeds[0]]
-    ari_consensus = [
-        adjusted_rand_score(ref_consensus, consensus_labels_by_seed[s]) for s in seeds[1:]
+    ami_consensus = [
+        adjusted_mutual_info_score(ref_consensus, consensus_labels_by_seed[s]) for s in seeds[1:]
     ]
-    stdev_consensus = float(np.std(ari_consensus))
+    stdev_consensus = float(np.std(ami_consensus))
 
     # For each member column, compute the same stdev independently.
     member_stdevs: dict[str, float] = {}
     for col in member_labels_by_seed[seeds[0]].columns:
         ref_member = member_labels_by_seed[seeds[0]][col].to_numpy()
-        aris = [
-            adjusted_rand_score(ref_member, member_labels_by_seed[s][col].to_numpy())
+        amis = [
+            adjusted_mutual_info_score(ref_member, member_labels_by_seed[s][col].to_numpy())
             for s in seeds[1:]
         ]
-        member_stdevs[col] = float(np.std(aris))
+        member_stdevs[col] = float(np.std(amis))
     best_member_stdev = min(member_stdevs.values())
 
     # The consensus must be at least as stable as the best single member,
@@ -112,6 +119,9 @@ def test_consensus_ari_vs_ground_truth_at_least_as_good_as_average_member() -> N
     (which requires consensus ≥ BEST member on a specific dataset). The
     synthetic test only requires consensus ≥ mean member, which is a
     necessary condition for the headline claim to hold on real data.
+
+    Uses ARI (not AMI) here intentionally: this is a GT-comparison axis
+    (consensus vs ground_truth), so the hero-benchmark family applies.
     """
     rng = np.random.default_rng(7)
     ground_truth = rng.integers(0, 5, size=200)
