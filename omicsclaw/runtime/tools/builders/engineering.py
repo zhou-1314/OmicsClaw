@@ -588,8 +588,17 @@ def build_engineering_tool_executors(
         except ValueError as exc:
             return f"Error: {exc}"
         limit = _bounded_int(args.get("limit"), default=_DEFAULT_GLOB_LIMIT, minimum=1, maximum=5000)
+        # pathlib.Path.glob("**") and "<dir>/**" only enumerate directories
+        # (the ``**`` segment matches dir paths, not file paths). Combined
+        # with the ``is_dir()`` filter below, the user-facing result for
+        # patterns ending in ``**`` is silently empty even when the directory
+        # contains files. Normalise to ``**/*`` so the contents are
+        # enumerated, matching the shell ``globstar`` expectation.
+        effective_pattern = pattern
+        if effective_pattern == "**" or effective_pattern.endswith("/**"):
+            effective_pattern = effective_pattern + "/*"
         matches: list[str] = []
-        for path in sorted(root_dir.glob(pattern)):
+        for path in sorted(root_dir.glob(effective_pattern)):
             if path.is_dir():
                 continue
             matches.append(str(path))
