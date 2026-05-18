@@ -1,0 +1,14 @@
+{
+  "dataset": "DLPFC sample 151673 (Maynard et al. 2021)",
+  "operator": "kmode",
+  "members_required": ["banksy", "graphst", "sedr", "leiden", "spagcn"],
+  "min_members_surviving": 4,
+  "consensus_ari_noise_floor": 0.02,
+  "consensus_ari_min_absolute": 0.45,
+  "rationale": {
+    "consensus_ari_noise_floor": "ARI(consensus, gt) >= max_i ARI(method_i, gt) - 0.02 — consensus must be no worse than the best single method, within 2% measurement noise.",
+    "consensus_ari_min_absolute": "Hard lower bound — if every method does this badly something is broken upstream (preprocessing, ground truth file, alignment). Published numbers for this sample fall in 0.45-0.70.",
+    "min_members_surviving": "ADR 0010 requires >=2; this benchmark requires >=4 of the 5 to confidently report regression in consensus quality."
+  },
+  "source_reference": "Maynard, Collado-Torres et al. 2021. Nat Neurosci 24(3):425-436. doi:10.1038/s41593-020-00787-0"
+}
