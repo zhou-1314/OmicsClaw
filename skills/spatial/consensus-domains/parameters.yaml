@@ -1,0 +1,41 @@
+domain: spatial
+allowed_extra_flags:
+- --members
+- --all
+- --n-clusters
+- --confirm-plan
+- --non-interactive
+- --alpha
+- --beta
+- --max-class-frac
+- --llm-judge
+- --operator
+- --seed
+- --timeout
+- --max-parallel
+- --query
+- --top-k
+- --run-id
+saves_h5ad: false
+requires:
+  bins:
+  - python3
+  env: []
+  config: []
+emoji: 🧩
+homepage: https://github.com/OmicsClaw/OmicsClaw
+os:
+- linux
+- macos
+install: []
+trigger_keywords:
+- consensus domains
+- consensus tissue regions
+- multi-method spatial domains
+- robust spatial clustering
+- expert in the loop spatial
+- bc ranking
+- saccelerator-like consensus
+script: consensus_domains.py
+param_hints: {}
+requires_preprocessed: true
