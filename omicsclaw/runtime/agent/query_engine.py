@@ -126,6 +126,13 @@ class QueryEngineCallbacks:
     on_llm_error: Callable[[Exception], Any] | None = None
     on_context_compacted: Callable[["CompactionEvent"], Any] | None = None
     on_pathology_signal: Callable[[PathologySignal], Any] | None = None
+    # ADR 0009 — declared for callback-construction symmetry. The
+    # functional path uses ``context.tool_runtime_context["cancel_event"]``
+    # (a dict already merged into each ToolExecutionRequest.runtime_context
+    # by ``_build_execution_requests``); this field carries the same Event
+    # so direct callers of the engine that don't go through
+    # ``tool_runtime_context`` still have a place to attach the signal.
+    cancel_event: Any = None
 
 
 @dataclass(frozen=True, slots=True)

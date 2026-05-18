@@ -546,6 +546,7 @@ async def llm_tool_loop(
     usage_accumulator=None,
     request_tool_approval=None,
     policy_state=None,
+    cancel_event=None,
 ) -> str:
     """
     Run the LLM tool-use loop:
@@ -641,6 +642,7 @@ async def llm_tool_loop(
         mode=mode,
         request_tool_approval=request_tool_approval,
         policy_state=policy_state,
+        cancel_event=cancel_event,
     )
 
 

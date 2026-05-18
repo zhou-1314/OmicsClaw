@@ -327,3 +327,48 @@ def test_envelope_cancel_event_field_reassignment_raises_frozen_instance_error()
     env = MessageEnvelope(chat_id="c1", content="hi")
     with pytest.raises(dataclasses.FrozenInstanceError):
         env.cancel_event = threading.Event()  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# ADR 0009 L2 — dispatcher forwards envelope.cancel_event to llm_tool_loop
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dispatch_forwards_envelope_cancel_event_to_llm_tool_loop(monkeypatch):
+    import threading
+
+    received: dict[str, object] = {}
+
+    async def fake_loop(**kwargs):
+        received["cancel_event"] = kwargs.get("cancel_event")
+        return "ok"
+
+    _patch_llm_tool_loop(monkeypatch, fake_loop)
+
+    cancel_event = threading.Event()
+    events = await _collect(
+        MessageEnvelope(chat_id="c1", content="hi", cancel_event=cancel_event)
+    )
+
+    assert events[-1] == Final(text="ok", kind="normal")
+    assert received["cancel_event"] is cancel_event
+
+
+@pytest.mark.asyncio
+async def test_dispatch_passes_none_cancel_event_when_envelope_has_none(monkeypatch):
+    """Surfaces that don't wire cancellation (today: Channel) must not
+    trigger any cancel-check logic — ``llm_tool_loop`` should see ``None``."""
+
+    received: dict[str, object] = {}
+
+    async def fake_loop(**kwargs):
+        received["cancel_event"] = kwargs.get("cancel_event")
+        return "ok"
+
+    _patch_llm_tool_loop(monkeypatch, fake_loop)
+
+    events = await _collect(MessageEnvelope(chat_id="c1", content="hi"))
+
+    assert events[-1] == Final(text="ok", kind="normal")
+    assert received["cancel_event"] is None
