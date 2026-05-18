@@ -215,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Validate setup without running consensus (CI smoke).",
+        help="Validate setup without running consensus.",
     )
     args = parser.parse_args(argv)
 

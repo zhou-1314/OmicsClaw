@@ -115,7 +115,8 @@ Two artifacts must ship with the v1 PR. Together they answer the
 | `test_self_consistency.py` | On synthetic noisy clusterings perturbed across 10 seeds, **stdev(ARI(consensus_seed_i, consensus_seed_0)) ≤ stdev(ARI(best_member_seed_i, best_member_seed_0)) + tolerance**. Synthetic-data harness is used instead of vendored DLPFC h5ad — the assertion is on operator stability, not on real-tissue accuracy. |
 
 The self-consistency test is the regression baseline — a future change
-that degrades consensus stability vs. the best single method fails CI.
+that degrades consensus stability vs. the best single method makes the
+test fail.
 
 **(ii) DLPFC 151673 hero benchmark** —
 `examples/consensus_benchmark/`:
@@ -123,9 +124,9 @@ that degrades consensus stability vs. the best single method fails CI.
 | File | Purpose |
 |---|---|
 | `README.md` | One hero figure, one paragraph |
-| `run_dlpfc_151673.py` | Pulls the DLPFC sample 151673 from SACCELERATOR `data/` (the most-cited Visium sample with manual layer annotations), fans out 5 members (BANKSY / GraphST / SEDR / Leiden / SpaGCN), runs kmode consensus, computes ARI vs ground-truth layer labels |
-| `expected_metrics.json` | Asserts `ARI(consensus, gt) >= max(ARI(method_i, gt)) - 0.02` — consensus must be no worse than the best single method, within a 2% noise floor |
-| CI hook | The expected-metrics assertion runs in CI on every consensus-runtime PR |
+| `run_dlpfc_151673.py` | Pulls the DLPFC sample 151673 from SACCELERATOR `data/` (the most-cited Visium sample with manual layer annotations), fans out 5 members (BANKSY / GraphST / SEDR / Leiden / SpaGCN), runs kmode consensus, computes the metric panel vs ground-truth layer labels |
+| `expected_metrics.json` | Encodes the pass rule — each hard metric in the panel must satisfy `consensus_metric >= best_member_metric - noise_floor` (within published-noise band) AND `consensus_metric >= min_absolute` |
+| Test gate | `tests/runtime/consensus/test_dlpfc_benchmark.py` only runs the full benchmark when `RUN_DLPFC_BENCHMARK=1` is set in the environment; offline / no-network runs skip the network-attached assertion |
 
 Why DLPFC 151673 specifically: it is the only Visium sample with
 manual cortex-layer ground truth that SACCELERATOR, BANKSY, GraphST,
@@ -263,8 +264,8 @@ their assertions tighten:
 
 - Top-K default is defensible: it is the SACCELERATOR-published
   formula run on inputs OmicsClaw already emits.
-- A single CI assertion (`ARI(consensus, gt) >= best_method - 0.02`
-  on DLPFC 151673) catches regressions before they ship.
+- A single metric-panel assertion (the `all_hard_pass` rule on
+  DLPFC 151673) catches regressions before they ship.
 - Self-consistency tests anchor the unit-test layer at the operator,
   not the runtime, so re-implementing `team.py` in the future does
   not invalidate algorithm tests.
@@ -278,10 +279,10 @@ their assertions tighten:
   hero) freeze early. A v2 ablation that overturns them needs a
   superseding ADR.
 - The DLPFC dataset must be vendored or fetched at test time.
-  Vendoring adds ~50MB to the repo; fetching at test time adds
-  network dependence to CI. The PR will pick one (default lean:
-  fetch with a `pytest.mark.requires_network` gate; skip when
-  offline; cache locally after first fetch).
+  Vendoring adds ~50MB to the repo; fetching at test time adds a
+  network dependence to the benchmark run. The PR will pick one
+  (default lean: fetch with the `RUN_DLPFC_BENCHMARK=1` opt-in gate;
+  skip when offline; cache locally after first fetch).
 
 ## Relationship to prior ADRs
 

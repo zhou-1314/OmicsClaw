@@ -1,9 +1,9 @@
-"""DLPFC hero benchmark CI hook.
+"""DLPFC hero benchmark tests.
 
-The full network-attached benchmark is gated. We always run an offline
+The full network-attached benchmark is opt-in. We always run an offline
 ``--dry-run`` smoke that asserts the script parses and reads
 ``expected_metrics.json`` cleanly. The real network run is exercised when
-``RUN_DLPFC_BENCHMARK=1`` (set in PR CI for the consensus-runtime job).
+``RUN_DLPFC_BENCHMARK=1`` is set in the environment.
 """
 
 from __future__ import annotations

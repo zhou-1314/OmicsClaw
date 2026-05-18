@@ -37,11 +37,17 @@ The script:
 4. Compares against ``expected_metrics.json`` and emits a non-zero exit
    code on regression.
 
-## CI integration
+## How to run as a test
 
-Gated by ``pytest.mark.requires_network`` in the corresponding test
-suite (``tests/runtime/consensus/test_dlpfc_benchmark.py``). Local /
-no-network runs skip the assertion entirely; PR CI runs it.
+The corresponding pytest module
+(``tests/runtime/consensus/test_dlpfc_benchmark.py``) gates the full
+network-attached benchmark behind the ``RUN_DLPFC_BENCHMARK=1``
+environment variable. Local / no-network runs skip the assertion
+entirely:
+
+```bash
+RUN_DLPFC_BENCHMARK=1 python -m pytest tests/runtime/consensus/test_dlpfc_benchmark.py
+```
 
 ## Files
 
