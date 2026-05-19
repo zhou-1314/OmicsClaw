@@ -38,33 +38,10 @@ def render_synthesis_prompt(
 
 
 def _default_llm_call(prompt: str, timeout: float = 60.0) -> str | None:
-    api_key = os.getenv("LLM_API_KEY") or ""
-    if not api_key:
-        return None
-    try:
-        import requests
+    """Best-effort synthesizer LLM call; ``None`` on failure so callers fall back."""
+    from omicsclaw.providers.chat_completion import call_chat_completion
 
-        from omicsclaw.routing.llm_router import _resolve_llm_config
-
-        _, base_url, model = _resolve_llm_config()
-        url = f"{base_url.rstrip('/')}/chat/completions"
-        response = requests.post(
-            url,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0,
-            },
-            timeout=timeout,
-        )
-        if response.status_code != 200:
-            logger.warning("synthesise: LLM HTTP %s: %s", response.status_code, response.text[:200])
-            return None
-        return str(response.json()["choices"][0]["message"]["content"]).strip()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("synthesise: LLM call failed: %s", exc)
-        return None
+    return call_chat_completion(prompt, timeout=timeout)
 
 
 def _ensure_banner(markdown: str) -> str:

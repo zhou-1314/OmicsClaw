@@ -14,19 +14,7 @@ load_project_dotenv(Path(__file__).resolve().parent.parent.parent, override=Fals
 logger = logging.getLogger(__name__)
 
 
-def _resolve_llm_config() -> Tuple[str, str, str]:
-    """Resolve (api_key, base_url, model) for LLM routing calls.
-
-    Returns:
-        (api_key, base_url, model) tuple.
-    """
-    base_url, model, api_key = resolve_provider(
-        provider=os.getenv("LLM_PROVIDER", ""),
-        base_url=os.getenv("LLM_BASE_URL", ""),
-        model=os.getenv("OMICSCLAW_MODEL") or os.getenv("LLM_MODEL", ""),
-        api_key=os.getenv("LLM_API_KEY", ""),
-    )
-    return api_key, (base_url or "https://api.openai.com/v1"), (model or "gpt-5-mini")
+from omicsclaw.providers.runtime import resolve_chat_endpoint as _resolve_llm_config  # noqa: F401, E402  back-compat alias
 
 
 def route_with_llm(query: str, skills: Dict[str, str], domain: str) -> Tuple[Optional[str], float]:
