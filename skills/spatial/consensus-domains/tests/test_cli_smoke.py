@@ -65,14 +65,14 @@ def test_consensus_domains_writes_report_and_labels(tmp_path: Path, monkeypatch:
         "leiden":  [0, 0, 0, 1, 1, 1, 2, 2, 2],
     }
     stub_runner = _make_stub_runner(tmp_path, label_arrays)
-    from omicsclaw.runtime.consensus import team as team_mod
-    real_run_team = team_mod.run_team
+    from omicsclaw.runtime.consensus import driver as driver_mod
+    real_run_typed = driver_mod.run_typed_consensus
 
-    async def patched_run_team(*args, **kwargs):
+    async def patched(*args, **kwargs):
         kwargs.setdefault("runner", stub_runner)
-        return await real_run_team(*args, **kwargs)
+        return await real_run_typed(*args, **kwargs)
 
-    monkeypatch.setattr("consensus_domains.run_team", patched_run_team)
+    monkeypatch.setattr("consensus_domains.run_typed_consensus", patched)
 
     argv = [
         "--input",
@@ -120,9 +120,9 @@ def test_lca_unavailable_returns_clean_exit_code(tmp_path: Path, monkeypatch: py
     install hint and exit non-zero, NOT bleed a Python traceback to the user.
     """
     import consensus_domains as cd  # type: ignore[import-not-found]
-    from omicsclaw.runtime.consensus import team as team_mod
+    from omicsclaw.runtime.consensus import driver as driver_mod
     from omicsclaw.runtime.consensus.operators.lca_r import LCAUnavailableError
-    real_run_team = team_mod.run_team
+    real_run_typed = driver_mod.run_typed_consensus
 
     label_arrays = {
         "banksy":  [0, 0, 0, 1, 1, 1, 2, 2, 2],
@@ -133,9 +133,9 @@ def test_lca_unavailable_returns_clean_exit_code(tmp_path: Path, monkeypatch: py
 
     async def patched(*args, **kwargs):
         kwargs.setdefault("runner", stub_runner)
-        return await real_run_team(*args, **kwargs)
+        return await real_run_typed(*args, **kwargs)
 
-    monkeypatch.setattr("consensus_domains.run_team", patched)
+    monkeypatch.setattr("consensus_domains.run_typed_consensus", patched)
 
     # Force lca_consensus to raise LCAUnavailableError.
     def _raise_unavailable(*args, **kwargs):

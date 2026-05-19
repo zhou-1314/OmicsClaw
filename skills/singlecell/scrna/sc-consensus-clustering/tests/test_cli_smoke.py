@@ -54,8 +54,8 @@ def _make_stub_runner(member_labels: dict[str, list[int]]) -> object:
 
 def test_consensus_sc_writes_report_and_labels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import sc_consensus_clustering as scc  # type: ignore[import-not-found]
-    from omicsclaw.runtime.consensus import team as team_mod
-    real_run_team = team_mod.run_team
+    from omicsclaw.runtime.consensus import driver as driver_mod
+    real_run_typed = driver_mod.run_typed_consensus
 
     member_labels = {
         "leiden_resolution-0.5":  [0, 0, 0, 1, 1, 1, 2, 2, 2],
@@ -66,9 +66,9 @@ def test_consensus_sc_writes_report_and_labels(tmp_path: Path, monkeypatch: pyte
 
     async def patched(*args, **kwargs):
         kwargs.setdefault("runner", stub_runner)
-        return await real_run_team(*args, **kwargs)
+        return await real_run_typed(*args, **kwargs)
 
-    monkeypatch.setattr("sc_consensus_clustering.run_team", patched)
+    monkeypatch.setattr("sc_consensus_clustering.run_typed_consensus", patched)
 
     argv = [
         "--input",
@@ -104,8 +104,10 @@ def test_members_from_explicit_parses_resolutions(tmp_path: Path) -> None:
     import sc_consensus_clustering as scc  # type: ignore[import-not-found]
     members = scc._members_from_explicit("leiden:resolution=0.5,louvain:resolution=1.0")
     assert [m.name for m in members] == ["leiden_resolution-0.5", "louvain_resolution-1.0"]
-    assert members[0].label_column == "leiden"
-    assert members[1].label_column == "louvain"
+    # Label-column resolution lives in ScClusteringArtifactReader now; the
+    # member only carries `cluster-method` in its params.
+    assert members[0].params["cluster-method"] == "leiden"
+    assert members[1].params["cluster-method"] == "louvain"
 
 
 def test_members_explicit_invalid_token_exits(tmp_path: Path) -> None:
