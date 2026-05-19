@@ -114,12 +114,7 @@ def test_llm_plan_parsed_and_unknown_methods_dropped(tmp_path: Path) -> None:
 
 def test_planned_member_converts_to_consensus_member(tmp_path: Path) -> None:
     pm = PlannedMember(method="leiden", params={"resolution": "1.0"}, rationale="x")
-    cm = pm.to_consensus_member(
-        skill_name="spatial-domains",
-        artifact_relpath="figure_data/spatial_full.csv",
-        label_column="spatial_domain",
-        intrinsic_quality_path="summary.mean_local_purity",
-    )
+    cm = pm.to_consensus_member(skill_name="spatial-domains")
     assert cm.name == "leiden_resolution-1.0"
     assert cm.params["method"] == "leiden"
     assert cm.params["resolution"] == "1.0"

@@ -62,27 +62,19 @@ class PlannedMember:
     params: dict[str, str]
     rationale: str
 
-    def to_consensus_member(
-        self,
-        *,
-        skill_name: str,
-        artifact_relpath: str,
-        label_column: str,
-        intrinsic_quality_path: str,
-    ) -> ConsensusMember:
-        # Embed method + ordered param tags into the unique member name so two
-        # leiden members with different resolutions get distinct subdirs.
+    def to_consensus_member(self, *, skill_name: str) -> ConsensusMember:
+        """Build a ``ConsensusMember`` ready for fan-out.
+
+        Embeds method + ordered param tags into the unique member name so two
+        leiden members with different resolutions get distinct subdirs. The
+        source skill's ``MemberArtifactReader`` (registered in
+        ``source_registry.py``) is what knows how to read this member's
+        outputs — the member itself does not.
+        """
         suffix = "_".join(f"{k}-{v}" for k, v in sorted(self.params.items()) if k != "method")
         name = f"{self.method}_{suffix}" if suffix else self.method
         params = {"method": self.method, **self.params}
-        return ConsensusMember(
-            name=name,
-            skill_name=skill_name,
-            params=params,
-            intrinsic_quality_path=intrinsic_quality_path,
-            artifact_relpath=artifact_relpath,
-            label_column=label_column,
-        )
+        return ConsensusMember(name=name, skill_name=skill_name, params=params)
 
 
 def load_param_hints(parameters_yaml_path: Path) -> dict[str, Any]:
@@ -149,34 +141,10 @@ def _parse_llm_plan(content: str, available_methods: set[str]) -> list[PlannedMe
 
 
 def _call_chair_llm(prompt: str, timeout: float = 30.0) -> str | None:
-    """Best-effort LLM call. Returns ``None`` on any failure so callers fall back."""
-    api_key = os.getenv("LLM_API_KEY") or ""
-    if not api_key:
-        return None
-    try:
-        import requests  # local import — keeps the offline path import-light
+    """Best-effort chair LLM call; ``None`` on failure so callers fall back."""
+    from omicsclaw.providers.chat_completion import call_chat_completion
 
-        from omicsclaw.routing.llm_router import _resolve_llm_config
-
-        _, base_url, model = _resolve_llm_config()
-        url = f"{base_url.rstrip('/')}/chat/completions"
-        response = requests.post(
-            url,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0,
-            },
-            timeout=timeout,
-        )
-        if response.status_code != 200:
-            logger.warning("plan: LLM HTTP %s: %s", response.status_code, response.text[:200])
-            return None
-        return str(response.json()["choices"][0]["message"]["content"]).strip()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("plan: LLM call failed: %s", exc)
-        return None
+    return call_chat_completion(prompt, timeout=timeout)
 
 
 def propose_members(

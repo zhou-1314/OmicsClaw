@@ -21,7 +21,7 @@ from omicsclaw.runtime.consensus.dispatch import (
     output_banner,
     select_consensus_mode,
 )
-from omicsclaw.runtime.consensus.member import ConsensusMember, read_intrinsic_quality
+from omicsclaw.runtime.consensus.member import ConsensusMember
 from omicsclaw.runtime.consensus.team import (
     InsufficientSurvivorsError,
     MemberRunResult,
@@ -88,21 +88,10 @@ def test_member_to_extra_args_skips_empty_value_for_flag() -> None:
     assert m.to_extra_args() == ["--all", "--method", "banksy"]
 
 
-def test_read_intrinsic_quality_returns_zero_on_missing_file(tmp_path: Path) -> None:
-    assert read_intrinsic_quality(tmp_path / "missing.json", "summary.mean_local_purity") == 0.0
-
-
-def test_read_intrinsic_quality_resolves_nested_dotted_path(tmp_path: Path) -> None:
-    summary = tmp_path / "summary.json"
-    summary.write_text('{"summary": {"mean_local_purity": 0.73}}')
-    assert read_intrinsic_quality(summary, "summary.mean_local_purity") == pytest.approx(0.73)
-
-
-def test_read_intrinsic_quality_returns_zero_on_bad_value(tmp_path: Path) -> None:
-    summary = tmp_path / "summary.json"
-    summary.write_text('{"summary": {"mean_local_purity": "not-a-number"}}')
-    assert read_intrinsic_quality(summary, "summary.mean_local_purity") == 0.0
-
+# Intrinsic-quality reading lives in per-source MemberArtifactReader adapters
+# (see source_registry.py + test_source_registry.py); the old member-local
+# read_intrinsic_quality() helper was removed when the spatial / sc readers
+# absorbed the JSON-vs-CSV difference.
 
 # ----------------------------- concurrency budget -------------------------- #
 

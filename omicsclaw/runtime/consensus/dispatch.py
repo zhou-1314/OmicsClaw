@@ -5,20 +5,28 @@ operator and is allowed on the A path. Anything else falls back to the B
 (narrative) path. New skills must opt in explicitly — there is no implicit
 output-schema sniffing, because the verified/exploratory boundary must be
 auditable from a single file.
+
+The registry itself is defined in ``source_registry.py`` (a dict of
+``TypedConsensusSource`` carrying the per-source ``MemberArtifactReader``).
+This module only owns the A/B routing decision and the URI / banner
+conventions; it imports the registry for membership checks.
 """
 
 from __future__ import annotations
 
 from typing import Literal
 
-ConsensusMode = Literal["typed", "narrative"]
+from omicsclaw.runtime.consensus.source_registry import TYPED_CONSENSUS_REGISTRY
 
-# Skills with a typed operator. Add to this set ONLY after ADR review.
-# v1 entries (per ADR 0010):
-TYPED_CONSENSUS_REGISTRY: set[str] = {
-    "spatial-domains",
-    "sc-clustering",
-}
+__all__ = [
+    "ConsensusMode",
+    "TYPED_CONSENSUS_REGISTRY",
+    "consensus_namespace",
+    "output_banner",
+    "select_consensus_mode",
+]
+
+ConsensusMode = Literal["typed", "narrative"]
 
 
 def select_consensus_mode(
