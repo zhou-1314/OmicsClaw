@@ -1,6 +1,6 @@
 ---
 name: consensus-interpret
-description: 'LLM-grounded biological interpretation of a verified typed consensus run. Reads the typed run dir + the original adata, runs inline per-cluster DE, looks up markers in a bundled tissue-keyed marker DB, and asks the chair LLM to (γ) name each cluster's likely cell type with mandatory marker citations and (β) recommend top-3 next-step skills with mandatory evidence_refs. Output banner [A+I: Interpreted on verified consensus]. Failure-mode contract per ADR 0012.'
+description: "LLM-grounded biological interpretation of a verified typed consensus run. Reads the typed run dir + the original adata, runs inline per-cluster DE, looks up markers in a bundled tissue-keyed marker DB, and asks the chair LLM to (γ) name each cluster's likely cell type with mandatory marker citations and (β) recommend top-3 next-step skills with mandatory evidence_refs. Output banner [A+I: Interpreted on verified consensus]. Failure-mode contract per ADR 0012."
 version: 0.1.0
 author: OmicsClaw
 license: Apache-2.0
