@@ -107,8 +107,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
-          pip install requests
-          pip install -r bot/requirements.txt
+          # bot/requirements.txt was retired by ADR 0004 (bot/ folded into
+          # omicsclaw/surfaces/channels/). Install the runtime deps the
+          # channel-surface tests import here, mirroring memory-test's
+          # explicit-pip-list pattern.
+          pip install \
+            requests \
+            httpx \
+            pyyaml \
+            pydantic \
+            openai \
+            python-dotenv \
+            python-telegram-bot \
+            lark-oapi \
+            edge-tts
 
       - name: Run bot core tests
         run: |
