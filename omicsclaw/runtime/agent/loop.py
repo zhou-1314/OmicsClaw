@@ -190,6 +190,24 @@ def _format_llm_api_error_message(exc: Exception) -> str:
             "provider dashboard or homepage."
         )
 
+    # Ollama-specific: translate the upstream "does not support tools"
+    # 400 into actionable guidance. OmicsClaw needs function-calling for
+    # every turn, so models like deepseek-r1 / gemma3 can't be used as the
+    # agent's primary model regardless of how capable they are otherwise.
+    if provider == "ollama" and "does not support tools" in detail.lower():
+        active_model = str(getattr(_core, "OMICSCLAW_MODEL", "") or "")
+        model_hint = f" `{active_model}`" if active_model else ""
+        return (
+            f"The selected Ollama model{model_hint} does not support tool "
+            "calling, which OmicsClaw requires for every turn. Pick a "
+            "tool-capable model — e.g. `qwen2.5:7b`, `qwen3:8b`, "
+            "`llama3.1:8b`, `llama3.3:70b`, `gemma4:e4b`, `mistral`, or "
+            "`command-r` — via Settings → Provider, or by setting "
+            "OMICSCLAW_MODEL. Reasoning-only models (deepseek-r1) and "
+            "older Gemma versions (gemma2, gemma3) lack tool support; "
+            "Gemma 4 added native function calling and works."
+        )
+
     return f"Sorry, I'm having trouble thinking right now -- API error: {detail}"
 
 

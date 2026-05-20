@@ -10,6 +10,7 @@ from omicsclaw.providers.patches import (
     apply_deepseek_reasoning_passback,
     discover_ollama_models,
     discover_ollama_models_async,
+    model_supports_tools_ollama,
 )
 
 
@@ -173,3 +174,78 @@ class TestDiscoverOllamaModelsAsync:
                 discover_ollama_models_async("http://127.0.0.1:11434")
             )
         assert result == ["qwen2.5:7b", "llama3.3:70b"]
+
+
+# ---------------------------------------------------------------------------
+# Ollama tool-capability classification
+# ---------------------------------------------------------------------------
+
+
+class TestModelSupportsToolsOllama:
+    def test_qwen2_5_family_capable(self):
+        assert model_supports_tools_ollama("qwen2.5:7b") is True
+        assert model_supports_tools_ollama("qwen2.5:14b") is True
+        assert model_supports_tools_ollama("qwen2.5:32b") is True
+        assert model_supports_tools_ollama("qwen2.5-coder:7b") is True
+
+    def test_qwen3_capable(self):
+        assert model_supports_tools_ollama("qwen3:8b") is True
+        assert model_supports_tools_ollama("qwen3-coder:latest") is True
+
+    def test_qwen2_base_incapable(self):
+        # qwen2 (without .5) lacks tool support; do not confuse with qwen2.5.
+        assert model_supports_tools_ollama("qwen2:7b") is False
+
+    def test_deepseek_r1_incapable(self):
+        # The issue #208 reproducer.
+        assert model_supports_tools_ollama("deepseek-r1:14b") is False
+        assert model_supports_tools_ollama("deepseek-r1:7b") is False
+        assert model_supports_tools_ollama("deepseek-r1:32b") is False
+
+    def test_deepseek_r1_with_registry_prefix(self):
+        # Matches the error string Ollama actually returns to the user.
+        assert (
+            model_supports_tools_ollama("registry.ollama.ai/library/deepseek-r1:14b")
+            is False
+        )
+
+    def test_gemma_family_incapable(self):
+        assert model_supports_tools_ollama("gemma3:4b") is False
+        assert model_supports_tools_ollama("gemma3:12b") is False
+        assert model_supports_tools_ollama("gemma2:9b") is False
+
+    def test_gemma4_capable(self):
+        # Gemma 4 (2026-04) added native function calling — must not be
+        # confused with the still-incapable gemma2 / gemma3 families.
+        assert model_supports_tools_ollama("gemma4:e4b") is True
+        assert model_supports_tools_ollama("gemma4:e2b") is True
+        assert model_supports_tools_ollama("gemma4:26b") is True
+        assert model_supports_tools_ollama("gemma4:31b") is True
+        assert model_supports_tools_ollama("gemma4:latest") is True
+
+    def test_llama3_minor_versions_capable(self):
+        assert model_supports_tools_ollama("llama3.1:8b") is True
+        assert model_supports_tools_ollama("llama3.2:3b") is True
+        assert model_supports_tools_ollama("llama3.3:70b") is True
+
+    def test_llama3_base_incapable(self):
+        # llama3 (no minor) is a base text model without tool support.
+        assert model_supports_tools_ollama("llama3:8b") is False
+
+    def test_mistral_family_capable(self):
+        assert model_supports_tools_ollama("mistral:latest") is True
+        assert model_supports_tools_ollama("mistral-nemo:12b") is True
+        assert model_supports_tools_ollama("mixtral:8x7b") is True
+
+    def test_embedding_models_incapable(self):
+        assert model_supports_tools_ollama("nomic-embed-text:latest") is False
+        assert model_supports_tools_ollama("mxbai-embed-large:latest") is False
+
+    def test_unknown_model_returns_none(self):
+        assert model_supports_tools_ollama("brand-new-model:7b") is None
+        assert model_supports_tools_ollama("some-untracked-thing") is None
+
+    def test_handles_invalid_input(self):
+        assert model_supports_tools_ollama("") is None
+        assert model_supports_tools_ollama(None) is None  # type: ignore[arg-type]
+        assert model_supports_tools_ollama(":no-name") is None

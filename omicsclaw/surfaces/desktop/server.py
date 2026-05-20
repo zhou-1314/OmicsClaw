@@ -3640,9 +3640,13 @@ async def list_providers():
     except ImportError:
         return {"providers": [], "current": core.LLM_PROVIDER_NAME, "current_model": core.OMICSCLAW_MODEL}
 
+    discovered_models = await _cached_ollama_models(PROVIDER_PRESETS)
+
     providers = []
     try:
-        provider_entries = build_provider_registry_entries(PROVIDER_PRESETS)
+        provider_entries = build_provider_registry_entries(
+            PROVIDER_PRESETS, discovered_models=discovered_models
+        )
     except Exception:
         provider_entries = [
             {
@@ -3706,6 +3710,63 @@ async def list_providers():
         "current": core.LLM_PROVIDER_NAME,
         "current_model": core.OMICSCLAW_MODEL,
     }
+
+
+# ---------------------------------------------------------------------------
+# Ollama installed-model discovery cache
+# ---------------------------------------------------------------------------
+#
+# Probes ``GET {ollama_base_url}/api/tags`` to surface the user's actually
+# installed Ollama models in the UI rather than only the curated catalog.
+# Resolves the gap behind https://github.com/TianGzlab/OmicsClaw/issues/208
+# where freshly pulled tags (e.g. ``gemma3:4b``) never appeared in the
+# dropdown. Falls back silently to the curated list if the daemon isn't
+# running. Short TTL — installed models change rarely but settings pages
+# may poll ``/providers`` frequently.
+
+_OLLAMA_MODELS_CACHE: dict[str, object] = {"ts": 0.0, "data": {}}
+_OLLAMA_MODELS_TTL_SECONDS: float = 30.0
+
+
+async def _cached_ollama_models(
+    provider_presets: dict[str, tuple[str, str, str]],
+) -> dict[str, list[str]]:
+    """Return ``{provider_name: [model, ...]}`` from live Ollama discovery.
+
+    Cached for ``_OLLAMA_MODELS_TTL_SECONDS``. Returns an empty mapping on
+    any failure so the curated fallback list still drives the UI.
+    """
+    import time as _time
+
+    now = _time.monotonic()
+    if (now - float(_OLLAMA_MODELS_CACHE["ts"])) < _OLLAMA_MODELS_TTL_SECONDS:
+        return _OLLAMA_MODELS_CACHE["data"]  # type: ignore[return-value]
+
+    result: dict[str, list[str]] = {}
+    try:
+        from omicsclaw.providers.patches import discover_ollama_models_async
+
+        ollama_preset = provider_presets.get("ollama")
+        if ollama_preset:
+            base_url = (
+                _read_first_env("OLLAMA_BASE_URL")
+                or (
+                    _read_first_env("LLM_BASE_URL", "OMICSCLAW_BASE_URL")
+                    if _configured_provider_name() == "ollama"
+                    else ""
+                )
+                or str(ollama_preset[0] or "")
+            )
+            if base_url:
+                models = await discover_ollama_models_async(base_url)
+                if models:
+                    result["ollama"] = models
+    except Exception:
+        result = {}
+
+    _OLLAMA_MODELS_CACHE["ts"] = now
+    _OLLAMA_MODELS_CACHE["data"] = result
+    return result
 
 
 # ---------------------------------------------------------------------------

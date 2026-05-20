@@ -15,9 +15,14 @@ ProviderPreset = tuple[str, str, str]
 ProviderTier = Literal["primary", "aggregator", "local"]
 
 
-class ModelMetadata(TypedDict):
+class ModelMetadata(TypedDict, total=False):
     id: str
     context_window: int | None
+    # Optional per-provider capability hints. ``supports_tools`` is populated
+    # for providers where tool-calling support varies per model (notably
+    # Ollama-served local models) so the UI can warn users away from
+    # tool-incompatible picks. ``None`` means "unknown".
+    supports_tools: bool | None
 
 
 class ProviderDisplayMetadata(TypedDict):
@@ -205,7 +210,16 @@ PROVIDER_DISPLAY_METADATA: dict[str, ProviderDisplayMetadata] = {
             "qwen2.5:7b",
             "qwen2.5:14b",
             "qwen2.5:32b",
+            "qwen3:8b",
             "llama3.3:70b",
+            "llama3.1:8b",
+            # Gemma 4 (2026-04, Apache 2.0) — native tool calling.
+            "gemma4:e4b",
+            "gemma4:26b",
+            # Reasoning / text-only models retained for visibility but the
+            # frontend marks them with supports_tools=False so users can't
+            # pick them as the primary agent model. See
+            # https://github.com/TianGzlab/OmicsClaw/issues/208.
             "deepseek-r1:7b",
             "deepseek-r1:14b",
             "deepseek-r1:32b",
@@ -277,20 +291,39 @@ def get_provider_display_metadata(provider_name: str) -> ProviderDisplayMetadata
 
 def build_provider_registry_entries(
     provider_presets: Mapping[str, ProviderPreset] = PROVIDER_PRESETS,
+    *,
+    discovered_models: Mapping[str, list[str]] | None = None,
 ) -> list[ProviderRegistryEntry]:
+    """Build the registry payload consumed by surfaces.
+
+    ``discovered_models`` lets callers inject runtime-detected model names
+    (currently used by the desktop surface to surface the user's installed
+    Ollama tags). When provided, discovered names are prepended to the
+    curated list and the merged result is deduplicated while preserving
+    order. The curated list is still kept as a fallback for first-run UX
+    when discovery fails (e.g. ollama daemon not running).
+    """
     from .models import get_context_window
+    from .patches import model_supports_tools_ollama
 
     entries: list[ProviderRegistryEntry] = []
     for name, (base_url, default_model, env_key) in provider_presets.items():
         metadata = get_provider_display_metadata(name)
+        discovered = list(discovered_models.get(name, [])) if discovered_models else []
         models = list(dict.fromkeys([
+            *discovered,
             *metadata["models"],
             *((default_model,) if default_model else tuple()),
         ]))
-        model_metadata: list[ModelMetadata] = [
-            {"id": model, "context_window": get_context_window(model)}
-            for model in models
-        ]
+        model_metadata: list[ModelMetadata] = []
+        for model in models:
+            entry: ModelMetadata = {
+                "id": model,
+                "context_window": get_context_window(model),
+            }
+            if name == "ollama":
+                entry["supports_tools"] = model_supports_tools_ollama(model)
+            model_metadata.append(entry)
         entries.append({
             "name": name,
             "base_url": base_url,
