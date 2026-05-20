@@ -3700,3 +3700,75 @@ async def test_memory_review_version_chain_endpoint_rejects_overwrite_uri(
         assert ei.value.status_code == 400
     finally:
         await memory_pkg.close_db()
+
+
+# ---------------------------------------------------------------------------
+# Ollama installed-model discovery URL normalization (issue #208 regression)
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_ollama_discovery_base_url_strips_v1():
+    """The OmicsClaw preset advertises ``…/v1`` for OpenAI-compat chat,
+    but Ollama's ``/api/tags`` lives at the root. Without this stripping
+    the discovery endpoint would resolve to ``…/v1/api/tags`` and 404,
+    making the entire live-discovery path silently no-op.
+    """
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+
+    f = server._normalize_ollama_discovery_base_url
+    assert f("http://localhost:11434/v1") == "http://localhost:11434"
+    assert f("http://localhost:11434/v1/") == "http://localhost:11434"
+    assert f("http://localhost:11434") == "http://localhost:11434"
+    assert f("http://localhost:11434/") == "http://localhost:11434"
+    # Mid-path /v1 must not be stripped.
+    assert f("http://gw.example.com/proxy/v1/extra") == (
+        "http://gw.example.com/proxy/v1/extra"
+    )
+    # Defensive against empty / whitespace input.
+    assert f("") == ""
+    assert f("   ") == ""
+
+
+@pytest.mark.asyncio
+async def test_cached_ollama_models_strips_v1_before_discovery(monkeypatch):
+    """End-to-end guard: ``_cached_ollama_models`` must hand
+    ``discover_ollama_models_async`` a root URL (no ``/v1``) regardless of
+    whether the preset, ``OLLAMA_BASE_URL``, or ``LLM_BASE_URL`` was the
+    source. Catches the original #208 regression even when discovery is
+    stubbed in higher-level tests.
+    """
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+    from omicsclaw.providers import patches as patches_mod
+
+    server._OLLAMA_MODELS_CACHE["ts"] = 0.0
+    server._OLLAMA_MODELS_CACHE["data"] = {}
+
+    captured: dict[str, str] = {}
+
+    async def fake_discover(base_url, *, timeout=1.5):
+        captured["base_url"] = base_url
+        return ["qwen2.5:7b"]
+
+    monkeypatch.setattr(
+        patches_mod, "discover_ollama_models_async", fake_discover
+    )
+    monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("OMICSCLAW_BASE_URL", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("OMICSCLAW_PROVIDER", raising=False)
+
+    presets = {"ollama": ("http://localhost:11434/v1", "qwen2.5:7b", "")}
+    result = await server._cached_ollama_models(presets)
+
+    assert captured["base_url"] == "http://localhost:11434"
+    assert not captured["base_url"].endswith("/v1")
+    assert result == {"ollama": ["qwen2.5:7b"]}
+
+    # Reset cache so subsequent tests aren't polluted.
+    server._OLLAMA_MODELS_CACHE["ts"] = 0.0
+    server._OLLAMA_MODELS_CACHE["data"] = {}

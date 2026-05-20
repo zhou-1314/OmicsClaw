@@ -3728,6 +3728,23 @@ _OLLAMA_MODELS_CACHE: dict[str, object] = {"ts": 0.0, "data": {}}
 _OLLAMA_MODELS_TTL_SECONDS: float = 30.0
 
 
+def _normalize_ollama_discovery_base_url(raw: str) -> str:
+    """Strip the OpenAI-compat ``/v1`` suffix from an Ollama base URL.
+
+    The OmicsClaw preset advertises ``http://localhost:11434/v1`` because
+    chat/completions traffic goes through Ollama's OpenAI-compatible layer.
+    Native endpoints — including ``/api/tags`` used for installed-model
+    discovery — live at the *root*, so passing the ``/v1``-suffixed value
+    straight to :func:`discover_ollama_models_async` would request the
+    nonexistent ``/v1/api/tags`` and silently 404. We only strip a trailing
+    ``/v1`` segment; nothing else about the URL is rewritten.
+    """
+    value = str(raw or "").strip().rstrip("/")
+    if value.endswith("/v1"):
+        return value[:-3]
+    return value
+
+
 async def _cached_ollama_models(
     provider_presets: dict[str, tuple[str, str, str]],
 ) -> dict[str, list[str]]:
@@ -3748,7 +3765,7 @@ async def _cached_ollama_models(
 
         ollama_preset = provider_presets.get("ollama")
         if ollama_preset:
-            base_url = (
+            base_url = _normalize_ollama_discovery_base_url(
                 _read_first_env("OLLAMA_BASE_URL")
                 or (
                     _read_first_env("LLM_BASE_URL", "OMICSCLAW_BASE_URL")
