@@ -123,6 +123,10 @@ from ._pipeline_support import (
     resolve_pipeline_workspace,
     resolve_research_workspace,
 )
+from ._interpret_command_support import (
+    parse_interpret_command,
+    to_run_command_string,
+)
 from ._skill_run_support import (
     SkillRunExecutionView,
     build_skill_run_exception_result,
@@ -728,6 +732,22 @@ def _handle_run(arg: str) -> SkillRunExecutionView | None:
         )
     _print_skill_run_execution(execution)
     return execution
+
+
+def _handle_interpret(arg: str) -> SkillRunExecutionView | None:
+    """Shortcut for ``/run consensus-interpret --input <dir> ...`` (Slice 10.B).
+
+    Parses /interpret args (validates --input is a typed consensus run dir
+    via the routing detector), builds the equivalent /run argstring, and
+    delegates to :func:`_handle_run`. Surfacing parse / detection failures
+    early prevents the user from triggering consensus-interpret's exit-3/5
+    fail-fast paths for avoidable input errors.
+    """
+    parsed = parse_interpret_command(arg)
+    if isinstance(parsed, str):
+        console.print(f"[yellow]{parsed}[/yellow]")
+        return None
+    return _handle_run(to_run_command_string(parsed))
 
 
 def _handle_doctor(
@@ -1925,6 +1945,14 @@ async def _async_interactive_loop(
                 run_result = _handle_run(command.arg)
                 if run_result:
                     state.messages.extend(run_result.history_messages)
+                    await _persist_session_state(state, model=resolved_model)
+                _print_separator()
+                continue
+
+            elif command is not None and command.name == "/interpret":
+                interpret_result = _handle_interpret(command.arg)
+                if interpret_result:
+                    state.messages.extend(interpret_result.history_messages)
                     await _persist_session_state(state, model=resolved_model)
                 _print_separator()
                 continue
