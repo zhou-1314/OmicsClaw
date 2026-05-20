@@ -46,6 +46,7 @@ RUN_COMMAND_USAGE = (
 SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/run",             f"Run a skill: {RUN_COMMAND_USAGE}"),
     ("/skills",          "List all OmicsClaw skills (optional: /skills <domain>)"),
+    ("/interpret",       "Interpret a verified consensus run: /interpret <typed_run_dir> [--tissue brain|immune|kidney|liver] [--no-llm] [--output <dir>]"),
     ("/research",        "Research pipeline: /research [pdf] --idea \"...\" [--plan-only | --resume --output <dir>]"),
     ("/resume-task",     "Focus an approved plan task or resume a pipeline stage: /resume-task <task-id|stage>"),
     ("/do-current-task", "Execute the active approved interactive plan task now: /do-current-task [task-id|index]"),
