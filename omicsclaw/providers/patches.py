@@ -113,8 +113,132 @@ async def discover_ollama_models_async(
     ]
 
 
+# ---------------------------------------------------------------------------
+# Ollama tool-capability classification
+# ---------------------------------------------------------------------------
+#
+# OmicsClaw is a tool-using agent: every chat turn may call MCP tools. The
+# Ollama tool API rejects requests for models that don't implement function
+# calling with an HTTP 400 like ``... does not support tools``. A pattern
+# heuristic lets us tag models in the UI and translate the upstream error
+# into actionable guidance — without paying for an ``/api/show`` round-trip
+# per model on every ``/providers`` poll. Patterns are matched against the
+# tag-stripped, lowercased model name (``deepseek-r1:14b`` → ``deepseek-r1``).
+#
+# Sources: Ollama model library tool-support metadata as of 2025-Q4. Keep
+# patterns conservative — unknowns return ``None`` so callers can pass
+# through and let Ollama be authoritative.
+
+_OLLAMA_TOOL_CAPABLE_PATTERNS: tuple[str, ...] = (
+    "qwen2.5",
+    "qwen3",
+    "qwen3-coder",
+    "qwen2.5-coder",
+    "llama3.1",
+    "llama3.2",
+    "llama3.3",
+    "llama4",
+    "mistral",
+    "mistral-nemo",
+    "mistral-small",
+    "mistral-large",
+    "mixtral",
+    "command-r",
+    "command-r-plus",
+    "command-r7b",
+    "granite3",
+    "granite3.1",
+    "granite3.2",
+    "granite3.3",
+    "firefunction",
+    "nemotron",
+    "llama3-groq-tool-use",
+    "hermes3",
+    "cogito",
+    "devstral",
+    "phi4",
+    # Google Gemma 4 (released 2026-04-02) ships native function-calling —
+    # the capabilities row on https://ollama.com/library/gemma4/tags lists
+    # `tools` alongside vision/thinking/audio. Distinct from gemma 1–3
+    # which remain text-only without tool support.
+    "gemma4",
+)
+
+_OLLAMA_TOOL_INCAPABLE_PATTERNS: tuple[str, ...] = (
+    "deepseek-r1",
+    "gemma3",
+    "gemma2",
+    "gemma",
+    "phi3",
+    "phi3.5",
+    "llama2",
+    "llama3",  # base llama3 (without .1/.2/.3 suffix) — see ordering below
+    "codellama",
+    "tinyllama",
+    "wizardlm",
+    "wizardcoder",
+    "starcoder",
+    "starcoder2",
+    "vicuna",
+    "orca",
+    "neural-chat",
+    "yi",
+    "qwen2",  # base qwen2 — no tool support; qwen2.5 does
+    "qwen",
+    "nomic-embed-text",
+    "mxbai-embed",
+    "snowflake-arctic-embed",
+    "all-minilm",
+)
+
+
+def _ollama_base_name(model: str) -> str:
+    """Strip Ollama tag (``:7b``, ``:latest``) and lowercase."""
+    if not isinstance(model, str):
+        return ""
+    base = model.split(":", 1)[0].strip().lower()
+    # Drop any registry path prefix (``registry.ollama.ai/library/foo`` → ``foo``)
+    if "/" in base:
+        base = base.rsplit("/", 1)[-1]
+    return base
+
+
+def model_supports_tools_ollama(model: str) -> bool | None:
+    """Return tool-support classification for an Ollama model name.
+
+    Returns ``True`` / ``False`` for known families, ``None`` for unknown
+    models (caller should treat as "let Ollama be authoritative"). Matching
+    is on the longest-prefix tag-stripped base name, so ``qwen2.5:14b`` and
+    ``qwen2.5-coder:7b`` both resolve to capable, while ``deepseek-r1:14b``
+    resolves to incapable.
+
+    Never raises.
+    """
+    base = _ollama_base_name(model)
+    if not base:
+        return None
+
+    # Longest-match wins to disambiguate qwen2.5 (capable) from qwen2 (not).
+    capable = max(
+        (p for p in _OLLAMA_TOOL_CAPABLE_PATTERNS if base == p or base.startswith(p + "-") or base.startswith(p + ".")),
+        key=len,
+        default="",
+    )
+    incapable = max(
+        (p for p in _OLLAMA_TOOL_INCAPABLE_PATTERNS if base == p or base.startswith(p + "-") or base.startswith(p + ".")),
+        key=len,
+        default="",
+    )
+    if capable and len(capable) >= len(incapable):
+        return True
+    if incapable:
+        return False
+    return None
+
+
 __all__ = [
     "apply_deepseek_reasoning_passback",
     "discover_ollama_models",
     "discover_ollama_models_async",
+    "model_supports_tools_ollama",
 ]
