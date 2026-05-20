@@ -139,6 +139,81 @@ async def test_driver_writes_4_canonical_artifacts(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Slice 0 precondition — input_path persisted in plan.json                    #
+#                                                                              #
+# consensus-interpret defaults `--adata` to the path recorded here. Driver    #
+# must inject the resolved absolute path even when callers omit it from       #
+# their plan_audit dict (and overwrite a relative-path value if caller        #
+# provided one), so downstream interpret runs find adata reliably.            #
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.asyncio
+async def test_driver_persists_input_path_in_plan_json(tmp_path: Path) -> None:
+    """plan.json MUST carry the absolute input_path of the source adata so
+    `consensus-interpret` can default `--adata` to it (ADR 0012 Slice 0)."""
+    from omicsclaw.runtime.consensus.driver import ScoreConfig, run_typed_consensus
+
+    fake_adata = tmp_path / "fake_input.h5ad"
+    fake_adata.write_text("")  # existence is what matters; driver shouldn't open it
+
+    label_arrays = {f"m{i}": ["A", "A", "B", "B"] for i in range(3)}
+    intrinsic = {f"m{i}": 0.5 for i in range(3)}
+    members = _members(list(label_arrays.keys()))
+    source = _make_source(label_arrays, intrinsic)
+    plan_audit = {"run_id": "test-input-path", "operator": "kmode", "members": [{"name": "m0"}]}
+
+    out = tmp_path / "run_out"
+    await run_typed_consensus(
+        members=members, source=source,
+        input_path=str(fake_adata), output_dir=out,
+        operator="kmode", bc_selector=lambda s, k: [x.member for x in s][:2],
+        score_config=ScoreConfig(), seed=0, plan_audit=plan_audit,
+        runner=_stub_runner,
+    )
+
+    plan = json.loads((out / "plan.json").read_text())
+    assert "input_path" in plan, "Slice 0: plan.json must persist input_path"
+    assert Path(plan["input_path"]).is_absolute(), \
+        f"Slice 0: input_path must be absolute, got {plan['input_path']!r}"
+    assert Path(plan["input_path"]) == fake_adata.resolve()
+
+
+@pytest.mark.asyncio
+async def test_driver_input_path_overrides_caller_supplied_relative_value(tmp_path: Path) -> None:
+    """If the caller put a relative `input_path` in plan_audit, the driver
+    overwrites it with the resolved absolute path so plan.json is always
+    authoritative for adata resolution downstream."""
+    from omicsclaw.runtime.consensus.driver import ScoreConfig, run_typed_consensus
+
+    fake_adata = tmp_path / "real_input.h5ad"
+    fake_adata.write_text("")
+
+    label_arrays = {f"m{i}": ["A", "A", "B", "B"] for i in range(3)}
+    intrinsic = {f"m{i}": 0.5 for i in range(3)}
+    members = _members(list(label_arrays.keys()))
+    source = _make_source(label_arrays, intrinsic)
+    plan_audit = {
+        "run_id": "override-test",
+        "operator": "kmode",
+        "members": [{"name": "m0"}],
+        "input_path": "some/relative/path.h5ad",   # caller mistake / older code
+    }
+
+    out = tmp_path / "run_out"
+    await run_typed_consensus(
+        members=members, source=source,
+        input_path=str(fake_adata), output_dir=out,
+        operator="kmode", bc_selector=lambda s, k: [x.member for x in s][:2],
+        score_config=ScoreConfig(), seed=0, plan_audit=plan_audit,
+        runner=_stub_runner,
+    )
+
+    plan = json.loads((out / "plan.json").read_text())
+    assert Path(plan["input_path"]) == fake_adata.resolve(), \
+        "driver must overwrite caller's relative input_path with resolved absolute path"
+
+
+# --------------------------------------------------------------------------- #
 # Error paths                                                                 #
 # --------------------------------------------------------------------------- #
 
