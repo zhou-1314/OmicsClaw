@@ -77,27 +77,45 @@ class TypedConsensusSource:
 # --------------------------------------------------------------------------- #
 
 class SpatialDomainsArtifactReader:
-    """spatial-domains writes ``figure_data/spatial_*.csv`` with columns
-    ``(observation, spatial_domain)`` (and optionally a purity column).
-    Intrinsic quality is ``summary.mean_local_purity`` in ``summary.json``."""
+    """spatial-domains writes per-observation labels under ``figure_data/``
+    (production: ``domain_spatial_points.csv``; legacy/mock: ``spatial_*.csv``)
+    with columns ``(observation, spatial_domain[, ...])``. Intrinsic quality
+    is ``summary.mean_local_purity`` in either ``summary.json`` (legacy/mock)
+    or ``result.json`` (production)."""
 
     _LABEL_COLUMN = "spatial_domain"
     _OBS_COLUMN = "observation"
-    _PRIMARY_RELPATH = "figure_data/spatial_full.csv"
-    _FALLBACK_GLOB = "figure_data/spatial_*.csv"
-    _SUMMARY_RELPATH = "summary.json"
+    # Production filename first, legacy/mock next; glob as last-resort fallback.
+    _LABEL_RELPATH_CANDIDATES = (
+        "figure_data/domain_spatial_points.csv",
+        "figure_data/spatial_full.csv",
+    )
+    _LABEL_FALLBACK_GLOBS = (
+        "figure_data/domain_*.csv",
+        "figure_data/spatial_*.csv",
+    )
+    # Production writes result.json; legacy/mock writes summary.json. Same dotted path.
+    _SUMMARY_RELPATH_CANDIDATES = ("result.json", "summary.json")
     _INTRINSIC_DOTTED = "summary.mean_local_purity"
+
+    def _resolve_label_csv(self, member_dir: Path) -> Path | None:
+        for relpath in self._LABEL_RELPATH_CANDIDATES:
+            candidate = member_dir / relpath
+            if candidate.exists():
+                return candidate
+        for pattern in self._LABEL_FALLBACK_GLOBS:
+            matches = sorted(member_dir.glob(pattern))
+            if matches:
+                return matches[0]
+        return None
 
     def read_labels(
         self, member: ConsensusMember, output_root: Path
     ) -> pd.Series | None:
         member_dir = member.member_output_dir(output_root)
-        csv_path = member_dir / self._PRIMARY_RELPATH
-        if not csv_path.exists():
-            candidates = sorted(member_dir.glob(self._FALLBACK_GLOB))
-            if not candidates:
-                return None
-            csv_path = candidates[0]
+        csv_path = self._resolve_label_csv(member_dir)
+        if csv_path is None:
+            return None
         df = pd.read_csv(csv_path)
         if self._OBS_COLUMN not in df.columns or self._LABEL_COLUMN not in df.columns:
             return None
@@ -108,23 +126,30 @@ class SpatialDomainsArtifactReader:
     ) -> float:
         import json
 
-        summary_path = member.member_output_dir(output_root) / self._SUMMARY_RELPATH
-        if not summary_path.exists():
-            return 0.0
-        try:
-            data: object = json.loads(summary_path.read_text())
-        except (OSError, json.JSONDecodeError):
-            return 0.0
-        cursor: object = data
-        for key in self._INTRINSIC_DOTTED.split("."):
-            if isinstance(cursor, dict) and key in cursor:
-                cursor = cursor[key]
-            else:
-                return 0.0
-        try:
-            return float(cursor)  # type: ignore[arg-type]
-        except (TypeError, ValueError):
-            return 0.0
+        member_dir = member.member_output_dir(output_root)
+        for relpath in self._SUMMARY_RELPATH_CANDIDATES:
+            summary_path = member_dir / relpath
+            if not summary_path.exists():
+                continue
+            try:
+                data: object = json.loads(summary_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            cursor: object = data
+            ok = True
+            for key in self._INTRINSIC_DOTTED.split("."):
+                if isinstance(cursor, dict) and key in cursor:
+                    cursor = cursor[key]
+                else:
+                    ok = False
+                    break
+            if not ok:
+                continue
+            try:
+                return float(cursor)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+        return 0.0
 
 
 class ScClusteringArtifactReader:

@@ -112,6 +112,83 @@ def test_spatial_reader_globs_alternate_filenames(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# SpatialDomainsArtifactReader — REAL spatial-domains skill schema             #
+#                                                                              #
+# Locks the v1.x bug fix: the production spatial-domains skill writes          #
+# ``figure_data/domain_spatial_points.csv`` and ``result.json`` (with          #
+# ``summary.mean_local_purity`` nested), not the mock names used elsewhere     #
+# in this file. The reader must handle both.                                   #
+# --------------------------------------------------------------------------- #
+
+def _write_real_spatial_domains_artifacts(
+    output_root: Path,
+    member_name: str,
+    obs: list[str],
+    labels: list[str],
+    mean_local_purity: float,
+) -> None:
+    """Mirror exactly what skills/spatial/spatial-domains/ writes."""
+    import json as _json
+    member_dir = output_root / member_name
+    figure_dir = member_dir / "figure_data"
+    figure_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "observation": obs,
+            "x": list(range(len(obs))),
+            "y": list(range(len(obs))),
+            "spatial_domain": labels,
+            "domain_local_purity": [0.5] * len(obs),
+        }
+    ).to_csv(figure_dir / "domain_spatial_points.csv", index=False)
+    (member_dir / "result.json").write_text(
+        _json.dumps(
+            {
+                "skill": "spatial-domains",
+                "summary": {
+                    "method": "leiden",
+                    "mean_local_purity": mean_local_purity,
+                    "n_domains": len(set(labels)),
+                },
+            }
+        )
+    )
+
+
+def test_spatial_reader_loads_labels_from_real_skill_schema(tmp_path: Path) -> None:
+    """The production skill writes domain_spatial_points.csv — reader must find it."""
+    from omicsclaw.runtime.consensus.source_registry import SpatialDomainsArtifactReader
+
+    member = ConsensusMember(
+        name="leiden_resolution-1.0",
+        skill_name="spatial-domains",
+        params={"method": "leiden"},
+    )
+    _write_real_spatial_domains_artifacts(
+        tmp_path, "leiden_resolution-1.0", ["s1", "s2", "s3"], ["0", "0", "1"], 0.494
+    )
+    labels = SpatialDomainsArtifactReader().read_labels(member, tmp_path)
+    assert labels is not None
+    assert list(labels.index) == ["s1", "s2", "s3"]
+    assert labels.to_list() == ["0", "0", "1"]
+
+
+def test_spatial_reader_reads_intrinsic_from_result_json(tmp_path: Path) -> None:
+    """When summary.json is absent, the reader must fall back to result.json:summary.mean_local_purity."""
+    from omicsclaw.runtime.consensus.source_registry import SpatialDomainsArtifactReader
+
+    member = ConsensusMember(
+        name="leiden_resolution-1.0",
+        skill_name="spatial-domains",
+        params={"method": "leiden"},
+    )
+    _write_real_spatial_domains_artifacts(
+        tmp_path, "leiden_resolution-1.0", ["s1"], ["0"], 0.4936
+    )
+    assert SpatialDomainsArtifactReader().read_intrinsic_quality(member, tmp_path) == pytest.approx(0.4936)
+
+
+# --------------------------------------------------------------------------- #
 # ScClusteringArtifactReader                                                  #
 # --------------------------------------------------------------------------- #
 
