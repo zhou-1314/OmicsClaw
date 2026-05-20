@@ -208,7 +208,12 @@ def _validate_omicsclaw_args(args: dict) -> str:
     return "\n".join(lines)
 
 
-async def execute_omicsclaw(args: dict, session_id: str = None, chat_id: int | str = 0) -> str:
+async def execute_omicsclaw(
+    args: dict,
+    session_id: str = None,
+    chat_id: int | str = 0,
+    cancel_event: threading.Event | None = None,
+) -> str:
     """Execute an OmicsClaw skill via the shared runner contract."""
     arg_shape_error = _validate_omicsclaw_args(args)
     if arg_shape_error:
@@ -424,6 +429,7 @@ async def execute_omicsclaw(args: dict, session_id: str = None, chat_id: int | s
             n_epochs=n_epochs,
             extra_args=extra_args,
             out_dir=out_dir,
+            cancel_event=cancel_event,
         )
         out_dir = Path(runner_result.get("out_dir") or out_dir)
         stdout_str = str(runner_result.get("stdout") or "")

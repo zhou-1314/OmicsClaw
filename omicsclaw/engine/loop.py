@@ -110,10 +110,16 @@ async def run_engine_loop(
     mode: str = "",
     request_tool_approval: Any = None,
     policy_state: Any = None,
+    cancel_event: Any = None,
 ) -> str:
     """Drive the LLM-plus-tools loop for a single chat turn.
 
     Returns the assistant's final user-facing reply.
+
+    ``cancel_event`` (ADR 0009) is a ``threading.Event`` set by the
+    Surface to request mid-flight cancellation. When provided, it is
+    injected into ``tool_runtime_context`` so per-tool executors can
+    forward it down to ``skill.runner.run_skill``.
     """
     if deps.llm is None:
         return LLM_NOT_CONFIGURED_MESSAGE
@@ -203,6 +209,10 @@ async def run_engine_loop(
                 "omicsclaw_dir": deps.omicsclaw_dir,
                 "workspace": workspace,
                 "pipeline_workspace": pipeline_workspace,
+                # ADR 0009 — surface-initiated cancel propagates through
+                # this dict into per-tool executors that forward it to
+                # skill.runner.run_skill(cancel_event=...).
+                "cancel_event": cancel_event,
             },
             request_tools=request_tools,
         ),

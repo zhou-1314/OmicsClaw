@@ -71,6 +71,7 @@ async def run_skill_via_shared_runner(
     n_epochs: int | None = None,
     extra_args: list[str] | None = None,
     out_dir: Path,
+    cancel_event: threading.Event | None = None,
 ) -> dict:
     from . import runner as skill_runner
     from .result import SkillRunResult
@@ -103,7 +104,12 @@ async def run_skill_via_shared_runner(
     def _emit_stderr(line: str) -> None:
         logger.info("[%s:stderr] %s", canonical_skill, line)
 
-    cancel_event = threading.Event()
+    # ADR 0009: prefer the caller-supplied cancel_event (the per-request
+    # signal threaded down from MessageEnvelope) so Surface-initiated aborts
+    # propagate to subprocess_driver._cancel_watcher. Fall back to a local
+    # Event when no caller is wired (preserves legacy callers and the
+    # asyncio.CancelledError → cancel_event.set() bridge below).
+    effective_cancel_event = cancel_event if cancel_event is not None else threading.Event()
 
     def _run() -> SkillRunResult:
         return skill_runner.run_skill(
@@ -115,13 +121,13 @@ async def run_skill_via_shared_runner(
             extra_args=forwarded_args or None,
             stdout_callback=_emit_stdout,
             stderr_callback=_emit_stderr,
-            cancel_event=cancel_event,
+            cancel_event=effective_cancel_event,
         )
 
     try:
         run_result = await asyncio.to_thread(_run)
     except asyncio.CancelledError:
-        cancel_event.set()
+        effective_cancel_event.set()
         raise
     stdout_str = run_result.stdout
     stderr_str = run_result.stderr
@@ -154,6 +160,7 @@ async def run_omics_skill_step(
     batch_key: str = "",
     n_epochs: int | None = None,
     extra_args: list[str] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> dict:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = output_root / build_output_dir_name(
@@ -174,6 +181,7 @@ async def run_omics_skill_step(
         n_epochs=n_epochs,
         extra_args=extra_args,
         out_dir=out_dir,
+        cancel_event=cancel_event,
     )
 
 

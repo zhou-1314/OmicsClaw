@@ -649,6 +649,8 @@ async def _execute_concurrent_batch(
 
 async def execute_tool_requests(
     requests: list[ToolExecutionRequest],
+    *,
+    cancel_event: Any = None,
 ) -> list[ToolExecutionResult]:
     """Execute tool requests with write barriers and stable output ordering.
 
@@ -659,7 +661,22 @@ async def execute_tool_requests(
 
     Consecutive read-only, concurrency-safe tools still run concurrently.
     Any other tool acts as a barrier and is executed serially.
+
+    ``cancel_event`` (ADR 0009) is a ``threading.Event`` set by the
+    Surface to request mid-flight cancellation. The functional path
+    is each request's ``runtime_context["cancel_event"]`` (populated
+    upstream by ``_build_execution_requests`` from the dispatcher's
+    ``tool_runtime_context`` dict). This kwarg is a defensive fallback
+    for direct callers (tests, scripts) that pass requests whose
+    ``runtime_context`` lacks the entry — when provided, it is
+    inserted into each request's ``runtime_context`` without
+    overriding an existing one.
     """
+
+    if cancel_event is not None:
+        for request in requests:
+            if request.runtime_context is not None and "cancel_event" not in request.runtime_context:
+                request.runtime_context["cancel_event"] = cancel_event
 
     results: list[ToolExecutionResult] = []
     concurrent_batch: list[ToolExecutionRequest] = []

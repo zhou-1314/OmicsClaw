@@ -208,7 +208,7 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                 "required": ["skill", "mode"],
             },
             surfaces=("bot",),
-            context_params=("session_id", "chat_id"),
+            context_params=("session_id", "chat_id", "cancel_event"),
             read_only=False,
             concurrency_safe=False,
             result_policy=RESULT_POLICY_SUMMARY_OR_MEDIA,

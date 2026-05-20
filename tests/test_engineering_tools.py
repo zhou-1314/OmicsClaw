@@ -21,6 +21,99 @@ def _build_executors(tmp_path: Path):
     )
 
 
+def _build_executors_with_data(tmp_path: Path):
+    """Build executors over a repo with three real data files under data/."""
+    repo_root = tmp_path / "repo"
+    (repo_root / "data").mkdir(parents=True, exist_ok=True)
+    (repo_root / "examples").mkdir(parents=True, exist_ok=True)
+    (repo_root / "output").mkdir(parents=True, exist_ok=True)
+    (repo_root / "data" / "pbmc3k_raw.h5ad").write_bytes(b"")
+    (repo_root / "data" / "pbmc3k_processed.h5ad").write_bytes(b"")
+    (repo_root / "data" / "slideseqv2_mouse_hippocampus.h5ad").write_bytes(b"")
+    executors = build_engineering_tool_executors(
+        omicsclaw_dir=repo_root,
+        state_root=tmp_path / "state",
+        tool_specs_supplier=build_engineering_tool_specs,
+    )
+    return repo_root, executors
+
+
+def test_glob_files_data_star_star_matches_files_not_just_dir(tmp_path: Path):
+    """Regression for the data/** -> 0 matches bug.
+
+    pathlib.Path.glob("data/**") on Python 3.11 returns only the
+    ``data`` directory itself (not its files), and the executor then
+    drops directories via ``is_dir()`` — yielding an empty match list
+    even though the directory contains real files. The user-visible
+    bug: ``data/*`` finds the files but ``data/**`` claims the
+    directory is empty.
+    """
+    repo_root, executors = _build_executors_with_data(tmp_path)
+    payload = asyncio.run(
+        executors["glob_files"](
+            {"pattern": "data/**", "root": str(repo_root)},
+            surface="interactive",
+        )
+    )
+    result = json.loads(payload)
+    assert result["count"] == 3, (
+        f"data/** should find 3 .h5ad files but returned {result['count']}: "
+        f"{result['matches']}"
+    )
+    names = sorted(Path(m).name for m in result["matches"])
+    assert names == [
+        "pbmc3k_processed.h5ad",
+        "pbmc3k_raw.h5ad",
+        "slideseqv2_mouse_hippocampus.h5ad",
+    ]
+
+
+def test_glob_files_bare_double_star_matches_files_recursively(tmp_path: Path):
+    """A pattern that is exactly ``**`` should match every file under
+    the root recursively, not just enumerate directories."""
+    repo_root, executors = _build_executors_with_data(tmp_path)
+    payload = asyncio.run(
+        executors["glob_files"](
+            {"pattern": "**", "root": str(repo_root)},
+            surface="interactive",
+        )
+    )
+    result = json.loads(payload)
+    assert result["count"] >= 3
+    names = {Path(m).name for m in result["matches"]}
+    assert "pbmc3k_raw.h5ad" in names
+
+
+def test_glob_files_data_star_unchanged_by_normalization(tmp_path: Path):
+    """The normalization for trailing ``**`` must not affect other
+    patterns. ``data/*`` (already correct) must keep returning the
+    same 3 files."""
+    repo_root, executors = _build_executors_with_data(tmp_path)
+    payload = asyncio.run(
+        executors["glob_files"](
+            {"pattern": "data/*", "root": str(repo_root)},
+            surface="interactive",
+        )
+    )
+    result = json.loads(payload)
+    assert result["count"] == 3
+
+
+def test_glob_files_data_star_star_star_unchanged_by_normalization(tmp_path: Path):
+    """``data/**/*`` already enumerates files correctly under pathlib;
+    the normalization must not corrupt patterns that already end with
+    a non-``**`` segment."""
+    repo_root, executors = _build_executors_with_data(tmp_path)
+    payload = asyncio.run(
+        executors["glob_files"](
+            {"pattern": "data/**/*", "root": str(repo_root)},
+            surface="interactive",
+        )
+    )
+    result = json.loads(payload)
+    assert result["count"] == 3
+
+
 def test_build_bot_tool_specs_includes_curated_engineering_tools():
     specs = build_bot_tool_specs(
         BotToolContext(

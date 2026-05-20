@@ -126,6 +126,13 @@ class QueryEngineCallbacks:
     on_llm_error: Callable[[Exception], Any] | None = None
     on_context_compacted: Callable[["CompactionEvent"], Any] | None = None
     on_pathology_signal: Callable[[PathologySignal], Any] | None = None
+    # ADR 0009 — declared for callback-construction symmetry. The
+    # functional path uses ``context.tool_runtime_context["cancel_event"]``
+    # (a dict already merged into each ToolExecutionRequest.runtime_context
+    # by ``_build_execution_requests``); this field carries the same Event
+    # so direct callers of the engine that don't go through
+    # ``tool_runtime_context`` still have a place to attach the signal.
+    cancel_event: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -517,6 +524,413 @@ def _is_new_pathology(signal: PathologySignal, state: LoopState) -> bool:
     return (last.kind, last.tool_name) != (signal.kind, signal.tool_name)
 
 
+async def _build_execution_requests(
+    *,
+    tool_calls: list,
+    context: "QueryEngineContext",
+    callbacks: "QueryEngineCallbacks",
+    tool_runtime: "ToolRuntime",
+    tool_runtime_context: dict | None,
+    current_policy_state: "ToolPolicyState | None",
+    hook_runtime,
+) -> tuple[list["ToolExecutionRequest"], dict[str, Any]]:
+    """Parse assistant tool_calls into ToolExecutionRequest list (ADR 0008 L4).
+
+    For each tc: resolves executor + spec, parses JSON args, builds
+    runtime_context, evaluates tool policy, emits EVENT_TOOL_BEFORE
+    hook, and runs before_tool callback. Returns (requests,
+    tool_states_by_call_id) — tool_states is later threaded into
+    after_tool via _record_tool_outcome.
+    """
+    execution_requests: list[ToolExecutionRequest] = []
+    tool_states: dict[str, Any] = {}
+    for tc in tool_calls:
+        executor = tool_runtime.executors.get(tc.name)
+        tool_spec = tool_runtime.specs_by_name.get(tc.name)
+        try:
+            func_args = json.loads(tc.arguments) if executor else {}
+        except json.JSONDecodeError:
+            func_args = {}
+
+        runtime_context = {
+            "session_id": context.session_id,
+            "chat_id": context.chat_id,
+            "surface": context.surface,
+            "policy_state": current_policy_state,
+        }
+        if tool_runtime_context:
+            runtime_context.update(tool_runtime_context)
+        request = ToolExecutionRequest(
+            call_id=tc.id,
+            name=tc.name,
+            arguments=func_args,
+            spec=tool_spec,
+            executor=executor,
+            runtime_context=runtime_context,
+            policy_decision=evaluate_tool_policy(
+                tc.name,
+                tool_spec,
+                runtime_context=runtime_context,
+            ),
+        )
+        if hook_runtime is not None:
+            hook_runtime.emit(
+                EVENT_TOOL_BEFORE,
+                ToolHookPayload(
+                    tool_name=tc.name,
+                    call_id=tc.id,
+                    status="pending",
+                    success=False,
+                    surface=context.surface,
+                    session_id=str(context.session_id or ""),
+                    chat_id=str(context.chat_id),
+                    policy_action=(
+                        request.policy_decision.action
+                        if request.policy_decision is not None
+                        else ""
+                    ),
+                ),
+                context=runtime_context,
+            )
+        if executor and callbacks.before_tool is not None:
+            tool_states[tc.id] = await _maybe_await(callbacks.before_tool(request))
+        execution_requests.append(request)
+    return execution_requests, tool_states
+
+
+async def _record_tool_outcome(
+    *,
+    execution_result: "ToolExecutionResult",
+    context: "QueryEngineContext",
+    callbacks: "QueryEngineCallbacks",
+    tool_result_store: "ToolResultStore",
+    transcript_store: "TranscriptStore",
+    hook_runtime,
+    tool_state: Any,
+    state: "LoopState",
+) -> str:
+    """Persist one tool result + record into LoopState (ADR 0008 L3).
+
+    Fires hook_runtime AFTER/FAILURE events, injects pre-call rule
+    preamble, records into tool_result_store, invokes after_tool
+    callback, appends to transcript, and stamps ToolCallRecord /
+    ToolErrorRecord into ``state``. Returns the per-result candidate
+    interruption_message ('' if this result is not preflight-pending).
+    """
+    request = execution_result.request
+    record_output = execution_result.output
+    if hook_runtime is not None:
+        event_name = EVENT_TOOL_AFTER
+        if not execution_result.success:
+            event_name = EVENT_TOOL_FAILURE
+        hook_runtime.emit(
+            event_name,
+            ToolHookPayload(
+                tool_name=request.name,
+                call_id=request.call_id,
+                status=execution_result.status,
+                success=execution_result.success,
+                surface=context.surface,
+                session_id=str(context.session_id or ""),
+                chat_id=str(context.chat_id),
+                policy_action=(
+                    execution_result.policy_decision.action
+                    if execution_result.policy_decision is not None
+                    else ""
+                ),
+            ),
+            context={
+                "session_id": context.session_id,
+                "chat_id": context.chat_id,
+                "surface": context.surface,
+                "workspace": str(
+                    (request.runtime_context or {}).get("pipeline_workspace")
+                    or (request.runtime_context or {}).get("workspace")
+                    or ""
+                ).strip(),
+            },
+        )
+        notices = hook_runtime.consume_pending_messages(
+            mode=HOOK_MODE_NOTICE,
+            event_names=(
+                EVENT_TOOL_BEFORE,
+                EVENT_TOOL_AFTER,
+                EVENT_TOOL_FAILURE,
+            ),
+            call_id=request.call_id,
+        )
+        if notices:
+            record_output = "\n".join([*notices, str(record_output)]).strip()
+    # Phase 4 (system-prompt-compression refactor): prepend the
+    # matched pre-call rule preamble (engineering / skill-execution
+    # discipline) to the tool result so the model sees the rule
+    # right before it reasons about the result. This is the
+    # runtime wiring of ``PreCallRuleInjector`` —
+    # ``build_pre_call_rule_text`` is otherwise dead abstraction.
+    from ..tools.execution_hooks import (
+        DEFAULT_PRE_CALL_RULE_INJECTORS,
+        build_pre_call_rule_text,
+    )
+
+    preamble_text = build_pre_call_rule_text(
+        tool_name=request.name,
+        tool_args=request.arguments or {},
+        injectors=DEFAULT_PRE_CALL_RULE_INJECTORS,
+    )
+    if preamble_text:
+        record_output = f"{preamble_text}\n\n{record_output}".strip()
+    result_record = tool_result_store.record(
+        chat_id=context.chat_id,
+        tool_call_id=request.call_id,
+        tool_name=request.name,
+        output=record_output,
+        success=execution_result.success,
+        error=execution_result.error,
+        spec=request.spec,
+        policy_decision=execution_result.policy_decision,
+        execution_trace=(
+            execution_result.trace.to_dict()
+            if execution_result.trace is not None
+            else None
+        ),
+    )
+
+    if callbacks.after_tool is not None:
+        await _maybe_await(
+            callbacks.after_tool(
+                execution_result,
+                result_record,
+                tool_state,
+            )
+        )
+
+    transcript_store.append_tool_message(
+        context.chat_id,
+        tool_call_id=request.call_id,
+        content=result_record.content,
+    )
+
+    state.tool_calls.append(
+        ToolCallRecord(
+            name=request.name,
+            args_digest=compute_args_digest(request.arguments),
+            iteration=state.iteration,
+            succeeded=execution_result.success,
+        )
+    )
+    if not execution_result.success:
+        error_obj = execution_result.error
+        state.errors.append(
+            ToolErrorRecord(
+                tool_name=request.name,
+                iteration=state.iteration,
+                error_class=type(error_obj).__name__
+                if error_obj is not None
+                else "ToolFailure",
+                message_head=(str(error_obj) if error_obj is not None else "")[:200],
+            )
+        )
+
+    return _build_preflight_interruption_message(result_record.content)
+
+
+async def _resolve_tool_approval_flow(
+    *,
+    execution_results: list["ToolExecutionResult"],
+    callbacks: "QueryEngineCallbacks",
+    context: "QueryEngineContext",
+    current_policy_state: "ToolPolicyState | None",
+) -> tuple[list["ToolExecutionResult"], "ToolPolicyState | None"]:
+    """Drive request_tool_approval for any REQUIRE_APPROVAL results (ADR 0008 L2).
+
+    Returns (resolved_results, possibly_updated_policy_state). The
+    caller mirrors the returned policy_state back into its own local so
+    the next iteration's tool-request build sees the updated state.
+    """
+    resolved_execution_results: list[ToolExecutionResult] = []
+    for execution_result in execution_results:
+        request = execution_result.request
+        if (
+            execution_result.status == EXECUTION_STATUS_POLICY_BLOCKED
+            and execution_result.policy_decision is not None
+            and execution_result.policy_decision.action
+            == TOOL_POLICY_REQUIRE_APPROVAL
+        ):
+            resolution = await _maybe_await(
+                callbacks.request_tool_approval(request, execution_result)
+            )
+            (
+                approval_behavior,
+                updated_arguments,
+                updated_policy_state,
+                deny_message,
+                approval_persist,
+            ) = _normalize_permission_resolution(
+                resolution,
+                request=request,
+                fallback_surface=context.surface,
+            )
+            if approval_behavior == "allow":
+                base_policy_state = ToolPolicyState.from_mapping(
+                    (request.runtime_context or {}).get("policy_state"),
+                    surface=context.surface,
+                )
+                effective_policy_state = updated_policy_state
+                if effective_policy_state is None:
+                    effective_policy_state = ToolPolicyState(
+                        surface=base_policy_state.surface or context.surface,
+                        trusted=base_policy_state.trusted,
+                        background=base_policy_state.background,
+                        auto_approve_ask=base_policy_state.auto_approve_ask,
+                        approved_tool_names=(
+                            base_policy_state.approved_tool_names
+                            | frozenset({request.name})
+                        ),
+                    )
+                approved_runtime_context = dict(request.runtime_context or {})
+                approved_runtime_context["policy_state"] = (
+                    effective_policy_state
+                )
+                approved_request = ToolExecutionRequest(
+                    call_id=request.call_id,
+                    name=request.name,
+                    arguments=(
+                        updated_arguments
+                        if updated_arguments is not None
+                        else request.arguments
+                    ),
+                    spec=request.spec,
+                    executor=request.executor,
+                    runtime_context=approved_runtime_context,
+                    policy_decision=evaluate_tool_policy(
+                        request.name,
+                        request.spec,
+                        runtime_context=approved_runtime_context,
+                    ),
+                )
+                execution_result = (
+                    await execute_tool_requests([approved_request])
+                )[0]
+                if updated_policy_state is not None and approval_persist:
+                    current_policy_state = updated_policy_state
+            elif deny_message:
+                execution_result = ToolExecutionResult(
+                    request=request,
+                    output=deny_message,
+                    success=False,
+                    error=execution_result.error,
+                    status=execution_result.status,
+                    policy_decision=execution_result.policy_decision,
+                    trace=execution_result.trace,
+                )
+        resolved_execution_results.append(execution_result)
+    return resolved_execution_results, current_policy_state
+
+
+async def _call_llm_with_reactive_compact_retry(
+    *,
+    llm,
+    context: QueryEngineContext,
+    tool_runtime: ToolRuntime,
+    config: QueryEngineConfig,
+    callbacks: QueryEngineCallbacks,
+    system_prompt: str,
+    history: list,
+    request_system_prompt: str,
+    request_messages: list,
+    transcript_store: TranscriptStore,
+    tool_result_store: ToolResultStore,
+    compaction_metadata: dict | None,
+    compaction_workspace: str | None,
+    on_usage_delta,
+    has_attempted_reactive_compact: bool,
+) -> tuple["MaterializedMessage", bool]:
+    """One LLM turn with on-demand reactive compaction (ADR 0008 L1).
+
+    Returns the materialised assistant message plus the (possibly flipped)
+    ``has_attempted_reactive_compact`` flag. Raises the underlying LLM
+    error if reactive compaction cannot recover; the caller is
+    responsible for routing the exception through ``on_llm_error``.
+    """
+    while True:
+        kwargs = {}
+        if callbacks.on_stream_content is not None:
+            kwargs = {"stream": True, "stream_options": {"include_usage": True}}
+        if config.extra_api_params:
+            kwargs.update(config.extra_api_params)
+
+        try:
+            # Phase 1 (tool-list-compression): use per-request tool
+            # list when caller provided one (via
+            # ``QueryEngineContext.request_tools``). Falls back to
+            # the full registry payload for backward compatibility.
+            request_tools = (
+                list(context.request_tools)
+                if context.request_tools is not None
+                else list(tool_runtime.openai_tools)
+            )
+            response = await llm.chat.completions.create(
+                model=config.model,
+                max_tokens=config.max_tokens,
+                messages=[{"role": "system", "content": request_system_prompt}]
+                + request_messages,
+                tools=request_tools,
+                **kwargs,
+            )
+            last_message = await _materialize_message(
+                response,
+                callbacks,
+                on_usage_delta=on_usage_delta,
+            )
+            return last_message, has_attempted_reactive_compact
+        except config.llm_error_types as exc:
+            if not (
+                not has_attempted_reactive_compact
+                and config.context_compaction.enabled
+                and _is_prompt_too_long_error(exc)
+            ):
+                raise
+
+            reactive_pre_chars = sum(estimate_message_size(m) for m in history)
+            reactive_messages = prepare_model_messages(
+                system_prompt=system_prompt,
+                history=history,
+                chat_id=context.chat_id,
+                tool_result_store=tool_result_store,
+                config=config.context_compaction,
+                metadata=compaction_metadata,
+                workspace=compaction_workspace,
+                force_reactive_compact=True,
+            )
+            has_attempted_reactive_compact = True
+            if reactive_messages.applied_stages and (
+                reactive_messages.system_prompt != request_system_prompt
+                or reactive_messages.messages != request_messages
+            ):
+                request_system_prompt = reactive_messages.system_prompt
+                request_messages = reactive_messages.messages
+                if config.deepseek_reasoning_passback:
+                    request_messages = apply_deepseek_reasoning_passback(
+                        request_messages
+                    )
+                _persist_prepared_compaction(
+                    transcript_store=transcript_store,
+                    chat_id=context.chat_id,
+                    prepared_messages=reactive_messages,
+                )
+                if callbacks.on_context_compacted:
+                    await _emit_compaction_event(
+                        callbacks=callbacks,
+                        pre_chars=reactive_pre_chars,
+                        post_chars=reactive_messages.estimated_chars,
+                        history_len=len(history),
+                        kept_len=len(reactive_messages.messages),
+                        applied_stages=reactive_messages.applied_stages,
+                    )
+                continue
+            raise
+
+
 async def run_query_engine(
     *,
     llm,
@@ -621,83 +1035,25 @@ async def run_query_engine(
                 applied_stages=prepared_messages.applied_stages,
             )
         try:
-            while True:
-                kwargs = {}
-                if callbacks.on_stream_content is not None:
-                    kwargs = {"stream": True, "stream_options": {"include_usage": True}}
-                if config.extra_api_params:
-                    kwargs.update(config.extra_api_params)
-
-                try:
-                    # Phase 1 (tool-list-compression): use per-request tool
-                    # list when caller provided one (via
-                    # ``QueryEngineContext.request_tools``). Falls back to
-                    # the full registry payload for backward compatibility.
-                    request_tools = (
-                        list(context.request_tools)
-                        if context.request_tools is not None
-                        else list(tool_runtime.openai_tools)
-                    )
-                    response = await llm.chat.completions.create(
-                        model=config.model,
-                        max_tokens=config.max_tokens,
-                        messages=[{"role": "system", "content": request_system_prompt}]
-                        + request_messages,
-                        tools=request_tools,
-                        **kwargs,
-                    )
-                    last_message = await _materialize_message(
-                        response,
-                        callbacks,
-                        on_usage_delta=_observe_usage_delta,
-                    )
-                    break
-                except config.llm_error_types as exc:
-                    if not (
-                        not has_attempted_reactive_compact
-                        and config.context_compaction.enabled
-                        and _is_prompt_too_long_error(exc)
-                    ):
-                        raise
-
-                    reactive_pre_chars = sum(estimate_message_size(m) for m in history)
-                    reactive_messages = prepare_model_messages(
-                        system_prompt=system_prompt,
-                        history=history,
-                        chat_id=context.chat_id,
-                        tool_result_store=tool_result_store,
-                        config=config.context_compaction,
-                        metadata=compaction_metadata,
-                        workspace=compaction_workspace,
-                        force_reactive_compact=True,
-                    )
-                    has_attempted_reactive_compact = True
-                    if reactive_messages.applied_stages and (
-                        reactive_messages.system_prompt != request_system_prompt
-                        or reactive_messages.messages != request_messages
-                    ):
-                        request_system_prompt = reactive_messages.system_prompt
-                        request_messages = reactive_messages.messages
-                        if config.deepseek_reasoning_passback:
-                            request_messages = apply_deepseek_reasoning_passback(
-                                request_messages
-                            )
-                        _persist_prepared_compaction(
-                            transcript_store=transcript_store,
-                            chat_id=context.chat_id,
-                            prepared_messages=reactive_messages,
-                        )
-                        if callbacks.on_context_compacted:
-                            await _emit_compaction_event(
-                                callbacks=callbacks,
-                                pre_chars=reactive_pre_chars,
-                                post_chars=reactive_messages.estimated_chars,
-                                history_len=len(history),
-                                kept_len=len(reactive_messages.messages),
-                                applied_stages=reactive_messages.applied_stages,
-                            )
-                        continue
-                    raise
+            last_message, has_attempted_reactive_compact = (
+                await _call_llm_with_reactive_compact_retry(
+                    llm=llm,
+                    context=context,
+                    tool_runtime=tool_runtime,
+                    config=config,
+                    callbacks=callbacks,
+                    system_prompt=system_prompt,
+                    history=history,
+                    request_system_prompt=request_system_prompt,
+                    request_messages=request_messages,
+                    transcript_store=transcript_store,
+                    tool_result_store=tool_result_store,
+                    compaction_metadata=compaction_metadata,
+                    compaction_workspace=compaction_workspace,
+                    on_usage_delta=_observe_usage_delta,
+                    has_attempted_reactive_compact=has_attempted_reactive_compact,
+                )
+            )
         except config.llm_error_types as exc:
             if callbacks.on_llm_error is not None:
                 return await _maybe_await(callbacks.on_llm_error(exc))
@@ -738,261 +1094,41 @@ async def run_query_engine(
                 accumulated_response_segments, current_response
             )
 
-        execution_requests: list[ToolExecutionRequest] = []
-        tool_states: dict[str, Any] = {}
-        for tc in last_message.tool_calls:
-            executor = tool_runtime.executors.get(tc.name)
-            tool_spec = tool_runtime.specs_by_name.get(tc.name)
-            try:
-                func_args = json.loads(tc.arguments) if executor else {}
-            except json.JSONDecodeError:
-                func_args = {}
-
-            runtime_context = {
-                "session_id": context.session_id,
-                "chat_id": context.chat_id,
-                "surface": context.surface,
-                "policy_state": current_policy_state,
-            }
-            if tool_runtime_context:
-                runtime_context.update(tool_runtime_context)
-            request = ToolExecutionRequest(
-                call_id=tc.id,
-                name=tc.name,
-                arguments=func_args,
-                spec=tool_spec,
-                executor=executor,
-                runtime_context=runtime_context,
-                policy_decision=evaluate_tool_policy(
-                    tc.name,
-                    tool_spec,
-                    runtime_context=runtime_context,
-                ),
-            )
-            if hook_runtime is not None:
-                hook_runtime.emit(
-                    EVENT_TOOL_BEFORE,
-                    ToolHookPayload(
-                        tool_name=tc.name,
-                        call_id=tc.id,
-                        status="pending",
-                        success=False,
-                        surface=context.surface,
-                        session_id=str(context.session_id or ""),
-                        chat_id=str(context.chat_id),
-                        policy_action=(
-                            request.policy_decision.action
-                            if request.policy_decision is not None
-                            else ""
-                        ),
-                    ),
-                    context=runtime_context,
-                )
-            if executor and callbacks.before_tool is not None:
-                tool_states[tc.id] = await _maybe_await(callbacks.before_tool(request))
-            execution_requests.append(request)
+        execution_requests, tool_states = await _build_execution_requests(
+            tool_calls=last_message.tool_calls,
+            context=context,
+            callbacks=callbacks,
+            tool_runtime=tool_runtime,
+            tool_runtime_context=tool_runtime_context,
+            current_policy_state=current_policy_state,
+            hook_runtime=hook_runtime,
+        )
 
         execution_results = await execute_tool_requests(execution_requests)
         if callbacks.request_tool_approval is not None:
-            resolved_execution_results: list[ToolExecutionResult] = []
-            for execution_result in execution_results:
-                request = execution_result.request
-                if (
-                    execution_result.status == EXECUTION_STATUS_POLICY_BLOCKED
-                    and execution_result.policy_decision is not None
-                    and execution_result.policy_decision.action
-                    == TOOL_POLICY_REQUIRE_APPROVAL
-                ):
-                    resolution = await _maybe_await(
-                        callbacks.request_tool_approval(request, execution_result)
-                    )
-                    (
-                        approval_behavior,
-                        updated_arguments,
-                        updated_policy_state,
-                        deny_message,
-                        approval_persist,
-                    ) = _normalize_permission_resolution(
-                        resolution,
-                        request=request,
-                        fallback_surface=context.surface,
-                    )
-                    if approval_behavior == "allow":
-                        base_policy_state = ToolPolicyState.from_mapping(
-                            (request.runtime_context or {}).get("policy_state"),
-                            surface=context.surface,
-                        )
-                        effective_policy_state = updated_policy_state
-                        if effective_policy_state is None:
-                            effective_policy_state = ToolPolicyState(
-                                surface=base_policy_state.surface or context.surface,
-                                trusted=base_policy_state.trusted,
-                                background=base_policy_state.background,
-                                auto_approve_ask=base_policy_state.auto_approve_ask,
-                                approved_tool_names=(
-                                    base_policy_state.approved_tool_names
-                                    | frozenset({request.name})
-                                ),
-                            )
-                        approved_runtime_context = dict(request.runtime_context or {})
-                        approved_runtime_context["policy_state"] = (
-                            effective_policy_state
-                        )
-                        approved_request = ToolExecutionRequest(
-                            call_id=request.call_id,
-                            name=request.name,
-                            arguments=(
-                                updated_arguments
-                                if updated_arguments is not None
-                                else request.arguments
-                            ),
-                            spec=request.spec,
-                            executor=request.executor,
-                            runtime_context=approved_runtime_context,
-                            policy_decision=evaluate_tool_policy(
-                                request.name,
-                                request.spec,
-                                runtime_context=approved_runtime_context,
-                            ),
-                        )
-                        execution_result = (
-                            await execute_tool_requests([approved_request])
-                        )[0]
-                        if updated_policy_state is not None and approval_persist:
-                            current_policy_state = updated_policy_state
-                    elif deny_message:
-                        execution_result = ToolExecutionResult(
-                            request=request,
-                            output=deny_message,
-                            success=False,
-                            error=execution_result.error,
-                            status=execution_result.status,
-                            policy_decision=execution_result.policy_decision,
-                            trace=execution_result.trace,
-                        )
-                resolved_execution_results.append(execution_result)
-            execution_results = resolved_execution_results
+            execution_results, current_policy_state = (
+                await _resolve_tool_approval_flow(
+                    execution_results=execution_results,
+                    callbacks=callbacks,
+                    context=context,
+                    current_policy_state=current_policy_state,
+                )
+            )
 
         interruption_message = ""
         for execution_result in execution_results:
-            request = execution_result.request
-            record_output = execution_result.output
-            if hook_runtime is not None:
-                event_name = EVENT_TOOL_AFTER
-                if not execution_result.success:
-                    event_name = EVENT_TOOL_FAILURE
-                hook_runtime.emit(
-                    event_name,
-                    ToolHookPayload(
-                        tool_name=request.name,
-                        call_id=request.call_id,
-                        status=execution_result.status,
-                        success=execution_result.success,
-                        surface=context.surface,
-                        session_id=str(context.session_id or ""),
-                        chat_id=str(context.chat_id),
-                        policy_action=(
-                            execution_result.policy_decision.action
-                            if execution_result.policy_decision is not None
-                            else ""
-                        ),
-                    ),
-                    context={
-                        "session_id": context.session_id,
-                        "chat_id": context.chat_id,
-                        "surface": context.surface,
-                        "workspace": str(
-                            (request.runtime_context or {}).get("pipeline_workspace")
-                            or (request.runtime_context or {}).get("workspace")
-                            or ""
-                        ).strip(),
-                    },
-                )
-                notices = hook_runtime.consume_pending_messages(
-                    mode=HOOK_MODE_NOTICE,
-                    event_names=(
-                        EVENT_TOOL_BEFORE,
-                        EVENT_TOOL_AFTER,
-                        EVENT_TOOL_FAILURE,
-                    ),
-                    call_id=request.call_id,
-                )
-                if notices:
-                    record_output = "\n".join([*notices, str(record_output)]).strip()
-            # Phase 4 (system-prompt-compression refactor): prepend the
-            # matched pre-call rule preamble (engineering / skill-execution
-            # discipline) to the tool result so the model sees the rule
-            # right before it reasons about the result. This is the
-            # runtime wiring of ``PreCallRuleInjector`` —
-            # ``build_pre_call_rule_text`` is otherwise dead abstraction.
-            from ..tools.execution_hooks import (
-                DEFAULT_PRE_CALL_RULE_INJECTORS,
-                build_pre_call_rule_text,
+            candidate = await _record_tool_outcome(
+                execution_result=execution_result,
+                context=context,
+                callbacks=callbacks,
+                tool_result_store=tool_result_store,
+                transcript_store=transcript_store,
+                hook_runtime=hook_runtime,
+                tool_state=tool_states.get(execution_result.request.call_id),
+                state=state,
             )
-
-            preamble_text = build_pre_call_rule_text(
-                tool_name=request.name,
-                tool_args=request.arguments or {},
-                injectors=DEFAULT_PRE_CALL_RULE_INJECTORS,
-            )
-            if preamble_text:
-                record_output = f"{preamble_text}\n\n{record_output}".strip()
-            result_record = tool_result_store.record(
-                chat_id=context.chat_id,
-                tool_call_id=request.call_id,
-                tool_name=request.name,
-                output=record_output,
-                success=execution_result.success,
-                error=execution_result.error,
-                spec=request.spec,
-                policy_decision=execution_result.policy_decision,
-                execution_trace=(
-                    execution_result.trace.to_dict()
-                    if execution_result.trace is not None
-                    else None
-                ),
-            )
-
-            if callbacks.after_tool is not None:
-                await _maybe_await(
-                    callbacks.after_tool(
-                        execution_result,
-                        result_record,
-                        tool_states.get(request.call_id),
-                    )
-                )
-
-            transcript_store.append_tool_message(
-                context.chat_id,
-                tool_call_id=request.call_id,
-                content=result_record.content,
-            )
-
-            state.tool_calls.append(
-                ToolCallRecord(
-                    name=request.name,
-                    args_digest=compute_args_digest(request.arguments),
-                    iteration=state.iteration,
-                    succeeded=execution_result.success,
-                )
-            )
-            if not execution_result.success:
-                error_obj = execution_result.error
-                state.errors.append(
-                    ToolErrorRecord(
-                        tool_name=request.name,
-                        iteration=state.iteration,
-                        error_class=type(error_obj).__name__
-                        if error_obj is not None
-                        else "ToolFailure",
-                        message_head=(str(error_obj) if error_obj is not None else "")[:200],
-                    )
-                )
-
             if not interruption_message:
-                interruption_message = _build_preflight_interruption_message(
-                    result_record.content
-                )
+                interruption_message = candidate
 
         if interruption_message:
             transcript_store.append_assistant_message(

@@ -115,6 +115,7 @@ async def dispatch(envelope: MessageEnvelope) -> AsyncIterator[Event]:
                 usage_accumulator=envelope.usage_accumulator,
                 request_tool_approval=envelope.request_tool_approval,
                 policy_state=envelope.policy_state,
+                cancel_event=envelope.cancel_event,
             )
 
             # ``pending_media`` is deliberately not touched here — see
