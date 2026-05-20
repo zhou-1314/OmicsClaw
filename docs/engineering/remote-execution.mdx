@@ -26,42 +26,52 @@ og:image: "/docs/images/og-cover.png"
 
 ```text
 ┌──────────────────────┐            ┌──────────────────────────────┐
-│  OmicsClaw-App       │            │  远程 Linux 服务器           │
-│  (control plane)     │            │  (execution plane)           │
-│  Next.js UI          │ ─SSH隧道─▶ │  oc app-server 127.0.0.1:8765│
-│  Electron            │            │  + Python skills             │
-│  TunnelManager       │            │  + dataset / workspace       │
-└──────────────────────┘            └──────────────────────────────┘
+│  OmicsClaw-App       │            │  远程 Linux 服务器               │
+│  (control plane)     │            │  (execution plane)               │
+│  Next.js UI          │ ─SSH隧道─▶ │  oc desktop-server 127.0.0.1:8765│
+│  Electron            │            │  + Python skills                 │
+│  TunnelManager       │            │  + dataset / workspace           │
+└──────────────────────┘            └──────────────────────────────────┘
 ```
 
-App 通过 TunnelManager 将本地动态端口前向到远端 `oc app-server`，所有通信走 SSH 加密隧道，无需对外开放任何端口。
+App 通过 TunnelManager 将本地动态端口前向到远端 `oc desktop-server`，所有通信走 SSH 加密隧道，无需对外开放任何端口。Desktop Surface 同时承载 OmicsClaw-App 自身的桌面后端 API 与 `omicsclaw.remote.*` 控制面路由（`/connections/test`、`/env/doctor`、`/datasets`、`/jobs`、`/artifacts`、`/sessions`），因此一个进程即可同时服务本地 App 与远程 SSH 接入，参见 [ADR 0005](https://github.com/zhou-1314/OmicsClaw/blob/main/docs/adr/0005-surfaces-umbrella-for-ingress.md)。
 
 ## 配置步骤
 
-**Step 1 — 在远端启动 `oc app-server`**
+**Step 1 — 在远端启动 `oc desktop-server`**
 
 SSH 登录到远端服务器后执行：
 
 ```bash
+# 安装 desktop 额外依赖（首次部署时）
+pip install -e ".[desktop]"
+
 # 激活 Python 环境
 source .venv/bin/activate        # 或 conda activate omicsclaw
 
-# 设置 workspace 根目录
+# 设置 workspace 根目录（jobs、artifacts、datasets 都落在这里）
 export OMICSCLAW_WORKSPACE=/data/omicsclaw-workspace
 mkdir -p "$OMICSCLAW_WORKSPACE"
 
-# 设置 Bearer token（SSH 之外的第二层鉴权）
+# 设置 Bearer token（SSH 之外的第二层鉴权；留空则走 SSH-only 模式）
 export OMICSCLAW_REMOTE_AUTH_TOKEN="your-secret-token-here"
 
-# 启动 app-server（仅绑 127.0.0.1，勿暴露公网）
-oc app-server --host 127.0.0.1 --port 8765
+# 启动 desktop-server（仅绑 127.0.0.1，勿暴露公网）
+oc desktop-server --host 127.0.0.1 --port 8765
 ```
+
+> 旧版命令 `oc app-server` 已于 ADR 0005 改名为 `oc desktop-server`，没有兼容别名，请同步更新自动化脚本。
 
 自检：
 
 ```bash
+# 公开探活端点（无需 token）
 curl http://127.0.0.1:8765/health
+
+# 控制面端点（需要 Bearer token；当 OMICSCLAW_REMOTE_AUTH_TOKEN 未设置时也可省略 header）
 curl -X POST http://127.0.0.1:8765/connections/test \
+  -H "Authorization: Bearer $OMICSCLAW_REMOTE_AUTH_TOKEN"
+curl http://127.0.0.1:8765/env/doctor \
   -H "Authorization: Bearer $OMICSCLAW_REMOTE_AUTH_TOKEN"
 ```
 
@@ -78,9 +88,9 @@ curl -X POST http://127.0.0.1:8765/connections/test \
 | SSH Key Path | `ssh_key_path` | `~/.ssh/id_ed25519` |
 | Remote Port | `remote_port` | 8765 |
 | Auth Token | `auth_token` | your-secret-token-here |
-| Auto-start Command | `remote_bootstrap_command` | `bash -lc 'cd ~/omicsclaw && nohup oc app-server --host 127.0.0.1 --port 8765 > app-server.log 2>&1 &'` |
+| Auto-start Command | `remote_bootstrap_command` | `bash -lc 'cd ~/omicsclaw && nohup oc desktop-server --host 127.0.0.1 --port 8765 > desktop-server.log 2>&1 &'` |
 
-`remote_bootstrap_command` 为可选字段：填写后，App 激活该 runtime 时若远端端口未监听，会通过 SSH exec 自动执行该命令并轮询直到端口可用。留空则需手动完成 Step 1。
+`remote_bootstrap_command` 为可选字段：填写后，App 激活该 runtime 时若远端端口未监听，会通过 SSH exec 自动执行该命令并轮询直到端口可用。留空则需手动完成 Step 1。命令中可继续沿用 App 内 Runtimes 页面预留的 `OMICSCLAW_WORKSPACE`、`OMICSCLAW_REMOTE_AUTH_TOKEN` 两个环境变量字段——它们会随启动命令一并 export。
 
 **Step 3 — 验证连接**
 
@@ -103,9 +113,10 @@ Job 完成后进入 **Artifacts** 面板，按 job 分组浏览：`report.md` / 
 
 | 症状 | 原因 | 解决 |
 |---|---|---|
-| Run Ping `/health` 失败 | SSH 无法连通或远端 `oc app-server` 未启动 | 先确认 `ssh -i <key> <user>@<host>` 可登录；再确认 `remote_port` 与远端监听端口一致 |
-| `/health` 绿但 `/env/doctor` 红 | Bearer token 不匹配 | 核对远端 `OMICSCLAW_REMOTE_AUTH_TOKEN` 与 profile `auth_token`（GET 返回遮罩值 `***<后8位>`） |
-| workspace 未配置 / 目录不存在 | 远端未 export `OMICSCLAW_WORKSPACE` 或目录不存在 | 远端执行 `mkdir -p $OMICSCLAW_WORKSPACE` 并重新启动 `oc app-server` |
+| Run Ping `/health` 失败 | SSH 无法连通或远端 `oc desktop-server` 未启动 | 先确认 `ssh -i <key> <user>@<host>` 可登录；再确认 `remote_port` 与远端监听端口一致；用 `ps -ef \| grep desktop-server` 检查进程 |
+| `/health` 绿但 `/env/doctor` 红 | Bearer token 不匹配 | 核对远端 `OMICSCLAW_REMOTE_AUTH_TOKEN` 与 profile `auth_token`（GET 返回遮罩值 `***<后8位>`），两边都为空也视为匹配 |
+| workspace 未配置 / 目录不存在 | 远端未 export `OMICSCLAW_WORKSPACE` 或目录不存在 | 远端执行 `mkdir -p $OMICSCLAW_WORKSPACE` 并重新启动 `oc desktop-server` |
+| 沿用 `oc app-server` 报错 `unknown command` | ADR 0005 已把命令更名为 `oc desktop-server`，未保留别名 | 更新启动脚本 / `remote_bootstrap_command` 改为 `oc desktop-server` |
 | Job 很快失败 | 环境或数据问题 | 查看 job 的 `stdout.log` 和 `diagnostics/env_doctor.json` |
 | SSE 日志不显示 | SSH 隧道断开 | 检查隧道是否存活，或在 Runtimes 页面重新 **Make Active** |
 
