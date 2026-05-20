@@ -1,0 +1,61 @@
+domain: spatial
+trigger_keywords:
+- consensus interpret
+- interpret consensus
+- explain consensus
+- annotate consensus
+- consensus cell type
+- name clusters
+- biological interpretation
+- next step after consensus
+- interpreted consensus
+- consensus biology
+
+allowed_extra_flags:
+- --input            # typed_run_dir (must contain plan.json)
+- --output           # interpreted output dir
+- --tissue           # brain | immune | kidney | liver (selects bundled DB)
+- --adata            # override plan.json input_path
+- --markers          # user-provided marker DB (TSV)
+- --no-llm           # structural-only degrade mode
+- --seed             # LLM seed (for self-consistency)
+- --top-k-markers    # default 20
+- --top-k-next-steps # default 3 (capped at 3 by ADR 0012)
+- --coverage-floor   # default 0.5
+
+# ADR 0012 §"Pass rule" — surfaced here so the orchestrator and tests can
+# detect the contract without reading the ADR.
+evaluation_contract:
+  axes:
+    - name: interpretation_faithfulness
+      kind: invariant
+      floor: 1.00
+      gate: always
+    - name: marker_grounding_rate
+      kind: metric
+      floor: 0.60
+      gate: stubbed-default | RUN_INTERPRET_LLM=1 for real
+    - name: interpret_self_consistency
+      kind: metric
+      floor: 0.70
+      gate: RUN_INTERPRET_CONSISTENCY=1
+    - name: expert_concordance_hero
+      kind: metric
+      floor: 0.45      # ARI on DLPFC 151673
+      gate: RUN_INTERPRET_DLPFC=1
+  banner_allowed:
+    - "[A+I: Interpreted on verified consensus]"
+    - "[I-noLLM: Structural patterns only — biology annotation disabled]"
+  namespace: "analysis://interpreted/<typed_run_id>"
+  evidence_base: "analysis://typed/<typed_run_id>"   # MUST be cited
+
+# Bundled marker DBs — relative to skill directory.
+marker_db_bundled:
+  brain:   data/markers/panglaodb_brain.tsv
+  immune:  data/markers/panglaodb_immune.tsv
+  kidney:  data/markers/panglaodb_kidney.tsv
+  liver:   data/markers/cellmarker_liver.tsv
+
+# No param_hints — consensus-interpret is NOT a fan-out target for any
+# typed_consensus run; it does not appear in TYPED_CONSENSUS_REGISTRY.
+# (It is a downstream consumer, not a source.)
