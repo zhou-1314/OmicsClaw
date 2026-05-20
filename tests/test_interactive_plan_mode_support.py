@@ -2,13 +2,13 @@ from omicsclaw.agents.plan_state import (
     PLAN_STATUS_APPROVED,
     PLAN_STATUS_PENDING_APPROVAL,
 )
-from omicsclaw.runtime.events import (
+from omicsclaw.runtime.tools.hooks import (
     EVENT_PLAN_APPROVED,
     EVENT_PLAN_CREATED,
     EVENT_TASK_STARTED,
 )
-from omicsclaw.runtime.hooks import LifecycleHookRuntime, LifecycleHookSpec
-from omicsclaw.interactive._plan_mode_support import (
+from omicsclaw.runtime.tools.hooks import LifecycleHookRuntime, LifecycleHookSpec
+from omicsclaw.surfaces.cli._plan_mode_support import (
     PLAN_KIND_GENERIC_ANALYSIS,
     PLAN_KIND_SKILL_CREATION,
     build_approve_plan_command_view,

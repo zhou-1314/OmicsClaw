@@ -1,4 +1,4 @@
-from omicsclaw.interactive._skill_run_support import (
+from omicsclaw.surfaces.cli._skill_run_support import (
     build_skill_run_exception_result,
     build_skill_run_execution_view,
     parse_skill_run_command,

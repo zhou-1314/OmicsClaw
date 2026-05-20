@@ -20,7 +20,7 @@ def _install_fake_skills(monkeypatch, skills: dict, domains: dict | None = None)
     ``ensure_registry_loaded()`` calls become a no-op rather than rescanning
     disk and clobbering the fake.
     """
-    from omicsclaw.core.registry import SKILLS_DIR, registry
+    from omicsclaw.skill.registry import SKILLS_DIR, registry
 
     monkeypatch.setattr(registry, "skills", skills, raising=False)
     monkeypatch.setattr(
@@ -32,7 +32,7 @@ def _install_fake_skills(monkeypatch, skills: dict, domains: dict | None = None)
 
 
 def test_skill_runner_module_exposes_run_skill_contract():
-    module = importlib.import_module("omicsclaw.core.skill_runner")
+    module = importlib.import_module("omicsclaw.skill.runner")
 
     assert hasattr(module, "run_skill")
     signature = inspect.signature(module.run_skill)
@@ -57,8 +57,8 @@ def test_run_skill_returns_skill_run_result_natively():
     return type here so a future "convenience dict-wrap" cannot silently
     regress the contract and reintroduce the dict↔model round-trip.
     """
-    from omicsclaw.core.skill_result import SkillRunResult
-    from omicsclaw.core.skill_runner import run_skill
+    from omicsclaw.skill.result import SkillRunResult
+    from omicsclaw.skill.runner import run_skill
 
     result = run_skill("__definitely_not_a_real_skill__", demo=True)
     assert isinstance(result, SkillRunResult)
@@ -74,7 +74,7 @@ def test_run_skill_returns_skill_run_result_natively():
 
 def test_root_omicsclaw_reexports_shared_run_skill():
     root = importlib.import_module("omicsclaw")
-    runner = importlib.import_module("omicsclaw.core.skill_runner")
+    runner = importlib.import_module("omicsclaw.skill.runner")
 
     assert root.run_skill is runner.run_skill
 
@@ -83,7 +83,7 @@ def test_run_skill_streams_stdout_and_stderr_lines_via_callbacks(tmp_path, monke
     """The runner must surface skill output line-by-line in real time so that
     long-running deep-learning skills produce visible logs to the bot/operator
     instead of staying silent until completion."""
-    skill_runner = importlib.import_module("omicsclaw.core.skill_runner")
+    skill_runner = importlib.import_module("omicsclaw.skill.runner")
 
     fake_script = tmp_path / "fake_streamer.py"
     fake_script.write_text(textwrap.dedent("""\
@@ -140,7 +140,7 @@ def test_run_skill_streams_stdout_and_stderr_lines_via_callbacks(tmp_path, monke
 def test_run_skill_callback_exception_does_not_break_run(tmp_path, monkeypatch):
     """A buggy stdout/stderr callback must not abort the skill — the runner
     swallows callback errors so the underlying analysis still completes."""
-    skill_runner = importlib.import_module("omicsclaw.core.skill_runner")
+    skill_runner = importlib.import_module("omicsclaw.skill.runner")
 
     fake_script = tmp_path / "fake_one_line.py"
     fake_script.write_text(textwrap.dedent("""\
@@ -189,7 +189,7 @@ def test_run_skill_cancel_event_kills_long_running_subprocess(tmp_path, monkeypa
     cancellation, so jobs cancelled by the FastAPI router would leak
     children that kept consuming CPU/GPU until they finished naturally.
     """
-    skill_runner = importlib.import_module("omicsclaw.core.skill_runner")
+    skill_runner = importlib.import_module("omicsclaw.skill.runner")
 
     fake_script = tmp_path / "fake_long.py"
     fake_script.write_text(textwrap.dedent("""\
@@ -253,7 +253,7 @@ def test_run_skill_cancellation_with_partial_result_json_is_not_reported_as_succ
     runs that happened to leave a partial ``result.json`` were silently
     reported as ``success=True``.
     """
-    skill_runner = importlib.import_module("omicsclaw.core.skill_runner")
+    skill_runner = importlib.import_module("omicsclaw.skill.runner")
 
     fake_script = tmp_path / "fake_partial_then_sleep.py"
     fake_script.write_text(textwrap.dedent("""\

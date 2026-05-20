@@ -8,9 +8,9 @@ import httpx
 import pytest
 from openai import OpenAIError
 
-import bot.core as core
+import omicsclaw.runtime.agent.state as core
 from omicsclaw.agents.pipeline import ResearchPipeline
-from omicsclaw.core.provider_registry import PROVIDER_PRESETS
+from omicsclaw.providers.registry import PROVIDER_PRESETS
 
 
 def _clear_llm_env(monkeypatch):
@@ -184,7 +184,7 @@ def test_init_disables_memory_when_graph_dependencies_missing(monkeypatch):
 
 
 def test_format_llm_api_error_mentions_custom_endpoint_base_url(monkeypatch):
-    from omicsclaw.core import provider_runtime
+    from omicsclaw.providers import runtime as provider_runtime
 
     provider_runtime.clear_active_provider_runtime()
     monkeypatch.setattr(core, "LLM_PROVIDER_NAME", "custom")
@@ -199,7 +199,7 @@ def test_format_llm_api_error_mentions_custom_endpoint_base_url(monkeypatch):
 
 
 def test_format_llm_api_error_prefers_active_runtime_base_url(monkeypatch):
-    from omicsclaw.core import provider_runtime
+    from omicsclaw.providers import runtime as provider_runtime
 
     monkeypatch.setattr(core, "LLM_PROVIDER_NAME", "custom")
     monkeypatch.setenv("LLM_BASE_URL", "https://stale.example.com/v1")

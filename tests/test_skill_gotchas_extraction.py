@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from omicsclaw.core.lazy_metadata import LazySkillMetadata
+from omicsclaw.skill.lazy_metadata import LazySkillMetadata
 
 
 ROOT = Path(__file__).resolve().parent.parent

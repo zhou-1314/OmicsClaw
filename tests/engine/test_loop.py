@@ -42,7 +42,7 @@ def _make_deps(**overrides) -> EngineDependencies:
 
 
 def test_returns_setup_prompt_when_llm_is_none() -> None:
-    """If bot.core.llm is None at request time, the engine returns
+    """If omicsclaw.runtime.agent.state.llm is None at request time, the engine returns
     a setup-instructions message instead of raising. This is the
     contract the bot has relied on since core.py was carved up."""
     deps = _make_deps(llm=None)

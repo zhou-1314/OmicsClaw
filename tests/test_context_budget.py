@@ -1,4 +1,4 @@
-from omicsclaw.runtime.context_budget import (
+from omicsclaw.runtime.context.budget import (
     estimate_message_size,
     trim_history_to_budget,
 )

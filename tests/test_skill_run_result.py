@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from omicsclaw.core.skill_result import build_skill_run_result, coerce_skill_run_result
+from omicsclaw.skill.result import build_skill_run_result, coerce_skill_run_result
 
 
 def test_skill_run_result_normalizes_failed_zero_exit_for_adapters():

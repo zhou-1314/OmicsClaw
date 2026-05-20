@@ -29,14 +29,14 @@ def _stub_optional_modules() -> None:
 def test_handler_pushes_status_frame_to_queue() -> None:
     _stub_optional_modules()
     try:
-        from omicsclaw.app._compaction_event_bridge import (
+        from omicsclaw.surfaces.desktop._compaction_event_bridge import (
             make_compaction_event_handler,
         )
     except ImportError as exc:
         import pytest
         pytest.skip(f"server bridge unavailable: {exc}")
 
-    from omicsclaw.runtime.context_compaction import CompactionEvent
+    from omicsclaw.runtime.context.compaction import CompactionEvent
 
     queue = MagicMock()
     handler = make_compaction_event_handler(queue)

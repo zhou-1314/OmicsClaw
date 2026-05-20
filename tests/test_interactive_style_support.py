@@ -1,4 +1,4 @@
-from omicsclaw.interactive._style_support import build_style_command_view
+from omicsclaw.surfaces.cli._style_support import build_style_command_view
 
 
 def test_build_style_command_view_lists_available_styles():

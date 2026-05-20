@@ -1,4 +1,4 @@
-from bot.core import _collect_output_media_paths
+from omicsclaw.runtime.agent.state import _collect_output_media_paths
 
 
 def test_collect_output_media_paths_preserves_nested_figure_locations(tmp_path):

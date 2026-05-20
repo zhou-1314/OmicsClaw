@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from omicsclaw.interactive._llm_bridge_support import (
+from omicsclaw.surfaces.cli._llm_bridge_support import (
     append_interruption_notice,
     build_usage_delta,
     seed_core_conversation,

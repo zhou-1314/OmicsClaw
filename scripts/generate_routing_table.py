@@ -19,7 +19,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from omicsclaw.core.registry import OmicsRegistry, SKILLS_DIR, _HARDCODED_DOMAINS
+from omicsclaw.skill.registry import OmicsRegistry, SKILLS_DIR, _HARDCODED_DOMAINS
 
 START_MARKER = "<!-- ROUTING-TABLE-START -->"
 END_MARKER = "<!-- ROUTING-TABLE-END -->"
@@ -104,12 +104,12 @@ def _generate_full_tables() -> str:
 def _generate_briefing() -> str:
     """Generate a compact 7-domain briefing (default, token-cheap mode).
 
-    Uses ``omicsclaw.core.domain_briefing`` as the single source of truth so
+    Uses ``omicsclaw.skill.domain_briefing`` as the single source of truth so
     the CLAUDE.md briefing and the bot-tool briefing stay byte-identical.
     Appends a single ``| domain | count | INDEX link |`` lookup table so a
     human (or LLM) can jump to the full list of any domain.
     """
-    from omicsclaw.core.domain_briefing import build_domain_briefing
+    from omicsclaw.skill.domain_briefing import build_domain_briefing
 
     briefing = build_domain_briefing(
         lead_in=(

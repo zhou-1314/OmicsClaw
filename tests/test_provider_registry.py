@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from omicsclaw.core.provider_registry import (
+from omicsclaw.providers.registry import (
     MODEL_NORMALIZATION_EXEMPT_PROVIDERS,
     PROVIDER_CHOICES,
     PROVIDER_DETECT_ORDER,

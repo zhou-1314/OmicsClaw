@@ -1,4 +1,4 @@
-"""Tests for ``omicsclaw.core.runtime.pipeline_config`` (OMI-12 P2.7).
+"""Tests for ``omicsclaw.skill.execution.pipeline_config`` (OMI-12 P2.7).
 
 These pin the YAML schema and the validation errors the loader raises.
 The end-to-end runner integration is exercised by
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from omicsclaw.core.runtime.pipeline_config import (
+from omicsclaw.skill.execution.pipeline_config import (
     PIPELINES_DIR,
     PipelineConfigError,
     list_available_pipelines,

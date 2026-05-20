@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from omicsclaw.core.registry import OmicsRegistry
+from omicsclaw.skill.registry import OmicsRegistry
 from omicsclaw.extensions.manifest import (
     ExtensionManifest,
     RESTRICTED_UNTRUSTED_CAPABILITIES,

@@ -163,7 +163,7 @@ def test_skill_runner_executor_maps_job_context_to_arun_skill(monkeypatch, tmp_p
 
     captured: dict[str, object] = {}
 
-    from omicsclaw.core.skill_result import build_skill_run_result
+    from omicsclaw.skill.result import build_skill_run_result
 
     async def fake_arun_skill(skill, **kwargs):
         captured["skill"] = skill
@@ -177,7 +177,7 @@ def test_skill_runner_executor_maps_job_context_to_arun_skill(monkeypatch, tmp_p
             stderr="",
         )
 
-    monkeypatch.setattr("omicsclaw.core.skill_runner.arun_skill", fake_arun_skill)
+    monkeypatch.setattr("omicsclaw.skill.runner.arun_skill", fake_arun_skill)
 
     ctx = _make_ctx(
         tmp_path=tmp_path,
@@ -212,7 +212,7 @@ def test_skill_runner_executor_does_not_spawn_a_thread_pool_worker(
     sneaks ``asyncio.to_thread(...)`` back in, this test must fail."""
     import asyncio
 
-    from omicsclaw.core.skill_result import build_skill_run_result
+    from omicsclaw.skill.result import build_skill_run_result
     from omicsclaw.execution.executors.default import SkillRunnerExecutor
 
     async def fake_arun_skill(skill, **_kwargs):
@@ -224,7 +224,7 @@ def test_skill_runner_executor_does_not_spawn_a_thread_pool_worker(
             stdout="ok",
         )
 
-    monkeypatch.setattr("omicsclaw.core.skill_runner.arun_skill", fake_arun_skill)
+    monkeypatch.setattr("omicsclaw.skill.runner.arun_skill", fake_arun_skill)
 
     to_thread_calls: list[tuple] = []
     original_to_thread = asyncio.to_thread
@@ -267,7 +267,7 @@ def test_skill_runner_executor_terminates_subprocess_on_asyncio_cancel(
         await asyncio.sleep(60)
         raise AssertionError("arun_skill was not cancelled")
 
-    monkeypatch.setattr("omicsclaw.core.skill_runner.arun_skill", fake_arun_skill)
+    monkeypatch.setattr("omicsclaw.skill.runner.arun_skill", fake_arun_skill)
 
     ctx = _make_ctx(tmp_path=tmp_path, skill="literature", inputs={"demo": True})
 
@@ -296,7 +296,7 @@ def test_skill_runner_executor_normalizes_failed_zero_exit(monkeypatch, tmp_path
 
     from omicsclaw.execution.executors.default import SkillRunnerExecutor
 
-    from omicsclaw.core.skill_result import build_skill_run_result
+    from omicsclaw.skill.result import build_skill_run_result
 
     async def fake_arun_skill(_skill, **_kwargs):
         return build_skill_run_result(
@@ -308,7 +308,7 @@ def test_skill_runner_executor_normalizes_failed_zero_exit(monkeypatch, tmp_path
             stderr="missing dependency",
         )
 
-    monkeypatch.setattr("omicsclaw.core.skill_runner.arun_skill", fake_arun_skill)
+    monkeypatch.setattr("omicsclaw.skill.runner.arun_skill", fake_arun_skill)
 
     ctx = _make_ctx(tmp_path=tmp_path, skill="literature", inputs={"demo": True})
     outcome = asyncio.run(SkillRunnerExecutor().run(ctx))

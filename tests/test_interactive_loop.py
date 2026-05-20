@@ -12,10 +12,10 @@ from types import SimpleNamespace
 import pytest
 from rich.console import Console
 
-from omicsclaw.core.registry import OmicsRegistry
-from omicsclaw.interactive import interactive
-from omicsclaw.interactive._session_state import SessionState
-from omicsclaw.interactive._session_command_support import (
+from omicsclaw.skill.registry import OmicsRegistry
+from omicsclaw.surfaces.cli import interactive
+from omicsclaw.surfaces.cli._session_state import SessionState
+from omicsclaw.surfaces.cli._session_command_support import (
     SessionCommandView,
     SessionListEntry,
     SessionListView,
@@ -36,7 +36,7 @@ def guarded_import(name, *args, **kwargs):
     return original_import(name, *args, **kwargs)
 
 builtins.__import__ = guarded_import
-import omicsclaw.interactive.interactive
+import omicsclaw.surfaces.cli.interactive
 print("ok")
 """
     result = subprocess.run(
@@ -60,9 +60,9 @@ async def test_stream_llm_response_uses_explicit_workspace_context(monkeypatch):
     output = io.StringIO()
 
     async def _fake_llm_tool_loop(
-        conversation_id,
-        user_text,
         *,
+        chat_id,
+        user_content,
         user_id="",
         platform="",
         plan_context="",
@@ -73,11 +73,12 @@ async def test_stream_llm_response_uses_explicit_workspace_context(monkeypatch):
         on_tool_call=None,
         on_tool_result=None,
         on_stream_content=None,
+        **_extra,
     ):
         captured.update(
             {
-                "conversation_id": conversation_id,
-                "user_text": user_text,
+                "chat_id": chat_id,
+                "user_content": user_content,
                 "plan_context": plan_context,
                 "workspace": workspace,
                 "pipeline_workspace": pipeline_workspace,
@@ -85,8 +86,8 @@ async def test_stream_llm_response_uses_explicit_workspace_context(monkeypatch):
                 "output_style": output_style,
             }
         )
-        core_module.conversations[conversation_id] = [
-            {"role": "user", "content": user_text},
+        core_module.conversations[chat_id] = [
+            {"role": "user", "content": user_content},
             {"role": "assistant", "content": "I am OmicsClaw."},
         ]
         if on_stream_content is not None:
@@ -94,7 +95,7 @@ async def test_stream_llm_response_uses_explicit_workspace_context(monkeypatch):
             await on_stream_content("OmicsClaw.")
         return "I am OmicsClaw."
 
-    core_module = ModuleType("bot.core")
+    core_module = ModuleType("omicsclaw.runtime.agent.state")
     core_module.conversations = {}
     core_module._conversation_access = {}
     core_module.get_usage_snapshot = lambda: {}
@@ -104,7 +105,9 @@ async def test_stream_llm_response_uses_explicit_workspace_context(monkeypatch):
     bot_package.core = core_module
 
     monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "bot.core", core_module)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
+    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
+    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 
@@ -117,7 +120,7 @@ async def test_stream_llm_response_uses_explicit_workspace_context(monkeypatch):
     )
 
     assert result == "I am OmicsClaw."
-    assert captured["user_text"] == "介绍你自己"
+    assert captured["user_content"] == "介绍你自己"
     assert captured["plan_context"] == ""
     assert captured["workspace"] == "/tmp/workspace"
     assert captured["pipeline_workspace"] == "/tmp/pipeline"
@@ -139,9 +142,9 @@ def test_init_llm_does_not_force_registry_load(monkeypatch):
         return real_load_all(self, *args, **kwargs)
 
     for name in (
-        "bot.core",
-        "omicsclaw.runtime.context_assembler",
-        "omicsclaw.runtime.context_layers",
+        "omicsclaw.runtime.agent.state",
+        "omicsclaw.runtime.context.assembler",
+        "omicsclaw.runtime.context.layers",
     ):
         sys.modules.pop(name, None)
 
@@ -161,7 +164,7 @@ def test_init_llm_does_not_force_registry_load(monkeypatch):
 
 def test_init_llm_prefers_explicit_config_over_environment(monkeypatch):
     captured: dict[str, str | None] = {}
-    core_module = ModuleType("bot.core")
+    core_module = ModuleType("omicsclaw.runtime.agent.state")
     core_module.OMICSCLAW_MODEL = "config-model"
     core_module.LLM_PROVIDER_NAME = "custom"
 
@@ -175,7 +178,9 @@ def test_init_llm_prefers_explicit_config_over_environment(monkeypatch):
     bot_package.core = core_module
 
     monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "bot.core", core_module)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
+    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
+    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("LLM_API_KEY", "env-key")
     monkeypatch.setenv("OMICSCLAW_MODEL", "env-model")
@@ -250,12 +255,13 @@ async def test_stream_llm_response_formats_markdown_for_cli(monkeypatch):
     output = io.StringIO()
 
     async def _fake_llm_tool_loop(
-        conversation_id,
-        user_text,
+        *,
+        chat_id,
+        user_content,
         **kwargs,
     ):
-        core_module.conversations[conversation_id] = [
-            {"role": "user", "content": user_text},
+        core_module.conversations[chat_id] = [
+            {"role": "user", "content": user_content},
             {"role": "assistant", "content": "**空间转录组学**"},
         ]
         on_stream_content = kwargs.get("on_stream_content")
@@ -264,7 +270,7 @@ async def test_stream_llm_response_formats_markdown_for_cli(monkeypatch):
             await on_stream_content("转录组学**")
         return "**空间转录组学**"
 
-    core_module = ModuleType("bot.core")
+    core_module = ModuleType("omicsclaw.runtime.agent.state")
     core_module.conversations = {}
     core_module._conversation_access = {}
     core_module.get_usage_snapshot = lambda: {}
@@ -274,7 +280,9 @@ async def test_stream_llm_response_formats_markdown_for_cli(monkeypatch):
     bot_package.core = core_module
 
     monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "bot.core", core_module)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
+    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
+    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 
@@ -295,13 +303,14 @@ async def test_stream_llm_response_passes_plan_context(monkeypatch):
     output = io.StringIO()
 
     async def _fake_llm_tool_loop(
-        conversation_id,
-        user_text,
+        *,
+        chat_id,
+        user_content,
         **kwargs,
     ):
         captured["plan_context"] = kwargs.get("plan_context", "")
-        core_module.conversations[conversation_id] = [
-            {"role": "user", "content": user_text},
+        core_module.conversations[chat_id] = [
+            {"role": "user", "content": user_content},
             {"role": "assistant", "content": "Plan-aware reply."},
         ]
         on_stream_content = kwargs.get("on_stream_content")
@@ -309,7 +318,7 @@ async def test_stream_llm_response_passes_plan_context(monkeypatch):
             await on_stream_content("Plan-aware reply.")
         return "Plan-aware reply."
 
-    core_module = ModuleType("bot.core")
+    core_module = ModuleType("omicsclaw.runtime.agent.state")
     core_module.conversations = {}
     core_module._conversation_access = {}
     core_module.get_usage_snapshot = lambda: {}
@@ -319,7 +328,9 @@ async def test_stream_llm_response_passes_plan_context(monkeypatch):
     bot_package.core = core_module
 
     monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "bot.core", core_module)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
+    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
+    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 
@@ -420,12 +431,13 @@ async def test_stream_llm_response_formats_sectioned_markdown_lists(monkeypatch)
 3. **参数解释**：需要明确说明关键参数"""
 
     async def _fake_llm_tool_loop(
-        conversation_id,
-        user_text,
+        *,
+        chat_id,
+        user_content,
         **kwargs,
     ):
-        core_module.conversations[conversation_id] = [
-            {"role": "user", "content": user_text},
+        core_module.conversations[chat_id] = [
+            {"role": "user", "content": user_content},
             {"role": "assistant", "content": markdown_text},
         ]
         on_stream_content = kwargs.get("on_stream_content")
@@ -433,7 +445,7 @@ async def test_stream_llm_response_formats_sectioned_markdown_lists(monkeypatch)
             await on_stream_content(markdown_text)
         return markdown_text
 
-    core_module = ModuleType("bot.core")
+    core_module = ModuleType("omicsclaw.runtime.agent.state")
     core_module.conversations = {}
     core_module._conversation_access = {}
     core_module.get_usage_snapshot = lambda: {}
@@ -443,7 +455,9 @@ async def test_stream_llm_response_formats_sectioned_markdown_lists(monkeypatch)
     bot_package.core = core_module
 
     monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "bot.core", core_module)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
+    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
+    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 
@@ -468,12 +482,13 @@ async def test_stream_llm_response_separates_tool_log_from_response(monkeypatch)
     output = io.StringIO()
 
     async def _fake_llm_tool_loop(
-        conversation_id,
-        user_text,
+        *,
+        chat_id,
+        user_content,
         **kwargs,
     ):
-        core_module.conversations[conversation_id] = [
-            {"role": "user", "content": user_text},
+        core_module.conversations[chat_id] = [
+            {"role": "user", "content": user_content},
             {"role": "assistant", "content": "Analysis ready."},
         ]
         on_tool_call = kwargs.get("on_tool_call")
@@ -491,7 +506,7 @@ async def test_stream_llm_response_separates_tool_log_from_response(monkeypatch)
             await on_stream_content("Analysis ready.")
         return "Analysis ready."
 
-    core_module = ModuleType("bot.core")
+    core_module = ModuleType("omicsclaw.runtime.agent.state")
     core_module.conversations = {}
     core_module._conversation_access = {}
     core_module.get_usage_snapshot = lambda: {}
@@ -501,7 +516,9 @@ async def test_stream_llm_response_separates_tool_log_from_response(monkeypatch)
     bot_package.core = core_module
 
     monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "bot.core", core_module)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
+    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
+    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 
@@ -523,12 +540,13 @@ async def test_stream_llm_response_does_not_repeat_final_text_after_tool_interlu
     output = io.StringIO()
 
     async def _fake_llm_tool_loop(
-        conversation_id,
-        user_text,
+        *,
+        chat_id,
+        user_content,
         **kwargs,
     ):
-        core_module.conversations[conversation_id] = [
-            {"role": "user", "content": user_text},
+        core_module.conversations[chat_id] = [
+            {"role": "user", "content": user_content},
             {"role": "assistant", "content": "Final answer."},
         ]
         on_tool_call = kwargs.get("on_tool_call")
@@ -548,7 +566,7 @@ async def test_stream_llm_response_does_not_repeat_final_text_after_tool_interlu
             await on_stream_content("Final answer.")
         return "Final answer."
 
-    core_module = ModuleType("bot.core")
+    core_module = ModuleType("omicsclaw.runtime.agent.state")
     core_module.conversations = {}
     core_module._conversation_access = {}
     core_module.get_usage_snapshot = lambda: {}
@@ -558,7 +576,9 @@ async def test_stream_llm_response_does_not_repeat_final_text_after_tool_interlu
     bot_package.core = core_module
 
     monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "bot.core", core_module)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
+    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
+    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 
@@ -579,12 +599,13 @@ async def test_stream_llm_response_marks_followup_tool_batches_as_updates(monkey
     output = io.StringIO()
 
     async def _fake_llm_tool_loop(
-        conversation_id,
-        user_text,
+        *,
+        chat_id,
+        user_content,
         **kwargs,
     ):
-        core_module.conversations[conversation_id] = [
-            {"role": "user", "content": user_text},
+        core_module.conversations[chat_id] = [
+            {"role": "user", "content": user_content},
             {"role": "assistant", "content": "Done."},
         ]
         on_tool_call = kwargs.get("on_tool_call")
@@ -613,7 +634,7 @@ async def test_stream_llm_response_marks_followup_tool_batches_as_updates(monkey
             await on_stream_content("Done.")
         return "Done."
 
-    core_module = ModuleType("bot.core")
+    core_module = ModuleType("omicsclaw.runtime.agent.state")
     core_module.conversations = {}
     core_module._conversation_access = {}
     core_module.get_usage_snapshot = lambda: {}
@@ -623,7 +644,9 @@ async def test_stream_llm_response_marks_followup_tool_batches_as_updates(monkey
     bot_package.core = core_module
 
     monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "bot.core", core_module)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
+    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
+    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 

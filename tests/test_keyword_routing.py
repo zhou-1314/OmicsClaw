@@ -11,8 +11,8 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from omicsclaw.core.lazy_metadata import LazySkillMetadata
-from omicsclaw.core.registry import OmicsRegistry, SKILLS_DIR
+from omicsclaw.skill.lazy_metadata import LazySkillMetadata
+from omicsclaw.skill.registry import OmicsRegistry, SKILLS_DIR
 
 
 # ---------------------------------------------------------------------------

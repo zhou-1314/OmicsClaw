@@ -2,8 +2,8 @@ import asyncio
 import json
 from pathlib import Path
 
-from omicsclaw.runtime.bot_tools import BotToolContext, build_bot_tool_specs
-from omicsclaw.runtime.engineering_tools import (
+from omicsclaw.runtime.tools.builders.agent import BotToolContext, build_bot_tool_specs
+from omicsclaw.runtime.tools.builders.engineering import (
     build_engineering_tool_executors,
     build_engineering_tool_specs,
 )
@@ -230,4 +230,4 @@ def test_web_fetch_uses_shared_fetcher_and_truncates(monkeypatch, tmp_path: Path
 # ``mcp_list`` bot ToolSpec + executor were deleted in the tool-list-
 # compression refactor (0 audit-log calls, no production callers).
 # The ``mcp_list_servers`` HTTP endpoint in ``omicsclaw/app/server.py``
-# is a separate function and remains tested via the app-server suite.
+# is a separate function and remains tested via the desktop-server suite.

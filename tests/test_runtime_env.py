@@ -8,7 +8,7 @@ from types import ModuleType
 
 from omicsclaw.common import runtime_env
 from omicsclaw.common.runtime_env import ensure_runtime_cache_dirs
-from omicsclaw.interactive import interactive
+from omicsclaw.surfaces.cli import interactive
 
 
 def test_ensure_numba_cache_dir_sets_writable_default(monkeypatch):
@@ -89,7 +89,7 @@ def test_interactive_init_llm_uses_shared_env_loader(monkeypatch, tmp_path):
     )
 
     captured: dict[str, str | None] = {}
-    core_module = ModuleType("bot.core")
+    core_module = ModuleType("omicsclaw.runtime.agent.state")
     core_module.OMICSCLAW_MODEL = "demo-model"
     core_module.LLM_PROVIDER_NAME = "custom"
 
@@ -103,7 +103,9 @@ def test_interactive_init_llm_uses_shared_env_loader(monkeypatch, tmp_path):
     bot_package.core = core_module
 
     monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "bot.core", core_module)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
+    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
+    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
     monkeypatch.setattr(interactive, "_OMICSCLAW_DIR", tmp_path)
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
     monkeypatch.delenv("LLM_BASE_URL", raising=False)

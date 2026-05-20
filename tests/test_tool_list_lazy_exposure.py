@@ -35,9 +35,9 @@ from __future__ import annotations
 
 import pytest
 
-from omicsclaw.runtime.bot_tools import BotToolContext, build_bot_tool_specs
-from omicsclaw.runtime.context_layers import ContextAssemblyRequest
-from omicsclaw.runtime.tool_registry import select_tool_specs
+from omicsclaw.runtime.tools.builders.agent import BotToolContext, build_bot_tool_specs
+from omicsclaw.runtime.context.layers import ContextAssemblyRequest
+from omicsclaw.runtime.tools.registry import select_tool_specs
 
 
 def _all_specs():

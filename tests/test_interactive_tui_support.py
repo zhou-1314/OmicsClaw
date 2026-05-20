@@ -1,4 +1,4 @@
-from omicsclaw.interactive._tui_support import (
+from omicsclaw.surfaces.cli._tui_support import (
     attach_reasoning_container,
     build_tui_header_label,
 )

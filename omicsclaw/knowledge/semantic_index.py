@@ -4,14 +4,14 @@ from typing import Optional
 
 # NOTE: sklearn is imported lazily inside __init__ / search (not at
 # module load time). This matters because omicsclaw.knowledge is
-# pulled into the import chain of omicsclaw.app.server via
+# pulled into the import chain of omicsclaw.surfaces.desktop.server via
 # omicsclaw.runtime → hooks → extensions → validators → knowledge →
 # retriever → semantic_index. The desktop-app slim runtime
 # (OmicsClaw-App/scripts/build-backend-runtime.py) installs omicsclaw
 # with `--no-deps` and deliberately does NOT ship sklearn — users
 # who need knowledge-semantic search install the scientific stack
 # themselves on demand. Keeping sklearn as a top-level import here
-# would break `python -m omicsclaw.app.server --help` in the slim
+# would break `python -m omicsclaw.surfaces.desktop.server --help` in the slim
 # bundle. See OmicsClaw-App/docs/bundled-backend.md for the contract.
 
 

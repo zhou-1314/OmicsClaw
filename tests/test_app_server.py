@@ -10,7 +10,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-import bot.core as bot_core
+import omicsclaw.runtime.agent.state as bot_core
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -54,7 +54,7 @@ def _parse_sse_events(payload: str) -> list[dict[str, object]]:
 
 async def _setup_memory_review_runtime(monkeypatch, tmp_path: Path):
     from omicsclaw import memory as memory_pkg
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.memory.snapshot import ChangesetStore
 
     db_path = (tmp_path / "memory.db").resolve()
@@ -76,7 +76,7 @@ async def _setup_memory_review_runtime(monkeypatch, tmp_path: Path):
 def test_app_server_main_uses_default_contract(monkeypatch):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     captured: dict[str, object] = {}
     fake_uvicorn = SimpleNamespace(
@@ -89,7 +89,7 @@ def test_app_server_main_uses_default_contract(monkeypatch):
 
     server.main([])
 
-    assert captured["app_ref"] == "omicsclaw.app.server:app"
+    assert captured["app_ref"] == "omicsclaw.surfaces.desktop.server:app"
     assert captured["host"] == server.DEFAULT_APP_API_HOST
     assert captured["port"] == server.DEFAULT_APP_API_PORT
     assert captured["reload"] is False
@@ -98,7 +98,7 @@ def test_app_server_main_uses_default_contract(monkeypatch):
 def test_app_server_main_exports_effective_port_to_env(monkeypatch):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     captured: dict[str, object] = {}
     fake_uvicorn = SimpleNamespace(
@@ -118,7 +118,7 @@ def test_app_server_main_exports_effective_port_to_env(monkeypatch):
 def test_app_server_main_reports_missing_uvicorn(monkeypatch, capsys):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     monkeypatch.setitem(sys.modules, "uvicorn", None)
 
@@ -135,14 +135,14 @@ def test_app_server_main_reports_missing_uvicorn(monkeypatch, capsys):
 async def test_app_server_lifespan_allows_startup_without_llm_credentials(monkeypatch):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     captured: dict[str, object] = {}
 
     def fake_init(**kwargs):
         captured.update(kwargs)
         if kwargs.get("allow_missing_credentials") is not True:
-            raise AssertionError("app-server startup must not require an LLM API key")
+            raise AssertionError("desktop-server startup must not require an LLM API key")
 
     for key in (
         "LLM_PROVIDER",
@@ -178,7 +178,7 @@ async def test_app_server_lifespan_allows_startup_without_llm_credentials(monkey
 def test_app_server_mounts_native_notebook_routes():
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     route_paths = {getattr(route, "path", "") for route in server.app.routes}
 
@@ -210,7 +210,7 @@ def test_register_optional_kg_router_mounts_embedded_routes(monkeypatch, tmp_pat
     from fastapi import APIRouter, Depends, FastAPI
     from fastapi.testclient import TestClient
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     kg_root = ModuleType("omicsclaw_kg")
     kg_config = ModuleType("omicsclaw_kg.config")
@@ -266,13 +266,14 @@ def test_notebook_file_routes_round_trip_through_backend_router(monkeypatch, tmp
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from omicsclaw.app import server
-    from omicsclaw.app.notebook.router import router as notebook_router
+    from omicsclaw.surfaces.desktop import server
+    from omicsclaw.surfaces.desktop.notebook.router import router as notebook_router
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[workspace])
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(workspace))
 
     app = FastAPI()
@@ -328,8 +329,8 @@ def test_notebook_open_rejects_untrusted_absolute_path_when_workspace_is_omitted
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from omicsclaw.app import server
-    from omicsclaw.app.notebook.router import router as notebook_router
+    from omicsclaw.surfaces.desktop import server
+    from omicsclaw.surfaces.desktop.notebook.router import router as notebook_router
 
     trusted_workspace = tmp_path / "trusted"
     trusted_workspace.mkdir()
@@ -343,6 +344,7 @@ def test_notebook_open_rejects_untrusted_absolute_path_when_workspace_is_omitted
 
     fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[trusted_workspace])
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(trusted_workspace))
 
     app = FastAPI()
@@ -363,8 +365,8 @@ def test_notebook_delete_rejects_live_pipeline_notebook(monkeypatch, tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from omicsclaw.app import server
-    from omicsclaw.app.notebook.router import router as notebook_router
+    from omicsclaw.surfaces.desktop import server
+    from omicsclaw.surfaces.desktop.notebook.router import router as notebook_router
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -376,9 +378,10 @@ def test_notebook_delete_rejects_live_pipeline_notebook(monkeypatch, tmp_path):
 
     fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[workspace])
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(workspace))
 
-    notebook_router_module = importlib.import_module("omicsclaw.app.notebook.router")
+    notebook_router_module = importlib.import_module("omicsclaw.surfaces.desktop.notebook.router")
     seen: dict[str, bool] = {"stop_called": False}
 
     class DummyManager:
@@ -412,9 +415,9 @@ def test_notebook_delete_route_rejects_live_pipeline_notebook(monkeypatch, tmp_p
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
-    notebook_router_module = importlib.import_module("omicsclaw.app.notebook.router")
+    notebook_router_module = importlib.import_module("omicsclaw.surfaces.desktop.notebook.router")
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -426,6 +429,7 @@ def test_notebook_delete_route_rejects_live_pipeline_notebook(monkeypatch, tmp_p
 
     fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[workspace])
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(workspace))
 
     seen = {"stop_calls": 0}
@@ -473,10 +477,10 @@ def test_notebook_kernel_routes_accept_workspace_file_contract(monkeypatch, tmp_
 
     import importlib
 
-    from omicsclaw.app import server
-    from omicsclaw.app.notebook import nb_files
+    from omicsclaw.surfaces.desktop import server
+    from omicsclaw.surfaces.desktop.notebook import nb_files
 
-    notebook_router_module = importlib.import_module("omicsclaw.app.notebook.router")
+    notebook_router_module = importlib.import_module("omicsclaw.surfaces.desktop.notebook.router")
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -487,6 +491,7 @@ def test_notebook_kernel_routes_accept_workspace_file_contract(monkeypatch, tmp_
     )
     fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[workspace])
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(workspace))
 
     seen: dict[str, dict[str, object]] = {}
@@ -559,10 +564,10 @@ def test_notebook_kernel_interrupt_route_forwards_to_manager(monkeypatch, tmp_pa
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from omicsclaw.app import server
-    from omicsclaw.app.notebook import nb_files
+    from omicsclaw.surfaces.desktop import server
+    from omicsclaw.surfaces.desktop.notebook import nb_files
 
-    notebook_router_module = importlib.import_module("omicsclaw.app.notebook.router")
+    notebook_router_module = importlib.import_module("omicsclaw.surfaces.desktop.notebook.router")
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -636,10 +641,10 @@ def test_notebook_execute_route_accepts_workspace_file_contract(monkeypatch, tmp
 
     import importlib
 
-    from omicsclaw.app import server
-    from omicsclaw.app.notebook import nb_files
+    from omicsclaw.surfaces.desktop import server
+    from omicsclaw.surfaces.desktop.notebook import nb_files
 
-    notebook_router_module = importlib.import_module("omicsclaw.app.notebook.router")
+    notebook_router_module = importlib.import_module("omicsclaw.surfaces.desktop.notebook.router")
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -650,6 +655,7 @@ def test_notebook_execute_route_accepts_workspace_file_contract(monkeypatch, tmp
     )
     fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[workspace])
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(workspace))
 
     seen: dict[str, object] = {}
@@ -721,9 +727,9 @@ def test_notebook_execute_route_rejects_untrusted_workspace_before_streaming(
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
-    notebook_router_module = importlib.import_module("omicsclaw.app.notebook.router")
+    notebook_router_module = importlib.import_module("omicsclaw.surfaces.desktop.notebook.router")
 
     trusted = tmp_path / "trusted"
     trusted.mkdir()
@@ -776,7 +782,7 @@ def test_notebook_execute_route_rejects_untrusted_workspace_before_streaming(
 def test_resolve_backend_init_config_prefers_documented_llm_namespace(monkeypatch):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     monkeypatch.setenv("LLM_PROVIDER", "siliconflow")
     monkeypatch.setenv("LLM_BASE_URL", "https://api.siliconflow.cn/v1")
@@ -798,19 +804,19 @@ def test_resolve_backend_init_config_prefers_documented_llm_namespace(monkeypatc
 
 def test_app_server_cli_dispatches(monkeypatch):
     oc = _load_omicsclaw_script()
-    fake_server = ModuleType("omicsclaw.app.server")
+    fake_server = ModuleType("omicsclaw.surfaces.desktop.server")
     captured: dict[str, object] = {}
 
     def fake_main(argv=None):
         captured["argv"] = argv
 
     fake_server.main = fake_main
-    monkeypatch.setitem(sys.modules, "omicsclaw.app.server", fake_server)
+    monkeypatch.setitem(sys.modules, "omicsclaw.surfaces.desktop.server", fake_server)
     monkeypatch.setattr(oc, "_ensure_server_dependencies", lambda **_: None)
     monkeypatch.setattr(
         sys,
         "argv",
-        ["omicsclaw.py", "app-server", "--host", "0.0.0.0", "--port", "9123", "--reload"],
+        ["omicsclaw.py", "desktop-server", "--host", "0.0.0.0", "--port", "9123", "--reload"],
     )
 
     with pytest.raises(SystemExit) as excinfo:
@@ -823,14 +829,14 @@ def test_app_server_cli_dispatches(monkeypatch):
 def test_app_server_cli_fails_fast_when_uvicorn_missing(monkeypatch, capsys):
     oc = _load_omicsclaw_script()
     monkeypatch.setattr(oc, "_module_available", lambda name: name != "uvicorn")
-    monkeypatch.setattr(sys, "argv", ["omicsclaw.py", "app-server"])
+    monkeypatch.setattr(sys, "argv", ["omicsclaw.py", "desktop-server"])
 
     with pytest.raises(SystemExit) as excinfo:
         oc.main()
 
     assert excinfo.value.code == 1
     captured = capsys.readouterr()
-    assert "`app-server` requires optional dependencies" in captured.err
+    assert "`desktop-server` requires optional dependencies" in captured.err
     assert "uvicorn" in captured.err
     assert 'pip install -e ".[desktop]"' in captured.err
 
@@ -854,7 +860,7 @@ def test_memory_server_cli_fails_fast_when_uvicorn_missing(monkeypatch, capsys):
 async def test_set_workspace_updates_workspace_env_and_persistence(monkeypatch, tmp_path):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[], OUTPUT_DIR=tmp_path / "old-output")
     captured_updates: dict[str, str] = {}
@@ -862,6 +868,7 @@ async def test_set_workspace_updates_workspace_env_and_persistence(monkeypatch, 
     workspace_dir.mkdir()
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_get_omicsclaw_env_path", lambda: tmp_path / ".env", raising=False)
     monkeypatch.setattr(
         server,
@@ -898,7 +905,7 @@ async def test_set_workspace_updates_workspace_env_and_persistence(monkeypatch, 
 async def test_chat_stream_request_workspace_updates_output_dir_before_tool_loop(monkeypatch, tmp_path):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     workspace_dir = tmp_path / "workspace"
     workspace_dir.mkdir()
@@ -927,6 +934,7 @@ async def test_chat_stream_request_workspace_updates_output_dir_before_tool_loop
             return "done"
 
     monkeypatch.setattr(server, "_core", FakeCore, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", FakeCore)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
     monkeypatch.delenv("OMICSCLAW_DATA_DIRS", raising=False)
     monkeypatch.delenv("OMICSCLAW_WORKSPACE", raising=False)
@@ -954,7 +962,7 @@ async def test_chat_stream_request_workspace_updates_output_dir_before_tool_loop
 async def test_outputs_latest_marks_stale_incomplete_run_failed(monkeypatch, tmp_path):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     output_dir = tmp_path / "output"
     stale_run = output_dir / "spatial-domains__graphst__20260504_010203__stale001"
@@ -967,6 +975,7 @@ async def test_outputs_latest_marks_stale_incomplete_run_failed(monkeypatch, tmp
 
     fake_core = SimpleNamespace(OUTPUT_DIR=output_dir)
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
 
     result = await server.outputs_latest(limit=10)
 
@@ -980,7 +989,7 @@ async def test_outputs_latest_marks_stale_incomplete_run_failed(monkeypatch, tmp
 async def test_files_tree_returns_remote_files_and_directories(tmp_path):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     root = tmp_path / "workspace"
     nested = root / "nested"
@@ -1004,7 +1013,7 @@ async def test_files_tree_returns_remote_files_and_directories(tmp_path):
 async def test_files_serve_returns_trusted_workspace_file(monkeypatch, tmp_path):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     workspace = tmp_path / "workspace"
     figure = workspace / "output" / "run-1" / "figures" / "spatial.png"
@@ -1013,6 +1022,7 @@ async def test_files_serve_returns_trusted_workspace_file(monkeypatch, tmp_path)
 
     fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[workspace], OUTPUT_DIR=workspace / "output")
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
 
     response = await server.files_serve(path=str(figure))
 
@@ -1025,7 +1035,7 @@ async def test_files_serve_returns_trusted_workspace_file(monkeypatch, tmp_path)
 async def test_files_serve_rejects_untrusted_path(monkeypatch, tmp_path):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -1034,6 +1044,7 @@ async def test_files_serve_rejects_untrusted_path(monkeypatch, tmp_path):
 
     fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[workspace], OUTPUT_DIR=workspace / "output")
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
 
     with pytest.raises(server.HTTPException) as exc:
         await server.files_serve(path=str(outside))
@@ -1044,7 +1055,7 @@ async def test_files_serve_rejects_untrusted_path(monkeypatch, tmp_path):
 def test_resolve_scoped_memory_workspace_prefers_explicit_then_env_then_data_dir(monkeypatch):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     monkeypatch.setattr(
         server,
@@ -1065,7 +1076,7 @@ def test_resolve_scoped_memory_workspace_prefers_explicit_then_env_then_data_dir
 async def test_health_reports_runtime_python_and_dependency_status(monkeypatch):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     fake_core = SimpleNamespace(
         LLM_PROVIDER_NAME="env",
@@ -1076,6 +1087,7 @@ async def test_health_reports_runtime_python_and_dependency_status(monkeypatch):
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(
         server,
         "_module_available",
@@ -1103,7 +1115,7 @@ async def test_health_reports_runtime_python_and_dependency_status(monkeypatch):
 def test_health_echoes_desktop_launch_id(monkeypatch):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     fake_core = SimpleNamespace(
         LLM_PROVIDER_NAME="env",
@@ -1114,6 +1126,7 @@ def test_health_echoes_desktop_launch_id(monkeypatch):
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setenv("OMICSCLAW_DESKTOP_LAUNCH_ID", "launch-123")
 
     payload = asyncio.run(server.health())
@@ -1125,7 +1138,7 @@ def test_health_echoes_desktop_launch_id(monkeypatch):
 async def test_chat_stream_emits_protocol_events_and_usage(monkeypatch):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     captured_kwargs: dict[str, object] = {}
 
@@ -1172,6 +1185,7 @@ async def test_chat_stream_emits_protocol_events_and_usage(monkeypatch):
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -1226,7 +1240,7 @@ async def test_chat_stream_emits_preflight_pending_event_for_omicsclaw_tool(monk
     """
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     payload = {
         "kind": "preflight",
@@ -1270,6 +1284,7 @@ async def test_chat_stream_emits_preflight_pending_event_for_omicsclaw_tool(monk
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -1308,7 +1323,7 @@ async def test_chat_stream_emits_preflight_pending_event_for_omicsclaw_tool(monk
 async def test_chat_stream_updates_bound_remote_chat_job_lifecycle(monkeypatch, tmp_path: Path):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.remote.schemas import Job
     from omicsclaw.remote.storage import jobs_root, utc_now_iso
 
@@ -1349,6 +1364,7 @@ async def test_chat_stream_updates_bound_remote_chat_job_lifecycle(monkeypatch, 
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -1374,7 +1390,7 @@ async def test_chat_stream_updates_bound_remote_chat_job_lifecycle(monkeypatch, 
 async def test_chat_stream_cost_uses_requested_model_override(monkeypatch):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     async def fake_llm_tool_loop(**kwargs):
         kwargs["usage_accumulator"](
@@ -1405,6 +1421,7 @@ async def test_chat_stream_cost_uses_requested_model_override(monkeypatch):
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -1429,7 +1446,7 @@ async def test_chat_stream_cost_uses_requested_model_override(monkeypatch):
 async def test_chat_stream_delivers_pending_media_as_tool_result_media(monkeypatch, tmp_path: Path):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     image_path = tmp_path / "spatial_domains.png"
     image_path.write_bytes(b"\x89PNG\r\n\x1a\n")
@@ -1463,6 +1480,7 @@ async def test_chat_stream_delivers_pending_media_as_tool_result_media(monkeypat
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -1486,7 +1504,7 @@ async def test_chat_stream_delivers_pending_media_as_tool_result_media(monkeypat
 async def test_chat_stream_merges_pending_media_without_duplicates(monkeypatch, tmp_path: Path):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     image_path = tmp_path / "spatial_domains.png"
     image_path.write_bytes(b"\x89PNG\r\n\x1a\n")
@@ -1520,6 +1538,7 @@ async def test_chat_stream_merges_pending_media_without_duplicates(monkeypatch, 
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -1548,7 +1567,7 @@ async def test_chat_stream_merges_pending_media_without_duplicates(monkeypatch, 
 async def test_chat_stream_delivers_pending_documents_as_file_media(monkeypatch, tmp_path: Path):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     table_path = tmp_path / "domain_purity.csv"
     table_path.write_text("domain,purity\n1,0.92\n", encoding="utf-8")
@@ -1579,6 +1598,7 @@ async def test_chat_stream_delivers_pending_documents_as_file_media(monkeypatch,
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -1611,7 +1631,7 @@ async def test_chat_stream_rejects_bind_when_job_already_canceled(monkeypatch, t
 
     from fastapi import HTTPException
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.remote.schemas import Job
     from omicsclaw.remote.storage import jobs_root, utc_now_iso
 
@@ -1654,6 +1674,7 @@ async def test_chat_stream_rejects_bind_when_job_already_canceled(monkeypatch, t
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     with pytest.raises(HTTPException) as excinfo:
@@ -1686,7 +1707,7 @@ async def test_chat_stream_surfaces_provider_switch_failure(monkeypatch):
 
     from fastapi import HTTPException
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     class FailingCore:
         LLM_PROVIDER_NAME = "anthropic"
@@ -1728,7 +1749,7 @@ async def test_chat_stream_reapplies_provider_when_model_changes(monkeypatch):
     """
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     captured: dict[str, object] = {}
 
@@ -1750,7 +1771,9 @@ async def test_chat_stream_reapplies_provider_when_model_changes(monkeypatch):
             captured["model_override"] = kwargs.get("model_override")
             return "ok"
 
-    monkeypatch.setattr(server, "_core", FakeCore(), raising=False)
+    _fake_core_instance = FakeCore()
+    monkeypatch.setattr(server, "_core", _fake_core_instance, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", _fake_core_instance)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
     monkeypatch.setattr(server, "_get_omicsclaw_env_path", lambda: None, raising=False)
     monkeypatch.setenv("LLM_BASE_URL", "https://api.example.com/v1")
@@ -1778,7 +1801,7 @@ async def test_chat_stream_reapplies_provider_when_model_changes(monkeypatch):
 async def test_chat_stream_provider_config_preserves_custom_env_base_url(monkeypatch):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     captured: dict[str, object] = {}
 
@@ -1799,7 +1822,9 @@ async def test_chat_stream_provider_config_preserves_custom_env_base_url(monkeyp
         async def llm_tool_loop(self, **kwargs):
             return "ok"
 
-    monkeypatch.setattr(server, "_core", FakeCore(), raising=False)
+    _fake_core_instance = FakeCore()
+    monkeypatch.setattr(server, "_core", _fake_core_instance, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", _fake_core_instance)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
     monkeypatch.setattr(server, "_get_omicsclaw_env_path", lambda: None, raising=False)
     monkeypatch.setenv("LLM_BASE_URL", "https://api.example.com/v1")
@@ -1831,7 +1856,7 @@ async def test_chat_stream_provider_config_rejects_incomplete_custom_endpoint(mo
 
     from fastapi import HTTPException
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     class FakeCore:
         LLM_PROVIDER_NAME = "deepseek"
@@ -1840,7 +1865,9 @@ async def test_chat_stream_provider_config_rejects_incomplete_custom_endpoint(mo
         def init(self, **kwargs):
             raise AssertionError("incomplete custom provider should fail before core.init")
 
-    monkeypatch.setattr(server, "_core", FakeCore(), raising=False)
+    _fake_core_instance = FakeCore()
+    monkeypatch.setattr(server, "_core", _fake_core_instance, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", _fake_core_instance)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
     monkeypatch.setenv("LLM_BASE_URL", "https://api.example.com/v1")
 
@@ -1861,7 +1888,7 @@ async def test_chat_stream_provider_config_rejects_incomplete_custom_endpoint(mo
 async def test_switch_provider_clears_legacy_base_url_alias(monkeypatch):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     captured_remove_keys: set[str] = set()
 
@@ -1895,7 +1922,7 @@ async def test_switch_provider_clears_legacy_base_url_alias(monkeypatch):
 def test_apply_chat_provider_switch_clears_legacy_base_url_alias(monkeypatch):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     captured_remove_keys: set[str] = set()
 
@@ -1925,7 +1952,7 @@ async def test_switch_provider_rejects_incomplete_custom_endpoint(monkeypatch):
 
     from fastapi import HTTPException
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     class FakeCore:
         LLM_PROVIDER_NAME = "deepseek"
@@ -1954,13 +1981,14 @@ async def test_switch_provider_rejects_incomplete_custom_endpoint(monkeypatch):
 async def test_list_providers_reflects_active_custom_endpoint(monkeypatch):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     class FakeCore:
         LLM_PROVIDER_NAME = "custom"
         OMICSCLAW_MODEL = "qwen-plus"
 
     monkeypatch.setattr(server, "_core", FakeCore, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", FakeCore)
     monkeypatch.setenv("LLM_PROVIDER", "custom")
     monkeypatch.setenv("LLM_BASE_URL", "https://api.example.com/v1")
     monkeypatch.setenv("LLM_API_KEY", "sk-test")
@@ -1979,7 +2007,7 @@ async def test_list_providers_reflects_active_custom_endpoint(monkeypatch):
 async def test_provider_test_closes_async_openai_client(monkeypatch):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     clients: list[object] = []
     fail_request = False
@@ -2050,7 +2078,7 @@ async def test_provider_test_accepts_reasoning_only_response(monkeypatch):
     chain-of-thought — that must still count as PASSED, not empty."""
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     class FakeAsyncOpenAI:
         def __init__(self, **kwargs):
@@ -2103,7 +2131,7 @@ async def test_provider_test_empty_response_includes_finish_reason(monkeypatch):
     tell e.g. content_filter from length cap."""
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     class FakeAsyncOpenAI:
         def __init__(self, **kwargs):
@@ -2153,7 +2181,7 @@ async def test_chat_stream_omits_adaptive_thinking_for_siliconflow(monkeypatch):
     """SiliconFlow gateway rejects non-standard thinking types — adaptive must omit."""
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     captured_kwargs: dict[str, object] = {}
 
@@ -2175,6 +2203,7 @@ async def test_chat_stream_omits_adaptive_thinking_for_siliconflow(monkeypatch):
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -2194,7 +2223,7 @@ async def test_chat_stream_enables_adaptive_thinking_for_deepseek(monkeypatch):
     """DeepSeek native API supports thinking — adaptive must enable it."""
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     captured_kwargs: dict[str, object] = {}
 
@@ -2216,6 +2245,7 @@ async def test_chat_stream_enables_adaptive_thinking_for_deepseek(monkeypatch):
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -2239,7 +2269,7 @@ def test_build_thinking_extra_body_explicit_enabled_and_disabled():
     """Explicit enabled/disabled are always honoured regardless of provider."""
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     # enabled — any provider
     assert server._build_thinking_extra_body(
@@ -2262,7 +2292,7 @@ def test_build_thinking_extra_body_adaptive_per_provider():
     """Adaptive mode enables thinking only for supported providers/models."""
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     adaptive = {"type": "adaptive"}
 
@@ -2311,7 +2341,7 @@ def test_build_thinking_extra_body_invalid_inputs():
     """Non-dict / empty inputs return None."""
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     assert server._build_thinking_extra_body(None) is None
     assert server._build_thinking_extra_body("enabled") is None
@@ -2323,7 +2353,7 @@ def test_build_thinking_extra_body_invalid_inputs():
 async def test_chat_stream_emits_structured_tool_timeout_events(monkeypatch):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     async def fake_llm_tool_loop(**kwargs):
         await kwargs["on_tool_call"]("notebook_add_execute", {"source": "sleep(999)"})
@@ -2352,6 +2382,7 @@ async def test_chat_stream_emits_structured_tool_timeout_events(monkeypatch):
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -2379,7 +2410,7 @@ async def test_chat_stream_emits_structured_tool_timeout_events(monkeypatch):
 async def test_chat_permission_endpoint_resumes_pending_request(monkeypatch):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     captured_decision: dict[str, object] = {}
     permission_event = asyncio.Event()
@@ -2413,6 +2444,7 @@ async def test_chat_permission_endpoint_resumes_pending_request(monkeypatch):
     )
 
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
 
     response = await server.chat_stream(
@@ -2454,8 +2486,8 @@ async def test_chat_permission_endpoint_resumes_pending_request(monkeypatch):
 async def test_mcp_sync_reconciles_removed_servers_and_preserves_tools(monkeypatch):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
-    from omicsclaw.interactive import _mcp
+    from omicsclaw.surfaces.desktop import server
+    from omicsclaw.surfaces.cli import _mcp
 
     added: list[dict[str, object]] = []
     removed: list[str] = []
@@ -2541,8 +2573,8 @@ async def test_mcp_sync_reconciles_removed_servers_and_preserves_tools(monkeypat
 async def test_mcp_sync_empty_payload_removes_all_existing_servers(monkeypatch):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
-    from omicsclaw.interactive import _mcp
+    from omicsclaw.surfaces.desktop import server
+    from omicsclaw.surfaces.cli import _mcp
 
     added: list[dict[str, object]] = []
     removed: list[str] = []
@@ -2586,7 +2618,7 @@ async def test_memory_browse_endpoint_falls_back_to_shared(monkeypatch, tmp_path
     HTTP boundary."""
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.memory.memory_client import MemoryClient
 
     graph, _, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
@@ -2630,7 +2662,7 @@ async def test_memory_browse_marks_versioned_uri(monkeypatch, tmp_path):
     """
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.memory.memory_client import MemoryClient
 
     _, _, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
@@ -2658,7 +2690,7 @@ async def test_memory_browse_marks_overwrite_uri(monkeypatch, tmp_path):
     these URIs structurally have no version chain."""
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.memory.memory_client import MemoryClient
 
     _, _, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
@@ -2690,7 +2722,7 @@ async def test_memory_browse_is_versioned_present_on_root_browse(
     """
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.memory.memory_client import MemoryClient
 
     _, _, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
@@ -2718,7 +2750,7 @@ async def test_memory_browse_children_have_rich_shape(monkeypatch, tmp_path):
     """
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.memory.memory_client import MemoryClient
 
     _, _, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
@@ -2808,7 +2840,7 @@ async def test_memory_browse_decorates_analysis_children_with_derived_title(
 
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.memory.memory_client import MemoryClient
 
     _, _, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
@@ -2898,7 +2930,7 @@ async def test_memory_children_endpoint_decorates_analysis_too(
 
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.memory.memory_client import MemoryClient
 
     _, _, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
@@ -2942,7 +2974,7 @@ async def test_memory_browse_does_not_decorate_non_analysis_domains(
     session / core listings."""
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.memory.memory_client import MemoryClient
 
     _, _, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
@@ -2979,7 +3011,7 @@ async def test_memory_search_endpoint_excludes_other_namespaces(
     must not leak — the production guarantee for multi-tenant DBs."""
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.memory.memory_client import MemoryClient
 
     graph, _, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
@@ -3036,7 +3068,7 @@ async def test_memory_children_endpoint_surfaces_shared_and_excludes_others(
     """
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.memory.memory_client import MemoryClient
 
     graph, _, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
@@ -3086,7 +3118,7 @@ async def test_memory_recent_endpoint_excludes_other_namespaces(
     never another user's per-namespace writes."""
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.memory.memory_client import MemoryClient
 
     graph, _, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
@@ -3124,7 +3156,7 @@ async def test_memory_domains_endpoint_counts_user_plus_shared_only(
     unscoped count was a privacy/correctness leak."""
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.memory.memory_client import MemoryClient
 
     graph, _, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
@@ -3169,7 +3201,7 @@ async def test_memory_domains_endpoint_admin_view_aggregates_all_namespaces(
     data stranded under a legacy namespace."""
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.memory.memory_client import MemoryClient
 
     graph, _, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
@@ -3215,7 +3247,7 @@ async def test_memory_namespaces_endpoint_lists_partitions_and_current(
     one the desktop client is currently bound to so the UI can preselect it."""
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.memory.memory_client import MemoryClient
 
     graph, _, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
@@ -3251,7 +3283,7 @@ async def test_memory_domains_endpoint_explicit_namespace_scopes_query(
     that namespace + shared, dedupe on collision."""
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.memory.memory_client import MemoryClient
 
     graph, _, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
@@ -3294,7 +3326,7 @@ async def test_memory_delete_endpoint_does_not_cross_namespace(monkeypatch, tmp_
     """
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
     from omicsclaw.memory.memory_client import MemoryClient
 
     graph, _, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
@@ -3350,8 +3382,8 @@ async def test_memory_update_endpoint_writes_to_desktop_namespace(monkeypatch, t
     """
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
-    from omicsclaw.app.server import MemoryUpdateRequest
+    from omicsclaw.surfaces.desktop import server
+    from omicsclaw.surfaces.desktop.server import MemoryUpdateRequest
     from omicsclaw.memory.memory_client import MemoryClient
 
     graph, _, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
@@ -3403,7 +3435,7 @@ async def test_memory_update_endpoint_writes_to_desktop_namespace(monkeypatch, t
 async def test_memory_review_clear_discards_pending_memory_create(monkeypatch, tmp_path):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     graph, store, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
 
@@ -3437,7 +3469,7 @@ async def test_memory_review_clear_discards_pending_memory_create(monkeypatch, t
 async def test_memory_review_clear_restores_previous_memory_content(monkeypatch, tmp_path):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     graph, store, memory_pkg = await _setup_memory_review_runtime(monkeypatch, tmp_path)
 
@@ -3565,8 +3597,8 @@ async def test_memory_review_rollback_uses_reviewlog(monkeypatch, tmp_path):
     cleanly; idempotent when already active."""
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
-    from omicsclaw.app.server import MemoryRollbackRequest
+    from omicsclaw.surfaces.desktop import server
+    from omicsclaw.surfaces.desktop.server import MemoryRollbackRequest
 
     graph, _, memory_pkg = await _setup_memory_review_runtime(
         monkeypatch, tmp_path
@@ -3621,7 +3653,7 @@ async def test_memory_review_orphans_endpoint_returns_dataclass_dicts(
 ):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     graph, _, memory_pkg = await _setup_memory_review_runtime(
         monkeypatch, tmp_path
@@ -3645,7 +3677,7 @@ async def test_memory_review_version_chain_endpoint_rejects_overwrite_uri(
 ):
     pytest.importorskip("fastapi")
 
-    from omicsclaw.app import server
+    from omicsclaw.surfaces.desktop import server
 
     _, _, memory_pkg = await _setup_memory_review_runtime(
         monkeypatch, tmp_path

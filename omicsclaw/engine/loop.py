@@ -20,18 +20,18 @@ from typing import Any
 
 from openai import APIError
 
-from omicsclaw.runtime.context_assembler import (
+from omicsclaw.runtime.context.assembler import (
     assemble_chat_context as _assemble_chat_context,
 )
-from omicsclaw.runtime.hooks import build_default_lifecycle_hook_runtime
-from omicsclaw.runtime.policy_state import ToolPolicyState
-from omicsclaw.runtime.query_engine import (
+from omicsclaw.runtime.tools.hooks import build_default_lifecycle_hook_runtime
+from omicsclaw.runtime.policy.state import ToolPolicyState
+from omicsclaw.runtime.agent.query_engine import (
     QueryEngineConfig,
     QueryEngineContext,
     run_query_engine,
 )
-from omicsclaw.runtime.system_prompt import build_system_prompt
-from omicsclaw.runtime.transcript_store import (
+from omicsclaw.runtime.context.system_prompt import build_system_prompt
+from omicsclaw.runtime.storage.transcript import (
     build_selective_replay_context,
 )
 
@@ -102,6 +102,7 @@ async def run_engine_loop(
     on_stream_content: Any = None,
     on_stream_reasoning: Any = None,
     on_context_compacted: Any = None,
+    on_pathology_signal: Any = None,
     model_override: str = "",
     extra_api_params: dict | None = None,
     max_tokens_override: int = 0,
@@ -180,6 +181,7 @@ async def run_engine_loop(
         deep_learning_methods=deps.deep_learning_methods,
         usage_accumulator=deps.usage_accumulator,
         on_context_compacted=on_context_compacted,
+        on_pathology_signal=on_pathology_signal,
     )
 
     # Surface flows into audit/metrics; an absent platform is caller misuse,

@@ -144,7 +144,7 @@ def test_negative_case_does_not_route_to_host_skill(case_id, host_skill, case):
             f"manual_override: {case.get('override_reason', 'no reason given')}"
         )
 
-    from omicsclaw.core.capability_resolver import resolve_capability
+    from omicsclaw.skill.capability_resolver import resolve_capability
 
     result = resolve_capability(query=case["trigger"])
     chosen = getattr(result, "chosen_skill", None) or (
@@ -171,7 +171,7 @@ def test_redirect_case_routes_to_expected_sibling(case_id, host_skill, case):
     if case.get("manual_override"):
         pytest.skip(f"manual_override: {case.get('override_reason', 'no reason given')}")
 
-    from omicsclaw.core.capability_resolver import resolve_capability
+    from omicsclaw.skill.capability_resolver import resolve_capability
 
     result = resolve_capability(query=case["trigger"])
     chosen = getattr(result, "chosen_skill", None) or (

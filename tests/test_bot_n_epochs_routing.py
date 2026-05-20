@@ -21,12 +21,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_bot_skill_orchestration_has_no_spatial_domain_identification_special_case():
-    """``bot/skill_orchestration.py`` must not switch on the legacy alias.
+    """``omicsclaw/skill/orchestration.py`` must not switch on the legacy alias.
 
     The argv builder owns the ``--epochs`` / ``--n-epochs`` rewrite; the
     bot adapter is supposed to be ignorant of which skill takes which.
     """
-    source = (ROOT / "bot" / "skill_orchestration.py").read_text(encoding="utf-8")
+    source = (ROOT / "omicsclaw" / "skill" / "orchestration.py").read_text(encoding="utf-8")
     # Tolerate docstring / comment mentions explaining the removal, but not
     # an actual code conditional.
     pattern = re.compile(r'^\s*if\s+canonical_skill\s*==\s*"spatial-domain-identification"', re.M)
@@ -38,8 +38,8 @@ def test_bot_skill_orchestration_has_no_spatial_domain_identification_special_ca
 
 
 def test_bot_tool_executors_has_no_spatial_domain_identification_special_case():
-    """``bot/tool_executors.py`` must not switch on the legacy alias either."""
-    source = (ROOT / "bot" / "tool_executors.py").read_text(encoding="utf-8")
+    """``omicsclaw/runtime/tools/builders/agent_executors.py`` must not switch on the legacy alias either."""
+    source = (ROOT / "omicsclaw" / "runtime" / "tools" / "builders" / "agent_executors.py").read_text(encoding="utf-8")
     pattern = re.compile(r'^\s*if\s+canonical_skill\s*==\s*"spatial-domain-identification"', re.M)
     assert not pattern.search(source), (
         "dead ``if canonical_skill == 'spatial-domain-identification'`` "
@@ -53,7 +53,7 @@ def test_argv_builder_still_rewrites_n_epochs_for_spatial_domains():
     allow-lists ``--epochs``, the bot's ``--n-epochs`` argv is rewritten
     correctly. If this stops working, the dead-branch deletion would
     silently strip the flag and skills would run with default epochs."""
-    from omicsclaw.core.runtime.argv_builder import filter_forwarded_args
+    from omicsclaw.skill.execution.argv_builder import filter_forwarded_args
 
     out = filter_forwarded_args(
         ["--n-epochs", "50"], allowed_extra_flags={"--epochs"}
@@ -66,7 +66,7 @@ def test_spatial_domains_canonical_alias_makes_branch_unreachable():
     ``spatial-domain-identification`` is ``spatial-domains``. Pin that so a
     future SKILL.md edit that renames the canonical alias back to
     ``spatial-domain-identification`` re-introduces the bug visibly."""
-    from omicsclaw.core.registry import ensure_registry_loaded
+    from omicsclaw.skill.registry import ensure_registry_loaded
 
     registry = ensure_registry_loaded()
     legacy_view = registry.skills.get("spatial-domain-identification")

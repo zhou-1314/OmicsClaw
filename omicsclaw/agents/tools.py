@@ -151,7 +151,7 @@ def omicsclaw_execute(
         kwargs["extra_args"] = extra
 
     try:
-        from omicsclaw.core.skill_runner import run_skill
+        from omicsclaw.skill.runner import run_skill
 
         result = run_skill(skill, **kwargs)
         success = result.success
@@ -231,7 +231,7 @@ def skill_search(
     from pathlib import Path
 
     try:
-        from omicsclaw.core.registry import ensure_registry_loaded
+        from omicsclaw.skill.registry import ensure_registry_loaded
 
         registry = ensure_registry_loaded()
 

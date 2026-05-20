@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 
-from omicsclaw.core.registry import OmicsRegistry
+from omicsclaw.skill.registry import OmicsRegistry
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -76,7 +76,7 @@ def test_public_docs_do_not_claim_legacy_framework_facts():
         "omicsclaw.py": [
             "List all 50+ available analysis skills",
         ],
-        "omicsclaw/interactive/_constants.py": [
+        "omicsclaw/surfaces/cli/_constants.py": [
             "50+ analysis skills",
         ],
         "tests/test_execution_default_executor.py": [

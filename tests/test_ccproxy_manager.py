@@ -1,4 +1,4 @@
-"""Unit tests for omicsclaw.core.ccproxy_manager.
+"""Unit tests for omicsclaw.providers.ccproxy.
 
 All subprocess / httpx / binary lookups are mocked so tests run offline
 and do not require the optional ``ccproxy-api`` package.
@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from omicsclaw.core import ccproxy_manager as ccm
+from omicsclaw.providers import ccproxy as ccm
 
 
 @pytest.fixture(autouse=True)

@@ -27,7 +27,7 @@ import threading
 from pathlib import Path
 
 from omicsclaw.common.report import mark_result_status, read_result_status
-from omicsclaw.core.runtime.subprocess_driver import drive_subprocess
+from omicsclaw.skill.execution.subprocess_driver import drive_subprocess
 
 
 # ---------------------------------------------------------------------------

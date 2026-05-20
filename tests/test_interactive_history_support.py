@@ -1,4 +1,4 @@
-from omicsclaw.interactive._history_support import (
+from omicsclaw.surfaces.cli._history_support import (
     build_skill_run_history_messages,
     build_skill_run_result_text,
 )

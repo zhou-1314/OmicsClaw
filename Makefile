@@ -132,18 +132,18 @@ demo-bulkrna:
 ## ── Bot targets ─────────────────────────────────────────────────────────────
 
 bot-telegram:
-	python -m bot.run --channels telegram
+	python -m omicsclaw.surfaces.channels --channels telegram
 
 bot-feishu:
-	python -m bot.run --channels feishu
+	python -m omicsclaw.surfaces.channels --channels feishu
 
 # Multi-channel runner (runs multiple channels in one process)
 # Usage: make bot-multi CHANNELS=telegram,feishu
 bot-multi:
-	python -m bot.run --channels $(CHANNELS)
+	python -m omicsclaw.surfaces.channels --channels $(CHANNELS)
 
 bot-list:
-	python -m bot.run --list
+	python -m omicsclaw.surfaces.channels --list
 
 ## ── Memory server ───────────────────────────────────────────────────────────
 

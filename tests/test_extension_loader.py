@@ -1,6 +1,6 @@
 import json
 
-from omicsclaw.core.registry import OmicsRegistry
+from omicsclaw.skill.registry import OmicsRegistry
 from omicsclaw.extensions import (
     EXTENSION_STATE_FILENAME,
     INSTALL_RECORD_FILENAME,

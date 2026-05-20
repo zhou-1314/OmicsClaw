@@ -270,7 +270,7 @@ async def test_compat_store_lazy_initialises_on_first_public_call(tmp_path):
     is called before someone has explicitly awaited initialize().
 
     bot/session.py:311 constructs the store from a synchronous init()
-    function, then assigns it to bot.core.memory_store. The async
+    function, then assigns it to omicsclaw.runtime.agent.state.memory_store. The async
     initialize() coroutine is never awaited along that path. The first
     LLM tool call (execute_remember -> memory_store.save_memory) must
     not blow up with 'CompatMemoryStore must be initialised before use'.

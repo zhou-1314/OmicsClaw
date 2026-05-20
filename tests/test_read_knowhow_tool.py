@@ -67,7 +67,7 @@ def test_read_knowhow_empty_input_returns_empty() -> None:
 def test_read_knowhow_tool_spec_is_registered() -> None:
     """The bot-surface ToolSpec for read_knowhow must exist with a name
     parameter and a description that hints to the model when to call it."""
-    from omicsclaw.runtime.bot_tools import BotToolContext, build_bot_tool_specs
+    from omicsclaw.runtime.tools.builders.agent import BotToolContext, build_bot_tool_specs
 
     specs = build_bot_tool_specs(
         BotToolContext(
@@ -94,7 +94,7 @@ def test_read_knowhow_tool_spec_is_registered() -> None:
 
 
 def test_read_knowhow_tool_spec_lists_bot_surface() -> None:
-    from omicsclaw.runtime.bot_tools import BotToolContext, build_bot_tool_specs
+    from omicsclaw.runtime.tools.builders.agent import BotToolContext, build_bot_tool_specs
 
     specs = {s.name: s for s in build_bot_tool_specs(
         BotToolContext(skill_names=(), domain_briefing="(t)")

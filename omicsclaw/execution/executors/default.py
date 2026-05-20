@@ -1,7 +1,7 @@
 """Default job executor wiring.
 
 The default local app/remote executor calls the shared
-``omicsclaw.core.skill_runner.arun_skill`` contract — the async-native
+``omicsclaw.skill.runner.arun_skill`` contract — the async-native
 sibling of ``run_skill`` introduced in OMI-12 audit P1 #4. The previous
 ``await asyncio.to_thread(run_skill)`` wrapping was the culprit behind
 ThreadPoolExecutor exhaustion under multi-user load (one parked worker
@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from omicsclaw.autoagent.constants import param_to_cli_flag
-from omicsclaw.core.skill_result import SkillRunResult, result_json_fallback
+from omicsclaw.skill.result import SkillRunResult, result_json_fallback
 
 from .base import JobContext, JobOutcome
 
@@ -96,7 +96,7 @@ def _params_to_extra_args(params: dict[str, Any]) -> list[str]:
 class SkillRunnerExecutor:
     """Executor that invokes the shared in-process skill runner.
 
-    Runs via ``omicsclaw.core.skill_runner.arun_skill`` (async-native) so
+    Runs via ``omicsclaw.skill.runner.arun_skill`` (async-native) so
     concurrent jobs cost one event-loop task each, not one parked
     ``ThreadPoolExecutor`` worker per long-running skill — see OMI-12
     audit P1 #4 for the original thread-pool-exhaustion regression.
@@ -104,10 +104,10 @@ class SkillRunnerExecutor:
 
     async def run(self, ctx: JobContext) -> JobOutcome:
         # Late import so callers / tests that monkeypatch
-        # ``omicsclaw.core.skill_runner.arun_skill`` see the patched
+        # ``omicsclaw.skill.runner.arun_skill`` see the patched
         # function at call time, the same way the previous
         # ``run_skill`` monkeypatching worked.
-        from omicsclaw.core import skill_runner
+        from omicsclaw.skill import runner as skill_runner
 
         input_path = ctx.inputs.get("input") or ctx.inputs.get("path")
         input_paths = ctx.inputs.get("inputs")

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Dict, Tuple, Optional
 
 from omicsclaw.common.runtime_env import load_project_dotenv
-from omicsclaw.core.provider_registry import resolve_provider
+from omicsclaw.providers.registry import resolve_provider
 
 load_project_dotenv(Path(__file__).resolve().parent.parent.parent, override=False)
 
@@ -32,7 +32,7 @@ def _resolve_llm_config() -> Tuple[str, str, str]:
 def route_with_llm(query: str, skills: Dict[str, str], domain: str) -> Tuple[Optional[str], float]:
     """Route query using LLM API.
 
-    Supports all providers configured in omicsclaw.core.provider_registry:
+    Supports all providers configured in omicsclaw.providers.registry:
     deepseek, openai, anthropic, gemini, nvidia, siliconflow, openrouter,
     volcengine, dashscope, zhipu, ollama, custom
 

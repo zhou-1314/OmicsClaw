@@ -5,7 +5,7 @@ import pytest
 from omicsclaw.agents.plan_state import PLAN_STATE_METADATA_KEY
 from omicsclaw.agents.pipeline_result import normalize_pipeline_result
 from omicsclaw.agents.pipeline import PipelineState
-from omicsclaw.interactive._pipeline_support import (
+from omicsclaw.surfaces.cli._pipeline_support import (
     approve_pipeline_plan,
     build_approve_plan_command_view,
     build_resume_research_command,

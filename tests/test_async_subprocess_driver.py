@@ -1,4 +1,4 @@
-"""Tests for ``omicsclaw.core.runtime.async_subprocess_driver`` (OMI-12 audit P1 #4).
+"""Tests for ``omicsclaw.skill.execution.async_subprocess_driver`` (OMI-12 audit P1 #4).
 
 The async driver replaces the ``asyncio.to_thread(run_skill)`` wrap that
 ``SkillRunnerExecutor`` used to do — pin the four corners of its
@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from omicsclaw.core.runtime.async_subprocess_driver import adrive_subprocess
+from omicsclaw.skill.execution.async_subprocess_driver import adrive_subprocess
 
 
 def _write_script(tmp_path: Path, body: str) -> Path:

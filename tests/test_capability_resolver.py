@@ -1,6 +1,6 @@
 """Tests for unified capability resolution and autonomous code validation."""
 
-from omicsclaw.core.capability_resolver import resolve_capability
+from omicsclaw.skill.capability_resolver import resolve_capability
 from omicsclaw.execution import validate_custom_analysis_code
 
 
@@ -129,7 +129,7 @@ def test_score_skills_and_detect_domain_visits_each_skill_once():
 
     Asserted by monkey-patching ``iter_primary_skills`` to count calls.
     """
-    from omicsclaw.core import capability_resolver as cr
+    from omicsclaw.skill import capability_resolver as cr
 
     real_registry = cr.ensure_registry_loaded()
     call_counts: list[int] = []

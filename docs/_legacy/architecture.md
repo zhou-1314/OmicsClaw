@@ -112,7 +112,7 @@ Common skill characteristics:
 
 ### CLI
 
-The repository-root `omicsclaw.py` remains the canonical launcher. The package script `oc` resolves and delegates to it through `omicsclaw/cli.py`.
+The repository-root `omicsclaw.py` remains the canonical launcher. The package script `oc` resolves and delegates to it through `omicsclaw/surfaces/cli/launcher.py`.
 
 Important CLI entrypoints:
 
@@ -120,14 +120,14 @@ Important CLI entrypoints:
 - `oc run <skill> ...`
 - `oc interactive`
 - `oc tui`
-- `oc app-server`
+- `oc desktop-server`
 - `oc mcp list|add|remove|config`
 - `oc memory-server`
 - `oc onboard` for project `.env` bootstrap across LLM, runtime, memory, and bot-channel configuration
 
 ### Interactive CLI / TUI
 
-Interactive sessions are implemented in `omicsclaw/interactive/` and share the same backend loop:
+Interactive sessions are implemented in `omicsclaw/surfaces/cli/` and share the same backend loop:
 
 - `interactive.py` provides the prompt_toolkit-based CLI surface
 - `tui.py` provides the Textual full-screen TUI

@@ -27,8 +27,8 @@ def soul_md_text() -> str:
 
 @pytest.fixture
 def bot_voice_rules_text() -> str:
-    from omicsclaw.runtime.context_assembler import assemble_prompt_context
-    from omicsclaw.runtime.context_layers import ContextAssemblyRequest
+    from omicsclaw.runtime.context.assembler import assemble_prompt_context
+    from omicsclaw.runtime.context.layers import ContextAssemblyRequest
 
     asm = assemble_prompt_context(request=ContextAssemblyRequest(surface="bot"))
     for layer in asm.layers:
@@ -39,8 +39,8 @@ def bot_voice_rules_text() -> str:
 
 @pytest.fixture
 def cli_voice_rules_text() -> str:
-    from omicsclaw.runtime.context_assembler import assemble_prompt_context
-    from omicsclaw.runtime.context_layers import ContextAssemblyRequest
+    from omicsclaw.runtime.context.assembler import assemble_prompt_context
+    from omicsclaw.runtime.context.layers import ContextAssemblyRequest
 
     asm = assemble_prompt_context(request=ContextAssemblyRequest(surface="interactive"))
     for layer in asm.layers:
@@ -98,7 +98,7 @@ class TestExecutionRulesNowGated:
         assert "confirm" in lower
 
     def test_engineering_preamble_carries_owasp_and_no_shell_rules(self):
-        from omicsclaw.runtime.tool_execution_hooks import (
+        from omicsclaw.runtime.tools.execution_hooks import (
             DEFAULT_PRE_CALL_RULE_INJECTORS,
             build_pre_call_rule_text,
         )
@@ -112,7 +112,7 @@ class TestExecutionRulesNowGated:
         assert ".sh" in text or "shell" in text
 
     def test_skill_execution_preamble_carries_method_and_output_rules(self):
-        from omicsclaw.runtime.tool_execution_hooks import (
+        from omicsclaw.runtime.tools.execution_hooks import (
             DEFAULT_PRE_CALL_RULE_INJECTORS,
             build_pre_call_rule_text,
         )
