@@ -204,7 +204,13 @@ async def run_typed_consensus(
     # 1. plan.json audit BEFORE fan-out
     if plan_audit is not None:
         plan_path = output_dir_p / "plan.json"
-        plan_path.write_text(json.dumps(dict(plan_audit), indent=2))
+        # Slice 0 precondition for consensus-interpret (ADR 0012): the
+        # absolute, resolved adata path is the canonical handoff for
+        # downstream interpreted runs. Driver is authoritative — overwrite
+        # any caller-supplied (possibly relative) value.
+        audit = dict(plan_audit)
+        audit["input_path"] = str(Path(input_path).resolve())
+        plan_path.write_text(json.dumps(audit, indent=2))
         artifacts.append(plan_path)
 
     run_id = str((plan_audit or {}).get("run_id") or output_dir_p.name)

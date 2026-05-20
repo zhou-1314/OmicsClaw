@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omicsclaw"
-version = "0.1.1"
+version = "0.1.2"
 description = "OmicsClaw: Multi-omics analysis platform with skills across spatial, single-cell, genomics, proteomics, metabolomics, and bulk RNA-seq domains"
 readme = "README.md"
 license = {text = "MIT"}
