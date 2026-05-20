@@ -3,10 +3,16 @@
 This module keeps a lightweight snapshot of the active OmicsClaw provider
 runtime so non-chat flows can reuse the same credentials and endpoint without
 having to re-read environment variables or duplicate provider-switch logic.
+
+Also exposes ``resolve_chat_endpoint`` — the public name for what used to
+live as a leading-underscore helper in ``omicsclaw.routing.llm_router``.
+Promoted because consensus runtime + future agents / autoagent code all
+need a single OpenAI-compatible chat-completion endpoint resolver.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Mapping
 
@@ -15,6 +21,29 @@ from .registry import (
     detect_provider_from_env,
     resolve_provider,
 )
+
+
+def resolve_chat_endpoint() -> tuple[str, str, str]:
+    """Resolve ``(api_key, base_url, model)`` for chat-completion calls.
+
+    Reads from the OmicsClaw environment (``LLM_PROVIDER`` / ``LLM_BASE_URL``
+    / ``OMICSCLAW_MODEL`` or ``LLM_MODEL`` / ``LLM_API_KEY``) and the
+    provider registry. Returns sensible defaults for ``base_url`` and
+    ``model`` when unset; ``api_key`` is left empty when no credential is
+    configured (callers expected to fall back deterministically).
+
+    This is the public form of the previously private
+    ``omicsclaw.routing.llm_router._resolve_llm_config`` — moved here so the
+    chat-completion concern is owned by the providers package rather than
+    by routing.
+    """
+    base_url, model, api_key = resolve_provider(
+        provider=os.getenv("LLM_PROVIDER", ""),
+        base_url=os.getenv("LLM_BASE_URL", ""),
+        model=os.getenv("OMICSCLAW_MODEL") or os.getenv("LLM_MODEL", ""),
+        api_key=os.getenv("LLM_API_KEY", ""),
+    )
+    return api_key, (base_url or "https://api.openai.com/v1"), (model or "gpt-5-mini")
 from .ccproxy import (
     oauth_base_url,
     provider_supports_oauth,

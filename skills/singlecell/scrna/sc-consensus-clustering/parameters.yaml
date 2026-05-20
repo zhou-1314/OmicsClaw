@@ -1,0 +1,55 @@
+domain: singlecell
+allowed_extra_flags:
+- --members
+- --resolutions
+- --cluster-methods
+- --all
+- --n-clusters
+- --confirm-plan
+- --non-interactive
+- --alpha
+- --beta
+- --max-class-frac
+- --llm-judge
+- --operator
+- --seed
+- --timeout
+- --max-parallel
+- --top-k
+- --run-id
+saves_h5ad: false
+requires:
+  bins:
+  - python3
+  env: []
+  config: []
+emoji: 🧩
+homepage: https://github.com/OmicsClaw/OmicsClaw
+os:
+- linux
+- macos
+install: []
+trigger_keywords:
+- consensus clustering
+- consensus celltype clustering
+- multi-resolution clustering
+- robust scrna clustering
+- resolution sweep consensus
+- single cell consensus clustering
+script: sc_consensus_clustering.py
+param_hints:
+  leiden:
+    params:
+    - resolution
+    defaults:
+      resolution: 1.0
+    tips:
+    - 'Member resolution values are produced by the --resolutions sweep.'
+  louvain:
+    params:
+    - resolution
+    defaults:
+      resolution: 1.0
+    tips:
+    - 'Member resolution values are produced by the --resolutions sweep.'
+requires_preprocessed: true
