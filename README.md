@@ -25,8 +25,8 @@
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![CI](https://github.com/TianGzlab/OmicsClaw/actions/workflows/pr-ci.yml/badge.svg)](https://github.com/TianGzlab/OmicsClaw/actions/workflows/pr-ci.yml)
 [![Website](https://img.shields.io/badge/Website-Live-brightgreen.svg)](https://TianGzlab.github.io/OmicsClaw/)
-[![Latest Release](https://img.shields.io/github/v/release/TianGzlab/OmicsClaw?label=desktop%20app&color=blue)](https://github.com/TianGzlab/OmicsClaw/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/TianGzlab/OmicsClaw/total?label=installer%20downloads&color=brightgreen)](https://github.com/TianGzlab/OmicsClaw/releases)
+[![Desktop App](https://img.shields.io/github/v/tag/TianGzlab/OmicsClaw?sort=semver&filter=v*&label=desktop%20app&color=blue&cacheSeconds=600)](https://github.com/TianGzlab/OmicsClaw/releases/latest)
+[![Installer Downloads](https://img.shields.io/github/downloads/TianGzlab/OmicsClaw/total?label=installer%20downloads&color=brightgreen&cacheSeconds=600)](https://github.com/TianGzlab/OmicsClaw/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](https://github.com/TianGzlab/OmicsClaw/releases/latest)
 
 OmicsClaw turns local multi-omics tools into AI-callable skills. The LLM plans and operates; Python/R/CLI tools process data in your local or remote runtime.
@@ -43,18 +43,23 @@ OmicsClaw turns local multi-omics tools into AI-callable skills. The LLM plans a
 
 <p align="center">
   <a href="https://github.com/TianGzlab/OmicsClaw/releases/latest"><b>📥 Download the OmicsClaw Desktop App</b></a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/TianGzlab/OmicsClaw/releases"><b>All releases</b></a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/TianGzlab/OmicsClaw/releases/latest/download/SHA256SUMS.txt"><b>SHA256SUMS</b></a>
 </p>
 
-The **[Releases](https://github.com/TianGzlab/OmicsClaw/releases)** tab hosts the prebuilt desktop installers — same `oc desktop-server` the CLI ships, wrapped in a chat-ready Electron UI.
+The **[Releases](https://github.com/TianGzlab/OmicsClaw/releases)** tab hosts the prebuilt desktop installers — same `oc desktop-server` the CLI ships, wrapped in a chat-ready Electron UI. Pick the asset for your platform:
 
-| Platform | Asset |
+| Platform | Installer |
 |---|---|
-| macOS — Apple Silicon · Intel | `OmicsClaw-<ver>-arm64.dmg` · `OmicsClaw-<ver>-x64.dmg` |
-| Windows — x64 · ARM64 | `OmicsClaw.Setup.<ver>-x64.exe` · `OmicsClaw.Setup.<ver>-arm64.exe` |
-| Linux — x64 | `.AppImage` · `.deb` · `.rpm` |
-| Linux — ARM64 | `.AppImage` |
+| 🍎 **macOS — Apple Silicon** (M1 / M2 / M3 / M4) | [`OmicsClaw-<ver>-arm64.dmg`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
+| 🍎 **macOS — Intel** | [`OmicsClaw-<ver>-x64.dmg`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
+| 🪟 **Windows — x64 / ARM64** | [`OmicsClaw.Setup.<ver>-x64.exe`](https://github.com/TianGzlab/OmicsClaw/releases/latest) · [`OmicsClaw.Setup.<ver>-arm64.exe`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
+| 🐧 **Linux — x64** | [`.AppImage`](https://github.com/TianGzlab/OmicsClaw/releases/latest) · [`.deb`](https://github.com/TianGzlab/OmicsClaw/releases/latest) · [`.rpm`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
+| 🐧 **Linux — ARM64** | [`.AppImage`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
 
-Verify with `SHA256SUMS.txt` next to the installers. The desktop client and the CLI talk to the same backend — analyses, memory, and remote runtimes stay portable across both.
+> Verify each download against `SHA256SUMS.txt` published alongside the installers. The desktop client and the CLI talk to the same backend — analyses, memory, and remote runtimes stay portable across both.
 
 ## 💡 Why OmicsClaw?
 
