@@ -174,11 +174,12 @@ PROVIDER_DISPLAY_METADATA: dict[str, ProviderDisplayMetadata] = {
     },
     "dashscope": {
         "display_name": "DashScope",
-        "description": "Alibaba Qwen3.6 / Qwen3 models (Plus, Max, Coder, QwQ)",
-        "description_zh": "阿里巴巴通义千问 Qwen3.6 / Qwen3 系列（Plus、Max、Coder、QwQ）",
+        "description": "Alibaba Qwen3.7 / Qwen3.6 / Qwen3 models (Max Preview, Plus, Coder, QwQ)",
+        "description_zh": "阿里巴巴通义千问 Qwen3.7 / Qwen3.6 / Qwen3 系列（Max Preview、Plus、Coder、QwQ）",
         "tier": "aggregator",
         "models": (
             "qwen3.6-plus",
+            "qwen3.7-max",
             "qwen3-max",
             "qwen3-coder-plus",
             "qwen3-235b-a22b",

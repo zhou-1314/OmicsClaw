@@ -76,6 +76,7 @@ MODEL_CATALOG: list[tuple[str, str, str]] = [
     ("qwen3-coder",  "qwen3-coder-plus", "dashscope"),
     ("qwen3-235b",   "qwen3-235b-a22b",  "dashscope"),
     ("qwen3-max",    "qwen-max",         "dashscope"),
+    ("qwen3.7-max", "qwen3.7-max", "dashscope"),
     ("qwen3.6-plus", "qwen3.6-plus",     "dashscope"),
     ("qwq-plus",     "qwq-plus",         "dashscope"),
     # moonshot
@@ -153,6 +154,7 @@ _KNOWN_MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "doubao-1.5-thinking-pro": 256_000,
     # DashScope
     "qwen3.6-plus": 1_000_000,
+    "qwen3.7-max": 1_000_000,
     "qwen3.6-27b": 262_000,
     "qwen3.6-35b-a3b": 262_000,
     "qwen3-max": 262_144,
