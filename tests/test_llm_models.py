@@ -90,6 +90,7 @@ class TestContextWindow:
             ("doubao-1.5-pro-256k", 256_000),
             ("doubao-1.5-thinking-pro", 256_000),
             ("qwen3.6-plus", 1_000_000),
+            ("qwen3.7-max", 1_000_000),
             ("qwen3-max", 262_144),
             ("qwen3-coder-plus", 1_000_000),
             ("qwen3-235b-a22b", 131_072),
