@@ -151,6 +151,12 @@ class QueryEngineConfig:
     deepseek_reasoning_passback: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class PlannedToolCallRun:
+    execution_results: list[ToolExecutionResult]
+    interruption_message: str = ""
+
+
 def _extract_completion_tokens(response_usage, delta) -> int:
     if isinstance(delta, dict):
         try:
@@ -558,6 +564,8 @@ async def _build_execution_requests(
             "surface": context.surface,
             "policy_state": current_policy_state,
         }
+        if callbacks.request_tool_approval is not None:
+            runtime_context["request_tool_approval"] = callbacks.request_tool_approval
         if tool_runtime_context:
             runtime_context.update(tool_runtime_context)
         request = ToolExecutionRequest(
@@ -734,6 +742,72 @@ async def _record_tool_outcome(
     return _build_preflight_interruption_message(result_record.content)
 
 
+async def _execute_planned_tool_calls(
+    *,
+    planned_tool_calls: list[MaterializedToolCall],
+    context: "QueryEngineContext",
+    callbacks: "QueryEngineCallbacks",
+    tool_runtime: ToolRuntime,
+    tool_result_store: "ToolResultStore",
+    transcript_store: "TranscriptStore",
+    hook_runtime,
+    tool_runtime_context: dict[str, Any] | None,
+    current_policy_state: "ToolPolicyState | None",
+    state: "LoopState",
+) -> tuple[list["ToolExecutionResult"], str, "ToolPolicyState | None"]:
+    """Execute deterministic tool calls through the same pipeline as LLM calls."""
+    assistant_tool_calls = [
+        {
+            "id": tc.id,
+            "type": "function",
+            "function": {
+                "name": tc.name,
+                "arguments": tc.arguments,
+            },
+        }
+        for tc in planned_tool_calls
+    ]
+    transcript_store.append_assistant_message(
+        context.chat_id,
+        content="",
+        tool_calls=assistant_tool_calls,
+    )
+
+    execution_requests, tool_states = await _build_execution_requests(
+        tool_calls=planned_tool_calls,
+        context=context,
+        callbacks=callbacks,
+        tool_runtime=tool_runtime,
+        tool_runtime_context=tool_runtime_context,
+        current_policy_state=current_policy_state,
+        hook_runtime=hook_runtime,
+    )
+    execution_results = await execute_tool_requests(execution_requests)
+    if callbacks.request_tool_approval is not None:
+        execution_results, current_policy_state = await _resolve_tool_approval_flow(
+            execution_results=execution_results,
+            callbacks=callbacks,
+            context=context,
+            current_policy_state=current_policy_state,
+        )
+
+    interruption_message = ""
+    for execution_result in execution_results:
+        candidate = await _record_tool_outcome(
+            execution_result=execution_result,
+            context=context,
+            callbacks=callbacks,
+            tool_result_store=tool_result_store,
+            transcript_store=transcript_store,
+            hook_runtime=hook_runtime,
+            tool_state=tool_states.get(execution_result.request.call_id),
+            state=state,
+        )
+        if not interruption_message:
+            interruption_message = candidate
+    return execution_results, interruption_message, current_policy_state
+
+
 async def _resolve_tool_approval_flow(
     *,
     execution_results: list["ToolExecutionResult"],
@@ -825,6 +899,87 @@ async def _resolve_tool_approval_flow(
                 )
         resolved_execution_results.append(execution_result)
     return resolved_execution_results, current_policy_state
+
+
+async def run_planned_tool_calls(
+    *,
+    calls: list[tuple[str, dict[str, Any]]],
+    context: QueryEngineContext,
+    tool_runtime: ToolRuntime,
+    transcript_store: TranscriptStore,
+    tool_result_store: ToolResultStore,
+    callbacks: QueryEngineCallbacks | None = None,
+    append_user_message: bool = True,
+) -> PlannedToolCallRun:
+    """Execute caller-planned tool calls without asking the LLM to choose them.
+
+    This preserves the same transcript, callback, hook, policy, approval, and
+    tool-result-store contracts that ``run_query_engine`` uses for model-
+    generated tool calls.
+    """
+    callbacks = callbacks or QueryEngineCallbacks()
+    hook_runtime = context.hook_runtime
+    tool_runtime_context = _prepare_tool_runtime_context(context.tool_runtime_context)
+    history_before = list(transcript_store.get_history(context.chat_id))
+
+    if hook_runtime is not None:
+        session_event_name = (
+            EVENT_SESSION_RESUME if history_before else EVENT_SESSION_START
+        )
+        hook_runtime.emit(
+            session_event_name,
+            SessionHookPayload(
+                chat_id=str(context.chat_id),
+                session_id=str(context.session_id or ""),
+                surface=context.surface,
+                resumed=bool(history_before),
+                message_count=len(history_before),
+            ),
+            context={
+                "chat_id": str(context.chat_id),
+                "session_id": str(context.session_id or ""),
+                "surface": context.surface,
+            },
+        )
+        hook_runtime.consume_pending_messages(
+            mode=HOOK_MODE_CONTEXT,
+            event_names=(session_event_name,),
+        )
+
+    transcript_store.touch(context.chat_id)
+    transcript_store.evict_lru_conversations()
+    if append_user_message:
+        transcript_store.append_user_message(context.chat_id, context.user_message_content)
+    transcript_store.prepare_history(context.chat_id)
+
+    planned_tool_calls = [
+        MaterializedToolCall(
+            id=f"planned-{index + 1}-{name}",
+            name=name,
+            arguments=json.dumps(arguments or {}, ensure_ascii=False),
+        )
+        for index, (name, arguments) in enumerate(calls)
+    ]
+    if not planned_tool_calls:
+        return PlannedToolCallRun(execution_results=[])
+
+    state = LoopState()
+    execution_results, interruption_message, _ = await _execute_planned_tool_calls(
+        planned_tool_calls=planned_tool_calls,
+        context=context,
+        callbacks=callbacks,
+        tool_runtime=tool_runtime,
+        tool_result_store=tool_result_store,
+        transcript_store=transcript_store,
+        hook_runtime=hook_runtime,
+        tool_runtime_context=tool_runtime_context,
+        current_policy_state=context.policy_state,
+        state=state,
+    )
+    return PlannedToolCallRun(
+        execution_results=execution_results,
+        interruption_message=interruption_message,
+    )
 
 
 async def _call_llm_with_reactive_compact_retry(
@@ -1094,41 +1249,20 @@ async def run_query_engine(
                 accumulated_response_segments, current_response
             )
 
-        execution_requests, tool_states = await _build_execution_requests(
-            tool_calls=last_message.tool_calls,
-            context=context,
-            callbacks=callbacks,
-            tool_runtime=tool_runtime,
-            tool_runtime_context=tool_runtime_context,
-            current_policy_state=current_policy_state,
-            hook_runtime=hook_runtime,
-        )
-
-        execution_results = await execute_tool_requests(execution_requests)
-        if callbacks.request_tool_approval is not None:
-            execution_results, current_policy_state = (
-                await _resolve_tool_approval_flow(
-                    execution_results=execution_results,
-                    callbacks=callbacks,
-                    context=context,
-                    current_policy_state=current_policy_state,
-                )
-            )
-
-        interruption_message = ""
-        for execution_result in execution_results:
-            candidate = await _record_tool_outcome(
-                execution_result=execution_result,
+        _, interruption_message, current_policy_state = (
+            await _execute_planned_tool_calls(
+                planned_tool_calls=last_message.tool_calls,
                 context=context,
                 callbacks=callbacks,
+                tool_runtime=tool_runtime,
                 tool_result_store=tool_result_store,
                 transcript_store=transcript_store,
                 hook_runtime=hook_runtime,
-                tool_state=tool_states.get(execution_result.request.call_id),
+                tool_runtime_context=tool_runtime_context,
+                current_policy_state=current_policy_state,
                 state=state,
             )
-            if not interruption_message:
-                interruption_message = candidate
+        )
 
         if interruption_message:
             transcript_store.append_assistant_message(

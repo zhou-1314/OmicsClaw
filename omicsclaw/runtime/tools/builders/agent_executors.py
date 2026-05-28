@@ -1960,6 +1960,75 @@ async def execute_custom_analysis_execute(args: dict, **kwargs) -> str:
         return f"Error running custom analysis: {e}"
 
 
+async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
+    """Run the first-class Autonomous Code Runner loop."""
+    try:
+        from omicsclaw.autonomous import (
+            AutonomousRunRequest,
+            run_autonomous_code_loop_async,
+        )
+
+        goal = str(args.get("goal", "") or "").strip()
+        if not goal:
+            return "Error: 'goal' parameter is required."
+
+        input_paths = [str(item) for item in args.get("input_paths", []) or []]
+        upstream_paths = [str(item) for item in args.get("upstream_paths", []) or []]
+        language = str(args.get("language", "python") or "python").strip().lower()
+        if language == "r":
+            language = "rscript"
+        if language not in {"python", "rscript"}:
+            return "Error: language must be 'python' or 'r'."
+
+        max_repair_attempts = int(args.get("max_repair_attempts", 2) or 2)
+        max_repair_attempts = max(0, min(max_repair_attempts, 2))
+        request = AutonomousRunRequest(
+            goal=goal,
+            output_root=str(OUTPUT_DIR),
+            input_paths=input_paths,
+            upstream_paths=upstream_paths,
+            language=language,
+            max_repair_attempts=max_repair_attempts,
+            context=str(args.get("context", "") or ""),
+            web_context=str(args.get("web_context", "") or ""),
+            model_override=str(kwargs.get("model_override", "") or ""),
+            provider_override=str(kwargs.get("provider_override", "") or ""),
+            metadata={
+                "surface": str(kwargs.get("surface", "") or ""),
+                "chat_id": str(kwargs.get("chat_id", "") or ""),
+                "session_id": str(kwargs.get("session_id", "") or ""),
+            },
+        )
+        result = await run_autonomous_code_loop_async(
+            request,
+            request_tool_approval=kwargs.get("request_tool_approval"),
+            runtime_context={
+                "surface": str(kwargs.get("surface", "bot") or "bot"),
+                "policy_state": kwargs.get("policy_state"),
+                "session_id": str(kwargs.get("session_id", "") or ""),
+                "chat_id": str(kwargs.get("chat_id", "") or ""),
+            },
+        )
+
+        attempt_lines = []
+        for attempt in result.attempts:
+            attempt_lines.append(
+                f"- attempt {attempt.attempt_index}: {attempt.status.value}, "
+                f"tier={attempt.permission_tier.value}, exit={attempt.exit_code}"
+            )
+        return (
+            f"Autonomous analysis {'completed' if result.ok else 'failed'}.\n"
+            f"Output dir: {result.workspace_root}\n"
+            f"Manifest: {result.manifest_path}\n"
+            f"Completion report: {result.completion_report_path}\n"
+            f"Attempts:\n{chr(10).join(attempt_lines) or '- none'}\n"
+            f"Error: {result.error or '<none>'}"
+        )
+    except Exception as e:
+        logger.error(f"Autonomous analysis execution failed: {e}", exc_info=True)
+        return f"Error running autonomous analysis: {e}"
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -1990,6 +2059,7 @@ def _available_tool_executors() -> dict[str, object]:
         "list_skills_in_domain": execute_list_skills_in_domain,
         "create_omics_skill": execute_create_omics_skill,
         "web_method_search": execute_web_method_search,
+        "autonomous_analysis_execute": execute_autonomous_analysis_execute,
         "custom_analysis_execute": execute_custom_analysis_execute,
         "inspect_data": execute_inspect_data,
     }
@@ -2018,5 +2088,3 @@ def get_tool_runtime():
 
 def get_tool_executors() -> dict[str, object]:
     return dict(get_tool_runtime().executors)
-
-

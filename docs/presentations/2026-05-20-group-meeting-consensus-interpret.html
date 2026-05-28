@@ -1,0 +1,1954 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OmicsClaw · 组会汇报 · 2026-05-20</title>
+
+<!-- ============================================================
+     FONTS — Paper & Ink editorial pairing
+     Cormorant Garamond (display serif) + Source Serif 4 (body)
+     JetBrains Mono (numerals, code)
+     ============================================================ -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600&family=Source+Serif+4:ital,opsz,wght@0,8..60,300;0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<style>
+  /* ============================================================
+     THEME — Paper & Ink (editorial / journal aesthetic)
+     Edit these CSS variables to retint the entire deck.
+     ============================================================ */
+  :root {
+    --bg: #faf9f7;
+    --paper: #f3f0e8;
+    --ink: #1a1a1a;
+    --ink-soft: #4a4642;
+    --ink-mute: #8a847c;
+    --rule: #2a2826;
+    --rule-soft: rgba(42,40,38,0.18);
+    --crimson: #c41e3a;
+    --gold: #b8985a;
+
+    --font-display: 'Cormorant Garamond', 'Times New Roman', serif;
+    --font-body: 'Source Serif 4', Georgia, serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+
+    --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+    --duration-normal: 0.7s;
+  }
+
+  /* ============================================================
+     RESET + GLOBAL
+     ============================================================ */
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-weight: 300; }
+  body {
+    background-image:
+      radial-gradient(ellipse at 18% 12%, rgba(196,30,58,0.035), transparent 55%),
+      radial-gradient(ellipse at 82% 88%, rgba(184,152,90,0.05), transparent 60%);
+  }
+
+  /* ============================================================
+     VIEWPORT FITTING — from viewport-base.css (mandatory)
+     Locks every slide to exactly one viewport. Never scrolls within.
+     ============================================================ */
+  html, body { height: 100%; overflow-x: hidden; }
+  html { scroll-snap-type: y mandatory; scroll-behavior: smooth; }
+  .slide {
+    width: 100vw; height: 100vh; height: 100dvh;
+    overflow: hidden; scroll-snap-align: start;
+    display: flex; flex-direction: column; position: relative;
+  }
+  .slide-content { flex: 1; display: flex; flex-direction: column; max-height: 100%; overflow: hidden; }
+
+  :root {
+    --title-size: clamp(1.5rem, 5vw, 4rem);
+    --h2-size:    clamp(1.25rem, 3.5vw, 2.5rem);
+    --h3-size:    clamp(1rem, 2.5vw, 1.75rem);
+    --body-size:  clamp(0.75rem, 1.5vw, 1.125rem);
+    --small-size: clamp(0.65rem, 1vw, 0.875rem);
+    --slide-padding: clamp(1rem, 4vw, 4rem);
+    --content-gap: clamp(0.5rem, 2vw, 2rem);
+    --element-gap: clamp(0.25rem, 1vw, 1rem);
+  }
+  .card, .container, .content-box { max-width: min(90vw, 1100px); max-height: min(80vh, 700px); }
+  .feature-list, .bullet-list { gap: clamp(0.4rem, 1vh, 1rem); }
+  .feature-list li, .bullet-list li { font-size: var(--body-size); line-height: 1.45; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: clamp(0.5rem, 1.5vw, 1rem); }
+  img, .image-container { max-width: 100%; max-height: min(50vh, 400px); object-fit: contain; }
+
+  /* Responsive breakpoints from viewport-base.css */
+  @media (max-height: 700px) {
+    :root {
+      --slide-padding: clamp(0.75rem, 3vw, 2rem);
+      --content-gap: clamp(0.4rem, 1.5vw, 1rem);
+      --title-size: clamp(1.25rem, 4.5vw, 2.5rem);
+      --h2-size: clamp(1rem, 3vw, 1.75rem);
+    }
+  }
+  @media (max-height: 600px) {
+    :root {
+      --slide-padding: clamp(0.5rem, 2.5vw, 1.5rem);
+      --content-gap: clamp(0.3rem, 1vw, 0.75rem);
+      --title-size: clamp(1.1rem, 4vw, 2rem);
+      --body-size: clamp(0.7rem, 1.2vw, 0.95rem);
+    }
+    .nav-dots, .keyboard-hint, .decorative { display: none; }
+  }
+  @media (max-height: 500px) {
+    :root {
+      --slide-padding: clamp(0.4rem, 2vw, 1rem);
+      --title-size: clamp(1rem, 3.5vw, 1.5rem);
+      --h2-size: clamp(0.9rem, 2.5vw, 1.25rem);
+      --body-size: clamp(0.65rem, 1vw, 0.85rem);
+    }
+  }
+  @media (max-width: 600px) {
+    :root { --title-size: clamp(1.25rem, 7vw, 2.5rem); }
+    .grid { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.2s !important; }
+    html { scroll-behavior: auto; }
+  }
+
+  /* ============================================================
+     PAGE FRAME — double-rule editorial border on every slide
+     ============================================================ */
+  .slide::before, .slide::after { content: ""; position: absolute; pointer-events: none; }
+  .slide::before {
+    top: clamp(0.8rem, 1.4vw, 1.4rem); left: clamp(0.8rem, 1.4vw, 1.4rem);
+    right: clamp(0.8rem, 1.4vw, 1.4rem); bottom: clamp(0.8rem, 1.4vw, 1.4rem);
+    border: 1px solid var(--rule); opacity: 0.18;
+  }
+  .slide::after {
+    top: clamp(1.05rem, 1.75vw, 1.75rem); left: clamp(1.05rem, 1.75vw, 1.75rem);
+    right: clamp(1.05rem, 1.75vw, 1.75rem); bottom: clamp(1.05rem, 1.75vw, 1.75rem);
+    border: 1px solid var(--rule); opacity: 0.08;
+  }
+
+  /* Paper grain */
+  .grain {
+    position: absolute; inset: 0; pointer-events: none; opacity: 0.04; z-index: 0;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  }
+
+  /* ============================================================
+     COMMON SLIDE PARTS — masthead / colophon / folio
+     ============================================================ */
+  .slide-frame {
+    position: relative; z-index: 1;
+    height: 100%;
+    padding: clamp(1.6rem, 4vw, 4rem) clamp(2rem, 6vw, 6rem);
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    gap: clamp(0.7rem, 1.6vh, 1.4rem);
+  }
+
+  .masthead {
+    display: flex; justify-content: space-between; align-items: baseline;
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: clamp(0.4rem, 0.9vh, 0.8rem);
+    font-family: var(--font-body);
+    font-size: clamp(0.58rem, 0.9vw, 0.72rem);
+    letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  .masthead .vol em { font-style: italic; color: var(--crimson); font-weight: 600; }
+  .masthead .org { letter-spacing: 0.28em; }
+
+  .colophon {
+    border-top: 1px solid var(--rule);
+    padding-top: clamp(0.5rem, 1vh, 0.9rem);
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: clamp(0.55rem, 0.85vw, 0.7rem);
+    letter-spacing: 0.16em;
+    color: var(--ink-mute);
+    text-transform: uppercase;
+  }
+  .colophon .right { font-family: var(--font-mono); color: var(--crimson); letter-spacing: 0.1em; }
+  .colophon .right span { color: var(--ink); }
+
+  .folio {
+    font-family: var(--font-display);
+    font-style: italic;
+    color: var(--ink-soft);
+    letter-spacing: 0.2em;
+  }
+
+  /* ============================================================
+     TYPOGRAPHY HELPERS
+     ============================================================ */
+  .section-tag {
+    font-family: var(--font-display);
+    font-style: italic;
+    color: var(--crimson);
+    font-size: clamp(0.85rem, 1.5vw, 1.25rem);
+    letter-spacing: 0.02em;
+    margin-bottom: clamp(0.35rem, 0.8vh, 0.7rem);
+  }
+  .section-tag::before {
+    content: "§ ";
+    font-style: normal;
+    font-weight: 600;
+    font-family: var(--font-body);
+    color: var(--gold);
+  }
+  h1, h2 { font-family: var(--font-display); font-weight: 600; letter-spacing: -0.01em; }
+  h1 { font-size: clamp(1.9rem, 5.2vw, 4.4rem); line-height: 1.04; color: var(--ink); }
+  h2 { font-size: clamp(1.4rem, 3.4vw, 2.7rem); line-height: 1.1; color: var(--ink); }
+  h3 { font-family: var(--font-display); font-weight: 600; font-size: clamp(1rem, 1.9vw, 1.4rem); color: var(--ink); }
+  .accent { color: var(--crimson); font-style: italic; font-weight: 500; }
+  .smallcap { font-variant-caps: all-small-caps; letter-spacing: 0.06em; font-weight: 700; }
+  .ampersand { font-family: var(--font-display); font-style: italic; color: var(--crimson); padding: 0 0.05em; }
+  .gold { color: var(--gold); }
+  .mono { font-family: var(--font-mono); }
+
+  p, li {
+    font-family: var(--font-body);
+    font-size: clamp(0.82rem, 1.35vw, 1.05rem);
+    line-height: 1.6;
+    color: var(--ink-soft);
+  }
+  .deck { font-weight: 300; max-width: 56ch; }
+  .deck em { color: var(--ink); font-style: italic; font-weight: 400; }
+
+  .pullquote {
+    padding-left: clamp(0.8rem, 1.5vw, 1.4rem);
+    border-left: 2px solid var(--crimson);
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: clamp(0.92rem, 1.5vw, 1.25rem);
+    color: var(--ink);
+    max-width: 64ch;
+  }
+
+  .small-rule {
+    width: clamp(2rem, 4vw, 3.5rem); height: 1px; background: var(--crimson);
+    margin: clamp(0.4rem, 1vh, 0.8rem) 0 clamp(0.6rem, 1.4vh, 1.1rem) 0;
+  }
+
+  /* ============================================================
+     SHARED REVEAL ANIMATION — staggered editorial fade-up
+     ============================================================ */
+  .reveal { opacity: 0; transform: translateY(18px); transition: opacity var(--duration-normal) var(--ease-out-expo), transform var(--duration-normal) var(--ease-out-expo); }
+  .slide.visible .reveal { opacity: 1; transform: translateY(0); }
+  .slide.visible .reveal:nth-child(1)  { transition-delay: 0.05s; }
+  .slide.visible .reveal:nth-child(2)  { transition-delay: 0.15s; }
+  .slide.visible .reveal:nth-child(3)  { transition-delay: 0.25s; }
+  .slide.visible .reveal:nth-child(4)  { transition-delay: 0.35s; }
+  .slide.visible .reveal:nth-child(5)  { transition-delay: 0.45s; }
+  .slide.visible .reveal:nth-child(6)  { transition-delay: 0.55s; }
+  .slide.visible .reveal:nth-child(7)  { transition-delay: 0.65s; }
+  .slide.visible .reveal:nth-child(8)  { transition-delay: 0.75s; }
+  .reveal-d1 { transition-delay: 0.05s; }
+  .reveal-d2 { transition-delay: 0.18s; }
+  .reveal-d3 { transition-delay: 0.32s; }
+  .reveal-d4 { transition-delay: 0.46s; }
+  .reveal-d5 { transition-delay: 0.6s; }
+
+  /* ============================================================
+     TITLE SLIDE
+     ============================================================ */
+  .title-slide .hero { padding: clamp(0.8rem, 2vh, 1.6rem) 0; }
+  .title-slide .eyebrow {
+    font-family: var(--font-display); font-style: italic;
+    color: var(--crimson);
+    font-size: clamp(0.95rem, 1.7vw, 1.4rem);
+    margin-bottom: clamp(0.6rem, 1.4vh, 1.2rem);
+  }
+  .title-slide h1 {
+    font-size: clamp(2rem, 5.6vw, 4.6rem);
+    margin-bottom: clamp(0.8rem, 1.6vh, 1.4rem);
+  }
+  .title-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: clamp(0.8rem, 1.5vw, 1.5rem);
+    margin-top: clamp(0.6rem, 1.2vh, 1rem);
+    padding-top: clamp(0.6rem, 1.2vh, 1rem);
+    border-top: 1px solid var(--rule-soft);
+    font-size: clamp(0.55rem, 0.95vw, 0.78rem);
+    letter-spacing: 0.12em;
+  }
+  .col-item .k { text-transform: uppercase; color: var(--ink-soft); display: block; margin-bottom: 0.25em; font-size: 0.92em; }
+  .col-item .v { font-family: var(--font-mono); font-weight: 500; color: var(--crimson); font-size: 1.05em; letter-spacing: 0.04em; }
+  .col-item .v.ink { color: var(--ink); }
+
+  /* ============================================================
+     CONTENT SLIDE HEADER (used on slides 2-14)
+     ============================================================ */
+  .content-head {
+    display: flex; flex-direction: column;
+    gap: clamp(0.2rem, 0.6vh, 0.5rem);
+    margin-bottom: clamp(0.7rem, 1.6vh, 1.4rem);
+  }
+
+  /* ============================================================
+     SLIDE-SPECIFIC LAYOUTS
+     ============================================================ */
+
+  /* Two-column comparison */
+  .two-col {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: clamp(1rem, 2.5vw, 2.4rem);
+    flex: 1;
+    align-items: start;
+  }
+  @media (max-width: 700px) { .two-col { grid-template-columns: 1fr; gap: clamp(0.8rem, 2vh, 1.2rem); } }
+
+  /* Card */
+  .icard {
+    border: 1px solid var(--rule-soft);
+    background: rgba(243,240,232,0.4);
+    padding: clamp(0.8rem, 1.6vw, 1.4rem);
+    position: relative;
+  }
+  .icard h3 { color: var(--crimson); margin-bottom: clamp(0.4rem, 0.9vh, 0.7rem); }
+  .icard .pill-no {
+    position: absolute; top: 0; right: clamp(0.8rem, 1.6vw, 1.4rem);
+    transform: translateY(-50%);
+    background: var(--bg);
+    padding: 0 clamp(0.4rem, 0.8vw, 0.7rem);
+    font-family: var(--font-display); font-style: italic;
+    color: var(--gold);
+    font-size: clamp(0.75rem, 1.2vw, 1rem);
+  }
+  .icard ul { list-style: none; }
+  .icard li {
+    padding-left: 1em; position: relative;
+    font-size: clamp(0.72rem, 1.15vw, 0.9rem);
+    margin-bottom: clamp(0.15rem, 0.4vh, 0.3rem);
+  }
+  .icard li::before { content: "—"; position: absolute; left: 0; color: var(--crimson); }
+
+  /* 4-pillar grid */
+  .pillar-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: clamp(0.7rem, 1.4vw, 1.2rem);
+    flex: 1; align-items: stretch;
+  }
+  @media (max-width: 900px) { .pillar-grid { grid-template-columns: 1fr 1fr; } }
+  .pillar {
+    border-top: 2px solid var(--crimson);
+    padding: clamp(0.7rem, 1.4vw, 1.2rem) clamp(0.6rem, 1.2vw, 1rem) 0;
+    display: flex; flex-direction: column;
+    background: rgba(243,240,232,0.35);
+  }
+  .pillar .no {
+    font-family: var(--font-display); font-style: italic;
+    color: var(--gold); font-size: clamp(0.85rem, 1.4vw, 1.1rem);
+    margin-bottom: clamp(0.15rem, 0.4vh, 0.3rem);
+  }
+  .pillar h3 { color: var(--ink); margin-bottom: clamp(0.3rem, 0.7vh, 0.5rem); font-weight: 600; }
+  .pillar p {
+    font-size: clamp(0.7rem, 1.1vw, 0.88rem);
+    line-height: 1.5;
+  }
+  .pillar .adr {
+    margin-top: auto;
+    padding-top: clamp(0.5rem, 1vh, 0.9rem);
+    border-top: 1px dashed var(--rule-soft);
+    font-family: var(--font-mono);
+    font-size: clamp(0.55rem, 0.85vw, 0.7rem);
+    color: var(--crimson);
+    letter-spacing: 0.08em;
+  }
+
+  /* Tables — editorial */
+  table.editorial {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: clamp(0.7rem, 1.15vw, 0.9rem);
+  }
+  table.editorial caption {
+    text-align: left;
+    font-family: var(--font-display);
+    font-style: italic;
+    color: var(--crimson);
+    padding: 0.2em 0 0.5em;
+    font-size: 1.1em;
+  }
+  table.editorial th {
+    text-align: left;
+    font-family: var(--font-body);
+    font-weight: 600;
+    font-size: 0.88em;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-soft);
+    border-bottom: 2px solid var(--rule);
+    padding: 0.45em 0.6em 0.45em 0;
+  }
+  table.editorial td {
+    border-bottom: 1px solid var(--rule-soft);
+    padding: 0.45em 0.6em 0.45em 0;
+    color: var(--ink-soft);
+    vertical-align: top;
+  }
+  table.editorial td:first-child { color: var(--ink); font-weight: 500; }
+  table.editorial td .check { color: #2d8a3e; font-weight: 700; }
+  table.editorial td .mono { font-family: var(--font-mono); color: var(--crimson); font-size: 0.95em; }
+  table.editorial tr:hover td { background: rgba(196,30,58,0.04); }
+
+  /* Stat tiles */
+  .stat-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: clamp(0.8rem, 1.6vw, 1.4rem);
+  }
+  .stat {
+    border-left: 2px solid var(--crimson);
+    padding-left: clamp(0.6rem, 1.2vw, 1rem);
+  }
+  .stat .k {
+    display: block;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    font-size: clamp(0.52rem, 0.85vw, 0.68rem);
+    color: var(--ink-soft);
+    margin-bottom: 0.4em;
+  }
+  .stat .v {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: clamp(1.4rem, 2.8vw, 2.4rem);
+    color: var(--ink);
+    line-height: 1;
+  }
+  .stat .v.crimson { color: var(--crimson); font-style: italic; }
+  .stat .sub { display: block; margin-top: 0.3em; font-size: clamp(0.55rem, 0.9vw, 0.72rem); color: var(--ink-mute); font-style: italic; }
+
+  /* Pipeline ASCII-art */
+  pre.pipeline {
+    font-family: var(--font-mono);
+    font-size: clamp(0.55rem, 0.92vw, 0.78rem);
+    line-height: 1.35;
+    color: var(--ink);
+    background: rgba(243,240,232,0.5);
+    border: 1px solid var(--rule-soft);
+    padding: clamp(0.8rem, 1.6vw, 1.4rem) clamp(1rem, 2vw, 1.8rem);
+    overflow: hidden;
+    max-height: 100%;
+    white-space: pre;
+  }
+  pre.pipeline .crimson { color: var(--crimson); font-weight: 700; }
+  pre.pipeline .gold    { color: var(--gold); font-weight: 700; }
+
+  /* Drop cap on first paragraph of a section */
+  .drop-cap::first-letter {
+    font-family: var(--font-display);
+    font-weight: 700;
+    float: left;
+    font-size: clamp(2.5rem, 6vw, 4.5rem);
+    line-height: 0.85;
+    padding-right: 0.12em;
+    color: var(--crimson);
+    margin-top: 0.05em;
+  }
+
+  /* Flow diagram (interpret layer) */
+  .flow {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr) auto;
+    gap: clamp(0.5rem, 1vw, 0.9rem);
+    align-items: stretch;
+    margin: clamp(0.6rem, 1.2vh, 1rem) 0 clamp(0.5rem, 1vh, 0.8rem);
+  }
+  .flow .box {
+    border: 1px solid var(--rule);
+    padding: clamp(0.5rem, 1vw, 0.8rem) clamp(0.6rem, 1.2vw, 1rem);
+    font-size: clamp(0.7rem, 1.1vw, 0.85rem);
+    background: var(--paper);
+    text-align: center;
+    display: flex; align-items: center; justify-content: center;
+    line-height: 1.3;
+  }
+  .flow .box.final {
+    background: var(--ink); color: var(--bg);
+    border-color: var(--ink);
+  }
+  .flow .arrow {
+    display: flex; align-items: center; justify-content: center;
+    color: var(--crimson); font-weight: 700;
+    font-family: var(--font-mono);
+  }
+
+  /* Invariants checklist */
+  .invariants {
+    display: grid; gap: clamp(0.4rem, 0.9vh, 0.7rem);
+  }
+  .invariants .row {
+    display: grid;
+    grid-template-columns: clamp(1.6rem, 3vw, 2.6rem) 1fr auto;
+    gap: clamp(0.5rem, 1vw, 0.9rem);
+    align-items: baseline;
+    padding-bottom: clamp(0.3rem, 0.7vh, 0.5rem);
+    border-bottom: 1px dashed var(--rule-soft);
+    font-size: clamp(0.72rem, 1.15vw, 0.92rem);
+  }
+  .invariants .num {
+    font-family: var(--font-display); font-style: italic;
+    color: var(--gold);
+    font-size: clamp(0.95rem, 1.6vw, 1.3rem);
+  }
+  .invariants .row p { color: var(--ink); line-height: 1.45; }
+  .invariants .row .tag {
+    font-family: var(--font-mono);
+    font-size: 0.78em;
+    color: var(--crimson);
+    letter-spacing: 0.06em;
+    border: 1px solid var(--rule-soft);
+    padding: 0.1em 0.5em;
+    white-space: nowrap;
+  }
+
+  /* Cell type table styling for slide 10 */
+  table.cells td:nth-child(3) { font-family: var(--font-mono); color: var(--gold); }
+  table.cells td:nth-child(2) { font-style: italic; }
+  .ct-major { color: #2d8a3e; font-weight: 700; }
+  .ct-low { color: var(--ink-mute); font-style: italic; }
+
+  /* ============================================================
+     PROGRESS BAR + NAV DOTS
+     ============================================================ */
+  .progress-bar {
+    position: fixed; top: 0; left: 0; height: 2px;
+    background: var(--crimson);
+    width: 0; z-index: 9999;
+    transition: width 0.2s linear;
+  }
+  .nav-dots {
+    position: fixed; right: clamp(0.6rem, 1.4vw, 1.4rem); top: 50%;
+    transform: translateY(-50%);
+    display: flex; flex-direction: column;
+    gap: clamp(0.35rem, 0.8vh, 0.6rem);
+    z-index: 1000;
+  }
+  .nav-dots button {
+    width: clamp(0.4rem, 0.7vw, 0.55rem);
+    height: clamp(0.4rem, 0.7vw, 0.55rem);
+    border-radius: 50%; border: 1px solid var(--rule);
+    background: transparent; cursor: pointer; padding: 0;
+    transition: background 0.25s, transform 0.25s;
+  }
+  .nav-dots button:hover { transform: scale(1.4); }
+  .nav-dots button.active { background: var(--crimson); border-color: var(--crimson); }
+
+  .keyboard-hint {
+    position: fixed; bottom: clamp(0.4rem, 0.8vw, 0.8rem);
+    left: 50%; transform: translateX(-50%);
+    font-family: var(--font-mono); font-size: clamp(0.55rem, 0.85vw, 0.7rem);
+    color: var(--ink-mute); letter-spacing: 0.1em;
+    z-index: 999; pointer-events: none;
+    opacity: 0.6;
+  }
+
+  /* ============================================================
+     INLINE EDITING (user opted IN)
+     Hidden by default — hover top-left corner or press E to enable.
+     Edits auto-save to localStorage; Ctrl+S exports a clean HTML file.
+     ============================================================ */
+  .edit-hotzone {
+    position: fixed; top: 0; left: 0;
+    width: 80px; height: 80px;
+    z-index: 10000; cursor: pointer;
+  }
+  .edit-toggle {
+    position: fixed; top: clamp(0.5rem, 1vw, 1rem); left: clamp(0.5rem, 1vw, 1rem);
+    width: clamp(2rem, 3vw, 2.6rem); height: clamp(2rem, 3vw, 2.6rem);
+    border-radius: 50%; border: 1px solid var(--rule);
+    background: var(--paper); color: var(--ink); font-size: clamp(0.85rem, 1.4vw, 1.1rem);
+    cursor: pointer; z-index: 10001;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.3s ease, transform 0.2s ease;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .edit-toggle.show, .edit-toggle.active { opacity: 1; pointer-events: auto; }
+  .edit-toggle.active { background: var(--crimson); color: var(--bg); border-color: var(--crimson); }
+  .edit-toggle:hover { transform: scale(1.08); }
+
+  .edit-banner {
+    position: fixed; top: clamp(0.5rem, 1vw, 1rem); left: 50%;
+    transform: translateX(-50%);
+    background: var(--ink); color: var(--bg);
+    font-family: var(--font-mono); font-size: clamp(0.55rem, 0.85vw, 0.72rem);
+    letter-spacing: 0.12em; text-transform: uppercase;
+    padding: clamp(0.3rem, 0.7vw, 0.55rem) clamp(0.7rem, 1.4vw, 1.2rem);
+    border: 1px solid var(--crimson);
+    z-index: 10001;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.3s ease;
+  }
+  .edit-banner.active { opacity: 1; pointer-events: auto; }
+  .edit-banner kbd {
+    font-family: var(--font-mono); background: var(--crimson);
+    padding: 0 0.35em; margin: 0 0.2em;
+    border-radius: 2px;
+  }
+
+  body.edit-active [contenteditable="true"] {
+    outline: 1px dashed var(--crimson);
+    outline-offset: 3px;
+    cursor: text;
+  }
+  body.edit-active [contenteditable="true"]:focus {
+    outline: 2px solid var(--crimson);
+    background: rgba(196,30,58,0.04);
+  }
+
+</style>
+</head>
+<body>
+
+<!-- Progress bar -->
+<div class="progress-bar" id="progressBar"></div>
+
+<!-- Inline edit controls (user opted in) -->
+<div class="edit-hotzone" id="editHotzone" title="Hover to enter edit mode"></div>
+<button class="edit-toggle" id="editToggle" title="Toggle edit mode (E)">✏️</button>
+<div class="edit-banner" id="editBanner">
+  EDIT MODE · click text to edit · <kbd>Ctrl+S</kbd> export · <kbd>E</kbd> toggle
+</div>
+
+<!-- Nav dots populated by JS -->
+<nav class="nav-dots" id="navDots" aria-label="Slide navigation"></nav>
+
+<!-- ============================================================
+     SLIDE 1 — TITLE
+     ============================================================ -->
+<section class="slide title-slide" data-title="Title">
+  <div class="grain"></div>
+  <div class="slide-frame">
+
+    <header class="masthead reveal">
+      <span class="vol">VOL. OMICSCLAW · <em>ADR 0010 — 0012</em></span>
+      <span class="org">GROUP MEETING · 2026 · 05 · 20</span>
+    </header>
+
+    <div class="hero slide-content">
+      <p class="eyebrow reveal">A research note on <em>verifiable</em> multi-omics consensus</p>
+      <h1 class="reveal">
+        Auditable <span class="accent">Consensus</span><br/>
+        &amp; Grounded <span class="smallcap">Interpretation</span><br/>
+        for <span class="accent">Multi-Omics</span>.
+      </h1>
+      <p class="deck reveal">
+        OmicsClaw 把 SACCELERATOR 的 <em>expert-in-the-loop</em> 共识思路用 LLM 操作化——
+        把"专家选 BC + 类型化算子合并"扩到跨组学，并通过强制 banner 与双 namespace
+        显式区分<em>已验证证据</em>与<em>探索性综合</em>。在 verified 之上加一层
+        自身可审计的 LLM 生物学解读，把统计可信翻译为生物学可用。
+      </p>
+      <div class="pullquote reveal">
+        "LLM 永远不做统计合并"——只在两端介入：挑成员、解读结果。
+        统计权力被 grep-tested invariants 长期锁定。
+      </div>
+
+      <div class="title-grid reveal">
+        <div class="col-item"><span class="k">ADRs</span><span class="v">0010 / 0011 / 0012</span></div>
+        <div class="col-item"><span class="k">Tests</span><span class="v">228 passed</span></div>
+        <div class="col-item"><span class="k">Marker Grounding</span><span class="v">1.000</span></div>
+        <div class="col-item"><span class="k">Author</span><span class="v ink">Weige&nbsp;Zhou</span></div>
+      </div>
+    </div>
+
+    <footer class="colophon reveal">
+      <span>OmicsClaw · Lab Seminar Series</span>
+      <span class="folio">— I —</span>
+    </footer>
+
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 2 — TL;DR  ·  §0
+     ============================================================ -->
+<section class="slide" data-title="TL;DR">
+  <div class="grain"></div>
+  <div class="slide-frame">
+
+    <header class="masthead reveal">
+      <span class="vol">OMICSCLAW · GROUP MEETING</span>
+      <span class="org">II · ONE-PARAGRAPH POSITIONING</span>
+    </header>
+
+    <div class="slide-content reveal">
+      <div class="content-head">
+        <p class="section-tag">0 · 一句话定位</p>
+        <h2>把"算法问题"重新框成 <span class="accent">证据链可审计性</span>问题</h2>
+        <div class="small-rule"></div>
+      </div>
+
+      <p class="deck drop-cap reveal" style="margin-bottom: clamp(0.8rem, 1.5vh, 1.2rem);">
+        这个工作没有发明新的聚类算法。我们把 SACCELERATOR 已有的"专家选 BC + 类型化合并"思想用 LLM
+        <em>操作化</em>，保证 LLM <em>只在两端介入</em>——挑成员、解读结果——
+        统计永远交给确定性算子。在此之上加一层 LLM 解读，把"统计可信"翻译成"生物可用"，
+        且每条主张<em>必须 cite</em> 一个 typed 产物行。
+      </p>
+
+      <div class="pullquote reveal" style="max-width: 78ch;">
+        DLPFC 151673 + 小鼠海马 Slide-seq 两组真实数据跑通——DeepSeek 上实测
+        <span class="accent">marker_grounding_rate = 1.000</span>、coverage 67%、<span class="accent">零幻觉</span>。
+        这是 LLM 生信智能体领域第一个<em>自身可证伪</em>的解读层设计。
+      </div>
+
+      <div class="stat-row reveal" style="margin-top: clamp(1rem, 2vh, 1.8rem);">
+        <div class="stat"><span class="k">3 ADRs</span><span class="v crimson">0010-0012</span><span class="sub">runtime + 评测 + 解读</span></div>
+        <div class="stat"><span class="k">3 PRs merged</span><span class="v">#11 #12 #13</span><span class="sub">all green</span></div>
+        <div class="stat"><span class="k">Tests</span><span class="v">228 ✓</span><span class="sub">+ 4 skipped</span></div>
+        <div class="stat"><span class="k">TDD slices</span><span class="v">10</span><span class="sub">red → green → commit</span></div>
+      </div>
+    </div>
+
+    <footer class="colophon reveal">
+      <span>OmicsClaw · 2026-05-20</span>
+      <span class="right">SLICE&nbsp;<span>0010—0012</span></span>
+      <span class="folio">— II —</span>
+    </footer>
+
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 3 — THE PROBLEM  ·  §1
+     ============================================================ -->
+<section class="slide" data-title="Problem">
+  <div class="grain"></div>
+  <div class="slide-frame">
+
+    <header class="masthead reveal">
+      <span class="vol">OMICSCLAW · GROUP MEETING</span>
+      <span class="org">III · WHAT IS BROKEN TODAY</span>
+    </header>
+
+    <div class="slide-content reveal">
+      <div class="content-head">
+        <p class="section-tag">1 · 我们解决的真实痛点</p>
+        <h2>同一切片 · 五个方法 · <span class="accent">五套不一致的 layer 划分</span></h2>
+        <div class="small-rule"></div>
+      </div>
+
+      <div class="two-col" style="margin-top: clamp(0.5rem, 1vh, 0.9rem);">
+
+        <!-- LEFT: Instability -->
+        <div class="reveal">
+          <h3 style="margin-bottom: clamp(0.4rem, 0.9vh, 0.7rem);">1.1 &nbsp; 单方法聚类的不稳定性</h3>
+          <p style="margin-bottom: clamp(0.5rem, 1vh, 0.9rem);">
+            以空间结构域识别为例：BANKSY / GraphST / SEDR / SpaGCN / Leiden 在 DLPFC 基准上
+            ARI <em>常态徘徊在 <span class="accent">0.45 – 0.70</span></em>；在 cancer / 非标 tissue 上失败模式各异。
+          </p>
+          <ul class="bullet-list" style="list-style: none; padding-left: 0;">
+            <li style="padding-left: 1em; position: relative;"><span style="position:absolute;left:0;color:var(--crimson)">·</span>用户无法判断"这个结果稳不稳"</li>
+            <li style="padding-left: 1em; position: relative;"><span style="position:absolute;left:0;color:var(--crimson)">·</span>论文复现性受损</li>
+            <li style="padding-left: 1em; position: relative;"><span style="position:absolute;left:0;color:var(--crimson)">·</span>下游 meta-analysis 噪声放大</li>
+            <li style="padding-left: 1em; position: relative;"><span style="position:absolute;left:0;color:var(--crimson)">·</span>临床转化的循证强度被悄悄稀释</li>
+          </ul>
+        </div>
+
+        <!-- RIGHT: Three gaps -->
+        <div class="reveal">
+          <h3 style="margin-bottom: clamp(0.4rem, 0.9vh, 0.7rem);">1.2 &nbsp; 已有共识范式的三个缺口</h3>
+          <table class="editorial">
+            <thead><tr><th style="width:18%">缺口</th><th>现状</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>(a) 跨组学普适</td>
+                <td>SACCELERATOR 锁在 spatial；nichecompass-benchmark 锁在 sc latent 评测</td>
+              </tr>
+              <tr>
+                <td>(b) 边界<br/>不可审计</td>
+                <td>报告无 banner；graph memory 共用 namespace；审稿 / 复现 / 团队协作时<em style="color:var(--ink)">无法快速辨别证据等级</em></td>
+              </tr>
+              <tr>
+                <td>(c) LLM 位置<br/>错配</td>
+                <td>要么不用，要么 <em style="color:var(--ink)">让 LLM 做统计合并</em>——LLM 不擅长万级标签向量的众数投票</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+      </div>
+    </div>
+
+    <footer class="colophon reveal">
+      <span>OmicsClaw · §1 the problem</span>
+      <span class="right">DLPFC&nbsp;<span>ARI 0.45–0.70</span></span>
+      <span class="folio">— III —</span>
+    </footer>
+
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 4 — FOUR PILLARS OVERVIEW  ·  §2
+     ============================================================ -->
+<section class="slide" data-title="Four Pillars">
+  <div class="grain"></div>
+  <div class="slide-frame">
+
+    <header class="masthead reveal">
+      <span class="vol">OMICSCLAW · GROUP MEETING</span>
+      <span class="org">IV · CORE CONTRIBUTION OVERVIEW</span>
+    </header>
+
+    <div class="slide-content reveal">
+      <div class="content-head">
+        <p class="section-tag">2 · 四个相互强化的支点</p>
+        <h2>每个支点都有先例 <span class="ampersand">·</span> <span class="accent">四者合起来</span>才是 OmicsClaw 独有</h2>
+        <div class="small-rule"></div>
+        <p class="deck" style="max-width: 78ch;">
+          单做任一支点都不算贡献——挑选 / 类型化合并 / 显式边界 / 解读，分别在 SACCELERATOR、Hungarian-align 文献、
+          软件工程审计实践、和 single-cell annotation 工具里都有。<em>把它们组合成一个互锁的范式</em>才是这个工作的形状。
+        </p>
+      </div>
+
+      <div class="pillar-grid reveal">
+        <div class="pillar">
+          <span class="no">— I —</span>
+          <h3>LLM-operationalized expert-in-the-loop</h3>
+          <p>角色分离：LLM <em>评审主席</em>只挑成员 + 解读结果；统计合并永远交类型化算子。SACCELERATOR "人类专家选 BC" 思想的 LLM 落地——<em>首次实现</em>。</p>
+          <span class="adr">ADR 0010</span>
+        </div>
+        <div class="pillar">
+          <span class="no">— II —</span>
+          <h3>Typed-consensus 跨组学范式</h3>
+          <p><span class="mono">TYPED_CONSENSUS_REGISTRY</span> allowlist 允许 v1 categorical → v2 ranked DE → v3 genomic interval 平滑扩展；进入 typed 路径必须显式注册 + ADR review。</p>
+          <span class="adr">ADR 0010 · §registry</span>
+        </div>
+        <div class="pillar">
+          <span class="no">— III —</span>
+          <h3>可审计的边界</h3>
+          <p>双 banner <span class="mono">[A: Verified]</span> / <span class="mono">[B: Exploratory]</span> + 双 namespace <span class="mono">typed/*</span> vs <span class="mono">exploratory/*</span>。审稿人默认只读 verified 那条证据链。</p>
+          <span class="adr">ADR 0010 · §11.3</span>
+        </div>
+        <div class="pillar">
+          <span class="no">— IV —</span>
+          <h3>Verified 之上的 LLM 解读层</h3>
+          <p>把"统计可信"翻译成"生物可用"。每条 cell-type claim 必须 cite ≥1 marker，每条 next-step 必须 cite ≥1 typed artifact 行。<em>自身可审计</em>。</p>
+          <span class="adr">ADR 0012 · 4-axis panel</span>
+        </div>
+      </div>
+    </div>
+
+    <footer class="colophon reveal">
+      <span>OmicsClaw · §2 the contribution</span>
+      <span class="right">四 PILLARS · <span>互锁</span></span>
+      <span class="folio">— IV —</span>
+    </footer>
+
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 5 — PILLAR I  ·  §2.1
+     ============================================================ -->
+<section class="slide" data-title="Pillar I">
+  <div class="grain"></div>
+  <div class="slide-frame">
+
+    <header class="masthead reveal">
+      <span class="vol">OMICSCLAW · PILLAR I</span>
+      <span class="org">V · LLM ROLE SEPARATION</span>
+    </header>
+
+    <div class="slide-content reveal">
+      <div class="content-head">
+        <p class="section-tag">2.1 · 支点一</p>
+        <h2>LLM 评审主席 <span class="ampersand">·</span> <span class="accent">只在两端介入</span></h2>
+        <div class="small-rule"></div>
+      </div>
+
+      <div class="two-col" style="margin-top: clamp(0.4rem, 1vh, 0.8rem);">
+
+        <!-- LEFT: roles -->
+        <div class="reveal">
+          <div class="icard" style="margin-bottom: clamp(0.8rem, 1.6vh, 1.2rem);">
+            <span class="pill-no">— in —</span>
+            <h3>LLM 做什么</h3>
+            <ul>
+              <li><b>挑选</b>：根据 query + 数据特征 + <span class="mono">param_hints</span>，从 N 个候选方法挑 5 个 fan-out</li>
+              <li><b>解读</b>：N 个方法的 cross-method NMI + 复合分数 + consensus output → 带矛盾标注的 markdown 报告</li>
+            </ul>
+          </div>
+          <div class="icard">
+            <span class="pill-no">— out —</span>
+            <h3>LLM 不做什么</h3>
+            <ul>
+              <li>不做 mode-voting / 加权平均 / Hungarian alignment</li>
+              <li>不动 typed artifacts；不改写 cluster labels；不参与 BC ranking 的统计计算</li>
+              <li>任何 LLM 调用对应到统计合并 → 视为<em style="color:var(--ink)">越权 bug</em></li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- RIGHT: invariant -->
+        <div class="reveal">
+          <h3 style="margin-bottom: clamp(0.5rem, 1vh, 0.9rem);">统计合并交给类型化算子</h3>
+          <p style="margin-bottom: clamp(0.6rem, 1.2vh, 1rem);">
+            <span class="mono">kmodes</span> · <span class="mono">weighted majority</span> · <span class="mono">LCA-R (latent class)</span>
+            ——所有合并都在 <span class="mono">runtime/consensus/operators/</span> 里，纯 Python / R 子进程，
+            <em>确定性可复现</em>。
+          </p>
+
+          <div class="pullquote">
+            这是 SACCELERATOR "人类专家选 BC" 思想的 <em>LLM 落地——首次实现</em>。
+            不变量 grep-tested 长期锁定。
+          </div>
+
+          <table class="editorial" style="margin-top: clamp(0.8rem, 1.6vh, 1.2rem);">
+            <thead><tr><th>位置</th><th>性质</th></tr></thead>
+            <tbody>
+              <tr><td>Evaluation chair</td><td>LLM · plan.py · 可降级为 deterministic fallback</td></tr>
+              <tr><td>Member fan-out</td><td>asyncio.gather · in-process · cancel_event 贯通</td></tr>
+              <tr><td>BC composite scoring</td><td>α·NMI + β·intrinsic · 纯 scipy</td></tr>
+              <tr><td>Typed operator</td><td>kmode / weighted / LCA-R · <em style="color:var(--ink)">deterministic</em></td></tr>
+              <tr><td>Narrative synthesis</td><td>LLM · 仅 B 路径</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+      </div>
+    </div>
+
+    <footer class="colophon reveal">
+      <span>OmicsClaw · pillar I</span>
+      <span class="right">ADR&nbsp;<span>0010 §3</span></span>
+      <span class="folio">— V —</span>
+    </footer>
+
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 6 — PILLARS II + III  ·  §2.2 + §2.3
+     ============================================================ -->
+<section class="slide" data-title="Pillars II + III">
+  <div class="grain"></div>
+  <div class="slide-frame">
+
+    <header class="masthead reveal">
+      <span class="vol">OMICSCLAW · PILLAR II + III</span>
+      <span class="org">VI · TYPED PARADIGM + AUDIT BOUNDARY</span>
+    </header>
+
+    <div class="slide-content reveal">
+      <div class="content-head">
+        <p class="section-tag">2.2 + 2.3 · 支点二 与 支点三</p>
+        <h2>跨组学 Schema 注册表 <span class="ampersand">·</span> <span class="accent">硬性 A/B 边界</span></h2>
+        <div class="small-rule"></div>
+      </div>
+
+      <div class="two-col" style="margin-top: clamp(0.4rem, 1vh, 0.8rem);">
+
+        <!-- LEFT: Pillar 2 typed registry -->
+        <div class="reveal">
+          <h3 style="margin-bottom: clamp(0.5rem, 1vh, 0.9rem);">II &nbsp; Typed-consensus 跨组学</h3>
+          <table class="editorial">
+            <thead><tr><th>输出 schema</th><th>状态</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>categorical /<br/>per-observation</td>
+                <td><span class="check">✓ v1</span> &nbsp; <span class="mono">consensus-domains</span> (spatial)<br/>
+                <span class="check">✓ v1</span> &nbsp; <span class="mono">sc-consensus-clustering</span></td>
+              </tr>
+              <tr>
+                <td>ranked gene lists</td>
+                <td>v2 &nbsp; DE-RRA (DESeq2 + limma + edgeR + pydeseq2)</td>
+              </tr>
+              <tr>
+                <td>genomic intervals</td>
+                <td>v3 &nbsp; variant / peak interval merge</td>
+              </tr>
+            </tbody>
+          </table>
+          <p style="margin-top: clamp(0.6rem, 1.2vh, 1rem);">
+            <span class="mono" style="color:var(--crimson)">TYPED_CONSENSUS_REGISTRY</span> allowlist 是关键边界设计——
+            新 skill 进入 typed 路径<em>必须显式注册 + ADR review</em>，不做隐式 schema 嗅探。
+          </p>
+        </div>
+
+        <!-- RIGHT: Pillar 3 audit boundary -->
+        <div class="reveal">
+          <h3 style="margin-bottom: clamp(0.5rem, 1vh, 0.9rem);">III &nbsp; 可审计的 verified / exploratory 边界</h3>
+          <table class="editorial">
+            <thead><tr><th>边界面</th><th>实现 · 不可关闭</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>报告 banner</td>
+                <td><span class="mono" style="color:var(--crimson)">[A: Verified]</span> /<br/>
+                <span class="mono" style="color:var(--gold)">[B: Exploratory]</span> 强制 prepend</td>
+              </tr>
+              <tr>
+                <td>graph memory<br/>namespace</td>
+                <td><span class="mono">analysis://typed/&lt;run&gt;</span> &nbsp;vs<br/>
+                <span class="mono">analysis://exploratory/&lt;run&gt;</span></td>
+              </tr>
+              <tr>
+                <td>失败语义</td>
+                <td>A 路径 &lt; 2 存活 → <span class="mono" style="color:var(--crimson)">InsufficientSurvivorsError</span>，<em style="color:var(--ink)">不自动降级 B</em></td>
+              </tr>
+              <tr>
+                <td>评估体系</td>
+                <td>A 走 task-targeted hard pass panel；B 不定量、仅 narrative</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="pullquote" style="margin-top: clamp(0.6rem, 1.2vh, 1rem); font-size: clamp(0.78rem, 1.2vw, 0.98rem);">
+            审稿 / 团队协作 / 下游 meta-analysis 可以<em>默认只读 typed/*</em>，
+            不被 LLM 综合污染严格证据链。
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <footer class="colophon reveal">
+      <span>OmicsClaw · pillars II + III</span>
+      <span class="right">ADR&nbsp;<span>0010 §11.3</span></span>
+      <span class="folio">— VI —</span>
+    </footer>
+
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 7 — PILLAR IV INTERPRETED LAYER  ·  §2.4
+     ============================================================ -->
+<section class="slide" data-title="Pillar IV">
+  <div class="grain"></div>
+  <div class="slide-frame">
+
+    <header class="masthead reveal">
+      <span class="vol">OMICSCLAW · PILLAR IV</span>
+      <span class="org">VII · INTERPRETED LAYER</span>
+    </header>
+
+    <div class="slide-content reveal">
+      <div class="content-head">
+        <p class="section-tag">2.4 · 支点四</p>
+        <h2>Verified 之上的 <span class="accent">自身可审计</span>解读层</h2>
+        <div class="small-rule"></div>
+      </div>
+
+      <!-- Flow diagram -->
+      <div class="flow reveal">
+        <div class="box">verified<br/>consensus</div>
+        <div class="arrow">→</div>
+        <div class="box">inline DE<br/><span class="mono" style="color:var(--ink-mute); font-size:0.85em">rank_genes_groups</span></div>
+        <div class="arrow">→</div>
+        <div class="box">Marker DB<br/><span class="mono" style="color:var(--ink-mute); font-size:0.85em">bundled tissue</span></div>
+      </div>
+      <div class="flow reveal" style="margin-top: clamp(0.2rem, 0.4vh, 0.4rem);">
+        <div class="box">LLM<br/>grounded annotation (γ)</div>
+        <div class="arrow">+</div>
+        <div class="box">LLM<br/>next-step (β)</div>
+        <div class="arrow">→</div>
+        <div class="box final">5 件 artifact<br/><span class="mono" style="opacity:0.7; font-size:0.85em">[A+I] banner</span></div>
+      </div>
+
+      <p class="reveal" style="margin: clamp(0.6rem, 1.2vh, 1rem) 0 clamp(0.4rem, 0.8vh, 0.7rem);">
+        <span class="mono" style="color:var(--crimson)">analysis://interpreted/&lt;run_id&gt;</span> 强制引用其 typed evidence base
+        <span class="mono" style="color:var(--gold)">analysis://typed/&lt;run_id&gt;</span>，构成<em>双层证据链</em>。
+      </p>
+
+      <h3 class="reveal" style="margin-top: clamp(0.4rem, 0.8vh, 0.7rem); margin-bottom: clamp(0.4rem, 0.8vh, 0.7rem);">
+        4 个新不变量 · 每条 grep-tested 锁定
+      </h3>
+      <div class="invariants reveal">
+        <div class="row">
+          <span class="num">i.</span>
+          <p>Interpreted 是 <em>downstream skill</em>，不是 Path C — A/B 二元未动。</p>
+          <span class="tag">ADR 0010 §11.3 unchanged</span>
+        </div>
+        <div class="row">
+          <span class="num">ii.</span>
+          <p>LLM <em>不动 typed artifacts</em>。DE 走确定性 <span class="mono">rank_genes_groups</span>；LLM 只做 markers → cell-type 的 grounded lookup。</p>
+          <span class="tag">T3 grep test</span>
+        </div>
+        <div class="row">
+          <span class="num">iii.</span>
+          <p>每条 cell-type claim <em>必须 cite ≥1 marker</em>；每条 next-step <em>必须 cite ≥1 typed artifact 行</em>。</p>
+          <span class="tag">InvariantViolationError · exit 7</span>
+        </div>
+        <div class="row">
+          <span class="num">iv.</span>
+          <p>默认 LLM 不可用 = <em>fail-fast (exit 6)</em>；<span class="mono">--no-llm</span> 显式 degrade 产生 <span class="mono" style="color:var(--gold)">[I-noLLM]</span> 不同 banner，<em>视觉不可混淆</em>。</p>
+          <span class="tag">structural-only path</span>
+        </div>
+      </div>
+    </div>
+
+    <footer class="colophon reveal">
+      <span>OmicsClaw · pillar IV — interpreted</span>
+      <span class="right">ADR&nbsp;<span>0012 · 4-axis panel</span></span>
+      <span class="folio">— VII —</span>
+    </footer>
+
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 8 — PIPELINE DIAGRAM  ·  §11
+     ============================================================ -->
+<section class="slide" data-title="Pipeline">
+  <div class="grain"></div>
+  <div class="slide-frame">
+
+    <header class="masthead reveal">
+      <span class="vol">OMICSCLAW · DATA FLOW</span>
+      <span class="org">VIII · END-TO-END PIPELINE</span>
+    </header>
+
+    <div class="slide-content reveal">
+      <div class="content-head">
+        <p class="section-tag">11 · Pipeline</p>
+        <h2>从 query 到 <span class="accent">[A+I] 双层证据</span>的全路径</h2>
+        <div class="small-rule"></div>
+      </div>
+
+<pre class="pipeline reveal">
+       ┌─────────────────────────────────────────────────────────┐
+       │  Query + Data                                            │
+       └──────────────────────────┬──────────────────────────────┘
+                                  ▼
+             ┌──────────────────────────────────────┐
+             │  <span class="crimson">Evaluation Chair (LLM)</span>                │
+             │  · 挑选 N 成员（param_hints + query）  │
+             │  · 解读结果 + 矛盾标注                  │
+             └──────────────────────────────────────┘
+                       │                       ▲
+              fan-out  │                       │ narrate
+                       ▼                       │
+   ┌────────────────────────────────────────┐  │
+   │  N × deterministic skill subprocess     │──┘
+   │  (BANKSY · GraphST · SEDR · Leiden · …) │
+   └────────────────────────────────────────┘
+                       ▼
+   ┌────────────────────────────────────────┐
+   │  <span class="gold">Composite BC scoring + Hard filter</span>      │
+   │  α·cross_NMI + β·intrinsic              │
+   │  max_class_frac > 0.8 → reject          │
+   └────────────────────────────────────────┘
+                       ▼
+   ┌────────────────────────────────────────┐
+   │  <span class="gold">Typed Operator</span>  (deterministic)         │
+   │  kmode  /  weighted  /  LCA (R)         │
+   └────────────────────────────────────────┘
+                       ▼
+   ┌────────────────────────────────────────┐
+   │  ┌─<span class="crimson">[A: Verified consensus]</span>──────────┐ │     ← 可审计边界
+   │  │ analysis://typed/&lt;run_id&gt;        │ │
+   │  └──────────────────────────────────┘  │
+   │  ┌─[B: Exploratory synthesis]──────┐   │
+   │  │ analysis://exploratory/&lt;run_id&gt; │   │
+   │  └──────────────────────────────────┘  │
+   └─────────────┬──────────────────────────┘
+                 │  (downstream consumer; A path only)
+                 ▼
+   ┌────────────────────────────────────────┐
+   │  <span class="crimson">consensus-interpret skill</span>             │
+   │  · Inline DE (rank_genes_groups)        │
+   │  · Marker DB lookup (bundled tissue)    │
+   │  · LLM annotation (γ) + next-step (β)   │
+   │  · 4-axis evaluation panel              │
+   │                                         │
+   │  ┌─<span class="crimson">[A+I: Interpreted on verified]</span>────┐ │ ← 第二层证据
+   │  │ analysis://interpreted/&lt;run_id&gt;   │ │   MUST cite typed
+   │  └───────────────────────────────────┘ │
+   └────────────────────────────────────────┘
+</pre>
+
+    </div>
+
+    <footer class="colophon reveal">
+      <span>OmicsClaw · §11 pipeline</span>
+      <span class="right">in-process&nbsp;<span>asyncio.gather</span></span>
+      <span class="folio">— VIII —</span>
+    </footer>
+
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 9 — ENGINEERING  ·  §3
+     ============================================================ -->
+<section class="slide" data-title="Engineering">
+  <div class="grain"></div>
+  <div class="slide-frame">
+
+    <header class="masthead reveal">
+      <span class="vol">OMICSCLAW · ENGINEERING NOTES</span>
+      <span class="org">IX · IMPLEMENTATION</span>
+    </header>
+
+    <div class="slide-content reveal">
+      <div class="content-head">
+        <p class="section-tag">3 · 工程实现概览</p>
+        <h2>五层架构 <span class="ampersand">·</span> <span class="accent">228 全测试 green</span></h2>
+        <div class="small-rule"></div>
+      </div>
+
+      <div class="two-col" style="margin-top: clamp(0.4rem, 1vh, 0.8rem); grid-template-columns: 1.05fr 1fr;">
+
+        <!-- LEFT: 5 layer + consensus runtime layout -->
+        <div class="reveal">
+          <h3 style="margin-bottom: clamp(0.4rem, 0.9vh, 0.7rem);">5 层架构</h3>
+<pre style="font-family: var(--font-mono); font-size: clamp(0.6rem, 0.95vw, 0.78rem); line-height: 1.5; background: rgba(243,240,232,0.5); border:1px solid var(--rule-soft); padding: clamp(0.5rem, 1vw, 0.9rem) clamp(0.7rem, 1.4vw, 1.2rem); white-space: pre;">L1  Surface     CLI / Desktop / 10 IM channels
+L2  Dispatch    dispatch(envelope) → Event stream
+L3  Engine      run_engine_loop + identity_anchor
+L4  Agent Loop  run_query_engine (7-phase tool loop)
+L5  Domain      <span style="color:var(--crimson)">★ runtime/consensus/</span>  ← 本工作位置
+                skill / routing / memory / providers</pre>
+
+          <h3 style="margin: clamp(0.8rem, 1.5vh, 1.2rem) 0 clamp(0.4rem, 0.9vh, 0.7rem);">consensus runtime · <span class="mono">~1530 LOC</span></h3>
+          <table class="editorial">
+            <tbody>
+              <tr><td><span class="mono">team.py</span></td><td>~250 · asyncio.gather fan-out</td></tr>
+              <tr><td><span class="mono">driver.py</span> ★</td><td>~340 · run_typed_consensus orchestrator</td></tr>
+              <tr><td><span class="mono">source_registry.py</span> ★</td><td>~200 · MemberArtifactReader protocol</td></tr>
+              <tr><td><span class="mono">scoring.py</span></td><td>~150 · α·NMI + β·intrinsic</td></tr>
+              <tr><td><span class="mono">spatial_metrics.py</span></td><td>~200 · MLAMI / CHAOS / PAS</td></tr>
+              <tr><td><span class="mono">operators/</span></td><td>kmodes · weighted · LCA-R subprocess</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- RIGHT: consensus-interpret skill + tests -->
+        <div class="reveal">
+          <h3 style="margin-bottom: clamp(0.4rem, 0.9vh, 0.7rem);">consensus-interpret skill · 10 个 TDD slice</h3>
+          <table class="editorial">
+            <tbody>
+              <tr><td>Slice 0–1</td><td>typed-run reader + bundle</td></tr>
+              <tr><td>Slice 2</td><td>bundled marker DBs (brain · immune · kidney · liver)</td></tr>
+              <tr><td>Slice 3</td><td>inline DE (rank_genes_groups)</td></tr>
+              <tr><td>Slice 4</td><td>pre-LLM candidate ranking</td></tr>
+              <tr><td>Slice 5</td><td>γ annotate + β synthesize · allowlist</td></tr>
+              <tr><td>Slice 6</td><td>T3 grep-tested invariants</td></tr>
+              <tr><td>Slice 7</td><td>5-file writer + report</td></tr>
+              <tr><td>Slice 8</td><td>thin CLI · <span class="mono">consensus_interpret.py</span></td></tr>
+              <tr><td>Slice 9</td><td>4-axis metric panel</td></tr>
+              <tr><td>Slice 10.A/B</td><td>routing detector + <span class="mono">/interpret</span> slash command</td></tr>
+            </tbody>
+          </table>
+
+          <div class="stat-row" style="margin-top: clamp(0.6rem, 1.2vh, 1rem); grid-template-columns: repeat(3, 1fr);">
+            <div class="stat"><span class="k">Tests</span><span class="v crimson">228 ✓</span><span class="sub">+ 4 skipped</span></div>
+            <div class="stat"><span class="k">+ new tests</span><span class="v">+103</span><span class="sub">+ 2 gated</span></div>
+            <div class="stat"><span class="k">PRs merged</span><span class="v">#11—#13</span><span class="sub">origin only</span></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <footer class="colophon reveal">
+      <span>OmicsClaw · §3 engineering</span>
+      <span class="right">TDD&nbsp;<span>red → green → commit</span></span>
+      <span class="folio">— IX —</span>
+    </footer>
+
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 10 — REAL EVIDENCE PART 1 (HIPPOCAMPUS CELL TYPES)
+     ============================================================ -->
+<section class="slide" data-title="Evidence I">
+  <div class="grain"></div>
+  <div class="slide-frame">
+
+    <header class="masthead reveal">
+      <span class="vol">OMICSCLAW · EMPIRICAL EVIDENCE I</span>
+      <span class="org">X · SLIDE-SEQ V2 · MOUSE HIPPOCAMPUS</span>
+    </header>
+
+    <div class="slide-content reveal">
+      <div class="content-head">
+        <p class="section-tag">4.1 + 4.2 · 端到端实测</p>
+        <h2>12 clusters → <span class="accent">8 interpreted</span> + 4 honest <em>Unknown</em></h2>
+        <div class="small-rule"></div>
+      </div>
+
+      <div class="two-col" style="margin-top: clamp(0.4rem, 1vh, 0.8rem); grid-template-columns: 0.85fr 1.15fr;">
+
+        <!-- LEFT: test conditions -->
+        <div class="reveal">
+          <h3 style="margin-bottom: clamp(0.4rem, 0.9vh, 0.7rem);">测试条件</h3>
+          <table class="editorial">
+            <tbody>
+              <tr><td>数据</td><td><span class="mono">slideseqv2_mouse_hippocampus.h5ad</span></td></tr>
+              <tr><td>规模</td><td>41,786 cells × 4,000 genes</td></tr>
+              <tr><td>子采样</td><td>4,171 cells · 保留 14 cell_type 比例</td></tr>
+              <tr><td>Typed run</td><td>3 leiden res (0.5 / 1.0 / 1.5) × <span class="mono">kmode</span> → 12 consensus clusters</td></tr>
+              <tr><td>Marker DB</td><td><span class="mono">panglaodb_brain.tsv</span> (bundled, 37 行 scaffold)</td></tr>
+              <tr><td>LLM</td><td>DeepSeek v4 Pro</td></tr>
+            </tbody>
+          </table>
+
+          <div class="pullquote" style="margin-top: clamp(0.7rem, 1.4vh, 1.1rem); font-size: clamp(0.78rem, 1.2vw, 0.98rem);">
+            海马标准 cell-type panel <em>几乎全数命中</em>——
+            CA1 · Dentate · Astrocyte · Oligo · OPC · Interneuron · Microglia。
+          </div>
+        </div>
+
+        <!-- RIGHT: cell type table -->
+        <div class="reveal">
+          <h3 style="margin-bottom: clamp(0.4rem, 0.9vh, 0.7rem);">LLM 输出质量（实测）</h3>
+          <table class="editorial cells">
+            <thead><tr><th>Cluster</th><th>Cell type</th><th>Conf</th><th>Marker evidence</th></tr></thead>
+            <tbody>
+              <tr><td>2</td><td><b class="ct-major">Oligodendrocyte</b></td><td>0.98</td><td><span class="mono">Plp1 · Mbp · Mag · Mog</span></td></tr>
+              <tr><td>3</td><td><b class="ct-major">CA1 pyramidal neuron</b></td><td>0.82</td><td><span class="mono">Pcp4</span> (canonical CA1)</td></tr>
+              <tr><td>5</td><td><b class="ct-major">Polydendrocyte (OPC)</b></td><td>0.90</td><td><span class="mono">Pdgfra</span></td></tr>
+              <tr><td>7</td><td><b class="ct-major">Astrocyte</b></td><td>0.95</td><td><span class="mono">Slc1a3 · Aqp4 · Gja1</span></td></tr>
+              <tr><td>9</td><td><b class="ct-major">Interneuron</b></td><td>0.95</td><td><span class="mono">Gad1 · Gad2 · Sst · Pvalb</span></td></tr>
+              <tr><td>10</td><td><b class="ct-major">Dentate granule cell</b></td><td>0.82</td><td><span class="mono">C1ql2</span></td></tr>
+              <tr><td>14</td><td><b class="ct-major">Microglia</b></td><td>0.95</td><td><span class="mono">Csf1r · Cx3cr1 · P2ry12</span></td></tr>
+              <tr><td>15</td><td><span class="ct-low">Microglia (low conf)</span></td><td>0.20</td><td><span class="mono">Cx3cr1</span> · 诚实标弱</td></tr>
+              <tr><td>1, 4, 8, 11</td><td><span class="ct-low">Unknown</span></td><td>0 – 0.65</td><td>LLM <em style="color:var(--ink)">拒绝幻觉</em>（marker 不够时坦白）</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+      </div>
+    </div>
+
+    <footer class="colophon reveal">
+      <span>OmicsClaw · §4.1–4.2</span>
+      <span class="right">DeepSeek v4 Pro &nbsp;·&nbsp;<span>2026-05-20</span></span>
+      <span class="folio">— X —</span>
+    </footer>
+
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 11 — REAL EVIDENCE PART 2 (INVARIANTS + β RECOMMENDATIONS)
+     ============================================================ -->
+<section class="slide" data-title="Evidence II">
+  <div class="grain"></div>
+  <div class="slide-frame">
+
+    <header class="masthead reveal">
+      <span class="vol">OMICSCLAW · EMPIRICAL EVIDENCE II</span>
+      <span class="org">XI · INVARIANTS · BACKWARD RECOMMENDATIONS</span>
+    </header>
+
+    <div class="slide-content reveal">
+      <div class="content-head">
+        <p class="section-tag">4.3 + 4.4 · 实测 ADR 0012 不变量</p>
+        <h2 style="display:flex; align-items: baseline; gap: clamp(0.6rem, 1.4vw, 1.2rem); flex-wrap: wrap;">
+          <span>marker_grounding_rate =</span>
+          <span class="accent" style="font-size: clamp(2rem, 5.8vw, 4.4rem); font-weight: 700; line-height: 1;">1.000</span>
+          <span style="font-size: 0.6em; color: var(--ink-mute);">· DeepSeek 上 0 个幻觉 marker</span>
+        </h2>
+        <div class="small-rule"></div>
+      </div>
+
+      <div class="stat-row reveal" style="margin-top: clamp(0.5rem, 1vh, 0.8rem); grid-template-columns: repeat(5, 1fr);">
+        <div class="stat">
+          <span class="k">Banner</span>
+          <span class="v" style="font-size: clamp(0.9rem, 1.6vw, 1.3rem);">[A+I] ✓</span>
+          <span class="sub">first line · required</span>
+        </div>
+        <div class="stat">
+          <span class="k">Marker citations</span>
+          <span class="v">8/8</span>
+          <span class="sub">non-Unknown clusters</span>
+        </div>
+        <div class="stat">
+          <span class="k">Next-step refs</span>
+          <span class="v">3/3</span>
+          <span class="sub">each cites typed row</span>
+        </div>
+        <div class="stat">
+          <span class="k">Coverage</span>
+          <span class="v">67<small>%</small></span>
+          <span class="sub">floor 50% · pass</span>
+        </div>
+        <div class="stat">
+          <span class="k">Grounding</span>
+          <span class="v crimson">1.000</span>
+          <span class="sub">floor 0.60 · pass ✓✓</span>
+        </div>
+      </div>
+
+      <p class="reveal" style="margin: clamp(0.7rem, 1.4vh, 1.2rem) 0 clamp(0.5rem, 1vh, 0.9rem);">
+        <em style="color:var(--ink)">LLM 引用的每一个 marker 都来自 DE top-20 候选列表 — Slice 4 (pre-LLM ranking) +
+          Slice 5 (allowlist enforcement) 协同设计的最强实测验证。</em>
+      </p>
+
+      <h3 class="reveal" style="margin-bottom: clamp(0.4rem, 0.9vh, 0.7rem);">3 个 evidence-tied next-step recommendations (β)</h3>
+      <table class="editorial reveal">
+        <thead><tr><th style="width:8%">P</th><th style="width:20%">Skill</th><th style="width:42%">Evidence cited</th><th>Reason</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b style="color:var(--crimson)">1</b></td>
+            <td><span class="mono">spatial-de</span></td>
+            <td>annotation_summary: cluster 1 conf=0, cluster 4 conf=0.65</td>
+            <td>找 4 个 Unknown cluster 的 markers</td>
+          </tr>
+          <tr>
+            <td><b style="color:var(--crimson)">1</b></td>
+            <td><span class="mono">spatial-statistics</span></td>
+            <td>cross_method_nmi_matrix: NMI=0.597</td>
+            <td>对最矛盾 NMI 对做邻域富集</td>
+          </tr>
+          <tr>
+            <td><b style="color:var(--crimson)">1</b></td>
+            <td><span class="mono">spatial-de</span></td>
+            <td>cluster 14 conf=0.95 vs cluster 15 conf=0.20</td>
+            <td>解决微胶细胞子型问题</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="pullquote reveal" style="margin-top: clamp(0.6rem, 1.2vh, 1rem); font-size: clamp(0.8rem, 1.25vw, 1rem);">
+        β <em>不是 OmicsClaw 推销页</em>——每条推荐<em>强制引用</em> typed 产物的具体行 / 值。
+        <span class="mono" style="font-style: normal; color: var(--crimson)">analysis://interpreted/*</span> 与
+        <span class="mono" style="font-style: normal; color: var(--gold)">analysis://typed/*</span> 两层证据等级分清楚开。
+      </div>
+
+    </div>
+
+    <footer class="colophon reveal">
+      <span>OmicsClaw · §4.3–4.5</span>
+      <span class="right">grep-tested invariants&nbsp;<span>all green</span></span>
+      <span class="folio">— XI —</span>
+    </footer>
+
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 12 — FALSIFIABILITY  ·  §5
+     ============================================================ -->
+<section class="slide" data-title="Falsifiability">
+  <div class="grain"></div>
+  <div class="slide-frame">
+
+    <header class="masthead reveal">
+      <span class="vol">OMICSCLAW · FALSIFIABILITY</span>
+      <span class="org">XII · HOW EACH CLAIM CAN FAIL</span>
+    </header>
+
+    <div class="slide-content reveal">
+      <div class="content-head">
+        <p class="section-tag">5 · Falsifiability</p>
+        <h2>每条声明都有对应的 <span class="accent">CI / grep 测试</span></h2>
+        <div class="small-rule"></div>
+        <p class="deck" style="max-width:76ch;">
+          "可证伪"的工程化版本——任何范式声明都要写出对应的 fail 条件，编进 CI 或 grep test。
+          这是 OmicsClaw 区别于"我们的方法更好（凭感觉）"类工作的核心姿态。
+        </p>
+      </div>
+
+      <table class="editorial reveal">
+        <thead><tr><th style="width:42%">主张</th><th>怎么证伪</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>consensus 比最好的单方法更稳</td>
+            <td>self-consistency: AMI stdev <span class="mono">consensus &gt; best member</span> → fail</td>
+          </tr>
+          <tr>
+            <td>consensus 在 GT 比对上不输给单方法</td>
+            <td>DLPFC 151673 hero: 任一 hard metric <span class="mono">consensus &lt; best_member - noise_floor</span> → fail</td>
+          </tr>
+          <tr>
+            <td>A/B 边界是硬的</td>
+            <td>报告里看不到 banner → 视为代码 bug</td>
+          </tr>
+          <tr>
+            <td>LLM 不做统计合并</td>
+            <td>grep 任何 LLM 调用对应到 mode-voting / 加权平均 → 视为越权 bug</td>
+          </tr>
+          <tr>
+            <td>evaluation chair 不能凭空打分</td>
+            <td><span class="mono">--llm-judge</span> 模式下 α/β 调整必须 ≤ ±0.2 (ADR 0011)</td>
+          </tr>
+          <tr>
+            <td><b>interpretation never claims biology without evidence</b></td>
+            <td><span class="mono">grep 'evidence.markers == []'</span> in <span class="mono">interpreted_assignments.json</span> → bug (ADR 0012)</td>
+          </tr>
+          <tr>
+            <td><b>interpreted 不污染 typed namespace</b></td>
+            <td><span class="mono">grep 'analysis://typed' interpreted_*.json</span> 写入操作 → 越权</td>
+          </tr>
+          <tr>
+            <td><b>interpretation_faithfulness ≥ 1.00 verbatim</b></td>
+            <td>recorded LLM 输出回归测试</td>
+          </tr>
+          <tr>
+            <td><b>marker_grounding_rate ≥ 0.60 on real LLM</b></td>
+            <td>DeepSeek 实测 <span class="check">= 1.000</span> (Slide-seq hippocampus 2026-05-20)</td>
+          </tr>
+          <tr>
+            <td><b>DLPFC interpreted ARI ≥ 0.45 hero floor</b></td>
+            <td><span class="mono">RUN_INTERPRET_DLPFC=1</span> gated CI</td>
+          </tr>
+        </tbody>
+      </table>
+
+    </div>
+
+    <footer class="colophon reveal">
+      <span>OmicsClaw · §5 falsifiability</span>
+      <span class="right">CI · <span>grep · regression tests</span></span>
+      <span class="folio">— XII —</span>
+    </footer>
+
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 13 — COMPARISON  ·  §6
+     ============================================================ -->
+<section class="slide" data-title="Comparison">
+  <div class="grain"></div>
+  <div class="slide-frame">
+
+    <header class="masthead reveal">
+      <span class="vol">OMICSCLAW · RELATED WORK</span>
+      <span class="org">XIII · COMPARATIVE TABLE</span>
+    </header>
+
+    <div class="slide-content reveal">
+      <div class="content-head">
+        <p class="section-tag">6 · 与同类系统的对比</p>
+        <h2>SACCELERATOR · nichecompass · LLM fan-out · <span class="accent">OmicsClaw</span></h2>
+        <div class="small-rule"></div>
+      </div>
+
+      <table class="editorial reveal" style="font-size: clamp(0.62rem, 1vw, 0.82rem);">
+        <thead>
+          <tr>
+            <th style="width:17%"></th>
+            <th>SACCELERATOR</th>
+            <th>nichecompass-benchmark</th>
+            <th>Generic LLM fan-out</th>
+            <th style="color:var(--crimson)">OmicsClaw consensus + interpret</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>应用范畴</td>
+            <td>spatial clustering only</td>
+            <td>spatial latent benchmark</td>
+            <td>通用 LLM agent runtime</td>
+            <td><b>spatial + sc</b> (v2 DE / v3 intervals)</td>
+          </tr>
+          <tr>
+            <td>共识算法</td>
+            <td>R: diceR · LCA · EnSDD</td>
+            <td>N/A（评测工具）</td>
+            <td>LLM-based narrative</td>
+            <td>typed: Python kmode / weighted + R LCA</td>
+          </tr>
+          <tr>
+            <td>人在回路</td>
+            <td>显式 BC 选择（人工）</td>
+            <td>N/A</td>
+            <td>无</td>
+            <td>CLI 交互 BC picker；Desktop/Channel top-K 默认</td>
+          </tr>
+          <tr>
+            <td>评估面板</td>
+            <td>17 R-only metrics</td>
+            <td>10 multi-axis</td>
+            <td>N/A</td>
+            <td><b>task-targeted</b>：hero ARI+AMI+V+MLAMI；interpreted 4-axis</td>
+          </tr>
+          <tr>
+            <td>LLM 在范式中</td>
+            <td>不用</td>
+            <td>不用</td>
+            <td>整个 sub-agent 都靠 LLM</td>
+            <td><b>只在两端</b>（plan + narrate）</td>
+          </tr>
+          <tr>
+            <td>验证 / 探索边界</td>
+            <td>隐式</td>
+            <td>隐式</td>
+            <td>隐式</td>
+            <td><b>显式 banner + namespace + interpreted layer</b></td>
+          </tr>
+          <tr>
+            <td>进程模型</td>
+            <td>R 子进程链</td>
+            <td>Python in-process</td>
+            <td>Redis queue · 多进程</td>
+            <td><b>in-process</b> asyncio.gather</td>
+          </tr>
+          <tr>
+            <td>可扩展性</td>
+            <td>R 模块化</td>
+            <td>评测函数级</td>
+            <td>任意 sub-agent</td>
+            <td><span class="mono">TYPED_CONSENSUS_REGISTRY</span> allowlist + thin skill 模板</td>
+          </tr>
+          <tr>
+            <td>生物解读层</td>
+            <td>无（产物只到聚类）</td>
+            <td>无</td>
+            <td>与统计纠缠</td>
+            <td><b>独立 interpreted layer · 4-axis 可审计</b></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="pullquote reveal" style="margin-top: clamp(0.7rem, 1.4vh, 1.1rem);">
+        OmicsClaw 是<em>首个</em>把 expert-in-the-loop 用 LLM 操作化 +
+        跨组学 + 双 namespace + 可审计解读层<em>一起打包</em>的系统。
+      </div>
+
+    </div>
+
+    <footer class="colophon reveal">
+      <span>OmicsClaw · §6 comparison</span>
+      <span class="right">unique combination&nbsp;<span>· not any single feature</span></span>
+      <span class="folio">— XIII —</span>
+    </footer>
+
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 14 — ROADMAP + PAPER POSITIONING + CLOSING
+     ============================================================ -->
+<section class="slide" data-title="Roadmap">
+  <div class="grain"></div>
+  <div class="slide-frame">
+
+    <header class="masthead reveal">
+      <span class="vol">OMICSCLAW · OUTLOOK</span>
+      <span class="org">XIV · WHAT'S NEXT · QUESTIONS</span>
+    </header>
+
+    <div class="slide-content reveal">
+      <div class="content-head">
+        <p class="section-tag">8 + 9 · Roadmap &amp; paper positioning</p>
+        <h2>v1.x 增量 <span class="ampersand">·</span> v2 跨组学 <span class="ampersand">·</span> <span class="accent">三篇可发表子-贡献</span></h2>
+        <div class="small-rule"></div>
+      </div>
+
+      <div class="two-col" style="margin-top: clamp(0.3rem, 0.8vh, 0.6rem); grid-template-columns: 1.05fr 1fr;">
+
+        <!-- LEFT: roadmap -->
+        <div class="reveal">
+          <h3 style="margin-bottom: clamp(0.4rem, 0.9vh, 0.7rem);">下一步路线图</h3>
+          <table class="editorial">
+            <thead><tr><th>阶段</th><th>项</th><th style="width:14%">难度</th></tr></thead>
+            <tbody>
+              <tr><td><b>v1.x</b></td><td>Agent-loop proactive 钩子 (suggest_interpret → callback)</td><td>小</td></tr>
+              <tr><td>v1.x</td><td>Marker DB 全量化 (PanglaoDB · CellMarker)</td><td>小</td></tr>
+              <tr><td>v1.x</td><td>Real-LLM gated CI (3 档 nightly)</td><td>中</td></tr>
+              <tr><td>v1.x</td><td>Composite score + spatial-smoothness 第 3 轴</td><td>小</td></tr>
+              <tr><td>v1.x</td><td>Desktop SSE: typed-run-completed → auto-suggest</td><td>中</td></tr>
+              <tr><td><b>v2</b></td><td><span class="mono">consensus-celltypes</span> · 异质 reference</td><td>大</td></tr>
+              <tr><td>v2</td><td><span class="mono">consensus-de</span> · DE-RRA (4 工具 robust rank)</td><td>大</td></tr>
+              <tr><td><b>v3</b></td><td><span class="mono">consensus-variants</span> · <span class="mono">consensus-peaks</span> · interval merge</td><td>大</td></tr>
+              <tr><td>v3</td><td>Evaluation chair → multi-agent debate（保持不变量）</td><td>大</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- RIGHT: paper positioning + Q&A -->
+        <div class="reveal">
+          <h3 style="margin-bottom: clamp(0.4rem, 0.9vh, 0.7rem);">三个独立可发表子-贡献</h3>
+          <div class="icard" style="margin-bottom: clamp(0.5rem, 1vh, 0.8rem);">
+            <span class="pill-no">— I —</span>
+            <h3 style="font-size: clamp(0.85rem, 1.4vw, 1.1rem);">Methods paper</h3>
+            <ul><li>典型化共识范式 + 跨组学 <span class="mono">TYPED_CONSENSUS_REGISTRY</span> + task-targeted metric panel</li></ul>
+          </div>
+          <div class="icard" style="margin-bottom: clamp(0.5rem, 1vh, 0.8rem);">
+            <span class="pill-no">— II —</span>
+            <h3 style="font-size: clamp(0.85rem, 1.4vw, 1.1rem);">Evaluation paper</h3>
+            <ul><li>A / B / A+I 三层 namespace + 4-axis interpreted evaluation + falsifiability table</li></ul>
+          </div>
+          <div class="icard" style="margin-bottom: clamp(0.7rem, 1.4vh, 1.1rem);">
+            <span class="pill-no">— III —</span>
+            <h3 style="font-size: clamp(0.85rem, 1.4vw, 1.1rem);">Tool paper</h3>
+            <ul><li>OmicsClaw 整体 · 89 skills · 三个 surface（CLI / Desktop / 10 IM channels）</li></ul>
+          </div>
+
+          <div class="pullquote" style="font-size: clamp(0.85rem, 1.4vw, 1.15rem);">
+            "把'多个聚类方法给出不一致结果'这个生信经典问题，
+            从<em>算法问题</em>重新框成<em>证据链可审计性</em>问题。"
+            <br/><br/>
+            <span style="font-style: normal; font-family: var(--font-body); font-size: 0.85em; color: var(--ink-mute); letter-spacing: 0.1em;">
+              — Thank you. Questions welcome.
+            </span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <footer class="colophon reveal">
+      <span>OmicsClaw · 2026-05-20 · Weige Zhou</span>
+      <span class="right">ADR&nbsp;<span>0010 / 0011 / 0012</span></span>
+      <span class="folio">— XIV / FIN —</span>
+    </footer>
+
+  </div>
+</section>
+
+<!-- Keyboard hint -->
+<div class="keyboard-hint">← → · SPACE · scroll · E to edit</div>
+
+<script>
+/* ============================================================
+   PRESENTATION CONTROLLER
+   - IntersectionObserver triggers per-slide reveal animations
+   - Keyboard / wheel / touch / nav-dots navigation
+   - Progress bar tied to current slide index
+   - Inline editing (opt-in) with localStorage auto-save
+   ============================================================ */
+class SlidePresentation {
+  constructor() {
+    this.slides = Array.from(document.querySelectorAll('.slide'));
+    this.currentSlide = 0;
+    this.progressBar = document.getElementById('progressBar');
+    this.navDotsContainer = document.getElementById('navDots');
+    this.setupIntersectionObserver();
+    this.setupKeyboardNav();
+    this.setupWheelNav();
+    this.setupTouchNav();
+    this.setupNavDots();
+    this.updateProgress();
+  }
+
+  setupIntersectionObserver() {
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+          this.currentSlide = this.slides.indexOf(entry.target);
+          this.updateProgress();
+          this.updateActiveDot();
+        }
+      });
+    }, { threshold: 0.4 });
+    this.slides.forEach(s => io.observe(s));
+  }
+
+  setupKeyboardNav() {
+    document.addEventListener('keydown', (e) => {
+      // Don't intercept arrow keys while editing text
+      if (document.activeElement && document.activeElement.getAttribute('contenteditable') === 'true') return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
+        e.preventDefault();
+        this.goTo(this.currentSlide + 1);
+      } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        e.preventDefault();
+        this.goTo(this.currentSlide - 1);
+      } else if (e.key === 'Home') {
+        this.goTo(0);
+      } else if (e.key === 'End') {
+        this.goTo(this.slides.length - 1);
+      }
+    });
+  }
+
+  setupWheelNav() {
+    // Throttled wheel — relies on scroll-snap, just a guardrail
+    let lock = false;
+    document.addEventListener('wheel', (e) => {
+      if (lock) return;
+      lock = true;
+      setTimeout(() => { lock = false; }, 600);
+    }, { passive: true });
+  }
+
+  setupTouchNav() {
+    let startY = 0;
+    document.addEventListener('touchstart', (e) => { startY = e.touches[0].clientY; }, { passive: true });
+    document.addEventListener('touchend', (e) => {
+      const dy = e.changedTouches[0].clientY - startY;
+      if (Math.abs(dy) < 50) return;
+      this.goTo(this.currentSlide + (dy < 0 ? 1 : -1));
+    }, { passive: true });
+  }
+
+  setupNavDots() {
+    // IMPORTANT: clear before building so re-opening doesn't duplicate dots
+    this.navDotsContainer.innerHTML = '';
+    this.slides.forEach((slide, i) => {
+      const btn = document.createElement('button');
+      btn.setAttribute('aria-label', 'Go to slide ' + (i + 1));
+      btn.title = slide.dataset.title || ('Slide ' + (i + 1));
+      btn.addEventListener('click', () => this.goTo(i));
+      this.navDotsContainer.appendChild(btn);
+    });
+    this.updateActiveDot();
+  }
+
+  updateActiveDot() {
+    const buttons = this.navDotsContainer.querySelectorAll('button');
+    buttons.forEach((b, i) => b.classList.toggle('active', i === this.currentSlide));
+  }
+
+  updateProgress() {
+    const pct = (this.currentSlide + 1) / this.slides.length * 100;
+    this.progressBar.style.width = pct + '%';
+  }
+
+  goTo(i) {
+    i = Math.max(0, Math.min(this.slides.length - 1, i));
+    this.slides[i].scrollIntoView({ behavior: 'smooth' });
+  }
+}
+
+/* ============================================================
+   INLINE EDITOR (user opted in)
+   ============================================================ */
+class InlineEditor {
+  constructor() {
+    this.isActive = false;
+    this.toggleBtn = document.getElementById('editToggle');
+    this.banner = document.getElementById('editBanner');
+    this.STORAGE_KEY = 'omicsclaw-seminar-2026-05-20.html';
+    // Restore edited content on load
+    this.restore();
+    // Save on input (debounced)
+    this.saveTimer = null;
+  }
+
+  enableEditing() {
+    document.body.classList.add('edit-active');
+    this.toggleBtn.classList.add('active');
+    this.banner.classList.add('active');
+    // Make all text content editable EXCEPT decorative elements
+    const editableSelectors = 'h1, h2, h3, p, li, td, th, .eyebrow, .pullquote, .section-tag, .stat .k, .stat .v, .stat .sub, .icard li, .deck';
+    document.querySelectorAll(editableSelectors).forEach(el => {
+      el.setAttribute('contenteditable', 'true');
+      el.addEventListener('input', () => this.scheduleSave());
+    });
+    this.isActive = true;
+  }
+
+  disableEditing() {
+    document.body.classList.remove('edit-active');
+    this.toggleBtn.classList.remove('active');
+    this.banner.classList.remove('active');
+    document.querySelectorAll('[contenteditable]').forEach(el => {
+      el.removeAttribute('contenteditable');
+    });
+    this.isActive = false;
+  }
+
+  toggleEditMode() {
+    this.isActive ? this.disableEditing() : this.enableEditing();
+  }
+
+  scheduleSave() {
+    clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => this.save(), 600);
+  }
+
+  save() {
+    // Save the snapshot of the slide tree (excludes nav-dots / progress / edit UI)
+    const slideTree = document.querySelectorAll('.slide');
+    const snapshot = Array.from(slideTree).map(s => s.innerHTML);
+    try {
+      localStorage.setItem(this.STORAGE_KEY, JSON.stringify(snapshot));
+    } catch (e) {
+      console.warn('localStorage save failed', e);
+    }
+  }
+
+  restore() {
+    try {
+      const raw = localStorage.getItem(this.STORAGE_KEY);
+      if (!raw) return;
+      const snapshot = JSON.parse(raw);
+      const slideTree = document.querySelectorAll('.slide');
+      if (snapshot.length === slideTree.length) {
+        snapshot.forEach((html, i) => { slideTree[i].innerHTML = html; });
+      }
+    } catch (e) {
+      console.warn('localStorage restore failed', e);
+    }
+  }
+
+  exportFile() {
+    // CRITICAL: strip edit state before capturing outerHTML
+    const editableEls = Array.from(document.querySelectorAll('[contenteditable]'));
+    editableEls.forEach(el => el.removeAttribute('contenteditable'));
+    document.body.classList.remove('edit-active');
+    const wasToggleActive = this.toggleBtn.classList.contains('active');
+    const wasToggleShown = this.toggleBtn.classList.contains('show');
+    const wasBannerActive = this.banner.classList.contains('active');
+    this.toggleBtn.classList.remove('active', 'show');
+    this.banner.classList.remove('active');
+
+    const html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+
+    // Restore edit state so the user can keep editing
+    if (this.isActive) {
+      document.body.classList.add('edit-active');
+      editableEls.forEach(el => el.setAttribute('contenteditable', 'true'));
+    }
+    if (wasToggleActive) this.toggleBtn.classList.add('active');
+    if (wasToggleShown) this.toggleBtn.classList.add('show');
+    if (wasBannerActive) this.banner.classList.add('active');
+
+    const blob = new Blob([html], { type: 'text/html' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'OmicsClaw-seminar-2026-05-20.html';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+}
+
+/* ============================================================
+   BOOT
+   ============================================================ */
+const presentation = new SlidePresentation();
+const editor = new InlineEditor();
+
+// 1. Edit toggle click
+document.getElementById('editToggle').addEventListener('click', () => editor.toggleEditMode());
+
+// 2. Hotzone hover with 400ms grace period
+const hotzone = document.getElementById('editHotzone');
+const editToggle = document.getElementById('editToggle');
+let hideTimeout = null;
+hotzone.addEventListener('mouseenter', () => {
+  clearTimeout(hideTimeout);
+  editToggle.classList.add('show');
+});
+hotzone.addEventListener('mouseleave', () => {
+  hideTimeout = setTimeout(() => {
+    if (!editor.isActive) editToggle.classList.remove('show');
+  }, 400);
+});
+editToggle.addEventListener('mouseenter', () => clearTimeout(hideTimeout));
+editToggle.addEventListener('mouseleave', () => {
+  hideTimeout = setTimeout(() => {
+    if (!editor.isActive) editToggle.classList.remove('show');
+  }, 400);
+});
+
+// 3. Hotzone direct click
+hotzone.addEventListener('click', () => editor.toggleEditMode());
+
+// 4. Keyboard: E to toggle, Ctrl+S to export
+document.addEventListener('keydown', (e) => {
+  if ((e.key === 'e' || e.key === 'E') && !(e.target.getAttribute('contenteditable') === 'true')) {
+    editor.toggleEditMode();
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault();
+    editor.exportFile();
+  }
+});
+
+// Initial visibility for first slide (in case observer is slow)
+if (presentation.slides[0]) presentation.slides[0].classList.add('visible');
+</script>
+
+</body>
+</html>

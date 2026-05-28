@@ -899,12 +899,73 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
             policy_tags=("repo", "skill", "workspace"),
         ),
         ToolSpec(
+            name="autonomous_analysis_execute",
+            description=(
+                "Recommended generated-code path for partial/no-skill analysis. "
+                "Provide the goal and optional local/web context; OmicsClaw writes, "
+                "executes, and repairs bounded Python/R code in an isolated autonomous workspace."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "string",
+                        "description": "Short statement of the analysis objective.",
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Optional local context from the conversation or prior skill outputs.",
+                    },
+                    "web_context": {
+                        "type": "string",
+                        "description": "Optional external method notes already retrieved by web_method_search.",
+                    },
+                    "input_paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional original data paths. They are referenced, not copied.",
+                    },
+                    "upstream_paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional prior skill output directories to consume as references.",
+                    },
+                    "language": {
+                        "type": "string",
+                        "enum": ["python", "r"],
+                        "description": "Generated script language. Default: python.",
+                    },
+                    "max_repair_attempts": {
+                        "type": "integer",
+                        "description": "Maximum evidence-bound repairs after the first execution. Default: 2, max: 2.",
+                    },
+                },
+                "required": ["goal"],
+            },
+            surfaces=("bot",),
+            context_params=(
+                "session_id",
+                "chat_id",
+                "surface",
+                "policy_state",
+                "request_tool_approval",
+                "model_override",
+                "provider_override",
+            ),
+            read_only=False,
+            concurrency_safe=False,
+            result_policy=RESULT_POLICY_SUMMARY_OR_MEDIA,
+            risk_level=RISK_LEVEL_HIGH,
+            writes_workspace=True,
+            allowed_in_background=False,
+            policy_tags=("analysis", "workflow", "autonomous", "autonomous_code_runner"),
+        ),
+        ToolSpec(
             name="custom_analysis_execute",
             description=(
-                "Execute custom analysis code in a restricted Jupyter notebook when an existing OmicsClaw skill "
-                "does not fully cover the request. Provide one self-contained Python snippet. "
-                "The notebook exposes INPUT_FILE, ANALYSIS_GOAL, ANALYSIS_CONTEXT, WEB_CONTEXT, and AUTONOMOUS_OUTPUT_DIR. "
-                "Shell, package install, and direct network access are blocked."
+                "Legacy adapter for user-supplied Python snippets in a restricted notebook. "
+                "Prefer autonomous_analysis_execute for new generated-code analysis because it owns code generation, "
+                "execution, repair, and autonomous workspace reports."
             ),
             parameters={
                 "type": "object",

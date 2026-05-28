@@ -85,6 +85,68 @@ The wired Surfaces derive their Namespace string consistently:
 
 The `app/`, `<platform>/` prefixes are structural — they prevent any cross-surface collision with absolute filesystem paths used by the CLI Surface.
 
+### Analysis routing
+
+**Analysis Router**: The analysis-intent decision boundary that classifies a user request as non-analysis chat, an Exact skill match, a Partial skill match, or a No skill match.
+_Avoid_: "orchestrator" (reserved for orchestration skills), "planner", "gateway"
+
+**Deterministic route, assisted parameterization**: The execution rule for an Exact skill match: the Analysis Router chooses the skill, while LLM-assisted preflight fills parameters and asks for confirmation when needed.
+_Avoid_: "LLM decides the skill", "fully bypass the LLM"
+
+**Autonomous Analysis Path**: The fallback analysis route that asks the LLM to generate and execute bounded local code when a request is not fully covered by an existing OmicsClaw skill.
+_Avoid_: "CellClaw path", "free-code mode", "fallback script"
+
+**Autonomous Code Runner**: The execution component used by the Autonomous Analysis Path to write generated code, run bounded local commands, and collect artifacts independently of the skill runner.
+_Avoid_: "custom_analysis_execute", "skill fallback executor", "hidden skill"
+
+**Legacy custom analysis adapter**: The temporary compatibility role for `custom_analysis_execute` after Autonomous Code Runner becomes the recommended generated-code path.
+_Avoid_: "primary fallback", "new autonomous path"
+
+**Autonomous Code Loop**: The bounded plan-write-run-inspect-revise-report loop owned by the Autonomous Code Runner.
+_Avoid_: "replace run_query_engine", "chat loop", "skill loop"
+
+**Evidence-bound repair**: The retry rule for the Autonomous Code Loop: failed generated code may be revised only from captured stderr, exit code, artifact checks, file schema, the user request, and prior skill artifacts.
+_Avoid_: "keep trying", "self-debug until it works"
+
+**Code Runner Permission Tier**: The risk class assigned to an Autonomous Code Runner action before execution.
+_Avoid_: "safety flag", "mode"
+
+**`read_only_probe`**: A Code Runner Permission Tier for commands that inspect files, schemas, package versions, or directory structure without writing analysis outputs.
+_Avoid_: "dry run" (that implies a skipped execution)
+
+**`analysis_write`**: A Code Runner Permission Tier for generated Python or R code that writes only inside the run workspace's approved output folders.
+_Avoid_: "safe write" (too broad)
+
+**`system_mutation`**: A Code Runner Permission Tier for package installation, network download, service startup, workspace-external writes, broad deletion, or unknown binary execution.
+_Avoid_: "advanced mode", "admin mode"
+
+**Output-shape parity**: The contract that Autonomous Code Runner runs produce the same navigable artifact shape as skill runs while preserving a distinct source label.
+_Avoid_: "fake skill output", "separate output format"
+
+**Autonomous run workspace**: The isolated output directory created for one Autonomous Code Runner execution under `autonomous-code__<timestamp>__<id>`.
+_Avoid_: "project root", "scratch dir", "temp dir"
+
+**Autonomous run lifecycle**: The job-shaped lifecycle of an Autonomous Code Runner execution, including status, logs, cancellation, retry, artifacts, and terminal outcome.
+_Avoid_: "plain tool result", "one-shot shell output"
+
+**Lifecycle-shape compatibility**: The rule that Autonomous run lifecycle records should align with existing job fields and artifact/log conventions without requiring callers to go through the remote jobs router.
+_Avoid_: "reuse the remote router", "separate job model"
+
+**Upstream artifact reference**: A manifest entry that points to a prior skill output or user input without copying the underlying data into the Autonomous run workspace.
+_Avoid_: "artifact copy", "imported output"
+
+**Exact skill match**: A capability decision where one built-in skill fully covers the user's requested analysis and should run through the shared skill runner.
+_Avoid_: "direct match", "normal route"
+
+**Partial skill match**: A capability decision where a built-in skill covers the nearest core analysis but the request also needs generated code for post-processing, visualization, reporting, or an extra analytic step.
+_Avoid_: "almost match", "hybrid match"
+
+**Skill-first composition**: The execution rule for a Partial skill match: run the nearest built-in skill first, then let the Autonomous Analysis Path consume the skill artifacts for the uncovered work.
+_Avoid_: "rewrite the skill", "replace the skill"
+
+**No skill match**: A capability decision where no built-in skill covers the requested analysis well enough to execute safely as a skill.
+_Avoid_: "unknown request", "miss"
+
 ## Relationships
 
 - A **Surface** holds one **MemoryClient** per request context.
@@ -94,6 +156,21 @@ The `app/`, `<platform>/` prefixes are structural — they prevent any cross-sur
 - A **ReviewLog** reads the same database as **MemoryEngine** but exposes only **Cold path** verbs.
 - A **Memory URI** with domain `core` and path starting with `agent` / `kh` / `my_user_default` is **routed to** `__shared__` by `namespace_policy` whenever something writes there. Both `core://agent` and `core://kh/*` are now wired: every memory-init path (Compat bot, MemoryClient legacy db_url, app/server.py chat lifespan, memory/server.py lifespan) calls `seed_knowhows()` after `init_db()`, mirroring the on-disk KH corpus into `__shared__` under `core://kh/<doc_id>`. `core://my_user_default` remains a reserved prefix awaiting a writer. Everything outside those three prefixes lives in the caller's current **Namespace**.
 - A **Versioned upsert**'s `migrated_to` chain is the only structure where **ReviewLog.rollback_to** can operate.
+- The **Analysis Router** classifies analysis-intent requests before execution; non-analysis chat stays on the normal conversational path.
+- An **Exact skill match** uses **Deterministic route, assisted parameterization**.
+- A **Partial skill match** uses **Skill-first composition**, then the **Autonomous Code Runner** handles the uncovered work.
+- A **No skill match** enters the **Autonomous Analysis Path** and uses the **Autonomous Code Runner** directly.
+- The **Analysis Router** submits deterministic analysis routes as planned tool calls through the existing tool policy, approval, callback, result-store, and transcript pipeline.
+- The **Autonomous Code Runner** is composed by the **Analysis Router** but does not call or wrap the skill runner.
+- The **Legacy custom analysis adapter** may forward to the **Autonomous Code Runner**, but it is not the recommended route for new generated-code execution.
+- The **Autonomous Code Runner** owns an **Autonomous Code Loop**; the outer chat engine can invoke it but is not replaced by it.
+- The **Autonomous Code Loop** uses **Evidence-bound repair** and defaults to at most two repair attempts after the initial execution.
+- Every Autonomous Code Runner command is assigned a **Code Runner Permission Tier**; **`system_mutation`** is blocked unless the user explicitly approves it.
+- The **Autonomous Code Runner** writes by default only inside its **Autonomous run workspace**.
+- The **Autonomous Code Runner** exposes an **Autonomous run lifecycle**, not just a synchronous tool-result string.
+- **Lifecycle-shape compatibility** keeps Autonomous run records compatible with existing job UI expectations while avoiding a hard dependency on the remote jobs router.
+- A **Partial skill match** passes prior skill outputs to the **Autonomous Code Runner** as **Upstream artifact references** by default, not by copying large artifacts.
+- **Output-shape parity** lets CLI, Desktop, memory, and review tooling read Autonomous Code Runner outputs through the same manifest and completion-report conventions used for skill outputs.
 
 ## Example dialogue
 
@@ -105,6 +182,9 @@ The `app/`, `<platform>/` prefixes are structural — they prevent any cross-sur
 >
 > **Dev:** "I bind the keyword 'TIL' to a shared OmicsClaw concept node — do other users see it?"
 > **Architect:** "Only if you call `add_glossary_shared('TIL', node)`. Plain `add_glossary` writes the binding under your current **Namespace**. **Read fallback** surfaces shared bindings to everyone, but your private one stays private."
+>
+> **Dev:** "The user asks for a built-in clustering plus a custom publication figure."
+> **Architect:** "That is a **Partial skill match** using **Skill-first composition**: the clustering runs through the shared skill runner, then the figure is produced through the **Autonomous Analysis Path**."
 
 ## Resolved-by-default decisions
 

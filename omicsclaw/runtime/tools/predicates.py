@@ -69,7 +69,8 @@ TOOL_PREDICATE_MAP: dict[str, Callable[[ContextAssemblyRequest], bool]] = {
     "remember": _remember_intent,
     "recall": _pred.memory_in_use,
     "forget": _pred.memory_in_use,
-    # Implementation intent → custom code execution
+    # Implementation intent → autonomous/custom code execution
+    "autonomous_analysis_execute": _pred.implementation_intent,
     "custom_analysis_execute": _pred.implementation_intent,
     # Workspace continuity → todo / task tools
     "todo_write": _pred.workspace_active,

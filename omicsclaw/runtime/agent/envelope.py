@@ -36,6 +36,7 @@ class MessageEnvelope:
     max_tokens_override: int = 0
     system_prompt_append: str = ""
     mode: str = ""
+    analysis_router_mode: str | None = None
 
     usage_accumulator: Any = None
     request_tool_approval: Any = None

@@ -149,6 +149,116 @@ def test_llm_tool_loop_returns_actionable_message_when_llm_uninitialised():
     )
 
 
+def test_llm_tool_loop_dispatches_no_skill_route_without_llm(monkeypatch, tmp_path):
+    """Opt-in Autonomous Analysis Path should execute planned tool calls before LLM."""
+    import asyncio
+
+    import omicsclaw.runtime.agent.loop as agent_loop
+    import omicsclaw.runtime.agent.state as core
+    from omicsclaw.runtime.policy.state import ToolPolicyState
+    from omicsclaw.runtime.storage.tool_result import ToolResultStore
+    from omicsclaw.runtime.storage.transcript import TranscriptStore, sanitize_tool_history
+    from omicsclaw.runtime.tools.registry import ToolRegistry
+    from omicsclaw.runtime.tools.spec import APPROVAL_MODE_ASK, ToolSpec
+    from omicsclaw.skill.capability_resolver import CapabilityDecision
+
+    monkeypatch.setenv("OMICSCLAW_ANALYSIS_ROUTER_ENABLED", "true")
+    monkeypatch.setattr(
+        agent_loop,
+        "route_analysis_request",
+        lambda _text: agent_loop.AnalysisRoute(
+            kind=agent_loop.AnalysisRouteKind.NO_SKILL,
+            capability_decision=CapabilityDecision(
+                query="compute custom score",
+                coverage="no_skill",
+                confidence=0.2,
+                reasoning=["no skill achieved a meaningful semantic match"],
+            ),
+        ),
+    )
+
+    observed = {"calls": 0, "tool_calls": [], "tool_results": [], "approvals": []}
+
+    async def autonomous_executor(args):
+        observed["calls"] += 1
+        return f"autonomous-ok:{args['goal']}"
+
+    runtime = ToolRegistry(
+        [
+            ToolSpec(
+                name="autonomous_analysis_execute",
+                description="Autonomous",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "goal": {"type": "string"},
+                        "input_paths": {"type": "array", "items": {"type": "string"}},
+                        "language": {"type": "string"},
+                        "max_repair_attempts": {"type": "integer"},
+                    },
+                    "required": ["goal"],
+                },
+                approval_mode=APPROVAL_MODE_ASK,
+                writes_workspace=True,
+                policy_tags=("analysis", "autonomous"),
+            )
+        ]
+    ).build_runtime({"autonomous_analysis_execute": autonomous_executor})
+    transcript = TranscriptStore(sanitizer=sanitize_tool_history)
+    results = ToolResultStore(storage_dir=tmp_path / "tool-results")
+
+    monkeypatch.setattr(agent_loop, "transcript_store", transcript)
+    monkeypatch.setattr(agent_loop, "tool_result_store", results)
+    monkeypatch.setattr(agent_loop, "_build_tool_runtime", lambda: runtime)
+    monkeypatch.setattr(agent_loop, "get_tool_registry", lambda: ToolRegistry(runtime.specs))
+    monkeypatch.setattr(agent_loop, "_skill_registry", lambda: type("Registry", (), {"skills": {}})())
+    monkeypatch.setattr(core, "llm", None)
+
+    async def on_tool_call(name, arguments):
+        observed["tool_calls"].append((name, arguments))
+
+    async def on_tool_result(name, result, metadata):
+        observed["tool_results"].append((name, result, metadata))
+
+    async def approve(request, execution_result):
+        observed["approvals"].append((request.name, execution_result.status))
+        return {
+            "behavior": "allow",
+            "policy_state": {
+                "surface": "cli",
+                "approved_tool_names": ["autonomous_analysis_execute"],
+            },
+        }
+
+    result = asyncio.run(
+        agent_loop.llm_tool_loop(
+            chat_id="chat-autonomous-route",
+            user_content="compute custom score",
+            platform="cli",
+            request_tool_approval=approve,
+            policy_state=ToolPolicyState(surface="cli"),
+            on_tool_call=on_tool_call,
+            on_tool_result=on_tool_result,
+        )
+    )
+
+    assert "Autonomous analysis route completed." in result
+    assert "autonomous-ok:compute custom score" in result
+    assert observed["calls"] == 1
+    assert observed["approvals"] == [
+        ("autonomous_analysis_execute", "policy_blocked")
+    ]
+    assert observed["tool_calls"][0][0] == "autonomous_analysis_execute"
+    assert observed["tool_results"][0][0] == "autonomous_analysis_execute"
+    history = transcript.get_history("chat-autonomous-route")
+    assert [message["role"] for message in history] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+
+
 def test_format_llm_api_error_message_provides_actionable_text_for_common_errors():
     """When the OpenAI SDK raises, this formatter turns the exception into
     a user-facing message with hints (rate limit, auth, network). The

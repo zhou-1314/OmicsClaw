@@ -77,6 +77,18 @@ The **[Releases](https://github.com/TianGzlab/OmicsClaw/releases)** tab hosts th
 | 🧠 **Memory**<br/>Sessions, preferences, lineage | 🔒 **Local-first**<br/>Raw data stays in your runtime | 🧰 **89 skills**<br/>Generated catalog + demos | 🧭 **Smart routing**<br/>Natural language to tools |
 | 🖥️ **CLI Surface**<br/>`oc interactive`, `oc tui` | 🌐 **Desktop Surface**<br/>FastAPI for desktop/web | 📨 **Channel Surface**<br/>10 IM adapters (Telegram, Feishu, …) | 📡 **Remote mode**<br/>SSH tunnel to Linux servers |
 
+Development note: OmicsClaw now has an accepted design and foundation for a
+first-class **Autonomous Analysis Path**. Built-in skills remain preferred when
+they match; generated-code analysis now has an independent
+`omicsclaw/autonomous/` runner with approval-gated workspace writes, bounded
+LLM repair, and skill-like manifest/completion outputs. Runtime behavior is
+controlled by `OMICSCLAW_ANALYSIS_ROUTER_MODE=off|assist|auto` and defaults to
+`assist`, which injects structured route context without deterministic
+execution. `auto` submits exact/no/partial analysis routes through the existing
+tool policy, approval, transcript, and completion-result pipeline instead of
+bypassing the chat engine contracts. The legacy
+`OMICSCLAW_ANALYSIS_ROUTER_ENABLED=true` flag is still accepted as `auto`.
+
 ## ⚡ Quick Start
 
 ```bash

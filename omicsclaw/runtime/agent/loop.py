@@ -91,14 +91,24 @@ from omicsclaw.runtime.tools.builders.agent import (
 )
 from omicsclaw.runtime.context.assembler import (
     assemble_chat_context as _assemble_chat_context,
+    extract_user_text as _extract_user_text,
+)
+from omicsclaw.analysis_router import (
+    AnalysisRoute,
+    AnalysisRouteKind,
+    build_analysis_tool_plan,
+    build_partial_autonomous_continuation,
+    route_analysis_request,
 )
 from omicsclaw.runtime.tools.hooks import build_default_lifecycle_hook_runtime
 from omicsclaw.runtime.policy.policy import TOOL_POLICY_ALLOW
 from omicsclaw.runtime.policy.state import ToolPolicyState
 from omicsclaw.runtime.agent.query_engine import (
+    PlannedToolCallRun,
     QueryEngineCallbacks,
     QueryEngineConfig,
     QueryEngineContext,
+    run_planned_tool_calls,
     run_query_engine,
 )
 from omicsclaw.runtime.context.system_prompt import build_system_prompt
@@ -159,6 +169,328 @@ MAX_TOOL_ITERATIONS = int(os.getenv("OMICSCLAW_MAX_TOOL_ITERATIONS", "20"))  # I
 # ---------------------------------------------------------------------------
 # LLM tool loop
 # ---------------------------------------------------------------------------
+
+ANALYSIS_ROUTER_MODE_OFF = "off"
+ANALYSIS_ROUTER_MODE_ASSIST = "assist"
+ANALYSIS_ROUTER_MODE_AUTO = "auto"
+ANALYSIS_ROUTER_MODES = {
+    ANALYSIS_ROUTER_MODE_OFF,
+    ANALYSIS_ROUTER_MODE_ASSIST,
+    ANALYSIS_ROUTER_MODE_AUTO,
+}
+
+
+def _normalize_analysis_router_mode(value: str | None = None) -> str:
+    if value is not None and str(value).strip():
+        raw = str(value).strip().lower()
+    else:
+        raw = os.getenv("OMICSCLAW_ANALYSIS_ROUTER_MODE", "").strip().lower()
+
+    if raw in ANALYSIS_ROUTER_MODES:
+        return raw
+
+    legacy = os.getenv("OMICSCLAW_ANALYSIS_ROUTER_ENABLED")
+    if legacy is not None:
+        return (
+            ANALYSIS_ROUTER_MODE_AUTO
+            if legacy.strip().lower() in {"1", "true", "yes", "on"}
+            else ANALYSIS_ROUTER_MODE_OFF
+        )
+
+    return ANALYSIS_ROUTER_MODE_ASSIST
+
+
+def _analysis_router_enabled() -> bool:
+    return _normalize_analysis_router_mode() != ANALYSIS_ROUTER_MODE_OFF
+
+
+def _analysis_router_auto_execute_enabled(mode: str | None = None) -> bool:
+    return _normalize_analysis_router_mode(mode) == ANALYSIS_ROUTER_MODE_AUTO
+
+
+def _format_analysis_route_context(route: AnalysisRoute) -> str:
+    """Render route metadata for the existing chat engine.
+
+    This is the first, non-disruptive integration slice: the router result is
+    made visible to the LLM, but execution still flows through the current
+    engine until exact/partial/no-skill executors land.
+    """
+    if route.kind is AnalysisRouteKind.CHAT:
+        return ""
+
+    decision = route.capability_decision
+    lines = [
+        "## Analysis Router",
+        f"- route_kind: {route.kind.value}",
+        f"- coverage: {decision.coverage}",
+        f"- chosen_skill: {route.chosen_skill or 'none'}",
+        f"- domain: {decision.domain or 'unknown'}",
+        f"- confidence: {round(route.confidence, 3)}",
+        f"- should_search_web: {route.should_search_web}",
+    ]
+    if decision.missing_capabilities:
+        lines.append("- missing_capabilities: " + "; ".join(decision.missing_capabilities))
+    if route.kind is AnalysisRouteKind.EXACT_SKILL:
+        lines.append(
+            "- execution_rule: deterministic route, assisted parameterization"
+        )
+    elif route.kind is AnalysisRouteKind.PARTIAL_SKILL:
+        lines.append(
+            "- execution_rule: skill-first composition; do not rewrite the matched skill"
+        )
+    elif route.kind is AnalysisRouteKind.NO_SKILL:
+        lines.append(
+            "- execution_rule: autonomous analysis path; execute through the autonomous code runner"
+        )
+    return "\n".join(lines)
+
+
+def _merge_system_prompt_additions(*additions: str) -> str:
+    return "\n\n".join(
+        addition.strip()
+        for addition in additions
+        if str(addition or "").strip()
+    )
+
+
+def _build_analysis_route_context(user_content: str | list, *, mode: str | None = None) -> str:
+    if _normalize_analysis_router_mode(mode) == ANALYSIS_ROUTER_MODE_OFF:
+        return ""
+    user_text = _extract_user_text(user_content)
+    try:
+        route = route_analysis_request(user_text)
+    except Exception as exc:
+        logger.warning("Analysis Router context failed (non-fatal): %s", exc)
+        return ""
+    return _format_analysis_route_context(route)
+
+
+def _build_engine_dependencies(*, usage_accumulator=None) -> EngineDependencies:
+    def _bind_callbacks_builder(**engine_kwargs):
+        # Engine doesn't carry the bot's logger; bind it here so the
+        # callback builder still gets the right ``logger_obj`` arg.
+        return _build_bot_query_engine_callbacks(logger_obj=logger, **engine_kwargs)
+
+    return EngineDependencies(
+        transcript_store=transcript_store,
+        tool_result_store=tool_result_store,
+        llm=_core.llm,
+        omicsclaw_model=_core.OMICSCLAW_MODEL or "",
+        llm_provider_name=_core.LLM_PROVIDER_NAME or "",
+        session_manager=_core.session_manager,
+        omicsclaw_dir=str(OMICSCLAW_DIR),
+        max_history=MAX_HISTORY,
+        max_history_chars=MAX_HISTORY_CHARS or None,
+        max_conversations=MAX_CONVERSATIONS,
+        audit_fn=audit,
+        usage_accumulator=usage_accumulator or _accumulate_usage,
+        skill_aliases=tuple(_skill_registry().skills.keys()),
+        deep_learning_methods=DEEP_LEARNING_METHODS,
+        tool_runtime=_build_tool_runtime(),
+        tool_registry=get_tool_registry(),
+        callbacks_builder=_bind_callbacks_builder,
+    )
+
+
+def _build_query_callbacks(
+    *,
+    chat_id,
+    progress_fn=None,
+    progress_update_fn=None,
+    on_tool_call=None,
+    on_tool_result=None,
+    on_stream_content=None,
+    on_stream_reasoning=None,
+    request_tool_approval=None,
+    usage_accumulator=None,
+    on_context_compacted=None,
+    on_pathology_signal=None,
+) -> QueryEngineCallbacks:
+    return _build_bot_query_engine_callbacks(
+        chat_id=chat_id,
+        progress_fn=progress_fn,
+        progress_update_fn=progress_update_fn,
+        on_tool_call=on_tool_call,
+        on_tool_result=on_tool_result,
+        on_stream_content=on_stream_content,
+        on_stream_reasoning=on_stream_reasoning,
+        request_tool_approval=request_tool_approval,
+        logger_obj=logger,
+        audit_fn=audit,
+        deep_learning_methods=DEEP_LEARNING_METHODS,
+        usage_accumulator=usage_accumulator or _accumulate_usage,
+        on_context_compacted=on_context_compacted,
+        on_pathology_signal=on_pathology_signal,
+    )
+
+
+def _format_deterministic_dispatch_final(
+    route: AnalysisRoute,
+    results: list,
+) -> str:
+    succeeded = bool(results) and all(
+        bool(getattr(result, "success", False)) for result in results
+    )
+    outcome = "completed" if succeeded else "failed"
+    if route.kind is AnalysisRouteKind.EXACT_SKILL:
+        heading = f"Exact skill route {outcome}."
+    elif route.kind is AnalysisRouteKind.PARTIAL_SKILL:
+        heading = f"Partial skill route {outcome}."
+    elif route.kind is AnalysisRouteKind.NO_SKILL:
+        heading = f"Autonomous analysis route {outcome}."
+    else:
+        heading = f"Analysis route {outcome}."
+
+    result_texts = [str(getattr(result, "output", "") or "") for result in results]
+    return "\n\n---\n".join([heading, *[text for text in result_texts if text]])
+
+
+async def _run_planned_analysis_calls(
+    *,
+    calls: tuple[tuple[str, dict], ...],
+    context: QueryEngineContext,
+    deps: EngineDependencies,
+    callbacks: QueryEngineCallbacks,
+    append_user_message: bool,
+) -> PlannedToolCallRun:
+    return await run_planned_tool_calls(
+        calls=[(name, dict(arguments)) for name, arguments in calls],
+        context=context,
+        tool_runtime=deps.tool_runtime,
+        transcript_store=deps.transcript_store,
+        tool_result_store=deps.tool_result_store,
+        callbacks=callbacks,
+        append_user_message=append_user_message,
+    )
+
+
+async def _maybe_dispatch_analysis_route(
+    *,
+    user_content: str | list,
+    chat_id: int | str,
+    user_id: str | None,
+    platform: str | None,
+    workspace: str,
+    pipeline_workspace: str,
+    progress_fn=None,
+    progress_update_fn=None,
+    on_tool_call=None,
+    on_tool_result=None,
+    on_stream_content=None,
+    on_stream_reasoning=None,
+    request_tool_approval=None,
+    policy_state=None,
+    usage_accumulator=None,
+    on_context_compacted=None,
+    on_pathology_signal=None,
+    cancel_event=None,
+    model_override: str = "",
+    provider_override: str = "",
+    analysis_router_mode: str | None = None,
+) -> str | None:
+    if not _analysis_router_auto_execute_enabled(analysis_router_mode):
+        return None
+
+    user_text = _extract_user_text(user_content)
+    if not user_text.strip():
+        return None
+
+    _ensure_system_prompt()
+
+    try:
+        route = route_analysis_request(user_text)
+    except Exception as exc:
+        logger.warning("Analysis Router dispatch failed (non-fatal): %s", exc)
+        return None
+
+    plan = build_analysis_tool_plan(route, user_text=user_text)
+    if plan is None:
+        return None
+    if not plan.should_execute:
+        final_message = plan.final_message.strip()
+        if final_message:
+            transcript_store.append_user_message(chat_id, user_content)
+            transcript_store.append_assistant_message(chat_id, content=final_message)
+            return final_message
+        return None
+
+    deps = _build_engine_dependencies(usage_accumulator=usage_accumulator)
+    surface = platform or "unknown"
+    session_id = f"{platform}:{user_id}:{chat_id}" if user_id and platform else None
+    query_context = QueryEngineContext(
+        chat_id=chat_id,
+        session_id=session_id,
+        system_prompt=SYSTEM_PROMPT,
+        user_message_content=user_content,
+        surface=surface,
+        policy_state=ToolPolicyState.from_mapping(policy_state, surface=surface),
+        hook_runtime=build_default_lifecycle_hook_runtime(deps.omicsclaw_dir),
+        tool_runtime_context={
+            "omicsclaw_dir": deps.omicsclaw_dir,
+            "workspace": workspace,
+            "pipeline_workspace": pipeline_workspace,
+            "cancel_event": cancel_event,
+            "model_override": model_override,
+            "provider_override": provider_override,
+        },
+    )
+    callbacks = _build_query_callbacks(
+        chat_id=chat_id,
+        progress_fn=progress_fn,
+        progress_update_fn=progress_update_fn,
+        on_tool_call=on_tool_call,
+        on_tool_result=on_tool_result,
+        on_stream_content=on_stream_content,
+        on_stream_reasoning=on_stream_reasoning,
+        request_tool_approval=request_tool_approval,
+        usage_accumulator=usage_accumulator,
+        on_context_compacted=on_context_compacted,
+        on_pathology_signal=on_pathology_signal,
+    )
+
+    first_run = await _run_planned_analysis_calls(
+        calls=plan.calls,
+        context=query_context,
+        deps=deps,
+        callbacks=callbacks,
+        append_user_message=True,
+    )
+    all_results = list(first_run.execution_results)
+    if first_run.interruption_message:
+        transcript_store.append_assistant_message(
+            chat_id,
+            content=first_run.interruption_message,
+        )
+        return first_run.interruption_message
+
+    if route.kind is AnalysisRouteKind.PARTIAL_SKILL:
+        first_output = str(all_results[-1].output if all_results else "")
+        last_success = bool(getattr(all_results[-1], "success", False)) if all_results else False
+        if last_success:
+            continuation = build_partial_autonomous_continuation(
+                route,
+                user_text=user_text,
+                skill_output=first_output,
+            )
+            if continuation is not None:
+                second_run = await _run_planned_analysis_calls(
+                    calls=(continuation,),
+                    context=query_context,
+                    deps=deps,
+                    callbacks=callbacks,
+                    append_user_message=False,
+                )
+                all_results.extend(second_run.execution_results)
+                if second_run.interruption_message:
+                    transcript_store.append_assistant_message(
+                        chat_id,
+                        content=second_run.interruption_message,
+                    )
+                    return second_run.interruption_message
+
+    final_message = _format_deterministic_dispatch_final(route, all_results)
+    transcript_store.append_assistant_message(chat_id, content=final_message)
+    return final_message
 
 
 def _format_llm_api_error_message(exc: Exception) -> str:
@@ -561,6 +893,7 @@ async def llm_tool_loop(
     max_tokens_override: int = 0,
     system_prompt_append: str = "",
     mode: str = "",
+    analysis_router_mode: str | None = None,
     usage_accumulator=None,
     request_tool_approval=None,
     policy_state=None,
@@ -606,32 +939,38 @@ async def llm_tool_loop(
         transcript_store.append_assistant_message(chat_id, content=resumed_result)
         return resumed_result
 
-    _ensure_system_prompt()
-
-    def _bind_callbacks_builder(**engine_kwargs):
-        # Engine doesn't carry the bot's logger; bind it here so the
-        # callback builder still gets the right ``logger_obj`` arg.
-        return _build_bot_query_engine_callbacks(logger_obj=logger, **engine_kwargs)
-
-    deps = EngineDependencies(
-        transcript_store=transcript_store,
-        tool_result_store=tool_result_store,
-        llm=_core.llm,
-        omicsclaw_model=_core.OMICSCLAW_MODEL or "",
-        llm_provider_name=_core.LLM_PROVIDER_NAME or "",
-        session_manager=_core.session_manager,
-        omicsclaw_dir=str(OMICSCLAW_DIR),
-        max_history=MAX_HISTORY,
-        max_history_chars=MAX_HISTORY_CHARS or None,
-        max_conversations=MAX_CONVERSATIONS,
-        audit_fn=audit,
-        usage_accumulator=usage_accumulator or _accumulate_usage,
-        skill_aliases=tuple(_skill_registry().skills.keys()),
-        deep_learning_methods=DEEP_LEARNING_METHODS,
-        tool_runtime=_build_tool_runtime(),
-        tool_registry=get_tool_registry(),
-        callbacks_builder=_bind_callbacks_builder,
+    deterministic_result = await _maybe_dispatch_analysis_route(
+        user_content=user_content,
+        chat_id=chat_id,
+        user_id=user_id,
+        platform=platform,
+        workspace=workspace,
+        pipeline_workspace=pipeline_workspace,
+        progress_fn=progress_fn,
+        progress_update_fn=progress_update_fn,
+        on_tool_call=on_tool_call,
+        on_tool_result=on_tool_result,
+        on_stream_content=on_stream_content,
+        on_stream_reasoning=on_stream_reasoning,
+        request_tool_approval=request_tool_approval,
+        policy_state=policy_state,
+        usage_accumulator=usage_accumulator,
+        on_context_compacted=on_context_compacted,
+        on_pathology_signal=on_pathology_signal,
+        cancel_event=cancel_event,
+        model_override=model_override,
+        analysis_router_mode=analysis_router_mode,
     )
+    if deterministic_result is not None:
+        return deterministic_result
+
+    analysis_route_context = _build_analysis_route_context(
+        user_content,
+        mode=analysis_router_mode,
+    )
+
+    _ensure_system_prompt()
+    deps = _build_engine_dependencies(usage_accumulator=usage_accumulator)
 
     return await run_engine_loop(
         deps=deps,
@@ -656,7 +995,10 @@ async def llm_tool_loop(
         model_override=model_override,
         extra_api_params=extra_api_params,
         max_tokens_override=max_tokens_override,
-        system_prompt_append=system_prompt_append,
+        system_prompt_append=_merge_system_prompt_additions(
+            system_prompt_append,
+            analysis_route_context,
+        ),
         mode=mode,
         request_tool_approval=request_tool_approval,
         policy_state=policy_state,

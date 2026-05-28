@@ -112,6 +112,7 @@ async def dispatch(envelope: MessageEnvelope) -> AsyncIterator[Event]:
                 max_tokens_override=envelope.max_tokens_override,
                 system_prompt_append=envelope.system_prompt_append,
                 mode=envelope.mode,
+                analysis_router_mode=envelope.analysis_router_mode,
                 usage_accumulator=envelope.usage_accumulator,
                 request_tool_approval=envelope.request_tool_approval,
                 policy_state=envelope.policy_state,

@@ -462,6 +462,101 @@ def test_run_query_engine_retries_policy_blocked_tool_after_approval(tmp_path):
     assert history[2]["content"] == "written:/tmp/approved.txt"
 
 
+def test_run_query_engine_passes_approval_callback_to_tool_runtime_context(tmp_path):
+    observed: dict[str, object] = {}
+
+    class _FakeLLM:
+        class _Chat:
+            class _Completions:
+                def __init__(self, outer):
+                    self.outer = outer
+
+                async def create(self, **kwargs):
+                    if not self.outer.called:
+                        self.outer.called = True
+                        return _FakeResponse(
+                            _FakeMessage(
+                                content="",
+                                tool_calls=[
+                                    _FakeToolCall(
+                                        "call-context",
+                                        "context_probe",
+                                        json.dumps({}),
+                                    )
+                                ],
+                            )
+                        )
+                    return _FakeResponse(_FakeMessage(content="done", tool_calls=None))
+
+            def __init__(self, outer):
+                self.completions = self._Completions(outer)
+
+        def __init__(self):
+            self.called = False
+            self.chat = self._Chat(self)
+
+    async def context_probe(args, *, request_tool_approval=None):
+        observed["has_callback"] = callable(request_tool_approval)
+        return "context-ok"
+
+    from omicsclaw.runtime.tools.spec import ToolSpec
+    from omicsclaw.runtime.tools.registry import ToolRuntime
+    from omicsclaw.runtime.agent.query_engine import (
+        QueryEngineCallbacks,
+        QueryEngineConfig,
+        QueryEngineContext,
+        run_query_engine,
+    )
+    from omicsclaw.runtime.storage.tool_result import ToolResultStore
+    from omicsclaw.runtime.storage.transcript import TranscriptStore, sanitize_tool_history
+
+    probe_spec = ToolSpec(
+        name="context_probe",
+        description="probe context",
+        parameters={"type": "object", "properties": {}},
+        context_params=("request_tool_approval",),
+    )
+    runtime = ToolRuntime(
+        specs=(probe_spec,),
+        specs_by_name={"context_probe": probe_spec},
+        executors={"context_probe": context_probe},
+        openai_tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "context_probe",
+                    "description": "probe context",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+    )
+
+    async def approval(_request, _execution_result):
+        return {"behavior": "allow"}
+
+    result = asyncio.run(
+        run_query_engine(
+            llm=_FakeLLM(),
+            context=QueryEngineContext(
+                chat_id="chat-context",
+                session_id="session-context",
+                system_prompt="SYSTEM",
+                user_message_content="probe",
+                surface="cli",
+            ),
+            tool_runtime=runtime,
+            transcript_store=TranscriptStore(sanitizer=sanitize_tool_history),
+            tool_result_store=ToolResultStore(storage_dir=tmp_path / "tool_results"),
+            config=QueryEngineConfig(model="fake-model", llm_error_types=(_FakeAPIError,)),
+            callbacks=QueryEngineCallbacks(request_tool_approval=approval),
+        )
+    )
+
+    assert result == "done"
+    assert observed["has_callback"] is True
+
+
 def test_run_query_engine_applies_session_context_hooks_and_tool_notices(tmp_path):
     async def alpha_executor(args):
         return "alpha-result"

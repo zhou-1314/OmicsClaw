@@ -557,6 +557,7 @@ class ChatRequest(BaseModel):
     permission_profile: str = "default"
     files: Optional[list[dict]] = None
     system_prompt_append: str = ""
+    analysis_router_mode: str = ""
 
 
 class AbortRequest(BaseModel):
@@ -1833,6 +1834,7 @@ async def chat_stream(req: ChatRequest):
                 max_tokens_override=max_tokens_override,
                 system_prompt_append=req.system_prompt_append,
                 mode=req.mode,
+                analysis_router_mode=req.analysis_router_mode,
                 cancel_event=cancel_event,
             )
             _active_envelopes[session_id] = envelope
