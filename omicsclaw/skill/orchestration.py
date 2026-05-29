@@ -418,6 +418,32 @@ async def _run_omics_skill_step(**kwargs) -> dict:
 _lookup_skill_info = lookup_skill_info
 
 
+def load_skill_md(skill_key: str, *, max_chars: int = 8000) -> str:
+    """Return the matched skill's ``SKILL.md`` text, capped, as the method menu.
+
+    Per ADR 0015, exact-skill assisted parameterization feeds the matched
+    skill's SKILL.md (its method menu, defaults, parameters, preconditions) into
+    the outer LLM as a deterministic input. Returns ``""`` when the skill or its
+    SKILL.md is missing — callers treat that as "no menu to inject" and degrade
+    gracefully rather than failing the turn.
+    """
+    try:
+        info = _lookup_skill_info(skill_key, force_reload=False) or {}
+        script = info.get("script")
+        if not script:
+            return ""
+        skill_md_path = Path(script).parent / "SKILL.md"
+        if not skill_md_path.is_file():
+            return ""
+        text = skill_md_path.read_text(encoding="utf-8", errors="replace").strip()
+    except Exception as exc:
+        logger.warning("load_skill_md(%s) failed (non-fatal): %s", skill_key, exc)
+        return ""
+    if len(text) > max_chars:
+        text = text[:max_chars].rstrip() + "\n\n…(SKILL.md truncated)…"
+    return text
+
+
 def _resolve_param_hint_info(skill_key: str, method: str) -> tuple[str, dict, dict]:
     """Return (method_lower, tip_info, skill_info) from SKILL.md param_hints."""
     method_lower = (method or "").lower().strip()

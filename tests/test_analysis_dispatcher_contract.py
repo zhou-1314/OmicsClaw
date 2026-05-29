@@ -231,6 +231,41 @@ def test_extract_valid_input_paths_keeps_untrusted_paths_out_with_subdir_discove
     assert extract_valid_input_paths(f"use {outside / 'secret.h5ad'}") == []
 
 
+def test_exact_skill_plan_honors_named_method() -> None:
+    """Run-as-typed (``auto``): a method named in the request rides into the plan
+    instead of being dropped — the fix for the 'CellCharter ignored' regression.
+    Uses the real registry, whose ``param_hints`` supply the valid method names.
+    """
+    from omicsclaw.skill.orchestration import _lookup_skill_info
+
+    _lookup_skill_info("spatial-domains", force_reload=True)  # real registry, order-independent
+    route = _route(AnalysisRouteKind.EXACT_SKILL, chosen_skill="spatial-domains")
+    query = "用 cellcharter 对数据进行 spatial niche 鉴定"
+    plan = build_analysis_tool_plan(route, user_text=query)
+
+    assert plan is not None
+    name, args = plan.calls[0]
+    assert name == "omicsclaw"
+    assert args["skill"] == "spatial-domains"
+    assert args["mode"] == "path"
+    assert args["method"] == "cellcharter"
+    assert args["query"] == query
+
+
+def test_exact_skill_plan_omits_method_when_none_named() -> None:
+    """No method token in the request -> no ``method`` key; the skill's own
+    default method stays its concern."""
+    from omicsclaw.skill.orchestration import _lookup_skill_info
+
+    _lookup_skill_info("spatial-domains", force_reload=True)
+    route = _route(AnalysisRouteKind.EXACT_SKILL, chosen_skill="spatial-domains")
+    plan = build_analysis_tool_plan(route, user_text="进行 spatial niche 的鉴定")
+
+    assert plan is not None
+    _, args = plan.calls[0]
+    assert "method" not in args
+
+
 def test_partial_continuation_uses_skill_output_as_upstream_reference(tmp_path: Path) -> None:
     upstream = tmp_path / "skill-output"
     upstream.mkdir()

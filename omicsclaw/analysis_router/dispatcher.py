@@ -155,6 +155,37 @@ def _requests_demo(text: str) -> bool:
     return any(hint in lowered for hint in _DEMO_HINTS)
 
 
+def _extract_named_method(user_text: str, skill_key: str) -> str:
+    """Return a valid method explicitly named in ``user_text`` for ``skill_key``.
+
+    The Run-as-typed (``auto``) route honors a method the user named outright
+    (e.g. "…用 CellCharter…") instead of silently dropping it. Valid methods are
+    the skill's ``param_hints`` keys (method-keyed in SKILL.md); matching is
+    whole-token and case-insensitive. Typos are *not* corrected — fuzzy intent is
+    the assist-mode LLM's job, not the deterministic literal route. Returns ``""``
+    when no valid method token is present.
+    """
+    text = str(user_text or "").lower()
+    if not text or not skill_key:
+        return ""
+    try:
+        from omicsclaw.skill.orchestration import _lookup_skill_info
+
+        info = _lookup_skill_info(skill_key, force_reload=False) or {}
+        methods = [
+            str(m).strip().lower()
+            for m in (info.get("param_hints") or {})
+            if str(m).strip()
+        ]
+    except Exception:
+        return ""
+    # Longest method name first so a specific token wins over a substring.
+    for method in sorted(set(methods), key=len, reverse=True):
+        if re.search(r"(?<![a-z0-9])" + re.escape(method) + r"(?![a-z0-9])", text):
+            return method
+    return ""
+
+
 def build_analysis_tool_plan(
     route: AnalysisRoute,
     *,
@@ -191,33 +222,23 @@ def build_analysis_tool_plan(
                     ),
                 ),
             )
-        if not input_paths:
-            return DeterministicToolCallPlan(
-                route=route,
-                calls=(
-                    (
-                        "omicsclaw",
-                        {
-                            "skill": route.chosen_skill,
-                            "mode": "path",
-                            "query": user_text,
-                        },
-                    ),
-                ),
-            )
+        # Run-as-typed: honor an explicitly named method instead of dropping it,
+        # so `auto` runs e.g. CellCharter when the user said so. A path-less plan
+        # is still emitted when no input resolved (the executor reports the
+        # missing input); the named method rides along either way.
+        call_args: dict = {
+            "skill": route.chosen_skill,
+            "mode": "path",
+            "query": user_text,
+        }
+        if input_paths:
+            call_args["file_path"] = input_paths[0]
+        named_method = _extract_named_method(user_text, route.chosen_skill)
+        if named_method:
+            call_args["method"] = named_method
         return DeterministicToolCallPlan(
             route=route,
-            calls=(
-                (
-                    "omicsclaw",
-                    {
-                        "skill": route.chosen_skill,
-                        "mode": "path",
-                        "file_path": input_paths[0],
-                        "query": user_text,
-                    },
-                ),
-            ),
+            calls=(("omicsclaw", call_args),),
         )
 
     if route.kind is AnalysisRouteKind.PARTIAL_SKILL:

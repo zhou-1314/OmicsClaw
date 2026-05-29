@@ -289,6 +289,37 @@ def _format_autonomous_understanding_block(schema_report: str) -> str:
     return "\n\n".join([_AUTONOMOUS_UNDERSTANDING_DIRECTIVE, schema_report.strip()])
 
 
+_EXACT_SKILL_ASSISTED_PARAM_DIRECTIVE = (
+    "## Assisted Parameterization (Exact skill match)\n"
+    "This request maps to one built-in skill (its SKILL.md method menu is included\n"
+    "below); the *skill* choice is fixed. Your job is to recommend *how* to run it —\n"
+    "the method and key parameters — grounded in that method menu and, when present,\n"
+    "the inspected data schema below. Before calling the `omicsclaw` tool:\n"
+    "1. Always show a short recommendation: the chosen method, a one-line rationale,\n"
+    "   and any materially different alternative method.\n"
+    "2. If the user named a specific (valid) method, use it as-is — do not second-guess.\n"
+    "3. If the best method is clear or safe, proceed: call `omicsclaw` with that method\n"
+    "   and key parameters, explicitly stating the assumptions you made.\n"
+    "4. Ask the user ONE focused question ONLY when the choice is genuinely consequential\n"
+    "   (methods differ materially in result or cost and the request does not\n"
+    "   disambiguate). Otherwise do not interrogate — proceed with documented defaults.\n"
+    "5. If the inspected data is missing a precondition the method needs (e.g. no\n"
+    "   `obsm['X_pca']` / `obsm['spatial']`), do not run — state what is missing and the\n"
+    "   remediation (e.g. run the preprocessing skill first).\n"
+    "Recommend only WITHIN this skill: never silently fall back to an undocumented\n"
+    "default, and never switch skills (surface a near-tie as a suggestion, not a swap)."
+)
+
+
+def _format_exact_skill_assisted_param_block(skill_md: str, schema_report: str) -> str:
+    parts = [_EXACT_SKILL_ASSISTED_PARAM_DIRECTIVE]
+    if skill_md.strip():
+        parts.append("### Matched skill — method menu (SKILL.md)\n\n" + skill_md.strip())
+    if schema_report.strip():
+        parts.append(schema_report.strip())
+    return "\n\n".join(parts)
+
+
 async def _build_autonomous_understanding_context(
     user_content: str | list, *, mode: str | None = None
 ) -> str:
@@ -336,6 +367,68 @@ async def _build_autonomous_understanding_context(
     if not str(schema_report or "").startswith("## Data Inspection"):
         return ""
     return _format_autonomous_understanding_block(schema_report)
+
+
+async def _build_exact_skill_assisted_param_context(
+    user_content: str | list, *, mode: str | None = None
+) -> str:
+    """Data-grounded assisted parameterization for Exact skill matches (ADR 0015).
+
+    When a request routes to ``exact_skill`` (assist mode), inject the matched
+    skill's SKILL.md method menu plus — when a trusted input file is present —
+    its ``inspect_data`` schema, and direct the outer LLM to recommend the method
+    and key parameters *within that skill* (always showing the recommendation;
+    asking one focused question only on consequential ambiguity). Returns ``""``
+    for chat / partial / no-skill routes, when the router is off, or when neither
+    a method menu nor a schema is available — leaving the route context untouched.
+
+    This is the exact-skill analogue of ``_build_autonomous_understanding_context``;
+    the two are mutually exclusive on ``route.kind``, so at most one ``inspect_data``
+    round-trip fires per turn.
+    """
+    if _normalize_analysis_router_mode(mode) == ANALYSIS_ROUTER_MODE_OFF:
+        return ""
+    user_text = _extract_user_text(user_content)
+    if not user_text.strip():
+        return ""
+    try:
+        route = route_analysis_request(user_text)
+    except Exception as exc:
+        logger.warning("Assisted-parameterization routing failed (non-fatal): %s", exc)
+        return ""
+    if route.kind is not AnalysisRouteKind.EXACT_SKILL or not route.chosen_skill:
+        return ""
+
+    try:
+        from omicsclaw.skill.orchestration import load_skill_md
+
+        skill_md = load_skill_md(route.chosen_skill)
+    except Exception as exc:
+        logger.warning("load_skill_md failed (non-fatal): %s", exc)
+        skill_md = ""
+
+    schema_report = ""
+    try:
+        input_paths = extract_valid_input_paths(user_text)
+    except Exception:
+        input_paths = []
+    if input_paths:
+        try:
+            from omicsclaw.runtime.tools.builders.agent_executors import (
+                execute_inspect_data,
+            )
+
+            report = await execute_inspect_data({"file_path": input_paths[0]})
+            if str(report or "").startswith("## Data Inspection"):
+                schema_report = report
+        except Exception as exc:
+            logger.warning(
+                "Assisted-parameterization inspect_data failed (non-fatal): %s", exc
+            )
+
+    if not skill_md and not schema_report:
+        return ""
+    return _format_exact_skill_assisted_param_block(skill_md, schema_report)
 
 
 def _build_engine_dependencies(*, usage_accumulator=None) -> EngineDependencies:
@@ -1045,6 +1138,10 @@ async def llm_tool_loop(
         user_content,
         mode=analysis_router_mode,
     )
+    exact_skill_assisted_param_context = await _build_exact_skill_assisted_param_context(
+        user_content,
+        mode=analysis_router_mode,
+    )
 
     _ensure_system_prompt()
     deps = _build_engine_dependencies(usage_accumulator=usage_accumulator)
@@ -1076,6 +1173,7 @@ async def llm_tool_loop(
             system_prompt_append,
             analysis_route_context,
             autonomous_understanding_context,
+            exact_skill_assisted_param_context,
         ),
         mode=mode,
         request_tool_approval=request_tool_approval,

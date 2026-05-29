@@ -90,8 +90,11 @@ The `app/`, `<platform>/` prefixes are structural — they prevent any cross-sur
 **Analysis Router**: The analysis-intent decision boundary that classifies a user request as non-analysis chat, an Exact skill match, a Partial skill match, or a No skill match.
 _Avoid_: "orchestrator" (reserved for orchestration skills), "planner", "gateway"
 
-**Deterministic route, assisted parameterization**: The execution rule for an Exact skill match: the Analysis Router chooses the skill, while LLM-assisted preflight fills parameters and asks for confirmation when needed.
-_Avoid_: "LLM decides the skill", "fully bypass the LLM"
+**Deterministic route, assisted parameterization**: The execution rule for an Exact skill match under the default `assist` mode. The Analysis Router fixes *which* skill runs (deterministic); the outer LLM then recommends *how* — the method and key parameters — grounded in two deterministically-supplied inputs: the matched skill's SKILL.md (its method menu, defaults, parameters, preconditions) and an `inspect_data` schema of the input. The recommendation (chosen method, rationale, near-tied alternative skills) is always shown. The LLM proceeds without blocking when the choice is safe — stating its assumptions — and asks exactly one focused question only on consequential ambiguity, per the **assisted-parameterization rule**: (1) a method named in the request is used as-is; (2) a safe/clear choice proceeds with stated assumptions; (3) a materially different, query-unresolved choice asks one focused question via the structured preflight channel; (4) a missing precondition (e.g. absent `obsm["X_pca"]`) blocks with remediation instead of running. Recommendation scope stays *within* the chosen skill; it never reselects the skill.
+_Avoid_: "run the skill's default method silently" (that is the `auto` **Run-as-typed route**, not assisted parameterization), "LLM decides the skill", "fully bypass the LLM"
+
+**Run-as-typed route**: The Exact-skill execution rule under `OMICSCLAW_ANALYSIS_ROUTER_MODE=auto` — the Analysis Router builds and runs the deterministic skill call with no outer-LLM step. It honors a method explicitly named in the request but performs no recommendation, data inspection, or confirmation. `auto` is the literal "run what I said" power-user path; the intelligent path is **Deterministic route, assisted parameterization** under the default `assist` mode.
+_Avoid_: "auto means smarter", "auto runs the recommendation"
 
 **Autonomous Analysis Path**: The fallback analysis route that asks the LLM to generate and execute bounded local code when a request is not fully covered by an existing OmicsClaw skill.
 _Avoid_: "reference path", "free-code mode", "fallback script"

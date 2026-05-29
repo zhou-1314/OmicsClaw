@@ -83,10 +83,15 @@ they match; generated-code analysis now has an independent
 `omicsclaw/autonomous/` runner with approval-gated workspace writes, bounded
 LLM repair, and skill-like manifest/completion outputs. Runtime behavior is
 controlled by `OMICSCLAW_ANALYSIS_ROUTER_MODE=off|assist|auto` and defaults to
-`assist`, which injects structured route context without deterministic
-execution. `auto` submits exact/no/partial analysis routes through the existing
-tool policy, approval, transcript, and completion-result pipeline instead of
-bypassing the chat engine contracts. The legacy
+`assist`. In `assist`, an Exact skill match gets **data-grounded assisted
+parameterization** ([ADR 0015](docs/adr/0015-exact-skill-assisted-parameterization.md)):
+the skill choice stays deterministic while the outer LLM recommends the method
+and parameters *within* it — grounded in the matched skill's SKILL.md method
+menu and an `inspect_data` schema — asking one focused question only on
+consequential ambiguity. `auto` is the **run-as-typed** literal path: it submits
+exact/no/partial analysis routes through the existing tool policy, approval,
+transcript, and completion-result pipeline (no outer LLM) and honors a method
+explicitly named in the request. The legacy
 `OMICSCLAW_ANALYSIS_ROUTER_ENABLED=true` flag is still accepted as `auto`.
 
 ## ⚡ Quick Start
