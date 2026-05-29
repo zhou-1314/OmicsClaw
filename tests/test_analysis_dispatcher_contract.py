@@ -47,6 +47,27 @@ def _route(
     )
 
 
+def _only_trust(monkeypatch, tmp_path: Path, *trusted: Path) -> None:
+    """Make path resolution hermetic: trust only ``trusted`` and point the
+    project-root / DATA_DIR fallbacks at an empty sandbox.
+
+    ``validate_input_path`` falls back to ``OMICSCLAW_DIR`` and ``DATA_DIR``
+    and treats anything under the project root as trusted, so merely setting
+    ``OMICSCLAW_DATA_DIRS`` is not enough: a file with the same basename
+    sitting in the real repo ``data/`` (present on a dev machine, gitignored in
+    CI) would otherwise leak into the result. Patching the roots to empty tmp
+    dirs closes every leak vector and keeps the test deterministic everywhere.
+    """
+    from omicsclaw.runtime.agent import state
+    from omicsclaw.services import path_validation
+
+    empty = tmp_path / "_empty_project_root"
+    (empty / "data").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(state, "OMICSCLAW_DIR", empty)
+    monkeypatch.setattr(state, "DATA_DIR", empty / "data")
+    monkeypatch.setattr(path_validation, "TRUSTED_DATA_DIRS", list(trusted))
+
+
 def test_exact_skill_plan_uses_existing_tool_for_missing_path_instead_of_demo() -> None:
     route = _route(AnalysisRouteKind.EXACT_SKILL, chosen_skill="sc-qc")
 
@@ -131,10 +152,7 @@ def test_exact_skill_plan_resolves_bare_filename_in_trusted_dir(monkeypatch, tmp
     trusted.mkdir()
     data_path = trusted / "slideseqv2_mouse_hippocampus.h5ad"
     data_path.write_bytes(b"")
-    monkeypatch.setenv("OMICSCLAW_DATA_DIRS", str(trusted))
-    from omicsclaw.services import path_validation
-
-    path_validation.TRUSTED_DATA_DIRS.clear()
+    _only_trust(monkeypatch, tmp_path, trusted)
     route = _route(AnalysisRouteKind.EXACT_SKILL, chosen_skill="spatial-domains")
 
     query = "对slideseqv2_mouse_hippocampus.h5ad执行spatial niche的鉴定"
@@ -152,6 +170,65 @@ def test_exact_skill_plan_resolves_bare_filename_in_trusted_dir(monkeypatch, tmp
             },
         ),
     )
+
+
+def test_exact_skill_plan_resolves_bare_filename_in_trusted_subdir(monkeypatch, tmp_path: Path) -> None:
+    """A bare filename living in a *subdirectory* of a trusted dir must still
+    resolve. This is the real Desktop shape: the app trusts the workspace
+    *root* (``_apply_runtime_workspace`` appends ``<workspace>``), but users
+    keep data under ``<workspace>/data/``.
+
+    Regression: ``extract_valid_input_paths`` resolved bare names via
+    ``validate_input_path`` (top level of each trusted dir only), while the
+    skill executor resolves them via ``discover_file`` (recursive rglob). A
+    file the executor could find was invisible to the deterministic router, so
+    the plan ran path-less and the executor reported 'No input file available'
+    even though the file plainly existed.
+    """
+    workspace = tmp_path / "workspace"
+    (workspace / "data").mkdir(parents=True)
+    data_path = workspace / "data" / "slideseqv2_mouse_hippocampus.h5ad"
+    data_path.write_bytes(b"")
+    # Trust the workspace ROOT — the file lives one level down in data/.
+    _only_trust(monkeypatch, tmp_path, workspace)
+    route = _route(AnalysisRouteKind.EXACT_SKILL, chosen_skill="spatial-domains")
+
+    query = "对slideseqv2_mouse_hippocampus.h5ad使用cellchater进行spatial niche的鉴定"
+    plan = build_analysis_tool_plan(route, user_text=query)
+
+    assert plan is not None
+    assert plan.calls == (
+        (
+            "omicsclaw",
+            {
+                "skill": "spatial-domains",
+                "mode": "path",
+                "file_path": str(data_path.resolve()),
+                "query": query,
+            },
+        ),
+    )
+
+
+def test_extract_valid_input_paths_keeps_untrusted_paths_out_with_subdir_discovery(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The recursive discovery fallback must not widen trust: a bare name that
+    only matches a file *outside* the trusted dirs stays unresolved, and an
+    explicit untrusted absolute path is still dropped."""
+    from omicsclaw.analysis_router.dispatcher import extract_valid_input_paths
+
+    workspace = tmp_path / "workspace"
+    (workspace / "data").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.h5ad").write_bytes(b"")
+    _only_trust(monkeypatch, tmp_path, workspace)
+
+    # bare name only present outside trusted dirs -> not discovered
+    assert extract_valid_input_paths("分析 secret.h5ad") == []
+    # explicit untrusted absolute path -> still rejected
+    assert extract_valid_input_paths(f"use {outside / 'secret.h5ad'}") == []
 
 
 def test_partial_continuation_uses_skill_output_as_upstream_reference(tmp_path: Path) -> None:

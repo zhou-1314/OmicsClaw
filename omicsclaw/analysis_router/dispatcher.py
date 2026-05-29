@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from omicsclaw.services.path_validation import validate_input_path
+from omicsclaw.services.path_validation import discover_file, validate_input_path
 
 from .models import AnalysisRoute, AnalysisRouteKind
 
@@ -69,11 +69,26 @@ def extract_valid_input_paths(text: str) -> list[str]:
     seen: set[str] = set()
     text = str(text or "")
 
-    def _add(raw_token: str) -> None:
+    def _add(raw_token: str, *, allow_discovery: bool = False) -> None:
         raw_token = _strip_path_punctuation(raw_token)
         if not raw_token:
             return
         resolved = validate_input_path(raw_token, allow_dir=True)
+        if resolved is None and allow_discovery:
+            # ``validate_input_path`` only checks the top level of each trusted
+            # dir, but the skill executor resolves bare names with
+            # ``discover_file`` (recursive rglob within the trusted dirs). A
+            # file one level down — e.g. ``<workspace>/data/foo.h5ad`` when the
+            # Desktop app trusts ``<workspace>`` — is therefore visible to the
+            # executor but not to this path extraction, so the deterministic
+            # router built a path-less plan and the run reported 'No input file
+            # available'. Mirror the executor: fall back to ``discover_file``,
+            # re-validating each hit so trust is never widened. ``discover_file``
+            # sorts newest-first, so the first trusted match is the best guess.
+            for found in discover_file(raw_token):
+                resolved = validate_input_path(str(found), allow_dir=True)
+                if resolved is not None:
+                    break
         if resolved is None:
             return
         key = str(resolved)
@@ -83,12 +98,14 @@ def extract_valid_input_paths(text: str) -> list[str]:
         paths.append(key)
 
     # 1. Explicit path tokens (~, /, ./, ../) — preserved first so an explicit
-    #    path keeps priority in the returned order.
+    #    path keeps priority in the returned order. No recursive discovery:
+    #    an explicit path that fails trust validation is rejected, not widened.
     for match in _PATH_TOKEN_RE.finditer(text):
         _add(match.group("path"))
-    # 2. Bare data filenames resolved against the trusted data directories.
+    # 2. Bare data filenames resolved against the trusted data directories,
+    #    including files nested in their subdirectories (recursive discovery).
     for match in _BARE_DATA_FILE_RE.finditer(text):
-        _add(match.group(1))
+        _add(match.group(1), allow_discovery=True)
     return paths
 
 
