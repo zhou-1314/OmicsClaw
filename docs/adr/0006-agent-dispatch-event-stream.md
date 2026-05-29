@@ -38,8 +38,8 @@ shape:
    does not by itself fix this, but it gives the slash dispatcher a natural
    home (an event handled before loop entry).
 
-3. **CellClaw-shaped temptation.** The user proposed mirroring CellClaw's
-   `Gateway → Redis queue → Worker → EventBus` four-layer ingress pipeline.
+3. **Reference-style temptation.** The user proposed mirroring the reference
+   implementation's `Gateway → Redis queue → Worker → EventBus` four-layer ingress pipeline.
    That pipeline buys: cross-process scaling, crash replay via persisted
    queue, multi-tenant fair scheduling, and decoupled inbound/compute event
    loops. In a single-machine single-user research tool with the explicit
@@ -49,9 +49,9 @@ shape:
    required"; ADR 0005 Q1-B deferred the same shape three days ago as
    "Left as a possible future ADR if a real cross-Surface concern emerges".
    The cross-Surface concern that did emerge is problem (1), not the
-   scaling concerns that motivate CellClaw.
+   scaling concerns that motivate the reference implementation.
 
-CellClaw's own code, read at HEAD: `cli/chat.py:211` calls
+The reference implementation's own code, read at HEAD: `cli/chat.py:211` calls
 `self.worker.run_agent_task(...)` directly, bypassing the queue. The
 "unified pipeline" is in fact two-thirds unified (Web + Channel) and one
 third in-process direct-call. Even in the reference implementation, CLI
@@ -71,7 +71,7 @@ order:
 
 **Q1 — Layer: L1 in-process only.** No Redis, no separate worker process,
 no persistent queue, no EventBus across process boundaries. Reasons: the
-four payoffs of CellClaw's L2 layer (cross-process scale, crash replay,
+four payoffs of the reference implementation's L2 layer (cross-process scale, crash replay,
 multi-tenant scheduling, inbound/compute decoupling) all assume an
 environment OmicsClaw explicitly is not. ADR 0003's "no caller required
 it" test still applies. The cross-Surface concern that motivates this ADR
@@ -179,10 +179,10 @@ the audit missed, it can stop at L3 without unwinding the dispatcher.
 
 ## Considered Options
 
-- **Option L2 — full CellClaw mirror.** Redis queue + separate worker
+- **Option L2 — full reference mirror.** Redis queue + separate worker
   process + EventBus. Rejected as documented in §Context: the four
   payoffs don't apply to a single-machine single-user research tool;
-  ADR 0003 already rejected the same shape; CellClaw's own CLI opts out.
+  ADR 0003 already rejected the same shape; the reference implementation's own CLI opts out.
 
 - **Option Scope-A — event stream only, leave globals.** Cheaper to
   ship but doesn't fix problem (1); reduces to "different calling

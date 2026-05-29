@@ -47,15 +47,15 @@ detector (wall-clock timeout, per-tool token budget — both listed in
 ADR 0007 §Open questions) will repeat the same archaeology against
 a function that is now 491 lines instead of 460.
 
-### Why not the CellClaw approach
+### Why not the reference approach
 
-CellClaw's analog `DecisionExecutionEngine`
+The reference implementation's analog `DecisionExecutionEngine`
 (`agent/execution_engine.py:49`) reaches **1348 lines** and uses
 class methods + Template Method hooks (`_before_iteration`,
 `_after_decision`, `_handle_terminal_decision`) to split concerns.
 ADR 0007 §Q3 explicitly rejected importing that shape because
 OmicsClaw runs a single execution mode (no direct-vs-queue split
-that motivated CellClaw's class hierarchy), and because
+that motivated the reference implementation's class hierarchy), and because
 `QueryEngineCallbacks` already provides composition-style variation.
 Reaffirming here: this ADR does **not** promote `run_query_engine`
 to a class. The decomposition is into free private async functions
@@ -289,7 +289,7 @@ After L4, one final regression matches the post-ADR-0007 baseline
 ## Considered Options
 
 - **Option Class-Promotion — make `run_query_engine` a class with
-  Template Method hooks.** Mirrors CellClaw's
+  Template Method hooks.** Mirrors the reference implementation's
   `DecisionExecutionEngine`. Rejected for the same reason ADR 0007
   §Q3 rejected it: composition via `QueryEngineCallbacks` already
   provides variation; class promotion would create two ways to do

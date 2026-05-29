@@ -20,7 +20,7 @@ Two patterns are recognised today:
   used here — a tool that fails with different arguments four times
   is still a tool that is unreliable in this loop.
 
-Defaults inherit CellClaw's numbers (4-of-6, 4-of-8). Tune in a follow
+Defaults inherit the reference implementation's numbers (4-of-6, 4-of-8). Tune in a follow
 up PR if real traces motivate changes; this module exposes the
 thresholds as module-level constants so a test or a `/diagnostics`
 slash command can monkeypatch them.

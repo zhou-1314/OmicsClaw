@@ -8,10 +8,10 @@ Accepted (2026-05-16).
 
 A grilling session compared OmicsClaw's `run_query_engine`
 (`runtime/agent/query_engine.py:480`, 460+ line body inside a 945-line module)
-with CellClaw's `DecisionExecutionEngine`
-(`/home/weige/project/repo_learn/cellclaw_source/agent/execution_engine.py:49`,
-inside a 1348-line module). The goal was to identify which of CellClaw's
-machinery actually pays off in OmicsClaw's single-user single-machine
+with the reference implementation's `DecisionExecutionEngine`
+(its `agent/execution_engine.py:49`,
+inside a 1348-line module). The goal was to identify which of the reference
+implementation's machinery actually pays off in OmicsClaw's single-user single-machine
 shape, given the constraints already pinned by ADRs 0003 / 0005 / 0006.
 
 The audit produced a sharper map of what already exists versus what is
@@ -23,7 +23,7 @@ genuinely missing.
    `QueryEngineCallbacks` — an eight-field callback dataclass
    (`on_stream_content`, `before_tool`, `after_tool`,
    `on_context_compacted`, …). This is functionally the equivalent of
-   CellClaw's Template Method hooks
+   the reference implementation's Template Method hooks
    (`_before_iteration` / `_after_decision` / `_handle_terminal_decision`),
    only delivered as composition rather than inheritance. Introducing a
    subclass hierarchy on top would be a parallel mechanism for the same
@@ -36,14 +36,14 @@ genuinely missing.
    `_maybe_require_batch_key_selection`), it returns a clarification
    string as the tool's result; the LLM reads it on the next turn and
    produces a natural-language ask. This is the OmicsClaw analogue of
-   CellClaw's `DecisionType.ASK_USER`. No Surface today renders
+   the reference implementation's `DecisionType.ASK_USER`. No Surface today renders
    clarifications differently from final replies, so the explicit
    decision-type machinery would add ceremony without UI payoff.
 
 3. **Single execution mode.** A grep over the tree confirms
    `run_query_engine` has exactly one caller (`engine/loop.py:190`),
    `run_engine_loop` has exactly one caller (`runtime/agent/loop.py:614`).
-   CellClaw's `DecisionExecutionEngine` / `DecisionExecutionRuntime`
+   The reference implementation's `DecisionExecutionEngine` / `DecisionExecutionRuntime`
    split exists because they run the same loop in two modes — direct
    in-process execution and worker-queue execution. OmicsClaw runs only
    the direct mode (ADR 0006 closed the door on queue-backed execution).
@@ -51,7 +51,7 @@ genuinely missing.
 
 **Genuinely missing — the one gap this ADR closes:**
 
-CellClaw passes a `LoopState` instance through every iteration of
+The reference implementation passes a `LoopState` instance through every iteration of
 `execute_decision_loop` and reads `state.tools_executed`,
 `state.recent_errors` from `before_iteration` / `after_decision` hooks.
 OmicsClaw's equivalent counters live as **local variables inside the
@@ -63,7 +63,7 @@ of unhealthy loop without invasive surgery into the function body:
 
 - **Ping-pong**: the LLM oscillates between two tools (A-B-A-B) or
   re-issues the same tool with the same arguments (A-A-A-A) without
-  the result actually advancing the answer. CellClaw counts these via
+  the result actually advancing the answer. The reference implementation counts these via
   `tool_loop_pingpong_threshold = 6` against `tool_call_history`.
 
 - **Repeated failure**: the LLM keeps invoking a tool that keeps
@@ -77,12 +77,12 @@ of unhealthy loop without invasive surgery into the function body:
   data. Adding them one-at-a-time as local-variable patches grows the
   function past readability.
 
-Cellclaw's `tool_call_history: list[str]` records only tool **names** —
+The reference implementation's `tool_call_history: list[str]` records only tool **names** —
 a stricter design would track names with argument digests so
 `grep(pattern="A")` followed by `grep(pattern="B")` is not falsely
 classified as ping-pong. This ADR adopts the stricter variant.
 
-The session also flagged what to **not** import from CellClaw:
+The session also flagged what to **not** import from the reference implementation:
 
 - `DecisionExecutionEngine` base + `DecisionExecutionRuntime` subclass —
   Template Method serves their dual execution mode; OmicsClaw has only
@@ -114,7 +114,7 @@ The five design decisions resolved in the session, in dependency order:
 
 **Q1 — Service shape: single-user local tool.** No multi-tenant
 SaaS, no IDE-protocol integration. This kills any motivation for
-the heavier CellClaw machinery (ACP, queue, worker, DecisionType for
+the heavier reference machinery (ACP, queue, worker, DecisionType for
 UI differentiation). Aligns with ADR 0006 Q1 and CLAUDE.md §Safety
 Rules.
 
@@ -167,7 +167,7 @@ Code performs similar mid-loop self-correction.
 
 ### Threshold defaults
 
-Adopt CellClaw's numbers for the first ship; tune in a follow-up PR
+Adopt the reference implementation's numbers for the first ship; tune in a follow-up PR
 if real traces motivate changes.
 
     pingpong:           same (tool_name, args_digest) appears ≥ 4 times
@@ -222,14 +222,14 @@ Surface without unwinding L0/L1.
 ## Considered Options
 
 - **Option Engine-Class — promote `run_query_engine` to a class with
-  Template Method hooks.** Mirrors CellClaw's
+  Template Method hooks.** Mirrors the reference implementation's
   `DecisionExecutionEngine`. Rejected because
   `QueryEngineCallbacks` already implements composition-style
   variation; adding a parallel inheritance mechanism creates two
   ways to do one thing.
 
 - **Option Engine-Class-Plus-DecisionType — Engine-Class plus
-  explicit `DecisionType` enum.** Mirrors CellClaw end-to-end.
+  explicit `DecisionType` enum.** Mirrors the reference implementation end-to-end.
   Rejected on top of Engine-Class because the three Surfaces today
   render every reply as a stream of tokens regardless of decision
   type — there is no UI differentiation to consume the enum.
@@ -270,7 +270,7 @@ Surface without unwinding L0/L1.
   already greppable.
 
 - **Option Args-Digest-Omitted — track tool names only, mirroring
-  CellClaw exactly.** Rejected because the false-positive rate is
+  the reference implementation exactly.** Rejected because the false-positive rate is
   unacceptable: `grep(pattern="A")` then `grep(pattern="B")` would
   count as ping-pong. SHA-1 over canonicalised args is cheap
   (microseconds) and bounds the state size by digest cardinality
@@ -385,7 +385,7 @@ ADRs 0004, 0005, and 0006.
 
 Tracked but not resolved here:
 
-- **Threshold tuning.** CellClaw's numbers (4-of-6 ping-pong,
+- **Threshold tuning.** The reference implementation's numbers (4-of-6 ping-pong,
   4-of-8 failure) are inherited as v1 defaults. Whether they are
   right for the OmicsClaw skill mix (where some legitimate
   workflows iterate a single tool with stepping arguments — e.g.

@@ -15,8 +15,9 @@ ADR 0006 §"Open questions" left one item explicitly deferred:
 > the contract. Revisit when a real cross-Surface cancel concern
 > emerges.
 
-Two days later (2026-05-18) a grilling session against CellClaw's
-`agent/tools/base.py:execute_with_cancel_check` re-opened the question.
+Two days later (2026-05-18) a grilling session against the reference
+implementation's `agent/tools/base.py:execute_with_cancel_check`
+re-opened the question.
 The session produced two findings that together cross the "real concern
 emerged" bar:
 
@@ -41,11 +42,11 @@ cancellation. The subprocess keeps running in its detached process
 group even though the user pressed the abort button.
 
 The grilling session then surfaced a third finding that reshaped the
-ADR from "introduce CellClaw's mechanism" to "wire OmicsClaw's existing
-chain":
+ADR from "introduce the reference implementation's mechanism" to "wire
+OmicsClaw's existing chain":
 
 **Finding 3 — OmicsClaw already has a more thorough subprocess-level
-cancel than CellClaw.** A trace of `cancel_event` references through
+cancel than the reference implementation.** A trace of `cancel_event` references through
 the tree shows two disconnected halves:
 
 | Side | Files | What it does |
@@ -62,16 +63,16 @@ Surfaces (Channel, Desktop, CLI) actually exercise. A `grep -rn
 `dispatcher.py`'s outermost `try/except asyncio.CancelledError`
 clean-up — zero in `query_engine.py`, zero in `runtime/tools/`.
 
-In other words: the cancellation infrastructure is **stronger than
-CellClaw's** (CellClaw's `execute_with_cancel_check` only `task.cancel()`s
+In other words: the cancellation infrastructure is **stronger than the
+reference implementation's** (the reference implementation's `execute_with_cancel_check` only `task.cancel()`s
 the coroutine; OmicsClaw's `subprocess_driver` actively `killpg`s the
 process group). The gap is structural, not capability — the chat
 loop and the skill runner have never been wired together for cancel
 even though both individually support it.
 
-### Why not import CellClaw's mechanism
+### Why not import the reference implementation's mechanism
 
-CellClaw's `execute_with_cancel_check` (`agent/tools/base.py:100-156`)
+The reference implementation's `execute_with_cancel_check` (`agent/tools/base.py:100-156`)
 is a 56-line `asyncio.wait_for + asyncio.shield` polling wrapper that
 checks `cancel_event` every 50ms. It is a perfect fit for cooperative
 cancellation of pure-coroutine tools that do not spawn subprocesses.
@@ -115,11 +116,11 @@ the two together explain why this is a *contract* issue and not a
 patch. (2) and (3) are downstream beneficiaries called out in
 §Consequences but not used as drivers.
 
-**Q2 — Scope: wire the existing chain, do not introduce CellClaw's
-`execute_with_cancel_check`.** The grilling session found OmicsClaw's
+**Q2 — Scope: wire the existing chain, do not introduce the reference
+implementation's `execute_with_cancel_check`.** The grilling session found OmicsClaw's
 `skill/execution/async_subprocess_driver.py:59-83` already implements
 SIGTERM→grace→SIGKILL via `os.killpg`, reaching grandchild processes
-via `start_new_session=True`. CellClaw's wrapper is a coarser-grained
+via `start_new_session=True`. The reference implementation's wrapper is a coarser-grained
 `task.cancel()` + 2s wait. Importing the latter on top of the former
 would create two cancel mechanisms for the same concern — the same
 "parallel variation mechanism" anti-pattern ADR 0007 §Q3 and ADR
@@ -278,7 +279,7 @@ signatures.
 
 ## Considered Options
 
-- **Option CellClaw-Mechanism — import `execute_with_cancel_check`.**
+- **Option Reference-Mechanism — import `execute_with_cancel_check`.**
   56-line `asyncio.wait_for + shield` polling wrapper. Rejected because
   `skill/execution/async_subprocess_driver.py:59-83` already implements
   stronger subprocess-level cancel via killpg; importing the wrapper
@@ -408,7 +409,7 @@ signatures.
   the asyncio loop busy for 5 minutes without spawning a subprocess
   would only respond to the outer `task.cancel()`, not to
   `cancel_event.set()`. If such a tool category appears, the
-  follow-up is to import CellClaw's `execute_with_cancel_check`-style
+  follow-up is to import the reference implementation's `execute_with_cancel_check`-style
   wrapper at that point (the rejected Option above), narrowly
   applied to that tool class.
 - One frozen-dataclass-with-mutable-Event idiom now exists in the
@@ -491,7 +492,7 @@ Tracked but not resolved here:
   subprocesses (none today, but `runtime/tools/builders/agent_executors.py`
   could grow some) would respond to the outer `task.cancel()` but
   not to `cancel_event.set()`. If such a tool category emerges,
-  apply CellClaw's `execute_with_cancel_check`-style wrapper
+  apply the reference implementation's `execute_with_cancel_check`-style wrapper
   narrowly to it, rather than promoting the wrapper to the whole
   executor path.
 
