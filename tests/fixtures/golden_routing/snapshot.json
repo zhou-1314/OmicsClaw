@@ -47,6 +47,29 @@
       ]
     },
     {
+      "query": "identify spatial niches in my hippocampus Slide-seqV2 data",
+      "file_path": "slideseqv2_mouse_hippocampus.h5ad",
+      "chosen_skill": "spatial-domains",
+      "coverage": "exact_skill",
+      "domain": "spatial",
+      "should_search_web": false,
+      "should_create_skill": false,
+      "top_3_candidates": [
+        {
+          "skill": "spatial-domains",
+          "score": 5.366666666666666
+        },
+        {
+          "skill": "spatial-preprocess",
+          "score": 3.2
+        },
+        {
+          "skill": "spatial-de",
+          "score": 2.55
+        }
+      ]
+    },
+    {
       "query": "identify spatially variable genes in my Visium data",
       "file_path": null,
       "chosen_skill": "spatial-genes",

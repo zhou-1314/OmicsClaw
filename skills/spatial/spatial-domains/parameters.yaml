@@ -171,6 +171,9 @@ trigger_keywords:
 - spatial domain
 - tissue region
 - niche
+- spatial niche
+- niche identification
+- niche detection
 - SpaGCN
 - STAGATE
 - CellCharter

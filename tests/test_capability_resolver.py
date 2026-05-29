@@ -52,6 +52,40 @@ def test_resolve_capability_detects_spatial_microenvironment_subset_skill():
     assert decision.chosen_skill == "spatial-microenvironment-subset"
 
 
+def test_resolve_capability_routes_singular_spatial_niche_to_domains():
+    """Regression: a 'spatial niche' request must reach ``spatial-domains``.
+
+    Singular "niche" used to score 2.35 (one description token ``spatial`` at
+    0.85 + the floor-weight ``niche`` keyword at 1.5) — just under the 3.0
+    no-skill threshold — because the skill's description/tags only carry the
+    *plural* "niches", so the singular form earned no description-overlap
+    credit. The request silently fell through to the autonomous code path
+    instead of the spatial niche/domain skill. Canonical singular phrasings
+    are now registered as trigger keywords on ``spatial-domains``.
+    """
+    for query in (
+        "spatial niche identification",
+        "perform spatial niche identification on slideseqv2_mouse_hippocampus.h5ad",
+        "niche identification",
+        "detect spatial niches",
+    ):
+        decision = resolve_capability(query, file_path="slideseqv2_mouse_hippocampus.h5ad")
+        assert decision.coverage == "exact_skill", f"{query!r} -> {decision.coverage}"
+        assert decision.chosen_skill == "spatial-domains", (
+            f"{query!r} -> {decision.chosen_skill!r}"
+        )
+
+
+def test_resolve_capability_keeps_local_niche_extraction_on_microenvironment_subset():
+    """Adding niche keywords to ``spatial-domains`` must not steal the local
+    'extract the niche *around* a cell type' intent from
+    ``spatial-microenvironment-subset``."""
+    decision = resolve_capability(
+        "extract the niche around T cells by spatial radius",
+        file_path="x.h5ad",
+    )
+    assert decision.chosen_skill == "spatial-microenvironment-subset"
+
 
 def test_resolve_capability_routes_spatial_raw_fastq_requests_to_spatial_domain():
     decision = resolve_capability(
