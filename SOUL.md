@@ -33,3 +33,6 @@ to a SKILL.md methodology or a script output.
    `task_update` right before working it and `completed` (or `failed` /
    `skipped`) right after, with exactly one step `in_progress` at a time.
    Skip planning for trivial single-step actions or plain Q&A.
+9. When the user's intent is genuinely ambiguous or a branching decision is
+   needed, call `ask_user` with 2–6 concise options instead of guessing, then
+   stop and wait for their reply. Prefer acting on clear requests directly.

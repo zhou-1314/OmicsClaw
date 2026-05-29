@@ -490,6 +490,46 @@ def build_engineering_tool_specs() -> list[ToolSpec]:
             input_validator=_validate_web_url_input,
             speculative_classifier=_classify_network_access,
         ),
+        ToolSpec(
+            name="ask_user",
+            description=(
+                "Ask the user to choose among a small set of options when their "
+                "intent is ambiguous or a decision is needed before proceeding. The "
+                "desktop shows the question as an interactive choice card. After "
+                "calling this, STOP and wait for the user's reply — do not call other "
+                "tools or answer on their behalf."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "The question to ask the user.",
+                    },
+                    "header": {
+                        "type": "string",
+                        "description": "Optional short label/category for the question.",
+                    },
+                    "options": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 2,
+                        "maxItems": 6,
+                        "description": "2–6 concise, mutually-exclusive choices.",
+                    },
+                    "allow_custom": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Whether the user may type their own answer.",
+                    },
+                },
+                "required": ["question", "options"],
+            },
+            surfaces=("bot", "interactive"),
+            read_only=True,
+            concurrency_safe=True,
+            policy_tags=("interactive", "ask"),
+        ),
     ]
 
 
@@ -1013,6 +1053,36 @@ def build_engineering_tool_executors(
             content = content[:max_chars].rstrip() + "\n\n... [truncated]"
         return f"URL: {url}\n\n{content}"
 
+    async def ask_user(args: dict[str, Any]) -> str:
+        question = str(args.get("question", "") or "").strip()
+        if not question:
+            return "Error: 'question' is required."
+        raw_options = args.get("options")
+        options = (
+            [str(o).strip() for o in raw_options if str(o).strip()]
+            if isinstance(raw_options, list)
+            else []
+        )
+        if len(options) < 2:
+            return "Error: 'options' must contain at least 2 choices."
+        options = options[:6]  # keep the card readable; spec is 2–6 choices
+        import uuid
+
+        payload = {
+            "kind": "ask_user",
+            "status": "needs_user_input",
+            "question_id": f"ask_{uuid.uuid4().hex[:10]}",
+            "question": question,
+            "header": str(args.get("header", "") or "").strip(),
+            "options": options,
+            "allow_custom": bool(args.get("allow_custom", True)),
+            "note": (
+                "Question presented to the user in the desktop UI. Stop and wait for "
+                "their reply; do not proceed or answer on their behalf."
+            ),
+        }
+        return json.dumps(payload, ensure_ascii=False)
+
     return {
         "tool_search": tool_search,
         "file_read": file_read,
@@ -1026,6 +1096,7 @@ def build_engineering_tool_executors(
         "task_update": task_update,
         "todo_write": todo_write,
         "web_fetch": web_fetch,
+        "ask_user": ask_user,
     }
 
 

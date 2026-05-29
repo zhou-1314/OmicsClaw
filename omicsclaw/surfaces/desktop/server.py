@@ -1070,6 +1070,7 @@ async def chat_stream(req: ChatRequest):
       - {"type": "tool_result",        "data": "{...}"} — tool result
       - {"type": "tool_timeout",       "data": "{...}"} — tool timed out
       - {"type": "permission_request", "data": "{...}"} — approval required
+      - {"type": "ask_user_question",  "data": "{...}"} — interactive choice prompt
       - {"type": "task_update",        "data": "{...}"} — task/todo sync
       - {"type": "result",             "data": "{...}"} — final usage summary
       - {"type": "keep_alive",         "data": ""}      — idle heartbeat
@@ -1662,6 +1663,32 @@ async def chat_stream(req: ChatRequest):
                             "tool_name": tool_name,
                             "kind": plan_kind,
                             "tasks": tasks_payload,
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    ),
+                )
+
+        if tool_name == "ask_user":
+            # The ask_user tool result carries a structured question; surface it
+            # to the desktop as an interactive choice card. The user answers by
+            # sending their choice as the next message (the agent resumes then).
+            try:
+                ask_obj = json.loads(content_str) if content_str else None
+            except (json.JSONDecodeError, TypeError, ValueError):
+                ask_obj = None
+            if isinstance(ask_obj, dict) and ask_obj.get("kind") == "ask_user":
+                await _queue_event(
+                    "ask_user_question",
+                    json.dumps(
+                        {
+                            "session_id": session_id,
+                            "tool_use_id": tool_use_id,
+                            "question_id": ask_obj.get("question_id", ""),
+                            "question": ask_obj.get("question", ""),
+                            "header": ask_obj.get("header", ""),
+                            "options": ask_obj.get("options", []),
+                            "allow_custom": bool(ask_obj.get("allow_custom", True)),
                         },
                         ensure_ascii=False,
                         default=str,

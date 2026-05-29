@@ -276,6 +276,29 @@ def _normalize_permission_resolution(
     return (behavior, updated_arguments, policy_state, message, persist)
 
 
+def _build_ask_user_interruption_message(tool_name: str, text: str | None) -> str:
+    """Halt the turn after `ask_user` so the agent waits for the user's choice.
+
+    Deterministic counterpart to the prompt guidance (SOUL rule 9 + tool
+    description): when the ask_user tool returns its structured question, end
+    the turn immediately instead of relying on the model to stop on its own.
+    """
+    if tool_name != "ask_user" or not text:
+        return ""
+    try:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return ""
+    if not isinstance(payload, dict) or payload.get("kind") != "ask_user":
+        return ""
+    question = str(payload.get("question") or "").strip()
+    return (
+        f"Awaiting the user's reply to: {question}"
+        if question
+        else "Awaiting the user's reply."
+    )
+
+
 def _build_preflight_interruption_message(text: str | None) -> str:
     payloads = extract_user_guidance_payloads(text)
     if not payloads:
@@ -739,6 +762,11 @@ async def _record_tool_outcome(
             )
         )
 
+    ask_user_interruption = _build_ask_user_interruption_message(
+        request.name, result_record.content
+    )
+    if ask_user_interruption:
+        return ask_user_interruption
     return _build_preflight_interruption_message(result_record.content)
 
 
