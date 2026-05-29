@@ -66,7 +66,7 @@ _Avoid_: "entry" (overloaded with engine entry-point); "front-end" (overloaded w
 _Avoid_: "Bot Surface" (overloaded with the OmicsBot persona in `SOUL.md`), "IM Surface" (only some of the 10 adapters are IM in the strict sense — Email isn't).
 
 **Channel Adapter**: The per-platform implementation that lives inside the Channel Surface. One file per platform under `omicsclaw/surfaces/channels/<name>.py`. Each adapter today calls `core.llm_tool_loop` directly (per ADR 0003).
-_Avoid_: "channel" (the bare word now denotes the Surface, not its adapters), "gateway" (cellclaw's word, not ours), "backend" (clashes with LLM/storage/queue backend).
+_Avoid_: "channel" (the bare word now denotes the Surface, not its adapters), "gateway" (the reference implementation's word, not ours), "backend" (clashes with LLM/storage/queue backend).
 
 **Desktop Surface**: The Surface served by `omicsclaw/surfaces/desktop/server.py` (FastAPI). Today streams intermediate events via SSE plus an `asyncio.Queue` callback bridge; supports cancel via `pending_preflight_requests`.
 
@@ -94,7 +94,7 @@ _Avoid_: "orchestrator" (reserved for orchestration skills), "planner", "gateway
 _Avoid_: "LLM decides the skill", "fully bypass the LLM"
 
 **Autonomous Analysis Path**: The fallback analysis route that asks the LLM to generate and execute bounded local code when a request is not fully covered by an existing OmicsClaw skill.
-_Avoid_: "CellClaw path", "free-code mode", "fallback script"
+_Avoid_: "reference path", "free-code mode", "fallback script"
 
 **Autonomous Code Runner**: The execution component used by the Autonomous Analysis Path to write generated code, run bounded local commands, and collect artifacts independently of the skill runner.
 _Avoid_: "custom_analysis_execute", "skill fallback executor", "hidden skill"
@@ -105,8 +105,14 @@ _Avoid_: "primary fallback", "new autonomous path"
 **Autonomous Code Loop**: The bounded plan-write-run-inspect-revise-report loop owned by the Autonomous Code Runner.
 _Avoid_: "replace run_query_engine", "chat loop", "skill loop"
 
-**Evidence-bound repair**: The retry rule for the Autonomous Code Loop: failed generated code may be revised only from captured stderr, exit code, artifact checks, file schema, the user request, and prior skill artifacts.
-_Avoid_: "keep trying", "self-debug until it works"
+**Evidence-bound repair**: The retry rule *inside* the Autonomous Code Loop: failed generated code may be revised only from captured stderr, exit code, and the injected data schema. Whether the result actually satisfies the user request — artifact checks against the plan, upstream skill artifacts — is **not** runner repair; that is **Autonomous result validation** in the outer loop.
+_Avoid_: "keep trying", "self-debug until it works", "the runner judges whether it answered the question"
+
+**Data-grounded autonomous planning**: The pre-codegen rule for a **No skill match** or **Partial skill match** that carries a trusted input file: the harness deterministically runs `inspect_data` and injects the real data schema (obs/var/obsm/layers/uns, shape, platform) into context *before* any autonomous codegen, and the outer LLM must emit a schema-grounded plan. The LLM asks the user one focused question only on consequential ambiguity; otherwise it proceeds with documented defaults and explicitly stated assumptions. The schema and plan are passed to the Autonomous Code Runner as context.
+_Avoid_: "skill preflight" (that fills skill parameters — a different step), "auto-inspect", "guess from the filename"
+
+**Autonomous result validation**: The outer-loop rule that, after the Autonomous Code Runner returns, the outer LLM judges the produced artifacts against the plan and intent and triggers a bounded re-delegation when they do not satisfy it — rather than trusting exit code 0. Judgment-based: no rigid expected-output contract.
+_Avoid_: "exit-code success", "trust the runner", "the runner self-validates"
 
 **Code Runner Permission Tier**: The risk class assigned to an Autonomous Code Runner action before execution.
 _Avoid_: "safety flag", "mode"
@@ -171,6 +177,8 @@ _Avoid_: "unknown request", "miss"
 - **Lifecycle-shape compatibility** keeps Autonomous run records compatible with existing job UI expectations while avoiding a hard dependency on the remote jobs router.
 - A **Partial skill match** passes prior skill outputs to the **Autonomous Code Runner** as **Upstream artifact references** by default, not by copying large artifacts.
 - **Output-shape parity** lets CLI, Desktop, memory, and review tooling read Autonomous Code Runner outputs through the same manifest and completion-report conventions used for skill outputs.
+- A **No skill match** or **Partial skill match** that carries a trusted input file passes through **Data-grounded autonomous planning** — deterministic `inspect_data` + schema injection + a schema-grounded plan — before the **Autonomous Code Runner** is invoked. The intelligence (planning, ambiguity judgement, interpretation) lives in the outer loop; the runner stays a bounded sandbox.
+- **Autonomous result validation** (outer loop), not **Evidence-bound repair** (runner), decides whether a run satisfied the user request; on failure it triggers a bounded re-delegation to the **Autonomous Code Runner**.
 
 ## Example dialogue
 

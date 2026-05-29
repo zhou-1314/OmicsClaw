@@ -939,6 +939,21 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                         "type": "integer",
                         "description": "Maximum evidence-bound repairs after the first execution. Default: 2, max: 2.",
                     },
+                    "data_schema": {
+                        "type": "string",
+                        "description": (
+                            "Inspected input data schema (obs/var/obsm/layers/uns keys, shape, "
+                            "platform) already provided to you in context. Pass it through so "
+                            "generated code and repairs use real keys instead of guessing."
+                        ),
+                    },
+                    "analysis_plan": {
+                        "type": "string",
+                        "description": (
+                            "Your concrete, data-grounded plan formed before delegating: steps, "
+                            "chosen method, expected outputs, and any stated assumptions."
+                        ),
+                    },
                 },
                 "required": ["goal"],
             },

@@ -2,11 +2,14 @@
 
 ## Status
 
-Accepted (2026-05-28).
+Accepted (2026-05-28). Amended by [ADR 0014](0014-outer-owned-autonomous-understanding.md)
+(2026-05-29): intent understanding, data inspection, and result validation move
+to the outer agent loop; `Evidence-bound repair` is narrowed to a
+runner-internal rule (stderr, exit code, injected schema).
 
 ## Context
 
-OmicsClaw's current chat flow is strongest when a user request maps to one of the registered analysis skills, but it is less flexible for requests that need bespoke code, post-processing, custom figures, or methods not yet packaged as skills. CellClaw's `DecisionExecutionEngine` demonstrates a useful structured plan/tool/repair loop, but replacing OmicsClaw's `run_query_engine` would discard existing Surface, tool-policy, approval, memory, completion-report, and skill-runner contracts.
+OmicsClaw's current chat flow is strongest when a user request maps to one of the registered analysis skills, but it is less flexible for requests that need bespoke code, post-processing, custom figures, or methods not yet packaged as skills. A reference implementation's `DecisionExecutionEngine` demonstrates a useful structured plan/tool/repair loop, but replacing OmicsClaw's `run_query_engine` would discard existing Surface, tool-policy, approval, memory, completion-report, and skill-runner contracts.
 
 ## Decision
 
@@ -55,4 +58,4 @@ Autonomous reports may include LLM-written scientific interpretation, but genera
 
 The existing `custom_analysis_execute` tool becomes a **Legacy custom analysis adapter**: it may remain for compatibility and may later forward into the Autonomous Code Runner, but it is no longer the recommended generated-code route.
 
-This preserves OmicsClaw's skill-first reproducibility where skills apply, adds CellClaw-style flexible code generation where they do not, and avoids coupling autonomous execution to the skill runner or to the remote HTTP jobs router.
+This preserves OmicsClaw's skill-first reproducibility where skills apply, adds reference-style flexible code generation where they do not, and avoids coupling autonomous execution to the skill runner or to the remote HTTP jobs router.

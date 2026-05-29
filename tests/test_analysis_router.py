@@ -236,3 +236,91 @@ def test_loop_analysis_router_legacy_boolean_maps_to_auto(monkeypatch) -> None:
     monkeypatch.setenv("OMICSCLAW_ANALYSIS_ROUTER_ENABLED", "true")
 
     assert _normalize_analysis_router_mode() == "auto"
+
+
+def test_understanding_preflight_injects_schema_for_no_skill_file(monkeypatch) -> None:
+    """ADR 0014: a no_skill/partial route with a trusted input file gets a
+    deterministic inspect_data schema plus the plan/validate/interpret directive."""
+    import asyncio
+
+    import omicsclaw.runtime.agent.loop as loop
+    import omicsclaw.runtime.tools.builders.agent_executors as execs
+
+    monkeypatch.delenv("OMICSCLAW_ANALYSIS_ROUTER_MODE", raising=False)
+    monkeypatch.setattr(loop, "extract_valid_input_paths", lambda text: ["/trusted/x.h5ad"])
+
+    async def _fake_inspect(args):
+        assert args["file_path"] == "/trusted/x.h5ad"
+        return "## Data Inspection: `x.h5ad`\n\n| Platform | Spatial transcriptomics |"
+
+    monkeypatch.setattr(execs, "execute_inspect_data", _fake_inspect)
+
+    ctx = asyncio.run(
+        loop._build_autonomous_understanding_context(
+            "compute a custom novel graph autocorrelation metric not in omicsclaw"
+        )
+    )
+    assert "Autonomous Understanding Preflight" in ctx
+    assert "## Data Inspection" in ctx
+    assert "`data_schema`" in ctx and "`analysis_plan`" in ctx
+
+
+def test_understanding_preflight_is_noop_for_chat_exact_and_no_file(monkeypatch) -> None:
+    """The preflight only fires for no_skill/partial routes that carry a trusted
+    file; chat / exact-skill / no-path / off-mode are all silent no-ops."""
+    import asyncio
+
+    import omicsclaw.runtime.agent.loop as loop
+    import omicsclaw.runtime.tools.builders.agent_executors as execs
+
+    monkeypatch.delenv("OMICSCLAW_ANALYSIS_ROUTER_MODE", raising=False)
+
+    inspect_calls = {"n": 0}
+
+    async def _fake_inspect(args):
+        inspect_calls["n"] += 1
+        return "## Data Inspection: `x.h5ad`"
+
+    monkeypatch.setattr(execs, "execute_inspect_data", _fake_inspect)
+
+    def _run(query):
+        return asyncio.run(loop._build_autonomous_understanding_context(query))
+
+    monkeypatch.setattr(loop, "extract_valid_input_paths", lambda text: ["/trusted/x.h5ad"])
+    assert _run("hello how are you") == ""  # chat route
+    assert _run("run spatial preprocessing") == ""  # exact_skill route
+
+    # no_skill route but no trusted path -> no inspection attempted
+    monkeypatch.setattr(loop, "extract_valid_input_paths", lambda text: [])
+    before = inspect_calls["n"]
+    assert _run("compute a custom novel graph autocorrelation metric not in omicsclaw") == ""
+    assert inspect_calls["n"] == before
+
+    # router disabled -> no-op even with a file
+    monkeypatch.setattr(loop, "extract_valid_input_paths", lambda text: ["/trusted/x.h5ad"])
+    monkeypatch.setenv("OMICSCLAW_ANALYSIS_ROUTER_MODE", "off")
+    assert _run("compute a custom novel graph autocorrelation metric not in omicsclaw") == ""
+
+
+def test_understanding_preflight_skips_non_h5ad_input(monkeypatch) -> None:
+    """A non-.h5ad path makes inspect_data return an error string, so the
+    preflight emits nothing and the base route context is left untouched."""
+    import asyncio
+
+    import omicsclaw.runtime.agent.loop as loop
+    import omicsclaw.runtime.tools.builders.agent_executors as execs
+
+    monkeypatch.delenv("OMICSCLAW_ANALYSIS_ROUTER_MODE", raising=False)
+    monkeypatch.setattr(loop, "extract_valid_input_paths", lambda text: ["/trusted/x.csv"])
+
+    async def _fake_inspect(args):
+        return "inspect_data only supports .h5ad files. Got: .csv"
+
+    monkeypatch.setattr(execs, "execute_inspect_data", _fake_inspect)
+
+    ctx = asyncio.run(
+        loop._build_autonomous_understanding_context(
+            "compute a custom novel graph autocorrelation metric not in omicsclaw"
+        )
+    )
+    assert ctx == ""

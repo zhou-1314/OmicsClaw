@@ -1991,6 +1991,8 @@ async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
             max_repair_attempts=max_repair_attempts,
             context=str(args.get("context", "") or ""),
             web_context=str(args.get("web_context", "") or ""),
+            data_schema=str(args.get("data_schema", "") or ""),
+            analysis_plan=str(args.get("analysis_plan", "") or ""),
             model_override=str(kwargs.get("model_override", "") or ""),
             provider_override=str(kwargs.get("provider_override", "") or ""),
             metadata={

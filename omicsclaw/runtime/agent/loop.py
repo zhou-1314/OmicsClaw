@@ -98,6 +98,7 @@ from omicsclaw.analysis_router import (
     AnalysisRouteKind,
     build_analysis_tool_plan,
     build_partial_autonomous_continuation,
+    extract_valid_input_paths,
     route_analysis_request,
 )
 from omicsclaw.runtime.tools.hooks import build_default_lifecycle_hook_runtime
@@ -263,6 +264,78 @@ def _build_analysis_route_context(user_content: str | list, *, mode: str | None 
         logger.warning("Analysis Router context failed (non-fatal): %s", exc)
         return ""
     return _format_analysis_route_context(route)
+
+
+_AUTONOMOUS_UNDERSTANDING_DIRECTIVE = (
+    "## Autonomous Understanding Preflight\n"
+    "This request matches no exact skill but carries a real input file, so it will run\n"
+    "through the autonomous code path. OmicsClaw has already inspected the file; the\n"
+    "deterministic data schema is included below. Before writing or running any code:\n"
+    "1. Form a concrete, data-grounded analysis plan from the schema (use the real\n"
+    "   obs/var/obsm/layers keys, shape, and platform — never guess keys).\n"
+    "2. Ask the user ONE focused question ONLY on consequential ambiguity (a choice that\n"
+    "   materially changes the result and cannot be safely defaulted). Otherwise proceed\n"
+    "   with documented defaults and explicitly state your assumptions.\n"
+    "3. Call `autonomous_analysis_execute`, passing `analysis_plan` (your plan) and\n"
+    "   `data_schema` (the schema below) so generated code and repairs use real keys.\n"
+    "4. After it returns, judge whether the produced artifacts satisfy your plan; if they\n"
+    "   do not, re-delegate a corrected run rather than trusting exit code 0.\n"
+    "5. Then interpret the results scientifically — separate computed results from\n"
+    "   interpretive claims, cite concrete artifacts, and keep the OmicsClaw disclaimer."
+)
+
+
+def _format_autonomous_understanding_block(schema_report: str) -> str:
+    return "\n\n".join([_AUTONOMOUS_UNDERSTANDING_DIRECTIVE, schema_report.strip()])
+
+
+async def _build_autonomous_understanding_context(
+    user_content: str | list, *, mode: str | None = None
+) -> str:
+    """Deterministic data-inspection preflight for autonomous routes (ADR 0014).
+
+    When a request routes to ``no_skill`` / ``partial_skill`` and carries a
+    trusted ``.h5ad`` input path, OmicsClaw inspects it up front and injects the
+    real schema plus a plan/validate/interpret directive, so the outer LLM
+    understands the data before generating code. Returns ``""`` (a no-op that
+    leaves the base route context untouched) for chat and exact-skill routes,
+    when no trusted file path is present, or when inspection is unavailable.
+    """
+    if _normalize_analysis_router_mode(mode) == ANALYSIS_ROUTER_MODE_OFF:
+        return ""
+    user_text = _extract_user_text(user_content)
+    if not user_text.strip():
+        return ""
+    try:
+        route = route_analysis_request(user_text)
+    except Exception as exc:
+        logger.warning("Autonomous understanding routing failed (non-fatal): %s", exc)
+        return ""
+    if route.kind not in (AnalysisRouteKind.NO_SKILL, AnalysisRouteKind.PARTIAL_SKILL):
+        return ""
+    try:
+        input_paths = extract_valid_input_paths(user_text)
+    except Exception:
+        input_paths = []
+    if not input_paths:
+        return ""
+    try:
+        from omicsclaw.runtime.tools.builders.agent_executors import (
+            execute_inspect_data,
+        )
+
+        schema_report = await execute_inspect_data({"file_path": input_paths[0]})
+    except Exception as exc:
+        logger.warning(
+            "Autonomous understanding preflight inspect_data failed (non-fatal): %s",
+            exc,
+        )
+        return ""
+    # ``execute_inspect_data`` only profiles .h5ad and returns an error string
+    # otherwise; only inject when we have a real schema report.
+    if not str(schema_report or "").startswith("## Data Inspection"):
+        return ""
+    return _format_autonomous_understanding_block(schema_report)
 
 
 def _build_engine_dependencies(*, usage_accumulator=None) -> EngineDependencies:
@@ -968,6 +1041,10 @@ async def llm_tool_loop(
         user_content,
         mode=analysis_router_mode,
     )
+    autonomous_understanding_context = await _build_autonomous_understanding_context(
+        user_content,
+        mode=analysis_router_mode,
+    )
 
     _ensure_system_prompt()
     deps = _build_engine_dependencies(usage_accumulator=usage_accumulator)
@@ -998,6 +1075,7 @@ async def llm_tool_loop(
         system_prompt_append=_merge_system_prompt_additions(
             system_prompt_append,
             analysis_route_context,
+            autonomous_understanding_context,
         ),
         mode=mode,
         request_tool_approval=request_tool_approval,

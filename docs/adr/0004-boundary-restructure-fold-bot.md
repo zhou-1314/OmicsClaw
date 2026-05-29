@@ -36,7 +36,7 @@ matched what each was responsible for:
    The package boundary did nothing to enforce which file owns what.
 
 The first explicit cue for this restructure came from comparing
-``omicsclaw/`` against a reference repository (CellClaw) whose
+``omicsclaw/`` against a reference repository whose
 top-level layout cleanly separated `agent/`, `gateway/`, `providers/`,
 `storage/`, `services/`, `models/`, and `web/`. The point was *not*
 the name parity but the **boundary parity**: in the reference layout,
@@ -159,7 +159,7 @@ inside ``omicsclaw/``:
 
 **Alternatives considered**
 
-- **Mirror CellClaw's top-level layout 1:1** (``agent/``, ``gateway/``,
+- **Mirror the reference repository's top-level layout 1:1** (``agent/``, ``gateway/``,
   ``providers/``, etc. at the repo root). Rejected: ``omicsclaw/`` is
   the public Python package; renaming it would break every external
   ``import omicsclaw…`` site without buying anything beyond

@@ -96,6 +96,64 @@ def test_no_skill_plan_validates_input_paths(monkeypatch, tmp_path: Path) -> Non
     )
 
 
+def test_extract_valid_input_paths_resolves_bare_data_filenames(monkeypatch, tmp_path: Path) -> None:
+    """A bare data filename (no path prefix) that exists in a trusted dir is
+    resolved; one that doesn't exist, or a non-data extension, is ignored.
+
+    Regression: ``_PATH_TOKEN_RE`` only matched ~/./../-prefixed paths, so a
+    bare filename — the natural way a desktop user names a file — was never
+    handed to ``validate_input_path`` (which already resolves trusted-dir names).
+    """
+    from omicsclaw.analysis_router.dispatcher import extract_valid_input_paths
+    from omicsclaw.services import path_validation
+
+    trusted = tmp_path / "trusted"
+    trusted.mkdir()
+    (trusted / "demo.h5ad").write_bytes(b"")
+    monkeypatch.setenv("OMICSCLAW_DATA_DIRS", str(trusted))
+    path_validation.TRUSTED_DATA_DIRS.clear()
+
+    # bare name flanked directly by CJK characters (real desktop input shape)
+    assert extract_valid_input_paths("对demo.h5ad执行分析") == [
+        str((trusted / "demo.h5ad").resolve())
+    ]
+    # a bare data filename that does not exist is not fabricated
+    assert extract_valid_input_paths("分析 missing_file.h5ad") == []
+    # a dotted word without a data extension is not treated as input
+    assert extract_valid_input_paths("see notes.pdf for details") == []
+
+
+def test_exact_skill_plan_resolves_bare_filename_in_trusted_dir(monkeypatch, tmp_path: Path) -> None:
+    """End-to-end seam: an exact-skill route whose user text names a bare file
+    (existing in a trusted dir) must pass ``file_path`` to the skill, not run
+    path-less and report 'No input file available'."""
+    trusted = tmp_path / "trusted"
+    trusted.mkdir()
+    data_path = trusted / "slideseqv2_mouse_hippocampus.h5ad"
+    data_path.write_bytes(b"")
+    monkeypatch.setenv("OMICSCLAW_DATA_DIRS", str(trusted))
+    from omicsclaw.services import path_validation
+
+    path_validation.TRUSTED_DATA_DIRS.clear()
+    route = _route(AnalysisRouteKind.EXACT_SKILL, chosen_skill="spatial-domains")
+
+    query = "对slideseqv2_mouse_hippocampus.h5ad执行spatial niche的鉴定"
+    plan = build_analysis_tool_plan(route, user_text=query)
+
+    assert plan is not None
+    assert plan.calls == (
+        (
+            "omicsclaw",
+            {
+                "skill": "spatial-domains",
+                "mode": "path",
+                "file_path": str(data_path.resolve()),
+                "query": query,
+            },
+        ),
+    )
+
+
 def test_partial_continuation_uses_skill_output_as_upstream_reference(tmp_path: Path) -> None:
     upstream = tmp_path / "skill-output"
     upstream.mkdir()

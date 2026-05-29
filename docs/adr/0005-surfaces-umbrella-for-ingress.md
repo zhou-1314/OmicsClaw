@@ -41,10 +41,10 @@ Two problems with this state:
    is also "interactive", the typing indicator in ``channels/`` is also
    "interactive". The word that distinguishes the Surface is *CLI*.
 
-The reference for this restructure was the same CellClaw repo cited in
+The reference for this restructure was the same reference repository cited in
 ADR 0004 — specifically its ingress story, where ``cli/``, ``web/``,
 and ``gateway/`` sit as visibly-sibling top-level packages. The point
-is *not* CellClaw's exact layout (ADR 0004 alternative #1 already
+is *not* the reference implementation's exact layout (ADR 0004 alternative #1 already
 rejected that), but the **discoverability property**: opening any
 ingress dir makes it obvious it's an ingress dir.
 
@@ -66,7 +66,7 @@ changes.
 defined in ``docs/CONTEXT.md`` (§"Surfaces"), so the language layer
 needs no edits. Alternative names ``ingress/`` (introduces a new term
 that would coexist redundantly with *Surface*) and *no umbrella*
-(cellclaw-style sibling tops) were rejected — see below.
+(reference-style sibling tops) were rejected — see below.
 
 **Q3 — Sub-package names: ``{channels, desktop, cli}``.** Renames
 ``app/`` → ``desktop/`` and ``interactive/`` → ``cli/`` to align
@@ -158,16 +158,16 @@ cross-Surface — any phased intermediate commit would break the
   proven concrete benefit. Left as a possible future ADR if a real
   cross-Surface concern emerges.
 
-- **No umbrella, cellclaw-style sibling top-level packages (Q2-C).**
+- **No umbrella, reference-style sibling top-level packages (Q2-C).**
   Would create ``omicsclaw/channels/``, ``omicsclaw/desktop/``,
   ``omicsclaw/cli/`` as three siblings under ``omicsclaw/``. Rejected
   because it directly contradicts ADR 0004 alternative #1, which one
-  day prior rejected mirroring cellclaw's top-level layout. ADR 0004's
-  reasoning (omicsclaw/ is the only top-level Python package; cellclaw
+  day prior rejected mirroring the reference implementation's top-level layout. ADR 0004's
+  reasoning (omicsclaw/ is the only top-level Python package; reference
   parity has no engineering benefit beyond superficial naming) applies
   identically here. Choosing C would require either revoking ADR
   0004's stance or living with a doctrinal contradiction. The
-  umbrella (``surfaces/``) achieves CellClaw-style discoverability
+  umbrella (``surfaces/``) achieves reference-style discoverability
   *inside* the omicsclaw/ package boundary that ADR 0004 protects.
 
 - **Keep current names (Q3-B), zero rename cost.** Would move

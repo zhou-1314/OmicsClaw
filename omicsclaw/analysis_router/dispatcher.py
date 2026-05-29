@@ -11,6 +11,28 @@ from omicsclaw.services.path_validation import validate_input_path
 from .models import AnalysisRoute, AnalysisRouteKind
 
 _PATH_TOKEN_RE = re.compile(r"(?P<path>(?:~|/|\./|\.\./)[^\s,;]+)")
+# Bare data filenames with no path prefix, e.g. "slideseqv2_mouse_hippocampus.h5ad".
+# ASCII-only character classes (not ``\w``) so CJK/other non-ASCII text acts as a
+# boundary — desktop users routinely write the filename flush against Chinese
+# text ("对xxx.h5ad执行..."). The leading negative lookbehind skips tokens that
+# are already part of a slash/~/.-prefixed path (those are handled by
+# ``_PATH_TOKEN_RE``). Resolution stays gated by ``validate_input_path`` against
+# the trusted data directories, so matching a token here never widens trust.
+_DATA_FILE_EXTENSIONS = (
+    "h5ad", "h5", "loom", "zarr", "mtx",
+    "mzml", "mzxml",
+    "fastq", "fq", "fasta", "fa",
+    "bam", "sam", "cram", "vcf", "bcf",
+    "gtf", "gff", "bed", "csv", "tsv", "rds",
+)
+_BARE_DATA_FILE_RE = re.compile(
+    r"(?<![A-Za-z0-9_./~\\-])"
+    r"([A-Za-z0-9_][A-Za-z0-9_.+\-]*\.(?:"
+    + "|".join(_DATA_FILE_EXTENSIONS)
+    + r")(?:\.gz|\.bz2)?)"
+    r"(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
 _OUTPUT_DIR_RE = re.compile(r"Output dir:\s*(?P<path>\S+)")
 _SKILL_OUTPUT_HINT_RE = re.compile(r"completed\.\s*Output:\s*(?P<path>\S+)")
 _NOTEBOOK_HINT_RE = re.compile(
@@ -45,18 +67,28 @@ def extract_valid_input_paths(text: str) -> list[str]:
     """
     paths: list[str] = []
     seen: set[str] = set()
-    for match in _PATH_TOKEN_RE.finditer(str(text or "")):
-        raw_path = _strip_path_punctuation(match.group("path"))
-        if not raw_path:
-            continue
-        resolved = validate_input_path(raw_path, allow_dir=True)
+    text = str(text or "")
+
+    def _add(raw_token: str) -> None:
+        raw_token = _strip_path_punctuation(raw_token)
+        if not raw_token:
+            return
+        resolved = validate_input_path(raw_token, allow_dir=True)
         if resolved is None:
-            continue
+            return
         key = str(resolved)
         if key in seen:
-            continue
+            return
         seen.add(key)
         paths.append(key)
+
+    # 1. Explicit path tokens (~, /, ./, ../) — preserved first so an explicit
+    #    path keeps priority in the returned order.
+    for match in _PATH_TOKEN_RE.finditer(text):
+        _add(match.group("path"))
+    # 2. Bare data filenames resolved against the trusted data directories.
+    for match in _BARE_DATA_FILE_RE.finditer(text):
+        _add(match.group(1))
     return paths
 
 

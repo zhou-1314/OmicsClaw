@@ -189,24 +189,40 @@ async def run_autonomous_code_loop_async(
 
 
 def _build_initial_prompt(request: AutonomousRunRequest) -> str:
-    return "\n".join(
+    lines = [
+        "You are OmicsClaw Autonomous Code Runner.",
+        "Return ONLY a JSON object with keys: analysis_plan, code, notes.",
+        "Generate one self-contained analysis script.",
+        "Use Python unless the requested language is R.",
+        "Write all outputs inside AUTONOMOUS_OUTPUT_DIR / OUTPUT_PATH.",
+        "Do not install packages, use shell commands, or access the network.",
+        "Separate computed outputs from interpretation in files when possible.",
+    ]
+    if request.data_schema.strip():
+        lines.append(
+            "Treat the input data schema below as ground truth for keys, columns, "
+            "and shapes; read real obs/var/obsm/layers names from it instead of guessing."
+        )
+    lines.extend(
         [
-            "You are OmicsClaw Autonomous Code Runner.",
-            "Return ONLY a JSON object with keys: analysis_plan, code, notes.",
-            "Generate one self-contained analysis script.",
-            "Use Python unless the requested language is R.",
-            "Write all outputs inside AUTONOMOUS_OUTPUT_DIR / OUTPUT_PATH.",
-            "Do not install packages, use shell commands, or access the network.",
-            "Separate computed outputs from interpretation in files when possible.",
             "",
             f"Requested language: {request.language}",
             f"Goal: {request.goal}",
+        ]
+    )
+    if request.analysis_plan.strip():
+        lines.append(f"Approved analysis plan:\n{request.analysis_plan}")
+    if request.data_schema.strip():
+        lines.append(f"Input data schema:\n{request.data_schema}")
+    lines.extend(
+        [
             f"Input path references: {[str(item) for item in request.input_paths]}",
             f"Upstream artifact references: {[str(item) for item in request.upstream_paths]}",
             f"Local context: {request.context}",
             f"External/web context supplied by outer flow: {request.web_context}",
         ]
     )
+    return "\n".join(lines)
 
 
 def _build_repair_prompt(
@@ -221,18 +237,23 @@ def _build_repair_prompt(
         "last_error": last_error,
         "attempts": [attempt.to_dict() for attempt in attempts],
     }
-    return "\n".join(
+    lines = [
+        "Repair the OmicsClaw autonomous analysis code using only this evidence.",
+        "Return ONLY a JSON object with keys: analysis_plan, code, notes.",
+        "Do not introduce network access, package installation, shell commands, or external writes.",
+        "",
+        f"Goal: {request.goal}",
+    ]
+    if request.data_schema.strip():
+        lines.append(f"Input data schema:\n{request.data_schema}")
+    lines.extend(
         [
-            "Repair the OmicsClaw autonomous analysis code using only this evidence.",
-            "Return ONLY a JSON object with keys: analysis_plan, code, notes.",
-            "Do not introduce network access, package installation, shell commands, or external writes.",
-            "",
-            f"Goal: {request.goal}",
             f"Previous plan: {previous_plan}",
             f"Previous code:\n{previous_code}",
             f"Failure evidence JSON:\n{json.dumps(evidence, indent=2, ensure_ascii=False)}",
         ]
     )
+    return "\n".join(lines)
 
 
 def _parse_llm_response(raw: str) -> dict[str, str]:

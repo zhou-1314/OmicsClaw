@@ -52,6 +52,8 @@ class AutonomousRunRequest:
     max_repair_attempts: int = 2
     context: str = ""
     web_context: str = ""
+    data_schema: str = ""
+    analysis_plan: str = ""
     model_override: str = ""
     provider_override: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
