@@ -389,3 +389,49 @@ def test_autonomous_code_loop_static_validation_blocks_network_code(tmp_path: Pa
     assert result.ok is False
     assert result.attempts == []
     assert "blocked import: requests" in result.error
+
+
+def test_prompts_omit_schema_and_plan_by_default() -> None:
+    """ADR 0014 plumbing must be a safe default: with no injected schema/plan,
+    the runner prompts are unchanged (no schema/plan lines leak in)."""
+    from omicsclaw.autonomous.code_loop import (
+        _build_initial_prompt,
+        _build_repair_prompt,
+    )
+
+    request = AutonomousRunRequest(goal="do X", output_root="/tmp/x")
+    initial = _build_initial_prompt(request)
+    repair = _build_repair_prompt(
+        request, previous_plan="p", previous_code="c", attempts=[], last_error="boom"
+    )
+
+    for prompt in (initial, repair):
+        assert "Input data schema:" not in prompt
+        assert "Approved analysis plan:" not in prompt
+    assert "Goal: do X" in initial
+
+
+def test_prompts_include_injected_schema_and_plan() -> None:
+    """When the outer loop injects a data schema and plan (ADR 0014), both the
+    initial and repair prompts surface them so codegen and repair use real keys."""
+    from omicsclaw.autonomous.code_loop import (
+        _build_initial_prompt,
+        _build_repair_prompt,
+    )
+
+    request = AutonomousRunRequest(
+        goal="spatial niche identification",
+        output_root="/tmp/x",
+        data_schema="obsm: spatial, X_pca | n_obs=53000",
+        analysis_plan="1. spatial-weighted leiden\n2. plot domains",
+    )
+
+    initial = _build_initial_prompt(request)
+    assert "Input data schema:" in initial and "obsm: spatial" in initial
+    assert "Approved analysis plan:" in initial and "leiden" in initial
+    assert "ground truth" in initial  # the schema-grounding instruction
+
+    repair = _build_repair_prompt(
+        request, previous_plan="p", previous_code="c", attempts=[], last_error="KeyError"
+    )
+    assert "Input data schema:" in repair and "obsm: spatial" in repair
