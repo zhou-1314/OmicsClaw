@@ -1626,14 +1626,47 @@ async def chat_stream(req: ChatRequest):
                 ),
             )
         if tool_name in {"task_create", "task_update", "todo_write"}:
-            await _queue_event(
-                "task_update",
-                json.dumps(
-                    {"session_id": session_id, "tool_name": tool_name},
-                    ensure_ascii=False,
-                    default=str,
-                ),
-            )
+            # Embed the full task list so the frontend 待办 panel can render live
+            # without a separate fetch. All three tools now return the whole list
+            # inline (fast path); the store_path reload is a defensive fallback.
+            # A tool ERROR returns a plain string (no tasks/store_path) — in that
+            # case we skip the event entirely so the live plan is not blanked out.
+            tasks_payload: list[dict[str, Any]] | None = None
+            plan_kind = "engineering_plan"
+            try:
+                result_obj = json.loads(content_str) if content_str else None
+            except (json.JSONDecodeError, TypeError, ValueError):
+                result_obj = None
+            if isinstance(result_obj, dict):
+                if isinstance(result_obj.get("tasks"), list):
+                    tasks_payload = result_obj["tasks"]
+                    plan_kind = str(result_obj.get("kind") or plan_kind)
+                else:
+                    store_path = str(result_obj.get("store_path") or "").strip()
+                    if store_path:
+                        try:
+                            from omicsclaw.runtime.storage.task import TaskStore
+
+                            store = TaskStore.load(Path(store_path))
+                        except (OSError, ValueError, TypeError):
+                            store = None
+                        if store is not None:
+                            tasks_payload = [task.to_dict() for task in store.tasks]
+                            plan_kind = store.kind
+            if tasks_payload is not None:
+                await _queue_event(
+                    "task_update",
+                    json.dumps(
+                        {
+                            "session_id": session_id,
+                            "tool_name": tool_name,
+                            "kind": plan_kind,
+                            "tasks": tasks_payload,
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    ),
+                )
 
     def usage_accumulator(response_usage: Any) -> dict[str, int]:
         nonlocal usage_payload

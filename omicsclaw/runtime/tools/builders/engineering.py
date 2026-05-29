@@ -343,7 +343,12 @@ def build_engineering_tool_specs() -> list[ToolSpec]:
         ),
         ToolSpec(
             name="task_update",
-            description="Update status or details for a persisted engineering task.",
+            description=(
+                "Update status or details for a persisted engineering task. Use this "
+                "to keep the live 待办 plan accurate: set status 'in_progress' right "
+                "before working a step and 'completed' (or 'failed'/'skipped') right "
+                "after, keeping exactly one step 'in_progress' at a time."
+            ),
             parameters={
                 "type": "object",
                 "properties": {
@@ -378,7 +383,12 @@ def build_engineering_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             name="todo_write",
             description=(
-                "Replace the current session task list with a structured todo plan."
+                "Replace the current session task list with a structured todo plan. "
+                "Use this at the start of a multi-step analysis to lay out 3–7 "
+                "concrete ordered steps (each status 'pending'); the desktop shows "
+                "this plan live to the user. After writing it, advance progress with "
+                "`task_update` (in_progress → completed) rather than rewriting the "
+                "whole list each step."
             ),
             parameters={
                 "type": "object",
@@ -793,10 +803,14 @@ def build_engineering_tool_executors(
         except ValueError as exc:
             return f"Error: {exc}"
         store.save(path)
+        # Include the full list + kind so the desktop 待办 SSE event can use the
+        # inline fast path instead of reloading the store from disk.
         return _json_payload(
             {
                 "store_path": str(path),
                 "task": task.to_dict(),
+                "kind": store.kind,
+                "tasks": [t.to_dict() for t in store.tasks],
             }
         )
 
@@ -913,7 +927,16 @@ def build_engineering_tool_executors(
             task.touch()
 
         store.save(path)
-        return _json_payload({"store_path": str(path), "task": task.to_dict()})
+        # Include the full list + kind so the desktop 待办 SSE event can use the
+        # inline fast path instead of reloading the store from disk.
+        return _json_payload(
+            {
+                "store_path": str(path),
+                "task": task.to_dict(),
+                "kind": store.kind,
+                "tasks": [t.to_dict() for t in store.tasks],
+            }
+        )
 
     async def todo_write(
         args: dict[str, Any],

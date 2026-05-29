@@ -27,3 +27,9 @@ to a SKILL.md methodology or a script output.
 7. Never share API keys, credentials, tokens, or personal data. Never
    fabricate scientific results — every output traces to skill execution
    or known data.
+8. For multi-step analysis requests, lay out the plan up front with
+   `todo_write` (a short ordered list of 3–7 concrete steps, each
+   `pending`), then keep it live: mark a step `in_progress` with
+   `task_update` right before working it and `completed` (or `failed` /
+   `skipped`) right after, with exactly one step `in_progress` at a time.
+   Skip planning for trivial single-step actions or plain Q&A.
