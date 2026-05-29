@@ -4091,6 +4091,106 @@ async def test_provider(req: ProviderTestRequest):
 
 
 # ---------------------------------------------------------------------------
+# Session titling — summarise a conversation into a short sidebar title
+# ---------------------------------------------------------------------------
+
+
+class ChatTitleMessage(BaseModel):
+    role: str = ""
+    content: str = ""
+
+
+class ChatTitleRequest(BaseModel):
+    messages: list[ChatTitleMessage] = Field(default_factory=list)
+
+
+_TITLE_SYSTEM_PROMPT = (
+    "You name a bioinformatics analysis conversation for a sidebar. "
+    "Read the conversation and reply with ONE short title that captures the "
+    "main task, and the method and dataset when they are clear. "
+    "Keep it under 6 words or 20 Chinese characters. "
+    "Reply in the language the user writes in. "
+    "Reply with ONLY the title — no quotes, no trailing punctuation, no prefix "
+    "like 'Title:'."
+)
+
+_TITLE_MESSAGE_CHAR_LIMIT = 600
+_TITLE_MAX_TURNS = 8
+
+
+def _build_title_transcript(messages: list[ChatTitleMessage]) -> str:
+    """Render cleaned turns into a compact transcript for the titler. The
+    frontend already flattens structured content to plain text, so here we
+    only label roles, trim very long turns, and cap the number of turns."""
+    lines: list[str] = []
+    for message in messages[:_TITLE_MAX_TURNS]:
+        text = str(message.content or "").strip()
+        if not text:
+            continue
+        if len(text) > _TITLE_MESSAGE_CHAR_LIMIT:
+            text = text[:_TITLE_MESSAGE_CHAR_LIMIT].rstrip() + "…"
+        speaker = "User" if message.role == "user" else "Assistant"
+        lines.append(f"{speaker}: {text}")
+    return "\n".join(lines)
+
+
+def _sanitize_generated_title(raw: str) -> str:
+    """Strip the quoting / prefixes models sometimes wrap a title in."""
+    title = str(raw or "").strip()
+    if not title:
+        return ""
+    # Single-line only; models occasionally add reasoning on later lines.
+    title = title.splitlines()[0].strip()
+    # Drop a leading "Title:" / "标题：" style prefix.
+    for prefix in ("title:", "标题:", "标题："):
+        if title.lower().startswith(prefix):
+            title = title[len(prefix):].strip()
+            break
+    # Unwrap surrounding quotes / brackets.
+    title = title.strip("\"'“”‘’《》「」 ").strip()
+    return title
+
+
+@app.post("/chat/title")
+async def chat_title(req: ChatTitleRequest):
+    """Generate a concise conversation title via a single cheap completion.
+
+    Reuses the core's already-authenticated LLM client (the same provider /
+    credentials the chat turn uses), so titling works without re-resolving
+    credentials from the environment. Best-effort by contract: the desktop app
+    falls back to its local heuristic when this returns an error, so failures
+    here are surfaced as HTTP errors rather than silently returning a bad title.
+    """
+    core = _get_core()
+    transcript = _build_title_transcript(req.messages)
+    if not transcript.strip():
+        raise HTTPException(400, detail="No conversation content to title.")
+
+    client = getattr(core, "llm", None)
+    model = str(getattr(core, "OMICSCLAW_MODEL", "") or "").strip()
+    if client is None or not model:
+        raise HTTPException(400, detail="LLM client is not configured for title generation.")
+
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": _TITLE_SYSTEM_PROMPT},
+                {"role": "user", "content": transcript},
+            ],
+            max_tokens=64,
+        )
+        raw = str(getattr(response.choices[0].message, "content", "") or "")
+    except Exception as exc:
+        raise HTTPException(502, detail=f"Title generation failed: {exc}") from exc
+
+    title = _sanitize_generated_title(raw)
+    if not title:
+        raise HTTPException(502, detail="Title generation returned no content.")
+    return {"title": title}
+
+
+# ---------------------------------------------------------------------------
 # OAuth endpoints — Claude Pro/Max + OpenAI Codex login via ccproxy
 # ---------------------------------------------------------------------------
 
