@@ -95,6 +95,7 @@ from omicsclaw.common.user_guidance import (
 from omicsclaw.skill.registry import ensure_registry_loaded, registry
 from omicsclaw.runtime.tools.builders.agent import build_bot_tool_registry, BotToolContext
 from omicsclaw.runtime.tools.builders.engineering import build_engineering_tool_executors
+from omicsclaw.runtime.tools.kg_tools import KG_TOOL_EXECUTORS
 from omicsclaw.runtime.policy.verification import format_completion_mapping_summary
 
 # Helpers from canonical homes (post-decomposition siblings).
@@ -2071,6 +2072,9 @@ def _available_tool_executors() -> dict[str, object]:
         "custom_analysis_execute": execute_custom_analysis_execute,
         "inspect_data": execute_inspect_data,
     }
+    # Bench Phase 3.1 (ADR 0019) — KG read tools, always registered; each
+    # executor soft-fails when the optional ``omicsclaw_kg`` package is absent.
+    executors.update(KG_TOOL_EXECUTORS)
     executors.update(
         build_engineering_tool_executors(
             omicsclaw_dir=OMICSCLAW_DIR,

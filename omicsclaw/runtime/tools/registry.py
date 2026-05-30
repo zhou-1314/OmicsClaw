@@ -29,6 +29,11 @@ _READ_STAGE_TOOLS: frozenset[str] = frozenset(
         # fetch_geo_metadata is the metadata-only (download=False) reader kept here.
         "fetch_geo_metadata", "consult_knowledge", "read_knowhow",
         "web_search", "web_fetch", "web_method_search",
+        # OmicsClaw-KG read tools (Bench Phase 3.1, ADR 0019): read-only retrieval
+        # over the cross-research knowledge base — the core of the Read stage.
+        # Soft-fail when the optional package is absent (kg_tools.py).
+        "kg_search", "kg_get_page", "kg_list_pages", "kg_graph_neighbors",
+        "kg_status", "kg_recent_log", "kg_communities",
         # lightweight memory notes + read-only data / file inspection. remember /
         # forget kept: note-taking only — no compute, no workspace write (recall is
         # the pure-read counterpart).
