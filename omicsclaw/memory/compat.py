@@ -107,6 +107,11 @@ class DatasetMemory(BaseMemory):
         "clustered", "annotated", "integrated", "preprocessed",
     ] = "raw"
     file_exists: bool = True
+    # Bench (ADR 0018) — investigation-thread scope; empty = legacy un-scoped.
+    # A permission-gated literature download (Phase 3.3b) stamps this so the
+    # dataset registers under dataset://<thread_id>/<basename>, visible to
+    # Analyze in the same thread. Mirrors AnalysisMemory.thread_id.
+    thread_id: str = ""
 
     @field_validator("file_path")
     @classmethod
@@ -188,7 +193,14 @@ _TYPE_CLASSES = {
 def _memory_to_uri_path(memory: BaseMemory) -> str:
     """Convert a memory object to a URI path within its domain."""
     if isinstance(memory, DatasetMemory):
-        return memory.file_path.replace("/", "_")
+        # Bench (ADR 0018, Phase 3.3): scope a thread-bound dataset under its
+        # investigation thread (dataset://<thread_id>/<basename>) so Analyze in
+        # that thread sees it and threads stay isolated. Empty thread_id keeps
+        # the legacy flat dataset://<basename> (backward compatible).
+        basename = memory.file_path.replace("/", "_")
+        if memory.thread_id:
+            return f"{memory.thread_id}/{basename}"
+        return basename
     elif isinstance(memory, AnalysisMemory):
         # Bench (ADR 0018): scope lineage under the investigation thread so a
         # thread rolls up only its own runs (BE-RECALL-6 reads analysis://<id>/*).

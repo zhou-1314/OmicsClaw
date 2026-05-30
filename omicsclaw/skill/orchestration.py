@@ -154,8 +154,15 @@ logger = logging.getLogger("omicsclaw.omicsclaw.skill.orchestration")
 # ---------------------------------------------------------------------------
 
 
-async def _auto_capture_dataset(session_id: str, input_path: str, data_type: str = ""):
-    """Auto-capture dataset memory when a file is processed."""
+async def _auto_capture_dataset(
+    session_id: str, input_path: str, data_type: str = "", thread_id: str = ""
+):
+    """Auto-capture dataset memory when a file is processed.
+
+    ``thread_id`` (Bench, ADR 0018) scopes the dataset under the active
+    investigation thread (``dataset://<thread_id>/<basename>``) so Analyze in
+    that thread can reference it; empty preserves the legacy un-scoped URI.
+    """
     from omicsclaw.runtime.agent.state import OMICSCLAW_DIR, memory_store
     if not memory_store or not session_id or not input_path:
         return
@@ -190,6 +197,7 @@ async def _auto_capture_dataset(session_id: str, input_path: str, data_type: str
             n_obs=n_obs,
             n_vars=n_vars,
             preprocessing_state="raw",
+            thread_id=thread_id,
         )
         await memory_store.save_memory(session_id, ds_mem)
         logger.debug(f"Auto-captured dataset: {rel_path}")

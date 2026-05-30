@@ -547,7 +547,7 @@ async def execute_omicsclaw(
     # Auto-capture dataset + analysis memory
     if session_id:
         if input_path:
-            await _auto_capture_dataset(session_id, input_path, data_type)
+            await _auto_capture_dataset(session_id, input_path, data_type, thread_id=thread_id)
         await _auto_capture_analysis(session_id, skill_key, args, out_dir, True, thread_id=thread_id)
 
     # Read result.json for preprocessing_state update and next_steps

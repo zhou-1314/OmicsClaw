@@ -28,6 +28,17 @@ from omicsclaw.memory.compat import (
 from omicsclaw.memory.models import Path
 
 
+def test_dataset_memory_uri_scopes_under_thread_id():
+    # Bench (ADR 0018, Phase 3.3): a set thread_id scopes a downloaded dataset
+    # under its investigation thread (dataset://<thread_id>/<basename>) so Analyze
+    # in that thread sees it; empty thread_id keeps the legacy flat dataset URI.
+    legacy = DatasetMemory(file_path="GSE12345/matrix.h5ad")
+    assert _memory_to_uri_path(legacy) == "GSE12345_matrix.h5ad"
+
+    scoped = DatasetMemory(file_path="GSE12345/matrix.h5ad", thread_id="t-glioma")
+    assert _memory_to_uri_path(scoped) == "t-glioma/GSE12345_matrix.h5ad"
+
+
 def test_analysis_memory_uri_scopes_under_thread_id():
     # Bench (ADR 0018): a set thread_id scopes the analysis:// lineage under the
     # investigation thread so a thread rolls up only its own runs (BE-RECALL-6

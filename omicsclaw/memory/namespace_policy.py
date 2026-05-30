@@ -29,6 +29,9 @@ VERSIONED_PREFIXES: tuple[tuple[str, str], ...] = (
     ("core", "my_user"),
     ("preference", ""),
 )
+# Note: ``dataset`` is deliberately absent here → ``should_version`` is False →
+# dataset:// is OVERWRITE-ONLY (Bench Phase 3.3 / plan §3). A re-download of the
+# same dataset://<thread_id>/<basename> replaces in place rather than versioning.
 
 
 def _matches_prefix(uri: MemoryURI, domain: str, prefix: str) -> bool:
