@@ -12,9 +12,11 @@ events relevant to their output channel.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import importlib
 import uuid
-from typing import AsyncIterator
+from collections.abc import Mapping
+from typing import Any, AsyncIterator
 
 from omicsclaw.runtime.agent.envelope import MessageEnvelope
 from omicsclaw.runtime.agent.events import (
@@ -32,6 +34,26 @@ from omicsclaw.runtime.agent.events import (
 )
 
 _SENTINEL: object = object()
+
+
+def _compaction_payload(event: Any) -> dict[str, Any]:
+    """Coerce an ``on_context_compacted`` argument into a neutral dict.
+
+    ``query_engine._emit_compaction_event`` fires this callback with a
+    :class:`~omicsclaw.runtime.context.compaction.CompactionEvent` dataclass
+    (frozen, ``slots=True`` — *not* iterable, so ``dict(event)`` raises
+    ``TypeError: 'CompactionEvent' object is not iterable``). Per ADR 0006 the
+    dispatcher is surface-agnostic, so it emits the event's fields as a plain
+    dict and lets each Surface format it. A mapping is passed through; anything
+    else (or ``None``) degrades to ``{}`` rather than crashing the turn.
+    """
+    if event is None:
+        return {}
+    if dataclasses.is_dataclass(event) and not isinstance(event, type):
+        return dataclasses.asdict(event)
+    if isinstance(event, Mapping):
+        return dict(event)
+    return {}
 
 
 async def dispatch(envelope: MessageEnvelope) -> AsyncIterator[Event]:
@@ -65,8 +87,8 @@ async def dispatch(envelope: MessageEnvelope) -> AsyncIterator[Event]:
     async def _on_stream_reasoning(chunk: str) -> None:
         await queue.put(StreamReasoning(chunk=chunk))
 
-    async def _on_context_compacted(payload) -> None:
-        await queue.put(ContextCompacted(payload=dict(payload) if payload else {}))
+    async def _on_context_compacted(event) -> None:
+        await queue.put(ContextCompacted(payload=_compaction_payload(event)))
 
     async def _on_pathology_signal(signal) -> None:
         await queue.put(

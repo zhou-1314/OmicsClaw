@@ -1910,7 +1910,12 @@ async def chat_stream(req: ChatRequest):
                 elif isinstance(event, _DispatchStreamReasoning):
                     await on_stream_reasoning(event.chunk)
                 elif isinstance(event, _DispatchContextCompacted):
-                    await on_context_compacted(event.payload)
+                    # ``on_context_compacted`` (make_compaction_event_handler)
+                    # is synchronous — call it, do NOT await it. It pushes the
+                    # SSE 'status' frame via queue.put_nowait and returns None;
+                    # awaiting None raises TypeError. It coerces the neutral
+                    # dispatch payload into a CompactionEvent internally.
+                    on_context_compacted(event.payload)
                 elif isinstance(event, _DispatchPathologyDetected):
                     await queue.put(
                         {

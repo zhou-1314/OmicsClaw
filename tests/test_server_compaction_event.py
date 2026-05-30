@@ -58,3 +58,57 @@ def test_handler_pushes_status_frame_to_queue() -> None:
     assert payload["stats"]["tokensSaved"] == 2100
     assert "7 older messages" in payload["message"]
     assert "~2,100 tokens" in payload["message"]
+
+
+def test_handler_accepts_neutral_payload_dict_from_dispatcher() -> None:
+    """ADR 0006: the dispatcher delivers a neutral dict payload (the
+    serialised CompactionEvent), not the dataclass itself. The handler must
+    coerce that dict — regression for the desktop consumer silently dropping
+    every compaction toast (``'dict' object has no attribute
+    'messages_compressed'``)."""
+    _stub_optional_modules()
+    try:
+        from omicsclaw.surfaces.desktop._compaction_event_bridge import (
+            make_compaction_event_handler,
+        )
+    except ImportError as exc:
+        import pytest
+        pytest.skip(f"server bridge unavailable: {exc}")
+
+    queue = MagicMock()
+    handler = make_compaction_event_handler(queue)
+
+    # Exactly the shape the dispatcher's ContextCompacted.payload carries.
+    handler(
+        {
+            "messages_compressed": 7,
+            "tokens_saved_estimate": 2100,
+            "applied_stages": ["auto_compact"],
+        }
+    )
+
+    queue.put_nowait.assert_called_once()
+    payload = json.loads(queue.put_nowait.call_args[0][0]["data"])
+    assert payload["stats"]["messagesCompressed"] == 7
+    assert payload["stats"]["tokensSaved"] == 2100
+
+
+def test_handler_is_synchronous_and_must_not_be_awaited() -> None:
+    """``server.py`` consumes the dispatch event with a plain call, NOT
+    ``await`` — regression for ``TypeError: object NoneType can't be used in
+    'await' expression``. The handler returns ``None`` (not a coroutine)."""
+    _stub_optional_modules()
+    try:
+        from omicsclaw.surfaces.desktop._compaction_event_bridge import (
+            make_compaction_event_handler,
+        )
+    except ImportError as exc:
+        import pytest
+        pytest.skip(f"server bridge unavailable: {exc}")
+
+    import asyncio
+
+    handler = make_compaction_event_handler(MagicMock())
+    result = handler({"messages_compressed": 1, "tokens_saved_estimate": 1, "applied_stages": []})
+    assert result is None
+    assert not asyncio.iscoroutine(result)

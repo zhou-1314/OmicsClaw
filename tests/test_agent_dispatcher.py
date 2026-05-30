@@ -43,8 +43,15 @@ def _patch_llm_tool_loop(monkeypatch, fake):
     import omicsclaw.runtime.agent.loop as _loop
     import omicsclaw.runtime.agent.state as _state
 
-    monkeypatch.setattr(_loop, "llm_tool_loop", fake, raising=True)
+    # Patch ``state`` BEFORE ``loop``. ``state.llm_tool_loop`` is a lazy
+    # ``__getattr__`` re-export that resolves (and memoises) the symbol from
+    # ``loop`` on first access. ``monkeypatch.setattr`` records the current
+    # value to restore on undo; if ``loop`` were patched first, that lookup
+    # would resolve to ``fake`` and undo would "restore" ``state`` to ``fake``,
+    # leaking the double across files. Patching ``state`` first makes the
+    # recorded value the real coroutine, so undo restores cleanly.
     monkeypatch.setattr(_state, "llm_tool_loop", fake, raising=False)
+    monkeypatch.setattr(_loop, "llm_tool_loop", fake, raising=True)
 
 
 async def _collect(envelope: MessageEnvelope):
@@ -154,7 +161,41 @@ async def test_stream_callbacks_translate_to_events(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_context_compacted_translates_to_event(monkeypatch):
+async def test_context_compacted_translates_compaction_event(monkeypatch):
+    """The real loop fires ``on_context_compacted`` with a ``CompactionEvent``
+    dataclass (``query_engine._emit_compaction_event``), NOT a dict. The
+    dispatcher must serialise it to a neutral payload rather than calling
+    ``dict()`` on it — regression for ``TypeError: 'CompactionEvent' object
+    is not iterable``.
+    """
+    from omicsclaw.runtime.context.compaction import CompactionEvent
+
+    async def fake_loop(**kwargs):
+        await kwargs["on_context_compacted"](
+            CompactionEvent(
+                messages_compressed=7,
+                tokens_saved_estimate=2100,
+                applied_stages=("auto_compact",),
+            )
+        )
+        return "ok"
+
+    _patch_llm_tool_loop(monkeypatch, fake_loop)
+    events = await _collect(MessageEnvelope(chat_id="c1", content="hi"))
+    assert events[0] == ContextCompacted(
+        payload={
+            "messages_compressed": 7,
+            "tokens_saved_estimate": 2100,
+            "applied_stages": ("auto_compact",),
+        }
+    )
+    assert events[1] == Final(text="ok", kind="normal")
+
+
+@pytest.mark.asyncio
+async def test_context_compacted_tolerates_mapping_payload(monkeypatch):
+    """A plain mapping payload is passed through unchanged (defensive: the
+    dispatcher must never crash on the payload type it is handed)."""
     async def fake_loop(**kwargs):
         await kwargs["on_context_compacted"]({"before": 100, "after": 30})
         return "ok"
