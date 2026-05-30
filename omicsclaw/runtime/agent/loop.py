@@ -1169,8 +1169,11 @@ async def llm_tool_loop(
         model_override=model_override,
         extra_api_params=extra_api_params,
         max_tokens_override=max_tokens_override,
-        system_prompt_append=_merge_system_prompt_additions(
-            system_prompt_append,
+        # ADR 0017 — caller's system addition stays in the (stable) system
+        # prefix; the per-turn route / understanding / assisted-param context
+        # is Volatile context and rides the user turn instead.
+        system_prompt_append=system_prompt_append,
+        user_turn_context=_merge_system_prompt_additions(
             analysis_route_context,
             autonomous_understanding_context,
             exact_skill_assisted_param_context,

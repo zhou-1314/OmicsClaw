@@ -14,16 +14,26 @@ def select_tool_specs(
     specs: tuple[ToolSpec, ...] | list[ToolSpec],
     *,
     request: Any,
+    surface_only: bool = False,
 ) -> tuple[ToolSpec, ...]:
     """Filter ``specs`` to those that should be visible for the given request.
 
     Filtering rules (in order):
       1. ``request.surface`` must be in ``spec.surfaces`` — surface gating
          remains a prerequisite.
-      2. If ``spec.predicate is None``, the tool is included (always-on).
-      3. Otherwise ``spec.predicate(request)`` is called under try/except.
+      2. If ``surface_only`` is True, the tool is included (predicate skipped).
+      3. Else if ``spec.predicate is None``, the tool is included (always-on).
+      4. Otherwise ``spec.predicate(request)`` is called under try/except.
          A raising predicate is fail-closed: the tool is suppressed and a
          WARNING is logged. A return value of False suppresses the tool.
+
+    ``surface_only=True`` (ADR 0017) yields the **Frozen tool list**: every
+    surface-eligible tool, independent of the per-turn query. Because ``surface``
+    is a session constant and ``specs`` order is static, the result is
+    byte-identical across a session's turns — the **Stable prefix invariant**
+    for the tool segment. The per-turn query-keyword gating (the former
+    tool-list-compression) is bypassed: once tools live in a cached prefix,
+    hit-token pricing (~10% of miss) makes compressing them a net loss.
 
     Order is preserved.
 
@@ -43,7 +53,7 @@ def select_tool_specs(
     for spec in specs:
         if spec.surfaces and surface and surface not in spec.surfaces:
             continue
-        if spec.predicate is None:
+        if surface_only or spec.predicate is None:
             selected.append(spec)
             continue
         try:
@@ -105,15 +115,21 @@ class ToolRegistry:
     def to_openai_tools(self) -> list[dict[str, Any]]:
         return [spec.to_openai_tool() for spec in self._specs]
 
-    def to_openai_tools_for_request(self, request: Any) -> list[dict[str, Any]]:
+    def to_openai_tools_for_request(
+        self, request: Any, *, surface_only: bool = False
+    ) -> list[dict[str, Any]]:
         """Per-request filtered openai-tool payload.
 
         ``to_openai_tools()`` (no request) still returns the full list —
-        callers that haven't migrated keep the legacy behavior.
+        callers that haven't migrated keep the legacy behavior. With
+        ``surface_only=True`` (ADR 0017) the per-turn query predicates are
+        skipped, yielding the session-stable **Frozen tool list**.
         """
         return [
             spec.to_openai_tool()
-            for spec in select_tool_specs(self._specs, request=request)
+            for spec in select_tool_specs(
+                self._specs, request=request, surface_only=surface_only
+            )
         ]
 
     def build_runtime(self, available_executors: dict[str, ToolCallable]) -> ToolRuntime:

@@ -222,7 +222,11 @@ def test_build_transcript_summary_collects_compacted_plan_and_advisory_refs(tmp_
     )
 
 
-def test_transcript_store_prepare_history_uses_budget_aware_suffix():
+def test_transcript_store_prepare_history_is_append_only_no_slide():
+    # ADR 0017 — prepare_history returns the FULL sanitized history (no per-turn
+    # newest-suffix slide); a small max_history no longer trims the model
+    # context (it governs the display replay only). Overflow is handled solely
+    # by context collapse downstream, keeping the prefix cache-stable.
     store = TranscriptStore(
         max_history=3,
         max_conversations=10,
@@ -250,21 +254,9 @@ def test_transcript_store_prepare_history_uses_budget_aware_suffix():
 
     history = store.prepare_history(chat_id)
 
-    assert history == [
-        {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {
-                    "id": "call-1",
-                    "type": "function",
-                    "function": {"name": "inspect_data", "arguments": "{}"},
-                }
-            ],
-        },
-        {"role": "tool", "tool_call_id": "call-1", "content": "tool output"},
-        {"role": "assistant", "content": "final answer"},
-    ]
+    # All five messages survive — append-only, no newest-suffix slide.
+    assert history == store.messages_by_chat[chat_id]
+    assert len(history) == 5
 
 
 def test_transcript_store_prepare_history_preserves_full_sanitized_transcript():
@@ -283,7 +275,11 @@ def test_transcript_store_prepare_history_preserves_full_sanitized_transcript():
 
     history = store.prepare_history(chat_id)
 
+    # ADR 0017 — the full history is returned (append-only), not a trimmed
+    # newest suffix; storage is likewise preserved intact.
     assert history == [
+        {"role": "user", "content": "older user"},
+        {"role": "assistant", "content": "older answer"},
         {"role": "user", "content": "latest user"},
         {"role": "assistant", "content": "latest answer"},
     ]

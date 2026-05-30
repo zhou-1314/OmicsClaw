@@ -60,6 +60,9 @@ ALWAYS_ON = (
     "glob_files",
     "file_read",
     "read_knowhow",
+    # ``ask_user`` (interactive choice tool) is always-on: predicate=None,
+    # so it is exposed every turn regardless of query.
+    "ask_user",
 )
 
 

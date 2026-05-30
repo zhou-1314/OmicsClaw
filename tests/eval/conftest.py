@@ -150,7 +150,11 @@ def real_llm_runner(
             capability_context=capability_context,
             workspace=workspace,
         )
-        selected_specs = select_tool_specs(all_specs, request=request)
+        # ADR 0017 — production freezes the tool list by surface
+        # (``engine/loop.py`` sends ``surface_only=True``); match it so the eval
+        # measures the same Frozen tool list real users get, not the retired
+        # per-turn predicate subset.
+        selected_specs = select_tool_specs(all_specs, request=request, surface_only=True)
         tools = [spec.to_openai_tool() for spec in selected_specs]
 
         client_kwargs: dict[str, Any] = {"api_key": api_key}

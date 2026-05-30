@@ -102,6 +102,39 @@ def test_tool_registry_to_openai_tools_for_request_returns_filtered_payload() ->
     ]
 
 
+def test_surface_only_bypasses_predicates_for_frozen_list() -> None:
+    """ADR 0017: ``surface_only=True`` yields the session-stable Frozen tool
+    list — every surface-eligible tool, independent of the per-turn query, so
+    a request that would normally gate a tool out still includes it."""
+    a = _spec("a")
+    b = _spec("b", predicate=lambda req: bool(req.workspace))
+    c = _spec("c", predicate=lambda req: False)
+    registry = ToolRegistry([a, b, c])
+
+    # Two requests differing only in query/workspace must yield identical lists.
+    frozen_1 = registry.to_openai_tools_for_request(
+        _req(surface="bot", query="explain UMAP"), surface_only=True
+    )
+    frozen_2 = registry.to_openai_tools_for_request(
+        _req(surface="bot", query="run sc-de", workspace="/tmp/x"),
+        surface_only=True,
+    )
+    names_1 = [t["function"]["name"] for t in frozen_1]
+    names_2 = [t["function"]["name"] for t in frozen_2]
+    assert names_1 == names_2 == ["a", "b", "c"]
+    # Surface gating still applies under surface_only.
+    cli_spec = ToolSpec(
+        name="cli_only",
+        description="d",
+        parameters={"type": "object", "properties": {}},
+        surfaces=("interactive",),
+    )
+    bot_frozen = select_tool_specs(
+        (a, cli_spec), request=_req(surface="bot"), surface_only=True
+    )
+    assert [s.name for s in bot_frozen] == ["a"]
+
+
 def test_select_tool_specs_honors_surface_gating() -> None:
     """Surface match remains a prerequisite — predicate runs only after."""
     a = ToolSpec(

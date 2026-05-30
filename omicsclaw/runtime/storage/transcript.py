@@ -464,13 +464,21 @@ class TranscriptStore:
         return message
 
     def prepare_history(self, chat_id: int | str, *, warn: bool = True) -> list[dict]:
+        """Sanitize and return the FULL model-path history (ADR 0017).
+
+        History is append-only between deliberate context collapses: this no
+        longer applies a per-turn newest-suffix slide, which used to shift the
+        first post-prefix message every turn and discard all history caching
+        for sessions past the window. Overflow is now handled solely by the
+        context-collapse stages in ``prepare_model_messages`` (gated on
+        ``max_prompt_chars``), which fold old messages into a frozen ``system``
+        summary — one cache re-warm — leaving the prefix byte-stable between
+        collapses. The ``max_history`` / ``max_history_chars`` budgets remain in
+        force for the *display* replay context (``build_selective_replay_context``).
+        """
         history = self.get_or_create(chat_id)
         history[:] = self.sanitizer(list(history), warn=warn)
-        return trim_history_to_budget(
-            history,
-            max_messages=self.max_history,
-            max_chars=self.max_history_chars,
-        )
+        return list(history)
 
     def build_replay_context(
         self,

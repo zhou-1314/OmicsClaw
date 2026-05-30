@@ -97,12 +97,16 @@ def test_assemble_prompt_context_layers_are_ordered_and_accounted():
     assert "BASE PERSONA" in assembly.system_prompt
     assert "## Output Style Profile" in assembly.system_prompt
     assert "preferred language: Chinese" in assembly.system_prompt
-    assert "## Prefetched Skill Context" in assembly.system_prompt
-    assert "Selected skill: `spatial-preprocess`" in assembly.system_prompt
     assert "seq-think" in assembly.system_prompt
-    # workspace_continuity_rule fires (workspace + pipeline_workspace are set)
-    assert "Workspace Continuity" in assembly.system_prompt
-    assert assembly.message_context == ""
+    # ADR 0017 — query-volatile layers now render into message_context (the
+    # user turn), not the system prefix; the system prefix stays cache-stable.
+    assert "## Prefetched Skill Context" in assembly.message_context
+    assert "Selected skill: `spatial-preprocess`" in assembly.message_context
+    # file_path_and_inspect_rule + workspace_continuity_rule fired (h5ad in
+    # query, workspace set) and now ride the user turn.
+    assert "Workspace Continuity" in assembly.message_context
+    assert "## Prefetched Skill Context" not in assembly.system_prompt
+    assert assembly.message_context != ""
 
 
 def test_assemble_prompt_context_can_route_workspace_to_message_context():
@@ -120,7 +124,9 @@ def test_assemble_prompt_context_can_route_workspace_to_message_context():
     assert "BASE PERSONA" in assembly.system_prompt
     assert "## Output Style Profile" in assembly.system_prompt
     assert "Surface Adapter (bot)" in assembly.system_prompt
-    assert assembly.message_context.startswith("## Workspace Context")
+    # ADR 0017 — other gated rule layers also render to message now, so
+    # workspace_context is present but no longer necessarily first.
+    assert "## Workspace Context" in assembly.message_context
     assert "/tmp/session" in assembly.message_context
     assert assembly.layer_stats["workspace_context"]["placement"] == "message"
 
@@ -178,7 +184,11 @@ def test_assemble_chat_context_loads_memory_and_builds_prompt():
     assert context.session_id == "telegram:user-1:chat-1"
     assert context.memory_context == "preferred language: Chinese"
     assert context.user_text == "Analyze sample.h5ad with spatial-preprocess"
-    assert context.user_message_content == "Analyze sample.h5ad with spatial-preprocess"
+    # ADR 0017 — query-volatile layers (here the file-path rule, triggered by
+    # "sample.h5ad") now ride the user turn as Volatile context, prepended to
+    # the raw user text, and are frozen into history append-only.
+    assert "Analyze sample.h5ad with spatial-preprocess" in context.user_message_content
+    assert "## File Path Discipline" in context.user_message_content
     assert context.skill_hint == "spatial-preprocess"
     assert context.domain_hint == "spatial"
     assert context.capability_context.startswith("## Deterministic Capability Assessment")
@@ -301,7 +311,8 @@ def test_assemble_prompt_context_prefetches_knowledge_guidance_for_method_questi
     )
 
     assert "knowledge_guidance" in assembly.layer_stats
-    assert "Prefer Harmony for batch correction." in assembly.system_prompt
+    # ADR 0017 — per-query knowledge prefetch is Volatile context (message).
+    assert "Prefer Harmony for batch correction." in assembly.message_context
     assert calls == [
         {
             "query": "Which method should I use for batch correction?",
@@ -379,8 +390,9 @@ def test_assemble_prompt_context_includes_skill_context_only_when_relevant():
     )
 
     assert "skill_context" in assembly.layer_stats
-    assert "## Prefetched Skill Context" in assembly.system_prompt
-    assert "Selected skill: `spatial-preprocess`" in assembly.system_prompt
+    # ADR 0017 — matched-skill context is Volatile context (message), not system.
+    assert "## Prefetched Skill Context" in assembly.message_context
+    assert "Selected skill: `spatial-preprocess`" in assembly.message_context
 
 
 def test_build_mcp_instructions_block_skips_inactive_entries():
@@ -506,7 +518,87 @@ def test_assemble_prompt_context_includes_plan_context_layer():
     )
 
     assert "plan_context" in assembly.layer_stats
-    assert "## Active Plan Mode" in assembly.system_prompt
+    # ADR 0017 — evolving plan state is Volatile context (message).
+    assert "## Active Plan Mode" in assembly.message_context
+
+
+def test_system_prompt_is_byte_stable_across_query_intents():
+    """ADR 0017 Phase 2 core invariant: the system prefix must be
+    byte-identical regardless of the query, so the provider's prefix cache
+    stays warm. Query-volatile content rides message_context instead."""
+
+    def _assemble(query: str):
+        return assemble_prompt_context(
+            request=ContextAssemblyRequest(
+                surface="bot",
+                base_persona="BASE PERSONA",
+                include_knowhow=False,
+                query=query,
+            )
+        )
+
+    queries = (
+        "explain UMAP",
+        "run sc-de on /tmp/x.h5ad",  # file-path rule
+        "extract GEO accession from /tmp/paper.pdf",  # pdf rule
+        "search the web for deconvolution methods",  # (web is a tool, not a layer)
+        "请记住我喜欢 DESeq2",  # memory-hygiene rule
+        "implement a custom QC step in python",  # implementation rule
+    )
+    systems = {q: _assemble(q).system_prompt for q in queries}
+    baseline = systems[queries[0]]
+    for q, system_prompt in systems.items():
+        assert system_prompt == baseline, (
+            f"system prefix drifted for query {q!r} — a query-volatile layer "
+            f"leaked into the system prefix and will break the cache."
+        )
+
+    # And the volatile rule genuinely appeared — in the message, not the system.
+    file_turn = _assemble("run sc-de on /tmp/x.h5ad")
+    assert "## File Path Discipline" in file_turn.message_context
+    assert "## File Path Discipline" not in file_turn.system_prompt
+
+
+def test_system_prompt_byte_stable_with_knowhow_and_scoped_memory():
+    """ADR 0017 — knowhow_constraints (query/skill/domain-matched) and
+    scoped_memory_context (query-RANKED) are Volatile context. Even with knowhow
+    ON and scoped memory present, the system prefix must stay byte-identical
+    across queries. This catches a query-varying layer wrongly left in the system
+    tier: it fails if either layer is placement="system" (the original Phase 2
+    mis-classification the adversarial review found)."""
+
+    def _assemble(query: str, skill: str, domain: str):
+        return assemble_prompt_context(
+            request=ContextAssemblyRequest(
+                surface="bot",
+                base_persona="BASE PERSONA",
+                query=query,
+                skill=skill,
+                domain=domain,
+                scoped_memory_context="## Workspace Notes\n\n- prefer leiden clustering",
+                include_knowhow=True,
+                # Content keyed on skill/domain so it genuinely varies per turn —
+                # were this layer in the system tier, the prefix would drift.
+                knowhow_loader=lambda **kw: (
+                    f"⚠️ CONSTRAINTS skill={kw.get('skill')} "
+                    f"domain={kw.get('domain')}: validate QC first"
+                ),
+            )
+        )
+
+    a = _assemble("run sc-de on /tmp/x.h5ad", "sc-de", "singlecell")
+    b = _assemble("do enrichment analysis", "sc-enrichment", "singlecell")
+    c = _assemble("explain UMAP", "", "")
+
+    assert a.system_prompt == b.system_prompt == c.system_prompt, (
+        "system prefix drifted across query/skill/domain — a query-varying layer "
+        "(knowhow_constraints or scoped_memory_context) leaked into the system tier."
+    )
+    # The volatile knowhow + scoped-memory content rides the user turn, not system.
+    assert "CONSTRAINTS skill=sc-de" in a.message_context
+    assert "Workspace Notes" in a.message_context
+    assert "CONSTRAINTS" not in a.system_prompt
+    assert "Workspace Notes" not in a.system_prompt
 
 
 def test_assemble_prompt_context_routes_transcript_context_to_message_layer():

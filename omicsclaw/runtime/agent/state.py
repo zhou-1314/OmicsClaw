@@ -337,6 +337,14 @@ tool_result_store = ToolResultStore(
 conversations = transcript_store.messages_by_chat
 _conversation_access = transcript_store.access_by_chat  # LRU tracking
 
+# ADR 0017 — process-wide prompt-prefix cache telemetry sink, re-exported here
+# so it sits alongside the other per-chat stores. The query engine records into
+# it directly (see ``cache_diagnostics.CACHE_DIAGNOSTICS``); this alias is for
+# discoverability and for surfaces that want to read session hit ratios.
+from omicsclaw.runtime.agent.cache_diagnostics import (  # noqa: E402
+    CACHE_DIAGNOSTICS as cache_diagnostics_store,
+)
+
 # received_files moved to omicsclaw.runtime.agent.session (re-exported via the SessionManager import below).
 pending_media: dict[int | str, list[dict]] = {}
 pending_preflight_requests: dict[int | str, dict] = {}

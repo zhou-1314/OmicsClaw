@@ -49,6 +49,12 @@ from ..context.budget import (
     create_token_budget_tracker,
     record_completion_tokens,
 )
+from .cache_diagnostics import (
+    CACHE_DIAGNOSTICS,
+    CacheTurnDiagnostics,
+    compute_segment_hash,
+    extract_cache_tokens,
+)
 from .loop_pathology import detect as detect_loop_pathology
 from .loop_state import (
     LoopState,
@@ -126,6 +132,10 @@ class QueryEngineCallbacks:
     on_llm_error: Callable[[Exception], Any] | None = None
     on_context_compacted: Callable[["CompactionEvent"], Any] | None = None
     on_pathology_signal: Callable[[PathologySignal], Any] | None = None
+    # ADR 0017 — per-turn prompt-prefix cache diagnostics (hit ratio +
+    # inferred miss reason). Surfaces subscribe to display/log them; ``None``
+    # (default) still records into the process-wide ``CACHE_DIAGNOSTICS`` sink.
+    on_cache_diagnostics: Callable[["CacheTurnDiagnostics"], Any] | None = None
     # ADR 0009 — declared for callback-construction symmetry. The
     # functional path uses ``context.tool_runtime_context["cancel_event"]``
     # (a dict already merged into each ToolExecutionRequest.runtime_context
@@ -183,6 +193,32 @@ def _record_usage(
         delta = callbacks.accumulate_usage(response_usage)
     if on_usage_delta is not None:
         on_usage_delta(response_usage, delta)
+
+
+async def _emit_cache_diagnostics(
+    *,
+    callbacks: QueryEngineCallbacks,
+    chat_id: Any,
+    response_usage: Any,
+    tool_hash: str,
+    system_hash: str,
+) -> None:
+    """Record one LLM call's prompt-prefix cache outcome (ADR 0017 Phase 0).
+
+    Always rolls the cross-turn prefix hashes forward (so the next call can
+    attribute a miss) and accumulates per-session hit/miss totals into the
+    ``CACHE_DIAGNOSTICS`` sink; additionally invokes the optional
+    ``on_cache_diagnostics`` surface callback when one is wired.
+    """
+    tokens = extract_cache_tokens(response_usage)
+    diagnostics = CACHE_DIAGNOSTICS.record(
+        chat_id,
+        tool_hash=tool_hash,
+        system_hash=system_hash,
+        tokens=tokens,
+    )
+    if callbacks.on_cache_diagnostics is not None:
+        await _maybe_await(callbacks.on_cache_diagnostics(diagnostics))
 
 
 def _is_prompt_too_long_error(exc: BaseException) -> bool:
@@ -975,7 +1011,10 @@ async def run_planned_tool_calls(
         )
 
     transcript_store.touch(context.chat_id)
-    transcript_store.evict_lru_conversations()
+    for _evicted_chat in transcript_store.evict_lru_conversations():
+        # ADR 0017 — release per-chat cache diagnostics when its transcript is
+        # evicted, so the CACHE_DIAGNOSTICS sink can't grow unbounded.
+        CACHE_DIAGNOSTICS.reset(_evicted_chat)
     if append_user_message:
         transcript_store.append_user_message(context.chat_id, context.user_message_content)
     transcript_store.prepare_history(context.chat_id)
@@ -1027,13 +1066,16 @@ async def _call_llm_with_reactive_compact_retry(
     compaction_workspace: str | None,
     on_usage_delta,
     has_attempted_reactive_compact: bool,
-) -> tuple["MaterializedMessage", bool]:
+) -> tuple["MaterializedMessage", bool, str]:
     """One LLM turn with on-demand reactive compaction (ADR 0008 L1).
 
-    Returns the materialised assistant message plus the (possibly flipped)
-    ``has_attempted_reactive_compact`` flag. Raises the underlying LLM
-    error if reactive compaction cannot recover; the caller is
-    responsible for routing the exception through ``on_llm_error``.
+    Returns the materialised assistant message, the (possibly flipped)
+    ``has_attempted_reactive_compact`` flag, and the ``request_system_prompt``
+    **actually sent** — which differs from the caller's value when reactive
+    compaction rebuilt it, so the caller's cache diagnostics (ADR 0017) hash the
+    real sent bytes and attribute the collapse re-warm as ``system-changed``.
+    Raises the underlying LLM error if reactive compaction cannot recover; the
+    caller is responsible for routing the exception through ``on_llm_error``.
     """
     while True:
         kwargs = {}
@@ -1065,7 +1107,7 @@ async def _call_llm_with_reactive_compact_retry(
                 callbacks,
                 on_usage_delta=on_usage_delta,
             )
-            return last_message, has_attempted_reactive_compact
+            return last_message, has_attempted_reactive_compact, request_system_prompt
         except config.llm_error_types as exc:
             if not (
                 not has_attempted_reactive_compact
@@ -1162,7 +1204,10 @@ async def run_query_engine(
             ).strip()
 
     transcript_store.touch(context.chat_id)
-    transcript_store.evict_lru_conversations()
+    for _evicted_chat in transcript_store.evict_lru_conversations():
+        # ADR 0017 — release per-chat cache diagnostics when its transcript is
+        # evicted, so the CACHE_DIAGNOSTICS sink can't grow unbounded.
+        CACHE_DIAGNOSTICS.reset(_evicted_chat)
     transcript_store.append_user_message(context.chat_id, context.user_message_content)
     transcript_store.prepare_history(context.chat_id)
 
@@ -1179,7 +1224,19 @@ async def run_query_engine(
     )
     compaction_workspace = pipeline_workspace or workspace or None
 
+    # ADR 0017 — the tool segment is frozen for the whole call (the per-turn
+    # frozen tool list), so hash it once; ``_observe_usage_delta`` captures each
+    # call's usage so cache diagnostics can be emitted after the call returns.
+    _diag_tool_payload = (
+        list(context.request_tools)
+        if context.request_tools is not None
+        else list(tool_runtime.openai_tools)
+    )
+    diag_tool_hash = compute_segment_hash(_diag_tool_payload)
+    _last_response_usage: dict[str, Any] = {"usage": None}
+
     def _observe_usage_delta(response_usage, delta) -> None:
+        _last_response_usage["usage"] = response_usage
         completion_tokens = _extract_completion_tokens(response_usage, delta)
         if completion_tokens > 0:
             record_completion_tokens(budget_tracker, completion_tokens)
@@ -1218,7 +1275,7 @@ async def run_query_engine(
                 applied_stages=prepared_messages.applied_stages,
             )
         try:
-            last_message, has_attempted_reactive_compact = (
+            last_message, has_attempted_reactive_compact, sent_system_prompt = (
                 await _call_llm_with_reactive_compact_retry(
                     llm=llm,
                     context=context,
@@ -1241,6 +1298,20 @@ async def run_query_engine(
             if callbacks.on_llm_error is not None:
                 return await _maybe_await(callbacks.on_llm_error(exc))
             raise
+
+        # ADR 0017 — attribute this call's prefix-cache outcome. ``sent_system_prompt``
+        # is the exact system bytes the helper actually sent (reactive compaction may
+        # have rebuilt them mid-call), so a collapse re-warm is correctly attributed as
+        # ``system-changed`` rather than mis-reported one turn late. The tool hash is
+        # constant for the call; a per-turn tool churn would surface as ``tool-list-changed``.
+        await _emit_cache_diagnostics(
+            callbacks=callbacks,
+            chat_id=context.chat_id,
+            response_usage=_last_response_usage["usage"],
+            tool_hash=diag_tool_hash,
+            system_hash=compute_segment_hash(sent_system_prompt),
+        )
+        _last_response_usage["usage"] = None
 
         assistant_tool_calls = None
         if last_message.tool_calls:

@@ -1,38 +1,34 @@
-"""Snapshot tests for the assembled bot tool list.
+"""Snapshot + invariant tests for the assembled bot tool list.
 
-Phase 1 (T1.1) of the tool-list-compression refactor. Freezes the OpenAI
-tool-list payload for 10 representative request shapes so the upcoming
-predicate-gated lazy-load produces visible, reviewable diffs against a
-known reference.
+ADR 0017 (Prompt Prefix Caching) retired per-turn tool-list-compression: the
+production path now calls ``to_openai_tools_for_request(..., surface_only=True)``,
+yielding the **Frozen tool list** — every surface-eligible tool, byte-identical
+across a session's turns regardless of the query. (The old per-turn predicate
+gating, and the char-budget assertions that drove it, are gone; once tools live
+in a cached prefix, hit-token pricing makes compressing them a net loss.)
+
+This file pins the frozen payload per surface (drift detection — it is what
+catches a stray new always-on tool) and asserts its two invariants:
+query-independence and full-surface coverage.
 
 Usage:
-    pytest tests/test_tool_list_snapshots.py            # verify
+    pytest tests/test_tool_list_snapshots.py
     UPDATE_SNAPSHOTS=1 pytest tests/test_tool_list_snapshots.py  # regenerate
-
-Each fixture lives at ``tests/fixtures/tool_list/<scenario>.json`` and
-contains:
-- ``request``: the scenario inputs (surface, skill, query, ...)
-- ``total_chars``: total chars across all tool descriptions + parameter schemas
-- ``tool_count``: number of ToolSpecs visible
-- ``tool_names``: sorted list of visible tool names
-- ``tools``: full openai-tool serialized list (the payload that goes to the LLM)
-
-Phase 1 baseline: every scenario sees all 41 tools (no per-request
-filtering yet). Subsequent commits in this branch flip to
-predicate-gated selection and the fixtures shrink dramatically.
 """
 
 from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from omicsclaw.runtime.context.layers import ContextAssemblyRequest
 from omicsclaw.runtime.tools.builders.agent import BotToolContext, build_bot_tool_specs
+from omicsclaw.runtime.tools.registry import select_tool_specs
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "tool_list"
 UPDATE = os.environ.get("UPDATE_SNAPSHOTS", "").strip() not in ("", "0", "false", "False")
@@ -42,99 +38,47 @@ UPDATE = os.environ.get("UPDATE_SNAPSHOTS", "").strip() not in ("", "0", "false"
 class Scenario:
     name: str
     surface: str = "bot"
-    skill: str = ""
     query: str = ""
     workspace: str = ""
-    pipeline_workspace: str = ""
-    capability_context: str = ""
 
 
-SCENARIOS: tuple[Scenario, ...] = (
-    Scenario(name="baseline_bot"),
+# One snapshot per surface pins the frozen payload for drift detection.
+SNAPSHOT_SCENARIOS: tuple[Scenario, ...] = (
+    Scenario(name="baseline_bot", surface="bot"),
     Scenario(name="baseline_interactive", surface="interactive"),
-    Scenario(
-        name="realistic_bot_scde",
-        surface="bot",
-        skill="sc-de",
-        query="do differential expression on /tmp/sample.h5ad",
-    ),
-    Scenario(
-        name="realistic_bot_bulkrna_de",
-        surface="bot",
-        skill="bulkrna-de",
-        query="run differential expression on /tmp/counts.csv",
-    ),
-    Scenario(
-        name="realistic_bot_pdf_paper",
-        surface="bot",
-        query="extract GEO accession from /tmp/paper.pdf",
-    ),
-    Scenario(
-        name="realistic_bot_workspace",
-        surface="bot",
-        query="show me the latest plan",
-        workspace="/tmp/run42",
-        pipeline_workspace="/tmp/run42",
-    ),
-    Scenario(
-        name="realistic_bot_save_intent",
-        surface="bot",
-        query="implement and save a sc-de variant under output/",
-    ),
-    Scenario(
-        name="realistic_bot_plot_intent",
-        surface="bot",
-        query="enhance the umap plot with bigger fonts",
-    ),
-    Scenario(
-        name="realistic_bot_code_edit_intent",
-        surface="bot",
-        query="refactor sc-de.py to extract the threshold helper",
-    ),
-    Scenario(
-        name="realistic_bot_web_intent",
-        surface="bot",
-        query="search the web for spatial deconvolution method comparison",
-    ),
 )
 
 
-def _build_specs(scenario: Scenario):
-    """Return the per-request *selected* specs (the payload the LLM
-    actually sees), mirroring what ``ToolRegistry.to_openai_tools_for_request``
-    produces in production."""
-    from omicsclaw.runtime.context.layers import ContextAssemblyRequest
-    from omicsclaw.runtime.tools.registry import select_tool_specs
+# Diverse bot queries that, pre-ADR-0017, gated different tools (file path, PDF,
+# web, plot, memory). Post-ADR-0017 they must all yield the IDENTICAL frozen
+# list — that is the tool-segment half of the Stable prefix invariant.
+DIVERSE_BOT_QUERIES: tuple[str, ...] = (
+    "",
+    "do differential expression on /tmp/sample.h5ad",
+    "extract GEO accession from /tmp/paper.pdf",
+    "search the web for spatial deconvolution comparison",
+    "enhance the umap plot with bigger fonts",
+    "请记住我喜欢 DESeq2",
+    "implement and save a sc-de variant under output/",
+)
 
-    skills = (scenario.skill,) if scenario.skill else ("sc-de",)
-    ctx = BotToolContext(skill_names=skills, domain_briefing="(test)")
+
+def _frozen_specs(*, surface: str = "bot", query: str = "", workspace: str = ""):
+    """The per-session Frozen tool list — what production actually sends."""
+    ctx = BotToolContext(skill_names=("sc-de",), domain_briefing="(test)")
     all_specs = build_bot_tool_specs(ctx)
-    request = ContextAssemblyRequest(
-        surface=scenario.surface,
-        skill=scenario.skill,
-        query=scenario.query,
-        workspace=scenario.workspace,
-        pipeline_workspace=scenario.pipeline_workspace,
-        capability_context=scenario.capability_context,
-    )
-    return select_tool_specs(all_specs, request=request)
+    request = ContextAssemblyRequest(surface=surface, query=query, workspace=workspace)
+    return select_tool_specs(all_specs, request=request, surface_only=True)
 
 
 def _serialize(scenario: Scenario) -> dict[str, Any]:
-    specs = _build_specs(scenario)
+    specs = _frozen_specs(surface=scenario.surface, query=scenario.query)
     tools = [spec.to_openai_tool() for spec in specs]
     total_chars = sum(
         len(spec.description) + len(json.dumps(spec.parameters)) for spec in specs
     )
     return {
-        "request": {
-            "surface": scenario.surface,
-            "skill": scenario.skill,
-            "query": scenario.query,
-            "workspace": scenario.workspace,
-            "pipeline_workspace": scenario.pipeline_workspace,
-            "capability_context": scenario.capability_context,
-        },
+        "request": {"surface": scenario.surface, "query": scenario.query},
         "total_chars": total_chars,
         "tool_count": len(specs),
         "tool_names": sorted(spec.name for spec in specs),
@@ -146,8 +90,8 @@ def _fixture_path(scenario: Scenario) -> Path:
     return FIXTURE_DIR / f"{scenario.name}.json"
 
 
-@pytest.mark.parametrize("scenario", SCENARIOS, ids=lambda s: s.name)
-def test_tool_list_matches_snapshot(scenario: Scenario) -> None:
+@pytest.mark.parametrize("scenario", SNAPSHOT_SCENARIOS, ids=lambda s: s.name)
+def test_frozen_tool_list_matches_snapshot(scenario: Scenario) -> None:
     actual = _serialize(scenario)
     fixture = _fixture_path(scenario)
     if UPDATE or not fixture.exists():
@@ -163,76 +107,40 @@ def test_tool_list_matches_snapshot(scenario: Scenario) -> None:
     assert actual == expected, (
         f"\nSnapshot drift: {scenario.name}\n"
         f"  fixture: {fixture}\n"
-        f"  actual total_chars: {actual['total_chars']} vs expected {expected.get('total_chars')}\n"
-        f"  actual tool_count:  {actual['tool_count']} vs expected {expected.get('tool_count')}\n"
-        f"  fix: rerun with UPDATE_SNAPSHOTS=1 and review the diff before committing."
+        f"  actual tool_count: {actual['tool_count']} vs expected {expected.get('tool_count')}\n"
+        f"  A new always-on tool or a changed description? If intended, rerun with "
+        f"UPDATE_SNAPSHOTS=1 and review the diff before committing."
     )
 
 
 def test_all_scenarios_have_unique_names() -> None:
-    names = [s.name for s in SCENARIOS]
+    names = [s.name for s in SNAPSHOT_SCENARIOS]
     assert len(names) == len(set(names))
 
 
-def test_at_least_ten_scenarios_cover_intent_categories() -> None:
-    """Coverage guard: 10 scenarios over baseline + 4 intent categories
-    that gate predicate-injected tools (file/path, pdf, workspace, plot,
-    code-edit, web). Subsequent phases rely on these triggers firing /
-    not-firing per scenario."""
-    assert len(SCENARIOS) >= 10
-    surfaces = {s.surface for s in SCENARIOS}
-    assert "bot" in surfaces
-    assert "interactive" in surfaces
+def test_frozen_list_is_query_independent_for_bot() -> None:
+    """ADR 0017 core invariant: the frozen bot tool payload is byte-identical
+    across queries that previously gated different tools."""
+    baseline = [spec.to_openai_tool() for spec in _frozen_specs(surface="bot")]
+    for query in DIVERSE_BOT_QUERIES:
+        payload = [spec.to_openai_tool() for spec in _frozen_specs(surface="bot", query=query)]
+        assert payload == baseline, (
+            f"frozen tool list changed for query {query!r}; the tool segment of "
+            f"the prefix must be query-independent (else cache diagnostics will "
+            f"flip to 'tool-list-changed')."
+        )
 
 
-# --- Phase 1 budget asserts --------------------------------------------------
-
-
-def _baseline_payload() -> dict[str, Any]:
-    return _serialize(Scenario(name="baseline_bot"))
-
-
-def test_always_on_tool_list_under_phase2_budget() -> None:
-    """Phase 2 budget: <=8,000 chars. Note ``replot_skill`` is
-    predicate-gated (lazy-load), so its compression doesn't affect the
-    baseline; only ``omicsclaw`` description shrinkage counts here.
-
-    History: 29,262 unfiltered → 8,745 on Phase 1 lazy-load (-70%)
-    → 7,708 on Phase 2 omicsclaw description compression (-74%).
-    """
-    payload = _baseline_payload()
-    assert payload["total_chars"] <= 8000, (
-        f"always-on tool list grew to {payload['total_chars']} chars; "
-        f"Phase 2 budget is 8,000. Either compress an always-on tool "
-        f"description or move it to lazy-load."
-    )
-
-
-def test_realistic_scde_tool_list_under_phase2_budget() -> None:
-    """Phase 2 budget: realistic sc-de <=12,500 chars (vs 29,262 unfiltered)."""
-    scde = next(s for s in SCENARIOS if s.name == "realistic_bot_scde")
-    payload = _serialize(scde)
-    assert payload["total_chars"] <= 12500, (
-        f"sc-de tool list at {payload['total_chars']} chars; Phase 2 budget 12,500"
-    )
-
-
-def test_baseline_tool_count_matches_always_on_set() -> None:
-    """Baseline must show exactly the 8 always-on tools."""
-    payload = _baseline_payload()
-    expected = {
-        "omicsclaw",
-        "resolve_capability",
-        "consult_knowledge",
-        "inspect_data",
-        "list_directory",
-        "glob_files",
-        "file_read",
-        "read_knowhow",
+def test_frozen_list_is_full_bot_surface_set() -> None:
+    """The frozen list includes every bot-surface tool — no per-turn gating."""
+    ctx = BotToolContext(skill_names=("sc-de",), domain_briefing="(test)")
+    all_specs = build_bot_tool_specs(ctx)
+    bot_eligible = {
+        spec.name for spec in all_specs if (not spec.surfaces) or "bot" in spec.surfaces
     }
-    actual = set(payload["tool_names"])
-    assert actual == expected, (
-        f"baseline visible tools differ from always-on contract\n"
-        f"  unexpected extras: {actual - expected}\n"
-        f"  missing required: {expected - actual}"
+    frozen = {spec.name for spec in _frozen_specs(surface="bot")}
+    assert frozen == bot_eligible, (
+        f"frozen list must equal the full bot-surface set\n"
+        f"  missing: {bot_eligible - frozen}\n"
+        f"  unexpected: {frozen - bot_eligible}"
     )

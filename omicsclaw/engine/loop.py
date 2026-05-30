@@ -82,6 +82,23 @@ def _maybe_append_caller_addition(system_prompt: str, addition: str) -> str:
     return system_prompt.rstrip() + "\n\n" + addition.strip()
 
 
+def _prepend_user_turn_context(content: str | list, addition: str) -> str | list:
+    """Prepend per-turn Volatile context (ADR 0017) to the user message.
+
+    The Analysis Router's route context, autonomous understanding, and
+    assisted-parameterization context are query-volatile, so they ride the
+    user turn — frozen append-only into history — rather than the system
+    prefix, keeping the Prompt prefix byte-stable across turns. Handles both
+    plain-string and multimodal (list-of-parts) user content.
+    """
+    if not addition or not addition.strip():
+        return content
+    block = addition.strip()
+    if isinstance(content, list):
+        return [{"type": "text", "text": block}, *content]
+    return f"{block}\n\n{content}"
+
+
 async def run_engine_loop(
     *,
     deps: EngineDependencies,
@@ -107,12 +124,19 @@ async def run_engine_loop(
     extra_api_params: dict | None = None,
     max_tokens_override: int = 0,
     system_prompt_append: str = "",
+    user_turn_context: str = "",
     mode: str = "",
     request_tool_approval: Any = None,
     policy_state: Any = None,
     cancel_event: Any = None,
 ) -> str:
     """Drive the LLM-plus-tools loop for a single chat turn.
+
+    ``user_turn_context`` (ADR 0017) carries per-turn Volatile context — the
+    Analysis Router's route context, autonomous understanding, and assisted
+    parameterization — which is prepended to the user message rather than the
+    system prefix, so the prefix stays cache-stable. ``system_prompt_append``
+    remains a system-prefix addition for callers that genuinely want one.
 
     Returns the assistant's final user-facing reply.
 
@@ -167,9 +191,14 @@ async def run_engine_loop(
     system_prompt = _maybe_append_caller_addition(system_prompt, system_prompt_append)
     system_prompt = _maybe_append_mode_hint(system_prompt, mode)
 
+    # ADR 0017 — freeze the tool list by surface (a session constant), not by
+    # per-turn query predicates. Byte-identical across turns ⇒ the tool segment
+    # of the Prompt prefix stays cache-stable. Cache diagnostics will flip to
+    # ``tool-list-changed`` if anything re-introduces per-turn tool variation.
     request_tools = tuple(
         deps.tool_registry.to_openai_tools_for_request(
-            chat_context.prompt_context.request
+            chat_context.prompt_context.request,
+            surface_only=True,
         )
     )
     hook_runtime = build_default_lifecycle_hook_runtime(deps.omicsclaw_dir)
@@ -201,7 +230,9 @@ async def run_engine_loop(
             chat_id=chat_id,
             session_id=chat_context.session_id,
             system_prompt=system_prompt,
-            user_message_content=chat_context.user_message_content,
+            user_message_content=_prepend_user_turn_context(
+                chat_context.user_message_content, user_turn_context
+            ),
             surface=surface,
             policy_state=resolved_policy_state,
             hook_runtime=hook_runtime,

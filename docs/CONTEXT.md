@@ -156,6 +156,28 @@ _Avoid_: "rewrite the skill", "replace the skill"
 **No skill match**: A capability decision where no built-in skill covers the requested analysis well enough to execute safely as a skill.
 _Avoid_: "unknown request", "miss"
 
+### Prompt Prefix & Caching
+
+The vocabulary for maximizing the LLM provider's automatic prefix cache (DeepSeek's `prompt_cache_hit_tokens`, OpenAI's `prompt_tokens_details.cached_tokens`). The mechanism is byte-exact: the provider caches the longest request prefix that is byte-identical to a recent request, so cache hit rate is governed entirely by **how stable the front of the request is across turns of one session**. OmicsClaw targets automatic prefix caching, **not** Anthropic `cache_control` breakpoints (decided 2026-05-30). Inspired by `DeepSeek-Reasonix`'s 99.82%-hit design, adapted to OmicsClaw's multi-surface, multi-user, layered assembler.
+
+**Prompt prefix**: The leading span of the request — serialized `tools` + the `system` message — that the provider keys its cache on. Everything the provider sees before the first turn-varying byte.
+_Avoid_: "system prompt" (only one part of the prefix; tools come first), "context".
+
+**Stable prefix invariant**: The rule that, within one session, the Prompt prefix must be **byte-identical across consecutive requests**. The provider's prefix cache fails from the first differing byte onward, so a single mid-prefix change discards the cache for that change point *and the entire conversation history that follows it*. The whole caching design is the enforcement of this one invariant.
+_Avoid_: "prefix should be similar", "mostly stable".
+
+**Volatile context**: The per-turn content that changes with the current query — query-gated rule layers, matched-skill / capability / knowledge-guidance / plan context, **query-ranked `scoped_memory_context`**, **query/skill/domain-matched `knowhow_constraints`**, and the Analysis Router's route / autonomous-understanding / assisted-parameterization context. To preserve the Stable prefix invariant it is rendered into the **latest user message** (`placement="message"` for layers; prepended as `user_turn_context` for route context), landing at the append-only tail of history, never in the `system` prefix. The classifier is *volatility*, not semantic role: a layer goes here iff its content varies within a session, regardless of whether it reads as an "instruction".
+_Avoid_: "dynamic prompt", "context injection" (too broad — covers stable layers too).
+
+**Session prefix snapshot**: The session-stable `system` tier (base persona, surface voice, output style, extension packs, mcp instructions, workspace context, and **session-scoped `memory_context`** — preferences/lineage that change only on a memory *write*, not per query) plus the Frozen tool list. v1 keeps it byte-stable **by construction** — deterministic re-assembly of session-constant inputs each turn — rather than a literal cached freeze object (that freeze is a deferred perf optimization). It changes only at a deliberate, logged **cache re-warm**: a model switch, a memory write (refreshing `memory_context`), a context collapse, or a session-start/resume hook injecting content. The analogue of Reasonix's `addTool`/`replaceSystem` invalidation.
+_Avoid_: "cache warmup", "prompt cache" (the cache is the provider's; this is the stable input tier).
+
+**Frozen tool list**: The session's tool payload, filtered once by `surface` (a session constant) and then frozen in static registration order. Per-turn query-keyword gating (the former tool-list-compression) is dropped: once tools live in a cached prefix, hit-token pricing (~10% of miss) makes compression a net loss. Unlike Reasonix, OmicsClaw needs **no** locale-independent re-sort — its tools are statically registered, so order is already deterministic; the only requirement is to stop varying the subset per request.
+_Avoid_: "lazy-load tools", "tool compression" (the retired per-turn behavior).
+
+**Cache-hit diagnostics**: The per-turn observability that reads `hit`/`miss` tokens from provider usage, computes a hit ratio, and — when a miss is unexpected — infers the reason by hashing prefix segments (tools / stable-system) and comparing against the prior turn (`tool-list-changed`, `system-changed`, `cold-start`, …). The Reasonix feature that turns the Stable prefix invariant from a hope into a measured property.
+_Avoid_: "cache metrics" (too vague), "token accounting" (that is billing, a superset).
+
 ## Relationships
 
 - A **Surface** holds one **MemoryClient** per request context.
@@ -182,6 +204,12 @@ _Avoid_: "unknown request", "miss"
 - **Output-shape parity** lets CLI, Desktop, memory, and review tooling read Autonomous Code Runner outputs through the same manifest and completion-report conventions used for skill outputs.
 - A **No skill match** or **Partial skill match** that carries a trusted input file passes through **Data-grounded autonomous planning** — deterministic `inspect_data` + schema injection + a schema-grounded plan — before the **Autonomous Code Runner** is invoked. The intelligence (planning, ambiguity judgement, interpretation) lives in the outer loop; the runner stays a bounded sandbox.
 - **Autonomous result validation** (outer loop), not **Evidence-bound repair** (runner), decides whether a run satisfied the user request; on failure it triggers a bounded re-delegation to the **Autonomous Code Runner**.
+- The **Prompt prefix** is the **Frozen tool list** (serialized first) followed by the stable `system` layers of the **Session prefix snapshot**; the **Stable prefix invariant** keeps it byte-identical across a session's turns.
+- The **Frozen tool list** is filtered once by the **Surface** (`surface` is a session constant), so per-Surface tool sets never break the **Stable prefix invariant** — different Surfaces are different sessions, not different turns.
+- **Volatile context** — per-turn `memory` recall, `capability`/`skill` hints, query-gated rule layers, and the **Analysis Router**'s route context — is rendered into the latest user message (`placement="message"`), landing on the append-only tail; it never enters the `system` prefix, so it cannot break the **Stable prefix invariant**.
+- A **Session prefix snapshot** is invalidated only by a deliberate, logged **cache re-warm**: a model switch, a `memory` write (which refreshes the snapshotted session-scoped `memory_context`), or a context collapse. Between re-warms, history is append-only.
+- Context collapse (the existing `CONTEXT_COLLAPSE` / `AUTO_COMPACT`) is the sole overflow handler: it folds old messages into a frozen `system` summary (one **cache re-warm**) so history stays append-only between collapses — replacing the former per-turn `trim_history_to_budget` sliding window, which shifted the history prefix every turn and discarded all history caching for sessions past the window.
+- **Cache-hit diagnostics** hash the **Frozen tool list** and the stable `system` prefix each turn: an unexpected provider miss with unchanged hashes is reported `history-shifted`, a changed tool hash `tool-list-changed`, a changed system hash `system-changed` — turning the **Stable prefix invariant** into a CI-assertable regression guard.
 
 ## Example dialogue
 
@@ -196,6 +224,12 @@ _Avoid_: "unknown request", "miss"
 >
 > **Dev:** "The user asks for a built-in clustering plus a custom publication figure."
 > **Architect:** "That is a **Partial skill match** using **Skill-first composition**: the clustering runs through the shared skill runner, then the figure is produced through the **Autonomous Analysis Path**."
+>
+> **Dev:** "The user typed a file path this turn, so the file tools appeared in the request. Next turn they didn't — does that hurt?"
+> **Architect:** "It used to: per-turn query-keyword gating changed the **Frozen tool list**, breaking the **Stable prefix invariant** at the tools segment and discarding the cache for the whole request. We dropped that gating — the tool list is now frozen per session, so the path-mentioning turn and the next turn send a byte-identical **Prompt prefix**. The file-path *rule layer* still appears adaptively, but as **Volatile context** in the user message, where it costs nothing in cache."
+>
+> **Dev:** "A 60-message session shows hit_ratio 0.95 on turn 30, then 0.0 on turn 31. What broke?"
+> **Architect:** "Read the **Cache-hit diagnostics** miss reason. `system-changed` means a `memory` write re-warmed the **Session prefix snapshot** — expected, one turn. `history-shifted` with unchanged hashes would mean a context collapse folded old messages (also expected). `tool-list-changed` would be a real regression — something re-introduced per-turn tool variation."
 
 ## Resolved-by-default decisions
 
