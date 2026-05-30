@@ -154,9 +154,8 @@ _READ_WITHHELD_TOOLS: frozenset[str] = frozenset(
         # heavyweight compute / skill creation
         "omicsclaw", "autonomous_analysis_execute", "custom_analysis_execute",
         "create_omics_skill", "replot_skill",
-        # network-download (workspace write): excluded from Read, returns in Phase 3
-        # wired for permission-gated download (ADR 0021).
-        "parse_literature",
+        # NOTE: parse_literature is NO LONGER withheld from Read (Phase 3.3b): it is
+        # allowed in Read with its download permission-gated (approval_mode=ASK).
         # file / directory mutation
         "file_edit", "file_write", "save_file", "write_file",
         "move_file", "remove_file", "make_directory",

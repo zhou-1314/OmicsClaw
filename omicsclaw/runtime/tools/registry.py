@@ -23,11 +23,13 @@ _LOGGER = logging.getLogger("omicsclaw.runtime.tools.registry")
 _READ_STAGE_TOOLS: frozenset[str] = frozenset(
     {
         # literature + knowledge + web reading (metadata / parse / read-only).
-        # parse_literature is intentionally EXCLUDED: its executor defaults
-        # auto_download=True (workspace write + network), so it is withheld from
-        # Read and returns in Phase 3 wired for permission-gated download (ADR 0021);
-        # fetch_geo_metadata is the metadata-only (download=False) reader kept here.
-        "fetch_geo_metadata", "consult_knowledge", "read_knowhow",
+        # parse_literature is now IN Read (Phase 3.3b): its download is permission-
+        # gated (approval_mode=ASK, ADR 0021) — a proposal, never automatic — and a
+        # downloaded dataset registers under dataset://<thread_id>/*. fetch_geo_metadata
+        # stays ungated as the metadata reader (download defaults False); its rarely-used
+        # download=True branch is itself ungated — a pre-existing bypass to gate in a
+        # follow-up (ADR 0021 applies to it too).
+        "fetch_geo_metadata", "parse_literature", "consult_knowledge", "read_knowhow",
         "web_search", "web_fetch", "web_method_search",
         # OmicsClaw-KG read tools (Bench Phase 3.1, ADR 0019): read-only retrieval
         # over the cross-research knowledge base — the core of the Read stage.

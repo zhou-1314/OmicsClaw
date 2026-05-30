@@ -404,8 +404,17 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                 "required": ["input_value"],
             },
             surfaces=("bot",),
+            # Bench (ADR 0021, Phase 3.3b) — the download is a permission-gated
+            # PROPOSAL, never automatic. approval_mode=ASK routes the call through
+            # request_tool_approval on surfaces that support it (desktop); on
+            # surfaces without an approval callback (channels/CLI) it is blocked
+            # with a message, consistent with the other write/network ASK tools
+            # (move_file/remove_file/file_write). context_params deliver session +
+            # thread so a downloaded dataset registers under dataset://<thread_id>/*.
+            context_params=("session_id", "thread_id"),
             read_only=False,
             concurrency_safe=False,
+            approval_mode=APPROVAL_MODE_ASK,
             risk_level=RISK_LEVEL_MEDIUM,
             writes_workspace=True,
             touches_network=True,

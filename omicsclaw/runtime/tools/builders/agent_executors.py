@@ -978,8 +978,45 @@ async def execute_generate_audio(args: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def execute_parse_literature(args: dict) -> str:
-    """Execute literature parsing skill."""
+async def _register_literature_datasets(
+    out_dir: Path, session_id: str, thread_id: str
+) -> None:
+    """Register literature-downloaded datasets under the active thread (Phase 3.3b).
+
+    Reads the literature skill's ``result.json`` and captures each downloaded data
+    file as a ``DatasetMemory`` scoped to ``thread_id`` (so it lands under
+    ``dataset://<thread_id>/<basename>`` and Analyze in this thread can reference
+    it). The per-GSE ``metadata.json`` sidecar is skipped — it is not a dataset.
+    Never raises into the loop.
+    """
+    try:
+        result_path = out_dir / "result.json"
+        if not result_path.exists():
+            return
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+        data = payload.get("data", {}) or {}
+        platform = (data.get("metadata", {}) or {}).get("technology") or ""
+        for dl in data.get("download_results", []) or []:
+            if dl.get("status") not in ("success", "partial"):
+                continue
+            for f in dl.get("files", []) or []:
+                if Path(f).name == "metadata.json":
+                    continue
+                await _auto_capture_dataset(session_id, str(f), platform, thread_id=thread_id)
+    except Exception as e:
+        logger.warning(f"Literature dataset registration failed: {e}")
+
+
+async def execute_parse_literature(
+    args: dict, session_id: str | None = None, thread_id: str = ""
+) -> str:
+    """Execute literature parsing skill.
+
+    Bench (Phase 3.3b): on a successful download, each downloaded dataset is
+    registered under the active investigation thread (``dataset://<thread_id>/*``)
+    so Analyze in the same thread can reference it. The download itself is
+    permission-gated at the ToolSpec layer (approval_mode=ASK, ADR 0021).
+    """
     input_value = args.get("input_value", "")
     input_type = args.get("input_type", "auto")
     auto_download = args.get("auto_download", True)
@@ -1043,6 +1080,11 @@ async def execute_parse_literature(args: dict) -> str:
         if env_msg:
             return env_msg
         return f"Literature parsing failed (exit {proc.returncode}):\n{err}"
+
+    # Bench Phase 3.3b: register downloaded datasets under the active thread so
+    # Analyze in this thread can reference them (dataset://<thread_id>/<basename>).
+    if auto_download and session_id:
+        await _register_literature_datasets(out_dir, session_id, thread_id)
 
     # Read report
     report_file = out_dir / "report.md"
