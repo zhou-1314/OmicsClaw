@@ -392,8 +392,192 @@ def test_kg_specs_are_bot_surface_read_only_and_read_stage_allowed():
         for s in select_tool_specs(specs, request=req, surface_only=True, stage="read")
     }
 
+    # kg_ingest (Phase 3.3c) is the one KG *writer* — bot-surface + Read-stage like
+    # the rest, but read_only=False (it builds the citation substrate).
     for name in kg_tools.KG_TOOL_EXECUTORS:
         assert name in by_name, f"{name} not registered as a ToolSpec"
-        assert by_name[name].read_only is True
         assert "bot" in by_name[name].surfaces
         assert name in read, f"{name} should be allowed in the Read stage"
+        if name != "kg_ingest":
+            assert by_name[name].read_only is True
+
+
+# ---- (f) kg_ingest (Phase 3.3c) --------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_kg_ingest_soft_fail_when_unavailable(monkeypatch):
+    monkeypatch.setattr(kg_tools, "_import_kg_ingest", lambda: None)
+    out = await kg_tools.execute_kg_ingest({"source": "/tmp/x.pdf"})
+    assert out == kg_tools._KG_UNAVAILABLE_HINT
+
+
+@pytest.mark.asyncio
+async def test_kg_ingest_requires_a_source(monkeypatch):
+    monkeypatch.setattr(kg_tools, "_import_kg_ingest", lambda: (object(), object()))
+    monkeypatch.setattr(kg_tools, "_resolve_ingest_source", lambda args, sid: ("", False))
+    out = await kg_tools.execute_kg_ingest({})
+    assert "no source to ingest" in out
+
+
+@pytest.mark.asyncio
+async def test_kg_ingest_rejects_untrusted_local_source(monkeypatch):
+    # Security blocker fix: an LLM-supplied local path outside the trusted data
+    # dirs is refused BEFORE reaching the KG ingest pipeline (no file read/exfil).
+    called = {"ingest": False}
+
+    def fake_ingest(source, cfg, llm):
+        called["ingest"] = True
+        return {"status": "ingested"}
+
+    fake_config = types.SimpleNamespace(resolve=lambda home=None: "cfg")
+    fake_cmd = types.SimpleNamespace(ingest=fake_ingest)
+    monkeypatch.setattr(kg_tools, "_import_kg_ingest", lambda: (fake_config, fake_cmd))
+    monkeypatch.setattr(kg_tools, "_build_kg_extractor", lambda: object())
+    # validate_input_path rejects an out-of-trusted-dir path by returning None.
+    monkeypatch.setattr(
+        "omicsclaw.services.path_validation.validate_input_path",
+        lambda path, allow_dir=False: None,
+    )
+    out = await kg_tools.execute_kg_ingest({"source": "/etc/passwd"})
+    assert "Access denied" in out
+    assert called["ingest"] is False  # never reached the ingest pipeline
+
+
+@pytest.mark.asyncio
+async def test_kg_ingest_reports_when_no_llm_configured(monkeypatch):
+    fake_config = types.SimpleNamespace(resolve=lambda home=None: "cfg")
+    fake_cmd = types.SimpleNamespace(ingest=lambda *a: {})
+    monkeypatch.setattr(kg_tools, "_import_kg_ingest", lambda: (fake_config, fake_cmd))
+    monkeypatch.setattr(kg_tools, "_build_kg_extractor", lambda: None)
+    # URL source skips the local-path guard, so we reach the no-LLM check.
+    out = await kg_tools.execute_kg_ingest({"source": "https://example.com/x"})
+    assert "no LLM" in out
+
+
+@pytest.mark.asyncio
+async def test_kg_ingest_formats_ingested_result_and_passes_source(monkeypatch):
+    captured: dict = {}
+
+    def fake_ingest(source, cfg, llm):
+        captured["source"] = source
+        return {
+            "status": "ingested",
+            "slug": "smith-2020",
+            "source_page": "sources/smith-2020.md",
+            "counts": {"entities": 3, "concepts": 2, "methods": 1, "claims": 4},
+        }
+
+    fake_config = types.SimpleNamespace(resolve=lambda home=None: ("cfg", home))
+    fake_cmd = types.SimpleNamespace(ingest=fake_ingest)
+    monkeypatch.setattr(kg_tools, "_import_kg_ingest", lambda: (fake_config, fake_cmd))
+    monkeypatch.setattr(kg_tools, "_build_kg_extractor", lambda: object())
+
+    # An http(s) URL skips the local-path guard (KG validate_url handles SSRF).
+    out = await kg_tools.execute_kg_ingest({"source": "https://example.com/paper"})
+    assert captured["source"] == "https://example.com/paper"
+    assert "Ingested into the knowledge graph: smith-2020" in out
+    assert "entities=3" in out
+
+
+@pytest.mark.asyncio
+async def test_kg_ingest_catches_underlying_exception(monkeypatch):
+    def boom(source, cfg, llm):
+        raise RuntimeError("ingest exploded")
+
+    fake_config = types.SimpleNamespace(resolve=lambda home=None: "cfg")
+    fake_cmd = types.SimpleNamespace(ingest=boom)
+    monkeypatch.setattr(kg_tools, "_import_kg_ingest", lambda: (fake_config, fake_cmd))
+    monkeypatch.setattr(kg_tools, "_build_kg_extractor", lambda: object())
+    out = await kg_tools.execute_kg_ingest({"source": "https://example.com/x"})
+    assert out.startswith("Error ingesting into the knowledge graph:")
+    assert "ingest exploded" in out
+
+
+def test_kg_extractor_strips_json_fences():
+    class _Completions:
+        @staticmethod
+        def create(**kwargs):
+            msg = types.SimpleNamespace(
+                content='```json\n{"entities": [], "concepts": []}\n```'
+            )
+            return types.SimpleNamespace(
+                choices=[types.SimpleNamespace(message=msg)]
+            )
+
+    fake_client = types.SimpleNamespace(
+        chat=types.SimpleNamespace(completions=_Completions())
+    )
+    ext = kg_tools._OmicsClawKGExtractor(fake_client, "test-model")
+    assert ext.call_extractor("source text", "prompt") == {
+        "entities": [],
+        "concepts": [],
+    }
+
+
+def test_kg_ingest_registered_as_read_stage_writer():
+    import omicsclaw.runtime.agent.state  # noqa: F401 — prod order
+    import omicsclaw.runtime.tools.builders.agent_executors as agent_executors
+
+    assert "kg_ingest" in agent_executors._available_tool_executors()
+
+    from omicsclaw.runtime.context.layers import ContextAssemblyRequest
+    from omicsclaw.runtime.tools.builders.agent import (
+        BotToolContext,
+        build_bot_tool_specs,
+    )
+    from omicsclaw.runtime.tools.registry import select_tool_specs
+    from omicsclaw.runtime.tools.spec import APPROVAL_MODE_AUTO
+
+    specs = build_bot_tool_specs(
+        BotToolContext(skill_names=("sc-de",), domain_briefing="(test)")
+    )
+    by_name = {s.name: s for s in specs}
+    assert "kg_ingest" in by_name
+    assert by_name["kg_ingest"].read_only is False
+    # AUTO-approved (OD-4): the citation substrate is ungated.
+    assert (by_name["kg_ingest"].approval_mode or APPROVAL_MODE_AUTO) == APPROVAL_MODE_AUTO
+
+    req = ContextAssemblyRequest(surface="bot")
+    read = {
+        s.name
+        for s in select_tool_specs(specs, request=req, surface_only=True, stage="read")
+    }
+    assert "kg_ingest" in read
+
+
+@pytest.mark.asyncio
+async def test_kg_ingest_real_end_to_end_creates_source_page(monkeypatch, tmp_path):
+    """Drive execute_kg_ingest through the REAL omicsclaw_kg ingest pipeline with a
+    KG StubLLMClient (no network/LLM): ingesting a local source must create a wiki
+    Source page (kg_status source count goes from 0 to >=1)."""
+    pytest.importorskip("omicsclaw_kg")
+    from omicsclaw_kg.llm.stub import StubLLMClient
+
+    kg_home = tmp_path / ".omicsclaw" / "knowledge"
+    monkeypatch.setenv("OMICSCLAW_KG_HOME", str(kg_home))
+    monkeypatch.delenv("OMICSCLAW_WORKSPACE", raising=False)
+    monkeypatch.setattr(kg_tools, "_build_kg_extractor", lambda: StubLLMClient())
+    # The fixture lives in tmp (outside trusted dirs); accept the path so this
+    # e2e exercises the REAL ingest pipeline (the source guard is tested above).
+    monkeypatch.setattr(
+        "omicsclaw.services.path_validation.validate_input_path",
+        lambda path, allow_dir=False: __import__("pathlib").Path(path),
+    )
+
+    source = tmp_path / "paper.md"
+    source.write_text(
+        "# A study of TP53 in glioma\n\nTP53 regulates MDM2 in glioblastoma tissue.\n",
+        encoding="utf-8",
+    )
+
+    before = await kg_tools.execute_kg_status({})
+    out = await kg_tools.execute_kg_ingest({"source": str(source)})
+    after = await kg_tools.execute_kg_status({})
+
+    # The ingest call did not crash and reports a result (ingested or skipped).
+    assert isinstance(out, str) and out
+    assert "error" not in out.lower() or "ingest" in out.lower()
+    # A Source page now exists where there were none.
+    assert "sources=0" in before
+    assert "sources=0" not in after

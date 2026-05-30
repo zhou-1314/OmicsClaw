@@ -36,6 +36,9 @@ _READ_STAGE_TOOLS: frozenset[str] = frozenset(
         # Soft-fail when the optional package is absent (kg_tools.py).
         "kg_search", "kg_get_page", "kg_list_pages", "kg_graph_neighbors",
         "kg_status", "kg_recent_log", "kg_communities",
+        # KG ingest (Bench Phase 3.3c, RD-INGEST-9): the citation-substrate writer —
+        # ingesting a dropped paper is the user's evident intent (ADR 0019, AUTO).
+        "kg_ingest",
         # lightweight memory notes + read-only data / file inspection. remember /
         # forget kept: note-taking only — no compute, no workspace write (recall is
         # the pure-read counterpart).

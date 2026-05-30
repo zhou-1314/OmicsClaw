@@ -76,6 +76,9 @@ ALWAYS_ON = (
     "kg_status",
     "kg_recent_log",
     "kg_communities",
+    # kg_ingest (Bench Phase 3.3c) is also predicate-less always-on — the KG
+    # citation-substrate writer, AUTO-approved (ADR 0019).
+    "kg_ingest",
 )
 
 
@@ -311,11 +314,11 @@ def test_realistic_scde_turn_count_well_under_full_set() -> None:
     """Realistic sc-de query exposes always-on + file-path tools, but
     keeps memory / pdf / web / plot tools hidden."""
     selected = _selected_names(query="run sc-de on /tmp/x.h5ad")
-    assert len(selected) <= 32, (
-        f"realistic sc-de turn exposed {len(selected)} tools; expected <= 32 "
-        f"(always-on 16 + file-path ~13 + maybe non_trivial fallback): {sorted(selected)}"
+    assert len(selected) <= 33, (
+        f"realistic sc-de turn exposed {len(selected)} tools; expected <= 33 "
+        f"(always-on 17 + file-path ~13 + maybe non_trivial fallback): {sorted(selected)}"
     )
-    assert len(selected) < 46, "ALL 46 tools shown — predicate gating not applied"
+    assert len(selected) < 47, "ALL 47 tools shown — predicate gating not applied"
     assert "remember" not in selected
     assert "parse_literature" not in selected
     assert "web_search" not in selected

@@ -25,6 +25,8 @@ Design (ADR 0019 — KG is a *first-class but soft* dependency):
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
 import re
@@ -398,6 +400,193 @@ async def execute_kg_communities(args: dict, **kwargs) -> str:
     return _fmt_communities(result)
 
 
+# ---------------------------------------------------------------------------
+# KG ingest (Bench Phase 3.3c, RD-INGEST-9) — build the citation substrate.
+# ---------------------------------------------------------------------------
+
+
+def _import_kg_ingest():
+    """Lazy soft-import of the KG ingest entrypoint + config. ``None`` if absent."""
+    try:
+        from omicsclaw_kg import config as kg_config
+        from omicsclaw_kg.cli import cmd_ingest
+
+        return kg_config, cmd_ingest
+    except ImportError:
+        return None
+
+
+class _OmicsClawKGExtractor:
+    """Adapt OmicsClaw's OpenAI-compatible LLM to the KG ingest ``LLMClient``.
+
+    KG's ingest pipeline calls ``call_extractor(text, prompt)`` *synchronously*,
+    but OmicsClaw's runtime client (``_core.llm``) is ``AsyncOpenAI``. So this
+    holds a *sync* ``openai.OpenAI`` built from the same credentials and mirrors
+    KG ``AnthropicLLMClient.call_extractor``'s request + JSON-fence handling —
+    avoiding any dependency on ``ANTHROPIC_API_KEY``.
+    """
+
+    def __init__(self, client: Any, model: str) -> None:
+        self._client = client
+        self._model = model
+
+    def call_extractor(self, text: str, prompt: str) -> dict[str, Any]:
+        max_chars = 60_000
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n\n[... truncated by ingest pipeline ...]"
+        resp = self._client.chat.completions.create(
+            model=self._model,
+            max_tokens=4096,  # bound output cost (mirrors KG AnthropicLLMClient)
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        prompt
+                        + "\n\n---\n\nSOURCE TEXT:\n\n"
+                        + text
+                        + "\n\nReturn ONLY valid JSON, no markdown fences."
+                    ),
+                }
+            ],
+        )
+        body = (resp.choices[0].message.content or "").strip()
+        if body.startswith("```"):
+            body = body.split("\n", 1)[1] if "\n" in body else body
+            if body.endswith("```"):
+                body = body.rsplit("```", 1)[0]
+        return json.loads(body)
+
+
+def _build_kg_extractor() -> Any | None:
+    """Construct the ingest LLM adapter from OmicsClaw's configured client.
+
+    Returns ``None`` when no LLM is configured (ingest then cannot extract).
+    This is the test seam: monkeypatch to return a ``StubLLMClient``.
+    """
+    from omicsclaw.runtime.agent import state as _core
+
+    client = getattr(_core, "llm", None)
+    model = str(getattr(_core, "OMICSCLAW_MODEL", "") or "")
+    if client is None:
+        return None
+    try:
+        from openai import OpenAI
+
+        sync_client = OpenAI(
+            api_key=getattr(client, "api_key", None),
+            base_url=str(getattr(client, "base_url", "") or "") or None,
+        )
+    except Exception:  # pragma: no cover - construction failure degrades to "no LLM"
+        return None
+    return _OmicsClawKGExtractor(sync_client, model)
+
+
+def _resolve_ingest_source(args: dict, session_id: str | None) -> tuple[str, bool]:
+    """Resolve the ingest source.
+
+    Returns ``(source, is_explicit)``. ``is_explicit`` is True for an
+    LLM-supplied ``args['source']`` (which the caller MUST path-guard before
+    ingesting); False for a freshly dropped PDF (a server-controlled, trusted
+    location). Returns ``("", False)`` when neither is available.
+    """
+    source = str(args.get("source", "") or "").strip()
+    if source:
+        return source, True
+    try:
+        from omicsclaw.runtime.agent import state as _core
+
+        for _cid, info in (getattr(_core, "received_files", None) or {}).items():
+            fp = info.get("path", "") if isinstance(info, dict) else ""
+            if fp and Path(fp).suffix.lower() == ".pdf":
+                return fp, False
+    except Exception:
+        pass
+    return "", False
+
+
+def _fmt_ingest(r: Any, source: str) -> str:
+    if not isinstance(r, dict):
+        return f"Knowledge graph ingest completed for {source}."
+    if "error" in r:
+        return f"Knowledge graph ingest error: {r['error']}"
+    status = r.get("status")
+    if status == "skipped":
+        return f"Ingest skipped {source}: {r.get('reason', 'already ingested')}."
+    if status == "ingested":
+        counts = r.get("counts") or {}
+        cstr = ", ".join(f"{k}={v}" for k, v in counts.items())
+        return (
+            f"Ingested into the knowledge graph: {r.get('slug', source)} "
+            f"(source page: {r.get('source_page', '?')}"
+            + (f"; {cstr}" if cstr else "")
+            + ")."
+        )
+    # Batch (directory) ingest — summarize counts, don't dump the raw envelope.
+    if "dir" in r or "results" in r or status in ("batch_complete", "complete"):
+        results = r.get("results") or []
+        ingested = sum(1 for x in results if isinstance(x, dict) and x.get("status") == "ingested")
+        return (
+            f"Batch ingest of {r.get('dir', source)}: "
+            f"{ingested}/{len(results)} sources ingested."
+        )
+    # Unknown shape — a compact, bounded summary (never dump a huge raw envelope).
+    keys = ", ".join(sorted(r.keys()))
+    return f"Knowledge graph ingest completed for {source} (status={status}; fields: {keys})."
+
+
+async def execute_kg_ingest(args: dict, session_id: str | None = None, **kwargs) -> str:
+    """Ingest a paper/source into the knowledge graph (citation substrate).
+
+    Bench Phase 3.3c (RD-INGEST-9): creates a Source page (+ extracted entities/
+    concepts/methods) the agent can cite. The KG is shared reading knowledge
+    (ADR 0019) so this is global / not thread-scoped and ungated (the gated
+    action is the dataset download in ``parse_literature``). Soft-fails when KG
+    or the LLM is unavailable; never raises into the loop. Heavy work runs off
+    the event loop via ``asyncio.to_thread``.
+    """
+    imported = _import_kg_ingest()
+    if imported is None:
+        return _KG_UNAVAILABLE_HINT
+    kg_config, cmd_ingest = imported
+
+    source, is_explicit = _resolve_ingest_source(args, session_id)
+    if not source:
+        return (
+            "Error: no source to ingest. Provide a 'source' (a file path or URL), "
+            "or drop a PDF into the chat."
+        )
+
+    # Security (Phase 3.3c): kg_ingest is AUTO-approved and reachable by untrusted
+    # IM users, so an LLM-supplied LOCAL path must be confined to a trusted data
+    # directory — otherwise it would read+exfiltrate any host file to the LLM and
+    # persist it into the shared KG. http(s) URLs are left to KG's validate_url
+    # (SSRF guard); a dropped PDF is already in a server-controlled location.
+    if is_explicit and not source.lower().startswith(("http://", "https://")):
+        from omicsclaw.services.path_validation import validate_input_path
+
+        if validate_input_path(source, allow_dir=True) is None:
+            return (
+                "Access denied: the ingest source is not inside a trusted data "
+                "directory. Drop the file into the chat, place it under the "
+                "workspace/data directory, or pass an http(s) URL."
+            )
+
+    extractor = _build_kg_extractor()
+    if extractor is None:
+        return (
+            "Knowledge-graph ingest needs an LLM to extract entities, but no LLM "
+            "client is configured. Configure LLM_API_KEY / LLM_BASE_URL to enable it."
+        )
+
+    try:
+        cfg = kg_config.resolve(_resolve_kg_home())
+        result = await asyncio.to_thread(cmd_ingest.ingest, source, cfg, extractor)
+    except Exception as e:
+        logger.error("kg_ingest failed: %s", e, exc_info=True)
+        return f"Error ingesting into the knowledge graph: {e}"
+    return _fmt_ingest(result, source)
+
+
 KG_TOOL_EXECUTORS: dict[str, Any] = {
     "kg_search": execute_kg_search,
     "kg_get_page": execute_kg_get_page,
@@ -406,4 +595,5 @@ KG_TOOL_EXECUTORS: dict[str, Any] = {
     "kg_status": execute_kg_status,
     "kg_recent_log": execute_kg_recent_log,
     "kg_communities": execute_kg_communities,
+    "kg_ingest": execute_kg_ingest,
 }

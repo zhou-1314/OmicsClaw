@@ -994,6 +994,43 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
             result_policy=RESULT_POLICY_KNOWLEDGE_REFERENCE,
             policy_tags=("knowledge", "graph", "reference"),
         ),
+        # KG ingest (Bench Phase 3.3c, RD-INGEST-9) — the one KG *write* tool in
+        # Read: builds the citation substrate (Source pages) the agent cites.
+        # AUTO-approved and thread-agnostic (ADR 0019: KG is shared reading
+        # knowledge; the gated action is the dataset download, not ingest).
+        # Soft-fails when KG/LLM is absent (kg_tools.execute_kg_ingest).
+        ToolSpec(
+            name="kg_ingest",
+            description=(
+                "Ingest a paper or source into the OmicsClaw knowledge graph, creating "
+                "a Source page (and extracting entities / concepts / methods) that later "
+                "answers can cite. Use when the user drops or links a paper to read. "
+                "Pass `source` as a local file path or http(s) URL, or omit it to ingest "
+                "a freshly dropped PDF. The knowledge base is shared across research "
+                "(not thread-specific)."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "description": (
+                            "A local file path or http(s) URL to ingest. "
+                            "Omit to use a dropped PDF."
+                        ),
+                    },
+                },
+            },
+            surfaces=("bot",),
+            context_params=("session_id",),
+            read_only=False,
+            concurrency_safe=False,
+            result_policy=RESULT_POLICY_KNOWLEDGE_REFERENCE,
+            risk_level=RISK_LEVEL_MEDIUM,
+            writes_workspace=True,  # persists Source pages + raw store to the KG home
+            touches_network=True,
+            policy_tags=("knowledge", "graph", "ingest"),
+        ),
         ToolSpec(
             name="resolve_capability",
             description=(
