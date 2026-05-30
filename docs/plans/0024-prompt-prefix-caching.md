@@ -26,13 +26,23 @@ Phases 0–3 implemented and verified; Phase 4 invariant enforced by tests.
 | 3 — append-only | ✅ | `prepare_history` no longer slides; collapse is sole overflow handler. Test: `test_query_engine_cache_diagnostics.py::test_history_is_append_only_across_turns` (max_history=4 would fail under the old slide). |
 | 4 — lock-in | ✅ (structural) | `test_regression_floor_stable_prefix_holds_high_hit_ratio` + the miss-reason suite enforce the invariant in CI. |
 
-**Empirical before/after (Task 0.3 / 4.2): pending a live run.** The diagnostics are
-now wired for every surface, but a real DeepSeek hit-ratio baseline cannot be
-captured in this offline environment. To capture it, run a multi-turn session on
-the `deepseek` provider and read the per-turn `cache_hit_ratio` / `cache_miss_reason`
-(Desktop usage banner, CLI, or `cache_diagnostics` DEBUG log). Expected: turn-1
-`cold-start`, turns 2+ `none` with a high hit ratio; any `tool-list-changed` /
-unexpected `system-changed` indicates a regression.
+**Empirical before/after (Task 0.3 / 4.2): measured on real DeepSeek.** A controlled
+A/B over one 6-turn omics dialogue (same conversation, real OmicsClaw system prompt
++ tool list), run via `scripts/measure_prefix_cache.py` against `api.deepseek.com`
+(`deepseek-v4-flash`), reading DeepSeek's actual `prompt_cache_hit_tokens` /
+`prompt_cache_miss_tokens`:
+
+| arm | session hit-ratio | per-turn |
+|---|---|---|
+| **before** (pre-ADR-0024: per-turn tool re-gating + volatile content in the system prefix) | **12.1%** | ~11–15% every turn — the prefix changes each turn, so almost nothing is cached |
+| **after** (ADR-0024: frozen tool list + stable system prefix + append-only history) | **81.8%** | turn 1 cold (2%), turns 2–6 **94–98%**; hit tokens grow each turn (11.0k → 12.8k) as append-only history extends the cached prefix |
+
+Input-token billing (DeepSeek charges a cache-hit token at ~10% of a miss):
+before ≈ 34,758 vs after ≈ 19,376 miss-equivalent units → **~44% lower input cost**,
+even though the "after" arm sends the *full* frozen tool list + accumulating context
+every turn. Steady-state (turns 2+) hit ratio is ~96%; the turn-1 cold-start drags
+the session aggregate to 81.8%. Re-run `scripts/measure_prefix_cache.py` to refresh
+on your live model.
 
 ## Architecture Decisions (from ADR 0024 + CONTEXT.md §"Prompt Prefix & Caching")
 

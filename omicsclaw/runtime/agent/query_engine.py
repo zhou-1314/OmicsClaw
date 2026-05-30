@@ -71,6 +71,21 @@ async def _maybe_await(value):
     return value
 
 
+def _prepend_volatile_to_user_content(content: Any, addition: str) -> Any:
+    """Prepend per-turn Volatile context (ADR 0024) to the user message content.
+
+    Used for session-hook fragments so they ride the append-only user turn
+    instead of the cache-stable system prefix. Handles both plain-string and
+    multimodal (list-of-parts) user content; a falsy addition is a no-op.
+    """
+    if not addition or not str(addition).strip():
+        return content
+    block = str(addition).strip()
+    if isinstance(content, list):
+        return [{"type": "text", "text": block}, *content]
+    return f"{block}\n\n{content}"
+
+
 def _prepare_tool_runtime_context(
     runtime_context: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -1171,6 +1186,11 @@ async def run_query_engine(
     tool_runtime_context = _prepare_tool_runtime_context(context.tool_runtime_context)
     history_before = list(transcript_store.get_history(context.chat_id))
     system_prompt = context.system_prompt
+    # ADR 0024 — session-start/resume hook fragments are per-turn Volatile
+    # context (a resume hook fires every turn and may inject changing content),
+    # so they ride the user turn instead of the system prefix, keeping the
+    # prefix byte-stable.
+    session_hook_context = ""
 
     if hook_runtime is not None:
         session_event_name = (
@@ -1196,8 +1216,8 @@ async def run_query_engine(
             event_names=(session_event_name,),
         )
         if context_fragments:
-            system_prompt = (
-                f"{system_prompt.rstrip()}\n\n## Active Session Hooks\n\n"
+            session_hook_context = (
+                "## Active Session Hooks\n\n"
                 + "\n\n".join(
                     fragment for fragment in context_fragments if fragment.strip()
                 )
@@ -1208,7 +1228,12 @@ async def run_query_engine(
         # ADR 0024 — release per-chat cache diagnostics when its transcript is
         # evicted, so the CACHE_DIAGNOSTICS sink can't grow unbounded.
         CACHE_DIAGNOSTICS.reset(_evicted_chat)
-    transcript_store.append_user_message(context.chat_id, context.user_message_content)
+    transcript_store.append_user_message(
+        context.chat_id,
+        _prepend_volatile_to_user_content(
+            context.user_message_content, session_hook_context
+        ),
+    )
     transcript_store.prepare_history(context.chat_id)
 
     budget_tracker = create_token_budget_tracker(context.token_budget)

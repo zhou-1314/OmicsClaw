@@ -160,9 +160,12 @@ events. Five resolutions:
 ### Positive
 
 - The dominant cache-busters (per-turn tool churn, per-turn history slide) are
-  removed; on DeepSeek a multi-turn session should move from near-total misses to
-  ~90%+ hits, with hit tokens billed at ~10% — net token cost falls despite
-  sending the full tool list and a larger history every turn.
+  removed. **Measured** on real DeepSeek (`scripts/measure_prefix_cache.py`, a
+  6-turn omics dialogue, `deepseek-v4-flash`): session prompt-cache hit ratio rose
+  from **12.1% → 81.8%** (turns 2+ run 94–98%; turn 1 is the cold-start), and
+  input-token billing fell **~44%** (cache-hit tokens cost ~10% of a miss) even
+  though the new path sends the full frozen tool list + accumulating context every
+  turn.
 - The fix reuses existing machinery (`placement`, context collapse,
   `usage_accumulator`); it is re-tiering and call-site removal, not new
   infrastructure.
@@ -192,22 +195,24 @@ events. Five resolutions:
   there as a context-window (not cost) measure; deferred under YAGNI.
 - **`keep_recent` tuning** — the perpetually-re-sent recent tool-result tail is
   bounded but non-zero; its size is a cost knob to measure once diagnostics land.
-- **Provider-blind `max_prompt_chars` on small-context providers** (review finding 6)
-  — Phase 3 removed the per-turn slide, so on a small-context local model (Ollama,
-  8k–32k) history could grow past the window before the `96000`-char collapse
-  fires. The existing reactive-compaction-on-context-error path
-  (`_call_llm_with_reactive_compact_retry`) is the safety net for providers that
-  *error* on overflow; providers that *silently truncate* (Ollama `num_ctx`)
-  need `num_ctx` tuning. Deriving `max_prompt_chars` from `get_context_window(model)`
-  is the proper follow-up.
-- **Per-turn system-prefix mutations outside the layer system** (review finding 8)
-  — the session-start/resume hook append (`## Active Session Hooks`) and the mode
-  hint are still applied to the `system` prefix in `query_engine` / `engine/loop`.
-  They are session-stable in the common case (no hooks configured; mode rarely
-  switches), so they read as additional **cache re-warm** triggers rather than
-  per-turn churn — but a hook that injects content every turn would churn the
-  prefix. Folding them into the Volatile-context path (or asserting hook
-  determinism) is a follow-up.
+- **Provider-blind `max_prompt_chars`** (review finding 6) — **RESOLVED.**
+  `engine/loop.resolve_max_prompt_chars(model)` now derives the context-collapse
+  budget from `get_context_window(model)` (`window × 3.0 chars/tok × 0.5`),
+  **never exceeding** the proven `96000` default (so an over-optimistic reported
+  window can't disable collapse) and **shrinking** for known-small windows.
+  Unknown windows (e.g. Ollama, which report `None`) keep the default and are
+  tuned via the new `OMICSCLAW_MAX_PROMPT_CHARS` env override; reactive
+  compaction on a context error remains the ultimate net. Test:
+  `tests/engine/test_loop.py::test_resolve_max_prompt_chars_scales_with_window`.
+- **Per-turn system-prefix mutations** (review finding 8) — **RESOLVED (session
+  hooks).** The session-start/resume hook fragments (`## Active Session Hooks`)
+  now render into the user turn as **Volatile context** (`query_engine`’s
+  `_prepend_volatile_to_user_content`) instead of being appended to the `system`
+  prefix, so a resume hook that injects changing content can no longer churn the
+  prefix. The **mode hint** is deliberately left in the `system` tier: it is
+  session-stable and a mode switch is a rare, sanctioned **cache re-warm** (a per
+  turn duplication in the user turn would be wasteful). Test updated:
+  `tests/test_query_engine.py::test_run_query_engine_applies_session_context_hooks_and_tool_notices`.
 
 ## Relationship to prior ADRs
 

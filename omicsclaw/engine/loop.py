@@ -30,10 +30,12 @@ from omicsclaw.runtime.agent.query_engine import (
     QueryEngineContext,
     run_query_engine,
 )
+from omicsclaw.runtime.context.compaction import ContextCompactionConfig
 from omicsclaw.runtime.context.system_prompt import build_system_prompt
 from omicsclaw.runtime.storage.transcript import (
     build_selective_replay_context,
 )
+from omicsclaw.providers.models import get_context_window
 
 from ._dependencies import EngineDependencies
 from ._identity_anchor import (
@@ -80,6 +82,32 @@ def _maybe_append_caller_addition(system_prompt: str, addition: str) -> str:
     if not addition:
         return system_prompt
     return system_prompt.rstrip() + "\n\n" + addition.strip()
+
+
+# ADR 0024 — derive the context-collapse char budget from the model's window.
+# Phase 3 made history append-only between collapses, removing the per-turn
+# slide that used to bound small-context providers; this re-introduces a safe
+# bound. Conservative blend (English ~4 chars/tok, CJK ~1.5) and half the window
+# reserved for completion + headroom. We never EXCEED the proven default (no risk
+# from an over-optimistic reported window), only shrink for known-small windows.
+# Unknown windows (e.g. Ollama, which report None) keep the default; operators
+# tune those via OMICSCLAW_MAX_PROMPT_CHARS. Reactive compaction on a context
+# error remains the ultimate safety net.
+_CHARS_PER_TOKEN = 3.0
+_PROMPT_BUDGET_FRACTION = 0.5
+_DEFAULT_MAX_PROMPT_CHARS = 96000
+
+
+def resolve_max_prompt_chars(model: str) -> int:
+    """Context-collapse char budget for ``model`` (ADR 0024)."""
+    override = (os.environ.get("OMICSCLAW_MAX_PROMPT_CHARS") or "").strip()
+    if override.isdigit() and int(override) > 0:
+        return int(override)
+    window = get_context_window(model)
+    if not window or window <= 0:
+        return _DEFAULT_MAX_PROMPT_CHARS
+    derived = int(window * _CHARS_PER_TOKEN * _PROMPT_BUDGET_FRACTION)
+    return min(_DEFAULT_MAX_PROMPT_CHARS, derived)
 
 
 def _prepend_user_turn_context(content: str | list, addition: str) -> str | list:
@@ -258,6 +286,10 @@ async def run_engine_loop(
             ),
             llm_error_types=(APIError,),
             extra_api_params=extra_api_params or {},
+            # ADR 0024 — collapse budget scaled to the model's context window.
+            context_compaction=ContextCompactionConfig(
+                max_prompt_chars=resolve_max_prompt_chars(effective_model),
+            ),
             deepseek_reasoning_passback=(
                 (deps.llm_provider_name or "").strip().lower() == "deepseek"
             ),

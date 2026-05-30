@@ -624,8 +624,12 @@ def test_run_query_engine_applies_session_context_hooks_and_tool_notices(tmp_pat
     )
 
     assert result == "done"
-    assert "## Active Session Hooks" in llm.calls[0]["messages"][0]["content"]
-    assert "Follow lab SOP for cli." in llm.calls[0]["messages"][0]["content"]
+    # ADR 0024 — session-hook fragments ride the user turn (Volatile context),
+    # not the system prefix, so the prefix stays cache-stable.
+    assert "## Active Session Hooks" not in llm.calls[0]["messages"][0]["content"]
+    user_msg = llm.calls[0]["messages"][1]["content"]
+    assert "## Active Session Hooks" in user_msg
+    assert "Follow lab SOP for cli." in user_msg
 
     history = transcript_store.get_history("chat-hook")
     assert "Hook summary for alpha: completed." in history[2]["content"]

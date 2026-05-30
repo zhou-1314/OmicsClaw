@@ -22,7 +22,32 @@ from omicsclaw.engine import (
 from omicsclaw.engine.loop import (
     _maybe_append_caller_addition,
     _maybe_append_mode_hint,
+    resolve_max_prompt_chars,
 )
+import omicsclaw.engine.loop as _engine_loop
+
+
+def test_resolve_max_prompt_chars_scales_with_window(monkeypatch):
+    """ADR 0024 — collapse budget shrinks for known-small windows, never
+    exceeds the proven default, falls back to default for unknown windows,
+    and honors the OMICSCLAW_MAX_PROMPT_CHARS override."""
+    monkeypatch.delenv("OMICSCLAW_MAX_PROMPT_CHARS", raising=False)
+
+    windows = {"big": 1_000_000, "small": 16_000, "unknown": None}
+    monkeypatch.setattr(_engine_loop, "get_context_window", lambda m: windows.get(m))
+
+    # Large window: capped at the proven default (no risky growth).
+    assert resolve_max_prompt_chars("big") == 96000
+    # Small known window: shrinks below the default for safety.
+    assert resolve_max_prompt_chars("small") == min(96000, int(16_000 * 3.0 * 0.5))
+    assert resolve_max_prompt_chars("small") < 96000
+    # Unknown window (e.g. Ollama, returns None): conservative default.
+    assert resolve_max_prompt_chars("unknown") == 96000
+
+    # Explicit override wins regardless of window.
+    monkeypatch.setenv("OMICSCLAW_MAX_PROMPT_CHARS", "12345")
+    assert resolve_max_prompt_chars("big") == 12345
+    assert resolve_max_prompt_chars("unknown") == 12345
 
 
 def _make_deps(**overrides) -> EngineDependencies:
