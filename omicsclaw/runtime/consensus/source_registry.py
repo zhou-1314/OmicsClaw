@@ -6,26 +6,23 @@ output root. One singleton per source skill; the driver / graph-memory writer
 / test harness all program against ``(read_labels, read_intrinsic_quality)``
 and never touch file paths or column names directly.
 
-The registry replaces the old ``set[str]`` marker in ``dispatch.py``:
-``TYPED_CONSENSUS_REGISTRY: dict[str, TypedConsensusSource]`` carries both
-the membership signal (is this skill on the A path?) and the behaviour
-needed to read the member's outputs.
+This module owns the artifact readers + the ``ConsensusSource`` contract
+(ADR 0016 L3). The flavour registry lives in ``sources.CONSENSUS_SOURCES``
+(keyed by flavour name); ``sources`` also derives the member_skill-keyed
+``TYPED_CONSENSUS_REGISTRY`` that ``dispatch`` consults for typed/narrative
+routing — a single source of truth, no hand-maintained second copy.
 
-Adding a new typed-consensus source skill requires three steps:
-
-1. Implement a ``MemberArtifactReader`` adapter (~30 lines).
-2. Register it: ``TYPED_CONSENSUS_REGISTRY["<skill-name>"] = TypedConsensusSource(reader=...)``.
-3. Add a thin CLI wrapper that calls ``run_typed_consensus`` with the source.
-
-See ADR 0010 for the architectural decision, ADR 0011 for the evaluation
-contract that consumes these adapters' outputs.
+Adding a new typed-consensus flavour: implement a ``MemberArtifactReader``
+(~30 lines) here, then add one ``ConsensusSource`` row to
+``sources.CONSENSUS_SOURCES``. See ADR 0010/0011 for the evaluation contract
+and ADR 0016 for this structure.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
 
@@ -61,15 +58,38 @@ class MemberArtifactReader(Protocol):
         """
 
 
-@dataclass(frozen=True)
-class TypedConsensusSource:
-    """Value type of ``TYPED_CONSENSUS_REGISTRY``.
+@runtime_checkable
+class MemberPlanner(Protocol):
+    """Strategy that turns CLI args into the members to fan out (ADR 0016 L3).
 
-    v1 holds one field (``reader``). v1.x may add a ``planner`` /
-    ``report_template`` / etc. without breaking the registry shape.
+    Implementations live in ``planners.py`` (``ChairLLMPlanner`` and
+    ``SweepPlanner``, sharing the ``_explicit_members`` helper for the
+    ``--members`` branch). This is the one piece of genuine per-flavour logic;
+    the rest of a ``ConsensusSource`` is data.
+    """
+
+    def propose(self, args: Any, *, source: "ConsensusSource") -> list[ConsensusMember]:
+        ...
+
+
+@dataclass(frozen=True)
+class ConsensusSource:
+    """Declarative contract for one consensus flavour (ADR 0016 L3).
+
+    ``reader`` is the only required field — reader-only construction
+    (``ConsensusSource(reader=...)``) stays valid. The rest carry the two-axis
+    (template × source) contract: ``CONSENSUS_SOURCES`` rows populate them all,
+    while the dispatch-derived view needs only ``member_skill`` + ``template``.
     """
 
     reader: MemberArtifactReader
+    name: str = ""
+    template: str = "categorical"
+    member_skill: str = ""
+    planner: "MemberPlanner | None" = None
+    domain: str = ""
+    report_title: str = ""
+    param_hints_path: Path | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -211,13 +231,5 @@ class ScClusteringArtifactReader:
             return 0.0
 
 
-# --------------------------------------------------------------------------- #
-# Registry                                                                    #
-# --------------------------------------------------------------------------- #
-
-#: Single audit surface for the verified/exploratory boundary.
-#: A skill in this dict is on the A (typed) path; anything else is B (narrative).
-TYPED_CONSENSUS_REGISTRY: dict[str, TypedConsensusSource] = {
-    "spatial-domains": TypedConsensusSource(reader=SpatialDomainsArtifactReader()),
-    "sc-clustering": TypedConsensusSource(reader=ScClusteringArtifactReader()),
-}
+# The flavour registry (CONSENSUS_SOURCES) and its derived member_skill-keyed
+# view (TYPED_CONSENSUS_REGISTRY) live in ``sources.py`` — single source of truth.

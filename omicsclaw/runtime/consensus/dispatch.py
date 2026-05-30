@@ -1,22 +1,22 @@
 """Typed vs narrative consensus dispatch — the A/B path router.
 
-ADR 0010 boundary: a skill in ``TYPED_CONSENSUS_REGISTRY`` has a typed
-operator and is allowed on the A path. Anything else falls back to the B
-(narrative) path. New skills must opt in explicitly — there is no implicit
-output-schema sniffing, because the verified/exploratory boundary must be
-auditable from a single file.
+Boundary: a skill whose registered source binds a template with ``typed``
+provenance is on the A path; anything else falls back to the B (narrative)
+path. Provenance is read from ``templates.TEMPLATES`` (ADR 0016, amending
+ADR 0010 — the verified/exploratory boundary is now two explicit fields,
+``source.template`` + ``template.provenance``, rather than one allowlist set).
 
-The registry itself is defined in ``source_registry.py`` (a dict of
-``TypedConsensusSource`` carrying the per-source ``MemberArtifactReader``).
-This module only owns the A/B routing decision and the URI / banner
-conventions; it imports the registry for membership checks.
+The flavour registry (``CONSENSUS_SOURCES``) and its derived member_skill-keyed
+view (``TYPED_CONSENSUS_REGISTRY``) live in ``sources.py``. This module only
+owns the A/B routing decision and the URI / banner conventions.
 """
 
 from __future__ import annotations
 
 from typing import Literal
 
-from omicsclaw.runtime.consensus.source_registry import TYPED_CONSENSUS_REGISTRY
+from omicsclaw.runtime.consensus.sources import TYPED_CONSENSUS_REGISTRY
+from omicsclaw.runtime.consensus.templates import provenance_of
 
 __all__ = [
     "ConsensusMode",
@@ -44,7 +44,13 @@ def select_consensus_mode(
                 f"force_mode must be 'typed' or 'narrative', got {force_mode!r}"
             )
         return force_mode
-    return "typed" if skill_name in TYPED_CONSENSUS_REGISTRY else "narrative"
+    # Provenance is the source of truth (ADR 0016, amending ADR 0010): a skill
+    # is on the A (typed) path iff its registered source binds a template whose
+    # provenance is "typed". Unknown skills fall back to the B (narrative) path.
+    source = TYPED_CONSENSUS_REGISTRY.get(skill_name)
+    if source is None:
+        return "narrative"
+    return "typed" if provenance_of(source.template) == "typed" else "narrative"
 
 
 def consensus_namespace(run_id: str, mode: ConsensusMode) -> str:

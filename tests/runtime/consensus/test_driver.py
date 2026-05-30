@@ -46,8 +46,8 @@ def _stub_runner(**kwargs):
 
 
 def _make_source(label_arrays, intrinsic_map):
-    from omicsclaw.runtime.consensus.source_registry import TypedConsensusSource
-    return TypedConsensusSource(reader=_StubReader(label_arrays, intrinsic_map))
+    from omicsclaw.runtime.consensus.source_registry import ConsensusSource
+    return ConsensusSource(reader=_StubReader(label_arrays, intrinsic_map))
 
 
 def _members(names: list[str]) -> list[ConsensusMember]:

@@ -26,7 +26,6 @@ prefix.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import threading
 from dataclasses import asdict, dataclass, field
@@ -49,13 +48,13 @@ from omicsclaw.runtime.consensus.scoring import (
     MemberScore,
     score_all_members,
 )
-from omicsclaw.runtime.consensus.source_registry import TypedConsensusSource
-from omicsclaw.runtime.consensus.team import (
+from omicsclaw.runtime.consensus.source_registry import ConsensusSource
+from omicsclaw.runtime.workflow import (
     DEFAULT_TIMEOUT_SECONDS,
+    FanOutResult,
     InsufficientSurvivorsError,
-    MemberRunResult,
-    TeamRunResult,
-    run_team,
+    StepRunResult,
+    fan_out,
 )
 
 OperatorName = Literal["kmode", "weighted", "lca"]
@@ -83,7 +82,7 @@ class TypedConsensusRun:
     run_id: str
     operator: str
     members: tuple[ConsensusMember, ...]
-    team_result: TeamRunResult
+    team_result: FanOutResult
     labels_df: pd.DataFrame
     intrinsic_map: dict[str, float]
     scores: tuple[MemberScore, ...]
@@ -107,8 +106,8 @@ class InsufficientBCsError(RuntimeError):
 # --------------------------------------------------------------------------- #
 
 def _gather_labels(
-    survivors: Sequence[MemberRunResult],
-    source: TypedConsensusSource,
+    survivors: Sequence[StepRunResult],
+    source: ConsensusSource,
 ) -> tuple[pd.DataFrame, dict[str, float], list[str]]:
     """Pull labels + intrinsic quality through the source reader."""
     columns: dict[str, pd.Series] = {}
@@ -116,12 +115,12 @@ def _gather_labels(
     missing: list[str] = []
     for r in survivors:
         output_root = r.output_dir.parent
-        labels = source.reader.read_labels(r.member, output_root)
+        labels = source.reader.read_labels(r.step, output_root)
         if labels is None:
-            missing.append(r.member.name)
+            missing.append(r.step.name)
             continue
-        columns[r.member.name] = labels
-        intrinsic[r.member.name] = source.reader.read_intrinsic_quality(r.member, output_root)
+        columns[r.step.name] = labels
+        intrinsic[r.step.name] = source.reader.read_intrinsic_quality(r.step, output_root)
     if not columns:
         return pd.DataFrame(), {}, missing
     labels_df = pd.concat(columns, axis=1).dropna(axis=0, how="any")
@@ -172,7 +171,7 @@ def _run_operator(
 async def run_typed_consensus(
     *,
     members: Sequence[ConsensusMember],
-    source: TypedConsensusSource,
+    source: ConsensusSource,
     input_path: str,
     output_dir: Path | str,
     operator: OperatorName,
@@ -216,7 +215,7 @@ async def run_typed_consensus(
     run_id = str((plan_audit or {}).get("run_id") or output_dir_p.name)
 
     # 2. fan-out
-    team: TeamRunResult = await run_team(
+    team: FanOutResult = await fan_out(
         members,
         input_path=input_path,
         output_root=output_dir_p,

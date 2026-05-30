@@ -16,19 +16,17 @@ from omicsclaw.runtime.consensus.member import ConsensusMember
 # --------------------------------------------------------------------------- #
 
 def test_registry_contains_v1_sources() -> None:
-    from omicsclaw.runtime.consensus.source_registry import TYPED_CONSENSUS_REGISTRY
+    from omicsclaw.runtime.consensus.sources import TYPED_CONSENSUS_REGISTRY
 
     assert set(TYPED_CONSENSUS_REGISTRY.keys()) == {"spatial-domains", "sc-clustering"}
 
 
 def test_registry_values_are_typed_consensus_sources() -> None:
-    from omicsclaw.runtime.consensus.source_registry import (
-        TYPED_CONSENSUS_REGISTRY,
-        TypedConsensusSource,
-    )
+    from omicsclaw.runtime.consensus.source_registry import ConsensusSource
+    from omicsclaw.runtime.consensus.sources import TYPED_CONSENSUS_REGISTRY
 
     for source in TYPED_CONSENSUS_REGISTRY.values():
-        assert isinstance(source, TypedConsensusSource)
+        assert isinstance(source, ConsensusSource)
         assert hasattr(source.reader, "read_labels")
         assert hasattr(source.reader, "read_intrinsic_quality")
 

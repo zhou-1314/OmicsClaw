@@ -203,7 +203,7 @@ async def test_run_team_timeout_marks_member(tmp_path: Path) -> None:
     )
     timed_out = [r for r in result.failed if r.status == "timeout"]
     assert len(timed_out) == 1
-    assert timed_out[0].member.name == "m1"
+    assert timed_out[0].step.name == "m1"
 
 
 @pytest.mark.asyncio
@@ -238,11 +238,11 @@ async def test_timeout_does_not_cancel_sibling_members(tmp_path: Path) -> None:
     # The slow one times out; the four fast ones must still succeed.
     assert result.n_survived == 4, (
         f"timeout of one member cascaded; only {result.n_survived}/5 survived. "
-        f"Statuses: {[(r.member.name, r.status, r.error) for r in result.members]}"
+        f"Statuses: {[(r.step.name, r.status, r.error) for r in result.steps]}"
     )
     timed_out = [r for r in result.failed if r.status == "timeout"]
     assert len(timed_out) == 1
-    assert timed_out[0].member.name == "slow"
+    assert timed_out[0].step.name == "slow"
     # cancel_event must remain UNSET — a per-member timeout is NOT user cancellation.
     assert not cancel_event.is_set(), (
         "cancel_event was set by the timeout branch; this would cascade-cancel "
