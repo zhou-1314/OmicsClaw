@@ -208,7 +208,9 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                 "required": ["skill", "mode"],
             },
             surfaces=("bot",),
-            context_params=("session_id", "chat_id", "cancel_event"),
+            # Bench (ADR 0018) — thread_id rides tool_runtime_context into
+            # execute_omicsclaw to scope auto-captured analysis:// lineage.
+            context_params=("session_id", "chat_id", "cancel_event", "thread_id"),
             read_only=False,
             concurrency_safe=False,
             result_policy=RESULT_POLICY_SUMMARY_OR_MEDIA,

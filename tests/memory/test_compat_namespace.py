@@ -19,11 +19,26 @@ import pytest_asyncio
 import sqlalchemy as sa
 
 from omicsclaw.memory.compat import (
+    AnalysisMemory,
     CompatMemoryStore,
     DatasetMemory,
     PreferenceMemory,
+    _memory_to_uri_path,
 )
 from omicsclaw.memory.models import Path
+
+
+def test_analysis_memory_uri_scopes_under_thread_id():
+    # Bench (ADR 0018): a set thread_id scopes the analysis:// lineage under the
+    # investigation thread so a thread rolls up only its own runs (BE-RECALL-6
+    # reads analysis://<id>/*); empty thread_id keeps the legacy un-scoped path.
+    legacy = AnalysisMemory(source_dataset_id="", skill="spatial-domains", method="leiden")
+    assert _memory_to_uri_path(legacy) == f"spatial-domains/{legacy.memory_id}"
+
+    scoped = AnalysisMemory(
+        source_dataset_id="", skill="spatial-domains", method="leiden", thread_id="t-glioma"
+    )
+    assert _memory_to_uri_path(scoped) == f"t-glioma/spatial-domains/{scoped.memory_id}"
 
 
 @pytest_asyncio.fixture

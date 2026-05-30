@@ -128,6 +128,8 @@ class AnalysisMemory(BaseMemory):
     status: Literal["completed", "failed", "interrupted"] = "completed"
     executed_at: datetime = Field(default_factory=_utcnow)
     duration_seconds: float = 0.0
+    # Bench (ADR 0018) — investigation-thread scope; empty = legacy un-scoped.
+    thread_id: str = ""
 
 
 class PreferenceMemory(BaseMemory):
@@ -188,6 +190,11 @@ def _memory_to_uri_path(memory: BaseMemory) -> str:
     if isinstance(memory, DatasetMemory):
         return memory.file_path.replace("/", "_")
     elif isinstance(memory, AnalysisMemory):
+        # Bench (ADR 0018): scope lineage under the investigation thread so a
+        # thread rolls up only its own runs (BE-RECALL-6 reads analysis://<id>/*).
+        # Empty thread_id preserves the legacy un-scoped path (backward compatible).
+        if memory.thread_id:
+            return f"{memory.thread_id}/{memory.skill}/{memory.memory_id}"
         return f"{memory.skill}/{memory.memory_id}"
     elif isinstance(memory, PreferenceMemory):
         return f"{memory.domain}/{memory.key}"

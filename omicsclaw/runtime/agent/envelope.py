@@ -37,6 +37,11 @@ class MessageEnvelope:
     system_prompt_append: str = ""
     mode: str = ""
     analysis_router_mode: str | None = None
+    # Bench — investigation thread (ADR 0018) + lifecycle stage lens (ADR 0020).
+    # Mirrors the ``scoped_memory_scope`` defaulted-field pattern in this
+    # dataclass. Empty = legacy (Phase 0: accepted but inert; consumers in 1A/2).
+    thread_id: str = ""
+    stage: str = ""
 
     usage_accumulator: Any = None
     request_tool_approval: Any = None

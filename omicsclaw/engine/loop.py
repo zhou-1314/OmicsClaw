@@ -154,6 +154,9 @@ async def run_engine_loop(
     system_prompt_append: str = "",
     user_turn_context: str = "",
     mode: str = "",
+    # Bench (ADR 0018/0020) — investigation thread + lifecycle stage lens.
+    thread_id: str = "",
+    stage: str = "",
     request_tool_approval: Any = None,
     policy_state: Any = None,
     cancel_event: Any = None,
@@ -268,6 +271,12 @@ async def run_engine_loop(
                 "omicsclaw_dir": deps.omicsclaw_dir,
                 "workspace": workspace,
                 "pipeline_workspace": pipeline_workspace,
+                # Bench (ADR 0018/0020) — investigation-thread id + stage lens
+                # ride into per-tool executors. Phase 0: observable but inert
+                # (no consumer yet). Phase 1A reads thread_id to scope
+                # analysis://<thread_id>; Phase 2 reads stage for tool gating.
+                "thread_id": thread_id,
+                "stage": stage,
                 # ADR 0009 — surface-initiated cancel propagates through
                 # this dict into per-tool executors that forward it to
                 # skill.runner.run_skill(cancel_event=...).

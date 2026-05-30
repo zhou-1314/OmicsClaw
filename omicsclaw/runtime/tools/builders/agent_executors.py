@@ -213,8 +213,14 @@ async def execute_omicsclaw(
     session_id: str = None,
     chat_id: int | str = 0,
     cancel_event: threading.Event | None = None,
+    thread_id: str = "",
 ) -> str:
-    """Execute an OmicsClaw skill via the shared runner contract."""
+    """Execute an OmicsClaw skill via the shared runner contract.
+
+    ``thread_id`` (Bench, ADR 0018) arrives from ``tool_runtime_context`` via the
+    tool's ``context_params`` and scopes the auto-captured analysis lineage under
+    the active investigation thread; empty = legacy un-scoped behaviour.
+    """
     arg_shape_error = _validate_omicsclaw_args(args)
     if arg_shape_error:
         return arg_shape_error
@@ -457,7 +463,7 @@ async def execute_omicsclaw(
             shutil.rmtree(out_dir, ignore_errors=True)
         # Capture failed analysis to memory (so we remember what was tried)
         if session_id:
-            await _auto_capture_analysis(session_id, skill_key, args, None, False)
+            await _auto_capture_analysis(session_id, skill_key, args, None, False, thread_id=thread_id)
         # Environment errors take priority — user needs to know it's not their data
         env_msg = _classify_env_error(err)
         if env_msg:
@@ -541,7 +547,7 @@ async def execute_omicsclaw(
     if session_id:
         if input_path:
             await _auto_capture_dataset(session_id, input_path, data_type)
-        await _auto_capture_analysis(session_id, skill_key, args, out_dir, True)
+        await _auto_capture_analysis(session_id, skill_key, args, out_dir, True, thread_id=thread_id)
 
     # Read result.json for preprocessing_state update and next_steps
     result_json = _read_result_json(out_dir)

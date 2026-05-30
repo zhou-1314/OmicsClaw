@@ -558,6 +558,12 @@ class ChatRequest(BaseModel):
     files: Optional[list[dict]] = None
     system_prompt_append: str = ""
     analysis_router_mode: str = ""
+    # Bench — study-scoped investigation thread (ADR 0018) + lifecycle stage
+    # lens (ADR 0020). Phase 0: both fields are accepted but inert (no thread
+    # binding, no stage tool gating yet); consumers arrive in Phase 1A / Phase 2.
+    # Invalid stage strings are tolerated (treated as default), never rejected.
+    thread_id: str = ""
+    stage: str = ""
 
 
 class AbortRequest(BaseModel):
@@ -1895,6 +1901,8 @@ async def chat_stream(req: ChatRequest):
                 system_prompt_append=req.system_prompt_append,
                 mode=req.mode,
                 analysis_router_mode=req.analysis_router_mode,
+                thread_id=req.thread_id,
+                stage=req.stage,
                 cancel_event=cancel_event,
             )
             _active_envelopes[session_id] = envelope

@@ -135,6 +135,8 @@ async def dispatch(envelope: MessageEnvelope) -> AsyncIterator[Event]:
                 system_prompt_append=envelope.system_prompt_append,
                 mode=envelope.mode,
                 analysis_router_mode=envelope.analysis_router_mode,
+                thread_id=envelope.thread_id,
+                stage=envelope.stage,
                 usage_accumulator=envelope.usage_accumulator,
                 request_tool_approval=envelope.request_tool_approval,
                 policy_state=envelope.policy_state,

@@ -197,8 +197,20 @@ async def _auto_capture_dataset(session_id: str, input_path: str, data_type: str
         logger.warning(f"Auto-capture dataset failed: {e}")
 
 
-async def _auto_capture_analysis(session_id: str, skill: str, args: dict, output_dir: Path, success: bool):
-    """Auto-capture analysis memory after skill execution."""
+async def _auto_capture_analysis(
+    session_id: str,
+    skill: str,
+    args: dict,
+    output_dir: Path,
+    success: bool,
+    thread_id: str = "",
+):
+    """Auto-capture analysis memory after skill execution.
+
+    ``thread_id`` (Bench, ADR 0018) scopes the captured run's lineage under the
+    active investigation thread (``analysis://<thread_id>/<skill>/<id>``); empty
+    preserves the legacy un-scoped URI.
+    """
     from omicsclaw.runtime.agent.state import memory_store
     if not memory_store or not session_id:
         return
@@ -223,7 +235,8 @@ async def _auto_capture_analysis(session_id: str, skill: str, args: dict, output
             method=method,
             parameters={"input": input_path} if input_path else {},
             output_path=str(output_dir) if output_dir else "",
-            status="completed" if success else "failed"
+            status="completed" if success else "failed",
+            thread_id=thread_id,
         )
 
         await memory_store.save_memory(session_id, memory)
