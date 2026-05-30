@@ -135,13 +135,30 @@ def _coerce_kg_home(candidate: str) -> Path:
     return path / ".omicsclaw" / "knowledge"
 
 
+# Bench Phase 3.2 (ADR 0019) — availability of the optional OmicsClaw-KG
+# integration, surfaced to the frontend via ``/health`` so it can show/hide
+# KG-dependent UI. Set by ``_register_optional_kg_router`` at startup (mirrors
+# the ``_NOTEBOOK_AVAILABLE`` flag pattern). Defaults to unavailable.
+_KG_AVAILABLE: bool = False
+_KG_IMPORT_ERROR: str = ""
+
+
 def _register_optional_kg_router(app: FastAPI) -> None:
-    """Mount OmicsClaw-KG under `/kg` when the optional package is available."""
+    """Mount OmicsClaw-KG under `/kg` when the optional package is available.
+
+    Also records availability in the module-level ``_KG_AVAILABLE`` /
+    ``_KG_IMPORT_ERROR`` flags (Bench Phase 3.2) so ``/health`` can tell the
+    frontend whether KG-dependent UI should be shown.
+    """
+    global _KG_AVAILABLE, _KG_IMPORT_ERROR
+
     kg_source_dir = str(os.getenv("OMICSCLAW_KG_SOURCE_DIR", "") or "").strip()
     if kg_source_dir and kg_source_dir not in sys.path:
         sys.path.insert(0, kg_source_dir)
 
     if importlib.util.find_spec("omicsclaw_kg") is None:
+        _KG_AVAILABLE = False
+        _KG_IMPORT_ERROR = "omicsclaw_kg package not found on the import path"
         logger.info("OmicsClaw-KG package not available; skipping embedded KG routes")
         return
 
@@ -150,6 +167,8 @@ def _register_optional_kg_router(app: FastAPI) -> None:
         from omicsclaw_kg.http_api import build_router as build_kg_router
         from omicsclaw_kg.http_api import get_kg_config as kg_workspace_dependency
     except ImportError as exc:
+        _KG_AVAILABLE = False
+        _KG_IMPORT_ERROR = str(exc)
         logger.info("OmicsClaw-KG import failed; skipping embedded KG routes: %s", exc)
         return
 
@@ -179,6 +198,8 @@ def _register_optional_kg_router(app: FastAPI) -> None:
 
     app.dependency_overrides[kg_workspace_dependency] = _embedded_kg_config
     app.include_router(build_kg_router(enable_writes=True), prefix="/kg")
+    _KG_AVAILABLE = True
+    _KG_IMPORT_ERROR = ""
     logger.info("Mounted embedded OmicsClaw-KG routes under /kg")
 
 
@@ -667,6 +688,44 @@ def _runtime_health_payload(core: Any) -> dict[str, Any]:
             "squidpy": _module_available("squidpy"),
         },
     }
+
+
+def _resolve_shared_kg_home() -> str:
+    """The shared KG home the desktop ``/kg`` routes resolve to, without a request
+    header (mirrors the env precedence in ``_embedded_kg_config``:
+    ``OMICSCLAW_KG_HOME`` else ``OMICSCLAW_WORKSPACE`` / ``DATA_DIR`` coerced to
+    ``<ws>/.omicsclaw/knowledge``). Empty when none set.
+
+    The result is ``.resolve()``-normalized to match what the routes actually
+    serve: ``KGConfig.__post_init__`` resolves the home, so a non-canonical or
+    relative input would otherwise be reported here differently than served.
+    """
+    explicit = str(os.getenv("OMICSCLAW_KG_HOME", "") or "").strip()
+    if explicit:
+        return str(Path(explicit).resolve())
+    workspace_root = _resolve_scoped_memory_workspace("")
+    if workspace_root:
+        return str(_coerce_kg_home(workspace_root).resolve())
+    return ""
+
+
+def _kg_status_payload() -> dict[str, Any]:
+    """Availability of the optional OmicsClaw-KG integration, for the frontend
+    (Bench Phase 3.2, ADR 0019). ``available`` is True iff the embedded ``/kg``
+    routes mounted at startup — the frontend shows/hides KG-dependent UI on this
+    flag. ``home`` is the shared KG home those routes resolve to (best-effort,
+    empty if unavailable); ``import_error`` is included only when unavailable.
+    """
+    home = ""
+    if _KG_AVAILABLE:
+        try:
+            home = _resolve_shared_kg_home()
+        except Exception:  # pragma: no cover - never break /health on home resolution
+            home = ""
+    payload: dict[str, Any] = {"available": _KG_AVAILABLE, "home": home}
+    if not _KG_AVAILABLE and _KG_IMPORT_ERROR:
+        payload["import_error"] = _KG_IMPORT_ERROR
+    return payload
 
 
 def _resolve_scoped_memory_workspace(explicit_workspace: str = "") -> str:
@@ -2458,6 +2517,7 @@ async def health():
         "provider": core.LLM_PROVIDER_NAME,
         "model": core.OMICSCLAW_MODEL,
         "skills_count": core._primary_skill_count(),
+        "kg": _kg_status_payload(),
         **_runtime_health_payload(core),
     }
 
