@@ -103,7 +103,7 @@ def test_tool_registry_to_openai_tools_for_request_returns_filtered_payload() ->
 
 
 def test_surface_only_bypasses_predicates_for_frozen_list() -> None:
-    """ADR 0017: ``surface_only=True`` yields the session-stable Frozen tool
+    """ADR 0024: ``surface_only=True`` yields the session-stable Frozen tool
     list — every surface-eligible tool, independent of the per-turn query, so
     a request that would normally gate a tool out still includes it."""
     a = _spec("a")

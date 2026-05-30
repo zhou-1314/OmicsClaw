@@ -337,7 +337,7 @@ tool_result_store = ToolResultStore(
 conversations = transcript_store.messages_by_chat
 _conversation_access = transcript_store.access_by_chat  # LRU tracking
 
-# ADR 0017 — process-wide prompt-prefix cache telemetry sink, re-exported here
+# ADR 0024 — process-wide prompt-prefix cache telemetry sink, re-exported here
 # so it sits alongside the other per-chat stores. The query engine records into
 # it directly (see ``cache_diagnostics.CACHE_DIAGNOSTICS``); this alias is for
 # discoverability and for surfaces that want to read session hit ratios.

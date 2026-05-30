@@ -1,6 +1,6 @@
 """Snapshot + invariant tests for the assembled bot tool list.
 
-ADR 0017 (Prompt Prefix Caching) retired per-turn tool-list-compression: the
+ADR 0024 (Prompt Prefix Caching) retired per-turn tool-list-compression: the
 production path now calls ``to_openai_tools_for_request(..., surface_only=True)``,
 yielding the **Frozen tool list** — every surface-eligible tool, byte-identical
 across a session's turns regardless of the query. (The old per-turn predicate
@@ -49,8 +49,8 @@ SNAPSHOT_SCENARIOS: tuple[Scenario, ...] = (
 )
 
 
-# Diverse bot queries that, pre-ADR-0017, gated different tools (file path, PDF,
-# web, plot, memory). Post-ADR-0017 they must all yield the IDENTICAL frozen
+# Diverse bot queries that, pre-ADR-0024, gated different tools (file path, PDF,
+# web, plot, memory). Post-ADR-0024 they must all yield the IDENTICAL frozen
 # list — that is the tool-segment half of the Stable prefix invariant.
 DIVERSE_BOT_QUERIES: tuple[str, ...] = (
     "",
@@ -119,7 +119,7 @@ def test_all_scenarios_have_unique_names() -> None:
 
 
 def test_frozen_list_is_query_independent_for_bot() -> None:
-    """ADR 0017 core invariant: the frozen bot tool payload is byte-identical
+    """ADR 0024 core invariant: the frozen bot tool payload is byte-identical
     across queries that previously gated different tools."""
     baseline = [spec.to_openai_tool() for spec in _frozen_specs(surface="bot")]
     for query in DIVERSE_BOT_QUERIES:

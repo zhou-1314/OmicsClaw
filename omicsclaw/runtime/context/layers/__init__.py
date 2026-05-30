@@ -1015,7 +1015,7 @@ DEFAULT_CONTEXT_LAYER_INJECTORS = (
     ContextLayerInjector(
         name="scope_and_minimal_change_rule",
         order=12,
-        placement="message",  # ADR 0017: query-volatile rule → Volatile context
+        placement="message",  # ADR 0024: query-volatile rule → Volatile context
         surfaces=("bot", "interactive", "pipeline"),
         builder=_make_predicate_rule_builder("scope_and_minimal_change_rule"),
         predicate=_predicate("implementation_intent"),
@@ -1023,7 +1023,7 @@ DEFAULT_CONTEXT_LAYER_INJECTORS = (
     ContextLayerInjector(
         name="file_path_and_inspect_rule",
         order=13,
-        placement="message",  # ADR 0017: query-volatile rule → Volatile context
+        placement="message",  # ADR 0024: query-volatile rule → Volatile context
         surfaces=("bot", "interactive", "pipeline"),
         builder=_make_predicate_rule_builder("file_path_and_inspect_rule"),
         predicate=_predicate("anndata_or_file_path_in_query"),
@@ -1031,7 +1031,7 @@ DEFAULT_CONTEXT_LAYER_INJECTORS = (
     ContextLayerInjector(
         name="parse_literature_rule",
         order=14,
-        placement="message",  # ADR 0017: query-volatile rule → Volatile context
+        placement="message",  # ADR 0024: query-volatile rule → Volatile context
         surfaces=("bot", "interactive", "pipeline"),
         builder=_make_predicate_rule_builder("parse_literature_rule"),
         predicate=_predicate("pdf_or_paper_intent"),
@@ -1039,7 +1039,7 @@ DEFAULT_CONTEXT_LAYER_INJECTORS = (
     ContextLayerInjector(
         name="workspace_continuity_rule",
         order=16,
-        placement="message",  # ADR 0017: gated rule → Volatile context (avoids mid-session re-warm when workspace is set)
+        placement="message",  # ADR 0024: gated rule → Volatile context (avoids mid-session re-warm when workspace is set)
         surfaces=("bot", "interactive", "pipeline"),
         builder=_make_predicate_rule_builder("workspace_continuity_rule"),
         predicate=_predicate("workspace_active"),
@@ -1047,7 +1047,7 @@ DEFAULT_CONTEXT_LAYER_INJECTORS = (
     ContextLayerInjector(
         name="chat_mode_rule",
         order=17,
-        placement="message",  # ADR 0017: gated rule → Volatile context
+        placement="message",  # ADR 0024: gated rule → Volatile context
         surfaces=("bot",),
         builder=_make_predicate_rule_builder("chat_mode_rule"),
         predicate=_predicate("chat_surface"),
@@ -1055,7 +1055,7 @@ DEFAULT_CONTEXT_LAYER_INJECTORS = (
     ContextLayerInjector(
         name="memory_hygiene_rule",
         order=18,
-        placement="message",  # ADR 0017: query-volatile rule → Volatile context
+        placement="message",  # ADR 0024: query-volatile rule → Volatile context
         surfaces=("bot", "interactive", "pipeline"),
         builder=_make_predicate_rule_builder("memory_hygiene_rule"),
         predicate=_predicate("memory_in_use"),
@@ -1063,7 +1063,7 @@ DEFAULT_CONTEXT_LAYER_INJECTORS = (
     ContextLayerInjector(
         name="capability_routing_hint_rule",
         order=19,
-        placement="message",  # ADR 0017: query-volatile rule → Volatile context
+        placement="message",  # ADR 0024: query-volatile rule → Volatile context
         surfaces=("bot", "interactive", "pipeline"),
         builder=_make_predicate_rule_builder("capability_routing_hint_rule"),
         predicate=_predicate("non_trivial_no_capability"),
@@ -1078,14 +1078,14 @@ DEFAULT_CONTEXT_LAYER_INJECTORS = (
     ContextLayerInjector(
         name="skill_context",
         order=42,
-        placement="message",  # ADR 0017: per-query matched-skill context → Volatile context
+        placement="message",  # ADR 0024: per-query matched-skill context → Volatile context
         surfaces=("bot", "interactive", "pipeline"),
         builder=_build_skill_context_layer,
     ),
     ContextLayerInjector(
         name="scoped_memory_context",
         order=45,
-        placement="message",  # ADR 0017: query-RANKED recall varies per turn → Volatile context
+        placement="message",  # ADR 0024: query-RANKED recall varies per turn → Volatile context
         surfaces=("bot", "interactive", "pipeline"),
         builder=_build_scoped_memory_context_layer,
     ),
@@ -1099,21 +1099,21 @@ DEFAULT_CONTEXT_LAYER_INJECTORS = (
     ContextLayerInjector(
         name="capability_assessment",
         order=50,
-        placement="message",  # ADR 0017: per-query capability resolution → Volatile context
+        placement="message",  # ADR 0024: per-query capability resolution → Volatile context
         surfaces=("bot", "interactive", "pipeline"),
         builder=_build_capability_context_layer,
     ),
     ContextLayerInjector(
         name="knowledge_guidance",
         order=52,
-        placement="message",  # ADR 0017: per-query knowledge prefetch → Volatile context
+        placement="message",  # ADR 0024: per-query knowledge prefetch → Volatile context
         surfaces=("bot", "interactive", "pipeline"),
         builder=_build_knowledge_guidance_layer,
     ),
     ContextLayerInjector(
         name="plan_context",
         order=55,
-        placement="message",  # ADR 0017: evolving plan state → Volatile context
+        placement="message",  # ADR 0024: evolving plan state → Volatile context
         surfaces=("bot", "interactive", "pipeline"),
         builder=_build_plan_context_layer,
     ),
@@ -1127,7 +1127,7 @@ DEFAULT_CONTEXT_LAYER_INJECTORS = (
     ContextLayerInjector(
         name="knowhow_constraints",
         order=60,
-        placement="message",  # ADR 0017: query/skill/domain-matched advisory varies per turn → Volatile context
+        placement="message",  # ADR 0024: query/skill/domain-matched advisory varies per turn → Volatile context
         surfaces=("bot", "interactive", "pipeline"),
         builder=_build_knowhow_constraints_layer,
     ),

@@ -1,4 +1,4 @@
-"""Unit tests for prompt-prefix cache diagnostics (ADR 0017, Phase 0).
+"""Unit tests for prompt-prefix cache diagnostics (ADR 0024, Phase 0).
 
 Pure-function coverage of the measurement oracle: provider token extraction,
 segment hashing, and miss-reason inference. No loop / I/O integration here —

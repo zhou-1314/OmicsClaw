@@ -1,8 +1,8 @@
-# Implementation Plan: ADR 0017 — Prompt Prefix Caching
+# Implementation Plan: ADR 0024 — Prompt Prefix Caching
 
 ## Overview
 
-Enforce the **Stable prefix invariant** (ADR 0017): within a session the Prompt
+Enforce the **Stable prefix invariant** (ADR 0024): within a session the Prompt
 prefix (serialized `tools` + the `system` message) is byte-identical across
 turns, changing only at deliberate, logged cache re-warms. Five workstreams:
 (1) freeze the tool list per session, (2) re-tier system layers by volatility
@@ -34,7 +34,7 @@ the `deepseek` provider and read the per-turn `cache_hit_ratio` / `cache_miss_re
 `cold-start`, turns 2+ `none` with a high hit ratio; any `tool-list-changed` /
 unexpected `system-changed` indicates a regression.
 
-## Architecture Decisions (from ADR 0017 + CONTEXT.md §"Prompt Prefix & Caching")
+## Architecture Decisions (from ADR 0024 + CONTEXT.md §"Prompt Prefix & Caching")
 
 - Target **automatic prefix caching** (DeepSeek default + OpenAI). **No**
   `cache_control` annotations. **No** tool re-sort (static registration order is
@@ -247,7 +247,7 @@ a hit-ratio floor from turn 2 on.
 #### Task 4.2: Record before/after
 
 **Description:** Fill in the after-numbers and a token-cost delta in this plan +
-ADR 0017 Consequences.
+ADR 0024 Consequences.
 
 **Acceptance criteria:**
 - [ ] Demo session hit ratio: before `____` → after `____`.

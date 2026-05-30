@@ -83,7 +83,7 @@ def _maybe_append_caller_addition(system_prompt: str, addition: str) -> str:
 
 
 def _prepend_user_turn_context(content: str | list, addition: str) -> str | list:
-    """Prepend per-turn Volatile context (ADR 0017) to the user message.
+    """Prepend per-turn Volatile context (ADR 0024) to the user message.
 
     The Analysis Router's route context, autonomous understanding, and
     assisted-parameterization context are query-volatile, so they ride the
@@ -132,7 +132,7 @@ async def run_engine_loop(
 ) -> str:
     """Drive the LLM-plus-tools loop for a single chat turn.
 
-    ``user_turn_context`` (ADR 0017) carries per-turn Volatile context — the
+    ``user_turn_context`` (ADR 0024) carries per-turn Volatile context — the
     Analysis Router's route context, autonomous understanding, and assisted
     parameterization — which is prepended to the user message rather than the
     system prefix, so the prefix stays cache-stable. ``system_prompt_append``
@@ -191,7 +191,7 @@ async def run_engine_loop(
     system_prompt = _maybe_append_caller_addition(system_prompt, system_prompt_append)
     system_prompt = _maybe_append_mode_hint(system_prompt, mode)
 
-    # ADR 0017 — freeze the tool list by surface (a session constant), not by
+    # ADR 0024 — freeze the tool list by surface (a session constant), not by
     # per-turn query predicates. Byte-identical across turns ⇒ the tool segment
     # of the Prompt prefix stays cache-stable. Cache diagnostics will flip to
     # ``tool-list-changed`` if anything re-introduces per-turn tool variation.

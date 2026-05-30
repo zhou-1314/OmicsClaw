@@ -1,4 +1,4 @@
-"""Multi-turn integration tests for prompt-prefix cache diagnostics (ADR 0017).
+"""Multi-turn integration tests for prompt-prefix cache diagnostics (ADR 0024).
 
 Drives ``run_query_engine`` across several turns of one chat with a stub LLM
 that reports DeepSeek-shaped cache tokens, and asserts the per-turn miss-reason
@@ -210,7 +210,7 @@ def test_history_shifted_when_prefix_stable_but_zero_hit(tmp_path):
 
 
 def test_history_is_append_only_across_turns(tmp_path):
-    """ADR 0017 Phase 3 — across turns (no collapse), each turn's sent messages
+    """ADR 0024 Phase 3 — across turns (no collapse), each turn's sent messages
     are a prefix of the next turn's: history only grows, never slides/rewrites.
 
     ``max_history=4`` is deliberately tiny: under the old per-turn sliding
@@ -274,7 +274,7 @@ def test_regression_floor_stable_prefix_holds_high_hit_ratio(tmp_path):
 
 
 def test_reactive_compaction_emits_hash_of_sent_system_prompt(tmp_path):
-    """ADR 0017 (review finding 1) — on a reactive-compaction turn the helper
+    """ADR 0024 (review finding 1) — on a reactive-compaction turn the helper
     rebuilds the system prompt mid-call; the emitted system_hash must match the
     bytes ACTUALLY sent (post-compaction), not the stale pre-compaction value,
     so a collapse re-warm is attributed correctly."""
@@ -325,7 +325,7 @@ def test_reactive_compaction_emits_hash_of_sent_system_prompt(tmp_path):
 
 
 def test_cache_diagnostics_released_on_transcript_eviction(tmp_path):
-    """ADR 0017 (review finding 7) — when a chat's transcript is LRU-evicted,
+    """ADR 0024 (review finding 7) — when a chat's transcript is LRU-evicted,
     its cache-diagnostics state is released too (no unbounded growth)."""
     CACHE_DIAGNOSTICS.clear()
     transcript_store = TranscriptStore(max_conversations=1, sanitizer=sanitize_tool_history)

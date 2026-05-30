@@ -1169,7 +1169,7 @@ async def llm_tool_loop(
         model_override=model_override,
         extra_api_params=extra_api_params,
         max_tokens_override=max_tokens_override,
-        # ADR 0017 — caller's system addition stays in the (stable) system
+        # ADR 0024 — caller's system addition stays in the (stable) system
         # prefix; the per-turn route / understanding / assisted-param context
         # is Volatile context and rides the user turn instead.
         system_prompt_append=system_prompt_append,

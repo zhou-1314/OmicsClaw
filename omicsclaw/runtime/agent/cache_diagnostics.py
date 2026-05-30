@@ -1,4 +1,4 @@
-"""Prompt-prefix cache diagnostics (ADR 0017).
+"""Prompt-prefix cache diagnostics (ADR 0024).
 
 Provider-neutral helpers that turn the **Stable prefix invariant** from a hope
 into a measured property. Three pure pieces:

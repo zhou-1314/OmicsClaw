@@ -98,7 +98,7 @@ def test_assemble_prompt_context_layers_are_ordered_and_accounted():
     assert "## Output Style Profile" in assembly.system_prompt
     assert "preferred language: Chinese" in assembly.system_prompt
     assert "seq-think" in assembly.system_prompt
-    # ADR 0017 — query-volatile layers now render into message_context (the
+    # ADR 0024 — query-volatile layers now render into message_context (the
     # user turn), not the system prefix; the system prefix stays cache-stable.
     assert "## Prefetched Skill Context" in assembly.message_context
     assert "Selected skill: `spatial-preprocess`" in assembly.message_context
@@ -124,7 +124,7 @@ def test_assemble_prompt_context_can_route_workspace_to_message_context():
     assert "BASE PERSONA" in assembly.system_prompt
     assert "## Output Style Profile" in assembly.system_prompt
     assert "Surface Adapter (bot)" in assembly.system_prompt
-    # ADR 0017 — other gated rule layers also render to message now, so
+    # ADR 0024 — other gated rule layers also render to message now, so
     # workspace_context is present but no longer necessarily first.
     assert "## Workspace Context" in assembly.message_context
     assert "/tmp/session" in assembly.message_context
@@ -184,7 +184,7 @@ def test_assemble_chat_context_loads_memory_and_builds_prompt():
     assert context.session_id == "telegram:user-1:chat-1"
     assert context.memory_context == "preferred language: Chinese"
     assert context.user_text == "Analyze sample.h5ad with spatial-preprocess"
-    # ADR 0017 — query-volatile layers (here the file-path rule, triggered by
+    # ADR 0024 — query-volatile layers (here the file-path rule, triggered by
     # "sample.h5ad") now ride the user turn as Volatile context, prepended to
     # the raw user text, and are frozen into history append-only.
     assert "Analyze sample.h5ad with spatial-preprocess" in context.user_message_content
@@ -311,7 +311,7 @@ def test_assemble_prompt_context_prefetches_knowledge_guidance_for_method_questi
     )
 
     assert "knowledge_guidance" in assembly.layer_stats
-    # ADR 0017 — per-query knowledge prefetch is Volatile context (message).
+    # ADR 0024 — per-query knowledge prefetch is Volatile context (message).
     assert "Prefer Harmony for batch correction." in assembly.message_context
     assert calls == [
         {
@@ -390,7 +390,7 @@ def test_assemble_prompt_context_includes_skill_context_only_when_relevant():
     )
 
     assert "skill_context" in assembly.layer_stats
-    # ADR 0017 — matched-skill context is Volatile context (message), not system.
+    # ADR 0024 — matched-skill context is Volatile context (message), not system.
     assert "## Prefetched Skill Context" in assembly.message_context
     assert "Selected skill: `spatial-preprocess`" in assembly.message_context
 
@@ -518,12 +518,12 @@ def test_assemble_prompt_context_includes_plan_context_layer():
     )
 
     assert "plan_context" in assembly.layer_stats
-    # ADR 0017 — evolving plan state is Volatile context (message).
+    # ADR 0024 — evolving plan state is Volatile context (message).
     assert "## Active Plan Mode" in assembly.message_context
 
 
 def test_system_prompt_is_byte_stable_across_query_intents():
-    """ADR 0017 Phase 2 core invariant: the system prefix must be
+    """ADR 0024 Phase 2 core invariant: the system prefix must be
     byte-identical regardless of the query, so the provider's prefix cache
     stays warm. Query-volatile content rides message_context instead."""
 
@@ -560,7 +560,7 @@ def test_system_prompt_is_byte_stable_across_query_intents():
 
 
 def test_system_prompt_byte_stable_with_knowhow_and_scoped_memory():
-    """ADR 0017 — knowhow_constraints (query/skill/domain-matched) and
+    """ADR 0024 — knowhow_constraints (query/skill/domain-matched) and
     scoped_memory_context (query-RANKED) are Volatile context. Even with knowhow
     ON and scoped memory present, the system prefix must stay byte-identical
     across queries. This catches a query-varying layer wrongly left in the system

@@ -27,7 +27,7 @@ def select_tool_specs(
          A raising predicate is fail-closed: the tool is suppressed and a
          WARNING is logged. A return value of False suppresses the tool.
 
-    ``surface_only=True`` (ADR 0017) yields the **Frozen tool list**: every
+    ``surface_only=True`` (ADR 0024) yields the **Frozen tool list**: every
     surface-eligible tool, independent of the per-turn query. Because ``surface``
     is a session constant and ``specs`` order is static, the result is
     byte-identical across a session's turns — the **Stable prefix invariant**
@@ -122,7 +122,7 @@ class ToolRegistry:
 
         ``to_openai_tools()`` (no request) still returns the full list —
         callers that haven't migrated keep the legacy behavior. With
-        ``surface_only=True`` (ADR 0017) the per-turn query predicates are
+        ``surface_only=True`` (ADR 0024) the per-turn query predicates are
         skipped, yielding the session-stable **Frozen tool list**.
         """
         return [

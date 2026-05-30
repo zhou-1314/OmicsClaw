@@ -223,7 +223,7 @@ def test_build_transcript_summary_collects_compacted_plan_and_advisory_refs(tmp_
 
 
 def test_transcript_store_prepare_history_is_append_only_no_slide():
-    # ADR 0017 — prepare_history returns the FULL sanitized history (no per-turn
+    # ADR 0024 — prepare_history returns the FULL sanitized history (no per-turn
     # newest-suffix slide); a small max_history no longer trims the model
     # context (it governs the display replay only). Overflow is handled solely
     # by context collapse downstream, keeping the prefix cache-stable.
@@ -275,7 +275,7 @@ def test_transcript_store_prepare_history_preserves_full_sanitized_transcript():
 
     history = store.prepare_history(chat_id)
 
-    # ADR 0017 — the full history is returned (append-only), not a trimmed
+    # ADR 0024 — the full history is returned (append-only), not a trimmed
     # newest suffix; storage is likewise preserved intact.
     assert history == [
         {"role": "user", "content": "older user"},

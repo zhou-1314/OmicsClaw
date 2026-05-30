@@ -464,7 +464,7 @@ class TranscriptStore:
         return message
 
     def prepare_history(self, chat_id: int | str, *, warn: bool = True) -> list[dict]:
-        """Sanitize and return the FULL model-path history (ADR 0017).
+        """Sanitize and return the FULL model-path history (ADR 0024).
 
         History is append-only between deliberate context collapses: this no
         longer applies a per-turn newest-suffix slide, which used to shift the
