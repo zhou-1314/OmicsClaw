@@ -1902,7 +1902,11 @@ async def chat_stream(req: ChatRequest):
                 mode=req.mode,
                 analysis_router_mode=req.analysis_router_mode,
                 thread_id=req.thread_id,
-                stage=req.stage,
+                # Bench (ADR 0020) — normalize stage once at the producer boundary
+                # so a casing/whitespace mismatch ("Read", " read ") can't silently
+                # bypass the stage gate; unknown values still fall through to the
+                # permissive full-tool path downstream.
+                stage=(req.stage or "").strip().lower(),
                 cancel_event=cancel_event,
             )
             _active_envelopes[session_id] = envelope

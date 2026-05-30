@@ -84,6 +84,47 @@ def _maybe_append_caller_addition(system_prompt: str, addition: str) -> str:
     return system_prompt.rstrip() + "\n\n" + addition.strip()
 
 
+# Bench (ADR 0020) — lifecycle-stage stance fragments. Additive guidance that
+# shapes the stage's stance (read vs. compute vs. write); subordinate to SOUL.md
+# and the base persona, it cannot override safety rules. The research-stance
+# persona layer + the full 5-layer composer arrive in Phase 4.
+_STAGE_FRAGMENTS: dict[str, str] = {
+    "read": (
+        "You are in the **Read** stage of a research investigation: help the user "
+        "read and interpret papers. Answer from ingested sources and cite them; do "
+        "not run heavyweight analyses here. If the user wants to compute, propose a "
+        "one-click switch to the Analyze stage rather than launching it yourself."
+    ),
+    "ideate": (
+        "You are in the **Ideate** stage: turn the thread's reading into testable, "
+        "source-grounded hypotheses. Never fabricate a citation; flag an ungrounded "
+        "hunch as such."
+    ),
+    "analyze": (
+        "You are in the **Analyze** stage: run OmicsClaw skills on the thread's data "
+        "and ground every result in real artifact values."
+    ),
+    "write": (
+        "You are in the **Write** stage: draft from recorded analysis lineage and "
+        "cited sources; preserve numbers verbatim and cite every claim."
+    ),
+}
+
+
+def _maybe_append_stage_fragment(system_prompt: str, stage: str) -> str:
+    """Append the Bench lifecycle-stage stance fragment (ADR 0020).
+
+    Empty / unknown stage = no fragment, so the legacy / non-Bench path is
+    byte-unchanged.
+    """
+    if not stage:
+        return system_prompt
+    fragment = _STAGE_FRAGMENTS.get(stage, "")
+    if not fragment:
+        return system_prompt
+    return system_prompt.rstrip() + "\n\n## Stage\n" + fragment
+
+
 # ADR 0024 — derive the context-collapse char budget from the model's window.
 # Phase 3 made history append-only between collapses, removing the per-turn
 # slide that used to bound small-context providers; this re-introduces a safe
@@ -221,15 +262,23 @@ async def run_engine_loop(
     )
     system_prompt = _maybe_append_caller_addition(system_prompt, system_prompt_append)
     system_prompt = _maybe_append_mode_hint(system_prompt, mode)
+    # Bench (ADR 0020) — append the lifecycle-stage stance fragment (additive,
+    # subordinate to SOUL.md + base persona; empty/unknown stage = no-op).
+    system_prompt = _maybe_append_stage_fragment(system_prompt, stage)
 
     # ADR 0024 — freeze the tool list by surface (a session constant), not by
     # per-turn query predicates. Byte-identical across turns ⇒ the tool segment
     # of the Prompt prefix stays cache-stable. Cache diagnostics will flip to
     # ``tool-list-changed`` if anything re-introduces per-turn tool variation.
+    # Bench (ADR 0020) — sub-filter the (otherwise cache-stable) surface tool
+    # list to the active lifecycle stage's default subset. Empty / analyze /
+    # unknown stage is unfiltered, so the prompt-prefix tool segment stays
+    # byte-stable for the legacy / non-Bench path (ADR 0024).
     request_tools = tuple(
         deps.tool_registry.to_openai_tools_for_request(
             chat_context.prompt_context.request,
             surface_only=True,
+            stage=stage,
         )
     )
     hook_runtime = build_default_lifecycle_hook_runtime(deps.omicsclaw_dir)

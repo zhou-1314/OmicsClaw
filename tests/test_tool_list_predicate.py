@@ -102,6 +102,49 @@ def test_tool_registry_to_openai_tools_for_request_returns_filtered_payload() ->
     ]
 
 
+# ---------------------------------------------------------------------------
+# Bench Phase 2 (ADR 0020) — stage → tool-subset gating
+# ---------------------------------------------------------------------------
+
+
+def test_stage_read_keeps_only_read_subset_tools() -> None:
+    specs = (_spec("recall"), _spec("file_read"), _spec("omicsclaw"), _spec("file_write"))
+    selected = select_tool_specs(
+        specs, request=_req(surface="bot"), surface_only=True, stage="read"
+    )
+    # Read withholds the analysis runner + file-write tools; order preserved.
+    assert [s.name for s in selected] == ["recall", "file_read"]
+
+
+def test_unfiltered_stages_keep_the_full_tool_list() -> None:
+    specs = (_spec("recall"), _spec("omicsclaw"), _spec("file_write"))
+    # analyze / empty / unknown stage = no subset → full list (cache-stable path).
+    for stage in ("", "analyze", "bogus-stage"):
+        selected = select_tool_specs(
+            specs, request=_req(surface="bot"), surface_only=True, stage=stage
+        )
+        assert [s.name for s in selected] == ["recall", "omicsclaw", "file_write"], (
+            f"stage={stage!r} must be unfiltered"
+        )
+
+
+def test_stage_subset_is_single_source_of_truth() -> None:
+    from omicsclaw.runtime.tools.registry import STAGE_TO_TOOL_SUBSETS
+
+    assert "recall" in STAGE_TO_TOOL_SUBSETS["read"]
+    assert "omicsclaw" not in STAGE_TO_TOOL_SUBSETS["read"]
+    # analyze is intentionally absent → unfiltered (full toolset).
+    assert "analyze" not in STAGE_TO_TOOL_SUBSETS
+
+
+def test_to_openai_tools_for_request_applies_stage_filter() -> None:
+    registry = ToolRegistry([_spec("recall"), _spec("omicsclaw")])
+    payload = registry.to_openai_tools_for_request(
+        _req(surface="bot"), surface_only=True, stage="read"
+    )
+    assert [t["function"]["name"] for t in payload] == ["recall"]
+
+
 def test_surface_only_bypasses_predicates_for_frozen_list() -> None:
     """ADR 0024: ``surface_only=True`` yields the session-stable Frozen tool
     list — every surface-eligible tool, independent of the per-turn query, so
