@@ -320,12 +320,18 @@ class MemoryClient:
         query: str,
         limit: int = 10,
         domain: Optional[str] = None,
+        path_prefix: str = "",
     ) -> List[Dict[str, Any]]:
-        """FTS over the client's namespace (with shared fallback)."""
+        """FTS over the client's namespace (with shared fallback).
+
+        ``path_prefix`` (Bench Phase 1) scopes hits to a path segment (exact or
+        ``<path_prefix>/...`` sub-paths) — used for thread-scoped recall.
+        """
         await self._ensure_init()
         assert self._engine is not None
         return await self._engine.search(
-            query, namespace=self._namespace, domain=domain, limit=limit
+            query, namespace=self._namespace, domain=domain, limit=limit,
+            path_prefix=path_prefix,
         )
 
     async def list_children(self, uri: str = "core://") -> List[Any]:
