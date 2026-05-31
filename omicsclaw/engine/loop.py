@@ -241,6 +241,10 @@ async def run_engine_loop(
         user_content=user_content,
         user_id=user_id,
         platform=platform,
+        # Bench (AN-CTXRECALL-11) — scope the passive per-turn memory injection
+        # to the active investigation thread (dataset/analysis only; global
+        # prefs/insights/project_context stay shared). Empty = legacy unscoped.
+        thread_id=thread_id,
         session_manager=deps.session_manager,
         system_prompt_builder=build_system_prompt,
         skill_aliases=deps.skill_aliases,

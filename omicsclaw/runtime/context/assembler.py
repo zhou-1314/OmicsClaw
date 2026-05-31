@@ -308,6 +308,7 @@ async def assemble_chat_context(
     user_content: str | list[dict[str, Any]],
     user_id: str | None = None,
     platform: str | None = None,
+    thread_id: str = "",
     session_manager=None,
     system_prompt_builder=None,
     capability_resolver=None,
@@ -328,8 +329,14 @@ async def assemble_chat_context(
     memory_task = None
     if session_manager and session_id:
         async def _load_session_memory() -> str:
-            await session_manager.get_or_create(user_id, platform, str(chat_id))
-            return await session_manager.load_context(session_id)
+            # Bench (ADR 0023 d3 / AN-CTXRECALL-11): stamp a freshly-created
+            # session with the active thread (no-op for an already-bound one —
+            # the binding is immutable) and scope the passive memory injection
+            # to that thread. thread_id="" preserves the legacy un-scoped load.
+            await session_manager.get_or_create(
+                user_id, platform, str(chat_id), thread_id=thread_id
+            )
+            return await session_manager.load_context(session_id, thread_id=thread_id)
 
         memory_task = asyncio.create_task(_load_session_memory())
 
