@@ -2828,6 +2828,170 @@ async def memory_search(
 
 
 # ---------------------------------------------------------------------------
+# Thread (Bench investigation) CRUD — BE-THREAD-CRUD-2 (Phase 1)
+# Authoritative metadata at project://<thread_id> (ThreadMemory, versioned).
+# All operations run in the desktop _memory_client namespace; the URL
+# thread_id is only a node-path lookup key, never trusted as a namespace.
+# NOTE: static routes (/thread/create, /thread/list) are declared BEFORE the
+# dynamic /thread/{thread_id} so the literal paths are not captured by it.
+# ---------------------------------------------------------------------------
+
+class ThreadCreateRequest(BaseModel):
+    name: str
+    description: str = ""
+    domains: list[str] = Field(default_factory=list)
+    organism: Optional[str] = None
+    platforms: list[str] = Field(default_factory=list)
+    venue: Optional[str] = None
+
+
+class ThreadUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    domains: Optional[list[str]] = None
+    organism: Optional[str] = None
+    platforms: Optional[list[str]] = None
+    venue: Optional[str] = None
+
+
+class ThreadPreferenceRequest(BaseModel):
+    key: str
+    value: Any
+
+
+@app.post("/thread/create")
+async def thread_create(req: ThreadCreateRequest):
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import thread as thread_svc
+
+        tm = await thread_svc.create_thread(
+            _memory_client,
+            name=req.name,
+            description=req.description,
+            domains=req.domains,
+            organism=req.organism,
+            platforms=req.platforms,
+            venue=req.venue,
+        )
+        return tm.model_dump()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Thread create error")
+        raise HTTPException(500, detail=str(exc))
+
+
+@app.get("/thread/list")
+async def thread_list():
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import thread as thread_svc
+
+        threads = await thread_svc.list_threads(_memory_client)
+        return {"threads": [t.model_dump() for t in threads], "count": len(threads)}
+    except Exception as exc:
+        logger.exception("Thread list error")
+        raise HTTPException(500, detail=str(exc))
+
+
+@app.get("/thread/{thread_id}")
+async def thread_get(thread_id: str):
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import thread as thread_svc
+
+        tm = await thread_svc.get_thread(_memory_client, thread_id)
+        if tm is None:
+            raise HTTPException(404, detail=f"thread not found: {thread_id}")
+        return tm.model_dump()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Thread get error")
+        raise HTTPException(500, detail=str(exc))
+
+
+@app.put("/thread/{thread_id}")
+async def thread_update(thread_id: str, req: ThreadUpdateRequest):
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import thread as thread_svc
+
+        tm = await thread_svc.update_thread(
+            _memory_client, thread_id, req.model_dump(exclude_none=True)
+        )
+        if tm is None:
+            raise HTTPException(404, detail=f"thread not found: {thread_id}")
+        return tm.model_dump()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Thread update error")
+        raise HTTPException(500, detail=str(exc))
+
+
+@app.delete("/thread/{thread_id}")
+async def thread_delete(thread_id: str):
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import thread as thread_svc
+
+        ok = await thread_svc.delete_thread(_memory_client, thread_id)
+        if not ok:
+            raise HTTPException(404, detail=f"thread not found: {thread_id}")
+        return {"ok": True, "thread_id": thread_id}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Thread delete error")
+        raise HTTPException(500, detail=str(exc))
+
+
+@app.get("/thread/{thread_id}/preference")
+async def thread_get_preference(thread_id: str):
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import thread as thread_svc
+
+        prefs = await thread_svc.get_thread_preferences(_memory_client, thread_id)
+        if prefs is None:
+            raise HTTPException(404, detail=f"thread not found: {thread_id}")
+        return {"thread_id": thread_id, "preferences": prefs}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Thread preference get error")
+        raise HTTPException(500, detail=str(exc))
+
+
+@app.put("/thread/{thread_id}/preference")
+async def thread_set_preference(thread_id: str, req: ThreadPreferenceRequest):
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import thread as thread_svc
+
+        tm = await thread_svc.set_thread_preference(
+            _memory_client, thread_id, req.key, req.value
+        )
+        if tm is None:
+            raise HTTPException(404, detail=f"thread not found: {thread_id}")
+        return {"thread_id": thread_id, "preferences": tm.preferences}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Thread preference set error")
+        raise HTTPException(500, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
 # Memory CRUD & Management Endpoints
 # ---------------------------------------------------------------------------
 
