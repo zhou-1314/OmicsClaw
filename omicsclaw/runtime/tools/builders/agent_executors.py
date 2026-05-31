@@ -102,6 +102,7 @@ from omicsclaw.runtime.policy.verification import format_completion_mapping_summ
 from omicsclaw.skill.orchestration import (
     _AUTO_DISAMBIGUATE_GAP,
     _auto_capture_analysis,
+    _auto_capture_consensus,
     _auto_capture_dataset,
     _build_method_preview,
     _build_param_hint,
@@ -548,7 +549,15 @@ async def execute_omicsclaw(
     if session_id:
         if input_path:
             await _auto_capture_dataset(session_id, input_path, data_type, thread_id=thread_id)
-        await _auto_capture_analysis(session_id, skill_key, args, out_dir, True, thread_id=thread_id)
+        # Bench (AN-ROUTER-10): a successful typed-consensus run records its
+        # lineage at the canonical thread-scoped namespace
+        # (analysis://<thread_id>/typed/<run_id>, ADR 0010/0018) — one record per
+        # run, readable by future meta-analysis. Returns False for non-consensus
+        # skills (and failed consensus runs), which keep the generic per-skill capture.
+        if not await _auto_capture_consensus(
+            session_id, skill_key, out_dir, True, thread_id=thread_id
+        ):
+            await _auto_capture_analysis(session_id, skill_key, args, out_dir, True, thread_id=thread_id)
 
     # Read result.json for preprocessing_state update and next_steps
     result_json = _read_result_json(out_dir)

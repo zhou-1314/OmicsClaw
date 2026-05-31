@@ -253,6 +253,111 @@ async def _auto_capture_analysis(
         logger.warning(f"Auto-capture analysis failed: {e}")
 
 
+async def _auto_capture_consensus(
+    session_id: str,
+    skill: str,
+    output_dir: Path,
+    success: bool,
+    thread_id: str = "",
+) -> bool:
+    """Auto-capture a typed-consensus run's lineage at its canonical URI.
+
+    AN-ROUTER-10 (Bench, ADR 0010/0018): a consensus skill (``consensus-domains``
+    / ``sc-consensus-clustering``) runs in a subprocess that writes only disk
+    artifacts — the in-loop agent is the only place that holds BOTH the active
+    ``thread_id`` and the graph-memory store. After a successful run we record
+    the run's lineage at the canonical, thread-scoped consensus namespace
+    ``analysis://<thread_id>/typed/<run_id>`` (``consensus_namespace`` — ADR 0010:
+    meta-analysis reads ``typed/*``; ADR 0018: thread scoping). Empty
+    ``thread_id`` keeps the legacy un-scoped ``analysis://typed/<run_id>``.
+
+    Returns ``True`` when this WAS a registered consensus flavour and the lineage
+    was captured, so the caller skips the generic ``_auto_capture_analysis``
+    (one record per run, at its canonical URI); ``False`` otherwise (the caller
+    falls back to the generic capture). A failed run also returns ``False``: a
+    non-run has no verified ``typed/`` lineage, so failures stay on the generic
+    per-skill capture.
+
+    This is the lightweight lineage marker (a plain ``AnalysisMemory`` at the
+    canonical URI, with the real consensus skill name); the richer
+    ``TypedConsensusRun`` provenance index (effective params, checksums, the
+    assisted-parameterization decision) lands at the SAME URI in
+    AN-PROV-CAPTURE-13.
+    """
+    from omicsclaw.runtime.agent.state import memory_store
+
+    try:
+        from omicsclaw.runtime.consensus.sources import CONSENSUS_SOURCES
+    except Exception:
+        return False
+    source = CONSENSUS_SOURCES.get(skill)
+    if source is None:
+        # Not a consensus flavour — the caller uses the generic capture.
+        return False
+    if not memory_store or not session_id or not success or not output_dir:
+        return False
+
+    try:
+        import json
+
+        from omicsclaw.memory.compat import AnalysisMemory
+        from omicsclaw.runtime.consensus.dispatch import consensus_namespace
+        from omicsclaw.runtime.consensus.templates import provenance_of
+
+        mode = "typed" if provenance_of(source.template) == "typed" else "narrative"
+
+        # run_id + operator come from the driver's plan.json audit (run.py); the
+        # agent loop never passes --run-id, so run_id == output_dir.name, but we
+        # read the audit to honour an explicit --run-id if one is ever wired.
+        run_id = output_dir.name
+        operator = "kmode"
+        try:
+            plan = json.loads((output_dir / "plan.json").read_text(encoding="utf-8"))
+            run_id = str(plan.get("run_id") or run_id)
+            operator = str(plan.get("operator") or operator)
+        except Exception:
+            pass
+        if not run_id:
+            return False
+
+        source_dataset_id = ""
+        try:
+            datasets = await memory_store.get_memories(
+                session_id, "dataset", limit=1, thread_id=thread_id
+            )
+            if datasets:
+                source_dataset_id = datasets[0].memory_id
+        except Exception:
+            pass
+
+        memory = AnalysisMemory(
+            memory_id=run_id,
+            source_dataset_id=source_dataset_id,
+            skill=skill,
+            method=operator,
+            parameters={"run_id": run_id, "consensus_mode": mode},
+            output_path=str(output_dir),
+            status="completed",
+            thread_id=thread_id,
+        )
+        # Land at the explicit consensus URI (which the AnalysisMemory's own
+        # <skill>/<id> path shape can't express) via the same per-session client
+        # CompatMemoryStore.save_memory uses — no new store API, no model change.
+        client = await memory_store._client_for_session(session_id)
+        await client.remember(
+            uri=consensus_namespace(run_id, mode, thread_id),
+            content=memory.model_dump_json(),
+            disclosure=f"Consensus lineage from session {session_id}",
+        )
+        logger.debug(
+            f"Auto-captured consensus lineage: {skill} run {run_id} ({mode})"
+        )
+        return True
+    except Exception as e:
+        logger.warning(f"Auto-capture consensus failed: {e}")
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Env-error parsing
 # ---------------------------------------------------------------------------
