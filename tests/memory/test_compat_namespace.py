@@ -23,6 +23,9 @@ from omicsclaw.memory.compat import (
     CompatMemoryStore,
     DatasetMemory,
     PreferenceMemory,
+    ProjectContextMemory,
+    ThreadMemory,
+    _content_to_memory,
     _memory_to_uri_path,
 )
 from omicsclaw.memory.models import Path
@@ -37,6 +40,32 @@ def test_dataset_memory_uri_scopes_under_thread_id():
 
     scoped = DatasetMemory(file_path="GSE12345/matrix.h5ad", thread_id="t-glioma")
     assert _memory_to_uri_path(scoped) == "t-glioma/GSE12345_matrix.h5ad"
+
+
+def test_thread_memory_uri_is_thread_id():
+    # Bench Phase 1: thread metadata is addressed by its thread_id → project://<thread_id>.
+    tm = ThreadMemory(thread_id="t-glioma", name="Glioma study")
+    assert _memory_to_uri_path(tm) == "t-glioma"
+
+
+def test_thread_memory_roundtrips_via_content_authoritative_type():
+    # ThreadMemory and ProjectContextMemory share the "project" domain. Deserialization
+    # must use the content's embedded memory_type, NOT the (ambiguous) domain hint:
+    # passing the WRONG hint still reconstructs the right class.
+    tm = ThreadMemory(thread_id="t1", name="N", domains=["spatial"], is_deleted=False)
+    back = _content_to_memory(tm.model_dump_json(), "project_context")  # wrong hint
+    assert isinstance(back, ThreadMemory)
+    assert back.thread_id == "t1" and back.name == "N" and back.domains == ["spatial"]
+
+    pc = ProjectContextMemory(project_goal="map the TME")
+    back2 = _content_to_memory(pc.model_dump_json(), "thread")  # wrong hint, other way
+    assert isinstance(back2, ProjectContextMemory)
+    assert back2.project_goal == "map the TME"
+
+
+def test_project_context_memory_uri_unchanged():
+    pc = ProjectContextMemory(project_goal="x")
+    assert _memory_to_uri_path(pc) == pc.memory_id
 
 
 def test_analysis_memory_uri_scopes_under_thread_id():
@@ -98,6 +127,44 @@ async def test_get_session_round_trips(store):
 # ----------------------------------------------------------------------
 # Memory storage uses session-derived namespace
 # ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_memories_type_gate_with_shared_project_domain(store):
+    """Bench Phase 1 regression: project_context and thread share the project://
+    domain, and content-authoritative deserialization no longer drops wrong-type
+    rows — so get_memories must re-apply the requested type filter. Without the
+    gate: no-filter duplicates 6x, typed queries bleed across types, and
+    get_memories('project_context') can return a ThreadMemory (crashing the
+    production context loader on .project_goal)."""
+    session = await store.create_session("user42", "telegram")
+    sid = session.session_id
+    await store.save_memory(sid, ProjectContextMemory(project_goal="map the TME"))
+    await store.save_memory(sid, ThreadMemory(thread_id="t1", name="Glioma"))
+    await store.save_memory(sid, DatasetMemory(file_path="pbmc.h5ad"))
+
+    # No-filter: exactly one of each type, no duplication.
+    everything = await store.get_memories(sid)
+    types = sorted(m.memory_type for m in everything)
+    assert types == ["dataset", "project_context", "thread"], types
+
+    # Typed queries are isolated — no cross-type bleed in the shared project domain.
+    pcs = await store.get_memories(sid, "project_context")
+    assert [m.memory_type for m in pcs] == ["project_context"]
+    assert isinstance(pcs[0], ProjectContextMemory) and pcs[0].project_goal == "map the TME"
+
+    threads = await store.get_memories(sid, "thread")
+    assert [m.memory_type for m in threads] == ["thread"]
+    assert isinstance(threads[0], ThreadMemory) and threads[0].thread_id == "t1"
+
+    datasets = await store.get_memories(sid, "dataset")
+    assert [m.memory_type for m in datasets] == ["dataset"]
+
+    # load_context must not crash (it calls get_memories('project_context') then
+    # reads .project_goal) and renders the project goal exactly once.
+    ctx = await store.load_context(sid)
+    assert isinstance(ctx, str)
+    assert ctx.count("map the TME") == 1
 
 
 @pytest.mark.asyncio

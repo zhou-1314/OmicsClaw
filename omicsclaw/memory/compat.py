@@ -167,6 +167,27 @@ class ProjectContextMemory(BaseMemory):
     disease_model: str | None = None
 
 
+class ThreadMemory(BaseMemory):
+    """Bench investigation-thread metadata (Phase 1, ADR 0018/0023).
+
+    Persisted at ``project://<thread_id>`` (versioned — see namespace_policy).
+    Shares the ``project`` domain with the legacy ``ProjectContextMemory``;
+    deserialization is disambiguated by the ``memory_type`` field in the stored
+    content (``_content_to_memory``), not by the shared domain. Soft-delete sets
+    ``is_deleted=True`` and re-versions rather than removing the record.
+    """
+    memory_type: Literal["thread"] = "thread"
+    thread_id: str
+    name: str = ""
+    description: str = ""
+    domains: list[str] = Field(default_factory=list)
+    organism: str | None = None
+    platforms: list[str] = Field(default_factory=list)
+    venue: str | None = None
+    preferences: dict[str, Any] = Field(default_factory=dict)
+    is_deleted: bool = False
+
+
 # =============================================================================
 # Type → URI domain mapping
 # =============================================================================
@@ -177,9 +198,16 @@ _TYPE_TO_DOMAIN = {
     "preference": "preference",
     "insight": "insight",
     "project_context": "project",
+    # Bench Phase 1: thread metadata shares the ``project`` domain (URI is
+    # project://<thread_id>); deserialization disambiguates by content memory_type.
+    "thread": "project",
 }
 
 _DOMAIN_TO_TYPE = {v: k for k, v in _TYPE_TO_DOMAIN.items()}
+# ``project`` maps to two types (project_context, thread); pin the reverse hint to
+# the legacy type. The read path (_content_to_memory) is authoritative on the
+# content's own memory_type, so this only affects the domain-derived fallback hint.
+_DOMAIN_TO_TYPE["project"] = "project_context"
 
 _TYPE_CLASSES = {
     "dataset": DatasetMemory,
@@ -187,6 +215,7 @@ _TYPE_CLASSES = {
     "preference": PreferenceMemory,
     "insight": InsightMemory,
     "project_context": ProjectContextMemory,
+    "thread": ThreadMemory,
 }
 
 
@@ -212,6 +241,10 @@ def _memory_to_uri_path(memory: BaseMemory) -> str:
         return f"{memory.domain}/{memory.key}"
     elif isinstance(memory, InsightMemory):
         return f"{memory.entity_type}/{memory.entity_id}"
+    elif isinstance(memory, ThreadMemory):
+        # Bench Phase 1: thread metadata is addressed by its thread_id, i.e.
+        # project://<thread_id> (the thread node; per-thread content nests under it).
+        return memory.thread_id
     elif isinstance(memory, ProjectContextMemory):
         return memory.memory_id
     return memory.memory_id
@@ -223,8 +256,20 @@ def _memory_to_content(memory: BaseMemory) -> str:
 
 
 def _content_to_memory(content: str, memory_type: str) -> Optional[BaseMemory]:
-    """Deserialize graph memory content to a Pydantic model."""
-    cls = _TYPE_CLASSES.get(memory_type)
+    """Deserialize graph memory content to a Pydantic model.
+
+    The ``memory_type`` embedded in the stored content is authoritative — it
+    disambiguates types that share a domain (e.g. ``project_context`` vs
+    ``thread`` under ``project://``), where the domain-derived ``memory_type``
+    hint is necessarily ambiguous. Falls back to the passed hint when the
+    content carries no usable type.
+    """
+    embedded = None
+    try:
+        embedded = json.loads(content).get("memory_type")
+    except Exception:
+        embedded = None
+    cls = _TYPE_CLASSES.get(embedded) or _TYPE_CLASSES.get(memory_type)
     if not cls:
         return None
     try:
@@ -549,11 +594,18 @@ class CompatMemoryStore:
                     if content != rec.content:
                         await client.remember(uri=child_uri, content=content)
                     obj = _content_to_memory(content, mtype)
-                    if obj:
-                        results.append(obj)
-                    else:
-                        # Not a valid leaf — recurse into this container node
+                    if obj is None:
+                        # Not a valid leaf — recurse into this container node.
                         await _collect(child_uri, mtype)
+                    elif not mtype or obj.memory_type == mtype:
+                        results.append(obj)
+                    # else: a valid leaf of a DIFFERENT type than requested — skip.
+                    # ``client.list_children`` is not domain-scoped (engine lists by
+                    # namespace), and content-authoritative ``_content_to_memory``
+                    # deserializes any type successfully, so this explicit type gate
+                    # is what scopes a typed/per-domain pass to its own type. Without
+                    # it, types sharing a domain (project_context vs thread under
+                    # project://) leak across queries and the no-filter walk duplicates.
 
         if domain:
             await _collect(f"{domain}://", memory_type or "")
@@ -627,7 +679,10 @@ class CompatMemoryStore:
             rd = r.get("domain", "")
             mt = _DOMAIN_TO_TYPE.get(rd, memory_type or "")
             obj = _content_to_memory(content, mt)
-            if obj:
+            # Type gate: when a specific type was requested, drop other types that
+            # share the domain (e.g. project_context vs thread under project://) —
+            # content-authoritative deserialization no longer filters them for us.
+            if obj is not None and (not memory_type or obj.memory_type == memory_type):
                 memories.append(obj)
 
         return memories

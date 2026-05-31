@@ -49,7 +49,14 @@ def test_should_version_false_for_non_versioned_domains():
     assert should_version(MemoryURI.parse("analysis://sc-de/run_42")) is False
     assert should_version(MemoryURI.parse("session://abc123")) is False
     assert should_version(MemoryURI.parse("insight://cluster/3")) is False
-    assert should_version(MemoryURI.parse("project://current")) is False
+
+
+def test_should_version_project_true():
+    # Bench Phase 1: the whole project:// domain is versioned (thread metadata is a
+    # versioned audit trail; soft-delete re-versions). Covers both ThreadMemory
+    # (project://<thread_id>) and legacy ProjectContextMemory (project://<memory_id>).
+    assert should_version(MemoryURI.parse("project://abc123def")) is True
+    assert should_version(MemoryURI.parse("project://current")) is True
 
 
 def test_should_version_core_my_user_true():
@@ -94,7 +101,7 @@ _PER_NS = "ns/X"  # opaque current namespace for matrix tests
         ("dataset://pbmc.h5ad",     _PER_NS,      False),
         ("analysis://run_42",       _PER_NS,      False),
         ("insight://cluster/3",     _PER_NS,      False),
-        ("project://current",       _PER_NS,      False),
+        ("project://current",       _PER_NS,      True),   # Bench Phase 1: project:// is versioned
         ("session://abc123",        _PER_NS,      False),
     ],
 )
