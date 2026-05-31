@@ -2451,6 +2451,140 @@ async def health():
 
 
 # ---------------------------------------------------------------------------
+# Skill detail helpers — read the richer per-skill metadata that lives on disk
+# (SKILL.md frontmatter + body, references/, parameters.yaml) but is not part of
+# the in-memory registry info dict.
+# ---------------------------------------------------------------------------
+
+def _skill_frontmatter(skill_dir: Path | None) -> dict:
+    """Parse the YAML frontmatter of a skill directory's SKILL.md ({} if absent)."""
+    if skill_dir is None:
+        return {}
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.exists():
+        return {}
+    try:
+        content = skill_md.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    if not content.startswith("---"):
+        return {}
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        return {}
+    try:
+        import yaml
+
+        data = yaml.safe_load(parts[1])
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _skill_source(script_path: Path | None) -> str:
+    """builtin if the skill ships under the repo SKILLS_DIR, else user-installed."""
+    if script_path is None:
+        return "user"
+    try:
+        from omicsclaw.skill.registry import SKILLS_DIR
+
+        script_path.resolve().relative_to(SKILLS_DIR.resolve())
+        return "builtin"
+    except Exception:
+        return "user"
+
+
+def _skill_health(status: str, *, skill_md_exists: bool, script_exists: bool) -> str:
+    if status != "ready" or not script_exists or not skill_md_exists:
+        return "degraded"
+    return "healthy"
+
+
+def _skill_resources(skill_dir: Path | None, script_path: Path | None) -> list[dict]:
+    if skill_dir is None:
+        return []
+    resources: list[dict] = []
+    if script_path is not None and script_path.exists():
+        resources.append({"path": script_path.name, "kind": "script"})
+    for special, kind in (("SKILL.md", "doc"), ("parameters.yaml", "config")):
+        if (skill_dir / special).exists():
+            resources.append({"path": special, "kind": kind})
+    ref_dir = skill_dir / "references"
+    if ref_dir.is_dir():
+        for f in sorted(ref_dir.glob("*.md")):
+            resources.append({"path": f"references/{f.name}", "kind": "reference"})
+    script_name = script_path.name if script_path is not None else None
+    for py in sorted(skill_dir.glob("*.py")):
+        if py.name != script_name:
+            resources.append({"path": py.name, "kind": "script"})
+    return resources
+
+
+def _skill_references(skill_dir: Path | None) -> list[dict]:
+    if skill_dir is None:
+        return []
+    ref_dir = skill_dir / "references"
+    if not ref_dir.is_dir():
+        return []
+    refs: list[dict] = []
+    for f in sorted(ref_dir.glob("*.md")):
+        title = f.stem.replace("_", " ").replace("-", " ").title()
+        try:
+            for line in f.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    title = stripped.lstrip("#").strip() or title
+                    break
+        except OSError:
+            pass
+        refs.append({"title": title, "path": f"references/{f.name}"})
+    return refs
+
+
+def _skill_diagnostics(
+    skill_dir: Path | None, script_path: Path | None, frontmatter: dict
+) -> list[dict]:
+    if skill_dir is None:
+        return []
+    checks: list[dict] = []
+
+    def add(label: str, ok: bool, detail: str, *, warn_only: bool = False) -> None:
+        status = "pass" if ok else ("warn" if warn_only else "fail")
+        checks.append({"label": label, "status": status, "detail": detail})
+
+    skill_md_exists = (skill_dir / "SKILL.md").exists()
+    add("SKILL.md", skill_md_exists, "skill definition found" if skill_md_exists else "SKILL.md missing")
+    script_exists = script_path is not None and script_path.exists()
+    add(
+        "entry script",
+        script_exists,
+        (script_path.name if script_exists and script_path else "entry script missing"),
+    )
+    has_version = bool(frontmatter.get("version"))
+    add(
+        "version declared",
+        has_version,
+        f"version {frontmatter.get('version')}" if has_version else "no version in frontmatter",
+        warn_only=True,
+    )
+    has_params = (skill_dir / "parameters.yaml").exists()
+    add(
+        "parameters.yaml",
+        has_params,
+        "runtime contract declared" if has_params else "no parameters.yaml",
+        warn_only=True,
+    )
+    has_refs = (skill_dir / "references").is_dir()
+    add(
+        "references",
+        has_refs,
+        "references/ present" if has_refs else "no references/ directory",
+        warn_only=True,
+    )
+    return checks
+
+
+# ---------------------------------------------------------------------------
 # GET /skills — list all skills grouped by domain
 # ---------------------------------------------------------------------------
 
@@ -2468,11 +2602,21 @@ async def list_skills():
 
         domain = info.get("domain", "other")
         script = info.get("script")
+        script_path = Path(script) if script else None
+        skill_dir = script_path.parent if script_path else None
+        status = "ready" if (script_path and script_path.exists()) else "planned"
+        version = _skill_frontmatter(skill_dir).get("version")
         entry = {
             "name": alias,
             "description": info.get("description", ""),
             "domain": domain,
-            "status": "ready" if (script and script.exists()) else "planned",
+            "status": status,
+            "version": str(version) if version else None,
+            "health": _skill_health(
+                status,
+                skill_md_exists=bool(skill_dir and (skill_dir / "SKILL.md").exists()),
+                script_exists=bool(script_path and script_path.exists()),
+            ),
         }
         domain_groups.setdefault(domain, []).append(entry)
 
@@ -2527,16 +2671,47 @@ async def get_skill(domain: str, skill_name: str):
         )
 
     script = info.get("script")
+    script_path = Path(script) if script else None
+    skill_dir = script_path.parent if script_path else None
+    status = "ready" if (script_path and script_path.exists()) else "planned"
+
+    frontmatter = _skill_frontmatter(skill_dir)
+    skill_md_text: str | None = None
+    if skill_dir is not None and (skill_dir / "SKILL.md").exists():
+        try:
+            skill_md_text = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+        except OSError:
+            skill_md_text = None
+
+    version = frontmatter.get("version")
     return {
         "name": skill_name,
         "domain": skill_domain,
         "description": info.get("description", ""),
-        "status": "ready" if (script and script.exists()) else "planned",
+        "status": status,
         "script_path": str(script) if script else None,
         "aliases": [
             a for a, i in skill_registry.skills.items()
             if i.get("alias") == skill_name and a != skill_name
         ],
+        # --- richer detail read from disk ---
+        "version": str(version) if version else None,
+        "source": _skill_source(script_path),
+        "health": _skill_health(
+            status,
+            # Existence — NOT read-success — mirrors list_skills so the two
+            # endpoints agree on health even when SKILL.md exists but is unreadable.
+            skill_md_exists=bool(skill_dir and (skill_dir / "SKILL.md").exists()),
+            script_exists=bool(script_path and script_path.exists()),
+        ),
+        "author": frontmatter.get("author") or None,
+        "license": frontmatter.get("license") or None,
+        "tags": [str(t) for t in (frontmatter.get("tags") or []) if str(t).strip()],
+        "requires": [str(r) for r in (frontmatter.get("requires") or []) if str(r).strip()],
+        "skill_md": skill_md_text,
+        "resources": _skill_resources(skill_dir, script_path),
+        "references": _skill_references(skill_dir),
+        "diagnostics": _skill_diagnostics(skill_dir, script_path, frontmatter),
     }
 
 
