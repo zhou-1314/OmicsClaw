@@ -690,6 +690,39 @@ def _runtime_health_payload(core: Any) -> dict[str, Any]:
     }
 
 
+async def _resolve_and_bind_thread_id(
+    session_manager: Any, user_id: str, session_id: str, req_thread_id: str
+) -> str:
+    """Resolve a turn's thread_id and bind it to the session (ADR 0023 decision 3).
+
+    Returns ``request.thread_id`` if set; otherwise the bound session's stored
+    ``thread_id`` (so a turn that omits the field still rolls up to its thread).
+    When a thread_id is resolved, ``get_or_create`` stamps a *freshly-created*
+    session with it (an existing session's binding is immutable — rebinding is
+    v1.5). The session id mirrors ``SessionManager.get_or_create``'s
+    ``f"{platform}:{user_id}:{chat_id}"`` form. Best-effort: any failure returns
+    the request's value and never blocks the turn.
+    """
+    resolved = req_thread_id
+    if session_manager is None:
+        return resolved
+    try:
+        full_session_id = f"app:{user_id}:{session_id}"
+        if not resolved:
+            # SessionManager wraps the store; get_session lives on .store.
+            store = getattr(session_manager, "store", None)
+            existing = await store.get_session(full_session_id) if store else None
+            if existing is not None and getattr(existing, "thread_id", ""):
+                resolved = existing.thread_id
+        if resolved:
+            await session_manager.get_or_create(
+                user_id, "app", session_id, thread_id=resolved
+            )
+    except Exception as exc:  # pragma: no cover - never block a turn on this
+        logger.warning("thread_id session resolution failed: %s", exc)
+    return resolved
+
+
 def _resolve_shared_kg_home() -> str:
     """The shared KG home the desktop ``/kg`` routes resolve to, without a request
     header (mirrors the env precedence in ``_embedded_kg_config``:
@@ -1942,6 +1975,17 @@ async def chat_stream(req: ChatRequest):
             import threading as _threading
 
             cancel_event = _threading.Event()
+
+            # Bench (ADR 0023 decision 3): resolve thread_id = request ?? session and
+            # stamp a freshly-created session so binding is durable across turns that
+            # omit the field. Best-effort — never blocks a turn.
+            resolved_thread_id = await _resolve_and_bind_thread_id(
+                getattr(_get_core(), "session_manager", None),
+                desktop_chat_user_id(),
+                session_id,
+                req.thread_id,
+            )
+
             envelope = MessageEnvelope(
                 chat_id=session_id,
                 content=user_content,
@@ -1960,7 +2004,7 @@ async def chat_stream(req: ChatRequest):
                 system_prompt_append=req.system_prompt_append,
                 mode=req.mode,
                 analysis_router_mode=req.analysis_router_mode,
-                thread_id=req.thread_id,
+                thread_id=resolved_thread_id,
                 # Bench (ADR 0020) — normalize stage once at the producer boundary
                 # so a casing/whitespace mismatch ("Read", " read ") can't silently
                 # bypass the stage gate; unknown values still fall through to the

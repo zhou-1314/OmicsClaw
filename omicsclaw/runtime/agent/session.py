@@ -44,12 +44,20 @@ class SessionManager:
     def __init__(self, store):
         self.store = store
 
-    async def get_or_create(self, user_id: str, platform: str, chat_id: str):
-        """Get existing session or create new one."""
+    async def get_or_create(self, user_id: str, platform: str, chat_id: str, thread_id: str = ""):
+        """Get existing session or create new one.
+
+        ``thread_id`` (Bench, ADR 0023 decision 3) binds a NEW session to an
+        investigation thread at creation. An existing session's binding is
+        immutable here (one thread per session; rebinding is v1.5) — the incoming
+        thread_id only stamps a freshly-created session.
+        """
         session_id = f"{platform}:{user_id}:{chat_id}"
         session = await self.store.get_session(session_id)
         if not session:
-            session = await self.store.create_session(user_id, platform, chat_id, session_id=session_id)
+            session = await self.store.create_session(
+                user_id, platform, chat_id, session_id=session_id, thread_id=thread_id
+            )
         else:
             await self.store.update_session(session_id, {"last_activity": datetime.now(timezone.utc)})
         return session

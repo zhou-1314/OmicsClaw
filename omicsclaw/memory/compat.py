@@ -86,6 +86,12 @@ class Session(BaseModel):
     last_activity: datetime = Field(default_factory=_utcnow)
     preferences: dict[str, Any] = Field(default_factory=dict)
     active: bool = True
+    # Bench (ADR 0023 decision 3) — the investigation thread this conversation is
+    # bound to, stamped at lazy creation; empty = unbound (plain chat). Durable:
+    # the backend resolves thread_id = request.thread_id or session.thread_id, so
+    # binding survives turns that omit the field. Legacy session:// blobs lacking
+    # this field deserialize via the default.
+    thread_id: str = ""
 
 
 class BaseMemory(BaseModel):
@@ -470,14 +476,22 @@ class CompatMemoryStore:
         namespace = f"{session.platform}/{session.user_id}"
         return self._client_for_namespace(namespace)
 
-    async def create_session(self, user_id: str, platform: str, chat_id: str = "", session_id: str = None) -> Session:
-        """Create a new session in the graph memory."""
+    async def create_session(
+        self, user_id: str, platform: str, chat_id: str = "", session_id: str = None,
+        thread_id: str = "",
+    ) -> Session:
+        """Create a new session in the graph memory.
+
+        ``thread_id`` (Bench, ADR 0023) binds the new session to an investigation
+        thread at creation; empty = unbound.
+        """
         await self.initialize()
         session_id = session_id or uuid.uuid4().hex[:16]
         session = Session(
             session_id=session_id,
             user_id=user_id,
             platform=platform,
+            thread_id=thread_id,
         )
 
         await self._client.remember(

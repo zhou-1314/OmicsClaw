@@ -29,15 +29,18 @@ def fake_store():
             self.calls.append(("get_session", (session_id,), {}))
             return self.sessions.get(session_id)
 
-        async def create_session(self, user_id, platform, chat_id, *, session_id):
+        async def create_session(self, user_id, platform, chat_id, *, session_id, thread_id=""):
+            # thread_id mirrors CompatMemoryStore.create_session (Bench, ADR 0023).
             self.calls.append(
-                ("create_session", (user_id, platform, chat_id), {"session_id": session_id})
+                ("create_session", (user_id, platform, chat_id),
+                 {"session_id": session_id, "thread_id": thread_id})
             )
             self.sessions[session_id] = {
                 "user_id": user_id,
                 "platform": platform,
                 "chat_id": chat_id,
                 "session_id": session_id,
+                "thread_id": thread_id,
                 "created_at": datetime.now(timezone.utc),
             }
             return self.sessions[session_id]
