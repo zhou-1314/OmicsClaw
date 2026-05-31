@@ -3211,6 +3211,75 @@ async def thread_set_preference(thread_id: str, req: ThreadPreferenceRequest):
 
 
 # ---------------------------------------------------------------------------
+# Onboarding & global bench preferences (Phase 5, BE-ONBOARD-8 / BE-PREF-7)
+# ---------------------------------------------------------------------------
+
+class OnboardUserRequest(BaseModel):
+    # The frontend's (<=5) onboarding answers, stored verbatim to the versioned
+    # core://my_user. Free-form so the question set can evolve without a schema bump.
+    profile: dict[str, Any] = Field(default_factory=dict)
+
+
+class BenchPreferenceRequest(BaseModel):
+    key: str
+    value: Any
+
+
+@app.post("/onboard/user")
+async def onboard_user_route(req: OnboardUserRequest):
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import onboarding
+
+        return await onboarding.onboard_user(_memory_client, req.profile)
+    except Exception as exc:
+        logger.exception("Onboarding (user) error")
+        raise HTTPException(500, detail=str(exc))
+
+
+@app.post("/onboard/skip")
+async def onboard_skip_route():
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import onboarding
+
+        return await onboarding.skip_onboarding(_memory_client)
+    except Exception as exc:
+        logger.exception("Onboarding (skip) error")
+        raise HTTPException(500, detail=str(exc))
+
+
+@app.get("/onboard/status")
+async def onboard_status_route():
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import onboarding
+
+        return await onboarding.onboarding_status(_memory_client)
+    except Exception as exc:
+        logger.exception("Onboarding (status) error")
+        raise HTTPException(500, detail=str(exc))
+
+
+@app.put("/preference/bench")
+async def set_bench_preference_route(req: BenchPreferenceRequest):
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import onboarding
+
+        return await onboarding.set_bench_preference(_memory_client, req.key, req.value)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Bench preference set error")
+        raise HTTPException(500, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
 # Memory CRUD & Management Endpoints
 # ---------------------------------------------------------------------------
 
