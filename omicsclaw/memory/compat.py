@@ -759,4 +759,21 @@ class CompatMemoryStore:
 
         return "\n\n".join(parts) if parts else ""
 
+    async def recall_agent_uri(self, session_id: str, uri: str) -> str:
+        """Recall a core/shared URI's raw content (BE-PERSONA-BOOT-9 — the agent's
+        ``core://agent/research_stance`` persona layer).
+
+        Reads through the session's client (so a per-user ``core://agent/*``
+        override wins, with shared fallback); returns ``""`` when the row is absent
+        or anything fails, so the persona layer degrades to a no-op."""
+        try:
+            await self.initialize()
+            client = (
+                await self._client_for_session(session_id) if session_id else self._client
+            )
+            record = await client.recall(uri)
+            return record.content if (record is not None and record.content) else ""
+        except Exception:
+            return ""
+
     # ------------------------------------------------------------------

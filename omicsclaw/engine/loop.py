@@ -84,6 +84,21 @@ def _maybe_append_caller_addition(system_prompt: str, addition: str) -> str:
     return system_prompt.rstrip() + "\n\n" + addition.strip()
 
 
+def _make_research_stance_loader(session_manager):
+    """BE-PERSONA-7 — a loader that recalls ``core://agent/research_stance`` (the
+    agent's research-stance persona layer) through the session store, with the
+    store's shared fallback. Returns ``None`` when memory is unavailable so the
+    persona layer degrades to a clean no-op (byte-identical legacy)."""
+    store = getattr(session_manager, "store", None)
+    if store is None or not hasattr(store, "recall_agent_uri"):
+        return None
+
+    async def _load(session_id: str) -> str:
+        return await store.recall_agent_uri(session_id, "core://agent/research_stance")
+
+    return _load
+
+
 # Bench (ADR 0020) — lifecycle-stage stance fragments. Additive guidance that
 # shapes the stage's stance (read vs. compute vs. write); subordinate to SOUL.md
 # and the base persona, it cannot override safety rules. The research-stance
@@ -247,6 +262,9 @@ async def run_engine_loop(
         thread_id=thread_id,
         session_manager=deps.session_manager,
         system_prompt_builder=build_system_prompt,
+        # Bench BE-PERSONA-7 — inject the agent's research-stance persona layer
+        # (core://agent/research_stance); None loader / absent row = no-op.
+        research_stance_loader=_make_research_stance_loader(deps.session_manager),
         skill_aliases=deps.skill_aliases,
         plan_context=plan_context,
         transcript_context=transcript_context,

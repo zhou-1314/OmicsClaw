@@ -500,6 +500,10 @@ class ContextAssemblyRequest:
     surface: str = "bot"
     omicsclaw_dir: str = ""
     base_persona: str = ""
+    # Bench BE-PERSONA-7 (ADR 0024) — the agent's research-stance persona layer
+    # (core://agent/research_stance, a thin tone). Subordinate to SOUL.md + the
+    # base persona; empty = no layer (byte-identical legacy / opt-in).
+    research_stance: str = ""
     output_style: str = ""
     memory_context: str = ""
     skill_context: str = ""
@@ -697,6 +701,12 @@ def _build_base_persona_layer(request: ContextAssemblyRequest) -> str:
         return request.base_persona.strip()
     loader = request.base_persona_loader or load_base_persona
     return loader(request.soul_md).strip()
+
+
+def _build_research_stance_layer(request: ContextAssemblyRequest) -> str | None:
+    """BE-PERSONA-7: the agent's research-stance tone, injected just below the
+    base persona. Empty (the default / opt-in absence) → no layer (no-op)."""
+    return request.research_stance.strip() or None
 
 
 def _build_memory_context_layer(request: ContextAssemblyRequest) -> str | None:
@@ -1000,6 +1010,18 @@ DEFAULT_CONTEXT_LAYER_INJECTORS = (
         placement="system",
         surfaces=("bot", "interactive", "pipeline"),
         builder=_build_base_persona_layer,
+    ),
+    # Bench BE-PERSONA-7 — research-stance tone, just BELOW the base persona.
+    # Same order as base_persona (10); the (order, name) sort tiebreak places
+    # "research_stance" after "base_persona" and before "surface_voice_rules" (11),
+    # so it is subordinate to SOUL.md + the base persona. Empty stance → the
+    # builder returns None → no layer (byte-identical legacy).
+    ContextLayerInjector(
+        name="research_stance",
+        order=10,
+        placement="system",
+        surfaces=("bot", "interactive", "pipeline"),
+        builder=_build_research_stance_layer,
     ),
     ContextLayerInjector(
         name="surface_voice_rules",

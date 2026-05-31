@@ -528,16 +528,21 @@ class MemoryClient:
     # ------------------------------------------------------------------
 
     async def boot(self) -> str:
-        """Load the boot URIs (core://agent + core://my_user by default).
+        """Load the boot URIs (core://agent + core://agent/research_stance +
+        core://my_user by default).
 
         ``OMICSCLAW_MEMORY_CORE_URIS`` overrides the URI list. Each URI is
         recalled with shared fallback, so a per-user ``core://my_user``
         with no row falls through to whatever the shared default is.
+
+        BE-PERSONA-BOOT-9 — ``core://agent/research_stance`` (the agent's
+        research-stance persona layer) boot-loads alongside ``core://agent``; an
+        absent row simply contributes nothing (no-op).
         """
         await self._ensure_init()
         core_uris_str = os.getenv(
             "OMICSCLAW_MEMORY_CORE_URIS",
-            "core://agent,core://my_user",
+            "core://agent,core://agent/research_stance,core://my_user",
         )
         core_uris = [u.strip() for u in core_uris_str.split(",") if u.strip()]
 
