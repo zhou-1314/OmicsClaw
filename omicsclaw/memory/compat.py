@@ -141,6 +141,21 @@ class AnalysisMemory(BaseMemory):
     duration_seconds: float = 0.0
     # Bench (ADR 0018) — investigation-thread scope; empty = legacy un-scoped.
     thread_id: str = ""
+    # Bench AN-PROV-CAPTURE-13 (ADR 0022) — provenance index for the Write phase.
+    # All optional; empty/None = a legacy record (backward-compatible: older
+    # serialized AnalysisMemory blobs deserialize via these defaults).
+    #  - effective_params: the parameter set the run actually used (result.json
+    #    ``data.params`` for skills; operator+members for typed consensus).
+    #  - assisted_param_decision: the recompute-at-capture comparison of the
+    #    SKILL.md param-hint recommendation vs the effective params —
+    #    ``{method, recommended, accepted, overrides}`` — or None when the
+    #    skill/method has no param-hint recommendation.
+    #  - artifacts: output file NAMES (paths, not contents; bulky data stays on disk).
+    effective_params: dict[str, Any] = Field(default_factory=dict)
+    input_checksum: str = ""
+    skill_version: str = ""
+    artifacts: list[str] = Field(default_factory=list)
+    assisted_param_decision: dict[str, Any] | None = None
 
 
 class PreferenceMemory(BaseMemory):

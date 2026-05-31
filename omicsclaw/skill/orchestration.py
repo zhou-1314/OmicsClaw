@@ -154,6 +154,74 @@ logger = logging.getLogger("omicsclaw.omicsclaw.skill.orchestration")
 # ---------------------------------------------------------------------------
 
 
+_MAX_ARTIFACT_NAMES = 200
+
+
+def _output_artifact_names(output_dir: Path) -> list[str]:
+    """Top-level output file names in a run dir (AN-PROV-CAPTURE-13 — provenance
+    references files by name; bulky contents stay on disk). Capped at
+    ``_MAX_ARTIFACT_NAMES`` so a run dir with thousands of files can't bloat the
+    memory record — ``output_path`` remains the source of truth for the full set;
+    a truncation marker signals when more exist. Empty on any error."""
+    try:
+        names = sorted(p.name for p in Path(output_dir).iterdir() if p.is_file())
+    except Exception:
+        return []
+    if len(names) > _MAX_ARTIFACT_NAMES:
+        extra = len(names) - _MAX_ARTIFACT_NAMES
+        return names[:_MAX_ARTIFACT_NAMES] + [f"…(+{extra} more files; see output_path)"]
+    return names
+
+
+def _param_values_equal(a: object, b: object) -> bool:
+    """Equality tolerant of the YAML→JSON type drift between a SKILL.md param-hint
+    default and a run's effective param (AN-PROV-CAPTURE-13): ``7 == 7.0`` and
+    ``"0.05" == 0.05`` must NOT read as overrides. Falls back to exact equality for
+    non-numerics."""
+    if a == b:  # exact (also covers 7 == 7.0 and True == 1 via Python equality)
+        return True
+    try:
+        return float(a) == float(b)  # type: ignore[arg-type]  ("0.05" vs 0.05, "7" vs 7)
+    except (TypeError, ValueError):
+        return False
+
+
+def _assisted_param_decision(skill: str, method: str, effective_params: dict) -> dict | None:
+    """Recompute the SKILL.md param-hint recommendation for (skill, method) and
+    compare it to the params the run actually used (AN-PROV-CAPTURE-13 / ADR 0015).
+
+    Returns ``{method, recommended, accepted, overrides}`` or ``None`` when the
+    skill/method has no param-hint recommendation. ``recommended`` is the hint's
+    default value per recommended param; ``accepted`` is True iff every recommended
+    param the run reported matches the recommendation; ``overrides`` lists the
+    diverging params (``{param: {recommended, effective}}``). The recommendation is
+    deterministic from SKILL.md param_hints, so recomputing it at capture time is
+    equivalent to what the agent was shown (ADR 0015) without instrumenting the loop.
+    """
+    try:
+        method_lower, tip_info, _ = _resolve_param_hint_info(skill, method)
+        if not isinstance(tip_info, dict) or not tip_info:
+            return None
+        defaults = tip_info.get("defaults", {}) or {}
+        params = tip_info.get("params", []) or []
+        recommended = {p: defaults[p] for p in params if p in defaults}
+        if not recommended:
+            return None
+        overrides: dict = {}
+        for p, rec_val in recommended.items():
+            if p in effective_params and not _param_values_equal(effective_params[p], rec_val):
+                overrides[p] = {"recommended": rec_val, "effective": effective_params[p]}
+        return {
+            "method": method_lower,
+            "recommended": recommended,
+            "accepted": not overrides,
+            "overrides": overrides,
+        }
+    except Exception as exc:
+        logger.debug("assisted-param decision recompute failed (non-fatal): %s", exc)
+        return None
+
+
 async def _auto_capture_dataset(
     session_id: str, input_path: str, data_type: str = "", thread_id: str = ""
 ):
@@ -218,6 +286,13 @@ async def _auto_capture_analysis(
     ``thread_id`` (Bench, ADR 0018) scopes the captured run's lineage under the
     active investigation thread (``analysis://<thread_id>/<skill>/<id>``); empty
     preserves the legacy un-scoped URI.
+
+    AN-PROV-CAPTURE-13 (ADR 0022): on a successful run we also read the skill's
+    ``result.json`` ({version, input_checksum, data.params}) and record the
+    effective params, checksum, version, output artifact names, and the
+    assisted-parameterization decision (recommendation vs effective) so the Write
+    phase has a queryable, memory-resident provenance record. Failed runs keep the
+    legacy lightweight record.
     """
     from omicsclaw.runtime.agent.state import memory_store
     if not memory_store or not session_id:
@@ -237,6 +312,23 @@ async def _auto_capture_analysis(
         except Exception:
             pass
 
+        # AN-PROV-CAPTURE-13 — post-run provenance from result.json + the
+        # recompute-at-capture assisted-parameterization decision.
+        effective_params: dict[str, Any] = {}
+        input_checksum = ""
+        skill_version = ""
+        artifacts: list[str] = []
+        if success and output_dir:
+            result_json = _read_result_json(output_dir)
+            if result_json:
+                skill_version = str(result_json.get("version") or "")
+                input_checksum = str(result_json.get("input_checksum") or "")
+                data = result_json.get("data") or {}
+                if isinstance(data, dict) and isinstance(data.get("params"), dict):
+                    effective_params = dict(data["params"])
+            artifacts = _output_artifact_names(output_dir)
+        decision = _assisted_param_decision(skill, method, effective_params)
+
         memory = AnalysisMemory(
             source_dataset_id=source_dataset_id if source_dataset_id else "",
             skill=skill,
@@ -245,6 +337,11 @@ async def _auto_capture_analysis(
             output_path=str(output_dir) if output_dir else "",
             status="completed" if success else "failed",
             thread_id=thread_id,
+            effective_params=effective_params,
+            input_checksum=input_checksum,
+            skill_version=skill_version,
+            artifacts=artifacts,
+            assisted_param_decision=decision,
         )
 
         await memory_store.save_memory(session_id, memory)
@@ -311,14 +408,25 @@ async def _auto_capture_consensus(
         # read the audit to honour an explicit --run-id if one is ever wired.
         run_id = output_dir.name
         operator = "kmode"
+        # AN-PROV-CAPTURE-13 — the consensus run's effective config IS the plan
+        # audit (operator + planned members + score weights); there is no SKILL.md
+        # param-hint recommendation for a planner-driven flavour, so the
+        # assisted-parameterization decision stays None.
+        effective_params: dict[str, Any] = {}
         try:
             plan = json.loads((output_dir / "plan.json").read_text(encoding="utf-8"))
             run_id = str(plan.get("run_id") or run_id)
             operator = str(plan.get("operator") or operator)
+            effective_params = {
+                k: plan[k]
+                for k in ("operator", "members", "alpha", "beta", "max_class_frac")
+                if k in plan
+            }
         except Exception:
             pass
         if not run_id:
             return False
+        effective_params.setdefault("operator", operator)
 
         source_dataset_id = ""
         try:
@@ -339,6 +447,8 @@ async def _auto_capture_consensus(
             output_path=str(output_dir),
             status="completed",
             thread_id=thread_id,
+            effective_params=effective_params,
+            artifacts=_output_artifact_names(output_dir),
         )
         # Land at the explicit consensus URI (which the AnalysisMemory's own
         # <skill>/<id> path shape can't express) via the same per-session client
