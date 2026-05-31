@@ -1620,30 +1620,68 @@ async def execute_remember(args: dict, session_id: str = None) -> str:
         return f"Error saving memory: {e}"
 
 
-async def execute_recall(args: dict, session_id: str = None) -> str:
-    """Retrieve memories from persistent storage."""
+async def _recall_fetch(sid: str, query: str, mem_type: str, limit: int, thread_id: str):
+    """One recall pass: query → search, else list-by-type/all. ``thread_id``
+    scopes to that thread (empty = unscoped, the cross-thread fallback pass)."""
+    store = _core.memory_store
+    if query:
+        return await store.search_memories(
+            sid, query, memory_type=mem_type or None, thread_id=thread_id
+        )
+    elif mem_type:
+        return await store.get_memories(sid, mem_type, limit=limit, thread_id=thread_id)
+    else:
+        return await store.get_memories(sid, limit=limit, thread_id=thread_id)
+
+
+async def execute_recall(args: dict, session_id: str = None, thread_id: str = "") -> str:
+    """Retrieve memories from persistent storage.
+
+    Bench (BE-RECALL-6): when a ``thread_id`` is active, recall defaults to that
+    investigation thread's memories, then appends cross-thread hits ranked lower
+    (ADR 0018 — cross-thread recall is a feature, not isolation). Empty thread_id
+    is the legacy unscoped recall.
+    """
     if not _core.memory_store:
         return _MEMORY_DISABLED_HINT
 
     try:
         mem_type = args.get("memory_type", "")
         query = args.get("query", "")
+        sid = session_id or ""
+        limit = int(args.get("limit", 10))
 
-        if query:
-            # Full-text search across memories
-            memories = await _core.memory_store.search_memories(
-                session_id or "", query, memory_type=mem_type or None
-            )
-        elif mem_type:
-            # List by type
-            memories = await _core.memory_store.get_memories(
-                session_id or "", mem_type, limit=int(args.get("limit", 10))
-            )
+        if thread_id:
+            def _gid(m):
+                return getattr(m, "memory_id", None)
+
+            primary = await _recall_fetch(sid, query, mem_type, limit, thread_id)
+            seen = {_gid(m) for m in primary}
+
+            # The user's explicitly-saved global memories (preference / insight /
+            # project_context) carry no thread_id, so the thread-scoped primary
+            # excludes them. On a no-query, no-type listing a busy thread's
+            # auto-captured dataset/analysis rows would otherwise crowd them out of
+            # the shared budget — so fetch them explicitly and always keep them.
+            globals_extra: list = []
+            if not query and not mem_type:
+                for gt in ("preference", "insight", "project_context"):
+                    for m in await _core.memory_store.get_memories(sid, gt, limit=limit):
+                        if _gid(m) not in seen:
+                            seen.add(_gid(m))
+                            globals_extra.append(m)
+
+            # Cross-thread hits (ranked lowest), de-duplicated by memory_id.
+            fallback = await _recall_fetch(sid, query, mem_type, limit, "")
+            cross = [m for m in fallback if _gid(m) not in seen]
+
+            # Thread rows + user globals are always shown; cross-thread fills the
+            # remaining budget up to ``limit``.
+            keep = primary + globals_extra
+            room = max(0, limit - len(keep))
+            memories = keep + cross[:room]
         else:
-            # Return all recent memories
-            memories = await _core.memory_store.get_memories(
-                session_id or "", limit=int(args.get("limit", 10))
-            )
+            memories = await _recall_fetch(sid, query, mem_type, limit, "")
 
         if not memories:
             return "No memories found."

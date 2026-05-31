@@ -660,7 +660,10 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                 },
             },
             surfaces=("bot",),
-            context_params=("session_id",),
+            # Bench (BE-RECALL-6) — thread_id rides tool_runtime_context so recall
+            # defaults to the active investigation thread (with a cross-thread
+            # fallback ranked lower). Empty thread_id = legacy unscoped recall.
+            context_params=("session_id", "thread_id"),
             read_only=True,
             concurrency_safe=True,
             policy_tags=("memory", "knowledge"),

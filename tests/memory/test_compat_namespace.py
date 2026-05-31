@@ -168,6 +168,37 @@ async def test_get_memories_type_gate_with_shared_project_domain(store):
 
 
 @pytest.mark.asyncio
+async def test_thread_scoped_get_and_search_memories(store):
+    """Bench Phase 1 (BE-RECALL-6): get_memories/search_memories accept thread_id
+    and scope to that thread's tagged rows; empty thread_id is unscoped."""
+    session = await store.create_session("u", "telegram")
+    sid = session.session_id
+    await store.save_memory(sid, DatasetMemory(file_path="alpha.h5ad", thread_id="A"))
+    await store.save_memory(sid, DatasetMemory(file_path="beta.h5ad", thread_id="B"))
+    await store.save_memory(
+        sid, AnalysisMemory(source_dataset_id="", skill="sc-de", method="x", thread_id="A")
+    )
+
+    # get_memories scoped to thread A → only A-tagged rows (across types).
+    a_ds = await store.get_memories(sid, "dataset", thread_id="A")
+    assert [m.file_path for m in a_ds] == ["alpha.h5ad"]
+    a_all = await store.get_memories(sid, thread_id="A")
+    assert all(getattr(m, "thread_id", "") == "A" for m in a_all)
+    assert {m.memory_type for m in a_all} == {"dataset", "analysis"}
+
+    # Unscoped get_memories sees both threads' datasets (legacy behavior).
+    all_ds = await store.get_memories(sid, "dataset")
+    assert sorted(m.file_path for m in all_ds) == ["alpha.h5ad", "beta.h5ad"]
+
+    # search scoped to A finds A's dataset only (path_prefix).
+    hits_a = await store.search_memories(sid, "h5ad", memory_type="dataset", thread_id="A")
+    assert hits_a and all(getattr(m, "thread_id", "") == "A" for m in hits_a)
+    # search scoped to B finds B's dataset only.
+    hits_b = await store.search_memories(sid, "h5ad", memory_type="dataset", thread_id="B")
+    assert [m.file_path for m in hits_b] == ["beta.h5ad"]
+
+
+@pytest.mark.asyncio
 async def test_save_memory_uses_session_derived_namespace(store):
     """A DatasetMemory saved under a tg session lands in tg/<user_id>."""
     session = await store.create_session("user42", "telegram")

@@ -557,7 +557,8 @@ class CompatMemoryStore:
         return memory.memory_id
 
     async def get_memories(
-        self, session_id: str, memory_type: Optional[str] = None, limit: int = 100
+        self, session_id: str, memory_type: Optional[str] = None, limit: int = 100,
+        thread_id: str = "",
     ) -> list[BaseMemory]:
         """Retrieve memories, optionally filtered by type.
 
@@ -566,6 +567,11 @@ class CompatMemoryStore:
         via the engine's read-fallback only on individual ``recall``
         calls — listings are strict, so shared keywords don't bleed
         into a per-user inventory.
+
+        ``thread_id`` (Bench Phase 1, BE-RECALL-6) restricts the inventory to
+        memories tagged with that investigation thread (dataset/analysis/thread
+        carry a ``thread_id``); empty = no scoping. The recall tool layers a
+        cross-thread fallback on top of this.
         """
         await self.initialize()
         client = await self._client_for_session(session_id)
@@ -597,7 +603,9 @@ class CompatMemoryStore:
                     if obj is None:
                         # Not a valid leaf — recurse into this container node.
                         await _collect(child_uri, mtype)
-                    elif not mtype or obj.memory_type == mtype:
+                    elif (not mtype or obj.memory_type == mtype) and (
+                        not thread_id or getattr(obj, "thread_id", "") == thread_id
+                    ):
                         results.append(obj)
                     # else: a valid leaf of a DIFFERENT type than requested — skip.
                     # ``client.list_children`` is not domain-scoped (engine lists by
@@ -661,14 +669,20 @@ class CompatMemoryStore:
             pass
 
     async def search_memories(
-        self, session_id: str, query: str, memory_type: Optional[str] = None
+        self, session_id: str, query: str, memory_type: Optional[str] = None,
+        thread_id: str = "",
     ) -> list[BaseMemory]:
-        """Search memories by content within the session's namespace."""
+        """Search memories by content within the session's namespace.
+
+        ``thread_id`` (Bench Phase 1, BE-RECALL-6) scopes hits to that thread's
+        subtree (project://<id>/* + analysis://<id>/* + dataset://<id>/*, since
+        all three are thread-path-scoped). Empty = no scoping.
+        """
         await self.initialize()
         client = await self._client_for_session(session_id)
 
         domain = _TYPE_TO_DOMAIN.get(memory_type) if memory_type else None
-        results = await client.search(query, limit=20, domain=domain)
+        results = await client.search(query, limit=20, domain=domain, path_prefix=thread_id)
 
         memories = []
         for r in results:
