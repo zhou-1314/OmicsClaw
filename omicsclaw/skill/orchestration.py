@@ -187,16 +187,21 @@ def _param_values_equal(a: object, b: object) -> bool:
 
 
 def _assisted_param_decision(skill: str, method: str, effective_params: dict) -> dict | None:
-    """Recompute the SKILL.md param-hint recommendation for (skill, method) and
-    compare it to the params the run actually used (AN-PROV-CAPTURE-13 / ADR 0015).
+    """Compare the run's effective params to the SKILL.md param-hint DEFAULTS for
+    (skill, method) — the provenance "method-choice" signal (AN-PROV-CAPTURE-13).
 
-    Returns ``{method, recommended, accepted, overrides}`` or ``None`` when the
-    skill/method has no param-hint recommendation. ``recommended`` is the hint's
-    default value per recommended param; ``accepted`` is True iff every recommended
-    param the run reported matches the recommendation; ``overrides`` lists the
-    diverging params (``{param: {recommended, effective}}``). The recommendation is
-    deterministic from SKILL.md param_hints, so recomputing it at capture time is
-    equivalent to what the agent was shown (ADR 0015) without instrumenting the loop.
+    Returns ``{method, basis, recommended, accepted, overrides}`` or ``None`` when
+    the skill/method has no param-hint recommendation.
+
+    PRECISION (ADR 0015): ``basis="skill_md_param_hint_defaults"`` — ``recommended``
+    is the DETERMINISTIC SKILL.md default per param, recomputed at capture time. It
+    is the deterministic *floor* of ADR 0015's recommendation, NOT the LLM's
+    ephemeral, data-grounded recommendation actually shown to the agent (that would
+    require instrumenting the loop's tool-result callback at show-time, a non-goal
+    of the recompute-at-capture design). So ``accepted=True`` means the run used the
+    SKILL.md defaults; an ``override`` means the run deviated from a default — which
+    is a useful, honest provenance signal, but not literally "accepted/rejected the
+    recommendation the agent saw". Future Write must read it with that basis in mind.
     """
     try:
         method_lower, tip_info, _ = _resolve_param_hint_info(skill, method)
@@ -213,6 +218,7 @@ def _assisted_param_decision(skill: str, method: str, effective_params: dict) ->
                 overrides[p] = {"recommended": rec_val, "effective": effective_params[p]}
         return {
             "method": method_lower,
+            "basis": "skill_md_param_hint_defaults",
             "recommended": recommended,
             "accepted": not overrides,
             "overrides": overrides,

@@ -175,6 +175,63 @@ def test_make_research_stance_loader_none_when_no_store():
 
 
 @pytest.mark.asyncio
+async def test_research_stance_loader_snapshots_per_session():
+    """ADR 0024 — the stance is a session constant, so the loader recalls it ONCE
+    per session and reuses the snapshot across turns (no per-turn recall); a
+    different session gets its own recall."""
+    from omicsclaw.engine.loop import _make_research_stance_loader, reset_research_stance_cache
+
+    reset_research_stance_cache()
+    try:
+        calls = {"n": 0}
+
+        class _Store:
+            async def recall_agent_uri(self, session_id, uri):
+                calls["n"] += 1
+                return "STANCE"
+
+        class _SM:
+            store = _Store()
+
+        loader = _make_research_stance_loader(_SM())
+        assert loader is not None
+        assert await loader("app:u:1") == "STANCE"
+        assert await loader("app:u:1") == "STANCE"  # 2nd turn, same session → cached
+        assert await loader("app:u:1") == "STANCE"
+        assert calls["n"] == 1  # recalled once, reused across turns
+        assert await loader("app:u:2") == "STANCE"  # different session → its own recall
+        assert calls["n"] == 2
+    finally:
+        reset_research_stance_cache()
+
+
+@pytest.mark.asyncio
+async def test_research_stance_loader_caches_empty_no_stance():
+    """The empty (opt-out) result is cached too, so the common no-stance path also
+    costs zero per-turn recalls."""
+    from omicsclaw.engine.loop import _make_research_stance_loader, reset_research_stance_cache
+
+    reset_research_stance_cache()
+    try:
+        calls = {"n": 0}
+
+        class _Store:
+            async def recall_agent_uri(self, session_id, uri):
+                calls["n"] += 1
+                return ""  # no stance set
+
+        class _SM:
+            store = _Store()
+
+        loader = _make_research_stance_loader(_SM())
+        assert await loader("app:u:1") == ""
+        assert await loader("app:u:1") == ""
+        assert calls["n"] == 1  # empty result cached, not re-recalled
+    finally:
+        reset_research_stance_cache()
+
+
+@pytest.mark.asyncio
 async def test_boot_includes_research_stance_uri(store):
     session = await store.create_session("u", "telegram")
     sid = session.session_id

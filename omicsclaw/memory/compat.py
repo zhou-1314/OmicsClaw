@@ -147,9 +147,12 @@ class AnalysisMemory(BaseMemory):
     #  - effective_params: the parameter set the run actually used (result.json
     #    ``data.params`` for skills; operator+members for typed consensus).
     #  - assisted_param_decision: the recompute-at-capture comparison of the
-    #    SKILL.md param-hint recommendation vs the effective params —
-    #    ``{method, recommended, accepted, overrides}`` — or None when the
-    #    skill/method has no param-hint recommendation.
+    #    effective params vs the SKILL.md param-hint DEFAULTS —
+    #    ``{method, basis, recommended, accepted, overrides}`` — or None when the
+    #    skill/method has no param-hint recommendation. ``basis`` names what
+    #    ``recommended`` is (``skill_md_param_hint_defaults``): the deterministic
+    #    floor of ADR 0015's recommendation, NOT the LLM's ephemeral data-grounded
+    #    recommendation shown to the agent. Read it with that basis in mind.
     #  - artifacts: output file NAMES (paths, not contents; bulky data stays on disk).
     effective_params: dict[str, Any] = Field(default_factory=dict)
     input_checksum: str = ""

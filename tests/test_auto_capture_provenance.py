@@ -58,6 +58,9 @@ def test_assisted_param_decision_accepted_when_effective_matches(monkeypatch):
     assert d["overrides"] == {}
     assert d["recommended"] == {"a": 10, "b": 20}
     assert d["method"] == "meth"
+    # The decision is explicit about its basis (SKILL.md defaults, not the LLM's
+    # ephemeral data-grounded recommendation) so future Write reads it correctly.
+    assert d["basis"] == "skill_md_param_hint_defaults"
 
 
 def test_assisted_param_decision_flags_override(monkeypatch):

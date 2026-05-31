@@ -84,17 +84,41 @@ def _maybe_append_caller_addition(system_prompt: str, addition: str) -> str:
     return system_prompt.rstrip() + "\n\n" + addition.strip()
 
 
+# BE-PERSONA-7 / ADR 0024 — per-session snapshot of the research-stance persona
+# layer. The stance is a SESSION CONSTANT (the prompt prefix must stay byte-stable
+# across turns), so we recall core://agent/research_stance once per session and
+# reuse it instead of re-recalling every turn. A stance change therefore applies on
+# the NEXT session (a deliberate re-warm), not mid-session — which is exactly the
+# prefix-stability ADR 0024 wants. The empty (no-stance) result is cached too, so
+# the common opt-out path also costs zero per-turn recalls.
+_RESEARCH_STANCE_CACHE: dict[str, str] = {}
+_RESEARCH_STANCE_CACHE_CAP = 4096
+
+
+def reset_research_stance_cache() -> None:
+    """Drop the per-session research-stance snapshots (tests; a forced re-warm)."""
+    _RESEARCH_STANCE_CACHE.clear()
+
+
 def _make_research_stance_loader(session_manager):
     """BE-PERSONA-7 — a loader that recalls ``core://agent/research_stance`` (the
     agent's research-stance persona layer) through the session store, with the
-    store's shared fallback. Returns ``None`` when memory is unavailable so the
+    store's shared fallback, snapshotting the result per session (see
+    ``_RESEARCH_STANCE_CACHE``). Returns ``None`` when memory is unavailable so the
     persona layer degrades to a clean no-op (byte-identical legacy)."""
     store = getattr(session_manager, "store", None)
     if store is None or not hasattr(store, "recall_agent_uri"):
         return None
 
     async def _load(session_id: str) -> str:
-        return await store.recall_agent_uri(session_id, "core://agent/research_stance")
+        cached = _RESEARCH_STANCE_CACHE.get(session_id)
+        if cached is not None:  # "" is a valid cached value (no stance set)
+            return cached
+        stance = await store.recall_agent_uri(session_id, "core://agent/research_stance")
+        if len(_RESEARCH_STANCE_CACHE) >= _RESEARCH_STANCE_CACHE_CAP:
+            _RESEARCH_STANCE_CACHE.clear()  # crude bound; sessions are short-lived
+        _RESEARCH_STANCE_CACHE[session_id] = stance
+        return stance
 
     return _load
 
