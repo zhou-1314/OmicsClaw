@@ -35,6 +35,9 @@ def to_frontend_hypothesis(raw: dict[str, Any]) -> dict[str, Any]:
         # Deferred to 0019 (needs thread<->source association); always False here.
         "cross_study": False,
         "status": str(raw.get("status") or "draft"),
+        # ADR 0021 §6: a verdict suggested by record_result, pending human confirm
+        # (null when nothing is pending).
+        "suggested_verdict": raw.get("suggested_verdict") or None,
     }
 
 
@@ -80,3 +83,20 @@ def formalize_thread_hypothesis(home: str, hunch: str, llm: Any) -> dict[str, An
     source_slugs = list_workspace_source_slugs(home)
     result = formalize_hypothesis(cfg, hunch, source_slugs, llm)
     return to_frontend_hypothesis(result)
+
+
+def confirm_thread_hypothesis_verdict(home: str, slug: str, verdict: str) -> dict[str, Any]:
+    """Confirm a suggested verdict (ADR 0021 §6): flip the hypothesis status and
+    clear the suggestion. May raise ValueError (unknown verdict) / FileNotFoundError
+    (missing page) from the KG layer.
+    """
+    from omicsclaw_kg import config as kg_config
+    from omicsclaw_kg.handoff.feedback import confirm_hypothesis_verdict
+
+    cfg = kg_config.resolve(home)
+    update = confirm_hypothesis_verdict(cfg, slug, verdict)
+    return {
+        "slug": update.slug,
+        "old_status": update.old_status,
+        "new_status": update.new_status,
+    }

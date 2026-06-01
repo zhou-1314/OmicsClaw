@@ -3083,6 +3083,10 @@ class ThreadFormalizeRequest(BaseModel):
     stub: bool = False  # use the offline LLM stub (tests / dry-runs)
 
 
+class ThreadConfirmVerdictRequest(BaseModel):
+    verdict: str  # validated | refuted | refined | inconclusive (ADR 0021 §6)
+
+
 @app.post("/thread/create")
 async def thread_create(req: ThreadCreateRequest):
     if _memory_client is None:
@@ -3194,6 +3198,29 @@ def thread_formalize(thread_id: str, req: ThreadFormalizeRequest):
         logger.exception("Formalize error")
         raise HTTPException(500, detail=str(exc))
     return {"thread_id": thread_id, "hypothesis": hypothesis}
+
+
+@app.post("/thread/{thread_id}/hypothesis/{slug}/confirm-verdict")
+def thread_confirm_verdict(thread_id: str, slug: str, req: ThreadConfirmVerdictRequest):
+    """Confirm a hypothesis's suggested verdict (ADR 0021 §6): flip its status and
+    clear the suggestion. Sync def → threadpooled KG IO (see thread_hypotheses)."""
+    if not _KG_AVAILABLE:
+        raise HTTPException(503, detail="OmicsClaw-KG is not available")
+    home = _resolve_shared_kg_home()
+    if not home:
+        raise HTTPException(400, detail="no workspace / KG home resolved")
+    from omicsclaw.surfaces.desktop import hypotheses as hyp_svc
+
+    try:
+        result = hyp_svc.confirm_thread_hypothesis_verdict(home, slug, req.verdict)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Confirm verdict error")
+        raise HTTPException(500, detail=str(exc))
+    return {"thread_id": thread_id, **result}
 
 
 @app.put("/thread/{thread_id}")
