@@ -44,18 +44,40 @@ class SessionManager:
     def __init__(self, store):
         self.store = store
 
-    async def get_or_create(self, user_id: str, platform: str, chat_id: str):
-        """Get existing session or create new one."""
+    async def get_or_create(self, user_id: str, platform: str, chat_id: str, thread_id: str = ""):
+        """Get existing session or create new one.
+
+        ``thread_id`` (Bench, ADR 0023 decision 3) binds a NEW session to an
+        investigation thread at creation. An existing session's binding is
+        immutable here (one thread per session; rebinding is v1.5) — the incoming
+        thread_id only stamps a freshly-created session.
+        """
         session_id = f"{platform}:{user_id}:{chat_id}"
         session = await self.store.get_session(session_id)
         if not session:
-            session = await self.store.create_session(user_id, platform, chat_id, session_id=session_id)
+            session = await self.store.create_session(
+                user_id, platform, chat_id, session_id=session_id, thread_id=thread_id
+            )
         else:
             await self.store.update_session(session_id, {"last_activity": datetime.now(timezone.utc)})
         return session
 
-    async def load_context(self, session_id: str) -> str:
-        """Load recent memories and format for LLM context."""
+    async def load_context(self, session_id: str, thread_id: str = "") -> str:
+        """Load recent memories and format for LLM context.
+
+        ``thread_id`` (Bench, AN-CTXRECALL-11) scopes the *passive* per-turn
+        injection to the active investigation thread. Only the thread-carrying
+        types — ``dataset`` and ``analysis`` — are scoped (they land under
+        ``dataset://<thread_id>/*`` / ``analysis://<thread_id>/*``), so a thread
+        sees its own datasets/runs and not another thread's. The global,
+        user-level types (``preference``, ``insight``, ``project_context``) carry
+        no ``thread_id`` and stay un-scoped — passing it would filter every one
+        of them out (``getattr(obj, "thread_id", "") != thread_id``), starving the
+        user's shared memory. Empty ``thread_id`` is a no-op: byte-identical to
+        the legacy un-scoped load. Unlike the recall *tool* (BE-RECALL-6), passive
+        injection does NOT add a cross-thread fallback — an empty thread shows no
+        dataset/analysis rather than another thread's, preserving isolation.
+        """
         try:
             datasets = []
             analyses = []
@@ -64,12 +86,16 @@ class SessionManager:
             project_ctx = []
 
             try:
-                datasets = await self.store.get_memories(session_id, "dataset", limit=2)
+                datasets = await self.store.get_memories(
+                    session_id, "dataset", limit=2, thread_id=thread_id
+                )
             except Exception as e:
                 logger.warning(f"Failed to load dataset memories: {e}")
 
             try:
-                analyses = await self.store.get_memories(session_id, "analysis", limit=3)
+                analyses = await self.store.get_memories(
+                    session_id, "analysis", limit=3, thread_id=thread_id
+                )
             except Exception as e:
                 logger.warning(f"Failed to load analysis memories: {e}")
 

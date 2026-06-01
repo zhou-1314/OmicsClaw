@@ -154,8 +154,89 @@ logger = logging.getLogger("omicsclaw.omicsclaw.skill.orchestration")
 # ---------------------------------------------------------------------------
 
 
-async def _auto_capture_dataset(session_id: str, input_path: str, data_type: str = ""):
-    """Auto-capture dataset memory when a file is processed."""
+_MAX_ARTIFACT_NAMES = 200
+
+
+def _output_artifact_names(output_dir: Path) -> list[str]:
+    """Top-level output file names in a run dir (AN-PROV-CAPTURE-13 — provenance
+    references files by name; bulky contents stay on disk). Capped at
+    ``_MAX_ARTIFACT_NAMES`` so a run dir with thousands of files can't bloat the
+    memory record — ``output_path`` remains the source of truth for the full set;
+    a truncation marker signals when more exist. Empty on any error."""
+    try:
+        names = sorted(p.name for p in Path(output_dir).iterdir() if p.is_file())
+    except Exception:
+        return []
+    if len(names) > _MAX_ARTIFACT_NAMES:
+        extra = len(names) - _MAX_ARTIFACT_NAMES
+        return names[:_MAX_ARTIFACT_NAMES] + [f"…(+{extra} more files; see output_path)"]
+    return names
+
+
+def _param_values_equal(a: object, b: object) -> bool:
+    """Equality tolerant of the YAML→JSON type drift between a SKILL.md param-hint
+    default and a run's effective param (AN-PROV-CAPTURE-13): ``7 == 7.0`` and
+    ``"0.05" == 0.05`` must NOT read as overrides. Falls back to exact equality for
+    non-numerics."""
+    if a == b:  # exact (also covers 7 == 7.0 and True == 1 via Python equality)
+        return True
+    try:
+        return float(a) == float(b)  # type: ignore[arg-type]  ("0.05" vs 0.05, "7" vs 7)
+    except (TypeError, ValueError):
+        return False
+
+
+def _assisted_param_decision(skill: str, method: str, effective_params: dict) -> dict | None:
+    """Compare the run's effective params to the SKILL.md param-hint DEFAULTS for
+    (skill, method) — the provenance "method-choice" signal (AN-PROV-CAPTURE-13).
+
+    Returns ``{method, basis, recommended, accepted, overrides}`` or ``None`` when
+    the skill/method has no param-hint recommendation.
+
+    PRECISION (ADR 0015): ``basis="skill_md_param_hint_defaults"`` — ``recommended``
+    is the DETERMINISTIC SKILL.md default per param, recomputed at capture time. It
+    is the deterministic *floor* of ADR 0015's recommendation, NOT the LLM's
+    ephemeral, data-grounded recommendation actually shown to the agent (that would
+    require instrumenting the loop's tool-result callback at show-time, a non-goal
+    of the recompute-at-capture design). So ``accepted=True`` means the run used the
+    SKILL.md defaults; an ``override`` means the run deviated from a default — which
+    is a useful, honest provenance signal, but not literally "accepted/rejected the
+    recommendation the agent saw". Future Write must read it with that basis in mind.
+    """
+    try:
+        method_lower, tip_info, _ = _resolve_param_hint_info(skill, method)
+        if not isinstance(tip_info, dict) or not tip_info:
+            return None
+        defaults = tip_info.get("defaults", {}) or {}
+        params = tip_info.get("params", []) or []
+        recommended = {p: defaults[p] for p in params if p in defaults}
+        if not recommended:
+            return None
+        overrides: dict = {}
+        for p, rec_val in recommended.items():
+            if p in effective_params and not _param_values_equal(effective_params[p], rec_val):
+                overrides[p] = {"recommended": rec_val, "effective": effective_params[p]}
+        return {
+            "method": method_lower,
+            "basis": "skill_md_param_hint_defaults",
+            "recommended": recommended,
+            "accepted": not overrides,
+            "overrides": overrides,
+        }
+    except Exception as exc:
+        logger.debug("assisted-param decision recompute failed (non-fatal): %s", exc)
+        return None
+
+
+async def _auto_capture_dataset(
+    session_id: str, input_path: str, data_type: str = "", thread_id: str = ""
+):
+    """Auto-capture dataset memory when a file is processed.
+
+    ``thread_id`` (Bench, ADR 0018) scopes the dataset under the active
+    investigation thread (``dataset://<thread_id>/<basename>``) so Analyze in
+    that thread can reference it; empty preserves the legacy un-scoped URI.
+    """
     from omicsclaw.runtime.agent.state import OMICSCLAW_DIR, memory_store
     if not memory_store or not session_id or not input_path:
         return
@@ -190,6 +271,7 @@ async def _auto_capture_dataset(session_id: str, input_path: str, data_type: str
             n_obs=n_obs,
             n_vars=n_vars,
             preprocessing_state="raw",
+            thread_id=thread_id,
         )
         await memory_store.save_memory(session_id, ds_mem)
         logger.debug(f"Auto-captured dataset: {rel_path}")
@@ -197,8 +279,27 @@ async def _auto_capture_dataset(session_id: str, input_path: str, data_type: str
         logger.warning(f"Auto-capture dataset failed: {e}")
 
 
-async def _auto_capture_analysis(session_id: str, skill: str, args: dict, output_dir: Path, success: bool):
-    """Auto-capture analysis memory after skill execution."""
+async def _auto_capture_analysis(
+    session_id: str,
+    skill: str,
+    args: dict,
+    output_dir: Path,
+    success: bool,
+    thread_id: str = "",
+):
+    """Auto-capture analysis memory after skill execution.
+
+    ``thread_id`` (Bench, ADR 0018) scopes the captured run's lineage under the
+    active investigation thread (``analysis://<thread_id>/<skill>/<id>``); empty
+    preserves the legacy un-scoped URI.
+
+    AN-PROV-CAPTURE-13 (ADR 0022): on a successful run we also read the skill's
+    ``result.json`` ({version, input_checksum, data.params}) and record the
+    effective params, checksum, version, output artifact names, and the
+    assisted-parameterization decision (recommendation vs effective) so the Write
+    phase has a queryable, memory-resident provenance record. Failed runs keep the
+    legacy lightweight record.
+    """
     from omicsclaw.runtime.agent.state import memory_store
     if not memory_store or not session_id:
         return
@@ -217,19 +318,160 @@ async def _auto_capture_analysis(session_id: str, skill: str, args: dict, output
         except Exception:
             pass
 
+        # AN-PROV-CAPTURE-13 — post-run provenance from result.json + the
+        # recompute-at-capture assisted-parameterization decision.
+        effective_params: dict[str, Any] = {}
+        input_checksum = ""
+        skill_version = ""
+        artifacts: list[str] = []
+        if success and output_dir:
+            result_json = _read_result_json(output_dir)
+            if result_json:
+                skill_version = str(result_json.get("version") or "")
+                input_checksum = str(result_json.get("input_checksum") or "")
+                data = result_json.get("data") or {}
+                if isinstance(data, dict) and isinstance(data.get("params"), dict):
+                    effective_params = dict(data["params"])
+            artifacts = _output_artifact_names(output_dir)
+        decision = _assisted_param_decision(skill, method, effective_params)
+
         memory = AnalysisMemory(
             source_dataset_id=source_dataset_id if source_dataset_id else "",
             skill=skill,
             method=method,
             parameters={"input": input_path} if input_path else {},
             output_path=str(output_dir) if output_dir else "",
-            status="completed" if success else "failed"
+            status="completed" if success else "failed",
+            thread_id=thread_id,
+            effective_params=effective_params,
+            input_checksum=input_checksum,
+            skill_version=skill_version,
+            artifacts=artifacts,
+            assisted_param_decision=decision,
         )
 
         await memory_store.save_memory(session_id, memory)
         logger.debug(f"Auto-captured analysis: {skill} ({method})")
     except Exception as e:
         logger.warning(f"Auto-capture analysis failed: {e}")
+
+
+async def _auto_capture_consensus(
+    session_id: str,
+    skill: str,
+    output_dir: Path,
+    success: bool,
+    thread_id: str = "",
+) -> bool:
+    """Auto-capture a typed-consensus run's lineage at its canonical URI.
+
+    AN-ROUTER-10 (Bench, ADR 0010/0018): a consensus skill (``consensus-domains``
+    / ``sc-consensus-clustering``) runs in a subprocess that writes only disk
+    artifacts — the in-loop agent is the only place that holds BOTH the active
+    ``thread_id`` and the graph-memory store. After a successful run we record
+    the run's lineage at the canonical, thread-scoped consensus namespace
+    ``analysis://<thread_id>/typed/<run_id>`` (``consensus_namespace`` — ADR 0010:
+    meta-analysis reads ``typed/*``; ADR 0018: thread scoping). Empty
+    ``thread_id`` keeps the legacy un-scoped ``analysis://typed/<run_id>``.
+
+    Returns ``True`` when this WAS a registered consensus flavour and the lineage
+    was captured, so the caller skips the generic ``_auto_capture_analysis``
+    (one record per run, at its canonical URI); ``False`` otherwise (the caller
+    falls back to the generic capture). A failed run also returns ``False``: a
+    non-run has no verified ``typed/`` lineage, so failures stay on the generic
+    per-skill capture.
+
+    This is the lightweight lineage marker (a plain ``AnalysisMemory`` at the
+    canonical URI, with the real consensus skill name); the richer
+    ``TypedConsensusRun`` provenance index (effective params, checksums, the
+    assisted-parameterization decision) lands at the SAME URI in
+    AN-PROV-CAPTURE-13.
+    """
+    from omicsclaw.runtime.agent.state import memory_store
+
+    try:
+        from omicsclaw.runtime.consensus.sources import CONSENSUS_SOURCES
+    except Exception:
+        return False
+    source = CONSENSUS_SOURCES.get(skill)
+    if source is None:
+        # Not a consensus flavour — the caller uses the generic capture.
+        return False
+    if not memory_store or not session_id or not success or not output_dir:
+        return False
+
+    try:
+        import json
+
+        from omicsclaw.memory.compat import AnalysisMemory
+        from omicsclaw.runtime.consensus.dispatch import consensus_namespace
+        from omicsclaw.runtime.consensus.templates import provenance_of
+
+        mode = "typed" if provenance_of(source.template) == "typed" else "narrative"
+
+        # run_id + operator come from the driver's plan.json audit (run.py); the
+        # agent loop never passes --run-id, so run_id == output_dir.name, but we
+        # read the audit to honour an explicit --run-id if one is ever wired.
+        run_id = output_dir.name
+        operator = "kmode"
+        # AN-PROV-CAPTURE-13 — the consensus run's effective config IS the plan
+        # audit (operator + planned members + score weights); there is no SKILL.md
+        # param-hint recommendation for a planner-driven flavour, so the
+        # assisted-parameterization decision stays None.
+        effective_params: dict[str, Any] = {}
+        try:
+            plan = json.loads((output_dir / "plan.json").read_text(encoding="utf-8"))
+            run_id = str(plan.get("run_id") or run_id)
+            operator = str(plan.get("operator") or operator)
+            effective_params = {
+                k: plan[k]
+                for k in ("operator", "members", "alpha", "beta", "max_class_frac")
+                if k in plan
+            }
+        except Exception:
+            pass
+        if not run_id:
+            return False
+        effective_params.setdefault("operator", operator)
+
+        source_dataset_id = ""
+        try:
+            datasets = await memory_store.get_memories(
+                session_id, "dataset", limit=1, thread_id=thread_id
+            )
+            if datasets:
+                source_dataset_id = datasets[0].memory_id
+        except Exception:
+            pass
+
+        memory = AnalysisMemory(
+            memory_id=run_id,
+            source_dataset_id=source_dataset_id,
+            skill=skill,
+            method=operator,
+            parameters={"run_id": run_id, "consensus_mode": mode},
+            output_path=str(output_dir),
+            status="completed",
+            thread_id=thread_id,
+            effective_params=effective_params,
+            artifacts=_output_artifact_names(output_dir),
+        )
+        # Land at the explicit consensus URI (which the AnalysisMemory's own
+        # <skill>/<id> path shape can't express) via the same per-session client
+        # CompatMemoryStore.save_memory uses — no new store API, no model change.
+        client = await memory_store._client_for_session(session_id)
+        await client.remember(
+            uri=consensus_namespace(run_id, mode, thread_id),
+            content=memory.model_dump_json(),
+            disclosure=f"Consensus lineage from session {session_id}",
+        )
+        logger.debug(
+            f"Auto-captured consensus lineage: {skill} run {run_id} ({mode})"
+        )
+        return True
+    except Exception as e:
+        logger.warning(f"Auto-capture consensus failed: {e}")
+        return False
 
 
 # ---------------------------------------------------------------------------

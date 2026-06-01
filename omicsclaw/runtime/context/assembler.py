@@ -308,6 +308,7 @@ async def assemble_chat_context(
     user_content: str | list[dict[str, Any]],
     user_id: str | None = None,
     platform: str | None = None,
+    thread_id: str = "",
     session_manager=None,
     system_prompt_builder=None,
     capability_resolver=None,
@@ -322,14 +323,21 @@ async def assemble_chat_context(
     omicsclaw_dir: str = "",
     context_injectors: tuple[ContextLayerInjector, ...] | None = None,
     scoped_memory_loader=None,
+    research_stance_loader=None,
 ) -> AssembledChatContext:
     session_id = f"{platform}:{user_id}:{chat_id}" if user_id and platform else None
     memory_context = ""
     memory_task = None
     if session_manager and session_id:
         async def _load_session_memory() -> str:
-            await session_manager.get_or_create(user_id, platform, str(chat_id))
-            return await session_manager.load_context(session_id)
+            # Bench (ADR 0023 d3 / AN-CTXRECALL-11): stamp a freshly-created
+            # session with the active thread (no-op for an already-bound one —
+            # the binding is immutable) and scope the passive memory injection
+            # to that thread. thread_id="" preserves the legacy un-scoped load.
+            await session_manager.get_or_create(
+                user_id, platform, str(chat_id), thread_id=thread_id
+            )
+            return await session_manager.load_context(session_id, thread_id=thread_id)
 
         memory_task = asyncio.create_task(_load_session_memory())
 
@@ -479,6 +487,16 @@ async def assemble_chat_context(
     )
     system_prompt = prompt_context.system_prompt
 
+    # Bench BE-PERSONA-7 — load the agent's research-stance persona layer (opt-in:
+    # only when a loader is wired, e.g. the engine loop). Absent / empty → no-op,
+    # so callers without a loader (and tests) stay byte-identical.
+    research_stance = ""
+    if research_stance_loader is not None and session_id:
+        try:
+            research_stance = (await research_stance_loader(session_id)) or ""
+        except Exception as exc:
+            LOGGER.warning("Research-stance load failed (non-fatal): %s", exc)
+
     if system_prompt_builder is not None:
         builder_kwargs = {
             "memory_context": memory_context,
@@ -499,6 +517,8 @@ async def assemble_chat_context(
         }
         if omicsclaw_dir:
             builder_kwargs["omicsclaw_dir"] = omicsclaw_dir
+        if research_stance:
+            builder_kwargs["research_stance"] = research_stance
         if prompt_pack_context:
             builder_kwargs["prompt_pack_context"] = prompt_pack_context
         knowledge_layer = next(

@@ -84,6 +84,86 @@ def _maybe_append_caller_addition(system_prompt: str, addition: str) -> str:
     return system_prompt.rstrip() + "\n\n" + addition.strip()
 
 
+# BE-PERSONA-7 / ADR 0024 — per-session snapshot of the research-stance persona
+# layer. The stance is a SESSION CONSTANT (the prompt prefix must stay byte-stable
+# across turns), so we recall core://agent/research_stance once per session and
+# reuse it instead of re-recalling every turn. A stance change therefore applies on
+# the NEXT session (a deliberate re-warm), not mid-session — which is exactly the
+# prefix-stability ADR 0024 wants. The empty (no-stance) result is cached too, so
+# the common opt-out path also costs zero per-turn recalls.
+_RESEARCH_STANCE_CACHE: dict[str, str] = {}
+_RESEARCH_STANCE_CACHE_CAP = 4096
+
+
+def reset_research_stance_cache() -> None:
+    """Drop the per-session research-stance snapshots (tests; a forced re-warm)."""
+    _RESEARCH_STANCE_CACHE.clear()
+
+
+def _make_research_stance_loader(session_manager):
+    """BE-PERSONA-7 — a loader that recalls ``core://agent/research_stance`` (the
+    agent's research-stance persona layer) through the session store, with the
+    store's shared fallback, snapshotting the result per session (see
+    ``_RESEARCH_STANCE_CACHE``). Returns ``None`` when memory is unavailable so the
+    persona layer degrades to a clean no-op (byte-identical legacy)."""
+    store = getattr(session_manager, "store", None)
+    if store is None or not hasattr(store, "recall_agent_uri"):
+        return None
+
+    async def _load(session_id: str) -> str:
+        cached = _RESEARCH_STANCE_CACHE.get(session_id)
+        if cached is not None:  # "" is a valid cached value (no stance set)
+            return cached
+        stance = await store.recall_agent_uri(session_id, "core://agent/research_stance")
+        if len(_RESEARCH_STANCE_CACHE) >= _RESEARCH_STANCE_CACHE_CAP:
+            _RESEARCH_STANCE_CACHE.clear()  # crude bound; sessions are short-lived
+        _RESEARCH_STANCE_CACHE[session_id] = stance
+        return stance
+
+    return _load
+
+
+# Bench (ADR 0020) — lifecycle-stage stance fragments. Additive guidance that
+# shapes the stage's stance (read vs. compute vs. write); subordinate to SOUL.md
+# and the base persona, it cannot override safety rules. The research-stance
+# persona layer + the full 5-layer composer arrive in Phase 4.
+_STAGE_FRAGMENTS: dict[str, str] = {
+    "read": (
+        "You are in the **Read** stage of a research investigation: help the user "
+        "read and interpret papers. Answer from ingested sources and cite them; do "
+        "not run heavyweight analyses here. If the user wants to compute, propose a "
+        "one-click switch to the Analyze stage rather than launching it yourself."
+    ),
+    "ideate": (
+        "You are in the **Ideate** stage: turn the thread's reading into testable, "
+        "source-grounded hypotheses. Never fabricate a citation; flag an ungrounded "
+        "hunch as such."
+    ),
+    "analyze": (
+        "You are in the **Analyze** stage: run OmicsClaw skills on the thread's data "
+        "and ground every result in real artifact values."
+    ),
+    "write": (
+        "You are in the **Write** stage: draft from recorded analysis lineage and "
+        "cited sources; preserve numbers verbatim and cite every claim."
+    ),
+}
+
+
+def _maybe_append_stage_fragment(system_prompt: str, stage: str) -> str:
+    """Append the Bench lifecycle-stage stance fragment (ADR 0020).
+
+    Empty / unknown stage = no fragment, so the legacy / non-Bench path is
+    byte-unchanged.
+    """
+    if not stage:
+        return system_prompt
+    fragment = _STAGE_FRAGMENTS.get(stage, "")
+    if not fragment:
+        return system_prompt
+    return system_prompt.rstrip() + "\n\n## Stage\n" + fragment
+
+
 # ADR 0024 — derive the context-collapse char budget from the model's window.
 # Phase 3 made history append-only between collapses, removing the per-turn
 # slide that used to bound small-context providers; this re-introduces a safe
@@ -154,6 +234,9 @@ async def run_engine_loop(
     system_prompt_append: str = "",
     user_turn_context: str = "",
     mode: str = "",
+    # Bench (ADR 0018/0020) — investigation thread + lifecycle stage lens.
+    thread_id: str = "",
+    stage: str = "",
     request_tool_approval: Any = None,
     policy_state: Any = None,
     cancel_event: Any = None,
@@ -197,8 +280,15 @@ async def run_engine_loop(
         user_content=user_content,
         user_id=user_id,
         platform=platform,
+        # Bench (AN-CTXRECALL-11) — scope the passive per-turn memory injection
+        # to the active investigation thread (dataset/analysis only; global
+        # prefs/insights/project_context stay shared). Empty = legacy unscoped.
+        thread_id=thread_id,
         session_manager=deps.session_manager,
         system_prompt_builder=build_system_prompt,
+        # Bench BE-PERSONA-7 — inject the agent's research-stance persona layer
+        # (core://agent/research_stance); None loader / absent row = no-op.
+        research_stance_loader=_make_research_stance_loader(deps.session_manager),
         skill_aliases=deps.skill_aliases,
         plan_context=plan_context,
         transcript_context=transcript_context,
@@ -218,15 +308,23 @@ async def run_engine_loop(
     )
     system_prompt = _maybe_append_caller_addition(system_prompt, system_prompt_append)
     system_prompt = _maybe_append_mode_hint(system_prompt, mode)
+    # Bench (ADR 0020) — append the lifecycle-stage stance fragment (additive,
+    # subordinate to SOUL.md + base persona; empty/unknown stage = no-op).
+    system_prompt = _maybe_append_stage_fragment(system_prompt, stage)
 
     # ADR 0024 — freeze the tool list by surface (a session constant), not by
     # per-turn query predicates. Byte-identical across turns ⇒ the tool segment
     # of the Prompt prefix stays cache-stable. Cache diagnostics will flip to
     # ``tool-list-changed`` if anything re-introduces per-turn tool variation.
+    # Bench (ADR 0020) — sub-filter the (otherwise cache-stable) surface tool
+    # list to the active lifecycle stage's default subset. Empty / analyze /
+    # unknown stage is unfiltered, so the prompt-prefix tool segment stays
+    # byte-stable for the legacy / non-Bench path (ADR 0024).
     request_tools = tuple(
         deps.tool_registry.to_openai_tools_for_request(
             chat_context.prompt_context.request,
             surface_only=True,
+            stage=stage,
         )
     )
     hook_runtime = build_default_lifecycle_hook_runtime(deps.omicsclaw_dir)
@@ -268,6 +366,12 @@ async def run_engine_loop(
                 "omicsclaw_dir": deps.omicsclaw_dir,
                 "workspace": workspace,
                 "pipeline_workspace": pipeline_workspace,
+                # Bench (ADR 0018/0020) — investigation-thread id + stage lens
+                # ride into per-tool executors. Phase 0: observable but inert
+                # (no consumer yet). Phase 1A reads thread_id to scope
+                # analysis://<thread_id>; Phase 2 reads stage for tool gating.
+                "thread_id": thread_id,
+                "stage": stage,
                 # ADR 0009 — surface-initiated cancel propagates through
                 # this dict into per-tool executors that forward it to
                 # skill.runner.run_skill(cancel_event=...).

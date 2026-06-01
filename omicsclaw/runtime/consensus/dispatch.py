@@ -53,16 +53,23 @@ def select_consensus_mode(
     return "typed" if provenance_of(source.template) == "typed" else "narrative"
 
 
-def consensus_namespace(run_id: str, mode: ConsensusMode) -> str:
+def consensus_namespace(run_id: str, mode: ConsensusMode, thread_id: str = "") -> str:
     """Return the graph-memory URI for a consensus run.
 
     ADR 0010 splits ``analysis://typed/<run_id>`` and
     ``analysis://exploratory/<run_id>``; future meta-analysis defaults to
     reading only ``typed/*``.
+
+    Bench (ADR 0018): when ``thread_id`` is set the run's lineage is scoped
+    under the investigation thread — ``analysis://<thread_id>/typed/<run_id>`` —
+    so a thread rolls up only its own runs. Empty ``thread_id`` preserves the
+    legacy un-scoped URIs (backward compatible); ``thread_id`` is orthogonal to
+    the typed/narrative routing decision.
     """
-    if mode == "typed":
-        return f"analysis://typed/{run_id}"
-    return f"analysis://exploratory/{run_id}"
+    sub = "typed" if mode == "typed" else "exploratory"
+    if thread_id:
+        return f"analysis://{thread_id}/{sub}/{run_id}"
+    return f"analysis://{sub}/{run_id}"
 
 
 def output_banner(mode: ConsensusMode) -> str:

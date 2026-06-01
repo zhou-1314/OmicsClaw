@@ -751,6 +751,71 @@ def test_run_query_engine_merges_tool_runtime_context(tmp_path):
     assert observed["workspace"] == "/tmp/omics-workspace"
 
 
+def test_run_query_engine_delivers_thread_id_and_stage_to_tool_context(tmp_path):
+    """Bench Phase 0 contract: thread_id + stage placed in tool_runtime_context
+    reach a tool that declares them as ``context_params``, as DISTINCT values.
+
+    This pins the consumer-side seam every later Bench phase reads from
+    (Phase 1A scopes ``analysis://<thread_id>``; Phase 2 gates tools by stage).
+    Asserting distinct values guards against a thread_id/stage swap at the
+    boundary — the exact fat-finger the signature-only test cannot catch.
+    """
+    observed = {}
+
+    async def bench_executor(args, thread_id=None, stage=None):
+        observed["thread_id"] = thread_id
+        observed["stage"] = stage
+        return "ok"
+
+    runtime = ToolRegistry(
+        [
+            ToolSpec(
+                name="bench",
+                description="Bench capturing tool",
+                parameters={"type": "object", "properties": {}},
+                context_params=("thread_id", "stage"),
+                read_only=True,
+                concurrency_safe=True,
+            )
+        ]
+    ).build_runtime({"bench": bench_executor})
+
+    llm = _FakeLLM(
+        [
+            _FakeResponse(
+                _FakeMessage(
+                    content="",
+                    tool_calls=[_FakeToolCall("call-bench", "bench", "{}")],
+                )
+            ),
+            _FakeResponse(_FakeMessage(content="done", tool_calls=None)),
+        ]
+    )
+    transcript_store = TranscriptStore(sanitizer=sanitize_tool_history)
+    result_store = ToolResultStore(storage_dir=tmp_path / "tool_results")
+
+    result = asyncio.run(
+        run_query_engine(
+            llm=llm,
+            context=QueryEngineContext(
+                chat_id="chat-bench",
+                session_id="session-bench",
+                system_prompt="SYSTEM",
+                user_message_content="hello",
+                tool_runtime_context={"thread_id": "t-glioma", "stage": "read"},
+            ),
+            tool_runtime=runtime,
+            transcript_store=transcript_store,
+            tool_result_store=result_store,
+            config=QueryEngineConfig(model="fake-model", llm_error_types=(_FakeAPIError,)),
+        )
+    )
+
+    assert result == "done"
+    assert observed["thread_id"] == "t-glioma"
+    assert observed["stage"] == "read"
+
+
 def test_run_query_engine_emits_failure_hooks_and_persists_execution_trace(tmp_path):
     async def broken_executor(args):
         raise RuntimeError("boom")

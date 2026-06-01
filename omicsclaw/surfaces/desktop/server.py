@@ -135,13 +135,30 @@ def _coerce_kg_home(candidate: str) -> Path:
     return path / ".omicsclaw" / "knowledge"
 
 
+# Bench Phase 3.2 (ADR 0019) — availability of the optional OmicsClaw-KG
+# integration, surfaced to the frontend via ``/health`` so it can show/hide
+# KG-dependent UI. Set by ``_register_optional_kg_router`` at startup (mirrors
+# the ``_NOTEBOOK_AVAILABLE`` flag pattern). Defaults to unavailable.
+_KG_AVAILABLE: bool = False
+_KG_IMPORT_ERROR: str = ""
+
+
 def _register_optional_kg_router(app: FastAPI) -> None:
-    """Mount OmicsClaw-KG under `/kg` when the optional package is available."""
+    """Mount OmicsClaw-KG under `/kg` when the optional package is available.
+
+    Also records availability in the module-level ``_KG_AVAILABLE`` /
+    ``_KG_IMPORT_ERROR`` flags (Bench Phase 3.2) so ``/health`` can tell the
+    frontend whether KG-dependent UI should be shown.
+    """
+    global _KG_AVAILABLE, _KG_IMPORT_ERROR
+
     kg_source_dir = str(os.getenv("OMICSCLAW_KG_SOURCE_DIR", "") or "").strip()
     if kg_source_dir and kg_source_dir not in sys.path:
         sys.path.insert(0, kg_source_dir)
 
     if importlib.util.find_spec("omicsclaw_kg") is None:
+        _KG_AVAILABLE = False
+        _KG_IMPORT_ERROR = "omicsclaw_kg package not found on the import path"
         logger.info("OmicsClaw-KG package not available; skipping embedded KG routes")
         return
 
@@ -150,6 +167,8 @@ def _register_optional_kg_router(app: FastAPI) -> None:
         from omicsclaw_kg.http_api import build_router as build_kg_router
         from omicsclaw_kg.http_api import get_kg_config as kg_workspace_dependency
     except ImportError as exc:
+        _KG_AVAILABLE = False
+        _KG_IMPORT_ERROR = str(exc)
         logger.info("OmicsClaw-KG import failed; skipping embedded KG routes: %s", exc)
         return
 
@@ -179,6 +198,8 @@ def _register_optional_kg_router(app: FastAPI) -> None:
 
     app.dependency_overrides[kg_workspace_dependency] = _embedded_kg_config
     app.include_router(build_kg_router(enable_writes=True), prefix="/kg")
+    _KG_AVAILABLE = True
+    _KG_IMPORT_ERROR = ""
     logger.info("Mounted embedded OmicsClaw-KG routes under /kg")
 
 
@@ -558,6 +579,12 @@ class ChatRequest(BaseModel):
     files: Optional[list[dict]] = None
     system_prompt_append: str = ""
     analysis_router_mode: str = ""
+    # Bench — study-scoped investigation thread (ADR 0018) + lifecycle stage
+    # lens (ADR 0020). Phase 0: both fields are accepted but inert (no thread
+    # binding, no stage tool gating yet); consumers arrive in Phase 1A / Phase 2.
+    # Invalid stage strings are tolerated (treated as default), never rejected.
+    thread_id: str = ""
+    stage: str = ""
 
 
 class AbortRequest(BaseModel):
@@ -661,6 +688,77 @@ def _runtime_health_payload(core: Any) -> dict[str, Any]:
             "squidpy": _module_available("squidpy"),
         },
     }
+
+
+async def _resolve_and_bind_thread_id(
+    session_manager: Any, user_id: str, session_id: str, req_thread_id: str
+) -> str:
+    """Resolve a turn's thread_id and bind it to the session (ADR 0023 decision 3).
+
+    Returns ``request.thread_id`` if set; otherwise the bound session's stored
+    ``thread_id`` (so a turn that omits the field still rolls up to its thread).
+    When a thread_id is resolved, ``get_or_create`` stamps a *freshly-created*
+    session with it (an existing session's binding is immutable — rebinding is
+    v1.5). The session id mirrors ``SessionManager.get_or_create``'s
+    ``f"{platform}:{user_id}:{chat_id}"`` form. Best-effort: any failure returns
+    the request's value and never blocks the turn.
+    """
+    resolved = req_thread_id
+    if session_manager is None:
+        return resolved
+    try:
+        full_session_id = f"app:{user_id}:{session_id}"
+        if not resolved:
+            # SessionManager wraps the store; get_session lives on .store.
+            store = getattr(session_manager, "store", None)
+            existing = await store.get_session(full_session_id) if store else None
+            if existing is not None and getattr(existing, "thread_id", ""):
+                resolved = existing.thread_id
+        if resolved:
+            await session_manager.get_or_create(
+                user_id, "app", session_id, thread_id=resolved
+            )
+    except Exception as exc:  # pragma: no cover - never block a turn on this
+        logger.warning("thread_id session resolution failed: %s", exc)
+    return resolved
+
+
+def _resolve_shared_kg_home() -> str:
+    """The shared KG home the desktop ``/kg`` routes resolve to, without a request
+    header (mirrors the env precedence in ``_embedded_kg_config``:
+    ``OMICSCLAW_KG_HOME`` else ``OMICSCLAW_WORKSPACE`` / ``DATA_DIR`` coerced to
+    ``<ws>/.omicsclaw/knowledge``). Empty when none set.
+
+    The result is ``.resolve()``-normalized to match what the routes actually
+    serve: ``KGConfig.__post_init__`` resolves the home, so a non-canonical or
+    relative input would otherwise be reported here differently than served.
+    """
+    explicit = str(os.getenv("OMICSCLAW_KG_HOME", "") or "").strip()
+    if explicit:
+        return str(Path(explicit).resolve())
+    workspace_root = _resolve_scoped_memory_workspace("")
+    if workspace_root:
+        return str(_coerce_kg_home(workspace_root).resolve())
+    return ""
+
+
+def _kg_status_payload() -> dict[str, Any]:
+    """Availability of the optional OmicsClaw-KG integration, for the frontend
+    (Bench Phase 3.2, ADR 0019). ``available`` is True iff the embedded ``/kg``
+    routes mounted at startup — the frontend shows/hides KG-dependent UI on this
+    flag. ``home`` is the shared KG home those routes resolve to (best-effort,
+    empty if unavailable); ``import_error`` is included only when unavailable.
+    """
+    home = ""
+    if _KG_AVAILABLE:
+        try:
+            home = _resolve_shared_kg_home()
+        except Exception:  # pragma: no cover - never break /health on home resolution
+            home = ""
+    payload: dict[str, Any] = {"available": _KG_AVAILABLE, "home": home}
+    if not _KG_AVAILABLE and _KG_IMPORT_ERROR:
+        payload["import_error"] = _KG_IMPORT_ERROR
+    return payload
 
 
 def _resolve_scoped_memory_workspace(explicit_workspace: str = "") -> str:
@@ -1877,6 +1975,17 @@ async def chat_stream(req: ChatRequest):
             import threading as _threading
 
             cancel_event = _threading.Event()
+
+            # Bench (ADR 0023 decision 3): resolve thread_id = request ?? session and
+            # stamp a freshly-created session so binding is durable across turns that
+            # omit the field. Best-effort — never blocks a turn.
+            resolved_thread_id = await _resolve_and_bind_thread_id(
+                getattr(_get_core(), "session_manager", None),
+                desktop_chat_user_id(),
+                session_id,
+                req.thread_id,
+            )
+
             envelope = MessageEnvelope(
                 chat_id=session_id,
                 content=user_content,
@@ -1895,6 +2004,12 @@ async def chat_stream(req: ChatRequest):
                 system_prompt_append=req.system_prompt_append,
                 mode=req.mode,
                 analysis_router_mode=req.analysis_router_mode,
+                thread_id=resolved_thread_id,
+                # Bench (ADR 0020) — normalize stage once at the producer boundary
+                # so a casing/whitespace mismatch ("Read", " read ") can't silently
+                # bypass the stage gate; unknown values still fall through to the
+                # permissive full-tool path downstream.
+                stage=(req.stage or "").strip().lower(),
                 cancel_event=cancel_event,
             )
             _active_envelopes[session_id] = envelope
@@ -2446,6 +2561,7 @@ async def health():
         "provider": core.LLM_PROVIDER_NAME,
         "model": core.OMICSCLAW_MODEL,
         "skills_count": core._primary_skill_count(),
+        "kg": _kg_status_payload(),
         **_runtime_health_payload(core),
     }
 
@@ -2927,6 +3043,239 @@ async def memory_search(
         return {"query": q, "results": results, "count": len(results)}
     except Exception as exc:
         logger.exception("Memory search error")
+        raise HTTPException(500, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Thread (Bench investigation) CRUD — BE-THREAD-CRUD-2 (Phase 1)
+# Authoritative metadata at project://<thread_id> (ThreadMemory, versioned).
+# All operations run in the desktop _memory_client namespace; the URL
+# thread_id is only a node-path lookup key, never trusted as a namespace.
+# NOTE: static routes (/thread/create, /thread/list) are declared BEFORE the
+# dynamic /thread/{thread_id} so the literal paths are not captured by it.
+# ---------------------------------------------------------------------------
+
+class ThreadCreateRequest(BaseModel):
+    name: str
+    description: str = ""
+    domains: list[str] = Field(default_factory=list)
+    organism: Optional[str] = None
+    platforms: list[str] = Field(default_factory=list)
+    venue: Optional[str] = None
+
+
+class ThreadUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    domains: Optional[list[str]] = None
+    organism: Optional[str] = None
+    platforms: Optional[list[str]] = None
+    venue: Optional[str] = None
+
+
+class ThreadPreferenceRequest(BaseModel):
+    key: str
+    value: Any
+
+
+@app.post("/thread/create")
+async def thread_create(req: ThreadCreateRequest):
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import thread as thread_svc
+
+        tm = await thread_svc.create_thread(
+            _memory_client,
+            name=req.name,
+            description=req.description,
+            domains=req.domains,
+            organism=req.organism,
+            platforms=req.platforms,
+            venue=req.venue,
+        )
+        return tm.model_dump()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Thread create error")
+        raise HTTPException(500, detail=str(exc))
+
+
+@app.get("/thread/list")
+async def thread_list():
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import thread as thread_svc
+
+        threads = await thread_svc.list_threads(_memory_client)
+        return {"threads": [t.model_dump() for t in threads], "count": len(threads)}
+    except Exception as exc:
+        logger.exception("Thread list error")
+        raise HTTPException(500, detail=str(exc))
+
+
+@app.get("/thread/{thread_id}")
+async def thread_get(thread_id: str):
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import thread as thread_svc
+
+        tm = await thread_svc.get_thread(_memory_client, thread_id)
+        if tm is None:
+            raise HTTPException(404, detail=f"thread not found: {thread_id}")
+        return tm.model_dump()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Thread get error")
+        raise HTTPException(500, detail=str(exc))
+
+
+@app.put("/thread/{thread_id}")
+async def thread_update(thread_id: str, req: ThreadUpdateRequest):
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import thread as thread_svc
+
+        tm = await thread_svc.update_thread(
+            _memory_client, thread_id, req.model_dump(exclude_none=True)
+        )
+        if tm is None:
+            raise HTTPException(404, detail=f"thread not found: {thread_id}")
+        return tm.model_dump()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Thread update error")
+        raise HTTPException(500, detail=str(exc))
+
+
+@app.delete("/thread/{thread_id}")
+async def thread_delete(thread_id: str):
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import thread as thread_svc
+
+        ok = await thread_svc.delete_thread(_memory_client, thread_id)
+        if not ok:
+            raise HTTPException(404, detail=f"thread not found: {thread_id}")
+        return {"ok": True, "thread_id": thread_id}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Thread delete error")
+        raise HTTPException(500, detail=str(exc))
+
+
+@app.get("/thread/{thread_id}/preference")
+async def thread_get_preference(thread_id: str):
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import thread as thread_svc
+
+        prefs = await thread_svc.get_thread_preferences(_memory_client, thread_id)
+        if prefs is None:
+            raise HTTPException(404, detail=f"thread not found: {thread_id}")
+        return {"thread_id": thread_id, "preferences": prefs}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Thread preference get error")
+        raise HTTPException(500, detail=str(exc))
+
+
+@app.put("/thread/{thread_id}/preference")
+async def thread_set_preference(thread_id: str, req: ThreadPreferenceRequest):
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import thread as thread_svc
+
+        tm = await thread_svc.set_thread_preference(
+            _memory_client, thread_id, req.key, req.value
+        )
+        if tm is None:
+            raise HTTPException(404, detail=f"thread not found: {thread_id}")
+        return {"thread_id": thread_id, "preferences": tm.preferences}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Thread preference set error")
+        raise HTTPException(500, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Onboarding & global bench preferences (Phase 5, BE-ONBOARD-8 / BE-PREF-7)
+# ---------------------------------------------------------------------------
+
+class OnboardUserRequest(BaseModel):
+    # The frontend's (<=5) onboarding answers, stored verbatim to the versioned
+    # core://my_user. Free-form so the question set can evolve without a schema bump.
+    profile: dict[str, Any] = Field(default_factory=dict)
+
+
+class BenchPreferenceRequest(BaseModel):
+    key: str
+    value: Any
+
+
+@app.post("/onboard/user")
+async def onboard_user_route(req: OnboardUserRequest):
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import onboarding
+
+        return await onboarding.onboard_user(_memory_client, req.profile)
+    except Exception as exc:
+        logger.exception("Onboarding (user) error")
+        raise HTTPException(500, detail=str(exc))
+
+
+@app.post("/onboard/skip")
+async def onboard_skip_route():
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import onboarding
+
+        return await onboarding.skip_onboarding(_memory_client)
+    except Exception as exc:
+        logger.exception("Onboarding (skip) error")
+        raise HTTPException(500, detail=str(exc))
+
+
+@app.get("/onboard/status")
+async def onboard_status_route():
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import onboarding
+
+        return await onboarding.onboarding_status(_memory_client)
+    except Exception as exc:
+        logger.exception("Onboarding (status) error")
+        raise HTTPException(500, detail=str(exc))
+
+
+@app.put("/preference/bench")
+async def set_bench_preference_route(req: BenchPreferenceRequest):
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    try:
+        from omicsclaw.surfaces.desktop import onboarding
+
+        return await onboarding.set_bench_preference(_memory_client, req.key, req.value)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Bench preference set error")
         raise HTTPException(500, detail=str(exc))
 
 

@@ -1,8 +1,8 @@
 """Phase 1 (T1.7) RED tests for the per-tool predicate mapping.
 
 Verifies that each lazy-load tool is exposed iff its expected predicate
-fires for the given request. The 8 always-on tools must appear in every
-scenario regardless of query.
+fires for the given request. The always-on tools (predicate=None) must appear
+in every scenario regardless of query.
 
 Coverage map (mirrors plan section "Wire 33 lazy-load tools to predicates"):
 
@@ -11,7 +11,10 @@ Coverage map (mirrors plan section "Wire 33 lazy-load tools to predicates"):
 | (none — always-on)                 | omicsclaw, resolve_capability,            |
 |                                    | consult_knowledge, inspect_data,          |
 |                                    | list_directory, glob_files, file_read,    |
-|                                    | read_knowhow                              |
+|                                    | read_knowhow, ask_user, kg_search,        |
+|                                    | kg_get_page, kg_list_pages,               |
+|                                    | kg_graph_neighbors, kg_status,            |
+|                                    | kg_recent_log, kg_communities             |
 | anndata_or_file_path_in_query      | save_file, write_file, inspect_file,      |
 |                                    | make_directory, move_file, remove_file,   |
 |                                    | get_file_size, file_write, file_edit,     |
@@ -63,6 +66,19 @@ ALWAYS_ON = (
     # ``ask_user`` (interactive choice tool) is always-on: predicate=None,
     # so it is exposed every turn regardless of query.
     "ask_user",
+    # OmicsClaw-KG read tools (Bench Phase 3.1, ADR 0019) are predicate-less,
+    # hence always-on like ``consult_knowledge`` — exposed every turn (and
+    # Read-stage allow-listed). They soft-fail when the optional package is absent.
+    "kg_search",
+    "kg_get_page",
+    "kg_list_pages",
+    "kg_graph_neighbors",
+    "kg_status",
+    "kg_recent_log",
+    "kg_communities",
+    # kg_ingest (Bench Phase 3.3c) is also predicate-less always-on — the KG
+    # citation-substrate writer, AUTO-approved (ADR 0019).
+    "kg_ingest",
 )
 
 
@@ -286,7 +302,7 @@ def test_generate_audio_appears_on_audio_query() -> None:
 
 def test_baseline_query_only_shows_always_on_set() -> None:
     """Baseline (empty query, no workspace, no capability) should show
-    exactly the 8 always-on tools and nothing else."""
+    exactly the always-on set and nothing else."""
     selected = _selected_names(query="")
     extras = selected - set(ALWAYS_ON)
     assert extras == set(), f"unexpected non-always-on tools fired: {extras}"
@@ -298,11 +314,11 @@ def test_realistic_scde_turn_count_well_under_full_set() -> None:
     """Realistic sc-de query exposes always-on + file-path tools, but
     keeps memory / pdf / web / plot tools hidden."""
     selected = _selected_names(query="run sc-de on /tmp/x.h5ad")
-    assert len(selected) <= 25, (
-        f"realistic sc-de turn exposed {len(selected)} tools; expected <= 25 "
-        f"(always-on 8 + file-path ~13 + maybe non_trivial fallback): {sorted(selected)}"
+    assert len(selected) <= 33, (
+        f"realistic sc-de turn exposed {len(selected)} tools; expected <= 33 "
+        f"(always-on 17 + file-path ~13 + maybe non_trivial fallback): {sorted(selected)}"
     )
-    assert len(selected) < 41, "ALL 41 tools shown — predicate gating not applied"
+    assert len(selected) < 47, "ALL 47 tools shown — predicate gating not applied"
     assert "remember" not in selected
     assert "parse_literature" not in selected
     assert "web_search" not in selected

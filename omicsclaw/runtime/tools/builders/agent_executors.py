@@ -95,12 +95,14 @@ from omicsclaw.common.user_guidance import (
 from omicsclaw.skill.registry import ensure_registry_loaded, registry
 from omicsclaw.runtime.tools.builders.agent import build_bot_tool_registry, BotToolContext
 from omicsclaw.runtime.tools.builders.engineering import build_engineering_tool_executors
+from omicsclaw.runtime.tools.kg_tools import KG_TOOL_EXECUTORS
 from omicsclaw.runtime.policy.verification import format_completion_mapping_summary
 
 # Helpers from canonical homes (post-decomposition siblings).
 from omicsclaw.skill.orchestration import (
     _AUTO_DISAMBIGUATE_GAP,
     _auto_capture_analysis,
+    _auto_capture_consensus,
     _auto_capture_dataset,
     _build_method_preview,
     _build_param_hint,
@@ -213,8 +215,14 @@ async def execute_omicsclaw(
     session_id: str = None,
     chat_id: int | str = 0,
     cancel_event: threading.Event | None = None,
+    thread_id: str = "",
 ) -> str:
-    """Execute an OmicsClaw skill via the shared runner contract."""
+    """Execute an OmicsClaw skill via the shared runner contract.
+
+    ``thread_id`` (Bench, ADR 0018) arrives from ``tool_runtime_context`` via the
+    tool's ``context_params`` and scopes the auto-captured analysis lineage under
+    the active investigation thread; empty = legacy un-scoped behaviour.
+    """
     arg_shape_error = _validate_omicsclaw_args(args)
     if arg_shape_error:
         return arg_shape_error
@@ -457,7 +465,7 @@ async def execute_omicsclaw(
             shutil.rmtree(out_dir, ignore_errors=True)
         # Capture failed analysis to memory (so we remember what was tried)
         if session_id:
-            await _auto_capture_analysis(session_id, skill_key, args, None, False)
+            await _auto_capture_analysis(session_id, skill_key, args, None, False, thread_id=thread_id)
         # Environment errors take priority — user needs to know it's not their data
         env_msg = _classify_env_error(err)
         if env_msg:
@@ -540,8 +548,16 @@ async def execute_omicsclaw(
     # Auto-capture dataset + analysis memory
     if session_id:
         if input_path:
-            await _auto_capture_dataset(session_id, input_path, data_type)
-        await _auto_capture_analysis(session_id, skill_key, args, out_dir, True)
+            await _auto_capture_dataset(session_id, input_path, data_type, thread_id=thread_id)
+        # Bench (AN-ROUTER-10): a successful typed-consensus run records its
+        # lineage at the canonical thread-scoped namespace
+        # (analysis://<thread_id>/typed/<run_id>, ADR 0010/0018) — one record per
+        # run, readable by future meta-analysis. Returns False for non-consensus
+        # skills (and failed consensus runs), which keep the generic per-skill capture.
+        if not await _auto_capture_consensus(
+            session_id, skill_key, out_dir, True, thread_id=thread_id
+        ):
+            await _auto_capture_analysis(session_id, skill_key, args, out_dir, True, thread_id=thread_id)
 
     # Read result.json for preprocessing_state update and next_steps
     result_json = _read_result_json(out_dir)
@@ -971,8 +987,45 @@ async def execute_generate_audio(args: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def execute_parse_literature(args: dict) -> str:
-    """Execute literature parsing skill."""
+async def _register_literature_datasets(
+    out_dir: Path, session_id: str, thread_id: str
+) -> None:
+    """Register literature-downloaded datasets under the active thread (Phase 3.3b).
+
+    Reads the literature skill's ``result.json`` and captures each downloaded data
+    file as a ``DatasetMemory`` scoped to ``thread_id`` (so it lands under
+    ``dataset://<thread_id>/<basename>`` and Analyze in this thread can reference
+    it). The per-GSE ``metadata.json`` sidecar is skipped — it is not a dataset.
+    Never raises into the loop.
+    """
+    try:
+        result_path = out_dir / "result.json"
+        if not result_path.exists():
+            return
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+        data = payload.get("data", {}) or {}
+        platform = (data.get("metadata", {}) or {}).get("technology") or ""
+        for dl in data.get("download_results", []) or []:
+            if dl.get("status") not in ("success", "partial"):
+                continue
+            for f in dl.get("files", []) or []:
+                if Path(f).name == "metadata.json":
+                    continue
+                await _auto_capture_dataset(session_id, str(f), platform, thread_id=thread_id)
+    except Exception as e:
+        logger.warning(f"Literature dataset registration failed: {e}")
+
+
+async def execute_parse_literature(
+    args: dict, session_id: str | None = None, thread_id: str = ""
+) -> str:
+    """Execute literature parsing skill.
+
+    Bench (Phase 3.3b): on a successful download, each downloaded dataset is
+    registered under the active investigation thread (``dataset://<thread_id>/*``)
+    so Analyze in the same thread can reference it. The download itself is
+    permission-gated at the ToolSpec layer (approval_mode=ASK, ADR 0021).
+    """
     input_value = args.get("input_value", "")
     input_type = args.get("input_type", "auto")
     auto_download = args.get("auto_download", True)
@@ -1036,6 +1089,11 @@ async def execute_parse_literature(args: dict) -> str:
         if env_msg:
             return env_msg
         return f"Literature parsing failed (exit {proc.returncode}):\n{err}"
+
+    # Bench Phase 3.3b: register downloaded datasets under the active thread so
+    # Analyze in this thread can reference them (dataset://<thread_id>/<basename>).
+    if auto_download and session_id:
+        await _register_literature_datasets(out_dir, session_id, thread_id)
 
     # Read report
     report_file = out_dir / "report.md"
@@ -1571,30 +1629,68 @@ async def execute_remember(args: dict, session_id: str = None) -> str:
         return f"Error saving memory: {e}"
 
 
-async def execute_recall(args: dict, session_id: str = None) -> str:
-    """Retrieve memories from persistent storage."""
+async def _recall_fetch(sid: str, query: str, mem_type: str, limit: int, thread_id: str):
+    """One recall pass: query → search, else list-by-type/all. ``thread_id``
+    scopes to that thread (empty = unscoped, the cross-thread fallback pass)."""
+    store = _core.memory_store
+    if query:
+        return await store.search_memories(
+            sid, query, memory_type=mem_type or None, thread_id=thread_id
+        )
+    elif mem_type:
+        return await store.get_memories(sid, mem_type, limit=limit, thread_id=thread_id)
+    else:
+        return await store.get_memories(sid, limit=limit, thread_id=thread_id)
+
+
+async def execute_recall(args: dict, session_id: str = None, thread_id: str = "") -> str:
+    """Retrieve memories from persistent storage.
+
+    Bench (BE-RECALL-6): when a ``thread_id`` is active, recall defaults to that
+    investigation thread's memories, then appends cross-thread hits ranked lower
+    (ADR 0018 — cross-thread recall is a feature, not isolation). Empty thread_id
+    is the legacy unscoped recall.
+    """
     if not _core.memory_store:
         return _MEMORY_DISABLED_HINT
 
     try:
         mem_type = args.get("memory_type", "")
         query = args.get("query", "")
+        sid = session_id or ""
+        limit = int(args.get("limit", 10))
 
-        if query:
-            # Full-text search across memories
-            memories = await _core.memory_store.search_memories(
-                session_id or "", query, memory_type=mem_type or None
-            )
-        elif mem_type:
-            # List by type
-            memories = await _core.memory_store.get_memories(
-                session_id or "", mem_type, limit=int(args.get("limit", 10))
-            )
+        if thread_id:
+            def _gid(m):
+                return getattr(m, "memory_id", None)
+
+            primary = await _recall_fetch(sid, query, mem_type, limit, thread_id)
+            seen = {_gid(m) for m in primary}
+
+            # The user's explicitly-saved global memories (preference / insight /
+            # project_context) carry no thread_id, so the thread-scoped primary
+            # excludes them. On a no-query, no-type listing a busy thread's
+            # auto-captured dataset/analysis rows would otherwise crowd them out of
+            # the shared budget — so fetch them explicitly and always keep them.
+            globals_extra: list = []
+            if not query and not mem_type:
+                for gt in ("preference", "insight", "project_context"):
+                    for m in await _core.memory_store.get_memories(sid, gt, limit=limit):
+                        if _gid(m) not in seen:
+                            seen.add(_gid(m))
+                            globals_extra.append(m)
+
+            # Cross-thread hits (ranked lowest), de-duplicated by memory_id.
+            fallback = await _recall_fetch(sid, query, mem_type, limit, "")
+            cross = [m for m in fallback if _gid(m) not in seen]
+
+            # Thread rows + user globals are always shown; cross-thread fills the
+            # remaining budget up to ``limit``.
+            keep = primary + globals_extra
+            room = max(0, limit - len(keep))
+            memories = keep + cross[:room]
         else:
-            # Return all recent memories
-            memories = await _core.memory_store.get_memories(
-                session_id or "", limit=int(args.get("limit", 10))
-            )
+            memories = await _recall_fetch(sid, query, mem_type, limit, "")
 
         if not memories:
             return "No memories found."
@@ -2065,6 +2161,9 @@ def _available_tool_executors() -> dict[str, object]:
         "custom_analysis_execute": execute_custom_analysis_execute,
         "inspect_data": execute_inspect_data,
     }
+    # Bench Phase 3.1 (ADR 0019) — KG read tools, always registered; each
+    # executor soft-fails when the optional ``omicsclaw_kg`` package is absent.
+    executors.update(KG_TOOL_EXECUTORS)
     executors.update(
         build_engineering_tool_executors(
             omicsclaw_dir=OMICSCLAW_DIR,

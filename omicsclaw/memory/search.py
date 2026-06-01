@@ -28,6 +28,22 @@ if TYPE_CHECKING:
     from .database import DatabaseManager
 
 
+def _build_path_clause(path_prefix: str, params: Dict[str, Any]) -> str:
+    """SQL fragment scoping results to a path segment (Bench Phase 1).
+
+    Matches the exact ``path_prefix`` OR ``<path_prefix>/...`` sub-paths, so a
+    thread-scoped recall can limit to e.g. ``project://<thread_id>`` and its
+    children. Mutates ``params`` with the bound values. Empty prefix → no clause.
+    LIKE wildcards in the prefix are escaped (the trailing ``/%`` is the literal
+    sub-path wildcard).
+    """
+    if not path_prefix:
+        return ""
+    params["path_eq"] = path_prefix
+    params["path_like"] = escape_like_literal(path_prefix) + "/%"
+    return "AND (sd.path = :path_eq OR sd.path LIKE :path_like ESCAPE '\\')"
+
+
 class SearchIndexer:
     """FTS index maintenance and query engine.
 
@@ -377,6 +393,7 @@ class SearchIndexer:
         limit: int = 10,
         domain: Optional[str] = None,
         namespace: Optional[str] = None,
+        path_prefix: str = "",
     ) -> List[Dict[str, Any]]:
         """Search memories by path and content using the derived FTS index.
 
@@ -384,6 +401,10 @@ class SearchIndexer:
         namespace plus the shared partition; per-namespace hits are sorted
         ahead of shared ones. ``namespace=None`` preserves legacy
         unfiltered behavior for callers that haven't migrated.
+
+        ``path_prefix`` (Bench Phase 1) restricts results to a path segment —
+        the exact path OR ``<path_prefix>/...`` sub-paths — so a thread-scoped
+        recall can limit to ``project://<thread_id>/*`` etc. Empty = no scoping.
         """
         async with self._session() as session:
             candidate_limit = max(limit * 5, 50)
@@ -393,6 +414,8 @@ class SearchIndexer:
             if domain is not None:
                 params["domain"] = domain
                 domain_clause = "AND sd.domain = :domain"
+
+            path_clause = _build_path_clause(path_prefix, params)
 
             namespace_clause, namespace_order = "", ""
             if namespace is not None:
@@ -416,10 +439,11 @@ class SearchIndexer:
                         namespace_clause,
                         namespace_order,
                         limit,
+                        path_clause,
                     )
                 except Exception:
                     return await self._search_sqlite_like(
-                        session, query, limit, domain, namespace
+                        session, query, limit, domain, namespace, path_prefix
                     )
             else:
                 normalized = expand_query_terms(query)
@@ -461,6 +485,7 @@ class SearchIndexer:
                               ) @@ websearch_to_tsquery('simple', :ts_query)
                           {domain_clause}
                           {namespace_clause}
+                          {path_clause}
                         ORDER BY {namespace_order} score DESC, sd.priority ASC, char_length(sd.path) ASC
                         LIMIT :candidate_limit
                         """
@@ -479,6 +504,7 @@ class SearchIndexer:
         namespace_clause: str,
         namespace_order: str,
         limit: int,
+        path_clause: str = "",
     ) -> List[Dict[str, Any]]:
         """Search using SQLite FTS5."""
         match_query = self._to_sqlite_match_query(query)
@@ -512,6 +538,7 @@ class SearchIndexer:
                 WHERE search_documents_fts MATCH :match_query
                   {domain_clause}
                   {namespace_clause}
+                  {path_clause}
                 ORDER BY {namespace_order} score ASC, sd.priority ASC, length(sd.path) ASC
                 LIMIT :candidate_limit
                 """
@@ -527,6 +554,7 @@ class SearchIndexer:
         limit: int,
         domain: Optional[str],
         namespace: Optional[str],
+        path_prefix: str = "",
     ) -> List[Dict[str, Any]]:
         """Fallback search using LIKE when FTS5 is unavailable."""
         safe_query = f"%{escape_like_literal(query)}%"
@@ -536,6 +564,8 @@ class SearchIndexer:
         if domain:
             params["domain"] = domain
             domain_clause = "AND sd.domain = :domain"
+
+        path_clause = _build_path_clause(path_prefix, params)
 
         namespace_clause, namespace_order = "", ""
         if namespace is not None:
@@ -565,6 +595,7 @@ class SearchIndexer:
                 WHERE (sd.content LIKE :query ESCAPE '\\' OR sd.path LIKE :query ESCAPE '\\')
                   {domain_clause}
                   {namespace_clause}
+                  {path_clause}
                 ORDER BY {namespace_order} sd.priority ASC, length(sd.path) ASC
                 LIMIT :limit
                 """

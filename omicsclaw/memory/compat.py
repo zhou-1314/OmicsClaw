@@ -86,6 +86,12 @@ class Session(BaseModel):
     last_activity: datetime = Field(default_factory=_utcnow)
     preferences: dict[str, Any] = Field(default_factory=dict)
     active: bool = True
+    # Bench (ADR 0023 decision 3) — the investigation thread this conversation is
+    # bound to, stamped at lazy creation; empty = unbound (plain chat). Durable:
+    # the backend resolves thread_id = request.thread_id or session.thread_id, so
+    # binding survives turns that omit the field. Legacy session:// blobs lacking
+    # this field deserialize via the default.
+    thread_id: str = ""
 
 
 class BaseMemory(BaseModel):
@@ -107,6 +113,11 @@ class DatasetMemory(BaseMemory):
         "clustered", "annotated", "integrated", "preprocessed",
     ] = "raw"
     file_exists: bool = True
+    # Bench (ADR 0018) — investigation-thread scope; empty = legacy un-scoped.
+    # A permission-gated literature download (Phase 3.3b) stamps this so the
+    # dataset registers under dataset://<thread_id>/<basename>, visible to
+    # Analyze in the same thread. Mirrors AnalysisMemory.thread_id.
+    thread_id: str = ""
 
     @field_validator("file_path")
     @classmethod
@@ -128,6 +139,26 @@ class AnalysisMemory(BaseMemory):
     status: Literal["completed", "failed", "interrupted"] = "completed"
     executed_at: datetime = Field(default_factory=_utcnow)
     duration_seconds: float = 0.0
+    # Bench (ADR 0018) — investigation-thread scope; empty = legacy un-scoped.
+    thread_id: str = ""
+    # Bench AN-PROV-CAPTURE-13 (ADR 0022) — provenance index for the Write phase.
+    # All optional; empty/None = a legacy record (backward-compatible: older
+    # serialized AnalysisMemory blobs deserialize via these defaults).
+    #  - effective_params: the parameter set the run actually used (result.json
+    #    ``data.params`` for skills; operator+members for typed consensus).
+    #  - assisted_param_decision: the recompute-at-capture comparison of the
+    #    effective params vs the SKILL.md param-hint DEFAULTS —
+    #    ``{method, basis, recommended, accepted, overrides}`` — or None when the
+    #    skill/method has no param-hint recommendation. ``basis`` names what
+    #    ``recommended`` is (``skill_md_param_hint_defaults``): the deterministic
+    #    floor of ADR 0015's recommendation, NOT the LLM's ephemeral data-grounded
+    #    recommendation shown to the agent. Read it with that basis in mind.
+    #  - artifacts: output file NAMES (paths, not contents; bulky data stays on disk).
+    effective_params: dict[str, Any] = Field(default_factory=dict)
+    input_checksum: str = ""
+    skill_version: str = ""
+    artifacts: list[str] = Field(default_factory=list)
+    assisted_param_decision: dict[str, Any] | None = None
 
 
 class PreferenceMemory(BaseMemory):
@@ -160,6 +191,27 @@ class ProjectContextMemory(BaseMemory):
     disease_model: str | None = None
 
 
+class ThreadMemory(BaseMemory):
+    """Bench investigation-thread metadata (Phase 1, ADR 0018/0023).
+
+    Persisted at ``project://<thread_id>`` (versioned — see namespace_policy).
+    Shares the ``project`` domain with the legacy ``ProjectContextMemory``;
+    deserialization is disambiguated by the ``memory_type`` field in the stored
+    content (``_content_to_memory``), not by the shared domain. Soft-delete sets
+    ``is_deleted=True`` and re-versions rather than removing the record.
+    """
+    memory_type: Literal["thread"] = "thread"
+    thread_id: str
+    name: str = ""
+    description: str = ""
+    domains: list[str] = Field(default_factory=list)
+    organism: str | None = None
+    platforms: list[str] = Field(default_factory=list)
+    venue: str | None = None
+    preferences: dict[str, Any] = Field(default_factory=dict)
+    is_deleted: bool = False
+
+
 # =============================================================================
 # Type → URI domain mapping
 # =============================================================================
@@ -170,9 +222,16 @@ _TYPE_TO_DOMAIN = {
     "preference": "preference",
     "insight": "insight",
     "project_context": "project",
+    # Bench Phase 1: thread metadata shares the ``project`` domain (URI is
+    # project://<thread_id>); deserialization disambiguates by content memory_type.
+    "thread": "project",
 }
 
 _DOMAIN_TO_TYPE = {v: k for k, v in _TYPE_TO_DOMAIN.items()}
+# ``project`` maps to two types (project_context, thread); pin the reverse hint to
+# the legacy type. The read path (_content_to_memory) is authoritative on the
+# content's own memory_type, so this only affects the domain-derived fallback hint.
+_DOMAIN_TO_TYPE["project"] = "project_context"
 
 _TYPE_CLASSES = {
     "dataset": DatasetMemory,
@@ -180,19 +239,36 @@ _TYPE_CLASSES = {
     "preference": PreferenceMemory,
     "insight": InsightMemory,
     "project_context": ProjectContextMemory,
+    "thread": ThreadMemory,
 }
 
 
 def _memory_to_uri_path(memory: BaseMemory) -> str:
     """Convert a memory object to a URI path within its domain."""
     if isinstance(memory, DatasetMemory):
-        return memory.file_path.replace("/", "_")
+        # Bench (ADR 0018, Phase 3.3): scope a thread-bound dataset under its
+        # investigation thread (dataset://<thread_id>/<basename>) so Analyze in
+        # that thread sees it and threads stay isolated. Empty thread_id keeps
+        # the legacy flat dataset://<basename> (backward compatible).
+        basename = memory.file_path.replace("/", "_")
+        if memory.thread_id:
+            return f"{memory.thread_id}/{basename}"
+        return basename
     elif isinstance(memory, AnalysisMemory):
+        # Bench (ADR 0018): scope lineage under the investigation thread so a
+        # thread rolls up only its own runs (BE-RECALL-6 reads analysis://<id>/*).
+        # Empty thread_id preserves the legacy un-scoped path (backward compatible).
+        if memory.thread_id:
+            return f"{memory.thread_id}/{memory.skill}/{memory.memory_id}"
         return f"{memory.skill}/{memory.memory_id}"
     elif isinstance(memory, PreferenceMemory):
         return f"{memory.domain}/{memory.key}"
     elif isinstance(memory, InsightMemory):
         return f"{memory.entity_type}/{memory.entity_id}"
+    elif isinstance(memory, ThreadMemory):
+        # Bench Phase 1: thread metadata is addressed by its thread_id, i.e.
+        # project://<thread_id> (the thread node; per-thread content nests under it).
+        return memory.thread_id
     elif isinstance(memory, ProjectContextMemory):
         return memory.memory_id
     return memory.memory_id
@@ -204,8 +280,20 @@ def _memory_to_content(memory: BaseMemory) -> str:
 
 
 def _content_to_memory(content: str, memory_type: str) -> Optional[BaseMemory]:
-    """Deserialize graph memory content to a Pydantic model."""
-    cls = _TYPE_CLASSES.get(memory_type)
+    """Deserialize graph memory content to a Pydantic model.
+
+    The ``memory_type`` embedded in the stored content is authoritative — it
+    disambiguates types that share a domain (e.g. ``project_context`` vs
+    ``thread`` under ``project://``), where the domain-derived ``memory_type``
+    hint is necessarily ambiguous. Falls back to the passed hint when the
+    content carries no usable type.
+    """
+    embedded = None
+    try:
+        embedded = json.loads(content).get("memory_type")
+    except Exception:
+        embedded = None
+    cls = _TYPE_CLASSES.get(embedded) or _TYPE_CLASSES.get(memory_type)
     if not cls:
         return None
     try:
@@ -406,14 +494,22 @@ class CompatMemoryStore:
         namespace = f"{session.platform}/{session.user_id}"
         return self._client_for_namespace(namespace)
 
-    async def create_session(self, user_id: str, platform: str, chat_id: str = "", session_id: str = None) -> Session:
-        """Create a new session in the graph memory."""
+    async def create_session(
+        self, user_id: str, platform: str, chat_id: str = "", session_id: str = None,
+        thread_id: str = "",
+    ) -> Session:
+        """Create a new session in the graph memory.
+
+        ``thread_id`` (Bench, ADR 0023) binds the new session to an investigation
+        thread at creation; empty = unbound.
+        """
         await self.initialize()
         session_id = session_id or uuid.uuid4().hex[:16]
         session = Session(
             session_id=session_id,
             user_id=user_id,
             platform=platform,
+            thread_id=thread_id,
         )
 
         await self._client.remember(
@@ -493,7 +589,8 @@ class CompatMemoryStore:
         return memory.memory_id
 
     async def get_memories(
-        self, session_id: str, memory_type: Optional[str] = None, limit: int = 100
+        self, session_id: str, memory_type: Optional[str] = None, limit: int = 100,
+        thread_id: str = "",
     ) -> list[BaseMemory]:
         """Retrieve memories, optionally filtered by type.
 
@@ -502,6 +599,11 @@ class CompatMemoryStore:
         via the engine's read-fallback only on individual ``recall``
         calls — listings are strict, so shared keywords don't bleed
         into a per-user inventory.
+
+        ``thread_id`` (Bench Phase 1, BE-RECALL-6) restricts the inventory to
+        memories tagged with that investigation thread (dataset/analysis/thread
+        carry a ``thread_id``); empty = no scoping. The recall tool layers a
+        cross-thread fallback on top of this.
         """
         await self.initialize()
         client = await self._client_for_session(session_id)
@@ -530,11 +632,20 @@ class CompatMemoryStore:
                     if content != rec.content:
                         await client.remember(uri=child_uri, content=content)
                     obj = _content_to_memory(content, mtype)
-                    if obj:
-                        results.append(obj)
-                    else:
-                        # Not a valid leaf — recurse into this container node
+                    if obj is None:
+                        # Not a valid leaf — recurse into this container node.
                         await _collect(child_uri, mtype)
+                    elif (not mtype or obj.memory_type == mtype) and (
+                        not thread_id or getattr(obj, "thread_id", "") == thread_id
+                    ):
+                        results.append(obj)
+                    # else: a valid leaf of a DIFFERENT type than requested — skip.
+                    # ``client.list_children`` is not domain-scoped (engine lists by
+                    # namespace), and content-authoritative ``_content_to_memory``
+                    # deserializes any type successfully, so this explicit type gate
+                    # is what scopes a typed/per-domain pass to its own type. Without
+                    # it, types sharing a domain (project_context vs thread under
+                    # project://) leak across queries and the no-filter walk duplicates.
 
         if domain:
             await _collect(f"{domain}://", memory_type or "")
@@ -590,14 +701,20 @@ class CompatMemoryStore:
             pass
 
     async def search_memories(
-        self, session_id: str, query: str, memory_type: Optional[str] = None
+        self, session_id: str, query: str, memory_type: Optional[str] = None,
+        thread_id: str = "",
     ) -> list[BaseMemory]:
-        """Search memories by content within the session's namespace."""
+        """Search memories by content within the session's namespace.
+
+        ``thread_id`` (Bench Phase 1, BE-RECALL-6) scopes hits to that thread's
+        subtree (project://<id>/* + analysis://<id>/* + dataset://<id>/*, since
+        all three are thread-path-scoped). Empty = no scoping.
+        """
         await self.initialize()
         client = await self._client_for_session(session_id)
 
         domain = _TYPE_TO_DOMAIN.get(memory_type) if memory_type else None
-        results = await client.search(query, limit=20, domain=domain)
+        results = await client.search(query, limit=20, domain=domain, path_prefix=thread_id)
 
         memories = []
         for r in results:
@@ -608,7 +725,10 @@ class CompatMemoryStore:
             rd = r.get("domain", "")
             mt = _DOMAIN_TO_TYPE.get(rd, memory_type or "")
             obj = _content_to_memory(content, mt)
-            if obj:
+            # Type gate: when a specific type was requested, drop other types that
+            # share the domain (e.g. project_context vs thread under project://) —
+            # content-authoritative deserialization no longer filters them for us.
+            if obj is not None and (not memory_type or obj.memory_type == memory_type):
                 memories.append(obj)
 
         return memories
@@ -641,5 +761,22 @@ class CompatMemoryStore:
                 parts.append(f"## {section_name}\n" + "\n".join(items))
 
         return "\n\n".join(parts) if parts else ""
+
+    async def recall_agent_uri(self, session_id: str, uri: str) -> str:
+        """Recall a core/shared URI's raw content (BE-PERSONA-BOOT-9 — the agent's
+        ``core://agent/research_stance`` persona layer).
+
+        Reads through the session's client (so a per-user ``core://agent/*``
+        override wins, with shared fallback); returns ``""`` when the row is absent
+        or anything fails, so the persona layer degrades to a no-op."""
+        try:
+            await self.initialize()
+            client = (
+                await self._client_for_session(session_id) if session_id else self._client
+            )
+            record = await client.recall(uri)
+            return record.content if (record is not None and record.content) else ""
+        except Exception:
+            return ""
 
     # ------------------------------------------------------------------

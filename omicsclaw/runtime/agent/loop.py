@@ -1060,6 +1060,9 @@ async def llm_tool_loop(
     system_prompt_append: str = "",
     mode: str = "",
     analysis_router_mode: str | None = None,
+    # Bench — investigation thread (ADR 0018) + lifecycle stage lens (ADR 0020).
+    thread_id: str = "",
+    stage: str = "",
     usage_accumulator=None,
     request_tool_approval=None,
     policy_state=None,
@@ -1179,6 +1182,8 @@ async def llm_tool_loop(
             exact_skill_assisted_param_context,
         ),
         mode=mode,
+        thread_id=thread_id,
+        stage=stage,
         request_tool_approval=request_tool_approval,
         policy_state=policy_state,
         cancel_event=cancel_event,

@@ -17,6 +17,15 @@ from ..spec import (
     ToolSpec,
 )
 
+# OmicsClaw-KG wiki page types (mirror ``omicsclaw_kg.paths.WIKI_SUBDIRS``) — used
+# in the ``kg_*`` read-tool schemas. Kept as a literal on purpose: importing the
+# optional KG package at tool-spec build time would make the frozen tool list
+# differ by environment, breaking the cache-stable prefix invariant (ADR 0024).
+_KG_PAGE_TYPES: tuple[str, ...] = (
+    "sources", "entities", "concepts", "methods", "comparisons",
+    "syntheses", "hypotheses", "questions", "topics", "experiments",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class BotToolContext:
@@ -208,7 +217,9 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                 "required": ["skill", "mode"],
             },
             surfaces=("bot",),
-            context_params=("session_id", "chat_id", "cancel_event"),
+            # Bench (ADR 0018) — thread_id rides tool_runtime_context into
+            # execute_omicsclaw to scope auto-captured analysis:// lineage.
+            context_params=("session_id", "chat_id", "cancel_event", "thread_id"),
             read_only=False,
             concurrency_safe=False,
             result_policy=RESULT_POLICY_SUMMARY_OR_MEDIA,
@@ -393,8 +404,17 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                 "required": ["input_value"],
             },
             surfaces=("bot",),
+            # Bench (ADR 0021, Phase 3.3b) — the download is a permission-gated
+            # PROPOSAL, never automatic. approval_mode=ASK routes the call through
+            # request_tool_approval on surfaces that support it (desktop); on
+            # surfaces without an approval callback (channels/CLI) it is blocked
+            # with a message, consistent with the other write/network ASK tools
+            # (move_file/remove_file/file_write). context_params deliver session +
+            # thread so a downloaded dataset registers under dataset://<thread_id>/*.
+            context_params=("session_id", "thread_id"),
             read_only=False,
             concurrency_safe=False,
+            approval_mode=APPROVAL_MODE_ASK,
             risk_level=RISK_LEVEL_MEDIUM,
             writes_workspace=True,
             touches_network=True,
@@ -640,7 +660,10 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                 },
             },
             surfaces=("bot",),
-            context_params=("session_id",),
+            # Bench (BE-RECALL-6) — thread_id rides tool_runtime_context so recall
+            # defaults to the active investigation thread (with a cross-thread
+            # fallback ranked lower). Empty thread_id = legacy unscoped recall.
+            context_params=("session_id", "thread_id"),
             read_only=True,
             concurrency_safe=True,
             policy_tags=("memory", "knowledge"),
@@ -751,6 +774,265 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
             concurrency_safe=True,
             result_policy=RESULT_POLICY_KNOWLEDGE_REFERENCE,
             policy_tags=("knowledge", "reference"),
+        ),
+        # ---- OmicsClaw-KG read tools (Bench Phase 3.1, ADR 0019) -------------
+        # Read-only knowledge-graph retrieval over the cross-research reading
+        # base. Always registered; their executors soft-fail when the optional
+        # ``omicsclaw_kg`` package is absent. Read-stage allow-listed (registry.py).
+        ToolSpec(
+            name="kg_search",
+            description=(
+                "Search the OmicsClaw knowledge graph — a wiki + graph built from "
+                "previously-ingested papers and reading notes — with BM25 ranking. "
+                "Use when the user asks what is already known about a topic, gene, "
+                "method, or hypothesis, or to find source pages before reading them. "
+                "Returns ranked page hits (page_type/slug, title, score)."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Free-text search query.",
+                    },
+                    "page_type": {
+                        "type": "string",
+                        "enum": list(_KG_PAGE_TYPES),
+                        "description": "Restrict to one wiki page type. Omit to search all.",
+                    },
+                    "state": {
+                        "type": "string",
+                        "description": "Restrict to pages with this lifecycle state.",
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "draft", "submitted", "testing",
+                            "validated", "refuted", "refined",
+                        ],
+                        "description": "Restrict hypothesis pages to this status.",
+                    },
+                    "field": {
+                        "type": "string",
+                        "enum": ["title", "body", "frontmatter"],
+                        "description": "Restrict scoring to a single field.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results. Default 10.",
+                    },
+                },
+                "required": ["query"],
+            },
+            surfaces=("bot",),
+            read_only=True,
+            concurrency_safe=True,
+            result_policy=RESULT_POLICY_KNOWLEDGE_REFERENCE,
+            policy_tags=("knowledge", "graph", "reference"),
+        ),
+        ToolSpec(
+            name="kg_get_page",
+            description=(
+                "Fetch one knowledge-graph wiki page (frontmatter + body) by type "
+                "and slug — typically a hit returned by `kg_search`. Use to read the "
+                "full content of a source, concept, method, or hypothesis page."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "page_type": {
+                        "type": "string",
+                        "enum": list(_KG_PAGE_TYPES),
+                        "description": "The page's wiki type.",
+                    },
+                    "slug": {
+                        "type": "string",
+                        "description": "The page slug (filename without .md).",
+                    },
+                    "include_notes": {
+                        "type": "boolean",
+                        "description": "Include the human-owned `## Notes` section. Default false.",
+                    },
+                },
+                "required": ["page_type", "slug"],
+            },
+            surfaces=("bot",),
+            read_only=True,
+            concurrency_safe=True,
+            result_policy=RESULT_POLICY_KNOWLEDGE_REFERENCE,
+            policy_tags=("knowledge", "graph", "reference"),
+        ),
+        ToolSpec(
+            name="kg_list_pages",
+            description=(
+                "List knowledge-graph pages of a given type, optionally filtered by "
+                "lifecycle state or hypothesis status. Use to browse what exists in a "
+                "category (e.g. all hypotheses still in `testing`)."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "page_type": {
+                        "type": "string",
+                        "enum": list(_KG_PAGE_TYPES),
+                        "description": "Which wiki page type to list.",
+                    },
+                    "state": {
+                        "type": "string",
+                        "description": "Filter by frontmatter `state`.",
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "draft", "submitted", "testing",
+                            "validated", "refuted", "refined",
+                        ],
+                        "description": "Filter hypothesis pages by status.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max entries. Default 50.",
+                    },
+                },
+                "required": ["page_type"],
+            },
+            surfaces=("bot",),
+            read_only=True,
+            concurrency_safe=True,
+            result_policy=RESULT_POLICY_KNOWLEDGE_REFERENCE,
+            policy_tags=("knowledge", "graph", "reference"),
+        ),
+        ToolSpec(
+            name="kg_graph_neighbors",
+            description=(
+                "Return the graph neighborhood of a knowledge-graph node (entities, "
+                "concepts, methods and the typed edges between them). Use to explore "
+                "how a gene/concept relates to others. `node_id` accepts a typed id "
+                "('entity:tp53') or a bare slug ('tp53')."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "node_id": {
+                        "type": "string",
+                        "description": "Graph node id (typed 'entity:tp53' or bare slug 'tp53').",
+                    },
+                    "depth": {
+                        "type": "integer",
+                        "description": "Hop count, 1-3. Default 1.",
+                    },
+                },
+                "required": ["node_id"],
+            },
+            surfaces=("bot",),
+            read_only=True,
+            concurrency_safe=True,
+            result_policy=RESULT_POLICY_KNOWLEDGE_REFERENCE,
+            policy_tags=("knowledge", "graph", "reference"),
+        ),
+        ToolSpec(
+            name="kg_status",
+            description=(
+                "Report knowledge-graph size: wiki page counts per type, total graph "
+                "nodes/edges, and node/edge breakdowns. Use to check whether the "
+                "knowledge base has content before searching, or to summarize its scope."
+            ),
+            parameters={"type": "object", "properties": {}},
+            surfaces=("bot",),
+            read_only=True,
+            concurrency_safe=True,
+            result_policy=RESULT_POLICY_KNOWLEDGE_REFERENCE,
+            policy_tags=("knowledge", "graph", "reference"),
+        ),
+        ToolSpec(
+            name="kg_recent_log",
+            description=(
+                "Return recent knowledge-graph activity log entries (newest first) — "
+                "ingests, handoffs, recorded results. Use to see what was recently "
+                "added to or done in the knowledge base."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max entries. Default 20.",
+                    },
+                    "event_type": {
+                        "type": "string",
+                        "description": "Filter to a single event_type (e.g. ingest, handoff).",
+                    },
+                },
+            },
+            surfaces=("bot",),
+            read_only=True,
+            concurrency_safe=True,
+            result_policy=RESULT_POLICY_KNOWLEDGE_REFERENCE,
+            policy_tags=("knowledge", "graph", "reference"),
+        ),
+        ToolSpec(
+            name="kg_communities",
+            description=(
+                "Detect knowledge clusters in the graph and return the largest N with "
+                "their key nodes. Use to get a high-level map of the major themes in "
+                "the knowledge base."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max communities (largest first). Default 10.",
+                    },
+                    "algorithm": {
+                        "type": "string",
+                        "enum": ["louvain", "greedy"],
+                        "description": "Community detection algorithm. Default louvain.",
+                    },
+                },
+            },
+            surfaces=("bot",),
+            read_only=True,
+            concurrency_safe=True,
+            result_policy=RESULT_POLICY_KNOWLEDGE_REFERENCE,
+            policy_tags=("knowledge", "graph", "reference"),
+        ),
+        # KG ingest (Bench Phase 3.3c, RD-INGEST-9) — the one KG *write* tool in
+        # Read: builds the citation substrate (Source pages) the agent cites.
+        # AUTO-approved and thread-agnostic (ADR 0019: KG is shared reading
+        # knowledge; the gated action is the dataset download, not ingest).
+        # Soft-fails when KG/LLM is absent (kg_tools.execute_kg_ingest).
+        ToolSpec(
+            name="kg_ingest",
+            description=(
+                "Ingest a paper or source into the OmicsClaw knowledge graph, creating "
+                "a Source page (and extracting entities / concepts / methods) that later "
+                "answers can cite. Use when the user drops or links a paper to read. "
+                "Pass `source` as a local file path or http(s) URL, or omit it to ingest "
+                "a freshly dropped PDF. The knowledge base is shared across research "
+                "(not thread-specific)."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "description": (
+                            "A local file path or http(s) URL to ingest. "
+                            "Omit to use a dropped PDF."
+                        ),
+                    },
+                },
+            },
+            surfaces=("bot",),
+            context_params=("session_id",),
+            read_only=False,
+            concurrency_safe=False,
+            result_policy=RESULT_POLICY_KNOWLEDGE_REFERENCE,
+            risk_level=RISK_LEVEL_MEDIUM,
+            writes_workspace=True,  # persists Source pages + raw store to the KG home
+            touches_network=True,
+            policy_tags=("knowledge", "graph", "ingest"),
         ),
         ToolSpec(
             name="resolve_capability",

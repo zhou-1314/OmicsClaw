@@ -212,6 +212,10 @@ def test_register_optional_kg_router_mounts_embedded_routes(monkeypatch, tmp_pat
 
     from omicsclaw.surfaces.desktop import server
 
+    # Phase 3.2: the mount mutates the module _KG_AVAILABLE flag; snapshot for restore.
+    monkeypatch.setattr(server, "_KG_AVAILABLE", server._KG_AVAILABLE)
+    monkeypatch.setattr(server, "_KG_IMPORT_ERROR", server._KG_IMPORT_ERROR)
+
     kg_root = ModuleType("omicsclaw_kg")
     kg_config = ModuleType("omicsclaw_kg.config")
     kg_http_api = ModuleType("omicsclaw_kg.http_api")
@@ -248,6 +252,7 @@ def test_register_optional_kg_router_mounts_embedded_routes(monkeypatch, tmp_pat
 
     app = FastAPI()
     server._register_optional_kg_router(app)
+    assert server._KG_AVAILABLE is True  # Phase 3.2: a successful mount marks KG available
     client = TestClient(app)
 
     workspace_root = tmp_path / "workspace"
@@ -258,6 +263,142 @@ def test_register_optional_kg_router_mounts_embedded_routes(monkeypatch, tmp_pat
     assert response.json() == {
         "workspace": str((workspace_root / ".omicsclaw" / "knowledge").resolve())
     }
+
+
+def test_register_optional_kg_router_marks_unavailable_when_package_missing(monkeypatch):
+    """When omicsclaw_kg is not importable, the flag is False, /kg is not mounted,
+    and the payload surfaces the unavailability + diagnostic (Bench Phase 3.2)."""
+    pytest.importorskip("fastapi")
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from omicsclaw.surfaces.desktop import server
+
+    monkeypatch.setattr(server, "_KG_AVAILABLE", server._KG_AVAILABLE)
+    monkeypatch.setattr(server, "_KG_IMPORT_ERROR", server._KG_IMPORT_ERROR)
+
+    real_find_spec = importlib.util.find_spec
+
+    def fake_find_spec(name, *args, **kwargs):
+        if name == "omicsclaw_kg":
+            return None
+        return real_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
+
+    fresh = FastAPI()
+    server._register_optional_kg_router(fresh)
+
+    assert server._KG_AVAILABLE is False
+    assert server._KG_IMPORT_ERROR  # non-empty diagnostic
+    # /kg routes are NOT mounted on the fresh app.
+    assert TestClient(fresh).get("/kg/status").status_code == 404
+
+    # The /health KG sub-payload reflects the unavailable flag + diagnostic.
+    payload = server._kg_status_payload()
+    assert payload["available"] is False
+    assert payload["home"] == ""
+    assert payload["import_error"] == server._KG_IMPORT_ERROR
+
+
+def test_kg_status_payload_available_when_package_present(monkeypatch):
+    """With omicsclaw_kg present, a fresh mount marks it available and the payload
+    reports available=True with a (possibly empty) home string, no error key."""
+    pytest.importorskip("fastapi")
+    pytest.importorskip("omicsclaw_kg")
+
+    from fastapi import FastAPI
+
+    from omicsclaw.surfaces.desktop import server
+
+    monkeypatch.setattr(server, "_KG_AVAILABLE", server._KG_AVAILABLE)
+    monkeypatch.setattr(server, "_KG_IMPORT_ERROR", server._KG_IMPORT_ERROR)
+
+    server._register_optional_kg_router(FastAPI())  # real package present -> available
+    assert server._KG_AVAILABLE is True
+
+    payload = server._kg_status_payload()
+    assert payload["available"] is True
+    assert isinstance(payload["home"], str)  # home key always present when available
+    assert "import_error" not in payload  # only included when unavailable
+
+
+def test_health_endpoint_includes_kg_block(monkeypatch):
+    """End-to-end: the /health endpoint wires in the KG availability sub-payload
+    (Bench Phase 3.2). Uses a stubbed core so the endpoint runs without startup."""
+    pytest.importorskip("fastapi")
+
+    from fastapi.testclient import TestClient
+
+    from omicsclaw.surfaces.desktop import server
+
+    monkeypatch.setattr(server, "_KG_AVAILABLE", True)
+    monkeypatch.setattr(server, "_KG_IMPORT_ERROR", "")
+
+    fake_core = SimpleNamespace(
+        LLM_PROVIDER_NAME="test-provider",
+        OMICSCLAW_MODEL="test-model",
+        _primary_skill_count=lambda: 0,
+        get_skill_runner_python=lambda: sys.executable,
+    )
+    monkeypatch.setattr(server, "_get_core", lambda: fake_core)
+
+    body = TestClient(server.app).get("/health").json()
+    assert body["status"] == "ok"
+    assert body["kg"]["available"] is True
+    assert "home" in body["kg"]
+
+
+def test_register_optional_kg_router_marks_unavailable_on_import_error(monkeypatch):
+    """find_spec passes but the submodule import raises ImportError -> flag False
+    and _KG_IMPORT_ERROR captures str(exc) (Bench Phase 3.2, ImportError branch)."""
+    pytest.importorskip("fastapi")
+
+    from fastapi import FastAPI
+
+    from omicsclaw.surfaces.desktop import server
+
+    monkeypatch.setattr(server, "_KG_AVAILABLE", server._KG_AVAILABLE)
+    monkeypatch.setattr(server, "_KG_IMPORT_ERROR", server._KG_IMPORT_ERROR)
+
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name, *a, **k: (object() if name == "omicsclaw_kg" else real_find_spec(name, *a, **k)),
+    )
+    # Replace omicsclaw_kg with a non-package module so `from omicsclaw_kg import config`
+    # raises ImportError (find_spec already returned truthy above).
+    monkeypatch.setitem(sys.modules, "omicsclaw_kg", ModuleType("omicsclaw_kg"))
+    monkeypatch.delitem(sys.modules, "omicsclaw_kg.config", raising=False)
+    monkeypatch.delitem(sys.modules, "omicsclaw_kg.http_api", raising=False)
+
+    server._register_optional_kg_router(FastAPI())
+
+    assert server._KG_AVAILABLE is False
+    assert server._KG_IMPORT_ERROR  # str(exc) captured from the ImportError branch
+
+
+def test_resolve_shared_kg_home_mirrors_embedded_kg_config_precedence(monkeypatch):
+    """OMICSCLAW_KG_HOME wins (resolved); else OMICSCLAW_WORKSPACE is coerced to its
+    .omicsclaw/knowledge home (resolved); else empty (Bench Phase 3.2). The
+    .resolve() matches what the /kg routes serve via KGConfig."""
+    from omicsclaw.surfaces.desktop import server
+
+    monkeypatch.setenv("OMICSCLAW_KG_HOME", "/explicit/kg")
+    monkeypatch.setenv("OMICSCLAW_WORKSPACE", "/some/ws")
+    assert server._resolve_shared_kg_home() == str(Path("/explicit/kg").resolve())
+
+    monkeypatch.delenv("OMICSCLAW_KG_HOME", raising=False)
+    assert server._resolve_shared_kg_home() == str(
+        (Path("/some/ws") / ".omicsclaw" / "knowledge").resolve()
+    )
+
+    # Third branch: neither env set and no workspace fallback -> empty string.
+    monkeypatch.delenv("OMICSCLAW_WORKSPACE", raising=False)
+    monkeypatch.setattr(server, "_resolve_scoped_memory_workspace", lambda *a, **k: "")
+    assert server._resolve_shared_kg_home() == ""
 
 
 def test_notebook_file_routes_round_trip_through_backend_router(monkeypatch, tmp_path):

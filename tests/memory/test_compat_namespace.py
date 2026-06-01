@@ -19,11 +19,66 @@ import pytest_asyncio
 import sqlalchemy as sa
 
 from omicsclaw.memory.compat import (
+    AnalysisMemory,
     CompatMemoryStore,
     DatasetMemory,
     PreferenceMemory,
+    ProjectContextMemory,
+    ThreadMemory,
+    _content_to_memory,
+    _memory_to_uri_path,
 )
 from omicsclaw.memory.models import Path
+
+
+def test_dataset_memory_uri_scopes_under_thread_id():
+    # Bench (ADR 0018, Phase 3.3): a set thread_id scopes a downloaded dataset
+    # under its investigation thread (dataset://<thread_id>/<basename>) so Analyze
+    # in that thread sees it; empty thread_id keeps the legacy flat dataset URI.
+    legacy = DatasetMemory(file_path="GSE12345/matrix.h5ad")
+    assert _memory_to_uri_path(legacy) == "GSE12345_matrix.h5ad"
+
+    scoped = DatasetMemory(file_path="GSE12345/matrix.h5ad", thread_id="t-glioma")
+    assert _memory_to_uri_path(scoped) == "t-glioma/GSE12345_matrix.h5ad"
+
+
+def test_thread_memory_uri_is_thread_id():
+    # Bench Phase 1: thread metadata is addressed by its thread_id → project://<thread_id>.
+    tm = ThreadMemory(thread_id="t-glioma", name="Glioma study")
+    assert _memory_to_uri_path(tm) == "t-glioma"
+
+
+def test_thread_memory_roundtrips_via_content_authoritative_type():
+    # ThreadMemory and ProjectContextMemory share the "project" domain. Deserialization
+    # must use the content's embedded memory_type, NOT the (ambiguous) domain hint:
+    # passing the WRONG hint still reconstructs the right class.
+    tm = ThreadMemory(thread_id="t1", name="N", domains=["spatial"], is_deleted=False)
+    back = _content_to_memory(tm.model_dump_json(), "project_context")  # wrong hint
+    assert isinstance(back, ThreadMemory)
+    assert back.thread_id == "t1" and back.name == "N" and back.domains == ["spatial"]
+
+    pc = ProjectContextMemory(project_goal="map the TME")
+    back2 = _content_to_memory(pc.model_dump_json(), "thread")  # wrong hint, other way
+    assert isinstance(back2, ProjectContextMemory)
+    assert back2.project_goal == "map the TME"
+
+
+def test_project_context_memory_uri_unchanged():
+    pc = ProjectContextMemory(project_goal="x")
+    assert _memory_to_uri_path(pc) == pc.memory_id
+
+
+def test_analysis_memory_uri_scopes_under_thread_id():
+    # Bench (ADR 0018): a set thread_id scopes the analysis:// lineage under the
+    # investigation thread so a thread rolls up only its own runs (BE-RECALL-6
+    # reads analysis://<id>/*); empty thread_id keeps the legacy un-scoped path.
+    legacy = AnalysisMemory(source_dataset_id="", skill="spatial-domains", method="leiden")
+    assert _memory_to_uri_path(legacy) == f"spatial-domains/{legacy.memory_id}"
+
+    scoped = AnalysisMemory(
+        source_dataset_id="", skill="spatial-domains", method="leiden", thread_id="t-glioma"
+    )
+    assert _memory_to_uri_path(scoped) == f"t-glioma/spatial-domains/{scoped.memory_id}"
 
 
 @pytest_asyncio.fixture
@@ -72,6 +127,75 @@ async def test_get_session_round_trips(store):
 # ----------------------------------------------------------------------
 # Memory storage uses session-derived namespace
 # ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_memories_type_gate_with_shared_project_domain(store):
+    """Bench Phase 1 regression: project_context and thread share the project://
+    domain, and content-authoritative deserialization no longer drops wrong-type
+    rows — so get_memories must re-apply the requested type filter. Without the
+    gate: no-filter duplicates 6x, typed queries bleed across types, and
+    get_memories('project_context') can return a ThreadMemory (crashing the
+    production context loader on .project_goal)."""
+    session = await store.create_session("user42", "telegram")
+    sid = session.session_id
+    await store.save_memory(sid, ProjectContextMemory(project_goal="map the TME"))
+    await store.save_memory(sid, ThreadMemory(thread_id="t1", name="Glioma"))
+    await store.save_memory(sid, DatasetMemory(file_path="pbmc.h5ad"))
+
+    # No-filter: exactly one of each type, no duplication.
+    everything = await store.get_memories(sid)
+    types = sorted(m.memory_type for m in everything)
+    assert types == ["dataset", "project_context", "thread"], types
+
+    # Typed queries are isolated — no cross-type bleed in the shared project domain.
+    pcs = await store.get_memories(sid, "project_context")
+    assert [m.memory_type for m in pcs] == ["project_context"]
+    assert isinstance(pcs[0], ProjectContextMemory) and pcs[0].project_goal == "map the TME"
+
+    threads = await store.get_memories(sid, "thread")
+    assert [m.memory_type for m in threads] == ["thread"]
+    assert isinstance(threads[0], ThreadMemory) and threads[0].thread_id == "t1"
+
+    datasets = await store.get_memories(sid, "dataset")
+    assert [m.memory_type for m in datasets] == ["dataset"]
+
+    # load_context must not crash (it calls get_memories('project_context') then
+    # reads .project_goal) and renders the project goal exactly once.
+    ctx = await store.load_context(sid)
+    assert isinstance(ctx, str)
+    assert ctx.count("map the TME") == 1
+
+
+@pytest.mark.asyncio
+async def test_thread_scoped_get_and_search_memories(store):
+    """Bench Phase 1 (BE-RECALL-6): get_memories/search_memories accept thread_id
+    and scope to that thread's tagged rows; empty thread_id is unscoped."""
+    session = await store.create_session("u", "telegram")
+    sid = session.session_id
+    await store.save_memory(sid, DatasetMemory(file_path="alpha.h5ad", thread_id="A"))
+    await store.save_memory(sid, DatasetMemory(file_path="beta.h5ad", thread_id="B"))
+    await store.save_memory(
+        sid, AnalysisMemory(source_dataset_id="", skill="sc-de", method="x", thread_id="A")
+    )
+
+    # get_memories scoped to thread A → only A-tagged rows (across types).
+    a_ds = await store.get_memories(sid, "dataset", thread_id="A")
+    assert [m.file_path for m in a_ds] == ["alpha.h5ad"]
+    a_all = await store.get_memories(sid, thread_id="A")
+    assert all(getattr(m, "thread_id", "") == "A" for m in a_all)
+    assert {m.memory_type for m in a_all} == {"dataset", "analysis"}
+
+    # Unscoped get_memories sees both threads' datasets (legacy behavior).
+    all_ds = await store.get_memories(sid, "dataset")
+    assert sorted(m.file_path for m in all_ds) == ["alpha.h5ad", "beta.h5ad"]
+
+    # search scoped to A finds A's dataset only (path_prefix).
+    hits_a = await store.search_memories(sid, "h5ad", memory_type="dataset", thread_id="A")
+    assert hits_a and all(getattr(m, "thread_id", "") == "A" for m in hits_a)
+    # search scoped to B finds B's dataset only.
+    hits_b = await store.search_memories(sid, "h5ad", memory_type="dataset", thread_id="B")
+    assert [m.file_path for m in hits_b] == ["beta.h5ad"]
 
 
 @pytest.mark.asyncio

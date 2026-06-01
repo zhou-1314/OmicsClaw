@@ -1052,15 +1052,20 @@ class MemoryEngine:
         namespace: str,
         domain: Optional[str] = None,
         limit: int = 10,
+        path_prefix: str = "",
     ) -> list[dict]:
         """Full-text search restricted to ``namespace`` + ``__shared__``.
 
         Per-namespace hits are returned ahead of shared hits when scores
         are otherwise comparable. Each result dict carries a
         ``namespace`` key indicating which partition the hit came from.
+
+        ``path_prefix`` (Bench Phase 1) further scopes hits to a path segment
+        (exact or ``<path_prefix>/...`` sub-paths) — e.g. a thread's subtree.
         """
         return await self._search.search(
-            query, limit=limit, domain=domain, namespace=namespace
+            query, limit=limit, domain=domain, namespace=namespace,
+            path_prefix=path_prefix,
         )
 
     async def list_children(

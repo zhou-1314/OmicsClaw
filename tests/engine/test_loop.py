@@ -22,6 +22,7 @@ from omicsclaw.engine import (
 from omicsclaw.engine.loop import (
     _maybe_append_caller_addition,
     _maybe_append_mode_hint,
+    _maybe_append_stage_fragment,
     resolve_max_prompt_chars,
 )
 import omicsclaw.engine.loop as _engine_loop
@@ -123,6 +124,26 @@ class TestMaybeAppendModeHint:
         result = _maybe_append_mode_hint("base", "plan")
         assert "## Mode" in result
         assert "plan mode" in result
+
+
+class TestMaybeAppendStageFragment:
+    # Bench (ADR 0020): stage stance fragment is additive; empty/unknown = no-op.
+    def test_empty_stage_is_no_op(self) -> None:
+        assert _maybe_append_stage_fragment("base", "") == "base"
+
+    def test_unknown_stage_is_no_op(self) -> None:
+        assert _maybe_append_stage_fragment("base", "bogus") == "base"
+
+    def test_read_stage_appends_section(self) -> None:
+        result = _maybe_append_stage_fragment("base", "read")
+        assert "## Stage" in result
+        assert "Read" in result
+        assert result.startswith("base")
+
+    def test_analyze_stage_appends_section(self) -> None:
+        result = _maybe_append_stage_fragment("base", "analyze")
+        assert "## Stage" in result
+        assert "Analyze" in result
 
 
 def test_max_tool_iterations_env_override(monkeypatch: pytest.MonkeyPatch) -> None:

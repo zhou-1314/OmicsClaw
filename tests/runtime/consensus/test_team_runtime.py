@@ -76,6 +76,20 @@ def test_namespace_split_per_adr_0010() -> None:
     assert consensus_namespace("run42", "narrative") == "analysis://exploratory/run42"
 
 
+def test_namespace_scopes_under_thread_id_when_set() -> None:
+    # Bench (ADR 0018): a set thread_id scopes the run's lineage under the
+    # investigation thread; empty thread_id preserves the legacy URIs.
+    assert consensus_namespace("run42", "typed", thread_id="") == "analysis://typed/run42"
+    assert (
+        consensus_namespace("run42", "typed", thread_id="t-glioma")
+        == "analysis://t-glioma/typed/run42"
+    )
+    assert (
+        consensus_namespace("run42", "narrative", thread_id="t-glioma")
+        == "analysis://t-glioma/exploratory/run42"
+    )
+
+
 def test_output_banner_mentions_verification_state() -> None:
     assert "Verified" in output_banner("typed")
     assert "Exploratory" in output_banner("narrative")

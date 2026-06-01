@@ -29,15 +29,18 @@ def fake_store():
             self.calls.append(("get_session", (session_id,), {}))
             return self.sessions.get(session_id)
 
-        async def create_session(self, user_id, platform, chat_id, *, session_id):
+        async def create_session(self, user_id, platform, chat_id, *, session_id, thread_id=""):
+            # thread_id mirrors CompatMemoryStore.create_session (Bench, ADR 0023).
             self.calls.append(
-                ("create_session", (user_id, platform, chat_id), {"session_id": session_id})
+                ("create_session", (user_id, platform, chat_id),
+                 {"session_id": session_id, "thread_id": thread_id})
             )
             self.sessions[session_id] = {
                 "user_id": user_id,
                 "platform": platform,
                 "chat_id": chat_id,
                 "session_id": session_id,
+                "thread_id": thread_id,
                 "created_at": datetime.now(timezone.utc),
             }
             return self.sessions[session_id]
@@ -47,8 +50,13 @@ def fake_store():
             self.sessions[session_id].update(fields)
             return self.sessions[session_id]
 
-        async def get_memories(self, session_id, kind, *, limit):
-            self.calls.append(("get_memories", (session_id, kind), {"limit": limit}))
+        async def get_memories(self, session_id, kind, *, limit, thread_id=""):
+            # thread_id mirrors CompatMemoryStore.get_memories (Bench, BE-RECALL-6 /
+            # AN-CTXRECALL-11). load_context passes it only for the thread-carrying
+            # types (dataset/analysis); the global types call without it.
+            self.calls.append(
+                ("get_memories", (session_id, kind), {"limit": limit, "thread_id": thread_id})
+            )
             return []
 
     return _FakeStore()
@@ -132,7 +140,7 @@ async def test_session_manager_load_context_swallows_per_kind_errors(fake_store)
     production loader, so this test pins that behaviour."""
     from omicsclaw.runtime.agent.session import SessionManager
 
-    async def _flaky_get_memories(session_id, kind, *, limit):
+    async def _flaky_get_memories(session_id, kind, *, limit, thread_id=""):
         if kind == "dataset":
             raise RuntimeError("decryption failed")
         if kind == "preference":
@@ -147,6 +155,49 @@ async def test_session_manager_load_context_swallows_per_kind_errors(fake_store)
     assert "**User Preferences**" in ctx
     assert "theme: dark" in ctx
     assert "**Current Dataset**" not in ctx
+
+
+@pytest.mark.asyncio
+async def test_load_context_scopes_only_thread_carrying_types(fake_store):
+    """AN-CTXRECALL-11: passive injection scopes ONLY the thread-carrying types.
+
+    ``dataset`` / ``analysis`` carry a ``thread_id`` and must be scoped to the
+    active thread; the global user-level types (``preference`` / ``insight`` /
+    ``project_context``) carry none, so passing ``thread_id`` would filter every
+    one of them out (the "starve the globals" bug from BE-RECALL-6). This pins
+    that load_context forwards the thread_id only to dataset+analysis."""
+    from omicsclaw.runtime.agent.session import SessionManager
+
+    mgr = SessionManager(fake_store)
+    await mgr.load_context("app:alice:t", thread_id="t-glioma")
+
+    by_kind = {
+        kind: kwargs["thread_id"]
+        for (name, (sid, kind), kwargs) in fake_store.calls
+        if name == "get_memories"
+    }
+    assert by_kind["dataset"] == "t-glioma"
+    assert by_kind["analysis"] == "t-glioma"
+    assert by_kind["preference"] == ""
+    assert by_kind["insight"] == ""
+    assert by_kind["project_context"] == ""
+
+
+@pytest.mark.asyncio
+async def test_load_context_empty_thread_id_is_unscoped(fake_store):
+    """An empty thread_id is byte-identical to the legacy load: every type is
+    fetched un-scoped (thread_id="" on every call)."""
+    from omicsclaw.runtime.agent.session import SessionManager
+
+    mgr = SessionManager(fake_store)
+    await mgr.load_context("app:alice:t")
+
+    threads = {
+        kwargs["thread_id"]
+        for (name, _args, kwargs) in fake_store.calls
+        if name == "get_memories"
+    }
+    assert threads == {""}
 
 
 def test_received_files_is_module_dict():
@@ -193,6 +244,6 @@ def test_evict_lru_conversations_clears_tool_results_for_evicted_chats(monkeypat
 
 
 def _make_get_memories(by_kind: dict[str, list]):
-    async def _impl(session_id, kind, *, limit):
+    async def _impl(session_id, kind, *, limit, thread_id=""):
         return by_kind.get(kind, [])
     return _impl

@@ -10,11 +10,63 @@ from ..tools.spec import ToolSpec
 _LOGGER = logging.getLogger("omicsclaw.runtime.tools.registry")
 
 
+# Bench (ADR 0020) — per-stage default tool subsets. ``STAGE_TO_TOOL_SUBSETS`` is
+# the single source of truth for per-stage tool *subsets* (the per-stage prompt
+# *stance* lives separately in ``_STAGE_FRAGMENTS``, engine/loop.py — the two maps
+# are deliberately NOT key-aligned: a stage may carry a stance fragment without a
+# tool subset). A stage NOT present here (``analyze``, ``""``/unset, or any unknown
+# string) is UNFILTERED — the full surface tool list — which keeps the legacy /
+# non-Bench path byte-identical and cache-stable (ADR 0024). Stages are permissive,
+# not jails: the Read subset is a default-deny allow-list (heavyweight analysis /
+# file-writing / network-download / media tools are withheld), and the frontend
+# proposes a one-click switch to Analyze when a withheld tool is wanted.
+_READ_STAGE_TOOLS: frozenset[str] = frozenset(
+    {
+        # literature + knowledge + web reading (metadata / parse / read-only).
+        # parse_literature is now IN Read (Phase 3.3b): its download is permission-
+        # gated (approval_mode=ASK, ADR 0021) — a proposal, never automatic — and a
+        # downloaded dataset registers under dataset://<thread_id>/*. fetch_geo_metadata
+        # stays ungated as the metadata reader (download defaults False); its rarely-used
+        # download=True branch is itself ungated — a pre-existing bypass to gate in a
+        # follow-up (ADR 0021 applies to it too).
+        "fetch_geo_metadata", "parse_literature", "consult_knowledge", "read_knowhow",
+        "web_search", "web_fetch", "web_method_search",
+        # OmicsClaw-KG read tools (Bench Phase 3.1, ADR 0019): read-only retrieval
+        # over the cross-research knowledge base — the core of the Read stage.
+        # Soft-fail when the optional package is absent (kg_tools.py).
+        "kg_search", "kg_get_page", "kg_list_pages", "kg_graph_neighbors",
+        "kg_status", "kg_recent_log", "kg_communities",
+        # KG ingest (Bench Phase 3.3c, RD-INGEST-9): the citation-substrate writer —
+        # ingesting a dropped paper is the user's evident intent (ADR 0019, AUTO).
+        "kg_ingest",
+        # lightweight memory notes + read-only data / file inspection. remember /
+        # forget kept: note-taking only — no compute, no workspace write (recall is
+        # the pure-read counterpart).
+        "recall", "remember", "forget",
+        "inspect_data", "inspect_file", "file_read", "glob_files", "grep_files",
+        "list_directory", "get_file_size",
+        # interaction / discovery / planning. task_* / todo_write are writes_config
+        # (session task store, drives the desktop 待办) — read-safe: no workspace,
+        # network, or compute.
+        "ask_user", "tool_search", "list_skills_in_domain", "resolve_capability",
+        "task_create", "task_get", "task_list", "task_update", "todo_write",
+    }
+)
+
+STAGE_TO_TOOL_SUBSETS: dict[str, frozenset[str]] = {
+    "read": _READ_STAGE_TOOLS,
+    # "ideate": Read tools + KG ideate tools — added in v1.5 (Phase 6) when they exist.
+    # "write": writing-domain tools — added in v2 (Phase 7) when they exist.
+    # "analyze" and "" are intentionally absent → full (unfiltered) tool list.
+}
+
+
 def select_tool_specs(
     specs: tuple[ToolSpec, ...] | list[ToolSpec],
     *,
     request: Any,
     surface_only: bool = False,
+    stage: str = "",
 ) -> tuple[ToolSpec, ...]:
     """Filter ``specs`` to those that should be visible for the given request.
 
@@ -81,6 +133,14 @@ def select_tool_specs(
         if decision:
             selected.append(spec)
 
+    # Bench (ADR 0020): when the active lifecycle stage defines a default tool
+    # subset, keep only those tools. A stage with no defined subset (analyze, "",
+    # unknown) is unfiltered — the permissive default — so the legacy path and the
+    # cache-stable surface list are untouched.
+    allowed = STAGE_TO_TOOL_SUBSETS.get(stage)
+    if allowed is not None:
+        selected = [spec for spec in selected if spec.name in allowed]
+
     return tuple(selected)
 
 
@@ -116,7 +176,7 @@ class ToolRegistry:
         return [spec.to_openai_tool() for spec in self._specs]
 
     def to_openai_tools_for_request(
-        self, request: Any, *, surface_only: bool = False
+        self, request: Any, *, surface_only: bool = False, stage: str = ""
     ) -> list[dict[str, Any]]:
         """Per-request filtered openai-tool payload.
 
@@ -124,11 +184,15 @@ class ToolRegistry:
         callers that haven't migrated keep the legacy behavior. With
         ``surface_only=True`` (ADR 0024) the per-turn query predicates are
         skipped, yielding the session-stable **Frozen tool list**.
+
+        ``stage`` (Bench, ADR 0020) sub-filters that list to the active
+        lifecycle stage's default subset; an empty / ``analyze`` / unknown stage
+        is unfiltered, preserving the cache-stable frozen list.
         """
         return [
             spec.to_openai_tool()
             for spec in select_tool_specs(
-                self._specs, request=request, surface_only=surface_only
+                self._specs, request=request, surface_only=surface_only, stage=stage
             )
         ]
 

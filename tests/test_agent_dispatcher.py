@@ -431,3 +431,75 @@ async def test_dispatch_forwards_analysis_router_mode_to_llm_tool_loop(monkeypat
 
     assert events[-1] == Final(text="ok", kind="normal")
     assert received["analysis_router_mode"] == "auto"
+
+
+# ---------------------------------------------------------------------------
+# Bench Phase 0 (ADR 0017/0020/0023) — thread_id + stage plumbing
+#
+# Walking skeleton: two new optional fields thread through the existing
+# dispatch chain as default-"" kwargs with ZERO behaviour change when empty.
+# Consumers arrive later (Phase 1A reads thread_id for analysis://<thread_id>
+# lineage; Phase 2 reads stage for per-stage tool gating).
+# ---------------------------------------------------------------------------
+
+
+def test_envelope_thread_id_and_stage_default_to_empty():
+    env = MessageEnvelope(chat_id="c1", content="hi")
+    assert env.thread_id == ""
+    assert env.stage == ""
+
+
+@pytest.mark.asyncio
+async def test_dispatch_forwards_thread_id_and_stage_to_llm_tool_loop(monkeypatch):
+    received: dict[str, object] = {}
+
+    async def fake_loop(**kwargs):
+        received["thread_id"] = kwargs.get("thread_id")
+        received["stage"] = kwargs.get("stage")
+        return "ok"
+
+    _patch_llm_tool_loop(monkeypatch, fake_loop)
+
+    events = await _collect(
+        MessageEnvelope(chat_id="c1", content="hi", thread_id="t-glioma", stage="read")
+    )
+
+    assert events[-1] == Final(text="ok", kind="normal")
+    assert received["thread_id"] == "t-glioma"
+    assert received["stage"] == "read"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_forwards_empty_thread_id_and_stage_by_default(monkeypatch):
+    """Backward compat: an envelope without Bench fields forwards empty
+    strings, preserving the legacy (no thread binding / full-tool) path."""
+    received: dict[str, object] = {}
+
+    async def fake_loop(**kwargs):
+        received["thread_id"] = kwargs.get("thread_id")
+        received["stage"] = kwargs.get("stage")
+        return "ok"
+
+    _patch_llm_tool_loop(monkeypatch, fake_loop)
+
+    await _collect(MessageEnvelope(chat_id="c1", content="hi"))
+
+    assert received["thread_id"] == ""
+    assert received["stage"] == ""
+
+
+def test_both_loop_layers_accept_thread_id_and_stage_kwargs():
+    """The Bench fields are accepted, default-"" kwargs on both loop layers —
+    so the dispatcher's forward (above) lands, and run_engine_loop can stash
+    them on tool_runtime_context for later consumers."""
+    import inspect
+
+    from omicsclaw.engine.loop import run_engine_loop
+    from omicsclaw.runtime.agent.loop import llm_tool_loop
+
+    for fn in (llm_tool_loop, run_engine_loop):
+        params = inspect.signature(fn).parameters
+        assert "thread_id" in params, f"{fn.__name__} missing thread_id"
+        assert "stage" in params, f"{fn.__name__} missing stage"
+        assert params["thread_id"].default == ""
+        assert params["stage"].default == ""

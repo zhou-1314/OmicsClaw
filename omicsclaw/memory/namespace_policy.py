@@ -28,7 +28,16 @@ VERSIONED_PREFIXES: tuple[tuple[str, str], ...] = (
     ("core", "agent"),
     ("core", "my_user"),
     ("preference", ""),
+    # Bench Phase 1 (plan §3): the whole ``project://`` domain is versioned —
+    # thread metadata (project://<thread_id>, ThreadMemory) is a versioned audit
+    # trail so a soft-delete (is_deleted=true) re-versions without losing history.
+    # This also versions legacy ProjectContextMemory (project://<memory_id>), which
+    # is benign (it gains a history chain instead of overwrite).
+    ("project", ""),
 )
+# Note: ``dataset`` is deliberately absent here → ``should_version`` is False →
+# dataset:// is OVERWRITE-ONLY (Bench Phase 3.3 / plan §3). A re-download of the
+# same dataset://<thread_id>/<basename> replaces in place rather than versioning.
 
 
 def _matches_prefix(uri: MemoryURI, domain: str, prefix: str) -> bool:

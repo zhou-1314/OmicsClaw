@@ -144,3 +144,57 @@ def test_frozen_list_is_full_bot_surface_set() -> None:
         f"  missing: {bot_eligible - frozen}\n"
         f"  unexpected: {frozen - bot_eligible}"
     )
+
+
+# Tools the Read stage MUST withhold (ADR 0020 safety boundary): heavyweight
+# compute / skill creation, network-download, file/dir mutation, and media gen.
+# This is the security boundary as an executable contract — see the test below.
+_READ_WITHHELD_TOOLS: frozenset[str] = frozenset(
+    {
+        # heavyweight compute / skill creation
+        "omicsclaw", "autonomous_analysis_execute", "custom_analysis_execute",
+        "create_omics_skill", "replot_skill",
+        # NOTE: parse_literature is NO LONGER withheld from Read (Phase 3.3b): it is
+        # allowed in Read with its download permission-gated (approval_mode=ASK).
+        # file / directory mutation
+        "file_edit", "file_write", "save_file", "write_file",
+        "move_file", "remove_file", "make_directory",
+        # media generation
+        "generate_audio",
+    }
+)
+
+
+def test_read_stage_withholds_exactly_the_unsafe_tools_from_real_bot_set() -> None:
+    """Security boundary as an executable contract (Bench Phase 2, ADR 0020).
+
+    Against the REAL assembled bot tool set, ``stage='read'`` must withhold
+    EXACTLY the heavyweight / file-writing / network-download / media / skill-
+    creation tools — nothing more, nothing less. This catches the class of bug a
+    full review caught manually: an unsafe tool slipping into the Read allow-list
+    (it would vanish from the withheld set), or a new always-on write tool added
+    to the registry but never classified read-safe (it would appear here).
+    """
+    ctx = BotToolContext(skill_names=("sc-de",), domain_briefing="(test)")
+    all_specs = build_bot_tool_specs(ctx)
+    req = ContextAssemblyRequest(surface="bot")
+
+    frozen = {s.name for s in select_tool_specs(all_specs, request=req, surface_only=True)}
+    read = {
+        s.name
+        for s in select_tool_specs(all_specs, request=req, surface_only=True, stage="read")
+    }
+
+    assert frozen - read == _READ_WITHHELD_TOOLS, (
+        "Read-stage tool boundary drifted:\n"
+        f"  unsafe tool LEAKED into Read: {_READ_WITHHELD_TOOLS - (frozen - read)}\n"
+        f"  read-safe tool wrongly WITHHELD: {(frozen - read) - _READ_WITHHELD_TOOLS}"
+    )
+    # Read only removes tools, never adds — a strict subset of the frozen list.
+    assert read < frozen
+    # Empty stage is byte-equal to no stage (cache-stable / legacy invariant).
+    empty = {
+        s.name
+        for s in select_tool_specs(all_specs, request=req, surface_only=True, stage="")
+    }
+    assert empty == frozen

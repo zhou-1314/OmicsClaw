@@ -146,10 +146,10 @@ def test_assemble_chat_context_loads_memory_and_builds_prompt():
     }
 
     class FakeSessionManager:
-        async def get_or_create(self, user_id, platform, chat_id):
+        async def get_or_create(self, user_id, platform, chat_id, thread_id=""):
             calls["session"].append(("get_or_create", user_id, platform, chat_id))
 
-        async def load_context(self, session_id):
+        async def load_context(self, session_id, thread_id=""):
             calls["session"].append(("load_context", session_id))
             return "preferred language: Chinese"
 
@@ -220,6 +220,40 @@ def test_assemble_chat_context_loads_memory_and_builds_prompt():
     assert "- Domain: `spatial`" in calls["prompt"]["skill_context"]
     assert "- Summary:" in calls["prompt"]["skill_context"]
     assert "workspace_context" not in context.prompt_context.layer_stats
+
+
+def test_assemble_chat_context_forwards_thread_id_to_session_memory():
+    """AN-CTXRECALL-11: the active investigation thread_id reaches both the
+    session stamp (get_or_create) and the passive memory load (load_context),
+    so per-turn injection is thread-scoped."""
+    seen = {"get_or_create": None, "load_context": None}
+
+    class FakeSessionManager:
+        async def get_or_create(self, user_id, platform, chat_id, thread_id=""):
+            seen["get_or_create"] = thread_id
+
+        async def load_context(self, session_id, thread_id=""):
+            seen["load_context"] = thread_id
+            return "scoped memory"
+
+    def fake_prompt_builder(**kwargs):
+        return "PROMPT"
+
+    context = asyncio.run(
+        assemble_chat_context(
+            chat_id="chat-9",
+            user_content="hello",
+            user_id="user-9",
+            platform="app",
+            thread_id="t-glioma",
+            session_manager=FakeSessionManager(),
+            system_prompt_builder=fake_prompt_builder,
+        )
+    )
+
+    assert context.memory_context == "scoped memory"
+    assert seen["get_or_create"] == "t-glioma"
+    assert seen["load_context"] == "t-glioma"
 
 
 def test_assemble_chat_context_passes_interactive_surface_to_prompt_builder():
