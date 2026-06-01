@@ -85,6 +85,26 @@ def test_to_frontend_hypothesis_ungrounded_inference() -> None:
     assert ungrounded["cross_study"] is False
 
 
+def test_to_frontend_hypothesis_surfaces_suggested_verdict() -> None:
+    pending = hyp_svc.to_frontend_hypothesis({"slug": "y", "suggested_verdict": "validated"})
+    assert pending["suggested_verdict"] == "validated"
+    none = hyp_svc.to_frontend_hypothesis({"slug": "x"})
+    assert none["suggested_verdict"] is None
+
+
+def test_confirm_thread_hypothesis_verdict_flips(kg: KGConfig) -> None:
+    _seed_hypothesis(kg, "h1", ["s1"])
+    out = hyp_svc.confirm_thread_hypothesis_verdict(str(kg.home), "h1", "validated")
+    assert out["old_status"] == "draft"
+    assert out["new_status"] == "validated"
+
+
+def test_confirm_thread_hypothesis_verdict_inconclusive_maps_to_submitted(kg: KGConfig) -> None:
+    _seed_hypothesis(kg, "h1", ["s1"])
+    out = hyp_svc.confirm_thread_hypothesis_verdict(str(kg.home), "h1", "inconclusive")
+    assert out["new_status"] == "submitted"
+
+
 def test_formalize_grounds_against_workspace_sources(kg: KGConfig) -> None:
     _seed_source(kg, "s1")
     _seed_source(kg, "s2")
