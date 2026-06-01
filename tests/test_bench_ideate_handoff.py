@@ -86,6 +86,31 @@ async def test_build_packet_then_record_suggests_verdict(kg_env: KGConfig) -> No
 
 
 @pytest.mark.asyncio
+async def test_record_refined_creates_refined_page(kg_env: KGConfig) -> None:
+    _seed_source(kg_env, "src1")
+    _seed_hypothesis(kg_env, "h1", ["src1"])
+    built = await kg_tools.execute_kg_build_packet({"hypothesis_slug": "h1"})
+    packet_id = re.search(r"`(hof-[^`]+)`", built).group(1)  # type: ignore[union-attr]
+
+    rec = await kg_tools.execute_kg_record_result(
+        {
+            "packet_id": packet_id,
+            "verdict": "refined",
+            "summary": "The original was too broad; a sharper claim fits the data.",
+            "refined_hypothesis_slug": "h1-refined",
+            "refined_proposed_claim": "TP53 inhibition reverses senescence within 7 days in fibroblasts.",
+        }
+    )
+    assert "suggested verdict" in rec
+
+    refined_page = paths.wiki_subdir(kg_env, "hypotheses") / "h1-refined.md"
+    assert refined_page.exists()
+    rfm = parse_frontmatter(parse_page(refined_page)[0])
+    assert rfm.refines == "h1"
+    assert "TP53 inhibition" in rfm.proposed_claim
+
+
+@pytest.mark.asyncio
 async def test_build_packet_unknown_hypothesis(kg_env: KGConfig) -> None:
     out = await kg_tools.execute_kg_build_packet({"hypothesis_slug": "does-not-exist"})
     assert "Error building handoff packet" in out

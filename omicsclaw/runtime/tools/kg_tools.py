@@ -683,6 +683,7 @@ async def execute_kg_record_result(args: dict, **kwargs) -> str:
     # list of single characters and still satisfy the list[str] schema).
     artifacts = [str(a) for a in raw_artifacts] if isinstance(raw_artifacts, list) else []
     refined = str(args.get("refined_hypothesis_slug", "") or "").strip() or None
+    refined_claim = str(args.get("refined_proposed_claim", "") or "").strip() or None
     notes = str(args.get("notes", "") or "").strip() or None
 
     try:
@@ -693,6 +694,7 @@ async def execute_kg_record_result(args: dict, **kwargs) -> str:
             summary=summary,
             artifact_paths=artifacts,
             refined_hypothesis_slug=refined,
+            refined_proposed_claim=refined_claim,
             notes=notes,
         )
     except Exception as e:  # pydantic validation (bad verdict / refined-without-slug)
