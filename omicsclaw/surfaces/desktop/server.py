@@ -3087,6 +3087,10 @@ class ThreadConfirmVerdictRequest(BaseModel):
     verdict: str  # validated | refuted | refined | inconclusive (ADR 0021 §6)
 
 
+class ThreadRoutePreviewRequest(BaseModel):
+    claim: str  # the hypothesis claim to route (ADR 0021 §4)
+
+
 @app.post("/thread/create")
 async def thread_create(req: ThreadCreateRequest):
     if _memory_client is None:
@@ -3221,6 +3225,24 @@ def thread_confirm_verdict(thread_id: str, slug: str, req: ThreadConfirmVerdictR
         logger.exception("Confirm verdict error")
         raise HTTPException(500, detail=str(exc))
     return {"thread_id": thread_id, **result}
+
+
+@app.post("/thread/{thread_id}/hypothesis/{slug}/route-preview")
+async def thread_route_preview(thread_id: str, slug: str, req: ThreadRoutePreviewRequest):
+    """Preview the Analysis Router's recommendation for testing a hypothesis (ADR 0021 §4).
+
+    Shows the recommended skill + route kind + the thread's bound dataset before the user
+    commits to Analyze. Soft-fails to 503 when the memory system is unavailable.
+    """
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    from omicsclaw.surfaces.desktop import hypotheses as hyp_svc
+
+    try:
+        return await hyp_svc.route_preview(_memory_client, thread_id, slug, req.claim)
+    except Exception as exc:
+        logger.exception("Route preview error")
+        raise HTTPException(500, detail=str(exc))
 
 
 @app.put("/thread/{thread_id}")

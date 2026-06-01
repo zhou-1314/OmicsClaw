@@ -11,6 +11,7 @@ cross-study badge are deferred to 0019.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -150,3 +151,123 @@ def test_formalize_allows_ungrounded(kg: KGConfig) -> None:
 def test_ideate_stage_tool_subset_mirrors_read() -> None:
     assert STAGE_TO_TOOL_SUBSETS.get("ideate") == _READ_STAGE_TOOLS
     assert "kg_search" in STAGE_TO_TOOL_SUBSETS["ideate"]
+
+
+# --- route_preview (ADR 0021 §4) ----------------------------------------------
+# These exercise the real MemoryClient read contract: route_preview lists the
+# thread's dataset subtree (``dataset://<thread_id>/``) via ``get_subtree`` and
+# ``recall``, then parses the stored content with the real dataset parser. The
+# Router itself is monkeypatched (it has its own tests) and used to capture the
+# resolved dataset path it is handed.
+from types import SimpleNamespace  # noqa: E402
+
+
+class _Ref:
+    def __init__(self, uri: str) -> None:
+        self.uri = uri
+
+
+class _Rec:
+    def __init__(self, content: str | None) -> None:
+        self.content = content
+
+
+class _FakeMemoryClient:
+    """Minimal MemoryClient: a thread→[(uri, DatasetMemory|None)] leaf map."""
+
+    def __init__(self, leaves: list[tuple[str, Any]], *, boom: bool = False) -> None:
+        self._leaves = leaves
+        self._boom = boom
+
+    async def get_subtree(self, uri: str, *, limit: int = 100):
+        if self._boom:
+            raise RuntimeError("memory backend down")
+        assert uri == "dataset://t1/"
+        return [_Ref(u) for u, _ in self._leaves]
+
+    async def recall(self, uri: str):
+        from omicsclaw.memory.compat import _memory_to_content
+
+        for u, mem in self._leaves:
+            if u == uri:
+                return _Rec(_memory_to_content(mem) if mem is not None else None)
+        return None
+
+
+def _capture_route(monkeypatch, **route_kwargs):
+    """Patch the Router to capture its args and return a SimpleNamespace route."""
+    captured: dict[str, Any] = {}
+
+    def _fake(query: str, file_path: str = "", domain_hint: str = ""):
+        captured["query"] = query
+        captured["file_path"] = file_path
+        return SimpleNamespace(
+            kind=SimpleNamespace(value=route_kwargs.get("kind", "exact_skill")),
+            chosen_skill=route_kwargs.get("chosen_skill", "spatial-preprocess"),
+            confidence=route_kwargs.get("confidence", 0.9),
+            should_search_web=route_kwargs.get("should_search_web", False),
+            missing_params=route_kwargs.get("missing_params", []),
+            capability_decision=SimpleNamespace(
+                reasoning=route_kwargs.get("reasoning", ["matched the spatial domain"])
+            ),
+        )
+
+    monkeypatch.setattr(hyp_svc, "route_analysis_request", _fake)
+    return captured
+
+
+def test_route_preview_resolves_thread_dataset_and_maps_shape(monkeypatch) -> None:
+    import asyncio
+
+    from omicsclaw.memory.compat import DatasetMemory
+
+    ds = DatasetMemory(file_path="data/glioma.h5ad", thread_id="t1")
+    client = _FakeMemoryClient(
+        [
+            ("dataset://t1/", None),  # container node — skipped
+            ("dataset://t1/data_glioma.h5ad", ds),  # the real leaf
+        ]
+    )
+    captured = _capture_route(monkeypatch, missing_params=["n_neighbors"])
+
+    out = asyncio.run(hyp_svc.route_preview(client, "t1", "h1", "Test TP53 spatially"))
+    # The Router was handed the resolved relative dataset path + the verbatim claim.
+    assert captured["file_path"] == "data/glioma.h5ad"
+    assert captured["query"] == "Test TP53 spatially"
+    # The response shape the frontend card consumes.
+    assert out["thread_id"] == "t1"
+    assert out["slug"] == "h1"
+    assert out["kind"] == "exact_skill"
+    assert out["chosen_skill"] == "spatial-preprocess"
+    assert out["dataset_path"] == "data/glioma.h5ad"
+    assert out["missing_params"] == ["n_neighbors"]
+    assert out["reasoning"] == ["matched the spatial domain"]
+
+
+def test_route_preview_without_dataset_is_soft(monkeypatch) -> None:
+    """No bound dataset → the Router still runs claim-only; dataset_path is null."""
+    import asyncio
+
+    client = _FakeMemoryClient([])  # empty subtree
+    captured = _capture_route(
+        monkeypatch, kind="no_skill", chosen_skill="", should_search_web=True
+    )
+
+    out = asyncio.run(hyp_svc.route_preview(client, "t1", "h1", "vague hunch"))
+    assert captured["file_path"] == ""  # no fabricated path
+    assert out["dataset_path"] is None
+    assert out["kind"] == "no_skill"
+    assert out["should_search_web"] is True
+
+
+def test_route_preview_survives_memory_failure(monkeypatch) -> None:
+    """A memory lookup that raises must not abort the preview — the Router still runs."""
+    import asyncio
+
+    client = _FakeMemoryClient([], boom=True)
+    captured = _capture_route(monkeypatch, chosen_skill="spatial-de")
+
+    out = asyncio.run(hyp_svc.route_preview(client, "t1", "h1", "claim"))
+    assert captured["file_path"] == ""
+    assert out["dataset_path"] is None
+    assert out["chosen_skill"] == "spatial-de"
