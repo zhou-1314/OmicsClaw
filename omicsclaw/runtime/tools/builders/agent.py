@@ -1034,6 +1034,84 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
             touches_network=True,
             policy_tags=("knowledge", "graph", "ingest"),
         ),
+        # Bench Ideate→Analyze handoff (ADR 0021 §4/§5/§6). Write tools, so NOT in
+        # _READ_STAGE_TOOLS → excluded from Read/Ideate; Analyze is unfiltered.
+        ToolSpec(
+            name="kg_build_packet",
+            description=(
+                "Build a handoff packet that links a hypothesis to its analysis (ADR 0021). "
+                "Call this when you START testing a hypothesis in the Analyze stage, BEFORE "
+                "running the skill. Pass the hypothesis `hypothesis_slug` (and optionally a "
+                "`target_skill` hint — the Analysis Router stays authoritative). Returns a "
+                "`packet_id` to record the result against once the analysis is done."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "hypothesis_slug": {
+                        "type": "string",
+                        "description": "Slug of the hypothesis page being tested.",
+                    },
+                    "target_skill": {
+                        "type": "string",
+                        "description": "Optional OmicsClaw skill-name hint; the Router is authoritative.",
+                    },
+                    "notes": {"type": "string", "description": "Optional free-form notes."},
+                },
+                "required": ["hypothesis_slug"],
+            },
+            surfaces=("bot",),
+            read_only=False,
+            concurrency_safe=False,
+            result_policy=RESULT_POLICY_KNOWLEDGE_REFERENCE,
+            risk_level=RISK_LEVEL_MEDIUM,
+            writes_workspace=True,
+            policy_tags=("knowledge", "graph", "handoff"),
+        ),
+        ToolSpec(
+            name="kg_record_result",
+            description=(
+                "Record the outcome of a hypothesis test against its handoff packet (ADR 0021). "
+                "Call this AFTER running the analysis. It SUGGESTS a verdict on the hypothesis — "
+                "it does not finalize it; the user confirms in the Ideate stage. Pass the "
+                "`packet_id` from kg_build_packet, a `verdict` (validated|refuted|refined|"
+                "inconclusive), and a one-line `summary` grounded in the real artifact values. "
+                "For `refined`, also pass `refined_hypothesis_slug`."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "packet_id": {"type": "string", "description": "Packet id from kg_build_packet."},
+                    "verdict": {
+                        "type": "string",
+                        "enum": ["validated", "refuted", "refined", "inconclusive"],
+                        "description": "The analysis outcome for the hypothesis.",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "One-line finding grounded in real artifact values.",
+                    },
+                    "artifact_paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Paths to the analysis outputs (figures, notebooks).",
+                    },
+                    "refined_hypothesis_slug": {
+                        "type": "string",
+                        "description": "Required when verdict='refined': the new hypothesis page slug.",
+                    },
+                    "notes": {"type": "string", "description": "Optional analyst notes."},
+                },
+                "required": ["packet_id", "verdict", "summary"],
+            },
+            surfaces=("bot",),
+            read_only=False,
+            concurrency_safe=False,
+            result_policy=RESULT_POLICY_KNOWLEDGE_REFERENCE,
+            risk_level=RISK_LEVEL_MEDIUM,
+            writes_workspace=True,
+            policy_tags=("knowledge", "graph", "handoff"),
+        ),
         ToolSpec(
             name="resolve_capability",
             description=(

@@ -141,7 +141,11 @@ _STAGE_FRAGMENTS: dict[str, str] = {
     ),
     "analyze": (
         "You are in the **Analyze** stage: run OmicsClaw skills on the thread's data "
-        "and ground every result in real artifact values."
+        "and ground every result in real artifact values. When the user asks you to "
+        "test a hypothesis, first build a handoff packet with kg_build_packet (pass the "
+        "hypothesis slug), run the appropriate skill, then record the outcome with "
+        "kg_record_result (verdict + a one-line summary from the real artifacts) so the "
+        "Ideate stage can suggest a verdict for the user to confirm."
     ),
     "write": (
         "You are in the **Write** stage: draft from recorded analysis lineage and "

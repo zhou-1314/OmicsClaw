@@ -30,7 +30,9 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 logger = logging.getLogger("omicsclaw.runtime.tools.kg_tools")
@@ -587,6 +589,135 @@ async def execute_kg_ingest(args: dict, session_id: str | None = None, **kwargs)
     return _fmt_ingest(result, source)
 
 
+# ---------------------------------------------------------------------------
+# KG handoff (Bench Ideate→Analyze, ADR 0021 §4/§5/§6) — close the verdict loop.
+# These two write tools let the agent, while testing a hypothesis in the Analyze
+# stage, link the hypothesis to its analysis (build a packet) and record the
+# outcome (which SUGGESTS a verdict the user confirms in Ideate). They are write
+# tools, so they are NOT in _READ_STAGE_TOOLS (excluded from Read/Ideate); Analyze
+# is unfiltered, so they are available there.
+# ---------------------------------------------------------------------------
+
+
+def _import_kg_handoff():
+    """Lazy soft-import of the KG handoff entrypoints. ``None`` if KG is absent."""
+    try:
+        from omicsclaw_kg import config as kg_config
+        from omicsclaw_kg import paths as kg_paths
+        from omicsclaw_kg.fs_utils import atomic_write_text
+        from omicsclaw_kg.handoff import build_packet, write_packet
+        from omicsclaw_kg.handoff.feedback import RecordResultError, record_result
+        from omicsclaw_kg.handoff.result import HandoffResult
+
+        return SimpleNamespace(
+            config=kg_config,
+            paths=kg_paths,
+            atomic_write_text=atomic_write_text,
+            build_packet=build_packet,
+            write_packet=write_packet,
+            record_result=record_result,
+            RecordResultError=RecordResultError,
+            HandoffResult=HandoffResult,
+        )
+    except ImportError:
+        return None
+
+
+async def execute_kg_build_packet(args: dict, **kwargs) -> str:
+    """Build a handoff packet for a hypothesis (ADR 0021 §5) — one hypothesis → one
+    packet → the Analysis Router. Returns the ``packet_id`` to record a result
+    against. Soft-fails when KG is unavailable; never raises into the loop.
+    """
+    kg = _import_kg_handoff()
+    if kg is None:
+        return _KG_UNAVAILABLE_HINT
+
+    slug = str(args.get("hypothesis_slug", "") or "").strip()
+    if not slug:
+        return "Error: 'hypothesis_slug' is required."
+    if not _is_safe_slug(slug):
+        return f"Error: invalid hypothesis_slug {slug!r}."
+    target_skill = str(args.get("target_skill", "") or "").strip() or None
+    notes = str(args.get("notes", "") or "").strip() or None
+
+    try:
+        cfg = kg.config.resolve(_resolve_kg_home())
+        packet = await asyncio.to_thread(kg.build_packet, cfg, slug, target_skill, notes)
+        await asyncio.to_thread(kg.write_packet, cfg, packet)
+    except (FileNotFoundError, ValueError) as e:
+        return f"Error building handoff packet: {e}"
+    except Exception as e:  # pragma: no cover - defensive
+        logger.error("kg_build_packet failed: %s", e, exc_info=True)
+        return f"Error building handoff packet: {e}"
+
+    skill = packet.target.skill_name or "(unresolved — file_drop)"
+    return (
+        f"Built handoff packet `{packet.packet_id}` for hypothesis `{slug}` "
+        f"(target skill: {skill}, kind: {packet.target.kind}). After running the "
+        f"analysis, record the outcome with kg_record_result(packet_id="
+        f"'{packet.packet_id}', verdict=<validated|refuted|refined|inconclusive>, summary=...)."
+    )
+
+
+async def execute_kg_record_result(args: dict, **kwargs) -> str:
+    """Record an analysis outcome against a handoff packet (ADR 0021 §6).
+
+    This SUGGESTS a verdict on the hypothesis (it does NOT flip its status); the
+    user confirms in the Ideate stage. Soft-fails when KG is unavailable.
+    """
+    kg = _import_kg_handoff()
+    if kg is None:
+        return _KG_UNAVAILABLE_HINT
+
+    packet_id = str(args.get("packet_id", "") or "").strip()
+    if not packet_id:
+        return "Error: 'packet_id' is required (from kg_build_packet)."
+    if not _is_safe_slug(packet_id):
+        return f"Error: invalid packet_id {packet_id!r}."
+    summary = str(args.get("summary", "") or "").strip()
+    if not summary:
+        return "Error: 'summary' is required (a one-line statement of the finding)."
+    verdict = str(args.get("verdict", "") or "").strip()
+    raw_artifacts = args.get("artifact_paths")
+    # Guard against an LLM passing a bare string (which would char-split into a
+    # list of single characters and still satisfy the list[str] schema).
+    artifacts = [str(a) for a in raw_artifacts] if isinstance(raw_artifacts, list) else []
+    refined = str(args.get("refined_hypothesis_slug", "") or "").strip() or None
+    notes = str(args.get("notes", "") or "").strip() or None
+
+    try:
+        result = kg.HandoffResult(
+            packet_id=packet_id,
+            completed=datetime.now(timezone.utc),
+            verdict=verdict,  # type: ignore[arg-type]
+            summary=summary,
+            artifact_paths=artifacts,
+            refined_hypothesis_slug=refined,
+            notes=notes,
+        )
+    except Exception as e:  # pydantic validation (bad verdict / refined-without-slug)
+        return f"Error: invalid result — {e}"
+
+    try:
+        cfg = kg.config.resolve(_resolve_kg_home())
+        staging = kg.paths.cache_dir(cfg) / "result_staging"
+        staging.mkdir(parents=True, exist_ok=True)
+        rf = staging / f"{packet_id}.json"
+        kg.atomic_write_text(rf, result.model_dump_json(indent=2))
+        out = await asyncio.to_thread(kg.record_result, cfg, packet_id, rf)
+    except kg.RecordResultError as e:
+        return f"Error recording result: {e}"
+    except Exception as e:  # pragma: no cover - defensive
+        logger.error("kg_record_result failed: %s", e, exc_info=True)
+        return f"Error recording result: {e}"
+
+    return (
+        f"Recorded result for packet `{packet_id}` (hypothesis `{out.get('hypothesis_slug')}`): "
+        f"suggested verdict **{out.get('suggested_verdict')}**. The hypothesis status stays "
+        f"'{out.get('hypothesis_status')}' until the user confirms it in the Ideate stage."
+    )
+
+
 KG_TOOL_EXECUTORS: dict[str, Any] = {
     "kg_search": execute_kg_search,
     "kg_get_page": execute_kg_get_page,
@@ -596,4 +727,6 @@ KG_TOOL_EXECUTORS: dict[str, Any] = {
     "kg_recent_log": execute_kg_recent_log,
     "kg_communities": execute_kg_communities,
     "kg_ingest": execute_kg_ingest,
+    "kg_build_packet": execute_kg_build_packet,
+    "kg_record_result": execute_kg_record_result,
 }
