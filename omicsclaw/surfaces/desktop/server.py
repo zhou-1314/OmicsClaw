@@ -3078,6 +3078,11 @@ class ThreadPreferenceRequest(BaseModel):
     value: Any
 
 
+class ThreadFormalizeRequest(BaseModel):
+    hunch: str
+    stub: bool = False  # use the offline LLM stub (tests / dry-runs)
+
+
 @app.post("/thread/create")
 async def thread_create(req: ThreadCreateRequest):
     if _memory_client is None:
@@ -3132,6 +3137,63 @@ async def thread_get(thread_id: str):
     except Exception as exc:
         logger.exception("Thread get error")
         raise HTTPException(500, detail=str(exc))
+
+
+# The two Ideate endpoints below are sync `def` (unlike the async thread routes):
+# their KG access is blocking file IO, and FastAPI runs sync path operations in a
+# threadpool, so they don't block the event loop.
+@app.get("/thread/{thread_id}/hypotheses")
+def thread_hypotheses(thread_id: str):
+    """List Bench Ideate hypotheses for a thread (ADR 0021).
+
+    Workspace-wide in v1.5 — KG is thread-blind, so per-thread filtering and the
+    cross-study badge are deferred to the 0019 thread<->source work. Soft-fails to
+    an empty list when KG is unavailable so the Ideate panel degrades gracefully.
+    """
+    if not _KG_AVAILABLE:
+        return {"thread_id": thread_id, "hypotheses": [], "kg_available": False}
+    home = _resolve_shared_kg_home()
+    if not home:
+        return {"thread_id": thread_id, "hypotheses": [], "kg_available": False}
+    from omicsclaw.surfaces.desktop import hypotheses as hyp_svc
+
+    try:
+        items = hyp_svc.list_workspace_hypotheses(home)
+    except Exception as exc:
+        logger.exception("Hypothesis listing error")
+        raise HTTPException(500, detail=str(exc))
+    return {"thread_id": thread_id, "hypotheses": items, "kg_available": True}
+
+
+@app.post("/thread/{thread_id}/formalize")
+def thread_formalize(thread_id: str, req: ThreadFormalizeRequest):
+    """Formalize a free-text hunch into a thread-grounded hypothesis (ADR 0021 §2).
+
+    Grounds against every workspace Source (see the v1.5 scope note in
+    ``surfaces/desktop/hypotheses.py``).
+    """
+    if not _KG_AVAILABLE:
+        raise HTTPException(503, detail="OmicsClaw-KG is not available")
+    home = _resolve_shared_kg_home()
+    if not home:
+        raise HTTPException(400, detail="no workspace / KG home resolved")
+    from omicsclaw.surfaces.desktop import hypotheses as hyp_svc
+    from omicsclaw_kg.ideation.hypotheses import HypothesisIdeationError
+    from omicsclaw_kg.llm.client import AnthropicLLMClient
+    from omicsclaw_kg.llm.stub import StubLLMClient
+
+    # KG ideation uses its own LLM (Anthropic, same as the /kg/ideate/* routes),
+    # independent of the backend's chat provider; production needs ANTHROPIC_API_KEY.
+    # `stub` selects the offline client for tests / dry-runs.
+    llm = StubLLMClient() if req.stub else AnthropicLLMClient()
+    try:
+        hypothesis = hyp_svc.formalize_thread_hypothesis(home, req.hunch, llm)
+    except HypothesisIdeationError as exc:
+        raise HTTPException(400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Formalize error")
+        raise HTTPException(500, detail=str(exc))
+    return {"thread_id": thread_id, "hypothesis": hypothesis}
 
 
 @app.put("/thread/{thread_id}")

@@ -55,7 +55,10 @@ _READ_STAGE_TOOLS: frozenset[str] = frozenset(
 
 STAGE_TO_TOOL_SUBSETS: dict[str, frozenset[str]] = {
     "read": _READ_STAGE_TOOLS,
-    # "ideate": Read tools + KG ideate tools — added in v1.5 (Phase 6) when they exist.
+    # Ideate (ADR 0021): same read/KG tools as Read. Formalize is a thread-scoped
+    # HTTP endpoint (POST /thread/{id}/formalize), not an in-loop agent tool, so no
+    # new tool is gated here.
+    "ideate": _READ_STAGE_TOOLS,
     # "write": writing-domain tools — added in v2 (Phase 7) when they exist.
     # "analyze" and "" are intentionally absent → full (unfiltered) tool list.
 }
