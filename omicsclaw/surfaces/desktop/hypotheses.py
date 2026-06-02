@@ -15,7 +15,10 @@ server mounts at ``/kg``), keyed by the resolved KG ``home`` string.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
+
+from omicsclaw.analysis_router.router import route_analysis_request
 
 
 def to_frontend_hypothesis(raw: dict[str, Any]) -> dict[str, Any]:
@@ -83,6 +86,65 @@ def formalize_thread_hypothesis(home: str, hunch: str, llm: Any) -> dict[str, An
     source_slugs = list_workspace_source_slugs(home)
     result = formalize_hypothesis(cfg, hunch, source_slugs, llm)
     return to_frontend_hypothesis(result)
+
+
+async def _resolve_thread_dataset_path(memory_client: Any, thread_id: str) -> str:
+    """Best-effort ``file_path`` of a dataset bound to this thread, else ``""``.
+
+    Datasets register at ``dataset://<thread_id>/<basename>`` (ADR 0018) inside the
+    desktop user's namespace — the same namespace ``memory_client`` (a ``MemoryClient``)
+    already reads. We list that subtree and return the first leaf's ``file_path`` (a
+    thread usually has one primary dataset; the Router result is a preview the user
+    confirms regardless). Any failure — memory off, no dataset, unparseable content —
+    yields ``""`` so the Router still runs claim-only. ``MemoryClient`` has no
+    ``get_memories`` (that lives on the session-keyed ``CompatMemoryStore``); the
+    namespace-direct ``get_subtree``/``recall`` pair is the endpoint-read path.
+    """
+    if not thread_id:
+        return ""
+    try:
+        from omicsclaw.memory.compat import _content_to_memory
+
+        refs = await memory_client.get_subtree(f"dataset://{thread_id}/", limit=20)
+        for ref in refs or []:
+            uri = getattr(ref, "uri", None)
+            if not uri:
+                continue
+            rec = await memory_client.recall(uri)
+            content = getattr(rec, "content", None) if rec is not None else None
+            if not content:
+                continue  # container node / empty leaf
+            mem = _content_to_memory(content, "dataset")
+            file_path = str(getattr(mem, "file_path", "") or "") if mem else ""
+            if file_path:
+                return file_path
+    except Exception:
+        return ""
+    return ""
+
+
+async def route_preview(
+    memory_client: Any, thread_id: str, slug: str, claim: str
+) -> dict[str, Any]:
+    """Preview the Analysis Router's recommendation for testing a hypothesis (ADR 0021 §4).
+
+    Resolves the thread's bound dataset (best-effort) and runs the Router on the claim so
+    the Ideate panel can SHOW the recommended skill + route kind + dataset before the user
+    commits — Analyze never authors a new path. The Router runs even with no dataset.
+    """
+    dataset_path = await _resolve_thread_dataset_path(memory_client, thread_id)
+    route = await asyncio.to_thread(route_analysis_request, claim, dataset_path)
+    return {
+        "thread_id": thread_id,
+        "slug": slug,
+        "kind": route.kind.value,
+        "chosen_skill": route.chosen_skill,
+        "confidence": route.confidence,
+        "should_search_web": route.should_search_web,
+        "missing_params": list(route.missing_params),
+        "dataset_path": dataset_path or None,
+        "reasoning": list(route.capability_decision.reasoning),
+    }
 
 
 def confirm_thread_hypothesis_verdict(home: str, slug: str, verdict: str) -> dict[str, Any]:

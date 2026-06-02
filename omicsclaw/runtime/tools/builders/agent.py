@@ -1076,7 +1076,8 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                 "it does not finalize it; the user confirms in the Ideate stage. Pass the "
                 "`packet_id` from kg_build_packet, a `verdict` (validated|refuted|refined|"
                 "inconclusive), and a one-line `summary` grounded in the real artifact values. "
-                "For `refined`, also pass `refined_hypothesis_slug`."
+                "For `refined`, also pass `refined_hypothesis_slug` AND `refined_proposed_claim` "
+                "(the new, sharper testable claim) — a refined page is created from them."
             ),
             parameters={
                 "type": "object",
@@ -1099,6 +1100,10 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                     "refined_hypothesis_slug": {
                         "type": "string",
                         "description": "Required when verdict='refined': the new hypothesis page slug.",
+                    },
+                    "refined_proposed_claim": {
+                        "type": "string",
+                        "description": "Required when verdict='refined': the refined, testable claim for the new hypothesis page.",
                     },
                     "notes": {"type": "string", "description": "Optional analyst notes."},
                 },
