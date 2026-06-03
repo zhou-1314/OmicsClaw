@@ -1,6 +1,6 @@
 # Surface the full OmicsClaw-KG capability set in the Desktop App
 
-**Status:** proposed (2026-06-03)
+**Status:** accepted (2026-06-03)
 
 The Desktop backend already mounts the **entire** OmicsClaw-KG HTTP API under `/kg`
 (`omicsclaw/surfaces/desktop/server.py:200`, `build_kg_router(enable_writes=True)`, gated by
@@ -74,9 +74,9 @@ en/zh i18n with compile-enforced parity, and the same graceful-degradation gate 
 (ADR 0019): every KG surface hides or shows a one-click "install/recheck KG" prompt when
 `available=false`. No new architectural primitives.
 
-**4. Graph rendering — Cytoscape.js recommended for v1 (pending Open Question 2).** Built-in
-force-directed layouts suit the concept graph and experiment DAGs; richer custom interaction can
-migrate to D3 later. This is the recommendation the open question weighs, not yet a ratified choice.
+**4. Graph rendering = Cytoscape.js for v1.** Built-in force-directed layouts suit the concept
+graph and experiment DAGs and keep v1 small; richer custom interaction can migrate to D3 later only
+if Cytoscape proves limiting. (Rejected for v1 — *D3 from the start*: more custom work than v1 warrants.)
 
 **5. KG is workspace-wide in v1.** `/kg-explorer` searches/browses the whole workspace KG (matching
 the agent tools — `kg_search`/`kg_graph_neighbors` are not thread-scoped — and the `/kg` mount's
@@ -92,17 +92,19 @@ popover on Ideate hypothesis cards and Analyze source cards (reusing the graph c
 primary entry point, and they preserve ADR 0023 §6 — the UI prefills/hands off; the agent loop
 still authors any analysis path.
 
-**7. Tier-C is gated on KG-side HTTP work (sequencing — Open Question 3).** Surfacing experiments,
-topics, cross-pollinate, graph export, HTTP ingest, and page authoring each require new KG routes
-first. The desktop UI skeletons can be built ahead and wired on arrival; *whether* to push KG for
-those routes now or ship all of Tier-A first is left open (OQ 3). Ownership and the Write-stage
-dependency are recorded under Consequences, not committed here.
+**7. Ship Tier-A first; Tier-C is a fast-follow gated on KG-side HTTP work.** Tier-A needs no new
+KG routes, so it ships first and de-risks the `/kg-explorer` IA before asking the KG repo for new
+endpoints. Surfacing experiments, topics, cross-pollinate, graph export, HTTP ingest, and page
+authoring each require new KG routes; their UI skeletons can be built ahead and wired on arrival.
+The experiment-DAG routes (KG-0001's flagship, today UI-less) are the highest-value fast-follow and
+should be the first KG-side issue filed. Ownership and the Write-stage dependency: see Consequences.
 
 ## Non-Goals (v1)
 
 v1 does **not** include: thread-scoped KG filtering in `/kg-explorer` (a Read-stage refinement, v2);
 KG content authoring or deletion UI (blocked on a KG `PUT /kg/pages` route); a drag-drop `ingest`
-upload UI (routes to the existing `kg_ingest` agent tool, or awaits a KG ingest route — OQ 4); the
+upload UI — v1 ingest goes through the existing `kg_ingest` agent tool, and a drag-drop surface
+awaits a future KG ingest HTTP route; the
 experiment-DAG viewer (blocked on KG experiment routes); cross-study hypothesis aggregation (threads
 stay isolated per ADR 0018); and KG maintenance UI (rebuild / export / catalog-sync — stay CLI for
 now).
@@ -133,14 +135,17 @@ now).
 - **Phase 3:** `WritePanel` binds to `PUT /kg/pages` once KG ships it; the experiment-DAG viewer
   renders once KG exposes experiment routes.
 
-## Open questions (to resolve before this moves to `accepted`)
+## Resolved decisions (2026-06-03)
 
-1. **IA**: dedicated `/kg-explorer` page (D1, recommended) vs. folding KG into the Bench stages.
-2. **Graph library**: Cytoscape.js (D4, recommended) vs. D3.
-3. **KG-side investment order**: push KG to add the Tier-C HTTP routes now (esp. the experiment DAG,
-   KG-0001's flagship, today entirely UI-less) vs. ship all of Tier-A first and revisit.
-4. **`ingest` entry**: a drag-drop upload (needs a KG HTTP ingest route) vs. routing through the
-   existing `kg_ingest` agent tool for v1.
+The four prior open questions were resolved in favour of the recommendations above:
+
+1. **IA** → a dedicated `/kg-explorer` page (D1). Discovery is a distinct mode from hypothesis
+   testing, and the Read-stage boundary (D1) keeps the two from overlapping.
+2. **Graph library** → Cytoscape.js for v1 (D4); revisit D3 only if interaction needs outgrow it.
+3. **KG-side investment order** → ship Tier-A first (no new KG routes, fastest value), then the
+   experiment-DAG routes as the first KG-side fast-follow (D7).
+4. **`ingest` entry** → the existing `kg_ingest` agent tool for v1; a drag-drop upload UI awaits a
+   future KG ingest HTTP route (Non-Goals).
 
 ## Consequences & relationships
 
