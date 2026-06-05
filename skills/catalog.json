@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
   "generated_by": "scripts/generate_catalog.py",
-  "skill_count": 89,
+  "skill_count": 92,
   "skills": [
     {
       "name": "bulkrna-batch-correction",
@@ -990,6 +990,29 @@
       "trigger_keywords": []
     },
     {
+      "name": "sc-consensus-clustering",
+      "cli_alias": "sc-consensus-clustering",
+      "description": "Multi-resolution typed consensus over sc-clustering. Fans out leiden / louvain at several resolutions in parallel, scores members by silhouette + cross-method NMI, runs kmode / weighted / LCA consensus on the surviving base clusterings, and emits a verified report carrying the mandatory A-path banner per ADR 0010.",
+      "version": "0.1.0",
+      "status": "mvp",
+      "has_script": true,
+      "has_tests": true,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run sc-consensus-clustering --demo",
+      "tags": [
+        "singlecell",
+        "consensus",
+        "typed-consensus",
+        "multi-resolution",
+        "silhouette",
+        "bc-ranking",
+        "kmode",
+        "lca",
+        "weighted"
+      ],
+      "trigger_keywords": []
+    },
+    {
       "name": "sc-count",
       "cli_alias": "sc-count",
       "description": "Load when turning scRNA FASTQ (or existing CellRanger/STARsolo/SimpleAF/kb-python output) into a downstream-ready AnnData. Skip when reads are already counted into AnnData (use sc-standardize-input) or for raw quality assessment only (use sc-fastq-qc).",
@@ -1481,6 +1504,49 @@
         "starsolo",
         "spliced-unspliced",
         "kb-python"
+      ],
+      "trigger_keywords": []
+    },
+    {
+      "name": "consensus-domains",
+      "cli_alias": "consensus-domains",
+      "description": "Multi-method consensus over spatial-domains. Fans out 5 methods in parallel, computes a SACCELERATOR-style base-clustering ranking, runs typed consensus (kmode / weighted / LCA), and emits a verified consensus report with the mandatory A-path banner per ADR 0010.",
+      "version": "0.1.0",
+      "status": "mvp",
+      "has_script": true,
+      "has_tests": true,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run consensus-domains --demo",
+      "tags": [
+        "spatial",
+        "consensus",
+        "typed-consensus",
+        "expert-in-the-loop",
+        "saccelerator",
+        "bc-ranking",
+        "kmode",
+        "lca",
+        "weighted"
+      ],
+      "trigger_keywords": []
+    },
+    {
+      "name": "consensus-interpret",
+      "cli_alias": "consensus-interpret",
+      "description": "LLM-grounded biological interpretation of a verified typed consensus run. Reads the typed run dir + the original adata, runs inline per-cluster DE, looks up markers in a bundled tissue-keyed marker DB, and asks the chair LLM to (\u03b3) name each cluster's likely cell type with mandatory marker citations and (\u03b2) recommend top-3 next-step skills with mandatory evidence_refs. Output banner [A+I: Interpreted on verified consensus]. Failure-mode contract per ADR 0012.",
+      "version": "0.1.0",
+      "status": "mvp",
+      "has_script": true,
+      "has_tests": true,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run consensus-interpret --demo",
+      "tags": [
+        "spatial",
+        "consensus",
+        "interpreted-layer",
+        "biology-annotation",
+        "marker-grounded",
+        "backward-proof-driven-recommendation"
       ],
       "trigger_keywords": []
     },
