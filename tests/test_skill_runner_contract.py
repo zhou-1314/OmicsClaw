@@ -311,3 +311,101 @@ def test_run_skill_cancellation_with_partial_result_json_is_not_reported_as_succ
         "cancelled run with partial result.json must NOT be reported as success"
     )
     assert result.exit_code != 0
+
+
+# ---------------------------------------------------------------------------
+# Skill-subprocess interpreter + environment isolation (desktop-server
+# "missing deps" regression — see project memory
+# project_desktop_server_wrong_interpreter_usersite).
+#
+# Two failure modes, both exercised at the ``_prepare_skill_run`` seam where
+# the subprocess argv + env are actually built:
+#   1. ``OMICSCLAW_RUN_PYTHON`` was ignored on the main run path (runner.py
+#      hardcoded ``sys.executable``), so an app server running in a lighter
+#      env could not redirect skills to the analysis env.
+#   2. Skill subprocesses inherited ``~/.local`` user-site, letting a broken
+#      package there shadow the analysis env's deps.
+# ---------------------------------------------------------------------------
+
+
+def _install_fake_demo_skill(monkeypatch, tmp_path):
+    """Register a trivial demo skill and return the runner module."""
+    skill_runner = importlib.import_module("omicsclaw.skill.runner")
+    fake_script = tmp_path / "fake_prep.py"
+    fake_script.write_text("print('noop')\n", encoding="utf-8")
+    monkeypatch.setattr(skill_runner, "DEFAULT_OUTPUT_ROOT", tmp_path)
+    _install_fake_skills(monkeypatch, {
+        "fake-prep": {
+            "script": fake_script,
+            "domain": "demo",
+            "demo_args": ["--demo"],
+            "allowed_extra_flags": set(),
+            "description": "Prep test skill",
+        }
+    })
+    return skill_runner
+
+
+def _prepare(skill_runner, tmp_path):
+    prepared = skill_runner._prepare_skill_run(
+        "fake-prep",
+        input_path=None,
+        input_paths=None,
+        output_dir=str(tmp_path / "out"),
+        demo=True,
+        session_path=None,
+        extra_args=None,
+        log_banner=False,
+    )
+    assert not isinstance(prepared, skill_runner.SkillRunResult), getattr(prepared, "stderr", prepared)
+    return prepared
+
+
+def test_prepare_skill_run_honours_omicsclaw_run_python(tmp_path, monkeypatch):
+    """The skill-subprocess interpreter must follow ``OMICSCLAW_RUN_PYTHON``.
+
+    Regression: ``runner.py`` used to hardcode ``PYTHON = sys.executable`` and
+    pass it to ``build_skill_argv``, so the documented override silently did
+    nothing — skills always ran under whatever interpreter launched the server
+    (e.g. base anaconda3 instead of the activated analysis env).
+    """
+    skill_runner = _install_fake_demo_skill(monkeypatch, tmp_path)
+
+    # An existing absolute path is returned resolved by get_skill_runner_python.
+    fake_py = tmp_path / "analysis_env" / "bin" / "python"
+    fake_py.parent.mkdir(parents=True)
+    fake_py.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setenv("OMICSCLAW_RUN_PYTHON", str(fake_py))
+
+    prepared = _prepare(skill_runner, tmp_path)
+    assert prepared.cmd[0] == str(fake_py.resolve())
+
+
+def test_prepare_skill_run_defaults_to_sys_executable_without_override(tmp_path, monkeypatch):
+    skill_runner = _install_fake_demo_skill(monkeypatch, tmp_path)
+    monkeypatch.delenv("OMICSCLAW_RUN_PYTHON", raising=False)
+
+    prepared = _prepare(skill_runner, tmp_path)
+    assert prepared.cmd[0] == sys.executable
+
+
+def test_prepare_skill_run_isolates_user_site_by_default(tmp_path, monkeypatch):
+    """Skill subprocesses must not inherit ``~/.local`` user-site packages.
+
+    Regression: a broken ABI-mismatched ``~/.local`` torch shadowed the
+    analysis env's torch, so CellCharter failed to import even under the
+    correct interpreter.
+    """
+    skill_runner = _install_fake_demo_skill(monkeypatch, tmp_path)
+    monkeypatch.delenv("PYTHONNOUSERSITE", raising=False)
+
+    prepared = _prepare(skill_runner, tmp_path)
+    assert prepared.env["PYTHONNOUSERSITE"] == "1"
+
+
+def test_prepare_skill_run_respects_explicit_pythonnousersite_optout(tmp_path, monkeypatch):
+    skill_runner = _install_fake_demo_skill(monkeypatch, tmp_path)
+    monkeypatch.setenv("PYTHONNOUSERSITE", "0")
+
+    prepared = _prepare(skill_runner, tmp_path)
+    assert prepared.env["PYTHONNOUSERSITE"] == "0"

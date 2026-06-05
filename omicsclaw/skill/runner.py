@@ -46,13 +46,17 @@ from .execution.pipeline_runner import (
     run_pipeline_by_name,
     run_spatial_pipeline,
 )
+from .execution.python_runtime import get_skill_runner_python
 from .execution.subprocess_driver import drive_subprocess
 from .result import SkillRunResult, build_skill_run_result
 
 
 OMICSCLAW_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_ROOT = OMICSCLAW_DIR / "output"
-PYTHON = sys.executable
+# Honour ``OMICSCLAW_RUN_PYTHON`` (falls back to ``sys.executable``). Resolved
+# fresh per run inside ``_prepare_skill_run``; this module constant is kept for
+# backward-compat with importers and reflects the override at import time.
+PYTHON = get_skill_runner_python()
 
 if str(OMICSCLAW_DIR) not in sys.path:
     sys.path.insert(0, str(OMICSCLAW_DIR))
@@ -160,7 +164,7 @@ def _prepare_skill_run(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     cmd = build_skill_argv(
-        python_executable=PYTHON,
+        python_executable=get_skill_runner_python(),
         script_path=script_path,
         skill_info=skill_info,
         demo=demo,
@@ -191,6 +195,11 @@ def _prepare_skill_run(
 
     env = os.environ.copy()
     env["PYTHONPATH"] = str(OMICSCLAW_DIR) + os.pathsep + env.get("PYTHONPATH", "")
+    # Isolate skill subprocesses from the user-site (``~/.local``) so a broken
+    # or ABI-mismatched package there cannot shadow the analysis env's deps
+    # (e.g. a stale ``~/.local`` torch breaking CellCharter). Operators can opt
+    # out by exporting ``PYTHONNOUSERSITE=0`` before launch.
+    env.setdefault("PYTHONNOUSERSITE", "1")
 
     return _PreparedSkillRun(
         skill_name=skill_name,

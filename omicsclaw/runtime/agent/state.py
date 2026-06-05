@@ -17,7 +17,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import sys
 import tempfile
 import threading
@@ -119,40 +118,12 @@ def _path_names(paths: list[Path]) -> list[str]:
     return [path.name for path in paths]
 
 
-def get_skill_runner_python() -> str:
-    """Return the Python executable used for skill subprocesses.
-
-    By default this is the current interpreter, but advanced deployments can
-    override it with ``OMICSCLAW_RUN_PYTHON`` when the app server itself runs
-    in a lighter environment than the scientific analysis stack.
-    """
-    candidate = str(os.getenv("OMICSCLAW_RUN_PYTHON", "") or "").strip()
-    if not candidate:
-        return sys.executable
-
-    expanded = os.path.expanduser(candidate)
-    if os.path.sep in expanded or (os.path.altsep and os.path.altsep in expanded):
-        resolved_path = Path(expanded)
-        if resolved_path.exists():
-            return str(resolved_path.resolve())
-        logging.getLogger("omicsclaw.bot").warning(
-            "OMICSCLAW_RUN_PYTHON=%s does not exist; falling back to sys.executable=%s",
-            candidate,
-            sys.executable,
-        )
-        return sys.executable
-
-    resolved = shutil.which(expanded)
-    if resolved:
-        return resolved
-
-    logging.getLogger("omicsclaw.bot").warning(
-        "OMICSCLAW_RUN_PYTHON=%s was not found on PATH; falling back to sys.executable=%s",
-        candidate,
-        sys.executable,
-    )
-    return sys.executable
-
+# ``get_skill_runner_python`` lives in the lightweight
+# ``omicsclaw.skill.execution.python_runtime`` module so the skill runner can
+# honour ``OMICSCLAW_RUN_PYTHON`` without importing this heavyweight bot-engine
+# module. Re-exported here for the existing callers (agent_executors, the
+# desktop health endpoint) that import it from ``state``.
+from omicsclaw.skill.execution.python_runtime import get_skill_runner_python
 
 PYTHON = get_skill_runner_python()
 
