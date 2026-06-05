@@ -4,7 +4,7 @@ The injector replaces the per-surface voice subsections that used to live
 inside SOUL.md (Bot Mode / CLI Mode). It emits a small block (≤600 chars)
 that adapts the agent's tone to the active surface:
 
-- bot         — emoji OK sparingly, markdown formatting allowed
+- bot         — no emoji (professional tone), markdown formatting allowed
 - interactive — plain text only, UPPERCASE for emphasis
 - pipeline    — same plain-text rule as interactive
 """
@@ -33,13 +33,15 @@ def test_surface_voice_rules_injector_is_registered() -> None:
     assert "surface_voice_rules" in names
 
 
-def test_surface_voice_rules_for_bot_allows_emoji() -> None:
+def test_surface_voice_rules_for_bot_forbids_emoji() -> None:
     text = _layer_for("bot")
     assert text, "bot voice rules layer empty"
     lower = text.lower()
-    # Bot mode lets the agent use emoji sparingly.
-    assert "emoji" in lower
-    assert "no emoji" not in lower, "bot must not get the no-emoji rule"
+    # The chat surface (desktop app) must read professionally — no emoji.
+    assert "no emoji" in lower
+    assert "emoji ok" not in lower, "bot must not be told emoji are OK"
+    # Markdown formatting still allowed (desktop renders it).
+    assert "markdown formatting allowed" in lower
 
 
 def test_surface_voice_rules_for_interactive_forbids_emoji_and_markdown_bold() -> None:
@@ -66,12 +68,14 @@ def test_surface_voice_rules_size_under_600_chars_per_surface() -> None:
         )
 
 
-def test_surface_voice_rules_bot_emoji_replaces_old_role_guardrails_emoji_rule() -> None:
-    """Phase 1 had ``role_guardrails`` carry "emojis unless the user
-    explicitly requests them" for every surface. After Phase 3, only
-    interactive/pipeline get an explicit no-emoji rule; bot gets the
-    permissive variant. This test pins that contract change."""
+def test_surface_voice_rules_bot_forbids_emoji_but_keeps_markdown() -> None:
+    """The chat ("bot") surface now forbids emoji like interactive/pipeline
+    (desktop replies must read professionally), but unlike those plain-text
+    surfaces it still permits markdown formatting. Pins this contract."""
     bot = _layer_for("bot")
     interactive = _layer_for("interactive")
-    assert "no emoji" not in bot.lower()
+    assert "no emoji" in bot.lower()
     assert "no emoji" in interactive.lower() or "plain text" in interactive.lower()
+    # bot keeps markdown; the plain-text surfaces do not.
+    assert "markdown formatting allowed" in bot.lower()
+    assert "plain text" in interactive.lower()

@@ -867,8 +867,7 @@ def _build_mcp_instructions_layer(request: ContextAssemblyRequest) -> str | None
 _SURFACE_VOICE_RULES: dict[str, str] = {
     "bot": (
         "## Voice (chat surface)\n\n"
-        "- Emoji OK sparingly: 🧬 (omics), 📊 (results), ⚠️ (warnings); "
-        "at most one per message.\n"
+        "- No emoji. Keep a professional, objective tone.\n"
         "- Markdown formatting allowed: **bold** for emphasis, *italic* for "
         "gene names, headers for structure.\n"
         "- Greet with `Hi [Name]`; sign off with `— OmicsBot`."
@@ -893,8 +892,8 @@ def _build_surface_voice_rules_layer(request: ContextAssemblyRequest) -> str | N
     """Surface-conditional voice rules.
 
     Replaces the per-surface ``Bot Mode`` / ``CLI Mode`` subsections that
-    used to live inside SOUL.md. The bot variant allows emoji and markdown;
-    interactive and pipeline enforce plain text.
+    used to live inside SOUL.md. The bot variant allows markdown but forbids
+    emoji (professional tone); interactive and pipeline enforce plain text.
     """
     text = _SURFACE_VOICE_RULES.get(str(request.surface or "").strip().lower())
     if not text:

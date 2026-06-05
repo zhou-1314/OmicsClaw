@@ -70,10 +70,12 @@ class TestPersonaToneRulesInSoulMd:
 class TestSurfaceConditionalVoiceRules:
     """Per-surface emoji / markdown rules moved here from role_guardrails."""
 
-    def test_bot_allows_emoji_sparingly(self, bot_voice_rules_text: str):
+    def test_bot_forbids_emoji(self, bot_voice_rules_text: str):
+        # The chat surface (desktop app) must read professionally — no emoji —
+        # while still allowing markdown (unlike the plain-text CLI/pipeline).
         lower = bot_voice_rules_text.lower()
-        assert "emoji" in lower
-        assert "no emoji" not in lower
+        assert "no emoji" in lower
+        assert "markdown formatting allowed" in lower
 
     def test_cli_forbids_emoji(self, cli_voice_rules_text: str):
         lower = cli_voice_rules_text.lower()
