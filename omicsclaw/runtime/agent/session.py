@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import datetime, timezone
 
 from omicsclaw.providers.registry import (
@@ -31,6 +32,32 @@ from omicsclaw.providers.runtime import (
 )
 
 logger = logging.getLogger("omicsclaw.omicsclaw.runtime.agent.session")
+
+
+def effective_llm_proxy() -> str:
+    """The proxy the LLM HTTP client (httpx/openai) will actually use, read from
+    the process environment with credentials masked.
+
+    Returns ``"(none)"`` when no proxy var is set. That is the signal worth
+    surfacing at startup: on a network that can only reach the LLM API through a
+    proxy (e.g. a remote server started without sourcing the shell rc, so the
+    exported ``HTTPS_PROXY`` never reached this process), LLM calls go direct and
+    fail with ``openai.APIConnectionError("Connection error")`` despite a valid
+    key. Put the proxy in this project's ``.env`` so it loads regardless of how
+    the backend was launched.
+    """
+    raw = (
+        os.environ.get("HTTPS_PROXY")
+        or os.environ.get("https_proxy")
+        or os.environ.get("ALL_PROXY")
+        or os.environ.get("all_proxy")
+        or os.environ.get("HTTP_PROXY")
+        or os.environ.get("http_proxy")
+        or ""
+    ).strip()
+    if not raw:
+        return "(none)"
+    return re.sub(r"//[^/@]+@", "//***@", raw)  # mask user:pass@ credentials
 
 # Files received from a chat surface, keyed by chat_id. Lives here per the
 # bot/session module contract; ``omicsclaw/app/_attachments.py`` reaches it
@@ -317,7 +344,7 @@ def init(
         logger.info(
             f"LLM initialised: provider={_core.LLM_PROVIDER_NAME}, "
             f"model={_core.OMICSCLAW_MODEL}, base_url={effective_base_url or '(default)'}, "
-            f"auth_mode={auth_mode_normalized}"
+            f"auth_mode={auth_mode_normalized}, proxy={effective_llm_proxy()}"
         )
 
     _core.memory_store = None
