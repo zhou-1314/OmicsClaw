@@ -115,3 +115,26 @@ def test_generator_still_filters_hidden_dirs_relative_to_skills_dir(tmp_path, mo
         "hidden dirs INSIDE the skills tree must still be filtered"
     )
     assert catalog["skills"][0]["name"] == "fake-skill"
+
+
+def test_committed_catalog_is_fresh():
+    """The committed skills/catalog.json must match a freshly generated one.
+
+    Guards against catalog drift: when a skill is added without re-running
+    `scripts/generate_catalog.py --apply`, the committed catalog goes stale
+    while the runtime registry discovers the new skill, and the Skill Catalog
+    health check flags `Registry/catalog drift detected`. This mirrors the
+    script's own `--check` mode (string-equal on the same indent=2 dump).
+
+    If this fails, run: python scripts/generate_catalog.py --apply
+    """
+    import json
+
+    catalog_path = generate_catalog.SKILLS_DIR / "catalog.json"
+    assert catalog_path.exists(), f"missing {catalog_path}"
+    expected = json.dumps(generate_catalog.generate_catalog(), indent=2)
+    current = catalog_path.read_text(encoding="utf-8")
+    assert current.rstrip() == expected.rstrip(), (
+        "skills/catalog.json is out of date — run "
+        "`python scripts/generate_catalog.py --apply`."
+    )

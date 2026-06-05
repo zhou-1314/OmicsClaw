@@ -51,6 +51,12 @@ jobs:
       - name: Test OmicsClaw CLI
         run: python omicsclaw.py list
 
+      - name: Check skills/catalog.json is fresh
+        run: python scripts/generate_catalog.py --check
+
+      - name: Catalog generator regression tests
+        run: python -m pytest tests/test_generate_catalog.py -v
+
   memory-test:
     runs-on: ubuntu-latest
     steps:
