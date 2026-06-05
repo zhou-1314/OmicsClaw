@@ -171,6 +171,15 @@ _KNOWN_MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "glm-5": 202_752,
     "glm-5-turbo": 202_752,
     "glm-4.7": 202_752,
+    # Ollama (local) — Gemma 4 (https://ollama.com/library/gemma4/tags).
+    # Edge variants (e2b/e4b) are 128K; 12b/26b/31b are 256K. Exact tag match,
+    # since Ollama ids carry a ``:tag`` suffix that get_context_window does not
+    # split (unlike ``/``-segmented gateway ids).
+    "gemma4:e2b": 131_072,
+    "gemma4:e4b": 131_072,
+    "gemma4:12b": 262_144,
+    "gemma4:26b": 262_144,
+    "gemma4:31b": 262_144,
 }
 
 

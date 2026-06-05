@@ -214,9 +214,15 @@ PROVIDER_DISPLAY_METADATA: dict[str, ProviderDisplayMetadata] = {
             "qwen3:8b",
             "llama3.3:70b",
             "llama3.1:8b",
-            # Gemma 4 (2026-04, Apache 2.0) — native tool calling.
+            # Gemma 4 (2026-04, Apache 2.0) — native tool calling. Full size
+            # ladder so the desktop picker offers a resource-appropriate tag
+            # before the user pulls anything. See
+            # docs/engineering/local-llm-gemma.mdx for the resource->model table.
+            "gemma4:e2b",
             "gemma4:e4b",
+            "gemma4:12b",
             "gemma4:26b",
+            "gemma4:31b",
             # Reasoning / text-only models retained for visibility but the
             # frontend marks them with supports_tools=False so users can't
             # pick them as the primary agent model. See

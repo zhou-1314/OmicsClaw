@@ -26,6 +26,7 @@ ENV/
 .env.*
 *.env.local
 !.env.example
+!.env.ollama.example
 
 # API keys and credentials
 *_key.txt

@@ -1,0 +1,196 @@
+---
+title: "本地 LLM：用 Ollama 跑 Gemma 4（零 API 费用）"
+description: "让 OmicsClaw 的多组学 agent 跑在本地、支持工具调用的 Gemma 4 上——由 Linux 服务器上的 Ollama 提供，零 API Key 费用，推理全部在服务器本机完成，经与远程执行相同的 SSH 隧道接入。"
+keywords: ["local-llm", "gemma", "gemma4", "ollama", "零 API", "remote", "SSH", "工具调用", "OmicsClaw"]
+og:image: "/docs/images/og-cover.png"
+---
+
+## 为什么用本地 Gemma 4 —— 以及要有的预期
+
+这份手册把 OmicsClaw 配成 **零 API Key 费用**运行：一个本地 Gemma 4 模型，由 [Ollama](https://ollama.com)
+提供服务，跑在与 `oc desktop-server` **同一台 Linux 服务器**上。Electron 版 OmicsClaw-App 留在你的笔记本，
+经 [远程执行](remote-execution.mdx) 的 SSH 隧道连后端；后端只在 `127.0.0.1` 上访问 Ollama，
+所以模型服务**从不对外暴露**。
+
+**先把预期摆正。** OmicsClaw 是一个多轮、多工具的 agent：它把每个查询路由到某个领域 skill，并以结构化参数
+调用工具。本地小模型驱动这套循环的**稳定性明显弱于前沿 API**（Claude / GPT / DeepSeek）。在复杂的多组学路由上，
+要预期**偶尔漏调工具、或参数填错**——模型可能用文字描述流程，却没真正调用 skill。这是免费本地化要付的代价；
+下面的「第 5 节 · 验证工具调用」和「第 6 节 · 故障排查」会告诉你如何发现它、并升档到更大的模型。
+
+> **必须是 Gemma 4。** 只有 **gemma4** 系列支持工具调用。**`gemma3:12b` 不支持工具调用**，会破坏 skill 路由
+> ——它只能聊天，永远不会调用工具。不要拿它替代。本手册全程使用 `gemma4:*` 标签。
+
+## 1. 前置条件与「资源 → 模型」选型表
+
+- 一台带 **NVIDIA GPU** 的 **Linux 服务器**（Ollama 和 `oc desktop-server` 都跑在这台机器上）。
+- 在该服务器上安装 OmicsClaw（含 desktop 扩展）：`pip install -e ".[desktop]"`。
+- 一台运行 OmicsClaw-App 的笔记本，且已能通过 SSH 访问该服务器（见 [远程执行](remote-execution.mdx)）。
+
+按服务器 GPU **能腾出的显存**挑一个 Gemma 4 标签。本手册以 `gemma4:12b` 作为**默认基线**。
+
+| 标签 | 下载体积\* | Context | 大致显存\*\* | 何时选 |
+|---|---|---|---|---|
+| `gemma4:e2b` | ~7.2 GB | 128K | ~8–9 GB | 最小显存 / 核显；漏调用最多 |
+| `gemma4:e4b` | ~9.6 GB | 128K | ~10–11 GB | 比 e2b 略强 |
+| `gemma4:12b` | ~7.6 GB (q4) | 256K | ~9–10 GB | **默认基线**，推荐起点 |
+| `gemma4:26b` | ~18 GB | 256K | ~20–22 GB | 12b 只聊天不调工具时升级 |
+| `gemma4:31b` | ~20 GB | 256K | ~22–24 GB | 大显存，工具调用最稳 |
+
+> \* 体积与 context 以 **Ollama 官方库为准**（数值可能随版本变动）：<https://ollama.com/library/gemma4/tags>。
+> \*\* 显存为「下载体积 + KV-cache / 上下文开销」的粗略估计——按 GPU 显存 **高于**下载体积来选，并为上下文留余量。
+> 若遇到 CUDA OOM，降一档标签或调小 context window（见第 6 节）。
+
+## 2. 服务器侧 —— Ollama
+
+SSH 登录**那台 Linux 服务器**（即跑 `oc desktop-server` 的同一台主机）。
+
+**安装 Ollama（Linux）。** 官方 Linux 一键安装：
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+> 上游安装脚本可能更新，最终以官方页 <https://ollama.com> 为准（不同发行版的支持方式也在那里）。
+
+**让 Ollama 只监听 localhost。** 前台运行时显式固定监听地址：
+
+```bash
+OLLAMA_HOST=127.0.0.1:11434 ollama serve
+```
+
+若以 systemd 服务方式常驻，用 `Environment="OLLAMA_HOST=127.0.0.1:11434"` 固化监听后重启服务
+（具体 unit-file / `systemctl edit` 语法属于 Ollama 自身的部署文档 <https://ollama.com>，本手册不再赘述）。
+
+> 因为后端和 Ollama 同机，后端的 `base_url=http://localhost:11434/v1`（OmicsClaw 在
+> `omicsclaw/providers/registry.py` 里硬编码的 ollama 预设）正好解析到**这台服务器**的 Ollama。
+> 把 Ollama 钉在 `127.0.0.1`，它就永不出机——和 desktop-server 一样。
+
+**拉取基线模型：**
+
+```bash
+ollama pull gemma4:12b
+```
+
+**确认模型已安装：**
+
+```bash
+# CLI：列出已装标签
+ollama list
+
+# REST：通过 API 列出标签
+curl http://localhost:11434/api/tags
+```
+
+`gemma4:12b` 应在两者中都出现。`/api/tags` 响应里每个模型在 `models[].name` 下。
+
+## 3. 服务器侧 —— 后端（`oc desktop-server`）
+
+用**规范的环境变量键**把 OmicsClaw 配成走 Ollama。OmicsClaw 会在 `oc` CLI 启动器最开头自动加载
+`<项目根>/.env`（`omicsclaw.py` 的 `main()` 在分发任何子命令前先调用 `load_project_dotenv()`），
+因此凡是走 `oc` CLI 的命令——`oc desktop-server`、`oc onboard`、`python omicsclaw.py …`——都会加载 `.env`。
+而直接跑 `python -m omicsclaw.surfaces.desktop.server` **会绕过该启动器**，不加载 `.env`。
+**这里务必用 `oc desktop-server` 启动。**
+
+**方式 A — 项目 `.env`（推荐）。** 在 `<项目根>/.env` 写入（或直接复制随附的 `.env.ollama.example`）以下键：
+
+```bash
+LLM_PROVIDER=ollama
+LLM_BASE_URL=http://localhost:11434/v1
+OMICSCLAW_MODEL=gemma4:12b
+```
+
+无需 API Key —— Ollama 预设携带空 key。因为 `oc desktop-server` 走 `oc` CLI 启动器，无论进程怎么被拉起
+（systemd / nohup / ssh exec），它都会在启动时加载这份 `.env`。
+
+**方式 B — `oc onboard`。** 跑向导、provider 选 `ollama`，它会把同样的键
+（`LLM_PROVIDER` / `LLM_BASE_URL` / `OMICSCLAW_MODEL`）写回 `<项目根>/.env`：
+
+```bash
+oc onboard
+```
+
+**方式 C — 在 shell 里导出**（适合一次性 / CI 运行）：
+
+```bash
+export LLM_PROVIDER=ollama
+export LLM_BASE_URL=http://localhost:11434/v1
+export OMICSCLAW_MODEL=gemma4:12b
+```
+
+**启动后端，绑定 localhost：**
+
+```bash
+oc desktop-server --host 127.0.0.1 --port 8765
+```
+
+**在启动日志里确认 provider。** 初始化行会报告生效的 provider 与 model：
+
+```
+OmicsClaw core initialised: provider=ollama model=gemma4:12b
+```
+
+若它显示的不是 `provider=ollama`，说明 `.env` 没被读到——检查是否用 `oc desktop-server` 启动
+（而非 `python -m …server`，后者绕过了启动器的 `.env` 加载），以及上面三个键是否拼写完全正确。
+
+## 4. 笔记本侧 —— App（remote 模式 + provider = Ollama）
+
+在**笔记本**上，按 [远程执行](remote-execution.mdx) 把 OmicsClaw-App 经 SSH 连到服务器后端：
+
+1. 服务器上确保 `oc desktop-server --host 127.0.0.1 --port 8765` 正在运行（第 3 节），
+   并设好 `OMICSCLAW_WORKSPACE`，可选 `OMICSCLAW_REMOTE_AUTH_TOKEN`。
+2. App 里打开 **Runtimes → New Runtime**，填 SSH Host / Port（`22`）/ User / Key Path，
+   **Remote Port** 设 `8765`，**Auth Token** 填得与服务器的 `OMICSCLAW_REMOTE_AUTH_TOKEN` 一致。
+3. App 的 TunnelManager 会把一个本地动态端口转发到服务器的 `127.0.0.1:8765`。
+4. 点 **Run Ping**（先查 `/health`，再带 Bearer token 查 `/env/doctor`），再点 **Make Active**。
+
+然后选模型：
+
+5. App 里设 **provider = Ollama**（Settings → OmicsClaw Backend → Providers，或设置向导的 provider 步骤）。
+   连远程后端时，provider / base_url 来自**服务器**的 `.env`；App 的 provider 选择是把 agent 指向 Ollama。
+6. **模型发现**会列出**服务器** Ollama 上已装的标签（与 `ollama list` 同一份）。选 **`gemma4:12b`**。
+
+## 5. 验证工具调用
+
+一个会**聊天**的本地模型，不等于一个会**路由**的本地模型。确认它真的**调用了工具**：
+
+1. 在 App 聊天里，让它跑一个应触发 skill 路由的 demo 分析——例如：*「跑一下 bulk RNA-seq DE 的 demo」*。
+   （OmicsClaw 通过 `--demo` 提供示例数据，如 `python omicsclaw.py run bulkrna-de --demo`。）
+2. **成功** = agent 实际发起了一次 skill/工具调用（你会看到 skill 开始运行、有作业 / 输出，而不只是文字描述）。
+3. **失败** = 模型只用文字描述流程、从不调用工具。这时就**升档**：拉取并选用更大的标签（12b → 26b）：
+
+```bash
+ollama pull gemma4:26b   # 在服务器上
+# 然后在 App 模型选择器里改选 gemma4:26b
+```
+
+## 6. 故障排查
+
+| 现象 | 可能原因 | 处理 |
+|---|---|---|
+| App 选择器里没有该模型 | Ollama 没运行，或 host 不对 | 服务器上跑 `ollama list` 和 `curl http://localhost:11434/api/tags`；确保 Ollama 绑在 `127.0.0.1:11434`（`OLLAMA_HOST=127.0.0.1:11434 ollama serve`），且后端 `LLM_BASE_URL` 为 `http://localhost:11434/v1`。 |
+| 工具从不被调用（只聊天） | 模型不对 / 不支持工具——如 `gemma3:12b`，或标签太小 | 用 `gemma4:*` 标签（绝不用 gemma3）。逐级升档 12b → 26b → 31b 提高工具调用可靠性（第 5 节）。 |
+| 服务器 CUDA / 显存 OOM | GPU 撑不住该标签或上下文 | 降一档标签（`gemma4:e4b` / `e2b`）或调小 context window。当前体积见 [Ollama 库页](https://ollama.com/library/gemma4/tags)，对照第 1 节选型表。 |
+| 启动日志 provider 不是 `ollama` | `.env` 没被加载 | 用 `oc desktop-server`（或 `oc onboard`）启动，别用 `python -m …server`（会绕过启动器的 `.env` 加载）。复核 `LLM_PROVIDER=ollama` / `LLM_BASE_URL` / `OMICSCLAW_MODEL`。 |
+| App **Run Ping** 的 `/health` 失败 | SSH 没连上或后端没起 | 确认 `ssh -i <key> <user>@<host>` 能登录；确认 Remote Port 是 `8765`；确认 desktop-server 进程在跑。 |
+| `/health` 绿、`/env/doctor` 红 | Bearer token 不匹配 | 让 App 配置里的 Auth Token 等于服务器的 `OMICSCLAW_REMOTE_AUTH_TOKEN`（两边都为空也算匹配）。 |
+
+## 7. 进阶 —— llama.cpp 或任意 OpenAI 兼容服务
+
+Ollama 只是其中一种 OpenAI 兼容后端；你可以用 **`custom`** provider（而非 `ollama`）把 OmicsClaw 指向**任意**
+OpenAI 兼容服务（如 `llama.cpp` 的 server）。键不变，只把 provider 换成 `custom`、base URL 指向你服务的 `/v1`：
+
+```bash
+LLM_PROVIDER=custom
+LLM_BASE_URL=http://localhost:8080/v1   # 你的 OpenAI 兼容服务的 /v1
+OMICSCLAW_MODEL=<你的模型名>
+```
+
+**macOS / Apple-Metal** 上的本地部署路径（Apple Silicon 跑 Gemma 4），见上游指南：
+<https://github.com/majiayu000/spellbook/tree/main/skills/gemma4-local-deploy>。
+
+## 8. 致谢与免责声明
+
+灵感来自 majiayu000/spellbook 的 gemma4-local-deploy。
+
+> OmicsClaw 是用于多组学分析的研究与教育工具，并非医疗器械，也不提供临床诊断。
+> 在依据这些结果做决定前，请咨询领域专家。
