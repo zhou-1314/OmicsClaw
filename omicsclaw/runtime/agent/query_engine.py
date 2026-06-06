@@ -393,9 +393,13 @@ def _extract_stream_delta_chunks(delta: Any) -> tuple[list[str], list[str]]:
     reasoning_chunks: list[str] = []
 
     content = getattr(delta, "content", None)
-    if isinstance(content, str):
+    if isinstance(content, str) and content:
+        # Ollama's OpenAI-compatible endpoint sends content="" alongside every
+        # reasoning delta for thinking models (e.g. Gemma). Skip empty strings so
+        # we don't emit an empty `text` event per reasoning token (which the
+        # desktop app would read as the thinking phase ending between tokens).
         text_chunks.append(content)
-    elif content is not None:
+    elif content is not None and not isinstance(content, str):
         parts = content if isinstance(content, (list, tuple)) else [content]
         for part in parts:
             part_type = ""

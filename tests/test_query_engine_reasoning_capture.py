@@ -224,6 +224,30 @@ def test_passback_preserves_real_reasoning_content_on_next_turn(tmp_path):
     assert assistant_in_request["reasoning_content"] == "r1-thought"
 
 
+def test_empty_string_content_alongside_reasoning_is_not_a_text_chunk():
+    """Ollama's OpenAI-compatible endpoint sends ``content=""`` alongside *every*
+    reasoning delta for thinking models (e.g. Gemma). The empty string must not
+    be treated as a streamed text chunk — otherwise the desktop app emits an
+    empty ``text`` event after each reasoning token, which marks the thinking
+    phase ended between tokens and splits the thought into ``---``-separated
+    phases (rendered one word per line with a rule between them)."""
+    from omicsclaw.runtime.agent.query_engine import _extract_stream_delta_chunks
+
+    delta = SimpleNamespace(content="", reasoning="The user", tool_calls=None)
+    text_chunks, reasoning_chunks = _extract_stream_delta_chunks(delta)
+    assert text_chunks == []  # empty content must NOT become a text chunk
+    assert reasoning_chunks == ["The user"]
+
+
+def test_real_string_content_is_still_a_text_chunk():
+    from omicsclaw.runtime.agent.query_engine import _extract_stream_delta_chunks
+
+    delta = SimpleNamespace(content="hello", reasoning=None, tool_calls=None)
+    text_chunks, reasoning_chunks = _extract_stream_delta_chunks(delta)
+    assert text_chunks == ["hello"]
+    assert reasoning_chunks == []
+
+
 def test_message_size_estimator_counts_reasoning_content():
     msg = {
         "role": "assistant",
