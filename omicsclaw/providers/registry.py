@@ -317,11 +317,23 @@ def build_provider_registry_entries(
     for name, (base_url, default_model, env_key) in provider_presets.items():
         metadata = get_provider_display_metadata(name)
         discovered = list(discovered_models.get(name, [])) if discovered_models else []
-        models = list(dict.fromkeys([
-            *discovered,
-            *metadata["models"],
-            *((default_model,) if default_model else tuple()),
-        ]))
+        if discovered and metadata["tier"] == "local":
+            # Local runtime (e.g. Ollama): the installed tags ARE the available
+            # models, so they're authoritative — expose ONLY what's installed.
+            # The curated catalogue would otherwise pad the picker with dozens
+            # of un-pulled models the user never downloaded (and which fail at
+            # chat time), which is confusing. The catalogue remains a first-run
+            # fallback for when discovery returns nothing (daemon down / no
+            # models pulled yet), honouring this function's documented contract.
+            # ``default_model`` is intentionally NOT appended here: a preset
+            # default (e.g. ``qwen2.5:7b``) is usually not what the user pulled.
+            models = list(dict.fromkeys(discovered))
+        else:
+            models = list(dict.fromkeys([
+                *discovered,
+                *metadata["models"],
+                *((default_model,) if default_model else tuple()),
+            ]))
         model_metadata: list[ModelMetadata] = []
         for model in models:
             entry: ModelMetadata = {

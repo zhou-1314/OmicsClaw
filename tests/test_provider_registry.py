@@ -19,6 +19,34 @@ def test_provider_choices_match_registry_keys():
     assert PROVIDER_CHOICES[-2:] == ("ollama", "custom")
 
 
+def test_local_provider_discovered_models_are_authoritative():
+    """When Ollama discovery succeeds, the picker must show ONLY the installed
+    tags — not the curated catalogue padded around them. The user pulled one
+    model; offering dozens of un-pulled ones is confusing and fails at chat
+    time.
+    """
+    entries = build_provider_registry_entries(
+        discovered_models={"ollama": ["gemma4:12b"]},
+    )
+    ollama = next(entry for entry in entries if entry["name"] == "ollama")
+
+    assert ollama["models"] == ["gemma4:12b"]
+    # The preset default (qwen2.5:7b) is NOT installed → must not leak in.
+    assert "qwen2.5:7b" not in ollama["models"]
+    assert [m["id"] for m in ollama["model_metadata"]] == ["gemma4:12b"]
+
+
+def test_local_provider_falls_back_to_catalogue_when_discovery_empty():
+    """No installed models / daemon down → keep the curated catalogue as a
+    first-run fallback so the picker isn't empty.
+    """
+    entries = build_provider_registry_entries(discovered_models={"ollama": []})
+    ollama = next(entry for entry in entries if entry["name"] == "ollama")
+
+    assert "qwen2.5:7b" in ollama["models"]
+    assert "gemma4:12b" in ollama["models"]
+
+
 def test_build_provider_registry_entries_exposes_display_metadata():
     entries = build_provider_registry_entries()
 
