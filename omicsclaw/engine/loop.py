@@ -36,6 +36,7 @@ from omicsclaw.runtime.storage.transcript import (
     build_selective_replay_context,
 )
 from omicsclaw.providers.models import get_context_window
+from omicsclaw.providers.patches import provider_has_unreliable_tool_calling
 
 from ._dependencies import EngineDependencies
 from ._identity_anchor import (
@@ -400,6 +401,11 @@ async def run_engine_loop(
             ),
             deepseek_reasoning_passback=(
                 (deps.llm_provider_name or "").strip().lower() == "deepseek"
+            ),
+            # ADR 0027 — only local providers (Ollama) that silently truncate
+            # and miss tool calls get the phantom-completion nudge.
+            phantom_completion_guard=provider_has_unreliable_tool_calling(
+                deps.llm_provider_name
             ),
         ),
         callbacks=callbacks,

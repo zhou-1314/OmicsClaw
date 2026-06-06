@@ -67,6 +67,192 @@ def _final_response(text: str):
     return _FakeResponse(_FakeMessage(content=text, tool_calls=None))
 
 
+def _build_execution_tool_runtime():
+    """A runtime exposing ``omicsclaw`` — an EXECUTION_TOOLS member — so a
+    recovery tool call clears the phantom-completion predicate."""
+
+    async def executor(args):
+        return "skill ran: spatial-preprocess complete"
+
+    return ToolRegistry(
+        [
+            ToolSpec(
+                name="omicsclaw",
+                description="Run an omics skill",
+                parameters={"type": "object", "properties": {}},
+                read_only=False,
+                concurrency_safe=False,
+            )
+        ]
+    ).build_runtime({"omicsclaw": executor})
+
+
+def _omicsclaw_call_response():
+    return _FakeResponse(
+        _FakeMessage(
+            content="",
+            tool_calls=[_FakeToolCall("call-O", "omicsclaw", '{"query": "preprocess"}')],
+        )
+    )
+
+
+def _run(llm, runtime, config, signals, *, chat_id, tmp_path):
+    transcript_store = TranscriptStore(sanitizer=sanitize_tool_history)
+    result_store = ToolResultStore(storage_dir=tmp_path / "tool_results")
+    result = asyncio.run(
+        run_query_engine(
+            llm=llm,
+            context=QueryEngineContext(
+                chat_id=chat_id,
+                session_id="s",
+                system_prompt="SYSTEM",
+                user_message_content="对这个数据执行预处理分析",
+            ),
+            tool_runtime=runtime,
+            transcript_store=transcript_store,
+            tool_result_store=result_store,
+            config=config,
+            callbacks=QueryEngineCallbacks(
+                on_pathology_signal=lambda s: signals.append(s)
+            ),
+        )
+    )
+    return result, transcript_store
+
+
+def _corrections(transcript_store, chat_id) -> list[str]:
+    return [
+        m["content"]
+        for m in transcript_store.get_history(chat_id)
+        if m["role"] == "user" and "Loop detector:" in m.get("content", "")
+    ]
+
+
+# ── Phantom completion (ADR 0027) ────────────────────────────────────
+
+
+def test_phantom_completion_nudges_once_then_recovers(tmp_path):
+    """Guard on: the model narrates a claim with no tool call, gets nudged
+    once, then actually calls the execution tool and finishes."""
+    runtime = _build_execution_tool_runtime()
+    llm = _FakeLLM(
+        [
+            _final_response("I will proceed with the preprocessing pipeline now."),
+            _omicsclaw_call_response(),
+            _final_response("done"),
+        ]
+    )
+    signals: list = []
+    result, transcript_store = _run(
+        llm,
+        runtime,
+        QueryEngineConfig(
+            model="fake",
+            llm_error_types=(_FakeAPIError,),
+            phantom_completion_guard=True,
+        ),
+        signals,
+        chat_id="chat-phantom-recover",
+        tmp_path=tmp_path,
+    )
+
+    assert result == "done"
+    assert len(signals) == 1
+    assert signals[0].kind == "phantom_completion"
+    assert signals[0].tool_name is None
+
+    corrections = _corrections(transcript_store, "chat-phantom-recover")
+    assert len(corrections) == 1
+    assert "did not call any tool" in corrections[0]
+
+    # The nudge reached the model: the second LLM call saw the correction.
+    second_call_contents = [
+        m.get("content", "")
+        for m in llm.calls[1]["messages"]
+        if isinstance(m, dict)
+    ]
+    assert any("Loop detector:" in c for c in second_call_contents if isinstance(c, str))
+
+
+def test_phantom_completion_nudges_at_most_once(tmp_path):
+    """If the model keeps narrating, only one nudge is injected and its
+    final narration is returned (no infinite loop)."""
+    runtime = _build_execution_tool_runtime()
+    llm = _FakeLLM(
+        [
+            _final_response("I will run the analysis."),
+            _final_response("I will run the analysis again, generating QC."),
+        ]
+    )
+    signals: list = []
+    result, transcript_store = _run(
+        llm,
+        runtime,
+        QueryEngineConfig(
+            model="fake",
+            llm_error_types=(_FakeAPIError,),
+            phantom_completion_guard=True,
+        ),
+        signals,
+        chat_id="chat-phantom-stubborn",
+        tmp_path=tmp_path,
+    )
+
+    assert result == "I will run the analysis again, generating QC."
+    assert len(signals) == 1
+    assert len(_corrections(transcript_store, "chat-phantom-stubborn")) == 1
+
+
+def test_phantom_completion_guard_off_leaves_cloud_untouched(tmp_path):
+    """Guard off (default / cloud providers): a claiming narration is
+    returned immediately, no nudge, no signal."""
+    runtime = _build_execution_tool_runtime()
+    narration = "I will proceed with the preprocessing pipeline now."
+    llm = _FakeLLM([_final_response(narration)])
+    signals: list = []
+    result, transcript_store = _run(
+        llm,
+        runtime,
+        QueryEngineConfig(model="fake", llm_error_types=(_FakeAPIError,)),
+        signals,
+        chat_id="chat-phantom-cloud",
+        tmp_path=tmp_path,
+    )
+
+    assert result == narration
+    assert signals == []
+    assert _corrections(transcript_store, "chat-phantom-cloud") == []
+
+
+def test_phantom_completion_silent_after_genuine_execution(tmp_path):
+    """Guard on, but an execution tool actually ran: the results summary is
+    legitimate, not a phantom — no nudge."""
+    runtime = _build_execution_tool_runtime()
+    llm = _FakeLLM(
+        [
+            _omicsclaw_call_response(),
+            _final_response("Here are the results of the analysis report: QC passed."),
+        ]
+    )
+    signals: list = []
+    result, transcript_store = _run(
+        llm,
+        runtime,
+        QueryEngineConfig(
+            model="fake",
+            llm_error_types=(_FakeAPIError,),
+            phantom_completion_guard=True,
+        ),
+        signals,
+        chat_id="chat-phantom-genuine",
+        tmp_path=tmp_path,
+    )
+
+    assert "QC passed" in result
+    assert signals == []
+    assert _corrections(transcript_store, "chat-phantom-genuine") == []
+
+
 def test_pathology_pingpong_fires_and_injects_correction(tmp_path):
     runtime = _build_tool_runtime()
     llm = _FakeLLM(

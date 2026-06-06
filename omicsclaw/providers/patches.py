@@ -236,9 +236,25 @@ def model_supports_tools_ollama(model: str) -> bool | None:
     return None
 
 
+def provider_has_unreliable_tool_calling(provider_name: str | None) -> bool:
+    """True for providers whose models silently truncate context and miss
+    tool calls — the agent loop arms the phantom-completion guard (ADR 0027)
+    for these.
+
+    Today this is Ollama only (ADR 0026: the documented local path; its
+    models are tool-capable but, being small and locally served, sometimes
+    narrate a fabricated completion instead of emitting the tool call).
+    Cloud providers reliably emit tool calls and raise real context-overflow
+    errors, so they are deliberately excluded. Extend this set if other
+    self-hosted providers exhibit the same behaviour.
+    """
+    return (provider_name or "").strip().lower() == "ollama"
+
+
 __all__ = [
     "apply_deepseek_reasoning_passback",
     "discover_ollama_models",
     "discover_ollama_models_async",
     "model_supports_tools_ollama",
+    "provider_has_unreliable_tool_calling",
 ]

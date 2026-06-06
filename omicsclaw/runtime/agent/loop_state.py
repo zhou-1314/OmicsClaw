@@ -53,9 +53,15 @@ class ToolErrorRecord:
 
 @dataclass(frozen=True, slots=True)
 class PathologySignal:
-    """A detector found an unhealthy pattern in the loop history."""
+    """A detector found an unhealthy pattern in the loop history.
 
-    kind: Literal["pingpong", "repeated_failure"]
+    ``phantom_completion`` (ADR 0027) differs from the two history-based
+    kinds: it is detected at the *termination* branch (the model returned
+    no tool call and the loop is about to finish) rather than after a tool
+    runs, and it carries no ``tool_name`` (no tool was called).
+    """
+
+    kind: Literal["pingpong", "repeated_failure", "phantom_completion"]
     tool_name: str | None
     iteration: int
     count: int

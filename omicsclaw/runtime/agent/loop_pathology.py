@@ -45,6 +45,170 @@ FAILURE_WINDOW = 8
 FAILURE_THRESHOLD = 4
 
 
+# ── Phantom completion (ADR 0027) ────────────────────────────────────
+#
+# The tools that *actually run an analysis* (as opposed to inspecting /
+# searching / planning). If none of these has run in the loop, a final
+# message that claims analysis work was done is a phantom completion.
+EXECUTION_TOOLS: frozenset[str] = frozenset(
+    {
+        "omicsclaw",
+        "custom_analysis_execute",
+        "autonomous_analysis_execute",
+        "replot_skill",
+    }
+)
+
+# Best-effort intent markers (EN + ZH) that signal the model is *claiming
+# or announcing* analysis work — "I will run…", "已生成…". Curated, not
+# exhaustive: a miss degrades to current behaviour (the loop returns the
+# message as-is), which is harmless. Markers are deliberately specific to
+# running/executing/producing analysis so a generic "I will help you" does
+# not trip them. Lower-cased substring match for EN; raw substring for ZH.
+_PHANTOM_INTENT_MARKERS: tuple[str, ...] = (
+    # English — first-person commitment to act (paired with an action verb so a
+    # generic "I will help you" does not trip) or a claim of completion.
+    "i will run",
+    "i will start",
+    "i will begin",
+    "i will execute",
+    "i will perform",
+    "i will proceed",
+    "i will apply",
+    "i will use the",
+    "i will generate",
+    "i will analyze",
+    "i will analyse",
+    "i will preprocess",
+    "i will now",
+    "i will go ahead",
+    "i'll run",
+    "i'll start",
+    "i'll begin",
+    "i'll execute",
+    "i'll perform",
+    "i'll proceed",
+    "i'll apply",
+    "i'll generate",
+    "i'll go ahead",
+    "let me run",
+    "let me start",
+    "let me begin",
+    "let me execute",
+    "let me proceed",
+    "let me apply",
+    "i'm going to",
+    "i am going to",
+    "going to run",
+    "going to start",
+    "going to proceed",
+    "i have run",
+    "i've run",
+    "i ran the",
+    "i have performed",
+    "i have executed",
+    "i've executed",
+    "i have started",
+    "i've started",
+    "i have generated",
+    "i've generated",
+    "i have completed",
+    "i have analyzed",
+    "i have analysed",
+    "i have processed",
+    "proceeding with",
+    "running the analysis",
+    "running the preprocessing",
+    "preprocessing pipeline",
+    "here are the results",
+    "here are the initial results",
+    "execution report",
+    "analysis report",
+    "qc report",
+    "my plan",
+    "first step",
+    # Chinese — first-person commitment ("我将/我会/我已/正在/我来/让我", which a
+    # capability-describing intro ("我可以帮你…") does not use) or a completion
+    # claim. Bare because the verb that follows varies (采用/按照/直接开始/执行…).
+    "我将",
+    "我会",
+    "我已",
+    "正在",
+    "我来",
+    "让我",
+    "准备对",
+    "计划执行",
+    "按照以下",
+    "开始第一步",
+    "第一步",
+    "已为您",
+    "执行情况",
+    "执行过程",
+    "初步结果",
+    "分析报告",
+    "已生成",
+    "已完成分析",
+    "已完成预处理",
+    "已启动",
+    "已运行",
+    "已执行",
+)
+
+
+def _announces_analysis_work(content: str) -> bool:
+    """True if ``content`` claims/announces analysis execution or results."""
+    text = content.strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(marker in lowered for marker in _PHANTOM_INTENT_MARKERS)
+
+
+def _execution_tool_ran(state: LoopState) -> bool:
+    return any(record.name in EXECUTION_TOOLS for record in state.tool_calls)
+
+
+def detect_phantom_completion(
+    *,
+    content: str,
+    state: LoopState,
+    enabled: bool,
+) -> PathologySignal | None:
+    """Detect a *phantom completion* at the no-tool-call termination branch.
+
+    Per ADR 0027. Fires only when ALL hold:
+
+    - ``enabled`` — gated to providers whose models silently truncate and
+      miss tool calls (Ollama today); the caller passes the config flag.
+    - The terminating message ``content`` *claims or announces* analysis
+      work (``_announces_analysis_work``).
+    - No execution tool (``EXECUTION_TOOLS``) has run in this loop — so a
+      genuine post-run summary, or a model still mid-execution, is not
+      flagged.
+
+    Unlike :func:`detect`, this is evaluated against the *current* message
+    rather than the post-execution history, because the symptom is the
+    absence of a tool call, not a pattern over prior calls. It returns no
+    ``tool_name`` (none was called) and a ``count`` of 1.
+    """
+    if not enabled:
+        return None
+    if _execution_tool_ran(state):
+        return None
+    if not _announces_analysis_work(content):
+        return None
+    return PathologySignal(
+        kind="phantom_completion",
+        tool_name=None,
+        iteration=state.iteration,
+        count=1,
+        reason=(
+            "model described or claimed analysis work but called no tool, "
+            "so nothing actually ran"
+        ),
+    )
+
+
 def detect(state: LoopState) -> PathologySignal | None:
     """Return the most-recent pathology that crossed its threshold, or None.
 
@@ -121,5 +285,7 @@ __all__ = [
     "PINGPONG_THRESHOLD",
     "FAILURE_WINDOW",
     "FAILURE_THRESHOLD",
+    "EXECUTION_TOOLS",
     "detect",
+    "detect_phantom_completion",
 ]

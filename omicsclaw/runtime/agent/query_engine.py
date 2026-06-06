@@ -56,6 +56,7 @@ from .cache_diagnostics import (
     extract_cache_tokens,
 )
 from .loop_pathology import detect as detect_loop_pathology
+from .loop_pathology import detect_phantom_completion
 from .loop_state import (
     LoopState,
     PathologySignal,
@@ -174,6 +175,12 @@ class QueryEngineConfig:
     # assistant message lacks ``reasoning_content``. Set to True for the
     # ``deepseek`` provider so the chat path mirrors the autoagent passback.
     deepseek_reasoning_passback: bool = False
+    # ADR 0027 — arm the phantom-completion guard for providers whose models
+    # silently truncate context and miss tool calls (Ollama). When True and
+    # the model ends a turn with a no-tool-call message that *claims* analysis
+    # work, the loop nudges it once to actually call the tool instead of
+    # returning the fabricated narration.
+    phantom_completion_guard: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -589,6 +596,15 @@ def _format_pathology_correction(signal: PathologySignal) -> str:
             f"Loop detector: tool '{signal.tool_name}' has failed "
             f"{signal.count} times in this loop. "
             "Reconsider your approach or finalize with current information."
+        )
+    if signal.kind == "phantom_completion":
+        return (
+            "Loop detector: you described or claimed analysis work, but you did "
+            "not call any tool, so nothing actually ran and no real results "
+            "exist. If the task requires running an analysis, call the "
+            "appropriate tool now (e.g. the `omicsclaw` tool to run a skill). "
+            "Never report results, figures, or QC reports you have not obtained "
+            "from a real tool result. If no tool is needed, say so plainly."
         )
     return f"Loop detector: {signal.reason}"
 
@@ -1364,6 +1380,28 @@ async def run_query_engine(
 
         if not last_message.tool_calls:
             current_response = last_message.content or ""
+            # ADR 0027 — phantom completion: the model ended the turn with a
+            # message that *claims* analysis work but called no tool, and no
+            # execution tool has run this loop. Nudge it once to actually call
+            # the tool instead of returning the fabricated narration. The
+            # `_is_new_pathology` dedup bounds this to a single nudge; if the
+            # model ignores it, control falls through to the normal return.
+            phantom_signal = detect_phantom_completion(
+                content=current_response,
+                state=state,
+                enabled=config.phantom_completion_guard,
+            )
+            if phantom_signal is not None and _is_new_pathology(phantom_signal, state):
+                state.signals.append(phantom_signal)
+                if callbacks.on_pathology_signal is not None:
+                    await _maybe_await(callbacks.on_pathology_signal(phantom_signal))
+                transcript_store.append_user_message(
+                    context.chat_id,
+                    _format_pathology_correction(phantom_signal),
+                )
+                # Deliberately do NOT accumulate the fabricated narration into
+                # the final answer — it described results that do not exist.
+                continue
             budget_decision = check_token_budget(budget_tracker)
             if budget_decision.action == "continue":
                 if current_response.strip():

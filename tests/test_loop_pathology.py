@@ -25,6 +25,7 @@ from omicsclaw.runtime.agent.loop_pathology import (
     PINGPONG_THRESHOLD,
     PINGPONG_WINDOW,
     detect,
+    detect_phantom_completion,
 )
 from omicsclaw.runtime.agent.loop_state import (
     LoopState,
@@ -185,3 +186,114 @@ def test_pathology_signal_is_immutable() -> None:
     )
     with pytest.raises(AttributeError):
         signal.count = 5
+
+
+# ── Phantom completion (ADR 0027) ────────────────────────────────────
+
+
+def test_phantom_disabled_never_fires() -> None:
+    # Cloud providers (guard off) are untouched even on a claiming message.
+    state = LoopState()
+    _push_call(state, "inspect_data", "d")
+    assert (
+        detect_phantom_completion(
+            content="I will run the preprocessing pipeline now.",
+            state=state,
+            enabled=False,
+        )
+        is None
+    )
+
+
+def test_phantom_fires_when_claiming_work_with_no_execution_tool() -> None:
+    # The reproduced bug: explored with prep tools, then narrated a claim
+    # without ever calling an execution tool.
+    state = LoopState()
+    _push_call(state, "inspect_data", "d")
+    _push_call(state, "resolve_capability", "d")
+    signal = detect_phantom_completion(
+        content="I will proceed with the preprocessing pipeline (QC, normalization).",
+        state=state,
+        enabled=True,
+    )
+    assert signal is not None
+    assert signal.kind == "phantom_completion"
+    assert signal.tool_name is None
+    assert signal.count == 1
+    assert signal.iteration == state.iteration
+
+
+def test_phantom_fires_on_turn_zero_with_no_prior_tools() -> None:
+    # A claim on the very first turn (no tools yet) is still a phantom.
+    state = LoopState()
+    signal = detect_phantom_completion(
+        content="我已启动空间转录组预处理分析，执行情况报告：QC 已生成。",
+        state=state,
+        enabled=True,
+    )
+    assert signal is not None
+    assert signal.kind == "phantom_completion"
+
+
+def test_phantom_silent_on_conversational_reply() -> None:
+    # "介绍你自己" style answer: no claim of analysis work -> not a phantom.
+    state = LoopState()
+    assert (
+        detect_phantom_completion(
+            content="你好，我是 OmicsBot，可以帮你做多组学分析。",
+            state=state,
+            enabled=True,
+        )
+        is None
+    )
+
+
+def test_phantom_silent_after_execution_tool_ran() -> None:
+    # Genuine post-run summary: an execution tool actually ran, so a results
+    # description is legitimate, not a phantom.
+    state = LoopState()
+    _push_call(state, "inspect_data", "d")
+    _push_call(state, "omicsclaw", "d")
+    assert (
+        detect_phantom_completion(
+            content="Here are the results of the analysis report: QC passed.",
+            state=state,
+            enabled=True,
+        )
+        is None
+    )
+
+
+def test_phantom_silent_on_empty_content() -> None:
+    state = LoopState()
+    _push_call(state, "inspect_data", "d")
+    assert (
+        detect_phantom_completion(content="", state=state, enabled=True) is None
+    )
+
+
+def test_phantom_intent_markers_cover_en_and_zh() -> None:
+    state = LoopState()
+    for claim in (
+        "I'll proceed with running the analysis.",
+        "Running the analysis now and generating QC.",
+        "正在执行预处理流程。",
+        "已为您准备好 qc 和 count 图表。",
+        # Real gemma4 narration that announces an intent/plan without acting.
+        "我将采用 `spatial-preprocess` 指令。我将按照以下计划执行：1. 执行预处理。",
+    ):
+        signal = detect_phantom_completion(content=claim, state=state, enabled=True)
+        assert signal is not None and signal.kind == "phantom_completion", claim
+
+
+def test_phantom_silent_on_capability_intro() -> None:
+    # A capability-describing intro ("我可以帮你…" / "I can help") is not a
+    # commitment to act and must not trip the guard.
+    state = LoopState()
+    for reply in (
+        "你好，我是 OmicsBot，可以帮你做多组学分析。",
+        "Hi, I'm OmicsBot. I can help you analyze multi-omics data.",
+    ):
+        assert (
+            detect_phantom_completion(content=reply, state=state, enabled=True) is None
+        ), reply
