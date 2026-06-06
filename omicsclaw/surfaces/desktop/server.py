@@ -5732,14 +5732,20 @@ def _update_env_file(
 
 
 def _apply_chat_provider_switch(core: Any, provider_id: str, model: str) -> None:
-    """Re-init ``core`` for a chat-initiated provider change and persist it.
+    """Re-init ``core`` for a chat-initiated provider change — **runtime only**.
 
-    Extracted from ``chat_stream`` so the persistence rules are unit-testable.
+    Each chat carries its own ``provider_id``/``model`` (the desktop client
+    binds the selection per session), so a per-message switch must be an
+    *ephemeral* runtime override of the single global ``core`` client: it
+    re-inits the LLM client for this turn but **must not** touch ``.env``.
+    The persistent default provider is owned exclusively by the explicit
+    ``PUT /providers`` Settings action; if a per-chat switch wrote ``.env``
+    here, the global default would ping-pong to whichever provider the user
+    last chatted with, breaking simultaneous multi-provider use.
+
     The chat request path has no ``auth_mode`` field, so ``core.init`` here
-    always lands in ``api_key`` mode; we must clear any stale
-    ``LLM_AUTH_MODE=oauth`` / ``CCPROXY_PORT`` in ``.env`` that belonged to
-    a prior OAuth session, otherwise a restart would rebuild an invalid
-    ``new_provider + oauth`` combination.
+    always lands in ``api_key`` mode (credentials are read from the existing
+    per-provider env keys).
 
     Raises the original ``core.init`` exception on failure — the caller must
     surface it to the user. Silently falling back to the previous provider
@@ -5759,21 +5765,8 @@ def _apply_chat_provider_switch(core: Any, provider_id: str, model: str) -> None
     )
     core.init(provider=provider_id, model=model, base_url=base_url or None)
 
-    env_path = _get_omicsclaw_env_path()
-    if env_path:
-        updates: dict[str, str] = {
-            "LLM_PROVIDER": provider_id,
-            "LLM_AUTH_MODE": "api_key",
-        }
-        if getattr(core, "OMICSCLAW_MODEL", ""):
-            updates["OMICSCLAW_MODEL"] = core.OMICSCLAW_MODEL
-        remove_keys: set[str] = {"CCPROXY_PORT"}
-        if provider_id != "custom":
-            remove_keys.update({"LLM_BASE_URL", "OMICSCLAW_BASE_URL"})
-        _update_env_file(env_path, updates, remove_keys=remove_keys)
-
     logger.info(
-        "Auto-switched provider=%s model=%s (from chat request)",
+        "Per-chat provider override (runtime-only, .env unchanged): provider=%s model=%s",
         getattr(core, "LLM_PROVIDER_NAME", provider_id),
         getattr(core, "OMICSCLAW_MODEL", ""),
     )

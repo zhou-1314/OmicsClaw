@@ -2060,31 +2060,43 @@ async def test_switch_provider_clears_legacy_base_url_alias(monkeypatch):
     assert "OMICSCLAW_BASE_URL" in captured_remove_keys
 
 
-def test_apply_chat_provider_switch_clears_legacy_base_url_alias(monkeypatch):
+def test_apply_chat_provider_switch_is_runtime_only_and_never_persists(monkeypatch):
+    """A per-chat provider switch must re-init the runtime core WITHOUT touching
+    ``.env`` — the persistent default belongs solely to ``PUT /providers``.
+
+    Each chat binds its own provider/model, so persisting here would let the
+    global default ping-pong to whichever provider was last chatted with,
+    breaking simultaneous multi-provider use.
+    """
     pytest.importorskip("fastapi")
 
     from omicsclaw.surfaces.desktop import server
 
-    captured_remove_keys: set[str] = set()
+    init_calls: list[dict] = []
+    env_writes: list[tuple] = []
 
     class FakeCore:
         LLM_PROVIDER_NAME = "custom"
         OMICSCLAW_MODEL = "custom-model"
 
         def init(self, **kwargs):
+            init_calls.append(kwargs)
             self.LLM_PROVIDER_NAME = kwargs.get("provider") or self.LLM_PROVIDER_NAME
             self.OMICSCLAW_MODEL = kwargs.get("model") or self.OMICSCLAW_MODEL
 
     def fake_update_env_file(env_path, updates, *, remove_keys=None):
-        captured_remove_keys.update(remove_keys or set())
+        env_writes.append((env_path, updates, remove_keys))
 
     monkeypatch.setattr(server, "_get_omicsclaw_env_path", lambda: Path("/tmp/.env"))
     monkeypatch.setattr(server, "_update_env_file", fake_update_env_file)
 
     server._apply_chat_provider_switch(FakeCore(), "openai", "gpt-5.5")
 
-    assert "LLM_BASE_URL" in captured_remove_keys
-    assert "OMICSCLAW_BASE_URL" in captured_remove_keys
+    # Runtime core re-initialised for the requested provider/model …
+    assert init_calls and init_calls[-1].get("provider") == "openai"
+    assert init_calls[-1].get("model") == "gpt-5.5"
+    # … but the per-chat path never writes to .env.
+    assert env_writes == []
 
 
 @pytest.mark.asyncio
