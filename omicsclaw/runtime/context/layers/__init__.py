@@ -870,7 +870,7 @@ _SURFACE_VOICE_RULES: dict[str, str] = {
         "- No emoji. Keep a professional, objective tone.\n"
         "- Markdown formatting allowed: **bold** for emphasis, *italic* for "
         "gene names, headers for structure.\n"
-        "- Greet with `Hi [Name]`; sign off with `— OmicsBot`."
+        "- Greet with `Hi [Name]`."
     ),
     "interactive": (
         "## Voice (CLI surface)\n\n"

@@ -79,3 +79,16 @@ def test_surface_voice_rules_bot_forbids_emoji_but_keeps_markdown() -> None:
     # bot keeps markdown; the plain-text surfaces do not.
     assert "markdown formatting allowed" in bot.lower()
     assert "plain text" in interactive.lower()
+
+
+def test_surface_voice_rules_bot_has_no_signoff_but_keeps_greeting() -> None:
+    """The chat ("bot") surface must not instruct a per-message sign-off — a
+    trailing ``— OmicsBot`` on every reply reads like a letter, and the desktop
+    UI already labels the sender. The opening greeting is intentionally kept.
+    Pins the fix so the sign-off can't creep back into the voice rule."""
+    bot = _layer_for("bot")
+    lower = bot.lower()
+    assert "sign off" not in lower, "bot surface must not tell the model to sign off"
+    assert "omicsbot" not in lower, "no per-message — OmicsBot signature"
+    # The greeting stays (user kept it).
+    assert "greet" in lower, "bot surface greeting should be retained"
