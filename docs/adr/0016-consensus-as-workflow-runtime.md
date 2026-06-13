@@ -87,7 +87,7 @@ preserved unchanged; this ADR only restructures *where orchestration lives* and
 
   | Layer | Owns | Shared by |
   |---|---|---|
-  | **L1 Workflow runtime** (`runtime/workflow/`, new) | execution topology + lifecycle only — `fan_out`, cancellation, timeout, journal/resume, step-result types | any client |
+  | **L1 Workflow runtime** (`runtime/workflow/`, new) | execution topology + lifecycle only — `fan_out`, cancellation, timeout, step-result types (`chain` + journal/resume planned, not yet implemented) | any client |
   | **L2 consensus-shared** (`runtime/consensus/`, exists) | operators (kmode/weighted/lca), composite scoring, BC selection, alignment, `spatial_metrics` | every consensus flavour |
   | **L3 workflow clients** | one declarative contract each | one flavour each |
 

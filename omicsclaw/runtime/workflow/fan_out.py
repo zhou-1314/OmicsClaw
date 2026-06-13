@@ -24,7 +24,6 @@ from typing import Any, Protocol, Sequence, runtime_checkable
 
 DEFAULT_TIMEOUT_SECONDS = 600.0
 MAX_PARALLEL_CEILING = 4
-MIN_SURVIVING_STEPS = 2
 
 
 @runtime_checkable
@@ -76,7 +75,7 @@ class FanOutResult:
 
 
 def _compute_max_parallel(n_steps: int, override: int | None = None) -> int:
-    """``max_parallel = min(N, cpu_count // 2, 4)`` per ADR 0010."""
+    """Concurrency cap: ``min(N, cpu_count // 2, MAX_PARALLEL_CEILING)``."""
     if override is not None and override > 0:
         return min(n_steps, override)
     cpu_half = max(1, (os.cpu_count() or 1) // 2)
@@ -148,8 +147,8 @@ async def _run_one_step(
         except asyncio.TimeoutError:
             # NOTE: do NOT set cancel_event here — a per-step timeout is a
             # *step-local* failure, not a user-cancellation signal. Setting
-            # the shared cancel_event would cascade and abort siblings,
-            # contradicting ADR 0010 "≥2 survivors continue". The underlying
+            # the shared cancel_event would cascade and abort sibling steps,
+            # which must each fail or survive independently. The underlying
             # ``skill.runner.run_skill`` already kills the subprocess group on
             # asyncio cancellation of the to_thread coroutine, so leakage of
             # the timed-out subprocess is handled there.
@@ -187,10 +186,11 @@ def _partition_results(
 
 
 class InsufficientSurvivorsError(RuntimeError):
-    """Raised when fewer than ``MIN_SURVIVING_STEPS`` steps succeed.
+    """Raised when fewer steps survive a fan-out than the caller required.
 
-    ADR 0010 forbids silent fallback to the narrative path; A-path failure
-    is loud by design.
+    The runtime never sets this threshold itself: it is raised only when a
+    caller opts in via ``fan_out(required_survivors=...)`` and fewer steps
+    succeed than requested.
     """
 
 
@@ -202,13 +202,17 @@ async def fan_out(
     cancel_event: threading.Event | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     max_parallel: int | None = None,
+    required_survivors: int | None = None,
     runner: Any = None,
 ) -> FanOutResult:
     """Fan out ``steps`` in parallel and collect their results.
 
-    Raises ``InsufficientSurvivorsError`` if fewer than 2 steps succeed
-    (ADR 0010 operational defaults). Cancellation is best-effort: in-flight
-    steps receive killpg via the underlying ``run_skill`` chain.
+    By default every step's outcome is reported and no minimum is enforced —
+    a single survivor (or none) still returns a ``FanOutResult``. Pass
+    ``required_survivors=N`` to raise ``InsufficientSurvivorsError`` when fewer
+    than ``N`` steps succeed; the threshold is always the caller's choice, never
+    the runtime's. Cancellation is best-effort: in-flight steps receive killpg
+    via the underlying ``run_skill`` chain.
     """
     if not steps:
         raise ValueError("steps must be non-empty")
@@ -242,7 +246,7 @@ async def fan_out(
     results: list[StepRunResult] = await asyncio.gather(*coros)
     survived, failed = _partition_results(results)
 
-    if len(survived) < MIN_SURVIVING_STEPS:
+    if required_survivors is not None and len(survived) < required_survivors:
         survivors_label = (
             f"{len(survived)} surviving step"
             if len(survived) == 1
@@ -252,7 +256,7 @@ async def fan_out(
             f"{r.step.name}={r.status}({r.error})" for r in failed
         )
         raise InsufficientSurvivorsError(
-            f"Only {survivors_label} (< {MIN_SURVIVING_STEPS} required). "
+            f"Only {survivors_label} (< {required_survivors} required). "
             f"Failed: {failed_summary or '(none recorded)'}"
         )
 

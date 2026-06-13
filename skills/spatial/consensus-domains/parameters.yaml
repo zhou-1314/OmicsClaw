@@ -2,13 +2,13 @@ domain: spatial
 allowed_extra_flags:
 - --members
 - --all
-- --n-clusters
+- --n-clusters  # reserved: accepted but not consumed (disposition pending)
 - --confirm-plan
 - --non-interactive
 - --alpha
 - --beta
 - --max-class-frac
-- --llm-judge
+- --llm-judge  # reserved: accepted but not consumed (disposition pending)
 - --operator
 - --seed
 - --timeout

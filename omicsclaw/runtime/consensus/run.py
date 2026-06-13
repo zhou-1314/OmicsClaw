@@ -53,10 +53,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--alpha", type=float, default=ALPHA_DEFAULT)
     parser.add_argument("--beta", type=float, default=BETA_DEFAULT)
     parser.add_argument("--max-class-frac", type=float, default=MAX_CLASS_FRAC_CAP_DEFAULT)
-    # Accepted for CLI back-compat with the v1 wrappers but not yet consumed
-    # (reserved: --n-clusters target override, --llm-judge chair veto/reweight).
-    parser.add_argument("--n-clusters", type=int, default=None)
-    parser.add_argument("--llm-judge", action="store_true")
+    # Accepted for CLI back-compat with the v1 wrappers but NOT consumed: these
+    # two flags are reserved (the driver never reads them). --n-clusters would
+    # force a target cluster count; --llm-judge would enable a chair-LLM
+    # veto/reweight. Their final disposition is still open.
+    parser.add_argument(
+        "--n-clusters", type=int, default=None,
+        help="Reserved: accepted but not consumed (would override the target cluster count).",
+    )
+    parser.add_argument(
+        "--llm-judge", action="store_true",
+        help="Reserved: accepted but not consumed (would enable a chair-LLM veto/reweight).",
+    )
     parser.add_argument("--operator", choices=["kmode", "weighted", "lca"], default="kmode")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)

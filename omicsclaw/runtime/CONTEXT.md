@@ -28,16 +28,20 @@ _Avoid_: using "workflow" to imply this — they are different.
 
 **Workflow runtime** _(L1)_:
 The reusable in-process execution layer that workflows are built on. The
-"thin waist": it owns **execution topology + lifecycle only** — `fan_out`
-(and a future `chain`), cancellation, timeout, journal/resume, step-result
-types — and nothing domain-specific (decided 2026-05-30). Reductions like consensus
-scoring / top-K selection live one layer up, never here, so the runtime
-stays usable by any client (consensus, pipeline, …), not just fan-out-then-
-score ones. It is `team.py`'s `run_team` de-consensus'd and lifted to a
-neutral package `runtime/workflow/`. v1 is born with **one** primitive,
-`fan_out`, and **one** client, consensus (decided 2026-05-30, scope "(i)"):
-`chain` and a second client (`pipeline_runner` re-platformed) grow together
-in a later PR, so no zero-client primitive is written speculatively.
+"thin waist": it owns **execution topology + lifecycle only**. Today that is
+exactly what `fan_out` implements — parallel fan-out, a concurrency semaphore,
+cancellation, per-step timeout, an opt-in caller-supplied survivor minimum,
+and step-result types — and nothing domain-specific (decided 2026-05-30). A
+`chain` primitive and journal/resume are **planned, not yet implemented**.
+Reductions like consensus scoring / top-K selection live one layer up, never
+here — and so does every artifact: `plan.json` and the consensus tables are
+written by the L2 driver, not the runtime — so the runtime stays usable by any
+client (consensus, pipeline, …), not just fan-out-then-score ones. It is
+`team.py`'s `run_team` de-consensus'd and lifted to a neutral package
+`runtime/workflow/`. v1 is born with **one** primitive, `fan_out`, and **one**
+client, consensus (decided 2026-05-30, scope "(i)"): `chain` and a second
+client (`pipeline_runner` re-platformed) grow together in a later PR, so no
+zero-client primitive is written speculatively.
 _Avoid_: "workflow engine" (implies generative), "orchestrator" (already the
 routing skill).
 

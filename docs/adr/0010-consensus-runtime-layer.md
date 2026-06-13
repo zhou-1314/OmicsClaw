@@ -197,7 +197,8 @@ _Avoid_: collapsing the two; using `analysis://` without a sub-prefix.
 | Member planning | LLM picks 5 from `param_hints`; `--members` overrides; `--all` fans out everything |
 | Expert-in-the-loop | CLI surface only (synchronous prompt after fan-out); Desktop/Channel use top-K by composite score |
 | Pre-run plan confirm | Off by default; opt-in via `--confirm-plan` |
-| `n_clusters` target | Median of member ks; user can override with `--n-clusters`; CLI interactive step also lets user adjust |
+| `n_clusters` target | Operator returns however many clusters the math yields (`categorical` bounds it at `max(member ks)`). The `--n-clusters` flag is **reserved: accepted but not consumed** and overrides nothing today (disposition pending plan 0025 DEC-5) |
+| `--llm-judge` | **Reserved: accepted but not consumed** — a chair-LLM veto/reweight is not wired today (disposition pending plan 0025 DEC-5) |
 | Operator language | kmode + weighted in Python (scipy); LCA via R subprocess (port from SACCELERATOR) |
 | Failure semantics | <2 surviving members → error; ≥2 → continue and annotate "N/M members failed" |
 | Concurrency | `max_parallel = min(N, os.cpu_count() // 2, 4)` |

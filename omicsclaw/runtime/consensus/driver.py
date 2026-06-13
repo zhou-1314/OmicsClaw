@@ -8,7 +8,7 @@ consensus-de) executes an A-path run. Each thin skill is reduced to
 The driver owns:
 
 1. ``plan.json`` audit dump (before fan-out, so audit survives early failures)
-2. parallel skill-subprocess fan-out via ``run_team`` (ADR 0010)
+2. parallel skill-subprocess fan-out via ``fan_out`` (ADR 0010)
 3. label + intrinsic gather through the source's ``MemberArtifactReader``
 4. composite scoring + cross-method NMI matrix
 5. BC selection (via injected ``bc_selector`` callable)
@@ -226,6 +226,11 @@ async def run_typed_consensus(
     )
 
     # 3. gather labels through the source reader
+    #
+    # The consensus survivor minimum (>=2 members with readable labels) is
+    # enforced here, in the consensus layer. The L1 fan-out is domain-neutral
+    # and sets no threshold of its own, so this readable-label gate is the
+    # authoritative survivor check for a verified run.
     labels_df, intrinsic_map, missing = _gather_labels(team.survived, source)
     if labels_df.shape[1] < 2:
         raise InsufficientSurvivorsError(
