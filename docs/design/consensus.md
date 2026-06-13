@@ -66,8 +66,9 @@ waist** at pure topology:
 ```
 
 - **L1** owns *only* execution topology: parallel fan-out, the concurrency
-  semaphore, cancellation, timeout, the "≥2 survivors" rule. It knows nothing
-  about consensus — `fan_out` runs any `WorkflowStep` (anything with
+  semaphore, cancellation, timeout, and an *optional, caller-supplied* survivor
+  minimum (`required_survivors`, default off). It knows nothing about
+  consensus — `fan_out` runs any `WorkflowStep` (anything with
   `name` / `skill_name` / `to_extra_args()`). It is the one reusable primitive;
   `chain` and a second client (`pipeline_runner`) are deferred (ADR 0016 §Open).
 - **L2** owns the consensus *math* and contracts — shared by every flavour.
@@ -123,7 +124,7 @@ between fan-out and the report stays in local variables; only the final
                 │
   members ──────┼─ 2. fan_out()  ── parallel skill subprocesses (asyncio.gather,
  (planner)      │       │             semaphore ≤4, per-member timeout 600s,
-                │       │             cancel chain; <2 survivors → error)
+                │       │             cancel chain; driver sets required_survivors=2)
                 │       ▼
                 ├─ 3. _gather_labels()  ── per-member reader → labels + intrinsic
                 │       │             (member that produced no readable labels is dropped)
