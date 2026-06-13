@@ -7,9 +7,9 @@ sub-agent. Cancellation flows via the ADR 0009 ``threading.Event`` chain
 straight into killpg.
 
 Domain-neutral: a ``WorkflowStep`` is anything carrying ``name`` /
-``skill_name`` / ``to_extra_args()``. Consensus's ``ConsensusMember`` is the
-first such step; this runtime never imports it. How a step's outputs are read
-is the caller's concern, never the runtime's.
+``skill_name`` / ``to_extra_args()``. The runtime never imports a concrete
+step type — its caller supplies one — and how a step's outputs are read is the
+caller's concern, never the runtime's.
 """
 
 from __future__ import annotations
