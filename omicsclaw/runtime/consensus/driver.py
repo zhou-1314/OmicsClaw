@@ -60,6 +60,12 @@ from omicsclaw.runtime.workflow import (
 OperatorName = Literal["kmode", "weighted", "lca"]
 BCSelectorFn = Callable[[list[MemberScore], int], list[str]]
 
+# Consensus needs at least two members to merge. This survivor minimum is L2's
+# policy, supplied explicitly to the neutral L1 fan-out so a sub-threshold run
+# raises InsufficientSurvivorsError with the full per-member failure summary
+# (crash/timeout details) — diagnostics the readable-label gate alone can't give.
+MIN_CONSENSUS_MEMBERS = 2
+
 
 @dataclass(frozen=True)
 class ScoreConfig:
@@ -215,6 +221,11 @@ async def run_typed_consensus(
     run_id = str((plan_audit or {}).get("run_id") or output_dir_p.name)
 
     # 2. fan-out
+    #
+    # Pass the consensus survivor minimum explicitly: L1 is domain-neutral and
+    # sets no threshold, but L2 requires >=2 surviving subprocesses. Doing it
+    # here means a sub-threshold run fails loudly with fan_out's full per-member
+    # failure summary (crash/timeout statuses), not a bare label-count message.
     team: FanOutResult = await fan_out(
         members,
         input_path=input_path,
@@ -222,20 +233,21 @@ async def run_typed_consensus(
         cancel_event=cancel_event,
         timeout_seconds=timeout_seconds,
         max_parallel=max_parallel,
+        required_survivors=MIN_CONSENSUS_MEMBERS,
         runner=runner,
     )
 
     # 3. gather labels through the source reader
     #
-    # The consensus survivor minimum (>=2 members with readable labels) is
-    # enforced here, in the consensus layer. The L1 fan-out is domain-neutral
-    # and sets no threshold of its own, so this readable-label gate is the
-    # authoritative survivor check for a verified run.
+    # fan_out already guaranteed >= MIN_CONSENSUS_MEMBERS surviving subprocesses.
+    # Surviving is necessary but not sufficient — a member can exit 0 yet emit
+    # unreadable labels — so this gate additionally requires two readable label
+    # columns.
     labels_df, intrinsic_map, missing = _gather_labels(team.survived, source)
-    if labels_df.shape[1] < 2:
+    if labels_df.shape[1] < MIN_CONSENSUS_MEMBERS:
         raise InsufficientSurvivorsError(
             f"Only {labels_df.shape[1]} member(s) produced readable labels "
-            f"(< 2 required). Missing artifacts: {missing}"
+            f"(< {MIN_CONSENSUS_MEMBERS} required). Missing artifacts: {missing}"
         )
 
     # 4. score + persist score table

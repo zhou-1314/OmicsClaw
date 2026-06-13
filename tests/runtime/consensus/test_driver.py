@@ -242,6 +242,40 @@ async def test_driver_raises_insufficient_survivors_when_under_2(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_driver_survivor_error_preserves_member_failure_details(tmp_path: Path) -> None:
+    """A sub-threshold run must surface per-member crash details, not a bare count.
+
+    Regression guard: the driver passes ``required_survivors`` to ``fan_out`` so
+    the fatal error carries each failed member's status/error. Relying only on
+    the readable-label gate would report ``Missing artifacts: []`` when every
+    member crashed, dropping the actionable diagnostics.
+    """
+    from omicsclaw.runtime.consensus.driver import ScoreConfig, run_typed_consensus
+    from omicsclaw.runtime.consensus.team import InsufficientSurvivorsError
+
+    members = _members(["m0", "m1", "m2"])
+    source = _make_source({m.name: ["A"] for m in members}, {m.name: 0.5 for m in members})
+
+    def crashy(**kwargs):
+        out = Path(kwargs["output_dir"])
+        out.mkdir(parents=True, exist_ok=True)
+        if out.name in ("m0", "m1"):
+            raise RuntimeError("synthetic boom")
+        return _StubResult(exit_code=0)
+
+    with pytest.raises(InsufficientSurvivorsError) as exc:
+        await run_typed_consensus(
+            members=members, source=source, input_path="/dev/null",
+            output_dir=tmp_path, operator="kmode",
+            bc_selector=lambda s, k: [], score_config=ScoreConfig(),
+            seed=0, runner=crashy,
+        )
+    msg = str(exc.value)
+    assert "synthetic boom" in msg, msg
+    assert "m0" in msg and "m1" in msg, msg
+
+
+@pytest.mark.asyncio
 async def test_driver_raises_insufficient_bcs_when_selector_picks_fewer_than_2(tmp_path: Path) -> None:
     from omicsclaw.runtime.consensus.driver import (
         InsufficientBCsError,

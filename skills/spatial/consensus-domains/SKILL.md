@@ -48,12 +48,12 @@ wraps it.
 | Output directory | `--output <dir>` | yes |
 | Member list | `--members banksy,graphst,sedr,leiden,spagcn` | no (defaults to LLM-curated 5) |
 | Run ALL eligible methods | `--all` | no (slower; SACCELERATOR-style benchmark mode) |
-| Target cluster count | `--n-clusters 7` | no (defaults to median across members) |
+| Target cluster count | `--n-clusters 7` | no — reserved: accepted but not consumed (pending DEC-5) |
 | Pre-run plan confirmation | `--confirm-plan` | no (default off) |
 | Non-interactive BC picker | `--non-interactive` | no (forces top-K by score) |
 | Score weights | `--alpha 0.6 --beta 0.4` | no (ADR 0011 defaults) |
 | Class-imbalance cap | `--max-class-frac 0.8` | no |
-| LLM judge veto/reweight | `--llm-judge` | no (default deterministic) |
+| LLM judge veto/reweight | `--llm-judge` | no — reserved: accepted but not consumed (pending DEC-5) |
 | Operator | `--operator {kmode,weighted,lca}` | no (default `kmode`) |
 | Seed | `--seed 0` | no |
 | Per-member timeout (s) | `--timeout 600` | no |
@@ -100,8 +100,9 @@ wraps it.
 - **Banner is non-configurable.** The `[A: Verified consensus]` header
   is enforced by `runtime/consensus/dispatch.output_banner`. Do not
   edit `report.md` to strip it before distribution.
-- **`--n-clusters` defaults to the median across members**, not 7.
-  Override only when you have prior k from histology / known anatomy.
+- **`--n-clusters` is reserved — accepted but not consumed.** The operator
+  returns however many clusters the math yields (bounded at the max member k);
+  passing `--n-clusters` changes nothing today (disposition pending DEC-5).
 - **LCA requires R + diceR.** When unavailable, the skill prints an
   installation hint and exits non-zero rather than silently switching
   operators. Pass `--operator kmode` to bypass.
@@ -122,7 +123,7 @@ oc run consensus-domains --input preprocessed.h5ad --output out/ \
 # Explicit members + weighted operator
 oc run consensus-domains --input preprocessed.h5ad --output out/ \
   --members banksy,graphst,sedr,leiden,spagcn \
-  --operator weighted --n-clusters 7
+  --operator weighted
 
 # SACCELERATOR-style benchmark (run ALL eligible methods)
 oc run consensus-domains --input preprocessed.h5ad --output out/ --all

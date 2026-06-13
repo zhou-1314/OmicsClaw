@@ -90,7 +90,13 @@ fan-out.
 
 ### Evaluation chair's degree of freedom
 
-The default ranking is deterministic. `--llm-judge` opt-in lets the
+> **Status — reserved (not yet wired):** `--llm-judge` is accepted on the CLI
+> but **not consumed** today; the default deterministic ranking always runs.
+> The chair degree-of-freedom described here is the *intended* protocol, not
+> current behavior. Disposition pending plan 0025 DEC-5 (consistent with
+> ADR 0010, which marks the flag reserved/not consumed).
+
+The default ranking is deterministic. When wired, `--llm-judge` opt-in lets the
 evaluation-chair LLM see the full composite-score table plus the
 cross-method NMI matrix and **veto up to two members or rebalance α/β
 within ±0.2**. The chair cannot synthesize scores out of thin air —
@@ -269,9 +275,10 @@ their assertions tighten:
 - Self-consistency tests anchor the unit-test layer at the operator,
   not the runtime, so re-implementing `team.py` in the future does
   not invalidate algorithm tests.
-- Evaluation-chair LLM scope is bounded: it cannot invent scores,
-  only veto/reweight within published-default ranges. Keeps the
-  "verified" path reproducible across model versions.
+- Evaluation-chair LLM scope is bounded by design: when wired it could
+  only veto/reweight within published-default ranges, never invent scores
+  (`--llm-judge` is reserved/not consumed today — see the status note above).
+  Keeps the "verified" path reproducible across model versions.
 
 ### Negative
 
