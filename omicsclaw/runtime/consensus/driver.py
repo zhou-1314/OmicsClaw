@@ -27,6 +27,7 @@ prefix.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -49,6 +50,10 @@ from omicsclaw.runtime.consensus.scoring import (
     score_all_members,
 )
 from omicsclaw.runtime.consensus.source_registry import ConsensusSource
+from omicsclaw.runtime.consensus.spatial_panel import (
+    PANEL_METRICS,
+    intrinsic_spatial_panel,
+)
 from omicsclaw.runtime.workflow import (
     DEFAULT_TIMEOUT_SECONDS,
     FanOutResult,
@@ -56,6 +61,8 @@ from omicsclaw.runtime.workflow import (
     StepRunResult,
     fan_out,
 )
+
+logger = logging.getLogger(__name__)
 
 OperatorName = Literal["kmode", "weighted", "lca"]
 BCSelectorFn = Callable[[list[MemberScore], int], list[str]]
@@ -98,6 +105,9 @@ class TypedConsensusRun:
     output_dir: Path
     artifacts_written: tuple[Path, ...]
     missing_label_members: tuple[str, ...] = field(default_factory=tuple)
+    #: Per-member raw spatial-panel metrics (chaos/pas/mlami) when the spatial
+    #: intrinsic panel ran; empty for non-spatial runs or when disabled.
+    intrinsic_panel_raw: dict[str, dict[str, float]] = field(default_factory=dict)
 
 
 class InsufficientBCsError(RuntimeError):
@@ -131,6 +141,52 @@ def _gather_labels(
         return pd.DataFrame(), {}, missing
     labels_df = pd.concat(columns, axis=1).dropna(axis=0, how="any")
     return labels_df, intrinsic, missing
+
+
+def _load_spatial_coords(
+    input_path: str, obs_index: pd.Index
+) -> np.ndarray | None:
+    """Spatial coordinates for ``obs_index`` from the shared input AnnData.
+
+    Reads ``obsm['spatial']`` from ``input_path`` and reorders it to match the
+    gathered ``labels_df`` index (observation ids). Returns ``None`` — so the
+    caller falls back to the reader's single intrinsic signal — when the input
+    is unreadable, carries no spatial coordinates, or its observations don't
+    cover ``obs_index``. A non-spatial flavour's AnnData (e.g. sc-clustering)
+    has no ``obsm['spatial']``, so this coords-presence check is what scopes the
+    spatial panel to spatial flavours without the driver knowing about domains.
+    """
+    if not input_path:
+        return None
+    try:
+        import anndata
+
+        adata = anndata.read_h5ad(input_path)
+    except Exception:  # noqa: BLE001 — missing/unreadable input -> fall back
+        return None
+    if "spatial" not in getattr(adata, "obsm", {}):
+        return None
+    coords_all = np.asarray(adata.obsm["spatial"])
+    if coords_all.ndim != 2 or coords_all.shape[0] != adata.n_obs:
+        return None
+    position = {str(name): i for i, name in enumerate(adata.obs_names)}
+    rows: list[int] = []
+    for obs in obs_index:
+        i = position.get(str(obs))
+        if i is None:
+            # The input HAS spatial coordinates but its observation ids don't
+            # cover the gathered labels — a real misconfiguration, not a
+            # non-spatial flavour. Warn (the run still proceeds on the reader's
+            # single intrinsic) rather than silently dropping the panel.
+            logger.warning(
+                "spatial coordinates present but observation id %r is missing "
+                "from the input AnnData; skipping the spatial intrinsic panel "
+                "and using the reader's single intrinsic signal.",
+                str(obs),
+            )
+            return None
+        rows.append(i)
+    return coords_all[rows][:, :2]
 
 
 def _cross_method_nmi_matrix(labels_df: pd.DataFrame) -> pd.DataFrame:
@@ -189,9 +245,16 @@ async def run_typed_consensus(
     cancel_event: threading.Event | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     max_parallel: int | None = None,
+    use_spatial_panel: bool = True,
+    panel_weights: Mapping[str, float] | None = None,
     runner: Any = None,
 ) -> TypedConsensusRun:
     """Orchestrate one typed-consensus run end-to-end.
+
+    When ``use_spatial_panel`` is set (default) and the input AnnData carries
+    spatial coordinates, the member intrinsic-quality signal fed to BC scoring
+    is a normalised multi-metric spatial panel (chaos/pas/mlami) instead of the
+    reader's single value; non-spatial inputs fall back to the reader signal.
 
     Raises
     ------
@@ -250,6 +313,44 @@ async def run_typed_consensus(
             f"(< {MIN_CONSENSUS_MEMBERS} required). Missing artifacts: {missing}"
         )
 
+    # 3b. spatial intrinsic panel (optional)
+    #
+    # For a spatial-domain flavour, replace the reader's single intrinsic signal
+    # with a normalised multi-metric panel (chaos/pas/mlami) so domain quality is
+    # judged from several angles. Gated on the *flavour's declared domain* — not
+    # merely coords-presence: an sc-clustering run on a spatially-annotated
+    # AnnData has coords but must keep its own silhouette intrinsic, since the
+    # panel measures spatial-domain coherence, not cell-cluster compactness.
+    intrinsic_panel_raw: dict[str, dict[str, float]] = {}
+    if use_spatial_panel and getattr(source, "domain", "") == "spatial":
+        coords = _load_spatial_coords(input_path, labels_df.index)
+        if coords is not None:
+            panel_intrinsic: dict[str, float] = {}
+            for col in labels_df.columns:
+                scalar, raw = intrinsic_spatial_panel(
+                    labels_df[col].to_numpy(), coords,
+                    weights=panel_weights, seed=seed,
+                )
+                panel_intrinsic[col] = scalar
+                intrinsic_panel_raw[col] = raw
+            intrinsic_map = panel_intrinsic
+            panel_path = output_dir_p / "member_intrinsic_panel.csv"
+            metric_cols = list(PANEL_METRICS)
+            pd.DataFrame(
+                [
+                    {
+                        "member": m,
+                        **{
+                            mc: intrinsic_panel_raw[m].get(mc, float("nan"))
+                            for mc in metric_cols
+                        },
+                        "intrinsic_panel": panel_intrinsic[m],
+                    }
+                    for m in labels_df.columns
+                ]
+            ).to_csv(panel_path, index=False)
+            artifacts.append(panel_path)
+
     # 4. score + persist score table
     labels_arrays = {col: labels_df[col].to_numpy() for col in labels_df.columns}
     scores = score_all_members(
@@ -307,4 +408,5 @@ async def run_typed_consensus(
         output_dir=output_dir_p,
         artifacts_written=tuple(artifacts),
         missing_label_members=tuple(missing),
+        intrinsic_panel_raw=intrinsic_panel_raw,
     )

@@ -37,7 +37,9 @@ are *already emitted* by every current OmicsClaw member:
   ~10 lines).
 - **Intrinsic quality, spatial**: `domain_local_purity` per spot
   averaged into `mean_local_purity`
-  (`spatial_domains.py:148, 178, 472`).
+  (`spatial_domains.py:148, 178, 472`). **Extended (ADR 0028):** spatial runs
+  now feed a normalized multi-metric panel (chaos/pas/mlami) as the intrinsic
+  term instead of `mean_local_purity` alone; `--no-spatial-panel` restores this.
 - **Intrinsic quality, scRNA**: `silhouette_score` per resolution
   (`sc_cluster.py:18, 248-295`).
 - **Class-imbalance signal**: trivially computable from the labels
@@ -77,7 +79,8 @@ def member_score(
 ```
 
 The `intrinsic_quality` argument is keyed by the member's skill:
-- `spatial-domains` → `mean_local_purity` from `summary.json`
+- `spatial-domains` → normalized chaos/pas/mlami panel (ADR 0028); falls back to
+  `mean_local_purity` from `summary.json` when coords are absent or via `--no-spatial-panel`
 - `sc-clustering` → `silhouette_score` from `clustering_summary.csv`
 - Future skills must register an `intrinsic_quality_key` in their
   `parameters.yaml` to be added to `TYPED_CONSENSUS_REGISTRY`.

@@ -67,6 +67,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--operator", choices=["kmode", "weighted", "lca"], default="kmode")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--no-spatial-panel", action="store_false", dest="spatial_panel",
+        help="Disable the multi-metric spatial intrinsic panel (chaos/pas/mlami) "
+             "and score with the reader's single intrinsic signal instead.",
+    )
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--max-parallel", type=int, default=None)
     parser.add_argument("--top-k", type=int, default=4)
@@ -165,6 +170,7 @@ async def _run(args: argparse.Namespace) -> int:
             plan_audit=plan_audit,
             timeout_seconds=args.timeout,
             max_parallel=args.max_parallel,
+            use_spatial_panel=args.spatial_panel,
         )
     except InsufficientSurvivorsError as exc:
         print(f"[{args.source}] FATAL: {exc}", file=sys.stderr)

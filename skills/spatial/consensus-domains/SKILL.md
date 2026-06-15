@@ -56,6 +56,7 @@ wraps it.
 | LLM judge veto/reweight | `--llm-judge` | no — reserved: accepted but not consumed (pending DEC-5) |
 | Operator | `--operator {kmode,weighted,lca}` | no (default `kmode`) |
 | Seed | `--seed 0` | no |
+| Disable multi-metric intrinsic | `--no-spatial-panel` | no (default: chaos/pas/mlami panel) |
 | Per-member timeout (s) | `--timeout 600` | no |
 | Concurrency cap | `--max-parallel 4` | no |
 
@@ -100,6 +101,13 @@ wraps it.
 - **Banner is non-configurable.** The `[A: Verified consensus]` header
   is enforced by `runtime/consensus/dispatch.output_banner`. Do not
   edit `report.md` to strip it before distribution.
+- **Member intrinsic quality is a multi-metric panel (ADR 0028).** Spatial-domain
+  members are scored on a normalized panel of three unsupervised metrics —
+  `chaos` (1-hop coherence), `pas` (anomaly rate), `mlami` (multi-scale
+  spatial-graph AMI) — combined into one `[0,1]` intrinsic for the β term of the
+  BC composite score. The per-member breakdown is written to
+  `member_intrinsic_panel.csv`. Pass `--no-spatial-panel` to score on the single
+  `mean_local_purity` signal instead.
 - **`--n-clusters` is reserved — accepted but not consumed.** The operator
   returns however many clusters the math yields (bounded at the max member k);
   passing `--n-clusters` changes nothing today (disposition pending DEC-5).
