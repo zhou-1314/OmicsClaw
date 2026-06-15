@@ -146,6 +146,13 @@ def test_integration_include_scvi_appends_member() -> None:
     assert [m.name for m in members] == ["unintegrated", "harmony", "scanorama", "scvi"]
 
 
+def test_integration_all_selects_every_backend() -> None:
+    """`--all` must actually fan out all available backends (default + scvi),
+    not silently behave like the default run."""
+    members = IntegrationRepSweepPlanner().propose(_args(all=True), source=INTEGRATION)
+    assert [m.name for m in members] == ["unintegrated", "harmony", "scanorama", "scvi"]
+
+
 def test_integration_explicit_methods_and_resolution() -> None:
     members = IntegrationRepSweepPlanner().propose(
         _args(integration_methods="harmony,scanorama", resolution="0.8", batch_key="donor"),

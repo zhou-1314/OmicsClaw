@@ -181,7 +181,9 @@ class IntegrationRepSweepPlanner:
                 )
         else:
             methods = list(DEFAULT_INTEGRATION_METHODS)
-            if getattr(args, "include_scvi", False):
+            # ``--all`` selects every available backend (the default set + the
+            # GPU/stochastic ``scvi`` member); ``--include-scvi`` adds only scvi.
+            if getattr(args, "all", False) or getattr(args, "include_scvi", False):
                 methods.append("scvi")
 
         resolution = str(getattr(args, "resolution", None) or 1.0)

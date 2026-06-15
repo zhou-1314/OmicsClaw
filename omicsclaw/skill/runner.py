@@ -173,6 +173,13 @@ def _prepare_skill_run(
         output_dir=out_dir,
     )
     if cmd is None:
+        if demo and not skill_info.get("demo_args", ["--demo"]):
+            return _err(
+                skill_name,
+                f"`{skill_name}` does not support --demo (workflow skills run on "
+                "real preprocessed data via the consensus runtime); provide "
+                "--input <preprocessed.h5ad>.",
+            )
         return _err(skill_name, "No --input, --demo, or --session provided.")
 
     if log_banner:

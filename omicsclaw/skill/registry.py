@@ -230,7 +230,10 @@ class OmicsRegistry:
                         "script": script_path_candidate,
                         "type": lazy.type,
                         "validation_level": lazy.validation_level,
-                        "demo_args": ["--demo"],
+                        # Workflow shims forward to the shared run parser, which
+                        # has no `--demo`; declare no demo so `oc run <wf> --demo`
+                        # is refused rather than aborting in argparse (ADR 0030).
+                        "demo_args": [] if lazy.type == "workflow" else ["--demo"],
                         "description": lazy.description,
                         "trigger_keywords": lazy.trigger_keywords or [],
                         "allowed_extra_flags": lazy.allowed_extra_flags or set(),
