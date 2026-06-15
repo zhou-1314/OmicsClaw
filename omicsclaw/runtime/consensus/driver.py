@@ -428,6 +428,25 @@ async def run_typed_consensus(
         audit["beta"] = score_config.beta
         audit["max_class_fraction_cap"] = score_config.max_class_frac_cap
         audit["top_k"] = top_k_default
+        # Panel-based rankings depend on the intrinsic-panel family + its weights
+        # (ADR 0028/0029); record the EFFECTIVE values so the run is reproducible
+        # from plan.json — especially for API callers passing non-default
+        # ``panel_weights``. ``"none"`` / ``{}`` when no panel is active.
+        _panel_kind = getattr(source, "intrinsic_panel", "")
+        if use_spatial_panel and _panel_kind in ("spatial", "integration"):
+            if _panel_kind == "spatial":
+                from omicsclaw.runtime.consensus.spatial_panel import (
+                    DEFAULT_PANEL_WEIGHTS as _panel_default_weights,
+                )
+            else:
+                from omicsclaw.runtime.consensus.integration_panel import (
+                    DEFAULT_PANEL_WEIGHTS as _panel_default_weights,
+                )
+            audit["intrinsic_panel"] = _panel_kind
+            audit["panel_weights"] = dict(panel_weights or _panel_default_weights)
+        else:
+            audit["intrinsic_panel"] = "none"
+            audit["panel_weights"] = {}
         plan_path.write_text(json.dumps(audit, indent=2))
         artifacts.append(plan_path)
 
