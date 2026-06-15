@@ -1,6 +1,6 @@
 ---
 name: consensus-domains
-description: 'Multi-method consensus over spatial-domains. Fans out 5 methods in parallel, computes a SACCELERATOR-style base-clustering ranking, runs typed consensus (kmode / weighted / LCA), and emits a verified consensus report with the mandatory A-path banner per ADR 0010.'
+description: 'Load when you want a verified multi-method consensus over spatial tissue domains on a preprocessed spatial AnnData — fanning out N domain methods, ranking base clusterings, and emitting a typed consensus with cross-method disagreement. Skip when one method suffices (use spatial-domains) or the data is single-cell (use sc-consensus-clustering).'
 version: 0.1.0
 author: OmicsClaw
 license: Apache-2.0
@@ -137,9 +137,10 @@ oc run consensus-domains --input preprocessed.h5ad --output out/ \
 oc run consensus-domains --input preprocessed.h5ad --output out/ --all
 ```
 
-## Pointers
+## See also
 
-- ADR 0010 — runtime layer architecture
-- ADR 0011 — scoring + evaluation protocol
-- `omicsclaw/runtime/consensus/` — runtime module
-- `examples/consensus_benchmark/` — DLPFC 151673 hero benchmark
+- `references/methodology.md` — the consensus scoring + operator rationale
+- `references/output_contract.md` — `consensus_labels.tsv` / `member_scores.csv` / `plan.json` schema
+- `references/parameters.md` — every CLI flag (generated from `parameters.yaml`)
+- Adjacent skills: `spatial-preprocess` (upstream — produces the input), `spatial-domains` (the per-member method this wraps), `consensus-interpret` (downstream — narrates the consensus result), `sc-consensus-clustering` (parallel — the single-cell analogue)
+- ADR 0010/0011/0016 — runtime layer, scoring protocol, workflow-runtime generalisation

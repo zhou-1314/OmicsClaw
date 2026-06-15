@@ -1,4 +1,5 @@
 domain: singlecell
+legacy_aliases: []
 allowed_extra_flags:
 - --method
 - --batch-key

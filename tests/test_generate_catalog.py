@@ -67,6 +67,52 @@ def test_generator_discovers_skills_under_dotted_ancestor(tmp_path, monkeypatch)
     assert catalog["skills"][0]["name"] == "fake-skill"
 
 
+def _build_catalog_skill(skills_dir, name, sidecar_yaml=None):
+    """Fabricate one skill dir (SKILL.md + script stub + optional sidecar)."""
+    skill_dir = skills_dir / "fake-domain" / name
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        _FAKE_SKILL_MD.replace("fake-skill", name), encoding="utf-8"
+    )
+    (skill_dir / f"{name.replace('-', '_')}.py").write_text("# stub\n", encoding="utf-8")
+    if sidecar_yaml is not None:
+        (skill_dir / "parameters.yaml").write_text(sidecar_yaml, encoding="utf-8")
+    return skill_dir
+
+
+def _gen_one(tmp_path, monkeypatch, name, sidecar_yaml=None):
+    skills_dir = tmp_path / "skills"
+    _build_catalog_skill(skills_dir, name, sidecar_yaml)
+    monkeypatch.setattr(generate_catalog, "SKILLS_DIR", skills_dir)
+    monkeypatch.setattr(generate_catalog, "build_cli_alias_map", lambda: {})
+    return generate_catalog.generate_catalog()["skills"][0]
+
+
+def test_catalog_emits_validation_level_default_and_preserves_status(tmp_path, monkeypatch):
+    """ADR 0030 §3: validation_level defaults to smoke-only and is emitted
+    ALONGSIDE status (availability) — status must not be replaced."""
+    entry = _gen_one(tmp_path, monkeypatch, "no-sidecar")
+    assert entry["validation_level"] == "smoke-only"
+    assert entry["status"] == "mvp"  # availability semantics preserved
+
+
+def test_catalog_emits_explicit_validation_level(tmp_path, monkeypatch):
+    entry = _gen_one(
+        tmp_path, monkeypatch, "graded",
+        "domain: d\nvalidation_level: benchmarked\n",
+    )
+    assert entry["validation_level"] == "benchmarked"
+    assert entry["status"] == "mvp"  # still emitted, unchanged
+
+
+def test_catalog_clamps_unknown_validation_level(tmp_path, monkeypatch):
+    entry = _gen_one(
+        tmp_path, monkeypatch, "bad",
+        "domain: d\nvalidation_level: bogus-level\n",
+    )
+    assert entry["validation_level"] == "smoke-only"
+
+
 def test_parse_yaml_frontmatter_handles_indented_list_syntax():
     """YAML list-syntax (`key:\\n- item`) is the standard form used in every
     SKILL.md `tags:` block.  The custom parser must produce a list, not the

@@ -3,7 +3,12 @@ verified typed consensus run (ADR 0012 γ + β).
 
 Thin CLI wrapper. Pipeline: load typed_run -> inline DE -> marker DB ->
 candidate ranking -> per-cluster annotation (LLM) -> next-step
-synthesis (LLM) -> invariant enforcement -> 5 artifact writes.
+synthesis (LLM) -> invariant enforcement -> 5 artifact writes (delegated to
+``_artifacts.py``): interpreted_report.md, interpreted_assignments.json,
+de_per_cluster.csv, contradiction_regions.csv, audit.json.
+
+Reads from the typed run dir (``--input``, via ``_run_reader.py``): plan.json,
+consensus_labels.tsv, member_scores.csv, cross_method_nmi.csv.
 
 Exit codes (continuous with consensus-domains §3/5/6):
     0  success

@@ -34,23 +34,36 @@ def parse_yaml_frontmatter(text: str) -> dict:
 
 
 _SKILL_TYPES = ("leaf", "workflow", "knowledge", "adapter")
+_VALIDATION_LEVELS = (
+    "smoke-only", "demo-validated", "fixture-validated", "benchmarked", "production",
+)
 
 
-def sidecar_type(skill_dir: Path) -> str:
-    """Read the declared skill `type` from parameters.yaml (ADR 0030).
+def _sidecar_enum(skill_dir: Path, key: str, allowed: tuple[str, ...], default: str) -> str:
+    """Read an optional enum field from parameters.yaml, clamped to ``allowed``.
 
-    Optional field; a missing/blank/unknown value falls back to ``leaf`` so the
-    catalog matches ``LazySkillMetadata.type`` exactly.
+    A missing/blank/unknown value falls back to ``default`` so the catalog matches
+    ``LazySkillMetadata`` exactly (ADR 0030).
     """
     sidecar = skill_dir / "parameters.yaml"
     if not sidecar.exists():
-        return "leaf"
+        return default
     try:
         data = yaml.safe_load(sidecar.read_text(encoding="utf-8"))
     except yaml.YAMLError:
-        return "leaf"
-    value = (data or {}).get("type") if isinstance(data, dict) else None
-    return value if value in _SKILL_TYPES else "leaf"
+        return default
+    value = (data or {}).get(key) if isinstance(data, dict) else None
+    return value if value in allowed else default
+
+
+def sidecar_type(skill_dir: Path) -> str:
+    """Declared skill `type` (ADR 0030); ``leaf`` when unset/unknown."""
+    return _sidecar_enum(skill_dir, "type", _SKILL_TYPES, "leaf")
+
+
+def sidecar_validation_level(skill_dir: Path) -> str:
+    """Validation maturity (ADR 0030); ``smoke-only`` when unset/unknown."""
+    return _sidecar_enum(skill_dir, "validation_level", _VALIDATION_LEVELS, "smoke-only")
 
 
 def build_cli_alias_map() -> dict[str, str]:
@@ -107,6 +120,7 @@ def generate_catalog() -> dict:
             "description": fm.get("description", ""),
             "version": fm.get("version", "0.1.0"),
             "status": "mvp" if has_script else "planned",
+            "validation_level": sidecar_validation_level(skill_dir),
             "has_script": has_script,
             "has_tests": has_tests,
             "has_demo": has_demo,

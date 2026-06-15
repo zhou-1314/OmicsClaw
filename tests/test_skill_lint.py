@@ -725,3 +725,137 @@ def test_argparse_short_flag_does_not_satisfy_long_flag_requirement(tmp_path: Pa
     # Must NOT report `-m` as a missing flag (single-dash short flags are
     # never listed in allowed_extra_flags).
     assert not any("missing '-m'" in e for e in errors), errors
+
+
+# ---------------------------------------------------------------------------
+# Check: type: workflow profile (ADR 0030)
+#
+# Workflow shims delegate their argparse + outputs to the shared consensus
+# runtime, so the leaf flag-match and output-contract checks are replaced by a
+# shim-wiring check.  The runtime-backed sub-checks (`SOURCE in CONSENSUS_SOURCES`,
+# `flags ⊆ run parser`) are monkeypatched so these tests are hermetic and do not
+# depend on the heavy consensus runtime importing in the test environment.
+# ---------------------------------------------------------------------------
+
+_WORKFLOW_SHIM = (
+    "import sys\n"
+    "from omicsclaw.runtime.consensus.run import main as _run_main\n"
+    'SOURCE = "consensus-domains"\n'
+    "def main(argv=None):\n"
+    "    argv = list(sys.argv[1:] if argv is None else argv)\n"
+    '    return _run_main(["--source", SOURCE, *argv])\n'
+)
+
+
+def _workflow_sidecar(**over: object) -> dict:
+    sc = {
+        **VALID_SIDECAR,
+        "type": "workflow",
+        "allowed_extra_flags": ["--members", "--seed"],
+    }
+    sc.update(over)
+    return sc
+
+
+def _patch_consensus(
+    monkeypatch,
+    sources: tuple[str, ...] = ("consensus-domains",),
+    flags: tuple[str, ...] = ("--members", "--seed"),
+) -> None:
+    monkeypatch.setattr(skill_lint, "_consensus_sources", lambda: set(sources))
+    monkeypatch.setattr(skill_lint, "_consensus_parser_flags", lambda: set(flags))
+
+
+def test_workflow_shim_valid_lints_clean(tmp_path: Path, monkeypatch) -> None:
+    _patch_consensus(monkeypatch)
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=_WORKFLOW_SHIM,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert errors == [], errors
+
+
+def test_workflow_shim_bad_source_fails(tmp_path: Path, monkeypatch) -> None:
+    _patch_consensus(monkeypatch)
+    shim = _WORKFLOW_SHIM.replace('"consensus-domains"', '"not-a-flavour"')
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any("not-a-flavour" in e and "CONSENSUS_SOURCES" in e for e in errors), errors
+
+
+def test_workflow_shim_missing_delegation_fails(tmp_path: Path, monkeypatch) -> None:
+    _patch_consensus(monkeypatch)
+    # No import of the run entry and no ["--source", ...] invocation.
+    shim = 'SOURCE = "consensus-domains"\ndef main():\n    return 0\n'
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any("must delegate" in e for e in errors), errors
+    assert any("--source" in e for e in errors), errors
+
+
+def test_workflow_shim_missing_source_constant_fails(tmp_path: Path, monkeypatch) -> None:
+    _patch_consensus(monkeypatch)
+    shim = (
+        "import sys\n"
+        "from omicsclaw.runtime.consensus.run import main as _run_main\n"
+        "def main(argv=None):\n"
+        '    return _run_main(["--source", "x", *sys.argv[1:]])\n'
+    )
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any('must define SOURCE' in e for e in errors), errors
+
+
+def test_workflow_shim_undeclared_flag_fails(tmp_path: Path, monkeypatch) -> None:
+    _patch_consensus(monkeypatch)
+    skill = _write_v2_skill(
+        tmp_path / "wf",
+        sidecar=_workflow_sidecar(allowed_extra_flags=["--members", "--totally-fake"]),
+        script_text=_WORKFLOW_SHIM,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any(
+        "--totally-fake" in e and "consensus run parser" in e for e in errors
+    ), errors
+
+
+def test_workflow_skips_leaf_argparse_match(tmp_path: Path, monkeypatch) -> None:
+    """A workflow shim has no add_argument; the leaf flag-match check would
+    flag every allowed_extra_flag as 'does not declare'.  Workflow skips it."""
+    _patch_consensus(monkeypatch)
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=_WORKFLOW_SHIM,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert not any("does not declare it via add_argument" in e for e in errors), errors
+
+
+def test_workflow_skips_output_contract_substring(tmp_path: Path, monkeypatch) -> None:
+    """The shim writes no outputs; output_contract paths must not be
+    substring-checked against the shim for workflow skills."""
+    _patch_consensus(monkeypatch)
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=_WORKFLOW_SHIM,
+    )
+    _write_output_contract(
+        skill, "## Output\n- `consensus_labels.tsv`\n- `plan.json`\n"
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert not any("output_contract.md:" in e for e in errors), errors
+
+
+def test_leaf_still_runs_argparse_match(tmp_path: Path) -> None:
+    """Regression guard: a leaf skill (type unset) keeps the leaf argparse
+    flag-match check that workflow skips."""
+    sidecar = {**VALID_SIDECAR, "allowed_extra_flags": ["--method", "--missing"]}
+    skill = _write_v2_skill(
+        tmp_path / "leaf", sidecar=sidecar, script_text=_flag_script("--method"),
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any("'--missing'" in e and "does not declare" in e for e in errors), errors

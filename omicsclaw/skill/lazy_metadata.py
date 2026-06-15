@@ -15,6 +15,7 @@ _RUNTIME_FIELDS = (
     "domain",
     "script",
     "type",
+    "validation_level",
     "trigger_keywords",
     "allowed_extra_flags",
     "legacy_aliases",
@@ -29,10 +30,23 @@ _RUNTIME_FIELDS = (
 SKILL_TYPES = ("leaf", "workflow", "knowledge", "adapter")
 _DEFAULT_SKILL_TYPE = "leaf"
 
+# Scientific-validation maturity ladder (ADR 0030 §3).  Orthogonal to `status`
+# (which records availability).  Optional in the sidecar; a missing/blank/unknown
+# value falls back to `smoke-only` (the skill at least runs `--demo`).
+VALIDATION_LEVELS = (
+    "smoke-only",
+    "demo-validated",
+    "fixture-validated",
+    "benchmarked",
+    "production",
+)
+_DEFAULT_VALIDATION_LEVEL = "smoke-only"
+
 _RUNTIME_DEFAULTS: dict[str, object] = {
     "domain": "",
     "script": "",
     "type": _DEFAULT_SKILL_TYPE,
+    "validation_level": _DEFAULT_VALIDATION_LEVEL,
     "trigger_keywords": [],
     "allowed_extra_flags": [],
     "legacy_aliases": [],
@@ -193,6 +207,13 @@ class LazySkillMetadata:
         self._ensure_basic()
         value = self._basic.get("type") or _DEFAULT_SKILL_TYPE
         return value if value in SKILL_TYPES else _DEFAULT_SKILL_TYPE
+
+    @property
+    def validation_level(self) -> str:
+        """Validation maturity (ADR 0030); `smoke-only` when unset or unknown."""
+        self._ensure_basic()
+        value = self._basic.get("validation_level") or _DEFAULT_VALIDATION_LEVEL
+        return value if value in VALIDATION_LEVELS else _DEFAULT_VALIDATION_LEVEL
 
     @property
     def trigger_keywords(self) -> list[str]:
