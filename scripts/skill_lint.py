@@ -325,6 +325,88 @@ def _skill_type(sidecar: dict) -> str:
     return value if value in _SKILL_TYPES else "leaf"
 
 
+def _const_truthiness(node: ast.AST) -> bool | None:
+    """Truthiness of a constant test (`if False:` / `if 0:` → False), else None."""
+    return bool(node.value) if isinstance(node, ast.Constant) else None
+
+
+def _top_level_main(tree: ast.AST) -> ast.AST | None:
+    """The module-level `def main(...)` / `async def main(...)`, if any."""
+    body = getattr(tree, "body", [])
+    for node in body:
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "main"
+        ):
+            return node
+    return None
+
+
+def _reachable_calls(stmts: list[ast.stmt]):
+    """Yield `ast.Call` nodes reachable in a statement list.
+
+    Prunes the bodies of trivially-constant `if`/`while` branches (so a call
+    under `if False:` does not count) and does NOT descend into nested
+    function/class definitions (so a call in a helper is off the `main` path).
+    """
+    for stmt in stmts:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        if isinstance(stmt, (ast.If, ast.While)):
+            truth = _const_truthiness(stmt.test)
+            if truth is True:
+                yield from _reachable_calls(stmt.body)
+                continue
+            if truth is False:
+                yield from _reachable_calls(stmt.orelse)
+                continue
+        for child in ast.iter_child_nodes(stmt):
+            if isinstance(child, ast.stmt):
+                yield from _reachable_calls([child])
+            else:
+                for node in ast.walk(child):
+                    if isinstance(node, ast.Call):
+                        yield node
+
+
+def _is_run_main_delegation(
+    node: ast.AST, run_main_names: set[str], module_aliases: set[str]
+) -> bool:
+    """True iff ``node`` calls the run-main target with the EXACT live-delegation
+    shape ``main(["--source", SOURCE, *argv])`` — three list elements:
+    ``"--source"``, the name ``SOURCE``, and ``*argv`` (the local argv name).
+
+    Rejects non-forwarding shapes such as ``*[]`` / ``*sys.argv[1:]`` and any
+    extra/short element count, so the lint proves the shim forwards user argv.
+    """
+    if not isinstance(node, ast.Call) or not node.args:
+        return False
+    func = node.func
+    calls_run_main = (
+        isinstance(func, ast.Name) and func.id in run_main_names
+    ) or (
+        isinstance(func, ast.Attribute)
+        and func.attr == "main"
+        and isinstance(func.value, ast.Name)
+        and func.value.id in module_aliases
+    )
+    if not calls_run_main:
+        return False
+    first = node.args[0]
+    if not isinstance(first, ast.List) or len(first.elts) != 3:
+        return False
+    e0, e1, e2 = first.elts
+    return (
+        isinstance(e0, ast.Constant)
+        and e0.value == "--source"
+        and isinstance(e1, ast.Name)
+        and e1.id == "SOURCE"
+        and isinstance(e2, ast.Starred)
+        and isinstance(e2.value, ast.Name)
+        and e2.value.id == "argv"
+    )
+
+
 def _analyse_workflow_shim(tree: ast.AST) -> tuple[set[str], set[str], str | None, bool]:
     """Structurally inspect a workflow shim's AST (ADR 0030).
 
@@ -334,11 +416,10 @@ def _analyse_workflow_shim(tree: ast.AST) -> tuple[set[str], set[str], str | Non
     - ``module_aliases`` — local names bound to the run *module* via
       ``import omicsclaw.runtime.consensus.run as ...``.
     - ``source_value`` — the string assigned to a module-level ``SOURCE = "..."``.
-    - ``delegates`` — True iff there is an actual *call* to the imported run-main
-      target whose first positional arg is a list literal beginning with the
-      constant ``"--source"``, the name ``SOURCE``, then a forwarded ``*argv``.
-      A shim that merely *mentions* ``"--source"`` without calling run-main is
-      NOT a delegation (the string-presence check this replaces accepted it).
+    - ``delegates`` — True iff the shim's top-level ``main`` makes a REACHABLE
+      call to the run-main target shaped exactly ``["--source", SOURCE, *argv]``.
+      Calls in helper functions, module-level dead code, or under ``if False:``
+      do NOT count — the shim must forward user argv on its live ``main`` path.
     """
     run_main_names: set[str] = set()
     module_aliases: set[str] = set()
@@ -363,39 +444,12 @@ def _analyse_workflow_shim(tree: ast.AST) -> tuple[set[str], set[str], str | Non
                 ):
                     source_value = node.value.value
 
-    delegates = any(
-        _is_run_main_delegation(node, run_main_names, module_aliases)
-        for node in ast.walk(tree)
+    main_fn = _top_level_main(tree)
+    delegates = main_fn is not None and any(
+        _is_run_main_delegation(call, run_main_names, module_aliases)
+        for call in _reachable_calls(main_fn.body)
     )
     return run_main_names, module_aliases, source_value, delegates
-
-
-def _is_run_main_delegation(
-    node: ast.AST, run_main_names: set[str], module_aliases: set[str]
-) -> bool:
-    """True iff ``node`` is a call to the run-main target with a first list arg
-    shaped ``["--source", SOURCE, *<argv>]``."""
-    if not isinstance(node, ast.Call) or not node.args:
-        return False
-    func = node.func
-    calls_run_main = (
-        isinstance(func, ast.Name) and func.id in run_main_names
-    ) or (
-        isinstance(func, ast.Attribute)
-        and func.attr == "main"
-        and isinstance(func.value, ast.Name)
-        and func.value.id in module_aliases
-    )
-    if not calls_run_main:
-        return False
-    first = node.args[0]
-    if not isinstance(first, ast.List) or len(first.elts) < 3:
-        return False
-    e0, e1 = first.elts[0], first.elts[1]
-    source_flag = isinstance(e0, ast.Constant) and e0.value == "--source"
-    source_name = isinstance(e1, ast.Name) and e1.id == "SOURCE"
-    forwards_argv = any(isinstance(el, ast.Starred) for el in first.elts[2:])
-    return source_flag and source_name and forwards_argv
 
 
 def _consensus_sources() -> set[str] | None:
@@ -465,9 +519,9 @@ def _check_workflow_shim(skill_dir: Path, sidecar: dict) -> list[str]:
     # list names the root cause rather than piling on.
     if imports_run and source is not None and not delegates:
         errors.append(
-            "type=workflow: shim must call the run entry as "
+            "type=workflow: shim's main() must delegate as "
             f'main(["--source", SOURCE, *argv]) in {script_name} '
-            "(import + SOURCE present but no delegating call found)"
+            "(no reachable main()-path call forwarding argv found)"
         )
 
     sources = _consensus_sources()
