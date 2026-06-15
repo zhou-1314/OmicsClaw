@@ -869,17 +869,48 @@ def identify_domains_banksy(
 ) -> dict:
     """BANKSY — spatial feature augmentation for domain identification.
 
-    BANKSY requires numpy<2.0 which conflicts with the main env's numpy>=2.0
-    (transitively via scvi-tools/numba). Therefore this runs in a dedicated
-    sub-env `omicsclaw_banksy` via subprocess; the BANKSY algorithm itself
-    lives in skills/spatial/_lib/_runners/banksy_runner.py.
+    BANKSY_py now supports numpy>=2, so the algorithm runs **in-process** in the
+    main env. If the ``banksy`` package isn't importable here, it falls back to
+    the dedicated ``omicsclaw_banksy`` sub-env (numpy<2.0) for back-compat. The
+    algorithm itself lives in ``_runners/banksy_runner.py`` (shared by both
+    paths — no duplication).
 
-    Bootstrap the sub-env once via: `bash 0_setup_env.sh --with-banksy`
-    (or `OMICSCLAW_WITH_BANKSY=1 bash 0_setup_env.sh`).
+    Install in the main env via::
+
+        pip install git+https://github.com/prabhakarlab/Banksy_py.git
+
+    or bootstrap the sub-env once via ``bash 0_setup_env.sh --with-banksy``.
 
     Mutates `adata` in place (sets adata.obs['spatial_domain'] and
     adata.obsm['X_banksy_pca']). Returns a metadata dict.
     """
+    params = {
+        "n_domains": n_domains,
+        "resolution": resolution,
+        "lambda_param": lambda_param,
+        "num_neighbours": num_neighbours,
+        "max_m": max_m,
+        "pca_dims": pca_dims,
+    }
+
+    # Preferred path: run in-process (BANKSY_py is numpy>=2 compatible).
+    try:
+        from skills.spatial._lib._runners.banksy_runner import run_banksy
+    except ImportError as exc:  # the package or its module isn't importable here
+        in_process_error: ImportError | None = exc
+    else:
+        try:
+            logger.info(
+                "BANKSY: running in-process (lambda=%.2f, n_domains=%s, "
+                "resolution=%.2f)", lambda_param, n_domains, resolution,
+            )
+            # run_banksy mutates adata in place and returns the metadata dict.
+            return run_banksy(adata, **params)
+        except ImportError as exc:  # ``banksy`` itself not installed in this env
+            in_process_error = exc
+
+    # Fallback path: dedicated sub-env (back-compat for environments that set up
+    # omicsclaw_banksy but don't have BANKSY_py in the main env).
     from pathlib import Path
     from omicsclaw.core.external_env import (
         EnvNotFoundError,
@@ -890,38 +921,26 @@ def identify_domains_banksy(
     sub_env = "omicsclaw_banksy"
     if not is_env_available(sub_env):
         raise EnvNotFoundError(
-            f"BANKSY requires the {sub_env!r} sub-env (numpy<2.0). "
-            "Create it via: bash 0_setup_env.sh --with-banksy"
+            "BANKSY needs either the 'banksy' (BANKSY_py) package in this env — "
+            "install via `pip install git+https://github.com/prabhakarlab/Banksy_py.git` "
+            f"(in-process import failed: {in_process_error}) — or the {sub_env!r} "
+            "sub-env, created via `bash 0_setup_env.sh --with-banksy`."
         )
 
-    runner = (
-        Path(__file__).resolve().parent / "_runners" / "banksy_runner.py"
-    )
-    params = {
-        "n_domains": n_domains,
-        "resolution": resolution,
-        "lambda_param": lambda_param,
-        "num_neighbours": num_neighbours,
-        "max_m": max_m,
-        "pca_dims": pca_dims,
-    }
-
+    runner = Path(__file__).resolve().parent / "_runners" / "banksy_runner.py"
     logger.info(
         "BANKSY: dispatching to sub-env %s (lambda=%.2f, n_domains=%s, "
         "resolution=%.2f)", sub_env, lambda_param, n_domains, resolution,
     )
-
     adata_out = run_anndata_op_in_env(
         env=sub_env,
         runner_script=runner,
         adata=adata,
         params=params,
     )
-
     # Propagate sub-env results back into the caller's AnnData.
     adata.obs["spatial_domain"] = adata_out.obs["spatial_domain"].values
     adata.obsm["X_banksy_pca"] = adata_out.obsm["X_banksy_pca"]
-
     return dict(adata_out.uns.get("banksy_meta", {}))
 
 

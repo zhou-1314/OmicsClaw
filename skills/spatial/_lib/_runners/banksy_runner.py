@@ -1,16 +1,18 @@
-"""BANKSY runner script. Runs inside the `omicsclaw_banksy` sub-env.
+"""BANKSY runner — the BANKSY domain-identification algorithm.
 
-Reads --input (.h5ad), runs BANKSY domain identification with the same
-algorithm as skills/spatial/_lib/domains.py:identify_domains_banksy
-(non-negative library-size normalization, optional HVG subsetting,
-smart routing between fixed-n_domains GMM/KMeans and resolution-based
-Leiden), writes --output (.h5ad) with results in adata.obs[
-'spatial_domain'], adata.obsm['X_banksy_pca'], and adata.uns[
-'banksy_meta'].
+``run_banksy`` is called two ways: **in-process** from
+``skills/spatial/_lib/domains.py:identify_domains_banksy`` (preferred, since
+BANKSY_py now supports numpy>=2), and as a ``__main__`` script inside the legacy
+``omicsclaw_banksy`` sub-env (numpy<2.0 fallback). It does non-negative
+library-size normalization, optional HVG subsetting, and smart routing between
+fixed-n_domains GMM/KMeans and resolution-based Leiden; results land in
+``adata.obs['spatial_domain']``, ``adata.obsm['X_banksy_pca']`` and (script
+path) ``adata.uns['banksy_meta']``.
 
-Do NOT import OmicsClaw modules here — the sub-env does not have
-omicsclaw installed, only the BANKSY-specific deps from
-environments/banksy.yml.
+Do NOT import OmicsClaw modules here — the sub-env does not have omicsclaw
+installed, only the BANKSY-specific deps. The ``banksy`` package itself is
+imported lazily inside ``run_banksy`` so this module stays importable wherever
+BANKSY_py is absent.
 """
 from __future__ import annotations
 
@@ -25,8 +27,11 @@ import numpy as np
 import pandas as pd
 import scanpy as sc
 import scipy.sparse as sp
-from banksy.embed_banksy import generate_banksy_matrix
-from banksy.initialize_banksy import initialize_banksy
+
+# NOTE: the ``banksy`` package itself (BANKSY_py) is imported lazily inside
+# ``run_banksy`` — BANKSY_py now supports numpy>=2, so this module is importable
+# (and ``run_banksy`` callable in-process) from the main env; only the actual
+# call needs the package present.
 
 logger = logging.getLogger("banksy_runner")
 logging.basicConfig(level=logging.INFO, format="[banksy_runner] %(message)s")
@@ -64,6 +69,11 @@ def run_banksy(
     Mutates adata in place (sets adata.obs['spatial_domain'] and
     adata.obsm['X_banksy_pca']). Returns metadata dict.
     """
+    # BANKSY_py (numpy>=2 compatible) — imported here so this module stays
+    # importable even where the package is absent (callers can then fall back).
+    from banksy.embed_banksy import generate_banksy_matrix
+    from banksy.initialize_banksy import initialize_banksy
+
     logger.info(
         "Running BANKSY (lambda=%.2f, n_domains=%s, resolution=%.2f) ...",
         lambda_param, n_domains, resolution,

@@ -89,13 +89,17 @@ DEPENDENCY_REGISTRY: dict[str, DependencyInfo] = {
     ),
     "pybanksy": DependencyInfo(
         "banksy",
-        "BANKSY runs in the omicsclaw_banksy sub-env (numpy<2.0). "
-        "Bootstrap once: bash 0_setup_env.sh --with-banksy",
-        "Spatial domain identification (BANKSY, Layer-4 sub-env)",
-        availability_check=lambda: __import__(
-            "omicsclaw.core.external_env",
-            fromlist=["is_env_available"],
-        ).is_env_available("omicsclaw_banksy"),
+        "pip install git+https://github.com/prabhakarlab/Banksy_py.git "
+        "(BANKSY_py supports numpy>=2 and runs in-process); or sub-env: "
+        "bash 0_setup_env.sh --with-banksy",
+        "Spatial domain identification (BANKSY; in-process or omicsclaw_banksy sub-env)",
+        availability_check=lambda: (
+            __import__("importlib.util", fromlist=["find_spec"]).find_spec("banksy")
+            is not None
+            or __import__(
+                "omicsclaw.core.external_env", fromlist=["is_env_available"],
+            ).is_env_available("omicsclaw_banksy")
+        ),
     ),
     "cellcharter": DependencyInfo(
         "cellcharter", "pip install cellcharter",

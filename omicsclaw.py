@@ -1194,7 +1194,7 @@ def main():
             ("Spatial-Comm",      "spatial-communication", "Cell communication, e.g., LIANA+, CellPhoneDB"),
             ("Spatial-Integrate", "spatial-integrate","Multi-sample integration, e.g., Harmony, BBKNN"),
             ("Spatial-Register",  "spatial-register","Spatial registration, e.g., PASTE"),
-            ("BANKSY",            "banksy",            "BANKSY spatial domains (requires numpy<2.0, isolated env)"),
+            ("BANKSY",            "banksy",            "BANKSY spatial domains (in-process with BANKSY_py numpy>=2, or omicsclaw_banksy sub-env)"),
         ]
         for label, tier_key, desc in standalone_layers:
             sl_installed = tiers.get(tier_key, False)
