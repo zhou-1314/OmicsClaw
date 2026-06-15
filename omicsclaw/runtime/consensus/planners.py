@@ -166,6 +166,19 @@ class IntegrationRepSweepPlanner:
         spec = args.members or getattr(args, "integration_methods", None)
         if spec:
             methods = [m.strip() for m in spec.split(",") if m.strip()]
+            # Integration members are plain method names: resolution is FIXED for
+            # every member (member-count comparability / k-divergence guard,
+            # ADR 0029), so per-member ``method:param=...`` specs are
+            # contradictory. Reject them early with a clear message rather than
+            # forwarding an invalid ``--method`` that fails during fan-out.
+            parameterized = [m for m in methods if ":" in m]
+            if parameterized:
+                raise SystemExit(
+                    "integration consensus members are plain method names "
+                    "(none/harmony/scanorama/scvi); per-member params are not "
+                    "supported (resolution is fixed via --resolution). Got: "
+                    f"{', '.join(parameterized)}"
+                )
         else:
             methods = list(DEFAULT_INTEGRATION_METHODS)
             if getattr(args, "include_scvi", False):

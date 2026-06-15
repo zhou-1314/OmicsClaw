@@ -161,3 +161,20 @@ def test_integration_rejects_duplicate_method() -> None:
         IntegrationRepSweepPlanner().propose(
             _args(integration_methods="harmony,harmony"), source=INTEGRATION
         )
+
+
+def test_integration_rejects_parameterized_member_spec() -> None:
+    """Integration fixes resolution for all members (ADR 0029), so a per-member
+    ``method:param=...`` spec is rejected early — it must NOT be forwarded as an
+    invalid ``--method harmony:resolution=0.8`` that fails during fan-out."""
+    with pytest.raises(SystemExit) as exc:
+        IntegrationRepSweepPlanner().propose(
+            _args(members="harmony:resolution=0.8,scanorama:resolution=0.8"),
+            source=INTEGRATION,
+        )
+    assert "per-member params are not supported" in str(exc.value)
+    # plain method names still work.
+    members = IntegrationRepSweepPlanner().propose(
+        _args(members="harmony,scanorama,none"), source=INTEGRATION
+    )
+    assert [m.name for m in members] == ["harmony", "scanorama", "unintegrated"]

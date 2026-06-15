@@ -10,7 +10,6 @@ fanned-out member skill differs (`sc-clustering` here).
 <output>/
 ├── consensus_labels.tsv        # cell_id -> consensus_<operator> label
 ├── member_scores.csv           # ADR 0011 composite score per surviving member
-├── member_intrinsic_panel.csv  # per-member intrinsic breakdown (silhouette)
 ├── cross_method_nmi.csv         # square cross-method NMI matrix
 ├── cross_method_nmi.png         # heatmap of the NMI matrix
 ├── plan.json                    # resolution sweep, chosen operator, audit trail
