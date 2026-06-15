@@ -128,7 +128,11 @@ def _produce_representation(adata, *, method: str, batch_key: str, n_pcs: int, s
             f"(found {adata.obs[batch_key].nunique()})"
         )
     if method == "harmony":
-        run_harmony_integration(adata, batch_key, n_pcs=n_pcs, random_state=seed)
+        # Reuse the capped ``X_pca`` that ``_ensure_pca`` already built (it clamps
+        # n_comps to n_obs-1 / n_vars-1). ``use_pca=True`` would recompute PCA at the
+        # uncapped ``n_pcs`` and Scanpy would raise on small datasets, dropping the
+        # Harmony member from the default consensus.
+        run_harmony_integration(adata, batch_key, use_pca=False, random_state=seed)
     elif method == "scanorama":
         _integrate_scanorama(adata, batch_key)
     elif method == "scvi":

@@ -56,6 +56,51 @@ def test_none_baseline_emits_reader_and_panel_artifacts(tmp_path: Path) -> None:
     assert "batch" in member_adata.obs.columns
 
 
+def test_harmony_reuses_capped_pca_instead_of_recomputing(monkeypatch) -> None:
+    """Regression (codex review [P2]): when the data has fewer usable PCs than
+    ``--n-pcs``, ``_ensure_pca`` builds a *capped* ``X_pca``; Harmony must REUSE
+    it (``use_pca=False``) rather than recompute PCA at the uncapped ``n_pcs`` —
+    which Scanpy rejects, silently dropping the Harmony member from the default
+    consensus. We assert the call contract (no harmonypy needed)."""
+    pytest.importorskip("scanpy")
+    import importlib.util as u
+
+    spec = u.spec_from_file_location("sic_p2_regression", _SKILL)
+    mod = u.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod._load_runtime()  # real scanpy for _ensure_pca
+
+    import anndata as ad
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    n_per, n_genes = 30, 40  # 60 cells x 40 genes -> n_vars-1 = 39 < n_pcs
+    X = np.vstack([rng.poisson(3.0, (n_per, n_genes)) + b for b in (0, 2)]).astype(float)
+    adata = ad.AnnData(X=np.log1p(X), obs=pd.DataFrame({"batch": ["b0"] * n_per + ["b1"] * n_per}))
+    adata.obs_names = [f"c{i}" for i in range(2 * n_per)]
+
+    captured: dict = {}
+
+    def _fake_harmony(adata_, batch_key, **kwargs):
+        captured.update(kwargs)
+        adata_.obsm["X_harmony"] = adata_.obsm["X_pca"].copy()
+        return adata_
+
+    monkeypatch.setattr(mod, "run_harmony_integration", _fake_harmony)
+
+    n_pcs = 50
+    mod._ensure_pca(adata, n_pcs=n_pcs, seed=0)
+    assert adata.obsm["X_pca"].shape[1] < n_pcs, "test setup must produce a capped X_pca"
+
+    key = mod._produce_representation(
+        adata, method="harmony", batch_key="batch", n_pcs=n_pcs, seed=0, n_top_genes=30
+    )
+    assert key == "X_harmony"
+    # The fix: reuse the existing capped X_pca. With the old call (default
+    # use_pca=True) this would be absent/True and Scanpy would raise upstream.
+    assert captured.get("use_pca") is False
+
+
 @pytest.mark.parametrize("missing_batch", [True])
 def test_integration_method_requires_batches(tmp_path: Path, missing_batch: bool) -> None:
     # A single-batch input must make a real integration method fail loudly

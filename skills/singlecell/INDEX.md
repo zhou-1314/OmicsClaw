@@ -4,7 +4,7 @@
 > Do not edit by hand — changes will be overwritten.
 
 **Domain key:** `singlecell`  
-**Skill count:** 30  
+**Skill count:** 33  
 **Primary data types:** h5ad, h5, loom, mtx  
 
 scRNA-seq + scATAC-seq: FASTQ→counts, QC, filter, doublet removal, normalize→HVG→PCA→UMAP→cluster, annotation, DE, trajectory, velocity, GRN, CCC.
@@ -19,6 +19,10 @@ scRNA-seq + scATAC-seq: FASTQ→counts, QC, filter, doublet removal, normalize�
 - `sc-cell-communication` — Load when computing cell-cell ligand-receptor communication on an annotated scRNA AnnData via builtin scorer, LIANA, CellPhoneDB, CellChat (R), or NicheNet (R). Skip when assigning cell-type labels (use sc-cell-annotation) or for transcription factor → target regulatory networks (use sc-grn).
   triggers: cell communication, cell-cell communication, ligand receptor, cellchat, liana, cellphonedb, nichenet
 - `sc-clustering` — Load when building the neighbour graph, embedding (UMAP/t-SNE/diffmap/PHATE), and clustering (Leiden/Louvain) on a normalised single-cell AnnData. Skip when QC/normalisation/HVG/PCA have not run yet (use sc-preprocessing) or for marker ranking after clustering (use sc-markers).
+- `sc-consensus-clustering` — Load when you want resolution-robust single-cell clusters on a preprocessed scRNA AnnData — fanning out leiden/louvain across a resolution sweep, scoring members by silhouette + cross-method NMI, and voting a typed consensus. Skip when one resolution suffices (use sc-clustering) or for spatial domains (use consensus-domains).
+  triggers: consensus clustering, consensus celltype clustering, multi-resolution clustering, robust scrna clustering, resolution sweep consensus, single cell consensus clustering
+- `sc-consensus-integration` — Load when you want a multi-sample single-cell (scRNA) clustering robust to the choice of integration method — fanning out Harmony/Scanorama/scVI + an unintegrated baseline, scoring each by a batch-mixing intrinsic panel, and voting a consensus. Skip when single-batch (use sc-consensus-clustering) or one integration method is fixed.
+  triggers: consensus integration, batch correction consensus, integration method consensus, robust scrna integration clustering, which clusters survive integration
 - `sc-count` — Load when turning scRNA FASTQ (or existing CellRanger/STARsolo/SimpleAF/kb-python output) into a downstream-ready AnnData. Skip when reads are already counted into AnnData (use sc-standardize-input) or for raw quality assessment only (use sc-fastq-qc).
   triggers: Cell Ranger count, STARsolo count, fastq to adata, raw single-cell counting, generate count matrix
 - `sc-cytotrace` — Load when computing per-cell differentiation potency / stemness scores from gene-expression complexity on a scRNA AnnData via the CytoTRACE-simple method. Skip when ordering cells along a trajectory (use sc-pseudotime) or for marker-based cell-type labelling (use sc-cell-annotation).
@@ -37,6 +41,7 @@ scRNA-seq + scATAC-seq: FASTQ→counts, QC, filter, doublet removal, normalize�
 - `sc-grn` — Load when inferring TF → target gene regulatory networks on a normalised scRNA AnnData via pySCENIC (GRNBoost2 + cisTarget + AUCell) or correlation-based GRN fallback (when arboreto is unavailable, in --demo, or with --allow-simplified-grn). Skip when computing ligand-receptor cell-cell signalling (use sc-cell-communication) or for predicting genetic-KO effects (use sc-in-silico-perturbation).
   triggers: grn, gene regulatory, scenic, pyscenic, regulon, transcription factor, grnboost
 - `sc-in-silico-perturbation` — Load when predicting in-silico gene knockout effects on a normalised scRNA AnnData via GRN-based propagation (Python) or scTenifoldKnk (R). Skip when you have a real Perturb-seq / CRISPR screen (use sc-perturb / sc-perturb-prep) or for predicting drug sensitivity (use sc-drug-response).
+- `sc-integrate-cluster` — Load when running a single batch-correction representation (none/Harmony/Scanorama/scVI) + clustering of single-cell data as one self-contained unit — normally fanned out as a member of sc-consensus-integration. Skip when you want the full integration consensus (use sc-consensus-integration) or resolution-robust clustering (use sc-consensus-clustering).
 - `sc-markers` — Load when ranking cluster-level marker genes from a clustered single-cell AnnData via Scanpy Wilcoxon / t-test / logreg or COSG specificity. Skip when comparing condition-vs-control with replicates (use sc-de) or for assigning cell-type labels (use sc-cell-annotation).
 - `sc-metacell` — Load when aggregating single cells into metacells (sample-aware coarse-grained pseudo-cells) on a normalised scRNA AnnData via SEACells or KMeans on a low-D embedding. Skip when ranking marker genes per cluster (use sc-markers) or for trajectory pseudotime ordering (use sc-pseudotime).
 - `sc-multi-count` — Load when merging multiple single-sample scRNA-seq count matrices (one per sample-from-sc-count) into a single downstream-ready AnnData with sample labels. Skip when input is one already-merged AnnData (use sc-standardize-input) or for FASTQ→counts on each sample (use sc-count first).

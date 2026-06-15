@@ -25,10 +25,10 @@ When the user asks a question, match it to a skill and act:
 
 When the user asks an analysis question, match it to a skill and act. OmicsClaw covers 7 domains; pick one, then consult its INDEX for the full skill list if the briefing below isn't enough.
 
-- **spatial** (17 skills — Spatial Transcriptomics)
+- **spatial** (19 skills — Spatial Transcriptomics)
   Spatial transcriptomics for Visium/Xenium/MERFISH/Slide-seq: QC, domain detection, SVG, deconvolution, cell communication, trajectories, CNV.
   Key skills: spatial-preprocess, spatial-domains, spatial-de, spatial-deconv, spatial-communication
-- **singlecell** (30 skills — Single-Cell Omics)
+- **singlecell** (33 skills — Single-Cell Omics)
   scRNA-seq + scATAC-seq: FASTQ→counts, QC, filter, doublet removal, normalize→HVG→PCA→UMAP→cluster, annotation, DE, trajectory, velocity, GRN, CCC.
   Key skills: sc-preprocessing, sc-cell-annotation, sc-de, sc-batch-integration, sc-pseudotime
 - **genomics** (10 skills — Genomics)
@@ -54,8 +54,8 @@ When the user asks an analysis question, match it to a skill and act. OmicsClaw 
 
 | Domain | Skills | Full index |
 |---|---|---|
-| Spatial Transcriptomics | 17 | [`skills/spatial/INDEX.md`](skills/spatial/INDEX.md) |
-| Single-Cell Omics | 30 | [`skills/singlecell/INDEX.md`](skills/singlecell/INDEX.md) |
+| Spatial Transcriptomics | 19 | [`skills/spatial/INDEX.md`](skills/spatial/INDEX.md) |
+| Single-Cell Omics | 33 | [`skills/singlecell/INDEX.md`](skills/singlecell/INDEX.md) |
 | Genomics | 10 | [`skills/genomics/INDEX.md`](skills/genomics/INDEX.md) |
 | Proteomics | 8 | [`skills/proteomics/INDEX.md`](skills/proteomics/INDEX.md) |
 | Metabolomics | 8 | [`skills/metabolomics/INDEX.md`](skills/metabolomics/INDEX.md) |
