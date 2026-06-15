@@ -94,13 +94,19 @@ def _ensure_pca(adata, *, n_pcs: int, seed: int) -> None:
 
 
 def _integrate_scanorama(adata, batch_key: str, knn: int = 20) -> None:
-    """Scanorama integration → ``obsm['X_scanorama']`` (mirrors sc-batch-integration)."""
+    """Scanorama integration → ``obsm['X_scanorama']``.
+
+    Uses ``integrate_scanpy``, which populates ``obsm['X_scanorama']`` in place on
+    each batch. ``correct_scanpy`` (the path sc-batch-integration historically
+    used) returns *corrected expression* with an EMPTY ``obsm``, so reading
+    ``X_scanorama`` off it always raised and dropped the scanorama member.
+    """
     import scanorama  # noqa: F401 — fail loud (member fails) if unavailable
 
     batches = [adata[adata.obs[batch_key] == b].copy() for b in adata.obs[batch_key].unique()]
-    corrected = scanorama.correct_scanpy(batches, return_dimred=True, knn=int(knn))
+    scanorama.integrate_scanpy(batches, knn=int(knn))
     frames = []
-    for cb in corrected:
+    for cb in batches:
         emb = cb.obsm.get("X_scanorama")
         if emb is None:
             raise RuntimeError("Scanorama did not produce 'X_scanorama' embeddings")
