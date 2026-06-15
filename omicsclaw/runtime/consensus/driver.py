@@ -595,8 +595,12 @@ async def run_typed_consensus(
         operator, labels_df[selected], seed=seed, score_lookup=score_lookup
     )
 
-    # 8. per-spot confidence + consensus labels TSV (label + agreement columns)
-    confidence = per_spot_confidence(consensus.aligned_labels)
+    # 8. per-spot confidence + consensus labels TSV (label + agreement columns).
+    # kmode/weighted emit a label in the aligned member-label space, so `support`
+    # is agreement with that emitted label (correct for weighted's minority-win
+    # case); lca's latent labels live in a different space → plurality fallback.
+    _conf_target = consensus.labels if operator in ("kmode", "weighted") else None
+    confidence = per_spot_confidence(consensus.aligned_labels, _conf_target)
     consensus_path = output_dir_p / "consensus_labels.tsv"
     pd.DataFrame(
         {

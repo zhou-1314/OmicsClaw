@@ -21,20 +21,32 @@ from pathlib import Path
 import pandas as pd
 
 
-def per_spot_confidence(aligned_labels: pd.DataFrame) -> pd.DataFrame:
+def per_spot_confidence(
+    aligned_labels: pd.DataFrame,
+    consensus_labels: pd.Series | None = None,
+) -> pd.DataFrame:
     """Per-observation consensus confidence from the operator's aligned labels.
 
-    Operates only on ``ConsensusResult.aligned_labels`` — the members that
-    entered consensus, in the common post-Hungarian label space — so it is
-    well-defined for *every* operator, including ``lca`` (whose output labels
-    live in a different space than the aligned member labels, making a direct
-    "agree with the consensus label" comparison ill-defined).
+    Operates on ``ConsensusResult.aligned_labels`` — the members that entered
+    consensus, in the common post-Hungarian label space.
+
+    ``support`` semantics depend on whether the emitted consensus label is
+    comparable to the aligned member labels:
+
+    - When ``consensus_labels`` is given (operators whose emitted label lives in
+      the aligned space — ``kmode`` / ``weighted``), ``support`` is the fraction
+      of members AGREEING WITH THE EMITTED consensus label, so it always
+      describes the label written to ``consensus_<operator>``. This matters for
+      ``weighted``: a high-weight minority can win the vote, and plurality would
+      otherwise report the fraction for a *different* label. For ``kmode`` it is
+      unchanged (the consensus *is* the plurality).
+    - When omitted (e.g. ``lca``, whose latent-class output lives in a different
+      space, making a direct "agree with the consensus label" comparison
+      ill-defined), ``support`` falls back to the plurality fraction — the
+      largest block of members sharing one aligned label.
 
     Returns a DataFrame indexed like ``aligned_labels`` with columns:
-      - ``support``   — the plurality fraction: the largest block of members
-        sharing one aligned label, over ``n_members`` (1.0 = unanimous, low =
-        contested). For ``kmode`` this equals the fraction of members agreeing
-        with the consensus label (the consensus *is* that plurality).
+      - ``support``   — see above (1.0 = unanimous, low = contested).
       - ``entropy``   — Shannon entropy (bits) of the member label distribution
         at the observation (0.0 = unanimous, higher = more split).
       - ``n_members`` — number of members with a label at that observation.
@@ -52,7 +64,13 @@ def per_spot_confidence(aligned_labels: pd.DataFrame) -> pd.DataFrame:
             return pd.Series({"support": 0.0, "entropy": 0.0})
         counts = vals.value_counts()
         total = float(len(vals))
-        support = float(counts.iloc[0]) / total  # largest agreeing block
+        if consensus_labels is not None:
+            # Fraction agreeing with the EMITTED consensus label (describes the
+            # label actually written to the TSV, not a possibly-different mode).
+            target = consensus_labels.loc[row.name]
+            support = float((vals == target).sum()) / total
+        else:
+            support = float(counts.iloc[0]) / total  # plurality (largest block)
         probs = (counts / total).to_numpy()
         # ``+ 0.0`` normalises IEEE negative zero (unanimous spot) to ``0.0``.
         entropy = float(-sum(p * math.log2(p) for p in probs if p > 0)) + 0.0
