@@ -903,6 +903,95 @@ def test_workflow_shim_delegation_under_if_false_fails(
     assert any("must delegate" in e for e in errors), errors
 
 
+def test_workflow_shim_delegation_after_return_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A delegating call AFTER an unconditional `return` is dead code — it must
+    not count as delegation (the live `main` path returns first)."""
+    _patch_consensus(monkeypatch)
+    shim = (
+        "import sys\n"
+        "from omicsclaw.runtime.consensus.run import main as _run_main\n"
+        'SOURCE = "consensus-domains"\n'
+        "def main(argv=None):\n"
+        "    argv = list(sys.argv[1:] if argv is None else argv)\n"
+        "    return 0\n"
+        '    return _run_main(["--source", SOURCE, *argv])\n'
+    )
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any("must delegate" in e for e in errors), errors
+
+
+def test_workflow_shim_delegation_after_raise_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A delegating call after an unconditional `raise` is unreachable."""
+    _patch_consensus(monkeypatch)
+    shim = (
+        "import sys\n"
+        "from omicsclaw.runtime.consensus.run import main as _run_main\n"
+        'SOURCE = "consensus-domains"\n'
+        "def main(argv=None):\n"
+        "    argv = list(sys.argv[1:] if argv is None else argv)\n"
+        '    raise RuntimeError("boom")\n'
+        '    return _run_main(["--source", SOURCE, *argv])\n'
+    )
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any("must delegate" in e for e in errors), errors
+
+
+def test_workflow_shim_delegation_after_if_true_return_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`if True: return 0` always returns, so a delegation after it is dead."""
+    _patch_consensus(monkeypatch)
+    shim = (
+        "import sys\n"
+        "from omicsclaw.runtime.consensus.run import main as _run_main\n"
+        'SOURCE = "consensus-domains"\n'
+        "def main(argv=None):\n"
+        "    argv = list(sys.argv[1:] if argv is None else argv)\n"
+        "    if True:\n"
+        "        return 0\n"
+        '    return _run_main(["--source", SOURCE, *argv])\n'
+    )
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any("must delegate" in e for e in errors), errors
+
+
+def test_workflow_shim_conditional_delegation_passes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A REACHABLE conditional delegation (`if cond: return _run_main(...)`) is a
+    valid live path and must still pass — terminal-flow pruning must not over-
+    reject runtime branches."""
+    _patch_consensus(monkeypatch)
+    shim = (
+        "import sys\n"
+        "from omicsclaw.runtime.consensus.run import main as _run_main\n"
+        'SOURCE = "consensus-domains"\n'
+        "def main(argv=None):\n"
+        "    argv = list(sys.argv[1:] if argv is None else argv)\n"
+        "    if argv:\n"
+        '        return _run_main(["--source", SOURCE, *argv])\n'
+        '    return _run_main(["--source", SOURCE, *argv])\n'
+    )
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert errors == [], errors
+
+
 def test_workflow_shim_missing_source_constant_fails(tmp_path: Path, monkeypatch) -> None:
     _patch_consensus(monkeypatch)
     shim = (

@@ -342,12 +342,40 @@ def _top_level_main(tree: ast.AST) -> ast.AST | None:
     return None
 
 
+def _block_terminates(stmts: list[ast.stmt]) -> bool:
+    """True iff executing ``stmts`` always reaches a `return`/`raise` — i.e. any
+    statement that follows this block on the same path is unreachable.
+
+    Handles the constant-branch and both-branches-terminate cases so dead code
+    after `if True: return` / `if/else` (both return) is also recognised.
+    """
+    for stmt in stmts:
+        if isinstance(stmt, (ast.Return, ast.Raise)):
+            return True
+        if isinstance(stmt, ast.If):
+            truth = _const_truthiness(stmt.test)
+            if truth is True:
+                if _block_terminates(stmt.body):
+                    return True
+            elif truth is False:
+                if _block_terminates(stmt.orelse):
+                    return True
+            elif _block_terminates(stmt.body) and _block_terminates(stmt.orelse):
+                return True
+    return False
+
+
 def _reachable_calls(stmts: list[ast.stmt]):
     """Yield `ast.Call` nodes reachable in a statement list.
 
-    Prunes the bodies of trivially-constant `if`/`while` branches (so a call
-    under `if False:` does not count) and does NOT descend into nested
-    function/class definitions (so a call in a helper is off the `main` path).
+    - Prunes the bodies of trivially-constant `if`/`while` branches (so a call
+      under `if False:` does not count).
+    - Does NOT descend into nested function/class definitions (so a call in a
+      helper is off the `main` path).
+    - STOPS scanning a block after an unconditional terminator (`return`/`raise`,
+      or a branch construct that terminates on all live paths), so a call placed
+      after `return 0` is dead code and does not count. The terminator's own
+      expression is still inspected before stopping.
     """
     for stmt in stmts:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -356,10 +384,19 @@ def _reachable_calls(stmts: list[ast.stmt]):
             truth = _const_truthiness(stmt.test)
             if truth is True:
                 yield from _reachable_calls(stmt.body)
+                if _block_terminates(stmt.body):
+                    return
                 continue
             if truth is False:
                 yield from _reachable_calls(stmt.orelse)
+                if _block_terminates(stmt.orelse):
+                    return
                 continue
+            yield from _reachable_calls(stmt.body)
+            yield from _reachable_calls(stmt.orelse)
+            if _block_terminates(stmt.body) and _block_terminates(stmt.orelse):
+                return
+            continue
         for child in ast.iter_child_nodes(stmt):
             if isinstance(child, ast.stmt):
                 yield from _reachable_calls([child])
@@ -367,6 +404,8 @@ def _reachable_calls(stmts: list[ast.stmt]):
                 for node in ast.walk(child):
                     if isinstance(node, ast.Call):
                         yield node
+        if isinstance(stmt, (ast.Return, ast.Raise)):
+            return
 
 
 def _is_run_main_delegation(
