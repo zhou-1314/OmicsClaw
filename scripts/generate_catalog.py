@@ -33,6 +33,26 @@ def parse_yaml_frontmatter(text: str) -> dict:
     return loaded if isinstance(loaded, dict) else {}
 
 
+_SKILL_TYPES = ("leaf", "workflow", "knowledge", "adapter")
+
+
+def sidecar_type(skill_dir: Path) -> str:
+    """Read the declared skill `type` from parameters.yaml (ADR 0030).
+
+    Optional field; a missing/blank/unknown value falls back to ``leaf`` so the
+    catalog matches ``LazySkillMetadata.type`` exactly.
+    """
+    sidecar = skill_dir / "parameters.yaml"
+    if not sidecar.exists():
+        return "leaf"
+    try:
+        data = yaml.safe_load(sidecar.read_text(encoding="utf-8"))
+    except yaml.YAMLError:
+        return "leaf"
+    value = (data or {}).get("type") if isinstance(data, dict) else None
+    return value if value in _SKILL_TYPES else "leaf"
+
+
 def build_cli_alias_map() -> dict[str, str]:
     """Build {absolute_skill_dir_path: canonical_cli_alias} from the Omics registry."""
     if str(OMICSCLAW_DIR) not in sys.path:
@@ -83,6 +103,7 @@ def generate_catalog() -> dict:
         entry = {
             "name": name,
             "cli_alias": cli_alias,
+            "type": sidecar_type(skill_dir),
             "description": fm.get("description", ""),
             "version": fm.get("version", "0.1.0"),
             "status": "mvp" if has_script else "planned",

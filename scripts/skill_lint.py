@@ -308,6 +308,104 @@ def _check_allowed_extra_flags(skill_dir: Path, sidecar: dict) -> list[str]:
     return errors
 
 
+# --- Type dispatch (ADR 0030) ---------------------------------------------
+#
+# `type` is an optional sidecar field: `leaf` (default) | `workflow` |
+# `knowledge` | `adapter`.  Only `workflow` currently has a distinct profile;
+# everything else (including a missing/unknown `type`) lints as `leaf`, so the
+# 91 existing single-script skills are byte-unchanged.
+
+_SKILL_TYPES = ("leaf", "workflow", "knowledge", "adapter")
+_WORKFLOW_RUN_MODULE = "omicsclaw.runtime.consensus.run"
+_WORKFLOW_SOURCE_RE = re.compile(r'^SOURCE\s*=\s*["\']([\w.-]+)["\']', re.MULTILINE)
+
+
+def _skill_type(sidecar: dict) -> str:
+    value = sidecar.get("type") or "leaf"
+    return value if value in _SKILL_TYPES else "leaf"
+
+
+def _consensus_sources() -> set[str] | None:
+    """Keys of ``CONSENSUS_SOURCES`` — None if the runtime can't be imported.
+
+    The lint degrades gracefully in minimal envs: an import failure skips the
+    SOURCE-membership check rather than crashing the whole run.
+    """
+    try:
+        from omicsclaw.runtime.consensus.sources import CONSENSUS_SOURCES
+    except Exception:
+        return None
+    return set(CONSENSUS_SOURCES)
+
+
+def _consensus_parser_flags() -> set[str] | None:
+    """`--flag` set accepted by the generic consensus ``run`` parser, or None."""
+    try:
+        from omicsclaw.runtime.consensus.run import _build_parser
+
+        parser = _build_parser()
+    except Exception:
+        return None
+    return {
+        opt
+        for action in parser._actions
+        for opt in action.option_strings
+        if opt.startswith("--")
+    }
+
+
+def _check_workflow_shim(skill_dir: Path, sidecar: dict) -> list[str]:
+    """Validate a `type: workflow` shim against the consensus runtime (ADR 0016).
+
+    Workflow skills are thin shims whose argparse surface lives in the shared
+    ``runtime/consensus/run`` parser, not in the shim — so the leaf
+    `allowed_extra_flags ↔ add_argument` check is replaced by: the shim
+    delegates to the run entry, defines a `SOURCE` that resolves in
+    ``CONSENSUS_SOURCES``, and only lists flags the generic run parser accepts.
+    """
+    errors: list[str] = []
+    script_name = sidecar.get("script") or ""
+    script_path = skill_dir / script_name if script_name else None
+    if not (script_path and script_path.exists()):
+        return [f"type=workflow: declared script {script_name!r} is missing"]
+    text = script_path.read_text(encoding="utf-8")
+
+    if _WORKFLOW_RUN_MODULE not in text:
+        errors.append(
+            f"type=workflow: shim must delegate to {_WORKFLOW_RUN_MODULE} "
+            f"(not found in {script_name})"
+        )
+    source_match = _WORKFLOW_SOURCE_RE.search(text)
+    source = source_match.group(1) if source_match else None
+    if source is None:
+        errors.append(
+            f'type=workflow: shim must define SOURCE = "<flavour>" in {script_name}'
+        )
+    if '"--source"' not in text and "'--source'" not in text:
+        errors.append(
+            'type=workflow: shim must invoke the run entry with '
+            f'["--source", SOURCE, ...] in {script_name}'
+        )
+
+    sources = _consensus_sources()
+    if source is not None and sources is not None and source not in sources:
+        errors.append(
+            f"type=workflow: SOURCE {source!r} not in CONSENSUS_SOURCES "
+            f"{sorted(sources)}"
+        )
+
+    parser_flags = _consensus_parser_flags()
+    if parser_flags is not None:
+        allowed = set(sidecar.get("allowed_extra_flags") or [])
+        unknown = allowed - parser_flags - _RUNNER_BLOCKED_FLAGS
+        for flag in sorted(unknown):
+            errors.append(
+                f"type=workflow: allowed_extra_flags lists {flag!r} which the "
+                f"consensus run parser does not accept"
+            )
+    return errors
+
+
 # --- Check: output_contract.md paths exist in the script ------------------
 #
 # `references/output_contract.md` is supposed to describe the files the
@@ -459,14 +557,24 @@ def lint_skill(skill_dir: Path) -> list[str]:
         return [f"parameters.yaml: invalid YAML ({exc})"]
 
     errors: list[str] = []
+    # Type-agnostic checks (apply to every skill type).
     errors.extend(_check_description(frontmatter.get("description", "")))
     errors.extend(_check_body(body))
     errors.extend(_check_frontmatter_keys(frontmatter))
     errors.extend(_check_sidecar(sidecar))
     errors.extend(_check_references(skill_dir, sidecar))
     errors.extend(_check_gotchas_anchors(skill_dir, body, sidecar))
-    errors.extend(_check_allowed_extra_flags(skill_dir, sidecar))
-    errors.extend(_check_output_contract_paths(skill_dir, sidecar))
+
+    # Type-specific profile (ADR 0030).  `workflow` shims delegate their
+    # argparse + outputs to the shared runtime, so the leaf flag-match and
+    # output-contract substring checks would false-fail; validate the shim
+    # wiring instead.  `leaf` (and, for now, `knowledge`/`adapter`) keep the
+    # full leaf contract unchanged.
+    if _skill_type(sidecar) == "workflow":
+        errors.extend(_check_workflow_shim(skill_dir, sidecar))
+    else:
+        errors.extend(_check_allowed_extra_flags(skill_dir, sidecar))
+        errors.extend(_check_output_contract_paths(skill_dir, sidecar))
     return errors
 
 
