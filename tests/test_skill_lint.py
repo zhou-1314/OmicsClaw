@@ -785,16 +785,60 @@ def test_workflow_shim_bad_source_fails(tmp_path: Path, monkeypatch) -> None:
     assert any("not-a-flavour" in e and "CONSENSUS_SOURCES" in e for e in errors), errors
 
 
-def test_workflow_shim_missing_delegation_fails(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_shim_missing_import_fails(tmp_path: Path, monkeypatch) -> None:
     _patch_consensus(monkeypatch)
-    # No import of the run entry and no ["--source", ...] invocation.
+    # No import of the run entry at all.
     shim = 'SOURCE = "consensus-domains"\ndef main():\n    return 0\n'
     skill = _write_v2_skill(
         tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
     )
     errors = skill_lint.lint_skill(skill)
-    assert any("must delegate" in e for e in errors), errors
-    assert any("--source" in e for e in errors), errors
+    assert any("must import" in e for e in errors), errors
+
+
+def test_workflow_shim_imports_but_never_delegates_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Codex R1 counterexample: the shim imports the run entry, defines a valid
+    SOURCE, and even *builds* the ``["--source", SOURCE, *argv]`` list — but
+    never CALLS the run entry. The old string-presence check passed this; the
+    AST check must reject it because no real delegation happens."""
+    _patch_consensus(monkeypatch)
+    shim = (
+        "import sys\n"
+        "from omicsclaw.runtime.consensus.run import main as _run_main\n"
+        'SOURCE = "consensus-domains"\n'
+        "def main(argv=None):\n"
+        "    argv = list(sys.argv[1:] if argv is None else argv)\n"
+        '    _ = ["--source", SOURCE, *argv]  # built but never passed to _run_main\n'
+        "    return 0\n"
+    )
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any("must call the run entry" in e for e in errors), errors
+
+
+def test_workflow_shim_module_alias_delegation_passes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The ``import omicsclaw.runtime.consensus.run as run`` + ``run.main([...])``
+    form is also a valid delegation (resolved by module alias, not import-as)."""
+    _patch_consensus(monkeypatch)
+    shim = (
+        "import sys\n"
+        "import omicsclaw.runtime.consensus.run as run\n"
+        'SOURCE = "consensus-domains"\n'
+        "def main(argv=None):\n"
+        "    argv = list(sys.argv[1:] if argv is None else argv)\n"
+        '    return run.main(["--source", SOURCE, *argv])\n'
+    )
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert errors == [], errors
 
 
 def test_workflow_shim_missing_source_constant_fails(tmp_path: Path, monkeypatch) -> None:

@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import sys
 from pathlib import Path
@@ -317,12 +318,84 @@ def _check_allowed_extra_flags(skill_dir: Path, sidecar: dict) -> list[str]:
 
 _SKILL_TYPES = ("leaf", "workflow", "knowledge", "adapter")
 _WORKFLOW_RUN_MODULE = "omicsclaw.runtime.consensus.run"
-_WORKFLOW_SOURCE_RE = re.compile(r'^SOURCE\s*=\s*["\']([\w.-]+)["\']', re.MULTILINE)
 
 
 def _skill_type(sidecar: dict) -> str:
     value = sidecar.get("type") or "leaf"
     return value if value in _SKILL_TYPES else "leaf"
+
+
+def _analyse_workflow_shim(tree: ast.AST) -> tuple[set[str], set[str], str | None, bool]:
+    """Structurally inspect a workflow shim's AST (ADR 0030).
+
+    Returns ``(run_main_names, module_aliases, source_value, delegates)``:
+    - ``run_main_names`` — local names bound to
+      ``omicsclaw.runtime.consensus.run.main`` via ``import ... as``.
+    - ``module_aliases`` — local names bound to the run *module* via
+      ``import omicsclaw.runtime.consensus.run as ...``.
+    - ``source_value`` — the string assigned to a module-level ``SOURCE = "..."``.
+    - ``delegates`` — True iff there is an actual *call* to the imported run-main
+      target whose first positional arg is a list literal beginning with the
+      constant ``"--source"``, the name ``SOURCE``, then a forwarded ``*argv``.
+      A shim that merely *mentions* ``"--source"`` without calling run-main is
+      NOT a delegation (the string-presence check this replaces accepted it).
+    """
+    run_main_names: set[str] = set()
+    module_aliases: set[str] = set()
+    source_value: str | None = None
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == _WORKFLOW_RUN_MODULE:
+            for alias in node.names:
+                if alias.name == "main":
+                    run_main_names.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == _WORKFLOW_RUN_MODULE:
+                    module_aliases.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Name)
+                    and target.id == "SOURCE"
+                    and isinstance(node.value, ast.Constant)
+                    and isinstance(node.value.value, str)
+                ):
+                    source_value = node.value.value
+
+    delegates = any(
+        _is_run_main_delegation(node, run_main_names, module_aliases)
+        for node in ast.walk(tree)
+    )
+    return run_main_names, module_aliases, source_value, delegates
+
+
+def _is_run_main_delegation(
+    node: ast.AST, run_main_names: set[str], module_aliases: set[str]
+) -> bool:
+    """True iff ``node`` is a call to the run-main target with a first list arg
+    shaped ``["--source", SOURCE, *<argv>]``."""
+    if not isinstance(node, ast.Call) or not node.args:
+        return False
+    func = node.func
+    calls_run_main = (
+        isinstance(func, ast.Name) and func.id in run_main_names
+    ) or (
+        isinstance(func, ast.Attribute)
+        and func.attr == "main"
+        and isinstance(func.value, ast.Name)
+        and func.value.id in module_aliases
+    )
+    if not calls_run_main:
+        return False
+    first = node.args[0]
+    if not isinstance(first, ast.List) or len(first.elts) < 3:
+        return False
+    e0, e1 = first.elts[0], first.elts[1]
+    source_flag = isinstance(e0, ast.Constant) and e0.value == "--source"
+    source_name = isinstance(e1, ast.Name) and e1.id == "SOURCE"
+    forwards_argv = any(isinstance(el, ast.Starred) for el in first.elts[2:])
+    return source_flag and source_name and forwards_argv
 
 
 def _consensus_sources() -> set[str] | None:
@@ -370,21 +443,31 @@ def _check_workflow_shim(skill_dir: Path, sidecar: dict) -> list[str]:
         return [f"type=workflow: declared script {script_name!r} is missing"]
     text = script_path.read_text(encoding="utf-8")
 
-    if _WORKFLOW_RUN_MODULE not in text:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as exc:
+        return [f"type=workflow: shim {script_name} is not parseable ({exc})"]
+
+    run_main_names, module_aliases, source, delegates = _analyse_workflow_shim(tree)
+
+    imports_run = bool(run_main_names or module_aliases)
+    if not imports_run:
         errors.append(
-            f"type=workflow: shim must delegate to {_WORKFLOW_RUN_MODULE} "
+            f"type=workflow: shim must import {_WORKFLOW_RUN_MODULE}.main "
             f"(not found in {script_name})"
         )
-    source_match = _WORKFLOW_SOURCE_RE.search(text)
-    source = source_match.group(1) if source_match else None
     if source is None:
         errors.append(
             f'type=workflow: shim must define SOURCE = "<flavour>" in {script_name}'
         )
-    if '"--source"' not in text and "'--source'" not in text:
+    # The key structural check: a real CALL to run-main, not just the strings.
+    # Only assert it once the import + SOURCE prerequisites exist, so the error
+    # list names the root cause rather than piling on.
+    if imports_run and source is not None and not delegates:
         errors.append(
-            'type=workflow: shim must invoke the run entry with '
-            f'["--source", SOURCE, ...] in {script_name}'
+            "type=workflow: shim must call the run entry as "
+            f'main(["--source", SOURCE, *argv]) in {script_name} '
+            "(import + SOURCE present but no delegating call found)"
         )
 
     sources = _consensus_sources()
