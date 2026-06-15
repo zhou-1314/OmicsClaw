@@ -147,13 +147,13 @@ async def _run(args: argparse.Namespace) -> int:
         )
         return 4
 
+    # Scoring thresholds (alpha/beta/max_class_fraction_cap/top_k) are written to
+    # plan.json authoritatively by the driver from the ScoreConfig it actually
+    # used — don't duplicate them here (avoids divergent keys in plan.json).
     plan_audit = {
         "run_id": args.run_id or output_dir.name,
         "operator": args.operator,
         "members": [{"name": m.name, "params": dict(m.params)} for m in members],
-        "alpha": args.alpha,
-        "beta": args.beta,
-        "max_class_frac": args.max_class_frac,
     }
 
     try:

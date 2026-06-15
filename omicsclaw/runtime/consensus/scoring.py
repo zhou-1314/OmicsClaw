@@ -1,8 +1,10 @@
 """Composite member score for base-clustering (BC) selection.
 
-Implements the SACCELERATOR-style ``02_BC_ranking`` formula adapted to
-OmicsClaw's existing intrinsic-quality signals (``mean_local_purity`` from
-``spatial-domains``; ``silhouette_score`` from ``sc-clustering``).
+Implements the SACCELERATOR-style ``02_BC_ranking`` formula. This layer is
+metric-agnostic: it takes one ``intrinsic_quality`` float per member, whatever
+its source. Spatial-domains runs feed a normalized multi-metric panel
+(chaos/pas/mlami, ADR 0028) as that float; sc-clustering feeds
+``silhouette_score``; the panel-disabled spatial fallback is ``mean_local_purity``.
 
 The score is deterministic; the evaluation-chair LLM may only veto members
 or rebalance ``alpha``/``beta`` within ±0.2, never invent scores. See
@@ -26,7 +28,12 @@ MAX_CLASS_FRAC_CAP_DEFAULT = 0.8
 
 @dataclass(frozen=True)
 class MemberScore:
-    """One row of the BC-ranking output."""
+    """One row of the BC-ranking output.
+
+    ``selected`` / ``selection_reason`` are populated by the driver *after* BC
+    selection (scoring itself doesn't know top-K); they default to a not-yet-
+    selected state so ``score_member`` callers stay unchanged.
+    """
 
     member: str
     composite: float
@@ -35,6 +42,8 @@ class MemberScore:
     max_class_frac: float
     filtered: bool
     filter_reason: str | None = None
+    selected: bool = False
+    selection_reason: str | None = None
 
 
 def _max_class_fraction(labels: np.ndarray) -> float:

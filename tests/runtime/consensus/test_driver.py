@@ -350,3 +350,53 @@ async def test_format_typed_report_starts_with_banner(tmp_path: Path) -> None:
     assert "Smoke test" in md
     assert "## Base clusterings" in md
     assert "## Cross-method NMI" in md
+
+
+@pytest.mark.asyncio
+async def test_report_and_artifacts_carry_explainability(tmp_path: Path) -> None:
+    import json
+
+    from omicsclaw.runtime.consensus.driver import ScoreConfig, run_typed_consensus
+    from omicsclaw.runtime.consensus.report import format_typed_report
+
+    label_arrays = {f"m{i}": ["A"] * 6 + ["B"] * 6 for i in range(3)}
+    intrinsic = {f"m{i}": 0.5 for i in range(3)}
+    members = _members(list(label_arrays.keys()))
+    source = _make_source(label_arrays, intrinsic)
+
+    run = await run_typed_consensus(
+        members=members, source=source, input_path="/dev/null",
+        output_dir=tmp_path, operator="kmode",
+        bc_selector=lambda s, k: [x.member for x in s][:2],
+        score_config=ScoreConfig(), seed=0,
+        plan_audit={"run_id": "x", "operator": "kmode"}, runner=_stub_runner,
+    )
+
+    # member_scores.csv gains selected + selection_reason (explainability).
+    ms = pd.read_csv(tmp_path / "member_scores.csv")
+    assert {"selected", "selection_reason"} <= set(ms.columns)
+    assert ms["selected"].sum() == 2
+    assert set(ms.loc[ms["selected"], "selection_reason"]) == {"passed"}
+    assert "below_top_k" in set(ms.loc[~ms["selected"], "selection_reason"])
+
+    # consensus_labels.tsv gains support / entropy / n_members.
+    cl = pd.read_csv(tmp_path / "consensus_labels.tsv", sep="\t")
+    assert {"observation", "support", "entropy", "n_members"} <= set(cl.columns)
+    assert ((cl["support"] >= 0) & (cl["support"] <= 1)).all()
+    assert (cl["n_members"] == 2).all()  # the 2 selected members entered consensus
+
+    # plan.json records the thresholds (never hidden).
+    plan = json.loads((tmp_path / "plan.json").read_text())
+    assert plan["max_class_fraction_cap"] == 0.8
+    assert plan["top_k"] == 4 and plan["alpha"] == 0.6 and plan["beta"] == 0.4
+
+    # report carries the explainability sections + the fixed disclaimer/caveat.
+    md = format_typed_report(run, title="Explain")
+    for section in (
+        "## Failed members", "## Consensus confidence",
+        "## Scoring parameters & thresholds", "## Interpretation notes",
+    ):
+        assert section in md, section
+    assert "not as experimental ground truth" in md
+    assert "biological correctness" in md
+    assert "| selected | reason |" in md

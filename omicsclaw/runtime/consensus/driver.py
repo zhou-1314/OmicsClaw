@@ -29,7 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Sequence
 
@@ -50,6 +50,10 @@ from omicsclaw.runtime.consensus.scoring import (
     score_all_members,
 )
 from omicsclaw.runtime.consensus.source_registry import ConsensusSource
+from omicsclaw.runtime.consensus.explain import (
+    per_spot_confidence,
+    render_nmi_heatmap,
+)
 from omicsclaw.runtime.consensus.spatial_panel import (
     PANEL_METRICS,
     intrinsic_spatial_panel,
@@ -108,6 +112,14 @@ class TypedConsensusRun:
     #: Per-member raw spatial-panel metrics (chaos/pas/mlami) when the spatial
     #: intrinsic panel ran; empty for non-spatial runs or when disabled.
     intrinsic_panel_raw: dict[str, dict[str, float]] = field(default_factory=dict)
+    #: ADR 0011 scoring config (alpha/beta/max-class cap) actually used.
+    score_config: "ScoreConfig" = field(default_factory=ScoreConfig)
+    #: Top-K used for BC selection.
+    top_k: int = 4
+    #: Per-observation consensus confidence (support/entropy/n_members).
+    confidence: pd.DataFrame = field(default_factory=pd.DataFrame)
+    #: Path to the cross-method NMI heatmap PNG, if it was rendered.
+    nmi_heatmap_path: Path | None = None
 
 
 class InsufficientBCsError(RuntimeError):
@@ -226,6 +238,28 @@ def _run_operator(
     raise ValueError(f"unknown operator: {operator!r}")
 
 
+def _annotate_selection(
+    scores: Sequence[MemberScore], selected: Sequence[str]
+) -> tuple[MemberScore, ...]:
+    """Stamp each score with whether/why it entered consensus (explainability).
+
+    ``selection_reason`` is one of: ``"passed"`` (entered consensus),
+    ``"below_top_k"`` (scored, not picked), or ``"filtered (max_class_fraction
+    > cap)"`` (hard-filtered before selection).
+    """
+    selected_set = set(selected)
+    annotated: list[MemberScore] = []
+    for s in scores:
+        if s.filtered:
+            sel, reason = False, "filtered (max_class_fraction > cap)"
+        elif s.member in selected_set:
+            sel, reason = True, "passed"
+        else:
+            sel, reason = False, "below_top_k"
+        annotated.append(replace(s, selected=sel, selection_reason=reason))
+    return tuple(annotated)
+
+
 # --------------------------------------------------------------------------- #
 # Entry                                                                       #
 # --------------------------------------------------------------------------- #
@@ -278,6 +312,14 @@ async def run_typed_consensus(
         # any caller-supplied (possibly relative) value.
         audit = dict(plan_audit)
         audit["input_path"] = str(Path(input_path).resolve())
+        # Record the scoring thresholds actually used (authoritative from the
+        # driver, never hidden) so plan.json + report stay truthful — the
+        # max-class-fraction hard filter in particular (ADR 0011).
+        audit["operator"] = operator
+        audit["alpha"] = score_config.alpha
+        audit["beta"] = score_config.beta
+        audit["max_class_fraction_cap"] = score_config.max_class_frac_cap
+        audit["top_k"] = top_k_default
         plan_path.write_text(json.dumps(audit, indent=2))
         artifacts.append(plan_path)
 
@@ -351,7 +393,7 @@ async def run_typed_consensus(
             ).to_csv(panel_path, index=False)
             artifacts.append(panel_path)
 
-    # 4. score + persist score table
+    # 4. score
     labels_arrays = {col: labels_df[col].to_numpy() for col in labels_df.columns}
     scores = score_all_members(
         labels_arrays,
@@ -360,18 +402,24 @@ async def run_typed_consensus(
         beta=score_config.beta,
         max_class_frac_cap=score_config.max_class_frac_cap,
     )
-    scores_path = output_dir_p / "member_scores.csv"
-    pd.DataFrame([asdict(s) for s in scores]).to_csv(scores_path, index=False)
-    artifacts.append(scores_path)
 
-    # 5. cross-method NMI + persist
+    # 5. cross-method NMI + persist (+ optional heatmap figure)
     nmi_df = _cross_method_nmi_matrix(labels_df)
     nmi_path = output_dir_p / "cross_method_nmi.csv"
     nmi_df.to_csv(nmi_path)
     artifacts.append(nmi_path)
+    nmi_heatmap_path = render_nmi_heatmap(nmi_df, output_dir_p / "cross_method_nmi.png")
+    if nmi_heatmap_path is not None:
+        artifacts.append(nmi_heatmap_path)
 
-    # 6. BC selection via injected callable
+    # 6. BC selection; stamp every member with selected/why, then persist the
+    #    score table. Written before the gate so a failed selection is still
+    #    auditable — every member carries its selection reason.
     selected = bc_selector(scores, top_k_default)
+    scores = _annotate_selection(scores, selected)
+    scores_path = output_dir_p / "member_scores.csv"
+    pd.DataFrame([asdict(s) for s in scores]).to_csv(scores_path, index=False)
+    artifacts.append(scores_path)
     if len(selected) < 2:
         raise InsufficientBCsError(
             f"BC selector returned {len(selected)} member(s) (< 2 required). "
@@ -384,12 +432,16 @@ async def run_typed_consensus(
         operator, labels_df[selected], seed=seed, score_lookup=score_lookup
     )
 
-    # 8. consensus labels TSV
+    # 8. per-spot confidence + consensus labels TSV (label + agreement columns)
+    confidence = per_spot_confidence(consensus.aligned_labels)
     consensus_path = output_dir_p / "consensus_labels.tsv"
     pd.DataFrame(
         {
             "observation": consensus.labels.index,
             f"consensus_{operator}": consensus.labels.values,
+            "support": confidence["support"].to_numpy(),
+            "entropy": confidence["entropy"].to_numpy(),
+            "n_members": confidence["n_members"].to_numpy(),
         }
     ).to_csv(consensus_path, sep="\t", index=False)
     artifacts.append(consensus_path)
@@ -409,4 +461,8 @@ async def run_typed_consensus(
         artifacts_written=tuple(artifacts),
         missing_label_members=tuple(missing),
         intrinsic_panel_raw=intrinsic_panel_raw,
+        score_config=score_config,
+        top_k=top_k_default,
+        confidence=confidence,
+        nmi_heatmap_path=nmi_heatmap_path,
     )

@@ -1,16 +1,57 @@
 """Markdown rendering for a ``TypedConsensusRun``.
 
-The banner is the first line of every report — non-configurable per
-ADR 0010. Callers pass only a domain-specific ``title`` (e.g. "Verified
-consensus — spatial domains"). Sections are stable across thin skills so
-downstream parsers (graph memory writer, paper-figure extractor) can rely
-on the structure.
+The banner is the first line of every report — non-configurable per ADR 0010.
+Callers pass only a domain-specific ``title``. Sections are stable across thin
+skills so downstream parsers (graph memory writer, paper-figure extractor) can
+rely on the structure. Beyond the core result this renders the explainability
+panel: failed members, a selected-vs-rejected table with reasons, per-spot
+consensus confidence, the scoring thresholds (also in ``plan.json``), and fixed
+interpretation notes (consensus-is-not-ground-truth + a calibrated NMI caveat).
 """
 
 from __future__ import annotations
 
 from omicsclaw.runtime.consensus.dispatch import output_banner
 from omicsclaw.runtime.consensus.driver import TypedConsensusRun
+
+#: Fixed disclaimer — a verified consensus is a reproducible estimate, not truth.
+_DISCLAIMER = (
+    "This verified consensus reflects agreement among selected computational "
+    "members under the recorded plan and scoring rules. It should be interpreted "
+    "as a reproducible consensus estimate, not as experimental ground truth."
+)
+
+
+def _failed_members_section(run: TypedConsensusRun) -> list[str]:
+    failed = list(run.team_result.failed)
+    lines = ["## Failed members", ""]
+    if not failed:
+        lines.append("None — every fanned-out member completed.")
+        return lines
+    lines.append(f"{len(failed)} member(s) did not produce a usable result:")
+    lines.append("")
+    for r in failed:
+        lines.append(f"- `{r.step.name}` — {r.status}: {r.error or '(no detail)'}")
+    return lines
+
+
+def _confidence_section(run: TypedConsensusRun) -> list[str]:
+    conf = run.confidence
+    lines = ["## Consensus confidence", ""]
+    if conf is None or len(conf) == 0 or "support" not in getattr(conf, "columns", []):
+        lines.append("Per-observation confidence not available for this run.")
+        return lines
+    support = conf["support"]
+    lines += [
+        f"- mean per-spot support (members agreeing with the consensus label): "
+        f"**{float(support.mean()):.3f}**",
+        f"- high-confidence spots (support ≥ 0.8): **{float((support >= 0.8).mean()) * 100:.1f}%**",
+        f"- contested spots (support < 0.5): **{float((support < 0.5).mean()) * 100:.1f}%**",
+        f"- mean per-spot label entropy across members: **{float(conf['entropy'].mean()):.3f}** bits",
+        "",
+        "_Per-observation `support` / `entropy` / `n_members` are in `consensus_labels.tsv`._",
+    ]
+    return lines
 
 
 def format_typed_report(run: TypedConsensusRun, *, title: str) -> str:
@@ -21,37 +62,83 @@ def format_typed_report(run: TypedConsensusRun, *, title: str) -> str:
     A-path report without it.
     """
     banner = output_banner("typed")
+    op = run.operator
+    cfg = run.score_config
     lines: list[str] = [
         banner,
         "",
-        f"# {title} ({run.operator})",
+        f"# {title} ({op})",
         "",
         f"- members fanned out: **{run.team_result.total}**",
         f"- members surviving: **{run.team_result.n_survived}**",
+        f"- members failed: **{run.team_result.n_failed}**",
         f"- members entering consensus (BC): **{len(run.selected_bcs)}**",
         f"- consensus clusters returned: **{run.consensus.n_clusters_returned}**",
-        f"- operator: `{run.operator}` (seed={run.consensus.seed})",
+        f"- operator: `{op}` (seed={run.consensus.seed})",
         "",
+    ]
+
+    lines += _failed_members_section(run)
+    lines.append("")
+
+    # Base clusterings — selected vs rejected, with the reason for each.
+    lines += [
         "## Base clusterings",
         "",
-        "| member | composite | cross_NMI | intrinsic | max_class_frac | filtered |",
-        "|---|---|---|---|---|---|",
+        "| member | composite | cross_NMI | intrinsic | max_class_frac | selected | reason |",
+        "|---|---|---|---|---|---|---|",
     ]
-    selected_set = set(run.selected_bcs)
     for s in run.scores:
-        chk = "✓" if s.member in selected_set else ""
+        reason = s.selection_reason or ("passed" if s.selected else "")
         lines.append(
-            f"| {s.member} {chk} | {s.composite:.4f} | {s.cross_nmi_mean:.4f} | "
+            f"| {s.member} | {s.composite:.4f} | {s.cross_nmi_mean:.4f} | "
             f"{s.intrinsic:.4f} | {s.max_class_frac:.3f} | "
-            f"{'yes (' + (s.filter_reason or '') + ')' if s.filtered else 'no'} |"
+            f"{'yes' if s.selected else 'no'} | {reason} |"
         )
+    lines.append("")
+
+    # Cross-method NMI matrix (+ heatmap figure when rendered).
     lines += [
-        "",
         "## Cross-method NMI matrix",
         "",
         "```",
         run.nmi_matrix.round(3).to_string(),
         "```",
+        "",
+    ]
+    if run.nmi_heatmap_path is not None:
+        lines += [f"![Cross-method NMI heatmap]({run.nmi_heatmap_path.name})", ""]
+
+    lines += _confidence_section(run)
+    lines.append("")
+
+    # Scoring parameters & thresholds (also recorded in plan.json; never hidden).
+    lines += [
+        "## Scoring parameters & thresholds",
+        "",
+        f"- composite score = α·cross_NMI + β·intrinsic, with **α={cfg.alpha}**, **β={cfg.beta}**",
+        f"- max-class-fraction hard filter: a member whose largest cluster exceeds "
+        f"**{cfg.max_class_frac_cap}** of observations is excluded (`composite = -inf`)",
+        f"- base-clustering selection: top-**{run.top_k}** members by composite score",
+        f"- operator: `{op}` (seed={run.consensus.seed})",
+        "",
+        "_All thresholds above are recorded in `plan.json`; none are hidden._",
+        "",
+    ]
+
+    # Interpretation notes — the two fixed wordings.
+    lines += [
+        "## Interpretation notes",
+        "",
+        f"> {_DISCLAIMER}",
+        "",
+        "**On cross-method NMI:** high cross-method NMI means the methods produce a "
+        "consistent partition under the *current input and parameters* — evidence of "
+        "consensus stability, **not** biological correctness. NMI can be insensitive "
+        "to cluster-count differences and to hierarchical correspondence between "
+        "resolutions, and a bias shared across all methods can inflate it. Low "
+        "cross-NMI indicates the members disagree, which may warrant refining the "
+        "operator or the member pool.",
         "",
         f"_Audit_: A path; namespace `analysis://typed/{run.run_id}`. "
         f"Do not strip the `{banner}` banner — it is enforced by ADR 0010.",
