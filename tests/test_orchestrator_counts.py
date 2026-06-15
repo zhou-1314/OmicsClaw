@@ -21,7 +21,7 @@ def test_orchestrator_count_generator_includes_literature_domain():
 
     blocks = generator.render_blocks()
 
-    assert "89 skills in 8 domains" in blocks["intro"]
-    assert "89 skills across 8 domains" in blocks["domains"]
+    assert "94 skills in 8 domains" in blocks["intro"]
+    assert "94 skills across 8 domains" in blocks["domains"]
     assert "**Literature** (1 skills)" in blocks["domains"]
-    assert "All 89 skills across 8 domains" in blocks["footer"]
+    assert "All 94 skills across 8 domains" in blocks["footer"]
