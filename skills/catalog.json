@@ -1095,8 +1095,8 @@
       "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
-      "has_demo": true,
-      "demo_command": "python omicsclaw.py run sc-consensus-clustering --demo",
+      "has_demo": false,
+      "demo_command": null,
       "tags": [
         "singlecell",
         "consensus",
@@ -1120,8 +1120,8 @@
       "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
-      "has_demo": true,
-      "demo_command": "python omicsclaw.py run sc-consensus-integration --demo",
+      "has_demo": false,
+      "demo_command": null,
       "tags": [
         "singlecell",
         "scrna",
@@ -1705,8 +1705,8 @@
       "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
-      "has_demo": true,
-      "demo_command": "python omicsclaw.py run consensus-domains --demo",
+      "has_demo": false,
+      "demo_command": null,
       "tags": [
         "spatial",
         "consensus",

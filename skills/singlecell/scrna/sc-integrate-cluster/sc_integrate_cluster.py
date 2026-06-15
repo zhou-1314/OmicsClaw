@@ -122,10 +122,49 @@ def _cluster(adata, *, rep_key: str, cluster_method: str, resolution: float,
         cluster_fn(adata, **kwargs)
 
 
+def _synthesise_demo_adata(seed: int = 0):
+    """Small deterministic multi-batch AnnData for ``--demo`` (smoke only).
+
+    2 batches x 3 cell types x 40 cells over 120 genes, with a per-batch additive
+    shift (the technical effect integration should remove). Carries raw
+    ``layers['counts']``, a log-normalised ``X``, and ``obs['batch']`` — enough
+    for ``--method none`` (X_pca baseline) to integrate + cluster end to end.
+    """
+    import anndata as ad
+
+    rng = np.random.default_rng(seed)
+    n_types, n_per, n_batches, n_genes = 3, 40, 2, 120
+    programs = rng.gamma(shape=1.0, scale=1.0, size=(n_types, n_genes)) * 3.0
+    rows: list[np.ndarray] = []
+    batches: list[str] = []
+    types: list[str] = []
+    for b in range(n_batches):
+        shift = rng.normal(b * 1.5, 0.2, size=n_genes)
+        for t in range(n_types):
+            mean = np.clip(programs[t] + shift, 0.0, None)
+            rows.append(rng.poisson(mean, size=(n_per, n_genes)))
+            batches.extend([f"batch{b}"] * n_per)
+            types.extend([f"type{t}"] * n_per)
+    counts = np.vstack(rows).astype(np.float32)
+    adata = ad.AnnData(counts.copy())
+    adata.obs_names = [f"cell{i}" for i in range(adata.n_obs)]
+    adata.var_names = [f"gene{j}" for j in range(n_genes)]
+    adata.obs["batch"] = batches
+    adata.obs["cell_type"] = types
+    adata.layers["counts"] = counts
+    sc.pp.normalize_total(adata, target_sum=1e4)
+    sc.pp.log1p(adata)
+    return adata
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Integrate + cluster (consensus member).")
-    parser.add_argument("--input", required=True, help="Preprocessed AnnData (.h5ad) with a batch key")
+    parser.add_argument("--input", required=False, help="Preprocessed AnnData (.h5ad) with a batch key")
     parser.add_argument("--output", required=True, help="Member output directory")
+    parser.add_argument(
+        "--demo", action="store_true",
+        help="Run on a small synthetic multi-batch AnnData instead of --input.",
+    )
     parser.add_argument(
         "--method", choices=["none", "harmony", "scanorama", "scvi"], default="none",
         help="Integration backend (none = unintegrated X_pca baseline)",
@@ -138,13 +177,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--n-top-genes", type=int, default=2000, help="HVGs for scVI setup")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args(argv)
+    if not args.demo and not args.input:
+        parser.error("provide --input <file> or --demo")
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     output_dir = Path(args.output)
     figure_dir = output_dir / "figure_data"
     figure_dir.mkdir(parents=True, exist_ok=True)
 
-    adata = sc.read_h5ad(args.input)
+    adata = _synthesise_demo_adata(seed=args.seed) if args.demo else sc.read_h5ad(args.input)
     _ensure_pca(adata, n_pcs=args.n_pcs, seed=args.seed)
 
     rep_key = _produce_representation(

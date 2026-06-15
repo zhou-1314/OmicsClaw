@@ -4,6 +4,7 @@ legacy_aliases: []
 allowed_extra_flags:
 - --members
 - --all
+- --no-spatial-panel  # run.py:71 — disable the multi-metric intrinsic panel
 - --n-clusters  # reserved: accepted but not consumed (disposition pending)
 - --confirm-plan
 - --non-interactive

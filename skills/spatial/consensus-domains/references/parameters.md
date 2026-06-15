@@ -8,6 +8,7 @@
 
 - `--members`
 - `--all`
+- `--no-spatial-panel`
 - `--n-clusters`
 - `--confirm-plan`
 - `--non-interactive`

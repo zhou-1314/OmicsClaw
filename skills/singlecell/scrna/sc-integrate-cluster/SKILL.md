@@ -34,7 +34,8 @@ consensus fans out genuinely different batch-correction representations.
 
 | Input | Format | Required |
 |---|---|---|
-| Preprocessed AnnData | `--input <preprocessed.h5ad>` with `obs[batch_key]` (≥2 batches) | yes |
+| Preprocessed AnnData | `--input <preprocessed.h5ad>` with `obs[batch_key]` (≥2 batches) | yes (unless `--demo`) |
+| Synthetic demo | `--demo` (small 2-batch synthetic AnnData; `--method none`) | optional |
 | Output (member) dir | `--output <member_dir>` | yes |
 | Integration method | `--method {none,harmony,scanorama,scvi}` | no (default `none`) |
 | Batch key | `--batch-key batch` | no |
@@ -86,6 +87,9 @@ consensus fans out genuinely different batch-correction representations.
 ## Key CLI
 
 ```bash
+# Synthetic smoke demo (no input needed)
+python omicsclaw.py run sc-integrate-cluster --demo --output /tmp/sic_demo
+
 python skills/singlecell/scrna/sc-integrate-cluster/sc_integrate_cluster.py \
   --input <preprocessed.h5ad> --output <member_dir> \
   --method harmony --batch-key batch --resolution 1.0 --cluster-method leiden --seed 0

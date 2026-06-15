@@ -101,7 +101,12 @@ def generate_catalog() -> dict:
 
         has_script = any(skill_dir.glob("*.py"))
         has_tests = (skill_dir / "tests").exists() and any((skill_dir / "tests").glob("test_*.py"))
-        has_demo = has_script
+        skill_type = sidecar_type(skill_dir)
+        # Workflow shims forward to the shared `runtime/consensus/run` parser,
+        # which has no `--demo` (consensus runs on real preprocessed multi-sample
+        # data).  Advertising `oc run <shim> --demo` would point at a command that
+        # exits with an argparse error, so they declare no demo.
+        has_demo = has_script and skill_type != "workflow"
 
         trigger_kw = []
         metadata = fm.get("metadata", {})
@@ -116,7 +121,7 @@ def generate_catalog() -> dict:
         entry = {
             "name": name,
             "cli_alias": cli_alias,
-            "type": sidecar_type(skill_dir),
+            "type": skill_type,
             "description": fm.get("description", ""),
             "version": fm.get("version", "0.1.0"),
             "status": "mvp" if has_script else "planned",
