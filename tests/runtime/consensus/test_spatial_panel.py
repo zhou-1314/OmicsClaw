@@ -141,7 +141,9 @@ async def test_driver_uses_spatial_panel_when_coords_present(tmp_path: Path) -> 
     _write_spatial_h5ad(h5ad, coords, obs_ids)
 
     members = _members(["m0", "m1", "m2"])
-    source = ConsensusSource(reader=_BandReader(coords, obs_ids), domain="spatial")
+    source = ConsensusSource(
+        reader=_BandReader(coords, obs_ids), domain="spatial", intrinsic_panel="spatial"
+    )
 
     def runner(**kwargs):
         Path(kwargs["output_dir"]).mkdir(parents=True, exist_ok=True)
@@ -180,7 +182,9 @@ async def test_driver_no_spatial_panel_keeps_reader_intrinsic(tmp_path: Path) ->
     h5ad = tmp_path / "input.h5ad"
     _write_spatial_h5ad(h5ad, coords, obs_ids)
 
-    source = ConsensusSource(reader=_BandReader(coords, obs_ids), domain="spatial")
+    source = ConsensusSource(
+        reader=_BandReader(coords, obs_ids), domain="spatial", intrinsic_panel="spatial"
+    )
 
     def runner(**kwargs):
         Path(kwargs["output_dir"]).mkdir(parents=True, exist_ok=True)

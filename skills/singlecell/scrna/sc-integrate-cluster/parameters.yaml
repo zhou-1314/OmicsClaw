@@ -1,0 +1,38 @@
+domain: singlecell
+allowed_extra_flags:
+- --method
+- --batch-key
+- --cluster-method
+- --resolution
+- --n-neighbors
+- --n-pcs
+- --n-top-genes
+- --seed
+param_hints:
+  default:
+    priority: method -> batch_key -> resolution
+    params:
+    - method
+    - batch_key
+    - resolution
+    advanced_params:
+    - cluster_method
+    - n_neighbors
+    - n_pcs
+    defaults:
+      method: none
+      batch_key: batch
+      cluster_method: leiden
+      resolution: 1.0
+      n_neighbors: 15
+      n_pcs: 50
+    requires:
+    - normalized_expression
+    - batch_key
+    tips:
+    - 'A consensus member: `--method` selects the batch-correction backend; `none` is the unintegrated X_pca baseline.'
+    - 'scVI is GPU/stochastic — include it only when reproducible-within-tolerance is acceptable, and serialise GPU members.'
+saves_h5ad: true
+requires_preprocessed: true
+script: sc_integrate_cluster.py
+trigger_keywords: []

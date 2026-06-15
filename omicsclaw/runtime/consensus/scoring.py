@@ -41,6 +41,10 @@ class MemberScore:
     intrinsic: float
     max_class_frac: float
     filtered: bool
+    #: Number of distinct clusters the member produced — recorded for the
+    #: k-divergence guard (ADR 0029): kmode/weighted alignment is only well-posed
+    #: when member cluster counts are comparable.
+    n_clusters: int = 0
     filter_reason: str | None = None
     selected: bool = False
     selection_reason: str | None = None
@@ -102,6 +106,7 @@ def score_member(
         intrinsic_value = float(intrinsic_quality)
         intrinsic_warning = None
 
+    n_clusters = int(np.unique(np.asarray(member_labels)).size)
     max_frac = _max_class_fraction(member_labels)
     if max_frac > max_class_frac_cap:
         return MemberScore(
@@ -111,6 +116,7 @@ def score_member(
             intrinsic=intrinsic_value,
             max_class_frac=max_frac,
             filtered=True,
+            n_clusters=n_clusters,
             filter_reason=f"max_class_frac={max_frac:.3f} > {max_class_frac_cap}",
         )
 
@@ -123,6 +129,7 @@ def score_member(
         intrinsic=intrinsic_value,
         max_class_frac=max_frac,
         filtered=False,
+        n_clusters=n_clusters,
         filter_reason=intrinsic_warning,
     )
 

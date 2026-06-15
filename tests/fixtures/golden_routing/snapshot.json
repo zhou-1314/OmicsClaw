@@ -160,23 +160,23 @@
     {
       "query": "Detect doublets in my single-cell data using scDblFinder",
       "file_path": null,
-      "chosen_skill": "",
-      "coverage": "no_skill",
-      "domain": "bulkrna",
+      "chosen_skill": "sc-doublet-detection",
+      "coverage": "exact_skill",
+      "domain": "singlecell",
       "should_search_web": false,
       "should_create_skill": false,
       "top_3_candidates": [
         {
-          "skill": "bulkrna-de",
+          "skill": "sc-doublet-detection",
+          "score": 6.4
+        },
+        {
+          "skill": "sc-de",
           "score": 2.55
         },
         {
-          "skill": "bulkrna-deconvolution",
-          "score": 2.55
-        },
-        {
-          "skill": "bulkrna-splicing",
-          "score": 2.55
+          "skill": "sc-perturb",
+          "score": 1.7
         }
       ]
     },

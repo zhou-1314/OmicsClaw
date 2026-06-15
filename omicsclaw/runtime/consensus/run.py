@@ -81,6 +81,26 @@ def _build_parser() -> argparse.ArgumentParser:
     # SweepPlanner (sc-consensus-clustering)
     parser.add_argument("--resolutions", default="0.5,0.8,1.0,1.4,2.0")
     parser.add_argument("--cluster-methods", default="leiden")
+    # IntegrationRepSweepPlanner (sc-consensus-integration)
+    parser.add_argument(
+        "--integration-methods", default=None,
+        help="Comma list of integration backends (none,harmony,scanorama,scvi); "
+             "default none,harmony,scanorama (+scvi with --include-scvi).",
+    )
+    parser.add_argument(
+        "--resolution", default=None,
+        help="Fixed clustering resolution for sc-consensus-integration members.",
+    )
+    parser.add_argument(
+        "--batch-key", default="batch",
+        help="obs batch column (sc-consensus-integration: members integrate + the "
+             "intrinsic panel scores batch mixing against this key).",
+    )
+    parser.add_argument(
+        "--include-scvi", action="store_true",
+        help="Add the GPU/stochastic scVI member to the default integration set "
+             "(serialise GPU members with --max-parallel 1).",
+    )
     return parser
 
 
@@ -171,6 +191,7 @@ async def _run(args: argparse.Namespace) -> int:
             timeout_seconds=args.timeout,
             max_parallel=args.max_parallel,
             use_spatial_panel=args.spatial_panel,
+            batch_key=args.batch_key,
         )
     except InsufficientSurvivorsError as exc:
         print(f"[{args.source}] FATAL: {exc}", file=sys.stderr)

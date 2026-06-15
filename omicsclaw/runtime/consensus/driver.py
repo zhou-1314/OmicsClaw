@@ -55,8 +55,12 @@ from omicsclaw.runtime.consensus.explain import (
     render_nmi_heatmap,
 )
 from omicsclaw.runtime.consensus.spatial_panel import (
-    PANEL_METRICS,
+    PANEL_METRICS as SPATIAL_PANEL_METRICS,
     intrinsic_spatial_panel,
+)
+from omicsclaw.runtime.consensus.integration_panel import (
+    PANEL_METRICS as INTEGRATION_PANEL_METRICS,
+    intrinsic_integration_panel,
 )
 from omicsclaw.runtime.workflow import (
     DEFAULT_TIMEOUT_SECONDS,
@@ -76,6 +80,13 @@ BCSelectorFn = Callable[[list[MemberScore], int], list[str]]
 # raises InsufficientSurvivorsError with the full per-member failure summary
 # (crash/timeout details) — diagnostics the readable-label gate alone can't give.
 MIN_CONSENSUS_MEMBERS = 2
+
+# kmode/weighted Hungarian alignment + majority vote is only well-posed when
+# member cluster counts are comparable. When the largest member k exceeds the
+# smallest by more than this ratio the driver warns and records it (ADR 0029):
+# disagreement may then be operator-induced (a fine partition folded into a
+# coarse one) rather than biological. v1 reports + warns; it does not downweight.
+K_DIVERGENCE_RATIO = 2.0
 
 
 @dataclass(frozen=True)
@@ -120,6 +131,9 @@ class TypedConsensusRun:
     confidence: pd.DataFrame = field(default_factory=pd.DataFrame)
     #: Path to the cross-method NMI heatmap PNG, if it was rendered.
     nmi_heatmap_path: Path | None = None
+    #: Per-member cluster counts + spread (k-divergence guard, ADR 0029):
+    #: ``{"k_by_member": {...}, "k_min", "k_max", "k_cv", "diverged": bool}``.
+    k_stats: dict[str, Any] = field(default_factory=dict)
 
 
 class InsufficientBCsError(RuntimeError):
@@ -199,6 +213,99 @@ def _load_spatial_coords(
             return None
         rows.append(i)
     return coords_all[rows][:, :2]
+
+
+def _reindex_rows(values: np.ndarray, obs_names: Sequence[Any], obs_index: pd.Index) -> np.ndarray | None:
+    """Reorder ``values`` (row i ↔ obs_names[i]) to ``obs_index``; ``None`` if any id is missing."""
+    position = {str(name): i for i, name in enumerate(obs_names)}
+    rows: list[int] = []
+    for obs in obs_index:
+        i = position.get(str(obs))
+        if i is None:
+            return None
+        rows.append(i)
+    return np.asarray(values)[rows]
+
+
+def _load_integration_panel_inputs(
+    member_dirs: Mapping[str, Path], batch_key: str, obs_index: pd.Index
+) -> tuple[dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]], int]:
+    """Per-member ``(embedding, X_pca, batch_labels)`` from each member's output.
+
+    Integration happens *inside* each member subprocess, so the representation
+    (``X_harmony``/``X_scvi``/...) lives only in that member's ``processed.h5ad``,
+    not the shared input. Each member's ``result.json`` records the
+    ``representation_used`` obsm key it clustered on. Members whose artifacts are
+    missing/unreadable, or whose observation ids don't cover ``obs_index``, are
+    skipped fail-soft (they keep the reader's intrinsic). Returns the per-member
+    inputs plus the max batch count seen (0 if none loaded).
+    """
+    import json
+
+    import anndata
+
+    out: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    max_batches = 0
+    for member, member_dir in member_dirs.items():
+        try:
+            summary = json.loads((Path(member_dir) / "result.json").read_text()).get("summary", {})
+            rep_key = str(summary.get("representation_used") or "X_pca")
+            adata = anndata.read_h5ad(Path(member_dir) / "processed.h5ad")
+            if rep_key not in adata.obsm or "X_pca" not in adata.obsm:
+                continue
+            if batch_key not in adata.obs.columns:
+                continue
+            embedding = _reindex_rows(np.asarray(adata.obsm[rep_key]), adata.obs_names, obs_index)
+            x_pca = _reindex_rows(np.asarray(adata.obsm["X_pca"]), adata.obs_names, obs_index)
+            batch = _reindex_rows(
+                adata.obs[batch_key].astype(str).to_numpy(), adata.obs_names, obs_index
+            )
+            if embedding is None or x_pca is None or batch is None:
+                continue
+            out[member] = (embedding, x_pca, batch)
+            max_batches = max(max_batches, int(np.unique(batch).size))
+        except Exception:  # noqa: BLE001 — fail-soft: member keeps reader intrinsic
+            logger.warning("integration panel: could not load embedding for member %r", member)
+            continue
+    return out, max_batches
+
+
+def _write_intrinsic_panel_csv(
+    path: Path,
+    members: Sequence[str],
+    panel_raw: Mapping[str, Mapping[str, float]],
+    panel_scalar: Mapping[str, float],
+    metric_cols: Sequence[str],
+) -> None:
+    """Write ``member_intrinsic_panel.csv`` (one row per member, stable metric columns)."""
+    pd.DataFrame(
+        [
+            {
+                "member": m,
+                **{mc: panel_raw.get(m, {}).get(mc, float("nan")) for mc in metric_cols},
+                "intrinsic_panel": panel_scalar[m],
+            }
+            for m in members
+            if m in panel_scalar
+        ]
+    ).to_csv(path, index=False)
+
+
+def _compute_k_stats(labels_df: pd.DataFrame) -> dict[str, Any]:
+    """Per-member cluster counts + spread for the k-divergence guard (ADR 0029)."""
+    k_by_member = {col: int(pd.Series(labels_df[col]).nunique()) for col in labels_df.columns}
+    ks = np.asarray(list(k_by_member.values()), dtype=float)
+    k_min, k_max = int(ks.min()), int(ks.max())
+    k_mean = float(ks.mean())
+    k_cv = float(ks.std() / k_mean) if k_mean > 0 else 0.0
+    diverged = k_min > 0 and (k_max / k_min) > K_DIVERGENCE_RATIO
+    return {
+        "k_by_member": k_by_member,
+        "k_min": k_min,
+        "k_max": k_max,
+        "k_cv": k_cv,
+        "diverged": diverged,
+    }
 
 
 def _cross_method_nmi_matrix(labels_df: pd.DataFrame) -> pd.DataFrame:
@@ -281,6 +388,7 @@ async def run_typed_consensus(
     max_parallel: int | None = None,
     use_spatial_panel: bool = True,
     panel_weights: Mapping[str, float] | None = None,
+    batch_key: str = "batch",
     runner: Any = None,
 ) -> TypedConsensusRun:
     """Orchestrate one typed-consensus run end-to-end.
@@ -355,16 +463,18 @@ async def run_typed_consensus(
             f"(< {MIN_CONSENSUS_MEMBERS} required). Missing artifacts: {missing}"
         )
 
-    # 3b. spatial intrinsic panel (optional)
+    # 3b. driver-computed intrinsic panel (optional)
     #
-    # For a spatial-domain flavour, replace the reader's single intrinsic signal
-    # with a normalised multi-metric panel (chaos/pas/mlami) so domain quality is
-    # judged from several angles. Gated on the *flavour's declared domain* — not
-    # merely coords-presence: an sc-clustering run on a spatially-annotated
-    # AnnData has coords but must keep its own silhouette intrinsic, since the
-    # panel measures spatial-domain coherence, not cell-cluster compactness.
+    # Replace the reader's single intrinsic signal with a normalised multi-metric
+    # panel so member quality is judged from several angles. The panel family is
+    # dispatched on the *flavour's declared* ``intrinsic_panel`` — not a domain or
+    # coords-presence check — so adding a family is one ConsensusSource field:
+    #   - "spatial"     chaos/pas/mlami on shared-input spatial coords (ADR 0028)
+    #   - "integration" iLISI / within-batch kNN preservation on each member's own
+    #                   embedding + the batch key (ADR 0029)
     intrinsic_panel_raw: dict[str, dict[str, float]] = {}
-    if use_spatial_panel and getattr(source, "domain", "") == "spatial":
+    panel_kind = getattr(source, "intrinsic_panel", "")
+    if use_spatial_panel and panel_kind == "spatial":
         coords = _load_spatial_coords(input_path, labels_df.index)
         if coords is not None:
             panel_intrinsic: dict[str, float] = {}
@@ -377,21 +487,55 @@ async def run_typed_consensus(
                 intrinsic_panel_raw[col] = raw
             intrinsic_map = panel_intrinsic
             panel_path = output_dir_p / "member_intrinsic_panel.csv"
-            metric_cols = list(PANEL_METRICS)
-            pd.DataFrame(
-                [
-                    {
-                        "member": m,
-                        **{
-                            mc: intrinsic_panel_raw[m].get(mc, float("nan"))
-                            for mc in metric_cols
-                        },
-                        "intrinsic_panel": panel_intrinsic[m],
-                    }
-                    for m in labels_df.columns
-                ]
-            ).to_csv(panel_path, index=False)
+            _write_intrinsic_panel_csv(
+                panel_path, list(labels_df.columns), intrinsic_panel_raw,
+                panel_intrinsic, list(SPATIAL_PANEL_METRICS),
+            )
             artifacts.append(panel_path)
+    elif use_spatial_panel and panel_kind == "integration":
+        member_dirs = {r.step.name: r.output_dir for r in team.survived}
+        panel_inputs, n_batches = _load_integration_panel_inputs(
+            member_dirs, batch_key, labels_df.index
+        )
+        if n_batches < 2:
+            logger.warning(
+                "integration panel: input has %d batch(es) on obs[%r] — batch-mixing "
+                "is undefined; scoring on within-batch structure only.",
+                n_batches, batch_key,
+            )
+        panel_intrinsic = {}
+        for col in labels_df.columns:
+            pi = panel_inputs.get(col)
+            if pi is None:
+                continue  # member keeps the reader's intrinsic (fail-soft)
+            embedding, x_pca, batch_labels = pi
+            scalar, raw = intrinsic_integration_panel(
+                labels_df[col].to_numpy(), embedding, batch_labels, x_pca,
+                weights=panel_weights, seed=seed,
+            )
+            panel_intrinsic[col] = scalar
+            intrinsic_panel_raw[col] = raw
+        if panel_intrinsic:
+            # Override only the members we computed; any skipped member retains
+            # its reader intrinsic so a partial panel never zeroes a member.
+            intrinsic_map = {**intrinsic_map, **panel_intrinsic}
+            panel_path = output_dir_p / "member_intrinsic_panel.csv"
+            _write_intrinsic_panel_csv(
+                panel_path, list(labels_df.columns), intrinsic_panel_raw,
+                panel_intrinsic, list(INTEGRATION_PANEL_METRICS),
+            )
+            artifacts.append(panel_path)
+
+    # k-divergence guard: record per-member cluster counts + spread; warn loudly
+    # when k diverges (operator-induced disagreement risk, ADR 0029).
+    k_stats = _compute_k_stats(labels_df)
+    if k_stats["diverged"]:
+        logger.warning(
+            "member cluster counts diverge (k_min=%d, k_max=%d, ratio>%.1f): kmode/"
+            "weighted alignment may induce disagreement; treat per-spot support with "
+            "care. k_by_member=%s",
+            k_stats["k_min"], k_stats["k_max"], K_DIVERGENCE_RATIO, k_stats["k_by_member"],
+        )
 
     # 4. score
     labels_arrays = {col: labels_df[col].to_numpy() for col in labels_df.columns}
@@ -465,4 +609,5 @@ async def run_typed_consensus(
         top_k=top_k_default,
         confidence=confidence,
         nmi_heatmap_path=nmi_heatmap_path,
+        k_stats=k_stats,
     )

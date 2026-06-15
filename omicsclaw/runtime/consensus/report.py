@@ -54,6 +54,27 @@ def _confidence_section(run: TypedConsensusRun) -> list[str]:
     return lines
 
 
+def _k_divergence_section(run: TypedConsensusRun) -> list[str]:
+    k = run.k_stats
+    if not k or "k_by_member" not in k:
+        return []
+    lines = ["## Cluster-count (k) across members", ""]
+    pairs = ", ".join(f"`{m}`={v}" for m, v in k["k_by_member"].items())
+    lines.append(f"- per-member k: {pairs}")
+    lines.append(
+        f"- k range **{k['k_min']}–{k['k_max']}** (CV {k['k_cv']:.2f})"
+    )
+    if k.get("diverged"):
+        lines.append(
+            "- ⚠️ **k diverges** (max/min > 2×): the consensus operator aligns "
+            "members into a common label space, so where cluster counts differ "
+            "widely the per-spot `support` can reflect operator-induced folding "
+            "rather than biological uncertainty. Prefer members with comparable k, "
+            "or fix the clustering resolution."
+        )
+    return lines
+
+
 def format_typed_report(run: TypedConsensusRun, *, title: str) -> str:
     """Render a verified-consensus markdown report from a ``TypedConsensusRun``.
 
@@ -111,6 +132,11 @@ def format_typed_report(run: TypedConsensusRun, *, title: str) -> str:
 
     lines += _confidence_section(run)
     lines.append("")
+
+    k_section = _k_divergence_section(run)
+    if k_section:
+        lines += k_section
+        lines.append("")
 
     # Scoring parameters & thresholds (also recorded in plan.json; never hidden).
     lines += [

@@ -18,7 +18,9 @@ from omicsclaw.runtime.consensus.member import ConsensusMember
 def test_registry_contains_v1_sources() -> None:
     from omicsclaw.runtime.consensus.sources import TYPED_CONSENSUS_REGISTRY
 
-    assert set(TYPED_CONSENSUS_REGISTRY.keys()) == {"spatial-domains", "sc-clustering"}
+    assert set(TYPED_CONSENSUS_REGISTRY.keys()) == {
+        "spatial-domains", "sc-clustering", "sc-integrate-cluster",
+    }
 
 
 def test_registry_values_are_typed_consensus_sources() -> None:

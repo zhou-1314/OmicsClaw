@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
   "generated_by": "scripts/generate_catalog.py",
-  "skill_count": 92,
+  "skill_count": 94,
   "skills": [
     {
       "name": "bulkrna-batch-correction",
@@ -1013,6 +1013,25 @@
       "trigger_keywords": []
     },
     {
+      "name": "sc-consensus-integration",
+      "cli_alias": "sc-consensus-integration",
+      "description": "Verified consensus over batch-correction representations \u2014 fans out integration methods (Harmony/Scanorama/scVI + unintegrated baseline), clusters each, and votes a consensus scored by a batch-mixing intrinsic panel. Use for robust multi-sample single-cell clustering that is not an artifact of one integration method.",
+      "version": "0.1.0",
+      "status": "mvp",
+      "has_script": true,
+      "has_tests": false,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run sc-consensus-integration --demo",
+      "tags": [
+        "singlecell",
+        "scrna",
+        "consensus",
+        "integration",
+        "batch-correction"
+      ],
+      "trigger_keywords": []
+    },
+    {
       "name": "sc-count",
       "cli_alias": "sc-count",
       "description": "Load when turning scRNA FASTQ (or existing CellRanger/STARsolo/SimpleAF/kb-python output) into a downstream-ready AnnData. Skip when reads are already counted into AnnData (use sc-standardize-input) or for raw quality assessment only (use sc-fastq-qc).",
@@ -1254,6 +1273,25 @@
         "knockout",
         "grn",
         "sctenifoldknk"
+      ],
+      "trigger_keywords": []
+    },
+    {
+      "name": "sc-integrate-cluster",
+      "cli_alias": "sc-integrate-cluster",
+      "description": "A consensus member skill that integrates (Harmony/Scanorama/scVI or unintegrated baseline) and clusters in one self-contained unit, emitting the sc-clustering artifact schema. Used as a fan-out member of sc-consensus-integration; not normally called directly.",
+      "version": "0.1.0",
+      "status": "mvp",
+      "has_script": true,
+      "has_tests": false,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run sc-integrate-cluster --demo",
+      "tags": [
+        "singlecell",
+        "scrna",
+        "integration",
+        "clustering",
+        "consensus"
       ],
       "trigger_keywords": []
     },

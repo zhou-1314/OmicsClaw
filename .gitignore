@@ -36,6 +36,7 @@ token.json
 
 # OmicsClaw outputs (large, generated)
 output/
+outputs/
 sessions/
 
 # Superpowers (local/internal agent workflow notes)
