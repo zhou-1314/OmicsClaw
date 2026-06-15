@@ -36,17 +36,43 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import scanpy as sc
 
-from omicsclaw.common.checksums import sha256_file
-from omicsclaw.common.report import write_result_json
-from skills.singlecell._lib.integration import (
-    run_harmony_integration,
-    run_scvi_integration,
-    setup_for_integration,
-)
+# Bootstrap sys.path so `omicsclaw`/`skills` resolve on direct invocation
+# (`python sc_integrate_cluster.py --help`) without an editable install. MUST run
+# before the OmicsClaw/skills imports below.
+_HERE = Path(__file__).resolve()
+for _candidate in _HERE.parents:
+    if (_candidate / "omicsclaw" / "__init__.py").exists():
+        if str(_candidate) not in sys.path:
+            sys.path.insert(0, str(_candidate))
+        break
+
+from omicsclaw.common.checksums import sha256_file  # noqa: E402
+from omicsclaw.common.report import write_result_json  # noqa: E402
+
+# Heavy Scanpy + integration `_lib` imports are deferred to `_load_runtime()`
+# (called after argparse) so the direct `--help` contract stays import-light
+# even where Scanpy is absent/broken. Populated as module globals on first run.
+sc = None
+run_harmony_integration = run_scvi_integration = setup_for_integration = None
 
 logger = logging.getLogger(__name__)
+
+
+def _load_runtime() -> None:
+    """Import the Scanpy-based runtime AFTER argument parsing (keeps `--help` light)."""
+    global sc, run_harmony_integration, run_scvi_integration, setup_for_integration
+    import scanpy as _sc
+    from skills.singlecell._lib.integration import (
+        run_harmony_integration as _harmony,
+        run_scvi_integration as _scvi,
+        setup_for_integration as _setup,
+    )
+
+    sc = _sc
+    run_harmony_integration = _harmony
+    run_scvi_integration = _scvi
+    setup_for_integration = _setup
 
 SKILL_NAME = "sc-integrate-cluster"
 SKILL_VERSION = "0.1.0"
@@ -180,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.demo and not args.input:
         parser.error("provide --input <file> or --demo")
 
+    _load_runtime()  # heavy Scanpy import deferred until after argparse
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     output_dir = Path(args.output)
     figure_dir = output_dir / "figure_data"
