@@ -20,7 +20,7 @@ Core rules:
 
 ## Project Overview
 
-OmicsClaw is a multi-omics analysis platform supporting 89 registered skills
+OmicsClaw is a multi-omics analysis platform supporting 94 registered skills
 across 8 domains: spatial transcriptomics, single-cell omics, genomics,
 proteomics, metabolomics, Bulk RNA-seq, orchestration, and literature. Each
 skill is a self-contained module that performs a specific analysis task via CLI
@@ -130,8 +130,8 @@ OmicsClaw/
 │   ├── app/         ⛔          # MOVED → surfaces/desktop/ (ADR 0005)
 │   └── __main__.py             # `python -m omicsclaw` entry hook (stays at package root)
 ├── skills/                     # Domain-organized skills + shared utilities
-│   ├── spatial/                # 17 spatial transcriptomics skills (+ _lib/)
-│   ├── singlecell/             # 30 single-cell omics skills (+ _lib/)
+│   ├── spatial/                # 19 spatial transcriptomics skills (+ _lib/)
+│   ├── singlecell/             # 33 single-cell omics skills (+ _lib/)
 │   ├── genomics/               # 10 genomics skills (+ _lib/)
 │   ├── proteomics/             # 8 proteomics skills (+ _lib/)
 │   ├── metabolomics/           # 8 metabolomics skills (+ _lib/)

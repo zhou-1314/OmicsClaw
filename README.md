@@ -92,7 +92,7 @@ The **[Releases](https://github.com/TianGzlab/OmicsClaw/releases)** tab hosts th
 
 | | | | |
 |---|---|---|---|
-| 🧠 **Memory**<br/>Sessions, preferences, lineage | 🔒 **Local-first**<br/>Raw data stays in your runtime | 🧰 **89 skills**<br/>Generated catalog + demos | 🧭 **Smart routing**<br/>Natural language to tools |
+| 🧠 **Memory**<br/>Sessions, preferences, lineage | 🔒 **Local-first**<br/>Raw data stays in your runtime | 🧰 **94 skills**<br/>Generated catalog + demos | 🧭 **Smart routing**<br/>Natural language to tools |
 | 💬 **CLI Surface**<br/>`oc interactive`, `oc tui` | 🌐 **Desktop Surface**<br/>FastAPI for desktop/web | 📨 **Channel Surface**<br/>9 IM adapters (Telegram, Feishu, …) | 📡 **Remote mode**<br/>SSH tunnel to Linux servers |
 | 🤝 **Consensus**<br/>Multi-method merge | 🤖 **Autonomous path**<br/>Router + assisted params | 🔌 **Any LLM**<br/>OpenAI-compatible providers | 📊 **Reproducible**<br/>Figures + data + report |
 
@@ -127,7 +127,7 @@ flowchart TD
     LOOP["🔁 Agent loop<br/>plan → tool calls → results → repeat<br/>pathology guard · approval gates"]
 
     subgraph Capabilities["🧰 Capabilities"]
-        SKILLS["🧪 Skill runner<br/>89 skills · 8 domains"]
+        SKILLS["🧪 Skill runner<br/>94 skills · 8 domains"]
         MEMORY["🧠 Graph memory<br/>sessions · datasets · lineage"]
         PROV["🔌 Providers<br/>any OpenAI-compatible LLM"]
         REMOTE["📡 Remote<br/>SSH to Linux servers"]
@@ -200,7 +200,7 @@ Remote mode uses `127.0.0.1`, SSH tunneling, and `OMICSCLAW_REMOTE_AUTH_TOKEN`. 
 
 ## 🧬 Domains
 
-`oc list` and `skills/catalog.json` currently agree on **89 registered skills** across **8 domains**.
+`oc list` and `skills/catalog.json` currently agree on **94 registered skills** across **8 domains**.
 
 | Domain | Skills | Examples | Docs |
 |---|---|---|---|
