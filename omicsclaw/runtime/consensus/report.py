@@ -24,14 +24,25 @@ _DISCLAIMER = (
 
 def _failed_members_section(run: TypedConsensusRun) -> list[str]:
     failed = list(run.team_result.failed)
+    # Members that exited 0 but whose artifacts had no readable labels are
+    # excluded from consensus too — they are not in ``team_result.failed`` but
+    # in ``run.missing_label_members``, so a partial run stays auditable here.
+    missing = list(run.missing_label_members)
     lines = ["## Failed members", ""]
-    if not failed:
+    if not failed and not missing:
         lines.append("None — every fanned-out member completed.")
         return lines
-    lines.append(f"{len(failed)} member(s) did not produce a usable result:")
+    lines.append(
+        f"{len(failed) + len(missing)} member(s) did not produce a usable result:"
+    )
     lines.append("")
     for r in failed:
         lines.append(f"- `{r.step.name}` — {r.status}: {r.error or '(no detail)'}")
+    for name in missing:
+        lines.append(
+            f"- `{name}` — completed (exit 0) but produced no readable labels; "
+            "excluded from consensus."
+        )
     return lines
 
 

@@ -12,6 +12,15 @@ from omicsclaw.runtime.consensus.integration_panel import (
     intrinsic_integration_panel,
 )
 
+# iLISI needs the optional Tier-4 ``harmonypy``; absent it the panel fail-soft
+# drops ``ilisi_norm``, so iLISI-specific expectations are guarded on this flag
+# to stay green in Python-only test environments.
+try:
+    import harmonypy  # noqa: F401
+    _HARMONYPY = True
+except Exception:  # pragma: no cover - depends on the install tier
+    _HARMONYPY = False
+
 
 # --------------------------- combine_panel (unit) -------------------------- #
 
@@ -77,10 +86,16 @@ def test_panel_scalar_in_unit_interval_and_reports_metrics() -> None:
     scalar, raw = intrinsic_integration_panel(clusters, x_pca, batches, x_pca)
     assert 0.0 <= scalar <= 1.0
     assert set(raw).issubset(set(PANEL_METRICS))
-    # On valid multi-batch input every metric computes.
-    assert "ilisi_norm" in raw and "knn_preservation_norm" in raw
+    # The structure metric always computes; iLISI only when harmonypy is
+    # installed (otherwise it is fail-soft dropped).
+    assert "knn_preservation_norm" in raw
+    if _HARMONYPY:
+        assert "ilisi_norm" in raw
 
 
+@pytest.mark.skipif(
+    not _HARMONYPY, reason="ranking depends on iLISI, which needs optional harmonypy"
+)
 def test_panel_rewards_balanced_over_under_and_over_integration() -> None:
     clusters, batches, x_pca = _two_batch_blobs()
     rng = np.random.default_rng(1)
@@ -105,8 +120,9 @@ def test_panel_unintegrated_preserves_structure_but_mixes_poorly() -> None:
     _, raw = intrinsic_integration_panel(clusters, x_pca, batches, x_pca)
     # embedding == x_pca -> within-batch kNN identical -> perfect preservation.
     assert raw["knn_preservation_norm"] == pytest.approx(1.0)
-    # separated batches -> poor mixing.
-    assert raw["ilisi_norm"] < 0.5
+    # separated batches -> poor mixing (iLISI only present with harmonypy).
+    if _HARMONYPY:
+        assert raw["ilisi_norm"] < 0.5
 
 
 def test_panel_single_batch_drops_ilisi_but_still_scores_structure() -> None:
@@ -235,11 +251,16 @@ async def test_driver_runs_integration_panel_and_records_k(tmp_path: Path) -> No
     import pandas as pd
 
     cols = set(pd.read_csv(panel_csv).columns)
-    assert {"member", "ilisi_norm", "knn_preservation_norm", "intrinsic_panel"} <= cols
+    assert {"member", "knn_preservation_norm", "intrinsic_panel"} <= cols
+    if _HARMONYPY:
+        assert "ilisi_norm" in cols
 
     # The panel REPLACED the reader's fixed intrinsic, and mixing pays off.
     assert all(v != _IntegrationReader.FIXED_INTRINSIC for v in run.intrinsic_map.values())
-    assert run.intrinsic_map["harmony"] > run.intrinsic_map["unintegrated"]
+    # harmony mixes batches -> higher iLISI -> higher intrinsic; this ranking
+    # needs the iLISI metric (optional harmonypy), so guard it.
+    if _HARMONYPY:
+        assert run.intrinsic_map["harmony"] > run.intrinsic_map["unintegrated"]
 
     # k-divergence recorded: unintegrated over-clusters (cluster x batch).
     assert run.k_stats["k_by_member"]["unintegrated"] > run.k_stats["k_by_member"]["harmony"]
