@@ -54,7 +54,7 @@ def _confidence_section(run: TypedConsensusRun) -> list[str]:
         return lines
     support = conf["support"]
     lines += [
-        f"- mean per-spot support (members agreeing with the consensus label): "
+        f"- mean per-spot support (voting members agreeing with the consensus label): "
         f"**{float(support.mean()):.3f}**",
         f"- high-confidence spots (support ≥ 0.8): **{float((support >= 0.8).mean()) * 100:.1f}%**",
         f"- contested spots (support < 0.5): **{float((support < 0.5).mean()) * 100:.1f}%**",

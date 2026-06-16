@@ -34,6 +34,7 @@ def _args(**kw) -> SimpleNamespace:
         resolution=None,
         batch_key="batch",
         include_scvi=False,
+        vote_baseline=False,
     )
     base.update(kw)
     return SimpleNamespace(**base)
@@ -168,6 +169,22 @@ def test_integration_rejects_duplicate_method() -> None:
         IntegrationRepSweepPlanner().propose(
             _args(integration_methods="harmony,harmony"), source=INTEGRATION
         )
+
+
+def test_derive_non_voting_baseline_gated_on_integration_source() -> None:
+    # B2: run.py excludes the unintegrated (method=none) baseline from the vote by
+    # default — but only for the integration flavour, and only without --vote-baseline.
+    from omicsclaw.runtime.consensus.member import ConsensusMember
+    from omicsclaw.runtime.consensus.run import _derive_non_voting
+
+    members = IntegrationRepSweepPlanner().propose(_args(), source=INTEGRATION)
+    assert _derive_non_voting(INTEGRATION, members, _args()) == ("unintegrated",)
+    # --vote-baseline opts it back into the vote.
+    assert _derive_non_voting(INTEGRATION, members, _args(vote_baseline=True)) == ()
+    # gated on the source: another flavour is never affected, even if a member
+    # happens to use method=none.
+    fake = [ConsensusMember(name="x", skill_name="spatial-domains", params={"method": "none"})]
+    assert _derive_non_voting(DOMAINS, fake, _args()) == ()
 
 
 def test_integration_rejects_parameterized_member_spec() -> None:

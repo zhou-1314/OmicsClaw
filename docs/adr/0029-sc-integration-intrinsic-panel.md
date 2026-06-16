@@ -123,12 +123,35 @@ per-member `n_clusters` in `member_scores.csv`, computes `k_range`/`k_cv`, and
 that per-spot `support` may then be operator-induced rather than biological). v1
 reports and warns; it does **not** downweight or filter on `k`.
 
+### 5. Diagnostic baseline is excluded from the consensus vote (B2)
+
+The unintegrated `method=none` baseline is a **reference control** — it exists to
+expose batch-artifact clusters by comparison, not to compete as an integration
+method. On panc8 it had the worst cell-type recovery (ARI 0.314) and the most
+clusters (k=34, batch artifacts), yet a near-top composite (its cross-NMI is
+inflated by the shared Leiden algorithm), so voting it as an equal **dragged the
+consensus below its own best members** (ARI 0.425/0.482 vs harmony 0.532,
+scanorama 0.579) and inflated the consensus cluster count (k≈33). The driver
+therefore **excludes diagnostic baselines from the consensus vote by default**
+(generic mechanism: `run_typed_consensus(non_voting_members=...)`; `run.py`
+derives it from `method=none` members): the baseline is still fanned out, scored,
+paneled and reported (its row carries `selection_reason = "baseline (diagnostic;
+excluded from consensus vote)"`), but the operator votes over the integration
+members only. `--vote-baseline` opts it back in. A guard re-includes the baseline
+if excluding it would leave `< MIN_CONSENSUS_MEMBERS` voters. On panc8 —
+recomputing kmode on the cached member labels to isolate the operator effect (not
+a fresh end-to-end run) — excluding the baseline raises the consensus from ARI
+**0.425 → 0.532** (matching the integration members) and drops the consensus `k`
+from 33 to 19. A fresh run is needed before quoting this as end-to-end performance.
+
 ## Consequences
 
 ### Positive
 - Single-cell consensus answers a meaningful question (robustness across
   integration methods) and exposes batch-artifact clusters via the unintegrated
-  baseline + per-cell support.
+  baseline — by comparing the baseline's clustering to the consensus (it is
+  reported but, after B2, does not vote, so per-cell `support` reflects agreement
+  among the *voting* integration members only).
 - The dead-intrinsic bug is bypassed: the driver computes the panel; it never
   reads the (missing) `silhouette_score` row.
 - Adding a panel family is now a one-field change (`intrinsic_panel`), not a

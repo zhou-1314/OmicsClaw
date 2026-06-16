@@ -379,3 +379,107 @@ async def test_driver_keeps_reader_intrinsic_when_ilisi_unavailable(tmp_path: Pa
     )
     # iLISI undefined -> every member keeps the reader intrinsic, not a 0.0 score.
     assert all(v == _IntegrationReader.FIXED_INTRINSIC for v in run.intrinsic_map.values())
+
+
+def _integration_runner(member_emb, obs_ids, batches):
+    import anndata as ad
+
+    def runner(**kwargs):
+        out = Path(kwargs["output_dir"])
+        out.mkdir(parents=True, exist_ok=True)
+        rep_key, emb = member_emb[out.name]
+        adata = ad.AnnData(X=np.zeros((len(obs_ids), 1), dtype=np.float32))
+        adata.obs_names = obs_ids
+        adata.obs["batch"] = batches
+        adata.obsm["X_pca"] = np.asarray(emb, dtype=np.float32)
+        adata.obsm[rep_key] = np.asarray(emb, dtype=np.float32)
+        adata.write_h5ad(out / "processed.h5ad")
+        (out / "result.json").write_text(
+            f'{{"summary": {{"representation_used": "{rep_key}"}}}}'
+        )
+
+        class _R:
+            exit_code = 0
+
+        return _R()
+
+    return runner
+
+
+@_pytest.mark.asyncio
+async def test_driver_excludes_baseline_from_vote(tmp_path: Path) -> None:
+    # B2: the unintegrated baseline is scored + reported but NOT voted — the
+    # consensus is over the integration members only.
+    from omicsclaw.runtime.consensus.driver import ScoreConfig, run_typed_consensus
+    from omicsclaw.runtime.consensus.source_registry import ConsensusSource
+
+    clusters, batches, x_pca = _two_batch_blobs()
+    obs_ids = [f"cell_{i}" for i in range(x_pca.shape[0])]
+    member_emb = {
+        "unintegrated": ("X_pca", x_pca),
+        "harmony": ("X_harmony", x_pca + 0.1),
+        "scanorama": ("X_scanorama", x_pca + 0.2),
+    }
+    members = [
+        ConsensusMember(name=n, skill_name="sc-integrate-cluster", params={"cluster-method": "leiden"})
+        for n in ("unintegrated", "harmony", "scanorama")
+    ]
+    source = ConsensusSource(
+        reader=_IntegrationReader(clusters, batches, obs_ids),
+        domain="singlecell", intrinsic_panel="integration",
+    )
+    run = await run_typed_consensus(
+        members=members, source=source, input_path="", output_dir=tmp_path / "out",
+        operator="kmode", bc_selector=lambda s, k: [x.member for x in s][:3],
+        score_config=ScoreConfig(), seed=0, runner=_integration_runner(member_emb, obs_ids, batches),
+        batch_key="batch", non_voting_members=["unintegrated"],
+    )
+    # baseline excluded from the vote, integration members vote.
+    assert set(run.selected_bcs) == {"harmony", "scanorama"}
+    assert run.consensus.aligned_labels.shape[1] == 2
+    # ... but it is still scored + reported with an explicit reason.
+    by = {s.member: s for s in run.scores}
+    assert by["unintegrated"].selected is False
+    assert "baseline" in (by["unintegrated"].selection_reason or "")
+    assert by["harmony"].selection_reason == "passed"
+    # k-stats reflect the VOTERS only (the excluded baseline's k is not in here).
+    assert set(run.k_stats["k_by_member"]) == {"harmony", "scanorama"}
+    # the effective vote policy is audited.
+    import json
+
+    audit = json.loads((tmp_path / "out" / "selection_audit.json").read_text())
+    assert sorted(audit["voting_bcs"]) == ["harmony", "scanorama"]
+    assert audit["excluded_baselines"] == ["unintegrated"]
+    assert audit["baseline_reincluded"] is False
+
+
+@_pytest.mark.asyncio
+async def test_driver_reincludes_baseline_when_too_few_voters(tmp_path: Path) -> None:
+    # Guard: excluding the baseline must not strand the run below 2 voters.
+    from omicsclaw.runtime.consensus.driver import ScoreConfig, run_typed_consensus
+    from omicsclaw.runtime.consensus.source_registry import ConsensusSource
+
+    clusters, batches, x_pca = _two_batch_blobs()
+    obs_ids = [f"cell_{i}" for i in range(x_pca.shape[0])]
+    member_emb = {"unintegrated": ("X_pca", x_pca), "harmony": ("X_harmony", x_pca + 0.1)}
+    members = [
+        ConsensusMember(name=n, skill_name="sc-integrate-cluster", params={"cluster-method": "leiden"})
+        for n in ("unintegrated", "harmony")
+    ]
+    source = ConsensusSource(
+        reader=_IntegrationReader(clusters, batches, obs_ids),
+        domain="singlecell", intrinsic_panel="integration",
+    )
+    run = await run_typed_consensus(
+        members=members, source=source, input_path="", output_dir=tmp_path / "out",
+        operator="kmode", bc_selector=lambda s, k: [x.member for x in s][:2],
+        score_config=ScoreConfig(), seed=0, runner=_integration_runner(member_emb, obs_ids, batches),
+        batch_key="batch", non_voting_members=["unintegrated"],
+    )
+    # only 1 non-baseline member -> baseline re-included so >=2 vote.
+    assert set(run.selected_bcs) == {"unintegrated", "harmony"}
+    import json
+
+    audit = json.loads((tmp_path / "out" / "selection_audit.json").read_text())
+    assert audit["baseline_reincluded"] is True
+    assert sorted(audit["voting_bcs"]) == ["harmony", "unintegrated"]

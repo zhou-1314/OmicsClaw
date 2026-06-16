@@ -103,6 +103,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Add the GPU/stochastic scVI member to the default integration set "
              "(serialise GPU members with --max-parallel 1).",
     )
+    parser.add_argument(
+        "--vote-baseline", action="store_true",
+        help="Include the unintegrated baseline (method=none) in the consensus "
+             "vote (sc-consensus-integration). Default: the baseline is scored + "
+             "reported but excluded from the vote — it is a diagnostic control, "
+             "and voting it as an equal drags the consensus (ADR 0029 B2).",
+    )
     return parser
 
 
@@ -131,6 +138,19 @@ def _make_bc_selector(args: argparse.Namespace):
         return [m for m in requested if m in valid] or default_pick
 
     return selector
+
+
+def _derive_non_voting(source, members, args) -> tuple[str, ...]:
+    """Members excluded from the consensus vote (diagnostic baselines, ADR 0029 B2).
+
+    Only ``sc-consensus-integration`` has a ``method=none`` reference baseline that
+    should be scored + reported but not voted; the check is **gated on the source**
+    so a future flavour that happens to use ``method=none`` is not silently
+    affected. ``--vote-baseline`` opts the baseline back into the vote.
+    """
+    if source.name != "sc-consensus-integration" or getattr(args, "vote_baseline", False):
+        return ()
+    return tuple(m.name for m in members if str(m.params.get("method", "")) == "none")
 
 
 def _maybe_confirm_plan(members, confirm: bool) -> bool:
@@ -178,6 +198,8 @@ async def _run(args: argparse.Namespace) -> int:
         "members": [{"name": m.name, "params": dict(m.params)} for m in members],
     }
 
+    non_voting = _derive_non_voting(source, members, args)
+
     try:
         run = await template.driver(
             members=members,
@@ -194,6 +216,7 @@ async def _run(args: argparse.Namespace) -> int:
             max_parallel=args.max_parallel,
             use_spatial_panel=args.spatial_panel,
             batch_key=args.batch_key,
+            non_voting_members=non_voting,
         )
     except InsufficientSurvivorsError as exc:
         print(f"[{args.source}] FATAL: {exc}", file=sys.stderr)

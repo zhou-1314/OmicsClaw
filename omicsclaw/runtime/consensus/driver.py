@@ -346,20 +346,26 @@ def _run_operator(
 
 
 def _annotate_selection(
-    scores: Sequence[MemberScore], selected: Sequence[str]
+    scores: Sequence[MemberScore],
+    voting: Sequence[str],
+    non_voting: "frozenset[str] | set[str]" = frozenset(),
 ) -> tuple[MemberScore, ...]:
-    """Stamp each score with whether/why it entered consensus (explainability).
+    """Stamp each score with whether/why it entered the consensus vote.
 
-    ``selection_reason`` is one of: ``"passed"`` (entered consensus),
-    ``"below_top_k"`` (scored, not picked), or ``"filtered (max_class_fraction
-    > cap)"`` (hard-filtered before selection).
+    ``selection_reason`` is one of: ``"passed"`` (voted), ``"below_top_k"``
+    (scored, not picked), ``"filtered (max_class_fraction > cap)"`` (hard-filtered
+    before selection), or ``"baseline (diagnostic; excluded from consensus vote)"``
+    (a reference control that is scored + reported but not voted — ADR 0029 B2).
     """
-    selected_set = set(selected)
+    voting_set = set(voting)
+    non_voting = set(non_voting)
     annotated: list[MemberScore] = []
     for s in scores:
         if s.filtered:
             sel, reason = False, "filtered (max_class_fraction > cap)"
-        elif s.member in selected_set:
+        elif s.member in non_voting:
+            sel, reason = False, "baseline (diagnostic; excluded from consensus vote)"
+        elif s.member in voting_set:
             sel, reason = True, "passed"
         else:
             sel, reason = False, "below_top_k"
@@ -389,6 +395,7 @@ async def run_typed_consensus(
     use_spatial_panel: bool = True,
     panel_weights: Mapping[str, float] | None = None,
     batch_key: str = "batch",
+    non_voting_members: Sequence[str] = (),
     runner: Any = None,
 ) -> TypedConsensusRun:
     """Orchestrate one typed-consensus run end-to-end.
@@ -571,17 +578,6 @@ async def run_typed_consensus(
             )
             artifacts.append(panel_path)
 
-    # k-divergence guard: record per-member cluster counts + spread; warn loudly
-    # when k diverges (operator-induced disagreement risk, ADR 0029).
-    k_stats = _compute_k_stats(labels_df)
-    if k_stats["diverged"]:
-        logger.warning(
-            "member cluster counts diverge (k_min=%d, k_max=%d, ratio>%.1f): kmode/"
-            "weighted alignment may induce disagreement; treat per-spot support with "
-            "care. k_by_member=%s",
-            k_stats["k_min"], k_stats["k_max"], K_DIVERGENCE_RATIO, k_stats["k_by_member"],
-        )
-
     # 4. score
     labels_arrays = {col: labels_df[col].to_numpy() for col in labels_df.columns}
     scores = score_all_members(
@@ -601,24 +597,69 @@ async def run_typed_consensus(
     if nmi_heatmap_path is not None:
         artifacts.append(nmi_heatmap_path)
 
-    # 6. BC selection; stamp every member with selected/why, then persist the
-    #    score table. Written before the gate so a failed selection is still
-    #    auditable — every member carries its selection reason.
+    # 6. BC selection + diagnostic-baseline exclusion; stamp every member with
+    #    selected/why, then persist the score table. Written before the gate so a
+    #    failed selection is still auditable — every member carries its reason.
     selected = bc_selector(scores, top_k_default)
-    scores = _annotate_selection(scores, selected)
+    # Diagnostic baselines (e.g. the unintegrated `method=none` integration
+    # member) are scored, paneled and reported, but excluded from the consensus
+    # VOTE by default: they are reference controls, and voting them as equals
+    # drags the consensus toward the un-integrated structure and corrupts the
+    # operator's label alignment when their cluster count diverges (ADR 0029 B2).
+    # They re-enter only if excluding them would leave < MIN_CONSENSUS_MEMBERS.
+    non_voting = {m for m in non_voting_members if m in selected}
+    voting = [m for m in selected if m not in non_voting]
+    baseline_reincluded = False
+    if non_voting and len(voting) < MIN_CONSENSUS_MEMBERS:
+        logger.warning(
+            "excluding baseline member(s) %s from the consensus vote would leave "
+            "%d voter(s) (< %d) — including them so the run can proceed.",
+            sorted(non_voting), len(voting), MIN_CONSENSUS_MEMBERS,
+        )
+        voting, non_voting, baseline_reincluded = list(selected), set(), True
+    if non_voting:
+        logger.info(
+            "consensus vote excludes diagnostic baseline member(s) %s; voting on %s.",
+            sorted(non_voting), voting,
+        )
+    scores = _annotate_selection(scores, voting, non_voting)
     scores_path = output_dir_p / "member_scores.csv"
     pd.DataFrame([asdict(s) for s in scores]).to_csv(scores_path, index=False)
     artifacts.append(scores_path)
-    if len(selected) < 2:
+    # Effective vote policy audit (plan.json is written before selection, so it
+    # cannot record which members actually voted — codex review).
+    audit_path = output_dir_p / "selection_audit.json"
+    audit_path.write_text(json.dumps({
+        "top_k_candidates": list(selected),
+        "voting_bcs": list(voting),
+        "requested_non_voting": list(non_voting_members),
+        "excluded_baselines": sorted(non_voting),
+        "baseline_reincluded": baseline_reincluded,
+    }, indent=2))
+    artifacts.append(audit_path)
+    if len(voting) < 2:
         raise InsufficientBCsError(
-            f"BC selector returned {len(selected)} member(s) (< 2 required). "
-            f"Selected: {selected}"
+            f"BC selector returned {len(voting)} voting member(s) (< 2 required). "
+            f"Selected: {selected}; excluded baselines: {sorted(non_voting)}"
         )
 
-    # 7. operator
+    # k-divergence guard over the ACTUAL voters (an excluded diagnostic baseline
+    # often has a divergent k that does NOT affect the consensus, so warn on the
+    # voters, not all readable members — codex review). Per-member n_clusters for
+    # every member (incl. the baseline) stays in member_scores.csv.
+    k_stats = _compute_k_stats(labels_df[voting])
+    if k_stats["diverged"]:
+        logger.warning(
+            "voting members' cluster counts diverge (k_min=%d, k_max=%d, ratio>%.1f): "
+            "kmode/weighted alignment may induce disagreement; treat per-spot support "
+            "with care. k_by_member=%s",
+            k_stats["k_min"], k_stats["k_max"], K_DIVERGENCE_RATIO, k_stats["k_by_member"],
+        )
+
+    # 7. operator (votes over the non-baseline members only)
     score_lookup = {s.member: s.composite for s in scores}
     consensus = _run_operator(
-        operator, labels_df[selected], seed=seed, score_lookup=score_lookup
+        operator, labels_df[voting], seed=seed, score_lookup=score_lookup
     )
 
     # 8. per-spot confidence + consensus labels TSV (label + agreement columns).
@@ -648,7 +689,7 @@ async def run_typed_consensus(
         intrinsic_map=intrinsic_map,
         scores=tuple(scores),
         nmi_matrix=nmi_df,
-        selected_bcs=tuple(selected),
+        selected_bcs=tuple(voting),
         consensus=consensus,
         output_dir=output_dir_p,
         artifacts_written=tuple(artifacts),

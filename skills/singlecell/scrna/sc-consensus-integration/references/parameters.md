@@ -11,6 +11,7 @@
 - `--resolution`
 - `--batch-key`
 - `--include-scvi`
+- `--vote-baseline`
 - `--all`
 - `--confirm-plan`
 - `--non-interactive`

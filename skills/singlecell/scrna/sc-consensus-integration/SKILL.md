@@ -39,6 +39,7 @@ integration intrinsic panel (ADR 0029) before voting a consensus.
 | Batch key | `--batch-key batch` | no (default `batch`) |
 | Integration methods | `--integration-methods none,harmony,scanorama` | no (default set) |
 | Include scVI member | `--include-scvi` | no (GPU/stochastic; serialise with `--max-parallel 1`) |
+| Vote the baseline | `--vote-baseline` | no (default: the `none` baseline is scored + reported but NOT voted) |
 | Fixed resolution | `--resolution 1.0` | no |
 | Operator | `--operator {kmode,weighted,lca}` | no (default `kmode`) |
 | Non-interactive | `--non-interactive` | no |
@@ -66,14 +67,17 @@ integration intrinsic panel (ADR 0029) before voting a consensus.
    `knn_preservation_norm` (within-batch `X_pca` retention), `batch_asw_norm` and
    `cluster_asw_norm` are reported as weight-0 **diagnostics** (`knn_preservation`
    anti-correlated with recovery, so it flags over-integration but does not score).
-4. **Consensus** — vote `kmode` / `weighted` / `lca` over the surviving members.
+4. **Consensus** — vote `kmode` / `weighted` / `lca` over the **voting** members
+   (the integration methods; the `none` baseline is excluded by default, B2).
 5. **Report** — banner + per-cell support/entropy + a k-divergence section.
 
 ## Gotchas
 
-- **`none` is the unintegrated `X_pca` baseline** — it deliberately exposes
-  batch-artifact clusters; clusters that survive only on `none` are the artifacts
-  the consensus is meant to flag.
+- **`none` is the unintegrated `X_pca` baseline, and it does NOT vote by default**
+  — it is a reference control that exposes batch-artifact clusters by comparison
+  (it is scored, paneled and reported, with `selection_reason = "baseline …"`),
+  but voting it as an equal drags the consensus toward un-integrated structure
+  (ADR 0029 B2). Pass `--vote-baseline` to include it in the vote.
 - **scVI is GPU/stochastic** — reproducible within tolerance, not bit-identical;
   add it with `--include-scvi` and serialise GPU members with `--max-parallel 1`.
 - **The intrinsic panel is unsupervised batch-mixing-vs-structure** — it is NOT

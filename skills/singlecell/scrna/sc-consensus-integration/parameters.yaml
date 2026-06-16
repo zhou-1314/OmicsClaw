@@ -7,6 +7,7 @@ allowed_extra_flags:
 - --resolution
 - --batch-key
 - --include-scvi
+- --vote-baseline
 - --all
 - --confirm-plan
 - --non-interactive
