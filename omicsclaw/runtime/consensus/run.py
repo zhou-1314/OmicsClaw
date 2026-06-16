@@ -70,7 +70,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-spatial-panel", action="store_false", dest="spatial_panel",
         help="Disable the multi-metric spatial intrinsic panel (chaos/pas/mlami) "
-             "and score with the reader's single intrinsic signal instead.",
+             "and score with the reader's single intrinsic signal instead. "
+             "Spatial sources only — integration sources always score with their "
+             "batch-mixing panel (this flag is a no-op for them).",
     )
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--max-parallel", type=int, default=None)

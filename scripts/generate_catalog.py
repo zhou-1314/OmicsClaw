@@ -56,6 +56,27 @@ def _sidecar_enum(skill_dir: Path, key: str, allowed: tuple[str, ...], default: 
     return value if value in allowed else default
 
 
+def sidecar_list(skill_dir: Path, key: str) -> list | None:
+    """Read an optional list field from parameters.yaml (the v2 sidecar).
+
+    Returns ``None`` when the sidecar is absent/unreadable or the key is unset, so
+    callers can fall back to legacy frontmatter — mirroring how
+    ``LazySkillMetadata._load_basic`` lets the sidecar win per-field and the
+    frontmatter fill the gaps (ADR 0030).
+    """
+    sidecar = skill_dir / "parameters.yaml"
+    if not sidecar.exists():
+        return None
+    try:
+        data = yaml.safe_load(sidecar.read_text(encoding="utf-8"))
+    except yaml.YAMLError:
+        return None
+    value = (data or {}).get(key) if isinstance(data, dict) else None
+    if isinstance(value, str):
+        return [value]
+    return value if isinstance(value, list) else None
+
+
 def sidecar_type(skill_dir: Path) -> str:
     """Declared skill `type` (ADR 0030); ``leaf`` when unset/unknown."""
     return _sidecar_enum(skill_dir, "type", _SKILL_TYPES, "leaf")
@@ -108,14 +129,20 @@ def generate_catalog() -> dict:
         # exits with an argparse error, so they declare no demo.
         has_demo = has_script and skill_type != "workflow"
 
-        trigger_kw = []
-        metadata = fm.get("metadata", {})
-        if isinstance(metadata, dict):
-            sc_meta = metadata.get("omicsclaw", {}) or metadata.get("spatialclaw", {})
-            if isinstance(sc_meta, dict):
-                trigger_kw = sc_meta.get("trigger_keywords", [])
-        if isinstance(trigger_kw, str):
-            trigger_kw = [trigger_kw]
+        # Sidecar wins, legacy frontmatter fills — same precedence as the runtime
+        # registry (LazySkillMetadata). v2 skills declare trigger_keywords at the
+        # top level of parameters.yaml; v1 skills carry them under
+        # metadata.omicsclaw in SKILL.md frontmatter. (codex review [P2])
+        trigger_kw = sidecar_list(skill_dir, "trigger_keywords")
+        if trigger_kw is None:
+            trigger_kw = []
+            metadata = fm.get("metadata", {})
+            if isinstance(metadata, dict):
+                sc_meta = metadata.get("omicsclaw", {}) or metadata.get("spatialclaw", {})
+                if isinstance(sc_meta, dict):
+                    trigger_kw = sc_meta.get("trigger_keywords", [])
+            if isinstance(trigger_kw, str):
+                trigger_kw = [trigger_kw]
 
         cli_alias = alias_map.get(str(skill_dir.resolve()))
         entry = {

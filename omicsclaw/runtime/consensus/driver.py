@@ -433,7 +433,12 @@ async def run_typed_consensus(
         # from plan.json — especially for API callers passing non-default
         # ``panel_weights``. ``"none"`` / ``{}`` when no panel is active.
         _panel_kind = getattr(source, "intrinsic_panel", "")
-        if use_spatial_panel and _panel_kind in ("spatial", "integration"):
+        # ``use_spatial_panel`` only gates the spatial panel; the integration
+        # panel always runs (see the scoring block below). Keep the audit in sync.
+        _panel_active = _panel_kind == "integration" or (
+            _panel_kind == "spatial" and use_spatial_panel
+        )
+        if _panel_active:
             if _panel_kind == "spatial":
                 from omicsclaw.runtime.consensus.spatial_panel import (
                     DEFAULT_PANEL_WEIGHTS as _panel_default_weights,
@@ -511,7 +516,12 @@ async def run_typed_consensus(
                 panel_intrinsic, list(SPATIAL_PANEL_METRICS),
             )
             artifacts.append(panel_path)
-    elif use_spatial_panel and panel_kind == "integration":
+    elif panel_kind == "integration":
+        # NOT gated by ``use_spatial_panel``: that flag is the spatial opt-out
+        # (chaos/pas/mlami). The integration batch-mixing panel is this flavour's
+        # only intended scoring axis, and ``sc-integrate-cluster`` does not emit a
+        # reader silhouette to fall back to — disabling it here would silently
+        # zero the scoring signal. (codex review [P2])
         member_dirs = {r.step.name: r.output_dir for r in team.survived}
         panel_inputs, n_batches = _load_integration_panel_inputs(
             member_dirs, batch_key, labels_df.index

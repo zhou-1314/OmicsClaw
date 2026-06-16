@@ -22,7 +22,14 @@
         "harmonization",
         "batch-effect"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "batch correction",
+        "ComBat",
+        "batch effect",
+        "harmonize",
+        "multi-cohort",
+        "batch removal"
+      ]
     },
     {
       "name": "bulkrna-coexpression",
@@ -44,7 +51,14 @@
         "modules",
         "hub-genes"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "coexpression",
+        "WGCNA",
+        "gene network",
+        "co-expression modules",
+        "hub genes",
+        "gene modules"
+      ]
     },
     {
       "name": "bulkrna-de",
@@ -66,7 +80,15 @@
         "MA-plot",
         "fold-change"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "differential expression",
+        "DE analysis",
+        "DESeq2",
+        "volcano plot",
+        "fold change",
+        "DEGs",
+        "bulk DE"
+      ]
     },
     {
       "name": "bulkrna-deconvolution",
@@ -86,7 +108,14 @@
         "NNLS",
         "cell-type-proportion"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "bulk deconvolution",
+        "cell type proportion",
+        "NNLS",
+        "CIBERSORTx",
+        "bulk deconv",
+        "cell fraction"
+      ]
     },
     {
       "name": "bulkrna-enrichment",
@@ -110,7 +139,15 @@
         "Reactome",
         "pathway"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "bulk enrichment",
+        "pathway analysis",
+        "GSEA",
+        "ORA",
+        "GO enrichment",
+        "KEGG",
+        "bulk pathway"
+      ]
     },
     {
       "name": "bulkrna-geneid-mapping",
@@ -133,7 +170,15 @@
         "HGNC",
         "annotation"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "gene ID",
+        "Ensembl",
+        "Entrez",
+        "gene symbol",
+        "ID mapping",
+        "gene annotation",
+        "convert IDs"
+      ]
     },
     {
       "name": "bulkrna-ppi-network",
@@ -155,7 +200,14 @@
         "hub-genes",
         "protein-interaction"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "PPI",
+        "protein interaction",
+        "STRING",
+        "network",
+        "hub gene",
+        "interactome"
+      ]
     },
     {
       "name": "bulkrna-qc",
@@ -178,7 +230,15 @@
         "sample-correlation",
         "CPM"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "bulk QC",
+        "library size",
+        "count matrix",
+        "sample quality",
+        "gene detection",
+        "RNA-seq quality",
+        "count QC"
+      ]
     },
     {
       "name": "bulkrna-read-alignment",
@@ -201,7 +261,15 @@
         "mapping-rate",
         "strandedness"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "RNA-seq alignment",
+        "STAR",
+        "HISAT2",
+        "Salmon",
+        "mapping rate",
+        "read alignment",
+        "alignment QC"
+      ]
     },
     {
       "name": "bulkrna-read-qc",
@@ -224,7 +292,16 @@
         "adapter",
         "read-quality"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "FASTQ QC",
+        "read quality",
+        "Phred",
+        "FastQC",
+        "adapter",
+        "GC content",
+        "Q20",
+        "Q30"
+      ]
     },
     {
       "name": "bulkrna-splicing",
@@ -246,7 +323,15 @@
         "rMATS",
         "SUPPA2"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "alternative splicing",
+        "splicing analysis",
+        "PSI",
+        "rMATS",
+        "SUPPA2",
+        "exon skipping",
+        "differential splicing"
+      ]
     },
     {
       "name": "bulkrna-survival",
@@ -268,7 +353,15 @@
         "hazard-ratio",
         "clinical"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "survival",
+        "Kaplan-Meier",
+        "Cox",
+        "prognosis",
+        "hazard ratio",
+        "overall survival",
+        "clinical outcome"
+      ]
     },
     {
       "name": "bulkrna-trajblend",
@@ -289,7 +382,15 @@
         "deconvolution",
         "single-cell"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "trajblend",
+        "trajectory",
+        "bulk to single cell",
+        "interpolation",
+        "bulk2single",
+        "VAE",
+        "deconvolution trajectory"
+      ]
     },
     {
       "name": "genomics-alignment",
@@ -312,7 +413,13 @@
         "bowtie2",
         "minimap2"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "alignment",
+        "BWA",
+        "Bowtie2",
+        "Minimap2",
+        "map reads"
+      ]
     },
     {
       "name": "genomics-assembly",
@@ -336,7 +443,14 @@
         "spades",
         "flye"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "genome assembly",
+        "de novo",
+        "SPAdes",
+        "Megahit",
+        "Flye",
+        "Canu"
+      ]
     },
     {
       "name": "genomics-cnv-calling",
@@ -359,7 +473,13 @@
         "cnvkit",
         "gatk-gcnv"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "CNV",
+        "copy number",
+        "amplification",
+        "deletion",
+        "CNVkit"
+      ]
     },
     {
       "name": "genomics-epigenomics",
@@ -383,7 +503,15 @@
         "macs",
         "bed"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "epigenomics",
+        "ATAC-seq",
+        "ChIP-seq",
+        "peak calling",
+        "MACS",
+        "motif",
+        "chromatin"
+      ]
     },
     {
       "name": "genomics-phasing",
@@ -406,7 +534,13 @@
         "eagle",
         "ps"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "haplotype phasing",
+        "WhatsHap",
+        "SHAPEIT",
+        "Eagle",
+        "phasing"
+      ]
     },
     {
       "name": "genomics-qc",
@@ -428,7 +562,13 @@
         "adapter",
         "fastqc"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "sequencing QC",
+        "FastQC",
+        "read quality",
+        "adapter trimming",
+        "fastp"
+      ]
     },
     {
       "name": "genomics-sv-detection",
@@ -451,7 +591,14 @@
         "sniffles",
         "bnd"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "structural variant",
+        "SV",
+        "Manta",
+        "Delly",
+        "Lumpy",
+        "Sniffles"
+      ]
     },
     {
       "name": "genomics-variant-annotation",
@@ -474,7 +621,13 @@
         "consequence",
         "impact"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "variant annotation",
+        "VEP",
+        "snpEff",
+        "ANNOVAR",
+        "functional effect"
+      ]
     },
     {
       "name": "genomics-variant-calling",
@@ -496,7 +649,16 @@
         "vcf",
         "ti-tv"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "variant calling",
+        "SNV",
+        "indel",
+        "GATK",
+        "DeepVariant",
+        "FreeBayes",
+        "Mutect2",
+        "VQSR"
+      ]
     },
     {
       "name": "genomics-vcf-operations",
@@ -519,7 +681,12 @@
         "snv",
         "indel"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "VCF",
+        "bcftools",
+        "variant filter",
+        "merge VCF"
+      ]
     },
     {
       "name": "literature",
@@ -541,7 +708,15 @@
         "geo",
         "metadata"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "parse paper",
+        "literature",
+        "GEO accession",
+        "download dataset",
+        "PDF extract",
+        "PubMed",
+        "DOI"
+      ]
     },
     {
       "name": "metabolomics-annotation",
@@ -562,7 +737,14 @@
         "demo",
         "mz-match"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "metabolite annotation",
+        "SIRIUS",
+        "GNPS",
+        "MetFrag",
+        "spectral matching",
+        "metabolite ID"
+      ]
     },
     {
       "name": "metabolomics-de",
@@ -584,7 +766,13 @@
         "bh-fdr",
         "biomarker"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "metabolomics differential",
+        "PLS-DA",
+        "volcano plot",
+        "biomarker",
+        "OPLS-DA"
+      ]
     },
     {
       "name": "metabolomics-normalization",
@@ -606,7 +794,12 @@
         "median",
         "log"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "metabolomics normalization",
+        "scaling",
+        "NOREVA",
+        "TIC normalization"
+      ]
     },
     {
       "name": "metabolomics-pathway-enrichment",
@@ -628,7 +821,13 @@
         "fisher",
         "demo"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "metabolomics pathway",
+        "KEGG",
+        "MetaboAnalyst",
+        "enrichment",
+        "mummichog"
+      ]
     },
     {
       "name": "metabolomics-peak-detection",
@@ -649,7 +848,14 @@
         "xcms",
         "mzmine"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "peak detection",
+        "feature detection",
+        "XCMS",
+        "MZmine",
+        "MS-DIAL",
+        "peak picking"
+      ]
     },
     {
       "name": "metabolomics-quantification",
@@ -671,7 +877,12 @@
         "knn",
         "tic"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "metabolomics quantification",
+        "imputation",
+        "feature quantification",
+        "missing values"
+      ]
     },
     {
       "name": "metabolomics-statistics",
@@ -694,7 +905,12 @@
         "kruskal",
         "bh-fdr"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "metabolomics statistics",
+        "multivariate",
+        "PCA",
+        "clustering"
+      ]
     },
     {
       "name": "metabolomics-xcms-preprocessing",
@@ -717,7 +933,13 @@
         "gc-ms",
         "centwave"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "xcms",
+        "metabolomics preprocessing",
+        "LC-MS",
+        "peak detection",
+        "RT alignment"
+      ]
     },
     {
       "name": "orchestrator",
@@ -738,7 +960,14 @@
         "multi-omics",
         "registry"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "which skill",
+        "route query",
+        "what should I run",
+        "orchestrate",
+        "pipeline",
+        "which analysis"
+      ]
     },
     {
       "name": "omics-skill-builder",
@@ -759,7 +988,15 @@
         "meta",
         "code-generation"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "create omicsclaw skill",
+        "add new skill",
+        "scaffold skill",
+        "create reusable workflow",
+        "\u65b0\u589e skill",
+        "\u521b\u5efa skill",
+        "\u5c01\u88c5\u6210 skill"
+      ]
     },
     {
       "name": "proteomics-data-import",
@@ -781,7 +1018,11 @@
         "diann",
         "spectronaut"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "data import",
+        "convert proteomics",
+        "format conversion"
+      ]
     },
     {
       "name": "proteomics-de",
@@ -803,7 +1044,13 @@
         "mann-whitney",
         "bh-fdr"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "differential abundance",
+        "protein expression",
+        "MSstats",
+        "limma",
+        "volcano"
+      ]
     },
     {
       "name": "proteomics-enrichment",
@@ -825,7 +1072,14 @@
         "demo",
         "pathway"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "proteomics enrichment",
+        "pathway analysis",
+        "STRING",
+        "DAVID",
+        "g:Profiler",
+        "GO enrichment"
+      ]
     },
     {
       "name": "proteomics-identification",
@@ -847,7 +1101,14 @@
         "maxquant",
         "msgf"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "peptide identification",
+        "database search",
+        "MaxQuant",
+        "MS-GF+",
+        "Comet",
+        "Mascot"
+      ]
     },
     {
       "name": "proteomics-ms-qc",
@@ -870,7 +1131,12 @@
         "missing-values",
         "cv"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "MS QC",
+        "mass spec QC",
+        "PTXQC",
+        "rawTools"
+      ]
     },
     {
       "name": "proteomics-ptm",
@@ -892,7 +1158,14 @@
         "ubiquitination",
         "site-localization"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "PTM",
+        "phosphorylation",
+        "acetylation",
+        "ubiquitination",
+        "modification",
+        "motif"
+      ]
     },
     {
       "name": "proteomics-quantification",
@@ -913,7 +1186,14 @@
         "ibaq",
         "spectral-counting"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "protein quantification",
+        "LFQ",
+        "TMT",
+        "DIA",
+        "DIA-NN",
+        "Skyline"
+      ]
     },
     {
       "name": "proteomics-structural",
@@ -938,7 +1218,14 @@
         "dsbu",
         "edc"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "structural proteomics",
+        "cross-linking MS",
+        "XL-MS",
+        "XlinkX",
+        "pLink",
+        "xiSEARCH"
+      ]
     },
     {
       "name": "scatac-preprocessing",
@@ -962,7 +1249,13 @@
         "clustering",
         "leiden"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "scATAC preprocessing",
+        "single-cell ATAC preprocessing",
+        "ATAC TF-IDF LSI",
+        "chromatin accessibility clustering",
+        "scATAC UMAP Leiden"
+      ]
     },
     {
       "name": "sc-ambient-removal",
@@ -984,7 +1277,13 @@
         "soupx",
         "contamination"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "ambient RNA",
+        "ambient removal",
+        "cellbender",
+        "contamination",
+        "background RNA"
+      ]
     },
     {
       "name": "sc-batch-integration",
@@ -1009,7 +1308,14 @@
         "scanorama",
         "simba"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "batch integration",
+        "batch effect",
+        "harmony",
+        "scvi",
+        "bbknn",
+        "merge samples"
+      ]
     },
     {
       "name": "sc-cell-annotation",
@@ -1059,7 +1365,15 @@
         "cellchat",
         "nichenet"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "cell communication",
+        "cell-cell communication",
+        "ligand receptor",
+        "cellchat",
+        "liana",
+        "cellphonedb",
+        "nichenet"
+      ]
     },
     {
       "name": "sc-clustering",
@@ -1108,7 +1422,14 @@
         "lca",
         "weighted"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "consensus clustering",
+        "consensus celltype clustering",
+        "multi-resolution clustering",
+        "robust scrna clustering",
+        "resolution sweep consensus",
+        "single cell consensus clustering"
+      ]
     },
     {
       "name": "sc-consensus-integration",
@@ -1129,7 +1450,13 @@
         "integration",
         "batch-correction"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "consensus integration",
+        "batch correction consensus",
+        "integration method consensus",
+        "robust scrna integration clustering",
+        "which clusters survive integration"
+      ]
     },
     {
       "name": "sc-count",
@@ -1152,7 +1479,13 @@
         "simpleaf",
         "kb-python"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "Cell Ranger count",
+        "STARsolo count",
+        "fastq to adata",
+        "raw single-cell counting",
+        "generate count matrix"
+      ]
     },
     {
       "name": "sc-cytotrace",
@@ -1195,7 +1528,13 @@
         "wilcoxon",
         "deseq2"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "differential expression",
+        "marker genes",
+        "de analysis",
+        "wilcoxon",
+        "pseudo-bulk"
+      ]
     },
     {
       "name": "sc-differential-abundance",
@@ -1287,7 +1626,15 @@
         "decoupler",
         "pathway-enrichment"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "sc enrichment",
+        "single-cell enrichment",
+        "GO enrichment",
+        "KEGG enrichment",
+        "GSEA",
+        "ORA",
+        "pathway enrichment"
+      ]
     },
     {
       "name": "sc-fastq-qc",
@@ -1308,7 +1655,13 @@
         "qc",
         "read-quality"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "scRNA FASTQ QC",
+        "FastQC single-cell",
+        "MultiQC single-cell",
+        "raw read quality",
+        "read-level QC"
+      ]
     },
     {
       "name": "sc-filter",
@@ -1329,7 +1682,14 @@
         "qc",
         "mitochondrial"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "filter cells",
+        "cell filtering",
+        "gene filtering",
+        "remove low quality",
+        "qc filtering",
+        "tissue-specific thresholds"
+      ]
     },
     {
       "name": "sc-gene-programs",
@@ -1376,7 +1736,15 @@
         "aucell",
         "cistarget"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "grn",
+        "gene regulatory",
+        "scenic",
+        "pyscenic",
+        "regulon",
+        "transcription factor",
+        "grnboost"
+      ]
     },
     {
       "name": "sc-in-silico-perturbation",
@@ -1485,7 +1853,13 @@
         "merge",
         "aggregation"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "merge count matrices",
+        "multi-sample count",
+        "aggregate samples",
+        "combine count outputs",
+        "cellranger aggr alternative"
+      ]
     },
     {
       "name": "sc-pathway-scoring",
@@ -1508,7 +1882,14 @@
         "gene-sets",
         "decoupler"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "pathway score",
+        "pathway scoring",
+        "gene set score",
+        "module score",
+        "pathway activity",
+        "signature score"
+      ]
     },
     {
       "name": "sc-perturb",
@@ -1579,7 +1960,14 @@
         "sctransform",
         "pearson_residuals"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "single cell preprocess",
+        "scRNA preprocessing",
+        "normalize hvg pca",
+        "base preprocessing",
+        "Seurat preprocessing",
+        "SCTransform preprocessing"
+      ]
     },
     {
       "name": "sc-pseudotime",
@@ -1605,7 +1993,17 @@
         "slingshot",
         "monocle3"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "pseudotime",
+        "trajectory",
+        "lineage",
+        "diffusion pseudotime",
+        "palantir",
+        "via",
+        "cellrank",
+        "monocle3",
+        "slingshot"
+      ]
     },
     {
       "name": "sc-qc",
@@ -1626,7 +2024,16 @@
         "mitochondrial",
         "ribosomal"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "scRNA QC",
+        "single-cell QC",
+        "quality control",
+        "mitochondrial percentage",
+        "ribosomal percentage",
+        "QC violin",
+        "QC scatter",
+        "n genes per cell"
+      ]
     },
     {
       "name": "sc-standardize-input",
@@ -1647,7 +2054,13 @@
         "standardization",
         "anndata"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "standardize AnnData",
+        "fix scRNA input",
+        "canonicalize single-cell input",
+        "prepare AnnData",
+        "input contract"
+      ]
     },
     {
       "name": "sc-velocity",
@@ -1670,7 +2083,15 @@
         "latent-time",
         "kinetics"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "rna velocity",
+        "velocity",
+        "scvelo",
+        "spliced unspliced",
+        "cellular dynamics",
+        "velovi",
+        "velocity pseudotime"
+      ]
     },
     {
       "name": "sc-velocity-prep",
@@ -1693,7 +2114,13 @@
         "spliced-unspliced",
         "kb-python"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "RNA velocity prep",
+        "prepare spliced unspliced layers",
+        "velocyto",
+        "starsolo velocyto",
+        "velocity-ready AnnData"
+      ]
     },
     {
       "name": "consensus-domains",
@@ -1718,7 +2145,15 @@
         "lca",
         "weighted"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "consensus domains",
+        "consensus tissue regions",
+        "multi-method spatial domains",
+        "robust spatial clustering",
+        "expert in the loop spatial",
+        "bc ranking",
+        "saccelerator-like consensus"
+      ]
     },
     {
       "name": "consensus-interpret",
@@ -1740,7 +2175,18 @@
         "marker-grounded",
         "backward-proof-driven-recommendation"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "consensus interpret",
+        "interpret consensus",
+        "explain consensus",
+        "annotate consensus",
+        "consensus cell type",
+        "name clusters",
+        "biological interpretation",
+        "next step after consensus",
+        "interpreted consensus",
+        "consensus biology"
+      ]
     },
     {
       "name": "spatial-annotate",
@@ -1763,7 +2209,16 @@
         "scanvi",
         "cellassign"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "cell type annotation",
+        "annotate cell types",
+        "Tangram",
+        "scANVI",
+        "CellAssign",
+        "marker genes",
+        "label transfer",
+        "spatial annotation"
+      ]
     },
     {
       "name": "spatial-cnv",
@@ -1785,7 +2240,16 @@
         "numbat",
         "tumor"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "copy number variation",
+        "CNV",
+        "inferCNV",
+        "infercnvpy",
+        "Numbat",
+        "aneuploidy",
+        "chromosomal aberration",
+        "tumor clone"
+      ]
     },
     {
       "name": "spatial-communication",
@@ -1808,7 +2272,16 @@
         "cellchat",
         "fastccc"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "cell communication",
+        "cell-cell communication",
+        "ligand receptor",
+        "ligand-receptor",
+        "LIANA",
+        "CellPhoneDB",
+        "FastCCC",
+        "CellChat"
+      ]
     },
     {
       "name": "spatial-condition",
@@ -1830,7 +2303,15 @@
         "wilcoxon",
         "differential-expression"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "condition comparison",
+        "pseudobulk",
+        "DESeq2",
+        "PyDESeq2",
+        "treatment vs control",
+        "experimental conditions",
+        "replicate-aware differential expression"
+      ]
     },
     {
       "name": "spatial-de",
@@ -1853,7 +2334,15 @@
         "pydeseq2",
         "pseudobulk"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "differential expression",
+        "marker gene",
+        "pseudobulk",
+        "Wilcoxon",
+        "t-test",
+        "PyDESeq2",
+        "spatial DE"
+      ]
     },
     {
       "name": "spatial-deconv",
@@ -1879,7 +2368,19 @@
         "card",
         "flashdeconv"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "cell type deconvolution",
+        "spatial deconvolution",
+        "cell proportion",
+        "cell type proportion",
+        "cell2location",
+        "RCTD",
+        "DestVI",
+        "Stereoscope",
+        "Tangram",
+        "SPOTlight",
+        "CARD"
+      ]
     },
     {
       "name": "spatial-domains",
@@ -1905,7 +2406,17 @@
         "leiden",
         "louvain"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "spatial domain",
+        "tissue region",
+        "niche",
+        "spatial niche",
+        "niche identification",
+        "niche detection",
+        "SpaGCN",
+        "STAGATE",
+        "CellCharter"
+      ]
     },
     {
       "name": "spatial-enrichment",
@@ -1928,7 +2439,16 @@
         "enrichr",
         "gene-set"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "pathway enrichment",
+        "gene set enrichment",
+        "enrichr",
+        "GSEA",
+        "ssGSEA",
+        "GO",
+        "Reactome",
+        "MSigDB"
+      ]
     },
     {
       "name": "spatial-genes",
@@ -1951,7 +2471,16 @@
         "sparkx",
         "flashs"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "spatially variable gene",
+        "spatial gene",
+        "SVG",
+        "SpatialDE",
+        "SPARK-X",
+        "spatial pattern",
+        "Moran",
+        "spatial autocorrelation"
+      ]
     },
     {
       "name": "spatial-integrate",
@@ -1974,7 +2503,14 @@
         "scanorama",
         "multi-sample"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "multi-sample integration",
+        "batch correction",
+        "Harmony",
+        "BBKNN",
+        "Scanorama",
+        "merge samples"
+      ]
     },
     {
       "name": "spatial-microenvironment-subset",
@@ -1997,7 +2533,15 @@
         "visium",
         "xenium"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "microenvironment",
+        "neighborhood subset",
+        "spatial radius",
+        "neighboring cells",
+        "nearby cells",
+        "tumor microenvironment",
+        "extract cells within 50 microns"
+      ]
     },
     {
       "name": "spatial-preprocess",
@@ -2022,7 +2566,19 @@
         "pca",
         "leiden"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "preprocess",
+        "spatial preprocessing",
+        "spatial QC",
+        "normalize",
+        "visium",
+        "xenium",
+        "merfish",
+        "slide-seq",
+        "load spatial data",
+        "leiden",
+        "umap"
+      ]
     },
     {
       "name": "spatial-raw-processing",
@@ -2044,7 +2600,19 @@
         "visium",
         "slideseq"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "spatial raw processing",
+        "raw spatial fastq",
+        "spatial fastq",
+        "st_pipeline",
+        "st pipeline",
+        "barcode coordinates",
+        "ids file",
+        "visium raw fastq",
+        "slide-seq fastq",
+        "slideseq fastq",
+        "upstream spatial processing"
+      ]
     },
     {
       "name": "spatial-register",
@@ -2066,7 +2634,14 @@
         "stalign",
         "multi-slice"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "spatial registration",
+        "slice alignment",
+        "coordinate alignment",
+        "PASTE",
+        "STalign",
+        "multi-slice"
+      ]
     },
     {
       "name": "spatial-statistics",
@@ -2091,7 +2666,16 @@
         "getis-ord",
         "squidpy"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "spatial statistics",
+        "Moran",
+        "Geary",
+        "Ripley",
+        "co-occurrence",
+        "Getis-Ord",
+        "local Moran",
+        "centrality"
+      ]
     },
     {
       "name": "spatial-trajectory",
@@ -2114,7 +2698,16 @@
         "palantir",
         "lineage"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "trajectory",
+        "pseudotime",
+        "diffusion pseudotime",
+        "DPT",
+        "CellRank",
+        "Palantir",
+        "cell fate",
+        "lineage"
+      ]
     },
     {
       "name": "spatial-velocity",
@@ -2136,7 +2729,14 @@
         "velovi",
         "dynamics"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "RNA velocity",
+        "cellular dynamics",
+        "scVelo",
+        "VELOVI",
+        "latent time",
+        "spliced unspliced"
+      ]
     }
   ]
 }
