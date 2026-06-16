@@ -725,3 +725,332 @@ def test_argparse_short_flag_does_not_satisfy_long_flag_requirement(tmp_path: Pa
     # Must NOT report `-m` as a missing flag (single-dash short flags are
     # never listed in allowed_extra_flags).
     assert not any("missing '-m'" in e for e in errors), errors
+
+
+# ---------------------------------------------------------------------------
+# Check: type: workflow profile (ADR 0030)
+#
+# Workflow shims delegate their argparse + outputs to the shared consensus
+# runtime, so the leaf flag-match and output-contract checks are replaced by a
+# shim-wiring check.  The runtime-backed sub-checks (`SOURCE in CONSENSUS_SOURCES`,
+# `flags ⊆ run parser`) are monkeypatched so these tests are hermetic and do not
+# depend on the heavy consensus runtime importing in the test environment.
+# ---------------------------------------------------------------------------
+
+_WORKFLOW_SHIM = (
+    "import sys\n"
+    "from omicsclaw.runtime.consensus.run import main as _run_main\n"
+    'SOURCE = "consensus-domains"\n'
+    "def main(argv=None):\n"
+    "    argv = list(sys.argv[1:] if argv is None else argv)\n"
+    '    return _run_main(["--source", SOURCE, *argv])\n'
+)
+
+
+def _workflow_sidecar(**over: object) -> dict:
+    sc = {
+        **VALID_SIDECAR,
+        "type": "workflow",
+        "allowed_extra_flags": ["--members", "--seed"],
+    }
+    sc.update(over)
+    return sc
+
+
+def _patch_consensus(
+    monkeypatch,
+    sources: tuple[str, ...] = ("consensus-domains",),
+    flags: tuple[str, ...] = ("--members", "--seed"),
+) -> None:
+    monkeypatch.setattr(skill_lint, "_consensus_sources", lambda: set(sources))
+    monkeypatch.setattr(skill_lint, "_consensus_parser_flags", lambda: set(flags))
+
+
+def test_workflow_shim_valid_lints_clean(tmp_path: Path, monkeypatch) -> None:
+    _patch_consensus(monkeypatch)
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=_WORKFLOW_SHIM,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert errors == [], errors
+
+
+def test_workflow_shim_bad_source_fails(tmp_path: Path, monkeypatch) -> None:
+    _patch_consensus(monkeypatch)
+    shim = _WORKFLOW_SHIM.replace('"consensus-domains"', '"not-a-flavour"')
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any("not-a-flavour" in e and "CONSENSUS_SOURCES" in e for e in errors), errors
+
+
+def test_workflow_shim_missing_import_fails(tmp_path: Path, monkeypatch) -> None:
+    _patch_consensus(monkeypatch)
+    # No import of the run entry at all.
+    shim = 'SOURCE = "consensus-domains"\ndef main():\n    return 0\n'
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any("must import" in e for e in errors), errors
+
+
+def test_workflow_shim_imports_but_never_delegates_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Codex R1 counterexample: the shim imports the run entry, defines a valid
+    SOURCE, and even *builds* the ``["--source", SOURCE, *argv]`` list — but
+    never CALLS the run entry. The old string-presence check passed this; the
+    AST check must reject it because no real delegation happens."""
+    _patch_consensus(monkeypatch)
+    shim = (
+        "import sys\n"
+        "from omicsclaw.runtime.consensus.run import main as _run_main\n"
+        'SOURCE = "consensus-domains"\n'
+        "def main(argv=None):\n"
+        "    argv = list(sys.argv[1:] if argv is None else argv)\n"
+        '    _ = ["--source", SOURCE, *argv]  # built but never passed to _run_main\n'
+        "    return 0\n"
+    )
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any("must delegate" in e for e in errors), errors
+
+
+def test_workflow_shim_module_alias_delegation_passes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The ``import omicsclaw.runtime.consensus.run as run`` + ``run.main([...])``
+    form is also a valid delegation (resolved by module alias, not import-as)."""
+    _patch_consensus(monkeypatch)
+    shim = (
+        "import sys\n"
+        "import omicsclaw.runtime.consensus.run as run\n"
+        'SOURCE = "consensus-domains"\n'
+        "def main(argv=None):\n"
+        "    argv = list(sys.argv[1:] if argv is None else argv)\n"
+        '    return run.main(["--source", SOURCE, *argv])\n'
+    )
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert errors == [], errors
+
+
+def test_workflow_shim_empty_argv_splat_fails(tmp_path: Path, monkeypatch) -> None:
+    """`*[]` is a Starred element but drops every user flag — it does NOT forward
+    argv, so the accepted splat must be `*argv` and this shim must fail."""
+    _patch_consensus(monkeypatch)
+    shim = (
+        "import sys\n"
+        "from omicsclaw.runtime.consensus.run import main as _run_main\n"
+        'SOURCE = "consensus-domains"\n'
+        "def main(argv=None):\n"
+        "    argv = list(sys.argv[1:] if argv is None else argv)\n"
+        '    return _run_main(["--source", SOURCE, *[]])\n'
+    )
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any("must delegate" in e for e in errors), errors
+
+
+def test_workflow_shim_delegation_in_helper_fails(tmp_path: Path, monkeypatch) -> None:
+    """A valid delegating call in a HELPER does not make `main` delegate — the
+    call must be on the live `main` path."""
+    _patch_consensus(monkeypatch)
+    shim = (
+        "import sys\n"
+        "from omicsclaw.runtime.consensus.run import main as _run_main\n"
+        'SOURCE = "consensus-domains"\n'
+        "def _unused(argv):\n"
+        '    return _run_main(["--source", SOURCE, *argv])\n'
+        "def main(argv=None):\n"
+        "    return 0\n"
+    )
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any("must delegate" in e for e in errors), errors
+
+
+def test_workflow_shim_delegation_under_if_false_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A valid-looking call under `if False:` is unreachable — it must not count
+    as delegation."""
+    _patch_consensus(monkeypatch)
+    shim = (
+        "import sys\n"
+        "from omicsclaw.runtime.consensus.run import main as _run_main\n"
+        'SOURCE = "consensus-domains"\n'
+        "def main(argv=None):\n"
+        "    argv = list(sys.argv[1:] if argv is None else argv)\n"
+        "    if False:\n"
+        '        return _run_main(["--source", SOURCE, *argv])\n'
+        "    return 0\n"
+    )
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any("must delegate" in e for e in errors), errors
+
+
+def test_workflow_shim_delegation_after_return_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A delegating call AFTER an unconditional `return` is dead code — it must
+    not count as delegation (the live `main` path returns first)."""
+    _patch_consensus(monkeypatch)
+    shim = (
+        "import sys\n"
+        "from omicsclaw.runtime.consensus.run import main as _run_main\n"
+        'SOURCE = "consensus-domains"\n'
+        "def main(argv=None):\n"
+        "    argv = list(sys.argv[1:] if argv is None else argv)\n"
+        "    return 0\n"
+        '    return _run_main(["--source", SOURCE, *argv])\n'
+    )
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any("must delegate" in e for e in errors), errors
+
+
+def test_workflow_shim_delegation_after_raise_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A delegating call after an unconditional `raise` is unreachable."""
+    _patch_consensus(monkeypatch)
+    shim = (
+        "import sys\n"
+        "from omicsclaw.runtime.consensus.run import main as _run_main\n"
+        'SOURCE = "consensus-domains"\n'
+        "def main(argv=None):\n"
+        "    argv = list(sys.argv[1:] if argv is None else argv)\n"
+        '    raise RuntimeError("boom")\n'
+        '    return _run_main(["--source", SOURCE, *argv])\n'
+    )
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any("must delegate" in e for e in errors), errors
+
+
+def test_workflow_shim_delegation_after_if_true_return_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`if True: return 0` always returns, so a delegation after it is dead."""
+    _patch_consensus(monkeypatch)
+    shim = (
+        "import sys\n"
+        "from omicsclaw.runtime.consensus.run import main as _run_main\n"
+        'SOURCE = "consensus-domains"\n'
+        "def main(argv=None):\n"
+        "    argv = list(sys.argv[1:] if argv is None else argv)\n"
+        "    if True:\n"
+        "        return 0\n"
+        '    return _run_main(["--source", SOURCE, *argv])\n'
+    )
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any("must delegate" in e for e in errors), errors
+
+
+def test_workflow_shim_conditional_delegation_passes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A REACHABLE conditional delegation (`if cond: return _run_main(...)`) is a
+    valid live path and must still pass — terminal-flow pruning must not over-
+    reject runtime branches."""
+    _patch_consensus(monkeypatch)
+    shim = (
+        "import sys\n"
+        "from omicsclaw.runtime.consensus.run import main as _run_main\n"
+        'SOURCE = "consensus-domains"\n'
+        "def main(argv=None):\n"
+        "    argv = list(sys.argv[1:] if argv is None else argv)\n"
+        "    if argv:\n"
+        '        return _run_main(["--source", SOURCE, *argv])\n'
+        '    return _run_main(["--source", SOURCE, *argv])\n'
+    )
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert errors == [], errors
+
+
+def test_workflow_shim_missing_source_constant_fails(tmp_path: Path, monkeypatch) -> None:
+    _patch_consensus(monkeypatch)
+    shim = (
+        "import sys\n"
+        "from omicsclaw.runtime.consensus.run import main as _run_main\n"
+        "def main(argv=None):\n"
+        '    return _run_main(["--source", "x", *sys.argv[1:]])\n'
+    )
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=shim,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any('must define SOURCE' in e for e in errors), errors
+
+
+def test_workflow_shim_undeclared_flag_fails(tmp_path: Path, monkeypatch) -> None:
+    _patch_consensus(monkeypatch)
+    skill = _write_v2_skill(
+        tmp_path / "wf",
+        sidecar=_workflow_sidecar(allowed_extra_flags=["--members", "--totally-fake"]),
+        script_text=_WORKFLOW_SHIM,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any(
+        "--totally-fake" in e and "consensus run parser" in e for e in errors
+    ), errors
+
+
+def test_workflow_skips_leaf_argparse_match(tmp_path: Path, monkeypatch) -> None:
+    """A workflow shim has no add_argument; the leaf flag-match check would
+    flag every allowed_extra_flag as 'does not declare'.  Workflow skips it."""
+    _patch_consensus(monkeypatch)
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=_WORKFLOW_SHIM,
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert not any("does not declare it via add_argument" in e for e in errors), errors
+
+
+def test_workflow_skips_output_contract_substring(tmp_path: Path, monkeypatch) -> None:
+    """The shim writes no outputs; output_contract paths must not be
+    substring-checked against the shim for workflow skills."""
+    _patch_consensus(monkeypatch)
+    skill = _write_v2_skill(
+        tmp_path / "wf", sidecar=_workflow_sidecar(), script_text=_WORKFLOW_SHIM,
+    )
+    _write_output_contract(
+        skill, "## Output\n- `consensus_labels.tsv`\n- `plan.json`\n"
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert not any("output_contract.md:" in e for e in errors), errors
+
+
+def test_leaf_still_runs_argparse_match(tmp_path: Path) -> None:
+    """Regression guard: a leaf skill (type unset) keeps the leaf argparse
+    flag-match check that workflow skips."""
+    sidecar = {**VALID_SIDECAR, "allowed_extra_flags": ["--method", "--missing"]}
+    skill = _write_v2_skill(
+        tmp_path / "leaf", sidecar=sidecar, script_text=_flag_script("--method"),
+    )
+    errors = skill_lint.lint_skill(skill)
+    assert any("'--missing'" in e and "does not declare" in e for e in errors), errors

@@ -1,8 +1,9 @@
 """Workflow runtime (ADR 0016 L1) — domain-neutral execution topology.
 
-v1 ships exactly one primitive, ``fan_out``, with exactly one client
-(consensus). ``chain`` and a second client (``pipeline_runner`` re-platformed)
-grow together in a later PR — see ``omicsclaw/runtime/CONTEXT.md``.
+v1 ships exactly one primitive, ``fan_out``, with a single client today; a
+``chain`` primitive and a second client (``pipeline_runner`` re-platformed)
+grow together in a later PR — see ``omicsclaw/runtime/CONTEXT.md`` (which names
+the client roster). This package imports no concrete step type of its own.
 """
 
 from __future__ import annotations

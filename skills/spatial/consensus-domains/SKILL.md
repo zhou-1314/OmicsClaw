@@ -1,6 +1,6 @@
 ---
 name: consensus-domains
-description: 'Multi-method consensus over spatial-domains. Fans out 5 methods in parallel, computes a SACCELERATOR-style base-clustering ranking, runs typed consensus (kmode / weighted / LCA), and emits a verified consensus report with the mandatory A-path banner per ADR 0010.'
+description: 'Load when you want a verified multi-method consensus over spatial tissue domains on a preprocessed spatial AnnData — fanning out N domain methods, ranking base clusterings, and emitting a typed consensus with cross-method disagreement. Skip when one method suffices (use spatial-domains) or the data is single-cell (use sc-consensus-clustering).'
 version: 0.1.0
 author: OmicsClaw
 license: Apache-2.0
@@ -48,14 +48,15 @@ wraps it.
 | Output directory | `--output <dir>` | yes |
 | Member list | `--members banksy,graphst,sedr,leiden,spagcn` | no (defaults to LLM-curated 5) |
 | Run ALL eligible methods | `--all` | no (slower; SACCELERATOR-style benchmark mode) |
-| Target cluster count | `--n-clusters 7` | no (defaults to median across members) |
+| Target cluster count | `--n-clusters 7` | no — reserved: accepted but not consumed (pending DEC-5) |
 | Pre-run plan confirmation | `--confirm-plan` | no (default off) |
 | Non-interactive BC picker | `--non-interactive` | no (forces top-K by score) |
 | Score weights | `--alpha 0.6 --beta 0.4` | no (ADR 0011 defaults) |
 | Class-imbalance cap | `--max-class-frac 0.8` | no |
-| LLM judge veto/reweight | `--llm-judge` | no (default deterministic) |
+| LLM judge veto/reweight | `--llm-judge` | no — reserved: accepted but not consumed (pending DEC-5) |
 | Operator | `--operator {kmode,weighted,lca}` | no (default `kmode`) |
 | Seed | `--seed 0` | no |
+| Disable multi-metric intrinsic | `--no-spatial-panel` | no (default: chaos/pas/mlami panel) |
 | Per-member timeout (s) | `--timeout 600` | no |
 | Concurrency cap | `--max-parallel 4` | no |
 
@@ -100,8 +101,16 @@ wraps it.
 - **Banner is non-configurable.** The `[A: Verified consensus]` header
   is enforced by `runtime/consensus/dispatch.output_banner`. Do not
   edit `report.md` to strip it before distribution.
-- **`--n-clusters` defaults to the median across members**, not 7.
-  Override only when you have prior k from histology / known anatomy.
+- **Member intrinsic quality is a multi-metric panel (ADR 0028).** Spatial-domain
+  members are scored on a normalized panel of three unsupervised metrics —
+  `chaos` (1-hop coherence), `pas` (anomaly rate), `mlami` (multi-scale
+  spatial-graph AMI) — combined into one `[0,1]` intrinsic for the β term of the
+  BC composite score. The per-member breakdown is written to
+  `member_intrinsic_panel.csv`. Pass `--no-spatial-panel` to score on the single
+  `mean_local_purity` signal instead.
+- **`--n-clusters` is reserved — accepted but not consumed.** The operator
+  returns however many clusters the math yields (bounded at the max member k);
+  passing `--n-clusters` changes nothing today (disposition pending DEC-5).
 - **LCA requires R + diceR.** When unavailable, the skill prints an
   installation hint and exits non-zero rather than silently switching
   operators. Pass `--operator kmode` to bypass.
@@ -122,15 +131,16 @@ oc run consensus-domains --input preprocessed.h5ad --output out/ \
 # Explicit members + weighted operator
 oc run consensus-domains --input preprocessed.h5ad --output out/ \
   --members banksy,graphst,sedr,leiden,spagcn \
-  --operator weighted --n-clusters 7
+  --operator weighted
 
 # SACCELERATOR-style benchmark (run ALL eligible methods)
 oc run consensus-domains --input preprocessed.h5ad --output out/ --all
 ```
 
-## Pointers
+## See also
 
-- ADR 0010 — runtime layer architecture
-- ADR 0011 — scoring + evaluation protocol
-- `omicsclaw/runtime/consensus/` — runtime module
-- `examples/consensus_benchmark/` — DLPFC 151673 hero benchmark
+- `references/methodology.md` — the consensus scoring + operator rationale
+- `references/output_contract.md` — `consensus_labels.tsv` / `member_scores.csv` / `plan.json` schema
+- `references/parameters.md` — every CLI flag (generated from `parameters.yaml`)
+- Adjacent skills: `spatial-preprocess` (upstream — produces the input), `spatial-domains` (the per-member method this wraps), `consensus-interpret` (downstream — narrates the consensus result), `sc-consensus-clustering` (parallel — the single-cell analogue)
+- ADR 0010/0011/0016 — runtime layer, scoring protocol, workflow-runtime generalisation

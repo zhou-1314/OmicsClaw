@@ -425,7 +425,14 @@ async def _auto_capture_consensus(
             operator = str(plan.get("operator") or operator)
             effective_params = {
                 k: plan[k]
-                for k in ("operator", "members", "alpha", "beta", "max_class_frac")
+                for k in (
+                    "operator", "members", "alpha", "beta",
+                    # ``max_class_fraction_cap`` is the current plan.json key for the
+                    # hard-filter threshold; ``max_class_frac`` kept for older plans.
+                    "max_class_frac", "max_class_fraction_cap",
+                    # Panel family + weights drive panel-based rankings (ADR 0028/0029).
+                    "intrinsic_panel", "panel_weights",
+                )
                 if k in plan
             }
         except Exception:

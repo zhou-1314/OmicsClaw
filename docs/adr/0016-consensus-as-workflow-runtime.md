@@ -25,7 +25,8 @@ live in local variables; only the `TypedConsensusRun` dataclass surfaces.
 This is a near-exact description of the dynamic-workflows pattern — *already
 realized*. The fan-out (`team.run_team`, `team.py:177`) is a generic
 `asyncio.gather` over `ConsensusMember`s with an injectable `runner`, with no
-consensus-specific logic beyond the "≥2 survivors" rule.
+consensus-specific logic beyond the "≥2 survivors" rule (which plan 0025 later
+relocated to L2, leaving the lifted L1 `fan_out` fully domain-neutral).
 
 **Finding 2 — the friction is boilerplate in the thin wrappers, not in how
 consensus is computed.** `consensus_domains.py` (247 lines) and
@@ -87,7 +88,7 @@ preserved unchanged; this ADR only restructures *where orchestration lives* and
 
   | Layer | Owns | Shared by |
   |---|---|---|
-  | **L1 Workflow runtime** (`runtime/workflow/`, new) | execution topology + lifecycle only — `fan_out`, cancellation, timeout, journal/resume, step-result types | any client |
+  | **L1 Workflow runtime** (`runtime/workflow/`, new) | execution topology + lifecycle only — `fan_out`, cancellation, timeout, step-result types (`chain` + journal/resume planned, not yet implemented) | any client |
   | **L2 consensus-shared** (`runtime/consensus/`, exists) | operators (kmode/weighted/lca), composite scoring, BC selection, alignment, `spatial_metrics` | every consensus flavour |
   | **L3 workflow clients** | one declarative contract each | one flavour each |
 

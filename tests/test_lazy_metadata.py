@@ -181,3 +181,35 @@ def test_lazy_metadata_loads_spatial_trajectory_method_specific_flags():
     assert "--dpt-n-dcs" in flags
     assert "--cellrank-frac-to-keep" in flags
     assert "--palantir-knn" in flags
+
+
+# --- ADR 0030: skill `type` + `validation_level` ---------------------------
+
+def test_lazy_metadata_reads_workflow_type():
+    """A consensus shim declares `type: workflow` in its sidecar."""
+    lazy = LazySkillMetadata(Path("skills/spatial/consensus-domains"))
+    assert lazy.type == "workflow"
+
+
+def test_lazy_metadata_defaults_type_leaf_and_validation_smoke_only():
+    """A normal skill with no `type`/`validation_level` falls back to the
+    conservative defaults (leaf / smoke-only)."""
+    lazy = LazySkillMetadata(Path("skills/spatial/spatial-preprocess"))
+    assert lazy.type == "leaf"
+    assert lazy.validation_level == "smoke-only"
+
+
+def test_lazy_metadata_clamps_unknown_type_and_validation_level(tmp_path):
+    """Unknown enum values are clamped to the safe default rather than
+    propagated, so a typo in a sidecar cannot mislabel a skill."""
+    skill = tmp_path / "x"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text(
+        "---\nname: x\ndescription: d\n---\n# x\n", encoding="utf-8"
+    )
+    (skill / "parameters.yaml").write_text(
+        "domain: d\ntype: bogus\nvalidation_level: bogus\n", encoding="utf-8"
+    )
+    lazy = LazySkillMetadata(skill)
+    assert lazy.type == "leaf"
+    assert lazy.validation_level == "smoke-only"

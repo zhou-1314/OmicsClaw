@@ -90,6 +90,12 @@ class ConsensusSource:
     domain: str = ""
     report_title: str = ""
     param_hints_path: Path | None = None
+    #: Which driver-computed intrinsic panel replaces the reader's single
+    #: intrinsic signal: ``"spatial"`` (chaos/pas/mlami, ADR 0028),
+    #: ``"integration"`` (iLISI / within-batch kNN preservation, ADR 0029), or
+    #: ``""`` (none — score on the reader's intrinsic). The driver dispatches on
+    #: this, so adding a panel family is a one-field change, not a domain check.
+    intrinsic_panel: str = ""
 
 
 # --------------------------------------------------------------------------- #

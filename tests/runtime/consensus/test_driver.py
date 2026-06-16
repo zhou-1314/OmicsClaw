@@ -214,6 +214,76 @@ async def test_driver_input_path_overrides_caller_supplied_relative_value(tmp_pa
 
 
 # --------------------------------------------------------------------------- #
+# Intrinsic-panel gating — spatial opt-out must not kill integration scoring   #
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.asyncio
+async def test_integration_panel_runs_even_when_spatial_panel_disabled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Regression (codex review [P2]): ``use_spatial_panel=False``
+    (``--no-spatial-panel``) is the SPATIAL opt-out (chaos/pas/mlami). It must
+    NOT disable the integration batch-mixing panel, which is the only intended
+    scoring axis for ``sc-consensus-integration`` — ``sc-integrate-cluster``
+    emits no reader silhouette to fall back to, so disabling it would silently
+    zero the scoring signal."""
+    import numpy as np
+
+    from omicsclaw.runtime.consensus import driver as driver_mod
+    from omicsclaw.runtime.consensus.driver import ScoreConfig, run_typed_consensus
+    from omicsclaw.runtime.consensus.source_registry import ConsensusSource
+
+    label_arrays = {f"m{i}": ["A"] * 6 + ["B"] * 6 for i in range(3)}
+    reader_fallback = {f"m{i}": 0.10 for i in range(3)}  # reader's single intrinsic
+    members = _members(list(label_arrays.keys()))
+    source = ConsensusSource(
+        reader=_StubReader(label_arrays, reader_fallback),
+        intrinsic_panel="integration",
+    )
+
+    called = {"loader": False}
+
+    def _fake_loader(member_dirs, batch_key, obs_index):
+        called["loader"] = True
+        n = len(obs_index)
+        emb = np.zeros((n, 2))
+        x_pca = np.zeros((n, 2))
+        batch = np.array(["b0", "b1"] * (n // 2 + 1))[:n]
+        return ({col: (emb, x_pca, batch) for col in member_dirs}, 2)
+
+    PANEL_SCORE = 0.99
+
+    def _fake_panel(labels, embedding, batch_labels, x_pca, *, weights, seed):
+        return PANEL_SCORE, {"ilisi_norm": PANEL_SCORE, "knn_preservation_norm": PANEL_SCORE}
+
+    monkeypatch.setattr(driver_mod, "_load_integration_panel_inputs", _fake_loader)
+    monkeypatch.setattr(driver_mod, "intrinsic_integration_panel", _fake_panel)
+
+    out = tmp_path / "out"
+    run = await run_typed_consensus(
+        members=members, source=source, input_path="/dev/null",
+        output_dir=out, operator="kmode",
+        bc_selector=lambda s, k: [x.member for x in s][:2],
+        score_config=ScoreConfig(), seed=0,
+        plan_audit={"run_id": "intg", "operator": "kmode"},
+        use_spatial_panel=False,  # the spatial opt-out — must NOT disable integration
+        runner=_stub_runner,
+    )
+
+    # Gate entered despite use_spatial_panel=False.
+    assert called["loader"], "integration panel must run even with --no-spatial-panel"
+    # Members scored by the panel (0.99), not the reader fallback (0.10).
+    assert run.intrinsic_map and all(
+        v == pytest.approx(PANEL_SCORE) for v in run.intrinsic_map.values()
+    )
+    # Panel artifact written + audit records the integration panel as active.
+    assert (out / "member_intrinsic_panel.csv").exists()
+    plan = json.loads((out / "plan.json").read_text())
+    assert plan["intrinsic_panel"] == "integration"
+    assert plan["panel_weights"], "audit must record the effective integration panel weights"
+
+
+# --------------------------------------------------------------------------- #
 # Error paths                                                                 #
 # --------------------------------------------------------------------------- #
 
@@ -239,6 +309,40 @@ async def test_driver_raises_insufficient_survivors_when_under_2(tmp_path: Path)
             bc_selector=lambda s, k: [], score_config=ScoreConfig(),
             seed=0, runner=crashy,
         )
+
+
+@pytest.mark.asyncio
+async def test_driver_survivor_error_preserves_member_failure_details(tmp_path: Path) -> None:
+    """A sub-threshold run must surface per-member crash details, not a bare count.
+
+    Regression guard: the driver passes ``required_survivors`` to ``fan_out`` so
+    the fatal error carries each failed member's status/error. Relying only on
+    the readable-label gate would report ``Missing artifacts: []`` when every
+    member crashed, dropping the actionable diagnostics.
+    """
+    from omicsclaw.runtime.consensus.driver import ScoreConfig, run_typed_consensus
+    from omicsclaw.runtime.consensus.team import InsufficientSurvivorsError
+
+    members = _members(["m0", "m1", "m2"])
+    source = _make_source({m.name: ["A"] for m in members}, {m.name: 0.5 for m in members})
+
+    def crashy(**kwargs):
+        out = Path(kwargs["output_dir"])
+        out.mkdir(parents=True, exist_ok=True)
+        if out.name in ("m0", "m1"):
+            raise RuntimeError("synthetic boom")
+        return _StubResult(exit_code=0)
+
+    with pytest.raises(InsufficientSurvivorsError) as exc:
+        await run_typed_consensus(
+            members=members, source=source, input_path="/dev/null",
+            output_dir=tmp_path, operator="kmode",
+            bc_selector=lambda s, k: [], score_config=ScoreConfig(),
+            seed=0, runner=crashy,
+        )
+    msg = str(exc.value)
+    assert "synthetic boom" in msg, msg
+    assert "m0" in msg and "m1" in msg, msg
 
 
 @pytest.mark.asyncio
@@ -316,3 +420,53 @@ async def test_format_typed_report_starts_with_banner(tmp_path: Path) -> None:
     assert "Smoke test" in md
     assert "## Base clusterings" in md
     assert "## Cross-method NMI" in md
+
+
+@pytest.mark.asyncio
+async def test_report_and_artifacts_carry_explainability(tmp_path: Path) -> None:
+    import json
+
+    from omicsclaw.runtime.consensus.driver import ScoreConfig, run_typed_consensus
+    from omicsclaw.runtime.consensus.report import format_typed_report
+
+    label_arrays = {f"m{i}": ["A"] * 6 + ["B"] * 6 for i in range(3)}
+    intrinsic = {f"m{i}": 0.5 for i in range(3)}
+    members = _members(list(label_arrays.keys()))
+    source = _make_source(label_arrays, intrinsic)
+
+    run = await run_typed_consensus(
+        members=members, source=source, input_path="/dev/null",
+        output_dir=tmp_path, operator="kmode",
+        bc_selector=lambda s, k: [x.member for x in s][:2],
+        score_config=ScoreConfig(), seed=0,
+        plan_audit={"run_id": "x", "operator": "kmode"}, runner=_stub_runner,
+    )
+
+    # member_scores.csv gains selected + selection_reason (explainability).
+    ms = pd.read_csv(tmp_path / "member_scores.csv")
+    assert {"selected", "selection_reason"} <= set(ms.columns)
+    assert ms["selected"].sum() == 2
+    assert set(ms.loc[ms["selected"], "selection_reason"]) == {"passed"}
+    assert "below_top_k" in set(ms.loc[~ms["selected"], "selection_reason"])
+
+    # consensus_labels.tsv gains support / entropy / n_members.
+    cl = pd.read_csv(tmp_path / "consensus_labels.tsv", sep="\t")
+    assert {"observation", "support", "entropy", "n_members"} <= set(cl.columns)
+    assert ((cl["support"] >= 0) & (cl["support"] <= 1)).all()
+    assert (cl["n_members"] == 2).all()  # the 2 selected members entered consensus
+
+    # plan.json records the thresholds (never hidden).
+    plan = json.loads((tmp_path / "plan.json").read_text())
+    assert plan["max_class_fraction_cap"] == 0.8
+    assert plan["top_k"] == 4 and plan["alpha"] == 0.6 and plan["beta"] == 0.4
+
+    # report carries the explainability sections + the fixed disclaimer/caveat.
+    md = format_typed_report(run, title="Explain")
+    for section in (
+        "## Failed members", "## Consensus confidence",
+        "## Scoring parameters & thresholds", "## Interpretation notes",
+    ):
+        assert section in md, section
+    assert "not as experimental ground truth" in md
+    assert "biological correctness" in md
+    assert "| selected | reason |" in md

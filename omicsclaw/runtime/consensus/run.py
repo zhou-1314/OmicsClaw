@@ -53,12 +53,27 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--alpha", type=float, default=ALPHA_DEFAULT)
     parser.add_argument("--beta", type=float, default=BETA_DEFAULT)
     parser.add_argument("--max-class-frac", type=float, default=MAX_CLASS_FRAC_CAP_DEFAULT)
-    # Accepted for CLI back-compat with the v1 wrappers but not yet consumed
-    # (reserved: --n-clusters target override, --llm-judge chair veto/reweight).
-    parser.add_argument("--n-clusters", type=int, default=None)
-    parser.add_argument("--llm-judge", action="store_true")
+    # Accepted for CLI back-compat with the v1 wrappers but NOT consumed: these
+    # two flags are reserved (the driver never reads them). --n-clusters would
+    # force a target cluster count; --llm-judge would enable a chair-LLM
+    # veto/reweight. Their final disposition is still open.
+    parser.add_argument(
+        "--n-clusters", type=int, default=None,
+        help="Reserved: accepted but not consumed (would override the target cluster count).",
+    )
+    parser.add_argument(
+        "--llm-judge", action="store_true",
+        help="Reserved: accepted but not consumed (would enable a chair-LLM veto/reweight).",
+    )
     parser.add_argument("--operator", choices=["kmode", "weighted", "lca"], default="kmode")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--no-spatial-panel", action="store_false", dest="spatial_panel",
+        help="Disable the multi-metric spatial intrinsic panel (chaos/pas/mlami) "
+             "and score with the reader's single intrinsic signal instead. "
+             "Spatial sources only — integration sources always score with their "
+             "batch-mixing panel (this flag is a no-op for them).",
+    )
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--max-parallel", type=int, default=None)
     parser.add_argument("--top-k", type=int, default=4)
@@ -68,6 +83,26 @@ def _build_parser() -> argparse.ArgumentParser:
     # SweepPlanner (sc-consensus-clustering)
     parser.add_argument("--resolutions", default="0.5,0.8,1.0,1.4,2.0")
     parser.add_argument("--cluster-methods", default="leiden")
+    # IntegrationRepSweepPlanner (sc-consensus-integration)
+    parser.add_argument(
+        "--integration-methods", default=None,
+        help="Comma list of integration backends (none,harmony,scanorama,scvi); "
+             "default none,harmony,scanorama (+scvi with --include-scvi).",
+    )
+    parser.add_argument(
+        "--resolution", default=None,
+        help="Fixed clustering resolution for sc-consensus-integration members.",
+    )
+    parser.add_argument(
+        "--batch-key", default="batch",
+        help="obs batch column (sc-consensus-integration: members integrate + the "
+             "intrinsic panel scores batch mixing against this key).",
+    )
+    parser.add_argument(
+        "--include-scvi", action="store_true",
+        help="Add the GPU/stochastic scVI member to the default integration set "
+             "(serialise GPU members with --max-parallel 1).",
+    )
     return parser
 
 
@@ -134,13 +169,13 @@ async def _run(args: argparse.Namespace) -> int:
         )
         return 4
 
+    # Scoring thresholds (alpha/beta/max_class_fraction_cap/top_k) are written to
+    # plan.json authoritatively by the driver from the ScoreConfig it actually
+    # used — don't duplicate them here (avoids divergent keys in plan.json).
     plan_audit = {
         "run_id": args.run_id or output_dir.name,
         "operator": args.operator,
         "members": [{"name": m.name, "params": dict(m.params)} for m in members],
-        "alpha": args.alpha,
-        "beta": args.beta,
-        "max_class_frac": args.max_class_frac,
     }
 
     try:
@@ -157,6 +192,8 @@ async def _run(args: argparse.Namespace) -> int:
             plan_audit=plan_audit,
             timeout_seconds=args.timeout,
             max_parallel=args.max_parallel,
+            use_spatial_panel=args.spatial_panel,
+            batch_key=args.batch_key,
         )
     except InsufficientSurvivorsError as exc:
         print(f"[{args.source}] FATAL: {exc}", file=sys.stderr)

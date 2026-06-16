@@ -36,6 +36,7 @@ token.json
 
 # OmicsClaw outputs (large, generated)
 output/
+outputs/
 sessions/
 
 # Superpowers (local/internal agent workflow notes)
@@ -162,6 +163,11 @@ e2e_test
 
 # Claude Code local state (settings, scheduled task locks)
 .claude/
+
+# Humanize RLCR loop — transient codex skill-call scratch (input/output/metadata
+# per invocation); the loop's durable artifacts (bitlesson, goal-tracker, round
+# summaries) stay trackable.
+.humanize/skill/
 
 # Eval suite per-run artifacts (every UTC-timestamped run dir)
 tests/eval/results/*/

@@ -1,4 +1,10 @@
 domain: spatial
+script: consensus_interpret.py
+type: leaf
+legacy_aliases: []
+saves_h5ad: false
+requires_preprocessed: false
+param_hints: {}
 trigger_keywords:
 - consensus interpret
 - interpret consensus
@@ -12,8 +18,6 @@ trigger_keywords:
 - consensus biology
 
 allowed_extra_flags:
-- --input            # typed_run_dir (must contain plan.json)
-- --output           # interpreted output dir
 - --tissue           # brain | immune | kidney | liver (selects bundled DB)
 - --adata            # override plan.json input_path
 - --markers          # user-provided marker DB (TSV)

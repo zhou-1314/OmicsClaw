@@ -9,8 +9,18 @@ flavour name so ``run_skill`` and the CLI can invoke it. See
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
-from omicsclaw.runtime.consensus.run import main as _run_main
+# Bootstrap sys.path so `omicsclaw` resolves on direct invocation
+# (`python sc_consensus_clustering.py --help`) without an editable install.
+_HERE = Path(__file__).resolve()
+for _candidate in _HERE.parents:
+    if (_candidate / "omicsclaw" / "__init__.py").exists():
+        if str(_candidate) not in sys.path:
+            sys.path.insert(0, str(_candidate))
+        break
+
+from omicsclaw.runtime.consensus.run import main as _run_main  # noqa: E402
 
 SOURCE = "sc-consensus-clustering"
 

@@ -1,14 +1,16 @@
 {
   "version": "1.0.0",
   "generated_by": "scripts/generate_catalog.py",
-  "skill_count": 92,
+  "skill_count": 94,
   "skills": [
     {
       "name": "bulkrna-batch-correction",
       "cli_alias": "bulkrna-batch-correction",
+      "type": "leaf",
       "description": "Load when removing batch effects from a multi-cohort bulk RNA-seq dataset using ComBat (R or Python implementation). Skip if there is only one batch, or for single-cell batch integration (use sc-batch-integration), or for spatial multi-slice integration (use spatial-integrate).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -20,14 +22,23 @@
         "harmonization",
         "batch-effect"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "batch correction",
+        "ComBat",
+        "batch effect",
+        "harmonize",
+        "multi-cohort",
+        "batch removal"
+      ]
     },
     {
       "name": "bulkrna-coexpression",
       "cli_alias": "bulkrna-coexpression",
+      "type": "leaf",
       "description": "Load when discovering gene co-expression modules and hub genes in a bulk RNA-seq cohort via WGCNA-style soft-thresholded networks. Skip for direct DE comparison (use bulkrna-de) or PPI lookup of an existing gene list (use bulkrna-ppi-network); single-cell co-expression uses sc-grn instead.",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -40,14 +51,23 @@
         "modules",
         "hub-genes"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "coexpression",
+        "WGCNA",
+        "gene network",
+        "co-expression modules",
+        "hub genes",
+        "gene modules"
+      ]
     },
     {
       "name": "bulkrna-de",
       "cli_alias": "bulkrna-de",
+      "type": "leaf",
       "description": "Load when comparing gene expression between two conditions in bulk RNA-seq count data. Skip when the data is single-cell (use sc-de) or spatial (use spatial-de), or when you need exon-level alternative splicing (use bulkrna-splicing).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -60,14 +80,24 @@
         "MA-plot",
         "fold-change"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "differential expression",
+        "DE analysis",
+        "DESeq2",
+        "volcano plot",
+        "fold change",
+        "DEGs",
+        "bulk DE"
+      ]
     },
     {
       "name": "bulkrna-deconvolution",
       "cli_alias": "bulkrna-deconvolution",
+      "type": "leaf",
       "description": "Load when estimating cell-type proportions in bulk RNA-seq samples from a single-cell or signature-matrix reference. Skip if the data is already single-cell (no deconvolution needed) or for spatial deconvolution (use spatial-deconv).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -78,14 +108,23 @@
         "NNLS",
         "cell-type-proportion"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "bulk deconvolution",
+        "cell type proportion",
+        "NNLS",
+        "CIBERSORTx",
+        "bulk deconv",
+        "cell fraction"
+      ]
     },
     {
       "name": "bulkrna-enrichment",
       "cli_alias": "bulkrna-enrichment",
+      "type": "leaf",
       "description": "Load when running pathway / GO term enrichment on a bulk RNA-seq DE result list. Skip if the input is single-cell (use sc-enrichment), spatial (use spatial-enrichment), or for metabolite pathways (use metabolomics-pathway-enrichment).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -100,14 +139,24 @@
         "Reactome",
         "pathway"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "bulk enrichment",
+        "pathway analysis",
+        "GSEA",
+        "ORA",
+        "GO enrichment",
+        "KEGG",
+        "bulk pathway"
+      ]
     },
     {
       "name": "bulkrna-geneid-mapping",
       "cli_alias": "bulkrna-geneid-mapping",
+      "type": "leaf",
       "description": "Load when converting gene identifiers between Ensembl, Entrez, and HGNC symbol in a bulk RNA-seq count matrix. Skip if the input is already in the desired identifier system, for organisms outside human/mouse, or for non-bulk-counts inputs.",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -121,14 +170,24 @@
         "HGNC",
         "annotation"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "gene ID",
+        "Ensembl",
+        "Entrez",
+        "gene symbol",
+        "ID mapping",
+        "gene annotation",
+        "convert IDs"
+      ]
     },
     {
       "name": "bulkrna-ppi-network",
       "cli_alias": "bulkrna-ppi-network",
+      "type": "leaf",
       "description": "Load when querying STRING for the protein-protein interaction subgraph induced by a bulk RNA-seq DEG list and finding hub genes. Skip for pathway enrichment of the same list (use bulkrna-enrichment) or for de novo co-expression network discovery (use bulkrna-coexpression).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -141,14 +200,23 @@
         "hub-genes",
         "protein-interaction"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "PPI",
+        "protein interaction",
+        "STRING",
+        "network",
+        "hub gene",
+        "interactome"
+      ]
     },
     {
       "name": "bulkrna-qc",
       "cli_alias": "bulkrna-qc",
+      "type": "leaf",
       "description": "Load when checking a bulk RNA-seq count matrix for library-size outliers, gene detection rates, and sample-sample correlation before DE. Skip if data is raw FASTQ (use bulkrna-read-qc) or aligner logs (use bulkrna-read-alignment), or for single-cell counts (use sc-qc).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -162,14 +230,24 @@
         "sample-correlation",
         "CPM"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "bulk QC",
+        "library size",
+        "count matrix",
+        "sample quality",
+        "gene detection",
+        "RNA-seq quality",
+        "count QC"
+      ]
     },
     {
       "name": "bulkrna-read-alignment",
       "cli_alias": "bulkrna-read-alignment",
+      "type": "leaf",
       "description": "Load when summarising STAR / HISAT2 / Salmon alignment-rate logs in bulk RNA-seq. Skip if data is raw FASTQ (use bulkrna-read-qc) or already counted (use bulkrna-qc), or for genome-DNA alignment (use genomics-alignment).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -183,14 +261,24 @@
         "mapping-rate",
         "strandedness"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "RNA-seq alignment",
+        "STAR",
+        "HISAT2",
+        "Salmon",
+        "mapping rate",
+        "read alignment",
+        "alignment QC"
+      ]
     },
     {
       "name": "bulkrna-read-qc",
       "cli_alias": "bulkrna-read-qc",
+      "type": "leaf",
       "description": "Load when checking raw FASTQ quality (Phred / GC / adapter / Q20-Q30) before alignment in bulk RNA-seq. Skip if reads are already aligned (use bulkrna-read-alignment) or counted (use bulkrna-qc), or for single-cell FASTQ (use sc-fastq-qc).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -204,14 +292,25 @@
         "adapter",
         "read-quality"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "FASTQ QC",
+        "read quality",
+        "Phred",
+        "FastQC",
+        "adapter",
+        "GC content",
+        "Q20",
+        "Q30"
+      ]
     },
     {
       "name": "bulkrna-splicing",
       "cli_alias": "bulkrna-splicing",
+      "type": "leaf",
       "description": "Load when summarising rMATS / SUPPA2 alternative-splicing output and identifying significant differential splicing events. Skip if you only have count-level DE (use bulkrna-de) or for splicing in single-cell or spatial data (currently unsupported).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -224,14 +323,24 @@
         "rMATS",
         "SUPPA2"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "alternative splicing",
+        "splicing analysis",
+        "PSI",
+        "rMATS",
+        "SUPPA2",
+        "exon skipping",
+        "differential splicing"
+      ]
     },
     {
       "name": "bulkrna-survival",
       "cli_alias": "bulkrna-survival",
+      "type": "leaf",
       "description": "Load when stratifying patients by gene expression and testing for survival differences (Kaplan-Meier + Cox) in bulk RNA-seq. Skip if no time-to-event clinical data exists, or for non-bulk cohorts (single-cell / spatial survival is not supported).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -244,14 +353,24 @@
         "hazard-ratio",
         "clinical"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "survival",
+        "Kaplan-Meier",
+        "Cox",
+        "prognosis",
+        "hazard ratio",
+        "overall survival",
+        "clinical outcome"
+      ]
     },
     {
       "name": "bulkrna-trajblend",
       "cli_alias": "bulkrna-trajblend",
+      "type": "leaf",
       "description": "Load when placing bulk RNA-seq samples on a single-cell reference's pseudotime axis (NNLS deconvolution + nearest-neighbour mapping). Skip for plain cell-type proportions (use bulkrna-deconvolution alone) or for native single-cell trajectory inference (use sc-pseudotime).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -263,14 +382,24 @@
         "deconvolution",
         "single-cell"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "trajblend",
+        "trajectory",
+        "bulk to single cell",
+        "interpolation",
+        "bulk2single",
+        "VAE",
+        "deconvolution trajectory"
+      ]
     },
     {
       "name": "genomics-alignment",
       "cli_alias": "genomics-alignment",
+      "type": "leaf",
       "description": "Load when computing alignment QC metrics (mapping rate, MAPQ distribution, insert size, duplicate rate, proper-pair rate) from a SAM or BAM file produced by any short-/long-read aligner (BWA / Bowtie2 / Minimap2). Skip when running the alignment step itself or when only FASTQ-level QC is needed (use `genomics-qc`).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -284,14 +413,22 @@
         "bowtie2",
         "minimap2"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "alignment",
+        "BWA",
+        "Bowtie2",
+        "Minimap2",
+        "map reads"
+      ]
     },
     {
       "name": "genomics-assembly",
       "cli_alias": "genomics-assembly",
+      "type": "leaf",
       "description": "Load when computing genome-assembly QC metrics \u2014 N50/N90, L50/L90, total length, contig count, GC content, longest-contig \u2014 from a FASTA produced by any assembler (SPAdes / Megahit / Flye / Canu). Skip when running the assembly itself or when assessing alignment quality (use `genomics-alignment`).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -306,14 +443,23 @@
         "spades",
         "flye"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "genome assembly",
+        "de novo",
+        "SPAdes",
+        "Megahit",
+        "Flye",
+        "Canu"
+      ]
     },
     {
       "name": "genomics-cnv-calling",
       "cli_alias": "genomics-cnv-calling",
+      "type": "leaf",
       "description": "Load when calling CNV segments via CBS-style segmentation on a bin-level log2-ratio CSV from exome / WGS coverage \u2014 emits per-segment 5-class CN state (`amplification` / `gain` / `neutral` / `loss` / `deep_deletion`), per-chromosome summary, genome-fraction-altered. Skip when working with single-cell / spatial CNV (use `spatial-cnv`).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -327,14 +473,22 @@
         "cnvkit",
         "gatk-gcnv"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "CNV",
+        "copy number",
+        "amplification",
+        "deletion",
+        "CNVkit"
+      ]
     },
     {
       "name": "genomics-epigenomics",
       "cli_alias": "genomics-epigenomics",
+      "type": "leaf",
       "description": "Load when summarising a peak file (BED / narrowPeak) from ATAC-seq / ChIP-seq / CUT&Tag \u2014 peak count, width distribution, per-chromosome counts, score statistics. Skip when calling peaks from BAM (run MACS / Genrich externally first) or when working with single-cell ATAC (use `scatac-preprocessing`).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -349,14 +503,24 @@
         "macs",
         "bed"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "epigenomics",
+        "ATAC-seq",
+        "ChIP-seq",
+        "peak calling",
+        "MACS",
+        "motif",
+        "chromatin"
+      ]
     },
     {
       "name": "genomics-phasing",
       "cli_alias": "genomics-phasing",
+      "type": "leaf",
       "description": "Load when summarising a phased VCF (output of WhatsHap / SHAPEIT5 / Eagle2) \u2014 phased fraction of het variants, phase-block N50, PS-field parsing, pipe-delimited genotype detection. Skip when the input is unphased (run a phaser first) or when calling small variants (use `genomics-variant-calling`).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -370,14 +534,22 @@
         "eagle",
         "ps"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "haplotype phasing",
+        "WhatsHap",
+        "SHAPEIT",
+        "Eagle",
+        "phasing"
+      ]
     },
     {
       "name": "genomics-qc",
       "cli_alias": "genomics-qc",
+      "type": "leaf",
       "description": "Load when running pre-alignment FASTQ quality control \u2014 Phred quality scores, Q20/Q30 rates, GC / N content, read-length distribution, adapter-contamination detection. Skip when working with already-aligned BAMs (use `genomics-alignment`) or when peak / variant files are the input (use the relevant downstream skill).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -390,14 +562,22 @@
         "adapter",
         "fastqc"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "sequencing QC",
+        "FastQC",
+        "read quality",
+        "adapter trimming",
+        "fastp"
+      ]
     },
     {
       "name": "genomics-sv-detection",
       "cli_alias": "genomics-sv-detection",
+      "type": "leaf",
       "description": "Load when summarising structural variants from an SV VCF (DEL / DUP / INV / TRA) \u2014 BND-notation parsing, size classification, per-type counts. Skip when working with small SNVs / indels (use `genomics-variant-calling`) or calling SVs from BAM (run Manta / Delly / Sniffles first).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -411,14 +591,23 @@
         "sniffles",
         "bnd"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "structural variant",
+        "SV",
+        "Manta",
+        "Delly",
+        "Lumpy",
+        "Sniffles"
+      ]
     },
     {
       "name": "genomics-variant-annotation",
       "cli_alias": "genomics-variant-annotation",
+      "type": "leaf",
       "description": "Load when summarising functional impact of an annotated variant CSV \u2014 per-IMPACT counts (HIGH / MODERATE / LOW / MODIFIER), top consequences, gene-affected count. Skip when input is a raw VCF (convert with `bcftools +split-vep` first), when calling raw variants (use `genomics-variant-calling`), or filtering VCFs (use `genomics-vcf-operations`).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -432,14 +621,22 @@
         "consequence",
         "impact"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "variant annotation",
+        "VEP",
+        "snpEff",
+        "ANNOVAR",
+        "functional effect"
+      ]
     },
     {
       "name": "genomics-variant-calling",
       "cli_alias": "genomics-variant-calling",
+      "type": "leaf",
       "description": "Load when summarising small variants (SNVs / indels) from a VCF or computing demo-pattern variant statistics (Ti/Tv ratio, per-chromosome distribution, SNP / indel split). Skip when filtering / merging VCFs (use `genomics-vcf-operations`), when calling structural variants (use `genomics-sv-detection`), or when adding functional annotations (use `genomics-variant-annotation`).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -452,14 +649,25 @@
         "vcf",
         "ti-tv"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "variant calling",
+        "SNV",
+        "indel",
+        "GATK",
+        "DeepVariant",
+        "FreeBayes",
+        "Mutect2",
+        "VQSR"
+      ]
     },
     {
       "name": "genomics-vcf-operations",
       "cli_alias": "genomics-vcf-operations",
+      "type": "leaf",
       "description": "Load when summarising / filtering a VCF \u2014 variant classification (SNP / MNP / INS / DEL / COMPLEX), Ti/Tv ratio, QUAL / DP threshold filtering, INFO-field parsing. Skip when the input is a BAM (use `genomics-variant-calling` upstream first) or when adding functional annotations (use `genomics-variant-annotation`).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -473,14 +681,21 @@
         "snv",
         "indel"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "VCF",
+        "bcftools",
+        "variant filter",
+        "merge VCF"
+      ]
     },
     {
       "name": "literature",
       "cli_alias": "literature",
+      "type": "leaf",
       "description": "Load when extracting GEO accessions, dataset metadata, and downloadable references from a scientific paper (PDF / URL / DOI / PubMed ID / raw text) for downstream omics analysis. Skip when the dataset is already in hand or when only routing a query (use `orchestrator`).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -493,14 +708,24 @@
         "geo",
         "metadata"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "parse paper",
+        "literature",
+        "GEO accession",
+        "download dataset",
+        "PDF extract",
+        "PubMed",
+        "DOI"
+      ]
     },
     {
       "name": "metabolomics-annotation",
       "cli_alias": "metabolomics-annotation",
+      "type": "leaf",
       "description": "Load when annotating LC-MS features against a built-in 15-metabolite HMDB demo dictionary by m/z within a `--ppm` tolerance \u2014 emits a per-feature annotation table. Skip when needing real HMDB / KEGG / LipidMaps / METLIN look-up (this skill is demo-only) or for raw spectra (use `metabolomics-xcms-preprocessing` first).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -512,14 +737,23 @@
         "demo",
         "mz-match"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "metabolite annotation",
+        "SIRIUS",
+        "GNPS",
+        "MetFrag",
+        "spectral matching",
+        "metabolite ID"
+      ]
     },
     {
       "name": "metabolomics-de",
       "cli_alias": "metabolomics-de",
+      "type": "leaf",
       "description": "Load when running two-group metabolomics DE (t-test + log2FC + BH-FDR + PCA) on a feature \u00d7 sample CSV using `--group-a-prefix` / `--group-b-prefix` (default `ctrl` / `treat`). Skip when needing tunable test backends (use `metabolomics-statistics` for Wilcoxon / ANOVA / Kruskal) or for raw spectra.",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -532,14 +766,22 @@
         "bh-fdr",
         "biomarker"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "metabolomics differential",
+        "PLS-DA",
+        "volcano plot",
+        "biomarker",
+        "OPLS-DA"
+      ]
     },
     {
       "name": "metabolomics-normalization",
       "cli_alias": "metabolomics-normalization",
+      "type": "leaf",
       "description": "Load when normalising a feature \u00d7 sample metabolomics CSV via median, quantile, total (sum), PQN (probabilistic quotient), or log methods \u2014 emits a normalised wide-form table. Skip when also imputing (use `metabolomics-quantification`) or for raw spectra (run `metabolomics-xcms-preprocessing` first).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -552,14 +794,21 @@
         "median",
         "log"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "metabolomics normalization",
+        "scaling",
+        "NOREVA",
+        "TIC normalization"
+      ]
     },
     {
       "name": "metabolomics-pathway-enrichment",
       "cli_alias": "metabolomics-pathway-enrichment",
+      "type": "leaf",
       "description": "Load when running over-representation analysis (ORA) on a metabolite list via Fisher's exact test against a built-in 9-pathway DEMO dictionary, BH-FDR adjusted. Skip when needing real KEGG / Reactome (this skill is demo-only) or `mummichog` / `fella` topology methods (CLI accepts them but only ORA runs).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -572,14 +821,22 @@
         "fisher",
         "demo"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "metabolomics pathway",
+        "KEGG",
+        "MetaboAnalyst",
+        "enrichment",
+        "mummichog"
+      ]
     },
     {
       "name": "metabolomics-peak-detection",
       "cli_alias": "metabolomics-peak-detection",
+      "type": "leaf",
       "description": "Load when running per-sample peak picking on a feature \u00d7 intensity table via `scipy.signal.find_peaks` \u2014 emits per-(sample, feature) detected peaks with prominence and width. Skip when working with mz / RT raw scans (use `metabolomics-xcms-preprocessing` upstream) or when only normalising / quantifying (use `metabolomics-quantification`).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -591,14 +848,23 @@
         "xcms",
         "mzmine"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "peak detection",
+        "feature detection",
+        "XCMS",
+        "MZmine",
+        "MS-DIAL",
+        "peak picking"
+      ]
     },
     {
       "name": "metabolomics-quantification",
       "cli_alias": "metabolomics-quantification",
+      "type": "leaf",
       "description": "Load when imputing missing values (min / median / KNN) and normalising (TIC / median / log) a feature \u00d7 sample metabolomics CSV. Skip when only normalisation is needed (use `metabolomics-normalization`) or when the input is raw spectra (run `metabolomics-xcms-preprocessing` first).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -611,14 +877,21 @@
         "knn",
         "tic"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "metabolomics quantification",
+        "imputation",
+        "feature quantification",
+        "missing values"
+      ]
     },
     {
       "name": "metabolomics-statistics",
       "cli_alias": "metabolomics-statistics",
+      "type": "leaf",
       "description": "Load when running univariate two-group testing (t-test / Wilcoxon / ANOVA / Kruskal-Wallis) on a feature \u00d7 sample metabolomics CSV with `--group1-prefix` / `--group2-prefix` column matching, BH-FDR adjusted. Skip when working with raw spectra (run `metabolomics-xcms-preprocessing`) or for two-group DE with default `ctrl` / `treat` prefixes (use `metabolomics-de`).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -632,14 +905,21 @@
         "kruskal",
         "bh-fdr"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "metabolomics statistics",
+        "multivariate",
+        "PCA",
+        "clustering"
+      ]
     },
     {
       "name": "metabolomics-xcms-preprocessing",
       "cli_alias": "metabolomics-xcms-preprocessing",
+      "type": "leaf",
       "description": "Load when running an XCMS-style preprocessing summary on LC-MS metabolomics raw / vendor-converted files \u2014 emits a peak table with m/z, retention time, and per-sample intensities. Skip when working with an already-built peak table (use `metabolomics-peak-detection`) or when only annotation is needed (use `metabolomics-annotation`).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -653,14 +933,22 @@
         "gc-ms",
         "centwave"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "xcms",
+        "metabolomics preprocessing",
+        "LC-MS",
+        "peak detection",
+        "RT alignment"
+      ]
     },
     {
       "name": "orchestrator",
       "cli_alias": "orchestrator",
+      "type": "leaf",
       "description": "Load when routing a natural-language omics query to the correct domain skill across spatial / singlecell / genomics / proteomics / metabolomics / bulkrna domains via keyword / LLM / hybrid matching. Skip when the target skill is already known \u2014 invoke that skill directly.",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -672,14 +960,23 @@
         "multi-omics",
         "registry"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "which skill",
+        "route query",
+        "what should I run",
+        "orchestrate",
+        "pipeline",
+        "which analysis"
+      ]
     },
     {
       "name": "omics-skill-builder",
       "cli_alias": "omics-skill-builder",
+      "type": "leaf",
       "description": "Load when scaffolding a NEW OmicsClaw skill from a natural-language request \u2014 generates the skill directory layout (SKILL.md, parameters.yaml, references/, tests/) under the chosen domain. Skip when modifying an existing skill (edit its files directly) or when only routing a query (use `orchestrator`).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -691,14 +988,24 @@
         "meta",
         "code-generation"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "create omicsclaw skill",
+        "add new skill",
+        "scaffold skill",
+        "create reusable workflow",
+        "\u65b0\u589e skill",
+        "\u521b\u5efa skill",
+        "\u5c01\u88c5\u6210 skill"
+      ]
     },
     {
       "name": "proteomics-data-import",
       "cli_alias": "proteomics-data-import",
+      "type": "leaf",
       "description": "Load when ingesting a MaxQuant `proteinGroups.txt`, FragPipe `combined_protein.tsv`, DIA-NN report, or generic CSV / TSV protein-quantification table \u2014 normalises columns to a standard schema, emits `tables/proteins.csv`. Skip when raw spectra are the input (run the search engine first) or when the file is already OmicsClaw schema.",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -711,14 +1018,20 @@
         "diann",
         "spectronaut"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "data import",
+        "convert proteomics",
+        "format conversion"
+      ]
     },
     {
       "name": "proteomics-de",
       "cli_alias": "proteomics-de",
+      "type": "leaf",
       "description": "Load when computing two-group differential protein abundance (group2 vs group1, log2FC + p-value + BH-adjusted FDR) via Welch t-test, equal-variance t-test, or Mann-Whitney on a wide protein \u00d7 sample CSV. Skip when you need multi-condition DE (run pairwise contrasts manually) or label-based TMT linear-mixed models.",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -731,14 +1044,22 @@
         "mann-whitney",
         "bh-fdr"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "differential abundance",
+        "protein expression",
+        "MSstats",
+        "limma",
+        "volcano"
+      ]
     },
     {
       "name": "proteomics-enrichment",
       "cli_alias": "proteomics-enrichment",
+      "type": "leaf",
       "description": "Load when running over-representation analysis (ORA) on a list of proteins via Fisher's exact test against a built-in 8-pathway DEMO dictionary, with BH-FDR correction. Skip when needing a real pathway database (this skill is demo-only \u2014 use `bulkrna-enrichment` for real KEGG / Reactome / MSigDB) or for rank-based GSEA.",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -751,14 +1072,23 @@
         "demo",
         "pathway"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "proteomics enrichment",
+        "pathway analysis",
+        "STRING",
+        "DAVID",
+        "g:Profiler",
+        "GO enrichment"
+      ]
     },
     {
       "name": "proteomics-identification",
       "cli_alias": "proteomics-identification",
+      "type": "leaf",
       "description": "Load when summarising peptide identifications (PSM count, unique peptide count, distinct protein count, score / charge distributions) from a peptide-level CSV produced by MaxQuant / FragPipe / DIA-NN. Skip when raw spectra are the input (run a search engine first) or when working with protein-quantification tables (use `proteomics-ms-qc`).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -771,14 +1101,23 @@
         "maxquant",
         "msgf"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "peptide identification",
+        "database search",
+        "MaxQuant",
+        "MS-GF+",
+        "Comet",
+        "Mascot"
+      ]
     },
     {
       "name": "proteomics-ms-qc",
       "cli_alias": "proteomics-ms-qc",
+      "type": "leaf",
       "description": "Load when computing protein-table QC \u2014 proteins \u00d7 samples count, missing-value rate, intensity CV (median + mean) \u2014 from a MaxQuant / FragPipe / DIA-NN protein-quantification CSV. Skip when raw mzML / RAW spectra are the input (run a search engine first) or when peptide-level QC is needed (use `proteomics-identification`).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -792,14 +1131,21 @@
         "missing-values",
         "cv"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "MS QC",
+        "mass spec QC",
+        "PTXQC",
+        "rawTools"
+      ]
     },
     {
       "name": "proteomics-ptm",
       "cli_alias": "proteomics-ptm",
+      "type": "leaf",
       "description": "Load when summarising PTM sites (phosphorylation, acetylation, ubiquitination, etc.) from a per-site CSV \u2014 site-class assignment (Olsen et al. Class I/II/III by `localization_probability`), per-PTM-type counts, amino-acid distribution, sites-per-protein. Skip when raw spectra are the input or when you only need protein-level abundance (use `proteomics-quantification`).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -812,14 +1158,23 @@
         "ubiquitination",
         "site-localization"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "PTM",
+        "phosphorylation",
+        "acetylation",
+        "ubiquitination",
+        "modification",
+        "motif"
+      ]
     },
     {
       "name": "proteomics-quantification",
       "cli_alias": "proteomics-quantification",
+      "type": "leaf",
       "description": "Load when computing per-protein abundance from a peptide / PSM table via LFQ (intensity summation), iBAQ (intensity / tryptic peptide count), or spectral counting (PSMs per protein). Skip when the input is already protein-level (use `proteomics-ms-qc` for QC) or for label-based TMT / iTRAQ workflows (search upstream first).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -831,14 +1186,23 @@
         "ibaq",
         "spectral-counting"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "protein quantification",
+        "LFQ",
+        "TMT",
+        "DIA",
+        "DIA-NN",
+        "Skyline"
+      ]
     },
     {
       "name": "proteomics-structural",
       "cli_alias": "proteomics-structural",
+      "type": "leaf",
       "description": "Load when summarising cross-linking MS (XL-MS) results \u2014 intra/inter-protein link split, optional FDR filtering, distance-constraint validation against a per-crosslinker (DSS / BS3 / EDC / DSSO / DSBU) max distance. Skip when raw spectra are the input (run XlinkX / pLink / xiSEARCH first) or no XL-MS experiment was performed.",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -854,14 +1218,23 @@
         "dsbu",
         "edc"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "structural proteomics",
+        "cross-linking MS",
+        "XL-MS",
+        "XlinkX",
+        "pLink",
+        "xiSEARCH"
+      ]
     },
     {
       "name": "scatac-preprocessing",
       "cli_alias": "scatac-preprocessing",
+      "type": "leaf",
       "description": "Load when preprocessing a single-cell ATAC peak \u00d7 cell AnnData via Signac-style TF-IDF + LSI + Leiden, producing a clustered UMAP-ready object. Skip when input is fragments or BAM (peak calling not implemented here) or for scRNA preprocessing (use sc-preprocessing).",
       "version": "0.2.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -876,14 +1249,22 @@
         "clustering",
         "leiden"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "scATAC preprocessing",
+        "single-cell ATAC preprocessing",
+        "ATAC TF-IDF LSI",
+        "chromatin accessibility clustering",
+        "scATAC UMAP Leiden"
+      ]
     },
     {
       "name": "sc-ambient-removal",
       "cli_alias": "sc-ambient-removal",
+      "type": "leaf",
       "description": "Load when removing ambient RNA contamination from droplet-based scRNA-seq using a simple subtraction path, CellBender, or SoupX. Skip when the contamination is multiplet barcodes (use sc-doublet-detection) or before counts exist (use sc-count).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -896,14 +1277,22 @@
         "soupx",
         "contamination"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "ambient RNA",
+        "ambient removal",
+        "cellbender",
+        "contamination",
+        "background RNA"
+      ]
     },
     {
       "name": "sc-batch-integration",
       "cli_alias": "sc-batch-integration",
+      "type": "leaf",
       "description": "Load when integrating multi-sample scRNA-seq with Harmony, scVI, scANVI, BBKNN, Scanorama, SIMBA, or supported R-backed methods to remove batch effects. Skip when the data is one sample (no batch effect to integrate) or for upstream merging only (use sc-multi-count).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -919,14 +1308,23 @@
         "scanorama",
         "simba"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "batch integration",
+        "batch effect",
+        "harmony",
+        "scvi",
+        "bbknn",
+        "merge samples"
+      ]
     },
     {
       "name": "sc-cell-annotation",
       "cli_alias": "sc-cell-annotation",
+      "type": "leaf",
       "description": "Load when assigning cell-type labels to a clustered scRNA AnnData via marker dictionaries, CellTypist, PopV, KNNPredict, SingleR, scmap, SCSA, or a manual cluster-to-label map. Skip when ranking marker genes per cluster (use sc-markers) or for condition-vs-control DE (use sc-de).",
       "version": "0.6.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -948,9 +1346,11 @@
     {
       "name": "sc-cell-communication",
       "cli_alias": "sc-cell-communication",
+      "type": "leaf",
       "description": "Load when computing cell-cell ligand-receptor communication on an annotated scRNA AnnData via builtin scorer, LIANA, CellPhoneDB, CellChat (R), or NicheNet (R). Skip when assigning cell-type labels (use sc-cell-annotation) or for transcription factor \u2192 target regulatory networks (use sc-grn).",
       "version": "0.4.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -965,14 +1365,24 @@
         "cellchat",
         "nichenet"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "cell communication",
+        "cell-cell communication",
+        "ligand receptor",
+        "cellchat",
+        "liana",
+        "cellphonedb",
+        "nichenet"
+      ]
     },
     {
       "name": "sc-clustering",
       "cli_alias": "sc-clustering",
+      "type": "leaf",
       "description": "Load when building the neighbour graph, embedding (UMAP/t-SNE/diffmap/PHATE), and clustering (Leiden/Louvain) on a normalised single-cell AnnData. Skip when QC/normalisation/HVG/PCA have not run yet (use sc-preprocessing) or for marker ranking after clustering (use sc-markers).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -992,13 +1402,15 @@
     {
       "name": "sc-consensus-clustering",
       "cli_alias": "sc-consensus-clustering",
-      "description": "Multi-resolution typed consensus over sc-clustering. Fans out leiden / louvain at several resolutions in parallel, scores members by silhouette + cross-method NMI, runs kmode / weighted / LCA consensus on the surviving base clusterings, and emits a verified report carrying the mandatory A-path banner per ADR 0010.",
+      "type": "workflow",
+      "description": "Load when you want resolution-robust single-cell clusters on a preprocessed scRNA AnnData \u2014 fanning out leiden/louvain across a resolution sweep, scoring members by silhouette + cross-method NMI, and voting a typed consensus. Skip when one resolution suffices (use sc-clustering) or for spatial domains (use consensus-domains).",
       "version": "0.1.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
-      "has_demo": true,
-      "demo_command": "python omicsclaw.py run sc-consensus-clustering --demo",
+      "has_demo": false,
+      "demo_command": null,
       "tags": [
         "singlecell",
         "consensus",
@@ -1010,14 +1422,50 @@
         "lca",
         "weighted"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "consensus clustering",
+        "consensus celltype clustering",
+        "multi-resolution clustering",
+        "robust scrna clustering",
+        "resolution sweep consensus",
+        "single cell consensus clustering"
+      ]
+    },
+    {
+      "name": "sc-consensus-integration",
+      "cli_alias": "sc-consensus-integration",
+      "type": "workflow",
+      "description": "Load when you want a multi-sample single-cell (scRNA) clustering robust to the choice of integration method \u2014 fanning out Harmony/Scanorama/scVI + an unintegrated baseline, scoring each by a batch-mixing intrinsic panel, and voting a consensus. Skip when single-batch (use sc-consensus-clustering) or one integration method is fixed.",
+      "version": "0.1.0",
+      "status": "mvp",
+      "validation_level": "smoke-only",
+      "has_script": true,
+      "has_tests": false,
+      "has_demo": false,
+      "demo_command": null,
+      "tags": [
+        "singlecell",
+        "scrna",
+        "consensus",
+        "integration",
+        "batch-correction"
+      ],
+      "trigger_keywords": [
+        "consensus integration",
+        "batch correction consensus",
+        "integration method consensus",
+        "robust scrna integration clustering",
+        "which clusters survive integration"
+      ]
     },
     {
       "name": "sc-count",
       "cli_alias": "sc-count",
+      "type": "leaf",
       "description": "Load when turning scRNA FASTQ (or existing CellRanger/STARsolo/SimpleAF/kb-python output) into a downstream-ready AnnData. Skip when reads are already counted into AnnData (use sc-standardize-input) or for raw quality assessment only (use sc-fastq-qc).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1031,14 +1479,22 @@
         "simpleaf",
         "kb-python"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "Cell Ranger count",
+        "STARsolo count",
+        "fastq to adata",
+        "raw single-cell counting",
+        "generate count matrix"
+      ]
     },
     {
       "name": "sc-cytotrace",
       "cli_alias": "sc-cytotrace",
+      "type": "leaf",
       "description": "Load when computing per-cell differentiation potency / stemness scores from gene-expression complexity on a scRNA AnnData via the CytoTRACE-simple method. Skip when ordering cells along a trajectory (use sc-pseudotime) or for marker-based cell-type labelling (use sc-cell-annotation).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1056,9 +1512,11 @@
     {
       "name": "sc-de",
       "cli_alias": "sc-de",
+      "type": "leaf",
       "description": "Load when finding marker genes per cluster or comparing condition expression in single-cell RNA-seq. Skip if the data is bulk (use bulkrna-de) or spatial (use spatial-de), or for cluster-only markers without conditions (use sc-markers).",
       "version": "0.6.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1070,14 +1528,22 @@
         "wilcoxon",
         "deseq2"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "differential expression",
+        "marker genes",
+        "de analysis",
+        "wilcoxon",
+        "pseudo-bulk"
+      ]
     },
     {
       "name": "sc-differential-abundance",
       "cli_alias": "sc-differential-abundance",
+      "type": "leaf",
       "description": "Load when testing whether cell-type / cluster proportions or neighbourhood densities differ between conditions in a multi-sample scRNA AnnData via Milo, scCODA, simple proportion screen, or R Monte-Carlo permutation. Skip when ranking marker genes (use sc-markers) or for per-cell DE (use sc-de).",
       "version": "0.2.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1096,9 +1562,11 @@
     {
       "name": "sc-doublet-detection",
       "cli_alias": "sc-doublet-detection",
+      "type": "leaf",
       "description": "Load when annotating putative doublets in single-cell RNA-seq using Scrublet, DoubletDetection, DoubletFinder, scDblFinder, or scds. Skip when ambient RNA is the contamination problem (use sc-ambient-removal) or before counts exist (use sc-fastq-qc / sc-count).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1116,9 +1584,11 @@
     {
       "name": "sc-drug-response",
       "cli_alias": "sc-drug-response",
+      "type": "leaf",
       "description": "Load when scoring drug sensitivity per cluster on an annotated scRNA AnnData via simple-correlation against drug-target signatures or via CaDRReS-Sc pretrained models (GDSC / PRISM). Skip when the AnnData has no cluster labels yet (run sc-clustering first) or for predicting genetic-perturbation effects (use sc-in-silico-perturbation).",
       "version": "0.2.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1137,9 +1607,11 @@
     {
       "name": "sc-enrichment",
       "cli_alias": "sc-enrichment",
+      "type": "leaf",
       "description": "Load when running bulk-style pathway enrichment (ORA / GSEA / GSEA-R / GSVA-R) on a per-group ranked DE / marker list against a gene-set library. Skip when computing per-cell pathway scores in-place (use sc-pathway-scoring) or for de-novo gene-program discovery (use sc-gene-programs).",
       "version": "0.4.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1154,14 +1626,24 @@
         "decoupler",
         "pathway-enrichment"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "sc enrichment",
+        "single-cell enrichment",
+        "GO enrichment",
+        "KEGG enrichment",
+        "GSEA",
+        "ORA",
+        "pathway enrichment"
+      ]
     },
     {
       "name": "sc-fastq-qc",
       "cli_alias": "sc-fastq-qc",
+      "type": "leaf",
       "description": "Load when checking raw single-cell FASTQ read quality (Phred / GC / adapter / length) before counting. Skip when reads are already counted (use sc-qc) or for bulk FASTQ (use bulkrna-read-qc).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1173,14 +1655,22 @@
         "qc",
         "read-quality"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "scRNA FASTQ QC",
+        "FastQC single-cell",
+        "MultiQC single-cell",
+        "raw read quality",
+        "read-level QC"
+      ]
     },
     {
       "name": "sc-filter",
       "cli_alias": "sc-filter",
+      "type": "leaf",
       "description": "Load when removing low-quality cells and lowly-detected genes from a single-cell AnnData using QC-derived thresholds or tissue presets. Skip for the full normalize\u2192HVG\u2192PCA\u2192cluster pipeline (use sc-preprocessing) or when reads are still raw FASTQ (use sc-fastq-qc \u2192 sc-count first).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1192,14 +1682,23 @@
         "qc",
         "mitochondrial"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "filter cells",
+        "cell filtering",
+        "gene filtering",
+        "remove low quality",
+        "qc filtering",
+        "tissue-specific thresholds"
+      ]
     },
     {
       "name": "sc-gene-programs",
       "cli_alias": "sc-gene-programs",
+      "type": "leaf",
       "description": "Load when extracting gene programs (NMF / cNMF factorisation) and per-cell program usage scores from a non-negative scRNA AnnData. Skip when ranking marker genes per cluster (use sc-markers) or for inferring TF \u2192 target regulons (use sc-grn).",
       "version": "0.2.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1217,9 +1716,11 @@
     {
       "name": "sc-grn",
       "cli_alias": "sc-grn",
+      "type": "leaf",
       "description": "Load when inferring TF \u2192 target gene regulatory networks on a normalised scRNA AnnData via pySCENIC (GRNBoost2 + cisTarget + AUCell) or correlation-based GRN fallback (when arboreto is unavailable, in --demo, or with --allow-simplified-grn). Skip when computing ligand-receptor cell-cell signalling (use sc-cell-communication) or for predicting genetic-KO effects (use sc-in-silico-perturbation).",
       "version": "0.4.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -1235,14 +1736,24 @@
         "aucell",
         "cistarget"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "grn",
+        "gene regulatory",
+        "scenic",
+        "pyscenic",
+        "regulon",
+        "transcription factor",
+        "grnboost"
+      ]
     },
     {
       "name": "sc-in-silico-perturbation",
       "cli_alias": "sc-in-silico-perturbation",
+      "type": "leaf",
       "description": "Load when predicting in-silico gene knockout effects on a normalised scRNA AnnData via GRN-based propagation (Python) or scTenifoldKnk (R). Skip when you have a real Perturb-seq / CRISPR screen (use sc-perturb / sc-perturb-prep) or for predicting drug sensitivity (use sc-drug-response).",
       "version": "0.2.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1258,11 +1769,34 @@
       "trigger_keywords": []
     },
     {
+      "name": "sc-integrate-cluster",
+      "cli_alias": "sc-integrate-cluster",
+      "type": "leaf",
+      "description": "Load when running a single batch-correction representation (none/Harmony/Scanorama/scVI) + clustering of single-cell data as one self-contained unit \u2014 normally fanned out as a member of sc-consensus-integration. Skip when you want the full integration consensus (use sc-consensus-integration) or resolution-robust clustering (use sc-consensus-clustering).",
+      "version": "0.1.0",
+      "status": "mvp",
+      "validation_level": "smoke-only",
+      "has_script": true,
+      "has_tests": false,
+      "has_demo": true,
+      "demo_command": "python omicsclaw.py run sc-integrate-cluster --demo",
+      "tags": [
+        "singlecell",
+        "scrna",
+        "integration",
+        "clustering",
+        "consensus"
+      ],
+      "trigger_keywords": []
+    },
+    {
       "name": "sc-markers",
       "cli_alias": "sc-markers",
+      "type": "leaf",
       "description": "Load when ranking cluster-level marker genes from a clustered single-cell AnnData via Scanpy Wilcoxon / t-test / logreg or COSG specificity. Skip when comparing condition-vs-control with replicates (use sc-de) or for assigning cell-type labels (use sc-cell-annotation).",
       "version": "0.6.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1281,9 +1815,11 @@
     {
       "name": "sc-metacell",
       "cli_alias": "sc-metacell",
+      "type": "leaf",
       "description": "Load when aggregating single cells into metacells (sample-aware coarse-grained pseudo-cells) on a normalised scRNA AnnData via SEACells or KMeans on a low-D embedding. Skip when ranking marker genes per cluster (use sc-markers) or for trajectory pseudotime ordering (use sc-pseudotime).",
       "version": "0.2.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1301,9 +1837,11 @@
     {
       "name": "sc-multi-count",
       "cli_alias": "sc-multi-count",
+      "type": "leaf",
       "description": "Load when merging multiple single-sample scRNA-seq count matrices (one per sample-from-sc-count) into a single downstream-ready AnnData with sample labels. Skip when input is one already-merged AnnData (use sc-standardize-input) or for FASTQ\u2192counts on each sample (use sc-count first).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1315,14 +1853,22 @@
         "merge",
         "aggregation"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "merge count matrices",
+        "multi-sample count",
+        "aggregate samples",
+        "combine count outputs",
+        "cellranger aggr alternative"
+      ]
     },
     {
       "name": "sc-pathway-scoring",
       "cli_alias": "sc-pathway-scoring",
+      "type": "leaf",
       "description": "Load when computing per-cell pathway / gene-set scores on a normalised scRNA AnnData via AUCell (R or Python) or Scanpy score_genes. Skip when running condition-vs-control bulk-style enrichment on top of a DE table (use sc-enrichment) or for de-novo gene-program discovery (use sc-gene-programs).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1336,14 +1882,23 @@
         "gene-sets",
         "decoupler"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "pathway score",
+        "pathway scoring",
+        "gene set score",
+        "module score",
+        "pathway activity",
+        "signature score"
+      ]
     },
     {
       "name": "sc-perturb",
       "cli_alias": "sc-perturb",
+      "type": "leaf",
       "description": "Load when classifying perturbed vs non-perturbed cells in a Perturb-seq / CRISPR-screen scRNA AnnData via the pertpy Mixscape workflow. Skip when guide labels are not yet attached to the expression object (run sc-perturb-prep first) or for in-silico KO predictions on unperturbed data (use sc-in-silico-perturbation).",
       "version": "0.2.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1362,9 +1917,11 @@
     {
       "name": "sc-perturb-prep",
       "cli_alias": "sc-perturb-prep",
+      "type": "leaf",
       "description": "Load when attaching cell-barcode \u2192 sgRNA assignments from a mapping TSV/CSV onto a Perturb-seq expression AnnData, producing standardised perturbation / sgRNA / target-gene obs columns. Skip when the AnnData already has perturbation labels (go straight to sc-perturb) or for raw guide-calling from FASTQ (use upstream demuxlet / cellranger guide pipelines).",
       "version": "0.2.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1382,9 +1939,11 @@
     {
       "name": "sc-preprocessing",
       "cli_alias": "sc-preprocessing",
+      "type": "leaf",
       "description": "Load when normalising QC'd scRNA into a PCA-ready AnnData via scanpy / Seurat / SCTransform / Pearson residuals. Skip when QC thresholds are still undecided (use sc-qc) or for batch correction across samples (use sc-batch-integration).",
       "version": "0.6.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1401,14 +1960,23 @@
         "sctransform",
         "pearson_residuals"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "single cell preprocess",
+        "scRNA preprocessing",
+        "normalize hvg pca",
+        "base preprocessing",
+        "Seurat preprocessing",
+        "SCTransform preprocessing"
+      ]
     },
     {
       "name": "sc-pseudotime",
       "cli_alias": "sc-pseudotime",
+      "type": "leaf",
       "description": "Load when ordering cells along a developmental trajectory in a normalised scRNA AnnData via DPT, Palantir, VIA, CellRank, Slingshot (R), or Monocle3 (R). Skip when ranking marker genes per cluster (use sc-markers) or for RNA velocity vector fields (use sc-velocity).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1425,14 +1993,26 @@
         "slingshot",
         "monocle3"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "pseudotime",
+        "trajectory",
+        "lineage",
+        "diffusion pseudotime",
+        "palantir",
+        "via",
+        "cellrank",
+        "monocle3",
+        "slingshot"
+      ]
     },
     {
       "name": "sc-qc",
       "cli_alias": "sc-qc",
+      "type": "leaf",
       "description": "Load when computing per-cell QC metrics (n_genes, total counts, mt%, ribo%) on a single-cell AnnData before filtering. Skip when reads are still raw FASTQ (use sc-fastq-qc) or you want to filter cells now (use sc-filter).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1444,14 +2024,25 @@
         "mitochondrial",
         "ribosomal"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "scRNA QC",
+        "single-cell QC",
+        "quality control",
+        "mitochondrial percentage",
+        "ribosomal percentage",
+        "QC violin",
+        "QC scatter",
+        "n genes per cell"
+      ]
     },
     {
       "name": "sc-standardize-input",
       "cli_alias": "sc-standardize-input",
+      "type": "leaf",
       "description": "Load when an external single-cell h5ad/h5/loom/mtx needs to be canonicalised onto the OmicsClaw AnnData contract before downstream scRNA skills run. Skip when data already came from sc-count (already canonical), or for bulk RNA-seq (use bulkrna-qc) or spatial (use spatial-preprocess).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": false,
       "has_demo": true,
@@ -1463,14 +2054,22 @@
         "standardization",
         "anndata"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "standardize AnnData",
+        "fix scRNA input",
+        "canonicalize single-cell input",
+        "prepare AnnData",
+        "input contract"
+      ]
     },
     {
       "name": "sc-velocity",
       "cli_alias": "sc-velocity",
+      "type": "leaf",
       "description": "Load when computing RNA velocity vectors and latent time on a scRNA AnnData with spliced / unspliced layers via scVelo (stochastic / dynamical / steady-state). Skip when input lacks spliced+unspliced layers (run sc-velocity-prep first) or for trajectory pseudotime ordering (use sc-pseudotime).",
       "version": "0.4.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1484,14 +2083,24 @@
         "latent-time",
         "kinetics"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "rna velocity",
+        "velocity",
+        "scvelo",
+        "spliced unspliced",
+        "cellular dynamics",
+        "velovi",
+        "velocity pseudotime"
+      ]
     },
     {
       "name": "sc-velocity-prep",
       "cli_alias": "sc-velocity-prep",
+      "type": "leaf",
       "description": "Load when generating spliced / unspliced layers from Cell Ranger BAM, FASTQ, STARsolo output, or velocyto loom \u2014 the prerequisite for sc-velocity. Skip when AnnData already has spliced+unspliced layers (go straight to sc-velocity) or for any non-velocity preprocessing (use sc-preprocessing).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1505,18 +2114,26 @@
         "spliced-unspliced",
         "kb-python"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "RNA velocity prep",
+        "prepare spliced unspliced layers",
+        "velocyto",
+        "starsolo velocyto",
+        "velocity-ready AnnData"
+      ]
     },
     {
       "name": "consensus-domains",
       "cli_alias": "consensus-domains",
-      "description": "Multi-method consensus over spatial-domains. Fans out 5 methods in parallel, computes a SACCELERATOR-style base-clustering ranking, runs typed consensus (kmode / weighted / LCA), and emits a verified consensus report with the mandatory A-path banner per ADR 0010.",
+      "type": "workflow",
+      "description": "Load when you want a verified multi-method consensus over spatial tissue domains on a preprocessed spatial AnnData \u2014 fanning out N domain methods, ranking base clusterings, and emitting a typed consensus with cross-method disagreement. Skip when one method suffices (use spatial-domains) or the data is single-cell (use sc-consensus-clustering).",
       "version": "0.1.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
-      "has_demo": true,
-      "demo_command": "python omicsclaw.py run consensus-domains --demo",
+      "has_demo": false,
+      "demo_command": null,
       "tags": [
         "spatial",
         "consensus",
@@ -1528,14 +2145,24 @@
         "lca",
         "weighted"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "consensus domains",
+        "consensus tissue regions",
+        "multi-method spatial domains",
+        "robust spatial clustering",
+        "expert in the loop spatial",
+        "bc ranking",
+        "saccelerator-like consensus"
+      ]
     },
     {
       "name": "consensus-interpret",
       "cli_alias": "consensus-interpret",
-      "description": "LLM-grounded biological interpretation of a verified typed consensus run. Reads the typed run dir + the original adata, runs inline per-cluster DE, looks up markers in a bundled tissue-keyed marker DB, and asks the chair LLM to (\u03b3) name each cluster's likely cell type with mandatory marker citations and (\u03b2) recommend top-3 next-step skills with mandatory evidence_refs. Output banner [A+I: Interpreted on verified consensus]. Failure-mode contract per ADR 0012.",
+      "type": "leaf",
+      "description": "Load when biologically interpreting a finished verified consensus run (consensus-domains / sc-consensus-clustering) \u2014 inline DE, marker-DB lookup, and LLM cell-type naming with mandatory marker citations + evidence-bound next-step recommendations. Skip when the consensus run failed (fix it first) or for forward query\u2192skill routing (use orchestrator).",
       "version": "0.1.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1548,14 +2175,27 @@
         "marker-grounded",
         "backward-proof-driven-recommendation"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "consensus interpret",
+        "interpret consensus",
+        "explain consensus",
+        "annotate consensus",
+        "consensus cell type",
+        "name clusters",
+        "biological interpretation",
+        "next step after consensus",
+        "interpreted consensus",
+        "consensus biology"
+      ]
     },
     {
       "name": "spatial-annotate",
       "cli_alias": "spatial-annotate",
+      "type": "leaf",
       "description": "Load when assigning per-spot cell-type labels on a spatial AnnData via marker-gene scoring or scRNA-reference mapping (Tangram / scANVI / CellAssign). Skip when computing spot-level cell-type proportions for multi-cell-per-spot platforms (use spatial-deconv) or for tissue-domain detection (use spatial-domains).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1569,14 +2209,25 @@
         "scanvi",
         "cellassign"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "cell type annotation",
+        "annotate cell types",
+        "Tangram",
+        "scANVI",
+        "CellAssign",
+        "marker genes",
+        "label transfer",
+        "spatial annotation"
+      ]
     },
     {
       "name": "spatial-cnv",
       "cli_alias": "spatial-cnv",
+      "type": "leaf",
       "description": "Load when inferring copy-number variation per spot on a preprocessed spatial AnnData with chromosome-annotated genes via infercnvpy (default \u2014 log-ratio sliding-window) or Numbat (R, allele-aware clone deconvolution). Skip when `var[\"chromosome\"]` / `var[\"start\"]` / `var[\"end\"]` gene-coord metadata is missing or when no normal-reference subset can be defined.",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1589,14 +2240,25 @@
         "numbat",
         "tumor"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "copy number variation",
+        "CNV",
+        "inferCNV",
+        "infercnvpy",
+        "Numbat",
+        "aneuploidy",
+        "chromosomal aberration",
+        "tumor clone"
+      ]
     },
     {
       "name": "spatial-communication",
       "cli_alias": "spatial-communication",
+      "type": "leaf",
       "description": "Load when computing ligand-receptor cell-cell communication on a preprocessed spatial AnnData with `obs[cell_type_key]` (default `leiden`) via LIANA (default), CellPhoneDB, FastCCC, or CellChat (R). Skip when running scRNA-only L-R inference (use `sc-cell-communication`) or when no cell-type labels exist (run `spatial-annotate` or `spatial-domains` first).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1610,14 +2272,25 @@
         "cellchat",
         "fastccc"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "cell communication",
+        "cell-cell communication",
+        "ligand receptor",
+        "ligand-receptor",
+        "LIANA",
+        "CellPhoneDB",
+        "FastCCC",
+        "CellChat"
+      ]
     },
     {
       "name": "spatial-condition",
       "cli_alias": "spatial-condition",
+      "type": "leaf",
       "description": "Load when comparing two or more experimental conditions (treatment vs control) on a multi-sample preprocessed spatial AnnData via PyDESeq2 pseudobulk or Wilcoxon DE \u2014 needs `obs[condition_key]`, `obs[sample_key]`, and cluster labels. Skip when running per-cluster DE on one condition (use `spatial-de`) or comparing two slices without replicates.",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1630,14 +2303,24 @@
         "wilcoxon",
         "differential-expression"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "condition comparison",
+        "pseudobulk",
+        "DESeq2",
+        "PyDESeq2",
+        "treatment vs control",
+        "experimental conditions",
+        "replicate-aware differential expression"
+      ]
     },
     {
       "name": "spatial-de",
       "cli_alias": "spatial-de",
+      "type": "leaf",
       "description": "Load when ranking spatial cluster markers or comparing two spatial groups in spatial transcriptomics. Skip if the data is single-cell (use sc-de) or bulk (use bulkrna-de), or for spatially variable expression discovery (use spatial-genes).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1651,14 +2334,24 @@
         "pydeseq2",
         "pseudobulk"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "differential expression",
+        "marker gene",
+        "pseudobulk",
+        "Wilcoxon",
+        "t-test",
+        "PyDESeq2",
+        "spatial DE"
+      ]
     },
     {
       "name": "spatial-deconv",
       "cli_alias": "spatial-deconv",
+      "type": "leaf",
       "description": "Load when deconvolving spot-level cell-type proportions on a Visium-style spatial AnnData using a labelled scRNA reference (FlashDeconv / Cell2location / RCTD / DestVI / Tangram / others). Skip when each spot is a single cell already (Xenium / MERFISH \u2014 use spatial-annotate) or for tissue-domain detection (use spatial-domains).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1675,14 +2368,28 @@
         "card",
         "flashdeconv"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "cell type deconvolution",
+        "spatial deconvolution",
+        "cell proportion",
+        "cell type proportion",
+        "cell2location",
+        "RCTD",
+        "DestVI",
+        "Stereoscope",
+        "Tangram",
+        "SPOTlight",
+        "CARD"
+      ]
     },
     {
       "name": "spatial-domains",
       "cli_alias": "spatial-domains",
+      "type": "leaf",
       "description": "Load when detecting tissue domains / niches on a preprocessed spatial AnnData via Leiden / Louvain (spatial-weighted) or graph-neural backends (SpaGCN / STAGATE / GraphST / BANKSY / CellCharter). Skip when ranking spatially variable genes (use spatial-genes) or for spot-level cell-type annotation (use spatial-annotate).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1699,14 +2406,26 @@
         "leiden",
         "louvain"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "spatial domain",
+        "tissue region",
+        "niche",
+        "spatial niche",
+        "niche identification",
+        "niche detection",
+        "SpaGCN",
+        "STAGATE",
+        "CellCharter"
+      ]
     },
     {
       "name": "spatial-enrichment",
       "cli_alias": "spatial-enrichment",
+      "type": "leaf",
       "description": "Load when running pathway / gene-set enrichment per cluster on a preprocessed spatial AnnData via Enrichr (over-representation), GSEA (preranked), or ssGSEA (per-cell scores). Skip when ranking spatially variable genes (use `spatial-genes`) or when comparing pathways across conditions (use `spatial-condition` for DE first, then this skill on the ranked output).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1720,14 +2439,25 @@
         "enrichr",
         "gene-set"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "pathway enrichment",
+        "gene set enrichment",
+        "enrichr",
+        "GSEA",
+        "ssGSEA",
+        "GO",
+        "Reactome",
+        "MSigDB"
+      ]
     },
     {
       "name": "spatial-genes",
       "cli_alias": "spatial-genes",
+      "type": "leaf",
       "description": "Load when ranking spatially variable genes (SVGs) on a preprocessed spatial AnnData via Moran's I, SpatialDE, SPARK-X, or FlashS. Skip when detecting tissue domains (use spatial-domains) or for differential expression between groups (use spatial-de).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1741,14 +2471,25 @@
         "sparkx",
         "flashs"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "spatially variable gene",
+        "spatial gene",
+        "SVG",
+        "SpatialDE",
+        "SPARK-X",
+        "spatial pattern",
+        "Moran",
+        "spatial autocorrelation"
+      ]
     },
     {
       "name": "spatial-integrate",
       "cli_alias": "spatial-integrate",
+      "type": "leaf",
       "description": "Load when removing batch effects across multiple spatial samples on a multi-batch spatial AnnData via Harmony, BBKNN, or Scanorama before downstream analysis. Skip when aligning physical slice coordinates (use spatial-register) or for single-batch data (no integration needed \u2014 go straight to spatial-domains).",
       "version": "0.4.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1762,14 +2503,23 @@
         "scanorama",
         "multi-sample"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "multi-sample integration",
+        "batch correction",
+        "Harmony",
+        "BBKNN",
+        "Scanorama",
+        "merge samples"
+      ]
     },
     {
       "name": "spatial-microenvironment-subset",
       "cli_alias": "spatial-microenvironment-subset",
+      "type": "leaf",
       "description": "Load when extracting a niche / microenvironment subset around a center cell-type by spatial radius from a labelled spatial AnnData, producing a smaller AnnData of centers + their within-radius neighbours. Skip when running global tissue-domain detection (use spatial-domains) or for cross-condition comparison (use spatial-condition).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1783,14 +2533,24 @@
         "visium",
         "xenium"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "microenvironment",
+        "neighborhood subset",
+        "spatial radius",
+        "neighboring cells",
+        "nearby cells",
+        "tumor microenvironment",
+        "extract cells within 50 microns"
+      ]
     },
     {
       "name": "spatial-preprocess",
       "cli_alias": "spatial-preprocess",
+      "type": "leaf",
       "description": "Load when running the foundational spatial transcriptomics QC + filtering + normalisation + HVG + PCA + neighbour-graph + Leiden pipeline on a Visium / Xenium / generic spatial AnnData. Skip when raw FASTQs need converting first (use spatial-raw-processing) or for tissue-domain detection on already-preprocessed data (use spatial-domains).",
       "version": "0.6.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1806,14 +2566,28 @@
         "pca",
         "leiden"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "preprocess",
+        "spatial preprocessing",
+        "spatial QC",
+        "normalize",
+        "visium",
+        "xenium",
+        "merfish",
+        "slide-seq",
+        "load spatial data",
+        "leiden",
+        "umap"
+      ]
     },
     {
       "name": "spatial-raw-processing",
       "cli_alias": "spatial-raw-processing",
+      "type": "leaf",
       "description": "Load when converting spatial transcriptomics raw FASTQ pairs through ST-Pipeline into a `raw_counts.h5ad` ready for spatial-preprocess. Skip when input is already a count-matrix AnnData (go straight to spatial-preprocess) or for non-spatial bulk / scRNA FASTQ (use bulkrna-read-qc / sc-fastq-qc).",
       "version": "0.3.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1826,14 +2600,28 @@
         "visium",
         "slideseq"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "spatial raw processing",
+        "raw spatial fastq",
+        "spatial fastq",
+        "st_pipeline",
+        "st pipeline",
+        "barcode coordinates",
+        "ids file",
+        "visium raw fastq",
+        "slide-seq fastq",
+        "slideseq fastq",
+        "upstream spatial processing"
+      ]
     },
     {
       "name": "spatial-register",
       "cli_alias": "spatial-register",
+      "type": "leaf",
       "description": "Load when aligning multiple spatial slices into a common coordinate frame on a multi-slice spatial AnnData via PASTE optimal transport or STalign image-aware registration. Skip when data is single-slice (no registration needed) or for cross-sample integration in the gene-expression space (use spatial-integrate).",
       "version": "0.4.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1846,14 +2634,23 @@
         "stalign",
         "multi-slice"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "spatial registration",
+        "slice alignment",
+        "coordinate alignment",
+        "PASTE",
+        "STalign",
+        "multi-slice"
+      ]
     },
     {
       "name": "spatial-statistics",
       "cli_alias": "spatial-statistics",
+      "type": "leaf",
       "description": "Load when running spatial autocorrelation / hotspot / co-occurrence / neighbourhood-enrichment / Ripley K stats on a clustered spatial AnnData via squidpy. Skip when ranking spatially variable genes (use spatial-genes) or for tissue domain detection (use spatial-domains).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1869,14 +2666,25 @@
         "getis-ord",
         "squidpy"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "spatial statistics",
+        "Moran",
+        "Geary",
+        "Ripley",
+        "co-occurrence",
+        "Getis-Ord",
+        "local Moran",
+        "centrality"
+      ]
     },
     {
       "name": "spatial-trajectory",
       "cli_alias": "spatial-trajectory",
+      "type": "leaf",
       "description": "Load when inferring pseudotime / lineage trajectories on a preprocessed spatial AnnData via DPT (default \u2014 diffusion pseudotime), CellRank (terminal-state + fate-probability), or Palantir (waypoint branch probabilities). Skip when the data has spliced/unspliced layers and you want velocity-driven dynamics (use `spatial-velocity`) or for non-spatial scRNA pseudotime (use `sc-pseudotime`).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1890,14 +2698,25 @@
         "palantir",
         "lineage"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "trajectory",
+        "pseudotime",
+        "diffusion pseudotime",
+        "DPT",
+        "CellRank",
+        "Palantir",
+        "cell fate",
+        "lineage"
+      ]
     },
     {
       "name": "spatial-velocity",
       "cli_alias": "spatial-velocity",
+      "type": "leaf",
       "description": "Load when estimating RNA velocity on a spatial AnnData with `layers[\"spliced\"]` + `layers[\"unspliced\"]` via scVelo (stochastic / deterministic / dynamical) or veloVI (deep generative). Skip when input lacks the spliced/unspliced layers (must be quantified upstream by velocyto / kb-python / STARsolo) or for non-spatial scRNA velocity (use `sc-velocity`).",
       "version": "0.5.0",
       "status": "mvp",
+      "validation_level": "smoke-only",
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
@@ -1910,7 +2729,14 @@
         "velovi",
         "dynamics"
       ],
-      "trigger_keywords": []
+      "trigger_keywords": [
+        "RNA velocity",
+        "cellular dynamics",
+        "scVelo",
+        "VELOVI",
+        "latent time",
+        "spliced unspliced"
+      ]
     }
   ]
 }

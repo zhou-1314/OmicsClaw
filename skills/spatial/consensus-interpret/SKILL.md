@@ -1,6 +1,6 @@
 ---
 name: consensus-interpret
-description: "LLM-grounded biological interpretation of a verified typed consensus run. Reads the typed run dir + the original adata, runs inline per-cluster DE, looks up markers in a bundled tissue-keyed marker DB, and asks the chair LLM to (γ) name each cluster's likely cell type with mandatory marker citations and (β) recommend top-3 next-step skills with mandatory evidence_refs. Output banner [A+I: Interpreted on verified consensus]. Failure-mode contract per ADR 0012."
+description: 'Load when biologically interpreting a finished verified consensus run (consensus-domains / sc-consensus-clustering) — inline DE, marker-DB lookup, and LLM cell-type naming with mandatory marker citations + evidence-bound next-step recommendations. Skip when the consensus run failed (fix it first) or for forward query→skill routing (use orchestrator).'
 version: 0.1.0
 author: OmicsClaw
 license: Apache-2.0
@@ -69,50 +69,10 @@ Skip when:
 | Contradiction regions | `contradiction_regions.csv` | rows where cross_method_nmi indicates disagreement; LLM-narrated in markdown |
 | Audit | `audit.json` | `typed_run_id`, adata checksum, marker DB used, LLM model/seed, `interpreted_namespace`, `evidence_base_namespace` |
 
-### `interpreted_assignments.json` schema
-
-```json
-{
-  "schema_version": "0.1",
-  "typed_run_id": "<plan.json:run_id>",
-  "evidence_base_namespace": "analysis://typed/<run_id>",
-  "interpreted_namespace": "analysis://interpreted/<run_id>",
-  "banner": "[A+I: Interpreted on verified consensus]",
-  "operator": "<from typed plan.json>",
-  "clusters": [
-    {
-      "id": 5,
-      "n_cells": 778,
-      "interpretation_status": "interpreted | low_confidence | failed",
-      "cell_type": "CA1 pyramidal",
-      "confidence": 0.84,
-      "evidence": {
-        "markers": [
-          {"gene": "Pvrl3", "de_rank": 1, "db_source": "panglaodb_brain", "db_celltype": "CA1 pyramidal neuron", "weight": 0.9},
-          {"gene": "Wfs1",  "de_rank": 3, "db_source": "panglaodb_brain", "db_celltype": "CA1 pyramidal neuron", "weight": 0.85}
-        ],
-        "mean_local_purity": 0.617,
-        "member_agreement": [
-          {"member": "leiden_resolution-0.5", "label_overlap": 0.92},
-          {"member": "leiden_resolution-1.0", "label_overlap": 0.78}
-        ]
-      },
-      "narrative_md_anchor": "#cluster-5"
-    }
-  ],
-  "next_steps": [
-    {
-      "skill": "spatial-de",
-      "args_hint": "--groupby consensus_kmode --comparisons cluster_3_vs_5",
-      "priority": 1,
-      "evidence_refs": [
-        "cross_method_nmi.csv:row=leiden_resolution-0.5,col=leiden_resolution-1.5,value=0.597"
-      ],
-      "reason": "Lowest pair-wise NMI in matrix; marker disambiguation between clusters 3 and 5 will resolve whether these are sub-types of CA1 or a transition zone."
-    }
-  ]
-}
-```
+The full `interpreted_assignments.json` schema (per-cluster `evidence.markers[]`
+with `{gene, de_rank, db_source, db_celltype, weight}`, `member_agreement[]`, and
+`next_steps[]` with mandatory `evidence_refs[]`) is in
+`references/output_contract.md`.
 
 ## Flow
 
@@ -162,6 +122,22 @@ Skip when:
    └─ audit.json
 ```
 
+## Gotchas
+
+- **It never refines the consensus.** The LLM names cell types and recommends
+  next steps but is forbidden from touching the statistical merge — the T3
+  invariants reject any attempt (ADR 0012 §11.4). Treat the consensus labels as
+  fixed input.
+- **Marker citations are mandatory.** Every cluster's `evidence.markers[]` and
+  every next-step's `evidence_refs[]` must be non-empty, or the run exits 7
+  (InvariantViolation). Ungrounded LLM output is rejected, not silently kept.
+- **`--no-llm` changes the banner, not just the content.** Structural-only mode
+  emits `[I-noLLM: ...]` and drops all cell-type claims; downstream consumers
+  must branch on the banner, not assume biology is present.
+- **Output lands in a separate namespace.** Interpreted artifacts go to
+  `analysis://interpreted/<run_id>`, never overwriting the verified
+  `analysis://typed/<run_id>` evidence base (the ADR 0010 boundary).
+
 ## Failure modes (per ADR 0012)
 
 | Exit | Name | Meaning |
@@ -175,7 +151,7 @@ Skip when:
 | 7 | InvariantViolation | LLM violated marker-grounding or evidence-ref contract (T3) |
 | 8 | CoverageBelowThreshold | < 50% of clusters interpretable (after T2 degradation) |
 
-## Examples
+## Key CLI
 
 ### Default usage (after a typed run completes)
 
@@ -206,18 +182,10 @@ oc run consensus-interpret --input run1/ --output run1_interp/ \
 # → bypasses --tissue requirement; uses user's custom DB
 ```
 
-## Related skills
+## See also
 
-| Direction | Skill | Relationship |
-|---|---|---|
-| upstream (required) | `consensus-domains` / `sc-consensus-clustering` | produces the typed run this skill interprets |
-| upstream (auto-chained, internal) | none — DE is computed inline with `scanpy.tl.rank_genes_groups`; we do not invoke `spatial-de` as a subprocess (see ADR 0012 rejected alternatives §4) | |
-| sibling (semantically distinct) | `orchestrator` | forward `query → skill`; this skill does backward `result → (skill, evidence)` |
-| downstream (β suggests these) | `spatial-de`, `spatial-deconv`, `spatial-communication`, `spatial-trajectory`, etc. | next-step skills the LLM may recommend; each recommendation MUST cite specific typed-run evidence |
-
-## References
-
-- ADR 0010 — typed-vs-narrative consensus runtime (boundary integrity)
-- ADR 0011 — typed consensus evaluation protocol (composite member score; DLPFC hero)
-- ADR 0012 — this skill's evaluation protocol (4-axis panel + T3 invariants)
-- `docs/CONTEXT.md` "Cross-reference: Consensus runtime" — canonical vocabulary
+- `references/methodology.md` — the γ (naming) + β (recommendation) protocol and grounding rules
+- `references/output_contract.md` — `interpreted_assignments.json` schema + the 5 written artifacts
+- `references/parameters.md` — every CLI flag (generated from `parameters.yaml`)
+- Adjacent skills: `consensus-domains` / `sc-consensus-clustering` (upstream — produce the verified run this interprets), `orchestrator` (sibling — forward `query → skill`; this does backward `result → skill+evidence`), `spatial-de` / `spatial-deconv` / `spatial-communication` (downstream — next-step skills β may recommend, each with mandatory evidence)
+- ADR 0010/0011/0012 — consensus runtime boundary, evaluation protocol, this skill's 4-axis + T3 invariants

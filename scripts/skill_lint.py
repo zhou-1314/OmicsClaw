@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import sys
 from pathlib import Path
@@ -308,6 +309,279 @@ def _check_allowed_extra_flags(skill_dir: Path, sidecar: dict) -> list[str]:
     return errors
 
 
+# --- Type dispatch (ADR 0030) ---------------------------------------------
+#
+# `type` is an optional sidecar field: `leaf` (default) | `workflow` |
+# `knowledge` | `adapter`.  Only `workflow` currently has a distinct profile;
+# everything else (including a missing/unknown `type`) lints as `leaf`, so the
+# 91 existing single-script skills are byte-unchanged.
+
+_SKILL_TYPES = ("leaf", "workflow", "knowledge", "adapter")
+_WORKFLOW_RUN_MODULE = "omicsclaw.runtime.consensus.run"
+
+
+def _skill_type(sidecar: dict) -> str:
+    value = sidecar.get("type") or "leaf"
+    return value if value in _SKILL_TYPES else "leaf"
+
+
+def _const_truthiness(node: ast.AST) -> bool | None:
+    """Truthiness of a constant test (`if False:` / `if 0:` → False), else None."""
+    return bool(node.value) if isinstance(node, ast.Constant) else None
+
+
+def _top_level_main(tree: ast.AST) -> ast.AST | None:
+    """The module-level `def main(...)` / `async def main(...)`, if any."""
+    body = getattr(tree, "body", [])
+    for node in body:
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "main"
+        ):
+            return node
+    return None
+
+
+def _block_terminates(stmts: list[ast.stmt]) -> bool:
+    """True iff executing ``stmts`` always reaches a `return`/`raise` — i.e. any
+    statement that follows this block on the same path is unreachable.
+
+    Handles the constant-branch and both-branches-terminate cases so dead code
+    after `if True: return` / `if/else` (both return) is also recognised.
+    """
+    for stmt in stmts:
+        if isinstance(stmt, (ast.Return, ast.Raise)):
+            return True
+        if isinstance(stmt, ast.If):
+            truth = _const_truthiness(stmt.test)
+            if truth is True:
+                if _block_terminates(stmt.body):
+                    return True
+            elif truth is False:
+                if _block_terminates(stmt.orelse):
+                    return True
+            elif _block_terminates(stmt.body) and _block_terminates(stmt.orelse):
+                return True
+    return False
+
+
+def _reachable_calls(stmts: list[ast.stmt]):
+    """Yield `ast.Call` nodes reachable in a statement list.
+
+    - Prunes the bodies of trivially-constant `if`/`while` branches (so a call
+      under `if False:` does not count).
+    - Does NOT descend into nested function/class definitions (so a call in a
+      helper is off the `main` path).
+    - STOPS scanning a block after an unconditional terminator (`return`/`raise`,
+      or a branch construct that terminates on all live paths), so a call placed
+      after `return 0` is dead code and does not count. The terminator's own
+      expression is still inspected before stopping.
+    """
+    for stmt in stmts:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        if isinstance(stmt, (ast.If, ast.While)):
+            truth = _const_truthiness(stmt.test)
+            if truth is True:
+                yield from _reachable_calls(stmt.body)
+                if _block_terminates(stmt.body):
+                    return
+                continue
+            if truth is False:
+                yield from _reachable_calls(stmt.orelse)
+                if _block_terminates(stmt.orelse):
+                    return
+                continue
+            yield from _reachable_calls(stmt.body)
+            yield from _reachable_calls(stmt.orelse)
+            if _block_terminates(stmt.body) and _block_terminates(stmt.orelse):
+                return
+            continue
+        for child in ast.iter_child_nodes(stmt):
+            if isinstance(child, ast.stmt):
+                yield from _reachable_calls([child])
+            else:
+                for node in ast.walk(child):
+                    if isinstance(node, ast.Call):
+                        yield node
+        if isinstance(stmt, (ast.Return, ast.Raise)):
+            return
+
+
+def _is_run_main_delegation(
+    node: ast.AST, run_main_names: set[str], module_aliases: set[str]
+) -> bool:
+    """True iff ``node`` calls the run-main target with the EXACT live-delegation
+    shape ``main(["--source", SOURCE, *argv])`` — three list elements:
+    ``"--source"``, the name ``SOURCE``, and ``*argv`` (the local argv name).
+
+    Rejects non-forwarding shapes such as ``*[]`` / ``*sys.argv[1:]`` and any
+    extra/short element count, so the lint proves the shim forwards user argv.
+    """
+    if not isinstance(node, ast.Call) or not node.args:
+        return False
+    func = node.func
+    calls_run_main = (
+        isinstance(func, ast.Name) and func.id in run_main_names
+    ) or (
+        isinstance(func, ast.Attribute)
+        and func.attr == "main"
+        and isinstance(func.value, ast.Name)
+        and func.value.id in module_aliases
+    )
+    if not calls_run_main:
+        return False
+    first = node.args[0]
+    if not isinstance(first, ast.List) or len(first.elts) != 3:
+        return False
+    e0, e1, e2 = first.elts
+    return (
+        isinstance(e0, ast.Constant)
+        and e0.value == "--source"
+        and isinstance(e1, ast.Name)
+        and e1.id == "SOURCE"
+        and isinstance(e2, ast.Starred)
+        and isinstance(e2.value, ast.Name)
+        and e2.value.id == "argv"
+    )
+
+
+def _analyse_workflow_shim(tree: ast.AST) -> tuple[set[str], set[str], str | None, bool]:
+    """Structurally inspect a workflow shim's AST (ADR 0030).
+
+    Returns ``(run_main_names, module_aliases, source_value, delegates)``:
+    - ``run_main_names`` — local names bound to
+      ``omicsclaw.runtime.consensus.run.main`` via ``import ... as``.
+    - ``module_aliases`` — local names bound to the run *module* via
+      ``import omicsclaw.runtime.consensus.run as ...``.
+    - ``source_value`` — the string assigned to a module-level ``SOURCE = "..."``.
+    - ``delegates`` — True iff the shim's top-level ``main`` makes a REACHABLE
+      call to the run-main target shaped exactly ``["--source", SOURCE, *argv]``.
+      Calls in helper functions, module-level dead code, or under ``if False:``
+      do NOT count — the shim must forward user argv on its live ``main`` path.
+    """
+    run_main_names: set[str] = set()
+    module_aliases: set[str] = set()
+    source_value: str | None = None
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == _WORKFLOW_RUN_MODULE:
+            for alias in node.names:
+                if alias.name == "main":
+                    run_main_names.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == _WORKFLOW_RUN_MODULE:
+                    module_aliases.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Name)
+                    and target.id == "SOURCE"
+                    and isinstance(node.value, ast.Constant)
+                    and isinstance(node.value.value, str)
+                ):
+                    source_value = node.value.value
+
+    main_fn = _top_level_main(tree)
+    delegates = main_fn is not None and any(
+        _is_run_main_delegation(call, run_main_names, module_aliases)
+        for call in _reachable_calls(main_fn.body)
+    )
+    return run_main_names, module_aliases, source_value, delegates
+
+
+def _consensus_sources() -> set[str] | None:
+    """Keys of ``CONSENSUS_SOURCES`` — None if the runtime can't be imported.
+
+    The lint degrades gracefully in minimal envs: an import failure skips the
+    SOURCE-membership check rather than crashing the whole run.
+    """
+    try:
+        from omicsclaw.runtime.consensus.sources import CONSENSUS_SOURCES
+    except Exception:
+        return None
+    return set(CONSENSUS_SOURCES)
+
+
+def _consensus_parser_flags() -> set[str] | None:
+    """`--flag` set accepted by the generic consensus ``run`` parser, or None."""
+    try:
+        from omicsclaw.runtime.consensus.run import _build_parser
+
+        parser = _build_parser()
+    except Exception:
+        return None
+    return {
+        opt
+        for action in parser._actions
+        for opt in action.option_strings
+        if opt.startswith("--")
+    }
+
+
+def _check_workflow_shim(skill_dir: Path, sidecar: dict) -> list[str]:
+    """Validate a `type: workflow` shim against the consensus runtime (ADR 0016).
+
+    Workflow skills are thin shims whose argparse surface lives in the shared
+    ``runtime/consensus/run`` parser, not in the shim — so the leaf
+    `allowed_extra_flags ↔ add_argument` check is replaced by: the shim
+    delegates to the run entry, defines a `SOURCE` that resolves in
+    ``CONSENSUS_SOURCES``, and only lists flags the generic run parser accepts.
+    """
+    errors: list[str] = []
+    script_name = sidecar.get("script") or ""
+    script_path = skill_dir / script_name if script_name else None
+    if not (script_path and script_path.exists()):
+        return [f"type=workflow: declared script {script_name!r} is missing"]
+    text = script_path.read_text(encoding="utf-8")
+
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as exc:
+        return [f"type=workflow: shim {script_name} is not parseable ({exc})"]
+
+    run_main_names, module_aliases, source, delegates = _analyse_workflow_shim(tree)
+
+    imports_run = bool(run_main_names or module_aliases)
+    if not imports_run:
+        errors.append(
+            f"type=workflow: shim must import {_WORKFLOW_RUN_MODULE}.main "
+            f"(not found in {script_name})"
+        )
+    if source is None:
+        errors.append(
+            f'type=workflow: shim must define SOURCE = "<flavour>" in {script_name}'
+        )
+    # The key structural check: a real CALL to run-main, not just the strings.
+    # Only assert it once the import + SOURCE prerequisites exist, so the error
+    # list names the root cause rather than piling on.
+    if imports_run and source is not None and not delegates:
+        errors.append(
+            "type=workflow: shim's main() must delegate as "
+            f'main(["--source", SOURCE, *argv]) in {script_name} '
+            "(no reachable main()-path call forwarding argv found)"
+        )
+
+    sources = _consensus_sources()
+    if source is not None and sources is not None and source not in sources:
+        errors.append(
+            f"type=workflow: SOURCE {source!r} not in CONSENSUS_SOURCES "
+            f"{sorted(sources)}"
+        )
+
+    parser_flags = _consensus_parser_flags()
+    if parser_flags is not None:
+        allowed = set(sidecar.get("allowed_extra_flags") or [])
+        unknown = allowed - parser_flags - _RUNNER_BLOCKED_FLAGS
+        for flag in sorted(unknown):
+            errors.append(
+                f"type=workflow: allowed_extra_flags lists {flag!r} which the "
+                f"consensus run parser does not accept"
+            )
+    return errors
+
+
 # --- Check: output_contract.md paths exist in the script ------------------
 #
 # `references/output_contract.md` is supposed to describe the files the
@@ -459,14 +733,24 @@ def lint_skill(skill_dir: Path) -> list[str]:
         return [f"parameters.yaml: invalid YAML ({exc})"]
 
     errors: list[str] = []
+    # Type-agnostic checks (apply to every skill type).
     errors.extend(_check_description(frontmatter.get("description", "")))
     errors.extend(_check_body(body))
     errors.extend(_check_frontmatter_keys(frontmatter))
     errors.extend(_check_sidecar(sidecar))
     errors.extend(_check_references(skill_dir, sidecar))
     errors.extend(_check_gotchas_anchors(skill_dir, body, sidecar))
-    errors.extend(_check_allowed_extra_flags(skill_dir, sidecar))
-    errors.extend(_check_output_contract_paths(skill_dir, sidecar))
+
+    # Type-specific profile (ADR 0030).  `workflow` shims delegate their
+    # argparse + outputs to the shared runtime, so the leaf flag-match and
+    # output-contract substring checks would false-fail; validate the shim
+    # wiring instead.  `leaf` (and, for now, `knowledge`/`adapter`) keep the
+    # full leaf contract unchanged.
+    if _skill_type(sidecar) == "workflow":
+        errors.extend(_check_workflow_shim(skill_dir, sidecar))
+    else:
+        errors.extend(_check_allowed_extra_flags(skill_dir, sidecar))
+        errors.extend(_check_output_contract_paths(skill_dir, sidecar))
     return errors
 
 

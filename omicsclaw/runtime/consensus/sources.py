@@ -14,7 +14,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from omicsclaw.runtime.consensus.planners import ChairLLMPlanner, SweepPlanner
+from omicsclaw.runtime.consensus.planners import (
+    ChairLLMPlanner,
+    IntegrationRepSweepPlanner,
+    SweepPlanner,
+)
 from omicsclaw.runtime.consensus.source_registry import (
     ConsensusSource,
     ScClusteringArtifactReader,
@@ -39,6 +43,7 @@ CONSENSUS_SOURCES: dict[str, ConsensusSource] = {
         domain="spatial",
         report_title="Verified consensus — spatial domains",
         param_hints_path=_param_hints("spatial", "spatial-domains"),
+        intrinsic_panel="spatial",
     ),
     "sc-consensus-clustering": ConsensusSource(
         reader=ScClusteringArtifactReader(),
@@ -49,6 +54,17 @@ CONSENSUS_SOURCES: dict[str, ConsensusSource] = {
         domain="singlecell",
         report_title="Verified consensus — sc clustering",
         param_hints_path=_param_hints("singlecell", "scrna", "sc-clustering"),
+    ),
+    "sc-consensus-integration": ConsensusSource(
+        reader=ScClusteringArtifactReader(),
+        name="sc-consensus-integration",
+        template="categorical",
+        member_skill="sc-integrate-cluster",
+        planner=IntegrationRepSweepPlanner(),
+        domain="singlecell",
+        report_title="Verified consensus — sc integration",
+        param_hints_path=_param_hints("singlecell", "scrna", "sc-integrate-cluster"),
+        intrinsic_panel="integration",
     ),
 }
 

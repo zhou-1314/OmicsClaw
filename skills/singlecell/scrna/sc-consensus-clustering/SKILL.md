@@ -1,6 +1,6 @@
 ---
 name: sc-consensus-clustering
-description: 'Multi-resolution typed consensus over sc-clustering. Fans out leiden / louvain at several resolutions in parallel, scores members by silhouette + cross-method NMI, runs kmode / weighted / LCA consensus on the surviving base clusterings, and emits a verified report carrying the mandatory A-path banner per ADR 0010.'
+description: 'Load when you want resolution-robust single-cell clusters on a preprocessed scRNA AnnData — fanning out leiden/louvain across a resolution sweep, scoring members by silhouette + cross-method NMI, and voting a typed consensus. Skip when one resolution suffices (use sc-clustering) or for spatial domains (use consensus-domains).'
 version: 0.1.0
 author: OmicsClaw
 license: Apache-2.0
@@ -105,8 +105,10 @@ oc run sc-consensus-clustering --input preprocessed.h5ad --output out/ \
   --members leiden:resolution=0.5,leiden:resolution=1.0,louvain:resolution=1.0
 ```
 
-## Pointers
+## See also
 
-- ADR 0010 — runtime architecture
-- ADR 0011 — scoring + evaluation
-- `skills/spatial/consensus-domains/` — sibling spatial-side skill
+- `references/methodology.md` — the resolution-sweep consensus rationale
+- `references/output_contract.md` — `consensus_labels.tsv` / `member_scores.csv` / `plan.json` schema
+- `references/parameters.md` — every CLI flag (generated from `parameters.yaml`)
+- Adjacent skills: `sc-preprocessing` (upstream — produces the input), `sc-clustering` (the per-member method this wraps), `consensus-domains` (parallel — the spatial analogue), `sc-consensus-integration` (parallel — consensus over integration backends)
+- ADR 0010/0011/0016 — runtime layer, scoring protocol, workflow-runtime generalisation

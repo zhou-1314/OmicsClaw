@@ -79,7 +79,13 @@ def build_skill_argv(
     """
     cmd: list[str] = [python_executable, str(script_path)]
     if demo:
-        cmd.extend(skill_info.get("demo_args", ["--demo"]))
+        demo_args = skill_info.get("demo_args", ["--demo"])
+        if not demo_args:
+            # The skill declares no demo support (e.g. a workflow shim that
+            # forwards to a parser without `--demo`). Refuse rather than build a
+            # command that aborts in argparse; the caller renders a clear error.
+            return None
+        cmd.extend(demo_args)
     elif input_paths:
         for path in input_paths:
             cmd.extend(["--input", str(path)])

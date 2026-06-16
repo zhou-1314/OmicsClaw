@@ -4,13 +4,17 @@
 > Do not edit by hand — changes will be overwritten.
 
 **Domain key:** `spatial`  
-**Skill count:** 17  
+**Skill count:** 19  
 **Primary data types:** h5ad, h5, zarr, loom  
 
 Spatial transcriptomics for Visium/Xenium/MERFISH/Slide-seq: QC, domain detection, SVG, deconvolution, cell communication, trajectories, CNV.
 
 ## Skills
 
+- `consensus-domains` — Load when you want a verified multi-method consensus over spatial tissue domains on a preprocessed spatial AnnData — fanning out N domain methods, ranking base clusterings, and emitting a typed consensus with cross-method disagreement. Skip when one method suffices (use spatial-domains) or the data is single-cell (use sc-consensus-clustering).
+  triggers: consensus domains, consensus tissue regions, multi-method spatial domains, robust spatial clustering, expert in the loop spatial, bc ranking, saccelerator-like consensus
+- `consensus-interpret` — Load when biologically interpreting a finished verified consensus run (consensus-domains / sc-consensus-clustering) — inline DE, marker-DB lookup, and LLM cell-type naming with mandatory marker citations + evidence-bound next-step recommendations. Skip when the consensus run failed (fix it first) or for forward query→skill routing (use orchestrator).
+  triggers: consensus interpret, interpret consensus, explain consensus, annotate consensus, consensus cell type, name clusters, biological interpretation, next step after consensus
 - `spatial-annotate` — Load when assigning per-spot cell-type labels on a spatial AnnData via marker-gene scoring or scRNA-reference mapping (Tangram / scANVI / CellAssign). Skip when computing spot-level cell-type proportions for multi-cell-per-spot platforms (use spatial-deconv) or for tissue-domain detection (use spatial-domains).
   triggers: cell type annotation, annotate cell types, Tangram, scANVI, CellAssign, marker genes, label transfer, spatial annotation
 - `spatial-cnv` — Load when inferring copy-number variation per spot on a preprocessed spatial AnnData with chromosome-annotated genes via infercnvpy (default — log-ratio sliding-window) or Numbat (R, allele-aware clone deconvolution). Skip when `var["chromosome"]` / `var["start"]` / `var["end"]` gene-coord metadata is missing or when no normal-reference subset can be defined.
@@ -24,7 +28,7 @@ Spatial transcriptomics for Visium/Xenium/MERFISH/Slide-seq: QC, domain detectio
 - `spatial-deconv` — Load when deconvolving spot-level cell-type proportions on a Visium-style spatial AnnData using a labelled scRNA reference (FlashDeconv / Cell2location / RCTD / DestVI / Tangram / others). Skip when each spot is a single cell already (Xenium / MERFISH — use spatial-annotate) or for tissue-domain detection (use spatial-domains).
   triggers: cell type deconvolution, spatial deconvolution, cell proportion, cell type proportion, cell2location, RCTD, DestVI, Stereoscope
 - `spatial-domains` — Load when detecting tissue domains / niches on a preprocessed spatial AnnData via Leiden / Louvain (spatial-weighted) or graph-neural backends (SpaGCN / STAGATE / GraphST / BANKSY / CellCharter). Skip when ranking spatially variable genes (use spatial-genes) or for spot-level cell-type annotation (use spatial-annotate).
-  triggers: spatial domain, tissue region, niche, SpaGCN, STAGATE, CellCharter
+  triggers: spatial domain, tissue region, niche, spatial niche, niche identification, niche detection, SpaGCN, STAGATE
 - `spatial-enrichment` — Load when running pathway / gene-set enrichment per cluster on a preprocessed spatial AnnData via Enrichr (over-representation), GSEA (preranked), or ssGSEA (per-cell scores). Skip when ranking spatially variable genes (use `spatial-genes`) or when comparing pathways across conditions (use `spatial-condition` for DE first, then this skill on the ranked output).
   triggers: pathway enrichment, gene set enrichment, enrichr, GSEA, ssGSEA, GO, Reactome, MSigDB
 - `spatial-genes` — Load when ranking spatially variable genes (SVGs) on a preprocessed spatial AnnData via Moran's I, SpatialDE, SPARK-X, or FlashS. Skip when detecting tissue domains (use spatial-domains) or for differential expression between groups (use spatial-de).

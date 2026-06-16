@@ -139,7 +139,9 @@ def get_installed_tiers() -> dict[str, bool]:
         "spatial-integration": importlib.util.find_spec("harmonypy") is not None or importlib.util.find_spec("bbknn") is not None,
         "spatial-registration": importlib.util.find_spec("paste") is not None,
         "r-bridge": _check_r_available(),
-        "banksy": is_env_available("omicsclaw_banksy"),  # Layer-4 sub-env check
+        # In-process (BANKSY_py, numpy>=2) OR the legacy omicsclaw_banksy sub-env.
+        "banksy": importlib.util.find_spec("banksy") is not None
+        or is_env_available("omicsclaw_banksy"),
     }
     return tiers_status
 

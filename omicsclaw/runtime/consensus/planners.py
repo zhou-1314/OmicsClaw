@@ -23,6 +23,11 @@ from omicsclaw.runtime.consensus.source_registry import ConsensusSource
 DEFAULT_RESOLUTIONS = "0.5,0.8,1.0,1.4,2.0"
 DEFAULT_METHODS = "leiden"
 
+#: Default integration backends fanned out by ``sc-consensus-integration``.
+#: ``none`` is the unintegrated ``X_pca`` baseline; the rest are cheap CPU
+#: methods. scVI is opt-in (``--include-scvi``) because it is GPU/stochastic.
+DEFAULT_INTEGRATION_METHODS = ("none", "harmony", "scanorama")
+
 
 def _explicit_members(
     spec: str,
@@ -140,3 +145,66 @@ class SweepPlanner:
             methods = [m.strip() for m in args.cluster_methods.split(",") if m.strip()]
             resolutions = [float(r) for r in args.resolutions.split(",")]
         return _members_from_sweep(source.member_skill, methods, resolutions)
+
+
+class IntegrationRepSweepPlanner:
+    """sc-consensus-integration planning: one member per integration backend.
+
+    The member axis is the **batch-correction representation** (mirroring how
+    ``ChairLLMPlanner`` fans out genuinely different spatial-domain algorithms),
+    at a single **fixed** resolution so member cluster counts stay comparable
+    for the categorical operator (the k-divergence guard, ADR 0029). Each member
+    runs ``sc-integrate-cluster --method <m>`` and is named by the method
+    (``none`` → ``unintegrated``).
+
+    Method selection: ``--integration-methods`` (or ``--members``) as a comma
+    list, else :data:`DEFAULT_INTEGRATION_METHODS` (+ ``scvi`` when
+    ``--include-scvi``).
+    """
+
+    def propose(self, args: Any, *, source: ConsensusSource) -> list[ConsensusMember]:
+        spec = args.members or getattr(args, "integration_methods", None)
+        if spec:
+            methods = [m.strip() for m in spec.split(",") if m.strip()]
+            # Integration members are plain method names: resolution is FIXED for
+            # every member (member-count comparability / k-divergence guard,
+            # ADR 0029), so per-member ``method:param=...`` specs are
+            # contradictory. Reject them early with a clear message rather than
+            # forwarding an invalid ``--method`` that fails during fan-out.
+            parameterized = [m for m in methods if ":" in m]
+            if parameterized:
+                raise SystemExit(
+                    "integration consensus members are plain method names "
+                    "(none/harmony/scanorama/scvi); per-member params are not "
+                    "supported (resolution is fixed via --resolution). Got: "
+                    f"{', '.join(parameterized)}"
+                )
+        else:
+            methods = list(DEFAULT_INTEGRATION_METHODS)
+            # ``--all`` selects every available backend (the default set + the
+            # GPU/stochastic ``scvi`` member); ``--include-scvi`` adds only scvi.
+            if getattr(args, "all", False) or getattr(args, "include_scvi", False):
+                methods.append("scvi")
+
+        resolution = str(getattr(args, "resolution", None) or 1.0)
+        batch_key = getattr(args, "batch_key", None) or "batch"
+        out: list[ConsensusMember] = []
+        seen: set[str] = set()
+        for method in methods:
+            name = "unintegrated" if method == "none" else method
+            if name in seen:
+                raise SystemExit(f"duplicate integration method '{method}' in member spec")
+            seen.add(name)
+            out.append(
+                ConsensusMember(
+                    name=name,
+                    skill_name=source.member_skill,
+                    params={
+                        "cluster-method": "leiden",
+                        "method": method,
+                        "resolution": resolution,
+                        "batch-key": batch_key,
+                    },
+                )
+            )
+        return out

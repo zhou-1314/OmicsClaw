@@ -70,6 +70,40 @@ def test_run_entry_consensus_domains(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert "spatial domains" in (out / "report.md").read_text()
 
 
+def test_reserved_flags_are_accepted_but_not_consumed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--n-clusters`` / ``--llm-judge`` parse and run, but change no output.
+
+    They are documented as reserved (accepted, not consumed) across run.py help,
+    ADR 0010, and the shim parameters.yaml. This pins that contract: passing them
+    must neither be rejected nor alter the consensus labels. If a future change
+    wires either flag into the driver, this comparison fails — a signal to update
+    the docs to match.
+    """
+    monkeypatch.setattr("omicsclaw.skill.runner.run_skill", _spatial_stub(_LABELS))
+    common = [
+        "--source", "consensus-domains",
+        "--input", str(tmp_path / "fake.h5ad"),
+        "--members", "banksy,graphst,leiden",
+        "--non-interactive", "--operator", "kmode", "--seed", "0",
+    ]
+
+    out_base = tmp_path / "base"
+    assert run_mod.main(common + ["--output", str(out_base)]) == 0
+
+    out_flags = tmp_path / "flagged"
+    rc_flags = run_mod.main(
+        common + ["--output", str(out_flags), "--n-clusters", "7", "--llm-judge"]
+    )
+    assert rc_flags == 0  # reserved flags are accepted, not rejected
+
+    # Reserved => not consumed: the consensus labels are byte-identical.
+    assert (out_flags / "consensus_labels.tsv").read_text() == (
+        out_base / "consensus_labels.tsv"
+    ).read_text()
+
+
 def test_run_entry_unknown_source_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(SystemExit):
         run_mod.main(["--source", "nope", "--output", "/tmp/x"])

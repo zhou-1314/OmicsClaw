@@ -10,11 +10,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from omicsclaw.runtime.consensus.planners import ChairLLMPlanner, SweepPlanner
+from omicsclaw.runtime.consensus.planners import (
+    ChairLLMPlanner,
+    IntegrationRepSweepPlanner,
+    SweepPlanner,
+)
 from omicsclaw.runtime.consensus.sources import CONSENSUS_SOURCES
 
 DOMAINS = CONSENSUS_SOURCES["consensus-domains"]
 SC = CONSENSUS_SOURCES["sc-consensus-clustering"]
+INTEGRATION = CONSENSUS_SOURCES["sc-consensus-integration"]
 
 
 def _args(**kw) -> SimpleNamespace:
@@ -24,6 +29,11 @@ def _args(**kw) -> SimpleNamespace:
         query="",
         cluster_methods="leiden",
         resolutions="0.5,0.8,1.0,1.4,2.0",
+        # IntegrationRepSweepPlanner args
+        integration_methods=None,
+        resolution=None,
+        batch_key="batch",
+        include_scvi=False,
     )
     base.update(kw)
     return SimpleNamespace(**base)
@@ -31,8 +41,10 @@ def _args(**kw) -> SimpleNamespace:
 
 # --------------------------- registry shape -------------------------------- #
 
-def test_registry_has_two_flavours_keyed_by_name() -> None:
-    assert set(CONSENSUS_SOURCES) == {"consensus-domains", "sc-consensus-clustering"}
+def test_registry_has_flavours_keyed_by_name() -> None:
+    assert set(CONSENSUS_SOURCES) == {
+        "consensus-domains", "sc-consensus-clustering", "sc-consensus-integration",
+    }
     assert DOMAINS.member_skill == "spatial-domains"
     assert SC.member_skill == "sc-clustering"
     assert isinstance(DOMAINS.planner, ChairLLMPlanner)
@@ -114,3 +126,62 @@ def test_chair_default_offline_returns_members() -> None:
     assert len(members) >= 1
     assert len(members) <= 5
     assert all(m.skill_name == "spatial-domains" for m in members)
+
+
+# ---------------------- IntegrationRepSweepPlanner ------------------------- #
+
+def test_integration_default_members() -> None:
+    members = IntegrationRepSweepPlanner().propose(_args(), source=INTEGRATION)
+    assert [m.name for m in members] == ["unintegrated", "harmony", "scanorama"]
+    assert all(m.skill_name == "sc-integrate-cluster" for m in members)
+    # Each member carries the integration method + a FIXED shared resolution.
+    assert members[0].params == {
+        "cluster-method": "leiden", "method": "none", "resolution": "1.0", "batch-key": "batch",
+    }
+    assert {m.params["resolution"] for m in members} == {"1.0"}  # comparable k
+
+
+def test_integration_include_scvi_appends_member() -> None:
+    members = IntegrationRepSweepPlanner().propose(_args(include_scvi=True), source=INTEGRATION)
+    assert [m.name for m in members] == ["unintegrated", "harmony", "scanorama", "scvi"]
+
+
+def test_integration_all_selects_every_backend() -> None:
+    """`--all` must actually fan out all available backends (default + scvi),
+    not silently behave like the default run."""
+    members = IntegrationRepSweepPlanner().propose(_args(all=True), source=INTEGRATION)
+    assert [m.name for m in members] == ["unintegrated", "harmony", "scanorama", "scvi"]
+
+
+def test_integration_explicit_methods_and_resolution() -> None:
+    members = IntegrationRepSweepPlanner().propose(
+        _args(integration_methods="harmony,scanorama", resolution="0.8", batch_key="donor"),
+        source=INTEGRATION,
+    )
+    assert [m.name for m in members] == ["harmony", "scanorama"]
+    assert all(m.params["resolution"] == "0.8" for m in members)
+    assert all(m.params["batch-key"] == "donor" for m in members)
+
+
+def test_integration_rejects_duplicate_method() -> None:
+    with pytest.raises(SystemExit):
+        IntegrationRepSweepPlanner().propose(
+            _args(integration_methods="harmony,harmony"), source=INTEGRATION
+        )
+
+
+def test_integration_rejects_parameterized_member_spec() -> None:
+    """Integration fixes resolution for all members (ADR 0029), so a per-member
+    ``method:param=...`` spec is rejected early — it must NOT be forwarded as an
+    invalid ``--method harmony:resolution=0.8`` that fails during fan-out."""
+    with pytest.raises(SystemExit) as exc:
+        IntegrationRepSweepPlanner().propose(
+            _args(members="harmony:resolution=0.8,scanorama:resolution=0.8"),
+            source=INTEGRATION,
+        )
+    assert "per-member params are not supported" in str(exc.value)
+    # plain method names still work.
+    members = IntegrationRepSweepPlanner().propose(
+        _args(members="harmony,scanorama,none"), source=INTEGRATION
+    )
+    assert [m.name for m in members] == ["harmony", "scanorama", "unintegrated"]

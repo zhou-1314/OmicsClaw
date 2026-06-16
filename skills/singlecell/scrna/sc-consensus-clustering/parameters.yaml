@@ -1,16 +1,18 @@
 domain: singlecell
+type: workflow  # thin shim over omicsclaw.runtime.consensus.run (ADR 0016/0030)
+legacy_aliases: []
 allowed_extra_flags:
 - --members
 - --resolutions
 - --cluster-methods
 - --all
-- --n-clusters
+- --n-clusters  # reserved: accepted but not consumed (disposition pending)
 - --confirm-plan
 - --non-interactive
 - --alpha
 - --beta
 - --max-class-frac
-- --llm-judge
+- --llm-judge  # reserved: accepted but not consumed (disposition pending)
 - --operator
 - --seed
 - --timeout

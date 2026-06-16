@@ -92,7 +92,7 @@
 
 | | | | |
 |---|---|---|---|
-| 🧠 **记忆**<br/>会话、偏好、血缘 | 🔒 **本地优先**<br/>原始数据留在你的运行时 | 🧰 **89 个技能**<br/>自动生成目录 + demo | 🧭 **智能路由**<br/>自然语言映射到工具 |
+| 🧠 **记忆**<br/>会话、偏好、血缘 | 🔒 **本地优先**<br/>原始数据留在你的运行时 | 🧰 **94 个分析技能**<br/>自动生成目录 + demo | 🧭 **智能路由**<br/>自然语言映射到工具 |
 | 💬 **CLI Surface**<br/>`oc interactive`、`oc tui` | 🌐 **Desktop Surface**<br/>给桌面/Web 前端用的 FastAPI | 📨 **Channel Surface**<br/>9 个 IM 适配器（Telegram、飞书 …） | 📡 **远程模式**<br/>SSH 隧道到 Linux 服务器 |
 | 🤝 **共识**<br/>多方法合并 | 🤖 **自主路径**<br/>Router + 参数辅助 | 🔌 **任意 LLM**<br/>OpenAI 兼容 provider | 📊 **可复现**<br/>图 + 数据 + 报告 |
 
@@ -127,7 +127,7 @@ flowchart TD
     LOOP["🔁 Agent loop<br/>规划 → 工具调用 → 结果 → 循环<br/>pathology 守护 · 审批门控"]
 
     subgraph Capabilities["🧰 能力层"]
-        SKILLS["🧪 技能运行器<br/>89 个技能 · 8 个领域"]
+        SKILLS["🧪 技能运行器<br/>94 个技能 · 8 个领域"]
         MEMORY["🧠 图记忆<br/>会话 · 数据集 · 血缘"]
         PROV["🔌 Providers<br/>任意 OpenAI 兼容 LLM"]
         REMOTE["📡 远程<br/>SSH 到 Linux 服务器"]
@@ -200,12 +200,12 @@ oc interactive
 
 ## 🧬 领域
 
-`oc list` 与 `skills/catalog.json` 当前一致维护 **89 个已注册技能**，分布在 **8 个领域**。
+`oc list` 与 `skills/catalog.json` 是全部 94 个技能的机器可读注册表，分布在 **8 个领域**。
 
 | 领域 | 技能数 | 示例技能 | 文档 |
 |---|---|---|---|
-| 🧫 空间转录组 | 17 | QC、domain、注释、解卷积、CNV、轨迹 | [spatial](docs/domains/spatial.mdx) |
-| 🔬 单细胞组学 | 30 | QC、聚类、注释、doublet、velocity、GRN | [singlecell](docs/domains/singlecell.mdx) |
+| 🧫 空间转录组 | 19 | QC、domain、注释、解卷积、CNV、轨迹 | [spatial](docs/domains/spatial.mdx) |
+| 🔬 单细胞组学 | 33 | QC、聚类、注释、doublet、velocity、GRN | [singlecell](docs/domains/singlecell.mdx) |
 | 🧬 基因组学 | 10 | QC、比对、变异、CNV、组装、表观 | [genomics](docs/domains/genomics.mdx) |
 | 🧪 蛋白组学 | 8 | DIA/DDA、PTM、网络、biomarker | [proteomics](docs/domains/proteomics.mdx) |
 | ⚗️ 代谢组学 | 8 | 峰、归一化、注释、通路 | [metabolomics](docs/domains/metabolomics.mdx) |
