@@ -2,14 +2,18 @@
 
 ## Status
 
-**Proposed (Draft, 2026-06-15).** Synthesises an in-session design diagnosis of
+**Accepted (2026-06-16).** Implemented on branch
+`consensus-runtime-genericity`. Synthesises an in-session design diagnosis of
 the skill architecture, fact-checked against the live tree. Extends ADR 0016
 (consensus-as-workflow-runtime), which already introduced — but did not *name*
-in the skill contract — the first non-leaf skill shape. The workflow runtime
-(`omicsclaw/runtime/consensus/`, ADR 0016 L1) and the consensus shims are
-already implemented; what is unbuilt is the **skill metadata / lint / registry
-/ catalog** contract that should recognise them. This ADR records that decision
-and a phased scope for review; nothing here is committed yet.
+in the skill contract — the first non-leaf skill shape. The phased scope below
+(P0–P4) is fully built and verified: the optional `type`
+(`leaf`/`workflow`/`knowledge`/`adapter`, default `leaf`) + `validation_level`
+sidecar fields, a type-aware `scripts/skill_lint.py` (AST-based
+workflow-delegation validation that proves a shim's `main` forwards
+`main(["--source", SOURCE, *argv])` on its live path), and propagation of both
+fields through `LazySkillMetadata`, the registry, and `catalog.json`. The
+existing single-script leaf skills are byte-unchanged.
 
 ## Context
 
