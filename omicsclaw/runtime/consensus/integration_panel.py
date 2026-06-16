@@ -13,37 +13,43 @@ metrics into one comparable ``[0, 1]`` intrinsic scalar for the BC-ranking
 Why no ground-truth labels: at consensus voting time we have batch labels but
 not curated cell types, so scIB-style bio-conservation metrics (cLISI,
 NMI/ARI-vs-truth) are unavailable — exactly as the spatial panel uses only
-labels + coords. The two **scored** axes are therefore:
+labels + coords.
 
-- ``ilisi_norm``            — iLISI batch-neighbourhood diversity, mapped to
-  ``[0, 1]`` by its theoretical range ``[1, n_batches]`` as
-  ``(iLISI - 1) / (n_batches - 1)``. Higher = better mixing. **Undefined for a
-  single batch** (the panel is then not applicable).
+Calibration (ADR 0029, revised after panc8 real-data validation). The **single
+scored axis** is batch mixing:
+
+- ``ilisi_norm``  — iLISI batch-neighbourhood diversity, mapped to ``[0, 1]`` by
+  its theoretical range ``[1, n_batches]`` as ``log(iLISI) / log(n_batches)``.
+  Higher = better mixing. **Undefined for a single batch** (the panel is then
+  not applicable). The log map (vs the linear ``(iLISI-1)/(n_batches-1)``) gives
+  real-world iLISI — which sits near 1 — usable dynamic range so good and poor
+  integrations are actually distinguishable (B3).
+
+The other three metrics are **computed and reported but carry weight 0** (pure
+diagnostics, never part of the score):
+
 - ``knn_preservation_norm`` — fraction of each cell's *within-batch* ``X_pca``
-  nearest neighbours that remain neighbours in the member's integrated
-  embedding. Within-batch by construction, so it is a clean bio-structure
-  signal (same batch ⇒ no batch effect between the cells) and a direct
-  over-integration probe: a method that mashes everything together destroys
-  within-batch neighbourhoods. Reference is the external ``X_pca``, not the
-  member's own labels, so it is **not circular** (unlike a same-label
-  silhouette). Higher = better.
-
-Two further metrics are **computed and reported but carry weight 0** (pure
-diagnostics, never part of the score) — a label-vs-embedding silhouette is
-partly self-fulfilling (the labels came from that embedding's graph) and a
-batch silhouette double-counts mixing, so neither should drive selection:
-
-- ``batch_asw_norm``    — ``1 - |silhouette(embedding, batch)|`` (batch ASW
-  near 0 is ideal; both strong separation and pathological anti-clustering are
-  penalised).
+  nearest neighbours retained in the member's integrated embedding. It was
+  *intended* as a bio-structure / over-integration probe, but on panc8 (5
+  technologies, ground-truth cell types) it **anti-correlated** with cell-type
+  recovery (Spearman ``r=-0.74`` vs ARI) while ``ilisi`` correlated (``r=+0.99``):
+  a method that legitimately reorganises the embedding to merge cell types across
+  batches lowers within-batch ``X_pca`` neighbour overlap (those neighbourhoods
+  carry technical variation, not only biology), so the metric penalises the best
+  integrator. Demoted to a diagnostic until a *validated* GT-free structure
+  metric exists (graph connectivity, deferred). It still flags over-integration
+  *in the report* — it just no longer drives selection (B1).
+- ``batch_asw_norm``    — ``1 - |silhouette(embedding, batch)|`` (batch ASW near
+  0 is ideal); a second, weaker mixing signal — diagnostic only.
 - ``cluster_asw_norm``  — ``(silhouette(embedding, cluster_labels) + 1) / 2``
-  (label compactness; reported only — circular, see above).
+  (label compactness; circular — labels came from this embedding's graph).
 
 Comparability (the crux): every metric is direction-aligned (higher = better)
 and mapped to ``[0, 1]`` by its **theoretical** range — never a data-snooped or
-hallucinated threshold — then combined as a weighted mean. Weights are explicit
-knobs (like ADR 0011's ``alpha``/``beta``) and are **experimental** — they are
-recorded in ``plan.json`` and the report, not presented as validated.
+hallucinated threshold — then combined as a weighted mean. The weight is an
+explicit knob recorded in ``plan.json`` and the report. ``ilisi`` is the one
+axis validated against ground truth (panc8); treat the score as a *relative
+mixing rank* and read ``knn_preservation`` alongside it to catch over-integration.
 
 Determinism + fail-soft: every metric is pure given its inputs (no RNG). Any
 metric that raises is dropped and the weights renormalise over the survivors;
@@ -58,8 +64,9 @@ import numpy as np
 
 #: Canonical metric order — the stable column order for
 #: ``member_intrinsic_panel.csv`` and the compute order, decoupled from the
-#: weights dict so reweighting can't silently reorder the artifact. The last two
-#: are diagnostics (default weight 0); they appear in the CSV but not the score.
+#: weights dict so reweighting can't silently reorder the artifact. Only the
+#: first (``ilisi_norm``) is scored; the last three are weight-0 diagnostics that
+#: appear in the CSV but not the score.
 PANEL_METRICS: tuple[str, ...] = (
     "ilisi_norm",
     "knn_preservation_norm",
@@ -67,15 +74,15 @@ PANEL_METRICS: tuple[str, ...] = (
     "cluster_asw_norm",
 )
 
-#: Default panel weights — **experimental**, not empirically calibrated (ADR
-#: 0029). Two orthogonal scored axes: batch mixing (``ilisi``) balanced against
-#: within-batch structure preservation (``knn_preservation``), so that both
-#: over-integration (mixing high, preservation low) and under-integration
-#: (preservation high, mixing low) are penalised. ``batch_asw``/``cluster_asw``
-#: are diagnostics with weight 0.
+#: Default panel weights (ADR 0029, revised after panc8 real-data validation).
+#: ``ilisi_norm`` is the **single scored axis** — the one metric validated to
+#: track ground-truth cell-type recovery (Spearman ``r=+0.99`` vs ARI on panc8).
+#: ``knn_preservation``/``batch_asw``/``cluster_asw`` are weight-0 diagnostics:
+#: ``knn_preservation`` *anti*-correlated with recovery (``r=-0.74``), so it must
+#: not drive selection (it is reported to flag over-integration, not to score).
+#: A validated GT-free structure axis (graph connectivity) is deferred.
 DEFAULT_PANEL_WEIGHTS: dict[str, float] = {
-    "ilisi_norm": 0.5,
-    "knn_preservation_norm": 0.5,
+    "ilisi_norm": 1.0,
 }
 
 #: Metrics whose raw value is "lower = better" and must be flipped on normalise.
@@ -123,11 +130,33 @@ def combine_panel(
 # Per-metric kernels (pure; lazy heavy imports; raise on bad input)           #
 # --------------------------------------------------------------------------- #
 
-def _ilisi_norm(embedding: np.ndarray, batch_labels: np.ndarray, perplexity: float) -> float:
-    """Normalised iLISI: ``(mean_iLISI - 1) / (n_batches - 1)`` in ``[0, 1]``.
+def _scale_ilisi(mean_ilisi: float, n_batches: int) -> float:
+    """Map mean iLISI in ``[1, n_batches]`` to ``[0, 1]`` via ``log/log``.
 
-    Raises ``ValueError`` for a single batch (integration is not assessable)
-    so the metric is dropped fail-soft rather than scoring a no-op as good.
+    Pure (no heavy deps) so the normalization can be unit-tested without
+    harmonypy. ``log(mean_iLISI)/log(n_batches)`` is preferred over the linear
+    ``(iLISI-1)/(n_batches-1)`` because real-world iLISI clusters near 1
+    (e.g. ~1.5/5 for a decent integration), so the linear map compresses every
+    method into the bottom of ``[0, 1]`` and barely separates good from poor
+    integration (B3); the log map restores usable dynamic range. It is strictly
+    monotone in iLISI, so it changes spacing, not member ranking. Endpoints:
+    ``iLISI=1 → 0``, ``iLISI=n_batches → 1``. Raises ``ValueError`` for a single
+    batch (iLISI is undefined). The input is clamped to ``[1, n_batches]`` first.
+    """
+    import math
+
+    if n_batches < 2:
+        raise ValueError("iLISI undefined for a single batch")
+    v = min(max(float(mean_ilisi), 1.0), float(n_batches))
+    return float(np.clip(math.log(v) / math.log(n_batches), 0.0, 1.0))
+
+
+def _ilisi_norm(embedding: np.ndarray, batch_labels: np.ndarray, perplexity: float) -> float:
+    """Normalised iLISI: ``log(mean_iLISI) / log(n_batches)`` in ``[0, 1]``.
+
+    Computes mean iLISI via harmonypy and rescales with :func:`_scale_ilisi`.
+    Raises ``ValueError`` for a single batch so the metric is dropped fail-soft
+    rather than scoring a no-op.
     """
     import pandas as pd
     from harmonypy import compute_lisi
@@ -142,8 +171,7 @@ def _ilisi_norm(embedding: np.ndarray, batch_labels: np.ndarray, perplexity: flo
     perp = int(min(int(perplexity), max(1, (n - 1) // 3)))
     metadata = pd.DataFrame({"batch": np.asarray(batch_labels).astype(str)})
     ilisi = compute_lisi(embedding, metadata, ["batch"], perplexity=perp)
-    mean_ilisi = float(np.mean(ilisi[:, 0]))
-    return float(np.clip((mean_ilisi - 1.0) / (n_batches - 1.0), 0.0, 1.0))
+    return _scale_ilisi(float(np.mean(ilisi[:, 0])), n_batches)
 
 
 def _knn_preservation_norm(

@@ -528,11 +528,14 @@ async def run_typed_consensus(
         )
         if n_batches < 2:
             logger.warning(
-                "integration panel: input has %d batch(es) on obs[%r] — batch-mixing "
-                "is undefined; scoring on within-batch structure only.",
+                "integration panel: input has %d batch(es) on obs[%r] — iLISI (the "
+                "sole scored axis, ADR 0029) is undefined, so members cannot be "
+                "scored on the panel. sc-consensus-integration needs >=2 batches.",
                 n_batches, batch_key,
             )
-        panel_intrinsic = {}
+        panel_scalar_csv: dict[str, float] = {}   # every computed member (for the CSV)
+        panel_scalar_score: dict[str, float] = {}  # only members iLISI scored (for scoring)
+        missing_ilisi: list[str] = []
         for col in labels_df.columns:
             pi = panel_inputs.get(col)
             if pi is None:
@@ -542,16 +545,29 @@ async def run_typed_consensus(
                 labels_df[col].to_numpy(), embedding, batch_labels, x_pca,
                 weights=panel_weights, seed=seed,
             )
-            panel_intrinsic[col] = scalar
             intrinsic_panel_raw[col] = raw
-        if panel_intrinsic:
-            # Override only the members we computed; any skipped member retains
-            # its reader intrinsic so a partial panel never zeroes a member.
-            intrinsic_map = {**intrinsic_map, **panel_intrinsic}
+            panel_scalar_csv[col] = scalar
+            # iLISI is the only scored axis: only override the reader intrinsic
+            # when it actually computed, else a failed iLISI would silently score
+            # the member 0.0 and degrade the run to cross-NMI-only (codex review).
+            if "ilisi_norm" in raw:
+                panel_scalar_score[col] = scalar
+            else:
+                missing_ilisi.append(col)
+        if missing_ilisi:
+            logger.warning(
+                "integration panel: iLISI (the sole scored axis) did not compute for "
+                "%s — those members keep the reader intrinsic rather than a misleading "
+                "0.0 panel score. Check harmonypy availability and the batch count.",
+                missing_ilisi,
+            )
+        if panel_scalar_score:
+            intrinsic_map = {**intrinsic_map, **panel_scalar_score}
+        if panel_scalar_csv:
             panel_path = output_dir_p / "member_intrinsic_panel.csv"
             _write_intrinsic_panel_csv(
                 panel_path, list(labels_df.columns), intrinsic_panel_raw,
-                panel_intrinsic, list(INTEGRATION_PANEL_METRICS),
+                panel_scalar_csv, list(INTEGRATION_PANEL_METRICS),
             )
             artifacts.append(panel_path)
 

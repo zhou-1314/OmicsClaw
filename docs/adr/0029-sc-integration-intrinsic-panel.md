@@ -60,34 +60,48 @@ ground-truth cell types — mirroring ADR 0028's labels-only constraint):
 
 | Metric | Angle | Native range | Normalisation | Direction | Weight |
 |---|---|---|---|---|---|
-| `ilisi_norm` | batch-neighbourhood mixing | `[1, n_batches]` | `(iLISI−1)/(n_batches−1)` | higher better | **0.50** |
-| `knn_preservation_norm` | within-batch structure preserved vs `X_pca` | `[0, 1]` | identity | higher better | **0.50** |
+| `ilisi_norm` | batch-neighbourhood mixing | `[1, n_batches]` | `log(iLISI)/log(n_batches)` | higher better | **1.0** |
+| `knn_preservation_norm` | within-batch structure preserved vs `X_pca` | `[0, 1]` | identity | higher better | 0 (diagnostic) |
 | `batch_asw_norm` | global batch separation | `[-1, 1]` | `1−|ASW|` | higher better | 0 (diagnostic) |
 | `cluster_asw_norm` | label compactness | `[-1, 1]` | `(ASW+1)/2` | higher better | 0 (diagnostic) |
 
-**Why these two scored axes.** A pure batch-mixing panel rewards
-*over-integration* — a method that mashes all cells together maximises iLISI but
-destroys biology. We have no GT cell types for a bio-conservation metric, but we
-do have an external structural reference: `X_pca`. `knn_preservation_norm` is the
-fraction of each cell's **within-batch** `X_pca` nearest neighbours that survive
-in the integrated embedding. Within-batch ⇒ no batch effect between the cells ⇒ a
-clean biological-structure signal, and the reference is `X_pca` (not the member's
-own labels), so it is **not circular** — unlike a same-label silhouette, which is
-why `cluster_asw` is demoted to a reported diagnostic. Mixing (iLISI) balanced
-against within-batch preservation penalises both over- and under-integration —
-the scIB batch-removal-vs-bio-conservation trade-off, done without GT.
+> **Calibration amended 2026-06-16 after panc8 real-data validation** (see the
+> Amendment below). The original design scored a *balanced* panel
+> (`{ilisi: 0.5, knn_preservation: 0.5}`, linear iLISI). Validation against
+> ground-truth cell types showed `knn_preservation` anti-correlated with recovery
+> and the linear iLISI compressed the score, so the panel is now **iLISI-only,
+> log-normalised**, with `knn_preservation` demoted to a reported diagnostic.
+
+**Why iLISI is the single scored axis (revised).** The original theory was that a
+pure batch-mixing panel rewards *over-integration*, so it should be balanced by a
+GT-free structure metric — `knn_preservation_norm` (within-batch `X_pca` neighbour
+retention; non-circular because the reference is external `X_pca`, not the
+member's own labels). On panc8 that theory **failed**: `knn_preservation`
+anti-correlated with cell-type recovery (`r=-0.74`) because within-batch `X_pca`
+neighbourhoods carry technical variation, not only biology — a method that
+legitimately reorganises the embedding to merge cell types lowers the metric. The
+one axis that tracked recovery was `ilisi` (`r=+0.99`). So `ilisi` is now the sole
+scored axis; `knn_preservation` is **reported** (it still flags over-integration in
+the report) but does not select. A *validated* GT-free structure axis (graph
+connectivity) is deferred.
 
 **Comparability.** Each metric is direction-aligned and mapped to `[0, 1]` by its
-**theoretical** range — never a data-snooped threshold. iLISI is undefined for a
-single batch (the panel then drops it; an integration consensus on one batch is a
-misconfiguration and the driver warns). Combined as a weighted mean over the
-metrics that computed; a failed metric is dropped and weights renormalise; if
-none compute, intrinsic is `0.0`. Per-metric values are written to
+**theoretical** range — never a data-snooped threshold. iLISI uses a **log** map
+(`log(iLISI)/log(n_batches)`) rather than the linear `(iLISI−1)/(n_batches−1)`,
+because real-world iLISI sits near 1 (e.g. ~1.5/5 for a decent integration) and
+the linear map compresses every method into the bottom of `[0, 1]`, barely
+separating good from poor integration. iLISI is undefined for a single batch (the
+panel then has no scored axis → intrinsic `0.0`; an integration consensus on one
+batch is a misconfiguration and the driver warns). A failed metric is dropped and
+weights renormalise. Per-metric values (scored + diagnostic) are written to
 `member_intrinsic_panel.csv`.
 
-**Weights are experimental.** `{ilisi: 0.5, knn_preservation: 0.5}` are explicit
-knobs (like ADR 0011's `α`/`β`), recorded in `plan.json` — **not** empirically
-calibrated. They are presented as a relative ranking aid, not a validated score.
+**The weight is experimental.** `{ilisi: 1.0}` is recorded in `plan.json`. iLISI
+is the one axis validated against ground truth (panc8); treat the score as a
+*relative mixing rank* and read `knn_preservation` alongside it to catch
+over-integration. The panel does **not** itself penalise over-integration in the
+score (that guard left with `knn_preservation`); this is an accepted limitation
+pending a validated structure axis.
 
 ### 3. Driver panel dispatch (generalises ADR 0028's gate)
 
@@ -132,15 +146,64 @@ reports and warns; it does **not** downweight or filter on `k`.
   typical small fan-out.
 
 ### Deferred
-- **Empirical weight calibration and scientific validation on real multi-batch
-  data.** Synthetic pseudo-batches are CI smoke only (they favour methods that
-  undo the synthetic shift); the panel stays **experimental** until validated on
-  a real multi-donor / multi-technology dataset with held-out labels, including
-  over-integration negative controls (rare population in one batch only). Until
-  then the score is a relative ranking, not a verified quality measure.
+- **A validated GT-free structure / bio-conservation axis.** The original
+  `knn_preservation` counterweight was invalidated on panc8 (see Amendment) and
+  demoted to a diagnostic, so the score no longer penalises over-integration.
+  Graph connectivity (scIB-style: per-cluster connected-component fraction of the
+  kNN subgraph) is the leading candidate — it measures manifold continuity rather
+  than raw `X_pca` neighbour overlap and so should not punish legitimate
+  reorganisation — but it must itself be validated against ground truth on
+  several datasets before it scores.
 - `kBET` and graph-iLISI (need `scib_metrics`, not installed) and a
   graph-only-member panel path (BBKNN returns `X_pca` + a rebuilt graph, so it is
   excluded from the default set) are future axes — addable by adding a metric to
   `integration_panel.py` and a weight.
 - k-divergence **downweighting/filtering** (v1 only reports + warns) and a
   one-command multi-embedding prep helper are deferred.
+
+## Amendment (2026-06-16): panc8 real-data validation → iLISI-only, log-normalised
+
+The panel was validated on **panc8** (5 sequencing technologies, 14,890 cells,
+13 ground-truth cell types), running `none`/`harmony`/`scanorama` and correlating
+each panel metric with per-member ARI vs the held-out cell types.
+
+Findings (each independently recomputed):
+- `knn_preservation` **anti-correlated** with bio-recovery (Spearman `r=-0.74` vs
+  ARI). Scanorama recovered cell types best (ARI 0.579) but got the *worst*
+  `knn_preservation` (0.334) — within-batch `X_pca` neighbourhoods carry technical
+  variation, so a method that legitimately reorganises the embedding to merge cell
+  types across batches lowers the metric. The original balanced panel therefore
+  **ranked the best integrator last**.
+- `ilisi` **correlated** with recovery (`r=+0.99`).
+- The linear `(iLISI−1)/(n_batches−1)` compressed real iLISI (≈1.0–1.5 over 5
+  batches) into the bottom ~14% of `[0,1]`, so harmony (0.137) barely beat the
+  unintegrated baseline (0.009).
+
+Decision: **demote `knn_preservation` to a weight-0 diagnostic (B1)** and **switch
+iLISI to `log(iLISI)/log(n_batches)` (B3)**.
+
+Attribution (important — they fix different things):
+- **B1 fixes the ranking.** Removing `knn_preservation` from the score is what
+  un-inverts the panel: `scanorama 0.353 > harmony 0.271 > unintegrated 0.023`
+  now **matches** the GT ARI ranking `0.579 > 0.532 > 0.314`.
+- **B3 only changes spacing, not ranking.** `log/log` is strictly monotone in
+  iLISI, so an iLISI-only score has the same member order with either map; B3's
+  value is *dynamic range* — harmony is now well-separated from the baseline
+  (0.271 vs 0.023) instead of compressed (0.137 vs 0.009 under the linear map).
+
+Scope of the improvement (do not overstate): this changes the **member ranking**
+in `member_scores.csv` and the **weights the `weighted` operator would use**. It
+does **not** necessarily change the `kmode` consensus labels: in a default run
+(3 members, `top_k=4`) all unfiltered members enter consensus regardless of rank,
+and `kmode` ignores scores after selection. The ranking matters when `top_k <
+n_members`, when a member is hard-filtered, or under the `weighted` operator.
+
+Cost: the score no longer penalises over-integration (that guard left with
+`knn_preservation`); over-integration is now only *flagged* — via the
+`knn_preservation` diagnostic, surfaced in the report's "Intrinsic panel
+diagnostics" section (high `ilisi_norm` + low `knn_preservation_norm`) and in
+`member_intrinsic_panel.csv` — pending a validated structure axis (see Deferred).
+If iLISI (the sole scored axis) cannot compute for a member (e.g. harmonypy
+missing), that member keeps its reader intrinsic and the run warns, rather than
+silently scoring a misleading 0.0. The panel remains **experimental** — validated
+on one real dataset, not yet calibrated across several.

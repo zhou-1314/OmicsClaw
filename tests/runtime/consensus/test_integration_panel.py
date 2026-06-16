@@ -30,10 +30,11 @@ def test_combine_perfect_and_worst() -> None:
 
 
 def test_combine_clips_out_of_range_inputs() -> None:
-    # raw outside [0,1] is clipped before weighting (no negative credit, no >1).
+    # raw outside [0,1] is clipped; only ilisi is scored (knn is a weight-0
+    # diagnostic since the panc8 recalibration), so ilisi=5.0 clips to 1.0.
     assert combine_panel(
         {"ilisi_norm": 5.0, "knn_preservation_norm": -3.0}
-    ) == pytest.approx((0.5 * 1.0 + 0.5 * 0.0) / 1.0)
+    ) == pytest.approx(1.0)
 
 
 def test_combine_renormalises_over_present_metrics() -> None:
@@ -47,11 +48,14 @@ def test_combine_ignores_nan_and_empty() -> None:
 
 
 def test_combine_ignores_zero_weight_diagnostics() -> None:
-    # batch_asw / cluster_asw are diagnostics (weight 0): present but never scored.
-    assert combine_panel({"batch_asw_norm": 0.9, "cluster_asw_norm": 0.9}) == 0.0
-    # ... and they don't perturb a real scored metric.
+    # knn_preservation / batch_asw / cluster_asw are diagnostics (weight 0 after
+    # the panc8 recalibration): present but never scored.
     assert combine_panel(
-        {"ilisi_norm": 0.3, "batch_asw_norm": 0.9, "cluster_asw_norm": 0.9}
+        {"knn_preservation_norm": 0.9, "batch_asw_norm": 0.9, "cluster_asw_norm": 0.9}
+    ) == 0.0
+    # ... and they don't perturb the one scored axis (ilisi).
+    assert combine_panel(
+        {"ilisi_norm": 0.3, "knn_preservation_norm": 0.9, "cluster_asw_norm": 0.9}
     ) == pytest.approx(0.3)
 
 
@@ -94,25 +98,34 @@ def test_panel_scalar_in_unit_interval_and_reports_metrics() -> None:
 
 
 @pytest.mark.skipif(
-    not _HARMONYPY, reason="ranking depends on iLISI, which needs optional harmonypy"
+    not _HARMONYPY, reason="score depends on iLISI, which needs optional harmonypy"
 )
-def test_panel_rewards_balanced_over_under_and_over_integration() -> None:
+def test_panel_score_rewards_batch_mixing() -> None:
+    # After the panc8 recalibration the score IS iLISI (the GT-validated axis):
+    # good integration (batches overlap) outscores the unintegrated baseline
+    # (batches separated, poor mixing).
     clusters, batches, x_pca = _two_batch_blobs()
-    rng = np.random.default_rng(1)
-
-    # Good integration: batch offset removed (batches overlap), biology kept.
     good = np.column_stack([x_pca[:, 0], x_pca[:, 1] - batches.astype(int) * 8.0])
-    # Unintegrated baseline: batches stay separated (== x_pca) -> low iLISI.
     unintegrated = x_pca.copy()
-    # Over-integration: everything collapses to one blob -> structure destroyed.
-    over = rng.normal(loc=0.0, scale=0.3, size=x_pca.shape)
 
     s_good, _ = intrinsic_integration_panel(clusters, good, batches, x_pca)
     s_unint, _ = intrinsic_integration_panel(clusters, unintegrated, batches, x_pca)
-    s_over, _ = intrinsic_integration_panel(clusters, over, batches, x_pca)
-
     assert s_good > s_unint, f"good {s_good} should beat unintegrated {s_unint}"
-    assert s_good > s_over, f"good {s_good} should beat over-integrated {s_over}"
+
+
+def test_knn_preservation_diagnostic_flags_over_integration() -> None:
+    # Over-integration is no longer penalised in the SCORE (it maximises mixing),
+    # but the knn_preservation DIAGNOSTIC still catches it: collapsing the
+    # embedding destroys within-batch structure, so its diagnostic drops well
+    # below a structure-preserving integration's. Reported, not scored (B1).
+    clusters, batches, x_pca = _two_batch_blobs()
+    rng = np.random.default_rng(1)
+    good = np.column_stack([x_pca[:, 0], x_pca[:, 1] - batches.astype(int) * 8.0])
+    over = rng.normal(loc=0.0, scale=0.3, size=x_pca.shape)  # collapsed blob
+
+    _, raw_good = intrinsic_integration_panel(clusters, good, batches, x_pca)
+    _, raw_over = intrinsic_integration_panel(clusters, over, batches, x_pca)
+    assert raw_over["knn_preservation_norm"] < raw_good["knn_preservation_norm"]
 
 
 def test_panel_unintegrated_preserves_structure_but_mixes_poorly() -> None:
@@ -125,13 +138,59 @@ def test_panel_unintegrated_preserves_structure_but_mixes_poorly() -> None:
         assert raw["ilisi_norm"] < 0.5
 
 
-def test_panel_single_batch_drops_ilisi_but_still_scores_structure() -> None:
+def test_panel_single_batch_drops_ilisi_to_zero_score() -> None:
+    # iLISI is the only scored axis and is undefined for a single batch, so the
+    # scalar is 0.0 (knn_preservation is still computed but is a weight-0
+    # diagnostic). An integration consensus on one batch is a misconfiguration.
     clusters, _, x_pca = _two_batch_blobs()
     one_batch = np.array(["0"] * x_pca.shape[0])
     scalar, raw = intrinsic_integration_panel(clusters, x_pca, one_batch, x_pca)
     assert "ilisi_norm" not in raw  # undefined for a single batch -> dropped
-    assert "knn_preservation_norm" in raw
-    assert 0.0 <= scalar <= 1.0
+    assert "knn_preservation_norm" in raw  # still reported as a diagnostic
+    assert scalar == 0.0
+
+
+def test_scale_ilisi_pure_log_map() -> None:
+    # Pure normalization (no harmonypy): endpoints, monotonicity, clamp, and the
+    # log map strictly beating the old linear (iLISI-1)/(n_batches-1) in the
+    # compressed mid-range (B3).
+    import math
+
+    from omicsclaw.runtime.consensus.integration_panel import _scale_ilisi
+
+    n = 5
+    assert _scale_ilisi(1.0, n) == pytest.approx(0.0)          # no mixing -> 0
+    assert _scale_ilisi(float(n), n) == pytest.approx(1.0)     # perfect -> 1
+    assert _scale_ilisi(0.5, n) == pytest.approx(0.0)          # clamp below 1
+    assert _scale_ilisi(99.0, n) == pytest.approx(1.0)         # clamp above n
+    # strictly monotone in iLISI
+    assert _scale_ilisi(1.5, n) < _scale_ilisi(2.5, n) < _scale_ilisi(4.0, n)
+    # log map gives a mid-range iLISI more credit than the linear map
+    assert _scale_ilisi(1.5, n) > (1.5 - 1.0) / (n - 1.0)
+    with pytest.raises(ValueError):
+        _scale_ilisi(1.5, 1)  # single batch -> undefined
+
+
+@pytest.mark.skipif(not _HARMONYPY, reason="patches harmonypy.compute_lisi")
+def test_ilisi_norm_uses_log_scale_not_linear(monkeypatch) -> None:
+    # B3: real-world iLISI sits near 1, so the linear (iLISI-1)/(n_batches-1)
+    # compresses scores; the log map log(iLISI)/log(n_batches) restores range.
+    # For a mid-range iLISI=1.5 over 3 batches: log≈0.369 vs linear 0.25.
+    import math
+
+    import harmonypy
+
+    from omicsclaw.runtime.consensus import integration_panel as ip
+
+    batch = np.array(["a"] * 20 + ["b"] * 20 + ["c"] * 20)
+    emb = np.zeros((60, 2), dtype=float)
+    monkeypatch.setattr(
+        harmonypy, "compute_lisi",
+        lambda X, md, keys, perplexity: np.full((X.shape[0], 1), 1.5),
+    )
+    val = ip._ilisi_norm(emb, batch, perplexity=10)
+    assert val == pytest.approx(math.log(1.5) / math.log(3))
+    assert val > (1.5 - 1.0) / (3 - 1.0)  # strictly beats the old linear map
 
 
 def test_panel_failsoft_on_shape_mismatch() -> None:
@@ -142,9 +201,14 @@ def test_panel_failsoft_on_shape_mismatch() -> None:
     assert raw == {}
 
 
-def test_default_weights_cover_only_scored_axes() -> None:
-    assert set(DEFAULT_PANEL_WEIGHTS) == {"ilisi_norm", "knn_preservation_norm"}
-    assert "batch_asw_norm" in PANEL_METRICS and "cluster_asw_norm" in PANEL_METRICS
+def test_default_weights_score_only_ilisi() -> None:
+    # panc8 recalibration (B1): ilisi is the single scored axis; the other three
+    # (incl. knn_preservation, which anti-correlated with GT recovery) are
+    # weight-0 diagnostics — present in the artifact but not in the score.
+    assert set(DEFAULT_PANEL_WEIGHTS) == {"ilisi_norm"}
+    for diagnostic in ("knn_preservation_norm", "batch_asw_norm", "cluster_asw_norm"):
+        assert diagnostic in PANEL_METRICS
+        assert diagnostic not in DEFAULT_PANEL_WEIGHTS
 
 
 # ----------------------------- driver integration ------------------------- #
@@ -264,3 +328,54 @@ async def test_driver_runs_integration_panel_and_records_k(tmp_path: Path) -> No
 
     # k-divergence recorded: unintegrated over-clusters (cluster x batch).
     assert run.k_stats["k_by_member"]["unintegrated"] > run.k_stats["k_by_member"]["harmony"]
+
+
+@_pytest.mark.asyncio
+async def test_driver_keeps_reader_intrinsic_when_ilisi_unavailable(tmp_path: Path) -> None:
+    # iLISI is the only scored axis; if it can't compute (here: a single batch),
+    # members must keep the reader intrinsic, NOT be silently scored 0.0 — which
+    # would degrade the run to cross-NMI-only with no signal (codex review P1).
+    import anndata as ad
+
+    from omicsclaw.runtime.consensus.driver import ScoreConfig, run_typed_consensus
+    from omicsclaw.runtime.consensus.source_registry import ConsensusSource
+
+    clusters, _, x_pca = _two_batch_blobs()
+    obs_ids = [f"cell_{i}" for i in range(x_pca.shape[0])]
+    one_batch = np.array(["b0"] * x_pca.shape[0])  # single batch -> iLISI undefined
+    member_emb = {"harmony": ("X_harmony", x_pca), "scanorama": ("X_scanorama", x_pca + 1e-3)}
+
+    def runner(**kwargs):
+        out = Path(kwargs["output_dir"])
+        out.mkdir(parents=True, exist_ok=True)
+        rep_key, emb = member_emb[out.name]
+        adata = ad.AnnData(X=np.zeros((len(obs_ids), 1), dtype=np.float32))
+        adata.obs_names = obs_ids
+        adata.obs["batch"] = one_batch
+        adata.obsm["X_pca"] = x_pca.astype(np.float32)
+        adata.obsm[rep_key] = np.asarray(emb, dtype=np.float32)
+        adata.write_h5ad(out / "processed.h5ad")
+        (out / "result.json").write_text(
+            f'{{"summary": {{"representation_used": "{rep_key}"}}}}'
+        )
+
+        class _R:
+            exit_code = 0
+
+        return _R()
+
+    members = [
+        ConsensusMember(name=n, skill_name="sc-integrate-cluster", params={"cluster-method": "leiden"})
+        for n in ("harmony", "scanorama")
+    ]
+    source = ConsensusSource(
+        reader=_IntegrationReader(clusters, one_batch, obs_ids),
+        domain="singlecell", intrinsic_panel="integration",
+    )
+    run = await run_typed_consensus(
+        members=members, source=source, input_path="", output_dir=tmp_path / "out",
+        operator="kmode", bc_selector=lambda s, k: [x.member for x in s][:2],
+        score_config=ScoreConfig(), seed=0, runner=runner, batch_key="batch",
+    )
+    # iLISI undefined -> every member keeps the reader intrinsic, not a 0.0 score.
+    assert all(v == _IntegrationReader.FIXED_INTRINSIC for v in run.intrinsic_map.values())

@@ -86,6 +86,59 @@ def _k_divergence_section(run: TypedConsensusRun) -> list[str]:
     return lines
 
 
+def _panel_diagnostics_section(run: TypedConsensusRun) -> list[str]:
+    """Per-member intrinsic-panel metrics + an over-integration flag.
+
+    Renders ``run.intrinsic_panel_raw`` (when a panel ran) so weight-0 diagnostics
+    are visible in the report, not only in ``member_intrinsic_panel.csv``. For the
+    integration panel this is where ``knn_preservation_norm`` actually flags
+    over-integration (ADR 0029): the score is ``ilisi_norm`` only, so a method that
+    over-mixes (high iLISI, low within-batch structure) is *reported* here rather
+    than penalised in selection.
+    """
+    raw = run.intrinsic_panel_raw
+    if not raw:
+        return []
+    metrics: list[str] = []
+    for vals in raw.values():
+        for k in vals:
+            if k not in metrics:
+                metrics.append(k)
+    if not metrics:
+        return []
+    lines = [
+        "## Intrinsic panel diagnostics",
+        "",
+        "| member | " + " | ".join(metrics) + " |",
+        "|---|" + "---|" * len(metrics),
+    ]
+    for member, vals in raw.items():
+        cells = " | ".join(
+            f"{vals[k]:.3f}" if (k in vals and vals[k] == vals[k]) else "—" for k in metrics
+        )
+        lines.append(f"| {member} | {cells} |")
+    lines.append("")
+    if "knn_preservation_norm" in metrics:  # integration panel
+        flagged = [
+            m for m, vals in raw.items()
+            if vals.get("ilisi_norm", 0.0) >= 0.5 and vals.get("knn_preservation_norm", 1.0) < 0.5
+        ]
+        if flagged:
+            lines.append(
+                "- ⚠️ possible **over-integration**: "
+                + ", ".join(f"`{m}`" for m in flagged)
+                + " — high batch mixing (`ilisi_norm` ≥ 0.5) with low within-batch "
+                "structure (`knn_preservation_norm` < 0.5). Only `ilisi_norm` is scored "
+                "(ADR 0029), so the score does not penalise this — inspect these members."
+            )
+        else:
+            lines.append(
+                "_Only `ilisi_norm` is scored; the rest are diagnostics. No "
+                "over-integration pattern (high iLISI + low kNN preservation) flagged._"
+            )
+    return lines
+
+
 def format_typed_report(run: TypedConsensusRun, *, title: str) -> str:
     """Render a verified-consensus markdown report from a ``TypedConsensusRun``.
 
@@ -147,6 +200,11 @@ def format_typed_report(run: TypedConsensusRun, *, title: str) -> str:
     k_section = _k_divergence_section(run)
     if k_section:
         lines += k_section
+        lines.append("")
+
+    panel_section = _panel_diagnostics_section(run)
+    if panel_section:
+        lines += panel_section
         lines.append("")
 
     # Scoring parameters & thresholds (also recorded in plan.json; never hidden).

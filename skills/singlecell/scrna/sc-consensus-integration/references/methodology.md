@@ -25,15 +25,18 @@ flavour answers it by fanning out integration **representations** as members.
 3. **Score — integration intrinsic panel (ADR 0029)** — the driver replaces the
    reader's per-member intrinsic with a batch-mixing panel computed on each
    member's own embedding + the batch key (no ground-truth cell types needed):
-   - `ilisi_norm` (weight 0.5) — iLISI batch-neighbourhood diversity,
-     `(iLISI−1)/(n_batches−1)`; higher = better mixing.
-   - `knn_preservation_norm` (weight 0.5) — fraction of each cell's within-batch
-     `X_pca` neighbours retained in the integrated embedding; a direct
-     over-integration probe.
-   - `batch_asw_norm` / `cluster_asw_norm` — diagnostics, reported at weight 0.
-   Balancing mixing against within-batch structure penalises both over- and
-   under-integration. **Weights are experimental** (recorded in `plan.json`),
-   not empirically calibrated.
+   - `ilisi_norm` (**weight 1.0** — the single scored axis) — iLISI
+     batch-neighbourhood diversity, `log(iLISI)/log(n_batches)`; higher = better
+     mixing. The log map (vs linear) keeps real-world iLISI (which sits near 1)
+     from compressing into the bottom of `[0,1]` (B3).
+   - `knn_preservation_norm`, `batch_asw_norm`, `cluster_asw_norm` — **weight-0
+     diagnostics**, reported but not scored.
+   On panc8 (ground-truth cell types) `ilisi` correlated with cell-type recovery
+   (`r=+0.99`) while `knn_preservation` **anti**-correlated (`r=-0.74`), so the
+   panel scores on `ilisi` alone and reports `knn_preservation` to flag
+   over-integration (B1, ADR 0029 Amendment). **The weight is experimental**
+   (recorded in `plan.json`), validated on one real dataset, not yet calibrated
+   across several.
 4. **Consensus** — `kmode` / `weighted` / `lca` over the surviving members.
 5. **Report** — `[A: Verified consensus]` banner + per-cell support/entropy + a
    k-divergence section.

@@ -59,11 +59,13 @@ integration intrinsic panel (ADR 0029) before voting a consensus.
    + scanorama by default; `scvi` via `--include-scvi`).
 2. **Fan out** — run `sc-integrate-cluster --method <m>` per member at the fixed
    `--resolution` (member cluster counts stay comparable for the operator).
-3. **Score** — the driver computes the **batch-mixing intrinsic panel** (ADR 0029)
-   on each member's embedding + batch key: `ilisi_norm` (0.5, iLISI diversity
-   `(iLISI−1)/(n_batches−1)`) and `knn_preservation_norm` (0.5, within-batch
-   `X_pca` neighbour retention); `batch_asw_norm` / `cluster_asw_norm` reported at
-   weight 0.
+3. **Score** — the driver computes the **batch-mixing intrinsic panel** (ADR 0029,
+   recalibrated on panc8) on each member's embedding + batch key. The single
+   scored axis is `ilisi_norm` (iLISI diversity, `log(iLISI)/log(n_batches)`) —
+   the one metric validated to track ground-truth cell-type recovery.
+   `knn_preservation_norm` (within-batch `X_pca` retention), `batch_asw_norm` and
+   `cluster_asw_norm` are reported as weight-0 **diagnostics** (`knn_preservation`
+   anti-correlated with recovery, so it flags over-integration but does not score).
 4. **Consensus** — vote `kmode` / `weighted` / `lca` over the surviving members.
 5. **Report** — banner + per-cell support/entropy + a k-divergence section.
 
