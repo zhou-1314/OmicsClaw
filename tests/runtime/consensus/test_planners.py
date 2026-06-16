@@ -35,6 +35,7 @@ def _args(**kw) -> SimpleNamespace:
         batch_key="batch",
         include_scvi=False,
         vote_baseline=False,
+        timeout=None,
     )
     base.update(kw)
     return SimpleNamespace(**base)
@@ -169,6 +170,29 @@ def test_integration_rejects_duplicate_method() -> None:
         IntegrationRepSweepPlanner().propose(
             _args(integration_methods="harmony,harmony"), source=INTEGRATION
         )
+
+
+def test_resolve_timeout_keyed_on_planned_scvi_member() -> None:
+    # B4 (codex review): the timeout bump keys off the *planned members*, not the
+    # --include-scvi flag, so --all / --integration-methods scvi also bump, and an
+    # explicit method set without scVI does not (even with --include-scvi).
+    from omicsclaw.runtime.consensus.run import SCVI_DEFAULT_TIMEOUT_SECONDS, _resolve_timeout
+    from omicsclaw.runtime.workflow import DEFAULT_TIMEOUT_SECONDS
+
+    def members(a):
+        return IntegrationRepSweepPlanner().propose(a, source=INTEGRATION)
+
+    cases = [
+        (_args(timeout=42.0, include_scvi=True), 42.0),                       # explicit wins
+        (_args(), DEFAULT_TIMEOUT_SECONDS),                                   # default set, no scvi
+        (_args(include_scvi=True), SCVI_DEFAULT_TIMEOUT_SECONDS),             # scvi via flag
+        (_args(all=True), SCVI_DEFAULT_TIMEOUT_SECONDS),                      # scvi via --all
+        (_args(integration_methods="harmony,scvi"), SCVI_DEFAULT_TIMEOUT_SECONDS),  # explicit scvi
+        (_args(integration_methods="harmony,scanorama", include_scvi=True),
+         DEFAULT_TIMEOUT_SECONDS),                                           # flag but no scvi member
+    ]
+    for a, expected in cases:
+        assert _resolve_timeout(a, members(a)) == expected
 
 
 def test_derive_non_voting_baseline_gated_on_integration_source() -> None:

@@ -277,16 +277,20 @@ def _write_intrinsic_panel_csv(
     panel_scalar: Mapping[str, float],
     metric_cols: Sequence[str],
 ) -> None:
-    """Write ``member_intrinsic_panel.csv`` (one row per member, stable metric columns)."""
+    """Write ``member_intrinsic_panel.csv`` — one row per member, stable columns.
+
+    Every member with readable labels gets a row; a member whose panel could not
+    be computed (e.g. its embedding failed to load) shows NaN metrics + NaN
+    ``intrinsic_panel`` rather than being silently omitted from the file (B5).
+    """
     pd.DataFrame(
         [
             {
                 "member": m,
                 **{mc: panel_raw.get(m, {}).get(mc, float("nan")) for mc in metric_cols},
-                "intrinsic_panel": panel_scalar[m],
+                "intrinsic_panel": panel_scalar.get(m, float("nan")),
             }
             for m in members
-            if m in panel_scalar
         ]
     ).to_csv(path, index=False)
 
@@ -570,13 +574,15 @@ async def run_typed_consensus(
             )
         if panel_scalar_score:
             intrinsic_map = {**intrinsic_map, **panel_scalar_score}
-        if panel_scalar_csv:
-            panel_path = output_dir_p / "member_intrinsic_panel.csv"
-            _write_intrinsic_panel_csv(
-                panel_path, list(labels_df.columns), intrinsic_panel_raw,
-                panel_scalar_csv, list(INTEGRATION_PANEL_METRICS),
-            )
-            artifacts.append(panel_path)
+        # Always write the CSV when the integration panel ran (every member with
+        # readable labels gets a row; uncomputed members show NaN), so an
+        # all-uncomputed panel is auditable rather than producing no artifact (B5).
+        panel_path = output_dir_p / "member_intrinsic_panel.csv"
+        _write_intrinsic_panel_csv(
+            panel_path, list(labels_df.columns), intrinsic_panel_raw,
+            panel_scalar_csv, list(INTEGRATION_PANEL_METRICS),
+        )
+        artifacts.append(panel_path)
 
     # 4. score
     labels_arrays = {col: labels_df[col].to_numpy() for col in labels_df.columns}

@@ -202,7 +202,7 @@ _Avoid_: collapsing the two; using `analysis://` without a sub-prefix.
 | Operator language | kmode + weighted in Python (scipy); LCA via R subprocess (port from SACCELERATOR) |
 | Failure semantics | <2 surviving members → error; ≥2 → continue and annotate "N/M members failed" |
 | Concurrency | `max_parallel = min(N, os.cpu_count() // 2, 4)` |
-| Per-member timeout | 600s |
+| Per-member timeout | 600s (sc-consensus-integration auto-raises to 1800s when an scVI member is planned — ADR 0029 B4) |
 | Cancellation | `envelope.cancel_event` from ADR 0009 propagates into `team.run()` and on into each subprocess via `skill.runner.run_skill()` |
 | Failure → B fallback | **Off**. A path is allowed to fail loudly; never silently downgrade to narrative |
 | Output banner | Reports start with `[A: Verified consensus]` or `[B: Exploratory synthesis — NOT statistical consensus]`; not configurable |

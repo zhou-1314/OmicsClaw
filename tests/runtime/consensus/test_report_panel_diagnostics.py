@@ -40,6 +40,37 @@ def test_over_integration_flag_fires_on_high_mix_low_structure() -> None:
     assert "over-integration" in text and "`overmix`" in text
 
 
+def test_failed_members_timeout_hint_vs_crash_cause() -> None:
+    # B4 (codex review): a timeout failure gets the --timeout hint; a crash (e.g.
+    # missing scvi-tools) surfaces the actual error as a cause, NOT the timeout hint.
+    from omicsclaw.runtime.consensus.report import _failed_members_section
+
+    class _SR:
+        def error_text(self, default="", tail_chars=None):
+            return "Traceback (most recent call last):\nModuleNotFoundError: No module named 'scvi'"
+
+    def _step(name):
+        return SimpleNamespace(name=name)
+
+    failed = [
+        SimpleNamespace(step=_step("scvi_timeout"), status="timeout",
+                        error="exceeded 600.0s", skill_result=None),
+        SimpleNamespace(step=_step("scvi_missing"), status="failed",
+                        error="skill exit_code=1", skill_result=_SR()),
+    ]
+    run = SimpleNamespace(
+        team_result=SimpleNamespace(failed=failed), missing_label_members=[]
+    )
+    text = "\n".join(_failed_members_section(run))
+    # timeout member -> actionable --timeout hint
+    assert "larger `--timeout`" in text
+    # crashed member -> the real cause (missing dep), not a timeout hint
+    assert "ModuleNotFoundError" in text and "scvi" in text
+    # the crash must not be mislabelled with the timeout hint
+    crash_block = text.split("scvi_missing", 1)[1]
+    assert "--timeout" not in crash_block
+
+
 def test_no_flag_for_legitimate_reorganisation() -> None:
     # scanorama on panc8: low knn (0.33) but only moderate mixing (0.35 < 0.5) —
     # legitimate reorganisation, NOT over-integration. Must NOT be flagged.

@@ -199,7 +199,7 @@ python omicsclaw.py run sc-consensus-clustering \
 | `--confirm-plan` | off | Interactive pre-run plan confirmation (TTY) |
 | `--non-interactive` | off | Force top-K BC selection (no prompts) |
 | `--seed` | `0` | Operator seed (LCA only; kmode/weighted are deterministic) |
-| `--timeout` | `600` | Per-member subprocess timeout (s) |
+| `--timeout` | `600` (auto-raised to `1800` when an scVI member is planned, ADR 0029 B4) | Per-member subprocess timeout (s) |
 | `--max-parallel` | auto | Concurrency cap (`min(N, cpu//2, 4)`) |
 | `--run-id` | output dir name | Run identifier (stamped into `plan.json` + namespace) |
 | `--query` | `""` | *(domains)* NL query for the evaluation chair |

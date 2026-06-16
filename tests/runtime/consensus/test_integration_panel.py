@@ -220,6 +220,29 @@ from omicsclaw.runtime.consensus.driver import _compute_k_stats  # noqa: E402
 from omicsclaw.runtime.consensus.member import ConsensusMember  # noqa: E402
 
 
+def test_write_intrinsic_panel_csv_includes_uncomputed_members(tmp_path: Path) -> None:
+    # B5: a member with readable labels but no computable panel must appear with
+    # NaN metrics, not be silently dropped from member_intrinsic_panel.csv.
+    import math
+
+    import pandas as pd
+
+    from omicsclaw.runtime.consensus.driver import _write_intrinsic_panel_csv
+
+    path = tmp_path / "panel.csv"
+    _write_intrinsic_panel_csv(
+        path,
+        members=["a", "b", "c"],  # 'c' has labels but its panel did not compute
+        panel_raw={"a": {"ilisi_norm": 0.5}, "b": {"ilisi_norm": 0.3}},
+        panel_scalar={"a": 0.5, "b": 0.3},
+        metric_cols=["ilisi_norm"],
+    )
+    df = pd.read_csv(path)
+    assert set(df["member"]) == {"a", "b", "c"}
+    crow = df[df["member"] == "c"].iloc[0]
+    assert math.isnan(crow["ilisi_norm"]) and math.isnan(crow["intrinsic_panel"])
+
+
 def test_compute_k_stats_flags_divergence() -> None:
     import pandas as pd
 
@@ -483,3 +506,59 @@ async def test_driver_reincludes_baseline_when_too_few_voters(tmp_path: Path) ->
     audit = json.loads((tmp_path / "out" / "selection_audit.json").read_text())
     assert audit["baseline_reincluded"] is True
     assert sorted(audit["voting_bcs"]) == ["harmony", "unintegrated"]
+
+
+@_pytest.mark.asyncio
+async def test_driver_panel_csv_includes_member_missing_processed_h5ad(tmp_path: Path) -> None:
+    # B5 real driver path (codex review): a member with readable labels but no
+    # processed.h5ad (panel input fails to load) must still appear in
+    # member_intrinsic_panel.csv with NaN, not be silently dropped.
+    import math
+
+    import anndata as ad
+    import pandas as pd
+
+    from omicsclaw.runtime.consensus.driver import ScoreConfig, run_typed_consensus
+    from omicsclaw.runtime.consensus.source_registry import ConsensusSource
+
+    clusters, batches, x_pca = _two_batch_blobs()
+    obs_ids = [f"cell_{i}" for i in range(x_pca.shape[0])]
+    member_emb = {"harmony": ("X_harmony", x_pca + 0.1), "scanorama": ("X_scanorama", x_pca + 0.2)}
+
+    def runner(**kwargs):
+        out = Path(kwargs["output_dir"])
+        out.mkdir(parents=True, exist_ok=True)
+        if out.name in member_emb:  # "incomplete" deliberately writes NO processed.h5ad
+            rep_key, emb = member_emb[out.name]
+            adata = ad.AnnData(X=np.zeros((len(obs_ids), 1), dtype=np.float32))
+            adata.obs_names = obs_ids
+            adata.obs["batch"] = batches
+            adata.obsm["X_pca"] = x_pca.astype(np.float32)
+            adata.obsm[rep_key] = np.asarray(emb, dtype=np.float32)
+            adata.write_h5ad(out / "processed.h5ad")
+            (out / "result.json").write_text(
+                f'{{"summary": {{"representation_used": "{rep_key}"}}}}'
+            )
+
+        class _R:
+            exit_code = 0
+
+        return _R()
+
+    members = [
+        ConsensusMember(name=n, skill_name="sc-integrate-cluster", params={"cluster-method": "leiden"})
+        for n in ("harmony", "scanorama", "incomplete")
+    ]
+    source = ConsensusSource(
+        reader=_IntegrationReader(clusters, batches, obs_ids),
+        domain="singlecell", intrinsic_panel="integration",
+    )
+    run = await run_typed_consensus(
+        members=members, source=source, input_path="", output_dir=tmp_path / "out",
+        operator="kmode", bc_selector=lambda s, k: [x.member for x in s][:3],
+        score_config=ScoreConfig(), seed=0, runner=runner, batch_key="batch",
+    )
+    df = pd.read_csv(tmp_path / "out" / "member_intrinsic_panel.csv")
+    assert "incomplete" in set(df["member"])  # not silently dropped (B5)
+    row = df[df["member"] == "incomplete"].iloc[0]
+    assert math.isnan(row["intrinsic_panel"])

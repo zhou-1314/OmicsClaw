@@ -38,6 +38,20 @@ def _failed_members_section(run: TypedConsensusRun) -> list[str]:
     lines.append("")
     for r in failed:
         lines.append(f"- `{r.step.name}` — {r.status}: {r.error or '(no detail)'}")
+        if r.status == "timeout":
+            lines.append(
+                "  - hint: the member exceeded the per-member timeout — re-run with a "
+                "larger `--timeout` (scVI GPU training is slow; a planned scVI member "
+                "already raises the default)."
+            )
+        else:
+            # Surface the subprocess error (e.g. a missing dependency such as
+            # `scvi-tools`) so a crash is actionable, not just `exit_code=N`.
+            sr = getattr(r, "skill_result", None)
+            tail = sr.error_text(default="", tail_chars=600).strip() if sr is not None else ""
+            last = next((ln for ln in reversed(tail.splitlines()) if ln.strip()), "")
+            if last:
+                lines.append(f"  - cause: `{last.strip()[:300]}`")
     for name in missing:
         lines.append(
             f"- `{name}` — completed (exit 0) but produced no readable labels; "

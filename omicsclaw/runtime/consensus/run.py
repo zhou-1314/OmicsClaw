@@ -35,6 +35,12 @@ from omicsclaw.runtime.workflow import DEFAULT_TIMEOUT_SECONDS, InsufficientSurv
 
 logger = logging.getLogger("consensus-run")
 
+#: Per-member timeout default when a GPU/scVI member is in the set. scVI training
+#: is ~10-15 min on ~15k cells, well over the CPU default (DEFAULT_TIMEOUT_SECONDS
+#: = 600s), so an --include-scvi run would otherwise drop the scVI member by
+#: timeout (ADR 0029 B4). The user can still override with --timeout.
+SCVI_DEFAULT_TIMEOUT_SECONDS = 1800.0
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -74,7 +80,11 @@ def _build_parser() -> argparse.ArgumentParser:
              "Spatial sources only — integration sources always score with their "
              "batch-mixing panel (this flag is a no-op for them).",
     )
-    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
+    parser.add_argument(
+        "--timeout", type=float, default=None,
+        help="Per-member timeout (s). Default 600; raised to "
+             f"{SCVI_DEFAULT_TIMEOUT_SECONDS:.0f} when --include-scvi (scVI is slow).",
+    )
     parser.add_argument("--max-parallel", type=int, default=None)
     parser.add_argument("--top-k", type=int, default=4)
     parser.add_argument("--run-id", default=None)
@@ -153,6 +163,29 @@ def _derive_non_voting(source, members, args) -> tuple[str, ...]:
     return tuple(m.name for m in members if str(m.params.get("method", "")) == "none")
 
 
+def _resolve_timeout(args, members) -> float:
+    """Per-member timeout (s): explicit ``--timeout`` wins; else the CPU default,
+    raised when an **scVI member is actually planned** because scVI GPU training is
+    far slower than the 600s CPU default and would otherwise be dropped by timeout
+    (ADR 0029 B4). Keyed off the planned members — not the ``--include-scvi`` flag —
+    so it also covers ``--all`` / ``--integration-methods scvi``, and does not bump
+    when ``--include-scvi`` is passed but the explicit method set excludes scVI."""
+    if args.timeout is not None:
+        return float(args.timeout)
+    has_scvi = any(
+        str(getattr(m, "params", {}).get("method", "")) == "scvi" for m in members
+    )
+    if has_scvi:
+        logger.warning(
+            "scVI member planned: raising the default per-member timeout to %.0fs "
+            "(scVI GPU training is slow — ~10-15 min on ~15k cells). Pass "
+            "--timeout to override; increase it further for larger datasets.",
+            SCVI_DEFAULT_TIMEOUT_SECONDS,
+        )
+        return SCVI_DEFAULT_TIMEOUT_SECONDS
+    return DEFAULT_TIMEOUT_SECONDS
+
+
 def _maybe_confirm_plan(members, confirm: bool) -> bool:
     """Interactive pre-run plan confirmation (opt-in via ``--confirm-plan``).
 
@@ -212,7 +245,7 @@ async def _run(args: argparse.Namespace) -> int:
             score_config=ScoreConfig(args.alpha, args.beta, args.max_class_frac),
             seed=args.seed,
             plan_audit=plan_audit,
-            timeout_seconds=args.timeout,
+            timeout_seconds=_resolve_timeout(args, members),
             max_parallel=args.max_parallel,
             use_spatial_panel=args.spatial_panel,
             batch_key=args.batch_key,

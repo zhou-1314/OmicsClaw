@@ -165,6 +165,12 @@ from 33 to 19. A fresh run is needed before quoting this as end-to-end performan
   (`--max-parallel 1`), and the consensus is *reproducible within tolerance, not
   bit-identical* when scVI is included. `MemberScore` gains an `n_clusters` field
   (a new `member_scores.csv` column).
+- **scVI is slow** (~10-15 min on ~15k cells), well over the 600s CPU per-member
+  default — `--include-scvi` therefore raises the default `--timeout` to
+  `SCVI_DEFAULT_TIMEOUT_SECONDS` (1800s) and warns (B4); a member that still
+  exceeds it is dropped by timeout (status `timeout`, distinct from a
+  missing-dependency `failed`), and the report adds a `--timeout` hint. Increase
+  `--timeout` further for very large datasets.
 - iLISI (harmonypy) + per-batch kNN add cost per member; acceptable for the
   typical small fan-out.
 
@@ -183,6 +189,14 @@ from 33 to 19. A fresh run is needed before quoting this as end-to-end performan
   `integration_panel.py` and a weight.
 - k-divergence **downweighting/filtering** (v1 only reports + warns) and a
   one-command multi-embedding prep helper are deferred.
+- **Hard timeout enforcement.** B4 raises the per-member *timeout value* for scVI,
+  but the generic L1 `fan_out` marks a member `timeout` without reliably killing
+  its subprocess (`asyncio.wait_for` cancelling an `asyncio.to_thread` does not
+  interrupt the blocking `run_skill`; the timeout branch deliberately does not set
+  the shared cancel event). A genuinely hung GPU member can therefore keep running
+  after being recorded as timed-out. Fixing this needs a per-step cancellation
+  signal in the L1 runtime (affects every flavour + the `team.py` back-compat),
+  so it is deferred; for now prefer a correct `--timeout` over relying on the kill.
 
 ## Amendment (2026-06-16): panc8 real-data validation → iLISI-only, log-normalised
 

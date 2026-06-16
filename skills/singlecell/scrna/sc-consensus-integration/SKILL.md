@@ -78,8 +78,12 @@ integration intrinsic panel (ADR 0029) before voting a consensus.
   (it is scored, paneled and reported, with `selection_reason = "baseline …"`),
   but voting it as an equal drags the consensus toward un-integrated structure
   (ADR 0029 B2). Pass `--vote-baseline` to include it in the vote.
-- **scVI is GPU/stochastic** — reproducible within tolerance, not bit-identical;
-  add it with `--include-scvi` and serialise GPU members with `--max-parallel 1`.
+- **scVI is GPU/stochastic and slow** — reproducible within tolerance, not
+  bit-identical; add it with `--include-scvi` (which raises the per-member
+  `--timeout` to 1800s, since scVI is ~10-15 min on ~15k cells) and serialise GPU
+  members with `--max-parallel 1`. For very large datasets raise `--timeout`
+  further. (If scVI is not installed the member fails with an import error, not a
+  timeout — `pip install scvi-tools`.)
 - **The intrinsic panel is unsupervised batch-mixing-vs-structure** — it is NOT
   validated against curated cell types; treat the score as a relative ranking and
   the panel weights in `plan.json` as experimental (ADR 0029), not calibrated.
