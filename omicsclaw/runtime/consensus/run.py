@@ -71,7 +71,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--llm-judge", action="store_true",
         help="Reserved: accepted but not consumed (would enable a chair-LLM veto/reweight).",
     )
-    parser.add_argument("--operator", choices=["kmode", "weighted", "lca"], default="kmode")
+    parser.add_argument(
+        "--operator", choices=["kmode", "weighted", "lca", "median"], default=None,
+        help="Consensus operator. Default kmode (categorical) / median (continuous). "
+             "Allowed per template: categorical=kmode|weighted|lca, continuous=median|weighted.",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--no-spatial-panel", action="store_false", dest="spatial_panel",
@@ -120,7 +124,32 @@ def _build_parser() -> argparse.ArgumentParser:
              "reported but excluded from the vote — it is a diagnostic control, "
              "and voting it as an equal drags the consensus (ADR 0029 B2).",
     )
+    # PseudotimeMethodPlanner (sc-consensus-pseudotime, ADR 0031)
+    parser.add_argument(
+        "--pseudotime-methods", default=None,
+        help="Comma list of pseudotime methods (dpt,palantir,via); default all three.",
+    )
+    parser.add_argument(
+        "--root-cluster", default=None,
+        help="Shared root cluster for sc-consensus-pseudotime members "
+             "(required — pass this or --root-cell; a shared root pins direction).",
+    )
+    parser.add_argument(
+        "--root-cell", default=None,
+        help="Shared root cell (obs_name or integer index) for sc-consensus-pseudotime members.",
+    )
     return parser
+
+
+#: Operators valid per Workflow template (ADR 0031 — continuous adds median).
+_OPERATORS_BY_TEMPLATE: dict[str, tuple[str, ...]] = {
+    "categorical": ("kmode", "weighted", "lca"),
+    "continuous": ("median", "weighted"),
+}
+_DEFAULT_OPERATOR_BY_TEMPLATE: dict[str, str] = {
+    "categorical": "kmode",
+    "continuous": "median",
+}
 
 
 def _make_bc_selector(args: argparse.Namespace):
@@ -222,12 +251,25 @@ async def _run(args: argparse.Namespace) -> int:
         )
         return 4
 
+    # Resolve + validate the operator for this template (ADR 0031: continuous
+    # uses median|weighted, categorical uses kmode|weighted|lca). --operator
+    # defaults to None so each template picks its own default.
+    allowed_ops = _OPERATORS_BY_TEMPLATE.get(source.template, ("kmode", "weighted", "lca"))
+    operator = args.operator or _DEFAULT_OPERATOR_BY_TEMPLATE.get(source.template, "kmode")
+    if operator not in allowed_ops:
+        print(
+            f"[{args.source}] operator {operator!r} is not valid for template "
+            f"{source.template!r}; choose from {sorted(allowed_ops)}.",
+            file=sys.stderr,
+        )
+        return 2
+
     # Scoring thresholds (alpha/beta/max_class_fraction_cap/top_k) are written to
     # plan.json authoritatively by the driver from the ScoreConfig it actually
     # used — don't duplicate them here (avoids divergent keys in plan.json).
     plan_audit = {
         "run_id": args.run_id or output_dir.name,
-        "operator": args.operator,
+        "operator": operator,
         "members": [{"name": m.name, "params": dict(m.params)} for m in members],
     }
 
@@ -239,7 +281,7 @@ async def _run(args: argparse.Namespace) -> int:
             source=source,
             input_path=args.input or "",
             output_dir=output_dir,
-            operator=args.operator,
+            operator=operator,
             bc_selector=_make_bc_selector(args),
             top_k_default=args.top_k,
             score_config=ScoreConfig(args.alpha, args.beta, args.max_class_frac),
@@ -265,11 +307,24 @@ async def _run(args: argparse.Namespace) -> int:
         )
         return 6
 
+    if source.template == "continuous":
+        from omicsclaw.runtime.consensus.continuous_report import format_continuous_report
+
+        md = format_continuous_report(run, title=source.report_title)
+        (run.output_dir / "report.md").write_text(md)
+        print(
+            f"[{args.source}] OK: {run.team_result.n_survived}/{run.team_result.total} members; "
+            f"{len(run.selected_bcs)} entered consensus; operator={operator}; "
+            f"weak_agreement={run.weak_agreement['diverged']} "
+            f"(mean rho={run.weak_agreement['cohort_mean_spearman']:.3f})."
+        )
+        return 0
+
     md = format_typed_report(run, title=source.report_title)
     (run.output_dir / "report.md").write_text(md)
     print(
         f"[{args.source}] OK: {run.team_result.n_survived}/{run.team_result.total} members; "
-        f"{len(run.selected_bcs)} entered consensus; operator={args.operator}; "
+        f"{len(run.selected_bcs)} entered consensus; operator={operator}; "
         f"clusters_returned={run.consensus.n_clusters_returned}."
     )
     return 0

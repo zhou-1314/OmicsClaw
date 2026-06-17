@@ -91,8 +91,8 @@ skills/
 └── literature/                        # 8th domain — PDF/DOI/PubMed/GEO parsing
 ```
 
-There are **8 domains and 94 skills** (see `skills/catalog.json:skill_count`).
-Per-domain counts are computed live (§4), currently: spatial 19, singlecell 33,
+There are **8 domains and 95 skills** (see `skills/catalog.json:skill_count`).
+Per-domain counts are computed live (§4), currently: spatial 19, singlecell 34,
 genomics 10, proteomics 8, metabolomics 8, bulkrna 13, orchestrator 2,
 literature 1.
 
@@ -126,7 +126,7 @@ python scripts/sync_skill_docs.py --check     # CI-style drift check
 Per-skill metadata lives in **`parameters.yaml`** (the v2 sidecar). The parser is
 `omicsclaw/skill/lazy_metadata.py:LazySkillMetadata` (lazy, read-only) and
 `scripts/generate_catalog.py` (one-shot batch scan). The legacy
-`metadata.omicsclaw` block in the `SKILL.md` frontmatter is **removed** — all 94
+`metadata.omicsclaw` block in the `SKILL.md` frontmatter is **removed** — all 95
 skills have migrated to the sidecar, and `scripts/skill_lint.py` errors if a
 legacy block reappears.
 
@@ -301,7 +301,7 @@ value cannot drift from the actual contents of `skills/`. The `summary` and
 `LazySkillMetadata` (`omicsclaw/skill/lazy_metadata.py`) is the per-skill
 metadata parser. It is *lazy* — a skill's `parameters.yaml` (and any frontmatter
 fallback) is read only when that skill is actually accessed. The bot routing path
-relies on this: touching the registry doesn't load all 94 skills' sidecars.
+relies on this: touching the registry doesn't load all 95 skills' sidecars.
 
 ---
 
@@ -314,7 +314,7 @@ two-stage LLM routing (see §5.6 for why).
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │  L0  capability_resolver (programmatic, 0 LLM tokens)         │
-│      scores all 94 skills by trigger_keywords + description    │
+│      scores all 95 skills by trigger_keywords + description    │
 │      token overlap + file extension + method mentions          │
 │      → returns chosen_skill OR skill_candidates[:5]            │
 └──────────────────────────────────────────────────────────────┘
@@ -370,7 +370,7 @@ OmicsClaw dispatches multi-omics analysis across 8 domains.
 - **spatial** (19 skills — Spatial Transcriptomics)
   Spatial transcriptomics for Visium/Xenium/MERFISH/Slide-seq: QC, ...
   Key skills: spatial-preprocess, spatial-domains, spatial-de, ...
-- **singlecell** (33 skills — Single-Cell Omics)
+- **singlecell** (34 skills — Single-Cell Omics)
   scRNA-seq + scATAC-seq: FASTQ→counts, QC, filter, ...
   ...
 ```

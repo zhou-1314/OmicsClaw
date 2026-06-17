@@ -28,6 +28,11 @@ DEFAULT_METHODS = "leiden"
 #: methods. scVI is opt-in (``--include-scvi``) because it is GPU/stochastic.
 DEFAULT_INTEGRATION_METHODS = ("none", "harmony", "scanorama")
 
+#: Default pseudotime methods fanned out by ``sc-consensus-pseudotime`` (ADR 0031).
+#: Each emits a SINGLE global pseudotime; multi-lineage methods (slingshot/
+#: monocle3/cellrank) are deferred (they re-introduce branching topology).
+DEFAULT_PSEUDOTIME_METHODS = ("dpt", "palantir", "via")
+
 
 def _explicit_members(
     spec: str,
@@ -206,5 +211,58 @@ class IntegrationRepSweepPlanner:
                         "batch-key": batch_key,
                     },
                 )
+            )
+        return out
+
+
+class PseudotimeMethodPlanner:
+    """sc-consensus-pseudotime planning: one member per pseudotime method, shared root.
+
+    The member axis is the **pseudotime method** (mirroring how the integration
+    planner fans out genuinely different integration backends). v1 members are the
+    single-global-pseudotime methods (``dpt``/``palantir``/``via``); multi-lineage
+    methods are deferred. All members share **one user-specified root**
+    (``--root-cluster`` / ``--root-cell``), **required** so direction is pinned
+    (ADR 0031 §3) — enforced HERE in the flavour, not the member skill (which does
+    not hard-require a root). Method selection: ``--pseudotime-methods`` (or
+    ``--members``) as a comma list, else :data:`DEFAULT_PSEUDOTIME_METHODS`.
+    """
+
+    def propose(self, args: Any, *, source: ConsensusSource) -> list[ConsensusMember]:
+        spec = args.members or getattr(args, "pseudotime_methods", None)
+        if spec:
+            methods = [m.strip() for m in spec.split(",") if m.strip()]
+            parameterized = [m for m in methods if ":" in m]
+            if parameterized:
+                raise SystemExit(
+                    "pseudotime consensus members are plain method names "
+                    "(dpt/palantir/via); per-member params are not supported. "
+                    f"Got: {', '.join(parameterized)}"
+                )
+        else:
+            methods = list(DEFAULT_PSEUDOTIME_METHODS)
+
+        root_cluster = getattr(args, "root_cluster", None)
+        root_cell = getattr(args, "root_cell", None)
+        if not root_cluster and not root_cell:
+            raise SystemExit(
+                "sc-consensus-pseudotime requires a shared root: pass "
+                "--root-cluster <name> or --root-cell <id> (ADR 0031: a shared root "
+                "pins pseudotime direction so the consensus is well-posed)."
+            )
+
+        out: list[ConsensusMember] = []
+        seen: set[str] = set()
+        for method in methods:
+            if method in seen:
+                raise SystemExit(f"duplicate pseudotime method '{method}' in member spec")
+            seen.add(method)
+            params: dict[str, str] = {"method": method}
+            if root_cluster:
+                params["root-cluster"] = str(root_cluster)
+            if root_cell:
+                params["root-cell"] = str(root_cell)
+            out.append(
+                ConsensusMember(name=method, skill_name=source.member_skill, params=params)
             )
         return out

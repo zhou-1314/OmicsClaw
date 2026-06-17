@@ -17,10 +17,12 @@ from pathlib import Path
 from omicsclaw.runtime.consensus.planners import (
     ChairLLMPlanner,
     IntegrationRepSweepPlanner,
+    PseudotimeMethodPlanner,
     SweepPlanner,
 )
 from omicsclaw.runtime.consensus.source_registry import (
     ConsensusSource,
+    PseudotimeArtifactReader,
     ScClusteringArtifactReader,
     SpatialDomainsArtifactReader,
 )
@@ -65,6 +67,17 @@ CONSENSUS_SOURCES: dict[str, ConsensusSource] = {
         report_title="Verified consensus — sc integration",
         param_hints_path=_param_hints("singlecell", "scrna", "sc-integrate-cluster"),
         intrinsic_panel="integration",
+    ),
+    "sc-consensus-pseudotime": ConsensusSource(
+        reader=PseudotimeArtifactReader(),
+        name="sc-consensus-pseudotime",
+        template="continuous",
+        member_skill="sc-pseudotime",
+        planner=PseudotimeMethodPlanner(),
+        domain="singlecell",
+        report_title="Verified consensus — sc pseudotime",
+        param_hints_path=_param_hints("singlecell", "scrna", "sc-pseudotime"),
+        intrinsic_panel="",
     ),
 }
 

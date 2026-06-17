@@ -83,7 +83,7 @@ def test_registry_loads_top_level_literature_skill():
     assert Path(registry.skills["literature"]["script"]).name == "literature_parse.py"
     assert ("literature", registry.skills["literature"]) in registry.iter_primary_skills()
     assert registry.domains["literature"]["skill_count"] == 1
-    assert len(registry.iter_primary_skills()) == 94
+    assert len(registry.iter_primary_skills()) == 95
 
 
 def test_skill_runner_sees_registry_invalidate_after_load():

@@ -7,11 +7,12 @@ Each template carries an explicit ``provenance`` (``typed``/verified vs
 claim. The registry is open but **controlled**: adding a template means adding a
 new "verified" math guarantee and requires its own ADR.
 
-Import hygiene: this module imports only the categorical driver
-(``run_typed_consensus``), which does not import ``dispatch``. The narrative
-B-path executes via ``narrative/{extractor,synthesizer}`` (and ``synthesizer``
-imports ``dispatch``), so its ``driver`` is left unbound here to avoid a
-``dispatch → templates → narrative → dispatch`` import cycle.
+Import hygiene: this module imports only the typed drivers (``run_typed_consensus``
+and ``run_continuous_consensus``), neither of which imports ``dispatch``
+(``continuous_driver`` imports the categorical ``driver`` but not ``dispatch``).
+The narrative B-path executes via ``narrative/{extractor,synthesizer}`` (and
+``synthesizer`` imports ``dispatch``), so its ``driver`` is left unbound here to
+avoid a ``dispatch → templates → narrative → dispatch`` import cycle.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Literal
 
+from omicsclaw.runtime.consensus.continuous_driver import run_continuous_consensus
 from omicsclaw.runtime.consensus.driver import run_typed_consensus
 
 Provenance = Literal["typed", "exploratory"]
@@ -35,8 +37,9 @@ class WorkflowTemplate:
 #: Open-but-controlled (ADR 0016 B4a). A new entry = a new ADR.
 TEMPLATES: dict[str, WorkflowTemplate] = {
     "categorical": WorkflowTemplate(provenance="typed", driver=run_typed_consensus),
+    "continuous": WorkflowTemplate(provenance="typed", driver=run_continuous_consensus),
     "narrative": WorkflowTemplate(provenance="exploratory", driver=None),
-    # v2 "rank" (DE-RRA) / v3 "interval" (variant/SV merge) — each its own ADR.
+    # reserved "rank" (DE-RRA) / "interval" (variant/SV merge) — each its own ADR.
 }
 
 

@@ -237,5 +237,41 @@ class ScClusteringArtifactReader:
             return 0.0
 
 
+class PseudotimeArtifactReader:
+    """sc-pseudotime writes a canonical per-cell ``obs['pseudotime']`` (the
+    method-specific key — ``dpt_pseudotime`` etc. — normalised via
+    ``pseudotime_key``) into its ``processed.h5ad`` for **every** method.
+    ``read_labels`` returns that numeric pseudotime Series indexed by ``obs_names``
+    (the continuous driver rank-normalises it). Intrinsic quality is ``0.0`` —
+    continuous v1 is agreement-only (β=0), so there is no reader intrinsic
+    (ADR 0031)."""
+
+    _H5AD_RELPATH = "processed.h5ad"
+    _OBS_KEY = "pseudotime"
+
+    def read_labels(
+        self, member: ConsensusMember, output_root: Path
+    ) -> pd.Series | None:
+        h5ad_path = member.member_output_dir(output_root) / self._H5AD_RELPATH
+        if not h5ad_path.exists():
+            return None
+        try:
+            import anndata
+
+            adata = anndata.read_h5ad(h5ad_path, backed="r")
+        except Exception:  # noqa: BLE001 — missing/unreadable -> "failed at gather"
+            return None
+        if self._OBS_KEY not in adata.obs.columns:
+            return None
+        series = pd.to_numeric(adata.obs[self._OBS_KEY], errors="coerce")
+        series.index = adata.obs_names.astype(str)
+        return series
+
+    def read_intrinsic_quality(
+        self, member: ConsensusMember, output_root: Path
+    ) -> float:
+        return 0.0
+
+
 # The flavour registry (CONSENSUS_SOURCES) and its derived member_skill-keyed
 # view (TYPED_CONSENSUS_REGISTRY) live in ``sources.py`` — single source of truth.

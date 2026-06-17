@@ -13,6 +13,7 @@ import pytest
 from omicsclaw.runtime.consensus.planners import (
     ChairLLMPlanner,
     IntegrationRepSweepPlanner,
+    PseudotimeMethodPlanner,
     SweepPlanner,
 )
 from omicsclaw.runtime.consensus.sources import CONSENSUS_SOURCES
@@ -46,12 +47,17 @@ def _args(**kw) -> SimpleNamespace:
 def test_registry_has_flavours_keyed_by_name() -> None:
     assert set(CONSENSUS_SOURCES) == {
         "consensus-domains", "sc-consensus-clustering", "sc-consensus-integration",
+        "sc-consensus-pseudotime",
     }
     assert DOMAINS.member_skill == "spatial-domains"
     assert SC.member_skill == "sc-clustering"
     assert isinstance(DOMAINS.planner, ChairLLMPlanner)
     assert isinstance(SC.planner, SweepPlanner)
     assert DOMAINS.template == "categorical" and SC.template == "categorical"
+    # ADR 0031: the continuous pseudotime flavour.
+    pt = CONSENSUS_SOURCES["sc-consensus-pseudotime"]
+    assert pt.template == "continuous" and pt.member_skill == "sc-pseudotime"
+    assert isinstance(pt.planner, PseudotimeMethodPlanner)
 
 
 # --------------------------- SweepPlanner (sc) ----------------------------- #

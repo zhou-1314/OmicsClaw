@@ -164,10 +164,10 @@ e2e_test
 # Claude Code local state (settings, scheduled task locks)
 .claude/
 
-# Humanize RLCR loop — transient codex skill-call scratch (input/output/metadata
-# per invocation); the loop's durable artifacts (bitlesson, goal-tracker, round
-# summaries) stay trackable.
-.humanize/skill/
+# Humanize RLCR loop artifacts (codex skill-call scratch, bitlesson, goal-tracker,
+# round summaries) — local-only loop bookkeeping, never committed.
+.humanize/
+.humanize-*/
 
 # Eval suite per-run artifacts (every UTC-timestamped run dir)
 tests/eval/results/*/

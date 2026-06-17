@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
   "generated_by": "scripts/generate_catalog.py",
-  "skill_count": 94,
+  "skill_count": 95,
   "skills": [
     {
       "name": "bulkrna-batch-correction",
@@ -1456,6 +1456,33 @@
         "integration method consensus",
         "robust scrna integration clustering",
         "which clusters survive integration"
+      ]
+    },
+    {
+      "name": "sc-consensus-pseudotime",
+      "cli_alias": "sc-consensus-pseudotime",
+      "type": "workflow",
+      "description": "Load when you want a single-cell pseudotime ordering robust to the choice of trajectory method \u2014 fanning out DPT/Palantir/VIA from a shared root, rank-aligning them, and voting a consensus pseudotime with per-cell uncertainty. Skip when you have branching multi-lineage trajectories or no defined root.",
+      "version": "0.1.0",
+      "status": "mvp",
+      "validation_level": "smoke-only",
+      "has_script": true,
+      "has_tests": false,
+      "has_demo": false,
+      "demo_command": null,
+      "tags": [
+        "singlecell",
+        "scrna",
+        "consensus",
+        "pseudotime",
+        "trajectory"
+      ],
+      "trigger_keywords": [
+        "consensus pseudotime",
+        "robust pseudotime",
+        "trajectory method consensus",
+        "pseudotime across methods",
+        "which ordering survives the trajectory method"
       ]
     },
     {
