@@ -15,9 +15,11 @@ caller's concern, never the runtime's.
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, Sequence, runtime_checkable
@@ -91,6 +93,8 @@ async def _run_one_step(
     cancel_event: threading.Event | None,
     timeout_seconds: float,
     runner: Any,
+    loop: asyncio.AbstractEventLoop,
+    executor: ThreadPoolExecutor,
 ) -> StepRunResult:
     """Run a single step under the concurrency semaphore, with timeout/cancel."""
     started = time.monotonic()
@@ -116,14 +120,20 @@ async def _run_one_step(
                 error="cancel_event was set while waiting for semaphore",
             )
         try:
+            # Run the blocking runner on fan_out's OWN call-scoped executor (not
+            # asyncio.to_thread's shared loop-default executor) so its worker
+            # threads are reclaimed when fan_out returns — see fan_out().
             skill_result = await asyncio.wait_for(
-                asyncio.to_thread(
-                    runner,
-                    skill_name=step.skill_name,
-                    input_path=input_path,
-                    output_dir=str(output_dir),
-                    extra_args=step.to_extra_args(),
-                    cancel_event=cancel_event,
+                loop.run_in_executor(
+                    executor,
+                    functools.partial(
+                        runner,
+                        skill_name=step.skill_name,
+                        input_path=input_path,
+                        output_dir=str(output_dir),
+                        extra_args=step.to_extra_args(),
+                        cancel_event=cancel_event,
+                    ),
                 ),
                 timeout=timeout_seconds,
             )
@@ -230,20 +240,33 @@ async def fan_out(
 
     parallel = _compute_max_parallel(len(steps), max_parallel)
     semaphore = asyncio.Semaphore(parallel)
-
-    coros = [
-        _run_one_step(
-            step,
-            input_path=input_path,
-            output_root=output_root_p,
-            semaphore=semaphore,
-            cancel_event=cancel_event,
-            timeout_seconds=timeout_seconds,
-            runner=runner,
-        )
-        for step in steps
-    ]
-    results: list[StepRunResult] = await asyncio.gather(*coros)
+    loop = asyncio.get_running_loop()
+    # Own the threadpool rather than using ``asyncio.to_thread``'s shared
+    # loop-default executor: a call-scoped pool is shut down when fan_out
+    # returns, so worker threads are reclaimed deterministically instead of
+    # lingering on the event loop and accumulating across callers (e.g.
+    # pytest-asyncio's per-test loops), which can stall interpreter teardown.
+    # ``shutdown(wait=False)`` so a genuinely timed-out (unkillable) worker never
+    # blocks the return — the deferred hard-timeout leak (ADR 0029) is unchanged.
+    executor = ThreadPoolExecutor(max_workers=max(1, parallel), thread_name_prefix="fanout")
+    try:
+        coros = [
+            _run_one_step(
+                step,
+                input_path=input_path,
+                output_root=output_root_p,
+                semaphore=semaphore,
+                cancel_event=cancel_event,
+                timeout_seconds=timeout_seconds,
+                runner=runner,
+                loop=loop,
+                executor=executor,
+            )
+            for step in steps
+        ]
+        results: list[StepRunResult] = await asyncio.gather(*coros)
+    finally:
+        executor.shutdown(wait=False)
     survived, failed = _partition_results(results)
 
     if required_survivors is not None and len(survived) < required_survivors:
