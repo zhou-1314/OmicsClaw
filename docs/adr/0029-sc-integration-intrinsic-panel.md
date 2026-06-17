@@ -179,10 +179,13 @@ from 33 to 19. A fresh run is needed before quoting this as end-to-end performan
   `knn_preservation` counterweight was invalidated on panc8 (see Amendment) and
   demoted to a diagnostic, so the score no longer penalises over-integration.
   Graph connectivity (scIB-style: per-cluster connected-component fraction of the
-  kNN subgraph) is the leading candidate — it measures manifold continuity rather
-  than raw `X_pca` neighbour overlap and so should not punish legitimate
-  reorganisation — but it must itself be validated against ground truth on
-  several datasets before it scores.
+  kNN subgraph) was the leading candidate. **Investigated and closed as not-viable
+  — see the Amendment "GT-free structure / bio-conservation axis" (2026-06-16):**
+  every GT-free graph-connectivity form (and every other GT-free bio-conservation
+  metric surveyed, including cell-cycle conservation) either anti-correlates with
+  GT recovery, is redundant with iLISI / `cross_NMI`, or needs ground-truth labels.
+  The panel stays iLISI-only; do not re-attempt this without a batch-independent
+  biological reference.
 - `kBET` and graph-iLISI (need `scib_metrics`, not installed) and a
   graph-only-member panel path (BBKNN returns `X_pca` + a rebuilt graph, so it is
   excluded from the default set) are future axes — addable by adding a metric to
@@ -244,3 +247,104 @@ If iLISI (the sole scored axis) cannot compute for a member (e.g. harmonypy
 missing), that member keeps its reader intrinsic and the run warns, rather than
 silently scoring a misleading 0.0. The panel remains **experimental** — validated
 on one real dataset, not yet calibrated across several.
+
+## Amendment (2026-06-16): GT-free structure / bio-conservation axis — investigated, no viable independent axis found; iLISI-only confirmed
+
+The Deferred item "a validated GT-free structure / bio-conservation axis (graph
+connectivity, the leading candidate)" was investigated end-to-end: the specific
+graph-connectivity candidate, plus a literature sweep for **any** GT-free metric
+that could serve as an independent bio-conservation counterweight to iLISI. Every
+candidate was prototyped on the cached panc8 members (`none`/`harmony`/`scanorama`/
+`scvi`) and Spearman-correlated against per-member GT ARI, with redundancy checks
+against the two signals the composite already scores: batch mixing (iLISI) and
+cross-method partition agreement (cross_NMI, the `α` term). **Outcome: no GT-free
+metric is a usable independent scored axis. The panel stays iLISI-only.**
+
+### Graph connectivity (the named candidate) — rejected
+
+scIB graph connectivity (per-label largest-connected-component fraction of the
+embedding kNN graph) only tracks GT recovery when computed on **ground-truth
+cell-type labels** (`gc_gt`, Spearman `+0.4` across all `k∈{3..30}`) — which are
+unavailable at voting time. Every GT-free label set fails:
+- **member's own Leiden clusters** (the candidate proposed for this ADR): **circular**
+  — Leiden clusters are connected components of the very graph being measured, so the
+  metric saturates at `1.000` (the OR-symmetrised graph over-connects ~4.2× vs mutual
+  kNN); desaturating it (mutual kNN) flips it to `rho=-1.0` (anti-correlated).
+- **external surrogate labels** (baseline Leiden, or fresh k-means on `X_pca`):
+  anti-correlate (`-0.4..-1.0`), exactly like `knn_preservation` — they encode the
+  batch-contaminated pre-integration partition.
+- **whole-graph connectivity**: degenerate (one giant component) or sign-unstable.
+- **cross-method labels** (score a member's graph with *other* members' Leiden
+  labels — non-circular, GT-free): positively correlates (`+1.0`), but is **redundant
+  with `cross_NMI`** (Spearman `+0.8`, Pearson `~0.7` between them; `cross_NMI` alone
+  already scores `+0.8` vs ARI), so it double-counts the `α` term and adds a
+  conformity bias (penalises a correct-but-minority member). Not independent.
+
+### Literature sweep for any other GT-free axis — only one structural candidate, and it fails on panc8
+
+Across the scIB taxonomy (Luecken 2022, *Nat Methods*; theislab/`scib`,
+YosefLab/`scib-metrics`), topology/manifold-preservation metrics, recent (2022–2025)
+reference-free integration evaluators, and biological-anchor proxies, GT-free metrics
+fall into three buckets — two of which are disqualified by construction:
+- **redundant with batch mixing (iLISI):** PCR(batch), kBET, silhouette(batch),
+  whole-graph connectivity, BRAS, CiLISI — all decompose to batch-variance removal.
+- **need ground-truth labels:** cLISI / graph-cLISI, cell-type ASW, NMI/ARI-vs-truth,
+  isolated-label F1/silhouette, trajectory conservation (needs a root/lineage), kBET-
+  and graph-connectivity-per-label.
+- **reference-trapped (anti-correlate like `knn_preservation`):** trustworthiness /
+  continuity / co-ranking, RTD, DEMaP, scIB-E's Jaccard kNN-overlap and Corr-MSE —
+  all reference the pre-integration `X_pca`, which is batch-contaminated, so
+  "preserving structure" rewards preserving the batch effect.
+
+The **one** GT-free metric that is embedding-deployable *and* structurally independent
+of both iLISI and `cross_NMI` is **cell-cycle conservation** (scIB `cell_cycle`):
+PC-regression of a known biological covariate's (S/G2M score) variance, embedding
+vs `X_pca`. It is the bio-anchor idea — reward retaining real biological variance
+while removing batch variance — and unlike `knn_preservation` it tolerates legitimate
+re-organisation. We prototyped it with clean **full-transcriptome** cell-cycle scores
+(panc8's 2000-HVG subset only retains 8/42 S + 17/51 G2M genes, so HVG-based scoring
+is unreliable; scored instead on the 34,363-gene `norm_data`). Result: it
+**anti-correlates on panc8** (`rho=-0.4`; `cc_cons` = 1.000/0.551/0.489/0.451 for
+`none`/`harmony`/`scanorama`/`scvi`). Mechanism: panc8 is resting pancreatic islet
+tissue (cell-cycle variance ≈1% of `X_pca` variance, mostly batch-confounded), and the
+cc-explained variance is removed **monotonically** as integration strengthens
+(`cc_after_S` 0.0104→0.0042→0.0030→0.0031) — i.e. the weak cell-cycle signal is
+entangled with batch and correctly removed, so "conservation" tracks *under*-correction.
+A fair test of cell-cycle conservation needs a **proliferating, cell-cycle-active**
+multi-batch dataset (e.g. immune/bone-marrow); even then it would be valid only on
+proliferating tissue and is therefore unsuitable as a *default* axis (it inverts on
+resting tissue, as panc8 shows). Modern `scib-metrics` has also dropped cell-cycle/
+HVG/PCR conservation entirely, and no source standalone-validates it as a monotone
+tracker of per-method ARI.
+
+### The unifying reason
+
+Every GT-free "structure/biology preservation" metric references **pre-integration
+structure** (X_pca neighbourhoods, cell-cycle variance, cell-cell correlations). In
+real multi-batch data that reference is itself **batch-confounded**, so rewarding its
+preservation rewards preserving the batch effect → anti-correlation (the same failure
+that demoted `knn_preservation`). The only signals that are clean *without* GT labels
+are batch mixing (iLISI) and cross-method agreement (`cross_NMI`) — both already in
+the composite. An independent GT-free bio-conservation axis would need a biological
+reference that is genuinely batch-independent, which the current literature does not
+supply in an embedding-deployable form.
+
+### Decision
+
+Keep the panel **iLISI-only**; over-integration remains *flagged* (not scored) via
+the `knn_preservation` diagnostic. This Deferred item is **closed as not-viable** for
+a default scored axis — do not re-attempt graph connectivity or a pre-integration-
+referenced preservation metric. Remaining untested long-shots, recorded with their
+hard caveats rather than pursued:
+- **Cross-batch topology agreement** (IMD/MSID, Tsitsulin ICLR 2020) — the only
+  candidate whose reference is neither `X_pca` nor per-cell batch labels (it compares
+  the manifold *shapes* of different batches within a member). Plausible escape from
+  the trap, but unproven as an integration-QC axis, needs a ~80-line spectral
+  reimplementation, and risks re-encoding iLISI (congruent batch shapes can also arise
+  from over-mixing).
+- **RBET** (Comm Biol 2025) — overcorrection-aware, GT-free, but operates on
+  *corrected gene-space expression*, which scVI (latent-only) does not emit.
+- **Opt-in GT bio-conservation axis** — when an upstream reference annotation exists
+  (e.g. after `sc-cell-annotation`), `gc_gt` / cLISI / NMI-vs-ref are validated and
+  could be added as an *optional* scored axis. Out of scope for the unsupervised
+  default panel.
