@@ -53,8 +53,11 @@ _Avoid_: "tool" (overloaded with the LLM function-calling sense), "agent".
 
 **Workflow template** _(L2.5)_:
 One consensus math/synthesis *shape* expressed as a fixed driver function —
-`categorical` (`run_typed_consensus`, v1), and reserved `rank` (RRA, v2) /
-`interval` (merge, v3). The `TEMPLATES` registry is open but **controlled**:
+`categorical` (`run_typed_consensus`, v1), `continuous` (rank-gauge per-cell
+*vector* consensus — one pseudotime/score vector per member, direction +
+monotone gauge resolved before aggregation; branching trajectory *topology* is
+out of scope — ADR 0031), and reserved `rank` (RRA) / `interval` (merge). The
+`TEMPLATES` registry is open but **controlled**:
 adding a template means adding a new "verified" math guarantee, so it
 requires its own ADR (decided 2026-05-30). Everyday flavours never add one.
 Each template carries an explicit **provenance** field
@@ -144,3 +147,8 @@ _Avoid_: using "pipeline" as a synonym for "workflow".
   invoked by the loop; the generative sense is explicitly out of scope.
 - "pipeline" was at risk of becoming a synonym for "workflow". Resolved:
   Pipeline is *one* workflow shape (YAML baton-pass), not the general term.
+- "continuous" vs the reserved "rank" template — both touch ranks, at risk of
+  being merged. Resolved (ADR 0031): `continuous` aggregates a per-cell scalar
+  *field* (every member has a value at every cell, rank-normalised — pseudotime/
+  scores); `rank` (RRA) aggregates ranked *lists* whose items differ per list
+  (DE). Distinct templates, distinct math — do not merge.
