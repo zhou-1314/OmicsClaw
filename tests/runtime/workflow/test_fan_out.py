@@ -156,18 +156,15 @@ async def test_run_team_wrapper_can_opt_out_of_minimum(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_fan_out_reclaims_its_worker_threads(tmp_path: Path) -> None:
-    """fan_out JOINS its call-scoped threadpool before returning — no worker
-    outlives the call.
+async def test_fan_out_workers_are_daemon_threads(tmp_path: Path) -> None:
+    """fan_out runs each blocking runner in a DAEMON thread.
 
-    Regression for the Round-2/3 Codex findings: ``asyncio.to_thread`` ran the
-    worker on the event loop's shared default executor (threads accumulated across
-    per-test loops); even a call-scoped pool shut down with ``wait=False`` left a
-    worker winding down *asynchronously*, which on the fast return/raise path could
-    survive into pytest's fd-level capture teardown and deadlock. The fix joins
-    workers (``wait=True``) on every non-timeout path. Checked IMMEDIATELY (no poll):
-    with the deterministic join nothing lingers; a ``wait=False`` implementation
-    fails this because a worker is still alive right after fan_out returns.
+    Structural fix for the Round 1-3 pytest-asyncio teardown hangs: earlier
+    variants (``asyncio.to_thread`` shared default executor; a call-scoped
+    ``ThreadPoolExecutor``) could leave an idle worker that stalled teardown across
+    a test sequence. A daemon worker can NEVER block process or test teardown, even
+    if it outlives the call (a timed-out/cancelled, unkillable runner). Invariant:
+    every thread fan_out spawns is a daemon.
     """
     import threading
 
@@ -177,31 +174,41 @@ async def test_fan_out_reclaims_its_worker_threads(tmp_path: Path) -> None:
         Path(kwargs["output_dir"]).mkdir(parents=True, exist_ok=True)
         return _StubResult(exit_code=0)
 
-    before = {t.ident for t in threading.enumerate() if t.is_alive()}
+    before = {t.ident for t in threading.enumerate()}
     result = await fan_out(steps, input_path="/dev/null", output_root=tmp_path, runner=runner)
     assert result.n_survived == 3
-    lingering = [t.name for t in threading.enumerate() if t.is_alive() and t.ident not in before]
-    assert not lingering, f"fan_out left worker thread(s) alive after return: {lingering}"
+    nondaemon = [
+        t.name for t in threading.enumerate()
+        if t.ident not in before and t.name.startswith("fanout") and not t.daemon
+    ]
+    assert not nondaemon, f"fan_out spawned non-daemon worker thread(s): {nondaemon}"
 
 
 @pytest.mark.asyncio
-async def test_fan_out_reclaims_threads_when_it_raises(tmp_path: Path) -> None:
-    """Deterministic join on the RAISE path too — the exact case that hung under
-    normal pytest capture (Round-2 review): fan_out raises fast, so a not-yet-joined
-    worker could outlive the test. No worker is alive immediately after fan_out
-    raises ``InsufficientSurvivorsError``.
+async def test_two_fan_out_calls_in_sequence_dont_hang_or_leak(tmp_path: Path) -> None:
+    """Codex Round-3: a SEQUENCE of fan_out calls hung while isolated tests passed.
+
+    Two calls back-to-back (one survivor, then all fail) both return — the test
+    completing IS the no-hang assertion — and any fan_out worker spawned is a
+    daemon (so a leftover cannot stall the next test's teardown).
     """
     import threading
 
     steps = [_Step(f"s{i}") for i in range(3)]
-    before = {t.ident for t in threading.enumerate() if t.is_alive()}
-    with pytest.raises(InsufficientSurvivorsError):
-        await fan_out(
-            steps,
-            input_path="/dev/null",
-            output_root=tmp_path,
-            required_survivors=2,
-            runner=_crash_all_but("s0"),
-        )
-    lingering = [t.name for t in threading.enumerate() if t.is_alive() and t.ident not in before]
-    assert not lingering, f"fan_out left worker thread(s) alive after raising: {lingering}"
+
+    def crash_all(**kwargs):
+        Path(kwargs["output_dir"]).mkdir(parents=True, exist_ok=True)
+        raise RuntimeError("synthetic crash")
+
+    before = {t.ident for t in threading.enumerate()}
+    r1 = await fan_out(
+        steps, input_path="/dev/null", output_root=tmp_path / "a", runner=_crash_all_but("s0")
+    )
+    assert r1.n_survived == 1
+    r2 = await fan_out(steps, input_path="/dev/null", output_root=tmp_path / "b", runner=crash_all)
+    assert r2.n_survived == 0
+    nondaemon = [
+        t.name for t in threading.enumerate()
+        if t.ident not in before and t.name.startswith("fanout") and not t.daemon
+    ]
+    assert not nondaemon, f"fan_out spawned non-daemon worker thread(s): {nondaemon}"
