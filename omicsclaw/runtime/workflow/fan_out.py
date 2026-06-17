@@ -265,8 +265,17 @@ async def fan_out(
             for step in steps
         ]
         results: list[StepRunResult] = await asyncio.gather(*coros)
-    finally:
+    except BaseException:
+        # Cancellation / unexpected: don't block teardown on in-flight work.
         executor.shutdown(wait=False)
+        raise
+    # Join workers BEFORE returning so none outlives the call. A worker that
+    # survives into the caller's teardown can deadlock pytest's fd-level output
+    # capture (observed on the fast exception/raise path, Round-2 review). Every
+    # worker has finished unless a step genuinely TIMED OUT (an unkillable blocking
+    # thread) — only then skip the join (wait=False) so a runaway worker never
+    # blocks the return; the deferred hard-timeout leak (ADR 0029) is unchanged.
+    executor.shutdown(wait=not any(r.status == "timeout" for r in results))
     survived, failed = _partition_results(results)
 
     if required_survivors is not None and len(survived) < required_survivors:
