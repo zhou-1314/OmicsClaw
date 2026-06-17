@@ -53,6 +53,20 @@ def test_planner_rejects_parameterized_and_duplicate_members():
         PseudotimeMethodPlanner().propose(_args(members="dpt,dpt", root_cluster="X"), source=_SRC)
 
 
+def test_planner_rejects_out_of_scope_and_unknown_methods():
+    # multi-lineage methods are deferred (ADR 0031 §3) — rejected before fan-out
+    for spec_kw in (dict(members="slingshot_r"), dict(pseudotime_methods="monocle3_r"),
+                    dict(members="cellrank"), dict(members="dptt")):
+        with pytest.raises(SystemExit, match="v1 supports only"):
+            PseudotimeMethodPlanner().propose(_args(root_cluster="X", **spec_kw), source=_SRC)
+    # a partly-valid spec still fails if ANY method is out of scope
+    with pytest.raises(SystemExit, match="v1 supports only"):
+        PseudotimeMethodPlanner().propose(_args(members="dpt,slingshot_r", root_cluster="X"), source=_SRC)
+    # valid subsets still pass
+    members = PseudotimeMethodPlanner().propose(_args(members="dpt,via", root_cluster="X"), source=_SRC)
+    assert [m.name for m in members] == ["dpt", "via"]
+
+
 # ---- reader ---------------------------------------------------------------- #
 
 def test_reader_reads_canonical_pseudotime(tmp_path: Path):

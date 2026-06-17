@@ -272,6 +272,11 @@ async def _run(args: argparse.Namespace) -> int:
         "operator": operator,
         "members": [{"name": m.name, "params": dict(m.params)} for m in members],
     }
+    # The continuous driver writes report.md itself (AC2) and needs the flavour title;
+    # pass it via plan_audit (the driver pops it before writing plan.json). Categorical
+    # renders the report in run.py below, so it does not need this key.
+    if source.template == "continuous":
+        plan_audit["report_title"] = source.report_title
 
     non_voting = _derive_non_voting(source, members, args)
 
@@ -308,10 +313,7 @@ async def _run(args: argparse.Namespace) -> int:
         return 6
 
     if source.template == "continuous":
-        from omicsclaw.runtime.consensus.continuous_report import format_continuous_report
-
-        md = format_continuous_report(run, title=source.report_title)
-        (run.output_dir / "report.md").write_text(md)
+        # report.md is written by run_continuous_consensus itself (AC2); just report.
         print(
             f"[{args.source}] OK: {run.team_result.n_survived}/{run.team_result.total} members; "
             f"{len(run.selected_bcs)} entered consensus; operator={operator}; "

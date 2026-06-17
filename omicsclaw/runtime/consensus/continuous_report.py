@@ -25,15 +25,21 @@ _DISCLAIMER = (
 def _failed_members_section(run: ContinuousConsensusRun) -> list[str]:
     failed = list(run.team_result.failed)
     missing = list(run.missing_members)
+    partial = list(run.partial_excluded)
     dropped = list(run.dropped_degenerate)
     lines = ["## Failed / excluded members", ""]
-    if not failed and not missing and not dropped:
+    if not failed and not missing and not partial and not dropped:
         lines.append("None — every fanned-out member produced a usable pseudotime.")
         return lines
     for r in failed:
         lines.append(f"- `{r.step.name}` — {r.status}: {r.error or '(no detail)'}")
     for name in missing:
         lines.append(f"- `{name}` — completed but produced no readable pseudotime; excluded.")
+    for name in partial:
+        lines.append(
+            f"- `{name}` — incomplete cell coverage / non-finite pseudotime; dropped whole "
+            "(full coverage required, ADR 0031 §4)."
+        )
     for name in dropped:
         lines.append(
             f"- `{name}` — degenerate pseudotime (constant / <2 unique / non-finite); "

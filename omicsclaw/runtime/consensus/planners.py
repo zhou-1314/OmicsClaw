@@ -242,6 +242,19 @@ class PseudotimeMethodPlanner:
         else:
             methods = list(DEFAULT_PSEUDOTIME_METHODS)
 
+        # v1 member whitelist (ADR 0031 §3): only single-global-pseudotime methods.
+        # Multi-lineage methods (slingshot_r/monocle3_r/cellrank) are deferred — they
+        # re-introduce branching topology — and unknown methods are rejected before
+        # fan-out rather than failing mid-run. Applies to --members and --pseudotime-methods.
+        unknown = [m for m in methods if m not in DEFAULT_PSEUDOTIME_METHODS]
+        if unknown:
+            raise SystemExit(
+                "sc-consensus-pseudotime v1 supports only the single-global-pseudotime "
+                f"methods {list(DEFAULT_PSEUDOTIME_METHODS)}; got unsupported "
+                f"{unknown}. Multi-lineage methods (slingshot/monocle3/cellrank) are "
+                "deferred (ADR 0031 §3)."
+            )
+
         root_cluster = getattr(args, "root_cluster", None)
         root_cell = getattr(args, "root_cell", None)
         if not root_cluster and not root_cell:

@@ -107,10 +107,16 @@ async def test_happy_path_writes_banner_and_artifacts(tmp_path: Path):
         assert (out / name).exists(), name
     cons = pd.read_csv(out / "consensus_pseudotime.tsv", sep="\t")
     assert list(cons.columns) == ["observation", "consensus_pseudotime", "pseudotime_mad", "range"]
+    assert len(cons) == n  # full cell coverage
 
+    # AC2: report.md is written by the DRIVER (not just the CLI), banner-first.
+    assert (out / "report.md").exists()
+    report = (out / "report.md").read_text()
+    assert report.splitlines()[0] == "[A: Verified consensus]"
+    assert "analysis://typed/ptrun" in report
+    # in-memory render matches (same formatter)
     md = format_continuous_report(run, title="t")
     assert md.splitlines()[0] == "[A: Verified consensus]"
-    assert "analysis://typed/ptrun" in md
 
 
 @pytest.mark.asyncio
@@ -175,3 +181,46 @@ async def test_weighted_operator_runs(tmp_path: Path):
     run = await _run(pt, tmp_path, operator="weighted")
     assert run.operator == "weighted"
     assert run.consensus.pseudotime.min() == 0.0 and run.consensus.pseudotime.max() == 1.0
+
+
+# --------------------------------------------------------------------------- #
+# full-coverage enforcement (ADR 0031 §4 — drop the member whole, not cells)  #
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.asyncio
+async def test_partial_coverage_member_dropped_whole(tmp_path: Path):
+    n = 50
+    base = np.arange(n, dtype=float)
+    # 'via' covers only n-1 cells (the stub reader indexes obs_0..obs_{len-1})
+    pt = {"dpt": base, "palantir": base + 1.0, "via": base[: n - 1]}
+    run = await _run(pt, tmp_path)
+    assert "via" in run.partial_excluded
+    assert set(run.selected_bcs) == {"dpt", "palantir"}
+    # the consensus keeps the FULL reference cell count, not the intersection
+    assert len(run.consensus.pseudotime) == n
+    cons = pd.read_csv(tmp_path / "out" / "consensus_pseudotime.tsv", sep="\t")
+    assert len(cons) == n
+
+
+@pytest.mark.asyncio
+async def test_nonfinite_member_dropped_whole(tmp_path: Path):
+    n = 40
+    base = np.arange(n, dtype=float)
+    bad = base.copy()
+    bad[5] = np.nan  # full coverage but a non-finite value -> drop whole
+    pt = {"dpt": base, "palantir": base + 1.0, "via": bad}
+    run = await _run(pt, tmp_path)
+    assert "via" in run.partial_excluded
+    assert len(run.consensus.pseudotime) == n
+
+
+@pytest.mark.asyncio
+async def test_too_few_full_coverage_members_raises(tmp_path: Path):
+    from omicsclaw.runtime.workflow import InsufficientSurvivorsError
+
+    n = 30
+    base = np.arange(n, dtype=float)
+    # only 'dpt' is full-coverage; 'via' is partial -> < 2 usable -> fail loud
+    pt = {"dpt": base, "via": base[: n - 1]}
+    with pytest.raises(InsufficientSurvivorsError):
+        await _run(pt, tmp_path)

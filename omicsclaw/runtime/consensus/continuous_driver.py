@@ -76,6 +76,7 @@ class ContinuousConsensusRun:
     anchor: str
     flipped_members: tuple[str, ...]
     dropped_degenerate: tuple[str, ...]
+    partial_excluded: tuple[str, ...]
     selected_bcs: tuple[str, ...]
     consensus: ContinuousConsensusResult
     weak_agreement: dict[str, Any]
@@ -88,21 +89,46 @@ class ContinuousConsensusRun:
 
 def _gather_pseudotime(
     survivors: Sequence[StepRunResult], source: ConsensusSource
-) -> tuple[pd.DataFrame, list[str]]:
-    """Pull each member's canonical per-cell ``pseudotime`` vector through the reader."""
-    columns: dict[str, pd.Series] = {}
+) -> tuple[pd.DataFrame, list[str], list[str]]:
+    """Pull each member's canonical per-cell pseudotime; enforce FULL coverage.
+
+    ADR 0031 §4: all members run on the same input and share ``obs_names``, so a
+    member with partial coverage or any non-finite value is dropped **whole** —
+    never unioned/intersected per cell. The reference ``obs_names`` is the largest
+    member (no member *adds* cells, so the largest is the full input set). Returns
+    ``(df, missing, partial)``: ``df`` is reindexed to the reference order with no
+    NaNs; ``missing`` = members with no readable artifact; ``partial`` = members
+    excluded for a different cell set, duplicate ids, or non-finite values.
+    """
+    series_by_member: dict[str, pd.Series] = {}
     missing: list[str] = []
     for r in survivors:
-        output_root = r.output_dir.parent
-        series = source.reader.read_labels(r.step, output_root)
+        series = source.reader.read_labels(r.step, r.output_dir.parent)
         if series is None:
             missing.append(r.step.name)
             continue
-        columns[r.step.name] = pd.to_numeric(series, errors="coerce")
+        s = pd.to_numeric(series, errors="coerce")
+        s.index = s.index.astype(str)
+        series_by_member[r.step.name] = s
+    if not series_by_member:
+        return pd.DataFrame(), missing, []
+
+    ref_index = max(series_by_member.values(), key=lambda s: s.index.size).index
+    ref_set = set(ref_index)
+    columns: dict[str, pd.Series] = {}
+    partial: list[str] = []
+    for member, s in series_by_member.items():
+        if s.index.has_duplicates or set(s.index) != ref_set:
+            partial.append(member)  # different cell set / duplicate ids
+            continue
+        reindexed = s.reindex(ref_index)
+        if not np.all(np.isfinite(reindexed.to_numpy(dtype=float))):
+            partial.append(member)  # non-finite after coercion
+            continue
+        columns[member] = reindexed
     if not columns:
-        return pd.DataFrame(), missing
-    df = pd.concat(columns, axis=1).dropna(axis=0, how="any")
-    return df, missing
+        return pd.DataFrame(index=ref_index), missing, partial
+    return pd.DataFrame(columns, index=ref_index), missing, partial
 
 
 def _annotate_selection(
@@ -161,10 +187,14 @@ async def run_continuous_consensus(
     # v1 is agreement-only: α=1, β=0 regardless of the passed score_config
     # (intrinsic_panel="" skips any panel, but BETA_DEFAULT is 0.4 — force it).
     eff_config = ScoreConfig(alpha=1.0, beta=0.0, max_class_frac_cap=score_config.max_class_frac_cap)
+    # Report title is carried via plan_audit (Codex review) — used for report.md,
+    # not a plan field, so it is popped from the plan.json audit below.
+    report_title = str((plan_audit or {}).get("report_title") or source.report_title or "Verified consensus")
 
     # 1. plan.json audit BEFORE fan-out (survives early failure).
     if plan_audit is not None:
         audit = dict(plan_audit)
+        audit.pop("report_title", None)
         audit["input_path"] = str(Path(input_path).resolve())
         audit["operator"] = operator
         audit["alpha"] = eff_config.alpha
@@ -190,12 +220,19 @@ async def run_continuous_consensus(
         runner=runner,
     )
 
-    # 3. gather per-member pseudotime; drop degenerate members; fail loud if < 2.
-    raw_df, missing = _gather_pseudotime(team.survived, source)
+    # 3. gather per-member pseudotime; enforce full coverage (drop partial/non-finite
+    #    members whole, ADR 0031 §4); drop degenerate members; fail loud if < 2.
+    raw_df, missing, partial = _gather_pseudotime(team.survived, source)
+    if partial:
+        logger.warning(
+            "dropping member(s) %s with incomplete cell coverage / non-finite "
+            "pseudotime (full coverage required — ADR 0031 §4).", partial,
+        )
     if raw_df.shape[1] < MIN_CONSENSUS_MEMBERS:
         raise InsufficientSurvivorsError(
-            f"Only {raw_df.shape[1]} member(s) produced a readable pseudotime "
-            f"(< {MIN_CONSENSUS_MEMBERS} required). Missing artifacts: {missing}"
+            f"Only {raw_df.shape[1]} member(s) produced a full-coverage readable "
+            f"pseudotime (< {MIN_CONSENSUS_MEMBERS} required). Missing: {missing}; "
+            f"partial: {partial}."
         )
     good: list[str] = []
     dropped: list[str] = []
@@ -208,8 +245,9 @@ async def run_continuous_consensus(
         )
     if len(good) < MIN_CONSENSUS_MEMBERS:
         raise InsufficientSurvivorsError(
-            f"Only {len(good)} member(s) had a non-degenerate pseudotime "
-            f"(< {MIN_CONSENSUS_MEMBERS} required); dropped {dropped}, missing {missing}."
+            f"Only {len(good)} member(s) had a non-degenerate full-coverage pseudotime "
+            f"(< {MIN_CONSENSUS_MEMBERS} required); dropped {dropped}, partial {partial}, "
+            f"missing {missing}."
         )
     pseudotime_df = raw_df[good]
 
@@ -244,6 +282,8 @@ async def run_continuous_consensus(
         "anchor": anchor,
         "flipped_members": list(flipped),
         "dropped_degenerate": list(dropped),
+        "partial_excluded": list(partial),
+        "missing": list(missing),
     }, indent=2))
     artifacts.append(audit_path)
     if len(voting) < MIN_CONSENSUS_MEMBERS:
@@ -282,7 +322,12 @@ async def run_continuous_consensus(
     }).to_csv(consensus_path, sep="\t", index=False)
     artifacts.append(consensus_path)
 
-    return ContinuousConsensusRun(
+    # 10. report.md is a driver-written artifact (AC2). Lazy-import the formatter:
+    #     it imports dispatch (banner) and `templates` imports THIS module, so a
+    #     module-level import would close a cycle (BL-20260617).
+    report_path = output_dir_p / "report.md"
+    artifacts.append(report_path)
+    run = ContinuousConsensusRun(
         run_id=run_id,
         operator=operator,
         members=tuple(members),
@@ -294,6 +339,7 @@ async def run_continuous_consensus(
         anchor=anchor,
         flipped_members=tuple(flipped),
         dropped_degenerate=tuple(dropped),
+        partial_excluded=tuple(partial),
         selected_bcs=tuple(voting),
         consensus=consensus,
         weak_agreement=weak,
@@ -303,3 +349,7 @@ async def run_continuous_consensus(
         score_config=eff_config,
         top_k=top_k_default,
     )
+    from omicsclaw.runtime.consensus.continuous_report import format_continuous_report
+
+    report_path.write_text(format_continuous_report(run, title=report_title))
+    return run
