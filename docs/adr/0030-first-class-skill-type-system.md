@@ -135,7 +135,7 @@ zero-test domains a concrete path off `smoke-only`.
 Use `parameters.yaml` as the source for runner policy, UI parameter cards,
 `references/parameters.md` (already generated from it), and catalog metadata.
 **Do not** generate the skill's `argparse` from a schema in this ADR — that
-fights ADR 0003's human-copy-template principle. Instead, lint compares the
+fights ADR 0033's human-copy-template principle. Instead, lint compares the
 sidecar policy against the executable's parser profile *for that type*.
 `allowed_extra_flags` stays a policy view (sidecar ∩ runner policy), preserving
 its security role while shrinking the drift surface.
@@ -201,11 +201,10 @@ them), so a breaking change there is concrete rather than hypothetical.
 
 ## Relationship to prior ADRs
 
-- **ADR 0003 (`0003-skill-template-is-human-copy-only.md`)** — the skill
+- **ADR 0033 (`0033-skill-template-is-human-copy-only.md`)** — the skill
   template stays human-copy; this adds per-type template variants, not codegen.
-  (Note: a second file, `0003-message-bus-decision.md`, shares the number; it is
-  relevant only as an anti-speculative-infrastructure precedent, not as the
-  skill-template ADR.)
+  (Renumbered from 0003 → 0033 on 2026-06-22 to resolve a number collision with
+  `0003-message-bus-decision.md`, now the sole ADR 0003.)
 - **ADR 0004** — the registry already ignores `_`-dirs and resolves scripts; it
   gains a `type` read and type-aware script resolution (shim vs leaf), plus the
   scriptless path that `knowledge` would require.

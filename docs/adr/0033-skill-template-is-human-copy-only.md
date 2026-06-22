@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted (2026-05-12).
+Accepted (2026-05-12). *Renumbered from 0003 → 0033 on 2026-06-22 to resolve a
+number collision with [`0003-message-bus-decision.md`](0003-message-bus-decision.md),
+now the sole ADR 0003.*
 
 ## Context
 

@@ -57,7 +57,7 @@ OmicsClaw/
 │   └── singlecell/scrna/sc-consensus-clustering/   # ★ ADR 0010 thin skill
 ├── docs/
 │   ├── CONTEXT.md          # 领域语言术语表（Memory + Surface 层）
-│   ├── adr/                # 7 个决策记录（0003–0008，+ 一个重复 0003）
+│   ├── adr/                # 7 个决策记录（0003–0008；原重复的 0003 已重编号为 0033）
 │   └── architecture/       # overview / orchestrator / skill-system + 本文档
 ├── frontend/               # （Vue 桌面前端，与本文档无关）
 ├── tools/                  # vendored bin（外部 CLI 工具）
@@ -867,7 +867,7 @@ tests/providers/
 | ADR   | 标题                                      | 状态       | 关键决定                                                                                                   |
 | ----- | --------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------ |
 | 0003  | message-bus-decision                    | Accepted | 不引入消息总线；事件流直接通过 callback / queue 传递                                                                    |
-| 0003* | skill-template-is-human-copy-only       | Accepted | skill 模板只供人类复制，不做自动化                                                                                   |
+| 0033  | skill-template-is-human-copy-only       | Accepted | skill 模板只供人类复制，不做自动化                                                                                   |
 | 0004  | boundary-restructure-fold-bot           | Accepted | 把 bot/ 折叠进 surfaces/channels/ 与 runtime/，消除 bot 边界                                                     |
 | 0005  | surfaces-umbrella-for-ingress           | Accepted | CLI / Desktop / Channels 三个 surface 统一在 `surfaces/` 雨伞下                                                |
 | 0006  | agent-dispatch-event-stream             | Accepted | `dispatch(envelope) → AsyncIterator[Event]`；用 typed events 代替 ACP 线协议；关闭 Redis queue / worker 路径       |
@@ -878,7 +878,7 @@ tests/providers/
 | 0011  | consensus-evaluation-protocol           | Accepted (amended) | 复合 BC 分数 + DLPFC 151673 hero benchmark + self-consistency；2026-05-18 amend：task-targeted metric panel（ARI 单 metric → 4 hard + 4 report-only）|
 
 
-> **历史注**：仓库里曾有两个 `0003-*.md`（编号冲突）；ADR 0009 起恢复连续编号，0010/0011 已就位（§7.11 / §11）。
+> **历史注**：仓库里曾有两个 `0003-*.md` 与两个 `0024-*.md`（编号冲突）；2026-06-22 已重编号消解——`skill-template-is-human-copy-only`→0033、`bench-heartbeat-episodic-memory`→0034（`message-bus-decision` 保留 0003，`prompt-prefix-caching` 保留 0024）。ADR 0009 起恢复连续编号，0010/0011 已就位（§7.11 / §11）。
 
 ---
 

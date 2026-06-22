@@ -1,7 +1,7 @@
 # OmicsClaw v2 Skill Template
 
 This directory is a **human-copy starter** for new OmicsClaw skills. It is not
-read by codegen — see [`docs/adr/0003-skill-template-is-human-copy-only.md`](../../docs/adr/0003-skill-template-is-human-copy-only.md).
+read by codegen — see [`docs/adr/0033-skill-template-is-human-copy-only.md`](../../docs/adr/0033-skill-template-is-human-copy-only.md).
 
 The goal: `cp -r` this directory into the right `skills/<domain>/` location,
 rename the placeholders, and you should be ~80% of the way to a gold-standard

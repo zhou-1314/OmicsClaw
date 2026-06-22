@@ -153,7 +153,7 @@ run/figure, version-pinned, grounds Methods/Results inline). A per-section `stat
 prompts "regenerate or keep?" — never a silent overwrite. **Prerequisite captured in v1**: the
 provenance index (`AN-PROV-CAPTURE-13`), because the assisted-parameterization decision is ephemeral.
 
-### Heartbeat + episodic memory (v2) — see [ADR 0024](../adr/0024-bench-heartbeat-episodic-memory.md)
+### Heartbeat + episodic memory (v2) — see [ADR 0034](../adr/0034-bench-heartbeat-episodic-memory.md)
 
 The proactive layer is minimal and read-only (continuity, not companion). The **heartbeat** is an
 *on-open check* (no scheduler): on thread-open, a `heartbeat` pseudo-stage (read-only tool subset + one

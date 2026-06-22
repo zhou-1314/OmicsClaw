@@ -1,6 +1,8 @@
 # Bench v2: heartbeat + episodic memory
 
-**Status:** accepted (2026-05-30)
+**Status:** accepted (2026-05-30). *Renumbered from 0024 → 0034 on 2026-06-22 to
+resolve a number collision with [`0024-prompt-prefix-caching.md`](0024-prompt-prefix-caching.md),
+now the sole ADR 0024.*
 
 The v2 proactive layer is deliberately minimal and read-only — ADR 0017 chose research-continuity over a
 companion. Eight decisions. Ground truth: the codebase has **no scheduler anywhere** (backend or
