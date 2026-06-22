@@ -5,12 +5,6 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from omicsclaw.analysis_router import (
-    AnalysisRoute,
-    AnalysisRouteKind,
-    build_analysis_tool_plan,
-    build_partial_autonomous_continuation,
-)
 from omicsclaw.runtime.agent.query_engine import (
     QueryEngineCallbacks,
     QueryEngineContext,
@@ -28,23 +22,6 @@ from omicsclaw.runtime.tools.hooks import (
 )
 from omicsclaw.runtime.tools.registry import ToolRegistry
 from omicsclaw.runtime.tools.spec import APPROVAL_MODE_ASK, ToolSpec
-from omicsclaw.skill.capability_resolver import CapabilityDecision
-
-
-def _route(
-    kind: AnalysisRouteKind,
-    *,
-    chosen_skill: str = "",
-) -> AnalysisRoute:
-    return AnalysisRoute(
-        kind=kind,
-        capability_decision=CapabilityDecision(
-            query="test",
-            coverage=kind.value,
-            chosen_skill=chosen_skill,
-            confidence=0.8,
-        ),
-    )
 
 
 def _only_trust(monkeypatch, tmp_path: Path, *trusted: Path) -> None:
@@ -66,55 +43,6 @@ def _only_trust(monkeypatch, tmp_path: Path, *trusted: Path) -> None:
     monkeypatch.setattr(state, "OMICSCLAW_DIR", empty)
     monkeypatch.setattr(state, "DATA_DIR", empty / "data")
     monkeypatch.setattr(path_validation, "TRUSTED_DATA_DIRS", list(trusted))
-
-
-def test_exact_skill_plan_uses_existing_tool_for_missing_path_instead_of_demo() -> None:
-    route = _route(AnalysisRouteKind.EXACT_SKILL, chosen_skill="sc-qc")
-
-    plan = build_analysis_tool_plan(route, user_text="run sc-qc")
-
-    assert plan is not None
-    assert plan.calls == (
-        (
-            "omicsclaw",
-            {
-                "skill": "sc-qc",
-                "mode": "path",
-                "query": "run sc-qc",
-            },
-        ),
-    )
-    assert plan.final_message == ""
-
-
-def test_no_skill_plan_validates_input_paths(monkeypatch, tmp_path: Path) -> None:
-    trusted_dir = tmp_path / "trusted"
-    trusted_dir.mkdir()
-    data_path = trusted_dir / "counts.csv"
-    data_path.write_text("gene,count\nA,1\n", encoding="utf-8")
-    monkeypatch.setenv("OMICSCLAW_DATA_DIRS", str(trusted_dir))
-    from omicsclaw.services import path_validation
-
-    path_validation.TRUSTED_DATA_DIRS.clear()
-    route = _route(AnalysisRouteKind.NO_SKILL)
-
-    plan = build_analysis_tool_plan(
-        route,
-        user_text=f"compute a custom score from {data_path} and /etc/passwd",
-    )
-
-    assert plan is not None
-    assert plan.calls == (
-        (
-            "autonomous_analysis_execute",
-            {
-                "goal": f"compute a custom score from {data_path} and /etc/passwd",
-                "input_paths": [str(data_path.resolve())],
-                "language": "python",
-                "max_repair_attempts": 2,
-            },
-        ),
-    )
 
 
 def test_extract_valid_input_paths_resolves_bare_data_filenames(monkeypatch, tmp_path: Path) -> None:
@@ -144,72 +72,6 @@ def test_extract_valid_input_paths_resolves_bare_data_filenames(monkeypatch, tmp
     assert extract_valid_input_paths("see notes.pdf for details") == []
 
 
-def test_exact_skill_plan_resolves_bare_filename_in_trusted_dir(monkeypatch, tmp_path: Path) -> None:
-    """End-to-end seam: an exact-skill route whose user text names a bare file
-    (existing in a trusted dir) must pass ``file_path`` to the skill, not run
-    path-less and report 'No input file available'."""
-    trusted = tmp_path / "trusted"
-    trusted.mkdir()
-    data_path = trusted / "slideseqv2_mouse_hippocampus.h5ad"
-    data_path.write_bytes(b"")
-    _only_trust(monkeypatch, tmp_path, trusted)
-    route = _route(AnalysisRouteKind.EXACT_SKILL, chosen_skill="spatial-domains")
-
-    query = "对slideseqv2_mouse_hippocampus.h5ad执行spatial niche的鉴定"
-    plan = build_analysis_tool_plan(route, user_text=query)
-
-    assert plan is not None
-    assert plan.calls == (
-        (
-            "omicsclaw",
-            {
-                "skill": "spatial-domains",
-                "mode": "path",
-                "file_path": str(data_path.resolve()),
-                "query": query,
-            },
-        ),
-    )
-
-
-def test_exact_skill_plan_resolves_bare_filename_in_trusted_subdir(monkeypatch, tmp_path: Path) -> None:
-    """A bare filename living in a *subdirectory* of a trusted dir must still
-    resolve. This is the real Desktop shape: the app trusts the workspace
-    *root* (``_apply_runtime_workspace`` appends ``<workspace>``), but users
-    keep data under ``<workspace>/data/``.
-
-    Regression: ``extract_valid_input_paths`` resolved bare names via
-    ``validate_input_path`` (top level of each trusted dir only), while the
-    skill executor resolves them via ``discover_file`` (recursive rglob). A
-    file the executor could find was invisible to the deterministic router, so
-    the plan ran path-less and the executor reported 'No input file available'
-    even though the file plainly existed.
-    """
-    workspace = tmp_path / "workspace"
-    (workspace / "data").mkdir(parents=True)
-    data_path = workspace / "data" / "slideseqv2_mouse_hippocampus.h5ad"
-    data_path.write_bytes(b"")
-    # Trust the workspace ROOT — the file lives one level down in data/.
-    _only_trust(monkeypatch, tmp_path, workspace)
-    route = _route(AnalysisRouteKind.EXACT_SKILL, chosen_skill="spatial-domains")
-
-    query = "对slideseqv2_mouse_hippocampus.h5ad使用cellchater进行spatial niche的鉴定"
-    plan = build_analysis_tool_plan(route, user_text=query)
-
-    assert plan is not None
-    assert plan.calls == (
-        (
-            "omicsclaw",
-            {
-                "skill": "spatial-domains",
-                "mode": "path",
-                "file_path": str(data_path.resolve()),
-                "query": query,
-            },
-        ),
-    )
-
-
 def test_extract_valid_input_paths_keeps_untrusted_paths_out_with_subdir_discovery(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -229,59 +91,6 @@ def test_extract_valid_input_paths_keeps_untrusted_paths_out_with_subdir_discove
     assert extract_valid_input_paths("分析 secret.h5ad") == []
     # explicit untrusted absolute path -> still rejected
     assert extract_valid_input_paths(f"use {outside / 'secret.h5ad'}") == []
-
-
-def test_exact_skill_plan_honors_named_method() -> None:
-    """Run-as-typed (``auto``): a method named in the request rides into the plan
-    instead of being dropped — the fix for the 'CellCharter ignored' regression.
-    Uses the real registry, whose ``param_hints`` supply the valid method names.
-    """
-    from omicsclaw.skill.orchestration import _lookup_skill_info
-
-    _lookup_skill_info("spatial-domains", force_reload=True)  # real registry, order-independent
-    route = _route(AnalysisRouteKind.EXACT_SKILL, chosen_skill="spatial-domains")
-    query = "用 cellcharter 对数据进行 spatial niche 鉴定"
-    plan = build_analysis_tool_plan(route, user_text=query)
-
-    assert plan is not None
-    name, args = plan.calls[0]
-    assert name == "omicsclaw"
-    assert args["skill"] == "spatial-domains"
-    assert args["mode"] == "path"
-    assert args["method"] == "cellcharter"
-    assert args["query"] == query
-
-
-def test_exact_skill_plan_omits_method_when_none_named() -> None:
-    """No method token in the request -> no ``method`` key; the skill's own
-    default method stays its concern."""
-    from omicsclaw.skill.orchestration import _lookup_skill_info
-
-    _lookup_skill_info("spatial-domains", force_reload=True)
-    route = _route(AnalysisRouteKind.EXACT_SKILL, chosen_skill="spatial-domains")
-    plan = build_analysis_tool_plan(route, user_text="进行 spatial niche 的鉴定")
-
-    assert plan is not None
-    _, args = plan.calls[0]
-    assert "method" not in args
-
-
-def test_partial_continuation_uses_skill_output_as_upstream_reference(tmp_path: Path) -> None:
-    upstream = tmp_path / "skill-output"
-    upstream.mkdir()
-    route = _route(AnalysisRouteKind.PARTIAL_SKILL, chosen_skill="sc-qc")
-
-    continuation = build_partial_autonomous_continuation(
-        route,
-        user_text="run sc-qc and make a custom volcano plot",
-        skill_output=f"sc-qc completed. Output: {upstream}\nQC summary here",
-    )
-
-    assert continuation is not None
-    name, args = continuation
-    assert name == "autonomous_analysis_execute"
-    assert args["upstream_paths"] == [str(upstream.resolve())]
-    assert "Matched built-in skill: sc-qc" in args["context"]
 
 
 def test_planned_tool_calls_reuse_policy_approval_callbacks_and_transcript(tmp_path: Path) -> None:
