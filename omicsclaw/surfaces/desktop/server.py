@@ -578,7 +578,6 @@ class ChatRequest(BaseModel):
     permission_profile: str = "default"
     files: Optional[list[dict]] = None
     system_prompt_append: str = ""
-    analysis_router_mode: str = ""
     # Bench — study-scoped investigation thread (ADR 0018) + lifecycle stage
     # lens (ADR 0020). Phase 0: both fields are accepted but inert (no thread
     # binding, no stage tool gating yet); consumers arrive in Phase 1A / Phase 2.
@@ -2003,7 +2002,6 @@ async def chat_stream(req: ChatRequest):
                 max_tokens_override=max_tokens_override,
                 system_prompt_append=req.system_prompt_append,
                 mode=req.mode,
-                analysis_router_mode=req.analysis_router_mode,
                 thread_id=resolved_thread_id,
                 # Bench (ADR 0020) — normalize stage once at the producer boundary
                 # so a casing/whitespace mismatch ("Read", " read ") can't silently

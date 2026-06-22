@@ -415,24 +415,6 @@ async def test_dispatch_passes_none_cancel_event_when_envelope_has_none(monkeypa
     assert received["cancel_event"] is None
 
 
-@pytest.mark.asyncio
-async def test_dispatch_forwards_analysis_router_mode_to_llm_tool_loop(monkeypatch):
-    received: dict[str, object] = {}
-
-    async def fake_loop(**kwargs):
-        received["analysis_router_mode"] = kwargs.get("analysis_router_mode")
-        return "ok"
-
-    _patch_llm_tool_loop(monkeypatch, fake_loop)
-
-    events = await _collect(
-        MessageEnvelope(chat_id="c1", content="hi", analysis_router_mode="auto")
-    )
-
-    assert events[-1] == Final(text="ok", kind="normal")
-    assert received["analysis_router_mode"] == "auto"
-
-
 # ---------------------------------------------------------------------------
 # Bench Phase 0 (ADR 0017/0020/0023) — thread_id + stage plumbing
 #

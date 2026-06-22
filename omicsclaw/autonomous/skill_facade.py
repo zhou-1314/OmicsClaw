@@ -1,0 +1,285 @@
+"""The ``oc`` skill-handle facade injected into the mini-agent kernel.
+
+ADR 0032 §3 (NESTED code surface): generated glue composes *vetted skills*, not
+raw scanpy, so heavy/parameter-sensitive steps never get hand-rolled. v1 handles
+shell out through the existing shared ``run_skill`` (Model A) — there is no
+in-process skill API — materialise the in-kernel object to a temp ``.h5ad``, run
+the vetted subprocess, reload the declared primary artifact, and append an
+ordered ``skill_calls.jsonl`` provenance record.
+
+This module is *trusted injected code*: it runs inside the kernel but is not the
+LLM-authored cell, so it is exempt from the AST blocklist and may legitimately
+spawn the skill subprocess. The raw LLM cell may call only this facade for skill
+execution (enforced by :func:`omicsclaw.autonomous.validation.validate_generated_code`).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+import json
+from pathlib import Path
+import threading
+import time
+from typing import Any, Callable
+
+PRIMARY_H5AD_NAME = "processed.h5ad"
+SKILL_CALLS_LOG = "skill_calls.jsonl"
+
+
+@dataclass(slots=True)
+class SkillHandleResult:
+    """What a facade skill call returns to the generated code."""
+
+    skill: str
+    success: bool
+    output_dir: str
+    method: str | None = None
+    primary_artifact: str = ""
+    adata: Any = None
+    tables: list[str] = field(default_factory=list)
+    figures: list[str] = field(default_factory=list)
+    stdout: str = ""
+    stderr: str = ""
+    error: str = ""
+    duration_seconds: float = 0.0
+
+    def __bool__(self) -> bool:
+        return self.success
+
+
+class SkillBudgetError(RuntimeError):
+    """Raised when the generated code exceeds the nested skill-call budget."""
+
+
+class SkillFacade:
+    """Registry-backed ``oc`` facade. Lives inside the kernel for one run."""
+
+    def __init__(
+        self,
+        workspace_root: str | Path,
+        *,
+        max_skill_calls: int = 20,
+        skill_timeout_seconds: int = 1800,
+        run_skill: Callable[..., Any] | None = None,
+    ) -> None:
+        self.workspace = Path(workspace_root)
+        self.max_skill_calls = int(max_skill_calls)
+        self.skill_timeout_seconds = int(skill_timeout_seconds)
+        self._run_skill = run_skill
+        self._n = 0
+        self.calls_log = self.workspace / SKILL_CALLS_LOG
+
+    # -- public API the generated code calls ----------------------------- #
+
+    def run(
+        self,
+        skill: str,
+        data: Any = None,
+        *,
+        input_path: str | Path | None = None,
+        method: str | None = None,
+        timeout: int | None = None,
+        **params: Any,
+    ) -> SkillHandleResult:
+        """Run a vetted skill on *data* (an AnnData) or *input_path*.
+
+        Returns a :class:`SkillHandleResult`; ``.adata`` is the reloaded primary
+        artifact when the skill declares one, else ``None``.
+        """
+        self._n += 1
+        if self._n > self.max_skill_calls:
+            raise SkillBudgetError(
+                f"nested skill-call budget exhausted ({self.max_skill_calls}); "
+                "compose fewer skills or ReturnAnswer with what you have."
+            )
+        runner = self._run_skill or _default_run_skill()
+        call_dir = self.workspace / "skill_calls" / f"{self._n:02d}_{_safe(skill)}"
+        call_dir.mkdir(parents=True, exist_ok=True)
+
+        in_path = self._resolve_input(data, input_path, call_dir)
+        out_dir = call_dir / "out"
+        flags = _to_flags(method, params)
+
+        t0 = time.time()
+        result = self._invoke(runner, skill, in_path, out_dir, flags, timeout)
+        duration = time.time() - t0
+
+        real_out = Path(getattr(result, "output_dir", "") or out_dir)
+        success = bool(getattr(result, "success", False))
+        primary = self._find_primary_h5ad(real_out) if success else None
+        adata = self._reload(primary) if primary else None
+
+        handle = SkillHandleResult(
+            skill=skill,
+            success=success,
+            output_dir=str(real_out),
+            method=getattr(result, "method", None) or method,
+            primary_artifact=str(primary) if primary else "",
+            adata=adata,
+            tables=_list_dir(real_out / "tables"),
+            figures=_list_dir(real_out / "figures"),
+            stdout=str(getattr(result, "stdout", "") or "")[-2000:],
+            stderr=str(getattr(result, "stderr", "") or "")[-2000:],
+            error="" if success else str(getattr(result, "stderr", "") or "")[-2000:],
+            duration_seconds=round(duration, 2),
+        )
+        self._record(handle, in_path, flags)
+        return handle
+
+    def __getattr__(self, name: str) -> Callable[..., SkillHandleResult]:
+        """Sugar: ``oc.spatial_preprocess(adata, ...)`` -> ``run('spatial-preprocess', ...)``."""
+        if name.startswith("_"):
+            raise AttributeError(name)
+        skill_name = name.replace("_", "-")
+
+        def _call(data: Any = None, **kwargs: Any) -> SkillHandleResult:
+            return self.run(skill_name, data, **kwargs)
+
+        return _call
+
+    # -- internals ------------------------------------------------------- #
+
+    def _resolve_input(self, data: Any, input_path: str | Path | None, call_dir: Path) -> Path:
+        if data is not None:
+            target = call_dir / "input.h5ad"
+            self._write_adata(data, target)
+            return target
+        if input_path:
+            return Path(input_path)
+        raise ValueError("oc.run() needs either data (an AnnData) or input_path=")
+
+    def _invoke(self, runner, skill, in_path, out_dir, flags, timeout):
+        cancel = threading.Event()
+        limit = int(timeout or self.skill_timeout_seconds)
+        timer = threading.Timer(limit, cancel.set)
+        timer.start()
+        try:
+            return runner(
+                skill,
+                input_path=str(in_path),
+                output_dir=str(out_dir),
+                extra_args=flags,
+                cancel_event=cancel,
+            )
+        finally:
+            timer.cancel()
+
+    @staticmethod
+    def _write_adata(data: Any, target: Path) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        writer = getattr(data, "write_h5ad", None) or getattr(data, "write", None)
+        if writer is None:
+            raise TypeError("oc.run(data=...) expects an AnnData-like object with .write_h5ad")
+        writer(target)
+
+    @staticmethod
+    def _find_primary_h5ad(out_dir: Path) -> Path | None:
+        primary = out_dir / PRIMARY_H5AD_NAME
+        if primary.exists():
+            return primary
+        candidates = sorted(out_dir.glob("*.h5ad"))
+        return candidates[0] if len(candidates) == 1 else None
+
+    @staticmethod
+    def _reload(path: Path) -> Any:
+        import anndata
+
+        return anndata.read_h5ad(path)
+
+    def _record(self, handle: SkillHandleResult, in_path: Path, flags: list[str]) -> None:
+        record = {
+            "index": self._n,
+            "skill": handle.skill,
+            "method": handle.method,
+            "params": _flags_to_params(flags),
+            "flags": flags,
+            "input_artifact": str(in_path),
+            "output_dir": handle.output_dir,
+            "primary_artifact": handle.primary_artifact,
+            "status": "succeeded" if handle.success else "failed",
+            "manifest_path": _manifest_path(handle.output_dir),
+            "duration_seconds": handle.duration_seconds,
+        }
+        with self.calls_log.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def build_facade(
+    workspace_root: str | Path,
+    *,
+    max_skill_calls: int = 20,
+    skill_timeout_seconds: int = 1800,
+    run_skill: Callable[..., Any] | None = None,
+) -> SkillFacade:
+    """Construct the ``oc`` facade for one autonomous run."""
+    return SkillFacade(
+        workspace_root,
+        max_skill_calls=max_skill_calls,
+        skill_timeout_seconds=skill_timeout_seconds,
+        run_skill=run_skill,
+    )
+
+
+def _default_run_skill() -> Callable[..., Any]:
+    from omicsclaw.skill.runner import run_skill
+
+    return run_skill
+
+
+def _to_flags(method: str | None, params: dict[str, Any]) -> list[str]:
+    flags: list[str] = []
+    if method:
+        flags += ["--method", str(method)]
+    for key, value in params.items():
+        flag = "--" + str(key).replace("_", "-")
+        if isinstance(value, bool):
+            if value:
+                flags.append(flag)
+        elif isinstance(value, (list, tuple)):
+            flags += [flag, ",".join(str(item) for item in value)]
+        elif value is not None:
+            flags += [flag, str(value)]
+    return flags
+
+
+def _list_dir(path: Path) -> list[str]:
+    if not path.is_dir():
+        return []
+    return sorted(p.name for p in path.iterdir() if p.is_file())
+
+
+def _flags_to_params(flags: list[str]) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    index = 0
+    while index < len(flags):
+        flag = flags[index]
+        if not flag.startswith("--"):
+            index += 1
+            continue
+        key = flag[2:].replace("-", "_")
+        if index + 1 < len(flags) and not flags[index + 1].startswith("--"):
+            params[key] = flags[index + 1]
+            index += 2
+        else:
+            params[key] = True
+            index += 1
+    return params
+
+
+def _manifest_path(output_dir: str) -> str:
+    candidate = Path(output_dir) / "manifest.json"
+    return str(candidate) if candidate.exists() else ""
+
+
+def _safe(name: str) -> str:
+    return "".join(c if c.isalnum() or c in "-_" else "-" for c in str(name))
+
+
+__all__ = [
+    "PRIMARY_H5AD_NAME",
+    "SKILL_CALLS_LOG",
+    "SkillBudgetError",
+    "SkillFacade",
+    "SkillHandleResult",
+    "build_facade",
+]

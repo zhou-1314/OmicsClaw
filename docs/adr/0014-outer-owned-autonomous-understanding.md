@@ -5,7 +5,14 @@
 Accepted (2026-05-29). Amends ADR 0013 (which remains Accepted). This ADR
 revises *where* intent understanding, data inspection, and result validation
 live for the Autonomous Analysis Path, and narrows ADR 0013's `Evidence-bound
-repair` rule.
+repair` rule. Its central "runner has no brain" decision is superseded by
+[ADR 0032](0032-autonomous-code-mini-agent.md) (2026-06-21), which gives the
+runner a bounded tactical mini-agent loop; ADR 0014's two outer judgment seams
+(a pre-handoff preflight question on consequential ambiguity, and outer-owned
+result validation) are preserved. Control-plane consolidation (2026-06-22): the
+`off`/`assist`/`auto` analysis-router mode selector and `OMICSCLAW_ANALYSIS_ROUTER_MODE`
+were removed; routing is now unconditionally assist-style (the two outer seams are
+unaffected).
 
 ## Context
 

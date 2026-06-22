@@ -1,7 +1,7 @@
 """Contracts for exact-skill assisted parameterization (ADR 0015).
 
-In ``assist`` mode an Exact skill match injects the matched skill's SKILL.md
-method menu plus (when a trusted file is present) its inspect_data schema, and a
+An Exact skill match injects the matched skill's SKILL.md method menu plus
+(when a trusted file is present) its inspect_data schema, and a
 directive that has the outer LLM recommend the method/parameters *within* that
 skill. ``route_analysis_request`` is monkeypatched so these contracts assert the
 context-building behavior without depending on capability-scoring thresholds.
@@ -35,22 +35,17 @@ def _patch_route(monkeypatch, route: AnalysisRoute) -> None:
 def test_assist_exact_skill_injects_menu_and_directive(monkeypatch) -> None:
     _patch_route(monkeypatch, _route(AnalysisRouteKind.EXACT_SKILL, chosen_skill="spatial-domains"))
     ctx = asyncio.run(
-        loop._build_exact_skill_assisted_param_context("identify spatial domains", mode="assist")
+        loop._build_exact_skill_assisted_param_context("identify spatial domains")
     )
     assert "Assisted Parameterization" in ctx          # the directive
     assert "method menu (SKILL.md)" in ctx             # the injected menu header
     assert "cellcharter" in ctx.lower()                # real SKILL.md method content
 
 
-def test_assist_context_empty_in_off_mode(monkeypatch) -> None:
-    _patch_route(monkeypatch, _route(AnalysisRouteKind.EXACT_SKILL, chosen_skill="spatial-domains"))
-    assert asyncio.run(loop._build_exact_skill_assisted_param_context("x", mode="off")) == ""
-
-
 def test_assist_context_empty_for_non_exact_routes(monkeypatch) -> None:
     for kind in (AnalysisRouteKind.CHAT, AnalysisRouteKind.NO_SKILL, AnalysisRouteKind.PARTIAL_SKILL):
         _patch_route(monkeypatch, _route(kind, chosen_skill="" if kind is AnalysisRouteKind.CHAT else "sc-qc"))
-        out = asyncio.run(loop._build_exact_skill_assisted_param_context("hello", mode="assist"))
+        out = asyncio.run(loop._build_exact_skill_assisted_param_context("hello"))
         assert out == "", f"{kind} should not inject assisted-param context"
 
 
@@ -58,7 +53,7 @@ def test_assist_context_empty_when_skill_has_no_menu(monkeypatch) -> None:
     # Unknown skill -> no SKILL.md -> no menu; with no input file there is no
     # schema either, so the builder injects nothing rather than a bare directive.
     _patch_route(monkeypatch, _route(AnalysisRouteKind.EXACT_SKILL, chosen_skill="no-such-skill-xyz"))
-    assert asyncio.run(loop._build_exact_skill_assisted_param_context("do it", mode="assist")) == ""
+    assert asyncio.run(loop._build_exact_skill_assisted_param_context("do it")) == ""
 
 
 def test_format_block_includes_directive_menu_and_optional_schema() -> None:

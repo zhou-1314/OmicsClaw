@@ -182,62 +182,6 @@ def test_loop_omits_chat_route_context() -> None:
     assert _format_analysis_route_context(route) == ""
 
 
-def test_loop_analysis_router_defaults_to_assist_mode(monkeypatch) -> None:
-    from omicsclaw.runtime.agent.loop import (
-        _analysis_router_enabled,
-        _analysis_router_auto_execute_enabled,
-        _normalize_analysis_router_mode,
-        _build_analysis_route_context,
-    )
-
-    monkeypatch.delenv("OMICSCLAW_ANALYSIS_ROUTER_ENABLED", raising=False)
-    monkeypatch.delenv("OMICSCLAW_ANALYSIS_ROUTER_MODE", raising=False)
-
-    assert _normalize_analysis_router_mode() == "assist"
-    assert _analysis_router_enabled() is True
-    assert _analysis_router_auto_execute_enabled() is False
-    assert "## Analysis Router" in _build_analysis_route_context(
-        "run spatial preprocessing"
-    )
-
-
-def test_loop_analysis_router_mode_off_disables_context_and_auto(monkeypatch) -> None:
-    from omicsclaw.runtime.agent.loop import (
-        _analysis_router_auto_execute_enabled,
-        _analysis_router_enabled,
-        _build_analysis_route_context,
-    )
-
-    monkeypatch.setenv("OMICSCLAW_ANALYSIS_ROUTER_MODE", "off")
-
-    assert _analysis_router_enabled() is False
-    assert _analysis_router_auto_execute_enabled() is False
-    assert _build_analysis_route_context("run spatial preprocessing") == ""
-
-
-def test_loop_analysis_router_mode_auto_enables_deterministic_dispatch(monkeypatch) -> None:
-    from omicsclaw.runtime.agent.loop import (
-        _analysis_router_auto_execute_enabled,
-        _analysis_router_enabled,
-        _normalize_analysis_router_mode,
-    )
-
-    monkeypatch.setenv("OMICSCLAW_ANALYSIS_ROUTER_MODE", "auto")
-
-    assert _normalize_analysis_router_mode() == "auto"
-    assert _analysis_router_enabled() is True
-    assert _analysis_router_auto_execute_enabled() is True
-
-
-def test_loop_analysis_router_legacy_boolean_maps_to_auto(monkeypatch) -> None:
-    from omicsclaw.runtime.agent.loop import _normalize_analysis_router_mode
-
-    monkeypatch.delenv("OMICSCLAW_ANALYSIS_ROUTER_MODE", raising=False)
-    monkeypatch.setenv("OMICSCLAW_ANALYSIS_ROUTER_ENABLED", "true")
-
-    assert _normalize_analysis_router_mode() == "auto"
-
-
 def test_understanding_preflight_injects_schema_for_no_skill_file(monkeypatch) -> None:
     """ADR 0014: a no_skill/partial route with a trusted input file gets a
     deterministic inspect_data schema plus the plan/validate/interpret directive."""
@@ -246,7 +190,6 @@ def test_understanding_preflight_injects_schema_for_no_skill_file(monkeypatch) -
     import omicsclaw.runtime.agent.loop as loop
     import omicsclaw.runtime.tools.builders.agent_executors as execs
 
-    monkeypatch.delenv("OMICSCLAW_ANALYSIS_ROUTER_MODE", raising=False)
     monkeypatch.setattr(loop, "extract_valid_input_paths", lambda text: ["/trusted/x.h5ad"])
 
     async def _fake_inspect(args):
@@ -267,13 +210,12 @@ def test_understanding_preflight_injects_schema_for_no_skill_file(monkeypatch) -
 
 def test_understanding_preflight_is_noop_for_chat_exact_and_no_file(monkeypatch) -> None:
     """The preflight only fires for no_skill/partial routes that carry a trusted
-    file; chat / exact-skill / no-path / off-mode are all silent no-ops."""
+    file; chat / exact-skill / no-path are all silent no-ops."""
     import asyncio
 
     import omicsclaw.runtime.agent.loop as loop
     import omicsclaw.runtime.tools.builders.agent_executors as execs
 
-    monkeypatch.delenv("OMICSCLAW_ANALYSIS_ROUTER_MODE", raising=False)
 
     inspect_calls = {"n": 0}
 
@@ -296,11 +238,6 @@ def test_understanding_preflight_is_noop_for_chat_exact_and_no_file(monkeypatch)
     assert _run("compute a custom novel graph autocorrelation metric not in omicsclaw") == ""
     assert inspect_calls["n"] == before
 
-    # router disabled -> no-op even with a file
-    monkeypatch.setattr(loop, "extract_valid_input_paths", lambda text: ["/trusted/x.h5ad"])
-    monkeypatch.setenv("OMICSCLAW_ANALYSIS_ROUTER_MODE", "off")
-    assert _run("compute a custom novel graph autocorrelation metric not in omicsclaw") == ""
-
 
 def test_understanding_preflight_skips_non_h5ad_input(monkeypatch) -> None:
     """A non-.h5ad path makes inspect_data return an error string, so the
@@ -310,7 +247,6 @@ def test_understanding_preflight_skips_non_h5ad_input(monkeypatch) -> None:
     import omicsclaw.runtime.agent.loop as loop
     import omicsclaw.runtime.tools.builders.agent_executors as execs
 
-    monkeypatch.delenv("OMICSCLAW_ANALYSIS_ROUTER_MODE", raising=False)
     monkeypatch.setattr(loop, "extract_valid_input_paths", lambda text: ["/trusted/x.csv"])
 
     async def _fake_inspect(args):

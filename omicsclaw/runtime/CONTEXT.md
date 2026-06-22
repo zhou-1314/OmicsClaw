@@ -17,14 +17,27 @@ _Avoid_: "dynamic workflow" (see below — the excluded LLM-authored sense),
 "agent team", "pipeline" (reserved, see below).
 
 **Dynamic workflow** _(excluded capability)_:
-The Anthropic / Claude-Code sense where the LLM **writes** the orchestration
-script at runtime and a sandbox executes it. OmicsClaw deliberately does
-**not** do this (decided 2026-05-30): on a "genetic data never leaves this
-machine / never hallucinate parameters" tool, letting the LLM author
-executable orchestration is the largest avoidable safety surface, and
-OmicsClaw's domain is regular (knowable-in-advance) pipelines, not the
-irregular one-off tasks dynamic authorship is for.
-_Avoid_: using "workflow" to imply this — they are different.
+The Anthropic / Claude-Code sense where the LLM **writes a reusable
+orchestration script** at runtime — fan-out / chain / branching control flow
+over tools — and a sandbox executes it as a workflow. OmicsClaw still does
+**not** do this (decided 2026-05-30, re-sharpened by ADR 0032): Workflows are
+pre-written library code selected by the LLM, not authored by it. The ADR 0032
+Autonomous Code Mini-Agent is the bounded exception that proves the boundary:
+it may write one-off analysis glue for a single Partial / No skill fallback
+run, primarily through curated skill handles, inside an autonomous run
+workspace with a kernel safety envelope and replay artifact. That glue is not
+registered, reused, exposed as `fan_out` / `chain` topology, or promoted into
+the Workflow runtime.
+_Avoid_: using "workflow" to imply this; using "mini-agent glue" to author
+reusable orchestration.
+
+**Autonomous one-off analysis glue**:
+LLM-authored code allowed only inside the ADR 0032 Autonomous Code Mini-Agent:
+single-run residual analysis code that composes vetted skills through the
+`oc` / `skills` facade and writes replayable artifacts. It is a fallback
+analysis artifact, not a Workflow, Source entry, Pipeline, or reusable
+orchestration layer.
+_Avoid_: "dynamic workflow", "generated workflow", "pipeline".
 
 **Workflow runtime** _(L1)_:
 The reusable in-process execution layer that workflows are built on. The
@@ -130,6 +143,9 @@ _Avoid_: using "pipeline" as a synonym for "workflow".
   `analysis://interpreted/<id>`, ADR 0012). The `consensus → interpret` chain
   is a **Pipeline**; the redesign leaves the skill itself untouched (its bulk
   is real domain logic, not wrapper duplication).
+- **Autonomous one-off analysis glue** can call a **Workflow** only through the
+  same curated skill-handle facade it uses for ordinary Skills. It cannot
+  synthesize new Workflow topology or register a reusable workflow.
 
 ## Example dialogue
 
@@ -144,7 +160,9 @@ _Avoid_: using "pipeline" as a synonym for "workflow".
 
 - "workflow" was colliding with the Claude-Code **Dynamic workflow** (LLM
   authors the script). Resolved: OmicsClaw "Workflow" = pre-written library
-  invoked by the loop; the generative sense is explicitly out of scope.
+  invoked by the loop; the generative reusable-orchestration sense is
+  explicitly out of scope. ADR 0032 allows only **Autonomous one-off analysis
+  glue** inside the fallback mini-agent boundary.
 - "pipeline" was at risk of becoming a synonym for "workflow". Resolved:
   Pipeline is *one* workflow shape (YAML baton-pass), not the general term.
 - "continuous" vs the reserved "rank" template — both touch ranks, at risk of

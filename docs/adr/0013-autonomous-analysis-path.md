@@ -5,7 +5,14 @@
 Accepted (2026-05-28). Amended by [ADR 0014](0014-outer-owned-autonomous-understanding.md)
 (2026-05-29): intent understanding, data inspection, and result validation move
 to the outer agent loop; `Evidence-bound repair` is narrowed to a
-runner-internal rule (stderr, exit code, injected schema).
+runner-internal rule (stderr, exit code, injected schema). Further amended
+by [ADR 0032](0032-autonomous-code-mini-agent.md) (2026-06-21): the one-shot
+`code_loop.py` Autonomous Code Runner is replaced by a bounded persistent-kernel
+Autonomous Code Mini-Agent (curated skill-handle facade + replay validation);
+skill-first routing, permission tiers, and output-shape parity are unchanged.
+Control-plane consolidation (2026-06-22): the `off`/`assist`/`auto` analysis-router
+mode selector, `OMICSCLAW_ANALYSIS_ROUTER_MODE`, and the `auto` deterministic-dispatch
+path were removed — routing is now unconditionally assist-style (no mode knob).
 
 ## Context
 

@@ -36,7 +36,6 @@ class MessageEnvelope:
     max_tokens_override: int = 0
     system_prompt_append: str = ""
     mode: str = ""
-    analysis_router_mode: str | None = None
     # Bench — investigation thread (ADR 0018) + lifecycle stage lens (ADR 0020).
     # Mirrors the ``scoped_memory_scope`` defaulted-field pattern in this
     # dataclass. Empty = legacy (Phase 0: accepted but inert; consumers in 1A/2).

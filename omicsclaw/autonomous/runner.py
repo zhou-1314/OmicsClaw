@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -21,15 +20,11 @@ from omicsclaw.runtime.policy.verification import (
 from .contracts import (
     AUTONOMOUS_CODE_RUNNER_SOURCE,
     AUTONOMOUS_WORKSPACE_PURPOSE,
-    AutonomousAttempt,
     AutonomousRunRequest,
     AutonomousRunResult,
     AutonomousRunStatus,
     AutonomousWorkspace,
-    utcnow_iso,
 )
-from .executor import execute_command, execute_command_with_approval
-from .workspace import create_workspace
 
 
 AUTONOMOUS_CODE_RUNNER_VERSION = "0.1.0"
@@ -47,102 +42,6 @@ def autonomous_requirements() -> list[ArtifactRequirement]:
         ArtifactRequirement("inputs", "inputs", kind=ARTIFACT_KIND_DIR, required=False),
         ArtifactRequirement("upstream", "upstream", kind=ARTIFACT_KIND_DIR, required=False),
     ]
-
-
-def run_commands(
-    request: AutonomousRunRequest,
-    commands: Sequence[Sequence[str]],
-) -> AutonomousRunResult:
-    """Create a workspace, run commands, and write manifest/completion reports."""
-    workspace = create_workspace(request)
-    attempts: list[AutonomousAttempt] = []
-    started_at = utcnow_iso()
-
-    for index, argv in enumerate(commands):
-        attempt = execute_command(
-            workspace,
-            [str(item) for item in argv],
-            attempt_index=index,
-            timeout_seconds=request.timeout_seconds,
-        )
-        attempts.append(attempt)
-        if attempt.status != AutonomousRunStatus.SUCCEEDED:
-            break
-
-    status = _run_status_from_attempts(attempts)
-    error = _first_error(attempts) or "No commands were provided."
-
-    result = AutonomousRunResult(
-        run_id=workspace.run_id,
-        workspace_root=str(workspace.root),
-        status=status,
-        attempts=attempts,
-        started_at=started_at,
-        finished_at=utcnow_iso(),
-        error=error if status != AutonomousRunStatus.SUCCEEDED else "",
-        metadata=dict(request.metadata),
-    )
-    manifest_path, completion_report_path = write_run_records(
-        workspace,
-        request=request,
-        result=result,
-    )
-    result.manifest_path = str(manifest_path)
-    result.completion_report_path = str(completion_report_path)
-    return result
-
-
-async def run_commands_with_approval(
-    request: AutonomousRunRequest,
-    commands: Sequence[Sequence[str]],
-    *,
-    request_tool_approval: Any = None,
-    runtime_context: dict[str, Any] | None = None,
-) -> AutonomousRunResult:
-    """Run commands through autonomous approval-aware execution."""
-    workspace = create_workspace(request)
-    attempts: list[AutonomousAttempt] = []
-    started_at = utcnow_iso()
-
-    for index, argv in enumerate(commands):
-        attempt = await execute_command_with_approval(
-            workspace,
-            [str(item) for item in argv],
-            attempt_index=index,
-            request=request,
-            timeout_seconds=request.timeout_seconds,
-            request_tool_approval=request_tool_approval,
-            runtime_context=runtime_context,
-        )
-        attempts.append(attempt)
-        if attempt.status != AutonomousRunStatus.SUCCEEDED:
-            break
-
-    status = _run_status_from_attempts(attempts)
-    error = _first_error(attempts) or "No commands were provided."
-    result = AutonomousRunResult(
-        run_id=workspace.run_id,
-        workspace_root=str(workspace.root),
-        status=status,
-        attempts=attempts,
-        started_at=started_at,
-        finished_at=utcnow_iso(),
-        error=error if status != AutonomousRunStatus.SUCCEEDED else "",
-        metadata={
-            **dict(request.metadata),
-            "approval_aware": True,
-            "language": request.language,
-            "max_repair_attempts": request.max_repair_attempts,
-        },
-    )
-    manifest_path, completion_report_path = write_run_records(
-        workspace,
-        request=request,
-        result=result,
-    )
-    result.manifest_path = str(manifest_path)
-    result.completion_report_path = str(completion_report_path)
-    return result
 
 
 def write_run_records(
@@ -284,20 +183,9 @@ def _write_result_summary(
     return summary_path
 
 
-def _first_error(attempts: list[AutonomousAttempt]) -> str:
+def _first_error(attempts: list) -> str:
+    """Kept as a small helper for run records; first non-succeeded attempt error."""
     for attempt in attempts:
         if attempt.status != AutonomousRunStatus.SUCCEEDED:
             return attempt.error or f"Command exited with code {attempt.exit_code}."
     return ""
-
-
-def _run_status_from_attempts(attempts: list[AutonomousAttempt]) -> AutonomousRunStatus:
-    if not attempts:
-        return AutonomousRunStatus.FAILED
-    if all(attempt.status == AutonomousRunStatus.SUCCEEDED for attempt in attempts):
-        return AutonomousRunStatus.SUCCEEDED
-    if any(attempt.status == AutonomousRunStatus.TIMED_OUT for attempt in attempts):
-        return AutonomousRunStatus.TIMED_OUT
-    if any(attempt.status == AutonomousRunStatus.CANCELLED for attempt in attempts):
-        return AutonomousRunStatus.CANCELLED
-    return AutonomousRunStatus.FAILED

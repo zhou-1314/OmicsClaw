@@ -97,15 +97,16 @@ The **[Releases](https://github.com/TianGzlab/OmicsClaw/releases)** tab hosts th
 | 🤝 **Consensus**<br/>Multi-method merge | 🤖 **Autonomous path**<br/>Router + assisted params | 🔌 **Any LLM**<br/>OpenAI-compatible providers | 📊 **Reproducible**<br/>Figures + data + report |
 
 <details>
-<summary><b>Autonomous Analysis Path — how routing modes work</b></summary>
+<summary><b>Autonomous Analysis Path — how routing works</b></summary>
 
-OmicsClaw prefers a matching built-in skill, but ships a first-class autonomous path for everything else. Behavior is controlled by `OMICSCLAW_ANALYSIS_ROUTER_MODE=off|assist|auto` (default `assist`):
+OmicsClaw prefers a matching built-in skill, but ships a first-class autonomous path for everything else. Routing is **always on and assistive** — there is no mode switch:
 
-- **`assist`** — an exact skill match gets **data-grounded assisted parameterization**: the skill choice stays deterministic while the outer LLM recommends the method and parameters *within* it — grounded in the matched `SKILL.md` method menu and an `inspect_data` schema — asking a focused question only on consequential ambiguity.
-- **`auto`** — the **run-as-typed** literal path: it submits exact / no / partial analysis routes through the existing tool policy, approval, transcript, and completion-result pipeline (no outer LLM) and honors a method explicitly named in the request.
-- **`off`** — disables the router entirely.
+- **Exact skill match** gets **data-grounded assisted parameterization**: the skill choice stays deterministic while the outer LLM recommends the method and parameters *within* it — grounded in the matched `SKILL.md` method menu and an `inspect_data` schema — asking a focused question only on consequential ambiguity.
+- **Partial / No skill match** is delegated to the autonomous code path.
 
-The legacy `OMICSCLAW_ANALYSIS_ROUTER_ENABLED=true` flag is still accepted as `auto`. Generated-code analysis runs in an independent `omicsclaw/autonomous/` runner with approval-gated workspace writes, bounded LLM repair, and skill-like manifest/completion outputs.
+Generated-code analysis runs in the single autonomous engine — the **Autonomous Code Mini-Agent** (`omicsclaw/autonomous/`): a bounded, tiered-isolation Jupyter-kernel agent that drives vetted skills through a curated `oc` handle and gates acceptance on a replay rerun.
+
+Design note: [ADR 0032](docs/adr/0032-autonomous-code-mini-agent.md) defines this fallback's architecture — a bounded autonomous code mini-agent with curated skill handles, a persistent Jupyter kernel under **tiered isolation** (bubblewrap OS envelope when available, in-kernel guard otherwise), and replay validation. As of the 2026-06-22 single-engine consolidation it is the **only** autonomous engine — always on, no flag, no legacy one-shot runner. The earlier `off`/`assist`/`auto` router-mode selector (`OMICSCLAW_ANALYSIS_ROUTER_MODE`) was removed in the same consolidation.
 
 </details>
 
@@ -328,3 +329,22 @@ Apache-2.0. See [LICENSE](LICENSE).
 ```
 
 [⬆ Back to top](#top)
+
+## 项目进展（Dream 自动维护）
+<!-- DREAM:START -->
+### 当前状态
+- OmicsClaw 的 autonomous analysis 已收敛为**单一引擎**（Autonomous Code Mini-Agent）
+- ADR 0032 (Autonomous Code Mini-Agent) 于 2026-06-21 接受，2026-06-22 完成单引擎合并（移除 flag 与 legacy 一次性 runner）
+- 现实现（`omicsclaw/autonomous/`）**永远开、无 flag**：有 bwrap 走 OS envelope、无 bwrap 走进程内 guard 的分层隔离；mini-agent 全套 + autonomous workspace + bot 路由共 78 passed
+
+### 最近进展（近7天）
+- 2026-06-22: 单引擎合并 — autonomous 收敛为唯一的 mini-agent 引擎、永远开、无 flag；隔离改为分层（bwrap OS envelope / 进程内 guard）；删除 legacy executor/permissions/policy 与一次性 runner
+- 2026-06-21: ADR 0032 接受 — Autonomous Code Runner 升级为 bounded mini-agent（持久化 Jupyter kernel + bubblewrap 隔离 + replay 验证）
+- 2026-06-21: ADR 0032 实现完成（`omicsclaw/autonomous/` 8 个新模块），经过架构评审和准确性评审两轮 Codex review
+- 2026-06-21: 实现准确性评审发现并修复 7 个问题（kernel 超时重启、ReturnAnswer 检测、token 预算计费、skill call 限制等）
+- 测试状态：mini-agent 全套 + autonomous workspace + bot 路由 78 passed（kernel 集成在无 IPC 环境优雅 skip），ruff 干净；legacy 一次性 runner 已删除
+
+### 待办 / 开放问题
+- ADR 0032 Open Questions 待解决：primary artifact mapping、nested skill-call replay 策略、mid-loop user input 协议、模型能力阈值基准
+- 弱模型（本地 Ollama gemma ~12B）可能无法胜任 multi-step mini-agent loop，需 capability gate
+<!-- DREAM:END -->

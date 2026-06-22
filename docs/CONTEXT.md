@@ -90,32 +90,47 @@ The `app/`, `<platform>/` prefixes are structural — they prevent any cross-sur
 **Analysis Router**: The analysis-intent decision boundary that classifies a user request as non-analysis chat, an Exact skill match, a Partial skill match, or a No skill match.
 _Avoid_: "orchestrator" (reserved for orchestration skills), "planner", "gateway"
 
-**Deterministic route, assisted parameterization**: The execution rule for an Exact skill match under the default `assist` mode. The Analysis Router fixes *which* skill runs (deterministic); the outer LLM then recommends *how* — the method and key parameters — grounded in two deterministically-supplied inputs: the matched skill's SKILL.md (its method menu, defaults, parameters, preconditions) and an `inspect_data` schema of the input. The recommendation (chosen method, rationale, near-tied alternative skills) is always shown. The LLM proceeds without blocking when the choice is safe — stating its assumptions — and asks exactly one focused question only on consequential ambiguity, per the **assisted-parameterization rule**: (1) a method named in the request is used as-is; (2) a safe/clear choice proceeds with stated assumptions; (3) a materially different, query-unresolved choice asks one focused question via the structured preflight channel; (4) a missing precondition (e.g. absent `obsm["X_pca"]`) blocks with remediation instead of running. Recommendation scope stays *within* the chosen skill; it never reselects the skill.
-_Avoid_: "run the skill's default method silently" (that is the `auto` **Run-as-typed route**, not assisted parameterization), "LLM decides the skill", "fully bypass the LLM"
+**Deterministic route, assisted parameterization**: The execution rule for an Exact skill match. The Analysis Router fixes *which* skill runs (deterministic); the outer LLM then recommends *how* — the method and key parameters — grounded in two deterministically-supplied inputs: the matched skill's SKILL.md (its method menu, defaults, parameters, preconditions) and an `inspect_data` schema of the input. The recommendation (chosen method, rationale, near-tied alternative skills) is always shown. The LLM proceeds without blocking when the choice is safe — stating its assumptions — and asks exactly one focused question only on consequential ambiguity, per the **assisted-parameterization rule**: (1) a method named in the request is used as-is; (2) a safe/clear choice proceeds with stated assumptions; (3) a materially different, query-unresolved choice asks one focused question via the structured preflight channel; (4) a missing precondition (e.g. absent `obsm["X_pca"]`) blocks with remediation instead of running. Recommendation scope stays *within* the chosen skill; it never reselects the skill.
+_Avoid_: "run the skill's default method silently", "LLM decides the skill", "fully bypass the LLM"
 
-**Run-as-typed route**: The Exact-skill execution rule under `OMICSCLAW_ANALYSIS_ROUTER_MODE=auto` — the Analysis Router builds and runs the deterministic skill call with no outer-LLM step. It honors a method explicitly named in the request but performs no recommendation, data inspection, or confirmation. `auto` is the literal "run what I said" power-user path; the intelligent path is **Deterministic route, assisted parameterization** under the default `assist` mode.
-_Avoid_: "auto means smarter", "auto runs the recommendation"
+**Autonomous Analysis Path**: The fallback analysis route for Partial / No skill matches. It delegates uncovered work to the Autonomous Code Mini-Agent while preserving skill-first routing and outer-loop judgment.
+_Avoid_: "reference path", "free-code mode", "fallback script", "replacement for skills"
 
-**Autonomous Analysis Path**: The fallback analysis route that asks the LLM to generate and execute bounded local code when a request is not fully covered by an existing OmicsClaw skill.
-_Avoid_: "reference path", "free-code mode", "fallback script"
+**Autonomous Code Mini-Agent**: The bounded fallback executor introduced by ADR 0032. It owns a tactical inspect → plan → code → execute → feedback → self-check loop inside one autonomous run, using a persistent kernel plus curated skill handles; it does not own final acceptance of the result.
+_Avoid_: "second chat engine", "fully autonomous scientist", "workflow author"
 
-**Autonomous Code Runner**: The execution component used by the Autonomous Analysis Path to write generated code, run bounded local commands, and collect artifacts independently of the skill runner.
-_Avoid_: "custom_analysis_execute", "skill fallback executor", "hidden skill"
+**Autonomous Code Runner**: The package / execution boundary that hosts the Autonomous Code Mini-Agent, allocates the run workspace, enforces permissions, records provenance, and returns output-shape-compatible artifacts.
+_Avoid_: "custom_analysis_execute", "hidden skill", "generic notebook"
 
 **Legacy custom analysis adapter**: The temporary compatibility role for `custom_analysis_execute` after Autonomous Code Runner becomes the recommended generated-code path.
 _Avoid_: "primary fallback", "new autonomous path"
 
-**Autonomous Code Loop**: The bounded plan-write-run-inspect-revise-report loop owned by the Autonomous Code Runner.
-_Avoid_: "replace run_query_engine", "chat loop", "skill loop"
+**Autonomous Code Loop**: The mini-agent's bounded tactical loop. It may reason over execution feedback, choose the next generated cell, call curated skill handles, and self-check artifacts before `ReturnAnswer`, but it remains scoped to one fallback run.
+_Avoid_: "replace run_query_engine", "chat loop", "workflow runtime", "reusable orchestration"
 
-**Evidence-bound repair**: The retry rule *inside* the Autonomous Code Loop: failed generated code may be revised only from captured stderr, exit code, and the injected data schema. Whether the result actually satisfies the user request — artifact checks against the plan, upstream skill artifacts — is **not** runner repair; that is **Autonomous result validation** in the outer loop.
-_Avoid_: "keep trying", "self-debug until it works", "the runner judges whether it answered the question"
+**Skill-handle facade**: The injected `oc` / `skills` object available inside the autonomous kernel. v1 handles call the existing skill runner as subprocesses, write nested output directories, record ordered skill-call provenance, and reload declared artifacts back into the kernel; they are not arbitrary imports of skill scripts.
+_Avoid_: "direct skill import", "raw subprocess access", "tool monkeypatch"
 
-**Data-grounded autonomous planning**: The pre-codegen rule for a **No skill match** or **Partial skill match** that carries a trusted input file: the harness deterministically runs `inspect_data` and injects the real data schema (obs/var/obsm/layers/uns, shape, platform) into context *before* any autonomous codegen, and the outer LLM must emit a schema-grounded plan. The LLM asks the user one focused question only on consequential ambiguity; otherwise it proceeds with documented defaults and explicitly stated assumptions. The schema and plan are passed to the Autonomous Code Runner as context.
-_Avoid_: "skill preflight" (that fills skill parameters — a different step), "auto-inspect", "guess from the filename"
+**Persistent autonomous kernel session**: The per-run Jupyter kernel used by the Autonomous Code Mini-Agent so data handles, variables, figures, and intermediate tables survive across generated-code steps.
+_Avoid_: "global notebook", "shared user kernel", "session memory"
 
-**Autonomous result validation**: The outer-loop rule that, after the Autonomous Code Runner returns, the outer LLM judges the produced artifacts against the plan and intent and triggers a bounded re-delegation when they do not satisfy it — rather than trusting exit code 0. Judgment-based: no rigid expected-output contract.
+**Autonomous Kernel Safety Envelope**: The process / OS boundary around the persistent autonomous kernel: no network by default, stripped secrets, reads limited to explicit inputs/upstream artifacts/workspace, writes limited to the autonomous run workspace, and resource/time limits where supported. AST checks are lint inside this envelope, not the security boundary.
+_Avoid_: "AST sandbox", "prompt safety", "best-effort guard"
+
+**Replay artifact**: The deterministic reproduction package emitted on `ReturnAnswer`: accepted cells in execution order (`analysis.py`), ordered skill-call manifest, run manifest, completion report, logs, figures, tables, artifacts, and replay status from a fresh isolated process.
+_Avoid_: "notebook transcript", "cell dump", "audit note"
+
+**Evidence-bound repair**: The mini-agent retry rule: failed generated steps may be revised from captured execution feedback, schema, variable/artifact diffs, and prior accepted steps. Whether the whole run satisfies the user's request remains **Autonomous result validation** in the outer loop.
+_Avoid_: "keep trying", "self-debug until it works", "the runner has final judgment"
+
+**Data-grounded autonomous planning**: The outer pre-handoff rule for a **No skill match** or **Partial skill match** that carries a trusted input file: the harness deterministically runs `inspect_data`, injects the real schema, and resolves consequential ambiguity before the mini-agent starts. The approved goal/schema/plan are passed to the mini-agent as run context.
+_Avoid_: "skill preflight" (that fills skill parameters — a different step), "auto-inspect", "guess from the filename", "mid-kernel user interview"
+
+**Autonomous result validation**: The outer-loop rule that, after the mini-agent returns, the outer LLM judges the replay-validated artifacts against the plan and intent and triggers a bounded re-delegation when they do not satisfy it — rather than trusting `ReturnAnswer` or exit code 0.
 _Avoid_: "exit-code success", "trust the runner", "the runner self-validates"
+
+**Outer autonomous seams**: The two judgment seams that stay outside the mini-agent after ADR 0032: one focused preflight question before handoff on consequential ambiguity, and final result validation before accepting `ReturnAnswer`.
+_Avoid_: "human-in-the-loop everywhere", "runner asks whenever it wants", "full judgment handoff"
 
 **Code Runner Permission Tier**: The risk class assigned to an Autonomous Code Runner action before execution.
 _Avoid_: "safety flag", "mode"
@@ -189,21 +204,25 @@ _Avoid_: "cache metrics" (too vague), "token accounting" (that is billing, a sup
 - A **Versioned upsert**'s `migrated_to` chain is the only structure where **ReviewLog.rollback_to** can operate.
 - The **Analysis Router** classifies analysis-intent requests before execution; non-analysis chat stays on the normal conversational path.
 - An **Exact skill match** uses **Deterministic route, assisted parameterization**.
-- A **Partial skill match** uses **Skill-first composition**, then the **Autonomous Code Runner** handles the uncovered work.
-- A **No skill match** enters the **Autonomous Analysis Path** and uses the **Autonomous Code Runner** directly.
+- A **Partial skill match** uses **Skill-first composition**, then the **Autonomous Code Mini-Agent** handles the uncovered work through the **Autonomous Code Runner** boundary.
+- A **No skill match** enters the **Autonomous Analysis Path** and uses the **Autonomous Code Mini-Agent** directly.
 - The **Analysis Router** submits deterministic analysis routes as planned tool calls through the existing tool policy, approval, callback, result-store, and transcript pipeline.
-- The **Autonomous Code Runner** is composed by the **Analysis Router** but does not call or wrap the skill runner.
+- The **Autonomous Code Runner** is composed by the **Analysis Router**; under ADR 0032 its **Skill-handle facade** wraps the existing skill runner instead of importing skill scripts directly.
 - The **Legacy custom analysis adapter** may forward to the **Autonomous Code Runner**, but it is not the recommended route for new generated-code execution.
-- The **Autonomous Code Runner** owns an **Autonomous Code Loop**; the outer chat engine can invoke it but is not replaced by it.
-- The **Autonomous Code Loop** uses **Evidence-bound repair** and defaults to at most two repair attempts after the initial execution.
+- The **Autonomous Code Runner** hosts the **Autonomous Code Loop**; the outer chat engine can invoke it but is not replaced by it.
+- The **Autonomous Code Loop** uses **Evidence-bound repair** inside bounded step / failure / budget limits.
+- The **Skill-handle facade** is the only approved way for generated autonomous code to invoke OmicsClaw skills; raw subprocess access from generated cells remains blocked.
+- The **Persistent autonomous kernel session** lives only for one autonomous run and must run inside the **Autonomous Kernel Safety Envelope**.
+- A successful autonomous run emits a **Replay artifact** and validates it in a fresh isolated process before the outer loop accepts the run as successful.
 - Every Autonomous Code Runner command is assigned a **Code Runner Permission Tier**; **`system_mutation`** is blocked unless the user explicitly approves it.
 - The **Autonomous Code Runner** writes by default only inside its **Autonomous run workspace**.
 - The **Autonomous Code Runner** exposes an **Autonomous run lifecycle**, not just a synchronous tool-result string.
 - **Lifecycle-shape compatibility** keeps Autonomous run records compatible with existing job UI expectations while avoiding a hard dependency on the remote jobs router.
 - A **Partial skill match** passes prior skill outputs to the **Autonomous Code Runner** as **Upstream artifact references** by default, not by copying large artifacts.
 - **Output-shape parity** lets CLI, Desktop, memory, and review tooling read Autonomous Code Runner outputs through the same manifest and completion-report conventions used for skill outputs.
-- A **No skill match** or **Partial skill match** that carries a trusted input file passes through **Data-grounded autonomous planning** — deterministic `inspect_data` + schema injection + a schema-grounded plan — before the **Autonomous Code Runner** is invoked. The intelligence (planning, ambiguity judgement, interpretation) lives in the outer loop; the runner stays a bounded sandbox.
-- **Autonomous result validation** (outer loop), not **Evidence-bound repair** (runner), decides whether a run satisfied the user request; on failure it triggers a bounded re-delegation to the **Autonomous Code Runner**.
+- A **No skill match** or **Partial skill match** that carries a trusted input file passes through **Data-grounded autonomous planning** — deterministic `inspect_data` + schema injection + consequential-ambiguity resolution — before the **Autonomous Code Mini-Agent** is invoked.
+- **Outer autonomous seams** mean the mini-agent gets full handoff of execution, not full handoff of judgment.
+- **Autonomous result validation** (outer loop), not **Evidence-bound repair** (mini-agent), decides whether a run satisfied the user request; on failure it triggers a bounded re-delegation to the **Autonomous Code Runner**.
 - The **Prompt prefix** is the **Frozen tool list** (serialized first) followed by the stable `system` layers of the **Session prefix snapshot**; the **Stable prefix invariant** keeps it byte-identical across a session's turns.
 - The **Frozen tool list** is filtered once by the **Surface** (`surface` is a session constant), so per-Surface tool sets never break the **Stable prefix invariant** — different Surfaces are different sessions, not different turns.
 - **Volatile context** — per-turn `memory` recall, `capability`/`skill` hints, query-gated rule layers, and the **Analysis Router**'s route context — is rendered into the latest user message (`placement="message"`), landing on the append-only tail; it never enters the `system` prefix, so it cannot break the **Stable prefix invariant**.
