@@ -2056,6 +2056,48 @@ async def execute_custom_analysis_execute(args: dict, **kwargs) -> str:
         return f"Error running custom analysis: {e}"
 
 
+def _resolve_trusted_data_paths(
+    raw_paths: list[str], *, allow_dir: bool = False
+) -> tuple[list[str], list[str]]:
+    """Resolve model/user-supplied data paths to absolute, trusted paths.
+
+    The autonomous engine binds inputs into a sandbox and its kernel chdir's into
+    the run workspace, so a *relative* path (e.g. ``data/x.h5ad`` copied from the
+    Desktop workspace file browser) never resolves: the bwrap bind source is taken
+    against the server cwd and the in-kernel ``read_h5ad`` against the run
+    workspace — both miss the real file, leaving ``adata=None`` and a run that
+    dies on ``'NoneType' has no attribute 'shape'``. Resolve each path the same
+    way the data-inspection / custom-analysis tools do so the engine receives an
+    absolute path that survives the cwd change.
+
+    ``allow_dir`` permits directory targets — spatial inputs may be a 10x/Visium
+    directory, and ``upstream_paths`` are defined by the tool schema as prior-skill
+    output *directories*. Returns ``(resolved_absolute, problems)``; ``problems``
+    are human-readable strings for paths that are missing or ambiguous (a bare name
+    matching several files, which we refuse rather than silently pick by mtime —
+    mirroring the custom-analysis tool). Blank entries are skipped.
+    """
+    resolved: list[str] = []
+    problems: list[str] = []
+    for raw in raw_paths:
+        candidate = str(raw).strip()
+        if not candidate:
+            continue
+        hit = validate_input_path(candidate, allow_dir=allow_dir)
+        if hit is not None:
+            resolved.append(str(hit))
+            continue
+        found = discover_file(candidate)
+        if len(found) == 1:
+            resolved.append(str(found[0]))
+        elif len(found) > 1:
+            sample = ", ".join(str(f) for f in found[:6])
+            problems.append(f"{candidate} (matches multiple files — pass a full path: {sample})")
+        else:
+            problems.append(f"{candidate} (not found in the workspace or a trusted data directory)")
+    return resolved, problems
+
+
 async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
     """Run the first-class Autonomous Code Runner loop."""
     try:
@@ -2068,8 +2110,20 @@ async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
         if not goal:
             return "Error: 'goal' parameter is required."
 
-        input_paths = [str(item) for item in args.get("input_paths", []) or []]
-        upstream_paths = [str(item) for item in args.get("upstream_paths", []) or []]
+        input_paths, input_problems = _resolve_trusted_data_paths(
+            [str(item) for item in args.get("input_paths", []) or []], allow_dir=True
+        )
+        upstream_paths, upstream_problems = _resolve_trusted_data_paths(
+            [str(item) for item in args.get("upstream_paths", []) or []], allow_dir=True
+        )
+        problems = input_problems + upstream_problems
+        if problems:
+            return (
+                "Error: could not resolve these path(s) for the autonomous run:\n- "
+                + "\n- ".join(problems)
+                + "\nPass a path under the active workspace (e.g. its data/ folder) "
+                "or an absolute path."
+            )
         language = str(args.get("language", "python") or "python").strip().lower()
         if language == "r":
             language = "rscript"

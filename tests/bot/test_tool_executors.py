@@ -482,3 +482,170 @@ async def test_execute_omicsclaw_file_mode_without_input_returns_friendly_error(
         f"execute_omicsclaw did not return the friendly no-input-file guidance; "
         f"got: {result!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_autonomous_analysis_resolves_relative_input_paths(tmp_path, monkeypatch):
+    """Regression (2026-06-24): execute_autonomous_analysis_execute must resolve
+    relative input_paths to ABSOLUTE trusted paths before handing them to the
+    engine.
+
+    A Desktop user asked to QC ``data/slideseqv2_mouse_hippocampus.h5ad``; the
+    model passed that *workspace-relative* path through verbatim. The sandbox
+    kernel chdir's into its run workspace, so the in-kernel ``read_h5ad('data/..')``
+    missed the file -> ``adata=None`` -> every step died on ``'NoneType' object
+    has no attribute 'shape'`` and the run failed (consecutive_failures). The fix
+    resolves the path the same way inspect_data / custom_analysis already do.
+    """
+    import omicsclaw.runtime.agent.state  # noqa: F401 — load state first (production order)
+    import omicsclaw.autonomous as autonomous_pkg
+    import omicsclaw.services.path_validation as pv
+    from omicsclaw.autonomous.contracts import AutonomousRunResult, AutonomousRunStatus
+    from omicsclaw.runtime.tools.builders.agent_executors import (
+        execute_autonomous_analysis_execute,
+    )
+
+    # A trusted workspace with a data file under data/, registered the way
+    # server.py's _apply_runtime_workspace() registers a live Desktop workspace.
+    ws = tmp_path / "omicsclaw-workspace"
+    (ws / "data").mkdir(parents=True)
+    data_file = ws / "data" / "demo.h5ad"
+    data_file.write_bytes(b"\x89HDF\r\n\x1a\n")  # engine is mocked; contents irrelevant
+    pv._ensure_trusted_dirs()
+    monkeypatch.setattr(pv, "TRUSTED_DATA_DIRS", [*pv.TRUSTED_DATA_DIRS, ws])
+
+    captured: dict = {}
+
+    async def _fake_loop(request, **kwargs):
+        captured["request"] = request
+        return AutonomousRunResult(
+            run_id="t",
+            workspace_root=str(ws / "output"),
+            status=AutonomousRunStatus.SUCCEEDED,
+        )
+
+    monkeypatch.setattr(autonomous_pkg, "run_autonomous_code_loop_async", _fake_loop)
+
+    out = await execute_autonomous_analysis_execute(
+        {"goal": "QC the dataset", "input_paths": ["data/demo.h5ad"]}
+    )
+
+    assert "request" in captured, f"engine was never called; executor returned: {out!r}"
+    got = captured["request"].input_paths
+    assert got == [str(data_file.resolve())], (
+        "execute_autonomous_analysis_execute handed an unresolved/relative input "
+        f"path to the engine: {got!r}. A relative path never resolves inside the "
+        "sandbox kernel (cwd = run workspace), so adata stays None and the run dies."
+    )
+
+
+@pytest.mark.asyncio
+async def test_autonomous_analysis_reports_unresolvable_input_path(tmp_path, monkeypatch):
+    """A path that exists nowhere trusted must yield a clear error and NOT start
+    the engine — so the model gets actionable feedback instead of a sandboxed run
+    that confabulates 'the sandbox blocked file access'."""
+    import omicsclaw.runtime.agent.state  # noqa: F401 — load state first (production order)
+    import omicsclaw.autonomous as autonomous_pkg
+    from omicsclaw.runtime.tools.builders.agent_executors import (
+        execute_autonomous_analysis_execute,
+    )
+
+    called = {"engine": False}
+
+    async def _fake_loop(request, **kwargs):  # pragma: no cover - must not run
+        called["engine"] = True
+        raise AssertionError("engine started despite an unresolvable input path")
+
+    monkeypatch.setattr(autonomous_pkg, "run_autonomous_code_loop_async", _fake_loop)
+
+    out = await execute_autonomous_analysis_execute(
+        {"goal": "QC", "input_paths": ["data/does_not_exist_anywhere.h5ad"]}
+    )
+    assert called["engine"] is False
+    assert "Error" in out and "does_not_exist_anywhere.h5ad" in out, (
+        f"expected a clear unresolved-path error naming the file; got: {out!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_autonomous_analysis_resolves_upstream_directory(tmp_path, monkeypatch):
+    """Codex finding 2 regression: upstream_paths are prior-skill output DIRECTORIES
+    (per the tool schema), so the resolver must accept directories with
+    allow_dir=True — not reject them as unresolved and refuse to start the engine."""
+    import omicsclaw.runtime.agent.state  # noqa: F401 — load state first (production order)
+    import omicsclaw.autonomous as autonomous_pkg
+    import omicsclaw.services.path_validation as pv
+    from omicsclaw.autonomous.contracts import AutonomousRunResult, AutonomousRunStatus
+    from omicsclaw.runtime.tools.builders.agent_executors import (
+        execute_autonomous_analysis_execute,
+    )
+
+    ws = tmp_path / "omicsclaw-workspace"
+    (ws / "data").mkdir(parents=True)
+    (ws / "data" / "demo.h5ad").write_bytes(b"\x89HDF\r\n\x1a\n")
+    upstream_dir = ws / "output" / "prior_run"
+    upstream_dir.mkdir(parents=True)
+    pv._ensure_trusted_dirs()
+    monkeypatch.setattr(pv, "TRUSTED_DATA_DIRS", [*pv.TRUSTED_DATA_DIRS, ws])
+
+    captured: dict = {}
+
+    async def _fake_loop(request, **kwargs):
+        captured["request"] = request
+        return AutonomousRunResult(
+            run_id="t", workspace_root=str(ws / "output"),
+            status=AutonomousRunStatus.SUCCEEDED,
+        )
+
+    monkeypatch.setattr(autonomous_pkg, "run_autonomous_code_loop_async", _fake_loop)
+
+    out = await execute_autonomous_analysis_execute(
+        {
+            "goal": "QC",
+            "input_paths": ["data/demo.h5ad"],
+            "upstream_paths": ["output/prior_run"],
+        }
+    )
+    assert "request" in captured, f"engine was not started; got: {out!r}"
+    assert captured["request"].upstream_paths == [str(upstream_dir.resolve())], (
+        "upstream output directory was rejected instead of resolved; got: "
+        f"{captured['request'].upstream_paths!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_autonomous_analysis_rejects_ambiguous_bare_filename(tmp_path, monkeypatch):
+    """Codex finding 1 regression: a bare filename matching several files must be
+    refused with a clear 'pass a full path' error (not silently resolved to the
+    newest by mtime), and the engine must not start."""
+    import omicsclaw.runtime.agent.state  # noqa: F401 — load state first (production order)
+    import omicsclaw.autonomous as autonomous_pkg
+    import omicsclaw.services.path_validation as pv
+    from omicsclaw.runtime.tools.builders.agent_executors import (
+        execute_autonomous_analysis_execute,
+    )
+
+    ws = tmp_path / "omicsclaw-workspace"
+    (ws / "sub1").mkdir(parents=True)
+    (ws / "sub2").mkdir(parents=True)
+    (ws / "sub1" / "dup.h5ad").write_bytes(b"\x89HDF\r\n\x1a\n")
+    (ws / "sub2" / "dup.h5ad").write_bytes(b"\x89HDF\r\n\x1a\n")
+    pv._ensure_trusted_dirs()
+    # Scope trust to just this workspace so discover_file only rglobs the tmp tree.
+    monkeypatch.setattr(pv, "TRUSTED_DATA_DIRS", [ws])
+
+    called = {"engine": False}
+
+    async def _fake_loop(request, **kwargs):  # pragma: no cover - must not run
+        called["engine"] = True
+        raise AssertionError("engine started on an ambiguous bare filename")
+
+    monkeypatch.setattr(autonomous_pkg, "run_autonomous_code_loop_async", _fake_loop)
+
+    out = await execute_autonomous_analysis_execute(
+        {"goal": "QC", "input_paths": ["dup.h5ad"]}
+    )
+    assert called["engine"] is False
+    assert "Error" in out and "multiple files" in out, (
+        f"expected an ambiguous-match error; got: {out!r}"
+    )
