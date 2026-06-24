@@ -649,3 +649,85 @@ async def test_autonomous_analysis_rejects_ambiguous_bare_filename(tmp_path, mon
     assert "Error" in out and "multiple files" in out, (
         f"expected an ambiguous-match error; got: {out!r}"
     )
+
+
+def test_validate_input_path_prefers_active_workspace_over_repo(tmp_path, monkeypatch):
+    """Finding 1 fix: when the same relative name exists in BOTH the project root
+    and the active Desktop workspace, validate_input_path resolves to the WORKSPACE
+    copy (the file the user actually loaded), not the project-root copy."""
+    import omicsclaw.runtime.agent.state as state
+    import omicsclaw.services.path_validation as pv
+
+    repo_dir = tmp_path / "repo"
+    (repo_dir / "data").mkdir(parents=True)
+    repo_copy = repo_dir / "data" / "dup.h5ad"
+    repo_copy.write_bytes(b"repo")
+    ws = tmp_path / "omicsclaw-workspace"
+    (ws / "data").mkdir(parents=True)
+    ws_copy = ws / "data" / "dup.h5ad"
+    ws_copy.write_bytes(b"workspace")
+
+    monkeypatch.setattr(state, "OMICSCLAW_DIR", repo_dir)
+    pv._ensure_trusted_dirs()
+    monkeypatch.setattr(pv, "TRUSTED_DATA_DIRS", [repo_dir / "data", ws])
+    monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(ws))
+
+    got = pv.validate_input_path("data/dup.h5ad")
+    assert got == ws_copy.resolve(), (
+        f"expected the workspace copy {ws_copy}, got {got} — a workspace-relative "
+        "path must prefer the active workspace over the project-root copy"
+    )
+
+
+def test_validate_input_path_ignores_untrusted_workspace(tmp_path, monkeypatch):
+    """Guard for the Codex-flagged shadowing regression: when OMICSCLAW_WORKSPACE is
+    set but is NOT a trusted dir, it must not shadow a valid trusted-dir match — the
+    relative path resolves to the trusted (project-root) copy, never None."""
+    import omicsclaw.runtime.agent.state as state
+    import omicsclaw.services.path_validation as pv
+
+    repo_dir = tmp_path / "repo"
+    (repo_dir / "data").mkdir(parents=True)
+    repo_copy = repo_dir / "data" / "dup.h5ad"
+    repo_copy.write_bytes(b"repo")
+    untrusted_ws = tmp_path / "untrusted-ws"
+    (untrusted_ws / "data").mkdir(parents=True)
+    (untrusted_ws / "data" / "dup.h5ad").write_bytes(b"workspace")
+
+    monkeypatch.setattr(state, "OMICSCLAW_DIR", repo_dir)
+    pv._ensure_trusted_dirs()
+    monkeypatch.setattr(pv, "TRUSTED_DATA_DIRS", [repo_dir / "data"])  # ws NOT trusted
+    monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(untrusted_ws))
+
+    got = pv.validate_input_path("data/dup.h5ad")
+    assert got == repo_copy.resolve(), (
+        f"an untrusted OMICSCLAW_WORKSPACE shadowed the trusted copy; got {got} "
+        f"(expected the project-root copy {repo_copy})"
+    )
+
+
+@pytest.mark.asyncio
+async def test_autonomous_analysis_rejects_r_language(monkeypatch):
+    """Finding 5 fix: the mini-agent is Python-only (mini_agent.py hardcodes
+    validate_generated_code(language='python') and a Python prompt/init), so a
+    language='r' request must return a clear Python-only error and NOT start the
+    engine — instead of silently running Python under an R label."""
+    import omicsclaw.runtime.agent.state  # noqa: F401 — load state first (production order)
+    import omicsclaw.autonomous as autonomous_pkg
+    from omicsclaw.runtime.tools.builders.agent_executors import (
+        execute_autonomous_analysis_execute,
+    )
+
+    called = {"engine": False}
+
+    async def _fake_loop(request, **kwargs):  # pragma: no cover - must not run
+        called["engine"] = True
+        raise AssertionError("engine started for an R request")
+
+    monkeypatch.setattr(autonomous_pkg, "run_autonomous_code_loop_async", _fake_loop)
+
+    out = await execute_autonomous_analysis_execute({"goal": "QC", "language": "r"})
+    assert called["engine"] is False
+    assert "Error" in out and "Python only" in out, (
+        f"expected a clear Python-only rejection; got: {out!r}"
+    )

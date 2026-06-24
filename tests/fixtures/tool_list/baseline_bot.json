@@ -1078,7 +1078,7 @@
       "type": "function",
       "function": {
         "name": "autonomous_analysis_execute",
-        "description": "Recommended generated-code path for partial/no-skill analysis. Provide the goal and optional local/web context; OmicsClaw writes, executes, and repairs bounded Python/R code in an isolated autonomous workspace.",
+        "description": "Recommended generated-code path for partial/no-skill analysis. Provide the goal and optional local/web context; OmicsClaw writes, executes, and repairs bounded Python code in an isolated autonomous workspace.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1111,10 +1111,9 @@
             "language": {
               "type": "string",
               "enum": [
-                "python",
-                "r"
+                "python"
               ],
-              "description": "Generated script language. Default: python."
+              "description": "Generated script language. The mini-agent is Python-only (ADR 0032 v1). Default: python."
             },
             "max_repair_attempts": {
               "type": "integer",

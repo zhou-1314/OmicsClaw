@@ -92,6 +92,22 @@ def _ensure_trusted_dirs():
         logger.info(f"Trusted data dirs: {[str(d) for d in TRUSTED_DATA_DIRS]}")
 
 
+def _is_trusted_root(directory: Path) -> bool:
+    """True when *directory* lies inside a trusted data dir or the project root."""
+    OMICSCLAW_DIR, _, _, _ = _bot_core_dirs()
+    try:
+        resolved = directory.resolve()
+    except OSError:
+        return False
+    for root in (*TRUSTED_DATA_DIRS, OMICSCLAW_DIR):
+        try:
+            resolved.relative_to(root.resolve())
+            return True
+        except ValueError:
+            continue
+    return False
+
+
 def validate_input_path(filepath: str, *, allow_dir: bool = False) -> Path | None:
     """Validate that a user-supplied path points to a real file/dir in a trusted directory.
 
@@ -101,20 +117,34 @@ def validate_input_path(filepath: str, *, allow_dir: bool = False) -> Path | Non
     OMICSCLAW_DIR, DATA_DIR, _, _ = _bot_core_dirs()
     p = Path(filepath).expanduser()
     if not p.is_absolute():
-        # 1. Try relative to project root first (most common case)
-        candidate = OMICSCLAW_DIR / p
-        if candidate.exists() and (candidate.is_file() or (allow_dir and candidate.is_dir())):
-            p = candidate
+        def _matches(candidate: Path) -> bool:
+            return candidate.exists() and (candidate.is_file() or (allow_dir and candidate.is_dir()))
+
+        # Resolution order. The active Desktop workspace comes FIRST: the user's
+        # files live there, so a workspace-relative path like ``data/x.h5ad`` must
+        # bind to the workspace copy, not a same-named file under the project root
+        # (this is what inspect_data / the autonomous engine should all agree on).
+        # Then the project root, then the trusted data dirs, then a DATA_DIR fallback.
+        search_roots: list[Path] = []
+        workspace_env = os.environ.get("OMICSCLAW_WORKSPACE", "").strip()
+        if workspace_env:
+            ws_path = Path(workspace_env).expanduser()
+            # Only prefer the workspace when it is itself a trusted location. An
+            # untrusted OMICSCLAW_WORKSPACE must NOT shadow a valid trusted-dir
+            # match: searching it first would resolve to a path the trailing trust
+            # check then rejects, returning None instead of the trusted copy.
+            if _is_trusted_root(ws_path):
+                search_roots.append(ws_path)
+        search_roots.append(OMICSCLAW_DIR)
+        search_roots.extend(TRUSTED_DATA_DIRS)
+        for d in search_roots:
+            candidate = d / p
+            if _matches(candidate):
+                p = candidate
+                break
         else:
-            # 2. Try each trusted data directory
-            for d in TRUSTED_DATA_DIRS:
-                candidate = d / p
-                if candidate.exists() and (candidate.is_file() or (allow_dir and candidate.is_dir())):
-                    p = candidate
-                    break
-            else:
-                # 3. Fall back to DATA_DIR
-                p = DATA_DIR / p
+            # Fall back to DATA_DIR (existence/trust checked below).
+            p = DATA_DIR / p
 
     resolved = p.resolve()
     if not resolved.exists():

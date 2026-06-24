@@ -1268,7 +1268,7 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
             description=(
                 "Recommended generated-code path for partial/no-skill analysis. "
                 "Provide the goal and optional local/web context; OmicsClaw writes, "
-                "executes, and repairs bounded Python/R code in an isolated autonomous workspace."
+                "executes, and repairs bounded Python code in an isolated autonomous workspace."
             ),
             parameters={
                 "type": "object",
@@ -1297,8 +1297,8 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                     },
                     "language": {
                         "type": "string",
-                        "enum": ["python", "r"],
-                        "description": "Generated script language. Default: python.",
+                        "enum": ["python"],
+                        "description": "Generated script language. The mini-agent is Python-only (ADR 0032 v1). Default: python.",
                     },
                     "max_repair_attempts": {
                         "type": "integer",

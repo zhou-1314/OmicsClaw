@@ -2125,10 +2125,15 @@ async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
                 "or an absolute path."
             )
         language = str(args.get("language", "python") or "python").strip().lower()
-        if language == "r":
-            language = "rscript"
-        if language not in {"python", "rscript"}:
-            return "Error: language must be 'python' or 'r'."
+        if language in {"r", "rscript"}:
+            return (
+                "Error: the Autonomous Code Mini-Agent runs Python only (ADR 0032 v1); "
+                "R is not supported (the kernel, system prompt and code lint are all "
+                "Python). Re-run with language='python', or use a built-in R-backed "
+                "skill for an R analysis."
+            )
+        if language != "python":
+            return "Error: language must be 'python'."
 
         max_repair_attempts = int(args.get("max_repair_attempts", 2) or 2)
         max_repair_attempts = max(0, min(max_repair_attempts, 2))
