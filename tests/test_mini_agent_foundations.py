@@ -31,6 +31,79 @@ from omicsclaw.autonomous.protocol import (
     parse_turn,
     strip_thinking,
 )
+from omicsclaw.autonomous.validation import validate_generated_code
+
+
+# --------------------------------------------------------------------------- #
+# validation (safety lint)
+# --------------------------------------------------------------------------- #
+
+
+def test_validate_generated_code_allows_facade_run_call():
+    """Regression (2026-06-24): the mini-agent safety lint must NOT block
+    ``oc.run(...)`` — the documented public API of the injected skill facade
+    (``skill_facade.run``). ``build_system_prompt`` tells the model to call exactly
+    ``oc.run('skill', adata, ...)``; while the bare attr-name ``run`` sat in
+    ``_BLOCKED_PYTHON_ATTRS`` every skill-driven step failed the lint, so the
+    mini-agent could never compose a skill once its data finally loaded."""
+    assert validate_generated_code("res = oc.run('spatial-preprocess', adata)") == []
+    assert (
+        validate_generated_code("adata = oc.run('sc-de', adata, method='wilcoxon').adata")
+        == []
+    )
+
+
+def test_validate_generated_code_still_blocks_destructive_and_network():
+    """The owner-aware guard keeps the dangerous forms blocked: ``os`` is an allowed
+    import so its destructive ops stay blocked, ``Path('x').unlink()`` is a non-name
+    (``object``) owner, and network/process modules stay blocked by import."""
+    for snippet in (
+        "import os\nos.system('rm -rf /')",
+        "import os\nos.remove('/data/x')",
+        "import os\nos.rename('a', 'b')",
+        "from pathlib import Path\nPath('x').unlink()",
+        "import subprocess",
+        "import requests",
+        "import socket",
+    ):
+        assert validate_generated_code(snippet), f"must stay blocked: {snippet!r}"
+
+
+def test_validate_generated_code_allows_data_methods_on_variables():
+    """Owner-aware lint (Codex finding 4): destructive-NAMED methods on plain user
+    variables are not filesystem ops and must pass — these are everyday QC/cleaning
+    calls that the bare-attr-name ban used to reject."""
+    for snippet in (
+        "df2 = df.rename(columns={'a': 'b'})",
+        "df2 = df.replace(0, 1)",
+        "adata.obs = adata.obs.rename(columns={'x': 'y'})",
+        "res = oc.run('spatial-preprocess', adata)",
+        "items.remove(0)",
+        "layer.call(x)",  # .call/.run on a user variable (non-risky root) is fine
+        "pipeline.run(data)",
+    ):
+        assert validate_generated_code(snippet) == [], f"should pass: {snippet!r}"
+
+
+def test_validate_generated_code_blocks_dynamic_import_subprocess_bypass():
+    """Codex finding 3 regression + re-review hardening: keeping ``run`` owner-aware
+    must not reopen a shell. The dynamic-import / FFI / file-exec modules are
+    import-blocked, and ALL subprocess execution methods (run/Popen/call/
+    check_call/check_output) stay blocked on a risky root — whether reached
+    directly or via ``sys.modules[...]``."""
+    for snippet in (
+        "import importlib",
+        "from importlib import import_module",
+        "import runpy",
+        "import ctypes",
+        "subprocess.run(['x'])",
+        "subprocess.Popen(['x'])",
+        "sys.modules['subprocess'].run(['x'])",
+        "sys.modules['subprocess'].Popen(['x'])",
+        "sys.modules['subprocess'].check_output(['x'])",
+        "import os\nos.popen('x')",
+    ):
+        assert validate_generated_code(snippet), f"must stay blocked: {snippet!r}"
 
 
 # --------------------------------------------------------------------------- #
