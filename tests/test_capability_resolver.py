@@ -103,11 +103,11 @@ def test_resolve_capability_no_skill_fallback_defaults_should_search_web_to_fals
     matches (or the request is the explicit "implement from literature"
     case, handled by ``_requests_new_literature_implementation``).
     """
-    # An omics-shaped query that doesn't match any skill (single-cell
-    # doublet detection — the resolver lacks a strong-signal skill, so it
-    # falls through to no_skill). No web/literature wording → False.
+    # An omics-shaped query that doesn't match any skill (transcriptional
+    # bursting kinetics — no OmicsClaw skill covers it, so it falls through to
+    # no_skill). No web/literature wording → False.
     decision = resolve_capability(
-        "Detect doublets in my single-cell data using scDblFinder"
+        "Estimate transcriptional bursting kinetics from my single-cell data"
     )
     assert decision.coverage == "no_skill"
     assert decision.should_search_web is False
@@ -120,7 +120,8 @@ def test_resolve_capability_no_skill_with_web_hints_still_searches_web():
     flag to ``True``.
     """
     decision = resolve_capability(
-        "Detect doublets in my single-cell data; check the latest documentation about scDblFinder"
+        "Estimate transcriptional bursting kinetics from my single-cell data; "
+        "check the latest documentation"
     )
     assert decision.coverage == "no_skill"
     assert decision.should_search_web is True
