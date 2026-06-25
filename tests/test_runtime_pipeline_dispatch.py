@@ -261,6 +261,11 @@ def test_run_skill_dispatcher_routes_pipeline_alias_to_run_pipeline_by_name(
     from omicsclaw.skill import runner as skill_runner
     from omicsclaw.skill.result import build_skill_run_result
 
+    # ADR 0035: the dispatcher now forwards the env-aware output root
+    # (``OMICSCLAW_OUTPUT_DIR`` or ``DEFAULT_OUTPUT_ROOT``). Pin the env so this
+    # test is not perturbed by another test leaking the var into ``os.environ``.
+    monkeypatch.delenv("OMICSCLAW_OUTPUT_DIR", raising=False)
+
     captured: dict[str, object] = {}
     sentinel = build_skill_run_result(
         skill="smoke-pipeline",

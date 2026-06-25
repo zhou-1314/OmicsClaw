@@ -47,6 +47,10 @@ class AutonomousRunRequest:
     input_paths: list[str | Path] = field(default_factory=list)
     upstream_paths: list[str | Path] = field(default_factory=list)
     run_id: str = ""
+    # ADR 0035: when set, the run workspace nests under this Project (the active
+    # Bench thread); empty keeps the legacy ``<output_root>/autonomous-code__…`` shape.
+    project_id: str = ""
+    project_name: str = ""
     timeout_seconds: int = 300
     language: str = "python"
     max_repair_attempts: int = 2

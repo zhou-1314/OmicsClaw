@@ -43,7 +43,17 @@ def create_workspace(request: AutonomousRunRequest) -> AutonomousWorkspace:
     """Create an isolated autonomous run workspace below ``output_root``."""
     run_id = request.run_id or _new_run_id()
     output_root = Path(request.output_root)
-    root = output_root / build_run_dir_name(run_id=run_id)
+    # ADR 0035 constraint 9: a top-level autonomous run nests under its Project
+    # (the nested skill-facade calls stay inside this workspace, so they never
+    # surface as top-level Runs). Empty project_id keeps the legacy root shape.
+    base = output_root
+    if getattr(request, "project_id", ""):
+        from omicsclaw.common.run_paths import resolve_project_dir
+
+        base = resolve_project_dir(
+            output_root, request.project_id, request.project_name, create=True
+        )
+    root = base / build_run_dir_name(run_id=run_id)
     root.mkdir(parents=True, exist_ok=False)
 
     dirs = {name: root / name for name in WORKSPACE_SUBDIRS}

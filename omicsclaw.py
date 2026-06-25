@@ -701,6 +701,22 @@ def main():
     opt_p.add_argument("--demo", action="store_true")
 
     # run
+    project_p = sub.add_parser(
+        "project", help="Manage research projects that group analysis outputs (ADR 0035)"
+    )
+    project_sub = project_p.add_subparsers(dest="project_command")
+    project_sub.add_parser("list", help="List projects and their run counts")
+    project_sub.add_parser("current", help="Show the current (active) project")
+    _pnew = project_sub.add_parser("new", help="Create a project and make it current")
+    _pnew.add_argument("name", help="Project name")
+    _puse = project_sub.add_parser("use", help="Set the current project (creates it if missing)")
+    _puse.add_argument("name", help="Project name or id")
+    project_sub.add_parser(
+        "clear", help="Clear the current-project pointer (runs fall back to 'default')"
+    )
+    _prei = project_sub.add_parser("reindex", help="Rebuild the run index for a project (or all)")
+    _prei.add_argument("name", nargs="?", default="", help="Project name/id (default: all projects)")
+
     run_p = sub.add_parser("run", help="Run a skill")
     run_p.add_argument("skill", help="Skill alias (e.g. preprocess, domains) or 'spatial-pipeline'")
     run_p.add_argument("--demo", action="store_true")
@@ -711,6 +727,9 @@ def main():
                        metavar="SAMPLE_ID",
                        help="Sample ID label (repeat once per --input for sc-multi-count)")
     run_p.add_argument("--output", dest="output_dir")
+    run_p.add_argument("--project", dest="project", default="",
+                       help="Group this run under a research project (ADR 0035); defaults to "
+                            "the current project ('oc project use') or 'default'")
     run_p.add_argument("--session", dest="session_path")
     # Skill-specific flags (forwarded to the skill script)
     run_p.add_argument("--data-type", dest="data_type")
@@ -1305,6 +1324,63 @@ def main():
 
         sys.exit(0)
 
+    if args.command == "project":
+        from omicsclaw.common import run_paths as _rp
+
+        output_root = Path(
+            os.getenv("OMICSCLAW_OUTPUT_DIR", "") or DEFAULT_OUTPUT_ROOT
+        ).expanduser()
+        pcmd = getattr(args, "project_command", None)
+
+        if pcmd in (None, "list"):
+            projects = _rp.list_projects(output_root)
+            cur_id, _ = _rp.get_current_project(output_root)
+            if not projects:
+                print("No projects yet. Runs without --project go to 'default'.")
+            else:
+                print(f"{BOLD}Projects{RESET} (output root: {output_root})")
+                for p in projects:
+                    mark = f"{GREEN}*{RESET}" if p["project_id"] == cur_id else " "
+                    print(f" {mark} {p['display_name']}  [{p['project_id']}]  "
+                          f"({p['runs']} runs)  dir={p['dir']}")
+                if cur_id:
+                    print(f"\n{GREEN}*{RESET} current project")
+            sys.exit(0)
+
+        if pcmd == "current":
+            cid, cname = _rp.get_current_project(output_root)
+            print(f"Current project: {cname} [{cid}]" if cid
+                  else "No current project (runs go to 'default').")
+            sys.exit(0)
+
+        if pcmd in ("new", "use"):
+            pid, pname = _rp.resolve_cli_project(output_root, args.name)
+            _rp.resolve_project_dir(output_root, pid, pname, create=True)
+            _rp.set_current_project(output_root, pid, pname)
+            print(f"{GREEN}Current project set:{RESET} {pname} [{pid}]")
+            sys.exit(0)
+
+        if pcmd == "clear":
+            _rp.clear_current_project(output_root)
+            print("Current project cleared; runs without --project go to 'default'.")
+            sys.exit(0)
+
+        if pcmd == "reindex":
+            name = getattr(args, "name", "") or ""
+            if name:
+                pid, pname = _rp.resolve_cli_project(output_root, name)
+                pdir = _rp.resolve_project_dir(output_root, pid, pname, create=False)
+                n = _rp.rebuild_index(pdir)
+                print(f"Reindexed {pname}: {n} runs")
+            else:
+                projects = _rp.list_projects(output_root)
+                total = sum(_rp.rebuild_index(output_root / p["dir"]) for p in projects)
+                print(f"Reindexed {total} runs across {len(projects)} projects")
+            sys.exit(0)
+
+        project_p.print_help()
+        sys.exit(0)
+
     if args.command == "run":
         # Collect extra args from skill-specific flags
         extra: list[str] = []
@@ -1417,6 +1493,19 @@ def main():
         single_input = input_paths_list[0] if len(input_paths_list) == 1 else None
         multi_inputs = input_paths_list if len(input_paths_list) >= 2 else None
 
+        # ADR 0035: resolve the project for this run (--project wins, else the
+        # current-project pointer set by 'oc project use', else the default project).
+        from omicsclaw.common import run_paths as _rp
+
+        _output_root = Path(
+            os.getenv("OMICSCLAW_OUTPUT_DIR", "") or DEFAULT_OUTPUT_ROOT
+        ).expanduser()
+        _proj_arg = getattr(args, "project", "") or ""
+        if _proj_arg:
+            _project_id, _project_name = _rp.resolve_cli_project(_output_root, _proj_arg)
+        else:
+            _project_id, _project_name = _rp.get_current_project(_output_root)
+
         result = run_skill(
             args.skill,
             input_path=single_input,
@@ -1425,6 +1514,8 @@ def main():
             demo=args.demo,
             session_path=args.session_path,
             extra_args=extra if extra else None,
+            project_id=_project_id,
+            project_name=_project_name,
         )
 
         if result.success:

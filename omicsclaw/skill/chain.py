@@ -19,11 +19,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-import uuid
 from datetime import datetime
 from pathlib import Path
 
-from omicsclaw.common.report import build_output_dir_name
+from omicsclaw.common import run_paths
 from omicsclaw.common.user_guidance import (
     extract_user_guidance_lines,
     render_guidance_block,
@@ -160,15 +159,22 @@ async def run_omics_skill_step(
     batch_key: str = "",
     n_epochs: int | None = None,
     extra_args: list[str] | None = None,
+    project_id: str = "",
+    project_name: str = "",
     cancel_event: threading.Event | None = None,
 ) -> dict:
+    # ADR 0035: place the Run under its Project (default when thread-less).
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = output_root / build_output_dir_name(
-        skill_key,
-        ts,
+    out_dir = run_paths.resolve_run_dir(
+        output_root=output_root,
+        skill=skill_key,
+        project_id=project_id,
+        project_name=project_name,
+        input_path=input_path,
+        demo=(mode == "demo"),
         method=method,
-        unique_suffix=uuid.uuid4().hex[:8],
-    )
+        timestamp=ts,
+    ).run_dir
 
     return await run_skill_via_shared_runner(
         skill_key=skill_key,

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from omicsclaw.common import run_paths
 from omicsclaw.common.manifest import StepRecord
 from omicsclaw.runtime.policy.verification import (
     ARTIFACT_KIND_DIR,
@@ -116,6 +117,27 @@ def write_run_records(
         metadata=metadata,
         append_step=False,
     )
+    if (workspace.root.parent / run_paths.PROJECT_META_FILENAME).exists():
+        run_paths.finalize_run(
+            workspace.root,
+            skill="autonomous-code",
+            status=(
+                "completed"
+                if result.status == AutonomousRunStatus.SUCCEEDED
+                else "failed"
+            ),
+            method="mini-agent",
+            dataset=run_paths.dataset_slug(
+                input_paths=[str(item) for item in request.input_paths],
+                dataset_label=str(metadata.get("dataset", "") or ""),
+            ),
+            surface=str(metadata.get("surface", "") or "autonomous"),
+            input_path=(
+                str(request.input_paths[0])
+                if len(request.input_paths) == 1
+                else None
+            ),
+        )
     return manifest_path, completion_report_path
 
 

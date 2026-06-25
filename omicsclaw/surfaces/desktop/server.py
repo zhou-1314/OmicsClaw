@@ -3089,6 +3089,23 @@ class ThreadRoutePreviewRequest(BaseModel):
     claim: str  # the hypothesis claim to route (ADR 0021 §4)
 
 
+def _seed_project_dir(thread_id: str, name: str) -> None:
+    """ADR 0035: pre-create the readable on-disk Project directory for a Bench
+    thread so its runs land under ``<name-slug>__<short-id>/`` (not an opaque
+    ``project__<hash>`` built when the agent runs without the thread name), and so
+    a thread rename keeps ``project_meta.json``'s display name in sync. Best-effort
+    — never let filesystem seeding break thread CRUD."""
+    try:
+        from omicsclaw.common import run_paths
+
+        core = _get_core()
+        run_paths.resolve_project_dir(
+            Path(str(core.OUTPUT_DIR)), thread_id, name or "", create=True
+        )
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("project dir seed skipped for thread %s", thread_id, exc_info=True)
+
+
 @app.post("/thread/create")
 async def thread_create(req: ThreadCreateRequest):
     if _memory_client is None:
@@ -3105,6 +3122,7 @@ async def thread_create(req: ThreadCreateRequest):
             platforms=req.platforms,
             venue=req.venue,
         )
+        _seed_project_dir(tm.thread_id, tm.name)
         return tm.model_dump()
     except HTTPException:
         raise
@@ -3255,6 +3273,7 @@ async def thread_update(thread_id: str, req: ThreadUpdateRequest):
         )
         if tm is None:
             raise HTTPException(404, detail=f"thread not found: {thread_id}")
+        _seed_project_dir(tm.thread_id, tm.name)  # ADR 0035: keep project_meta name in sync
         return tm.model_dump()
     except HTTPException:
         raise
@@ -5457,28 +5476,45 @@ def _read_result_json(run_dir: Path) -> tuple[str, Any]:
 
 
 @app.get("/outputs/latest")
-async def outputs_latest(limit: int = Query(10, ge=1, le=50)):
+async def outputs_latest(
+    limit: int = Query(10, ge=1, le=50),
+    project: str = "",  # plain default (not Query): unit tests call this fn directly
+):
     """
-    List the most recent output directories from OmicsClaw's OUTPUT_DIR.
+    List the most recent Runs from OmicsClaw's OUTPUT_DIR.
 
-    Each entry includes parsed metadata, figures, key files, and a summary
-    extracted from ``result.json`` when available.
+    ADR 0035: Runs live under ``<OUTPUT_DIR>/<project>/<run>/`` (a legacy
+    root-level run dir is tolerated as ``default``). Each entry carries its
+    project, plus parsed metadata, figures, key files, and a ``result.json``
+    summary when available. Pass ``?project=`` to scope to one project.
     """
+    from omicsclaw.common import run_paths
+
     core = _get_core()
     output_dir = Path(str(core.OUTPUT_DIR))
 
     if not output_dir.is_dir():
         return {"runs": [], "output_dir": str(output_dir), "total": 0}
 
-    # Gather all subdirectories with their mtime
-    dir_entries: list[tuple[float, Path]] = []
+    # Walk one Project level (constraint 4); cache project_meta per project dir.
+    meta_cache: dict[Path, dict[str, Any]] = {}
+    dir_entries: list[tuple[float, Path, str, str]] = []  # (mtime, run_dir, project_id, project_name)
     try:
-        for entry in output_dir.iterdir():
-            if entry.is_dir():
-                try:
-                    dir_entries.append((entry.stat().st_mtime, entry))
-                except OSError:
-                    pass
+        for project_dir, run_dir in run_paths.iter_run_dirs(output_dir):
+            meta = meta_cache.get(project_dir)
+            if meta is None:
+                meta = run_paths.read_project_meta(project_dir)
+                meta_cache[project_dir] = meta
+            project_id = str(meta.get("project_id") or (
+                run_paths.DEFAULT_PROJECT_ID if project_dir == output_dir else project_dir.name
+            ))
+            project_name = str(meta.get("display_name") or project_id)
+            if project and project not in (project_id, project_dir.name):
+                continue
+            try:
+                dir_entries.append((run_dir.stat().st_mtime, run_dir, project_id, project_name))
+            except OSError:
+                pass
     except OSError as exc:
         raise HTTPException(500, detail=f"Cannot read output directory: {exc}")
 
@@ -5489,7 +5525,7 @@ async def outputs_latest(limit: int = Query(10, ge=1, le=50)):
     dir_entries = dir_entries[:limit]
 
     runs: list[dict] = []
-    for mtime, d in dir_entries:
+    for mtime, d, project_id, project_name in dir_entries:
         skill, timestamp_iso = _parse_run_dir_name(d.name)
         status, summary = _read_result_json(d)
         figures = _collect_figures(d)
@@ -5507,6 +5543,8 @@ async def outputs_latest(limit: int = Query(10, ge=1, le=50)):
             "timestamp": effective_timestamp,
             "status": status,
             "path": str(d),
+            "project_id": project_id,
+            "project_name": project_name,
             "figures": figures,
             "files": files,
         }
@@ -5525,18 +5563,17 @@ async def outputs_run_files(run_id: str):
 
     Returns a flat list of every file with path, size, and type classification.
     """
+    from omicsclaw.common import run_paths
+
     core = _get_core()
     output_dir = Path(str(core.OUTPUT_DIR))
-    run_dir = output_dir / run_id
 
-    if not run_dir.is_dir():
+    # ADR 0035 constraint 4: resolve run_id -> path via a project-aware lookup,
+    # never ``output_dir / run_id`` (Runs now nest under a project directory).
+    # ``find_run_dir`` already rejects traversal and symlinked candidates.
+    run_dir = run_paths.find_run_dir(output_dir, run_id)
+    if run_dir is None or not run_dir.is_dir():
         raise HTTPException(404, detail=f"Output run '{run_id}' not found")
-
-    # Security: ensure the resolved path is still under OUTPUT_DIR
-    try:
-        run_dir.resolve().relative_to(output_dir.resolve())
-    except ValueError:
-        raise HTTPException(400, detail="Invalid run_id (path traversal)")
 
     files: list[dict] = []
     try:

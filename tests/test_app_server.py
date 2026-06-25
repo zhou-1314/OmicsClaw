@@ -1127,6 +1127,46 @@ async def test_outputs_latest_marks_stale_incomplete_run_failed(monkeypatch, tmp
 
 
 @pytest.mark.asyncio
+async def test_outputs_latest_lists_project_nested_runs(monkeypatch, tmp_path):
+    """ADR 0035: Runs nest under a project dir; the listing descends one level,
+    carries project_id/project_name, and ``?project=`` scopes the result."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+    from omicsclaw.common import run_paths
+
+    output_dir = tmp_path / "output"
+    a = run_paths.resolve_run_dir(output_root=output_dir, skill="sc-de",
+                                  project_id="t1", project_name="Glioma Study",
+                                  input_path="/d/pbmc.h5ad", timestamp="20260624_120000")
+    run_paths.finalize_run(a.run_dir, skill="sc-de", status="completed", dataset=a.dataset)
+    b = run_paths.resolve_run_dir(output_root=output_dir, skill="qc",
+                                  project_id="t2", project_name="Liver",
+                                  demo=True, timestamp="20260624_130000")
+    run_paths.finalize_run(b.run_dir, skill="qc", status="completed", dataset=b.dataset)
+
+    monkeypatch.setattr(server, "_core", SimpleNamespace(OUTPUT_DIR=output_dir), raising=False)
+
+    res = await server.outputs_latest(limit=10)
+    assert res["total"] == 2
+    by_id = {r["id"]: r for r in res["runs"]}
+    assert by_id[a.run_id]["project_id"] == "t1"
+    assert by_id[a.run_id]["project_name"] == "Glioma Study"
+
+    scoped = await server.outputs_latest(limit=10, project="t1")
+    assert scoped["total"] == 1
+    assert scoped["runs"][0]["id"] == a.run_id
+
+    # File lookup resolves a nested run_id via the index, not output_dir/run_id.
+    (a.run_dir / "figures").mkdir()
+    (a.run_dir / "figures" / "umap.png").write_bytes(b"x")
+    files = await server.outputs_run_files(a.run_id)
+    assert any(f["relative_path"] == "figures/umap.png" for f in files["files"])
+    with pytest.raises(Exception):
+        await server.outputs_run_files("does-not-exist")
+
+
+@pytest.mark.asyncio
 async def test_files_tree_returns_remote_files_and_directories(tmp_path):
     pytest.importorskip("fastapi")
 

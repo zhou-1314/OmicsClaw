@@ -171,6 +171,26 @@ _Avoid_: "rewrite the skill", "replace the skill"
 **No skill match**: A capability decision where no built-in skill covers the requested analysis well enough to execute safely as a skill.
 _Avoid_: "unknown request", "miss"
 
+### Run & output organization
+
+**Run**: One execution of a skill (or the Autonomous Analysis Path) that produces a single output directory and one `analysis://` memory record. Surfaces and the desktop frontend already model this unit (`OutputRun`, `run_meta`, `run_id`). The Project-scoped layout below is decided in ADR 0035.
+_Avoid_: "job" (the remote-router lifecycle shape), "task", "analysis" (a Run *is* an `analysis://` record, but the word also names the routing intent)
+
+**Project output directory**: The on-disk projection of a Project, holding every Run of that Project. Its directory **name** is a readable `<name-slug>__<short-id>` (or the literal `default`) — *not* the raw `project_id`, because a Bench `project_id` is an opaque `uuid.uuid4().hex` and opaque project folders would re-introduce the very confusion this layer removes. The `short-id` is deterministic (`hash(project_id)[:10]`), and the name is **frozen at creation**: a later thread rename updates `project_meta.json` + memory only, never the folder (moving it would dangle every stored `output_path`). The canonical `project_id` (the **same** id as the Bench investigation thread `project://<project_id>`, ADR 0018) is recorded inside the directory's `project_meta.json`, which is the authoritative `project_id`↔directory mapping — never parse the folder name for it. One Project, two projections (a memory subtree and an output directory), not two concepts; `project_id` already reaches the runtime as `thread_id` for memory scoping, and this extends it into output-path resolution.
+_Avoid_: "output project", "workspace project" (would re-fork the single Project concept), "results root"
+
+**`default` project**: The reserved fallback Project for Runs with no explicit thread — today every CLI, stateless `/chat`, and channel-bot Run. Its output directory is the literal `<output root>/default/`; it is the filesystem analogue of memory's no-thread `analysis://typed/*` convention. A `default`-project Run can later be reassigned to a real Project (reassignment policy — move vs re-tag — is an open question, see below).
+_Avoid_: "misc", "scratch", "uncategorized", "inbox"
+
+**Run directory**: A Run's on-disk folder at `<project output directory>/<skill>[__<method>]__<YYYYMMDD_HHMMSS>__<dataset-slug>-<uid8>/`. The leaf is the Run's `run_id` and must match the frontend run-dir pattern (`^[^/]*__\d{8}_\d{6}__[^/]+$`, `run-link.ts`). The trailing token pairs the input **dataset** slug (readable at a glance) with a mandatory `uid8` (keeps `run_id` **globally unique** — the desktop `run_meta` keys on it). The directory is reserved atomically (`mkdir(exist_ok=False)`), and the resolver picks the final name up front — there is no post-run rename (ADR 0035 constraints).
+_Avoid_: "run folder"; a pure-dataset leaf with no uid (it collides on `run_id`)
+
+**project_meta.json**: The per-Project file at the Project output directory root recording the canonical `project_id`, display name, and creation metadata — the durable `project_id`↔directory binding (mirrors cellclaw's `project_meta.json`).
+_Avoid_: "project config", "manifest" (manifest is per-Run)
+
+**Run index**: A rebuildable `index.jsonl` at each Project output directory root, one line per Run (`schema_version`, `project_id`, `run_id`, skill, method, dataset, status, `manifest_mtime`, `path_rel`), appended by the single path resolver via a lock-protected / `O_APPEND` single-line write. It is a **derived cache** for fast listing — the Run directories and their `manifest.json` are the only source of truth, so a reader that hits a missing file, a half-written/corrupt line, or an `mtime` mismatch rebuilds by walking (`oc outputs reindex`, or lazily in `/outputs/latest`). The memory graph (`analysis://`) and the desktop SQLite `run_meta` are **reconciled views**: they may cache an `output_path`, but `manifest.json` alone defines where a Run lives, and a reindex repairs stale cached paths.
+_Avoid_: "run database", "registry" (overstates it — it is a rebuildable cache)
+
 ### Prompt Prefix & Caching
 
 The vocabulary for maximizing the LLM provider's automatic prefix cache (DeepSeek's `prompt_cache_hit_tokens`, OpenAI's `prompt_tokens_details.cached_tokens`). The mechanism is byte-exact: the provider caches the longest request prefix that is byte-identical to a recent request, so cache hit rate is governed entirely by **how stable the front of the request is across turns of one session**. OmicsClaw targets automatic prefix caching, **not** Anthropic `cache_control` breakpoints (decided 2026-05-30). Inspired by `DeepSeek-Reasonix`'s 99.82%-hit design, adapted to OmicsClaw's multi-surface, multi-user, layered assembler.
@@ -229,6 +249,9 @@ _Avoid_: "cache metrics" (too vague), "token accounting" (that is billing, a sup
 - A **Session prefix snapshot** is invalidated only by a deliberate, logged **cache re-warm**: a model switch, a `memory` write (which refreshes the snapshotted session-scoped `memory_context`), or a context collapse. Between re-warms, history is append-only.
 - Context collapse (the existing `CONTEXT_COLLAPSE` / `AUTO_COMPACT`) is the sole overflow handler: it folds old messages into a frozen `system` summary (one **cache re-warm**) so history stays append-only between collapses — replacing the former per-turn `trim_history_to_budget` sliding window, which shifted the history prefix every turn and discarded all history caching for sessions past the window.
 - **Cache-hit diagnostics** hash the **Frozen tool list** and the stable `system` prefix each turn: an unexpected provider miss with unchanged hashes is reported `history-shifted`, a changed tool hash `tool-list-changed`, a changed system hash `system-changed` — turning the **Stable prefix invariant** into a CI-assertable regression guard.
+- A **Run** is written into a **Project output directory**; its `project_id` is the same id as the Bench thread `project://<project_id>` (ADR 0018), and a Run with no active thread lands in the **`default` project**.
+- All four Surfaces (CLI, Desktop `/chat`, Channel, the agent loop) resolve a **Run directory** through one shared path resolver, which also writes **project_meta.json** and appends the **Run index**. Today these paths diverge (`omicsclaw.py`, `skill/runner.py`, `skill/chain.py`, `runtime/tools/builders/agent_executors.py`); converging them is the core engineering change.
+- The **Run index**, the memory graph's `analysis://<project_id>/typed/<run_id>` records, and the desktop **`run_meta`** rows are all **reconciled views** keyed by `run_id` over the same Run directories + `manifest.json`; the directories are the single source of truth and every view is rebuildable from a walk. Views may cache an `output_path` (memory's `_auto_capture_analysis` does today), but only the manifest/index defines where a Run lives, and a reindex repairs stale paths.
 
 ## Example dialogue
 
@@ -257,12 +280,14 @@ Decisions that the refactor PRs (#125–#132) chose by sensible default rather t
 - **One database, many Namespaces** — `OMICSCLAW_MEMORY_DB_URL` selects a single SQLite/Postgres database; Namespace columns partition the data inside it. Different desktop launches with different `OMICSCLAW_DESKTOP_LAUNCH_ID` values share the same DB but get distinct Namespaces. Dropping a per-launch DB option keeps cross-launch read-fallback (`__shared__`) working with no extra cross-DB plumbing.
 - **`oc interactive` from `~/`** — uses the absolute home path as Namespace. No special-case handling; `~` is a valid string id like any other directory.
 - **Read fallback policy is asymmetric** — `recall` and `search` fall back to `__shared__`; `list_children` and `get_subtree` do not. The asymmetry is deliberate: per-row fallbacks give per-user contexts visibility into globally-shared content, but per-listing fallbacks would pollute a user's own inventory with shared structure they didn't author.
+- **No legacy output migration** — the pre-existing flat `output/<skill>__…__<uuid8>/` directories are disposable test data (owner's call, 2026-06-24); the Project layout is a clean cut-over with no migration step. The listing walk may still tolerate a root-level run dir (treating it as `default`) for safety, but no data is moved or preserved by contract.
 
 ## Open questions
 
 Tracked but not yet resolved in code:
 
 - **`_auto_capture_dataset` policy** — When the bot detects a dataset filename, should it write under the user's Namespace or `__shared__`? Today it goes user-scoped (per CompatMemoryStore default), which means the same `pbmc.h5ad` mentioned by two users gets two `dataset://` rows. Whether to deduplicate at `__shared__` is a UX question.
+- **`default`→real-Project reassignment** — when a Run created in the **`default` project** is later attributed to a real Project, does the resolver *move* the **Run directory** (changing its absolute path — the frontend survives because **`run_meta`** keys on `run_id` and re-fetches paths, but memory `AnalysisMemory.output_path` would dangle) or only *re-tag* it in the **Run index** + memory (leaving the directory under `default`, so the disk projection and the logical Project diverge)? Unresolved; v1 may simply not support reassignment.
 
 ## Resolved (kept here for tombstone)
 

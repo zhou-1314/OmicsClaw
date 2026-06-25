@@ -17,7 +17,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from omicsclaw.common.report import build_output_dir_name
 from ..result import SkillRunResult, build_skill_run_result
 
 from .output_finalize import write_pipeline_readme
@@ -63,6 +62,8 @@ def run_pipeline(
     output_dir: str | None = None,
     demo: bool = False,
     session_path: str | None = None,
+    project_id: str = "",
+    project_name: str = "",
 ) -> SkillRunResult:
     """Run an arbitrary skill chain described by ``config`` end-to-end.
 
@@ -83,10 +84,21 @@ def run_pipeline(
 
     if output_dir:
         out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
     else:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out_dir = default_output_root / build_output_dir_name(config.name, ts)
-    out_dir.mkdir(parents=True, exist_ok=True)
+        # ADR 0035: the pipeline run is a composite Run placed under its Project.
+        # Step subdirs use explicit output paths (out_dir/<skill>), so they nest
+        # inside this run rather than registering as top-level Runs.
+        from omicsclaw.common import run_paths
+
+        out_dir = run_paths.resolve_run_dir(
+            output_root=default_output_root,
+            skill=config.name,
+            project_id=project_id,
+            project_name=project_name,
+            input_path=input_path,
+            demo=demo,
+        ).run_dir
 
     all_results: dict[str, Any] = {}
     current_input = input_path
@@ -137,6 +149,21 @@ def run_pipeline(
     )
 
     succeeded = sum(1 for result in all_results.values() if result["success"])
+    # ADR 0035: record the composite pipeline run in its Project (manifest + index),
+    # gated on a sibling project_meta.json so an explicit --output is left untouched.
+    try:
+        from omicsclaw.common import run_paths
+
+        if (out_dir.parent / run_paths.PROJECT_META_FILENAME).exists():
+            run_paths.finalize_run(
+                out_dir,
+                skill=config.name,
+                status="completed" if succeeded == len(skill_names) else "failed",
+                input_path=input_path,
+                surface="pipeline",
+            )
+    except Exception:  # pragma: no cover - defensive
+        pass
     return build_skill_run_result(
         skill=config.name,
         success=succeeded == len(skill_names),
@@ -159,6 +186,8 @@ def run_spatial_pipeline(
     output_dir: str | None = None,
     demo: bool = False,
     session_path: str | None = None,
+    project_id: str = "",
+    project_name: str = "",
 ) -> SkillRunResult:
     """Thin wrapper preserved for backward compatibility.
 
@@ -183,6 +212,8 @@ def run_spatial_pipeline(
         output_dir=output_dir,
         demo=demo,
         session_path=session_path,
+        project_id=project_id,
+        project_name=project_name,
     )
 
 
@@ -195,6 +226,8 @@ def run_pipeline_by_name(
     output_dir: str | None = None,
     demo: bool = False,
     session_path: str | None = None,
+    project_id: str = "",
+    project_name: str = "",
 ) -> SkillRunResult | None:
     """Load ``pipelines/<name>.yaml`` and run it; return ``None`` when absent.
 
@@ -217,4 +250,6 @@ def run_pipeline_by_name(
         output_dir=output_dir,
         demo=demo,
         session_path=session_path,
+        project_id=project_id,
+        project_name=project_name,
     )

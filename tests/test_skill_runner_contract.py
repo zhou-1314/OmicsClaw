@@ -44,6 +44,8 @@ def test_skill_runner_module_exposes_run_skill_contract():
         "demo",
         "session_path",
         "extra_args",
+        "project_id",  # ADR 0035: project-scoped output
+        "project_name",
         "stdout_callback",
         "stderr_callback",
         "cancel_event",

@@ -84,7 +84,7 @@ from omicsclaw.services.path_validation import (
     validate_path,
 )
 
-from omicsclaw.common.report import build_output_dir_name
+from omicsclaw.common import run_paths
 from omicsclaw.common.user_guidance import (
     extract_user_guidance_lines,
     extract_user_guidance_payloads,
@@ -378,15 +378,20 @@ async def execute_omicsclaw(
     if batch_key_clarification:
         return batch_key_clarification
 
-    # Output directory
-    import uuid
+    # Output directory (ADR 0035): place the Run under its Project. The active
+    # Bench thread (``thread_id``, already on the wire for memory scoping) is the
+    # ``project_id``; a thread-less /chat or channel run falls to ``default``. The
+    # readable ``<dataset>-<uid8>`` leaf keeps ``run_id`` globally unique.
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = OUTPUT_DIR / build_output_dir_name(
-        skill_key,
-        ts,
+    out_dir = run_paths.resolve_run_dir(
+        output_root=OUTPUT_DIR,
+        skill=skill_key,
+        project_id=thread_id,
+        input_path=str(input_path) if input_path else None,
+        demo=(mode == "demo"),
         method=method,
-        unique_suffix=uuid.uuid4().hex[:8],
-    )
+        timestamp=ts,
+    ).run_dir
 
     batch_key = _resolve_requested_batch_key(args)
 
@@ -2142,6 +2147,7 @@ async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
             output_root=str(OUTPUT_DIR),
             input_paths=input_paths,
             upstream_paths=upstream_paths,
+            project_id=str(kwargs.get("thread_id", "") or ""),  # ADR 0035: nest under active project
             language=language,
             max_repair_attempts=max_repair_attempts,
             context=str(args.get("context", "") or ""),

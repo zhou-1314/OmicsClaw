@@ -336,8 +336,10 @@ Apache-2.0. See [LICENSE](LICENSE).
 - OmicsClaw 的 autonomous analysis 已收敛为**单一引擎**（Autonomous Code Mini-Agent）
 - ADR 0032 (Autonomous Code Mini-Agent) 于 2026-06-21 接受，2026-06-22 完成单引擎合并（移除 flag 与 legacy 一次性 runner）
 - 现实现（`omicsclaw/autonomous/`）**永远开、无 flag**：有 bwrap 走 OS envelope、无 bwrap 走进程内 guard 的分层隔离；mini-agent 全套 + autonomous workspace + bot 路由共 78 passed
+- 分析输出已**按研究课题（project）分组**（ADR 0035）：从平铺 `output/<skill>__ts__uuid8/` 改为 `output/<project>/<skill>__ts__<dataset>-<uid8>/`，每课题一个 `project_meta.json` + 可重建 `index.jsonl`；四 surface 收敛到单一 resolver `omicsclaw/common/run_paths.py`
 
 ### 最近进展（近7天）
+- 2026-06-24: ADR 0035 接受并实现 — project 作用域输出目录 + 可重建 run 索引；单一 resolver（`run_paths.py`）接入 CLI/agent/channel/autonomous，新增 `oc project list|new|use|current|clear|reindex` 与 `oc run --project`，后端 `/outputs/latest` 下钻一层 + `/outputs/{run_id}/files` 经索引定位，前端 OutputPanel 增 project 维度；经 Codex（gpt-5.5 xhigh）审查补 10 条硬约束（run_id 全局唯一、原子建目录、禁后置改名、改名不动目录等），后端新增 13 个 run_paths 单测 + 嵌套-project 端点测试，134 passed
 - 2026-06-22: 单引擎合并 — autonomous 收敛为唯一的 mini-agent 引擎、永远开、无 flag；隔离改为分层（bwrap OS envelope / 进程内 guard）；删除 legacy executor/permissions/policy 与一次性 runner
 - 2026-06-21: ADR 0032 接受 — Autonomous Code Runner 升级为 bounded mini-agent（持久化 Jupyter kernel + bubblewrap 隔离 + replay 验证）
 - 2026-06-21: ADR 0032 实现完成（`omicsclaw/autonomous/` 8 个新模块），经过架构评审和准确性评审两轮 Codex review

@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any
 
 from omicsclaw.common.report import (
-    build_output_dir_name,
     extract_method_name,
     load_result_json,
     write_output_readme,
@@ -63,15 +62,11 @@ def finalize_output_directory(
     final_dir = out_dir
     notebook_command = list(actual_command) if actual_command else None
 
-    if not user_supplied_output_dir and actual_method:
-        desired_name = build_output_dir_name(skill_name, timestamp, method=actual_method)
-        desired_path = deduplicate_path(out_dir.with_name(desired_name))
-        if desired_path != out_dir:
-            try:
-                out_dir.rename(desired_path)
-                final_dir = desired_path
-            except OSError:
-                final_dir = out_dir
+    # ADR 0035 constraint 3: the resolver names the Run directory up front; there
+    # is no post-run rename. The actual method (which a skill may auto-select) is
+    # recorded in ``manifest.json`` by ``run_paths.finalize_run`` and surfaced in
+    # the README/notebook below — the directory name never changes after creation,
+    # so any ``index.jsonl`` / ``manifest.json`` entry stays valid.
 
     if notebook_command:
         for idx, token in enumerate(notebook_command):

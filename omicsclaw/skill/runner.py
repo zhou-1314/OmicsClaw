@@ -27,7 +27,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from omicsclaw.common.report import build_output_dir_name
 from .registry import ensure_registry_loaded, registry
 from .execution.argv_builder import (
     build_skill_argv,
@@ -119,6 +118,8 @@ def _prepare_skill_run(
     demo: bool,
     session_path: str | None,
     extra_args: list[str] | None,
+    project_id: str = "",
+    project_name: str = "",
     log_banner: bool = True,
 ) -> _PreparedSkillRun | SkillRunResult:
     """Resolve skill, build argv, prepare output dir. Returns the prepared
@@ -157,11 +158,39 @@ def _prepare_skill_run(
     requested_method = extract_flag_value(extra_args, "--method")
 
     if output_dir:
+        # Explicit ``--output`` wins and keeps the user's exact layout; the
+        # project-scoped resolver is bypassed (and so is index/manifest finalize,
+        # gated on a sibling ``project_meta.json`` in ``_finalize_skill_run``).
         out_dir = Path(output_dir).resolve()
+        # CLAUDE.md safety rule 4 / ADR 0035: warn before overwriting a non-empty
+        # report directory (resolver-managed runs never collide thanks to the uid).
+        if log_banner and out_dir.exists() and any(out_dir.iterdir()):
+            print(
+                f"{RED}Warning:{RESET} output dir {out_dir} already exists and is not "
+                "empty — existing files may be overwritten.",
+                file=sys.stderr,
+            )
+        out_dir.mkdir(parents=True, exist_ok=True)
     else:
-        auto_name = build_output_dir_name(skill_name, generated_ts, method=requested_method)
-        out_dir = deduplicate_path(DEFAULT_OUTPUT_ROOT / auto_name)
-    out_dir.mkdir(parents=True, exist_ok=True)
+        # ADR 0035: place the Run under its Project, with a readable, globally
+        # unique, atomically-reserved directory name.
+        from omicsclaw.common import run_paths
+
+        output_root = Path(
+            os.getenv("OMICSCLAW_OUTPUT_DIR", "") or DEFAULT_OUTPUT_ROOT
+        ).expanduser()
+        resolution = run_paths.resolve_run_dir(
+            output_root=output_root,
+            skill=skill_name,
+            project_id=project_id,
+            project_name=project_name,
+            input_path=resolved_input,
+            input_paths=resolved_input_paths,
+            demo=demo,
+            method=requested_method,
+            timestamp=generated_ts,
+        )
+        out_dir = resolution.run_dir
 
     cmd = build_skill_argv(
         python_executable=get_skill_runner_python(),
@@ -258,6 +287,25 @@ def _finalize_skill_run(
             preferred_method=prepared.requested_method,
             actual_command=user_command,
         )
+        # ADR 0035: record the Run in its Project (enrich manifest.json + append
+        # the rebuildable index.jsonl). Gated on a sibling ``project_meta.json`` so
+        # resolver-managed runs (CLI default + agent + channel) are indexed while an
+        # explicit ``--output`` outside the output root is left untouched. Never let
+        # bookkeeping failure break a successful run.
+        try:
+            from omicsclaw.common import run_paths
+
+            if (final_out_dir.parent / run_paths.PROJECT_META_FILENAME).exists():
+                run_paths.finalize_run(
+                    final_out_dir,
+                    skill=prepared.skill_name,
+                    status="completed",
+                    method=actual_method,
+                    input_path=prepared.resolved_input,
+                    surface="skill-runner",
+                )
+        except Exception:  # pragma: no cover - defensive
+            pass
 
     output_files = sorted(
         [path.name for path in final_out_dir.rglob("*") if path.is_file()]
@@ -311,6 +359,8 @@ def run_skill(
     demo: bool = False,
     session_path: str | None = None,
     extra_args: list[str] | None = None,
+    project_id: str = "",
+    project_name: str = "",
     stdout_callback: Callable[[str], None] | None = None,
     stderr_callback: Callable[[str], None] | None = None,
     cancel_event: threading.Event | None = None,
@@ -343,12 +393,16 @@ def run_skill(
     if skill_name.endswith("-pipeline"):
         pipeline_result = run_pipeline_by_name(
             skill_name,
-            default_output_root=DEFAULT_OUTPUT_ROOT,
+            default_output_root=Path(
+                os.getenv("OMICSCLAW_OUTPUT_DIR", "") or DEFAULT_OUTPUT_ROOT
+            ).expanduser(),
             err_factory=_err,
             input_path=input_path,
             output_dir=output_dir,
             demo=demo,
             session_path=session_path,
+            project_id=project_id,
+            project_name=project_name,
         )
         if pipeline_result is not None:
             return pipeline_result
@@ -361,6 +415,8 @@ def run_skill(
         demo=demo,
         session_path=session_path,
         extra_args=extra_args,
+        project_id=project_id,
+        project_name=project_name,
     )
     if isinstance(prepared, SkillRunResult):
         return prepared
@@ -393,6 +449,8 @@ async def arun_skill(
     demo: bool = False,
     session_path: str | None = None,
     extra_args: list[str] | None = None,
+    project_id: str = "",
+    project_name: str = "",
 ) -> SkillRunResult:
     """Async sibling of :func:`run_skill` for callers already in an event loop.
 
@@ -436,6 +494,8 @@ async def arun_skill(
         demo=demo,
         session_path=session_path,
         extra_args=extra_args,
+        project_id=project_id,
+        project_name=project_name,
         log_banner=False,
     )
     if isinstance(prepared, SkillRunResult):
