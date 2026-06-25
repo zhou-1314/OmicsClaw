@@ -11,8 +11,11 @@ def _iter_cli_path_candidates() -> list[Path]:
     """Return candidate paths for the top-level ``omicsclaw.py`` launcher."""
     candidates: list[Path] = []
 
-    # 1) Standard source/editable layout: <repo>/omicsclaw/cli.py -> <repo>/omicsclaw.py
-    candidates.append(Path(__file__).resolve().parent.parent / "omicsclaw.py")
+    # 1) Standard source/editable layout: the repo root holds omicsclaw.py and is
+    #    an ancestor of this module (<repo>/omicsclaw/surfaces/cli/launcher.py).
+    #    Walk up every ancestor so the lookup survives the module being moved.
+    for base in Path(__file__).resolve().parents:
+        candidates.append(base / "omicsclaw.py")
 
     # 2) Optional explicit override.
     env_path = os.environ.get("OMICSCLAW_CLI_PATH", "").strip()
