@@ -9,7 +9,7 @@ cost on every turn.
 
 Used for:
 - Engineering discipline (read first, smallest change, OWASP, no .sh)
-  fires before ``file_edit`` / ``file_write`` / ``custom_analysis_execute``.
+  fires before ``file_edit`` / ``file_write``.
 - Skill execution rule (lowercase method, canonical aliases, output/
   location) fires before ``omicsclaw``.
 """

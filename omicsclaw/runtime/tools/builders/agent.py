@@ -240,7 +240,7 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                 "`width`/`height`/`dpi`/`palette`/`title`. Omit "
                 "`output_path` to auto-resolve. If R missing, relay "
                 "returned install instructions; do NOT fall back to "
-                "`custom_analysis_execute` or Python plotting."
+                "`autonomous_analysis_execute` or Python plotting."
             ),
             parameters={
                 "type": "object",
@@ -1193,8 +1193,8 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                 "The emitted skill is lint-clean against scripts/skill_lint.py and ready "
                 "to register via the runtime registry. "
                 "Use this only when the user explicitly wants a reusable new skill added "
-                "to OmicsClaw. If a previous custom_analysis_execute run succeeded, you can "
-                "promote that notebook into the new skill."
+                "to OmicsClaw. If a previous autonomous_analysis_execute run succeeded, you can "
+                "promote that workspace into the new skill."
             ),
             parameters={
                 "type": "object",
@@ -1221,7 +1221,7 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                     },
                     "source_analysis_dir": {
                         "type": "string",
-                        "description": "Optional path to a successful custom_analysis_execute output directory to promote into a skill.",
+                        "description": "Optional path to a successful autonomous_analysis_execute output directory to promote into a skill.",
                     },
                     "promote_from_latest": {
                         "type": "boolean",
@@ -1339,59 +1339,6 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
             writes_workspace=True,
             allowed_in_background=False,
             policy_tags=("analysis", "workflow", "autonomous", "autonomous_code_runner"),
-        ),
-        ToolSpec(
-            name="custom_analysis_execute",
-            description=(
-                "Legacy adapter for user-supplied Python snippets in a restricted notebook. "
-                "Prefer autonomous_analysis_execute for new generated-code analysis because it owns code generation, "
-                "execution, repair, and autonomous workspace reports."
-            ),
-            parameters={
-                "type": "object",
-                "properties": {
-                    "goal": {
-                        "type": "string",
-                        "description": "Short statement of the analysis objective.",
-                    },
-                    "analysis_plan": {
-                        "type": "string",
-                        "description": "Concise markdown plan describing what the custom analysis will do.",
-                    },
-                    "python_code": {
-                        "type": "string",
-                        "description": "A single self-contained Python snippet to execute inside the restricted notebook.",
-                    },
-                    "context": {
-                        "type": "string",
-                        "description": "Optional local context from the conversation or prior skill outputs.",
-                    },
-                    "web_context": {
-                        "type": "string",
-                        "description": "Optional external method notes returned by web_method_search.",
-                    },
-                    "file_path": {
-                        "type": "string",
-                        "description": "Optional input file path to expose as INPUT_FILE inside the notebook.",
-                    },
-                    "sources": {
-                        "type": "string",
-                        "description": "Optional markdown list of cited URLs or source notes to persist alongside the notebook.",
-                    },
-                    "output_label": {
-                        "type": "string",
-                        "description": "Optional short label for the output directory prefix.",
-                    },
-                },
-                "required": ["goal", "analysis_plan", "python_code"],
-            },
-            surfaces=("bot",),
-            read_only=False,
-            concurrency_safe=False,
-            risk_level=RISK_LEVEL_HIGH,
-            approval_mode=APPROVAL_MODE_ASK,
-            writes_workspace=True,
-            policy_tags=("analysis", "workflow", "notebook"),
         ),
         ToolSpec(
             name="inspect_data",

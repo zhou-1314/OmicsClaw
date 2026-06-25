@@ -62,7 +62,7 @@ run_autonomous_code_loop_async(request, ...)
 
 - **无 flag、自动**：autonomous 路径只有 mini-agent 一条引擎；`OMICSCLAW_AUTONOMOUS_MINI_AGENT` 开关与 legacy 一次性引擎都已移除。能力门控对不胜任的模型直接 **refuse**（没有可降级的简单引擎）。
 - legacy 一次性引擎及其 `executor.py` / `permissions.py` / `policy.py` / 一次性 `runtime_guard` 模块已**删除**；跨平台运行由 mini-agent 的**分层隔离**承担（§5、§8）。
-- `custom_analysis_execute`（LLM 自带 `python_code` 的直调工具）仍以 ADR 0013 的 *legacy adapter* 形态保留，其工具描述已引导 LLM 优先走 autonomous 路径。
+- `custom_analysis_execute`（LLM 自带 `python_code` 的旧直调工具）已在单引擎合并中**删除**；`autonomous_analysis_execute`（mini-agent）是唯一的生成式代码兜底路径。
 
 ## 4. Mini-agent 执行流水线（`mini_agent_runner.run_mini_agent_request`）
 

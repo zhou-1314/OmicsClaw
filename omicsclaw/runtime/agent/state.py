@@ -505,7 +505,6 @@ from omicsclaw.runtime.tools.builders.agent_executors import (
     _build_tool_runtime,
     execute_consult_knowledge,
     execute_create_omics_skill,
-    execute_custom_analysis_execute,
     execute_fetch_geo_metadata,
     execute_forget,
     execute_generate_audio,

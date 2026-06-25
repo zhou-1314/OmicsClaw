@@ -102,7 +102,7 @@ _Avoid_: "second chat engine", "fully autonomous scientist", "workflow author"
 **Autonomous Code Runner**: The package / execution boundary that hosts the Autonomous Code Mini-Agent, allocates the run workspace, enforces permissions, records provenance, and returns output-shape-compatible artifacts.
 _Avoid_: "custom_analysis_execute", "hidden skill", "generic notebook"
 
-**Legacy custom analysis adapter**: The temporary compatibility role for `custom_analysis_execute` after Autonomous Code Runner becomes the recommended generated-code path.
+**Legacy custom analysis adapter** (removed): `custom_analysis_execute` was the one-shot notebook compatibility adapter; it was removed in the ADR 0032 single-engine consolidation. `autonomous_analysis_execute` (the Autonomous Code Mini-Agent) is now the sole generated-code fallback path.
 _Avoid_: "primary fallback", "new autonomous path"
 
 **Autonomous Code Loop**: The mini-agent's bounded tactical loop. It may reason over execution feedback, choose the next generated cell, call curated skill handles, and self-check artifacts before `ReturnAnswer`, but it remains scoped to one fallback run.
@@ -228,7 +228,7 @@ _Avoid_: "cache metrics" (too vague), "token accounting" (that is billing, a sup
 - A **No skill match** enters the **Autonomous Analysis Path** and uses the **Autonomous Code Mini-Agent** directly.
 - The **Analysis Router** submits deterministic analysis routes as planned tool calls through the existing tool policy, approval, callback, result-store, and transcript pipeline.
 - The **Autonomous Code Runner** is composed by the **Analysis Router**; under ADR 0032 its **Skill-handle facade** wraps the existing skill runner instead of importing skill scripts directly.
-- The **Legacy custom analysis adapter** may forward to the **Autonomous Code Runner**, but it is not the recommended route for new generated-code execution.
+- The **Legacy custom analysis adapter** (`custom_analysis_execute`) was removed in the ADR 0032 single-engine consolidation; the **Autonomous Code Mini-Agent** (`autonomous_analysis_execute`) is the only generated-code route.
 - The **Autonomous Code Runner** hosts the **Autonomous Code Loop**; the outer chat engine can invoke it but is not replaced by it.
 - The **Autonomous Code Loop** uses **Evidence-bound repair** inside bounded step / failure / budget limits.
 - The **Skill-handle facade** is the only approved way for generated autonomous code to invoke OmicsClaw skills; raw subprocess access from generated cells remains blocked.

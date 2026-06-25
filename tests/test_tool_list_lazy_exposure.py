@@ -22,8 +22,7 @@ Coverage map (mirrors plan section "Wire 33 lazy-load tools to predicates"):
 |                                    | create_csv_file                           |
 | pdf_or_paper_intent                | parse_literature, fetch_geo_metadata      |
 | memory_in_use                      | remember, recall, forget                  |
-| implementation_intent              | autonomous_analysis_execute,              |
-|                                    | custom_analysis_execute                   |
+| implementation_intent              | autonomous_analysis_execute               |
 | workspace_active                   | todo_write, task_create, task_get,        |
 |                                    | task_list, task_update                    |
 | non_trivial_no_capability          | list_skills_in_domain                     |
@@ -191,14 +190,14 @@ def test_recall_forget_hidden_on_preference_statement(query: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "tool", ("autonomous_analysis_execute", "custom_analysis_execute")
+    "tool", ("autonomous_analysis_execute",)
 )
 def test_custom_analysis_tools_appear_on_implement_query(tool: str) -> None:
     assert tool in _selected_names(query="implement a new sc-de variant")
 
 
 @pytest.mark.parametrize(
-    "tool", ("autonomous_analysis_execute", "custom_analysis_execute")
+    "tool", ("autonomous_analysis_execute",)
 )
 def test_custom_analysis_tools_hidden_on_plain_query(tool: str) -> None:
     assert tool not in _selected_names(query="explain UMAP")

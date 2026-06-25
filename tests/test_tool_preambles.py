@@ -4,8 +4,8 @@ The Phase 4 design ships two ``PreCallRuleInjector`` instances on bot/
 interactive surfaces:
 
 1. **engineering_preamble** — fires before code-writing tools
-   (``file_edit``, ``file_write`` of .py/.R/.ipynb,
-   ``custom_analysis_execute``). Carries the existing-first / minimal
+   (``file_edit``, ``file_write`` of .py/.R/.ipynb). Carries
+   the existing-first / minimal
    change / OWASP / no-shell-script rules that used to live in
    ``skill_contract §6 Controlled Execution`` and ``§8 Engineering
    Discipline``.
@@ -56,11 +56,6 @@ def test_engineering_preamble_quiet_on_file_write_of_unrelated_extension() -> No
     the engineering rules."""
     text = _preamble("file_write", {"path": "out/data.csv"})
     assert "OWASP" not in text
-
-
-def test_engineering_preamble_fires_on_custom_analysis_execute() -> None:
-    text = _preamble("custom_analysis_execute", {"code": "import scanpy"})
-    assert text, "engineering preamble missing for custom_analysis_execute"
 
 
 def test_engineering_preamble_quiet_on_unrelated_tool() -> None:

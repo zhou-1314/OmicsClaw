@@ -322,7 +322,7 @@ async def execute_omicsclaw(
                     f"Coverage: {decision.coverage}\n"
                     f"Reason: {missing}\n\n"
                     "If the user wants a reusable repository skill, use create_omics_skill. "
-                    "Otherwise use web_method_search and custom_analysis_execute for controlled fallback."
+                    "Otherwise use web_method_search and autonomous_analysis_execute for controlled fallback."
                 )
         except Exception as e:
             return f"Error resolving skill automatically: {e}"
@@ -1978,89 +1978,6 @@ async def execute_web_method_search(args: dict, **kwargs) -> str:
         return f"Error searching the web for methods: {e}"
 
 
-async def execute_custom_analysis_execute(args: dict, **kwargs) -> str:
-    """Run custom analysis code in a restricted notebook sandbox."""
-    try:
-        from omicsclaw.skill.capability_resolver import resolve_capability
-        from omicsclaw.execution import run_autonomous_analysis
-
-        goal = args.get("goal", "")
-        analysis_plan = args.get("analysis_plan", "")
-        python_code = args.get("python_code", "")
-        if not goal or not analysis_plan or not python_code:
-            return "Error: 'goal', 'analysis_plan', and 'python_code' are required."
-
-        file_path_arg = args.get("file_path", "")
-        resolved_path = None
-        if file_path_arg:
-            resolved_path = validate_input_path(file_path_arg)
-            if resolved_path is None:
-                found = discover_file(file_path_arg)
-                if len(found) == 1:
-                    resolved_path = found[0]
-                elif len(found) > 1:
-                    listing = "\n".join(f"  - {f}" for f in found[:8])
-                    return (
-                        f"Multiple files match '{file_path_arg}':\n{listing}\n\n"
-                        "Please specify the full path before custom analysis."
-                    )
-                else:
-                    return f"Error: input file not found or not trusted: {file_path_arg}"
-
-        capability = resolve_capability(
-            f"{goal}\n{analysis_plan}",
-            file_path=str(resolved_path or ""),
-        )
-
-        result = await asyncio.to_thread(
-            run_autonomous_analysis,
-            output_root=str(OUTPUT_DIR),
-            goal=goal,
-            analysis_plan=analysis_plan,
-            python_code=python_code,
-            context=args.get("context", ""),
-            web_context=args.get("web_context", ""),
-            input_file=str(resolved_path or ""),
-            sources=args.get("sources", ""),
-            capability_decision=capability.to_dict(),
-            output_label=args.get("output_label", "autonomous-analysis") or "autonomous-analysis",
-        )
-
-        if not result.get("ok"):
-            completion_summary = format_completion_mapping_summary(result.get("completion"))
-            return (
-                "Custom analysis failed.\n"
-                f"Output dir: {result.get('output_dir', '<unknown>')}\n"
-                f"Notebook: {result.get('notebook_path', '<unknown>')}\n"
-                f"Manifest: {result.get('manifest_path', '<unknown>')}\n"
-                f"Completion report: {result.get('completion_report_path', '<unknown>')}\n"
-                f"Gate:\n{completion_summary or '<unavailable>'}\n"
-                f"Error: {result.get('error', 'unknown error')}"
-            )
-
-        preview = str(result.get("output_preview", "") or "")
-        completion_summary = format_completion_mapping_summary(result.get("completion"))
-        return (
-            "Custom analysis completed.\n"
-            f"Output dir: {result.get('output_dir')}\n"
-            f"Notebook: {result.get('notebook_path')}\n"
-            f"Summary: {result.get('summary_path')}\n"
-            f"Manifest: {result.get('manifest_path')}\n"
-            f"Completion report: {result.get('completion_report_path')}\n"
-            f"Gate:\n{completion_summary or '<unavailable>'}\n"
-            f"Preview:\n{preview or '<no stdout preview>'}"
-        )
-    except ImportError as e:
-        return (
-            "Error: autonomous notebook dependencies are not installed. "
-            'Install with: pip install -e ".[autonomous]" or pip install -e ".[research]". '
-            f"Details: {e}"
-        )
-    except Exception as e:
-        logger.error(f"Custom analysis execution failed: {e}", exc_info=True)
-        return f"Error running custom analysis: {e}"
-
-
 def _resolve_trusted_data_paths(
     raw_paths: list[str], *, allow_dir: bool = False
 ) -> tuple[list[str], list[str]]:
@@ -2223,7 +2140,6 @@ def _available_tool_executors() -> dict[str, object]:
         "create_omics_skill": execute_create_omics_skill,
         "web_method_search": execute_web_method_search,
         "autonomous_analysis_execute": execute_autonomous_analysis_execute,
-        "custom_analysis_execute": execute_custom_analysis_execute,
         "inspect_data": execute_inspect_data,
     }
     # Bench Phase 3.1 (ADR 0019) — KG read tools, always registered; each

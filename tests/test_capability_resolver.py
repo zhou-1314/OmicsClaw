@@ -1,7 +1,6 @@
-"""Tests for unified capability resolution and autonomous code validation."""
+"""Tests for unified capability resolution."""
 
 from omicsclaw.skill.capability_resolver import resolve_capability
-from omicsclaw.execution import validate_custom_analysis_code
 
 
 def test_resolve_capability_exact_skill():
@@ -94,21 +93,6 @@ def test_resolve_capability_routes_spatial_raw_fastq_requests_to_spatial_domain(
     )
     assert decision.domain == "spatial"
     assert decision.chosen_skill == "spatial-raw-processing"
-
-
-def test_validate_custom_analysis_code_blocks_shell_and_network():
-    issues = validate_custom_analysis_code(
-        "import subprocess\nsubprocess.run(['echo', 'hi'])\n"
-    )
-    assert any("blocked import" in issue for issue in issues)
-    assert any("blocked attribute call" in issue for issue in issues)
-
-
-def test_validate_custom_analysis_code_allows_basic_analysis():
-    issues = validate_custom_analysis_code(
-        "import scanpy as sc\nimport pandas as pd\nprint('ok')\n"
-    )
-    assert issues == []
 
 
 def test_resolve_capability_no_skill_fallback_defaults_should_search_web_to_false():

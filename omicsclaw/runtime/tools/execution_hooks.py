@@ -45,8 +45,6 @@ def _is_code_file_write(tool_name: str, tool_args: Mapping[str, Any]) -> bool:
 def _engineering_preamble_matches(tool_name: str, tool_args: Mapping[str, Any]) -> bool:
     if tool_name == "file_edit":
         return True
-    if tool_name == "custom_analysis_execute":
-        return True
     return _is_code_file_write(tool_name, tool_args)
 
 

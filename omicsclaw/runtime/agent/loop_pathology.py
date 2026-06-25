@@ -53,7 +53,6 @@ FAILURE_THRESHOLD = 4
 EXECUTION_TOOLS: frozenset[str] = frozenset(
     {
         "omicsclaw",
-        "custom_analysis_execute",
         "autonomous_analysis_execute",
         "replot_skill",
     }

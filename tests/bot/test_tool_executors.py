@@ -35,7 +35,6 @@ TOOL_EXECUTORS_REEXPORTS = (
     "execute_list_skills_in_domain",
     "execute_create_omics_skill",
     "execute_web_method_search",
-    "execute_custom_analysis_execute",
     # Dispatch surface
     "_available_tool_executors",
     "_build_tool_runtime",

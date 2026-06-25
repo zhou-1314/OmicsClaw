@@ -6,10 +6,10 @@
 - The user explicitly asks to **add**, **create**, **package**, or **persist** a new OmicsClaw skill.
 - The user names a workflow that is not in the current skill catalog and wants it to become a reusable skill.
 - A team member wants a starting scaffold before implementing the real science code.
-- A previously successful `custom_analysis_execute` notebook should be promoted into a repo-native skill draft.
+- A previously successful `autonomous_analysis_execute` run should be promoted into a repo-native skill draft.
 
 Do **not** use this for one-off analyses. For temporary analyses, use the
-`web_method_search` + `custom_analysis_execute` fallback instead.
+`web_method_search` + `autonomous_analysis_execute` fallback instead.
 
 
 ## What It Creates

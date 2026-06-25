@@ -8,7 +8,6 @@ import pytest
 from omicsclaw.runtime.agent.state import (
     _build_bot_query_engine_callbacks,
     execute_create_omics_skill,
-    execute_custom_analysis_execute,
 )
 from omicsclaw.skill.scaffolder import SkillScaffoldResult
 from omicsclaw.knowledge.retriever import _push_runtime_notice, clear_runtime_notices
@@ -54,53 +53,6 @@ async def test_execute_create_omics_skill_includes_gate_summary(monkeypatch):
     assert "Gate:" in message
     assert "Status: complete" in message
     assert "Completed: True" in message
-
-
-class _FakeCapabilityDecision:
-    def to_dict(self) -> dict[str, object]:
-        return {"chosen_skill": "", "coverage": "no_skill"}
-
-
-@pytest.mark.asyncio
-async def test_execute_custom_analysis_execute_includes_gate_summary(monkeypatch):
-    monkeypatch.setattr(
-        "omicsclaw.skill.capability_resolver.resolve_capability",
-        lambda *_args, **_kwargs: _FakeCapabilityDecision(),
-    )
-    monkeypatch.setattr(
-        "omicsclaw.execution.run_autonomous_analysis",
-        lambda **_kwargs: {
-            "ok": True,
-            "output_dir": "/tmp/analysis",
-            "notebook_path": "/tmp/analysis/reproducibility/analysis_notebook.ipynb",
-            "summary_path": "/tmp/analysis/result_summary.md",
-            "manifest_path": "/tmp/analysis/manifest.json",
-            "completion_report_path": "/tmp/analysis/completion_report.json",
-            "output_preview": "preview",
-            "completion": {
-                "status": "complete",
-                "completed": True,
-                "missing_required_artifacts": [],
-                "warnings": ["review notebook before promotion"],
-                "errors": [],
-            },
-        },
-    )
-
-    message = await execute_custom_analysis_execute(
-        {
-            "goal": "Run a one-off analysis.",
-            "analysis_plan": "1. Load data\n2. Summarize results",
-            "python_code": "print('ok')",
-        }
-    )
-
-    assert "Custom analysis completed." in message
-    assert "Gate:" in message
-    assert "Status: complete" in message
-    assert "Completed: True" in message
-    assert "Warnings:" in message
-    assert "- review notebook before promotion" in message
 
 
 @pytest.mark.asyncio

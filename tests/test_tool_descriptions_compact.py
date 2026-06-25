@@ -67,7 +67,7 @@ def test_omicsclaw_description_pins_auto_prepare_for_batch_integration() -> None
 
 def test_replot_skill_description_under_550_chars() -> None:
     """Budget bumped from 500 to 550 to keep both the
-    ``custom_analysis_execute`` AND Python-plotting prohibition (the
+    ``autonomous_analysis_execute`` AND Python-plotting prohibition (the
     review-flagged "do not fall back" path) without risking model
     behavior."""
     spec = _spec_by_name("replot_skill")
@@ -89,9 +89,9 @@ def test_replot_skill_description_pins_top_n_renderer_flags() -> None:
 
 def test_replot_skill_description_pins_no_python_fallback() -> None:
     """The original instruction explicitly forbade falling back to
-    ``custom_analysis_execute``. Code review caught the loss; pin both
-    names so future rewrites can't drop them again."""
+    custom code (``autonomous_analysis_execute`` / Python plotting). Pin
+    the prohibition so future rewrites can't drop it again."""
     spec = _spec_by_name("replot_skill")
     lower = spec.description.lower()
-    assert "custom_analysis_execute" in lower
+    assert "autonomous_analysis_execute" in lower
     assert "python" in lower
