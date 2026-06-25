@@ -215,6 +215,9 @@ class AutonomousAnalysisBundle:
     domain: str = ""
     input_file: str = ""
     context: str = ""
+    # "mini_agent" code is authored against the oc/adata/show/ReturnAnswer facade
+    # and needs a bootstrap in the promoted script; "notebook" code is self-contained.
+    engine: str = "notebook"
 
 
 def slugify_skill_name(name: str) -> str:
@@ -662,6 +665,34 @@ if __name__ == "__main__":
 """
 
 
+# Recreates the mini-agent kernel namespace (oc/adata/show/ReturnAnswer) inside a
+# promoted skill so its accepted code runs instead of crashing on NameError. Only
+# injected for ``engine == "mini_agent"`` bundles; notebook code is self-contained.
+_MINI_AGENT_FACADE_BOOTSTRAP = '''\
+# --- mini-agent facade bootstrap --------------------------------------------
+# This code was authored in the OmicsClaw Autonomous Code Mini-Agent kernel, which
+# provides `oc`, `adata`, `show()` and `ReturnAnswer()`. They are recreated here so
+# the promoted draft runs; adapt them as you harden it into a real skill.
+import anndata as _ad
+adata = _ad.read_h5ad(INPUT_FILE) if INPUT_FILE else None
+from omicsclaw.autonomous.skill_facade import build_facade as _build_facade
+oc = _build_facade(AUTONOMOUS_OUTPUT_DIR, max_skill_calls=20, skill_timeout_seconds=1800)
+import matplotlib as _matplotlib
+_matplotlib.use("Agg")
+import matplotlib.pyplot as _plt
+_oc_fig_count = [0]
+def show(*_a, **_k):
+    for _num in _plt.get_fignums():
+        _oc_fig_count[0] += 1
+        _plt.figure(_num).savefig(
+            str(OUTPUT_PATH / ("fig_%02d.png" % _oc_fig_count[0])), dpi=120, bbox_inches="tight"
+        )
+    _plt.close("all")
+def ReturnAnswer(text=""):
+    (OUTPUT_PATH / "answer.txt").write_text(str(text), encoding="utf-8")
+'''
+
+
 def render_promoted_skill_script(
     *,
     skill_name: str,
@@ -677,6 +708,9 @@ def render_promoted_skill_script(
     requires_input = bool(default_input)
     normalized_code = _normalize_promoted_code(source_bundle.python_code, source_bundle.source_dir)
     indented_code = textwrap.indent(normalized_code.rstrip() + "\n", "    ")
+    facade_bootstrap = ""
+    if source_bundle.engine == "mini_agent":
+        facade_bootstrap = textwrap.indent(_MINI_AGENT_FACADE_BOOTSTRAP, "    ") + "\n"
 
     return f"""#!/usr/bin/env python3
 \"\"\"Promoted OmicsClaw skill for {title}.\"\"\"
@@ -729,11 +763,11 @@ def main() -> None:
     OUTPUT_PATH = skill_output_dir
     OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 
-{indented_code}
+{facade_bootstrap}{indented_code}
 
     readme = f\"\"\"# {{SKILL_NAME}}
 
-This skill was promoted from a successful `custom_analysis_execute` run.
+This skill was promoted from a successful `autonomous_analysis_execute` run.
 
 - Domain: {{DOMAIN}}
 - Input: {{effective_input or "none"}}
@@ -877,7 +911,18 @@ def _load_notebook(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+_ACCEPTED_STEP_RE = re.compile(r"^# === accepted step \d+ ===$", re.MULTILINE)
+
+
 def _load_autonomous_bundle(path: Path) -> AutonomousAnalysisBundle:
+    """Load a promotable autonomous run, in either supported layout.
+
+    Since the ADR 0032 single-engine consolidation the Autonomous Code Mini-Agent
+    is the only producer: it writes the consolidated accepted cells to
+    ``<run_dir>/analysis.py`` (no notebook). The legacy one-shot
+    ``custom_analysis_execute`` notebook layout is still read so older on-disk runs
+    stay promotable.
+    """
     completion_path = path / COMPLETION_REPORT_FILENAME
     if completion_path.exists():
         completion = _load_completion_report(completion_path)
@@ -888,13 +933,53 @@ def _load_autonomous_bundle(path: Path) -> AutonomousAnalysisBundle:
             )
 
     notebook_path = path / "reproducibility" / "analysis_notebook.ipynb"
+    if notebook_path.exists():
+        return _load_legacy_notebook_bundle(path, notebook_path)
+
+    analysis_path = path / "analysis.py"
+    if analysis_path.exists():
+        return _load_mini_agent_bundle(path, analysis_path)
+
+    raise FileNotFoundError(
+        f"No promotable autonomous analysis found at {path}: expected a mini-agent "
+        f"replay script ({analysis_path}) or a legacy notebook ({notebook_path})."
+    )
+
+
+def _load_mini_agent_bundle(path: Path, analysis_path: Path) -> AutonomousAnalysisBundle:
+    """Build a promotion bundle from a mini-agent run (ADR 0032 layout)."""
+    code = _extract_accepted_cells(analysis_path.read_text(encoding="utf-8"))
+    if not code.strip():
+        raise ValueError(f"No executable analysis code found in {analysis_path}")
+
+    summary_path = path / "result_summary.md"
+    result_summary = summary_path.read_text(encoding="utf-8") if summary_path.exists() else ""
+    goal, input_file = _read_run_goal_and_input(path)
+    if not goal:
+        goal = _goal_from_summary(result_summary)
+
+    return AutonomousAnalysisBundle(
+        source_dir=str(path),
+        notebook_path="",
+        analysis_plan="",
+        result_summary=result_summary,
+        web_sources="",
+        capability_decision={},
+        python_code=code.rstrip() + "\n",
+        goal=goal,
+        domain="",
+        input_file=input_file,
+        context="",
+        engine="mini_agent",
+    )
+
+
+def _load_legacy_notebook_bundle(path: Path, notebook_path: Path) -> AutonomousAnalysisBundle:
+    """Build a promotion bundle from a legacy ``custom_analysis_execute`` notebook."""
     plan_path = path / "analysis_plan.md"
     summary_path = path / "result_summary.md"
     sources_path = path / "web_sources.md"
     capability_path = path / "capability_decision.json"
-
-    if not notebook_path.exists():
-        raise FileNotFoundError(f"Autonomous analysis notebook not found: {notebook_path}")
 
     notebook = _load_notebook(notebook_path)
     code_cells = []
@@ -937,6 +1022,59 @@ def _load_autonomous_bundle(path: Path) -> AutonomousAnalysisBundle:
     )
 
 
+def _extract_accepted_cells(script: str) -> str:
+    """Return the accepted-cell bodies from a mini-agent ``analysis.py``.
+
+    The replay script is ``<generated init preamble>`` followed by one
+    ``# === accepted step N ===`` block per accepted cell. Only the accepted
+    blocks are the analyst-authored logic worth promoting; the init preamble is
+    kernel scaffolding (``oc`` facade, ``adata`` load) and is dropped. The marker
+    is matched line-anchored so a coincidental substring inside cell code or a
+    comment cannot cut the extraction early.
+    """
+    match = _ACCEPTED_STEP_RE.search(script)
+    return "" if match is None else script[match.start():]
+
+
+def _read_run_goal_and_input(path: Path) -> tuple[str, str]:
+    """Best-effort goal + first input path for a mini-agent run."""
+    goal = ""
+    input_file = ""
+    manifest_path = path / "manifest.json"
+    if manifest_path.exists():
+        try:
+            meta = json.loads(manifest_path.read_text(encoding="utf-8")).get("metadata", {}) or {}
+        except (json.JSONDecodeError, OSError):
+            meta = {}
+        goal = str(meta.get("goal", "") or "")
+        inputs = meta.get("input_paths") or []
+        if isinstance(inputs, list) and inputs:
+            input_file = str(inputs[0])
+    if not input_file:
+        refs_path = path / "inputs" / "references.json"
+        if refs_path.exists():
+            try:
+                refs = json.loads(refs_path.read_text(encoding="utf-8")).get("references") or []
+            except (json.JSONDecodeError, OSError):
+                refs = []
+            if refs:
+                input_file = str(refs[0])
+    return goal, input_file
+
+
+def _goal_from_summary(summary: str) -> str:
+    """Pull the ``## Goal`` section body from a result summary (best-effort)."""
+    lines = summary.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip().lower() == "## goal":
+            for body in lines[i + 1:]:
+                if body.strip().startswith("##"):
+                    break
+                if body.strip():
+                    return body.strip()
+    return ""
+
+
 def _extract_setup_literals(source: str) -> dict[str, str]:
     values: dict[str, str] = {}
     tree = ast.parse(source)
@@ -963,34 +1101,80 @@ def _normalize_promoted_code(code: str, source_dir: str) -> str:
     return normalized.rstrip() + "\n"
 
 
+def _is_autonomous_run_dir(child: Path) -> bool:
+    """Identity gate for the weaker mini-agent signal (a root ``analysis.py``).
+
+    A regular skill output can also carry ``result_summary.md``, so a mini-agent
+    run must additionally look autonomous: the canonical run-dir prefix, or a
+    manifest whose ``metadata.source`` is the autonomous runner. The legacy
+    notebook+plan layout is self-identifying and does not go through this gate.
+    """
+    from omicsclaw.autonomous.contracts import (
+        AUTONOMOUS_CODE_RUNNER_SOURCE,
+        AUTONOMOUS_RUN_DIR_PREFIX,
+    )
+
+    if child.name.startswith(AUTONOMOUS_RUN_DIR_PREFIX) or child.name.startswith("autonomous-analysis"):
+        return True
+    manifest = child / "manifest.json"
+    if manifest.is_file():
+        try:
+            meta = json.loads(manifest.read_text(encoding="utf-8")).get("metadata", {}) or {}
+        except (json.JSONDecodeError, OSError):
+            return False
+        return str(meta.get("source", "")) == AUTONOMOUS_CODE_RUNNER_SOURCE
+    return False
+
+
+def _autonomous_run_candidate(child: Path) -> tuple[float, Path] | None:
+    """Return ``(mtime, dir)`` when ``child`` is a promotable autonomous run."""
+    if not child.is_dir():
+        return None
+    completion_path = child / COMPLETION_REPORT_FILENAME
+    if completion_path.is_file():
+        try:
+            completion = _load_completion_report(completion_path)
+        except json.JSONDecodeError:
+            return None
+        if not bool(completion.get("completed", False)):
+            return None
+    summary_path = child / "result_summary.md"
+    if not summary_path.is_file():
+        return None
+    legacy_nb = child / "reproducibility" / "analysis_notebook.ipynb"
+    legacy_plan = child / "analysis_plan.md"
+    mini_code = child / "analysis.py"
+    if legacy_nb.is_file() and legacy_plan.is_file():
+        code_path = legacy_nb
+    elif mini_code.is_file() and _is_autonomous_run_dir(child):
+        code_path = mini_code
+    else:
+        return None
+    latest_ts = max(code_path.stat().st_mtime, summary_path.stat().st_mtime, child.stat().st_mtime)
+    return (latest_ts, child)
+
+
 def find_latest_autonomous_analysis(output_root: Path | None = None) -> Path | None:
     root = Path(output_root or OUTPUT_DIR)
     if not root.exists():
         return None
+    from omicsclaw.common.run_paths import PROJECT_META_FILENAME
 
     candidates: list[tuple[float, Path]] = []
     for child in root.iterdir():
         if not child.is_dir():
             continue
-        completion_path = child / COMPLETION_REPORT_FILENAME
-        if completion_path.exists():
-            try:
-                completion = _load_completion_report(completion_path)
-            except json.JSONDecodeError:
-                continue
-            if not bool(completion.get("completed", False)):
-                continue
-        notebook_path = child / "reproducibility" / "analysis_notebook.ipynb"
-        plan_path = child / "analysis_plan.md"
-        summary_path = child / "result_summary.md"
-        if notebook_path.exists() and plan_path.exists() and summary_path.exists():
-            latest_ts = max(
-                notebook_path.stat().st_mtime,
-                plan_path.stat().st_mtime,
-                summary_path.stat().st_mtime,
-                child.stat().st_mtime,
-            )
-            candidates.append((latest_ts, child))
+        cand = _autonomous_run_candidate(child)
+        if cand is not None:
+            candidates.append(cand)
+        # ADR 0035: a run nests under output_root/<project>/ when project_id is set.
+        # Descend one level into real project dirs (they carry project_meta.json) so
+        # Bench-thread runs are discoverable, without walking arbitrary subtrees.
+        if (child / PROJECT_META_FILENAME).is_file():
+            for grandchild in child.iterdir():
+                cand = _autonomous_run_candidate(grandchild)
+                if cand is not None:
+                    candidates.append(cand)
 
     if not candidates:
         return None
@@ -1186,7 +1370,10 @@ def create_skill_scaffold(
                 "source_completion_report.json": resolved_source_dir / COMPLETION_REPORT_FILENAME,
             }
             for filename, source_path in reference_targets.items():
-                if source_path.exists():
+                # is_file() (not exists()): a mini-agent bundle has no notebook, so
+                # notebook_path is "" → Path("") == Path(".") which exists as a dir
+                # and would make shutil.copy2 raise IsADirectoryError.
+                if source_path.is_file():
                     dest = references_dir / filename
                     shutil.copy2(source_path, dest)
                     rel_path = Path("references") / filename

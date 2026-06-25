@@ -168,6 +168,158 @@ def test_create_skill_scaffold_can_promote_autonomous_analysis(tmp_path: Path):
     assert lint_skill(skill_dir) == []
 
 
+def _build_real_mini_agent_run(
+    tmp_path: Path,
+    *,
+    accepted_cells: list[str] | None = None,
+    real_input: bool = False,
+    project_id: str = "",
+):
+    """Materialise a real Autonomous Code Mini-Agent workspace on disk.
+
+    Uses the actual producer helpers (``create_workspace`` / ``emit_replay_script``
+    / ``write_run_records``) so this test tracks the real write-side contract
+    instead of a hand-rolled notebook bundle (which masked the promotion bug).
+    ``real_input`` writes a tiny valid .h5ad (for execution tests); ``project_id``
+    nests the run under a project dir (ADR 0035).
+    """
+    from omicsclaw.autonomous.budget import MiniAgentBudget
+    from omicsclaw.autonomous.contracts import (
+        AutonomousRunRequest,
+        AutonomousRunResult,
+        AutonomousRunStatus,
+    )
+    from omicsclaw.autonomous.replay import emit_replay_script
+    from omicsclaw.autonomous.runner import write_run_records
+    from omicsclaw.autonomous.workspace import create_workspace
+
+    output_root = tmp_path / "output"
+    input_file = tmp_path / "data.h5ad"
+    if real_input:
+        import anndata as ad
+        import numpy as np
+
+        ad.AnnData(np.zeros((5, 3), dtype="float32")).write_h5ad(input_file)
+    else:
+        input_file.write_text("fake", encoding="utf-8")
+
+    request = AutonomousRunRequest(
+        goal="cluster the cells and summarize markers",
+        output_root=str(output_root),
+        input_paths=[str(input_file)],
+        project_id=project_id,
+    )
+    workspace = create_workspace(request)
+    cells = accepted_cells if accepted_cells is not None else [
+        "res = oc.run('sc-preprocessing', adata)\nadata = res.adata",
+        "import scanpy as sc\nsc.tl.leiden(adata)\nReturnAnswer('2 clusters')",
+    ]
+    emit_replay_script(
+        workspace.root,
+        cells,
+        [str(input_file)],
+        MiniAgentBudget(),
+        replay_workspace=workspace.root / "replay",
+    )
+    result = AutonomousRunResult(
+        run_id=workspace.run_id,
+        workspace_root=str(workspace.root),
+        status=AutonomousRunStatus.SUCCEEDED,
+        metadata={"answer": "2 clusters", "computed_results": "leiden -> 2 clusters"},
+    )
+    write_run_records(workspace, request=request, result=result)
+    return output_root, workspace.root
+
+
+def test_create_skill_scaffold_can_promote_mini_agent_analysis(tmp_path: Path):
+    """Promote a REAL mini-agent run (no notebook; code in ``analysis.py``)."""
+    output_root, source_dir = _build_real_mini_agent_run(tmp_path)
+
+    result = create_skill_scaffold(
+        request="Package the clustering run as a reusable skill.",
+        domain="singlecell",
+        skill_name="mini-promote-skill",
+        summary="Reusable clustering skill.",
+        skills_root=tmp_path / "skills",
+        source_analysis_dir=source_dir,
+        output_root=output_root,
+    )
+
+    skill_dir = Path(result.skill_dir)
+    script_text = (skill_dir / "mini_promote_skill.py").read_text(encoding="utf-8")
+    assert "Promoted OmicsClaw skill" in script_text
+    # The mini-agent's accepted code (from analysis.py) made it into the draft.
+    assert "sc.tl.leiden(adata)" in script_text
+    assert "oc.run('sc-preprocessing', adata)" in script_text
+    # Real source artifacts are copied as references (notebook absent → skipped).
+    assert (skill_dir / "references" / "source_result_summary.md").exists()
+    assert (skill_dir / "references" / "source_manifest.json").exists()
+    assert not (skill_dir / "references" / "source_analysis_notebook.ipynb").exists()
+    assert result.completion["completed"] is True
+    assert lint_skill(skill_dir) == []
+
+
+def test_find_latest_autonomous_analysis_discovers_mini_agent_run(tmp_path: Path):
+    """``promote_from_latest`` must discover a real mini-agent run."""
+    output_root, source_dir = _build_real_mini_agent_run(tmp_path)
+    latest = find_latest_autonomous_analysis(output_root=output_root)
+    assert latest is not None
+    assert latest.resolve() == source_dir.resolve()
+
+
+def test_promoted_mini_agent_skill_runs(tmp_path: Path):
+    """The promoted mini-agent skill must actually RUN (no NameError: 'oc').
+
+    Executes the generated script end-to-end against a tiny real .h5ad with
+    facade-only accepted code, so it exercises the bootstrap, not just file text.
+    """
+    output_root, source_dir = _build_real_mini_agent_run(
+        tmp_path,
+        real_input=True,
+        accepted_cells=["n = int(adata.n_obs)", "show()\nReturnAnswer('cells=' + str(n))"],
+    )
+    result = create_skill_scaffold(
+        request="Package the run as a reusable skill.",
+        domain="singlecell",
+        skill_name="run-promote-skill",
+        skills_root=tmp_path / "skills",
+        source_analysis_dir=source_dir,
+        output_root=output_root,
+    )
+    script = Path(result.skill_dir) / "run_promote_skill.py"
+    run_out = tmp_path / "run_out"
+    proc = subprocess.run(
+        [sys.executable, str(script), "--demo", "--output", str(run_out)],
+        cwd=ROOT,
+        env={**os.environ, "PYTHONPATH": str(ROOT)},
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    assert "NameError" not in proc.stderr
+    assert (run_out / "result.json").exists()
+    assert (run_out / "answer.txt").read_text(encoding="utf-8").strip() == "cells=5"
+
+
+def test_find_latest_discovers_project_nested_mini_agent_run(tmp_path: Path):
+    """ADR 0035: a run nested under a project dir must still be discoverable."""
+    output_root, source_dir = _build_real_mini_agent_run(tmp_path, project_id="thread-xyz")
+    assert source_dir.parent != output_root  # sanity: really nested under a project
+    latest = find_latest_autonomous_analysis(output_root=output_root)
+    assert latest is not None
+    assert latest.resolve() == source_dir.resolve()
+
+
+def test_find_latest_ignores_non_autonomous_dir(tmp_path: Path):
+    """A non-autonomous dir with result_summary.md + analysis.py is not promoted."""
+    output_root = tmp_path / "output"
+    decoy = output_root / "some-skill-output"
+    decoy.mkdir(parents=True)
+    (decoy / "result_summary.md").write_text("summary\n", encoding="utf-8")
+    (decoy / "analysis.py").write_text("print('x')\n", encoding="utf-8")
+    assert find_latest_autonomous_analysis(output_root=output_root) is None
+
+
 def test_create_skill_scaffold_rejects_incomplete_autonomous_analysis(tmp_path: Path):
     source_dir = tmp_path / "output" / "incomplete-analysis"
     repro_dir = source_dir / "reproducibility"
