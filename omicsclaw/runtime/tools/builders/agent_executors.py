@@ -162,7 +162,12 @@ def _compute_omicsclaw_schema_arg_keys() -> frozenset[str]:
     """
     from omicsclaw.runtime.tools.builders.agent import BotToolContext, build_bot_tool_specs
 
-    for spec in build_bot_tool_specs(BotToolContext(skill_names=())):
+    # Pass a placeholder domain_briefing so this import-time probe does NOT force a
+    # registry load: an empty briefing makes build_bot_tool_specs call
+    # build_domain_briefing(ensure_loaded=True) -> OmicsRegistry.load_all. We only
+    # need the omicsclaw param-key set, which is briefing-independent.
+    probe_ctx = BotToolContext(skill_names=(), domain_briefing="(schema-probe)")
+    for spec in build_bot_tool_specs(probe_ctx):
         if spec.name == "omicsclaw":
             return frozenset(spec.parameters["properties"].keys())
     raise RuntimeError("omicsclaw tool spec missing from build_bot_tool_specs output")
