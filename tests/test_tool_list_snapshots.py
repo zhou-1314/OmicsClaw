@@ -161,6 +161,9 @@ _READ_WITHHELD_TOOLS: frozenset[str] = frozenset(
         "move_file", "remove_file", "make_directory",
         # media generation
         "generate_audio",
+        # KG hypothesis-handoff writers (ADR 0021): used in the Analyze/Ideate
+        # stages, not Read. Unlike kg_ingest they are not read-stage allow-listed.
+        "kg_build_packet", "kg_record_result",
     }
 )
 

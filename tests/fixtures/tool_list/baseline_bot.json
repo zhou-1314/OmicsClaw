@@ -3,8 +3,8 @@
     "surface": "bot",
     "query": ""
   },
-  "total_chars": 32738,
-  "tool_count": 46,
+  "total_chars": 34903,
+  "tool_count": 48,
   "tool_names": [
     "ask_user",
     "autonomous_analysis_execute",
@@ -21,12 +21,14 @@
     "grep_files",
     "inspect_data",
     "inspect_file",
+    "kg_build_packet",
     "kg_communities",
     "kg_get_page",
     "kg_graph_neighbors",
     "kg_ingest",
     "kg_list_pages",
     "kg_recent_log",
+    "kg_record_result",
     "kg_search",
     "kg_status",
     "list_directory",
@@ -922,6 +924,87 @@
               "description": "A local file path or http(s) URL to ingest. Omit to use a dropped PDF."
             }
           }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "kg_build_packet",
+        "description": "Build a handoff packet that links a hypothesis to its analysis (ADR 0021). Call this when you START testing a hypothesis in the Analyze stage, BEFORE running the skill. Pass the hypothesis `hypothesis_slug` (and optionally a `target_skill` hint — the Analysis Router stays authoritative). Returns a `packet_id` to record the result against once the analysis is done.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "hypothesis_slug": {
+              "type": "string",
+              "description": "Slug of the hypothesis page being tested."
+            },
+            "target_skill": {
+              "type": "string",
+              "description": "Optional OmicsClaw skill-name hint; the Router is authoritative."
+            },
+            "notes": {
+              "type": "string",
+              "description": "Optional free-form notes."
+            }
+          },
+          "required": [
+            "hypothesis_slug"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "kg_record_result",
+        "description": "Record the outcome of a hypothesis test against its handoff packet (ADR 0021). Call this AFTER running the analysis. It SUGGESTS a verdict on the hypothesis — it does not finalize it; the user confirms in the Ideate stage. Pass the `packet_id` from kg_build_packet, a `verdict` (validated|refuted|refined|inconclusive), and a one-line `summary` grounded in the real artifact values. For `refined`, also pass `refined_hypothesis_slug` AND `refined_proposed_claim` (the new, sharper testable claim) — a refined page is created from them.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "packet_id": {
+              "type": "string",
+              "description": "Packet id from kg_build_packet."
+            },
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "validated",
+                "refuted",
+                "refined",
+                "inconclusive"
+              ],
+              "description": "The analysis outcome for the hypothesis."
+            },
+            "summary": {
+              "type": "string",
+              "description": "One-line finding grounded in real artifact values."
+            },
+            "artifact_paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Paths to the analysis outputs (figures, notebooks)."
+            },
+            "refined_hypothesis_slug": {
+              "type": "string",
+              "description": "Required when verdict='refined': the new hypothesis page slug."
+            },
+            "refined_proposed_claim": {
+              "type": "string",
+              "description": "Required when verdict='refined': the refined, testable claim for the new hypothesis page."
+            },
+            "notes": {
+              "type": "string",
+              "description": "Optional analyst notes."
+            }
+          },
+          "required": [
+            "packet_id",
+            "verdict",
+            "summary"
+          ]
         }
       }
     },

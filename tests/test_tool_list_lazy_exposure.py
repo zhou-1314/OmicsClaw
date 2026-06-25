@@ -78,6 +78,10 @@ ALWAYS_ON = (
     # kg_ingest (Bench Phase 3.3c) is also predicate-less always-on — the KG
     # citation-substrate writer, AUTO-approved (ADR 0019).
     "kg_ingest",
+    # kg_build_packet / kg_record_result (hypothesis handoff, ADR 0021) are likewise
+    # predicate-less always-on; they are write tools, so still Read-stage withheld.
+    "kg_build_packet",
+    "kg_record_result",
 )
 
 
