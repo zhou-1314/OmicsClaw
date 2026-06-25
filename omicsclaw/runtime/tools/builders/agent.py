@@ -113,18 +113,13 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
             description=(
                 "Run an OmicsClaw multi-omics analysis skill.\n\n"
                 f"{briefing}\n\n"
-                "PREFER `skill='auto'` + `query=<user request>` "
-                "(auto-routes deterministically). Pick a specific skill only "
-                "if the user named it. `mode='demo'` ONLY when explicitly "
-                "asked. For a server-side file, use `mode='path'` and pass "
-                "the path at the top level as `file_path='/abs/path.h5ad'` — "
-                "do NOT nest args under a `params` key. `mode='file'` is "
-                "only for files the user uploaded via chat. `return_media` "
-                "empty = text summary; pass a keyword "
-                "('umap','qc','cluster',comma-sep) or 'all' for figures. "
-                "For sc-batch-integration upstream-prep pause, rerun with "
-                "`auto_prepare=true`. Preserve exact numbers, warnings, "
-                "errors, and file paths when relaying results."
+                "PREFER `skill='auto'` + `query=<user request>` (auto-routes); name a "
+                "specific skill only if the user did. Server-side file: `mode='path'` + "
+                "`file_path='/abs/path.h5ad'` at the TOP level (do NOT nest under "
+                "`params`); `mode='file'` = chat upload; `mode='demo'` only when asked. "
+                "`return_media`: empty = text, a keyword or 'all' = figures. "
+                "sc-batch-integration pause -> `auto_prepare=true`. "
+                "Preserve exact numbers, warnings, errors, paths in results."
             ),
             parameters={
                 "type": "object",
