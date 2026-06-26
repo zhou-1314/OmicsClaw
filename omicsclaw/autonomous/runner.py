@@ -203,11 +203,3 @@ def _write_result_summary(
     )
     summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return summary_path
-
-
-def _first_error(attempts: list) -> str:
-    """Kept as a small helper for run records; first non-succeeded attempt error."""
-    for attempt in attempts:
-        if attempt.status != AutonomousRunStatus.SUCCEEDED:
-            return attempt.error or f"Command exited with code {attempt.exit_code}."
-    return ""

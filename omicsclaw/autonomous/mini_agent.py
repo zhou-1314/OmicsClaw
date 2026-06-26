@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass, field
+import json
 from pathlib import Path
 import time
 from typing import Protocol
@@ -30,6 +31,14 @@ ANSWER_FILE = "_oc_answer.txt"
 # lint-clean turn within this many opening steps, it cannot drive the contract
 # (distinct from a capable model hitting a hard runtime problem). ADR 0032 §8.
 WARMUP_STEPS = 3
+
+# Grace added to the kernel-cell timeout for cells that call ``oc.run(...)``.
+# The facade enforces the skill subprocess deadline in-kernel at
+# ``skill_call_timeout_seconds``; the outer kernel-cell timeout must fire *after*
+# that, or the two race — the kernel gets interrupted/restarted in the middle of
+# the facade cancelling its skill, producing a confusing engine error instead of
+# a clean skill timeout. The grace lets the in-kernel cancel unwind first.
+SKILL_CELL_TIMEOUT_GRACE_SECONDS = 60
 
 
 class MiniAgentLLM(Protocol):
@@ -65,7 +74,20 @@ def _sync_skill_calls(ledger: BudgetLedger, workspace: Path) -> None:
     log = workspace / SKILL_CALLS_LOG
     if not log.exists():
         return
-    total = sum(1 for line in log.read_text(encoding="utf-8").splitlines() if line.strip())
+    # Count only complete JSON records, exactly as the runner re-reads the log for
+    # the final manifest (mini_agent_runner._read_jsonl). A partial line from an
+    # in-flight append is skipped by both, so the live ledger and the persisted
+    # manifest can never diverge on a half-written record.
+    total = 0
+    for line in log.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        total += 1
     while ledger.skill_calls_used < total:
         ledger.record_skill_call()
 
@@ -112,6 +134,9 @@ def run_mini_agent(
     termination = TerminationReason.STEP_BUDGET
     produced_usable_turn = False
     warmup_steps = max(1, min(WARMUP_STEPS, budget.max_steps))
+    # Last post-execution variable snapshot, reused as the next step's "before"
+    # set so each step costs one introspect round-trip instead of two.
+    prev_names: set[str] | None = None
 
     while True:
         # Capability backstop FIRST: a model that has not produced one parseable,
@@ -172,14 +197,23 @@ def run_mini_agent(
         # The model produced a parseable, lint-clean step — it can drive the
         # contract, so the capability backstop no longer applies.
         produced_usable_turn = True
-        before = set(session.introspect())
-        timeout = budget.skill_call_timeout_seconds if _references_oc(turn.code) else budget.raw_cell_timeout_seconds
+        # Reuse the previous step's post-execution snapshot as this step's "before"
+        # set: nothing mutates the namespace between accepted cells (rejected turns
+        # run no kernel code, and introspect only defines underscore-prefixed
+        # helpers that are filtered out), so a second introspect here would be
+        # redundant. Only the first executable step pays the extra round-trip.
+        before = prev_names if prev_names is not None else set(session.introspect())
+        if _references_oc(turn.code):
+            timeout = budget.skill_call_timeout_seconds + SKILL_CELL_TIMEOUT_GRACE_SECONDS
+        else:
+            timeout = budget.raw_cell_timeout_seconds
         cell = session.execute(turn.code, timeout=timeout)
         if cell.timed_out:
             new_vars = {}
         else:
             after = session.introspect()
             new_vars = {k: _fmt_var(v) for k, v in after.items() if k not in before}
+            prev_names = set(after)
 
         step = MiniAgentStep(
             index=index,

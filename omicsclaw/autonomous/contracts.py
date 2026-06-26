@@ -51,8 +51,14 @@ class AutonomousRunRequest:
     # Bench thread); empty keeps the legacy ``<output_root>/autonomous-code__…`` shape.
     project_id: str = ""
     project_name: str = ""
-    timeout_seconds: int = 300
+    # ADR 0032 single-engine: timeout_seconds now bounds the whole mini-agent run
+    # (mapped to the budget's wall_clock_seconds), so its default matches the
+    # budget default — a one-shot-era 300s would silently truncate real runs that
+    # legitimately call multi-minute skills plus a faithful replay.
+    timeout_seconds: int = 3600
     language: str = "python"
+    # Evidence-bound repairs allowed AFTER the first execution; mapped to the
+    # budget's max_consecutive_failures (= repairs + the initial attempt).
     max_repair_attempts: int = 2
     context: str = ""
     web_context: str = ""

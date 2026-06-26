@@ -16,6 +16,16 @@ from .contracts import AutonomousRunRequest, AutonomousRunResult
 
 logger = logging.getLogger("omicsclaw.autonomous.code_loop")
 
+# Process-local positive cache of model identities that have already passed the
+# capability probe, so a long-lived surface (Desktop / Channel) does not pay the
+# probe's LLM round-trip on every autonomous run with a stable model. Keyed by
+# (provider_override, model_override). Only CAPABLE verdicts are cached: a refusal
+# is never stored, so a transient endpoint failure cannot permanently poison the
+# route, and the in-loop WARMUP_STEPS backstop still catches a model that passes
+# the probe but later regresses. Only the production path (no injected client) is
+# cached — injected clients are test-only and per-call.
+_CAPABLE_MODEL_CACHE: set[tuple[str, str]] = set()
+
 
 class AutonomousLLMClient(Protocol):
     """Minimal completion client used by the capability probe + mini-agent."""
@@ -280,8 +290,16 @@ async def run_autonomous_code_loop_async(
     """
     import asyncio
 
-    from .capability import mini_agent_gate
+    from .capability import mini_agent_gate, probe_enabled_default
     from .mini_agent_runner import refused_result, run_mini_agent_request_async
+
+    # Skip the probe round-trip when this exact model identity already proved it
+    # can drive the contract (production path only — an injected client is a
+    # per-call test double and must always re-probe).
+    cache_key = (request.provider_override, request.model_override)
+    cacheable = llm_client is None and probe_enabled_default()
+    if cacheable and cache_key in _CAPABLE_MODEL_CACHE:
+        return await run_mini_agent_request_async(request, llm_client=llm_client)
 
     # The capability probe is a cheap "can the model emit one valid turn" check;
     # cap it at 30s (vs the loop's 120s) so an unresponsive endpoint refuses fast.
@@ -292,4 +310,6 @@ async def run_autonomous_code_loop_async(
     gate = await asyncio.to_thread(mini_agent_gate, probe_client)
     if gate.action == "refuse":
         return await asyncio.to_thread(refused_result, request, gate.diagnostic)
+    if cacheable:
+        _CAPABLE_MODEL_CACHE.add(cache_key)
     return await run_mini_agent_request_async(request, llm_client=llm_client)

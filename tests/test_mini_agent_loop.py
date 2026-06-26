@@ -81,6 +81,22 @@ def test_sync_skill_calls_mirrors_jsonl_into_ledger(tmp_path: Path):
     assert ledger.skill_calls_used == 3
 
 
+def test_sync_skill_calls_ignores_partial_json_lines(tmp_path: Path):
+    """A half-written in-flight append must not be counted, so the live ledger
+    stays consistent with the runner's JSON-parsing re-read of the same log."""
+    from omicsclaw.autonomous.skill_facade import SKILL_CALLS_LOG
+
+    ledger = BudgetLedger(budget=MiniAgentBudget())
+    log = tmp_path / SKILL_CALLS_LOG
+    log.write_text('{"skill": "a"}\n{"skill": "b"', encoding="utf-8")  # second line partial
+    _sync_skill_calls(ledger, tmp_path)
+    assert ledger.skill_calls_used == 1  # partial line is skipped, not counted
+
+    log.write_text('{"skill": "a"}\n{"skill": "b"}\n', encoding="utf-8")  # line completed
+    _sync_skill_calls(ledger, tmp_path)
+    assert ledger.skill_calls_used == 2
+
+
 def test_happy_path_returns_answer(session: KernelSession, tmp_path: Path):
     llm = ScriptedLLM(
         [

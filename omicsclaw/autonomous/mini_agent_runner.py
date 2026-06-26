@@ -142,7 +142,7 @@ def run_mini_agent_request(
         replay_script = replay.script_path
 
     accepted = outcome.succeeded and replay_ok
-    status = AutonomousRunStatus.SUCCEEDED if accepted else AutonomousRunStatus.FAILED
+    status = _status_for(accepted, outcome.termination)
     error = "" if accepted else _failure_message(outcome, replay_ok, replay_error)
 
     skill_calls = _read_jsonl(workspace.root / SKILL_CALLS_LOG)
@@ -224,11 +224,35 @@ def _require_sandbox_default() -> bool:
 
 
 def _budget_from_request(request: AutonomousRunRequest) -> MiniAgentBudget:
+    # ADR 0032 single-engine: the request's one-shot-era controls now map onto the
+    # mini-agent budget so they are no longer inert. ``timeout_seconds`` bounds the
+    # whole run (wall clock); ``max_repair_attempts`` is the count of evidence-bound
+    # repairs allowed after the first attempt, so the loop tolerates repairs + 1
+    # consecutive failures. An explicit ``metadata["mini_agent_budget"]`` still wins
+    # (applied last) for benchmarking overrides.
+    base = MiniAgentBudget().with_overrides(
+        wall_clock_seconds=request.timeout_seconds,
+        max_consecutive_failures=request.max_repair_attempts + 1,
+    )
     overrides = request.metadata.get("mini_agent_budget") if isinstance(request.metadata, dict) else None
-    base = MiniAgentBudget()
     if isinstance(overrides, dict):
         return base.with_overrides(**{k: overrides[k] for k in _BUDGET_KEYS if k in overrides})
     return base
+
+
+def _status_for(accepted: bool, termination: TerminationReason) -> AutonomousRunStatus:
+    """Map a loop outcome to the run status surfaced to callers.
+
+    A wall-clock exhaustion is reported as ``TIMED_OUT`` rather than the generic
+    ``FAILED`` so a UI / retry policy can distinguish a run that ran out of time
+    from one that genuinely could not produce an answer. (Cell-level hangs stay
+    ``ENGINE_ERROR`` -> ``FAILED``; only the run-level wall clock maps here.)
+    """
+    if accepted:
+        return AutonomousRunStatus.SUCCEEDED
+    if termination == TerminationReason.WALL_CLOCK:
+        return AutonomousRunStatus.TIMED_OUT
+    return AutonomousRunStatus.FAILED
 
 
 def _attempts_from_steps(outcome) -> list[AutonomousAttempt]:
