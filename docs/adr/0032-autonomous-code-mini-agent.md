@@ -143,7 +143,10 @@ The kernel process must be launched through an **Autonomous Kernel Safety
 Envelope**:
 
 - no network by default;
-- write access limited to the autonomous run workspace;
+- host write access limited to the autonomous run workspace (the deliverable);
+  the kernel's ephemeral scratch `$HOME` (tool caches — see **Kernel scratch
+  home** in CONTEXT.md) lives in the sandbox `/tmp` tmpfs or a throwaway temp
+  dir, never in the run workspace nor on the host repo / inputs / system;
 - read access limited to explicit input paths, upstream artifact references,
   and the run workspace;
 - secrets and provider API keys stripped from the kernel environment;
@@ -166,6 +169,19 @@ boundary — the kernel process envelope (or, in the non-bwrap tier, the in-kern
 guard above) is. Fail-closed behaviour follows the tiered-isolation note above,
 not an unconditional rule.
 
+> **Deliverable vs. machinery (2026-06-26 clarification).** "Write access limited
+> to the run workspace" governs *deliverable* writes. Two write-scopes were
+> always conflated: the deliverable (the navigable artifacts a user reads) and
+> ephemeral kernel scratch (matplotlib / numba / ipython caches). Pinning the
+> kernel `$HOME` to the run workspace pushed scratch into the deliverable,
+> cluttering it with empty `.cache` / `.config` / `.ipython` trees. The envelope
+> now routes scratch to a **Kernel scratch home** (sandbox tmpfs, or a throwaway
+> temp dir without a sandbox) — no new host write-surface, since the sandbox
+> tmpfs was always writable. Likewise the **Replay artifact**'s validation re-run
+> now executes in throwaway scratch, not a `replay/` subdirectory of the
+> deliverable; only its pass/fail status is surfaced. The run workspace therefore
+> contains only deliverable artifacts.
+
 ### 5. Replay is a validation gate, not a best-effort artifact
 
 Persistent kernels make hidden state easy: a cell can depend on a previous
@@ -183,9 +199,14 @@ On every successful step, the runner records:
 When the mini-agent calls `ReturnAnswer`, OmicsClaw emits:
 
 - consolidated `analysis.py` containing only accepted cells in execution order;
-- `skill_calls.jsonl` / ordered skill-call manifest;
-- `manifest.json`, `completion_report.json`, logs, figures, tables, artifacts,
-  and the OmicsClaw disclaimer.
+- `skill_calls.jsonl` / ordered skill-call manifest (when skills were called);
+- `manifest.json`, `completion_report.json`, `result_summary.md` (with the
+  OmicsClaw disclaimer), and any `figures/` / `tables/` the run actually produced.
+
+Only `result_summary.md` is required; the optional dirs are created lazily by
+their writers, so a run never ships empty placeholder directories. (The
+one-shot-era `scripts/`/`logs/`/`artifacts/` are gone — the persistent-kernel
+engine never wrote them.)
 
 Before the outer loop receives a successful result, the runner replays
 `analysis.py` in a fresh isolated kernel/process against the recorded inputs and

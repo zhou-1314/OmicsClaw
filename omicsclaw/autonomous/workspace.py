@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import uuid
 
+from . import run_layout
 from .contracts import (
     AUTONOMOUS_RUN_DIR_PREFIX,
     AutonomousRunRequest,
@@ -13,15 +14,12 @@ from .contracts import (
 )
 
 
-WORKSPACE_SUBDIRS = (
-    "scripts",
-    "logs",
-    "figures",
-    "tables",
-    "artifacts",
-    "inputs",
-    "upstream",
-)
+# The subdirs create_workspace actually materialises (the historical meaning of
+# this exported name: "the dirs a fresh run dir contains"). The full run-dir
+# schema — every name, eager vs lazy, and role — is owned by run_layout, the
+# single source of truth that create_workspace AND the artifact contract both
+# derive from, so they can never drift apart.
+WORKSPACE_SUBDIRS = run_layout.eager_dirs()
 
 
 def _timestamp_for_path() -> str:
@@ -56,23 +54,14 @@ def create_workspace(request: AutonomousRunRequest) -> AutonomousWorkspace:
     root = base / build_run_dir_name(run_id=run_id)
     root.mkdir(parents=True, exist_ok=False)
 
-    dirs = {name: root / name for name in WORKSPACE_SUBDIRS}
-    for path in dirs.values():
-        path.mkdir(parents=True, exist_ok=True)
+    # Only the eager dirs (those that receive a references.json) are materialised;
+    # every other path is created lazily by its writer, per the run_layout schema.
+    for relpath in run_layout.eager_dirs():
+        (root / relpath).mkdir(parents=True, exist_ok=True)
 
-    workspace = AutonomousWorkspace(
-        run_id=run_id,
-        root=root,
-        scripts_dir=dirs["scripts"],
-        logs_dir=dirs["logs"],
-        figures_dir=dirs["figures"],
-        tables_dir=dirs["tables"],
-        artifacts_dir=dirs["artifacts"],
-        inputs_dir=dirs["inputs"],
-        upstream_dir=dirs["upstream"],
-    )
-    _write_reference_manifest(workspace.inputs_dir / "references.json", request.input_paths)
-    _write_reference_manifest(workspace.upstream_dir / "references.json", request.upstream_paths)
+    workspace = AutonomousWorkspace(run_id=run_id, root=root)
+    _write_reference_manifest(workspace.paths.inputs / "references.json", request.input_paths)
+    _write_reference_manifest(workspace.paths.upstream / "references.json", request.upstream_paths)
     return workspace
 
 

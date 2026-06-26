@@ -67,6 +67,30 @@ def test_runner_end_to_end_with_replay_and_manifest(tmp_path: Path):
     assert (ws / "analysis.py").exists()  # the replay artifact
 
 
+def test_run_dir_has_no_kernel_machinery_or_empty_dirs(tmp_path: Path):
+    """Regression for the workspace-clutter bug: a finished run must not ship
+    kernel HOME machinery (.cache/.config/.ipython) or empty placeholder dirs
+    into the user-facing output (RC1 + RC2 + RC3)."""
+    if not IPC_AVAILABLE:
+        pytest.skip("ZMQ IPC sockets are unavailable in this test sandbox")
+    request = AutonomousRunRequest(goal="compute the answer", output_root=str(tmp_path))
+    result = run_mini_agent_request(
+        request, llm_client=ScriptedLLM(_answer_turns()), require_sandbox=False, budget=BUDGET
+    )
+    assert result.ok is True
+    ws = Path(result.workspace_root)
+    # (Q2) the replay re-run happens in throwaway scratch, never in the deliverable.
+    assert not (ws / "replay").exists(), "replay re-run leaked into the run workspace"
+    # (RC1) kernel HOME machinery never lands in the user-facing run dir.
+    for junk in (".cache", ".config", ".ipython"):
+        assert not (ws / junk).exists(), f"kernel machinery {junk} leaked into the run dir"
+    # (RC2/RC3) no empty placeholder or leftover directory anywhere in the run.
+    empties = sorted(
+        str(p.relative_to(ws)) for p in ws.rglob("*") if p.is_dir() and not any(p.iterdir())
+    )
+    assert empties == [], f"empty dirs left behind: {empties}"
+
+
 def test_runner_fails_when_no_answer(tmp_path: Path):
     if not IPC_AVAILABLE:
         pytest.skip("ZMQ IPC sockets are unavailable in this test sandbox")

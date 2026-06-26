@@ -32,17 +32,28 @@ AUTONOMOUS_CODE_RUNNER_VERSION = "0.1.0"
 
 
 def autonomous_requirements() -> list[ArtifactRequirement]:
-    """Artifact contract shared by autonomous code runner workspaces."""
-    return [
-        ArtifactRequirement("result_summary", "result_summary.md"),
-        ArtifactRequirement("scripts", "scripts", kind=ARTIFACT_KIND_DIR),
-        ArtifactRequirement("logs", "logs", kind=ARTIFACT_KIND_DIR),
-        ArtifactRequirement("figures", "figures", kind=ARTIFACT_KIND_DIR, required=False),
-        ArtifactRequirement("tables", "tables", kind=ARTIFACT_KIND_DIR, required=False),
-        ArtifactRequirement("artifacts", "artifacts", kind=ARTIFACT_KIND_DIR, required=False),
-        ArtifactRequirement("inputs", "inputs", kind=ARTIFACT_KIND_DIR, required=False),
-        ArtifactRequirement("upstream", "upstream", kind=ARTIFACT_KIND_DIR, required=False),
-    ]
+    """Artifact contract for mini-agent run workspaces — derived from ``run_layout``.
+
+    The run-dir schema's deliverable entries (``run_layout.contract_entries``)
+    mapped onto the verification contract. Only ``result_summary.md`` is required;
+    everything else is optional, and the sentinel / provenance / rerun paths are
+    excluded by the schema's roles. Because this list and ``create_workspace``'s
+    eager set come from the *same* declaration, they can never drift apart (the
+    clutter bug, where required dirs the engine never wrote shipped empty).
+    """
+    from . import run_layout
+
+    requirements: list[ArtifactRequirement] = []
+    for spec in run_layout.contract_entries():
+        if spec.kind is run_layout.Kind.DIR:
+            requirements.append(
+                ArtifactRequirement(spec.key, spec.relpath, kind=ARTIFACT_KIND_DIR, required=spec.required)
+            )
+        else:
+            requirements.append(
+                ArtifactRequirement(spec.key, spec.relpath, required=spec.required)
+            )
+    return requirements
 
 
 def write_run_records(
@@ -153,7 +164,7 @@ def _write_result_summary(
     interpretive sections. The foundation still writes a useful summary so
     failed command-only runs are inspectable.
     """
-    summary_path = workspace.root / "result_summary.md"
+    summary_path = workspace.paths.result_summary
     lines = [
         "# Autonomous Code Runner Summary",
         "",

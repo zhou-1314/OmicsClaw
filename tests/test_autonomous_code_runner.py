@@ -13,7 +13,6 @@ import json
 from pathlib import Path
 
 from omicsclaw.autonomous import (
-    WORKSPACE_SUBDIRS,
     AutonomousRunRequest,
     AutonomousRunResult,
     AutonomousRunStatus,
@@ -37,12 +36,16 @@ def test_create_workspace_uses_autonomous_shape(tmp_path: Path) -> None:
     assert workspace.root.parent == tmp_path
     assert workspace.root.name.startswith("autonomous-code__")
     assert workspace.root.name.endswith("__abc123")
-    for name in WORKSPACE_SUBDIRS:
+    # Only the dirs that receive a reference manifest are materialised up front;
+    # the rest are created lazily by their writers, so no empty placeholders ship.
+    for name in ("inputs", "upstream"):
         assert (workspace.root / name).is_dir()
-    assert json.loads((workspace.inputs_dir / "references.json").read_text()) == {
+    for name in ("scripts", "logs", "figures", "tables", "artifacts"):
+        assert not (workspace.root / name).exists(), f"{name} should not be pre-created"
+    assert json.loads((workspace.paths.inputs / "references.json").read_text()) == {
         "references": ["/data/input.h5ad"]
     }
-    assert json.loads((workspace.upstream_dir / "references.json").read_text()) == {
+    assert json.loads((workspace.paths.upstream / "references.json").read_text()) == {
         "references": ["/runs/skill-output"]
     }
 

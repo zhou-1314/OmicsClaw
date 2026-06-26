@@ -18,6 +18,7 @@ from pathlib import Path
 import time
 from typing import Protocol
 
+from . import run_layout
 from .budget import BudgetLedger, MiniAgentBudget, MiniAgentStep, TerminationReason
 from .kernel_session import KernelSession
 from .protocol import TurnFormatError, parse_turn
@@ -25,7 +26,7 @@ from .runtime_guard import build_kernel_guard_code
 from .skill_facade import SKILL_CALLS_LOG
 from .validation import validate_generated_code
 
-ANSWER_FILE = "_oc_answer.txt"
+ANSWER_FILE = run_layout.relpath("answer")
 
 # In-loop capability backstop: if the model never produces a single parseable,
 # lint-clean turn within this many opening steps, it cannot drive the contract
@@ -278,8 +279,9 @@ def build_init_code(
     With ``process_guard`` the non-bwrap in-kernel guard (no-network,
     workspace-confined writes) is prepended as the first thing the kernel runs.
     """
-    fig_dir = workspace / "figures"
-    answer_file = workspace / ANSWER_FILE
+    _paths = run_layout.RunPaths(workspace)
+    fig_dir = _paths.figures
+    answer_file = _paths.answer
     h5ad_inputs = [str(p) for p in input_paths if str(p).endswith(".h5ad")]
     # Appended AFTER the imports so library caches (matplotlib font cache, etc.)
     # warm up before the destructive-os-op block applies.
@@ -296,7 +298,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as _plt
 from pathlib import Path as _Path
-_Path({str(fig_dir)!r}).mkdir(parents=True, exist_ok=True)
 from omicsclaw.autonomous.skill_facade import build_facade as _build_facade
 oc = _build_facade(
     {str(workspace)!r},
@@ -305,13 +306,17 @@ oc = _build_facade(
 )
 _oc_fig = [0]
 def show(*_a, **_k):
-    for _num in _plt.get_fignums():
+    _nums = _plt.get_fignums()
+    if _nums:
+        _Path({str(fig_dir)!r}).mkdir(parents=True, exist_ok=True)
+    for _num in _nums:
         _oc_fig[0] += 1
         _plt.figure(_num).savefig(
             {str(fig_dir)!r} + "/fig_%02d.png" % _oc_fig[0], dpi=120, bbox_inches="tight"
         )
     _plt.close("all")
 def ReturnAnswer(text=""):
+    _Path({str(answer_file)!r}).parent.mkdir(parents=True, exist_ok=True)
     with open({str(answer_file)!r}, "w", encoding="utf-8") as _f:
         _f.write(str(text))
     print("__OC_RETURN_ANSWER__")
@@ -350,6 +355,7 @@ def build_system_prompt(goal: str, data_schema: str, analysis_plan: str) -> str:
         "  `res = oc.run('spatial-preprocess', adata, method='scanpy'); adata = res.adata`.",
         "  `res.adata` is the reloaded result; `res.tables` / `res.figures` list artifacts.",
         "  ALWAYS prefer a skill over hand-rolling QC/normalisation/clustering/DE parameters.",
+        "  Call `oc.skills(domain=None)` to list runnable skills — do not guess a name.",
         "- `show(...)`: save current matplotlib figures into the run's figures/ folder.",
         "- `ReturnAnswer(text)`: call this once, when done, with your final summary.",
         "",

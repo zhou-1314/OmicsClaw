@@ -113,6 +113,46 @@ def test_timeout_marks_session_unusable_and_terminates(tmp_path: Path):
     assert proc.terminated is True
 
 
+def test_cleanup_scratch_removes_conn_and_home_dirs(tmp_path: Path):
+    """Shutdown, restart, AND a failed start must remove the ipc dir and the
+    throwaway HOME so a never-ready kernel leaks nothing under /tmp."""
+    ks = KernelSession(workspace_root=tmp_path, sandbox=False)
+    conn = tmp_path / "conn"
+    conn.mkdir()
+    (conn / "kernel.json").write_text("{}")
+    home = tmp_path / "home"
+    (home / ".cache").mkdir(parents=True)
+    ks._conn_dir = conn
+    ks._conn_file = conn / "kernel.json"
+    ks._home_dir = home
+
+    ks._cleanup_scratch()
+
+    assert not conn.exists()
+    assert not home.exists()
+    assert ks._conn_dir is None and ks._home_dir is None and ks._conn_file is None
+
+
+def test_returnanswer_creates_missing_output_root(tmp_path: Path):
+    """A re-run of analysis.py whose output root (e.g. a lazy rerun/ sibling) does
+    not exist yet must still write the answer — ReturnAnswer mkdirs its parent."""
+    if not IPC_AVAILABLE:
+        pytest.skip("ZMQ IPC sockets are unavailable in this test sandbox")
+    from omicsclaw.autonomous.budget import MiniAgentBudget
+    from omicsclaw.autonomous.mini_agent import ANSWER_FILE, build_init_code
+
+    out_root = tmp_path / "rerun"  # deliberately NOT pre-created
+    ks = KernelSession(workspace_root=tmp_path, sandbox=SANDBOX, startup_timeout=60)
+    ks.start()
+    try:
+        assert ks.execute(build_init_code(out_root, [], MiniAgentBudget()), timeout=60).ok
+        # ReturnAnswer only — no show()/oc.run() to lazily create the dir first.
+        assert ks.execute("ReturnAnswer('ok')", timeout=30).ok
+    finally:
+        ks.shutdown()
+    assert (out_root / ANSWER_FILE).read_text(encoding="utf-8").strip() == "ok"
+
+
 @pytest.mark.skipif(not SANDBOX, reason="bubblewrap not available; cannot assert network isolation")
 def test_sandbox_blocks_network(session: KernelSession):
     code = (

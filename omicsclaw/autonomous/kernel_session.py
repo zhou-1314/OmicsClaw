@@ -41,6 +41,12 @@ from .kernel_envelope import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# "Kernel scratch home" inside the sandbox's ephemeral /tmp tmpfs. Each bwrap
+# sandbox gets its own private /tmp, so this fixed path never collides across
+# concurrent runs and vanishes when the sandbox exits — tool caches never touch
+# the user-facing run workspace.
+_SANDBOX_KERNEL_HOME = "/tmp/oc-kernel-home"
+
 # Names hidden from variable introspection (interpreter + our own helpers).
 _INTROSPECT_SKIP = {"In", "Out", "exit", "quit", "get_ipython", "open"}
 
@@ -113,6 +119,7 @@ class KernelSession:
 
         self._conn_dir: Path | None = None
         self._conn_file: Path | None = None
+        self._home_dir: Path | None = None
         self._proc: subprocess.Popen | None = None
         self._client = None
         self._alive = False
@@ -152,18 +159,28 @@ class KernelSession:
 
         inner = [sys.executable, "-m", "ipykernel_launcher", "-f", str(self._conn_file)]
         if self.sandbox:
+            # Kernel scratch HOME lives in the sandbox's own /tmp tmpfs: ephemeral,
+            # invisible to the host, no bind and no cleanup needed.
             config = EnvelopeConfig(
                 workspace_root=self.workspace_root,
                 ipc_dir=self._conn_dir,
                 repo_root=self.repo_root,
+                home_dir=Path(_SANDBOX_KERNEL_HOME),
                 read_roots=list(self.read_roots),
                 allow_network=self.allow_network,
             )
             argv = build_bwrap_argv(config, inner)
             env = build_launch_env(config)
         else:
+            # No sandbox (no tmpfs): give the kernel a throwaway host HOME, removed
+            # on shutdown so tool caches never persist beside the run workspace.
+            self._home_dir = Path(tempfile.mkdtemp(prefix="ock-home-", dir=_short_tmp_base()))
             argv = inner
-            env = scrub_env(dict(os.environ), workspace_root=self.workspace_root)
+            env = scrub_env(
+                dict(os.environ),
+                workspace_root=self.workspace_root,
+                home_dir=self._home_dir,
+            )
             env["PYTHONPATH"] = os.pathsep.join(
                 filter(None, [str(self.repo_root), env.get("PYTHONPATH", "")])
             )
@@ -177,6 +194,7 @@ class KernelSession:
         except RuntimeError as exc:
             client.stop_channels()
             self._terminate_proc()
+            self._cleanup_scratch()
             raise KernelStartError(
                 f"kernel did not become ready within {self.startup_timeout}s: {exc}"
             ) from exc
@@ -192,8 +210,7 @@ class KernelSession:
             self._client = None
         self._terminate_proc()
         self._alive = False
-        if self._conn_dir and self._conn_dir.exists():
-            shutil.rmtree(self._conn_dir, ignore_errors=True)
+        self._cleanup_scratch()
 
     def __enter__(self) -> "KernelSession":
         self.start()
@@ -296,14 +313,25 @@ class KernelSession:
                 pass
             self._client = None
         self._terminate_proc()
-        if self._conn_dir and self._conn_dir.exists():
-            shutil.rmtree(self._conn_dir, ignore_errors=True)
-        self._conn_dir = None
-        self._conn_file = None
+        self._cleanup_scratch()
         try:
             self.start()
         except Exception:
             self._alive = False
+
+    def _cleanup_scratch(self) -> None:
+        """Remove the per-run scratch dirs (ipc connection dir + throwaway HOME).
+
+        Called on shutdown, on a post-timeout restart, AND on a failed start — so a
+        kernel that never becomes ready does not leak its connection dir or its
+        non-sandbox HOME caches under /tmp.
+        """
+        for attr in ("_conn_dir", "_home_dir"):
+            path = getattr(self, attr)
+            if path is not None and path.exists():
+                shutil.rmtree(path, ignore_errors=True)
+            setattr(self, attr, None)
+        self._conn_file = None
 
     def _terminate_proc(self) -> None:
         if self._proc is None:

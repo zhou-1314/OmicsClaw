@@ -114,11 +114,14 @@ _Avoid_: "direct skill import", "raw subprocess access", "tool monkeypatch"
 **Persistent autonomous kernel session**: The per-run Jupyter kernel used by the Autonomous Code Mini-Agent so data handles, variables, figures, and intermediate tables survive across generated-code steps.
 _Avoid_: "global notebook", "shared user kernel", "session memory"
 
-**Autonomous Kernel Safety Envelope**: The process / OS boundary around the persistent autonomous kernel: no network by default, stripped secrets, reads limited to explicit inputs/upstream artifacts/workspace, writes limited to the autonomous run workspace, and resource/time limits where supported. AST checks are lint inside this envelope, not the security boundary.
+**Autonomous Kernel Safety Envelope**: The process / OS boundary around the persistent autonomous kernel: no network by default, stripped secrets, reads limited to explicit inputs/upstream artifacts/workspace; the host write-surface is the run workspace (the deliverable) plus ephemeral kernel scratch — never the host repo/inputs/system; and resource/time limits where supported. AST checks are lint inside this envelope, not the security boundary.
 _Avoid_: "AST sandbox", "prompt safety", "best-effort guard"
 
-**Replay artifact**: The deterministic reproduction package emitted on `ReturnAnswer`: accepted cells in execution order (`analysis.py`), ordered skill-call manifest, run manifest, completion report, logs, figures, tables, artifacts, and replay status from a fresh isolated process.
-_Avoid_: "notebook transcript", "cell dump", "audit note"
+**Kernel scratch home**: The throwaway `$HOME` for the autonomous kernel's tool dotfiles (matplotlib / numba / ipython caches). In the sandbox it lives inside the ephemeral `/tmp` tmpfs; without a sandbox it is a host temp dir removed on shutdown. It is machinery, never deliverable, so it never lands in the **Autonomous run workspace**.
+_Avoid_: "kernel cache dir", "the .cache folder", "HOME in the workspace"
+
+**Replay artifact**: The deterministic reproduction package emitted on `ReturnAnswer`: accepted cells in execution order (`analysis.py`, re-runnable — a manual re-run writes into a `rerun/` sibling, never over the original artifacts), the run manifest, the completion report, and the replay status. The validation re-run executes in throwaway scratch (a **Kernel scratch home**), so its re-run outputs never clutter the deliverable — only the pass/fail status is surfaced.
+_Avoid_: "notebook transcript", "cell dump", "audit note", "replay subdirectory"
 
 **Evidence-bound repair**: The mini-agent retry rule: failed generated steps may be revised from captured execution feedback, schema, variable/artifact diffs, and prior accepted steps. Whether the whole run satisfies the user's request remains **Autonomous result validation** in the outer loop.
 _Avoid_: "keep trying", "self-debug until it works", "the runner has final judgment"
@@ -147,8 +150,11 @@ _Avoid_: "advanced mode", "admin mode"
 **Output-shape parity**: The contract that Autonomous Code Runner runs produce the same navigable artifact shape as skill runs while preserving a distinct source label.
 _Avoid_: "fake skill output", "separate output format"
 
-**Autonomous run workspace**: The isolated output directory created for one Autonomous Code Runner execution under `autonomous-code__<timestamp>__<id>`.
+**Autonomous run workspace**: The isolated output directory created for one Autonomous Code Runner execution under `autonomous-code__<timestamp>__<id>`. It is the *instance* (`AutonomousWorkspace`); its shape is the **Run layout**.
 _Avoid_: "project root", "scratch dir", "temp dir"
+
+**Run layout**: The single declaration (`run_layout`) of every path in an Autonomous run workspace — each path's name, lifecycle (eager vs lazy), and role (deliverable / provenance / sentinel / rerun). The eager-create set, the completion-report artifact contract, and the typed path accessors all derive from it, so the workspace layer and the contract cannot drift apart. The *schema* to the run workspace's *instance*.
+_Avoid_: "dir constants", "the subdirs list", "WORKSPACE_SUBDIRS" (the scattered form it replaced)
 
 **Autonomous run lifecycle**: The job-shaped lifecycle of an Autonomous Code Runner execution, including status, logs, cancellation, retry, artifacts, and terminal outcome.
 _Avoid_: "plain tool result", "one-shot shell output"

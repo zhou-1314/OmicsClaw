@@ -71,18 +71,24 @@ class AutonomousRunRequest:
 
 @dataclass(slots=True)
 class AutonomousWorkspace:
-    """Concrete workspace allocated for one autonomous code run."""
+    """One allocated autonomous code run (the *instance*).
+
+    The run-dir *schema* — every path name, lifecycle, and role — lives in
+    :mod:`omicsclaw.autonomous.run_layout`. Reach concrete paths through ``.paths``
+    (a ``RunPaths`` over ``root``); only ``inputs``/``upstream`` are eagerly created
+    (they receive a references.json), the rest are created lazily by their writers
+    so a run never ships empty placeholder dirs.
+    """
 
     run_id: str
     root: Path
-    scripts_dir: Path
-    logs_dir: Path
-    figures_dir: Path
-    tables_dir: Path
-    artifacts_dir: Path
-    inputs_dir: Path
-    upstream_dir: Path
     created_at: str = field(default_factory=utcnow_iso)
+
+    @property
+    def paths(self) -> "RunPaths":
+        from .run_layout import RunPaths
+
+        return RunPaths(self.root)
 
 
 @dataclass(slots=True)

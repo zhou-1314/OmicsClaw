@@ -22,8 +22,10 @@ import threading
 import time
 from typing import Any, Callable
 
+from . import run_layout
+
 PRIMARY_H5AD_NAME = "processed.h5ad"
-SKILL_CALLS_LOG = "skill_calls.jsonl"
+SKILL_CALLS_LOG = run_layout.relpath("skill_calls_log")
 
 
 @dataclass(slots=True)
@@ -51,6 +53,16 @@ class SkillBudgetError(RuntimeError):
     """Raised when the generated code exceeds the nested skill-call budget."""
 
 
+class SkillNotFoundError(ValueError):
+    """Raised when ``oc.run()`` is given a name that is not a registered analysis skill.
+
+    Subclasses ``ValueError`` so callers that already catch ValueError still handle
+    it. The message lists close matches and points at ``oc.skills()`` so a category
+    error (e.g. ``oc.run('list-skills')``, a meta op that is not an analysis skill)
+    becomes a cheap, self-correcting signal instead of a confusing downstream fail.
+    """
+
+
 class SkillFacade:
     """Registry-backed ``oc`` facade. Lives inside the kernel for one run."""
 
@@ -61,11 +73,16 @@ class SkillFacade:
         max_skill_calls: int = 20,
         skill_timeout_seconds: int = 1800,
         run_skill: Callable[..., Any] | None = None,
+        skill_catalog: Callable[[], dict[str, str]] | None = None,
     ) -> None:
         self.workspace = Path(workspace_root)
         self.max_skill_calls = int(max_skill_calls)
         self.skill_timeout_seconds = int(skill_timeout_seconds)
         self._run_skill = run_skill
+        # Provider of {skill_name: domain}; defaults to the live registry. Injected
+        # in tests so facade unit tests need not load the full registry.
+        self._skill_catalog_provider = skill_catalog
+        self._catalog_cache: dict[str, str] | None = None
         self._n = 0
         self.calls_log = self.workspace / SKILL_CALLS_LOG
 
@@ -86,6 +103,14 @@ class SkillFacade:
         Returns a :class:`SkillHandleResult`; ``.adata`` is the reloaded primary
         artifact when the skill declares one, else ``None``.
         """
+        # Reject an unknown skill name + a missing input up front — before counting
+        # against the budget or materialising anything — so a self-correctable
+        # mistake (a category error like oc.run('list-skills'), or a call with no
+        # data) costs a clear message, not a budget slot, a call number, or a
+        # leftover dir (#3, RC3). Returns the canonical skill name.
+        resolved = self._validate_skill(skill)
+        if data is None and not input_path:
+            raise ValueError(f"oc.run({skill!r}) needs either data (an AnnData) or input_path=")
         self._n += 1
         if self._n > self.max_skill_calls:
             raise SkillBudgetError(
@@ -93,7 +118,7 @@ class SkillFacade:
                 "compose fewer skills or ReturnAnswer with what you have."
             )
         runner = self._run_skill or _default_run_skill()
-        call_dir = self.workspace / "skill_calls" / f"{self._n:02d}_{_safe(skill)}"
+        call_dir = self.workspace / run_layout.relpath("skill_calls") / f"{self._n:02d}_{_safe(resolved)}"
         call_dir.mkdir(parents=True, exist_ok=True)
 
         in_path = self._resolve_input(data, input_path, call_dir)
@@ -101,7 +126,7 @@ class SkillFacade:
         flags = _to_flags(method, params)
 
         t0 = time.time()
-        result = self._invoke(runner, skill, in_path, out_dir, flags, timeout)
+        result = self._invoke(runner, resolved, in_path, out_dir, flags, timeout)
         duration = time.time() - t0
 
         real_out = Path(getattr(result, "output_dir", "") or out_dir)
@@ -110,7 +135,7 @@ class SkillFacade:
         adata = self._reload(primary) if primary else None
 
         handle = SkillHandleResult(
-            skill=skill,
+            skill=resolved,
             success=success,
             output_dir=str(real_out),
             method=getattr(result, "method", None) or method,
@@ -125,6 +150,46 @@ class SkillFacade:
         )
         self._record(handle, in_path, flags)
         return handle
+
+    def skills(self, domain: str | None = None) -> list[str]:
+        """List the analysis skills ``oc`` can run, optionally filtered by *domain*.
+
+        The in-kernel discovery path: generated code calls this instead of guessing
+        a name (or misusing ``oc.run`` for a meta op like list-skills).
+        """
+        catalog = self._catalog()
+        if domain is None:
+            return sorted(catalog)
+        want = str(domain).strip().lower()
+        return sorted(name for name, dom in catalog.items() if str(dom).strip().lower() == want)
+
+    def _catalog(self) -> dict[str, str]:
+        """``{skill_name: domain}`` for every runnable analysis skill (cached)."""
+        if self._catalog_cache is None:
+            provider = self._skill_catalog_provider or _default_skill_catalog
+            self._catalog_cache = dict(provider())
+        return self._catalog_cache
+
+    def _validate_skill(self, skill: str) -> str:
+        """Resolve *skill* to a runnable registry name, or raise SkillNotFoundError."""
+        catalog = self._catalog()
+        if skill in catalog:
+            return skill
+        if self._skill_catalog_provider is None:
+            # Production: resolve a legacy alias via the registry before rejecting.
+            from omicsclaw.skill.runner import resolve_skill_alias
+
+            resolved = resolve_skill_alias(skill)
+            if resolved in catalog:
+                return resolved
+        import difflib
+
+        close = difflib.get_close_matches(skill, list(catalog), n=5)
+        hint = f" Did you mean: {', '.join(close)}?" if close else ""
+        raise SkillNotFoundError(
+            f"'{skill}' is not an analysis skill.{hint} "
+            f"Call oc.skills() to list the {len(catalog)} available skills."
+        )
 
     def __getattr__(self, name: str) -> Callable[..., SkillHandleResult]:
         """Sugar: ``oc.spatial_preprocess(adata, ...)`` -> ``run('spatial-preprocess', ...)``."""
@@ -210,6 +275,7 @@ def build_facade(
     max_skill_calls: int = 20,
     skill_timeout_seconds: int = 1800,
     run_skill: Callable[..., Any] | None = None,
+    skill_catalog: Callable[[], dict[str, str]] | None = None,
 ) -> SkillFacade:
     """Construct the ``oc`` facade for one autonomous run."""
     return SkillFacade(
@@ -217,6 +283,7 @@ def build_facade(
         max_skill_calls=max_skill_calls,
         skill_timeout_seconds=skill_timeout_seconds,
         run_skill=run_skill,
+        skill_catalog=skill_catalog,
     )
 
 
@@ -224,6 +291,25 @@ def _default_run_skill() -> Callable[..., Any]:
     from omicsclaw.skill.runner import run_skill
 
     return run_skill
+
+
+def _default_skill_catalog() -> dict[str, str]:
+    """``{skill_name: domain}`` from the live registry — the production catalog.
+
+    Canonical skills only: the registry indexes each skill under its canonical name
+    AND its legacy / directory aliases (181 keys, 95 canonical). Exposing the alias
+    keys would make ``oc.skills()`` a noisy list of duplicates; excluding them also
+    means an alias input misses this catalog and is canonicalized via
+    ``resolve_skill_alias`` in :meth:`SkillFacade._validate_skill`.
+    """
+    from omicsclaw.skill.registry import ensure_registry_loaded
+
+    registry = ensure_registry_loaded()
+    return {
+        name: str(info.get("domain", ""))
+        for name, info in registry.skills.items()
+        if name == info.get("alias", name)
+    }
 
 
 def _to_flags(method: str | None, params: dict[str, Any]) -> list[str]:
@@ -281,5 +367,6 @@ __all__ = [
     "SkillBudgetError",
     "SkillFacade",
     "SkillHandleResult",
+    "SkillNotFoundError",
     "build_facade",
 ]

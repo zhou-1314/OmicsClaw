@@ -93,6 +93,12 @@ class EnvelopeConfig:
     workspace_root: Path
     ipc_dir: Path
     repo_root: Path
+    # "Kernel scratch home": where the kernel's tool dotfiles (matplotlib / numba
+    # / ipython caches) go, pointed at by $HOME so this machinery never clutters
+    # the user-facing run workspace. In the sandbox this is a path inside the
+    # ephemeral /tmp tmpfs (created via --dir, not bound). None falls back to
+    # workspace_root for back-compat with callers that predate the split.
+    home_dir: Path | None = None
     read_roots: list[Path] = field(default_factory=list)
     allow_network: bool = False
     extra_env: dict[str, str] = field(default_factory=dict)
@@ -119,11 +125,19 @@ def system_read_roots() -> list[Path]:
     return resolved
 
 
-def scrub_env(base_env: dict[str, str] | None, *, workspace_root: Path) -> dict[str, str]:
+def scrub_env(
+    base_env: dict[str, str] | None,
+    *,
+    workspace_root: Path,
+    home_dir: Path | None = None,
+) -> dict[str, str]:
     """Build the minimal, secret-free environment for the sandboxed kernel.
 
-    Deny-by-default allowlist + forced values. ``HOME`` is pinned inside the
-    workspace so libraries that write dotfiles cannot escape the writable bind.
+    Deny-by-default allowlist + forced values. ``HOME`` is pinned to a throwaway
+    ``home_dir`` (tool caches / ipython profile live there, NOT in the run
+    workspace) so dotfiles cannot escape the writable bind yet never clutter the
+    user-facing output. ``home_dir=None`` falls back to ``workspace_root`` for
+    back-compat with callers that predate the split.
     """
     source = dict(base_env if base_env is not None else os.environ)
     env: dict[str, str] = {}
@@ -132,7 +146,7 @@ def scrub_env(base_env: dict[str, str] | None, *, workspace_root: Path) -> dict[
         if value:
             env[key] = value
     env.update(_ENV_FORCED)
-    env["HOME"] = str(workspace_root)
+    env["HOME"] = str(home_dir or workspace_root)
     env["TMPDIR"] = "/tmp"
     # Defensive: never leak a secret-shaped variable even if added to the
     # allowlist by mistake.
@@ -161,8 +175,14 @@ def build_bwrap_argv(config: EnvelopeConfig, inner_argv: list[str]) -> list[str]
         argv += ["--unshare-net"]
     argv += ["--unshare-pid", "--unshare-uts", "--unshare-ipc", "--unshare-cgroup"]
 
-    # Virtual filesystems.
+    # Virtual filesystems. The kernel's scratch HOME (matplotlib / numba /
+    # ipython caches) lives INSIDE this ephemeral /tmp tmpfs: created with --dir,
+    # never bound from the host, gone when the sandbox exits. So tool machinery
+    # never lands in — or even near — the user-facing run workspace, and the
+    # envelope's host write-surface is unchanged (tmpfs was always writable).
     argv += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"]
+    if config.home_dir is not None:
+        argv += ["--dir", str(config.home_dir)]
 
     # Read-only: interpreter + system, repo, then declared inputs.
     ro_roots: list[Path] = [*system_read_roots(), config.repo_root.resolve()]
@@ -177,7 +197,8 @@ def build_bwrap_argv(config: EnvelopeConfig, inner_argv: list[str]) -> list[str]
             continue
         argv += ["--ro-bind", str(root), str(root)]
 
-    # Writable: workspace + ipc channel dir.
+    # Writable: workspace + ipc channel dir. (The kernel's scratch HOME is NOT
+    # a host bind — it lives in the tmpfs created above.)
     argv += ["--bind", str(workspace), str(workspace)]
     if ipc_dir != workspace and workspace not in ipc_dir.parents:
         argv += ["--bind", str(ipc_dir), str(ipc_dir)]
@@ -195,7 +216,11 @@ def build_launch_env(config: EnvelopeConfig) -> dict[str, str]:
     secret-free env. Caller extras are merged but can never reintroduce a
     secret-shaped key.
     """
-    env = scrub_env(None, workspace_root=config.workspace_root.resolve())
+    env = scrub_env(
+        None,
+        workspace_root=config.workspace_root.resolve(),
+        home_dir=config.home_dir,
+    )
     for key, value in config.extra_env.items():
         if value and not any(marker in key.upper() for marker in _SECRET_MARKERS):
             env[key] = value

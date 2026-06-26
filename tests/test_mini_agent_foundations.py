@@ -353,6 +353,34 @@ def test_build_bwrap_argv_does_not_double_bind_ipc_inside_workspace(tmp_path: Pa
     assert not _has_pair(argv, "--bind", str(ipc.resolve()))
 
 
+def test_kernel_scratch_home_is_a_tmpfs_dir_not_a_host_bind(tmp_path: Path):
+    """The kernel's scratch HOME is created in the sandbox tmpfs via --dir and
+    pointed at by $HOME — never a host writable bind (Q1: deliverable-only run)."""
+    home = Path("/tmp/oc-kernel-home")
+    config = EnvelopeConfig(
+        workspace_root=tmp_path / "ws",
+        ipc_dir=tmp_path / "ipc",
+        repo_root=tmp_path / "repo",
+        home_dir=home,
+    )
+    argv = build_bwrap_argv(config, ["true"])
+    # --dir is a single-value bwrap flag that creates an empty dir in the tmpfs.
+    assert any(
+        argv[i] == "--dir" and argv[i + 1] == str(home) for i in range(len(argv) - 1)
+    )
+    assert not _has_pair(argv, "--bind", str(home))  # NOT a host writable bind
+    assert build_launch_env(config)["HOME"] == str(home)  # kernel HOME points there
+
+
+def test_scrub_env_home_points_at_scratch_home_when_given():
+    scrubbed = scrub_env(
+        {"PATH": "/usr/bin"},
+        workspace_root=Path("/tmp/ws"),
+        home_dir=Path("/tmp/oc-kernel-home"),
+    )
+    assert scrubbed["HOME"] == "/tmp/oc-kernel-home"  # scratch home wins over workspace
+
+
 def _has_pair(argv: list[str], flag: str, value: str) -> bool:
     for i, tok in enumerate(argv):
         if tok == flag and i + 2 < len(argv) and argv[i + 1] == value and argv[i + 2] == value:
