@@ -39,6 +39,12 @@ class ToolCallRecord:
     args_digest: str
     iteration: int
     succeeded: bool
+    # Normalized identifier of the single file/resource a read-like tool
+    # targets (file_read / grep_files / inspect_* / read_knowhow), else "".
+    # Lets the repeated-read detector see that the SAME file was accessed via
+    # different tools or args — which the ``(name, args_digest)`` pingpong key
+    # cannot. Populated by ``loop_pathology.read_access_target``.
+    target: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,11 +67,16 @@ class PathologySignal:
     runs, and it carries no ``tool_name`` (no tool was called).
     """
 
-    kind: Literal["pingpong", "repeated_failure", "phantom_completion"]
+    kind: Literal[
+        "pingpong", "repeated_failure", "phantom_completion", "repeated_read"
+    ]
     tool_name: str | None
     iteration: int
     count: int
     reason: str
+    # For ``repeated_read``: the normalized resource read repeatedly (its
+    # identity is the file, not the tool). None for the other kinds.
+    target: str | None = None
 
 
 @dataclass(slots=True)

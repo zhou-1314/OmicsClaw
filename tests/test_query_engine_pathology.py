@@ -453,3 +453,95 @@ def test_pathology_no_signal_under_threshold(tmp_path):
         for m in history
         if m["role"] == "user"
     )
+
+
+# ── Repeated read — same file via different tools/args ───────────────
+
+
+def _build_read_tool_runtime():
+    """A runtime exposing two read-only tools (file_read + grep_files) so the
+    repeated-read detector can key on ``ToolCallRecord.target``."""
+
+    async def reader(args):
+        return "file contents"
+
+    return ToolRegistry(
+        [
+            ToolSpec(
+                name="file_read",
+                description="Read a file",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "start_line": {"type": "integer"},
+                        "end_line": {"type": "integer"},
+                    },
+                },
+                read_only=True,
+                concurrency_safe=True,
+            ),
+            ToolSpec(
+                name="grep_files",
+                description="Grep files",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "root": {"type": "string"},
+                        "glob": {"type": "string"},
+                        "pattern": {"type": "string"},
+                    },
+                },
+                read_only=True,
+                concurrency_safe=True,
+            ),
+        ]
+    ).build_runtime({"file_read": reader, "grep_files": reader})
+
+
+def _read_call(call_id: str, name: str, args_json: str):
+    return _FakeResponse(
+        _FakeMessage(content="", tool_calls=[_FakeToolCall(call_id, name, args_json)])
+    )
+
+
+def test_repeated_read_fires_and_injects_correction(tmp_path):
+    """Same report opened via file_read, grep_files, then a line-range
+    file_read — three different (name, args_digest) keys — trips the
+    repeated-read detector and injects exactly one correction naming the file."""
+    runtime = _build_read_tool_runtime()
+    llm = _FakeLLM(
+        [
+            _read_call("c1", "file_read", '{"path": "/x/report.json"}'),
+            _read_call(
+                "c2",
+                "grep_files",
+                '{"root": "/x", "glob": "report.json", "pattern": "p"}',
+            ),
+            _read_call(
+                "c3",
+                "file_read",
+                '{"path": "/x/report.json", "start_line": 1, "end_line": 5}',
+            ),
+            _final_response("done"),
+        ]
+    )
+    signals: list = []
+    result, transcript_store = _run(
+        llm,
+        runtime,
+        QueryEngineConfig(model="fake", llm_error_types=(_FakeAPIError,)),
+        signals,
+        chat_id="chat-read",
+        tmp_path=tmp_path,
+    )
+
+    assert result == "done"
+    assert len(signals) == 1
+    assert signals[0].kind == "repeated_read"
+    assert signals[0].target == "/x/report.json"
+
+    corrections = _corrections(transcript_store, "chat-read")
+    assert len(corrections) == 1
+    assert "read the same resource" in corrections[0]
+    assert "/x/report.json" in corrections[0]

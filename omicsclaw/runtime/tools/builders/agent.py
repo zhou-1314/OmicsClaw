@@ -53,7 +53,9 @@ def build_default_bot_tool_context() -> BotToolContext:
     from omicsclaw.skill.registry import ensure_registry_loaded
 
     registry = ensure_registry_loaded()
-    skill_names = tuple(list(registry.skills.keys()) + ["auto"])
+    # Canonical aliases only (legacy aliases still resolve at the executor but
+    # need not bloat the omicsclaw `skill` enum sent every turn — ~380 tok/turn).
+    skill_names = tuple(registry.canonical_skill_aliases() + ["auto"])
     briefing = build_domain_briefing(
         lead_in=(
             "OmicsClaw dispatches multi-omics analysis across 7 domains. "

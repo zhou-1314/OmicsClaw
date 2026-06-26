@@ -5,7 +5,7 @@ Per ADR 0007. ``detect(state)`` is a pure function over the current
 and returns at most one ``PathologySignal`` per call — the most recent
 unhealthy pattern that crossed a threshold.
 
-Two patterns are recognised today:
+Three patterns are recognised today:
 
 - **Pingpong** — the same ``(tool_name, args_digest)`` pair appears at
   least ``PINGPONG_THRESHOLD`` times within the trailing
@@ -13,6 +13,15 @@ Two patterns are recognised today:
   granularity is intentional: ``grep(pattern="A")`` followed by
   ``grep(pattern="B")`` is *not* a ping-pong even though the tool name
   repeats.
+
+- **Repeated read** — the same *file* (``ToolCallRecord.target``) is
+  read at least ``REPEATED_READ_THRESHOLD`` times within the trailing
+  ``REPEATED_READ_WINDOW`` entries, *regardless of which read tool or
+  arguments were used*. This catches the pattern pingpong cannot: a
+  report opened via ``file_read``, then ``grep_files``, then a
+  line-range ``file_read`` — three different ``(name, args_digest)``
+  keys, one file already in context. (Real trace: a QC run re-read its
+  ``completion_report.json`` five times across a verification storm.)
 
 - **Repeated failure** — the same ``tool_name`` appears at least
   ``FAILURE_THRESHOLD`` times within the trailing ``FAILURE_WINDOW``
@@ -28,7 +37,9 @@ slash command can monkeypatch them.
 
 from __future__ import annotations
 
+import os
 from collections import Counter
+from typing import Any
 
 from omicsclaw.runtime.agent.loop_state import (
     LoopState,
@@ -43,6 +54,58 @@ PINGPONG_THRESHOLD = 4
 
 FAILURE_WINDOW = 8
 FAILURE_THRESHOLD = 4
+
+# Reading the *same* file 3 times is already wasteful — its contents are in
+# context after the first read. The window is wider than pingpong's because
+# storm reads are interleaved with other inspection calls (glob, list_directory).
+REPEATED_READ_WINDOW = 8
+REPEATED_READ_THRESHOLD = 3
+
+# Read-like tools and the argument(s) that name the single file they read,
+# in priority order. ``grep_files`` and ``read_knowhow`` are handled specially
+# in ``read_access_target`` (root+glob / knowhow name).
+_READ_TARGET_ARGS: dict[str, tuple[str, ...]] = {
+    "file_read": ("path", "file_path"),
+    "inspect_file": ("file_path", "path"),
+    "inspect_data": ("file_path", "path"),
+}
+
+
+def _normalize_fs_target(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return os.path.normpath(os.path.expanduser(text))
+
+
+def read_access_target(name: str, arguments: Any) -> str:
+    """Normalized identifier of the single file/resource a read-like tool reads.
+
+    Returns ``""`` for tools that are not single-resource reads (so they never
+    count toward the repeated-read pattern). A ``grep_files`` call only pins a
+    file when its ``glob`` is a concrete filename — a wildcard glob (``*.py``)
+    is a broad search that legitimately repeats with new patterns.
+
+    This is computed at record time (where the raw arguments are available) and
+    stored on ``ToolCallRecord.target`` so the detector can match the same file
+    across ``file_read`` / ``grep_files`` / ``inspect_*`` calls.
+    """
+    if not isinstance(arguments, dict):
+        return ""
+    if name == "read_knowhow":
+        kn = str(arguments.get("name", "") or "").strip()
+        return f"knowhow:{kn}" if kn else ""
+    if name == "grep_files":
+        glob = str(arguments.get("glob", "") or "").strip()
+        if not glob or any(ch in glob for ch in "*?[]"):
+            return ""
+        root = str(arguments.get("root", "") or "").strip()
+        return _normalize_fs_target(os.path.join(root, glob) if root else glob)
+    for arg in _READ_TARGET_ARGS.get(name, ()):  # file_read / inspect_*
+        value = arguments.get(arg)
+        if value:
+            return _normalize_fs_target(str(value))
+    return ""
 
 
 # ── Phantom completion (ADR 0027) ────────────────────────────────────
@@ -226,6 +289,9 @@ def detect(state: LoopState) -> PathologySignal | None:
     pingpong = _detect_pingpong(state)
     if pingpong is not None:
         return pingpong
+    repeated_read = _detect_repeated_file_access(state)
+    if repeated_read is not None:
+        return repeated_read
     return _detect_repeated_failure(state)
 
 
@@ -251,6 +317,35 @@ def _detect_pingpong(state: LoopState) -> PathologySignal | None:
             f"tool {tool_name!r} called {count} times with same arguments "
             f"in last {len(window)} tool invocations"
         ),
+    )
+
+
+def _detect_repeated_file_access(state: LoopState) -> PathologySignal | None:
+    if not state.tool_calls:
+        return None
+    window: list[ToolCallRecord] = list(state.tool_calls)[-REPEATED_READ_WINDOW:]
+    targets = [record.target for record in window if record.target]
+    if len(targets) < REPEATED_READ_THRESHOLD:
+        return None
+    target, count = Counter(targets).most_common(1)[0]
+    if count < REPEATED_READ_THRESHOLD:
+        return None
+    # Report the tool from the most recent access to this target.
+    last_name = next(
+        (record.name for record in reversed(window) if record.target == target),
+        None,
+    )
+    return PathologySignal(
+        kind="repeated_read",
+        tool_name=last_name,
+        iteration=window[-1].iteration,
+        count=count,
+        reason=(
+            f"the same resource {target!r} was read {count} times in the last "
+            f"{len(window)} tool calls (via file_read / grep_files / inspect_*); "
+            "it is already in context"
+        ),
+        target=target,
     )
 
 
@@ -284,7 +379,10 @@ __all__ = [
     "PINGPONG_THRESHOLD",
     "FAILURE_WINDOW",
     "FAILURE_THRESHOLD",
+    "REPEATED_READ_WINDOW",
+    "REPEATED_READ_THRESHOLD",
     "EXECUTION_TOOLS",
     "detect",
     "detect_phantom_completion",
+    "read_access_target",
 ]

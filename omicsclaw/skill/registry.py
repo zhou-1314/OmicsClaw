@@ -33,6 +33,11 @@ class OmicsRegistry:
 
     def __init__(self):
         self.skills: dict[str, dict[str, Any]] = {}
+        # Canonical skill aliases in registration order (excludes legacy aliases
+        # and directory-name lookup keys). Used to keep the ``omicsclaw`` tool's
+        # ``skill`` enum compact — legacy aliases still resolve via ``self.skills``
+        # but need not bloat the schema sent to the LLM every turn.
+        self.canonical_aliases: list[str] = []
         self.domains = {
             domain: dict(info)
             for domain, info in _HARDCODED_DOMAINS.items()
@@ -40,6 +45,15 @@ class OmicsRegistry:
         self._loaded = False
         self._loaded_dir: Path | None = None
         self.lazy_skills: dict[str, LazySkillMetadata] = {}
+
+    def canonical_skill_aliases(self) -> list[str]:
+        """Canonical skill aliases (no legacy aliases), in registration order.
+
+        Legacy aliases remain resolvable via ``self.skills`` — they are simply
+        omitted from the LLM-facing ``omicsclaw`` tool enum, which is sent on
+        every turn, to keep that schema compact (ADR 0024 frozen tool list).
+        """
+        return list(self.canonical_aliases)
 
     @staticmethod
     def _top_level_python_files(skill_path: Path) -> list[Path]:
@@ -153,6 +167,8 @@ class OmicsRegistry:
         .add(...)``) does not silently corrupt the canonical or sibling views.
         """
         self.skills[canonical_alias] = copy.deepcopy(info)
+        if canonical_alias not in self.canonical_aliases:
+            self.canonical_aliases.append(canonical_alias)
 
         lookup_keys: list[str] = list(info.get("legacy_aliases", []))
         # The directory name is also a valid lookup key (e.g. ``oc run
@@ -381,6 +397,7 @@ class OmicsRegistry:
         change without restarting the process.
         """
         self.skills = {}
+        self.canonical_aliases = []
         self.lazy_skills = {}
         self.domains = {
             domain: dict(info)

@@ -24,8 +24,11 @@ from omicsclaw.runtime.agent.loop_pathology import (
     FAILURE_WINDOW,
     PINGPONG_THRESHOLD,
     PINGPONG_WINDOW,
+    REPEATED_READ_THRESHOLD,
+    REPEATED_READ_WINDOW,
     detect,
     detect_phantom_completion,
+    read_access_target,
 )
 from omicsclaw.runtime.agent.loop_state import (
     LoopState,
@@ -186,6 +189,124 @@ def test_pathology_signal_is_immutable() -> None:
     )
     with pytest.raises(AttributeError):
         signal.count = 5
+
+
+# ── Repeated read — same file via different tools/args ───────────────
+
+
+def _push_read(state: LoopState, name: str, arguments: dict) -> None:
+    state.iteration += 1
+    state.tool_calls.append(
+        ToolCallRecord(
+            name=name,
+            args_digest=compute_args_digest(arguments),
+            iteration=state.iteration,
+            succeeded=True,
+            target=read_access_target(name, arguments),
+        )
+    )
+
+
+def test_repeated_read_fires_across_tools_and_args() -> None:
+    # The verification-storm tail: the same report opened via file_read, then
+    # grep_files, then a line-range file_read — three different
+    # (name, args_digest) keys that pingpong cannot see, one file.
+    state = LoopState()
+    _push_read(state, "file_read", {"path": "/run/completion_report.json"})
+    _push_read(
+        state,
+        "grep_files",
+        {"root": "/run", "glob": "completion_report.json", "pattern": "stdout"},
+    )
+    _push_read(
+        state,
+        "file_read",
+        {"path": "/run/completion_report.json", "start_line": 360, "end_line": 400},
+    )
+    signal = detect(state)
+    assert signal is not None
+    assert signal.kind == "repeated_read"
+    assert signal.count == REPEATED_READ_THRESHOLD
+    assert signal.target == "/run/completion_report.json"
+    assert signal.iteration == state.iteration
+
+
+def test_repeated_read_below_threshold_is_silent() -> None:
+    state = LoopState()
+    _push_read(state, "file_read", {"path": "/run/report.json"})
+    _push_read(
+        state, "grep_files", {"root": "/run", "glob": "report.json", "pattern": "x"}
+    )
+    assert detect(state) is None
+
+
+def test_repeated_read_distinct_files_do_not_fire() -> None:
+    state = LoopState()
+    for i in range(REPEATED_READ_THRESHOLD + 1):
+        _push_read(state, "file_read", {"path": f"/run/file_{i}.txt"})
+    assert detect(state) is None
+
+
+def test_repeated_read_respects_window() -> None:
+    state = LoopState()
+    for _ in range(REPEATED_READ_THRESHOLD):
+        _push_read(state, "file_read", {"path": "/run/report.json"})
+    # Slide the three same-file reads out of the trailing window.
+    for i in range(REPEATED_READ_WINDOW):
+        _push_read(state, "file_read", {"path": f"/run/other_{i}.txt"})
+    assert detect(state) is None
+
+
+def test_broad_grep_glob_does_not_count_as_repeated_read() -> None:
+    # A wildcard grep is a legitimate broad search (target=""). Distinct patterns
+    # keep it out of pingpong too, isolating the repeated-read property: it must
+    # stay silent.
+    state = LoopState()
+    for i in range(REPEATED_READ_THRESHOLD + 1):
+        _push_read(
+            state,
+            "grep_files",
+            {"root": "/run", "glob": "*.py", "pattern": f"def_{i}"},
+        )
+    assert detect(state) is None
+
+
+def test_pingpong_takes_precedence_over_repeated_read() -> None:
+    # Four identical file_read calls are BOTH pingpong and repeated_read; the
+    # more actionable pingpong wins.
+    state = LoopState()
+    for _ in range(PINGPONG_THRESHOLD):
+        _push_read(state, "file_read", {"path": "/run/report.json"})
+    signal = detect(state)
+    assert signal is not None
+    assert signal.kind == "pingpong"
+
+
+def test_read_access_target_extraction() -> None:
+    assert read_access_target("file_read", {"path": "/a/b.txt"}) == "/a/b.txt"
+    assert read_access_target("inspect_file", {"file_path": "/a/b.json"}) == "/a/b.json"
+    assert read_access_target("inspect_data", {"file_path": "/a/x.h5ad"}) == "/a/x.h5ad"
+    assert (
+        read_access_target("grep_files", {"root": "/a", "glob": "b.txt", "pattern": "p"})
+        == "/a/b.txt"
+    )
+    # Wildcard glob, non-read tools, and malformed args never pin a target.
+    assert (
+        read_access_target("grep_files", {"root": "/a", "glob": "*.txt", "pattern": "p"})
+        == ""
+    )
+    assert read_access_target("read_knowhow", {"name": "KH-x.md"}) == "knowhow:KH-x.md"
+    assert read_access_target("omicsclaw", {"query": "run"}) == ""
+    assert read_access_target("file_read", {}) == ""
+    assert read_access_target("file_read", "notadict") == ""
+
+
+def test_read_access_target_normalizes_paths() -> None:
+    # A messy path and its canonical form collapse to one target so reads via
+    # different spellings still count as the same file.
+    assert read_access_target(
+        "file_read", {"path": "/run/../run/report.json"}
+    ) == read_access_target("inspect_file", {"file_path": "/run/report.json"})
 
 
 # ── Phantom completion (ADR 0027) ────────────────────────────────────

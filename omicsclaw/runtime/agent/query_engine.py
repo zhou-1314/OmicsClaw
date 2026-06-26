@@ -51,12 +51,16 @@ from ..context.budget import (
 )
 from .cache_diagnostics import (
     CACHE_DIAGNOSTICS,
+    REASON_HISTORY_SHIFTED,
+    REASON_SYSTEM_CHANGED,
+    REASON_TOOL_LIST_CHANGED,
     CacheTurnDiagnostics,
     compute_segment_hash,
     extract_cache_tokens,
 )
 from .loop_pathology import detect as detect_loop_pathology
 from .loop_pathology import detect_phantom_completion
+from .loop_pathology import read_access_target
 from .loop_state import (
     LoopState,
     PathologySignal,
@@ -239,6 +243,30 @@ async def _emit_cache_diagnostics(
         system_hash=system_hash,
         tokens=tokens,
     )
+    # ADR 0024 §5 — surface the prefix-cache outcome in logs (every surface).
+    # An unexpected mid-session miss (tool/system/history churn) means the stable
+    # prefix is being re-billed at full price, so it warns; healthy hits are DEBUG.
+    if diagnostics.has_signal:
+        import logging
+
+        logger = logging.getLogger(__name__)
+        if diagnostics.miss_reason in (
+            REASON_TOOL_LIST_CHANGED,
+            REASON_SYSTEM_CHANGED,
+            REASON_HISTORY_SHIFTED,
+        ):
+            logger.warning(
+                "prompt cache miss (%s): hit_ratio=%.0f%% — the stable prefix is "
+                "being re-billed; investigate prefix stability (ADR 0024)",
+                diagnostics.miss_reason,
+                diagnostics.hit_ratio * 100,
+            )
+        else:
+            logger.debug(
+                "prompt cache: hit_ratio=%.0f%% reason=%s",
+                diagnostics.hit_ratio * 100,
+                diagnostics.miss_reason,
+            )
     if callbacks.on_cache_diagnostics is not None:
         await _maybe_await(callbacks.on_cache_diagnostics(diagnostics))
 
@@ -591,6 +619,15 @@ def _format_pathology_correction(signal: PathologySignal) -> str:
             f"{signal.count} times with the same arguments in this loop. "
             "Reconsider your approach or finalize with current information."
         )
+    if signal.kind == "repeated_read":
+        target = signal.target or signal.tool_name or "that file"
+        return (
+            f"Loop detector: you have read the same resource ('{target}') "
+            f"{signal.count} times in this loop (via file_read / grep_files / "
+            "inspect_*). Its contents are already in your context — re-reading "
+            "it wastes tokens and adds nothing. Use what you already have, or "
+            "read a DIFFERENT artifact, then finalize."
+        )
     if signal.kind == "repeated_failure":
         return (
             f"Loop detector: tool '{signal.tool_name}' has failed "
@@ -621,7 +658,13 @@ def _is_new_pathology(signal: PathologySignal, state: LoopState) -> bool:
     if not state.signals:
         return True
     last = state.signals[-1]
-    return (last.kind, last.tool_name) != (signal.kind, signal.tool_name)
+
+    def _key(s: PathologySignal) -> tuple[str, str | None]:
+        # ``repeated_read`` identity is the file (different tools hit the same
+        # target); the other kinds are identified by tool_name.
+        return (s.kind, s.target if s.target else s.tool_name)
+
+    return _key(last) != _key(signal)
 
 
 async def _build_execution_requests(
@@ -818,6 +861,7 @@ async def _record_tool_outcome(
             args_digest=compute_args_digest(request.arguments),
             iteration=state.iteration,
             succeeded=execution_result.success,
+            target=read_access_target(request.name, request.arguments),
         )
     )
     if not execution_result.success:

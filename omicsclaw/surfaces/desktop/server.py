@@ -946,6 +946,15 @@ def _build_token_usage(
         usage_payload["cache_creation_input_tokens"] = int(
             usage_totals["cache_creation_input_tokens"]
         )
+    # ADR 0024 §5 — surface the cache economics so the gross input_tokens total is
+    # interpretable. With a byte-stable prefix most re-sent input is cache hits
+    # (~10% the price of a miss on DeepSeek), so fresh_input_tokens — the tokens
+    # actually re-processed — is far below the gross input_tokens the UI shows.
+    total_input = usage_totals["input_tokens"]
+    cached_input = usage_totals["cache_read_input_tokens"]
+    if total_input > 0 and cached_input > 0:
+        usage_payload["cache_hit_ratio"] = round(cached_input / total_input, 4)
+        usage_payload["fresh_input_tokens"] = int(max(0.0, total_input - cached_input))
     if cost_usd > 0:
         usage_payload["cost_usd"] = round(cost_usd, 6)
     return usage_payload

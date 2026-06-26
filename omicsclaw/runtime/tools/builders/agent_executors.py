@@ -2025,6 +2025,117 @@ def _resolve_trusted_data_paths(
     return resolved, problems
 
 
+# Inline-result digest for the autonomous run. The tool result uses
+# RESULT_POLICY_SUMMARY_OR_MEDIA, which spills outputs over ~5000 bytes to disk
+# and replaces them with a preview — so the digest is byte-capped below that to
+# stay fully in-context (otherwise the outer agent would re-fetch it).
+_AUTONOMOUS_DIGEST_MAX_BYTES = 4800
+_AUTONOMOUS_ARTIFACT_SUFFIXES = frozenset(
+    {".png", ".pdf", ".svg", ".csv", ".tsv", ".html", ".h5ad", ".xlsx"}
+)
+_AUTONOMOUS_BOOKKEEPING_FILES = frozenset(
+    {"completion_report.json", "manifest.json", "analysis.py"}
+)
+
+
+def _clip_chars(text: str, max_chars: int) -> str:
+    text = text.strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + " …[truncated]"
+
+
+def _clip_to_bytes(text: str, max_bytes: int) -> str:
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    suffix = "\n…[digest truncated — open the completion report for full detail]"
+    # Reserve room for the suffix so the total stays at/under max_bytes — the
+    # whole point of the cap is to keep the digest inline (not spilled to disk).
+    budget = max(0, max_bytes - len(suffix.encode("utf-8")))
+    clipped = encoded[:budget].decode("utf-8", errors="ignore").rstrip()
+    return clipped + suffix
+
+
+def _autonomous_artifacts(workspace_root: str, *, limit: int = 40) -> list[str]:
+    """List the analysis outputs (figures + data files), skipping bookkeeping.
+
+    Replaces the glob/list_directory calls the outer agent used to issue to
+    discover what a run produced.
+    """
+    from pathlib import Path
+
+    out: list[str] = []
+    try:
+        root = Path(workspace_root)
+        figures = root / "figures"
+        if figures.is_dir():
+            out.extend(
+                f"figures/{p.name}" for p in sorted(figures.iterdir()) if p.is_file()
+            )
+        for p in sorted(root.iterdir()):
+            if (
+                p.is_file()
+                and p.suffix.lower() in _AUTONOMOUS_ARTIFACT_SUFFIXES
+                and p.name not in _AUTONOMOUS_BOOKKEEPING_FILES
+            ):
+                out.append(p.name)
+    except OSError:
+        pass
+    return out[:limit]
+
+
+def _format_autonomous_digest(result) -> str:
+    """Compact, self-contained digest of an autonomous run for the outer agent.
+
+    ADR 0014 asks the outer LLM to judge the produced artifacts after the run.
+    When the tool returned only file paths, the model satisfied that by reading
+    completion_report.json / result_summary.md and globbing figures across many
+    turns — a token-heavy "verification storm" (diagnose 2026-06-26). This
+    inlines the compact content the run already produced (computed results,
+    answer, artifact list) so the model can verify WITHOUT re-reading raw files,
+    byte-capped to stay under the tool-result inline threshold.
+    """
+    meta = result.metadata or {}
+    status = "completed" if result.ok else "failed"
+    parts: list[str] = [f"Autonomous analysis {status} (run {result.run_id})."]
+
+    computed = str(meta.get("computed_results", "") or "").strip()
+    answer = str(meta.get("answer", "") or "").strip()
+    notes = str(meta.get("interpretive_notes", "") or "").strip()
+
+    if computed:
+        parts.append("## Computed results\n" + _clip_chars(computed, 1600))
+    if answer:
+        parts.append("## Answer\n" + _clip_chars(answer, 1600))
+    if notes and notes != answer:
+        parts.append("## Interpretive notes\n" + _clip_chars(notes, 600))
+
+    artifacts = _autonomous_artifacts(result.workspace_root)
+    if artifacts:
+        parts.append("## Artifacts produced\n" + "\n".join(f"- {a}" for a in artifacts))
+
+    attempt_lines = [
+        f"- attempt {a.attempt_index}: {a.status.value}, "
+        f"tier={a.permission_tier.value}, exit={a.exit_code}"
+        for a in result.attempts
+    ]
+    parts.append("## Attempts\n" + ("\n".join(attempt_lines) or "- none"))
+
+    if result.error:
+        parts.append("## Error\n" + _clip_chars(str(result.error), 600))
+
+    parts.append(
+        "## Raw artifacts (already summarized above — read only if you need "
+        "detail beyond this digest)\n"
+        f"- Output dir: {result.workspace_root}\n"
+        f"- Completion report: {result.completion_report_path}\n"
+        f"- Manifest: {result.manifest_path}"
+    )
+
+    return _clip_to_bytes("\n\n".join(parts), _AUTONOMOUS_DIGEST_MAX_BYTES)
+
+
 async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
     """Run the first-class Autonomous Code Runner loop."""
     try:
@@ -2095,20 +2206,7 @@ async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
             },
         )
 
-        attempt_lines = []
-        for attempt in result.attempts:
-            attempt_lines.append(
-                f"- attempt {attempt.attempt_index}: {attempt.status.value}, "
-                f"tier={attempt.permission_tier.value}, exit={attempt.exit_code}"
-            )
-        return (
-            f"Autonomous analysis {'completed' if result.ok else 'failed'}.\n"
-            f"Output dir: {result.workspace_root}\n"
-            f"Manifest: {result.manifest_path}\n"
-            f"Completion report: {result.completion_report_path}\n"
-            f"Attempts:\n{chr(10).join(attempt_lines) or '- none'}\n"
-            f"Error: {result.error or '<none>'}"
-        )
+        return _format_autonomous_digest(result)
     except Exception as e:
         logger.error(f"Autonomous analysis execution failed: {e}", exc_info=True)
         return f"Error running autonomous analysis: {e}"
