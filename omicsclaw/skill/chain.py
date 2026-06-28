@@ -28,6 +28,7 @@ from omicsclaw.common.user_guidance import (
     render_guidance_block,
     strip_user_guidance_lines,
 )
+from .log_stream import skill_log_emitter_var
 from .lookup import lookup_skill_info
 
 logger = logging.getLogger("omicsclaw.skill.chain")
@@ -97,11 +98,33 @@ async def run_skill_via_shared_runner(
         forwarded_args.extend(["--n-epochs", str(int(n_epochs))])
     forwarded_args.extend(normalize_extra_args(extra_args))
 
+    # Resolve the live-log sink (if a surface installed one) here, in the
+    # coroutine context where the ContextVar is visible, and close over it + the
+    # run id by value: the per-line callbacks below fire on raw subprocess reader
+    # threads (subprocess_driver) which do NOT inherit ContextVars.
+    skill_log_sink = skill_log_emitter_var.get(None)
+    skill_log_run_id = None
+    if skill_log_sink is not None:
+        try:
+            skill_log_run_id = skill_log_sink.begin_skill(canonical_skill)
+        except Exception:
+            skill_log_sink = None
+
     def _emit_stdout(line: str) -> None:
         logger.info("[%s:stdout] %s", canonical_skill, line)
+        if skill_log_sink is not None and skill_log_run_id is not None:
+            try:
+                skill_log_sink.emit(skill_log_run_id, "stdout", line)
+            except Exception:
+                pass
 
     def _emit_stderr(line: str) -> None:
         logger.info("[%s:stderr] %s", canonical_skill, line)
+        if skill_log_sink is not None and skill_log_run_id is not None:
+            try:
+                skill_log_sink.emit(skill_log_run_id, "stderr", line)
+            except Exception:
+                pass
 
     # ADR 0009: prefer the caller-supplied cancel_event (the per-request
     # signal threaded down from MessageEnvelope) so Surface-initiated aborts

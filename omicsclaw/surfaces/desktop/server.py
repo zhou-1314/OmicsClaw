@@ -1244,6 +1244,7 @@ async def chat_stream(req: ChatRequest):
       - {"type": "text",               "data": "..."}   — streamed LLM text chunk
       - {"type": "tool_use",           "data": "{...}"} — tool call start
       - {"type": "tool_output",        "data": "..."}   — tool progress/output
+      - {"type": "tool_log",           "data": "{...}"} — live skill stdout/stderr log lines
       - {"type": "tool_result",        "data": "{...}"} — tool result
       - {"type": "tool_timeout",       "data": "{...}"} — tool timed out
       - {"type": "permission_request", "data": "{...}"} — approval required
@@ -1398,6 +1399,11 @@ async def chat_stream(req: ChatRequest):
     tool_call_ids_by_name: dict[str, deque[str]] = {}
     tool_progress_tasks: dict[str, asyncio.Task] = {}
     permission_request_ids: set[str] = set()
+    # Live skill-log bridge. The coalescer is created per turn inside
+    # ``_run_loop`` and exposed here so ``on_tool_result`` can flush pending
+    # lines before a tool's result frame. Skill logs correlate by per-run id
+    # (assigned in the skill chain), not by tool-call id.
+    skill_log_state: dict[str, Any] = {"coalescer": None}
 
     slash_commands: list[dict[str, str]] = []
     try:
@@ -1620,6 +1626,11 @@ async def chat_stream(req: ChatRequest):
         return payload if isinstance(payload, dict) else None
 
     async def on_tool_result(tool_name: str, display_output: Any, metadata: Any = None):
+        # Flush any buffered skill logs BEFORE this tool's result frame so the
+        # trailing progress lines arrive ahead of the result in the stream.
+        _skill_log_coalescer = skill_log_state["coalescer"]
+        if _skill_log_coalescer is not None:
+            await _skill_log_coalescer.flush_now()
         content_str = str(display_output) if display_output is not None else ""
         pending_ids = tool_call_ids_by_name.get(tool_name)
         tool_use_id = pending_ids.popleft() if pending_ids else ""
@@ -1907,6 +1918,8 @@ async def chat_stream(req: ChatRequest):
     # ---- Background task running the tool loop ----
 
     async def _run_loop():
+        skill_log_coalescer = None
+        _skill_log_token = None
         try:
             # Load active MCP servers for this session
             mcp_servers = ()
@@ -1979,6 +1992,22 @@ async def chat_stream(req: ChatRequest):
                 cancel_event=cancel_event,
             )
             _active_envelopes[session_id] = envelope
+
+            # Install the live skill-log bridge for this turn. The ContextVar
+            # must be set BEFORE dispatch() so the child task it spawns copies a
+            # context that already carries the emitter (see omicsclaw.skill.chain).
+            from omicsclaw.skill.log_stream import skill_log_emitter_var
+            from omicsclaw.surfaces.desktop._skill_log_bridge import (
+                SkillLogCoalescer,
+            )
+
+            skill_log_coalescer = SkillLogCoalescer(
+                loop=asyncio.get_running_loop(),
+                queue=queue,
+            )
+            skill_log_state["coalescer"] = skill_log_coalescer
+            skill_log_coalescer.start()
+            _skill_log_token = skill_log_emitter_var.set(skill_log_coalescer)
 
             result = ""
             async for event in dispatch(envelope):
@@ -2064,6 +2093,15 @@ async def chat_stream(req: ChatRequest):
             for task in list(tool_progress_tasks.values()):
                 task.cancel()
             tool_progress_tasks.clear()
+            # Tear down the live skill-log bridge: stop emitting, drain any
+            # trailing buffered lines onto the queue, then signal end-of-stream.
+            if _skill_log_token is not None:
+                from omicsclaw.skill.log_stream import skill_log_emitter_var
+
+                skill_log_emitter_var.reset(_skill_log_token)
+            skill_log_state["coalescer"] = None
+            if skill_log_coalescer is not None:
+                await skill_log_coalescer.aclose()
             await queue.put(_DONE)
             _active_sessions.pop(session_id, None)
             _active_envelopes.pop(session_id, None)
