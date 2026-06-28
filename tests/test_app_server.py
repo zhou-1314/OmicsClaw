@@ -1676,6 +1676,7 @@ async def test_chat_stream_delivers_pending_media_as_tool_result_media(monkeypat
             "type": "image",
             "mimeType": "image/png",
             "localPath": str(image_path),
+            "sizeBytes": image_path.stat().st_size,
         }
     ]
     assert fake_core.pending_media == {}
@@ -1734,11 +1735,13 @@ async def test_chat_stream_merges_pending_media_without_duplicates(monkeypatch, 
             "type": "image",
             "mimeType": "image/png",
             "localPath": str(image_path),
+            "sizeBytes": image_path.stat().st_size,
         },
         {
             "type": "image",
             "mimeType": "image/png",
             "localPath": str(extra_path),
+            "sizeBytes": extra_path.stat().st_size,
         },
     ]
     assert fake_core.pending_media == {}
@@ -1794,9 +1797,112 @@ async def test_chat_stream_delivers_pending_documents_as_file_media(monkeypatch,
             "type": "file",
             "mimeType": "text/csv",
             "localPath": str(table_path),
+            "sizeBytes": table_path.stat().st_size,
         }
     ]
     assert fake_core.pending_media == {}
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_suppresses_unrequested_figures(monkeypatch, tmp_path: Path):
+    """A tool result that references a real figure (e.g. ``plot_path``) but
+    queues NOTHING on ``pending_media`` (user did not ask) must NOT auto-surface
+    that figure — the server no longer scans output payloads/dirs for media."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+
+    image_path = tmp_path / "qc_heatmap.png"
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    async def fake_llm_tool_loop(**kwargs):
+        # NB: no pending_media set — the run produced a figure as a side effect.
+        await kwargs["on_tool_call"]("omicsclaw", {"skill": "sc-qc"})
+        await kwargs["on_tool_result"]("omicsclaw", json.dumps({"plot_path": str(image_path)}))
+        return "analysis complete"
+
+    fake_core = SimpleNamespace(
+        init=lambda **kwargs: None,
+        llm_tool_loop=fake_llm_tool_loop,
+        LLM_PROVIDER_NAME="env",
+        OMICSCLAW_MODEL="gpt-test",
+        OUTPUT_DIR=ROOT / "output",
+        pending_media={},
+        _skill_registry=lambda: SimpleNamespace(skills={}),
+        get_tool_executors=lambda: {"omicsclaw": object()},
+        _accumulate_usage=lambda response_usage: {},
+        _get_token_price=lambda model: (0.0, 0.0),
+    )
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
+    monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
+
+    response = await server.chat_stream(
+        server.ChatRequest(session_id="session-suppress", content="run qc")
+    )
+    events = _parse_sse_events(await _read_streaming_response(response))
+    tool_result = next(event for event in events if event["type"] == "tool_result")
+    assert "media" not in tool_result["data"], "unrequested side-effect figures must NOT auto-display"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_delivers_output_summary_block(monkeypatch, tmp_path: Path):
+    """An output_summary item on ``pending_media`` reaches the frontend as a
+    single collapsed-entry block (counts + runDir), not a per-figure dump."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+
+    run_dir = tmp_path / "output" / "sc-qc__20260601_120000__abc123ff"
+    run_dir.mkdir(parents=True)
+    # A finalized run leaf so _is_fresh_run_leaf accepts the summary's runDir
+    # anchor for session stamping (本对话).
+    (run_dir / "result.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+    pending_media: dict[str, list[dict]] = {}
+
+    async def fake_llm_tool_loop(**kwargs):
+        pending_media["session-summary"] = [
+            {"type": "output_summary", "figures": 3, "tables": 1, "notebooks": 0, "run_dir": str(run_dir)},
+        ]
+        await kwargs["on_tool_call"]("omicsclaw", {"skill": "sc-qc"})
+        await kwargs["on_tool_result"]("omicsclaw", "QC complete. Outputs saved.")
+        return "analysis complete"
+
+    fake_core = SimpleNamespace(
+        init=lambda **kwargs: None,
+        llm_tool_loop=fake_llm_tool_loop,
+        LLM_PROVIDER_NAME="env",
+        OMICSCLAW_MODEL="gpt-test",
+        OUTPUT_DIR=tmp_path / "output",
+        pending_media=pending_media,
+        _skill_registry=lambda: SimpleNamespace(skills={}),
+        get_tool_executors=lambda: {"omicsclaw": object()},
+        _accumulate_usage=lambda response_usage: {},
+        _get_token_price=lambda model: (0.0, 0.0),
+    )
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
+    monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
+
+    response = await server.chat_stream(
+        server.ChatRequest(session_id="session-summary", content="run qc")
+    )
+    events = _parse_sse_events(await _read_streaming_response(response))
+    tool_result = next(event for event in events if event["type"] == "tool_result")
+    assert tool_result["data"]["media"] == [
+        {
+            "type": "output_summary",
+            "figures": 3,
+            "tables": 1,
+            "notebooks": 0,
+            "runDir": str(run_dir),
+        }
+    ]
+    assert fake_core.pending_media == {}
+    # Regression: a figure-suppressed run must still stamp its producing session
+    # via the summary's runDir anchor (the stamp call drains `media`, not a stale
+    # local — a NameError there would silently break 本对话 linkage).
+    assert server._read_session_sidecar(run_dir) == "session-summary"
 
 
 @pytest.mark.asyncio

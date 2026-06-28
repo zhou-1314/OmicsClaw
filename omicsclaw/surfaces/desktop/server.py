@@ -1503,153 +1503,24 @@ async def chat_stream(req: ChatRequest):
         except asyncio.CancelledError:
             return
 
-    def _extract_media_from_display_output(
-        tool_name: str,
-        display_output: Any,
-    ) -> list[dict[str, Any]]:
-        media: list[dict[str, Any]] = []
-        try:
-            if isinstance(display_output, dict):
-                parsed = display_output
-            elif isinstance(display_output, str):
-                try:
-                    parsed = json.loads(display_output)
-                except (json.JSONDecodeError, ValueError):
-                    parsed = {}
-            else:
-                parsed = {}
-
-            IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
-
-            def _extract_paths(obj: Any, depth: int = 0) -> None:
-                if depth > 3:
-                    return
-                if isinstance(obj, str) and "/" in obj:
-                    ext = os.path.splitext(obj)[1].lower()
-                    if ext in IMAGE_EXTS and os.path.isfile(obj):
-                        media.append(
-                            {
-                                "type": "image",
-                                "mimeType": f"image/{ext.lstrip('.')}".replace(
-                                    "jpg", "jpeg"
-                                ),
-                                "localPath": obj,
-                            }
-                        )
-                    elif (
-                        ext in {".csv", ".tsv", ".md", ".json", ".html", ".ipynb"}
-                        and os.path.isfile(obj)
-                    ):
-                        media.append(
-                            {
-                                "type": "file",
-                                "mimeType": "application/octet-stream",
-                                "localPath": obj,
-                            }
-                        )
-                elif isinstance(obj, dict):
-                    for value in obj.values():
-                        _extract_paths(value, depth + 1)
-                elif isinstance(obj, (list, tuple)):
-                    for item in obj:
-                        _extract_paths(item, depth + 1)
-
-            _extract_paths(parsed)
-
-            for key in ("image_path", "plot_path", "figure_path", "output_path"):
-                path = parsed.get(key)
-                if isinstance(path, str) and os.path.isfile(path):
-                    ext = os.path.splitext(path)[1].lower()
-                    if ext in IMAGE_EXTS and not any(
-                        item["localPath"] == path for item in media
-                    ):
-                        media.append(
-                            {
-                                "type": "image",
-                                "mimeType": f"image/{ext.lstrip('.')}".replace(
-                                    "jpg", "jpeg"
-                                ),
-                                "localPath": path,
-                            }
-                        )
-
-            for key in ("output_dir", "output_directory"):
-                out_dir = parsed.get(key)
-                if isinstance(out_dir, str) and os.path.isdir(out_dir):
-                    fig_dir = os.path.join(out_dir, "figures")
-                    if os.path.isdir(fig_dir):
-                        for fname in sorted(os.listdir(fig_dir)):
-                            fpath = os.path.join(fig_dir, fname)
-                            ext = os.path.splitext(fname)[1].lower()
-                            if ext in IMAGE_EXTS and not any(
-                                item["localPath"] == fpath for item in media
-                            ):
-                                media.append(
-                                    {
-                                        "type": "image",
-                                        "mimeType": f"image/{ext.lstrip('.')}".replace(
-                                            "jpg", "jpeg"
-                                        ),
-                                        "localPath": fpath,
-                                    }
-                                )
-
-            if not media:
-                output_dir = str(core.OUTPUT_DIR)
-                if os.path.isdir(output_dir):
-                    candidates: list[tuple[float, str]] = []
-                    for entry in os.scandir(output_dir):
-                        if not entry.is_dir():
-                            continue
-                        if entry.name.startswith(tool_name.replace("-", "_").split("_")[0]):
-                            candidates.append((entry.stat().st_mtime, entry.path))
-                        elif tool_name.replace("-", "_") in entry.name:
-                            candidates.append((entry.stat().st_mtime, entry.path))
-                        elif tool_name in entry.name:
-                            candidates.append((entry.stat().st_mtime, entry.path))
-                    if candidates:
-                        candidates.sort(reverse=True)
-                        latest_dir = candidates[0][1]
-                        fig_dir = os.path.join(latest_dir, "figures")
-                        if os.path.isdir(fig_dir):
-                            for fname in sorted(os.listdir(fig_dir)):
-                                fpath = os.path.join(fig_dir, fname)
-                                ext = os.path.splitext(fname)[1].lower()
-                                if ext in IMAGE_EXTS and os.path.isfile(fpath):
-                                    media.append(
-                                        {
-                                            "type": "image",
-                                            "mimeType": f"image/{ext.lstrip('.')}".replace(
-                                                "jpg", "jpeg"
-                                            ),
-                                            "localPath": fpath,
-                                        }
-                                    )
-                        for fname in ("report.md", "result.json", "README.md"):
-                            fpath = os.path.join(latest_dir, fname)
-                            if os.path.isfile(fpath):
-                                media.append(
-                                    {
-                                        "type": "file",
-                                        "mimeType": (
-                                            "text/markdown"
-                                            if fname.endswith(".md")
-                                            else "application/json"
-                                        ),
-                                        "localPath": fpath,
-                                    }
-                                )
-        except Exception:
-            return media
-        return media
-
     def _pending_media_item_to_block(item: Any) -> dict[str, Any] | None:
         if not isinstance(item, dict):
             return None
+        item_type = str(item.get("type") or "").strip().lower()
+        if item_type == "output_summary":
+            # The collapsed "view outputs" entry: counts of the artifacts the
+            # user did NOT explicitly request + a run-dir anchor. It carries no
+            # file of its own — the desktop renders it as a single link.
+            return {
+                "type": "output_summary",
+                "figures": int(item.get("figures") or 0),
+                "tables": int(item.get("tables") or 0),
+                "notebooks": int(item.get("notebooks") or 0),
+                "runDir": str(item.get("run_dir") or item.get("runDir") or ""),
+            }
         path = str(item.get("path") or item.get("localPath") or "").strip()
         if not path or not os.path.isfile(path):
             return None
-        item_type = str(item.get("type") or "").strip().lower()
         mime_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
         if item_type in {"photo", "image"} or mime_type.startswith("image/"):
             media_type = "image"
@@ -1661,11 +1532,16 @@ async def chat_stream(req: ChatRequest):
             media_type = "file"
         else:
             return None
-        return {
+        block: dict[str, Any] = {
             "type": media_type,
             "mimeType": mime_type,
             "localPath": path,
         }
+        try:
+            block["sizeBytes"] = os.path.getsize(path)
+        except OSError:
+            pass
+        return block
 
     def _consume_pending_media_for_session() -> list[dict[str, Any]]:
         pending = getattr(core, "pending_media", None)
@@ -1678,10 +1554,11 @@ async def chat_stream(req: ChatRequest):
             block = _pending_media_item_to_block(item)
             if not block:
                 continue
-            local_path = str(block["localPath"])
-            if local_path in seen:
+            # Files dedup by path; the output_summary entry dedups by its run dir.
+            key = str(block.get("localPath") or f"summary:{block.get('runDir', '')}")
+            if key in seen:
                 continue
-            seen.add(local_path)
+            seen.add(key)
             media.append(block)
         return media
 
@@ -1753,24 +1630,23 @@ async def chat_stream(req: ChatRequest):
         else:
             await _queue_event("tool_output", f"Completed {tool_name}")
 
-        media = _extract_media_from_display_output(tool_name, display_output)
-        pending_media = _consume_pending_media_for_session()
-        if pending_media:
-            existing = {str(item.get("localPath", "")) for item in media}
-            media.extend(
-                item for item in pending_media
-                if str(item.get("localPath", "")) not in existing
-            )
+        # Media is sourced SOLELY from the intent-gated `pending_media`
+        # side-channel — never auto-scanned from the tool's output dir. A run's
+        # figures appear in chat only when the user asked for them
+        # (`return_media`); otherwise the executor queues a collapsed
+        # output_summary instead (no auto-display of side-effect figures).
+        media: list[dict[str, Any]] = _consume_pending_media_for_session()
 
         # Record which chat session produced this Run (本对话 scope) so the
         # desktop output 看板 attributes it authoritatively, instead of the
         # frontend reverse-engineering the run id from streamed media paths.
-        # Stamp ONLY from producer signals — the result payload's explicit
-        # output_dir and the skill's own side-channel `pending_media` — never
-        # the generically-extracted/fallback-scanned `media` (which can carry a
-        # path a *read* tool merely referenced, into another run/session).
+        # `media` is now exclusively the intent-gated side-channel blocks (file
+        # cards + the output_summary's run-dir anchor) — every entry is a genuine
+        # producer signal, and the run-dir resolver only trusts fresh run leaves,
+        # so stamping straight from it is correct (and keeps figure-suppressed /
+        # text-only runs linked via the summary's runDir).
         try:
-            _stamp_session_for_run(session_id, display_output, pending_media)
+            _stamp_session_for_run(session_id, display_output, media)
         except Exception:
             pass
 
@@ -5858,7 +5734,14 @@ def _resolve_session_run_dir(
                 candidates.append(val)
     for item in media:
         if isinstance(item, dict):
-            lp = item.get("localPath") or item.get("path")
+            # A transferred media path, or the output_summary's run-dir anchor
+            # (the only producer signal a figure-suppressed run carries).
+            lp = (
+                item.get("localPath")
+                or item.get("path")
+                or item.get("runDir")
+                or item.get("run_dir")
+            )
             if isinstance(lp, str) and lp:
                 candidates.append(lp)
     for cand in candidates:

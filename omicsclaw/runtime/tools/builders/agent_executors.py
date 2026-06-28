@@ -109,6 +109,8 @@ from omicsclaw.skill.orchestration import (
     _build_param_hint,
     _classify_env_error,
     _collect_output_media_paths,
+    build_media_delivery_plan,
+    MediaDeliveryPlan,
     _format_auto_disambiguation,
     _format_auto_route_banner,
     _format_next_steps,
@@ -489,31 +491,18 @@ async def execute_omicsclaw(
         plain = f"{skill_key} failed (exit {returncode}):\n{err}"
         return auto_route_banner + (payload_prefix + "\n" if payload_prefix else "") + plain
 
-    # Collect report + figures from output directory
+    # Collect report + figures from output directory. The delivery plan is the
+    # single place that gates artifacts on the user's `return_media` intent:
+    # requested files are queued as interactive cards, everything else is
+    # collapsed into an output_summary entry (figures are NEVER auto-shown).
     return_media = str(args.get("return_media", "")).strip().lower()
     collected = _collect_output_media_paths(out_dir)
-    figure_paths = collected.figure_paths
-    table_paths = collected.table_paths
-    notebook_paths = collected.notebook_paths
-    figure_names = _path_names(figure_paths)
-    table_names = _path_names(table_paths)
-    notebook_names = _path_names(notebook_paths)
-    sent_names = []
-    media_items = collected.media_items
-    if out_dir.exists():
-        if return_media and media_items:
-            if return_media == "all":
-                filtered = media_items
-            else:
-                keywords = [k.strip() for k in return_media.split(",") if k.strip()]
-                filtered = [
-                    item for item in media_items
-                    if any(kw in Path(item["path"]).stem.lower() for kw in keywords)
-                ]
-            if filtered:
-                pending_media[session_id] = pending_media.get(session_id, []) + filtered
-                sent_names = [Path(item["path"]).name for item in filtered]
-                logger.info(f"return_media='{return_media}': sending {len(filtered)}/{len(media_items)} items")
+    plan = build_media_delivery_plan(collected, return_media, out_dir)
+    sent_names = plan.sent_names
+    if out_dir.exists() and plan.pending_items and session_id:
+        pending_media[session_id] = pending_media.get(session_id, []) + plan.pending_items
+        if sent_names:
+            logger.info(f"return_media='{return_media}': sending {len(sent_names)} item(s)")
 
     # Read report for chat display
     report_text = ""
@@ -600,44 +589,10 @@ async def execute_omicsclaw(
     if param_hint:
         result_text = param_hint + "\n---\n" + result_text
 
-    # Append media delivery status so the LLM knows what happened
-    # and does NOT attempt to browse output directories itself.
-    all_names = figure_names + table_names + notebook_names
-    if sent_names:
-        result_text += (
-            "\n\n---\n"
-            f"[MEDIA DELIVERY: {len(sent_names)} file(s) already queued for the user: "
-            f"{', '.join(sent_names)}. DO NOT use list_directory or other tools to find/send "
-            "these files — they will be delivered automatically.]"
-        )
-        unsent = [n for n in all_names if n not in sent_names]
-        if unsent:
-            result_text += (
-                f"\n[Other available outputs not requested: {', '.join(unsent)}.]"
-            )
-    elif not return_media and all_names:
-        # Emit absolute paths wrapped in backticks so the desktop UI's
-        # `injectInlineImages` regex can render them as inline <img>
-        # elements when the LLM quotes them verbatim in later replies.
-        hints = []
-        if figure_paths:
-            paths = "\n  ".join(f"- `{path}`" for path in figure_paths)
-            hints.append("Figures:\n  " + paths)
-        if table_paths:
-            paths = "\n  ".join(f"- `{path}`" for path in table_paths)
-            hints.append("Tables:\n  " + paths)
-        if notebook_paths:
-            paths = "\n  ".join(f"- `{path}`" for path in notebook_paths)
-            hints.append("Notebooks:\n  " + paths)
-        result_text += (
-            "\n\n---\n"
-            "[Available outputs (absolute paths):\n"
-            + "\n".join(hints)
-            + "\n\nWhen the user asks to see a figure, quote its backtick path verbatim "
-            "(e.g. `/abs/path/to/figure.png`) in your reply — the UI renders any "
-            "backtick-quoted image path as an inline preview. Do NOT call "
-            "list_directory or other tools to locate these files.]"
-        )
+    # Append a concise, path-free media note so the LLM knows what the user can
+    # see (cards for requested files, a collapsed "view outputs" entry for the
+    # rest) and does NOT browse output dirs or paste absolute paths into chat.
+    result_text += _format_media_delivery_note(plan, out_dir)
 
     # Stage 2+4: Emit AdvisoryEvent and resolve post-execution knowledge
     try:
@@ -2222,38 +2177,77 @@ def _format_autonomous_digest(result) -> str:
     return _clip_to_bytes("\n\n".join(parts), _AUTONOMOUS_DIGEST_MAX_BYTES)
 
 
-def _register_autonomous_media(session_id: str, workspace_root: str) -> list[dict]:
-    """Queue an autonomous run's figures + a run-dir anchor onto the
-    ``pending_media`` side-channel (audit A-3).
+def _format_media_delivery_note(plan: MediaDeliveryPlan, out_dir: Path) -> str:
+    """Render the LLM-facing media note from a delivery plan — deliberately
+    path-free.
 
-    The verification-storm fix made the autonomous tool return a compact text
-    digest with no machine-readable producer field, so ``on_tool_result`` could
-    neither inline the run's figures nor stamp the producing session (the run
-    never appeared under 本对话). The digest stays the LLM-facing return value;
-    the figures plus the readable ``result_summary.md`` travel through
-    ``pending_media`` exactly like the skill executor's ``return_media`` path —
-    so the desktop inlines plots and links the Run WITHOUT re-bloating the
-    model's context. Best-effort: never raises into the tool loop.
+    The desktop renders interactive cards (requested files) and a collapsed
+    "view outputs" entry (the rest) from the ``pending_media`` side-channel, so
+    pasting absolute paths into the reply only bloats context, and the UI no
+    longer inlines backtick-quoted paths anyway.
+    """
+    lines: list[str] = []
+    if plan.sent_names:
+        lines.append(
+            f"[MEDIA DELIVERY: {len(plan.sent_names)} file(s) queued for the user as "
+            f"clickable cards: {', '.join(plan.sent_names)}. DO NOT use list_directory "
+            "or other tools to find/send these — they are delivered automatically.]"
+        )
+    s = plan.summary
+    if s and (s["figures"] or s["tables"] or s["notebooks"]):
+        parts: list[str] = []
+        if s["figures"]:
+            parts.append(f"{s['figures']} figure(s)")
+        if s["tables"]:
+            parts.append(f"{s['tables']} table(s)")
+        if s["notebooks"]:
+            parts.append(f"{s['notebooks']} notebook(s)")
+        produced = ", ".join(parts)
+        if plan.sent_names:
+            lines.append(
+                f"[Other outputs not shown inline: {produced} — the user sees a collapsed "
+                "'view outputs' entry that links them.]"
+            )
+        else:
+            lines.append(
+                f"[Run produced {produced} (saved under {out_dir}). Figures are NOT "
+                "auto-shown; the user sees a collapsed 'view outputs' entry. To surface a "
+                "specific figure as a clickable card, re-run with return_media='<keyword>' "
+                "or 'all'.]"
+            )
+    if not lines:
+        return ""
+    return "\n\n---\n" + "\n".join(lines)
+
+
+def _register_autonomous_media(
+    session_id: str, workspace_root: str, return_media: str = ""
+) -> list[dict]:
+    """Queue an autonomous run's outputs onto ``pending_media`` (audit A-3),
+    gated on the user's ``return_media`` intent.
+
+    Figures are NEVER auto-inlined. Without an explicit ``return_media`` the run
+    queues only a collapsed ``output_summary`` (counts + a run-dir anchor) so the
+    desktop shows a "view outputs" entry and can still stamp the producing
+    session (本对话) via the anchor — WITHOUT dumping plots into chat. When the
+    user did ask, the matching figures ride through as interactive cards exactly
+    like the skill executor's ``return_media`` path. Best-effort: never raises
+    into the tool loop.
     """
     if not session_id or not workspace_root:
         return []
     root = Path(workspace_root)
     try:
-        collected = _collect_output_media_paths(root).media_items
+        collected = _collect_output_media_paths(root)
     except Exception:
         logger.debug("autonomous media collection failed", exc_info=True)
-        collected = []
-    items: list[dict] = [it for it in collected if it.get("type") == "photo"]
-    summary = root / "result_summary.md"
-    if summary.is_file():
-        # The readable report doubles as the run-dir anchor that lets text-only
-        # runs (no figures) still link to their conversation.
-        items.append({"type": "document", "path": str(summary)})
-    if not items and collected:
-        items.append(collected[0])
-    if items:
-        pending_media[session_id] = pending_media.get(session_id, []) + items
-    return items
+        return []
+    plan = build_media_delivery_plan(
+        collected, str(return_media or "").strip().lower(), root, always_anchor=True
+    )
+    if plan.pending_items:
+        pending_media[session_id] = pending_media.get(session_id, []) + plan.pending_items
+    return plan.pending_items
 
 
 async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
@@ -2327,7 +2321,9 @@ async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
         # machine-readable paths). Best-effort; must not fail the run.
         try:
             _register_autonomous_media(
-                str(kwargs.get("session_id", "") or ""), result.workspace_root
+                str(kwargs.get("session_id", "") or ""),
+                result.workspace_root,
+                return_media=str(args.get("return_media", "") or "").strip().lower(),
             )
         except Exception:
             logger.debug("autonomous media registration failed", exc_info=True)

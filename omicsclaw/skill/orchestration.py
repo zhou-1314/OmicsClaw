@@ -63,6 +63,87 @@ def _collect_output_media_paths(out_dir: Path) -> OutputMediaPaths:
     return OutputMediaPaths(figure_paths, table_paths, notebook_paths, media_items)
 
 
+@dataclass(frozen=True)
+class MediaDeliveryPlan:
+    """The single decision of what a finished run shows the user.
+
+    ``pending_items`` are appended to the ``pending_media`` side-channel that the
+    desktop surface drains: requested artifacts (queued as interactive file
+    cards) followed by at most one ``output_summary`` item (the collapsed
+    "N outputs" entry counting the artifacts the user did NOT ask to see).
+    ``sent_names`` are the basenames queued for display (for the LLM-facing
+    note). ``summary`` is the output_summary dict (also the last pending item
+    when present), or ``None``.
+    """
+
+    pending_items: list[dict]
+    sent_names: list[str]
+    summary: dict | None
+
+
+def _filter_requested_media(media_items: list[dict], return_media: str) -> list[dict]:
+    """Select the media items the user explicitly asked for.
+
+    ``return_media`` is the intent signal: empty → nothing; ``"all"`` →
+    everything; otherwise a comma-separated keyword list matched against each
+    file stem."""
+    rm = (return_media or "").strip().lower()
+    if not rm:
+        return []
+    if rm == "all":
+        return list(media_items)
+    keywords = [k.strip() for k in rm.split(",") if k.strip()]
+    if not keywords:
+        return []
+    return [
+        item
+        for item in media_items
+        if any(kw in Path(str(item.get("path", ""))).stem.lower() for kw in keywords)
+    ]
+
+
+def build_media_delivery_plan(
+    collected: OutputMediaPaths,
+    return_media: str,
+    run_dir: Path | str | None,
+    *,
+    always_anchor: bool = False,
+) -> MediaDeliveryPlan:
+    """Decide what a finished run delivers to chat, gated on user intent.
+
+    Figures/tables are NEVER auto-shown: only the artifacts named by
+    ``return_media`` are queued for display (rendered as interactive cards).
+    Everything the user did not request is collapsed into a single
+    ``output_summary`` item carrying the counts + ``run_dir`` (the desktop
+    renders it as a "view outputs" entry and uses ``run_dir`` to link the run to
+    its conversation). ``always_anchor`` forces a summary even when nothing is
+    left to count, so text-only runs still leave a run-dir anchor for 本对话
+    session stamping.
+    """
+    sent = _filter_requested_media(collected.media_items, return_media)
+    sent_paths = {str(item.get("path", "")) for item in sent}
+    sent_names = [Path(str(item["path"])).name for item in sent if item.get("path")]
+
+    fig_unsent = sum(1 for p in collected.figure_paths if str(p) not in sent_paths)
+    tab_unsent = sum(1 for p in collected.table_paths if str(p) not in sent_paths)
+    nb_unsent = sum(1 for p in collected.notebook_paths if str(p) not in sent_paths)
+
+    summary: dict | None = None
+    if fig_unsent or tab_unsent or nb_unsent or (always_anchor and run_dir is not None):
+        summary = {
+            "type": "output_summary",
+            "figures": fig_unsent,
+            "tables": tab_unsent,
+            "notebooks": nb_unsent,
+            "run_dir": str(run_dir) if run_dir is not None else "",
+        }
+
+    pending_items: list[dict] = list(sent)
+    if summary is not None:
+        pending_items.append(summary)
+    return MediaDeliveryPlan(pending_items=pending_items, sent_names=sent_names, summary=summary)
+
+
 # Auto-routing disambiguation block: emitted when the capability resolver's
 # top-2 candidates are within ~``_AUTO_DISAMBIGUATE_GAP`` of each other.
 # Tuned against ``capability_resolver._candidate_score`` output magnitudes
