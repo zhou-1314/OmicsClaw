@@ -85,6 +85,28 @@ def test_usage_payload_exposes_hit_ratio_and_fresh_tokens(monkeypatch):
     assert payload["fresh_input_tokens"] == 2000
 
 
+def test_usage_payload_cost_discounts_cache_reads(monkeypatch):
+    # F: cost_usd must bill cache reads at a discount, consistent with the
+    # cache_hit_ratio/fresh_input_tokens in the same payload (not full price).
+    from omicsclaw.surfaces.desktop import server
+
+    fake_core = SimpleNamespace(
+        _get_token_price=lambda m: (10.0, 30.0),  # input=10, output=30 per 1M
+        _cache_read_discount=lambda: 0.1,
+        OMICSCLAW_MODEL="x",
+    )
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    usage = SimpleNamespace(prompt_tokens=20000, completion_tokens=500, prompt_cache_hit_tokens=18000)
+    payload = server._build_token_usage(usage, _usage_totals(), model="x")
+
+    # fresh=2000@10 + cached=18000@10*0.1 + output=500@30, all /1e6
+    expected = (2000 * 10.0 + 18000 * 10.0 * 0.1 + 500 * 30.0) / 1_000_000
+    assert payload["cost_usd"] == round(expected, 6)
+    # Strictly cheaper than billing all 20k input at full price.
+    full = (20000 * 10.0 + 500 * 30.0) / 1_000_000
+    assert payload["cost_usd"] < round(full, 6)
+
+
 def test_usage_payload_omits_cache_fields_when_no_cache(monkeypatch):
     from omicsclaw.surfaces.desktop import server
 

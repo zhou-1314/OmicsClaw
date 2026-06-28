@@ -581,3 +581,117 @@ async def test_kg_ingest_real_end_to_end_creates_source_page(monkeypatch, tmp_pa
     # A Source page now exists where there were none.
     assert "sources=0" in before
     assert "sources=0" not in after
+
+
+# ---- (g) D-3: build_packet skill authority — Router-chosen skill feeds target ----
+
+
+def _fake_handoff(capture: dict) -> types.SimpleNamespace:
+    """A stand-in for _import_kg_handoff() that captures build_packet's target_skill."""
+    def build_packet(cfg, slug, target_skill, notes):
+        capture["target_skill"] = target_skill
+        return types.SimpleNamespace(
+            packet_id="pk1",
+            target=types.SimpleNamespace(skill_name=target_skill or "(file_drop)", kind="skill" if target_skill else "file_drop"),
+        )
+
+    return types.SimpleNamespace(
+        config=types.SimpleNamespace(resolve=lambda home: f"cfg:{home}"),
+        build_packet=build_packet,
+        write_packet=lambda cfg, packet: None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_packet_uses_explicit_target_skill_without_router(monkeypatch):
+    cap: dict = {}
+    monkeypatch.setattr(kg_tools, "_import_kg_handoff", lambda: _fake_handoff(cap))
+    monkeypatch.setattr(kg_tools, "_resolve_kg_home", lambda: "/kg")
+    # If an explicit skill is given, the Router must NOT be consulted.
+    def _boom(slug, home, dataset_path=""):  # pragma: no cover - must not be called
+        raise AssertionError("router consulted despite explicit target_skill")
+    monkeypatch.setattr(kg_tools, "_router_skill_for_hypothesis", _boom)
+
+    out = await kg_tools.execute_kg_build_packet({"hypothesis_slug": "h1", "target_skill": "spatial-de"})
+    assert cap["target_skill"] == "spatial-de"
+    assert "pk1" in out
+
+
+@pytest.mark.asyncio
+async def test_build_packet_falls_back_to_router_skill(monkeypatch):
+    cap: dict = {}
+    monkeypatch.setattr(kg_tools, "_import_kg_handoff", lambda: _fake_handoff(cap))
+    monkeypatch.setattr(kg_tools, "_resolve_kg_home", lambda: "/kg")
+    monkeypatch.setattr(kg_tools, "_router_skill_for_hypothesis", lambda slug, home, dataset_path="": "sc-de")
+
+    await kg_tools.execute_kg_build_packet({"hypothesis_slug": "h1"})
+    assert cap["target_skill"] == "sc-de"  # Router-authoritative when agent didn't pin one
+
+
+@pytest.mark.asyncio
+async def test_build_packet_target_none_when_router_not_confident(monkeypatch):
+    cap: dict = {}
+    monkeypatch.setattr(kg_tools, "_import_kg_handoff", lambda: _fake_handoff(cap))
+    monkeypatch.setattr(kg_tools, "_resolve_kg_home", lambda: "/kg")
+    monkeypatch.setattr(kg_tools, "_router_skill_for_hypothesis", lambda slug, home, dataset_path="": None)
+
+    await kg_tools.execute_kg_build_packet({"hypothesis_slug": "h1"})
+    assert cap["target_skill"] is None  # KG keeps its recommended_skills/file_drop fallback
+
+
+@pytest.mark.asyncio
+async def test_build_packet_routes_on_thread_dataset_path(monkeypatch):
+    """D-3 (codex must-fix): the packet routes on the SAME (claim, dataset_path) the
+    Ideate route-preview did — the thread's bound dataset reaches the Router."""
+    cap: dict = {}
+    seen: dict = {}
+    monkeypatch.setattr(kg_tools, "_import_kg_handoff", lambda: _fake_handoff(cap))
+    monkeypatch.setattr(kg_tools, "_resolve_kg_home", lambda: "/kg")
+
+    async def fake_dataset(session_id, thread_id):
+        seen["resolved_for"] = (session_id, thread_id)
+        return "data/glioma.h5ad"
+
+    def fake_router(slug, home, dataset_path=""):
+        seen["dataset_path"] = dataset_path
+        return "spatial-deconv"
+
+    monkeypatch.setattr(kg_tools, "_thread_dataset_path_for_loop", fake_dataset)
+    monkeypatch.setattr(kg_tools, "_router_skill_for_hypothesis", fake_router)
+
+    await kg_tools.execute_kg_build_packet({"hypothesis_slug": "h1"}, session_id="s1", thread_id="t1")
+    assert seen["resolved_for"] == ("s1", "t1")
+    assert seen["dataset_path"] == "data/glioma.h5ad"
+    assert cap["target_skill"] == "spatial-deconv"
+
+
+def test_router_skill_for_hypothesis_returns_chosen_for_exact_route(monkeypatch):
+    from omicsclaw.analysis_router.models import AnalysisRouteKind
+
+    seen: dict = {}
+
+    def fake_route(claim, dataset_path=""):
+        seen["dataset_path"] = dataset_path
+        return types.SimpleNamespace(kind=AnalysisRouteKind.EXACT_SKILL, chosen_skill="sc-de")
+
+    monkeypatch.setattr(
+        kg_tools, "_import_kg",
+        lambda: _fake_kg(kg_get_page=lambda **k: {"frontmatter": {"proposed_claim": "test TP53 senescence"}}),
+    )
+    monkeypatch.setattr("omicsclaw.analysis_router.router.route_analysis_request", fake_route)
+    assert kg_tools._router_skill_for_hypothesis("h1", "/kg", "data/x.h5ad") == "sc-de"
+    assert seen["dataset_path"] == "data/x.h5ad"  # dataset_path threads through to the Router
+
+
+def test_router_skill_for_hypothesis_none_for_no_skill_route(monkeypatch):
+    from omicsclaw.analysis_router.models import AnalysisRouteKind
+
+    monkeypatch.setattr(
+        kg_tools, "_import_kg",
+        lambda: _fake_kg(kg_get_page=lambda **k: {"frontmatter": {"proposed_claim": "vague hunch"}}),
+    )
+    monkeypatch.setattr(
+        "omicsclaw.analysis_router.router.route_analysis_request",
+        lambda claim, dataset_path="": types.SimpleNamespace(kind=AnalysisRouteKind.NO_SKILL, chosen_skill=""),
+    )
+    assert kg_tools._router_skill_for_hypothesis("h1", "/kg") is None

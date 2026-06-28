@@ -246,3 +246,75 @@ def test_empty_text_with_only_files_still_emits_path_block(tmp_path: Path):
     assert isinstance(content, str)
     assert "[Attached file:" in content
     assert "data.bin" in content
+
+
+def test_multiple_attachments_all_registered_for_pickup(monkeypatch):
+    """F: build_chat_content fires on_file_saved once per file, so a multi-file
+    drop calls _register_attachment_for_session N times for one session_id. Every
+    file must remain in received_files (not just the last), while the bare
+    session_id key still resolves a primary input for the session-exact reader."""
+    from omicsclaw.surfaces.desktop import server
+
+    class _FakeCore:
+        received_files: dict = {}
+
+    monkeypatch.setattr(server, "_get_core", lambda: _FakeCore)
+
+    server._register_attachment_for_session(
+        "sess-1", {"path": "/up/1-a.pdf", "filename": "a.pdf", "mime": "application/pdf"}
+    )
+    server._register_attachment_for_session(
+        "sess-1", {"path": "/up/2-b.csv", "filename": "b.csv", "mime": "text/csv"}
+    )
+
+    paths = {info["path"] for info in _FakeCore.received_files.values()}
+    assert paths == {"/up/1-a.pdf", "/up/2-b.csv"}  # both survive (last no longer clobbers)
+    # session-exact reader (agent_executors execute_skill) still gets a primary input:
+    assert _FakeCore.received_files["sess-1"]["path"] == "/up/1-a.pdf"
+
+
+def test_single_attachment_uses_bare_session_key(monkeypatch):
+    from omicsclaw.surfaces.desktop import server
+
+    class _FakeCore:
+        received_files: dict = {}
+
+    monkeypatch.setattr(server, "_get_core", lambda: _FakeCore)
+    server._register_attachment_for_session(
+        "sess-2", {"path": "/up/only.h5ad", "filename": "only.h5ad", "mime": ""}
+    )
+    assert list(_FakeCore.received_files) == ["sess-2"]
+    assert _FakeCore.received_files["sess-2"]["filename"] == "only.h5ad"
+
+
+def test_new_upload_batch_replaces_stale_session_attachments(monkeypatch):
+    """codex must-fix: the bare session_id key must NOT stick to the first-ever
+    file across turns. A new batch (after _reset) replaces it, so the
+    session-exact reader never resolves a stale file."""
+    from omicsclaw.surfaces.desktop import server
+
+    class _FakeCore:
+        received_files: dict = {}
+
+    monkeypatch.setattr(server, "_get_core", lambda: _FakeCore)
+
+    # Turn 1: drop file A.
+    server._register_attachment_for_session(
+        "sess-1", {"path": "/up/1-a.pdf", "filename": "a.pdf", "mime": "application/pdf"}
+    )
+    assert _FakeCore.received_files["sess-1"]["path"] == "/up/1-a.pdf"
+
+    # Turn 2 start: a new batch arrives → reset, then register the new files.
+    server._reset_session_attachments("sess-1")
+    assert "sess-1" not in _FakeCore.received_files  # old batch cleared
+    server._register_attachment_for_session(
+        "sess-1", {"path": "/up/2-b.csv", "filename": "b.csv", "mime": "text/csv"}
+    )
+    server._register_attachment_for_session(
+        "sess-1", {"path": "/up/3-c.csv", "filename": "c.csv", "mime": "text/csv"}
+    )
+    # Bare key is the NEW batch's first file (not the stale a.pdf); both new files present.
+    assert _FakeCore.received_files["sess-1"]["path"] == "/up/2-b.csv"
+    paths = {info["path"] for info in _FakeCore.received_files.values()}
+    assert paths == {"/up/2-b.csv", "/up/3-c.csv"}
+    assert "/up/1-a.pdf" not in paths  # stale file gone

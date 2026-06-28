@@ -166,13 +166,13 @@ async def rollback_changes(req: RollbackRequest):
                 # Content was updated: rollback to the old memory version.
                 old_id = before.get("id")
                 if old_id:
-                    # ReviewLog.rollback_to declares ``namespace`` as
-                    # a required kwarg for signature symmetry with the
-                    # rest of ReviewLog, but the chain rewrite itself
-                    # never consults the value (it acts on memory_id
-                    # → node_uuid, which is namespace-independent).
-                    # Pass __shared__ as the canonical placeholder.
-                    await review.rollback_to(old_id, namespace="__shared__")
+                    # rollback_to now ENFORCES namespace isolation (refuses a target
+                    # not reachable in the given namespace). This standalone review
+                    # spans partitions, so resolve the node's ACTUAL namespace and
+                    # target that (was a hard-coded "__shared__" placeholder, which
+                    # would fail-closed for non-shared nodes).
+                    ns = await review.resolve_memory_namespace(old_id) or "__shared__"
+                    await review.rollback_to(old_id, namespace=ns)
                     rolled_back.append(key)
                 else:
                     errors.append({"key": key, "error": "No old memory ID"})

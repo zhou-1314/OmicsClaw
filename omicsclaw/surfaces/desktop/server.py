@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import argparse
+import ast
 import importlib.util
 import json
 import logging
@@ -353,6 +354,12 @@ _active_envelopes: dict[str, Any] = {}
 _pending_permission_requests: dict[str, dict[str, Any]] = {}
 _session_policy_states: dict[str, ToolPolicyState] = {}
 _session_permission_profiles: dict[str, str] = {}
+# Bound the per-session policy/profile maps so a long-running desktop backend
+# doesn't accumulate one entry per session forever (audit F). Evicting the oldest
+# beyond this cap preserves cross-turn approved-tool memory for recent sessions
+# (do NOT pop in the run-loop finally — that drops "Allow for this session"
+# approvals, which are read back at the next turn's start).
+_MAX_TRACKED_SESSIONS = 512
 
 # Cached MCP server entries for prompt injection
 _mcp_entries: tuple = ()
@@ -849,10 +856,29 @@ def _set_session_permission_profile(
     permission_profile: str,
 ) -> ToolPolicyState:
     normalized = _normalize_permission_profile(permission_profile)
-    _session_permission_profiles[session_id] = normalized
+    # Compute next_state BEFORE re-inserting — _permission_profile_to_policy_state
+    # reads the persisted approved_tool_names from _session_policy_states (the
+    # cross-turn "Allow for this session" carry); popping first would lose it.
     next_state = _permission_profile_to_policy_state(session_id, normalized)
+    # pop+reinsert moves this session to the most-recent (end) position so the
+    # insertion-order eviction in _evict_stale_session_state is LRU-by-turn-start
+    # (a reused old session isn't dropped before idle newer ones).
+    _session_permission_profiles.pop(session_id, None)
+    _session_permission_profiles[session_id] = normalized
+    _session_policy_states.pop(session_id, None)
     _session_policy_states[session_id] = next_state
+    _evict_stale_session_state()
     return next_state
+
+
+def _evict_stale_session_state() -> None:
+    """Bound the per-session policy/profile maps (audit F). dict preserves
+    insertion order, so dropping ``next(iter(...))`` evicts the oldest beyond the
+    cap. Cross-turn approved-tool memory is preserved for the most recent sessions;
+    an evicted session simply re-establishes default state on next use."""
+    for store in (_session_policy_states, _session_permission_profiles):
+        while len(store) > _MAX_TRACKED_SESSIONS:
+            store.pop(next(iter(store)), None)
 
 
 def _with_approved_tools(
@@ -929,8 +955,17 @@ def _build_token_usage(
     get_prices = getattr(core, "_get_token_price", None)
     if callable(get_prices):
         input_price, output_price = get_prices(model or core.OMICSCLAW_MODEL)
+        # F: bill cache-READ input at a discount (consistent with the
+        # cache_hit_ratio / fresh_input_tokens surfaced below) instead of charging
+        # every input token at full price — a cache-heavy session is otherwise
+        # over-reported ~5–10x. fresh = gross input − cache reads.
+        disc_fn = getattr(core, "_cache_read_discount", None)
+        discount = disc_fn() if callable(disc_fn) else 0.1
+        cache_read = usage_totals["cache_read_input_tokens"]
+        fresh_input = max(0, usage_totals["input_tokens"] - cache_read)
         cost_usd = (
-            usage_totals["input_tokens"] / 1_000_000 * float(input_price or 0.0)
+            fresh_input / 1_000_000 * float(input_price or 0.0)
+            + cache_read / 1_000_000 * float(input_price or 0.0) * discount
             + usage_totals["output_tokens"] / 1_000_000 * float(output_price or 0.0)
         )
 
@@ -1003,11 +1038,41 @@ def _register_attachment_for_session(session_id: str, meta: dict) -> None:
     if not session_id:
         return
     core = _get_core()
-    core.received_files[session_id] = {
+    entry = {
         "path": meta["path"],
         "filename": meta["filename"],
         "mime": meta.get("mime", ""),
     }
+    # build_chat_content fires on_file_saved ONCE PER saved file, so a multi-file
+    # drop calls this N times for the same session_id. Keep the FIRST file under the
+    # bare session_id key (the session-scoped reader in agent_executors.execute_skill
+    # resolves the primary input there) and register each additional file under a
+    # unique derived key so the global-scan readers (literature/KG PDF auto-pickup,
+    # save_file) see it too — instead of the last write clobbering every earlier
+    # file (audit F). The saved path is unique (ms-timestamp prefix), so no
+    # collisions; value stays a dict, so all received_files readers are unchanged.
+    if session_id not in core.received_files:
+        core.received_files[session_id] = entry
+    else:
+        core.received_files[f"{session_id}::{meta['path']}"] = entry
+
+
+def _reset_session_attachments(session_id: str) -> None:
+    """Drop this session's prior attachment entries (the bare ``session_id`` key +
+    any ``session_id::<path>`` derived keys) so a NEW upload batch REPLACES the old
+    one. Without this the bare key would stick to the first-ever file across turns,
+    and the session-exact reader (agent_executors.execute_skill) would run tools on
+    a stale file after a later upload. Called per-turn only when new files arrive."""
+    if not session_id:
+        return
+    core = _get_core()
+    prefix = f"{session_id}::"
+    stale = [
+        k for k in list(core.received_files)
+        if k == session_id or (isinstance(k, str) and k.startswith(prefix))
+    ]
+    for k in stale:
+        core.received_files.pop(k, None)
 
 
 def _build_multimodal_content(
@@ -1027,6 +1092,12 @@ def _build_multimodal_content(
     access).
     """
     from omicsclaw.surfaces.desktop._attachments import build_chat_content
+
+    # A new upload batch replaces the previous one for this session (a later turn's
+    # files supersede an earlier turn's) — clear stale entries before re-registering
+    # so the session-exact reader never resolves a prior turn's file.
+    if files and session_id:
+        _reset_session_attachments(session_id)
 
     uploads_dir = _resolve_uploads_dir(workspace)
     return build_chat_content(
@@ -1691,6 +1762,18 @@ async def chat_stream(req: ChatRequest):
                 if str(item.get("localPath", "")) not in existing
             )
 
+        # Record which chat session produced this Run (本对话 scope) so the
+        # desktop output 看板 attributes it authoritatively, instead of the
+        # frontend reverse-engineering the run id from streamed media paths.
+        # Stamp ONLY from producer signals — the result payload's explicit
+        # output_dir and the skill's own side-channel `pending_media` — never
+        # the generically-extracted/fallback-scanned `media` (which can carry a
+        # path a *read* tool merely referenced, into another run/session).
+        try:
+            _stamp_session_for_run(session_id, display_output, pending_media)
+        except Exception:
+            pass
+
         result_data: dict[str, Any] = {
             "tool_use_id": tool_use_id,
             "tool_name": tool_name,
@@ -2132,7 +2215,10 @@ async def chat_stream(req: ChatRequest):
 
                 yield _sse_line(event["type"], event["data"])
         except asyncio.CancelledError:
-            task.cancel()
+            # Client disconnected (e.g. closed the tab) mid-run. Mirror /chat/abort:
+            # set the envelope's cancel_event BEFORE cancelling so a long-running
+            # skill subprocess is actually killed, not left orphaned (audit E).
+            _abort_active_session(session_id)
             yield _sse_error("Client disconnected")
             yield _sse_done()
         finally:
@@ -2154,28 +2240,31 @@ async def chat_stream(req: ChatRequest):
 # POST /chat/abort — cancel a running session
 # ---------------------------------------------------------------------------
 
+def _abort_active_session(session_id: str) -> bool:
+    """Cancel a running dispatch() session, setting its ``cancel_event`` *before*
+    cancelling the task (ADR 0009) so a skill subprocess in a detached process
+    group is actually SIGTERM'd via ``subprocess_driver._cancel_watcher`` rather
+    than orphaned — ``task.cancel()`` alone only raises ``CancelledError`` at the
+    outermost await. Shared by ``/chat/abort`` and the SSE client-disconnect
+    handler. Returns True if a session task was active. Idempotent.
+    """
+    task = _active_sessions.get(session_id)
+    envelope = _active_envelopes.get(session_id)
+    if envelope is not None and getattr(envelope, "cancel_event", None) is not None:
+        envelope.cancel_event.set()
+    if task is not None:
+        task.cancel()
+    _active_sessions.pop(session_id, None)
+    _active_envelopes.pop(session_id, None)
+    return task is not None
+
+
 @app.post("/chat/abort")
 async def chat_abort(req: AbortRequest):
-    """Cancel a running dispatch() session.
-
-    Per ADR 0009, set the envelope's ``cancel_event`` *before* cancelling
-    the task so the SIGTERM signal propagates through
-    ``tool_runtime_context["cancel_event"]`` to
-    ``subprocess_driver._cancel_watcher`` — otherwise ``task.cancel()``
-    only raises ``CancelledError`` at the outermost await in dispatch()
-    and the skill subprocess keeps running in its detached process group.
-    """
-    task = _active_sessions.get(req.session_id)
-    if task is None:
+    """Cancel a running dispatch() session (see ``_abort_active_session``)."""
+    if _active_sessions.get(req.session_id) is None:
         raise HTTPException(404, detail="No active session with that ID")
-
-    envelope = _active_envelopes.get(req.session_id)
-    if envelope is not None and envelope.cancel_event is not None:
-        envelope.cancel_event.set()
-
-    task.cancel()
-    _active_sessions.pop(req.session_id, None)
-    _active_envelopes.pop(req.session_id, None)
+    _abort_active_session(req.session_id)
     return {"status": "aborted", "session_id": req.session_id}
 
 
@@ -3172,16 +3261,32 @@ async def thread_get(thread_id: str):
         raise HTTPException(500, detail=str(exc))
 
 
-# The two Ideate endpoints below are sync `def` (unlike the async thread routes):
-# their KG access is blocking file IO, and FastAPI runs sync path operations in a
-# threadpool, so they don't block the event loop.
+async def _thread_source_slugs(thread_id: str) -> list[str] | None:
+    """The thread's recorded KG Source slugs, or None when per-thread scoping is
+    unavailable (memory off) → callers fall back to workspace-wide (批7).
+
+    The memory recall is async; the desktop _memory_client reads the same
+    namespace the in-loop ingest wrote to (see ``orchestration._capture_thread_source``).
+    """
+    if _memory_client is None:
+        return None
+    from omicsclaw.surfaces.desktop import thread as thread_svc
+
+    return await thread_svc.list_thread_source_slugs(_memory_client, thread_id)
+
+
+# The Ideate endpoints below are `async def` (批7): they first `await` the
+# per-thread Source slugs from the (async) memory client, then offload the
+# BLOCKING KG file IO / LLM round-trip to a worker thread via asyncio.to_thread
+# so the event loop (and SSE chat streaming) is never blocked.
 @app.get("/thread/{thread_id}/hypotheses")
-def thread_hypotheses(thread_id: str):
+async def thread_hypotheses(thread_id: str):
     """List Bench Ideate hypotheses for a thread (ADR 0021).
 
-    Workspace-wide in v1.5 — KG is thread-blind, so per-thread filtering and the
-    cross-study badge are deferred to the 0019 thread<->source work. Soft-fails to
-    an empty list when KG is unavailable so the Ideate panel degrades gracefully.
+    The listing stays workspace-wide (a thread can see hypotheses formed
+    elsewhere); 批7 adds the per-thread cross-study (跨课题) badge by passing the
+    thread's Source slugs. Soft-fails to an empty list when KG is unavailable so
+    the Ideate panel degrades gracefully.
     """
     if not _KG_AVAILABLE:
         return {"thread_id": thread_id, "hypotheses": [], "kg_available": False}
@@ -3190,20 +3295,59 @@ def thread_hypotheses(thread_id: str):
         return {"thread_id": thread_id, "hypotheses": [], "kg_available": False}
     from omicsclaw.surfaces.desktop import hypotheses as hyp_svc
 
+    slugs = await _thread_source_slugs(thread_id)
+    thread_slugs = set(slugs) if slugs is not None else None
     try:
-        items = hyp_svc.list_workspace_hypotheses(home)
+        items = await asyncio.to_thread(
+            hyp_svc.list_workspace_hypotheses, home, thread_slugs=thread_slugs
+        )
     except Exception as exc:
         logger.exception("Hypothesis listing error")
         raise HTTPException(500, detail=str(exc))
     return {"thread_id": thread_id, "hypotheses": items, "kg_available": True}
 
 
+@app.get("/thread/{thread_id}/sources")
+async def thread_sources(thread_id: str):
+    """List the KG Sources ingested in this thread (批7, per-thread grounding).
+
+    Reads the thread's recorded Source slugs from memory and enriches them with
+    title/state from the workspace KG (stale/deleted slugs dropped). Soft-fails to
+    an empty list when KG/memory is unavailable so the Read panel degrades
+    gracefully.
+    """
+    if not _KG_AVAILABLE:
+        return {"thread_id": thread_id, "sources": [], "returned": 0, "total": 0, "kg_available": False}
+    home = _resolve_shared_kg_home()
+    if not home:
+        return {"thread_id": thread_id, "sources": [], "returned": 0, "total": 0, "kg_available": False}
+    from omicsclaw.surfaces.desktop import hypotheses as hyp_svc
+
+    slugs = await _thread_source_slugs(thread_id) or []
+    try:
+        sources = await asyncio.to_thread(hyp_svc.list_thread_sources, home, slugs)
+    except Exception as exc:
+        logger.exception("Thread sources error")
+        raise HTTPException(500, detail=str(exc))
+    return {
+        "thread_id": thread_id,
+        "sources": sources,
+        "returned": len(sources),
+        "total": len(sources),
+        "kg_available": True,
+    }
+
+
 @app.post("/thread/{thread_id}/formalize")
-def thread_formalize(thread_id: str, req: ThreadFormalizeRequest):
+async def thread_formalize(thread_id: str, req: ThreadFormalizeRequest):
     """Formalize a free-text hunch into a thread-grounded hypothesis (ADR 0021 §2).
 
-    Grounds against every workspace Source (see the v1.5 scope note in
-    ``surfaces/desktop/hypotheses.py``).
+    批7: grounds against the THREAD's Sources (its per-thread citation allow-list)
+    rather than every workspace Source, so ``cross_study`` is real and a thread
+    only cites what it has read. Falls back to workspace-wide when memory is
+    unavailable. This in-process route is the canonical desktop formalize path;
+    the KG-native ``/kg/ideate/formalize`` (body-driven slugs) is for headless KG
+    use only and the App never calls it.
     """
     if not _KG_AVAILABLE:
         raise HTTPException(503, detail="OmicsClaw-KG is not available")
@@ -3212,15 +3356,28 @@ def thread_formalize(thread_id: str, req: ThreadFormalizeRequest):
         raise HTTPException(400, detail="no workspace / KG home resolved")
     from omicsclaw.surfaces.desktop import hypotheses as hyp_svc
     from omicsclaw_kg.ideation.hypotheses import HypothesisIdeationError
-    from omicsclaw_kg.llm.client import AnthropicLLMClient
     from omicsclaw_kg.llm.stub import StubLLMClient
 
-    # KG ideation uses its own LLM (Anthropic, same as the /kg/ideate/* routes),
-    # independent of the backend's chat provider; production needs ANTHROPIC_API_KEY.
+    # A-1: ground KG ideation in the SAME provider that powers the desktop chat
+    # (the live ``_core.llm``), via the OpenAI-compatible adapter, so formalize
+    # works for any configured provider instead of hard-requiring ANTHROPIC_API_KEY.
     # `stub` selects the offline client for tests / dry-runs.
-    llm = StubLLMClient() if req.stub else AnthropicLLMClient()
+    if req.stub:
+        llm = StubLLMClient()
+    else:
+        from omicsclaw.runtime.tools.kg_tools import _build_kg_extractor
+
+        llm = _build_kg_extractor()
+        if llm is None:
+            raise HTTPException(
+                503,
+                detail="no LLM provider configured; set a provider in Settings (LLM_API_KEY) to formalize hypotheses",
+            )
+    slugs = await _thread_source_slugs(thread_id)  # None → workspace-wide fallback
     try:
-        hypothesis = hyp_svc.formalize_thread_hypothesis(home, req.hunch, llm)
+        hypothesis = await asyncio.to_thread(
+            hyp_svc.formalize_thread_hypothesis, home, req.hunch, llm, slugs
+        )
     except HypothesisIdeationError as exc:
         raise HTTPException(400, detail=str(exc))
     except Exception as exc:
@@ -3268,6 +3425,132 @@ async def thread_route_preview(thread_id: str, slug: str, req: ThreadRoutePrevie
     except Exception as exc:
         logger.exception("Route preview error")
         raise HTTPException(500, detail=str(exc))
+
+
+class RunPacketRequest(BaseModel):
+    packet_id: str = Field(..., min_length=1, description="Outbox packet id (from kg_build_packet or experiment submit).")
+    input_path: str | None = Field(None, description="Explicit dataset path; defaults to the thread's bound dataset.")
+    verdict: str = Field("inconclusive", description="validated | refuted | inconclusive. Defaults to inconclusive (analysis ran; the user confirms the scientific verdict in Ideate).")
+
+
+@app.get("/thread/{thread_id}/outbox")
+def thread_outbox(thread_id: str):
+    """List pending KG handoff packets the deterministic executor can run for this
+    workspace (audit E). Soft-fails to 503 when OmicsClaw-KG is unavailable."""
+    if not _KG_AVAILABLE:
+        raise HTTPException(503, detail="OmicsClaw-KG is not available")
+    home = _resolve_shared_kg_home()
+    if not home:
+        raise HTTPException(400, detail="no workspace / KG home resolved")
+    from omicsclaw_kg import config as kg_config
+
+    from omicsclaw.surfaces.desktop import outbox as outbox_svc
+
+    cfg = kg_config.resolve(home)
+    return {"thread_id": thread_id, "packets": outbox_svc.list_outbox_packets(cfg)}
+
+
+@app.post("/thread/{thread_id}/run-packet")
+async def thread_run_packet(thread_id: str, req: RunPacketRequest):
+    """Run an outbox packet to completion and record the result back to the KG
+    (audit E: deterministic idea→analysis→verdict closure).
+
+    Replaces relying on the LLM to voluntarily call ``kg_record_result``: given a
+    packet, the server resolves the target skill + the thread's dataset, runs the
+    skill, and records a ``HandoffResult`` (archiving the packet, updating the
+    graph, advancing any experiment step).
+    """
+    if not _KG_AVAILABLE:
+        raise HTTPException(503, detail="OmicsClaw-KG is not available")
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    home = _resolve_shared_kg_home()
+    if not home:
+        raise HTTPException(400, detail="no workspace / KG home resolved")
+    from omicsclaw_kg import config as kg_config
+
+    from omicsclaw.surfaces.desktop import outbox as outbox_svc
+
+    cfg = kg_config.resolve(home)
+    try:
+        result = await outbox_svc.run_packet(
+            _memory_client,
+            cfg,
+            thread_id,
+            req.packet_id,
+            input_path=req.input_path or None,
+            verdict=req.verdict,
+        )
+    except Exception as exc:
+        logger.exception("run-packet error")
+        raise HTTPException(500, detail=str(exc))
+    if result.get("status") == "error":
+        raise HTTPException(400, detail=result.get("error", "could not run packet"))
+    return {"thread_id": thread_id, **result}
+
+
+class RunHypothesisRequest(BaseModel):
+    hypothesis_slug: str = Field(..., min_length=1, description="Hypothesis page slug to test.")
+    input_path: str | None = Field(None, description="Explicit dataset path; defaults to the thread's bound dataset.")
+    verdict: str = Field("inconclusive", description="validated | refuted | inconclusive (the user confirms the scientific verdict in Ideate).")
+
+
+@app.post("/thread/{thread_id}/run-hypothesis")
+async def thread_run_hypothesis(thread_id: str, req: RunHypothesisRequest):
+    """One-click Ideate→Analyze (audit E-(2→3)): build a handoff packet for a
+    hypothesis (Analysis-Router-authoritative skill — the SAME (claim, dataset)
+    the route-preview showed) and run it via the deterministic outbox executor, so
+    the result lands as a thread analysis (visible in the Analyze panel) WITHOUT
+    the user manually composing a chat message.
+
+    Augments — does NOT replace — the chat-in-the-loop path (ADR 0023 §6 keeps the
+    composer pre-fill); this is the programmatic shortcut the audit asked for.
+    Chains the existing build_packet (Router skill) + outbox.run_packet machinery.
+    """
+    if not _KG_AVAILABLE:
+        raise HTTPException(503, detail="OmicsClaw-KG is not available")
+    if _memory_client is None:
+        raise HTTPException(503, detail="Memory system not available")
+    home = _resolve_shared_kg_home()
+    if not home:
+        raise HTTPException(400, detail="no workspace / KG home resolved")
+    from omicsclaw.memory.compat import resolve_thread_dataset_path
+    from omicsclaw.runtime.tools import kg_tools
+    from omicsclaw.surfaces.desktop import outbox as outbox_svc
+
+    slug = req.hypothesis_slug.strip()
+    # Security: slug is attacker-influenced at the HTTP boundary and flows into
+    # wiki/hypotheses/<slug>.md + the packet id + handoff/outbox/<packet_id>.json.
+    # Gate it the same way the agent-tool path does before any KG filesystem write.
+    if not kg_tools._is_safe_slug(slug):
+        raise HTTPException(400, detail=f"invalid hypothesis_slug {slug!r}")
+    kg = kg_tools._import_kg_handoff()  # soft-import: config/build_packet/write_packet
+    if kg is None:
+        raise HTTPException(503, detail="OmicsClaw-KG handoff is not available")
+    cfg = kg.config.resolve(home)
+    try:
+        # Router-authoritative skill on the SAME (claim, thread dataset) the
+        # Ideate route-preview used (D-3) — then build + run the packet.
+        dataset_path = await resolve_thread_dataset_path(_memory_client, thread_id)
+        target_skill = await asyncio.to_thread(kg_tools._router_skill_for_hypothesis, slug, home, dataset_path)
+        packet = await asyncio.to_thread(kg.build_packet, cfg, slug, target_skill, None)
+        await asyncio.to_thread(kg.write_packet, cfg, packet)
+        result = await outbox_svc.run_packet(
+            _memory_client,
+            cfg,
+            thread_id,
+            packet.packet_id,
+            input_path=req.input_path or None,
+            verdict=req.verdict,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("run-hypothesis error")
+        raise HTTPException(500, detail=str(exc))
+    if result.get("status") == "error":
+        raise HTTPException(400, detail=result.get("error", "could not run hypothesis"))
+    return {"thread_id": thread_id, "hypothesis_slug": slug, "packet_id": packet.packet_id, **result}
 
 
 @app.put("/thread/{thread_id}")
@@ -5408,7 +5691,7 @@ def _collect_key_files(run_dir: Path) -> list[dict]:
 
     Includes: report.md, result.json, README.md, *.csv, *.h5ad, and similar.
     """
-    KEY_PATTERNS = {"report.md", "result.json", "readme.md"}
+    KEY_PATTERNS = {"report.md", "result.json", "readme.md", "result_summary.md", "completion_report.json"}
     KEY_EXTENSIONS = {".csv", ".tsv", ".h5ad", ".h5", ".loom", ".rds", ".pdf", ".html", ".ipynb"}
 
     results: list[dict] = []
@@ -5484,9 +5767,155 @@ def _read_result_json(run_dir: Path) -> tuple[str, Any]:
         return ("unknown", None)
 
 
+# ── Conversation → Run linkage (the desktop output 看板 "本对话" scope) ──────
+#
+# The producing chat session is the authoritative source of the link, so we
+# record it here (server-side) rather than have the desktop frontend reverse-
+# engineer it from streamed tool-result media paths (which silently misses
+# text-only runs and any run whose figures aren't surfaced). When a tool result
+# resolves to a Run directory under OUTPUT_DIR, we drop a small sidecar next to
+# ``result.json``; ``/outputs/latest`` reads it back per Run.
+_SESSION_SIDECAR_NAME = ".omicsclaw_session.json"
+
+
+def _path_is_under(child: Path, parent: Path) -> bool:
+    try:
+        child.resolve().relative_to(parent.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def _run_dir_for_output_path(path_str: str, output_dir: Path) -> Path | None:
+    """Walk up an output file/dir path to the Run directory under OUTPUT_DIR
+    (the ancestor whose name carries the ``__YYYYMMDD_HHMMSS__`` run stamp)."""
+    if not path_str:
+        return None
+    try:
+        p = Path(str(path_str))
+    except (TypeError, ValueError):
+        return None
+    for ancestor in (p, *p.parents):
+        if _parse_run_dir_name(ancestor.name)[1] is None:
+            continue
+        if ancestor.is_dir() and _path_is_under(ancestor, output_dir):
+            return ancestor
+    return None
+
+
+# Only stamp a Run produced during *this* turn. The completion marker
+# (result.json) is written at finalization, so its age is a reliable "fresh"
+# signal — it stops a read/list tool that merely *references* an older Run from
+# re-stamping it with the current session.
+_RUN_STAMP_RECENCY_SECONDS = 900
+
+
+def _coerce_result_mapping(display_output: Any) -> dict[str, Any] | None:
+    """Parse a tool-result payload into a mapping. Accepts a dict directly, a
+    JSON string, and a Python-repr string (``str(dict)``) — the desktop SSE
+    path str()-ifies dict results, so the repr form is a realistic shape."""
+    if isinstance(display_output, dict):
+        return display_output
+    if isinstance(display_output, str):
+        for loader in (json.loads, ast.literal_eval):
+            try:
+                parsed = loader(display_output)
+            except (ValueError, SyntaxError, TypeError):
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+    return None
+
+
+def _is_fresh_run_leaf(run_dir: Path) -> bool:
+    """A real, just-produced Run leaf: it carries the completion contract
+    (``result.json``/``manifest.json``) written within this turn's window."""
+    marker = run_dir / "result.json"
+    if not marker.is_file():
+        marker = run_dir / "manifest.json"
+        if not marker.is_file():
+            return False
+    try:
+        return (time.time() - marker.stat().st_mtime) <= _RUN_STAMP_RECENCY_SECONDS
+    except OSError:
+        return False
+
+
+def _resolve_session_run_dir(
+    display_output: Any, media: list[dict[str, Any]], output_dir: Path
+) -> Path | None:
+    """Find the Run directory THIS tool result PRODUCED, or None. Trusts only
+    producer signals — an explicit ``output_dir``/``output_directory``/``run_dir``
+    field in the result payload, or a transferred media path — never arbitrary
+    path strings (which may reference a *previous* run). The resolved directory
+    must be a real, freshly-finalized Run leaf under OUTPUT_DIR."""
+    candidates: list[str] = []
+    parsed = _coerce_result_mapping(display_output)
+    if parsed is not None:
+        for key in ("output_dir", "output_directory", "run_dir"):
+            val = parsed.get(key)
+            if isinstance(val, str) and val:
+                candidates.append(val)
+    for item in media:
+        if isinstance(item, dict):
+            lp = item.get("localPath") or item.get("path")
+            if isinstance(lp, str) and lp:
+                candidates.append(lp)
+    for cand in candidates:
+        run_dir = _run_dir_for_output_path(cand, output_dir)
+        if run_dir is not None and _is_fresh_run_leaf(run_dir):
+            return run_dir
+    return None
+
+
+def _write_session_sidecar(run_dir: Path, session_id: str) -> None:
+    if not session_id:
+        return
+    sidecar = run_dir / _SESSION_SIDECAR_NAME
+    try:
+        sidecar.write_text(
+            json.dumps(
+                {
+                    "session_id": session_id,
+                    "stamped_at": datetime.now(timezone.utc).isoformat(),
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass  # never let linkage bookkeeping break a run
+
+
+def _read_session_sidecar(run_dir: Path) -> str:
+    sidecar = run_dir / _SESSION_SIDECAR_NAME
+    if not sidecar.is_file():
+        return ""
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        sid = data.get("session_id")
+        return str(sid) if isinstance(sid, str) else ""
+    except (OSError, json.JSONDecodeError, ValueError):
+        return ""
+
+
+def _stamp_session_for_run(
+    session_id: str, display_output: Any, media: list[dict[str, Any]]
+) -> None:
+    """Record the producing chat session into the Run directory, if one is
+    resolvable. Best-effort and exception-safe — called from the SSE loop."""
+    if not session_id:
+        return
+    core = _get_core()
+    output_dir = Path(str(core.OUTPUT_DIR))
+    run_dir = _resolve_session_run_dir(display_output, media, output_dir)
+    if run_dir is not None:
+        _write_session_sidecar(run_dir, session_id)
+
+
 @app.get("/outputs/latest")
 async def outputs_latest(
-    limit: int = Query(10, ge=1, le=50),
+    limit: int = Query(10, ge=1, le=200),  # E-(4): 50→200 so the dashboard can page past the old cap
     project: str = "",  # plain default (not Query): unit tests call this fn directly
 ):
     """
@@ -5559,6 +5988,11 @@ async def outputs_latest(
         }
         if summary:
             run_entry["summary"] = summary
+        # Conversation linkage (本对话 scope): the session that produced this Run,
+        # if the server recorded it (see _stamp_session_for_run). Empty otherwise.
+        session_id = _read_session_sidecar(d)
+        if session_id:
+            run_entry["session_id"] = session_id
 
         runs.append(run_entry)
 

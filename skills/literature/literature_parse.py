@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from skills.literature.core.parser import parse_input
-from skills.literature.core.extractor import extract_metadata
+from skills.literature.core.extractor import DOMAIN_ENTRY, extract_metadata, infer_domain
 from skills.literature.core.downloader import download_geo_dataset
 
 
@@ -79,6 +79,15 @@ def main():
     metadata_file = output_dir / 'extracted_metadata.json'
     metadata_file.write_text(json.dumps(metadata, indent=2))
 
+    # Persist the parsed source text so EVERY input type (file/url/doi/pubmed/text)
+    # leaves one server-controlled, KG-routable artifact the backend can ingest into
+    # the knowledge graph (D-1: literature → knowledge → idea grounding).
+    source_text_path = output_dir / 'source.txt'
+    try:
+        source_text_path.write_text(text, encoding='utf-8')
+    except OSError:
+        source_text_path = None
+
     # Download datasets
     download_results = []
     if not no_download and gse_ids:
@@ -104,6 +113,8 @@ def main():
         no_download=no_download,
         detected_type=detected_type,
         demo=args.demo,
+        input_value=input_value,
+        source_text_path=source_text_path,
     )
 
     print(f"\n✓ Results saved to {output_dir}")
@@ -122,8 +133,14 @@ def write_result_json(
     no_download: bool,
     detected_type: str,
     demo: bool,
+    input_value: str = "",
+    source_text_path: Path | None = None,
 ):
-    """Write a minimal OmicsClaw result envelope for downstream output tooling."""
+    """Write a minimal OmicsClaw result envelope for downstream output tooling.
+
+    ``source_text_path`` + ``source`` let the backend ingest the parsed source
+    into the KG (D-1) so the paper grounds ideation.
+    """
     payload = {
         "skill": "literature",
         "success": True,
@@ -137,6 +154,8 @@ def write_result_json(
         "data": {
             "metadata": metadata,
             "download_results": download_results,
+            "source_text_path": str(source_text_path) if source_text_path else None,
+            "source": {"value": input_value, "type": detected_type},
             "params": {
                 "input_type": detected_type,
                 "no_download": no_download,
@@ -186,8 +205,17 @@ def generate_report(output_dir: Path, metadata: dict, download_results: list, no
 
     report_lines.append("\n## Next Steps")
     report_lines.append("\nYou can now analyze the downloaded data using OmicsClaw skills:")
-    report_lines.append("- For spatial data: `spatial-preprocessing`")
-    report_lines.append("- For single-cell data: `sc-preprocessing`")
+    # E-(1): route on the detected technology's omics domain (all 6 domains), not
+    # just spatial/single-cell. Unknown technology → list the common starting points.
+    domain = infer_domain(metadata.get("technology", ""))
+    if domain and domain in DOMAIN_ENTRY:
+        entry_skill, label = DOMAIN_ENTRY[domain]
+        report_lines.append(f"- Detected **{label}** data → start with `{entry_skill}`")
+    else:
+        report_lines.append("- For spatial data: `spatial-preprocess`")
+        report_lines.append("- For single-cell data: `sc-preprocessing`")
+        report_lines.append("- For bulk RNA-seq: `bulkrna-qc` · genomics: `genomics-alignment` · "
+                            "proteomics: `proteomics-identification` · metabolomics: `metabolomics-peak-detection`")
 
     report_file = output_dir / 'report.md'
     report_file.write_text('\n'.join(report_lines))

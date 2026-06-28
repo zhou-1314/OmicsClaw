@@ -45,6 +45,12 @@ class IntakeResult:
     paper_md_path: str = ""
     h5ad_path: str = ""
 
+    # KG convergence (audit §4.2 / D-1): full extracted text persisted for the
+    # canonical KG ingest, and the resulting Source slug (empty in Mode C, or when
+    # KG/LLM is unavailable). The regex metadata above stays for research_request.md.
+    source_text_path: str = ""
+    kg_source: str = ""
+
     @classmethod
     def from_workspace(
         cls,
@@ -1214,6 +1220,14 @@ def prepare_intake(
     md_path = paper_dir / "01_abstract_conclusion.md"
     paper_md = modular_files["01_abstract_conclusion.md"]
 
+    # §4.2 / D-1 convergence: persist the FULL extracted text so the canonical KG
+    # ingest can build the paper's Source page + concept/claim graph (the regex
+    # metadata above is supplementary, for research_request.md). One server-owned
+    # artifact, mirroring the literature skill's source.txt. The async ingest
+    # itself runs in the pipeline (see ``ingest_intake_paper``).
+    source_text_path = paper_dir / "source.txt"
+    source_text_path.write_text(raw_text, encoding="utf-8")
+
     # 6. Handle h5ad (Mode B)
     h5ad_meta = None
     input_mode = "A"
@@ -1254,7 +1268,35 @@ def prepare_intake(
         input_mode=input_mode,
         paper_md_path=str(md_path),
         h5ad_path=h5ad_path or "",
+        source_text_path=str(source_text_path),
     )
+
+
+async def ingest_intake_paper(intake: IntakeResult) -> str:
+    """Ingest the intake paper's persisted full text into the KG (audit §4.2).
+
+    Converges the autonomous pipeline's intake onto the canonical in-process KG
+    bridge (``kg_tools.ingest_source_into_kg``) so the paper becomes a citeable
+    Source (wiki/sources + concept/claim graph) — the same path the desktop
+    literature tool uses (D-1). Returns the KG slug, or ``""`` when there is no
+    persisted text (Mode C / resume) or KG/LLM is unavailable. Best-effort —
+    NEVER raises, so it can't break the research pipeline over a KG hiccup.
+    """
+    path = (intake.source_text_path or "").strip()
+    if not path or not Path(path).is_file():
+        return ""
+    try:
+        from omicsclaw.runtime.tools import kg_tools
+
+        result = await kg_tools.ingest_source_into_kg(path)
+        if isinstance(result, dict) and result.get("status") in ("ingested", "skipped"):
+            slug = result.get("slug")
+            return str(slug) if isinstance(slug, str) and slug else ""
+        if isinstance(result, dict) and result.get("status") == "failed":
+            logger.warning("Intake→KG ingest recorded a failed result: %s", result.get("reason", "unknown"))
+    except Exception as e:  # never break the pipeline over a KG hiccup
+        logger.warning("Intake→KG ingest failed (non-fatal): %s", e)
+    return ""
 
 
 def _prepare_intake_idea_only(

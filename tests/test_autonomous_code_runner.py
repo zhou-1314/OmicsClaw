@@ -73,3 +73,52 @@ def test_project_scoped_autonomous_run_is_indexed(tmp_path: Path) -> None:
     assert rows[0]["run_id"] == workspace.root.name
     assert rows[0]["skill"] == "autonomous-code"
     assert rows[0]["status"] == "completed"
+
+
+def test_write_run_records_emits_result_json_contract(tmp_path: Path) -> None:
+    """Audit A-2: the desktop ``/outputs`` reader keys on ``result.json``. The
+    autonomous runner must emit it (status/summary/output_dir) so finished runs
+    are reported completed instead of mis-classified running→failed."""
+    import omicsclaw.surfaces.desktop.server as server
+
+    request = AutonomousRunRequest(goal="cluster the cells", output_root=tmp_path, run_id="ok01")
+    workspace = create_workspace(request)
+    result = AutonomousRunResult(
+        run_id=workspace.run_id,
+        workspace_root=str(workspace.root),
+        status=AutonomousRunStatus.SUCCEEDED,
+        metadata={"answer": "found 7 clusters"},
+    )
+
+    write_run_records(workspace, request=request, result=result)
+
+    result_json = workspace.root / "result.json"
+    assert result_json.is_file(), "autonomous run must write result.json"
+    data = json.loads(result_json.read_text(encoding="utf-8"))
+    assert data["status"] == "completed"
+    assert data["output_dir"] == str(workspace.root)
+    assert data.get("summary")
+    # The desktop reader agrees.
+    status, _summary = server._read_result_json(workspace.root)
+    assert status == "completed"
+
+
+def test_write_run_records_result_json_marks_failure(tmp_path: Path) -> None:
+    import omicsclaw.surfaces.desktop.server as server
+
+    request = AutonomousRunRequest(goal="cluster the cells", output_root=tmp_path, run_id="bad01")
+    workspace = create_workspace(request)
+    result = AutonomousRunResult(
+        run_id=workspace.run_id,
+        workspace_root=str(workspace.root),
+        status=AutonomousRunStatus.FAILED,
+        error="kernel died",
+    )
+
+    write_run_records(workspace, request=request, result=result)
+
+    data = json.loads((workspace.root / "result.json").read_text(encoding="utf-8"))
+    assert data["status"] == "failed"
+    assert data["error"] == "kernel died"
+    status, _ = server._read_result_json(workspace.root)
+    assert status == "failed"

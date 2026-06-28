@@ -514,6 +514,8 @@ def _fmt_ingest(r: Any, source: str) -> str:
     status = r.get("status")
     if status == "skipped":
         return f"Ingest skipped {source}: {r.get('reason', 'already ingested')}."
+    if status == "failed":
+        return f"Knowledge graph ingest failed for {source}: {r.get('reason', 'extraction failed')}."
     if status == "ingested":
         counts = r.get("counts") or {}
         cstr = ", ".join(f"{k}={v}" for k, v in counts.items())
@@ -527,23 +529,63 @@ def _fmt_ingest(r: Any, source: str) -> str:
     if "dir" in r or "results" in r or status in ("batch_complete", "complete"):
         results = r.get("results") or []
         ingested = sum(1 for x in results if isinstance(x, dict) and x.get("status") == "ingested")
+        failed = r.get("failed")
+        if failed is None:
+            failed = sum(1 for x in results if isinstance(x, dict) and x.get("status") == "failed")
+        suffix = f" ({failed} failed)" if failed else ""
         return (
             f"Batch ingest of {r.get('dir', source)}: "
-            f"{ingested}/{len(results)} sources ingested."
+            f"{ingested}/{len(results)} sources ingested{suffix}."
         )
     # Unknown shape — a compact, bounded summary (never dump a huge raw envelope).
     keys = ", ".join(sorted(r.keys()))
     return f"Knowledge graph ingest completed for {source} (status={status}; fields: {keys})."
 
 
-async def execute_kg_ingest(args: dict, session_id: str | None = None, **kwargs) -> str:
+async def ingest_source_into_kg(source: str) -> dict[str, Any] | None:
+    """Ingest a SERVER-CONTROLLED source (path or URL) into the KG, programmatically.
+
+    The single in-process entry the backend uses to converge literature/intake
+    extraction onto the canonical KG ingest (audit D-1): import the ingest
+    pipeline, build the platform LLM extractor, resolve the KG home, and run
+    ``cmd_ingest.ingest`` off the event loop. Returns the ingest result dict, or
+    ``None`` when KG or the LLM is unavailable or ingest fails (soft-fail — callers
+    must treat it as best-effort).
+
+    The CALLER must path-guard any untrusted/LLM-supplied source. This helper
+    TRUSTS its argument — pass only server-produced artifacts (a file under
+    OUTPUT_DIR, an uploaded PDF, an intake-validated path) or a vetted URL. The
+    LLM-tool path (``execute_kg_ingest``) keeps its own ``validate_input_path``
+    gate for attacker-controllable sources.
+    """
+    imported = _import_kg_ingest()
+    if imported is None:
+        return None
+    kg_config, cmd_ingest = imported
+    extractor = _build_kg_extractor()
+    if extractor is None:
+        return None
+    try:
+        cfg = kg_config.resolve(_resolve_kg_home())
+        return await asyncio.to_thread(cmd_ingest.ingest, source, cfg, extractor)
+    except Exception as e:
+        logger.error("ingest_source_into_kg failed for %s: %s", source, e, exc_info=True)
+        return None
+
+
+async def execute_kg_ingest(
+    args: dict, session_id: str | None = None, thread_id: str = "", **kwargs
+) -> str:
     """Ingest a paper/source into the knowledge graph (citation substrate).
 
     Bench Phase 3.3c (RD-INGEST-9): creates a Source page (+ extracted entities/
-    concepts/methods) the agent can cite. The KG is shared reading knowledge
-    (ADR 0019) so this is global / not thread-scoped and ungated (the gated
-    action is the dataset download in ``parse_literature``). Soft-fails when KG
-    or the LLM is unavailable; never raises into the loop. Heavy work runs off
+    concepts/methods) the agent can cite. The KG Source page is shared reading
+    knowledge (ADR 0019) — workspace-global, ungated (the gated action is the
+    dataset download in ``parse_literature``). Bench 批7: when invoked inside a
+    thread (``thread_id`` arrives via the ToolSpec ``context_params``), we also
+    record a per-thread link off the ingest's slug so the source is groundable in
+    THIS thread's Ideate; the shared Source itself is unchanged. Soft-fails when
+    KG or the LLM is unavailable; never raises into the loop. Heavy work runs off
     the event loop via ``asyncio.to_thread``.
     """
     imported = _import_kg_ingest()
@@ -586,6 +628,18 @@ async def execute_kg_ingest(args: dict, session_id: str | None = None, **kwargs)
     except Exception as e:
         logger.error("kg_ingest failed: %s", e, exc_info=True)
         return f"Error ingesting into the knowledge graph: {e}"
+    # 批7: record the thread<->source link off the slug (before _fmt_ingest
+    # collapses the dict to prose). Both "ingested" and "skipped" (cache hit)
+    # carry a slug now. No-op without a thread; _capture_thread_source guards
+    # memory-off / unknown-session and never raises.
+    if isinstance(result, dict) and thread_id and session_id:
+        slug = result.get("slug")
+        if isinstance(slug, str) and slug and result.get("status") in ("ingested", "skipped"):
+            from omicsclaw.skill.orchestration import _capture_thread_source
+
+            await _capture_thread_source(
+                session_id, thread_id, slug, str(result.get("source_page") or "")
+            )
     return _fmt_ingest(result, source)
 
 
@@ -607,6 +661,7 @@ def _import_kg_handoff():
         from omicsclaw_kg.fs_utils import atomic_write_text
         from omicsclaw_kg.handoff import build_packet, write_packet
         from omicsclaw_kg.handoff.feedback import RecordResultError, record_result
+        from omicsclaw_kg.handoff.packet import HandoffPacket
         from omicsclaw_kg.handoff.result import HandoffResult
 
         return SimpleNamespace(
@@ -618,12 +673,72 @@ def _import_kg_handoff():
             record_result=record_result,
             RecordResultError=RecordResultError,
             HandoffResult=HandoffResult,
+            HandoffPacket=HandoffPacket,
         )
     except ImportError:
         return None
 
 
-async def execute_kg_build_packet(args: dict, **kwargs) -> str:
+def _router_skill_for_hypothesis(slug: str, home: str | None, dataset_path: str = "") -> str | None:
+    """The Analysis Router's skill for a hypothesis's claim, or None (D-3).
+
+    Reads the hypothesis page's ``proposed_claim`` and runs the same
+    ``route_analysis_request(claim, dataset_path)`` the Ideate route-preview uses
+    — INCLUDING the thread's bound dataset path, so a built handoff packet's
+    target skill matches what the user was shown even for dataset-shape-sensitive
+    routing (single skill authority). Returns the chosen skill only for an
+    exact/partial route; None otherwise (caller keeps the KG
+    ``recommended_skills`` → file_drop fallback). Best-effort and sync (runs off
+    the loop via ``to_thread``); never raises.
+    """
+    try:
+        kg = _import_kg()
+        if kg is None:
+            return None
+        detail = kg.kg_get_page(page_type="hypotheses", slug=slug, home=home)
+        if not isinstance(detail, dict) or "error" in detail:
+            return None
+        claim = str((detail.get("frontmatter") or {}).get("proposed_claim") or "").strip()
+        if not claim:
+            return None
+        from omicsclaw.analysis_router.models import AnalysisRouteKind
+        from omicsclaw.analysis_router.router import route_analysis_request
+
+        route = route_analysis_request(claim, dataset_path or "")
+        if route.kind in (AnalysisRouteKind.EXACT_SKILL, AnalysisRouteKind.PARTIAL_SKILL) and route.chosen_skill:
+            return str(route.chosen_skill)
+    except Exception as e:  # best-effort — never break packet building over routing
+        logger.debug("router skill resolution failed for %s: %s", slug, e)
+    return None
+
+
+async def _thread_dataset_path_for_loop(session_id: str, thread_id: str) -> str:
+    """The thread's bound dataset path, resolved from the agent loop (D-3).
+
+    Mirrors the Ideate route-preview's resolution via the SHARED
+    ``compat.resolve_thread_dataset_path`` so kg_build_packet and route-preview
+    agree. The loop has a ``CompatMemoryStore`` (``state.memory_store``), not the
+    desktop ``_memory_client``; we derive the namespace-bound client from the
+    session. Best-effort: ``""`` when memory is off / session unknown / no dataset.
+    """
+    if not session_id or not thread_id:
+        return ""
+    try:
+        from omicsclaw.memory.compat import resolve_thread_dataset_path
+        from omicsclaw.runtime.agent import state as _core
+
+        store = getattr(_core, "memory_store", None)
+        if store is None:
+            return ""
+        client = await store._client_for_session(session_id)
+        return await resolve_thread_dataset_path(client, thread_id)
+    except Exception:
+        return ""
+
+
+async def execute_kg_build_packet(
+    args: dict, session_id: str = "", thread_id: str = "", **kwargs
+) -> str:
     """Build a handoff packet for a hypothesis (ADR 0021 §5) — one hypothesis → one
     packet → the Analysis Router. Returns the ``packet_id`` to record a result
     against. Soft-fails when KG is unavailable; never raises into the loop.
@@ -640,8 +755,24 @@ async def execute_kg_build_packet(args: dict, **kwargs) -> str:
     target_skill = str(args.get("target_skill", "") or "").strip() or None
     notes = str(args.get("notes", "") or "").strip() or None
 
+    home = _resolve_kg_home()
+    # D-3: when the agent didn't pin a skill, let the Analysis Router (claim-based,
+    # the SAME source the Ideate route-preview shows the user) choose the packet's
+    # target skill — one authoritative skill recommendation instead of two
+    # uncoordinated ones (KG hypothesis.recommended_skills vs Router chosen_skill).
+    # build_packet's resolve_skill then only validates it. Best-effort: when the
+    # Router isn't confident, target_skill stays None and KG keeps its
+    # recommended_skills → file_drop fallback.
+    if target_skill is None:
+        # Resolve the thread's bound dataset the SAME way the Ideate route-preview
+        # does, so the packet routes on the identical (claim, dataset_path).
+        dataset_path = await _thread_dataset_path_for_loop(session_id, thread_id)
+        routed = await asyncio.to_thread(_router_skill_for_hypothesis, slug, home, dataset_path)
+        if routed:
+            target_skill = routed
+
     try:
-        cfg = kg.config.resolve(_resolve_kg_home())
+        cfg = kg.config.resolve(home)
         packet = await asyncio.to_thread(kg.build_packet, cfg, slug, target_skill, notes)
         await asyncio.to_thread(kg.write_packet, cfg, packet)
     except (FileNotFoundError, ValueError) as e:

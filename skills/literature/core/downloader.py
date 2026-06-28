@@ -107,8 +107,12 @@ def download_supplementary_files(gse_id: str, output_dir: Path, max_retries: int
         if response.status_code != 200:
             return downloaded
 
-        # Parse HTML directory listing
-        file_links = re.findall(r'href="([^"]+\.(h5ad|mtx|csv|tsv|txt|gz|tar))"', response.text, re.IGNORECASE)
+        # Parse HTML directory listing. The extension alternation must be a
+        # NON-capturing group: with a second capture group, ``re.findall``
+        # returns ``(filename, ext)`` tuples and the loop below would do
+        # ``ftp_base + filename`` / ``output_dir / filename`` on a tuple,
+        # raising TypeError (swallowed) and delivering zero data files.
+        file_links = re.findall(r'href="([^"]+\.(?:h5ad|mtx|csv|tsv|txt|gz|tar))"', response.text, re.IGNORECASE)
 
         for filename in file_links[:10]:  # Limit to 10 files
             file_url = ftp_base + filename

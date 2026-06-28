@@ -1006,8 +1006,9 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                 "a Source page (and extracting entities / concepts / methods) that later "
                 "answers can cite. Use when the user drops or links a paper to read. "
                 "Pass `source` as a local file path or http(s) URL, or omit it to ingest "
-                "a freshly dropped PDF. The knowledge base is shared across research "
-                "(not thread-specific)."
+                "a freshly dropped PDF. The Source page is shared across research "
+                "(ADR 0019); when ingested inside a Bench thread it is also linked to "
+                "that thread so the thread's Ideate can ground on it (批7)."
             ),
             parameters={
                 "type": "object",
@@ -1022,7 +1023,7 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                 },
             },
             surfaces=("bot",),
-            context_params=("session_id",),
+            context_params=("session_id", "thread_id"),  # 批7: thread_id scopes the per-thread source link
             read_only=False,
             concurrency_safe=False,
             result_policy=RESULT_POLICY_KNOWLEDGE_REFERENCE,
@@ -1058,6 +1059,7 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                 "required": ["hypothesis_slug"],
             },
             surfaces=("bot",),
+            context_params=("session_id", "thread_id"),  # D-3: thread_id+session_id resolve the thread dataset for Router-authoritative skill selection
             read_only=False,
             concurrency_safe=False,
             result_policy=RESULT_POLICY_KNOWLEDGE_REFERENCE,
@@ -1325,7 +1327,6 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                 "chat_id",
                 "surface",
                 "policy_state",
-                "request_tool_approval",
                 "model_override",
                 "provider_override",
             ),
@@ -1333,6 +1334,11 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
             concurrency_safe=False,
             result_policy=RESULT_POLICY_SUMMARY_OR_MEDIA,
             risk_level=RISK_LEVEL_HIGH,
+            # Arbitrary generated code (a code-executing mini-agent): gate the whole
+            # tool call ONCE at the outer agent loop (ADR 0008 L2) — the mini-agent
+            # has no per-cell approval. Was AUTO, which left it ungated despite the
+            # advertised hook (F: that was the actual gap behind the dead param).
+            approval_mode=APPROVAL_MODE_ASK,
             writes_workspace=True,
             allowed_in_background=False,
             policy_tags=("analysis", "workflow", "autonomous", "autonomous_code_runner"),

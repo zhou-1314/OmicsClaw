@@ -273,3 +273,19 @@ def test_runner_uses_process_guard_without_bwrap(tmp_path: Path, monkeypatch):
     assert result.ok is True
     assert result.metadata["isolation"] == "process_guard"
     assert result.metadata["sandbox"] is False
+
+
+def test_autonomous_loop_does_not_advertise_dead_approval_hook():
+    # F: request_tool_approval was threaded into the autonomous loop but silently
+    # dropped (code_loop never forwarded it; the mini-agent has no mid-run
+    # approval). The misleading dead param (+ the equally-dead runtime_context)
+    # must not exist — gating lives at the outer agent loop (ADR 0008 L2) + the
+    # kernel envelope / strict-sandbox tier.
+    import inspect
+
+    from omicsclaw.autonomous import code_loop
+
+    for fn in (code_loop.run_autonomous_code_loop_async, code_loop.run_autonomous_code_loop):
+        params = inspect.signature(fn).parameters
+        assert "request_tool_approval" not in params, fn.__name__
+        assert "runtime_context" not in params, fn.__name__

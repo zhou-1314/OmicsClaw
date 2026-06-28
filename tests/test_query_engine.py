@@ -1265,3 +1265,92 @@ def test_run_query_engine_injects_token_budget_nudge_and_merges_final_response(t
     assert history[2]["role"] == "user"
     assert "Continue working on the same request." in history[2]["content"]
     assert history[3] == {"role": "assistant", "content": "phase two"}
+
+
+class _FakeMidStreamErrorResponse:
+    """A stream that yields a few chunks then raises mid-stream (a non-retryable
+    provider error AFTER content was already shown to the user)."""
+
+    def __init__(self, chunks, error):
+        self._chunks = list(chunks)
+        self._error = error
+
+    def __aiter__(self):
+        self._iter = iter(self._chunks)
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._iter)
+        except StopIteration:
+            raise self._error
+
+
+def test_run_query_engine_persists_partial_content_on_midstream_error(tmp_path):
+    # F: a mid-stream error left partial content shown to the user but NOT in the
+    # transcript → next turn's history diverged from what the user saw.
+    chunks = [
+        _FakeStreamChunk(delta=SimpleNamespace(content="Partial ", tool_calls=None)),
+        _FakeStreamChunk(delta=SimpleNamespace(content="answer", tool_calls=None)),
+    ]
+    llm = _FakeLLM(events=[_FakeMidStreamErrorResponse(chunks, _FakeAPIError("stream died"))])
+    transcript_store = TranscriptStore(sanitizer=sanitize_tool_history)
+    result_store = ToolResultStore(storage_dir=tmp_path / "tr")
+    runtime = ToolRegistry([]).build_runtime({})
+    observed: list[str] = []
+
+    result = asyncio.run(
+        run_query_engine(
+            llm=llm,
+            context=QueryEngineContext(
+                chat_id="chat-mid",
+                session_id="s-mid",
+                system_prompt="SYS",
+                user_message_content="hi",
+            ),
+            tool_runtime=runtime,
+            transcript_store=transcript_store,
+            tool_result_store=result_store,
+            config=QueryEngineConfig(model="fake-model", llm_error_types=(_FakeAPIError,)),
+            callbacks=QueryEngineCallbacks(
+                on_stream_content=observed.append,
+                on_llm_error=lambda exc: f"handled: {exc}",
+            ),
+        )
+    )
+
+    assert result == "handled: stream died"          # error still surfaced unchanged
+    assert observed == ["Partial ", "answer"]          # the user saw the partial
+    history = transcript_store.get_history("chat-mid")
+    assistant = [m for m in history if m.get("role") == "assistant"]
+    assert assistant, "partial assistant turn must be persisted"
+    assert "Partial answer" in (assistant[-1].get("content") or "")
+
+
+def test_run_query_engine_prestream_error_persists_no_assistant_message(tmp_path):
+    # Guard: a PRE-stream create() failure has no partial — must NOT fabricate an
+    # empty assistant turn (the partial.content guard).
+    llm = _FakeLLM(error=_FakeAPIError("boom"))
+    transcript_store = TranscriptStore(sanitizer=sanitize_tool_history)
+    result_store = ToolResultStore(storage_dir=tmp_path / "tr2")
+    runtime = ToolRegistry([]).build_runtime({})
+
+    result = asyncio.run(
+        run_query_engine(
+            llm=llm,
+            context=QueryEngineContext(
+                chat_id="chat-pre",
+                session_id="s-pre",
+                system_prompt="SYS",
+                user_message_content="hi",
+            ),
+            tool_runtime=runtime,
+            transcript_store=transcript_store,
+            tool_result_store=result_store,
+            config=QueryEngineConfig(model="fake-model", llm_error_types=(_FakeAPIError,)),
+            callbacks=QueryEngineCallbacks(on_llm_error=lambda exc: f"handled: {exc}"),
+        )
+    )
+    assert result == "handled: boom"
+    history = transcript_store.get_history("chat-pre")
+    assert [m for m in history if m.get("role") == "assistant"] == []

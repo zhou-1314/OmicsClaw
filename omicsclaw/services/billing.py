@@ -15,8 +15,30 @@ _usage: dict[str, int] = {
     "prompt_tokens": 0,
     "completion_tokens": 0,
     "total_tokens": 0,
+    "cached_input_tokens": 0,  # subset of prompt_tokens served from a prompt cache
     "api_calls": 0,
 }
+
+
+def _cache_read_discount() -> float:
+    """Price multiplier for cache-READ input tokens vs a fresh-input token.
+
+    Cache reads cost a fraction of a miss (DeepSeek/Anthropic ~0.1; OpenAI ~0.25–0.5).
+    Billing cached input at FULL price overcharges cache-heavy sessions ~5–10x and
+    contradicts the cache_hit_ratio surfaced alongside. Default 0.1 (the common
+    floor); override via ``LLM_CACHE_READ_DISCOUNT``. Approximate — the price table
+    itself is approximate (see module docstring)."""
+    try:
+        v = float(os.environ["LLM_CACHE_READ_DISCOUNT"])
+        return min(1.0, max(0.0, v))
+    except (KeyError, ValueError, TypeError):
+        return 0.1
+
+
+# Module-level constant for callers that want the default without the env read
+# (e.g. tests, the desktop server's parallel cost calc). Env override still wins
+# at compute time via _cache_read_discount().
+CACHE_READ_DISCOUNT: float = 0.1
 
 
 # Approximate pricing per 1M tokens (USD, input/output) — keyed by a substring
@@ -113,15 +135,27 @@ def accumulate_usage(response_usage) -> dict[str, int]:
     """Add API response usage to the running counters; return per-call delta."""
     if response_usage is None:
         return {}
+    # Cache-READ subtotal (a subset of prompt_tokens). Provider shapes vary:
+    #   OpenAI:    prompt_tokens_details.cached_tokens
+    #   DeepSeek:  prompt_cache_hit_tokens (top-level)
+    #   Anthropic: cache_read_input_tokens (top-level)
+    prompt_details = getattr(response_usage, "prompt_tokens_details", None)
+    cached = int(getattr(prompt_details, "cached_tokens", 0) or 0)
+    if not cached:
+        cached = int(getattr(response_usage, "prompt_cache_hit_tokens", 0) or 0)
+    if not cached:
+        cached = int(getattr(response_usage, "cache_read_input_tokens", 0) or 0)
+
     delta = {
         "prompt_tokens":     getattr(response_usage, "prompt_tokens",     0) or 0,
         "completion_tokens": getattr(response_usage, "completion_tokens", 0) or 0,
         "total_tokens":      getattr(response_usage, "total_tokens",      0) or 0,
     }
-    _usage["prompt_tokens"]     += delta["prompt_tokens"]
-    _usage["completion_tokens"] += delta["completion_tokens"]
-    _usage["total_tokens"]      += delta["total_tokens"]
-    _usage["api_calls"]         += 1
+    _usage["prompt_tokens"]       += delta["prompt_tokens"]
+    _usage["completion_tokens"]   += delta["completion_tokens"]
+    _usage["total_tokens"]        += delta["total_tokens"]
+    _usage["cached_input_tokens"] += cached
+    _usage["api_calls"]           += 1
     return delta
 
 
@@ -137,8 +171,13 @@ def get_usage_snapshot(model: str = "", provider: str = "") -> dict:
     active bot context should use ``omicsclaw.runtime.agent.state.get_usage_snapshot()`` which
     fills in ``OMICSCLAW_MODEL`` / ``LLM_PROVIDER_NAME`` automatically."""
     inp_price, out_price = _get_token_price(model)
+    # F: bill cache-READ input at a discount, fresh input at full price — else a
+    # cache-heavy session is overcharged ~5–10x (and contradicts cache_hit_ratio).
+    cached = _usage.get("cached_input_tokens", 0)
+    fresh_input = max(0, _usage["prompt_tokens"] - cached)
     cost = (
-        _usage["prompt_tokens"]     / 1_000_000 * inp_price +
+        fresh_input                 / 1_000_000 * inp_price +
+        cached                      / 1_000_000 * inp_price * _cache_read_discount() +
         _usage["completion_tokens"] / 1_000_000 * out_price
     )
     return {

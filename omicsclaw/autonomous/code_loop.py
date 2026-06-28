@@ -253,19 +253,12 @@ def run_autonomous_code_loop(
     request: AutonomousRunRequest,
     *,
     llm_client: AutonomousLLMClient | None = None,
-    request_tool_approval: Any = None,
-    runtime_context: dict[str, Any] | None = None,
 ) -> AutonomousRunResult:
     """Synchronous wrapper around :func:`run_autonomous_code_loop_async`."""
     import asyncio
 
     return asyncio.run(
-        run_autonomous_code_loop_async(
-            request,
-            llm_client=llm_client,
-            request_tool_approval=request_tool_approval,
-            runtime_context=runtime_context,
-        )
+        run_autonomous_code_loop_async(request, llm_client=llm_client)
     )
 
 
@@ -273,8 +266,6 @@ async def run_autonomous_code_loop_async(
     request: AutonomousRunRequest,
     *,
     llm_client: AutonomousLLMClient | None = None,
-    request_tool_approval: Any = None,
-    runtime_context: dict[str, Any] | None = None,
 ) -> AutonomousRunResult:
     """Run the autonomous analysis path (ADR 0032, revised 2026-06-22).
 
@@ -284,9 +275,13 @@ async def run_autonomous_code_loop_async(
     tiered isolation (bubblewrap when available, else an in-kernel guard) keeps it
     cross-platform.
 
-    ``request_tool_approval`` / ``runtime_context`` are accepted for call-site
-    compatibility; the mini-agent has no mid-run approval (system mutations are
-    blocked by the kernel envelope), so they are currently unused.
+    No mid-run approval hook: the mini-agent has no per-cell approval, so the whole
+    ``autonomous_analysis_execute`` tool call is gated ONCE at the outer agent loop
+    (ADR 0008 L2 REQUIRE_APPROVAL); system mutations are then contained by the
+    kernel envelope / the ``OMICSCLAW_AUTONOMOUS_REQUIRE_SANDBOX=1`` fail-closed
+    tier. (A previous ``request_tool_approval``/``runtime_context`` kwarg pair was
+    accepted but never consulted — removed to stop advertising a hook that never
+    fired; ``request.metadata`` already carries surface/chat_id/session_id.)
     """
     import asyncio
 

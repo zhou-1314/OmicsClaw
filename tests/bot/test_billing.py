@@ -27,10 +27,13 @@ def _reset_billing_state():
 class _Usage:
     """Stand-in for an OpenAI ``response.usage`` object."""
 
-    def __init__(self, prompt: int, completion: int, total: int | None = None):
+    def __init__(self, prompt: int, completion: int, total: int | None = None, cached: int = 0):
         self.prompt_tokens = prompt
         self.completion_tokens = completion
         self.total_tokens = total if total is not None else prompt + completion
+        # OpenAI shape: cached input subtotal lives in prompt_tokens_details.
+        if cached:
+            self.prompt_tokens_details = type("_Det", (), {"cached_tokens": cached})()
 
 
 def test_accumulate_usage_returns_delta_and_increments_running_totals():
@@ -43,6 +46,30 @@ def test_accumulate_usage_returns_delta_and_increments_running_totals():
     assert snap["prompt_tokens"] == 100
     assert snap["completion_tokens"] == 50
     assert snap["total_tokens"] == 150
+
+
+def test_cost_discounts_cached_input_tokens():
+    # F: cache-hit input must NOT be billed at full price (90% hit → ~5x overcharge).
+    from omicsclaw.services.billing import CACHE_READ_DISCOUNT, accumulate_usage, get_usage_snapshot
+
+    accumulate_usage(_Usage(prompt=1000, completion=100, cached=900))
+    snap = get_usage_snapshot(model="claude-haiku-4")  # input=1.0, output=5.0 per 1M
+    assert snap["cached_input_tokens"] == 900
+    # fresh=100 @1.0 + cached=900 @1.0*DISCOUNT + completion=100 @5.0, all /1e6
+    expected = (100 * 1.0 + 900 * 1.0 * CACHE_READ_DISCOUNT + 100 * 5.0) / 1_000_000
+    assert snap["estimated_cost_usd"] == round(expected, 6)
+    # And it is strictly cheaper than billing every prompt token at full price.
+    full = (1000 * 1.0 + 100 * 5.0) / 1_000_000
+    assert snap["estimated_cost_usd"] < round(full, 6)
+
+
+def test_cost_unchanged_without_cache_hits():
+    from omicsclaw.services.billing import accumulate_usage, get_usage_snapshot
+
+    accumulate_usage(_Usage(prompt=1000, completion=100))  # no cached
+    snap = get_usage_snapshot(model="claude-haiku-4")
+    assert snap["cached_input_tokens"] == 0
+    assert snap["estimated_cost_usd"] == round((1000 * 1.0 + 100 * 5.0) / 1_000_000, 6)
 
 
 def test_accumulate_usage_none_is_noop_and_returns_empty_dict():

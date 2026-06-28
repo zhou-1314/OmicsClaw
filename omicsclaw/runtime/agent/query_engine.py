@@ -478,6 +478,11 @@ def _materialize_message_from_choice_message(message) -> MaterializedMessage:
     )
 
 
+_STREAM_INTERRUPTED_NOTE = (
+    "\n\n[Note: the previous response was interrupted by a streaming error and is incomplete.]"
+)
+
+
 async def _materialize_message_from_stream(
     response,
     callbacks: QueryEngineCallbacks,
@@ -493,40 +498,56 @@ async def _materialize_message_from_stream(
     # accumulated totals for those providers.
     last_usage: Any = None
 
-    async for chunk in response:
-        if chunk.usage:
-            last_usage = chunk.usage
-        if not chunk.choices:
-            continue
+    try:
+        async for chunk in response:
+            if chunk.usage:
+                last_usage = chunk.usage
+            if not chunk.choices:
+                continue
 
-        delta = chunk.choices[0].delta
-        text_chunks, reasoning_chunks = _extract_stream_delta_chunks(delta)
-        for reasoning_chunk in reasoning_chunks:
-            final_reasoning += reasoning_chunk
-            if callbacks.on_stream_reasoning:
-                await _maybe_await(callbacks.on_stream_reasoning(reasoning_chunk))
-        for text_chunk in text_chunks:
-            final_content += text_chunk
-            if callbacks.on_stream_content:
-                await _maybe_await(callbacks.on_stream_content(text_chunk))
+            delta = chunk.choices[0].delta
+            text_chunks, reasoning_chunks = _extract_stream_delta_chunks(delta)
+            for reasoning_chunk in reasoning_chunks:
+                final_reasoning += reasoning_chunk
+                if callbacks.on_stream_reasoning:
+                    await _maybe_await(callbacks.on_stream_reasoning(reasoning_chunk))
+            for text_chunk in text_chunks:
+                final_content += text_chunk
+                if callbacks.on_stream_content:
+                    await _maybe_await(callbacks.on_stream_content(text_chunk))
 
-        if delta.tool_calls:
-            for tc_chunk in delta.tool_calls:
-                tc_index = tc_chunk.index
-                if tc_index not in tool_calls_dict:
-                    tool_calls_dict[tc_index] = MaterializedToolCall(
-                        id=tc_chunk.id or "",
-                        name=tc_chunk.function.name or "",
-                        arguments=tc_chunk.function.arguments or "",
-                    )
-                else:
-                    existing = tool_calls_dict[tc_index]
-                    tool_calls_dict[tc_index] = MaterializedToolCall(
-                        id=existing.id or tc_chunk.id or "",
-                        name=existing.name + (tc_chunk.function.name or ""),
-                        arguments=existing.arguments
-                        + (tc_chunk.function.arguments or ""),
-                    )
+            if delta.tool_calls:
+                for tc_chunk in delta.tool_calls:
+                    tc_index = tc_chunk.index
+                    if tc_index not in tool_calls_dict:
+                        tool_calls_dict[tc_index] = MaterializedToolCall(
+                            id=tc_chunk.id or "",
+                            name=tc_chunk.function.name or "",
+                            arguments=tc_chunk.function.arguments or "",
+                        )
+                    else:
+                        existing = tool_calls_dict[tc_index]
+                        tool_calls_dict[tc_index] = MaterializedToolCall(
+                            id=existing.id or tc_chunk.id or "",
+                            name=existing.name + (tc_chunk.function.name or ""),
+                            arguments=existing.arguments
+                            + (tc_chunk.function.arguments or ""),
+                        )
+    except Exception as exc:
+        # Mid-stream failure: this content was ALREADY shown to the user via
+        # on_stream_content. Carry the partial on the exception so the caller can
+        # persist it to the transcript before routing to on_llm_error — otherwise
+        # the next turn's reconstructed history loses what the user just saw.
+        # Deliberately NOT carrying partial tool_calls: a half-streamed call has
+        # incomplete JSON args and no matching tool result, so it would dangle and
+        # 400 the next request. The bug is about visible CONTENT.
+        if final_content or final_reasoning:
+            exc._omicsclaw_partial_message = MaterializedMessage(
+                content=final_content or None,
+                tool_calls=None,
+                reasoning_content=final_reasoning or None,
+            )
+        raise
 
     if last_usage is not None:
         _record_usage(last_usage, callbacks, on_usage_delta=on_usage_delta)
@@ -1384,6 +1405,18 @@ async def run_query_engine(
                 )
             )
         except config.llm_error_types as exc:
+            # Persist any partial content the stream already showed the user before
+            # routing the error, so the next turn's history matches the UI (F).
+            # Guarded on partial.content → a pre-stream create() failure / a
+            # prompt-too-long-then-retry (both fail before any content) append
+            # nothing. tool_calls are intentionally omitted (see materializer).
+            partial = getattr(exc, "_omicsclaw_partial_message", None)
+            if partial is not None and partial.content:
+                transcript_store.append_assistant_message(
+                    context.chat_id,
+                    content=partial.content + _STREAM_INTERRUPTED_NOTE,
+                    reasoning_content=partial.reasoning_content,
+                )
             if callbacks.on_llm_error is not None:
                 return await _maybe_await(callbacks.on_llm_error(exc))
             raise

@@ -104,6 +104,7 @@ from omicsclaw.skill.orchestration import (
     _auto_capture_analysis,
     _auto_capture_consensus,
     _auto_capture_dataset,
+    _capture_thread_source,
     _build_method_preview,
     _build_param_hint,
     _classify_env_error,
@@ -1026,6 +1027,83 @@ async def _register_literature_datasets(
         logger.warning(f"Literature dataset registration failed: {e}")
 
 
+# Bound the background KG ingest's await so a slow provider can't keep the asyncio
+# task pending forever. (The underlying ``to_thread`` worker still runs to
+# completion — the timeout frees the awaiter, not the OS thread.)
+_LIT_KG_INGEST_TIMEOUT = 120  # seconds
+# Strong refs to in-flight background ingest tasks so they aren't GC'd mid-run.
+_LITERATURE_KG_TASKS: set[asyncio.Task] = set()
+
+
+async def _ingest_literature_into_kg(
+    out_dir: Path, thread_id: str = "", session_id: str = ""
+) -> None:
+    """Converge literature extraction onto the canonical KG ingest (audit D-1).
+
+    The literature skill persists the parsed source text it already obtained to
+    ``out_dir/source.txt`` (one server-controlled artifact for every input type —
+    file/url/doi/pubmed/text). We ingest THAT into the KG so the paper becomes an
+    ideation/formalize-groundable Source (``wiki/sources/*`` + concept/claim graph
+    nodes) instead of dead regex metadata. Ingesting the persisted text (rather
+    than re-fetching a URL or re-parsing a PDF) keeps this safe (no SSRF, no
+    re-fetch) and uniform. Best-effort: KG/LLM may be absent; bounded by
+    ``_LIT_KG_INGEST_TIMEOUT`` and never raises (caller spawns it in the
+    background so it can't delay the literature tool's response).
+    """
+    try:
+        from omicsclaw.runtime.tools import kg_tools
+
+        result_path = out_dir / "result.json"
+        if not result_path.exists():
+            return
+        data = (json.loads(result_path.read_text(encoding="utf-8")) or {}).get("data", {}) or {}
+        source_text_path = data.get("source_text_path")
+        if isinstance(source_text_path, str) and source_text_path and Path(source_text_path).is_file():
+            result = await asyncio.wait_for(
+                kg_tools.ingest_source_into_kg(source_text_path),
+                timeout=_LIT_KG_INGEST_TIMEOUT,
+            )
+            # ingest_source_into_kg returns None (KG/LLM absent) or a result dict;
+            # a recorded {"status":"failed"} must be surfaced, not silently dropped.
+            if isinstance(result, dict) and result.get("status") == "failed":
+                logger.warning(
+                    "Literature→KG ingest recorded a failed result: %s",
+                    result.get("reason", "unknown"),
+                )
+            # 批7: record the thread<->source link off the returned slug so the
+            # paper is groundable in THIS thread's Ideate. Both "ingested" and
+            # "skipped" (cache hit — cross-thread reuse) carry a slug now. No-op
+            # without a thread (legacy/IM) — _capture_thread_source guards.
+            elif isinstance(result, dict) and result.get("status") in ("ingested", "skipped"):
+                slug = result.get("slug")
+                if isinstance(slug, str) and slug and thread_id and session_id:
+                    await _capture_thread_source(
+                        session_id, thread_id, slug, str(result.get("source_page") or "")
+                    )
+    except Exception as e:  # incl. TimeoutError — never break the literature tool over a KG hiccup
+        logger.warning(f"Literature→KG ingest failed (non-fatal): {e}")
+
+
+def _spawn_literature_kg_ingest(
+    out_dir: Path, thread_id: str = "", session_id: str = ""
+) -> None:
+    """Fire-and-forget the D-1 KG ingest so KG/LLM latency never blocks the
+    literature tool's return. Keeps a strong ref until the task finishes.
+
+    ``thread_id``/``session_id`` (批7) are bound into the coroutine args HERE (at
+    spawn time) — the spawning tool call has already returned by the time the
+    task runs, so the per-thread linkage must travel as values, not be read later
+    from a mutated context."""
+    try:
+        task = asyncio.ensure_future(
+            _ingest_literature_into_kg(out_dir, thread_id=thread_id, session_id=session_id)
+        )
+    except RuntimeError:  # no running loop (defensive — the tool path is async)
+        return
+    _LITERATURE_KG_TASKS.add(task)
+    task.add_done_callback(_LITERATURE_KG_TASKS.discard)
+
+
 async def execute_parse_literature(
     args: dict, session_id: str | None = None, thread_id: str = ""
 ) -> str:
@@ -1104,6 +1182,14 @@ async def execute_parse_literature(
     # Analyze in this thread can reference them (dataset://<thread_id>/<basename>).
     if auto_download and session_id:
         await _register_literature_datasets(out_dir, session_id, thread_id)
+
+    # D-1: converge literature onto the canonical KG ingest so the parsed paper
+    # becomes an ideation-groundable Source. 批7: the KG Source page stays
+    # workspace-shared (ADR 0019), but we record a per-thread link off the
+    # ingest's slug so the paper is groundable in THIS thread's Ideate. Best-effort,
+    # spawned in the BACKGROUND (bounded + self-logging) so KG/LLM latency never
+    # delays this user-facing tool's response; thread_id/session_id bound at spawn.
+    _spawn_literature_kg_ingest(out_dir, thread_id=thread_id, session_id=session_id or "")
 
     # Read report
     report_file = out_dir / "report.md"
@@ -2136,6 +2222,40 @@ def _format_autonomous_digest(result) -> str:
     return _clip_to_bytes("\n\n".join(parts), _AUTONOMOUS_DIGEST_MAX_BYTES)
 
 
+def _register_autonomous_media(session_id: str, workspace_root: str) -> list[dict]:
+    """Queue an autonomous run's figures + a run-dir anchor onto the
+    ``pending_media`` side-channel (audit A-3).
+
+    The verification-storm fix made the autonomous tool return a compact text
+    digest with no machine-readable producer field, so ``on_tool_result`` could
+    neither inline the run's figures nor stamp the producing session (the run
+    never appeared under 本对话). The digest stays the LLM-facing return value;
+    the figures plus the readable ``result_summary.md`` travel through
+    ``pending_media`` exactly like the skill executor's ``return_media`` path —
+    so the desktop inlines plots and links the Run WITHOUT re-bloating the
+    model's context. Best-effort: never raises into the tool loop.
+    """
+    if not session_id or not workspace_root:
+        return []
+    root = Path(workspace_root)
+    try:
+        collected = _collect_output_media_paths(root).media_items
+    except Exception:
+        logger.debug("autonomous media collection failed", exc_info=True)
+        collected = []
+    items: list[dict] = [it for it in collected if it.get("type") == "photo"]
+    summary = root / "result_summary.md"
+    if summary.is_file():
+        # The readable report doubles as the run-dir anchor that lets text-only
+        # runs (no figures) still link to their conversation.
+        items.append({"type": "document", "path": str(summary)})
+    if not items and collected:
+        items.append(collected[0])
+    if items:
+        pending_media[session_id] = pending_media.get(session_id, []) + items
+    return items
+
+
 async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
     """Run the first-class Autonomous Code Runner loop."""
     try:
@@ -2195,18 +2315,23 @@ async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
                 "session_id": str(kwargs.get("session_id", "") or ""),
             },
         )
-        result = await run_autonomous_code_loop_async(
-            request,
-            request_tool_approval=kwargs.get("request_tool_approval"),
-            runtime_context={
-                "surface": str(kwargs.get("surface", "bot") or "bot"),
-                "policy_state": kwargs.get("policy_state"),
-                "session_id": str(kwargs.get("session_id", "") or ""),
-                "chat_id": str(kwargs.get("chat_id", "") or ""),
-            },
-        )
+        # No mid-run approval kwarg: the whole autonomous tool call is gated once
+        # at the outer agent loop (ADR 0008 L2); request.metadata already carries
+        # surface/chat_id/session_id. (Dropped the dead request_tool_approval/
+        # runtime_context that code_loop never consulted — see code_loop docstring.)
+        result = await run_autonomous_code_loop_async(request)
 
-        return _format_autonomous_digest(result)
+        digest = _format_autonomous_digest(result)
+        # A-3: surface the run's figures + report and link the producing session
+        # via the pending_media side-channel (the compact digest carries no
+        # machine-readable paths). Best-effort; must not fail the run.
+        try:
+            _register_autonomous_media(
+                str(kwargs.get("session_id", "") or ""), result.workspace_root
+            )
+        except Exception:
+            logger.debug("autonomous media registration failed", exc_info=True)
+        return digest
     except Exception as e:
         logger.error(f"Autonomous analysis execution failed: {e}", exc_info=True)
         return f"Error running autonomous analysis: {e}"

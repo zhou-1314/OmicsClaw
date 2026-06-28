@@ -182,7 +182,7 @@ class _FakeMemoryClient:
     async def get_subtree(self, uri: str, *, limit: int = 100):
         if self._boom:
             raise RuntimeError("memory backend down")
-        assert uri == "dataset://t1/"
+        assert uri == "dataset://t1"  # no trailing slash (real-client fix)
         return [_Ref(u) for u, _ in self._leaves]
 
     async def recall(self, uri: str):
@@ -271,3 +271,210 @@ def test_route_preview_survives_memory_failure(monkeypatch) -> None:
     assert captured["file_path"] == ""
     assert out["dataset_path"] is None
     assert out["chosen_skill"] == "spatial-de"
+
+
+# --- 批7: per-thread grounding (thread_source_slugs + cross_study + sources) ---
+
+
+def test_formalize_thread_scoped_allow_list_excludes_other_thread_sources(kg: KGConfig) -> None:
+    """With thread_source_slugs=[s1], a hunch may NOT cite s2 (a workspace source
+    outside this thread) — the closed-list validator rejects it."""
+    from omicsclaw_kg.ideation.hypotheses import HypothesisIdeationError
+
+    _seed_source(kg, "s1")
+    _seed_source(kg, "s2")
+    stub = StubLLMClient(
+        responses={
+            "HUNCH:": {
+                "title": "Cross-thread cite",
+                "slug": "cross-thread",
+                "proposed_claim": "A claim long enough to pass validation comfortably.",
+                "supported_by": ["s2"],  # NOT in the thread's allow-list
+                "candidate_datasets": [],
+                "recommended_skills": [],
+            }
+        }
+    )
+    with pytest.raises(HypothesisIdeationError):
+        hyp_svc.formalize_thread_hypothesis(str(kg.home), "x", stub, thread_source_slugs=["s1"])
+
+
+def test_formalize_thread_scoped_grounds_on_thread_source(kg: KGConfig) -> None:
+    _seed_source(kg, "s1")
+    _seed_source(kg, "s2")
+    stub = StubLLMClient(
+        responses={
+            "HUNCH:": {
+                "title": "Within thread",
+                "slug": "within-thread",
+                "proposed_claim": "A claim long enough to pass validation comfortably.",
+                "supported_by": ["s1"],
+                "candidate_datasets": [],
+                "recommended_skills": [],
+            }
+        }
+    )
+    h = hyp_svc.formalize_thread_hypothesis(str(kg.home), "x", stub, thread_source_slugs=["s1"])
+    assert h["supported_by"] == ["s1"]
+    assert h["ungrounded"] is False
+
+
+def test_formalize_empty_thread_yields_ungrounded(kg: KGConfig) -> None:
+    """A thread with zero sources (empty allow-list) formalizes to an UNGROUNDED
+    hypothesis — not a 400. require_support=False permits it."""
+    _seed_source(kg, "s1")  # workspace has a source, but the thread has none
+    stub = StubLLMClient(
+        responses={
+            "HUNCH:": {
+                "title": "Fresh thread guess",
+                "slug": "fresh-thread-guess",
+                "proposed_claim": "A speculative claim that is plenty long enough to pass.",
+                "supported_by": [],
+                "candidate_datasets": [],
+                "recommended_skills": [],
+            }
+        }
+    )
+    h = hyp_svc.formalize_thread_hypothesis(str(kg.home), "x", stub, thread_source_slugs=[])
+    assert h["ungrounded"] is True
+    assert h["supported_by"] == []
+
+
+def test_formalize_none_thread_slugs_is_workspace_wide(kg: KGConfig) -> None:
+    """thread_source_slugs=None preserves the legacy workspace-wide grounding."""
+    _seed_source(kg, "s1")
+    _seed_source(kg, "s2")
+    stub = StubLLMClient(
+        responses={
+            "HUNCH:": {
+                "title": "Workspace wide",
+                "slug": "workspace-wide",
+                "proposed_claim": "A claim long enough to pass validation comfortably.",
+                "supported_by": ["s2"],  # allowed because workspace-wide
+                "candidate_datasets": [],
+                "recommended_skills": [],
+            }
+        }
+    )
+    h = hyp_svc.formalize_thread_hypothesis(str(kg.home), "x", stub)  # no thread scoping
+    assert h["supported_by"] == ["s2"]
+
+
+def test_cross_study_badge_guards_none_and_computes_membership() -> None:
+    # None thread context → always False (legacy / no thread).
+    assert hyp_svc.to_frontend_hypothesis({"slug": "h", "supported_by": ["s1"]})["cross_study"] is False
+    # All cited sources inside the thread → False.
+    inside = hyp_svc.to_frontend_hypothesis({"slug": "h", "supported_by": ["s1"]}, thread_slugs={"s1", "s2"})
+    assert inside["cross_study"] is False
+    # A cited source outside the thread → True (跨课题).
+    outside = hyp_svc.to_frontend_hypothesis({"slug": "h", "supported_by": ["s1", "s3"]}, thread_slugs={"s1", "s2"})
+    assert outside["cross_study"] is True
+    # Ungrounded (no citations) → never cross-study.
+    ungrounded = hyp_svc.to_frontend_hypothesis({"slug": "h", "supported_by": []}, thread_slugs={"s1"})
+    assert ungrounded["cross_study"] is False
+
+
+def test_list_workspace_hypotheses_computes_cross_study_with_thread_slugs(kg: KGConfig) -> None:
+    _seed_source(kg, "s1")
+    _seed_source(kg, "s2")
+    _seed_hypothesis(kg, "h1", ["s2"])  # cites s2, which is NOT in the thread
+    items = hyp_svc.list_workspace_hypotheses(str(kg.home), thread_slugs={"s1"})
+    assert len(items) == 1
+    assert items[0]["cross_study"] is True
+
+
+def test_list_thread_sources_enriches_and_drops_stale(kg: KGConfig) -> None:
+    _seed_source(kg, "s1")
+    _seed_source(kg, "s2")
+    # thread references s1 (exists) and s3 (deleted/stale) — s2 is not in the thread.
+    out = hyp_svc.list_thread_sources(str(kg.home), ["s1", "s3"])
+    assert [s["slug"] for s in out] == ["s1"]
+    assert out[0]["title"] == "s1"
+    assert "state" in out[0]
+
+
+# --- 批7: endpoint wiring (per-thread slugs reach the service) ----------------
+
+
+async def _client_with_thread_source(tmp_path, thread_id: str, slug: str):
+    from omicsclaw.memory.compat import ThreadSourceMemory
+    from omicsclaw.memory.database import DatabaseManager
+    from omicsclaw.memory.engine import MemoryEngine
+    from omicsclaw.memory.memory_client import MemoryClient
+    from omicsclaw.memory.search import SearchIndexer
+
+    db = DatabaseManager(f"sqlite+aiosqlite:///{tmp_path}/m.db")
+    await db.init_db()
+    client = MemoryClient(engine=MemoryEngine(db, SearchIndexer(db)), namespace="app/u")
+    await client.remember(
+        f"thread_source://{thread_id}/{slug}",
+        ThreadSourceMemory(thread_id=thread_id, slug=slug).model_dump_json(),
+    )
+    return db, client
+
+
+@pytest.mark.asyncio
+async def test_thread_sources_endpoint_lists_thread_scoped(kg, tmp_path, monkeypatch):
+    from omicsclaw.surfaces.desktop import server
+
+    _seed_source(kg, "s1")
+    _seed_source(kg, "s2")  # in workspace but NOT in the thread
+    db, client = await _client_with_thread_source(tmp_path, "A", "s1")
+    monkeypatch.setattr(server, "_memory_client", client)
+    monkeypatch.setattr(server, "_KG_AVAILABLE", True)
+    monkeypatch.setattr(server, "_resolve_shared_kg_home", lambda: str(kg.home))
+    try:
+        res = await server.thread_sources("A")
+    finally:
+        await db.close()
+    assert [s["slug"] for s in res["sources"]] == ["s1"]
+    assert res["returned"] == 1 and res["kg_available"] is True
+
+
+@pytest.mark.asyncio
+async def test_thread_formalize_endpoint_passes_thread_slugs(kg, tmp_path, monkeypatch):
+    from omicsclaw.surfaces.desktop import hypotheses as hyp_svc
+    from omicsclaw.surfaces.desktop import server
+
+    db, client = await _client_with_thread_source(tmp_path, "A", "s1")
+    captured: dict = {}
+
+    def fake_formalize(home, hunch, llm, thread_source_slugs=None):
+        captured["slugs"] = thread_source_slugs
+        return {"id": "h", "title": "t", "claim": "c", "supported_by": [], "ungrounded": True}
+
+    monkeypatch.setattr(hyp_svc, "formalize_thread_hypothesis", fake_formalize)
+    monkeypatch.setattr(server, "_memory_client", client)
+    monkeypatch.setattr(server, "_KG_AVAILABLE", True)
+    monkeypatch.setattr(server, "_resolve_shared_kg_home", lambda: str(kg.home))
+    req = server.ThreadFormalizeRequest(hunch="x", stub=True)
+    try:
+        res = await server.thread_formalize("A", req)
+    finally:
+        await db.close()
+    assert captured["slugs"] == ["s1"]
+    assert res["thread_id"] == "A"
+
+
+@pytest.mark.asyncio
+async def test_thread_hypotheses_endpoint_passes_thread_slugs(kg, tmp_path, monkeypatch):
+    from omicsclaw.surfaces.desktop import hypotheses as hyp_svc
+    from omicsclaw.surfaces.desktop import server
+
+    db, client = await _client_with_thread_source(tmp_path, "A", "s1")
+    captured: dict = {}
+
+    def fake_list(home, *, limit=50, thread_slugs=None):
+        captured["thread_slugs"] = thread_slugs
+        return []
+
+    monkeypatch.setattr(hyp_svc, "list_workspace_hypotheses", fake_list)
+    monkeypatch.setattr(server, "_memory_client", client)
+    monkeypatch.setattr(server, "_KG_AVAILABLE", True)
+    monkeypatch.setattr(server, "_resolve_shared_kg_home", lambda: str(kg.home))
+    try:
+        res = await server.thread_hypotheses("A")
+    finally:
+        await db.close()
+    assert captured["thread_slugs"] == {"s1"}
+    assert res["kg_available"] is True

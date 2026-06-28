@@ -1163,6 +1163,12 @@ class ResearchPipeline:
                     h5ad_path=h5ad_path,
                     output_dir=str(self.workspace),
                 )
+                # §4.2 / D-1: converge intake onto the canonical KG ingest so the
+                # paper becomes a citeable Source (graph), not just regex metadata.
+                # Best-effort (never raises; no-op when KG/LLM absent or Mode C).
+                from .intake import ingest_intake_paper
+
+                intake.kg_source = await ingest_intake_paper(intake)
                 self.state.mark_stage_completed(
                     "intake",
                     summary="Prepared intake context",

@@ -125,6 +125,34 @@ async def test_rollback_to_raises_when_memory_not_found(env):
 
 
 @pytest.mark.asyncio
+async def test_resolve_memory_namespace_returns_node_partition(env):
+    # Lets namespace-agnostic callers target a node's actual partition for rollback.
+    engine, review, *_ = env
+    r1 = await engine.upsert_versioned("core://agent", "v1", namespace="tg/userA")
+    assert await review.resolve_memory_namespace(r1.new_memory_id) == "tg/userA"
+    assert await review.resolve_memory_namespace(99999) is None
+
+
+@pytest.mark.asyncio
+async def test_rollback_to_refuses_cross_namespace(env):
+    # F: rollback ignored its `namespace` arg → a caller in namespace B could
+    # rewrite namespace A's version chain in a shared DB. It must verify the
+    # target's node is reachable from the given namespace first.
+    engine, review, *_ = env
+    r1 = await engine.upsert_versioned("core://agent", "v1", namespace="tg/userA")
+    await engine.upsert_versioned("core://agent", "v2", namespace="tg/userA")  # r1 now deprecated
+
+    with pytest.raises(ValueError, match="namespace"):
+        await review.rollback_to(r1.new_memory_id, namespace="tg/userB")
+
+    # The owning namespace can still roll back.
+    res = await review.rollback_to(r1.new_memory_id, namespace="tg/userA")
+    assert res.restored_memory_id == r1.new_memory_id
+    record = await engine.recall("core://agent", namespace="tg/userA")
+    assert record is not None and record.content == "v1"
+
+
+@pytest.mark.asyncio
 async def test_rollback_to_noop_when_already_active(env):
     engine, review, _, _ = env
     r1 = await engine.upsert_versioned(

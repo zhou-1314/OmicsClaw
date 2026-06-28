@@ -324,3 +324,16 @@ def test_web_fetch_uses_shared_fetcher_and_truncates(monkeypatch, tmp_path: Path
 # compression refactor (0 audit-log calls, no production callers).
 # The ``mcp_list_servers`` HTTP endpoint in ``omicsclaw/app/server.py``
 # is a separate function and remains tested via the desktop-server suite.
+
+
+def test_autonomous_analysis_execute_is_approval_gated():
+    # F (codex must-fix): autonomous_analysis_execute runs arbitrary generated code
+    # (RISK_HIGH). It must be outer-loop approval-gated (ADR 0008 L2), else removing
+    # the dead per-cell approval hook would leave it ungated. And the now-unused
+    # request_tool_approval context_param must be gone.
+    from omicsclaw.runtime.tools.spec import APPROVAL_MODE_ASK
+
+    specs = build_bot_tool_specs(BotToolContext(skill_names=("sc-de",), domain_briefing="(test)"))
+    spec = next(s for s in specs if s.name == "autonomous_analysis_execute")
+    assert spec.approval_mode == APPROVAL_MODE_ASK
+    assert "request_tool_approval" not in (spec.context_params or ())

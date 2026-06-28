@@ -122,6 +122,43 @@ async def delete_thread(client: Any, thread_id: str) -> bool:
     return True
 
 
+async def list_thread_source_slugs(client: Any, thread_id: str) -> list[str]:
+    """KG Source slugs ingested in this thread (per-thread grounding, 批7).
+
+    Reads the ``thread_source://<thread_id>/`` subtree — one node per source,
+    written at ingest time by ``orchestration._capture_thread_source`` — and
+    returns the unique slugs. Empty on a missing thread, memory off, or no
+    sources. Mirrors the dataset-subtree read in
+    ``hypotheses._resolve_thread_dataset_path``; any failure yields what was
+    collected so the caller can still proceed (grounding degrades, never breaks).
+    """
+    if not thread_id:
+        return []
+    slugs: list[str] = []
+    try:
+        from omicsclaw.memory.compat import _content_to_memory
+
+        # NOTE: query WITHOUT a trailing slash — list_children/get_subtree treat
+        # ``.../A/`` as a distinct (empty) node and return nothing; ``.../A`` lists
+        # the leaves thread_source://<thread_id>/<slug>.
+        refs = await client.list_children(f"thread_source://{thread_id}")
+        for ref in refs or []:
+            uri = getattr(ref, "uri", None)
+            if not uri:
+                continue
+            rec = await client.recall(uri)
+            content = getattr(rec, "content", None) if rec is not None else None
+            if not content:
+                continue  # container node / empty leaf
+            mem = _content_to_memory(content, "thread_source")
+            slug = str(getattr(mem, "slug", "") or "") if mem else ""
+            if slug and slug not in slugs:
+                slugs.append(slug)
+    except Exception:
+        return slugs
+    return slugs
+
+
 async def get_thread_preferences(client: Any, thread_id: str) -> dict[str, Any] | None:
     tm = await _recall_thread(client, thread_id)
     return None if tm is None else dict(tm.preferences)

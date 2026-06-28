@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from .contracts import (
     AutonomousRunResult,
     AutonomousRunStatus,
     AutonomousWorkspace,
+    utcnow_iso,
 )
 
 
@@ -149,7 +151,50 @@ def write_run_records(
                 else None
             ),
         )
+    # Write result.json LAST: the desktop /outputs reader treats it as the
+    # completion marker (its mtime drives the freshness gate), so it must land
+    # after the manifest / completion report / index finalization (codex review).
+    _write_result_json(workspace, request=request, result=result)
     return manifest_path, completion_report_path
+
+
+def _write_result_json(
+    workspace: AutonomousWorkspace,
+    *,
+    request: AutonomousRunRequest,
+    result: AutonomousRunResult,
+) -> Path:
+    """Emit the ``result.json`` completion envelope the desktop /outputs reader
+    keys on (audit A-2).
+
+    The autonomous runner natively writes ``completion_report.json`` /
+    ``result_summary.md``, but the desktop output 看板 (``_read_result_json``)
+    recognises a finished Run only by ``result.json``. Without this, every
+    successful autonomous run was mis-reported running→failed and never linked
+    back to its conversation. We map the autonomous status onto the same
+    envelope shape skills use (``status`` / ``completed_at`` / ``summary`` /
+    ``output_dir``) so autonomous runs are first-class in the outputs system.
+    """
+    status = "completed" if result.status == AutonomousRunStatus.SUCCEEDED else "failed"
+    summary = (
+        str(result.metadata.get("answer", "") or "").strip()
+        or str(result.metadata.get("computed_results", "") or "").strip()
+        or (request.goal or "").strip()
+        or f"Autonomous run {status}"
+    )
+    payload: dict[str, Any] = {
+        "skill": AUTONOMOUS_CODE_RUNNER_SOURCE,
+        "status": status,
+        "summary": summary[:500],
+        "run_id": workspace.run_id,
+        "output_dir": str(workspace.root),
+        "completed_at": utcnow_iso(),
+    }
+    if result.error:
+        payload["error"] = str(result.error)
+    result_path = workspace.root / "result.json"
+    result_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return result_path
 
 
 def _write_result_summary(

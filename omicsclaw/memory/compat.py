@@ -212,6 +212,29 @@ class ThreadMemory(BaseMemory):
     is_deleted: bool = False
 
 
+class ThreadSourceMemory(BaseMemory):
+    """Link from a Bench thread to a KG Source page (per-thread grounding, 批7).
+
+    Persisted at ``thread_source://<thread_id>/<slug>`` — overwrite-mode (NOT
+    versioned, like ``dataset://``), one independent node per (thread, source).
+    The backend records one on every KG ingest performed inside a thread; the
+    desktop Read/Ideate surfaces enumerate a thread's sources via this subtree
+    and pass them as the formalize citation allow-list (ADR 0019/0021).
+
+    Independent nodes (vs a mutable list on the versioned ``project://<thread_id>``
+    ThreadMemory node) avoid read-modify-write races with concurrent thread
+    metadata edits and re-versioning churn — mirroring the ``dataset://<thread_id>/*``
+    precedent. ``slug`` is a KG-minted slugified id (no path separators), safe in
+    the URI path.
+    """
+    memory_type: Literal["thread_source"] = "thread_source"
+    thread_id: str
+    slug: str
+    # KG source-page relative path (wiki/sources/<slug>.md), best-effort; "" when
+    # the ingest result did not carry one (e.g. a cache-hit before the slug fix).
+    source_page: str = ""
+
+
 # =============================================================================
 # Type → URI domain mapping
 # =============================================================================
@@ -222,6 +245,9 @@ _TYPE_TO_DOMAIN = {
     "preference": "preference",
     "insight": "insight",
     "project_context": "project",
+    # Bench 批7: per-thread KG source links live in their own (un-versioned)
+    # domain, addressed thread_source://<thread_id>/<slug>.
+    "thread_source": "thread_source",
     # Bench Phase 1: thread metadata shares the ``project`` domain (URI is
     # project://<thread_id>); deserialization disambiguates by content memory_type.
     "thread": "project",
@@ -240,6 +266,7 @@ _TYPE_CLASSES = {
     "insight": InsightMemory,
     "project_context": ProjectContextMemory,
     "thread": ThreadMemory,
+    "thread_source": ThreadSourceMemory,
 }
 
 
@@ -265,6 +292,11 @@ def _memory_to_uri_path(memory: BaseMemory) -> str:
         return f"{memory.domain}/{memory.key}"
     elif isinstance(memory, InsightMemory):
         return f"{memory.entity_type}/{memory.entity_id}"
+    elif isinstance(memory, ThreadSourceMemory):
+        # Bench 批7: a thread<->KG-source link nests under its thread, one node
+        # per source: thread_source://<thread_id>/<slug>. Overwrite-mode, so a
+        # re-ingest of the same source is an idempotent rewrite (no duplicate).
+        return f"{memory.thread_id}/{memory.slug}"
     elif isinstance(memory, ThreadMemory):
         # Bench Phase 1: thread metadata is addressed by its thread_id, i.e.
         # project://<thread_id> (the thread node; per-thread content nests under it).
@@ -300,6 +332,46 @@ def _content_to_memory(content: str, memory_type: str) -> Optional[BaseMemory]:
         return cls.model_validate_json(content)
     except Exception:
         return None
+
+
+async def resolve_thread_dataset_path(memory_client: Any, thread_id: str) -> str:
+    """Best-effort ``file_path`` of a dataset bound to this thread, else ``""``.
+
+    Datasets register at ``dataset://<thread_id>/<basename>`` (ADR 0018) inside the
+    desktop user's namespace. We list that subtree and return the first leaf's
+    ``file_path`` (a thread usually has one primary dataset). Any failure — memory
+    off, no dataset, unparseable content — yields ``""`` so callers degrade to a
+    claim-only / no-dataset path.
+
+    Shared (批8/D-3) by the Ideate route-preview AND the kg_build_packet skill
+    router so a built packet routes on the SAME ``(claim, dataset_path)`` the user
+    previewed — a single skill authority. ``memory_client`` is any namespace-bound
+    client exposing ``get_subtree``/``recall`` (desktop ``_memory_client`` or a
+    ``CompatMemoryStore._client_for_session`` result).
+    """
+    if not thread_id:
+        return ""
+    try:
+        # Query WITHOUT a trailing slash: the real MemoryClient treats ``.../t1/``
+        # as a distinct (empty) node and returns nothing, so the thread dataset
+        # silently never reached the Router. ``.../t1`` returns the thread node +
+        # its dataset leaves (the container node has no content → skipped below).
+        refs = await memory_client.get_subtree(f"dataset://{thread_id}", limit=20)
+        for ref in refs or []:
+            uri = getattr(ref, "uri", None)
+            if not uri:
+                continue
+            rec = await memory_client.recall(uri)
+            content = getattr(rec, "content", None) if rec is not None else None
+            if not content:
+                continue  # container node / empty leaf
+            mem = _content_to_memory(content, "dataset")
+            file_path = str(getattr(mem, "file_path", "") or "") if mem else ""
+            if file_path:
+                return file_path
+    except Exception:
+        return ""
+    return ""
 
 
 def _analysis_content_to_title(

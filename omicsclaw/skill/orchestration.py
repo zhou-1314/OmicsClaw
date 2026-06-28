@@ -279,6 +279,37 @@ async def _auto_capture_dataset(
         logger.warning(f"Auto-capture dataset failed: {e}")
 
 
+async def _capture_thread_source(
+    session_id: str, thread_id: str, slug: str, source_page: str = ""
+) -> None:
+    """Record a thread<->KG-source link for per-thread grounding (批7, ADR 0019/0021).
+
+    Writes a ``ThreadSourceMemory`` at ``thread_source://<thread_id>/<slug>`` so the
+    thread's Read/Ideate surfaces can enumerate the sources it ingested and pass
+    them as the formalize citation allow-list. One independent overwrite-mode node
+    per (thread, source) — no read-modify-write (mirrors ``_auto_capture_dataset``).
+
+    Best-effort and never raises: skips when memory is disabled (``memory_store``
+    is None), the session/thread is unknown, or no ``slug`` was produced (KG/LLM
+    absent, or a cache hit that could not recover one). The broad ``except`` also
+    swallows the ``LookupError`` ``_client_for_session`` raises for an unknown
+    session — the caller (a fire-and-forget ingest) must not break over it.
+    """
+    from omicsclaw.runtime.agent.state import memory_store
+    if not memory_store or not session_id or not thread_id or not slug:
+        return
+    try:
+        from omicsclaw.memory.compat import ThreadSourceMemory
+
+        await memory_store.save_memory(
+            session_id,
+            ThreadSourceMemory(thread_id=thread_id, slug=slug, source_page=source_page or ""),
+        )
+        logger.debug("Captured thread source: %s/%s", thread_id, slug)
+    except Exception as e:
+        logger.warning(f"Capture thread source failed: {e}")
+
+
 async def _auto_capture_analysis(
     session_id: str,
     skill: str,

@@ -3,7 +3,7 @@
     "surface": "bot",
     "query": ""
   },
-  "total_chars": 34703,
+  "total_chars": 34804,
   "tool_count": 48,
   "tool_names": [
     "ask_user",
@@ -915,7 +915,7 @@
       "type": "function",
       "function": {
         "name": "kg_ingest",
-        "description": "Ingest a paper or source into the OmicsClaw knowledge graph, creating a Source page (and extracting entities / concepts / methods) that later answers can cite. Use when the user drops or links a paper to read. Pass `source` as a local file path or http(s) URL, or omit it to ingest a freshly dropped PDF. The knowledge base is shared across research (not thread-specific).",
+        "description": "Ingest a paper or source into the OmicsClaw knowledge graph, creating a Source page (and extracting entities / concepts / methods) that later answers can cite. Use when the user drops or links a paper to read. Pass `source` as a local file path or http(s) URL, or omit it to ingest a freshly dropped PDF. The Source page is shared across research (ADR 0019); when ingested inside a Bench thread it is also linked to that thread so the thread's Ideate can ground on it (批7).",
         "parameters": {
           "type": "object",
           "properties": {

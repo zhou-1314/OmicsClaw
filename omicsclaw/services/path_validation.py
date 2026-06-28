@@ -181,7 +181,14 @@ def discover_file(filename_or_pattern: str) -> list[Path]:
     # Handle absolute paths directly
     if filename_or_pattern.startswith('/'):
         p = Path(filename_or_pattern)
-        if p.is_file():
+        # SECURITY (audit B-1): an absolute path must still resolve inside a
+        # trusted root, mirroring validate_input_path's trailing trust gate.
+        # Without this, discover_file would resurrect an out-of-tree absolute
+        # path that validate_input_path already rejected — and the agent callers
+        # that fall back to discover_file (the skill executor and
+        # _resolve_trusted_data_paths) use the hit without re-validating, so a
+        # prompt-injected / remote-job path would be read despite the gate.
+        if p.is_file() and _is_trusted_root(p):
             return [p]
         return []
 
@@ -199,4 +206,9 @@ def discover_file(filename_or_pattern: str) -> list[Path]:
                 if f.is_file() and f not in matches:
                     matches.append(f)
     matches.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-    return matches
+    # SECURITY (audit B-1): a relative name can still escape a trusted dir via
+    # ``..`` traversal (``d / "../secret"``) or a symlink inside the dir that
+    # points outside it. Resolve every hit and keep only those that still land
+    # under a trusted root — mirroring validate_input_path's trailing trust gate
+    # so callers that don't re-validate discovery hits stay safe.
+    return [f for f in matches if _is_trusted_root(f)]

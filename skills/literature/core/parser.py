@@ -83,7 +83,9 @@ def parse_doi(doi: str) -> str:
     # Normalize DOI
     doi = doi.strip()
     if not doi.startswith('10.'):
-        doi = '10.' + doi.lstrip('10.')
+        # removeprefix (exact prefix), NOT lstrip — lstrip('10.') strips the
+        # character SET {'1','0','.'}, corrupting e.g. "1038/foo" → "38/foo".
+        doi = '10.' + doi.removeprefix('10.')
 
     # Try dx.doi.org redirect
     url = f"https://doi.org/{doi}"

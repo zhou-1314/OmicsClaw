@@ -20,8 +20,11 @@
             ├─ partial → 先跑最近 skill，再把 artifacts 交给回退路处理     [skill-first composition]
             └─ no_skill→ 回退路（本子系统）
                  └─ execute_autonomous_analysis_execute   (runtime/tools/builders/agent_executors.py:2059)
-                      └─ run_autonomous_code_loop_async(request, *, llm_client, request_tool_approval, runtime_context)
+                      └─ run_autonomous_code_loop_async(request, *, llm_client)
                                                           (autonomous/code_loop.py)   ← 唯一入口
+                         （审批在外层 agent loop 一次性 gate：autonomous_analysis_execute
+                          为 approval_mode=ASK / ADR 0008 L2；mini-agent 无逐 cell 审批，
+                          故 request_tool_approval / runtime_context 已移除）
 ```
 
 **契约不变量**：无论内部走哪套引擎，入口签名与返回的 `AutonomousRunResult`（`.ok / .attempts / .workspace_root / .manifest_path / .completion_report_path / .error / .metadata`）形状不变，所以 `agent_executors.py` 的渲染、Surface、job UI 都无需改动（output-shape parity）。

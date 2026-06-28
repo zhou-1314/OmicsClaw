@@ -151,7 +151,16 @@ def _prepare_skill_run(
             resolved_input = session.h5ad_path
 
     if resolved_input:
-        resolved_input = str(Path(resolved_input).resolve())
+        # Only resolve inputs that are an actual local file/dir. Free-form skill
+        # inputs — a literature DOI ("10.1038/..."), a URL, or raw text — are NOT
+        # paths: ``Path(...).resolve()`` would mangle them into a bogus
+        # ``<cwd>/10.1038/...`` so the skill mis-detects the input type (the
+        # documented ``oc run literature --input <doi|url>`` then silently falls
+        # back to 'text'). A non-existent input passes through verbatim for the
+        # skill to interpret (audit B).
+        _candidate = Path(resolved_input)
+        if _candidate.exists():
+            resolved_input = str(_candidate.resolve())
 
     user_supplied_output_dir = output_dir is not None
     generated_ts = datetime.now().strftime("%Y%m%d_%H%M%S")

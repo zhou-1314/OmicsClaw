@@ -161,6 +161,24 @@ class ReviewLog:
                 for r in rows
             ]
 
+    async def resolve_memory_namespace(self, memory_id: int) -> Optional[str]:
+        """The namespace a memory's node is reachable from (its first Path), or None.
+
+        Lets namespace-agnostic callers (e.g. the standalone memory-server review,
+        which spans partitions) target the node's ACTUAL partition for
+        ``rollback_to`` instead of guessing ``__shared__`` — which would now
+        fail-closed under the namespace-isolation check.
+        """
+        async with self._db.session() as s:
+            target = await s.get(Memory, memory_id)
+            if target is None or target.node_uuid is None:
+                return None
+            return await s.scalar(
+                sa.select(Path.namespace)
+                .where(Path.edge_id == Edge.id, Edge.child_uuid == target.node_uuid)
+                .limit(1)
+            )
+
     async def rollback_to(
         self, memory_id: int, *, namespace: str
     ) -> RollbackResult:
@@ -175,6 +193,26 @@ class ReviewLog:
             target = await s.get(Memory, memory_id)
             if target is None:
                 raise ValueError(f"Memory ID {memory_id} not found")
+
+            # Namespace isolation: the target's node must be reachable from a Path
+            # in the given namespace. Without this, a caller in namespace B could
+            # rewrite namespace A's version chain in a shared DB (the documented
+            # partition was dead — `namespace` was accepted but ignored). Join
+            # Memory.node_uuid → Edge.child_uuid → Path.namespace.
+            reachable = await s.scalar(
+                sa.select(sa.literal(True))
+                .where(
+                    Path.edge_id == Edge.id,
+                    Edge.child_uuid == target.node_uuid,
+                    Path.namespace == namespace,
+                )
+                .limit(1)
+            )
+            if not reachable:
+                raise ValueError(
+                    f"Memory ID {memory_id} (node {target.node_uuid}) is not reachable "
+                    f"in namespace {namespace!r}; refusing cross-namespace rollback"
+                )
 
             if not target.deprecated:
                 return RollbackResult(

@@ -352,6 +352,7 @@ session_manager = None
 from omicsclaw.services.billing import (
     _TOKEN_PRICES,
     _TOKEN_PRICE_KEYS_BY_LENGTH,
+    _cache_read_discount,
     _get_token_price,
     _usage,
     accumulate_usage,
