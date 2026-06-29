@@ -13,9 +13,14 @@ tags:
 - differential-expression
 requires:
 - anndata
-- scanpy
+- matplotlib
 - numpy
 - pandas
+- pydeseq2
+- scanpy
+- scipy
+- seaborn
+- statsmodels
 ---
 
 # spatial-condition

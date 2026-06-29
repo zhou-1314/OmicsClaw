@@ -14,9 +14,16 @@ tags:
 - lineage
 requires:
 - anndata
-- scanpy
+- cellrank
+- matplotlib
 - numpy
+- palantir
 - pandas
+- scanpy
+- scipy
+- scvelo
+- seaborn
+- statsmodels
 ---
 
 # spatial-trajectory

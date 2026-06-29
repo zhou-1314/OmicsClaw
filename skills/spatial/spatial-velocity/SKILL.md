@@ -13,10 +13,16 @@ tags:
 - dynamics
 requires:
 - anndata
-- scanpy
-- scvelo
+- matplotlib
 - numpy
 - pandas
+- scanpy
+- scipy
+- scvelo
+- scvi-tools
+- seaborn
+- torch
+- velovi
 ---
 
 # spatial-velocity

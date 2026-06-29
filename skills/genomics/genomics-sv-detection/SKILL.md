@@ -13,8 +13,8 @@ tags:
 - sniffles
 - bnd
 requires:
-- pandas
 - numpy
+- pandas
 ---
 
 # genomics-sv-detection

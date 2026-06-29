@@ -12,7 +12,10 @@ tags:
 - anndata
 requires:
 - anndata
+- matplotlib
 - numpy
+- pandas
+- scanpy
 - scipy
 ---
 

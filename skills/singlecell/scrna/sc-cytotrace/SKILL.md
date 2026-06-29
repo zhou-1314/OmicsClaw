@@ -13,9 +13,10 @@ tags:
 - differentiation
 requires:
 - anndata
-- scanpy
+- matplotlib
 - numpy
 - pandas
+- scanpy
 - scipy
 ---
 

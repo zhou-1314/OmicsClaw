@@ -13,9 +13,13 @@ tags:
 - tumor
 requires:
 - anndata
-- scanpy
+- infercnvpy
+- matplotlib
 - numpy
 - pandas
+- scanpy
+- scipy
+- seaborn
 ---
 
 # spatial-cnv

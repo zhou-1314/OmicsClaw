@@ -14,9 +14,15 @@ tags:
 - proportion-test
 requires:
 - anndata
-- scanpy
+- matplotlib
 - numpy
 - pandas
+- pertpy
+- scanpy
+- sccoda
+- scipy
+- seaborn
+- statsmodels
 ---
 
 # sc-differential-abundance

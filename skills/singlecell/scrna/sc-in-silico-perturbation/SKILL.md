@@ -13,9 +13,12 @@ tags:
 - sctenifoldknk
 requires:
 - anndata
-- scanpy
+- matplotlib
 - numpy
 - pandas
+- scanpy
+- scipy
+- statsmodels
 ---
 
 # sc-in-silico-perturbation

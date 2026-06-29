@@ -11,8 +11,8 @@ tags:
 - xcms
 - mzmine
 requires:
-- pandas
 - numpy
+- pandas
 - scipy
 ---
 

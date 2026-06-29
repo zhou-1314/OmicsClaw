@@ -15,8 +15,14 @@ tags:
 - phate
 requires:
 - anndata
-- scanpy
+- matplotlib
 - numpy
+- pandas
+- phate
+- scanpy
+- scikit-learn
+- scipy
+- seaborn
 ---
 
 # sc-clustering

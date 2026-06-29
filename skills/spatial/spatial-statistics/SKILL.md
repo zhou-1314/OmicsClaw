@@ -16,10 +16,16 @@ tags:
 - squidpy
 requires:
 - anndata
-- scanpy
-- squidpy
+- esda
+- libpysal
+- matplotlib
+- networkx
 - numpy
 - pandas
+- scanpy
+- scipy
+- seaborn
+- squidpy
 ---
 
 # spatial-statistics

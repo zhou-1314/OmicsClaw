@@ -14,10 +14,17 @@ tags:
 - kinetics
 requires:
 - anndata
-- scanpy
-- scvelo
+- cellrank
+- matplotlib
 - numpy
+- palantir
 - pandas
+- pyVIA
+- scanpy
+- scikit-learn
+- scipy
+- scvelo
+- seaborn
 ---
 
 # sc-velocity

@@ -10,6 +10,11 @@ tags:
 - ComBat
 - harmonization
 - batch-effect
+requires:
+- matplotlib
+- numpy
+- pandas
+- scipy
 ---
 
 # bulkrna-batch-correction

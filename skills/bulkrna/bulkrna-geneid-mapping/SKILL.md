@@ -13,6 +13,7 @@ tags:
 - HGNC
 - annotation
 requires:
+- mygene
 - numpy
 - pandas
 ---

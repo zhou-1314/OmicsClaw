@@ -10,6 +10,17 @@ tags:
 - integration
 - clustering
 - consensus
+requires:
+- anndata
+- harmonypy
+- matplotlib
+- numpy
+- pandas
+- scanorama
+- scanpy
+- scikit-learn
+- seaborn
+- torch
 ---
 
 # sc-integrate-cluster

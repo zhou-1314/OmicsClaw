@@ -11,8 +11,8 @@ tags:
 - ibaq
 - spectral-counting
 requires:
-- pandas
 - numpy
+- pandas
 ---
 
 # proteomics-quantification

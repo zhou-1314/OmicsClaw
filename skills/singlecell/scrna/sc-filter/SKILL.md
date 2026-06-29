@@ -12,7 +12,12 @@ tags:
 - mitochondrial
 requires:
 - anndata
+- matplotlib
+- numpy
+- pandas
 - scanpy
+- scipy
+- seaborn
 ---
 
 # sc-filter

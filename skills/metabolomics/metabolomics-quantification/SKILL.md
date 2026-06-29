@@ -12,8 +12,8 @@ tags:
 - knn
 - tic
 requires:
-- pandas
 - numpy
+- pandas
 - scikit-learn
 ---
 

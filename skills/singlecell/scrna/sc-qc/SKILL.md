@@ -12,8 +12,12 @@ tags:
 - ribosomal
 requires:
 - anndata
-- scanpy
 - matplotlib
+- numpy
+- pandas
+- scanpy
+- scipy
+- seaborn
 ---
 
 # sc-qc

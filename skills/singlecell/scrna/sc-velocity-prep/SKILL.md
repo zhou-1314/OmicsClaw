@@ -14,8 +14,12 @@ tags:
 - kb-python
 requires:
 - anndata
+- matplotlib
 - numpy
 - pandas
+- scanpy
+- scipy
+- seaborn
 ---
 
 # sc-velocity-prep

@@ -15,9 +15,14 @@ tags:
 - nichenet
 requires:
 - anndata
-- scanpy
+- cellphonedb
+- liana
+- matplotlib
 - numpy
 - pandas
+- scanpy
+- scipy
+- seaborn
 ---
 
 # sc-cell-communication

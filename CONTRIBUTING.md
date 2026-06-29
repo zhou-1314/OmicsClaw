@@ -307,6 +307,35 @@ This wraps four generators:
 The `docs-consistency` CI job runs `--check` on every PR and will fail
 if any of these files are stale.
 
+### Keeping skill `requires:` complete
+
+A skill's `requires:` frontmatter must list every Python package its script
+needs — including optional backends reached transitively through `_lib`
+(e.g. `cellrank`/`palantir` for `spatial-trajectory`). These drift easily,
+so they are **generated and checked**, not hand-maintained:
+
+```bash
+python scripts/audit_skill_requires.py            # report gaps
+python scripts/audit_skill_requires.py --write    # regenerate frontmatter in place
+make audit-requires FIX=1                          # same, via Make
+```
+
+The auditor statically analyses each script + the `_lib` modules it imports,
+resolves the shared `_lib/viz` re-export **by imported symbol** (so a skill is
+not charged for backends it never drives), and canonicalises optional-backend
+names against each domain's `_lib/dependency_manager.py` `DEPENDENCY_REGISTRY`
+(the single source of truth — see AGENTS.md). `--write` is **union-only**: it
+adds missing deps but never drops a declared one (skills that delegate to
+`omicsclaw.*` runtime hide their surface behind the package boundary).
+
+**When you add an algorithm/backend to a skill:**
+1. Register it in the domain's `DEPENDENCY_REGISTRY` with an `install_cmd`.
+2. Add it to the right `pyproject.toml` extra or `environment.yml` Tier 4.
+3. Run `python scripts/audit_skill_requires.py --write` to refresh frontmatter.
+
+CI runs `audit_skill_requires.py --check` (also wired into `skill_lint.py`) and
+**fails on any skill missing a real dependency**.
+
 ### Routing-context token budget
 
 The bot's LLM-facing tool registry ships with every turn. To prevent slow

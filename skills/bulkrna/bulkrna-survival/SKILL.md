@@ -11,6 +11,11 @@ tags:
 - Cox
 - hazard-ratio
 - clinical
+requires:
+- matplotlib
+- numpy
+- pandas
+- scipy
 ---
 
 # bulkrna-survival

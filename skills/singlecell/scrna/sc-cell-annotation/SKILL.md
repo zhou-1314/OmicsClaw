@@ -17,9 +17,14 @@ tags:
 - markers
 requires:
 - anndata
-- scanpy
+- celltypist
+- matplotlib
 - numpy
 - pandas
+- popv
+- scanpy
+- scipy
+- seaborn
 ---
 
 # sc-cell-annotation

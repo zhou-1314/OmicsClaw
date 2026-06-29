@@ -14,10 +14,15 @@ tags:
 - decoupler
 - pathway-enrichment
 requires:
+- adjustText
 - anndata
-- scanpy
+- matplotlib
+- networkx
 - numpy
 - pandas
+- scanpy
+- scipy
+- seaborn
 ---
 
 # sc-enrichment

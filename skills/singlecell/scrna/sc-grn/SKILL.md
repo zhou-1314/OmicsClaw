@@ -16,9 +16,17 @@ tags:
 - cistarget
 requires:
 - anndata
-- scanpy
+- arboreto
+- dask
+- matplotlib
+- networkx
 - numpy
 - pandas
+- pyscenic
+- scanpy
+- scikit-learn
+- scipy
+- seaborn
 ---
 
 # sc-grn

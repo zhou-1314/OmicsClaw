@@ -13,9 +13,17 @@ tags:
 - multi-slice
 requires:
 - anndata
-- scanpy
+- matplotlib
 - numpy
 - pandas
+- paste-bio
+- POT
+- scanpy
+- scikit-learn
+- scipy
+- seaborn
+- STalign
+- torch
 ---
 
 # spatial-register

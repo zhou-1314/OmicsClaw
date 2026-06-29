@@ -14,9 +14,14 @@ tags:
 - multi-sample
 requires:
 - anndata
-- scanpy
+- bbknn
+- harmonypy
+- matplotlib
 - numpy
 - pandas
+- scanpy
+- scipy
+- seaborn
 ---
 
 # spatial-integrate

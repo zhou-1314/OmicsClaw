@@ -13,6 +13,12 @@ tags:
 - KEGG
 - Reactome
 - pathway
+requires:
+- gseapy
+- matplotlib
+- numpy
+- pandas
+- scipy
 ---
 
 # bulkrna-enrichment

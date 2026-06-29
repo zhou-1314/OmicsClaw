@@ -15,8 +15,8 @@ tags:
 - dsbu
 - edc
 requires:
-- pandas
 - numpy
+- pandas
 ---
 
 # proteomics-structural

@@ -13,8 +13,8 @@ tags:
 - consequence
 - impact
 requires:
-- pandas
 - numpy
+- pandas
 ---
 
 # genomics-variant-annotation

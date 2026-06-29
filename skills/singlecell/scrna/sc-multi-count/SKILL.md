@@ -12,7 +12,12 @@ tags:
 - aggregation
 requires:
 - anndata
+- matplotlib
+- numpy
 - pandas
+- scanpy
+- scipy
+- seaborn
 ---
 
 # sc-multi-count

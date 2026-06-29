@@ -12,8 +12,8 @@ tags:
 - ubiquitination
 - site-localization
 requires:
-- pandas
 - numpy
+- pandas
 ---
 
 # proteomics-ptm

@@ -57,6 +57,14 @@ python omicsclaw.py run spatial-preprocess --demo
 > - **GitHub-only R packages** are installed inline by `0_setup_env.sh`
 >   Tier 3 (`devtools::install_github` for spacexr, CARD, CellChat, numbat,
 >   SPARK, DoubletFinder).
+> - **Optional analysis backends** (cellrank, palantir, scvelo, tangram-sc,
+>   …) are catalogued per domain in `skills/<domain>/_lib/dependency_manager.py`
+>   `DEPENDENCY_REGISTRY` (canonical PyPI name → module + install_cmd). This is
+>   the SSOT for backend name mapping; new algorithms register here.
+> - **Per-skill `requires:` frontmatter** is generated/checked from the real
+>   import surface by `scripts/audit_skill_requires.py` (`--check` in CI,
+>   `--write` to regenerate). Never hand-edit it to "fix" a missing backend —
+>   register the backend and run `--write`. See CONTRIBUTING.md.
 >
 > The repository does not use a root `requirements.txt` as a primary
 > install entrypoint.

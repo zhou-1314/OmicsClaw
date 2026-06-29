@@ -13,8 +13,8 @@ tags:
 - cnvkit
 - gatk-gcnv
 requires:
-- pandas
 - numpy
+- pandas
 ---
 
 # genomics-cnv-calling

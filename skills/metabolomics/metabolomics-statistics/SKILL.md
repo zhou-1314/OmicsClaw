@@ -13,8 +13,8 @@ tags:
 - kruskal
 - bh-fdr
 requires:
-- pandas
 - numpy
+- pandas
 - scipy
 ---
 

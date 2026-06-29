@@ -12,6 +12,15 @@ tags:
 - t-test
 - pydeseq2
 - pseudobulk
+requires:
+- anndata
+- matplotlib
+- numpy
+- pandas
+- pydeseq2
+- scanpy
+- scipy
+- seaborn
 ---
 
 # spatial-de

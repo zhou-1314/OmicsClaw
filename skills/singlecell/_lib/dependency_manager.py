@@ -62,6 +62,22 @@ DEPENDENCY_REGISTRY: dict[str, DependencyInfo] = {
     # DE
     "pydeseq2": DependencyInfo("pydeseq2", "pip install pydeseq2", "DESeq2 in Python"),
     "gseapy": DependencyInfo("gseapy", 'pip install -e ".[singlecell-enrichment]"', "Single-cell statistical enrichment and pathway-library resolution"),
+
+    # Perturbation / compositional
+    "pertpy": DependencyInfo("pertpy", "pip install pertpy", "Perturbation analysis (Augur, Milo, Mixscape, ...)"),
+    "sccoda": DependencyInfo("sccoda", "pip install sccoda", "scCODA Bayesian compositional analysis"),
+
+    # Embedding / multi-omics
+    "simba-bio": DependencyInfo("simba", "pip install simba-bio", "SIMBA single-cell graph embedding"),
+    "omicverse": DependencyInfo("omicverse", "pip install omicverse", "OmicVerse multi-omics analysis toolkit"),
+
+    # Gene programs / metacells
+    "cnmf": DependencyInfo("cnmf", "pip install cnmf", "Consensus NMF gene programs (cNMF)"),
+    "SEACells": DependencyInfo("SEACells", "pip install SEACells", "SEACells metacell inference"),
+
+    # GRN / annotation backends
+    "pyscenic": DependencyInfo("pyscenic", "pip install pyscenic", "SCENIC gene-regulatory-network inference"),
+    "popv": DependencyInfo("popv", "pip install popv", "PopV consensus cell-type annotation"),
 }
 
 

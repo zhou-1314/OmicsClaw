@@ -13,8 +13,8 @@ tags:
 - bowtie2
 - minimap2
 requires:
-- pandas
 - numpy
+- pandas
 ---
 
 # genomics-alignment

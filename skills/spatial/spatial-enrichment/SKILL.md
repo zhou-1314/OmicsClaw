@@ -14,9 +14,12 @@ tags:
 - gene-set
 requires:
 - anndata
-- scanpy
+- matplotlib
 - numpy
 - pandas
+- scanpy
+- scipy
+- seaborn
 ---
 
 # spatial-enrichment

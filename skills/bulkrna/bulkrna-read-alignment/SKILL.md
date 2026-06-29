@@ -13,9 +13,9 @@ tags:
 - mapping-rate
 - strandedness
 requires:
+- matplotlib
 - numpy
 - pandas
-- matplotlib
 ---
 
 # bulkrna-read-alignment

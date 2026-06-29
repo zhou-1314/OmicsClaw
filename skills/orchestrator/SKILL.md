@@ -11,7 +11,7 @@ tags:
 - multi-omics
 - registry
 requires:
-- pyyaml
+- PyYAML
 ---
 
 # orchestrator

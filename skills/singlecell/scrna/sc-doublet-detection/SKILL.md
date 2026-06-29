@@ -13,8 +13,15 @@ tags:
 - scdblfinder
 requires:
 - anndata
+- doubletdetection
+- h5py
+- matplotlib
 - numpy
+- pandas
 - scanpy
+- scipy
+- scrublet
+- seaborn
 ---
 
 # sc-doublet-detection

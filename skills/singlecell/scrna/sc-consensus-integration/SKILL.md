@@ -10,6 +10,14 @@ tags:
 - consensus
 - integration
 - batch-correction
+requires:
+- anndata
+- numpy
+- pandas
+- PyYAML
+- scanpy
+- scikit-learn
+- scipy
 ---
 
 # sc-consensus-integration

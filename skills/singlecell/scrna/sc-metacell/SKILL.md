@@ -13,10 +13,13 @@ tags:
 - pseudo-cells
 requires:
 - anndata
-- scanpy
+- matplotlib
 - numpy
 - pandas
+- scanpy
 - scikit-learn
+- scipy
+- SEACells
 ---
 
 # sc-metacell

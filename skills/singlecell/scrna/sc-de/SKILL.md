@@ -10,6 +10,16 @@ tags:
 - markers
 - wilcoxon
 - deseq2
+requires:
+- adjustText
+- anndata
+- matplotlib
+- numpy
+- pandas
+- pydeseq2
+- scanpy
+- scipy
+- seaborn
 ---
 
 # sc-de

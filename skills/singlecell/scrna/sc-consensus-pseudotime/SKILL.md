@@ -10,6 +10,14 @@ tags:
 - consensus
 - pseudotime
 - trajectory
+requires:
+- anndata
+- numpy
+- pandas
+- PyYAML
+- scanpy
+- scikit-learn
+- scipy
 ---
 
 # sc-consensus-pseudotime

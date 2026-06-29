@@ -1,5 +1,5 @@
 .PHONY: setup-env setup-env-name \
-        demo test list demo-all catalog demo-orchestrator demo-bulkrna \
+        demo test list demo-all catalog audit-requires demo-orchestrator demo-bulkrna \
         install install-spatial-domains install-full install-dev \
         install-oc oc-link \
         bot-telegram bot-feishu bot-multi bot-list \
@@ -78,6 +78,12 @@ list:
 
 catalog:
 	python scripts/generate_catalog.py
+
+# Reconcile each skill's `requires:` frontmatter with its real (transitively
+# detected) Python-package surface.  CI calls `--check` (blocking on missing
+# deps); local dev runs `make audit-requires FIX=1` to regenerate in place.
+audit-requires:
+	python scripts/audit_skill_requires.py $(if $(FIX),--write,--check)
 
 # ADR 2026-05-11 (#1): verify every routing surface (catalog.json, every
 # domain INDEX.md, CLAUDE.md routing table) stays in sync with SKILL.md

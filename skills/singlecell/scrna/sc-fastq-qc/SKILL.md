@@ -11,8 +11,13 @@ tags:
 - qc
 - read-quality
 requires:
-- pandas
+- anndata
 - matplotlib
+- numpy
+- pandas
+- scanpy
+- scipy
+- seaborn
 ---
 
 # sc-fastq-qc

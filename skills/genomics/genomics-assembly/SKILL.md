@@ -14,8 +14,8 @@ tags:
 - spades
 - flye
 requires:
-- pandas
 - numpy
+- pandas
 ---
 
 # genomics-assembly

@@ -9,6 +9,11 @@ tags:
 - deconvolution
 - NNLS
 - cell-type-proportion
+requires:
+- matplotlib
+- numpy
+- pandas
+- scipy
 ---
 
 # bulkrna-deconvolution

@@ -13,8 +13,8 @@ tags:
 - eagle
 - ps
 requires:
-- pandas
 - numpy
+- pandas
 ---
 
 # genomics-phasing

@@ -11,6 +11,11 @@ tags:
 - network
 - hub-genes
 - protein-interaction
+requires:
+- matplotlib
+- numpy
+- pandas
+- requests
 ---
 
 # bulkrna-ppi-network

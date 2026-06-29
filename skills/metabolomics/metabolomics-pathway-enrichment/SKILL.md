@@ -12,8 +12,8 @@ tags:
 - fisher
 - demo
 requires:
-- pandas
 - numpy
+- pandas
 - scipy
 ---
 

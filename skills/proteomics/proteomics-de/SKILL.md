@@ -12,8 +12,8 @@ tags:
 - mann-whitney
 - bh-fdr
 requires:
-- pandas
 - numpy
+- pandas
 - scipy
 ---
 

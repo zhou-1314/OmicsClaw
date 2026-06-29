@@ -11,6 +11,11 @@ tags:
 - PSI
 - rMATS
 - SUPPA2
+requires:
+- matplotlib
+- numpy
+- pandas
+- scipy
 ---
 
 # bulkrna-splicing

@@ -13,10 +13,13 @@ tags:
 - factorisation
 requires:
 - anndata
-- scanpy
+- cnmf
+- matplotlib
 - numpy
 - pandas
+- scanpy
 - scikit-learn
+- scipy
 ---
 
 # sc-gene-programs

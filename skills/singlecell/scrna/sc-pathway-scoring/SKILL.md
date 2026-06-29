@@ -14,9 +14,13 @@ tags:
 - decoupler
 requires:
 - anndata
-- scanpy
+- gseapy
+- matplotlib
 - numpy
 - pandas
+- scanpy
+- scipy
+- seaborn
 ---
 
 # sc-pathway-scoring

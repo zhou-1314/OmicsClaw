@@ -14,9 +14,13 @@ tags:
 - prism
 requires:
 - anndata
-- scanpy
+- matplotlib
 - numpy
+- omicverse
 - pandas
+- scanpy
+- scipy
+- seaborn
 ---
 
 # sc-drug-response

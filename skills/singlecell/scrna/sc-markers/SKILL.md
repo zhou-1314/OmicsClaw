@@ -14,9 +14,13 @@ tags:
 - cosg
 requires:
 - anndata
-- scanpy
+- matplotlib
 - numpy
 - pandas
+- scanpy
+- scikit-learn
+- scipy
+- seaborn
 ---
 
 # sc-markers

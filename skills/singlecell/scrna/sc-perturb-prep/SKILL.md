@@ -13,8 +13,13 @@ tags:
 - sgrna-assignment
 requires:
 - anndata
+- matplotlib
 - numpy
+- packaging
 - pandas
+- pertpy
+- scanpy
+- scipy
 ---
 
 # sc-perturb-prep

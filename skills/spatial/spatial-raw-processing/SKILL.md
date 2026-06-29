@@ -13,8 +13,12 @@ tags:
 - slideseq
 requires:
 - anndata
+- matplotlib
 - numpy
 - pandas
+- PyYAML
+- scipy
+- seaborn
 ---
 
 # spatial-raw-processing

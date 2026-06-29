@@ -12,8 +12,8 @@ tags:
 - maxquant
 - msgf
 requires:
-- pandas
 - numpy
+- pandas
 ---
 
 # proteomics-identification

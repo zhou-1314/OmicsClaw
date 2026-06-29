@@ -12,10 +12,11 @@ tags:
 - bh-fdr
 - biomarker
 requires:
-- pandas
+- matplotlib
 - numpy
-- scipy
+- pandas
 - scikit-learn
+- scipy
 ---
 
 # metabolomics-de

@@ -14,9 +14,15 @@ tags:
 - cellassign
 requires:
 - anndata
-- scanpy
+- matplotlib
 - numpy
 - pandas
+- scanpy
+- scipy
+- scvi-tools
+- seaborn
+- tangram-sc
+- torch
 ---
 
 # spatial-annotate

@@ -14,9 +14,15 @@ tags:
 - flashs
 requires:
 - anndata
-- scanpy
+- matplotlib
 - numpy
 - pandas
+- scanpy
+- scipy
+- seaborn
+- SpatialDE
+- squidpy
+- statsmodels
 ---
 
 # spatial-genes

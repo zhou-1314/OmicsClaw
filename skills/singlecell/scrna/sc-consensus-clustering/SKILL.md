@@ -16,12 +16,12 @@ tags:
 - weighted
 requires:
 - anndata
-- scanpy
 - numpy
 - pandas
-- scipy
+- PyYAML
+- scanpy
 - scikit-learn
-- pyyaml
+- scipy
 ---
 
 # sc-consensus-clustering

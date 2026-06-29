@@ -12,8 +12,8 @@ tags:
 - demo
 - pathway
 requires:
-- pandas
 - numpy
+- pandas
 - scipy
 ---
 

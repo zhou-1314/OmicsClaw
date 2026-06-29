@@ -17,9 +17,16 @@ tags:
 - monocle3
 requires:
 - anndata
-- scanpy
+- cellrank
+- matplotlib
 - numpy
+- palantir
 - pandas
+- pyVIA
+- scanpy
+- scipy
+- scvelo
+- seaborn
 ---
 
 # sc-pseudotime

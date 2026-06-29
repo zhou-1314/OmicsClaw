@@ -16,8 +16,20 @@ tags:
 - simba
 requires:
 - anndata
+- bbknn
+- harmonypy
+- matplotlib
 - numpy
+- pandas
+- phate
+- scanorama
+- scanpy
+- scikit-learn
 - scipy
+- scvi-tools
+- seaborn
+- simba-bio
+- torch
 ---
 
 # sc-batch-integration

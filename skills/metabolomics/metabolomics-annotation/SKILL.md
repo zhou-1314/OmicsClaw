@@ -11,8 +11,8 @@ tags:
 - demo
 - mz-match
 requires:
-- pandas
 - numpy
+- pandas
 ---
 
 # metabolomics-annotation

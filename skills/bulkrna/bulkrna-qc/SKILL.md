@@ -13,9 +13,9 @@ tags:
 - sample-correlation
 - CPM
 requires:
+- matplotlib
 - numpy
 - pandas
-- matplotlib
 - scipy
 ---
 

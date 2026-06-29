@@ -14,9 +14,11 @@ tags:
 - xenium
 requires:
 - anndata
-- scanpy
+- matplotlib
 - numpy
 - pandas
+- scanpy
+- scipy
 ---
 
 # spatial-microenvironment-subset

@@ -12,8 +12,8 @@ tags:
 - median
 - log
 requires:
-- pandas
 - numpy
+- pandas
 ---
 
 # metabolomics-normalization

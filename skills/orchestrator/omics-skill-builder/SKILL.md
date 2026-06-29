@@ -11,7 +11,7 @@ tags:
 - meta
 - code-generation
 requires:
-- pyyaml
+- PyYAML
 ---
 
 # omics-skill-builder

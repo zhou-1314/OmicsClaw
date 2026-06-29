@@ -13,8 +13,8 @@ tags:
 - snv
 - indel
 requires:
-- pandas
 - numpy
+- pandas
 ---
 
 # genomics-vcf-operations

@@ -17,9 +17,20 @@ tags:
 - louvain
 requires:
 - anndata
-- scanpy
+- GraphST
+- louvain
+- matplotlib
 - numpy
 - pandas
+- pybanksy
+- scanpy
+- scikit-learn
+- scipy
+- seaborn
+- SpaGCN
+- squidpy
+- STAGATE-pyG
+- torch
 ---
 
 # spatial-domains

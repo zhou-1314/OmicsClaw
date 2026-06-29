@@ -15,11 +15,14 @@ tags:
 - leiden
 requires:
 - anndata
-- scanpy
+- matplotlib
 - numpy
 - pandas
-- scipy
+- phate
+- scanpy
 - scikit-learn
+- scipy
+- seaborn
 ---
 
 # scatac-preprocessing

@@ -109,6 +109,30 @@ def _check_body(body: str) -> list[str]:
     return errors
 
 
+def _check_requires_complete(skill_dir: Path) -> list[str]:
+    """Fail when frontmatter `requires:` omits a statically-provable dependency.
+
+    Conservative (Codex-reviewed): MISSING real deps are errors; stale extras are
+    only warned about by the standalone `scripts/audit_skill_requires.py` (skills
+    that delegate to ``omicsclaw.*`` legitimately declare more than is importable).
+    Auto-fix with ``python scripts/audit_skill_requires.py --write``.
+    """
+    scripts_dir = str(Path(__file__).resolve().parent)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    try:
+        from audit_skill_requires import audit_skill
+    except Exception:  # pragma: no cover - import path / optional yaml
+        return []
+    result = audit_skill(skill_dir)
+    if result["missing"]:
+        return [
+            "requires: missing statically-detected deps "
+            f"{result['missing']} — run `python scripts/audit_skill_requires.py --write`"
+        ]
+    return []
+
+
 def _check_frontmatter_keys(frontmatter: dict) -> list[str]:
     errors: list[str] = []
     extra = set(frontmatter) - ALLOWED_FRONTMATTER_KEYS
@@ -740,6 +764,7 @@ def lint_skill(skill_dir: Path) -> list[str]:
     errors.extend(_check_sidecar(sidecar))
     errors.extend(_check_references(skill_dir, sidecar))
     errors.extend(_check_gotchas_anchors(skill_dir, body, sidecar))
+    errors.extend(_check_requires_complete(skill_dir))
 
     # Type-specific profile (ADR 0030).  `workflow` shims delegate their
     # argparse + outputs to the shared runtime, so the leaf flag-match and

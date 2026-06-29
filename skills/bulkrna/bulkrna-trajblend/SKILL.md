@@ -10,6 +10,13 @@ tags:
 - pseudotime
 - deconvolution
 - single-cell
+requires:
+- anndata
+- matplotlib
+- numpy
+- pandas
+- scikit-learn
+- scipy
 ---
 
 # bulkrna-trajblend

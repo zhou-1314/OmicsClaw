@@ -12,8 +12,8 @@ tags:
 - adapter
 - fastqc
 requires:
-- pandas
 - numpy
+- pandas
 ---
 
 # genomics-qc

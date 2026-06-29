@@ -14,9 +14,13 @@ tags:
 - pertpy
 requires:
 - anndata
-- scanpy
+- matplotlib
 - numpy
+- packaging
 - pandas
+- pertpy
+- scanpy
+- scipy
 ---
 
 # sc-perturb

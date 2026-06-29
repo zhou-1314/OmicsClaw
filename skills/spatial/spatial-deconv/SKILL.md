@@ -17,9 +17,17 @@ tags:
 - flashdeconv
 requires:
 - anndata
-- scanpy
+- cell2location
+- flashdeconv
+- matplotlib
 - numpy
 - pandas
+- scanpy
+- scipy
+- scvi-tools
+- seaborn
+- tangram-sc
+- torch
 ---
 
 # spatial-deconv

@@ -13,8 +13,13 @@ tags:
 - contamination
 requires:
 - anndata
+- cellbender
+- matplotlib
 - numpy
+- pandas
+- scanpy
 - scipy
+- torch
 ---
 
 # sc-ambient-removal

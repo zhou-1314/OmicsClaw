@@ -12,8 +12,8 @@ tags:
 - diann
 - spectronaut
 requires:
-- pandas
 - numpy
+- pandas
 ---
 
 # proteomics-data-import

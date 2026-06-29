@@ -12,8 +12,8 @@ tags:
 - vcf
 - ti-tv
 requires:
-- pandas
 - numpy
+- pandas
 ---
 
 # genomics-variant-calling

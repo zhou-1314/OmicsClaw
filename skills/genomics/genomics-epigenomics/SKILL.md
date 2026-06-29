@@ -14,8 +14,8 @@ tags:
 - macs
 - bed
 requires:
-- pandas
 - numpy
+- pandas
 ---
 
 # genomics-epigenomics

@@ -13,8 +13,8 @@ tags:
 - missing-values
 - cv
 requires:
-- pandas
 - numpy
+- pandas
 ---
 
 # proteomics-ms-qc

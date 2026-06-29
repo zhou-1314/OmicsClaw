@@ -13,9 +13,9 @@ tags:
 - adapter
 - read-quality
 requires:
+- matplotlib
 - numpy
 - pandas
-- matplotlib
 ---
 
 # bulkrna-read-qc

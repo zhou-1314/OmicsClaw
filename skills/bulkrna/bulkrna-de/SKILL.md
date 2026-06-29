@@ -12,9 +12,9 @@ tags:
 - MA-plot
 - fold-change
 requires:
+- matplotlib
 - numpy
 - pandas
-- matplotlib
 - scipy
 ---
 

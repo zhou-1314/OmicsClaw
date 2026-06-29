@@ -13,9 +13,9 @@ tags:
 - backward-proof-driven-recommendation
 requires:
 - anndata
-- scanpy
 - numpy
 - pandas
+- scanpy
 - scikit-learn
 ---
 

@@ -16,9 +16,12 @@ tags:
 - leiden
 requires:
 - anndata
-- scanpy
+- matplotlib
 - numpy
 - pandas
+- scanpy
+- scipy
+- seaborn
 ---
 
 # spatial-preprocess

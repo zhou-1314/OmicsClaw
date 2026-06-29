@@ -17,9 +17,13 @@ tags:
 - pearson_residuals
 requires:
 - anndata
-- scanpy
+- matplotlib
 - numpy
 - pandas
+- phate
+- scanpy
+- scipy
+- seaborn
 ---
 
 # sc-preprocessing

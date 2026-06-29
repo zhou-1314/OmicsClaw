@@ -11,6 +11,11 @@ tags:
 - network
 - modules
 - hub-genes
+requires:
+- matplotlib
+- numpy
+- pandas
+- scipy
 ---
 
 # bulkrna-coexpression

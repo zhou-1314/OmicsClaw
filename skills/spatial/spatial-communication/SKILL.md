@@ -14,9 +14,15 @@ tags:
 - fastccc
 requires:
 - anndata
-- scanpy
+- cellphonedb
+- fastccc
+- liana
+- matplotlib
 - numpy
 - pandas
+- scanpy
+- scipy
+- seaborn
 ---
 
 # spatial-communication

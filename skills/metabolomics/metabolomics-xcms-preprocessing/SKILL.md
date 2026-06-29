@@ -13,8 +13,8 @@ tags:
 - gc-ms
 - centwave
 requires:
-- pandas
 - numpy
+- pandas
 ---
 
 # metabolomics-xcms-preprocessing
