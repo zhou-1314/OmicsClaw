@@ -3,8 +3,10 @@ from __future__ import annotations
 import anndata as ad
 import numpy as np
 import pandas as pd
+import pytest
 
 from skills.singlecell._lib.preflight import (
+    PreflightDecision,
     apply_preflight,
     preflight_sc_ambient_removal,
     preflight_sc_batch_integration,
@@ -341,6 +343,46 @@ def test_apply_preflight_accepts_confirmed_sc_preprocessing_prompt():
     assert decision.status == "proceed_with_guidance"
     assert not decision.confirmations
     assert any("user confirmed" in line for line in decision.guidance)
+
+
+class _NullLogger:
+    def warning(self, *_args, **_kwargs):
+        return None
+
+
+def test_apply_preflight_confirmation_gate_exits_cleanly_not_traceback():
+    """A `needs_user_input` confirmation gate must surface as a clean non-zero
+    SystemExit (no Python traceback), NOT an uncaught ValueError. Regression for
+    the sc-preprocessing 'preflight check failed' traceback that fired on the
+    normal raw-data + default-thresholds workflow and read as a crash."""
+    adata = _adata(x=np.array([[10, 1], [8, 2]], dtype=float))
+    decision = preflight_sc_preprocessing(
+        adata,
+        method="scanpy",
+        min_genes=200,
+        max_mt_pct=20.0,
+        min_cells=3,
+        source_path="/tmp/pbmc3k_raw.h5ad",
+    )
+    assert decision.status == "needs_user_input"
+
+    with pytest.raises(SystemExit) as exc:
+        apply_preflight(decision, _NullLogger(), confirmed=False)
+    # non-zero so surfaces still detect the gate (USER_GUIDANCE_JSON on stderr)
+    # and can prompt-then-rerun with --confirmed-preflight.
+    assert exc.value.code not in (0, None)
+
+
+def test_apply_preflight_blocked_exits_cleanly_not_traceback():
+    """A hard `blocked` preflight (missing data) also exits cleanly (non-zero)
+    rather than crashing with a traceback."""
+    decision = PreflightDecision("sc-preprocessing")
+    decision.block("Preprocessing expects raw count-like input.")
+    assert decision.status == "blocked"
+
+    with pytest.raises(SystemExit) as exc:
+        apply_preflight(decision, _NullLogger(), confirmed=False)
+    assert exc.value.code not in (0, None)
 
 
 def test_preflight_sc_qc_blocks_non_count_like_input():

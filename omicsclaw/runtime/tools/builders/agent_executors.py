@@ -470,21 +470,31 @@ async def execute_omicsclaw(
             extract_user_guidance_lines(stderr_str),
             payloads=payloads,
         )
+        # A controlled preflight gate (confirmation needed / missing data) exits
+        # non-zero by design and emits a structured payload — it is NOT a crash.
+        # Detect it from the payload status so it renders as clean guidance even
+        # though it no longer carries the legacy "preflight check failed" string.
+        preflight_gate = any(
+            isinstance(p, dict) and p.get("status") in {"needs_user_input", "blocked"}
+            for p in payloads
+        )
         clean_stderr = strip_user_guidance_lines(stderr_str)
         clean_stdout = strip_user_guidance_lines(stdout_str)
         err = clean_stderr[-1500:] if clean_stderr else clean_stdout[-1500:] if clean_stdout else "unknown error"
         # Clean up empty output directory on failure
         if out_dir.exists():
             shutil.rmtree(out_dir, ignore_errors=True)
-        # Capture failed analysis to memory (so we remember what was tried)
-        if session_id:
+        # A preflight gate is not a failed analysis — don't record it as one.
+        if session_id and not preflight_gate:
             await _auto_capture_analysis(session_id, skill_key, args, None, False, thread_id=thread_id)
+        # A preflight gate takes priority over env-error heuristics and the
+        # legacy string check: render the guidance cleanly, no "failed (exit N)".
+        if guidance_block and (preflight_gate or "preflight check failed" in err.lower()):
+            return auto_route_banner + (payload_prefix + "\n" if payload_prefix else "") + guidance_block
         # Environment errors take priority — user needs to know it's not their data
         env_msg = _classify_env_error(err)
         if env_msg:
             return env_msg
-        if guidance_block and "preflight check failed" in err.lower():
-            return auto_route_banner + (payload_prefix + "\n" if payload_prefix else "") + guidance_block
         if guidance_block:
             rendered = guidance_block + f"\n\n---\n{skill_key} failed (exit {returncode}):\n{err}"
             return auto_route_banner + (payload_prefix + "\n" if payload_prefix else "") + rendered

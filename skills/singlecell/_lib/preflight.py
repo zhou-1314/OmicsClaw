@@ -35,6 +35,14 @@ _STATUS_SEVERITY = {
     "blocked": 3,
 }
 
+# Exit code used when a skill stops at a controlled preflight gate
+# (``needs_user_input`` confirmation or ``blocked`` missing-data). Distinct from
+# the generic ``1`` of an unexpected crash so callers *could* branch on it; all
+# current surfaces detect the gate from the emitted ``USER_GUIDANCE_JSON``
+# payload, not the code. Non-zero so the run is still treated as "did not
+# complete".
+PREFLIGHT_GATE_EXIT_CODE = 2
+
 _OBS_FAMILY_KEYWORDS: dict[str, tuple[str, ...]] = {
     "batch": ("batch", "sample", "sample_id", "donor", "patient", "replicate", "orig.ident", "library"),
     "condition": ("condition", "group", "treatment", "status", "disease", "diagnosis", "phenotype"),
@@ -1864,4 +1872,13 @@ def apply_preflight(
         decision.pending_fields.clear()
         decision.status = "proceed_with_guidance"
     decision.emit(logger)
-    decision.raise_if_blocking()
+    if decision.status in {"needs_user_input", "blocked"}:
+        # A preflight that needs confirmation (``needs_user_input``) or is missing
+        # data/packages (``blocked``) is a CONTROLLED gate, not a code crash. The
+        # structured ``USER_GUIDANCE_JSON`` payload + human-readable guidance lines
+        # were just emitted to stderr for the surface to parse: it can prompt and
+        # re-run with ``--confirmed-preflight`` (confirmation) or report the blocker.
+        # Exit non-zero WITHOUT a Python traceback so logs and UIs don't read the
+        # gate as a crash (the historical ``raise ValueError`` propagated uncaught
+        # and printed a full traceback on the normal raw-data workflow).
+        raise SystemExit(PREFLIGHT_GATE_EXIT_CODE)

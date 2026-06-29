@@ -120,17 +120,35 @@ def build_skill_run_display_view(
     skill: str,
     result: dict[str, Any],
 ) -> SkillRunDisplayView:
+    stderr_text = str(result.get("stderr", "") or "")
+    payloads = extract_user_guidance_payloads(stderr_text)
     guidance_block = render_guidance_block(
-        extract_user_guidance_lines(str(result.get("stderr", "") or "")),
+        extract_user_guidance_lines(stderr_text),
         title="Important follow-up",
-        payloads=extract_user_guidance_payloads(str(result.get("stderr", "") or "")),
+        payloads=payloads,
     )
     stdout = str(result.get("stdout", "") or "")
     if guidance_block:
         stdout = guidance_block + ("\n\n---\n" + stdout if stdout else "")
     raw_error = strip_user_guidance_lines(str(result.get("stderr", "unknown error") or "unknown error")) or "unknown error"
-    if guidance_block and "preflight check failed" in raw_error.lower():
-        raw_error = "Preflight needs your confirmation before running."
+    # A controlled preflight gate (confirmation needed / missing data) is not a
+    # crash. `apply_preflight` now exits cleanly (no "preflight check failed"
+    # traceback string), so detect the gate from the payload status; keep the
+    # legacy string as a fallback for any older raise path.
+    gate_status = next(
+        (
+            p.get("status")
+            for p in payloads
+            if isinstance(p, dict) and p.get("status") in {"needs_user_input", "blocked"}
+        ),
+        None,
+    )
+    if guidance_block and (gate_status or "preflight check failed" in raw_error.lower()):
+        raw_error = (
+            "Preflight blocked: required data or metadata is missing."
+            if gate_status == "blocked"
+            else "Preflight needs your confirmation before running."
+        )
     return SkillRunDisplayView(
         skill=skill,
         success=bool(result.get("success")),
