@@ -25,8 +25,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-import yaml
-
 from omicsclaw.runtime.consensus.member import ConsensusMember
 
 logger = logging.getLogger(__name__)
@@ -78,18 +76,29 @@ class PlannedMember:
 
 
 def load_param_hints(parameters_yaml_path: Path) -> dict[str, Any]:
-    """Read ``param_hints`` from a skill's ``parameters.yaml``.
+    """Read a member skill's ``param_hints`` via the DUAL-TRACK reader (ADR 0037).
 
-    Returns ``{}`` if the file or the block is missing — the planner then
-    falls back to the user-supplied ``--members`` list (callers must enforce).
+    A migrated (v2) member exposes them at ``skill.yaml.interface.parameters.hints``;
+    a v1 member at ``parameters.yaml.param_hints``. ``LazySkillMetadata`` prefers the
+    former and falls back to the latter, so this stays correct as the 4 consensus
+    members migrate and their ``parameters.yaml`` is deleted (verified identical to
+    the old direct read while a member is still v1).
+
+    ``parameters_yaml_path`` may be the member's ``parameters.yaml`` path (the
+    ``CONSENSUS_SOURCES`` rows + tests still pass this — its parent is the skill
+    dir, which survives the deletion) or the member skill dir directly. Returns
+    ``{}`` when neither source has hints — the planner then falls back to the
+    user-supplied ``--members`` list (callers must enforce).
     """
-    if not parameters_yaml_path.exists():
-        return {}
-    data = yaml.safe_load(parameters_yaml_path.read_text()) or {}
-    hints = data.get("param_hints") or {}
-    if not isinstance(hints, dict):
-        return {}
-    return hints
+    from omicsclaw.skill.lazy_metadata import LazySkillMetadata
+
+    skill_dir = (
+        parameters_yaml_path.parent
+        if parameters_yaml_path.name == "parameters.yaml"
+        else parameters_yaml_path
+    )
+    hints = LazySkillMetadata(skill_dir).param_hints
+    return dict(hints) if isinstance(hints, dict) else {}
 
 
 def _deterministic_plan(

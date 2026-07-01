@@ -333,6 +333,8 @@ def skill_import_surface(skill_dir: Path, script_names: list[str]):
 # Per-skill report.                                                             #
 # --------------------------------------------------------------------------- #
 def parse_frontmatter(skill_md: Path) -> dict:
+    if not skill_md.exists():
+        return {}
     txt = skill_md.read_text()
     parts = txt.split("---", 2)
     if len(parts) < 3:
@@ -343,18 +345,44 @@ def parse_frontmatter(skill_md: Path) -> dict:
         return {}
 
 
-def param_hint_backends(skill_dir: Path) -> set[str]:
-    """Registry-known backend tokens from param_hints (captures scanpy.external
-    backends like palantir that never appear as a static import)."""
-    pyaml = skill_dir / "parameters.yaml"
-    if not pyaml.exists():
-        return set()
+def _skill_yaml_raw(skill_dir: Path) -> dict | None:
+    """Raw parse of a v2 ``skill.yaml`` (ADR 0037), or None if absent/unreadable.
+
+    Read raw (not via the pydantic schema) so the audit stays robust on a
+    malformed skill.yaml — schema validity is enforced separately by
+    ``scripts/validate_skill_yaml.py`` / ``skill_lint`` ``_lint_v2``.
+    """
+    sy = skill_dir / "skill.yaml"
+    if not sy.exists():
+        return None
     try:
-        data = yaml.safe_load(pyaml.read_text()) or {}
+        data = yaml.safe_load(sy.read_text(encoding="utf-8"))
     except yaml.YAMLError:
-        return set()
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def param_hint_backends(skill_dir: Path) -> set[str]:
+    """Registry-known backend tokens from param hints (captures scanpy.external
+    backends like palantir that never appear as a static import).
+
+    Dual-track (ADR 0037): v2 hints live at
+    ``skill.yaml.interface.parameters.hints``; v1 at ``parameters.yaml.param_hints``.
+    """
+    sy = _skill_yaml_raw(skill_dir)
+    if sy is not None:
+        hints = (((sy.get("interface") or {}).get("parameters") or {}).get("hints")) or {}
+    else:
+        pyaml = skill_dir / "parameters.yaml"
+        if not pyaml.exists():
+            return set()
+        try:
+            data = yaml.safe_load(pyaml.read_text()) or {}
+        except yaml.YAMLError:
+            return set()
+        hints = data.get("param_hints") or {}
     out: set[str] = set()
-    for info in (data.get("param_hints") or {}).values():
+    for info in hints.values():
         for tok in (info or {}).get("requires", []) or []:
             if isinstance(tok, str):
                 canon = pkg_name(tok)
@@ -364,6 +392,11 @@ def param_hint_backends(skill_dir: Path) -> set[str]:
 
 
 def skill_script_names(skill_dir: Path) -> list[str]:
+    # v2: runtime.entry; v1: parameters.yaml script.
+    sy = _skill_yaml_raw(skill_dir)
+    if sy is not None:
+        entry = (sy.get("runtime") or {}).get("entry")
+        return [entry] if entry else []
     pyaml = skill_dir / "parameters.yaml"
     if pyaml.exists():
         try:
@@ -376,16 +409,31 @@ def skill_script_names(skill_dir: Path) -> list[str]:
 
 
 def audit_skill(sd: Path) -> dict:
-    """Per-skill dependency audit (used by build_report and by skill_lint)."""
+    """Per-skill dependency audit (used by build_report and by skill_lint).
+
+    Dual-track (ADR 0037): the declared Python surface is read from
+    ``skill.yaml deps.python`` (v2) or ``SKILL.md requires:`` (v1). The static
+    import analysis is unchanged. (deps.r is out of scope here — R dependency
+    semantics are handled by the R subsystem.)
+    """
     sd = Path(sd).resolve()  # callers may pass a relative skill dir
-    md = sd / "SKILL.md"
+    # Contract is decided by the marker FILE's presence, not by whether it parses
+    # (Codex cross-validation): a malformed v2 skill.yaml must STILL be treated as
+    # v2 so --write routes to the v2 (no-op-on-invalid) writer instead of trying
+    # to rewrite a (possibly absent) SKILL.md.
+    has_v2 = (sd / "skill.yaml").exists()
+    sy = _skill_yaml_raw(sd)
+    contract = "v2" if has_v2 else "v1"
     core, optional, lib_used, notes = skill_import_surface(sd, skill_script_names(sd))
     b_backends = param_hint_backends(sd)
     recommended = set(core) | set(optional) | b_backends
     if "scanpy" in recommended:
         recommended.add("anndata")  # scanpy hard-depends on anndata
-    fm = parse_frontmatter(md)
-    declared = [str(r).strip() for r in (fm.get("requires") or []) if str(r).strip()]
+    if has_v2:
+        raw_declared = ((sy or {}).get("deps") or {}).get("python") or []
+    else:
+        raw_declared = parse_frontmatter(sd / "SKILL.md").get("requires") or []
+    declared = [str(r).strip() for r in raw_declared if str(r).strip()]
     declared_norm = {pkg_name(x) for x in declared}
     missing = sorted(recommended - declared_norm, key=str.lower)
     extra = sorted(declared_norm - recommended, key=str.lower)
@@ -397,6 +445,7 @@ def audit_skill(sd: Path) -> dict:
     final = sorted(recommended | declared_norm, key=str.lower)
     return {
         "skill": str(sd.relative_to(SKILLS)),
+        "contract": contract,
         "declared": declared,
         "recommended": sorted(recommended, key=str.lower),
         "final": final,
@@ -410,7 +459,10 @@ def audit_skill(sd: Path) -> dict:
 
 
 def build_report() -> list[dict]:
-    return [audit_skill(md.parent) for md in sorted(SKILLS.rglob("SKILL.md"))]
+    # Discover v1 (SKILL.md) and v2-only (skill.yaml) skill dirs alike.
+    dirs = {p.parent for p in SKILLS.rglob("SKILL.md")}
+    dirs |= {p.parent for p in SKILLS.rglob("skill.yaml")}
+    return [audit_skill(d) for d in sorted(dirs)]
 
 
 # --------------------------------------------------------------------------- #
@@ -441,6 +493,42 @@ def write_requires(skill_md: Path, packages: list[str]) -> bool:
     return True
 
 
+def write_deps_python_v2(skill_dir: Path, packages: list[str]) -> bool:
+    """Rewrite ``deps.python`` in a v2 skill.yaml via the schema (canonical re-dump).
+
+    UNION-only like the v1 path: ``packages`` is the report's ``final`` list.
+    No-op (returns False) when unchanged or the skill.yaml is invalid/unloadable.
+
+    NOTE: this is a canonical re-dump, NOT a lossless text editor — it normalises
+    field order and drops comments/anchors. That is fine for generated skill.yaml
+    (the migrate scaffold already emits canonical YAML); hand-formatted files lose
+    cosmetic formatting.
+    """
+    if str(_ROOT) not in sys.path:
+        sys.path.insert(0, str(_ROOT))
+    try:
+        from omicsclaw.skill.schema import load_skill_yaml, parse_skill_manifest
+    except Exception:
+        return False
+    sy = skill_dir / "skill.yaml"
+    try:
+        manifest = load_skill_yaml(sy)
+    except Exception:
+        return False
+    if list(manifest.deps.python) == list(packages):
+        return False
+    # Rebuild THROUGH the schema so the write is re-validated (deps cleaning,
+    # field constraints) rather than mutated in place (validate_assignment is off).
+    data = manifest.model_dump()
+    data["deps"]["python"] = list(packages)
+    try:
+        rebuilt = parse_skill_manifest(data)
+    except Exception:
+        return False
+    sy.write_text(rebuilt.to_yaml(), encoding="utf-8")
+    return True
+
+
 # --------------------------------------------------------------------------- #
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -449,7 +537,8 @@ def main() -> int:
     ap.add_argument("--check", action="store_true",
                     help="exit 1 if any skill is missing a real dependency")
     ap.add_argument("--write", action="store_true",
-                    help="regenerate frontmatter requires in place")
+                    help="regenerate the declared dependency surface in place "
+                         "(v2 skill.yaml deps.python / v1 SKILL.md requires)")
     args = ap.parse_args()
 
     report = build_report()
@@ -466,11 +555,15 @@ def main() -> int:
     if args.write:
         changed = 0
         for r in report:
-            md = SKILLS / r["skill"] / "SKILL.md"
-            if write_requires(md, r["final"]):
+            sdir = SKILLS / r["skill"]
+            if r["contract"] == "v2":
+                ok = write_deps_python_v2(sdir, r["final"])
+            else:
+                ok = write_requires(sdir / "SKILL.md", r["final"])
+            if ok:
                 changed += 1
-                print(f"updated {r['skill']}: +{r['missing']}")
-        print(f"\n{changed}/{len(report)} SKILL.md files updated.")
+                print(f"updated {r['skill']} ({r['contract']}): +{r['missing']}")
+        print(f"\n{changed}/{len(report)} skill(s) updated.")
         return 0
 
     miss = [r for r in report if r["missing"]]

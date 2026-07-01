@@ -506,7 +506,7 @@ class OmicsClawParser(argparse.ArgumentParser):
         print(f"{BOLD}{YELLOW}Core Commands{RESET}", file=file)
         print(f"  {GREEN}interactive{RESET}  AI interactive terminal (CLI mode) | Alias: {GREEN}chat{RESET}", file=file)
         print(f"  {GREEN}tui        {RESET}  Advanced full-screen Textual interface", file=file)
-        print(f"  {GREEN}list       {RESET}  List all 89 available analysis skills", file=file)
+        print(f"  {GREEN}list       {RESET}  List all 95 available skills", file=file)
         print(f"  {GREEN}run        {RESET}  Execute a specific skill (e.g., 'oc run preprocess')", file=file)
         print(f"  {GREEN}version    {RESET}  Show the current OmicsClaw version", file=file)
 

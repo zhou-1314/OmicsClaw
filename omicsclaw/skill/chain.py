@@ -126,6 +126,17 @@ async def run_skill_via_shared_runner(
             except Exception:
                 pass
 
+    def _emit_status(message: str) -> None:
+        # Adaptive-env provisioning progress ("Preparing environment…/installing …")
+        # rides the existing live-log bridge as a distinct ``status`` stream tag so
+        # the chat shows it before the skill subprocess produces any output.
+        logger.info("[%s:status] %s", canonical_skill, message)
+        if skill_log_sink is not None and skill_log_run_id is not None:
+            try:
+                skill_log_sink.emit(skill_log_run_id, "status", message)
+            except Exception:
+                pass
+
     # ADR 0009: prefer the caller-supplied cancel_event (the per-request
     # signal threaded down from MessageEnvelope) so Surface-initiated aborts
     # propagate to subprocess_driver._cancel_watcher. Fall back to a local
@@ -144,6 +155,7 @@ async def run_skill_via_shared_runner(
             stdout_callback=_emit_stdout,
             stderr_callback=_emit_stderr,
             cancel_event=effective_cancel_event,
+            status_callback=_emit_status,
         )
 
     try:

@@ -2578,33 +2578,25 @@ async def health():
 
 # ---------------------------------------------------------------------------
 # Skill detail helpers — read the richer per-skill metadata that lives on disk
-# (SKILL.md frontmatter + body, references/, parameters.yaml) but is not part of
-# the in-memory registry info dict.
+# (the narrative SKILL.md body, references/) plus the dual-track contract
+# (skill.yaml v2 / SKILL.md frontmatter + parameters.yaml v1) that is not part
+# of the in-memory registry info dict.
 # ---------------------------------------------------------------------------
 
-def _skill_frontmatter(skill_dir: Path | None) -> dict:
-    """Parse the YAML frontmatter of a skill directory's SKILL.md ({} if absent)."""
-    if skill_dir is None:
-        return {}
-    skill_md = skill_dir / "SKILL.md"
-    if not skill_md.exists():
-        return {}
-    try:
-        content = skill_md.read_text(encoding="utf-8")
-    except OSError:
-        return {}
-    if not content.startswith("---"):
-        return {}
-    parts = content.split("---", 2)
-    if len(parts) < 3:
-        return {}
-    try:
-        import yaml
+def _skill_metadata(skill_dir: Path | None):
+    """Dual-track per-skill metadata, or ``None`` for a missing directory.
 
-        data = yaml.safe_load(parts[1])
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
+    Reads version/author/license/tags/requires through ``LazySkillMetadata`` —
+    the SAME dual-track reader the registry and catalog use (ADR 0037) — so a
+    skill reports identical facts whether it ships a v2 ``skill.yaml`` or a v1
+    ``SKILL.md`` frontmatter + ``parameters.yaml``. Properties are read lazily,
+    so constructing this is cheap.
+    """
+    if skill_dir is None:
+        return None
+    from omicsclaw.skill.lazy_metadata import LazySkillMetadata
+
+    return LazySkillMetadata(skill_dir)
 
 
 def _skill_source(script_path: Path | None) -> str:
@@ -2632,7 +2624,9 @@ def _skill_resources(skill_dir: Path | None, script_path: Path | None) -> list[d
     resources: list[dict] = []
     if script_path is not None and script_path.exists():
         resources.append({"path": script_path.name, "kind": "script"})
-    for special, kind in (("SKILL.md", "doc"), ("parameters.yaml", "config")):
+    # skill.yaml (v2 contract) and parameters.yaml (v1 sidecar) are both config;
+    # a skill ships one or the other (or both, mid-migration) — list whatever exists.
+    for special, kind in (("SKILL.md", "doc"), ("skill.yaml", "config"), ("parameters.yaml", "config")):
         if (skill_dir / special).exists():
             resources.append({"path": special, "kind": kind})
     ref_dir = skill_dir / "references"
@@ -2668,7 +2662,7 @@ def _skill_references(skill_dir: Path | None) -> list[dict]:
 
 
 def _skill_diagnostics(
-    skill_dir: Path | None, script_path: Path | None, frontmatter: dict
+    skill_dir: Path | None, script_path: Path | None, version: str | None
 ) -> list[dict]:
     if skill_dir is None:
         return []
@@ -2686,20 +2680,22 @@ def _skill_diagnostics(
         script_exists,
         (script_path.name if script_exists and script_path else "entry script missing"),
     )
-    has_version = bool(frontmatter.get("version"))
+    has_version = bool(version)
     add(
         "version declared",
         has_version,
-        f"version {frontmatter.get('version')}" if has_version else "no version in frontmatter",
+        f"version {version}" if has_version else "no version declared",
         warn_only=True,
     )
-    has_params = (skill_dir / "parameters.yaml").exists()
-    add(
-        "parameters.yaml",
-        has_params,
-        "runtime contract declared" if has_params else "no parameters.yaml",
-        warn_only=True,
-    )
+    # Runtime contract: v2 skill.yaml or v1 parameters.yaml (ADR 0037 dual-track).
+    skill_yaml_exists = (skill_dir / "skill.yaml").exists()
+    params_exists = (skill_dir / "parameters.yaml").exists()
+    if skill_yaml_exists:
+        contract_label, contract_detail = "skill.yaml", "runtime contract declared (v2)"
+    else:
+        contract_label = "parameters.yaml"
+        contract_detail = "runtime contract declared" if params_exists else "no parameters.yaml"
+    add(contract_label, skill_yaml_exists or params_exists, contract_detail, warn_only=True)
     has_refs = (skill_dir / "references").is_dir()
     add(
         "references",
@@ -2731,7 +2727,8 @@ async def list_skills():
         script_path = Path(script) if script else None
         skill_dir = script_path.parent if script_path else None
         status = "ready" if (script_path and script_path.exists()) else "planned"
-        version = _skill_frontmatter(skill_dir).get("version")
+        meta = _skill_metadata(skill_dir)
+        version = meta.version if meta else None
         entry = {
             "name": alias,
             "description": info.get("description", ""),
@@ -2801,7 +2798,7 @@ async def get_skill(domain: str, skill_name: str):
     skill_dir = script_path.parent if script_path else None
     status = "ready" if (script_path and script_path.exists()) else "planned"
 
-    frontmatter = _skill_frontmatter(skill_dir)
+    meta = _skill_metadata(skill_dir)
     skill_md_text: str | None = None
     if skill_dir is not None and (skill_dir / "SKILL.md").exists():
         try:
@@ -2809,7 +2806,9 @@ async def get_skill(domain: str, skill_name: str):
         except OSError:
             skill_md_text = None
 
-    version = frontmatter.get("version")
+    # Dual-track identity metadata (ADR 0037): sourced from skill.yaml (v2) or
+    # SKILL.md frontmatter (v1) via the same reader the registry/catalog use.
+    version = meta.version if meta else None
     return {
         "name": skill_name,
         "domain": skill_domain,
@@ -2820,7 +2819,7 @@ async def get_skill(domain: str, skill_name: str):
             a for a, i in skill_registry.skills.items()
             if i.get("alias") == skill_name and a != skill_name
         ],
-        # --- richer detail read from disk ---
+        # --- richer detail (skill.yaml v2 / SKILL.md+parameters.yaml v1) ---
         "version": str(version) if version else None,
         "source": _skill_source(script_path),
         "health": _skill_health(
@@ -2830,14 +2829,14 @@ async def get_skill(domain: str, skill_name: str):
             skill_md_exists=bool(skill_dir and (skill_dir / "SKILL.md").exists()),
             script_exists=bool(script_path and script_path.exists()),
         ),
-        "author": frontmatter.get("author") or None,
-        "license": frontmatter.get("license") or None,
-        "tags": [str(t) for t in (frontmatter.get("tags") or []) if str(t).strip()],
-        "requires": [str(r) for r in (frontmatter.get("requires") or []) if str(r).strip()],
+        "author": (meta.author if meta else "") or None,
+        "license": (meta.license if meta else "") or None,
+        "tags": [str(t) for t in (meta.tags if meta else []) if str(t).strip()],
+        "requires": [str(r) for r in (meta.requires if meta else []) if str(r).strip()],
         "skill_md": skill_md_text,
         "resources": _skill_resources(skill_dir, script_path),
         "references": _skill_references(skill_dir),
-        "diagnostics": _skill_diagnostics(skill_dir, script_path, frontmatter),
+        "diagnostics": _skill_diagnostics(skill_dir, script_path, version),
     }
 
 

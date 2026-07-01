@@ -1,8 +1,21 @@
-"""Render `references/parameters.md` from a v2 skill's `parameters.yaml` dict.
+"""Render `references/parameters.md` for both v1 and v2 skills (ADR 0037).
+
+The CLI flags + per-method tuning hints render identically for both tracks —
+only the parameter *source* differs:
+
+- **v1** — the flat `parameters.yaml` sidecar: top-level `allowed_extra_flags`
+  and `param_hints`.
+- **v2** — `skill.yaml.interface.parameters`: `allowed_extra_flags` and `hints`
+  (same shape as v1 `param_hints`, just renamed and nested).
+
+`render_parameters_md` takes a dict carrying `allowed_extra_flags` plus the
+hints (under `param_hints` for v1, `hints` for v2, selected by `source`) and
+emits the provenance header for that track. The body bytes are identical
+across tracks for the same skill — only the header file reference changes.
 
 Lives in the package so that both consumers — `scripts/skill_lint.py` (which
 diffs the rendered output against the on-disk reference) and
-`omicsclaw/core/skill_scaffolder.py` (which writes the rendered output for
+`omicsclaw/skill/scaffolder.py` (which writes the rendered output for
 freshly-scaffolded skills) — can import it directly, without mutating
 `sys.path` to reach into `scripts/`.
 
@@ -18,14 +31,29 @@ AUTOGEN_HEADER = (
     "<!-- Regenerate: python scripts/generate_parameters_md.py <skill_dir> -->\n\n"
 )
 
+# v2 skills render from skill.yaml (parameters.yaml no longer exists), so the
+# provenance header points at the new source of truth. Body bytes are unchanged.
+AUTOGEN_HEADER_V2 = (
+    "<!-- AUTO-GENERATED from skill.yaml — do not edit by hand. -->\n"
+    "<!-- Regenerate: python scripts/generate_parameters_md.py <skill_dir> -->\n\n"
+)
 
-def render_parameters_md(sidecar: dict) -> str:
-    """Render a parameters.yaml dict to the canonical markdown layout.
+
+def render_parameters_md(sidecar: dict, *, source: str = "v1") -> str:
+    """Render a parameter dict to the canonical markdown layout.
+
+    `source` selects the track: ``"v1"`` reads `param_hints` and stamps the
+    parameters.yaml header; ``"v2"`` reads `hints` and stamps the skill.yaml
+    header. `allowed_extra_flags` is top-level in both.
 
     Empty / missing fields render as informative one-liners so a reader
     always knows whether the absence is intentional.
     """
-    lines: list[str] = [AUTOGEN_HEADER, "# Parameters\n"]
+    if source not in ("v1", "v2"):
+        raise ValueError(f"source must be 'v1' or 'v2', got {source!r}")
+    header = AUTOGEN_HEADER_V2 if source == "v2" else AUTOGEN_HEADER
+    hints_key = "hints" if source == "v2" else "param_hints"
+    lines: list[str] = [header, "# Parameters\n"]
 
     flags = sidecar.get("allowed_extra_flags", []) or []
     lines.append("## Allowed extra CLI flags\n")
@@ -37,7 +65,7 @@ def render_parameters_md(sidecar: dict) -> str:
     lines.append("")
 
     lines.append("## Per-method parameter hints\n")
-    hints: dict = sidecar.get("param_hints", {}) or {}
+    hints: dict = sidecar.get(hints_key, {}) or {}
     if not hints:
         lines.append("_No method-specific tuning hints._\n")
         return "\n".join(lines).rstrip() + "\n"

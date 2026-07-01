@@ -69,6 +69,10 @@ class OmicsRegistry:
         if (skill_path / "SKILL.md").exists():
             return True
 
+        # v2 skills carry a skill.yaml machine contract (ADR 0037).
+        if (skill_path / "skill.yaml").exists():
+            return True
+
         expected = skill_path / f"{skill_path.name.replace('-', '_')}.py"
         if expected.exists():
             return True
@@ -184,13 +188,14 @@ class OmicsRegistry:
     def load_all(self, skills_dir: Path | None = None) -> None:
         """Dynamically load skills from the filesystem.
 
-        Each skill directory is expected to contain a ``SKILL.md`` whose
-        frontmatter (``metadata.omicsclaw.*``) is the single source of
-        truth for the skill's metadata. A skill directory without a
-        readable ``SKILL.md`` description gets a minimal dynamic entry
-        whose name comes from the directory; all per-skill metadata
-        (legacy aliases, allowed flags, saves_h5ad, etc.) must live in
-        SKILL.md.
+        Each skill directory is expected to contain a ``skill.yaml`` (ADR 0037)
+        — the single machine-contract source of truth for the skill's metadata
+        — plus a generated ``SKILL.md`` card. Metadata is read via the dual-track
+        ``LazySkillMetadata`` (v2 ``skill.yaml`` preferred; legacy
+        ``metadata.omicsclaw`` frontmatter / ``parameters.yaml`` still accepted).
+        A skill directory without a readable ``SKILL.md`` description gets a
+        minimal dynamic entry whose name comes from the directory; all per-skill
+        metadata (aliases, allowed flags, saves_h5ad, etc.) lives in ``skill.yaml``.
 
         ``skills_dir`` is part of the cache key — re-calling with a
         different directory triggers a fresh scan instead of silently
@@ -244,13 +249,17 @@ class OmicsRegistry:
                         "canonical_name": canonical_alias,
                         "directory_name": skill_dir_name,
                         "script": script_path_candidate,
+                        "source": lazy.source,  # "v2" (skill.yaml) | "v1" (ADR 0037)
                         "type": lazy.type,
                         "validation_level": lazy.validation_level,
-                        # Workflow shims forward to the shared run parser, which
-                        # has no `--demo`; declare no demo so `oc run <wf> --demo`
-                        # is refused rather than aborting in argparse (ADR 0030).
-                        "demo_args": [] if lazy.type == "workflow" else ["--demo"],
+                        # Consensus shims forward to the shared run parser, which
+                        # has no `--demo`; declare no demo so `oc run <cs> --demo`
+                        # is refused rather than aborting in argparse (ADR 0016/0030).
+                        "demo_args": [] if lazy.type == "consensus" else ["--demo"],
                         "description": lazy.description,
+                        # Reconciled Python-package surface (frontmatter
+                        # `requires:`) for the adaptive env resolver.
+                        "requires": lazy.requires or [],
                         "trigger_keywords": lazy.trigger_keywords or [],
                         "allowed_extra_flags": lazy.allowed_extra_flags or set(),
                         "legacy_aliases": self._unique_strings(list(lazy.legacy_aliases or [])),
@@ -269,10 +278,12 @@ class OmicsRegistry:
                         "canonical_name": canonical_alias,
                         "directory_name": skill_dir_name,
                         "script": script_path_candidate,
+                        "source": lazy.source if lazy else "v1",
                         "type": "leaf",
                         "validation_level": "smoke-only",
                         "demo_args": ["--demo"],
                         "description": f"Dynamically loaded {canonical_alias} skill",
+                        "requires": [],
                         "trigger_keywords": [],
                         "allowed_extra_flags": set(),
                         "legacy_aliases": [],
@@ -308,8 +319,9 @@ class OmicsRegistry:
             candidate_skill_dirs.extend(self._iter_skill_dirs(domain_path))
 
             for skill_path in candidate_skill_dirs:
-                skill_md = skill_path / "SKILL.md"
-                if not skill_md.exists():
+                # v1 carries metadata in SKILL.md; v2 in skill.yaml (ADR 0037).
+                # Accept either so a v2 skill is registered with full metadata.
+                if not (skill_path / "SKILL.md").exists() and not (skill_path / "skill.yaml").exists():
                     continue
 
                 lazy = LazySkillMetadata(skill_path)

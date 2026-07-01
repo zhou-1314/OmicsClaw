@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Lint OmicsClaw v2 skills against the canonical template.
+"""Lint OmicsClaw skills against the canonical contract (dual-track, ADR 0037).
 
-A skill is "v2" iff it has a `parameters.yaml` sidecar.  Lint rules apply only
-to v2 skills; legacy skills (frontmatter-only) lint clean by default so the
-89-skill migration can proceed one PR at a time without breaking CI.
+Contract detection:
+- **v2** — a `skill.yaml` is present → validated against the declarative schema
+  (`omicsclaw.skill.schema`) plus the narrative/script checks that still apply
+  (`_lint_v2`).
+- **v1** — a `parameters.yaml` sidecar (no `skill.yaml`) → the legacy contract,
+  byte-unchanged.
+- **pre-migration** — neither sidecar → lint clean by default so migration can
+  proceed one PR at a time without breaking CI.
 
 Usage:
     python scripts/skill_lint.py <skill_dir>          # one skill
@@ -141,7 +146,7 @@ def _check_frontmatter_keys(frontmatter: dict) -> list[str]:
         if isinstance(meta, dict) and "omicsclaw" in meta:
             errors.append(
                 "frontmatter: legacy 'metadata.omicsclaw' block must be removed "
-                "from v2 skills (move runtime fields to parameters.yaml)"
+                "from v2 skills (runtime fields live in skill.yaml — ADR 0037)"
             )
         extra.discard("metadata")
     if extra:
@@ -335,13 +340,15 @@ def _check_allowed_extra_flags(skill_dir: Path, sidecar: dict) -> list[str]:
 
 # --- Type dispatch (ADR 0030) ---------------------------------------------
 #
-# `type` is an optional sidecar field: `leaf` (default) | `workflow` |
-# `knowledge` | `adapter`.  Only `workflow` currently has a distinct profile;
-# everything else (including a missing/unknown `type`) lints as `leaf`, so the
-# 91 existing single-script skills are byte-unchanged.
+# `type` is an optional sidecar field: `leaf` (default) | `consensus` |
+# `workflow` | `knowledge` | `adapter`.  Only `consensus` currently has a
+# distinct profile (a shim over the consensus runtime, ADR 0016). `workflow` is
+# RESERVED for a future skill-composition type and, like everything else
+# (including a missing/unknown `type`), lints as `leaf` for now, so the existing
+# single-script skills are byte-unchanged.
 
-_SKILL_TYPES = ("leaf", "workflow", "knowledge", "adapter")
-_WORKFLOW_RUN_MODULE = "omicsclaw.runtime.consensus.run"
+_SKILL_TYPES = ("leaf", "workflow", "consensus", "knowledge", "adapter")
+_CONSENSUS_RUN_MODULE = "omicsclaw.runtime.consensus.run"
 
 
 def _skill_type(sidecar: dict) -> str:
@@ -470,8 +477,8 @@ def _is_run_main_delegation(
     )
 
 
-def _analyse_workflow_shim(tree: ast.AST) -> tuple[set[str], set[str], str | None, bool]:
-    """Structurally inspect a workflow shim's AST (ADR 0030).
+def _analyse_consensus_shim(tree: ast.AST) -> tuple[set[str], set[str], str | None, bool]:
+    """Structurally inspect a consensus shim's AST (ADR 0016/0030).
 
     Returns ``(run_main_names, module_aliases, source_value, delegates)``:
     - ``run_main_names`` — local names bound to
@@ -489,13 +496,13 @@ def _analyse_workflow_shim(tree: ast.AST) -> tuple[set[str], set[str], str | Non
     source_value: str | None = None
 
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == _WORKFLOW_RUN_MODULE:
+        if isinstance(node, ast.ImportFrom) and node.module == _CONSENSUS_RUN_MODULE:
             for alias in node.names:
                 if alias.name == "main":
                     run_main_names.add(alias.asname or alias.name)
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name == _WORKFLOW_RUN_MODULE:
+                if alias.name == _CONSENSUS_RUN_MODULE:
                     module_aliases.add(alias.asname or alias.name)
         elif isinstance(node, ast.Assign):
             for target in node.targets:
@@ -544,10 +551,10 @@ def _consensus_parser_flags() -> set[str] | None:
     }
 
 
-def _check_workflow_shim(skill_dir: Path, sidecar: dict) -> list[str]:
-    """Validate a `type: workflow` shim against the consensus runtime (ADR 0016).
+def _check_consensus_shim(skill_dir: Path, sidecar: dict) -> list[str]:
+    """Validate a `type: consensus` shim against the consensus runtime (ADR 0016).
 
-    Workflow skills are thin shims whose argparse surface lives in the shared
+    Consensus skills are thin shims whose argparse surface lives in the shared
     ``runtime/consensus/run`` parser, not in the shim — so the leaf
     `allowed_extra_flags ↔ add_argument` check is replaced by: the shim
     delegates to the run entry, defines a `SOURCE` that resolves in
@@ -557,32 +564,32 @@ def _check_workflow_shim(skill_dir: Path, sidecar: dict) -> list[str]:
     script_name = sidecar.get("script") or ""
     script_path = skill_dir / script_name if script_name else None
     if not (script_path and script_path.exists()):
-        return [f"type=workflow: declared script {script_name!r} is missing"]
+        return [f"type=consensus: declared script {script_name!r} is missing"]
     text = script_path.read_text(encoding="utf-8")
 
     try:
         tree = ast.parse(text)
     except SyntaxError as exc:
-        return [f"type=workflow: shim {script_name} is not parseable ({exc})"]
+        return [f"type=consensus: shim {script_name} is not parseable ({exc})"]
 
-    run_main_names, module_aliases, source, delegates = _analyse_workflow_shim(tree)
+    run_main_names, module_aliases, source, delegates = _analyse_consensus_shim(tree)
 
     imports_run = bool(run_main_names or module_aliases)
     if not imports_run:
         errors.append(
-            f"type=workflow: shim must import {_WORKFLOW_RUN_MODULE}.main "
+            f"type=consensus: shim must import {_CONSENSUS_RUN_MODULE}.main "
             f"(not found in {script_name})"
         )
     if source is None:
         errors.append(
-            f'type=workflow: shim must define SOURCE = "<flavour>" in {script_name}'
+            f'type=consensus: shim must define SOURCE = "<flavour>" in {script_name}'
         )
     # The key structural check: a real CALL to run-main, not just the strings.
     # Only assert it once the import + SOURCE prerequisites exist, so the error
     # list names the root cause rather than piling on.
     if imports_run and source is not None and not delegates:
         errors.append(
-            "type=workflow: shim's main() must delegate as "
+            "type=consensus: shim's main() must delegate as "
             f'main(["--source", SOURCE, *argv]) in {script_name} '
             "(no reachable main()-path call forwarding argv found)"
         )
@@ -590,7 +597,7 @@ def _check_workflow_shim(skill_dir: Path, sidecar: dict) -> list[str]:
     sources = _consensus_sources()
     if source is not None and sources is not None and source not in sources:
         errors.append(
-            f"type=workflow: SOURCE {source!r} not in CONSENSUS_SOURCES "
+            f"type=consensus: SOURCE {source!r} not in CONSENSUS_SOURCES "
             f"{sorted(sources)}"
         )
 
@@ -600,7 +607,7 @@ def _check_workflow_shim(skill_dir: Path, sidecar: dict) -> list[str]:
         unknown = allowed - parser_flags - _RUNNER_BLOCKED_FLAGS
         for flag in sorted(unknown):
             errors.append(
-                f"type=workflow: allowed_extra_flags lists {flag!r} which the "
+                f"type=consensus: allowed_extra_flags lists {flag!r} which the "
                 f"consensus run parser does not accept"
             )
     return errors
@@ -609,7 +616,7 @@ def _check_workflow_shim(skill_dir: Path, sidecar: dict) -> list[str]:
 # --- Check: output_contract.md paths exist in the script ------------------
 #
 # `references/output_contract.md` is supposed to describe the files the
-# script actually writes.  PR-F discovered that migrate_skill.py copies the
+# script actually writes.  PR-F discovered that generated output-contract headers copy the
 # legacy SKILL.md "Output Structure" section verbatim, so output_contract.md
 # often lists files the script never touches.  This lint forces every
 # `tables/X.csv` / `figures/X.png` / etc. mentioned in the contract to
@@ -638,7 +645,7 @@ _OUTPUT_CONTRACT_PATH_RE = re.compile(
 )
 # Framework-standard files written by the common report helper (NOT by the
 # skill script directly) — exempt from the substring check.  Also exempt
-# self-referencing doc filenames that the migrate_skill.py header comment
+# self-referencing doc filenames that an output_contract.md header comment
 # may accidentally surface.
 _FRAMEWORK_FILES = frozenset({
     "report.md", "result.json",
@@ -648,7 +655,7 @@ _FRAMEWORK_FILES = frozenset({
     "methodology.md", "r_visualization.md",
     "manifest.json",
 })
-# Strip HTML comments — migrate_skill.py prepends a `<!-- Generated ... -->`
+# Strip HTML comments — generated output contracts prepend a `<!-- Generated ... -->`
 # header that contains references to output_contract.md / SKILL.md which
 # would otherwise be mis-counted as path claims.
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
@@ -720,28 +727,133 @@ def _check_output_contract_paths(skill_dir: Path, sidecar: dict) -> list[str]:
     return errors
 
 
+def _check_parameters_md_fresh(skill_dir: Path, params: dict, *, source: str) -> list[str]:
+    """Flag a stale `references/parameters.md` (only when the file exists).
+
+    `params` carries `allowed_extra_flags` plus the hints, keyed for `source`
+    (`param_hints` for v1, `hints` for v2). Both tracks share this check so a
+    migrated skill's generated doc is kept fresh exactly like a v1 sidecar.
+    """
+    params_md = skill_dir / "references" / "parameters.md"
+    if not params_md.exists():
+        return []
+    expected = render_parameters_md(params, source=source)
+    if params_md.read_text(encoding="utf-8") != expected:
+        return [
+            "references/parameters.md: stale — regenerate with "
+            "scripts/generate_parameters_md.py"
+        ]
+    return []
+
+
 def _check_references(skill_dir: Path, sidecar: dict) -> list[str]:
     errors: list[str] = []
     refs = skill_dir / "references"
     for name in REQUIRED_REFERENCES:
         if not (refs / name).exists():
             errors.append(f"references/{name}: missing")
-    params_md = refs / "parameters.md"
-    if params_md.exists():
-        expected = render_parameters_md(sidecar)
-        if params_md.read_text(encoding="utf-8") != expected:
+    errors.extend(_check_parameters_md_fresh(skill_dir, sidecar, source="v1"))
+    return errors
+
+
+# v2 narrative SKILL.md drops the hand-written "Inputs & Outputs" fact section
+# (those facts live in skill.yaml.interface; ADR 0037).
+_V2_REQUIRED_SECTIONS = tuple(s for s in REQUIRED_SECTIONS if s != "## Inputs & Outputs")
+
+
+def _lint_v2(skill_dir: Path) -> list[str]:
+    """Lint a v2 skill (skill.yaml present, ADR 0037).
+
+    Validates the machine contract against the schema, then runs the
+    narrative/script checks that still apply, including references/parameters.md
+    freshness (generator is now dual-track). A schema-invalid skill stops early
+    (the manifest can't be trusted). Deferred until the narrative migration
+    lands: requires->deps.python audit, and v2 frontmatter-key rules.
+    """
+    from omicsclaw.skill.schema import load_skill_yaml, validate_skill_yaml
+
+    sy = skill_dir / "skill.yaml"
+    schema_errors = validate_skill_yaml(sy)
+    if schema_errors:
+        return [f"skill.yaml: {e}" for e in schema_errors]
+
+    manifest = load_skill_yaml(sy)
+    errors: list[str] = []
+
+    # references/parameters.md must be regenerated from this manifest when
+    # present (generator is dual-track; ADR 0037). File-exists-guarded so a
+    # transitional v2 skill without the rendered doc is tolerated.
+    errors.extend(
+        _check_parameters_md_fresh(
+            skill_dir, manifest.interface.parameters.model_dump(), source="v2"
+        )
+    )
+
+    # runtime.entry must exist (Codex cross-validation): the leaf flag/output
+    # checks silently no-op when the script is absent, so a valid skill.yaml
+    # pointing at a missing script would otherwise lint green. `draft` skills may
+    # not have a script yet; consensus shims are covered by _check_consensus_shim.
+    if manifest.type != "consensus" and manifest.lifecycle.status != "draft":
+        if not (skill_dir / manifest.runtime.entry).exists():
             errors.append(
-                "references/parameters.md: stale — regenerate with "
-                "scripts/generate_parameters_md.py"
+                f"runtime.entry: script '{manifest.runtime.entry}' not found in skill dir "
+                "(set lifecycle.status: draft if intentional)"
             )
+
+    # Parity with the v1 "Skip when" contract (Codex cross-validation): the v1
+    # description lint forces a Skip clause, so v2 forces >=1 skip rule here
+    # (lint-level, not parse-level, so the schema stays flexible).
+    if not manifest.summary.skip_when:
+        errors.append(
+            "skill.yaml: summary.skip_when must declare >=1 rule "
+            "(parity with the v1 'Skip when' description contract)"
+        )
+
+    # Narrative SKILL.md is still the human card in v2 (header generated from
+    # skill.yaml). Lint its sections/length when present; tolerate its absence
+    # during transition.
+    parsed = _parse_skill_md(skill_dir)
+    body = parsed[1] if parsed else ""
+    if body:
+        line_count = len(body.splitlines())
+        if line_count > MAX_BODY_LINES:
+            errors.append(f"SKILL.md body: exceeds {MAX_BODY_LINES} lines (found {line_count})")
+        body_lines = [ln.lstrip() for ln in body.splitlines()]
+        for section in _V2_REQUIRED_SECTIONS:
+            if not any(line.startswith(section) for line in body_lines):
+                errors.append(f"SKILL.md body: missing required section '{section}'")
+
+    # Synthesize a sidecar-equivalent so the existing script-anchored checks
+    # (driven by script + allowed_extra_flags + type) run unchanged.
+    synth = {
+        "script": manifest.runtime.entry,
+        "allowed_extra_flags": list(manifest.interface.parameters.allowed_extra_flags),
+        "type": manifest.type,
+    }
+    if body:
+        errors.extend(_check_gotchas_anchors(skill_dir, body, synth))
+    if manifest.type == "consensus":
+        errors.extend(_check_consensus_shim(skill_dir, synth))
+    else:
+        flag_errors = _check_allowed_extra_flags(skill_dir, synth)
+        errors.extend(
+            e.replace("parameters.yaml:", "skill.yaml (interface.parameters):")
+            for e in flag_errors
+        )
+        errors.extend(_check_output_contract_paths(skill_dir, synth))
     return errors
 
 
 def lint_skill(skill_dir: Path) -> list[str]:
     """Return a list of lint errors for one skill directory.
 
-    Empty list = clean.  Legacy skills (no parameters.yaml) always return [].
+    Empty list = clean.  v2 (skill.yaml present) lints via the schema + v2 path;
+    v1 (parameters.yaml, no skill.yaml) keeps the legacy contract byte-unchanged;
+    pre-migration skills (neither sidecar) always return [].
     """
+    if (skill_dir / "skill.yaml").exists():
+        return _lint_v2(skill_dir)
+
     parsed = _parse_skill_md(skill_dir)
     if parsed is None:
         return [f"{skill_dir}: SKILL.md missing or unparseable"]
@@ -766,13 +878,13 @@ def lint_skill(skill_dir: Path) -> list[str]:
     errors.extend(_check_gotchas_anchors(skill_dir, body, sidecar))
     errors.extend(_check_requires_complete(skill_dir))
 
-    # Type-specific profile (ADR 0030).  `workflow` shims delegate their
-    # argparse + outputs to the shared runtime, so the leaf flag-match and
-    # output-contract substring checks would false-fail; validate the shim
-    # wiring instead.  `leaf` (and, for now, `knowledge`/`adapter`) keep the
-    # full leaf contract unchanged.
-    if _skill_type(sidecar) == "workflow":
-        errors.extend(_check_workflow_shim(skill_dir, sidecar))
+    # Type-specific profile (ADR 0016/0030).  `consensus` shims delegate their
+    # argparse + outputs to the shared consensus runtime, so the leaf flag-match
+    # and output-contract substring checks would false-fail; validate the shim
+    # wiring instead.  `leaf`, the reserved `workflow`, and `knowledge`/`adapter`
+    # keep the full leaf contract unchanged.
+    if _skill_type(sidecar) == "consensus":
+        errors.extend(_check_consensus_shim(skill_dir, sidecar))
     else:
         errors.extend(_check_allowed_extra_flags(skill_dir, sidecar))
         errors.extend(_check_output_contract_paths(skill_dir, sidecar))
@@ -780,8 +892,10 @@ def lint_skill(skill_dir: Path) -> list[str]:
 
 
 def discover_skills(skills_root: Path) -> list[Path]:
-    """Every directory containing a SKILL.md, recursively."""
-    return sorted(p.parent for p in skills_root.rglob("SKILL.md"))
+    """Every directory containing a SKILL.md or a skill.yaml, recursively."""
+    dirs = {p.parent for p in skills_root.rglob("SKILL.md")}
+    dirs |= {p.parent for p in skills_root.rglob("skill.yaml")}
+    return sorted(dirs)
 
 
 def main() -> int:

@@ -1187,7 +1187,7 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
             name="create_omics_skill",
             description=(
                 "Create a new OmicsClaw-native skill scaffold under skills/<domain>/<skill-name>/ "
-                "using the canonical v2 layout (SKILL.md + parameters.yaml sidecar + "
+                "using the canonical v2 layout (SKILL.md + skill.yaml (ADR 0037 machine contract) + "
                 "references/{methodology,output_contract,parameters,r_visualization}.md). "
                 "The emitted skill is lint-clean against scripts/skill_lint.py and ready "
                 "to register via the runtime registry. "

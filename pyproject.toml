@@ -55,6 +55,13 @@ dependencies = [
 
     # ========== SOCKS proxy bridge — not on conda-forge under this name ==========
     "socksio>=1.0.0",
+
+    # ========== v2 skill contract parser (ADR 0037) — core skill-loading path ==========
+    # lazy_metadata imports omicsclaw.skill.schema when a skill.yaml is present, so
+    # pydantic must be in the pip core (not only environment.yml) before v2 skills
+    # land in the live tree — otherwise a lightweight `pip install -e .` env silently
+    # falls back to v1 / degrades v2-only skills to minimal entries.
+    "pydantic>=2,<3",
 ]
 
 [project.optional-dependencies]
