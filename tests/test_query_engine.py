@@ -1168,8 +1168,8 @@ def test_run_query_engine_retries_once_with_reactive_compact_on_prompt_too_long(
 
     assert result == "done after retry"
     assert len(llm.calls) == 2
-    assert "## Reactive Compact Context" not in llm.calls[0]["messages"][0]["content"]
-    assert "## Reactive Compact Context" in llm.calls[1]["messages"][0]["content"]
+    assert "### Reactive Compact Context" not in llm.calls[0]["messages"][0]["content"]
+    assert "### Reactive Compact Context" in llm.calls[1]["messages"][0]["content"]
     assert len(llm.calls[1]["messages"]) < len(llm.calls[0]["messages"])
 
 

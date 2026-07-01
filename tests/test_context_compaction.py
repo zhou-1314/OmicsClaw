@@ -2,9 +2,11 @@ from omicsclaw.runtime.context.compaction import (
     STAGE_AUTO_COMPACT,
     STAGE_CONTEXT_COLLAPSE,
     STAGE_MICRO_COMPACT,
+    STAGE_REACTIVE_COMPACT,
     STAGE_SNIP_COMPACT,
     ContextCompactionConfig,
     prepare_model_messages,
+    wrap_compaction_summary,
 )
 from omicsclaw.runtime.storage.tool_result import ToolResultStore
 
@@ -91,7 +93,9 @@ def test_prepare_model_messages_runs_context_collapse_before_auto_compact(tmp_pa
 
     assert STAGE_CONTEXT_COLLAPSE in prepared.applied_stages
     assert STAGE_AUTO_COMPACT not in prepared.applied_stages
-    assert "## Context Collapse" in prepared.system_prompt
+    # F2: summaries render under one canonical heading with a per-stage sub-section.
+    assert "## Persisted Compacted Context" in prepared.system_prompt
+    assert "### Context Collapse" in prepared.system_prompt
     assert len(prepared.messages) <= 4
 
 
@@ -122,5 +126,129 @@ def test_prepare_model_messages_runs_auto_compact_when_collapse_is_not_enough(tm
 
     assert STAGE_CONTEXT_COLLAPSE in prepared.applied_stages
     assert STAGE_AUTO_COMPACT in prepared.applied_stages
-    assert "## Auto Compacted Context" in prepared.system_prompt
+    # F2: canonical heading wraps both stage sub-sections.
+    assert "## Persisted Compacted Context" in prepared.system_prompt
+    assert "### Auto Compacted Context" in prepared.system_prompt
     assert len(prepared.messages) <= 2
+
+
+def _pairs(count, filler):
+    history = []
+    for index in range(count):
+        history.append({"role": "user", "content": f"user step {index} " + filler})
+        history.append({"role": "assistant", "content": f"assistant step {index} " + filler})
+    return history
+
+
+def _hoist_next_turn(prepared, *, config, tool_result_store, chat_id):
+    # Simulate the next turn: the persisted summary rides as messages[0], the
+    # preserved tail follows, and nothing new triggers a fresh compaction.
+    next_history = [
+        {"role": "system", "content": wrap_compaction_summary(prepared.persisted_summary)},
+        *prepared.messages,
+    ]
+    return prepare_model_messages(
+        system_prompt="SYSTEM",
+        history=next_history,
+        chat_id=chat_id,
+        tool_result_store=tool_result_store,
+        config=config,
+    )
+
+
+def _assert_one_compaction_one_rewarm(first, *, config, tool_result_store, chat_id):
+    # F2 invariant: the compaction-turn system prompt must be byte-identical to
+    # the next turn's hoisted system, and stay stable on the turn after that —
+    # i.e. a single compaction causes exactly one prefix re-warm (ADR 0024).
+    assert first.applied_stages
+    assert first.persisted_summary.strip()
+    second = _hoist_next_turn(
+        first, config=config, tool_result_store=tool_result_store, chat_id=chat_id
+    )
+    assert second.system_prompt == first.system_prompt
+    third = _hoist_next_turn(
+        second, config=config, tool_result_store=tool_result_store, chat_id=chat_id
+    )
+    assert third.system_prompt == first.system_prompt
+
+
+def test_byte_stable_single_collapse(tmp_path):
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    config = ContextCompactionConfig(
+        max_prompt_chars=4_000, snip_message_chars=4_000, protected_tail_messages=2,
+        collapse_trigger_ratio=0.45, auto_compact_trigger_ratio=0.99,
+        collapse_preserve_messages=4, collapse_preserve_chars=600,
+    )
+    first = prepare_model_messages(
+        system_prompt="SYSTEM", history=_pairs(8, "A" * 180), chat_id="c",
+        tool_result_store=store, config=config,
+    )
+    assert STAGE_CONTEXT_COLLAPSE in first.applied_stages
+    _assert_one_compaction_one_rewarm(
+        first, config=config, tool_result_store=store, chat_id="c"
+    )
+
+
+def test_byte_stable_collapse_plus_auto(tmp_path):
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    config = ContextCompactionConfig(
+        max_prompt_chars=2_200, snip_message_chars=4_000, protected_tail_messages=2,
+        collapse_trigger_ratio=0.35, auto_compact_trigger_ratio=0.55,
+        collapse_preserve_messages=8, collapse_preserve_chars=1_200,
+        auto_compact_preserve_messages=2, auto_compact_preserve_chars=220,
+    )
+    first = prepare_model_messages(
+        system_prompt="SYSTEM", history=_pairs(10, "A" * 260), chat_id="c",
+        tool_result_store=store, config=config,
+    )
+    assert STAGE_CONTEXT_COLLAPSE in first.applied_stages
+    assert STAGE_AUTO_COMPACT in first.applied_stages
+    _assert_one_compaction_one_rewarm(
+        first, config=config, tool_result_store=store, chat_id="c"
+    )
+
+
+def test_byte_stable_reactive(tmp_path):
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    config = ContextCompactionConfig(
+        max_prompt_chars=4_000, snip_message_chars=4_000, protected_tail_messages=1,
+        reactive_preserve_messages=2, reactive_preserve_chars=200,
+    )
+    first = prepare_model_messages(
+        system_prompt="SYSTEM", history=_pairs(8, "A" * 180), chat_id="c",
+        tool_result_store=store, config=config, force_reactive_compact=True,
+    )
+    assert STAGE_REACTIVE_COMPACT in first.applied_stages
+    _assert_one_compaction_one_rewarm(
+        first, config=config, tool_result_store=store, chat_id="c"
+    )
+
+
+def test_byte_stable_prior_summary_plus_new_collapse(tmp_path):
+    # The critical algebra: a turn that BOTH hoists a prior persisted summary AND
+    # produces a new collapse section must still equal its own next-turn hoist.
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    config = ContextCompactionConfig(
+        max_prompt_chars=4_000, snip_message_chars=4_000, protected_tail_messages=2,
+        collapse_trigger_ratio=0.45, auto_compact_trigger_ratio=0.99,
+        collapse_preserve_messages=4, collapse_preserve_chars=600,
+    )
+    first = prepare_model_messages(
+        system_prompt="SYSTEM", history=_pairs(8, "A" * 180), chat_id="c",
+        tool_result_store=store, config=config,
+    )
+    assert first.persisted_summary.strip()
+    # Next turn carries the prior summary AND a fresh batch that collapses again.
+    combined_history = [
+        {"role": "system", "content": wrap_compaction_summary(first.persisted_summary)},
+        *first.messages,
+        *_pairs(8, "C" * 180),
+    ]
+    second = prepare_model_messages(
+        system_prompt="SYSTEM", history=combined_history, chat_id="c",
+        tool_result_store=store, config=config,
+    )
+    assert STAGE_CONTEXT_COLLAPSE in second.applied_stages
+    _assert_one_compaction_one_rewarm(
+        second, config=config, tool_result_store=store, chat_id="c"
+    )

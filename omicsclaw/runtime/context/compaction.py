@@ -463,12 +463,12 @@ def prepare_model_messages(
     force_reactive_compact: bool = False,
 ) -> PreparedModelMessages:
     messages = [copy.deepcopy(message) for message in history]
-    prompt = str(system_prompt or "")
+    base_prompt = str(system_prompt or "")
     if not config.enabled:
         return PreparedModelMessages(
-            system_prompt=prompt,
+            system_prompt=base_prompt,
             messages=messages,
-            estimated_chars=estimate_prompt_chars(prompt, messages),
+            estimated_chars=estimate_prompt_chars(base_prompt, messages),
         )
 
     previous_summary = ""
@@ -476,15 +476,21 @@ def prepare_model_messages(
         previous_summary = unwrap_compaction_summary(
             str(messages[0].get("content", "") or "")
         )
-        prompt = _append_system_summary(
-            prompt,
-            "## Persisted Compacted Context",
-            previous_summary,
-        )
         messages = messages[1:]
 
     applied_stages: list[str] = []
     summary_sections: list[tuple[str, str]] = []
+
+    # F2: render every compaction summary — the hoisted prior one AND any new
+    # stage summaries this turn — under a SINGLE canonical ``## Persisted
+    # Compacted Context`` block, byte-identical to how the next turn will hoist
+    # it. This guarantees one compaction => one prefix re-warm (ADR 0024) rather
+    # than a second re-warm when the heading shape shifts on the following turn.
+    def _render_system() -> str:
+        combined = _combine_persisted_summaries(previous_summary, summary_sections)
+        return _append_system_summary(
+            base_prompt, "## Persisted Compacted Context", combined
+        )
 
     messages, snip_changed = _apply_snip_compaction(messages, config=config)
     if snip_changed:
@@ -509,15 +515,12 @@ def prepare_model_messages(
             config=config,
         )
         if reactive_result.omitted_count > 0:
-            heading = "Reactive Compact Context"
-            prompt = _append_system_summary(
-                prompt,
-                f"## {heading}",
-                reactive_result.summary,
-            )
             messages = reactive_result.messages
             applied_stages.append(STAGE_REACTIVE_COMPACT)
-            summary_sections.append((heading, reactive_result.summary))
+            summary_sections.append(
+                ("Reactive Compact Context", reactive_result.summary)
+            )
+        prompt = _render_system()
         return PreparedModelMessages(
             system_prompt=prompt,
             messages=messages,
@@ -538,7 +541,7 @@ def prepare_model_messages(
         config.auto_compact_trigger_ratio,
     )
 
-    current_chars = estimate_prompt_chars(prompt, messages)
+    current_chars = estimate_prompt_chars(_render_system(), messages)
     if collapse_threshold is not None and current_chars > collapse_threshold:
         collapse_result = _collapse_history(
             messages,
@@ -549,16 +552,10 @@ def prepare_model_messages(
             config=config,
         )
         if collapse_result.omitted_count > 0:
-            heading = "Context Collapse"
-            prompt = _append_system_summary(
-                prompt,
-                f"## {heading}",
-                collapse_result.summary,
-            )
             messages = collapse_result.messages
             applied_stages.append(STAGE_CONTEXT_COLLAPSE)
-            summary_sections.append((heading, collapse_result.summary))
-            current_chars = estimate_prompt_chars(prompt, messages)
+            summary_sections.append(("Context Collapse", collapse_result.summary))
+            current_chars = estimate_prompt_chars(_render_system(), messages)
 
     if auto_threshold is not None and current_chars > auto_threshold:
         auto_result = _collapse_history(
@@ -570,16 +567,11 @@ def prepare_model_messages(
             config=config,
         )
         if auto_result.omitted_count > 0:
-            heading = "Auto Compacted Context"
-            prompt = _append_system_summary(
-                prompt,
-                f"## {heading}",
-                auto_result.summary,
-            )
             messages = auto_result.messages
             applied_stages.append(STAGE_AUTO_COMPACT)
-            summary_sections.append((heading, auto_result.summary))
+            summary_sections.append(("Auto Compacted Context", auto_result.summary))
 
+    prompt = _render_system()
     return PreparedModelMessages(
         system_prompt=prompt,
         messages=messages,
