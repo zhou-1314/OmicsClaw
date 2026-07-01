@@ -23,6 +23,13 @@ class ContextBudgetStatus(str, Enum):
     BLOCK = "block"
 
 
+# Single source of truth for the char↔token bridge, used both by the char-budget
+# derivation (engine.resolve_max_prompt_chars) and the budget-status token
+# estimate — so the two never drift. A rough global proxy (see audit F1 for the
+# CJK/content-type caveats).
+CHARS_PER_TOKEN = 3.0
+
+
 def effective_context_capacity(
     context_window: int,
     *,

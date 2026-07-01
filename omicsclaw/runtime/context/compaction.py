@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..context.budget import (
+    CHARS_PER_TOKEN,
     ContextBudgetStatus,
     classify_context_budget,
     effective_context_capacity,
@@ -84,7 +85,7 @@ class ContextCompactionConfig:
     # status (backward-compatible). chars_per_token bridges the char estimate to
     # a token count for the status only (not the char thresholds above).
     context_window_tokens: int | None = None
-    chars_per_token: float = 3.0
+    chars_per_token: float = CHARS_PER_TOKEN
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,7 +115,7 @@ def _budget_status(
     estimated_chars: int, config: "ContextCompactionConfig"
 ) -> "ContextBudgetStatus | None":
     """§9.3: observational token-budget status, or None if no window configured."""
-    if not config.context_window_tokens:
+    if config.context_window_tokens is None:
         return None
     used_tokens = int(estimated_chars / max(0.1, config.chars_per_token))
     effective = effective_context_capacity(config.context_window_tokens)

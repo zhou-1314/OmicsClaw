@@ -30,6 +30,7 @@ from omicsclaw.runtime.agent.query_engine import (
     QueryEngineContext,
     run_query_engine,
 )
+from omicsclaw.runtime.context.budget import CHARS_PER_TOKEN
 from omicsclaw.runtime.context.compaction import ContextCompactionConfig
 from omicsclaw.runtime.storage.transcript import (
     build_selective_replay_context,
@@ -177,7 +178,7 @@ def _maybe_append_stage_fragment(system_prompt: str, stage: str) -> str:
 # Unknown windows (e.g. Ollama, which report None) keep the default; operators
 # tune those via OMICSCLAW_MAX_PROMPT_CHARS. Reactive compaction on a context
 # error remains the ultimate safety net.
-_CHARS_PER_TOKEN = 3.0
+_CHARS_PER_TOKEN = CHARS_PER_TOKEN
 _PROMPT_BUDGET_FRACTION = 0.5
 _DEFAULT_MAX_PROMPT_CHARS = 96000
 

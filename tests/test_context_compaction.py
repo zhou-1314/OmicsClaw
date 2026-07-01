@@ -268,6 +268,22 @@ def test_prepare_model_messages_budget_status_none_without_window(tmp_path):
     assert prepared.budget_status is None
 
 
+def test_prepare_model_messages_budget_status_blocks_on_zero_window(tmp_path):
+    # A configured but zero-capacity window is BLOCK, not None (is-None guard).
+    from omicsclaw.runtime.context.budget import ContextBudgetStatus
+
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    config = ContextCompactionConfig(max_prompt_chars=1_000_000, context_window_tokens=0)
+    prepared = prepare_model_messages(
+        system_prompt="SYS",
+        history=[{"role": "user", "content": "hi"}],
+        chat_id="c",
+        tool_result_store=store,
+        config=config,
+    )
+    assert prepared.budget_status == ContextBudgetStatus.BLOCK
+
+
 def test_byte_stable_prior_summary_plus_new_collapse(tmp_path):
     # The critical algebra: a turn that BOTH hoists a prior persisted summary AND
     # produces a new collapse section must still equal its own next-turn hoist.
