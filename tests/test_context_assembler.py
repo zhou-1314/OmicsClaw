@@ -142,7 +142,6 @@ def test_assemble_chat_context_loads_memory_and_builds_prompt():
     calls = {
         "session": [],
         "resolver": None,
-        "prompt": None,
     }
 
     class FakeSessionManager:
@@ -164,10 +163,6 @@ def test_assemble_chat_context_loads_memory_and_builds_prompt():
         calls["resolver"] = (query, domain_hint)
         return FakeDecision()
 
-    def fake_prompt_builder(**kwargs):
-        calls["prompt"] = kwargs
-        return "PROMPT"
-
     context = asyncio.run(
         assemble_chat_context(
             chat_id="chat-1",
@@ -175,7 +170,6 @@ def test_assemble_chat_context_loads_memory_and_builds_prompt():
             user_id="user-1",
             platform="telegram",
             session_manager=FakeSessionManager(),
-            system_prompt_builder=fake_prompt_builder,
             capability_resolver=fake_capability_resolver,
             skill_aliases=("spatial-preprocess", "sc-qc"),
         )
@@ -192,7 +186,6 @@ def test_assemble_chat_context_loads_memory_and_builds_prompt():
     assert context.skill_hint == "spatial-preprocess"
     assert context.domain_hint == "spatial"
     assert context.capability_context.startswith("## Deterministic Capability Assessment")
-    assert context.system_prompt == "PROMPT"
     assert calls["session"] == [
         ("get_or_create", "user-1", "telegram", "chat-1"),
         ("load_context", "telegram:user-1:chat-1"),
@@ -201,24 +194,43 @@ def test_assemble_chat_context_loads_memory_and_builds_prompt():
         "Analyze sample.h5ad with spatial-preprocess",
         "spatial",
     )
-    assert calls["prompt"]["memory_context"] == "preferred language: Chinese"
-    assert calls["prompt"]["scoped_memory_context"] == ""
-    assert calls["prompt"]["skill"] == "spatial-preprocess"
-    assert calls["prompt"]["skill_candidates"] == ("spatial-preprocess",)
-    assert calls["prompt"]["query"] == "Analyze sample.h5ad with spatial-preprocess"
-    assert calls["prompt"]["domain"] == "spatial"
-    assert calls["prompt"]["capability_context"] == "## Deterministic Capability Assessment\n- coverage: exact_skill"
-    assert calls["prompt"]["plan_context"] == ""
-    assert calls["prompt"]["transcript_context"] == ""
-    assert calls["prompt"]["surface"] == "bot"
-    assert calls["prompt"]["output_style"] == ""
-    assert calls["prompt"]["workspace"] == ""
-    assert calls["prompt"]["pipeline_workspace"] == ""
-    assert calls["prompt"]["mcp_servers"] == ()
-    assert calls["prompt"]["skill_context"].startswith("## Prefetched Skill Context")
-    assert "Selected skill: `spatial-preprocess`" in calls["prompt"]["skill_context"]
-    assert "- Domain: `spatial`" in calls["prompt"]["skill_context"]
-    assert "- Summary:" in calls["prompt"]["skill_context"]
+    # F3 — assert the REAL assembled context instead of discarded builder kwargs.
+    # memory_context is a SYSTEM layer: it renders into the system prompt.
+    assert "preferred language: Chinese" in context.system_prompt
+    assert "preferred language: Chinese" in context.memory_context
+    assert context.scoped_memory_context == ""
+    assert context.skill_hint == "spatial-preprocess"
+    request = context.prompt_context.request
+    assert request.skill_candidates == ("spatial-preprocess",)
+    assert request.query == "Analyze sample.h5ad with spatial-preprocess"
+    # Also assert the request DTO itself carries the scalars that downstream
+    # layer/tool predicates consume — guards against a stale request assembled
+    # under an otherwise-correct AssembledChatContext scalar (codex x-val P2).
+    assert request.skill == "spatial-preprocess"
+    assert request.domain == "spatial"
+    assert (
+        request.capability_context
+        == "## Deterministic Capability Assessment\n- coverage: exact_skill"
+    )
+    assert context.domain_hint == "spatial"
+    assert (
+        context.capability_context
+        == "## Deterministic Capability Assessment\n- coverage: exact_skill"
+    )
+    assert request.surface == "bot"
+    assert request.output_style == ""
+    assert request.workspace == ""
+    assert request.pipeline_workspace == ""
+    assert request.mcp_servers == ()
+    layer_stats = context.prompt_context.layer_stats
+    assert "plan_context" not in layer_stats
+    assert "transcript_context" not in layer_stats
+    # skill_context is a MESSAGE layer: it renders into message_context, not system.
+    assert context.skill_context.startswith("## Prefetched Skill Context")
+    assert "Selected skill: `spatial-preprocess`" in context.skill_context
+    assert "- Domain: `spatial`" in context.skill_context
+    assert "- Summary:" in context.skill_context
+    assert context.skill_context in context.prompt_context.message_context
     assert "workspace_context" not in context.prompt_context.layer_stats
 
 
@@ -293,9 +305,6 @@ def test_assemble_chat_context_forwards_thread_id_to_session_memory():
             seen["load_context"] = thread_id
             return "scoped memory"
 
-    def fake_prompt_builder(**kwargs):
-        return "PROMPT"
-
     context = asyncio.run(
         assemble_chat_context(
             chat_id="chat-9",
@@ -304,7 +313,6 @@ def test_assemble_chat_context_forwards_thread_id_to_session_memory():
             platform="app",
             thread_id="t-glioma",
             session_manager=FakeSessionManager(),
-            system_prompt_builder=fake_prompt_builder,
         )
     )
 
@@ -313,20 +321,13 @@ def test_assemble_chat_context_forwards_thread_id_to_session_memory():
     assert seen["load_context"] == "t-glioma"
 
 
-def test_assemble_chat_context_passes_interactive_surface_to_prompt_builder():
-    calls = {"prompt": None}
-
-    def fake_prompt_builder(**kwargs):
-        calls["prompt"] = kwargs
-        return "PROMPT"
-
+def test_assemble_chat_context_passes_interactive_surface_to_assembly():
     context = asyncio.run(
         assemble_chat_context(
             chat_id="chat-2",
             user_content="hello there",
             user_id="user-2",
             platform="cli",
-            system_prompt_builder=fake_prompt_builder,
             output_style="teaching",
             workspace="/tmp/chat-workspace",
             pipeline_workspace="/tmp/pipeline-workspace",
@@ -334,36 +335,21 @@ def test_assemble_chat_context_passes_interactive_surface_to_prompt_builder():
         )
     )
 
-    assert context.system_prompt == "PROMPT"
-    assert calls["prompt"] == {
-        "memory_context": "",
-        "scoped_memory_context": "",
-        "skill_context": "",
-        "skill": "",
-        "skill_candidates": (),
-        "query": "hello there",
-        "domain": "",
-        "capability_context": "",
-        "plan_context": "",
-        "transcript_context": "",
-        "surface": "interactive",
-        "output_style": "teaching",
-        "workspace": "/tmp/chat-workspace",
-        "pipeline_workspace": "/tmp/pipeline-workspace",
-        "mcp_servers": ("seq-think", "bio-tools"),
-    }
+    request = context.prompt_context.request
+    assert request.surface == "interactive"
+    assert request.output_style == "teaching"
+    assert request.workspace == "/tmp/chat-workspace"
+    assert request.pipeline_workspace == "/tmp/pipeline-workspace"
+    assert request.mcp_servers == ("seq-think", "bio-tools")
+    layer_stats = context.prompt_context.layer_stats
+    assert "workspace_context" in layer_stats
+    assert "mcp_instructions" in layer_stats
 
 
-def test_assemble_chat_context_loads_scoped_memory_and_forwards_to_prompt_builder():
-    calls = {"prompt": None}
-
+def test_assemble_chat_context_loads_scoped_memory_and_forwards_to_message_context():
     class FakeRecall:
         def to_context_text(self):
             return "1. PBMC QC defaults\n   scope=project | owner=tester | freshness=evolving | updated=2026-04-02"
-
-    def fake_prompt_builder(**kwargs):
-        calls["prompt"] = kwargs
-        return "PROMPT"
 
     context = asyncio.run(
         assemble_chat_context(
@@ -372,15 +358,15 @@ def test_assemble_chat_context_loads_scoped_memory_and_forwards_to_prompt_builde
             user_id="user-scoped-memory",
             platform="cli",
             workspace="/tmp/project",
-            system_prompt_builder=fake_prompt_builder,
             scoped_memory_scope="project",
             scoped_memory_loader=lambda **_: FakeRecall(),
         )
     )
 
-    assert context.system_prompt == "PROMPT"
     assert "PBMC QC defaults" in context.scoped_memory_context
-    assert calls["prompt"]["scoped_memory_context"].startswith("1. PBMC QC defaults")
+    assert context.scoped_memory_context.startswith("1. PBMC QC defaults")
+    # scoped_memory_context is a MESSAGE layer: it renders into message_context.
+    assert "PBMC QC defaults" in context.prompt_context.message_context
 
 
 def test_assemble_prompt_context_prefetches_knowledge_guidance_for_method_questions():
@@ -571,13 +557,7 @@ def test_mcp_runtime_config_skips_disabled_entries_and_forwards_headers(monkeypa
     assert _mcp._build_mcp_connection(all_config["disabled-remote"]) is None
 
 
-def test_assemble_chat_context_forwards_knowledge_guidance_to_prompt_builder(monkeypatch):
-    calls = {"prompt": None}
-
-    def fake_prompt_builder(**kwargs):
-        calls["prompt"] = kwargs
-        return "PROMPT"
-
+def test_assemble_chat_context_forwards_knowledge_guidance_into_message_context(monkeypatch):
     monkeypatch.setattr(
         "omicsclaw.runtime.context.layers.load_knowledge_guidance",
         lambda **_: "## Preloaded Knowledge Guidance\n\nPrefer Harmony for batch correction.",
@@ -589,13 +569,16 @@ def test_assemble_chat_context_forwards_knowledge_guidance_to_prompt_builder(mon
             user_content="Which method should I use for batch correction?",
             user_id="user-knowledge",
             platform="cli",
-            system_prompt_builder=fake_prompt_builder,
         )
     )
 
-    assert context.system_prompt == "PROMPT"
-    assert calls["prompt"]["knowledge_context"].startswith("## Preloaded Knowledge Guidance")
-    assert calls["prompt"]["include_knowledge_guidance"] is True
+    # knowledge_guidance is a MESSAGE layer: it renders into message_context and
+    # must stay OUT of the byte-stable system prefix.
+    assert "knowledge_guidance" in context.prompt_context.layer_stats
+    message_context = context.prompt_context.message_context
+    assert "## Preloaded Knowledge Guidance" in message_context
+    assert "Prefer Harmony for batch correction." in message_context
+    assert "## Preloaded Knowledge Guidance" not in context.system_prompt
 
 
 def test_assemble_prompt_context_includes_plan_context_layer():
@@ -751,7 +734,7 @@ def test_assemble_prompt_context_includes_active_prompt_pack_layer(tmp_path):
     assert assembly.layer_stats["extension_prompt_packs"]["placement"] == "system"
 
 
-def test_assemble_chat_context_forwards_prompt_pack_context_to_builder(tmp_path):
+def test_assemble_chat_context_forwards_prompt_pack_context_to_system_prompt(tmp_path):
     prompt_pack = tmp_path / "installed_extensions" / "prompt-packs" / "local-rules"
     prompt_pack.mkdir(parents=True)
     (prompt_pack / "rules.md").write_text(
@@ -780,24 +763,17 @@ def test_assemble_chat_context_forwards_prompt_pack_context_to_builder(tmp_path)
     )
     write_extension_state(prompt_pack, enabled=True)
 
-    calls = {"prompt": None}
-
-    def fake_prompt_builder(**kwargs):
-        calls["prompt"] = kwargs
-        return "PROMPT"
-
     context = asyncio.run(
         assemble_chat_context(
             chat_id="chat-pack",
             user_content="hello there",
             user_id="user-pack",
             platform="cli",
-            system_prompt_builder=fake_prompt_builder,
             omicsclaw_dir=str(tmp_path),
         )
     )
 
-    assert context.system_prompt == "PROMPT"
-    assert calls["prompt"]["omicsclaw_dir"] == str(tmp_path)
-    assert "## Active Local Prompt Packs" in calls["prompt"]["prompt_pack_context"]
-    assert "Prefer exact status summaries." in calls["prompt"]["prompt_pack_context"]
+    assert context.prompt_context.request.omicsclaw_dir == str(tmp_path)
+    # extension_prompt_packs is a SYSTEM layer: it renders into the system prompt.
+    assert "## Active Local Prompt Packs" in context.system_prompt
+    assert "Prefer exact status summaries." in context.system_prompt

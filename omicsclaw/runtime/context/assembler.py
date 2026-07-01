@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
 import re
 from dataclasses import dataclass
@@ -257,24 +256,6 @@ def _default_capability_resolver(query: str, *, domain_hint: str = ""):
     return resolve_capability(query, domain_hint=domain_hint)
 
 
-def _invoke_legacy_prompt_builder(prompt_builder, **kwargs) -> str:
-    try:
-        signature = inspect.signature(prompt_builder)
-        if any(
-            parameter.kind == inspect.Parameter.VAR_KEYWORD
-            for parameter in signature.parameters.values()
-        ):
-            return prompt_builder(**kwargs)
-        accepted = {
-            key: value
-            for key, value in kwargs.items()
-            if key in signature.parameters
-        }
-        return prompt_builder(**accepted)
-    except (TypeError, ValueError):
-        return prompt_builder(**kwargs)
-
-
 async def _call_sync_in_background(func, /, *args, **kwargs):
     return await asyncio.to_thread(func, *args, **kwargs)
 
@@ -310,7 +291,6 @@ async def assemble_chat_context(
     platform: str | None = None,
     thread_id: str = "",
     session_manager=None,
-    system_prompt_builder=None,
     capability_resolver=None,
     skill_aliases: tuple[str, ...] | None = None,
     plan_context: str = "",
@@ -500,42 +480,6 @@ async def assemble_chat_context(
         injectors=context_injectors,
     )
     system_prompt = prompt_context.system_prompt
-
-    if system_prompt_builder is not None:
-        builder_kwargs = {
-            "memory_context": memory_context,
-            "scoped_memory_context": scoped_memory_context,
-            "skill_context": skill_context,
-            "skill": skill_hint,
-            "skill_candidates": skill_candidates,
-            "query": user_text[:200] if user_text else "",
-            "domain": domain_hint,
-            "capability_context": capability_context,
-            "plan_context": plan_context,
-            "transcript_context": transcript_context,
-            "surface": surface,
-            "output_style": output_style,
-            "workspace": workspace,
-            "pipeline_workspace": pipeline_workspace,
-            "mcp_servers": tuple(mcp_servers or ()),
-        }
-        if omicsclaw_dir:
-            builder_kwargs["omicsclaw_dir"] = omicsclaw_dir
-        if research_stance:
-            builder_kwargs["research_stance"] = research_stance
-        if prompt_pack_context:
-            builder_kwargs["prompt_pack_context"] = prompt_pack_context
-        knowledge_layer = next(
-            (layer for layer in prompt_context.layers if layer.name == "knowledge_guidance"),
-            None,
-        )
-        if knowledge_layer is not None:
-            builder_kwargs["knowledge_context"] = knowledge_layer.content
-            builder_kwargs["include_knowledge_guidance"] = True
-        system_prompt = _invoke_legacy_prompt_builder(
-            system_prompt_builder,
-            **builder_kwargs,
-        )
 
     return AssembledChatContext(
         session_id=session_id,

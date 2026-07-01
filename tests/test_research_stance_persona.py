@@ -79,28 +79,23 @@ def test_assemble_chat_context_forwards_stance_from_loader():
         seen["sid"] = session_id
         return "RESEARCH STANCE FROM MEMORY"
 
-    def fake_builder(**kwargs):
-        seen["research_stance"] = kwargs.get("research_stance", "<<absent>>")
-        return "PROMPT"
-
-    asyncio.run(
+    context = asyncio.run(
         assemble_chat_context(
             chat_id="c1",
             user_content="hi",
             user_id="u1",
             platform="app",
             session_manager=FakeSessionManager(),
-            system_prompt_builder=fake_builder,
             research_stance_loader=loader,
         )
     )
+    # The loader still receives the session_id, and research_stance is a SYSTEM
+    # layer: its content renders into the assembled system prompt.
     assert seen["sid"] == "app:u1:c1"
-    assert seen["research_stance"] == "RESEARCH STANCE FROM MEMORY"
+    assert "RESEARCH STANCE FROM MEMORY" in context.system_prompt
 
 
 def test_assemble_chat_context_without_loader_is_noop():
-    seen = {}
-
     class FakeSessionManager:
         async def get_or_create(self, user_id, platform, chat_id, thread_id=""):
             pass
@@ -108,22 +103,17 @@ def test_assemble_chat_context_without_loader_is_noop():
         async def load_context(self, session_id, thread_id=""):
             return ""
 
-    def fake_builder(**kwargs):
-        seen["research_stance"] = kwargs.get("research_stance", "<<absent>>")
-        return "PROMPT"
-
-    asyncio.run(
+    context = asyncio.run(
         assemble_chat_context(
             chat_id="c1",
             user_content="hi",
             user_id="u1",
             platform="app",
             session_manager=FakeSessionManager(),
-            system_prompt_builder=fake_builder,
         )
     )
-    # No loader → research_stance never added to builder kwargs (byte-identical).
-    assert seen["research_stance"] == "<<absent>>"
+    # No loader → the research_stance layer is a no-op (never assembled).
+    assert "research_stance" not in context.prompt_context.layer_stats
 
 
 # --------------------------------------------------------------------------- #
