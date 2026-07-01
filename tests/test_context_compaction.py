@@ -224,6 +224,50 @@ def test_byte_stable_reactive(tmp_path):
     )
 
 
+def test_prepare_model_messages_reports_observational_budget_status(tmp_path):
+    # §9.3 slice 2: when the model context window is known, PreparedModelMessages
+    # carries an observational token-budget status (no behavior change).
+    from omicsclaw.runtime.context.budget import ContextBudgetStatus
+
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    config = ContextCompactionConfig(
+        max_prompt_chars=1_000_000,  # never compact — isolate status computation
+        snip_message_chars=1_000_000,  # never snip the big message
+        context_window_tokens=10_000,  # effective = 10000 - 4096 - 2048 = 3856 tok
+    )
+    small = prepare_model_messages(
+        system_prompt="SYS",
+        history=[{"role": "user", "content": "x" * 3_000}],
+        chat_id="c",
+        tool_result_store=store,
+        config=config,
+    )
+    big = prepare_model_messages(
+        system_prompt="SYS",
+        history=[{"role": "user", "content": "x" * 30_000}],
+        chat_id="c",
+        tool_result_store=store,
+        config=config,
+    )
+    # ~1000 tok / 3856 ~ 26% -> OK ; ~10000 tok / 3856 > 96% -> BLOCK
+    assert small.budget_status == ContextBudgetStatus.OK
+    assert big.budget_status == ContextBudgetStatus.BLOCK
+
+
+def test_prepare_model_messages_budget_status_none_without_window(tmp_path):
+    # Backward-compatible: no configured window -> no observational status.
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    config = ContextCompactionConfig(max_prompt_chars=1_000_000)
+    prepared = prepare_model_messages(
+        system_prompt="SYS",
+        history=[{"role": "user", "content": "hello"}],
+        chat_id="c",
+        tool_result_store=store,
+        config=config,
+    )
+    assert prepared.budget_status is None
+
+
 def test_byte_stable_prior_summary_plus_new_collapse(tmp_path):
     # The critical algebra: a turn that BOTH hoists a prior persisted summary AND
     # produces a new collapse section must still equal its own next-turn hoist.

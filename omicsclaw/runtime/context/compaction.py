@@ -4,7 +4,13 @@ import copy
 from dataclasses import dataclass
 from typing import Any
 
-from ..context.budget import estimate_message_size, trim_history_to_budget
+from ..context.budget import (
+    ContextBudgetStatus,
+    classify_context_budget,
+    effective_context_capacity,
+    estimate_message_size,
+    trim_history_to_budget,
+)
 from ..storage.tool_result import ToolResultRecord, ToolResultStore
 from ..storage.transcript import (
     TranscriptReplaySummary,
@@ -74,6 +80,11 @@ class ContextCompactionConfig:
     max_compacted_refs: int = 3
     max_plan_refs: int = 2
     max_advisory_refs: int = 3
+    # §9.3 — observational token-budget status. context_window_tokens=None → no
+    # status (backward-compatible). chars_per_token bridges the char estimate to
+    # a token count for the status only (not the char thresholds above).
+    context_window_tokens: int | None = None
+    chars_per_token: float = 3.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +94,7 @@ class PreparedModelMessages:
     estimated_chars: int
     applied_stages: tuple[str, ...] = ()
     persisted_summary: str = ""
+    budget_status: "ContextBudgetStatus | None" = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +108,17 @@ def estimate_prompt_chars(system_prompt: str, messages: list[dict[str, Any]]) ->
     return len(str(system_prompt or "")) + sum(
         estimate_message_size(message) for message in messages
     )
+
+
+def _budget_status(
+    estimated_chars: int, config: "ContextCompactionConfig"
+) -> "ContextBudgetStatus | None":
+    """§9.3: observational token-budget status, or None if no window configured."""
+    if not config.context_window_tokens:
+        return None
+    used_tokens = int(estimated_chars / max(0.1, config.chars_per_token))
+    effective = effective_context_capacity(config.context_window_tokens)
+    return classify_context_budget(used_tokens, effective)
 
 
 def _flatten_message_content(content: Any) -> str:
@@ -465,10 +488,12 @@ def prepare_model_messages(
     messages = [copy.deepcopy(message) for message in history]
     base_prompt = str(system_prompt or "")
     if not config.enabled:
+        est = estimate_prompt_chars(base_prompt, messages)
         return PreparedModelMessages(
             system_prompt=base_prompt,
             messages=messages,
-            estimated_chars=estimate_prompt_chars(base_prompt, messages),
+            estimated_chars=est,
+            budget_status=_budget_status(est, config),
         )
 
     previous_summary = ""
@@ -521,15 +546,17 @@ def prepare_model_messages(
                 ("Reactive Compact Context", reactive_result.summary)
             )
         prompt = _render_system()
+        est = estimate_prompt_chars(prompt, messages)
         return PreparedModelMessages(
             system_prompt=prompt,
             messages=messages,
-            estimated_chars=estimate_prompt_chars(prompt, messages),
+            estimated_chars=est,
             applied_stages=tuple(applied_stages),
             persisted_summary=_combine_persisted_summaries(
                 previous_summary,
                 summary_sections,
             ),
+            budget_status=_budget_status(est, config),
         )
 
     collapse_threshold = _threshold_chars(
@@ -572,15 +599,17 @@ def prepare_model_messages(
             summary_sections.append(("Auto Compacted Context", auto_result.summary))
 
     prompt = _render_system()
+    est = estimate_prompt_chars(prompt, messages)
     return PreparedModelMessages(
         system_prompt=prompt,
         messages=messages,
-        estimated_chars=estimate_prompt_chars(prompt, messages),
+        estimated_chars=est,
         applied_stages=tuple(applied_stages),
         persisted_summary=_combine_persisted_summaries(
             previous_summary,
             summary_sections,
         ),
+        budget_status=_budget_status(est, config),
     )
 
 

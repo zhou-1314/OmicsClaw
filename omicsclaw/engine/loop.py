@@ -399,6 +399,9 @@ async def run_engine_loop(
             # ADR 0024 — collapse budget scaled to the model's context window.
             context_compaction=ContextCompactionConfig(
                 max_prompt_chars=resolve_max_prompt_chars(effective_model),
+                # §9.3 — observational token-budget status (surfaced, not yet
+                # acted on): pass the resolved model's context window.
+                context_window_tokens=get_context_window(effective_model),
             ),
             deepseek_reasoning_passback=(
                 (deps.llm_provider_name or "").strip().lower() == "deepseek"
