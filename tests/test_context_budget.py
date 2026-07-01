@@ -95,3 +95,117 @@ def test_trim_history_to_budget_still_keeps_latest_block_when_char_budget_is_tin
             "content": "this response is very long and should dominate the budget",
         }
     ]
+
+
+def test_estimate_message_size_counts_inline_image_block():
+    # F4: an inline base64 image otherwise contributes only its ~9-char
+    # "image_url" type string, so a multimodal turn is near-invisible to the
+    # char budget and can silently overflow the model window.
+    base64_blob = "A" * 100_000
+    size = estimate_message_size(
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{base64_blob}"},
+                }
+            ],
+        }
+    )
+    # Image now costs a real, bounded budget (was ~13 chars: role + type);
+    # threshold locks the surcharge design against silent degradation to ~0.
+    assert size >= 2000
+
+
+def test_estimate_message_size_does_not_count_full_base64_image_length():
+    base64_blob = "A" * 100_000
+    size = estimate_message_size(
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{base64_blob}"},
+                }
+            ],
+        }
+    )
+    # Bounded surcharge, NOT the raw base64 length — else every image turn would
+    # blow max_prompt_chars and trigger reactive collapse.
+    assert size < len(base64_blob)
+
+
+def test_estimate_message_size_charges_each_image_block():
+    def message_with(n_images):
+        return {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+                for _ in range(n_images)
+            ],
+        }
+
+    one = estimate_message_size(message_with(1))
+    two = estimate_message_size(message_with(2))
+    # Each image is charged (per-block surcharge), so two cost meaningfully more.
+    assert two - one >= 1000
+
+
+def test_estimate_message_size_still_counts_text_blocks_in_list_content():
+    size = estimate_message_size(
+        {"role": "user", "content": [{"type": "text", "text": "hello world"}]}
+    )
+    # The image short-circuit must not skip normal text blocks.
+    assert size >= len("user") + len("text") + len("hello world")
+
+
+def test_estimate_message_size_counts_text_in_mixed_image_block():
+    # A block carrying BOTH an image payload and text must count both — the image
+    # surcharge must not short-circuit past same-block text.
+    caption = "a long descriptive caption of the tissue section"
+    image_only = estimate_message_size(
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:,x"}}]}
+    )
+    with_caption = estimate_message_size(
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:,x"},
+                    "text": caption,
+                }
+            ],
+        }
+    )
+    assert with_caption >= image_only + len(caption)
+
+
+def test_estimate_message_size_counts_anthropic_style_image_block():
+    size = estimate_message_size(
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"},
+                }
+            ],
+        }
+    )
+    # Anthropic-style block (type=image, no image_url key) is still charged.
+    assert size >= 2000
+
+
+def test_estimate_message_size_counts_text_even_when_image_url_key_present():
+    # A predominantly-text block that also carries an image_url key must not lose
+    # its text (the image detector may over-charge, but must never drop text).
+    caption = "important caption text"
+    size = estimate_message_size(
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": caption, "image_url": {"url": "data:,x"}}],
+        }
+    )
+    assert size >= len(caption)

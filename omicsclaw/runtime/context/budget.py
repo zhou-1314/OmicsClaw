@@ -6,6 +6,24 @@ from dataclasses import dataclass
 from typing import Any
 
 
+# F4 (ADR 0024 budget accuracy): inline image content blocks otherwise count
+# only their ~9-char ``image_url`` type string, so a multimodal turn is nearly
+# invisible to the char budget and can silently overflow the model window.
+# Charge a fixed per-image budget instead — a rough proxy for typical vision
+# token cost (~1300 tokens x ~3 chars/token). NOT the raw base64 length, which
+# would over-count catastrophically (a 100 KB image ~= 133 KB of base64).
+_IMAGE_BUDGET_CHARS = 4000
+
+_IMAGE_BLOCK_TYPES = frozenset({"image_url", "image", "input_image"})
+
+
+def _is_image_block(block: dict[str, Any]) -> bool:
+    """True if a multimodal content block carries an image payload."""
+    if str(block.get("type", "") or "").strip().lower() in _IMAGE_BLOCK_TYPES:
+        return True
+    return "image_url" in block
+
+
 def estimate_message_size(message: dict[str, Any]) -> int:
     """Approximate one transcript message's budget footprint."""
     size = len(str(message.get("role", "") or ""))
@@ -14,6 +32,11 @@ def estimate_message_size(message: dict[str, Any]) -> int:
     if isinstance(content, list):
         for block in content:
             if isinstance(block, dict):
+                if _is_image_block(block):
+                    size += _IMAGE_BUDGET_CHARS
+                # Still count the block's type + any same-block text (mixed
+                # image+text blocks, metadata): the image surcharge must not
+                # short-circuit past real text.
                 size += len(str(block.get("type", "") or ""))
                 size += len(str(block.get("text", "") or ""))
             else:
