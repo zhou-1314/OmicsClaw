@@ -1192,6 +1192,12 @@ def load_prompt_pack_runtime_context(
     """
 
     del surface, skill, query, domain
+    # F8 / ADR 0024: the pack content is deliberately query-independent, so the
+    # ``extension_prompt_packs`` layer can stay in the cache-stable *system*
+    # prefix. If you implement the "future filtering logic" above (varying
+    # content by query/skill/domain), also move that layer to ``message``
+    # placement in ``runtime/context/layers`` — otherwise the system prefix
+    # churns per turn and breaks automatic prompt-prefix caching.
 
     packs = load_enabled_prompt_packs(
         omicsclaw_dir,
