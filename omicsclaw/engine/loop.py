@@ -182,6 +182,15 @@ _CHARS_PER_TOKEN = CHARS_PER_TOKEN
 _PROMPT_BUDGET_FRACTION = 0.5
 _DEFAULT_MAX_PROMPT_CHARS = 96000
 
+# §9.3 slice 3 — compress-to-target. After a collapse/auto compaction, converge
+# the TOTAL prompt (system + preserved tail) to this fraction of max_prompt_chars,
+# so the target scales with the model's real char budget instead of the old fixed
+# 12000/6000-char tail. Both sit well below their trigger ratios (0.82 / 0.92) so
+# the re-warmed next turn cannot re-collapse (F2 one-compaction = one-rewarm), and
+# auto keeps less than collapse.
+_COLLAPSE_TARGET_RATIO = 0.55
+_AUTO_COMPACT_TARGET_RATIO = 0.40
+
 
 def resolve_max_prompt_chars(model: str) -> int:
     """Context-collapse char budget for ``model`` (ADR 0024)."""
@@ -193,6 +202,21 @@ def resolve_max_prompt_chars(model: str) -> int:
         return _DEFAULT_MAX_PROMPT_CHARS
     derived = int(window * _CHARS_PER_TOKEN * _PROMPT_BUDGET_FRACTION)
     return min(_DEFAULT_MAX_PROMPT_CHARS, derived)
+
+
+def _build_compaction_config(effective_model: str) -> ContextCompactionConfig:
+    """Assemble the per-request compaction config for ``effective_model``.
+
+    ADR 0024 — collapse budget scaled to the model's context window. §9.3 —
+    observational token-budget status (context_window_tokens) plus budget-relative
+    compress-to-target ratios (slice 3).
+    """
+    return ContextCompactionConfig(
+        max_prompt_chars=resolve_max_prompt_chars(effective_model),
+        context_window_tokens=get_context_window(effective_model),
+        collapse_target_ratio=_COLLAPSE_TARGET_RATIO,
+        auto_compact_target_ratio=_AUTO_COMPACT_TARGET_RATIO,
+    )
 
 
 def _prepend_user_turn_context(content: str | list, addition: str) -> str | list:
@@ -397,13 +421,7 @@ async def run_engine_loop(
             ),
             llm_error_types=(APIError,),
             extra_api_params=extra_api_params or {},
-            # ADR 0024 — collapse budget scaled to the model's context window.
-            context_compaction=ContextCompactionConfig(
-                max_prompt_chars=resolve_max_prompt_chars(effective_model),
-                # §9.3 — observational token-budget status (surfaced, not yet
-                # acted on): pass the resolved model's context window.
-                context_window_tokens=get_context_window(effective_model),
-            ),
+            context_compaction=_build_compaction_config(effective_model),
             deepseek_reasoning_passback=(
                 (deps.llm_provider_name or "").strip().lower() == "deepseek"
             ),

@@ -241,3 +241,31 @@ def test_classify_context_budget_five_level_thresholds():
     assert classify_context_budget(960, cap) == ContextBudgetStatus.BLOCK
     # Degenerate capacity never divides by zero; treat as fully used.
     assert classify_context_budget(10, 0) == ContextBudgetStatus.BLOCK
+
+
+def test_local_budget_status_classifies_against_prompt_char_budget():
+    # §9.3 slice 3: local pressure is chars/max_prompt_chars — the real binding
+    # compaction budget. Unlike the window-relative status (which is ~always OK
+    # for large-window models because the char budget caps context far below the
+    # window), this stays decision-useful and can drive compress-to-target.
+    from omicsclaw.runtime.context.budget import (
+        ContextBudgetStatus,
+        local_budget_status,
+    )
+
+    budget = 100_000
+    assert local_budget_status(10_000, budget) == ContextBudgetStatus.OK  # 10%
+    assert local_budget_status(70_000, budget) == ContextBudgetStatus.WARNING  # 70%
+    assert local_budget_status(85_000, budget) == ContextBudgetStatus.COMPRESS  # 85%
+    assert local_budget_status(93_000, budget) == ContextBudgetStatus.CRITICAL  # 93%
+    assert local_budget_status(99_000, budget) == ContextBudgetStatus.BLOCK  # 99%
+
+
+def test_local_budget_status_none_when_char_budget_unbounded():
+    # No local char budget configured (None / <=0) -> no local status, so the
+    # field stays absent rather than misreporting BLOCK on an unbounded prompt.
+    from omicsclaw.runtime.context.budget import local_budget_status
+
+    assert local_budget_status(50_000, None) is None
+    assert local_budget_status(50_000, 0) is None
+    assert local_budget_status(50_000, -1) is None

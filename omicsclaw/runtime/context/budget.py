@@ -64,6 +64,23 @@ def classify_context_budget(
     return ContextBudgetStatus.BLOCK
 
 
+def local_budget_status(
+    estimated_chars: int, max_prompt_chars: int | None
+) -> ContextBudgetStatus | None:
+    """§9.3 slice 3: pressure against the *local* char budget (``max_prompt_chars``).
+
+    The window-relative :func:`classify_context_budget` is decision-useless on
+    large-window models — the char budget already caps context to a few percent
+    of the window, so that status is ~always OK. This one classifies against the
+    real binding compaction budget, so it stays actionable and can drive
+    compress-to-target. Returns ``None`` when no char budget is configured
+    (unbounded prompt), so the field stays absent rather than misreporting BLOCK.
+    """
+    if max_prompt_chars is None or max_prompt_chars <= 0:
+        return None
+    return classify_context_budget(estimated_chars, max_prompt_chars)
+
+
 # F4 (ADR 0024 budget accuracy): inline image content blocks otherwise count
 # only their ~9-char ``image_url`` type string, so a multimodal turn is nearly
 # invisible to the char budget and can silently overflow the model window.

@@ -51,6 +51,27 @@ def test_resolve_max_prompt_chars_scales_with_window(monkeypatch):
     assert resolve_max_prompt_chars("unknown") == 12345
 
 
+def test_build_compaction_config_sets_budget_relative_targets(monkeypatch):
+    # §9.3 slice 3: the engine wires budget-relative compress-to-target ratios so
+    # the collapse/auto preserve budgets scale with the model's char budget
+    # instead of the fixed magic constants. The ratios must stay below their
+    # triggers (byte-stability) and stack collapse > auto (auto is more aggressive).
+    monkeypatch.delenv("OMICSCLAW_MAX_PROMPT_CHARS", raising=False)
+    monkeypatch.setattr(_engine_loop, "get_context_window", lambda m: 1_000_000)
+
+    cfg = _engine_loop._build_compaction_config("big")
+
+    assert cfg.max_prompt_chars == 96000
+    assert cfg.context_window_tokens == 1_000_000
+    assert cfg.collapse_target_ratio is not None
+    assert cfg.auto_compact_target_ratio is not None
+    # Targets sit below their triggers so the re-warmed next turn cannot re-collapse.
+    assert cfg.collapse_target_ratio < cfg.collapse_trigger_ratio
+    assert cfg.auto_compact_target_ratio < cfg.auto_compact_trigger_ratio
+    # Auto compaction preserves less than collapse (strictly more aggressive).
+    assert cfg.auto_compact_target_ratio < cfg.collapse_target_ratio
+
+
 def _make_deps(**overrides) -> EngineDependencies:
     """Build a full EngineDependencies with minimal sentinel values."""
     field_names = {f.name for f in dataclasses.fields(EngineDependencies)}

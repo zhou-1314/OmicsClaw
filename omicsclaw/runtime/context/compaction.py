@@ -10,6 +10,7 @@ from ..context.budget import (
     classify_context_budget,
     effective_context_capacity,
     estimate_message_size,
+    local_budget_status,
     trim_history_to_budget,
 )
 from ..storage.tool_result import ToolResultRecord, ToolResultStore
@@ -77,6 +78,17 @@ class ContextCompactionConfig:
     auto_compact_preserve_chars: int | None = 6000
     reactive_preserve_messages: int = 6
     reactive_preserve_chars: int | None = 4000
+    # §9.3 slice 3 — compress-to-target. When set (not None), the collapse/auto
+    # stage converges the TOTAL prompt (system incl. its summary + preserved tail)
+    # to this fraction of max_prompt_chars — the char budget drives (the small
+    # message-count cap is lifted; the fixed preserve_chars above applies only in
+    # legacy no-target mode) — so the target tracks the model's real char budget
+    # rather than a magic number. Keep each ratio safely below its trigger ratio so
+    # the re-warmed next turn cannot re-collapse (F2 one-compaction = one-rewarm).
+    # None on both -> current behavior (backward-compatible). reactive is left
+    # aggressive on purpose (emergency path), so it has no target ratio.
+    collapse_target_ratio: float | None = None
+    auto_compact_target_ratio: float | None = None
     max_highlights_per_role: int = 3
     max_compacted_refs: int = 3
     max_plan_refs: int = 2
@@ -96,6 +108,7 @@ class PreparedModelMessages:
     applied_stages: tuple[str, ...] = ()
     persisted_summary: str = ""
     budget_status: "ContextBudgetStatus | None" = None
+    local_budget_status: "ContextBudgetStatus | None" = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +201,134 @@ def _threshold_chars(max_prompt_chars: int | None, ratio: float) -> int | None:
         return None
     bounded_ratio = min(1.0, max(0.0, ratio))
     return max(1, int(max_prompt_chars * bounded_ratio))
+
+
+def _preserve_char_target(
+    preserve_chars: int | None,
+    target_ratio: float | None,
+    max_prompt_chars: int | None,
+    system_chars: int,
+) -> int | None:
+    """§9.3 slice 3: preserved-tail char budget for a compaction stage.
+
+    Legacy (no target ratio / no char budget): the fixed ``preserve_chars``.
+
+    Compress-to-target: the budget that makes the resulting TOTAL prompt
+    (system + tail) converge to ``target_ratio * max_prompt_chars``, by subtracting
+    the ``system_chars`` overhead — so the target is a true *total*-prompt target,
+    invariant to system-prompt size, and a large budget keeps proportionally more
+    recent context than the fixed 12000/6000-char constants. The fixed
+    ``preserve_chars`` is *not* a floor here: under a target the target drives
+    purely, so a large system (or, via the two-pass caller, a large summary)
+    cannot push the re-warmed next turn back over the collapse trigger (robust F2).
+    Floored at 1 — never None/0 — because the message-count cap is lifted under a
+    target, so a None char budget would keep the whole history and overflow.
+    """
+    if target_ratio is None or max_prompt_chars is None or max_prompt_chars <= 0:
+        return preserve_chars
+    total_target = int(max_prompt_chars * min(1.0, max(0.0, target_ratio)))
+    return max(1, total_target - max(0, int(system_chars)))
+
+
+def _preserve_message_target(
+    preserve_messages: int, target_ratio: float | None
+) -> int:
+    """§9.3 slice 3: message-count cap for a compaction stage.
+
+    When compress-to-target is active the char budget (:func:`_preserve_char_target`)
+    is the sole driver, so the fixed message-count cap is lifted (``-1`` =
+    unbounded) and the tail fills up to the char target — otherwise the small
+    default cap (16/8) would bind first and keep only a sliver of a large budget.
+    Without a target ratio the configured message cap applies (backward-compatible).
+    """
+    return -1 if target_ratio is not None else preserve_messages
+
+
+def _collapse_with_target(
+    messages: list[dict[str, Any]],
+    *,
+    preserve_messages: int,
+    preserve_chars: int | None,
+    target_ratio: float | None,
+    max_prompt_chars: int | None,
+    section_label: str,
+    render_system: Any,
+    metadata: dict[str, Any] | None,
+    workspace: str | None,
+    config: "ContextCompactionConfig",
+) -> "_CollapseResult":
+    """§9.3 slice 3: collapse converging the FINAL total to the target.
+
+    ``render_system(extra)`` returns the system prompt given extra pending
+    ``(label, summary)`` sections, so the tail budget can be sized against the
+    real rendered system. Legacy (``target_ratio`` is None): a single pass with the
+    fixed preserve budget.
+
+    Target-active (three steps, all guarding F2 one-compaction = one-rewarm — the
+    naive single pass leaves ``target + summary`` and re-collapses next turn):
+      1. size the tail against the pre-summary system;
+      2. re-collapse against the ACTUAL pass-1 summary so the extra-omitted
+         messages are themselves summarized (fidelity);
+      3. a final hard-trim against the ACTUAL pass-2 summary — which can still be
+         larger than pass-1's (more verbatim, length-unbounded tool-result paths
+         surface from the larger omitted set) — bringing the final total within
+         target so the re-warmed next turn stays under the trigger. The trim drops
+         at most a few oldest preserved messages not captured in the summary, and
+         only when the summary actually grew (so the summary's "N older messages"
+         count can then understate by that few — a benign, deterministic hint).
+
+    The trim cannot reduce *irreducible* content: if the rendered system alone
+    exceeds target, or the newest preserved block alone exceeds the remaining
+    budget (``trim_history_to_budget`` always keeps the newest block), the total
+    can still exceed target. That is an inherent limit, unchanged from legacy and
+    backstopped by reactive compaction on a real context-length error.
+    """
+    if target_ratio is None:
+        return _collapse_history(
+            messages,
+            preserve_messages=preserve_messages,
+            preserve_chars=preserve_chars,
+            metadata=metadata,
+            workspace=workspace,
+            config=config,
+        )
+
+    def _collapse(pending: tuple[tuple[str, str], ...]) -> "_CollapseResult":
+        budget = _preserve_char_target(
+            preserve_chars, target_ratio, max_prompt_chars,
+            system_chars=len(render_system(pending)),
+        )
+        return _collapse_history(
+            messages,
+            preserve_messages=preserve_messages,
+            preserve_chars=budget,
+            metadata=metadata,
+            workspace=workspace,
+            config=config,
+        )
+
+    result = _collapse(())
+    if result.omitted_count == 0:
+        return result
+    result = _collapse(((section_label, result.summary),))
+    if result.omitted_count == 0:
+        return result
+
+    final_budget = _preserve_char_target(
+        preserve_chars, target_ratio, max_prompt_chars,
+        system_chars=len(render_system(((section_label, result.summary),))),
+    )
+    trimmed = trim_history_to_budget(
+        result.messages, max_messages=preserve_messages, max_chars=final_budget
+    )
+    dropped = len(result.messages) - len(trimmed)
+    if dropped > 0:
+        return _CollapseResult(
+            messages=trimmed,
+            summary=result.summary,
+            omitted_count=result.omitted_count + dropped,
+        )
+    return result
 
 
 def _apply_snip_compaction(
@@ -495,6 +636,7 @@ def prepare_model_messages(
             messages=messages,
             estimated_chars=est,
             budget_status=_budget_status(est, config),
+            local_budget_status=local_budget_status(est, config.max_prompt_chars),
         )
 
     previous_summary = ""
@@ -512,8 +654,10 @@ def prepare_model_messages(
     # Compacted Context`` block, byte-identical to how the next turn will hoist
     # it. This guarantees one compaction => one prefix re-warm (ADR 0024) rather
     # than a second re-warm when the heading shape shifts on the following turn.
-    def _render_system() -> str:
-        combined = _combine_persisted_summaries(previous_summary, summary_sections)
+    def _render_system(extra: tuple[tuple[str, str], ...] = ()) -> str:
+        combined = _combine_persisted_summaries(
+            previous_summary, [*summary_sections, *extra]
+        )
         return _append_system_summary(
             base_prompt, "## Persisted Compacted Context", combined
         )
@@ -558,6 +702,7 @@ def prepare_model_messages(
                 summary_sections,
             ),
             budget_status=_budget_status(est, config),
+            local_budget_status=local_budget_status(est, config.max_prompt_chars),
         )
 
     collapse_threshold = _threshold_chars(
@@ -571,10 +716,16 @@ def prepare_model_messages(
 
     current_chars = estimate_prompt_chars(_render_system(), messages)
     if collapse_threshold is not None and current_chars > collapse_threshold:
-        collapse_result = _collapse_history(
+        collapse_result = _collapse_with_target(
             messages,
-            preserve_messages=config.collapse_preserve_messages,
+            preserve_messages=_preserve_message_target(
+                config.collapse_preserve_messages, config.collapse_target_ratio
+            ),
             preserve_chars=config.collapse_preserve_chars,
+            target_ratio=config.collapse_target_ratio,
+            max_prompt_chars=config.max_prompt_chars,
+            section_label="Context Collapse",
+            render_system=_render_system,
             metadata=metadata,
             workspace=workspace,
             config=config,
@@ -586,10 +737,16 @@ def prepare_model_messages(
             current_chars = estimate_prompt_chars(_render_system(), messages)
 
     if auto_threshold is not None and current_chars > auto_threshold:
-        auto_result = _collapse_history(
+        auto_result = _collapse_with_target(
             messages,
-            preserve_messages=config.auto_compact_preserve_messages,
+            preserve_messages=_preserve_message_target(
+                config.auto_compact_preserve_messages, config.auto_compact_target_ratio
+            ),
             preserve_chars=config.auto_compact_preserve_chars,
+            target_ratio=config.auto_compact_target_ratio,
+            max_prompt_chars=config.max_prompt_chars,
+            section_label="Auto Compacted Context",
+            render_system=_render_system,
             metadata=metadata,
             workspace=workspace,
             config=config,
@@ -611,6 +768,7 @@ def prepare_model_messages(
             summary_sections,
         ),
         budget_status=_budget_status(est, config),
+        local_budget_status=local_budget_status(est, config.max_prompt_chars),
     )
 
 
