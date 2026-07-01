@@ -51,7 +51,6 @@ def test_prepare_model_messages_applies_snip_and_micro_before_heavy_stages(tmp_p
         config=ContextCompactionConfig(
             max_prompt_chars=50_000,
             snip_message_chars=240,
-            snip_tool_argument_chars=180,
             protected_tail_messages=1,
             micro_keep_recent_tool_messages=0,
             collapse_trigger_ratio=0.95,
@@ -62,8 +61,61 @@ def test_prepare_model_messages_applies_snip_and_micro_before_heavy_stages(tmp_p
     assert prepared.applied_stages == (STAGE_SNIP_COMPACT, STAGE_MICRO_COMPACT)
     assert "## Context Collapse" not in prepared.system_prompt
     assert "snip compacted older message" in prepared.messages[0]["content"]
-    assert "snip compacted older tool arguments" in prepared.messages[1]["tool_calls"][0]["function"]["arguments"]
+    # F11: snip must NOT rewrite historical tool_call arguments — truncating a JSON
+    # args string yields invalid args re-sent to the model every turn. Arguments
+    # are preserved verbatim; oversized args are folded by the collapse stage.
+    assert (
+        prepared.messages[1]["tool_calls"][0]["function"]["arguments"]
+        == '{"payload":"' + ("B" * 1200) + '"}'
+    )
     assert "[tool result micro-compacted]" in prepared.messages[2]["content"]
+
+
+def test_snip_preserves_tool_call_arguments(tmp_path):
+    # F11: snip compresses message CONTENT (and tool RESULTS via micro), but must
+    # leave historical assistant tool_call arguments byte-identical — truncating a
+    # JSON args string produces invalid args re-sent to the model every turn, and
+    # (when a collapse stage co-fires) persists the corruption. Oversized args are
+    # handled by the collapse stage, not by rewriting the call in place.
+    import json
+
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    big_args = '{"path":"/data/sample.h5ad","payload":"' + ("Z" * 4000) + '"}'
+    prepared = prepare_model_messages(
+        system_prompt="SYSTEM",
+        history=[
+            {"role": "user", "content": "please run " + ("Q" * 4000)},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "run_skill", "arguments": big_args},
+                    }
+                ],
+            },
+            {"role": "user", "content": "latest"},
+        ],
+        chat_id="c",
+        tool_result_store=store,
+        config=ContextCompactionConfig(
+            max_prompt_chars=1_000_000,  # never collapse/auto — isolate snip
+            snip_message_chars=200,
+            protected_tail_messages=1,
+            collapse_trigger_ratio=0.99,
+            auto_compact_trigger_ratio=0.999,
+        ),
+    )
+
+    assert STAGE_SNIP_COMPACT in prepared.applied_stages
+    # message content is still snipped ...
+    assert "snip compacted older message" in prepared.messages[0]["content"]
+    # ... but the tool_call arguments are preserved verbatim and stay valid JSON.
+    args = prepared.messages[1]["tool_calls"][0]["function"]["arguments"]
+    assert args == big_args
+    json.loads(args)
 
 
 def test_prepare_model_messages_runs_context_collapse_before_auto_compact(tmp_path):

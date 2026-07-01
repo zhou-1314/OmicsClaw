@@ -67,7 +67,6 @@ class ContextCompactionConfig:
     enabled: bool = True
     max_prompt_chars: int | None = 96000
     snip_message_chars: int = 2400
-    snip_tool_argument_chars: int = 1200
     protected_tail_messages: int = 4
     micro_keep_recent_tool_messages: int = 1
     collapse_trigger_ratio: float = 0.82
@@ -357,26 +356,12 @@ def _apply_snip_compaction(
             )
             changed = True
 
-        tool_calls = updated.get("tool_calls")
-        if isinstance(tool_calls, list):
-            for tool_call in tool_calls:
-                if not isinstance(tool_call, dict):
-                    continue
-                function_block = tool_call.get("function")
-                if not isinstance(function_block, dict):
-                    continue
-                arguments = function_block.get("arguments")
-                if (
-                    isinstance(arguments, str)
-                    and len(arguments) > config.snip_tool_argument_chars > 0
-                ):
-                    function_block["arguments"] = _truncate_text(
-                        arguments,
-                        max_chars=config.snip_tool_argument_chars,
-                        label="snip compacted older tool arguments",
-                    )
-                    changed = True
-
+        # F11: snip does NOT rewrite tool_call function.arguments. Truncating a
+        # JSON args string yields invalid args that are re-sent to the model every
+        # turn (and, when a collapse stage co-fires, persisted via replace_history)
+        # — an in-place corruption of append-only history. Oversized tool calls are
+        # folded (dropped-with-summary) by the collapse stage, the correct place;
+        # tool RESULT content is still compressed by snip (above) and micro.
         compacted.append(updated)
 
     return compacted, changed
