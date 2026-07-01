@@ -222,6 +222,63 @@ def test_assemble_chat_context_loads_memory_and_builds_prompt():
     assert "workspace_context" not in context.prompt_context.layer_stats
 
 
+def test_assemble_chat_context_injects_research_stance_in_single_assembly():
+    # F3: research_stance must render into the system prompt via the SINGLE
+    # injector assembly — even with no custom system_prompt_builder. This lets
+    # the engine drop the redundant legacy second assembly for the default path.
+    async def stance_loader(session_id):
+        return "RESEARCH_STANCE_MARKER_XYZ"
+
+    context = asyncio.run(
+        assemble_chat_context(
+            chat_id="chat-1",
+            user_content="analyze data",
+            user_id="user-1",
+            platform="cli",
+            research_stance_loader=stance_loader,
+        )
+    )
+
+    assert "RESEARCH_STANCE_MARKER_XYZ" in context.system_prompt
+
+
+def test_single_assembly_system_prompt_equals_legacy_builder():
+    # F3 contract: the single injector assembly must produce a BYTE-IDENTICAL
+    # system prompt to the legacy build_system_prompt path, so dropping the
+    # second assembly (engine default path) changes nothing. Exercise the two
+    # fields that differ: research_stance (now folded into the single request)
+    # and knowledge_context (legacy-only — must NOT leak into system, since
+    # knowledge_guidance is a message-placement layer).
+    from omicsclaw.runtime.context.assembler import assemble_prompt_context
+    from omicsclaw.runtime.context.layers import ContextAssemblyRequest
+    from omicsclaw.runtime.context.system_prompt import build_system_prompt
+
+    common = dict(
+        surface="bot",
+        memory_context="MEM",
+        skill_context="## Prefetched Skill Context\n- x",
+        skill="spatial-preprocess",
+        query="analyze",
+        domain="spatial",
+        capability_context="## Deterministic Capability Assessment",
+        plan_context="PLAN",
+        transcript_context="TX",
+        output_style="",
+        research_stance="STANCE MARKER",
+        prompt_pack_context="PACK",
+    )
+    legacy = build_system_prompt(
+        **common,
+        knowledge_context="KNOWLEDGE GUIDANCE BODY",
+        include_knowledge_guidance=True,
+    )
+    single = assemble_prompt_context(request=ContextAssemblyRequest(**common)).system_prompt
+
+    assert single == legacy
+    assert "STANCE MARKER" in single  # research_stance renders into system
+    assert "KNOWLEDGE GUIDANCE BODY" not in single  # knowledge stays out of system
+
+
 def test_assemble_chat_context_forwards_thread_id_to_session_memory():
     """AN-CTXRECALL-11: the active investigation thread_id reaches both the
     session stamp (get_or_create) and the passive memory load (load_context),

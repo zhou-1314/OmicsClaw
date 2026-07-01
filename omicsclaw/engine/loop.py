@@ -31,7 +31,6 @@ from omicsclaw.runtime.agent.query_engine import (
     run_query_engine,
 )
 from omicsclaw.runtime.context.compaction import ContextCompactionConfig
-from omicsclaw.runtime.context.system_prompt import build_system_prompt
 from omicsclaw.runtime.storage.transcript import (
     build_selective_replay_context,
 )
@@ -290,7 +289,9 @@ async def run_engine_loop(
         # prefs/insights/project_context stay shared). Empty = legacy unscoped.
         thread_id=thread_id,
         session_manager=deps.session_manager,
-        system_prompt_builder=build_system_prompt,
+        # F3: no system_prompt_builder — the single injector assembly (with
+        # research_stance folded in) is byte-equivalent to the old legacy
+        # builder, so the redundant second assembly is dropped for this path.
         # Bench BE-PERSONA-7 — inject the agent's research-stance persona layer
         # (core://agent/research_stance); None loader / absent row = no-op.
         research_stance_loader=_make_research_stance_loader(deps.session_manager),

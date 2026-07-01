@@ -463,10 +463,24 @@ async def assemble_chat_context(
         except Exception as exc:
             LOGGER.warning("Skill context prefetch failed (non-fatal): %s", exc)
 
+    # Bench BE-PERSONA-7 — load the agent's research-stance persona layer (opt-in:
+    # only when a loader is wired, e.g. the engine loop). Absent / empty → no-op,
+    # so callers without a loader (and tests) stay byte-identical.
+    # F3: loaded BEFORE the assembly so the stance rides the SINGLE injector pass;
+    # the default (no custom builder) path no longer needs a redundant second
+    # (legacy-builder) assembly to inject it.
+    research_stance = ""
+    if research_stance_loader is not None and session_id:
+        try:
+            research_stance = (await research_stance_loader(session_id)) or ""
+        except Exception as exc:
+            LOGGER.warning("Research-stance load failed (non-fatal): %s", exc)
+
     prompt_context = assemble_prompt_context(
         request=ContextAssemblyRequest(
             surface=surface,
             omicsclaw_dir=omicsclaw_dir,
+            research_stance=research_stance,
             output_style=output_style,
             memory_context=memory_context,
             skill_context=skill_context,
@@ -486,16 +500,6 @@ async def assemble_chat_context(
         injectors=context_injectors,
     )
     system_prompt = prompt_context.system_prompt
-
-    # Bench BE-PERSONA-7 — load the agent's research-stance persona layer (opt-in:
-    # only when a loader is wired, e.g. the engine loop). Absent / empty → no-op,
-    # so callers without a loader (and tests) stay byte-identical.
-    research_stance = ""
-    if research_stance_loader is not None and session_id:
-        try:
-            research_stance = (await research_stance_loader(session_id)) or ""
-        except Exception as exc:
-            LOGGER.warning("Research-stance load failed (non-fatal): %s", exc)
 
     if system_prompt_builder is not None:
         builder_kwargs = {
