@@ -209,3 +209,35 @@ def test_estimate_message_size_counts_text_even_when_image_url_key_present():
         }
     )
     assert size >= len(caption)
+
+
+def test_effective_context_capacity_subtracts_reserve_and_margin():
+    # §9.3: usable input budget = model window − reserved output − safety margin
+    # (cellclaw ModelSpec.effective_capacity).
+    from omicsclaw.runtime.context.budget import effective_context_capacity
+
+    assert effective_context_capacity(
+        context_window=128_000, reserved_output=4096, safety_margin=2048
+    ) == 128_000 - 4096 - 2048
+    # Never negative.
+    assert effective_context_capacity(
+        context_window=1000, reserved_output=4096, safety_margin=2048
+    ) == 0
+
+
+def test_classify_context_budget_five_level_thresholds():
+    # §9.3: OK <65% ≤ WARNING <80% ≤ COMPRESS <90% ≤ CRITICAL <96% ≤ BLOCK
+    # (cellclaw ModelSpec.classify_usage).
+    from omicsclaw.runtime.context.budget import (
+        ContextBudgetStatus,
+        classify_context_budget,
+    )
+
+    cap = 1000
+    assert classify_context_budget(640, cap) == ContextBudgetStatus.OK
+    assert classify_context_budget(650, cap) == ContextBudgetStatus.WARNING
+    assert classify_context_budget(800, cap) == ContextBudgetStatus.COMPRESS
+    assert classify_context_budget(900, cap) == ContextBudgetStatus.CRITICAL
+    assert classify_context_budget(960, cap) == ContextBudgetStatus.BLOCK
+    # Degenerate capacity never divides by zero; treat as fully used.
+    assert classify_context_budget(10, 0) == ContextBudgetStatus.BLOCK

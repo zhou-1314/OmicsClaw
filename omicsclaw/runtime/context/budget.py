@@ -3,7 +3,58 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
+
+
+# --------------------------------------------------------------------------- #
+# §9.3 — input-context budget status (token-based; mirrors cellclaw's
+# ContextBudgetEvaluator). Pure primitives here; wiring is a separate slice.
+# --------------------------------------------------------------------------- #
+
+
+class ContextBudgetStatus(str, Enum):
+    """Input-context budget pressure (cellclaw ContextStatus parity)."""
+
+    OK = "ok"
+    WARNING = "warning"
+    COMPRESS = "compress"
+    CRITICAL = "critical"
+    BLOCK = "block"
+
+
+def effective_context_capacity(
+    context_window: int,
+    *,
+    reserved_output: int = 4096,
+    safety_margin: int = 2048,
+) -> int:
+    """Usable input-token budget = window − reserved output − safety margin."""
+    return max(0, int(context_window) - int(reserved_output) - int(safety_margin))
+
+
+_BUDGET_WARNING_PCT = 65
+_BUDGET_COMPRESS_PCT = 80
+_BUDGET_CRITICAL_PCT = 90
+_BUDGET_BLOCK_PCT = 96
+
+
+def classify_context_budget(
+    used_tokens: int, effective_capacity: int
+) -> ContextBudgetStatus:
+    """Classify input-context pressure by used/effective percentage."""
+    if effective_capacity <= 0:
+        return ContextBudgetStatus.BLOCK
+    pct = used_tokens / effective_capacity * 100
+    if pct < _BUDGET_WARNING_PCT:
+        return ContextBudgetStatus.OK
+    if pct < _BUDGET_COMPRESS_PCT:
+        return ContextBudgetStatus.WARNING
+    if pct < _BUDGET_CRITICAL_PCT:
+        return ContextBudgetStatus.COMPRESS
+    if pct < _BUDGET_BLOCK_PCT:
+        return ContextBudgetStatus.CRITICAL
+    return ContextBudgetStatus.BLOCK
 
 
 # F4 (ADR 0024 budget accuracy): inline image content blocks otherwise count
