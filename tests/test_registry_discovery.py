@@ -7,7 +7,7 @@ These cover behaviors that don't show up in the snapshot tests:
   invalidate the previous snapshot instead of silently returning it.
 - ``invalidate`` / ``reload`` semantics.
 - Hot-loading a synthetic fixture skill so we exercise the same paths the
-  bundled 89 skills use, without depending on those snapshots.
+  bundled 95 skills use, without depending on those snapshots.
 """
 
 from __future__ import annotations

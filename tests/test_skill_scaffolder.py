@@ -13,6 +13,7 @@ from omicsclaw.skill.scaffolder import (
     find_latest_autonomous_analysis,
     infer_skill_name,
 )
+from omicsclaw.skill.schema import validate_skill_yaml
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -66,13 +67,14 @@ def test_create_skill_scaffold_creates_registry_loadable_skill(tmp_path: Path):
     assert (skill_dir / "scaffold_spec.json").exists()
     assert (skill_dir / "manifest.json").exists()
     assert (skill_dir / "completion_report.json").exists()
-    # v2 layout (PR-eval-3a): every scaffold ships sidecar + 4 references.
-    # These existence checks are the actual regression guard — `lint_skill`
-    # short-circuits to [] for any skill *without* `parameters.yaml`, so if the
-    # scaffolder ever regressed to legacy v1 emission, the lint assert alone
-    # would silently pass.  The pair below — exists() + lint == [] — only
-    # passes when both v2 shape AND v2 content are correct.
-    assert (skill_dir / "parameters.yaml").exists()
+    # v2 layout (ADR 0037): every scaffold is BORN v2 — a skill.yaml machine
+    # contract + 4 references, and NO legacy parameters.yaml sidecar (that would
+    # break the 0-parameters.yaml repo invariant).  The existence checks pair
+    # with lint == [] so both v2 shape AND v2 content are validated; a v2
+    # skill.yaml routes `lint_skill` through the schema-validated `_lint_v2` path.
+    assert (skill_dir / "skill.yaml").exists()
+    assert not (skill_dir / "parameters.yaml").exists()
+    assert validate_skill_yaml(skill_dir / "skill.yaml") == []
     assert (skill_dir / "references" / "methodology.md").exists()
     assert (skill_dir / "references" / "output_contract.md").exists()
     assert (skill_dir / "references" / "parameters.md").exists()
@@ -156,7 +158,9 @@ def test_create_skill_scaffold_can_promote_autonomous_analysis(tmp_path: Path):
     assert (skill_dir / "references" / "source_result_summary.md").exists()
     # v2 layout co-exists with the source_* promotion artifacts.  Same
     # existence-then-lint pairing as the default-scaffold test.
-    assert (skill_dir / "parameters.yaml").exists()
+    assert (skill_dir / "skill.yaml").exists()
+    assert not (skill_dir / "parameters.yaml").exists()
+    assert validate_skill_yaml(skill_dir / "skill.yaml") == []
     assert (skill_dir / "references" / "methodology.md").exists()
     assert (skill_dir / "references" / "output_contract.md").exists()
     assert (skill_dir / "references" / "parameters.md").exists()
@@ -257,6 +261,24 @@ def test_create_skill_scaffold_can_promote_mini_agent_analysis(tmp_path: Path):
     assert not (skill_dir / "references" / "source_analysis_notebook.ipynb").exists()
     assert result.completion["completed"] is True
     assert lint_skill(skill_dir) == []
+
+    # ITEM 2: the promotion path seeds deps.python from the RENDERED script's
+    # real import surface — the mini-agent facade bootstrap imports anndata +
+    # matplotlib, and the accepted cells import scanpy — so a promoted skill
+    # under skills/ starts clean against audit_skill_requires.
+    from audit_skill_requires import skill_import_surface
+
+    from omicsclaw.skill.schema import load_skill_yaml
+
+    manifest = load_skill_yaml(skill_dir / "skill.yaml")
+    deps = manifest.deps.python
+    assert deps == sorted(set(deps)), f"deps.python must be sorted + deduped: {deps}"
+    assert {"anndata", "matplotlib"}.issubset(deps), deps
+    assert "python" not in deps and "sys" not in deps, f"stdlib leaked into deps: {deps}"
+    # The audit's computed import surface must be a subset of the seeded deps so
+    # `audit_skill_requires --check` reports nothing missing.
+    core, optional, _lib, _notes = skill_import_surface(skill_dir, [manifest.runtime.entry])
+    assert set(core) | set(optional) <= set(deps), (core, optional, deps)
 
 
 def test_find_latest_autonomous_analysis_discovers_mini_agent_run(tmp_path: Path):

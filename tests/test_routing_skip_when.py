@@ -1,14 +1,15 @@
 """Deterministic routing tests driven by the Skip-when eval snapshot.
 
-ADR 2026-05-11: negative routing cases are extracted from SKILL.md
-Skip-when clauses at write-time by an LLM, then frozen as JSON.  This
-test reads the snapshot only — it does NOT call any LLM — so CI is
-deterministic and offline-safe.
+ADR 2026-05-11 / ADR 0037: negative routing cases are extracted from each
+skill's Skip-when clause (v2 `skill.yaml summary` / v1 `SKILL.md` frontmatter,
+read via the same dual-track reader as the extractor) at write-time by an LLM,
+then frozen as JSON.  This test reads the snapshot only — it does NOT call any
+LLM — so CI is deterministic and offline-safe.
 
-When a SKILL.md description changes, `description_hash` in the snapshot
-goes stale and this test fails with guidance to run `make eval-snapshot`.
-The maintainer reviews the regenerated snapshot's diff before commit,
-which is the human-in-the-loop step the ADR mandates.
+When a skill's description changes, `description_hash` in the snapshot goes stale
+and this test fails with guidance to run `make eval-snapshot`.  The maintainer
+reviews the regenerated snapshot's diff before commit, which is the
+human-in-the-loop step the ADR mandates.
 """
 
 from __future__ import annotations
@@ -18,7 +19,6 @@ import json
 from pathlib import Path
 
 import pytest
-import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 SNAPSHOT_PATH = ROOT / "tests" / "eval" / "skip_when_cases.json"
@@ -38,24 +38,14 @@ def _load_snapshot() -> dict:
     return json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
 
 
-def _load_current_description(domain: str, skill: str) -> str:
-    """Find the SKILL.md for this skill under its domain dir (handles flat
-    `skills/spatial/<skill>/SKILL.md` and nested layouts)."""
-    domain_dir = ROOT / "skills" / domain
-    for skill_md in domain_dir.rglob("SKILL.md"):
-        text = skill_md.read_text(encoding="utf-8")
-        if not text.startswith("---"):
-            continue
-        parts = text.split("---", 2)
-        if len(parts) < 3:
-            continue
-        try:
-            fm = yaml.safe_load(parts[1]) or {}
-        except yaml.YAMLError:
-            continue
-        if str(fm.get("name", "") or skill_md.parent.name) == skill:
-            return str(fm.get("description", "") or "").strip()
-    return ""
+def _current_descriptions(domain: str) -> dict[str, str]:
+    """Skill name -> description via the SAME dual-track reader the extractor
+    uses (v2 `skill.yaml summary` / v1 `SKILL.md` frontmatter), so the test's
+    hash matches the extractor's and v2/skill.yaml-only skills are covered
+    (ADR 0037)."""
+    from scripts.extract_skip_when_cases import _load_skill_entries
+
+    return {e.skill: e.description for e in _load_skill_entries(domain)}
 
 
 # --------------------------------------------------------------------------- #
@@ -68,11 +58,12 @@ def test_snapshot_hashes_match_current_skill_descriptions():
     diff" gate enforced as code."""
     snapshot = _load_snapshot()
     domain = snapshot["domain"]
+    descriptions = _current_descriptions(domain)
     stale: list[tuple[str, str, str]] = []
     for entry in snapshot["skills"]:
         skill = entry["skill"]
         recorded_hash = entry["description_hash"]
-        current_desc = _load_current_description(domain, skill)
+        current_desc = descriptions.get(skill, "")
         if not current_desc:
             stale.append((skill, recorded_hash, "DESCRIPTION_MISSING"))
             continue
@@ -80,11 +71,38 @@ def test_snapshot_hashes_match_current_skill_descriptions():
         if current_hash != recorded_hash:
             stale.append((skill, recorded_hash, current_hash))
     assert not stale, (
-        "Snapshot stale — SKILL.md descriptions changed without re-extracting.\n"
+        "Snapshot stale — skill descriptions changed without re-extracting.\n"
         "Run `make eval-snapshot DOMAIN=" + domain + "` and review the diff "
         "before committing.\n"
         f"Stale entries: {stale}"
     )
+
+
+def test_current_descriptions_dual_track_v2(tmp_path, monkeypatch):
+    """The drift check sources descriptions via the SAME dual-track reader as the
+    extractor, so a v2 skill.yaml-only skill is covered with its reconstructed
+    description (no false DESCRIPTION_MISSING / hash mismatch) — ADR 0037."""
+    from scripts import extract_skip_when_cases as extractor
+    from omicsclaw.skill.schema import parse_skill_manifest
+
+    monkeypatch.setattr(extractor, "_ROOT", tmp_path)
+    sd = tmp_path / "skills" / "spatial" / "sk"
+    sd.mkdir(parents=True)
+    doc = {
+        "schema_version": 2, "id": "sk", "name": "sk", "domain": "spatial",
+        "version": "1.0.0",
+        "summary": {"load_when": "clustering a spatial AnnData",
+                    "skip_when": [{"condition": "single-cell data", "use": "sc-de"}]},
+        "runtime": {"language": "python", "entry": "sk.py"},
+    }
+    (sd / "skill.yaml").write_text(parse_skill_manifest(doc).to_yaml(), encoding="utf-8")
+
+    descriptions = _current_descriptions("spatial")
+    assert "sk" in descriptions
+    assert descriptions["sk"].startswith("Load when clustering a spatial AnnData")
+    # the test's own hash matches the extractor's entry hash (same reader + fn)
+    assert _hash_description(descriptions["sk"]) == \
+        extractor._hash_description(descriptions["sk"])
 
 
 def test_snapshot_has_no_silent_extraction_failures():

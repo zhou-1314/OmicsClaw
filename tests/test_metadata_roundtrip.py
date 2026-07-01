@@ -287,13 +287,31 @@ _PROD_SPATIAL_DE = _REPO_ROOT / "skills" / "spatial" / "spatial-de"
 
 
 def _discover_v2_skills() -> list[Path]:
-    """Every production skill directory that has migrated to v2 (has a
-    parameters.yaml sidecar).  Excludes the _template scaffold."""
+    """Every production skill directory (ADR 0037 v2 — has a ``skill.yaml``).
+    Excludes the ``_``-prefixed scaffold/lib dirs."""
     return sorted(
-        p.parent for p in (_REPO_ROOT / "skills").rglob("parameters.yaml")
+        p.parent for p in (_REPO_ROOT / "skills").rglob("skill.yaml")
         if not any(part.startswith("_") for part in p.relative_to(_REPO_ROOT / "skills").parts[:-1])
         and not p.parent.name.startswith("_")
     )
+
+
+def _prod_runtime_contract(skill_dir: Path) -> dict:
+    """The runtime-contract fields of a production skill, sourced via the
+    canonical dual-track ``LazySkillMetadata`` (post-ADR-0037 this reads
+    ``skill.yaml``). Rebuilt into the v1 sidecar shape so the fabricated
+    frontmatter/sidecar forms below can round-trip it identically."""
+    lazy = LazySkillMetadata(skill_dir)
+    return {
+        "domain": lazy.domain,
+        "script": lazy.script,
+        "allowed_extra_flags": sorted(lazy.allowed_extra_flags),
+        "trigger_keywords": list(lazy.trigger_keywords),
+        "legacy_aliases": list(lazy.legacy_aliases),
+        "saves_h5ad": lazy.saves_h5ad,
+        "requires_preprocessed": lazy.requires_preprocessed,
+        "param_hints": dict(lazy.param_hints),
+    }
 
 
 @pytest.mark.parametrize(
@@ -305,13 +323,14 @@ def test_every_v2_skill_roundtrips(tmp_path: Path, skill_dir: Path) -> None:
     """Every v2 skill in production must round-trip identically between the
     legacy frontmatter form and the new sidecar form via LazySkillMetadata.
 
-    Auto-discovers every parameters.yaml under skills/ — when PR #N adds a
-    new v2 skill, this test covers it for free.  Per-skill failures are
+    Auto-discovers every skill.yaml under skills/ (its runtime contract is
+    sourced via LazySkillMetadata) — when a new v2 skill is added, this test
+    covers it for free.  Per-skill failures are
     attributable via the pytest parametrisation ID (e.g.
     `bulkrna/bulkrna-coexpression`).
     """
-    sidecar_data = yaml.safe_load((skill_dir / "parameters.yaml").read_text(encoding="utf-8"))
-    assert isinstance(sidecar_data, dict), f"{skill_dir}/parameters.yaml must be a dict"
+    sidecar_data = _prod_runtime_contract(skill_dir)
+    assert isinstance(sidecar_data, dict), f"{skill_dir} runtime contract must be a dict"
 
     # Identity fields stay in SKILL.md frontmatter; reuse production values
     # so the fabricated forms only differ in WHERE the runtime contract lives.
@@ -356,7 +375,8 @@ def test_every_v2_skill_roundtrips(tmp_path: Path, skill_dir: Path) -> None:
 def test_spatial_de_real_skill_roundtrips(tmp_path: Path) -> None:
     """Pin the production skills/spatial/spatial-de runtime contract directly.
 
-    Loads the actual parameters.yaml from the migrated skill and asserts both
+    Loads the actual runtime contract (via LazySkillMetadata → skill.yaml) from
+    the migrated skill and asserts both
     that (a) the legacy frontmatter form would yield the same LazySkillMetadata
     output as the production sidecar, and (b) the production sidecar still
     contains the load-bearing keys that bot/skill_orchestration.py and
@@ -365,7 +385,7 @@ def test_spatial_de_real_skill_roundtrips(tmp_path: Path) -> None:
     below fail — closing the silent-drift hole that an in-test spec dict
     alone would leave open.
     """
-    prod_sidecar = yaml.safe_load((_PROD_SPATIAL_DE / "parameters.yaml").read_text())
+    prod_sidecar = _prod_runtime_contract(_PROD_SPATIAL_DE)
 
     # Production sanity: load-bearing shape every consumer depends on.
     assert set(prod_sidecar["param_hints"].keys()) == {"wilcoxon", "t-test", "pydeseq2"}

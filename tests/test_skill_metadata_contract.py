@@ -22,15 +22,22 @@ def _frontmatter(skill_md: Path) -> dict[str, Any]:
 
 
 def _runtime_contract(skill_dir: Path) -> dict[str, Any]:
-    """Return the runtime metadata block, regardless of whether the skill
-    is in legacy (frontmatter `metadata.omicsclaw`) or v2 (sidecar
-    `parameters.yaml`) form.  Mirrors the priority used by
-    omicsclaw.skill.lazy_metadata."""
-    sidecar = skill_dir / "parameters.yaml"
-    if sidecar.exists():
-        return yaml.safe_load(sidecar.read_text(encoding="utf-8")) or {}
-    fm = _frontmatter(skill_dir / "SKILL.md")
-    return (fm.get("metadata", {}) or {}).get("omicsclaw", {}) or {}
+    """Return the runtime metadata block via the canonical dual-track reader
+    (``omicsclaw.skill.lazy_metadata`` — v2 ``skill.yaml`` preferred, else the
+    legacy ``metadata.omicsclaw`` frontmatter). Post-migration every skill is v2,
+    so the values come from ``skill.yaml``; using ``LazySkillMetadata`` keeps this
+    test aligned with the real runtime reader instead of the deleted sidecar."""
+    from omicsclaw.skill.lazy_metadata import LazySkillMetadata
+
+    lazy = LazySkillMetadata(skill_dir)
+    return {
+        "domain": lazy.domain,
+        "script": lazy.script,
+        "allowed_extra_flags": sorted(lazy.allowed_extra_flags),
+        "param_hints": dict(lazy.param_hints),
+        "saves_h5ad": lazy.saves_h5ad,
+        "requires_preprocessed": lazy.requires_preprocessed,
+    }
 
 
 def test_all_primary_skills_have_standard_omicsclaw_frontmatter():
