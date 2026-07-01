@@ -922,24 +922,34 @@ async def _execute_planned_tool_calls(
     tool_runtime_context: dict[str, Any] | None,
     current_policy_state: "ToolPolicyState | None",
     state: "LoopState",
+    append_assistant: bool = True,
 ) -> tuple[list["ToolExecutionResult"], str, "ToolPolicyState | None"]:
-    """Execute deterministic tool calls through the same pipeline as LLM calls."""
-    assistant_tool_calls = [
-        {
-            "id": tc.id,
-            "type": "function",
-            "function": {
-                "name": tc.name,
-                "arguments": tc.arguments,
-            },
-        }
-        for tc in planned_tool_calls
-    ]
-    transcript_store.append_assistant_message(
-        context.chat_id,
-        content="",
-        tool_calls=assistant_tool_calls,
-    )
+    """Execute deterministic tool calls through the same pipeline as LLM calls.
+
+    ``append_assistant`` records the assistant-with-tool-calls message that owns
+    these results. The planned-prelude caller has not recorded it, so it defaults
+    to True; the main LLM loop already appended the real assistant message (with
+    its content + reasoning), so it passes False to avoid a duplicate empty copy
+    that sanitize_tool_history would later drop *in place of* the content-bearing
+    one — silently losing the assistant's pre-tool-call text.
+    """
+    if append_assistant:
+        assistant_tool_calls = [
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.name,
+                    "arguments": tc.arguments,
+                },
+            }
+            for tc in planned_tool_calls
+        ]
+        transcript_store.append_assistant_message(
+            context.chat_id,
+            content="",
+            tool_calls=assistant_tool_calls,
+        )
 
     execution_requests, tool_states = await _build_execution_requests(
         tool_calls=planned_tool_calls,
@@ -1512,6 +1522,10 @@ async def run_query_engine(
                 tool_runtime_context=tool_runtime_context,
                 current_policy_state=current_policy_state,
                 state=state,
+                # The loop already recorded the real assistant message (content +
+                # reasoning + tool_calls) at append_assistant_message above; don't
+                # append a duplicate empty copy here.
+                append_assistant=False,
             )
         )
 
