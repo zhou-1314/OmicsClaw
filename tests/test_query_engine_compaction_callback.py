@@ -98,6 +98,14 @@ def test_callback_fires_when_compaction_applied(tmp_path):
     assert event.applied_stages
     assert event.messages_compressed >= 0
     assert event.tokens_saved_estimate >= 0
+    # B3: the context-budget status is threaded end-to-end from the
+    # PreparedModelMessages into the emitted event. max_prompt_chars=8000 is set
+    # (so local_budget_status is populated) but context_window_tokens is not
+    # (so the window-relative budget_status stays None — the B1 finding).
+    from omicsclaw.runtime.context.budget import ContextBudgetStatus
+
+    assert isinstance(event.local_budget_status, ContextBudgetStatus)
+    assert event.budget_status is None
 
 
 def test_auto_compaction_persists_summary_and_trimmed_history(tmp_path):

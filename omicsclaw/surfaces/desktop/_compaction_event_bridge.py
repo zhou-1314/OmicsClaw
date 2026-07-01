@@ -39,6 +39,12 @@ def _coerce_compaction_event(event: CompactionEventOrPayload) -> CompactionEvent
         messages_compressed=int(data.get("messages_compressed", 0) or 0),
         tokens_saved_estimate=int(data.get("tokens_saved_estimate", 0) or 0),
         applied_stages=tuple(stages),
+        # B3: carry context-budget status across the surface boundary. Arrives as
+        # an enum instance in-process or a plain string after JSON; both are
+        # normalised by build_compaction_status_payload. Absent -> None (older
+        # producers), so the pre-B3 payload shape is preserved.
+        budget_status=data.get("budget_status"),
+        local_budget_status=data.get("local_budget_status"),
     )
 
 

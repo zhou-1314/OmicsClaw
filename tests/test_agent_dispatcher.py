@@ -187,6 +187,10 @@ async def test_context_compacted_translates_compaction_event(monkeypatch):
             "messages_compressed": 7,
             "tokens_saved_estimate": 2100,
             "applied_stages": ("auto_compact",),
+            # B3: dataclasses.asdict now emits the budget-status fields; None by
+            # default (this event was built without a configured window/budget).
+            "budget_status": None,
+            "local_budget_status": None,
         }
     )
     assert events[1] == Final(text="ok", kind="normal")

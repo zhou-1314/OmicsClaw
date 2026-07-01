@@ -779,6 +779,28 @@ class CompactionEvent:
     messages_compressed: int
     tokens_saved_estimate: int
     applied_stages: tuple[str, ...]
+    # B3 (§9.3) — surface the already-computed context-budget pressure so a
+    # surface can render a "context X% full" badge. local_budget_status (vs
+    # max_prompt_chars) is the actionable one; budget_status (window-relative) is
+    # ~always OK on large-window models (B1). Optional/None for back-compat with
+    # existing 3-arg constructions and dataclasses.asdict consumers.
+    budget_status: "ContextBudgetStatus | str | None" = None
+    local_budget_status: "ContextBudgetStatus | str | None" = None
+
+
+def _budget_status_str(status: "ContextBudgetStatus | str | None") -> str | None:
+    """Normalise a budget status to its plain string value, or None.
+
+    Handles a live ``ContextBudgetStatus`` enum (in-process) and a plain string
+    (after crossing the dispatcher's ``dataclasses.asdict`` / JSON boundary), so
+    the SSE JSON contract is a stable string independent of the str-Enum impl.
+    """
+    if status is None:
+        return None
+    if isinstance(status, ContextBudgetStatus):
+        return status.value
+    text = str(status).strip()
+    return text or None
 
 
 def build_compaction_status_payload(event: CompactionEvent) -> dict[str, Any]:
@@ -805,7 +827,7 @@ def build_compaction_status_payload(event: CompactionEvent) -> dict[str, Any]:
             f"Context compressed: {event.messages_compressed} older "
             "messages summarized"
         )
-    return {
+    payload: dict[str, Any] = {
         "notification": True,
         "subtype": "context_compressed",
         "message": msg,
@@ -814,3 +836,13 @@ def build_compaction_status_payload(event: CompactionEvent) -> dict[str, Any]:
             "tokensSaved": event.tokens_saved_estimate,
         },
     }
+    # B3: add budget-status keys ONLY when present, so the pre-B3 payload shape
+    # (asserted byte-for-byte by callers) is unchanged when no window/char budget
+    # is configured.
+    budget = _budget_status_str(event.budget_status)
+    local_budget = _budget_status_str(event.local_budget_status)
+    if budget is not None:
+        payload["budgetStatus"] = budget
+    if local_budget is not None:
+        payload["localBudgetStatus"] = local_budget
+    return payload

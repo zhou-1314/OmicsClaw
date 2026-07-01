@@ -11,7 +11,7 @@ from omicsclaw.common.user_guidance import (
 )
 from omicsclaw.providers.patches import apply_deepseek_reasoning_passback
 
-from ..context.budget import estimate_message_size
+from ..context.budget import ContextBudgetStatus, estimate_message_size
 from ..context.compaction import (
     CompactionEvent,
     ContextCompactionConfig,
@@ -590,6 +590,8 @@ async def _emit_compaction_event(
     history_len: int,
     kept_len: int,
     applied_stages: tuple[str, ...],
+    budget_status: ContextBudgetStatus | None = None,
+    local_budget_status: ContextBudgetStatus | None = None,
 ) -> None:
     """Build a CompactionEvent and dispatch via the callback.
 
@@ -603,6 +605,8 @@ async def _emit_compaction_event(
         messages_compressed=omitted,
         tokens_saved_estimate=int(saved_chars / 3.5),
         applied_stages=applied_stages,
+        budget_status=budget_status,
+        local_budget_status=local_budget_status,
     )
     try:
         await _maybe_await(callbacks.on_context_compacted(event))
@@ -1251,6 +1255,8 @@ async def _call_llm_with_reactive_compact_retry(
                         history_len=len(history),
                         kept_len=len(reactive_messages.messages),
                         applied_stages=reactive_messages.applied_stages,
+                        budget_status=reactive_messages.budget_status,
+                        local_budget_status=reactive_messages.local_budget_status,
                     )
                 continue
             raise
@@ -1383,6 +1389,8 @@ async def run_query_engine(
                 history_len=len(history),
                 kept_len=len(prepared_messages.messages),
                 applied_stages=prepared_messages.applied_stages,
+                budget_status=prepared_messages.budget_status,
+                local_budget_status=prepared_messages.local_budget_status,
             )
         try:
             last_message, has_attempted_reactive_compact, sent_system_prompt = (
