@@ -2,6 +2,12 @@
 
 ## Status
 
+> **Amended by [ADR 0038](0038-consensus-skill-type-workflow-reserved.md)
+> (2026-07-01):** the non-leaf type this ADR named `workflow` is renamed
+> **`consensus`** (it was only ever a consensus shim); `workflow` is now a
+> reserved type for future skill-composition. Read `workflow → consensus`
+> throughout the "consensus shim" discussion below.
+
 **Accepted (2026-06-16).** Implemented on branch
 `consensus-runtime-genericity`. Synthesises an in-session design diagnosis of
 the skill architecture, fact-checked against the live tree. Extends ADR 0016

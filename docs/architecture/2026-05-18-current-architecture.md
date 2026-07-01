@@ -7,7 +7,7 @@
 
 ## 0. 一句话定位
 
-OmicsClaw 是一个 **本地优先（local-first）的单用户多组学 AI 研究助手**，把 LLM 工具循环（agent loop）和 89 个组学 skill 黏在一起，对外暴露三个 surface（CLI / Desktop / Channels）。架构选型由 ADR 0001 / 0003–0008 一系列决策**显式收窄**到"单进程 asyncio + 直接执行 + 类型化事件流"。
+OmicsClaw 是一个 **本地优先（local-first）的单用户多组学 AI 研究助手**，把 LLM 工具循环（agent loop）和 95 个组学 skill 黏在一起，对外暴露三个 surface（CLI / Desktop / Channels）。架构选型由 ADR 0001 / 0003–0008 一系列决策**显式收窄**到"单进程 asyncio + 直接执行 + 类型化事件流"。
 
 ```
 LLM 推理 ──→ run_query_engine ──→ tool 执行 ──→ skill 调用 ──→ 产物（figure + figure_data + report.md）
@@ -49,7 +49,7 @@ OmicsClaw/
 │   ├── loaders/             # 数据加载
 │   ├── extensions/          # 插件扩展
 │   └── research/            # 研究脚手架
-├── skills/                  # ★ 89 + 2 consensus thin skill 资源（每个含 SKILL.md + 入口脚本）
+├── skills/                  # ★ 95 skill 资源（含 4 个 consensus shim）（每个含 SKILL.md + 入口脚本）
 │   ├── catalog.json
 │   ├── spatial/  (17)  singlecell/ (30)  genomics/ (10)  proteomics/ (8)
 │   ├── metabolomics/ (8)  bulkrna/ (13)  orchestrator/ (2)  literature/ (1)
@@ -109,7 +109,7 @@ OmicsClaw/
 │   runtime/context/       消息装配 / token 预算 / reactive 压缩          │
 │   runtime/storage/       transcript / tool_result / task               │
 │   runtime/consensus/     ★ 多方法共识层（ADR 0010 / 0011）             │
-│   skill/                 89 skill 解析 + 调度（→ skills/ 资源）        │
+│   skill/                 95 skill 解析 + 调度（→ skills/ 资源）        │
 │   routing/               自然语言意图路由                              │
 │   memory/                MemoryEngine + ReviewLog + MemoryClient        │
 │   providers/             LLM provider 注册                             │
@@ -446,7 +446,7 @@ storage/
 
 ```
 skill/
-├── registry.py            OmicsRegistry（发现 + 加载 89 个 skill）
+├── registry.py            OmicsRegistry（发现 + 加载 95 个 skill）
 ├── lookup.py              按名/别名/能力查找
 ├── listing.py             枚举（用于 `oc list`）
 ├── lazy_metadata.py       SKILL.md 元数据懒加载
@@ -470,7 +470,7 @@ skill/
 - `r_renderers/` （可选）— R Enhanced 重绘
 - `tests/` （可选）— 测试
 
-89 个 skill 按 8 个 domain 分组（`skills/catalog.json` 是索引）。
+95 个 skill 按 8 个 domain 分组（`skills/catalog.json` 是索引）。
 
 ### 7.6 `routing/` — 自然语言意图路由
 

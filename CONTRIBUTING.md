@@ -32,7 +32,7 @@ mkdir -p skills/<domain>/<skill-name>/tests
 
 Subdomain nesting is also supported (e.g., `singlecell/scrna/sc-qc/sc_qc.py`).
 
-### Step 2: Write SKILL.md
+### Step 2: Write skill.yaml (SKILL.md is generated)
 
 Copy and customize the template:
 
@@ -40,48 +40,74 @@ Copy and customize the template:
 cp -r templates/skill skills/<domain>/<skill-name>     # then rename + fill placeholders
 ```
 
-The v2 layout splits user-visible metadata (SKILL.md frontmatter) from
-runtime contract (parameters.yaml sidecar):
+Under **ADR 0037**, a skill is defined by a single machine contract,
+`skill.yaml`, and a narrative card, `SKILL.md` — which is **generated** from
+`skill.yaml`, not hand-written field by field. You edit `skill.yaml` and
+regenerate. `skill.yaml` is validated by `omicsclaw/skill/schema.py:SkillManifest`
+(pydantic).
 
-**SKILL.md frontmatter (only these keys):**
+**`skill.yaml` (the single source of truth):**
 
 ```yaml
----
-name: your-skill-name              # Must match folder name
-description: >-
-  Load when <user intent / data shape>. Skip when <neighbouring skill>.
-  (≤50 words, lint-enforced.)
+schema_version: 2                  # required — v2 contract marker
+id: your-skill-name                # kebab-case, matches folder name
+name: your-skill-name              # usually == id
+domain: spatial                    # one of the 8 domain keys (matches skills/<domain>/)
+type: leaf                         # leaf (default) | consensus | workflow
 version: 0.1.0
 author: OmicsClaw
 license: MIT
-tags: [domain, analysis-type, method]
-requires: [pyyaml]                 # Optional Python deps
----
+emoji: "🔬"
+summary:                           # applicability — drives routing + the generated description
+  load_when: <the one situation this skill is for>
+  skip_when:                       # >=1 rule (lint requires at least one)
+  - condition: a sibling skill already covers the request
+    use: neighbouring-skill
+  trigger_keywords: [preprocess, QC]
+  tags: [domain, analysis-type, method]
+  aliases: []                      # legacy skill names this answers to
+interface:
+  inputs:
+    modalities: [visium]
+    file_types: [h5ad]             # extensions WITHOUT the dot
+    preconditions:
+      data_shape: {requires_preprocessed: false}   # needs preprocessed AnnData input?
+  parameters:
+    allowed_extra_flags:           # flags beyond --input/--output/--demo (must match argparse)
+    - --method
+    - --species
+    hints: {}                      # per-method tuning hints (optional)
+  outputs:
+    files: [report.md, result.json]
+    anndata: {saves_h5ad: false}   # does the script write processed.h5ad?
+runtime:
+  language: python                 # python | r | bash
+  entry: your_skill_name.py        # runtime entrypoint (folder name with _)
+deps:
+  python: [pyyaml]                 # third-party imports as PyPI names
 ```
 
-**parameters.yaml sidecar (everything else):**
+`schema.py:SkillManifest` also carries the top-level `compatibility`,
+`resources`, `lifecycle`, `validation`, `provenance`, `security`, and `mcp`
+sections — see `templates/skill/skill.yaml` for the full annotated template and
+`skills/singlecell/scrna/sc-qc/skill.yaml` for a filled-in example.
 
-```yaml
-domain: spatial                    # Domain bucket (matches skills/<domain>/)
-script: your_skill_name.py         # Runtime entrypoint (folder name with _ )
-saves_h5ad: false                  # Outputs include processed.h5ad?
-requires_preprocessed: false       # Needs preprocessed AnnData input?
-trigger_keywords:                  # Orchestrator routing keywords
-- preprocess
-- QC
-legacy_aliases: []                 # Old skill names this answers to
-allowed_extra_flags:               # Flags beyond --input/--output/--demo
-- --method
-- --species
-param_hints: {}                    # Per-method tuning hints (optional)
+`SKILL.md` is **generated** from `skill.yaml` by `scripts/generate_skill_md.py`:
+its frontmatter header and the `## Inputs & Outputs` summary are auto-populated
+(do **not** hand-edit them), while the narrative sections you author —
+`## When to use`, `## Flow`, `## Gotchas`, `## Key CLI`, `## See also` — are
+preserved verbatim. Regenerate after every `skill.yaml` edit:
+
+```bash
+python scripts/generate_skill_md.py       skills/<domain>/<skill-name>
+python scripts/generate_parameters_md.py  skills/<domain>/<skill-name>
 ```
-
-See `templates/skill/parameters.yaml` for the full inline schema with
-per-field documentation.
 
 **Required SKILL.md sections (lint-enforced at scripts/skill_lint.py):**
 `## When to use`, `## Inputs & Outputs`, `## Flow`, `## Gotchas`,
 `## Key CLI`, `## See also`. Body capped at 200 lines.
+`scripts/validate_skill_yaml.py` and `scripts/skill_lint.py` gate both the
+manifest and the generated card.
 
 ### Step 3: Implement the script
 
@@ -168,7 +194,7 @@ verifies every claimed path appears in the script):
 | `tables/<name>.csv` | CSV data tables | per skill |
 | `figures/<name>.png` | PNG/SVG visualizations | only if your script uses matplotlib |
 | `reproducibility/{commands.sh,requirements.txt,checksums.sha256}` | Replay artifacts | written by common report helper when applicable |
-| `processed.h5ad` | Output AnnData | only if `saves_h5ad: true` in `parameters.yaml` |
+| `processed.h5ad` | Output AnnData | only if `interface.outputs.anndata.saves_h5ad: true` in `skill.yaml` |
 
 ### Step 4: (Recommended) Use `_lib` for core logic
 

@@ -35,22 +35,29 @@ skills/
 └── literature/    （1 个）
 ```
 
-## SKILL.md 的契约
+## 技能契约：skill.yaml + 生成的 SKILL.md
 
-每个 SKILL.md 以 YAML frontmatter 开头，registry 和 bot 均从中读取字段。以下字段来自 `skills/spatial/spatial-preprocess/SKILL.md`：
+ADR 0037 起，每个 skill 的机器可读契约集中在一份 `skill.yaml`，由 `omicsclaw/skill/schema.py:SkillManifest`（pydantic）校验；registry 和 bot 都通过双轨的 `LazySkillMetadata` 从中读取字段（优先 `skill.yaml`，旧的 SKILL.md frontmatter 格式仅作安全兜底）。`SKILL.md` 不再手写元数据，而是由 `scripts/generate_skill_md.py` 从 `skill.yaml` **一键生成**——其 frontmatter 头部与 `## Inputs & Outputs` 段自动填充（不要手改），其余方法论正文（`When to use` / `Flow` / `Gotchas` / `Key CLI` / `See also`）人写并原样保留。
+
+以下字段来自 `skills/spatial/spatial-preprocess/skill.yaml`：
 
 | 字段 | 用途 | 示例（来自 spatial-preprocess） |
 |---|---|---|
-| `name` | skill 唯一标识（路由 slug） | `spatial-preprocess` |
-| `description` | 一句话摘要，供 LLM 路由打分 | `"Load matrix-level spatial transcriptomics data ... downstream-ready AnnData"` |
-| `version` | 版本追踪 | `0.5.0` |
-| `tags` | 关键词列表，辅助搜索 | `[spatial, preprocessing, QC, normalization, HVG, leiden, umap]` |
-| `metadata.omicsclaw.domain` | 所属领域键（当前 8 个 domain） | `spatial` |
-| `metadata.omicsclaw.allowed_extra_flags` | bot 可传入的 CLI flags | `["--leiden-resolution", "--min-genes", "--n-top-hvg", ...]` |
-| `metadata.omicsclaw.param_hints` | autoagent 调参搜索空间 + bot 参数预览 | `scanpy_standard: {priority: "tissue → min_genes/max_mt_pct/..."}` |
-| `metadata.omicsclaw.legacy_aliases` | 旧名称，路由仍可命中 | `[preprocess]` |
-| `metadata.omicsclaw.saves_h5ad` | 告知 LLM 该 skill 输出 h5ad | `true` |
-| `metadata.omicsclaw.requires_preprocessed` | 告知 LLM 该 skill 需要预处理输入 | `false` |
+| `id` / `name` | skill 唯一标识（路由 slug） | `spatial-preprocess` |
+| `domain` | 所属领域键（当前 8 个 domain） | `spatial` |
+| `version` | 版本追踪 | `0.6.0` |
+| `summary.load_when` | 一句话适用场景，供 LLM 路由打分 | `"running the foundational spatial ... QC + filtering + normalisation + HVG + PCA + ... + Leiden pipeline ..."` |
+| `summary.skip_when` | 何时改用别的 skill（≥1 条，lint 强制） | `raw FASTQ → spatial-raw-processing`；`已预处理数据做域识别 → spatial-domains` |
+| `summary.trigger_keywords` | 路由关键词打分 | `[preprocess, spatial QC, normalize, visium, xenium, leiden, umap, ...]` |
+| `summary.tags` | 关键词列表，辅助搜索 | `[spatial, visium, xenium, preprocessing, qc, normalization, hvg, pca, leiden]` |
+| `summary.aliases` | 旧名称，路由仍可命中 | `[preprocess, spatial-preprocessing]` |
+| `interface.inputs` | 输入模态 / 文件类型 / 前置条件 | `modalities: [visium, xenium]`；`file_types: [h5ad]` |
+| `interface.parameters.allowed_extra_flags` | bot 可传入的 CLI flags（安全白名单） | `["--min-genes", "--n-top-hvg", "--leiden-resolution", ...]` |
+| `interface.parameters.hints` | autoagent 调参搜索空间 + bot 参数预览 | `scanpy_standard: {priority: "tissue → min_genes/max_mt_pct/... → leiden_resolution"}` |
+| `interface.outputs.anndata.saves_h5ad` | 告知 LLM 该 skill 输出 h5ad | `true` |
+| `interface.inputs.preconditions.data_shape.requires_preprocessed` | 告知 LLM 该 skill 是否需要预处理输入 | `false` |
+| `runtime` | 运行语言与入口脚本 | `language: python`；`entry: spatial_preprocess.py` |
+| `deps.python` | 第三方依赖（PyPI 名，自动装配） | `[anndata, matplotlib, numpy, pandas, scanpy, scipy, seaborn]` |
 
 ## Registry 加载流程
 
@@ -68,7 +75,7 @@ skills/
                           ▼
 ┌──────────────────────────────────────────────────────────┐
 │  对每个 skill 目录：                                     │
-│  · LazySkillMetadata 懒解析 SKILL.md frontmatter         │
+│  · LazySkillMetadata 懒解析 skill.yaml（旧 frontmatter 兜底）│
 │  · _resolve_script_path() 定位入口 .py 脚本              │
 │  · 提取 domain / alias / legacy_aliases / demo_args      │
 └──────────────────────────────────────────────────────────┘

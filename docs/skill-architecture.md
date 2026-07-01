@@ -8,13 +8,16 @@ routed, and kept lean under LLM context. It is the primary reference for:
 - Understanding why a given file, generator, or CI job exists
 - Extending the bot's tool surface without inflating always-loaded context
 
-> **Last reviewed: 2026-06-16.** Reflects three changes the older revision of
+> **Last reviewed: 2026-07-01.** Reflects three changes the older revision of
 > this doc predated: (1) the core skill modules moved from `omicsclaw/core/` to
-> **`omicsclaw/skill/`**; (2) per-skill machine metadata moved out of the
-> `SKILL.md` frontmatter into a **`parameters.yaml` sidecar** (v2); and (3)
+> **`omicsclaw/skill/`**; (2) per-skill machine metadata was consolidated into a
+> single **`skill.yaml`** contract, with `SKILL.md` **generated** from it
+> (**ADR 0037**, superseding the earlier frontmatter + sidecar split); and (3)
 > **ADR 0030** added first-class skill `type` + `validation_level`. See
-> `CONTRIBUTING.md` for the day-to-day contributor workflow and
-> `docs/adr/0030-first-class-skill-type-system.md` for the type system.
+> `CONTRIBUTING.md` for the day-to-day contributor workflow,
+> `docs/adr/0037-unified-declarative-skill-representation.md` for the unified
+> contract, and `docs/adr/0030-first-class-skill-type-system.md` for the type
+> system.
 
 ---
 
@@ -23,10 +26,12 @@ routed, and kept lean under LLM context. It is the primary reference for:
 A skill is a **single analytical capability** packaged as a directory under
 `skills/`. At minimum it contains:
 
-- `SKILL.md` — YAML frontmatter (a little) + markdown body (the human-readable
-  methodology, six required sections)
-- `parameters.yaml` — the **v2 sidecar**: the machine-readable metadata that the
-  registry, lint, catalog, and runner all read
+- `skill.yaml` — the **v2 machine contract** (ADR 0037): the single
+  machine-readable source of truth that the registry, lint, catalog, and runner
+  all read
+- `SKILL.md` — the human-readable methodology card (six required sections); its
+  frontmatter header and `## Inputs & Outputs` summary are **generated** from
+  `skill.yaml`, and the rest of the body is hand-written
 - A runnable entrypoint (`*.py`) invoked by `omicsclaw.py run <alias>`
 
 Skills are dynamically discovered at startup by
@@ -37,10 +42,11 @@ register it.
 ### Design principles
 
 1. **Directory layout is the source of truth.** CLAUDE.md tables,
-   `catalog.json`, `orchestrator/SKILL.md`, and per-domain `INDEX.md` are all
-   *generated* from the filesystem + sidecars. Never hand-edit them.
-2. **Sidecar serves machines; SKILL.md body serves humans.** Everything in
-   `parameters.yaml` is parsed by the registry and surfaced to the LLM or
+   `catalog.json`, `orchestrator/SKILL.md`, per-domain `INDEX.md`, and each
+   `SKILL.md` are all *generated* from the filesystem + `skill.yaml` manifests.
+   Never hand-edit them.
+2. **`skill.yaml` serves machines; the SKILL.md body serves humans.** Everything
+   in `skill.yaml` is parsed by the registry and surfaced to the LLM or
    autoagent. The markdown body is for contributors reading the repo.
 3. **Keep always-loaded context small.** The LLM sees an 8-domain briefing plus
    per-tool specs every turn. Full per-skill detail is paged in on demand. See
@@ -65,8 +71,8 @@ skills/
 │   ├── INDEX.md                      # generated: lazy-load detail for LLM
 │   ├── _lib/                         # shared spatial helpers
 │   ├── spatial-preprocess/
-│   │   ├── SKILL.md                  # frontmatter + methodology (6 sections)
-│   │   ├── parameters.yaml           # v2 sidecar: machine metadata
+│   │   ├── skill.yaml                # v2 machine contract (single source of truth)
+│   │   ├── SKILL.md                  # generated card: methodology (6 sections)
 │   │   ├── spatial_preprocess.py     # entrypoint (canonical *.py)
 │   │   ├── references/               # generated parameters.md / methodology
 │   │   ├── tests/
@@ -121,20 +127,26 @@ python scripts/sync_skill_docs.py --check     # CI-style drift check
 
 ---
 
-## 3. The skill contract: `SKILL.md` body + `parameters.yaml` sidecar
+## 3. The skill contract: `skill.yaml` (single source) + generated `SKILL.md`
 
-Per-skill metadata lives in **`parameters.yaml`** (the v2 sidecar). The parser is
+Per-skill metadata lives in **`skill.yaml`** (the ADR 0037 machine contract).
+The one schema parser is `omicsclaw/skill/schema.py:SkillManifest` (pydantic);
 `omicsclaw/skill/lazy_metadata.py:LazySkillMetadata` (lazy, read-only) and
-`scripts/generate_catalog.py` (one-shot batch scan). The legacy
-`metadata.omicsclaw` block in the `SKILL.md` frontmatter is **removed** — all 95
-skills have migrated to the sidecar, and `scripts/skill_lint.py` errors if a
-legacy block reappears.
+`scripts/generate_catalog.py` (one-shot batch scan) read a skill's metadata
+through it (dual-track: `LazySkillMetadata` prefers `skill.yaml`, falling back to
+the legacy v1 form only as a safety net). All 95 skills have migrated to
+`skill.yaml`; the legacy per-skill metadata block that used to live inline in the
+`SKILL.md` frontmatter is **removed**, and `scripts/skill_lint.py` errors if such
+a legacy block reappears.
 
-### `SKILL.md` — frontmatter + six required body sections
+### `SKILL.md` — generated card: frontmatter + six required body sections
 
-The frontmatter now carries only display/identity fields (`name`,
-`description`, `version`, `author`, `license`, `tags`). `LazySkillMetadata`
-reads `name`/`description` from it and everything else from the sidecar.
+`SKILL.md` is **generated** from `skill.yaml` by `scripts/generate_skill_md.py`
+(`omicsclaw/skill/skill_md.py`). Its frontmatter header (`name`, `description`,
+`version`, `author`, `license`, `emoji`, `tags`, `requires`) and the
+`## Inputs & Outputs` summary are auto-populated from the manifest; the narrative
+sections are hand-written and preserved verbatim. `LazySkillMetadata` reads all
+metadata from `skill.yaml`, never from the generated frontmatter.
 
 The body must contain six sections, enforced by
 `scripts/skill_lint.py:REQUIRED_SECTIONS`:
@@ -151,34 +163,61 @@ The body must contain six sections, enforced by
 (`## Gotchas` is additionally checked: every code anchor it cites must
 grep-resolve in the skill's script — see `_check_gotchas_anchors`.)
 
-### `parameters.yaml` — machine metadata (all fields top-level)
+### `skill.yaml` — machine contract (nested; `schema.py:SkillManifest`)
+
+The top-level keys are `schema_version, id, name, domain, type, version, author,
+license, emoji, summary, interface, runtime, deps, compatibility, resources,
+lifecycle, validation, provenance, security, mcp`. The routing- and
+execution-relevant fields (formerly flat sidecar keys) now nest under `summary`
+and `interface`:
 
 ```yaml
-domain: spatial                    # REQUIRED: one of the 8 domain keys
-type: leaf                         # ADR 0030: leaf|workflow|knowledge|adapter (default leaf)
-validation_level: smoke-only       # ADR 0030: scientific-maturity ladder (default smoke-only)
-script: spatial_de.py
-trigger_keywords:                  # drives routing scoring
+schema_version: 2                    # REQUIRED: v2 contract marker
+id: spatial-de
+name: spatial-de
+domain: spatial                      # REQUIRED: one of the 8 domain keys
+type: leaf                           # leaf (default) | consensus | workflow
+version: 0.1.0
+summary:
+  load_when: <the one situation this skill is for>
+  skip_when:                         # >=1 rule (lint-enforced)
+  - condition: a sibling already covers the request
+    use: spatial-genes
+  trigger_keywords:                  # drives routing scoring
   - spatially variable genes
   - marker genes
-allowed_extra_flags:               # SECURITY: the only CLI flags the bot may pass
-  - "--method"
-  - "--top-n"
-legacy_aliases: [old-name]         # old names still route + run
-saves_h5ad: true                   # advertised in prefetch; helps the LLM plan chains
-requires_preprocessed: true        # prefetch warns the LLM about expected input
-param_hints: { … }                 # method-level search/preview surface (below)
+  tags: [spatial, de]
+  aliases: [old-name]                # old names still route + run (was legacy_aliases)
+interface:
+  inputs:
+    file_types: [h5ad]
+    preconditions:
+      data_shape: {requires_preprocessed: true}   # prefetch warns the LLM about expected input
+  parameters:
+    allowed_extra_flags:             # SECURITY: the only CLI flags the bot may pass
+    - "--method"
+    - "--top-n"
+    hints: { … }                     # method-level search/preview surface (below; was param_hints)
+  outputs:
+    anndata: {saves_h5ad: true}      # advertised in prefetch; helps the LLM plan chains
+runtime:
+  entry: spatial_de.py               # the runnable script (was `script`)
+validation:
+  level: smoke-only                  # scientific-maturity ladder (default smoke-only)
 ```
 
-The fields exposed as `LazySkillMetadata` properties are listed in
-`omicsclaw/skill/lazy_metadata.py:_RUNTIME_FIELDS`. When a sidecar is present it
-wins per-field; otherwise the loader falls back to legacy frontmatter (the
-fallback exists for safety — no shipped skill relies on it).
+`LazySkillMetadata` reads every routing property through
+`omicsclaw/skill/schema.py:SkillManifest`. The flat property surface it exposes
+(`trigger_keywords`, `allowed_extra_flags`, `saves_h5ad`, `requires_preprocessed`,
+`legacy_aliases`, `param_hints`, …) is unchanged, so its callers did not have to
+move when the on-disk keys nested.
 
 ### `param_hints` — method-level search surface
 
-For skills the **autoagent** can auto-tune or that the bot shows parameter
-previews for, add one block per method:
+On disk this block lives at `interface.parameters.hints` in `skill.yaml`;
+`LazySkillMetadata` still exposes it as the `param_hints` property. For skills
+the **autoagent** can auto-tune or that the bot shows parameter previews for, add
+one block per method:
 
 ```yaml
 param_hints:
@@ -216,8 +255,9 @@ users who learned the old name still route correctly.
 
 ADR 0030 makes **skill type** an explicit, declared dimension of the contract,
 so the template, lint, registry, and catalog can **dispatch on type** instead of
-assuming every skill is a leaf single-script. Both fields are optional in the
-sidecar and default safely, so existing leaf skills needed no edit. Constants:
+assuming every skill is a leaf single-script. Both fields are optional in
+`skill.yaml` (`type` at the top level, `validation_level` under `validation.level`)
+and default safely, so existing leaf skills needed no edit. Constants:
 `omicsclaw/skill/lazy_metadata.py:SKILL_TYPES` and `:VALIDATION_LEVELS`.
 
 ### `type` — four execution shapes
@@ -230,7 +270,7 @@ sidecar and default safely, so existing leaf skills needed no edit. Constants:
 | `adapter` | wraps an external tool or remote capability | future R/CLI/remote wrappers |
 
 A missing/unknown `type` falls back to `leaf`. `type` is read but not yet
-*required* in the sidecar; it becomes required only once every consumer
+*required* in `skill.yaml`; it becomes required only once every consumer
 understands it.
 
 ### Type-aware lint
@@ -299,9 +339,10 @@ value cannot drift from the actual contents of `skills/`. The `summary` and
 ### Lazy metadata
 
 `LazySkillMetadata` (`omicsclaw/skill/lazy_metadata.py`) is the per-skill
-metadata parser. It is *lazy* — a skill's `parameters.yaml` (and any frontmatter
-fallback) is read only when that skill is actually accessed. The bot routing path
-relies on this: touching the registry doesn't load all 95 skills' sidecars.
+metadata accessor. It is *lazy* — a skill's `skill.yaml` is parsed (through
+`schema.py:SkillManifest`) only when that skill is actually accessed. The bot
+routing path relies on this: touching the registry doesn't load all 95 skills'
+manifests.
 
 ---
 
@@ -396,7 +437,8 @@ filtered live from the registry (not from disk, to avoid staleness).
 After the LLM picks a skill, the context layers inject a "Prefetched Skill
 Context" block: selected alias + domain + summary, up to 4 `param_hints` method
 keys, `requires_preprocessed` / `saves_h5ad` flags, and legacy aliases. This is
-the closest the LLM gets to the full sidecar, and only after a skill is chosen.
+the closest the LLM gets to the full `skill.yaml`, and only after a skill is
+chosen.
 
 ### 5.5 Disambiguation gate
 
@@ -471,7 +513,7 @@ Four generators keep skill-derived documentation in sync with the filesystem.
 All support `--apply` and `--check`.
 
 ```
-        skills/**/parameters.yaml + SKILL.md (truth)
+        skills/**/skill.yaml (truth)
         _HARDCODED_DOMAINS (truth)
                     │ load_all()
                     ▼
@@ -545,24 +587,27 @@ Checklist for a brand-new leaf skill `spatial-foo`:
 
 ```
 skills/spatial/spatial-foo/
-├── SKILL.md
-├── parameters.yaml
+├── skill.yaml            # machine contract (author this)
+├── SKILL.md              # generated from skill.yaml
 ├── spatial_foo.py
 └── tests/
     └── test_spatial_foo.py
 ```
 
-Start from `templates/skill/` (it ships a `SKILL.md`, `parameters.yaml`,
+Start from `templates/skill/` (it ships a `skill.yaml`, a `SKILL.md`,
 `references/`, `tests/`, and a `replace_me.py` stub).
 
-### 2. Write `SKILL.md` + `parameters.yaml`
+### 2. Write `skill.yaml`, then generate `SKILL.md`
 
-- `SKILL.md`: frontmatter (`name`, `description`, …) + the six required body
-  sections (§3).
-- `parameters.yaml`: `domain` (required), `type` (omit for leaf),
-  `validation_level`, `trigger_keywords`, `allowed_extra_flags`, `script`, and
-  optional `param_hints`. Canonical examples:
-  `skills/spatial/spatial-preprocess/`, `skills/singlecell/scrna/sc-de/`.
+- `skill.yaml`: `schema_version: 2`, identity (`id`, `name`, `domain`, `type`,
+  `version`), `summary` (`load_when`, `skip_when`, `trigger_keywords`, `tags`,
+  `aliases`), `interface` (`inputs`, `parameters.allowed_extra_flags`,
+  `outputs`), `runtime.entry`, and `deps`. Canonical examples:
+  `skills/spatial/spatial-preprocess/skill.yaml`,
+  `skills/singlecell/scrna/sc-qc/skill.yaml`.
+- `SKILL.md`: generated from `skill.yaml` (`scripts/generate_skill_md.py`) — its
+  header and `## Inputs & Outputs` are auto-populated; author the six required
+  narrative sections (§3), then regenerate.
 
 ### 3. Implement the entrypoint
 
@@ -573,6 +618,8 @@ Start from `templates/skill/` (it ships a `SKILL.md`, `parameters.yaml`,
 ### 4. Regenerate derived docs
 
 ```bash
+python scripts/generate_skill_md.py       skills/spatial/spatial-foo   # SKILL.md from skill.yaml
+python scripts/generate_parameters_md.py  skills/spatial/spatial-foo   # references/parameters.md
 python scripts/sync_skill_docs.py --apply   # catalog + INDEX + CLAUDE.md + orchestrator counts
 ```
 
@@ -582,6 +629,7 @@ python scripts/sync_skill_docs.py --apply   # catalog + INDEX + CLAUDE.md + orch
 python omicsclaw.py list                      # new skill should appear
 python omicsclaw.py run spatial-foo --demo    # end-to-end smoke test
 python -m pytest skills/spatial/spatial-foo/tests/ -v
+python scripts/validate_skill_yaml.py skills/spatial/spatial-foo   # schema gate
 python scripts/skill_lint.py skills/spatial/spatial-foo   # contract check (type-aware)
 python scripts/sync_skill_docs.py --check     # should be green
 ```
@@ -674,8 +722,9 @@ Follow the pattern set by `list_skills_in_domain`
 Skill core (`omicsclaw/skill/`):
 
 - `registry.py` — skill discovery, alias resolution, `_HARDCODED_DOMAINS`
-- `lazy_metadata.py` — per-skill lazy sidecar parser; `SKILL_TYPES`,
-  `VALIDATION_LEVELS`, `_RUNTIME_FIELDS`
+- `schema.py` — the single `skill.yaml` schema parser (`SkillManifest`, pydantic)
+- `lazy_metadata.py` — per-skill lazy metadata accessor (reads `skill.yaml` via
+  `schema.py`); `SKILL_TYPES`, `VALIDATION_LEVELS`, `_RUNTIME_FIELDS`
 - `capability_resolver.py` — programmatic routing (L0)
 - `domain_briefing.py` — L1 briefing renderer
 - `listing.py` — L2 `list_skills_in_domain`
