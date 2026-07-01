@@ -64,7 +64,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "sc-cell-annotation"
-SKILL_VERSION = "0.7.0"
+SKILL_VERSION = "0.6.0"
 SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-cell-annotation/sc_annotate.py"
 
 # R Enhanced renderers for this skill.

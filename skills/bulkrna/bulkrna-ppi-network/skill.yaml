@@ -1,0 +1,93 @@
+schema_version: 2
+id: bulkrna-ppi-network
+name: bulkrna-ppi-network
+domain: bulkrna
+type: leaf
+version: 0.3.0
+author: OmicsClaw
+license: MIT
+emoji: 🕸️
+summary:
+  load_when: querying STRING for the protein-protein interaction subgraph induced by a bulk RNA-seq DEG
+    list and finding hub genes
+  skip_when:
+  - condition: pathway enrichment of the same list
+    use: bulkrna-enrichment
+  - condition: de novo co-expression network discovery
+    use: bulkrna-coexpression
+  trigger_keywords:
+  - PPI
+  - protein interaction
+  - STRING
+  - network
+  - hub gene
+  - interactome
+  tags:
+  - bulkrna
+  - PPI
+  - STRING
+  - network
+  - hub-genes
+  - protein-interaction
+  aliases:
+  - bulk-ppi
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - csv
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --score-threshold
+    - --species
+    - --top-n
+    hints: {}
+  outputs:
+    files:
+    - tables/hub_genes.csv
+    - tables/interaction_edges.csv
+    - tables/node_centrality.csv
+    - figures/hub_genes_barplot.png
+    - figures/ppi_network.png
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: bulkrna_ppi_network.py
+deps:
+  python:
+  - matplotlib
+  - numpy
+  - pandas
+  - requests
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

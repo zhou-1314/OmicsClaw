@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: literature
-description: Load when extracting GEO accessions, dataset metadata, and downloadable references from a scientific paper (PDF / URL / DOI / PubMed ID / raw text) for downstream omics analysis. Skip when the dataset is already in hand or when only routing a query (use `orchestrator`).
+description: Load when extracting GEO accessions, dataset metadata, and downloadable references from a
+  scientific paper (PDF / URL / DOI / PubMed ID / raw text) for downstream omics analysis. Skip when the
+  dataset is already in hand; only routing a query (use orchestrator).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 📄
 tags:
 - literature
 - pdf
@@ -33,19 +38,18 @@ For scaffolding a new skill from a paper use `omics-skill-builder`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Reference | `--input <URL\|DOI\|PubMed\|PDF path\|text>` | yes (unless `--demo`) |
-| Input type | `--input-type {auto,url,doi,pubmed,file,text}` (default `auto`) | no |
-| Skip download | `--no-download` (extract metadata only) | no |
-| Data dir | `--data-dir <path>` (default `data/`) | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Extracted metadata | `output_dir/extracted_metadata.json` | written at `literature_parse.py:80` |
-| Report | `output_dir/report.md` | written at `literature_parse.py:193` |
-| Result envelope | `output_dir/result.json` | written at `literature_parse.py:147` |
-| Downloaded GEO data | `<data-dir>/<GSE...>/...` | only when GEO accessions found AND `--no-download` not set |
+**Inputs**
+
+- File types: `.pdf`
+
+**Outputs**
+
+- `output_dir/extracted_metadata.json`
+- `output_dir/report.md`
+- `output_dir/result.json`
+- `<--data-dir>/<GSEid>/...`
 
 ## Flow
 

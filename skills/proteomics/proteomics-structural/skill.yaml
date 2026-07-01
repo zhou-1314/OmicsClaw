@@ -1,0 +1,89 @@
+schema_version: 2
+id: proteomics-structural
+name: proteomics-structural
+domain: proteomics
+type: leaf
+version: 0.5.0
+author: OmicsClaw
+license: MIT
+emoji: 🏗️
+summary:
+  load_when: summarising cross-linking MS (XL-MS) results — intra/inter-protein link split, optional FDR
+    filtering, distance-constraint validation against a per-crosslinker (DSS / BS3 / EDC / DSSO / DSBU)
+    max distance
+  skip_when:
+  - condition: raw spectra are the input (run XlinkX / pLink / xiSEARCH first)
+  - condition: no XL-MS experiment was performed
+  trigger_keywords:
+  - structural proteomics
+  - cross-linking MS
+  - XL-MS
+  - XlinkX
+  - pLink
+  - xiSEARCH
+  tags:
+  - proteomics
+  - structural
+  - xl-ms
+  - crosslinking
+  - dss
+  - bs3
+  - dsso
+  - dsbu
+  - edc
+  aliases:
+  - struct-proteomics
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - csv
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --crosslinker
+    - --fdr
+    hints: {}
+  outputs:
+    files:
+    - tables/crosslinks.csv
+    - tables/inter_protein_crosslinks.csv
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: struct_proteomics.py
+deps:
+  python:
+  - numpy
+  - pandas
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

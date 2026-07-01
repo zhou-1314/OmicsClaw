@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-count
-description: Load when turning scRNA FASTQ (or existing CellRanger/STARsolo/SimpleAF/kb-python output) into a downstream-ready AnnData. Skip when reads are already counted into AnnData (use sc-standardize-input) or for raw quality assessment only (use sc-fastq-qc).
+description: Load when turning scRNA FASTQ (or existing CellRanger/STARsolo/SimpleAF/kb-python output)
+  into a downstream-ready AnnData. Skip when reads are already counted into AnnData (use sc-standardize-input);
+  raw quality assessment only (use sc-fastq-qc).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: 🧬
 tags:
 - singlecell
 - scrna
@@ -36,19 +41,44 @@ samples).
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Reads or counts | FASTQ path / dir, or existing CellRanger / STARsolo / SimpleAF / kb-python output dir | yes (unless `--demo`) |
-| Reference | transcriptome / genome dir / index, depending on backend | only when running the backend (not for re-canonicalising existing output) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| AnnData | `processed.h5ad` | canonical contract; sample-label populated when `--sample` is used |
-| Run summary | `tables/count_summary.csv` | compact run-level summary |
-| Backend summary | `tables/backend_summary.csv` | backend-emitted metric/value pairs (always written) |
-| Per-barcode metrics | `tables/barcode_metrics.csv` | per-barcode count summary |
-| Diagnostic figures | `figures/barcode_rank.png`, `figures/count_distributions.png`, `figures/count_complexity_scatter.png` | always rendered |
-| Report | `report.md` + `result.json` | always written |
+**Inputs**
+
+- Modalities: scrna
+
+**Outputs**
+
+- `tables/Summary.csv`
+- `tables/backend_summary.csv`
+- `tables/barcode_metrics.csv`
+- `tables/barcodes.tsv`
+- `tables/cell_metadata.csv`
+- `tables/count_summary.csv`
+- `tables/features.tsv`
+- `tables/genes.tsv`
+- `tables/metrics_summary.csv`
+- `tables/simpleaf_t2g.tsv`
+- `figures/barcode_rank.png`
+- `figures/count_complexity_scatter.png`
+- `figures/count_distributions.png`
+- `3M-february-2018.txt`
+- `737K-august-2016.txt`
+- `Aligned.sortedByCoord.out.bam`
+- `analysis_summary.txt`
+- `cells_x_genes.barcodes.txt`
+- `cells_x_genes.genes.txt`
+- `multiqc_report.html`
+- `possorted_genome_bam.bam`
+- `processed.h5ad`
+- `quants_mat_cols.txt`
+- `quants_mat_rows.txt`
+- `simpleaf_index.json`
+- `standardized_input.h5ad`
+- `web_summary.html`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`)
 
 ## Flow
 

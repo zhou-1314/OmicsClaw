@@ -15,7 +15,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 from omicsclaw.skill.scaffolder import create_skill_scaffold
 
 SKILL_NAME = "omics-skill-builder"
-SKILL_VERSION = "0.1.0"
+SKILL_VERSION = "0.5.0"
 
 
 def parse_args() -> argparse.Namespace:

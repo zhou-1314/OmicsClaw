@@ -64,7 +64,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "sc-filter"
-SKILL_VERSION = "0.4.0"
+SKILL_VERSION = "0.3.0"
 
 R_ENHANCED_PLOTS: dict[str, str] = {
     # sc-filter runs before clustering — no cell-type compositions yet.

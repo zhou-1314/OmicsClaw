@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: metabolomics-xcms-preprocessing
-description: Load when running an XCMS-style preprocessing summary on LC-MS metabolomics raw / vendor-converted files — emits a peak table with m/z, retention time, and per-sample intensities. Skip when working with an already-built peak table (use `metabolomics-peak-detection`) or when only annotation is needed (use `metabolomics-annotation`).
+description: Load when running an XCMS-style preprocessing summary on LC-MS metabolomics raw / vendor-converted
+  files — emits a peak table with m/z, retention time, and per-sample intensities. Skip when working with
+  an already-built peak table (use metabolomics-peak-detection); only annotation is needed (use metabolomics-annotation).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🧪
 tags:
 - metabolomics
 - xcms
@@ -34,16 +39,17 @@ For per-sample peak picking from a single intensity matrix use
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Raw / converted MS files | `--input <file1> [<file2> ...]` (multi-file via `nargs="+"`) | yes (unless `--demo`) |
-| ppm | `--ppm <float>` (default 25.0) — m/z tolerance | no |
-| Peak width | `--peakwidth-min` / `--peakwidth-max` (default 10.0 / 60.0 sec) | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Peak table | `tables/peak_table.csv` | features × (mz, rt, intensities…) — long form |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: lc-ms
+
+**Outputs**
+
+- `tables/peak_table.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

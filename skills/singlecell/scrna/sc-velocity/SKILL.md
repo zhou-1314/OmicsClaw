@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-velocity
-description: Load when computing RNA velocity vectors and latent time on a scRNA AnnData with spliced / unspliced layers via scVelo (stochastic / dynamical / steady-state). Skip when input lacks spliced+unspliced layers (run sc-velocity-prep first) or for trajectory pseudotime ordering (use sc-pseudotime).
+description: Load when computing RNA velocity vectors and latent time on a scRNA AnnData with spliced
+  / unspliced layers via scVelo (stochastic / dynamical / steady-state). Skip when input lacks spliced+unspliced
+  layers (use sc-velocity-prep); trajectory pseudotime ordering (use sc-pseudotime).
 version: 0.4.0
 author: OmicsClaw
 license: MIT
+emoji: S
 tags:
 - singlecell
 - scrna
@@ -48,19 +53,35 @@ FASTQs / cellranger output, run `sc-velocity-prep` first.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| AnnData with spliced + unspliced layers | `.h5ad` | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated AnnData | `processed.h5ad` | adds `layers["velocity"]`, optional `obs["latent_time"]` (dynamical mode), velocity-graph in `obsp` |
-| Run summary | `tables/velocity_summary.csv` | always |
-| Per-cell summary | `tables/velocity_cells.csv` | velocity magnitude, latent time per cell |
-| Top genes | `tables/top_velocity_genes.csv` | ranked by mean absolute velocity |
-| Figures | `figures/velocity_stream.png`, `figures/velocity_magnitude_umap.png`, `figures/velocity_magnitude_distribution.png`, `figures/velocity_top_genes.png` | always |
-| Latent time UMAP | `figures/latent_time_umap.png` | when `mode == scvelo_dynamical` (i.e., `has_latent_time = True`) |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+
+**Outputs**
+
+- `tables/cell_metadata.csv`
+- `tables/top_velocity_genes.csv`
+- `tables/velocity_cells.csv`
+- `tables/velocity_summary.csv`
+- `figures/latent_time_distribution.png`
+- `figures/latent_time_umap.png`
+- `figures/r_embedding_discrete.png`
+- `figures/r_embedding_feature.png`
+- `figures/r_velocity.png`
+- `figures/velocity_magnitude_distribution.png`
+- `figures/velocity_magnitude_umap.png`
+- `figures/velocity_stream.png`
+- `figures/velocity_top_genes.png`
+- `adata_with_velocity.h5ad`
+- `analysis_summary.txt`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `latent_time`; `layers`: `velocity`
 
 ## Flow
 

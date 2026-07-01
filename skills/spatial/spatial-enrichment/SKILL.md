@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: spatial-enrichment
-description: Load when running pathway / gene-set enrichment per cluster on a preprocessed spatial AnnData via Enrichr (over-representation), GSEA (preranked), or ssGSEA (per-cell scores). Skip when ranking spatially variable genes (use `spatial-genes`) or when comparing pathways across conditions (use `spatial-condition` for DE first, then this skill on the ranked output).
+description: Load when running pathway / gene-set enrichment per cluster on a preprocessed spatial AnnData
+  via Enrichr (over-representation), GSEA (preranked), or ssGSEA (per-cell scores). Skip when ranking
+  spatially variable genes (use spatial-genes); comparing pathways across conditions (use spatial-condition).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🛤️
 tags:
 - spatial
 - enrichment
@@ -46,21 +51,40 @@ or `mouse`. For non-spatial enrichment use `sc-enrichment`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Preprocessed spatial AnnData | `.h5ad` with `obsm["spatial"]`, `obs[groupby]` (auto-runs Leiden if missing) | yes (unless `--demo`) |
-| Gene set | `--gene-set <library_name>` (Enrichr lib) or `--gene-set-file <path.gmt>` | one of the two for non-default runs |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated AnnData | `processed.h5ad` | Enrichr/GSEA/ssGSEA: `uns["enrichment_results"]` + `uns["{method}_results"]` (`uns["enrichr_results"]` / `uns["gsea_results"]` / `uns["ssgsea_results"]`, written at `_lib/enrichment.py:1113-1117`); ssGSEA additionally writes per-cell scores as `obs[<score_col>]` columns and a list `uns["enrichment_score_columns"]` (`_lib/enrichment.py:907-910`) |
-| Full results | `tables/enrichment_results.csv` | every term, every group |
-| Significant subset | `tables/enrichment_significant.csv` | filtered by `--fdr-threshold` |
-| Ranked markers | `tables/ranked_markers.csv` | input to enrichment |
-| Top terms | `tables/top_enriched_terms.csv` | top-N per group |
-| Group metrics | `tables/enrichment_group_metrics.csv` | n_terms / n_significant per group |
-| Run summary | `tables/enrichment_run_summary.csv` | params used |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+- Expects `obsm`: `spatial`
+
+**Outputs**
+
+- `tables/enrichment_group_metrics.csv`
+- `tables/enrichment_results.csv`
+- `tables/enrichment_run_summary.csv`
+- `tables/enrichment_significant.csv`
+- `tables/enrichment_spatial_points.csv`
+- `tables/enrichment_term_group_scores.csv`
+- `tables/enrichment_umap_points.csv`
+- `tables/ranked_markers.csv`
+- `tables/top_enriched_terms.csv`
+- `figures/enrichment_barplot.png`
+- `figures/enrichment_dotplot.png`
+- `figures/enrichment_group_metrics.png`
+- `figures/enrichment_group_spatial_context.png`
+- `figures/enrichment_group_top_stat_spatial.png`
+- `figures/enrichment_group_top_stat_umap.png`
+- `figures/enrichment_pvalue_distribution.png`
+- `figures/enrichment_score_distribution.png`
+- `figures/enrichment_score_violin.png`
+- `figures/enrichment_spatial_scores.png`
+- `figures/top_enriched_terms.png`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `uns`: `enrichment_results`, `{method}_results`, `enrichr_results`, `gsea_results`, `ssgsea_results`, `enrichment_score_columns`
 
 ## Flow
 

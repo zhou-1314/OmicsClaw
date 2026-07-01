@@ -1,6 +1,10 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-cell-annotation
-description: Load when assigning cell-type labels to a clustered scRNA AnnData via marker dictionaries, CellTypist, PopV, KNNPredict, SingleR, scmap, SCSA, or a manual cluster-to-label map. Skip when ranking marker genes per cluster (use sc-markers) or for condition-vs-control DE (use sc-de).
+description: Load when assigning cell-type labels to a clustered scRNA AnnData via marker dictionaries,
+  CellTypist, PopV, KNNPredict, SingleR, scmap, SCSA, or a manual cluster-to-label map. Skip when ranking
+  marker genes per cluster (use sc-markers); condition-vs-control DE (use sc-de).
 version: 0.6.0
 author: OmicsClaw
 license: MIT
@@ -47,21 +51,42 @@ This skill labels — for **ranking** the genes that justify a label use
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Clustered AnnData | `.h5ad` with normalised `.X` and a cluster column in `obs` | yes (unless `--demo`) |
-| Reference (popv / knnpredict / singler / scmap) | `.h5ad` (popv / knnpredict) or atlas selector ("HPCA", etc.) | conditional |
-| Manual map (`manual`) | inline string `'0=T cell;1,2=Myeloid'` or `--manual-map-file` | conditional |
-| Custom marker file (`markers`) | JSON / CSV via `--marker-file` | optional |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated AnnData | `processed.h5ad` | adds `obs["cell_type"]`, `obs["annotation_requested_method"]`, optional `obs["annotation_score"]`, optional `obsm["cell_type_prob"]` |
-| Annotation overview | `tables/annotation_summary.csv` | always |
-| Counts / proportions | `tables/cell_type_counts.csv` | always |
-| Cluster ↔ cell-type | `tables/cluster_annotation_matrix.csv` | when a `cluster_key` is resolved |
-| Figures | `figures/embedding_cell_type.png`, `figures/embedding_cluster_vs_cell_type.png`, `figures/cluster_to_cell_type_heatmap.png`, `figures/cell_type_counts.png`, `figures/embedding_annotation_score.png` | last is conditional on a numeric score |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+
+**Outputs**
+
+- `tables/annotation_embedding_points.csv`
+- `tables/annotation_summary.csv`
+- `tables/cell_metadata.csv`
+- `tables/cell_type_counts.csv`
+- `tables/cellmarker2_markers.csv`
+- `tables/cluster_annotation_matrix.csv`
+- `tables/popv_predictions.csv`
+- `tables/scmap_results.csv`
+- `tables/singler_results.csv`
+- `figures/cell_type_counts.png`
+- `figures/cluster_to_cell_type_heatmap.png`
+- `figures/embedding_annotation_score.png`
+- `figures/embedding_cell_type.png`
+- `figures/embedding_cluster_vs_cell_type.png`
+- `figures/r_cell_barplot.png`
+- `figures/r_cell_proportion.png`
+- `figures/r_cell_sankey.png`
+- `figures/r_embedding_discrete.png`
+- `figures/r_embedding_feature.png`
+- `_demo_ref.h5ad`
+- `analysis_summary.txt`
+- `input.h5ad`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `cell_type`, `annotation_requested_method`, `annotation_score`; `obsm`: `cell_type_prob`
 
 ## Flow
 

@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: metabolomics-statistics
-description: Load when running univariate two-group testing (t-test / Wilcoxon / ANOVA / Kruskal-Wallis) on a feature × sample metabolomics CSV with `--group1-prefix` / `--group2-prefix` column matching, BH-FDR adjusted. Skip when working with raw spectra (run `metabolomics-xcms-preprocessing`) or for two-group DE with default `ctrl` / `treat` prefixes (use `metabolomics-de`).
+description: Load when running univariate two-group testing (t-test / Wilcoxon / ANOVA / Kruskal-Wallis)
+  on a feature × sample metabolomics CSV with `--group1-prefix` / `--group2-prefix` column matching, BH-FDR
+  adjusted. Skip when working with raw spectra (use metabolomics-xcms-preprocessing); two-group DE with
+  default `ctrl` / `treat` prefixes (use metabolomics-de).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 📈
 tags:
 - metabolomics
 - statistics
@@ -42,18 +48,18 @@ use `metabolomics-de`. For raw spectra use
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Feature × sample table | `.csv` with feature index in column 0 + sample columns | yes (unless `--demo`) |
-| Method | `--method {ttest,anova,wilcoxon,kruskal}` (default `ttest`) | no |
-| Significance | `--alpha <float>` (default 0.05) | no |
-| Group columns | `--group1-prefix <str>` and `--group2-prefix <str>` (else midpoint split) | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Full results | `tables/statistics.csv` | per-feature columns: `feature`, `group1_mean`, `group2_mean`, `fold_change`, `log2fc`, `statistic`, `pvalue`, `fdr` (BH-adjusted) |
-| Significant subset | `tables/significant.csv` | filtered by `--alpha` |
-| Report | `report.md` + `result.json` | `summary["method"]`, `summary["n_significant"]` |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/statistics.csv`
+- `tables/significant.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

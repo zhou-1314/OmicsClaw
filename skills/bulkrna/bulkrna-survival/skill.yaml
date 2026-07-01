@@ -1,0 +1,92 @@
+schema_version: 2
+id: bulkrna-survival
+name: bulkrna-survival
+domain: bulkrna
+type: leaf
+version: 0.3.0
+author: OmicsClaw
+license: MIT
+emoji: 📈
+summary:
+  load_when: stratifying patients by gene expression and testing for survival differences (Kaplan-Meier
+    + Cox) in bulk RNA-seq
+  skip_when:
+  - condition: no time-to-event clinical data exists
+  - condition: non-bulk cohorts (single-cell / spatial survival is not supported)
+  trigger_keywords:
+  - survival
+  - Kaplan-Meier
+  - Cox
+  - prognosis
+  - hazard ratio
+  - overall survival
+  - clinical outcome
+  tags:
+  - bulkrna
+  - survival
+  - Kaplan-Meier
+  - Cox
+  - hazard-ratio
+  - clinical
+  aliases:
+  - bulk-survival
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - csv
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --clinical
+    - --cutoff-method
+    - --genes
+    hints: {}
+  outputs:
+    files:
+    - tables/clinical.csv
+    - tables/expr.csv
+    - tables/km_data.csv
+    - tables/survival_results.csv
+    - figures/forest_plot.png
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: bulkrna_survival.py
+deps:
+  python:
+  - matplotlib
+  - numpy
+  - pandas
+  - scipy
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

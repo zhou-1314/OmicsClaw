@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: spatial-raw-processing
-description: Load when converting spatial transcriptomics raw FASTQ pairs through ST-Pipeline into a `raw_counts.h5ad` ready for spatial-preprocess. Skip when input is already a count-matrix AnnData (go straight to spatial-preprocess) or for non-spatial bulk / scRNA FASTQ (use bulkrna-read-qc / sc-fastq-qc).
+description: Load when converting spatial transcriptomics raw FASTQ pairs through ST-Pipeline into a `raw_counts.h5ad`
+  ready for spatial-preprocess. Skip when input is already a count-matrix AnnData (use spatial-preprocess);
+  non-spatial bulk / scRNA FASTQ (use bulkrna-read-qc).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: 🧬
 tags:
 - spatial
 - raw-processing
@@ -37,20 +42,40 @@ QC use `bulkrna-read-qc`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Read 1 (barcode + UMI) | `.fastq` / `.fastq.gz` (`--read1`) | yes (real run) |
-| Read 2 (cDNA) | `.fastq` / `.fastq.gz` (`--read2`) | yes (real run) |
-| Spot barcode IDs | TSV / file (`--ids`) | yes (real run) |
-| STAR index | directory (`--ref-map`) | yes (real run) |
-| Reference annotation | GTF (`--ref-annotation`) | optional |
-| Bundle JSON / YAML | path (positional `--input`) | optional — alternative to flag-by-flag args |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Raw counts AnnData | `raw_counts.h5ad` | one row per spatial spot; `obs["barcode"]`, `obsm["spatial"]`, `obs["x_array"]` / `y_array` if available |
-| Pipeline metrics | upstream-tool outputs (logs, stats) | written by ST-Pipeline alongside `raw_counts.h5ad` |
-| Report | `result.json` | always |
+**Inputs**
+
+- Modalities: visium, slideseq
+- File types: `.fastq`
+
+**Outputs**
+
+- `tables/gene_qc.csv`
+- `tables/raw_gene_qc.csv`
+- `tables/raw_processing_run_summary.csv`
+- `tables/raw_processing_spatial_points.csv`
+- `tables/raw_spot_qc.csv`
+- `tables/raw_top_genes.csv`
+- `tables/run_summary.csv`
+- `tables/saturation_curve.csv`
+- `tables/spatial_coordinates.csv`
+- `tables/spot_qc.csv`
+- `tables/stage_summary.csv`
+- `tables/top_genes.csv`
+- `figures/raw_detected_genes_spatial.png`
+- `figures/raw_spot_qc_histograms.png`
+- `figures/raw_top_genes_barplot.png`
+- `figures/raw_total_counts_spatial.png`
+- `figures/st_pipeline_saturation_curve.png`
+- `figures/st_pipeline_stage_attrition.png`
+- `omicsclaw_stpipeline_run.json`
+- `raw_counts.h5ad`
+- `st_pipeline.stderr.txt`
+- `st_pipeline.stdout.txt`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `barcode`, `x_array`, `y_array`; `obsm`: `spatial`
 
 ## Flow
 

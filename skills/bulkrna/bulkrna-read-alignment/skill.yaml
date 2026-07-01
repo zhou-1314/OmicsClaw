@@ -1,0 +1,94 @@
+schema_version: 2
+id: bulkrna-read-alignment
+name: bulkrna-read-alignment
+domain: bulkrna
+type: leaf
+version: 0.3.0
+author: OmicsClaw
+license: MIT
+emoji: 🧬
+summary:
+  load_when: summarising STAR / HISAT2 / Salmon alignment-rate logs in bulk RNA-seq
+  skip_when:
+  - condition: data is raw FASTQ
+    use: bulkrna-read-qc
+  - condition: already counted
+    use: bulkrna-qc
+  - condition: genome-DNA alignment
+    use: genomics-alignment
+  trigger_keywords:
+  - RNA-seq alignment
+  - STAR
+  - HISAT2
+  - Salmon
+  - mapping rate
+  - read alignment
+  - alignment QC
+  tags:
+  - bulkrna
+  - alignment
+  - STAR
+  - HISAT2
+  - Salmon
+  - mapping-rate
+  - strandedness
+  aliases:
+  - bulk-align-reads
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - out
+    - log
+    - json
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --method
+    hints: {}
+  outputs:
+    files:
+    - tables/alignment_stats.csv
+    - figures/alignment_composition.png
+    - figures/gene_body_coverage.png
+    - figures/mapping_summary.png
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: bulkrna_read_alignment.py
+deps:
+  python:
+  - matplotlib
+  - numpy
+  - pandas
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

@@ -1,6 +1,11 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-perturb-prep
-description: Load when attaching cell-barcode → sgRNA assignments from a mapping TSV/CSV onto a Perturb-seq expression AnnData, producing standardised perturbation / sgRNA / target-gene obs columns. Skip when the AnnData already has perturbation labels (go straight to sc-perturb) or for raw guide-calling from FASTQ (use upstream demuxlet / cellranger guide pipelines).
+description: Load when attaching cell-barcode → sgRNA assignments from a mapping TSV/CSV onto a Perturb-seq
+  expression AnnData, producing standardised perturbation / sgRNA / target-gene obs columns. Skip when
+  the AnnData already has perturbation labels (use sc-perturb); raw guide-calling from FASTQ (use upstream
+  demuxlet / cellranger guide pipelines).
 version: 0.2.0
 author: OmicsClaw
 license: MIT
@@ -43,22 +48,27 @@ classification. This skill does NOT infer guide identities from FASTQ
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Expression | `.h5ad` / 10x `.h5` / 10x dir | yes (unless `--demo`) |
-| Barcode → sgRNA mapping | `.tsv` / `.csv` (`--mapping-file`) | yes (unless `--demo`) |
-| Column overrides | `--barcode-column` / `--sgrna-column` / `--target-column` / `--sep` | optional (auto-detect by default) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Standardised AnnData | `processed.h5ad` | adds `obs["perturbation"]` / `obs["sgRNA"]` / `obs["target_gene"]` / `obs["assignment_status"]` / `obs["n_sgrnas"]`; non-gene features removed from `var` |
-| Per-cell assignments | `tables/perturbation_assignments.csv` | always |
-| Status counts | `tables/assignment_status_counts.csv` | single_guide / multi_guide / unassigned tally |
-| Perturbation tally | `tables/perturbation_counts.csv` | cells per perturbation label |
-| Dropped multi-guide | `tables/dropped_multi_guide_cells.csv` | when multi-guide cells were dropped |
-| Feature summary | `tables/feature_type_summary.csv` | gene vs non-gene feature breakdown |
-| Figure | `figures/perturbation_counts.png` | always |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`, `.h5`, `.tsv`, `.csv`
+
+**Outputs**
+
+- `tables/assignment_status_counts.csv`
+- `tables/cell_metadata.csv`
+- `tables/dropped_multi_guide_cells.csv`
+- `tables/feature_type_summary.csv`
+- `tables/perturbation_assignments.csv`
+- `tables/perturbation_counts.csv`
+- `figures/perturbation_counts.png`
+- `analysis_summary.txt`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `perturbation`, `sgRNA`, `target_gene`, `assignment_status`, `n_sgrnas`
 
 ## Flow
 

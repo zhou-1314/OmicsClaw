@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: metabolomics-peak-detection
-description: Load when running per-sample peak picking on a feature × intensity table via `scipy.signal.find_peaks` — emits per-(sample, feature) detected peaks with prominence and width. Skip when working with mz / RT raw scans (use `metabolomics-xcms-preprocessing` upstream) or when only normalising / quantifying (use `metabolomics-quantification`).
+description: Load when running per-sample peak picking on a feature × intensity table via `scipy.signal.find_peaks`
+  — emits per-(sample, feature) detected peaks with prominence and width. Skip when working with mz /
+  RT raw scans (use metabolomics-xcms-preprocessing); only normalising / quantifying (use metabolomics-quantification).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: ⛰️
 tags:
 - metabolomics
 - peak-detection
@@ -32,16 +37,17 @@ For normalisation use `metabolomics-normalization`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Feature × intensity table | `.csv` with intensity columns starting `sample` or containing `intensity` (case-insensitive) | yes (unless `--demo`) |
-| Sample column override | `--sample-prefix <str>` | no |
-| Detection params | `--prominence <float>` (default 1e4), `--height <float>` (default `None`), `--distance <int>` (default 5) | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Detected peaks | `tables/detected_peaks.csv` | per-(sample, feature) peak with `prominence` + `width` |
-| Report | `report.md` + `result.json` | `n_samples`, `mean_prominence` |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/detected_peaks.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

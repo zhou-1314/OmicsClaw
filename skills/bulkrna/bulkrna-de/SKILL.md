@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: bulkrna-de
-description: Load when comparing gene expression between two conditions in bulk RNA-seq count data. Skip when the data is single-cell (use sc-de) or spatial (use spatial-de), or when you need exon-level alternative splicing (use bulkrna-splicing).
+description: Load when comparing gene expression between two conditions in bulk RNA-seq count data. Skip
+  when the data is single-cell (use sc-de); spatial (use spatial-de); you need exon-level alternative
+  splicing (use bulkrna-splicing).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: 🔬
 tags:
 - bulkrna
 - differential-expression
@@ -29,18 +34,24 @@ t-test is the fallback for the single-replicate / no-PyDESeq2 case.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Count matrix | `.csv` (gene id col + sample count cols) | yes |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| DE results | `tables/de_results.csv` | DESeq2-style columns (gene, baseMean, log2FoldChange, lfcSE, stat, pvalue, padj) |
-| Significant DEGs | `tables/de_significant.csv` | filtered by padj + |log2FC| |
-| Volcano | `figures/volcano_plot.png` | top genes labelled |
-| MA plot | `figures/ma_plot.png` | threshold lines drawn |
-| p-value diagnostic | `figures/pvalue_histogram.png` | check for inflation |
-| Report | `report.md` + `result.json` | always written |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/counts.csv`
+- `tables/de_results.csv`
+- `tables/de_significant.csv`
+- `tables/deseq2_results.csv`
+- `figures/de_barplot.png`
+- `figures/ma_plot.png`
+- `figures/pvalue_histogram.png`
+- `figures/volcano_plot.png`
+- `report.md`
+- `result.json`
 
 ## Flow
 

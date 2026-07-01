@@ -1,0 +1,101 @@
+schema_version: 2
+id: bulkrna-de
+name: bulkrna-de
+domain: bulkrna
+type: leaf
+version: 0.3.0
+author: OmicsClaw
+license: MIT
+emoji: 🔬
+summary:
+  load_when: comparing gene expression between two conditions in bulk RNA-seq count data
+  skip_when:
+  - condition: the data is single-cell
+    use: sc-de
+  - condition: spatial
+    use: spatial-de
+  - condition: you need exon-level alternative splicing
+    use: bulkrna-splicing
+  trigger_keywords:
+  - differential expression
+  - DE analysis
+  - DESeq2
+  - volcano plot
+  - fold change
+  - DEGs
+  - bulk DE
+  tags:
+  - bulkrna
+  - differential-expression
+  - DESeq2
+  - volcano
+  - MA-plot
+  - fold-change
+  aliases:
+  - bulk-de
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - csv
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --control-prefix
+    - --lfc-cutoff
+    - --method
+    - --padj-cutoff
+    - --treat-prefix
+    hints: {}
+  outputs:
+    files:
+    - tables/counts.csv
+    - tables/de_results.csv
+    - tables/de_significant.csv
+    - tables/deseq2_results.csv
+    - figures/de_barplot.png
+    - figures/ma_plot.png
+    - figures/pvalue_histogram.png
+    - figures/volcano_plot.png
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: bulkrna_de.py
+deps:
+  python:
+  - matplotlib
+  - numpy
+  - pandas
+  - scipy
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+  tests: tests/
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

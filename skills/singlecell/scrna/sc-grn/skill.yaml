@@ -1,0 +1,152 @@
+schema_version: 2
+id: sc-grn
+name: sc-grn
+domain: singlecell
+type: leaf
+version: 0.4.0
+author: OmicsClaw
+license: MIT
+emoji: S
+summary:
+  load_when: inferring TF → target gene regulatory networks on a normalised scRNA AnnData via pySCENIC
+    (GRNBoost2 + cisTarget + AUCell) or correlation-based GRN fallback (when arboreto is unavailable,
+    in --demo, or with --allow-simplified-grn)
+  skip_when:
+  - condition: computing ligand-receptor cell-cell signalling
+    use: sc-cell-communication
+  - condition: predicting genetic-KO effects
+    use: sc-in-silico-perturbation
+  trigger_keywords:
+  - grn
+  - gene regulatory
+  - scenic
+  - pyscenic
+  - regulon
+  - transcription factor
+  - grnboost
+  tags:
+  - singlecell
+  - scrna
+  - grn
+  - gene-regulatory-network
+  - scenic
+  - pyscenic
+  - grnboost2
+  - aucell
+  - cistarget
+  aliases: []
+interface:
+  inputs:
+    modalities:
+    - scrna
+    file_types:
+    - h5ad
+    - txt
+    preconditions:
+      data_shape:
+        requires_preprocessed: true
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --allow-simplified-grn
+    - --cluster-key
+    - --db
+    - --motif
+    - --n-jobs
+    - --n-top-targets
+    - --seed
+    - --tf-list
+    - --r-enhanced
+    hints:
+      pyscenic_workflow:
+        priority: tf_list -> db -> motif -> n_top_targets -> n_jobs
+        params:
+        - tf_list
+        - db
+        - motif
+        - n_top_targets
+        - n_jobs
+        - seed
+        defaults:
+          n_top_targets: 50
+          n_jobs: 4
+          seed: 42
+        requires:
+        - preprocessed_anndata
+        - pyscenic
+        - arboreto
+        - TF_list
+        - cisTarget_database
+        - motif_annotations
+        tips:
+        - --tf-list, --db, and --motif are the core external resources for a full pySCENIC run.
+        - '--n-top-targets: Wrapper-level export cap for the top targets retained per regulon.'
+  outputs:
+    files:
+    - tables/auc_matrix.csv
+    - tables/cell_metadata.csv
+    - tables/gene_expression.csv
+    - tables/regulon_summary.csv
+    - tables/top_adjacencies.csv
+    - figures/r_regulon_cor.png
+    - figures/r_regulon_violin.png
+    - analysis_summary.txt
+    - processed.h5ad
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+    anndata:
+      saves_h5ad: true
+      obs:
+      - regulon_<TF>
+      obsm: []
+      var: []
+      layers: []
+      uns: []
+runtime:
+  language: python
+  entry: sc_grn.py
+deps:
+  python:
+  - anndata
+  - arboreto
+  - dask
+  - matplotlib
+  - networkx
+  - numpy
+  - pandas
+  - pyscenic
+  - scanpy
+  - scikit-learn
+  - scipy
+  - seaborn
+  cli: []
+compatibility:
+  platforms:
+  - macos
+  - linux
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+  - r_visualization.md
+  homepage: https://github.com/OmicsClaw/OmicsClaw
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

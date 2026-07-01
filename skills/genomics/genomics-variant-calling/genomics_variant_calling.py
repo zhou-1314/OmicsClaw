@@ -39,7 +39,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "genomics-variant-calling"
-SKILL_VERSION = "0.2.0"
+SKILL_VERSION = "0.5.0"
 
 # Transition / Transversion classification
 # Transitions: A<->G, C<->T (purine<->purine or pyrimidine<->pyrimidine)

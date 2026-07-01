@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-preprocessing
-description: Load when normalising QC'd scRNA into a PCA-ready AnnData via scanpy / Seurat / SCTransform / Pearson residuals. Skip when QC thresholds are still undecided (use sc-qc) or for batch correction across samples (use sc-batch-integration).
+description: Load when normalising QC'd scRNA into a PCA-ready AnnData via scanpy / Seurat / SCTransform
+  / Pearson residuals. Skip when QC thresholds are still undecided (use sc-qc); batch correction across
+  samples (use sc-batch-integration).
 version: 0.6.0
 author: OmicsClaw
 license: MIT
+emoji: 🧫
 tags:
 - singlecell
 - scrna
@@ -41,19 +46,39 @@ transformation). The skill stops at PCA — UMAP / clustering live in
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Filtered AnnData | `.h5ad` (raw-count-like or QC-annotated) | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Processed AnnData | `processed.h5ad` | `X = normalised`, `layers["counts"] = raw`, `obsm["X_pca"]`, `var["highly_variable"]`, `adata.raw` populated |
-| Run summary | `tables/preprocess_summary.csv` | always |
-| HVG table | `tables/hvg_summary.csv` | top-N HVGs |
-| PCA variance | `tables/pca_variance_ratio.csv` | per-PC variance + cumulative |
-| PCA embedding | `tables/pca_embedding.csv` | first 5 PCs per cell |
-| Per-cell QC | `tables/qc_metrics_per_cell.csv` | retained QC metrics |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+
+**Outputs**
+
+- `tables/X_norm.csv`
+- `tables/cell_metadata.csv`
+- `tables/cluster_summary.csv`
+- `tables/embedding_points.csv`
+- `tables/gene_expression.csv`
+- `tables/hvg.csv`
+- `tables/hvg_summary.csv`
+- `tables/obs.csv`
+- `tables/pca.csv`
+- `tables/pca_embedding.csv`
+- `tables/pca_variance_ratio.csv`
+- `tables/preprocess_summary.csv`
+- `tables/qc_metrics_per_cell.csv`
+- `figures/highly_variable_genes.png`
+- `figures/pca_variance.png`
+- `figures/qc_violin.png`
+- `figures/r_hvg_violin.png`
+- `analysis_summary.txt`
+- `info.json`
+- `input.h5ad`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obsm`: `X_pca`; `var`: `highly_variable`; `layers`: `counts`
 
 ## Flow
 

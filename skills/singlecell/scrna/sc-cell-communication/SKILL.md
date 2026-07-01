@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-cell-communication
-description: Load when computing cell-cell ligand-receptor communication on an annotated scRNA AnnData via builtin scorer, LIANA, CellPhoneDB, CellChat (R), or NicheNet (R). Skip when assigning cell-type labels (use sc-cell-annotation) or for transcription factor → target regulatory networks (use sc-grn).
+description: Load when computing cell-cell ligand-receptor communication on an annotated scRNA AnnData
+  via builtin scorer, LIANA, CellPhoneDB, CellChat (R), or NicheNet (R). Skip when assigning cell-type
+  labels (use sc-cell-annotation); transcription factor → target regulatory networks (use sc-grn).
 version: 0.4.0
 author: OmicsClaw
 license: MIT
+emoji: S
 tags:
 - singlecell
 - scrna
@@ -45,20 +50,48 @@ labelling use `sc-cell-annotation`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Annotated AnnData | `.h5ad` with cell-type labels in `obs` | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated AnnData | `processed.h5ad` | always |
-| L-R interactions | `tables/lr_interactions.csv`, `tables/top_interactions.csv` | always (`builtin` leaves `pvalue` empty) |
-| Sender-receiver | `tables/sender_receiver_summary.csv`, `tables/group_role_summary.csv` | always |
-| Pathway summary | `tables/pathway_summary.csv` | always |
-| CellChat extras | `tables/cellchat_pathways.csv`, `tables/cellchat_centrality.csv`, `tables/cellchat_count_matrix.csv`, `tables/cellchat_weight_matrix.csv` | when method == `cellchat_r` |
-| CellPhoneDB extras | `tables/cellphonedb_means.csv`, `tables/cellphonedb_pvalues.csv`, `tables/cellphonedb_significant_means.csv` | when method == `cellphonedb` |
-| NicheNet extras | `tables/nichenet_ligand_activities.csv`, `tables/nichenet_ligand_target_links.csv`, `tables/nichenet_ligand_receptors.csv` | when method == `nichenet_r` |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+
+**Outputs**
+
+- `tables/_matrix.csv`
+- `tables/cellchat_centrality.csv`
+- `tables/cellchat_count_matrix.csv`
+- `tables/cellchat_pathways.csv`
+- `tables/cellchat_results.csv`
+- `tables/cellchat_weight_matrix.csv`
+- `tables/cellphonedb_means.csv`
+- `tables/cellphonedb_pvalues.csv`
+- `tables/cellphonedb_significant_means.csv`
+- `tables/group_role_summary.csv`
+- `tables/lr_interactions.csv`
+- `tables/meta.tsv`
+- `tables/nichenet_ligand_activities.csv`
+- `tables/nichenet_ligand_receptors.csv`
+- `tables/nichenet_ligand_target_links.csv`
+- `tables/nichenet_lr_network.csv`
+- `tables/pathway_summary.csv`
+- `tables/sender_receiver_summary.csv`
+- `tables/top_interactions.csv`
+- `figures/r_ccc_bipartite.png`
+- `figures/r_ccc_bubble.png`
+- `figures/r_ccc_diff_network.png`
+- `figures/r_ccc_heatmap.png`
+- `figures/r_ccc_network.png`
+- `figures/r_ccc_stat_bar.png`
+- `figures/r_ccc_stat_scatter.png`
+- `figures/r_ccc_stat_violin.png`
+- `input.h5ad`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`)
 
 ## Flow
 

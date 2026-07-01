@@ -1,0 +1,94 @@
+schema_version: 2
+id: bulkrna-splicing
+name: bulkrna-splicing
+domain: bulkrna
+type: leaf
+version: 0.3.0
+author: OmicsClaw
+license: MIT
+emoji: 🧬
+summary:
+  load_when: summarising rMATS / SUPPA2 alternative-splicing output and identifying significant differential
+    splicing events
+  skip_when:
+  - condition: you only have count-level DE
+    use: bulkrna-de
+  - condition: splicing in single-cell
+  - condition: spatial data (currently unsupported)
+  trigger_keywords:
+  - alternative splicing
+  - splicing analysis
+  - PSI
+  - rMATS
+  - SUPPA2
+  - exon skipping
+  - differential splicing
+  tags:
+  - bulkrna
+  - splicing
+  - alternative-splicing
+  - PSI
+  - rMATS
+  - SUPPA2
+  aliases:
+  - bulk-splicing
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - csv
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --dpsi-cutoff
+    - --padj-cutoff
+    hints: {}
+  outputs:
+    files:
+    - tables/significant_events.csv
+    - tables/splicing_events.csv
+    - figures/dpsi_distribution.png
+    - figures/event_type_distribution.png
+    - figures/volcano_splicing.png
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: bulkrna_splicing.py
+deps:
+  python:
+  - matplotlib
+  - numpy
+  - pandas
+  - scipy
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+  tests: tests/
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

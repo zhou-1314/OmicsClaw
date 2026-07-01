@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: genomics-epigenomics
-description: Load when summarising a peak file (BED / narrowPeak) from ATAC-seq / ChIP-seq / CUT&Tag — peak count, width distribution, per-chromosome counts, score statistics. Skip when calling peaks from BAM (run MACS / Genrich externally first) or when working with single-cell ATAC (use `scatac-preprocessing`).
+description: Load when summarising a peak file (BED / narrowPeak) from ATAC-seq / ChIP-seq / CUT&Tag —
+  peak count, width distribution, per-chromosome counts, score statistics. Skip when calling peaks from
+  BAM (run MACS / Genrich externally first); working with single-cell ATAC (use scatac-preprocessing).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🧬
 tags:
 - genomics
 - epigenomics
@@ -34,17 +39,19 @@ For single-cell ATAC processing use `scatac-preprocessing`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Peaks | `.bed` (3-col or 6-col) or `.narrowPeak` (10-col); broadPeak (9-col) loads as BED6 with cols 7-9 dropped | yes (unless `--demo`) |
-| Assay metadata | `--assay {chip-seq,atac-seq,cut-tag}` (default `chip-seq`) | no |
-| Caller metadata | `--method {macs2,macs3,homer,genrich}` (default `macs2`) | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Peaks summary | `tables/peaks_summary.csv` | per-peak start/end/width/score |
-| Per-chromosome | `tables/peaks_per_chromosome.csv` | peaks count per chromosome |
-| Report | `report.md` + `result.json` | always; `result.json["data"]["peaks_per_chrom"]` mirrors the table |
+**Inputs**
+
+- Modalities: atac-seq, chip-seq
+- File types: `.bed`
+
+**Outputs**
+
+- `tables/peaks_per_chromosome.csv`
+- `tables/peaks_summary.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

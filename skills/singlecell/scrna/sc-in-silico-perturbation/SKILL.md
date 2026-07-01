@@ -1,6 +1,10 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-in-silico-perturbation
-description: Load when predicting in-silico gene knockout effects on a normalised scRNA AnnData via GRN-based propagation (Python) or scTenifoldKnk (R). Skip when you have a real Perturb-seq / CRISPR screen (use sc-perturb / sc-perturb-prep) or for predicting drug sensitivity (use sc-drug-response).
+description: Load when predicting in-silico gene knockout effects on a normalised scRNA AnnData via GRN-based
+  propagation (Python) or scTenifoldKnk (R). Skip when you have a real Perturb-seq / CRISPR screen (use
+  sc-perturb); predicting drug sensitivity (use sc-drug-response).
 version: 0.2.0
 author: OmicsClaw
 license: MIT
@@ -41,18 +45,28 @@ sensitivity prediction use `sc-drug-response`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Normalised scRNA AnnData | `.h5ad` (raw counts in `layers["counts"]` recommended) | yes (unless `--demo`) |
-| KO gene | `--ko-gene` (must exist in `var_names`) | yes |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| AnnData (preserved) | `processed.h5ad` | unchanged; perturbation effect is reported in tables |
-| Diff regulation | `tables/diff_regulation.csv` | per-gene KO effect (logFC / score / p-value) |
-| `sctenifoldknk` raw output | `tables/tenifold_diff_regulation.csv` | when method == `sctenifoldknk` |
-| Figures | `figures/top_perturbed_genes.png`, `figures/pvalue_distribution.png` | always |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+
+**Outputs**
+
+- `tables/cell_metadata.csv`
+- `tables/de_top_markers.csv`
+- `tables/diff_regulation.csv`
+- `tables/matrix.csv`
+- `tables/tenifold_diff_regulation.csv`
+- `figures/pvalue_distribution.png`
+- `figures/r_isp_volcano.png`
+- `figures/top_perturbed_genes.png`
+- `analysis_summary.txt`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `var`: `perturbation_dr_score`, `perturbation_p_adj`, `perturbation_FC`
 
 ## Flow
 

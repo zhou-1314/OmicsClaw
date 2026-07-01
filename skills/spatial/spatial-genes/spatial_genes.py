@@ -61,7 +61,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "spatial-genes"
-SKILL_VERSION = "0.4.0"
+SKILL_VERSION = "0.5.0"
 SCRIPT_REL_PATH = "skills/spatial/spatial-genes/spatial_genes.py"
 
 

@@ -1,0 +1,85 @@
+schema_version: 2
+id: metabolomics-annotation
+name: metabolomics-annotation
+domain: metabolomics
+type: leaf
+version: 0.5.0
+author: OmicsClaw
+license: MIT
+emoji: 🏷️
+summary:
+  load_when: annotating LC-MS features against a built-in 15-metabolite HMDB demo dictionary by m/z within
+    a `--ppm` tolerance — emits a per-feature annotation table
+  skip_when:
+  - condition: needing real HMDB / KEGG / LipidMaps / METLIN look-up (this skill is demo-only)
+  - condition: raw spectra
+    use: metabolomics-xcms-preprocessing
+  trigger_keywords:
+  - metabolite annotation
+  - SIRIUS
+  - GNPS
+  - MetFrag
+  - spectral matching
+  - metabolite ID
+  tags:
+  - metabolomics
+  - annotation
+  - hmdb
+  - demo
+  - mz-match
+  aliases:
+  - met-annotate
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - csv
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --adducts
+    - --database
+    - --ppm
+    hints: {}
+  outputs:
+    files:
+    - tables/annotations.csv
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: metabolomics_annotation.py
+deps:
+  python:
+  - numpy
+  - pandas
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-grn
-description: Load when inferring TF → target gene regulatory networks on a normalised scRNA AnnData via pySCENIC (GRNBoost2 + cisTarget + AUCell) or correlation-based GRN fallback (when arboreto is unavailable, in --demo, or with --allow-simplified-grn). Skip when computing ligand-receptor cell-cell signalling (use sc-cell-communication) or for predicting genetic-KO effects (use sc-in-silico-perturbation).
+description: Load when inferring TF → target gene regulatory networks on a normalised scRNA AnnData via
+  pySCENIC (GRNBoost2 + cisTarget + AUCell) or correlation-based GRN fallback (when arboreto is unavailable,
+  in --demo, or with --allow-simplified-grn). Skip when computing ligand-receptor cell-cell signalling
+  (use sc-cell-communication); predicting genetic-KO effects (use sc-in-silico-perturbation).
 version: 0.4.0
 author: OmicsClaw
 license: MIT
+emoji: S
 tags:
 - singlecell
 - scrna
@@ -53,22 +59,28 @@ For ligand-receptor / cell-cell communication use
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Normalised AnnData | `.h5ad` with `obs[--cluster-key]` | yes (unless `--demo`) |
-| TF list | `.txt` (one TF per line, `--tf-list`) | required for full SCENIC |
-| cisTarget DB | glob pattern (`--db`) | required for full SCENIC |
-| Motif annotations | TSV (`--motif`) | required for full SCENIC |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| AnnData | `processed.h5ad` | adds per-regulon `obs["regulon_<TF>"]` columns (one per TF when AUCell ran, `sc_grn.py:850`) plus contract metadata. **Note:** AUCell scores live in `obs`, NOT `obsm` — there is no `obsm["X_aucell"]`. |
-| All adjacencies | `tables/grn_adjacencies.csv` | TF → target with importance score (always when GRNBoost2 ran) |
-| Regulon summary | `tables/grn_regulons.csv` | per-TF target count + motif NES |
-| TF → target pairs | `tables/grn_regulon_targets.csv` | flattened list |
-| AUCell activity | `tables/grn_auc_matrix.csv` | when AUCell ran (full SCENIC) |
-| Figures | `figures/regulon_activity_umap.png`, `figures/regulon_heatmap.png`, `figures/regulon_network.png` | best-effort |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`, `.txt`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+
+**Outputs**
+
+- `tables/auc_matrix.csv`
+- `tables/cell_metadata.csv`
+- `tables/gene_expression.csv`
+- `tables/regulon_summary.csv`
+- `tables/top_adjacencies.csv`
+- `figures/r_regulon_cor.png`
+- `figures/r_regulon_violin.png`
+- `analysis_summary.txt`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `regulon_<TF>`
 
 ## Flow
 

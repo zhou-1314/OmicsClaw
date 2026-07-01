@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: bulkrna-enrichment
-description: Load when running pathway / GO term enrichment on a bulk RNA-seq DE result list. Skip if the input is single-cell (use sc-enrichment), spatial (use spatial-enrichment), or for metabolite pathways (use metabolomics-pathway-enrichment).
+description: Load when running pathway / GO term enrichment on a bulk RNA-seq DE result list. Skip when
+  the input is single-cell (use sc-enrichment); the input is spatial (use spatial-enrichment); metabolite
+  pathways (use metabolomics-pathway-enrichment).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: 🛤️
 tags:
 - bulkrna
 - enrichment
@@ -33,17 +38,20 @@ and a built-in hypergeometric implementation as fallbacks.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| DE results | `.csv` (gene + log2FoldChange + padj cols) | yes (or `--demo`) |
-| Custom gene set | `--gene-set-file` GMT/JSON | optional |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Enrichment table | `tables/enrichment_results.csv` | per-term padj, NES, leading-edge genes |
-| Top terms barplot | `figures/enrichment_barplot.png` | top N by padj |
-| Dotplot | `figures/enrichment_dotplot.png` | size = gene count, colour = padj |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/enrichment_results.csv`
+- `tables/enrichment_significant.csv`
+- `figures/enrichment_barplot.png`
+- `figures/enrichment_dotplot.png`
+- `report.md`
+- `result.json`
 
 ## Flow
 

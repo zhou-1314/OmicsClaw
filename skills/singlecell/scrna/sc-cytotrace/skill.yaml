@@ -1,0 +1,117 @@
+schema_version: 2
+id: sc-cytotrace
+name: sc-cytotrace
+domain: singlecell
+type: leaf
+version: 0.3.0
+author: OmicsClaw
+license: MIT
+summary:
+  load_when: computing per-cell differentiation potency / stemness scores from gene-expression complexity
+    on a scRNA AnnData via the CytoTRACE-simple method
+  skip_when:
+  - condition: ordering cells along a trajectory
+    use: sc-pseudotime
+  - condition: marker-based cell-type labelling
+    use: sc-cell-annotation
+  trigger_keywords: []
+  tags:
+  - singlecell
+  - scrna
+  - cytotrace
+  - potency
+  - stemness
+  - differentiation
+  aliases: []
+interface:
+  inputs:
+    modalities:
+    - scrna
+    file_types:
+    - h5ad
+    preconditions:
+      data_shape:
+        requires_preprocessed: true
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --method
+    - --n-neighbors
+    - --r-enhanced
+    hints:
+      cytotrace_simple:
+        priority: n_neighbors
+        params:
+        - n_neighbors
+        defaults:
+          n_neighbors: 30
+        requires:
+        - normalized_expression_or_counts
+        tips:
+        - '`cytotrace_simple` uses gene detection count as a potency proxy. No external models needed.'
+  outputs:
+    files:
+    - tables/cell_metadata.csv
+    - tables/cytotrace_embedding.csv
+    - tables/cytotrace_scores.csv
+    - figures/potency_composition.png
+    - figures/potency_umap.png
+    - figures/r_cell_density.png
+    - figures/r_cytotrace_boxplot.png
+    - figures/r_embedding_discrete.png
+    - figures/r_embedding_feature.png
+    - figures/score_distribution.png
+    - analysis_summary.txt
+    - processed.h5ad
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+    anndata:
+      saves_h5ad: true
+      obs:
+      - cytotrace_score
+      - cytotrace_potency
+      - cytotrace_gene_count
+      obsm: []
+      var: []
+      layers: []
+      uns: []
+runtime:
+  language: python
+  entry: sc_cytotrace.py
+deps:
+  python:
+  - anndata
+  - matplotlib
+  - numpy
+  - pandas
+  - scanpy
+  - scipy
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+  - r_visualization.md
+  tests: tests/
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

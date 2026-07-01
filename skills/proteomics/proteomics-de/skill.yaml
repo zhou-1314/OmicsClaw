@@ -1,0 +1,87 @@
+schema_version: 2
+id: proteomics-de
+name: proteomics-de
+domain: proteomics
+type: leaf
+version: 0.5.0
+author: OmicsClaw
+license: MIT
+emoji: ⚖️
+summary:
+  load_when: computing two-group differential protein abundance (group2 vs group1, log2FC + p-value +
+    BH-adjusted FDR) via Welch t-test, equal-variance t-test, or Mann-Whitney on a wide protein × sample
+    CSV
+  skip_when:
+  - condition: you need multi-condition DE (run pairwise contrasts manually)
+  - condition: label-based TMT linear-mixed models
+  trigger_keywords:
+  - differential abundance
+  - protein expression
+  - MSstats
+  - limma
+  - volcano
+  tags:
+  - proteomics
+  - differential-expression
+  - ttest
+  - welch
+  - mann-whitney
+  - bh-fdr
+  aliases:
+  - differential-abundance
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - csv
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --alpha
+    - --log2fc-threshold
+    - --method
+    hints: {}
+  outputs:
+    files:
+    - tables/differential_abundance.csv
+    - tables/significant.csv
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: proteomics_de.py
+deps:
+  python:
+  - numpy
+  - pandas
+  - scipy
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

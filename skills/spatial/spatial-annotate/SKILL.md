@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: spatial-annotate
-description: Load when assigning per-spot cell-type labels on a spatial AnnData via marker-gene scoring or scRNA-reference mapping (Tangram / scANVI / CellAssign). Skip when computing spot-level cell-type proportions for multi-cell-per-spot platforms (use spatial-deconv) or for tissue-domain detection (use spatial-domains).
+description: Load when assigning per-spot cell-type labels on a spatial AnnData via marker-gene scoring
+  or scRNA-reference mapping (Tangram / scANVI / CellAssign). Skip when computing spot-level cell-type
+  proportions for multi-cell-per-spot platforms (use spatial-deconv); tissue-domain detection (use spatial-domains).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🏷️
 tags:
 - spatial
 - annotation
@@ -50,21 +55,35 @@ For *proportion* deconvolution on Visium-style multi-cell spots use
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Spatial AnnData | `.h5ad` with `obsm["spatial"]` | yes (unless `--demo`) |
-| scRNA reference | `.h5ad` with cell-type labels (`--reference`) | required for `tangram` / `scanvi` |
-| Custom marker model | path (`--model`) | optional for `marker_based` |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated AnnData | `processed.h5ad` | adds `obs["cell_type"]` (Categorical); per-method probability matrices in `obsm` — `obsm["tangram_ct_pred"]` (`_lib/annotation.py:334`), `obsm["scanvi_probabilities"]` (`:482`), `obsm["cellassign_probabilities"]` (`:612`). There is no unified `obsm["cell_type_probabilities"]` key. |
-| Annotation summary | `tables/annotation_summary.csv` | per-celltype count + proportion |
-| Per-spot assignments | `tables/cell_type_assignments.csv` | always |
-| Cluster ↔ celltype | `tables/cluster_annotations.csv` | when an existing cluster column was used |
-| Probabilities | `figure_data/annotation_probabilities.csv` | tangram / scanvi / cellassign (per-spot × celltype matrix) |
-| Marker overlap | per-method `figure_data/...` CSVs | when `--analysis-type marker_based` finds a marker DB |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+- Expects `obsm`: `spatial`
+
+**Outputs**
+
+- `tables/annotation_cell_type_counts.csv`
+- `tables/annotation_probabilities.csv`
+- `tables/annotation_spatial_points.csv`
+- `tables/annotation_summary.csv`
+- `tables/annotation_umap_points.csv`
+- `tables/cell_type_assignments.csv`
+- `tables/cluster_annotations.csv`
+- `tables/marker_overlap_scores.csv`
+- `figures/annotation_confidence_histogram.png`
+- `figures/annotation_confidence_spatial.png`
+- `figures/annotation_probability_heatmap.png`
+- `figures/cell_type_barplot.png`
+- `figures/cell_type_spatial.png`
+- `figures/cell_type_umap.png`
+- `figures/marker_overlap_heatmap.png`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `cell_type`; `obsm`: `tangram_ct_pred`, `scanvi_probabilities`, `cellassign_probabilities`
 
 ## Flow
 

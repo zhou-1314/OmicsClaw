@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: spatial-statistics
-description: Load when running spatial autocorrelation / hotspot / co-occurrence / neighbourhood-enrichment / Ripley K stats on a clustered spatial AnnData via squidpy. Skip when ranking spatially variable genes (use spatial-genes) or for tissue domain detection (use spatial-domains).
+description: Load when running spatial autocorrelation / hotspot / co-occurrence / neighbourhood-enrichment
+  / Ripley K stats on a clustered spatial AnnData via squidpy. Skip when ranking spatially variable genes
+  (use spatial-genes); tissue domain detection (use spatial-domains).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 📊
 tags:
 - spatial
 - statistics
@@ -52,20 +57,59 @@ detection use `spatial-domains`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Clustered spatial AnnData | `.h5ad` with `obsm["spatial"]` + `obs[--cluster-key]` | yes (unless `--demo`) |
-| Genes | `--genes geneA,geneB,...` (comma-separated) | required for `bivariate_moran` |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated AnnData | `processed.h5ad` | adds per-gene analysis-specific `obs` columns: `obs[f"local_moran_<gene>"]` / `obs[f"local_moran_pval_<gene>"]` / `obs[f"local_moran_q_<gene>"]` (`_lib/statistics.py:739-741`); `obs[f"getis_ord_<gene>"]` / `obs[f"getis_ord_pval_<gene>"]` (`:832-833`). Other analyses write to `uns`. |
-| Analysis summary | `tables/analysis_summary.csv` | always |
-| Neighbourhood Z-score matrix | `tables/neighborhood_zscore.csv` | when `--analysis-type neighborhood_enrichment` |
-| Neighbourhood counts | `tables/neighborhood_counts.csv` | when `--analysis-type neighborhood_enrichment` |
-| Bivariate-Moran summary | `tables/bivariate_moran_summary.csv` | when `--analysis-type bivariate_moran` |
-| Per-analysis result tables | `tables/<analysis-specific>.csv` | dispatched per analysis-type |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+- Expects `obsm`: `spatial`
+
+**Outputs**
+
+- `tables/analysis_results.csv`
+- `tables/analysis_summary.csv`
+- `tables/bivariate_moran_summary.csv`
+- `tables/centrality_scores.csv`
+- `tables/cluster_summary.csv`
+- `tables/cooccurrence_curves.csv`
+- `tables/cooccurrence_pairs.csv`
+- `tables/neighborhood_counts.csv`
+- `tables/neighborhood_pairs.csv`
+- `tables/neighborhood_zscore.csv`
+- `tables/network_per_cluster.csv`
+- `tables/network_summary.csv`
+- `tables/pair_summary.csv`
+- `tables/per_cluster_metrics.csv`
+- `tables/ripley_cluster_summary.csv`
+- `tables/ripley_curves.csv`
+- `tables/spot_statistics.csv`
+- `tables/top_results.csv`
+- `figures/bivariate_moran_scatter.png`
+- `figures/bivariate_moran_spatial.png`
+- `figures/centrality_scores.png`
+- `figures/centrality_scores_barplot.png`
+- `figures/co_occurrence_curves.png`
+- `figures/co_occurrence_distribution.png`
+- `figures/co_occurrence_top_pairs.png`
+- `figures/geary_pvalue_distribution.png`
+- `figures/geary_ranking.png`
+- `figures/geary_score_vs_significance.png`
+- `figures/moran_pvalue_distribution.png`
+- `figures/moran_ranking.png`
+- `figures/moran_score_vs_significance.png`
+- `figures/neighborhood_enrichment_heatmap.png`
+- `figures/neighborhood_top_pairs.png`
+- `figures/neighborhood_zscore_distribution.png`
+- `figures/network_degree_histogram.png`
+- `figures/network_per_cluster_degree.png`
+- `figures/ripley_cluster_max_stat.png`
+- `figures/ripley_curves.png`
+- `figures/ripley_stat_distribution.png`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `local_moran_<gene>`, `local_moran_pval_<gene>`, `local_moran_q_<gene>`, `getis_ord_<gene>`, `getis_ord_pval_<gene>`
 
 ## Flow
 

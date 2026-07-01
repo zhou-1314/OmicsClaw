@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: bulkrna-coexpression
-description: Load when discovering gene co-expression modules and hub genes in a bulk RNA-seq cohort via WGCNA-style soft-thresholded networks. Skip for direct DE comparison (use bulkrna-de) or PPI lookup of an existing gene list (use bulkrna-ppi-network); single-cell co-expression uses sc-grn instead.
+description: Load when discovering gene co-expression modules and hub genes in a bulk RNA-seq cohort via
+  WGCNA-style soft-thresholded networks. Skip when direct DE comparison (use bulkrna-de); PPI lookup of
+  an existing gene list (use bulkrna-ppi-network); single-cell co-expression (use sc-grn).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: 🕸️
 tags:
 - bulkrna
 - coexpression
@@ -30,19 +35,26 @@ assignments, hub genes, and module-trait correlations.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Count matrix | `.csv` (gene × sample) | yes (or `--demo`) |
-| Sample traits | `--traits` CSV | optional, for module-trait correlation |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Module assignments | `tables/module_assignments.csv` | gene → module colour |
-| Hub genes | `tables/hub_genes.csv` | per-module top-connectivity genes |
-| Soft-threshold diagnostic | `tables/threshold_fit.csv` + `figures/scale_free_fit.png` | per-power scale-free fit + connectivity |
-| Module sizes | `figures/module_sizes.png` | bar chart of gene count per module |
-| Module assignments | `figures/module_dendrogram.png` | colour-strip of per-gene module label |
-| Report | `report.md` + `result.json` | summary keys: `n_genes_used`, `n_samples`, `soft_power`, `n_modules`, `module_sizes`, `method_used` |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/counts.csv`
+- `tables/gene_modules.csv`
+- `tables/hub_genes.csv`
+- `tables/module_assignments.csv`
+- `tables/soft_power_table.csv`
+- `tables/threshold_fit.csv`
+- `figures/module_dendrogram.png`
+- `figures/module_sizes.png`
+- `figures/scale_free_fit.png`
+- `wgcna_info.json`
+- `report.md`
+- `result.json`
 
 ## Flow
 

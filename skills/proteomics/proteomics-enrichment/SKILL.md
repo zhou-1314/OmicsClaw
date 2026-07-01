@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: proteomics-enrichment
-description: Load when running over-representation analysis (ORA) on a list of proteins via Fisher's exact test against a built-in 8-pathway DEMO dictionary, with BH-FDR correction. Skip when needing a real pathway database (this skill is demo-only — use `bulkrna-enrichment` for real KEGG / Reactome / MSigDB) or for rank-based GSEA.
+description: Load when running over-representation analysis (ORA) on a list of proteins via Fisher's exact
+  test against a built-in 8-pathway DEMO dictionary, with BH-FDR correction. Skip when needing a real
+  pathway database (this skill is demo-only) (use bulkrna-enrichment); rank-based GSEA.
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🗺️
 tags:
 - proteomics
 - enrichment
@@ -36,17 +41,17 @@ real ORA + GSEA + ssGSEA backends with hosted libraries).
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Protein list | `.csv` with `protein_id` column (or any first column treated as gene IDs) | yes (unless `--demo`) |
-| Method | `--method ora` (only choice) | no |
-| Species | `--species <name>` (default `human`, RECORDED ONLY — does not switch DBs) | no |
-| Background size | `--background-size <int>` (default = `max(union(input, pathway-genes), |input|+1)` ≈ 40 + n_input for the demo) | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Enrichment results | `tables/enrichment_results.csv` | per-pathway `pvalue`, `fdr` (BH-adjusted), gene counts |
-| Report | `report.md` + `result.json` | `summary["n_significant"]` (FDR < 0.05); `summary["n_pathways_tested"]` = 8 |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/enrichment_results.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

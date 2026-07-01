@@ -1,6 +1,10 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-markers
-description: Load when ranking cluster-level marker genes from a clustered single-cell AnnData via Scanpy Wilcoxon / t-test / logreg or COSG specificity. Skip when comparing condition-vs-control with replicates (use sc-de) or for assigning cell-type labels (use sc-cell-annotation).
+description: Load when ranking cluster-level marker genes from a clustered single-cell AnnData via Scanpy
+  Wilcoxon / t-test / logreg or COSG specificity. Skip when comparing condition-vs-control with replicates
+  (use sc-de); assigning cell-type labels (use sc-cell-annotation).
 version: 0.6.0
 author: OmicsClaw
 license: MIT
@@ -38,18 +42,27 @@ DE with replicates use `sc-de`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Clustered AnnData | `.h5ad` with normalised expression in `.X` and a grouping column in `obs` | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| AnnData (cleaned) | `processed.h5ad` | drops `uns["rank_genes_groups"]` / `uns["rank_genes_groups_filtered"]` to keep file small; preserves obs/obsm |
-| All markers | `tables/markers_all.csv` | one row per (group, gene) — fold-change, scores, fractions, optional p-values |
-| Top per group | `tables/markers_top.csv` | top-`--n-top` per group used by figures |
-| Per-cluster summary | `tables/cluster_summary.csv` | marker counts + top genes per group |
-| Marker figures | `figures/markers_heatmap.png`, `figures/markers_dotplot.png`, `figures/marker_effect_summary.png`, `figures/marker_cluster_summary.png`, `figures/marker_fraction_scatter.png` | always (last is fraction-only) |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+
+**Outputs**
+
+- `tables/cell_metadata.csv`
+- `tables/cluster_summary.csv`
+- `tables/markers_all.csv`
+- `tables/markers_top.csv`
+- `figures/r_feature_violin.png`
+- `figures/r_marker_heatmap.png`
+- `analysis_summary.txt`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`)
 
 ## Flow
 

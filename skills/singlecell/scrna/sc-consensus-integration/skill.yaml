@@ -1,0 +1,127 @@
+schema_version: 2
+id: sc-consensus-integration
+name: sc-consensus-integration
+domain: singlecell
+type: consensus
+version: 0.1.0
+author: OmicsClaw
+license: MIT
+emoji: 🧬
+summary:
+  load_when: you want a multi-sample single-cell (scRNA) clustering robust to the choice of integration
+    method — fanning out Harmony/Scanorama/scVI + an unintegrated baseline, scoring each by a batch-mixing
+    intrinsic panel, and voting a consensus
+  skip_when:
+  - condition: single-batch
+    use: sc-consensus-clustering
+  - condition: one integration method is fixed
+  trigger_keywords:
+  - consensus integration
+  - batch correction consensus
+  - integration method consensus
+  - robust scrna integration clustering
+  - which clusters survive integration
+  tags:
+  - singlecell
+  - scrna
+  - consensus
+  - integration
+  - batch-correction
+  aliases: []
+interface:
+  inputs:
+    modalities:
+    - scrna
+    file_types:
+    - h5ad
+    preconditions:
+      data_shape:
+        requires_preprocessed: true
+        obs: []
+        obsm:
+        - X_pca
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --members
+    - --integration-methods
+    - --resolution
+    - --batch-key
+    - --include-scvi
+    - --vote-baseline
+    - --all
+    - --confirm-plan
+    - --non-interactive
+    - --alpha
+    - --beta
+    - --max-class-frac
+    - --operator
+    - --seed
+    - --timeout
+    - --max-parallel
+    - --top-k
+    - --run-id
+    hints:
+      default:
+        params:
+        - integration_methods
+        - resolution
+        - batch_key
+        defaults:
+          integration_methods: none,harmony,scanorama
+          resolution: 1.0
+          batch_key: batch
+        tips:
+        - Members are integration backends; `none` is the unintegrated X_pca baseline that exposes batch-artifact
+          clusters.
+        - Add `--include-scvi` for the GPU/stochastic scVI member; serialise GPU members with `--max-parallel
+          1`.
+  outputs:
+    files:
+    - consensus_labels.tsv
+    - member_scores.csv
+    - member_intrinsic_panel.csv
+    - cross_method_nmi.csv
+    - plan.json
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: sc_consensus_integration.py
+deps:
+  python:
+  - anndata
+  - numpy
+  - pandas
+  - PyYAML
+  - scanpy
+  - scikit-learn
+  - scipy
+  cli: []
+compatibility:
+  platforms:
+  - linux
+  - macos
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+  homepage: https://github.com/OmicsClaw/OmicsClaw
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

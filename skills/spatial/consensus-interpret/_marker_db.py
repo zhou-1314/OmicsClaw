@@ -26,7 +26,7 @@ logger = logging.getLogger("consensus-interpret.marker_db")
 
 _BUNDLED_DIR = Path(__file__).resolve().parent / "data" / "markers"
 
-# Tissue key → bundled TSV filename (mirrors parameters.yaml marker_db_bundled).
+# Tissue key → bundled TSV filename (the bundled marker-DB set for each tissue).
 _BUNDLED_FILES: dict[str, str] = {
     "brain": "panglaodb_brain.tsv",
     "immune": "panglaodb_immune.tsv",

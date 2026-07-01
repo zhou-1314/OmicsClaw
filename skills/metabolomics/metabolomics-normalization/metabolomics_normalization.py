@@ -32,7 +32,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "normalization"
-SKILL_VERSION = "0.3.0"
+SKILL_VERSION = "0.5.0"
 SUPPORTED_METHODS = ("median", "quantile", "total", "pqn", "log")
 
 

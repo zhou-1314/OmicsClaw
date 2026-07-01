@@ -1,0 +1,99 @@
+schema_version: 2
+id: bulkrna-enrichment
+name: bulkrna-enrichment
+domain: bulkrna
+type: leaf
+version: 0.3.0
+author: OmicsClaw
+license: MIT
+emoji: 🛤️
+summary:
+  load_when: running pathway / GO term enrichment on a bulk RNA-seq DE result list
+  skip_when:
+  - condition: the input is single-cell
+    use: sc-enrichment
+  - condition: the input is spatial
+    use: spatial-enrichment
+  - condition: metabolite pathways
+    use: metabolomics-pathway-enrichment
+  trigger_keywords:
+  - bulk enrichment
+  - pathway analysis
+  - GSEA
+  - ORA
+  - GO enrichment
+  - KEGG
+  - bulk pathway
+  tags:
+  - bulkrna
+  - enrichment
+  - GSEA
+  - ORA
+  - GO
+  - KEGG
+  - Reactome
+  - pathway
+  aliases:
+  - bulk-enrichment
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - csv
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --gene-set-file
+    - --lfc-cutoff
+    - --method
+    - --padj-cutoff
+    hints: {}
+  outputs:
+    files:
+    - tables/enrichment_results.csv
+    - tables/enrichment_significant.csv
+    - figures/enrichment_barplot.png
+    - figures/enrichment_dotplot.png
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: bulkrna_enrichment.py
+deps:
+  python:
+  - gseapy
+  - matplotlib
+  - numpy
+  - pandas
+  - scipy
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+  tests: tests/
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

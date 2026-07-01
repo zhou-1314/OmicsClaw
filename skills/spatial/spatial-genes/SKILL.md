@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: spatial-genes
-description: Load when ranking spatially variable genes (SVGs) on a preprocessed spatial AnnData via Moran's I, SpatialDE, SPARK-X, or FlashS. Skip when detecting tissue domains (use spatial-domains) or for differential expression between groups (use spatial-de).
+description: Load when ranking spatially variable genes (SVGs) on a preprocessed spatial AnnData via Moran's
+  I, SpatialDE, SPARK-X, or FlashS. Skip when detecting tissue domains (use spatial-domains); differential
+  expression between groups (use spatial-de).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🧭
 tags:
 - spatial
 - svg
@@ -48,19 +53,36 @@ DE use `spatial-de`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Preprocessed spatial AnnData | `.h5ad` with `obsm["spatial"]` | yes (unless `--demo`) |
-| Raw counts (`spatialde` / `sparkx`) | `layers["counts"]` recommended | optional fallback to `.X` |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated AnnData | `processed.h5ad` | preserved; `morans` additionally writes `adata.uns["moranI"]` (squidpy convention). No method writes a `var` column — scores live only in the tables. |
-| All SVG results | `tables/svg_results.csv` | per-gene score / pvalue / padj |
-| Top SVGs | `tables/top_svg_scores.csv` | top-`--n-top-genes` |
-| Significant SVGs | `tables/significant_svgs.csv` | filtered at `--fdr-threshold` |
-| Per-spot metrics | `tables/svg_observation_metrics.csv` | when method exposes them |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+- Expects `obsm`: `spatial`
+
+**Outputs**
+
+- `tables/coords.csv`
+- `tables/counts.csv`
+- `tables/significant_svgs.csv`
+- `tables/sparkx_results.csv`
+- `tables/svg_observation_metrics.csv`
+- `tables/svg_results.csv`
+- `tables/svg_run_summary.csv`
+- `tables/top_svg_scores.csv`
+- `tables/top_svg_spatial_points.csv`
+- `tables/top_svg_umap_points.csv`
+- `figures/moran_ranking.png`
+- `figures/svg_score_vs_significance.png`
+- `figures/svg_significance_distribution.png`
+- `figures/top_svg_scores.png`
+- `figures/top_svg_spatial.png`
+- `figures/top_svg_umap.png`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `uns`: `moranI`
 
 ## Flow
 

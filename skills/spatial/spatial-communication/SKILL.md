@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: spatial-communication
-description: Load when computing ligand-receptor cell-cell communication on a preprocessed spatial AnnData with `obs[cell_type_key]` (default `leiden`) via LIANA (default), CellPhoneDB, FastCCC, or CellChat (R). Skip when running scRNA-only L-R inference (use `sc-cell-communication`) or when no cell-type labels exist (run `spatial-annotate` or `spatial-domains` first).
+description: Load when computing ligand-receptor cell-cell communication on a preprocessed spatial AnnData
+  with `obs[cell_type_key]` (default `leiden`) via LIANA (default), CellPhoneDB, FastCCC, or CellChat
+  (R). Skip when running scRNA-only L-R inference (use sc-cell-communication); no cell-type labels exist
+  (use spatial-annotate).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 📡
 tags:
 - spatial
 - communication
@@ -48,20 +54,49 @@ L-R use `sc-cell-communication`; for pathway scoring use
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Preprocessed spatial AnnData | `.h5ad` with `obsm["spatial"]`, `obs[cell_type_key]` (default `leiden`) | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated AnnData | `processed.h5ad` | `uns["ccc_results"]` (canonical L-R DataFrame); per-method copy at `uns["liana_results"]` / `uns["cellphonedb_results"]` / `uns["fastccc_results"]` / `uns["cellchat_results"]`; `uns["communication_summary"]` (pathway-level); `uns["communication_signaling_roles"]` (sender/receiver scores); `uns["spatial_communication"]` (run metadata) |
-| L-R interactions | `tables/lr_interactions.csv` | full L-R list |
-| Top interactions | `tables/top_interactions.csv` | top-N filtered |
-| Pathway summary | `tables/communication_summary.csv` | aggregate per pathway |
-| Signaling roles | `tables/signaling_roles.csv` | sender/receiver per cell type |
-| Source-target | `tables/source_target_summary.csv` | per source-target pair counts |
-| Run summary | `tables/communication_run_summary.csv` | params used |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+- Expects `obsm`: `spatial`
+
+**Outputs**
+
+- `tables/cellchat_centrality.csv`
+- `tables/cellchat_count_matrix.csv`
+- `tables/cellchat_pathways.csv`
+- `tables/cellchat_results.csv`
+- `tables/cellchat_weight_matrix.csv`
+- `tables/communication_run_summary.csv`
+- `tables/communication_spatial_points.csv`
+- `tables/communication_summary.csv`
+- `tables/communication_umap_points.csv`
+- `tables/complex_composition_table.csv`
+- `tables/complex_table.csv`
+- `tables/gene_table.csv`
+- `tables/interaction_table.csv`
+- `tables/lr_interactions.csv`
+- `tables/meta.tsv`
+- `tables/protein_table.csv`
+- `tables/signaling_roles.csv`
+- `tables/source_target_summary.csv`
+- `tables/top_interactions.csv`
+- `figures/communication_pvalue_distribution.png`
+- `figures/communication_roles_spatial.png`
+- `figures/communication_score_vs_significance.png`
+- `figures/lr_dotplot.png`
+- `figures/lr_heatmap.png`
+- `figures/lr_spatial.png`
+- `figures/signaling_roles.png`
+- `figures/source_target_summary.png`
+- `fastccc_input.h5ad`
+- `input.h5ad`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `uns`: `ccc_results`, `liana_results`, `cellphonedb_results`, `fastccc_results`, `cellchat_results`, `communication_summary`, `communication_signaling_roles`, `spatial_communication`
 
 ## Flow
 

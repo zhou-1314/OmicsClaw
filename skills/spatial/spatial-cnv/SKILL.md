@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: spatial-cnv
-description: Load when inferring copy-number variation per spot on a preprocessed spatial AnnData with chromosome-annotated genes via infercnvpy (default — log-ratio sliding-window) or Numbat (R, allele-aware clone deconvolution). Skip when `var["chromosome"]` / `var["start"]` / `var["end"]` gene-coord metadata is missing or when no normal-reference subset can be defined.
+description: Load when inferring copy-number variation per spot on a preprocessed spatial AnnData with
+  chromosome-annotated genes via infercnvpy (default — log-ratio sliding-window) or Numbat (R, allele-aware
+  clone deconvolution). Skip when `var["chromosome"]` / `var["start"]` / `var["end"]` gene-coord metadata
+  is missing; no normal-reference subset can be defined.
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🧫
 tags:
 - spatial
 - cnv
@@ -44,21 +50,40 @@ the normal-reference subset (strongly recommended).
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Preprocessed spatial AnnData | `.h5ad` with `obsm["spatial"]`, `var["chromosome"]` + `var["start"]` + `var["end"]` (gene-coord metadata); raw counts in `layers["counts"]` for Numbat | yes (unless `--demo`) |
-| Reference subset | `--reference-key <obs col>` + `--reference-cat <category>` | strongly recommended (else inferred per-cell drift) |
-| Numbat allele counts | `obsm["allele_counts"]` (DataFrame-like) | required for `--method numbat` |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated AnnData | `processed.h5ad` | infercnvpy: `obs["cnv_score"]` (set by `cnv.tl.cnv_score`, `_lib/cnv.py:219`; NaNs filled at `_lib/cnv.py:226`), `obs["cnv_leiden"]` (set by `cnv.tl.leiden` at `_lib/cnv.py:210`; constant fallback `_lib/cnv.py:216`); Numbat: `uns["numbat_calls"]`, `uns["numbat_clone_post"]` (DataFrames as records), `obs["numbat_p_cnv"]`, `obs["numbat_clone"]`, `obs["numbat_entropy"]` (`_lib/cnv.py:344-366`) |
-| Per-spot scores | `tables/cnv_scores.csv` | per-spot CNV score |
-| Run summary | `tables/cnv_run_summary.csv` | params used |
-| Group sizes | `tables/cnv_group_sizes.csv` | per-clone count + proportion |
-| Bin profile | `tables/cnv_bin_summary.csv` | per-genomic-bin mean CNV |
-| Numbat tables | `tables/numbat_calls.csv`, `tables/numbat_clone_post.csv` | Numbat only |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+- Expects `obsm`: `spatial`, `allele_counts`
+
+**Outputs**
+
+- `tables/allele_counts.csv`
+- `tables/cnv_bin_summary.csv`
+- `tables/cnv_group_sizes.csv`
+- `tables/cnv_run_summary.csv`
+- `tables/cnv_scores.csv`
+- `tables/cnv_spatial_points.csv`
+- `tables/cnv_umap_points.csv`
+- `tables/numbat_calls.csv`
+- `tables/numbat_clone_post.csv`
+- `tables/numbat_results.csv`
+- `figures/cnv_bin_summary.png`
+- `figures/cnv_group_sizes.png`
+- `figures/cnv_groups_umap.png`
+- `figures/cnv_heatmap.png`
+- `figures/cnv_score_distribution.png`
+- `figures/cnv_spatial.png`
+- `figures/cnv_umap.png`
+- `figures/cnv_uncertainty_distribution.png`
+- `figures/cnv_uncertainty_spatial.png`
+- `numbat_input.h5ad`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `cnv_score`, `cnv_leiden`, `numbat_p_cnv`, `numbat_clone`, `numbat_entropy`; `uns`: `numbat_calls`, `numbat_clone_post`
 
 ## Flow
 

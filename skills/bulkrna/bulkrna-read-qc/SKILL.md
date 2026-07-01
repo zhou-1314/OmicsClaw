@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: bulkrna-read-qc
-description: Load when checking raw FASTQ quality (Phred / GC / adapter / Q20-Q30) before alignment in bulk RNA-seq. Skip if reads are already aligned (use bulkrna-read-alignment) or counted (use bulkrna-qc), or for single-cell FASTQ (use sc-fastq-qc).
+description: Load when checking raw FASTQ quality (Phred / GC / adapter / Q20-Q30) before alignment in
+  bulk RNA-seq. Skip when reads are already aligned (use bulkrna-read-alignment); counted (use bulkrna-qc);
+  single-cell FASTQ (use sc-fastq-qc).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: 🔍
 tags:
 - bulkrna
 - FASTQ
@@ -29,16 +34,21 @@ the metrics needed to decide whether trimming is worth the trouble.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| FASTQ file | `.fastq` or `.fastq.gz` | yes (or `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| QC report | `report.md` + `result.json` | always |
-| Per-base quality | `figures/per_base_quality.png` | Phred profile across read positions |
-| GC distribution | `figures/gc_content.png` | per-read GC% histogram |
-| Length distribution | `figures/read_length_dist.png` | for variable-length / trimmed input |
+**Inputs**
+
+- File types: `.fastq`
+
+**Outputs**
+
+- `tables/qc_summary.csv`
+- `figures/gc_content.png`
+- `figures/per_base_quality.png`
+- `figures/quality_score_distribution.png`
+- `figures/read_length_distribution.png`
+- `report.md`
+- `result.json`
 
 ## Flow
 

@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-ambient-removal
-description: Load when removing ambient RNA contamination from droplet-based scRNA-seq using a simple subtraction path, CellBender, or SoupX. Skip when the contamination is multiplet barcodes (use sc-doublet-detection) or before counts exist (use sc-count).
+description: Load when removing ambient RNA contamination from droplet-based scRNA-seq using a simple
+  subtraction path, CellBender, or SoupX. Skip when the contamination is multiplet barcodes (use sc-doublet-detection);
+  before counts exist (use sc-count).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: S
 tags:
 - singlecell
 - scrna
@@ -37,16 +42,35 @@ multiplet barcodes.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Filtered single-cell AnnData | `.h5ad` | yes (unless `--demo`) |
-| Raw matrix (SoupX) | 10X mtx dir via `--raw-matrix-dir` | only for `--method soupx` |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Cleaned AnnData | `processed.h5ad` | `adata.X` overwritten with corrected counts; `layers["counts"]` preserves the pre-correction matrix; `uns["ambient_correction"]` (simple) / `uns["soupx"]` / `uns["cellbender"]` carries diagnostics |
-| Diagnostic figures | `figures/counts_comparison.png`, `figures/count_distribution.png`, `figures/barcode_rank.png` | always rendered |
-| Report | `report.md` + `result.json` | always written |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+
+**Outputs**
+
+- `tables/cell_metadata.csv`
+- `tables/cellbender_output_cell_barcodes.csv`
+- `tables/cellbender_output_metrics.csv`
+- `tables/cells.csv`
+- `tables/corrected_counts.csv`
+- `tables/correction_summary.csv`
+- `tables/gene_expression.csv`
+- `tables/genes.csv`
+- `figures/barcode_rank.png`
+- `figures/count_distribution.png`
+- `figures/counts_comparison.png`
+- `figures/r_ambient_violin.png`
+- `README.md`
+- `analysis_summary.txt`
+- `cellbender_output_report.html`
+- `contamination.json`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `layers`: `counts`; `uns`: `ambient_correction`, `soupx`, `cellbender`
 
 ## Flow
 

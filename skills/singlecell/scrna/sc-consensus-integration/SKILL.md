@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-consensus-integration
-description: 'Load when you want a multi-sample single-cell (scRNA) clustering robust to the choice of integration method — fanning out Harmony/Scanorama/scVI + an unintegrated baseline, scoring each by a batch-mixing intrinsic panel, and voting a consensus. Skip when single-batch (use sc-consensus-clustering) or one integration method is fixed.'
+description: Load when you want a multi-sample single-cell (scRNA) clustering robust to the choice of
+  integration method — fanning out Harmony/Scanorama/scVI + an unintegrated baseline, scoring each by
+  a batch-mixing intrinsic panel, and voting a consensus. Skip when single-batch (use sc-consensus-clustering);
+  one integration method is fixed.
 version: 0.1.0
 author: OmicsClaw
 license: MIT
+emoji: 🧬
 tags:
 - singlecell
 - scrna
@@ -40,27 +46,24 @@ integration intrinsic panel (ADR 0029) before voting a consensus.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Preprocessed multi-sample AnnData | `--input <preprocessed.h5ad>` with `obsm["X_pca"]` + a batch key in `obs` (≥2 batches) | yes |
-| Output directory | `--output <dir>` | yes |
-| Batch key | `--batch-key batch` | no (default `batch`) |
-| Integration methods | `--integration-methods none,harmony,scanorama` | no (default set) |
-| Include scVI member | `--include-scvi` | no (GPU/stochastic; serialise with `--max-parallel 1`) |
-| Vote the baseline | `--vote-baseline` | no (default: the `none` baseline is scored + reported but NOT voted) |
-| Fixed resolution | `--resolution 1.0` | no |
-| Operator | `--operator {kmode,weighted,lca}` | no (default `kmode`) |
-| Non-interactive | `--non-interactive` | no |
-| Seed | `--seed 0` | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Verified consensus labels | `consensus_labels.tsv` | per-cell `consensus_<operator>`, `support`, `entropy` |
-| Composite member scores | `member_scores.csv` | incl. per-member `n_clusters` |
-| Intrinsic panel breakdown | `member_intrinsic_panel.csv` | iLISI / kNN-preservation per member |
-| Cross-method NMI | `cross_method_nmi.csv` | square per member |
-| Audit + panel weights | `plan.json` | members, operator, experimental panel weights |
-| Markdown report | `report.md` | `[A: Verified consensus]` banner + k-divergence section |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+- Expects `obsm`: `X_pca`
+
+**Outputs**
+
+- `consensus_labels.tsv`
+- `member_scores.csv`
+- `member_intrinsic_panel.csv`
+- `cross_method_nmi.csv`
+- `plan.json`
+- `report.md`
+- `result.json`
 
 ## Flow
 
@@ -120,6 +123,6 @@ python omicsclaw.py run sc-consensus-integration --input <h5ad> --output <dir> \
 
 - `references/methodology.md` — integration-consensus + intrinsic-panel rationale
 - `references/output_contract.md` — `consensus_labels.tsv` / `member_scores.csv` / `plan.json` schema
-- `references/parameters.md` — every CLI flag (generated from `parameters.yaml`)
+- `references/parameters.md` — every CLI flag (generated from `skill.yaml`)
 - Adjacent skills: `sc-preprocessing` (upstream), `sc-integrate-cluster` (the per-member integrate+cluster unit this wraps), `sc-consensus-clustering` (parallel — resolution-robustness instead of integration-robustness), `consensus-domains` (parallel — the spatial analogue)
 - ADR 0011/0016/0029 — scoring protocol, workflow runtime, integration intrinsic panel

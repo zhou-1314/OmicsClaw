@@ -1,0 +1,93 @@
+schema_version: 2
+id: bulkrna-geneid-mapping
+name: bulkrna-geneid-mapping
+domain: bulkrna
+type: leaf
+version: 0.3.0
+author: OmicsClaw
+license: MIT
+emoji: 🏷️
+summary:
+  load_when: converting gene identifiers between Ensembl, Entrez, and HGNC symbol in a bulk RNA-seq count
+    matrix
+  skip_when:
+  - condition: the input is already in the desired identifier system
+  - condition: organisms outside human/mouse
+  - condition: non-bulk-counts inputs
+  trigger_keywords:
+  - gene ID
+  - Ensembl
+  - Entrez
+  - gene symbol
+  - ID mapping
+  - gene annotation
+  - convert IDs
+  tags:
+  - bulkrna
+  - gene-id
+  - mapping
+  - Ensembl
+  - Entrez
+  - HGNC
+  - annotation
+  aliases:
+  - bulk-geneid
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - csv
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --from
+    - --mapping-file
+    - --on-duplicate
+    - --species
+    - --to
+    hints: {}
+  outputs:
+    files:
+    - tables/mapped_counts.csv
+    - tables/mapping_table.csv
+    - tables/unmapped_genes.csv
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: bulkrna_geneid_mapping.py
+deps:
+  python:
+  - mygene
+  - numpy
+  - pandas
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

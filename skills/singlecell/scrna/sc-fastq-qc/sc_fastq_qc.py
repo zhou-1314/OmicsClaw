@@ -45,7 +45,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "sc-fastq-qc"
-SKILL_VERSION = "0.1.0"
+SKILL_VERSION = "0.3.0"
 SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-fastq-qc/sc_fastq_qc.py"
 
 

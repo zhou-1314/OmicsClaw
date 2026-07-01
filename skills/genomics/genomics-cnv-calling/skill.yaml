@@ -1,0 +1,86 @@
+schema_version: 2
+id: genomics-cnv-calling
+name: genomics-cnv-calling
+domain: genomics
+type: leaf
+version: 0.5.0
+author: OmicsClaw
+license: MIT
+emoji: 📊
+summary:
+  load_when: calling CNV segments via CBS-style segmentation on a bin-level log2-ratio CSV from exome
+    / WGS coverage — emits per-segment 5-class CN state (`amplification` / `gain` / `neutral` / `loss`
+    / `deep_deletion`), per-chromosome summary, genome-fraction-altered
+  skip_when:
+  - condition: working with single-cell / spatial CNV
+    use: spatial-cnv
+  trigger_keywords:
+  - CNV
+  - copy number
+  - amplification
+  - deletion
+  - CNVkit
+  tags:
+  - genomics
+  - cnv
+  - copy-number
+  - cbs
+  - segmentation
+  - cnvkit
+  - gatk-gcnv
+  aliases:
+  - cnv-calling
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - csv
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --alpha
+    - --method
+    hints: {}
+  outputs:
+    files:
+    - tables/cnv_per_chromosome.csv
+    - tables/cnv_segments.csv
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: genomics_cnv_calling.py
+deps:
+  python:
+  - numpy
+  - pandas
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

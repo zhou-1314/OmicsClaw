@@ -56,7 +56,7 @@ output_directory/
 
 - `processed.h5ad` — written by `<script>.py`. Counts in
   `layers["counts"]`, log-normalized in `adata.X`, results stashed in `uns`.
-- Set `saves_h5ad: true` in `parameters.yaml`.
+- Set `interface.outputs.anndata.saves_h5ad: true` in `skill.yaml`.
 
 ### When the skill emits Python figures
 

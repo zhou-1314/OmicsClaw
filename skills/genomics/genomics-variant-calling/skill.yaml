@@ -1,0 +1,91 @@
+schema_version: 2
+id: genomics-variant-calling
+name: genomics-variant-calling
+domain: genomics
+type: leaf
+version: 0.5.0
+author: OmicsClaw
+license: MIT
+emoji: 🔎
+summary:
+  load_when: summarising small variants (SNVs / indels) from a VCF or computing demo-pattern variant statistics
+    (Ti/Tv ratio, per-chromosome distribution, SNP / indel split)
+  skip_when:
+  - condition: filtering / merging VCFs
+    use: genomics-vcf-operations
+  - condition: calling structural variants
+    use: genomics-sv-detection
+  - condition: adding functional annotations
+    use: genomics-variant-annotation
+  trigger_keywords:
+  - variant calling
+  - SNV
+  - indel
+  - GATK
+  - DeepVariant
+  - FreeBayes
+  - Mutect2
+  - VQSR
+  tags:
+  - genomics
+  - variant-calling
+  - snv
+  - indel
+  - vcf
+  - ti-tv
+  aliases:
+  - variant-call
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - vcf
+    - bam
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --n-variants
+    hints: {}
+  outputs:
+    files:
+    - tables/variants.csv
+    - tables/variants_per_chrom.csv
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: genomics_variant_calling.py
+deps:
+  python:
+  - numpy
+  - pandas
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

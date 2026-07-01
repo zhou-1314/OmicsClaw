@@ -1,0 +1,85 @@
+schema_version: 2
+id: metabolomics-quantification
+name: metabolomics-quantification
+domain: metabolomics
+type: leaf
+version: 0.5.0
+author: OmicsClaw
+license: MIT
+emoji: 📏
+summary:
+  load_when: imputing missing values (min / median / KNN) and normalising (TIC / median / log) a feature
+    × sample metabolomics CSV
+  skip_when:
+  - condition: only normalisation is needed
+    use: metabolomics-normalization
+  - condition: the input is raw spectra
+    use: metabolomics-xcms-preprocessing
+  trigger_keywords:
+  - metabolomics quantification
+  - imputation
+  - feature quantification
+  - missing values
+  tags:
+  - metabolomics
+  - quantification
+  - imputation
+  - normalization
+  - knn
+  - tic
+  aliases:
+  - met-quantify
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - csv
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --impute
+    - --normalize
+    hints: {}
+  outputs:
+    files:
+    - tables/quantified_features.csv
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: met_quantify.py
+deps:
+  python:
+  - numpy
+  - pandas
+  - scikit-learn
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

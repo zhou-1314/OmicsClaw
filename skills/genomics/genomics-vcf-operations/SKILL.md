@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: genomics-vcf-operations
-description: Load when summarising / filtering a VCF — variant classification (SNP / MNP / INS / DEL / COMPLEX), Ti/Tv ratio, QUAL / DP threshold filtering, INFO-field parsing. Skip when the input is a BAM (use `genomics-variant-calling` upstream first) or when adding functional annotations (use `genomics-variant-annotation`).
+description: Load when summarising / filtering a VCF — variant classification (SNP / MNP / INS / DEL /
+  COMPLEX), Ti/Tv ratio, QUAL / DP threshold filtering, INFO-field parsing. Skip when the input is a BAM
+  (use genomics-variant-calling); adding functional annotations (use genomics-variant-annotation).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 📋
 tags:
 - genomics
 - vcf
@@ -34,15 +39,18 @@ for functional impact (gene / consequence / impact) use
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Variants | `.vcf` (uncompressed; `.vcf.gz` not auto-decompressed) | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Variant table | `tables/variants.csv` | per-variant CHROM/POS/REF/ALT/QUAL/DP/type |
-| Filtered VCF | `output_dir/filtered.vcf` | only when `--min-qual > 0` or `--min-dp > 0` |
-| Report | `report.md` + `result.json` | always; `result.json["data"]["variants_per_chrom"]` mirrors per-chrom counts |
+**Inputs**
+
+- File types: `.vcf`
+
+**Outputs**
+
+- `tables/variants.csv`
+- `filtered.vcf`
+- `report.md`
+- `result.json`
 
 ## Flow
 

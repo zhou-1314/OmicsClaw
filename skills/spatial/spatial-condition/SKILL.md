@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: spatial-condition
-description: Load when comparing two or more experimental conditions (treatment vs control) on a multi-sample preprocessed spatial AnnData via PyDESeq2 pseudobulk or Wilcoxon DE — needs `obs[condition_key]`, `obs[sample_key]`, and cluster labels. Skip when running per-cluster DE on one condition (use `spatial-de`) or comparing two slices without replicates.
+description: Load when comparing two or more experimental conditions (treatment vs control) on a multi-sample
+  preprocessed spatial AnnData via PyDESeq2 pseudobulk or Wilcoxon DE — needs `obs[condition_key]`, `obs[sample_key]`,
+  and cluster labels. Skip when running per-cluster DE on one condition (use spatial-de); comparing two
+  slices without replicates.
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: ⚖️
 tags:
 - spatial
 - condition
@@ -45,19 +51,39 @@ spatially variable genes use `spatial-genes`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Preprocessed multi-sample spatial AnnData | `.h5ad` with `obsm["spatial"]`, `obs[condition_key]`, `obs[sample_key]`, `obs[cluster_key]` (default `leiden`) | yes (unless `--demo`) |
-| Raw counts | `adata.layers["counts"]` (preferred) or `adata.raw` (fallback) | yes for `pydeseq2` |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated AnnData | `processed.h5ad` | `obs[condition_key]` + `obs[cluster_key]` cast to Categorical (`obs[sample_key]` is read but not cast) |
-| Pseudobulk DE | `tables/pseudobulk_de.csv` | gene × cluster × contrast (long-form) |
-| Per-cluster summary | `tables/per_cluster_summary.csv` | up/down counts per cluster |
-| Skipped contrasts | `tables/skipped_contrasts.csv` | clusters that failed replicate-count check |
-| Run summary | `tables/condition_run_summary.csv` | params used per-method |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+- Expects `obsm`: `spatial`
+
+**Outputs**
+
+- `tables/cluster_de_metrics.csv`
+- `tables/condition_run_summary.csv`
+- `tables/condition_spatial_points.csv`
+- `tables/condition_umap_points.csv`
+- `tables/per_cluster_summary.csv`
+- `tables/pseudobulk_de.csv`
+- `tables/pseudobulk_volcano_points.csv`
+- `tables/sample_counts_by_condition.csv`
+- `tables/skipped_contrasts.csv`
+- `tables/top_de_genes.csv`
+- `figures/cluster_de_burden.png`
+- `figures/condition_de_barplot.png`
+- `figures/condition_effect_burden_spatial.png`
+- `figures/condition_effect_burden_umap.png`
+- `figures/condition_pvalue_distribution.png`
+- `figures/condition_spatial_context.png`
+- `figures/pseudobulk_volcano.png`
+- `figures/sample_counts_by_condition.png`
+- `figures/skipped_contrasts.png`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`)
 
 ## Flow
 

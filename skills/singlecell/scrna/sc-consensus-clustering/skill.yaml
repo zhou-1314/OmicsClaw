@@ -1,0 +1,131 @@
+schema_version: 2
+id: sc-consensus-clustering
+name: sc-consensus-clustering
+domain: singlecell
+type: consensus
+version: 0.1.0
+author: OmicsClaw
+license: Apache-2.0
+emoji: 🧩
+summary:
+  load_when: you want resolution-robust single-cell clusters on a preprocessed scRNA AnnData — fanning
+    out leiden/louvain across a resolution sweep, scoring members by silhouette + cross-method NMI, and
+    voting a typed consensus
+  skip_when:
+  - condition: one resolution suffices
+    use: sc-clustering
+  - condition: spatial domains
+    use: consensus-domains
+  trigger_keywords:
+  - consensus clustering
+  - consensus celltype clustering
+  - multi-resolution clustering
+  - robust scrna clustering
+  - resolution sweep consensus
+  - single cell consensus clustering
+  tags:
+  - singlecell
+  - consensus
+  - typed-consensus
+  - multi-resolution
+  - silhouette
+  - bc-ranking
+  - kmode
+  - lca
+  - weighted
+  aliases: []
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - h5ad
+    preconditions:
+      data_shape:
+        requires_preprocessed: true
+        obs: []
+        obsm:
+        - X_pca
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --members
+    - --resolutions
+    - --cluster-methods
+    - --all
+    - --n-clusters
+    - --confirm-plan
+    - --non-interactive
+    - --alpha
+    - --beta
+    - --max-class-frac
+    - --llm-judge
+    - --operator
+    - --seed
+    - --timeout
+    - --max-parallel
+    - --top-k
+    - --run-id
+    hints:
+      leiden:
+        params:
+        - resolution
+        defaults:
+          resolution: 1.0
+        tips:
+        - Member resolution values are produced by the --resolutions sweep.
+      louvain:
+        params:
+        - resolution
+        defaults:
+          resolution: 1.0
+        tips:
+        - Member resolution values are produced by the --resolutions sweep.
+  outputs:
+    files:
+    - consensus_labels.tsv
+    - member_scores.csv
+    - cross_method_nmi.csv
+    - plan.json
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: sc_consensus_clustering.py
+deps:
+  python:
+  - anndata
+  - numpy
+  - pandas
+  - PyYAML
+  - scanpy
+  - scikit-learn
+  - scipy
+  cli: []
+compatibility:
+  platforms:
+  - linux
+  - macos
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+  tests: tests/
+  homepage: https://github.com/OmicsClaw/OmicsClaw
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

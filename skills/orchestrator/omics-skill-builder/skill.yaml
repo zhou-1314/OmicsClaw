@@ -1,0 +1,95 @@
+schema_version: 2
+id: omics-skill-builder
+name: omics-skill-builder
+domain: orchestrator
+type: leaf
+version: 0.5.0
+author: OmicsClaw
+license: MIT
+emoji: 🛠
+summary:
+  load_when: scaffolding a NEW OmicsClaw skill from a natural-language request — generates the skill directory
+    layout (skill.yaml, SKILL.md, references/, tests/) under the chosen domain
+  skip_when:
+  - condition: modifying an existing skill (edit its files directly)
+  - condition: only routing a query
+    use: orchestrator
+  trigger_keywords:
+  - create omicsclaw skill
+  - add new skill
+  - scaffold skill
+  - create reusable workflow
+  - 新增 skill
+  - 创建 skill
+  - 封装成 skill
+  tags:
+  - orchestrator
+  - scaffold
+  - skill-builder
+  - meta
+  - code-generation
+  aliases: []
+interface:
+  inputs:
+    modalities: []
+    file_types: []
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --domain
+    - --input-format
+    - --method
+    - --no-tests
+    - --output-item
+    - --promote-from-latest
+    - --request
+    - --skill-name
+    - --source-analysis-dir
+    - --summary
+    - --trigger-keyword
+    hints: {}
+  outputs:
+    files:
+    - output_dir/SCAFFOLD_SUMMARY.md
+    - output_dir/report.md
+    - output_dir/result.json
+    - skills/<domain>/<skill-name>/
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: omics_skill_builder.py
+deps:
+  python:
+  - PyYAML
+  cli: []
+compatibility:
+  platforms:
+  - macos
+  - linux
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+  homepage: https://github.com/TianGzlab/OmicsClaw
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

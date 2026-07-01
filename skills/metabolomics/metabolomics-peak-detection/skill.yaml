@@ -1,0 +1,88 @@
+schema_version: 2
+id: metabolomics-peak-detection
+name: metabolomics-peak-detection
+domain: metabolomics
+type: leaf
+version: 0.5.0
+author: OmicsClaw
+license: MIT
+emoji: ⛰️
+summary:
+  load_when: running per-sample peak picking on a feature × intensity table via `scipy.signal.find_peaks`
+    — emits per-(sample, feature) detected peaks with prominence and width
+  skip_when:
+  - condition: working with mz / RT raw scans
+    use: metabolomics-xcms-preprocessing
+  - condition: only normalising / quantifying
+    use: metabolomics-quantification
+  trigger_keywords:
+  - peak detection
+  - feature detection
+  - XCMS
+  - MZmine
+  - MS-DIAL
+  - peak picking
+  tags:
+  - metabolomics
+  - peak-detection
+  - find-peaks
+  - xcms
+  - mzmine
+  aliases:
+  - peak-detect
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - csv
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --distance
+    - --height
+    - --prominence
+    - --sample-prefix
+    hints: {}
+  outputs:
+    files:
+    - tables/detected_peaks.csv
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: peak_detect.py
+deps:
+  python:
+  - numpy
+  - pandas
+  - scipy
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

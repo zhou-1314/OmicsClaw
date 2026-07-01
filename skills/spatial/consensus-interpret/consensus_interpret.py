@@ -48,6 +48,11 @@ from _run_reader import load_typed_run
 
 logger = logging.getLogger("consensus-interpret")
 
+# Keep in sync with skill.yaml `version` (SSOT, ADR 0037). Required leaf-skill
+# module constants (omicsclaw.skill.protocol.validate_skill_module).
+SKILL_NAME = "consensus-interpret"
+SKILL_VERSION = "0.1.0"
+
 _BANNER_AI = "[A+I: Interpreted on verified consensus]"
 _BANNER_NOLLM = "[I-noLLM: Structural patterns only — biology annotation disabled]"
 

@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: genomics-cnv-calling
-description: Load when calling CNV segments via CBS-style segmentation on a bin-level log2-ratio CSV from exome / WGS coverage — emits per-segment 5-class CN state (`amplification` / `gain` / `neutral` / `loss` / `deep_deletion`), per-chromosome summary, genome-fraction-altered. Skip when working with single-cell / spatial CNV (use `spatial-cnv`).
+description: Load when calling CNV segments via CBS-style segmentation on a bin-level log2-ratio CSV from
+  exome / WGS coverage — emits per-segment 5-class CN state (`amplification` / `gain` / `neutral` / `loss`
+  / `deep_deletion`), per-chromosome summary, genome-fraction-altered. Skip when working with single-cell
+  / spatial CNV (use spatial-cnv).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 📊
 tags:
 - genomics
 - cnv
@@ -35,16 +41,18 @@ spatial / single-cell CNV use `spatial-cnv`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Bin-level log2 ratios | `.csv` with columns `chrom`, `start`, `end`, `log2_ratio` | yes (unless `--demo`) |
-| Segmentation significance | `--alpha <float>` (default 0.01) | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| CNV segments | `tables/cnv_segments.csv` | per-segment columns: `chrom`, `start`, `end`, `n_bins`, `log2_ratio`, `cn_state` (5-class), `estimated_cn` |
-| Per-chromosome | `tables/cnv_per_chromosome.csv` | n_segments + altered fraction per chromosome |
-| Report | `report.md` + `result.json` | summary includes `n_amplifications`, `n_deep_deletions`, `n_gains`, `n_losses`, `genome_fraction_altered` |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/cnv_per_chromosome.csv`
+- `tables/cnv_segments.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

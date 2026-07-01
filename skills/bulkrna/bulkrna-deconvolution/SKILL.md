@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: bulkrna-deconvolution
-description: Load when estimating cell-type proportions in bulk RNA-seq samples from a single-cell or signature-matrix reference. Skip if the data is already single-cell (no deconvolution needed) or for spatial deconvolution (use spatial-deconv).
+description: Load when estimating cell-type proportions in bulk RNA-seq samples from a single-cell or
+  signature-matrix reference. Skip when the data is already single-cell (no deconvolution needed); spatial
+  deconvolution (use spatial-deconv).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: 🧩
 tags:
 - bulkrna
 - deconvolution
@@ -27,18 +32,21 @@ implemented; the wrapper does not call CIBERSORTx or MuSiC.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Bulk count matrix | `.csv` (gene × sample) | yes (or `--demo`) |
-| Reference | `--reference` CSV (signature matrix) or `.h5ad` (sc reference) | yes (or `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Proportions | `tables/proportions.csv` | sample × cell_type, rows sum to 1 |
-| Dominant types | `tables/dominant_types.csv` | per-sample top cell type |
-| Stacked-bar plot | `figures/proportions_stacked.png` | per-sample composition |
-| Heatmap | `figures/proportions_heatmap.png` | sample × cell_type intensity |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/dominant_types.csv`
+- `tables/proportions.csv`
+- `figures/mean_proportions_pie.png`
+- `figures/proportions_heatmap.png`
+- `figures/proportions_stacked.png`
+- `report.md`
+- `result.json`
 
 ## Flow
 
@@ -61,8 +69,6 @@ implemented; the wrapper does not call CIBERSORTx or MuSiC.
 python omicsclaw.py run bulkrna-deconvolution --demo
 python omicsclaw.py run bulkrna-deconvolution \
   --input counts.csv --reference signature.csv --output results/
-python omicsclaw.py run bulkrna-deconvolution \
-  --input counts.csv --reference scref.h5ad --output results/
 ```
 
 ## See also

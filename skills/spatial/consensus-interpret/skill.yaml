@@ -1,0 +1,100 @@
+schema_version: 2
+id: consensus-interpret
+name: consensus-interpret
+domain: spatial
+type: leaf
+version: 0.1.0
+author: OmicsClaw
+license: Apache-2.0
+summary:
+  load_when: biologically interpreting a finished verified consensus run (consensus-domains / sc-consensus-clustering)
+    — inline DE, marker-DB lookup, and LLM cell-type naming with mandatory marker citations + evidence-bound
+    next-step recommendations
+  skip_when:
+  - condition: the consensus run failed (fix it first)
+  - condition: forward query→skill routing
+    use: orchestrator
+  trigger_keywords:
+  - consensus interpret
+  - interpret consensus
+  - explain consensus
+  - annotate consensus
+  - consensus cell type
+  - name clusters
+  - biological interpretation
+  - next step after consensus
+  - interpreted consensus
+  - consensus biology
+  tags:
+  - spatial
+  - consensus
+  - interpreted-layer
+  - biology-annotation
+  - marker-grounded
+  - backward-proof-driven-recommendation
+  aliases: []
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - json
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --tissue
+    - --adata
+    - --markers
+    - --no-llm
+    - --seed
+    - --top-k-markers
+    - --top-k-next-steps
+    - --coverage-floor
+    hints: {}
+  outputs:
+    files:
+    - interpreted_report.md
+    - interpreted_assignments.json
+    - de_per_cluster.csv
+    - contradiction_regions.csv
+    - audit.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: consensus_interpret.py
+deps:
+  python:
+  - anndata
+  - numpy
+  - pandas
+  - scanpy
+  - scikit-learn
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+  tests: tests/
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

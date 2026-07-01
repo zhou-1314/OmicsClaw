@@ -1,6 +1,11 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-integrate-cluster
-description: 'Load when running a single batch-correction representation (none/Harmony/Scanorama/scVI) + clustering of single-cell data as one self-contained unit — normally fanned out as a member of sc-consensus-integration. Skip when you want the full integration consensus (use sc-consensus-integration) or resolution-robust clustering (use sc-consensus-clustering).'
+description: Load when running a single batch-correction representation (none/Harmony/Scanorama/scVI)
+  + clustering of single-cell data as one self-contained unit — normally fanned out as a member of sc-consensus-integration.
+  Skip when you want the full integration consensus (use sc-consensus-integration); resolution-robust
+  clustering (use sc-consensus-clustering).
 version: 0.1.0
 author: OmicsClaw
 license: MIT
@@ -43,33 +48,21 @@ consensus fans out genuinely different batch-correction representations.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Preprocessed AnnData | `--input <preprocessed.h5ad>` with `obs[batch_key]` (≥2 batches) | yes (unless `--demo`) |
-| Synthetic demo | `--demo` (small 2-batch synthetic AnnData; `--method none`) | optional |
-| Output (member) dir | `--output <member_dir>` | yes |
-| Integration method | `--method {none,harmony,scanorama,scvi}` | no (default `none`) |
-| Batch key | `--batch-key batch` | no |
-| Cluster method | `--cluster-method leiden` | no |
-| Fixed resolution | `--resolution 1.0` | no |
-| Graph / PCA params | `--n-neighbors 15 --n-pcs 50 --n-top-genes` | no |
-| Seed | `--seed 0` | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Embedding + labels | `figure_data/embedding_points.csv` | `cell_id`, `embedding_key`, `coord1`, `coord2`, `<cluster-method>`, `batch` |
-| Clustering summary | `figure_data/clustering_summary.csv` | `method`, `representation_used`, `n_clusters`, `resolution`, `batch_key`, `n_batches` |
-| Processed AnnData | `processed.h5ad` | carries `obsm[representation_used]` + `obsm["X_pca"]` + labels + batch key |
-| Result envelope | `result.json` | standardised summary |
+**Inputs**
 
-### Methods (`--method`)
+- Modalities: scrna
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
 
-| method | backend | device | obsm key | notes |
-|---|---|---|---|---|
-| `none` | unintegrated baseline | CPU | `X_pca` | reveals batch-artifact clusters |
-| `harmony` | Harmony | CPU | `X_harmony` | fast, deterministic |
-| `scanorama` | Scanorama | CPU | `X_scanorama` | needs shared genes across batches |
-| `scvi` | scVI VAE | GPU | `X_scvi` | **stochastic** (reproducible within tolerance); opt-in, serialise GPU members |
+**Outputs**
+
+- `figure_data/embedding_points.csv`
+- `figure_data/clustering_summary.csv`
+- `processed.h5ad`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obsm`: `X_pca`
 
 ## Flow
 
@@ -110,6 +103,6 @@ python skills/singlecell/scrna/sc-integrate-cluster/sc_integrate_cluster.py \
 
 - `references/methodology.md` — integrate-then-cluster member rationale
 - `references/output_contract.md` — the `figure_data/` schema the consensus reads
-- `references/parameters.md` — every CLI flag (generated from `parameters.yaml`)
+- `references/parameters.md` — every CLI flag (generated from `skill.yaml`)
 - Adjacent skills: `sc-preprocessing` (upstream), `sc-consensus-integration` (the consensus that fans this out), `sc-clustering` (the non-integration single-resolution clusterer)
 - ADR 0016/0029 — workflow runtime, integration intrinsic panel

@@ -35,7 +35,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "bulkrna-de"
-SKILL_VERSION = "0.5.0"
+SKILL_VERSION = "0.3.0"
 SUPPORTED_METHODS = ("deseq2", "ttest")
 
 

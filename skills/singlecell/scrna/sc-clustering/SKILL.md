@@ -1,6 +1,10 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-clustering
-description: Load when building the neighbour graph, embedding (UMAP/t-SNE/diffmap/PHATE), and clustering (Leiden/Louvain) on a normalised single-cell AnnData. Skip when QC/normalisation/HVG/PCA have not run yet (use sc-preprocessing) or for marker ranking after clustering (use sc-markers).
+description: Load when building the neighbour graph, embedding (UMAP/t-SNE/diffmap/PHATE), and clustering
+  (Leiden/Louvain) on a normalised single-cell AnnData. Skip when QC/normalisation/HVG/PCA have not run
+  yet (use sc-preprocessing); marker ranking after clustering (use sc-markers).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
@@ -39,18 +43,38 @@ explicit resolution or auto-resolution search.  Designed to read from
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Normalised AnnData | `.h5ad` with `obsm["X_pca"]` (or `--use-rep <key>`) | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Clustered AnnData | `processed.h5ad` | adds `obs["leiden"]` / `obs["louvain"]`, `obsm["X_<embedding>"]` |
-| Per-cluster summary | `tables/cluster_summary.csv` | cells per cluster |
-| Run-level summary | `tables/clustering_summary.csv` | resolution, n_clusters, modularity |
-| Embedding points | `tables/embedding_points.csv` | per-cell embedding coordinates |
-| Diagnostic figures | embedding gallery (always); `figures/auto_resolution_search.png` only when `--resolution auto` | gallery + conditional sweep figure |
-| Report | `report.md` + `result.json` | always written |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+- Expects `obsm`: `X_pca`
+
+**Outputs**
+
+- `tables/cell_metadata.csv`
+- `tables/cluster_qc_summary.csv`
+- `tables/cluster_summary.csv`
+- `tables/clustering_summary.csv`
+- `tables/embedding_points.csv`
+- `figures/auto_resolution_search.png`
+- `figures/cluster_qc_heatmap.png`
+- `figures/cluster_size_summary.png`
+- `figures/embedding_clusters.png`
+- `figures/embedding_comparison.png`
+- `figures/pca_scatter.png`
+- `figures/pca_variance.png`
+- `figures/r_cell_barplot.png`
+- `figures/r_cell_proportion.png`
+- `figures/r_embedding_discrete.png`
+- `figures/r_embedding_feature.png`
+- `analysis_summary.txt`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `leiden`, `louvain`; `obsm`: `X_<embedding>`
 
 ## Flow
 

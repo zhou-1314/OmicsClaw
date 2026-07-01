@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-filter
-description: Load when removing low-quality cells and lowly-detected genes from a single-cell AnnData using QC-derived thresholds or tissue presets. Skip for the full normalize→HVG→PCA→cluster pipeline (use sc-preprocessing) or when reads are still raw FASTQ (use sc-fastq-qc → sc-count first).
+description: Load when removing low-quality cells and lowly-detected genes from a single-cell AnnData
+  using QC-derived thresholds or tissue presets. Skip when the full normalize→HVG→PCA→cluster pipeline
+  (use sc-preprocessing); reads are still raw FASTQ (use sc-fastq-qc).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: S
 tags:
 - singlecell
 - scrna
@@ -33,18 +38,33 @@ normalise, cluster, or annotate.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Single-cell AnnData | `.h5ad` | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Filtered AnnData | `processed.h5ad` | post-filter, contract preserved |
-| Filter stats | `tables/filter_stats.csv` | per-rule keep/drop counts |
-| Retention summary | `tables/filter_summary.csv` | workflow + threshold metadata + cells/genes-retained pct |
-| Diagnostic figures | `figures/filter_comparison.png`, `figures/filter_summary.png` | before/after panels |
-| Provenance | `result.json` | `summary` includes `expression_source`, `warnings` |
-| Report | `report.md` | always written |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+
+**Outputs**
+
+- `tables/cell_metadata.csv`
+- `tables/filter_reasons.csv`
+- `tables/filter_state.csv`
+- `tables/filter_stats.csv`
+- `tables/filter_summary.csv`
+- `tables/gene_expression.csv`
+- `tables/retention_summary.csv`
+- `figures/filter_comparison.png`
+- `figures/filter_reason_summary.png`
+- `figures/filter_state_scatter.png`
+- `figures/filter_summary.png`
+- `figures/filter_thresholds.png`
+- `figures/r_feature_violin.png`
+- `analysis_summary.txt`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`)
 
 ## Flow
 

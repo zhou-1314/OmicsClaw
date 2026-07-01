@@ -1,0 +1,89 @@
+schema_version: 2
+id: bulkrna-deconvolution
+name: bulkrna-deconvolution
+domain: bulkrna
+type: leaf
+version: 0.3.0
+author: OmicsClaw
+license: MIT
+emoji: 🧩
+summary:
+  load_when: estimating cell-type proportions in bulk RNA-seq samples from a single-cell or signature-matrix
+    reference
+  skip_when:
+  - condition: the data is already single-cell (no deconvolution needed)
+  - condition: spatial deconvolution
+    use: spatial-deconv
+  trigger_keywords:
+  - bulk deconvolution
+  - cell type proportion
+  - NNLS
+  - CIBERSORTx
+  - bulk deconv
+  - cell fraction
+  tags:
+  - bulkrna
+  - deconvolution
+  - NNLS
+  - cell-type-proportion
+  aliases:
+  - bulk-deconv
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - csv
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --reference
+    hints: {}
+  outputs:
+    files:
+    - tables/dominant_types.csv
+    - tables/proportions.csv
+    - figures/mean_proportions_pie.png
+    - figures/proportions_heatmap.png
+    - figures/proportions_stacked.png
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: bulkrna_deconvolution.py
+deps:
+  python:
+  - matplotlib
+  - numpy
+  - pandas
+  - scipy
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+  tests: tests/
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

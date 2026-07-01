@@ -1,6 +1,10 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-pseudotime
-description: Load when ordering cells along a developmental trajectory in a normalised scRNA AnnData via DPT, Palantir, VIA, CellRank, Slingshot (R), or Monocle3 (R). Skip when ranking marker genes per cluster (use sc-markers) or for RNA velocity vector fields (use sc-velocity).
+description: Load when ordering cells along a developmental trajectory in a normalised scRNA AnnData via
+  DPT, Palantir, VIA, CellRank, Slingshot (R), or Monocle3 (R). Skip when ranking marker genes per cluster
+  (use sc-markers); RNA velocity vector fields (use sc-velocity).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
@@ -51,22 +55,41 @@ vector fields (kinetics, not ordering) use `sc-velocity`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Normalised clustered AnnData | `.h5ad` with cluster column + low-D rep in `obsm` | yes (unless `--demo`) |
-| Root anchor | `--root-cluster` or `--root-cell` (recommended for `dpt` / `palantir` / `cellrank`) | conditional |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated AnnData | `processed.h5ad` | adds `obs["pseudotime"]`, optional `obsm["trajectory_fate_probabilities"]` (palantir / via / cellrank) |
-| Per-cell pseudotime | `tables/pseudotime_cells.csv` | always |
-| Trajectory genes | `tables/trajectory_genes.csv` | top-`--n-genes` correlated with pseudotime |
-| Run summary | `tables/trajectory_summary.csv` | always |
-| Fate probabilities | `tables/fate_probabilities.csv` | palantir / via / cellrank |
-| Slingshot curves | `tables/slingshot_curves.csv` | slingshot_r |
-| Monocle3 trajectory | `monocle3_trajectory.csv` | monocle3_r |
-| Figures | `figures/pseudotime_embedding.png`, `figures/pseudotime_distribution_by_group.png` | always |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+
+**Outputs**
+
+- `tables/cell_metadata.csv`
+- `tables/fate_probabilities.csv`
+- `tables/gene_expression.csv`
+- `tables/monocle3_pseudotime.csv`
+- `tables/monocle3_trajectory.csv`
+- `tables/pseudotime_cells.csv`
+- `tables/pseudotime_points.csv`
+- `tables/slingshot_branches.csv`
+- `tables/slingshot_curves.csv`
+- `tables/slingshot_pseudotime.csv`
+- `tables/trajectory_genes.csv`
+- `tables/trajectory_summary.csv`
+- `figures/monocle3_trajectory_graph.png`
+- `figures/r_cell_density.png`
+- `figures/r_embedding_discrete.png`
+- `figures/r_embedding_feature.png`
+- `figures/r_pseudotime_dynamic.png`
+- `figures/r_pseudotime_heatmap.png`
+- `figures/r_pseudotime_lineage.png`
+- `analysis_summary.txt`
+- `input.h5ad`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `pseudotime`; `obsm`: `trajectory_fate_probabilities`
 
 ## Flow
 

@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: bulkrna-read-alignment
-description: Load when summarising STAR / HISAT2 / Salmon alignment-rate logs in bulk RNA-seq. Skip if data is raw FASTQ (use bulkrna-read-qc) or already counted (use bulkrna-qc), or for genome-DNA alignment (use genomics-alignment).
+description: Load when summarising STAR / HISAT2 / Salmon alignment-rate logs in bulk RNA-seq. Skip when
+  data is raw FASTQ (use bulkrna-read-qc); already counted (use bulkrna-qc); genome-DNA alignment (use
+  genomics-alignment).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: 🧬
 tags:
 - bulkrna
 - alignment
@@ -30,17 +35,20 @@ count matrix.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Aligner log | `Log.final.out` (STAR), `.log` (HISAT2), `meta_info.json` (Salmon) | yes (or `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Mapping summary figure | `figures/mapping_summary.png` | unique vs multi vs unmapped |
-| Gene body coverage | `figures/gene_body_coverage.png` | 5'→3' bias profile |
-| Alignment composition | `figures/alignment_composition.png` | breakdown of mapping outcomes |
-| Stats table | `tables/alignment_stats.csv` | parsed numeric metrics |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.out`, `.log`, `.json`
+
+**Outputs**
+
+- `tables/alignment_stats.csv`
+- `figures/alignment_composition.png`
+- `figures/gene_body_coverage.png`
+- `figures/mapping_summary.png`
+- `report.md`
+- `result.json`
 
 ## Flow
 

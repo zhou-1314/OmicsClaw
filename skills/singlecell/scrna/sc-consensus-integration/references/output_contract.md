@@ -32,5 +32,5 @@ fanned-out member skill differs (`sc-integrate-cluster` here).
 | `result.json` | summary: surviving members, operator, cluster count, run id |
 
 `report.md` and `result.json` are framework-standard. All paths are produced by
-the runtime; this is a `type: workflow` shim, so the per-file substring contract
+the runtime; this is a `type: consensus` shim, so the per-file substring contract
 check is delegated to the runtime rather than enforced against the shim.

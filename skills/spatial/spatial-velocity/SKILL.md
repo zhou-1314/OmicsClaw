@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: spatial-velocity
-description: Load when estimating RNA velocity on a spatial AnnData with `layers["spliced"]` + `layers["unspliced"]` via scVelo (stochastic / deterministic / dynamical) or veloVI (deep generative). Skip when input lacks the spliced/unspliced layers (must be quantified upstream by velocyto / kb-python / STARsolo) or for non-spatial scRNA velocity (use `sc-velocity`).
+description: Load when estimating RNA velocity on a spatial AnnData with `layers["spliced"]` + `layers["unspliced"]`
+  via scVelo (stochastic / deterministic / dynamical) or veloVI (deep generative). Skip when input lacks
+  the spliced/unspliced layers (must be quantified upstream by velocyto / kb-python / STARsolo); non-spatial
+  scRNA velocity (use sc-velocity).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🏎️
 tags:
 - spatial
 - velocity
@@ -47,19 +53,51 @@ trajectory inference without spliced layers use `spatial-trajectory`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Spatial AnnData with spliced/unspliced layers | `.h5ad` with `layers["spliced"]`, `layers["unspliced"]`, `obsm["spatial"]`, `obs[cluster_key]` (default `leiden`) | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated AnnData | `processed.h5ad` | `layers["velocity"]` (every method); `layers["latent_time_velovi"]` + `layers["fit_t"]` (velovi only); `obs["velocity_speed"]`, `obs["latent_time"]` (velovi); `var["fit_scaling"]`, `var["velocity_genes"]`, `var["fit_t_"]` (dynamical) |
-| Cell-level metrics | `tables/cell_velocity_metrics.csv` | per-cell speed / coherence |
-| Gene-level summary | `tables/gene_velocity_summary.csv` | per-gene fit stats |
-| Velocity-gene hits | `tables/velocity_gene_hits.csv` | gene filter (R² + likelihood) |
-| Cluster summary | `tables/velocity_cluster_summary.csv` | per-cluster mean speed |
-| Top cells / genes | `tables/top_velocity_cells.csv`, `tables/top_velocity_genes.csv` | ranked summaries |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+- Expects `obsm`: `spatial`
+
+**Outputs**
+
+- `tables/cell_velocity_metrics.csv`
+- `tables/gene_velocity_summary.csv`
+- `tables/top_velocity_cells.csv`
+- `tables/top_velocity_genes.csv`
+- `tables/velocity_cell_metrics.csv`
+- `tables/velocity_cluster_summary.csv`
+- `tables/velocity_gene_hits.csv`
+- `tables/velocity_gene_summary.csv`
+- `tables/velocity_run_summary.csv`
+- `tables/velocity_spatial_points.csv`
+- `tables/velocity_summary.csv`
+- `tables/velocity_top_cells.csv`
+- `tables/velocity_top_genes.csv`
+- `tables/velocity_umap_points.csv`
+- `figures/velocity_cluster_summary.png`
+- `figures/velocity_confidence_distribution.png`
+- `figures/velocity_confidence_spatial.png`
+- `figures/velocity_confidence_umap.png`
+- `figures/velocity_heatmap.png`
+- `figures/velocity_latent_time_spatial.png`
+- `figures/velocity_layer_proportions.png`
+- `figures/velocity_paga.png`
+- `figures/velocity_phase.png`
+- `figures/velocity_pseudotime_spatial.png`
+- `figures/velocity_speed_distribution.png`
+- `figures/velocity_speed_spatial.png`
+- `figures/velocity_speed_umap.png`
+- `figures/velocity_stream_spatial.png`
+- `figures/velocity_stream_umap.png`
+- `figures/velocity_top_genes_barplot.png`
+- `figures/velocity_transition_confidence_umap.png`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `velocity_speed`, `latent_time`; `var`: `fit_scaling`, `velocity_genes`, `fit_t_`; `layers`: `velocity`, `latent_time_velovi`, `fit_t`
 
 ## Flow
 

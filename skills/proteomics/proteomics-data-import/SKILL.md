@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: proteomics-data-import
-description: Load when ingesting a MaxQuant `proteinGroups.txt`, FragPipe `combined_protein.tsv`, DIA-NN report, or generic CSV / TSV protein-quantification table — normalises columns to a standard schema, emits `tables/proteins.csv`. Skip when raw spectra are the input (run the search engine first) or when the file is already OmicsClaw schema.
+description: Load when ingesting a MaxQuant `proteinGroups.txt`, FragPipe `combined_protein.tsv`, DIA-NN
+  report, or generic CSV / TSV protein-quantification table — normalises columns to a standard schema,
+  emits `tables/proteins.csv`. Skip when raw spectra are the input (run the search engine first); the
+  file is already OmicsClaw schema.
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 📥
 tags:
 - proteomics
 - import
@@ -35,15 +41,17 @@ table.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Search-engine output | `proteinGroups.txt` (MaxQuant), `combined_protein.tsv` (FragPipe), `report.tsv` (DIA-NN), or generic `.csv` / `.tsv` | yes (unless `--demo`) |
-| Format | `--format {maxquant,fragpipe,diann,generic}` (default `maxquant`) | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Normalised proteins | `tables/proteins.csv` | OmicsClaw schema: lowercase `protein_id`, `gene_name`, plus `LFQ_<sample>` / `Int_<sample>` intensity columns (`proteomics_data_import.py:85`) |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.txt`, `.tsv`, `.csv`
+
+**Outputs**
+
+- `tables/proteins.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

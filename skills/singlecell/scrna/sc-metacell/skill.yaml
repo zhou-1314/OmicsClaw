@@ -1,0 +1,114 @@
+schema_version: 2
+id: sc-metacell
+name: sc-metacell
+domain: singlecell
+type: leaf
+version: 0.2.0
+author: OmicsClaw
+license: MIT
+summary:
+  load_when: aggregating single cells into metacells (sample-aware coarse-grained pseudo-cells) on a normalised
+    scRNA AnnData via SEACells or KMeans on a low-D embedding
+  skip_when:
+  - condition: ranking marker genes per cluster
+    use: sc-markers
+  - condition: trajectory pseudotime ordering
+    use: sc-pseudotime
+  trigger_keywords: []
+  tags:
+  - singlecell
+  - scrna
+  - metacell
+  - seacells
+  - aggregation
+  - pseudo-cells
+  aliases: []
+interface:
+  inputs:
+    modalities:
+    - scrna
+    file_types:
+    - h5ad
+    preconditions:
+      data_shape:
+        requires_preprocessed: true
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --celltype-key
+    - --max-iter
+    - --method
+    - --min-iter
+    - --n-metacells
+    - --n-neighbors
+    - --n-pcs
+    - --r-enhanced
+    - --seed
+    - --use-rep
+    hints: {}
+  outputs:
+    files:
+    - tables/cell_metadata.csv
+    - tables/cell_to_metacell.csv
+    - tables/centroid_points.csv
+    - tables/embedding_points.csv
+    - tables/metacell_summary.csv
+    - figures/metacell_centroids.png
+    - figures/metacell_size_distribution.png
+    - figures/r_embedding_discrete.png
+    - analysis_summary.txt
+    - metacells.h5ad
+    - metacells_annotated.h5ad
+    - processed.h5ad
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+    anndata:
+      saves_h5ad: true
+      obs:
+      - metacell
+      obsm: []
+      var: []
+      layers: []
+      uns: []
+runtime:
+  language: python
+  entry: sc_metacell.py
+deps:
+  python:
+  - anndata
+  - matplotlib
+  - numpy
+  - pandas
+  - scanpy
+  - scikit-learn
+  - scipy
+  - SEACells
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+  - r_visualization.md
+  tests: tests/
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

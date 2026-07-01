@@ -1,0 +1,87 @@
+schema_version: 2
+id: metabolomics-xcms-preprocessing
+name: metabolomics-xcms-preprocessing
+domain: metabolomics
+type: leaf
+version: 0.5.0
+author: OmicsClaw
+license: MIT
+emoji: 🧪
+summary:
+  load_when: running an XCMS-style preprocessing summary on LC-MS metabolomics raw / vendor-converted
+    files — emits a peak table with m/z, retention time, and per-sample intensities
+  skip_when:
+  - condition: working with an already-built peak table
+    use: metabolomics-peak-detection
+  - condition: only annotation is needed
+    use: metabolomics-annotation
+  trigger_keywords:
+  - xcms
+  - metabolomics preprocessing
+  - LC-MS
+  - peak detection
+  - RT alignment
+  tags:
+  - metabolomics
+  - xcms
+  - preprocessing
+  - peak-detection
+  - lc-ms
+  - gc-ms
+  - centwave
+  aliases:
+  - xcms-preprocess
+interface:
+  inputs:
+    modalities:
+    - lc-ms
+    file_types: []
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --peakwidth-max
+    - --peakwidth-min
+    - --ppm
+    hints: {}
+  outputs:
+    files:
+    - tables/peak_table.csv
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: metabolomics_xcms_preprocessing.py
+deps:
+  python:
+  - numpy
+  - pandas
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

@@ -39,7 +39,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "sc-metacell"
-SKILL_VERSION = "0.1.0"
+SKILL_VERSION = "0.2.0"
 
 # R Enhanced plotting configuration
 R_ENHANCED_PLOTS = {

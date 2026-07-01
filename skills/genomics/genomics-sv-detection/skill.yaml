@@ -1,0 +1,85 @@
+schema_version: 2
+id: genomics-sv-detection
+name: genomics-sv-detection
+domain: genomics
+type: leaf
+version: 0.5.0
+author: OmicsClaw
+license: MIT
+emoji: 🧱
+summary:
+  load_when: summarising structural variants from an SV VCF (DEL / DUP / INV / TRA) — BND-notation parsing,
+    size classification, per-type counts
+  skip_when:
+  - condition: working with small SNVs / indels
+    use: genomics-variant-calling
+  - condition: calling SVs from BAM (run Manta / Delly / Sniffles first)
+  trigger_keywords:
+  - structural variant
+  - SV
+  - Manta
+  - Delly
+  - Lumpy
+  - Sniffles
+  tags:
+  - genomics
+  - structural-variants
+  - sv
+  - manta
+  - delly
+  - sniffles
+  - bnd
+  aliases:
+  - sv-detect
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - vcf
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --n-svs
+    hints: {}
+  outputs:
+    files:
+    - tables/structural_variants.csv
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: sv_detection.py
+deps:
+  python:
+  - numpy
+  - pandas
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

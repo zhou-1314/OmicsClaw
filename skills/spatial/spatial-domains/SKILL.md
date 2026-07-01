@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: spatial-domains
-description: Load when detecting tissue domains / niches on a preprocessed spatial AnnData via Leiden / Louvain (spatial-weighted) or graph-neural backends (SpaGCN / STAGATE / GraphST / BANKSY / CellCharter). Skip when ranking spatially variable genes (use spatial-genes) or for spot-level cell-type annotation (use spatial-annotate).
+description: Load when detecting tissue domains / niches on a preprocessed spatial AnnData via Leiden
+  / Louvain (spatial-weighted) or graph-neural backends (SpaGCN / STAGATE / GraphST / BANKSY / CellCharter).
+  Skip when ranking spatially variable genes (use spatial-genes); spot-level cell-type annotation (use
+  spatial-annotate).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🗺️
 tags:
 - spatial
 - domains
@@ -63,17 +69,33 @@ cell-type labels use `spatial-annotate`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Preprocessed spatial AnnData | `.h5ad` with `obsm["X_pca"]` + `obsm["spatial"]` | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated AnnData | `processed.h5ad` | adds `obs["spatial_domain"]` (categorical); per-method embedding (`obsm["X_stagate"]` / `X_graphst` / `X_banksy_pca` / `X_cellcharter`) |
-| Domain summary | `tables/domain_summary.csv` | per-domain count + proportion |
-| Per-spot assignment | `tables/domain_assignments.csv` | always |
-| Neighbour mixing | `tables/domain_neighbor_mixing.csv` | when neighbourhood metrics computed |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.h5ad`
+- Expects `obsm`: `X_pca`, `spatial`
+
+**Outputs**
+
+- `tables/domain_assignments.csv`
+- `tables/domain_counts.csv`
+- `tables/domain_method_embedding_points.csv`
+- `tables/domain_neighbor_mixing.csv`
+- `tables/domain_spatial_points.csv`
+- `tables/domain_summary.csv`
+- `tables/domain_umap_points.csv`
+- `figures/domain_local_purity_histogram.png`
+- `figures/domain_local_purity_spatial.png`
+- `figures/domain_neighbor_mixing.png`
+- `figures/domain_sizes.png`
+- `figures/pca_domains.png`
+- `figures/spatial_domains.png`
+- `figures/umap_domains.png`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `spatial_domain`; `obsm`: `X_stagate`, `X_graphst`, `X_banksy_pca`, `X_cellcharter`
 
 ## Flow
 

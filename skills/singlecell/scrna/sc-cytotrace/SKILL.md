@@ -1,6 +1,10 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-cytotrace
-description: Load when computing per-cell differentiation potency / stemness scores from gene-expression complexity on a scRNA AnnData via the CytoTRACE-simple method. Skip when ordering cells along a trajectory (use sc-pseudotime) or for marker-based cell-type labelling (use sc-cell-annotation).
+description: Load when computing per-cell differentiation potency / stemness scores from gene-expression
+  complexity on a scRNA AnnData via the CytoTRACE-simple method. Skip when ordering cells along a trajectory
+  (use sc-pseudotime); marker-based cell-type labelling (use sc-cell-annotation).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
@@ -38,17 +42,31 @@ Output goes into `obs["cytotrace_score"]`, `obs["cytotrace_potency"]`,
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Normalised or raw scRNA AnnData | `.h5ad` | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated AnnData | `processed.h5ad` | adds `obs["cytotrace_score"]` (float 0-1), `obs["cytotrace_potency"]` (6-level categorical), `obs["cytotrace_gene_count"]` (int) |
-| Per-cell scores | `tables/cytotrace_scores.csv` | always |
-| Embedding data | `figure_data/cytotrace_embedding.csv` | always |
-| Figures | `figures/potency_umap.png`, `figures/score_distribution.png`, `figures/potency_composition.png` | always |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+
+**Outputs**
+
+- `tables/cell_metadata.csv`
+- `tables/cytotrace_embedding.csv`
+- `tables/cytotrace_scores.csv`
+- `figures/potency_composition.png`
+- `figures/potency_umap.png`
+- `figures/r_cell_density.png`
+- `figures/r_cytotrace_boxplot.png`
+- `figures/r_embedding_discrete.png`
+- `figures/r_embedding_feature.png`
+- `figures/score_distribution.png`
+- `analysis_summary.txt`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `cytotrace_score`, `cytotrace_potency`, `cytotrace_gene_count`
 
 ## Flow
 

@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: bulkrna-trajblend
-description: Load when placing bulk RNA-seq samples on a single-cell reference's pseudotime axis (NNLS deconvolution + nearest-neighbour mapping). Skip for plain cell-type proportions (use bulkrna-deconvolution alone) or for native single-cell trajectory inference (use sc-pseudotime).
+description: Load when placing bulk RNA-seq samples on a single-cell reference's pseudotime axis (NNLS
+  deconvolution + nearest-neighbour mapping). Skip when plain cell-type proportions (use bulkrna-deconvolution);
+  native single-cell trajectory inference (use sc-pseudotime).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: 🔀
 tags:
 - bulkrna
 - trajectory
@@ -31,18 +36,22 @@ NNLS-plus-nearest-neighbour pipeline (PCA → kNN against ref); it does
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Bulk count matrix | `.csv` / `.tsv` (gene × sample) | yes (or `--demo`) |
-| sc reference | `--reference` `.h5ad` or `.csv` (must include pseudotime in `obs` for h5ad) | yes (or `--demo`) |
-| `--n-epochs` | int | default `50` — currently a no-op (the script's `argparse` help text already says "unused in fallback"); kept for forward-compat with a future training path |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Cell-type fractions | `tables/cell_fractions.csv` | sample × cell_type proportions (NNLS weights) |
-| Pseudotime estimates | `tables/pseudotime_estimates.csv` | per sample: pseudotime mean / std / mean_neighbor_dist / pc1 / pc2 |
-| Figures | `figures/*.png` | trajectory projection on reference UMAP/PCA |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.csv`, `.tsv`, `.h5ad`
+
+**Outputs**
+
+- `tables/cell_fractions.csv`
+- `tables/pseudotime_estimates.csv`
+- `figures/bulk_on_trajectory.png`
+- `figures/fraction_heatmap.png`
+- `figures/pseudotime_distribution.png`
+- `figures/trajectory_embedding.png`
+- `report.md`
+- `result.json`
 
 ## Flow
 

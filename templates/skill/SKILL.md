@@ -1,9 +1,12 @@
 ---
-name: skill-template
-description: Load when copying this directory to bootstrap a new OmicsClaw v2 skill (rename, fill in, then `git add`). Skip when an existing skill already covers the request.
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
+name: replace-me-skill
+description: Load when copying this directory to bootstrap a new OmicsClaw v2 skill (rename, fill in skill.yaml, regenerate). Skip when an existing skill already covers the request.
 version: 0.1.0
 author: OmicsClaw
 license: MIT
+emoji: "🔬"
 tags:
 - template
 - scaffold
@@ -13,13 +16,20 @@ tags:
 <!--
 Authoring checklist (delete this comment block before committing):
 
-  1. Rename: copy this directory, rename `replace_me.py` and the `tests/`
-     file, update frontmatter `name`, `parameters.yaml::script`.
-  2. Fill: `description` (≤50 words, "Load when … Skip when …"), the six
-     `##` sections below, and the three `references/*.md` stubs.
-  3. Implement: replace the synthetic-CSV demo in the script with real I/O.
-  4. Verify: `python scripts/generate_parameters_md.py <skill_dir>` then
-     `python scripts/skill_lint.py <skill_dir>` then `pytest tests/`.
+  1. Copy: `cp -r templates/skill skills/<domain>/<my-new-skill>`, then
+     `mv replace_me.py <my_new_skill>.py` and rename the tests/ file.
+  2. Fill skill.yaml (the machine contract — the SINGLE source of truth):
+     id/name/domain/emoji, summary.load_when + skip_when, interface,
+     runtime.entry, deps.python.  The header + `## Inputs & Outputs` block
+     below are GENERATED from it — never hand-edit them.
+  3. Write the narrative sections below (When to use / Flow / Gotchas /
+     Key CLI / See also) and the three `references/*.md` stubs.
+  4. Implement: replace the synthetic-CSV demo in the script with real I/O.
+  5. Regenerate + verify:
+       python scripts/generate_skill_md.py       skills/<domain>/<my-new-skill>
+       python scripts/generate_parameters_md.py  skills/<domain>/<my-new-skill>
+       python scripts/skill_lint.py              skills/<domain>/<my-new-skill>
+       pytest tests/
 
 Full usage notes, lint rules, and soft conventions live in
 `templates/skill/README.md`.
@@ -30,9 +40,9 @@ Full usage notes, lint rules, and soft conventions live in
 ## When to use
 
 <!--
-One short paragraph (3-6 lines).  Mirror the frontmatter description
-("Load when … Skip when …") and explicitly call out the closest adjacent
-skill so the agent knows when to redirect.
+One short paragraph (3-6 lines).  Mirror skill.yaml's summary.load_when /
+skip_when and explicitly call out the closest adjacent skill so the agent
+knows when to redirect.
 -->
 
 The user has `<input shape>` and wants `<output shape>`.  Pick this skill
@@ -41,19 +51,20 @@ when `<distinguishing condition>`.  For `<adjacent capability>` use
 
 ## Inputs & Outputs
 
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
+
 <!--
-One row per format.  Detailed schema lives in `references/output_contract.md`
-— do NOT duplicate column-by-column tables here.
+This section is REGENERATED from skill.yaml's `interface` (inputs + outputs).
+Do NOT hand-edit it — declare inputs/outputs in skill.yaml, then run
+`python scripts/generate_skill_md.py <skill_dir>` to refresh it.  The block
+below is the placeholder shape the generator will overwrite.
 -->
 
-| Input | Format | Required |
-|---|---|---|
-| Primary input | `<.h5ad / .csv / .vcf / …>` | yes (unless `--demo`) |
+**Outputs**
 
-| Output | Path | Notes |
-|---|---|---|
-| Primary table | `tables/<name>.csv` | one row per `<unit>` |
-| Report | `report.md` + `result.json` | always |
+- `tables/replace_me.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

@@ -26,6 +26,15 @@ the exact `sc-clustering` artifact schema so the consensus reader
    `figure_data/clustering_summary.csv`, `processed.h5ad` (the embedding the
    driver scores with the ADR 0029 panel), and `result.json`.
 
+## Methods (`--method`)
+
+| method | backend | device | obsm key | notes |
+|---|---|---|---|---|
+| `none` | unintegrated baseline | CPU | `X_pca` | reveals batch-artifact clusters |
+| `harmony` | Harmony | CPU | `X_harmony` | fast, deterministic |
+| `scanorama` | Scanorama | CPU | `X_scanorama` | needs shared genes across batches |
+| `scvi` | scVI VAE | GPU | `X_scvi` | **stochastic** (reproducible within tolerance); opt-in, serialise GPU members |
+
 ## Notes
 
 - `none` is the unintegrated baseline; clusters that appear only on `none` are

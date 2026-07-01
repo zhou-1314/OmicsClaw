@@ -7,6 +7,21 @@ The goal: `cp -r` this directory into the right `skills/<domain>/` location,
 rename the placeholders, and you should be ~80% of the way to a gold-standard
 skill like `skills/singlecell/scrna/sc-de` or `skills/spatial/spatial-de`.
 
+## The v2 layout (ADR 0037)
+
+A v2 skill is defined by ONE machine contract, `skill.yaml`, validated by
+`omicsclaw.skill.schema`. Everything else is generated one-way from it:
+
+- **`skill.yaml`** — the single source of truth (identity, `summary`,
+  `interface`, `runtime`, `deps`). Hand-edit THIS file.
+- **`SKILL.md`** — a narrative methodology card whose frontmatter header and
+  `## Inputs & Outputs` block are GENERATED from `skill.yaml`
+  (`scripts/generate_skill_md.py`); only the narrative sections are hand-written.
+- **`references/parameters.md`** — GENERATED from `skill.yaml.interface.parameters`
+  (`scripts/generate_parameters_md.py`).
+
+There is no `parameters.yaml` sidecar in v2 — its fields moved into `skill.yaml`.
+
 ## Bootstrap steps
 
 ```bash
@@ -17,13 +32,18 @@ mv replace_me.py <my_new_skill>.py
 mv tests/test_replace_me.py tests/test_<my_new_skill>.py
 
 # 2. Edit the placeholders
-#    - SKILL.md            frontmatter name/description/tags + body sections
-#    - parameters.yaml     domain, script, trigger_keywords, soft fields
+#    - skill.yaml          resolve every `# TODO` (id/name/domain, summary,
+#                          interface, runtime.entry, deps.python) — the machine
+#                          contract and single source of truth
 #    - <my_new_skill>.py   replace the synthetic-CSV demo with real I/O
+#    - SKILL.md            write the narrative body sections (the frontmatter
+#                          header + Inputs & Outputs block are generated)
 #    - references/*.md     fill in methodology / output contract
 
-# 3. Regenerate the autogen parameters reference after editing the sidecar
-python scripts/generate_parameters_md.py skills/<domain>/<my-new-skill>
+# 3. Regenerate the derived artifacts from skill.yaml
+python scripts/generate_skill_md.py       skills/<domain>/<my-new-skill>
+python scripts/generate_parameters_md.py  skills/<domain>/<my-new-skill>
+python scripts/audit_skill_requires.py --write   # finalize deps.python
 
 # 4. Verify
 python scripts/skill_lint.py skills/<domain>/<my-new-skill>
@@ -38,14 +58,15 @@ The full rule set lives in the script; the high-leverage rules are:
 
 | Surface | Rule |
 |---|---|
-| `SKILL.md` frontmatter `description` | Starts with `Load when`, contains a `Skip when/if/for` clause, ≤ 50 words |
-| `SKILL.md` body | ≤ 200 lines; must contain `## When to use`, `## Inputs & Outputs`, `## Flow`, `## Gotchas`, `## Key CLI`, `## See also` |
+| `skill.yaml` | Must validate against `omicsclaw.skill.schema` (`schema_version: 2`, known `domain`, `id`/`name`/`version`, `summary`, `runtime.entry`) |
+| `skill.yaml` `summary.skip_when` | Must declare ≥ 1 rule (parity with the v1 "Skip when" description contract) |
+| `skill.yaml` `runtime.entry` | Must resolve to a real file in the skill dir (unless `lifecycle.status: draft`) |
+| `skill.yaml` `interface.parameters.allowed_extra_flags` | Must exactly match the `--flag` literals declared via `add_argument(...)` in the script (excluding the runner-blocked trio `--input`/`--output`/`--demo`); kebab-case only |
+| `SKILL.md` body | ≤ 200 lines; must contain `## When to use`, `## Flow`, `## Gotchas`, `## Key CLI`, `## See also` (the `## Inputs & Outputs` block is generated) |
 | `SKILL.md` Gotchas | Each non-empty bullet must anchor to a real code path (`<script>.py:LINE`), `result.json["key"]`, or a `tables/`/`figures/` filename that the script actually writes |
-| `parameters.yaml` | Must define `domain`, `script`, `saves_h5ad`, `requires_preprocessed`, `trigger_keywords`, `legacy_aliases`, `allowed_extra_flags`, `param_hints` |
-| `parameters.yaml` `allowed_extra_flags` | Must exactly match the `--flag` literals declared via `add_argument(...)` in the script (excluding the runner-blocked trio `--input`/`--output`/`--demo`) |
 | `references/` | Must contain `methodology.md`, `output_contract.md`, `parameters.md` |
 | `references/output_contract.md` | Every `tables/X.csv` / `figures/X.png` / etc. it mentions must appear as a substring in the script (or any sibling `_lib/*.py` it imports) |
-| `references/parameters.md` | Must match the output of `scripts/generate_parameters_md.py` — regenerate after every sidecar edit |
+| `references/parameters.md` | Must match the output of `scripts/generate_parameters_md.py` — regenerate after every `skill.yaml` edit |
 
 ## Soft conventions (not lint-enforced, but every gold skill does this)
 

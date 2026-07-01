@@ -1,0 +1,133 @@
+schema_version: 2
+id: sc-multi-count
+name: sc-multi-count
+domain: singlecell
+type: leaf
+version: 0.3.0
+author: OmicsClaw
+license: MIT
+emoji: 🧬
+summary:
+  load_when: merging multiple single-sample scRNA-seq count matrices (one per sample-from-sc-count) into
+    a single downstream-ready AnnData with sample labels
+  skip_when:
+  - condition: input is one already-merged AnnData
+    use: sc-standardize-input
+  - condition: FASTQ→counts on each sample
+    use: sc-count
+  trigger_keywords:
+  - merge count matrices
+  - multi-sample count
+  - aggregate samples
+  - combine count outputs
+  - cellranger aggr alternative
+  tags:
+  - singlecell
+  - scrna
+  - multi-sample
+  - merge
+  - aggregation
+  aliases:
+  - scrna-multi-count
+interface:
+  inputs:
+    modalities:
+    - scrna
+    file_types: []
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --r-enhanced
+    - --sample-id
+    hints:
+      merge:
+        priority: input (multiple) -> sample-id -> output
+        params:
+        - input
+        - sample-id
+        defaults: {}
+        requires:
+        - two_or_more_processed_h5ad
+        tips:
+        - '--input: repeat for each sample, e.g. --input s1/processed.h5ad --input s2/processed.h5ad'
+        - '--sample-id: optional labels; if omitted, derived from directory or file names.'
+  outputs:
+    files:
+    - tables/Summary.csv
+    - tables/barcode_metrics.csv
+    - tables/barcodes.tsv
+    - tables/cell_metadata.csv
+    - tables/features.tsv
+    - tables/genes.tsv
+    - tables/metrics_summary.csv
+    - tables/per_sample_summary.csv
+    - figures/barcode_rank.png
+    - figures/count_complexity_scatter.png
+    - figures/count_distributions.png
+    - figures/sample_composition.png
+    - 3M-february-2018.txt
+    - 737K-august-2016.txt
+    - Aligned.sortedByCoord.out.bam
+    - analysis_summary.txt
+    - multiqc_report.html
+    - possorted_genome_bam.bam
+    - processed.h5ad
+    - standardized_input.h5ad
+    - web_summary.html
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+    anndata:
+      saves_h5ad: true
+      obs:
+      - sample_id
+      obsm: []
+      var: []
+      layers: []
+      uns: []
+runtime:
+  language: python
+  entry: sc_multi_count.py
+deps:
+  python:
+  - anndata
+  - matplotlib
+  - numpy
+  - pandas
+  - scanpy
+  - scipy
+  - seaborn
+  cli: []
+compatibility:
+  platforms:
+  - macos
+  - linux
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+  - r_visualization.md
+  tests: tests/
+  homepage: https://github.com/TianGzlab/OmicsClaw
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false
