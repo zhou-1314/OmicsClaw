@@ -23,6 +23,9 @@ class SkillRunResult:
     method: str | None = None
     readme_path: str = ""
     notebook_path: str = ""
+    # Adaptive-env provenance: which interpreter served this run —
+    # ``base`` | ``skip`` | ``probe`` | ``venv:<key>`` (ADR: adaptive-environment-provisioning).
+    runtime_source: str = "base"
     raw: Mapping[str, Any] = field(default_factory=dict)
 
     @property
@@ -49,7 +52,12 @@ class SkillRunResult:
         return text
 
     def to_legacy_dict(self) -> dict[str, Any]:
-        """Return the public dict shape expected by existing ``run_skill`` callers."""
+        """Return the public dict shape expected by existing ``run_skill`` callers.
+
+        ``runtime_source`` is intentionally NOT emitted here — this dict pins the
+        stable shape existing callers assert against. Read provenance from the model
+        attribute (``result.runtime_source``) or the ``raw`` mapping instead.
+        """
         return {
             "skill": self.skill,
             "success": self.success,
@@ -106,6 +114,7 @@ def coerce_skill_run_result(result: Mapping[str, Any]) -> SkillRunResult:
         method=str(method_value) if method_value else None,
         readme_path=str(result.get("readme_path") or ""),
         notebook_path=str(result.get("notebook_path") or ""),
+        runtime_source=str(result.get("runtime_source") or "base"),
         raw=dict(result),
     )
 
@@ -123,6 +132,7 @@ def build_skill_run_result(
     method: str | None = None,
     readme_path: str | Path | None = "",
     notebook_path: str | Path | None = "",
+    runtime_source: str = "base",
 ) -> SkillRunResult:
     """Build a normalized result from runner-native values."""
     return SkillRunResult(
@@ -137,6 +147,7 @@ def build_skill_run_result(
         method=str(method) if method else None,
         readme_path=str(readme_path or ""),
         notebook_path=str(notebook_path or ""),
+        runtime_source=str(runtime_source or "base"),
     )
 
 

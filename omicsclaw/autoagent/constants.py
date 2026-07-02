@@ -38,6 +38,11 @@ SUBPROCESS_ENV_WHITELIST: frozenset[str] = frozenset({
     "PYTHONPATH", "VIRTUAL_ENV", "CONDA_PREFIX", "CONDA_DEFAULT_ENV",
     "TMPDIR", "TMP", "TEMP", "SHELL",
     "R_HOME", "R_LIBS", "R_LIBS_USER", "JAVA_HOME",
+    # Adaptive env provisioning controls (ADR: adaptive-environment-provisioning)
+    # — forward so AutoAgent trial subprocesses resolve overlays the same way the
+    # CLI/desktop do.
+    "OMICSCLAW_ADAPTIVE_ENV", "OMICSCLAW_SKIP_ADAPTIVE_ENV", "OMICSCLAW_ENV_DIR",
+    "OMICSCLAW_RUN_PYTHON", "XDG_CACHE_HOME",
 })
 """Environment variables passed to trial subprocesses.
 
