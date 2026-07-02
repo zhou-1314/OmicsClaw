@@ -11,7 +11,7 @@ from omicsclaw.common.user_guidance import (
 )
 from omicsclaw.providers.patches import apply_deepseek_reasoning_passback
 
-from ..context.budget import estimate_message_size
+from ..context.budget import ContextBudgetStatus, estimate_message_size
 from ..context.compaction import (
     CompactionEvent,
     ContextCompactionConfig,
@@ -590,6 +590,8 @@ async def _emit_compaction_event(
     history_len: int,
     kept_len: int,
     applied_stages: tuple[str, ...],
+    budget_status: ContextBudgetStatus | None = None,
+    local_budget_status: ContextBudgetStatus | None = None,
 ) -> None:
     """Build a CompactionEvent and dispatch via the callback.
 
@@ -603,6 +605,8 @@ async def _emit_compaction_event(
         messages_compressed=omitted,
         tokens_saved_estimate=int(saved_chars / 3.5),
         applied_stages=applied_stages,
+        budget_status=budget_status,
+        local_budget_status=local_budget_status,
     )
     try:
         await _maybe_await(callbacks.on_context_compacted(event))
@@ -918,24 +922,36 @@ async def _execute_planned_tool_calls(
     tool_runtime_context: dict[str, Any] | None,
     current_policy_state: "ToolPolicyState | None",
     state: "LoopState",
+    append_assistant: bool = True,
 ) -> tuple[list["ToolExecutionResult"], str, "ToolPolicyState | None"]:
-    """Execute deterministic tool calls through the same pipeline as LLM calls."""
-    assistant_tool_calls = [
-        {
-            "id": tc.id,
-            "type": "function",
-            "function": {
-                "name": tc.name,
-                "arguments": tc.arguments,
-            },
-        }
-        for tc in planned_tool_calls
-    ]
-    transcript_store.append_assistant_message(
-        context.chat_id,
-        content="",
-        tool_calls=assistant_tool_calls,
-    )
+    """Execute deterministic tool calls through the same pipeline as LLM calls.
+
+    ``append_assistant`` records the assistant-with-tool-calls message that owns
+    these results. The planned-prelude caller has not recorded it, so it defaults
+    to True; the main LLM loop already appended the real assistant message (with
+    its content + reasoning), so it passes False to avoid a redundant second
+    (empty) copy — historically that empty duplicate was the copy sanitize kept in
+    place of the content-bearing one, silently losing the assistant's pre-tool-call
+    text (sanitize now repairs incomplete bundles rather than dropping, but the
+    duplicate is still redundant and must not be recorded).
+    """
+    if append_assistant:
+        assistant_tool_calls = [
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.name,
+                    "arguments": tc.arguments,
+                },
+            }
+            for tc in planned_tool_calls
+        ]
+        transcript_store.append_assistant_message(
+            context.chat_id,
+            content="",
+            tool_calls=assistant_tool_calls,
+        )
 
     execution_requests, tool_states = await _build_execution_requests(
         tool_calls=planned_tool_calls,
@@ -1217,7 +1233,10 @@ async def _call_llm_with_reactive_compact_retry(
                 raise
 
             reactive_pre_chars = sum(estimate_message_size(m) for m in history)
-            reactive_messages = prepare_model_messages(
+            # Reactive/413 is an emergency recovery path: deterministic only, so
+            # no ``llm`` is passed (F6 refine must never fire here — the retry
+            # cannot itself risk another LLM round-trip that may also 413).
+            reactive_messages = await prepare_model_messages(
                 system_prompt=system_prompt,
                 history=history,
                 chat_id=context.chat_id,
@@ -1251,6 +1270,8 @@ async def _call_llm_with_reactive_compact_retry(
                         history_len=len(history),
                         kept_len=len(reactive_messages.messages),
                         applied_stages=reactive_messages.applied_stages,
+                        budget_status=reactive_messages.budget_status,
+                        local_budget_status=reactive_messages.local_budget_status,
                     )
                 continue
             raise
@@ -1357,7 +1378,7 @@ async def run_query_engine(
         state.iteration = iteration_index
         history = transcript_store.prepare_history(context.chat_id)
         pre_chars = sum(estimate_message_size(m) for m in history)
-        prepared_messages = prepare_model_messages(
+        prepared_messages = await prepare_model_messages(
             system_prompt=system_prompt,
             history=history,
             chat_id=context.chat_id,
@@ -1365,6 +1386,8 @@ async def run_query_engine(
             config=config.context_compaction,
             metadata=compaction_metadata,
             workspace=compaction_workspace,
+            llm=llm,
+            llm_model=config.model,
         )
         request_system_prompt = prepared_messages.system_prompt
         request_messages = prepared_messages.messages
@@ -1383,6 +1406,8 @@ async def run_query_engine(
                 history_len=len(history),
                 kept_len=len(prepared_messages.messages),
                 applied_stages=prepared_messages.applied_stages,
+                budget_status=prepared_messages.budget_status,
+                local_budget_status=prepared_messages.local_budget_status,
             )
         try:
             last_message, has_attempted_reactive_compact, sent_system_prompt = (
@@ -1504,6 +1529,10 @@ async def run_query_engine(
                 tool_runtime_context=tool_runtime_context,
                 current_policy_state=current_policy_state,
                 state=state,
+                # The loop already recorded the real assistant message (content +
+                # reasoning + tool_calls) at append_assistant_message above; don't
+                # append a duplicate empty copy here.
+                append_assistant=False,
             )
         )
 

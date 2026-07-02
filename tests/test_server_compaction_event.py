@@ -93,6 +93,63 @@ def test_handler_accepts_neutral_payload_dict_from_dispatcher() -> None:
     assert payload["stats"]["tokensSaved"] == 2100
 
 
+def test_handler_carries_budget_status_from_neutral_dict() -> None:
+    """B3: the dispatcher-serialised payload (dataclasses.asdict) carries the
+    budget-status values across the surface boundary; the SSE frame must expose
+    them so the desktop app can render context-budget pressure."""
+    _stub_optional_modules()
+    try:
+        from omicsclaw.surfaces.desktop._compaction_event_bridge import (
+            make_compaction_event_handler,
+        )
+    except ImportError as exc:
+        import pytest
+        pytest.skip(f"server bridge unavailable: {exc}")
+
+    queue = MagicMock()
+    handler = make_compaction_event_handler(queue)
+    handler(
+        {
+            "messages_compressed": 3,
+            "tokens_saved_estimate": 500,
+            "applied_stages": ["context_collapse"],
+            "budget_status": "warning",
+            "local_budget_status": "critical",
+        }
+    )
+
+    payload = json.loads(queue.put_nowait.call_args[0][0]["data"])
+    assert payload["budgetStatus"] == "warning"
+    assert payload["localBudgetStatus"] == "critical"
+
+
+def test_handler_omits_budget_status_when_absent_from_dict() -> None:
+    """A neutral dict without budget-status keys (older producers) must not add
+    them — backward-compatible with the pre-B3 payload shape."""
+    _stub_optional_modules()
+    try:
+        from omicsclaw.surfaces.desktop._compaction_event_bridge import (
+            make_compaction_event_handler,
+        )
+    except ImportError as exc:
+        import pytest
+        pytest.skip(f"server bridge unavailable: {exc}")
+
+    queue = MagicMock()
+    handler = make_compaction_event_handler(queue)
+    handler(
+        {
+            "messages_compressed": 3,
+            "tokens_saved_estimate": 500,
+            "applied_stages": ["context_collapse"],
+        }
+    )
+
+    payload = json.loads(queue.put_nowait.call_args[0][0]["data"])
+    assert "budgetStatus" not in payload
+    assert "localBudgetStatus" not in payload
+
+
 def test_handler_is_synchronous_and_must_not_be_awaited() -> None:
     """``server.py`` consumes the dispatch event with a plain call, NOT
     ``await`` — regression for ``TypeError: object NoneType can't be used in

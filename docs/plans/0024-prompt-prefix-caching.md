@@ -201,10 +201,13 @@ Session prefix snapshot (they are session-scoped, `assembler.py:330-332`). On a
 memory **write** during the session, invalidate + rebuild the snapshot and log a
 re-warm.
 
-**Acceptance criteria:**
-- [ ] Preferences/memory appear in the stable `system` prefix, not the message tail.
-- [ ] A memory write triggers exactly one snapshot rebuild + one logged re-warm.
-- [ ] No memory write → snapshot stays byte-identical.
+**Acceptance criteria:** _(Decision-2 refinement 2026-07-02: only DURABLE memory —
+preferences + project_context — lives in the `system` prefix; volatile work-state —
+dataset/analysis/insight — moved to the message tail as `project_state_context`, so
+only durable-memory writes re-warm.)_
+- [ ] Durable memory (preferences/project) appears in the stable `system` prefix, not the message tail.
+- [ ] A durable-memory write triggers exactly one snapshot rebuild + one logged re-warm (volatile work-state writes do not).
+- [ ] No durable-memory write → snapshot stays byte-identical.
 
 **Verification:**
 - [ ] Test: state a preference mid-session → diagnostic shows one `system-changed`

@@ -142,7 +142,6 @@ def test_assemble_chat_context_loads_memory_and_builds_prompt():
     calls = {
         "session": [],
         "resolver": None,
-        "prompt": None,
     }
 
     class FakeSessionManager:
@@ -164,10 +163,6 @@ def test_assemble_chat_context_loads_memory_and_builds_prompt():
         calls["resolver"] = (query, domain_hint)
         return FakeDecision()
 
-    def fake_prompt_builder(**kwargs):
-        calls["prompt"] = kwargs
-        return "PROMPT"
-
     context = asyncio.run(
         assemble_chat_context(
             chat_id="chat-1",
@@ -175,7 +170,6 @@ def test_assemble_chat_context_loads_memory_and_builds_prompt():
             user_id="user-1",
             platform="telegram",
             session_manager=FakeSessionManager(),
-            system_prompt_builder=fake_prompt_builder,
             capability_resolver=fake_capability_resolver,
             skill_aliases=("spatial-preprocess", "sc-qc"),
         )
@@ -192,7 +186,6 @@ def test_assemble_chat_context_loads_memory_and_builds_prompt():
     assert context.skill_hint == "spatial-preprocess"
     assert context.domain_hint == "spatial"
     assert context.capability_context.startswith("## Deterministic Capability Assessment")
-    assert context.system_prompt == "PROMPT"
     assert calls["session"] == [
         ("get_or_create", "user-1", "telegram", "chat-1"),
         ("load_context", "telegram:user-1:chat-1"),
@@ -201,25 +194,101 @@ def test_assemble_chat_context_loads_memory_and_builds_prompt():
         "Analyze sample.h5ad with spatial-preprocess",
         "spatial",
     )
-    assert calls["prompt"]["memory_context"] == "preferred language: Chinese"
-    assert calls["prompt"]["scoped_memory_context"] == ""
-    assert calls["prompt"]["skill"] == "spatial-preprocess"
-    assert calls["prompt"]["skill_candidates"] == ("spatial-preprocess",)
-    assert calls["prompt"]["query"] == "Analyze sample.h5ad with spatial-preprocess"
-    assert calls["prompt"]["domain"] == "spatial"
-    assert calls["prompt"]["capability_context"] == "## Deterministic Capability Assessment\n- coverage: exact_skill"
-    assert calls["prompt"]["plan_context"] == ""
-    assert calls["prompt"]["transcript_context"] == ""
-    assert calls["prompt"]["surface"] == "bot"
-    assert calls["prompt"]["output_style"] == ""
-    assert calls["prompt"]["workspace"] == ""
-    assert calls["prompt"]["pipeline_workspace"] == ""
-    assert calls["prompt"]["mcp_servers"] == ()
-    assert calls["prompt"]["skill_context"].startswith("## Prefetched Skill Context")
-    assert "Selected skill: `spatial-preprocess`" in calls["prompt"]["skill_context"]
-    assert "- Domain: `spatial`" in calls["prompt"]["skill_context"]
-    assert "- Summary:" in calls["prompt"]["skill_context"]
+    # F3 — assert the REAL assembled context instead of discarded builder kwargs.
+    # memory_context is a SYSTEM layer: it renders into the system prompt.
+    assert "preferred language: Chinese" in context.system_prompt
+    assert "preferred language: Chinese" in context.memory_context
+    assert context.scoped_memory_context == ""
+    assert context.skill_hint == "spatial-preprocess"
+    request = context.prompt_context.request
+    assert request.skill_candidates == ("spatial-preprocess",)
+    assert request.query == "Analyze sample.h5ad with spatial-preprocess"
+    # Also assert the request DTO itself carries the scalars that downstream
+    # layer/tool predicates consume — guards against a stale request assembled
+    # under an otherwise-correct AssembledChatContext scalar (codex x-val P2).
+    assert request.skill == "spatial-preprocess"
+    assert request.domain == "spatial"
+    assert (
+        request.capability_context
+        == "## Deterministic Capability Assessment\n- coverage: exact_skill"
+    )
+    assert context.domain_hint == "spatial"
+    assert (
+        context.capability_context
+        == "## Deterministic Capability Assessment\n- coverage: exact_skill"
+    )
+    assert request.surface == "bot"
+    assert request.output_style == ""
+    assert request.workspace == ""
+    assert request.pipeline_workspace == ""
+    assert request.mcp_servers == ()
+    layer_stats = context.prompt_context.layer_stats
+    assert "plan_context" not in layer_stats
+    assert "transcript_context" not in layer_stats
+    # skill_context is a MESSAGE layer: it renders into message_context, not system.
+    assert context.skill_context.startswith("## Prefetched Skill Context")
+    assert "Selected skill: `spatial-preprocess`" in context.skill_context
+    assert "- Domain: `spatial`" in context.skill_context
+    assert "- Summary:" in context.skill_context
+    assert context.skill_context in context.prompt_context.message_context
     assert "workspace_context" not in context.prompt_context.layer_stats
+
+
+def test_assemble_chat_context_injects_research_stance_in_single_assembly():
+    # F3: research_stance must render into the system prompt via the SINGLE
+    # injector assembly — even with no custom system_prompt_builder. This lets
+    # the engine drop the redundant legacy second assembly for the default path.
+    async def stance_loader(session_id):
+        return "RESEARCH_STANCE_MARKER_XYZ"
+
+    context = asyncio.run(
+        assemble_chat_context(
+            chat_id="chat-1",
+            user_content="analyze data",
+            user_id="user-1",
+            platform="cli",
+            research_stance_loader=stance_loader,
+        )
+    )
+
+    assert "RESEARCH_STANCE_MARKER_XYZ" in context.system_prompt
+
+
+def test_single_assembly_system_prompt_equals_legacy_builder():
+    # F3 contract: the single injector assembly must produce a BYTE-IDENTICAL
+    # system prompt to the legacy build_system_prompt path, so dropping the
+    # second assembly (engine default path) changes nothing. Exercise the two
+    # fields that differ: research_stance (now folded into the single request)
+    # and knowledge_context (legacy-only — must NOT leak into system, since
+    # knowledge_guidance is a message-placement layer).
+    from omicsclaw.runtime.context.assembler import assemble_prompt_context
+    from omicsclaw.runtime.context.layers import ContextAssemblyRequest
+    from omicsclaw.runtime.context.system_prompt import build_system_prompt
+
+    common = dict(
+        surface="bot",
+        memory_context="MEM",
+        skill_context="## Prefetched Skill Context\n- x",
+        skill="spatial-preprocess",
+        query="analyze",
+        domain="spatial",
+        capability_context="## Deterministic Capability Assessment",
+        plan_context="PLAN",
+        transcript_context="TX",
+        output_style="",
+        research_stance="STANCE MARKER",
+        prompt_pack_context="PACK",
+    )
+    legacy = build_system_prompt(
+        **common,
+        knowledge_context="KNOWLEDGE GUIDANCE BODY",
+        include_knowledge_guidance=True,
+    )
+    single = assemble_prompt_context(request=ContextAssemblyRequest(**common)).system_prompt
+
+    assert single == legacy
+    assert "STANCE MARKER" in single  # research_stance renders into system
+    assert "KNOWLEDGE GUIDANCE BODY" not in single  # knowledge stays out of system
 
 
 def test_assemble_chat_context_forwards_thread_id_to_session_memory():
@@ -236,9 +305,6 @@ def test_assemble_chat_context_forwards_thread_id_to_session_memory():
             seen["load_context"] = thread_id
             return "scoped memory"
 
-    def fake_prompt_builder(**kwargs):
-        return "PROMPT"
-
     context = asyncio.run(
         assemble_chat_context(
             chat_id="chat-9",
@@ -247,7 +313,6 @@ def test_assemble_chat_context_forwards_thread_id_to_session_memory():
             platform="app",
             thread_id="t-glioma",
             session_manager=FakeSessionManager(),
-            system_prompt_builder=fake_prompt_builder,
         )
     )
 
@@ -256,20 +321,13 @@ def test_assemble_chat_context_forwards_thread_id_to_session_memory():
     assert seen["load_context"] == "t-glioma"
 
 
-def test_assemble_chat_context_passes_interactive_surface_to_prompt_builder():
-    calls = {"prompt": None}
-
-    def fake_prompt_builder(**kwargs):
-        calls["prompt"] = kwargs
-        return "PROMPT"
-
+def test_assemble_chat_context_passes_interactive_surface_to_assembly():
     context = asyncio.run(
         assemble_chat_context(
             chat_id="chat-2",
             user_content="hello there",
             user_id="user-2",
             platform="cli",
-            system_prompt_builder=fake_prompt_builder,
             output_style="teaching",
             workspace="/tmp/chat-workspace",
             pipeline_workspace="/tmp/pipeline-workspace",
@@ -277,36 +335,21 @@ def test_assemble_chat_context_passes_interactive_surface_to_prompt_builder():
         )
     )
 
-    assert context.system_prompt == "PROMPT"
-    assert calls["prompt"] == {
-        "memory_context": "",
-        "scoped_memory_context": "",
-        "skill_context": "",
-        "skill": "",
-        "skill_candidates": (),
-        "query": "hello there",
-        "domain": "",
-        "capability_context": "",
-        "plan_context": "",
-        "transcript_context": "",
-        "surface": "interactive",
-        "output_style": "teaching",
-        "workspace": "/tmp/chat-workspace",
-        "pipeline_workspace": "/tmp/pipeline-workspace",
-        "mcp_servers": ("seq-think", "bio-tools"),
-    }
+    request = context.prompt_context.request
+    assert request.surface == "interactive"
+    assert request.output_style == "teaching"
+    assert request.workspace == "/tmp/chat-workspace"
+    assert request.pipeline_workspace == "/tmp/pipeline-workspace"
+    assert request.mcp_servers == ("seq-think", "bio-tools")
+    layer_stats = context.prompt_context.layer_stats
+    assert "workspace_context" in layer_stats
+    assert "mcp_instructions" in layer_stats
 
 
-def test_assemble_chat_context_loads_scoped_memory_and_forwards_to_prompt_builder():
-    calls = {"prompt": None}
-
+def test_assemble_chat_context_loads_scoped_memory_and_forwards_to_message_context():
     class FakeRecall:
         def to_context_text(self):
             return "1. PBMC QC defaults\n   scope=project | owner=tester | freshness=evolving | updated=2026-04-02"
-
-    def fake_prompt_builder(**kwargs):
-        calls["prompt"] = kwargs
-        return "PROMPT"
 
     context = asyncio.run(
         assemble_chat_context(
@@ -315,15 +358,15 @@ def test_assemble_chat_context_loads_scoped_memory_and_forwards_to_prompt_builde
             user_id="user-scoped-memory",
             platform="cli",
             workspace="/tmp/project",
-            system_prompt_builder=fake_prompt_builder,
             scoped_memory_scope="project",
             scoped_memory_loader=lambda **_: FakeRecall(),
         )
     )
 
-    assert context.system_prompt == "PROMPT"
     assert "PBMC QC defaults" in context.scoped_memory_context
-    assert calls["prompt"]["scoped_memory_context"].startswith("1. PBMC QC defaults")
+    assert context.scoped_memory_context.startswith("1. PBMC QC defaults")
+    # scoped_memory_context is a MESSAGE layer: it renders into message_context.
+    assert "PBMC QC defaults" in context.prompt_context.message_context
 
 
 def test_assemble_prompt_context_prefetches_knowledge_guidance_for_method_questions():
@@ -514,13 +557,7 @@ def test_mcp_runtime_config_skips_disabled_entries_and_forwards_headers(monkeypa
     assert _mcp._build_mcp_connection(all_config["disabled-remote"]) is None
 
 
-def test_assemble_chat_context_forwards_knowledge_guidance_to_prompt_builder(monkeypatch):
-    calls = {"prompt": None}
-
-    def fake_prompt_builder(**kwargs):
-        calls["prompt"] = kwargs
-        return "PROMPT"
-
+def test_assemble_chat_context_forwards_knowledge_guidance_into_message_context(monkeypatch):
     monkeypatch.setattr(
         "omicsclaw.runtime.context.layers.load_knowledge_guidance",
         lambda **_: "## Preloaded Knowledge Guidance\n\nPrefer Harmony for batch correction.",
@@ -532,13 +569,16 @@ def test_assemble_chat_context_forwards_knowledge_guidance_to_prompt_builder(mon
             user_content="Which method should I use for batch correction?",
             user_id="user-knowledge",
             platform="cli",
-            system_prompt_builder=fake_prompt_builder,
         )
     )
 
-    assert context.system_prompt == "PROMPT"
-    assert calls["prompt"]["knowledge_context"].startswith("## Preloaded Knowledge Guidance")
-    assert calls["prompt"]["include_knowledge_guidance"] is True
+    # knowledge_guidance is a MESSAGE layer: it renders into message_context and
+    # must stay OUT of the byte-stable system prefix.
+    assert "knowledge_guidance" in context.prompt_context.layer_stats
+    message_context = context.prompt_context.message_context
+    assert "## Preloaded Knowledge Guidance" in message_context
+    assert "Prefer Harmony for batch correction." in message_context
+    assert "## Preloaded Knowledge Guidance" not in context.system_prompt
 
 
 def test_assemble_prompt_context_includes_plan_context_layer():
@@ -694,7 +734,7 @@ def test_assemble_prompt_context_includes_active_prompt_pack_layer(tmp_path):
     assert assembly.layer_stats["extension_prompt_packs"]["placement"] == "system"
 
 
-def test_assemble_chat_context_forwards_prompt_pack_context_to_builder(tmp_path):
+def test_assemble_chat_context_forwards_prompt_pack_context_to_system_prompt(tmp_path):
     prompt_pack = tmp_path / "installed_extensions" / "prompt-packs" / "local-rules"
     prompt_pack.mkdir(parents=True)
     (prompt_pack / "rules.md").write_text(
@@ -723,24 +763,164 @@ def test_assemble_chat_context_forwards_prompt_pack_context_to_builder(tmp_path)
     )
     write_extension_state(prompt_pack, enabled=True)
 
-    calls = {"prompt": None}
-
-    def fake_prompt_builder(**kwargs):
-        calls["prompt"] = kwargs
-        return "PROMPT"
-
     context = asyncio.run(
         assemble_chat_context(
             chat_id="chat-pack",
             user_content="hello there",
             user_id="user-pack",
             platform="cli",
-            system_prompt_builder=fake_prompt_builder,
             omicsclaw_dir=str(tmp_path),
         )
     )
 
-    assert context.system_prompt == "PROMPT"
-    assert calls["prompt"]["omicsclaw_dir"] == str(tmp_path)
-    assert "## Active Local Prompt Packs" in calls["prompt"]["prompt_pack_context"]
-    assert "Prefer exact status summaries." in calls["prompt"]["prompt_pack_context"]
+    assert context.prompt_context.request.omicsclaw_dir == str(tmp_path)
+    # extension_prompt_packs is a SYSTEM layer: it renders into the system prompt.
+    assert "## Active Local Prompt Packs" in context.system_prompt
+    assert "Prefer exact status summaries." in context.system_prompt
+
+
+def test_assemble_chat_context_cancels_pending_background_tasks():
+    # F9: when the assembly coroutine is cancelled mid-flight, it must reap its
+    # in-flight background tasks (the cancellable session-memory coroutine in
+    # particular) via a finally, rather than leaking them to run detached.
+    async def _scenario():
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        class _BlockingSessionManager:
+            async def get_or_create(self, *args, **kwargs):
+                return None
+
+            async def load_context(self, *args, **kwargs):
+                started.set()
+                try:
+                    await asyncio.sleep(3600)
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+                return "mem"  # pragma: no cover
+
+        task = asyncio.create_task(
+            assemble_chat_context(
+                chat_id="c",
+                user_content="hello",
+                user_id="u",
+                platform="cli",
+                session_manager=_BlockingSessionManager(),
+            )
+        )
+        await asyncio.wait_for(started.wait(), timeout=2)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        assert cancelled.is_set(), "pending memory task was not cancelled by cleanup"
+
+    asyncio.run(_scenario())
+
+
+def test_assemble_chat_context_reaps_non_awaited_task_on_cancel():
+    # F9 (the real leak): a background task created but NOT the one currently being
+    # awaited when cancellation hits is orphaned (asyncio only auto-cancels the
+    # awaited fut_waiter). Here capability_task is spawned, then we cancel while
+    # parked at `await memory_task`; the finally must reap the pending capability
+    # task so no orphaned Task is left in the loop.
+    import threading
+
+    async def _scenario():
+        started_mem = asyncio.Event()
+        cap_entered = threading.Event()
+
+        def _slow_capability(query, *, domain_hint=""):
+            cap_entered.set()
+            threading.Event().wait(1.0)  # bounded so loop teardown can't hang
+
+            class _Decision:
+                chosen_skill = ""
+                domain = ""
+                skill_candidates = ()
+
+                def to_prompt_block(self):
+                    return ""
+
+            return _Decision()
+
+        class _BlockingSessionManager:
+            async def get_or_create(self, *args, **kwargs):
+                return None
+
+            async def load_context(self, *args, **kwargs):
+                started_mem.set()
+                await asyncio.sleep(3600)
+
+        task = asyncio.create_task(
+            assemble_chat_context(
+                chat_id="c",
+                user_content="run differential expression analysis",  # triggers capability
+                user_id="u",
+                platform="cli",
+                skill_aliases=("noop",),  # avoid loading the real registry
+                session_manager=_BlockingSessionManager(),
+                capability_resolver=_slow_capability,
+            )
+        )
+        await asyncio.wait_for(started_mem.wait(), timeout=2)
+        await asyncio.to_thread(cap_entered.wait, 2)  # capability thread is running
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        leftover = [
+            t
+            for t in asyncio.all_tasks()
+            if t is not asyncio.current_task() and not t.done()
+        ]
+        assert leftover == [], f"leaked pending background tasks: {leftover}"
+
+    asyncio.run(_scenario())
+
+
+def test_volatile_memory_does_not_churn_system_prefix():
+    # Decision-2 placement split: within a session, evolving memory (dataset /
+    # analysis / insight) is written between turns, so load_context returns updated
+    # content. Those volatile blocks must ride the MESSAGE layer, not the system
+    # prefix — otherwise every memory write re-warms the ADR 0024 prefix. Durable
+    # identity (preferences / project_context) stays in the cache-warm system layer.
+    _STABLE = "**User Preferences**:\n- lang: zh"
+
+    def _sm(volatile):
+        class _SM:
+            async def get_or_create(self, *a, **k):
+                return None
+
+            async def load_context_layers(self, session_id, thread_id=""):
+                return _STABLE, volatile
+
+            async def load_context(self, session_id, thread_id=""):
+                return "\n".join(p for p in (_STABLE, volatile) if p)
+
+        return _SM()
+
+    def _turn(volatile):
+        return asyncio.run(
+            assemble_chat_context(
+                chat_id="c",
+                user_content="continue",
+                user_id="u",
+                platform="cli",
+                session_manager=_sm(volatile),
+            )
+        )
+
+    t1 = _turn("**Recent Analyses**:\n1. sc-de (wilcoxon) - running")
+    t2 = _turn("**Recent Analyses**:\n1. sc-de (wilcoxon) - complete")
+
+    # The volatile analysis-status change must NOT alter the system prefix.
+    assert t1.system_prompt == t2.system_prompt
+    # Durable identity stays in system; volatile work-state does not.
+    assert "**User Preferences**" in t1.system_prompt
+    assert "sc-de" not in t1.system_prompt
+    # Volatile work-state rides the message layer instead.
+    assert "sc-de" in t2.prompt_context.message_context

@@ -126,6 +126,17 @@ events. Five resolutions:
    matched and is Volatile context. (Rejected alternative: move all memory to the
    message tail — that would demote session-scoped preferences from system
    instruction to per-turn context unnecessarily.)
+   **Refinement (Decision-2, 2026-07-02):** `memory_context` is split by
+   *write-frequency*, not moved wholesale. Durable identity — `project_context` +
+   user `preference` — rarely changes, so it stays in the `system` tier `## Your
+   Memory` block (cache-warm + authoritative). The *volatile work-state* —
+   `dataset` (preprocessing_state), recent `analysis` runs, and `insight` — is
+   written repeatedly mid-session, so it now rides the message tail as
+   `project_state_context` (`placement="message"`, `## Current Work State`) via
+   `session_manager.load_context_layers()`. Consequence: a mid-session write to
+   dataset/analysis/insight no longer re-warms the prefix; only a write to
+   preferences/project_context does. (Legacy managers exposing only `load_context`
+   fall back to whole-memory-in-`system`, byte-identical to the prior behavior.)
 
 4. **History append-only between collapses.** Remove the per-turn sliding
    `trim_history_to_budget` slide from the model path. History grows append-only;
@@ -198,8 +209,17 @@ events. Five resolutions:
 - **Provider-blind `max_prompt_chars`** (review finding 6) — **RESOLVED.**
   `engine/loop.resolve_max_prompt_chars(model)` now derives the context-collapse
   budget from `get_context_window(model)` (`window × 3.0 chars/tok × 0.5`),
-  **never exceeding** the proven `96000` default (so an over-optimistic reported
-  window can't disable collapse) and **shrinking** for known-small windows.
+  **never exceeding** the deliberate `DEFAULT_MAX_PROMPT_CHARS` budget (so an
+  over-optimistic reported window can't disable collapse) and **shrinking** for
+  known-small windows.
+  *(2026-07-02: `DEFAULT_MAX_PROMPT_CHARS` raised 96000 → 256000 and made a single
+  named policy constant in `compaction.py`. Git archaeology found 96000 was a
+  legacy, uncalibrated pre-ADR-0024 default (= a round 32k tokens) that capped the
+  entire fleet at ~3% of window and left the window-relative shrink branch dead;
+  256000 (~85k tok) recovers long-session capability — cheap under prefix caching
+  (extra history billed at the cache-hit rate, ~no added latency, fewer re-warm
+  collapses) — and `min(256000, window×1.5)` revives the shrink branch for
+  windows below ~170k tokens. reactive-413 compaction remains the net.)*
   Unknown windows (e.g. Ollama, which report `None`) keep the default and are
   tuned via the new `OMICSCLAW_MAX_PROMPT_CHARS` env override; reactive
   compaction on a context error remains the ultimate net. Test:

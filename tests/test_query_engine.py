@@ -50,9 +50,13 @@ class _FakeToolCall:
 
 
 class _FakeMessage:
-    def __init__(self, content=None, tool_calls=None):
+    def __init__(self, content=None, tool_calls=None, reasoning_content=None):
         self.content = content
         self.tool_calls = tool_calls
+        # Set only when provided, so messages without reasoning stay byte-identical
+        # to before (the materializer reads it via getattr).
+        if reasoning_content is not None:
+            self.reasoning_content = reasoning_content
 
 
 class _FakeChoice:
@@ -206,6 +210,80 @@ def test_run_query_engine_executes_tools_and_records_transcript(tmp_path):
         {"role": "tool", "tool_call_id": "call-alpha", "content": "alpha-result"},
         {"role": "assistant", "content": "done"},
     ]
+
+
+def test_assistant_content_alongside_tool_call_is_preserved(tmp_path):
+    # Root-cause fix (F10 prerequisite): the main loop must NOT double-append the
+    # assistant-with-tool-calls. Before the fix, only the empty copy that
+    # _execute_planned_tool_calls appended survived (the content-bearing loop copy
+    # was the one sanitize discarded), silently losing the assistant's pre-tool-
+    # call text.
+    async def alpha_executor(args):
+        return "alpha-result"
+
+    runtime = ToolRegistry(
+        [
+            ToolSpec(
+                name="alpha",
+                description="Alpha tool",
+                parameters={"type": "object", "properties": {}},
+                read_only=True,
+                concurrency_safe=True,
+            )
+        ]
+    ).build_runtime({"alpha": alpha_executor})
+
+    llm = _FakeLLM(
+        [
+            _FakeResponse(
+                _FakeMessage(
+                    content="I will run alpha first.",
+                    tool_calls=[_FakeToolCall("call-alpha", "alpha", "{}")],
+                    reasoning_content="I should call alpha to inspect the data.",
+                )
+            ),
+            _FakeResponse(_FakeMessage(content="done", tool_calls=None)),
+        ]
+    )
+    transcript_store = TranscriptStore(sanitizer=sanitize_tool_history)
+    result_store = ToolResultStore(storage_dir=tmp_path / "tool_results")
+
+    result = asyncio.run(
+        run_query_engine(
+            llm=llm,
+            context=QueryEngineContext(
+                chat_id="chat-content",
+                session_id=None,
+                system_prompt="SYSTEM",
+                user_message_content="hello",
+            ),
+            tool_runtime=runtime,
+            transcript_store=transcript_store,
+            tool_result_store=result_store,
+            config=QueryEngineConfig(model="fake-model", llm_error_types=(_FakeAPIError,)),
+        )
+    )
+
+    assert result == "done"
+    history = transcript_store.get_history("chat-content")
+    tool_call_assts = [
+        m for m in history if m["role"] == "assistant" and m.get("tool_calls")
+    ]
+    # Exactly one assistant-with-tool-calls (no duplicate), and it keeps BOTH its
+    # text and its reasoning_content (both were lost to the empty duplicate before).
+    assert len(tool_call_assts) == 1
+    assert tool_call_assts[0]["content"] == "I will run alpha first."
+    assert (
+        tool_call_assts[0]["reasoning_content"]
+        == "I should call alpha to inspect the data."
+    )
+    # Order stays canonical: user, assistant(call), tool(result), assistant(done).
+    assert [m["role"] for m in history] == ["user", "assistant", "tool", "assistant"]
+    assert history[2] == {
+        "role": "tool",
+        "tool_call_id": "call-alpha",
+        "content": "alpha-result",
+    }
 
 
 def test_run_query_engine_uses_llm_error_callback(tmp_path):
@@ -1168,8 +1246,8 @@ def test_run_query_engine_retries_once_with_reactive_compact_on_prompt_too_long(
 
     assert result == "done after retry"
     assert len(llm.calls) == 2
-    assert "## Reactive Compact Context" not in llm.calls[0]["messages"][0]["content"]
-    assert "## Reactive Compact Context" in llm.calls[1]["messages"][0]["content"]
+    assert "### Reactive Compact Context" not in llm.calls[0]["messages"][0]["content"]
+    assert "### Reactive Compact Context" in llm.calls[1]["messages"][0]["content"]
     assert len(llm.calls[1]["messages"]) < len(llm.calls[0]["messages"])
 
 

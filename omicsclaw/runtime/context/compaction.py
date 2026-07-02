@@ -1,10 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 import copy
-from dataclasses import dataclass
+import json
+import logging
+import re
+from dataclasses import dataclass, field, replace
 from typing import Any
 
-from ..context.budget import estimate_message_size, trim_history_to_budget
+from ..context.budget import (
+    CHARS_PER_TOKEN,
+    ContextBudgetStatus,
+    classify_context_budget,
+    effective_context_capacity,
+    estimate_message_size,
+    local_budget_status,
+    trim_history_to_budget,
+)
 from ..storage.tool_result import ToolResultRecord, ToolResultStore
 from ..storage.transcript import (
     TranscriptReplaySummary,
@@ -54,12 +66,24 @@ def is_compaction_summary_message(message: dict[str, Any]) -> bool:
     return content.lstrip().startswith(COMPACTION_SUMMARY_OPEN)
 
 
+# Deliberate proactive prompt budget (chars), the single source of truth shared by
+# the dataclass default and engine.resolve_max_prompt_chars. This is a cost/latency
+# *policy*, not a hard window limit: on a large-window model it caps the working
+# prompt at ~85k tokens (256000/CHARS_PER_TOKEN), trading a little more cheap
+# cache-hit-billed history for far less lossy compaction — the model window still
+# has ample room and reactive compaction on a real context-length error is the net.
+# resolve_max_prompt_chars applies it as min(this, window*CHARS_PER_TOKEN*fraction),
+# so windows below ~170k tokens get the smaller window-relative budget, and the env
+# override OMICSCLAW_MAX_PROMPT_CHARS tunes it per deployment. (Was a legacy 96000 /
+# ~32k-token default inherited from the pre-ADR-0024 dataclass; raised deliberately.)
+DEFAULT_MAX_PROMPT_CHARS = 256000
+
+
 @dataclass(frozen=True, slots=True)
 class ContextCompactionConfig:
     enabled: bool = True
-    max_prompt_chars: int | None = 96000
+    max_prompt_chars: int | None = DEFAULT_MAX_PROMPT_CHARS
     snip_message_chars: int = 2400
-    snip_tool_argument_chars: int = 1200
     protected_tail_messages: int = 4
     micro_keep_recent_tool_messages: int = 1
     collapse_trigger_ratio: float = 0.82
@@ -70,10 +94,39 @@ class ContextCompactionConfig:
     auto_compact_preserve_chars: int | None = 6000
     reactive_preserve_messages: int = 6
     reactive_preserve_chars: int | None = 4000
+    # §9.3 slice 3 — compress-to-target. When set (not None), the collapse/auto
+    # stage converges the TOTAL prompt (system incl. its summary + preserved tail)
+    # to this fraction of max_prompt_chars — the char budget drives (the small
+    # message-count cap is lifted; the fixed preserve_chars above applies only in
+    # legacy no-target mode) — so the target tracks the model's real char budget
+    # rather than a magic number. Keep each ratio safely below its trigger ratio so
+    # the re-warmed next turn cannot re-collapse (F2 one-compaction = one-rewarm).
+    # None on both -> current behavior (backward-compatible). reactive is left
+    # aggressive on purpose (emergency path), so it has no target ratio.
+    collapse_target_ratio: float | None = None
+    auto_compact_target_ratio: float | None = None
     max_highlights_per_role: int = 3
     max_compacted_refs: int = 3
     max_plan_refs: int = 2
     max_advisory_refs: int = 3
+    # §9.3 — observational token-budget status. context_window_tokens=None → no
+    # status (backward-compatible). chars_per_token bridges the char estimate to
+    # a token count for the status only (not the char thresholds above).
+    context_window_tokens: int | None = None
+    chars_per_token: float = CHARS_PER_TOKEN
+    # F6 — LLM-condensed collapse summary (opt-in, ships dark). When enabled AND a
+    # collapse/auto-compact stage fires (target-active branch only) over an omitted
+    # set of at least ``llm_summary_min_omitted`` messages, the deterministic
+    # template summary is upgraded to an LLM "episode" summary, validated (tier 3:
+    # non-empty and NO LONGER than the template, so the byte-stable re-hoist stays
+    # within the same budget the template already satisfied — F2 one-compaction =
+    # one-rewarm), and falls back to the template on any timeout/error/validation
+    # failure. Structurally unreachable from snip/micro (every-turn hot path),
+    # reactive-413, and /compact (they never enter _collapse_with_target).
+    collapse_llm_summary_enabled: bool = False
+    llm_summary_min_omitted: int = 8
+    llm_summary_timeout_s: float = 20.0
+    llm_summary_max_tokens: int = 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +136,8 @@ class PreparedModelMessages:
     estimated_chars: int
     applied_stages: tuple[str, ...] = ()
     persisted_summary: str = ""
+    budget_status: "ContextBudgetStatus | None" = None
+    local_budget_status: "ContextBudgetStatus | None" = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,12 +145,27 @@ class _CollapseResult:
     messages: list[dict[str, Any]]
     summary: str
     omitted_count: int
+    # F6 — the omitted (dropped-with-summary) messages, so a caller can feed them
+    # to an LLM episode summarizer. Populated by _collapse_history; empty when
+    # nothing was omitted. Never itself persisted or sent to the model.
+    omitted_history: list[dict[str, Any]] = field(default_factory=list)
 
 
 def estimate_prompt_chars(system_prompt: str, messages: list[dict[str, Any]]) -> int:
     return len(str(system_prompt or "")) + sum(
         estimate_message_size(message) for message in messages
     )
+
+
+def _budget_status(
+    estimated_chars: int, config: "ContextCompactionConfig"
+) -> "ContextBudgetStatus | None":
+    """§9.3: observational token-budget status, or None if no window configured."""
+    if config.context_window_tokens is None:
+        return None
+    used_tokens = int(estimated_chars / max(0.1, config.chars_per_token))
+    effective = effective_context_capacity(config.context_window_tokens)
+    return classify_context_budget(used_tokens, effective)
 
 
 def _flatten_message_content(content: Any) -> str:
@@ -166,6 +236,328 @@ def _threshold_chars(max_prompt_chars: int | None, ratio: float) -> int | None:
     return max(1, int(max_prompt_chars * bounded_ratio))
 
 
+def _preserve_char_target(
+    preserve_chars: int | None,
+    target_ratio: float | None,
+    max_prompt_chars: int | None,
+    system_chars: int,
+) -> int | None:
+    """§9.3 slice 3: preserved-tail char budget for a compaction stage.
+
+    Legacy (no target ratio / no char budget): the fixed ``preserve_chars``.
+
+    Compress-to-target: the budget that makes the resulting TOTAL prompt
+    (system + tail) converge to ``target_ratio * max_prompt_chars``, by subtracting
+    the ``system_chars`` overhead — so the target is a true *total*-prompt target,
+    invariant to system-prompt size, and a large budget keeps proportionally more
+    recent context than the fixed 12000/6000-char constants. The fixed
+    ``preserve_chars`` is *not* a floor here: under a target the target drives
+    purely, so a large system (or, via the two-pass caller, a large summary)
+    cannot push the re-warmed next turn back over the collapse trigger (robust F2).
+    Floored at 1 — never None/0 — because the message-count cap is lifted under a
+    target, so a None char budget would keep the whole history and overflow.
+    """
+    if target_ratio is None or max_prompt_chars is None or max_prompt_chars <= 0:
+        return preserve_chars
+    total_target = int(max_prompt_chars * min(1.0, max(0.0, target_ratio)))
+    return max(1, total_target - max(0, int(system_chars)))
+
+
+def _preserve_message_target(
+    preserve_messages: int, target_ratio: float | None
+) -> int:
+    """§9.3 slice 3: message-count cap for a compaction stage.
+
+    When compress-to-target is active the char budget (:func:`_preserve_char_target`)
+    is the sole driver, so the fixed message-count cap is lifted (``-1`` =
+    unbounded) and the tail fills up to the char target — otherwise the small
+    default cap (16/8) would bind first and keep only a sliver of a large budget.
+    Without a target ratio the configured message cap applies (backward-compatible).
+    """
+    return -1 if target_ratio is not None else preserve_messages
+
+
+_EPISODE_SUMMARY_SYSTEM_PROMPT = (
+    "You are compacting an ongoing AI agent conversation to keep it within its "
+    "context budget. Summarize the omitted transcript below into a concise, "
+    "faithful episode summary. Preserve: the user's goals and constraints, key "
+    "decisions and their rationale, tool results and any file/artifact paths, and "
+    "durable workspace state. Do NOT invent facts and do NOT add pleasantries. "
+    "CRITICAL: never reproduce tool-call syntax, function-call JSON, or any text "
+    "that imitates invoking a tool — refer to past tool use only as plain past-tense "
+    "narration (e.g. \"read config.py\", not a tool call), so the summary cannot "
+    "induce the model to mimic tool calls on later turns. Write dense prose or "
+    "bullet points; be brief."
+)
+
+
+def _render_omitted_for_summary(omitted_history: list[dict[str, Any]]) -> str:
+    """Render the omitted messages as plain text for the LLM summarizer (F6).
+
+    Feeds the RAW omitted content (not previews) so the model can condense with
+    full fidelity; the model's job is the compression.
+    """
+    parts: list[str] = []
+    for message in omitted_history:
+        role = str(message.get("role", "") or "")
+        content = _flatten_message_content(message.get("content", ""))
+        tool_calls = message.get("tool_calls")
+        if role == "assistant" and tool_calls:
+            names = []
+            for tool_call in tool_calls or []:
+                if not isinstance(tool_call, dict):
+                    continue
+                function_block = tool_call.get("function")
+                if isinstance(function_block, dict) and function_block.get("name"):
+                    names.append(str(function_block.get("name")))
+            if names:
+                marker = f"[called tools: {', '.join(names)}]"
+                content = f"{content}\n{marker}".strip() if content else marker
+        if content:
+            parts.append(f"{role.upper()}: {content}")
+    return "\n\n".join(parts)
+
+
+def _should_refine_episode(
+    llm: Any,
+    config: "ContextCompactionConfig",
+    omitted_history: list[dict[str, Any]],
+) -> bool:
+    """F6 tier-1 gate: only refine with an LLM when opted in and the omitted set is
+    large enough to be worth a round-trip. (Reached only on the target-active
+    collapse/auto path, so /compact + reactive are excluded structurally.)"""
+    return (
+        llm is not None
+        and config.collapse_llm_summary_enabled
+        and len(omitted_history) >= max(1, config.llm_summary_min_omitted)
+    )
+
+
+_TOOL_CALL_SIGNATURE = re.compile(
+    r'"(?:tool_calls|tool_call_id|function|arguments)"\s*:'
+    r"|<\s*(?:tool_call|tool_use|function_calls|invoke)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_tool_invocation(text: str) -> bool:
+    """True if the summary imitates a tool/function call (F6 anti-mimicry).
+
+    The deterministic path renders prior tool calls as inert XML metadata; a free
+    LLM summary must not reintroduce function-call JSON or tool-call tags into the
+    persisted context, which would prompt the model to mimic tool calls as plain
+    text on later turns (see _message_preview). A whole-body JSON object/array is
+    never a legitimate prose episode summary, and the structural markers below are
+    strong tool-call signals unlikely in faithful narration. Rejected → template.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if stripped[0] in "{[":
+        try:
+            json.loads(stripped)
+            return True
+        except Exception:
+            pass
+    return bool(_TOOL_CALL_SIGNATURE.search(stripped))
+
+
+def _extract_summary_text(response: Any) -> str:
+    """Pull the assistant content from a non-streaming chat completion, tolerating
+    both SDK objects (``.choices[0].message.content``) and plain dicts."""
+    try:
+        choices = getattr(response, "choices", None)
+        if choices is None and isinstance(response, dict):
+            choices = response.get("choices")
+        if not choices:
+            return ""
+        first = choices[0]
+        message = getattr(first, "message", None)
+        if message is None and isinstance(first, dict):
+            message = first.get("message")
+        content = getattr(message, "content", None)
+        if content is None and isinstance(message, dict):
+            content = message.get("content")
+        return str(content or "")
+    except Exception:
+        return ""
+
+
+async def _summarize_episode_llm(
+    *,
+    llm: Any,
+    llm_model: str | None,
+    omitted_history: list[dict[str, Any]],
+    template_fallback: str,
+    config: "ContextCompactionConfig",
+    max_summary_chars: int,
+) -> str:
+    """F6 tier-2/3: one bounded LLM call to condense ``omitted_history`` into an
+    episode summary, else the deterministic ``template_fallback``.
+
+    All-or-nothing: any timeout, client error, empty output, or a summary longer
+    than ``max_summary_chars`` (the template's length — the F2 length cap) returns
+    the template unchanged. Never raises except on cancellation.
+    """
+    if max_summary_chars <= 0:
+        return template_fallback
+    try:
+        rendered = _render_omitted_for_summary(omitted_history)
+        if not rendered.strip():
+            return template_fallback
+        response = await asyncio.wait_for(
+            llm.chat.completions.create(
+                model=llm_model,
+                max_tokens=config.llm_summary_max_tokens,
+                messages=[
+                    {"role": "system", "content": _EPISODE_SUMMARY_SYSTEM_PROMPT},
+                    {"role": "user", "content": rendered},
+                ],
+                stream=False,
+            ),
+            timeout=max(0.1, config.llm_summary_timeout_s),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "F6 LLM episode summary failed; falling back to the deterministic "
+            "template summary.",
+            exc_info=True,
+        )
+        return template_fallback
+
+    summary = _extract_summary_text(response).strip()
+    # Tier-3 validation. The length cap (<= the template) is load-bearing for F2:
+    # a summary no larger than the template keeps the re-hoisted system prompt no
+    # larger than the deterministic path already produced, so the next turn cannot
+    # newly cross the collapse trigger (one compaction = one re-warm). Bound BOTH
+    # code points (the unit the char-based trigger + estimator use) AND UTF-8 bytes
+    # (defense in depth: a same-code-point-count but denser-encoded summary — e.g.
+    # CJK/emoji replacing ASCII — must not inflate the real provider payload and
+    # risk a 413 → deterministic reactive compact → a second re-warm).
+    if not summary or len(summary) > max_summary_chars:
+        return template_fallback
+    if len(summary.encode("utf-8")) > len(template_fallback.encode("utf-8")):
+        return template_fallback
+    if _looks_like_tool_invocation(summary):
+        return template_fallback
+    return summary
+
+
+async def _collapse_with_target(
+    messages: list[dict[str, Any]],
+    *,
+    preserve_messages: int,
+    preserve_chars: int | None,
+    target_ratio: float | None,
+    max_prompt_chars: int | None,
+    section_label: str,
+    render_system: Any,
+    metadata: dict[str, Any] | None,
+    workspace: str | None,
+    config: "ContextCompactionConfig",
+    llm: Any = None,
+    llm_model: str | None = None,
+) -> "_CollapseResult":
+    """§9.3 slice 3: collapse converging the FINAL total to the target.
+
+    ``render_system(extra)`` returns the system prompt given extra pending
+    ``(label, summary)`` sections, so the tail budget can be sized against the
+    real rendered system. Legacy (``target_ratio`` is None): a single pass with the
+    fixed preserve budget.
+
+    Target-active (three steps, all guarding F2 one-compaction = one-rewarm — the
+    naive single pass leaves ``target + summary`` and re-collapses next turn):
+      1. size the tail against the pre-summary system;
+      2. re-collapse against the ACTUAL pass-1 summary so the extra-omitted
+         messages are themselves summarized (fidelity);
+      3. a final hard-trim against the ACTUAL pass-2 summary — which can still be
+         larger than pass-1's (more verbatim, length-unbounded tool-result paths
+         surface from the larger omitted set) — bringing the final total within
+         target so the re-warmed next turn stays under the trigger. The trim drops
+         at most a few oldest preserved messages not captured in the summary, and
+         only when the summary actually grew (so the summary's "N older messages"
+         count can then understate by that few — a benign, deterministic hint).
+
+    The trim cannot reduce *irreducible* content: if the rendered system alone
+    exceeds target, or the newest preserved block alone exceeds the remaining
+    budget (``trim_history_to_budget`` always keeps the newest block), the total
+    can still exceed target. That is an inherent limit, unchanged from legacy and
+    backstopped by reactive compaction on a real context-length error.
+    """
+    if target_ratio is None:
+        return _collapse_history(
+            messages,
+            preserve_messages=preserve_messages,
+            preserve_chars=preserve_chars,
+            metadata=metadata,
+            workspace=workspace,
+            config=config,
+        )
+
+    def _collapse(pending: tuple[tuple[str, str], ...]) -> "_CollapseResult":
+        budget = _preserve_char_target(
+            preserve_chars, target_ratio, max_prompt_chars,
+            system_chars=len(render_system(pending)),
+        )
+        return _collapse_history(
+            messages,
+            preserve_messages=preserve_messages,
+            preserve_chars=budget,
+            metadata=metadata,
+            workspace=workspace,
+            config=config,
+        )
+
+    result = _collapse(())
+    if result.omitted_count == 0:
+        return result
+    result = _collapse(((section_label, result.summary),))
+    if result.omitted_count == 0:
+        return result
+
+    final_budget = _preserve_char_target(
+        preserve_chars, target_ratio, max_prompt_chars,
+        system_chars=len(render_system(((section_label, result.summary),))),
+    )
+    trimmed = trim_history_to_budget(
+        result.messages, max_messages=preserve_messages, max_chars=final_budget
+    )
+    dropped = len(result.messages) - len(trimmed)
+    if dropped > 0:
+        # trim keeps the newest contiguous suffix, so the dropped messages are the
+        # oldest `dropped` of result.messages. Fold them into omitted_history so the
+        # F6 LLM episode summary sees the FULL omitted set — otherwise omitted_count
+        # would claim they were compacted while neither the template nor the LLM
+        # ever saw them (a fidelity gap for a "faithful summary of omitted history").
+        result = _CollapseResult(
+            messages=trimmed,
+            summary=result.summary,
+            omitted_count=result.omitted_count + dropped,
+            omitted_history=[*result.omitted_history, *result.messages[:dropped]],
+        )
+
+    # F6: optionally upgrade the deterministic template summary to an LLM episode
+    # summary, capped at the template's length. Because the chosen summary is never
+    # longer than the template, the re-hoisted next-turn system prompt is no larger
+    # than the deterministic path already produced (which the byte-stable tests
+    # pin under the trigger) — so F2 (one compaction = one re-warm) holds without
+    # re-sizing the preserved tail. Falls back to the template on any failure.
+    if _should_refine_episode(llm, config, result.omitted_history):
+        chosen = await _summarize_episode_llm(
+            llm=llm,
+            llm_model=llm_model,
+            omitted_history=result.omitted_history,
+            template_fallback=result.summary,
+            config=config,
+            max_summary_chars=len(result.summary),
+        )
+        if chosen != result.summary:
+            result = replace(result, summary=chosen)
+    return result
+
+
 def _apply_snip_compaction(
     messages: list[dict[str, Any]],
     *,
@@ -192,26 +584,12 @@ def _apply_snip_compaction(
             )
             changed = True
 
-        tool_calls = updated.get("tool_calls")
-        if isinstance(tool_calls, list):
-            for tool_call in tool_calls:
-                if not isinstance(tool_call, dict):
-                    continue
-                function_block = tool_call.get("function")
-                if not isinstance(function_block, dict):
-                    continue
-                arguments = function_block.get("arguments")
-                if (
-                    isinstance(arguments, str)
-                    and len(arguments) > config.snip_tool_argument_chars > 0
-                ):
-                    function_block["arguments"] = _truncate_text(
-                        arguments,
-                        max_chars=config.snip_tool_argument_chars,
-                        label="snip compacted older tool arguments",
-                    )
-                    changed = True
-
+        # F11: snip does NOT rewrite tool_call function.arguments. Truncating a
+        # JSON args string yields invalid args that are re-sent to the model every
+        # turn (and, when a collapse stage co-fires, persisted via replace_history)
+        # — an in-place corruption of append-only history. Oversized tool calls are
+        # folded (dropped-with-summary) by the collapse stage, the correct place;
+        # tool RESULT content is still compressed by snip (above) and micro.
         compacted.append(updated)
 
     return compacted, changed
@@ -448,10 +826,11 @@ def _collapse_history(
         messages=trimmed,
         summary=summary,
         omitted_count=omitted_count,
+        omitted_history=omitted_history,
     )
 
 
-def prepare_model_messages(
+async def prepare_model_messages(
     *,
     system_prompt: str,
     history: list[dict[str, Any]],
@@ -461,14 +840,19 @@ def prepare_model_messages(
     metadata: dict[str, Any] | None = None,
     workspace: str | None = None,
     force_reactive_compact: bool = False,
+    llm: Any = None,
+    llm_model: str | None = None,
 ) -> PreparedModelMessages:
     messages = [copy.deepcopy(message) for message in history]
-    prompt = str(system_prompt or "")
+    base_prompt = str(system_prompt or "")
     if not config.enabled:
+        est = estimate_prompt_chars(base_prompt, messages)
         return PreparedModelMessages(
-            system_prompt=prompt,
+            system_prompt=base_prompt,
             messages=messages,
-            estimated_chars=estimate_prompt_chars(prompt, messages),
+            estimated_chars=est,
+            budget_status=_budget_status(est, config),
+            local_budget_status=local_budget_status(est, config.max_prompt_chars),
         )
 
     previous_summary = ""
@@ -476,15 +860,23 @@ def prepare_model_messages(
         previous_summary = unwrap_compaction_summary(
             str(messages[0].get("content", "") or "")
         )
-        prompt = _append_system_summary(
-            prompt,
-            "## Persisted Compacted Context",
-            previous_summary,
-        )
         messages = messages[1:]
 
     applied_stages: list[str] = []
     summary_sections: list[tuple[str, str]] = []
+
+    # F2: render every compaction summary — the hoisted prior one AND any new
+    # stage summaries this turn — under a SINGLE canonical ``## Persisted
+    # Compacted Context`` block, byte-identical to how the next turn will hoist
+    # it. This guarantees one compaction => one prefix re-warm (ADR 0024) rather
+    # than a second re-warm when the heading shape shifts on the following turn.
+    def _render_system(extra: tuple[tuple[str, str], ...] = ()) -> str:
+        combined = _combine_persisted_summaries(
+            previous_summary, [*summary_sections, *extra]
+        )
+        return _append_system_summary(
+            base_prompt, "## Persisted Compacted Context", combined
+        )
 
     messages, snip_changed = _apply_snip_compaction(messages, config=config)
     if snip_changed:
@@ -509,24 +901,24 @@ def prepare_model_messages(
             config=config,
         )
         if reactive_result.omitted_count > 0:
-            heading = "Reactive Compact Context"
-            prompt = _append_system_summary(
-                prompt,
-                f"## {heading}",
-                reactive_result.summary,
-            )
             messages = reactive_result.messages
             applied_stages.append(STAGE_REACTIVE_COMPACT)
-            summary_sections.append((heading, reactive_result.summary))
+            summary_sections.append(
+                ("Reactive Compact Context", reactive_result.summary)
+            )
+        prompt = _render_system()
+        est = estimate_prompt_chars(prompt, messages)
         return PreparedModelMessages(
             system_prompt=prompt,
             messages=messages,
-            estimated_chars=estimate_prompt_chars(prompt, messages),
+            estimated_chars=est,
             applied_stages=tuple(applied_stages),
             persisted_summary=_combine_persisted_summaries(
                 previous_summary,
                 summary_sections,
             ),
+            budget_status=_budget_status(est, config),
+            local_budget_status=local_budget_status(est, config.max_prompt_chars),
         )
 
     collapse_threshold = _threshold_chars(
@@ -538,57 +930,65 @@ def prepare_model_messages(
         config.auto_compact_trigger_ratio,
     )
 
-    current_chars = estimate_prompt_chars(prompt, messages)
+    current_chars = estimate_prompt_chars(_render_system(), messages)
     if collapse_threshold is not None and current_chars > collapse_threshold:
-        collapse_result = _collapse_history(
+        collapse_result = await _collapse_with_target(
             messages,
-            preserve_messages=config.collapse_preserve_messages,
+            preserve_messages=_preserve_message_target(
+                config.collapse_preserve_messages, config.collapse_target_ratio
+            ),
             preserve_chars=config.collapse_preserve_chars,
+            target_ratio=config.collapse_target_ratio,
+            max_prompt_chars=config.max_prompt_chars,
+            section_label="Context Collapse",
+            render_system=_render_system,
             metadata=metadata,
             workspace=workspace,
             config=config,
+            llm=llm,
+            llm_model=llm_model,
         )
         if collapse_result.omitted_count > 0:
-            heading = "Context Collapse"
-            prompt = _append_system_summary(
-                prompt,
-                f"## {heading}",
-                collapse_result.summary,
-            )
             messages = collapse_result.messages
             applied_stages.append(STAGE_CONTEXT_COLLAPSE)
-            summary_sections.append((heading, collapse_result.summary))
-            current_chars = estimate_prompt_chars(prompt, messages)
+            summary_sections.append(("Context Collapse", collapse_result.summary))
+            current_chars = estimate_prompt_chars(_render_system(), messages)
 
     if auto_threshold is not None and current_chars > auto_threshold:
-        auto_result = _collapse_history(
+        auto_result = await _collapse_with_target(
             messages,
-            preserve_messages=config.auto_compact_preserve_messages,
+            preserve_messages=_preserve_message_target(
+                config.auto_compact_preserve_messages, config.auto_compact_target_ratio
+            ),
             preserve_chars=config.auto_compact_preserve_chars,
+            target_ratio=config.auto_compact_target_ratio,
+            max_prompt_chars=config.max_prompt_chars,
+            section_label="Auto Compacted Context",
+            render_system=_render_system,
             metadata=metadata,
             workspace=workspace,
             config=config,
+            llm=llm,
+            llm_model=llm_model,
         )
         if auto_result.omitted_count > 0:
-            heading = "Auto Compacted Context"
-            prompt = _append_system_summary(
-                prompt,
-                f"## {heading}",
-                auto_result.summary,
-            )
             messages = auto_result.messages
             applied_stages.append(STAGE_AUTO_COMPACT)
-            summary_sections.append((heading, auto_result.summary))
+            summary_sections.append(("Auto Compacted Context", auto_result.summary))
 
+    prompt = _render_system()
+    est = estimate_prompt_chars(prompt, messages)
     return PreparedModelMessages(
         system_prompt=prompt,
         messages=messages,
-        estimated_chars=estimate_prompt_chars(prompt, messages),
+        estimated_chars=est,
         applied_stages=tuple(applied_stages),
         persisted_summary=_combine_persisted_summaries(
             previous_summary,
             summary_sections,
         ),
+        budget_status=_budget_status(est, config),
+        local_budget_status=local_budget_status(est, config.max_prompt_chars),
     )
 
 
@@ -599,6 +999,28 @@ class CompactionEvent:
     messages_compressed: int
     tokens_saved_estimate: int
     applied_stages: tuple[str, ...]
+    # B3 (§9.3) — surface the already-computed context-budget pressure so a
+    # surface can render a "context X% full" badge. local_budget_status (vs
+    # max_prompt_chars) is the actionable one; budget_status (window-relative) is
+    # ~always OK on large-window models (B1). Optional/None for back-compat with
+    # existing 3-arg constructions and dataclasses.asdict consumers.
+    budget_status: "ContextBudgetStatus | str | None" = None
+    local_budget_status: "ContextBudgetStatus | str | None" = None
+
+
+def _budget_status_str(status: "ContextBudgetStatus | str | None") -> str | None:
+    """Normalise a budget status to its plain string value, or None.
+
+    Handles a live ``ContextBudgetStatus`` enum (in-process) and a plain string
+    (after crossing the dispatcher's ``dataclasses.asdict`` / JSON boundary), so
+    the SSE JSON contract is a stable string independent of the str-Enum impl.
+    """
+    if status is None:
+        return None
+    if isinstance(status, ContextBudgetStatus):
+        return status.value
+    text = str(status).strip()
+    return text or None
 
 
 def build_compaction_status_payload(event: CompactionEvent) -> dict[str, Any]:
@@ -625,7 +1047,7 @@ def build_compaction_status_payload(event: CompactionEvent) -> dict[str, Any]:
             f"Context compressed: {event.messages_compressed} older "
             "messages summarized"
         )
-    return {
+    payload: dict[str, Any] = {
         "notification": True,
         "subtype": "context_compressed",
         "message": msg,
@@ -634,3 +1056,13 @@ def build_compaction_status_payload(event: CompactionEvent) -> dict[str, Any]:
             "tokensSaved": event.tokens_saved_estimate,
         },
     }
+    # B3: add budget-status keys ONLY when present, so the pre-B3 payload shape
+    # (asserted byte-for-byte by callers) is unchanged when no window/char budget
+    # is configured.
+    budget = _budget_status_str(event.budget_status)
+    local_budget = _budget_status_str(event.local_budget_status)
+    if budget is not None:
+        payload["budgetStatus"] = budget
+    if local_budget is not None:
+        payload["localBudgetStatus"] = local_budget
+    return payload

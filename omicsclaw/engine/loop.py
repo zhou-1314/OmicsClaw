@@ -30,8 +30,11 @@ from omicsclaw.runtime.agent.query_engine import (
     QueryEngineContext,
     run_query_engine,
 )
-from omicsclaw.runtime.context.compaction import ContextCompactionConfig
-from omicsclaw.runtime.context.system_prompt import build_system_prompt
+from omicsclaw.runtime.context.budget import CHARS_PER_TOKEN
+from omicsclaw.runtime.context.compaction import (
+    DEFAULT_MAX_PROMPT_CHARS,
+    ContextCompactionConfig,
+)
 from omicsclaw.runtime.storage.transcript import (
     build_selective_replay_context,
 )
@@ -170,17 +173,27 @@ def _maybe_append_stage_fragment(system_prompt: str, stage: str) -> str:
 
 
 # ADR 0024 — derive the context-collapse char budget from the model's window.
-# Phase 3 made history append-only between collapses, removing the per-turn
-# slide that used to bound small-context providers; this re-introduces a safe
-# bound. Conservative blend (English ~4 chars/tok, CJK ~1.5) and half the window
-# reserved for completion + headroom. We never EXCEED the proven default (no risk
-# from an over-optimistic reported window), only shrink for known-small windows.
-# Unknown windows (e.g. Ollama, which report None) keep the default; operators
-# tune those via OMICSCLAW_MAX_PROMPT_CHARS. Reactive compaction on a context
-# error remains the ultimate safety net.
-_CHARS_PER_TOKEN = 3.0
+# Phase 3 made history append-only between collapses, removing the per-turn slide
+# that used to bound small-context providers; this re-introduces a safe bound:
+# min(DEFAULT_MAX_PROMPT_CHARS, window * CHARS_PER_TOKEN * fraction). The cap is a
+# deliberate cost/latency POLICY (see DEFAULT_MAX_PROMPT_CHARS in compaction.py),
+# not the model window: at 256000 it works a large window at ~85k tokens. Windows
+# below ~170k tokens get the smaller window-relative budget (the branch the old
+# 96000 cap left dead for the whole fleet); unknown windows (e.g. Ollama, None)
+# keep the default; operators tune per deployment via OMICSCLAW_MAX_PROMPT_CHARS.
+# Reactive compaction on a context error remains the ultimate safety net.
+_CHARS_PER_TOKEN = CHARS_PER_TOKEN
 _PROMPT_BUDGET_FRACTION = 0.5
-_DEFAULT_MAX_PROMPT_CHARS = 96000
+_DEFAULT_MAX_PROMPT_CHARS = DEFAULT_MAX_PROMPT_CHARS
+
+# §9.3 slice 3 — compress-to-target. After a collapse/auto compaction, converge
+# the TOTAL prompt (system + preserved tail) to this fraction of max_prompt_chars,
+# so the target scales with the model's real char budget instead of the old fixed
+# 12000/6000-char tail. Both sit well below their trigger ratios (0.82 / 0.92) so
+# the re-warmed next turn cannot re-collapse (F2 one-compaction = one-rewarm), and
+# auto keeps less than collapse.
+_COLLAPSE_TARGET_RATIO = 0.55
+_AUTO_COMPACT_TARGET_RATIO = 0.40
 
 
 def resolve_max_prompt_chars(model: str) -> int:
@@ -193,6 +206,21 @@ def resolve_max_prompt_chars(model: str) -> int:
         return _DEFAULT_MAX_PROMPT_CHARS
     derived = int(window * _CHARS_PER_TOKEN * _PROMPT_BUDGET_FRACTION)
     return min(_DEFAULT_MAX_PROMPT_CHARS, derived)
+
+
+def _build_compaction_config(effective_model: str) -> ContextCompactionConfig:
+    """Assemble the per-request compaction config for ``effective_model``.
+
+    ADR 0024 — collapse budget scaled to the model's context window. §9.3 —
+    observational token-budget status (context_window_tokens) plus budget-relative
+    compress-to-target ratios (slice 3).
+    """
+    return ContextCompactionConfig(
+        max_prompt_chars=resolve_max_prompt_chars(effective_model),
+        context_window_tokens=get_context_window(effective_model),
+        collapse_target_ratio=_COLLAPSE_TARGET_RATIO,
+        auto_compact_target_ratio=_AUTO_COMPACT_TARGET_RATIO,
+    )
 
 
 def _prepend_user_turn_context(content: str | list, addition: str) -> str | list:
@@ -290,7 +318,9 @@ async def run_engine_loop(
         # prefs/insights/project_context stay shared). Empty = legacy unscoped.
         thread_id=thread_id,
         session_manager=deps.session_manager,
-        system_prompt_builder=build_system_prompt,
+        # F3: no system_prompt_builder — the single injector assembly (with
+        # research_stance folded in) is byte-equivalent to the old legacy
+        # builder, so the redundant second assembly is dropped for this path.
         # Bench BE-PERSONA-7 — inject the agent's research-stance persona layer
         # (core://agent/research_stance); None loader / absent row = no-op.
         research_stance_loader=_make_research_stance_loader(deps.session_manager),
@@ -395,10 +425,7 @@ async def run_engine_loop(
             ),
             llm_error_types=(APIError,),
             extra_api_params=extra_api_params or {},
-            # ADR 0024 — collapse budget scaled to the model's context window.
-            context_compaction=ContextCompactionConfig(
-                max_prompt_chars=resolve_max_prompt_chars(effective_model),
-            ),
+            context_compaction=_build_compaction_config(effective_model),
             deepseek_reasoning_passback=(
                 (deps.llm_provider_name or "").strip().lower() == "deepseek"
             ),

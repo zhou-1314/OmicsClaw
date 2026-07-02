@@ -19,7 +19,13 @@ from omicsclaw.runtime.storage.transcript import (
 )
 
 
-def test_transcript_store_prepares_history_and_drops_incomplete_tool_bundle():
+def test_transcript_store_repairs_incomplete_tool_bundle_preserving_success():
+    # F10 follow-up: an interrupted bundle (call_1 succeeded, call_2 never
+    # recorded) must PRESERVE the succeeded result and synthesize a deterministic
+    # placeholder for the missing tool_call, instead of whole-dropping the bundle
+    # (which silently lost the real observation). The bundle stays provider-valid.
+    from omicsclaw.runtime.storage.transcript import _INTERRUPTED_TOOL_PLACEHOLDER
+
     store = TranscriptStore(max_history=10, max_conversations=10, sanitizer=sanitize_tool_history)
     chat_id = "chat-1"
 
@@ -39,8 +45,105 @@ def test_transcript_store_prepares_history_and_drops_incomplete_tool_bundle():
 
     assert history == [
         {"role": "user", "content": "do two things"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "a", "arguments": "{}"}},
+                {"id": "call_2", "type": "function", "function": {"name": "b", "arguments": "{}"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "result 1"},
+        {"role": "tool", "tool_call_id": "call_2", "content": _INTERRUPTED_TOOL_PLACEHOLDER},
         {"role": "assistant", "content": "next turn"},
     ]
+
+    # Idempotent: re-sanitizing the repaired history is a no-op (the placeholder
+    # now satisfies call_2), so it is byte-stable across turns (prepare_history
+    # writes back). No second re-warm of the history segment.
+    assert sanitize_tool_history(list(history)) == history
+
+
+def test_sanitize_repairs_bundle_with_no_successful_results():
+    # Option 1 (uniform): a bundle where EVERY result is missing is still
+    # preserved (assistant + all placeholders), keeping the assistant's intent/
+    # content and staying provider-valid. Placeholders follow tool_calls order.
+    from omicsclaw.runtime.storage.transcript import _INTERRUPTED_TOOL_PLACEHOLDER
+
+    history = [
+        {"role": "user", "content": "go"},
+        {
+            "role": "assistant",
+            "content": "I will call two tools.",
+            "tool_calls": [
+                {"id": "x1", "type": "function", "function": {"name": "a", "arguments": "{}"}},
+                {"id": "x2", "type": "function", "function": {"name": "b", "arguments": "{}"}},
+            ],
+        },
+        {"role": "user", "content": "next"},
+    ]
+
+    sanitized = sanitize_tool_history(history)
+
+    assert sanitized == [
+        {"role": "user", "content": "go"},
+        {
+            "role": "assistant",
+            "content": "I will call two tools.",
+            "tool_calls": [
+                {"id": "x1", "type": "function", "function": {"name": "a", "arguments": "{}"}},
+                {"id": "x2", "type": "function", "function": {"name": "b", "arguments": "{}"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "x1", "content": _INTERRUPTED_TOOL_PLACEHOLDER},
+        {"role": "tool", "tool_call_id": "x2", "content": _INTERRUPTED_TOOL_PLACEHOLDER},
+        {"role": "user", "content": "next"},
+    ]
+    assert sanitize_tool_history(sanitized) == sanitized  # idempotent
+
+
+def test_sanitize_leaves_complete_bundle_unchanged():
+    # Byte-stability guard: a complete bundle must pass through untouched (no
+    # placeholder), so healthy sessions are unaffected.
+    history = [
+        {"role": "user", "content": "go"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "a", "arguments": "{}"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+        {"role": "assistant", "content": "done"},
+    ]
+    assert sanitize_tool_history(history) == history
+
+
+def test_sanitize_dedupes_placeholder_for_duplicate_tool_call_id():
+    # codex P2: a malformed assistant with DUPLICATE tool_call ids + a missing
+    # result must yield ONE placeholder per unique id, so re-sanitizing stays a
+    # no-op (else pass 2 drops the extra placeholder as an orphan -> not idempotent).
+    from omicsclaw.runtime.storage.transcript import _INTERRUPTED_TOOL_PLACEHOLDER
+
+    history = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "dup", "type": "function", "function": {"name": "a", "arguments": "{}"}},
+                {"id": "dup", "type": "function", "function": {"name": "a", "arguments": "{}"}},
+            ],
+        },
+        {"role": "user", "content": "next"},
+    ]
+    once = sanitize_tool_history(history)
+    placeholders = [
+        m for m in once if m.get("role") == "tool" and m.get("tool_call_id") == "dup"
+    ]
+    assert len(placeholders) == 1
+    assert placeholders[0]["content"] == _INTERRUPTED_TOOL_PLACEHOLDER
+    assert sanitize_tool_history(once) == once  # idempotent despite the duplicate id
 
 
 def test_transcript_store_evicts_lru_conversations():

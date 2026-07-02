@@ -8,6 +8,22 @@ from omicsclaw.surfaces.cli._llm_bridge_support import (
     seed_core_conversation,
     sync_core_conversation,
 )
+from omicsclaw.runtime.storage.transcript import _INTERRUPTED_TOOL_PLACEHOLDER
+
+# F10 follow-up: sanitize_tool_history now REPAIRS an interrupted tool-call bundle
+# (preserve assistant + synthesize a placeholder for the missing result) instead
+# of whole-dropping it. The CLI bridge/session use the same sanitizer, so their
+# transcripts gain the assistant + placeholder rather than losing the bundle.
+_CALL_1_ASSISTANT = {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [{"id": "call-1", "type": "function"}],
+}
+_CALL_1_PLACEHOLDER = {
+    "role": "tool",
+    "tool_call_id": "call-1",
+    "content": _INTERRUPTED_TOOL_PLACEHOLDER,
+}
 
 
 def _build_core() -> SimpleNamespace:
@@ -35,7 +51,11 @@ def test_seed_core_conversation_sanitizes_history_and_extracts_text_blocks():
     user_text = seed_core_conversation(core, "chat-1", messages, touched_at=123.0)
 
     assert user_text == "please retry"
-    assert core.conversations["chat-1"] == [{"role": "user", "content": "hello"}]
+    assert core.conversations["chat-1"] == [
+        {"role": "user", "content": "hello"},
+        _CALL_1_ASSISTANT,
+        _CALL_1_PLACEHOLDER,
+    ]
     assert core._conversation_access["chat-1"] == 123.0
 
 
@@ -56,6 +76,8 @@ def test_sync_core_conversation_sanitizes_and_mutates_message_list():
 
     assert updated == [
         {"role": "user", "content": "hello"},
+        _CALL_1_ASSISTANT,
+        _CALL_1_PLACEHOLDER,
         {"role": "assistant", "content": "final answer"},
     ]
     assert messages == updated
@@ -83,6 +105,8 @@ def test_append_interruption_notice_syncs_first_and_updates_messages():
 
     assert updated == [
         {"role": "user", "content": "hello"},
+        _CALL_1_ASSISTANT,
+        _CALL_1_PLACEHOLDER,
         {"role": "user", "content": "Conversation interrupted"},
     ]
     assert messages == updated

@@ -65,3 +65,55 @@ def test_payload_subtype_is_stable_constant():
     """Frontend dispatch keys on this exact string — must not drift."""
     event = CompactionEvent(messages_compressed=1, tokens_saved_estimate=1, applied_stages=())
     assert build_compaction_status_payload(event)["subtype"] == "context_compressed"
+
+
+def test_event_defaults_budget_status_to_none():
+    # B3: the budget-status fields are optional (back-compat with 3-arg
+    # constructions and dataclasses.asdict consumers).
+    event = CompactionEvent(messages_compressed=1, tokens_saved_estimate=1, applied_stages=())
+    assert event.budget_status is None
+    assert event.local_budget_status is None
+
+
+def test_payload_includes_budget_status_when_present():
+    # B3: surface the already-computed context-budget pressure to the SSE toast.
+    from omicsclaw.runtime.context.budget import ContextBudgetStatus
+
+    event = CompactionEvent(
+        messages_compressed=5,
+        tokens_saved_estimate=100,
+        applied_stages=("context_collapse",),
+        budget_status=ContextBudgetStatus.WARNING,
+        local_budget_status=ContextBudgetStatus.COMPRESS,
+    )
+    payload = build_compaction_status_payload(event)
+    # Plain string enum VALUES — JSON contract independent of the str-Enum impl.
+    assert payload["budgetStatus"] == "warning"
+    assert payload["localBudgetStatus"] == "compress"
+
+
+def test_payload_omits_budget_status_when_none():
+    # Back-compat: None statuses add no keys, so the exact-equality payload
+    # contract (test_payload_with_tokens_saved) stays byte-identical.
+    event = CompactionEvent(
+        messages_compressed=5,
+        tokens_saved_estimate=100,
+        applied_stages=("context_collapse",),
+    )
+    payload = build_compaction_status_payload(event)
+    assert "budgetStatus" not in payload
+    assert "localBudgetStatus" not in payload
+
+
+def test_payload_accepts_plain_string_status():
+    # Across the dispatcher's dataclasses.asdict / JSON boundary a status may
+    # arrive as a plain string; it must render unchanged (no enum coercion).
+    event = CompactionEvent(
+        messages_compressed=2,
+        tokens_saved_estimate=0,
+        applied_stages=(),
+        local_budget_status="critical",
+    )
+    payload = build_compaction_status_payload(event)
+    assert payload["localBudgetStatus"] == "critical"
+    assert "budgetStatus" not in payload

@@ -3,6 +3,7 @@ import sqlite3
 import pytest
 
 from omicsclaw.surfaces.cli import _session as session_store
+from omicsclaw.runtime.storage.transcript import _INTERRUPTED_TOOL_PLACEHOLDER
 
 
 @pytest.mark.asyncio
@@ -88,7 +89,7 @@ async def test_save_session_migrates_old_schema_without_metadata(tmp_path, monke
 
 
 @pytest.mark.asyncio
-async def test_session_store_sanitizes_incomplete_tool_bundles_on_save_and_load(tmp_path, monkeypatch):
+async def test_session_store_repairs_incomplete_tool_bundles_on_save_and_load(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
 
     await session_store.save_session(
@@ -108,11 +109,15 @@ async def test_session_store_sanitizes_incomplete_tool_bundles_on_save_and_load(
     sessions = await session_store.list_sessions(limit=10)
 
     assert loaded is not None
+    # F10 follow-up: the interrupted bundle is REPAIRED (assistant + placeholder
+    # for the missing result), not whole-dropped.
     assert loaded["messages"] == [
         {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "call-1", "type": "function"}]},
+        {"role": "tool", "tool_call_id": "call-1", "content": _INTERRUPTED_TOOL_PLACEHOLDER},
         {"role": "assistant", "content": "final answer"},
     ]
-    assert sessions[0]["message_count"] == 2
+    assert sessions[0]["message_count"] == 4
     assert sessions[0]["preview"] == "hello"
 
 

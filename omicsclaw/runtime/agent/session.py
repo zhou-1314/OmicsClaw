@@ -89,8 +89,15 @@ class SessionManager:
             await self.store.update_session(session_id, {"last_activity": datetime.now(timezone.utc)})
         return session
 
-    async def load_context(self, session_id: str, thread_id: str = "") -> str:
-        """Load recent memories and format for LLM context.
+    async def _load_memory_blocks(
+        self, session_id: str, thread_id: str = ""
+    ) -> dict[str, str]:
+        """Load the five memory types and format each into its labelled block.
+
+        Returns ``{project, dataset, analyses, prefs, insights}`` (empty string when
+        a type has no memories). Per-kind load errors are swallowed (that block is
+        omitted). Shared by :meth:`load_context` (combined, legacy order) and
+        :meth:`load_context_layers` (Decision-2 stable/volatile placement split).
 
         ``thread_id`` (Bench, AN-CTXRECALL-11) scopes the *passive* per-turn
         injection to the active investigation thread. Only the thread-carrying
@@ -105,86 +112,138 @@ class SessionManager:
         injection does NOT add a cross-thread fallback — an empty thread shows no
         dataset/analysis rather than another thread's, preserving isolation.
         """
+        datasets = []
+        analyses = []
+        prefs = []
+        insights = []
+        project_ctx = []
+
         try:
-            datasets = []
-            analyses = []
-            prefs = []
-            insights = []
-            project_ctx = []
+            datasets = await self.store.get_memories(
+                session_id, "dataset", limit=2, thread_id=thread_id
+            )
+        except Exception as e:
+            logger.warning(f"Failed to load dataset memories: {e}")
 
-            try:
-                datasets = await self.store.get_memories(
-                    session_id, "dataset", limit=2, thread_id=thread_id
+        try:
+            analyses = await self.store.get_memories(
+                session_id, "analysis", limit=3, thread_id=thread_id
+            )
+        except Exception as e:
+            logger.warning(f"Failed to load analysis memories: {e}")
+
+        try:
+            prefs = await self.store.get_memories(session_id, "preference", limit=5)
+        except Exception as e:
+            logger.warning(f"Failed to load preference memories: {e}")
+
+        try:
+            insights = await self.store.get_memories(session_id, "insight", limit=3)
+        except Exception as e:
+            logger.warning(f"Failed to load insight memories: {e}")
+
+        try:
+            project_ctx = await self.store.get_memories(session_id, "project_context", limit=1)
+        except Exception as e:
+            logger.warning(f"Failed to load project context memories: {e}")
+
+        project = ""
+        if project_ctx:
+            pc = project_ctx[0]
+            ctx_parts = []
+            if pc.project_goal:
+                ctx_parts.append(f"Goal: {pc.project_goal}")
+            if pc.species:
+                ctx_parts.append(f"Species: {pc.species}")
+            if pc.tissue_type:
+                ctx_parts.append(f"Tissue: {pc.tissue_type}")
+            if pc.disease_model:
+                ctx_parts.append(f"Disease: {pc.disease_model}")
+            if ctx_parts:
+                project = "**Project Context**: " + " | ".join(ctx_parts)
+
+        dataset = ""
+        if datasets:
+            ds = datasets[0]
+            dataset = (
+                f"**Current Dataset**: {ds.file_path} "
+                f"({ds.platform or 'unknown'}, {ds.n_obs or '?'} obs, "
+                f"preprocessed={ds.preprocessing_state})"
+            )
+
+        analyses_block = ""
+        if analyses:
+            lines = ["**Recent Analyses**:"]
+            for i, a in enumerate(analyses[:3], 1):
+                lines.append(f"{i}. {a.skill} ({a.method}) - {a.status}")
+            analyses_block = "\n".join(lines)
+
+        prefs_block = ""
+        if prefs:
+            lines = ["**User Preferences**:"]
+            for p in prefs:
+                lines.append(f"- {p.key}: {p.value}")
+            prefs_block = "\n".join(lines)
+
+        insights_block = ""
+        if insights:
+            lines = ["**Known Insights**:"]
+            for ins in insights:
+                confidence = "confirmed" if ins.confidence == "user_confirmed" else "predicted"
+                lines.append(
+                    f"- {ins.entity_type} {ins.entity_id}: {ins.biological_label} ({confidence})"
                 )
-            except Exception as e:
-                logger.warning(f"Failed to load dataset memories: {e}")
+            insights_block = "\n".join(lines)
 
-            try:
-                analyses = await self.store.get_memories(
-                    session_id, "analysis", limit=3, thread_id=thread_id
-                )
-            except Exception as e:
-                logger.warning(f"Failed to load analysis memories: {e}")
+        return {
+            "project": project,
+            "dataset": dataset,
+            "analyses": analyses_block,
+            "prefs": prefs_block,
+            "insights": insights_block,
+        }
 
-            try:
-                prefs = await self.store.get_memories(session_id, "preference", limit=5)
-            except Exception as e:
-                logger.warning(f"Failed to load preference memories: {e}")
+    async def load_context(self, session_id: str, thread_id: str = "") -> str:
+        """Load recent memories, formatted for LLM context (combined, legacy order).
 
-            try:
-                insights = await self.store.get_memories(session_id, "insight", limit=3)
-            except Exception as e:
-                logger.warning(f"Failed to load insight memories: {e}")
-
-            try:
-                project_ctx = await self.store.get_memories(session_id, "project_context", limit=1)
-            except Exception as e:
-                logger.warning(f"Failed to load project context memories: {e}")
-
-            parts = []
-
-            if project_ctx:
-                pc = project_ctx[0]
-                ctx_parts = []
-                if pc.project_goal:
-                    ctx_parts.append(f"Goal: {pc.project_goal}")
-                if pc.species:
-                    ctx_parts.append(f"Species: {pc.species}")
-                if pc.tissue_type:
-                    ctx_parts.append(f"Tissue: {pc.tissue_type}")
-                if pc.disease_model:
-                    ctx_parts.append(f"Disease: {pc.disease_model}")
-                if ctx_parts:
-                    parts.append("**Project Context**: " + " | ".join(ctx_parts))
-
-            if datasets:
-                ds = datasets[0]
-                parts.append(
-                    f"**Current Dataset**: {ds.file_path} "
-                    f"({ds.platform or 'unknown'}, {ds.n_obs or '?'} obs, "
-                    f"preprocessed={ds.preprocessing_state})"
-                )
-
-            if analyses:
-                parts.append("**Recent Analyses**:")
-                for i, a in enumerate(analyses[:3], 1):
-                    parts.append(f"{i}. {a.skill} ({a.method}) - {a.status}")
-
-            if prefs:
-                parts.append("**User Preferences**:")
-                for p in prefs:
-                    parts.append(f"- {p.key}: {p.value}")
-
-            if insights:
-                parts.append("**Known Insights**:")
-                for ins in insights:
-                    confidence = "confirmed" if ins.confidence == "user_confirmed" else "predicted"
-                    parts.append(f"- {ins.entity_type} {ins.entity_id}: {ins.biological_label} ({confidence})")
-
+        Joins the five blocks in the historical order project → dataset → analyses →
+        preferences → insights. See :meth:`_load_memory_blocks` for the thread_id
+        scoping contract, and :meth:`load_context_layers` for the placement split.
+        """
+        try:
+            blocks = await self._load_memory_blocks(session_id, thread_id)
+            parts = [
+                blocks[k]
+                for k in ("project", "dataset", "analyses", "prefs", "insights")
+                if blocks[k]
+            ]
             return "\n".join(parts) if parts else ""
         except Exception as e:
             logger.error(f"Failed to load memory context: {e}", exc_info=True)
             return ""
+
+    async def load_context_layers(
+        self, session_id: str, thread_id: str = ""
+    ) -> tuple[str, str]:
+        """Decision-2 placement split → ``(stable_system_memory, volatile_message_memory)``.
+
+        - **stable** = project context + user preferences — durable identity that
+          rarely changes, so it stays in the cache-warm, authoritative SYSTEM layer.
+        - **volatile** = current dataset + recent analyses + insights — evolve as
+          work progresses (written mid-session), so they ride the MESSAGE layer
+          (ADR 0024 Volatile context); a mid-session memory write therefore no
+          longer churns the byte-stable system prefix.
+
+        Same per-kind scoping / error-swallowing as :meth:`load_context`.
+        """
+        try:
+            blocks = await self._load_memory_blocks(session_id, thread_id)
+            stable = [blocks[k] for k in ("project", "prefs") if blocks[k]]
+            volatile = [blocks[k] for k in ("dataset", "analyses", "insights") if blocks[k]]
+            return "\n".join(stable), "\n".join(volatile)
+        except Exception as e:
+            logger.error(f"Failed to load layered memory context: {e}", exc_info=True)
+            return "", ""
 
 
 def init(
