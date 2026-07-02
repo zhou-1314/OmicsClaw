@@ -69,6 +69,15 @@ jobs:
       - name: Validate v2 skill.yaml contracts (ADR 0037 dual-track)
         run: python scripts/validate_skill_yaml.py --check
 
+      - name: Check routing table (CLAUDE.md) is fresh
+        run: python scripts/generate_routing_table.py --check
+
+      - name: Check per-domain INDEX.md is fresh
+        run: python scripts/generate_domain_index.py --check
+
+      - name: Check SKILL.md description drift (catalog / INDEX / routing)
+        run: python scripts/check_description_drift.py
+
       - name: Catalog generator regression tests
         run: python -m pytest tests/test_generate_catalog.py -v
 

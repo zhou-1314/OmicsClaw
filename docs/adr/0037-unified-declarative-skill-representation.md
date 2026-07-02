@@ -21,9 +21,12 @@ falling back to v1 when absent or invalid; discovery + `load_lightweight` accept
 load. The one-way generators are now landed — catalog/INDEX/routing (dual-track) +
 `references/parameters.md` (`generate_parameters_md.py`) + the **narrative SKILL.md
 header & I/O summary** (`scripts/generate_skill_md.py` + `omicsclaw/skill/skill_md.py`),
-fed by `interface` auto-population (`omicsclaw/skill/interface_extract.py`); all
-`--check`-gated in CI. Still pending: the 3-layer `result_json.required_keys` check,
-R/bash dep semantics, and completing per-domain in-place rollout.
+fed by `interface` auto-population (`omicsclaw/skill/interface_extract.py`). The
+catalog / `references/parameters.md` / SKILL.md-header / routing-table / per-domain
+`INDEX.md` / description-drift generators are all `--check`-gated in CI. The
+per-domain in-place rollout is **complete** (95/95 skills carry `skill.yaml`; 0
+`parameters.yaml` remain; merged in #23). Still pending: the 3-layer
+`result_json.required_keys` check and R/bash dep semantics.
 
 ## Context
 
@@ -101,7 +104,7 @@ schema_version: 2
 id: spatial-preprocess
 name: spatial-preprocess
 domain: spatial                 # 8 domains (7 analysis/orchestration + literature)
-type: leaf                      # leaf | workflow
+type: leaf                      # leaf | workflow | consensus (ADR 0038)
 version: 0.6.0
 author: OmicsClaw               # preserved from v1 frontmatter (lossless)
 license: MIT                    # preserved from v1 frontmatter (lossless)
