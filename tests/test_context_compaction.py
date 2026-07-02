@@ -10,6 +10,16 @@ from omicsclaw.runtime.context.compaction import (
 )
 from omicsclaw.runtime.storage.tool_result import ToolResultStore
 
+import asyncio
+
+
+def _prep(**kwargs):
+    # prepare_model_messages is async (F6 threads an optional LLM refine through
+    # the collapse/auto stages). These synchronous tests drive it via asyncio.run;
+    # with no ``llm`` passed the path is byte-for-byte identical to the old sync
+    # deterministic behavior.
+    return asyncio.run(prepare_model_messages(**kwargs))
+
 
 def test_prepare_model_messages_applies_snip_and_micro_before_heavy_stages(tmp_path):
     result_store = ToolResultStore(
@@ -25,7 +35,7 @@ def test_prepare_model_messages_applies_snip_and_micro_before_heavy_stages(tmp_p
         success=True,
     )
 
-    prepared = prepare_model_messages(
+    prepared = _prep(
         system_prompt="SYSTEM",
         history=[
             {"role": "user", "content": "older user " + ("A" * 1200)},
@@ -81,7 +91,7 @@ def test_snip_preserves_tool_call_arguments(tmp_path):
 
     store = ToolResultStore(storage_dir=tmp_path / "tr")
     big_args = '{"path":"/data/sample.h5ad","payload":"' + ("Z" * 4000) + '"}'
-    prepared = prepare_model_messages(
+    prepared = _prep(
         system_prompt="SYSTEM",
         history=[
             {"role": "user", "content": "please run " + ("Q" * 4000)},
@@ -125,7 +135,7 @@ def test_prepare_model_messages_runs_context_collapse_before_auto_compact(tmp_pa
         history.append({"role": "user", "content": f"user step {index} " + ("A" * 180)})
         history.append({"role": "assistant", "content": f"assistant step {index} " + ("B" * 180)})
 
-    prepared = prepare_model_messages(
+    prepared = _prep(
         system_prompt="SYSTEM",
         history=history,
         chat_id="chat-collapse",
@@ -158,7 +168,7 @@ def test_prepare_model_messages_runs_auto_compact_when_collapse_is_not_enough(tm
         history.append({"role": "user", "content": f"user step {index} " + ("A" * 260)})
         history.append({"role": "assistant", "content": f"assistant step {index} " + ("B" * 260)})
 
-    prepared = prepare_model_messages(
+    prepared = _prep(
         system_prompt="SYSTEM",
         history=history,
         chat_id="chat-auto",
@@ -199,7 +209,7 @@ def _hoist_next_turn(prepared, *, config, tool_result_store, chat_id):
         {"role": "system", "content": wrap_compaction_summary(prepared.persisted_summary)},
         *prepared.messages,
     ]
-    return prepare_model_messages(
+    return _prep(
         system_prompt="SYSTEM",
         history=next_history,
         chat_id=chat_id,
@@ -231,7 +241,7 @@ def test_byte_stable_single_collapse(tmp_path):
         collapse_trigger_ratio=0.45, auto_compact_trigger_ratio=0.99,
         collapse_preserve_messages=4, collapse_preserve_chars=600,
     )
-    first = prepare_model_messages(
+    first = _prep(
         system_prompt="SYSTEM", history=_pairs(8, "A" * 180), chat_id="c",
         tool_result_store=store, config=config,
     )
@@ -249,7 +259,7 @@ def test_byte_stable_collapse_plus_auto(tmp_path):
         collapse_preserve_messages=8, collapse_preserve_chars=1_200,
         auto_compact_preserve_messages=2, auto_compact_preserve_chars=220,
     )
-    first = prepare_model_messages(
+    first = _prep(
         system_prompt="SYSTEM", history=_pairs(10, "A" * 260), chat_id="c",
         tool_result_store=store, config=config,
     )
@@ -266,7 +276,7 @@ def test_byte_stable_reactive(tmp_path):
         max_prompt_chars=4_000, snip_message_chars=4_000, protected_tail_messages=1,
         reactive_preserve_messages=2, reactive_preserve_chars=200,
     )
-    first = prepare_model_messages(
+    first = _prep(
         system_prompt="SYSTEM", history=_pairs(8, "A" * 180), chat_id="c",
         tool_result_store=store, config=config, force_reactive_compact=True,
     )
@@ -287,14 +297,14 @@ def test_prepare_model_messages_reports_observational_budget_status(tmp_path):
         snip_message_chars=1_000_000,  # never snip the big message
         context_window_tokens=10_000,  # effective = 10000 - 4096 - 2048 = 3856 tok
     )
-    small = prepare_model_messages(
+    small = _prep(
         system_prompt="SYS",
         history=[{"role": "user", "content": "x" * 3_000}],
         chat_id="c",
         tool_result_store=store,
         config=config,
     )
-    big = prepare_model_messages(
+    big = _prep(
         system_prompt="SYS",
         history=[{"role": "user", "content": "x" * 30_000}],
         chat_id="c",
@@ -310,7 +320,7 @@ def test_prepare_model_messages_budget_status_none_without_window(tmp_path):
     # Backward-compatible: no configured window -> no observational status.
     store = ToolResultStore(storage_dir=tmp_path / "tr")
     config = ContextCompactionConfig(max_prompt_chars=1_000_000)
-    prepared = prepare_model_messages(
+    prepared = _prep(
         system_prompt="SYS",
         history=[{"role": "user", "content": "hello"}],
         chat_id="c",
@@ -326,7 +336,7 @@ def test_prepare_model_messages_budget_status_blocks_on_zero_window(tmp_path):
 
     store = ToolResultStore(storage_dir=tmp_path / "tr")
     config = ContextCompactionConfig(max_prompt_chars=1_000_000, context_window_tokens=0)
-    prepared = prepare_model_messages(
+    prepared = _prep(
         system_prompt="SYS",
         history=[{"role": "user", "content": "hi"}],
         chat_id="c",
@@ -349,14 +359,14 @@ def test_prepare_model_messages_reports_local_budget_status(tmp_path):
         collapse_trigger_ratio=0.99,
         auto_compact_trigger_ratio=0.999,  # isolate: never collapse here
     )
-    small = prepare_model_messages(
+    small = _prep(
         system_prompt="SYS",
         history=[{"role": "user", "content": "x" * 1_000}],
         chat_id="c",
         tool_result_store=store,
         config=config,
     )
-    full = prepare_model_messages(
+    full = _prep(
         system_prompt="SYS",
         history=[{"role": "user", "content": "x" * 9_800}],
         chat_id="c",
@@ -371,7 +381,7 @@ def test_prepare_model_messages_local_budget_status_none_without_char_budget(tmp
     # Backward-compatible: no char budget -> no local status.
     store = ToolResultStore(storage_dir=tmp_path / "tr")
     config = ContextCompactionConfig(max_prompt_chars=None)
-    prepared = prepare_model_messages(
+    prepared = _prep(
         system_prompt="SYS",
         history=[{"role": "user", "content": "hello"}],
         chat_id="c",
@@ -398,14 +408,14 @@ def test_collapse_target_ratio_scales_preserve_with_budget(tmp_path):
     )
     history = _pairs(40, "A" * 400)  # ~33600 chars > 20000 -> collapse fires
 
-    fixed = prepare_model_messages(
+    fixed = _prep(
         system_prompt="SYSTEM",
         history=history,
         chat_id="c",
         tool_result_store=store,
         config=ContextCompactionConfig(**base),
     )
-    scaled = prepare_model_messages(
+    scaled = _prep(
         system_prompt="SYSTEM",
         history=history,
         chat_id="c",
@@ -435,7 +445,7 @@ def test_byte_stable_collapse_with_target_ratio(tmp_path):
         collapse_preserve_chars=2_000,
         collapse_target_ratio=0.50,  # target 20000 << trigger 32000
     )
-    first = prepare_model_messages(
+    first = _prep(
         system_prompt="SYSTEM",
         history=_pairs(60, "A" * 300),
         chat_id="c",
@@ -500,7 +510,7 @@ def test_byte_stable_collapse_with_target_ratio_large_summary(tmp_path):
         collapse_preserve_chars=200,
         collapse_target_ratio=0.40,  # total target 3200
     )
-    first = prepare_model_messages(
+    first = _prep(
         system_prompt="SYSTEM",  # must match _hoist_next_turn's hardcoded base
         history=history,
         chat_id="c",
@@ -530,7 +540,7 @@ def test_compress_to_target_lifts_message_cap_and_is_system_size_invariant(tmp_p
     store = ToolResultStore(storage_dir=tmp_path / "tr")
 
     def prep(system_prompt):
-        return prepare_model_messages(
+        return _prep(
             system_prompt=system_prompt,
             history=_pairs(120, "A" * 200),  # many small msgs -> would hit msg cap
             chat_id="c",
@@ -576,7 +586,7 @@ def test_compress_to_target_bounds_tail_when_system_exceeds_target(tmp_path):
         collapse_preserve_chars=None,  # no floor
         collapse_target_ratio=0.50,  # total target 10000
     )
-    prepared = prepare_model_messages(
+    prepared = _prep(
         system_prompt="S" * 11_000,  # system alone > target (10000)
         history=_pairs(40, "A" * 200),  # ~16000 chars of history
         chat_id="c",
@@ -597,7 +607,7 @@ def test_byte_stable_prior_summary_plus_new_collapse(tmp_path):
         collapse_trigger_ratio=0.45, auto_compact_trigger_ratio=0.99,
         collapse_preserve_messages=4, collapse_preserve_chars=600,
     )
-    first = prepare_model_messages(
+    first = _prep(
         system_prompt="SYSTEM", history=_pairs(8, "A" * 180), chat_id="c",
         tool_result_store=store, config=config,
     )
@@ -608,7 +618,7 @@ def test_byte_stable_prior_summary_plus_new_collapse(tmp_path):
         *first.messages,
         *_pairs(8, "C" * 180),
     ]
-    second = prepare_model_messages(
+    second = _prep(
         system_prompt="SYSTEM", history=combined_history, chat_id="c",
         tool_result_store=store, config=config,
     )
@@ -616,3 +626,307 @@ def test_byte_stable_prior_summary_plus_new_collapse(tmp_path):
     _assert_one_compaction_one_rewarm(
         second, config=config, tool_result_store=store, chat_id="c"
     )
+
+
+# ---------------------------------------------------------------------------
+# F6 — LLM-condensed collapse summary (opt-in). The LLM refine fires ONLY on the
+# target-active collapse/auto path; it is capped at the template's length so the
+# byte-stable re-hoist (F2, one compaction = one re-warm) holds, and falls back to
+# the deterministic template on any timeout/error/empty/oversized output.
+# ---------------------------------------------------------------------------
+
+_LLM_MARKER = "LLM-EPISODE-SUMMARY::user goal + tool paths condensed"
+
+
+class _FakeMsg:
+    def __init__(self, content):
+        self.content = content
+
+
+class _FakeChoice:
+    def __init__(self, content):
+        self.message = _FakeMsg(content)
+
+
+class _FakeResp:
+    def __init__(self, content):
+        self.choices = [_FakeChoice(content)]
+
+
+class _FakeCompletions:
+    def __init__(self, outer):
+        self._outer = outer
+
+    async def create(self, **kwargs):
+        return await self._outer._create(**kwargs)
+
+
+class _FakeChat:
+    def __init__(self, outer):
+        self.completions = _FakeCompletions(outer)
+
+
+class _FakeSummaryLLM:
+    """Minimal OpenAI-shaped client exposing chat.completions.create for F6."""
+
+    def __init__(self, *, content=None, error=None, delay=0.0):
+        self._content = content
+        self._error = error
+        self._delay = delay
+        self.calls = []
+        self.chat = _FakeChat(self)
+
+    async def _create(self, *, model, max_tokens, messages, stream):
+        self.calls.append(
+            {"model": model, "max_tokens": max_tokens, "messages": messages, "stream": stream}
+        )
+        if self._delay:
+            await asyncio.sleep(self._delay)
+        if self._error is not None:
+            raise self._error
+        return _FakeResp(self._content)
+
+
+def _prep_llm(llm, **kwargs):
+    kwargs.setdefault("llm_model", "fake-model")
+    return asyncio.run(prepare_model_messages(llm=llm, **kwargs))
+
+
+def _f6_config(**overrides):
+    base = dict(
+        max_prompt_chars=4_000,
+        snip_message_chars=4_000,
+        protected_tail_messages=2,
+        collapse_trigger_ratio=0.45,
+        collapse_target_ratio=0.35,
+        auto_compact_trigger_ratio=0.99,
+        collapse_preserve_messages=4,
+        collapse_preserve_chars=600,
+        collapse_llm_summary_enabled=True,
+        llm_summary_min_omitted=4,
+    )
+    base.update(overrides)
+    return ContextCompactionConfig(**base)
+
+
+def _collapse_section_body(persisted_summary, heading="Context Collapse"):
+    marker = f"### {heading}\n\n"
+    start = persisted_summary.index(marker) + len(marker)
+    rest = persisted_summary[start:]
+    end = rest.find("\n\n---\n\n")
+    return (rest if end == -1 else rest[:end]).strip()
+
+
+def test_f6_llm_summary_sent_equals_persisted(tmp_path):
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    llm = _FakeSummaryLLM(content=_LLM_MARKER)
+    config = _f6_config()
+    first = _prep_llm(
+        llm, system_prompt="SYSTEM", history=_pairs(12, "A" * 180), chat_id="c",
+        tool_result_store=store, config=config,
+    )
+    assert STAGE_CONTEXT_COLLAPSE in first.applied_stages
+    assert len(llm.calls) == 1  # exactly one refine call on the collapse turn
+    # The LLM text is what got sent AND persisted (approach A: same summary_sections).
+    assert _LLM_MARKER in first.system_prompt
+    assert _collapse_section_body(first.persisted_summary) == _LLM_MARKER
+
+
+def test_f6_byte_stable_across_hoist_with_llm_summary(tmp_path):
+    # F2: a single collapse with an LLM summary must re-hoist byte-for-byte and
+    # NOT re-collapse next turn (the length cap keeps N+1 within the same budget
+    # the template already satisfied).
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    llm = _FakeSummaryLLM(content=_LLM_MARKER)
+    config = _f6_config()
+    first = _prep_llm(
+        llm, system_prompt="SYSTEM", history=_pairs(12, "A" * 180), chat_id="c",
+        tool_result_store=store, config=config,
+    )
+    assert STAGE_CONTEXT_COLLAPSE in first.applied_stages
+    assert _LLM_MARKER in first.system_prompt
+    # Hoist twice with no LLM (verbatim summary ride); prefix stays byte-identical.
+    _assert_one_compaction_one_rewarm(
+        first, config=config, tool_result_store=store, chat_id="c"
+    )
+
+
+def test_f6_llm_error_falls_back_to_template(tmp_path):
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    llm = _FakeSummaryLLM(error=RuntimeError("boom"))
+    config = _f6_config()
+    first = _prep_llm(
+        llm, system_prompt="SYSTEM", history=_pairs(12, "A" * 180), chat_id="c",
+        tool_result_store=store, config=config,
+    )
+    assert STAGE_CONTEXT_COLLAPSE in first.applied_stages
+    assert len(llm.calls) == 1
+    assert _LLM_MARKER not in first.system_prompt
+    # The deterministic template header is present, and it stays byte-stable.
+    assert "earlier message(s) were compacted" in first.persisted_summary
+    _assert_one_compaction_one_rewarm(
+        first, config=config, tool_result_store=store, chat_id="c"
+    )
+
+
+def test_f6_llm_timeout_falls_back_to_template(tmp_path):
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    llm = _FakeSummaryLLM(content=_LLM_MARKER, delay=1.0)
+    config = _f6_config(llm_summary_timeout_s=0.05)
+    first = _prep_llm(
+        llm, system_prompt="SYSTEM", history=_pairs(12, "A" * 180), chat_id="c",
+        tool_result_store=store, config=config,
+    )
+    assert STAGE_CONTEXT_COLLAPSE in first.applied_stages
+    assert _LLM_MARKER not in first.system_prompt
+    assert "earlier message(s) were compacted" in first.persisted_summary
+
+
+def test_f6_empty_and_oversized_summaries_rejected(tmp_path):
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    config = _f6_config()
+    # Empty output -> template.
+    empty_llm = _FakeSummaryLLM(content="   ")
+    empty = _prep_llm(
+        empty_llm, system_prompt="SYSTEM", history=_pairs(12, "A" * 180), chat_id="c",
+        tool_result_store=store, config=config,
+    )
+    assert _LLM_MARKER not in empty.system_prompt
+    assert "earlier message(s) were compacted" in empty.persisted_summary
+    # Oversized output (> template length) -> template (the F2 length cap).
+    huge_llm = _FakeSummaryLLM(content="Z" * 100_000)
+    huge = _prep_llm(
+        huge_llm, system_prompt="SYSTEM", history=_pairs(12, "A" * 180), chat_id="c2",
+        tool_result_store=store, config=config,
+    )
+    assert "Z" * 100_000 not in huge.system_prompt
+    assert "earlier message(s) were compacted" in huge.persisted_summary
+    _assert_one_compaction_one_rewarm(
+        huge, config=config, tool_result_store=store, chat_id="c2"
+    )
+
+
+def test_f6_tier1_lossless_skip_below_threshold(tmp_path):
+    # Omitted set smaller than llm_summary_min_omitted -> no LLM call, template kept.
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    llm = _FakeSummaryLLM(content=_LLM_MARKER)
+    config = _f6_config(llm_summary_min_omitted=1000)
+    first = _prep_llm(
+        llm, system_prompt="SYSTEM", history=_pairs(12, "A" * 180), chat_id="c",
+        tool_result_store=store, config=config,
+    )
+    assert STAGE_CONTEXT_COLLAPSE in first.applied_stages
+    assert llm.calls == []
+    assert _LLM_MARKER not in first.system_prompt
+
+
+def test_f6_disabled_flag_never_calls_llm(tmp_path):
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    llm = _FakeSummaryLLM(content=_LLM_MARKER)
+    config = _f6_config(collapse_llm_summary_enabled=False)
+    first = _prep_llm(
+        llm, system_prompt="SYSTEM", history=_pairs(12, "A" * 180), chat_id="c",
+        tool_result_store=store, config=config,
+    )
+    assert STAGE_CONTEXT_COLLAPSE in first.applied_stages
+    assert llm.calls == []
+    assert _LLM_MARKER not in first.system_prompt
+
+
+def test_f6_reactive_path_stays_deterministic(tmp_path):
+    # The emergency reactive/413 path must never fire the LLM refine even if a
+    # client is threaded through, because it early-returns before the target branch.
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    llm = _FakeSummaryLLM(content=_LLM_MARKER)
+    config = _f6_config(reactive_preserve_messages=2, reactive_preserve_chars=300)
+    first = _prep_llm(
+        llm, system_prompt="SYSTEM", history=_pairs(12, "A" * 180), chat_id="c",
+        tool_result_store=store, config=config, force_reactive_compact=True,
+    )
+    assert STAGE_REACTIVE_COMPACT in first.applied_stages
+    assert llm.calls == []
+    assert _LLM_MARKER not in first.system_prompt
+
+
+def test_f6_bytewise_denser_summary_rejected(tmp_path):
+    # The F2 cap bounds BOTH code points and UTF-8 bytes: a summary with the SAME
+    # code-point count as the template but more bytes (CJK vs ASCII) is rejected,
+    # so a denser-encoded summary cannot silently balloon the real provider payload.
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    config = _f6_config()
+    hist = _pairs(12, "A" * 180)
+    det = _prep(  # llm=None -> deterministic template
+        system_prompt="SYSTEM", history=hist, chat_id="c0",
+        tool_result_store=store, config=config,
+    )
+    tmpl = _collapse_section_body(det.persisted_summary)
+    n = len(tmpl)
+    cjk = "中" * n  # n code points (<= cap) but 3n bytes (> cap)
+    assert len(cjk) <= n and len(cjk.encode("utf-8")) > len(tmpl.encode("utf-8"))
+    cjk_res = _prep_llm(
+        _FakeSummaryLLM(content=cjk), system_prompt="SYSTEM", history=hist,
+        chat_id="c1", tool_result_store=store, config=config,
+    )
+    assert cjk not in cjk_res.system_prompt
+    assert _collapse_section_body(cjk_res.persisted_summary) == tmpl  # fell back
+    # An ASCII summary of the SAME code-point count passes both caps -> accepted.
+    ascii_ok = "a" * n
+    ok_res = _prep_llm(
+        _FakeSummaryLLM(content=ascii_ok), system_prompt="SYSTEM", history=hist,
+        chat_id="c2", tool_result_store=store, config=config,
+    )
+    assert _collapse_section_body(ok_res.persisted_summary) == ascii_ok  # accepted
+
+
+def test_f6_llm_sees_omitted_history_and_antimimicry_prompt(tmp_path):
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    llm = _FakeSummaryLLM(content="SHORT")
+    config = _f6_config()
+    first = _prep_llm(
+        llm, system_prompt="SYSTEM", history=_pairs(12, "A" * 180), chat_id="c",
+        tool_result_store=store, config=config,
+    )
+    assert STAGE_CONTEXT_COLLAPSE in first.applied_stages
+    assert len(llm.calls) == 1
+    system_msg = llm.calls[0]["messages"][0]
+    user_msg = llm.calls[0]["messages"][1]
+    # The oldest omitted message reaches the summarizer (full omitted set fed).
+    assert "user step 0" in user_msg["content"]
+    # The summarizer is instructed against reproducing tool-call syntax (anti-mimicry).
+    assert system_msg["role"] == "system"
+    assert "tool-call syntax" in system_msg["content"]
+
+
+def test_f6_tool_call_shaped_summary_rejected(tmp_path):
+    # P2 anti-mimicry: a summary that imitates a tool/function call must be rejected
+    # to the template so it can't be persisted into the context and induce the model
+    # to mimic tool calls on later turns. Plain past-tense prose is still accepted.
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    config = _f6_config()
+    hist = _pairs(12, "A" * 180)
+    det = _prep(
+        system_prompt="SYSTEM", history=hist, chat_id="c0",
+        tool_result_store=store, config=config,
+    )
+    tmpl = _collapse_section_body(det.persisted_summary)
+
+    for i, bad in enumerate(
+        [
+            '{"tool": "run_skill", "arguments": {}}',
+            '<tool_call name="Read">/data</tool_call>',
+            'The assistant did work; "arguments": {"path": "/x"} were used.',
+        ]
+    ):
+        res = _prep_llm(
+            _FakeSummaryLLM(content=bad), system_prompt="SYSTEM", history=hist,
+            chat_id=f"bad{i}", tool_result_store=store, config=config,
+        )
+        assert bad not in res.system_prompt
+        assert _collapse_section_body(res.persisted_summary) == tmpl  # fell back
+
+    good = "The user asked to profile data; the assistant read config.py and edited it."
+    ok = _prep_llm(
+        _FakeSummaryLLM(content=good), system_prompt="SYSTEM", history=hist,
+        chat_id="good", tool_result_store=store, config=config,
+    )
+    assert _collapse_section_body(ok.persisted_summary) == good  # accepted (no markers)

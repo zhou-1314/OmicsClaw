@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import copy
-from dataclasses import dataclass
+import json
+import logging
+import re
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ..context.budget import (
@@ -110,6 +114,19 @@ class ContextCompactionConfig:
     # a token count for the status only (not the char thresholds above).
     context_window_tokens: int | None = None
     chars_per_token: float = CHARS_PER_TOKEN
+    # F6 — LLM-condensed collapse summary (opt-in, ships dark). When enabled AND a
+    # collapse/auto-compact stage fires (target-active branch only) over an omitted
+    # set of at least ``llm_summary_min_omitted`` messages, the deterministic
+    # template summary is upgraded to an LLM "episode" summary, validated (tier 3:
+    # non-empty and NO LONGER than the template, so the byte-stable re-hoist stays
+    # within the same budget the template already satisfied — F2 one-compaction =
+    # one-rewarm), and falls back to the template on any timeout/error/validation
+    # failure. Structurally unreachable from snip/micro (every-turn hot path),
+    # reactive-413, and /compact (they never enter _collapse_with_target).
+    collapse_llm_summary_enabled: bool = False
+    llm_summary_min_omitted: int = 8
+    llm_summary_timeout_s: float = 20.0
+    llm_summary_max_tokens: int = 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +145,10 @@ class _CollapseResult:
     messages: list[dict[str, Any]]
     summary: str
     omitted_count: int
+    # F6 — the omitted (dropped-with-summary) messages, so a caller can feed them
+    # to an LLM episode summarizer. Populated by _collapse_history; empty when
+    # nothing was omitted. Never itself persisted or sent to the model.
+    omitted_history: list[dict[str, Any]] = field(default_factory=list)
 
 
 def estimate_prompt_chars(system_prompt: str, messages: list[dict[str, Any]]) -> int:
@@ -256,7 +277,175 @@ def _preserve_message_target(
     return -1 if target_ratio is not None else preserve_messages
 
 
-def _collapse_with_target(
+_EPISODE_SUMMARY_SYSTEM_PROMPT = (
+    "You are compacting an ongoing AI agent conversation to keep it within its "
+    "context budget. Summarize the omitted transcript below into a concise, "
+    "faithful episode summary. Preserve: the user's goals and constraints, key "
+    "decisions and their rationale, tool results and any file/artifact paths, and "
+    "durable workspace state. Do NOT invent facts and do NOT add pleasantries. "
+    "CRITICAL: never reproduce tool-call syntax, function-call JSON, or any text "
+    "that imitates invoking a tool — refer to past tool use only as plain past-tense "
+    "narration (e.g. \"read config.py\", not a tool call), so the summary cannot "
+    "induce the model to mimic tool calls on later turns. Write dense prose or "
+    "bullet points; be brief."
+)
+
+
+def _render_omitted_for_summary(omitted_history: list[dict[str, Any]]) -> str:
+    """Render the omitted messages as plain text for the LLM summarizer (F6).
+
+    Feeds the RAW omitted content (not previews) so the model can condense with
+    full fidelity; the model's job is the compression.
+    """
+    parts: list[str] = []
+    for message in omitted_history:
+        role = str(message.get("role", "") or "")
+        content = _flatten_message_content(message.get("content", ""))
+        tool_calls = message.get("tool_calls")
+        if role == "assistant" and tool_calls:
+            names = []
+            for tool_call in tool_calls or []:
+                if not isinstance(tool_call, dict):
+                    continue
+                function_block = tool_call.get("function")
+                if isinstance(function_block, dict) and function_block.get("name"):
+                    names.append(str(function_block.get("name")))
+            if names:
+                marker = f"[called tools: {', '.join(names)}]"
+                content = f"{content}\n{marker}".strip() if content else marker
+        if content:
+            parts.append(f"{role.upper()}: {content}")
+    return "\n\n".join(parts)
+
+
+def _should_refine_episode(
+    llm: Any,
+    config: "ContextCompactionConfig",
+    omitted_history: list[dict[str, Any]],
+) -> bool:
+    """F6 tier-1 gate: only refine with an LLM when opted in and the omitted set is
+    large enough to be worth a round-trip. (Reached only on the target-active
+    collapse/auto path, so /compact + reactive are excluded structurally.)"""
+    return (
+        llm is not None
+        and config.collapse_llm_summary_enabled
+        and len(omitted_history) >= max(1, config.llm_summary_min_omitted)
+    )
+
+
+_TOOL_CALL_SIGNATURE = re.compile(
+    r'"(?:tool_calls|tool_call_id|function|arguments)"\s*:'
+    r"|<\s*(?:tool_call|tool_use|function_calls|invoke)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_tool_invocation(text: str) -> bool:
+    """True if the summary imitates a tool/function call (F6 anti-mimicry).
+
+    The deterministic path renders prior tool calls as inert XML metadata; a free
+    LLM summary must not reintroduce function-call JSON or tool-call tags into the
+    persisted context, which would prompt the model to mimic tool calls as plain
+    text on later turns (see _message_preview). A whole-body JSON object/array is
+    never a legitimate prose episode summary, and the structural markers below are
+    strong tool-call signals unlikely in faithful narration. Rejected → template.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if stripped[0] in "{[":
+        try:
+            json.loads(stripped)
+            return True
+        except Exception:
+            pass
+    return bool(_TOOL_CALL_SIGNATURE.search(stripped))
+
+
+def _extract_summary_text(response: Any) -> str:
+    """Pull the assistant content from a non-streaming chat completion, tolerating
+    both SDK objects (``.choices[0].message.content``) and plain dicts."""
+    try:
+        choices = getattr(response, "choices", None)
+        if choices is None and isinstance(response, dict):
+            choices = response.get("choices")
+        if not choices:
+            return ""
+        first = choices[0]
+        message = getattr(first, "message", None)
+        if message is None and isinstance(first, dict):
+            message = first.get("message")
+        content = getattr(message, "content", None)
+        if content is None and isinstance(message, dict):
+            content = message.get("content")
+        return str(content or "")
+    except Exception:
+        return ""
+
+
+async def _summarize_episode_llm(
+    *,
+    llm: Any,
+    llm_model: str | None,
+    omitted_history: list[dict[str, Any]],
+    template_fallback: str,
+    config: "ContextCompactionConfig",
+    max_summary_chars: int,
+) -> str:
+    """F6 tier-2/3: one bounded LLM call to condense ``omitted_history`` into an
+    episode summary, else the deterministic ``template_fallback``.
+
+    All-or-nothing: any timeout, client error, empty output, or a summary longer
+    than ``max_summary_chars`` (the template's length — the F2 length cap) returns
+    the template unchanged. Never raises except on cancellation.
+    """
+    if max_summary_chars <= 0:
+        return template_fallback
+    try:
+        rendered = _render_omitted_for_summary(omitted_history)
+        if not rendered.strip():
+            return template_fallback
+        response = await asyncio.wait_for(
+            llm.chat.completions.create(
+                model=llm_model,
+                max_tokens=config.llm_summary_max_tokens,
+                messages=[
+                    {"role": "system", "content": _EPISODE_SUMMARY_SYSTEM_PROMPT},
+                    {"role": "user", "content": rendered},
+                ],
+                stream=False,
+            ),
+            timeout=max(0.1, config.llm_summary_timeout_s),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "F6 LLM episode summary failed; falling back to the deterministic "
+            "template summary.",
+            exc_info=True,
+        )
+        return template_fallback
+
+    summary = _extract_summary_text(response).strip()
+    # Tier-3 validation. The length cap (<= the template) is load-bearing for F2:
+    # a summary no larger than the template keeps the re-hoisted system prompt no
+    # larger than the deterministic path already produced, so the next turn cannot
+    # newly cross the collapse trigger (one compaction = one re-warm). Bound BOTH
+    # code points (the unit the char-based trigger + estimator use) AND UTF-8 bytes
+    # (defense in depth: a same-code-point-count but denser-encoded summary — e.g.
+    # CJK/emoji replacing ASCII — must not inflate the real provider payload and
+    # risk a 413 → deterministic reactive compact → a second re-warm).
+    if not summary or len(summary) > max_summary_chars:
+        return template_fallback
+    if len(summary.encode("utf-8")) > len(template_fallback.encode("utf-8")):
+        return template_fallback
+    if _looks_like_tool_invocation(summary):
+        return template_fallback
+    return summary
+
+
+async def _collapse_with_target(
     messages: list[dict[str, Any]],
     *,
     preserve_messages: int,
@@ -268,6 +457,8 @@ def _collapse_with_target(
     metadata: dict[str, Any] | None,
     workspace: str | None,
     config: "ContextCompactionConfig",
+    llm: Any = None,
+    llm_model: str | None = None,
 ) -> "_CollapseResult":
     """§9.3 slice 3: collapse converging the FINAL total to the target.
 
@@ -335,11 +526,35 @@ def _collapse_with_target(
     )
     dropped = len(result.messages) - len(trimmed)
     if dropped > 0:
-        return _CollapseResult(
+        # trim keeps the newest contiguous suffix, so the dropped messages are the
+        # oldest `dropped` of result.messages. Fold them into omitted_history so the
+        # F6 LLM episode summary sees the FULL omitted set — otherwise omitted_count
+        # would claim they were compacted while neither the template nor the LLM
+        # ever saw them (a fidelity gap for a "faithful summary of omitted history").
+        result = _CollapseResult(
             messages=trimmed,
             summary=result.summary,
             omitted_count=result.omitted_count + dropped,
+            omitted_history=[*result.omitted_history, *result.messages[:dropped]],
         )
+
+    # F6: optionally upgrade the deterministic template summary to an LLM episode
+    # summary, capped at the template's length. Because the chosen summary is never
+    # longer than the template, the re-hoisted next-turn system prompt is no larger
+    # than the deterministic path already produced (which the byte-stable tests
+    # pin under the trigger) — so F2 (one compaction = one re-warm) holds without
+    # re-sizing the preserved tail. Falls back to the template on any failure.
+    if _should_refine_episode(llm, config, result.omitted_history):
+        chosen = await _summarize_episode_llm(
+            llm=llm,
+            llm_model=llm_model,
+            omitted_history=result.omitted_history,
+            template_fallback=result.summary,
+            config=config,
+            max_summary_chars=len(result.summary),
+        )
+        if chosen != result.summary:
+            result = replace(result, summary=chosen)
     return result
 
 
@@ -611,10 +826,11 @@ def _collapse_history(
         messages=trimmed,
         summary=summary,
         omitted_count=omitted_count,
+        omitted_history=omitted_history,
     )
 
 
-def prepare_model_messages(
+async def prepare_model_messages(
     *,
     system_prompt: str,
     history: list[dict[str, Any]],
@@ -624,6 +840,8 @@ def prepare_model_messages(
     metadata: dict[str, Any] | None = None,
     workspace: str | None = None,
     force_reactive_compact: bool = False,
+    llm: Any = None,
+    llm_model: str | None = None,
 ) -> PreparedModelMessages:
     messages = [copy.deepcopy(message) for message in history]
     base_prompt = str(system_prompt or "")
@@ -714,7 +932,7 @@ def prepare_model_messages(
 
     current_chars = estimate_prompt_chars(_render_system(), messages)
     if collapse_threshold is not None and current_chars > collapse_threshold:
-        collapse_result = _collapse_with_target(
+        collapse_result = await _collapse_with_target(
             messages,
             preserve_messages=_preserve_message_target(
                 config.collapse_preserve_messages, config.collapse_target_ratio
@@ -727,6 +945,8 @@ def prepare_model_messages(
             metadata=metadata,
             workspace=workspace,
             config=config,
+            llm=llm,
+            llm_model=llm_model,
         )
         if collapse_result.omitted_count > 0:
             messages = collapse_result.messages
@@ -735,7 +955,7 @@ def prepare_model_messages(
             current_chars = estimate_prompt_chars(_render_system(), messages)
 
     if auto_threshold is not None and current_chars > auto_threshold:
-        auto_result = _collapse_with_target(
+        auto_result = await _collapse_with_target(
             messages,
             preserve_messages=_preserve_message_target(
                 config.auto_compact_preserve_messages, config.auto_compact_target_ratio
@@ -748,6 +968,8 @@ def prepare_model_messages(
             metadata=metadata,
             workspace=workspace,
             config=config,
+            llm=llm,
+            llm_model=llm_model,
         )
         if auto_result.omitted_count > 0:
             messages = auto_result.messages

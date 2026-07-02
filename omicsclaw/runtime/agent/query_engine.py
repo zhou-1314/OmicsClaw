@@ -1233,7 +1233,10 @@ async def _call_llm_with_reactive_compact_retry(
                 raise
 
             reactive_pre_chars = sum(estimate_message_size(m) for m in history)
-            reactive_messages = prepare_model_messages(
+            # Reactive/413 is an emergency recovery path: deterministic only, so
+            # no ``llm`` is passed (F6 refine must never fire here — the retry
+            # cannot itself risk another LLM round-trip that may also 413).
+            reactive_messages = await prepare_model_messages(
                 system_prompt=system_prompt,
                 history=history,
                 chat_id=context.chat_id,
@@ -1375,7 +1378,7 @@ async def run_query_engine(
         state.iteration = iteration_index
         history = transcript_store.prepare_history(context.chat_id)
         pre_chars = sum(estimate_message_size(m) for m in history)
-        prepared_messages = prepare_model_messages(
+        prepared_messages = await prepare_model_messages(
             system_prompt=system_prompt,
             history=history,
             chat_id=context.chat_id,
@@ -1383,6 +1386,8 @@ async def run_query_engine(
             config=config.context_compaction,
             metadata=compaction_metadata,
             workspace=compaction_workspace,
+            llm=llm,
+            llm_model=config.model,
         )
         request_system_prompt = prepared_messages.system_prompt
         request_messages = prepared_messages.messages
