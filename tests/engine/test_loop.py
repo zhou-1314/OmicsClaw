@@ -29,21 +29,31 @@ import omicsclaw.engine.loop as _engine_loop
 
 
 def test_resolve_max_prompt_chars_scales_with_window(monkeypatch):
-    """ADR 0024 — collapse budget shrinks for known-small windows, never
-    exceeds the proven default, falls back to default for unknown windows,
-    and honors the OMICSCLAW_MAX_PROMPT_CHARS override."""
+    """ADR 0024 / cap-policy: collapse budget = min(deliberate DEFAULT_MAX_PROMPT_CHARS
+    budget, window*1.5); it is window-relative below the cap (so small windows shrink
+    AND mid-size windows use their window), capped for large windows, falls back to
+    the default for unknown windows, and honors the OMICSCLAW_MAX_PROMPT_CHARS override."""
     monkeypatch.delenv("OMICSCLAW_MAX_PROMPT_CHARS", raising=False)
 
-    windows = {"big": 1_000_000, "small": 16_000, "unknown": None}
+    windows = {
+        "big": 1_000_000,
+        "small": 16_000,
+        "small_real": 131_072,  # smallest registered window
+        "unknown": None,
+    }
     monkeypatch.setattr(_engine_loop, "get_context_window", lambda m: windows.get(m))
 
-    # Large window: capped at the proven default (no risky growth).
-    assert resolve_max_prompt_chars("big") == 96000
-    # Small known window: shrinks below the default for safety.
-    assert resolve_max_prompt_chars("small") == min(96000, int(16_000 * 3.0 * 0.5))
-    assert resolve_max_prompt_chars("small") < 96000
+    # Large window: capped at the deliberate budget (bounded cost/latency).
+    assert resolve_max_prompt_chars("big") == 256000
+    # Small synthetic window: shrinks well below the cap for safety.
+    assert resolve_max_prompt_chars("small") == min(256000, int(16_000 * 3.0 * 0.5))
+    assert resolve_max_prompt_chars("small") < 256000
+    # A REAL small-window model (131072 tok) is below the 256000 cap, so it now gets
+    # the window-relative budget (the branch the old 96000 cap left dead), not the cap.
+    assert resolve_max_prompt_chars("small_real") == min(256000, int(131_072 * 3.0 * 0.5))
+    assert resolve_max_prompt_chars("small_real") == 196608
     # Unknown window (e.g. Ollama, returns None): conservative default.
-    assert resolve_max_prompt_chars("unknown") == 96000
+    assert resolve_max_prompt_chars("unknown") == 256000
 
     # Explicit override wins regardless of window.
     monkeypatch.setenv("OMICSCLAW_MAX_PROMPT_CHARS", "12345")
@@ -61,7 +71,7 @@ def test_build_compaction_config_sets_budget_relative_targets(monkeypatch):
 
     cfg = _engine_loop._build_compaction_config("big")
 
-    assert cfg.max_prompt_chars == 96000
+    assert cfg.max_prompt_chars == 256000
     assert cfg.context_window_tokens == 1_000_000
     assert cfg.collapse_target_ratio is not None
     assert cfg.auto_compact_target_ratio is not None

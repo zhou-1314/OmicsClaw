@@ -62,10 +62,23 @@ def is_compaction_summary_message(message: dict[str, Any]) -> bool:
     return content.lstrip().startswith(COMPACTION_SUMMARY_OPEN)
 
 
+# Deliberate proactive prompt budget (chars), the single source of truth shared by
+# the dataclass default and engine.resolve_max_prompt_chars. This is a cost/latency
+# *policy*, not a hard window limit: on a large-window model it caps the working
+# prompt at ~85k tokens (256000/CHARS_PER_TOKEN), trading a little more cheap
+# cache-hit-billed history for far less lossy compaction — the model window still
+# has ample room and reactive compaction on a real context-length error is the net.
+# resolve_max_prompt_chars applies it as min(this, window*CHARS_PER_TOKEN*fraction),
+# so windows below ~170k tokens get the smaller window-relative budget, and the env
+# override OMICSCLAW_MAX_PROMPT_CHARS tunes it per deployment. (Was a legacy 96000 /
+# ~32k-token default inherited from the pre-ADR-0024 dataclass; raised deliberately.)
+DEFAULT_MAX_PROMPT_CHARS = 256000
+
+
 @dataclass(frozen=True, slots=True)
 class ContextCompactionConfig:
     enabled: bool = True
-    max_prompt_chars: int | None = 96000
+    max_prompt_chars: int | None = DEFAULT_MAX_PROMPT_CHARS
     snip_message_chars: int = 2400
     protected_tail_messages: int = 4
     micro_keep_recent_tool_messages: int = 1

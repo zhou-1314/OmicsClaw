@@ -31,7 +31,10 @@ from omicsclaw.runtime.agent.query_engine import (
     run_query_engine,
 )
 from omicsclaw.runtime.context.budget import CHARS_PER_TOKEN
-from omicsclaw.runtime.context.compaction import ContextCompactionConfig
+from omicsclaw.runtime.context.compaction import (
+    DEFAULT_MAX_PROMPT_CHARS,
+    ContextCompactionConfig,
+)
 from omicsclaw.runtime.storage.transcript import (
     build_selective_replay_context,
 )
@@ -170,17 +173,18 @@ def _maybe_append_stage_fragment(system_prompt: str, stage: str) -> str:
 
 
 # ADR 0024 — derive the context-collapse char budget from the model's window.
-# Phase 3 made history append-only between collapses, removing the per-turn
-# slide that used to bound small-context providers; this re-introduces a safe
-# bound. Conservative blend (English ~4 chars/tok, CJK ~1.5) and half the window
-# reserved for completion + headroom. We never EXCEED the proven default (no risk
-# from an over-optimistic reported window), only shrink for known-small windows.
-# Unknown windows (e.g. Ollama, which report None) keep the default; operators
-# tune those via OMICSCLAW_MAX_PROMPT_CHARS. Reactive compaction on a context
-# error remains the ultimate safety net.
+# Phase 3 made history append-only between collapses, removing the per-turn slide
+# that used to bound small-context providers; this re-introduces a safe bound:
+# min(DEFAULT_MAX_PROMPT_CHARS, window * CHARS_PER_TOKEN * fraction). The cap is a
+# deliberate cost/latency POLICY (see DEFAULT_MAX_PROMPT_CHARS in compaction.py),
+# not the model window: at 256000 it works a large window at ~85k tokens. Windows
+# below ~170k tokens get the smaller window-relative budget (the branch the old
+# 96000 cap left dead for the whole fleet); unknown windows (e.g. Ollama, None)
+# keep the default; operators tune per deployment via OMICSCLAW_MAX_PROMPT_CHARS.
+# Reactive compaction on a context error remains the ultimate safety net.
 _CHARS_PER_TOKEN = CHARS_PER_TOKEN
 _PROMPT_BUDGET_FRACTION = 0.5
-_DEFAULT_MAX_PROMPT_CHARS = 96000
+_DEFAULT_MAX_PROMPT_CHARS = DEFAULT_MAX_PROMPT_CHARS
 
 # §9.3 slice 3 — compress-to-target. After a collapse/auto compaction, converge
 # the TOTAL prompt (system + preserved tail) to this fraction of max_prompt_chars,
