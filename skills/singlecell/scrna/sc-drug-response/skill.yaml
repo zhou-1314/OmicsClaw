@@ -1,0 +1,108 @@
+schema_version: 2
+id: sc-drug-response
+name: sc-drug-response
+domain: singlecell
+type: leaf
+version: 0.2.0
+author: OmicsClaw
+license: MIT
+summary:
+  load_when: scoring drug sensitivity per cluster on an annotated scRNA AnnData via simple-correlation
+    against drug-target signatures or via CaDRReS-Sc pretrained models (GDSC / PRISM)
+  skip_when:
+  - condition: the AnnData has no cluster labels yet
+    use: sc-clustering
+  - condition: predicting genetic-perturbation effects
+    use: sc-in-silico-perturbation
+  trigger_keywords: []
+  tags:
+  - singlecell
+  - scrna
+  - drug-response
+  - pharmacogenomics
+  - cadrres
+  - gdsc
+  - prism
+  aliases: []
+interface:
+  inputs:
+    modalities:
+    - scrna
+    file_types:
+    - h5ad
+    preconditions:
+      data_shape:
+        requires_preprocessed: true
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --cluster-key
+    - --drug-db
+    - --method
+    - --model-dir
+    - --n-drugs
+    - --r-enhanced
+    hints: {}
+  outputs:
+    files:
+    - tables/IC50_prediction.csv
+    - tables/PRISM_prediction.csv
+    - tables/cell_metadata.csv
+    - tables/drug_rankings.csv
+    - tables/masked_drugs.csv
+    - figures/drug_cluster_heatmap.png
+    - figures/drug_sensitivity_umap.png
+    - figures/top_drugs_bar.png
+    - analysis_summary.txt
+    - processed.h5ad
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+    anndata:
+      saves_h5ad: true
+      obs:
+      - drug_score_<drug>
+      obsm: []
+      var: []
+      layers: []
+      uns: []
+runtime:
+  language: python
+  entry: sc_drug_response.py
+deps:
+  python:
+  - anndata
+  - matplotlib
+  - numpy
+  - omicverse
+  - pandas
+  - scanpy
+  - scipy
+  - seaborn
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+  tests: tests/
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

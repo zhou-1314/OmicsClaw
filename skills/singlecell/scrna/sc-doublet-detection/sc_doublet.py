@@ -66,7 +66,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "sc-doublet-detection"
-SKILL_VERSION = "0.6.0"
+SKILL_VERSION = "0.3.0"
 SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-doublet-detection/sc_doublet.py"
 
 R_ENHANCED_PLOTS = {

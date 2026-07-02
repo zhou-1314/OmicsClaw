@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: genomics-qc
-description: Load when running pre-alignment FASTQ quality control — Phred quality scores, Q20/Q30 rates, GC / N content, read-length distribution, adapter-contamination detection. Skip when working with already-aligned BAMs (use `genomics-alignment`) or when peak / variant files are the input (use the relevant downstream skill).
+description: Load when running pre-alignment FASTQ quality control — Phred quality scores, Q20/Q30 rates,
+  GC / N content, read-length distribution, adapter-contamination detection. Skip when working with already-aligned
+  BAMs (use genomics-alignment); peak / variant files are the input (use the relevant downstream skill).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 📊
 tags:
 - genomics
 - qc
@@ -31,17 +36,19 @@ For BAM-level alignment QC use `genomics-alignment`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Raw reads | `.fastq` / `.fastq.gz` (Phred+33) | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| QC summary | `tables/qc_metrics.csv` | one-row metrics table |
-| Per-base quality | `tables/per_base_quality.csv` | mean Phred per cycle |
-| Read-length distribution | `tables/read_length_distribution.csv` | length / count, top-20 lengths only (`genomics_qc.py:287`) |
-| Reproducibility | `reproducibility/` | params + lineage |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.fastq`
+
+**Outputs**
+
+- `tables/per_base_quality.csv`
+- `tables/qc_metrics.csv`
+- `tables/read_length_distribution.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

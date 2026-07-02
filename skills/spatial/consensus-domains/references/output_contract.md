@@ -32,5 +32,5 @@ flavour only changes the member skill that is fanned out.
 | `result.json` | summary: surviving members, operator, cluster count, run id |
 
 `report.md` and `result.json` are framework-standard. All paths are produced by
-the runtime; this skill is a `type: workflow` shim, so the per-file substring
+the runtime; this skill is a `type: consensus` shim, so the per-file substring
 contract check is delegated to the runtime rather than enforced against the shim.

@@ -1,0 +1,86 @@
+schema_version: 2
+id: genomics-vcf-operations
+name: genomics-vcf-operations
+domain: genomics
+type: leaf
+version: 0.5.0
+author: OmicsClaw
+license: MIT
+emoji: 📋
+summary:
+  load_when: summarising / filtering a VCF — variant classification (SNP / MNP / INS / DEL / COMPLEX),
+    Ti/Tv ratio, QUAL / DP threshold filtering, INFO-field parsing
+  skip_when:
+  - condition: the input is a BAM
+    use: genomics-variant-calling
+  - condition: adding functional annotations
+    use: genomics-variant-annotation
+  trigger_keywords:
+  - VCF
+  - bcftools
+  - variant filter
+  - merge VCF
+  tags:
+  - genomics
+  - vcf
+  - bcftools
+  - filter
+  - ti-tv
+  - snv
+  - indel
+  aliases:
+  - vcf-ops
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - vcf
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --min-dp
+    - --min-qual
+    hints: {}
+  outputs:
+    files:
+    - tables/variants.csv
+    - filtered.vcf
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: genomics_vcf_operations.py
+deps:
+  python:
+  - numpy
+  - pandas
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

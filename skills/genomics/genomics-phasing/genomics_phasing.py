@@ -45,7 +45,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "genomics-phasing"
-SKILL_VERSION = "0.2.0"
+SKILL_VERSION = "0.5.0"
 
 
 # ---------------------------------------------------------------------------

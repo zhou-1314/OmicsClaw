@@ -1,6 +1,10 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-doublet-detection
-description: Load when annotating putative doublets in single-cell RNA-seq using Scrublet, DoubletDetection, DoubletFinder, scDblFinder, or scds. Skip when ambient RNA is the contamination problem (use sc-ambient-removal) or before counts exist (use sc-fastq-qc / sc-count).
+description: Load when annotating putative doublets in single-cell RNA-seq using Scrublet, DoubletDetection,
+  DoubletFinder, scDblFinder, or scds. Skip when ambient RNA is the contamination problem (use sc-ambient-removal);
+  before counts exist (use sc-fastq-qc).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
@@ -33,22 +37,40 @@ to flag putative doublet barcodes before clustering / annotation.
 Five backends share one CLI: `scrublet` (default, Python), `doubletdetection`
 (Python), `doubletfinder` (R), `scdblfinder` (R), `scds` (R).  Per-cell
 scores + binary calls land in `obs`; this skill annotates, it does not
-remove cells (filter downstream with `obs["is_doublet"]`).
+remove cells (filter downstream with `obs["predicted_doublet"]`).
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Single-cell AnnData | `.h5ad` (post-`sc-filter`) | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated AnnData | `processed.h5ad` | adds `obs["doublet_score"]`, `obs["is_doublet"]` |
-| Per-cell calls | `tables/doublet_calls.csv` | per-barcode scores + flags |
-| Run summary | `tables/summary.csv` | counts of doublets by group / threshold |
-| Per-group breakdown | `tables/group_summary.csv` | only when `--batch-key` is set |
-| Score distribution | `figures/doublet_score_distribution.png` | always rendered |
-| Report | `report.md` + `result.json` | always written |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+
+**Outputs**
+
+- `tables/cell_metadata.csv`
+- `tables/doublet_calls.csv`
+- `tables/doublet_summary.csv`
+- `tables/doubletfinder_results.csv`
+- `tables/embedding_points.csv`
+- `tables/group_summary.csv`
+- `tables/scdblfinder_results.csv`
+- `tables/scds_results.csv`
+- `tables/summary.csv`
+- `figures/embedding_doublet_calls.png`
+- `figures/embedding_doublet_scores.png`
+- `figures/embedding_doublet_vs_group.png`
+- `figures/r_embedding_discrete.png`
+- `figures/r_embedding_feature.png`
+- `figures/r_feature_violin.png`
+- `analysis_summary.txt`
+- `input.h5ad`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `doublet_score`, `predicted_doublet`, `doublet_classification`
 
 ## Flow
 
@@ -56,14 +78,14 @@ remove cells (filter downstream with `obs["is_doublet"]`).
 2. Run the chosen backend (R-backed methods need a working R + rpy2 stack).
 3. If the requested R backend fails, fall back deterministically to a Python sibling.
 4. Apply the chosen `--threshold` (or method default) to score → call.
-5. Write `obs["is_doublet"]` + `obs["doublet_score"]`; emit tables and the score-distribution figure.
+5. Write `obs["predicted_doublet"]` + `obs["doublet_score"]`; emit tables and the score-distribution figure.
 6. Save `processed.h5ad` + `report.md` + `result.json`.
 
 ## Gotchas
 
 - **R backends silently fall back.** `sc_doublet.py:304` logs `"DoubletFinder runtime failed (...). Falling back to scDblFinder."` and continues; `sc_doublet.py:359` does the same for `scds → cxds`.  After every R-method run, confirm `result.json["summary"]["method_used"]` matches what you asked for — the `--method doubletfinder` flag does not guarantee DoubletFinder ran.
 - **Explicit `--scds-mode` (e.g. `bcds` or `hybrid`) silently falls back to the `cxds` default on failure.** `sc_doublet.py:359` swaps modes when the requested one raises; the requested mode is not surfaced as an error, only logged.  Inspect the warning log when the report claims `scds` ran with the default.
-- **No cells are removed.** This skill annotates barcodes; downstream filtering on `obs["is_doublet"]` is the user's responsibility.  If `sc-filter` was already run, doublets re-introduce themselves to the cluster graph if not filtered after this step.
+- **No cells are removed.** This skill annotates barcodes; downstream filtering on `obs["predicted_doublet"]` is the user's responsibility.  If `sc-filter` was already run, doublets re-introduce themselves to the cluster graph if not filtered after this step.
 - **Group summary is conditional.** `tables/group_summary.csv` is only written when `--batch-key` is set; absence does not mean failure.
 - **Embedding pre-flight is non-fatal.** `sc_doublet.py:429` logs `"Preview embedding computation failed"` and continues; the score-distribution figure still renders without the embedding overlay.  When the figure looks sparse vs documented examples, check the warning log before assuming a bug.
 - **Unsupported method → hard fail.** `sc_doublet.py:801` raises `ValueError("Unsupported method: ...")` for typos like `--method scrubblet`.

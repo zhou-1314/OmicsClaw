@@ -62,7 +62,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "sc-cell-communication"
-SKILL_VERSION = "0.3.0"
+SKILL_VERSION = "0.4.0"
 SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-cell-communication/sc_cell_communication.py"
 
 # R Enhanced renderers for this skill.

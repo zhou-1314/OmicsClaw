@@ -18,7 +18,7 @@ skills/<domain>/<skill-name>/
 - `output_dir/report.md` — Markdown report mirroring the scaffold + parameters. Written at `omics_skill_builder.py:130`.
 - `output_dir/reproducibility/commands.sh` — replay command including the original `--request` and resolved `--domain`. Written at `omics_skill_builder.py:132-137`.
 - `output_dir/result.json` — `summary` includes the new skill's domain, name, paths, and trigger keywords. Written at `omics_skill_builder.py:139-141`.
-- `skills/<domain>/<skill-name>/` — the actual NEW skill directory (SKILL.md + parameters.yaml + references/ + tests/), written by `create_skill_scaffold` from `omicsclaw.core.skill_scaffolder`.
+- `skills/<domain>/<skill-name>/` — the actual NEW skill directory (skill.yaml + SKILL.md + references/ + tests/), written by `create_skill_scaffold` from `omicsclaw.core.skill_scaffolder`.
 
 ## Notes
 

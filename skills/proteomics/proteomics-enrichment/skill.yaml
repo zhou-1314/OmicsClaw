@@ -1,0 +1,87 @@
+schema_version: 2
+id: proteomics-enrichment
+name: proteomics-enrichment
+domain: proteomics
+type: leaf
+version: 0.5.0
+author: OmicsClaw
+license: MIT
+emoji: 🗺️
+summary:
+  load_when: running over-representation analysis (ORA) on a list of proteins via Fisher's exact test
+    against a built-in 8-pathway DEMO dictionary, with BH-FDR correction
+  skip_when:
+  - condition: needing a real pathway database (this skill is demo-only)
+    use: bulkrna-enrichment
+  - condition: rank-based GSEA
+  trigger_keywords:
+  - proteomics enrichment
+  - pathway analysis
+  - STRING
+  - DAVID
+  - g:Profiler
+  - GO enrichment
+  tags:
+  - proteomics
+  - enrichment
+  - ora
+  - fisher
+  - demo
+  - pathway
+  aliases:
+  - prot-enrichment
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - csv
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --background-size
+    - --method
+    - --species
+    hints: {}
+  outputs:
+    files:
+    - tables/enrichment_results.csv
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: prot_enrichment.py
+deps:
+  python:
+  - numpy
+  - pandas
+  - scipy
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

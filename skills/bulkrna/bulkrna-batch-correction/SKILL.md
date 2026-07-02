@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: bulkrna-batch-correction
-description: Load when removing batch effects from a multi-cohort bulk RNA-seq dataset using ComBat (R or Python implementation). Skip if there is only one batch, or for single-cell batch integration (use sc-batch-integration), or for spatial multi-slice integration (use spatial-integrate).
+description: Load when removing batch effects from a multi-cohort bulk RNA-seq dataset using ComBat (R
+  or Python implementation). Skip when there is only one batch; single-cell batch integration (use sc-batch-integration);
+  spatial multi-slice integration (use spatial-integrate).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: 🔧
 tags:
 - bulkrna
 - batch-correction
@@ -28,20 +33,22 @@ when available, falling back to a Python port.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Expression matrix | `.csv` (gene × sample) | yes (or `--demo`) |
-| Batch metadata | `--batch-info` CSV (sample, batch cols) | yes (or `--demo`) |
-| `--mode` | `parametric` or `non-parametric` | default `parametric` |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Corrected matrix | `tables/corrected_expression.csv` | same shape, batch effect removed |
-| PCA before correction | `figures/pca_before_correction.png` | per-sample colour-coded by batch |
-| PCA after correction | `figures/pca_after_correction.png` | same layout, post-ComBat |
-| Batch assessment | `figures/batch_assessment.png` | side-by-side comparison + silhouette delta |
-| Batch metrics | `tables/batch_metrics.csv` | silhouette score before/after |
-| Report | `report.md` + `result.json` | summary keys: `n_genes`, `n_samples`, `n_batches`, `batch_names`, `mode`, `silhouette_before`, `silhouette_after` |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/batch_info.csv`
+- `tables/batch_metrics.csv`
+- `tables/corrected_counts.csv`
+- `tables/corrected_expression.csv`
+- `tables/counts.csv`
+- `figures/batch_assessment.png`
+- `report.md`
+- `result.json`
 
 ## Flow
 

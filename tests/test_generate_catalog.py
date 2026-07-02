@@ -118,7 +118,7 @@ def test_parse_yaml_frontmatter_handles_indented_list_syntax():
     SKILL.md `tags:` block.  The custom parser must produce a list, not the
     empty string.  Reproducing CodeRabbit's finding on PR #170 — without
     this, 89/89 catalog entries had `tags: ""` and every downstream
-    consumer that expected a list (e.g. `tags[0] if tags` in migrate_skill)
+    consumer that expected a list (e.g. `tags[0] if tags`)
     received a string-of-chars or empty."""
     frontmatter = (
         "---\n"

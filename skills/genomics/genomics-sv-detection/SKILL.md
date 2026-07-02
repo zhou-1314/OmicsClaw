@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: genomics-sv-detection
-description: Load when summarising structural variants from an SV VCF (DEL / DUP / INV / TRA) — BND-notation parsing, size classification, per-type counts. Skip when working with small SNVs / indels (use `genomics-variant-calling`) or calling SVs from BAM (run Manta / Delly / Sniffles first).
+description: Load when summarising structural variants from an SV VCF (DEL / DUP / INV / TRA) — BND-notation
+  parsing, size classification, per-type counts. Skip when working with small SNVs / indels (use genomics-variant-calling);
+  calling SVs from BAM (run Manta / Delly / Sniffles first).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🧱
 tags:
 - genomics
 - structural-variants
@@ -31,14 +36,17 @@ caller first; this skill summarises its VCF output.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Structural variants | `.vcf` (SV-flavoured: `SVTYPE` in INFO and/or BND `ALT` rows) | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| SV table | `tables/structural_variants.csv` | per-SV CHROM/POS/SVTYPE/SVLEN/size_class |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.vcf`
+
+**Outputs**
+
+- `tables/structural_variants.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

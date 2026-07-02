@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: bulkrna-geneid-mapping
-description: Load when converting gene identifiers between Ensembl, Entrez, and HGNC symbol in a bulk RNA-seq count matrix. Skip if the input is already in the desired identifier system, for organisms outside human/mouse, or for non-bulk-counts inputs.
+description: Load when converting gene identifiers between Ensembl, Entrez, and HGNC symbol in a bulk
+  RNA-seq count matrix. Skip when the input is already in the desired identifier system; organisms outside
+  human/mouse; non-bulk-counts inputs.
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: 🏷️
 tags:
 - bulkrna
 - gene-id
@@ -31,17 +36,19 @@ not supported — feed via `--mapping-file` if needed.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Count matrix | `.csv` (gene id col + sample count cols) | yes (or `--demo`) |
-| Custom mapping | `--mapping-file` TSV | optional, overrides built-ins |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Mapped matrix | `tables/mapped_counts.csv` | same shape, gene column rewritten |
-| Mapping table | `tables/mapping_table.csv` | original_id → target_id audit |
-| Unmapped IDs | `tables/unmapped_genes.csv` | original IDs that couldn't be resolved |
-| Report | `report.md` + `result.json` | summary keys: `n_original_genes`, `n_mapped`, `n_unmapped`, `pct_mapped`, `n_duplicates_resolved`, `duplicate_strategy`, `n_final_genes`, `from_type`, `to_type`, `species` |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/mapped_counts.csv`
+- `tables/mapping_table.csv`
+- `tables/unmapped_genes.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

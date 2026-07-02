@@ -62,7 +62,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "sc-de"
-SKILL_VERSION = "0.4.0"
+SKILL_VERSION = "0.6.0"
 
 # R Enhanced renderers for this skill.
 # Key   = renderer name registered in viz/r/registry.R R_PLOT_REGISTRY

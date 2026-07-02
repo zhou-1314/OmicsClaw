@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: metabolomics-normalization
-description: Load when normalising a feature × sample metabolomics CSV via median, quantile, total (sum), PQN (probabilistic quotient), or log methods — emits a normalised wide-form table. Skip when also imputing (use `metabolomics-quantification`) or for raw spectra (run `metabolomics-xcms-preprocessing` first).
+description: Load when normalising a feature × sample metabolomics CSV via median, quantile, total (sum),
+  PQN (probabilistic quotient), or log methods — emits a normalised wide-form table. Skip when also imputing
+  (use metabolomics-quantification); raw spectra (use metabolomics-xcms-preprocessing).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 📐
 tags:
 - metabolomics
 - normalization
@@ -33,15 +38,17 @@ For combined imputation + normalisation use `metabolomics-quantification`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Feature × intensity table | `.csv` (wide form: rows = features, columns = samples) | yes (unless `--demo`) |
-| Method | `--method {median,quantile,total,pqn,log}` (default `median`) | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Normalised table | `tables/normalized.csv` | wide form, same shape as input |
-| Report | `report.md` + `result.json` | `n_features`, `n_samples`, `method` |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/normalized.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

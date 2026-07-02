@@ -1,0 +1,100 @@
+schema_version: 2
+id: bulkrna-coexpression
+name: bulkrna-coexpression
+domain: bulkrna
+type: leaf
+version: 0.3.0
+author: OmicsClaw
+license: MIT
+emoji: 🕸️
+summary:
+  load_when: discovering gene co-expression modules and hub genes in a bulk RNA-seq cohort via WGCNA-style
+    soft-thresholded networks
+  skip_when:
+  - condition: direct DE comparison
+    use: bulkrna-de
+  - condition: PPI lookup of an existing gene list
+    use: bulkrna-ppi-network
+  - condition: single-cell co-expression
+    use: sc-grn
+  trigger_keywords:
+  - coexpression
+  - WGCNA
+  - gene network
+  - co-expression modules
+  - hub genes
+  - gene modules
+  tags:
+  - bulkrna
+  - coexpression
+  - WGCNA
+  - network
+  - modules
+  - hub-genes
+  aliases:
+  - bulk-wgcna
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - csv
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --min-module-size
+    - --power
+    hints: {}
+  outputs:
+    files:
+    - tables/counts.csv
+    - tables/gene_modules.csv
+    - tables/hub_genes.csv
+    - tables/module_assignments.csv
+    - tables/soft_power_table.csv
+    - tables/threshold_fit.csv
+    - figures/module_dendrogram.png
+    - figures/module_sizes.png
+    - figures/scale_free_fit.png
+    - wgcna_info.json
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: bulkrna_coexpression.py
+deps:
+  python:
+  - matplotlib
+  - numpy
+  - pandas
+  - scipy
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+  tests: tests/
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

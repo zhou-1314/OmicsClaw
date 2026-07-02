@@ -1,6 +1,10 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-drug-response
-description: Load when scoring drug sensitivity per cluster on an annotated scRNA AnnData via simple-correlation against drug-target signatures or via CaDRReS-Sc pretrained models (GDSC / PRISM). Skip when the AnnData has no cluster labels yet (run sc-clustering first) or for predicting genetic-perturbation effects (use sc-in-silico-perturbation).
+description: Load when scoring drug sensitivity per cluster on an annotated scRNA AnnData via simple-correlation
+  against drug-target signatures or via CaDRReS-Sc pretrained models (GDSC / PRISM). Skip when the AnnData
+  has no cluster labels yet (use sc-clustering); predicting genetic-perturbation effects (use sc-in-silico-perturbation).
 version: 0.2.0
 author: OmicsClaw
 license: MIT
@@ -43,17 +47,29 @@ classification use `sc-perturb`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Clustered AnnData (HGNC symbols in `var_names`) | `.h5ad` with cluster column in `obs` | yes (unless `--demo`) |
-| CaDRReS model dir | path (`--model-dir`) | required for `cadrres` (real runs only) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| AnnData (preserved) | `processed.h5ad` | unchanged unless cluster_key was auto-resolved |
-| Drug rankings | `tables/drug_rankings.csv` | per-cluster × drug score table; column `Score` |
-| Figures | `figures/top_drugs_bar.png`, `figures/drug_cluster_heatmap.png`, `figures/drug_sensitivity_umap.png` | best-effort: UMAP overlay skipped when `obsm["X_umap"]` is missing (`sc_drug_response.py:447-449`); bar / heatmap calls are wrapped in `try / except` (`:814-826`) and only log on failure |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+
+**Outputs**
+
+- `tables/IC50_prediction.csv`
+- `tables/PRISM_prediction.csv`
+- `tables/cell_metadata.csv`
+- `tables/drug_rankings.csv`
+- `tables/masked_drugs.csv`
+- `figures/drug_cluster_heatmap.png`
+- `figures/drug_sensitivity_umap.png`
+- `figures/top_drugs_bar.png`
+- `analysis_summary.txt`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `drug_score_<drug>`
 
 ## Flow
 

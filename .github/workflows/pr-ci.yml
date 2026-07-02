@@ -46,7 +46,7 @@ jobs:
       - name: Install core dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest numpy pandas scikit-learn matplotlib PyYAML
+          pip install pytest numpy pandas scikit-learn matplotlib PyYAML pydantic
 
       - name: Test OmicsClaw CLI
         run: python omicsclaw.py list
@@ -54,14 +54,41 @@ jobs:
       - name: Check skills/catalog.json is fresh
         run: python scripts/generate_catalog.py --check
 
+      - name: Check references/parameters.md is fresh (dual-track)
+        run: python scripts/generate_parameters_md.py --all --check
+
+      - name: Check v2 SKILL.md is regenerated from skill.yaml
+        run: python scripts/generate_skill_md.py --all --check
+
+      - name: Check v2 script SKILL_VERSION matches skill.yaml.version
+        run: python scripts/sync_skill_version.py --all --check
+
       - name: Check skill `requires:` frontmatter is complete
         run: python scripts/audit_skill_requires.py --check
+
+      - name: Validate v2 skill.yaml contracts (ADR 0037 dual-track)
+        run: python scripts/validate_skill_yaml.py --check
 
       - name: Catalog generator regression tests
         run: python -m pytest tests/test_generate_catalog.py -v
 
       - name: Skill requires auditor tests
         run: python -m pytest tests/test_skill_requires_audit.py -v
+
+      - name: Skill schema + v2 registry-wiring tests
+        run: python -m pytest tests/test_skill_schema.py tests/test_registry_v2.py -v
+
+      - name: v2 lint + parameters.md generator tests (dual-track)
+        run: python -m pytest tests/test_skill_lint_v2.py tests/test_generate_parameters_md.py -v
+
+      - name: v2 interface extraction + SKILL.md generator tests
+        run: python -m pytest tests/test_interface_extract.py tests/test_skill_md.py -v
+
+      - name: v2 SKILL_VERSION sync tests
+        run: python -m pytest tests/test_skill_version.py -v
+
+      - name: v2 skip_when description parser tests
+        run: python -m pytest tests/test_skill_description_parse.py -v
 
   memory-test:
     runs-on: ubuntu-latest

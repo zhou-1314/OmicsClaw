@@ -89,6 +89,11 @@ class ConsensusSource:
     planner: "MemberPlanner | None" = None
     domain: str = ""
     report_title: str = ""
+    #: Anchor for the member's ``param_hints``, resolved DUAL-TRACK by
+    #: ``plan.load_param_hints`` (ADR 0037): a migrated (v2) member reads them
+    #: from ``skill.yaml.interface.parameters.hints``, a v1 member from
+    #: ``parameters.yaml.param_hints``. Points at the member's ``parameters.yaml``
+    #: (whose parent skill dir survives the file's deletion on migration).
     param_hints_path: Path | None = None
     #: Which driver-computed intrinsic panel replaces the reader's single
     #: intrinsic signal: ``"spatial"`` (chaos/pas/mlami, ADR 0028),

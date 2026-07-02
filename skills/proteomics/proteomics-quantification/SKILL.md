@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: proteomics-quantification
-description: Load when computing per-protein abundance from a peptide / PSM table via LFQ (intensity summation), iBAQ (intensity / tryptic peptide count), or spectral counting (PSMs per protein). Skip when the input is already protein-level (use `proteomics-ms-qc` for QC) or for label-based TMT / iTRAQ workflows (search upstream first).
+description: Load when computing per-protein abundance from a peptide / PSM table via LFQ (intensity summation),
+  iBAQ (intensity / tryptic peptide count), or spectral counting (PSMs per protein). Skip when the input
+  is already protein-level (use proteomics-ms-qc); label-based TMT / iTRAQ workflows (search upstream
+  first).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 📏
 tags:
 - proteomics
 - quantification
@@ -38,15 +44,18 @@ quant first; this skill is intensity- / count-only.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Peptide / PSM table | `.csv` with `protein` column. `intensity` required for `lfq` / `ibaq`; for `ibaq` ALSO either `sequence` (per-protein AA sequence, in-silico digested at `proteomics_quantification.py:42-72`) OR `n_theoretical_peptides` (pre-computed integer); PSM rows for `spectral_count` | yes (unless `--demo`) |
-| Method | `--method {lfq,spectral_count,ibaq}` (default `lfq`) | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Protein abundance | `tables/protein_abundance.csv` | one row per protein with the chosen abundance metric |
-| Report | `report.md` + `result.json` | `summary["method"]`, `summary["n_proteins"]` |
+**Inputs**
+
+- Modalities: lfq
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/protein_abundance.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

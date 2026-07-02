@@ -35,7 +35,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "bulkrna-enrichment"
-SKILL_VERSION = "0.4.0"
+SKILL_VERSION = "0.3.0"
 SUPPORTED_METHODS = ("ora", "gsea", "ora_r", "gsea_r")
 
 # Ranking metric preference order (from Biomni prepare_gene_lists.R)

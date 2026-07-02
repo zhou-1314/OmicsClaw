@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Auto-generate the Skill Routing Table section of CLAUDE.md.
 
-Reads skill metadata from the Registry + SKILL.md frontmatter and generates
+Reads skill metadata from the Registry (dual-track v1/v2 via LazySkillMetadata) and generates
 markdown tables grouped by domain.  Replaces the content between
 ``<!-- ROUTING-TABLE-START -->`` and ``<!-- ROUTING-TABLE-END -->`` markers.
 

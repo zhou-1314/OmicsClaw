@@ -20,15 +20,12 @@ def _frontmatter(skill_md: Path) -> dict[str, Any]:
 
 
 def _runtime_legacy_aliases(skill_dir: Path) -> list[str]:
-    """Read legacy_aliases from the v2 sidecar if present, otherwise from the
-    legacy frontmatter block.  Mirrors lazy_metadata's source priority."""
-    sidecar = skill_dir / "parameters.yaml"
-    if sidecar.exists():
-        data = yaml.safe_load(sidecar.read_text(encoding="utf-8")) or {}
-        return list(data.get("legacy_aliases", []) or [])
-    fm = _frontmatter(skill_dir / "SKILL.md")
-    omics = (fm.get("metadata", {}) or {}).get("omicsclaw", {}) or {}
-    return list(omics.get("legacy_aliases", []) or [])
+    """Read legacy_aliases via the canonical dual-track reader (v2 ``skill.yaml``,
+    else legacy frontmatter). Post-migration every skill is v2, so this comes from
+    ``skill.yaml``; ``LazySkillMetadata`` is the same source the registry uses."""
+    from omicsclaw.skill.lazy_metadata import LazySkillMetadata
+
+    return list(LazySkillMetadata(skill_dir).legacy_aliases)
 
 
 def test_discovered_skill_legacy_aliases_are_owned_by_skill_md():

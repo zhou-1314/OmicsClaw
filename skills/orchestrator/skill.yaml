@@ -1,0 +1,82 @@
+schema_version: 2
+id: orchestrator
+name: orchestrator
+domain: orchestrator
+type: leaf
+version: 0.5.0
+author: OmicsClaw
+license: MIT
+emoji: 🎯
+summary:
+  load_when: routing a natural-language omics query to the correct domain skill across spatial / singlecell
+    / genomics / proteomics / metabolomics / bulkrna domains via keyword / LLM / hybrid matching
+  skip_when:
+  - condition: the target skill is already known — invoke that skill directly
+  trigger_keywords:
+  - which skill
+  - route query
+  - what should I run
+  - orchestrate
+  - pipeline
+  - which analysis
+  tags:
+  - orchestrator
+  - routing
+  - meta
+  - multi-omics
+  - registry
+  aliases: []
+interface:
+  inputs:
+    modalities: []
+    file_types: []
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --query
+    - --routing-mode
+    hints: {}
+  outputs:
+    files:
+    - result.json
+    - demo_report.txt
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: omics_orchestrator.py
+deps:
+  python:
+  - PyYAML
+  cli: []
+compatibility:
+  platforms:
+  - macos
+  - linux
+  - windows
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+  homepage: https://github.com/OmicsClaw/OmicsClaw
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

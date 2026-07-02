@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: genomics-phasing
-description: Load when summarising a phased VCF (output of WhatsHap / SHAPEIT5 / Eagle2) — phased fraction of het variants, phase-block N50, PS-field parsing, pipe-delimited genotype detection. Skip when the input is unphased (run a phaser first) or when calling small variants (use `genomics-variant-calling`).
+description: Load when summarising a phased VCF (output of WhatsHap / SHAPEIT5 / Eagle2) — phased fraction
+  of het variants, phase-block N50, PS-field parsing, pipe-delimited genotype detection. Skip when the
+  input is unphased (run a phaser first); calling small variants (use genomics-variant-calling).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🔀
 tags:
 - genomics
 - phasing
@@ -32,15 +37,18 @@ already been phased.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Phased VCF | `.vcf` with `FORMAT/PS` and pipe-delimited GT | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Per-variant table | `tables/phased_variants.csv` | CHROM/POS/GT/PS/phased flag |
-| Phase blocks | `tables/phase_blocks.csv` | per-PS block start/end/length/n_variants |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.vcf`
+
+**Outputs**
+
+- `tables/phase_blocks.csv`
+- `tables/phased_variants.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

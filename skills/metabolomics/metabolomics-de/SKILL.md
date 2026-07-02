@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: metabolomics-de
-description: Load when running two-group metabolomics DE (t-test + log2FC + BH-FDR + PCA) on a feature × sample CSV using `--group-a-prefix` / `--group-b-prefix` (default `ctrl` / `treat`). Skip when needing tunable test backends (use `metabolomics-statistics` for Wilcoxon / ANOVA / Kruskal) or for raw spectra.
+description: Load when running two-group metabolomics DE (t-test + log2FC + BH-FDR + PCA) on a feature
+  × sample CSV using `--group-a-prefix` / `--group-b-prefix` (default `ctrl` / `treat`). Skip when needing
+  tunable test backends (use metabolomics-statistics); raw spectra.
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 📈
 tags:
 - metabolomics
 - de
@@ -35,17 +40,19 @@ analysis" output.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Feature × sample table | `.csv` with sample columns starting `ctrl*` and `treat*` (or matching the user-supplied prefixes) | yes (unless `--demo`) |
-| Group prefixes | `--group-a-prefix <str>` (default `ctrl`), `--group-b-prefix <str>` (default `treat`) | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Full DE results | `tables/differential_features.csv` | per-feature `pvalue`, `fdr` (BH), `log2fc`, group means |
-| Significant subset | `tables/significant_features.csv` | filtered by hard-coded `fdr < 0.05` |
-| PCA scatter (when ≥ 3 samples per group) | `figures/pca_scores.png` | best-effort, may be skipped on tiny inputs |
-| Report | `report.md` + `result.json` | `n_features`, `n_significant` |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/differential_features.csv`
+- `tables/significant_features.csv`
+- `figures/pca_scores.png`
+- `report.md`
+- `result.json`
 
 ## Flow
 

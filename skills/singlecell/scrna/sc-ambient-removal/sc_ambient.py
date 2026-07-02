@@ -55,7 +55,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "sc-ambient-removal"
-SKILL_VERSION = "0.6.0"
+SKILL_VERSION = "0.3.0"
 
 R_ENHANCED_PLOTS: dict[str, str] = {
     # ambient-removal exports gene_expression.csv with before/after counts for top genes.

@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: bulkrna-qc
-description: Load when checking a bulk RNA-seq count matrix for library-size outliers, gene detection rates, and sample-sample correlation before DE. Skip if data is raw FASTQ (use bulkrna-read-qc) or aligner logs (use bulkrna-read-alignment), or for single-cell counts (use sc-qc).
+description: Load when checking a bulk RNA-seq count matrix for library-size outliers, gene detection
+  rates, and sample-sample correlation before DE. Skip when data is raw FASTQ (use bulkrna-read-qc); aligner
+  logs (use bulkrna-read-alignment); single-cell counts (use sc-qc).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: 📊
 tags:
 - bulkrna
 - QC
@@ -31,19 +36,22 @@ and CPM-vs-raw comparison artefacts.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Count matrix | `.csv` (gene id col + sample count cols) | yes (or `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Library sizes | `figures/library_sizes.png` | per-sample total counts |
-| Gene detection | `figures/gene_detection.png` | non-zero gene count per sample |
-| Sample correlation | `figures/sample_correlation.png` | log-CPM Pearson heatmap |
-| Expression density | `figures/expression_density.png` | per-sample log-CPM density curves |
-| Outlier flag | `result.json["outlier_samples"]` | sample names flagged below correlation threshold |
-| CPM-normalised matrix | `tables/cpm_normalized.csv` | per-million normalisation, useful for visualisation |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/cpm_normalized.csv`
+- `tables/sample_stats.csv`
+- `figures/expression_density.png`
+- `figures/gene_detection.png`
+- `figures/library_sizes.png`
+- `figures/sample_correlation.png`
+- `report.md`
+- `result.json`
 
 ## Flow
 

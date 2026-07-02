@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-qc
-description: Load when computing per-cell QC metrics (n_genes, total counts, mt%, ribo%) on a single-cell AnnData before filtering. Skip when reads are still raw FASTQ (use sc-fastq-qc) or you want to filter cells now (use sc-filter).
+description: Load when computing per-cell QC metrics (n_genes, total counts, mt%, ribo%) on a single-cell
+  AnnData before filtering. Skip when reads are still raw FASTQ (use sc-fastq-qc); you want to filter
+  cells now (use sc-filter).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: 📊
 tags:
 - singlecell
 - scrna
@@ -32,18 +37,35 @@ cells based on these metrics.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Single-cell AnnData | `.h5ad` | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| QC summary | `tables/qc_metrics_summary.csv` | one row per metric, with stats |
-| Per-cell metrics | `tables/qc_metrics_per_cell.csv` | one row per cell |
-| Top expressed genes | `tables/highest_expr_genes.csv` | by mean expression |
-| Diagnostic figures | `figures/qc_violin.png`, `figures/qc_scatter.png` | always rendered |
-| Provenance | `result.json` | `summary` includes `n_cells`, `n_genes`, `expression_source` |
-| Report | `report.md` | always written |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+
+**Outputs**
+
+- `tables/barcode_rank_curve.csv`
+- `tables/cell_metadata.csv`
+- `tables/gene_expression.csv`
+- `tables/highest_expr_genes.csv`
+- `tables/qc_metric_correlations.csv`
+- `tables/qc_metrics_per_cell.csv`
+- `tables/qc_metrics_summary.csv`
+- `tables/qc_run_summary.csv`
+- `figures/barcode_rank.png`
+- `figures/highest_expr_genes.png`
+- `figures/qc_correlation_heatmap.png`
+- `figures/qc_histograms.png`
+- `figures/qc_scatter.png`
+- `figures/qc_violin.png`
+- `figures/r_qc_violin.png`
+- `analysis_summary.txt`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`)
 
 ## Flow
 

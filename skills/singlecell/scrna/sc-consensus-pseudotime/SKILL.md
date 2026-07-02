@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-consensus-pseudotime
-description: 'Load when you want a single-cell pseudotime ordering robust to the choice of trajectory method — fanning out DPT/Palantir/VIA from a shared root, rank-aligning them, and voting a consensus pseudotime with per-cell uncertainty. Skip when you have branching multi-lineage trajectories or no defined root.'
+description: Load when you want a single-cell pseudotime ordering robust to the choice of trajectory method
+  — fanning out DPT/Palantir/VIA from a shared root, rank-aligning them, and voting a consensus pseudotime
+  with per-cell uncertainty. Skip when you have branching multi-lineage trajectories; no defined root.
 version: 0.1.0
 author: OmicsClaw
 license: MIT
+emoji: 🧬
 tags:
 - singlecell
 - scrna
@@ -39,17 +44,22 @@ consensus by per-cell `median` (default) or agreement-`weighted` mean, re-ranked
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Preprocessed AnnData | `--input <preprocessed.h5ad>` (a neighbour graph / `X_pca`) | yes |
-| Output directory | `--output <dir>` | yes |
-| Shared root | `--root-cluster <name>` **or** `--root-cell <id>` | yes (one of) |
-| Pseudotime methods | `--pseudotime-methods dpt,palantir,via` | no (default all three) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-Outputs (under `analysis://typed/<run_id>`): `consensus_pseudotime.tsv`
-(`consensus_pseudotime` + per-cell `pseudotime_mad` + `range`),
-`member_agreement_spearman.csv`, `member_scores.csv`, `plan.json`, `report.md`
-(first line `[A: Verified consensus]`).
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+
+**Outputs**
+
+- `consensus_pseudotime.tsv`
+- `member_agreement_spearman.csv`
+- `member_scores.csv`
+- `selection_audit.json`
+- `plan.json`
+- `report.md`
 
 ## Flow
 

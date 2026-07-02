@@ -9,10 +9,9 @@ import os
 import re
 import shutil
 from pathlib import Path
+import sys
 import textwrap
 from typing import Iterable
-
-import yaml
 
 from omicsclaw.common.manifest import StepRecord
 from omicsclaw.runtime.tools.hooks import build_default_lifecycle_hook_runtime
@@ -322,12 +321,14 @@ def render_skill_markdown(
     trigger_keywords: Iterable[str],
     source_bundle: AutonomousAnalysisBundle | None = None,
 ) -> str:
-    """Render a v2-shaped SKILL.md (frontmatter + 6 required sections).
+    """Render the narrative SKILL.md consumed by ``skill_md.render_skill_md``.
 
-    Lint-clean against `scripts/skill_lint.py` when paired with a
-    `parameters.yaml` emitted by `render_parameters_yaml`.  All runtime fields
-    (domain, script, trigger_keywords, allowed_extra_flags, …) live in the
-    sidecar — the frontmatter carries only Anthropic-style metadata.
+    Supplies the 5 hand-written narrative sections (When to use / Flow /
+    Gotchas / Key CLI / See also) plus a placeholder frontmatter and a
+    hand-written ``## Inputs & Outputs`` table.  ``render_skill_md`` then
+    replaces the frontmatter with a header generated from ``skill.yaml`` and
+    swaps the table for the generated I/O summary, so the runtime contract
+    lives in ``skill.yaml`` (ADR 0037), not in this body.
     """
     del input_formats, primary_outputs, trigger_keywords  # Live in sidecar / contract.
     title = _display_title(skill_name)
@@ -416,45 +417,161 @@ python omicsclaw.py run {skill_name} \\
 """
 
 
-def render_parameters_yaml(
+# Import roots whose PyPI distribution name differs from the module name.
+# Mirrored (by hand — the library must NOT import from scripts/) from
+# scripts/audit_skill_requires.py::COMMON_MODULE_TO_PKG so a promoted skill's
+# seeded deps line up with what that audit later recomputes.
+_IMPORT_ROOT_TO_PKG = {
+    "sklearn": "scikit-learn",
+    "skimage": "scikit-image",
+    "skmisc": "scikit-misc",
+    "cv2": "opencv-python",
+    "PIL": "Pillow",
+    "yaml": "PyYAML",
+    "bs4": "beautifulsoup4",
+    "igraph": "python-igraph",
+    "mpl_toolkits": "matplotlib",
+}
+_STDLIB_MODULES = set(sys.stdlib_module_names) | {"__future__"}
+
+
+def _scan_third_party_imports(source: str) -> list[str]:
+    """Best-effort third-party import surface of a rendered skill script.
+
+    AST-walks ALL imports — module-level AND nested, since the promotion
+    bootstrap and the accepted analysis cells import inside ``main()`` — keeps
+    each import ROOT that is not stdlib / ``omicsclaw`` / a relative or private
+    (leading-underscore) module, maps roots to PyPI names, and returns them
+    sorted + de-duplicated. A starting point for a promoted skill's
+    ``deps.python``; the author finalizes it with
+    ``scripts/audit_skill_requires.py`` (this stays decoupled from ``scripts/``).
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    roots: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                roots.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.level and node.level > 0:
+                continue  # relative import — internal to the skill package
+            if node.module:
+                roots.add(node.module.split(".")[0])
+    pkgs: set[str] = set()
+    for root in roots:
+        if not root or root.startswith("_"):
+            continue
+        if root in _STDLIB_MODULES or root == "omicsclaw":
+            continue
+        pkgs.add(_IMPORT_ROOT_TO_PKG.get(root, root))
+    if "scanpy" in pkgs:
+        pkgs.add("anndata")  # scanpy hard-depends on anndata (matches the audit)
+    return sorted(pkgs)
+
+
+def build_scaffold_manifest(
     *,
     skill_name: str,
     domain: str,
     trigger_keywords: Iterable[str],
     source_bundle: AutonomousAnalysisBundle | None = None,
-) -> str:
-    """Render a v2 `parameters.yaml` sidecar.
+    deps_python: Iterable[str] | None = None,
+):
+    """Build a minimal valid v2 ``SkillManifest`` (ADR 0037) for a scaffold.
 
-    The 8 required keys match `scripts/skill_lint.py::REQUIRED_SIDECAR_KEYS`.
+    A freshly-scaffolded skill is born v2: the machine contract is the
+    ``SkillManifest`` below, serialized to ``skill.yaml``.  ``load_when`` /
+    ``skip_when`` mirror the scaffold's v2 description (`_render_v2_description`).
     Both the default-scaffold and promoted-skill scripts declare
-    `--method` + `--species` via argparse, so `allowed_extra_flags` is fixed
-    at those two flags; PR-eval-3b's CSV/adata/argparse lint checks will
-    keep this honest as the script evolves.
+    ``--method`` + ``--species`` via argparse, so ``allowed_extra_flags`` is
+    fixed at those two flags.  ``deps.python`` is ``deps_python`` when given
+    (the promotion path seeds it from the rendered script's real import surface
+    so ``audit_skill_requires`` starts clean) else empty (the default
+    placeholder script imports only stdlib).
     """
-    del source_bundle  # Reserved for future per-promotion hints.
+    # Lazy import: keeps the scaffolder importable without pydantic (mirrors the
+    # deferred schema import in lazy_metadata / generate_parameters_md).
+    from .schema import (
+        SCHEMA_VERSION,
+        Deps,
+        Interface,
+        Inputs,
+        Outputs,
+        Parameters,
+        Provenance,
+        Resources,
+        Runtime,
+        SkillManifest,
+        SkipRule,
+        Summary,
+    )
+
+    profile = _DOMAIN_PROFILES[domain]
     script_name = f"{skill_name.replace('-', '_')}.py"
     keywords = _unique(trigger_keywords) or [skill_name, f"{domain} scaffold"]
-    keywords_yaml = "\n".join(
-        f"- {json.dumps(k, ensure_ascii=False)}" for k in keywords
+    return SkillManifest(
+        schema_version=SCHEMA_VERSION,
+        id=skill_name,
+        name=skill_name,
+        domain=domain,
+        type="leaf",
+        version="0.1.0",
+        author="OmicsClaw",
+        license="MIT",
+        emoji=profile["emoji"],
+        summary=Summary(
+            load_when=(
+                f"the user explicitly asks to create a new {domain} skill "
+                f"named '{skill_name}'"
+            ),
+            skip_when=[
+                SkipRule(condition=f"an existing {domain} skill already covers the request")
+            ],
+            trigger_keywords=keywords,
+            tags=[domain, "autogenerated", "skill-scaffold"],
+            aliases=[],
+        ),
+        interface=Interface(
+            inputs=Inputs(),
+            parameters=Parameters(
+                allowed_extra_flags=list(_DEFAULT_SCAFFOLD_ALLOWED_FLAGS),
+                hints={},
+            ),
+            outputs=Outputs(files=["report.md", "result.json"]),
+        ),
+        runtime=Runtime(language="python", entry=script_name),
+        deps=Deps(python=list(deps_python or [])),
+        resources=Resources(
+            references=[
+                "methodology.md",
+                "output_contract.md",
+                "parameters.md",
+                "r_visualization.md",
+            ],
+        ),
+        provenance=Provenance(origin="promoted" if source_bundle else "scaffolded"),
     )
-    flags_yaml = "\n".join(f'- "{flag}"' for flag in _DEFAULT_SCAFFOLD_ALLOWED_FLAGS)
 
-    return (
-        "# Generated by omics-skill-builder from templates/skill/parameters.yaml.\n"
-        "# Hand-edit before shipping: replace placeholders, populate param_hints,\n"
-        "# and confirm allowed_extra_flags still matches the script's argparse.\n"
-        "\n"
-        f"domain: {domain}\n"
-        f"script: {script_name}\n"
-        "saves_h5ad: false\n"
-        "requires_preprocessed: false\n"
-        "trigger_keywords:\n"
-        f"{keywords_yaml}\n"
-        "legacy_aliases: []\n"
-        "allowed_extra_flags:\n"
-        f"{flags_yaml}\n"
-        "param_hints: {}\n"
-    )
+
+def render_skill_yaml(
+    *,
+    skill_name: str,
+    domain: str,
+    trigger_keywords: Iterable[str],
+    source_bundle: AutonomousAnalysisBundle | None = None,
+    deps_python: Iterable[str] | None = None,
+) -> str:
+    """Render the v2 ``skill.yaml`` machine contract (ADR 0037) for a scaffold."""
+    return build_scaffold_manifest(
+        skill_name=skill_name,
+        domain=domain,
+        trigger_keywords=trigger_keywords,
+        source_bundle=source_bundle,
+        deps_python=deps_python,
+    ).to_yaml()
 
 
 _REFERENCE_METHODOLOGY = """# Methodology
@@ -535,15 +652,16 @@ a renderer is added under `r_visualization/<name>_publication_template.R`.
 """
 
 
-def _render_parameters_md_from_sidecar(sidecar: dict) -> str:
-    """Render parameters.md using the canonical shared renderer.
+def _render_parameters_md_from_manifest(manifest) -> str:
+    """Render references/parameters.md from the v2 manifest (ADR 0037 dual-track).
 
-    Uses `omicsclaw.skill.parameters_md.render_parameters_md` — the same
-    function `scripts/skill_lint.py` reads from — so the scaffolder's output
-    stays byte-for-byte consistent with `_check_references`'s freshness check.
+    Uses `omicsclaw.skill.parameters_md.render_parameters_md` with ``source="v2"``
+    — the exact path `scripts/generate_parameters_md.py` and `skill_lint._lint_v2`
+    take for a `skill.yaml` — so the scaffolder's output stays byte-for-byte
+    consistent with the generator's `--check` freshness gate.
     """
     from .parameters_md import render_parameters_md
-    return render_parameters_md(sidecar)
+    return render_parameters_md(manifest.interface.parameters.model_dump(), source="v2")
 
 
 def render_skill_script(
@@ -849,9 +967,9 @@ def _skill_scaffold_requirements(
             description="Generated skill entrypoint.",
         ),
         ArtifactRequirement(
-            name="parameters_sidecar",
-            path="parameters.yaml",
-            description="v2 runtime contract sidecar (domain, script, allowed_extra_flags, …).",
+            name="skill_manifest",
+            path="skill.yaml",
+            description="v2 machine contract (ADR 0037): identity, summary, interface, runtime, deps.",
         ),
         ArtifactRequirement(
             name="reference_methodology",
@@ -1279,31 +1397,56 @@ def create_skill_scaffold(
         spec_path = skill_dir / "scaffold_spec.json"
         test_path = skill_dir / "tests" / f"test_{script_name}"
 
-        skill_md_path.write_text(
-            render_skill_markdown(
+        # v2 layout (ADR 0037): skill.yaml is the machine contract; SKILL.md is a
+        # narrative card whose header + I/O summary are generated FROM the manifest.
+        from .skill_md import render_skill_md
+
+        # Render the entry script first so a PROMOTED skill can seed deps.python
+        # from its real (bootstrap + accepted-cell) import surface. The default
+        # placeholder script is stdlib-only, so its deps stay empty.
+        if source_bundle is not None:
+            script_text = render_promoted_skill_script(
                 skill_name=resolved_skill_name,
                 domain=domain,
-                summary=summary or (source_bundle.goal if source_bundle else ""),
-                request=request or (source_bundle.goal if source_bundle else ""),
-                methods=methods or [],
-                input_formats=input_formats or [],
-                primary_outputs=primary_outputs or [],
-                trigger_keywords=trigger_keywords or [],
+                summary=summary or source_bundle.goal,
                 source_bundle=source_bundle,
-            ),
-            encoding="utf-8",
-        )
-        relative_created_paths.append(Path("SKILL.md"))
+            )
+            deps_python = _scan_third_party_imports(script_text)
+        else:
+            script_text = render_skill_script(
+                skill_name=resolved_skill_name,
+                domain=domain,
+                summary=summary,
+                methods=methods or [],
+            )
+            deps_python = []
 
-        # v2 layout: parameters.yaml sidecar + references/*.md
-        sidecar_yaml = render_parameters_yaml(
+        manifest = build_scaffold_manifest(
             skill_name=resolved_skill_name,
             domain=domain,
             trigger_keywords=trigger_keywords or [],
             source_bundle=source_bundle,
+            deps_python=deps_python,
         )
-        (skill_dir / "parameters.yaml").write_text(sidecar_yaml, encoding="utf-8")
-        relative_created_paths.append(Path("parameters.yaml"))
+        (skill_dir / "skill.yaml").write_text(manifest.to_yaml(), encoding="utf-8")
+        relative_created_paths.append(Path("skill.yaml"))
+
+        narrative_md = render_skill_markdown(
+            skill_name=resolved_skill_name,
+            domain=domain,
+            summary=summary or (source_bundle.goal if source_bundle else ""),
+            request=request or (source_bundle.goal if source_bundle else ""),
+            methods=methods or [],
+            input_formats=input_formats or [],
+            primary_outputs=primary_outputs or [],
+            trigger_keywords=trigger_keywords or [],
+            source_bundle=source_bundle,
+        )
+        skill_md_path.write_text(
+            render_skill_md(manifest, narrative_md),
+            encoding="utf-8",
+        )
+        relative_created_paths.append(Path("SKILL.md"))
 
         references_dir = skill_dir / "references"
         references_dir.mkdir(parents=True, exist_ok=True)
@@ -1316,35 +1459,16 @@ def create_skill_scaffold(
             (references_dir / fname).write_text(content, encoding="utf-8")
             relative_created_paths.append(Path("references") / fname)
 
-        # parameters.md is auto-generated from the sidecar so it stays in sync
-        # with `scripts/skill_lint.py::_check_references` (byte-for-byte diff).
-        sidecar_dict = yaml.safe_load(sidecar_yaml) or {}
+        # parameters.md is auto-generated from the v2 manifest so it stays in
+        # sync with `skill_lint._lint_v2` + `generate_parameters_md --check`
+        # (byte-for-byte diff on the v2 track).
         (references_dir / "parameters.md").write_text(
-            _render_parameters_md_from_sidecar(sidecar_dict),
+            _render_parameters_md_from_manifest(manifest),
             encoding="utf-8",
         )
         relative_created_paths.append(Path("references") / "parameters.md")
 
-        if source_bundle is not None:
-            script_path.write_text(
-                render_promoted_skill_script(
-                    skill_name=resolved_skill_name,
-                    domain=domain,
-                    summary=summary or source_bundle.goal,
-                    source_bundle=source_bundle,
-                ),
-                encoding="utf-8",
-            )
-        else:
-            script_path.write_text(
-                render_skill_script(
-                    skill_name=resolved_skill_name,
-                    domain=domain,
-                    summary=summary,
-                    methods=methods or [],
-                ),
-                encoding="utf-8",
-            )
+        script_path.write_text(script_text, encoding="utf-8")
         relative_created_paths.append(Path(script_name))
 
         if create_tests:

@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-multi-count
-description: Load when merging multiple single-sample scRNA-seq count matrices (one per sample-from-sc-count) into a single downstream-ready AnnData with sample labels. Skip when input is one already-merged AnnData (use sc-standardize-input) or for FASTQ→counts on each sample (use sc-count first).
+description: Load when merging multiple single-sample scRNA-seq count matrices (one per sample-from-sc-count)
+  into a single downstream-ready AnnData with sample labels. Skip when input is one already-merged AnnData
+  (use sc-standardize-input); FASTQ→counts on each sample (use sc-count).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: 🧬
 tags:
 - singlecell
 - scrna
@@ -32,17 +37,38 @@ canonical AnnData contract instead of re-counting.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Per-sample inputs | repeated `--input <path>` flag, one per sample (`action="append"`) | yes (unless `--demo`); minimum two paths |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Merged AnnData | `processed.h5ad` | adds `obs["sample"]` from filename or label arg |
-| Per-barcode summary | `tables/barcode_metrics.csv` | per-barcode count summary with sample labels |
-| Per-sample summary | `tables/per_sample_summary.csv` | per-sample summary statistics |
-| Diagnostic figures | `figures/barcode_rank.png`, `figures/count_distributions.png`, `figures/count_complexity_scatter.png`, `figures/sample_composition.png` | always rendered |
-| Report | `report.md` + `result.json` | always written |
+**Inputs**
+
+- Modalities: scrna
+
+**Outputs**
+
+- `tables/Summary.csv`
+- `tables/barcode_metrics.csv`
+- `tables/barcodes.tsv`
+- `tables/cell_metadata.csv`
+- `tables/features.tsv`
+- `tables/genes.tsv`
+- `tables/metrics_summary.csv`
+- `tables/per_sample_summary.csv`
+- `figures/barcode_rank.png`
+- `figures/count_complexity_scatter.png`
+- `figures/count_distributions.png`
+- `figures/sample_composition.png`
+- `3M-february-2018.txt`
+- `737K-august-2016.txt`
+- `Aligned.sortedByCoord.out.bam`
+- `analysis_summary.txt`
+- `multiqc_report.html`
+- `possorted_genome_bam.bam`
+- `processed.h5ad`
+- `standardized_input.h5ad`
+- `web_summary.html`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `sample_id`
 
 ## Flow
 

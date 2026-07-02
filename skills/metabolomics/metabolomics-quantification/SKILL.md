@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: metabolomics-quantification
-description: Load when imputing missing values (min / median / KNN) and normalising (TIC / median / log) a feature × sample metabolomics CSV. Skip when only normalisation is needed (use `metabolomics-normalization`) or when the input is raw spectra (run `metabolomics-xcms-preprocessing` first).
+description: Load when imputing missing values (min / median / KNN) and normalising (TIC / median / log)
+  a feature × sample metabolomics CSV. Skip when only normalisation is needed (use metabolomics-normalization);
+  the input is raw spectra (use metabolomics-xcms-preprocessing).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 📏
 tags:
 - metabolomics
 - quantification
@@ -34,16 +39,17 @@ for raw LC-MS use `metabolomics-xcms-preprocessing`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Feature × intensity table | `.csv` with sample columns starting `sample` or `intensity` | yes (unless `--demo`) |
-| Imputation | `--impute {min,median,knn}` (default `min`) | no |
-| Normalisation | `--normalize {tic,median,log}` (default `tic`) | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Quantified features | `tables/quantified_features.csv` | imputed + normalised feature × sample table |
-| Report | `report.md` + `result.json` | `n_features`, `n_samples`, `impute`, `normalize` |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/quantified_features.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

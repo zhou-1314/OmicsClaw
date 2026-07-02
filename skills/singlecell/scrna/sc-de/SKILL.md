@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-de
-description: Load when finding marker genes per cluster or comparing condition expression in single-cell RNA-seq. Skip if the data is bulk (use bulkrna-de) or spatial (use spatial-de), or for cluster-only markers without conditions (use sc-markers).
+description: Load when finding marker genes per cluster or comparing condition expression in single-cell
+  RNA-seq. Skip when the data is bulk (use bulkrna-de); spatial (use spatial-de); cluster-only markers
+  without conditions (use sc-markers).
 version: 0.6.0
 author: OmicsClaw
 license: MIT
+emoji: S
 tags:
 - singlecell
 - differential-expression
@@ -35,20 +40,38 @@ because mixing them is the most common silent-wrong-answer failure mode.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Preprocessed AnnData | `.h5ad` | yes |
-| Sample/replicate metadata in `obs` | column name via `--sample-key` | only for `deseq2_r` |
-| Cell type label in `obs` | column name via `--celltype-key` | only for `deseq2_r` |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| DE table | `tables/de_full.csv` | full per-gene results |
-| Top markers | `tables/markers_top.csv` | `--n-top-genes` per group |
-| Processed AnnData | `processed.h5ad` | DE results stashed in `uns` |
-| Figures | `figures/*.png` | dotplot, rank summary, group summary; pseudobulk volcano/MA per cell type |
-| R-enhanced figures | `figures/r_enhanced/*.png` | only with `--r-enhanced` |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+
+**Outputs**
+
+- `tables/counts.csv`
+- `tables/de_full.csv`
+- `tables/de_group_summary.csv`
+- `tables/de_top_markers.csv`
+- `tables/deseq2_results.csv`
+- `tables/gene_expression.csv`
+- `tables/markers_top.csv`
+- `tables/mast_results.csv`
+- `tables/metadata.csv`
+- `tables/pseudobulk_summary.csv`
+- `figures/marker_dotplot.png`
+- `figures/pseudobulk_group_summary.png`
+- `figures/r_de_heatmap.png`
+- `figures/r_de_manhattan.png`
+- `figures/r_de_volcano.png`
+- `figures/r_feature_cor.png`
+- `figures/r_feature_violin.png`
+- `figures/rank_genes_groups.png`
+- `input.h5ad`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`)
 
 ## Flow
 

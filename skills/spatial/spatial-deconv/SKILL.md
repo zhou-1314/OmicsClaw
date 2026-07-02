@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: spatial-deconv
-description: Load when deconvolving spot-level cell-type proportions on a Visium-style spatial AnnData using a labelled scRNA reference (FlashDeconv / Cell2location / RCTD / DestVI / Tangram / others). Skip when each spot is a single cell already (Xenium / MERFISH — use spatial-annotate) or for tissue-domain detection (use spatial-domains).
+description: Load when deconvolving spot-level cell-type proportions on a Visium-style spatial AnnData
+  using a labelled scRNA reference (FlashDeconv / Cell2location / RCTD / DestVI / Tangram / others). Skip
+  when each spot is a single cell already (Xenium / MERFISH) (use spatial-annotate); tissue-domain detection
+  (use spatial-domains).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🧩
 tags:
 - spatial
 - deconvolution
@@ -61,20 +67,46 @@ use `spatial-domains`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Spatial AnnData | `.h5ad` with `obsm["spatial"]` | yes (unless `--demo`) |
-| scRNA reference | `.h5ad` with cell-type labels in `obs` (`--reference`) | required for all real-data methods |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated spatial AnnData | `processed.h5ad` | adds `obsm[f"deconvolution_{method}"]` (spots × cell-types; `spatial_deconv.py:592`) and per-method obs columns prefixed `deconv_{method}_` (e.g., `deconv_flashdeconv_dominant_cell_type`, `deconv_flashdeconv_dominant_proportion`; `:692-697`) |
-| Proportions table | `tables/proportions.csv` | wide: rows = spots, cols = cell types |
-| Per-spot metrics | `tables/deconv_spot_metrics.csv` | dominant celltype + diversity per spot |
-| Dominant per-celltype | `tables/dominant_celltype_counts.csv` | always |
-| Diversity index | `tables/celltype_diversity.csv` | Shannon-style per spot |
-| Cross-method auxiliaries | `tables/dominant_celltype.csv`, `tables/mean_proportions.csv` | always |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+- Expects `obsm`: `spatial`
+
+**Outputs**
+
+- `tables/card_proportions.csv`
+- `tables/card_refined_proportions.csv`
+- `tables/celltype_diversity.csv`
+- `tables/deconv_run_summary.csv`
+- `tables/deconv_spatial_points.csv`
+- `tables/deconv_spot_metrics.csv`
+- `tables/deconv_umap_points.csv`
+- `tables/dominant_celltype.csv`
+- `tables/dominant_celltype_counts.csv`
+- `tables/mean_proportions.csv`
+- `tables/proportions.csv`
+- `tables/rctd_proportions.csv`
+- `tables/ref_celltypes.csv`
+- `tables/ref_counts.csv`
+- `tables/ref_meta.csv`
+- `tables/spatial_coords.csv`
+- `tables/spatial_counts.csv`
+- `tables/spotlight_proportions.csv`
+- `figures/assignment_margin_distribution.png`
+- `figures/assignment_margin_spatial.png`
+- `figures/celltype_diversity.png`
+- `figures/dominant_celltype.png`
+- `figures/dominant_celltype_distribution.png`
+- `figures/mean_proportions.png`
+- `figures/spatial_proportions.png`
+- `figures/umap_proportions.png`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `deconv_{method}_dominant_cell_type`, `deconv_{method}_dominant_proportion`; `obsm`: `deconvolution_{method}`
 
 ## Flow
 

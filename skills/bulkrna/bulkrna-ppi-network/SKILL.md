@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: bulkrna-ppi-network
-description: Load when querying STRING for the protein-protein interaction subgraph induced by a bulk RNA-seq DEG list and finding hub genes. Skip for pathway enrichment of the same list (use bulkrna-enrichment) or for de novo co-expression network discovery (use bulkrna-coexpression).
+description: Load when querying STRING for the protein-protein interaction subgraph induced by a bulk
+  RNA-seq DEG list and finding hub genes. Skip when pathway enrichment of the same list (use bulkrna-enrichment);
+  de novo co-expression network discovery (use bulkrna-coexpression).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: 🕸️
 tags:
 - bulkrna
 - PPI
@@ -29,21 +34,21 @@ induced subgraph, and ranks hub proteins by degree centrality.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Gene list / DE results | `.csv` (gene names) | yes (or `--demo`) |
-| `--species` NCBI taxon | int | default `9606` (human); `10090` for mouse |
-| `--score-threshold` | int 0–1000 | default `400` (STRING "medium" confidence) |
-| `--top-n` | int | default `20` (top-degree hubs to report) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Edge list | `tables/interaction_edges.csv` | source / target / score |
-| Node centrality | `tables/node_centrality.csv` | per-gene degree / betweenness / closeness / hub_score |
-| Hub genes | `tables/hub_genes.csv` | top-N from `node_centrality` by hub_score |
-| Network figure | `figures/ppi_network.png` | NetworkX layout |
-| Hub-gene barplot | `figures/hub_genes_barplot.png` | top-N by hub_score |
-| Report | `report.md` + `result.json` | summary keys: `n_genes`, `n_edges`, `n_connected`, `n_isolated`, `mean_degree` |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/hub_genes.csv`
+- `tables/interaction_edges.csv`
+- `tables/node_centrality.csv`
+- `figures/hub_genes_barplot.png`
+- `figures/ppi_network.png`
+- `report.md`
+- `result.json`
 
 ## Flow
 

@@ -1469,7 +1469,7 @@ async def execute_inspect_data(args: dict) -> str:
         else:
             lines.append("### Method Suitability & Parameter Preview")
             lines.append("- No `param_hints` found for this `skill/method` combination.")
-            lines.append("- Add method hints in SKILL.md: `metadata.omicsclaw.param_hints.<method>`.")
+            lines.append("- Add method hints in `skill.yaml`: `interface.parameters.hints.<method>`.")
             if not preview_skill:
                 lines.append("- Tip: pass `skill` with `inspect_data` for accurate method preview.")
 

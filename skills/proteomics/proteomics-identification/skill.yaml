@@ -1,0 +1,87 @@
+schema_version: 2
+id: proteomics-identification
+name: proteomics-identification
+domain: proteomics
+type: leaf
+version: 0.5.0
+author: OmicsClaw
+license: MIT
+emoji: 🔬
+summary:
+  load_when: summarising peptide identifications (PSM count, unique peptide count, distinct protein count,
+    score / charge distributions) from a peptide-level CSV produced by MaxQuant / FragPipe / DIA-NN
+  skip_when:
+  - condition: raw spectra are the input (run a search engine first)
+  - condition: working with protein-quantification tables
+    use: proteomics-ms-qc
+  trigger_keywords:
+  - peptide identification
+  - database search
+  - MaxQuant
+  - MS-GF+
+  - Comet
+  - Mascot
+  tags:
+  - proteomics
+  - identification
+  - peptides
+  - psm
+  - maxquant
+  - msgf
+  aliases:
+  - peptide-id
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - csv
+    - tsv
+    - txt
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --fdr
+    - --n-spectra
+    hints: {}
+  outputs:
+    files:
+    - tables/peptides.csv
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: proteomics_identification.py
+deps:
+  python:
+  - numpy
+  - pandas
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

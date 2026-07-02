@@ -1,0 +1,83 @@
+schema_version: 2
+id: proteomics-data-import
+name: proteomics-data-import
+domain: proteomics
+type: leaf
+version: 0.5.0
+author: OmicsClaw
+license: MIT
+emoji: 📥
+summary:
+  load_when: ingesting a MaxQuant `proteinGroups.txt`, FragPipe `combined_protein.tsv`, DIA-NN report,
+    or generic CSV / TSV protein-quantification table — normalises columns to a standard schema, emits
+    `tables/proteins.csv`
+  skip_when:
+  - condition: raw spectra are the input (run the search engine first)
+  - condition: the file is already OmicsClaw schema
+  trigger_keywords:
+  - data import
+  - convert proteomics
+  - format conversion
+  tags:
+  - proteomics
+  - import
+  - maxquant
+  - fragpipe
+  - diann
+  - spectronaut
+  aliases:
+  - data-import
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - txt
+    - tsv
+    - csv
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --format
+    hints: {}
+  outputs:
+    files:
+    - tables/proteins.csv
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: proteomics_data_import.py
+deps:
+  python:
+  - numpy
+  - pandas
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

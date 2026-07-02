@@ -51,7 +51,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "spatial-raw-processing"
-SKILL_VERSION = "0.1.0"
+SKILL_VERSION = "0.3.0"
 SCRIPT_REL_PATH = "skills/spatial/spatial-raw-processing/spatial_raw_processing.py"
 SKILL_DESCRIPTION = (
     "Spatial transcriptomics raw FASTQ processing via st_pipeline with "

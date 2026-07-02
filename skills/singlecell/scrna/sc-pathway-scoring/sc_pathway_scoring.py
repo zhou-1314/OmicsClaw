@@ -57,7 +57,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "sc-pathway-scoring"
-SKILL_VERSION = "0.2.0"
+SKILL_VERSION = "0.3.0"
 DEFAULT_METHOD = "aucell_r"
 SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-pathway-scoring/sc_pathway_scoring.py"
 

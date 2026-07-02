@@ -79,7 +79,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "sc-enrichment"
-SKILL_VERSION = "0.1.0"
+SKILL_VERSION = "0.4.0"
 SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-enrichment/sc_enrichment.py"
 
 # R Enhanced renderers for this skill.

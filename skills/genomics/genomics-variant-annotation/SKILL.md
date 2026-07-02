@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: genomics-variant-annotation
-description: Load when summarising functional impact of an annotated variant CSV — per-IMPACT counts (HIGH / MODERATE / LOW / MODIFIER), top consequences, gene-affected count. Skip when input is a raw VCF (convert with `bcftools +split-vep` first), when calling raw variants (use `genomics-variant-calling`), or filtering VCFs (use `genomics-vcf-operations`).
+description: Load when summarising functional impact of an annotated variant CSV — per-IMPACT counts (HIGH
+  / MODERATE / LOW / MODIFIER), top consequences, gene-affected count. Skip when input is a raw VCF (convert
+  with `bcftools +split-vep` first); calling raw variants (use genomics-variant-calling); filtering VCFs
+  (use genomics-vcf-operations).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 📝
 tags:
 - genomics
 - annotation
@@ -36,15 +42,18 @@ parse a raw VCF — it only reads CSV. For raw calling use
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Annotated CSV | `.csv` with lowercase columns `chrom`, `pos`, `ref`, `alt`, `consequence`, `impact`, `gene` (and optionally `cadd_phred`) | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated table | `tables/annotated_variants.csv` | per-variant copy of the input CSV |
-| Impact distribution | `tables/impact_distribution.csv` | counts per IMPACT class |
-| Report | `report.md` + `result.json` | `result.json["data"]["top_consequences"]` mirrors top-N consequence counts |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/annotated_variants.csv`
+- `tables/impact_distribution.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

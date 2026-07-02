@@ -26,19 +26,60 @@ def _server():
     return server
 
 
-def test_skill_frontmatter_parses_yaml():
-    fm = _server()._skill_frontmatter(SKILL_DIR)
-    assert fm.get("name") == "spatial-preprocess"
-    assert fm.get("version") == "0.6.0"
-    assert fm.get("author") == "OmicsClaw"
-    assert fm.get("license") == "MIT"
-    assert "spatial" in (fm.get("tags") or [])
+def _v1_skill_dir(tmp_path):
+    """A synthetic v1 skill (SKILL.md frontmatter + parameters.yaml, no skill.yaml).
+
+    Built fresh so the v1-path assertions stay valid as live skills migrate to v2.
+    """
+    sd = tmp_path / "v1-skill"
+    sd.mkdir(parents=True)
+    (sd / "SKILL.md").write_text(
+        "---\n"
+        "name: v1-skill\n"
+        "version: 0.6.0\n"
+        "author: OmicsClaw\n"
+        "license: MIT\n"
+        "tags: [spatial, qc]\n"
+        "requires: [scanpy, numpy]\n"
+        "description: Load when X. Skip when Y (use z).\n"
+        "---\n"
+        "# v1-skill\n",
+        encoding="utf-8",
+    )
+    (sd / "parameters.yaml").write_text(
+        "domain: spatial\nallowed_extra_flags: []\nparam_hints: {}\n", encoding="utf-8"
+    )
+    (sd / "v1_skill.py").write_text("def main(argv=None):\n    pass\n", encoding="utf-8")
+    return sd
 
 
-def test_skill_frontmatter_missing_is_empty():
+def test_skill_metadata_v1_reads_frontmatter(tmp_path):
+    # v1 path → metadata comes from SKILL.md frontmatter (dual-track reader).
+    m = _server()._skill_metadata(_v1_skill_dir(tmp_path))
+    assert m is not None
+    assert m.source == "v1"
+    assert m.version == "0.6.0"
+    assert m.author == "OmicsClaw"
+    assert m.license == "MIT"
+    assert "spatial" in m.tags
+    assert "scanpy" in m.requires
+
+
+def test_skill_metadata_none_for_missing_dir():
     s = _server()
-    assert s._skill_frontmatter(None) == {}
-    assert s._skill_frontmatter(SKILLS_DIR / "does-not-exist") == {}
+    assert s._skill_metadata(None) is None
+
+
+def test_skill_metadata_nonexistent_dir_degrades_to_defaults():
+    # A registry entry can point at a directory missing on disk; property access
+    # must degrade to empty defaults, not raise (so get_skill stays robust).
+    m = _server()._skill_metadata(SKILLS_DIR / "does-not-exist-xyz")
+    assert m is not None
+    assert m.version == ""
+    assert m.author == ""
+    assert m.license == ""
+    assert m.tags == []
+    assert m.requires == []
 
 
 def test_skill_source_builtin_vs_user(tmp_path):
@@ -62,7 +103,9 @@ def test_skill_resources_lists_script_doc_config_and_references():
     by_path = {r["path"]: r["kind"] for r in res}
     assert by_path.get("spatial_preprocess.py") == "script"
     assert by_path.get("SKILL.md") == "doc"
-    assert by_path.get("parameters.yaml") == "config"
+    # config contract: skill.yaml (v2) or parameters.yaml (v1) — the live skill
+    # may be on either track as the migration proceeds.
+    assert by_path.get("skill.yaml") == "config" or by_path.get("parameters.yaml") == "config"
     assert by_path.get("references/methodology.md") == "reference"
     assert s._skill_resources(None, None) == []
 
@@ -78,25 +121,113 @@ def test_skill_references_titles_from_first_heading():
 
 def test_skill_diagnostics_pass_for_complete_skill():
     s = _server()
-    fm = s._skill_frontmatter(SKILL_DIR)
-    by_label = {c["label"]: c["status"] for c in s._skill_diagnostics(SKILL_DIR, SCRIPT, fm)}
+    by_label = {c["label"]: c["status"] for c in s._skill_diagnostics(SKILL_DIR, SCRIPT, "0.6.0")}
     assert by_label.get("SKILL.md") == "pass"
     assert by_label.get("entry script") == "pass"
     assert by_label.get("version declared") == "pass"
-    assert by_label.get("parameters.yaml") == "pass"
+    # Runtime contract present — skill.yaml (v2) or parameters.yaml (v1); the
+    # live skill may be on either track as the migration proceeds.
+    assert by_label.get("skill.yaml") == "pass" or by_label.get("parameters.yaml") == "pass"
     assert by_label.get("references") == "pass"
-    assert s._skill_diagnostics(None, None, {}) == []
+    assert s._skill_diagnostics(None, None, None) == []
 
 
 def test_skill_diagnostics_warns_when_version_absent():
-    """A complete skill with NO frontmatter version → the (warn_only) 'version
+    """A complete skill with NO declared version → the (warn_only) 'version
     declared' check is 'warn', not 'fail' — version is advisory."""
     s = _server()
-    by_label = {c["label"]: c["status"] for c in s._skill_diagnostics(SKILL_DIR, SCRIPT, {})}
+    by_label = {c["label"]: c["status"] for c in s._skill_diagnostics(SKILL_DIR, SCRIPT, None)}
     assert by_label.get("version declared") == "warn"
     # required checks (SKILL.md + entry script) still pass for a complete skill.
     assert by_label.get("SKILL.md") == "pass"
     assert by_label.get("entry script") == "pass"
+
+
+def _v2_skill_dir(tmp_path):
+    """Build a complete v2 (skill.yaml) skill directory and return (dir, script)."""
+    from omicsclaw.skill.schema import parse_skill_manifest
+
+    doc = {
+        "schema_version": 2,
+        "id": "spatial-demo",
+        "name": "spatial-demo",
+        "domain": "spatial",
+        "version": "2.1.0",
+        "author": "OmicsClaw",
+        "license": "MIT",
+        "summary": {
+            "load_when": "demoing v2 desktop detail",
+            "skip_when": [{"condition": "single-cell data", "use": "sc-de"}],
+            "tags": ["spatial", "demo"],
+        },
+        "runtime": {"language": "python", "entry": "spatial_demo.py"},
+        "deps": {"python": ["scanpy", "numpy"]},
+    }
+    sd = tmp_path / "spatial-demo"
+    sd.mkdir(parents=True)
+    (sd / "skill.yaml").write_text(parse_skill_manifest(doc).to_yaml(), encoding="utf-8")
+    script = sd / "spatial_demo.py"
+    script.write_text("def main(argv=None):\n    pass\n", encoding="utf-8")
+    (sd / "SKILL.md").write_text("---\nname: spatial-demo\n---\n# spatial-demo\n", encoding="utf-8")
+    return sd, script
+
+
+def test_skill_metadata_v2_reads_skill_yaml(tmp_path):
+    sd, _ = _v2_skill_dir(tmp_path)
+    m = _server()._skill_metadata(sd)
+    assert m is not None
+    assert m.source == "v2"
+    assert m.version == "2.1.0"
+    assert m.author == "OmicsClaw"
+    assert m.license == "MIT"
+    assert "demo" in m.tags
+    # v2 `requires` is the deps.python surface.
+    assert "scanpy" in m.requires
+
+
+def test_skill_diagnostics_v2_contract_is_skill_yaml(tmp_path):
+    sd, script = _v2_skill_dir(tmp_path)
+    by_label = {c["label"]: c["status"] for c in _server()._skill_diagnostics(sd, script, "2.1.0")}
+    assert by_label.get("skill.yaml") == "pass"          # v2 contract label
+    assert "parameters.yaml" not in by_label             # not a v1 sidecar
+    assert by_label.get("version declared") == "pass"
+
+
+def test_skill_resources_v2_lists_skill_yaml(tmp_path):
+    sd, script = _v2_skill_dir(tmp_path)
+    by_path = {r["path"]: r["kind"] for r in _server()._skill_resources(sd, script)}
+    assert by_path.get("skill.yaml") == "config"
+    assert "parameters.yaml" not in by_path
+
+
+@pytest.mark.asyncio
+async def test_get_skill_endpoint_v2(tmp_path, monkeypatch):
+    """GET /skills/{domain}/{name} sources detail from skill.yaml for a v2 skill."""
+    from types import SimpleNamespace
+
+    s = _server()
+    sd, script = _v2_skill_dir(tmp_path)
+    fake_core = SimpleNamespace(
+        _skill_registry=lambda: SimpleNamespace(
+            skills={
+                "spatial-demo": {
+                    "alias": "spatial-demo",
+                    "domain": "spatial",
+                    "description": "Spatial demo",
+                    "script": str(script),
+                }
+            }
+        ),
+    )
+    monkeypatch.setattr(s, "_core", fake_core, raising=False)
+
+    payload = await s.get_skill("spatial", "spatial-demo")
+    assert payload["version"] == "2.1.0"
+    assert payload["author"] == "OmicsClaw"
+    assert payload["license"] == "MIT"
+    assert "demo" in payload["tags"]
+    assert "scanpy" in payload["requires"]
+    assert any(c["label"] == "skill.yaml" and c["status"] == "pass" for c in payload["diagnostics"])
 
 
 @pytest.mark.asyncio

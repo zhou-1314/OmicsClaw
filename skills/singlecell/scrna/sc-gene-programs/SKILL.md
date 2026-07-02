@@ -1,6 +1,10 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-gene-programs
-description: Load when extracting gene programs (NMF / cNMF factorisation) and per-cell program usage scores from a non-negative scRNA AnnData. Skip when ranking marker genes per cluster (use sc-markers) or for inferring TF → target regulons (use sc-grn).
+description: Load when extracting gene programs (NMF / cNMF factorisation) and per-cell program usage
+  scores from a non-negative scRNA AnnData. Skip when ranking marker genes per cluster (use sc-markers);
+  inferring TF → target regulons (use sc-grn).
 version: 0.2.0
 author: OmicsClaw
 license: MIT
@@ -44,18 +48,32 @@ gene sets use `sc-pathway-scoring`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Non-negative AnnData | `.h5ad` (raw counts in `layers["counts"]` or log-normalised in `.X`) | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated AnnData | `processed.h5ad` | adds `obsm["X_gene_programs"]` (cells × K usage matrix; `sc_gene_programs.py:469`). The `program_usage` name only applies to the `tables/program_usage.csv` file, NOT to the obsm key. |
-| Per-cell usage | `tables/program_usage.csv` | cells × K matrix |
-| Gene weights | `tables/program_weights.csv` | genes × K matrix |
-| Top genes | `tables/top_program_genes.csv` | top-`--top-genes` per program |
-| Figures | `figures/mean_program_usage.png`, `figures/program_correlation.png` | always |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+
+**Outputs**
+
+- `tables/cell_metadata.csv`
+- `tables/gene_expression.csv`
+- `tables/program_correlation.csv`
+- `tables/program_tpm.csv`
+- `tables/program_usage.csv`
+- `tables/program_weights.csv`
+- `tables/top_program_genes.csv`
+- `figures/mean_program_usage.png`
+- `figures/program_correlation.png`
+- `figures/r_feature_cor.png`
+- `figures/r_feature_violin.png`
+- `analysis_summary.txt`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obsm`: `X_gene_programs`
 
 ## Flow
 

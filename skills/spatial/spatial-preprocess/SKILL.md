@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: spatial-preprocess
-description: Load when running the foundational spatial transcriptomics QC + filtering + normalisation + HVG + PCA + neighbour-graph + Leiden pipeline on a Visium / Xenium / generic spatial AnnData. Skip when raw FASTQs need converting first (use spatial-raw-processing) or for tissue-domain detection on already-preprocessed data (use spatial-domains).
+description: Load when running the foundational spatial transcriptomics QC + filtering + normalisation
+  + HVG + PCA + neighbour-graph + Leiden pipeline on a Visium / Xenium / generic spatial AnnData. Skip
+  when raw FASTQs need converting first (use spatial-raw-processing); tissue-domain detection on already-preprocessed
+  data (use spatial-domains).
 version: 0.6.0
 author: OmicsClaw
 license: MIT
+emoji: 🔬
 tags:
 - spatial
 - visium
@@ -44,20 +50,35 @@ output use `spatial-domains`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Spatial AnnData | `.h5ad` (Visium / Xenium / generic, with `obsm["spatial"]` recommended) | yes (unless `--demo`) |
-| Tissue preset | `--tissue` (one of `TISSUE_PRESETS`) | optional — overrides QC defaults |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Processed AnnData | `processed.h5ad` | `X = normalised`, `layers["counts"] = raw`, `obsm["X_pca"]`, `obsm["X_umap"]`, `var["highly_variable"]`, `obs["leiden"]` |
-| Run summary | `tables/preprocess_summary.csv` | always |
-| Cluster sizes | `tables/cluster_summary.csv` | always |
-| QC summary | `tables/qc_summary.csv` | per-cluster QC metrics |
-| PCA variance | `tables/pca_variance_ratio.csv` | per-PC variance |
-| Multi-resolution sweep | `tables/multi_resolution_summary.csv` | when `--resolutions` is provided |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: visium, xenium
+- File types: `.h5ad`
+- Expects `obsm`: `spatial`
+
+**Outputs**
+
+- `tables/cluster_summary.csv`
+- `tables/multi_resolution_summary.csv`
+- `tables/pca_variance_ratio.csv`
+- `tables/preprocess_run_summary.csv`
+- `tables/preprocess_spatial_points.csv`
+- `tables/preprocess_umap_points.csv`
+- `tables/qc_metric_distributions.csv`
+- `tables/qc_summary.csv`
+- `figures/cluster_size_barplot.png`
+- `figures/leiden_resolution_sweep.png`
+- `figures/pca_variance_curve.png`
+- `figures/qc_metric_distributions.png`
+- `figures/qc_metrics_spatial.png`
+- `figures/spatial_leiden.png`
+- `figures/umap_leiden.png`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `leiden`; `obsm`: `X_pca`, `X_umap`; `var`: `highly_variable`; `layers`: `counts`
 
 ## Flow
 

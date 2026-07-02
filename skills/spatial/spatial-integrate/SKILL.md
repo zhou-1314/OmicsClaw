@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: spatial-integrate
-description: Load when removing batch effects across multiple spatial samples on a multi-batch spatial AnnData via Harmony, BBKNN, or Scanorama before downstream analysis. Skip when aligning physical slice coordinates (use spatial-register) or for single-batch data (no integration needed — go straight to spatial-domains).
+description: Load when removing batch effects across multiple spatial samples on a multi-batch spatial
+  AnnData via Harmony, BBKNN, or Scanorama before downstream analysis. Skip when aligning physical slice
+  coordinates (use spatial-register); single-batch data (no integration needed) (use spatial-domains).
 version: 0.4.0
 author: OmicsClaw
 license: MIT
+emoji: 🔗
 tags:
 - spatial
 - integration
@@ -51,17 +56,34 @@ single-batch data skip this skill and go to `spatial-domains` /
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Multi-batch AnnData | `.h5ad` with `obs[--batch-key]` (default `batch`) and `obsm["X_pca"]` | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Integrated AnnData | `processed.h5ad` | adds `obsm["X_pca_harmony"]` (harmony) / `obsm["X_scanorama"]` (scanorama) / `obsp["distances"]` rebuild (bbknn) |
-| Integration metrics | `tables/integration_metrics.csv` | always |
-| Batch sizes | `tables/batch_sizes.csv` | always |
-| Observations | `tables/integration_observations.csv` | best-effort (when batch metric flags present) |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+- Expects `obsm`: `X_pca`
+
+**Outputs**
+
+- `tables/batch_sizes.csv`
+- `tables/corrected_embedding_points.csv`
+- `tables/integration_metrics.csv`
+- `tables/integration_observations.csv`
+- `tables/umap_after_points.csv`
+- `tables/umap_before_points.csv`
+- `figures/batch_entropy_after_umap.png`
+- `figures/batch_entropy_distribution.png`
+- `figures/batch_highlight.png`
+- `figures/batch_mixing.png`
+- `figures/batch_sizes.png`
+- `figures/umap_before_by_batch.png`
+- `figures/umap_by_batch.png`
+- `figures/umap_by_cluster.png`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obsm`: `X_pca_harmony`, `X_scanorama`
 
 ## Flow
 

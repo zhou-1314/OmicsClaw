@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: bulkrna-splicing
-description: Load when summarising rMATS / SUPPA2 alternative-splicing output and identifying significant differential splicing events. Skip if you only have count-level DE (use bulkrna-de) or for splicing in single-cell or spatial data (currently unsupported).
+description: Load when summarising rMATS / SUPPA2 alternative-splicing output and identifying significant
+  differential splicing events. Skip when you only have count-level DE (use bulkrna-de); splicing in single-cell;
+  spatial data (currently unsupported).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: 🧬
 tags:
 - bulkrna
 - splicing
@@ -30,20 +35,21 @@ MXE / RI).
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Splicing event table | `.csv` from rMATS or SUPPA2 (event_id, type, ΔPSI, p-value cols) | yes (or `--demo`) |
-| `--dpsi-cutoff` | float | default `0.1` (events with abs ΔPSI ≥ this) |
-| `--padj-cutoff` | float | default `0.05` (significance threshold) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| All events | `tables/splicing_events.csv` | full annotated event table |
-| Significant events | `tables/significant_events.csv` | filtered by `--dpsi-cutoff` and `--padj-cutoff` |
-| ΔPSI distribution | `figures/dpsi_distribution.png` | histogram with cutoff lines |
-| Event-type breakdown | `figures/event_type_distribution.png` | SE / A3SS / A5SS / MXE / RI counts |
-| Volcano | `figures/volcano_splicing.png` | ΔPSI vs -log10(padj) |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/significant_events.csv`
+- `tables/splicing_events.csv`
+- `figures/dpsi_distribution.png`
+- `figures/event_type_distribution.png`
+- `figures/volcano_splicing.png`
+- `report.md`
+- `result.json`
 
 ## Flow
 

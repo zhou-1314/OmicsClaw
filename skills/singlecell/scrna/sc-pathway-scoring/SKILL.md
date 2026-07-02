@@ -1,6 +1,10 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-pathway-scoring
-description: Load when computing per-cell pathway / gene-set scores on a normalised scRNA AnnData via AUCell (R or Python) or Scanpy score_genes. Skip when running condition-vs-control bulk-style enrichment on top of a DE table (use sc-enrichment) or for de-novo gene-program discovery (use sc-gene-programs).
+description: Load when computing per-cell pathway / gene-set scores on a normalised scRNA AnnData via
+  AUCell (R or Python) or Scanpy score_genes. Skip when running condition-vs-control bulk-style enrichment
+  on top of a DE table (use sc-enrichment); de-novo gene-program discovery (use sc-gene-programs).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
@@ -48,21 +52,31 @@ For *bulk-style* condition-vs-control GSEA / ORA on a DE table use
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Normalised AnnData | `.h5ad` | yes (unless `--demo`) |
-| Gene sets | `.gmt` (`--gene-sets`) **OR** library alias (`--gene-set-db hallmark`/`kegg`/`reactome`/`go_bp`) | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated AnnData | `processed.h5ad` | adds per-cell pathway scores in `obs` (one column per gene set) |
-| Per-cell scores | `tables/enrichment_scores.csv` | cells × gene_sets |
-| Gene-set overlap | `tables/gene_set_overlap.csv` | how many input genes survived the feature mapping |
-| Top pathways | `tables/top_pathways.csv` | top-`--top-pathways` ranked gene sets |
-| Group means | `tables/group_mean_scores.csv` | when `--groupby` is provided |
-| Group high-fraction | `tables/group_high_fraction.csv` | when `--groupby` is provided |
-| Figures | `top_gene_sets.png`, `group_mean_heatmap.png`, `group_mean_dotplot.png`, `top_pathway_distributions.png`, `embedding_top_pathways.png` | rendered via `skills/singlecell/_lib/viz/enrichment.py`; group-aware ones require `--groupby` |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+
+**Outputs**
+
+- `tables/aucell_scores.csv`
+- `tables/cell_metadata.csv`
+- `tables/enrichment_scores.csv`
+- `tables/expression_matrix.tsv`
+- `tables/gene_expression.csv`
+- `tables/gene_set_overlap.csv`
+- `tables/group_high_fraction.csv`
+- `tables/group_mean_scores.csv`
+- `tables/top_pathway_scores_long.csv`
+- `tables/top_pathways.csv`
+- `figures/r_pathway_violin.png`
+- `analysis_summary.txt`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`)
 
 ## Flow
 

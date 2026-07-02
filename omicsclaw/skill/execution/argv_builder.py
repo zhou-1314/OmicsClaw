@@ -81,7 +81,7 @@ def build_skill_argv(
     if demo:
         demo_args = skill_info.get("demo_args", ["--demo"])
         if not demo_args:
-            # The skill declares no demo support (e.g. a workflow shim that
+            # The skill declares no demo support (e.g. a consensus shim that
             # forwards to a parser without `--demo`). Refuse rather than build a
             # command that aborts in argparse; the caller renders a clear error.
             return None

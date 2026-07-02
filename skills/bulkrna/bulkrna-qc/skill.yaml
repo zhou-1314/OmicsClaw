@@ -1,0 +1,95 @@
+schema_version: 2
+id: bulkrna-qc
+name: bulkrna-qc
+domain: bulkrna
+type: leaf
+version: 0.3.0
+author: OmicsClaw
+license: MIT
+emoji: 📊
+summary:
+  load_when: checking a bulk RNA-seq count matrix for library-size outliers, gene detection rates, and
+    sample-sample correlation before DE
+  skip_when:
+  - condition: data is raw FASTQ
+    use: bulkrna-read-qc
+  - condition: aligner logs
+    use: bulkrna-read-alignment
+  - condition: single-cell counts
+    use: sc-qc
+  trigger_keywords:
+  - bulk QC
+  - library size
+  - count matrix
+  - sample quality
+  - gene detection
+  - RNA-seq quality
+  - count QC
+  tags:
+  - bulkrna
+  - QC
+  - count-matrix
+  - library-size
+  - gene-detection
+  - sample-correlation
+  - CPM
+  aliases:
+  - bulk-align
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - csv
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags: []
+    hints: {}
+  outputs:
+    files:
+    - tables/cpm_normalized.csv
+    - tables/sample_stats.csv
+    - figures/expression_density.png
+    - figures/gene_detection.png
+    - figures/library_sizes.png
+    - figures/sample_correlation.png
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: bulkrna_qc.py
+deps:
+  python:
+  - matplotlib
+  - numpy
+  - pandas
+  - scipy
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

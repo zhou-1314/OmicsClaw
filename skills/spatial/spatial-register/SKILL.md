@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: spatial-register
-description: Load when aligning multiple spatial slices into a common coordinate frame on a multi-slice spatial AnnData via PASTE optimal transport or STalign image-aware registration. Skip when data is single-slice (no registration needed) or for cross-sample integration in the gene-expression space (use spatial-integrate).
+description: Load when aligning multiple spatial slices into a common coordinate frame on a multi-slice
+  spatial AnnData via PASTE optimal transport or STalign image-aware registration. Skip when data is single-slice
+  (no registration needed); cross-sample integration in the gene-expression space (use spatial-integrate).
 version: 0.4.0
 author: OmicsClaw
 license: MIT
+emoji: 📐
 tags:
 - spatial
 - registration
@@ -49,17 +54,31 @@ use the same skill with that atlas as the reference slice.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Multi-slice AnnData | `.h5ad` with `obs[--slice-key]` (≥ 2 slices) | yes (unless `--demo`) |
-| Histology images | `obsm` keys (`stalign` only) | conditional |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Registered AnnData | `processed.h5ad` | adds `obsm["spatial_aligned"]` (registered coords from `_lib/register.py:184/476`); the original `obsm["spatial"]` is preserved as-is (the script does NOT overwrite it). A legacy duplicate also lives at `obsm["X_spatial"]` (`spatial_register.py:80/83`). |
-| Registration summary | `tables/registration_summary.csv` | per-slice shift / disparity stats |
-| Per-slice metrics | `tables/registration_metrics.csv` | always |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+
+**Outputs**
+
+- `tables/registration_disparities.csv`
+- `tables/registration_metrics.csv`
+- `tables/registration_points.csv`
+- `tables/registration_run_summary.csv`
+- `tables/registration_shift_by_slice.csv`
+- `tables/registration_summary.csv`
+- `figures/registration_disparities.png`
+- `figures/registration_shift_by_slice.png`
+- `figures/registration_shift_distribution.png`
+- `figures/registration_shift_map.png`
+- `figures/slices_after.png`
+- `figures/slices_before.png`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obsm`: `spatial_aligned`, `spatial`, `X_spatial`
 
 ## Flow
 

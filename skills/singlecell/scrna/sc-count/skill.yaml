@@ -1,0 +1,205 @@
+schema_version: 2
+id: sc-count
+name: sc-count
+domain: singlecell
+type: leaf
+version: 0.3.0
+author: OmicsClaw
+license: MIT
+emoji: 🧬
+summary:
+  load_when: turning scRNA FASTQ (or existing CellRanger/STARsolo/SimpleAF/kb-python output) into a downstream-ready
+    AnnData
+  skip_when:
+  - condition: reads are already counted into AnnData
+    use: sc-standardize-input
+  - condition: raw quality assessment only
+    use: sc-fastq-qc
+  trigger_keywords:
+  - Cell Ranger count
+  - STARsolo count
+  - fastq to adata
+  - raw single-cell counting
+  - generate count matrix
+  tags:
+  - singlecell
+  - scrna
+  - counting
+  - cellranger
+  - starsolo
+  - simpleaf
+  - kb-python
+  aliases:
+  - scrna-count
+  - sc-pseudoalign-count
+  - scrna-pseudoalign-count
+interface:
+  inputs:
+    modalities:
+    - scrna
+    file_types: []
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --chemistry
+    - --method
+    - --r-enhanced
+    - --read2
+    - --reference
+    - --sample
+    - --t2g
+    - --threads
+    - --whitelist
+    hints:
+      cellranger:
+        priority: reference -> sample -> threads -> chemistry
+        params:
+        - reference
+        - sample
+        - threads
+        - chemistry
+        defaults:
+          threads: 8
+          chemistry: auto
+        requires:
+        - cellranger
+        - fastq_dir_or_existing_cellranger_output
+        tips:
+        - '--reference: required Cell Ranger transcriptome reference directory.'
+        - '--sample: choose one sample when the FASTQ directory contains multiple groups.'
+        - '--chemistry auto: current wrapper leaves chemistry auto-detection to Cell Ranger by default.'
+      starsolo:
+        priority: reference -> chemistry -> whitelist -> sample -> threads
+        params:
+        - reference
+        - chemistry
+        - whitelist
+        - sample
+        - threads
+        defaults:
+          threads: 8
+        requires:
+        - STAR
+        - 10x_paired_fastq_or_existing_starsolo_output
+        tips:
+        - '--chemistry: current STARsolo wrapper supports `10xv2`, `10xv3`, and `10xv4` geometry.'
+        - '--whitelist: strongly recommended; OmicsClaw only auto-detects common local v2/v3 whitelist
+          files.'
+        - '--reference: must be a STAR genome directory, not a raw FASTA/GTF pair.'
+      simpleaf:
+        priority: reference -> chemistry -> sample -> threads
+        params:
+        - reference
+        - chemistry
+        - sample
+        - threads
+        defaults:
+          threads: 8
+          chemistry: 10xv3
+        requires:
+        - simpleaf_output_or_fastq
+        tips:
+        - '--reference: current wrapper expects a simpleaf index path.'
+        - '--chemistry: current wrapper is optimized for mainstream 10x-style droplet presets.'
+      kb_python:
+        priority: reference -> t2g -> chemistry -> sample -> threads
+        params:
+        - reference
+        - t2g
+        - chemistry
+        - sample
+        - threads
+        defaults:
+          threads: 8
+          chemistry: 10xv3
+        requires:
+        - kb_output_or_fastq
+        tips:
+        - '--reference: current wrapper expects a kallisto index path.'
+        - '--t2g: required transcript-to-gene map for kb-python runs.'
+        - '--chemistry: forwarded as kb technology string such as `10xv2`, `10xv3`, or `10xv4`.'
+  outputs:
+    files:
+    - tables/Summary.csv
+    - tables/backend_summary.csv
+    - tables/barcode_metrics.csv
+    - tables/barcodes.tsv
+    - tables/cell_metadata.csv
+    - tables/count_summary.csv
+    - tables/features.tsv
+    - tables/genes.tsv
+    - tables/metrics_summary.csv
+    - tables/simpleaf_t2g.tsv
+    - figures/barcode_rank.png
+    - figures/count_complexity_scatter.png
+    - figures/count_distributions.png
+    - 3M-february-2018.txt
+    - 737K-august-2016.txt
+    - Aligned.sortedByCoord.out.bam
+    - analysis_summary.txt
+    - cells_x_genes.barcodes.txt
+    - cells_x_genes.genes.txt
+    - multiqc_report.html
+    - possorted_genome_bam.bam
+    - processed.h5ad
+    - quants_mat_cols.txt
+    - quants_mat_rows.txt
+    - simpleaf_index.json
+    - standardized_input.h5ad
+    - web_summary.html
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+    anndata:
+      saves_h5ad: true
+      obs: []
+      obsm: []
+      var: []
+      layers: []
+      uns: []
+runtime:
+  language: python
+  entry: sc_count.py
+deps:
+  python:
+  - anndata
+  - matplotlib
+  - numpy
+  - pandas
+  - scanpy
+  - scipy
+  - seaborn
+  cli: []
+compatibility:
+  platforms:
+  - macos
+  - linux
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+  - r_visualization.md
+  tests: tests/
+  homepage: https://github.com/TianGzlab/OmicsClaw
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

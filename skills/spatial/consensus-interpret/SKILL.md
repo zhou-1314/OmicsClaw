@@ -1,6 +1,11 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: consensus-interpret
-description: 'Load when biologically interpreting a finished verified consensus run (consensus-domains / sc-consensus-clustering) — inline DE, marker-DB lookup, and LLM cell-type naming with mandatory marker citations + evidence-bound next-step recommendations. Skip when the consensus run failed (fix it first) or for forward query→skill routing (use orchestrator).'
+description: Load when biologically interpreting a finished verified consensus run (consensus-domains
+  / sc-consensus-clustering) — inline DE, marker-DB lookup, and LLM cell-type naming with mandatory marker
+  citations + evidence-bound next-step recommendations. Skip when the consensus run failed (fix it first);
+  forward query→skill routing (use orchestrator).
 version: 0.1.0
 author: OmicsClaw
 license: Apache-2.0
@@ -48,31 +53,19 @@ Skip when:
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Typed run directory | `--input <typed_run_dir>` (must contain `plan.json` written by `consensus-domains` / `sc-consensus-clustering`) | yes |
-| Output directory | `--output <interpreted_dir>` | yes |
-| Tissue hint | `--tissue {brain, immune, kidney, liver}` (selects bundled marker DB) | yes (unless `--markers` provided) |
-| Original AnnData path | `--adata <preprocessed.h5ad>` | no — defaults to `plan.json` `input_path` |
-| User-provided marker DB | `--markers <file.tsv>` (overrides bundled DB; same schema) | no |
-| Disable LLM (structural-only) | `--no-llm` | no — default fails-fast on LLM unavailability |
-| LLM seed (for self-consistency runs) | `--seed 0` | no |
-| Top-K markers reported per cluster | `--top-k-markers 20` | no |
-| Top-K next-step recommendations | `--top-k-next-steps 3` | no (capped at 3 by ADR 0012) |
-| Coverage floor for T2 escalation | `--coverage-floor 0.5` | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Interpreted report | `interpreted_report.md` | **First line: `[A+I: Interpreted on verified consensus]`** (or `[I-noLLM: ...]` if `--no-llm`). Non-configurable per ADR 0012. |
-| Structured cell-type assignments | `interpreted_assignments.json` | machine-readable; schema below |
-| Per-cluster DE table | `de_per_cluster.csv` | inline `scanpy.tl.rank_genes_groups` output; consensus-interpret computes this |
-| Contradiction regions | `contradiction_regions.csv` | rows where cross_method_nmi indicates disagreement; LLM-narrated in markdown |
-| Audit | `audit.json` | `typed_run_id`, adata checksum, marker DB used, LLM model/seed, `interpreted_namespace`, `evidence_base_namespace` |
+**Inputs**
 
-The full `interpreted_assignments.json` schema (per-cluster `evidence.markers[]`
-with `{gene, de_rank, db_source, db_celltype, weight}`, `member_agreement[]`, and
-`next_steps[]` with mandatory `evidence_refs[]`) is in
-`references/output_contract.md`.
+- File types: `.json`
+
+**Outputs**
+
+- `interpreted_report.md`
+- `interpreted_assignments.json`
+- `de_per_cluster.csv`
+- `contradiction_regions.csv`
+- `audit.json`
 
 ## Flow
 
@@ -186,6 +179,6 @@ oc run consensus-interpret --input run1/ --output run1_interp/ \
 
 - `references/methodology.md` — the γ (naming) + β (recommendation) protocol and grounding rules
 - `references/output_contract.md` — `interpreted_assignments.json` schema + the 5 written artifacts
-- `references/parameters.md` — every CLI flag (generated from `parameters.yaml`)
+- `references/parameters.md` — every CLI flag (generated from `skill.yaml`)
 - Adjacent skills: `consensus-domains` / `sc-consensus-clustering` (upstream — produce the verified run this interprets), `orchestrator` (sibling — forward `query → skill`; this does backward `result → skill+evidence`), `spatial-de` / `spatial-deconv` / `spatial-communication` (downstream — next-step skills β may recommend, each with mandatory evidence)
 - ADR 0010/0011/0012 — consensus runtime boundary, evaluation protocol, this skill's 4-axis + T3 invariants

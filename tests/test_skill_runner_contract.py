@@ -49,6 +49,7 @@ def test_skill_runner_module_exposes_run_skill_contract():
         "stdout_callback",
         "stderr_callback",
         "cancel_event",
+        "status_callback",  # adaptive-env provisioning progress sink
     ]
 
 

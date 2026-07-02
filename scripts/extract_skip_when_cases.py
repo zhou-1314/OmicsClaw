@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Extract negative routing eval cases from SKILL.md Skip-when clauses.
+"""Extract negative routing eval cases from each skill's Skip-when clause.
+
+Dual-track (ADR 0037): the description is read via ``LazySkillMetadata`` — the v2
+``skill.yaml summary`` (reconstructed "Load when… / Skip when…") when present,
+else the v1 ``SKILL.md`` frontmatter.
 
 ADR 2026-05-11: every `Skip when X — use sibling-skill instead` clause is
 a negative case for the host skill AND a positive case for the sibling.
@@ -40,8 +44,6 @@ try:
 except ModuleNotFoundError:  # pragma: no cover
     import tomli as tomllib  # type: ignore
 
-import yaml
-
 LOGGER = logging.getLogger("extract_skip_when_cases")
 
 
@@ -65,35 +67,35 @@ def _hash_description(description: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# SKILL.md discovery
+# Skill discovery (dual-track, ADR 0037)
 # --------------------------------------------------------------------------- #
 
 def _load_skill_entries(domain: str) -> list[SkillEntry]:
+    """Skill descriptions for a domain via the dual-track reader.
+
+    Sources each description through ``LazySkillMetadata`` so it reflects the v2
+    ``skill.yaml summary`` (the reconstructed "Load when… / Skip when…" string)
+    when present, or the v1 ``SKILL.md`` frontmatter otherwise. The Skip-when
+    clause the downstream LLM extracts is preserved in both cases.
+    """
+    from omicsclaw.skill.lazy_metadata import LazySkillMetadata
+
     domain_dir = _ROOT / "skills" / domain
     if not domain_dir.exists():
         raise FileNotFoundError(f"Domain dir not found: {domain_dir}")
 
+    # Every dir with a v1 SKILL.md or a v2 skill.yaml (some domains, e.g.
+    # literature, keep the skill at the domain root rather than nested).
+    skill_dirs = {p.parent for p in domain_dir.rglob("SKILL.md")}
+    skill_dirs |= {p.parent for p in domain_dir.rglob("skill.yaml")}
+
     entries: list[SkillEntry] = []
-    for skill_md in sorted(domain_dir.rglob("SKILL.md")):
-        # Discover every SKILL.md under the domain dir.  Some domains
-        # (e.g. literature) keep a single SKILL.md at the domain root
-        # rather than nested in per-skill subdirs; those must be picked
-        # up, not skipped.  Domain-level INDEX files are .md without the
-        # SKILL prefix so they are not confused with skills.
-        text = skill_md.read_text(encoding="utf-8")
-        if not text.startswith("---"):
-            continue
-        parts = text.split("---", 2)
-        if len(parts) < 3:
-            continue
-        try:
-            frontmatter = yaml.safe_load(parts[1]) or {}
-        except yaml.YAMLError:
-            continue
-        description = str(frontmatter.get("description", "") or "").strip()
-        skill_name = str(frontmatter.get("name", "") or skill_md.parent.name).strip()
+    for skill_dir in sorted(skill_dirs):
+        lazy = LazySkillMetadata(skill_dir)
+        description = (lazy.description or "").strip()
         if not description:
             continue
+        skill_name = (lazy.name or skill_dir.name).strip()
         entries.append(SkillEntry(
             skill=skill_name,
             description=description,

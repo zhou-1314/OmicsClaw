@@ -38,7 +38,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "genomics-variant-annotation"
-SKILL_VERSION = "0.2.0"
+SKILL_VERSION = "0.5.0"
 
 # Ensembl consequence types ordered by severity (VEP-compatible)
 # Ref: https://www.ensembl.org/info/genome/variation/prediction/predicted_data.html

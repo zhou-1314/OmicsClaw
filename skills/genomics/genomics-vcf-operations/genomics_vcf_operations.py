@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "genomics-vcf-operations"
-SKILL_VERSION = "0.2.0"
+SKILL_VERSION = "0.5.0"
 
 # Transition pairs (purine<->purine or pyrimidine<->pyrimidine)
 TRANSITIONS = {("A", "G"), ("G", "A"), ("C", "T"), ("T", "C")}

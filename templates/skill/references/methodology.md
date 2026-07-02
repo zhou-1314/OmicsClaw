@@ -75,8 +75,8 @@ comparison table — caveats are usually too specific to fit a table cell.
 <!--
 The runtime requirements as the user will encounter them.  Split into
 required vs optional so the installation hint surfaced by the bot is
-precise.  `parameters.yaml::requires` and `parameters.yaml::install`
-should agree with this list.
+precise.  `skill.yaml::deps.python` should agree with this list
+(finalize it with `python scripts/audit_skill_requires.py --write`).
 -->
 
 **Required**

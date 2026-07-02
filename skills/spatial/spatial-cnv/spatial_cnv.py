@@ -64,7 +64,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "spatial-cnv"
-SKILL_VERSION = "0.3.0"
+SKILL_VERSION = "0.5.0"
 SCRIPT_REL_PATH = "skills/spatial/spatial-cnv/spatial_cnv.py"
 
 

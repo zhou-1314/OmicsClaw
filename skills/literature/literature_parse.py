@@ -14,6 +14,9 @@ from skills.literature.core.parser import parse_input
 from skills.literature.core.extractor import DOMAIN_ENTRY, extract_metadata, infer_domain
 from skills.literature.core.downloader import download_geo_dataset
 
+SKILL_NAME = "literature"
+SKILL_VERSION = "0.5.0"
+
 
 DEMO_TEXT = (
     "We profiled human brain spatial transcriptomics with Visium and deposited "

@@ -1,0 +1,88 @@
+schema_version: 2
+id: genomics-assembly
+name: genomics-assembly
+domain: genomics
+type: leaf
+version: 0.5.0
+author: OmicsClaw
+license: MIT
+emoji: 🧬
+summary:
+  load_when: computing genome-assembly QC metrics — N50/N90, L50/L90, total length, contig count, GC content,
+    longest-contig — from a FASTA produced by any assembler (SPAdes / Megahit / Flye / Canu)
+  skip_when:
+  - condition: running the assembly itself
+  - condition: assessing alignment quality
+    use: genomics-alignment
+  trigger_keywords:
+  - genome assembly
+  - de novo
+  - SPAdes
+  - Megahit
+  - Flye
+  - Canu
+  tags:
+  - genomics
+  - assembly
+  - n50
+  - l50
+  - contig
+  - quast
+  - spades
+  - flye
+  aliases:
+  - assemble
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - fasta
+    - fa
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --genome-size
+    hints: {}
+  outputs:
+    files:
+    - tables/assembly_metrics.csv
+    - tables/contig_lengths.csv
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: genome_assembly.py
+deps:
+  python:
+  - numpy
+  - pandas
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

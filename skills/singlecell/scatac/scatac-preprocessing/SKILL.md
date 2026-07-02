@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: scatac-preprocessing
-description: Load when preprocessing a single-cell ATAC peak × cell AnnData via Signac-style TF-IDF + LSI + Leiden, producing a clustered UMAP-ready object. Skip when input is fragments or BAM (peak calling not implemented here) or for scRNA preprocessing (use sc-preprocessing).
+description: Load when preprocessing a single-cell ATAC peak × cell AnnData via Signac-style TF-IDF +
+  LSI + Leiden, producing a clustered UMAP-ready object. Skip when input is fragments; BAM (peak calling
+  not implemented here); scRNA preprocessing (use sc-preprocessing).
 version: 0.2.0
 author: OmicsClaw
 license: MIT
+emoji: 🧬
 tags:
 - singlecell
 - scatac
@@ -38,21 +43,35 @@ multi-sample integration. For scRNA preprocessing use `sc-preprocessing`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Peak × cell AnnData | `.h5ad` (`.X` non-negative count-like) | yes (unless `--demo`) |
-| Alternates | `.h5` (10x), `.loom`, `.csv`/`.tsv`, 10x directory | yes (loaded via `smart_load`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Processed AnnData | `processed.h5ad` | retained peak space; `obsm["X_lsi"]`, `obsm["X_umap"]`, `obs["leiden"]`; raw counts kept in `layers["counts"]` |
-| Run summary | `tables/preprocess_summary.csv` | always |
-| Cluster sizes | `tables/cluster_summary.csv` | always |
-| Top peaks | `tables/peak_summary.csv` | most accessible retained peaks |
-| LSI variance | `tables/lsi_variance_ratio.csv` | per-component |
-| Per-cell QC | `tables/qc_metrics_per_cell.csv` | always |
-| Figures | `figures/umap_leiden.png`, `figures/qc_violin.png`, `figures/top_accessible_peaks.png`, `figures/lsi_variance.png` | always |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: scatac
+- File types: `.h5ad`, `.h5`, `.loom`, `.csv`, `.tsv`
+
+**Outputs**
+
+- `tables/cell_metadata.csv`
+- `tables/cluster_summary.csv`
+- `tables/lsi_variance_ratio.csv`
+- `tables/peak_summary.csv`
+- `tables/preprocess_summary.csv`
+- `tables/qc_metrics_per_cell.csv`
+- `tables/umap_points.csv`
+- `figures/clustering_comparison.png`
+- `figures/feature_umap.png`
+- `figures/lsi_variance.png`
+- `figures/pca_loadings.png`
+- `figures/pca_scatter.png`
+- `figures/pca_variance.png`
+- `figures/qc_violin.png`
+- `figures/top_accessible_peaks.png`
+- `analysis_summary.txt`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `leiden`; `obsm`: `X_lsi`, `X_umap`; `layers`: `counts`
 
 ## Flow
 

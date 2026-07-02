@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-velocity-prep
-description: Load when generating spliced / unspliced layers from Cell Ranger BAM, FASTQ, STARsolo output, or velocyto loom — the prerequisite for sc-velocity. Skip when AnnData already has spliced+unspliced layers (go straight to sc-velocity) or for any non-velocity preprocessing (use sc-preprocessing).
+description: Load when generating spliced / unspliced layers from Cell Ranger BAM, FASTQ, STARsolo output,
+  or velocyto loom — the prerequisite for sc-velocity. Skip when AnnData already has spliced+unspliced
+  layers (use sc-velocity); any non-velocity preprocessing (use sc-preprocessing).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: 🌀
 tags:
 - singlecell
 - scrna
@@ -45,21 +50,39 @@ scRNA preprocessing use `sc-preprocessing`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Cell Ranger run dir / STARsolo dir / FASTQ dir / `.loom` | path | yes (unless `--demo`) |
-| GTF | `.gtf` (`--gtf`) | required for BAM-backed velocyto |
-| STAR index | dir (`--reference`) | required for FASTQ-backed STARsolo |
-| Chemistry | `10xv2` / `10xv3` / `10xv4` (`--chemistry`) | required for FASTQ STARsolo |
-| Optional base AnnData | `.h5ad` (`--base-h5ad`) | merge layers into existing object |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Velocity-ready AnnData | `processed.h5ad` | adds `layers["spliced"]`, `layers["unspliced"]`, `layers["ambiguous"]` |
-| Layer totals | `tables/velocity_layer_summary.csv` | molecules per layer |
-| Top genes | `tables/top_velocity_genes.csv` | highest-abundance velocity genes |
-| Figures | `figures/velocity_layer_summary.png`, `figures/velocity_layer_fraction.png`, `figures/velocity_gene_balance.png`, `figures/velocity_top_genes_stacked.png` | always |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.loom`, `.h5ad`
+
+**Outputs**
+
+- `tables/Summary.csv`
+- `tables/barcodes.tsv`
+- `tables/cell_metadata.csv`
+- `tables/features.tsv`
+- `tables/genes.tsv`
+- `tables/metrics_summary.csv`
+- `tables/top_velocity_genes.csv`
+- `tables/velocity_layer_summary.csv`
+- `figures/velocity_gene_balance.png`
+- `figures/velocity_layer_fraction.png`
+- `figures/velocity_layer_summary.png`
+- `figures/velocity_top_genes_stacked.png`
+- `3M-february-2018.txt`
+- `737K-august-2016.txt`
+- `Aligned.sortedByCoord.out.bam`
+- `analysis_summary.txt`
+- `multiqc_report.html`
+- `possorted_genome_bam.bam`
+- `processed.h5ad`
+- `velocity_input.h5ad`
+- `web_summary.html`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `layers`: `spliced`, `unspliced`, `ambiguous`
 
 ## Flow
 

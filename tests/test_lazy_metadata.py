@@ -185,10 +185,10 @@ def test_lazy_metadata_loads_spatial_trajectory_method_specific_flags():
 
 # --- ADR 0030: skill `type` + `validation_level` ---------------------------
 
-def test_lazy_metadata_reads_workflow_type():
-    """A consensus shim declares `type: workflow` in its sidecar."""
+def test_lazy_metadata_reads_consensus_type():
+    """A consensus shim declares `type: consensus` in its sidecar (ADR 0016)."""
     lazy = LazySkillMetadata(Path("skills/spatial/consensus-domains"))
-    assert lazy.type == "workflow"
+    assert lazy.type == "consensus"
 
 
 def test_lazy_metadata_defaults_type_leaf_and_validation_smoke_only():

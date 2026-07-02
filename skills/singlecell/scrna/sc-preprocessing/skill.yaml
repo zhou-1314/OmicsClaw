@@ -1,0 +1,253 @@
+schema_version: 2
+id: sc-preprocessing
+name: sc-preprocessing
+domain: singlecell
+type: leaf
+version: 0.6.0
+author: OmicsClaw
+license: MIT
+emoji: 🧫
+summary:
+  load_when: normalising QC'd scRNA into a PCA-ready AnnData via scanpy / Seurat / SCTransform / Pearson
+    residuals
+  skip_when:
+  - condition: QC thresholds are still undecided
+    use: sc-qc
+  - condition: batch correction across samples
+    use: sc-batch-integration
+  trigger_keywords:
+  - single cell preprocess
+  - scRNA preprocessing
+  - normalize hvg pca
+  - base preprocessing
+  - Seurat preprocessing
+  - SCTransform preprocessing
+  tags:
+  - singlecell
+  - scrna
+  - preprocessing
+  - normalization
+  - hvg
+  - pca
+  - scanpy
+  - seurat
+  - sctransform
+  - pearson_residuals
+  aliases:
+  - sc-preprocess
+interface:
+  inputs:
+    modalities:
+    - scrna
+    file_types:
+    - h5ad
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --confirmed-preflight
+    - --doublet-score-threshold
+    - --max-mt-pct
+    - --method
+    - --min-cells
+    - --min-genes
+    - --n-pcs
+    - --n-top-hvg
+    - --no-remove-doublets
+    - --normalization-target-sum
+    - --pearson-hvg-flavor
+    - --pearson-theta
+    - --r-enhanced
+    - --scanpy-hvg-flavor
+    - --sctransform-regress-mt
+    - --seurat-hvg-method
+    - --seurat-normalize-method
+    - --seurat-scale-factor
+    hints:
+      scanpy:
+        priority: min_genes/max_mt_pct -> n_top_hvg -> n_pcs
+        params:
+        - min_genes
+        - max_mt_pct
+        - n_top_hvg
+        - n_pcs
+        advanced_params:
+        - min_cells
+        - normalization_target_sum
+        - scanpy_hvg_flavor
+        defaults:
+          min_genes: 200
+          min_cells: 3
+          max_mt_pct: 20.0
+          n_top_hvg: 2000
+          n_pcs: 50
+          normalization_target_sum: 10000.0
+          scanpy_hvg_flavor: seurat
+        requires:
+        - raw_counts
+        - scanpy
+        tips:
+        - '--method scanpy: Python-native base preprocessing up to PCA.'
+        - Use `sc-clustering` after this if batch integration is not needed.
+      seurat:
+        priority: min_genes/max_mt_pct -> n_top_hvg -> n_pcs
+        params:
+        - min_genes
+        - max_mt_pct
+        - n_top_hvg
+        - n_pcs
+        advanced_params:
+        - min_cells
+        - seurat_normalize_method
+        - seurat_scale_factor
+        - seurat_hvg_method
+        defaults:
+          min_genes: 200
+          min_cells: 3
+          max_mt_pct: 20.0
+          n_top_hvg: 2000
+          n_pcs: 50
+          seurat_normalize_method: LogNormalize
+          seurat_scale_factor: 10000.0
+          seurat_hvg_method: vst
+        requires:
+        - raw_counts
+        - Rscript
+        - Seurat
+        - SingleCellExperiment
+        - zellkonverter
+        tips:
+        - '--method seurat: R-backed LogNormalize workflow up to PCA export.'
+      sctransform:
+        priority: max_mt_pct -> n_top_hvg -> n_pcs
+        params:
+        - min_genes
+        - max_mt_pct
+        - n_top_hvg
+        - n_pcs
+        advanced_params:
+        - min_cells
+        - sctransform_regress_mt
+        defaults:
+          min_genes: 200
+          min_cells: 3
+          max_mt_pct: 20.0
+          n_top_hvg: 3000
+          n_pcs: 50
+          sctransform_regress_mt: true
+        requires:
+        - raw_counts
+        - Rscript
+        - Seurat
+        - SingleCellExperiment
+        - zellkonverter
+        - sctransform
+        tips:
+        - '--method sctransform: R-backed SCTransform workflow up to PCA export.'
+      pearson_residuals:
+        priority: min_genes/max_mt_pct -> n_top_hvg -> n_pcs
+        params:
+        - min_genes
+        - max_mt_pct
+        - n_top_hvg
+        - n_pcs
+        advanced_params:
+        - min_cells
+        - pearson_hvg_flavor
+        - pearson_theta
+        defaults:
+          min_genes: 200
+          min_cells: 3
+          max_mt_pct: 20.0
+          n_top_hvg: 2000
+          n_pcs: 50
+          pearson_hvg_flavor: seurat_v3
+          pearson_theta: 100.0
+        requires:
+        - raw_counts
+        - scanpy
+        tips:
+        - '--method pearson_residuals: raw-count HVG selection plus Pearson residual modeling, while exporting
+          a normalized public matrix and PCA.'
+  outputs:
+    files:
+    - tables/X_norm.csv
+    - tables/cell_metadata.csv
+    - tables/cluster_summary.csv
+    - tables/embedding_points.csv
+    - tables/gene_expression.csv
+    - tables/hvg.csv
+    - tables/hvg_summary.csv
+    - tables/obs.csv
+    - tables/pca.csv
+    - tables/pca_embedding.csv
+    - tables/pca_variance_ratio.csv
+    - tables/preprocess_summary.csv
+    - tables/qc_metrics_per_cell.csv
+    - figures/highly_variable_genes.png
+    - figures/pca_variance.png
+    - figures/qc_violin.png
+    - figures/r_hvg_violin.png
+    - analysis_summary.txt
+    - info.json
+    - input.h5ad
+    - processed.h5ad
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+    anndata:
+      saves_h5ad: true
+      obs: []
+      obsm:
+      - X_pca
+      var:
+      - highly_variable
+      layers:
+      - counts
+      uns: []
+runtime:
+  language: python
+  entry: sc_preprocess.py
+deps:
+  python:
+  - anndata
+  - matplotlib
+  - numpy
+  - pandas
+  - phate
+  - scanpy
+  - scipy
+  - seaborn
+  cli: []
+compatibility:
+  platforms:
+  - macos
+  - linux
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+  - r_visualization.md
+  tests: tests/
+  homepage: https://github.com/OmicsClaw/OmicsClaw
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

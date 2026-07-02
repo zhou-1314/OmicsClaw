@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Verify every routing surface stays in sync with SKILL.md descriptions.
+"""Verify every routing surface stays in sync with the skill descriptions.
 
-ADR 2026-05-11: SKILL.md frontmatter `description` is the single source
-of truth for routing intent.  Three downstream surfaces are auto-generated
-from it — `skills/catalog.json`, every `skills/<domain>/INDEX.md`, and the
-routing table in `CLAUDE.md`.  Each has its own ``--check`` mode that
+ADR 2026-05-11 / ADR 0037: each skill's `description` is the single source
+of truth for routing intent — sourced from the v2 `skill.yaml summary` when
+present, else v1 `SKILL.md` frontmatter (read uniformly via the registry /
+`LazySkillMetadata`, so all three generators are dual-track).  Three downstream
+surfaces are auto-generated from it — `skills/catalog.json`, every
+`skills/<domain>/INDEX.md`, and the routing table in `CLAUDE.md`.  Each has its own ``--check`` mode that
 exits non-zero on drift; this orchestrator runs all three and reports a
 single unified verdict for CI.
 
@@ -113,7 +115,10 @@ def main() -> int:
     drifted = [(s, out) for s, clean, out in results if not clean]
 
     if not drifted:
-        LOGGER.info("✓ All routing surfaces in sync with SKILL.md descriptions.")
+        LOGGER.info(
+            "✓ All routing surfaces in sync with skill descriptions "
+            "(v2 skill.yaml summary / v1 SKILL.md)."
+        )
         return 0
 
     if args.fix:
@@ -139,8 +144,9 @@ def main() -> int:
                 LOGGER.error("    | %s", line)
     LOGGER.error("")
     LOGGER.error(
-        "Per ADR 2026-05-11: SKILL.md frontmatter description is the single source "
-        "of truth.  Run the fix commands above, review the diff, commit the "
+        "Per ADR 2026-05-11 / ADR 0037: the skill description (v2 skill.yaml summary "
+        "/ v1 SKILL.md frontmatter) is the single source of truth.  Run the fix "
+        "commands above, review the diff, commit the "
         "regenerated artefacts.  Or run `python scripts/check_description_drift.py --fix` "
         "to regenerate all drifted surfaces in one step (local dev only)."
     )

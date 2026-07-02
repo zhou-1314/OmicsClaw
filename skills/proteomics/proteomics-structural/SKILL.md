@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: proteomics-structural
-description: Load when summarising cross-linking MS (XL-MS) results — intra/inter-protein link split, optional FDR filtering, distance-constraint validation against a per-crosslinker (DSS / BS3 / EDC / DSSO / DSBU) max distance. Skip when raw spectra are the input (run XlinkX / pLink / xiSEARCH first) or no XL-MS experiment was performed.
+description: Load when summarising cross-linking MS (XL-MS) results — intra/inter-protein link split,
+  optional FDR filtering, distance-constraint validation against a per-crosslinker (DSS / BS3 / EDC /
+  DSSO / DSBU) max distance. Skip when raw spectra are the input (run XlinkX / pLink / xiSEARCH first);
+  no XL-MS experiment was performed.
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🏗️
 tags:
 - proteomics
 - structural
@@ -40,17 +46,18 @@ already-searched results.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Cross-link results | `.csv` with `protein_a`, `protein_b` columns (lowercase, used to derive `link_type`); optional `fdr` (for filtering), `distance_angstrom` (for constraint check), `score` | yes (unless `--demo`) |
-| Crosslinker | `--crosslinker {DSS,BS3,EDC,DSSO,DSBU}` (default `DSS`) | no |
-| FDR | `--fdr <float>` (default 0.05) | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| All crosslinks | `tables/crosslinks.csv` | FDR-filtered subset; adds derived `link_type` and (if distances present) `constraint_satisfied` columns |
-| Inter-protein subset | `tables/inter_protein_crosslinks.csv` | only when ≥ 1 row has `link_type == "inter-protein"` |
-| Report | `report.md` + `result.json` | `n_crosslinks`, `n_inter`, `n_intra`, distance statistics, `constraint_satisfaction_rate` (if `distance_angstrom` present) |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/crosslinks.csv`
+- `tables/inter_protein_crosslinks.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: spatial-trajectory
-description: Load when inferring pseudotime / lineage trajectories on a preprocessed spatial AnnData via DPT (default — diffusion pseudotime), CellRank (terminal-state + fate-probability), or Palantir (waypoint branch probabilities). Skip when the data has spliced/unspliced layers and you want velocity-driven dynamics (use `spatial-velocity`) or for non-spatial scRNA pseudotime (use `sc-pseudotime`).
+description: Load when inferring pseudotime / lineage trajectories on a preprocessed spatial AnnData via
+  DPT (default — diffusion pseudotime), CellRank (terminal-state + fate-probability), or Palantir (waypoint
+  branch probabilities). Skip when the data has spliced/unspliced layers and you want velocity-driven
+  dynamics (use spatial-velocity); non-spatial scRNA pseudotime (use sc-pseudotime).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🛤️
 tags:
 - spatial
 - trajectory
@@ -50,23 +56,45 @@ For RNA-velocity-driven trajectories use `spatial-velocity`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Preprocessed spatial AnnData | `.h5ad` with `obsm["X_pca"]`, neighbour graph (built if missing); optional `obs[cluster_key]` for grouped exports | yes (unless `--demo`) |
-| Root cell | `--root-cell <barcode>` (else auto-pick by expression rank) | optional |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated AnnData | `processed.h5ad` | DPT/CellRank: `obs["dpt_pseudotime"]` (set by `sc.tl.dpt` at `_lib/trajectory.py:276`), `uns["iroot"]` (`_lib/trajectory.py:273`); CellRank also: `obs["traj_terminal_state"]`, `obs["traj_fate_max_prob"]`, `obs["traj_fate_entropy"]` (`spatial_trajectory.py:236-238`); Palantir: `obs["palantir_pseudotime"]`, `obs["palantir_entropy"]`, `uns["palantir_waypoints"]` (`_lib/trajectory.py:527-529`); when ≥ 1 branch is non-empty also `obsm["palantir_branch_probs"]` + `uns["palantir_branch_prob_columns"]` (`_lib/trajectory.py:531-533`) |
-| Summary | `tables/trajectory_summary.csv` | per-cell pseudotime + cluster |
-| Cluster summary | `tables/trajectory_cluster_summary.csv` | per-cluster mean/median pseudotime |
-| Trajectory genes | `tables/trajectory_genes.csv` | top correlated with pseudotime |
-| Terminal states | `tables/trajectory_terminal_states.csv` + `tables/{method}_terminal_states.csv` | CellRank / Palantir |
-| Driver genes | `tables/trajectory_driver_genes.csv` (+ `cellrank_driver_genes.csv` alias) | CellRank only |
-| Fate probabilities | `tables/trajectory_fate_probabilities_wide.csv` | CellRank wide form |
-| Branch probs | `tables/palantir_branch_probs.csv` | Palantir |
-| Run summary | `tables/trajectory_run_summary.csv` | params used |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+- Expects `obsm`: `X_pca`
+
+**Outputs**
+
+- `tables/cellrank_driver_genes.csv`
+- `tables/palantir_branch_probs.csv`
+- `tables/trajectory_cluster_summary.csv`
+- `tables/trajectory_diffmap_points.csv`
+- `tables/trajectory_driver_genes.csv`
+- `tables/trajectory_fate_probabilities.csv`
+- `tables/trajectory_fate_probabilities_wide.csv`
+- `tables/trajectory_genes.csv`
+- `tables/trajectory_run_summary.csv`
+- `tables/trajectory_spatial_points.csv`
+- `tables/trajectory_summary.csv`
+- `tables/trajectory_terminal_states.csv`
+- `tables/trajectory_umap_points.csv`
+- `figures/cellrank_fate_circular.png`
+- `figures/cellrank_fate_heatmap.png`
+- `figures/cellrank_fate_map.png`
+- `figures/cellrank_gene_trends.png`
+- `figures/trajectory_cluster_summary.png`
+- `figures/trajectory_diffmap.png`
+- `figures/trajectory_entropy_distribution.png`
+- `figures/trajectory_fate_probability_distribution.png`
+- `figures/trajectory_genes_barplot.png`
+- `figures/trajectory_pseudotime_distribution.png`
+- `figures/trajectory_pseudotime_embedding.png`
+- `figures/trajectory_pseudotime_spatial.png`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `dpt_pseudotime`, `traj_terminal_state`, `traj_fate_max_prob`, `traj_fate_entropy`, `palantir_pseudotime`, `palantir_entropy`; `obsm`: `palantir_branch_probs`; `uns`: `iroot`, `palantir_waypoints`, `palantir_branch_prob_columns`
 
 ## Flow
 

@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-batch-integration
-description: Load when integrating multi-sample scRNA-seq with Harmony, scVI, scANVI, BBKNN, Scanorama, SIMBA, or supported R-backed methods to remove batch effects. Skip when the data is one sample (no batch effect to integrate) or for upstream merging only (use sc-multi-count).
+description: Load when integrating multi-sample scRNA-seq with Harmony, scVI, scANVI, BBKNN, Scanorama,
+  SIMBA, or supported R-backed methods to remove batch effects. Skip when the data is one sample (no batch
+  effect to integrate); upstream merging only (use sc-multi-count).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: S
 tags:
 - singlecell
 - scrna
@@ -46,19 +51,35 @@ diagnostics when available.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Merged multi-sample AnnData | `.h5ad` with `obs["batch"]` (or via `--batch-key`) | yes (unless `--demo`) |
-| Cell-type labels | `obs["<labels-key>"]` for `scanvi` | only for `--method scanvi` |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Integrated AnnData | `processed.h5ad` | adds `obsm["X_<method>"]` for embedding-based methods (Harmony / scVI / scANVI / Scanorama / SIMBA); BBKNN modifies the neighbour graph and leaves `obsm["X_pca"]` as the embedding |
-| Run summary | `tables/integration_summary.csv` | parameters + run mode |
-| Batch composition | `tables/batch_sizes.csv`, `tables/batch_mixing_matrix.csv` | per-batch / per-cluster mixing |
-| Cluster sizes | `tables/cluster_sizes.csv` | cells per integrated cluster |
-| Diagnostics | `tables/integration_metrics.csv` | LISI + ASW when available |
-| Report | `report.md` + `result.json` | always written |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+
+**Outputs**
+
+- `tables/batch_mixing_matrix.csv`
+- `tables/batch_sizes.csv`
+- `tables/cell_metadata.csv`
+- `tables/cluster_sizes.csv`
+- `tables/embedding.csv`
+- `tables/integration_metrics.csv`
+- `tables/integration_summary.csv`
+- `tables/obs.csv`
+- `tables/umap.csv`
+- `tables/umap_points.csv`
+- `figures/batch_mixing_heatmap.png`
+- `figures/integration_metrics.png`
+- `figures/r_embedding_discrete.png`
+- `analysis_summary.txt`
+- `input.h5ad`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obsm`: `X_<method>`, `X_pca`
 
 ## Flow
 

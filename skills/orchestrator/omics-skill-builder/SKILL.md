@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: omics-skill-builder
-description: Load when scaffolding a NEW OmicsClaw skill from a natural-language request — generates the skill directory layout (SKILL.md, parameters.yaml, references/, tests/) under the chosen domain. Skip when modifying an existing skill (edit its files directly) or when only routing a query (use `orchestrator`).
+description: Load when scaffolding a NEW OmicsClaw skill from a natural-language request — generates the
+  skill directory layout (skill.yaml, SKILL.md, references/, tests/) under the chosen domain. Skip when
+  modifying an existing skill (edit its files directly); only routing a query (use orchestrator).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🛠
 tags:
 - orchestrator
 - scaffold
@@ -22,7 +27,7 @@ The user wants to add a NEW skill to the OmicsClaw catalog from a
 natural-language request. This skill produces a directory scaffold
 under the chosen `--domain` (`spatial` / `singlecell` / `genomics`
 / `proteomics` / `metabolomics` / `bulkrna` / `orchestrator`) with
-the v2 layout: `SKILL.md`, `parameters.yaml`, `references/`,
+the v2 layout: `skill.yaml`, `SKILL.md`, `references/`,
 `tests/`, plus a reproducibility manifest.
 
 For modifying an existing skill, edit its files directly — this
@@ -31,23 +36,14 @@ existing skills, use `orchestrator`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| User request | `--request <text>` (natural-language description of the desired skill) | yes (unless `--demo`) |
-| Domain | `--domain {spatial,singlecell,genomics,proteomics,metabolomics,bulkrna,orchestrator}` (default `orchestrator`) | no |
-| Skill alias | `--skill-name <hyphenated>` | no |
-| Summary | `--summary <one-line>` | no |
-| Promote source | `--source-analysis-dir <path>` or `--promote-from-latest` | no |
-| Trigger keywords | `--trigger-keyword <kw>` (repeatable) | no |
-| Methods / formats | `--method <m>` / `--input-format <f>` / `--output-item <o>` (each repeatable) | no |
-| Skip tests | `--no-tests` | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Scaffold summary | `output_dir/SCAFFOLD_SUMMARY.md` | what was generated, written at `omics_skill_builder.py:129` |
-| Report | `output_dir/report.md` | written at `omics_skill_builder.py:130` |
-| Reproducibility | `output_dir/reproducibility/commands.sh` | replay command, written at `omics_skill_builder.py:132-137` |
-| Result envelope | `output_dir/result.json` | written at `omics_skill_builder.py:139-141` |
+**Outputs**
+
+- `output_dir/SCAFFOLD_SUMMARY.md`
+- `output_dir/report.md`
+- `output_dir/result.json`
+- `skills/<domain>/<skill-name>/`
 
 ## Flow
 

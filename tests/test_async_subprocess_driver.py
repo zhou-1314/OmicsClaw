@@ -63,7 +63,7 @@ def test_adrive_subprocess_captures_stdout_stderr_separately(tmp_path: Path):
 def test_adrive_subprocess_keeps_minus_9_to_zero_heuristic(tmp_path: Path):
     """When a skill exits via SIGKILL but already produced ``result.json``,
     the driver classifies it as success — preserving the legacy heuristic
-    so the 89 skills that don't yet emit a status field don't regress."""
+    so the 95 skills that don't yet emit a status field don't regress."""
     out_dir = tmp_path / "out"
     out_dir.mkdir(parents=True, exist_ok=True)
     # The script writes result.json then SIGKILLs itself so the runner

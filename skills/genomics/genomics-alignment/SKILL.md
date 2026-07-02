@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: genomics-alignment
-description: Load when computing alignment QC metrics (mapping rate, MAPQ distribution, insert size, duplicate rate, proper-pair rate) from a SAM or BAM file produced by any short-/long-read aligner (BWA / Bowtie2 / Minimap2). Skip when running the alignment step itself or when only FASTQ-level QC is needed (use `genomics-qc`).
+description: Load when computing alignment QC metrics (mapping rate, MAPQ distribution, insert size, duplicate
+  rate, proper-pair rate) from a SAM or BAM file produced by any short-/long-read aligner (BWA / Bowtie2
+  / Minimap2). Skip when running the alignment step itself; only FASTQ-level QC is needed (use genomics-qc).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🎯
 tags:
 - genomics
 - alignment
@@ -33,14 +38,17 @@ on the aligned reads use `genomics-variant-calling`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Aligned reads | `.sam` (SAM v1.6 text — header + records). Binary `.bam` is NOT supported — convert with `samtools view -h aligned.bam > aligned.sam` first. | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Alignment metrics | `tables/alignment_stats.csv` | one-row table — flagstat-style summary |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.sam`
+
+**Outputs**
+
+- `tables/alignment_stats.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: spatial-de
-description: Load when ranking spatial cluster markers or comparing two spatial groups in spatial transcriptomics. Skip if the data is single-cell (use sc-de) or bulk (use bulkrna-de), or for spatially variable expression discovery (use spatial-genes).
+description: Load when ranking spatial cluster markers or comparing two spatial groups in spatial transcriptomics.
+  Skip when the data is single-cell (use sc-de); bulk (use bulkrna-de); spatially variable expression
+  discovery (use spatial-genes).
 version: 0.5.0
 author: OmicsClaw Team
 license: MIT
+emoji: 🧬
 tags:
 - spatial
 - differential-expression
@@ -37,20 +42,41 @@ and refuses to fabricate replicates — pseudobulk requires a real
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Preprocessed AnnData | `.h5ad` | yes (or `--demo`) |
-| Sample/replicate column in `obs` | `--sample-key` (default `sample_id`) | only for `pydeseq2` |
-| Raw counts in `layers["counts"]` | layer | recommended for `pydeseq2`; fallback chain to `adata.raw` then `adata.X` with warning |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Processed AnnData | `processed.h5ad` | DE results stashed in `uns` |
-| Full DE table | `tables/de_full.csv` | per-gene results across all groups |
-| Top markers | `tables/markers_top.csv` | `--n-top-genes` per group |
-| Standard gallery | `figures/*.png` | recipe-driven (overview / diagnostic / supporting / uncertainty roles) |
-| `figure_data/manifest.json` | for the optional R customization layer |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+
+**Outputs**
+
+- `tables/de_full.csv`
+- `tables/de_plot_points.csv`
+- `tables/de_run_summary.csv`
+- `tables/de_significant.csv`
+- `tables/de_spatial_points.csv`
+- `tables/de_umap_points.csv`
+- `tables/group_de_metrics.csv`
+- `tables/markers_top.csv`
+- `tables/sample_counts_by_group.csv`
+- `tables/skipped_sample_groups.csv`
+- `tables/top_de_hits.csv`
+- `figures/de_effect_burden_spatial.png`
+- `figures/de_effect_burden_umap.png`
+- `figures/de_group_spatial_context.png`
+- `figures/de_marker_dotplot.png`
+- `figures/de_marker_heatmap.png`
+- `figures/de_pvalue_distribution.png`
+- `figures/de_top_hits_barplot.png`
+- `figures/de_volcano.png`
+- `figures/group_de_burden.png`
+- `figures/sample_counts_by_group.png`
+- `figures/skipped_sample_groups.png`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`)
 
 ## Flow
 

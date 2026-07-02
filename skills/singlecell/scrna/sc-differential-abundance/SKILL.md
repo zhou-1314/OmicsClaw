@@ -1,6 +1,10 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-differential-abundance
-description: Load when testing whether cell-type / cluster proportions or neighbourhood densities differ between conditions in a multi-sample scRNA AnnData via Milo, scCODA, simple proportion screen, or R Monte-Carlo permutation. Skip when ranking marker genes (use sc-markers) or for per-cell DE (use sc-de).
+description: Load when testing whether cell-type / cluster proportions or neighbourhood densities differ
+  between conditions in a multi-sample scRNA AnnData via Milo, scCODA, simple proportion screen, or R
+  Monte-Carlo permutation. Skip when ranking marker genes (use sc-markers); per-cell DE (use sc-de).
 version: 0.2.0
 author: OmicsClaw
 license: MIT
@@ -45,22 +49,39 @@ For ranking *what* defines a cluster, use `sc-markers`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| AnnData with sample + condition + cell-type columns | `.h5ad` | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| AnnData (preserved) | `processed.h5ad` | unchanged unless milo writes neighbour graph |
-| Counts matrix | `tables/sample_by_celltype_counts.csv` | always |
-| Proportions matrix | `tables/sample_by_celltype_proportions.csv` | always |
-| Mean-by-condition | `tables/condition_mean_proportions.csv` | always |
-| `simple` results | `tables/simple_da_results.csv` | when method == `simple` |
-| `milo` neighbourhood results | `tables/milo_nhood_results.csv` + `figures/milo_logfc_barplot.png` | when method == `milo` |
-| `proportion_test_r` results | `tables/proportion_test_results.csv` + per-comparison lollipops | when method == `proportion_test_r` |
-| `sccoda` effects | `tables/sccoda_effects.csv` | when method == `sccoda` |
-| Composition heatmap | `figures/sample_celltype_proportions.png` | always |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+
+**Outputs**
+
+- `tables/cell_meta.csv`
+- `tables/cell_metadata.csv`
+- `tables/condition_mean_proportions.csv`
+- `tables/milo_nhood_results.csv`
+- `tables/proportion_test_results.csv`
+- `tables/sample_by_celltype_counts.csv`
+- `tables/sample_by_celltype_proportions.csv`
+- `tables/sccoda_effects.csv`
+- `tables/simple_da_results.csv`
+- `figures/milo_logfc_barplot.png`
+- `figures/proportion_test_r_no_results.png`
+- `figures/r_cell_barplot.png`
+- `figures/r_cell_density.png`
+- `figures/r_embedding_discrete.png`
+- `figures/r_proportion_test.png`
+- `figures/sample_celltype_proportions.png`
+- `figures/sccoda_log2fc_barplot.png`
+- `analysis_summary.txt`
+- `annotated_input.h5ad`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`)
 
 ## Flow
 

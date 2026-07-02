@@ -468,7 +468,7 @@ def _score_skills_and_detect_domain(
     both the detected domain *and* every skill's per-candidate score.
 
     Pre-refactor the resolver walked ``iter_primary_skills`` twice — once
-    inside ``_detect_domain`` (89 skills × per-domain accumulation), then
+    inside ``_detect_domain`` (95 skills × per-domain accumulation), then
     again inside ``resolve_capability`` (the same skills, this time with
     the per-skill weights). The two passes used different weights but read
     the same SKILL.md fields (alias, legacy aliases, description tokens,

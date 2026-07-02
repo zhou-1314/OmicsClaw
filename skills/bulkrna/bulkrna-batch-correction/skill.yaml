@@ -1,0 +1,93 @@
+schema_version: 2
+id: bulkrna-batch-correction
+name: bulkrna-batch-correction
+domain: bulkrna
+type: leaf
+version: 0.3.0
+author: OmicsClaw
+license: MIT
+emoji: 🔧
+summary:
+  load_when: removing batch effects from a multi-cohort bulk RNA-seq dataset using ComBat (R or Python
+    implementation)
+  skip_when:
+  - condition: there is only one batch
+  - condition: single-cell batch integration
+    use: sc-batch-integration
+  - condition: spatial multi-slice integration
+    use: spatial-integrate
+  trigger_keywords:
+  - batch correction
+  - ComBat
+  - batch effect
+  - harmonize
+  - multi-cohort
+  - batch removal
+  tags:
+  - bulkrna
+  - batch-correction
+  - ComBat
+  - harmonization
+  - batch-effect
+  aliases:
+  - bulk-combat
+interface:
+  inputs:
+    modalities: []
+    file_types:
+    - csv
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --batch-info
+    - --mode
+    hints: {}
+  outputs:
+    files:
+    - tables/batch_info.csv
+    - tables/batch_metrics.csv
+    - tables/corrected_counts.csv
+    - tables/corrected_expression.csv
+    - tables/counts.csv
+    - figures/batch_assessment.png
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+runtime:
+  language: python
+  entry: bulkrna_batch_correction.py
+deps:
+  python:
+  - matplotlib
+  - numpy
+  - pandas
+  - scipy
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

@@ -1,6 +1,11 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: spatial-microenvironment-subset
-description: Load when extracting a niche / microenvironment subset around a center cell-type by spatial radius from a labelled spatial AnnData, producing a smaller AnnData of centers + their within-radius neighbours. Skip when running global tissue-domain detection (use spatial-domains) or for cross-condition comparison (use spatial-condition).
+description: Load when extracting a niche / microenvironment subset around a center cell-type by spatial
+  radius from a labelled spatial AnnData, producing a smaller AnnData of centers + their within-radius
+  neighbours. Skip when running global tissue-domain detection (use spatial-domains); cross-condition
+  comparison (use spatial-condition).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
@@ -41,22 +46,25 @@ cross-condition niche comparison use `spatial-condition`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Labelled spatial AnnData | `.h5ad` with `obs[--center-key]` and `obsm["spatial"]` | yes (unless `--demo`) |
-| Center label values | comma-separated string (`--center-values`) | yes |
-| Radius | one of `--radius-microns` OR `--radius-native` | yes (mutually exclusive) |
-| Optional target restriction | `--target-key` + `--target-values` | optional |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Subset AnnData | `processed.h5ad` | rows = centers + within-radius neighbours; adds `obs["microenv_is_center"]`, `obs["microenv_role"]`, `obs["microenv_within_radius"]`, `obs["microenv_nearest_center"]`, `obs["microenv_distance_native"]`, plus `obs["microenv_distance_microns"]` only when `--microns-per-coordinate-unit` was supplied (`_lib/microenvironment.py:341/346`) |
-| Selected observations | `tables/selected_observations.csv` | per-row role (center / neighbour) + distance |
-| Centers retained | `tables/center_observations.csv` | always |
-| Label composition | `tables/label_composition.csv` | label-prevalence before vs after subset |
-| Run summary | `tables/selection_summary.csv` | always |
-| Figure | `figures/microenvironment_selection.png` | spatial layout with selection overlay |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: visium, xenium
+- File types: `.h5ad`
+- Expects `obsm`: `spatial`
+
+**Outputs**
+
+- `tables/center_observations.csv`
+- `tables/label_composition.csv`
+- `tables/selected_observations.csv`
+- `tables/selection_summary.csv`
+- `figures/microenvironment_selection.png`
+- `spatial_microenvironment_subset.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `microenv_is_center`, `microenv_role`, `microenv_within_radius`, `microenv_nearest_center`, `microenv_distance_native`, `microenv_distance_microns`
 
 ## Flow
 

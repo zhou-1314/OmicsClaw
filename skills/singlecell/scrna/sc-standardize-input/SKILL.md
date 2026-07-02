@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-standardize-input
-description: Load when an external single-cell h5ad/h5/loom/mtx needs to be canonicalised onto the OmicsClaw AnnData contract before downstream scRNA skills run. Skip when data already came from sc-count (already canonical), or for bulk RNA-seq (use bulkrna-qc) or spatial (use spatial-preprocess).
+description: Load when an external single-cell h5ad/h5/loom/mtx needs to be canonicalised onto the OmicsClaw
+  AnnData contract before downstream scRNA skills run. Skip when data already came from sc-count (already
+  canonical); bulk RNA-seq (use bulkrna-qc); spatial (use spatial-preprocess).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: 🧱
 tags:
 - singlecell
 - scrna
@@ -32,15 +37,21 @@ AnnData contract every downstream scRNA skill assumes: raw counts in
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Single-cell expression | `.h5ad`, `.h5`, `.loom`, `.csv`, `.tsv`, or 10X mtx dir | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Canonicalised AnnData | `processed.h5ad` | `adata.X` = counts; `layers["counts"]` + `adata.raw` populated |
-| Provenance | `result.json` | `summary` includes `warnings`, contract metadata |
-| Report | `report.md` | always written |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`, `.h5`, `.loom`, `.csv`, `.tsv`
+
+**Outputs**
+
+- `tables/cell_metadata.csv`
+- `analysis_summary.txt`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `layers`: `counts`
 
 ## Flow
 

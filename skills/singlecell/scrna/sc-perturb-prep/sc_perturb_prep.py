@@ -42,7 +42,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "sc-perturb-prep"
-SKILL_VERSION = "0.1.0"
+SKILL_VERSION = "0.2.0"
 METHOD_NAME = "mapping_tsv"
 SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-perturb-prep/sc_perturb_prep.py"
 

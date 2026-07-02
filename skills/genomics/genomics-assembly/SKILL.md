@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: genomics-assembly
-description: Load when computing genome-assembly QC metrics — N50/N90, L50/L90, total length, contig count, GC content, longest-contig — from a FASTA produced by any assembler (SPAdes / Megahit / Flye / Canu). Skip when running the assembly itself or when assessing alignment quality (use `genomics-alignment`).
+description: Load when computing genome-assembly QC metrics — N50/N90, L50/L90, total length, contig count,
+  GC content, longest-contig — from a FASTA produced by any assembler (SPAdes / Megahit / Flye / Canu).
+  Skip when running the assembly itself; assessing alignment quality (use genomics-alignment).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🧬
 tags:
 - genomics
 - assembly
@@ -33,16 +38,18 @@ assembler emits.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Assembled contigs | `.fasta` / `.fa` | yes (unless `--demo`) |
-| Expected genome size | `--genome-size <bp>` (used for completeness %) | optional |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Per-contig table | `tables/contig_lengths.csv` | one row per contig with `contig` + `length` (no GC column — GC is assembly-wide only) |
-| Assembly metrics | `tables/assembly_metrics.csv` | one-row N50/L50/total/longest summary |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- File types: `.fasta`, `.fa`
+
+**Outputs**
+
+- `tables/assembly_metrics.csv`
+- `tables/contig_lengths.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

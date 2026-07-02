@@ -1,9 +1,13 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-fastq-qc
-description: Load when checking raw single-cell FASTQ read quality (Phred / GC / adapter / length) before counting. Skip when reads are already counted (use sc-qc) or for bulk FASTQ (use bulkrna-read-qc).
+description: Load when checking raw single-cell FASTQ read quality (Phred / GC / adapter / length) before
+  counting. Skip when reads are already counted (use sc-qc); bulk FASTQ (use bulkrna-read-qc).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: 🧪
 tags:
 - singlecell
 - scrna
@@ -32,17 +36,35 @@ otherwise so the skill always returns something useful.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Raw scRNA reads | `.fastq` / `.fastq.gz` (single file or directory) | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Per-file table | `tables/fastq_per_file_summary.csv` | one row per FASTQ |
-| Per-sample table | `tables/fastq_per_sample_summary.csv` | aggregated by sample |
-| Per-base table | `tables/fastq_per_base_quality.csv` | quality vs read position |
-| Quality figures | `figures/fastq_q30_summary.png`, `figures/per_base_quality.png`, `figures/fastq_file_quality.png`, `figures/fastq_read_structure.png` | all four always rendered |
-| Report | `report.md` + `result.json` | always written |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.fastq`
+
+**Outputs**
+
+- `tables/Summary.csv`
+- `tables/barcodes.tsv`
+- `tables/fastq_per_base_quality.csv`
+- `tables/fastq_per_file_summary.csv`
+- `tables/fastq_per_sample_summary.csv`
+- `tables/features.tsv`
+- `tables/genes.tsv`
+- `tables/metrics_summary.csv`
+- `figures/fastq_file_quality.png`
+- `figures/fastq_q30_summary.png`
+- `figures/fastq_read_structure.png`
+- `figures/per_base_quality.png`
+- `3M-february-2018.txt`
+- `737K-august-2016.txt`
+- `Aligned.sortedByCoord.out.bam`
+- `multiqc_report.html`
+- `possorted_genome_bam.bam`
+- `web_summary.html`
+- `report.md`
+- `result.json`
 
 ## Flow
 

@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: proteomics-de
-description: Load when computing two-group differential protein abundance (group2 vs group1, log2FC + p-value + BH-adjusted FDR) via Welch t-test, equal-variance t-test, or Mann-Whitney on a wide protein × sample CSV. Skip when you need multi-condition DE (run pairwise contrasts manually) or label-based TMT linear-mixed models.
+description: Load when computing two-group differential protein abundance (group2 vs group1, log2FC +
+  p-value + BH-adjusted FDR) via Welch t-test, equal-variance t-test, or Mann-Whitney on a wide protein
+  × sample CSV. Skip when you need multi-condition DE (run pairwise contrasts manually); label-based TMT
+  linear-mixed models.
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: ⚖️
 tags:
 - proteomics
 - differential-expression
@@ -39,17 +45,18 @@ label-based TMT linear-mixed models, use MSstats / limma in R.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Protein × sample table | `.csv` with protein index in column 0 and equal-count sample columns | yes (unless `--demo`) |
-| Method | `--method {ttest,welch,mann_whitney}` (default `ttest`) | no |
-| Significance | `--alpha <float>` (default 0.05); `--log2fc-threshold <float>` (default 0.0) | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Full results | `tables/differential_abundance.csv` | per-protein `log2fc`, `pvalue`, `padj`, `group1_mean`, `group2_mean` |
-| Significant subset | `tables/significant.csv` | filtered by `--alpha` (and optional `--log2fc-threshold`) |
-| Report | `report.md` + `result.json` | `summary["method"]`, `summary["n_tested"]`, `summary["n_significant"]` |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/differential_abundance.csv`
+- `tables/significant.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

@@ -26,6 +26,9 @@ from omicsclaw.loaders import detect_domain_from_path
 from omicsclaw.routing.router import route_keyword, route_query_unified
 from omicsclaw.skill.registry import registry
 
+SKILL_NAME = "orchestrator"
+SKILL_VERSION = "0.5.0"
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 

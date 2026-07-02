@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: metabolomics-pathway-enrichment
-description: Load when running over-representation analysis (ORA) on a metabolite list via Fisher's exact test against a built-in 9-pathway DEMO dictionary, BH-FDR adjusted. Skip when needing real KEGG / Reactome (this skill is demo-only) or `mummichog` / `fella` topology methods (CLI accepts them but only ORA runs).
+description: Load when running over-representation analysis (ORA) on a metabolite list via Fisher's exact
+  test against a built-in 9-pathway DEMO dictionary, BH-FDR adjusted. Skip when needing real KEGG / Reactome
+  (this skill is demo-only); `mummichog` / `fella` topology methods (CLI accepts them but only ORA runs).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🗺️
 tags:
 - metabolomics
 - pathway
@@ -36,15 +41,17 @@ metabolite list through `bulkrna-enrichment` after gene-mapping.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Metabolite list | `.csv` with `metabolite` column (or any first column treated as metabolite names) | yes (unless `--demo`) |
-| Method | `--method {ora,mummichog,fella}` (only `ora` is actually implemented) | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Pathway enrichment | `tables/pathway_enrichment.csv` | per-pathway `pvalue`, `fdr` (BH-adjusted), overlap counts |
-| Report | `report.md` + `result.json` | `summary["n_significant"]` (FDR < 0.05); `summary["n_pathways_tested"]` = 9 |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/pathway_enrichment.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

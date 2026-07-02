@@ -174,7 +174,7 @@ Skills are registered in `omicsclaw/core/registry.py` and dynamically discovered
 
 ### Skill Metadata Rules
 
-- SKILL.md frontmatter (`metadata.omicsclaw`) is the single source of truth for skill metadata — canonical name, legacy aliases, allowed flags, `saves_h5ad`, and so on.
+- `skill.yaml` (ADR 0037) is the single machine-contract source of truth for skill metadata — canonical name, aliases, allowed flags, `saves_h5ad`, param hints, and so on; `SKILL.md` is generated from it by `scripts/generate_skill_md.py`.
 - All primary skill scripts must expose a lightweight direct `--help` path.
 - Skill scripts write native artifacts; the shared runner writes the top-level `README.md` and `reproducibility/analysis_notebook.ipynb`.
 - Bot skill execution uses the same shared runner contract as CLI, interactive, agent tools, app, and remote jobs.

@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: proteomics-ms-qc
-description: Load when computing protein-table QC — proteins × samples count, missing-value rate, intensity CV (median + mean) — from a MaxQuant / FragPipe / DIA-NN protein-quantification CSV. Skip when raw mzML / RAW spectra are the input (run a search engine first) or when peptide-level QC is needed (use `proteomics-identification`).
+description: Load when computing protein-table QC — proteins × samples count, missing-value rate, intensity
+  CV (median + mean) — from a MaxQuant / FragPipe / DIA-NN protein-quantification CSV. Skip when raw mzML
+  / RAW spectra are the input (run a search engine first); peptide-level QC is needed (use proteomics-identification).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 📊
 tags:
 - proteomics
 - qc
@@ -33,14 +38,18 @@ identification stats use `proteomics-identification`.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Protein table | `.csv` with at least one numeric (intensity) column | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| QC metrics | `tables/qc_metrics.csv` | one-row table — n_proteins / n_samples / missing_rate / median_cv / mean_cv |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: ms
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/qc_metrics.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

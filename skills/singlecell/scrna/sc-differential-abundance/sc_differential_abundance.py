@@ -62,7 +62,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "sc-differential-abundance"
-SKILL_VERSION = "0.3.0"
+SKILL_VERSION = "0.2.0"
 SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-differential-abundance/sc_differential_abundance.py"
 R_SCRIPTS_DIR = _PROJECT_ROOT / "omicsclaw" / "r_scripts"
 

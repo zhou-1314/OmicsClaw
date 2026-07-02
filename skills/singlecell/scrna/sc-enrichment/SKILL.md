@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-enrichment
-description: Load when running bulk-style pathway enrichment (ORA / GSEA / GSEA-R / GSVA-R) on a per-group ranked DE / marker list against a gene-set library. Skip when computing per-cell pathway scores in-place (use sc-pathway-scoring) or for de-novo gene-program discovery (use sc-gene-programs).
+description: Load when running bulk-style pathway enrichment (ORA / GSEA / GSEA-R / GSVA-R) on a per-group
+  ranked DE / marker list against a gene-set library. Skip when computing per-cell pathway scores in-place
+  (use sc-pathway-scoring); de-novo gene-program discovery (use sc-gene-programs).
 version: 0.4.0
 author: OmicsClaw
 license: MIT
+emoji: 🧭
 tags:
 - singlecell
 - scrna
@@ -52,24 +57,47 @@ For per-cell scoring (no rankings, just gene sets) use
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Clustered / labelled AnnData | `.h5ad` | yes (unless `--demo`) |
-| Gene sets | `.gmt` (`--gene-sets`) **OR** library alias (`--gene-set-db hallmark`/`kegg`/...) **OR** marker source (`--gene-set-from-markers`) | yes (unless `--demo`) |
-| Group column | `--groupby` (auto-resolves if unset) | optional (required for `gsva_r`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| AnnData | `processed.h5ad` | preserved with contract metadata |
-| All terms | `tables/enrichment_results.csv` | per-group × term, score / pvalue / pvalue_adj |
-| Significant subset | `tables/enrichment_significant.csv` | filtered at `--fdr-threshold` |
-| Group summary | `tables/group_summary.csv` | counts + top term per group |
-| Ranking used | `tables/ranking_input.csv` | the gene ranking actually fed to the method |
-| Top terms | `tables/top_terms.csv` | top-`--top-terms` for figures |
-| GSEA running scores | `tables/gsea_running_scores.csv` | when method == `gsea` (Python) |
-| GSVA R scores | `tables/gsva_r_scores.csv` | when method == `gsva_r` |
-| Figures | `top_terms_bar.png`, `group_term_dotplot.png`, `group_enrichment_summary.png`, `gsea_running_scores.png`, `gsva_r_heatmap.png` (gsva_r only) | rendered via `_lib/viz/stat_enrichment.py` |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+
+**Outputs**
+
+- `tables/cell_metadata.csv`
+- `tables/clusterprofiler_results.csv`
+- `tables/de_for_gsea_r.csv`
+- `tables/de_full.csv`
+- `tables/enrichment_results.csv`
+- `tables/enrichment_significant.csv`
+- `tables/group_expr_for_gsva.csv`
+- `tables/group_summary.csv`
+- `tables/gsea_input.csv`
+- `tables/gsea_r_results.csv`
+- `tables/gsea_running_scores.csv`
+- `tables/gsva_r_scores.csv`
+- `tables/markers_all.csv`
+- `tables/ora_input.csv`
+- `tables/ranking_input.csv`
+- `tables/top_terms.csv`
+- `figures/gsva_r_heatmap.png`
+- `figures/r_enrichment_bar.png`
+- `figures/r_enrichment_dotplot.png`
+- `figures/r_enrichment_enrichmap.png`
+- `figures/r_enrichment_lollipop.png`
+- `figures/r_enrichment_network.png`
+- `figures/r_gsea_mountain.png`
+- `figures/r_gsea_nes_heatmap.png`
+- `analysis_summary.txt`
+- `background_genes.txt`
+- `processed.h5ad`
+- `r_plot_metadata.json`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`)
 
 ## Flow
 

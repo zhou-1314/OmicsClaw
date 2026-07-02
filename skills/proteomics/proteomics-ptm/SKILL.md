@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: proteomics-ptm
-description: Load when summarising PTM sites (phosphorylation, acetylation, ubiquitination, etc.) from a per-site CSV — site-class assignment (Olsen et al. Class I/II/III by `localization_probability`), per-PTM-type counts, amino-acid distribution, sites-per-protein. Skip when raw spectra are the input or when you only need protein-level abundance (use `proteomics-quantification`).
+description: Load when summarising PTM sites (phosphorylation, acetylation, ubiquitination, etc.) from
+  a per-site CSV — site-class assignment (Olsen et al. Class I/II/III by `localization_probability`),
+  per-PTM-type counts, amino-acid distribution, sites-per-protein. Skip when raw spectra are the input;
+  you only need protein-level abundance (use proteomics-quantification).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🔬
 tags:
 - proteomics
 - ptm
@@ -35,16 +41,18 @@ For protein-level abundance (no PTM split) use
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| PTM sites | `.csv` with required columns `protein`, `ptm_type`; optional `localization_probability`, `amino_acid` | yes (unless `--demo`) |
-| Class I cutoff | `--loc-threshold <float>` (default 0.75) | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| All PTM sites | `tables/ptm_sites.csv` | input copy with added `site_class` column (`Class I` / `Class II` / `Class III` / `Unknown`) |
-| Class I subset | `tables/ptm_class_I_sites.csv` | sites with `localization_probability ≥ --loc-threshold` |
-| Report | `report.md` + `result.json` | per-PTM-type counts, AA distribution, sites-per-protein stats |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/ptm_class_I_sites.csv`
+- `tables/ptm_sites.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

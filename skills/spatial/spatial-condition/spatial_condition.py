@@ -59,7 +59,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "spatial-condition"
-SKILL_VERSION = "0.3.0"
+SKILL_VERSION = "0.5.0"
 SCRIPT_REL_PATH = "skills/spatial/spatial-condition/spatial_condition.py"
 BOOL_NEGATIVE_FLAGS = {
     "pydeseq2_refit_cooks": "--no-pydeseq2-refit-cooks",

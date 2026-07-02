@@ -214,7 +214,7 @@ def _prepare_skill_run(
         if demo and not skill_info.get("demo_args", ["--demo"]):
             return _err(
                 skill_name,
-                f"`{skill_name}` does not support --demo (workflow skills run on "
+                f"`{skill_name}` does not support --demo (consensus skills run on "
                 "real preprocessed data via the consensus runtime); provide "
                 "--input <preprocessed.h5ad>.",
             )

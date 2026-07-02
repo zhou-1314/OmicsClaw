@@ -33,6 +33,31 @@ def test_extractor_finds_domain_root_skill_md():
     )
 
 
+def test_load_skill_entries_dual_track_v2(tmp_path, monkeypatch):
+    """A v2 skill.yaml-only skill is discovered, and its description is the
+    reconstructed 'Load when… / Skip when…' from summary (ADR 0037)."""
+    from omicsclaw.skill.schema import parse_skill_manifest
+
+    monkeypatch.setattr(extractor, "_ROOT", tmp_path)
+    sd = tmp_path / "skills" / "spatial" / "sk"
+    sd.mkdir(parents=True)
+    doc = {
+        "schema_version": 2, "id": "sk", "name": "sk", "domain": "spatial",
+        "version": "1.0.0",
+        "summary": {
+            "load_when": "clustering a spatial AnnData",
+            "skip_when": [{"condition": "single-cell data", "use": "sc-de"}],
+        },
+        "runtime": {"language": "python", "entry": "sk.py"},
+    }
+    (sd / "skill.yaml").write_text(parse_skill_manifest(doc).to_yaml(), encoding="utf-8")
+
+    entries = _load_skill_entries("spatial")
+    assert [e.skill for e in entries] == ["sk"]
+    assert entries[0].description.startswith("Load when clustering a spatial AnnData")
+    assert "Skip when single-cell data (use sc-de)" in entries[0].description
+
+
 # --------------------------------------------------------------------------- #
 # LLM extraction failure handling — when the LLM returns malformed JSON, the
 # snapshot entry MUST record extraction_failed=true so a reviewer notices,

@@ -47,7 +47,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = "sc-multi-count"
-SKILL_VERSION = "0.1.0"
+SKILL_VERSION = "0.3.0"
 SCRIPT_REL_PATH = "skills/singlecell/scrna/sc-multi-count/sc_multi_count.py"
 
 

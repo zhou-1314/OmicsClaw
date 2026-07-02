@@ -1,0 +1,104 @@
+schema_version: 2
+id: sc-standardize-input
+name: sc-standardize-input
+domain: singlecell
+type: leaf
+version: 0.3.0
+author: OmicsClaw
+license: MIT
+emoji: 🧱
+summary:
+  load_when: an external single-cell h5ad/h5/loom/mtx needs to be canonicalised onto the OmicsClaw AnnData
+    contract before downstream scRNA skills run
+  skip_when:
+  - condition: data already came from sc-count (already canonical)
+  - condition: bulk RNA-seq
+    use: bulkrna-qc
+  - condition: spatial
+    use: spatial-preprocess
+  trigger_keywords:
+  - standardize AnnData
+  - fix scRNA input
+  - canonicalize single-cell input
+  - prepare AnnData
+  - input contract
+  tags:
+  - singlecell
+  - scrna
+  - input
+  - standardization
+  - anndata
+  aliases: []
+interface:
+  inputs:
+    modalities:
+    - scrna
+    file_types:
+    - h5ad
+    - h5
+    - loom
+    - csv
+    - tsv
+    preconditions:
+      data_shape:
+        requires_preprocessed: false
+        obs: []
+        obsm: []
+      env: []
+      config: []
+  parameters:
+    allowed_extra_flags:
+    - --species
+    - --r-enhanced
+    hints: {}
+  outputs:
+    files:
+    - tables/cell_metadata.csv
+    - analysis_summary.txt
+    - processed.h5ad
+    - report.md
+    - result.json
+    result_json:
+      required_keys: []
+    anndata:
+      saves_h5ad: true
+      obs: []
+      obsm: []
+      var: []
+      layers:
+      - counts
+      uns: []
+runtime:
+  language: python
+  entry: sc_standardize_input.py
+deps:
+  python:
+  - anndata
+  - matplotlib
+  - numpy
+  - pandas
+  - scanpy
+  - scipy
+  cli: []
+compatibility:
+  platforms: []
+  architectures: []
+resources:
+  references:
+  - methodology.md
+  - output_contract.md
+  - parameters.md
+  - r_visualization.md
+lifecycle:
+  status: mvp
+validation:
+  level: smoke-only
+  evidence: []
+provenance:
+  origin: human
+security:
+  data_egress: none
+  network: none
+  writes: output_dir_only
+mcp:
+  expose: false

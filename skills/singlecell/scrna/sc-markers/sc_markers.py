@@ -56,7 +56,7 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 SKILL_NAME = 'sc-markers'
-SKILL_VERSION = '0.5.0'
+SKILL_VERSION = '0.6.0'
 SCRIPT_REL_PATH = 'skills/singlecell/scrna/sc-markers/sc_markers.py'
 
 # R Enhanced renderers for this skill.

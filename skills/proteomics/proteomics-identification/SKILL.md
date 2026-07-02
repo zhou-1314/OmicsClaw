@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: proteomics-identification
-description: Load when summarising peptide identifications (PSM count, unique peptide count, distinct protein count, score / charge distributions) from a peptide-level CSV produced by MaxQuant / FragPipe / DIA-NN. Skip when raw spectra are the input (run a search engine first) or when working with protein-quantification tables (use `proteomics-ms-qc`).
+description: Load when summarising peptide identifications (PSM count, unique peptide count, distinct
+  protein count, score / charge distributions) from a peptide-level CSV produced by MaxQuant / FragPipe
+  / DIA-NN. Skip when raw spectra are the input (run a search engine first); working with protein-quantification
+  tables (use proteomics-ms-qc).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🔬
 tags:
 - proteomics
 - identification
@@ -33,16 +39,17 @@ metadata only (no FDR re-thresholding is performed).
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Peptide table | `.csv` with at least `peptide` and `protein` columns; optional `score`, `charge`, and any one of `qvalue` / `q-value` / `q_value` / `PEP` / `pep` / `fdr` for FDR filtering | yes (unless `--demo`) |
-| FDR cutoff | `--fdr <float>` (default 0.01, ACTIVELY filters when an FDR column exists) | no |
-| Spectra count | `--n-spectra <int>` (demo size hint only — not a CSV column) | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Peptides | `tables/peptides.csv` | FDR-filtered peptide table |
-| Report | `report.md` + `result.json` | `summary["n_psms"]`, `summary["n_unique_peptides"]`, `summary["n_proteins"]`, `summary["id_rate"]`; `summary["median_score"]` (if `score` present); `summary["charge_distribution"]` (if `charge` present) |
+**Inputs**
+
+- File types: `.csv`, `.tsv`, `.txt`
+
+**Outputs**
+
+- `tables/peptides.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

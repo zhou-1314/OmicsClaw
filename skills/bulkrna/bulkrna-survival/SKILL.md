@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: bulkrna-survival
-description: Load when stratifying patients by gene expression and testing for survival differences (Kaplan-Meier + Cox) in bulk RNA-seq. Skip if no time-to-event clinical data exists, or for non-bulk cohorts (single-cell / spatial survival is not supported).
+description: Load when stratifying patients by gene expression and testing for survival differences (Kaplan-Meier
+  + Cox) in bulk RNA-seq. Skip when no time-to-event clinical data exists; non-bulk cohorts (single-cell
+  / spatial survival is not supported).
 version: 0.3.0
 author: OmicsClaw
 license: MIT
+emoji: 📈
 tags:
 - bulkrna
 - survival
@@ -30,18 +35,21 @@ Cox proportional-hazards hazard ratio.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Expression matrix | `.csv` (gene × sample) | yes (or `--demo`) |
-| Clinical data | `.csv` (sample, time, event cols) via `--clinical` | yes (or `--demo`) |
-| Genes to test | `--genes TP53,BRCA1` (comma-separated) | optional, defaults to all in expression matrix |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Per-gene survival stats | `tables/survival_results.csv` | columns: `gene, cutoff, n_high, n_low, hazard_ratio, log_rank_chi2, log_rank_pval, median_survival_high, median_survival_low` |
-| KM curves | `figures/km_<gene>.png` | one per gene tested |
-| Forest plot | `figures/forest_plot.png` | HR + CI across genes |
-| Report | `report.md` + `result.json` | summary contains `n_genes` and per-gene `results` array (`bulkrna_survival.py:153-160`) |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/clinical.csv`
+- `tables/expr.csv`
+- `tables/km_data.csv`
+- `tables/survival_results.csv`
+- `figures/forest_plot.png`
+- `report.md`
+- `result.json`
 
 ## Flow
 

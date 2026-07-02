@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: consensus-domains
-description: 'Load when you want a verified multi-method consensus over spatial tissue domains on a preprocessed spatial AnnData — fanning out N domain methods, ranking base clusterings, and emitting a typed consensus with cross-method disagreement. Skip when one method suffices (use spatial-domains) or the data is single-cell (use sc-consensus-clustering).'
+description: Load when you want a verified multi-method consensus over spatial tissue domains on a preprocessed
+  spatial AnnData — fanning out N domain methods, ranking base clusterings, and emitting a typed consensus
+  with cross-method disagreement. Skip when one method suffices (use spatial-domains); the data is single-cell
+  (use sc-consensus-clustering).
 version: 0.1.0
 author: OmicsClaw
 license: Apache-2.0
+emoji: 🧩
 tags:
 - spatial
 - consensus
@@ -42,37 +48,27 @@ wraps it.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Preprocessed AnnData | `--input <preprocessed.h5ad>` (PCA + spatial graph) | yes |
-| Output directory | `--output <dir>` | yes |
-| Member list | `--members banksy,graphst,sedr,leiden,spagcn` | no (defaults to LLM-curated 5) |
-| Run ALL eligible methods | `--all` | no (slower; SACCELERATOR-style benchmark mode) |
-| Target cluster count | `--n-clusters 7` | no — reserved: accepted but not consumed (pending DEC-5) |
-| Pre-run plan confirmation | `--confirm-plan` | no (default off) |
-| Non-interactive BC picker | `--non-interactive` | no (forces top-K by score) |
-| Score weights | `--alpha 0.6 --beta 0.4` | no (ADR 0011 defaults) |
-| Class-imbalance cap | `--max-class-frac 0.8` | no |
-| LLM judge veto/reweight | `--llm-judge` | no — reserved: accepted but not consumed (pending DEC-5) |
-| Operator | `--operator {kmode,weighted,lca}` | no (default `kmode`) |
-| Seed | `--seed 0` | no |
-| Disable multi-metric intrinsic | `--no-spatial-panel` | no (default: chaos/pas/mlami panel) |
-| Per-member timeout (s) | `--timeout 600` | no |
-| Concurrency cap | `--max-parallel 4` | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Verified consensus labels | `consensus_labels.tsv` | columns `observation,consensus_<operator>` |
-| Per-member labels (raw) | `member_<name>/figure_data/spatial_*.csv` | passed through from spatial-domains |
-| Cross-method NMI matrix | `cross_method_nmi.csv` | square matrix per member |
-| Composite member scores | `member_scores.csv` | ADR 0011 schema |
-| Markdown report | `report.md` | **starts with `[A: Verified consensus]`** (non-configurable) |
-| Plan + audit trail | `plan.json` | LLM rationale + chosen operator + filtered members |
+**Inputs**
+
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+
+**Outputs**
+
+- `consensus_labels.tsv`
+- `member_scores.csv`
+- `member_intrinsic_panel.csv`
+- `cross_method_nmi.csv`
+- `plan.json`
+- `report.md`
+- `result.json`
 
 ## Flow
 
 1. **Plan** — `runtime/consensus/plan.propose_members` reads
-   `skills/spatial/spatial-domains/parameters.yaml` `param_hints`,
+   `spatial-domains`' `param_hints` (from its `skill.yaml`),
    queries the evaluation-chair LLM (or falls back deterministically),
    produces N PlannedMember entries.
 2. **Fan out** — `runtime/consensus/team.run_team` invokes
@@ -141,6 +137,6 @@ oc run consensus-domains --input preprocessed.h5ad --output out/ --all
 
 - `references/methodology.md` — the consensus scoring + operator rationale
 - `references/output_contract.md` — `consensus_labels.tsv` / `member_scores.csv` / `plan.json` schema
-- `references/parameters.md` — every CLI flag (generated from `parameters.yaml`)
+- `references/parameters.md` — every CLI flag (generated from `skill.yaml`)
 - Adjacent skills: `spatial-preprocess` (upstream — produces the input), `spatial-domains` (the per-member method this wraps), `consensus-interpret` (downstream — narrates the consensus result), `sc-consensus-clustering` (parallel — the single-cell analogue)
 - ADR 0010/0011/0016 — runtime layer, scoring protocol, workflow-runtime generalisation

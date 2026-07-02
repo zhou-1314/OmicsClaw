@@ -1,9 +1,15 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: genomics-variant-calling
-description: Load when summarising small variants (SNVs / indels) from a VCF or computing demo-pattern variant statistics (Ti/Tv ratio, per-chromosome distribution, SNP / indel split). Skip when filtering / merging VCFs (use `genomics-vcf-operations`), when calling structural variants (use `genomics-sv-detection`), or when adding functional annotations (use `genomics-variant-annotation`).
+description: Load when summarising small variants (SNVs / indels) from a VCF or computing demo-pattern
+  variant statistics (Ti/Tv ratio, per-chromosome distribution, SNP / indel split). Skip when filtering
+  / merging VCFs (use genomics-vcf-operations); calling structural variants (use genomics-sv-detection);
+  adding functional annotations (use genomics-variant-annotation).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🔎
 tags:
 - genomics
 - variant-calling
@@ -33,15 +39,18 @@ for SVs use `genomics-sv-detection`; for functional annotation use
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Variants | `.vcf` or `.bam` (BAM only used as a placeholder; no calling is run) | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Variant table | `tables/variants.csv` | per-variant CHROM/POS/REF/ALT/QUAL |
-| Per-chromosome | `tables/variants_per_chrom.csv` | counts per chromosome |
-| Report | `report.md` + `result.json` | always; `result.json["data"]["variants_per_chrom"]` mirrors the table |
+**Inputs**
+
+- File types: `.vcf`, `.bam`
+
+**Outputs**
+
+- `tables/variants.csv`
+- `tables/variants_per_chrom.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

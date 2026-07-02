@@ -1,9 +1,14 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: metabolomics-annotation
-description: Load when annotating LC-MS features against a built-in 15-metabolite HMDB demo dictionary by m/z within a `--ppm` tolerance — emits a per-feature annotation table. Skip when needing real HMDB / KEGG / LipidMaps / METLIN look-up (this skill is demo-only) or for raw spectra (use `metabolomics-xcms-preprocessing` first).
+description: Load when annotating LC-MS features against a built-in 15-metabolite HMDB demo dictionary
+  by m/z within a `--ppm` tolerance — emits a per-feature annotation table. Skip when needing real HMDB
+  / KEGG / LipidMaps / METLIN look-up (this skill is demo-only); raw spectra (use metabolomics-xcms-preprocessing).
 version: 0.5.0
 author: OmicsClaw
 license: MIT
+emoji: 🏷️
 tags:
 - metabolomics
 - annotation
@@ -33,16 +38,17 @@ skill.
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Feature table | `.csv` with `mz` column (m/z values) | yes (unless `--demo`) |
-| Database | `--database {hmdb,kegg,lipidmaps,metlin}` (default `hmdb`, RECORDED ONLY — does not switch lookup) | no |
-| Mass tolerance | `--ppm <float>` (default 10.0) | no |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotations | `tables/annotations.csv` | per-feature match (mz → name + HMDB id + formula) |
-| Report | `report.md` + `result.json` | `n_annotated`, `database` (recorded value) |
+**Inputs**
+
+- File types: `.csv`
+
+**Outputs**
+
+- `tables/annotations.csv`
+- `report.md`
+- `result.json`
 
 ## Flow
 

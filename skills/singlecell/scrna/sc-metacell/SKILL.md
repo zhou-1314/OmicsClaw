@@ -1,6 +1,10 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-metacell
-description: Load when aggregating single cells into metacells (sample-aware coarse-grained pseudo-cells) on a normalised scRNA AnnData via SEACells or KMeans on a low-D embedding. Skip when ranking marker genes per cluster (use sc-markers) or for trajectory pseudotime ordering (use sc-pseudotime).
+description: Load when aggregating single cells into metacells (sample-aware coarse-grained pseudo-cells)
+  on a normalised scRNA AnnData via SEACells or KMeans on a low-D embedding. Skip when ranking marker
+  genes per cluster (use sc-markers); trajectory pseudotime ordering (use sc-pseudotime).
 version: 0.2.0
 author: OmicsClaw
 license: MIT
@@ -45,18 +49,31 @@ For per-cluster marker discovery on the original AnnData, use
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Normalised AnnData | `.h5ad` with `obsm[--use-rep]` (default `X_pca`) | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Cell-level AnnData with metacell labels | `processed.h5ad` | **rows = original cells**; adds `obs["metacell"]` holding the metacell ID. This is the primary downstream object — `sc-de` / `sc-enrichment` expect this shape. |
-| Metacell-aggregated AnnData | `tables/metacells.h5ad` | rows = metacells; per-metacell aggregated expression for cluster-level / GRN downstream |
-| Metacell summary | `tables/metacell_summary.csv` | per-metacell `obs` (size, dominant celltype, etc.) |
-| Cell → metacell map | `tables/cell_to_metacell.csv` | always |
-| Figures | `figures/metacell_centroids.png`, `figures/metacell_size_distribution.png` | first only when an embedding is plottable |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
+
+**Outputs**
+
+- `tables/cell_metadata.csv`
+- `tables/cell_to_metacell.csv`
+- `tables/centroid_points.csv`
+- `tables/embedding_points.csv`
+- `tables/metacell_summary.csv`
+- `figures/metacell_centroids.png`
+- `figures/metacell_size_distribution.png`
+- `figures/r_embedding_discrete.png`
+- `analysis_summary.txt`
+- `metacells.h5ad`
+- `metacells_annotated.h5ad`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `metacell`
 
 ## Flow
 

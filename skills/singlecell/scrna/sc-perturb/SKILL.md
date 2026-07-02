@@ -1,6 +1,10 @@
 ---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+# Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-perturb
-description: Load when classifying perturbed vs non-perturbed cells in a Perturb-seq / CRISPR-screen scRNA AnnData via the pertpy Mixscape workflow. Skip when guide labels are not yet attached to the expression object (run sc-perturb-prep first) or for in-silico KO predictions on unperturbed data (use sc-in-silico-perturbation).
+description: Load when classifying perturbed vs non-perturbed cells in a Perturb-seq / CRISPR-screen scRNA
+  AnnData via the pertpy Mixscape workflow. Skip when guide labels are not yet attached to the expression
+  object (use sc-perturb-prep); in-silico KO predictions on unperturbed data (use sc-in-silico-perturbation).
 version: 0.2.0
 author: OmicsClaw
 license: MIT
@@ -45,18 +49,28 @@ predicting perturbation effects on **unperturbed** data, use
 
 ## Inputs & Outputs
 
-| Input | Format | Required |
-|---|---|---|
-| Perturb-seq AnnData | `.h5ad` with `obs[--pert-key]` containing perturbation labels + `--control` value | yes (unless `--demo`) |
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
 
-| Output | Path | Notes |
-|---|---|---|
-| Annotated AnnData | `processed.h5ad` | adds Mixscape `obs["mixscape_class"]` / `obs["mixscape_class_global"]` / `obs["mixscape_class_p_<lower(perturbation_type)>"]` (one column per perturbation **type**, e.g. `mixscape_class_p_ko` for `--perturbation-type KO`) |
-| Per-perturbation × class | `tables/mixscape_class_counts.csv` | always |
-| Global class totals | `tables/mixscape_global_class_counts.csv` | always |
-| Per-cell class | `tables/mixscape_cell_classes.csv` | always |
-| Figure | `figures/mixscape_global_classes.png` | always |
-| Report | `report.md` + `result.json` | always |
+**Inputs**
+
+- Modalities: scrna
+- File types: `.h5ad`
+
+**Outputs**
+
+- `tables/cell_metadata.csv`
+- `tables/cell_type_counts.csv`
+- `tables/mixscape_cell_classes.csv`
+- `tables/mixscape_class_counts.csv`
+- `tables/mixscape_global_class_counts.csv`
+- `tables/mixscape_global_classes.csv`
+- `figures/mixscape_global_classes.png`
+- `figures/r_perturbation_barplot.png`
+- `analysis_summary.txt`
+- `processed.h5ad`
+- `report.md`
+- `result.json`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `mixscape_class`, `mixscape_class_global`, `mixscape_class_p_<lower(perturbation_type)>`
 
 ## Flow
 

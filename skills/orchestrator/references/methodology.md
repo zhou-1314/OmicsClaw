@@ -4,7 +4,7 @@
 ## Supported Domains
 
 <!-- ORCH-DOMAINS-START -->
-OmicsClaw currently supports **89 skills across 8 domains**:
+OmicsClaw currently supports **95 skills across 8 domains**:
 
 1. **Spatial Transcriptomics** (17 skills) - `.h5ad`, `.h5`, `.zarr`, `.loom`
 2. **Single-Cell Omics** (30 skills) - `.h5ad`, `.h5`, `.loom`, `.mtx`
@@ -274,5 +274,5 @@ The orchestrator is the primary entry point for the OmicsClaw bot interfaces (Te
 - Confidence scoring based on keyword match length and position
 - Supports both exact skill names and natural language queries
 <!-- ORCH-FOOTER-START -->
-- All 89 skills across 8 domains are accessible through this single interface
+- All 95 skills across 8 domains are accessible through this single interface
 <!-- ORCH-FOOTER-END -->
