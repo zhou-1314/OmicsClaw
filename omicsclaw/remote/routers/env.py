@@ -6,13 +6,31 @@ agree byte-for-byte on what counts as a healthy environment.
 
 from __future__ import annotations
 
+import asyncio
+import os
+
 from fastapi import APIRouter
 
 from omicsclaw.diagnostics import build_doctor_report
-from omicsclaw.remote.schemas import EnvDoctorCheck, EnvDoctorReport
+from omicsclaw.remote.schemas import (
+    AdaptiveModeResponse,
+    AdaptiveModeUpdateRequest,
+    EnvDoctorCheck,
+    EnvDoctorReport,
+    OverlayCleanRequest,
+    OverlayCleanResponse,
+    OverlayInfo,
+    OverlayListResponse,
+)
 from omicsclaw.remote.storage import resolve_workspace
 
 router = APIRouter(tags=["remote"])
+
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _kill_switch_active() -> bool:
+    return os.getenv("OMICSCLAW_SKIP_ADAPTIVE_ENV", "").strip().lower() in _TRUTHY
 
 
 def build_env_doctor_report_payload(*, workspace_dir: str = "") -> EnvDoctorReport:
@@ -56,3 +74,52 @@ def build_env_doctor_report_payload(*, workspace_dir: str = "") -> EnvDoctorRepo
 @router.get("/env/doctor", response_model=EnvDoctorReport)
 async def env_doctor() -> EnvDoctorReport:
     return build_env_doctor_report_payload()
+
+
+# ---------------------------------------------------------------------------
+# Adaptive env overlay management (ADR: adaptive-environment-provisioning).
+# Backed by the same ``venv_provision`` functions the ``oc env`` CLI uses; all
+# are non-fatal (bad keys return False/0, never raise) and path-traversal-safe.
+# Filesystem-walking calls are offloaded to a thread to keep the loop responsive.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/env/overlays", response_model=OverlayListResponse)
+async def env_overlays() -> OverlayListResponse:
+    from omicsclaw.skill.execution import venv_provision as vp
+
+    overlays = await asyncio.to_thread(vp.list_overlays)
+    return OverlayListResponse(
+        overlays=[OverlayInfo(**item) for item in overlays],
+        total=len(overlays),
+        total_bytes=sum(int(item.get("size_bytes", 0)) for item in overlays),
+        env_root=str(vp.env_root()),
+    )
+
+
+@router.post("/env/clean", response_model=OverlayCleanResponse)
+async def env_clean(req: OverlayCleanRequest) -> OverlayCleanResponse:
+    from omicsclaw.skill.execution import venv_provision as vp
+
+    if req.key:
+        ok = await asyncio.to_thread(vp.remove_overlay, req.key)
+        return OverlayCleanResponse(removed=1 if ok else 0, key=req.key)
+    removed = await asyncio.to_thread(vp.clean_all)
+    return OverlayCleanResponse(removed=removed)
+
+
+@router.get("/env/adaptive-mode", response_model=AdaptiveModeResponse)
+async def get_adaptive_mode() -> AdaptiveModeResponse:
+    from omicsclaw.skill.execution.env_resolver import adaptive_env_mode
+
+    return AdaptiveModeResponse(mode=adaptive_env_mode(), kill_switch=_kill_switch_active())
+
+
+@router.put("/env/adaptive-mode", response_model=AdaptiveModeResponse)
+async def set_adaptive_mode(req: AdaptiveModeUpdateRequest) -> AdaptiveModeResponse:
+    from omicsclaw.skill.execution.env_resolver import adaptive_env_mode
+
+    # Process-scoped override; the resolver re-reads the var per run, so it takes
+    # effect immediately (not persisted to .env — applies to this server session).
+    os.environ["OMICSCLAW_ADAPTIVE_ENV"] = req.mode
+    return AdaptiveModeResponse(mode=adaptive_env_mode(), kill_switch=_kill_switch_active())

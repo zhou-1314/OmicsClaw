@@ -144,7 +144,12 @@ class SkillRunnerExecutor:
 
         exit_code = run_result.adapter_exit_code
         error = None if exit_code == 0 else run_result.stderr or stdout_text or "skill_runner_failed"
-        return JobOutcome(exit_code=exit_code, error=error, stdout_text=stdout_text)
+        return JobOutcome(
+            exit_code=exit_code,
+            error=error,
+            stdout_text=stdout_text,
+            runtime_source=run_result.runtime_source,
+        )
 
 
 def build_default_executor() -> SkillRunnerExecutor:

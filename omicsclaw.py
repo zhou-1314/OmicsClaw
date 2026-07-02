@@ -558,6 +558,13 @@ def main():
 
     # env
     env_p = sub.add_parser("env", help="Check installed OmicsClaw dependency tiers")
+    env_p.add_argument(
+        "env_action",
+        nargs="?",
+        choices=["overlays", "clean"],
+        help="overlays: list adaptive overlay venvs; clean: remove them (use --key for one)",
+    )
+    env_p.add_argument("--key", help="with `clean`: remove only this overlay key")
 
     # upload
     upload_p = sub.add_parser("upload", help="Create a spatial session from h5ad data")
@@ -1180,6 +1187,36 @@ def main():
         sys.exit(0)
 
     if args.command == "env":
+        env_action = getattr(args, "env_action", None)
+        if env_action in {"overlays", "clean"}:
+            from omicsclaw.skill.execution import venv_provision as _vp
+
+            if env_action == "overlays":
+                overlays = _vp.list_overlays()
+                print(f"\n{BOLD}Adaptive overlay venvs{RESET}  ({_vp.env_root()})")
+                if not overlays:
+                    print(f"{DIM}  (none provisioned yet){RESET}")
+                    raise SystemExit(0)
+                total = 0
+                for ov in overlays:
+                    total += ov["size_bytes"]
+                    mb = ov["size_bytes"] / 1e6
+                    status = f"{GREEN}ok{RESET}" if ov["valid"] else f"{RED}broken{RESET}"
+                    specs = ", ".join(ov["pip_specs"]) or "—"
+                    print(f"  {CYAN}{ov['key']}{RESET} [{status}] {mb:6.1f} MB  {specs}")
+                print(f"{BOLD}Total:{RESET} {total / 1e6:.1f} MB across {len(overlays)} overlay(s)")
+                raise SystemExit(0)
+
+            # env_action == "clean"
+            key = getattr(args, "key", None)
+            if key:
+                ok = _vp.remove_overlay(key)
+                print(f"{'Removed' if ok else 'No such overlay:'} {key}")
+                raise SystemExit(0 if ok else 1)
+            removed = _vp.clean_all()
+            print(f"Removed {removed} overlay venv(s) from {_vp.env_root()}")
+            raise SystemExit(0)
+
         from omicsclaw.core.dependency_manager import get_installed_tiers
         tiers = get_installed_tiers()
         
