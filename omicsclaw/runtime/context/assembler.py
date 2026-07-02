@@ -319,9 +319,10 @@ async def assemble_chat_context(
 
     try:
         memory_context = ""
+        project_state_context = ""
         memory_task = None
         if session_manager and session_id:
-            async def _load_session_memory() -> str:
+            async def _load_session_memory() -> tuple[str, str]:
                 # Bench (ADR 0023 d3 / AN-CTXRECALL-11): stamp a freshly-created
                 # session with the active thread (no-op for an already-bound one —
                 # the binding is immutable) and scope the passive memory injection
@@ -329,7 +330,18 @@ async def assemble_chat_context(
                 await session_manager.get_or_create(
                     user_id, platform, str(chat_id), thread_id=thread_id
                 )
-                return await session_manager.load_context(session_id, thread_id=thread_id)
+                # Decision-2: split durable identity (→system, cache-warm) from
+                # volatile work-state (→message, ADR 0024 Volatile). Fall back to
+                # the whole string in the system layer for session managers that
+                # only implement load_context (byte-identical to legacy).
+                if hasattr(session_manager, "load_context_layers"):
+                    return await session_manager.load_context_layers(
+                        session_id, thread_id=thread_id
+                    )
+                return (
+                    await session_manager.load_context(session_id, thread_id=thread_id),
+                    "",
+                )
 
             memory_task = _spawn(_load_session_memory())
 
@@ -354,7 +366,7 @@ async def assemble_chat_context(
 
         if memory_task is not None:
             try:
-                memory_context = await memory_task
+                memory_context, project_state_context = await memory_task
             except Exception as exc:
                 LOGGER.warning("Session memory context preparation failed (non-fatal): %s", exc)
 
@@ -477,6 +489,7 @@ async def assemble_chat_context(
                 memory_context=memory_context,
                 skill_context=skill_context,
                 scoped_memory_context=scoped_memory_context,
+                project_state_context=project_state_context,
                 skill=skill_hint,
                 skill_candidates=skill_candidates,
                 query=user_text[:200] if user_text else "",

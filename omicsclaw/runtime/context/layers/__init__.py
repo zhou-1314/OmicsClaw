@@ -124,6 +124,17 @@ def build_scoped_memory_context_block(scoped_memory_context: str) -> str:
     return f"## Scoped Memory\n\n{value}"
 
 
+def build_project_state_context_block(project_state_context: str) -> str:
+    # Decision-2: the volatile "current work state" slice of session memory
+    # (dataset / recent analyses / insights). It evolves as work progresses, so it
+    # rides the MESSAGE layer (ADR 0024 Volatile context) — keeping the system
+    # prefix byte-stable across mid-session memory writes.
+    value = str(project_state_context or "").strip()
+    if not value:
+        return ""
+    return f"## Current Work State\n\n{value}"
+
+
 def build_workspace_context_block(
     *,
     workspace: str = "",
@@ -508,6 +519,9 @@ class ContextAssemblyRequest:
     memory_context: str = ""
     skill_context: str = ""
     scoped_memory_context: str = ""
+    # Decision-2: volatile "current work state" memory (dataset/analysis/insight) →
+    # message layer, so mid-session memory writes don't churn the system prefix.
+    project_state_context: str = ""
     skill: str = ""
     skill_candidates: tuple[str, ...] = ()
     query: str = ""
@@ -737,6 +751,10 @@ def _build_skill_context_layer(request: ContextAssemblyRequest) -> str | None:
 
 def _build_scoped_memory_context_layer(request: ContextAssemblyRequest) -> str | None:
     return build_scoped_memory_context_block(request.scoped_memory_context) or None
+
+
+def _build_project_state_context_layer(request: ContextAssemblyRequest) -> str | None:
+    return build_project_state_context_block(request.project_state_context) or None
 
 
 def _build_capability_context_layer(request: ContextAssemblyRequest) -> str | None:
@@ -1111,6 +1129,13 @@ DEFAULT_CONTEXT_LAYER_INJECTORS = (
         builder=_build_scoped_memory_context_layer,
     ),
     ContextLayerInjector(
+        name="project_state_context",
+        order=44,
+        placement="message",  # ADR 0024: volatile work-state (dataset/analysis/insight) → Volatile context
+        surfaces=("bot", "interactive", "pipeline"),
+        builder=_build_project_state_context_layer,
+    ),
+    ContextLayerInjector(
         name="extension_prompt_packs",
         order=35,
         placement="system",
@@ -1193,6 +1218,7 @@ __all__ = [
     "build_plan_context_block",
     "build_skill_context_block",
     "build_scoped_memory_context_block",
+    "build_project_state_context_block",
     "build_transcript_context_block",
     "build_workspace_context_block",
     "get_default_context_injectors",

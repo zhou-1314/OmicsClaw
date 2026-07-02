@@ -126,6 +126,17 @@ events. Five resolutions:
    matched and is Volatile context. (Rejected alternative: move all memory to the
    message tail — that would demote session-scoped preferences from system
    instruction to per-turn context unnecessarily.)
+   **Refinement (Decision-2, 2026-07-02):** `memory_context` is split by
+   *write-frequency*, not moved wholesale. Durable identity — `project_context` +
+   user `preference` — rarely changes, so it stays in the `system` tier `## Your
+   Memory` block (cache-warm + authoritative). The *volatile work-state* —
+   `dataset` (preprocessing_state), recent `analysis` runs, and `insight` — is
+   written repeatedly mid-session, so it now rides the message tail as
+   `project_state_context` (`placement="message"`, `## Current Work State`) via
+   `session_manager.load_context_layers()`. Consequence: a mid-session write to
+   dataset/analysis/insight no longer re-warms the prefix; only a write to
+   preferences/project_context does. (Legacy managers exposing only `load_context`
+   fall back to whole-memory-in-`system`, byte-identical to the prior behavior.)
 
 4. **History append-only between collapses.** Remove the per-turn sliding
    `trim_history_to_budget` slide from the model path. History grows append-only;

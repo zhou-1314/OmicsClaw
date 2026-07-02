@@ -880,3 +880,47 @@ def test_assemble_chat_context_reaps_non_awaited_task_on_cancel():
         assert leftover == [], f"leaked pending background tasks: {leftover}"
 
     asyncio.run(_scenario())
+
+
+def test_volatile_memory_does_not_churn_system_prefix():
+    # Decision-2 placement split: within a session, evolving memory (dataset /
+    # analysis / insight) is written between turns, so load_context returns updated
+    # content. Those volatile blocks must ride the MESSAGE layer, not the system
+    # prefix — otherwise every memory write re-warms the ADR 0024 prefix. Durable
+    # identity (preferences / project_context) stays in the cache-warm system layer.
+    _STABLE = "**User Preferences**:\n- lang: zh"
+
+    def _sm(volatile):
+        class _SM:
+            async def get_or_create(self, *a, **k):
+                return None
+
+            async def load_context_layers(self, session_id, thread_id=""):
+                return _STABLE, volatile
+
+            async def load_context(self, session_id, thread_id=""):
+                return "\n".join(p for p in (_STABLE, volatile) if p)
+
+        return _SM()
+
+    def _turn(volatile):
+        return asyncio.run(
+            assemble_chat_context(
+                chat_id="c",
+                user_content="continue",
+                user_id="u",
+                platform="cli",
+                session_manager=_sm(volatile),
+            )
+        )
+
+    t1 = _turn("**Recent Analyses**:\n1. sc-de (wilcoxon) - running")
+    t2 = _turn("**Recent Analyses**:\n1. sc-de (wilcoxon) - complete")
+
+    # The volatile analysis-status change must NOT alter the system prefix.
+    assert t1.system_prompt == t2.system_prompt
+    # Durable identity stays in system; volatile work-state does not.
+    assert "**User Preferences**" in t1.system_prompt
+    assert "sc-de" not in t1.system_prompt
+    # Volatile work-state rides the message layer instead.
+    assert "sc-de" in t2.prompt_context.message_context
