@@ -42,6 +42,10 @@ class JobOutcome:
     exit_code: int
     error: Optional[str] = None
     stdout_text: str = ""
+    # Adaptive-env provenance carried up from SkillRunResult.runtime_source
+    # ("base" | "skip" | "probe" | "venv:<key>") so the Job record can surface
+    # which environment served the run (ADR: adaptive-environment-provisioning).
+    runtime_source: str = "base"
 
 
 @runtime_checkable

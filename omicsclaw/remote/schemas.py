@@ -41,6 +41,45 @@ class EnvDoctorReport(BaseModel):
     checks: list[EnvDoctorCheck]
 
 
+# Adaptive env overlay management (ADR: adaptive-environment-provisioning).
+# Shapes mirror ``venv_provision.list_overlays()`` and the ``oc env`` CLI.
+
+
+class OverlayInfo(BaseModel):
+    key: str
+    valid: bool
+    pip_specs: list[str] = Field(default_factory=list)
+    base_python: str = ""
+    created: Optional[float] = None
+    size_bytes: int = 0
+    path: str
+
+
+class OverlayListResponse(BaseModel):
+    overlays: list[OverlayInfo]
+    total: int
+    total_bytes: int
+    env_root: str
+
+
+class OverlayCleanRequest(BaseModel):
+    key: Optional[str] = None
+
+
+class OverlayCleanResponse(BaseModel):
+    removed: int
+    key: Optional[str] = None
+
+
+class AdaptiveModeResponse(BaseModel):
+    mode: Literal["on", "probe", "off"]
+    kill_switch: bool
+
+
+class AdaptiveModeUpdateRequest(BaseModel):
+    mode: Literal["on", "probe", "off"]
+
+
 # ---------------------------------------------------------------------------
 # /datasets
 # ---------------------------------------------------------------------------
@@ -102,6 +141,10 @@ class Job(BaseModel):
     exit_code: Optional[int] = None
     error: Optional[str] = None
     artifact_root: Optional[str] = None
+    # Adaptive-env provenance: which interpreter served the run
+    # ("base" | "skip" | "probe" | "venv:<key>"). Optional/None for jobs created
+    # before this field existed (backward-compatible deserialization).
+    runtime_source: Optional[str] = None
 
 
 class JobListResponse(BaseModel):

@@ -371,6 +371,7 @@ async def _run_job(workspace: Path, job_id: str) -> None:
                 "exit_code": outcome.exit_code,
                 "error": None,
                 "artifact_root": artifact_root,
+                "runtime_source": outcome.runtime_source,
             })
         else:
             artifact_root = _persist_failure_diagnostics(
@@ -384,6 +385,7 @@ async def _run_job(workspace: Path, job_id: str) -> None:
                 "exit_code": outcome.exit_code,
                 "error": outcome.error or "executor_not_implemented",
                 "artifact_root": artifact_root,
+                "runtime_source": outcome.runtime_source,
             })
         _write_job(workspace, final)
     finally:

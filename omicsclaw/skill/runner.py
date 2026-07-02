@@ -35,6 +35,7 @@ from .execution.argv_builder import (
     filter_forwarded_args,
 )
 from .execution.async_subprocess_driver import adrive_subprocess
+from .execution.env_resolver import resolve_skill_runtime
 from .execution.output_finalize import (
     deduplicate_path,
     finalize_output_directory,
@@ -107,6 +108,8 @@ class _PreparedSkillRun:
     env: dict[str, str]
     demo: bool
     session_path: str | None
+    # Adaptive-env provenance (which interpreter served the run).
+    runtime_source: str = "base"
 
 
 def _prepare_skill_run(
@@ -121,6 +124,7 @@ def _prepare_skill_run(
     project_id: str = "",
     project_name: str = "",
     log_banner: bool = True,
+    status_callback: Callable[[str], None] | None = None,
 ) -> _PreparedSkillRun | SkillRunResult:
     """Resolve skill, build argv, prepare output dir. Returns the prepared
     run or a stable ``_err`` ``SkillRunResult`` on setup failure.
@@ -246,6 +250,32 @@ def _prepare_skill_run(
     # out by exporting ``PYTHONNOUSERSITE=0`` before launch.
     env.setdefault("PYTHONNOUSERSITE", "1")
 
+    # Adaptive environment resolution (ADR: adaptive-environment-provisioning).
+    # Probe the skill's reconciled `requires:` surface against the *final* env and,
+    # when enabled (default-on), select an overlay interpreter. When disabled
+    # (``OMICSCLAW_ADAPTIVE_ENV=off``/``SKIP``) the resolver returns the base
+    # interpreter with an empty overlay, so cmd[0]/env are byte-for-byte the legacy
+    # path. ``cmd[0]`` is the interpreter (argv_builder always emits ``[python,
+    # script, ...]``); ``cmd.extend(filtered)`` above never touches it. A defensive
+    # guard keeps any resolver failure non-fatal (degrade to the base interpreter).
+    runtime_source = "base"
+    try:
+        runtime = resolve_skill_runtime(
+            skill_info,
+            method=requested_method,
+            base_python=cmd[0],
+            base_env=env,
+            cwd=str(script_path.parent),
+            status_cb=status_callback,
+        )
+        runtime_source = runtime.source
+        if runtime.python != cmd[0]:
+            cmd[0] = runtime.python
+        if runtime.env_overlay:
+            env.update(runtime.env_overlay)
+    except Exception:  # pragma: no cover - belt-and-suspenders; resolver is already guarded
+        pass
+
     return _PreparedSkillRun(
         skill_name=skill_name,
         skill_info=skill_info,
@@ -261,6 +291,7 @@ def _prepare_skill_run(
         env=env,
         demo=demo,
         session_path=session_path,
+        runtime_source=runtime_source,
     )
 
 
@@ -332,6 +363,7 @@ def _finalize_skill_run(
         method=actual_method,
         readme_path=readme_path,
         notebook_path=notebook_path,
+        runtime_source=prepared.runtime_source,
     )
 
     if prepared.session_path and result.success:
@@ -373,6 +405,7 @@ def run_skill(
     stdout_callback: Callable[[str], None] | None = None,
     stderr_callback: Callable[[str], None] | None = None,
     cancel_event: threading.Event | None = None,
+    status_callback: Callable[[str], None] | None = None,
 ) -> SkillRunResult:
     """Run a single skill via subprocess and return a ``SkillRunResult``.
 
@@ -426,6 +459,7 @@ def run_skill(
         extra_args=extra_args,
         project_id=project_id,
         project_name=project_name,
+        status_callback=status_callback,
     )
     if isinstance(prepared, SkillRunResult):
         return prepared
@@ -443,7 +477,7 @@ def run_skill(
         )
     except Exception as exc:
         duration = time.time() - t0
-        return _err(skill_name, str(exc), duration=duration)
+        return _err(skill_name, str(exc), duration=duration, runtime_source=prepared.runtime_source)
 
     duration = time.time() - t0
     return _finalize_skill_run(prepared, proc, duration)
@@ -460,6 +494,7 @@ async def arun_skill(
     extra_args: list[str] | None = None,
     project_id: str = "",
     project_name: str = "",
+    status_callback: Callable[[str], None] | None = None,
 ) -> SkillRunResult:
     """Async sibling of :func:`run_skill` for callers already in an event loop.
 
@@ -495,7 +530,12 @@ async def arun_skill(
     """
     skill_name = resolve_skill_alias(skill_name)
 
-    prepared = _prepare_skill_run(
+    # ``_prepare_skill_run`` is synchronous and now runs the adaptive-env probe
+    # (and, in Phase 2, venv provisioning), which can take seconds. Offload it to a
+    # worker thread so the desktop/jobs event loop is never blocked before the
+    # first await (Codex Phase 1 review).
+    prepared = await asyncio.to_thread(
+        _prepare_skill_run,
         skill_name,
         input_path=input_path,
         input_paths=input_paths,
@@ -506,6 +546,7 @@ async def arun_skill(
         project_id=project_id,
         project_name=project_name,
         log_banner=False,
+        status_callback=status_callback,
     )
     if isinstance(prepared, SkillRunResult):
         return prepared
@@ -525,7 +566,7 @@ async def arun_skill(
         raise
     except Exception as exc:
         duration = time.time() - t0
-        return _err(skill_name, str(exc), duration=duration)
+        return _err(skill_name, str(exc), duration=duration, runtime_source=prepared.runtime_source)
 
     duration = time.time() - t0
     return _finalize_skill_run(prepared, proc, duration)
@@ -553,7 +594,7 @@ def _store_result_in_session(session_path: str, skill_name: str, out_dir: Path) 
         pass
 
 
-def _err(skill: str, msg: str, duration: float = 0) -> SkillRunResult:
+def _err(skill: str, msg: str, duration: float = 0, runtime_source: str = "base") -> SkillRunResult:
     return build_skill_run_result(
         skill=skill,
         success=False,
@@ -561,6 +602,7 @@ def _err(skill: str, msg: str, duration: float = 0) -> SkillRunResult:
         output_dir=None,
         stderr=msg,
         duration_seconds=duration,
+        runtime_source=runtime_source,
     )
 
 
