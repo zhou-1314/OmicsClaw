@@ -300,7 +300,7 @@ class SkillManifest(_Strict):
     type: SkillType = "leaf"
     version: str = Field(min_length=1)
     # identity metadata preserved from v1 frontmatter (kept lossless;
-    # refinement over the ADR 0037 field tree, which omitted them):
+    # matches the ADR 0037 field tree author/license/emoji fields):
     author: Optional[str] = None
     license: Optional[str] = None
     emoji: Optional[str] = None
