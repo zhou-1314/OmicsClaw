@@ -777,3 +777,106 @@ def test_assemble_chat_context_forwards_prompt_pack_context_to_system_prompt(tmp
     # extension_prompt_packs is a SYSTEM layer: it renders into the system prompt.
     assert "## Active Local Prompt Packs" in context.system_prompt
     assert "Prefer exact status summaries." in context.system_prompt
+
+
+def test_assemble_chat_context_cancels_pending_background_tasks():
+    # F9: when the assembly coroutine is cancelled mid-flight, it must reap its
+    # in-flight background tasks (the cancellable session-memory coroutine in
+    # particular) via a finally, rather than leaking them to run detached.
+    async def _scenario():
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        class _BlockingSessionManager:
+            async def get_or_create(self, *args, **kwargs):
+                return None
+
+            async def load_context(self, *args, **kwargs):
+                started.set()
+                try:
+                    await asyncio.sleep(3600)
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+                return "mem"  # pragma: no cover
+
+        task = asyncio.create_task(
+            assemble_chat_context(
+                chat_id="c",
+                user_content="hello",
+                user_id="u",
+                platform="cli",
+                session_manager=_BlockingSessionManager(),
+            )
+        )
+        await asyncio.wait_for(started.wait(), timeout=2)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        assert cancelled.is_set(), "pending memory task was not cancelled by cleanup"
+
+    asyncio.run(_scenario())
+
+
+def test_assemble_chat_context_reaps_non_awaited_task_on_cancel():
+    # F9 (the real leak): a background task created but NOT the one currently being
+    # awaited when cancellation hits is orphaned (asyncio only auto-cancels the
+    # awaited fut_waiter). Here capability_task is spawned, then we cancel while
+    # parked at `await memory_task`; the finally must reap the pending capability
+    # task so no orphaned Task is left in the loop.
+    import threading
+
+    async def _scenario():
+        started_mem = asyncio.Event()
+        cap_entered = threading.Event()
+
+        def _slow_capability(query, *, domain_hint=""):
+            cap_entered.set()
+            threading.Event().wait(1.0)  # bounded so loop teardown can't hang
+
+            class _Decision:
+                chosen_skill = ""
+                domain = ""
+                skill_candidates = ()
+
+                def to_prompt_block(self):
+                    return ""
+
+            return _Decision()
+
+        class _BlockingSessionManager:
+            async def get_or_create(self, *args, **kwargs):
+                return None
+
+            async def load_context(self, *args, **kwargs):
+                started_mem.set()
+                await asyncio.sleep(3600)
+
+        task = asyncio.create_task(
+            assemble_chat_context(
+                chat_id="c",
+                user_content="run differential expression analysis",  # triggers capability
+                user_id="u",
+                platform="cli",
+                skill_aliases=("noop",),  # avoid loading the real registry
+                session_manager=_BlockingSessionManager(),
+                capability_resolver=_slow_capability,
+            )
+        )
+        await asyncio.wait_for(started_mem.wait(), timeout=2)
+        await asyncio.to_thread(cap_entered.wait, 2)  # capability thread is running
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        leftover = [
+            t
+            for t in asyncio.all_tasks()
+            if t is not asyncio.current_task() and not t.done()
+        ]
+        assert leftover == [], f"leaked pending background tasks: {leftover}"
+
+    asyncio.run(_scenario())
