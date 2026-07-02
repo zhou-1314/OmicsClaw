@@ -7,18 +7,61 @@ from typing import Any, Callable
 
 from ..context.budget import trim_history_to_budget
 
+# F10: content for a synthesized tool result standing in for a tool_call whose
+# real result was never recorded (the turn was interrupted/cancelled/crashed
+# between the assistant's tool_calls and all their results). Deterministic and
+# honest so the repaired bundle is idempotent + byte-stable across turns.
+_INTERRUPTED_TOOL_PLACEHOLDER = (
+    "[tool result unavailable: the previous turn was interrupted "
+    "before this tool call completed]"
+)
+
+
 def sanitize_tool_history(history: list[dict], warn: bool = True) -> list[dict]:
-    """Drop orphaned or incomplete tool-call bundles from history."""
+    """Repair incomplete tool-call bundles; drop only orphaned tool results.
+
+    An assistant tool-call bundle is "incomplete" when a following ``tool``
+    result is missing for one of its ``tool_calls`` (an interrupted turn). Rather
+    than whole-dropping the bundle — which silently discarded already-succeeded
+    results and the assistant's text — preserve the assistant + any succeeded
+    results and synthesize a deterministic placeholder ``tool`` message for each
+    missing ``tool_call_id`` so the bundle stays provider-valid. This is
+    idempotent: on the next pass the placeholder satisfies the pending id, so a
+    repaired bundle is byte-identical (the F2 append-only / prefix-cache
+    invariants hold; ``prepare_history`` writes the repaired history back). A
+    complete bundle passes through unchanged; an orphan ``tool`` (no matching
+    assistant) is still dropped. "provider-valid" holds for well-formed
+    ``tool_calls`` carrying ids; a malformed ``tool_call`` without an id is
+    preserved but cannot be paired (pre-existing behavior, not repaired here).
+    """
     sanitised: list[dict] = []
     pending_bundle: list[dict] | None = None
     pending_tool_ids: set[str] = set()
 
-    def flush_pending(drop_incomplete: bool) -> None:
+    def flush_pending() -> None:
         nonlocal pending_bundle, pending_tool_ids
         if pending_bundle is None:
             return
-        if not (drop_incomplete and pending_tool_ids):
-            sanitised.extend(pending_bundle)
+        if pending_tool_ids:
+            # Synthesize ONE placeholder per missing id, in the assistant's
+            # tool_calls declaration order (NOT set-iteration order, which is
+            # non-deterministic and would break byte-stability). Dedupe by id so a
+            # (malformed) duplicate tool_call id yields a single placeholder — else
+            # a second pass would drop the extra as an orphan and break idempotency.
+            assistant_msg = pending_bundle[0]
+            placeheld: set[str] = set()
+            for tool_call in assistant_msg.get("tool_calls", []) or []:
+                tc_id = tool_call.get("id") if isinstance(tool_call, dict) else None
+                if tc_id in pending_tool_ids and tc_id not in placeheld:
+                    placeheld.add(tc_id)
+                    pending_bundle.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc_id,
+                            "content": _INTERRUPTED_TOOL_PLACEHOLDER,
+                        }
+                    )
+        sanitised.extend(pending_bundle)
         pending_bundle = None
         pending_tool_ids = set()
 
@@ -26,7 +69,7 @@ def sanitize_tool_history(history: list[dict], warn: bool = True) -> list[dict]:
         role = msg.get("role")
 
         if role == "assistant" and msg.get("tool_calls"):
-            flush_pending(drop_incomplete=True)
+            flush_pending()
             pending_bundle = [msg]
             pending_tool_ids = {
                 tc.get("id")
@@ -41,14 +84,14 @@ def sanitize_tool_history(history: list[dict], warn: bool = True) -> list[dict]:
                 pending_bundle.append(msg)
                 pending_tool_ids.remove(tool_call_id)
                 if not pending_tool_ids:
-                    flush_pending(drop_incomplete=False)
+                    flush_pending()
                 continue
             continue
 
-        flush_pending(drop_incomplete=True)
+        flush_pending()
         sanitised.append(msg)
 
-    flush_pending(drop_incomplete=True)
+    flush_pending()
     return sanitised
 
 

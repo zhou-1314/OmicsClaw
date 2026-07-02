@@ -929,9 +929,11 @@ async def _execute_planned_tool_calls(
     ``append_assistant`` records the assistant-with-tool-calls message that owns
     these results. The planned-prelude caller has not recorded it, so it defaults
     to True; the main LLM loop already appended the real assistant message (with
-    its content + reasoning), so it passes False to avoid a duplicate empty copy
-    that sanitize_tool_history would later drop *in place of* the content-bearing
-    one — silently losing the assistant's pre-tool-call text.
+    its content + reasoning), so it passes False to avoid a redundant second
+    (empty) copy — historically that empty duplicate was the copy sanitize kept in
+    place of the content-bearing one, silently losing the assistant's pre-tool-call
+    text (sanitize now repairs incomplete bundles rather than dropping, but the
+    duplicate is still redundant and must not be recorded).
     """
     if append_assistant:
         assistant_tool_calls = [

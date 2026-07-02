@@ -214,10 +214,10 @@ def test_run_query_engine_executes_tools_and_records_transcript(tmp_path):
 
 def test_assistant_content_alongside_tool_call_is_preserved(tmp_path):
     # Root-cause fix (F10 prerequisite): the main loop must NOT double-append the
-    # assistant-with-tool-calls. Before the fix, the content-bearing copy appended
-    # by the loop was dropped by sanitize in favour of the empty copy that
-    # _execute_planned_tool_calls appended, silently losing the assistant's
-    # pre-tool-call text.
+    # assistant-with-tool-calls. Before the fix, only the empty copy that
+    # _execute_planned_tool_calls appended survived (the content-bearing loop copy
+    # was the one sanitize discarded), silently losing the assistant's pre-tool-
+    # call text.
     async def alpha_executor(args):
         return "alpha-result"
 
