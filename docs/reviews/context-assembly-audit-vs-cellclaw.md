@@ -57,6 +57,12 @@
 
 **§9.3 slice 1/2**（预算 status 原语 + 观测态接进 `PreparedModelMessages`）：✅ 完成（`45eb3dc`/`dea4d90`/`72f140f`）。
 
+> **2026-07-03 · 范式重构决策（ADR 0039 / 0040）**：本审计原本 deferred 的两项已被用户提升为正式重构决策，超越本文档当时的保守排序——
+> - **F1（char↔token）+ §7（96000/256000 成本策略）+ 控制平面五个半成品 → [ADR 0039](../adr/0039-token-native-context-budget.md)（Proposed）**：token-native 控制平面（一个 token 预算驱动 budget/status/compaction），**退役** char 机制（`CHARS_PER_TOKEN`/char 版 `resolve_max_prompt_chars`/恒 OK 的 window-relative `budget_status`）+ **舍弃 256000 char 成本策略**，改为 **85k token 延迟护栏** `min(85_000, 0.5×effective_capacity)`；压缩目标保持静态 0.55/0.40（F2 护栏）；**LLM collapse 摘要默认 ON**（用户 2026-07-03 定，重 LLM 语义质量、放弃默认确定性；仍长度/字节封顶保字节稳定，reactive-413 仍确定性）。本审计 §7/§9.3 的"char 校准边际、deferred"结论**被 ADR 0039 取代**。
+> - **F14（transcript 持久化）→ [ADR 0040](../adr/0040-restart-resilient-transcript-persistence.md)（Proposed）**：write-through **P-state 派生态镜像**进独立 `transcripts.db`（SQLite，非 memory.db）+ **冷启动/miss 时一次 rehydrate**（非每轮重载，保 ADR 0024 字节稳定）；tool blob 仍留 ToolResultStore 文件。
+>
+> 两个 ADR 均**完整保留 ADR 0024 缓存不变量**。设计经 grill-with-docs + codex(gpt-5.5 xhigh) 三轮交叉核验落定。
+
 ### 1.5.1 下一步优化方向（复审推荐）
 
 审计的 **P0/P1 高价值项全部完成且 codex-clean**；剩余项要么低价值、要么有意暂缓（附条件）。按性价比推荐：
