@@ -436,11 +436,14 @@ def _evict_lru_conversations():
     """Evict least-recently-used conversations when the conversation cap is
     exceeded. Late-imports ``transcript_store`` / ``tool_result_store`` /
     ``MAX_CONVERSATIONS`` from ``omicsclaw.runtime.agent.state`` since those globals live there."""
-    from omicsclaw.runtime.agent.state import MAX_CONVERSATIONS, tool_result_store, transcript_store
+    from omicsclaw.runtime.agent.state import MAX_CONVERSATIONS, transcript_store
 
     transcript_store.max_conversations = MAX_CONVERSATIONS
+    # ADR 0040 D6 / B2: LRU eviction clears the in-memory working set ONLY. It must
+    # NOT delete the durable transcripts.db rows or the ToolResultStore blobs — a
+    # later revisit rehydrates the transcript, whose full_result_path refs must
+    # still resolve. Only an explicit /clear deletes durable state (retention/GC of
+    # unbounded blobs+rows is a separate pre-launch concern — ADR 0040 Open).
     evicted = transcript_store.evict_lru_conversations()
-    for chat_id in evicted:
-        tool_result_store.clear(chat_id)
     if evicted:
-        logger.debug(f"Evicted {len(evicted)} stale conversation(s)")
+        logger.debug(f"Evicted {len(evicted)} stale conversation(s) from memory")

@@ -423,11 +423,15 @@ class TranscriptStore:
         max_history_chars: int | None = None,
         max_conversations: int = 1000,
         sanitizer: Callable[[list[dict], bool], list[dict]] = sanitize_tool_history,
+        db: Any = None,
     ) -> None:
         self.max_history = max_history
         self.max_history_chars = max_history_chars
         self.max_conversations = max_conversations
         self.sanitizer = sanitizer
+        # ADR 0040: optional write-through mirror (a TranscriptDB, duck-typed).
+        # None keeps the pure in-process behaviour (byte-identical to pre-0040).
+        self.db = db
         self.messages_by_chat: dict[int | str, list[dict]] = {}
         self.access_by_chat: dict[int | str, float] = {}
 
@@ -436,7 +440,19 @@ class TranscriptStore:
         return len(self.messages_by_chat)
 
     def get_or_create(self, chat_id: int | str) -> list[dict]:
-        return self.messages_by_chat.setdefault(chat_id, [])
+        if chat_id not in self.messages_by_chat:
+            # ADR 0040: lazy rehydrate on in-memory miss (cold-start / post-LRU),
+            # then append-only in memory. Never per-turn — the in-memory store is
+            # the source of truth for building requests (byte-stable prefix).
+            if self.db is not None and self.db.has(chat_id):
+                self.messages_by_chat[chat_id] = self.db.rehydrate(chat_id)
+            else:
+                self.messages_by_chat[chat_id] = []
+        return self.messages_by_chat[chat_id]
+
+    def _mirror_append(self, chat_id: int | str, message: dict) -> None:
+        if self.db is not None:
+            self.db.append(chat_id, message)
 
     def get_history(self, chat_id: int | str) -> list[dict]:
         return self.get_or_create(chat_id)
@@ -444,6 +460,9 @@ class TranscriptStore:
     def clear(self, chat_id: int | str) -> None:
         self.messages_by_chat.pop(chat_id, None)
         self.access_by_chat.pop(chat_id, None)
+        # ADR 0040 D6: /clear deletes durable state (LRU eviction does NOT — batch 7).
+        if self.db is not None:
+            self.db.clear(chat_id)
 
     def replace_history(
         self, chat_id: int | str, messages: list[dict[str, Any]]
@@ -455,6 +474,8 @@ class TranscriptStore:
         """
         self.messages_by_chat[chat_id] = list(messages)
         self.touch(chat_id)
+        if self.db is not None:  # ADR 0040: mirror the collapse/rewrite atomically
+            self.db.replace(chat_id, list(messages))
 
     def touch(self, chat_id: int | str, *, at: float | None = None) -> None:
         self.access_by_chat[chat_id] = time.time() if at is None else at
@@ -473,6 +494,7 @@ class TranscriptStore:
     def append_user_message(self, chat_id: int | str, content: Any) -> dict:
         message = {"role": "user", "content": content}
         self.get_or_create(chat_id).append(message)
+        self._mirror_append(chat_id, message)
         return message
 
     def append_assistant_message(
@@ -489,6 +511,7 @@ class TranscriptStore:
         if reasoning_content:
             message["reasoning_content"] = reasoning_content
         self.get_or_create(chat_id).append(message)
+        self._mirror_append(chat_id, message)
         return message
 
     def append_tool_message(
@@ -504,6 +527,7 @@ class TranscriptStore:
             "content": content,
         }
         self.get_or_create(chat_id).append(message)
+        self._mirror_append(chat_id, message)
         return message
 
     def prepare_history(self, chat_id: int | str, *, warn: bool = True) -> list[dict]:
@@ -520,7 +544,12 @@ class TranscriptStore:
         force for the *display* replay context (``build_selective_replay_context``).
         """
         history = self.get_or_create(chat_id)
+        before = list(history)
         history[:] = self.sanitizer(list(history), warn=warn)
+        # ADR 0040 M3: sanitize is usually a no-op; mirror only when it actually
+        # changed the list (a repaired interrupted tool bundle) — a bounded replace.
+        if self.db is not None and history != before:
+            self.db.replace(chat_id, list(history))
         return list(history)
 
     def build_replay_context(

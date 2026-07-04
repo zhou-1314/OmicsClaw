@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -56,10 +55,15 @@ def seed_core_conversation(
         list(messages[:-1]) if len(messages) > 1 else [],
         warn=False,
     )
-    core_module.conversations[conversation_id] = seed
-    core_module._conversation_access[conversation_id] = (
-        time.time() if touched_at is None else touched_at
-    )
+    # ADR 0040: mutate through the store so an enabled transcripts.db mirror stays
+    # consistent — a direct write to ``core.conversations`` (an alias of the store's
+    # in-memory dict) would seed memory but NOT the db, and the loop's first
+    # incremental append would then start at seq 0, so a restart would rehydrate a
+    # transcript missing this seed. ``replace_history`` writes both.
+    store = core_module.transcript_store
+    store.replace_history(conversation_id, seed)
+    if touched_at is not None:
+        store.touch(conversation_id, at=touched_at)
     if not messages:
         return ""
     return _extract_user_text(messages[-1].get("content", ""))
@@ -74,7 +78,7 @@ def sync_core_conversation(
         list(core_module.conversations.get(conversation_id, [])),
         warn=False,
     )
-    core_module.conversations[conversation_id] = list(updated)
+    core_module.transcript_store.replace_history(conversation_id, list(updated))
     if messages is not None:
         messages.clear()
         messages.extend(updated)
@@ -90,7 +94,7 @@ def append_interruption_notice(
 ) -> list[dict]:
     updated = sync_core_conversation(core_module, conversation_id)
     updated.append({"role": "user", "content": text})
-    core_module.conversations[conversation_id] = list(updated)
+    core_module.transcript_store.replace_history(conversation_id, list(updated))
     if messages is not None:
         messages.clear()
         messages.extend(updated)
