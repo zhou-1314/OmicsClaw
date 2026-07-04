@@ -54,7 +54,7 @@ def test_tool_call_highlights_use_xml_tags_not_prose():
     result = compact_history(
         history,
         preserve_messages=4,
-        preserve_chars=2000,
+        preserve_tokens=500,
         config=ContextCompactionConfig(),
     )
     summary = result.summary
@@ -93,7 +93,7 @@ def test_tool_call_xml_tag_is_self_closing_and_lists_tool_names():
     result = compact_history(
         history,
         preserve_messages=2,
-        preserve_chars=1000,
+        preserve_tokens=250,
         config=ContextCompactionConfig(),
     )
     assert result.omitted_count > 0
@@ -118,7 +118,7 @@ def test_assistant_with_text_content_renders_as_text():
     result = compact_history(
         history,
         preserve_messages=2,
-        preserve_chars=600,
+        preserve_tokens=150,
         config=ContextCompactionConfig(),
     )
     assert result.omitted_count > 0

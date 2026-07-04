@@ -305,9 +305,9 @@ def test_reactive_compaction_emits_hash_of_sent_system_prompt(tmp_path):
             config=QueryEngineConfig(
                 model="fake-model",
                 context_compaction=ContextCompactionConfig(
-                    max_prompt_chars=1_000_000,
+                    max_prompt_tokens=1_000_000,
                     reactive_preserve_messages=4,
-                    reactive_preserve_chars=2_000,
+                    reactive_preserve_tokens=500,
                 ),
             ),
             callbacks=QueryEngineCallbacks(on_cache_diagnostics=lambda d: captured.append(d)),

@@ -11,7 +11,7 @@ from omicsclaw.common.user_guidance import (
 )
 from omicsclaw.providers.patches import apply_deepseek_reasoning_passback
 
-from ..context.budget import ContextBudgetStatus, estimate_message_size
+from ..context.budget import ContextBudgetStatus, estimate_message_tokens
 from ..context.compaction import (
     CompactionEvent,
     ContextCompactionConfig,
@@ -585,8 +585,8 @@ async def _materialize_message(
 async def _emit_compaction_event(
     *,
     callbacks: QueryEngineCallbacks,
-    pre_chars: int,
-    post_chars: int,
+    pre_tokens: int,
+    post_tokens: int,
     history_len: int,
     kept_len: int,
     applied_stages: tuple[str, ...],
@@ -599,11 +599,11 @@ async def _emit_compaction_event(
     swallowed — compaction itself succeeded; failing to notify must
     not abort the turn.
     """
-    saved_chars = max(0, pre_chars - post_chars)
+    saved_tokens = max(0, pre_tokens - post_tokens)
     omitted = max(0, history_len - kept_len)
     event = CompactionEvent(
         messages_compressed=omitted,
-        tokens_saved_estimate=int(saved_chars / 3.5),
+        tokens_saved_estimate=saved_tokens,
         applied_stages=applied_stages,
         budget_status=budget_status,
         local_budget_status=local_budget_status,
@@ -1232,7 +1232,7 @@ async def _call_llm_with_reactive_compact_retry(
             ):
                 raise
 
-            reactive_pre_chars = sum(estimate_message_size(m) for m in history)
+            reactive_pre_tokens = sum(estimate_message_tokens(m) for m in history)
             # Reactive/413 is an emergency recovery path: deterministic only, so
             # no ``llm`` is passed (F6 refine must never fire here — the retry
             # cannot itself risk another LLM round-trip that may also 413).
@@ -1265,8 +1265,10 @@ async def _call_llm_with_reactive_compact_retry(
                 if callbacks.on_context_compacted:
                     await _emit_compaction_event(
                         callbacks=callbacks,
-                        pre_chars=reactive_pre_chars,
-                        post_chars=reactive_messages.estimated_chars,
+                        pre_tokens=reactive_pre_tokens,
+                        post_tokens=sum(
+                            estimate_message_tokens(m) for m in reactive_messages.messages
+                        ),
                         history_len=len(history),
                         kept_len=len(reactive_messages.messages),
                         applied_stages=reactive_messages.applied_stages,
@@ -1377,7 +1379,7 @@ async def run_query_engine(
     for iteration_index in range(config.max_iterations):
         state.iteration = iteration_index
         history = transcript_store.prepare_history(context.chat_id)
-        pre_chars = sum(estimate_message_size(m) for m in history)
+        pre_tokens = sum(estimate_message_tokens(m) for m in history)
         prepared_messages = await prepare_model_messages(
             system_prompt=system_prompt,
             history=history,
@@ -1401,8 +1403,10 @@ async def run_query_engine(
         if prepared_messages.applied_stages and callbacks.on_context_compacted:
             await _emit_compaction_event(
                 callbacks=callbacks,
-                pre_chars=pre_chars,
-                post_chars=prepared_messages.estimated_chars,
+                pre_tokens=pre_tokens,
+                post_tokens=sum(
+                    estimate_message_tokens(m) for m in prepared_messages.messages
+                ),
                 history_len=len(history),
                 kept_len=len(prepared_messages.messages),
                 applied_stages=prepared_messages.applied_stages,

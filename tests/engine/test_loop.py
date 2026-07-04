@@ -23,16 +23,17 @@ from omicsclaw.engine.loop import (
     _maybe_append_caller_addition,
     _maybe_append_mode_hint,
     _maybe_append_stage_fragment,
-    resolve_max_prompt_chars,
+    resolve_max_prompt_tokens,
 )
 import omicsclaw.engine.loop as _engine_loop
 
 
-def test_resolve_max_prompt_chars_scales_with_window(monkeypatch):
-    """ADR 0024 / cap-policy: collapse budget = min(deliberate DEFAULT_MAX_PROMPT_CHARS
-    budget, window*1.5); it is window-relative below the cap (so small windows shrink
-    AND mid-size windows use their window), capped for large windows, falls back to
-    the default for unknown windows, and honors the OMICSCLAW_MAX_PROMPT_CHARS override."""
+def test_resolve_max_prompt_tokens_scales_with_window(monkeypatch):
+    """ADR 0039: token budget = min(TOKEN_CAP=85_000, floor((window-8192)*0.5)).
+    Window-relative below the cap (small windows shrink; mid-size use their window),
+    capped for large windows (latency backstop), default for unknown windows,
+    honors OMICSCLAW_MAX_PROMPT_TOKENS, and converts the deprecated _CHARS var."""
+    monkeypatch.delenv("OMICSCLAW_MAX_PROMPT_TOKENS", raising=False)
     monkeypatch.delenv("OMICSCLAW_MAX_PROMPT_CHARS", raising=False)
 
     windows = {
@@ -43,36 +44,58 @@ def test_resolve_max_prompt_chars_scales_with_window(monkeypatch):
     }
     monkeypatch.setattr(_engine_loop, "get_context_window", lambda m: windows.get(m))
 
-    # Large window: capped at the deliberate budget (bounded cost/latency).
-    assert resolve_max_prompt_chars("big") == 256000
-    # Small synthetic window: shrinks well below the cap for safety.
-    assert resolve_max_prompt_chars("small") == min(256000, int(16_000 * 3.0 * 0.5))
-    assert resolve_max_prompt_chars("small") < 256000
-    # A REAL small-window model (131072 tok) is below the 256000 cap, so it now gets
-    # the window-relative budget (the branch the old 96000 cap left dead), not the cap.
-    assert resolve_max_prompt_chars("small_real") == min(256000, int(131_072 * 3.0 * 0.5))
-    assert resolve_max_prompt_chars("small_real") == 196608
-    # Unknown window (e.g. Ollama, returns None): conservative default.
-    assert resolve_max_prompt_chars("unknown") == 256000
+    # Large window: capped at the token cap (bounded cold/re-warm latency).
+    assert resolve_max_prompt_tokens("big") == 85_000
+    # Small synthetic window: shrinks below the cap.
+    assert resolve_max_prompt_tokens("small") == min(85_000, (16_000 - 8192) // 2)
+    assert resolve_max_prompt_tokens("small") < 85_000
+    # Real small-window model (131072 tok) below the cap → window-relative budget.
+    assert resolve_max_prompt_tokens("small_real") == (131_072 - 8192) // 2
+    assert resolve_max_prompt_tokens("small_real") == 61_440
+    # Unknown window (Ollama → None): token-cap fallback.
+    assert resolve_max_prompt_tokens("unknown") == 85_000
 
-    # Explicit override wins regardless of window.
-    monkeypatch.setenv("OMICSCLAW_MAX_PROMPT_CHARS", "12345")
-    assert resolve_max_prompt_chars("big") == 12345
-    assert resolve_max_prompt_chars("unknown") == 12345
+    # Explicit token override wins regardless of window.
+    monkeypatch.setenv("OMICSCLAW_MAX_PROMPT_TOKENS", "12345")
+    assert resolve_max_prompt_tokens("big") == 12345
+    monkeypatch.delenv("OMICSCLAW_MAX_PROMPT_TOKENS", raising=False)
+
+    # Deprecated char override is honored for one release, converted chars→tokens (÷4).
+    monkeypatch.setenv("OMICSCLAW_MAX_PROMPT_CHARS", "40000")
+    assert resolve_max_prompt_tokens("big") == 10_000  # 40000 // 4
+    # A tiny deprecated char value must never convert to a 0-token budget (clamp≥1).
+    monkeypatch.setenv("OMICSCLAW_MAX_PROMPT_CHARS", "3")
+    assert resolve_max_prompt_tokens("big") == 1
+    # When both are set, the token env wins.
+    monkeypatch.setenv("OMICSCLAW_MAX_PROMPT_TOKENS", "9000")
+    assert resolve_max_prompt_tokens("big") == 9000
+
+
+def test_collapse_llm_summary_env_toggle(monkeypatch):
+    # ADR 0039 D5: default-ON; OMICSCLAW_COLLAPSE_LLM_SUMMARY=0 disables it.
+    from omicsclaw.engine.loop import _collapse_llm_summary_enabled
+
+    monkeypatch.delenv("OMICSCLAW_COLLAPSE_LLM_SUMMARY", raising=False)
+    assert _collapse_llm_summary_enabled() is True  # default-ON
+    monkeypatch.setenv("OMICSCLAW_COLLAPSE_LLM_SUMMARY", "0")
+    assert _collapse_llm_summary_enabled() is False
+    monkeypatch.setenv("OMICSCLAW_COLLAPSE_LLM_SUMMARY", "1")
+    assert _collapse_llm_summary_enabled() is True
 
 
 def test_build_compaction_config_sets_budget_relative_targets(monkeypatch):
-    # §9.3 slice 3: the engine wires budget-relative compress-to-target ratios so
-    # the collapse/auto preserve budgets scale with the model's char budget
-    # instead of the fixed magic constants. The ratios must stay below their
+    # §9.3 slice 3 + ADR 0039: the engine wires budget-relative compress-to-target
+    # ratios so the collapse/auto preserve budgets scale with the model's TOKEN
+    # budget instead of fixed magic constants. The ratios must stay below their
     # triggers (byte-stability) and stack collapse > auto (auto is more aggressive).
+    monkeypatch.delenv("OMICSCLAW_MAX_PROMPT_TOKENS", raising=False)
     monkeypatch.delenv("OMICSCLAW_MAX_PROMPT_CHARS", raising=False)
     monkeypatch.setattr(_engine_loop, "get_context_window", lambda m: 1_000_000)
 
     cfg = _engine_loop._build_compaction_config("big")
 
-    assert cfg.max_prompt_chars == 256000
-    assert cfg.context_window_tokens == 1_000_000
+    # ADR 0039: large window → capped at the token cap (85_000).
+    assert cfg.max_prompt_tokens == 85_000
     assert cfg.collapse_target_ratio is not None
     assert cfg.auto_compact_target_ratio is not None
     # Targets sit below their triggers so the re-warmed next turn cannot re-collapse.

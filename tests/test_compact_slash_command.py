@@ -41,7 +41,7 @@ class TestCompactHistoryHelper:
         result = compact_history(
             history,
             preserve_messages=4,
-            preserve_chars=2000,
+            preserve_tokens=500,
             config=ContextCompactionConfig(),
         )
 
@@ -57,7 +57,7 @@ class TestCompactHistoryHelper:
                 {"role": "assistant", "content": "hello"},
             ],
             preserve_messages=10,
-            preserve_chars=10000,
+            preserve_tokens=2500,
             config=ContextCompactionConfig(),
         )
         assert result.omitted_count == 0

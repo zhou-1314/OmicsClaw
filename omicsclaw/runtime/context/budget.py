@@ -4,7 +4,7 @@ import re
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 
 
 # --------------------------------------------------------------------------- #
@@ -21,13 +21,6 @@ class ContextBudgetStatus(str, Enum):
     COMPRESS = "compress"
     CRITICAL = "critical"
     BLOCK = "block"
-
-
-# Single source of truth for the char↔token bridge, used both by the char-budget
-# derivation (engine.resolve_max_prompt_chars) and the budget-status token
-# estimate — so the two never drift. A rough global proxy (see audit F1 for the
-# CJK/content-type caveats).
-CHARS_PER_TOKEN = 3.0
 
 
 def effective_context_capacity(
@@ -65,20 +58,20 @@ def classify_context_budget(
 
 
 def local_budget_status(
-    estimated_chars: int, max_prompt_chars: int | None
+    estimated_tokens: int, max_prompt_tokens: int | None
 ) -> ContextBudgetStatus | None:
-    """§9.3 slice 3: pressure against the *local* char budget (``max_prompt_chars``).
+    """ADR 0039: pressure against the *local* token budget (``max_prompt_tokens``).
 
     The window-relative :func:`classify_context_budget` is decision-useless on
-    large-window models — the char budget already caps context to a few percent
-    of the window, so that status is ~always OK. This one classifies against the
-    real binding compaction budget, so it stays actionable and can drive
-    compress-to-target. Returns ``None`` when no char budget is configured
+    large-window models — the compaction budget already caps context to a few
+    percent of the window, so that status is ~always OK. This one classifies
+    against the real binding compaction budget, so it stays actionable and can
+    drive compress-to-target. Returns ``None`` when no budget is configured
     (unbounded prompt), so the field stays absent rather than misreporting BLOCK.
     """
-    if max_prompt_chars is None or max_prompt_chars <= 0:
+    if max_prompt_tokens is None or max_prompt_tokens <= 0:
         return None
-    return classify_context_budget(estimated_chars, max_prompt_chars)
+    return classify_context_budget(estimated_tokens, max_prompt_tokens)
 
 
 # F4 (ADR 0024 budget accuracy): inline image content blocks otherwise count
@@ -137,6 +130,111 @@ def estimate_message_size(message: dict[str, Any]) -> int:
     return size
 
 
+# --------------------------------------------------------------------------- #
+# ADR 0039 — token-native estimator. Token analogue of estimate_message_size:
+# the same structural walk, counted in tokens (tiktoken where available, else a
+# ceil(chars / 4) fallback), charging a bounded per-image surcharge rather than
+# tokenizing base64 — preserving the F4 multimodal-budget semantics in tokens.
+# --------------------------------------------------------------------------- #
+
+try:  # optional dependency — installs without it use the ceil(chars/4) fallback
+    import tiktoken as _tiktoken
+except Exception:  # pragma: no cover - import guard
+    _tiktoken = None
+
+# Token analogue of _IMAGE_BUDGET_CHARS (=4000 chars). The F4 surcharge was a
+# proxy for "~1300 vision tokens"; charge that directly in the token unit.
+_IMAGE_BUDGET_TOKENS = 1300
+_CHARS_PER_TOKEN_FALLBACK = 4  # rough chars→tokens when no tokenizer is available
+_DEFAULT_ENCODING = "cl100k_base"
+_TOKEN_ENCODING_CACHE: dict[str, Any] = {}
+
+
+def _resolve_encoding(model: str | None) -> Any | None:
+    """Return a tiktoken encoding for ``model`` (or a default), or ``None`` to
+    signal the ceil(chars/4) fallback (tiktoken absent / model unknown)."""
+    if _tiktoken is None:
+        return None
+    key = model or _DEFAULT_ENCODING
+    if key in _TOKEN_ENCODING_CACHE:
+        return _TOKEN_ENCODING_CACHE[key]
+    encoding = None
+    try:
+        encoding = (
+            _tiktoken.encoding_for_model(model)
+            if model
+            else _tiktoken.get_encoding(_DEFAULT_ENCODING)
+        )
+    except Exception:
+        try:
+            encoding = _tiktoken.get_encoding(_DEFAULT_ENCODING)
+        except Exception:  # pragma: no cover - defensive
+            encoding = None
+    _TOKEN_ENCODING_CACHE[key] = encoding
+    return encoding
+
+
+def _count_text_tokens(text: str, encoding: Any | None) -> int:
+    """Token count of a text fragment via ``encoding``, else ceil(chars/4)."""
+    if not text:
+        return 0
+    if encoding is not None:
+        try:
+            return len(encoding.encode(text))
+        except Exception:  # pragma: no cover - defensive
+            pass
+    return -(-len(text) // _CHARS_PER_TOKEN_FALLBACK)
+
+
+def estimate_message_tokens(message: dict[str, Any], *, model: str | None = None) -> int:
+    """Approximate one transcript message's token footprint (ADR 0039).
+
+    Token analogue of :func:`estimate_message_size`: the identical structural
+    walk (role, text/list content, tool calls, tool_call_id, reasoning_content),
+    counted in tokens instead of chars. Inline image blocks are charged a bounded
+    ``_IMAGE_BUDGET_TOKENS`` surcharge — never tokenized (base64 would
+    catastrophically over-count) and never dropped (images would under-count to
+    ~0) — preserving the F4 multimodal-budget semantics in the token unit.
+    """
+    encoding = _resolve_encoding(model)
+    tokens = _count_text_tokens(str(message.get("role", "") or ""), encoding)
+
+    content = message.get("content", "")
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict):
+                if _is_image_block(block):
+                    tokens += _IMAGE_BUDGET_TOKENS
+                tokens += _count_text_tokens(str(block.get("type", "") or ""), encoding)
+                tokens += _count_text_tokens(str(block.get("text", "") or ""), encoding)
+            else:
+                tokens += _count_text_tokens(str(block), encoding)
+    else:
+        tokens += _count_text_tokens(str(content or ""), encoding)
+
+    for tool_call in message.get("tool_calls", []) or []:
+        if not isinstance(tool_call, dict):
+            tokens += _count_text_tokens(str(tool_call), encoding)
+            continue
+        tokens += _count_text_tokens(str(tool_call.get("id", "") or ""), encoding)
+        tokens += _count_text_tokens(str(tool_call.get("type", "") or ""), encoding)
+        function_block = tool_call.get("function", {}) or {}
+        if isinstance(function_block, dict):
+            tokens += _count_text_tokens(str(function_block.get("name", "") or ""), encoding)
+            tokens += _count_text_tokens(str(function_block.get("arguments", "") or ""), encoding)
+        else:
+            tokens += _count_text_tokens(str(function_block), encoding)
+
+    tokens += _count_text_tokens(str(message.get("tool_call_id", "") or ""), encoding)
+    tokens += _count_text_tokens(str(message.get("reasoning_content", "") or ""), encoding)
+    return tokens
+
+
+def estimate_text_tokens(text: str, *, model: str | None = None) -> int:
+    """Token count of a raw text string (e.g. a system prompt) — ADR 0039."""
+    return _count_text_tokens(str(text or ""), _resolve_encoding(model))
+
+
 def _group_history_blocks(history: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     blocks: list[list[dict[str, Any]]] = []
     index = 0
@@ -161,11 +259,17 @@ def trim_history_to_budget(
     *,
     max_messages: int = 50,
     max_chars: int | None = None,
+    size_fn: Callable[[dict[str, Any]], int] = estimate_message_size,
 ) -> list[dict[str, Any]]:
     """Return the newest contiguous history suffix that fits the current budget.
 
     The budget is block-aware: assistant tool-call messages stay grouped with their
     following tool results so truncation does not split bundles in the middle.
+
+    ``size_fn`` measures a message and ``max_chars`` is the budget in that unit:
+    the char estimator by default (display/replay); pass
+    :func:`estimate_message_tokens` for the token-native compaction budget
+    (ADR 0039). The unit of ``size_fn`` and ``max_chars`` must match.
     """
     if not history:
         return []
@@ -181,7 +285,7 @@ def trim_history_to_budget(
 
     for block in reversed(blocks):
         block_message_count = len(block)
-        block_chars = sum(estimate_message_size(message) for message in block)
+        block_chars = sum(size_fn(message) for message in block)
         fits_messages = max_messages < 0 or (selected_message_count + block_message_count) <= max_messages
         fits_chars = char_budget is None or (selected_chars + block_chars) <= char_budget
 
