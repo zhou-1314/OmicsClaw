@@ -1235,9 +1235,9 @@ def test_run_query_engine_retries_once_with_reactive_compact_on_prompt_too_long(
                 model="fake-model",
                 llm_error_types=(_FakeAPIError,),
                 context_compaction=ContextCompactionConfig(
-                    max_prompt_chars=50_000,
+                    max_prompt_tokens=12_500,
                     reactive_preserve_messages=2,
-                    reactive_preserve_chars=240,
+                    reactive_preserve_tokens=60,
                     protected_tail_messages=1,
                 ),
             ),
@@ -1283,9 +1283,9 @@ def test_run_query_engine_reactive_compact_only_attempts_once(tmp_path):
                 model="fake-model",
                 llm_error_types=(_FakeAPIError,),
                 context_compaction=ContextCompactionConfig(
-                    max_prompt_chars=50_000,
+                    max_prompt_tokens=12_500,
                     reactive_preserve_messages=2,
-                    reactive_preserve_chars=240,
+                    reactive_preserve_tokens=60,
                 ),
             ),
             callbacks=QueryEngineCallbacks(

@@ -219,6 +219,19 @@ _Avoid_: "lazy-load tools", "tool compression" (the retired per-turn behavior).
 **Cache-hit diagnostics**: The per-turn observability that reads `hit`/`miss` tokens from provider usage, computes a hit ratio, and — when a miss is unexpected — infers the reason by hashing prefix segments (tools / stable-system) and comparing against the prior turn (`tool-list-changed`, `system-changed`, `cold-start`, …). The Reasonix feature that turns the Stable prefix invariant from a hope into a measured property.
 _Avoid_: "cache metrics" (too vague), "token accounting" (that is billing, a superset).
 
+> **Forward-declared — ADR 0039 / 0040 (Proposed, 2026-07-03).** Two refactors of
+> this subsystem are decided but not yet in code, so the terms below are named
+> here only so cross-subsystem readers recognise them; canonical definitions live
+> in the ADRs until implemented. **ADR 0039** collapses the compaction *budget*
+> from chars onto a single **token budget** (one unit for budget → status →
+> compaction; the 256000-char cost cap becomes an ~85k-token *latency backstop*;
+> the LLM condensed collapse summary becomes the default output). **ADR 0040**
+> gives the raw **transcript** restart durability via a write-through **derived-state
+> (P-state) mirror** into a dedicated `transcripts.db`, rehydrated **once on
+> cold-start miss** (never per-turn). Both preserve every prefix-cache invariant
+> above unchanged; the only vocabulary shift is that the compaction budget is
+> counted in tokens rather than chars.
+
 ## Relationships
 
 - A **Surface** holds one **MemoryClient** per request context.

@@ -15,6 +15,7 @@ follows lives here.
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
@@ -30,9 +31,8 @@ from omicsclaw.runtime.agent.query_engine import (
     QueryEngineContext,
     run_query_engine,
 )
-from omicsclaw.runtime.context.budget import CHARS_PER_TOKEN
+from omicsclaw.runtime.context.budget import effective_context_capacity
 from omicsclaw.runtime.context.compaction import (
-    DEFAULT_MAX_PROMPT_CHARS,
     ContextCompactionConfig,
 )
 from omicsclaw.runtime.storage.transcript import (
@@ -172,54 +172,91 @@ def _maybe_append_stage_fragment(system_prompt: str, stage: str) -> str:
     return system_prompt.rstrip() + "\n\n## Stage\n" + fragment
 
 
-# ADR 0024 — derive the context-collapse char budget from the model's window.
-# Phase 3 made history append-only between collapses, removing the per-turn slide
-# that used to bound small-context providers; this re-introduces a safe bound:
-# min(DEFAULT_MAX_PROMPT_CHARS, window * CHARS_PER_TOKEN * fraction). The cap is a
-# deliberate cost/latency POLICY (see DEFAULT_MAX_PROMPT_CHARS in compaction.py),
-# not the model window: at 256000 it works a large window at ~85k tokens. Windows
-# below ~170k tokens get the smaller window-relative budget (the branch the old
-# 96000 cap left dead for the whole fleet); unknown windows (e.g. Ollama, None)
-# keep the default; operators tune per deployment via OMICSCLAW_MAX_PROMPT_CHARS.
-# Reactive compaction on a context error remains the ultimate safety net.
-_CHARS_PER_TOKEN = CHARS_PER_TOKEN
+# ADR 0039 — the prompt budget is this fraction of the model's effective token
+# capacity (then capped by _MAX_PROMPT_TOKENS_CAP). See resolve_max_prompt_tokens.
 _PROMPT_BUDGET_FRACTION = 0.5
-_DEFAULT_MAX_PROMPT_CHARS = DEFAULT_MAX_PROMPT_CHARS
 
 # §9.3 slice 3 — compress-to-target. After a collapse/auto compaction, converge
-# the TOTAL prompt (system + preserved tail) to this fraction of max_prompt_chars,
-# so the target scales with the model's real char budget instead of the old fixed
-# 12000/6000-char tail. Both sit well below their trigger ratios (0.82 / 0.92) so
-# the re-warmed next turn cannot re-collapse (F2 one-compaction = one-rewarm), and
-# auto keeps less than collapse.
+# the TOTAL prompt (system + preserved tail) to this fraction of max_prompt_tokens,
+# so the target scales with the model's real token budget instead of a fixed tail.
+# Both sit well below their trigger ratios (0.82 / 0.92) so the re-warmed next turn
+# cannot re-collapse (F2 one-compaction = one-rewarm), and auto keeps less than collapse.
 _COLLAPSE_TARGET_RATIO = 0.55
 _AUTO_COMPACT_TARGET_RATIO = 0.40
 
+# ADR 0039 — token-native context-collapse budget (supersedes the char budget
+# above). TOKEN_CAP is a latency backstop, not a cost policy: prefix caching makes
+# accumulated history cheap to bill but does not bound cold-turn / re-warm / miss
+# latency, so the budget is capped well below a large model's window.
+# reserved_output leaves head-room for the model's completion.
+_MAX_PROMPT_TOKENS_CAP = 85_000
+_RESERVED_OUTPUT_TOKENS = 8192
 
-def resolve_max_prompt_chars(model: str) -> int:
-    """Context-collapse char budget for ``model`` (ADR 0024)."""
-    override = (os.environ.get("OMICSCLAW_MAX_PROMPT_CHARS") or "").strip()
-    if override.isdigit() and int(override) > 0:
-        return int(override)
+_LOGGER = logging.getLogger(__name__)
+
+
+def _resolve_max_prompt_tokens_override() -> int | None:
+    """Return an explicit token-budget override, or ``None``.
+
+    ``OMICSCLAW_MAX_PROMPT_TOKENS`` wins. The deprecated ``OMICSCLAW_MAX_PROMPT_CHARS``
+    is honored for one release by converting the char value to ~tokens (÷ 4), with a
+    warning — it must NOT be read as a raw token count (ADR 0039 M4).
+    """
+    tokens = (os.environ.get("OMICSCLAW_MAX_PROMPT_TOKENS") or "").strip()
+    if tokens.isdigit() and int(tokens) > 0:
+        return int(tokens)
+    legacy = (os.environ.get("OMICSCLAW_MAX_PROMPT_CHARS") or "").strip()
+    if legacy.isdigit() and int(legacy) > 0:
+        converted = max(1, int(legacy) // 4)  # chars → ~tokens; clamp so tiny values never yield a 0 budget
+        _LOGGER.warning(
+            "OMICSCLAW_MAX_PROMPT_CHARS is deprecated (ADR 0039 token-native budget); "
+            "converting %s chars -> ~%d tokens. Set OMICSCLAW_MAX_PROMPT_TOKENS instead.",
+            legacy,
+            converted,
+        )
+        return converted
+    return None
+
+
+def resolve_max_prompt_tokens(model: str) -> int:
+    """Context-collapse token budget for ``model`` (ADR 0039).
+
+    ``min(TOKEN_CAP, floor(effective_capacity * PROMPT_BUDGET_FRACTION))`` where
+    ``effective_capacity = window - reserved_output``. Unknown windows fall back to
+    the cap; the ``OMICSCLAW_MAX_PROMPT_TOKENS`` override (and the deprecated
+    ``_CHARS`` one) win. The cap is a latency backstop, not a cost policy.
+    """
+    override = _resolve_max_prompt_tokens_override()
+    if override is not None:
+        return override
     window = get_context_window(model)
     if not window or window <= 0:
-        return _DEFAULT_MAX_PROMPT_CHARS
-    derived = int(window * _CHARS_PER_TOKEN * _PROMPT_BUDGET_FRACTION)
-    return min(_DEFAULT_MAX_PROMPT_CHARS, derived)
+        return _MAX_PROMPT_TOKENS_CAP
+    effective = effective_context_capacity(
+        window, reserved_output=_RESERVED_OUTPUT_TOKENS, safety_margin=0
+    )
+    derived = int(effective * _PROMPT_BUDGET_FRACTION)
+    return min(_MAX_PROMPT_TOKENS_CAP, derived)
+
+
+def _collapse_llm_summary_enabled() -> bool:
+    """ADR 0039 D5: the LLM collapse summary is default-ON;
+    ``OMICSCLAW_COLLAPSE_LLM_SUMMARY=0`` disables it for deterministic/replayable
+    runs (CI, byte-exact fixtures)."""
+    return (os.environ.get("OMICSCLAW_COLLAPSE_LLM_SUMMARY") or "").strip() != "0"
 
 
 def _build_compaction_config(effective_model: str) -> ContextCompactionConfig:
     """Assemble the per-request compaction config for ``effective_model``.
 
-    ADR 0024 — collapse budget scaled to the model's context window. §9.3 —
-    observational token-budget status (context_window_tokens) plus budget-relative
-    compress-to-target ratios (slice 3).
+    ADR 0039 — token-native collapse budget scaled to the model's window, plus
+    budget-relative compress-to-target ratios (§9.3 slice 3).
     """
     return ContextCompactionConfig(
-        max_prompt_chars=resolve_max_prompt_chars(effective_model),
-        context_window_tokens=get_context_window(effective_model),
+        max_prompt_tokens=resolve_max_prompt_tokens(effective_model),
         collapse_target_ratio=_COLLAPSE_TARGET_RATIO,
         auto_compact_target_ratio=_AUTO_COMPACT_TARGET_RATIO,
+        collapse_llm_summary_enabled=_collapse_llm_summary_enabled(),
     )
 
 

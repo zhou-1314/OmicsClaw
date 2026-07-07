@@ -59,7 +59,7 @@ def test_prepare_model_messages_applies_snip_and_micro_before_heavy_stages(tmp_p
         chat_id="chat-light",
         tool_result_store=result_store,
         config=ContextCompactionConfig(
-            max_prompt_chars=50_000,
+            max_prompt_tokens=50_000,
             snip_message_chars=240,
             protected_tail_messages=1,
             micro_keep_recent_tool_messages=0,
@@ -111,7 +111,7 @@ def test_snip_preserves_tool_call_arguments(tmp_path):
         chat_id="c",
         tool_result_store=store,
         config=ContextCompactionConfig(
-            max_prompt_chars=1_000_000,  # never collapse/auto — isolate snip
+            max_prompt_tokens=1_000_000,  # never collapse/auto — isolate snip
             snip_message_chars=200,
             protected_tail_messages=1,
             collapse_trigger_ratio=0.99,
@@ -141,15 +141,15 @@ def test_prepare_model_messages_runs_context_collapse_before_auto_compact(tmp_pa
         chat_id="chat-collapse",
         tool_result_store=result_store,
         config=ContextCompactionConfig(
-            max_prompt_chars=4_000,
+            max_prompt_tokens=1_000,
             snip_message_chars=4_000,
             protected_tail_messages=2,
             collapse_trigger_ratio=0.45,
             auto_compact_trigger_ratio=0.75,
             collapse_preserve_messages=4,
-            collapse_preserve_chars=600,
+            collapse_preserve_tokens=150,
             auto_compact_preserve_messages=2,
-            auto_compact_preserve_chars=240,
+            auto_compact_preserve_tokens=60,
         ),
     )
 
@@ -174,15 +174,15 @@ def test_prepare_model_messages_runs_auto_compact_when_collapse_is_not_enough(tm
         chat_id="chat-auto",
         tool_result_store=result_store,
         config=ContextCompactionConfig(
-            max_prompt_chars=2_200,
+            max_prompt_tokens=550,
             snip_message_chars=4_000,
             protected_tail_messages=2,
             collapse_trigger_ratio=0.35,
             auto_compact_trigger_ratio=0.55,
             collapse_preserve_messages=8,
-            collapse_preserve_chars=1_200,
+            collapse_preserve_tokens=300,
             auto_compact_preserve_messages=2,
-            auto_compact_preserve_chars=220,
+            auto_compact_preserve_tokens=55,
         ),
     )
 
@@ -237,9 +237,9 @@ def _assert_one_compaction_one_rewarm(first, *, config, tool_result_store, chat_
 def test_byte_stable_single_collapse(tmp_path):
     store = ToolResultStore(storage_dir=tmp_path / "tr")
     config = ContextCompactionConfig(
-        max_prompt_chars=4_000, snip_message_chars=4_000, protected_tail_messages=2,
+        max_prompt_tokens=1_000, snip_message_chars=4_000, protected_tail_messages=2,
         collapse_trigger_ratio=0.45, auto_compact_trigger_ratio=0.99,
-        collapse_preserve_messages=4, collapse_preserve_chars=600,
+        collapse_preserve_messages=4, collapse_preserve_tokens=150,
     )
     first = _prep(
         system_prompt="SYSTEM", history=_pairs(8, "A" * 180), chat_id="c",
@@ -254,10 +254,10 @@ def test_byte_stable_single_collapse(tmp_path):
 def test_byte_stable_collapse_plus_auto(tmp_path):
     store = ToolResultStore(storage_dir=tmp_path / "tr")
     config = ContextCompactionConfig(
-        max_prompt_chars=2_200, snip_message_chars=4_000, protected_tail_messages=2,
+        max_prompt_tokens=550, snip_message_chars=4_000, protected_tail_messages=2,
         collapse_trigger_ratio=0.35, auto_compact_trigger_ratio=0.55,
-        collapse_preserve_messages=8, collapse_preserve_chars=1_200,
-        auto_compact_preserve_messages=2, auto_compact_preserve_chars=220,
+        collapse_preserve_messages=8, collapse_preserve_tokens=300,
+        auto_compact_preserve_messages=2, auto_compact_preserve_tokens=55,
     )
     first = _prep(
         system_prompt="SYSTEM", history=_pairs(10, "A" * 260), chat_id="c",
@@ -273,8 +273,8 @@ def test_byte_stable_collapse_plus_auto(tmp_path):
 def test_byte_stable_reactive(tmp_path):
     store = ToolResultStore(storage_dir=tmp_path / "tr")
     config = ContextCompactionConfig(
-        max_prompt_chars=4_000, snip_message_chars=4_000, protected_tail_messages=1,
-        reactive_preserve_messages=2, reactive_preserve_chars=200,
+        max_prompt_tokens=4_000, snip_message_chars=4_000, protected_tail_messages=1,
+        reactive_preserve_messages=2, reactive_preserve_tokens=200,
     )
     first = _prep(
         system_prompt="SYSTEM", history=_pairs(8, "A" * 180), chat_id="c",
@@ -286,64 +286,34 @@ def test_byte_stable_reactive(tmp_path):
     )
 
 
-def test_prepare_model_messages_reports_observational_budget_status(tmp_path):
-    # §9.3 slice 2: when the model context window is known, PreparedModelMessages
-    # carries an observational token-budget status (no behavior change).
+def test_prepare_model_messages_budget_status_mirrors_token_status(tmp_path):
+    # ADR 0039 / S3: the retired window-relative status is gone. `budget_status`
+    # now carries the SAME single actionable token status as `local_budget_status`
+    # (both wire keys kept for one release, both sourced from max_prompt_tokens).
     from omicsclaw.runtime.context.budget import ContextBudgetStatus
 
     store = ToolResultStore(storage_dir=tmp_path / "tr")
     config = ContextCompactionConfig(
-        max_prompt_chars=1_000_000,  # never compact — isolate status computation
-        snip_message_chars=1_000_000,  # never snip the big message
-        context_window_tokens=10_000,  # effective = 10000 - 4096 - 2048 = 3856 tok
+        max_prompt_tokens=2_500,
+        snip_message_chars=1_000_000,
+        collapse_trigger_ratio=0.99,  # isolate: never compact here
+        auto_compact_trigger_ratio=0.999,
     )
-    small = _prep(
+    full = _prep(
         system_prompt="SYS",
-        history=[{"role": "user", "content": "x" * 3_000}],
+        history=[{"role": "user", "content": "x" * 9_800}],  # ~2450 tok / 2500 -> ~98%
         chat_id="c",
         tool_result_store=store,
         config=config,
     )
-    big = _prep(
-        system_prompt="SYS",
-        history=[{"role": "user", "content": "x" * 30_000}],
-        chat_id="c",
-        tool_result_store=store,
-        config=config,
+    assert full.budget_status == full.local_budget_status == ContextBudgetStatus.BLOCK
+    # No budget configured -> both None (backward-compatible).
+    none_cfg = ContextCompactionConfig(max_prompt_tokens=None)
+    p = _prep(
+        system_prompt="SYS", history=[{"role": "user", "content": "hi"}],
+        chat_id="c", tool_result_store=store, config=none_cfg,
     )
-    # ~1000 tok / 3856 ~ 26% -> OK ; ~10000 tok / 3856 > 96% -> BLOCK
-    assert small.budget_status == ContextBudgetStatus.OK
-    assert big.budget_status == ContextBudgetStatus.BLOCK
-
-
-def test_prepare_model_messages_budget_status_none_without_window(tmp_path):
-    # Backward-compatible: no configured window -> no observational status.
-    store = ToolResultStore(storage_dir=tmp_path / "tr")
-    config = ContextCompactionConfig(max_prompt_chars=1_000_000)
-    prepared = _prep(
-        system_prompt="SYS",
-        history=[{"role": "user", "content": "hello"}],
-        chat_id="c",
-        tool_result_store=store,
-        config=config,
-    )
-    assert prepared.budget_status is None
-
-
-def test_prepare_model_messages_budget_status_blocks_on_zero_window(tmp_path):
-    # A configured but zero-capacity window is BLOCK, not None (is-None guard).
-    from omicsclaw.runtime.context.budget import ContextBudgetStatus
-
-    store = ToolResultStore(storage_dir=tmp_path / "tr")
-    config = ContextCompactionConfig(max_prompt_chars=1_000_000, context_window_tokens=0)
-    prepared = _prep(
-        system_prompt="SYS",
-        history=[{"role": "user", "content": "hi"}],
-        chat_id="c",
-        tool_result_store=store,
-        config=config,
-    )
-    assert prepared.budget_status == ContextBudgetStatus.BLOCK
+    assert p.budget_status is None and p.local_budget_status is None
 
 
 def test_prepare_model_messages_reports_local_budget_status(tmp_path):
@@ -354,7 +324,7 @@ def test_prepare_model_messages_reports_local_budget_status(tmp_path):
 
     store = ToolResultStore(storage_dir=tmp_path / "tr")
     config = ContextCompactionConfig(
-        max_prompt_chars=10_000,
+        max_prompt_tokens=2_500,
         snip_message_chars=1_000_000,  # isolate: never snip
         collapse_trigger_ratio=0.99,
         auto_compact_trigger_ratio=0.999,  # isolate: never collapse here
@@ -380,7 +350,7 @@ def test_prepare_model_messages_reports_local_budget_status(tmp_path):
 def test_prepare_model_messages_local_budget_status_none_without_char_budget(tmp_path):
     # Backward-compatible: no char budget -> no local status.
     store = ToolResultStore(storage_dir=tmp_path / "tr")
-    config = ContextCompactionConfig(max_prompt_chars=None)
+    config = ContextCompactionConfig(max_prompt_tokens=None)
     prepared = _prep(
         system_prompt="SYS",
         history=[{"role": "user", "content": "hello"}],
@@ -398,13 +368,13 @@ def test_collapse_target_ratio_scales_preserve_with_budget(tmp_path):
     # the magic 12000-char constant, which under a target no longer applies).
     store = ToolResultStore(storage_dir=tmp_path / "tr")
     base = dict(
-        max_prompt_chars=40_000,
+        max_prompt_tokens=10_000,
         snip_message_chars=1_000_000,
         protected_tail_messages=2,
-        collapse_trigger_ratio=0.50,  # threshold 20000
+        collapse_trigger_ratio=0.50,  # threshold 5000
         auto_compact_trigger_ratio=0.999,  # isolate collapse
-        collapse_preserve_messages=100,  # high -> char budget binds
-        collapse_preserve_chars=500,
+        collapse_preserve_messages=100,  # high -> token budget binds
+        collapse_preserve_tokens=125,
     )
     history = _pairs(40, "A" * 400)  # ~33600 chars > 20000 -> collapse fires
 
@@ -426,7 +396,7 @@ def test_collapse_target_ratio_scales_preserve_with_budget(tmp_path):
     assert STAGE_CONTEXT_COLLAPSE in fixed.applied_stages
     assert STAGE_CONTEXT_COLLAPSE in scaled.applied_stages
     # Fixed keeps ~500 chars; budget-relative keeps ~16000 (0.40 * 40000).
-    assert scaled.estimated_chars > fixed.estimated_chars
+    assert scaled.estimated_tokens > fixed.estimated_tokens
     assert len(scaled.messages) > len(fixed.messages)
 
 
@@ -436,14 +406,14 @@ def test_byte_stable_collapse_with_target_ratio(tmp_path):
     # below the collapse trigger so the re-warmed next turn does not re-collapse.
     store = ToolResultStore(storage_dir=tmp_path / "tr")
     config = ContextCompactionConfig(
-        max_prompt_chars=40_000,
+        max_prompt_tokens=10_000,
         snip_message_chars=1_000_000,
         protected_tail_messages=2,
-        collapse_trigger_ratio=0.80,  # threshold 32000
+        collapse_trigger_ratio=0.80,  # threshold 8000
         auto_compact_trigger_ratio=0.999,
         collapse_preserve_messages=100,
-        collapse_preserve_chars=2_000,
-        collapse_target_ratio=0.50,  # target 20000 << trigger 32000
+        collapse_preserve_tokens=500,
+        collapse_target_ratio=0.50,  # target 5000 << trigger 8000
     )
     first = _prep(
         system_prompt="SYSTEM",
@@ -501,14 +471,14 @@ def test_byte_stable_collapse_with_target_ratio_large_summary(tmp_path):
     history = head + _pairs(6, "Q" * 140)
 
     config = ContextCompactionConfig(
-        max_prompt_chars=8_000,
+        max_prompt_tokens=2_000,
         snip_message_chars=1_000_000,
         protected_tail_messages=2,
-        collapse_trigger_ratio=0.55,  # threshold 4400
+        collapse_trigger_ratio=0.55,  # threshold 1100
         auto_compact_trigger_ratio=0.999,  # isolate collapse
         collapse_preserve_messages=8,
-        collapse_preserve_chars=200,
-        collapse_target_ratio=0.40,  # total target 3200
+        collapse_preserve_tokens=50,
+        collapse_target_ratio=0.40,  # total target 800
     )
     first = _prep(
         system_prompt="SYSTEM",  # must match _hoist_next_turn's hardcoded base
@@ -523,8 +493,8 @@ def test_byte_stable_collapse_with_target_ratio_large_summary(tmp_path):
     assert len(first.persisted_summary) > 1_500
     # The final total must be within target (below the trigger), so the next turn
     # cannot re-collapse.
-    assert first.estimated_chars <= int(
-        config.max_prompt_chars * config.collapse_trigger_ratio
+    assert first.estimated_tokens <= int(
+        config.max_prompt_tokens * config.collapse_trigger_ratio
     )
     _assert_one_compaction_one_rewarm(
         first, config=config, tool_result_store=store, chat_id="c"
@@ -546,14 +516,14 @@ def test_compress_to_target_lifts_message_cap_and_is_system_size_invariant(tmp_p
             chat_id="c",
             tool_result_store=store,
             config=ContextCompactionConfig(
-                max_prompt_chars=40_000,
+                max_prompt_tokens=10_000,
                 snip_message_chars=1_000_000,
                 protected_tail_messages=2,
-                collapse_trigger_ratio=0.80,  # threshold 32000
+                collapse_trigger_ratio=0.80,  # threshold 8000
                 auto_compact_trigger_ratio=0.999,
                 collapse_preserve_messages=4,  # small cap -> must be lifted
-                collapse_preserve_chars=1_000,
-                collapse_target_ratio=0.50,  # total target 20000
+                collapse_preserve_tokens=250,
+                collapse_target_ratio=0.50,  # total target 5000
             ),
         )
 
@@ -565,9 +535,9 @@ def test_compress_to_target_lifts_message_cap_and_is_system_size_invariant(tmp_p
     assert len(small_sys.messages) > 20
     # Total converges to ~target (20000, plus bounded summary overhead) and stays
     # under the collapse trigger — invariant to system size (subtract-system).
-    assert 18_000 <= small_sys.estimated_chars <= 26_000
-    assert 18_000 <= big_sys.estimated_chars <= 26_000
-    assert abs(small_sys.estimated_chars - big_sys.estimated_chars) < 4_000
+    assert 4_000 <= small_sys.estimated_tokens <= 7_500
+    assert 4_000 <= big_sys.estimated_tokens <= 7_500
+    assert abs(small_sys.estimated_tokens - big_sys.estimated_tokens) < 1_500
 
 
 def test_compress_to_target_bounds_tail_when_system_exceeds_target(tmp_path):
@@ -577,14 +547,14 @@ def test_compress_to_target_bounds_tail_when_system_exceeds_target(tmp_path):
     # the whole history and overflow.
     store = ToolResultStore(storage_dir=tmp_path / "tr")
     config = ContextCompactionConfig(
-        max_prompt_chars=20_000,
+        max_prompt_tokens=5_000,
         snip_message_chars=1_000_000,
         protected_tail_messages=2,
-        collapse_trigger_ratio=0.50,  # threshold 10000
+        collapse_trigger_ratio=0.50,  # threshold 2500
         auto_compact_trigger_ratio=0.999,
         collapse_preserve_messages=4,
-        collapse_preserve_chars=None,  # no floor
-        collapse_target_ratio=0.50,  # total target 10000
+        collapse_preserve_tokens=None,  # no floor
+        collapse_target_ratio=0.50,  # total target 2500
     )
     prepared = _prep(
         system_prompt="S" * 11_000,  # system alone > target (10000)
@@ -603,9 +573,9 @@ def test_byte_stable_prior_summary_plus_new_collapse(tmp_path):
     # produces a new collapse section must still equal its own next-turn hoist.
     store = ToolResultStore(storage_dir=tmp_path / "tr")
     config = ContextCompactionConfig(
-        max_prompt_chars=4_000, snip_message_chars=4_000, protected_tail_messages=2,
+        max_prompt_tokens=1_000, snip_message_chars=4_000, protected_tail_messages=2,
         collapse_trigger_ratio=0.45, auto_compact_trigger_ratio=0.99,
-        collapse_preserve_messages=4, collapse_preserve_chars=600,
+        collapse_preserve_messages=4, collapse_preserve_tokens=150,
     )
     first = _prep(
         system_prompt="SYSTEM", history=_pairs(8, "A" * 180), chat_id="c",
@@ -694,14 +664,14 @@ def _prep_llm(llm, **kwargs):
 
 def _f6_config(**overrides):
     base = dict(
-        max_prompt_chars=4_000,
+        max_prompt_tokens=1_000,
         snip_message_chars=4_000,
         protected_tail_messages=2,
         collapse_trigger_ratio=0.45,
         collapse_target_ratio=0.35,
         auto_compact_trigger_ratio=0.99,
         collapse_preserve_messages=4,
-        collapse_preserve_chars=600,
+        collapse_preserve_tokens=150,
         collapse_llm_summary_enabled=True,
         llm_summary_min_omitted=4,
     )
@@ -838,7 +808,7 @@ def test_f6_reactive_path_stays_deterministic(tmp_path):
     # client is threaded through, because it early-returns before the target branch.
     store = ToolResultStore(storage_dir=tmp_path / "tr")
     llm = _FakeSummaryLLM(content=_LLM_MARKER)
-    config = _f6_config(reactive_preserve_messages=2, reactive_preserve_chars=300)
+    config = _f6_config(reactive_preserve_messages=2, reactive_preserve_tokens=300)
     first = _prep_llm(
         llm, system_prompt="SYSTEM", history=_pairs(12, "A" * 180), chat_id="c",
         tool_result_store=store, config=config, force_reactive_compact=True,
@@ -876,6 +846,91 @@ def test_f6_bytewise_denser_summary_rejected(tmp_path):
         chat_id="c2", tool_result_store=store, config=config,
     )
     assert _collapse_section_body(ok_res.persisted_summary) == ascii_ok  # accepted
+
+
+def test_f6_token_denser_summary_rejected(tmp_path, monkeypatch):
+    # ADR 0039: the F2 cap is now TOKEN-based. A summary that is FEWER chars than the
+    # template but tokenizes LARGER (denser tokens) must be rejected — else the
+    # re-hoisted system could re-cross the token trigger and re-collapse (F2 break).
+    import omicsclaw.runtime.context.compaction as _compaction
+
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    config = _f6_config()
+    hist = _pairs(12, "A" * 180)
+    det = _prep(  # llm=None -> deterministic template
+        system_prompt="SYSTEM", history=hist, chat_id="c0",
+        tool_result_store=store, config=config,
+    )
+    tmpl = _collapse_section_body(det.persisted_summary)
+
+    marker = "SHORT"  # a short LLM summary — far fewer chars than the template
+    assert len(marker) < len(tmpl)
+
+    real = _compaction.estimate_text_tokens
+
+    def fake_tokens(text, **kw):
+        # The short LLM summary tokenizes huge; everything else is measured for real.
+        return 10_000 if marker in text else real(text, **kw)
+
+    monkeypatch.setattr(_compaction, "estimate_text_tokens", fake_tokens)
+
+    res = _prep_llm(
+        _FakeSummaryLLM(content=marker), system_prompt="SYSTEM", history=hist,
+        chat_id="c1", tool_result_store=store, config=config,
+    )
+    assert STAGE_CONTEXT_COLLAPSE in res.applied_stages
+    # Rejected on the token cap despite being char-shorter -> the template is used.
+    assert marker not in res.system_prompt
+    assert _collapse_section_body(res.persisted_summary) == tmpl
+
+
+def test_drops_required_tokens_unit():
+    # B1 content-fidelity gate: a path (>=2 segments) or error marker present in the
+    # omitted content but missing from the summary triggers a fallback.
+    from omicsclaw.runtime.context.compaction import _drops_required_tokens
+
+    omitted = "ran /data/study/sample.h5ad and hit a Traceback in step 2"
+    assert _drops_required_tokens(omitted, "a summary without the path or error")
+    assert not _drops_required_tokens(
+        omitted, "kept /data/study/sample.h5ad and the Traceback"
+    )
+    assert not _drops_required_tokens("no special tokens here", "any summary")
+    # A DIFFERENT (superstring) path does NOT satisfy the required path — extracted-
+    # token comparison, not raw substring membership.
+    assert _drops_required_tokens(
+        "used /data/study/sample.h5ad", "used /data/study/sample.h5ad.bak"
+    )
+    # Trailing sentence punctuation on the omitted path must not cause a false reject.
+    assert not _drops_required_tokens(
+        "read /data/study/sample.h5ad.", "kept /data/study/sample.h5ad here"
+    )
+    # Pending-work markers are protected too (ADR 0039 D5).
+    assert _drops_required_tokens("there is a pending TODO", "all done, nothing left")
+
+
+def test_f6_drops_required_path_falls_back_to_template(tmp_path):
+    # B1: an LLM summary that OMITS a file path present in the omitted content is
+    # rejected (no retry) -> the deterministic template is used instead.
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    config = _f6_config()
+    path = "/data/study/sample.h5ad"
+    hist = [
+        {"role": "user", "content": f"please read {path} " + ("Q" * 200)},
+        {"role": "assistant", "content": "reading " + ("R" * 200)},
+    ] + _pairs(10, "A" * 180)
+    res = _prep_llm(
+        _FakeSummaryLLM(content="condensed the whole conversation, ran some analysis"),
+        system_prompt="SYSTEM", history=hist, chat_id="c",
+        tool_result_store=store, config=config,
+    )
+    assert STAGE_CONTEXT_COLLAPSE in res.applied_stages
+    # The path was omitted; the LLM summary dropped it -> gate rejected it.
+    assert "condensed the whole conversation" not in res.persisted_summary
+
+
+def test_collapse_llm_summary_default_on():
+    # ADR 0039 D5: default-ON now that the token cap + B1 gate make it safe.
+    assert ContextCompactionConfig().collapse_llm_summary_enabled is True
 
 
 def test_f6_llm_sees_omitted_history_and_antimimicry_prompt(tmp_path):

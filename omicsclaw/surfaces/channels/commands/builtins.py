@@ -131,7 +131,7 @@ async def _cmd_compact(ctx: SlashCommandContext) -> str:
     result = compact_history(
         tail_to_compact,
         preserve_messages=compaction_config.reactive_preserve_messages,
-        preserve_chars=compaction_config.reactive_preserve_chars,
+        preserve_tokens=compaction_config.reactive_preserve_tokens,
         config=compaction_config,
         workspace=ctx.workspace or ctx.pipeline_workspace or None,
     )

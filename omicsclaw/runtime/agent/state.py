@@ -294,11 +294,26 @@ MAX_CONVERSATIONS = int(os.getenv("OMICSCLAW_MAX_CONVERSATIONS", "1000"))
 TOOL_RESULT_INLINE_BYTES = int(os.getenv("OMICSCLAW_TOOL_RESULT_INLINE_BYTES", "6000"))
 TOOL_RESULT_PREVIEW_CHARS = int(os.getenv("OMICSCLAW_TOOL_RESULT_PREVIEW_CHARS", "1200"))
 TOOL_RESULT_STORAGE_DIR = OMICSCLAW_DIR / "bot" / "logs" / "tool_results"
+def _build_transcript_db():
+    """ADR 0040: opt-in restart-resilient transcript persistence. ``OMICSCLAW_TRANSCRIPT_DB``
+    unset or ``0`` -> ``None`` (pure in-process, the default — byte-identical, no side
+    effects in tests). ``1`` -> the default path; any other value is used as the db path.
+    Deployment-gated (restart resilience is a multi-user/hosted concern)."""
+    setting = (os.getenv("OMICSCLAW_TRANSCRIPT_DB") or "").strip()
+    if setting in ("", "0"):
+        return None
+    from omicsclaw.runtime.storage.transcript_db import TranscriptDB
+
+    path = (OMICSCLAW_DIR / "bot" / "logs" / "transcripts.db") if setting == "1" else setting
+    return TranscriptDB(path)
+
+
 transcript_store = TranscriptStore(
     max_history=MAX_HISTORY,
     max_history_chars=MAX_HISTORY_CHARS or None,
     max_conversations=MAX_CONVERSATIONS,
     sanitizer=_runtime_sanitize_tool_history,
+    db=_build_transcript_db(),
 )
 tool_result_store = ToolResultStore(
     storage_dir=TOOL_RESULT_STORAGE_DIR,

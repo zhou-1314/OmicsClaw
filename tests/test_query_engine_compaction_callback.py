@@ -87,7 +87,7 @@ def test_callback_fires_when_compaction_applied(tmp_path):
             config=QueryEngineConfig(
                 model="fake",
                 # Tight budget to force compaction.
-                context_compaction=ContextCompactionConfig(max_prompt_chars=8000),
+                context_compaction=ContextCompactionConfig(max_prompt_tokens=2000),
             ),
             callbacks=QueryEngineCallbacks(on_context_compacted=on_compacted),
         )
@@ -98,14 +98,14 @@ def test_callback_fires_when_compaction_applied(tmp_path):
     assert event.applied_stages
     assert event.messages_compressed >= 0
     assert event.tokens_saved_estimate >= 0
-    # B3: the context-budget status is threaded end-to-end from the
-    # PreparedModelMessages into the emitted event. max_prompt_chars=8000 is set
-    # (so local_budget_status is populated) but context_window_tokens is not
-    # (so the window-relative budget_status stays None — the B1 finding).
+    # B3 + S3: the context-budget status is threaded end-to-end from the
+    # PreparedModelMessages into the emitted event. The retired window-relative
+    # status is gone; both budget_status and local_budget_status now carry the
+    # single actionable token status (both wire keys kept for one release).
     from omicsclaw.runtime.context.budget import ContextBudgetStatus
 
     assert isinstance(event.local_budget_status, ContextBudgetStatus)
-    assert event.budget_status is None
+    assert event.budget_status == event.local_budget_status
 
 
 def test_auto_compaction_persists_summary_and_trimmed_history(tmp_path):
@@ -129,7 +129,7 @@ def test_auto_compaction_persists_summary_and_trimmed_history(tmp_path):
             tool_result_store=result_store,
             config=QueryEngineConfig(
                 model="fake",
-                context_compaction=ContextCompactionConfig(max_prompt_chars=8000),
+                context_compaction=ContextCompactionConfig(max_prompt_tokens=2000),
             ),
         )
     )
@@ -165,9 +165,9 @@ def test_reactive_compaction_persists_summary_after_prompt_error(tmp_path):
             config=QueryEngineConfig(
                 model="fake",
                 context_compaction=ContextCompactionConfig(
-                    max_prompt_chars=1_000_000,
+                    max_prompt_tokens=1_000_000,
                     reactive_preserve_messages=4,
-                    reactive_preserve_chars=2_000,
+                    reactive_preserve_tokens=500,
                 ),
             ),
         )
@@ -237,7 +237,7 @@ def test_callback_failure_does_not_abort_turn(tmp_path):
             tool_result_store=result_store,
             config=QueryEngineConfig(
                 model="fake",
-                context_compaction=ContextCompactionConfig(max_prompt_chars=8000),
+                context_compaction=ContextCompactionConfig(max_prompt_tokens=2000),
             ),
             callbacks=QueryEngineCallbacks(on_context_compacted=on_compacted),
         )

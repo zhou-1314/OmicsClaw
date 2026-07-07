@@ -215,11 +215,11 @@ def test_received_files_is_module_dict():
         omicsclaw.runtime.agent.session.received_files.pop("sentinel", None)
 
 
-def test_evict_lru_conversations_clears_tool_results_for_evicted_chats(monkeypatch):
-    """When the transcript store evicts a stale chat_id,
-    ``_evict_lru_conversations`` must call ``tool_result_store.clear(chat_id)``
-    for every evicted id — otherwise tool result blobs leak. Drives the
-    function with stand-in stores (no real disk / state)."""
+def test_evict_lru_conversations_keeps_tool_results_for_evicted_chats(monkeypatch):
+    """ADR 0040 D6 / B2: LRU eviction clears the in-memory working set ONLY — it must
+    NOT delete tool-result blobs (a later revisit rehydrates the transcript from
+    transcripts.db, whose full_result_path refs must still resolve). Only an explicit
+    /clear deletes durable state."""
     cleared: list = []
 
     fake_transcript_store = SimpleNamespace(
@@ -239,7 +239,8 @@ def test_evict_lru_conversations_clears_tool_results_for_evicted_chats(monkeypat
 
     _evict_lru_conversations()
 
-    assert cleared == ["chat-1", "chat-2"]
+    # Eviction is memory-only: blobs are NOT deleted (they survive for rehydrate).
+    assert cleared == []
     assert fake_transcript_store.max_conversations == 50
 
 

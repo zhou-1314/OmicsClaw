@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 from rich.console import Console
 
+from omicsclaw.runtime.storage.transcript import TranscriptStore
 from omicsclaw.skill.registry import OmicsRegistry
 from omicsclaw.surfaces.cli import interactive
 from omicsclaw.surfaces.cli._session_state import SessionState
@@ -96,8 +97,13 @@ async def test_stream_llm_response_uses_explicit_workspace_context(monkeypatch):
         return "I am OmicsClaw."
 
     core_module = ModuleType("omicsclaw.runtime.agent.state")
-    core_module.conversations = {}
-    core_module._conversation_access = {}
+    # Mirror omicsclaw.runtime.agent.state: conversations/_conversation_access are
+    # aliases of the transcript store's dicts, so the bridge helpers mutate through
+    # the store (ADR 0040 mirror-consistency), not a standalone dict.
+    _core_store = TranscriptStore()
+    core_module.transcript_store = _core_store
+    core_module.conversations = _core_store.messages_by_chat
+    core_module._conversation_access = _core_store.access_by_chat
     core_module.get_usage_snapshot = lambda: {}
     core_module.llm_tool_loop = _fake_llm_tool_loop
 
@@ -271,8 +277,13 @@ async def test_stream_llm_response_formats_markdown_for_cli(monkeypatch):
         return "**空间转录组学**"
 
     core_module = ModuleType("omicsclaw.runtime.agent.state")
-    core_module.conversations = {}
-    core_module._conversation_access = {}
+    # Mirror omicsclaw.runtime.agent.state: conversations/_conversation_access are
+    # aliases of the transcript store's dicts, so the bridge helpers mutate through
+    # the store (ADR 0040 mirror-consistency), not a standalone dict.
+    _core_store = TranscriptStore()
+    core_module.transcript_store = _core_store
+    core_module.conversations = _core_store.messages_by_chat
+    core_module._conversation_access = _core_store.access_by_chat
     core_module.get_usage_snapshot = lambda: {}
     core_module.llm_tool_loop = _fake_llm_tool_loop
 
@@ -319,8 +330,13 @@ async def test_stream_llm_response_passes_plan_context(monkeypatch):
         return "Plan-aware reply."
 
     core_module = ModuleType("omicsclaw.runtime.agent.state")
-    core_module.conversations = {}
-    core_module._conversation_access = {}
+    # Mirror omicsclaw.runtime.agent.state: conversations/_conversation_access are
+    # aliases of the transcript store's dicts, so the bridge helpers mutate through
+    # the store (ADR 0040 mirror-consistency), not a standalone dict.
+    _core_store = TranscriptStore()
+    core_module.transcript_store = _core_store
+    core_module.conversations = _core_store.messages_by_chat
+    core_module._conversation_access = _core_store.access_by_chat
     core_module.get_usage_snapshot = lambda: {}
     core_module.llm_tool_loop = _fake_llm_tool_loop
 
@@ -446,8 +462,13 @@ async def test_stream_llm_response_formats_sectioned_markdown_lists(monkeypatch)
         return markdown_text
 
     core_module = ModuleType("omicsclaw.runtime.agent.state")
-    core_module.conversations = {}
-    core_module._conversation_access = {}
+    # Mirror omicsclaw.runtime.agent.state: conversations/_conversation_access are
+    # aliases of the transcript store's dicts, so the bridge helpers mutate through
+    # the store (ADR 0040 mirror-consistency), not a standalone dict.
+    _core_store = TranscriptStore()
+    core_module.transcript_store = _core_store
+    core_module.conversations = _core_store.messages_by_chat
+    core_module._conversation_access = _core_store.access_by_chat
     core_module.get_usage_snapshot = lambda: {}
     core_module.llm_tool_loop = _fake_llm_tool_loop
 
@@ -507,8 +528,13 @@ async def test_stream_llm_response_separates_tool_log_from_response(monkeypatch)
         return "Analysis ready."
 
     core_module = ModuleType("omicsclaw.runtime.agent.state")
-    core_module.conversations = {}
-    core_module._conversation_access = {}
+    # Mirror omicsclaw.runtime.agent.state: conversations/_conversation_access are
+    # aliases of the transcript store's dicts, so the bridge helpers mutate through
+    # the store (ADR 0040 mirror-consistency), not a standalone dict.
+    _core_store = TranscriptStore()
+    core_module.transcript_store = _core_store
+    core_module.conversations = _core_store.messages_by_chat
+    core_module._conversation_access = _core_store.access_by_chat
     core_module.get_usage_snapshot = lambda: {}
     core_module.llm_tool_loop = _fake_llm_tool_loop
 
@@ -567,8 +593,13 @@ async def test_stream_llm_response_does_not_repeat_final_text_after_tool_interlu
         return "Final answer."
 
     core_module = ModuleType("omicsclaw.runtime.agent.state")
-    core_module.conversations = {}
-    core_module._conversation_access = {}
+    # Mirror omicsclaw.runtime.agent.state: conversations/_conversation_access are
+    # aliases of the transcript store's dicts, so the bridge helpers mutate through
+    # the store (ADR 0040 mirror-consistency), not a standalone dict.
+    _core_store = TranscriptStore()
+    core_module.transcript_store = _core_store
+    core_module.conversations = _core_store.messages_by_chat
+    core_module._conversation_access = _core_store.access_by_chat
     core_module.get_usage_snapshot = lambda: {}
     core_module.llm_tool_loop = _fake_llm_tool_loop
 
@@ -635,8 +666,13 @@ async def test_stream_llm_response_marks_followup_tool_batches_as_updates(monkey
         return "Done."
 
     core_module = ModuleType("omicsclaw.runtime.agent.state")
-    core_module.conversations = {}
-    core_module._conversation_access = {}
+    # Mirror omicsclaw.runtime.agent.state: conversations/_conversation_access are
+    # aliases of the transcript store's dicts, so the bridge helpers mutate through
+    # the store (ADR 0040 mirror-consistency), not a standalone dict.
+    _core_store = TranscriptStore()
+    core_module.transcript_store = _core_store
+    core_module.conversations = _core_store.messages_by_chat
+    core_module._conversation_access = _core_store.access_by_chat
     core_module.get_usage_snapshot = lambda: {}
     core_module.llm_tool_loop = _fake_llm_tool_loop
 
