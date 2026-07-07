@@ -8,13 +8,13 @@ from typing import Any, Callable
 
 
 # --------------------------------------------------------------------------- #
-# §9.3 — input-context budget status (token-based; mirrors cellclaw's
-# ContextBudgetEvaluator). Pure primitives here; wiring is a separate slice.
+# §9.3 — input-context budget status (token-based). Pure primitives here;
+# wiring is a separate slice.
 # --------------------------------------------------------------------------- #
 
 
 class ContextBudgetStatus(str, Enum):
-    """Input-context budget pressure (cellclaw ContextStatus parity)."""
+    """Input-context budget pressure."""
 
     OK = "ok"
     WARNING = "warning"

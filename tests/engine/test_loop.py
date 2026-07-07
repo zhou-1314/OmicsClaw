@@ -71,6 +71,25 @@ def test_resolve_max_prompt_tokens_scales_with_window(monkeypatch):
     assert resolve_max_prompt_tokens("big") == 9000
 
 
+def test_resolve_max_prompt_tokens_small_window_never_zero(monkeypatch):
+    """G / ADR 0039: a known window at/near reserved_output (8192) must NOT yield a 0
+    budget. A 0 ``max_prompt_tokens`` silently disables proactive collapse — the sole
+    overflow handler — because the collapse/auto thresholds become None. Fall back to a
+    fraction of the window so proactive collapse still fires on tiny/edge windows."""
+    monkeypatch.delenv("OMICSCLAW_MAX_PROMPT_TOKENS", raising=False)
+    monkeypatch.delenv("OMICSCLAW_MAX_PROMPT_CHARS", raising=False)
+    windows = {"w8192": 8192, "w8193": 8193, "w4096": 4096, "w16000": 16_000}
+    monkeypatch.setattr(_engine_loop, "get_context_window", lambda m: windows.get(m))
+
+    # Windows where floor((window - 8192) * 0.5) collapses to 0 must stay positive.
+    assert resolve_max_prompt_tokens("w8192") > 0
+    assert resolve_max_prompt_tokens("w8193") > 0
+    assert resolve_max_prompt_tokens("w4096") > 0
+    # A window comfortably above reserved_output keeps the standard window-relative
+    # budget (no behavior change for normal windows).
+    assert resolve_max_prompt_tokens("w16000") == (16_000 - 8192) // 2
+
+
 def test_collapse_llm_summary_env_toggle(monkeypatch):
     # ADR 0039 D5: default-ON; OMICSCLAW_COLLAPSE_LLM_SUMMARY=0 disables it.
     from omicsclaw.engine.loop import _collapse_llm_summary_enabled

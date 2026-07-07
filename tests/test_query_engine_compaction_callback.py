@@ -108,6 +108,63 @@ def test_callback_fires_when_compaction_applied(tmp_path):
     assert event.budget_status == event.local_budget_status
 
 
+def test_emitted_status_reports_pre_compaction_pressure(tmp_path):
+    # D1(a): the emitted CompactionEvent must carry the PRE-compaction pressure (the
+    # status that TRIGGERED the collapse), not the deflated post-collapse value.
+    # With collapse_target_ratio set, the collapse drives the post total to ~35%
+    # (OK), so if the wire reported the post value the badge would read OK — the
+    # exact bug. It must instead read the elevated pre value.
+    from omicsclaw.runtime.context.budget import ContextBudgetStatus
+    from omicsclaw.runtime.context.compaction import STAGE_CONTEXT_COLLAPSE
+
+    captured: list[CompactionEvent] = []
+    transcript_store = TranscriptStore(sanitizer=sanitize_tool_history)
+    _seed_long_history(transcript_store, "chat-P", turns=8)
+    result_store = ToolResultStore(storage_dir=tmp_path / "tool_results")
+    runtime = ToolRegistry([]).build_runtime({})
+
+    asyncio.run(
+        run_query_engine(
+            llm=_FakeLLM(),
+            context=QueryEngineContext(
+                chat_id="chat-P", session_id=None,
+                system_prompt="SYS", user_message_content="hi",
+            ),
+            tool_runtime=runtime,
+            transcript_store=transcript_store,
+            tool_result_store=result_store,
+            config=QueryEngineConfig(
+                model="fake",
+                context_compaction=ContextCompactionConfig(
+                    max_prompt_tokens=1000,
+                    collapse_trigger_ratio=0.45,
+                    collapse_target_ratio=0.35,  # post-collapse ~OK
+                    auto_compact_trigger_ratio=0.99,
+                    collapse_preserve_messages=4,
+                    collapse_preserve_tokens=150,
+                ),
+            ),
+            callbacks=QueryEngineCallbacks(
+                on_context_compacted=lambda e: captured.append(e)
+            ),
+        )
+    )
+
+    assert captured
+    event = captured[0]
+    assert STAGE_CONTEXT_COLLAPSE in event.applied_stages  # a real collapse fired
+    # The wire carries the elevated pre-compaction pressure — NOT the deflated
+    # post-collapse OK reading that the old code sent.
+    assert event.budget_status in (
+        ContextBudgetStatus.COMPRESS,
+        ContextBudgetStatus.CRITICAL,
+        ContextBudgetStatus.BLOCK,
+    )
+    assert event.budget_status != ContextBudgetStatus.OK
+    # The two wire keys stay equal on the pre-compaction path too (invariant e).
+    assert event.budget_status == event.local_budget_status
+
+
 def test_auto_compaction_persists_summary_and_trimmed_history(tmp_path):
     transcript_store = TranscriptStore(sanitizer=sanitize_tool_history)
     _seed_long_history(transcript_store, "chat-persist")
@@ -244,3 +301,50 @@ def test_callback_failure_does_not_abort_turn(tmp_path):
     )
 
     assert final == "ok"
+
+
+def test_persist_prepared_compaction_gated_on_real_collapse_stage():
+    # C1: after the first collapse, persisted_summary is non-empty on EVERY
+    # subsequent turn (it always re-folds the hoisted prior summary). Gating
+    # persistence on "a summary exists" therefore rewrites the whole transcript
+    # every turn (O(N) DELETE+INSERT) and durably persists snip/micro truncation of
+    # older messages on non-collapse turns. Persistence must be gated on an ACTUAL
+    # collapse/auto/reactive stage firing this turn.
+    from dataclasses import replace
+
+    from omicsclaw.runtime.agent.query_engine import _persist_prepared_compaction
+    from omicsclaw.runtime.context.compaction import (
+        PreparedModelMessages,
+        STAGE_CONTEXT_COLLAPSE,
+        STAGE_MICRO_COMPACT,
+        STAGE_SNIP_COMPACT,
+    )
+
+    calls: list = []
+    fake_store = SimpleNamespace(
+        replace_history=lambda chat_id, msgs: calls.append((chat_id, list(msgs)))
+    )
+
+    steady = PreparedModelMessages(
+        system_prompt="SYS",
+        messages=[{"role": "user", "content": "hi"}],
+        estimated_tokens=10,
+        applied_stages=(STAGE_SNIP_COMPACT, STAGE_MICRO_COMPACT),
+        persisted_summary="### Context Collapse\n\nprior summary",
+    )
+    # Post-collapse steady state, no collapse stage this turn -> NO rewrite.
+    _persist_prepared_compaction(
+        transcript_store=fake_store, chat_id="c", prepared_messages=steady
+    )
+    assert calls == []
+
+    # A turn where a real collapse fired -> persist exactly once, as [summary, *msgs].
+    collapsed = replace(
+        steady, applied_stages=(STAGE_MICRO_COMPACT, STAGE_CONTEXT_COLLAPSE)
+    )
+    _persist_prepared_compaction(
+        transcript_store=fake_store, chat_id="c", prepared_messages=collapsed
+    )
+    assert len(calls) == 1
+    assert calls[0][0] == "c"
+    assert calls[0][1][0]["role"] == "system"

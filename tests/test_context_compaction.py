@@ -251,6 +251,73 @@ def test_byte_stable_single_collapse(tmp_path):
     )
 
 
+def test_byte_stable_collapse_with_persisted_summary_cap(tmp_path):
+    # C2: with the persisted-summary cap ACTIVE and a large accumulated prior summary
+    # that the cap trims, the one-collapse = one-rewarm invariant must still hold —
+    # the bounded summary re-hoists byte-identically (idempotent trim).
+    from omicsclaw.runtime.context.compaction import _SUMMARY_ELISION_MARKER
+
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    big_prior = "\n\n---\n\n".join(
+        f"### Prior {i}\n\nkept content {i} " + ("w " * 40) for i in range(15)
+    )
+    config = ContextCompactionConfig(
+        max_prompt_tokens=1_000, snip_message_chars=4_000, protected_tail_messages=2,
+        collapse_trigger_ratio=0.45, auto_compact_trigger_ratio=0.99,
+        collapse_preserve_messages=4, collapse_preserve_tokens=150,
+        max_persisted_summary_tokens=120,  # forces a trim of the 15-block prior
+    )
+    history = [
+        {"role": "system", "content": wrap_compaction_summary(big_prior)},
+        *_pairs(8, "A" * 180),
+    ]
+    first = _prep(
+        system_prompt="SYSTEM", history=history, chat_id="c",
+        tool_result_store=store, config=config,
+    )
+    assert STAGE_CONTEXT_COLLAPSE in first.applied_stages
+    # The cap trimmed the accumulated prior summary.
+    assert _SUMMARY_ELISION_MARKER in first.persisted_summary
+    # ...and the invariant still holds despite the active trim.
+    _assert_one_compaction_one_rewarm(
+        first, config=config, tool_result_store=store, chat_id="c"
+    )
+
+
+def test_byte_stable_collapse_with_persisted_summary_cap_target_branch(tmp_path):
+    # C2 (production path): the engine sets collapse_target_ratio (0.55), so collapse
+    # goes through the 3-pass _collapse_with_target that sizes the tail against the
+    # rendered system. With the persisted-summary cap ALSO active, that rendered
+    # system is the bounded summary — verify the 3-pass path stays byte-stable
+    # (one-collapse = one-rewarm) when the cap actively trims.
+    from omicsclaw.runtime.context.compaction import _SUMMARY_ELISION_MARKER
+
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    big_prior = "\n\n---\n\n".join(
+        f"### Prior {i}\n\nkept content {i} " + ("w " * 40) for i in range(15)
+    )
+    config = ContextCompactionConfig(
+        max_prompt_tokens=1_000, snip_message_chars=4_000, protected_tail_messages=2,
+        collapse_trigger_ratio=0.45, collapse_target_ratio=0.35,  # 3-pass target branch
+        auto_compact_trigger_ratio=0.99,
+        collapse_preserve_messages=4, collapse_preserve_tokens=150,
+        max_persisted_summary_tokens=120,
+    )
+    history = [
+        {"role": "system", "content": wrap_compaction_summary(big_prior)},
+        *_pairs(8, "A" * 180),
+    ]
+    first = _prep(
+        system_prompt="SYSTEM", history=history, chat_id="c",
+        tool_result_store=store, config=config,
+    )
+    assert STAGE_CONTEXT_COLLAPSE in first.applied_stages
+    assert _SUMMARY_ELISION_MARKER in first.persisted_summary
+    _assert_one_compaction_one_rewarm(
+        first, config=config, tool_result_store=store, chat_id="c"
+    )
+
+
 def test_byte_stable_collapse_plus_auto(tmp_path):
     store = ToolResultStore(storage_dir=tmp_path / "tr")
     config = ContextCompactionConfig(
@@ -908,15 +975,67 @@ def test_drops_required_tokens_unit():
     assert _drops_required_tokens("there is a pending TODO", "all done, nothing left")
 
 
+def test_drops_required_tokens_matches_relative_and_windows_paths():
+    # A3: a full_result_path value can be a RELATIVE path or a WINDOWS drive path,
+    # not only an absolute POSIX path. The gate must require those too, else a
+    # collapse summary could silently drop a relative/Windows blob reference.
+    from omicsclaw.runtime.context.compaction import _drops_required_tokens
+
+    # relative multi-segment path with a file extension
+    assert _drops_required_tokens("saved outputs/de/results.json", "no path here")
+    assert not _drops_required_tokens(
+        "saved outputs/de/results.json", "kept outputs/de/results.json"
+    )
+    # Windows drive path — both backslash and forward-slash separators.
+    assert _drops_required_tokens(r"wrote C:\runs\de\out.csv", "no path here")
+    assert not _drops_required_tokens(
+        r"wrote C:\runs\de\out.csv", r"kept C:\runs\de\out.csv"
+    )
+    assert _drops_required_tokens("wrote C:/runs/de/out.csv", "no path here")
+    assert not _drops_required_tokens(
+        "wrote C:/runs/de/out.csv", "kept C:/runs/de/out.csv"
+    )
+
+
+def test_drops_required_tokens_does_not_overmatch_urls_or_numeric_ratios():
+    # A3 hardening: the path matcher must NOT treat a URL or a numeric ratio/date as
+    # a required file path. Over-matching those revives the exact inert-summary
+    # failure mode this gate was fixed to avoid — forcing a faithful prose summary
+    # back to the template because it did not reproduce an incidental URL verbatim.
+    from omicsclaw.runtime.context.compaction import _drops_required_tokens
+
+    # A URL scheme must not yield a spurious "s://..." / "/host/path" required token.
+    assert not _drops_required_tokens(
+        "see https://example.com/foo.json for details", "summarized the run"
+    )
+    # Numeric ratios / dates are not paths (no alphabetic file extension).
+    assert not _drops_required_tokens("throughput was 3/4.5 units", "throughput noted")
+    assert not _drops_required_tokens("on 2024/01/15 we ran it", "ran on that date")
+    # ...but a real relative or absolute path IS still required.
+    assert _drops_required_tokens("wrote outputs/de/results.json", "done")
+    assert _drops_required_tokens("wrote /work/de/results.json", "done")
+
+
 def test_f6_drops_required_path_falls_back_to_template(tmp_path):
-    # B1: an LLM summary that OMITS a file path present in the omitted content is
-    # rejected (no retry) -> the deterministic template is used instead.
+    # B1: an LLM summary that OMITS a file path the deterministic TEMPLATE kept
+    # (a compacted tool-result ref) is rejected (no retry) -> the template is used.
+    # ADR 0039 pins the required-token set to the template, so the dropped path must
+    # be one the template actually preserved (a tool ref), not merely present in the
+    # raw omitted content.
     store = ToolResultStore(storage_dir=tmp_path / "tr")
     config = _f6_config()
     path = "/data/study/sample.h5ad"
     hist = [
-        {"role": "user", "content": f"please read {path} " + ("Q" * 200)},
-        {"role": "assistant", "content": "reading " + ("R" * 200)},
+        {"role": "user", "content": "read the file " + ("Q" * 200)},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "call-7", "type": "function",
+                 "function": {"name": "load", "arguments": "{}"}}
+            ],
+        },
+        _tool_result_message("call-7", "load", path),
     ] + _pairs(10, "A" * 180)
     res = _prep_llm(
         _FakeSummaryLLM(content="condensed the whole conversation, ran some analysis"),
@@ -924,13 +1043,149 @@ def test_f6_drops_required_path_falls_back_to_template(tmp_path):
         tool_result_store=store, config=config,
     )
     assert STAGE_CONTEXT_COLLAPSE in res.applied_stages
-    # The path was omitted; the LLM summary dropped it -> gate rejected it.
+    # The template kept the path; the LLM summary dropped it -> gate rejected it.
     assert "condensed the whole conversation" not in res.persisted_summary
+    # ...and the deterministic template it fell back to preserved the path.
+    assert path in res.persisted_summary
+
+
+def _tool_result_message(call_id, tool_name, path, *, preview="P" * 200):
+    return {
+        "role": "tool",
+        "tool_call_id": call_id,
+        "content": (
+            "[tool result compacted]\n"
+            f"tool: {tool_name}\n"
+            "bytes: 8192\n"
+            f"full_result_path: {path}\n"
+            "preview:\n" + preview
+        ),
+    }
+
+
+def test_f6_llm_summary_preserving_tool_path_value_is_accepted(tmp_path):
+    # A2 (ADR 0039 D5 / B1): the fidelity gate must key its required tokens off the
+    # deterministic TEMPLATE, which renders a compacted tool result's path VALUE
+    # (`-> `/path``) but NOT the internal field name `full_result_path`. A faithful
+    # prose summary that preserves the path value has no semantic reason to echo the
+    # literal field name, so it must be ACCEPTED — not paid-for-then-discarded.
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    config = _f6_config()
+    path = "/work/omics/outputs/de/results.json"
+    hist = [
+        {"role": "user", "content": "run DE " + ("Q" * 200)},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "call-1", "type": "function",
+                 "function": {"name": "run_de", "arguments": "{}"}}
+            ],
+        },
+        _tool_result_message("call-1", "run_de", path),
+    ] + _pairs(10, "A" * 180)
+    # Faithful summary: keeps the path value, does not mention `full_result_path`.
+    faithful = f"Condensed the episode: ran DE, results at {path}. Continue from there."
+    res = _prep_llm(
+        _FakeSummaryLLM(content=faithful),
+        system_prompt="SYSTEM", history=hist, chat_id="c",
+        tool_result_store=store, config=config,
+    )
+    assert STAGE_CONTEXT_COLLAPSE in res.applied_stages
+    assert faithful in res.persisted_summary
 
 
 def test_collapse_llm_summary_default_on():
     # ADR 0039 D5: default-ON now that the token cap + B1 gate make it safe.
     assert ContextCompactionConfig().collapse_llm_summary_enabled is True
+
+
+def test_pre_compaction_budget_status_reflects_trigger_pressure(tmp_path):
+    # D1(a): on a collapse turn, the actionable status the wire reports must reflect
+    # the pressure that TRIGGERED the collapse (pre-compaction), not the deflated
+    # post-collapse value (collapse just drove the total down to ~target). Otherwise
+    # the App badge reads ~OK exactly when pressure was highest.
+    from omicsclaw.runtime.context.budget import ContextBudgetStatus
+
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    config = ContextCompactionConfig(
+        max_prompt_tokens=1_000, snip_message_chars=4_000, protected_tail_messages=2,
+        collapse_trigger_ratio=0.45, collapse_target_ratio=0.35,
+        auto_compact_trigger_ratio=0.99,
+        collapse_preserve_messages=4, collapse_preserve_tokens=150,
+    )
+    res = _prep(
+        system_prompt="SYSTEM", history=_pairs(8, "A" * 180), chat_id="c",
+        tool_result_store=store, config=config,
+    )
+    assert STAGE_CONTEXT_COLLAPSE in res.applied_stages
+    # Post-collapse status is deflated (collapse converged the total to ~0.35 target).
+    assert res.budget_status == ContextBudgetStatus.OK
+    # Pre-compaction status reflects the >=80% pressure that fired the collapse.
+    assert res.pre_compaction_budget_status in (
+        ContextBudgetStatus.COMPRESS,
+        ContextBudgetStatus.CRITICAL,
+        ContextBudgetStatus.BLOCK,
+    )
+
+
+def test_pre_compaction_budget_status_reactive_path(tmp_path):
+    # D1(a): the reactive (413-backstop) path also reports the PRE-reactive pressure
+    # — genuinely over the model window — not the post-reactive total.
+    from omicsclaw.runtime.context.budget import ContextBudgetStatus
+
+    store = ToolResultStore(storage_dir=tmp_path / "tr")
+    config = ContextCompactionConfig(
+        max_prompt_tokens=1_000, snip_message_chars=4_000, protected_tail_messages=2,
+        reactive_preserve_messages=4, reactive_preserve_tokens=150,
+    )
+    res = _prep(
+        system_prompt="SYSTEM", history=_pairs(15, "A" * 200), chat_id="c",
+        tool_result_store=store, config=config, force_reactive_compact=True,
+    )
+    assert STAGE_REACTIVE_COMPACT in res.applied_stages
+    # Pre-reactive pressure is over the window -> elevated (not the deflated post value).
+    assert res.pre_compaction_budget_status in (
+        ContextBudgetStatus.COMPRESS,
+        ContextBudgetStatus.CRITICAL,
+        ContextBudgetStatus.BLOCK,
+    )
+
+
+def test_combine_persisted_summaries_bounds_growth_and_is_idempotent():
+    # C2: the persisted collapse summary accumulates one section per collapse and
+    # carries previous_summary verbatim forever, so over a long multi-collapse
+    # session it grows ~linearly and eventually freezes a large share of the budget.
+    # With a token cap it must (a) stay bounded, (b) always keep the NEWEST section,
+    # and (c) be IDEMPOTENT when re-combined next turn (byte-stable re-hoist — the
+    # one-collapse = one-rewarm invariant).
+    from omicsclaw.runtime.context.compaction import (
+        _SUMMARY_ELISION_MARKER,
+        _combine_persisted_summaries,
+    )
+    from omicsclaw.runtime.context.budget import estimate_text_tokens
+
+    prev = "\n\n---\n\n".join(
+        f"### Section {i}\n\n" + ("word " * 60) for i in range(20)
+    )
+    cap = 200
+    unbounded = _combine_persisted_summaries(prev, [("Newest", "fresh " * 20)])
+    bounded = _combine_persisted_summaries(
+        prev, [("Newest", "fresh " * 20)], max_tokens=cap
+    )
+
+    # (a) bounded well below the unbounded accumulation, within cap + marker overhead.
+    assert estimate_text_tokens(bounded) < estimate_text_tokens(unbounded)
+    assert estimate_text_tokens(bounded) <= cap + estimate_text_tokens(
+        _SUMMARY_ELISION_MARKER
+    ) + 8
+    # (b) the newest section survives; an elision marker signals the trim.
+    assert "Newest" in bounded
+    assert _SUMMARY_ELISION_MARKER in bounded
+    # (c) re-hoisting a bounded summary with no new sections is byte-identical.
+    assert _combine_persisted_summaries(bounded, [], max_tokens=cap) == bounded
+    # No cap (default) preserves the legacy unbounded behavior.
+    assert _combine_persisted_summaries(prev, [], max_tokens=None) == prev.strip()
 
 
 def test_f6_llm_sees_omitted_history_and_antimimicry_prompt(tmp_path):

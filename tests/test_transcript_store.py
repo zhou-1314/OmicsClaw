@@ -274,6 +274,39 @@ def test_extract_compacted_tool_result_refs_parses_runtime_references():
     ]
 
 
+def test_extract_compacted_tool_result_refs_recognizes_micro_marker():
+    # A1 fix: micro-compaction rewrites a tool result to first line
+    # "[tool result micro-compacted]" (a DIFFERENT marker than "[tool result
+    # compacted]"). The collapse summary's only tool-path extractor must accept it
+    # too, otherwise every micro-compacted full_result_path is dropped from the
+    # persisted summary — violating ADR 0040 D6's blob-GC precondition.
+    refs = extract_compacted_tool_result_refs(
+        [
+            {
+                "role": "tool",
+                "tool_call_id": "call-9",
+                "content": (
+                    "[tool result micro-compacted]\n"
+                    "tool: run_de\n"
+                    "bytes: 8192\n"
+                    "policy: reference\n"
+                    "full_result_path: /work/omics/outputs/de/results.json\n"
+                    "note: reload the referenced file if earlier tool details are needed."
+                ),
+            },
+        ]
+    )
+
+    assert refs == [
+        CompactedToolResultRef(
+            tool_call_id="call-9",
+            tool_name="run_de",
+            storage_path="/work/omics/outputs/de/results.json",
+            output_bytes=8192,
+        )
+    ]
+
+
 def test_build_transcript_summary_collects_compacted_plan_and_advisory_refs(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

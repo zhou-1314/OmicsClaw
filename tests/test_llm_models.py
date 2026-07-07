@@ -274,3 +274,23 @@ class TestNeverRaises:
 
     def test_get_default_features_with_non_string(self):
         assert get_default_features(42, 99) == {}  # type: ignore[arg-type]
+
+
+def test_get_context_window_uses_runtime_resolver_for_unknown(monkeypatch):
+    # #2: an unknown model falls back to a runtime (litellm) resolver when available,
+    # instead of a blind None/cap.
+    import omicsclaw.providers.models as models
+
+    monkeypatch.setattr(models, "_runtime_context_window", lambda m: 424_242)
+    assert models.get_context_window("totally-unknown-model-xyz") == 424_242
+    # Known models still short-circuit on the static registry (resolver not consulted).
+    assert models.get_context_window("claude-haiku-4-5") == 200_000
+
+
+def test_runtime_context_window_is_safe_noop_without_litellm():
+    # Without litellm (the OmicsClaw default), the resolver returns None, so the
+    # existing None-for-unknown behavior is preserved and no dependency is required.
+    import omicsclaw.providers.models as models
+
+    assert models._runtime_context_window("no-such-model-anywhere-123") is None
+    assert models.get_context_window("gpt-3.5-turbo") is None
