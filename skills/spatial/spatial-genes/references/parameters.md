@@ -6,9 +6,9 @@
 
 ## Allowed extra CLI flags
 
+- `--fdr-threshold`
 - `--flashs-bandwidth`
 - `--flashs-n-rand-features`
-- `--fdr-threshold`
 - `--method`
 - `--morans-coord-type`
 - `--morans-corr-method`

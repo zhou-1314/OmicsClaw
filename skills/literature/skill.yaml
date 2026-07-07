@@ -43,10 +43,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --data-dir
-    - --input-type
-    - --no-download
     hints: {}
   outputs:
     files:

@@ -50,29 +50,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --analysis-type
-    - --centrality-score
-    - --cluster-key
-    - --coocc-interval
-    - --coocc-n-splits
-    - --genes
-    - --getis-star
-    - --local-moran-geoda-quads
-    - --n-top-genes
-    - --ripley-max-dist
-    - --ripley-metric
-    - --ripley-mode
-    - --ripley-n-neigh
-    - --ripley-n-observations
-    - --ripley-n-simulations
-    - --ripley-n-steps
-    - --stats-corr-method
-    - --stats-n-neighs
-    - --stats-n-perms
-    - --stats-n-rings
-    - --stats-seed
-    - --stats-two-tailed
     hints:
       neighborhood_enrichment:
         priority: cluster_key → stats_n_neighs/stats_n_rings → stats_n_perms

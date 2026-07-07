@@ -41,19 +41,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --cell-type-key
-    - --condition-key
-    - --contrast
-    - --fdr
-    - --method
-    - --min-count
-    - --n-neighbors
-    - --n-permutations
-    - --prop
-    - --r-enhanced
-    - --reference-cell-type
-    - --sample-key
     hints: {}
   outputs:
     files:

@@ -12,19 +12,19 @@
 - `--cellphonedb-counts-data`
 - `--cellphonedb-iterations`
 - `--cellphonedb-pvalue`
-- `--cellphonedb-threshold`
 - `--cellphonedb-threads`
+- `--cellphonedb-threshold`
 - `--condition-key`
 - `--condition-oi`
 - `--condition-ref`
 - `--method`
-- `--nichenet-lfc-cutoff`
 - `--nichenet-expression-pct`
+- `--nichenet-lfc-cutoff`
 - `--nichenet-top-ligands`
+- `--r-enhanced`
 - `--receiver`
 - `--senders`
 - `--species`
-- `--r-enhanced`
 
 ## Per-method parameter hints
 

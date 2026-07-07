@@ -44,10 +44,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --peakwidth-max
-    - --peakwidth-min
-    - --ppm
     hints: {}
   outputs:
     files:

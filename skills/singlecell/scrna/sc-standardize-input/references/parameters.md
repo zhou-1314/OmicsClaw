@@ -6,8 +6,8 @@
 
 ## Allowed extra CLI flags
 
-- `--species`
 - `--r-enhanced`
+- `--species`
 
 ## Per-method parameter hints
 

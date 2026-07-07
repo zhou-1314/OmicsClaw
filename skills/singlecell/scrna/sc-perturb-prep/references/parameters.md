@@ -6,21 +6,21 @@
 
 ## Allowed extra CLI flags
 
-- `--mapping-file`
 - `--barcode-column`
-- `--sgrna-column`
-- `--target-column`
-- `--sep`
+- `--control-label`
+- `--control-patterns`
 - `--delimiter`
 - `--gene-position`
-- `--pert-key`
-- `--sgrna-key`
-- `--target-key`
-- `--control-patterns`
-- `--control-label`
 - `--keep-multi-guide`
-- `--species`
+- `--mapping-file`
+- `--pert-key`
 - `--r-enhanced`
+- `--sep`
+- `--sgrna-column`
+- `--sgrna-key`
+- `--species`
+- `--target-column`
+- `--target-key`
 
 ## Per-method parameter hints
 

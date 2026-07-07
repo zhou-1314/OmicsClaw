@@ -47,33 +47,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --fdr-threshold
-    - --filter-compare-abs
-    - --filter-markers
-    - --group1
-    - --group2
-    - --groupby
-    - --log2fc-threshold
-    - --max-out-group-fraction
-    - --method
-    - --min-cells-per-sample
-    - --min-counts-per-gene
-    - --min-fold-change
-    - --min-in-group-fraction
-    - --n-top-genes
-    - --pydeseq2-alpha
-    - --pydeseq2-cooks-filter
-    - --pydeseq2-fit-type
-    - --pydeseq2-independent-filter
-    - --pydeseq2-n-cpus
-    - --pydeseq2-refit-cooks
-    - --pydeseq2-size-factors-fit-type
-    - --sample-key
-    - --scanpy-corr-method
-    - --scanpy-pts
-    - --scanpy-rankby-abs
-    - --scanpy-tie-correct
     hints:
       wilcoxon:
         priority: groupby → scanpy_corr_method → filter_markers → scanpy_tie_correct

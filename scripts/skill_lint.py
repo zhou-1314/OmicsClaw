@@ -30,6 +30,13 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
 from omicsclaw.skill.parameters_md import render_parameters_md  # noqa: E402
+from omicsclaw.skill.execution.flag_introspection import (  # noqa: E402
+    RUNNER_BLOCKED_FLAGS as _RUNNER_BLOCKED_FLAGS,
+    consensus_parser_flags as _consensus_parser_flags,
+    effective_allowed_flags as _effective_allowed_flags,
+    extract_argparse_flags as _extract_argparse_flags,
+    params_dump_with_effective_flags as _params_dump_with_effective_flags,
+)
 
 REQUIRED_SECTIONS = (
     "## When to use",
@@ -262,78 +269,82 @@ def _check_gotchas_anchors(
     return errors
 
 
-# --- Check: allowed_extra_flags ⊇ argparse --------------------------------
+# --- Check: allowed_extra_flags override (ADR 0041) -----------------------
 #
-# When the user invokes `omicsclaw.py run <skill> --foo bar`, the runner at
-# `omicsclaw/core/skill_runner.py:354-378` filters out any --foo not listed
-# in the sidecar's `allowed_extra_flags`.  Empty / partial lists silently
-# drop user flags, producing wrong output with default parameters.  This
-# regression class was discovered in PR-F (proteomics / metabolomics) and
-# affects skills migrated in PR-D / PR-E too.
-
-# Locate each `add_argument(` call so we can scan its body for every
-# `--flag` literal — handles short+long pairs like `add_argument("-m",
-# "--method")` and multi-line calls.  Requires literal `--` so single-dash
-# short flags (e.g. `-m`) are correctly NOT captured.
-_ADD_ARGUMENT_OPEN_RE = re.compile(r'add_argument\s*\(')
-_FLAG_LITERAL_RE = re.compile(r'["\'](--[\w-]+)["\']')
-
-
-def _extract_argparse_flags(script_text: str) -> set[str]:
-    """Find every `--flag` literal inside an `add_argument(...)` call body.
-
-    Walks the source balancing parens so `default=foo(bar)` and similar
-    nested calls don't truncate the body early.
-    """
-    flags: set[str] = set()
-    i = 0
-    n = len(script_text)
-    while i < n:
-        match = _ADD_ARGUMENT_OPEN_RE.search(script_text, i)
-        if not match:
-            break
-        body_start = match.end()
-        depth = 1
-        j = body_start
-        while j < n and depth > 0:
-            if script_text[j] == "(":
-                depth += 1
-            elif script_text[j] == ")":
-                depth -= 1
-            j += 1
-        body = script_text[body_start: j - 1]
-        for fm in _FLAG_LITERAL_RE.finditer(body):
-            flags.add(fm.group(1))
-        i = j
-    return flags
-_RUNNER_BLOCKED_FLAGS = frozenset({"--input", "--output", "--demo"})
+# The runner filters LLM-supplied `--foo` flags against the set a skill
+# accepts (`argv_builder.filter_forwarded_args`). That set is now DERIVED at
+# runtime from the script's argparse surface (leaf) or the consensus run
+# parser (consensus) — see `omicsclaw.skill.execution.flag_introspection`, the
+# single source of truth this lint also imports. `allowed_extra_flags` is no
+# longer a hand-maintained mirror; a skill lists it only to NARROW below the
+# derived surface (e.g. a consensus shim exposing a curated subset). The check
+# below only guards such an override against typos / stale flags.
 
 
 def _check_allowed_extra_flags(skill_dir: Path, sidecar: dict) -> list[str]:
-    """Verify `allowed_extra_flags` covers every script argparse flag.
+    """Guard an optional `allowed_extra_flags` override against drift.
 
-    Excludes the runner-blocked trio (`--input`, `--output`, `--demo`),
-    which never need to be listed.
+    Empty / absent is the norm after ADR 0041 — the runtime derives the
+    allow-list from the script, so there is nothing to check. When a skill
+    *does* declare the list (a deliberate narrowing override) every entry must
+    be a flag the script actually accepts; otherwise the override silently
+    drops a real flag or references a stale one.
     """
-    errors: list[str] = []
+    allowed = set(sidecar.get("allowed_extra_flags") or [])
+    if not allowed:
+        return []  # derive-mode: nothing declared, nothing to verify
     script_name = sidecar.get("script") or ""
     script_path = skill_dir / script_name if script_name else None
     if not (script_path and script_path.exists()):
         return []  # script not co-located — skip rather than false-fail
     script_text = script_path.read_text(encoding="utf-8")
     declared = _extract_argparse_flags(script_text) - _RUNNER_BLOCKED_FLAGS
-    allowed = set(sidecar.get("allowed_extra_flags") or [])
-    missing = declared - allowed
-    extra = allowed - declared
-    for flag in sorted(missing):
-        errors.append(
-            f"parameters.yaml: allowed_extra_flags missing '{flag}' — "
-            f"declared in {script_name} via add_argument"
-        )
-    for flag in sorted(extra):
+    errors: list[str] = []
+    for flag in sorted(allowed - declared):
         errors.append(
             f"parameters.yaml: allowed_extra_flags lists '{flag}' but "
             f"{script_name} does not declare it via add_argument"
+        )
+    return errors
+
+
+def _check_hint_flags_accepted(skill_dir: Path, sidecar: dict, hints: dict) -> list[str]:
+    """Every flag a per-method hint names must be one the gate actually accepts.
+
+    `hints.*.(params|advanced_params)` feed the parameter card and autoagent
+    search space as CLI flags (`--kebab`). If a hint names a flag outside the
+    skill's effective allow-list — derived from the script (leaf) or the declared
+    consensus subset — the runner silently drops it, so the suggestion / tuned
+    value is a no-op. Runner-blocked framework flags are exempt (they are
+    injected by the runner, not forwarded from hints).
+    """
+    if not isinstance(hints, dict) or not hints:
+        return []
+    skill_type = _skill_type(sidecar)
+    script_name = sidecar.get("script") or ""
+    if skill_type != "consensus":
+        # A leaf's allow-list is DERIVED from the script; with no co-located
+        # script there is nothing to derive, so skip rather than flag every hint
+        # (mirrors _check_allowed_extra_flags). Consensus uses its declared list.
+        script_path = skill_dir / script_name if script_name else None
+        if not (script_path and script_path.exists()):
+            return []
+    allowed = _effective_allowed_flags(
+        sidecar.get("allowed_extra_flags"), skill_dir, script_name, skill_type
+    )
+    named: set[str] = set()
+    for info in hints.values():
+        if not isinstance(info, dict):
+            continue
+        for key in ("params", "advanced_params"):
+            for param in info.get(key) or []:
+                named.add("--" + str(param).replace("_", "-"))
+    errors: list[str] = []
+    for flag in sorted(named - allowed - _RUNNER_BLOCKED_FLAGS):
+        errors.append(
+            f"skill.yaml (interface.parameters): hint names '{flag}' but the skill "
+            f"does not accept it (not in the script's flags / declared override) — "
+            f"the runner would drop it"
         )
     return errors
 
@@ -535,20 +546,8 @@ def _consensus_sources() -> set[str] | None:
     return set(CONSENSUS_SOURCES)
 
 
-def _consensus_parser_flags() -> set[str] | None:
-    """`--flag` set accepted by the generic consensus ``run`` parser, or None."""
-    try:
-        from omicsclaw.runtime.consensus.run import _build_parser
-
-        parser = _build_parser()
-    except Exception:
-        return None
-    return {
-        opt
-        for action in parser._actions
-        for opt in action.option_strings
-        if opt.startswith("--")
-    }
+# `_consensus_parser_flags` is the shared `flag_introspection.consensus_parser_flags`
+# (imported at module top) — one source of truth for the consensus flag surface.
 
 
 def _check_consensus_shim(skill_dir: Path, sidecar: dict) -> list[str]:
@@ -601,9 +600,17 @@ def _check_consensus_shim(skill_dir: Path, sidecar: dict) -> list[str]:
             f"{sorted(sources)}"
         )
 
+    allowed = set(sidecar.get("allowed_extra_flags") or [])
+    if not allowed:
+        # Unlike leaf skills, a consensus shim cannot derive its allow-list: the
+        # run parser exposes every flavour's flags plus --help/--source, so an
+        # absent list would over-expose them. The curated subset must be explicit.
+        errors.append(
+            "type=consensus: allowed_extra_flags must be declared (a curated "
+            "subset of the consensus run parser; it is not auto-derived)"
+        )
     parser_flags = _consensus_parser_flags()
     if parser_flags is not None:
-        allowed = set(sidecar.get("allowed_extra_flags") or [])
         unknown = allowed - parser_flags - _RUNNER_BLOCKED_FLAGS
         for flag in sorted(unknown):
             errors.append(
@@ -785,7 +792,14 @@ def _lint_v2(skill_dir: Path) -> list[str]:
     # transitional v2 skill without the rendered doc is tolerated.
     errors.extend(
         _check_parameters_md_fresh(
-            skill_dir, manifest.interface.parameters.model_dump(), source="v2"
+            skill_dir,
+            _params_dump_with_effective_flags(
+                manifest.interface.parameters.model_dump(),
+                skill_dir,
+                manifest.runtime.entry,
+                manifest.type,
+            ),
+            source="v2",
         )
     )
 
@@ -841,6 +855,10 @@ def _lint_v2(skill_dir: Path) -> list[str]:
             for e in flag_errors
         )
         errors.extend(_check_output_contract_paths(skill_dir, synth))
+    # Applies to every type: a per-method hint must not name a flag the gate drops.
+    errors.extend(
+        _check_hint_flags_accepted(skill_dir, synth, manifest.interface.parameters.hints)
+    )
     return errors
 
 

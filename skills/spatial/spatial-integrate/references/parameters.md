@@ -7,17 +7,17 @@
 ## Allowed extra CLI flags
 
 - `--batch-key`
-- `--method`
-- `--harmony-theta`
+- `--bbknn-n-pcs`
+- `--bbknn-neighbors-within-batch`
+- `--bbknn-trim`
 - `--harmony-lambda`
 - `--harmony-max-iter`
-- `--bbknn-neighbors-within-batch`
-- `--bbknn-n-pcs`
-- `--bbknn-trim`
-- `--scanorama-knn`
-- `--scanorama-sigma`
+- `--harmony-theta`
+- `--method`
 - `--scanorama-alpha`
 - `--scanorama-batch-size`
+- `--scanorama-knn`
+- `--scanorama-sigma`
 
 ## Per-method parameter hints
 

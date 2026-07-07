@@ -44,10 +44,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --score-threshold
-    - --species
-    - --top-n
     hints: {}
   outputs:
     files:

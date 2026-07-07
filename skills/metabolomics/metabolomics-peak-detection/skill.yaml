@@ -43,11 +43,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --distance
-    - --height
-    - --prominence
-    - --sample-prefix
     hints: {}
   outputs:
     files:

@@ -49,23 +49,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --flashs-bandwidth
-    - --flashs-n-rand-features
-    - --fdr-threshold
-    - --method
-    - --morans-coord-type
-    - --morans-corr-method
-    - --morans-n-neighs
-    - --morans-n-perms
-    - --n-top-genes
-    - --sparkx-max-genes
-    - --sparkx-num-cores
-    - --sparkx-option
-    - --spatialde-aeh-lengthscale
-    - --spatialde-aeh-patterns
-    - --spatialde-min-counts
-    - --spatialde-no-aeh
     hints:
       morans:
         priority: morans_coord_type → morans_n_neighs → morans_n_perms

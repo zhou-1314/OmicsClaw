@@ -46,23 +46,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --infercnv-chunksize
-    - --infercnv-dynamic-threshold
-    - --infercnv-exclude-chromosomes
-    - --infercnv-include-sex-chromosomes
-    - --infercnv-lfc-clip
-    - --infercnv-n-jobs
-    - --method
-    - --numbat-genome
-    - --numbat-max-entropy
-    - --numbat-min-cells
-    - --numbat-min-llr
-    - --numbat-ncores
-    - --reference-cat
-    - --reference-key
-    - --step
-    - --window-size
     hints:
       infercnvpy:
         priority: reference_key/reference_cat → window_size/step → infercnv_dynamic_threshold → infercnv_lfc_clip

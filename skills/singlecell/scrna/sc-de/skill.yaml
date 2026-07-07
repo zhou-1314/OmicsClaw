@@ -42,20 +42,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --celltype-key
-    - --group1
-    - --group2
-    - --groupby
-    - --log2fc-threshold
-    - --logreg-solver
-    - --method
-    - --n-top-genes
-    - --padj-threshold
-    - --pseudobulk-min-cells
-    - --pseudobulk-min-counts
-    - --sample-key
-    - --r-enhanced
     hints:
       wilcoxon:
         priority: groupby -> n_top_genes -> group1/group2

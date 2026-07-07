@@ -38,17 +38,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --control
-    - --logfc-threshold
-    - --method
-    - --n-neighbors
-    - --pert-key
-    - --perturbation-type
-    - --pval-cutoff
-    - --r-enhanced
-    - --seed
-    - --split-by
     hints: {}
   outputs:
     files:

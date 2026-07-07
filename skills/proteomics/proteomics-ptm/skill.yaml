@@ -44,8 +44,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --loc-threshold
     hints: {}
   outputs:
     files:

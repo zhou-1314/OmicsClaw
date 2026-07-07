@@ -48,24 +48,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --cluster-key
-    - --condition-key
-    - --fdr-threshold
-    - --log2fc-threshold
-    - --method
-    - --min-counts-per-gene
-    - --min-samples-per-condition
-    - --pydeseq2-alpha
-    - --pydeseq2-cooks-filter
-    - --pydeseq2-fit-type
-    - --pydeseq2-independent-filter
-    - --pydeseq2-n-cpus
-    - --pydeseq2-refit-cooks
-    - --pydeseq2-size-factors-fit-type
-    - --reference-condition
-    - --sample-key
-    - --wilcoxon-alternative
     hints:
       pydeseq2:
         priority: condition_key/sample_key/cluster_key → reference_condition → pydeseq2_fit_type/size_factors_fit_type

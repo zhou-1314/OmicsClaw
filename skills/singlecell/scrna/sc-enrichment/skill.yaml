@@ -47,29 +47,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --engine
-    - --fdr-threshold
-    - --gene-set-db
-    - --gene-set-from-markers
-    - --gene-sets
-    - --groupby
-    - --gsea-max-size
-    - --gsea-min-size
-    - --gsea-permutation-num
-    - --gsea-ranking-metric
-    - --gsea-seed
-    - --gsea-weight
-    - --marker-group
-    - --marker-top-n
-    - --method
-    - --ora-log2fc-cutoff
-    - --ora-max-genes
-    - --ora-padj-cutoff
-    - --r-enhanced
-    - --ranking-method
-    - --species
-    - --top-terms
     hints:
       ora:
         priority: gene_sets/gene_set_db/gene_set_from_markers -> engine -> groupby/ranking_method

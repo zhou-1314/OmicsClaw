@@ -7,10 +7,10 @@
 ## Allowed extra CLI flags
 
 - `--max-reads`
+- `--r-enhanced`
 - `--read2`
 - `--sample`
 - `--threads`
-- `--r-enhanced`
 
 ## Per-method parameter hints
 

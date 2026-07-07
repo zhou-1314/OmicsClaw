@@ -37,10 +37,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --method
-    - --n-neighbors
-    - --r-enhanced
     hints:
       cytotrace_simple:
         priority: n_neighbors

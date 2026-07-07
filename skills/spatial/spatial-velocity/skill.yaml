@@ -45,46 +45,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --cluster-key
-    - --dynamical-fit-scaling
-    - --dynamical-fit-steady-states
-    - --dynamical-fit-time
-    - --dynamical-max-iter
-    - --dynamical-n-jobs
-    - --dynamical-n-top-genes
-    - --method
-    - --no-dynamical-fit-scaling
-    - --no-dynamical-fit-steady-states
-    - --no-dynamical-fit-time
-    - --no-velocity-fit-offset
-    - --no-velocity-fit-offset2
-    - --no-velocity-graph-approx
-    - --no-velocity-graph-sqrt-transform
-    - --no-velocity-use-highly-variable
-    - --no-velovi-early-stopping
-    - --velocity-fit-offset
-    - --velocity-fit-offset2
-    - --velocity-graph-approx
-    - --velocity-graph-n-neighbors
-    - --velocity-graph-sqrt-transform
-    - --velocity-min-likelihood
-    - --velocity-min-r2
-    - --velocity-min-shared-counts
-    - --velocity-n-neighbors
-    - --velocity-n-pcs
-    - --velocity-n-top-genes
-    - --velocity-use-highly-variable
-    - --velovi-batch-size
-    - --velovi-dropout-rate
-    - --velovi-early-stopping
-    - --velovi-lr
-    - --velovi-max-epochs
-    - --velovi-n-hidden
-    - --velovi-n-latent
-    - --velovi-n-layers
-    - --velovi-n-samples
-    - --velovi-weight-decay
     hints:
       stochastic:
         priority: velocity_n_neighbors/n_pcs → velocity_fit_offset/min_r2 → velocity_graph_*

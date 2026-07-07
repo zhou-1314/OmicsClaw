@@ -298,9 +298,6 @@ def _requirement_rows(domain: str) -> str:
     )
 
 
-_DEFAULT_SCAFFOLD_ALLOWED_FLAGS = ("--method", "--species")
-
-
 def _render_v2_description(skill_name: str, domain: str) -> str:
     return (
         f"Load when the user explicitly asks to create a new {domain} skill "
@@ -485,9 +482,9 @@ def build_scaffold_manifest(
     A freshly-scaffolded skill is born v2: the machine contract is the
     ``SkillManifest`` below, serialized to ``skill.yaml``.  ``load_when`` /
     ``skip_when`` mirror the scaffold's v2 description (`_render_v2_description`).
-    Both the default-scaffold and promoted-skill scripts declare
-    ``--method`` + ``--species`` via argparse, so ``allowed_extra_flags`` is
-    fixed at those two flags.  ``deps.python`` is ``deps_python`` when given
+    ``allowed_extra_flags`` is left empty: the runtime derives the accepted
+    flags from the script's argparse surface (ADR 0041), so a scaffold need not
+    mirror its own ``--method`` / ``--species``.  ``deps.python`` is ``deps_python`` when given
     (the promotion path seeds it from the rendered script's real import surface
     so ``audit_skill_requires`` starts clean) else empty (the default
     placeholder script imports only stdlib).
@@ -536,10 +533,7 @@ def build_scaffold_manifest(
         ),
         interface=Interface(
             inputs=Inputs(),
-            parameters=Parameters(
-                allowed_extra_flags=list(_DEFAULT_SCAFFOLD_ALLOWED_FLAGS),
-                hints={},
-            ),
+            parameters=Parameters(hints={}),
             outputs=Outputs(files=["report.md", "result.json"]),
         ),
         runtime=Runtime(language="python", entry=script_name),
@@ -652,16 +646,29 @@ a renderer is added under `r_visualization/<name>_publication_template.R`.
 """
 
 
-def _render_parameters_md_from_manifest(manifest) -> str:
+def _render_parameters_md_from_manifest(manifest, script_text: str = "") -> str:
     """Render references/parameters.md from the v2 manifest (ADR 0037 dual-track).
 
     Uses `omicsclaw.skill.parameters_md.render_parameters_md` with ``source="v2"``
     — the exact path `scripts/generate_parameters_md.py` and `skill_lint._lint_v2`
     take for a `skill.yaml` — so the scaffolder's output stays byte-for-byte
     consistent with the generator's `--check` freshness gate.
+
+    Since ADR 0041 the accepted flags are derived, not stored, so the empty
+    `allowed_extra_flags` override is resolved here from the freshly-generated
+    ``script_text`` (which the freshness gate later derives identically from the
+    same bytes on disk). Consensus shims keep their explicit declared subset.
     """
     from .parameters_md import render_parameters_md
-    return render_parameters_md(manifest.interface.parameters.model_dump(), source="v2")
+    from .execution.flag_introspection import effective_allowed_flags_from_script_text
+
+    params = manifest.interface.parameters.model_dump()
+    params["allowed_extra_flags"] = sorted(
+        effective_allowed_flags_from_script_text(
+            params.get("allowed_extra_flags"), script_text, manifest.type
+        )
+    )
+    return render_parameters_md(params, source="v2")
 
 
 def render_skill_script(
@@ -1463,7 +1470,7 @@ def create_skill_scaffold(
         # sync with `skill_lint._lint_v2` + `generate_parameters_md --check`
         # (byte-for-byte diff on the v2 track).
         (references_dir / "parameters.md").write_text(
-            _render_parameters_md_from_manifest(manifest),
+            _render_parameters_md_from_manifest(manifest, script_text),
             encoding="utf-8",
         )
         relative_created_paths.append(Path("references") / "parameters.md")

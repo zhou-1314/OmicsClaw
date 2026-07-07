@@ -42,9 +42,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --group-a-prefix
-    - --group-b-prefix
     hints: {}
   outputs:
     files:

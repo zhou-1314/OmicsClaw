@@ -46,12 +46,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --control-prefix
-    - --lfc-cutoff
-    - --method
-    - --padj-cutoff
-    - --treat-prefix
     hints: {}
   outputs:
     files:

@@ -6,13 +6,13 @@
 
 ## Allowed extra CLI flags
 
-- `--method`
-- `--n-programs`
-- `--n-iter`
-- `--seed`
 - `--layer`
-- `--top-genes`
+- `--method`
+- `--n-iter`
+- `--n-programs`
 - `--r-enhanced`
+- `--seed`
+- `--top-genes`
 
 ## Per-method parameter hints
 

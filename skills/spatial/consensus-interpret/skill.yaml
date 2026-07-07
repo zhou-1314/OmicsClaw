@@ -46,15 +46,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --tissue
-    - --adata
-    - --markers
-    - --no-llm
-    - --seed
-    - --top-k-markers
-    - --top-k-next-steps
-    - --coverage-floor
     hints: {}
   outputs:
     files:

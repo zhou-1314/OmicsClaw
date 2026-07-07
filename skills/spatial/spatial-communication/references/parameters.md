@@ -7,20 +7,20 @@
 ## Allowed extra CLI flags
 
 - `--cell-type-key`
-- `--method`
-- `--species`
+- `--cellchat-min-cells`
+- `--cellchat-prob-type`
+- `--cellphonedb-iterations`
+- `--cellphonedb-threshold`
+- `--fastccc-complex-aggregation`
+- `--fastccc-lr-combination`
+- `--fastccc-min-percentile`
+- `--fastccc-single-unit-summary`
 - `--liana-expr-prop`
 - `--liana-min-cells`
 - `--liana-n-perms`
 - `--liana-resource`
-- `--cellphonedb-iterations`
-- `--cellphonedb-threshold`
-- `--fastccc-single-unit-summary`
-- `--fastccc-complex-aggregation`
-- `--fastccc-lr-combination`
-- `--fastccc-min-percentile`
-- `--cellchat-prob-type`
-- `--cellchat-min-cells`
+- `--method`
+- `--species`
 
 ## Per-method parameter hints
 

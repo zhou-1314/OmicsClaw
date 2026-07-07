@@ -17,8 +17,8 @@
 - `--padj-threshold`
 - `--pseudobulk-min-cells`
 - `--pseudobulk-min-counts`
-- `--sample-key`
 - `--r-enhanced`
+- `--sample-key`
 
 ## Per-method parameter hints
 

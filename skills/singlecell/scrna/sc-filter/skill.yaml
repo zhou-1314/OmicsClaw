@@ -43,17 +43,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --doublet-score-threshold
-    - --max-counts
-    - --max-genes
-    - --max-mt-percent
-    - --min-cells
-    - --min-counts
-    - --min-genes
-    - --no-remove-doublets
-    - --r-enhanced
-    - --tissue
     hints:
       threshold_filtering:
         priority: tissue -> min_genes/max_mt_percent -> min_cells -> count caps

@@ -6,24 +6,24 @@
 
 ## Allowed extra CLI flags
 
-- `--members`
-- `--integration-methods`
-- `--resolution`
-- `--batch-key`
-- `--include-scvi`
-- `--vote-baseline`
 - `--all`
-- `--confirm-plan`
-- `--non-interactive`
 - `--alpha`
+- `--batch-key`
 - `--beta`
+- `--confirm-plan`
+- `--include-scvi`
+- `--integration-methods`
 - `--max-class-frac`
+- `--max-parallel`
+- `--members`
+- `--non-interactive`
 - `--operator`
+- `--resolution`
+- `--run-id`
 - `--seed`
 - `--timeout`
-- `--max-parallel`
 - `--top-k`
-- `--run-id`
+- `--vote-baseline`
 
 ## Per-method parameter hints
 

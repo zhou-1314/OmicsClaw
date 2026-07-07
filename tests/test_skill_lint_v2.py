@@ -62,12 +62,17 @@ def test_missing_skip_when_flagged(tmp_path):
     assert any("skip_when" in e for e in errs)
 
 
-def test_allowed_extra_flags_must_match_argparse(tmp_path):
+def test_allowed_extra_flags_override_stale_flag_flagged(tmp_path):
     sd = tmp_path / "spatial-demo"
     sd.mkdir(parents=True)
-    manifest = parse_skill_manifest(_v2_doc())  # no allowed_extra_flags declared
+    manifest = parse_skill_manifest(
+        _v2_doc(interface={"parameters": {"allowed_extra_flags": ["--bogus"]}})
+    )
     (sd / "skill.yaml").write_text(manifest.to_yaml(), encoding="utf-8")
-    # script declares a flag the manifest omits → must be flagged
+    # ADR 0041: allowed_extra_flags is an optional narrowing override, no longer
+    # a mirror. A flag the script declares but the override omits (`--resolution`)
+    # is fine (derived); only a stale override entry the script lacks (`--bogus`)
+    # is flagged — with v2-context wording, not "parameters.yaml:".
     (sd / "spatial_demo.py").write_text(
         "import argparse\n"
         "def main(argv=None):\n"
@@ -76,8 +81,8 @@ def test_allowed_extra_flags_must_match_argparse(tmp_path):
         encoding="utf-8",
     )
     errs = skill_lint.lint_skill(sd)
-    assert any("--resolution" in e for e in errs)
-    # v2-context wording, not "parameters.yaml:"
+    assert any("--bogus" in e for e in errs)
+    assert not any("--resolution" in e for e in errs)
     assert any("skill.yaml (interface.parameters)" in e for e in errs)
 
 

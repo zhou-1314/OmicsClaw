@@ -6,22 +6,22 @@
 
 ## Allowed extra CLI flags
 
-- `--members`
-- `--pseudotime-methods`
-- `--root-cluster`
-- `--root-cell`
-- `--operator`
 - `--all`
-- `--confirm-plan`
-- `--non-interactive`
 - `--alpha`
 - `--beta`
+- `--confirm-plan`
 - `--max-class-frac`
+- `--max-parallel`
+- `--members`
+- `--non-interactive`
+- `--operator`
+- `--pseudotime-methods`
+- `--root-cell`
+- `--root-cluster`
+- `--run-id`
 - `--seed`
 - `--timeout`
-- `--max-parallel`
 - `--top-k`
-- `--run-id`
 
 ## Per-method parameter hints
 

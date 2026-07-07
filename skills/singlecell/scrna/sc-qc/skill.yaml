@@ -45,9 +45,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --species
-    - --r-enhanced
     hints:
       qc_metrics:
         priority: species

@@ -47,19 +47,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --batch-key
-    - --method
-    - --harmony-theta
-    - --harmony-lambda
-    - --harmony-max-iter
-    - --bbknn-neighbors-within-batch
-    - --bbknn-n-pcs
-    - --bbknn-trim
-    - --scanorama-knn
-    - --scanorama-sigma
-    - --scanorama-alpha
-    - --scanorama-batch-size
     hints:
       harmony:
         priority: harmony_theta → harmony_lambda → harmony_max_iter

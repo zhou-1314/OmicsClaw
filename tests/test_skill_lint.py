@@ -510,9 +510,9 @@ def _flag_script(*flags: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def test_allowed_extra_flags_matches_argparse(tmp_path: Path) -> None:
-    """yaml.allowed_extra_flags must list exactly the script's argparse flags
-    (minus --input / --output / --demo, which the runner blocks)."""
+def test_allowed_extra_flags_override_subset_of_argparse_passes(tmp_path: Path) -> None:
+    """An explicit allowed_extra_flags override that is a subset of the script's
+    argparse flags is a valid narrowing (ADR 0041) — no error."""
     sidecar = {**VALID_SIDECAR, "allowed_extra_flags": ["--alpha", "--method"]}
     skill = _write_v2_skill(
         tmp_path / "demo",
@@ -523,8 +523,10 @@ def test_allowed_extra_flags_matches_argparse(tmp_path: Path) -> None:
     assert not any("allowed_extra_flags" in e for e in errors), errors
 
 
-def test_allowed_extra_flags_missing_declared_flag_fails(tmp_path: Path) -> None:
-    """A flag declared in argparse but absent from yaml triggers an error."""
+def test_allowed_extra_flags_missing_declared_flag_is_ok(tmp_path: Path) -> None:
+    """After ADR 0041 the runtime derives the allow-list from argparse, so a
+    flag the script declares but that is absent from an explicit override is a
+    deliberate narrowing, NOT an error (the old 'missing' check is gone)."""
     sidecar = {**VALID_SIDECAR, "allowed_extra_flags": ["--method"]}
     skill = _write_v2_skill(
         tmp_path / "demo",
@@ -532,7 +534,7 @@ def test_allowed_extra_flags_missing_declared_flag_fails(tmp_path: Path) -> None
         script_text=_flag_script("--method", "--alpha"),
     )
     errors = skill_lint.lint_skill(skill)
-    assert any("missing '--alpha'" in e for e in errors), errors
+    assert not any("allowed_extra_flags" in e for e in errors), errors
 
 
 def test_allowed_extra_flags_lists_undeclared_flag_fails(tmp_path: Path) -> None:
@@ -713,18 +715,17 @@ def test_output_contract_does_not_scan_unimported_lib(tmp_path: Path) -> None:
     assert not any("'tables/wanted.csv'" in e for e in errors), errors
 
 
-def test_argparse_short_flag_does_not_satisfy_long_flag_requirement(tmp_path: Path) -> None:
-    """`add_argument("-m", "--method")` must register `--method` (not `-m`)
-    and require `--method` in `allowed_extra_flags`.  The earlier regex
-    `[\\-\\-]` collapsed to `[-]` and would have matched `-m` instead."""
-    sidecar = {**VALID_SIDECAR, "allowed_extra_flags": []}
+def test_argparse_extractor_registers_long_flag_not_short(tmp_path: Path) -> None:
+    """`add_argument("-m", "--method")` registers `--method`, never `-m`
+    (single-dash short flags are never allow-listed). Guards the extractor
+    regex against collapsing `--` to `-`. ADR 0041 moved the extractor to
+    ``flag_introspection``; assert it directly (no lint_skill)."""
+    from omicsclaw.skill.execution.flag_introspection import extract_argparse_flags
+
     script = _flag_script() + 'p.add_argument("-m", "--method")\n'
-    skill = _write_v2_skill(tmp_path / "demo", sidecar=sidecar, script_text=script)
-    errors = skill_lint.lint_skill(skill)
-    assert any("missing '--method'" in e for e in errors), errors
-    # Must NOT report `-m` as a missing flag (single-dash short flags are
-    # never listed in allowed_extra_flags).
-    assert not any("missing '-m'" in e for e in errors), errors
+    flags = extract_argparse_flags(script)
+    assert "--method" in flags
+    assert "-m" not in flags
 
 
 # ---------------------------------------------------------------------------

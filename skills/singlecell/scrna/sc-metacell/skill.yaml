@@ -37,17 +37,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --celltype-key
-    - --max-iter
-    - --method
-    - --min-iter
-    - --n-metacells
-    - --n-neighbors
-    - --n-pcs
-    - --r-enhanced
-    - --seed
-    - --use-rep
     hints: {}
   outputs:
     files:

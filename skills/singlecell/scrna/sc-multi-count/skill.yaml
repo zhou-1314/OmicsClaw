@@ -42,9 +42,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --r-enhanced
-    - --sample-id
     hints:
       merge:
         priority: input (multiple) -> sample-id -> output

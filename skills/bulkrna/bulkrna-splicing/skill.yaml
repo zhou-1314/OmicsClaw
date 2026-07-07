@@ -45,9 +45,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --dpsi-cutoff
-    - --padj-cutoff
     hints: {}
   outputs:
     files:

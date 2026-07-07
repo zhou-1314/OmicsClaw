@@ -48,36 +48,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --de-corr-method
-    - --de-method
-    - --enrichr-log2fc-cutoff
-    - --enrichr-max-genes
-    - --enrichr-padj-cutoff
-    - --fdr-threshold
-    - --gene-set
-    - --gene-set-file
-    - --groupby
-    - --gsea-ascending
-    - --gsea-max-size
-    - --gsea-min-size
-    - --gsea-permutation-num
-    - --gsea-ranking-metric
-    - --gsea-seed
-    - --gsea-threads
-    - --gsea-weight
-    - --method
-    - --n-top-terms
-    - --source
-    - --species
-    - --ssgsea-ascending
-    - --ssgsea-correl-norm-type
-    - --ssgsea-max-size
-    - --ssgsea-min-size
-    - --ssgsea-sample-norm-method
-    - --ssgsea-seed
-    - --ssgsea-threads
-    - --ssgsea-weight
     hints:
       enrichr:
         priority: source/gene_set_file → de_method/de_corr_method → enrichr_padj_cutoff/log2fc_cutoff

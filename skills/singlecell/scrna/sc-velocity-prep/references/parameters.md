@@ -10,12 +10,12 @@
 - `--chemistry`
 - `--gtf`
 - `--method`
+- `--r-enhanced`
 - `--read2`
 - `--reference`
 - `--sample`
 - `--threads`
 - `--whitelist`
-- `--r-enhanced`
 
 ## Per-method parameter hints
 
