@@ -2,10 +2,13 @@
 
 import asyncio
 import json
+import logging
 
 from omicsclaw.surfaces.cli import _mcp
 from omicsclaw.extensions import write_extension_state, write_install_record
 from omicsclaw.runtime.context.layers import (
+    ContextLayer,
+    ContextLayerInjector,
     build_mcp_instructions_block,
     should_prefetch_knowledge_guidance,
     should_prefetch_skill_context,
@@ -107,6 +110,43 @@ def test_assemble_prompt_context_layers_are_ordered_and_accounted():
     assert "Workspace Continuity" in assembly.message_context
     assert "## Prefetched Skill Context" not in assembly.system_prompt
     assert assembly.message_context != ""
+
+
+def test_assemble_prompt_context_survives_a_raising_builder(caplog):
+    """A builder that raises must be fail-closed, exactly like a raising
+    predicate: the offending layer is suppressed (with a warning) and assembly
+    still returns the other layers. Without this, any single misbehaving layer
+    builder crashes the whole prompt assembly and every LLM request 500s.
+    """
+
+    def good_builder(_request):
+        return ContextLayer(name="good", content="GOOD", placement="system", order=10)
+
+    def bad_builder(_request):
+        raise RuntimeError("synthetic builder failure")
+
+    injectors = (
+        ContextLayerInjector(
+            name="good", order=10, placement="system", surfaces=("bot",), builder=good_builder
+        ),
+        ContextLayerInjector(
+            name="bad", order=20, placement="system", surfaces=("bot",), builder=bad_builder
+        ),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        assembly = assemble_prompt_context(
+            request=ContextAssemblyRequest(surface="bot"),
+            injectors=injectors,
+        )
+
+    # Fail-closed: no exception propagated, bad layer omitted, good layer kept.
+    assert assembly.layer_names == ("good",)
+    assert "GOOD" in assembly.system_prompt
+    # The warning should name the injector and surface the underlying error.
+    joined = "\n".join(rec.getMessage() for rec in caplog.records)
+    assert "bad" in joined
+    assert "synthetic builder failure" in joined or "builder" in joined.lower()
 
 
 def test_assemble_prompt_context_can_route_workspace_to_message_context():

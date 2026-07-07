@@ -96,6 +96,30 @@ def test_predicate_raising_exception_is_fail_closed_and_logged(caplog) -> None:
     assert "synthetic failure" in joined or "predicate" in joined.lower()
 
 
+def test_builder_raising_exception_is_fail_closed_and_logged(caplog) -> None:
+    """Symmetric to the predicate case: a builder that *raises* is fail-closed —
+    ``render`` suppresses the layer and logs a warning, so one misbehaving layer
+    builder never crashes the whole prompt assembly.
+    """
+
+    def bad_builder(_req: ContextAssemblyRequest) -> ContextLayer:
+        raise ValueError("synthetic builder failure")
+
+    inj = ContextLayerInjector(
+        name="probe",
+        order=99,
+        placement="system",
+        surfaces=("bot",),
+        builder=bad_builder,
+    )
+    with caplog.at_level(logging.WARNING):
+        layer = inj.render(ContextAssemblyRequest(surface="bot"))
+    assert layer is None, "fail-closed: layer must be suppressed on builder exception"
+    joined = "\n".join(rec.getMessage() for rec in caplog.records)
+    assert "probe" in joined
+    assert "synthetic builder failure" in joined or "builder" in joined.lower()
+
+
 # --- Event emission ----------------------------------------------------------
 
 
