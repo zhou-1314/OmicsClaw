@@ -318,13 +318,19 @@ def _check_hint_flags_accepted(skill_dir: Path, sidecar: dict, hints: dict) -> l
     value is a no-op. Runner-blocked framework flags are exempt (they are
     injected by the runner, not forwarded from hints).
     """
-    if not isinstance(hints, dict):
+    if not isinstance(hints, dict) or not hints:
         return []
+    skill_type = _skill_type(sidecar)
+    script_name = sidecar.get("script") or ""
+    if skill_type != "consensus":
+        # A leaf's allow-list is DERIVED from the script; with no co-located
+        # script there is nothing to derive, so skip rather than flag every hint
+        # (mirrors _check_allowed_extra_flags). Consensus uses its declared list.
+        script_path = skill_dir / script_name if script_name else None
+        if not (script_path and script_path.exists()):
+            return []
     allowed = _effective_allowed_flags(
-        sidecar.get("allowed_extra_flags"),
-        skill_dir,
-        sidecar.get("script") or "",
-        _skill_type(sidecar),
+        sidecar.get("allowed_extra_flags"), skill_dir, script_name, skill_type
     )
     named: set[str] = set()
     for info in hints.values():

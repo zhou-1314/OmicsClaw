@@ -298,7 +298,6 @@ def _requirement_rows(domain: str) -> str:
     )
 
 
-
 def _render_v2_description(skill_name: str, domain: str) -> str:
     return (
         f"Load when the user explicitly asks to create a new {domain} skill "
@@ -661,16 +660,14 @@ def _render_parameters_md_from_manifest(manifest, script_text: str = "") -> str:
     same bytes on disk). Consensus shims keep their explicit declared subset.
     """
     from .parameters_md import render_parameters_md
-    from .execution.flag_introspection import (
-        RUNNER_BLOCKED_FLAGS,
-        extract_argparse_flags,
-    )
+    from .execution.flag_introspection import effective_allowed_flags_from_script_text
 
     params = manifest.interface.parameters.model_dump()
-    declared = set(params.get("allowed_extra_flags") or [])
-    if not declared and manifest.type != "consensus":
-        declared = extract_argparse_flags(script_text) - RUNNER_BLOCKED_FLAGS
-    params["allowed_extra_flags"] = sorted(declared)
+    params["allowed_extra_flags"] = sorted(
+        effective_allowed_flags_from_script_text(
+            params.get("allowed_extra_flags"), script_text, manifest.type
+        )
+    )
     return render_parameters_md(params, source="v2")
 
 

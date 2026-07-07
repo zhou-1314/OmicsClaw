@@ -135,6 +135,24 @@ def effective_allowed_flags(
     return derive_accepted_flags(skill_dir, script_name, skill_type)
 
 
+def effective_allowed_flags_from_script_text(
+    declared: Iterable[str] | None,
+    script_text: str,
+    skill_type: str,
+) -> set[str]:
+    """Same override-else-derive rule as :func:`effective_allowed_flags`, but for
+    callers holding the script source in memory before it is on disk (the
+    scaffolder writes ``parameters.md`` before the script). Consensus fails
+    closed — it must declare its curated subset.
+    """
+    declared_set = {f for f in (declared or ()) if f}
+    if declared_set:
+        return declared_set
+    if skill_type == "consensus":
+        return set()
+    return extract_argparse_flags(script_text) - RUNNER_BLOCKED_FLAGS
+
+
 def params_dump_with_effective_flags(
     params_dump: dict,
     skill_dir: Path,
