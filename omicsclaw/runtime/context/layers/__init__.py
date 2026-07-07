@@ -682,7 +682,16 @@ class ContextLayerInjector:
         return decision
 
     def render(self, request: ContextAssemblyRequest) -> ContextLayer | None:
-        result = self.builder(request)
+        try:
+            result = self.builder(request)
+        except Exception as exc:  # fail-closed: misbehaving builder must not inject
+            LOGGER.warning(
+                "Builder for layer %r raised %s: %s; suppressing layer",
+                self.name,
+                exc.__class__.__name__,
+                exc,
+            )
+            return None
         if result is None:
             return None
 
