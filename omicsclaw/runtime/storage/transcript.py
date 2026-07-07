@@ -220,7 +220,16 @@ def extract_compacted_tool_result_refs(
 
         content = str(message.get("content", "") or "")
         lines = content.splitlines()
-        if not lines or lines[0].strip() != "[tool result compacted]":
+        # A1 (ADR 0040 D6): accept BOTH the ingestion marker and the
+        # micro-compaction marker. Micro rewrites a tool result to
+        # "[tool result micro-compacted]" before collapse runs, so without this
+        # the collapse summary would drop every micro-compacted full_result_path
+        # — breaking the reference-aware blob-GC precondition (a summary must
+        # preserve every full_result_path through collapse).
+        if not lines or lines[0].strip() not in (
+            "[tool result compacted]",
+            "[tool result micro-compacted]",
+        ):
             continue
 
         fields: dict[str, str] = {}

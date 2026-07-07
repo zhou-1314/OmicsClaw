@@ -236,6 +236,13 @@ def resolve_max_prompt_tokens(model: str) -> int:
         window, reserved_output=_RESERVED_OUTPUT_TOKENS, safety_margin=0
     )
     derived = int(effective * _PROMPT_BUDGET_FRACTION)
+    if derived <= 0:
+        # G: a known window at/near reserved_output makes (window - reserved) * 0.5
+        # floor to 0. A 0 budget silently disables proactive collapse (its thresholds
+        # become None), leaving only reactive-413 as the overflow net. Fall back to a
+        # fraction of the raw window so proactive collapse still fires on tiny/edge
+        # windows. Only affects windows small enough to otherwise yield 0.
+        derived = max(1, int(window * _PROMPT_BUDGET_FRACTION))
     return min(_MAX_PROMPT_TOKENS_CAP, derived)
 
 
@@ -246,17 +253,28 @@ def _collapse_llm_summary_enabled() -> bool:
     return (os.environ.get("OMICSCLAW_COLLAPSE_LLM_SUMMARY") or "").strip() != "0"
 
 
+# C2 — cap the accumulated persisted-compacted-context summary at this fraction of
+# the prompt budget so it cannot grow unboundedly across collapses and freeze a large
+# share of the budget. Well below collapse_target_ratio (0.55) so the summary plus a
+# useful preserved tail still fit under the trigger.
+_PERSISTED_SUMMARY_RATIO = 0.25
+
+
 def _build_compaction_config(effective_model: str) -> ContextCompactionConfig:
     """Assemble the per-request compaction config for ``effective_model``.
 
     ADR 0039 — token-native collapse budget scaled to the model's window, plus
     budget-relative compress-to-target ratios (§9.3 slice 3).
     """
+    max_prompt_tokens = resolve_max_prompt_tokens(effective_model)
     return ContextCompactionConfig(
-        max_prompt_tokens=resolve_max_prompt_tokens(effective_model),
+        max_prompt_tokens=max_prompt_tokens,
         collapse_target_ratio=_COLLAPSE_TARGET_RATIO,
         auto_compact_target_ratio=_AUTO_COMPACT_TARGET_RATIO,
         collapse_llm_summary_enabled=_collapse_llm_summary_enabled(),
+        max_persisted_summary_tokens=max(
+            1, int(max_prompt_tokens * _PERSISTED_SUMMARY_RATIO)
+        ),
     )
 
 
@@ -463,6 +481,7 @@ async def run_engine_loop(
             llm_error_types=(APIError,),
             extra_api_params=extra_api_params or {},
             context_compaction=_build_compaction_config(effective_model),
+            provider=(deps.llm_provider_name or "").strip().lower(),
             deepseek_reasoning_passback=(
                 (deps.llm_provider_name or "").strip().lower() == "deepseek"
             ),

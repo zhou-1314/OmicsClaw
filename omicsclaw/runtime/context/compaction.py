@@ -119,6 +119,12 @@ class ContextCompactionConfig:
     llm_summary_min_omitted: int = 8
     llm_summary_timeout_s: float = 20.0
     llm_summary_max_tokens: int = 1024
+    # C2 — cap on the accumulated ``## Persisted Compacted Context`` summary. When
+    # set, the oldest ``### <label>`` blocks are elided so the summary cannot grow
+    # unboundedly across collapses and freeze a large share of the budget. None keeps
+    # the legacy unbounded behavior (byte-identical); the engine sets it from a
+    # fraction of ``max_prompt_tokens``.
+    max_persisted_summary_tokens: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +136,11 @@ class PreparedModelMessages:
     persisted_summary: str = ""
     budget_status: "ContextBudgetStatus | None" = None
     local_budget_status: "ContextBudgetStatus | None" = None
+    # D1(a): the actionable status computed from the PRE-compaction token estimate
+    # (the pressure that triggered this turn's collapse/auto/reactive), so the surface
+    # can report how full the context was — not the deflated post-compaction value the
+    # collapse just drove down to ~target. None when nothing raised pressure this turn.
+    pre_compaction_budget_status: "ContextBudgetStatus | None" = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,9 +228,53 @@ def _append_system_summary(system_prompt: str, heading: str, summary: str) -> st
     return (f"{system_prompt.rstrip()}\n\n{heading}\n\n{summary.strip()}").strip()
 
 
+# C2: the persisted collapse summary accumulates one ``### <label>`` block per
+# collapse and carries ``previous_summary`` forward verbatim, so over a long
+# multi-collapse session it grows ~linearly and eventually freezes a large share of
+# the token budget (roughly ``collapse_target_ratio`` of it). ``max_tokens`` bounds
+# it by keeping the NEWEST blocks that fit and eliding the oldest — a lossy but
+# deterministic and idempotent trim (byte-stable re-hoist = one-collapse=one-rewarm).
+_SUMMARY_ELISION_MARKER = (
+    "[Older compacted context was condensed to keep the prompt within budget.]"
+)
+_SUMMARY_BLOCK_SEP = "\n\n---\n\n"
+
+
+def _split_summary_blocks(summary: str) -> list[str]:
+    return [block.strip() for block in summary.split(_SUMMARY_BLOCK_SEP) if block.strip()]
+
+
+def _bound_summary_blocks(blocks: list[str], max_tokens: int) -> list[str]:
+    """Keep the newest blocks that fit ``max_tokens`` (always keep the newest one),
+    drop the oldest, and prepend an elision marker whenever anything is/was trimmed.
+
+    Idempotent: a stale marker is stripped and re-derived, and the marker persists
+    once present, so re-bounding an already-bounded list returns the same list —
+    the byte-stable re-hoist the one-collapse=one-rewarm invariant depends on.
+    """
+    real_blocks = [block for block in blocks if block != _SUMMARY_ELISION_MARKER]
+    had_marker = len(real_blocks) != len(blocks)
+
+    kept_reversed: list[str] = []
+    total = 0
+    for block in reversed(real_blocks):
+        tokens = estimate_text_tokens(block)
+        if kept_reversed and total + tokens > max_tokens:
+            break
+        kept_reversed.append(block)
+        total += tokens
+    kept = list(reversed(kept_reversed))
+
+    if had_marker or len(kept) < len(real_blocks):
+        kept = [_SUMMARY_ELISION_MARKER, *kept]
+    return kept
+
+
 def _combine_persisted_summaries(
     previous_summary: str,
     sections: list[tuple[str, str]],
+    *,
+    max_tokens: int | None = None,
 ) -> str:
     parts: list[str] = []
     if previous_summary.strip():
@@ -227,7 +282,12 @@ def _combine_persisted_summaries(
     for heading, summary in sections:
         if summary.strip():
             parts.append(f"### {heading}\n\n{summary.strip()}")
-    return "\n\n---\n\n".join(parts).strip()
+    if max_tokens is not None and max_tokens > 0:
+        blocks: list[str] = []
+        for part in parts:
+            blocks.extend(_split_summary_blocks(part))
+        parts = _bound_summary_blocks(blocks, max_tokens)
+    return _SUMMARY_BLOCK_SEP.join(parts).strip()
 
 
 def _threshold_tokens(max_prompt_tokens: int | None, ratio: float) -> int | None:
@@ -385,11 +445,34 @@ def _extract_summary_text(response: Any) -> str:
 
 
 # B1 (ADR 0039 D5) content-fidelity gate: tokens the LLM summary must not drop if
-# they were present in the omitted content — file paths (>=2 path segments), error/
-# traceback markers, persisted tool-result path refs, and pending-work markers.
-_FIDELITY_PATH_RE = re.compile(r"(?:/[\w.\-]+){2,}")
+# they were present in the DETERMINISTIC TEMPLATE for the same episode (ADR 0039
+# pins the required set to the template, not the raw omitted content). Required
+# tokens are file paths and error/pending markers. Match ABSOLUTE POSIX paths,
+# RELATIVE multi-segment paths with a file extension, and Windows drive paths — a
+# ``full_result_path`` value can be any of these; matching only absolute paths
+# would silently drop a relative/Windows blob ref. The internal field NAME
+# ``full_result_path`` is intentionally NOT a required marker: the template renders
+# the path VALUE (``-> `/path```), and a faithful prose summary echoes the value,
+# not the structural field label.
+#
+# Over-match guards (the matcher must not force a summary to reproduce non-paths,
+# which would revive the inert-summary failure mode):
+#   - Windows branch anchors on a WORD BOUNDARY before a single drive letter
+#     (``\bC:``), so a URL scheme ``https://`` is not read as a drive path
+#     ``s:/...`` (there is no boundary before the ``s`` in ``https``, and real
+#     URI schemes are >=2 chars). It accepts both ``\`` and ``/`` separators so a
+#     forward-slash Windows path (``C:/a/b.txt``) is still required.
+#   - The POSIX branches carry a negative lookbehind ``(?<![:/\w.])`` so a path
+#     inside a URL (``…//host/p``) is not matched.
+#   - The relative branch requires an ALPHABETIC-initial file extension, so numeric
+#     ratios / dates (``3/4.5``, ``2024/01/15``) are not treated as paths.
+_FIDELITY_PATH_RE = re.compile(
+    r"\b[A-Za-z]:[\\/][\w.\-\\/]+"                      # Windows drive path (C:\a\b.txt or C:/a/b.txt)
+    r"|(?<![:/\w.])(?:/[\w.\-]+){2,}"                   # absolute POSIX path (>=2 segments)
+    r"|(?<![:/\w.])(?:[\w.\-]+/)+[\w.\-]+\.[A-Za-z]\w*" # relative path w/ alpha-initial extension
+)
 _FIDELITY_MARKER_RE = re.compile(
-    r"\b(?:Error|Exception|Traceback|Failed|TODO|FIXME|pending|full_result_path)\b"
+    r"\b(?:Error|Exception|Traceback|Failed|TODO|FIXME|pending)\b"
 )
 
 
@@ -481,8 +564,12 @@ async def _summarize_episode_llm(
     if _looks_like_tool_invocation(summary):
         return template_fallback
     # B1 content-fidelity gate (no retry): if the summary drops a required file
-    # path / error marker present in the omitted content, use the template instead.
-    if _drops_required_tokens(rendered, summary):
+    # path / error marker present in the DETERMINISTIC TEMPLATE for this episode,
+    # use the template instead. Keying off ``template_fallback`` (not ``rendered``,
+    # the raw omitted content) is what ADR 0039 D5/B1 pins: the guarantee is
+    # "no worse than the template", so a faithful summary that preserves every
+    # path the template kept is accepted rather than paid-for-then-discarded.
+    if _drops_required_tokens(template_fallback, summary):
         return template_fallback
     return summary
 
@@ -918,7 +1005,9 @@ async def prepare_model_messages(
     # than a second re-warm when the heading shape shifts on the following turn.
     def _render_system(extra: tuple[tuple[str, str], ...] = ()) -> str:
         combined = _combine_persisted_summaries(
-            previous_summary, [*summary_sections, *extra]
+            previous_summary,
+            [*summary_sections, *extra],
+            max_tokens=config.max_persisted_summary_tokens,
         )
         return _append_system_summary(
             base_prompt, "## Persisted Compacted Context", combined
@@ -938,6 +1027,11 @@ async def prepare_model_messages(
         applied_stages.append(STAGE_MICRO_COMPACT)
 
     if force_reactive_compact:
+        # D1(a): the pre-reactive-collapse pressure, classified vs the local
+        # max_prompt_tokens budget (after this turn's snip/micro). A reactive compact
+        # is a 413 backstop, so this reliably lands CRITICAL/BLOCK — the wire should
+        # report that, not the deflated post-reactive total.
+        pre_compaction_tokens = estimate_prompt_tokens(_render_system(), messages)
         reactive_result = _collapse_history(
             messages,
             preserve_messages=config.reactive_preserve_messages,
@@ -962,9 +1056,13 @@ async def prepare_model_messages(
             persisted_summary=_combine_persisted_summaries(
                 previous_summary,
                 summary_sections,
+                max_tokens=config.max_persisted_summary_tokens,
             ),
             budget_status=_prompt_budget_status(est, config),
             local_budget_status=local_budget_status(est, config.max_prompt_tokens),
+            pre_compaction_budget_status=_prompt_budget_status(
+                pre_compaction_tokens, config
+            ),
         )
 
     collapse_threshold = _threshold_tokens(
@@ -977,6 +1075,10 @@ async def prepare_model_messages(
     )
 
     current_tokens = estimate_prompt_tokens(_render_system(), messages)
+    # D1(a): the pre-collapse pressure — the value that is compared against the
+    # collapse trigger — so the wire status reports it rather than the post-collapse
+    # total the stages below drive down to ~target.
+    pre_compaction_tokens = current_tokens
     if collapse_threshold is not None and current_tokens > collapse_threshold:
         collapse_result = await _collapse_with_target(
             messages,
@@ -1032,12 +1134,14 @@ async def prepare_model_messages(
         persisted_summary=_combine_persisted_summaries(
             previous_summary,
             summary_sections,
+            max_tokens=config.max_persisted_summary_tokens,
         ),
         # S3: the inert window-relative status is retired; both the legacy
         # ``budgetStatus`` wire key and ``localBudgetStatus`` now carry the single
         # actionable token status (App badge becomes useful; wire shape preserved).
         budget_status=_prompt_budget_status(est, config),
         local_budget_status=_prompt_budget_status(est, config),
+        pre_compaction_budget_status=_prompt_budget_status(pre_compaction_tokens, config),
     )
 
 

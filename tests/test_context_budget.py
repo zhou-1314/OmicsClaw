@@ -213,8 +213,7 @@ def test_estimate_message_size_counts_text_even_when_image_url_key_present():
 
 
 def test_effective_context_capacity_subtracts_reserve_and_margin():
-    # §9.3: usable input budget = model window − reserved output − safety margin
-    # (cellclaw ModelSpec.effective_capacity).
+    # §9.3: usable input budget = model window − reserved output − safety margin.
     from omicsclaw.runtime.context.budget import effective_context_capacity
 
     assert effective_context_capacity(
@@ -227,8 +226,7 @@ def test_effective_context_capacity_subtracts_reserve_and_margin():
 
 
 def test_classify_context_budget_five_level_thresholds():
-    # §9.3: OK <65% ≤ WARNING <80% ≤ COMPRESS <90% ≤ CRITICAL <96% ≤ BLOCK
-    # (cellclaw ModelSpec.classify_usage).
+    # §9.3: OK <65% ≤ WARNING <80% ≤ COMPRESS <90% ≤ CRITICAL <96% ≤ BLOCK.
     from omicsclaw.runtime.context.budget import (
         ContextBudgetStatus,
         classify_context_budget,

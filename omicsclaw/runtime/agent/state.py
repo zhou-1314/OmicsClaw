@@ -323,6 +323,20 @@ tool_result_store = ToolResultStore(
 conversations = transcript_store.messages_by_chat
 _conversation_access = transcript_store.access_by_chat  # LRU tracking
 
+
+def clear_conversation(chat_id: int | str) -> None:
+    """Delete ALL durable state for ``chat_id`` (ADR 0040 D6).
+
+    ``/clear`` (and ``/new`` / ``/forget``) is the only path allowed to delete
+    durable state, and it must fan out to BOTH stores so no orphan survives: the
+    transcript rows (in-memory + ``transcripts.db``) AND the ``ToolResultStore``
+    blob files + record cache. This single seam is what every surface routes
+    through, so a surface cannot clear one store and forget the other (the CLI/TUI
+    orphaned-blob bug). LRU eviction is memory-only and must NOT call this.
+    """
+    transcript_store.clear(chat_id)
+    tool_result_store.clear(chat_id)
+
 # ADR 0024 — process-wide prompt-prefix cache telemetry sink, re-exported here
 # so it sits alongside the other per-chat stores. The query engine records into
 # it directly (see ``cache_diagnostics.CACHE_DIAGNOSTICS``); this alias is for

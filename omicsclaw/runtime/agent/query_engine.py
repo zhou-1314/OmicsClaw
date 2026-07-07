@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
@@ -9,10 +10,14 @@ from omicsclaw.common.user_guidance import (
     extract_user_guidance_payloads,
     render_guidance_block,
 )
+from omicsclaw.providers.models import apply_prompt_cache_breakpoints
 from omicsclaw.providers.patches import apply_deepseek_reasoning_passback
 
 from ..context.budget import ContextBudgetStatus, estimate_message_tokens
 from ..context.compaction import (
+    STAGE_AUTO_COMPACT,
+    STAGE_CONTEXT_COLLAPSE,
+    STAGE_REACTIVE_COMPACT,
     CompactionEvent,
     ContextCompactionConfig,
     PreparedModelMessages,
@@ -68,6 +73,21 @@ from .loop_state import (
     ToolErrorRecord,
     compute_args_digest,
 )
+
+
+# C1: the stages that actually fold history into a frozen summary — the only turns
+# whose result must be persisted back into the transcript. snip/micro are every-turn,
+# idempotent, re-applied fresh each turn, so they carry nothing new to persist.
+_PERSISTABLE_COLLAPSE_STAGES = frozenset(
+    {STAGE_CONTEXT_COLLAPSE, STAGE_AUTO_COMPACT, STAGE_REACTIVE_COMPACT}
+)
+
+
+def _prompt_cache_breakpoints_enabled() -> bool:
+    """Anthropic cache-breakpoint injection is on by default; the env kill-switch
+    ``OMICSCLAW_PROMPT_CACHE_BREAKPOINTS=0`` disables it (e.g. if a gateway rejects
+    the content-block payload shape)."""
+    return (os.environ.get("OMICSCLAW_PROMPT_CACHE_BREAKPOINTS") or "").strip() != "0"
 
 
 async def _maybe_await(value):
@@ -175,6 +195,10 @@ class QueryEngineConfig:
         default_factory=ContextCompactionConfig
     )
     extra_api_params: dict[str, Any] = field(default_factory=dict)
+    # Provider label (e.g. "anthropic"/"deepseek"/"openrouter") — used to gate
+    # Anthropic prompt-cache breakpoint injection at the send site. Empty when
+    # unknown (breakpoints then key off the model name family).
+    provider: str = ""
     # DeepSeek thinking-mode endpoints reject requests where any historical
     # assistant message lacks ``reasoning_content``. Set to True for the
     # ``deepseek`` provider so the chat path mirrors the autoagent passback.
@@ -626,6 +650,15 @@ def _persist_prepared_compaction(
     prepared_messages: PreparedModelMessages,
 ) -> None:
     if not prepared_messages.persisted_summary.strip():
+        return
+    # C1: persist ONLY when a real collapse/auto/reactive stage fired THIS turn.
+    # persisted_summary stays non-empty on every post-collapse turn (it re-folds the
+    # hoisted prior summary), so without this gate every append-only turn would
+    # trigger a full O(N) DELETE+INSERT transcript rewrite AND durably persist the
+    # every-turn snip/micro truncation of older messages — permanently shrinking a
+    # survivor only because a prior turn collapsed. snip/micro are idempotent and
+    # re-derived each turn, so a no-collapse turn has nothing new to persist.
+    if not _PERSISTABLE_COLLAPSE_STAGES.intersection(prepared_messages.applied_stages):
         return
     compacted_history = [
         {
@@ -1210,11 +1243,24 @@ async def _call_llm_with_reactive_compact_retry(
                 if context.request_tools is not None
                 else list(tool_runtime.openai_tools)
             )
+            request_payload_messages = [
+                {"role": "system", "content": request_system_prompt}
+            ] + request_messages
+            # Anthropic/OpenRouter-Anthropic need explicit cache_control breakpoints to
+            # cache the (byte-stable) system+tools prefix; identity for auto-caching
+            # providers (OpenAI/DeepSeek), ccproxy/localhost, or the env kill-switch.
+            request_payload_messages, request_tools = apply_prompt_cache_breakpoints(
+                request_payload_messages,
+                request_tools,
+                provider=config.provider,
+                model=config.model,
+                base_url=str(getattr(llm, "base_url", "") or ""),
+                enabled=_prompt_cache_breakpoints_enabled(),
+            )
             response = await llm.chat.completions.create(
                 model=config.model,
                 max_tokens=config.max_tokens,
-                messages=[{"role": "system", "content": request_system_prompt}]
-                + request_messages,
+                messages=request_payload_messages,
                 tools=request_tools,
                 **kwargs,
             )
@@ -1272,8 +1318,11 @@ async def _call_llm_with_reactive_compact_retry(
                         history_len=len(history),
                         kept_len=len(reactive_messages.messages),
                         applied_stages=reactive_messages.applied_stages,
-                        budget_status=reactive_messages.budget_status,
-                        local_budget_status=reactive_messages.local_budget_status,
+                        # D1(a): report the PRE-compaction (over-window) pressure.
+                        budget_status=reactive_messages.pre_compaction_budget_status
+                        or reactive_messages.budget_status,
+                        local_budget_status=reactive_messages.pre_compaction_budget_status
+                        or reactive_messages.local_budget_status,
                     )
                 continue
             raise
@@ -1410,8 +1459,12 @@ async def run_query_engine(
                 history_len=len(history),
                 kept_len=len(prepared_messages.messages),
                 applied_stages=prepared_messages.applied_stages,
-                budget_status=prepared_messages.budget_status,
-                local_budget_status=prepared_messages.local_budget_status,
+                # D1(a): report the PRE-compaction pressure (what triggered the
+                # collapse), not the deflated post-collapse total.
+                budget_status=prepared_messages.pre_compaction_budget_status
+                or prepared_messages.budget_status,
+                local_budget_status=prepared_messages.pre_compaction_budget_status
+                or prepared_messages.local_budget_status,
             )
         try:
             last_message, has_attempted_reactive_compact, sent_system_prompt = (

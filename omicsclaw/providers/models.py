@@ -223,7 +223,136 @@ def get_context_window(model: str | None) -> int | None:
     short = lowered.split("/")[-1]
     if short != lowered and short in _KNOWN_MODEL_CONTEXT_WINDOWS:
         return _KNOWN_MODEL_CONTEXT_WINDOWS[short]
+    # #2: fall back to a runtime metadata lookup for models absent from the static
+    # catalog (e.g. local/gateway models) instead of a blind None → 85k-cap. Returns
+    # None when the optional dependency is unavailable, so behavior is unchanged
+    # without it.
+    return _runtime_context_window(model)
+
+
+def _runtime_context_window(model: str) -> int | None:
+    """Best-effort dynamic context-window lookup via ``litellm`` metadata (an OPTIONAL
+    dependency). Returns ``None`` when litellm is absent or has no window for the
+    model, so an installation without litellm keeps the prior None-for-unknown
+    behavior and no hard dependency is added. Never raises."""
+    try:
+        import litellm  # type: ignore[import-not-found]
+    except Exception:
+        return None
+    candidates = [model]
+    if "/" in model:
+        bare = model.split("/", 1)[1]
+        if bare and bare not in candidates:
+            candidates.append(bare)
+    for candidate in candidates:
+        try:
+            info = litellm.get_model_info(candidate)
+        except Exception:
+            continue
+        if not isinstance(info, dict):
+            continue
+        raw = info.get("max_input_tokens") or info.get("max_tokens")
+        try:
+            window = int(raw) if raw else 0
+        except (TypeError, ValueError):
+            window = 0
+        if window > 0:
+            return window
     return None
+
+
+_EPHEMERAL_CACHE_CONTROL = {"type": "ephemeral"}
+
+
+def _is_anthropic_family(provider: str, model: str) -> bool:
+    """True if the backend is Claude/Anthropic (native or via a gateway such as
+    OpenRouter), which — unlike auto-caching providers — needs an explicit
+    ``cache_control`` breakpoint to cache the prompt prefix."""
+    p = (str(provider) if provider is not None else "").strip().lower()
+    m = (str(model) if model is not None else "").strip().lower()
+    if p == "anthropic":
+        return True
+    return "claude" in m or m.startswith("anthropic/")
+
+
+def _mark_last_system_message(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return a copy of ``messages`` with the LAST system message's content carrying
+    a ``cache_control: ephemeral`` breakpoint (string content is wrapped into one text
+    block). Non-mutating; returns the input unchanged if there is no system message."""
+    idx = next(
+        (i for i in range(len(messages) - 1, -1, -1) if messages[i].get("role") == "system"),
+        None,
+    )
+    if idx is None:
+        return messages
+    out = list(messages)
+    msg = dict(out[idx])
+    content = msg.get("content")
+    if isinstance(content, str):
+        msg["content"] = [
+            {"type": "text", "text": content, "cache_control": dict(_EPHEMERAL_CACHE_CONTROL)}
+        ]
+    elif isinstance(content, list) and content:
+        blocks = list(content)
+        j = next(
+            (k for k in range(len(blocks) - 1, -1, -1) if isinstance(blocks[k], dict)),
+            None,
+        )
+        if j is None:
+            return messages
+        blocks[j] = {**blocks[j], "cache_control": dict(_EPHEMERAL_CACHE_CONTROL)}
+        msg["content"] = blocks
+    else:
+        return messages  # empty/None content — nothing to mark
+    out[idx] = msg
+    return out
+
+
+def _mark_last_tool(
+    tools: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    """Return a copy of ``tools`` with the LAST tool carrying a ``cache_control``
+    breakpoint. Non-mutating; returns the input unchanged if empty/None."""
+    if not tools:
+        return tools
+    out = list(tools)
+    last = out[-1]
+    if isinstance(last, dict):
+        out[-1] = {**last, "cache_control": dict(_EPHEMERAL_CACHE_CONTROL)}
+    return out
+
+
+def apply_prompt_cache_breakpoints(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    *,
+    provider: str = "",
+    model: str = "",
+    base_url: str = "",
+    enabled: bool = True,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
+    """Inject Anthropic-style ``cache_control: {type: ephemeral}`` breakpoints on the
+    system prompt and the last tool.
+
+    OmicsClaw engineers a byte-stable system+tools prefix (ADR 0024) for AUTOMATIC
+    provider prefix-caching (OpenAI/DeepSeek). Anthropic/OpenRouter-Anthropic do NOT
+    cache without an explicit breakpoint, so a native Anthropic backend previously got
+    ~0% caching despite the stable prefix. This adds the two breakpoints Anthropic
+    needs — the last block of the system message and the last tool.
+
+    Pure and non-mutating: returns the inputs UNCHANGED (identity) for non-Anthropic
+    providers, ccproxy/localhost endpoints (which reject the payload shape, mirroring
+    ``get_default_features``), or when ``enabled=False`` (the env kill-switch, read by
+    the caller so this module stays I/O-free). Applied deterministically every turn, so
+    the breakpoint itself does not churn the byte-stable prefix.
+    """
+    if not enabled:
+        return messages, tools
+    if not _is_anthropic_family(provider, model):
+        return messages, tools
+    if _is_localhost(base_url):
+        return messages, tools
+    return _mark_last_system_message(messages), _mark_last_tool(tools)
 
 
 def get_default_features(
@@ -333,6 +462,7 @@ __all__ = [
     "MODEL_CATALOG",
     "ModelInfo",
     "all_short_names",
+    "apply_prompt_cache_breakpoints",
     "get_context_window",
     "get_default_features",
     "list_models_for_provider",
