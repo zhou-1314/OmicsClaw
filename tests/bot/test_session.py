@@ -244,6 +244,32 @@ def test_evict_lru_conversations_keeps_tool_results_for_evicted_chats(monkeypatc
     assert fake_transcript_store.max_conversations == 50
 
 
+def test_clear_conversation_fans_out_to_both_stores(monkeypatch):
+    """ADR 0040 D6: /clear is the ONLY path that deletes durable state and MUST fan
+    out to BOTH the transcript store (rows) AND the tool-result store (blobs), so no
+    orphan blob survives. ``clear_conversation`` is the single seam every surface
+    (channels, TUI, interactive REPL) routes through, so the fan-out cannot be
+    forgotten by one surface (the CLI/TUI orphaned-blob bug)."""
+    cleared_transcript: list = []
+    cleared_tool: list = []
+
+    fake_transcript_store = SimpleNamespace(
+        clear=lambda chat_id: cleared_transcript.append(chat_id)
+    )
+    fake_tool_result_store = SimpleNamespace(
+        clear=lambda chat_id: cleared_tool.append(chat_id)
+    )
+
+    import omicsclaw.runtime.agent.state as _core
+    monkeypatch.setattr(_core, "transcript_store", fake_transcript_store, raising=False)
+    monkeypatch.setattr(_core, "tool_result_store", fake_tool_result_store, raising=False)
+
+    _core.clear_conversation("chat-42")
+
+    assert cleared_transcript == ["chat-42"]
+    assert cleared_tool == ["chat-42"]
+
+
 def _make_get_memories(by_kind: dict[str, list]):
     async def _impl(session_id, kind, *, limit, thread_id=""):
         return by_kind.get(kind, [])

@@ -855,10 +855,11 @@ if _HAS_TEXTUAL:
             try:
                 import omicsclaw.runtime.agent.state as core
 
-                # A user-initiated clear deletes durable state (ADR 0040 D6): route
-                # through the store so an enabled transcripts.db is cleared too,
-                # rather than popping the in-memory alias and leaving the db stale.
-                core.transcript_store.clear("__tui__")
+                # A user-initiated clear deletes durable state (ADR 0040 D6): fan out
+                # to BOTH stores (transcript rows incl. transcripts.db AND the
+                # ToolResultStore blobs) via the shared seam, so the TUI does not
+                # leave orphaned tool-result blobs under tool_results/tui/.
+                core.clear_conversation("__tui__")
             except Exception:
                 pass
 

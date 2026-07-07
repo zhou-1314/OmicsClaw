@@ -2,11 +2,37 @@
 
 ## Status
 
-Proposed (2026-07-03). Supersedes ADR 0024's char-budget stance (its
-"Provider-blind `max_prompt_chars` — RESOLVED" open item and the
-`DEFAULT_MAX_PROMPT_CHARS` policy text). New vocabulary reuses `docs/CONTEXT.md`
-§"Prompt Prefix & Caching" unchanged; the caching decision and every prefix-cache
-invariant of ADR 0024 remain in force.
+Accepted (2026-07-06). Shipped to `main` via PR #29 (token-native budget +
+collapse) and PR #30 (B1 fidelity gate, C2 persisted-summary cap, G edge-window
+floor). Supersedes ADR 0024's
+char-budget stance (its "Provider-blind `max_prompt_chars` — RESOLVED" open item
+and the `DEFAULT_MAX_PROMPT_CHARS` policy text). New vocabulary reuses
+`docs/CONTEXT.md` §"Prompt Prefix & Caching" unchanged; the caching decision and
+every prefix-cache invariant of ADR 0024 remain in force.
+
+**Implementation status (2026-07-06).** The previously-`PROPOSED — confirm`
+values are locked as shipped and tested (`tests/engine/test_loop.py`):
+`TOKEN_CAP = 85_000`, `reserved_output = 8192`, `PROMPT_BUDGET_FRACTION = 0.5`,
+static targets `0.55 / 0.40`. Decision 5's B1 content-fidelity gate **has landed**
+(`_drops_required_tokens`, `omicsclaw/runtime/context/compaction.py`) and the LLM
+collapse summary now ships **default-ON** as ratified — see the updated Decision 5
+below.
+
+**Post-acceptance hardening (2026-07-06).** Two follow-ups close audit gaps in the
+budget/collapse machinery without changing the control-plane design:
+- **Small/edge-window budget floor.** `resolve_max_prompt_tokens` previously returned
+  `0` for any known window `<= reserved_output` (`floor((window - 8192) * 0.5) <= 0`),
+  which silently disabled proactive collapse (its thresholds become `None`), leaving
+  only reactive-413 as the net. It now floors to `max(1, floor(window * 0.5))` in that
+  case, so proactive collapse still fires on tiny windows. Normal windows are
+  unchanged (`omicsclaw/engine/loop.py`).
+- **Persisted-summary cap (C2).** The accumulated `## Persisted Compacted Context`
+  summary grew one `### <label>` block per collapse and carried the prior summary
+  verbatim, so a long multi-collapse session could freeze roughly `collapse_target`
+  of the budget as frozen summary. A new `max_persisted_summary_tokens` cap (set by
+  the engine to `0.25 × max_prompt_tokens`) elides the oldest blocks with a persistent
+  marker, keeping the newest. The trim is **idempotent**, so the byte-stable re-hoist
+  (one-collapse = one-rewarm) is preserved (`omicsclaw/runtime/context/compaction.py`).
 
 ## Context
 
@@ -152,18 +178,24 @@ resolutions.
    length cap, UTF-8-byte cap, anti-tool-mimicry, and fallback to the
    deterministic template on any timeout/error (`compaction.py:430-445`).
 
-   **Ratification prerequisite (B1) — the content-fidelity gate does not exist
-   yet.** The live acceptance path (`compaction.py:430-445`) checks only
-   non-empty / length / UTF-8-byte / anti-tool-mimicry; there is **no** check that
-   the summary preserves required content, so default-ON would **silently drop**
-   `full_result_path` references, error markers, or pending-work markers that the
-   deterministic template keeps. **Flipping the default to ON is therefore gated
-   on, in one change:** (i) pinning the required-token set — at minimum every
-   `full_result_path` ref, error/traceback marker, and pending-plan marker present
-   in the deterministic template for the same episode; (ii) implementing a
-   **no-retry content-fidelity gate** that falls back to the template when any
-   required token is missing; (iii) a test asserting the gate rejects a
-   fidelity-dropping summary. Until (i)–(iii) land, the default stays **OFF**.
+   **Ratification prerequisite (B1) — LANDED (2026-07-06).** All three parts of
+   the gate now ship: (i) the required-token set is pinned to the file-path,
+   error/traceback, and pending-work markers **present in the deterministic
+   template for the same episode** (`_drops_required_tokens(template_fallback, …)`,
+   `omicsclaw/runtime/context/compaction.py`); (ii) a **no-retry content-fidelity
+   gate** falls back to the template when any required token is missing; (iii)
+   tests assert both directions — a fidelity-dropping summary is rejected and a
+   faithful summary preserving the template's paths is accepted
+   (`tests/test_context_compaction.py`). **Two refinements were applied during
+   implementation and are part of the ratified design:** the required-token set is
+   keyed off the **deterministic template**, not the raw omitted content — the
+   guarantee is "no worse than the template", so a faithful summary is not
+   paid-for-then-discarded; and the required tokens are the path **values** (the
+   internal field name `full_result_path` is not required), with the path matcher
+   covering absolute-POSIX, relative-with-extension, and Windows drive paths. The
+   micro-compaction marker is also recognized by the template's tool-ref extractor
+   so a micro-compacted `full_result_path` survives collapse (ADR 0040 D6 blob-GC
+   precondition). With B1 landed, the default is **ON**.
 
    Two properties then make default-ON safe for the Stable prefix invariant:
    (a) the summary is generated **once per collapse and frozen** into the `system`
@@ -240,17 +272,17 @@ it does not change *how* collapse folds history or re-warms the prefix.
 
 ### Open
 
-- **`TOKEN_CAP` and `reserved_output` values (Decision 3)** — PROPOSED
-  `85_000` / `8192`; confirm or retune once token-native billing/latency
-  telemetry lands.
-- **Static vs status-driven targets (Decision 4)** — PROPOSED static; the
-  re-collapse-loop argument stands, but a maintainer may still want a bounded,
-  hysteresis-guarded dynamic target later.
-- **LLM-summary content-fidelity gate (Decision 5)** — default ON is the ratified
-  *target*, but ships OFF until the no-retry content-fidelity gate is specified,
-  implemented, and tested (prerequisite B1). Pinning the exact required-token set
-  (`full_result_path` refs / error markers / pending-work markers) is part of that
-  prerequisite.
+- **`TOKEN_CAP` and `reserved_output` values (Decision 3)** — RESOLVED as shipped:
+  `85_000` / `8192` (locked by `tests/engine/test_loop.py`). May still be retuned
+  once token-native billing/latency telemetry lands.
+- **Static vs status-driven targets (Decision 4)** — RESOLVED static (`0.55` /
+  `0.40`, shipped). The re-collapse-loop argument stands; a maintainer may still
+  want a bounded, hysteresis-guarded dynamic target later.
+- **LLM-summary content-fidelity gate (Decision 5)** — RESOLVED: the no-retry gate
+  is specified, implemented, and tested; default is **ON** (see the B1 "LANDED"
+  note in Decision 5). The required-token set is keyed off the deterministic
+  template's path values (not the raw omitted content, and not the internal
+  `full_result_path` field name).
 - **Per-provider token accuracy** — deliberately out of scope; if a provider's
   own tokenizer diverges materially from the estimate, a provider-specific counter
   can be slotted behind the same single-unit interface without reopening the
