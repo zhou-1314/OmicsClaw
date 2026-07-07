@@ -2098,6 +2098,17 @@ async def _async_interactive_loop(
                     state,
                     build_clear_conversation_command_view(),
                 )
+                # ADR 0040 D6: /clear deletes durable state and must fan out to BOTH
+                # stores. The view above only resets the REPL's local message list;
+                # tool outputs are recorded to the shared ToolResultStore under the
+                # constant "__interactive__" chat_id, so without this the blobs +
+                # records leak across every /clear.
+                try:
+                    import omicsclaw.runtime.agent.state as core
+
+                    core.clear_conversation("__interactive__")
+                except Exception:
+                    pass
                 _print_separator()
                 continue
 

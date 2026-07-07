@@ -27,7 +27,6 @@ from omicsclaw.runtime.agent.state import (
     _primary_skill_count,
     format_skills_table,
     transcript_store,
-    tool_result_store,
 )
 from omicsclaw.runtime.tools.builders.agent_executors import get_tool_executors
 
@@ -40,24 +39,21 @@ from ._registry import SlashCommandContext, register
 @register("/clear")
 async def _cmd_clear(ctx: SlashCommandContext) -> str:
     """Clear conversation history; keep graph memory intact."""
-    transcript_store.clear(ctx.chat_id)
-    tool_result_store.clear(ctx.chat_id)
+    _core.clear_conversation(ctx.chat_id)  # ADR 0040 D6: fan out to both stores
     return "✓ Conversation history cleared. (Memory preserved)"
 
 
 @register("/new")
 async def _cmd_new(ctx: SlashCommandContext) -> str:
     """Same effect as ``/clear``; phrased as a "new conversation" intent."""
-    transcript_store.clear(ctx.chat_id)
-    tool_result_store.clear(ctx.chat_id)
+    _core.clear_conversation(ctx.chat_id)  # ADR 0040 D6: fan out to both stores
     return "✓ New conversation started. (Memory preserved)"
 
 
 @register("/forget")
 async def _cmd_forget(ctx: SlashCommandContext) -> str:
     """Clear conversation + delete the session's graph memory."""
-    transcript_store.clear(ctx.chat_id)
-    tool_result_store.clear(ctx.chat_id)
+    _core.clear_conversation(ctx.chat_id)  # ADR 0040 D6: fan out to both stores
 
     if _core.session_manager and ctx.user_id and ctx.platform:
         session_id = f"{ctx.platform}:{ctx.user_id}:{ctx.chat_id}"
