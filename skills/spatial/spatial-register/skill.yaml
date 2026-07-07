@@ -44,17 +44,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --method
-    - --paste-alpha
-    - --paste-dissimilarity
-    - --paste-use-gpu
-    - --reference-slice
-    - --slice-key
-    - --stalign-a
-    - --stalign-image-size
-    - --stalign-niter
-    - --use-expression
     hints:
       paste:
         priority: slice_key/reference_slice → paste_alpha → paste_dissimilarity

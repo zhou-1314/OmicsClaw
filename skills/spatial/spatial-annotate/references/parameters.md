@@ -21,8 +21,8 @@
 - `--reference`
 - `--scanvi-max-epochs`
 - `--scanvi-n-hidden`
-- `--scanvi-n-layers`
 - `--scanvi-n-latent`
+- `--scanvi-n-layers`
 - `--species`
 - `--tangram-device`
 - `--tangram-num-epochs`

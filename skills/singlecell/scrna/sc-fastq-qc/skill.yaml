@@ -42,12 +42,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --max-reads
-    - --read2
-    - --sample
-    - --threads
-    - --r-enhanced
     hints:
       fastqc:
         priority: threads -> sample -> read2 -> max_reads

@@ -7,21 +7,21 @@
 ## Allowed extra CLI flags
 
 - `--batch-key`
-- `--method`
-- `--n-epochs`
-- `--no-gpu`
-- `--n-latent`
-- `--labels-key`
-- `--harmony-theta`
 - `--bbknn-neighbors-within-batch`
-- `--scanorama-knn`
+- `--harmony-theta`
 - `--integration-features`
 - `--integration-pcs`
-- `--simba-n-top-genes`
-- `--simba-n-components`
-- `--simba-k`
-- `--simba-num-workers`
+- `--labels-key`
+- `--method`
+- `--n-epochs`
+- `--n-latent`
+- `--no-gpu`
 - `--r-enhanced`
+- `--scanorama-knn`
+- `--simba-k`
+- `--simba-n-components`
+- `--simba-n-top-genes`
+- `--simba-num-workers`
 
 ## Per-method parameter hints
 

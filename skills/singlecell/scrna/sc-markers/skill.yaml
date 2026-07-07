@@ -38,16 +38,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --groupby
-    - --method
-    - --n-genes
-    - --n-top
-    - --min-in-group-fraction
-    - --min-fold-change
-    - --max-out-group-fraction
-    - --mu
-    - --r-enhanced
     hints:
       wilcoxon:
         priority: groupby -> n_genes -> n_top

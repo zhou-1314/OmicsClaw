@@ -12,9 +12,9 @@
 - `--motif`
 - `--n-jobs`
 - `--n-top-targets`
+- `--r-enhanced`
 - `--seed`
 - `--tf-list`
-- `--r-enhanced`
 
 ## Per-method parameter hints
 

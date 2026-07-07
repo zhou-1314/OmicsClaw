@@ -68,19 +68,13 @@ interface:
     - --run-id
     hints:
       leiden:
-        params:
-        - resolution
-        defaults:
-          resolution: 1.0
         tips:
-        - Member resolution values are produced by the --resolutions sweep.
+        - Per-member resolution is not a standalone CLI flag; the sweep values come
+          from the --resolutions list (see allowed_extra_flags).
       louvain:
-        params:
-        - resolution
-        defaults:
-          resolution: 1.0
         tips:
-        - Member resolution values are produced by the --resolutions sweep.
+        - Per-member resolution is not a standalone CLI flag; the sweep values come
+          from the --resolutions list (see allowed_extra_flags).
   outputs:
     files:
     - consensus_labels.tsv

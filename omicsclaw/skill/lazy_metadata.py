@@ -192,6 +192,26 @@ class LazySkillMetadata:
             text = (text + " " if text else "") + "Skip when " + "; ".join(clauses) + "."
         return text
 
+    def _effective_allowed_flags(self, m) -> list[str]:
+        """Flags the runtime gate accepts: explicit override, else derived (ADR 0041).
+
+        ``skill.yaml``'s ``allowed_extra_flags`` is now an optional narrowing
+        override (kept only where a skill exposes fewer flags than its script
+        accepts, e.g. consensus subsets). When empty/absent — the common leaf
+        case — the accepted flags are derived from the script's argparse surface
+        so the list is no longer a hand-maintained mirror.
+        """
+        from .execution.flag_introspection import effective_allowed_flags
+
+        return sorted(
+            effective_allowed_flags(
+                m.interface.parameters.allowed_extra_flags,
+                self.path,
+                m.runtime.entry,
+                m.type,
+            )
+        )
+
     def _basic_from_v2(self, m) -> dict:
         """Map a v2 SkillManifest onto the legacy property surface (zero consumer churn)."""
         anndata = m.interface.outputs.anndata
@@ -204,7 +224,7 @@ class LazySkillMetadata:
             "type": m.type,
             "validation_level": m.validation.level,
             "trigger_keywords": list(m.summary.trigger_keywords),
-            "allowed_extra_flags": list(m.interface.parameters.allowed_extra_flags),
+            "allowed_extra_flags": self._effective_allowed_flags(m),
             "legacy_aliases": list(m.summary.aliases),
             "saves_h5ad": bool(anndata.saves_h5ad) if anndata else False,
             "requires_preprocessed": bool(

@@ -46,16 +46,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --chemistry
-    - --method
-    - --r-enhanced
-    - --read2
-    - --reference
-    - --sample
-    - --t2g
-    - --threads
-    - --whitelist
     hints:
       cellranger:
         priority: reference -> sample -> threads -> chemistry

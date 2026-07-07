@@ -6,23 +6,23 @@
 
 ## Allowed extra CLI flags
 
-- `--members`
 - `--all`
-- `--no-spatial-panel`
-- `--n-clusters`
-- `--confirm-plan`
-- `--non-interactive`
 - `--alpha`
 - `--beta`
-- `--max-class-frac`
+- `--confirm-plan`
 - `--llm-judge`
+- `--max-class-frac`
+- `--max-parallel`
+- `--members`
+- `--n-clusters`
+- `--no-spatial-panel`
+- `--non-interactive`
 - `--operator`
+- `--query`
+- `--run-id`
 - `--seed`
 - `--timeout`
-- `--max-parallel`
-- `--query`
 - `--top-k`
-- `--run-id`
 
 ## Per-method parameter hints
 

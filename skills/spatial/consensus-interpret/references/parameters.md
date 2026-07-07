@@ -6,14 +6,14 @@
 
 ## Allowed extra CLI flags
 
-- `--tissue`
 - `--adata`
+- `--coverage-floor`
 - `--markers`
 - `--no-llm`
 - `--seed`
+- `--tissue`
 - `--top-k-markers`
 - `--top-k-next-steps`
-- `--coverage-floor`
 
 ## Per-method parameter hints
 

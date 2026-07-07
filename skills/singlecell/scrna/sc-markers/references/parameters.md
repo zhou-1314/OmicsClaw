@@ -7,13 +7,13 @@
 ## Allowed extra CLI flags
 
 - `--groupby`
+- `--max-out-group-fraction`
 - `--method`
+- `--min-fold-change`
+- `--min-in-group-fraction`
+- `--mu`
 - `--n-genes`
 - `--n-top`
-- `--min-in-group-fraction`
-- `--min-fold-change`
-- `--max-out-group-fraction`
-- `--mu`
 - `--r-enhanced`
 
 ## Per-method parameter hints

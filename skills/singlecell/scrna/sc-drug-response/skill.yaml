@@ -38,13 +38,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --cluster-key
-    - --drug-db
-    - --method
-    - --model-dir
-    - --n-drugs
-    - --r-enhanced
     hints: {}
   outputs:
     files:

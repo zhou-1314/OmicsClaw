@@ -41,8 +41,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --max-reads
     hints: {}
   outputs:
     files:

@@ -50,15 +50,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --leiden-resolution
-    - --method
-    - --min-cells
-    - --min-peaks
-    - --n-lsi
-    - --n-neighbors
-    - --n-top-peaks
-    - --tfidf-scale-factor
     hints:
       tfidf_lsi:
         priority: min_peaks/min_cells -> n_top_peaks -> n_lsi/n_neighbors -> leiden_resolution

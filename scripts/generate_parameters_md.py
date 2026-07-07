@@ -54,8 +54,17 @@ def render_for_skill(skill_dir: Path) -> str | None:
         errors = validate_skill_yaml(skill_yaml)
         if errors:
             raise ValueError("; ".join(errors))
+        from omicsclaw.skill.execution.flag_introspection import (
+            params_dump_with_effective_flags,
+        )
+
         manifest = load_skill_yaml(skill_yaml)
-        params = manifest.interface.parameters.model_dump()
+        params = params_dump_with_effective_flags(
+            manifest.interface.parameters.model_dump(),
+            skill_dir,
+            manifest.runtime.entry,
+            manifest.type,
+        )
         return render_parameters_md(params, source="v2")
 
     sidecar_path = skill_dir / "parameters.yaml"

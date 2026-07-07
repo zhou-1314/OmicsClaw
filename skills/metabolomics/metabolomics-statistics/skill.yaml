@@ -43,11 +43,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --alpha
-    - --group1-prefix
-    - --group2-prefix
-    - --method
     hints: {}
   outputs:
     files:

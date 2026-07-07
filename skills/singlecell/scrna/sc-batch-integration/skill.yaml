@@ -47,23 +47,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --batch-key
-    - --method
-    - --n-epochs
-    - --no-gpu
-    - --n-latent
-    - --labels-key
-    - --harmony-theta
-    - --bbknn-neighbors-within-batch
-    - --scanorama-knn
-    - --integration-features
-    - --integration-pcs
-    - --simba-n-top-genes
-    - --simba-n-components
-    - --simba-k
-    - --simba-num-workers
-    - --r-enhanced
     hints:
       harmony:
         priority: batch_key

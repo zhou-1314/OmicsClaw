@@ -36,15 +36,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --method
-    - --batch-key
-    - --cluster-method
-    - --resolution
-    - --n-neighbors
-    - --n-pcs
-    - --n-top-genes
-    - --seed
     hints:
       default:
         priority: method -> batch_key -> resolution

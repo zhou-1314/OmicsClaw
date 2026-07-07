@@ -6,29 +6,29 @@
 
 ## Allowed extra CLI flags
 
-- `--read1`
-- `--read2`
-- `--ids`
-- `--ref-map`
-- `--ref-annotation`
-- `--exp-name`
-- `--platform`
-- `--threads`
+- `--bin-path`
+- `--compute-saturation`
 - `--contaminant-index`
+- `--demultiplexing-kmer`
+- `--demultiplexing-mismatches`
+- `--disable-clipping`
+- `--exp-name`
+- `--htseq-no-ambiguous`
+- `--ids`
 - `--min-length-qual-trimming`
 - `--min-quality-trimming`
-- `--demultiplexing-mismatches`
-- `--demultiplexing-kmer`
-- `--umi-allowed-mismatches`
-- `--umi-start-position`
-- `--umi-end-position`
-- `--disable-clipping`
-- `--compute-saturation`
-- `--htseq-no-ambiguous`
-- `--transcriptome`
+- `--platform`
+- `--read1`
+- `--read2`
+- `--ref-annotation`
+- `--ref-map`
 - `--star-two-pass-mode`
 - `--stpipeline-repo`
-- `--bin-path`
+- `--threads`
+- `--transcriptome`
+- `--umi-allowed-mismatches`
+- `--umi-end-position`
+- `--umi-start-position`
 
 ## Per-method parameter hints
 

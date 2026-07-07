@@ -42,10 +42,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --alpha
-    - --log2fc-threshold
-    - --method
     hints: {}
   outputs:
     files:

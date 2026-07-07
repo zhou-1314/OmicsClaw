@@ -6,13 +6,13 @@
 
 ## Allowed extra CLI flags
 
-- `--method`
 - `--batch-key`
 - `--cluster-method`
-- `--resolution`
+- `--method`
 - `--n-neighbors`
 - `--n-pcs`
 - `--n-top-genes`
+- `--resolution`
 - `--seed`
 
 ## Per-method parameter hints

@@ -41,18 +41,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --domain
-    - --input-format
-    - --method
-    - --no-tests
-    - --output-item
-    - --promote-from-latest
-    - --request
-    - --skill-name
-    - --source-analysis-dir
-    - --summary
-    - --trigger-keyword
     hints: {}
   outputs:
     files:

@@ -47,26 +47,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --cell-type-key
-    - --cellchat-min-cells
-    - --cellchat-prob-type
-    - --cellphonedb-counts-data
-    - --cellphonedb-iterations
-    - --cellphonedb-pvalue
-    - --cellphonedb-threshold
-    - --cellphonedb-threads
-    - --condition-key
-    - --condition-oi
-    - --condition-ref
-    - --method
-    - --nichenet-lfc-cutoff
-    - --nichenet-expression-pct
-    - --nichenet-top-ligands
-    - --receiver
-    - --senders
-    - --species
-    - --r-enhanced
     hints:
       builtin:
         priority: cell_type_key -> species

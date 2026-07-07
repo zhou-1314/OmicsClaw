@@ -10,9 +10,9 @@
 - `--expected-cells`
 - `--filtered-matrix-dir`
 - `--method`
+- `--r-enhanced`
 - `--raw-h5`
 - `--raw-matrix-dir`
-- `--r-enhanced`
 
 ## Per-method parameter hints
 

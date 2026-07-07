@@ -41,21 +41,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --embedding-method
-    - --cluster-method
-    - --use-rep
-    - --n-neighbors
-    - --n-pcs
-    - --resolution
-    - --umap-min-dist
-    - --umap-spread
-    - --tsne-perplexity
-    - --tsne-metric
-    - --diffmap-n-comps
-    - --phate-knn
-    - --phate-decay
-    - --r-enhanced
     hints:
       umap:
         priority: use_rep -> cluster_method -> n_neighbors/resolution

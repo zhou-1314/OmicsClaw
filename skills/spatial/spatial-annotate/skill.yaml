@@ -49,28 +49,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --batch-key
-    - --cell-type-key
-    - --cellassign-max-epochs
-    - --cluster-key
-    - --layer
-    - --marker-n-genes
-    - --marker-overlap-method
-    - --marker-overlap-normalize
-    - --marker-padj-cutoff
-    - --marker-rank-method
-    - --method
-    - --model
-    - --reference
-    - --scanvi-max-epochs
-    - --scanvi-n-hidden
-    - --scanvi-n-layers
-    - --scanvi-n-latent
-    - --species
-    - --tangram-device
-    - --tangram-num-epochs
-    - --tangram-train-genes
     hints:
       marker_based:
         priority: cluster_key → marker_rank_method → marker_n_genes / marker_padj_cutoff

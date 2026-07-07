@@ -48,11 +48,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --gene-set-file
-    - --lfc-cutoff
-    - --method
-    - --padj-cutoff
     hints: {}
   outputs:
     files:

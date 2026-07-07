@@ -52,30 +52,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --read1
-    - --read2
-    - --ids
-    - --ref-map
-    - --ref-annotation
-    - --exp-name
-    - --platform
-    - --threads
-    - --contaminant-index
-    - --min-length-qual-trimming
-    - --min-quality-trimming
-    - --demultiplexing-mismatches
-    - --demultiplexing-kmer
-    - --umi-allowed-mismatches
-    - --umi-start-position
-    - --umi-end-position
-    - --disable-clipping
-    - --compute-saturation
-    - --htseq-no-ambiguous
-    - --transcriptome
-    - --star-two-pass-mode
-    - --stpipeline-repo
-    - --bin-path
     hints:
       st_pipeline:
         priority: ids/ref_map/ref_annotation -> threads -> compute_saturation -> demultiplexing -> umi

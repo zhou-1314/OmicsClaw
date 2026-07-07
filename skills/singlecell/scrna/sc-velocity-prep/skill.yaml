@@ -46,17 +46,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --base-h5ad
-    - --chemistry
-    - --gtf
-    - --method
-    - --read2
-    - --reference
-    - --sample
-    - --threads
-    - --whitelist
-    - --r-enhanced
     hints:
       velocyto:
         priority: gtf -> base_h5ad -> threads

@@ -53,16 +53,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --center-key
-    - --center-values
-    - --data-type
-    - --exclude-centers
-    - --microns-per-coordinate-unit
-    - --radius-microns
-    - --radius-native
-    - --target-key
-    - --target-values
     hints: {}
   outputs:
     files:

@@ -45,12 +45,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --from
-    - --mapping-file
-    - --on-duplicate
-    - --species
-    - --to
     hints: {}
   outputs:
     files:

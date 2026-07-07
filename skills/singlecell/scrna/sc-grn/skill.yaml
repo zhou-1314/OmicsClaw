@@ -50,16 +50,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --allow-simplified-grn
-    - --cluster-key
-    - --db
-    - --motif
-    - --n-jobs
-    - --n-top-targets
-    - --seed
-    - --tf-list
-    - --r-enhanced
     hints:
       pyscenic_workflow:
         priority: tf_list -> db -> motif -> n_top_targets -> n_jobs

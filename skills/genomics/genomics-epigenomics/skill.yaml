@@ -48,10 +48,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --assay
-    - --method
-    - --n-peaks
     hints: {}
   outputs:
     files:

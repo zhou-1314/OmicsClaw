@@ -42,20 +42,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --celltypist-majority-voting
-    - --cluster-key
-    - --manual-map
-    - --manual-map-file
-    - --marker-file
-    - --method
-    - --model
-    - --r-enhanced
-    - --reference
-    - --scsa-foldchange
-    - --scsa-pvalue
-    - --species
-    - --tissue
     hints:
       manual:
         priority: cluster_key -> manual_map/manual_map_file

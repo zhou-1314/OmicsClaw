@@ -49,25 +49,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --confirmed-preflight
-    - --doublet-score-threshold
-    - --max-mt-pct
-    - --method
-    - --min-cells
-    - --min-genes
-    - --n-pcs
-    - --n-top-hvg
-    - --no-remove-doublets
-    - --normalization-target-sum
-    - --pearson-hvg-flavor
-    - --pearson-theta
-    - --r-enhanced
-    - --scanpy-hvg-flavor
-    - --sctransform-regress-mt
-    - --seurat-hvg-method
-    - --seurat-normalize-method
-    - --seurat-scale-factor
     hints:
       scanpy:
         priority: min_genes/max_mt_pct -> n_top_hvg -> n_pcs

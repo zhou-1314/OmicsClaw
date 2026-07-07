@@ -6,44 +6,32 @@
 
 ## Allowed extra CLI flags
 
-- `--members`
-- `--resolutions`
-- `--cluster-methods`
 - `--all`
-- `--n-clusters`
-- `--confirm-plan`
-- `--non-interactive`
 - `--alpha`
 - `--beta`
-- `--max-class-frac`
+- `--cluster-methods`
+- `--confirm-plan`
 - `--llm-judge`
+- `--max-class-frac`
+- `--max-parallel`
+- `--members`
+- `--n-clusters`
+- `--non-interactive`
 - `--operator`
+- `--resolutions`
+- `--run-id`
 - `--seed`
 - `--timeout`
-- `--max-parallel`
 - `--top-k`
-- `--run-id`
 
 ## Per-method parameter hints
 
 ### `leiden`
 
-**Core parameters:**
-
-| name | default |
-|---|---|
-| `resolution` | `1.0` |
-
 **Tips:**
-- Member resolution values are produced by the --resolutions sweep.
+- Per-member resolution is not a standalone CLI flag; the sweep values come from the --resolutions list (see allowed_extra_flags).
 
 ### `louvain`
 
-**Core parameters:**
-
-| name | default |
-|---|---|
-| `resolution` | `1.0` |
-
 **Tips:**
-- Member resolution values are produced by the --resolutions sweep.
+- Per-member resolution is not a standalone CLI flag; the sweep values come from the --resolutions list (see allowed_extra_flags).

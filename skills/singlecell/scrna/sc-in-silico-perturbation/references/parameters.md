@@ -6,21 +6,21 @@
 
 ## Allowed extra CLI flags
 
-- `--method`
-- `--ko-gene`
-- `--n-top-genes`
 - `--corr-threshold`
-- `--qc`
-- `--qc-min-lib-size`
-- `--qc-min-cells`
-- `--n-net`
+- `--ko-gene`
+- `--ma-dim`
+- `--method`
 - `--n-cells`
 - `--n-comp`
-- `--q`
-- `--td-k`
-- `--ma-dim`
 - `--n-cores`
+- `--n-net`
+- `--n-top-genes`
+- `--q`
+- `--qc`
+- `--qc-min-cells`
+- `--qc-min-lib-size`
 - `--r-enhanced`
+- `--td-k`
 
 ## Per-method parameter hints
 

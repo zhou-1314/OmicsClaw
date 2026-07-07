@@ -56,19 +56,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --data-type
-    - --leiden-resolution
-    - --max-genes
-    - --max-mt-pct
-    - --min-cells
-    - --min-genes
-    - --n-neighbors
-    - --n-pcs
-    - --n-top-hvg
-    - --resolutions
-    - --species
-    - --tissue
     hints:
       scanpy_standard:
         priority: tissue → min_genes/max_mt_pct/max_genes → n_top_hvg → n_pcs/n_neighbors → leiden_resolution

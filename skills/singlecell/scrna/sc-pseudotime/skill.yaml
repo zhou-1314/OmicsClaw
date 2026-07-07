@@ -50,30 +50,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --method
-    - --cluster-key
-    - --use-rep
-    - --root-cluster
-    - --root-cell
-    - --end-clusters
-    - --n-neighbors
-    - --n-pcs
-    - --n-dcs
-    - --n-genes
-    - --corr-method
-    - --palantir-knn
-    - --palantir-n-components
-    - --palantir-num-waypoints
-    - --palantir-max-iterations
-    - --palantir-seed
-    - --via-knn
-    - --via-seed
-    - --cellrank-n-states
-    - --cellrank-schur-components
-    - --cellrank-frac-to-keep
-    - --cellrank-use-velocity
-    - --r-enhanced
     hints:
       dpt:
         priority: cluster_key -> use_rep -> root_cluster/root_cell

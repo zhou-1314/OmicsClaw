@@ -54,27 +54,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --auto-k
-    - --auto-k-min
-    - --auto-k-max
-    - --data-type
-    - --dim-output
-    - --epochs
-    - --k-nn
-    - --lambda-param
-    - --method
-    - --n-domains
-    - --n-layers
-    - --num-neighbours
-    - --pre-resolution
-    - --rad-cutoff
-    - --refine
-    - --resolution
-    - --spagcn-p
-    - --spatial-weight
-    - --stagate-alpha
-    - --use-rep
     hints:
       leiden:
         priority: resolution → spatial_weight

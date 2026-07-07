@@ -6,19 +6,19 @@
 
 ## Allowed extra CLI flags
 
-- `--method`
-- `--cluster-key`
-- `--root-cell`
-- `--root-cell-type`
-- `--dpt-n-dcs`
+- `--cellrank-frac-to-keep`
 - `--cellrank-n-states`
 - `--cellrank-schur-components`
-- `--cellrank-frac-to-keep`
 - `--cellrank-use-velocity`
-- `--palantir-n-components`
+- `--cluster-key`
+- `--dpt-n-dcs`
+- `--method`
 - `--palantir-knn`
-- `--palantir-num-waypoints`
 - `--palantir-max-iterations`
+- `--palantir-n-components`
+- `--palantir-num-waypoints`
+- `--root-cell`
+- `--root-cell-type`
 
 ## Per-method parameter hints
 

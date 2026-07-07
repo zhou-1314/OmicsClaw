@@ -7,8 +7,8 @@
 ## Allowed extra CLI flags
 
 - `--auto-k`
-- `--auto-k-min`
 - `--auto-k-max`
+- `--auto-k-min`
 - `--data-type`
 - `--dim-output`
 - `--epochs`

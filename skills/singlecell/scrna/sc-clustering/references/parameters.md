@@ -6,20 +6,20 @@
 
 ## Allowed extra CLI flags
 
-- `--embedding-method`
 - `--cluster-method`
-- `--use-rep`
+- `--diffmap-n-comps`
+- `--embedding-method`
 - `--n-neighbors`
 - `--n-pcs`
+- `--phate-decay`
+- `--phate-knn`
+- `--r-enhanced`
 - `--resolution`
+- `--tsne-metric`
+- `--tsne-perplexity`
 - `--umap-min-dist`
 - `--umap-spread`
-- `--tsne-perplexity`
-- `--tsne-metric`
-- `--diffmap-n-comps`
-- `--phate-knn`
-- `--phate-decay`
-- `--r-enhanced`
+- `--use-rep`
 
 ## Per-method parameter hints
 

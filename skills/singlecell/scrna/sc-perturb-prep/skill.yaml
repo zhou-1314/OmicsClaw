@@ -39,22 +39,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --mapping-file
-    - --barcode-column
-    - --sgrna-column
-    - --target-column
-    - --sep
-    - --delimiter
-    - --gene-position
-    - --pert-key
-    - --sgrna-key
-    - --target-key
-    - --control-patterns
-    - --control-label
-    - --keep-multi-guide
-    - --species
-    - --r-enhanced
     hints: {}
   outputs:
     files:

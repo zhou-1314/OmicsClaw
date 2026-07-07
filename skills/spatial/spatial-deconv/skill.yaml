@@ -55,47 +55,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --card-imputation
-    - --card-ineibor
-    - --card-min-count-gene
-    - --card-min-count-spot
-    - --card-num-grids
-    - --card-sample-key
-    - --cell-type-key
-    - --cell2location-detection-alpha
-    - --cell2location-n-cells-per-spot
-    - --cell2location-n-epochs
-    - --cpu
-    - --destvi-condscvi-epochs
-    - --destvi-dropout-rate
-    - --destvi-n-epochs
-    - --destvi-n-hidden
-    - --destvi-n-latent
-    - --destvi-n-layers
-    - --destvi-vamp-prior-p
-    - --flashdeconv-lambda-spatial
-    - --flashdeconv-n-hvg
-    - --flashdeconv-n-markers-per-type
-    - --flashdeconv-sketch-dim
-    - --method
-    - --n-epochs
-    - --no-gpu
-    - --rctd-mode
-    - --reference
-    - --spotlight-min-prop
-    - --spotlight-model
-    - --spotlight-n-top
-    - --spotlight-scale
-    - --spotlight-weight-id
-    - --stereoscope-batch-size
-    - --stereoscope-learning-rate
-    - --stereoscope-rna-epochs
-    - --stereoscope-spatial-epochs
-    - --tangram-learning-rate
-    - --tangram-mode
-    - --tangram-n-epochs
-    - --use-gpu
     hints:
       flashdeconv:
         priority: flashdeconv_lambda_spatial → flashdeconv_sketch_dim → flashdeconv_n_hvg

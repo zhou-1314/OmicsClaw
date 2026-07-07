@@ -6,29 +6,29 @@
 
 ## Allowed extra CLI flags
 
-- `--method`
-- `--cluster-key`
-- `--use-rep`
-- `--root-cluster`
-- `--root-cell`
-- `--end-clusters`
-- `--n-neighbors`
-- `--n-pcs`
-- `--n-dcs`
-- `--n-genes`
-- `--corr-method`
-- `--palantir-knn`
-- `--palantir-n-components`
-- `--palantir-num-waypoints`
-- `--palantir-max-iterations`
-- `--palantir-seed`
-- `--via-knn`
-- `--via-seed`
+- `--cellrank-frac-to-keep`
 - `--cellrank-n-states`
 - `--cellrank-schur-components`
-- `--cellrank-frac-to-keep`
 - `--cellrank-use-velocity`
+- `--cluster-key`
+- `--corr-method`
+- `--end-clusters`
+- `--method`
+- `--n-dcs`
+- `--n-genes`
+- `--n-neighbors`
+- `--n-pcs`
+- `--palantir-knn`
+- `--palantir-max-iterations`
+- `--palantir-n-components`
+- `--palantir-num-waypoints`
+- `--palantir-seed`
 - `--r-enhanced`
+- `--root-cell`
+- `--root-cluster`
+- `--use-rep`
+- `--via-knn`
+- `--via-seed`
 
 ## Per-method parameter hints
 

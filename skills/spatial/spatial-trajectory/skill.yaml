@@ -49,20 +49,6 @@ interface:
       env: []
       config: []
   parameters:
-    allowed_extra_flags:
-    - --method
-    - --cluster-key
-    - --root-cell
-    - --root-cell-type
-    - --dpt-n-dcs
-    - --cellrank-n-states
-    - --cellrank-schur-components
-    - --cellrank-frac-to-keep
-    - --cellrank-use-velocity
-    - --palantir-n-components
-    - --palantir-knn
-    - --palantir-num-waypoints
-    - --palantir-max-iterations
     hints:
       dpt:
         priority: cluster_key/root_cell/root_cell_type → dpt_n_dcs
