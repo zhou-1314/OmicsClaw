@@ -9,11 +9,14 @@ import pytest
 
 from omicsclaw.skill.registry import OmicsRegistry
 from omicsclaw.skill.scaffolder import (
+    _demo_gate_skip_reason,
+    _strip_redundant_pathlib_import,
     create_skill_scaffold,
     find_latest_autonomous_analysis,
     infer_skill_name,
 )
-from omicsclaw.skill.schema import validate_skill_yaml
+from omicsclaw.skill.schema import load_skill_yaml, validate_skill_yaml
+from omicsclaw.common.report import SCAFFOLD_STATUS, validate_result_envelope
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -46,6 +49,60 @@ def test_infer_skill_name_falls_back_to_request_tokens():
     assert infer_skill_name("Create a CellCharter spatial domains skill", "spatial") == (
         "cellcharter-spatial-domains"
     )
+
+
+# --- P1 --demo smoke gate: skip-vs-reject classification --------------------
+
+
+def test_demo_gate_skip_reason_recognizes_missing_dependency():
+    traceback_text = "Traceback (most recent call last):\n  File x\nModuleNotFoundError: No module named 'x'\n"
+    assert _demo_gate_skip_reason(traceback_text) is not None
+
+
+def test_demo_gate_skip_reason_recognizes_stale_demo_input():
+    """MF6: a promoted skill's original input can go stale between the source
+    run and promotion (its autonomous-analysis workspace may already be
+    cleaned up) — that is a missing-input environment limitation, not a bug
+    in the promoted code."""
+    traceback_text = (
+        "Traceback (most recent call last):\n  File x\n"
+        "FileNotFoundError: [Errno 2] No such file or directory: 'x'\n"
+    )
+    assert _demo_gate_skip_reason(traceback_text) is not None
+
+
+def test_demo_gate_skip_reason_rejects_unrelated_message_mentioning_importerror():
+    """A genuine bug whose OWN message happens to contain the word
+    "ImportError" must not be misclassified as an environment limitation —
+    only the actual exception TYPE at the start of a traceback line counts
+    (an anchored regex, not a bare substring match), otherwise a broken
+    promoted skill could slip into the catalog as merely `skipped`."""
+    traceback_text = "Traceback (most recent call last):\n  File x\nRuntimeError: ImportError: synthetic hard bug\n"
+    assert _demo_gate_skip_reason(traceback_text) is None
+
+
+# --- _strip_redundant_pathlib_import: AST-based, not a blind text pass ------
+
+
+def test_strip_redundant_pathlib_import_preserves_string_literals():
+    """A regex/text pass would also match this text inside a string literal;
+    the AST-based implementation must not corrupt it."""
+    code = "msg = 'remember: from pathlib import Path'\nprint(msg)\n"
+    assert _strip_redundant_pathlib_import(code) == code
+
+
+def test_strip_redundant_pathlib_import_drops_real_import():
+    code = "from pathlib import Path\nout = Path('x')\n"
+    stripped = _strip_redundant_pathlib_import(code)
+    assert "from pathlib import Path" not in stripped
+    assert "out = Path('x')" in stripped
+
+
+def test_strip_redundant_pathlib_import_leaves_multi_name_import_alone():
+    """`from pathlib import Path, PurePath` must be left untouched — dropping
+    the whole line would also remove `PurePath`, which the code may need."""
+    code = "from pathlib import Path, PurePath\nout = Path('x')\n"
+    assert _strip_redundant_pathlib_import(code) == code
 
 
 def test_create_skill_scaffold_creates_registry_loadable_skill(tmp_path: Path):
@@ -83,6 +140,13 @@ def test_create_skill_scaffold_creates_registry_loadable_skill(tmp_path: Path):
     assert result.completion["completed"] is True
     assert lint_skill(skill_dir) == []
 
+    # Acquisition P0 contract: a fresh scaffold is BORN unproven — `draft`
+    # persists under to_yaml(exclude_defaults) since it isn't the schema
+    # default (`mvp`), and origin records how the skill came to exist.
+    manifest = load_skill_yaml(skill_dir / "skill.yaml")
+    assert manifest.lifecycle.status == "draft"
+    assert manifest.provenance.origin == "scaffolded"
+
     registry = OmicsRegistry()
     registry.load_all(tmp_path)
 
@@ -90,6 +154,32 @@ def test_create_skill_scaffold_creates_registry_loadable_skill(tmp_path: Path):
     assert info is not None
     assert info["domain"] == "proteomics"
     assert info["script"].name == "proteomics_kinase_activity.py"
+
+
+def test_scaffold_placeholder_script_runs_and_signals_unimplemented(tmp_path: Path):
+    """The placeholder script must actually run --demo and its result.json must
+    validate against the envelope contract while still signalling `scaffold`
+    (unimplemented) — this is the only signal the P1 --demo smoke gate has to
+    tell a fresh placeholder apart from a real/promoted body."""
+    result = create_skill_scaffold(
+        request="Detect spatial domains for a new demo assay.",
+        domain="spatial",
+        skill_name="placeholder-check-skill",
+        skills_root=tmp_path,
+    )
+    script = Path(result.skill_dir) / "placeholder_check_skill.py"
+    run_out = tmp_path / "run_out"
+    proc = subprocess.run(
+        [sys.executable, str(script), "--demo", "--output", str(run_out)],
+        cwd=ROOT,
+        env={**os.environ, "PYTHONPATH": str(ROOT)},
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    envelope = json.loads((run_out / "result.json").read_text(encoding="utf-8"))
+    assert validate_result_envelope(envelope) == []
+    assert envelope["status"] == SCAFFOLD_STATUS
 
 
 def test_create_skill_scaffold_can_promote_autonomous_analysis(tmp_path: Path):
@@ -216,7 +306,13 @@ def _build_real_mini_agent_run(
     workspace = create_workspace(request)
     cells = accepted_cells if accepted_cells is not None else [
         "res = oc.run('sc-preprocessing', adata)\nadata = res.adata",
-        "import scanpy as sc\nsc.tl.leiden(adata)\nReturnAnswer('2 clusters')",
+        # `if adata is not None` guards the same way `SkillHandleResult.__bool__`
+        # invites (`if res: ...`): sc-preprocessing's own preflight can block
+        # pending a confirmation no headless replay can give, leaving
+        # `res.adata` None. A real accepted-and-shipped mini-agent cell
+        # checks before consuming a nested oc.run() result; this fixture now
+        # matches that so the promoted script is actually demo-runnable.
+        "import scanpy as sc\nif adata is not None:\n    sc.tl.leiden(adata)\nReturnAnswer('2 clusters')",
     ]
     emit_replay_script(
         workspace.root,
@@ -236,8 +332,20 @@ def _build_real_mini_agent_run(
 
 
 def test_create_skill_scaffold_can_promote_mini_agent_analysis(tmp_path: Path):
-    """Promote a REAL mini-agent run (no notebook; code in ``analysis.py``)."""
-    output_root, source_dir = _build_real_mini_agent_run(tmp_path)
+    """Promote a REAL mini-agent run (no notebook; code in ``analysis.py``).
+
+    ``real_input=True``: the P1 --demo smoke gate now actually executes the
+    promoted script during ``create_skill_scaffold``, so its input must be a
+    loadable .h5ad — a real promotion's input is always the original run's
+    genuinely-successful file, this fixture just mirrors that. The default
+    cells' ``oc.run('sc-preprocessing', adata)`` call can't actually complete
+    standalone (that skill's own preflight guard blocks pending interactive
+    confirmation no headless replay can give), which is why the second cell
+    guards with ``if adata is not None`` before consuming the result — real
+    accepted-and-shipped mini-agent code checks a nested call's outcome the
+    same way (``SkillHandleResult.__bool__``) rather than assuming success.
+    """
+    output_root, source_dir = _build_real_mini_agent_run(tmp_path, real_input=True)
 
     result = create_skill_scaffold(
         request="Package the clustering run as a reusable skill.",
@@ -321,6 +429,14 @@ def test_promoted_mini_agent_skill_runs(tmp_path: Path):
     assert "NameError" not in proc.stderr
     assert (run_out / "result.json").exists()
     assert (run_out / "answer.txt").read_text(encoding="utf-8").strip() == "cells=5"
+
+    # Acquisition P0 contract: a promoted body that ran to completion earns a
+    # real `ok` status through the shared write_result_json/mark_result_status
+    # helpers, not the old ad-hoc "promoted_from_autonomous_analysis" string
+    # (which validate_result_envelope would have rejected as off-taxonomy).
+    envelope = json.loads((run_out / "result.json").read_text(encoding="utf-8"))
+    assert validate_result_envelope(envelope) == []
+    assert envelope["status"] == "ok"
 
 
 def test_find_latest_discovers_project_nested_mini_agent_run(tmp_path: Path):

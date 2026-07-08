@@ -340,6 +340,39 @@ def write_result_json(
 
 _RESULT_STATUS_VALUES = frozenset({"ok", "partial", "failed"})
 
+# Sentinel status written by placeholder scaffold scripts (scaffolder.render_skill_script):
+# the envelope is shape-valid but the scientific body is unimplemented. The
+# promotion / demo smoke gate keys off this to keep a fresh scaffold as ``draft``
+# instead of crediting it. It is NOT a run outcome, so ``mark_result_status``
+# (which gates real success / failure) deliberately rejects it.
+SCAFFOLD_STATUS = "scaffold"
+
+
+def validate_result_envelope(payload: Any) -> list[str]:
+    """Validate a ``result.json`` payload against the standard envelope contract.
+
+    Returns a list of human-readable problems (empty == valid). The envelope
+    guarantees two content objects — ``summary`` and ``data`` are always written
+    as dicts by :func:`write_result_json`. A top-level ``status``, when present,
+    must be one of the documented run outcomes (``ok`` / ``partial`` / ``failed``)
+    or the :data:`SCAFFOLD_STATUS` sentinel that marks an unimplemented
+    placeholder. This is the shared contract the ``--demo`` smoke gate reuses to
+    decide whether a freshly-created skill earned ``demo-validated`` (it treats a
+    ``scaffold`` status as "not a real run" rather than a failure).
+    """
+    if not isinstance(payload, dict):
+        return ["result.json must be a JSON object"]
+    problems: list[str] = []
+    if not isinstance(payload.get("summary"), dict):
+        problems.append("summary must be an object")
+    if not isinstance(payload.get("data"), dict):
+        problems.append("data must be an object")
+    status = payload.get("status")
+    if status is not None and status not in _RESULT_STATUS_VALUES and status != SCAFFOLD_STATUS:
+        allowed = sorted(_RESULT_STATUS_VALUES | {SCAFFOLD_STATUS})
+        problems.append(f"status {status!r} is not one of {allowed}")
+    return problems
+
 
 def mark_result_status(
     output_dir: str | Path,

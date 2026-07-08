@@ -26,7 +26,12 @@ import subprocess
 import threading
 from pathlib import Path
 
-from omicsclaw.common.report import mark_result_status, read_result_status
+from omicsclaw.common.report import (
+    SCAFFOLD_STATUS,
+    mark_result_status,
+    read_result_status,
+    validate_result_envelope,
+)
 from omicsclaw.skill.execution.subprocess_driver import drive_subprocess
 
 
@@ -81,6 +86,56 @@ def test_read_result_status_returns_the_canonical_value(tmp_path: Path):
     for value in ("ok", "partial", "failed"):
         _write_result_envelope(tmp_path, status=value)
         assert read_result_status(tmp_path) == value
+
+
+# ---------------------------------------------------------------------------
+# validate_result_envelope (acquisition P0 contract validator, reused by the
+# P1 --demo smoke gate to decide whether a fresh scaffold earned credit)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_result_envelope_accepts_a_compliant_payload():
+    payload = {"summary": {"method": "fake"}, "data": {"n": 1}, "status": "ok"}
+    assert validate_result_envelope(payload) == []
+
+
+def test_validate_result_envelope_status_is_optional():
+    payload = {"summary": {}, "data": {}}
+    assert validate_result_envelope(payload) == []
+
+
+def test_validate_result_envelope_accepts_the_scaffold_sentinel():
+    """A fresh placeholder's ``status: scaffold`` is shape-valid, not a failure —
+    the smoke gate uses this to withhold credit rather than reject the skill."""
+    payload = {"summary": {"implemented": False}, "data": {}, "status": SCAFFOLD_STATUS}
+    assert validate_result_envelope(payload) == []
+
+
+def test_validate_result_envelope_rejects_non_dict_payload():
+    assert validate_result_envelope(["not", "a", "dict"]) == ["result.json must be a JSON object"]
+
+
+def test_validate_result_envelope_flags_missing_summary():
+    problems = validate_result_envelope({"data": {}})
+    assert "summary must be an object" in problems
+
+
+def test_validate_result_envelope_flags_missing_data():
+    problems = validate_result_envelope({"summary": {}})
+    assert "data must be an object" in problems
+
+
+def test_validate_result_envelope_flags_wrong_typed_summary_and_data():
+    problems = validate_result_envelope({"summary": "nope", "data": []})
+    assert "summary must be an object" in problems
+    assert "data must be an object" in problems
+
+
+def test_validate_result_envelope_rejects_off_taxonomy_status():
+    problems = validate_result_envelope({"summary": {}, "data": {}, "status": "success"})
+    assert len(problems) == 1
+    assert "success" in problems[0]
+    assert "ok" in problems[0] and SCAFFOLD_STATUS in problems[0]
 
 
 # ---------------------------------------------------------------------------

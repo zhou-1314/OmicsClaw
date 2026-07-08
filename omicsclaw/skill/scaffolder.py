@@ -8,12 +8,14 @@ import json
 import os
 import re
 import shutil
+import subprocess
 from pathlib import Path
 import sys
 import textwrap
 from typing import Iterable
 
 from omicsclaw.common.manifest import StepRecord
+from omicsclaw.common.report import SCAFFOLD_STATUS, validate_result_envelope
 from omicsclaw.runtime.tools.hooks import build_default_lifecycle_hook_runtime
 from omicsclaw.runtime.policy.verification import (
     COMPLETION_REPORT_FILENAME,
@@ -41,6 +43,12 @@ OUTPUT_DIR = OMICSCLAW_DIR / "output"
 SKILL_TEMPLATE_PATH = OMICSCLAW_DIR / "templates" / "skill" / "SKILL.md"
 STAGING_ROOT = OMICSCLAW_DIR / ".omicsclaw-staging" / "skill-scaffolds"
 SKILL_SCAFFOLDER_VERSION = __version__
+
+# P1 acquisition gate (docs/proposals/skill-acquisition-p0-p1-landing.md): a
+# --demo smoke run is a lightweight sanity check, not a real analysis, so it
+# should finish in seconds; this bounds a genuine hang rather than a slow
+# computation (MF4 — this is demo validation, not a sandboxed execution tier).
+_DEMO_SMOKE_GATE_TIMEOUT_SECONDS = 120
 
 VALID_DOMAINS = (
     "spatial",
@@ -194,6 +202,13 @@ class SkillScaffoldResult:
     created_files: list[str] | None = None
     template_path: str = str(SKILL_TEMPLATE_PATH)
     registry_refreshed: bool = False
+    # P1 --demo smoke gate outcome: "earned" (validation.level upgraded to
+    # demo-validated) or "skipped" (env/input limitation or an unimplemented
+    # placeholder — left at its prior validation level). A "rejected" verdict
+    # never reaches this dataclass: create_skill_scaffold raises instead. See
+    # _run_demo_smoke_gate.
+    demo_gate_verdict: str = ""
+    demo_gate_reason: str = ""
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -487,7 +502,8 @@ def build_scaffold_manifest(
     mirror its own ``--method`` / ``--species``.  ``deps.python`` is ``deps_python`` when given
     (the promotion path seeds it from the rendered script's real import surface
     so ``audit_skill_requires`` starts clean) else empty (the default
-    placeholder script imports only stdlib).
+    placeholder script imports only stdlib plus ``omicsclaw.common.report``,
+    which ``_infer_python_deps`` excludes, so ``deps.python`` stays empty).
     """
     # Lazy import: keeps the scaffolder importable without pydantic (mirrors the
     # deferred schema import in lazy_metadata / generate_parameters_md).
@@ -496,6 +512,7 @@ def build_scaffold_manifest(
         Deps,
         Interface,
         Inputs,
+        Lifecycle,
         Outputs,
         Parameters,
         Provenance,
@@ -547,6 +564,11 @@ def build_scaffold_manifest(
             ],
         ),
         provenance=Provenance(origin="promoted" if source_bundle else "scaffolded"),
+        # Born unproven: a scaffold's science is a placeholder until the demo
+        # smoke gate credits it. `draft` (non-default) persists under
+        # to_yaml(exclude_defaults); skill_lint also exempts draft skills from the
+        # "entry script must exist" check. It graduates to `mvp` once earned.
+        lifecycle=Lifecycle(status="draft"),
     )
 
 
@@ -698,7 +720,14 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import sys
 from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from omicsclaw.common.report import SCAFFOLD_STATUS, write_result_json
 
 
 SKILL_NAME = "{skill_name}"
@@ -762,15 +791,14 @@ Implementation checklist:
 - expand tests beyond the scaffold smoke test
 \"\"\"
 
-    result = {{
-        "ok": True,
-        "status": "scaffold",
+    summary = {{"method": args.method, "implemented": False}}
+    data = {{
         "skill": SKILL_NAME,
         "domain": DOMAIN,
         "input": args.input_path or "demo",
         "method": args.method,
         "species": args.species,
-        "summary": SUMMARY,
+        "description": SUMMARY,
     }}
 
     _write_text(output_dir / "README.md", readme)
@@ -780,7 +808,16 @@ Implementation checklist:
         f"oc run {{SKILL_NAME}} --demo --output {{output_dir}}\\n",
     )
     _write_csv(output_dir / "tables" / "scaffold_checklist.csv")
-    (output_dir / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    result_path = write_result_json(
+        output_dir, skill=SKILL_NAME, version="0.1.0", summary=summary, data=data
+    )
+    # Mark the placeholder as unimplemented so the promotion / demo gate keeps
+    # this skill as `draft` rather than crediting a real run. write_result_json
+    # omits `status`; mark_result_status only accepts run outcomes, so stamp the
+    # scaffold sentinel directly.
+    envelope = json.loads(result_path.read_text(encoding="utf-8"))
+    envelope["status"] = SCAFFOLD_STATUS
+    result_path.write_text(json.dumps(envelope, indent=2), encoding="utf-8")
 
     print(f"Scaffold skill '{{SKILL_NAME}}' completed. Outputs written to {{output_dir}}")
 
@@ -844,7 +881,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from omicsclaw.common.report import mark_result_status, write_result_json
 
 
 SKILL_NAME = "{skill_name}"
@@ -917,15 +961,14 @@ This skill was generated from a successful autonomous analysis notebook.
 - Expand tests and tighten the OmicsClaw output contract in follow-up edits.
 \"\"\"
 
-    result = {{
-        "ok": True,
-        "status": "promoted_from_autonomous_analysis",
+    summary = {{"method": args.method, "input": effective_input}}
+    data = {{
         "skill": SKILL_NAME,
         "domain": DOMAIN,
         "input": effective_input,
         "source_analysis_dir": SOURCE_ANALYSIS_DIR,
         "source_notebook": SOURCE_NOTEBOOK,
-        "summary": SUMMARY,
+        "description": SUMMARY,
     }}
 
     _write_text(skill_output_dir / "README.md", readme)
@@ -934,7 +977,13 @@ This skill was generated from a successful autonomous analysis notebook.
         skill_output_dir / "reproducibility" / "commands.sh",
         f"oc run {{SKILL_NAME}} --output {{skill_output_dir}}\\n",
     )
-    (skill_output_dir / "result.json").write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+    write_result_json(
+        skill_output_dir, skill=SKILL_NAME, version="0.1.0", summary=summary, data=data
+    )
+    # Reaching this line means the promoted body above ran to completion without
+    # raising, so this is a genuine success signal (unlike the scaffold
+    # placeholder's SCAFFOLD_STATUS sentinel, which marks unimplemented science).
+    mark_result_status(skill_output_dir, "ok")
 
     print(f"Promoted skill '{{SKILL_NAME}}' completed. Outputs written to {{skill_output_dir}}")
 
@@ -947,12 +996,40 @@ if __name__ == "__main__":
 def render_skill_test(skill_name: str) -> str:
     script_name = f"{skill_name.replace('-', '_')}.py"
     return f"""from pathlib import Path
+import json
+import subprocess
+import sys
 
 
 def test_scaffold_files_exist():
     root = Path(__file__).resolve().parents[1]
     assert (root / "SKILL.md").exists()
     assert (root / "{script_name}").exists()
+
+
+def test_demo_produces_a_valid_result_envelope(tmp_path):
+    \"\"\"Real smoke assertion (not just file existence): the entry script must
+    actually run --demo and its result.json must satisfy the shared envelope
+    shape (summary/data objects) that the P1 acquisition gate checked at
+    creation time. Passes for both an unimplemented placeholder (status:
+    scaffold) and a real/promoted body (status: ok) -- this is the smoke
+    floor every skill clears; a durable input fixture in place of --demo
+    (fixture-validated) is a stricter tier layered on top later.
+    \"\"\"
+    script = Path(__file__).resolve().parents[1] / "{script_name}"
+    out_dir = tmp_path / "demo_out"
+    proc = subprocess.run(
+        [sys.executable, str(script), "--demo", "--output", str(out_dir)],
+        capture_output=True,
+        text=True,
+        timeout={_DEMO_SMOKE_GATE_TIMEOUT_SECONDS},
+    )
+    assert proc.returncode == 0, f"stdout={{proc.stdout}}\\nstderr={{proc.stderr}}"
+    envelope = json.loads((out_dir / "result.json").read_text(encoding="utf-8"))
+    # Mirrors validate_result_envelope's shape check without importing across
+    # the skill/package boundary (skill tests stay self-contained).
+    assert isinstance(envelope.get("summary"), dict)
+    assert isinstance(envelope.get("data"), dict)
 """
 
 
@@ -1219,10 +1296,49 @@ def _extract_setup_literals(source: str) -> dict[str, str]:
     return values
 
 
+def _strip_redundant_pathlib_import(code: str) -> str:
+    """Drop a standalone ``from pathlib import Path`` / ``import pathlib`` line.
+
+    This code is spliced into ``main()`` AFTER the promoted-script template's
+    own ``skill_output_dir = Path(args.output)``, but ``Path`` is already a
+    module global (the template imports it at module scope). A notebook/
+    mini-agent cell re-importing the exact same name — a common, harmless
+    habit in standalone code — makes ``Path`` local to ``main()`` for its
+    ENTIRE body under Python's function-scoping rule, so the template's
+    earlier use raises ``UnboundLocalError`` even though the import is
+    textually later. ``Path`` is already available; drop the redundant import.
+
+    Uses the AST (not a text/regex pass) so a string literal or comment that
+    happens to contain this exact text is never touched — only a real
+    top-level-in-its-scope import statement whose *only* imported name is
+    ``Path``/``pathlib`` qualifies, so `from pathlib import Path, PurePath`
+    (which the user's code may still need `PurePath` from) is left alone.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    drop_lines: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "pathlib":
+            if len(node.names) == 1 and node.names[0].name == "Path" and node.names[0].asname is None:
+                drop_lines.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+        elif isinstance(node, ast.Import):
+            if len(node.names) == 1 and node.names[0].name == "pathlib" and node.names[0].asname is None:
+                drop_lines.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+
+    if not drop_lines:
+        return code
+    lines = code.splitlines()
+    return "\n".join(line for i, line in enumerate(lines, start=1) if i not in drop_lines)
+
+
 def _normalize_promoted_code(code: str, source_dir: str) -> str:
     normalized = code or ""
     if source_dir:
         normalized = normalized.replace(str(source_dir), "AUTONOMOUS_OUTPUT_DIR")
+    normalized = _strip_redundant_pathlib_import(normalized)
     return normalized.rstrip() + "\n"
 
 
@@ -1318,6 +1434,168 @@ def refresh_registry() -> bool:
         return True
     except Exception:
         return False
+
+
+@dataclass
+class _DemoGateOutcome:
+    """Outcome of the P1 acquisition gate's one-shot ``--demo`` smoke run.
+
+    - ``earned``: the script ran to completion, its result.json satisfies
+      :func:`~omicsclaw.common.report.validate_result_envelope`, and its
+      status is not the scaffold-placeholder sentinel — a real or promoted
+      body that actually works. The caller upgrades ``validation.level`` to
+      ``demo-validated``.
+    - ``skipped``: a legitimate reason NOT to judge this run — either an
+      unimplemented placeholder (MF1: status == SCAFFOLD_STATUS is a
+      deliberate "not implemented yet" signal, not a failure) or a promoted
+      body that could not run for a reason outside this gate's control
+      (missing dependency/input — MF3/MF6). The skill still enters the
+      catalog at its current validation level.
+    - ``rejected``: a genuine crash, or a result.json that is missing,
+      unparseable, or fails the envelope contract. The caller raises so
+      ``isolated_workspace`` rmtree's the staging dir and the skill never
+      lands in the catalog.
+    """
+
+    verdict: str
+    reason: str
+    envelope: dict | None = None
+
+
+# Exception TYPES (anchored at the start of a traceback line — how Python
+# prints an uncaught exception, e.g. "ModuleNotFoundError: No module named
+# 'x'") that mean "this environment/input limitation is outside the gate's
+# control", not "the promoted code is broken" (MF3/MF6 in the P0/P1 plan):
+#   - ModuleNotFoundError/ImportError: the raw staged subprocess never reaches
+#     `resolve_skill_runtime`'s adaptive-env provisioning (MF3), so a promoted
+#     skill needing a heavy optional dependency is expected to fail here.
+#   - FileNotFoundError: a promoted skill's original demo input can go stale
+#     between the source run and promotion (its autonomous-analysis workspace
+#     may already be cleaned up) — MF6 skips on missing input, not just the
+#     empty-input case our own template's SystemExit guard below catches.
+# A start-of-line anchor (not a bare substring) is deliberate: a genuine bug
+# whose OWN message happens to mention "ImportError" (e.g. a RuntimeError
+# with that word in its text) must not be misclassified as an environment
+# limitation — that would let broken promoted code slip into the catalog.
+_DEMO_GATE_SKIP_EXCEPTION_TYPES = re.compile(
+    r"^(?:ModuleNotFoundError|ImportError|FileNotFoundError):", re.MULTILINE
+)
+# The exact SystemExit message our own promoted-script template raises when
+# no demo input is available at all (render_promoted_skill_script) — a plain
+# substring is fine here since this is a long, specific, first-party string,
+# not a generic exception type name a message could coincidentally contain.
+_DEMO_GATE_SKIP_MESSAGE = "Provide --input, or use --demo to reuse the original autonomous-analysis input."
+
+
+def _demo_gate_skip_reason(combined_output: str) -> str | None:
+    """Classify a nonzero --demo exit as an environment limitation, if any."""
+    match = _DEMO_GATE_SKIP_EXCEPTION_TYPES.search(combined_output)
+    if match:
+        return f"environment/input limitation ({match.group(0)[:-1]})"
+    if _DEMO_GATE_SKIP_MESSAGE in combined_output:
+        return "no demo input available"
+    return None
+
+
+def _run_demo_smoke_gate(script_path: Path, output_dir: Path) -> _DemoGateOutcome:
+    """Run ``script_path --demo`` once in ``output_dir`` and classify the result.
+
+    This is demo *validation*, not a sandbox (MF4): it runs in the base
+    interpreter with only ``PYTHONPATH``/``PYTHONNOUSERSITE`` set, mirroring
+    ``runner.py``'s subprocess env — no OS-level isolation, and no
+    adaptive-env provisioning (a raw staged subprocess never reaches
+    ``resolve_skill_runtime`` — MF3). Sandboxing model-authored promoted code
+    before execution is a separate, not-yet-built P2 concern.
+    """
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(OMICSCLAW_DIR) + os.pathsep + env.get("PYTHONPATH", "")
+    env.setdefault("PYTHONNOUSERSITE", "1")
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(script_path), "--demo", "--output", str(output_dir)],
+            cwd=str(OMICSCLAW_DIR),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=_DEMO_SMOKE_GATE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return _DemoGateOutcome(
+            verdict="rejected",
+            reason=f"--demo did not finish within {_DEMO_SMOKE_GATE_TIMEOUT_SECONDS}s",
+        )
+
+    if proc.returncode != 0:
+        combined = f"{proc.stdout}\n{proc.stderr}"
+        skip_reason = _demo_gate_skip_reason(combined)
+        if skip_reason is not None:
+            return _DemoGateOutcome(verdict="skipped", reason=f"--demo exited {proc.returncode}: {skip_reason}")
+        return _DemoGateOutcome(
+            verdict="rejected",
+            reason=f"--demo exited {proc.returncode}:\n{proc.stderr.strip()[-2000:]}",
+        )
+
+    result_path = output_dir / "result.json"
+    try:
+        envelope = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return _DemoGateOutcome(
+            verdict="rejected",
+            reason=f"--demo exited 0 but result.json is missing/unparseable: {exc}",
+        )
+
+    problems = validate_result_envelope(envelope)
+    if problems:
+        return _DemoGateOutcome(
+            verdict="rejected",
+            reason=f"result.json failed the envelope contract: {problems}",
+            envelope=envelope,
+        )
+
+    if envelope.get("status") == SCAFFOLD_STATUS:
+        return _DemoGateOutcome(
+            verdict="skipped",
+            reason="unimplemented scaffold placeholder (status: scaffold)",
+            envelope=envelope,
+        )
+
+    return _DemoGateOutcome(
+        verdict="earned", reason="--demo ran and produced a valid result.json", envelope=envelope
+    )
+
+
+def _render_validation_evidence(script_name: str, gate: _DemoGateOutcome) -> str:
+    """Durable record of the P1 --demo smoke gate credit.
+
+    SF1: the staging tmp dir this ran in is rmtree'd on ``create_skill_scaffold``
+    exit, so the evidence a ``demo-validated`` skill.yaml points to must live
+    here — a persisted file — rather than referencing the ephemeral tmp path.
+    """
+    envelope = gate.envelope or {}
+    summary_json = json.dumps(envelope.get("summary", {}), indent=2, ensure_ascii=False)
+    status = envelope.get("status", "")
+    return f"""# Demo Validation Evidence
+
+Earned `demo-validated` via the acquisition-flywheel P1 `--demo` smoke gate at
+skill-creation time (see `docs/proposals/skill-acquisition-p0-p1-landing.md`).
+
+**Command re-run for a fresh check:**
+
+```bash
+python {script_name} --demo --output <output_dir>
+```
+
+**Outcome**: {gate.reason}
+
+**result.json status**: `{status}`
+
+**result.json summary**:
+
+```json
+{summary_json}
+```
+"""
 
 
 def create_skill_scaffold(
@@ -1590,6 +1868,27 @@ def create_skill_scaffold(
         )
         relative_created_paths.append(Path(COMPLETION_REPORT_FILENAME))
 
+        # P1 acquisition gate: run --demo once, in staging, before this skill
+        # is allowed to enter the catalog. A genuine crash raises here so
+        # isolated_workspace rmtree's the staging dir (never reaches move); a
+        # skip (placeholder / env-limited promoted body) proceeds unchanged;
+        # an earn upgrades validation.level and rewrites skill.yaml in place.
+        demo_gate = _run_demo_smoke_gate(script_path, staging_root / "_demo_smoke_gate_output")
+        if demo_gate.verdict == "rejected":
+            raise RuntimeError(f"Skill scaffold failed the --demo smoke gate: {demo_gate.reason}")
+        if demo_gate.verdict == "earned":
+            from .schema import Validation
+
+            evidence_path = references_dir / "validation.md"
+            evidence_path.write_text(
+                _render_validation_evidence(script_name, demo_gate), encoding="utf-8"
+            )
+            relative_created_paths.append(Path("references") / "validation.md")
+            manifest.validation = Validation(
+                level="demo-validated", evidence=["references/validation.md"]
+            )
+            (skill_dir / "skill.yaml").write_text(manifest.to_yaml(), encoding="utf-8")
+
         shutil.move(str(skill_dir), str(final_skill_dir))
 
     created_files = [str(final_skill_dir / rel_path) for rel_path in relative_created_paths]
@@ -1611,6 +1910,8 @@ def create_skill_scaffold(
         completion=completion_report.to_dict(),
         created_files=created_files,
         registry_refreshed=refreshed,
+        demo_gate_verdict=demo_gate.verdict,
+        demo_gate_reason=demo_gate.reason,
     )
 
 

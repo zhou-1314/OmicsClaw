@@ -213,3 +213,29 @@ def test_lazy_metadata_clamps_unknown_type_and_validation_level(tmp_path):
     lazy = LazySkillMetadata(skill)
     assert lazy.type == "leaf"
     assert lazy.validation_level == "smoke-only"
+
+
+# --- acquisition P0: `origin` (provenance) + `lifecycle_status` ------------
+
+
+def test_lazy_metadata_reads_origin_and_lifecycle_status_from_v2():
+    """A hand-written v2 skill predates the acquisition flywheel: skill.yaml's
+    own schema defaults (human/mvp) carry through unchanged."""
+    lazy = LazySkillMetadata(Path("skills/spatial/spatial-preprocess"))
+    assert lazy.origin == "human"
+    assert lazy.lifecycle_status == "mvp"
+
+
+def test_lazy_metadata_v1_fallback_defaults_origin_and_lifecycle(tmp_path):
+    """v1 skills (SKILL.md + parameters.yaml) predate origin/lifecycle_status
+    entirely — they must still resolve to the same defaults as their v2
+    schema counterparts (human/mvp) rather than crashing on a missing key."""
+    skill = tmp_path / "x"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text(
+        "---\nname: x\ndescription: d\n---\n# x\n", encoding="utf-8"
+    )
+    (skill / "parameters.yaml").write_text("domain: d\n", encoding="utf-8")
+    lazy = LazySkillMetadata(skill)
+    assert lazy.origin == "human"
+    assert lazy.lifecycle_status == "mvp"

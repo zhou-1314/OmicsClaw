@@ -2734,6 +2734,10 @@ async def list_skills():
             "description": info.get("description", ""),
             "domain": domain,
             "status": status,
+            # Governance lifecycle (draft/mvp/stable/deprecated) + authorship —
+            # distinct from `status` above, which is script-on-disk availability.
+            "lifecycle_status": meta.lifecycle_status if meta else "mvp",
+            "origin": meta.origin if meta else "human",
             "version": str(version) if version else None,
             "health": _skill_health(
                 status,
@@ -2814,6 +2818,10 @@ async def get_skill(domain: str, skill_name: str):
         "domain": skill_domain,
         "description": info.get("description", ""),
         "status": status,
+        # Governance lifecycle (draft/mvp/stable/deprecated) + authorship —
+        # distinct from `status` above, which is script-on-disk availability.
+        "lifecycle_status": meta.lifecycle_status if meta else "mvp",
+        "origin": meta.origin if meta else "human",
         "script_path": str(script) if script else None,
         "aliases": [
             a for a, i in skill_registry.skills.items()

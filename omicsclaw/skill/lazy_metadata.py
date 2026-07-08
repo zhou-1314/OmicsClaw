@@ -42,6 +42,19 @@ VALIDATION_LEVELS = (
 )
 _DEFAULT_VALIDATION_LEVEL = "smoke-only"
 
+# Governance lifecycle stage (skill.yaml `lifecycle.status`, ADR 0030/acquisition
+# P0 contract). Orthogonal to *availability* (`has_script`/`has_demo` in
+# generate_catalog.py) — a draft skill can already have a runnable placeholder
+# script. v1 (pre-v2, hand-written) skills predate this field entirely, so they
+# default to "mvp": already-shipped, not a fresh unproven scaffold.
+LIFECYCLE_STATUSES = ("draft", "mvp", "stable", "deprecated")
+_DEFAULT_LIFECYCLE_STATUS = "mvp"
+
+# Authorship provenance (skill.yaml `provenance.origin`). v1 skills predate this
+# field and were all hand-written, so they default to "human".
+ORIGINS = ("human", "scaffolded", "promoted", "migrated")
+_DEFAULT_ORIGIN = "human"
+
 _RUNTIME_DEFAULTS: dict[str, object] = {
     "domain": "",
     "script": "",
@@ -223,6 +236,8 @@ class LazySkillMetadata:
             "script": m.runtime.entry,
             "type": m.type,
             "validation_level": m.validation.level,
+            "origin": m.provenance.origin,
+            "lifecycle_status": m.lifecycle.status,
             "trigger_keywords": list(m.summary.trigger_keywords),
             "allowed_extra_flags": self._effective_allowed_flags(m),
             "legacy_aliases": list(m.summary.aliases),
@@ -381,6 +396,20 @@ class LazySkillMetadata:
         self._ensure_basic()
         value = self._basic.get("validation_level") or _DEFAULT_VALIDATION_LEVEL
         return value if value in VALIDATION_LEVELS else _DEFAULT_VALIDATION_LEVEL
+
+    @property
+    def origin(self) -> str:
+        """Authorship provenance; `human` when unset, unknown, or pre-v2."""
+        self._ensure_basic()
+        value = self._basic.get("origin") or _DEFAULT_ORIGIN
+        return value if value in ORIGINS else _DEFAULT_ORIGIN
+
+    @property
+    def lifecycle_status(self) -> str:
+        """Governance lifecycle stage; distinct from availability (has_script/has_demo)."""
+        self._ensure_basic()
+        value = self._basic.get("lifecycle_status") or _DEFAULT_LIFECYCLE_STATUS
+        return value if value in LIFECYCLE_STATUSES else _DEFAULT_LIFECYCLE_STATUS
 
     @property
     def trigger_keywords(self) -> list[str]:
