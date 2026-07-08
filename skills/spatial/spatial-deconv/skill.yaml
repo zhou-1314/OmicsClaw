@@ -2,7 +2,6 @@ schema_version: 2
 id: spatial-deconv
 name: spatial-deconv
 domain: spatial
-type: leaf
 version: 0.5.0
 author: OmicsClaw
 license: MIT
@@ -43,17 +42,13 @@ summary:
   - spatial-deconvolution
 interface:
   inputs:
-    modalities: []
     file_types:
     - h5ad
     preconditions:
       data_shape:
         requires_preprocessed: true
-        obs: []
         obsm:
         - spatial
-      env: []
-      config: []
   parameters:
     hints:
       flashdeconv:
@@ -294,8 +289,6 @@ interface:
     - processed.h5ad
     - report.md
     - result.json
-    result_json:
-      required_keys: []
     anndata:
       saves_h5ad: true
       obs:
@@ -303,11 +296,7 @@ interface:
       - deconv_{method}_dominant_proportion
       obsm:
       - deconvolution_{method}
-      var: []
-      layers: []
-      uns: []
 runtime:
-  language: python
   entry: spatial_deconv.py
 deps:
   python:
@@ -323,12 +312,10 @@ deps:
   - seaborn
   - tangram-sc
   - torch
-  cli: []
 compatibility:
   platforms:
   - macos
   - linux
-  architectures: []
 resources:
   references:
   - methodology.md
@@ -337,16 +324,3 @@ resources:
   figures: r_visualization/
   tests: tests/
   homepage: https://github.com/TianGzlab/OmicsClaw
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

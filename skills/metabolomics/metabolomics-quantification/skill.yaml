@@ -2,7 +2,6 @@ schema_version: 2
 id: metabolomics-quantification
 name: metabolomics-quantification
 domain: metabolomics
-type: leaf
 version: 0.5.0
 author: OmicsClaw
 license: MIT
@@ -31,52 +30,22 @@ summary:
   - met-quantify
 interface:
   inputs:
-    modalities: []
     file_types:
     - csv
-    preconditions:
-      data_shape:
-        requires_preprocessed: false
-        obs: []
-        obsm: []
-      env: []
-      config: []
-  parameters:
-    hints: {}
   outputs:
     files:
     - tables/quantified_features.csv
     - report.md
     - result.json
-    result_json:
-      required_keys: []
 runtime:
-  language: python
   entry: met_quantify.py
 deps:
   python:
   - numpy
   - pandas
   - scikit-learn
-  cli: []
-compatibility:
-  platforms: []
-  architectures: []
 resources:
   references:
   - methodology.md
   - output_contract.md
   - parameters.md
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

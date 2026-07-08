@@ -2,7 +2,6 @@ schema_version: 2
 id: sc-clustering
 name: sc-clustering
 domain: singlecell
-type: leaf
 version: 0.3.0
 author: OmicsClaw
 license: MIT
@@ -14,7 +13,6 @@ summary:
     use: sc-preprocessing
   - condition: marker ranking after clustering
     use: sc-markers
-  trigger_keywords: []
   tags:
   - singlecell
   - scrna
@@ -35,11 +33,8 @@ interface:
     preconditions:
       data_shape:
         requires_preprocessed: true
-        obs: []
         obsm:
         - X_pca
-      env: []
-      config: []
   parameters:
     hints:
       umap:
@@ -155,8 +150,6 @@ interface:
     - processed.h5ad
     - report.md
     - result.json
-    result_json:
-      required_keys: []
     anndata:
       saves_h5ad: true
       obs:
@@ -164,11 +157,7 @@ interface:
       - louvain
       obsm:
       - X_<embedding>
-      var: []
-      layers: []
-      uns: []
 runtime:
-  language: python
   entry: sc_cluster.py
 deps:
   python:
@@ -181,10 +170,6 @@ deps:
   - scikit-learn
   - scipy
   - seaborn
-  cli: []
-compatibility:
-  platforms: []
-  architectures: []
 resources:
   references:
   - methodology.md
@@ -192,16 +177,3 @@ resources:
   - parameters.md
   - r_visualization.md
   tests: tests/
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

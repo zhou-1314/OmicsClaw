@@ -2,7 +2,6 @@ schema_version: 2
 id: spatial-microenvironment-subset
 name: spatial-microenvironment-subset
 domain: spatial
-type: leaf
 version: 0.3.0
 author: OmicsClaw
 license: MIT
@@ -46,14 +45,8 @@ interface:
     - h5ad
     preconditions:
       data_shape:
-        requires_preprocessed: false
-        obs: []
         obsm:
         - spatial
-      env: []
-      config: []
-  parameters:
-    hints: {}
   outputs:
     files:
     - tables/center_observations.csv
@@ -64,8 +57,6 @@ interface:
     - spatial_microenvironment_subset.h5ad
     - report.md
     - result.json
-    result_json:
-      required_keys: []
     anndata:
       saves_h5ad: true
       obs:
@@ -75,12 +66,7 @@ interface:
       - microenv_nearest_center
       - microenv_distance_native
       - microenv_distance_microns
-      obsm: []
-      var: []
-      layers: []
-      uns: []
 runtime:
-  language: python
   entry: spatial_microenvironment_subset.py
 deps:
   python:
@@ -90,26 +76,9 @@ deps:
   - pandas
   - scanpy
   - scipy
-  cli: []
-compatibility:
-  platforms: []
-  architectures: []
 resources:
   references:
   - methodology.md
   - output_contract.md
   - parameters.md
   tests: tests/
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

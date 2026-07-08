@@ -2,7 +2,6 @@ schema_version: 2
 id: sc-pathway-scoring
 name: sc-pathway-scoring
 domain: singlecell
-type: leaf
 version: 0.3.0
 author: OmicsClaw
 license: MIT
@@ -29,20 +28,12 @@ summary:
   - scanpy-score-genes
   - gene-sets
   - decoupler
-  aliases: []
 interface:
   inputs:
     modalities:
     - scrna
     file_types:
     - h5ad
-    preconditions:
-      data_shape:
-        requires_preprocessed: false
-        obs: []
-        obsm: []
-      env: []
-      config: []
   parameters:
     hints:
       aucell_r:
@@ -127,17 +118,9 @@ interface:
     - processed.h5ad
     - report.md
     - result.json
-    result_json:
-      required_keys: []
     anndata:
       saves_h5ad: true
-      obs: []
-      obsm: []
-      var: []
-      layers: []
-      uns: []
 runtime:
-  language: python
   entry: sc_pathway_scoring.py
 deps:
   python:
@@ -149,10 +132,6 @@ deps:
   - scanpy
   - scipy
   - seaborn
-  cli: []
-compatibility:
-  platforms: []
-  architectures: []
 resources:
   references:
   - methodology.md
@@ -160,16 +139,3 @@ resources:
   - parameters.md
   - r_visualization.md
   tests: tests/
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

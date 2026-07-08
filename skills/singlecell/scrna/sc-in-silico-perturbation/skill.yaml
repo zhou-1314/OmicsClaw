@@ -2,7 +2,6 @@ schema_version: 2
 id: sc-in-silico-perturbation
 name: sc-in-silico-perturbation
 domain: singlecell
-type: leaf
 version: 0.2.0
 author: OmicsClaw
 license: MIT
@@ -14,7 +13,6 @@ summary:
     use: sc-perturb
   - condition: predicting drug sensitivity
     use: sc-drug-response
-  trigger_keywords: []
   tags:
   - singlecell
   - scrna
@@ -30,15 +28,6 @@ interface:
     - scrna
     file_types:
     - h5ad
-    preconditions:
-      data_shape:
-        requires_preprocessed: false
-        obs: []
-        obsm: []
-      env: []
-      config: []
-  parameters:
-    hints: {}
   outputs:
     files:
     - tables/cell_metadata.csv
@@ -53,20 +42,13 @@ interface:
     - processed.h5ad
     - report.md
     - result.json
-    result_json:
-      required_keys: []
     anndata:
       saves_h5ad: true
-      obs: []
-      obsm: []
       var:
       - perturbation_dr_score
       - perturbation_p_adj
       - perturbation_FC
-      layers: []
-      uns: []
 runtime:
-  language: python
   entry: sc_in_silico_perturbation.py
 deps:
   python:
@@ -77,10 +59,6 @@ deps:
   - scanpy
   - scipy
   - statsmodels
-  cli: []
-compatibility:
-  platforms: []
-  architectures: []
 resources:
   references:
   - methodology.md
@@ -88,16 +66,3 @@ resources:
   - parameters.md
   - r_visualization.md
   tests: tests/
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

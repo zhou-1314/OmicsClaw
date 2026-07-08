@@ -2,7 +2,6 @@ schema_version: 2
 id: sc-drug-response
 name: sc-drug-response
 domain: singlecell
-type: leaf
 version: 0.2.0
 author: OmicsClaw
 license: MIT
@@ -14,7 +13,6 @@ summary:
     use: sc-clustering
   - condition: predicting genetic-perturbation effects
     use: sc-in-silico-perturbation
-  trigger_keywords: []
   tags:
   - singlecell
   - scrna
@@ -23,7 +21,6 @@ summary:
   - cadrres
   - gdsc
   - prism
-  aliases: []
 interface:
   inputs:
     modalities:
@@ -33,12 +30,6 @@ interface:
     preconditions:
       data_shape:
         requires_preprocessed: true
-        obs: []
-        obsm: []
-      env: []
-      config: []
-  parameters:
-    hints: {}
   outputs:
     files:
     - tables/IC50_prediction.csv
@@ -53,18 +44,11 @@ interface:
     - processed.h5ad
     - report.md
     - result.json
-    result_json:
-      required_keys: []
     anndata:
       saves_h5ad: true
       obs:
       - drug_score_<drug>
-      obsm: []
-      var: []
-      layers: []
-      uns: []
 runtime:
-  language: python
   entry: sc_drug_response.py
 deps:
   python:
@@ -76,26 +60,9 @@ deps:
   - scanpy
   - scipy
   - seaborn
-  cli: []
-compatibility:
-  platforms: []
-  architectures: []
 resources:
   references:
   - methodology.md
   - output_contract.md
   - parameters.md
   tests: tests/
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

@@ -2,7 +2,6 @@ schema_version: 2
 id: spatial-preprocess
 name: spatial-preprocess
 domain: spatial
-type: leaf
 version: 0.6.0
 author: OmicsClaw
 license: MIT
@@ -49,12 +48,8 @@ interface:
     - h5ad
     preconditions:
       data_shape:
-        requires_preprocessed: false
-        obs: []
         obsm:
         - spatial
-      env: []
-      config: []
   parameters:
     hints:
       scanpy_standard:
@@ -118,8 +113,6 @@ interface:
     - processed.h5ad
     - report.md
     - result.json
-    result_json:
-      required_keys: []
     anndata:
       saves_h5ad: true
       obs:
@@ -131,9 +124,7 @@ interface:
       - highly_variable
       layers:
       - counts
-      uns: []
 runtime:
-  language: python
   entry: spatial_preprocess.py
 deps:
   python:
@@ -144,12 +135,10 @@ deps:
   - scanpy
   - scipy
   - seaborn
-  cli: []
 compatibility:
   platforms:
   - macos
   - linux
-  architectures: []
 resources:
   references:
   - methodology.md
@@ -158,16 +147,3 @@ resources:
   figures: r_visualization/
   tests: tests/
   homepage: https://github.com/TianGzlab/OmicsClaw
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

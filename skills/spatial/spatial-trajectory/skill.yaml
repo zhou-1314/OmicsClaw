@@ -2,7 +2,6 @@ schema_version: 2
 id: spatial-trajectory
 name: spatial-trajectory
 domain: spatial
-type: leaf
 version: 0.5.0
 author: OmicsClaw
 license: MIT
@@ -37,17 +36,13 @@ summary:
   - trajectory
 interface:
   inputs:
-    modalities: []
     file_types:
     - h5ad
     preconditions:
       data_shape:
         requires_preprocessed: true
-        obs: []
         obsm:
         - X_pca
-      env: []
-      config: []
   parameters:
     hints:
       dpt:
@@ -165,8 +160,6 @@ interface:
     - processed.h5ad
     - report.md
     - result.json
-    result_json:
-      required_keys: []
     anndata:
       saves_h5ad: true
       obs:
@@ -178,14 +171,11 @@ interface:
       - palantir_entropy
       obsm:
       - palantir_branch_probs
-      var: []
-      layers: []
       uns:
       - iroot
       - palantir_waypoints
       - palantir_branch_prob_columns
 runtime:
-  language: python
   entry: spatial_trajectory.py
 deps:
   python:
@@ -200,12 +190,10 @@ deps:
   - scvelo
   - seaborn
   - statsmodels
-  cli: []
 compatibility:
   platforms:
   - macos
   - linux
-  architectures: []
 resources:
   references:
   - methodology.md
@@ -214,16 +202,3 @@ resources:
   figures: r_visualization/
   tests: tests/
   homepage: https://github.com/TianGzlab/OmicsClaw
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

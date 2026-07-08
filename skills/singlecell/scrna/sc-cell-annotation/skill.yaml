@@ -2,7 +2,6 @@ schema_version: 2
 id: sc-cell-annotation
 name: sc-cell-annotation
 domain: singlecell
-type: leaf
 version: 0.6.0
 author: OmicsClaw
 license: MIT
@@ -14,7 +13,6 @@ summary:
     use: sc-markers
   - condition: condition-vs-control DE
     use: sc-de
-  trigger_keywords: []
   tags:
   - singlecell
   - scrna
@@ -37,10 +35,6 @@ interface:
     preconditions:
       data_shape:
         requires_preprocessed: true
-        obs: []
-        obsm: []
-      env: []
-      config: []
   parameters:
     hints:
       manual:
@@ -161,8 +155,6 @@ interface:
     - processed.h5ad
     - report.md
     - result.json
-    result_json:
-      required_keys: []
     anndata:
       saves_h5ad: true
       obs:
@@ -171,11 +163,7 @@ interface:
       - annotation_score
       obsm:
       - cell_type_prob
-      var: []
-      layers: []
-      uns: []
 runtime:
-  language: python
   entry: sc_annotate.py
 deps:
   python:
@@ -188,10 +176,6 @@ deps:
   - scanpy
   - scipy
   - seaborn
-  cli: []
-compatibility:
-  platforms: []
-  architectures: []
 resources:
   references:
   - methodology.md
@@ -199,16 +183,3 @@ resources:
   - parameters.md
   - r_visualization.md
   tests: tests/
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

@@ -2,7 +2,6 @@ schema_version: 2
 id: literature
 name: literature
 domain: literature
-type: leaf
 version: 0.5.0
 author: OmicsClaw
 license: MIT
@@ -29,58 +28,29 @@ summary:
   - pubmed
   - geo
   - metadata
-  aliases: []
 interface:
   inputs:
-    modalities: []
     file_types:
     - pdf
-    preconditions:
-      data_shape:
-        requires_preprocessed: false
-        obs: []
-        obsm: []
-      env: []
-      config: []
-  parameters:
-    hints: {}
   outputs:
     files:
     - output_dir/extracted_metadata.json
     - output_dir/report.md
     - output_dir/result.json
     - <--data-dir>/<GSEid>/...
-    result_json:
-      required_keys: []
 runtime:
-  language: python
   entry: literature_parse.py
 deps:
   python:
   - requests
-  cli: []
 compatibility:
   platforms:
   - macos
   - linux
   - windows
-  architectures: []
 resources:
   references:
   - methodology.md
   - output_contract.md
   - parameters.md
   homepage: https://github.com/OmicsClaw/OmicsClaw
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

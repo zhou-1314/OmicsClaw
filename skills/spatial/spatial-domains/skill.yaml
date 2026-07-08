@@ -2,7 +2,6 @@ schema_version: 2
 id: spatial-domains
 name: spatial-domains
 domain: spatial
-type: leaf
 version: 0.5.0
 author: OmicsClaw
 license: MIT
@@ -41,18 +40,13 @@ summary:
   - spatial-domain-identification
 interface:
   inputs:
-    modalities: []
     file_types:
     - h5ad
     preconditions:
       data_shape:
-        requires_preprocessed: false
-        obs: []
         obsm:
         - X_pca
         - spatial
-      env: []
-      config: []
   parameters:
     hints:
       leiden:
@@ -197,8 +191,6 @@ interface:
     - processed.h5ad
     - report.md
     - result.json
-    result_json:
-      required_keys: []
     anndata:
       saves_h5ad: true
       obs:
@@ -208,11 +200,7 @@ interface:
       - X_graphst
       - X_banksy_pca
       - X_cellcharter
-      var: []
-      layers: []
-      uns: []
 runtime:
-  language: python
   entry: spatial_domains.py
 deps:
   python:
@@ -231,12 +219,10 @@ deps:
   - squidpy
   - STAGATE-pyG
   - torch
-  cli: []
 compatibility:
   platforms:
   - macos
   - linux
-  architectures: []
 resources:
   references:
   - methodology.md
@@ -245,16 +231,3 @@ resources:
   figures: r_visualization/
   tests: tests/
   homepage: https://github.com/TianGzlab/OmicsClaw
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

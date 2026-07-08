@@ -2,7 +2,6 @@ schema_version: 2
 id: sc-ambient-removal
 name: sc-ambient-removal
 domain: singlecell
-type: leaf
 version: 0.3.0
 author: OmicsClaw
 license: MIT
@@ -28,20 +27,12 @@ summary:
   - cellbender
   - soupx
   - contamination
-  aliases: []
 interface:
   inputs:
     modalities:
     - scrna
     file_types:
     - h5ad
-    preconditions:
-      data_shape:
-        requires_preprocessed: false
-        obs: []
-        obsm: []
-      env: []
-      config: []
   parameters:
     hints:
       simple:
@@ -105,13 +96,8 @@ interface:
     - processed.h5ad
     - report.md
     - result.json
-    result_json:
-      required_keys: []
     anndata:
       saves_h5ad: true
-      obs: []
-      obsm: []
-      var: []
       layers:
       - counts
       uns:
@@ -119,7 +105,6 @@ interface:
       - soupx
       - cellbender
 runtime:
-  language: python
   entry: sc_ambient.py
 deps:
   python:
@@ -131,12 +116,10 @@ deps:
   - scanpy
   - scipy
   - torch
-  cli: []
 compatibility:
   platforms:
   - macos
   - linux
-  architectures: []
 resources:
   references:
   - methodology.md
@@ -144,16 +127,3 @@ resources:
   - parameters.md
   - r_visualization.md
   homepage: https://github.com/OmicsClaw/OmicsClaw
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

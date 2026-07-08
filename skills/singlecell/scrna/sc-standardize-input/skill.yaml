@@ -2,7 +2,6 @@ schema_version: 2
 id: sc-standardize-input
 name: sc-standardize-input
 domain: singlecell
-type: leaf
 version: 0.3.0
 author: OmicsClaw
 license: MIT
@@ -28,7 +27,6 @@ summary:
   - input
   - standardization
   - anndata
-  aliases: []
 interface:
   inputs:
     modalities:
@@ -39,15 +37,6 @@ interface:
     - loom
     - csv
     - tsv
-    preconditions:
-      data_shape:
-        requires_preprocessed: false
-        obs: []
-        obsm: []
-      env: []
-      config: []
-  parameters:
-    hints: {}
   outputs:
     files:
     - tables/cell_metadata.csv
@@ -55,18 +44,11 @@ interface:
     - processed.h5ad
     - report.md
     - result.json
-    result_json:
-      required_keys: []
     anndata:
       saves_h5ad: true
-      obs: []
-      obsm: []
-      var: []
       layers:
       - counts
-      uns: []
 runtime:
-  language: python
   entry: sc_standardize_input.py
 deps:
   python:
@@ -76,26 +58,9 @@ deps:
   - pandas
   - scanpy
   - scipy
-  cli: []
-compatibility:
-  platforms: []
-  architectures: []
 resources:
   references:
   - methodology.md
   - output_contract.md
   - parameters.md
   - r_visualization.md
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

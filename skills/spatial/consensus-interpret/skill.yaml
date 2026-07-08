@@ -2,7 +2,6 @@ schema_version: 2
 id: consensus-interpret
 name: consensus-interpret
 domain: spatial
-type: leaf
 version: 0.1.0
 author: OmicsClaw
 license: Apache-2.0
@@ -32,21 +31,10 @@ summary:
   - biology-annotation
   - marker-grounded
   - backward-proof-driven-recommendation
-  aliases: []
 interface:
   inputs:
-    modalities: []
     file_types:
     - json
-    preconditions:
-      data_shape:
-        requires_preprocessed: false
-        obs: []
-        obsm: []
-      env: []
-      config: []
-  parameters:
-    hints: {}
   outputs:
     files:
     - interpreted_report.md
@@ -54,10 +42,7 @@ interface:
     - de_per_cluster.csv
     - contradiction_regions.csv
     - audit.json
-    result_json:
-      required_keys: []
 runtime:
-  language: python
   entry: consensus_interpret.py
 deps:
   python:
@@ -66,26 +51,9 @@ deps:
   - pandas
   - scanpy
   - scikit-learn
-  cli: []
-compatibility:
-  platforms: []
-  architectures: []
 resources:
   references:
   - methodology.md
   - output_contract.md
   - parameters.md
   tests: tests/
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

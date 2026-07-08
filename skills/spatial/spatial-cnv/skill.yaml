@@ -2,7 +2,6 @@ schema_version: 2
 id: spatial-cnv
 name: spatial-cnv
 domain: spatial
-type: leaf
 version: 0.5.0
 author: OmicsClaw
 license: MIT
@@ -33,18 +32,14 @@ summary:
   - cnv
 interface:
   inputs:
-    modalities: []
     file_types:
     - h5ad
     preconditions:
       data_shape:
         requires_preprocessed: true
-        obs: []
         obsm:
         - spatial
         - allele_counts
-      env: []
-      config: []
   parameters:
     hints:
       infercnvpy:
@@ -134,8 +129,6 @@ interface:
     - processed.h5ad
     - report.md
     - result.json
-    result_json:
-      required_keys: []
     anndata:
       saves_h5ad: true
       obs:
@@ -144,14 +137,10 @@ interface:
       - numbat_p_cnv
       - numbat_clone
       - numbat_entropy
-      obsm: []
-      var: []
-      layers: []
       uns:
       - numbat_calls
       - numbat_clone_post
 runtime:
-  language: python
   entry: spatial_cnv.py
 deps:
   python:
@@ -163,12 +152,10 @@ deps:
   - scanpy
   - scipy
   - seaborn
-  cli: []
 compatibility:
   platforms:
   - macos
   - linux
-  architectures: []
 resources:
   references:
   - methodology.md
@@ -177,16 +164,3 @@ resources:
   figures: r_visualization/
   tests: tests/
   homepage: https://github.com/TianGzlab/OmicsClaw
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

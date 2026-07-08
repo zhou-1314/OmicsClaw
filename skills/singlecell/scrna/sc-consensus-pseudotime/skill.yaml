@@ -26,7 +26,6 @@ summary:
   - consensus
   - pseudotime
   - trajectory
-  aliases: []
 interface:
   inputs:
     modalities:
@@ -36,10 +35,6 @@ interface:
     preconditions:
       data_shape:
         requires_preprocessed: true
-        obs: []
-        obsm: []
-      env: []
-      config: []
   parameters:
     allowed_extra_flags:
     - --members
@@ -77,10 +72,7 @@ interface:
     - selection_audit.json
     - plan.json
     - report.md
-    result_json:
-      required_keys: []
 runtime:
-  language: python
   entry: sc_consensus_pseudotime.py
 deps:
   python:
@@ -91,28 +83,13 @@ deps:
   - scanpy
   - scikit-learn
   - scipy
-  cli: []
 compatibility:
   platforms:
   - linux
   - macos
-  architectures: []
 resources:
   references:
   - methodology.md
   - output_contract.md
   - parameters.md
   homepage: https://github.com/OmicsClaw/OmicsClaw
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

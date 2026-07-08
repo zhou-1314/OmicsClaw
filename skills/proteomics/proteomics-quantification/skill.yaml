@@ -2,7 +2,6 @@ schema_version: 2
 id: proteomics-quantification
 name: proteomics-quantification
 domain: proteomics
-type: leaf
 version: 0.5.0
 author: OmicsClaw
 license: MIT
@@ -35,48 +34,19 @@ interface:
     - lfq
     file_types:
     - csv
-    preconditions:
-      data_shape:
-        requires_preprocessed: false
-        obs: []
-        obsm: []
-      env: []
-      config: []
-  parameters:
-    hints: {}
   outputs:
     files:
     - tables/protein_abundance.csv
     - report.md
     - result.json
-    result_json:
-      required_keys: []
 runtime:
-  language: python
   entry: proteomics_quantification.py
 deps:
   python:
   - numpy
   - pandas
-  cli: []
-compatibility:
-  platforms: []
-  architectures: []
 resources:
   references:
   - methodology.md
   - output_contract.md
   - parameters.md
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

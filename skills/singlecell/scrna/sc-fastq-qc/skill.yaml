@@ -2,7 +2,6 @@ schema_version: 2
 id: sc-fastq-qc
 name: sc-fastq-qc
 domain: singlecell
-type: leaf
 version: 0.3.0
 author: OmicsClaw
 license: MIT
@@ -34,13 +33,6 @@ interface:
     - scrna
     file_types:
     - fastq
-    preconditions:
-      data_shape:
-        requires_preprocessed: false
-        obs: []
-        obsm: []
-      env: []
-      config: []
   parameters:
     hints:
       fastqc:
@@ -81,10 +73,7 @@ interface:
     - web_summary.html
     - report.md
     - result.json
-    result_json:
-      required_keys: []
 runtime:
-  language: python
   entry: sc_fastq_qc.py
 deps:
   python:
@@ -95,12 +84,10 @@ deps:
   - scanpy
   - scipy
   - seaborn
-  cli: []
 compatibility:
   platforms:
   - macos
   - linux
-  architectures: []
 resources:
   references:
   - methodology.md
@@ -109,16 +96,3 @@ resources:
   - r_visualization.md
   tests: tests/
   homepage: https://github.com/TianGzlab/OmicsClaw
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

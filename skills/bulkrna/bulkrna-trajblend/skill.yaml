@@ -2,7 +2,6 @@ schema_version: 2
 id: bulkrna-trajblend
 name: bulkrna-trajblend
 domain: bulkrna
-type: leaf
 version: 0.3.0
 author: OmicsClaw
 license: MIT
@@ -33,20 +32,10 @@ summary:
   - bulk-trajblend
 interface:
   inputs:
-    modalities: []
     file_types:
     - csv
     - tsv
     - h5ad
-    preconditions:
-      data_shape:
-        requires_preprocessed: false
-        obs: []
-        obsm: []
-      env: []
-      config: []
-  parameters:
-    hints: {}
   outputs:
     files:
     - tables/cell_fractions.csv
@@ -57,10 +46,7 @@ interface:
     - figures/trajectory_embedding.png
     - report.md
     - result.json
-    result_json:
-      required_keys: []
 runtime:
-  language: python
   entry: bulkrna_trajblend.py
 deps:
   python:
@@ -70,25 +56,8 @@ deps:
   - pandas
   - scikit-learn
   - scipy
-  cli: []
-compatibility:
-  platforms: []
-  architectures: []
 resources:
   references:
   - methodology.md
   - output_contract.md
   - parameters.md
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

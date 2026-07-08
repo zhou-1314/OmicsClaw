@@ -332,8 +332,16 @@ class SkillManifest(_Strict):
         return v
 
     def to_yaml(self) -> str:
-        """Serialize to a deterministic, ordered YAML document for ``skill.yaml``."""
-        data = self.model_dump(exclude_none=True)
+        """Serialize to a deterministic, ordered YAML document for ``skill.yaml``.
+
+        ``exclude_defaults`` omits every field that equals its schema default —
+        the governance/security/mcp blocks when unset, ``type: leaf``,
+        ``runtime.language: python``, empty lists, etc. Those are reconstructed
+        identically on load, so the authored file carries only what actually
+        varies. ``exclude_none`` additionally drops optional-None fields.
+        Round-trip identity holds: ``parse_skill_manifest(yaml.safe_load(m.to_yaml())) == m``.
+        """
+        data = self.model_dump(exclude_defaults=True, exclude_none=True)
         return yaml.safe_dump(
             data, sort_keys=False, default_flow_style=False, allow_unicode=True, width=100
         )

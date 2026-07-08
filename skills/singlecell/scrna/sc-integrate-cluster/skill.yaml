@@ -2,7 +2,6 @@ schema_version: 2
 id: sc-integrate-cluster
 name: sc-integrate-cluster
 domain: singlecell
-type: leaf
 version: 0.1.0
 author: OmicsClaw
 license: MIT
@@ -14,14 +13,12 @@ summary:
     use: sc-consensus-integration
   - condition: resolution-robust clustering
     use: sc-consensus-clustering
-  trigger_keywords: []
   tags:
   - singlecell
   - scrna
   - integration
   - clustering
   - consensus
-  aliases: []
 interface:
   inputs:
     modalities:
@@ -31,10 +28,6 @@ interface:
     preconditions:
       data_shape:
         requires_preprocessed: true
-        obs: []
-        obsm: []
-      env: []
-      config: []
   parameters:
     hints:
       default:
@@ -68,18 +61,11 @@ interface:
     - figure_data/clustering_summary.csv
     - processed.h5ad
     - result.json
-    result_json:
-      required_keys: []
     anndata:
       saves_h5ad: true
-      obs: []
       obsm:
       - X_pca
-      var: []
-      layers: []
-      uns: []
 runtime:
-  language: python
   entry: sc_integrate_cluster.py
 deps:
   python:
@@ -93,25 +79,8 @@ deps:
   - scikit-learn
   - seaborn
   - torch
-  cli: []
-compatibility:
-  platforms: []
-  architectures: []
 resources:
   references:
   - methodology.md
   - output_contract.md
   - parameters.md
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

@@ -34,19 +34,13 @@ summary:
   - kmode
   - lca
   - weighted
-  aliases: []
 interface:
   inputs:
-    modalities: []
     file_types:
     - h5ad
     preconditions:
       data_shape:
         requires_preprocessed: true
-        obs: []
-        obsm: []
-      env: []
-      config: []
   parameters:
     allowed_extra_flags:
     - --members
@@ -66,7 +60,6 @@ interface:
     - --query
     - --top-k
     - --run-id
-    hints: {}
   outputs:
     files:
     - consensus_labels.tsv
@@ -76,10 +69,7 @@ interface:
     - plan.json
     - report.md
     - result.json
-    result_json:
-      required_keys: []
 runtime:
-  language: python
   entry: consensus_domains.py
 deps:
   python:
@@ -90,12 +80,10 @@ deps:
   - scanpy
   - scikit-learn
   - scipy
-  cli: []
 compatibility:
   platforms:
   - linux
   - macos
-  architectures: []
 resources:
   references:
   - methodology.md
@@ -103,16 +91,3 @@ resources:
   - parameters.md
   tests: tests/
   homepage: https://github.com/OmicsClaw/OmicsClaw
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

@@ -2,7 +2,6 @@ schema_version: 2
 id: spatial-communication
 name: spatial-communication
 domain: spatial
-type: leaf
 version: 0.5.0
 author: OmicsClaw
 license: MIT
@@ -37,17 +36,13 @@ summary:
   - spatial-cell-communication
 interface:
   inputs:
-    modalities: []
     file_types:
     - h5ad
     preconditions:
       data_shape:
         requires_preprocessed: true
-        obs: []
         obsm:
         - spatial
-      env: []
-      config: []
   parameters:
     hints:
       liana:
@@ -176,14 +171,8 @@ interface:
     - processed.h5ad
     - report.md
     - result.json
-    result_json:
-      required_keys: []
     anndata:
       saves_h5ad: true
-      obs: []
-      obsm: []
-      var: []
-      layers: []
       uns:
       - ccc_results
       - liana_results
@@ -194,7 +183,6 @@ interface:
       - communication_signaling_roles
       - spatial_communication
 runtime:
-  language: python
   entry: spatial_communication.py
 deps:
   python:
@@ -208,12 +196,10 @@ deps:
   - scanpy
   - scipy
   - seaborn
-  cli: []
 compatibility:
   platforms:
   - macos
   - linux
-  architectures: []
 resources:
   references:
   - methodology.md
@@ -222,16 +208,3 @@ resources:
   figures: r_visualization/
   tests: tests/
   homepage: https://github.com/TianGzlab/OmicsClaw
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

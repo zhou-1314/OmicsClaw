@@ -2,7 +2,6 @@ schema_version: 2
 id: sc-perturb-prep
 name: sc-perturb-prep
 domain: singlecell
-type: leaf
 version: 0.2.0
 author: OmicsClaw
 license: MIT
@@ -13,7 +12,6 @@ summary:
   - condition: the AnnData already has perturbation labels
     use: sc-perturb
   - condition: raw guide-calling from FASTQ (use upstream demuxlet / cellranger guide pipelines)
-  trigger_keywords: []
   tags:
   - singlecell
   - scrna
@@ -21,7 +19,6 @@ summary:
   - perturb-seq
   - crispr
   - sgrna-assignment
-  aliases: []
 interface:
   inputs:
     modalities:
@@ -31,15 +28,6 @@ interface:
     - h5
     - tsv
     - csv
-    preconditions:
-      data_shape:
-        requires_preprocessed: false
-        obs: []
-        obsm: []
-      env: []
-      config: []
-  parameters:
-    hints: {}
   outputs:
     files:
     - tables/assignment_status_counts.csv
@@ -53,8 +41,6 @@ interface:
     - processed.h5ad
     - report.md
     - result.json
-    result_json:
-      required_keys: []
     anndata:
       saves_h5ad: true
       obs:
@@ -63,12 +49,7 @@ interface:
       - target_gene
       - assignment_status
       - n_sgrnas
-      obsm: []
-      var: []
-      layers: []
-      uns: []
 runtime:
-  language: python
   entry: sc_perturb_prep.py
 deps:
   python:
@@ -80,10 +61,6 @@ deps:
   - pertpy
   - scanpy
   - scipy
-  cli: []
-compatibility:
-  platforms: []
-  architectures: []
 resources:
   references:
   - methodology.md
@@ -91,16 +68,3 @@ resources:
   - parameters.md
   - r_visualization.md
   tests: tests/
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

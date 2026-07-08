@@ -2,7 +2,6 @@ schema_version: 2
 id: metabolomics-pathway-enrichment
 name: metabolomics-pathway-enrichment
 domain: metabolomics
-type: leaf
 version: 0.5.0
 author: OmicsClaw
 license: MIT
@@ -30,52 +29,22 @@ summary:
   - met-pathway
 interface:
   inputs:
-    modalities: []
     file_types:
     - csv
-    preconditions:
-      data_shape:
-        requires_preprocessed: false
-        obs: []
-        obsm: []
-      env: []
-      config: []
-  parameters:
-    hints: {}
   outputs:
     files:
     - tables/pathway_enrichment.csv
     - report.md
     - result.json
-    result_json:
-      required_keys: []
 runtime:
-  language: python
   entry: met_pathway.py
 deps:
   python:
   - numpy
   - pandas
   - scipy
-  cli: []
-compatibility:
-  platforms: []
-  architectures: []
 resources:
   references:
   - methodology.md
   - output_contract.md
   - parameters.md
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

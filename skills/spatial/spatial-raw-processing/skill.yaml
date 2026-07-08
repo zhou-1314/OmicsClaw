@@ -2,7 +2,6 @@ schema_version: 2
 id: spatial-raw-processing
 name: spatial-raw-processing
 domain: spatial
-type: leaf
 version: 0.3.0
 author: OmicsClaw
 license: MIT
@@ -44,13 +43,6 @@ interface:
     - slideseq
     file_types:
     - fastq
-    preconditions:
-      data_shape:
-        requires_preprocessed: false
-        obs: []
-        obsm: []
-      env: []
-      config: []
   parameters:
     hints:
       st_pipeline:
@@ -123,8 +115,6 @@ interface:
     - st_pipeline.stdout.txt
     - report.md
     - result.json
-    result_json:
-      required_keys: []
     anndata:
       saves_h5ad: true
       obs:
@@ -133,11 +123,7 @@ interface:
       - y_array
       obsm:
       - spatial
-      var: []
-      layers: []
-      uns: []
 runtime:
-  language: python
   entry: spatial_raw_processing.py
 deps:
   python:
@@ -148,12 +134,10 @@ deps:
   - PyYAML
   - scipy
   - seaborn
-  cli: []
 compatibility:
   platforms:
   - macos
   - linux
-  architectures: []
 resources:
   references:
   - methodology.md
@@ -162,16 +146,3 @@ resources:
   figures: r_visualization/
   tests: tests/
   homepage: https://github.com/TianGzlab/OmicsClaw
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

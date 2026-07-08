@@ -2,7 +2,6 @@ schema_version: 2
 id: scatac-preprocessing
 name: scatac-preprocessing
 domain: singlecell
-type: leaf
 version: 0.2.0
 author: OmicsClaw
 license: MIT
@@ -42,13 +41,6 @@ interface:
     - loom
     - csv
     - tsv
-    preconditions:
-      data_shape:
-        requires_preprocessed: false
-        obs: []
-        obsm: []
-      env: []
-      config: []
   parameters:
     hints:
       tfidf_lsi:
@@ -101,8 +93,6 @@ interface:
     - processed.h5ad
     - report.md
     - result.json
-    result_json:
-      required_keys: []
     anndata:
       saves_h5ad: true
       obs:
@@ -110,12 +100,9 @@ interface:
       obsm:
       - X_lsi
       - X_umap
-      var: []
       layers:
       - counts
-      uns: []
 runtime:
-  language: python
   entry: scatac_preprocessing.py
 deps:
   python:
@@ -128,12 +115,10 @@ deps:
   - scikit-learn
   - scipy
   - seaborn
-  cli: []
 compatibility:
   platforms:
   - macos
   - linux
-  architectures: []
 resources:
   references:
   - methodology.md
@@ -141,16 +126,3 @@ resources:
   - parameters.md
   tests: tests/
   homepage: https://github.com/OmicsClaw/OmicsClaw
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false

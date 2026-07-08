@@ -2,7 +2,6 @@ schema_version: 2
 id: sc-cell-communication
 name: sc-cell-communication
 domain: singlecell
-type: leaf
 version: 0.4.0
 author: OmicsClaw
 license: MIT
@@ -32,7 +31,6 @@ summary:
   - cellphonedb
   - cellchat
   - nichenet
-  aliases: []
 interface:
   inputs:
     modalities:
@@ -42,10 +40,6 @@ interface:
     preconditions:
       data_shape:
         requires_preprocessed: true
-        obs: []
-        obsm: []
-      env: []
-      config: []
   parameters:
     hints:
       builtin:
@@ -193,17 +187,9 @@ interface:
     - processed.h5ad
     - report.md
     - result.json
-    result_json:
-      required_keys: []
     anndata:
       saves_h5ad: true
-      obs: []
-      obsm: []
-      var: []
-      layers: []
-      uns: []
 runtime:
-  language: python
   entry: sc_cell_communication.py
 deps:
   python:
@@ -216,12 +202,10 @@ deps:
   - scanpy
   - scipy
   - seaborn
-  cli: []
 compatibility:
   platforms:
   - macos
   - linux
-  architectures: []
 resources:
   references:
   - methodology.md
@@ -230,16 +214,3 @@ resources:
   - r_visualization.md
   tests: tests/
   homepage: https://github.com/OmicsClaw/OmicsClaw
-lifecycle:
-  status: mvp
-validation:
-  level: smoke-only
-  evidence: []
-provenance:
-  origin: human
-security:
-  data_egress: none
-  network: none
-  writes: output_dir_only
-mcp:
-  expose: false
