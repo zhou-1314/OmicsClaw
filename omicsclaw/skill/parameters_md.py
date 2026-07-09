@@ -78,17 +78,41 @@ def render_parameters_md(sidecar: dict, *, source: str = "v1") -> str:
         if priority:
             lines.append(f"**Tuning priority:** {priority}\n")
 
+        # P5 (acquisition-plan.md §P5): a corpus-derived skill's hints carry a
+        # per-param `source_refs` entry (quote/span/doc_ref, or {"todo": True})
+        # — surfaced as a 3rd column when present. Gated per-method so every
+        # existing skill (none of which have `source_refs` today) renders
+        # byte-identical, since skill_lint._check_parameters_md_fresh diffs
+        # this output against the on-disk reference.
+        source_refs: dict = info.get("source_refs", {}) or {}
+        has_source_refs = bool(source_refs)
         for label, key in (("Core parameters", "params"), ("Advanced parameters", "advanced_params")):
             params = info.get(key) or []
             if params:
                 lines.append(f"**{label}:**")
                 lines.append("")
-                lines.append("| name | default |")
-                lines.append("|---|---|")
+                if has_source_refs:
+                    lines.append("| name | default | source |")
+                    lines.append("|---|---|---|")
+                else:
+                    lines.append("| name | default |")
+                    lines.append("|---|---|")
                 defaults = info.get("defaults", {}) or {}
                 for p in params:
                     dval = defaults.get(p, "—")
-                    lines.append(f"| `{p}` | `{dval}` |")
+                    if not has_source_refs:
+                        lines.append(f"| `{p}` | `{dval}` |")
+                        continue
+                    ref = source_refs.get(p)
+                    if not ref:
+                        source_cell = "—"
+                    elif ref.get("todo"):
+                        source_cell = "TODO"
+                    else:
+                        quote = str(ref.get("quote", "")).replace("|", "\\|")
+                        doc_ref = ref.get("doc_ref", "")
+                        source_cell = f'"{quote}" ({doc_ref})' if quote else "—"
+                    lines.append(f"| `{p}` | `{dval}` | {source_cell} |")
                 lines.append("")
 
         requires = info.get("requires") or []

@@ -117,6 +117,83 @@ def extract_technology(text: str) -> str:
     return 'unknown'
 
 
+# Candidate methodology parameters extract_methodology() recognizes, keyed by the
+# canonical param name used downstream (skill.yaml hints). Aliases are matched
+# case-insensitively, longest-first within each param, against a "KEY (op) NUMBER"
+# pattern (e.g. "resolution=0.8", "FDR < 0.1") — see extract_methodology below.
+_PARAM_ALIASES: Dict[str, List[str]] = {
+    'resolution': ['leiden resolution', 'clustering resolution', 'leiden_resolution', 'resolution'],
+    'n_pcs': ['number of pcs', 'principal components', 'n_pcs', 'npcs'],
+    'n_neighbors': ['nearest neighbors', 'k neighbors', 'n_neighbors'],
+    'min_genes': ['minimum genes', 'min genes', 'min_genes'],
+    'min_cells': ['minimum cells', 'min cells', 'min_cells'],
+    'max_mt_pct': ['mitochondrial percentage', 'pct_counts_mt', 'percent.mt', 'max_mt_pct'],
+    'n_top_hvg': ['highly variable genes', 'n_top_hvg', 'hvg'],
+    'p_value': ['p-value', 'p value', 'pvalue'],
+    'fdr': ['false discovery rate', 'q-value', 'qvalue', 'padj', 'fdr'],
+    'log2fc': ['log2 fold change', 'log2fc', 'logfc'],
+}
+_OP_RE = r'==|<=|>=|=|<|>|:'
+# Atomic group ((?>...), Python 3.11+): without it, a trailing-boundary check
+# failing on the full greedy match (e.g. "0.8" in "0.8abc") lets the engine
+# backtrack to a SHORTER, wrong match ("0", dropping ".8abc" silently) instead
+# of failing outright — worse than not extracting at all. Atomic grouping
+# forbids that backtrack, so a boundary failure rejects the whole candidate.
+_NUM_RE = r'(?>-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)'
+# A number match must not be immediately followed by another alnum/underscore
+# char — otherwise a value embedded in a larger token (e.g. "0.8abc",
+# "30cells", or a truncated "1e-" with no exponent digits) would be silently
+# reported as a clean, complete value instead of being rejected outright.
+# Deliberately does NOT forbid a following '.' — a sentence-ending period
+# ("resolution=0.8.") is common prose and must not suppress a real match.
+_NUM_BOUNDARY_RE = r'(?![A-Za-z0-9_])'
+
+
+def extract_methodology(text: str) -> List[Dict]:
+    """Extract candidate methodology parameters, each backed by a verifiable
+    (quote, char_span) slice into `text` — never a paraphrase or a guessed
+    value. Vocabulary-limited, regex-only, mirroring extract_technology's
+    alias-dict style: this is deliberately NOT an NLP/LLM pass, so that every
+    candidate returned is sourced by construction (P5 iron rule: never emit a
+    numeric default without a real, re-verifiable span into the source text).
+
+    Only recognizes a fixed "KEY (operator) NUMBER" phrasing (e.g.
+    "resolution=0.8", "FDR < 0.1", "n_pcs: 30"). A param mentioned without an
+    adjacent parseable number is simply not returned — this function never
+    guesses, and never emits a TODO placeholder itself (that policy choice
+    belongs to the caller, if ever needed).
+
+    Returns:
+        One dict per recognized param (first match in `text` wins, same
+        first-match-wins policy as extract_technology): {'param', 'operator',
+        'value' (int|float), 'quote', 'char_span': [start, end], 'todo': False}.
+    """
+    found: Dict[str, Dict] = {}
+    for param, aliases in _PARAM_ALIASES.items():
+        alias_pattern = '|'.join(re.escape(a) for a in sorted(aliases, key=len, reverse=True))
+        pattern = re.compile(
+            rf'\b(?:{alias_pattern})\b\s*({_OP_RE})\s*({_NUM_RE}){_NUM_BOUNDARY_RE}',
+            re.IGNORECASE,
+        )
+        m = pattern.search(text)
+        if not m:
+            continue
+        start, end = m.span()
+        quote = text[start:end]
+        assert text[start:end] == quote  # self-consistent by construction (re.Match.span())
+        raw_num = m.group(2)
+        value = float(raw_num) if ('.' in raw_num or 'e' in raw_num.lower()) else int(raw_num)
+        found[param] = {
+            'param': param,
+            'operator': m.group(1),
+            'value': value,
+            'quote': quote,
+            'char_span': [start, end],
+            'todo': False,
+        }
+    return list(found.values())
+
+
 # Detected-technology → omics domain. The report's "Next Steps" maps each domain
 # to its entry skill (DOMAIN_ENTRY below) so all 6 domains route correctly.
 _TECH_TO_DOMAIN = {

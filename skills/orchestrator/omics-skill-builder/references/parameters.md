@@ -6,7 +6,10 @@
 
 ## Allowed extra CLI flags
 
+- `--doc-ref`
 - `--domain`
+- `--from-paper`
+- `--from-tool-docs`
 - `--input-format`
 - `--method`
 - `--no-tests`

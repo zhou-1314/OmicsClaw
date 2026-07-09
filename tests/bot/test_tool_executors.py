@@ -730,3 +730,80 @@ async def test_autonomous_analysis_rejects_r_language(monkeypatch):
     assert "Error" in out and "Python only" in out, (
         f"expected a clear Python-only rejection; got: {out!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_autonomous_analysis_appends_a_promotion_suggestion_on_the_third_similar_success(
+    memory_store, monkeypatch
+):
+    """P4 (docs/proposals/skill-acquisition-plan.md §P4) end-to-end wiring: a
+    3rd similar-goal success in the same thread must append a promotion
+    suggestion to the digest, anchored to THIS run's own workspace_root (not
+    `promote_from_latest`, which still resolves via the mtime-scanning
+    `find_latest_autonomous_analysis` this feature exists to avoid racing)."""
+    import omicsclaw.autonomous as autonomous_pkg
+    from omicsclaw.autonomous.contracts import AutonomousRunResult, AutonomousRunStatus
+    from omicsclaw.runtime.tools.builders.agent_executors import (
+        execute_autonomous_analysis_execute,
+    )
+    from omicsclaw.skill.orchestration import _auto_capture_autonomous_run
+
+    session = await memory_store.create_session("u", "telegram")
+    sid = session.session_id
+    thread_id = "thread-promo"
+    goal = "cluster cells by cell type and annotate"
+
+    # Seed 2 PRIOR similar successes in the same thread.
+    await _auto_capture_autonomous_run(sid, thread_id, "cluster the cells by cell type", "run-1", "/tmp/run-1", "succeeded")
+    await _auto_capture_autonomous_run(sid, thread_id, "Cluster cells by type and annotate.", "run-2", "/tmp/run-2", "succeeded")
+
+    async def _fake_loop(request, **kwargs):
+        return AutonomousRunResult(
+            run_id="run-3", workspace_root="/tmp/run-3", status=AutonomousRunStatus.SUCCEEDED
+        )
+
+    monkeypatch.setattr(autonomous_pkg, "run_autonomous_code_loop_async", _fake_loop)
+
+    out = await execute_autonomous_analysis_execute(
+        {"goal": goal}, session_id=sid, thread_id=thread_id
+    )
+
+    assert "Promotion candidate" in out
+    assert "3rd time" in out
+    assert "source_analysis_dir='/tmp/run-3'" in out
+    assert "promote_from_latest=True" not in out
+
+    # The 3rd run's own lineage must also now be on record.
+    recs = await memory_store.get_memories(sid, "autonomous_run", thread_id=thread_id)
+    assert len(recs) == 3
+    assert any(r.run_id == "run-3" and r.status == "succeeded" for r in recs)
+
+
+@pytest.mark.asyncio
+async def test_autonomous_analysis_no_promotion_suggestion_below_threshold(memory_store, monkeypatch):
+    """Only 1 prior similar success exists — must not suggest promotion yet,
+    and the digest must be unaffected (no "Promotion candidate" section)."""
+    import omicsclaw.autonomous as autonomous_pkg
+    from omicsclaw.autonomous.contracts import AutonomousRunResult, AutonomousRunStatus
+    from omicsclaw.runtime.tools.builders.agent_executors import (
+        execute_autonomous_analysis_execute,
+    )
+    from omicsclaw.skill.orchestration import _auto_capture_autonomous_run
+
+    session = await memory_store.create_session("u", "telegram")
+    sid = session.session_id
+    thread_id = "thread-promo-2"
+
+    await _auto_capture_autonomous_run(sid, thread_id, "cluster the cells by cell type", "run-1", "/tmp/run-1", "succeeded")
+
+    async def _fake_loop(request, **kwargs):
+        return AutonomousRunResult(
+            run_id="run-2", workspace_root="/tmp/run-2", status=AutonomousRunStatus.SUCCEEDED
+        )
+
+    monkeypatch.setattr(autonomous_pkg, "run_autonomous_code_loop_async", _fake_loop)
+
+    out = await execute_autonomous_analysis_execute(
+        {"goal": "cluster cells by type"}, session_id=sid, thread_id=thread_id
+    )
+    assert "Promotion candidate" not in out

@@ -52,7 +52,7 @@ _DEFAULT_LIFECYCLE_STATUS = "mvp"
 
 # Authorship provenance (skill.yaml `provenance.origin`). v1 skills predate this
 # field and were all hand-written, so they default to "human".
-ORIGINS = ("human", "scaffolded", "promoted", "migrated")
+ORIGINS = ("human", "scaffolded", "promoted", "migrated", "corpus")
 _DEFAULT_ORIGIN = "human"
 
 _RUNTIME_DEFAULTS: dict[str, object] = {

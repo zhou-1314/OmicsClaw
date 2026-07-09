@@ -349,6 +349,88 @@ def _check_hint_flags_accepted(skill_dir: Path, sidecar: dict, hints: dict) -> l
     return errors
 
 
+def _check_corpus_source_refs(
+    skill_dir: Path, provenance_origin: str, source_ref: str | None, hints: dict
+) -> list[str]:
+    """P5 iron rule (acquisition-plan.md §P5): never ship a fabricated default.
+
+    For a corpus-derived skill (`provenance.origin == "corpus"`), every
+    `hints.*.defaults[param]` must have a matching `source_refs[param]` that
+    is a real, well-formed `{quote, char_span, doc_ref}` triple — never a
+    `{"todo": True}` placeholder standing in for a live default. When
+    `references/source_corpus.txt` is present, `char_span` is re-sliced out
+    of it and must equal `quote` — the actual anti-fabrication check, not
+    just a structural one (file-exists-guarded, mirroring
+    `_check_allowed_extra_flags`'s tolerance for a transitional skill).
+
+    A no-op for any non-corpus skill (the overwhelming majority) — returns
+    `[]` immediately, so this rule cannot regress an existing skill's lint
+    status.
+    """
+    if provenance_origin != "corpus":
+        return []
+    errors: list[str] = []
+    if not (source_ref or "").strip():
+        errors.append(
+            "skill.yaml (provenance): origin is 'corpus' but source_ref (DOI/URL/PMID) is not set"
+        )
+
+    corpus_text: str | None = None
+    corpus_path = skill_dir / "references" / "source_corpus.txt"
+    if corpus_path.exists():
+        corpus_text = corpus_path.read_text(encoding="utf-8")
+
+    for method, info in (hints or {}).items():
+        if not isinstance(info, dict):
+            continue
+        defaults = info.get("defaults")
+        if not isinstance(defaults, dict):
+            continue
+        source_refs = info.get("source_refs")
+        if not isinstance(source_refs, dict):
+            source_refs = {}
+        for param, value in defaults.items():
+            ref = source_refs.get(param)
+            if not isinstance(ref, dict) or ref.get("todo") is True:
+                errors.append(
+                    f"skill.yaml (interface.parameters.hints.{method}): "
+                    f"'{param}' has a default ({value!r}) but no source_ref — "
+                    "corpus-derived defaults must never be unsourced"
+                )
+                continue
+            quote, span, doc_ref = ref.get("quote"), ref.get("char_span"), ref.get("doc_ref")
+            # Bounds are validated as real ints with 0 <= start < end BEFORE any
+            # slicing: Python silently CLAMPS out-of-range/negative slice indices
+            # instead of raising, so a naive `span[0] < span[1]` check alone would
+            # let a bogus span (e.g. [-14, 999]) sail through as "verified" —
+            # exactly the fabrication the iron rule exists to catch.
+            span_valid = (
+                isinstance(span, list)
+                and len(span) == 2
+                and isinstance(span[0], int)
+                and isinstance(span[1], int)
+                and not isinstance(span[0], bool)
+                and not isinstance(span[1], bool)
+                and 0 <= span[0] < span[1]
+            )
+            malformed = not quote or not doc_ref or not span_valid
+            if malformed:
+                errors.append(
+                    f"skill.yaml (interface.parameters.hints.{method}): "
+                    f"source_refs['{param}'] is malformed (needs quote/char_span/doc_ref)"
+                )
+                continue
+            if corpus_text is not None and (
+                span[1] > len(corpus_text) or corpus_text[span[0]:span[1]] != quote
+            ):
+                errors.append(
+                    f"skill.yaml (interface.parameters.hints.{method}): "
+                    f"source_refs['{param}'] char_span does not slice out its own quote "
+                    "in references/source_corpus.txt"
+                )
+    return errors
+
+
 # --- Type dispatch (ADR 0030) ---------------------------------------------
 #
 # `type` is an optional sidecar field: `leaf` (default) | `consensus` |
@@ -858,6 +940,15 @@ def _lint_v2(skill_dir: Path) -> list[str]:
     # Applies to every type: a per-method hint must not name a flag the gate drops.
     errors.extend(
         _check_hint_flags_accepted(skill_dir, synth, manifest.interface.parameters.hints)
+    )
+    # P5: a corpus-derived skill must never ship a fabricated numeric default.
+    errors.extend(
+        _check_corpus_source_refs(
+            skill_dir,
+            manifest.provenance.origin,
+            manifest.provenance.source_ref,
+            manifest.interface.parameters.hints,
+        )
     )
     return errors
 

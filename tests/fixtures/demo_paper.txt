@@ -1,0 +1,4 @@
+We performed Leiden clustering (resolution=0.8) after computing n_pcs=30
+principal components on the filtered dataset. Cells were filtered with
+min_genes: 200 and min_cells=3. Differential expression significance was
+assessed at FDR < 0.1 with log2fc=1.5 as the fold-change threshold.

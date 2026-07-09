@@ -11,11 +11,14 @@ from omicsclaw.skill.registry import OmicsRegistry
 from omicsclaw.skill.scaffolder import (
     _demo_gate_skip_reason,
     _strip_redundant_pathlib_import,
+    _synthesize_load_when,
     create_skill_scaffold,
     find_latest_autonomous_analysis,
     infer_skill_name,
 )
 from omicsclaw.skill.schema import load_skill_yaml, validate_skill_yaml
+from omicsclaw.skill.execution.flag_introspection import derive_accepted_flags
+from omicsclaw.skill.lazy_metadata import LazySkillMetadata
 from omicsclaw.common.report import SCAFFOLD_STATUS, validate_result_envelope
 
 
@@ -105,6 +108,115 @@ def test_strip_redundant_pathlib_import_leaves_multi_name_import_alone():
     assert _strip_redundant_pathlib_import(code) == code
 
 
+# --- P3 task-derived load_when synthesis ------------------------------------
+
+
+def test_load_when_prefers_summary_over_request():
+    result = _synthesize_load_when(
+        "proteomics",
+        "x",
+        "Create a reusable kinase activity skill for phosphoproteomics.",
+        "Kinase activity inference scaffold for phosphoproteomics matrices.",
+    )
+    assert result == "the user needs Kinase activity inference scaffold for phosphoproteomics matrices"
+
+
+def test_load_when_falls_back_to_request_when_summary_empty():
+    """Regression guard: an earlier version of this synthesizer tried to
+    strip a leading creation VERB from `request` via a finite whitelist, and
+    broke on exactly this string (`detect` isn't a "create a skill" verb, and
+    no finite whitelist covers every bio-analysis verb) — the fixed design
+    uses a verb-agnostic "needs to <sentence>" template instead."""
+    result = _synthesize_load_when("spatial", "x", "Detect spatial domains for a new demo assay.", "")
+    assert result == "the user needs to Detect spatial domains for a new demo assay"
+
+
+def test_load_when_handles_a_second_non_creation_verb_request():
+    result = _synthesize_load_when("orchestrator", "x", "Promote the failed analysis.", "")
+    assert result == "the user needs to Promote the failed analysis"
+
+
+def test_load_when_strips_leading_article_from_bare_noun_request():
+    result = _synthesize_load_when("spatial", "x", "A spatial domain detection skill", "")
+    assert result == "the user needs spatial domain detection"
+
+
+def test_load_when_strips_trailing_skill_suffix():
+    result = _synthesize_load_when("spatial", "cellcharter-spatial-domains", "Create a CellCharter spatial domains skill", "")
+    assert result == "the user needs to Create a CellCharter spatial domains"
+
+
+def test_load_when_truncates_to_first_sentence():
+    result = _synthesize_load_when(
+        "singlecell", "x", "Cluster the cells by cell type. It should also compute markers.", ""
+    )
+    assert result == "the user needs to Cluster the cells by cell type"
+
+
+def test_load_when_rejects_a_question_and_falls_back_to_generic():
+    """Gluing a question after "needs to" would read WORSE than the generic
+    template ("the user needs to Can you build me a peak-calling skill for
+    ChIP-seq") — reject it outright rather than salvage it."""
+    result = _synthesize_load_when("genomics", "x", "Can you build me a peak-calling skill for ChIP-seq?", "")
+    assert result == "the user explicitly asks to create a new genomics skill named 'x'"
+
+
+def test_load_when_rejects_a_question_separated_by_a_tab():
+    """Regression: an earlier version extracted the first word via
+    `sentence.split(" ", 1)` — a literal-space split — so a tab between
+    "Can" and "you" slipped past the reject guard entirely."""
+    result = _synthesize_load_when("genomics", "x", "Can\tyou build me a peak-calling skill for ChIP-seq?", "")
+    assert result == "the user explicitly asks to create a new genomics skill named 'x'"
+
+
+def test_load_when_rejects_a_contraction_starting_with_a_rejected_word():
+    """Regression: "I'd"/"I've"/etc. keep the apostrophe INSIDE the word, so
+    a plain `.strip("'\\\"")` (which only trims leading/trailing quote
+    characters) never reduced "i'd" to "i"."""
+    result = _synthesize_load_when("genomics", "x", "I'd like a peak-calling skill for ChIP-seq.", "")
+    assert result == "the user explicitly asks to create a new genomics skill named 'x'"
+
+
+def test_load_when_rejects_additional_question_openers():
+    """Regression: when/where/which/who are just as much question openers as
+    can/could/would/... but were missing from the reject set."""
+    for request in (
+        "When should I use peak calling?",
+        "Where can I find a spatial domain skill?",
+        "Which method detects doublets best?",
+        "Who reviews promoted skills?",
+    ):
+        result = _synthesize_load_when("genomics", "x", request, "")
+        assert result == "the user explicitly asks to create a new genomics skill named 'x'", request
+
+
+def test_load_when_rejects_a_relative_clause_request():
+    result = _synthesize_load_when(
+        "singlecell", "x", "I need a skill that clusters cells and annotates types.", ""
+    )
+    assert result == "the user explicitly asks to create a new singlecell skill named 'x'"
+
+
+def test_load_when_falls_back_to_generic_when_both_empty():
+    """Pins the previously-untested cyclical placeholder as a regression
+    guard for the truly-no-info case (preserves prior behavior)."""
+    result = _synthesize_load_when("bulkrna", "my-skill", "", "")
+    assert result == "the user explicitly asks to create a new bulkrna skill named 'my-skill'"
+
+
+def test_load_when_reverts_when_stripping_a_short_summary_leaves_too_little():
+    """"QC skill." stripped down to "QC" loses too much signal to be useful —
+    revert to the pre-strip sentence instead."""
+    result = _synthesize_load_when("singlecell", "x", "", "QC skill.")
+    assert result == "the user needs QC skill"
+
+
+def test_load_when_caps_pathological_input_length():
+    long_request = "Analyze " + " ".join(f"gene{i}" for i in range(50)) + " expression patterns."
+    result = _synthesize_load_when("bulkrna", "x", long_request, "")
+    assert len(result.split()) <= 24  # "the user needs to" (4 words) + 20-word topic cap
+
+
 def test_create_skill_scaffold_creates_registry_loadable_skill(tmp_path: Path):
     result = create_skill_scaffold(
         request="Create a reusable kinase activity skill for phosphoproteomics.",
@@ -154,6 +266,33 @@ def test_create_skill_scaffold_creates_registry_loadable_skill(tmp_path: Path):
     assert info is not None
     assert info["domain"] == "proteomics"
     assert info["script"].name == "proteomics_kinase_activity.py"
+
+    # P3: the real description consumers (catalog/SKILL.md, via LazySkillMetadata
+    # -> _reconstruct_description) must reflect the actual capability, not the
+    # old cyclical "the user explicitly asks to create a new X skill" text.
+    description = LazySkillMetadata(skill_dir).description
+    assert "Kinase activity inference" in description
+    assert "explicitly asks to create a new" not in description
+
+
+def test_scaffold_load_when_survives_a_colon_in_the_request(tmp_path: Path):
+    """Round-trip through the written skill.yaml (not just the in-memory
+    manifest) to catch YAML-escaping bugs a colon in free text could trigger
+    (`key: value with: colon` is a classic YAML footgun)."""
+    result = create_skill_scaffold(
+        request="Create a skill for peak-calling: MACS2 style.",
+        domain="genomics",
+        skill_name="macs2-peak-calling",
+        skills_root=tmp_path,
+    )
+    skill_dir = Path(result.skill_dir)
+    assert validate_skill_yaml(skill_dir / "skill.yaml") == []
+
+    manifest = load_skill_yaml(skill_dir / "skill.yaml")
+    assert "peak-calling: MACS2 style" in manifest.summary.load_when
+
+    description = LazySkillMetadata(skill_dir).description
+    assert "peak-calling: MACS2 style" in description
 
 
 def test_scaffold_placeholder_script_runs_and_signals_unimplemented(tmp_path: Path):
@@ -437,6 +576,125 @@ def test_promoted_mini_agent_skill_runs(tmp_path: Path):
     envelope = json.loads((run_out / "result.json").read_text(encoding="utf-8"))
     assert validate_result_envelope(envelope) == []
     assert envelope["status"] == "ok"
+
+
+def test_promoted_mini_agent_skill_lifts_literal_oc_run_kwargs(tmp_path: Path):
+    """P2a (acquisition-plan.md §P2): a literal oc.run(...) kwarg becomes an
+    overridable CLI flag on the promoted script, instead of being frozen
+    forever at whatever value the original mini-agent run happened to use."""
+    output_root, source_dir = _build_real_mini_agent_run(
+        tmp_path,
+        real_input=True,
+        accepted_cells=[
+            "res = oc.run('sc-preprocessing', adata, min_genes=5)",
+            "show()\nReturnAnswer('done')",
+        ],
+    )
+    result = create_skill_scaffold(
+        request="Package the run as a reusable skill.",
+        domain="singlecell",
+        skill_name="lift-promote-skill",
+        skills_root=tmp_path / "skills",
+        source_analysis_dir=source_dir,
+        output_root=output_root,
+    )
+    skill_dir = Path(result.skill_dir)
+    script = skill_dir / "lift_promote_skill.py"
+    script_text = script.read_text(encoding="utf-8")
+    assert "--min-genes" in script_text
+    assert "min_genes=args.min_genes" in script_text
+    assert "min_genes=5)" not in script_text
+    assert lint_skill(skill_dir) == []
+
+    # ADR 0041: allowed_extra_flags derives from the script's real argparse
+    # surface, so the new flag is automatically usable with no schema wiring.
+    manifest = load_skill_yaml(skill_dir / "skill.yaml")
+    accepted_flags = derive_accepted_flags(skill_dir, script.name, manifest.type)
+    assert "--min-genes" in accepted_flags
+
+    evidence = (skill_dir / "references" / "parameter_lift.md").read_text(encoding="utf-8")
+    assert "--min-genes" in evidence
+    assert "5" in evidence
+
+    # The override must actually reach the nested oc.run() call — verified via
+    # the facade's own skill_calls.jsonl provenance record (params round-trip
+    # through CLI-flag strings, see skill_facade.py _flags_to_params).
+    run_out = tmp_path / "run_out"
+    proc = subprocess.run(
+        [sys.executable, str(script), "--demo", "--output", str(run_out), "--min-genes", "777"],
+        cwd=ROOT,
+        env={**os.environ, "PYTHONPATH": str(ROOT)},
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    skill_calls = [
+        json.loads(line)
+        for line in (run_out / "skill_calls.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert skill_calls[0]["params"]["min_genes"] == "777"
+
+
+def test_lift_falls_back_to_verbatim_when_the_gate_rejects_the_lifted_script(tmp_path, monkeypatch):
+    """P2a safety net (acquisition-plan.md §3 point 5): a code transform can
+    silently break otherwise-working code. If the --demo gate rejects the
+    LIFTED script, create_skill_scaffold must fall back to the untouched
+    verbatim body and re-gate THAT — never ship a script that hasn't passed
+    some gate run, and never leave parameters.md advertising a flag the
+    shipped script doesn't have."""
+    import omicsclaw.skill.scaffolder as scaffolder_module
+
+    output_root, source_dir = _build_real_mini_agent_run(
+        tmp_path,
+        real_input=True,
+        accepted_cells=[
+            "res = oc.run('sc-preprocessing', adata, min_genes=5)",
+            "show()\nReturnAnswer('done')",
+        ],
+    )
+
+    real_gate = scaffolder_module._run_demo_smoke_gate
+    seen_scripts: list[str] = []
+
+    def fake_gate(script_path, output_dir):
+        seen_scripts.append(script_path.read_text(encoding="utf-8"))
+        if len(seen_scripts) == 1:
+            return scaffolder_module._DemoGateOutcome(
+                verdict="rejected", reason="synthetic failure for fallback test"
+            )
+        return real_gate(script_path, output_dir)
+
+    monkeypatch.setattr(scaffolder_module, "_run_demo_smoke_gate", fake_gate)
+
+    result = create_skill_scaffold(
+        request="Package the run as a reusable skill.",
+        domain="singlecell",
+        skill_name="fallback-promote-skill",
+        skills_root=tmp_path / "skills",
+        source_analysis_dir=source_dir,
+        output_root=output_root,
+    )
+
+    assert len(seen_scripts) == 2
+    assert "min_genes=args.min_genes" in seen_scripts[0]  # 1st attempt: lifted
+    assert "min_genes=5)" in seen_scripts[1]  # 2nd attempt: fallback verbatim
+
+    skill_dir = Path(result.skill_dir)
+    shipped_text = (skill_dir / "fallback_promote_skill.py").read_text(encoding="utf-8")
+    assert "min_genes=5)" in shipped_text
+    assert "--min-genes" not in shipped_text
+    assert lint_skill(skill_dir) == []
+
+    parameters_md = (skill_dir / "references" / "parameters.md").read_text(encoding="utf-8")
+    assert "--min-genes" not in parameters_md
+
+    evidence = (skill_dir / "references" / "parameter_lift.md").read_text(encoding="utf-8")
+    assert "fell back to verbatim" in evidence
+    assert "synthetic failure for fallback test" in evidence
+
+    # The verbatim retry ran for real (real_gate) and succeeded on its own merits.
+    assert result.demo_gate_verdict == "earned"
 
 
 def test_find_latest_discovers_project_nested_mini_agent_run(tmp_path: Path):

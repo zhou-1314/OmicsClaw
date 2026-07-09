@@ -72,7 +72,7 @@ ValidationLevel = Literal[
     "smoke-only", "demo-validated", "fixture-validated", "benchmarked", "production"
 ]
 LifecycleStatus = Literal["draft", "mvp", "stable", "deprecated"]
-Origin = Literal["human", "scaffolded", "promoted", "migrated"]
+Origin = Literal["human", "scaffolded", "promoted", "migrated", "corpus"]
 RSource = Literal["cran", "bioc"]
 
 
@@ -274,6 +274,7 @@ class Provenance(_Strict):
     migrated_from: Optional[str] = None   # knowledge_base/<topic> when migrated
     source_hash: Optional[str] = None
     source_license: Optional[str] = None
+    source_ref: Optional[str] = None      # DOI/URL/PMID (or filename fallback) when origin=="corpus"
 
 
 class Security(_Strict):

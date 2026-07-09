@@ -102,8 +102,10 @@ from omicsclaw.runtime.policy.verification import format_completion_mapping_summ
 from omicsclaw.skill.orchestration import (
     _AUTO_DISAMBIGUATE_GAP,
     _auto_capture_analysis,
+    _auto_capture_autonomous_run,
     _auto_capture_consensus,
     _auto_capture_dataset,
+    _compute_promotion_suggestion,
     _capture_thread_source,
     _build_method_preview,
     _build_param_hint,
@@ -2337,6 +2339,24 @@ async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
             )
         except Exception:
             logger.debug("autonomous media registration failed", exc_info=True)
+        # P4: record this run's lineage and, on success, check whether a
+        # similar goal has already succeeded enough times in this thread to
+        # suggest promoting it to a reusable skill. Best-effort; must not
+        # fail the run (mirrors _register_autonomous_media above).
+        try:
+            session_id = str(kwargs.get("session_id", "") or "")
+            thread_id = str(kwargs.get("thread_id", "") or "")
+            await _auto_capture_autonomous_run(
+                session_id, thread_id, goal, result.run_id, result.workspace_root, str(result.status)
+            )
+            if result.ok:
+                suggestion = await _compute_promotion_suggestion(
+                    session_id, thread_id, goal, result.run_id, result.workspace_root
+                )
+                if suggestion:
+                    digest += f"\n\n{suggestion}"
+        except Exception:
+            logger.debug("autonomous promotion-signal capture failed", exc_info=True)
         return digest
     except Exception as e:
         logger.error(f"Autonomous analysis execution failed: {e}", exc_info=True)

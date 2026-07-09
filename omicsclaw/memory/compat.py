@@ -161,6 +161,32 @@ class AnalysisMemory(BaseMemory):
     assisted_param_decision: dict[str, Any] | None = None
 
 
+class AutonomousRunMemory(BaseMemory):
+    """Autonomous mini-agent run lineage — P4 acquisition-flywheel signal.
+
+    Sibling of ``AnalysisMemory`` for the autonomous (free-form code-loop, ADR
+    0032) flow rather than the fixed skill-execution flow: no ``skill``/
+    ``method`` identity, just the free-text ``goal`` the run pursued. Feeds
+    the "suggest promoting this to a skill" signal in
+    ``omicsclaw.skill.orchestration._compute_promotion_suggestion`` — recorded
+    for every completed run (success or failure), even though only successes
+    count toward that signal, so a future consumer isn't blind to failures
+    without a backfill.
+    """
+    memory_type: Literal["autonomous_run"] = "autonomous_run"
+    goal: str
+    run_id: str
+    workspace_root: str
+    status: Literal["succeeded", "failed"] = "failed"
+    # Verbatim AutonomousRunStatus.value (e.g. "timed_out") — `status` above
+    # collapses to a binary for the promotion-count logic; this keeps the
+    # finer distinction around for a future consumer without a schema change.
+    raw_status: str = ""
+    # Bench (ADR 0018) — investigation-thread scope; empty = legacy un-scoped.
+    thread_id: str = ""
+    executed_at: datetime = Field(default_factory=_utcnow)
+
+
 class PreferenceMemory(BaseMemory):
     """User preferences and habits."""
     memory_type: Literal["preference"] = "preference"
@@ -242,6 +268,9 @@ class ThreadSourceMemory(BaseMemory):
 _TYPE_TO_DOMAIN = {
     "dataset": "dataset",
     "analysis": "analysis",
+    # P4: autonomous mini-agent run lineage, sibling of "analysis" but for the
+    # free-form code-loop flow rather than fixed skill execution.
+    "autonomous_run": "autonomous_run",
     "preference": "preference",
     "insight": "insight",
     "project_context": "project",
@@ -262,6 +291,7 @@ _DOMAIN_TO_TYPE["project"] = "project_context"
 _TYPE_CLASSES = {
     "dataset": DatasetMemory,
     "analysis": AnalysisMemory,
+    "autonomous_run": AutonomousRunMemory,
     "preference": PreferenceMemory,
     "insight": InsightMemory,
     "project_context": ProjectContextMemory,
@@ -288,6 +318,12 @@ def _memory_to_uri_path(memory: BaseMemory) -> str:
         if memory.thread_id:
             return f"{memory.thread_id}/{memory.skill}/{memory.memory_id}"
         return f"{memory.skill}/{memory.memory_id}"
+    elif isinstance(memory, AutonomousRunMemory):
+        # P4: mirrors AnalysisMemory's thread-scoped lineage path, keyed by
+        # run_id (no fixed skill/method identity for a free-form goal).
+        if memory.thread_id:
+            return f"{memory.thread_id}/{memory.run_id}"
+        return memory.run_id
     elif isinstance(memory, PreferenceMemory):
         return f"{memory.domain}/{memory.key}"
     elif isinstance(memory, InsightMemory):

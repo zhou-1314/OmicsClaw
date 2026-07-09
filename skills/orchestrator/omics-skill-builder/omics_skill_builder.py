@@ -44,6 +44,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--summary", default="", help="One-line skill summary.")
     parser.add_argument("--source-analysis-dir", default="", help="Promote a successful autonomous analysis output directory into the new skill.")
     parser.add_argument("--promote-from-latest", action="store_true", help="Promote the most recent autonomous analysis output.")
+    parser.add_argument(
+        "--from-paper", default="",
+        help="Path to a text file with paper content; extracts sourced methodology "
+        "candidates into the scaffold's hints (P5, mutually exclusive with "
+        "--from-tool-docs / --source-analysis-dir / --promote-from-latest).",
+    )
+    parser.add_argument(
+        "--from-tool-docs", default="",
+        help="Path to a text file with tool/methods documentation; same extraction "
+        "pipeline as --from-paper.",
+    )
+    parser.add_argument(
+        "--doc-ref", default="",
+        help="DOI/URL/PMID for --from-paper/--from-tool-docs (falls back to the file name if omitted).",
+    )
     parser.add_argument("--trigger-keyword", dest="trigger_keywords", action="append", default=[])
     parser.add_argument("--method", dest="methods", action="append", default=[])
     parser.add_argument("--input-format", dest="input_formats", action="append", default=[])
@@ -60,6 +75,11 @@ def _write_text(path: Path, content: str) -> None:
 
 def main() -> None:
     args = parse_args()
+    if args.from_paper and args.from_tool_docs:
+        raise SystemExit("--from-paper and --from-tool-docs are mutually exclusive.")
+    from_corpus = args.from_paper or args.from_tool_docs
+    corpus_source_kind = "paper" if args.from_paper else ("tool_docs" if args.from_tool_docs else "paper")
+
     if args.demo:
         request = (
             "Create a reusable OmicsClaw skill for CellCharter-based spatial "
@@ -104,6 +124,9 @@ def main() -> None:
         methods=methods,
         trigger_keywords=trigger_keywords,
         create_tests=not args.no_tests,
+        from_corpus=from_corpus,
+        corpus_source_kind=corpus_source_kind,
+        doc_ref=args.doc_ref,
     )
 
     output_dir = Path(args.output)

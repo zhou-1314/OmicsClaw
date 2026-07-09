@@ -66,6 +66,53 @@ def test_v1_v2_body_is_byte_identical():
     assert v1[len(AUTOGEN_HEADER):] == v2[len(AUTOGEN_HEADER_V2):]
 
 
+def test_source_refs_absent_renders_byte_identical_to_baseline():
+    # P5: a hints entry with NO source_refs key must render exactly like
+    # today's 2-column output — this is the regression guard the freshness
+    # gate (skill_lint._check_parameters_md_fresh) depends on for the ~100+
+    # existing skills, none of which have source_refs.
+    baseline = render_parameters_md({"allowed_extra_flags": _FLAGS, "hints": _HINTS}, source="v2")
+    assert "| name | default |" in baseline
+    assert "| name | default | source |" not in baseline
+
+
+def test_source_refs_present_adds_third_column():
+    hints_with_refs = {
+        "leiden": {
+            "params": ["resolution", "n_neighbors"],
+            "defaults": {"resolution": 0.8, "n_neighbors": 15},
+            "source_refs": {
+                "resolution": {"quote": "resolution=0.8", "char_span": [0, 14], "doc_ref": "10.1038/xyz"},
+                "n_neighbors": {"todo": True},
+            },
+        }
+    }
+    out = render_parameters_md({"allowed_extra_flags": _FLAGS, "hints": hints_with_refs}, source="v2")
+    assert "| name | default | source |" in out
+    assert '| `resolution` | `0.8` | "resolution=0.8" (10.1038/xyz) |' in out
+    assert "| `n_neighbors` | `15` | TODO |" in out
+
+
+def test_source_refs_quote_pipe_character_is_escaped():
+    hints_with_refs = {
+        "leiden": {
+            "params": ["resolution"],
+            "defaults": {"resolution": 0.8},
+            "source_refs": {
+                "resolution": {"quote": "a|b resolution=0.8", "char_span": [0, 5], "doc_ref": "x"},
+            },
+        }
+    }
+    out = render_parameters_md({"allowed_extra_flags": _FLAGS, "hints": hints_with_refs}, source="v2")
+    # Escaped (\|) so markdown doesn't parse it as a table-column delimiter —
+    # an unescaped pipe would corrupt the table into extra columns.
+    assert "a\\|b resolution=0.8" in out
+    for line in out.splitlines():
+        if "resolution=0.8" in line:
+            unescaped_pipes = line.replace("\\|", "").count("|")
+            assert unescaped_pipes == 4  # leading/trailing + 2 internal separators
+
+
 def _v2_skill(tmp_path: Path) -> Path:
     doc = {
         "schema_version": 2,

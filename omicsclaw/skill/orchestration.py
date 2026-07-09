@@ -468,6 +468,167 @@ async def _auto_capture_analysis(
         logger.warning(f"Auto-capture analysis failed: {e}")
 
 
+# P4 (docs/proposals/skill-acquisition-plan.md §P4): adaptive promotion
+# signal — after a successful autonomous-analysis (mini-agent) run, notice
+# when a SIMILAR goal has already succeeded before in the same thread and
+# proactively suggest promoting it to a reusable skill, instead of relying
+# purely on the user explicitly asking. Sibling of ``_auto_capture_analysis``
+# above, but for the free-form code-loop flow (ADR 0032) rather than fixed
+# skill execution — no ``skill``/``method`` identity, just a free-text goal.
+
+# 3rd occurrence of a similar goal (2 PRIOR successes + this one) reads as a
+# pattern rather than a coincidence. Named so it's easy to retune later
+# without re-deriving the reasoning.
+_PROMOTION_SUGGESTION_MIN_PRIOR_SUCCESSES = 2
+# Hand-verified against realistic goal text: a genuine reword of the same
+# goal scores ~0.6-0.8, an unrelated goal scores ~0.0-0.1.
+_GOAL_SIMILARITY_THRESHOLD = 0.5
+_GOAL_SIMILARITY_STOPWORDS = frozenset(
+    {"the", "a", "an", "and", "by", "in", "of", "to", "for", "with", "on"}
+)
+
+
+def _ordinal(n: int) -> str:
+    """"1st"/"2nd"/"3rd"/"4th"/... — 11th/12th/13th are the "teen" exception."""
+    if 11 <= (n % 100) <= 13:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def _goal_similarity(a: str, b: str) -> float:
+    """Jaccard token overlap between two goal strings, stopwords excluded.
+
+    Reuses the memory subsystem's own tokenizer (``SearchTokenizer`` —
+    handles normalization + CJK segmentation) so this stays consistent with
+    how the rest of the system tokenizes text, rather than a second scheme.
+    Deliberately NOT an FTS5 search: ``SearchIndexer``'s ``MATCH`` query ANDs
+    every tokenized term with no stopword removal, so two genuinely-reworded
+    goals often fail to match on a missing connector word — too strict for
+    "has the user done something like this before."  No embedding-based
+    semantic similarity either: no such infra exists in this codebase, and
+    this deterministic token-overlap heuristic is proportionate to the ask.
+    """
+    from omicsclaw.memory.search_terms import SearchTokenizer
+
+    tokens_a = {t.lower() for t in SearchTokenizer.tokenize(a)} - _GOAL_SIMILARITY_STOPWORDS
+    tokens_b = {t.lower() for t in SearchTokenizer.tokenize(b)} - _GOAL_SIMILARITY_STOPWORDS
+    if not tokens_a or not tokens_b:
+        return 0.0
+    return len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
+
+
+async def _auto_capture_autonomous_run(
+    session_id: str,
+    thread_id: str,
+    goal: str,
+    run_id: str,
+    workspace_root: str,
+    raw_status: str,
+) -> None:
+    """Record an autonomous mini-agent run's lineage (success or failure).
+
+    Mirrors ``_auto_capture_analysis``'s early-return-if-disabled pattern.
+    Records EVERY completed run, not just successes — only successes count
+    toward the promotion signal (``_compute_promotion_suggestion``), but
+    capturing failures too means a future consumer (e.g. "N failures then a
+    success") doesn't need a backfill.
+    """
+    from omicsclaw.runtime.agent.state import memory_store
+    if not memory_store or not session_id:
+        return
+
+    try:
+        from omicsclaw.memory.compat import AutonomousRunMemory
+
+        memory = AutonomousRunMemory(
+            goal=goal,
+            run_id=run_id,
+            workspace_root=workspace_root,
+            status="succeeded" if raw_status == "succeeded" else "failed",
+            raw_status=raw_status,
+            thread_id=thread_id,
+        )
+        await memory_store.save_memory(session_id, memory)
+        logger.debug(f"Auto-captured autonomous run: {run_id} ({raw_status})")
+    except Exception as e:
+        logger.warning(f"Auto-capture autonomous run failed: {e}")
+
+
+async def _compute_promotion_suggestion(
+    session_id: str,
+    thread_id: str,
+    goal: str,
+    run_id: str,
+    workspace_root: str,
+) -> str | None:
+    """Suggest promoting to a skill when a similar goal has succeeded before.
+
+    Only meaningful to call after a SUCCESSFUL run (the caller checks
+    ``result.ok``). Fetches this thread's prior ``autonomous_run`` records
+    (``get_memories``, not the FTS5 ``search_memories`` — see
+    ``_goal_similarity``'s docstring for why), counts those that succeeded
+    and are similar to ``goal`` (excluding ``run_id`` itself, in case this
+    exact run was somehow already captured), and — if at least
+    ``_PROMOTION_SUGGESTION_MIN_PRIOR_SUCCESSES`` qualify — returns a
+    markdown suggestion naming ``workspace_root`` as the exact
+    ``source_analysis_dir`` for ``execute_create_omics_skill``.
+
+    Deliberately never mentions ``promote_from_latest``: that still resolves
+    via ``find_latest_autonomous_analysis``'s global mtime scan across ALL
+    sessions' output directories, which is exactly the concurrent-session
+    race this feature must not reintroduce — anchoring to this run's own
+    ``workspace_root`` (known immediately after the run, no disk scan)
+    keeps the suggestion correct even with other sessions running at once.
+    """
+    from omicsclaw.runtime.agent.state import memory_store
+    if not memory_store or not session_id:
+        return None
+    if not thread_id:
+        # get_memories treats an empty thread_id as "no filter" (by design,
+        # for its general listing use — see its own docstring), which would
+        # silently let this feature cross-contaminate suggestions across
+        # UNRELATED threads/sessions for any caller that has no Bench thread
+        # context. The plan requires thread-scoped only; without a real
+        # thread_id there's no safe scope to count within, so decline rather
+        # than guess.
+        return None
+
+    try:
+        prior = await memory_store.get_memories(
+            session_id, "autonomous_run", limit=50, thread_id=thread_id
+        )
+    except Exception as e:
+        logger.warning(f"Promotion-suggestion lookup failed: {e}")
+        return None
+
+    similar_successes = sum(
+        1
+        for record in prior
+        if getattr(record, "run_id", "") != run_id
+        and getattr(record, "status", "") == "succeeded"
+        and _goal_similarity(goal, getattr(record, "goal", "")) >= _GOAL_SIMILARITY_THRESHOLD
+    )
+    if similar_successes < _PROMOTION_SUGGESTION_MIN_PRIOR_SUCCESSES:
+        return None
+
+    occurrence = similar_successes + 1
+    # repr() (not raw f-string interpolation) so a quote character inside the
+    # goal text can't produce a syntactically broken/misleading snippet —
+    # e.g. a goal containing `"tumor"` must not close the string early.
+    return (
+        "## Promotion candidate\n\n"
+        f"This is the {_ordinal(occurrence)} time a similar goal has succeeded in "
+        "this thread. Consider promoting it to a reusable skill:\n\n"
+        "```\n"
+        f"execute_create_omics_skill(request={goal!r}, source_analysis_dir={workspace_root!r})\n"
+        "```\n\n"
+        "(Anchored to this exact run's own workspace, not `promote_from_latest` — "
+        "stays correct even if other analyses are running concurrently.)"
+    )
+
+
 async def _auto_capture_consensus(
     session_id: str,
     skill: str,
