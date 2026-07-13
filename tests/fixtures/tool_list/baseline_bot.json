@@ -3,7 +3,7 @@
     "surface": "bot",
     "query": ""
   },
-  "total_chars": 34804,
+  "total_chars": 34644,
   "tool_count": 48,
   "tool_names": [
     "ask_user",
@@ -1080,7 +1080,7 @@
       "type": "function",
       "function": {
         "name": "create_omics_skill",
-        "description": "Create a new OmicsClaw-native skill scaffold under skills/<domain>/<skill-name>/ using the canonical v2 layout (SKILL.md + parameters.yaml sidecar + references/{methodology,output_contract,parameters,r_visualization}.md). The emitted skill is lint-clean against scripts/skill_lint.py and ready to register via the runtime registry. Use this only when the user explicitly wants a reusable new skill added to OmicsClaw. If a previous autonomous_analysis_execute run succeeded, you can promote that workspace into the new skill.",
+        "description": "Create a new OmicsClaw-native skill scaffold under skills/<domain>/<skill-name>/ using the canonical v2 layout (SKILL.md + skill.yaml (ADR 0037 machine contract) + references/{methodology,output_contract,parameters,r_visualization}.md). The emitted skill is lint-clean against scripts/skill_lint.py and ready to register via the runtime registry. Use this only when the user explicitly wants a reusable new skill added to OmicsClaw. If a previous autonomous_analysis_execute run succeeded, you can promote that workspace into the new skill.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1112,10 +1112,6 @@
             "source_analysis_dir": {
               "type": "string",
               "description": "Optional path to a successful autonomous_analysis_execute output directory to promote into a skill."
-            },
-            "promote_from_latest": {
-              "type": "boolean",
-              "description": "If true, promote the most recent successful autonomous analysis output when source_analysis_dir is not provided."
             },
             "input_formats": {
               "type": "array",

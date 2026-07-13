@@ -66,6 +66,16 @@ def test_audit_skill_reads_declared_from_deps_python(tmp_path, monkeypatch):
     assert "scanpy" in r["final"]          # UNION includes it
 
 
+def test_audit_skill_accepts_staged_path_outside_skills_root(tmp_path):
+    sd = _write_v2(tmp_path / "staging" / "sk", [])
+    (sd / "sk.py").write_text("import numpy\n", encoding="utf-8")
+
+    result = audit.audit_skill(sd)
+
+    assert result["skill"] == str(sd.resolve())
+    assert "numpy" in result["missing"]
+
+
 def test_malformed_v2_stays_v2_contract_and_write_is_noop(tmp_path, monkeypatch):
     # A v2-only dir whose skill.yaml is broken YAML must still be contract=v2
     # (by marker presence), so --write routes to the v2 no-op writer instead of

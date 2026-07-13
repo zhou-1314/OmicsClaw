@@ -351,11 +351,15 @@ SCAFFOLD_STATUS = "scaffold"
 def validate_result_envelope(payload: Any) -> list[str]:
     """Validate a ``result.json`` payload against the standard envelope contract.
 
-    Returns a list of human-readable problems (empty == valid). The envelope
-    guarantees two content objects — ``summary`` and ``data`` are always written
-    as dicts by :func:`write_result_json`. A top-level ``status``, when present,
-    must be one of the documented run outcomes (``ok`` / ``partial`` / ``failed``)
-    or the :data:`SCAFFOLD_STATUS` sentinel that marks an unimplemented
+    Returns a list of human-readable problems (empty == valid). ``skill``,
+    ``version``, and ``completed_at`` must be present as non-empty strings;
+    ``input_checksum`` must be present as a string but may be empty (an
+    unhashed input is legitimate) — this mirrors exactly what
+    :func:`write_result_json` always writes, so any envelope it produces
+    passes. ``summary`` and ``data`` are always written as dicts by
+    :func:`write_result_json`. A top-level ``status``, when present, must be
+    one of the documented run outcomes (``ok`` / ``partial`` / ``failed``) or
+    the :data:`SCAFFOLD_STATUS` sentinel that marks an unimplemented
     placeholder. This is the shared contract the ``--demo`` smoke gate reuses to
     decide whether a freshly-created skill earned ``demo-validated`` (it treats a
     ``scaffold`` status as "not a real run" rather than a failure).
@@ -363,6 +367,13 @@ def validate_result_envelope(payload: Any) -> list[str]:
     if not isinstance(payload, dict):
         return ["result.json must be a JSON object"]
     problems: list[str] = []
+    for key in ("skill", "version", "completed_at"):
+        value = payload.get(key)
+        if not isinstance(value, str) or not value:
+            problems.append(f"{key} must be a non-empty string")
+    checksum = payload.get("input_checksum")
+    if not isinstance(checksum, str):
+        problems.append("input_checksum must be a string (may be empty)")
     if not isinstance(payload.get("summary"), dict):
         problems.append("summary must be an object")
     if not isinstance(payload.get("data"), dict):

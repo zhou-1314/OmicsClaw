@@ -56,6 +56,51 @@ async def test_execute_create_omics_skill_includes_gate_summary(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_execute_create_omics_skill_reports_quarantine(monkeypatch):
+    monkeypatch.setattr(
+        "omicsclaw.skill.scaffolder.create_skill_scaffold",
+        lambda **_kwargs: SkillScaffoldResult(
+            skill_name="unsafe-promotion",
+            domain="singlecell",
+            skill_dir="/tmp/skills/.quarantine/singlecell/unsafe-promotion",
+            script_path="/tmp/skills/.quarantine/singlecell/unsafe-promotion/run.py",
+            skill_md_path="/tmp/skills/.quarantine/singlecell/unsafe-promotion/SKILL.md",
+            spec_path="/tmp/skills/.quarantine/singlecell/unsafe-promotion/scaffold_spec.json",
+            completion={"status": "complete", "completed": True},
+            quarantined=True,
+            quarantine_reason_path=(
+                "/tmp/skills/.quarantine/singlecell/unsafe-promotion/"
+                "references/quarantine.md"
+            ),
+            demo_gate_verdict="skipped",
+            demo_gate_reason="bwrap unavailable",
+        ),
+    )
+
+    message = await execute_create_omics_skill(
+        {"request": "Promote this analysis.", "domain": "singlecell"}
+    )
+
+    assert "Admission: quarantined" in message
+    assert "not available to registry/routing" in message
+    assert "quarantine.md" in message
+
+
+@pytest.mark.asyncio
+async def test_execute_create_omics_skill_rejects_global_latest_promotion():
+    message = await execute_create_omics_skill(
+        {
+            "request": "Promote the latest analysis.",
+            "domain": "singlecell",
+            "promote_from_latest": True,
+        }
+    )
+
+    assert "promote_from_latest is disabled" in message
+    assert "source_analysis_dir" in message
+
+
+@pytest.mark.asyncio
 async def test_consult_knowledge_ui_callback_receives_refresh_notice():
     clear_runtime_notices()
     _push_runtime_notice("Knowledge base updated; index refreshed automatically (12 file(s)).")

@@ -11,14 +11,14 @@
       "top_3_candidates": [
         {
           "skill": "spatial-preprocess",
-          "score": 14.716666666666669
+          "score": 18.71666666666667
         },
         {
           "skill": "spatial-raw-processing",
           "score": 1.7
         },
         {
-          "skill": "spatial-annotate",
+          "skill": "consensus-domains",
           "score": 0.85
         }
       ]
@@ -60,11 +60,11 @@
           "score": 5.366666666666666
         },
         {
-          "skill": "spatial-preprocess",
-          "score": 3.2
+          "skill": "spatial-de",
+          "score": 2.55
         },
         {
-          "skill": "spatial-de",
+          "skill": "spatial-register",
           "score": 2.55
         }
       ]
@@ -80,7 +80,7 @@
       "top_3_candidates": [
         {
           "skill": "spatial-genes",
-          "score": 15.383333333333335
+          "score": 19.383333333333333
         },
         {
           "skill": "spatial-de",
@@ -122,7 +122,7 @@
       "top_3_candidates": [
         {
           "skill": "spatial-raw-processing",
-          "score": 11.016666666666666
+          "score": 9.683333333333334
         },
         {
           "skill": "spatial-preprocess",
@@ -137,23 +137,23 @@
     {
       "query": "Run scRNA-seq preprocessing: QC, normalization, HVG selection, PCA, UMAP, leiden",
       "file_path": null,
-      "chosen_skill": "spatial-preprocess",
+      "chosen_skill": "sc-preprocessing",
       "coverage": "exact_skill",
-      "domain": "spatial",
+      "domain": "singlecell",
       "should_search_web": false,
       "should_create_skill": false,
       "top_3_candidates": [
         {
-          "skill": "spatial-preprocess",
-          "score": 17.066666666666666
+          "skill": "sc-preprocessing",
+          "score": 8.683333333333334
         },
         {
-          "skill": "spatial-domains",
-          "score": 3.85
+          "skill": "sc-clustering",
+          "score": 7.25
         },
         {
-          "skill": "spatial-communication",
-          "score": 0.85
+          "skill": "scatac-preprocessing",
+          "score": 5.7
         }
       ]
     },
@@ -175,7 +175,7 @@
           "score": 2.55
         },
         {
-          "skill": "sc-perturb",
+          "skill": "sc-integrate-cluster",
           "score": 1.7
         }
       ]
@@ -237,7 +237,7 @@
       "top_3_candidates": [
         {
           "skill": "bulkrna-survival",
-          "score": 9.566666666666666
+          "score": 13.566666666666666
         },
         {
           "skill": "bulkrna-de",
@@ -271,22 +271,22 @@
     {
       "query": "Preprocess this LC-MS dataset with XCMS: peak detection and RT alignment",
       "file_path": null,
-      "chosen_skill": "spatial-preprocess",
+      "chosen_skill": "metabolomics-xcms-preprocessing",
       "coverage": "exact_skill",
-      "domain": "spatial",
+      "domain": "metabolomics",
       "should_search_web": false,
       "should_create_skill": false,
       "top_3_candidates": [
         {
-          "skill": "spatial-preprocess",
-          "score": 11.516666666666666
+          "skill": "metabolomics-xcms-preprocessing",
+          "score": 7.033333333333334
         },
         {
-          "skill": "spatial-annotate",
-          "score": 0.85
+          "skill": "metabolomics-peak-detection",
+          "score": 5.533333333333333
         },
         {
-          "skill": "spatial-deconv",
+          "skill": "metabolomics-annotation",
           "score": 0.85
         }
       ]
@@ -325,7 +325,7 @@
       "top_3_candidates": [
         {
           "skill": "proteomics-quantification",
-          "score": 11.35
+          "score": 15.35
         },
         {
           "skill": "proteomics-identification",
@@ -341,9 +341,9 @@
       "query": "Extract GEO accessions from this paper PDF",
       "file_path": "/tmp/paper.pdf",
       "chosen_skill": "literature",
-      "coverage": "partial_skill",
+      "coverage": "exact_skill",
       "domain": "literature",
-      "should_search_web": true,
+      "should_search_web": false,
       "should_create_skill": false,
       "top_3_candidates": [
         {
@@ -363,7 +363,7 @@
       "top_3_candidates": [
         {
           "skill": "spatial-preprocess",
-          "score": 15.016666666666666
+          "score": 4.35
         },
         {
           "skill": "spatial-de",
@@ -380,8 +380,8 @@
       "file_path": null,
       "chosen_skill": "",
       "coverage": "no_skill",
-      "domain": "",
-      "should_search_web": false,
+      "domain": "literature",
+      "should_search_web": true,
       "should_create_skill": false,
       "top_3_candidates": []
     },
@@ -393,28 +393,37 @@
       "domain": "",
       "should_search_web": false,
       "should_create_skill": false,
-      "top_3_candidates": []
+      "top_3_candidates": [
+        {
+          "skill": "spatial-de",
+          "score": 1.7
+        },
+        {
+          "skill": "spatial-register",
+          "score": 1.7
+        },
+        {
+          "skill": "consensus-domains",
+          "score": 0.85
+        }
+      ]
     },
     {
       "query": "Create a new OmicsClaw skill for CellCharter-based spatial domain analysis",
       "file_path": null,
-      "chosen_skill": "spatial-domains",
+      "chosen_skill": "omics-skill-builder",
       "coverage": "exact_skill",
-      "domain": "spatial",
+      "domain": "orchestrator",
       "should_search_web": false,
       "should_create_skill": true,
       "top_3_candidates": [
         {
-          "skill": "spatial-domains",
-          "score": 5.016666666666667
+          "skill": "omics-skill-builder",
+          "score": 13.7
         },
         {
-          "skill": "spatial-statistics",
+          "skill": "orchestrator",
           "score": 1.7
-        },
-        {
-          "skill": "spatial-annotate",
-          "score": 0.85
         }
       ]
     },

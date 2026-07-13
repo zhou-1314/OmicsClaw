@@ -1222,10 +1222,6 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                         "type": "string",
                         "description": "Optional path to a successful autonomous_analysis_execute output directory to promote into a skill.",
                     },
-                    "promote_from_latest": {
-                        "type": "boolean",
-                        "description": "If true, promote the most recent successful autonomous analysis output when source_analysis_dir is not provided.",
-                    },
                     "input_formats": {
                         "type": "array",
                         "items": {"type": "string"},
@@ -1329,6 +1325,11 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                 "policy_state",
                 "model_override",
                 "provider_override",
+                # P4 (acquisition-plan.md §P4): the promotion-suggestion signal is
+                # thread-scoped by design (cross-thread leakage is a safety
+                # invariant, not just noise) — without this, _compute_promotion_
+                # suggestion always sees an empty thread_id and silently declines.
+                "thread_id",
             ),
             read_only=False,
             concurrency_safe=False,

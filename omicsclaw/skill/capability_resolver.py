@@ -69,6 +69,23 @@ _SCORE_TRIGGER_KEYWORD_LIMIT = 3  # max distinct keywords counted per skill
 # methodology block.
 _SCORE_PARAM_HINT_MATCH = 3.0
 
+# Explicitly naming the leaf task type (the final alias component, e.g.
+# ``preprocessing`` in ``sc-preprocessing``) is a soft but meaningful signal.
+# This lets "scRNA-seq preprocessing ... PCA/UMAP/Leiden" select the requested
+# preprocessing workflow instead of over-weighting downstream method tokens.
+_SCORE_TASK_TYPE_EXPLICIT = 8.0
+
+# Within the single-cell domain, the registry deliberately separates scRNA
+# skills (``sc-*``) from scATAC skills (``scatac-*``).  Preserve that ontology
+# in scoring so a shared stage word such as "preprocessing" cannot route an
+# explicitly-scRNA request to the ATAC implementation, or vice versa.
+_SCORE_MODALITY_MATCH = 5.0
+_SCORE_MODALITY_CONFLICT = 5.0
+_SINGLECELL_MODALITY_PHRASES: dict[str, tuple[str, ...]] = {
+    "scrna": ("scrna", "single cell rna", "single-cell rna"),
+    "scatac": ("scatac", "single cell atac", "single-cell atac"),
+}
+
 
 # ----- _detect_domain: per-domain scoring -----
 
@@ -77,12 +94,35 @@ _DOMAIN_SCORE_FILE_PATH = 5.0
 # Per-domain mirrors of the per-skill scores, intentionally weaker so the
 # domain detector is more forgiving than the skill picker.
 _DOMAIN_SCORE_ALIAS_MENTION = 8.0
-_DOMAIN_SCORE_LEGACY_ALIAS_MENTION = 6.0
+_DOMAIN_SCORE_LEGACY_ALIAS_MENTION = 3.0
 _DOMAIN_SCORE_DESCRIPTION_OVERLAP_PER_TOKEN = 0.6
 _DOMAIN_SCORE_DESCRIPTION_OVERLAP_CAP = 5
-_DOMAIN_SCORE_TRIGGER_KEYWORD_LIMIT = 2
+_DOMAIN_SCORE_TRIGGER_KEYWORD_LIMIT = 3
 # The user typed the domain name verbatim ("bulk RNA-seq", "spatial").
-_DOMAIN_SCORE_DOMAIN_NAME_MATCH = 4.0
+_DOMAIN_SCORE_DOMAIN_NAME_MATCH = 10.0
+
+# Human-facing names are not always the registry keys (``singlecell`` vs
+# "single-cell", ``bulkrna`` vs "bulk RNA-seq").  Explicit domain wording is
+# a strong scoping instruction and must beat generic cross-domain terms such
+# as "cluster", "integrate", or "annotation".
+_DOMAIN_QUERY_ALIASES: dict[str, tuple[str, ...]] = {
+    "spatial": ("spatial transcriptomics", "spatial omics", "visium"),
+    "singlecell": (
+        "single cell",
+        "single-cell",
+        "scrna",
+        "scRNA-seq",
+        "scatac",
+        "single cell atac",
+        "single-cell atac",
+    ),
+    "genomics": ("genomics", "genomic"),
+    "proteomics": ("proteomics", "proteomic"),
+    "metabolomics": ("metabolomics", "metabolomic", "metabolite", "metabolites"),
+    "bulkrna": ("bulk rna", "bulk RNA-seq", "bulk rnaseq"),
+    "orchestrator": ("orchestrate", "routing", "route this query"),
+    "literature": ("literature", "paper", "pubmed", "doi"),
+}
 
 
 # ----- resolve_capability: decision thresholds -----
@@ -109,6 +149,34 @@ _RESOLVE_NO_SKILL_CONFIDENCE_DIVISOR = 10.0
 # Confidence ceiling for the ``no_skill`` fallback path; we never claim
 # strong confidence when we're below the no-skill threshold.
 _RESOLVE_NO_SKILL_CONFIDENCE_CAP = 0.35
+
+# Only governed, released lifecycle stages participate in automatic routing.
+# ``draft`` remains available to explicit developer workflows through the
+# registry, while ``deprecated`` remains inspectable in catalogs/audit views.
+_ROUTABLE_LIFECYCLE_STATUSES = frozenset({"mvp", "stable"})
+
+# A structured Skip-when redirect is stronger than an alias mention: the user
+# may explicitly name a skill and then state the exact condition under which
+# that skill says not to use it. Keep the bonus named and regression-tested.
+_SCORE_SKIP_WHEN_REDIRECT_BONUS = 2.0
+_SCORE_ORCHESTRATOR_INTENT_BONUS = 9.0
+_SCORE_SKILL_CREATION_TARGET_BONUS = 12.0
+_SKIP_WHEN_TOKEN_COVERAGE = 0.65
+_SKIP_WHEN_MIN_SHARED_TOKENS = 3
+_NEGATIVE_CONDITION_TOKENS = frozenset(
+    {"not", "no", "without", "missing", "lack", "lacks", "failed", "undecided"}
+)
+
+# Validation is a bounded tie-break, never a substitute for semantic fit. The
+# full ladder spans less than one description-token match (0.85), so a highly
+# validated irrelevant skill cannot overtake a genuinely better candidate.
+_VALIDATION_SCORE = {
+    "smoke-only": 0.0,
+    "demo-validated": 0.15,
+    "fixture-validated": 0.30,
+    "benchmarked": 0.45,
+    "production": 0.60,
+}
 
 
 _NON_ANALYSIS_HINTS = (
@@ -395,9 +463,26 @@ def _mentions_phrase(text: str, phrase: str) -> bool:
     phrase = (phrase or "").strip().lower()
     if not phrase:
         return False
-    if len(phrase) <= 3 and phrase.replace("-", "").replace("_", "").isalnum():
-        pattern = rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])"
+    if " " not in phrase and phrase.replace("-", "").replace("_", "").isalnum():
+        plural = "" if phrase.endswith("s") else "s?"
+        pattern = rf"(?<![a-z0-9]){re.escape(phrase)}{plural}(?![a-z0-9])"
         return bool(re.search(pattern, text))
+    # Treat whitespace, hyphen, and underscore as equivalent word separators
+    # for metadata phrases: "cell type" should match "cell-type", and
+    # "phosphorylation site" should match "phosphorylation-site".  Keep
+    # punctuation-heavy phrases on the literal fallback below.
+    if re.fullmatch(r"[a-z0-9 _-]+", phrase):
+        words = [word for word in re.split(r"[ _-]+", phrase) if word]
+        if words:
+            last = re.escape(words[-1]) + ("" if words[-1].endswith("s") else "s?")
+            pattern = (
+                r"(?<![a-z0-9])"
+                + r"[\s_-]+".join(
+                    [*(re.escape(word) for word in words[:-1]), last]
+                )
+                + r"(?![a-z0-9])"
+            )
+            return bool(re.search(pattern, text))
     return phrase in text
 
 
@@ -418,6 +503,59 @@ def _method_mentions(query: str) -> set[str]:
     }
 
 
+def _normalise_condition_text(text: str) -> str:
+    """Normalise common spelling variants before Skip-when token matching."""
+    value = (text or "").lower()
+    return (
+        value.replace("normalisation", "normalization")
+        .replace("normalised", "normalized")
+        .replace("normalise", "normalize")
+    )
+
+
+def _matching_skip_rule(info: dict[str, Any], query_lower: str) -> dict[str, str] | None:
+    """Return the first structured negative-routing rule supported by the query.
+
+    This deliberately uses condition-token coverage rather than arbitrary
+    semantic similarity. A rule only fires when most of its own meaningful
+    tokens are present, with a minimum of three shared tokens, which keeps
+    generic words in long queries from suppressing unrelated skills.
+    """
+    normalised_query = _normalise_condition_text(query_lower)
+    query_tokens = _tokenize(normalised_query)
+    for raw_rule in info.get("skip_when", []):
+        if not isinstance(raw_rule, dict):
+            continue
+        condition = str(raw_rule.get("condition") or "").strip()
+        if not condition:
+            continue
+        normalised_condition = _normalise_condition_text(condition)
+        condition_tokens = _tokenize(normalised_condition)
+        if not condition_tokens:
+            continue
+        shared = condition_tokens & query_tokens
+        exact = normalised_condition in normalised_query
+        # Preserve polarity. Token coverage alone would treat "QC/PCA have
+        # already run" as equivalent to "QC/PCA have not run yet" because
+        # nearly every content word overlaps. If the rule is explicitly
+        # negative, the query must carry a negative marker too.
+        condition_negatives = condition_tokens & _NEGATIVE_CONDITION_TOKENS
+        query_negatives = query_tokens & _NEGATIVE_CONDITION_TOKENS
+        if condition_negatives and not query_negatives:
+            continue
+        coverage = len(shared) / len(condition_tokens)
+        if exact or (
+            len(shared) >= _SKIP_WHEN_MIN_SHARED_TOKENS
+            and coverage >= _SKIP_WHEN_TOKEN_COVERAGE
+        ):
+            return {
+                "condition": condition,
+                "use": str(raw_rule.get("use") or "").strip(),
+                "rationale": str(raw_rule.get("rationale") or "").strip(),
+            }
+    return None
+
+
 def _requests_skill_creation(query: str) -> bool:
     lower = (query or "").lower()
     if any(hint in lower for hint in _SKILL_CREATION_HINTS):
@@ -434,6 +572,32 @@ def _requests_skill_creation(query: str) -> bool:
         return True
 
     return False
+
+
+def _requests_orchestration(query: str) -> bool:
+    """Detect requests whose task is choosing/routing a skill, not analysis."""
+    lower = (query or "").lower()
+    which_or_choose_skill = bool(
+        re.search(r"\b(?:which|choose)\b.{0,80}\bskills?\b", lower)
+    )
+    route_request = bool(
+        re.search(
+            r"\broute\s+(?:(?:this|the|my|a|an)\s+)?(?:query|request)\b",
+            lower,
+        )
+    )
+    explicit_orchestration = bool(
+        re.search(r"\borchestrat(?:e|es|ed|ing|ion)\b", lower)
+        and any(_mentions_phrase(lower, noun) for noun in ("request", "pipeline", "analysis"))
+    )
+    return which_or_choose_skill or route_request or explicit_orchestration
+
+
+def _query_mentions_domain(registry: OmicsRegistry, domain: str, query_lower: str) -> bool:
+    info = registry.domains.get(domain, {})
+    domain_name = str(info.get("name", domain)).lower()
+    phrases = (domain_name, domain.lower(), *_DOMAIN_QUERY_ALIASES.get(domain, ()))
+    return any(_mentions_phrase(query_lower, phrase.lower()) for phrase in phrases)
 
 
 def _detect_domain(
@@ -495,6 +659,9 @@ def _score_skills_and_detect_domain(
 
     candidates: list[CapabilityCandidate] = []
     for alias, skill_info in registry.iter_primary_skills():
+        lifecycle_status = str(skill_info.get("lifecycle_status") or "mvp")
+        if lifecycle_status not in _ROUTABLE_LIFECYCLE_STATUSES:
+            continue
         # Iterate each skill's OWN trigger_keywords once and reuse the
         # match list on both the per-skill (limit=3) and per-domain
         # (limit=2) sides. The previous "compute keyword matches via
@@ -523,8 +690,11 @@ def _score_skills_and_detect_domain(
         if candidate is not None:
             candidates.append(candidate)
 
-        # ---- domain-side scoring (per-domain weights, accumulated into
-        # the skill's home domain; keyword limit drops to 2).
+        # ---- domain-side scoring (per-domain weights; keyword limit drops
+        # to 3).  Keep the strongest leaf signal instead of summing every
+        # positive skill in a domain. Summation makes domain size a hidden
+        # prior (34 single-cell leaves can swamp 1 literature leaf) and lets
+        # shared generic words pull queries into the largest domain.
         skill_domain = str(skill_info.get("domain", ""))
         if not skill_domain:
             continue
@@ -545,13 +715,14 @@ def _score_skills_and_detect_domain(
         # so the loop body never rescans this skill's trigger_keywords.
         for kw_phrase in all_kw_matches[:_DOMAIN_SCORE_TRIGGER_KEYWORD_LIMIT]:
             delta += _trigger_keyword_score(kw_phrase)
-        domain_scores[skill_domain] = domain_scores.get(skill_domain, 0.0) + delta
+        domain_scores[skill_domain] = max(
+            domain_scores.get(skill_domain, 0.0), delta
+        )
 
     # Domain-name and domain-key textual matches contribute independently of
     # any skill — keep these post-loop so the loop body has one concern.
-    for domain_key, info in registry.domains.items():
-        domain_name = str(info.get("name", domain_key)).lower()
-        if domain_name in query_lower or domain_key.lower() in query_lower:
+    for domain_key in registry.domains:
+        if _query_mentions_domain(registry, domain_key, query_lower):
             domain_scores[domain_key] = (
                 domain_scores.get(domain_key, 0.0) + _DOMAIN_SCORE_DOMAIN_NAME_MATCH
             )
@@ -582,6 +753,51 @@ def _candidate_score(
     reasons: list[str] = []
 
     alias_lower = alias.lower()
+    if alias == "omics-skill-builder" and _requests_skill_creation(query_lower):
+        score += _SCORE_SKILL_CREATION_TARGET_BONUS
+        reasons.append("query explicitly requests skill creation")
+    elif alias == "orchestrator" and _requests_orchestration(query_lower):
+        score += _SCORE_ORCHESTRATOR_INTENT_BONUS
+        reasons.append("query explicitly requests skill routing/orchestration")
+
+    alias_parts = alias_lower.split("-")
+    task_type = alias_parts[-1]
+    task_variants = {task_type}
+    if task_type.endswith("ing") and len(task_type) > 6:
+        task_variants.add(task_type[:-3])
+    # Only two-component aliases encode a clean ``domain -> task`` shape.
+    # A deeper alias such as ``sc-integrate-cluster`` must not win merely
+    # because the query says "cluster" while omitting the required integrate
+    # intent.
+    task_type_explicit = len(alias_parts) == 2 and any(
+        _mentions_phrase(query_lower, variant) for variant in task_variants
+    )
+    if len(task_type) >= 5 and task_type_explicit:
+        score += _SCORE_TASK_TYPE_EXPLICIT
+        reasons.append(f"query explicitly names task type '{task_type}'")
+
+    query_modalities = {
+        modality
+        for modality, phrases in _SINGLECELL_MODALITY_PHRASES.items()
+        if any(_mentions_phrase(query_lower, phrase) for phrase in phrases)
+    }
+    skill_modality = ""
+    if str(info.get("domain") or "") == "singlecell":
+        if alias_lower.startswith("scatac-"):
+            skill_modality = "scatac"
+        elif alias_lower.startswith("sc-"):
+            skill_modality = "scrna"
+    if len(query_modalities) == 1 and skill_modality:
+        query_modality = next(iter(query_modalities))
+        if query_modality == skill_modality:
+            score += _SCORE_MODALITY_MATCH
+            reasons.append(f"query explicitly names modality '{query_modality}'")
+        else:
+            score -= _SCORE_MODALITY_CONFLICT
+            reasons.append(
+                f"query modality '{query_modality}' conflicts with '{skill_modality}'"
+            )
+
     if _mentions_phrase(query_lower, alias_lower):
         score += _SCORE_ALIAS_MENTION
         reasons.append(f"query explicitly mentions skill '{alias}'")
@@ -623,6 +839,14 @@ def _candidate_score(
             score += _SCORE_PARAM_HINT_MATCH
             reasons.append(f"requested method '{kw_lower}' appears in param hints")
 
+    validation_level = str(info.get("validation_level") or "smoke-only")
+    validation_score = _VALIDATION_SCORE.get(validation_level, 0.0)
+    if score > 0 and validation_score:
+        score += validation_score
+        reasons.append(
+            f"validation level {validation_level} tie-break +{validation_score}"
+        )
+
     if score <= 0:
         return None
 
@@ -652,7 +876,17 @@ def resolve_capability(
 
     skill_creation_requested = _requests_skill_creation(query)
 
-    if not _looks_like_analysis_request(query) and not file_path and not skill_creation_requested:
+    # Keep explicit help/install chatter out, but do not use the small
+    # hand-written `_GENERIC_ANALYSIS_HINTS` list as a hard pre-filter.  The
+    # registry's descriptions + trigger keywords are the richer, extensible
+    # source of truth; an early return here previously made valid intents such
+    # as PSM identification, BAM alignment QC, PTM sites, and GEO extraction
+    # unreachable before their metadata was ever scored.
+    if (
+        not file_path
+        and not skill_creation_requested
+        and any(_mentions_phrase(query.lower(), hint) for hint in _NON_ANALYSIS_HINTS)
+    ):
         return CapabilityDecision(
             query=query,
             reasoning=["request does not look like an omics analysis task"],
@@ -664,8 +898,13 @@ def resolve_capability(
     # over ``iter_primary_skills`` (OMI-12 audit P1 #1) — the pre-refactor
     # code visited each skill twice with different weights for what was
     # effectively the same set of SKILL.md reads.
-    if domain_hint:
-        domain = domain_hint
+    control_domain = (
+        "orchestrator"
+        if skill_creation_requested or _requests_orchestration(query)
+        else ""
+    )
+    if domain_hint or control_domain:
+        domain = domain_hint or control_domain
         # When the caller forces a domain, we still need candidate scores
         # for that domain; do the single-pass scoring and discard the
         # detection result.
@@ -702,6 +941,54 @@ def resolve_capability(
     else:
         candidates = list(all_candidates)
 
+    # Consume structured negative-routing rules after domain narrowing but
+    # before ranking. A matched host is removed; its declared ``use`` target is
+    # inserted/boosted even when the target had no lexical score of its own.
+    # Only already-meaningful host candidates are considered, avoiding rules
+    # on unrelated zero-signal skills firing because a long query shares a few
+    # generic words.
+    redirected: dict[str, CapabilityCandidate] = {}
+    retained: list[CapabilityCandidate] = []
+    for candidate in candidates:
+        info = registry.skills.get(candidate.skill, {})
+        rule = (
+            _matching_skip_rule(info, query_lower)
+            if candidate.score >= _RESOLVE_NO_SKILL_THRESHOLD
+            else None
+        )
+        if rule is None:
+            retained.append(candidate)
+            continue
+
+        target_key = rule.get("use", "")
+        target_info = registry.skills.get(target_key, {}) if target_key else {}
+        target_status = str(target_info.get("lifecycle_status") or "mvp")
+        if not target_info or target_status not in _ROUTABLE_LIFECYCLE_STATUSES:
+            continue
+
+        target_alias = str(target_info.get("alias") or target_key)
+        existing = next((c for c in candidates if c.skill == target_alias), None)
+        redirect_reason = (
+            f"structured skip_when on '{candidate.skill}' matched "
+            f"'{rule['condition']}'; use '{target_alias}'"
+        )
+        redirected_candidate = CapabilityCandidate(
+            skill=target_alias,
+            domain=str(target_info.get("domain", "")),
+            score=max(
+                existing.score if existing is not None else 0.0,
+                candidate.score + _SCORE_SKIP_WHEN_REDIRECT_BONUS,
+            ),
+            reasons=[redirect_reason] + (list(existing.reasons) if existing else []),
+        )
+        previous = redirected.get(target_alias)
+        if previous is None or redirected_candidate.score > previous.score:
+            redirected[target_alias] = redirected_candidate
+
+    redirected_aliases = set(redirected)
+    candidates = [c for c in retained if c.skill not in redirected_aliases]
+    candidates.extend(redirected.values())
+
     # Sort by score DESC with a stable alphabetical tie-break on the skill
     # alias. Without the tie-break, the post-PR audit caught WGCNA flapping
     # between ``bulkrna-coexpression`` and ``bulkrna-ppi-network`` depending
@@ -715,6 +1002,23 @@ def resolve_capability(
     composite_requested = any(h in query_lower for h in _COMPOSITE_HINTS)
 
     if not candidates or candidates[0].score < _RESOLVE_NO_SKILL_THRESHOLD:
+        # Registry scoring must run before this check so niche but well-described
+        # omics intents are still discoverable.  Once every candidate remains
+        # below the commitment threshold, however, preserve the chat boundary:
+        # generic conversation must not become an autonomous analysis merely
+        # because common words overlap a SKILL.md description.
+        if (
+            not file_path
+            and not domain_hint
+            and not control_domain
+            and not _looks_like_analysis_request(query)
+        ):
+            return CapabilityDecision(
+                query=query,
+                domain="",
+                skill_candidates=candidates,
+                reasoning=["request does not look like an omics analysis task"],
+            )
         reasons = ["no skill achieved a meaningful semantic match"]
         if skill_creation_requested:
             reasons.append("query explicitly asks to create or package a reusable skill")
@@ -733,7 +1037,20 @@ def resolve_capability(
         # "go look up external literature" case.
         return CapabilityDecision(
             query=query,
-            domain=domain,
+            # A weak lexical overlap should not invent a domain for unrelated
+            # chatter (e.g. weather). Preserve the domain only when the user or
+            # file explicitly scoped it; strong semantic cases route above.
+            domain=(
+                domain
+                if domain
+                and (
+                    bool(file_path)
+                    or bool(domain_hint)
+                    or bool(control_domain)
+                    or _query_mentions_domain(registry, domain, query_lower)
+                )
+                else ""
+            ),
             coverage="no_skill",
             confidence=(
                 0.0
@@ -771,9 +1088,15 @@ def resolve_capability(
     if skill_creation_requested:
         reasoning.append("query explicitly asks for a reusable OmicsClaw skill scaffold")
 
-    if custom_requested or web_requested or (composite_requested and close_second):
+    # Literature lookup is not an uncovered add-on when the selected skill is
+    # itself the first-party literature extractor.  The old blanket
+    # `web_requested -> partial_skill` rule made every successful literature
+    # route look incomplete.
+    uncovered_web_requested = web_requested and top.skill != "literature"
+
+    if custom_requested or uncovered_web_requested or (composite_requested and close_second):
         coverage = "partial_skill"
-        should_search_web = web_requested or not top.reasons
+        should_search_web = uncovered_web_requested or not top.reasons
     else:
         coverage = "exact_skill"
         should_search_web = False
@@ -785,7 +1108,11 @@ def resolve_capability(
 
     return CapabilityDecision(
         query=query,
-        domain=domain,
+        # Normally top.domain equals the detected domain because candidates are
+        # narrowed above. A structured Skip-when redirect may intentionally
+        # cross domains (e.g. bulk enrichment on single-cell input), in which
+        # case the chosen skill's domain is the truthful final decision.
+        domain=top.domain or domain,
         coverage=coverage,
         confidence=confidence,
         chosen_skill=top.skill,

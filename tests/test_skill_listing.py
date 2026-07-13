@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from omicsclaw.runtime.tools.builders.agent import BotToolContext, build_bot_tool_specs
 from omicsclaw.skill.listing import list_skills_in_domain
 
@@ -34,9 +32,10 @@ def test_list_skills_in_domain_spatial_returns_all_skills():
 def test_filter_narrows_result_and_is_case_insensitive():
     low = list_skills_in_domain("singlecell", "VELOCITY")
     assert "sc-velocity" in low
-    # The 0/30 dead zone for an obviously unknown term should produce a graceful message.
+    # An obviously unknown term should produce a graceful empty result. Keep
+    # the total dynamic so adding a valid skill does not make this test stale.
     empty = list_skills_in_domain("singlecell", "zzz_no_such_term")
-    assert "0/30" in empty
+    assert "— 0/" in empty and "skills" in empty
     assert "No skills match that filter" in empty
 
 

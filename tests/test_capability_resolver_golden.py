@@ -9,13 +9,10 @@ game (see OMI-12 evaluation, P2.9).
 
 This test pins **the current** ``chosen_skill`` / ``coverage`` /
 ``domain`` for ~20 representative queries spanning every domain plus the
-no-skill / partial-skill / skill-creation decision boundaries.
-
-The corpus deliberately includes a handful of *known* mis-routes
-(``Run scRNA-seq preprocessing`` lands on ``spatial-preprocess``, WGCNA
-lands on ``bulkrna-ppi-network``, XCMS lands on ``spatial-preprocess``).
-Those are not aspirational — they pin the live behaviour so a future
-weight change that silently shifts them shows up in the diff.
+no-skill / partial-skill / skill-creation decision boundaries.  It is a drift
+snapshot, not the expected-behaviour authority: the versioned 8-domain quality
+oracle lives in ``tests/fixtures/routing_oracle/v1.json`` and must pass before
+an intentional snapshot regeneration is accepted.
 
 ### Regenerating the snapshot
 

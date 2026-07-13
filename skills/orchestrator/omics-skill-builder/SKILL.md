@@ -5,7 +5,7 @@ name: omics-skill-builder
 description: Load when scaffolding a NEW OmicsClaw skill from a natural-language request — generates the
   skill directory layout (skill.yaml, SKILL.md, references/, tests/) under the chosen domain. Skip when
   modifying an existing skill (edit its files directly); only routing a query (use orchestrator).
-version: 0.5.0
+version: 0.5.1
 author: OmicsClaw
 license: MIT
 emoji: 🛠
@@ -48,8 +48,8 @@ existing skills, use `orchestrator`.
 ## Flow
 
 1. Parse `--request` (or `--demo`); raise `SystemExit("--request is required unless --demo is used.")` at `omics_skill_builder.py:75` when missing.
-2. Optionally promote a previous autonomous-analysis output via `--source-analysis-dir <path>` or `--promote-from-latest`.
-3. Call `create_skill_scaffold` (`omicsclaw.core.skill_scaffolder`); it writes the new skill directory under `skills/<domain>/<skill-name>/`.
+2. Optionally promote one explicitly identified autonomous-analysis output via `--source-analysis-dir <path>`.
+3. Call `create_skill_scaffold` (`omicsclaw.core.skill_scaffolder`); earned promotions enter `skills/<domain>/<skill-name>/`, while environment-limited promoted code enters the undiscoverable `skills/.quarantine/` tree.
 4. Write `SCAFFOLD_SUMMARY.md` + `report.md` + `reproducibility/commands.sh` + `result.json` into `--output`.
 
 ## Gotchas
@@ -58,7 +58,8 @@ existing skills, use `orchestrator`.
 - **`--domain` defaults to `orchestrator` — usually NOT what you want.** `omics_skill_builder.py:30` defaults to `orchestrator`; pass `--domain spatial` (or whichever) explicitly. Choices are 7 fixed values; an unknown domain is rejected by argparse.
 - **The new skill is written to `skills/<domain>/<skill-name>/`, not `--output`.** `--output` only receives the scaffold summary + report + commands.sh; the actual skill code goes under `skills/`. Don't confuse the two.
 - **`--trigger-keyword`, `--method`, `--input-format`, `--output-item` are REPEATABLE flags.** Pass `--trigger-keyword kw1 --trigger-keyword kw2` to add multiple. Single quoting won't help — argparse honours `action="append"`.
-- **`--promote-from-latest` requires a recent autonomous-analysis output.** If no recent output exists, the promotion silently no-ops.
+- **Global `--promote-from-latest` selection is disabled.** Supply the exact `--source-analysis-dir`; this keeps concurrent sessions and runs isolated.
+- **A skipped promoted-code gate is not admission.** The bundle is quarantined with `references/quarantine.md` evidence and is not registered until a later explicit validation/admission flow exists.
 - **`--demo` lands in the orchestrator domain, NOT the implied target domain.** `omics_skill_builder.py:65` resolves `domain = args.domain or "spatial"`, but `args.domain` defaults to `"orchestrator"` (truthy), so the demo scaffold is written to `skills/orchestrator/spatial-cellcharter-domains/` rather than `skills/spatial/...`. For real scaffolds always pass `--domain <target>` explicitly.
 
 ## Key CLI

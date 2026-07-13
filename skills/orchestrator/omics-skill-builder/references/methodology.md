@@ -35,10 +35,11 @@ Before finalizing a new scaffold, capture:
 
 1. Resolve whether the user wants a reusable skill or a one-off analysis.
 2. Normalize the requested skill name and target domain.
-3. Generate the scaffold under `skills/<domain>/<skill-name>/`.
-4. If a successful autonomous notebook is supplied, reuse its Python code and copy the source notebook into `references/`.
-4. Refresh the registry so the new skill is discoverable immediately.
-5. Return the created file paths and the next implementation steps.
+3. Generate the scaffold in a temporary staging directory.
+4. If an exact autonomous-analysis directory is supplied, reuse its Python code and copy the source notebook into `references/`.
+5. Run the source-aware admission gate: earned promotion enters the formal catalog; an environment-limited promoted bundle enters `skills/.quarantine/` and remains undiscoverable.
+6. Refresh the registry only after formal admission.
+7. Return the actual admitted/quarantined paths and the next implementation steps.
 
 
 ## CLI Reference
@@ -53,12 +54,13 @@ oc run omics-skill-builder \
   --method cellcharter \
   --trigger-keyword "cellcharter domains"
 
-# Promote the most recent successful custom notebook into a skill draft
+# Promote one explicitly identified autonomous-analysis output
 oc run omics-skill-builder \
   --output output/promoted_skill \
-  --request "Package the last successful autonomous analysis into a reusable OmicsClaw skill" \
+  --request "Package this successful autonomous analysis into a reusable OmicsClaw skill" \
   --skill-name peak-detection-skill \
-  --promote-from-latest
+  --domain metabolomics \
+  --source-analysis-dir /absolute/path/to/the/exact/run
 ```
 
 
@@ -66,4 +68,6 @@ oc run omics-skill-builder \
 
 - Create a new skill only when the user explicitly wants a reusable artifact.
 - Do not overwrite an existing skill directory silently.
+- Never infer a promotion source from a process-global "latest" directory; require the exact run path.
+- Do not expose promoted code to registry discovery unless its admission gate is earned.
 - Keep the scaffold OmicsClaw-native: valid frontmatter, stable CLI flags, standard output artifacts.

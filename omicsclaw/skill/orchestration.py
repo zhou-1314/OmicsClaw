@@ -575,12 +575,10 @@ async def _compute_promotion_suggestion(
     markdown suggestion naming ``workspace_root`` as the exact
     ``source_analysis_dir`` for ``execute_create_omics_skill``.
 
-    Deliberately never mentions ``promote_from_latest``: that still resolves
-    via ``find_latest_autonomous_analysis``'s global mtime scan across ALL
-    sessions' output directories, which is exactly the concurrent-session
-    race this feature must not reintroduce — anchoring to this run's own
-    ``workspace_root`` (known immediately after the run, no disk scan)
-    keeps the suggestion correct even with other sessions running at once.
+    Deliberately never offers ``promote_from_latest``: that unsafe global
+    mtime-based admission path is disabled. Anchoring to this run's own
+    ``workspace_root`` (known immediately after the run, no disk scan) keeps
+    the suggestion correct even with other sessions running at once.
     """
     from omicsclaw.runtime.agent.state import memory_store
     if not memory_store or not session_id:
@@ -614,6 +612,8 @@ async def _compute_promotion_suggestion(
         return None
 
     occurrence = similar_successes + 1
+    from omicsclaw.skill.scaffolder import VALID_DOMAINS
+
     # repr() (not raw f-string interpolation) so a quote character inside the
     # goal text can't produce a syntactically broken/misleading snippet —
     # e.g. a goal containing `"tumor"` must not close the string early.
@@ -624,7 +624,16 @@ async def _compute_promotion_suggestion(
         "```\n"
         f"execute_create_omics_skill(request={goal!r}, source_analysis_dir={workspace_root!r})\n"
         "```\n\n"
-        "(Anchored to this exact run's own workspace, not `promote_from_latest` — "
+        # An autonomous-analysis bundle never carries a target domain (nothing
+        # in the run's lifecycle records one), so create_skill_scaffold cannot
+        # infer it and running the snippet as-is raises. Say so explicitly
+        # instead of shipping a command that looks copy-paste-ready but fails —
+        # a domain="..." placeholder embedded IN the snippet would still look
+        # runnable and just reproduce the same error.
+        "Add `domain=\"...\"` before running this — it cannot be inferred "
+        f"automatically for an autonomous-analysis run. Valid domains: "
+        f"{', '.join(VALID_DOMAINS)}.\n\n"
+        "(Anchored to this exact run's own workspace; global `promote_from_latest` is disabled — "
         "stays correct even if other analyses are running concurrently.)"
     )
 

@@ -9,9 +9,12 @@ import pytest
 
 from omicsclaw.skill.registry import OmicsRegistry
 from omicsclaw.skill.scaffolder import (
+    AutonomousAnalysisBundle,
     _demo_gate_skip_reason,
+    _load_autonomous_bundle,
     _strip_redundant_pathlib_import,
     _synthesize_load_when,
+    build_acquisition_abstraction,
     create_skill_scaffold,
     find_latest_autonomous_analysis,
     infer_skill_name,
@@ -66,12 +69,35 @@ def test_demo_gate_skip_reason_recognizes_stale_demo_input():
     """MF6: a promoted skill's original input can go stale between the source
     run and promotion (its autonomous-analysis workspace may already be
     cleaned up) — that is a missing-input environment limitation, not a bug
-    in the promoted code."""
+    in the promoted code. Only recognized when the FileNotFoundError names
+    the SPECIFIC known original input path (threaded in as
+    ``original_input_file``) — a bare exception-type match is not enough
+    (see the rejection test below)."""
     traceback_text = (
         "Traceback (most recent call last):\n  File x\n"
-        "FileNotFoundError: [Errno 2] No such file or directory: 'x'\n"
+        "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/original-input.h5ad'\n"
     )
-    assert _demo_gate_skip_reason(traceback_text) is not None
+    assert _demo_gate_skip_reason(traceback_text, original_input_file="/tmp/original-input.h5ad") is not None
+
+
+def test_demo_gate_skip_reason_rejects_file_not_found_for_an_unrelated_path():
+    """A FileNotFoundError NOT referencing the known original input path is a
+    real bug in the promoted body (e.g. a typo'd internal path) — must be
+    rejected, not silently tolerated as an environment limitation. This is
+    the fix for the pre-existing over-broad classification that let any
+    FileNotFoundError, regardless of cause, slip a broken promoted skill
+    into the catalog as merely `skipped`."""
+    traceback_text = (
+        "Traceback (most recent call last):\n  File x\n"
+        "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/some/other/typo.csv'\n"
+    )
+    assert (
+        _demo_gate_skip_reason(traceback_text, original_input_file="/tmp/original-input.h5ad")
+        is None
+    )
+    # No known original input at all (a plain scaffold/corpus skill) — any
+    # FileNotFoundError is unconditionally rejected.
+    assert _demo_gate_skip_reason(traceback_text) is None
 
 
 def test_demo_gate_skip_reason_rejects_unrelated_message_mentioning_importerror():
@@ -470,6 +496,541 @@ def _build_real_mini_agent_run(
     return output_root, workspace.root
 
 
+def test_mini_agent_promotion_bundle_loads_structured_steps_and_skill_calls(tmp_path: Path):
+    """P2 generalisation must consume the producer's structured trace instead
+    of reverse-engineering every semantic decision from flattened Python.
+
+    ``metadata.steps`` records accepted-cell intent; the append-only JSONL is
+    authoritative for executed skill calls and must win over a stale manifest
+    copy of the same field.
+    """
+    _output_root, source_dir = _build_real_mini_agent_run(
+        tmp_path,
+        accepted_cells=["ReturnAnswer('done')"],
+    )
+    manifest_path = source_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["metadata"]["steps"] = [
+        {"index": 1, "purpose": "preprocess cells", "new_variables": ["qc"]}
+    ]
+    manifest["metadata"]["skill_calls"] = [{"skill": "stale-manifest-copy"}]
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    (source_dir / "skill_calls.jsonl").write_text(
+        json.dumps(
+            {
+                "index": 1,
+                "skill": "sc-preprocessing",
+                "params": {"min_genes": "200"},
+                "flags": ["--min-genes", "200"],
+                "input_artifact": str(tmp_path / "data.h5ad"),
+                "output_dir": str(source_dir / "skill_calls" / "01_sc-preprocessing" / "out"),
+                "primary_artifact": str(source_dir / "skill_calls" / "01_sc-preprocessing" / "out" / "processed.h5ad"),
+                "status": "succeeded",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    bundle = _load_autonomous_bundle(source_dir)
+
+    assert bundle.steps == manifest["metadata"]["steps"]
+    assert [call["skill"] for call in bundle.skill_calls] == ["sc-preprocessing"]
+    assert bundle.skill_calls[0]["params"] == {"min_genes": "200"}
+
+
+def test_promotion_uses_facade_free_structured_abstraction_when_semantics_are_provable(
+    tmp_path: Path, monkeypatch
+):
+    """A call-only mini-agent trace is a workflow, not arbitrary Python.
+
+    Promote it through the stable runner API and retain exact source evidence;
+    do not ship the temporary in-kernel facade as a production dependency.
+    """
+    import omicsclaw.skill.scaffolder as scaffolder_module
+
+    output_root, source_dir = _build_real_mini_agent_run(
+        tmp_path,
+        real_input=True,
+        accepted_cells=[
+            "result = oc.run('sc-preprocessing', adata, min_genes=200)\n"
+            "adata = result.adata\n"
+            "ReturnAnswer('done')"
+        ],
+    )
+    (source_dir / "skill_calls.jsonl").write_text(
+        json.dumps(
+            {
+                "index": 1,
+                "skill": "sc-preprocessing",
+                "method": None,
+                "params": {"min_genes": "200"},
+                "flags": ["--min-genes", "200"],
+                "input_artifact": str(source_dir / "skill_calls" / "01_sc-preprocessing" / "input.h5ad"),
+                "output_dir": str(source_dir / "skill_calls" / "01_sc-preprocessing" / "out"),
+                "primary_artifact": str(source_dir / "skill_calls" / "01_sc-preprocessing" / "out" / "processed.h5ad"),
+                "status": "succeeded",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        scaffolder_module,
+        "_run_demo_smoke_gate",
+        lambda *args, **kwargs: scaffolder_module._DemoGateOutcome(
+            verdict="earned", reason="synthetic structured abstraction gate"
+        ),
+    )
+
+    result = create_skill_scaffold(
+        request="Package the preprocessing workflow as a reusable skill.",
+        domain="singlecell",
+        skill_name="structured-promote-skill",
+        skills_root=tmp_path / "skills",
+        source_analysis_dir=source_dir,
+        output_root=output_root,
+    )
+
+    skill_dir = Path(result.skill_dir)
+    script_text = (skill_dir / "structured_promote_skill.py").read_text(encoding="utf-8")
+    assert "from omicsclaw.skill.runner import run_skill" in script_text
+    assert "--min-genes" in script_text
+    assert "build_facade" not in script_text
+    assert "oc.run" not in script_text
+    assert "ReturnAnswer" not in script_text
+    evidence = json.loads(
+        (skill_dir / "references" / "acquisition_abstraction.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert evidence["strategy"] == "structured-skill-calls-v1"
+    assert evidence["applied"] is True
+    assert evidence["facade_free"] is True
+    assert evidence["calls"][0]["input_source"] == "input"
+    assert evidence["parameters"][0]["flag"] == "--min-genes"
+
+
+@pytest.mark.parametrize(
+    ("code", "records", "expected_reason"),
+    [
+        (
+            "result = oc.run('sc-preprocessing', adata)\n",
+            [
+                {
+                    "skill": "sc-preprocessing",
+                    "status": "failed",
+                    "params": {},
+                }
+            ],
+            "was not successful",
+        ),
+        (
+            "result = oc.run('sc-preprocessing', adata)\n",
+            [
+                {
+                    "skill": "sc-clustering",
+                    "status": "succeeded",
+                    "params": {},
+                }
+            ],
+            "source/trace mismatch",
+        ),
+        (
+            "result = oc.run('sc-preprocessing', unknown_data)\n",
+            [
+                {
+                    "skill": "sc-preprocessing",
+                    "status": "succeeded",
+                    "params": {},
+                }
+            ],
+            "ambiguous input lineage",
+        ),
+        (
+            "result = oc.run('sc-preprocessing', adata, min_genes=[200])\n",
+            [
+                {
+                    "skill": "sc-preprocessing",
+                    "status": "succeeded",
+                    "params": {"min_genes": [200]},
+                }
+            ],
+            "unsupported name or value type",
+        ),
+        (
+            "result = oc.run('sc-preprocessing', adata)\n",
+            [
+                {
+                    "skill": "sc-preprocessing",
+                    "status": "succeeded",
+                    "params": {},
+                },
+                {
+                    "skill": "sc-clustering",
+                    "status": "succeeded",
+                    "params": {},
+                },
+            ],
+            "trace contains 2 calls",
+        ),
+        (
+            "for item in [1]:\n    result = oc.run('sc-preprocessing', adata)\n",
+            [
+                {
+                    "skill": "sc-preprocessing",
+                    "status": "succeeded",
+                    "params": {},
+                }
+            ],
+            "unsupported non-workflow statement",
+        ),
+    ],
+)
+def test_acquisition_abstraction_fails_closed_for_unproven_semantics(
+    code: str,
+    records: list[dict],
+    expected_reason: str,
+):
+    bundle = AutonomousAnalysisBundle(
+        source_dir="/tmp/source",
+        notebook_path="",
+        analysis_plan="",
+        result_summary="",
+        web_sources="",
+        capability_decision={},
+        python_code=code,
+        goal="test fail-closed acquisition",
+        input_file="/tmp/input.h5ad",
+        engine="mini_agent",
+        skill_calls=records,
+    )
+
+    abstraction = build_acquisition_abstraction(bundle)
+
+    assert abstraction.reusable is False
+    assert abstraction.facade_free is False
+    assert expected_reason in abstraction.reason
+
+
+def test_facade_free_acquisition_executes_proven_two_step_lineage(
+    tmp_path: Path, monkeypatch
+):
+    """A second nested skill must consume step 1's produced artifact.
+
+    This proves the structured ``step:N`` lineage end to end through the
+    generated entry script, rather than only inspecting the abstraction JSON.
+    """
+    import importlib.util
+    from types import SimpleNamespace
+
+    import omicsclaw.skill.scaffolder as scaffolder_module
+
+    output_root, source_dir = _build_real_mini_agent_run(
+        tmp_path,
+        real_input=True,
+        accepted_cells=[
+            "preprocessed = oc.run('sc-preprocessing', adata, min_genes=200)\n"
+            "adata = preprocessed.adata\n"
+            "clustered = oc.run('sc-clustering', adata, resolution=1.0)\n"
+            "adata = clustered.adata\n"
+            "ReturnAnswer('done')"
+        ],
+    )
+    trace_records = [
+        {
+            "index": 1,
+            "skill": "sc-preprocessing",
+            "params": {"min_genes": 200},
+            "flags": ["--min-genes", "200"],
+            "input_artifact": "source/input.h5ad",
+            "output_dir": "source/step-1",
+            "primary_artifact": "source/step-1/processed.h5ad",
+            "status": "succeeded",
+        },
+        {
+            "index": 2,
+            "skill": "sc-clustering",
+            "params": {"resolution": 1.0},
+            "flags": ["--resolution", "1.0"],
+            "input_artifact": "source/step-1/processed.h5ad",
+            "output_dir": "source/step-2",
+            "primary_artifact": "source/step-2/processed.h5ad",
+            "status": "succeeded",
+        },
+    ]
+    (source_dir / "skill_calls.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in trace_records),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        scaffolder_module,
+        "_run_demo_smoke_gate",
+        lambda *args, **kwargs: scaffolder_module._DemoGateOutcome(
+            verdict="earned", reason="synthetic two-step gate"
+        ),
+    )
+    promoted = create_skill_scaffold(
+        request="Acquire a reusable preprocessing and clustering workflow.",
+        domain="singlecell",
+        skill_name="two-step-acquired-skill",
+        skills_root=tmp_path / "skills",
+        source_analysis_dir=source_dir,
+        output_root=output_root,
+    )
+    script = Path(promoted.script_path)
+    module_spec = importlib.util.spec_from_file_location("two_step_acquired_skill", script)
+    assert module_spec is not None and module_spec.loader is not None
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+
+    observed: list[tuple[str, Path, list[str]]] = []
+
+    def fake_run_skill(skill, *, input_path, output_dir, extra_args, **kwargs):
+        input_path = Path(input_path).resolve()
+        nested = Path(output_dir)
+        nested.mkdir(parents=True, exist_ok=True)
+        observed.append((skill, input_path, list(extra_args)))
+        payload = input_path.read_text(encoding="utf-8") + f"|{skill}"
+        (nested / "processed.h5ad").write_text(payload, encoding="utf-8")
+        return SimpleNamespace(
+            success=True,
+            output_dir=str(nested),
+            stdout="",
+            stderr="",
+        )
+
+    module.run_skill = fake_run_skill
+    input_path = tmp_path / "two-step-input.h5ad"
+    input_path.write_text("dataset", encoding="utf-8")
+    run_out = tmp_path / "two-step-output"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(script),
+            "--input",
+            str(input_path),
+            "--output",
+            str(run_out),
+            "--min-genes",
+            "321",
+            "--resolution",
+            "0.8",
+        ],
+    )
+
+    module.main()
+
+    assert [item[0] for item in observed] == ["sc-preprocessing", "sc-clustering"]
+    assert observed[0][1] == input_path.resolve()
+    assert observed[1][1] == (
+        run_out / "steps" / "01_sc-preprocessing" / "processed.h5ad"
+    ).resolve()
+    assert observed[0][2] == ["--min-genes", "321"]
+    assert observed[1][2] == ["--resolution", "0.8"]
+    assert (run_out / "processed.h5ad").read_text(encoding="utf-8") == (
+        "dataset|sc-preprocessing|sc-clustering"
+    )
+    evidence = json.loads(
+        (Path(promoted.skill_dir) / "references" / "acquisition_abstraction.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert [call["input_source"] for call in evidence["calls"]] == [
+        "input",
+        "step:1",
+    ]
+
+
+def test_facade_free_acquired_skill_reuses_two_inputs_and_two_parameter_sets(
+    tmp_path: Path, monkeypatch
+):
+    """ACQ-06: one acquired artifact must work across a 2×2 input/parameter
+    matrix; successful replay of the original run alone is not generalisation.
+
+    The nested runner is replaced by a contract-faithful deterministic test
+    double so this test exercises the generated entry script without invoking
+    a heavyweight scientific backend.
+    """
+    import importlib.util
+    from types import SimpleNamespace
+
+    import omicsclaw.skill.scaffolder as scaffolder_module
+
+    output_root, source_dir = _build_real_mini_agent_run(
+        tmp_path,
+        real_input=True,
+        accepted_cells=[
+            "result = oc.run('sc-preprocessing', adata, min_genes=200)\n"
+            "adata = result.adata\n"
+            "ReturnAnswer('done')"
+        ],
+    )
+    (source_dir / "skill_calls.jsonl").write_text(
+        json.dumps(
+            {
+                "index": 1,
+                "skill": "sc-preprocessing",
+                "params": {"min_genes": "200"},
+                "flags": ["--min-genes", "200"],
+                "input_artifact": "source-call/input.h5ad",
+                "output_dir": "source-call/out",
+                "primary_artifact": "source-call/out/processed.h5ad",
+                "status": "succeeded",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        scaffolder_module,
+        "_run_demo_smoke_gate",
+        lambda *args, **kwargs: scaffolder_module._DemoGateOutcome(
+            verdict="earned", reason="synthetic structured abstraction gate"
+        ),
+    )
+    promoted = create_skill_scaffold(
+        request="Acquire a reusable preprocessing workflow.",
+        domain="singlecell",
+        skill_name="matrix-generalized-skill",
+        skills_root=tmp_path / "skills",
+        source_analysis_dir=source_dir,
+        output_root=output_root,
+    )
+    script = Path(promoted.script_path)
+    module_spec = importlib.util.spec_from_file_location("matrix_generalized_skill", script)
+    assert module_spec is not None and module_spec.loader is not None
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+
+    observed: list[tuple[str, str]] = []
+
+    def fake_run_skill(skill, *, input_path, output_dir, extra_args, **kwargs):
+        assert skill == "sc-preprocessing"
+        value = extra_args[extra_args.index("--min-genes") + 1]
+        observed.append((str(Path(input_path).resolve()), value))
+        nested = Path(output_dir)
+        nested.mkdir(parents=True, exist_ok=True)
+        payload = Path(input_path).read_text(encoding="utf-8") + f"|min_genes={value}"
+        (nested / "processed.h5ad").write_text(payload, encoding="utf-8")
+        return SimpleNamespace(
+            success=True,
+            output_dir=str(nested),
+            stdout="",
+            stderr="",
+        )
+
+    module.run_skill = fake_run_skill
+    input_paths = []
+    for label in ("dataset-a", "dataset-b"):
+        path = tmp_path / f"{label}.h5ad"
+        path.write_text(label, encoding="utf-8")
+        input_paths.append(path)
+
+    for input_path in input_paths:
+        for min_genes in ("111", "777"):
+            run_out = tmp_path / f"run-{input_path.stem}-{min_genes}"
+            monkeypatch.setattr(
+                sys,
+                "argv",
+                [
+                    str(script),
+                    "--input",
+                    str(input_path),
+                    "--output",
+                    str(run_out),
+                    "--min-genes",
+                    min_genes,
+                ],
+            )
+            module.main()
+            assert (run_out / "processed.h5ad").read_text(encoding="utf-8") == (
+                f"{input_path.stem}|min_genes={min_genes}"
+            )
+            envelope = json.loads((run_out / "result.json").read_text(encoding="utf-8"))
+            assert envelope["status"] == "ok"
+            assert envelope["data"]["steps"][0]["parameters"]["min_genes"] == min_genes
+
+    assert observed == [
+        (str(input_path.resolve()), min_genes)
+        for input_path in input_paths
+        for min_genes in ("111", "777")
+    ]
+
+
+def test_rejected_structured_abstraction_is_regated_on_verbatim_fallback(
+    tmp_path: Path, monkeypatch
+):
+    """A source transform never ships on static confidence alone.
+
+    If its gate rejects, restore accepted source semantics, regenerate derived
+    metadata, run the gate again, and retain the exact fallback reason.
+    """
+    import omicsclaw.skill.scaffolder as scaffolder_module
+
+    output_root, source_dir = _build_real_mini_agent_run(
+        tmp_path,
+        real_input=True,
+        accepted_cells=[
+            "result = oc.run('sc-preprocessing', adata)\n"
+            "adata = result.adata\n"
+            "ReturnAnswer('done')"
+        ],
+    )
+    (source_dir / "skill_calls.jsonl").write_text(
+        json.dumps(
+            {
+                "index": 1,
+                "skill": "sc-preprocessing",
+                "params": {},
+                "flags": [],
+                "input_artifact": "source-call/input.h5ad",
+                "output_dir": "source-call/out",
+                "primary_artifact": "source-call/out/processed.h5ad",
+                "status": "succeeded",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    gate_scripts: list[str] = []
+
+    def fake_gate(script_path, *args, **kwargs):
+        gate_scripts.append(script_path.read_text(encoding="utf-8"))
+        if len(gate_scripts) == 1:
+            return scaffolder_module._DemoGateOutcome(
+                verdict="rejected", reason="synthetic structured semantic regression"
+            )
+        return scaffolder_module._DemoGateOutcome(
+            verdict="earned", reason="verbatim fallback passed"
+        )
+
+    monkeypatch.setattr(scaffolder_module, "_run_demo_smoke_gate", fake_gate)
+    promoted = create_skill_scaffold(
+        request="Acquire with a safe fallback.",
+        domain="singlecell",
+        skill_name="structured-fallback-skill",
+        skills_root=tmp_path / "skills",
+        source_analysis_dir=source_dir,
+        output_root=output_root,
+    )
+
+    assert len(gate_scripts) == 2
+    assert "from omicsclaw.skill.runner import run_skill" in gate_scripts[0]
+    assert "build_facade" in gate_scripts[1]
+    shipped = Path(promoted.script_path).read_text(encoding="utf-8")
+    assert "build_facade" in shipped
+    evidence = json.loads(
+        (Path(promoted.skill_dir) / "references" / "acquisition_abstraction.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert evidence["applied"] is False
+    assert evidence["facade_free"] is False
+    assert evidence["fallback_reason"] == "synthetic structured semantic regression"
+
+
 def test_create_skill_scaffold_can_promote_mini_agent_analysis(tmp_path: Path):
     """Promote a REAL mini-agent run (no notebook; code in ``analysis.py``).
 
@@ -528,12 +1089,82 @@ def test_create_skill_scaffold_can_promote_mini_agent_analysis(tmp_path: Path):
     assert set(core) | set(optional) <= set(deps), (core, optional, deps)
 
 
+def test_promoted_skill_demo_gate_skips_without_crediting_when_bwrap_unavailable(
+    tmp_path: Path, monkeypatch
+):
+    """Fix 2 (security): promoted (model-authored) code is untrusted and must
+    not run unsandboxed. When bwrap is unavailable, the gate must NOT fall
+    back to an unsandboxed run and award demo-validated trust — it must
+    skip, leaving the skill at the smoke-only default. Untrusted code that did
+    not run inside the required OS sandbox must stay outside the discoverable
+    skill tree: keep it in the acquisition quarantine for inspection/retry."""
+    import omicsclaw.autonomous.kernel_envelope as kernel_envelope_module
+
+    monkeypatch.setattr(kernel_envelope_module, "envelope_available", lambda: False)
+
+    output_root, source_dir = _build_real_mini_agent_run(tmp_path, real_input=True)
+
+    result = create_skill_scaffold(
+        request="Package the clustering run as a reusable skill.",
+        domain="singlecell",
+        skill_name="no-sandbox-promote-skill",
+        skills_root=tmp_path / "skills",
+        source_analysis_dir=source_dir,
+        output_root=output_root,
+    )
+
+    skill_dir = Path(result.skill_dir)
+    manifest = load_skill_yaml(skill_dir / "skill.yaml")
+    formal_dir = tmp_path / "skills" / "singlecell" / "no-sandbox-promote-skill"
+    assert result.quarantined is True
+    assert ".quarantine" in skill_dir.parts
+    assert not formal_dir.exists()
+    assert manifest.validation.level != "demo-validated"
+    assert not (skill_dir / "references" / "validation.md").exists()
+    assert (skill_dir / "references" / "quarantine.md").exists()
+
+    registry = OmicsRegistry()
+    registry.load_all(tmp_path / "skills")
+    assert "no-sandbox-promote-skill" not in registry.skills
+
+
+def test_plain_scaffold_demo_gate_does_not_require_bwrap(tmp_path: Path, monkeypatch):
+    """A freshly-scaffolded (non-promoted, self-authored template) skill is
+    not untrusted model-authored code — its demo gate must keep working even
+    when bwrap is unavailable, since require_sandbox is only set for
+    promotions (source_bundle is not None)."""
+    import omicsclaw.autonomous.kernel_envelope as kernel_envelope_module
+
+    monkeypatch.setattr(kernel_envelope_module, "envelope_available", lambda: False)
+
+    result = create_skill_scaffold(
+        request="Create a demo-only placeholder skill.",
+        domain="singlecell",
+        skill_name="plain-scaffold-no-bwrap",
+        skills_root=tmp_path / "skills",
+        output_root=tmp_path / "output",
+    )
+    assert result.completion["completed"] is True
+
+
 def test_find_latest_autonomous_analysis_discovers_mini_agent_run(tmp_path: Path):
     """``promote_from_latest`` must discover a real mini-agent run."""
     output_root, source_dir = _build_real_mini_agent_run(tmp_path)
     latest = find_latest_autonomous_analysis(output_root=output_root)
     assert latest is not None
     assert latest.resolve() == source_dir.resolve()
+
+
+def test_promote_from_latest_requires_explicit_source_analysis_dir(tmp_path: Path):
+    with pytest.raises(ValueError, match="source_analysis_dir"):
+        create_skill_scaffold(
+            request="Promote the latest analysis.",
+            domain="singlecell",
+            skill_name="unsafe-latest-promotion",
+            promote_from_latest=True,
+            output_root=tmp_path / "output",
+            skills_root=tmp_path / "skills",
+        )
 
 
 def test_promoted_mini_agent_skill_runs(tmp_path: Path):
@@ -657,13 +1288,13 @@ def test_lift_falls_back_to_verbatim_when_the_gate_rejects_the_lifted_script(tmp
     real_gate = scaffolder_module._run_demo_smoke_gate
     seen_scripts: list[str] = []
 
-    def fake_gate(script_path, output_dir):
+    def fake_gate(script_path, output_dir, **kwargs):
         seen_scripts.append(script_path.read_text(encoding="utf-8"))
         if len(seen_scripts) == 1:
             return scaffolder_module._DemoGateOutcome(
                 verdict="rejected", reason="synthetic failure for fallback test"
             )
-        return real_gate(script_path, output_dir)
+        return real_gate(script_path, output_dir, **kwargs)
 
     monkeypatch.setattr(scaffolder_module, "_run_demo_smoke_gate", fake_gate)
 
@@ -695,6 +1326,8 @@ def test_lift_falls_back_to_verbatim_when_the_gate_rejects_the_lifted_script(tmp
 
     # The verbatim retry ran for real (real_gate) and succeeded on its own merits.
     assert result.demo_gate_verdict == "earned"
+    assert result.quarantined is False
+    assert load_skill_yaml(skill_dir / "skill.yaml").lifecycle.status == "mvp"
 
 
 def test_find_latest_discovers_project_nested_mini_agent_run(tmp_path: Path):

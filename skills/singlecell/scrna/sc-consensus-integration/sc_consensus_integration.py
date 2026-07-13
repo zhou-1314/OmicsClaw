@@ -24,6 +24,8 @@ for _candidate in _HERE.parents:
 
 from omicsclaw.runtime.consensus.run import main as _run_main  # noqa: E402
 
+SKILL_NAME = "sc-consensus-integration"
+SKILL_VERSION = "0.1.0"
 SOURCE = "sc-consensus-integration"
 
 

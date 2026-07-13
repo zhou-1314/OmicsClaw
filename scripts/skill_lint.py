@@ -357,11 +357,15 @@ def _check_corpus_source_refs(
     For a corpus-derived skill (`provenance.origin == "corpus"`), every
     `hints.*.defaults[param]` must have a matching `source_refs[param]` that
     is a real, well-formed `{quote, char_span, doc_ref}` triple — never a
-    `{"todo": True}` placeholder standing in for a live default. When
-    `references/source_corpus.txt` is present, `char_span` is re-sliced out
-    of it and must equal `quote` — the actual anti-fabrication check, not
-    just a structural one (file-exists-guarded, mirroring
-    `_check_allowed_extra_flags`'s tolerance for a transitional skill).
+    `{"todo": True}` placeholder standing in for a live default.
+    `references/source_corpus.txt` must be present: `char_span` is re-sliced
+    out of it and must equal `quote` — the actual anti-fabrication check, not
+    just a structural one. Unlike `_check_allowed_extra_flags`'s file-exists
+    tolerance (which accommodates skills that genuinely predate a rule),
+    there is no legitimate corpus-origin skill without this file —
+    `create_skill_scaffold(from_corpus=...)` always writes it — so a missing
+    file here can only mean the persisted evidence was deleted, which is
+    exactly what the iron rule must catch, not silently tolerate.
 
     A no-op for any non-corpus skill (the overwhelming majority) — returns
     `[]` immediately, so this rule cannot regress an existing skill's lint
@@ -379,6 +383,11 @@ def _check_corpus_source_refs(
     corpus_path = skill_dir / "references" / "source_corpus.txt"
     if corpus_path.exists():
         corpus_text = corpus_path.read_text(encoding="utf-8")
+    else:
+        errors.append(
+            "references/source_corpus.txt is missing for a corpus-origin skill — "
+            "cannot re-verify source_refs char_span against the persisted raw text"
+        )
 
     for method, info in (hints or {}).items():
         if not isinstance(info, dict):
@@ -742,6 +751,7 @@ _FRAMEWORK_FILES = frozenset({
     "processed.h5ad", "processed.bam",
     "SKILL.md", "output_contract.md", "parameters.md",
     "methodology.md", "r_visualization.md",
+    "quarantine.md",
     "manifest.json",
 })
 # Strip HTML comments — generated output contracts prepend a `<!-- Generated ... -->`

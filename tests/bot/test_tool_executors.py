@@ -738,9 +738,8 @@ async def test_autonomous_analysis_appends_a_promotion_suggestion_on_the_third_s
 ):
     """P4 (docs/proposals/skill-acquisition-plan.md §P4) end-to-end wiring: a
     3rd similar-goal success in the same thread must append a promotion
-    suggestion to the digest, anchored to THIS run's own workspace_root (not
-    `promote_from_latest`, which still resolves via the mtime-scanning
-    `find_latest_autonomous_analysis` this feature exists to avoid racing)."""
+    suggestion to the digest, anchored to THIS run's own workspace_root. The
+    unsafe global `promote_from_latest` admission path is disabled."""
     import omicsclaw.autonomous as autonomous_pkg
     from omicsclaw.autonomous.contracts import AutonomousRunResult, AutonomousRunStatus
     from omicsclaw.runtime.tools.builders.agent_executors import (
@@ -772,6 +771,11 @@ async def test_autonomous_analysis_appends_a_promotion_suggestion_on_the_third_s
     assert "3rd time" in out
     assert "source_analysis_dir='/tmp/run-3'" in out
     assert "promote_from_latest=True" not in out
+    # Fix 6: an autonomous-analysis bundle never carries a domain, so the
+    # snippet as printed would raise if run verbatim — the suggestion must
+    # say so explicitly instead of shipping a silently-broken command.
+    assert 'domain="..."' in out
+    assert "spatial" in out and "singlecell" in out
 
     # The 3rd run's own lineage must also now be on record.
     recs = await memory_store.get_memories(sid, "autonomous_run", thread_id=thread_id)
@@ -807,3 +811,72 @@ async def test_autonomous_analysis_no_promotion_suggestion_below_threshold(memor
         {"goal": "cluster cells by type"}, session_id=sid, thread_id=thread_id
     )
     assert "Promotion candidate" not in out
+
+
+def test_autonomous_analysis_execute_toolspec_declares_thread_id_in_context_params():
+    """Regression guard: the two tests above call ``execute_autonomous_analysis_execute``
+    directly with a hand-passed ``thread_id=`` kwarg, which bypasses the real
+    ``ToolSpec.context_params`` -> ``build_executor_kwargs`` -> executor seam
+    entirely. That bypass is exactly how the production wiring gap (thread_id
+    silently missing from the real ToolSpec, so ``kwargs.get("thread_id")`` was
+    always ``""`` in production) went undetected. Pin the declaration itself so
+    it cannot regress silently again."""
+    from omicsclaw.runtime.tools.builders.agent import BotToolContext, build_bot_tool_specs
+
+    specs = build_bot_tool_specs(BotToolContext(skill_names=()))
+    spec = next(s for s in specs if s.name == "autonomous_analysis_execute")
+    assert "thread_id" in spec.context_params
+
+
+@pytest.mark.asyncio
+async def test_autonomous_analysis_promotion_suggestion_reaches_executor_through_the_real_toolspec_seam(
+    memory_store, monkeypatch
+):
+    """End-to-end through the REAL dispatch seam (ToolSpec.context_params ->
+    build_executor_kwargs -> invoke_tool), not a hand-rolled bypass. Must fail
+    on the pre-fix code (thread_id absent from context_params -> executor sees
+    thread_id="" -> _compute_promotion_suggestion declines) and pass once
+    "thread_id" is declared."""
+    import omicsclaw.autonomous as autonomous_pkg
+    from omicsclaw.autonomous.contracts import AutonomousRunResult, AutonomousRunStatus
+    from omicsclaw.runtime.tools.builders.agent import BotToolContext, build_bot_tool_specs
+    from omicsclaw.runtime.tools.builders.agent_executors import (
+        execute_autonomous_analysis_execute,
+    )
+    from omicsclaw.runtime.tools.executor import invoke_tool
+    from omicsclaw.skill.orchestration import _auto_capture_autonomous_run
+
+    session = await memory_store.create_session("u", "telegram")
+    sid = session.session_id
+    thread_id = "thread-promo-seam"
+    goal = "cluster cells by cell type and annotate"
+
+    await _auto_capture_autonomous_run(sid, thread_id, "cluster the cells by cell type", "run-1", "/tmp/run-1", "succeeded")
+    await _auto_capture_autonomous_run(sid, thread_id, "Cluster cells by type and annotate.", "run-2", "/tmp/run-2", "succeeded")
+
+    async def _fake_loop(request, **kwargs):
+        return AutonomousRunResult(
+            run_id="run-3", workspace_root="/tmp/run-3", status=AutonomousRunStatus.SUCCEEDED
+        )
+
+    monkeypatch.setattr(autonomous_pkg, "run_autonomous_code_loop_async", _fake_loop)
+
+    specs = build_bot_tool_specs(BotToolContext(skill_names=()))
+    spec = next(s for s in specs if s.name == "autonomous_analysis_execute")
+
+    out = await invoke_tool(
+        spec,
+        execute_autonomous_analysis_execute,
+        {"goal": goal},
+        runtime_context={
+            "session_id": sid,
+            "thread_id": thread_id,
+            "chat_id": "",
+            "surface": "",
+            "policy_state": {},
+            "model_override": "",
+            "provider_override": "",
+        },
+    )
+
+    assert "Promotion candidate" in out

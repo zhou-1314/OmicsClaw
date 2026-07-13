@@ -105,3 +105,19 @@ def test_from_paper_and_from_tool_docs_together_raises(builder, tmp_path, monkey
     )
     with pytest.raises(SystemExit, match="mutually exclusive"):
         builder.main()
+
+
+def test_promote_from_latest_is_rejected_with_actionable_message(builder, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "omics_skill_builder.py",
+            "--request", "x",
+            "--domain", "singlecell",
+            "--promote-from-latest",
+            "--output", str(tmp_path / "out"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="source-analysis-dir"):
+        builder.main()

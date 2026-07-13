@@ -2,7 +2,7 @@ schema_version: 2
 id: omics-skill-builder
 name: omics-skill-builder
 domain: orchestrator
-version: 0.5.0
+version: 0.5.1
 author: OmicsClaw
 license: MIT
 emoji: 🛠

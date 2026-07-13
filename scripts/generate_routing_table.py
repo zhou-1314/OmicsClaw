@@ -35,6 +35,7 @@ DOMAIN_ORDER = [
     ("metabolomics", "Metabolomics"),
     ("bulkrna", "Bulk RNA-seq"),
     ("orchestrator", "Orchestration"),
+    ("literature", "Literature"),
 ]
 
 
@@ -102,7 +103,7 @@ def _generate_full_tables() -> str:
 
 
 def _generate_briefing() -> str:
-    """Generate a compact 7-domain briefing (default, token-cheap mode).
+    """Generate a compact 8-domain briefing (default, token-cheap mode).
 
     Uses ``omicsclaw.skill.domain_briefing`` as the single source of truth so
     the CLAUDE.md briefing and the bot-tool briefing stay byte-identical.
@@ -114,7 +115,7 @@ def _generate_briefing() -> str:
     briefing = build_domain_briefing(
         lead_in=(
             "When the user asks an analysis question, match it to a skill and act. "
-            "OmicsClaw covers 7 domains; pick one, then consult its INDEX for the "
+            "OmicsClaw covers 8 domains; pick one, then consult its INDEX for the "
             "full skill list if the briefing below isn't enough."
         ),
         trailing_hint="",
@@ -158,8 +159,8 @@ def _generate_briefing() -> str:
 def generate_tables(full: bool = False) -> str:
     """Return the routing block content.
 
-    By default returns the compact 7-domain briefing (~600 tokens).
-    Pass ``full=True`` to restore the legacy 88-row per-skill tables
+    By default returns the compact 8-domain briefing (~600 tokens).
+    Pass ``full=True`` to restore the full per-skill tables
     (~4,300 tokens) for cases where the full listing is desired in context.
     """
     return _generate_full_tables() if full else _generate_briefing()
@@ -219,7 +220,7 @@ def main():
     parser.add_argument(
         "--full",
         action="store_true",
-        help="Emit the legacy full 88-row per-skill tables instead of the compact 7-domain briefing",
+        help="Emit full per-skill tables instead of the compact 8-domain briefing",
     )
     args = parser.parse_args()
 

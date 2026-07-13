@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from dataclasses import asdict, dataclass, field
+import hashlib
 import json
 import os
 import re
@@ -42,6 +43,7 @@ SKILLS_DIR = OMICSCLAW_DIR / "skills"
 OUTPUT_DIR = OMICSCLAW_DIR / "output"
 SKILL_TEMPLATE_PATH = OMICSCLAW_DIR / "templates" / "skill" / "SKILL.md"
 STAGING_ROOT = OMICSCLAW_DIR / ".omicsclaw-staging" / "skill-scaffolds"
+QUARANTINE_DIRNAME = ".quarantine"
 SKILL_SCAFFOLDER_VERSION = __version__
 
 # P1 acquisition gate (docs/proposals/skill-acquisition-p0-p1-landing.md): a
@@ -209,6 +211,10 @@ class SkillScaffoldResult:
     # _run_demo_smoke_gate.
     demo_gate_verdict: str = ""
     demo_gate_reason: str = ""
+    # A promoted body whose required sandbox/demo gate was skipped is moved
+    # under ``skills/.quarantine`` rather than the discoverable domain tree.
+    quarantined: bool = False
+    quarantine_reason_path: str = ""
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -232,6 +238,72 @@ class AutonomousAnalysisBundle:
     # "mini_agent" code is authored against the oc/adata/show/ReturnAnswer facade
     # and needs a bootstrap in the promoted script; "notebook" code is self-contained.
     engine: str = "notebook"
+    # Structured producer evidence used by the P2 abstraction pass.  Keep the
+    # original dictionaries intact so every generated transformation can cite
+    # the exact persisted record rather than a lossy re-parse of analysis.py.
+    steps: list[dict[str, object]] = field(default_factory=list)
+    skill_calls: list[dict[str, object]] = field(default_factory=list)
+    trace_warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class AcquisitionParameter:
+    """One deterministic CLI parameter lifted from an executed skill call."""
+
+    key: str
+    flag: str
+    dest: str
+    default: object
+    type: str
+    call_indexes: list[int] = field(default_factory=list)
+
+
+@dataclass
+class AcquisitionCall:
+    """A facade-free call in a promoted workflow.
+
+    ``input_source`` is either ``input`` or ``step:<1-based-index>``.  The
+    latter is emitted only when AST lineage proves that the call consumed a
+    prior handle's ``.adata``; absence of proof rejects structured promotion.
+    """
+
+    index: int
+    skill: str
+    input_source: str
+    parameter_bindings: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class AcquisitionAbstraction:
+    """Auditable result of turning one accepted run into a reusable workflow."""
+
+    strategy: str
+    reusable: bool
+    facade_free: bool
+    reason: str
+    source_code_sha256: str
+    calls: list[AcquisitionCall] = field(default_factory=list)
+    parameters: list[AcquisitionParameter] = field(default_factory=list)
+    source_steps: list[dict[str, object]] = field(default_factory=list)
+    source_skill_calls: list[dict[str, object]] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    def to_dict(self, *, applied: bool, fallback_reason: str = "") -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "strategy": self.strategy,
+            "reusable": self.reusable,
+            "applied": applied,
+            "facade_free": bool(applied and self.facade_free),
+            "reason": self.reason,
+            "fallback_reason": fallback_reason,
+            "source_code_sha256": self.source_code_sha256,
+            "calls": [asdict(call) for call in self.calls],
+            "parameters": [asdict(param) for param in self.parameters],
+            "source_steps": list(self.source_steps),
+            "source_skill_calls": list(self.source_skill_calls),
+            "warnings": list(self.warnings),
+        }
 
 
 @dataclass(frozen=True)
@@ -1451,6 +1523,198 @@ if __name__ == "__main__":
 """
 
 
+def _render_acquisition_argument_line(param: AcquisitionParameter) -> str:
+    type_kwarg = ""
+    if param.type == "int":
+        type_kwarg = "type=int, "
+    elif param.type == "float":
+        type_kwarg = "type=float, "
+    elif param.type == "bool":
+        type_kwarg = "type=_parse_flag_bool, "
+    return (
+        f"    parser.add_argument({param.flag!r}, dest={param.dest!r}, "
+        f"{type_kwarg}default={param.default!r}, "
+        f"help='Acquired parameter for source call(s) {param.call_indexes}')"
+    )
+
+
+def render_structured_promoted_skill_script(
+    *,
+    skill_name: str,
+    domain: str,
+    summary: str,
+    source_bundle: AutonomousAnalysisBundle,
+    abstraction: AcquisitionAbstraction,
+) -> str:
+    """Render a facade-free workflow over the stable shared skill runner."""
+    if not abstraction.reusable or not abstraction.facade_free:
+        raise ValueError("structured renderer requires a reusable facade-free abstraction")
+
+    goal = source_bundle.goal or summary
+    default_input = source_bundle.input_file or ""
+    arg_lines = "\n".join(
+        _render_acquisition_argument_line(param) for param in abstraction.parameters
+    )
+    bool_helper = (
+        "def _parse_flag_bool(value: str) -> bool:\n"
+        '    return value.strip().lower() not in {"0", "false", "no", ""}\n\n\n'
+        if any(param.type == "bool" for param in abstraction.parameters)
+        else ""
+    )
+    call_specs = [asdict(call) for call in abstraction.calls]
+
+    return f'''#!/usr/bin/env python3
+"""Facade-free acquired OmicsClaw workflow for {_display_title(skill_name)}."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from omicsclaw.common.report import mark_result_status, write_result_json
+from omicsclaw.skill.runner import run_skill
+
+
+SKILL_NAME = {skill_name!r}
+DOMAIN = {domain!r}
+SUMMARY = {summary or goal!r}
+ANALYSIS_GOAL = {goal!r}
+SOURCE_ANALYSIS_DIR = {source_bundle.source_dir!r}
+DEFAULT_INPUT_FILE = {default_input!r}
+CALL_SPECS = json.loads({json.dumps(json.dumps(call_specs, ensure_ascii=False))})
+
+
+{bool_helper}def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=SUMMARY)
+    parser.add_argument("--input", dest="input_path", help="Path to input data")
+    parser.add_argument("--output", required=True, help="Output directory")
+    parser.add_argument("--demo", action="store_true", help="Reuse the source run input")
+{arg_lines}
+    return parser.parse_args()
+
+
+def _value_to_flags(key: str, value: object) -> list[str]:
+    flag = "--" + key.replace("_", "-")
+    if isinstance(value, bool):
+        return [flag] if value else []
+    if value is None:
+        return []
+    return [flag, str(value)]
+
+
+def _primary_h5ad(output_dir: str | Path) -> Path | None:
+    root = Path(output_dir)
+    preferred = root / "processed.h5ad"
+    if preferred.is_file():
+        return preferred
+    candidates = sorted(root.glob("*.h5ad"))
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def main() -> None:
+    args = parse_args()
+    effective_input = args.input_path or (DEFAULT_INPUT_FILE if args.demo else "")
+    if not effective_input:
+        raise SystemExit("Provide --input, or use --demo to reuse the source run input.")
+
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    step_primary: dict[int, Path] = {{}}
+    step_results: list[dict[str, object]] = []
+
+    for spec in CALL_SPECS:
+        index = int(spec["index"])
+        source = str(spec["input_source"])
+        if source == "input":
+            step_input = Path(effective_input)
+        elif source.startswith("step:"):
+            upstream = int(source.split(":", 1)[1])
+            if upstream not in step_primary:
+                raise RuntimeError(
+                    f"Step {{index}} needs the primary .h5ad from step {{upstream}}, "
+                    "but that step did not produce one."
+                )
+            step_input = step_primary[upstream]
+        else:
+            raise RuntimeError(f"Unsupported acquired input source: {{source}}")
+
+        extra_args: list[str] = []
+        for key, dest in spec["parameter_bindings"].items():
+            extra_args.extend(_value_to_flags(key, getattr(args, dest)))
+        step_dir = output_dir / "steps" / f"{{index:02d}}_{{spec['skill']}}"
+        result = run_skill(
+            str(spec["skill"]),
+            input_path=str(step_input),
+            output_dir=str(step_dir),
+            extra_args=extra_args,
+        )
+        if not result.success:
+            raise RuntimeError(
+                f"Acquired workflow step {{index}} ({{spec['skill']}}) failed: "
+                f"{{result.stderr or result.stdout}}"
+            )
+        primary = _primary_h5ad(result.output_dir or step_dir)
+        if primary is not None:
+            step_primary[index] = primary
+        step_results.append(
+            {{
+                "index": index,
+                "skill": spec["skill"],
+                "input": str(step_input),
+                "output_dir": str(result.output_dir or step_dir),
+                "primary_artifact": str(primary) if primary else "",
+                "parameters": {{
+                    key: getattr(args, dest)
+                    for key, dest in spec["parameter_bindings"].items()
+                }},
+            }}
+        )
+
+    final_primary = step_primary.get(len(CALL_SPECS))
+    if final_primary is not None:
+        target = output_dir / "processed.h5ad"
+        if final_primary.resolve() != target.resolve():
+            shutil.copy2(final_primary, target)
+
+    (output_dir / "README.md").write_text(
+        f"# {{SKILL_NAME}}\\n\\nFacade-free workflow acquired from `{{SOURCE_ANALYSIS_DIR}}`.\\n",
+        encoding="utf-8",
+    )
+    (output_dir / "report.md").write_text(
+        f"# Acquired Workflow Report\\n\\nGoal: {{ANALYSIS_GOAL}}\\n\\nSteps: {{len(step_results)}}\\n",
+        encoding="utf-8",
+    )
+    repro = output_dir / "reproducibility" / "commands.sh"
+    repro.parent.mkdir(parents=True, exist_ok=True)
+    repro.write_text(f"oc run {{SKILL_NAME}} --input <input> --output {{output_dir}}\\n", encoding="utf-8")
+    write_result_json(
+        output_dir,
+        skill=SKILL_NAME,
+        version="0.1.0",
+        summary={{"steps": len(step_results), "input": effective_input}},
+        data={{
+            "skill": SKILL_NAME,
+            "domain": DOMAIN,
+            "source_analysis_dir": SOURCE_ANALYSIS_DIR,
+            "steps": step_results,
+        }},
+    )
+    mark_result_status(output_dir, "ok")
+    print(f"Acquired skill '{{SKILL_NAME}}' completed. Outputs written to {{output_dir}}")
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
 def render_skill_test(skill_name: str) -> str:
     script_name = f"{skill_name.replace('-', '_')}.py"
     return f"""from pathlib import Path
@@ -1615,6 +1879,7 @@ def _load_mini_agent_bundle(path: Path, analysis_path: Path) -> AutonomousAnalys
     summary_path = path / "result_summary.md"
     result_summary = summary_path.read_text(encoding="utf-8") if summary_path.exists() else ""
     goal, input_file = _read_run_goal_and_input(path)
+    steps, skill_calls, trace_warnings = _read_structured_run_trace(path)
     if not goal:
         goal = _goal_from_summary(result_summary)
 
@@ -1631,6 +1896,9 @@ def _load_mini_agent_bundle(path: Path, analysis_path: Path) -> AutonomousAnalys
         input_file=input_file,
         context="",
         engine="mini_agent",
+        steps=steps,
+        skill_calls=skill_calls,
+        trace_warnings=trace_warnings,
     )
 
 
@@ -1728,6 +1996,71 @@ def _extract_accepted_cells(script: str) -> str:
     """
     match = _ACCEPTED_STEP_RE.search(script)
     return "" if match is None else script[match.start():]
+
+
+def _read_structured_run_trace(
+    path: Path,
+) -> tuple[list[dict[str, object]], list[dict[str, object]], list[str]]:
+    """Read mini-agent intent and executed-call evidence without guessing.
+
+    The manifest is the source for accepted-cell ``metadata.steps``.  For
+    nested calls, the append-only ``skill_calls.jsonl`` is more current than
+    the manifest snapshot and therefore wins when it contains valid records;
+    older runs that only embedded calls in metadata remain readable.
+
+    A damaged optional trace does not make a historically successful run
+    unloadable.  Warnings are retained on the bundle and later written into
+    abstraction evidence, allowing the acquisition pass to fall back to the
+    verbatim path without hiding why structured generalisation was skipped.
+    """
+    warnings: list[str] = []
+    metadata: dict[str, object] = {}
+    manifest_path = path / "manifest.json"
+    if manifest_path.exists():
+        try:
+            raw_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            raw_metadata = raw_manifest.get("metadata", {}) if isinstance(raw_manifest, dict) else {}
+            if isinstance(raw_metadata, dict):
+                metadata = raw_metadata
+            else:
+                warnings.append("manifest metadata is not an object")
+        except (json.JSONDecodeError, OSError) as exc:
+            warnings.append(f"could not read manifest metadata: {type(exc).__name__}")
+
+    raw_steps = metadata.get("steps", [])
+    steps = [dict(item) for item in raw_steps if isinstance(item, dict)] if isinstance(raw_steps, list) else []
+    if raw_steps and not steps:
+        warnings.append("manifest metadata.steps contains no object records")
+
+    raw_manifest_calls = metadata.get("skill_calls", [])
+    manifest_calls = (
+        [dict(item) for item in raw_manifest_calls if isinstance(item, dict)]
+        if isinstance(raw_manifest_calls, list)
+        else []
+    )
+
+    jsonl_calls: list[dict[str, object]] = []
+    calls_path = path / "skill_calls.jsonl"
+    if calls_path.exists():
+        try:
+            for line_number, line in enumerate(
+                calls_path.read_text(encoding="utf-8").splitlines(), start=1
+            ):
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    warnings.append(f"skill_calls.jsonl line {line_number} is invalid JSON")
+                    continue
+                if not isinstance(record, dict):
+                    warnings.append(f"skill_calls.jsonl line {line_number} is not an object")
+                    continue
+                jsonl_calls.append(dict(record))
+        except OSError as exc:
+            warnings.append(f"could not read skill_calls.jsonl: {type(exc).__name__}")
+
+    return steps, (jsonl_calls or manifest_calls), warnings
 
 
 def _read_run_goal_and_input(path: Path) -> tuple[str, str]:
@@ -1832,6 +2165,291 @@ def _normalize_promoted_code(code: str, source_dir: str) -> str:
         normalized = normalized.replace(str(source_dir), "AUTONOMOUS_OUTPUT_DIR")
     normalized = _strip_redundant_pathlib_import(normalized)
     return normalized.rstrip() + "\n"
+
+
+def _acquisition_failure(
+    source_bundle: AutonomousAnalysisBundle,
+    reason: str,
+    *,
+    warnings: Iterable[str] = (),
+) -> AcquisitionAbstraction:
+    return AcquisitionAbstraction(
+        strategy=(
+            "structured-skill-calls-v1"
+            if source_bundle.skill_calls
+            else "verbatim-replay-v1"
+        ),
+        reusable=False,
+        facade_free=False,
+        reason=reason,
+        source_code_sha256=hashlib.sha256(
+            source_bundle.python_code.encode("utf-8")
+        ).hexdigest(),
+        source_steps=list(source_bundle.steps),
+        source_skill_calls=list(source_bundle.skill_calls),
+        warnings=list(source_bundle.trace_warnings) + list(warnings),
+    )
+
+
+def _is_oc_run(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "run"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "oc"
+    )
+
+
+def _literal_call_skill(call: ast.Call) -> str:
+    if not call.args:
+        return ""
+    try:
+        value = ast.literal_eval(call.args[0])
+    except Exception:
+        return ""
+    return str(value) if isinstance(value, str) else ""
+
+
+def _call_input_source(
+    call: ast.Call,
+    *,
+    data_sources: dict[str, str],
+    handle_sources: dict[str, int],
+    original_input: str,
+) -> str:
+    data_node: ast.AST | None = call.args[1] if len(call.args) >= 2 else None
+    input_path_node: ast.AST | None = None
+    for keyword in call.keywords:
+        if keyword.arg == "data":
+            data_node = keyword.value
+        elif keyword.arg == "input_path":
+            input_path_node = keyword.value
+
+    if isinstance(data_node, ast.Name):
+        return data_sources.get(data_node.id, "")
+    if (
+        isinstance(data_node, ast.Attribute)
+        and data_node.attr == "adata"
+        and isinstance(data_node.value, ast.Name)
+        and data_node.value.id in handle_sources
+    ):
+        return f"step:{handle_sources[data_node.value.id]}"
+    if input_path_node is not None:
+        if isinstance(input_path_node, ast.Name):
+            return data_sources.get(input_path_node.id, "")
+        try:
+            literal_path = ast.literal_eval(input_path_node)
+        except Exception:
+            literal_path = None
+        if isinstance(literal_path, (str, Path)) and str(literal_path) == original_input:
+            return "input"
+    return ""
+
+
+def _parameter_type(value: object) -> str:
+    if type(value) is bool:
+        return "bool"
+    if type(value) is int:
+        return "int"
+    if type(value) is float:
+        return "float"
+    if type(value) is str:
+        return "str"
+    return ""
+
+
+def _parameter_flag_key(key: str) -> str:
+    value = re.sub(r"[^a-z0-9]+", "-", key.strip().lower().replace("_", "-"))
+    return value.strip("-")
+
+
+def build_acquisition_abstraction(
+    source_bundle: AutonomousAnalysisBundle,
+) -> AcquisitionAbstraction:
+    """Build a deterministic, fail-closed workflow from structured evidence.
+
+    v1 intentionally accepts only *call-composition* programs: top-level
+    ``oc.run`` assignments, explicit ``handle.adata`` propagation, and the
+    presentation-only ``show``/``ReturnAnswer`` calls.  Arbitrary Python,
+    control flow, imports, or ambiguous data lineage stay on the quarantined
+    verbatim path.  This narrow contract makes removal of the kernel facade a
+    semantics-preserving translation instead of an optimistic source rewrite.
+    """
+    if source_bundle.engine != "mini_agent":
+        return _acquisition_failure(source_bundle, "source engine has no mini-agent call trace")
+    if not source_bundle.skill_calls:
+        return _acquisition_failure(source_bundle, "no executed skill_calls evidence is available")
+    if source_bundle.trace_warnings:
+        return _acquisition_failure(
+            source_bundle,
+            "structured trace contains read warnings",
+        )
+
+    try:
+        tree = ast.parse(source_bundle.python_code)
+    except SyntaxError as exc:
+        return _acquisition_failure(source_bundle, f"accepted code does not parse: {exc.msg}")
+
+    records = list(source_bundle.skill_calls)
+    calls: list[AcquisitionCall] = []
+    parameters: list[AcquisitionParameter] = []
+    param_cache: dict[tuple[str, type, object], int] = {}
+    used_flags = set(_RESERVED_PROMOTED_FLAGS - {"method", "species"})
+    data_sources: dict[str, str] = {"adata": "input", "INPUT_FILE": "input"}
+    handle_sources: dict[str, int] = {}
+
+    def register_call(call: ast.Call, target_names: list[str]) -> str | None:
+        call_index = len(calls) + 1
+        if call_index > len(records):
+            return "accepted code contains more oc.run calls than the execution trace"
+        record = records[call_index - 1]
+        status = str(record.get("status") or "").strip().lower()
+        if status != "succeeded":
+            return f"skill call #{call_index} was not successful (status={status or 'missing'})"
+        source_skill = _literal_call_skill(call)
+        recorded_skill = str(record.get("skill") or "").strip()
+        if not source_skill or source_skill != recorded_skill:
+            return (
+                f"skill call #{call_index} source/trace mismatch "
+                f"({source_skill or 'dynamic'} != {recorded_skill or 'missing'})"
+            )
+        input_source = _call_input_source(
+            call,
+            data_sources=data_sources,
+            handle_sources=handle_sources,
+            original_input=source_bundle.input_file,
+        )
+        if not input_source:
+            return f"skill call #{call_index} has ambiguous input lineage"
+        if input_source.startswith("step:"):
+            try:
+                upstream = int(input_source.split(":", 1)[1])
+            except ValueError:
+                return f"skill call #{call_index} has invalid input lineage"
+            if upstream >= call_index:
+                return f"skill call #{call_index} references a non-prior step"
+
+        raw_params = record.get("params") or {}
+        if not isinstance(raw_params, dict):
+            return f"skill call #{call_index} params are not an object"
+        params = dict(raw_params)
+        if record.get("method") is not None and "method" not in params:
+            params["method"] = record.get("method")
+
+        bindings: dict[str, str] = {}
+        for raw_key, value in params.items():
+            key = str(raw_key).strip().replace("-", "_")
+            type_name = _parameter_type(value)
+            base_flag = _parameter_flag_key(key)
+            if not key or not base_flag or not type_name:
+                return (
+                    f"skill call #{call_index} parameter {raw_key!r} has an "
+                    "unsupported name or value type"
+                )
+            cache_key = (key, type(value), value)
+            parameter_index = param_cache.get(cache_key)
+            if parameter_index is None:
+                flag_key = base_flag
+                if flag_key in used_flags:
+                    flag_key = f"step-{call_index}-{base_flag}"
+                    suffix = 2
+                    while flag_key in used_flags:
+                        flag_key = f"step-{call_index}-{base_flag}-{suffix}"
+                        suffix += 1
+                dest = flag_key.replace("-", "_")
+                parameters.append(
+                    AcquisitionParameter(
+                        key=key,
+                        flag=f"--{flag_key}",
+                        dest=dest,
+                        default=value,
+                        type=type_name,
+                        call_indexes=[call_index],
+                    )
+                )
+                parameter_index = len(parameters) - 1
+                param_cache[cache_key] = parameter_index
+                used_flags.add(flag_key)
+            elif call_index not in parameters[parameter_index].call_indexes:
+                parameters[parameter_index].call_indexes.append(call_index)
+            bindings[key] = parameters[parameter_index].dest
+
+        calls.append(
+            AcquisitionCall(
+                index=call_index,
+                skill=recorded_skill,
+                input_source=input_source,
+                parameter_bindings=bindings,
+            )
+        )
+        for name in target_names:
+            handle_sources[name] = call_index
+        return None
+
+    for statement in tree.body:
+        if isinstance(statement, ast.Assign) and _is_oc_run(statement.value):
+            targets = [target.id for target in statement.targets if isinstance(target, ast.Name)]
+            if len(targets) != len(statement.targets) or not targets:
+                return _acquisition_failure(
+                    source_bundle,
+                    f"unsupported oc.run assignment at line {statement.lineno}",
+                )
+            error = register_call(statement.value, targets)
+            if error:
+                return _acquisition_failure(source_bundle, error)
+            continue
+        if isinstance(statement, ast.Expr) and _is_oc_run(statement.value):
+            error = register_call(statement.value, [])
+            if error:
+                return _acquisition_failure(source_bundle, error)
+            continue
+        if isinstance(statement, ast.Assign):
+            value = statement.value
+            if (
+                isinstance(value, ast.Attribute)
+                and value.attr == "adata"
+                and isinstance(value.value, ast.Name)
+                and value.value.id in handle_sources
+                and all(isinstance(target, ast.Name) for target in statement.targets)
+            ):
+                source = f"step:{handle_sources[value.value.id]}"
+                for target in statement.targets:
+                    data_sources[target.id] = source
+                continue
+        if (
+            isinstance(statement, ast.Expr)
+            and isinstance(statement.value, ast.Call)
+            and isinstance(statement.value.func, ast.Name)
+            and statement.value.func.id in {"show", "ReturnAnswer"}
+        ):
+            continue
+        if isinstance(statement, ast.Pass):
+            continue
+        return _acquisition_failure(
+            source_bundle,
+            f"unsupported non-workflow statement at line {getattr(statement, 'lineno', '?')}",
+        )
+
+    if len(calls) != len(records):
+        return _acquisition_failure(
+            source_bundle,
+            f"execution trace contains {len(records)} calls but accepted code proves {len(calls)}",
+        )
+    return AcquisitionAbstraction(
+        strategy="structured-skill-calls-v1",
+        reusable=True,
+        facade_free=True,
+        reason="all executed skill calls and their input lineage were proven from structured trace + AST",
+        source_code_sha256=hashlib.sha256(
+            source_bundle.python_code.encode("utf-8")
+        ).hexdigest(),
+        calls=calls,
+        parameters=parameters,
+        source_steps=list(source_bundle.steps),
+        source_skill_calls=list(source_bundle.skill_calls),
+        warnings=[],
+    )
 
 
 # Flags the promoted-script template already declares (or param identity
@@ -2144,8 +2762,9 @@ class _DemoGateOutcome:
       unimplemented placeholder (MF1: status == SCAFFOLD_STATUS is a
       deliberate "not implemented yet" signal, not a failure) or a promoted
       body that could not run for a reason outside this gate's control
-      (missing dependency/input — MF3/MF6). The skill still enters the
-      catalog at its current validation level.
+      (missing dependency/input — MF3/MF6). A promoted body is quarantined;
+      a first-party placeholder may still enter the developer catalog as a
+      non-routable draft.
     - ``rejected``: a genuine crash, or a result.json that is missing,
       unparseable, or fails the envelope contract. The caller raises so
       ``isolated_workspace`` rmtree's the staging dir and the skill never
@@ -2159,22 +2778,29 @@ class _DemoGateOutcome:
 
 # Exception TYPES (anchored at the start of a traceback line — how Python
 # prints an uncaught exception, e.g. "ModuleNotFoundError: No module named
-# 'x'") that mean "this environment/input limitation is outside the gate's
-# control", not "the promoted code is broken" (MF3/MF6 in the P0/P1 plan):
-#   - ModuleNotFoundError/ImportError: the raw staged subprocess never reaches
-#     `resolve_skill_runtime`'s adaptive-env provisioning (MF3), so a promoted
-#     skill needing a heavy optional dependency is expected to fail here.
-#   - FileNotFoundError: a promoted skill's original demo input can go stale
-#     between the source run and promotion (its autonomous-analysis workspace
-#     may already be cleaned up) — MF6 skips on missing input, not just the
-#     empty-input case our own template's SystemExit guard below catches.
-# A start-of-line anchor (not a bare substring) is deliberate: a genuine bug
-# whose OWN message happens to mention "ImportError" (e.g. a RuntimeError
-# with that word in its text) must not be misclassified as an environment
-# limitation — that would let broken promoted code slip into the catalog.
+# 'x'") that mean "this environment limitation is outside the gate's
+# control", not "the promoted code is broken" (MF3 in the P0/P1 plan):
+# the raw staged subprocess never reaches `resolve_skill_runtime`'s
+# adaptive-env provisioning, so a promoted skill needing a heavy optional
+# dependency is expected to fail here. A start-of-line anchor (not a bare
+# substring) is deliberate: a genuine bug whose OWN message happens to
+# mention "ImportError" (e.g. a RuntimeError with that word in its text)
+# must not be misclassified as an environment limitation — that would let
+# broken promoted code slip into the catalog.
 _DEMO_GATE_SKIP_EXCEPTION_TYPES = re.compile(
-    r"^(?:ModuleNotFoundError|ImportError|FileNotFoundError):", re.MULTILINE
+    r"^(?:ModuleNotFoundError|ImportError):", re.MULTILINE
 )
+# FileNotFoundError is deliberately NOT in the type-name set above: unlike a
+# missing optional dependency, a FileNotFoundError can come from ANYTHING the
+# promoted body references — including a typo'd internal path in the
+# model-authored code, which is a real bug, not an environment limitation.
+# MF6's actual intent was narrower: "a promoted skill's original demo input
+# can go stale between the source run and promotion" — i.e. only a
+# FileNotFoundError that references that SPECIFIC known path (threaded in as
+# ``original_input_file``, the same ``DEFAULT_INPUT_FILE`` --demo reuses per
+# render_promoted_skill_script) should be tolerated as a skip. Any other
+# FileNotFoundError is rejected like any other genuine crash.
+_DEMO_GATE_FILE_NOT_FOUND = re.compile(r"^FileNotFoundError:", re.MULTILINE)
 # The exact SystemExit message our own promoted-script template raises when
 # no demo input is available at all (render_promoted_skill_script) — a plain
 # substring is fine here since this is a long, specific, first-party string,
@@ -2182,33 +2808,102 @@ _DEMO_GATE_SKIP_EXCEPTION_TYPES = re.compile(
 _DEMO_GATE_SKIP_MESSAGE = "Provide --input, or use --demo to reuse the original autonomous-analysis input."
 
 
-def _demo_gate_skip_reason(combined_output: str) -> str | None:
+def _demo_gate_skip_reason(combined_output: str, original_input_file: str = "") -> str | None:
     """Classify a nonzero --demo exit as an environment limitation, if any."""
     match = _DEMO_GATE_SKIP_EXCEPTION_TYPES.search(combined_output)
     if match:
         return f"environment/input limitation ({match.group(0)[:-1]})"
     if _DEMO_GATE_SKIP_MESSAGE in combined_output:
         return "no demo input available"
+    if (
+        original_input_file
+        and _DEMO_GATE_FILE_NOT_FOUND.search(combined_output)
+        and original_input_file in combined_output
+    ):
+        return "environment/input limitation (stale original input, FileNotFoundError)"
     return None
 
 
-def _run_demo_smoke_gate(script_path: Path, output_dir: Path) -> _DemoGateOutcome:
+def _run_demo_smoke_gate(
+    script_path: Path,
+    output_dir: Path,
+    *,
+    require_sandbox: bool = False,
+    input_file: str = "",
+) -> _DemoGateOutcome:
     """Run ``script_path --demo`` once in ``output_dir`` and classify the result.
 
-    This is demo *validation*, not a sandbox (MF4): it runs in the base
-    interpreter with only ``PYTHONPATH``/``PYTHONNOUSERSITE`` set, mirroring
-    ``runner.py``'s subprocess env — no OS-level isolation, and no
-    adaptive-env provisioning (a raw staged subprocess never reaches
-    ``resolve_skill_runtime`` — MF3). Sandboxing model-authored promoted code
-    before execution is a separate, not-yet-built P2 concern.
+    Two isolation tiers, matching the plan's MF4 decision (demo validation
+    is not automatically sandbox validation, but untrusted code must be):
+
+    - ``require_sandbox=False`` — a freshly-scaffolded or corpus-derived
+      body (self-authored, not lifted from an untrusted source): light demo
+      validation is enough. Runs in the base interpreter with only
+      ``PYTHONPATH``/``PYTHONNOUSERSITE`` set, mirroring ``runner.py``'s
+      subprocess env — no adaptive-env provisioning either (a raw staged
+      subprocess never reaches ``resolve_skill_runtime`` — MF3).
+    - ``require_sandbox=True`` — a skill promoted verbatim from an
+      autonomous run, i.e. UNTRUSTED model-authored code: must go through an
+      OS-level sandbox before its result is trusted. Reuses ADR 0032's
+      already-built bwrap envelope (``omicsclaw.autonomous.kernel_envelope``
+      — pure argv/env builders, decoupled from the mini-agent's persistent
+      kernel loop). When bwrap is unavailable this does NOT fall back to an
+      unsandboxed run: it returns ``skipped`` (the same "don't block
+      creation, but don't award false credit" philosophy already used below
+      for a missing optional dependency or missing input).
+
+    ``input_file`` (the promoted bundle's original input path, when any) is
+    threaded through for two reasons: it is the sandbox's one legitimate
+    external read target, and it is the only path whose FileNotFoundError is
+    tolerated as a "stale input" skip rather than a rejection (see
+    ``_demo_gate_skip_reason``).
     """
     env = os.environ.copy()
     env["PYTHONPATH"] = str(OMICSCLAW_DIR) + os.pathsep + env.get("PYTHONPATH", "")
     env.setdefault("PYTHONNOUSERSITE", "1")
 
+    argv = [sys.executable, str(script_path), "--demo", "--output", str(output_dir)]
+
+    if require_sandbox:
+        from omicsclaw.autonomous.kernel_envelope import (
+            EnvelopeConfig,
+            build_bwrap_argv,
+            build_launch_env,
+            envelope_available,
+        )
+
+        if not envelope_available():
+            return _DemoGateOutcome(
+                verdict="skipped",
+                reason=(
+                    "bwrap unavailable; cannot sandbox untrusted promoted code "
+                    "before trusting its --demo run"
+                ),
+            )
+
+        input_path = Path(input_file) if input_file else None
+        read_roots = []
+        if input_path is not None:
+            read_roots = [input_path if input_path.is_dir() else input_path.parent]
+
+        # bwrap's --bind requires the source to already exist on the host;
+        # the promoted script itself creates output_dir on startup, which is
+        # too late for the bind to be set up.
+        output_dir.mkdir(parents=True, exist_ok=True)
+        config = EnvelopeConfig(
+            workspace_root=output_dir,
+            ipc_dir=output_dir,
+            repo_root=OMICSCLAW_DIR,
+            read_roots=read_roots,
+            allow_network=False,
+            extra_env={"PYTHONPATH": str(OMICSCLAW_DIR)},
+        )
+        argv = build_bwrap_argv(config, argv)
+        env = build_launch_env(config)
+
     try:
         proc = subprocess.run(
-            [sys.executable, str(script_path), "--demo", "--output", str(output_dir)],
+            argv,
             cwd=str(OMICSCLAW_DIR),
             env=env,
             capture_output=True,
@@ -2223,7 +2918,7 @@ def _run_demo_smoke_gate(script_path: Path, output_dir: Path) -> _DemoGateOutcom
 
     if proc.returncode != 0:
         combined = f"{proc.stdout}\n{proc.stderr}"
-        skip_reason = _demo_gate_skip_reason(combined)
+        skip_reason = _demo_gate_skip_reason(combined, original_input_file=input_file)
         if skip_reason is not None:
             return _DemoGateOutcome(verdict="skipped", reason=f"--demo exited {proc.returncode}: {skip_reason}")
         return _DemoGateOutcome(
@@ -2299,6 +2994,31 @@ python {script_name} --demo --output <output_dir>
 {summary_json}
 ```
 {lifted_note}"""
+
+
+def _render_quarantine_evidence(script_name: str, gate: _DemoGateOutcome) -> str:
+    """Durable explanation for keeping an unverified promotion undiscoverable."""
+    return f"""# Acquisition Quarantine Evidence
+
+This promoted skill contains model-authored code and did not earn admission to
+the discoverable skill tree because its required sandboxed `--demo` gate was
+skipped.
+
+**Attempted command:**
+
+```bash
+python {script_name} --demo --output <output_dir>
+```
+
+**Gate verdict:** `skipped`
+
+**Reason:** {gate.reason}
+
+Re-run the acquisition gate with the OS sandbox available, or perform an
+explicit human review and validation before moving this skill into a domain
+directory. Files under `skills/{QUARANTINE_DIRNAME}/` are intentionally ignored
+by registry discovery and automatic routing.
+"""
 
 
 def _render_parameter_lift_evidence(lift_result: LiftResult, *, fallback_reason: str | None = None) -> str:
@@ -2385,26 +3105,24 @@ def create_skill_scaffold(
 
     # P5 (acquisition-plan.md §P5): corpus-derived scaffolding is a third,
     # independent branch — mutually exclusive with the promotion path since a
-    # paper/tool-docs text has no executable python_code to promote. Checked
-    # against the RAW args, before ANY resolution/loading logic runs:
-    # promote_from_latest's own resolution below can raise FileNotFoundError
-    # (when no prior autonomous run exists) before resolved_source_dir is ever
-    # set, which would mask this check if it ran any later (found by an
-    # adversarial codex review — resolved_source_dir-is-not-None was not a
-    # reliable proxy for "the caller asked for a promotion").
+    # paper/tool-docs text has no executable python_code to promote. Check the
+    # raw arguments before source loading and before rejecting the legacy global
+    # latest flag, so callers always get the most specific contract error.
     if from_corpus and (source_analysis_dir or promote_from_latest):
         raise ValueError(
             "from_corpus is mutually exclusive with source_analysis_dir/promote_from_latest."
+        )
+
+    if promote_from_latest:
+        raise ValueError(
+            "promote_from_latest is disabled because a global mtime scan can select "
+            "another session's run; provide the exact source_analysis_dir instead."
         )
 
     if source_analysis_dir:
         resolved_source_dir = Path(source_analysis_dir)
         if not resolved_source_dir.is_absolute():
             resolved_source_dir = (OMICSCLAW_DIR / resolved_source_dir).resolve()
-    elif promote_from_latest:
-        resolved_source_dir = find_latest_autonomous_analysis(output_root=output_root)
-        if resolved_source_dir is None:
-            raise FileNotFoundError("No autonomous analysis output was found to promote.")
 
     if resolved_source_dir is not None:
         source_bundle = _load_autonomous_bundle(resolved_source_dir)
@@ -2467,8 +3185,9 @@ def create_skill_scaffold(
         "doc_ref": resolved_doc_ref,
     }
     relative_created_paths: list[Path] = []
-    manifest_path = final_skill_dir / "manifest.json"
-    completion_report_path = final_skill_dir / COMPLETION_REPORT_FILENAME
+    committed_skill_dir = final_skill_dir
+    quarantined = False
+    quarantine_reason_path = ""
 
     with isolated_workspace(STAGING_ROOT, prefix="skill-scaffold") as staging_root:
         skill_dir = staging_root / resolved_skill_name
@@ -2488,28 +3207,39 @@ def create_skill_scaffold(
         # placeholder script is stdlib-only, so its deps stay empty.
         normalized_code = ""
         lift_result: LiftResult | None = None
+        abstraction: AcquisitionAbstraction | None = None
+        abstraction_applied = False
+        abstraction_fallback_reason = ""
         corpus_method = "default"
         if source_bundle is not None:
             normalized_code = _normalize_promoted_code(source_bundle.python_code, source_bundle.source_dir)
-            # P2a (acquisition-plan.md §P2): lift literal oc.run(...) kwargs into
-            # CLI flags so a mini-agent-promoted skill isn't frozen to a verbatim
-            # replay of its original thresholds. Notebook-engine bundles (no
-            # facade, no `oc`) have nothing to lift. If the lift breaks the
-            # script, the demo gate below (rejected verdict) triggers a fallback
-            # to `normalized_code` unchanged.
-            lift_result = (
-                lift_oc_run_literals(normalized_code)
-                if source_bundle.engine == "mini_agent"
-                else LiftResult(code=normalized_code)
-            )
-            script_text = render_promoted_skill_script(
-                skill_name=resolved_skill_name,
-                domain=domain,
-                summary=summary or source_bundle.goal,
-                source_bundle=source_bundle,
-                body_code=lift_result.code,
-                lifted_params=lift_result.lifted,
-            )
+            abstraction = build_acquisition_abstraction(source_bundle)
+            if abstraction.reusable:
+                script_text = render_structured_promoted_skill_script(
+                    skill_name=resolved_skill_name,
+                    domain=domain,
+                    summary=summary or source_bundle.goal,
+                    source_bundle=source_bundle,
+                    abstraction=abstraction,
+                )
+                abstraction_applied = True
+            else:
+                # P2a fallback for arbitrary Python whose workflow semantics
+                # cannot be proven from trace + AST.  It remains facade-backed,
+                # sandbox-gated, and its narrow literal kwargs are still lifted.
+                lift_result = (
+                    lift_oc_run_literals(normalized_code)
+                    if source_bundle.engine == "mini_agent"
+                    else LiftResult(code=normalized_code)
+                )
+                script_text = render_promoted_skill_script(
+                    skill_name=resolved_skill_name,
+                    domain=domain,
+                    summary=summary or source_bundle.goal,
+                    source_bundle=source_bundle,
+                    body_code=lift_result.code,
+                    lifted_params=lift_result.lifted,
+                )
             deps_python = _scan_third_party_imports(script_text)
         elif corpus_bundle is not None:
             corpus_method = (_unique(methods or []) or ["default"])[0]
@@ -2605,6 +3335,7 @@ def create_skill_scaffold(
                 "source_result_summary.md": resolved_source_dir / "result_summary.md",
                 "source_analysis_plan.md": resolved_source_dir / "analysis_plan.md",
                 "source_web_sources.md": resolved_source_dir / "web_sources.md",
+                "source_skill_calls.jsonl": resolved_source_dir / "skill_calls.jsonl",
                 "source_manifest.json": resolved_source_dir / "manifest.json",
                 "source_completion_report.json": resolved_source_dir / COMPLETION_REPORT_FILENAME,
             }
@@ -2720,8 +3451,49 @@ def create_skill_scaffold(
         # isolated_workspace rmtree's the staging dir (never reaches move); a
         # skip (placeholder / env-limited promoted body) proceeds unchanged;
         # an earn upgrades validation.level and rewrites skill.yaml in place.
-        demo_gate = _run_demo_smoke_gate(script_path, staging_root / "_demo_smoke_gate_output")
+        # require_sandbox=True whenever this is a promotion (source_bundle is
+        # not None): that body is untrusted model-authored code, not a
+        # self-authored scaffold/corpus template.
+        demo_gate = _run_demo_smoke_gate(
+            script_path,
+            staging_root / "_demo_smoke_gate_output",
+            require_sandbox=source_bundle is not None,
+            input_file=source_bundle.input_file if source_bundle is not None else "",
+        )
         lift_fallback_reason: str | None = None
+        if (
+            demo_gate.verdict == "rejected"
+            and abstraction is not None
+            and abstraction_applied
+        ):
+            # The structured translation is useful only if it independently
+            # clears the same sandboxed execution gate.  On any semantic
+            # regression, retry the untouched accepted code once and retain
+            # the reason in acquisition_abstraction.json.
+            abstraction_fallback_reason = demo_gate.reason
+            verbatim_text = render_promoted_skill_script(
+                skill_name=resolved_skill_name,
+                domain=domain,
+                summary=summary or source_bundle.goal,
+                source_bundle=source_bundle,
+                body_code=normalized_code,
+                lifted_params=[],
+            )
+            script_path.write_text(verbatim_text, encoding="utf-8")
+            script_text = verbatim_text
+            abstraction_applied = False
+            manifest.deps.python = _scan_third_party_imports(verbatim_text)
+            (skill_dir / "skill.yaml").write_text(manifest.to_yaml(), encoding="utf-8")
+            (references_dir / "parameters.md").write_text(
+                _render_parameters_md_from_manifest(manifest, verbatim_text),
+                encoding="utf-8",
+            )
+            demo_gate = _run_demo_smoke_gate(
+                script_path,
+                staging_root / "_demo_smoke_gate_output_abstraction_fallback",
+                require_sandbox=True,
+                input_file=source_bundle.input_file,
+            )
         if demo_gate.verdict == "rejected" and lift_result is not None and lift_result.lifted:
             # P2a: the literal-lift pass can silently break otherwise-working
             # code (acquisition-plan.md §3 point 5) — fall back to the
@@ -2743,10 +3515,32 @@ def create_skill_scaffold(
                 _render_parameters_md_from_manifest(manifest, verbatim_text), encoding="utf-8"
             )
             lift_fallback_reason = demo_gate.reason
-            demo_gate = _run_demo_smoke_gate(script_path, staging_root / "_demo_smoke_gate_output_fallback")
+            demo_gate = _run_demo_smoke_gate(
+                script_path,
+                staging_root / "_demo_smoke_gate_output_fallback",
+                require_sandbox=True,
+                input_file=source_bundle.input_file,
+            )
             lift_result = LiftResult(code=normalized_code, skipped=[f"fell back to verbatim: {lift_fallback_reason}"])
         if demo_gate.verdict == "rejected":
             raise RuntimeError(f"Skill scaffold failed the --demo smoke gate: {demo_gate.reason}")
+
+        if abstraction is not None:
+            (references_dir / "acquisition_abstraction.json").write_text(
+                json.dumps(
+                    abstraction.to_dict(
+                        applied=abstraction_applied,
+                        fallback_reason=abstraction_fallback_reason,
+                    ),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            relative_created_paths.append(
+                Path("references") / "acquisition_abstraction.json"
+            )
 
         if source_bundle is not None and source_bundle.engine == "mini_agent" and lift_result is not None:
             (references_dir / "parameter_lift.md").write_text(
@@ -2756,7 +3550,7 @@ def create_skill_scaffold(
             relative_created_paths.append(Path("references") / "parameter_lift.md")
 
         if demo_gate.verdict == "earned":
-            from .schema import Validation
+            from .schema import Lifecycle, Validation
 
             evidence_path = references_dir / "validation.md"
             evidence_path.write_text(
@@ -2766,24 +3560,49 @@ def create_skill_scaffold(
             manifest.validation = Validation(
                 level="demo-validated", evidence=["references/validation.md"]
             )
+            # A real implementation that passed its source-appropriate gate is
+            # eligible for normal routing. Placeholders never reach ``earned``
+            # because their result status is the explicit scaffold sentinel.
+            manifest.lifecycle = Lifecycle(status="mvp")
             (skill_dir / "skill.yaml").write_text(manifest.to_yaml(), encoding="utf-8")
 
-        shutil.move(str(skill_dir), str(final_skill_dir))
+        if source_bundle is not None and demo_gate.verdict == "skipped":
+            quarantined = True
+            committed_skill_dir = (
+                resolved_root / QUARANTINE_DIRNAME / domain / resolved_skill_name
+            )
+            if committed_skill_dir.exists():
+                raise FileExistsError(
+                    f"Quarantined skill directory already exists: {committed_skill_dir}"
+                )
+            committed_skill_dir.parent.mkdir(parents=True, exist_ok=True)
+            quarantine_evidence = references_dir / "quarantine.md"
+            quarantine_evidence.write_text(
+                _render_quarantine_evidence(script_name, demo_gate), encoding="utf-8"
+            )
+            relative_created_paths.append(Path("references") / "quarantine.md")
+            quarantine_reason_path = str(
+                committed_skill_dir / "references" / "quarantine.md"
+            )
 
-    created_files = [str(final_skill_dir / rel_path) for rel_path in relative_created_paths]
+        shutil.move(str(skill_dir), str(committed_skill_dir))
+
+    created_files = [str(committed_skill_dir / rel_path) for rel_path in relative_created_paths]
+    manifest_path = committed_skill_dir / "manifest.json"
+    completion_report_path = committed_skill_dir / COMPLETION_REPORT_FILENAME
 
     refreshed = False
-    if resolved_root.resolve() == SKILLS_DIR.resolve():
+    if not quarantined and resolved_root.resolve() == SKILLS_DIR.resolve():
         refreshed = refresh_registry()
 
     return SkillScaffoldResult(
         skill_name=resolved_skill_name,
         domain=domain,
-        skill_dir=str(final_skill_dir),
-        script_path=str(final_skill_dir / script_name),
-        skill_md_path=str(final_skill_dir / "SKILL.md"),
-        test_path=str(final_skill_dir / "tests" / f"test_{script_name}" if create_tests else ""),
-        spec_path=str(final_skill_dir / "scaffold_spec.json"),
+        skill_dir=str(committed_skill_dir),
+        script_path=str(committed_skill_dir / script_name),
+        skill_md_path=str(committed_skill_dir / "SKILL.md"),
+        test_path=str(committed_skill_dir / "tests" / f"test_{script_name}" if create_tests else ""),
+        spec_path=str(committed_skill_dir / "scaffold_spec.json"),
         manifest_path=str(manifest_path),
         completion_report_path=str(completion_report_path),
         completion=completion_report.to_dict(),
@@ -2791,20 +3610,28 @@ def create_skill_scaffold(
         registry_refreshed=refreshed,
         demo_gate_verdict=demo_gate.verdict,
         demo_gate_reason=demo_gate.reason,
+        quarantined=quarantined,
+        quarantine_reason_path=quarantine_reason_path,
     )
 
 
 __all__ = [
+    "AcquisitionAbstraction",
+    "AcquisitionCall",
+    "AcquisitionParameter",
     "AutonomousAnalysisBundle",
     "CorpusDerivedBundle",
     "CorpusParamCandidate",
     "SKILL_TEMPLATE_PATH",
     "SKILLS_DIR",
+    "QUARANTINE_DIRNAME",
     "VALID_DOMAINS",
     "SkillScaffoldResult",
+    "build_acquisition_abstraction",
     "create_skill_scaffold",
     "find_latest_autonomous_analysis",
     "infer_skill_name",
     "refresh_registry",
+    "render_structured_promoted_skill_script",
     "slugify_skill_name",
 ]

@@ -2,8 +2,15 @@
 
 ## Status
 
-**Proposed / Draft (2026-06-30).** Co-designed with the maintainer and
-cross-validated by Codex (gpt-5.5, xhigh) against the live tree. Extends
+**Accepted for the v2 representation contract (status reconciled 2026-07-13).**
+The 95/95 rollout, single-source generators, and CI checks described below are
+implemented. The formal 95-skill tree now also fails closed on invalid v2
+manifests. Typed parameters/composition (v3) and full cross-layer security
+governance consumption remain separate, unaccepted work;
+see the
+[skill audit acceptance baseline](../reviews/2026-07-13-skill-audit-system-design-assessment.md).
+The decision was co-designed with the maintainer and cross-validated by Codex
+(gpt-5.5, xhigh) against the live tree. Extends
 [ADR 0030](0030-first-class-skill-type-system.md) (first-class skill types) and
 supersedes the *frontmatter + `parameters.yaml` sidecar* split it inherited.
 Companion to the lifecycle redesign proposal
@@ -15,10 +22,12 @@ Companion to the lifecycle redesign proposal
 `build/skillyaml_pilot/` (non-destructive; v1 files untouched). **v2 wiring landed
 (dual-track):** `lazy_metadata.LazySkillMetadata` prefers `skill.yaml` behind its
 existing property surface (so `registry.py` and all consumers get v2 transparently),
-falling back to v1 when absent or invalid; discovery + `load_lightweight` accept a
-`skill.yaml`-only dir; `scripts/validate_skill_yaml.py --check` is a CI gate;
-`tests/test_registry_v2.py` covers v2-read / v2-wins / invalid-v2-fallback / registry
-load. The one-way generators are now landed — catalog/INDEX/routing (dual-track) +
+falling back to v1 when absent. Invalid v2 fails closed in the formal `SKILLS_DIR`;
+only non-canonical external/legacy roots retain migration fallback. Discovery +
+`load_lightweight` accept a `skill.yaml`-only dir;
+`scripts/validate_skill_yaml.py --check` is a CI gate; `tests/test_registry_v2.py`
+covers v2-read / v2-wins / formal fail-closed / external fallback / registry load.
+The one-way generators are now landed — catalog/INDEX/routing (dual-track) +
 `references/parameters.md` (`generate_parameters_md.py`) + the **narrative SKILL.md
 header & I/O summary** (`scripts/generate_skill_md.py` + `omicsclaw/skill/skill_md.py`),
 fed by `interface` auto-population (`omicsclaw/skill/interface_extract.py`). The
@@ -311,7 +320,7 @@ registry to all domains or make "default pip" a documented, conscious fallback.
 **Hardening (this change)**
 - ✅ `pydantic>=2,<3` promoted to pip core deps (was environment.yml-only) so the core skill-loading path never silently degrades.
 - ✅ `source` ("v2"/"v1") exposed in registry `skill_info` for detection.
-- ⬜ Add an `oc doctor` / CI check that FAILS when a `skill.yaml` is present but the skill loads as `source != "v2"` (invalid v2 silently treated as v1) — fallback-to-v1 is migration-period protection, not post-launch correctness.
+- ✅ Formal `SKILLS_DIR` loading now FAILS when a present `skill.yaml` is invalid; external/legacy roots retain the migration fallback and have a dedicated regression test.
 - ✅ Settle `summary.skip_when` parity — enforced in `_lint_v2` (≥1 rule), mirroring v1's required Skip clause.
 - ⬜ `_lint_v2` should call `_check_requires_complete` for v2 lint parity (audit is now dual-track) — deferred; standalone `audit_skill_requires --check` covers it meanwhile (and `_check_requires_complete` has a sandbox `relative_to(SKILLS)` entanglement to untangle first).
 

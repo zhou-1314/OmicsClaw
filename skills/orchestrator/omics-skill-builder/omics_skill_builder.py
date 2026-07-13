@@ -12,13 +12,18 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from omicsclaw.skill.scaffolder import create_skill_scaffold
+from omicsclaw.skill.scaffolder import create_skill_scaffold  # noqa: E402
 
 SKILL_NAME = "omics-skill-builder"
-SKILL_VERSION = "0.5.0"
+SKILL_VERSION = "0.5.1"
 
 
 def parse_args() -> argparse.Namespace:
+    if "--promote-from-latest" in sys.argv[1:]:
+        raise SystemExit(
+            "--promote-from-latest is disabled; provide the exact "
+            "--source-analysis-dir to preserve run/session identity."
+        )
     parser = argparse.ArgumentParser(description="Create an OmicsClaw skill scaffold.")
     parser.add_argument("--output", required=True, help="Directory for the scaffold report.")
     parser.add_argument("--request", help="Original user request describing the desired skill.")
@@ -43,12 +48,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--summary", default="", help="One-line skill summary.")
     parser.add_argument("--source-analysis-dir", default="", help="Promote a successful autonomous analysis output directory into the new skill.")
-    parser.add_argument("--promote-from-latest", action="store_true", help="Promote the most recent autonomous analysis output.")
     parser.add_argument(
         "--from-paper", default="",
         help="Path to a text file with paper content; extracts sourced methodology "
         "candidates into the scaffold's hints (P5, mutually exclusive with "
-        "--from-tool-docs / --source-analysis-dir / --promote-from-latest).",
+        "--from-tool-docs / --source-analysis-dir).",
     )
     parser.add_argument(
         "--from-tool-docs", default="",
@@ -95,7 +99,6 @@ def main() -> None:
         input_formats = args.input_formats or ["AnnData with spatial coordinates"]
         primary_outputs = args.primary_outputs or ["processed.h5ad", "figures/domain_map.png"]
         source_analysis_dir = args.source_analysis_dir
-        promote_from_latest = args.promote_from_latest
     else:
         if not args.request:
             raise SystemExit("--request is required unless --demo is used.")
@@ -106,7 +109,6 @@ def main() -> None:
         domain = args.domain
         summary = args.summary
         source_analysis_dir = args.source_analysis_dir
-        promote_from_latest = args.promote_from_latest
         trigger_keywords = args.trigger_keywords
         methods = args.methods
         input_formats = args.input_formats
@@ -118,7 +120,6 @@ def main() -> None:
         skill_name=skill_name,
         summary=summary,
         source_analysis_dir=source_analysis_dir,
-        promote_from_latest=promote_from_latest,
         input_formats=input_formats,
         primary_outputs=primary_outputs,
         methods=methods,
@@ -132,6 +133,15 @@ def main() -> None:
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    quarantined = bool(getattr(result, "quarantined", False))
+    admission = "quarantined" if quarantined else "admitted"
+    admission_note = (
+        "The promoted code remains outside registry/routing until the required "
+        "sandboxed demo gate or explicit human validation succeeds."
+        if quarantined
+        else "The scaffold is available under its governed lifecycle status."
+    )
+
     scaffold_summary = f"""# Omics Skill Builder Scaffold
 
 Created a new scaffolded OmicsClaw skill.
@@ -139,7 +149,10 @@ Created a new scaffolded OmicsClaw skill.
 - Skill: `{result.skill_name}`
 - Domain: `{result.domain}`
 - Skill directory: `{result.skill_dir}`
+- Admission: `{admission}`
 - Registry refreshed: `{result.registry_refreshed}`
+
+{admission_note}
 """
 
     report = """# Scaffold Report

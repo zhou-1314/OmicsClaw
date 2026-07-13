@@ -593,7 +593,7 @@ def test_output_contract_paths_must_exist_in_script(tmp_path: Path) -> None:
 
 def test_output_contract_framework_files_exempt(tmp_path: Path) -> None:
     """`report.md`, `result.json`, `processed.h5ad`, `commands.sh`, etc. are
-    written by the framework helper, NOT the skill script — exempt them."""
+    written by framework helpers, NOT the skill script — exempt them."""
     skill = _write_v2_skill(
         tmp_path / "demo",
         script_text=_flag_script(),  # Script writes nothing custom
@@ -601,7 +601,8 @@ def test_output_contract_framework_files_exempt(tmp_path: Path) -> None:
     _write_output_contract(
         skill,
         "## Output\n- `report.md`\n- `result.json`\n- `processed.h5ad`\n"
-        "- `commands.sh`\n- `requirements.txt`\n- `checksums.sha256`\n",
+        "- `commands.sh`\n- `requirements.txt`\n- `checksums.sha256`\n"
+        "- `references/quarantine.md`\n",
     )
     errors = skill_lint.lint_skill(skill)
     assert not any("output_contract.md:" in e for e in errors), errors

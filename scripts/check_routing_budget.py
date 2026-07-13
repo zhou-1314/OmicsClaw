@@ -2,8 +2,8 @@
 """Enforce the routing-context token budget.
 
 Runs the same measurement as ``scripts/measure_routing_tokens.py`` and
-compares each field against the ceiling declared in
-``build/routing-baselines/ceiling.json``. Exits 1 when any ceiling is
+compares each field against the committed ceiling declared in
+``tests/fixtures/routing_budget/ceiling.json``. Exits 1 when any ceiling is
 exceeded so CI can block PRs that silently inflate the LLM's always-loaded
 context.
 
@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT))
 
 from scripts.measure_routing_tokens import measure  # noqa: E402
 
-CEILING_PATH = ROOT / "build" / "routing-baselines" / "ceiling.json"
+CEILING_PATH = ROOT / "tests" / "fixtures" / "routing_budget" / "ceiling.json"
 
 
 def _load_ceilings() -> dict[str, int]:
@@ -81,7 +81,7 @@ def main() -> int:
         print()
         print(
             "If the growth is intentional, raise the ceiling in "
-            "`build/routing-baselines/ceiling.json` and justify it in the PR."
+            "`tests/fixtures/routing_budget/ceiling.json` and justify it in the PR."
         )
         return 1
 

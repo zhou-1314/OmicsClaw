@@ -1,5 +1,13 @@
 # OmicsClaw 结构感知技能检索（Structure-Aware Retrieval）可行性评估与优化计划
 
+> **文档角色（2026-07-13 校准）：**本文是 retrieval 的可行性与实施方案，不是落地证明。
+> 当前 resolver 仍以 domain-first 词法评分为主，但 2026-07-13 首轮修复已接入结构化
+> `skip_when` redirect、lifecycle filter 和 validation tie-break。2026-07-13 又落地了
+> 26-case、8-domain 的版本化 routing oracle，以及 precision@1/top-3 recall/domain/
+> decision/alias-hallucination 全局与逐域门；preconditions 与候选兼容图仍未落地。当前验收状态以
+> [`2026-07-13-skill-audit-system-design-assessment.md`](../reviews/2026-07-13-skill-audit-system-design-assessment.md)
+> §5/§8 为准。
+>
 > 状态：草案 v0.2（v0.1 经 Codex/gpt-5.5(xhigh) 独立审阅，已纳入其"必须修正"6 项 + "建议优化"5 项；全记录见附录 C → 待维护者审核）
 > 作者：OmicsClaw 维护团队（在 Claude 协助下，基于对三个外部参考系统 + 本仓 `omicsclaw/skill/` 的并行代码级审计生成）
 > 日期：2026-06-30
@@ -199,6 +207,23 @@ A.outputs.files:[processed.h5ad]                          · 出处: matched_out
 - 风险：标注语料需领域人力；trace 需有真实使用日志。
 - 验收：eval 可重复产出 baseline 数值；CI 预算门转绿；13 技能可达性 eval 命中率显著上升。
 - **决策门**：若 baseline precision@1 已很高且复合查询/前置错误占比低 → (A)/(B) 收益有限，可仅做 Phase 1 的 schema 收尾而暂缓 (A)。
+
+**2026-07-13 落地状态（Phase 0 retrieval truth 已验收）：**
+
+- `tests/fixtures/routing_oracle/v1.json` 固化 24 个预期行为 case，每个 8-domain 至少 3 条，
+  并覆盖 route/no-skill boundary；fixture validation 拒绝未知域、非 canonical alias、域错配、
+  重复 ID 和缺失阈值。
+- `omicsclaw.skill.routing_oracle` 与 `scripts/evaluate_routing_oracle.py` 输出 precision@1、
+  top-3 recall、domain accuracy、decision accuracy、hallucinated alias rate，以及逐域同类指标；
+  全局或任一域低于门槛均非零退出，已接入 PR CI。
+- 当前 v1 结果：全局五项均 `1.000`（alias hallucination `0.000`），8 域逐域 top1/top3/
+  domain/decision 均 `1.000`。该数值只描述 26-case 人工 oracle，不外推为真实流量 100%。
+- resolver 的相应根因修复包括：取消硬编码分析词表的前置误杀、domain-size 累加偏置、
+  泛化 legacy alias 跨域抢占；增加显式 domain/task/control-plane 软信号，并把 literature
+  自身的检索请求判为 exact coverage。
+
+Phase 0 完成不代表结构检索完成：RET-04 precondition penalty 与 RET-05 candidate DAG/topo
+chain 仍是下一主线，dense retrieval 仍不应提前启用。
 
 ### Phase 1 — 声明式结构落地（拆 1a 字段 / 1b 内容质量）｜工作量 M｜优先级 高
 **目标**：把"结构感知需要的可过滤字段"真正物化——三个 repo 都缺、OmicsClaw 必须先有的地基。

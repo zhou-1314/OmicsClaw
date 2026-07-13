@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from omicsclaw.skill.lazy_metadata import LazySkillMetadata
 from omicsclaw.skill.registry import OmicsRegistry
 from omicsclaw.skill.schema import parse_skill_manifest
@@ -109,6 +111,21 @@ def test_invalid_v2_falls_back_to_v1(tmp_path):
     assert lazy.trigger_keywords == ["v1kw"]
 
 
+def test_invalid_v2_fails_closed_in_strict_mode(tmp_path):
+    sd = tmp_path / "spatial-demo"
+    sd.mkdir(parents=True)
+    (sd / "skill.yaml").write_text("schema_version: 2\nid: x\n", encoding="utf-8")
+    (sd / "SKILL.md").write_text(
+        "---\nname: spatial-demo\ndescription: legacy fallback must not mask invalid v2\n"
+        "---\n# body\n",
+        encoding="utf-8",
+    )
+
+    lazy = LazySkillMetadata(sd, strict_v2=True)
+    with pytest.raises(ValueError):
+        _ = lazy.name
+
+
 def test_registry_load_all_consumes_v2(tmp_path):
     skills = tmp_path / "skills"
     sd = skills / "spatial" / "spatial-demo"
@@ -124,5 +141,30 @@ def test_registry_load_all_consumes_v2(tmp_path):
     assert info["requires"] == ["scanpy", "squidpy"]
     assert info["trigger_keywords"] == ["demo", "v2 wiring"]
     assert info["validation_level"] == "fixture-validated"
+    assert info["origin"] == "human"
+    assert info["lifecycle_status"] == "mvp"
+    assert info["superseded_by"] == ""
+    assert info["skip_when"] == [{"condition": "single-cell data", "use": "sc-de"}]
     assert info["saves_h5ad"] is True
     assert info["description"].startswith("Load when demoing v2 wiring")
+
+
+def test_registry_propagates_governance_fields(tmp_path):
+    skills = tmp_path / "skills"
+    sd = skills / "spatial" / "spatial-demo"
+    _write_v2(
+        sd,
+        _v2_doc(
+            lifecycle={"status": "deprecated", "superseded_by": "spatial-next"},
+            provenance={"origin": "promoted"},
+        ),
+    )
+    (sd / "spatial_demo.py").write_text("def main(argv=None):\n    pass\n", encoding="utf-8")
+
+    reg = OmicsRegistry()
+    reg.load_all(skills)
+
+    info = reg.skills["spatial-demo"]
+    assert info["origin"] == "promoted"
+    assert info["lifecycle_status"] == "deprecated"
+    assert info["superseded_by"] == "spatial-next"

@@ -184,10 +184,13 @@ def test_non_corpus_skill_with_arbitrary_hints_is_never_flagged(tmp_path):
     assert not any("source_ref" in e for e in errs)
 
 
-def test_missing_source_corpus_txt_skips_span_check_not_fails(tmp_path):
-    # File-exists-guarded (mirrors _check_allowed_extra_flags): a transitional
-    # corpus skill without the persisted raw text is tolerated for the span
-    # check specifically, though the structural checks still apply.
+def test_missing_source_corpus_txt_is_rejected(tmp_path):
+    # create_skill_scaffold(from_corpus=...) always writes this file, so a
+    # corpus-origin skill without it can only mean the persisted evidence was
+    # deleted after the fact — exactly the anti-fabrication bypass the iron
+    # rule must catch, not tolerate. (Unlike _check_allowed_extra_flags's
+    # file-exists tolerance, there's no legitimate "predates the rule" case
+    # here.)
     sd = _write(
         tmp_path / "spatial-demo",
         _v2_doc(
@@ -197,7 +200,7 @@ def test_missing_source_corpus_txt_skips_span_check_not_fails(tmp_path):
         corpus_text=None,  # no references/source_corpus.txt written
     )
     errs = skill_lint.lint_skill(sd)
-    assert not any("does not slice out its own quote" in e for e in errs)
+    assert any("source_corpus.txt is missing" in e for e in errs)
 
 
 # ---- adversarial regressions (found by codex cross-validation) ----

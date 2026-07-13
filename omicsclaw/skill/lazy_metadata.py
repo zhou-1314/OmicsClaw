@@ -117,8 +117,9 @@ def _extract_gotcha_leads(body: str) -> list[str]:
 
 
 class LazySkillMetadata:
-    def __init__(self, skill_path: Path):
+    def __init__(self, skill_path: Path, *, strict_v2: bool = False):
         self.path = skill_path
+        self.strict_v2 = strict_v2
         self._basic = None
         self._full = None
         self._gotchas: list[str] | None = None
@@ -163,12 +164,13 @@ class LazySkillMetadata:
         return data if isinstance(data, dict) else None
 
     def _try_load_v2(self):
-        """Load skill.yaml (v2) when present and valid; else None (fall back to v1).
+        """Load skill.yaml (v2) when present and valid.
 
         The schema/pydantic import is deferred to here so v1-only installs never
-        pay for pydantic, and a malformed or unparseable skill.yaml degrades to
-        the v1 path instead of breaking the registry (schema_version coexistence,
-        ADR 0037).
+        pay for pydantic. Compatibility callers may still fall back to v1, but
+        ``strict_v2`` callers fail closed when a present machine contract is
+        unreadable; this prevents stale SKILL.md frontmatter from masking a
+        broken formal manifest after the 95/95 v2 rollout (ADR 0037).
         """
         sidecar = self.path / "skill.yaml"
         if not sidecar.exists():
@@ -176,6 +178,10 @@ class LazySkillMetadata:
         try:
             from .schema import load_skill_yaml
         except Exception as exc:  # pydantic/schema unavailable
+            if self.strict_v2:
+                raise RuntimeError(
+                    f"skill.yaml present at {sidecar} but schema is unavailable"
+                ) from exc
             logger.warning(
                 "skill.yaml present at %s but schema unavailable (%s); using v1 metadata",
                 sidecar,
@@ -185,6 +191,8 @@ class LazySkillMetadata:
         try:
             return load_skill_yaml(sidecar)
         except Exception as exc:
+            if self.strict_v2:
+                raise
             logger.warning(
                 "invalid skill.yaml at %s (%s); falling back to v1 metadata", sidecar, exc
             )
@@ -238,6 +246,10 @@ class LazySkillMetadata:
             "validation_level": m.validation.level,
             "origin": m.provenance.origin,
             "lifecycle_status": m.lifecycle.status,
+            "superseded_by": m.lifecycle.superseded_by or "",
+            "skip_when": [
+                rule.model_dump(exclude_none=True) for rule in m.summary.skip_when
+            ],
             "trigger_keywords": list(m.summary.trigger_keywords),
             "allowed_extra_flags": self._effective_allowed_flags(m),
             "legacy_aliases": list(m.summary.aliases),
@@ -256,8 +268,9 @@ class LazySkillMetadata:
 
     def _load_basic(self):
         # v2 first: skill.yaml is the single source of truth (ADR 0037). When it
-        # is present and valid, every legacy field is sourced from it; otherwise
-        # we fall back to the v1 frontmatter + parameters.yaml path below.
+        # is present and valid, every legacy field is sourced from it. An absent
+        # manifest uses v1; an invalid manifest does so only in compatibility
+        # mode, while the formal registry enables strict_v2 and fails closed.
         manifest = self._try_load_v2()
         if manifest is not None:
             self._basic = self._basic_from_v2(manifest)
@@ -313,6 +326,10 @@ class LazySkillMetadata:
             "author": frontmatter.get("author") or "",
             "license": frontmatter.get("license") or "",
             "emoji": sidecar.get("emoji") or legacy.get("emoji") or frontmatter.get("emoji") or "",
+            "origin": _DEFAULT_ORIGIN,
+            "lifecycle_status": _DEFAULT_LIFECYCLE_STATUS,
+            "superseded_by": "",
+            "skip_when": [],
             **runtime,
         }
 
@@ -410,6 +427,18 @@ class LazySkillMetadata:
         self._ensure_basic()
         value = self._basic.get("lifecycle_status") or _DEFAULT_LIFECYCLE_STATUS
         return value if value in LIFECYCLE_STATUSES else _DEFAULT_LIFECYCLE_STATUS
+
+    @property
+    def superseded_by(self) -> str:
+        """Canonical replacement named by a deprecated skill, when declared."""
+        self._ensure_basic()
+        return str(self._basic.get("superseded_by") or "")
+
+    @property
+    def skip_when(self) -> list[dict[str, str]]:
+        """Structured negative-routing rules from ``skill.yaml`` summary."""
+        self._ensure_basic()
+        return [dict(rule) for rule in self._basic.get("skip_when", [])]
 
     @property
     def trigger_keywords(self) -> list[str]:

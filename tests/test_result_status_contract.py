@@ -94,20 +94,38 @@ def test_read_result_status_returns_the_canonical_value(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
+_ENVELOPE_IDENTITY = {
+    "skill": "fake-skill",
+    "version": "0.1.0",
+    "completed_at": "2026-07-12T00:00:00+00:00",
+    "input_checksum": "",
+}
+
+
 def test_validate_result_envelope_accepts_a_compliant_payload():
-    payload = {"summary": {"method": "fake"}, "data": {"n": 1}, "status": "ok"}
+    payload = {
+        **_ENVELOPE_IDENTITY,
+        "summary": {"method": "fake"},
+        "data": {"n": 1},
+        "status": "ok",
+    }
     assert validate_result_envelope(payload) == []
 
 
 def test_validate_result_envelope_status_is_optional():
-    payload = {"summary": {}, "data": {}}
+    payload = {**_ENVELOPE_IDENTITY, "summary": {}, "data": {}}
     assert validate_result_envelope(payload) == []
 
 
 def test_validate_result_envelope_accepts_the_scaffold_sentinel():
     """A fresh placeholder's ``status: scaffold`` is shape-valid, not a failure —
     the smoke gate uses this to withhold credit rather than reject the skill."""
-    payload = {"summary": {"implemented": False}, "data": {}, "status": SCAFFOLD_STATUS}
+    payload = {
+        **_ENVELOPE_IDENTITY,
+        "summary": {"implemented": False},
+        "data": {},
+        "status": SCAFFOLD_STATUS,
+    }
     assert validate_result_envelope(payload) == []
 
 
@@ -116,26 +134,59 @@ def test_validate_result_envelope_rejects_non_dict_payload():
 
 
 def test_validate_result_envelope_flags_missing_summary():
-    problems = validate_result_envelope({"data": {}})
+    problems = validate_result_envelope({**_ENVELOPE_IDENTITY, "data": {}})
     assert "summary must be an object" in problems
 
 
 def test_validate_result_envelope_flags_missing_data():
-    problems = validate_result_envelope({"summary": {}})
+    problems = validate_result_envelope({**_ENVELOPE_IDENTITY, "summary": {}})
     assert "data must be an object" in problems
 
 
 def test_validate_result_envelope_flags_wrong_typed_summary_and_data():
-    problems = validate_result_envelope({"summary": "nope", "data": []})
+    problems = validate_result_envelope({**_ENVELOPE_IDENTITY, "summary": "nope", "data": []})
     assert "summary must be an object" in problems
     assert "data must be an object" in problems
 
 
 def test_validate_result_envelope_rejects_off_taxonomy_status():
-    problems = validate_result_envelope({"summary": {}, "data": {}, "status": "success"})
+    problems = validate_result_envelope(
+        {**_ENVELOPE_IDENTITY, "summary": {}, "data": {}, "status": "success"}
+    )
     assert len(problems) == 1
     assert "success" in problems[0]
     assert "ok" in problems[0] and SCAFFOLD_STATUS in problems[0]
+
+
+def test_validate_result_envelope_flags_missing_skill_version_completed_at():
+    """write_result_json always populates skill/version/completed_at — a
+    payload missing any of them is not a real envelope, just summary/data/
+    status shape-valid by coincidence."""
+    payload = {"summary": {}, "data": {}}
+    problems = validate_result_envelope(payload)
+    assert "skill must be a non-empty string" in problems
+    assert "version must be a non-empty string" in problems
+    assert "completed_at must be a non-empty string" in problems
+
+
+def test_validate_result_envelope_allows_empty_input_checksum():
+    """write_result_json always writes input_checksum, but as "" when no
+    input was hashed — an empty checksum is a legitimate value, not a
+    missing field."""
+    payload = {**_ENVELOPE_IDENTITY, "input_checksum": "", "summary": {}, "data": {}}
+    assert validate_result_envelope(payload) == []
+
+
+def test_validate_result_envelope_flags_missing_input_checksum_key():
+    payload = {
+        "skill": "fake-skill",
+        "version": "0.1.0",
+        "completed_at": "2026-07-12T00:00:00+00:00",
+        "summary": {},
+        "data": {},
+    }
+    problems = validate_result_envelope(payload)
+    assert "input_checksum must be a string (may be empty)" in problems
 
 
 # ---------------------------------------------------------------------------

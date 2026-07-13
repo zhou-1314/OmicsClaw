@@ -6,7 +6,6 @@ Centralises skill definition, discovery, and loading across all omics domains.
 from __future__ import annotations
 
 import copy
-import json
 import logging
 import os
 from pathlib import Path
@@ -252,6 +251,10 @@ class OmicsRegistry:
                         "source": lazy.source,  # "v2" (skill.yaml) | "v1" (ADR 0037)
                         "type": lazy.type,
                         "validation_level": lazy.validation_level,
+                        "origin": lazy.origin,
+                        "lifecycle_status": lazy.lifecycle_status,
+                        "superseded_by": lazy.superseded_by,
+                        "skip_when": lazy.skip_when,
                         # Consensus shims forward to the shared run parser, which
                         # has no `--demo`; declare no demo so `oc run <cs> --demo`
                         # is refused rather than aborting in argparse (ADR 0016/0030).
@@ -281,6 +284,10 @@ class OmicsRegistry:
                         "source": lazy.source if lazy else "v1",
                         "type": "leaf",
                         "validation_level": "smoke-only",
+                        "origin": "human",
+                        "lifecycle_status": "mvp",
+                        "superseded_by": "",
+                        "skip_when": [],
                         "demo_args": ["--demo"],
                         "description": f"Dynamically loaded {canonical_alias} skill",
                         "requires": [],
@@ -305,9 +312,14 @@ class OmicsRegistry:
 
     def load_lightweight(self, skills_dir: Path | None = None) -> None:
         """Load only basic skill metadata for fast startup."""
-        target_dir = skills_dir or SKILLS_DIR
+        target_dir = (skills_dir or SKILLS_DIR).resolve()
         if not target_dir.exists():
             return
+
+        # The shipped 95/95 v2 tree is authoritative and must fail closed on
+        # an invalid present manifest. Alternate roots retain the dual-track
+        # compatibility behavior for external/legacy skill collections.
+        strict_v2 = target_dir == SKILLS_DIR.resolve()
 
         for domain_path in target_dir.iterdir():
             if not domain_path.is_dir() or domain_path.name.startswith(('.', '__', '_')):
@@ -324,7 +336,7 @@ class OmicsRegistry:
                 if not (skill_path / "SKILL.md").exists() and not (skill_path / "skill.yaml").exists():
                     continue
 
-                lazy = LazySkillMetadata(skill_path)
+                lazy = LazySkillMetadata(skill_path, strict_v2=strict_v2)
                 skill_key = skill_path.name
                 self.lazy_skills[skill_key] = lazy
 

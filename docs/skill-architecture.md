@@ -569,12 +569,13 @@ with hard ceilings:
 - `scripts/measure_routing_tokens.py` measures the live surface and can
   `--compare` against a saved baseline.
 - `scripts/check_routing_budget.py` compares the live measurement against the
-  ceilings in `build/routing-baselines/ceiling.json` and exits 1 if exceeded.
+  committed ceilings in `tests/fixtures/routing_budget/ceiling.json` and exits
+  1 if exceeded.
 
 Legitimate reasons to raise a ceiling: a genuinely new bot tool, or a description
 expanded for a new mode/parameter. Not legitimate: inline-docs bloat, or
 re-embedding a flat skill list (undoing the refactor). When raising, edit
-`ceiling.json`, commit, and justify in the PR (ideally with a
+`tests/fixtures/routing_budget/ceiling.json`, commit, and justify in the PR (ideally with a
 `measure_routing_tokens.py --compare` diff).
 
 ---

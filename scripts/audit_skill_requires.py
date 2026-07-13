@@ -443,8 +443,15 @@ def audit_skill(sd: Path) -> dict:
     # boundary, so a declared extra is usually an analyzer blind spot, not a
     # stale entry. Extras are surfaced as warnings for manual pruning only.
     final = sorted(recommended | declared_norm, key=str.lower)
+    try:
+        skill_identity = sd.relative_to(SKILLS)
+    except ValueError:
+        # Lint/tests may audit a staged or quarantined skill outside the
+        # repository's canonical SKILLS root. Dependency analysis is still
+        # valid there; only the human-readable report identity differs.
+        skill_identity = sd
     return {
-        "skill": str(sd.relative_to(SKILLS)),
+        "skill": str(skill_identity),
         "contract": contract,
         "declared": declared,
         "recommended": sorted(recommended, key=str.lower),

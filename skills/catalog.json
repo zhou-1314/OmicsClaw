@@ -1007,7 +1007,7 @@
       "cli_alias": "omics-skill-builder",
       "type": "leaf",
       "description": "Load when scaffolding a NEW OmicsClaw skill from a natural-language request \u2014 generates the skill directory layout (skill.yaml, SKILL.md, references/, tests/) under the chosen domain. Skip when modifying an existing skill (edit its files directly); only routing a query (use orchestrator).",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "status": "mvp",
       "origin": "human",
       "validation_level": "smoke-only",

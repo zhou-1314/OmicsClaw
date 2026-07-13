@@ -78,6 +78,15 @@ jobs:
       - name: Check SKILL.md description drift (catalog / INDEX / routing)
         run: python scripts/check_description_drift.py
 
+      - name: Run full deterministic skill lint
+        run: python scripts/skill_lint.py --all
+
+      - name: Check routing-context budget
+        run: python scripts/check_routing_budget.py
+
+      - name: Enforce full-domain routing oracle
+        run: python scripts/evaluate_routing_oracle.py
+
       - name: Catalog generator regression tests
         run: python -m pytest tests/test_generate_catalog.py -v
 
@@ -98,6 +107,24 @@ jobs:
 
       - name: v2 skip_when description parser tests
         run: python -m pytest tests/test_skill_description_parse.py -v
+
+      - name: Acquisition and full-domain routing regression tests
+        run: |
+          python -m pytest \
+            tests/test_skill_scaffolder.py \
+            tests/test_scaffolder_literal_lift.py \
+            tests/test_scaffolder_corpus_derived.py \
+            tests/test_analysis_router.py \
+            tests/test_capability_resolver.py \
+            tests/test_capability_resolver_golden.py \
+            tests/test_keyword_routing.py \
+            tests/test_auto_routing_disambiguation.py \
+            tests/test_routing_oracle.py \
+            tests/test_routing_budget_gate.py \
+            tests/test_audit_requires_v2.py \
+            tests/test_omics_skill_builder_cli.py \
+            tests/test_result_status_contract.py \
+            -v
 
   memory-test:
     runs-on: ubuntu-latest
@@ -173,11 +200,13 @@ jobs:
       - name: Run bot core tests
         run: |
           python -m pytest \
+            tests/bot/test_tool_executors.py \
             tests/test_bot_core_import_behavior.py \
             tests/test_bot_completion_messages.py \
             tests/test_channels.py \
             tests/test_provider_registry.py \
             tests/test_pipeline_provider_resolution.py \
+            tests/test_skill_listing.py \
             -v
 
   spatial-test:

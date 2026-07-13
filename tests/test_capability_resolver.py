@@ -1,5 +1,9 @@
 """Tests for unified capability resolution."""
 
+import pytest
+
+from omicsclaw.skill.registry import OmicsRegistry
+
 from omicsclaw.skill.capability_resolver import resolve_capability
 
 
@@ -199,3 +203,162 @@ def test_resolve_capability_breaks_score_ties_alphabetically():
     # ``bulkrna-coexpression`` (alphabetically before ``bulkrna-ppi-network``)
     # under any registry iteration order.
     assert decision.chosen_skill == "bulkrna-coexpression"
+
+
+def test_resolve_capability_excludes_draft_and_deprecated_skills(monkeypatch):
+    """Governance metadata must affect automatic routing, not just catalog UI."""
+    from omicsclaw.skill import capability_resolver as cr
+
+    registry = OmicsRegistry()
+    registry._loaded = True
+    registry.domains = {"spatial": {"name": "Spatial Transcriptomics", "skills": []}}
+    registry.skills = {
+        "draft-cluster": {
+            "alias": "draft-cluster",
+            "domain": "spatial",
+            "description": "Load when clustering spatial transcriptomics data.",
+            "trigger_keywords": ["clustering"],
+            "legacy_aliases": [],
+            "param_hints": {},
+            "lifecycle_status": "draft",
+        },
+        "deprecated-cluster": {
+            "alias": "deprecated-cluster",
+            "domain": "spatial",
+            "description": "Load when clustering spatial transcriptomics data.",
+            "trigger_keywords": ["clustering"],
+            "legacy_aliases": [],
+            "param_hints": {},
+            "lifecycle_status": "deprecated",
+            "superseded_by": "stable-cluster",
+        },
+        "stable-cluster": {
+            "alias": "stable-cluster",
+            "domain": "spatial",
+            "description": "Load when clustering spatial transcriptomics data.",
+            "trigger_keywords": ["clustering"],
+            "legacy_aliases": [],
+            "param_hints": {},
+            "lifecycle_status": "stable",
+        },
+    }
+    registry.canonical_aliases = list(registry.skills)
+    monkeypatch.setattr(cr, "ensure_registry_loaded", lambda: registry)
+
+    decision = cr.resolve_capability("clustering spatial transcriptomics data")
+
+    aliases = [candidate.skill for candidate in decision.skill_candidates]
+    assert decision.chosen_skill == "stable-cluster"
+    assert "draft-cluster" not in aliases
+    assert "deprecated-cluster" not in aliases
+
+
+def test_resolve_capability_consumes_structured_skip_when():
+    decision = resolve_capability(
+        "Use sc-clustering, but QC normalization HVG and PCA have not run yet"
+    )
+
+    assert decision.chosen_skill == "sc-preprocessing"
+    assert any("skip_when" in reason for reason in decision.reasoning)
+
+
+def test_resolve_capability_skip_when_respects_negation_polarity():
+    decision = resolve_capability(
+        "Use sc-clustering after QC normalization HVG and PCA have already run"
+    )
+
+    assert decision.chosen_skill == "sc-clustering"
+    assert not any("skip_when" in reason for reason in decision.reasoning)
+
+
+def test_resolve_capability_cross_domain_skip_redirect_updates_domain():
+    decision = resolve_capability(
+        "Use bulkrna-enrichment, but the input is single-cell"
+    )
+
+    assert decision.chosen_skill == "sc-enrichment"
+    assert decision.domain == "singlecell"
+
+
+def test_resolve_capability_uses_singlecell_modality_to_disambiguate_preprocessing():
+    """A downstream-method mention must not erase an explicit scRNA modality.
+
+    The wording intentionally differs from the oracle corpus: this guards the
+    ontology-level scRNA/scATAC distinction rather than one benchmark phrase.
+    """
+    scrna = resolve_capability(
+        "Use a preprocessing workflow for scRNA-seq; UMAP and Leiden will run later."
+    )
+    scatac = resolve_capability(
+        "Use a preprocessing workflow for scATAC peak counts before UMAP and Leiden."
+    )
+
+    assert scrna.chosen_skill == "sc-preprocessing"
+    assert scatac.chosen_skill == "scatac-preprocessing"
+    assert any("modality 'scrna'" in reason for reason in scrna.reasoning)
+    assert any("modality 'scatac'" in reason for reason in scatac.reasoning)
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_skill"),
+    [
+        (
+            "What is the best route for RNA velocity analysis in scRNA-seq data?",
+            "sc-velocity",
+        ),
+        (
+            "Please choose the optimal single-cell clustering resolution for this pipeline.",
+            "sc-clustering",
+        ),
+        (
+            "Route this scRNA-seq differential expression analysis appropriately.",
+            "sc-de",
+        ),
+    ],
+)
+def test_analysis_wording_does_not_force_the_orchestrator_control_domain(
+    query: str,
+    expected_skill: str,
+):
+    decision = resolve_capability(query)
+
+    assert decision.chosen_skill == expected_skill
+    assert decision.domain != "orchestrator"
+
+
+def test_ambiguous_parameter_choice_is_not_misclassified_as_meta_routing():
+    ambiguous = resolve_capability(
+        "Please choose the optimal clustering resolution for this pipeline."
+    )
+    assert ambiguous.domain != "orchestrator"
+
+
+def test_resolve_capability_uses_validation_as_a_small_tie_break(monkeypatch):
+    from omicsclaw.skill import capability_resolver as cr
+
+    registry = OmicsRegistry()
+    registry._loaded = True
+    registry.domains = {"spatial": {"name": "Spatial Transcriptomics", "skills": []}}
+    common = {
+        "domain": "spatial",
+        "description": "Load when clustering spatial transcriptomics data.",
+        "trigger_keywords": ["clustering"],
+        "legacy_aliases": [],
+        "param_hints": {},
+        "lifecycle_status": "mvp",
+    }
+    registry.skills = {
+        "a-smoke": {**common, "alias": "a-smoke", "validation_level": "smoke-only"},
+        "z-fixture": {
+            **common,
+            "alias": "z-fixture",
+            "validation_level": "fixture-validated",
+        },
+    }
+    registry.canonical_aliases = list(registry.skills)
+    monkeypatch.setattr(cr, "ensure_registry_loaded", lambda: registry)
+
+    decision = cr.resolve_capability("clustering spatial transcriptomics data")
+
+    assert decision.chosen_skill == "z-fixture"
+    assert "validation level fixture-validated" in " ".join(decision.reasoning)

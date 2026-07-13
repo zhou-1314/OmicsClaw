@@ -1976,6 +1976,11 @@ async def execute_create_omics_skill(args: dict, **kwargs) -> str:
         domain = args.get("domain", "")
         if not request:
             return "Error: 'request' parameter is required."
+        if args.get("promote_from_latest"):
+            return (
+                "Error: promote_from_latest is disabled because it can select "
+                "another session's run. Provide the exact source_analysis_dir."
+            )
 
         result = create_skill_scaffold(
             request=request,
@@ -1983,7 +1988,6 @@ async def execute_create_omics_skill(args: dict, **kwargs) -> str:
             skill_name=args.get("skill_name", ""),
             summary=args.get("summary", ""),
             source_analysis_dir=args.get("source_analysis_dir", ""),
-            promote_from_latest=bool(args.get("promote_from_latest", False)),
             output_root=OUTPUT_DIR,
             input_formats=args.get("input_formats") or [],
             primary_outputs=args.get("primary_outputs") or [],
@@ -1993,16 +1997,26 @@ async def execute_create_omics_skill(args: dict, **kwargs) -> str:
         )
         created = "\n".join(f"- {path}" for path in result.created_files or [])
         completion_summary = format_completion_mapping_summary(result.completion)
+        admission = "quarantined" if result.quarantined else "admitted"
+        quarantine_note = (
+            "This skill is not available to registry/routing until it passes "
+            "the required gate or receives explicit human validation.\n"
+            f"Quarantine evidence: {result.quarantine_reason_path or '<none>'}\n"
+            if result.quarantined
+            else ""
+        )
         return (
             "Created OmicsClaw skill scaffold.\n"
             f"Skill: {result.skill_name}\n"
             f"Domain: {result.domain}\n"
             f"Directory: {result.skill_dir}\n"
+            f"Admission: {admission}\n"
+            f"{quarantine_note}"
             f"Registry refreshed: {result.registry_refreshed}\n"
             f"Manifest: {result.manifest_path or '<none>'}\n"
             f"Completion report: {result.completion_report_path or '<none>'}\n"
             f"Gate:\n{completion_summary or '<unavailable>'}\n"
-            f"Source analysis: {args.get('source_analysis_dir') or ('<latest autonomous analysis>' if args.get('promote_from_latest') else '<none>')}\n"
+            f"Source analysis: {args.get('source_analysis_dir') or '<none>'}\n"
             "Files:\n"
             f"{created}"
         )

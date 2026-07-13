@@ -1,5 +1,12 @@
 # 技能获取飞轮 —— P0/P1 落地方案（执行级）
 
+> **文档角色（2026-07-13 校准）：**本文记录 P0/P1 的落地设计，不是当前完整状态报告。
+> 实现已超过本文当时的 live-tree 快照；当前验收与剩余信任边界问题见
+> [`2026-07-13-skill-audit-system-design-assessment.md`](../reviews/2026-07-13-skill-audit-system-design-assessment.md)
+> §8。
+> 2026-07-13 安全复验后，promoted `skipped` 不再进入正式目录，而是进入
+> `skills/.quarantine/`；后文旧的“skip 后正式移入”描述仅作方案演进记录。
+>
 > 状态：落地方案 v1（承接 [`skill-acquisition-plan.md`](./skill-acquisition-plan.md) §P0/§P1，收敛为**当前 main 可执行**的形态）
 > 所有行号对齐当前 `main`（去仪式后，commit 8cbb80a 之后）实测，非提案原文引用。
 > 结论前提：飞轮真瓶颈是**引擎**（晋升逐字回放 + 无入库执行门），**不是表示**。P0/P1 只做「契约管道 + 入库门」，把已有空槽填活。

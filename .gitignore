@@ -39,6 +39,9 @@ output/
 outputs/
 sessions/
 
+# Unverified model-authored skill promotions (local audit/retry only)
+skills/.quarantine/
+
 # Superpowers (local/internal agent workflow notes)
 superpowers/
 docs/superpowers/

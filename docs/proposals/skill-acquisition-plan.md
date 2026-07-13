@@ -1,5 +1,17 @@
 # §2 技能获取（Acquisition）落地方案 —— 飞轮引擎
 
+> **文档角色（2026-07-13 校准）：**本文是 acquisition 的历史诊断与分期方案，
+> 代码已落地 P0/P1、P2a、P3、P4、P5，并于 2026-07-13 新增 P2 的第一条
+> **结构化泛化纵切**：读取 `skill_calls.jsonl` + manifest `metadata.steps`，对可证明的
+> call-composition workflow 生成无 kernel facade 的 `run_skill` 脚本；任意 Python/歧义
+> lineage 仍 fail-closed 回退到 sandbox-gated verbatim 路径。因此这是可验收子集，不代表
+> 所有模型生成 Python 都已可泛化。
+> 当前实现状态与完成判据以
+> [`2026-07-13-skill-audit-system-design-assessment.md`](../reviews/2026-07-13-skill-audit-system-design-assessment.md)
+> §5/§8 为准。
+> 2026-07-13 首轮修复已将 skipped promotion 改入不可发现 quarantine，并禁用全局
+> `promote_from_latest` 晋升入口；本文后文的旧 skip-not-fail 正式入库描述仅作历史记录。
+>
 > 状态：草案 v0.2（承接 [`skill-lifecycle-redesign.md`](./skill-lifecycle-redesign.md) §2；§1 表示层已在 main 落地：95/95 `skill.yaml`、0 `parameters.yaml`、schema/CI 门齐备）。
 > 现状核验由一次 7-agent 并行 code-map 完成，所有行号对照本 worktree（v2、post-migration）实测，非提案原文引用。
 > **v0.2 已纳入 Codex/gpt-5.5(xhigh) docs review 的 6 条 must-fix + 关键 should-fix（裁决：SOUND-WITH-FIXES）——见文末「Codex 复核修订记录」。**
@@ -122,6 +134,25 @@ P5 语料衍生                   [L]  ← 独立高价值轨，单开子方案
 ```
 
 **第一刀建议**：P0 单独落地（低风险、解锁后续），再 P1+P2 成套。P0 完成后飞轮就有了"契约 + 可见性"，P1+P2 完成后飞轮真正开始转（可复用 + 有质量刹车）。
+
+### 4.1 2026-07-13 P2 结构化泛化落地记录
+
+- `_load_mini_agent_bundle` 读取 append-only `skill_calls.jsonl`（优先）及 manifest
+  `metadata.steps`，损坏/不一致以 warning 留证而不是静默猜测。
+- `build_acquisition_abstraction` 仅接受能够由 AST 证明输入 lineage 的顶层 `oc.run`
+  组合；控制流、任意后处理、动态 skill 名或失败 call 均不进入结构化路径。
+- 生成脚本直接调用共享 `omicsclaw.skill.runner.run_skill`，参数来自实际 call trace，
+  上游 `.h5ad` 通过显式 `step:N` 关系传递，不再注入 `oc/adata/show/ReturnAnswer`。
+- `references/acquisition_abstraction.json` 持久化 source hash、原始 calls/steps、参数绑定、
+  lineage、是否 applied 与 fallback reason；结构化脚本仍须通过同一 sandbox/demo gate，
+  gate 拒绝时重试 verbatim 并更新依赖/参数派生物。
+- ACQ-06 由一个生成后的脚本在 **2 inputs × 2 parameter sets** 上执行四次验证；每次
+  input、flag、最终 artifact 和 `result.json` 均独立核对。
+- 线性组合另有独立端到端验证：第二个 `oc.run` 的输入必须解析为第一个 call 生成的
+  `step:1` `.h5ad`，并验证两步参数、嵌套输出和最终 artifact 内容，而非只检查 JSON。
+
+未覆盖边界：任意 Python 科学后处理的语义抽象、复杂分支 workflow、非 `.h5ad` 跨步
+artifact 映射，以及 run/thread acquisition event identity；这些仍是后续 P2 工作。
 
 ---
 

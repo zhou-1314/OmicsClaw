@@ -14,7 +14,6 @@
 - `--method`
 - `--no-tests`
 - `--output-item`
-- `--promote-from-latest`
 - `--request`
 - `--skill-name`
 - `--source-analysis-dir`
