@@ -44,6 +44,7 @@ because mixing them is the most common silent-wrong-answer failure mode.
 
 **Inputs**
 
+- Modalities: scrna
 - File types: `.h5ad`
 - Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
 

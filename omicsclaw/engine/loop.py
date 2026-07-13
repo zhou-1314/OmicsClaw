@@ -328,6 +328,7 @@ async def run_engine_loop(
     request_tool_approval: Any = None,
     policy_state: Any = None,
     cancel_event: Any = None,
+    candidate_chain_gate: dict[str, Any] | None = None,
 ) -> str:
     """Drive the LLM-plus-tools loop for a single chat turn.
 
@@ -466,6 +467,9 @@ async def run_engine_loop(
                 # this dict into per-tool executors that forward it to
                 # skill.runner.run_skill(cancel_event=...).
                 "cancel_event": cancel_event,
+                # RET-05: the exact candidate plan digest is enforced by a
+                # pre-execution hook before any ``omicsclaw`` executor runs.
+                "candidate_chain_gate": dict(candidate_chain_gate or {}),
             },
             request_tools=request_tools,
         ),

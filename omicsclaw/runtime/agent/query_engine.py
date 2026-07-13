@@ -37,6 +37,7 @@ from ..policy.policy import TOOL_POLICY_REQUIRE_APPROVAL, evaluate_tool_policy
 from ..tools.hooks import LifecycleHookRuntime
 from ..policy.state import ToolPolicyState
 from ..tools.execution_hooks import (
+    build_candidate_chain_confirmation_hook,
     build_default_tool_execution_hooks,
     merge_tool_execution_hooks,
 )
@@ -116,12 +117,16 @@ def _prepare_tool_runtime_context(
 ) -> dict[str, Any]:
     prepared = dict(runtime_context or {})
     omicsclaw_dir = str(prepared.get("omicsclaw_dir", "") or "").strip()
-    if not omicsclaw_dir:
-        return prepared
-    return merge_tool_execution_hooks(
-        prepared,
-        build_default_tool_execution_hooks(omicsclaw_dir),
+    hooks = (
+        list(build_default_tool_execution_hooks(omicsclaw_dir))
+        if omicsclaw_dir
+        else []
     )
+    if prepared.get("candidate_chain_gate"):
+        hooks.append(build_candidate_chain_confirmation_hook())
+    if not hooks:
+        return prepared
+    return merge_tool_execution_hooks(prepared, hooks)
 
 
 @dataclass(frozen=True, slots=True)

@@ -32,6 +32,9 @@ summary:
   - spatial-registration
 interface:
   inputs:
+    modalities:
+    - visium
+    - xenium
     file_types:
     - h5ad
     preconditions:

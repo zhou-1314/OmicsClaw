@@ -44,6 +44,7 @@ class OmicsRegistry:
         self._loaded = False
         self._loaded_dir: Path | None = None
         self.lazy_skills: dict[str, LazySkillMetadata] = {}
+        self._skill_dag_cache: dict[str, Any] | None = None
 
     def canonical_skill_aliases(self) -> list[str]:
         """Canonical skill aliases (no legacy aliases), in registration order.
@@ -269,6 +270,7 @@ class OmicsRegistry:
                         "saves_h5ad": lazy.saves_h5ad,
                         "requires_preprocessed": lazy.requires_preprocessed,
                         "input_contract": lazy.input_contract,
+                        "output_contract": lazy.output_contract,
                         "param_hints": lazy.param_hints,
                         "gotchas": lazy.gotchas,
                     }
@@ -298,6 +300,7 @@ class OmicsRegistry:
                         "saves_h5ad": False,
                         "requires_preprocessed": False,
                         "input_contract": {},
+                        "output_contract": {},
                         "param_hints": {},
                         "gotchas": [],
                     }
@@ -380,6 +383,62 @@ class OmicsRegistry:
             for alias, info in self.iter_primary_skills(domain=domain)
         }
 
+    def _canonical_graph_skill(self, skill: str) -> str:
+        if not self._loaded:
+            self.load_all()
+        info = self.skills.get(skill)
+        if info is None:
+            raise KeyError(f"unknown skill: {skill}")
+        return str(info.get("alias") or skill)
+
+    def build_compatibility_dag(self) -> dict[str, Any]:
+        """Return the canonical compatibility graph used to derive plan DAGs."""
+        if self._skill_dag_cache is None:
+            from .skill_dag import build_skill_dag, load_skill_dag_reviews
+
+            review_path = (self._loaded_dir or SKILLS_DIR) / "skill_dag_reviews.yaml"
+            self._skill_dag_cache = build_skill_dag(
+                self,
+                reviews=load_skill_dag_reviews(review_path),
+            )
+        return copy.deepcopy(self._skill_dag_cache)
+
+    def get_upstream_skills(self, skill: str) -> list[str]:
+        """Return transitive candidate producers for a canonical or legacy alias."""
+        from .skill_dag import upstream_closure
+
+        return upstream_closure(
+            self.build_compatibility_dag(),
+            self._canonical_graph_skill(skill),
+        )
+
+    def get_downstream_skills(self, skill: str) -> list[str]:
+        """Return transitive candidate consumers for a canonical or legacy alias."""
+        from .skill_dag import downstream_skills
+
+        return downstream_skills(
+            self.build_compatibility_dag(),
+            self._canonical_graph_skill(skill),
+        )
+
+    def topological_skill_order(self, skills: list[str] | None = None) -> list[str]:
+        """Return deterministic producer-before-consumer order for selected skills."""
+        from .skill_dag import topological_sort
+
+        canonical = (
+            [self._canonical_graph_skill(skill) for skill in skills]
+            if skills is not None
+            else None
+        )
+        return topological_sort(self.build_compatibility_dag(), skills=canonical)
+
+    def build_candidate_skill_chain(self, skills: list[str]) -> dict[str, Any]:
+        """Return a topo-ordered selected chain with edge-level provenance."""
+        from .skill_dag import build_candidate_chain
+
+        canonical = [self._canonical_graph_skill(skill) for skill in skills]
+        return build_candidate_chain(self.build_compatibility_dag(), canonical)
+
     def build_keyword_map(
         self,
         domain: str | None = None,
@@ -431,6 +490,7 @@ class OmicsRegistry:
         }
         self._loaded = False
         self._loaded_dir = None
+        self._skill_dag_cache = None
 
     def reload(self, skills_dir: Path | None = None) -> None:
         """Invalidate then immediately reload from ``skills_dir`` (or default)."""

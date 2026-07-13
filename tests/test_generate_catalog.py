@@ -65,6 +65,7 @@ def test_generator_discovers_skills_under_dotted_ancestor(tmp_path, monkeypatch)
         f"got {catalog['skill_count']}: {[s.get('name') for s in catalog['skills']]}"
     )
     assert catalog["skills"][0]["name"] == "fake-skill"
+    assert catalog["compatibility_graph"]["node_count"] == 1
 
 
 def _build_catalog_skill(skills_dir, name, sidecar_yaml=None):

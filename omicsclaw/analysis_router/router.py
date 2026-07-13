@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import hashlib
+import json
 
 from omicsclaw.skill.capability_resolver import (
     CapabilityDecision,
@@ -70,6 +72,21 @@ class AnalysisRouter:
             preflight_required=preflight_required,
             missing_params=(
                 list(decision.missing_preconditions) if preflight_required else []
+            ),
+            metadata=(
+                {
+                    "candidate_chain": decision.candidate_chain,
+                    "requires_confirmation": True,
+                    "plan_digest": hashlib.sha256(
+                        json.dumps(
+                            decision.candidate_chain,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    ).hexdigest(),
+                }
+                if decision.candidate_chain
+                else {}
             ),
         )
 

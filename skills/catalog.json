@@ -2,6 +2,20 @@
   "version": "1.0.0",
   "generated_by": "scripts/generate_catalog.py",
   "skill_count": 95,
+  "compatibility_graph": {
+    "node_count": 95,
+    "edge_count": 52,
+    "exact_edge_count": 32,
+    "generic_edge_count": 20,
+    "reviewed_edge_count": 6,
+    "has_cycle": false,
+    "edge_kind_counts": {
+      "alternative": 46,
+      "optional": 0,
+      "preferred": 6,
+      "required": 0
+    }
+  },
   "skills": [
     {
       "name": "bulkrna-batch-correction",

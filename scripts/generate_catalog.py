@@ -79,6 +79,8 @@ def generate_catalog() -> dict:
     if str(OMICSCLAW_DIR) not in sys.path:
         sys.path.insert(0, str(OMICSCLAW_DIR))
     from omicsclaw.skill.lazy_metadata import LazySkillMetadata
+    from omicsclaw.skill.registry import OmicsRegistry
+    from omicsclaw.skill.skill_dag import build_skill_dag, load_skill_dag_reviews
 
     alias_map = build_cli_alias_map()
     skills = []
@@ -116,10 +118,17 @@ def generate_catalog() -> dict:
         }
         skills.append(entry)
 
+    graph_registry = OmicsRegistry()
+    graph_registry.load_all(SKILLS_DIR)
+    graph = build_skill_dag(
+        graph_registry,
+        reviews=load_skill_dag_reviews(SKILLS_DIR / "skill_dag_reviews.yaml"),
+    )
     catalog = {
         "version": "1.0.0",
         "generated_by": "scripts/generate_catalog.py",
         "skill_count": len(skills),
+        "compatibility_graph": graph["summary"],
         "skills": skills,
     }
     return catalog

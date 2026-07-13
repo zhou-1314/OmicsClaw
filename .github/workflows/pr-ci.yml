@@ -55,6 +55,9 @@ jobs:
       - name: Check skills/catalog.json is fresh
         run: python scripts/generate_catalog.py --check
 
+      - name: Check skill compatibility graph is fresh
+        run: python scripts/generate_skill_dag.py --check
+
       - name: Check references/parameters.md is fresh (dual-track)
         run: python scripts/generate_parameters_md.py --all --check
 
@@ -89,13 +92,13 @@ jobs:
         run: python scripts/evaluate_routing_oracle.py
 
       - name: Catalog generator regression tests
-        run: python -m pytest tests/test_generate_catalog.py -v
+        run: python -m pytest tests/test_generate_catalog.py tests/test_generate_skill_dag.py -v
 
       - name: Skill requires auditor tests
         run: python -m pytest tests/test_skill_requires_audit.py -v
 
       - name: Skill schema + v2 registry-wiring tests
-        run: python -m pytest tests/test_skill_schema.py tests/test_registry_v2.py -v
+        run: python -m pytest tests/test_skill_schema.py tests/test_registry_v2.py tests/test_skill_dag.py -v
 
       - name: v2 lint + parameters.md generator tests (dual-track)
         run: python -m pytest tests/test_skill_lint_v2.py tests/test_generate_parameters_md.py -v
@@ -116,6 +119,7 @@ jobs:
             tests/test_scaffolder_literal_lift.py \
             tests/test_scaffolder_corpus_derived.py \
             tests/test_analysis_router.py \
+            tests/test_tool_execution_hooks.py \
             tests/test_capability_resolver.py \
             tests/test_capability_resolver_golden.py \
             tests/test_keyword_routing.py \

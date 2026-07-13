@@ -332,6 +332,27 @@ _COMPOSITE_HINTS = (
     "再",
 )
 
+_COMPOSITE_SPLIT_RE = re.compile(
+    r"\s+(?:and\s+then|and|followed\s+by|plus|with\s+an\s+extra)\s+|然后|再",
+    flags=re.IGNORECASE,
+)
+
+_COMPOSITE_EXECUTION_HINTS = (
+    "run ",
+    "perform ",
+    "execute ",
+    "apply ",
+    "use ",
+    "combine ",
+    "运行",
+    "执行",
+)
+
+_COMPOSITE_ADVISORY_RE = re.compile(
+    r"^\s*(?:please\s+)?(?:should\b|how\b|explain\b|compare\b|describe\b|tell\s+me\b)",
+    flags=re.IGNORECASE,
+)
+
 _GENERIC_ANALYSIS_HINTS = (
     "analy",
     "run ",
@@ -426,6 +447,7 @@ class CapabilityDecision:
     missing_preconditions: list[str] = field(default_factory=list)
     precondition_reasons: list[str] = field(default_factory=list)
     recommended_preparation: list[str] = field(default_factory=list)
+    candidate_chain: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -445,6 +467,7 @@ class CapabilityDecision:
             "missing_preconditions": list(self.missing_preconditions),
             "precondition_reasons": list(self.precondition_reasons),
             "recommended_preparation": list(self.recommended_preparation),
+            "candidate_chain": dict(self.candidate_chain),
         }
 
     def to_json(self) -> str:
@@ -481,6 +504,17 @@ class CapabilityDecision:
                 for c in self.skill_candidates[:3]
             )
             lines.append(f"- candidate_skills: {preview}")
+        if self.candidate_chain:
+            if self.candidate_chain.get("validated_order"):
+                lines.append(
+                    "- candidate_topo_chain: "
+                    + " -> ".join(self.candidate_chain.get("skills", []))
+                )
+            else:
+                lines.append(
+                    "- unresolved_candidate_intents: "
+                    + "; ".join(self.candidate_chain.get("requested_skills", []))
+                )
         return "\n".join(lines)
 
 
@@ -891,12 +925,69 @@ def _candidate_score(
     )
 
 
+def _resolve_composite_candidate_chain(
+    query: str,
+    *,
+    file_path: str,
+    domain_hint: str,
+    input_profile: InputProfile | dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Resolve atomic clauses, then order only graph-connected selections.
+
+    Clause resolution deliberately reuses the ordinary resolver with graph
+    expansion disabled.  This keeps lifecycle, skip_when, and routing scores
+    identical to single-intent requests while avoiding recursive composition.
+    """
+
+    clauses = [part.strip(" ,.;") for part in _COMPOSITE_SPLIT_RE.split(query) if part.strip(" ,.;")]
+    if len(clauses) < 2:
+        return {}
+
+    selected: list[str] = []
+    for clause in clauses:
+        decision = resolve_capability(
+            clause,
+            file_path=file_path,
+            domain_hint=domain_hint,
+            input_profile=input_profile,
+            _build_composite_chain=False,
+        )
+        if not decision.chosen_skill or decision.chosen_skill in selected:
+            continue
+        selected.append(decision.chosen_skill)
+    if len(selected) < 2:
+        return {}
+
+    registry = ensure_registry_loaded()
+    return registry.build_candidate_skill_chain(selected)
+
+
+def _explicit_multi_skill_request(registry: OmicsRegistry, query: str) -> bool:
+    """Recognize two named skills after the caller proves execution intent.
+
+    Scientific method descriptions routinely join operations with ``and``
+    (for example, "PCA and Leiden"). Those phrases are one skill, not two
+    candidate intents. Strong sequencing words remain sufficient on their
+    own; this guard only disambiguates the otherwise generic conjunction.
+    """
+
+    if " and " not in query:
+        return False
+    mentioned = {
+        name
+        for name, _info in registry.iter_primary_skills()
+        if _mentions_phrase(query, name.lower())
+    }
+    return len(mentioned) >= 2
+
+
 def resolve_capability(
     query: str,
     *,
     file_path: str = "",
     domain_hint: str = "",
     input_profile: InputProfile | dict[str, Any] | None = None,
+    _build_composite_chain: bool = True,
 ) -> CapabilityDecision:
     """Resolve a user request into exact/partial/no-skill coverage."""
     query = (query or "").strip()
@@ -1041,7 +1132,14 @@ def resolve_capability(
 
     custom_requested = any(h in query_lower for h in _CUSTOM_FALLBACK_HINTS)
     web_requested = any(h in query_lower for h in _WEB_HINTS)
-    composite_requested = any(h in query_lower for h in _COMPOSITE_HINTS)
+    composite_requested = (
+        not _COMPOSITE_ADVISORY_RE.search(query_lower)
+        and any(hint in query_lower for hint in _COMPOSITE_EXECUTION_HINTS)
+        and (
+            any(h in query_lower for h in _COMPOSITE_HINTS)
+            or _explicit_multi_skill_request(registry, query_lower)
+        )
+    )
 
     if not candidates or candidates[0].score < _RESOLVE_NO_SKILL_THRESHOLD:
         # Registry scoring must run before this check so niche but well-described
@@ -1165,6 +1263,32 @@ def resolve_capability(
             f"selected skill preconditions evaluated as '{assessment.status.value}'"
         )
 
+    candidate_chain = (
+        _resolve_composite_candidate_chain(
+            query,
+            file_path=file_path,
+            domain_hint=domain_hint,
+            input_profile=input_profile,
+        )
+        if composite_requested and _build_composite_chain
+        else {}
+    )
+    if candidate_chain:
+        coverage = "partial_skill"
+        composite_gap = "request combines multiple resolved analysis intents"
+        if composite_gap not in missing_capabilities:
+            missing_capabilities.append(composite_gap)
+        if candidate_chain.get("validated_order"):
+            reasoning.append(
+                "compatibility graph produced composite candidate plan: "
+                + " -> ".join(candidate_chain["skills"])
+            )
+        else:
+            reasoning.append(
+                "compatibility graph preserved unresolved composite intents: "
+                + "; ".join(candidate_chain["requested_skills"])
+            )
+
     return CapabilityDecision(
         query=query,
         # Normally top.domain equals the detected domain because candidates are
@@ -1188,6 +1312,7 @@ def resolve_capability(
         recommended_preparation=(
             list(assessment.recommended_preparation) if assessment else []
         ),
+        candidate_chain=candidate_chain,
     )
 
 

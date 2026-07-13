@@ -1,0 +1,56 @@
+schema_version: 1
+reviews:
+  - source: sc-preprocessing
+    target: sc-clustering
+    matched_output_key: anndata.obsm.X_pca
+    matched_precondition_key: data_shape.obsm.X_pca
+    edge_kind: preferred
+    condition_scope:
+    reviewed_by: Codex implementation audit
+    reviewed_at: '2026-07-13'
+    rationale: The producer writes X_pca and the consumer declares X_pca as a hard input precondition.
+  - source: sc-preprocessing
+    target: sc-de
+    matched_output_key: files.processed.h5ad
+    matched_precondition_key: data_shape.requires_preprocessed
+    edge_kind: preferred
+    condition_scope:
+    reviewed_by: Codex implementation audit
+    reviewed_at: '2026-07-13'
+    rationale: sc-preprocessing explicitly guarantees processing_state=preprocessed for scrna output.
+  - source: spatial-raw-processing
+    target: spatial-preprocess
+    matched_output_key: anndata.obsm.spatial
+    matched_precondition_key: data_shape.obsm.spatial
+    edge_kind: preferred
+    condition_scope:
+    reviewed_by: Codex implementation audit
+    reviewed_at: '2026-07-13'
+    rationale: Raw spatial processing writes obsm.spatial consumed by the foundational preprocessing stage.
+  - source: spatial-preprocess
+    target: spatial-register
+    matched_output_key: files.processed.h5ad
+    matched_precondition_key: data_shape.requires_preprocessed
+    edge_kind: preferred
+    condition_scope:
+    reviewed_by: Codex implementation audit
+    reviewed_at: '2026-07-13'
+    rationale: The registration skill documentation explicitly names preprocessing as its upstream stage.
+  - source: spatial-preprocess
+    target: spatial-integrate
+    matched_output_key: anndata.obsm.X_pca
+    matched_precondition_key: data_shape.obsm.X_pca
+    edge_kind: preferred
+    condition_scope:
+    reviewed_by: Codex implementation audit
+    reviewed_at: '2026-07-13'
+    rationale: Spatial preprocessing writes X_pca and integration declares that representation as required.
+  - source: spatial-preprocess
+    target: spatial-trajectory
+    matched_output_key: anndata.obsm.X_pca
+    matched_precondition_key: data_shape.obsm.X_pca
+    edge_kind: preferred
+    condition_scope:
+    reviewed_by: Codex implementation audit
+    reviewed_at: '2026-07-13'
+    rationale: Spatial preprocessing writes X_pca and trajectory declares that representation as required.

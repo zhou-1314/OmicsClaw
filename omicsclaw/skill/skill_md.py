@@ -89,7 +89,8 @@ def render_io_section(manifest: SkillManifest) -> str | None:
     )
     has_outputs = bool(
         out.files or out.result_json.required_keys
-        or (anndata and (anndata.saves_h5ad or anndata.obs or anndata.obsm or anndata.var
+        or (anndata and (anndata.saves_h5ad or anndata.processing_state
+                         or anndata.obs or anndata.obsm or anndata.var
                          or anndata.layers or anndata.uns))
     )
     if not has_inputs and not has_outputs:
@@ -140,6 +141,11 @@ def render_io_section(manifest: SkillManifest) -> str | None:
                 schema_bits.append("`uns`: " + ", ".join(f"`{k}`" for k in anndata.uns))
             suffix = (" — adds " + "; ".join(schema_bits)) if schema_bits else ""
             lines.append(f"- Processed AnnData (`saves_h5ad`){suffix}")
+        if anndata and anndata.processing_state:
+            lines.append(
+                "- AnnData processing state after success: "
+                f"`{anndata.processing_state}`"
+            )
         if out.result_json.required_keys:
             lines.append(
                 "- `result.json` keys: " + ", ".join(f"`{k}`" for k in out.result_json.required_keys)

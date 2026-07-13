@@ -1,0 +1,1239 @@
+{
+  "schema_version": 1,
+  "nodes": [
+    {
+      "skill": "bulkrna-batch-correction",
+      "domain": "bulkrna",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "bulkrna-coexpression",
+      "domain": "bulkrna",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "bulkrna-de",
+      "domain": "bulkrna",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "bulkrna-deconvolution",
+      "domain": "bulkrna",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "bulkrna-enrichment",
+      "domain": "bulkrna",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "bulkrna-geneid-mapping",
+      "domain": "bulkrna",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "bulkrna-ppi-network",
+      "domain": "bulkrna",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "bulkrna-qc",
+      "domain": "bulkrna",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "bulkrna-read-alignment",
+      "domain": "bulkrna",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "bulkrna-read-qc",
+      "domain": "bulkrna",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "bulkrna-splicing",
+      "domain": "bulkrna",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "bulkrna-survival",
+      "domain": "bulkrna",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "bulkrna-trajblend",
+      "domain": "bulkrna",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "consensus-domains",
+      "domain": "spatial",
+      "type": "consensus",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "consensus-interpret",
+      "domain": "spatial",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "genomics-alignment",
+      "domain": "genomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "genomics-assembly",
+      "domain": "genomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "genomics-cnv-calling",
+      "domain": "genomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "genomics-epigenomics",
+      "domain": "genomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "genomics-phasing",
+      "domain": "genomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "genomics-qc",
+      "domain": "genomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "genomics-sv-detection",
+      "domain": "genomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "genomics-variant-annotation",
+      "domain": "genomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "genomics-variant-calling",
+      "domain": "genomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "genomics-vcf-operations",
+      "domain": "genomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "literature",
+      "domain": "literature",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "metabolomics-annotation",
+      "domain": "metabolomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "metabolomics-de",
+      "domain": "metabolomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "metabolomics-normalization",
+      "domain": "metabolomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "metabolomics-pathway-enrichment",
+      "domain": "metabolomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "metabolomics-peak-detection",
+      "domain": "metabolomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "metabolomics-quantification",
+      "domain": "metabolomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "metabolomics-statistics",
+      "domain": "metabolomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "metabolomics-xcms-preprocessing",
+      "domain": "metabolomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "omics-skill-builder",
+      "domain": "orchestrator",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "orchestrator",
+      "domain": "orchestrator",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "proteomics-data-import",
+      "domain": "proteomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "proteomics-de",
+      "domain": "proteomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "proteomics-enrichment",
+      "domain": "proteomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "proteomics-identification",
+      "domain": "proteomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "proteomics-ms-qc",
+      "domain": "proteomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "proteomics-ptm",
+      "domain": "proteomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "proteomics-quantification",
+      "domain": "proteomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "proteomics-structural",
+      "domain": "proteomics",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-ambient-removal",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-batch-integration",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-cell-annotation",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-cell-communication",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-clustering",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-consensus-clustering",
+      "domain": "singlecell",
+      "type": "consensus",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-consensus-integration",
+      "domain": "singlecell",
+      "type": "consensus",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-consensus-pseudotime",
+      "domain": "singlecell",
+      "type": "consensus",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-count",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-cytotrace",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-de",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-differential-abundance",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-doublet-detection",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-drug-response",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-enrichment",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-fastq-qc",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-filter",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-gene-programs",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-grn",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-in-silico-perturbation",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-integrate-cluster",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-markers",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-metacell",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-multi-count",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-pathway-scoring",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-perturb",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-perturb-prep",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-preprocessing",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-pseudotime",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-qc",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-standardize-input",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-velocity",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "sc-velocity-prep",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "scatac-preprocessing",
+      "domain": "singlecell",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "spatial-annotate",
+      "domain": "spatial",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "spatial-cnv",
+      "domain": "spatial",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "spatial-communication",
+      "domain": "spatial",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "spatial-condition",
+      "domain": "spatial",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "spatial-de",
+      "domain": "spatial",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "spatial-deconv",
+      "domain": "spatial",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "spatial-domains",
+      "domain": "spatial",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "spatial-enrichment",
+      "domain": "spatial",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "spatial-genes",
+      "domain": "spatial",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "spatial-integrate",
+      "domain": "spatial",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "spatial-microenvironment-subset",
+      "domain": "spatial",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "spatial-preprocess",
+      "domain": "spatial",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "spatial-raw-processing",
+      "domain": "spatial",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "spatial-register",
+      "domain": "spatial",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "spatial-statistics",
+      "domain": "spatial",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "spatial-trajectory",
+      "domain": "spatial",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    },
+    {
+      "skill": "spatial-velocity",
+      "domain": "spatial",
+      "type": "leaf",
+      "validation_level": "smoke-only",
+      "lifecycle_status": "mvp"
+    }
+  ],
+  "edges": [
+    {
+      "source": "sc-batch-integration",
+      "target": "sc-clustering",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.X_pca",
+      "matched_precondition_key": "data_shape.obsm.X_pca",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "sc-batch-integration",
+      "target": "sc-consensus-clustering",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.X_pca",
+      "matched_precondition_key": "data_shape.obsm.X_pca",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "sc-batch-integration",
+      "target": "sc-consensus-integration",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.X_pca",
+      "matched_precondition_key": "data_shape.obsm.X_pca",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "sc-integrate-cluster",
+      "target": "sc-clustering",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.X_pca",
+      "matched_precondition_key": "data_shape.obsm.X_pca",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "sc-integrate-cluster",
+      "target": "sc-consensus-clustering",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.X_pca",
+      "matched_precondition_key": "data_shape.obsm.X_pca",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "sc-integrate-cluster",
+      "target": "sc-consensus-integration",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.X_pca",
+      "matched_precondition_key": "data_shape.obsm.X_pca",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-batch-integration",
+      "edge_kind": "alternative",
+      "matched_output_key": "files.processed.h5ad",
+      "matched_precondition_key": "data_shape.requires_preprocessed",
+      "condition_scope": null,
+      "confidence": 0.55,
+      "reviewed": false
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-cell-annotation",
+      "edge_kind": "alternative",
+      "matched_output_key": "files.processed.h5ad",
+      "matched_precondition_key": "data_shape.requires_preprocessed",
+      "condition_scope": null,
+      "confidence": 0.55,
+      "reviewed": false
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-cell-communication",
+      "edge_kind": "alternative",
+      "matched_output_key": "files.processed.h5ad",
+      "matched_precondition_key": "data_shape.requires_preprocessed",
+      "condition_scope": null,
+      "confidence": 0.55,
+      "reviewed": false
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-clustering",
+      "edge_kind": "preferred",
+      "matched_output_key": "anndata.obsm.X_pca",
+      "matched_precondition_key": "data_shape.obsm.X_pca",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": true,
+      "review": {
+        "reviewed_by": "Codex implementation audit",
+        "reviewed_at": "2026-07-13",
+        "rationale": "The producer writes X_pca and the consumer declares X_pca as a hard input precondition."
+      }
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-clustering",
+      "edge_kind": "alternative",
+      "matched_output_key": "files.processed.h5ad",
+      "matched_precondition_key": "data_shape.requires_preprocessed",
+      "condition_scope": null,
+      "confidence": 0.55,
+      "reviewed": false
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-consensus-clustering",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.X_pca",
+      "matched_precondition_key": "data_shape.obsm.X_pca",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-consensus-clustering",
+      "edge_kind": "alternative",
+      "matched_output_key": "files.processed.h5ad",
+      "matched_precondition_key": "data_shape.requires_preprocessed",
+      "condition_scope": null,
+      "confidence": 0.55,
+      "reviewed": false
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-consensus-integration",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.X_pca",
+      "matched_precondition_key": "data_shape.obsm.X_pca",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-consensus-integration",
+      "edge_kind": "alternative",
+      "matched_output_key": "files.processed.h5ad",
+      "matched_precondition_key": "data_shape.requires_preprocessed",
+      "condition_scope": null,
+      "confidence": 0.55,
+      "reviewed": false
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-consensus-pseudotime",
+      "edge_kind": "alternative",
+      "matched_output_key": "files.processed.h5ad",
+      "matched_precondition_key": "data_shape.requires_preprocessed",
+      "condition_scope": null,
+      "confidence": 0.55,
+      "reviewed": false
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-cytotrace",
+      "edge_kind": "alternative",
+      "matched_output_key": "files.processed.h5ad",
+      "matched_precondition_key": "data_shape.requires_preprocessed",
+      "condition_scope": null,
+      "confidence": 0.55,
+      "reviewed": false
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-de",
+      "edge_kind": "preferred",
+      "matched_output_key": "files.processed.h5ad",
+      "matched_precondition_key": "data_shape.requires_preprocessed",
+      "condition_scope": null,
+      "confidence": 0.55,
+      "reviewed": true,
+      "review": {
+        "reviewed_by": "Codex implementation audit",
+        "reviewed_at": "2026-07-13",
+        "rationale": "sc-preprocessing explicitly guarantees processing_state=preprocessed for scrna output."
+      }
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-differential-abundance",
+      "edge_kind": "alternative",
+      "matched_output_key": "files.processed.h5ad",
+      "matched_precondition_key": "data_shape.requires_preprocessed",
+      "condition_scope": null,
+      "confidence": 0.55,
+      "reviewed": false
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-drug-response",
+      "edge_kind": "alternative",
+      "matched_output_key": "files.processed.h5ad",
+      "matched_precondition_key": "data_shape.requires_preprocessed",
+      "condition_scope": null,
+      "confidence": 0.55,
+      "reviewed": false
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-enrichment",
+      "edge_kind": "alternative",
+      "matched_output_key": "files.processed.h5ad",
+      "matched_precondition_key": "data_shape.requires_preprocessed",
+      "condition_scope": null,
+      "confidence": 0.55,
+      "reviewed": false
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-gene-programs",
+      "edge_kind": "alternative",
+      "matched_output_key": "files.processed.h5ad",
+      "matched_precondition_key": "data_shape.requires_preprocessed",
+      "condition_scope": null,
+      "confidence": 0.55,
+      "reviewed": false
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-grn",
+      "edge_kind": "alternative",
+      "matched_output_key": "files.processed.h5ad",
+      "matched_precondition_key": "data_shape.requires_preprocessed",
+      "condition_scope": null,
+      "confidence": 0.55,
+      "reviewed": false
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-integrate-cluster",
+      "edge_kind": "alternative",
+      "matched_output_key": "files.processed.h5ad",
+      "matched_precondition_key": "data_shape.requires_preprocessed",
+      "condition_scope": null,
+      "confidence": 0.55,
+      "reviewed": false
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-markers",
+      "edge_kind": "alternative",
+      "matched_output_key": "files.processed.h5ad",
+      "matched_precondition_key": "data_shape.requires_preprocessed",
+      "condition_scope": null,
+      "confidence": 0.55,
+      "reviewed": false
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-metacell",
+      "edge_kind": "alternative",
+      "matched_output_key": "files.processed.h5ad",
+      "matched_precondition_key": "data_shape.requires_preprocessed",
+      "condition_scope": null,
+      "confidence": 0.55,
+      "reviewed": false
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-pseudotime",
+      "edge_kind": "alternative",
+      "matched_output_key": "files.processed.h5ad",
+      "matched_precondition_key": "data_shape.requires_preprocessed",
+      "condition_scope": null,
+      "confidence": 0.55,
+      "reviewed": false
+    },
+    {
+      "source": "sc-preprocessing",
+      "target": "sc-velocity",
+      "edge_kind": "alternative",
+      "matched_output_key": "files.processed.h5ad",
+      "matched_precondition_key": "data_shape.requires_preprocessed",
+      "condition_scope": null,
+      "confidence": 0.55,
+      "reviewed": false
+    },
+    {
+      "source": "spatial-preprocess",
+      "target": "spatial-integrate",
+      "edge_kind": "preferred",
+      "matched_output_key": "anndata.obsm.X_pca",
+      "matched_precondition_key": "data_shape.obsm.X_pca",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": true,
+      "review": {
+        "reviewed_by": "Codex implementation audit",
+        "reviewed_at": "2026-07-13",
+        "rationale": "Spatial preprocessing writes X_pca and integration declares that representation as required."
+      }
+    },
+    {
+      "source": "spatial-preprocess",
+      "target": "spatial-register",
+      "edge_kind": "preferred",
+      "matched_output_key": "files.processed.h5ad",
+      "matched_precondition_key": "data_shape.requires_preprocessed",
+      "condition_scope": null,
+      "confidence": 0.55,
+      "reviewed": true,
+      "review": {
+        "reviewed_by": "Codex implementation audit",
+        "reviewed_at": "2026-07-13",
+        "rationale": "The registration skill documentation explicitly names preprocessing as its upstream stage."
+      }
+    },
+    {
+      "source": "spatial-preprocess",
+      "target": "spatial-trajectory",
+      "edge_kind": "preferred",
+      "matched_output_key": "anndata.obsm.X_pca",
+      "matched_precondition_key": "data_shape.obsm.X_pca",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": true,
+      "review": {
+        "reviewed_by": "Codex implementation audit",
+        "reviewed_at": "2026-07-13",
+        "rationale": "Spatial preprocessing writes X_pca and trajectory declares that representation as required."
+      }
+    },
+    {
+      "source": "spatial-raw-processing",
+      "target": "spatial-annotate",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "spatial-raw-processing",
+      "target": "spatial-cnv",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "spatial-raw-processing",
+      "target": "spatial-communication",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "spatial-raw-processing",
+      "target": "spatial-condition",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "spatial-raw-processing",
+      "target": "spatial-deconv",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "spatial-raw-processing",
+      "target": "spatial-domains",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "spatial-raw-processing",
+      "target": "spatial-enrichment",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "spatial-raw-processing",
+      "target": "spatial-genes",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "spatial-raw-processing",
+      "target": "spatial-microenvironment-subset",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "spatial-raw-processing",
+      "target": "spatial-preprocess",
+      "edge_kind": "preferred",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": true,
+      "review": {
+        "reviewed_by": "Codex implementation audit",
+        "reviewed_at": "2026-07-13",
+        "rationale": "Raw spatial processing writes obsm.spatial consumed by the foundational preprocessing stage."
+      }
+    },
+    {
+      "source": "spatial-raw-processing",
+      "target": "spatial-statistics",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "spatial-raw-processing",
+      "target": "spatial-velocity",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "spatial-register",
+      "target": "spatial-annotate",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "spatial-register",
+      "target": "spatial-cnv",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "spatial-register",
+      "target": "spatial-communication",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "spatial-register",
+      "target": "spatial-condition",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "spatial-register",
+      "target": "spatial-deconv",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "spatial-register",
+      "target": "spatial-enrichment",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "spatial-register",
+      "target": "spatial-genes",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "spatial-register",
+      "target": "spatial-statistics",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    },
+    {
+      "source": "spatial-register",
+      "target": "spatial-velocity",
+      "edge_kind": "alternative",
+      "matched_output_key": "anndata.obsm.spatial",
+      "matched_precondition_key": "data_shape.obsm.spatial",
+      "condition_scope": null,
+      "confidence": 0.95,
+      "reviewed": false
+    }
+  ],
+  "diagnostics": {
+    "cycles": []
+  },
+  "summary": {
+    "node_count": 95,
+    "edge_count": 52,
+    "exact_edge_count": 32,
+    "generic_edge_count": 20,
+    "reviewed_edge_count": 6,
+    "has_cycle": false,
+    "edge_kind_counts": {
+      "alternative": 46,
+      "optional": 0,
+      "preferred": 6,
+      "required": 0
+    }
+  }
+}

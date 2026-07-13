@@ -79,6 +79,7 @@ transformation). The skill stops at PCA — UMAP / clustering live in
 - `report.md`
 - `result.json`
 - Processed AnnData (`saves_h5ad`) — adds `obsm`: `X_pca`; `var`: `highly_variable`; `layers`: `counts`
+- AnnData processing state after success: `preprocessed`
 
 ## Flow
 

@@ -168,6 +168,12 @@ _Avoid_: "artifact copy", "imported output"
 **Exact skill match**: A capability decision where one built-in skill fully covers the user's requested analysis and should run through the shared skill runner.
 _Avoid_: "direct match", "normal route"
 
+**Skill compatibility graph**: The generated, auditable producer→consumer relation derived from canonical `interface.outputs` and `interface.inputs.preconditions`. It is candidate evidence, may contain cycles, and currently covers the AnnData-compatible single-cell/spatial slice; generated edges stay unreviewed alternatives until a governed review overlay promotes them. `summary.skip_when` never enters this graph.
+_Avoid_: "execution DAG", "all-domain workflow graph", "proven dependency"
+
+**Candidate skill plan**: A user-requested set of resolved skills induced from the Skill compatibility graph. A cycle-free connected selection carries producer-before-consumer order and edge provenance; disconnected intents remain explicit unresolved/parallel candidates instead of receiving invented order. It is not executable authority until its digest is explicitly confirmed, and the confirmation gate permits only listed skills.
+_Avoid_: "automatic pipeline", "confirmed workflow", "LLM-generated dependency"
+
 **Partial skill match**: A capability decision where a built-in skill covers the nearest core analysis but the request also needs generated code for post-processing, visualization, reporting, or an extra analytic step.
 _Avoid_: "almost match", "hybrid match"
 

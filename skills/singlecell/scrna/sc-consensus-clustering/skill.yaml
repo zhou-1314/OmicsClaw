@@ -35,6 +35,8 @@ summary:
   - weighted
 interface:
   inputs:
+    modalities:
+    - scrna
     file_types:
     - h5ad
     preconditions:

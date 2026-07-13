@@ -51,6 +51,7 @@ It does NOT replace `sc-clustering`; it wraps it.
 
 **Inputs**
 
+- Modalities: scrna
 - File types: `.h5ad`
 - Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
 - Expects `obsm`: `X_pca`

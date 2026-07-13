@@ -80,6 +80,7 @@ output use `spatial-domains`.
 - `report.md`
 - `result.json`
 - Processed AnnData (`saves_h5ad`) — adds `obs`: `leiden`; `obsm`: `X_pca`, `X_umap`; `var`: `highly_variable`; `layers`: `counts`
+- AnnData processing state after success: `preprocessed`
 
 ## Flow
 

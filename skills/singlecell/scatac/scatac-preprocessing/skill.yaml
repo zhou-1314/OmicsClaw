@@ -98,6 +98,7 @@ interface:
     - result.json
     anndata:
       saves_h5ad: true
+      processing_state: preprocessed
       obs:
       - leiden
       obsm:

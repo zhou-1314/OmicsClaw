@@ -348,6 +348,7 @@ from omicsclaw.runtime.agent.cache_diagnostics import (  # noqa: E402
 # received_files moved to omicsclaw.runtime.agent.session (re-exported via the SessionManager import below).
 pending_media: dict[int | str, list[dict]] = {}
 pending_preflight_requests: dict[int | str, dict] = {}
+pending_candidate_chain_confirmations: dict[int | str, dict] = {}
 
 BOT_START_TIME = time.time()
 

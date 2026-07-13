@@ -58,6 +58,7 @@ use the same skill with that atlas as the reference slice.
 
 **Inputs**
 
+- Modalities: visium, xenium
 - File types: `.h5ad`
 - Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)
 

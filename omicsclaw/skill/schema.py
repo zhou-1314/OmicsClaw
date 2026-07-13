@@ -75,6 +75,7 @@ ValidationLevel = Literal[
 LifecycleStatus = Literal["draft", "mvp", "stable", "deprecated"]
 Origin = Literal["human", "scaffolded", "promoted", "migrated", "corpus"]
 RSource = Literal["cran", "bioc"]
+AnnDataProcessingState = Literal["raw", "standardized", "preprocessed"]
 
 
 def _clean_str_list(v: list[str]) -> list[str]:
@@ -172,6 +173,9 @@ class ResultJson(_Strict):
 
 class AnnDataOutputs(_Strict):
     saves_h5ad: bool = False
+    # Explicit postcondition consumed by the compatibility graph. A filename
+    # such as ``processed.h5ad`` is not evidence that preprocessing occurred.
+    processing_state: Optional[AnnDataProcessingState] = None
     obs: list[str] = Field(default_factory=list)
     obsm: list[str] = Field(default_factory=list)
     var: list[str] = Field(default_factory=list)

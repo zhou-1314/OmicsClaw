@@ -55,6 +55,7 @@ from omicsclaw.runtime.agent.state import (
     audit,
     format_skills_table,
     pending_preflight_requests,
+    pending_candidate_chain_confirmations,
     tool_result_store,
     transcript_store,
 )
@@ -99,6 +100,7 @@ from omicsclaw.analysis_router import (
     extract_valid_input_paths,
     route_analysis_request,
 )
+from omicsclaw.skill.capability_resolver import CapabilityDecision
 from omicsclaw.runtime.policy.policy import TOOL_POLICY_ALLOW
 from omicsclaw.runtime.agent.query_engine import (
     QueryEngineCallbacks,
@@ -186,6 +188,25 @@ def _format_analysis_route_context(route: AnalysisRoute) -> str:
     ]
     if decision.missing_capabilities:
         lines.append("- missing_capabilities: " + "; ".join(decision.missing_capabilities))
+    candidate_chain = route.metadata.get("candidate_chain") or {}
+    if candidate_chain:
+        if candidate_chain.get("validated_order"):
+            lines.append(
+                "- candidate_topo_chain: "
+                + " -> ".join(candidate_chain.get("skills", []))
+            )
+        else:
+            lines.append(
+                "- unresolved_candidate_intents: "
+                + "; ".join(candidate_chain.get("requested_skills", []))
+            )
+            lines.append(
+                f"- unresolved_dependency_pairs: {len(candidate_chain.get('unresolved_pairs', []))}"
+            )
+        lines.append(f"- candidate_plan_digest: {route.metadata.get('plan_digest', '')}")
+        lines.append(
+            f"- candidate_chain_edges: {len(candidate_chain.get('edges', []))} provenance records"
+        )
     if route.preflight_required:
         lines.extend(
             [
@@ -205,6 +226,10 @@ def _format_analysis_route_context(route: AnalysisRoute) -> str:
             )
         lines.append(
             "- execution_rule: do not execute the selected skill until preflight succeeds"
+        )
+    elif candidate_chain:
+        lines.append(
+            "- execution_rule: candidate plan only; confirm the complete chain before executing any step"
         )
     elif route.kind is AnalysisRouteKind.EXACT_SKILL:
         lines.append(
@@ -257,6 +282,91 @@ def _build_analysis_route_context(user_content: str | list) -> str:
         logger.warning("Analysis Router context failed (non-fatal): %s", exc)
         return ""
     return _format_analysis_route_context(route)
+
+
+_CANDIDATE_PLAN_CONFIRMATIONS = frozenset(
+    {
+        "y",
+        "yes",
+        "yes please",
+        "yes confirm",
+        "yes confirm this plan",
+        "yes go ahead",
+        "ok",
+        "okay",
+        "confirm",
+        "confirmed",
+        "confirm this plan",
+        "accept",
+        "accept this plan",
+        "continue",
+        "continue with this plan",
+        "proceed",
+        "proceed with this plan",
+        "go ahead",
+        "确认",
+        "确认执行",
+        "确认这个计划",
+        "确认该计划",
+        "可以",
+        "可以执行",
+        "继续",
+        "接受",
+        "同意",
+        "同意执行",
+    }
+)
+
+
+def _is_explicit_candidate_plan_confirmation(user_text: str) -> bool:
+    """Accept only a short standalone reply, never a matching substring."""
+
+    normalized = re.sub(r"[^\w\u4e00-\u9fff]+", " ", user_text.lower()).strip()
+    normalized = " ".join(normalized.split())
+    return normalized in _CANDIDATE_PLAN_CONFIRMATIONS
+
+
+def _candidate_chain_gate_for_turn(
+    chat_id: int | str,
+    user_text: str,
+    route: AnalysisRoute,
+) -> dict:
+    """Bind a composite plan confirmation to one chat and one plan digest."""
+
+    if route.metadata.get("requires_confirmation"):
+        gate = {
+            "plan_digest": str(route.metadata.get("plan_digest") or ""),
+            "skills": list(
+                (route.metadata.get("candidate_chain") or {}).get("skills", [])
+            ),
+            "confirmed": False,
+        }
+        pending_candidate_chain_confirmations[chat_id] = dict(gate)
+        return gate
+
+    pending = pending_candidate_chain_confirmations.get(chat_id)
+    if not pending:
+        return {}
+
+    lowered = user_text.strip().lower()
+    if any(
+        marker in lowered
+        for marker in ("cancel", "reject", "stop", "取消", "拒绝", "停止", "不执行")
+    ):
+        pending_candidate_chain_confirmations.pop(chat_id, None)
+        return dict(pending) | {"confirmed": False}
+    if route.kind is not AnalysisRouteKind.CHAT:
+        # A new concrete analysis request replaces the pending plan.
+        pending_candidate_chain_confirmations.pop(chat_id, None)
+        return {}
+    if _is_explicit_candidate_plan_confirmation(user_text):
+        confirmed = dict(pending) | {"confirmed": True}
+        pending_candidate_chain_confirmations[chat_id] = confirmed
+        return confirmed
+
+    # Keep the exact digest and its current confirmation state across chat
+    # turns, so an interrupted plan cannot silently lose or gain authority.
+    return dict(pending)
 
 
 _AUTONOMOUS_UNDERSTANDING_DIRECTIVE = (
@@ -332,6 +442,10 @@ async def _build_autonomous_understanding_context(user_content: str | list) -> s
         logger.warning("Autonomous understanding routing failed (non-fatal): %s", exc)
         return ""
     if route.kind not in (AnalysisRouteKind.NO_SKILL, AnalysisRouteKind.PARTIAL_SKILL):
+        return ""
+    if route.metadata.get("candidate_chain"):
+        # A composite built-in plan is not an uncovered-code fallback. Keep the
+        # autonomous executor out of both the prompt and confirmation seam.
         return ""
     try:
         input_paths = extract_valid_input_paths(user_text)
@@ -891,7 +1005,21 @@ async def llm_tool_loop(
         transcript_store.append_assistant_message(chat_id, content=resumed_result)
         return resumed_result
 
-    analysis_route_context = _build_analysis_route_context(user_content)
+    user_text = _extract_user_text(user_content)
+    try:
+        analysis_route = _route_user_text_with_input_state(user_text)
+    except Exception as exc:
+        logger.warning("Analysis Router context failed (non-fatal): %s", exc)
+        analysis_route = AnalysisRoute(
+            kind=AnalysisRouteKind.CHAT,
+            capability_decision=CapabilityDecision(query=user_text),
+        )
+    analysis_route_context = _format_analysis_route_context(analysis_route)
+    candidate_chain_gate = _candidate_chain_gate_for_turn(
+        chat_id,
+        user_text,
+        analysis_route,
+    )
     autonomous_understanding_context = await _build_autonomous_understanding_context(
         user_content
     )
@@ -940,6 +1068,7 @@ async def llm_tool_loop(
         request_tool_approval=request_tool_approval,
         policy_state=policy_state,
         cancel_event=cancel_event,
+        candidate_chain_gate=candidate_chain_gate,
     )
 
 

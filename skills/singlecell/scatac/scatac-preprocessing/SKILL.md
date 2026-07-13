@@ -73,6 +73,7 @@ multi-sample integration. For scRNA preprocessing use `sc-preprocessing`.
 - `report.md`
 - `result.json`
 - Processed AnnData (`saves_h5ad`) — adds `obs`: `leiden`; `obsm`: `X_lsi`, `X_umap`; `layers`: `counts`
+- AnnData processing state after success: `preprocessed`
 
 ## Flow
 

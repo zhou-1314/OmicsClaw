@@ -7,7 +7,6 @@ from pydantic import ValidationError
 
 from omicsclaw.skill.schema import (
     SCHEMA_VERSION,
-    SkillManifest,
     load_skill_yaml,
     parse_skill_manifest,
     validate_skill_yaml,
@@ -52,6 +51,24 @@ def test_input_path_kinds_are_explicit_and_validated():
     ]
 
     data["interface"] = {"inputs": {"path_kinds": ["socket"]}}
+    with pytest.raises(ValidationError):
+        parse_skill_manifest(data)
+
+
+def test_anndata_processing_state_is_explicit_and_validated():
+    data = _minimal()
+    data["interface"] = {
+        "outputs": {
+            "anndata": {
+                "saves_h5ad": True,
+                "processing_state": "preprocessed",
+            }
+        }
+    }
+    manifest = parse_skill_manifest(data)
+    assert manifest.interface.outputs.anndata.processing_state == "preprocessed"
+
+    data["interface"]["outputs"]["anndata"]["processing_state"] = "processed"
     with pytest.raises(ValidationError):
         parse_skill_manifest(data)
 

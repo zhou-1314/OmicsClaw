@@ -31,7 +31,15 @@ def _v2_doc(**over) -> dict:
         "interface": {
             "inputs": {"preconditions": {"data_shape": {"requires_preprocessed": True}}},
             "parameters": {"allowed_extra_flags": ["--resolution"], "hints": {"m": {"x": 1}}},
-            "outputs": {"anndata": {"saves_h5ad": True}},
+            "outputs": {
+                "files": ["processed.h5ad", "result.json"],
+                "result_json": {"required_keys": ["status"]},
+                "anndata": {
+                    "saves_h5ad": True,
+                    "processing_state": "preprocessed",
+                    "obsm": ["X_pca"],
+                },
+            },
         },
         "runtime": {"language": "python", "entry": "spatial_demo.py"},
         "deps": {"python": ["scanpy", "squidpy"]},
@@ -64,6 +72,19 @@ def test_lazy_reads_all_fields_from_v2(tmp_path):
     assert lazy.legacy_aliases == ["spatial-demo-legacy"]
     assert lazy.saves_h5ad is True
     assert lazy.requires_preprocessed is True
+    assert lazy.output_contract == {
+        "files": ["processed.h5ad", "result.json"],
+        "result_json": {"required_keys": ["status"]},
+        "anndata": {
+            "saves_h5ad": True,
+            "processing_state": "preprocessed",
+            "obs": [],
+            "obsm": ["X_pca"],
+            "var": [],
+            "layers": [],
+            "uns": [],
+        },
+    }
     assert lazy.param_hints == {"m": {"x": 1}}
 
 
@@ -146,7 +167,31 @@ def test_registry_load_all_consumes_v2(tmp_path):
     assert info["superseded_by"] == ""
     assert info["skip_when"] == [{"condition": "single-cell data", "use": "sc-de"}]
     assert info["saves_h5ad"] is True
+    assert info["output_contract"] == {
+        "files": ["processed.h5ad", "result.json"],
+        "result_json": {"required_keys": ["status"]},
+        "anndata": {
+            "saves_h5ad": True,
+            "processing_state": "preprocessed",
+            "obs": [],
+            "obsm": ["X_pca"],
+            "var": [],
+            "layers": [],
+            "uns": [],
+        },
+    }
     assert info["description"].startswith("Load when demoing v2 wiring")
+
+
+def test_v1_output_contract_defaults_empty(tmp_path):
+    sd = tmp_path / "legacy"
+    sd.mkdir()
+    (sd / "SKILL.md").write_text(
+        "---\nname: legacy\ndescription: Load when testing. Skip when never.\n---\n",
+        encoding="utf-8",
+    )
+
+    assert LazySkillMetadata(sd).output_contract == {}
 
 
 def test_registry_propagates_governance_fields(tmp_path):

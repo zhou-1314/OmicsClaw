@@ -9,12 +9,14 @@ from omicsclaw.extensions import (
 )
 from omicsclaw.runtime import (
     EXECUTION_STATUS_FAILED,
+    EXECUTION_STATUS_HOOK_BLOCKED,
     ToolExecutionRequest,
     ToolRegistry,
     ToolSpec,
     build_default_tool_execution_hooks,
     execute_tool_requests,
 )
+from omicsclaw.runtime.agent.query_engine import _prepare_tool_runtime_context
 
 
 def _write_runtime_policy_extension(
@@ -201,3 +203,128 @@ def test_build_default_tool_execution_hooks_ignores_remote_extensions(tmp_path):
     )
 
     assert build_default_tool_execution_hooks(tmp_path) == ()
+
+
+def test_candidate_chain_confirmation_hook_blocks_executor_until_confirmed(tmp_path):
+    calls = {"count": 0, "autonomous": 0}
+
+    async def executor(args):
+        calls["count"] += 1
+        return f"ran:{args['skill']}"
+
+    async def autonomous_executor(_args):
+        calls["autonomous"] += 1
+        return "autonomous-ran"
+
+    runtime = ToolRegistry(
+        [
+            ToolSpec(
+                name="omicsclaw",
+                description="Run skill",
+                parameters={
+                    "type": "object",
+                    "properties": {"skill": {"type": "string"}},
+                    "required": ["skill"],
+                },
+            ),
+            ToolSpec(
+                name="autonomous_analysis_execute",
+                description="Run autonomous analysis",
+                parameters={"type": "object", "properties": {}},
+            ),
+        ]
+    ).build_runtime(
+        {
+            "omicsclaw": executor,
+            "autonomous_analysis_execute": autonomous_executor,
+        }
+    )
+    gate = {
+        "plan_digest": "abc123",
+        "skills": ["sc-preprocessing", "sc-clustering"],
+        "confirmed": False,
+    }
+
+    def request(context):
+        return ToolExecutionRequest(
+            call_id="candidate-chain",
+            name="omicsclaw",
+            arguments={"skill": "sc-preprocessing"},
+            spec=runtime.specs_by_name["omicsclaw"],
+            executor=runtime.executors["omicsclaw"],
+            runtime_context=_prepare_tool_runtime_context(context),
+        )
+
+    blocked = asyncio.run(
+        execute_tool_requests(
+            [
+                request(
+                    {
+                        "candidate_chain_gate": gate,
+                    }
+                )
+            ]
+        )
+    )[0]
+
+    assert calls["count"] == 0
+    assert blocked.status == EXECUTION_STATUS_HOOK_BLOCKED
+    assert blocked.policy_decision is not None
+    assert blocked.policy_decision.action == "require_approval"
+    assert "abc123" in str(blocked.output)
+
+    autonomous_blocked = asyncio.run(
+        execute_tool_requests(
+            [
+                ToolExecutionRequest(
+                    call_id="candidate-chain-autonomous",
+                    name="autonomous_analysis_execute",
+                    arguments={},
+                    spec=runtime.specs_by_name["autonomous_analysis_execute"],
+                    executor=runtime.executors["autonomous_analysis_execute"],
+                    runtime_context=_prepare_tool_runtime_context(
+                        {"candidate_chain_gate": gate}
+                    ),
+                )
+            ]
+        )
+    )[0]
+
+    assert autonomous_blocked.status == EXECUTION_STATUS_HOOK_BLOCKED
+    assert calls["autonomous"] == 0
+
+    allowed = asyncio.run(
+        execute_tool_requests(
+            [
+                request(
+                    {
+                        "omicsclaw_dir": str(tmp_path),
+                        "candidate_chain_gate": gate | {"confirmed": True},
+                    }
+                )
+            ]
+        )
+    )[0]
+
+    assert allowed.success is True
+    assert calls["count"] == 1
+
+    out_of_plan = asyncio.run(
+        execute_tool_requests(
+            [
+                ToolExecutionRequest(
+                    call_id="candidate-chain-out-of-plan",
+                    name="omicsclaw",
+                    arguments={"skill": "sc-de"},
+                    spec=runtime.specs_by_name["omicsclaw"],
+                    executor=runtime.executors["omicsclaw"],
+                    runtime_context=_prepare_tool_runtime_context(
+                        {"candidate_chain_gate": gate | {"confirmed": True}}
+                    ),
+                )
+            ]
+        )
+    )[0]
+
+    assert out_of_plan.status == EXECUTION_STATUS_HOOK_BLOCKED
+    assert calls["count"] == 1

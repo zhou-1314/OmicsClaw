@@ -22,6 +22,7 @@ _RUNTIME_FIELDS = (
     "saves_h5ad",
     "requires_preprocessed",
     "input_contract",
+    "output_contract",
     "param_hints",
 )
 
@@ -67,6 +68,7 @@ _RUNTIME_DEFAULTS: dict[str, object] = {
     "saves_h5ad": False,
     "requires_preprocessed": False,
     "input_contract": {},
+    "output_contract": {},
     "param_hints": {},
 }
 
@@ -260,6 +262,7 @@ class LazySkillMetadata:
                 m.interface.inputs.preconditions.data_shape.requires_preprocessed
             ),
             "input_contract": m.interface.inputs.model_dump(exclude_none=True),
+            "output_contract": m.interface.outputs.model_dump(exclude_none=True),
             "param_hints": dict(m.interface.parameters.hints),
             # identity metadata (catalog / desktop / generators read these)
             "version": m.version,
@@ -473,6 +476,12 @@ class LazySkillMetadata:
         """Complete machine-readable ``interface.inputs`` contract."""
         self._ensure_basic()
         return dict(self._basic.get("input_contract", {}) or {})
+
+    @property
+    def output_contract(self) -> dict:
+        """Complete machine-readable ``interface.outputs`` contract."""
+        self._ensure_basic()
+        return dict(self._basic.get("output_contract", {}) or {})
 
     @property
     def param_hints(self) -> dict:
