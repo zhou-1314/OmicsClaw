@@ -38,11 +38,18 @@ summary:
   - spatial-st-pipeline
 interface:
   inputs:
+    path_kinds:
+    - file
+    - directory
     modalities:
     - visium
     - slideseq
     file_types:
     - fastq
+    - fq
+    - json
+    - yaml
+    - yml
   parameters:
     hints:
       st_pipeline:

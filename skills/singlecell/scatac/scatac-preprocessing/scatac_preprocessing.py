@@ -838,7 +838,11 @@ def main():
     save_h5ad(adata, output_h5ad)
     logger.info("Saved to %s", output_h5ad)
 
-    checksum = sha256_file(input_file) if input_file and Path(input_file).exists() else ""
+    checksum = (
+        sha256_file(input_file)
+        if input_file and Path(input_file).is_file()
+        else ""
+    )
     result_data = {
         "method": method,
         "params": public_params,

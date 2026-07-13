@@ -30,6 +30,7 @@ interface:
   inputs:
     file_types:
     - fastq
+    - fq
   outputs:
     files:
     - tables/per_base_quality.csv

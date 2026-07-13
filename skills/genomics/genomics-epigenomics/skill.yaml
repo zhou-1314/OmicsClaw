@@ -39,6 +39,8 @@ interface:
     - chip-seq
     file_types:
     - bed
+    - narrowpeak
+    - csv
   outputs:
     files:
     - tables/peaks_per_chromosome.csv

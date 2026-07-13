@@ -846,7 +846,11 @@ def write_report(
     footer = generate_report_footer()
     (output_dir / "report.md").write_text(header + "\n".join(body_lines) + "\n" + footer)
 
-    checksum = sha256_file(input_file) if input_file and Path(input_file).exists() else ""
+    checksum = (
+        sha256_file(input_file)
+        if input_file and Path(input_file).is_file()
+        else ""
+    )
     result_data: dict[str, Any] = {
         "method": method_name,
         "params": params,

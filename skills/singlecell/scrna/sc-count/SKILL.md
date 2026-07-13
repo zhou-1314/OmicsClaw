@@ -45,6 +45,7 @@ samples).
 
 **Inputs**
 
+- Input kinds: `file`, `directory`
 - Modalities: scrna
 
 **Outputs**

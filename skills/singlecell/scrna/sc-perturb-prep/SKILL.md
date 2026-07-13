@@ -52,8 +52,9 @@ classification. This skill does NOT infer guide identities from FASTQ
 
 **Inputs**
 
+- Input kinds: `file`, `directory`
 - Modalities: scrna
-- File types: `.h5ad`, `.h5`, `.tsv`, `.csv`
+- File types: `.h5ad`, `.h5`, `.loom`, `.tsv`, `.csv`
 
 **Outputs**
 

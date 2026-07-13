@@ -21,11 +21,15 @@ summary:
   - sgrna-assignment
 interface:
   inputs:
+    path_kinds:
+    - file
+    - directory
     modalities:
     - scrna
     file_types:
     - h5ad
     - h5
+    - loom
     - tsv
     - csv
   outputs:

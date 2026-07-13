@@ -33,6 +33,8 @@ summary:
   - backward-proof-driven-recommendation
 interface:
   inputs:
+    path_kinds:
+    - directory
     file_types:
     - json
   outputs:

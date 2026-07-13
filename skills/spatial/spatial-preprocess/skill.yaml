@@ -41,11 +41,17 @@ summary:
   - spatial-preprocessing
 interface:
   inputs:
+    path_kinds:
+    - file
+    - directory
     modalities:
     - visium
     - xenium
     file_types:
     - h5ad
+    - h5
+    - hdf5
+    - zarr
     preconditions:
       data_shape:
         obsm:

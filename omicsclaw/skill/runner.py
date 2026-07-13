@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .registry import ensure_registry_loaded, registry
+from .preconditions import format_precondition_failure, preflight_skill_execution
 from .execution.argv_builder import (
     build_skill_argv,
     build_user_run_command,
@@ -148,6 +149,14 @@ def _prepare_skill_run(
 
     resolved_input = input_path
     if session_path and not input_path and not demo and not resolved_input_paths:
+        session_assessment = preflight_skill_execution(
+            skill_name,
+            session_path=session_path,
+            registry=registry,
+        )
+        if session_assessment is not None and not session_assessment.execution_ready:
+            return _err(skill_name, format_precondition_failure(session_assessment))
+
         from omicsclaw.common.session import SpatialSession
 
         session = SpatialSession.load(session_path)
@@ -165,6 +174,26 @@ def _prepare_skill_run(
         _candidate = Path(resolved_input)
         if _candidate.exists():
             resolved_input = str(_candidate.resolve())
+
+    assessment = preflight_skill_execution(
+        skill_name,
+        input_path=resolved_input,
+        input_paths=resolved_input_paths,
+        demo=demo,
+        registry=registry,
+    )
+    if assessment is not None and not assessment.execution_ready:
+        return _err(skill_name, format_precondition_failure(assessment))
+
+    if demo and not skill_info.get("demo_args", ["--demo"]):
+        return _err(
+            skill_name,
+            f"`{skill_name}` does not support --demo (consensus skills run on "
+            "real preprocessed data via the consensus runtime); provide "
+            "--input <preprocessed.h5ad>.",
+        )
+    if not demo and not resolved_input and not resolved_input_paths:
+        return _err(skill_name, "No --input, --demo, or --session provided.")
 
     user_supplied_output_dir = output_dir is not None
     generated_ts = datetime.now().strftime("%Y%m%d_%H%M%S")

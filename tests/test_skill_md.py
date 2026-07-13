@@ -89,6 +89,14 @@ def test_io_section_none_when_interface_empty():
     assert render_io_section(_manifest(interface={})) is None
 
 
+def test_io_section_renders_non_default_input_path_kinds():
+    io = render_io_section(
+        _manifest(interface={"inputs": {"path_kinds": ["directory", "freeform"]}})
+    )
+    assert io is not None
+    assert "Input kinds: `directory`, `freeform`" in io
+
+
 def test_render_replaces_io_and_regenerates_header():
     out = render_skill_md(_manifest(), _NARRATIVE)
     # header regenerated from skill.yaml (new version, not the stale one)

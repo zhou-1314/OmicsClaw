@@ -1265,7 +1265,11 @@ def main() -> None:
         _write_reproducibility(output_dir, params={"method": method, "groupby": resolved_groupby, **gsva_params},
                                 input_file=input_file, demo=args.demo)
 
-        checksum = sha256_file(input_file) if input_file and Path(input_file).exists() else ""
+        checksum = (
+            sha256_file(input_file)
+            if input_file and Path(input_file).is_file()
+            else ""
+        )
         result_data = {
             "params": {"method": method, "groupby": resolved_groupby, **gsva_params},
             "input_contract": input_contract,
@@ -1471,7 +1475,11 @@ def main() -> None:
     _write_report(output_dir, summary=summary, params=params, input_file=input_file, group_summary_df=group_summary_df)
     _write_reproducibility(output_dir, params=params, input_file=input_file, demo=args.demo)
 
-    checksum = sha256_file(input_file) if input_file and Path(input_file).exists() else ""
+    checksum = (
+        sha256_file(input_file)
+        if input_file and Path(input_file).is_file()
+        else ""
+    )
     result_data = {
         "params": params,
         "input_contract": input_contract,

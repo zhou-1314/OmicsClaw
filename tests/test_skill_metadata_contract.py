@@ -10,6 +10,40 @@ from omicsclaw.skill.registry import OmicsRegistry
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# Audited from the primary ``--input`` path in each runtime entry. Keep this
+# list explicit: a permissive shared loader alone does not make every consumer
+# directory-compatible, while these skills document and exercise directory
+# inputs as part of their public contract.
+DIRECTORY_INPUT_SKILLS = {
+    "consensus-interpret",
+    "scatac-preprocessing",
+    "sc-ambient-removal",
+    "sc-count",
+    "sc-enrichment",
+    "sc-fastq-qc",
+    "sc-perturb-prep",
+    "sc-standardize-input",
+    "sc-velocity-prep",
+    "spatial-microenvironment-subset",
+    "spatial-preprocess",
+    "spatial-raw-processing",
+}
+
+AUDITED_INPUT_FILE_TYPES = {
+    "bulkrna-ppi-network": {"csv", "txt"},
+    "bulkrna-read-qc": {"fastq", "fq"},
+    "genomics-epigenomics": {"bed", "narrowpeak", "csv"},
+    "genomics-qc": {"fastq", "fq"},
+    "sc-ambient-removal": {"h5ad", "h5", "loom", "csv", "tsv"},
+    "sc-fastq-qc": {"fastq", "fq"},
+    "sc-perturb-prep": {"h5ad", "h5", "loom", "csv", "tsv"},
+    "sc-velocity-prep": {"loom", "fastq", "fq"},
+    "scatac-preprocessing": {"h5ad", "h5", "loom", "csv", "tsv"},
+    "spatial-microenvironment-subset": {"h5ad", "h5", "hdf5", "zarr"},
+    "spatial-preprocess": {"h5ad", "h5", "hdf5", "zarr"},
+    "spatial-raw-processing": {"fastq", "fq", "json", "yaml", "yml"},
+}
+
 
 def _frontmatter(skill_md: Path) -> dict[str, Any]:
     text = skill_md.read_text(encoding="utf-8")
@@ -94,3 +128,36 @@ def test_all_primary_skills_have_standard_omicsclaw_frontmatter():
         failures.append(f"{skill_md.relative_to(ROOT)}: SKILL.md is not a primary registered skill")
 
     assert not failures, "\n".join(failures[:120])
+
+
+def test_audited_directory_inputs_are_declared_in_the_machine_contract():
+    registry = OmicsRegistry()
+    registry.load_all()
+
+    failures = []
+    for skill_name in sorted(DIRECTORY_INPUT_SKILLS):
+        info = registry.skills[skill_name]
+        path_kinds = (info.get("input_contract") or {}).get("path_kinds", [])
+        if "directory" not in path_kinds:
+            failures.append(f"{skill_name}: path_kinds={path_kinds!r}")
+
+    assert not failures, "\n".join(failures)
+
+
+def test_audited_public_input_formats_are_declared_in_the_machine_contract():
+    registry = OmicsRegistry()
+    registry.load_all()
+
+    failures = []
+    for skill_name, expected in sorted(AUDITED_INPUT_FILE_TYPES.items()):
+        info = registry.skills[skill_name]
+        declared = set(
+            (info.get("input_contract") or {}).get("file_types", [])
+        )
+        if declared != expected:
+            failures.append(
+                f"{skill_name}: expected={sorted(expected)!r}, "
+                f"declared={sorted(declared)!r}"
+            )
+
+    assert not failures, "\n".join(failures)

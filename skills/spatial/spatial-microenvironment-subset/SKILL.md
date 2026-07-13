@@ -50,8 +50,9 @@ cross-condition niche comparison use `spatial-condition`.
 
 **Inputs**
 
+- Input kinds: `file`, `directory`
 - Modalities: visium, xenium
-- File types: `.h5ad`
+- File types: `.h5ad`, `.h5`, `.hdf5`, `.zarr`
 - Expects `obsm`: `spatial`
 
 **Outputs**

@@ -38,7 +38,7 @@ the metrics needed to decide whether trimming is worth the trouble.
 
 **Inputs**
 
-- File types: `.fastq`
+- File types: `.fastq`, `.fq`
 
 **Outputs**
 

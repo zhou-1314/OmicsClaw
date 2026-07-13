@@ -38,7 +38,7 @@ induced subgraph, and ranks hub proteins by degree centrality.
 
 **Inputs**
 
-- File types: `.csv`
+- File types: `.csv`, `.txt`
 
 **Outputs**
 

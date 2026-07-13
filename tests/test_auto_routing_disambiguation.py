@@ -187,6 +187,84 @@ async def test_auto_route_never_executes_an_unreadable_h5ad(tmp_path, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_explicit_agent_skill_preflights_before_reserving_a_run_directory(
+    tmp_path,
+    monkeypatch,
+):
+    import omicsclaw.runtime.agent.state  # noqa: F401 - bootstrap executor exports
+    from omicsclaw.runtime.tools.builders import agent_executors
+
+    input_path = tmp_path / "corrupt.h5ad"
+    input_path.write_bytes(b"not an hdf5 file")
+    monkeypatch.setattr(
+        agent_executors,
+        "validate_input_path",
+        lambda *_args, **_kwargs: input_path,
+    )
+    monkeypatch.setattr(agent_executors, "audit", lambda *_args, **_kwargs: None)
+
+    def fail_if_reserved(**_kwargs):
+        raise AssertionError("agent must not reserve output before explicit preflight")
+
+    async def fail_if_executed(**_kwargs):
+        raise AssertionError("corrupt input must not reach the shared runner")
+
+    monkeypatch.setattr(agent_executors.run_paths, "resolve_run_dir", fail_if_reserved)
+    monkeypatch.setattr(
+        agent_executors,
+        "_run_skill_via_shared_runner",
+        fail_if_executed,
+    )
+
+    result = await agent_executors.execute_omicsclaw(
+        {
+            "skill": "sc-clustering",
+            "mode": "path",
+            "file_path": str(input_path),
+        }
+    )
+
+    assert "USER_GUIDANCE_JSON:" in result
+    assert "execution precondition gate" in result
+    assert "inspection" in result
+
+
+@pytest.mark.asyncio
+async def test_agent_pipeline_preflights_before_reserving_a_run_directory(
+    tmp_path,
+    monkeypatch,
+):
+    import omicsclaw.runtime.agent.state  # noqa: F401 - bootstrap executor exports
+    from omicsclaw.runtime.tools.builders import agent_executors
+
+    input_path = tmp_path / "corrupt.h5ad"
+    input_path.write_bytes(b"not an hdf5 file")
+    monkeypatch.setattr(
+        agent_executors,
+        "validate_input_path",
+        lambda *_args, **_kwargs: input_path,
+    )
+    monkeypatch.setattr(agent_executors, "audit", lambda *_args, **_kwargs: None)
+
+    def fail_if_reserved(**_kwargs):
+        raise AssertionError("agent must not reserve pipeline output before preflight")
+
+    monkeypatch.setattr(agent_executors.run_paths, "resolve_run_dir", fail_if_reserved)
+
+    result = await agent_executors.execute_omicsclaw(
+        {
+            "skill": "pipeline",
+            "mode": "path",
+            "file_path": str(input_path),
+        }
+    )
+
+    assert "USER_GUIDANCE_JSON:" in result
+    assert "execution precondition gate" in result
+    assert "inspection" in result
+
+
+@pytest.mark.asyncio
 async def test_file_mode_profiles_the_current_sessions_upload(tmp_path, monkeypatch):
     import omicsclaw.runtime.agent.state  # noqa: F401 - bootstrap executor exports
     from omicsclaw.runtime.tools.builders import agent_executors

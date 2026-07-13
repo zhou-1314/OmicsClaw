@@ -40,7 +40,7 @@ For BAM-level alignment QC use `genomics-alignment`.
 
 **Inputs**
 
-- File types: `.fastq`
+- File types: `.fastq`, `.fq`
 
 **Outputs**
 

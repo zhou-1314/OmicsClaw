@@ -46,8 +46,9 @@ multiplet barcodes.
 
 **Inputs**
 
+- Input kinds: `file`, `directory`
 - Modalities: scrna
-- File types: `.h5ad`
+- File types: `.h5ad`, `.h5`, `.loom`, `.csv`, `.tsv`
 
 **Outputs**
 

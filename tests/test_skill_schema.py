@@ -37,6 +37,23 @@ def test_minimal_manifest_parses_with_defaults():
     assert m.security.data_egress == "none"
     assert m.security.network == "none"
     assert m.security.writes == "output_dir_only"
+    assert m.interface.inputs.path_kinds == ["file"]
+
+
+def test_input_path_kinds_are_explicit_and_validated():
+    data = _minimal()
+    data["interface"] = {
+        "inputs": {"path_kinds": ["file", "directory", "freeform"]}
+    }
+    assert parse_skill_manifest(data).interface.inputs.path_kinds == [
+        "file",
+        "directory",
+        "freeform",
+    ]
+
+    data["interface"] = {"inputs": {"path_kinds": ["socket"]}}
+    with pytest.raises(ValidationError):
+        parse_skill_manifest(data)
 
 
 def test_reserved_flags_rejected():

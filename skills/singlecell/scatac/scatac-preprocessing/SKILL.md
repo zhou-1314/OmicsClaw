@@ -47,6 +47,7 @@ multi-sample integration. For scRNA preprocessing use `sc-preprocessing`.
 
 **Inputs**
 
+- Input kinds: `file`, `directory`
 - Modalities: scatac
 - File types: `.h5ad`, `.h5`, `.loom`, `.csv`, `.tsv`
 

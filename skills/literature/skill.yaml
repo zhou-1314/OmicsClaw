@@ -30,6 +30,9 @@ summary:
   - metadata
 interface:
   inputs:
+    path_kinds:
+    - file
+    - freeform
     file_types:
     - pdf
   outputs:

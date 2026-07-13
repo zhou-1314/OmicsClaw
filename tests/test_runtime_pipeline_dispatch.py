@@ -134,6 +134,7 @@ def test_pipeline_respects_chain_output_basename_override(tmp_path, monkeypatch)
     calls = _stub_run_skill_chain(monkeypatch, chain_output_basename="counts.csv")
 
     pipeline_out = tmp_path / "bulk_out"
+    (tmp_path / "raw.csv").write_text("raw", encoding="utf-8")
     pipeline_runner.run_pipeline(
         config,
         default_output_root=tmp_path,
@@ -143,7 +144,6 @@ def test_pipeline_respects_chain_output_basename_override(tmp_path, monkeypatch)
         input_path=str(tmp_path / "raw.csv"),
         output_dir=str(pipeline_out),
     )
-    (tmp_path / "raw.csv").write_text("raw", encoding="utf-8")
 
     # step 2's input is step 1's baton, but the baton is ``counts.csv``, not
     # the default ``processed.h5ad`` — proving the override was honoured.
@@ -192,6 +192,28 @@ def test_pipeline_stops_at_first_failure_and_records_partial_summary(tmp_path, m
     assert "step-c" not in summary["results"]
     assert summary["results"]["step-a"]["success"] is True
     assert summary["results"]["step-b"]["success"] is False
+    assert summary["results"]["step-b"]["stderr"] == "stub failure"
+    assert result.stderr == "stub failure"
+
+
+def test_pipeline_preflights_first_step_before_creating_composite_output(tmp_path):
+    """RET-04b: a corrupt initial input cannot leave a pipeline shell behind."""
+    from omicsclaw.skill.runner import run_skill
+
+    corrupt_input = tmp_path / "corrupt.h5ad"
+    corrupt_input.write_text("not an HDF5 file\n", encoding="utf-8")
+    pipeline_out = tmp_path / "pipeline-out"
+
+    result = run_skill(
+        "spatial-pipeline",
+        input_path=str(corrupt_input),
+        output_dir=str(pipeline_out),
+    )
+
+    assert result.success is False
+    assert "precondition" in result.stderr.lower()
+    assert "inspection" in result.stderr.lower()
+    assert not pipeline_out.exists()
 
 
 def test_pipeline_requires_at_least_one_input_source(tmp_path, monkeypatch):

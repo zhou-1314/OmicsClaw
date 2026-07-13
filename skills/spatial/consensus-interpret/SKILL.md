@@ -57,6 +57,7 @@ Skip when:
 
 **Inputs**
 
+- Input kinds: `directory`
 - File types: `.json`
 
 **Outputs**

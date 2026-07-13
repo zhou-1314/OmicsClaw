@@ -217,7 +217,7 @@ def main() -> int:
             sep=args.sep,
         )
         input_file = args.input
-        input_checksum = sha256_file(args.input)
+        input_checksum = sha256_file(args.input) if Path(args.input).is_file() else ""
 
     feature_filtered, feature_summary = keep_gene_expression_features(adata)
     control_patterns = tuple(token.strip() for token in args.control_patterns.split(",") if token.strip())

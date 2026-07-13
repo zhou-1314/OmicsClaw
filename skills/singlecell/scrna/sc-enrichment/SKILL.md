@@ -61,6 +61,7 @@ For per-cell scoring (no rankings, just gene sets) use
 
 **Inputs**
 
+- Input kinds: `file`, `directory`
 - Modalities: scrna
 - File types: `.h5ad`
 - Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)

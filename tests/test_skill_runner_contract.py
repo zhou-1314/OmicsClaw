@@ -3,11 +3,14 @@ from __future__ import annotations
 import importlib
 import inspect
 import json
+import subprocess
 import sys
 import textwrap
 import threading
 import time
 from pathlib import Path
+
+import pytest
 
 
 def _install_fake_skills(monkeypatch, skills: dict, domains: dict | None = None) -> None:
@@ -80,6 +83,699 @@ def test_root_omicsclaw_reexports_shared_run_skill():
     runner = importlib.import_module("omicsclaw.skill.runner")
 
     assert root.run_skill is runner.run_skill
+
+
+def test_explicit_skill_rejects_uninspectable_local_input_before_execution(
+    tmp_path,
+    monkeypatch,
+):
+    """RET-04b: named skills share the same fail-closed execution gate.
+
+    A corrupt local ``.h5ad`` must be rejected before the runner creates its
+    output directory or starts a subprocess.  This public runner contract is
+    intentionally independent of the Analysis Router's auto-route preflight.
+    """
+    skill_runner = importlib.import_module("omicsclaw.skill.runner")
+
+    fake_script = tmp_path / "must_not_run.py"
+    fake_script.write_text("raise SystemExit('must not execute')\n", encoding="utf-8")
+    corrupt_input = tmp_path / "corrupt.h5ad"
+    corrupt_input.write_text("not an h5ad file\n", encoding="utf-8")
+    output_dir = tmp_path / "out"
+
+    _install_fake_skills(
+        monkeypatch,
+        {
+            "guarded-skill": {
+                "script": fake_script,
+                "domain": "singlecell",
+                "demo_args": ["--demo"],
+                "allowed_extra_flags": set(),
+                "description": "Explicit execution gate test skill",
+                "input_contract": {
+                    "modalities": ["scrna"],
+                    "file_types": ["h5ad"],
+                    "preconditions": {
+                        "data_shape": {
+                            "requires_preprocessed": True,
+                            "obsm": ["X_pca"],
+                        }
+                    },
+                },
+            }
+        },
+    )
+
+    subprocess_calls: list[list[str]] = []
+
+    def _must_not_execute(cmd, **_kwargs):
+        subprocess_calls.append(cmd)
+        raise AssertionError("subprocess must not start after preflight failure")
+
+    monkeypatch.setattr(skill_runner, "drive_subprocess", _must_not_execute)
+
+    result = skill_runner.run_skill(
+        "guarded-skill",
+        input_path=str(corrupt_input),
+        output_dir=str(output_dir),
+    )
+
+    assert result.success is False
+    assert result.exit_code == -1
+    assert "USER_GUIDANCE_JSON:" in result.stderr
+    assert "precondition" in result.stderr.lower()
+    assert "inspection" in result.stderr.lower()
+    assert subprocess_calls == []
+    assert not output_dir.exists()
+
+
+def test_explicit_skill_gate_allows_a_verified_local_input(tmp_path, monkeypatch):
+    import anndata as ad
+    import numpy as np
+
+    skill_runner = importlib.import_module("omicsclaw.skill.runner")
+    fake_script = tmp_path / "verified.py"
+    fake_script.write_text("raise SystemExit('driver is stubbed')\n", encoding="utf-8")
+    input_path = tmp_path / "verified.h5ad"
+    adata = ad.AnnData(np.ones((3, 2)))
+    adata.obsm["X_pca"] = np.ones((3, 2))
+    adata.uns["omicsclaw_input_contract"] = {
+        "domain": "singlecell",
+        "modality": "scrna",
+        "preprocessed": True,
+    }
+    adata.write_h5ad(input_path)
+
+    _install_fake_skills(
+        monkeypatch,
+        {
+            "guarded-skill": {
+                "script": fake_script,
+                "domain": "singlecell",
+                "demo_args": ["--demo"],
+                "allowed_extra_flags": set(),
+                "input_contract": {
+                    "modalities": ["scrna"],
+                    "file_types": ["h5ad"],
+                    "preconditions": {
+                        "data_shape": {
+                            "requires_preprocessed": True,
+                            "obsm": ["X_pca"],
+                        }
+                    },
+                },
+            }
+        },
+    )
+    calls: list[list[str]] = []
+
+    def _completed(cmd, **_kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(skill_runner, "drive_subprocess", _completed)
+
+    result = skill_runner.run_skill(
+        "guarded-skill",
+        input_path=str(input_path),
+        output_dir=str(tmp_path / "out"),
+    )
+
+    assert result.success is True, result.stderr
+    assert len(calls) == 1
+
+
+def test_explicit_gate_allows_external_h5ad_without_omicsclaw_modality_tag(
+    tmp_path,
+    monkeypatch,
+):
+    """Explicit selection supplies intent; unknown identity is not a conflict."""
+    import anndata as ad
+    import numpy as np
+
+    skill_runner = importlib.import_module("omicsclaw.skill.runner")
+    fake_script = tmp_path / "external.py"
+    fake_script.write_text("raise SystemExit('driver is stubbed')\n", encoding="utf-8")
+    input_path = tmp_path / "external.h5ad"
+    adata = ad.AnnData(np.ones((3, 2)))
+    adata.obsm["X_pca"] = np.ones((3, 2))
+    adata.write_h5ad(input_path)
+    _install_fake_skills(
+        monkeypatch,
+        {
+            "guarded-skill": {
+                "script": fake_script,
+                "domain": "singlecell",
+                "demo_args": ["--demo"],
+                "allowed_extra_flags": set(),
+                "input_contract": {
+                    "modalities": ["scrna"],
+                    "file_types": ["h5ad"],
+                    "preconditions": {
+                        "data_shape": {
+                            "requires_preprocessed": True,
+                            "obsm": ["X_pca"],
+                        }
+                    },
+                },
+            }
+        },
+    )
+    calls: list[list[str]] = []
+
+    def _completed(cmd, **_kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(skill_runner, "drive_subprocess", _completed)
+
+    result = skill_runner.run_skill(
+        "guarded-skill",
+        input_path=str(input_path),
+        output_dir=str(tmp_path / "external-out"),
+    )
+
+    assert result.success is True, result.stderr
+    assert len(calls) == 1
+
+
+def test_explicit_gate_still_rejects_an_observed_modality_conflict(
+    tmp_path,
+    monkeypatch,
+):
+    import anndata as ad
+    import numpy as np
+
+    skill_runner = importlib.import_module("omicsclaw.skill.runner")
+    fake_script = tmp_path / "conflict.py"
+    fake_script.write_text("raise SystemExit('must not execute')\n", encoding="utf-8")
+    input_path = tmp_path / "genomics.h5ad"
+    adata = ad.AnnData(np.ones((2, 2)))
+    adata.uns["omicsclaw_input_contract"] = {"modality": "genomics"}
+    adata.write_h5ad(input_path)
+    _install_fake_skills(
+        monkeypatch,
+        {
+            "scrna-skill": {
+                "script": fake_script,
+                "domain": "singlecell",
+                "demo_args": ["--demo"],
+                "allowed_extra_flags": set(),
+                "input_contract": {
+                    "modalities": ["scrna"],
+                    "file_types": ["h5ad"],
+                    "preconditions": {},
+                },
+            }
+        },
+    )
+    calls: list[list[str]] = []
+
+    def _must_not_execute(cmd, **_kwargs):
+        calls.append(cmd)
+        raise AssertionError("modality conflict must not reach subprocess")
+
+    monkeypatch.setattr(skill_runner, "drive_subprocess", _must_not_execute)
+
+    result = skill_runner.run_skill(
+        "scrna-skill",
+        input_path=str(input_path),
+        output_dir=str(tmp_path / "conflict-out"),
+    )
+
+    assert result.success is False
+    assert "modality 'genomics' is incompatible" in result.stderr
+    assert calls == []
+
+
+def test_explicit_gate_preserves_existing_directory_inputs(tmp_path, monkeypatch):
+    skill_runner = importlib.import_module("omicsclaw.skill.runner")
+    fake_script = tmp_path / "directory.py"
+    fake_script.write_text("raise SystemExit('driver is stubbed')\n", encoding="utf-8")
+    input_dir = tmp_path / "tenx_matrix.v1"
+    input_dir.mkdir()
+    (input_dir / "matrix.mtx").write_text("%%MatrixMarket\n", encoding="utf-8")
+    _install_fake_skills(
+        monkeypatch,
+        {
+            "standardize-skill": {
+                "script": fake_script,
+                "domain": "singlecell",
+                "demo_args": ["--demo"],
+                "allowed_extra_flags": set(),
+                "input_contract": {
+                    "modalities": ["scrna"],
+                    "file_types": ["h5ad", "h5", "loom"],
+                    "path_kinds": ["file", "directory"],
+                    "preconditions": {},
+                },
+            }
+        },
+    )
+    calls: list[list[str]] = []
+
+    def _completed(cmd, **_kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(skill_runner, "drive_subprocess", _completed)
+
+    result = skill_runner.run_skill(
+        "standardize-skill",
+        input_path=str(input_dir),
+        output_dir=str(tmp_path / "directory-out"),
+    )
+
+    assert result.success is True, result.stderr
+    assert len(calls) == 1
+
+
+def test_explicit_gate_rejects_directory_for_a_file_only_skill(tmp_path, monkeypatch):
+    skill_runner = importlib.import_module("omicsclaw.skill.runner")
+    fake_script = tmp_path / "file_only.py"
+    fake_script.write_text("raise SystemExit('must not execute')\n", encoding="utf-8")
+    input_dir = tmp_path / "not_an_h5ad"
+    input_dir.mkdir()
+    _install_fake_skills(
+        monkeypatch,
+        {
+            "file-only-skill": {
+                "script": fake_script,
+                "domain": "singlecell",
+                "demo_args": ["--demo"],
+                "allowed_extra_flags": set(),
+                "input_contract": {
+                    "modalities": ["scrna"],
+                    "file_types": ["h5ad"],
+                    "path_kinds": ["file"],
+                    "preconditions": {},
+                },
+            }
+        },
+    )
+
+    result = skill_runner.run_skill(
+        "file-only-skill",
+        input_path=str(input_dir),
+        output_dir=str(tmp_path / "file-only-out"),
+    )
+
+    assert result.success is False
+    assert "directory input is incompatible" in result.stderr
+
+
+def test_explicit_gate_rejects_file_for_a_directory_only_skill(tmp_path, monkeypatch):
+    skill_runner = importlib.import_module("omicsclaw.skill.runner")
+    fake_script = tmp_path / "directory_only.py"
+    fake_script.write_text("raise SystemExit('must not execute')\n", encoding="utf-8")
+    input_file = tmp_path / "audit.json"
+    input_file.write_text("{}\n", encoding="utf-8")
+    _install_fake_skills(
+        monkeypatch,
+        {
+            "directory-only-skill": {
+                "script": fake_script,
+                "domain": "spatial",
+                "demo_args": ["--demo"],
+                "allowed_extra_flags": set(),
+                "input_contract": {
+                    "modalities": [],
+                    "file_types": ["json"],
+                    "path_kinds": ["directory"],
+                    "preconditions": {},
+                },
+            }
+        },
+    )
+
+    result = skill_runner.run_skill(
+        "directory-only-skill",
+        input_path=str(input_file),
+        output_dir=str(tmp_path / "directory-only-out"),
+    )
+
+    assert result.success is False
+    assert "file input is incompatible" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "freeform_input",
+    [
+        "plain raw text",
+        "10.1038/s41586-024-00000-0",
+        "https://example.org/paper",
+    ],
+)
+def test_explicit_gate_rejects_freeform_for_a_file_only_skill(
+    tmp_path,
+    monkeypatch,
+    freeform_input,
+):
+    skill_runner = importlib.import_module("omicsclaw.skill.runner")
+    fake_script = tmp_path / "file_only.py"
+    fake_script.write_text("raise SystemExit('must not execute')\n", encoding="utf-8")
+    _install_fake_skills(
+        monkeypatch,
+        {
+            "file-only-skill": {
+                "script": fake_script,
+                "domain": "singlecell",
+                "demo_args": ["--demo"],
+                "allowed_extra_flags": set(),
+                "input_contract": {
+                    "modalities": ["scrna"],
+                    "file_types": ["h5ad"],
+                    "path_kinds": ["file"],
+                    "preconditions": {},
+                },
+            }
+        },
+    )
+
+    result = skill_runner.run_skill(
+        "file-only-skill",
+        input_path=freeform_input,
+        output_dir=str(tmp_path / "freeform-out"),
+    )
+
+    assert result.success is False
+    assert "freeform input is incompatible" in result.stderr
+
+
+def test_explicit_skill_gate_does_not_reclassify_demo_or_free_form_inputs(
+    tmp_path,
+    monkeypatch,
+):
+    skill_runner = importlib.import_module("omicsclaw.skill.runner")
+    fake_script = tmp_path / "flexible.py"
+    fake_script.write_text("raise SystemExit('driver is stubbed')\n", encoding="utf-8")
+    _install_fake_skills(
+        monkeypatch,
+        {
+            "flexible-skill": {
+                "script": fake_script,
+                "domain": "literature",
+                "demo_args": ["--demo"],
+                "allowed_extra_flags": set(),
+                "input_contract": {
+                    "modalities": [],
+                    "file_types": ["pdf"],
+                    "path_kinds": ["file", "freeform"],
+                    "preconditions": {},
+                },
+            }
+        },
+    )
+    calls: list[list[str]] = []
+
+    def _completed(cmd, **_kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(skill_runner, "drive_subprocess", _completed)
+
+    demo_result = skill_runner.run_skill(
+        "flexible-skill",
+        input_path=str(tmp_path / "corrupt.pdf"),
+        output_dir=str(tmp_path / "demo-out"),
+        demo=True,
+    )
+    doi_result = skill_runner.run_skill(
+        "flexible-skill",
+        input_path="10.1038/s41586-024-00000-0",
+        output_dir=str(tmp_path / "doi-out"),
+    )
+
+    assert demo_result.success is True, demo_result.stderr
+    assert doi_result.success is True, doi_result.stderr
+    assert len(calls) == 2
+
+
+def test_explicit_gate_preserves_matching_non_h5ad_inputs_until_they_are_inspectable(
+    tmp_path,
+    monkeypatch,
+):
+    """RET-04b must not invent missing structure for formats it cannot probe."""
+    skill_runner = importlib.import_module("omicsclaw.skill.runner")
+    fake_script = tmp_path / "csv_skill.py"
+    fake_script.write_text("raise SystemExit('driver is stubbed')\n", encoding="utf-8")
+    input_path = tmp_path / "proteins.csv"
+    input_path.write_text("protein_id,intensity\nP1,1.0\n", encoding="utf-8")
+    _install_fake_skills(
+        monkeypatch,
+        {
+            "csv-skill": {
+                "script": fake_script,
+                "domain": "proteomics",
+                "demo_args": ["--demo"],
+                "allowed_extra_flags": set(),
+                "input_contract": {
+                    "modalities": ["proteomics"],
+                    "file_types": ["csv"],
+                    "preconditions": {
+                        "data_shape": {
+                            "obs": ["sample_id"],
+                        }
+                    },
+                },
+            }
+        },
+    )
+    calls: list[list[str]] = []
+
+    def _completed(cmd, **_kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(skill_runner, "drive_subprocess", _completed)
+
+    result = skill_runner.run_skill(
+        "csv-skill",
+        input_path=str(input_path),
+        output_dir=str(tmp_path / "csv-out"),
+    )
+
+    assert result.success is True, result.stderr
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("filename", ["missing.csv", "missing.vcf"])
+def test_explicit_gate_rejects_a_missing_non_h5ad_path(
+    tmp_path,
+    monkeypatch,
+    filename,
+):
+    """File existence is observable even when content structure is not."""
+    skill_runner = importlib.import_module("omicsclaw.skill.runner")
+    fake_script = tmp_path / "csv_skill.py"
+    fake_script.write_text("raise SystemExit('must not execute')\n", encoding="utf-8")
+    missing_input = tmp_path / filename
+    output_dir = tmp_path / "missing-out"
+    _install_fake_skills(
+        monkeypatch,
+        {
+            "csv-skill": {
+                "script": fake_script,
+                "domain": "proteomics",
+                "demo_args": ["--demo"],
+                "allowed_extra_flags": set(),
+                "input_contract": {
+                    "modalities": ["proteomics"],
+                    "file_types": ["csv"],
+                    "preconditions": {},
+                },
+            }
+        },
+    )
+    calls: list[list[str]] = []
+
+    def _must_not_execute(cmd, **_kwargs):
+        calls.append(cmd)
+        raise AssertionError("missing input must not reach subprocess")
+
+    monkeypatch.setattr(skill_runner, "drive_subprocess", _must_not_execute)
+
+    result = skill_runner.run_skill(
+        "csv-skill",
+        input_path=str(missing_input),
+        output_dir=str(output_dir),
+    )
+
+    assert result.success is False
+    assert "does not exist" in result.stderr
+    assert calls == []
+    assert not output_dir.exists()
+
+
+def test_explicit_gate_returns_a_stable_result_for_an_invalid_session(
+    tmp_path,
+    monkeypatch,
+):
+    skill_runner = importlib.import_module("omicsclaw.skill.runner")
+    fake_script = tmp_path / "session_skill.py"
+    fake_script.write_text("raise SystemExit('must not execute')\n", encoding="utf-8")
+    bad_session = tmp_path / "session.json"
+    bad_session.write_text("{broken json", encoding="utf-8")
+    output_dir = tmp_path / "session-out"
+    _install_fake_skills(
+        monkeypatch,
+        {
+            "session-skill": {
+                "script": fake_script,
+                "domain": "singlecell",
+                "demo_args": ["--demo"],
+                "allowed_extra_flags": set(),
+                "input_contract": {
+                    "modalities": ["scrna"],
+                    "file_types": ["h5ad"],
+                    "preconditions": {},
+                },
+            }
+        },
+    )
+
+    result = skill_runner.run_skill(
+        "session-skill",
+        session_path=str(bad_session),
+        output_dir=str(output_dir),
+    )
+
+    assert result.success is False
+    assert result.exit_code == -1
+    assert "USER_GUIDANCE_JSON:" in result.stderr
+    assert "session input inspection failed" in result.stderr
+    assert not output_dir.exists()
+
+
+def test_explicit_runner_rejects_missing_input_before_creating_output(
+    tmp_path,
+    monkeypatch,
+):
+    skill_runner = importlib.import_module("omicsclaw.skill.runner")
+    fake_script = tmp_path / "input_required.py"
+    fake_script.write_text("raise SystemExit('must not execute')\n", encoding="utf-8")
+    output_dir = tmp_path / "missing-input-out"
+    _install_fake_skills(
+        monkeypatch,
+        {
+            "input-required-skill": {
+                "script": fake_script,
+                "domain": "singlecell",
+                "demo_args": ["--demo"],
+                "allowed_extra_flags": set(),
+                "input_contract": {
+                    "modalities": ["scrna"],
+                    "file_types": ["h5ad"],
+                    "path_kinds": ["file"],
+                    "preconditions": {},
+                },
+            }
+        },
+    )
+
+    result = skill_runner.run_skill(
+        "input-required-skill",
+        output_dir=str(output_dir),
+    )
+
+    assert result.success is False
+    assert "No --input, --demo, or --session provided." in result.stderr
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "session_payload",
+    [
+        {},
+        {"primary_data_path": ""},
+        {"primary_data_path": "missing-relative-input"},
+    ],
+)
+def test_explicit_gate_rejects_a_session_without_a_usable_local_input(
+    tmp_path,
+    monkeypatch,
+    session_payload,
+):
+    skill_runner = importlib.import_module("omicsclaw.skill.runner")
+    fake_script = tmp_path / "session_skill.py"
+    fake_script.write_text("raise SystemExit('must not execute')\n", encoding="utf-8")
+    session_path = tmp_path / "session.json"
+    session_path.write_text(json.dumps(session_payload), encoding="utf-8")
+    output_dir = tmp_path / "session-out"
+    _install_fake_skills(
+        monkeypatch,
+        {
+            "session-skill": {
+                "script": fake_script,
+                "domain": "singlecell",
+                "demo_args": ["--demo"],
+                "allowed_extra_flags": set(),
+                "input_contract": {
+                    "modalities": ["scrna"],
+                    "file_types": ["h5ad"],
+                    "path_kinds": ["file"],
+                    "preconditions": {},
+                },
+            }
+        },
+    )
+
+    result = skill_runner.run_skill(
+        "session-skill",
+        session_path=str(session_path),
+        output_dir=str(output_dir),
+    )
+
+    assert result.success is False
+    assert "USER_GUIDANCE_JSON:" in result.stderr
+    assert "session" in result.stderr.lower()
+    assert not output_dir.exists()
+
+
+@pytest.mark.asyncio
+async def test_async_explicit_skill_uses_the_same_precondition_gate(
+    tmp_path, monkeypatch
+):
+    skill_runner = importlib.import_module("omicsclaw.skill.runner")
+    fake_script = tmp_path / "must_not_run_async.py"
+    fake_script.write_text("raise SystemExit('must not execute')\n", encoding="utf-8")
+    corrupt_input = tmp_path / "corrupt.h5ad"
+    corrupt_input.write_text("not an h5ad file\n", encoding="utf-8")
+    output_dir = tmp_path / "async-out"
+    _install_fake_skills(
+        monkeypatch,
+        {
+            "guarded-skill": {
+                "script": fake_script,
+                "domain": "singlecell",
+                "demo_args": ["--demo"],
+                "allowed_extra_flags": set(),
+                "input_contract": {
+                    "modalities": ["scrna"],
+                    "file_types": ["h5ad"],
+                    "preconditions": {},
+                },
+            }
+        },
+    )
+    calls: list[list[str]] = []
+
+    async def _must_not_execute(cmd, **_kwargs):
+        calls.append(cmd)
+        raise AssertionError("async subprocess must not start")
+
+    monkeypatch.setattr(skill_runner, "adrive_subprocess", _must_not_execute)
+
+    result = await skill_runner.arun_skill(
+        "guarded-skill",
+        input_path=str(corrupt_input),
+        output_dir=str(output_dir),
+    )
+
+    assert result.success is False
+    assert "precondition" in result.stderr.lower()
+    assert calls == []
+    assert not output_dir.exists()
 
 
 def test_run_skill_streams_stdout_and_stderr_lines_via_callbacks(tmp_path, monkeypatch):

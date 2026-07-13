@@ -40,8 +40,9 @@ otherwise so the skill always returns something useful.
 
 **Inputs**
 
+- Input kinds: `file`, `directory`
 - Modalities: scrna
-- File types: `.fastq`
+- File types: `.fastq`, `.fq`
 
 **Outputs**
 

@@ -54,8 +54,9 @@ scRNA preprocessing use `sc-preprocessing`.
 
 **Inputs**
 
+- Input kinds: `file`, `directory`
 - Modalities: scrna
-- File types: `.loom`, `.h5ad`
+- File types: `.loom`, `.fastq`, `.fq`
 
 **Outputs**
 

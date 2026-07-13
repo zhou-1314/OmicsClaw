@@ -32,11 +32,15 @@ summary:
   - scrna-velocity-prep
 interface:
   inputs:
+    path_kinds:
+    - file
+    - directory
     modalities:
     - scrna
     file_types:
     - loom
-    - h5ad
+    - fastq
+    - fq
   parameters:
     hints:
       velocyto:

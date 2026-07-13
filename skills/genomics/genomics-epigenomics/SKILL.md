@@ -44,7 +44,7 @@ For single-cell ATAC processing use `scatac-preprocessing`.
 **Inputs**
 
 - Modalities: atac-seq, chip-seq
-- File types: `.bed`
+- File types: `.bed`, `.narrowpeak`, `.csv`
 
 **Outputs**
 

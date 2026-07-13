@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from ..result import SkillRunResult, build_skill_run_result
+from ..preconditions import format_precondition_failure, preflight_skill_execution
 
 from .output_finalize import write_pipeline_readme
 from .pipeline_config import (
@@ -82,6 +83,18 @@ def run_pipeline(
     # imports pipeline_runner, not the other way around.
     from ..runner import run_skill
 
+    first_assessment = preflight_skill_execution(
+        config.skill_names[0],
+        input_path=input_path,
+        demo=demo,
+        session_path=session_path,
+    )
+    if first_assessment is not None and not first_assessment.execution_ready:
+        return err_factory(
+            config.name,
+            format_precondition_failure(first_assessment),
+        )
+
     if output_dir:
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -103,6 +116,7 @@ def run_pipeline(
     all_results: dict[str, Any] = {}
     current_input = input_path
     chain_basename = config.chain_output_basename
+    failure_stderr = ""
 
     for skill_name in config.skill_names:
         skill_out = out_dir / skill_name
@@ -121,8 +135,10 @@ def run_pipeline(
             "output_dir": result.output_dir or "",
             "readme_path": result.readme_path,
             "notebook_path": result.notebook_path,
+            "stderr": result.stderr if not result.success else "",
         }
         if not result.success:
+            failure_stderr = result.stderr
             print(f"FAILED: {skill_name}")
             if result.stderr:
                 print(f"    {result.stderr[:200]}")
@@ -171,7 +187,7 @@ def run_pipeline(
         output_dir=out_dir,
         files=[path.name for path in out_dir.rglob("*") if path.is_file()],
         stdout=f"Pipeline: {succeeded}/{len(skill_names)} skills succeeded.",
-        stderr="",
+        stderr=failure_stderr,
         duration_seconds=sum(result["duration"] for result in all_results.values()),
         readme_path=pipeline_readme,
         notebook_path="",

@@ -437,6 +437,26 @@ async def execute_omicsclaw(
     if batch_key_clarification:
         return batch_key_clarification
 
+    # RET-04b: explicit named skills use the same observed-input gate as the
+    # shared runner, but run it before reserving an agent Run directory.  The
+    # runner repeats the check as the defense-in-depth execution Seam used by
+    # every other Surface.
+    from omicsclaw.skill.preconditions import (
+        format_precondition_failure,
+        preflight_skill_execution,
+    )
+
+    gate_skill = "spatial-preprocess" if skill_key == "pipeline" else skill_key
+    assessment = preflight_skill_execution(
+        gate_skill,
+        input_path=input_path,
+        demo=mode == "demo",
+        session_path=session_path,
+        registry=registry,
+    )
+    if assessment is not None and not assessment.execution_ready:
+        return format_precondition_failure(assessment)
+
     # Output directory (ADR 0035): place the Run under its Project. The active
     # Bench thread (``thread_id``, already on the wire for memory scoping) is the
     # ``project_id``; a thread-less /chat or channel run falls to ``default``. The

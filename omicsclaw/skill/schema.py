@@ -68,6 +68,7 @@ _PYTHON_VER_RE = re.compile(r"python\d+(\.\d+)*$")
 # skill uses it yet. ``leaf`` (default) is a single self-contained analysis.
 SkillType = Literal["leaf", "workflow", "consensus"]
 RuntimeLanguage = Literal["python", "r", "bash"]
+InputPathKind = Literal["file", "directory", "freeform"]
 ValidationLevel = Literal[
     "smoke-only", "demo-validated", "fixture-validated", "benchmarked", "production"
 ]
@@ -133,7 +134,16 @@ class Preconditions(_Strict):
 class Inputs(_Strict):
     modalities: list[str] = Field(default_factory=list)
     file_types: list[str] = Field(default_factory=list)
+    path_kinds: list[InputPathKind] = Field(default_factory=lambda: ["file"])
     preconditions: Preconditions = Field(default_factory=Preconditions)
+
+    @field_validator("path_kinds")
+    @classmethod
+    def _check_path_kinds(cls, v: list[InputPathKind]) -> list[InputPathKind]:
+        cleaned = list(dict.fromkeys(v))
+        if not cleaned:
+            raise ValueError("path_kinds must declare at least one input kind")
+        return cleaned
 
 
 class Parameters(_Strict):

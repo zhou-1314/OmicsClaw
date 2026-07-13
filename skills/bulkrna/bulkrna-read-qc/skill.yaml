@@ -38,6 +38,7 @@ interface:
   inputs:
     file_types:
     - fastq
+    - fq
   outputs:
     files:
     - tables/qc_summary.csv

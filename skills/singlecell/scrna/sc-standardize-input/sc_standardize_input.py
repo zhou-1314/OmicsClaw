@@ -382,7 +382,11 @@ def main() -> None:
         {"skill": "sc-qc", "reason": "Compute QC metrics on standardized data", "priority": "recommended"},
     ]
     result_data["preprocessing_state_after"] = "standardized"
-    checksum = sha256_file(input_file) if input_file and Path(input_file).exists() else ""
+    checksum = (
+        sha256_file(input_file)
+        if input_file and Path(input_file).is_file()
+        else ""
+    )
     write_result_json(output_dir, SKILL_NAME, SKILL_VERSION, summary, result_data, checksum)
     result_payload = load_result_json(output_dir) or {"skill": SKILL_NAME, "summary": summary, "data": result_data}
 

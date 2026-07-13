@@ -46,8 +46,9 @@ QC use `bulkrna-read-qc`.
 
 **Inputs**
 
+- Input kinds: `file`, `directory`
 - Modalities: visium, slideseq
-- File types: `.fastq`
+- File types: `.fastq`, `.fq`, `.json`, `.yaml`, `.yml`
 
 **Outputs**
 

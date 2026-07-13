@@ -4,6 +4,7 @@ from omicsclaw.skill.preconditions import (
     InputProfile,
     PreconditionStatus,
     evaluate_skill_preconditions,
+    preflight_skill_execution,
     probe_input_profile,
 )
 from omicsclaw.skill.capability_resolver import resolve_capability
@@ -278,3 +279,215 @@ def test_spatial_domains_does_not_block_an_auto_computable_pca() -> None:
     assert assessment.status is PreconditionStatus.ELIGIBLE
     assert assessment.execution_ready is True
     assert "obsm.X_pca" not in assessment.missing
+
+
+def test_preparation_recommendation_never_points_to_the_blocked_skill_itself() -> None:
+    assessment = evaluate_skill_preconditions(
+        "spatial-preprocess",
+        InputProfile(
+            file_type="h5ad",
+            modality="visium",
+            obsm=set(),
+        ),
+    )
+
+    assert assessment.execution_ready is False
+    assert "obsm.spatial" in assessment.missing
+    assert "spatial-preprocess" not in assessment.recommended_preparation
+
+
+def test_multi_input_execution_gate_fails_when_any_local_input_is_missing(
+    tmp_path,
+) -> None:
+    import anndata as ad
+    import numpy as np
+
+    from omicsclaw.skill.registry import OmicsRegistry
+
+    valid = tmp_path / "valid.h5ad"
+    missing = tmp_path / "missing.h5ad"
+    ad.AnnData(np.ones((2, 2))).write_h5ad(valid)
+    registry = OmicsRegistry()
+    registry.skills = {
+        "multi": {
+            "alias": "multi",
+            "domain": "singlecell",
+            "input_contract": {
+                "modalities": ["scrna"],
+                "file_types": [],
+                "preconditions": {},
+            },
+        }
+    }
+
+    assessment = preflight_skill_execution(
+        "multi",
+        input_paths=[str(valid), str(missing)],
+        registry=registry,
+    )
+
+    assert assessment is not None
+    assert assessment.execution_ready is False
+    assert assessment.status is PreconditionStatus.BLOCKED
+    assert "input[2].inspection" in assessment.missing
+
+
+def test_non_h5ad_execution_still_enforces_observable_env_and_config(tmp_path) -> None:
+    from omicsclaw.skill.registry import OmicsRegistry
+
+    input_path = tmp_path / "proteins.csv"
+    input_path.write_text("protein_id,intensity\nP1,1.0\n", encoding="utf-8")
+    registry = OmicsRegistry()
+    registry.skills = {
+        "contract-skill": {
+            "alias": "contract-skill",
+            "domain": "proteomics",
+            "input_contract": {
+                "modalities": ["proteomics"],
+                "file_types": ["csv"],
+                "preconditions": {
+                    "data_shape": {"obs": ["sample_id"]},
+                    "env": ["OMICSCLAW_TEST_MISSING_ENV"],
+                    "config": ["instrument_profile"],
+                },
+            },
+        }
+    }
+
+    assessment = preflight_skill_execution(
+        "contract-skill",
+        input_path=str(input_path),
+        registry=registry,
+    )
+
+    assert assessment is not None
+    assert assessment.status is PreconditionStatus.BLOCKED
+    assert assessment.missing == [
+        "env.OMICSCLAW_TEST_MISSING_ENV",
+        "config.instrument_profile",
+    ]
+    assert "obs.sample_id" not in assessment.missing
+
+
+def test_literature_free_text_ending_in_a_known_suffix_is_not_a_local_path() -> None:
+    for text in (
+        "Review the supplementary data.csv",
+        "Summarize this study about processed.h5ad",
+    ):
+        assessment = preflight_skill_execution("literature", input_path=text)
+        assert assessment is None
+
+
+def test_declared_zarr_directory_is_compatible_for_routing_and_execution(
+    tmp_path,
+) -> None:
+    from omicsclaw.skill.registry import OmicsRegistry
+
+    input_dir = tmp_path / "xenium.zarr"
+    input_dir.mkdir()
+    registry = OmicsRegistry()
+    registry.skills = {
+        "xenium-skill": {
+            "alias": "xenium-skill",
+            "domain": "spatial",
+            "input_contract": {
+                "modalities": [],
+                "file_types": ["h5ad", "zarr"],
+                "path_kinds": ["file", "directory"],
+                "preconditions": {},
+            },
+        }
+    }
+
+    profile = probe_input_profile(input_dir)
+    routing_assessment = evaluate_skill_preconditions(
+        "xenium-skill",
+        profile,
+        registry=registry,
+    )
+    execution_assessment = preflight_skill_execution(
+        "xenium-skill",
+        input_path=str(input_dir),
+        registry=registry,
+    )
+
+    assert profile.file_type == "zarr"
+    assert routing_assessment.execution_ready is True
+    assert execution_assessment is not None
+    assert execution_assessment.execution_ready is True
+
+
+def test_dotted_directory_name_is_not_a_file_type_for_either_gate(tmp_path) -> None:
+    from omicsclaw.skill.registry import OmicsRegistry
+
+    input_dir = tmp_path / "tenx_matrix.v1"
+    input_dir.mkdir()
+    registry = OmicsRegistry()
+    registry.skills = {
+        "directory-skill": {
+            "alias": "directory-skill",
+            "domain": "singlecell",
+            "input_contract": {
+                "modalities": [],
+                "file_types": ["h5ad"],
+                "path_kinds": ["file", "directory"],
+                "preconditions": {},
+            },
+        }
+    }
+
+    profile = probe_input_profile(input_dir)
+    routing_assessment = evaluate_skill_preconditions(
+        "directory-skill",
+        profile,
+        registry=registry,
+    )
+    execution_assessment = preflight_skill_execution(
+        "directory-skill",
+        input_path=str(input_dir),
+        registry=registry,
+    )
+
+    assert profile.path_kind == "directory"
+    assert profile.file_type == ""
+    assert routing_assessment.status is not PreconditionStatus.BLOCKED
+    assert execution_assessment is not None
+    assert execution_assessment.execution_ready is True
+
+
+def test_zarr_directory_remains_incompatible_when_not_declared(tmp_path) -> None:
+    from omicsclaw.skill.registry import OmicsRegistry
+
+    input_dir = tmp_path / "xenium.zarr"
+    input_dir.mkdir()
+    registry = OmicsRegistry()
+    registry.skills = {
+        "tenx-only-skill": {
+            "alias": "tenx-only-skill",
+            "domain": "singlecell",
+            "input_contract": {
+                "modalities": [],
+                "file_types": ["h5ad", "h5"],
+                "path_kinds": ["file", "directory"],
+                "preconditions": {},
+            },
+        }
+    }
+
+    profile = probe_input_profile(input_dir)
+    routing_assessment = evaluate_skill_preconditions(
+        "tenx-only-skill",
+        profile,
+        registry=registry,
+    )
+    execution_assessment = preflight_skill_execution(
+        "tenx-only-skill",
+        input_path=str(input_dir),
+        registry=registry,
+    )
+
+    assert profile.path_kind == "directory"
+    assert profile.file_type == "zarr"
+    assert routing_assessment.status is PreconditionStatus.BLOCKED
+    assert execution_assessment is not None
+    assert execution_assessment.status is PreconditionStatus.BLOCKED

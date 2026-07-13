@@ -42,6 +42,7 @@ For scaffolding a new skill from a paper use `omics-skill-builder`.
 
 **Inputs**
 
+- Input kinds: `file`, `freeform`
 - File types: `.pdf`
 
 **Outputs**

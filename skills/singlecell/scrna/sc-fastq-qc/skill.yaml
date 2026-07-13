@@ -29,10 +29,14 @@ summary:
   - scrna-fastq-qc
 interface:
   inputs:
+    path_kinds:
+    - file
+    - directory
     modalities:
     - scrna
     file_types:
     - fastq
+    - fq
   parameters:
     hints:
       fastqc:

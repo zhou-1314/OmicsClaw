@@ -85,6 +85,7 @@ def render_io_section(manifest: SkillManifest) -> str | None:
     has_inputs = bool(
         inp.modalities or inp.file_types or ds.requires_preprocessed or ds.obs or ds.obsm
         or inp.preconditions.env or inp.preconditions.config
+        or inp.path_kinds != ["file"]
     )
     has_outputs = bool(
         out.files or out.result_json.required_keys
@@ -99,6 +100,10 @@ def render_io_section(manifest: SkillManifest) -> str | None:
     if has_inputs:
         lines.append("**Inputs**")
         lines.append("")
+        if inp.path_kinds != ["file"]:
+            lines.append(
+                "- Input kinds: " + ", ".join(f"`{kind}`" for kind in inp.path_kinds)
+            )
         if inp.modalities:
             lines.append(f"- Modalities: {', '.join(inp.modalities)}")
         if inp.file_types:

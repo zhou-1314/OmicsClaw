@@ -29,6 +29,9 @@ summary:
   - anndata
 interface:
   inputs:
+    path_kinds:
+    - file
+    - directory
     modalities:
     - scrna
     file_types:

@@ -34,6 +34,9 @@ summary:
   - scrna-pseudoalign-count
 interface:
   inputs:
+    path_kinds:
+    - file
+    - directory
     modalities:
     - scrna
   parameters:
