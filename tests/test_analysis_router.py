@@ -12,6 +12,10 @@ def _decision(
     confidence: float = 0.0,
     should_search_web: bool = False,
     reasoning: list[str] | None = None,
+    precondition_status: str = "eligible",
+    precondition_evaluated: bool = False,
+    execution_ready: bool = True,
+    missing_preconditions: list[str] | None = None,
 ) -> CapabilityDecision:
     return CapabilityDecision(
         query=query,
@@ -20,6 +24,10 @@ def _decision(
         confidence=confidence,
         should_search_web=should_search_web,
         reasoning=reasoning or [],
+        precondition_status=precondition_status,
+        precondition_evaluated=precondition_evaluated,
+        execution_ready=execution_ready,
+        missing_preconditions=missing_preconditions or [],
     )
 
 
@@ -72,6 +80,26 @@ def test_router_maps_exact_skill_decision() -> None:
     assert route.kind is AnalysisRouteKind.EXACT_SKILL
     assert route.chosen_skill == "spatial-preprocess"
     assert route.confidence == 0.86
+
+
+def test_router_requires_preflight_when_selected_skill_needs_preparation() -> None:
+    router = AnalysisRouter(
+        resolver=lambda query, **_: _decision(
+            query=query,
+            coverage="exact_skill",
+            chosen_skill="sc-clustering",
+            precondition_status="needs_preparation",
+            precondition_evaluated=True,
+            execution_ready=False,
+            missing_preconditions=["preprocessed", "obsm.X_pca"],
+        )
+    )
+
+    route = router.route("cluster my cells")
+
+    assert route.kind is AnalysisRouteKind.EXACT_SKILL
+    assert route.preflight_required is True
+    assert route.missing_params == ["preprocessed", "obsm.X_pca"]
 
 
 def test_router_maps_partial_skill_decision() -> None:
@@ -166,6 +194,54 @@ def test_loop_formats_non_chat_route_context() -> None:
     assert "route_kind: partial_skill" in context
     assert "chosen_skill: spatial-preprocess" in context
     assert "skill-first composition" in context
+
+
+def test_loop_formats_failed_precondition_as_a_do_not_execute_rule() -> None:
+    from omicsclaw.runtime.agent.loop import _format_analysis_route_context
+
+    route = AnalysisRouter(
+        resolver=lambda query, **_: _decision(
+            query=query,
+            coverage="exact_skill",
+            chosen_skill="sc-clustering",
+            precondition_status="needs_preparation",
+            precondition_evaluated=True,
+            execution_ready=False,
+            missing_preconditions=["preprocessed", "obsm.X_pca"],
+        )
+    ).route("cluster my cells")
+
+    context = _format_analysis_route_context(route)
+
+    assert "preflight_required: true" in context
+    assert "precondition_status: needs_preparation" in context
+    assert "missing_preconditions: preprocessed; obsm.X_pca" in context
+    assert "do not execute" in context.lower()
+
+
+def test_route_context_probes_a_trusted_h5ad_before_declaring_execution_ready(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import anndata as ad
+    import numpy as np
+    import omicsclaw.runtime.agent.loop as loop
+
+    input_path = tmp_path / "raw.h5ad"
+    ad.AnnData(np.ones((3, 2))).write_h5ad(input_path)
+    monkeypatch.setattr(
+        loop,
+        "extract_valid_input_paths",
+        lambda _text: [str(input_path)],
+    )
+
+    context = loop._build_analysis_route_context(
+        f"cluster my scRNA-seq cells with Leiden from {input_path}"
+    )
+
+    assert "chosen_skill: sc-clustering" in context
+    assert "preflight_required: true" in context
+    assert "obsm.X_pca" in context
 
 
 def test_loop_omits_chat_route_context() -> None:

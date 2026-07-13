@@ -1,14 +1,15 @@
 {
   "schema_version": 1,
   "oracle_version": "2026-07-13.v1",
-  "description": "Deterministic full-domain capability-routing acceptance oracle.",
+  "description": "Deterministic full-domain capability-routing and selected-skill precondition acceptance oracle.",
   "minimum_cases_per_domain": 3,
   "thresholds": {
     "precision_at_1": 0.9,
     "top3_recall": 0.95,
     "domain_accuracy": 0.9,
     "decision_accuracy": 0.95,
-    "hallucinated_alias_rate": 0.0
+    "hallucinated_alias_rate": 0.0,
+    "precondition_accuracy": 1.0
   },
   "per_domain_thresholds": {
     "precision_at_1": 0.9,
@@ -42,12 +43,67 @@
       "decision": "route"
     },
     {
+      "id": "spatial__domains_auto_compute_pca",
+      "domain": "spatial",
+      "query": "Detect tissue domains in this spatial AnnData with Leiden and spatial neighbors.",
+      "expected_skills": ["spatial-domains"],
+      "expected_coverage": ["exact_skill"],
+      "decision": "route",
+      "input_profile": {
+        "file_type": "h5ad",
+        "preprocessed": false,
+        "obsm": ["spatial"]
+      },
+      "expected_precondition_status": "eligible",
+      "expected_execution_ready": true
+    },
+    {
       "id": "singlecell__cluster_leiden",
       "domain": "singlecell",
       "query": "Cluster normalized single-cell RNA data with a neighbor graph, UMAP and Leiden.",
       "expected_skills": ["sc-clustering"],
       "expected_coverage": ["exact_skill"],
-      "decision": "route"
+      "decision": "route",
+      "input_profile": {
+        "file_type": "h5ad",
+        "modality": "scrna",
+        "preprocessed": true,
+        "obsm": ["X_pca"]
+      },
+      "expected_precondition_status": "eligible",
+      "expected_execution_ready": true
+    },
+    {
+      "id": "singlecell__cluster_raw_precondition",
+      "domain": "singlecell",
+      "query": "Run neighbor graph, UMAP and Leiden clustering on this scRNA-seq AnnData.",
+      "expected_skills": ["sc-clustering"],
+      "expected_coverage": ["exact_skill"],
+      "decision": "route",
+      "input_profile": {
+        "file_type": "h5ad",
+        "modality": "scrna",
+        "preprocessed": false,
+        "obsm": []
+      },
+      "expected_precondition_status": "needs_preparation",
+      "expected_execution_ready": false
+    },
+    {
+      "id": "singlecell__cluster_incompatible_input",
+      "domain": "singlecell",
+      "query": "Apply a neighbor graph, UMAP and Leiden clustering to this single-cell RNA object.",
+      "expected_skills": ["sc-clustering"],
+      "expected_coverage": ["exact_skill"],
+      "decision": "route",
+      "input_profile": {
+        "file_type": "vcf",
+        "modality": "genomics",
+        "preprocessed": true,
+        "obsm": ["X_pca"]
+      },
+      "expected_precondition_status": "blocked",
+      "expected_execution_ready": false
     },
     {
       "id": "singlecell__cell_annotation",

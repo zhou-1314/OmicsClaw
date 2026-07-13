@@ -18,9 +18,15 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 import json
+from pathlib import Path
 import re
 from typing import Any
 
+from .preconditions import (
+    InputProfile,
+    evaluate_skill_preconditions,
+    probe_input_profile,
+)
 from .registry import OmicsRegistry, ensure_registry_loaded
 
 try:
@@ -389,6 +395,12 @@ class CapabilityCandidate:
     domain: str
     score: float
     reasons: list[str] = field(default_factory=list)
+    precondition_status: str = "eligible"
+    precondition_evaluated: bool = False
+    execution_ready: bool = True
+    missing_preconditions: list[str] = field(default_factory=list)
+    precondition_reasons: list[str] = field(default_factory=list)
+    recommended_preparation: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -408,6 +420,12 @@ class CapabilityDecision:
     skill_candidates: list[CapabilityCandidate] = field(default_factory=list)
     missing_capabilities: list[str] = field(default_factory=list)
     reasoning: list[str] = field(default_factory=list)
+    precondition_status: str = "eligible"
+    precondition_evaluated: bool = False
+    execution_ready: bool = True
+    missing_preconditions: list[str] = field(default_factory=list)
+    precondition_reasons: list[str] = field(default_factory=list)
+    recommended_preparation: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -421,6 +439,12 @@ class CapabilityDecision:
             "skill_candidates": [c.to_dict() for c in self.skill_candidates],
             "missing_capabilities": list(self.missing_capabilities),
             "reasoning": list(self.reasoning),
+            "precondition_status": self.precondition_status,
+            "precondition_evaluated": self.precondition_evaluated,
+            "execution_ready": self.execution_ready,
+            "missing_preconditions": list(self.missing_preconditions),
+            "precondition_reasons": list(self.precondition_reasons),
+            "recommended_preparation": list(self.recommended_preparation),
         }
 
     def to_json(self) -> str:
@@ -435,6 +459,9 @@ class CapabilityDecision:
             f"- confidence: {round(float(self.confidence), 3)}",
             f"- should_search_web: {self.should_search_web}",
             f"- should_create_skill: {self.should_create_skill}",
+            f"- precondition_status: {self.precondition_status}",
+            f"- precondition_evaluated: {self.precondition_evaluated}",
+            f"- execution_ready: {self.execution_ready}",
         ]
         if self.missing_capabilities:
             lines.append("- missing_capabilities: " + "; ".join(self.missing_capabilities))
@@ -442,6 +469,12 @@ class CapabilityDecision:
             lines.append("- reasoning:")
             for item in self.reasoning[:4]:
                 lines.append(f"  * {item}")
+        if self.missing_preconditions:
+            lines.append("- missing_preconditions: " + "; ".join(self.missing_preconditions))
+        if self.recommended_preparation:
+            lines.append(
+                "- recommended_preparation: " + "; ".join(self.recommended_preparation)
+            )
         if self.skill_candidates:
             preview = ", ".join(
                 f"{c.skill} ({round(float(c.score), 2)})"
@@ -863,6 +896,7 @@ def resolve_capability(
     *,
     file_path: str = "",
     domain_hint: str = "",
+    input_profile: InputProfile | dict[str, Any] | None = None,
 ) -> CapabilityDecision:
     """Resolve a user request into exact/partial/no-skill coverage."""
     query = (query or "").strip()
@@ -871,6 +905,14 @@ def resolve_capability(
             query=query,
             reasoning=["empty request"],
         )
+
+    # A caller-supplied profile is advisory.  When the referenced local input
+    # exists, observed path facts always win so direct resolver/AnalysisRouter
+    # callers cannot accidentally treat assertions as execution evidence.
+    if file_path:
+        candidate_path = Path(file_path).expanduser()
+        if candidate_path.exists():
+            input_profile = probe_input_profile(candidate_path)
 
     registry = ensure_registry_loaded()
 
@@ -1106,6 +1148,23 @@ def resolve_capability(
             f"second candidate '{second.skill}' is close ({round(second.score, 2)}), but no extra custom step was requested"
         )
 
+    assessment = None
+    if input_profile is not None:
+        assessment = evaluate_skill_preconditions(
+            top.skill,
+            input_profile,
+            registry=registry,
+        )
+        top.precondition_status = assessment.status.value
+        top.precondition_evaluated = assessment.evaluated
+        top.execution_ready = assessment.execution_ready
+        top.missing_preconditions = list(assessment.missing)
+        top.precondition_reasons = list(assessment.reasons)
+        top.recommended_preparation = list(assessment.recommended_preparation)
+        reasoning.append(
+            f"selected skill preconditions evaluated as '{assessment.status.value}'"
+        )
+
     return CapabilityDecision(
         query=query,
         # Normally top.domain equals the detected domain because candidates are
@@ -1121,6 +1180,14 @@ def resolve_capability(
         skill_candidates=candidates[:5],
         missing_capabilities=missing_capabilities,
         reasoning=reasoning,
+        precondition_status=(assessment.status.value if assessment else "eligible"),
+        precondition_evaluated=(assessment.evaluated if assessment else False),
+        execution_ready=(assessment.execution_ready if assessment else True),
+        missing_preconditions=(list(assessment.missing) if assessment else []),
+        precondition_reasons=(list(assessment.reasons) if assessment else []),
+        recommended_preparation=(
+            list(assessment.recommended_preparation) if assessment else []
+        ),
     )
 
 

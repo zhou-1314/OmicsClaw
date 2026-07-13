@@ -268,6 +268,7 @@ class OmicsRegistry:
                         "legacy_aliases": self._unique_strings(list(lazy.legacy_aliases or [])),
                         "saves_h5ad": lazy.saves_h5ad,
                         "requires_preprocessed": lazy.requires_preprocessed,
+                        "input_contract": lazy.input_contract,
                         "param_hints": lazy.param_hints,
                         "gotchas": lazy.gotchas,
                     }
@@ -296,6 +297,7 @@ class OmicsRegistry:
                         "legacy_aliases": [],
                         "saves_h5ad": False,
                         "requires_preprocessed": False,
+                        "input_contract": {},
                         "param_hints": {},
                         "gotchas": [],
                     }

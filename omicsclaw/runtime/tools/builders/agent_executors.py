@@ -151,6 +151,30 @@ _MEMORY_DISABLED_HINT = (
 )
 
 
+def _format_auto_precondition_gate(decision) -> str:
+    """Explain why a semantic top-1 is not safe to execute yet."""
+    lines = [
+        f"Selected skill `{decision.chosen_skill}` is not execution-ready.",
+        f"Precondition status: {decision.precondition_status}",
+    ]
+    if decision.missing_preconditions:
+        lines.append(
+            "Missing preconditions: " + ", ".join(decision.missing_preconditions)
+        )
+    if decision.precondition_reasons:
+        lines.append("Reasons:")
+        lines.extend(f"- {reason}" for reason in decision.precondition_reasons)
+    if decision.recommended_preparation:
+        lines.append(
+            "Recommended preparation: "
+            + ", ".join(f"`{skill}`" for skill in decision.recommended_preparation)
+        )
+    lines.append(
+        "Prepare or replace the input, then resolve the request again before execution."
+    )
+    return "\n".join(lines)
+
+
 # Runtime-internal flags injected by the preflight chain (not part of
 # the LLM-facing tool schema). Validator accepts them so auto-prep
 # self-recursion via execute_omicsclaw doesn't trip its own guard, but
@@ -274,25 +298,42 @@ async def execute_omicsclaw(
             logger.info(f"Resolved input path: {resolved_path}")
             audit("file_resolve", file_path=str(resolved_path), original=file_path_arg)
 
+    # Bind uploaded-file inspection and execution to the same session-scoped
+    # record.  Never fall back to another chat's first received file.
+    session_file_info = received_files.get(session_id) if session_id else None
+    session_input_path = (
+        session_file_info.get("path") if session_file_info else None
+    )
+
     # --- Auto-routing via capability resolver ---
     if skill_key == "auto":
         from omicsclaw.skill.capability_resolver import resolve_capability
+        from omicsclaw.skill.preconditions import probe_input_profile
 
         capability_input = query
         if resolved_path:
             capability_input = str(resolved_path)
-        elif mode == "file":
-            for _cid, info in received_files.items():
-                capability_input = info["path"]
-                break
+        elif mode == "file" and session_input_path:
+            capability_input = str(session_input_path)
 
         if not capability_input:
             return "Error: skill='auto' requires either a file, a file_path, or a query to route."
 
         try:
+            input_profile = None
+            profile_path = resolved_path
+            if profile_path is None and mode == "file" and session_input_path:
+                profile_path = Path(str(session_input_path)).expanduser()
+            if profile_path is None and capability_input:
+                candidate_path = Path(str(capability_input)).expanduser()
+                if candidate_path.is_file():
+                    profile_path = candidate_path
+            if profile_path is not None:
+                input_profile = probe_input_profile(profile_path)
             decision = resolve_capability(
                 query or capability_input,
-                file_path=str(resolved_path or capability_input or ""),
+                file_path=str(resolved_path or session_input_path or capability_input or ""),
+                input_profile=input_profile,
             )
             if decision.chosen_skill:
                 if getattr(decision, "should_create_skill", False):
@@ -300,6 +341,16 @@ async def execute_omicsclaw(
                         "This request is asking to add a reusable OmicsClaw skill.\n\n"
                         "Use create_omics_skill instead of auto-running an analysis skill."
                     )
+                if (
+                    getattr(decision, "precondition_evaluated", False)
+                    and not getattr(decision, "execution_ready", True)
+                ):
+                    logger.info(
+                        "Auto-routing refused to execute %s: precondition status=%s",
+                        decision.chosen_skill,
+                        decision.precondition_status,
+                    )
+                    return _format_auto_precondition_gate(decision)
                 # Close-tie disambiguation: refuse to execute when top-1 and
                 # top-2 candidates are within _AUTO_DISAMBIGUATE_GAP, so the
                 # LLM (or user) picks between them explicitly. Costs one extra
@@ -341,11 +392,9 @@ async def execute_omicsclaw(
     input_path = str(resolved_path) if resolved_path else None
     session_path = None
 
-    if not input_path and session_id:
-        file_info = received_files.get(session_id)
-        if file_info:
-            input_path = file_info.get("path")
-            session_path = file_info.get("session_path")
+    if not input_path and session_file_info:
+        input_path = session_file_info.get("path")
+        session_path = session_file_info.get("session_path")
 
     if mode in ("file", "path") and not input_path and not session_path:
         _ensure_trusted_dirs()
@@ -1925,6 +1974,7 @@ async def execute_resolve_capability(args: dict, **kwargs) -> str:
     """Resolve whether a request maps to an existing skill or needs fallback."""
     try:
         from omicsclaw.skill.capability_resolver import resolve_capability
+        from omicsclaw.skill.preconditions import probe_input_profile
 
         query = args.get("query", "")
         if not query:
@@ -1932,10 +1982,17 @@ async def execute_resolve_capability(args: dict, **kwargs) -> str:
 
         file_path_arg = args.get("file_path", "")
         resolved_path = validate_input_path(file_path_arg) if file_path_arg else None
+        if resolved_path and resolved_path.is_file():
+            input_profile = probe_input_profile(resolved_path)
+        else:
+            # Caller-supplied profiles support planning without an accessible
+            # file.  They never override facts from a trusted readable path.
+            input_profile = args.get("input_profile")
         decision = resolve_capability(
             query,
             file_path=str(resolved_path or file_path_arg or ""),
             domain_hint=args.get("domain_hint", ""),
+            input_profile=input_profile,
         )
         return decision.to_json()
     except Exception as e:

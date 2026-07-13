@@ -21,6 +21,7 @@ _RUNTIME_FIELDS = (
     "legacy_aliases",
     "saves_h5ad",
     "requires_preprocessed",
+    "input_contract",
     "param_hints",
 )
 
@@ -65,6 +66,7 @@ _RUNTIME_DEFAULTS: dict[str, object] = {
     "legacy_aliases": [],
     "saves_h5ad": False,
     "requires_preprocessed": False,
+    "input_contract": {},
     "param_hints": {},
 }
 
@@ -257,6 +259,7 @@ class LazySkillMetadata:
             "requires_preprocessed": bool(
                 m.interface.inputs.preconditions.data_shape.requires_preprocessed
             ),
+            "input_contract": m.interface.inputs.model_dump(exclude_none=True),
             "param_hints": dict(m.interface.parameters.hints),
             # identity metadata (catalog / desktop / generators read these)
             "version": m.version,
@@ -464,6 +467,12 @@ class LazySkillMetadata:
     def requires_preprocessed(self) -> bool:
         self._ensure_basic()
         return self._basic.get("requires_preprocessed", False)
+
+    @property
+    def input_contract(self) -> dict:
+        """Complete machine-readable ``interface.inputs`` contract."""
+        self._ensure_basic()
+        return dict(self._basic.get("input_contract", {}) or {})
 
     @property
     def param_hints(self) -> dict:

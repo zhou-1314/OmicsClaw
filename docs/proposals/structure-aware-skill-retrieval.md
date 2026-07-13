@@ -3,12 +3,14 @@
 > **文档角色（2026-07-13 校准）：**本文是 retrieval 的可行性与实施方案，不是落地证明。
 > 当前 resolver 仍以 domain-first 词法评分为主，但 2026-07-13 首轮修复已接入结构化
 > `skip_when` redirect、lifecycle filter 和 validation tie-break。2026-07-13 又落地了
-> 26-case、8-domain 的版本化 routing oracle，以及 precision@1/top-3 recall/domain/
-> decision/alias-hallucination 全局与逐域门；preconditions 与候选兼容图仍未落地。当前验收状态以
+> 29-case、8-domain 的版本化 routing oracle，以及 precision@1/top-3 recall/domain/
+> decision/alias-hallucination 全局与逐域门。RET-04 已落地“输入探针 + 三态评估 + `skill=auto` 执行硬门”的
+> 安全纵切，并把 precondition accuracy 纳入 oracle；候选级 penalty/compatibility graph 与 topo
+> chain 仍未落地。当前验收状态以
 > [`2026-07-13-skill-audit-system-design-assessment.md`](../reviews/2026-07-13-skill-audit-system-design-assessment.md)
 > §5/§8 为准。
 >
-> 状态：草案 v0.2（v0.1 经 Codex/gpt-5.5(xhigh) 独立审阅，已纳入其"必须修正"6 项 + "建议优化"5 项；全记录见附录 C → 待维护者审核）
+> 状态：实施草案 v0.3（RET-04 安全纵切已落地；v0.1 经 Codex/gpt-5.5(xhigh) 独立审阅，已纳入其"必须修正"6 项 + "建议优化"5 项；全记录见附录 C）
 > 作者：OmicsClaw 维护团队（在 Claude 协助下，基于对三个外部参考系统 + 本仓 `omicsclaw/skill/` 的并行代码级审计生成）
 > 日期：2026-06-30
 > 评审：Codex（gpt-5.5, xhigh）独立审阅 717s，逐条核对了本仓 live tree 的 `file:line`；记录见附录 C
@@ -210,20 +212,22 @@ A.outputs.files:[processed.h5ad]                          · 出处: matched_out
 
 **2026-07-13 落地状态（Phase 0 retrieval truth 已验收）：**
 
-- `tests/fixtures/routing_oracle/v1.json` 固化 24 个预期行为 case，每个 8-domain 至少 3 条，
+- `tests/fixtures/routing_oracle/v1.json` 固化 29 个预期行为 case，每个 8-domain 至少 3 条，
   并覆盖 route/no-skill boundary；fixture validation 拒绝未知域、非 canonical alias、域错配、
   重复 ID 和缺失阈值。
 - `omicsclaw.skill.routing_oracle` 与 `scripts/evaluate_routing_oracle.py` 输出 precision@1、
-  top-3 recall、domain accuracy、decision accuracy、hallucinated alias rate，以及逐域同类指标；
+  top-3 recall、domain accuracy、decision accuracy、hallucinated alias rate、precondition accuracy，
+  以及逐域路由指标；
   全局或任一域低于门槛均非零退出，已接入 PR CI。
-- 当前 v1 结果：全局五项均 `1.000`（alias hallucination `0.000`），8 域逐域 top1/top3/
-  domain/decision 均 `1.000`。该数值只描述 26-case 人工 oracle，不外推为真实流量 100%。
+- 当前 v1 结果：全局路由与 precondition accuracy 均 `1.000`（alias hallucination `0.000`），
+  8 域逐域 top1/top3/domain/decision 均 `1.000`。该数值只描述 29-case 人工 oracle，
+  不外推为真实流量 100%。
 - resolver 的相应根因修复包括：取消硬编码分析词表的前置误杀、domain-size 累加偏置、
   泛化 legacy alias 跨域抢占；增加显式 domain/task/control-plane 软信号，并把 literature
   自身的检索请求判为 exact coverage。
 
-Phase 0 完成不代表结构检索完成：RET-04 precondition penalty 与 RET-05 candidate DAG/topo
-chain 仍是下一主线，dense retrieval 仍不应提前启用。
+Phase 0 完成不代表结构检索完成：RET-04 已有安全纵切，但候选级 penalty 与更广文件格式探针
+仍待补齐；RET-05 candidate DAG/topo chain 是下一主线，dense retrieval 仍不应提前启用。
 
 ### Phase 1 — 声明式结构落地（拆 1a 字段 / 1b 内容质量）｜工作量 M｜优先级 高
 **目标**：把"结构感知需要的可过滤字段"真正物化——三个 repo 都缺、OmicsClaw 必须先有的地基。
@@ -249,12 +253,35 @@ chain 仍是下一主线，dense retrieval 仍不应提前启用。
 - 风险：大文件探测成本（backed 模式 + 缓存）；状态随上游运行变化（缓存失效策略）。
 - 验收：给定一个 `.h5ad`，探针正确报告 `obsm` 等键集；缓存命中/失效有测试；`sc_batch` 改为该引擎的消费者之一。
 
+**2026-07-13 落地状态（首个安全纵切）：**
+
+- `omicsclaw.skill.preconditions.InputProfile` 表示 file type/modality/preprocessed 与
+  `obs/var/layers/obsm/uns/env/config`；`probe_input_profile()` 以 AnnData backed 模式只读
+  `.h5ad` 元数据，并以 resolved path + mtime_ns + size 缓存；该签名发生变化时缓存失效。
+- `PreconditionAssessment` 只输出三态：`eligible`、`needs_preparation`、`blocked`。
+  data-shape/preprocessed 或输入身份未验证进入 preparation；文件类型/模态/env/config 不兼容及
+  探测失败进入 blocked；所有结果携带 missing、reason、可证明的 preparation skill。
+- `skill.yaml interface.inputs` 已经由 lazy metadata/registry 完整传播。resolver 保留语义 top-1，
+  同时携带 precondition 状态与 `execution_ready`；AnalysisRouter 转换为 `preflight_required`。
+- `skill=auto` 在 `execution_ready=false` 时于 runner 之前硬停止；`mode=file` 的探测和执行绑定
+  同一个 `session_id`；bot `resolve_capability` 工具和 route context 均可自动探测可信 `.h5ad`。
+  caller profile 仅用于规划且不能覆盖可读路径的真实探针。这不是把 precondition 当语义相关度硬过滤。
+- 发现并修正 `spatial-domains` 的错误硬前置：其代码可自动计算 PCA，故 `X_pca` 从硬
+  `data_shape.obsm` 合约移除；oracle 负例保证只有 `obsm.spatial` 时仍可执行。
+- 尚未完成：显式指定 skill 的统一运行时硬门、非 `.h5ad` 的结构化内容探针、把 `sc_batch`
+  迁为通用 evaluator 消费者、candidate-wide penalty/compatibility graph；这些不能由本纵切
+  外推为 RET-04/05 全完成。
+
 ### Phase 3 — 结构感知检索消费（resolver API 扩展 + penalty-first）｜工作量 M–L｜优先级 高
 **目标**：让 resolver 用上 task_type / skip_when / precondition / 候选图（§3.4 的 1–5）。
 - 借鉴：GraphSkill 回溯（`retrieval_agent.py:743`）；AgentSkillOS 多样性重排（`SKILL_PRUNE_PROMPT`）作可选去冗。
 - 动作（**非局部 splice，需改 resolver API**，Codex must-fix #3）：扩 `CapabilityCandidate`（`:318`）携带 task_type/precondition 评估/skip 命中；让 domain 检测（`:461`）暴露 margin 以支持回溯；给 `resolve_capability`（`:637`）注入 Phase 2a 数据状态。在此之上加：task_type 软分区、skip_when 负权（新增 `_SCORE_SKIP_PENALTY`）、precondition **软降权 + 解释（默认不剔除）**、低置信回溯、复合查询返回 topo 链。新增权重提升为命名常量（沿用 `_SCORE_*` 风格）。
 - 风险：改 re-rank 动黄金快照——**必须先扩 Phase 0 eval 与黄金快照再改**；precondition 硬过滤会误杀自动补算/可选输入的技能（默认软、经 eval 才个别升级硬）。
 - 验收：Phase 0 eval 的 precision@1/消歧率/前置软信号正确率较 baseline 改善且无黄金快照回归；"复合查询→正确 topo 链"用例通过；"valid-without-upstream"负例不被误剔（见 §5）。
+
+**2026-07-13 落地状态：** resolver/候选/decision API 已携带选中技能的前置评估，29-case
+oracle 增加 `precondition_accuracy=1.000` 硬门并覆盖三态及 auto-computable 负例。当前策略是
+“语义排名保持 + 执行门禁”，尚未对全部候选施加 penalty，也尚未返回候选 topo 链。
 
 ### Phase 4 — 依赖感知编排（泛化 pipeline runner）｜工作量 M｜优先级 中
 **目标**：把 DAG 真正执行——topo 有序、按层并行、失败级联跳过。

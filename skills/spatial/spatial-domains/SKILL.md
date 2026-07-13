@@ -74,7 +74,7 @@ cell-type labels use `spatial-annotate`.
 **Inputs**
 
 - File types: `.h5ad`
-- Expects `obsm`: `X_pca`, `spatial`
+- Expects `obsm`: `spatial`
 
 **Outputs**
 

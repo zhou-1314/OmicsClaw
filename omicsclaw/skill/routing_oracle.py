@@ -18,7 +18,7 @@ from .capability_resolver import resolve_capability
 from .registry import ensure_registry_loaded
 
 
-_METRIC_NAMES = frozenset(
+_REQUIRED_METRIC_NAMES = frozenset(
     {
         "precision_at_1",
         "top3_recall",
@@ -27,9 +27,14 @@ _METRIC_NAMES = frozenset(
         "hallucinated_alias_rate",
     }
 )
+_METRIC_NAMES = _REQUIRED_METRIC_NAMES | {"precondition_accuracy"}
 _COVERAGES = frozenset({"exact_skill", "partial_skill", "no_skill"})
 _DECISIONS = frozenset({"route", "partial", "no_skill"})
-_PER_DOMAIN_METRIC_NAMES = _METRIC_NAMES - {"hallucinated_alias_rate"}
+_PER_DOMAIN_METRIC_NAMES = _METRIC_NAMES - {
+    "hallucinated_alias_rate",
+    "precondition_accuracy",
+}
+_PRECONDITION_STATUSES = frozenset({"eligible", "needs_preparation", "blocked"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +47,9 @@ class RoutingOracleCase:
     decision: str
     file_path: str = ""
     domain_hint: str = ""
+    input_profile: dict[str, Any] | None = None
+    expected_precondition_status: str = ""
+    expected_execution_ready: bool | None = None
 
 
 @dataclass(slots=True)
@@ -71,6 +79,12 @@ class RoutingOracleCaseResult:
     top3_ok: bool
     domain_ok: bool
     decision_ok: bool
+    expected_precondition_status: str = ""
+    observed_precondition_status: str = ""
+    expected_execution_ready: bool | None = None
+    observed_precondition_evaluated: bool = False
+    observed_execution_ready: bool = True
+    precondition_ok: bool = True
     hallucinated_aliases: tuple[str, ...] = ()
     error: str = ""
 
@@ -82,6 +96,7 @@ class RoutingOracleCaseResult:
             and self.top3_ok
             and self.domain_ok
             and self.decision_ok
+            and self.precondition_ok
             and not self.hallucinated_aliases
         )
 
@@ -118,6 +133,15 @@ class RoutingOracleReport:
                 details += f" error={result.error}"
             if result.hallucinated_aliases:
                 details += f" hallucinated={list(result.hallucinated_aliases)}"
+            if not result.precondition_ok:
+                details += (
+                    " precondition="
+                    f"expected({result.expected_precondition_status}, "
+                    f"ready={result.expected_execution_ready}) "
+                    f"observed({result.observed_precondition_status}, "
+                    f"ready={result.observed_execution_ready}, "
+                    f"evaluated={result.observed_precondition_evaluated})"
+                )
             lines.append(details)
         return "\n".join(lines) or "routing oracle passed"
 
@@ -150,7 +174,7 @@ def _validate_oracle(oracle: RoutingOracle) -> list[str]:
     if oracle.minimum_cases_per_domain < 1:
         errors.append("minimum_cases_per_domain must be positive")
 
-    missing_metrics = _METRIC_NAMES - set(oracle.thresholds)
+    missing_metrics = _REQUIRED_METRIC_NAMES - set(oracle.thresholds)
     extra_metrics = set(oracle.thresholds) - _METRIC_NAMES
     if missing_metrics:
         errors.append(f"missing metric thresholds: {sorted(missing_metrics)}")
@@ -179,6 +203,7 @@ def _validate_oracle(oracle: RoutingOracle) -> list[str]:
     ids: set[str] = set()
     normalized_queries: dict[str, str] = {}
     domain_counts: Counter[str] = Counter()
+    precondition_statuses: set[str] = set()
     for index, case in enumerate(oracle.cases, start=1):
         prefix = case.id or f"case#{index}"
         if not case.id:
@@ -203,6 +228,25 @@ def _validate_oracle(oracle: RoutingOracle) -> list[str]:
             domain_counts[case.domain] += 1
         if case.decision not in _DECISIONS:
             errors.append(f"{prefix}: unsupported decision {case.decision!r}")
+        if case.expected_precondition_status:
+            precondition_statuses.add(case.expected_precondition_status)
+            if case.expected_precondition_status not in _PRECONDITION_STATUSES:
+                errors.append(
+                    f"{prefix}: invalid expected_precondition_status "
+                    f"{case.expected_precondition_status!r}"
+                )
+            if case.expected_execution_ready is None:
+                errors.append(
+                    f"{prefix}: expected_execution_ready is required with a precondition expectation"
+                )
+            if case.input_profile is None:
+                errors.append(
+                    f"{prefix}: input_profile is required with a precondition expectation"
+                )
+        elif case.expected_execution_ready is not None:
+            errors.append(
+                f"{prefix}: expected_precondition_status is required with expected_execution_ready"
+            )
         if not case.expected_coverage or not set(case.expected_coverage) <= _COVERAGES:
             errors.append(f"{prefix}: invalid expected_coverage {list(case.expected_coverage)}")
         elif len(case.expected_coverage) != 1:
@@ -244,6 +288,13 @@ def _validate_oracle(oracle: RoutingOracle) -> list[str]:
                 f"domain {domain!r} has {count} cases; "
                 f"minimum is {oracle.minimum_cases_per_domain}"
             )
+    if "precondition_accuracy" in oracle.thresholds:
+        missing_statuses = _PRECONDITION_STATUSES - precondition_statuses
+        if missing_statuses:
+            errors.append(
+                "precondition_accuracy requires cases covering all statuses; "
+                f"missing {sorted(missing_statuses)}"
+            )
     return errors
 
 
@@ -265,6 +316,19 @@ def load_routing_oracle(path: str | Path) -> RoutingOracle:
             decision=str(raw.get("decision") or "").strip(),
             file_path=str(raw.get("file_path") or "").strip(),
             domain_hint=str(raw.get("domain_hint") or "").strip(),
+            input_profile=(
+                dict(raw["input_profile"])
+                if isinstance(raw.get("input_profile"), dict)
+                else None
+            ),
+            expected_precondition_status=str(
+                raw.get("expected_precondition_status") or ""
+            ).strip(),
+            expected_execution_ready=(
+                bool(raw["expected_execution_ready"])
+                if "expected_execution_ready" in raw
+                else None
+            ),
         )
         for raw in raw_cases
         if isinstance(raw, dict)
@@ -312,6 +376,7 @@ def evaluate_routing_oracle(oracle: RoutingOracle) -> RoutingOracleReport:
                 case.query,
                 file_path=case.file_path,
                 domain_hint=case.domain_hint,
+                input_profile=case.input_profile,
             )
             observed_top3 = tuple(
                 candidate.skill for candidate in decision.skill_candidates[:3]
@@ -345,6 +410,15 @@ def evaluate_routing_oracle(oracle: RoutingOracle) -> RoutingOracleReport:
                 decision_ok = top1_ok and decision.coverage == "partial_skill"
             else:
                 decision_ok = top1_ok and coverage_ok
+            precondition_ok = (
+                True
+                if not case.expected_precondition_status
+                else (
+                    decision.precondition_evaluated
+                    and decision.precondition_status == case.expected_precondition_status
+                    and decision.execution_ready == case.expected_execution_ready
+                )
+            )
             results.append(
                 RoutingOracleCaseResult(
                     id=case.id,
@@ -359,6 +433,12 @@ def evaluate_routing_oracle(oracle: RoutingOracle) -> RoutingOracleReport:
                     top3_ok=top3_ok,
                     domain_ok=decision.domain == case.domain,
                     decision_ok=decision_ok,
+                    expected_precondition_status=case.expected_precondition_status,
+                    observed_precondition_status=decision.precondition_status,
+                    expected_execution_ready=case.expected_execution_ready,
+                    observed_precondition_evaluated=decision.precondition_evaluated,
+                    observed_execution_ready=decision.execution_ready,
+                    precondition_ok=precondition_ok,
                     hallucinated_aliases=hallucinated,
                 )
             )
@@ -377,17 +457,31 @@ def evaluate_routing_oracle(oracle: RoutingOracle) -> RoutingOracleReport:
                     top3_ok=False,
                     domain_ok=False,
                     decision_ok=False,
+                    expected_precondition_status=case.expected_precondition_status,
+                    expected_execution_ready=case.expected_execution_ready,
+                    precondition_ok=not case.expected_precondition_status,
                     error=f"{type(exc).__name__}: {exc}",
                 )
             )
 
     routed = [result for result in results if result.expected_skills]
+    precondition_cases = [
+        result for result in results if result.expected_precondition_status
+    ]
     metrics = {
         "precision_at_1": _ratio(sum(result.top1_ok for result in routed), len(routed)),
         "top3_recall": _ratio(sum(result.top3_ok for result in routed), len(routed)),
         "domain_accuracy": _ratio(sum(result.domain_ok for result in results), len(results)),
         "decision_accuracy": _ratio(sum(result.decision_ok for result in results), len(results)),
         "hallucinated_alias_rate": _ratio(alias_hallucinations, alias_predictions),
+        "precondition_accuracy": (
+            _ratio(
+                sum(result.precondition_ok for result in precondition_cases),
+                len(precondition_cases),
+            )
+            if precondition_cases
+            else 1.0
+        ),
     }
     threshold_failures: list[str] = []
     for name, threshold in oracle.thresholds.items():

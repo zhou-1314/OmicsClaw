@@ -47,6 +47,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pytest numpy pandas scikit-learn matplotlib PyYAML pydantic
+          pip install "anndata==0.11.4" h5py
 
       - name: Test OmicsClaw CLI
         run: python omicsclaw.py list
@@ -119,6 +120,7 @@ jobs:
             tests/test_capability_resolver_golden.py \
             tests/test_keyword_routing.py \
             tests/test_auto_routing_disambiguation.py \
+            tests/test_skill_preconditions.py \
             tests/test_routing_oracle.py \
             tests/test_routing_budget_gate.py \
             tests/test_audit_requires_v2.py \
@@ -237,7 +239,7 @@ jobs:
             seaborn \
             pillow \
             h5py \
-            anndata \
+            "anndata==0.11.4" \
             scanpy \
             scikit-misc \
             python-igraph \

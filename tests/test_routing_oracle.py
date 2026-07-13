@@ -45,6 +45,12 @@ def test_full_domain_routing_oracle_is_valid_and_meets_its_quality_thresholds():
 
     assert report.passed, report.format_failures()
     assert report.metrics["hallucinated_alias_rate"] == 0.0
+    assert report.metrics["precondition_accuracy"] == 1.0
+    assert {
+        result.observed_precondition_status
+        for result in report.case_results
+        if result.expected_precondition_status
+    } == {"eligible", "needs_preparation", "blocked"}
     assert all(
         metrics["precision_at_1"] >= 0.9
         for metrics in report.per_domain.values()
@@ -85,10 +91,12 @@ def test_pr_ci_executes_acquisition_and_routing_regression_suites():
         "tests/test_capability_resolver_golden.py",
         "tests/test_routing_oracle.py",
         "tests/test_routing_budget_gate.py",
+        "tests/test_skill_preconditions.py",
     }
 
     missing = sorted(path for path in required_tests if path not in workflow)
     assert missing == [], f"PR CI does not execute regression suites: {missing}"
+    assert workflow.count('"anndata==0.11.4"') == 2
 
 
 @pytest.mark.parametrize(
@@ -216,6 +224,90 @@ def test_hallucinated_alias_is_counted_and_fails_zero_tolerance(monkeypatch):
         "invented-spatial-skill",
     )
     assert any("hallucinated_alias_rate" in item for item in report.threshold_failures)
+
+
+def test_precondition_mismatch_fails_the_oracle_quality_gate(tmp_path: Path):
+    payload = _oracle_payload()
+    raw_case = next(
+        case
+        for case in payload["cases"]
+        if case["id"] == "singlecell__cluster_raw_precondition"
+    )
+    raw_case["expected_precondition_status"] = "eligible"
+    raw_case["expected_execution_ready"] = True
+
+    report = evaluate_routing_oracle(load_routing_oracle(_write_oracle(tmp_path, payload)))
+
+    assert report.metrics["precondition_accuracy"] < 1.0
+    assert any("precondition_accuracy" in item for item in report.threshold_failures)
+    assert "observed(needs_preparation, ready=False" in report.format_failures()
+
+
+def test_precondition_metric_requires_a_real_evaluation(monkeypatch):
+    oracle = load_routing_oracle(ORACLE_PATH)
+    case = next(
+        item
+        for item in oracle.cases
+        if item.id == "singlecell__cluster_raw_precondition"
+    )
+    oracle.cases = [case]
+    oracle.validation_errors = []
+    oracle.thresholds = {name: 0.0 for name in oracle.thresholds}
+    oracle.thresholds["precondition_accuracy"] = 1.0
+    oracle.per_domain_thresholds = {
+        name: 0.0 for name in oracle.per_domain_thresholds
+    }
+    expected_skill = case.expected_skills[0]
+    monkeypatch.setattr(
+        routing_oracle_module,
+        "resolve_capability",
+        lambda *args, **kwargs: CapabilityDecision(
+            query=case.query,
+            domain=case.domain,
+            coverage=case.expected_coverage[0],
+            chosen_skill=expected_skill,
+            skill_candidates=[
+                CapabilityCandidate(
+                    skill=expected_skill,
+                    domain=case.domain,
+                    score=10.0,
+                )
+            ],
+            precondition_status=case.expected_precondition_status,
+            precondition_evaluated=False,
+            execution_ready=bool(case.expected_execution_ready),
+        ),
+    )
+
+    report = evaluate_routing_oracle(oracle)
+
+    assert report.metrics["precondition_accuracy"] == 0.0
+    assert report.case_results[0].precondition_ok is False
+    assert "evaluated=False" in report.format_failures()
+
+
+def test_schema_v1_keeps_the_new_precondition_threshold_optional(tmp_path: Path):
+    payload = _oracle_payload()
+    del payload["thresholds"]["precondition_accuracy"]
+
+    oracle = load_routing_oracle(_write_oracle(tmp_path, payload))
+
+    assert oracle.validation_errors == []
+
+
+def test_precondition_threshold_requires_all_three_oracle_states(tmp_path: Path):
+    payload = _oracle_payload()
+    for case in payload["cases"]:
+        case.pop("input_profile", None)
+        case.pop("expected_precondition_status", None)
+        case.pop("expected_execution_ready", None)
+
+    oracle = load_routing_oracle(_write_oracle(tmp_path, payload))
+
+    assert any(
+        "precondition_accuracy requires cases covering" in error
+        for error in oracle.validation_errors
+    )
 
 
 @pytest.mark.parametrize(

@@ -8,6 +8,7 @@ from omicsclaw.skill.capability_resolver import (
     CapabilityDecision,
     resolve_capability,
 )
+from omicsclaw.skill.preconditions import InputProfile
 
 from .models import AnalysisRoute, AnalysisRouteKind
 
@@ -50,18 +51,26 @@ class AnalysisRouter:
         query: str,
         file_path: str = "",
         domain_hint: str = "",
+        input_profile: InputProfile | dict | None = None,
     ) -> AnalysisRoute:
-        decision = self._resolver(
-            query,
-            file_path=file_path,
-            domain_hint=domain_hint,
-        )
+        resolver_kwargs = {
+            "file_path": file_path,
+            "domain_hint": domain_hint,
+        }
+        if input_profile is not None:
+            resolver_kwargs["input_profile"] = input_profile
+        decision = self._resolver(query, **resolver_kwargs)
         kind = self._route_kind(query=query, file_path=file_path, decision=decision)
+        preflight_required = bool(
+            decision.precondition_evaluated and not decision.execution_ready
+        )
         return AnalysisRoute(
             kind=kind,
             capability_decision=decision,
-            preflight_required=False,
-            missing_params=[],
+            preflight_required=preflight_required,
+            missing_params=(
+                list(decision.missing_preconditions) if preflight_required else []
+            ),
         )
 
     def _route_kind(
@@ -104,6 +113,7 @@ def route_analysis_request(
     query: str,
     file_path: str = "",
     domain_hint: str = "",
+    input_profile: InputProfile | dict | None = None,
 ) -> AnalysisRoute:
     """Convenience function for callers that do not need a router instance."""
 
@@ -111,6 +121,7 @@ def route_analysis_request(
         query,
         file_path=file_path,
         domain_hint=domain_hint,
+        input_profile=input_profile,
     )
 
 

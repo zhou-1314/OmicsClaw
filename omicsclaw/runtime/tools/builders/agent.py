@@ -1142,6 +1142,26 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                         ],
                         "description": "Optional domain hint if the user has already narrowed the domain.",
                     },
+                    "input_profile": {
+                        "type": "object",
+                        "description": (
+                            "Optional caller-supplied facts for advisory planning only; these facts never authorize "
+                            "execution or override a readable file_path, which is probed automatically."
+                        ),
+                        "properties": {
+                            "file_type": {"type": "string"},
+                            "modality": {"type": "string"},
+                            "preprocessed": {"type": "boolean"},
+                            "obs": {"type": "array", "items": {"type": "string"}},
+                            "var": {"type": "array", "items": {"type": "string"}},
+                            "layers": {"type": "array", "items": {"type": "string"}},
+                            "obsm": {"type": "array", "items": {"type": "string"}},
+                            "uns": {"type": "array", "items": {"type": "string"}},
+                            "env": {"type": "array", "items": {"type": "string"}},
+                            "config": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "additionalProperties": False,
+                    },
                 },
                 "required": ["query"],
             },

@@ -186,7 +186,27 @@ def _format_analysis_route_context(route: AnalysisRoute) -> str:
     ]
     if decision.missing_capabilities:
         lines.append("- missing_capabilities: " + "; ".join(decision.missing_capabilities))
-    if route.kind is AnalysisRouteKind.EXACT_SKILL:
+    if route.preflight_required:
+        lines.extend(
+            [
+                "- preflight_required: true",
+                f"- precondition_status: {decision.precondition_status}",
+            ]
+        )
+        if decision.missing_preconditions:
+            lines.append(
+                "- missing_preconditions: "
+                + "; ".join(decision.missing_preconditions)
+            )
+        if decision.recommended_preparation:
+            lines.append(
+                "- recommended_preparation: "
+                + "; ".join(decision.recommended_preparation)
+            )
+        lines.append(
+            "- execution_rule: do not execute the selected skill until preflight succeeds"
+        )
+    elif route.kind is AnalysisRouteKind.EXACT_SKILL:
         lines.append(
             "- execution_rule: deterministic route, assisted parameterization"
         )
@@ -209,10 +229,30 @@ def _merge_system_prompt_additions(*additions: str) -> str:
     )
 
 
+def _route_user_text_with_input_state(user_text: str) -> AnalysisRoute:
+    """Route text with a cached, read-only profile of its first trusted input."""
+    try:
+        input_paths = extract_valid_input_paths(user_text)
+    except Exception as exc:
+        logger.warning("Input-state path extraction failed (non-fatal): %s", exc)
+        input_paths = []
+    if not input_paths:
+        return route_analysis_request(user_text)
+
+    input_path = input_paths[0]
+    from omicsclaw.skill.preconditions import probe_input_profile
+
+    return route_analysis_request(
+        user_text,
+        file_path=input_path,
+        input_profile=probe_input_profile(input_path),
+    )
+
+
 def _build_analysis_route_context(user_content: str | list) -> str:
     user_text = _extract_user_text(user_content)
     try:
-        route = route_analysis_request(user_text)
+        route = _route_user_text_with_input_state(user_text)
     except Exception as exc:
         logger.warning("Analysis Router context failed (non-fatal): %s", exc)
         return ""
@@ -337,7 +377,7 @@ async def _build_exact_skill_assisted_param_context(user_content: str | list) ->
     if not user_text.strip():
         return ""
     try:
-        route = route_analysis_request(user_text)
+        route = _route_user_text_with_input_state(user_text)
     except Exception as exc:
         logger.warning("Assisted-parameterization routing failed (non-fatal): %s", exc)
         return ""

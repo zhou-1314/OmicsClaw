@@ -45,7 +45,6 @@ interface:
     preconditions:
       data_shape:
         obsm:
-        - X_pca
         - spatial
   parameters:
     hints:
