@@ -8,13 +8,14 @@ reservation, durable acceptance, and Envelope construction stay behind it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import hashlib
 import json
 from typing import Callable, Mapping
 
 from omicsclaw.attachments import (
     AttachmentIntegrityError,
+    AttachmentReferenceV1,
     AttachmentStore,
     InboundAttachmentSource,
 )
@@ -66,13 +67,23 @@ def _validate_reply_target(raw: RawInboundV1) -> None:
         "account_namespace",
         "destination_id",
     }
-    if not required.issubset(target) or set(target) - (required | {"thread_id"}):
+    # `destination_kind` disambiguates providers whose destination identifier is
+    # not self-describing.  Feishu, for example, addresses the same send call by
+    # chat, open, union or user ID, and the Adapter cannot infer which one a bare
+    # string is.  It stays optional and platform-neutral: Telegram omits it, and
+    # omitting it keeps an existing Reply Target's key byte-identical because the
+    # key is a canonical-JSON digest of the whole target.
+    optional = {"thread_id", "destination_kind"}
+    if not required.issubset(target) or set(target) - (required | optional):
         raise ValueError("Channel Reply Target fields do not match V1")
     for field_name in ("adapter", "account_namespace", "destination_id"):
         _require_nonempty_string(target.get(field_name), field_name)
     thread_id = target.get("thread_id")
     if thread_id is not None:
         _require_nonempty_string(thread_id, "thread_id")
+    destination_kind = target.get("destination_kind")
+    if destination_kind is not None:
+        _require_nonempty_string(destination_kind, "destination_kind")
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +103,11 @@ class IngressBackendConfig:
     owner_identities: Mapping[str, frozenset[str]] = field(default_factory=dict)
     channel_delivery_enabled: bool = False
     attachment_input_enabled: bool = False
+    # Channel Adapters whose Attachment Store cutover has landed. One shared
+    # Channel runtime may serve Adapters at different cutover stages, so
+    # enabling attachments for one must not open inbound bytes for another.
+    # Empty means no Channel Adapter may submit attachments.
+    attachment_input_adapters: frozenset[str] = frozenset()
     max_outstanding_deliveries_total: int = 64
     max_outstanding_deliveries_per_account: int = 32
     max_source_identity_chars: int = 512
@@ -257,6 +273,78 @@ class IngressNormalizer:
                     return self.accept(raw)
                 return await self._accept_attachments(raw, attachment_source)
 
+    def _attachment_adapter_admitted(self, raw: RawInboundV1) -> bool:
+        """Only a Channel Adapter with a landed Attachment cutover may submit bytes.
+
+        A shared Channel runtime may serve Adapters at different cutover stages,
+        so the global switch alone is not sufficient authority.  Local Surfaces
+        keep using the global switch because they have no Adapter identity.
+        """
+
+        if raw.surface != "channel":
+            return True
+        adapter = str(raw.reply_target.get("adapter", ""))
+        return adapter in self._config.attachment_input_adapters
+
+    def _accepted_attachment_refs(
+        self, turn_id: str, conversation_id: str
+    ) -> tuple[AttachmentReferenceV1, ...]:
+        """Read one existing Turn's ordered accepted Attachment References.
+
+        ADR 0059 requires a duplicate to observe the original Records, so the
+        control-plane batch commitment — not the Store's answer alone — decides
+        what an empty result means.  A Turn with no commitment (it never carried
+        attachments) and a Backend with no Attachment Store both legitimately
+        read empty.  When the control plane committed to N attachments, the only
+        acceptable answers are exactly those N accepted References or a
+        recognised non-acceptance; anything else is an integrity incident rather
+        than a silent "text Turn with no attachments".
+        """
+
+        store = self._attachment_store
+        if store is None or not turn_id or not conversation_id:
+            return ()
+        try:
+            references = store.get_turn_references(turn_id, conversation_id)
+        except AttachmentIntegrityError as exc:
+            raise ControlIntegrityError(
+                "accepted Attachment References are unavailable for this Turn"
+            ) from exc
+        commitment = self._repository.get_turn_attachment_commitment(turn_id)
+        if commitment is None:
+            return references
+        if references:
+            if len(references) != commitment.record_count:
+                raise ControlIntegrityError(
+                    "committed Attachment References are incomplete for this Turn"
+                )
+            return references
+        # The control plane committed to >=1 attachment yet the Store returns
+        # none.  A Turn that actually ran with its attachments (succeeded) must
+        # still have them, so an empty answer there is lost committed content.
+        # Non-succeeded outcomes — a synchronous finalize failure in particular
+        # — legitimately never produced accepted Records.
+        receipt = self._repository.get_turn(turn_id)
+        if receipt is not None and receipt.status == "succeeded":
+            raise ControlIntegrityError(
+                "accepted Attachment References are unavailable for this Turn"
+            )
+        return references
+
+    def _with_accepted_attachment_refs(
+        self, result: TurnAcceptanceResult
+    ) -> TurnAcceptanceResult:
+        """Attach the durable References to an outcome that names a Turn."""
+
+        if result.attachment_refs:
+            return result
+        references = self._accepted_attachment_refs(
+            result.turn_id, result.conversation_id
+        )
+        if not references:
+            return result
+        return replace(result, attachment_refs=references)
+
     async def _accept_attachments(
         self,
         raw: RawInboundV1,
@@ -314,10 +402,12 @@ class IngressNormalizer:
         )
         plan = self._repository.plan_turn_acceptance(intent)
         if plan.state == "duplicate":
-            return TurnAcceptanceResult(
-                TurnAcceptanceStatus.DUPLICATE,
-                plan.turn_id,
-                plan.conversation_id,
+            return self._with_accepted_attachment_refs(
+                TurnAcceptanceResult(
+                    TurnAcceptanceStatus.DUPLICATE,
+                    plan.turn_id,
+                    plan.conversation_id,
+                )
             )
         if plan.state == "conflict":
             return TurnAcceptanceResult(
@@ -339,6 +429,7 @@ class IngressNormalizer:
             or store is None
             or attachment_source is None
             or not callable(getattr(attachment_source, "open", None))
+            or not self._attachment_adapter_admitted(raw)
         ):
             return TurnAcceptanceResult(
                 TurnAcceptanceStatus.REJECTED,
@@ -382,6 +473,7 @@ class IngressNormalizer:
 
             publication = None
             accepted: TurnAcceptanceResult | None = None
+            references: tuple[AttachmentReferenceV1, ...] = ()
             reservation_finished = False
             try:
                 try:
@@ -423,7 +515,9 @@ class IngressNormalizer:
                             conversation_id=accepted.conversation_id,
                             code="admission_contention",
                         )
-                    return accepted
+                    # A concurrent submission won this identity; the caller must
+                    # still observe that Turn's original ordered Records.
+                    return self._with_accepted_attachment_refs(accepted)
 
                 try:
                     references = store.accept_batch(publication.commitment)
@@ -487,7 +581,7 @@ class IngressNormalizer:
                 )
                 reservation.commit(envelope)
                 reservation_finished = True
-                return accepted
+                return replace(accepted, attachment_refs=references)
             except Exception:
                 if not reservation_finished:
                     if (
@@ -505,11 +599,16 @@ class IngressNormalizer:
                                 "Accepted Turn enqueue and terminal compensation "
                                 "both failed; Conversation quarantined"
                             ) from terminal_error
+                        # The batch was durably accepted before enqueue failed,
+                        # so this failed Turn's accepted References must travel
+                        # with the novel result exactly as a duplicate lookup
+                        # would later return them.
                         return TurnAcceptanceResult(
                             TurnAcceptanceStatus.ACCEPTED,
                             accepted.turn_id,
                             accepted.conversation_id,
                             "dispatch_enqueue_failed",
+                            attachment_refs=references,
                         )
                     if publication is not None:
                         store.abandon_batch(publication.commitment.batch_id)
@@ -633,10 +732,12 @@ class IngressNormalizer:
     ) -> TurnAcceptanceResult:
         plan = self._repository.plan_turn_acceptance(intent)
         if plan.state == "duplicate":
-            return TurnAcceptanceResult(
-                TurnAcceptanceStatus.DUPLICATE,
-                plan.turn_id,
-                plan.conversation_id,
+            return self._with_accepted_attachment_refs(
+                TurnAcceptanceResult(
+                    TurnAcceptanceStatus.DUPLICATE,
+                    plan.turn_id,
+                    plan.conversation_id,
+                )
             )
         if plan.state == "conflict":
             return TurnAcceptanceResult(

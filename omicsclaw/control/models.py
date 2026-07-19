@@ -730,6 +730,37 @@ class DeliveryStartupRecoveryResult:
 
 
 @dataclass(frozen=True, slots=True)
+class DeliveryStatusSummary:
+    """One Delivery plus its ordered Items and derived operational state.
+
+    ``state`` is the Owner/operator-facing rollup described in the design:
+    ``delivered`` once every Item is delivered, otherwise the outcome of the
+    first non-delivered Item in ordinal order (``in_progress`` while it is still
+    queued/sending/retry_wait, ``failed``/``unknown`` once it reaches that
+    terminal outcome, or ``blocked`` for a suppressed head).
+    """
+
+    delivery: DeliveryRecord
+    items: tuple[DeliveryItemRecord, ...]
+    state: str
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryOperationOutcome:
+    """The typed result of an explicit Owner/operator Delivery action.
+
+    ``code`` is one of ``resent``, ``retry_rearmed``, ``no_retryable_items``,
+    ``delivery_not_found`` or ``delivery_backpressure``.  A ``resent`` outcome
+    carries the freshly created ``purpose=resend`` Delivery; a ``retry_rearmed``
+    outcome reports how many ``retry_wait`` Items had their backoff expedited.
+    """
+
+    code: str
+    delivery: DeliveryRecord | None = None
+    rearmed_items: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectionIntentRecord:
     projection_intent_id: str
     project_id: str
@@ -764,10 +795,25 @@ class TurnAcceptanceIntent:
 
 @dataclass(frozen=True, slots=True)
 class TurnAcceptanceResult:
+    """Admission outcome plus the Turn's ordered accepted Attachment References.
+
+    ADR 0059 requires that a matching duplicate return the original Turn *and*
+    its original ordered Attachment Records, so the references belong to the
+    shared Normalizer contract rather than to any single Surface Adapter.
+    """
+
     status: TurnAcceptanceStatus
     turn_id: str = ""
     conversation_id: str = ""
     code: str = ""
+    attachment_refs: tuple[AttachmentReferenceV1, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "attachment_refs", tuple(self.attachment_refs))
+        if any(
+            not isinstance(item, AttachmentReferenceV1) for item in self.attachment_refs
+        ):
+            raise TypeError("attachment_refs must contain AttachmentReferenceV1 values")
 
 
 @dataclass(frozen=True, slots=True)

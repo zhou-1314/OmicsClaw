@@ -600,6 +600,21 @@ async def test_v1_turns_accepts_desktop_image_then_duplicates_without_source_ope
             first_payload["conversation_id"],
         )
         assert len(references) == 1
+        # ADR 0059: both the novel 202 and the duplicate 200 project the same
+        # ordered Attachment References, and carry no bytes or paths.
+        expected_attachments = [
+            {
+                "schema_version": 1,
+                "attachment_id": references[0].attachment_id,
+                "ordinal": 0,
+                "content_sha256": references[0].content_sha256,
+                "byte_size": references[0].byte_size,
+                "display_name": references[0].display_name,
+                "media_type": references[0].media_type,
+            }
+        ]
+        assert first_payload["attachments"] == expected_attachments
+        assert duplicate_payload["attachments"] == expected_attachments
         assert (
             runtime.repository.get_turn_attachment_commitment(first_payload["turn_id"])
             is not None

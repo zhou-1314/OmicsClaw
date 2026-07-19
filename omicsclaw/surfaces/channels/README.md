@@ -204,6 +204,8 @@ For a guided setup, run `oc onboard`. The wizard writes `.env` using the same va
 | `TELEGRAM_ACCOUNT_NAMESPACE` | Optional assertion; when set it must equal `bot-<authenticated-bot-id>` | Telegram |
 | `FEISHU_APP_ID` | From Feishu developer console | Feishu |
 | `FEISHU_APP_SECRET` | From Feishu developer console | Feishu |
+| `FEISHU_ALLOWED_SENDERS` | **Required.** Comma-separated Owner `open_id` values | Feishu |
+| `FEISHU_BOT_OPEN_ID` | This Bot's `open_id`; group chats fail closed without it | Feishu |
 | `DINGTALK_CLIENT_ID` | Robot App Key | DingTalk |
 | `DINGTALK_CLIENT_SECRET` | Robot App Secret | DingTalk |
 | `DISCORD_BOT_TOKEN` | Discord bot token | Discord |

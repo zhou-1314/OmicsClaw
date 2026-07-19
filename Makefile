@@ -70,8 +70,22 @@ setup-full: venv
 demo:
 	python omicsclaw.py run preprocess --demo --output /tmp/omicsclaw_demo
 
+# Full suite, parallel. pytest-xdist splits across processes; the suite is
+# ~6.3k mostly-small tests, so wall time is dominated by having one worker
+# rather than by any single file. Serial was 12m42s; -n 16 is ~1m40s.
+# Override workers with: make test PYTEST_WORKERS=32
+PYTEST_WORKERS ?= 16
+
 test:
+	python -m pytest -q -n $(PYTEST_WORKERS)
+
+# Serial run, for debugging: -s/pdb and readable tracebacks need one process.
+test-serial:
 	python -m pytest -v
+
+# Includes the `slow` tests excluded by default (live conda/network queries).
+test-slow:
+	python -m pytest -q -n $(PYTEST_WORKERS) -m slow
 
 list:
 	python omicsclaw.py list

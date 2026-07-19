@@ -1448,11 +1448,18 @@ async def test_authoritative_desktop_rejects_files_before_staging(
     )
     await runtime.start()
     monkeypatch.setattr(server, "_desktop_control_runtime", runtime, raising=False)
-    monkeypatch.setattr(
-        server,
+    # ADR 0059: the Desktop staging helpers that used to write `.uploads` and
+    # register `received_files` are gone, so "no staging before admission" is
+    # now structural rather than something a stub has to intercept.
+    for retired in (
         "_build_multimodal_content",
-        lambda *_args, **_kwargs: pytest.fail("file staging ran before admission"),
-    )
+        "_register_attachment_for_session",
+        "_reset_session_attachments",
+        "_resolve_uploads_dir",
+    ):
+        assert not hasattr(server, retired), (
+            f"{retired} is a retired parallel attachment ingress"
+        )
     try:
         with pytest.raises(HTTPException, match="attachments_not_supported"):
             await server.chat_stream(

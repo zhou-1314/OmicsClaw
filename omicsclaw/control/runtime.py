@@ -10,7 +10,7 @@ never serialized into ``control.db`` or an accepted ``InboundEnvelopeV1``.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 import inspect
@@ -21,6 +21,7 @@ from typing import Any
 
 from omicsclaw.attachments import (
     AttachmentIntegrityError,
+    AttachmentReferenceV1,
     AttachmentStore,
     InboundAttachmentSource,
 )
@@ -52,7 +53,10 @@ from .event_hub import (
 from .event_hub import TurnEventFrame
 from .ingress import IngressBackendConfig, IngressNormalizer
 from .models import (
+    DeliveryOperationOutcome,
     DeliveryPlan,
+    DeliveryRecord,
+    DeliveryStatusSummary,
     InboundEnvelopeV1,
     RawInboundV1,
     StateChangeResult,
@@ -114,11 +118,58 @@ class ControlRuntimePorts:
 
 
 @dataclass(frozen=True, slots=True)
+class ChannelSurfaceBinding:
+    """One Channel Adapter's contribution to the shared Channel control plane.
+
+    A Channel describes itself with this and never composes its own runtime:
+    `control.db` takes an exclusive lifetime lock, so a second per-Channel
+    runtime in the same process would fail deep inside startup.
+    """
+
+    adapter: str
+    account_namespace: str
+    owner_identities: Mapping[str, frozenset[str]]
+    delivery_adapter: DeliveryAdapter
+    attachment_input_enabled: bool = False
+
+    def __post_init__(self) -> None:
+        adapter = self.adapter.strip() if isinstance(self.adapter, str) else ""
+        account = (
+            self.account_namespace.strip()
+            if isinstance(self.account_namespace, str)
+            else ""
+        )
+        if not adapter or not account:
+            raise ValueError("Channel adapter and account_namespace must be non-empty")
+        object.__setattr__(self, "adapter", adapter)
+        object.__setattr__(self, "account_namespace", account)
+        expected_scope_prefix = f"channel/{adapter}/{account}/"
+        if not self.owner_identities or not any(
+            scope.startswith(expected_scope_prefix) for scope in self.owner_identities
+        ):
+            raise ValueError(
+                "Channel runtime requires an Owner Identity scope for its account"
+            )
+        if not callable(self.delivery_adapter):
+            raise TypeError("delivery_adapter must be callable")
+
+
+@dataclass(frozen=True, slots=True)
 class ControlRuntimeResult:
     """Admission observation plus the durable Receipt, when one exists."""
 
     acceptance: TurnAcceptanceResult
     receipt: TurnRecord | None
+
+    @property
+    def attachment_refs(self) -> tuple[AttachmentReferenceV1, ...]:
+        """This Turn's ordered accepted Attachment References.
+
+        Delegates to the acceptance outcome so novel and duplicate submissions
+        read one Normalizer-owned answer instead of a Surface-local re-query.
+        """
+
+        return self.acceptance.attachment_refs
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,6 +276,8 @@ class ControlRuntime:
         dispatch_events: DispatchEvents = _default_dispatch_events,
         event_hub: TurnEventHub | None = None,
         delivery_pump: DeliveryPump | None = None,
+        max_outstanding_deliveries_total: int | None = None,
+        max_outstanding_deliveries_per_account: int | None = None,
     ) -> None:
         self.repository = repository
         self.transcript = transcript
@@ -235,6 +288,12 @@ class ControlRuntime:
         self._dispatch_events = dispatch_events
         self._event_hub = event_hub or TurnEventHub()
         self._delivery_pump = delivery_pump
+        # Explicit Owner resend consumes fresh delivery capacity, so it must
+        # honour the same outstanding bounds as novel Channel ingress.  ``None``
+        # means the composing Surface did not configure a Channel bound (for
+        # example a local CLI/Desktop runtime), so no resend gate is applied.
+        self._delivery_max_total = max_outstanding_deliveries_total
+        self._delivery_max_per_account = max_outstanding_deliveries_per_account
         self._live_turns: dict[str, _LiveTurn] = {}
         self._observer_tasks: set[asyncio.Task[_ObserverOutcome]] = set()
         self._observer_drain_timeout_seconds = 1.0
@@ -369,6 +428,35 @@ class ControlRuntime:
         account_namespace: str,
         owner_identities: Mapping[str, frozenset[str]],
         delivery_adapter: DeliveryAdapter,
+        attachment_input_enabled: bool = False,
+        **runtime_options: Any,
+    ) -> "ControlRuntime":
+        """Compose an authoritative Channel runtime serving exactly one Adapter.
+
+        Thin wrapper over :meth:`for_channel_surfaces` retained because a single
+        Adapter is the common case and the older signature is widely used.
+        """
+
+        return cls.for_channel_surfaces(
+            workspace_id=workspace_id,
+            bindings=(
+                ChannelSurfaceBinding(
+                    adapter=adapter,
+                    account_namespace=account_namespace,
+                    owner_identities=owner_identities,
+                    delivery_adapter=delivery_adapter,
+                    attachment_input_enabled=attachment_input_enabled,
+                ),
+            ),
+            **runtime_options,
+        )
+
+    @classmethod
+    def for_channel_surfaces(
+        cls,
+        *,
+        workspace_id: str,
+        bindings: Sequence["ChannelSurfaceBinding"],
         state_root: str | Path | None = None,
         dispatch_events: DispatchEvents = _default_dispatch_events,
         max_entries_per_conversation: int = 8,
@@ -377,31 +465,43 @@ class ControlRuntime:
         max_outstanding_deliveries_per_account: int = 32,
         max_active_delivery_attempts: int = 16,
         max_delivery_retry_hint_ms: int = _MAX_CHANNEL_RETRY_MS,
-        attachment_input_enabled: bool = False,
     ) -> "ControlRuntime":
-        """Compose one authoritative Channel runtime.
+        """Compose ONE authoritative runtime serving every cut-over Channel.
 
-        Attachment input is fail-closed unless the composition root explicitly
-        enables the Backend-owned Store path. File selections remain rejected.
-        A Channel is cut over only when its Surface supplies both an Owner
-        allowlist and a single-attempt Delivery Adapter here.
+        `control.db` takes an exclusive lifetime lock, so one Backend process
+        owns exactly one control plane. Adapters are therefore composed here
+        rather than by each Channel: the Delivery Pump already resolves by
+        ``(adapter, account_namespace)``, so several Channels share one
+        repository, Sequencer, Transcript Store and Pump without any of them
+        being able to claim another's Reply Target sequence.
+
+        Attachment input stays fail-closed per Adapter: enabling it for one
+        Channel must not silently open inbound bytes for a Channel whose
+        Attachment Store cutover has not landed.
         """
 
-        adapter = adapter.strip() if isinstance(adapter, str) else ""
-        account_namespace = (
-            account_namespace.strip() if isinstance(account_namespace, str) else ""
-        )
-        if not adapter or not account_namespace:
-            raise ValueError("Channel adapter and account_namespace must be non-empty")
-        expected_scope_prefix = f"channel/{adapter}/{account_namespace}/"
-        if not owner_identities or not any(
-            scope.startswith(expected_scope_prefix) for scope in owner_identities
-        ):
-            raise ValueError(
-                "Channel runtime requires an Owner Identity scope for its account"
-            )
-        if not callable(delivery_adapter):
-            raise TypeError("delivery_adapter must be callable")
+        bindings = tuple(bindings)
+        if not bindings:
+            raise ValueError("at least one Channel Surface binding is required")
+        merged_owner_identities: dict[str, frozenset[str]] = {}
+        delivery_adapters: dict[tuple[str, str], DeliveryAdapter] = {}
+        attachment_adapters: set[str] = set()
+        for binding in bindings:
+            if not isinstance(binding, ChannelSurfaceBinding):
+                raise TypeError("bindings must contain ChannelSurfaceBinding values")
+            account = (binding.adapter, binding.account_namespace)
+            if account in delivery_adapters:
+                raise ValueError(
+                    "duplicate Channel Surface binding for "
+                    f"{binding.adapter}/{binding.account_namespace}"
+                )
+            delivery_adapters[account] = binding.delivery_adapter
+            for scope, subjects in binding.owner_identities.items():
+                if scope in merged_owner_identities:
+                    raise ValueError(f"duplicate Owner Identity scope: {scope}")
+                merged_owner_identities[scope] = frozenset(subjects)
+            if binding.attachment_input_enabled:
+                attachment_adapters.add(binding.adapter)
 
         repository = ControlStateRepository(state_root or default_control_state_root())
         transcript: CanonicalTranscript | None = None
@@ -441,9 +541,10 @@ class ControlRuntime:
                 sequencer,
                 IngressBackendConfig(
                     workspace_id=workspace_id,
-                    owner_identities=owner_identities,
+                    owner_identities=merged_owner_identities,
                     channel_delivery_enabled=True,
-                    attachment_input_enabled=attachment_input_enabled,
+                    attachment_input_enabled=bool(attachment_adapters),
+                    attachment_input_adapters=frozenset(attachment_adapters),
                     max_outstanding_deliveries_total=(max_outstanding_deliveries_total),
                     max_outstanding_deliveries_per_account=(
                         max_outstanding_deliveries_per_account
@@ -470,7 +571,7 @@ class ControlRuntime:
             )
             delivery_pump = DeliveryPump(
                 repository,
-                adapters={(adapter, account_namespace): delivery_adapter},
+                adapters=delivery_adapters,
                 content_resolver=lambda item: resolve_delivery_text(
                     transcript,
                     item,
@@ -487,6 +588,10 @@ class ControlRuntime:
                 workspace_id=workspace_id,
                 dispatch_events=dispatch_events,
                 delivery_pump=delivery_pump,
+                max_outstanding_deliveries_total=max_outstanding_deliveries_total,
+                max_outstanding_deliveries_per_account=(
+                    max_outstanding_deliveries_per_account
+                ),
             )
         except BaseException:
             if attachment_store is not None:
@@ -982,6 +1087,71 @@ class ControlRuntime:
             raise RuntimeError("ControlRuntime must be running")
         if self._delivery_pump is not None:
             await self._delivery_pump.wait_idle()
+
+    def list_deliveries(
+        self, *, turn_id: str | None = None
+    ) -> tuple[DeliveryRecord, ...]:
+        """Owner/operator read: every Delivery, or those for one Turn."""
+
+        return self.repository.list_deliveries(turn_id=turn_id)
+
+    def describe_delivery(self, delivery_id: str) -> DeliveryStatusSummary | None:
+        """Owner/operator read: one Delivery, its Items and rolled-up state."""
+
+        return self.repository.describe_delivery(delivery_id)
+
+    def resend_delivery(self, delivery_id: str) -> DeliveryOperationOutcome:
+        """Explicit Owner resend of an existing Delivery's frozen content.
+
+        Creates a new ``purpose=resend`` Delivery linked to ``delivery_id``,
+        reusing its immutable content references without touching the Turn, a
+        tool or a Run.  It is the correct recovery after an ``unknown`` or
+        already-``delivered`` outcome, where reopening the original Items is
+        unsafe.  A fresh resend honours the configured outstanding-delivery
+        capacity bound and then wakes the Pump.
+        """
+
+        summary = self.repository.describe_delivery(delivery_id)
+        if summary is None:
+            return DeliveryOperationOutcome("delivery_not_found")
+        if not self._resend_within_capacity(summary.delivery):
+            return DeliveryOperationOutcome("delivery_backpressure")
+        record = self.repository.insert_resend_delivery(delivery_id)
+        self._wake_delivery_pump()
+        return DeliveryOperationOutcome("resent", delivery=record)
+
+    def retry_delivery(self, delivery_id: str) -> DeliveryOperationOutcome:
+        """Expedite an in-place safe retry of a Delivery's waiting Items.
+
+        Pulls every ``retry_wait`` Item's backoff forward so the Pump reclaims
+        it immediately.  It never reopens a terminal ``failed``/``unknown``
+        Item — those require an explicit :meth:`resend_delivery` — so a Delivery
+        with no waiting Item returns ``no_retryable_items``.
+        """
+
+        try:
+            rearmed = self.repository.expedite_delivery_retries(delivery_id)
+        except KeyError:
+            return DeliveryOperationOutcome("delivery_not_found")
+        if rearmed <= 0:
+            return DeliveryOperationOutcome("no_retryable_items")
+        self._wake_delivery_pump()
+        return DeliveryOperationOutcome("retry_rearmed", rearmed_items=rearmed)
+
+    def _resend_within_capacity(self, delivery: DeliveryRecord) -> bool:
+        """Apply the configured outstanding-delivery bound to a resend."""
+
+        if self._delivery_max_total is None or self._delivery_max_per_account is None:
+            return True
+        try:
+            return self.repository.has_delivery_capacity(
+                delivery.reply_target,
+                max_total=self._delivery_max_total,
+                max_per_account=self._delivery_max_per_account,
+            )
+        except ValueError:
+            # A non-Channel Reply Target has no Channel capacity bound to apply.
+            return True
 
     def _register_live_turn(
         self,

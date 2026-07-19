@@ -52,18 +52,126 @@ later target sequence can start. Novel Channel ingress is bounded by durable fut
 capacity while duplicate lookup bypasses that gate. Telegram terminal handlers
 no longer send `Final.text` directly or drain `pending_media`.
 
-This is deliberately text-only. Telegram photo/document ingress fails before
-download, media Items and explicit resend/repair are not implemented, and the
-official Channel runner rejects every other Adapter until it has an equivalent
-ControlRuntime plus persistent Delivery Adapter cutover. The legacy Adapter
-implementations remain source material, not enabled production paths.
+**Operator lifecycle slice (2026-07-20).** The control plane now completes the
+non-media half of this ADR's Decision. An over-long terminal reply no longer
+fails terminalization closed: `freeze_terminal_text_delivery` collapses it into
+one bounded fallback Item that keeps the reply's start plus a deterministic
+truncation notice, anchored to the immutable Transcript prefix and digest —
+without inventing a new store. Explicit Owner action is implemented as
+`ControlStateRepository.insert_resend_delivery` / `expedite_delivery_retries`
+and surfaced through `ControlRuntime.resend_delivery` / `retry_delivery`:
+`retry_delivery` only expedites a `retry_wait` backoff (the schema keeps
+`failed`/`unknown`/`delivered` Items terminal), while `resend_delivery` freezes
+a new `purpose=resend` Delivery that reuses the immutable content references,
+links through `resend_of_delivery_id`, honours the outstanding-delivery capacity
+bound and never re-enters `dispatch()`, the Agent, a tool or a Run.
+`ControlRuntime.list_deliveries` / `describe_delivery` give the Owner/operator a
+read of each Delivery and its rolled-up state.
+
+**Feishu text-only cutover (2026-07-20).** Feishu is the second authoritative
+Channel, proving this ADR's platform-independence claim. Only the platform seams
+are new: a `RawInboundV1` normalizer keyed on the globally unique Feishu
+`message_id` as Source Request ID, a Reply Target of
+`adapter=feishu, account_namespace=<app_id>, destination_id=<chat_id>` plus the
+new optional `destination_kind`, and a single-attempt `FeishuDeliveryAdapter`
+over `im.v1.message.create`. Everything else — `ControlRuntime`, `control.db`,
+target sequencing, the Delivery Pump, Transcript freezing and digest
+verification — is reused unchanged.
+
+`destination_kind` is a small additive extension to the Channel Reply Target:
+Feishu addresses one send by chat, open, union or user ID and a bare identifier
+is not self-describing. It is optional, so an existing Telegram Reply Target's
+canonical-JSON key is byte-identical to before.
+
+One Feishu-specific hazard has no Telegram analogue and is worth naming: the
+lark SDK is synchronous, so the provider call runs in an executor thread, and
+**cancelling an executor future does not stop that thread**. A naive
+`asyncio.to_thread` await would complete promptly on the Pump's timeout
+cancellation, which the Pump reads as proof of termination -- it would then
+record `unknown` and release the ADR 0063 Reply Target barrier while the real
+send was still in flight, letting a later reply overtake or duplicate it. The
+Adapter therefore shields the executor future and does not finish until the
+provider thread actually stops, so an unresponsive call leaves the Attempt
+unterminated and the Pump halts fail closed as ADR 0063 requires.
+
+Two further Feishu-specific hazards are closed explicitly. The legacy
+`_send_text_sync` retried three times internally; a retried send whose first
+attempt reached Feishu duplicates a reply the control plane believes is
+ambiguous, so the new Adapter performs exactly one call and reports transport
+failure as `acceptance_unknown`. And the legacy parser downloads images/files as
+a side effect, then synthesizes `[image]` text or embeds `[local path] /tmp/...`
+when a download yields nothing; the handler therefore gates on the provider
+message type *before* parsing, so no non-text message can reach a Turn, trigger
+a download, or reintroduce the local-path side channel ADR 0059 retires. The
+legacy Feishu direct-send and direct-dispatch methods are deleted rather than
+left unused, along with the inbound download/parse helpers that produced them,
+and `AUTHORITATIVE_CHANNELS` is now `{telegram, feishu}`.
+
+The Feishu Adapter also supplies the opaque Delivery Item ID as Feishu's
+request-dedup `uuid`, satisfying this ADR's "provider idempotency key wherever
+supported" rule that the Telegram Adapter cannot satisfy. The key is per-Item
+rather than per-Attempt, so a retry — including one issued after an
+`acceptance_unknown` result — cannot produce a second visible message. An older
+lark-oapi without the field degrades to non-idempotent rather than refusing to
+deliver.
+
+Group chats are admitted only when the message @-mentions this Bot, proved by
+comparing the mention's open ID against a configured `FEISHU_BOT_OPEN_ID`. A
+non-empty mention list is not sufficient — the Owner mentioning another human
+would otherwise produce an unsolicited reply — and an unconfigured Bot open ID
+fails group chats closed rather than guessing from member counts.
+
+Cross-validated by an independent `codex exec gpt-5.5 xhigh` read-only review
+(2026-07-20). It returned 1 P0, 4 P1 and 2 P2; all seven are resolved. The P0
+was the executor-cancellation barrier release described above, which had no
+Telegram precedent and was not covered by the reused Pump tests.
+
+**Shared composition root (2026-07-20).** The one-authoritative-Channel-per-
+process limit is lifted. `control.db` takes an exclusive lifetime lock, so one
+Backend process owns exactly one control plane; the `ControlRuntime` is now
+composed by the runner from every Channel's binding rather than by each Channel.
+
+Channel startup is two-phase. `Channel.prepare_control_binding()` authenticates
+far enough to name the account namespace and build the single-attempt Delivery
+Adapter, returning a `ChannelSurfaceBinding`. The runner collects every binding
+first — so a Channel that cannot authenticate fails the whole start rather than
+leaving a half-composed control plane — then builds and starts one runtime via
+`ControlRuntime.for_channel_surfaces`, injects it with
+`bind_control_runtime()`, and only then calls `start()` so no Channel can submit
+into an unstarted runtime. `for_channel_surface` remains as a single-binding
+wrapper.
+
+Little of the control plane had to change: the Delivery Pump already resolved
+adapters by `(adapter, account_namespace)`. Two rules did need making explicit.
+Owner scopes merge into one map but confer no cross-Adapter authority — a
+Feishu Owner's subject presented on the Telegram Adapter is still
+`owner_denied`. And attachment input is enabled **per Adapter**
+(`attachment_input_adapters`) rather than as one process-wide switch, because a
+shared runtime serves Adapters at different cutover stages: Telegram has an
+Attachment Store cutover and Feishu does not, and OR-ing one flag would have
+silently opened inbound bytes for Feishu.
+
+Lifecycle ownership follows: the runner closes the shared runtime after every
+Channel has stopped, and an individual Channel only *detaches* on stop or
+startup rollback. A Channel that closed the runtime because its own polling
+failed would tear down every other Channel's control plane.
+
+This slice remains text-only. Telegram photo/document ingress fails before
+download, Feishu inbound attachments/rich post/cards and outbound media fail
+closed, outbound media Items are not implemented (so the over-long fallback
+keeps the reply's start but does not yet attach the full text as a durable
+artifact reference), and the official Channel runner rejects every remaining
+Adapter until it has an equivalent ControlRuntime plus persistent Delivery
+Adapter cutover. The legacy Adapter implementations remain source material, not
+enabled production paths.
 
 Outbound media remains outside the implemented slice. Legacy tools may still
 write local paths into the process-global `pending_media` side channel, but the
-authoritative Telegram path never drains it. Feishu and Desktop retain legacy
-consumers outside this cutover; a future media slice must replace those with
-verified durable artifact references rather than treating the side channel as
-Delivery authority.
+authoritative Telegram path never drains it. Feishu no longer consumes it — its
+`pending_media` drain and every legacy direct-send helper were deleted with the
+2026-07-20 cutover — but Desktop retains legacy consumers outside this cutover.
+A future media slice must replace those with verified durable artifact
+references rather than treating the side channel as Delivery authority.
 
 `omicsclaw/surfaces/desktop/outbox.py` is unrelated: it executes KG
 HandoffPackets to close the idea-to-analysis-to-verdict workflow. It is a

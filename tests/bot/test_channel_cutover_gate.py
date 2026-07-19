@@ -8,19 +8,33 @@ from omicsclaw.surfaces.channels.__main__ import (
 )
 
 
-def test_telegram_is_the_only_authoritative_channel_cutover() -> None:
-    _require_authoritative_channels(["telegram"])
+@pytest.mark.parametrize("channel", ["telegram", "feishu"])
+def test_cutover_channels_pass_the_authoritative_gate(channel: str) -> None:
+    _require_authoritative_channels([channel])
 
 
-@pytest.mark.parametrize("channel", ["feishu", "slack", "discord", "email"])
+def test_cutover_channels_may_now_share_one_process() -> None:
+    """The runner composes ONE ControlRuntime from every Channel's binding,
+    so `control.db`'s exclusive lifetime lock is taken once rather than once
+    per Channel."""
+
+    _require_authoritative_channels(["telegram", "feishu"])
+
+
+def test_the_same_channel_cannot_be_requested_twice() -> None:
+    with pytest.raises(RuntimeError, match="more than once"):
+        _require_authoritative_channels(["feishu", "feishu"])
+
+
+@pytest.mark.parametrize("channel", ["slack", "discord", "email", "qq"])
 def test_legacy_direct_dispatch_channels_fail_closed(channel: str) -> None:
     with pytest.raises(RuntimeError, match="persistent Delivery Adapter"):
         _require_authoritative_channels([channel])
 
 
 def test_mixed_channel_start_fails_as_one_unit() -> None:
-    with pytest.raises(RuntimeError, match="feishu"):
-        _require_authoritative_channels(["telegram", "feishu"])
+    with pytest.raises(RuntimeError, match="slack"):
+        _require_authoritative_channels(["telegram", "slack"])
 
 
 def test_requested_channel_must_really_be_running() -> None:
@@ -34,12 +48,24 @@ def test_requested_running_channel_passes_startup_barrier() -> None:
 
 @pytest.mark.asyncio
 async def test_programmatic_legacy_channel_start_is_also_gated() -> None:
+    from omicsclaw.surfaces.channels.slack import SlackChannel, SlackConfig
+
+    channel = SlackChannel(SlackConfig(bot_token="token", app_token="app"))
+
+    with pytest.raises(RuntimeError, match="ControlRuntime"):
+        await channel.start()
+
+
+@pytest.mark.asyncio
+async def test_feishu_without_configured_owner_fails_closed() -> None:
+    """The cutover must not admit a Feishu App with no Owner identity."""
+
     from omicsclaw.surfaces.channels.feishu import FeishuChannel, FeishuConfig
 
     channel = FeishuChannel(FeishuConfig(app_id="app", app_secret="secret"))
 
-    with pytest.raises(RuntimeError, match="ControlRuntime"):
-        await channel.start()
+    with pytest.raises(RuntimeError, match="FEISHU_ALLOWED_SENDERS"):
+        await channel.prepare_control_binding()
 
 
 @pytest.mark.asyncio
@@ -78,3 +104,68 @@ def test_telegram_declares_authoritative_ingress() -> None:
     channel = TelegramChannel(TelegramConfig(bot_token="token", admin_chat_id=7))
 
     channel.require_authoritative_ingress()
+
+
+def test_feishu_declares_authoritative_ingress() -> None:
+    from omicsclaw.surfaces.channels.feishu import FeishuChannel, FeishuConfig
+
+    channel = FeishuChannel(FeishuConfig(app_id="app", app_secret="secret"))
+
+    channel.require_authoritative_ingress()
+
+
+@pytest.mark.asyncio
+async def test_feishu_legacy_direct_send_paths_are_retired() -> None:
+    """No Feishu reply may bypass the persistent Delivery Outbox."""
+
+    from omicsclaw.surfaces.channels.feishu import FeishuChannel, FeishuConfig
+
+    channel = FeishuChannel(FeishuConfig(app_id="app", app_secret="secret"))
+
+    with pytest.raises(RuntimeError, match="ControlRuntime"):
+        await channel.process_message("chat", "hello")
+    with pytest.raises(RuntimeError, match="Delivery Outbox"):
+        await channel.send("chat", "hello")
+    with pytest.raises(RuntimeError, match="Delivery Outbox"):
+        await channel._send_chunk("chat", "hello", "hello", {})
+    with pytest.raises(RuntimeError, match="durable artifact references"):
+        await channel.send_media("chat", "/tmp/figure.png")
+
+    # The legacy internal senders are gone, not merely unused, so they cannot
+    # be rewired by a later change.
+    for retired in (
+        "_send_text_sync",
+        "_send_long_text",
+        "_send_media_items",
+        "_update_text",
+        "_process_message_async",
+    ):
+        assert not hasattr(channel, retired), f"{retired} is a retired direct path"
+
+
+def test_feishu_env_wiring_requires_configured_owners(monkeypatch) -> None:
+    """Owner identity is Backend configuration; ingress must not start without it."""
+
+    from omicsclaw.surfaces.channels.__main__ import _build_feishu_channel
+
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_app")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret")
+    monkeypatch.delenv("FEISHU_ALLOWED_SENDERS", raising=False)
+
+    with pytest.raises(RuntimeError, match="FEISHU_ALLOWED_SENDERS"):
+        _build_feishu_channel()
+
+
+def test_feishu_env_wiring_builds_owner_and_bot_identity(monkeypatch) -> None:
+    from omicsclaw.surfaces.channels.__main__ import _build_feishu_channel
+
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_app")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret")
+    monkeypatch.setenv("FEISHU_ALLOWED_SENDERS", "ou_1, ou_2")
+    monkeypatch.setenv("FEISHU_BOT_OPEN_ID", "ou_bot")
+
+    channel = _build_feishu_channel()
+
+    assert channel.config.allowed_senders == {"ou_1", "ou_2"}
+    assert channel.feishu_config.bot_open_id == "ou_bot"
+    assert channel.authoritative_ingress is True

@@ -261,6 +261,9 @@ class Channel(ABC):
     def __init__(self, config: BaseChannelConfig | None = None):
         self.config = config or BaseChannelConfig()
         self._running = False
+        # Set by `bind_control_runtime`; a cut-over Channel never composes its own.
+        self._control_runtime = None
+        self._control_loop = None
         self._dedup = DedupCache()
         self._rate_limiter = RateLimiter(
             max_per_hour=self.config.rate_limit_per_hour,
@@ -273,9 +276,42 @@ class Channel(ABC):
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
+    async def prepare_control_binding(self):
+        """Phase 1: connect to the provider and describe this Channel's binding.
+
+        `control.db` takes an exclusive lifetime lock, so ONE Backend process
+        owns one control plane and the composition root must live above every
+        Channel. Startup is therefore two-phase:
+
+        1. every cut-over Channel authenticates far enough to name its account
+           namespace and build its single-attempt Delivery Adapter, and returns
+           a ``ChannelSurfaceBinding``;
+        2. the runner composes one shared ``ControlRuntime`` from all bindings,
+           starts it, calls :meth:`bind_control_runtime`, then calls
+           :meth:`start`.
+
+        A legacy Channel returns ``None`` and is rejected before this point.
+        """
+
+        return None
+
+    def bind_control_runtime(self, runtime, *, loop=None) -> None:
+        """Phase 1.5: adopt the shared runtime the runner composed and started.
+
+        ``loop`` is the event loop the runtime lives on. A Channel whose
+        provider SDK delivers events on its own thread must submit to THAT
+        loop; asyncio primitives belong to the loop that created them.
+        """
+
+        self._control_runtime = runtime
+        self._control_loop = loop
+
     @abstractmethod
     async def start(self) -> None:
-        """Initialize and start the channel (connect, authenticate, etc.)."""
+        """Phase 2: begin receiving provider events.
+
+        A cut-over Channel may assume :meth:`bind_control_runtime` already ran.
+        """
         ...
 
     @abstractmethod

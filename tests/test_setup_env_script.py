@@ -446,7 +446,15 @@ def test_setup_env_installs_github_r_packages_without_dependency_resolution_or_v
     assert "build_manual = FALSE" in setup_script
 
 
+@pytest.mark.slow
 def test_conda_forge_wrmisc_builds_do_not_target_r43():
+    """Queries the live conda-forge index, so it costs ~60s of network time.
+
+    That is the single slowest test in the suite and it sets the floor for a
+    parallel run, which is exactly what the `slow` marker exists for. Run it
+    with `-m slow` (or unmarked via `-m ''`) when validating the R toolchain.
+    """
+
     try:
         result = subprocess.run(
             [

@@ -45,6 +45,7 @@ from .models import (
     DeliveryCandidate,
     DeliveryCapacitySnapshot,
     DeliveryStartupRecoveryResult,
+    DeliveryStatusSummary,
     DeliveryItemPlan,
     DeliveryItemRecord,
     DeliveryPlan,
@@ -4298,6 +4299,154 @@ class ControlStateRepository:
             ).fetchall()
         return tuple(_delivery_item_record(row) for row in rows)
 
+    def describe_delivery(self, delivery_id: str) -> DeliveryStatusSummary | None:
+        """Return one Delivery, its ordered Items and derived operator state."""
+
+        _require_nonempty(delivery_id, "delivery_id")
+        with self._read() as connection:
+            delivery_row = connection.execute(
+                "SELECT * FROM deliveries WHERE delivery_id = ?", (delivery_id,)
+            ).fetchone()
+            if delivery_row is None:
+                return None
+            item_rows = connection.execute(
+                """
+                SELECT * FROM delivery_items
+                WHERE delivery_id = ? ORDER BY ordinal
+                """,
+                (delivery_id,),
+            ).fetchall()
+        items = tuple(_delivery_item_record(row) for row in item_rows)
+        return DeliveryStatusSummary(
+            delivery=_delivery_record(delivery_row),
+            items=items,
+            state=_aggregate_delivery_state(items),
+        )
+
+    def insert_resend_delivery(self, delivery_id: str) -> DeliveryRecord:
+        """Create a new ``purpose=resend`` Delivery reusing frozen content.
+
+        An explicit Owner resend re-freezes the source Delivery's immutable
+        content references into a fresh queued Delivery with a new opaque ID,
+        linked through ``resend_of_delivery_id``.  It allocates the next target
+        sequence, never reopens the Turn and never reruns a tool or Run.  The
+        source may itself be a resend, forming an auditable chain.
+        """
+
+        _require_nonempty(delivery_id, "delivery_id")
+        with self._transaction("insert_resend_delivery") as connection:
+            source = connection.execute(
+                "SELECT * FROM deliveries WHERE delivery_id = ?", (delivery_id,)
+            ).fetchone()
+            if source is None:
+                raise KeyError(delivery_id)
+            item_rows = connection.execute(
+                """
+                SELECT * FROM delivery_items
+                WHERE delivery_id = ? ORDER BY ordinal
+                """,
+                (delivery_id,),
+            ).fetchall()
+            if not item_rows:
+                raise ControlIntegrityError("resend source Delivery has no Items")
+            now = self._now()
+            sequence_row = connection.execute(
+                """
+                SELECT COALESCE(MAX(target_sequence), 0) + 1 AS next_sequence
+                FROM deliveries WHERE surface = ? AND reply_target_key = ?
+                """,
+                (source["surface"], source["reply_target_key"]),
+            ).fetchone()
+            assert sequence_row is not None
+            resend_id = _new_id()
+            target_sequence = int(sequence_row["next_sequence"])
+            connection.execute(
+                """
+                INSERT INTO deliveries (
+                    delivery_id, turn_id, conversation_id, purpose, terminal_kind,
+                    surface, reply_target_version, reply_target_key,
+                    reply_target_json, target_sequence, resend_of_delivery_id,
+                    created_at_ms
+                ) VALUES (?, ?, ?, 'resend', ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    resend_id,
+                    source["turn_id"],
+                    source["conversation_id"],
+                    source["terminal_kind"],
+                    source["surface"],
+                    source["reply_target_version"],
+                    source["reply_target_key"],
+                    source["reply_target_json"],
+                    target_sequence,
+                    delivery_id,
+                    now,
+                ),
+            )
+            for row in item_rows:
+                connection.execute(
+                    """
+                    INSERT INTO delivery_items (
+                        item_id, delivery_id, ordinal, item_kind, content_store,
+                        content_ref, content_sha256, content_range_json,
+                        render_version, media_type, caption_ref, caption_sha256,
+                        state, attempt_count, next_attempt_at_ms, last_error_code,
+                        provider_evidence_json, blocked_by_item_id,
+                        delivered_at_ms, updated_at_ms
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                              'queued', 0, NULL, NULL, NULL, NULL, NULL, ?)
+                    """,
+                    (
+                        _new_id(),
+                        resend_id,
+                        int(row["ordinal"]),
+                        row["item_kind"],
+                        row["content_store"],
+                        row["content_ref"],
+                        row["content_sha256"],
+                        row["content_range_json"],
+                        int(row["render_version"]),
+                        row["media_type"],
+                        row["caption_ref"],
+                        row["caption_sha256"],
+                        now,
+                    ),
+                )
+            resend_row = connection.execute(
+                "SELECT * FROM deliveries WHERE delivery_id = ?", (resend_id,)
+            ).fetchone()
+            assert resend_row is not None
+            return _delivery_record(resend_row)
+
+    def expedite_delivery_retries(self, delivery_id: str) -> int:
+        """Bring every waiting ``retry_wait`` Item's backoff forward to now.
+
+        This is the safe-non-acceptance ``retry_delivery`` primitive: it only
+        pulls an already-scheduled retry horizon forward so the Pump claims it
+        immediately.  It never reopens a ``failed``/``unknown``/``delivered``
+        Item (those are terminal and require an explicit resend) and never
+        changes frozen content.  Returns the number of Items re-armed.
+        """
+
+        _require_nonempty(delivery_id, "delivery_id")
+        with self._transaction("expedite_delivery_retries") as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM deliveries WHERE delivery_id = ?", (delivery_id,)
+            ).fetchone()
+            if exists is None:
+                raise KeyError(delivery_id)
+            now = self._now()
+            cursor = connection.execute(
+                """
+                UPDATE delivery_items
+                SET next_attempt_at_ms = ?, updated_at_ms = ?
+                WHERE delivery_id = ? AND state = 'retry_wait'
+                  AND (next_attempt_at_ms IS NULL OR next_attempt_at_ms > ?)
+                """,
+                (now, now, delivery_id, now),
+            )
+            return int(cursor.rowcount)
+
     def list_due_delivery_candidates(
         self,
         *,
@@ -5300,6 +5449,22 @@ def _delivery_item_record(row: sqlite3.Row) -> DeliveryItemRecord:
             str(row["blocked_by_item_id"]) if row["blocked_by_item_id"] else None
         ),
     )
+
+
+def _aggregate_delivery_state(items: Sequence[DeliveryItemRecord]) -> str:
+    """Roll ordered Item states up to one Owner/operator-facing summary state."""
+
+    if not items:
+        return "empty"
+    non_delivered = [item for item in items if item.state != "delivered"]
+    if not non_delivered:
+        return "delivered"
+    head = min(non_delivered, key=lambda item: item.ordinal)
+    if head.state in {"queued", "sending", "retry_wait"}:
+        return "in_progress"
+    if head.state in {"failed", "unknown"}:
+        return head.state
+    return "blocked"
 
 
 def _delivery_candidate(

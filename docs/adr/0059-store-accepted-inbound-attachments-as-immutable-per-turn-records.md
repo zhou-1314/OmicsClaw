@@ -14,6 +14,13 @@ Refines
 [ADR 0054](0054-persist-authoritative-control-state-in-backend-exclusive-sqlite.md), and
 [ADR 0055](0055-model-project-lifecycle-as-reversible-archive-and-restore.md).
 
+**Attachment-ID-minting refinement (2026-07-20):**
+[ADR 0073](0073-mint-attachment-id-in-the-attachment-store.md) moves minting of
+the opaque Attachment ID from the control plane into the Attachment Store during
+staging. That successor decision preserves this ADR's opacity, uniqueness and
+non-semantic guarantees; the original wording below is retained as the historical
+record.
+
 Every accepted inbound attachment becomes one immutable **Attachment Record**
 owned by an **Attachment Store**, associated with exactly one accepted Turn and
 backed by an immutable content-addressed **Attachment Blob**. Control Plane
@@ -101,13 +108,40 @@ with `dispatch_enqueue_failed` and releases the waiting FIFO lease before
 returning. OpenAPI declares the required multipart body, Idempotency-Key, and
 actual 200/202 plus rejection response statuses.
 
+Duplicate ingress now satisfies its full Decision requirement (2026-07-20).
+`TurnAcceptanceResult` carries the Turn's ordered accepted Attachment
+References, so the shared Normalizer — not a Surface-local re-query — is the one
+authority: a novel acceptance reports the References it just published, and a
+matching duplicate reads them back through the Attachment Store without opening
+a byte source. `ControlRuntimeResult.attachment_refs` delegates to that same
+value, and Desktop `POST /v1/turns` projects it as a bounded, byte-free
+`attachments` array on both the 202 and the 200 response. A Store that cannot
+produce the References of an existing Turn raises an integrity incident instead
+of answering empty.
+
+The legacy Desktop parallel ingress is retired (2026-07-20). The `.uploads`
+writer, the `received_files` registration/reset helpers and the
+`_attachments` module that implemented them have been deleted, and
+`POST /chat/stream` now rejects attachment-shaped input unconditionally rather
+than only when an authoritative runtime is bound — so neither a second durable
+copy nor a silent file drop is reachable. `received_files` itself survives only
+for Channel Adapters that have not been cut over, and is not attachment
+authority.
+
+Accepted Blobs also have durable external retention (2026-07-20). Migration 2
+adds `attachment_blob_retention_claims` plus a `BEFORE DELETE` trigger, so a
+governed holder — a Run input, a Transcript, or another external reference —
+claims a Blob inside `attachments.db` before publishing its reference. Claims
+are versioned, immutable, idempotent per `(holder_kind, holder_ref, digest)`
+and enforced by the database, so the guarantee does not depend on any garbage
+collection query remaining correct. This closes the ordering hazard before Run
+Manifest attachment inputs or governed purge land, rather than after.
+
 Telegram media groups, documents, audio, video and outbound media remain
 fail-closed. CLI attachment input, every File Reference path, Desktop JSON
 submission/options/Project commands, OmicsClaw-App adoption, Textual TUI, every
 non-Telegram Channel Adapter, tool consumption, Run Manifest integration,
 legacy attachment migration and governed purge are separate future slices.
-Legacy upload helpers may still exist behind disabled compatibility paths and
-are not fallback authority for this implementation.
 
 ## Context
 

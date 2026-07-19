@@ -7,8 +7,8 @@ import pytest
 
 from omicsclaw.control.delivery_content import (
     DELIVERY_TEXT_RENDER_VERSION,
+    DELIVERY_TEXT_TRUNCATION_NOTICE,
     DeliveryContentIntegrityError,
-    DeliveryContentLimitError,
     freeze_terminal_text_delivery,
     resolve_delivery_text,
 )
@@ -161,22 +161,71 @@ def test_freeze_terminal_text_delivery_rejects_tampered_transcript_ref(tmp_path)
         transcript.close()
 
 
-def test_freeze_terminal_text_delivery_rejects_plan_over_item_bound(tmp_path):
+def test_freeze_terminal_text_delivery_produces_bounded_fallback_over_item_bound(
+    tmp_path,
+):
     transcript = CanonicalTranscript(tmp_path)
     try:
+        text = "x" * 9000
         candidate = transcript.bind_turn("conversation-1", "turn-1").stage_terminal(
-            "abcde",
+            text,
             terminal_kind="normal",
         )
 
-        with pytest.raises(DeliveryContentLimitError, match="Item limit"):
-            freeze_terminal_text_delivery(
-                transcript,
-                TurnTranscriptRef(candidate.entry_id, candidate.content_sha256),
-                "succeeded",
-                max_chunk_codepoints=2,
-                max_items=2,
-            )
+        plan = freeze_terminal_text_delivery(
+            transcript,
+            TurnTranscriptRef(candidate.entry_id, candidate.content_sha256),
+            "succeeded",
+            max_items=1,
+        )
+
+        # A reply too long to send verbatim collapses to exactly one bounded
+        # fallback Item rather than failing terminalization closed.
+        assert len(plan.items) == 1
+        item = plan.items[0]
+        prefix_len = 4096 - len(DELIVERY_TEXT_TRUNCATION_NOTICE)
+        assert item.item_kind == "text"
+        assert item.content_store == "transcript"
+        assert item.content_ref == candidate.entry_id
+        assert dict(item.content_range or {}) == {
+            "unit": "unicode_codepoint",
+            "start": 0,
+            "end": prefix_len,
+            "truncated": True,
+        }
+        assert item.content_sha256 == _sha256_text(
+            text[:prefix_len] + DELIVERY_TEXT_TRUNCATION_NOTICE
+        )
+    finally:
+        transcript.close()
+
+
+def test_resolve_delivery_text_reconstructs_truncated_fallback(tmp_path):
+    transcript = CanonicalTranscript(tmp_path)
+    try:
+        text = "y" * 9000
+        candidate_ref = transcript.bind_turn("conversation-1", "turn-1").stage_terminal(
+            text, terminal_kind="normal"
+        )
+        ref = TurnTranscriptRef(candidate_ref.entry_id, candidate_ref.content_sha256)
+        plan = freeze_terminal_text_delivery(
+            transcript,
+            ref,
+            "succeeded",
+            max_items=1,
+        )
+        transcript.promote_terminal(
+            ref.entry_id,
+            ref.content_sha256,
+            expected_conversation_id="conversation-1",
+            expected_turn_id="turn-1",
+        )
+
+        prefix_len = 4096 - len(DELIVERY_TEXT_TRUNCATION_NOTICE)
+        resolved = resolve_delivery_text(
+            transcript, _candidate_from_plan(plan.items[0])
+        )
+        assert resolved == text[:prefix_len] + DELIVERY_TEXT_TRUNCATION_NOTICE
     finally:
         transcript.close()
 

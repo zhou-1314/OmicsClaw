@@ -60,8 +60,13 @@ def effective_llm_proxy() -> str:
     return re.sub(r"//[^/@]+@", "//***@", raw)  # mask user:pass@ credentials
 
 # Files received from a chat surface, keyed by chat_id. Lives here per the
-# bot/session module contract; ``omicsclaw/app/_attachments.py`` reaches it
-# via ``omicsclaw.runtime.agent.state.received_files``.
+# bot/session module contract.
+#
+# This is NOT attachment authority. ADR 0059 makes the Attachment Store the
+# only durable home for accepted inbound bytes; the Desktop writer that used
+# to populate this registry has been removed. Remaining writers belong to
+# Channel Adapters that have not been cut over yet, and no cut-over path may
+# read attachments from here.
 received_files: dict[int | str, dict] = {}
 
 

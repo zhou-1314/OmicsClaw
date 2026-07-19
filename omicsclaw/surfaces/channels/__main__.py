@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import suppress
 import logging
 import os
 import sys
@@ -119,8 +120,24 @@ def _build_feishu_channel():
     app_secret = os.environ.get("FEISHU_APP_SECRET", "")
     if not app_id or not app_secret:
         raise RuntimeError("FEISHU_APP_ID and FEISHU_APP_SECRET required")
+    # Owner identity is Backend configuration, not a Surface decision: the
+    # authoritative ingress refuses to start without it (ADR 0044/0060).
+    allowed_senders = {
+        value.strip()
+        for value in os.environ.get("FEISHU_ALLOWED_SENDERS", "").split(",")
+        if value.strip()
+    }
+    if not allowed_senders:
+        raise RuntimeError(
+            "FEISHU_ALLOWED_SENDERS is required: authoritative Feishu ingress "
+            "admits only configured Owner open_id values"
+        )
     return FeishuChannel(
         FeishuConfig(
+            allowed_senders=allowed_senders,
+            # Optional: without it group @-mentions cannot be attributed to this
+            # Bot, so group chats fail closed and only p2p messages are served.
+            bot_open_id=os.environ.get("FEISHU_BOT_OPEN_ID", "").strip(),
             app_id=app_id,
             app_secret=app_secret,
             thinking_threshold_ms=int(
@@ -324,11 +341,15 @@ CHANNEL_BUILDERS = {
     "imessage": _build_imessage_channel,
 }
 
-AUTHORITATIVE_CHANNELS = frozenset({"telegram"})
+# A Channel joins this set only after it has an equivalent cutover: a Backend
+# ControlRuntime, a normalized RawInboundV1 ingress, and a single-attempt
+# persistent Delivery Adapter. Feishu joined with its text-only slice
+# (ADR 0060/0063); its inbound attachments and outbound media stay fail-closed.
+AUTHORITATIVE_CHANNELS = frozenset({"telegram", "feishu"})
 
 
 def _require_authoritative_channels(channel_names: list[str]) -> None:
-    """Fail closed before starting a legacy direct-dispatch Channel."""
+    """Fail closed before starting a legacy or unshareable Channel composition."""
 
     unsupported = sorted(set(channel_names) - AUTHORITATIVE_CHANNELS)
     if unsupported:
@@ -336,6 +357,11 @@ def _require_authoritative_channels(channel_names: list[str]) -> None:
         raise RuntimeError(
             f"Channel(s) {names} are disabled until their ControlRuntime and "
             "persistent Delivery Adapter cutover is implemented"
+        )
+    duplicates = sorted({name for name in channel_names if channel_names.count(name) > 1})
+    if duplicates:
+        raise RuntimeError(
+            "Channel(s) " + ", ".join(duplicates) + " were requested more than once"
         )
 
 
@@ -348,6 +374,58 @@ def _require_started_channels(
     missing = sorted(set(requested) - set(running))
     if missing:
         raise RuntimeError("Channel startup failed for: " + ", ".join(missing))
+
+
+async def _compose_shared_control_runtime(manager):
+    """Build, start and inject the one ControlRuntime every Channel shares.
+
+    Ordering matters. Every binding is collected before the runtime is built,
+    so a Channel that cannot authenticate fails the whole start rather than
+    leaving a half-composed control plane. The runtime is started before it is
+    injected, so no Channel can submit a Turn into an unstarted runtime.
+    """
+
+    import asyncio
+
+    from omicsclaw.control import ControlRuntime
+    from omicsclaw.runtime.agent import state as core
+
+    channels = list(manager.channels.values())
+    bindings = []
+    try:
+        for channel in channels:
+            binding = await channel.prepare_control_binding()
+            if binding is None:
+                raise RuntimeError(
+                    f"Channel '{channel.name}' produced no control binding; a "
+                    "cut-over Channel must describe its Adapter and Owner scope"
+                )
+            bindings.append(binding)
+    except BaseException:
+        for channel in channels:
+            with suppress(Exception):
+                await channel.stop()
+        raise
+
+    runtime = ControlRuntime.for_channel_surfaces(
+        workspace_id=str(core.DATA_DIR),
+        bindings=tuple(bindings),
+    )
+    try:
+        await runtime.start()
+    except BaseException:
+        for channel in channels:
+            with suppress(Exception):
+                await channel.stop()
+        raise
+
+    loop = asyncio.get_running_loop()
+    for channel in channels:
+        channel.bind_control_runtime(runtime, loop=loop)
+    logger.info(
+        "Shared ControlRuntime composed for %d Channel Adapter(s)", len(bindings)
+    )
+    return runtime
 
 
 async def _run_channels(channel_names: list[str], health_port: int = 0) -> None:
@@ -397,13 +475,19 @@ async def _run_channels(channel_names: list[str], health_port: int = 0) -> None:
             print(f"Error building channel '{name}': {e}")
             sys.exit(1)
 
-    # Start channels
-    await manager.start_all()
-    running = manager.running_channels()
+    # One Backend process owns exactly one control plane: `control.db` takes an
+    # exclusive lifetime lock, so the ControlRuntime is composed HERE from every
+    # Channel's binding rather than by each Channel. Phase 1 authenticates each
+    # provider and collects bindings; the shared runtime is then started and
+    # injected before any Channel begins receiving events in phase 2.
+    control_runtime = await _compose_shared_control_runtime(manager)
     try:
+        await manager.start_all()
+        running = manager.running_channels()
         _require_started_channels(channel_names, running)
-    except RuntimeError:
+    except BaseException:
         await manager.stop_all()
+        await control_runtime.close()
         raise
 
     # Optional health check server
@@ -428,6 +512,11 @@ async def _run_channels(channel_names: list[str], health_port: int = 0) -> None:
         pass
     finally:
         await manager.stop_all()
+        # The runner owns the shared control plane, so it closes it after every
+        # Channel has stopped producing Turns -- letting the Delivery Pump drain
+        # its in-flight Attempt rather than being recovered as `unknown`.
+        with suppress(Exception):
+            await control_runtime.close()
         print("OmicsClaw bot stopped.")
 
 

@@ -111,6 +111,7 @@ from omicsclaw.surfaces.desktop.turn_submission import (
     DEFAULT_MULTIPART_READ_TIMEOUT_SECONDS,
     DesktopMultipartCapacity,
     DesktopMultipartError,
+    DesktopAttachmentReferenceV1,
     DesktopTurnAcceptedV1,
     decode_desktop_multipart_submission,
 )
@@ -1712,106 +1713,6 @@ def _extract_blocked_path(arguments: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Multimodal content helpers
-# ---------------------------------------------------------------------------
-
-
-def _resolve_uploads_dir(workspace: str) -> Path:
-    """Pick the directory used to persist chat attachments for this turn.
-
-    Priority:
-    1. ``<workspace>/.uploads`` when the request supplied a workspace.
-    2. ``<core.DATA_DIR>/.uploads`` as the fallback so the desktop app
-       always has a writable location even before the user picks a
-       workspace.
-    """
-    if workspace:
-        return Path(workspace) / ".uploads"
-    core = _get_core()
-    return Path(core.DATA_DIR) / ".uploads"
-
-
-def _register_attachment_for_session(session_id: str, meta: dict) -> None:
-    """Mirror the Telegram/Feishu pattern: stash the saved path in the
-    shared ``omicsclaw.runtime.agent.state.received_files`` registry so existing tools
-    (parse_literature, the omicsclaw skill runner with mode='file') can
-    pick it up without the model having to specify the path explicitly.
-    """
-    if not session_id:
-        return
-    core = _get_core()
-    entry = {
-        "path": meta["path"],
-        "filename": meta["filename"],
-        "mime": meta.get("mime", ""),
-    }
-    # build_chat_content fires on_file_saved ONCE PER saved file, so a multi-file
-    # drop calls this N times for the same session_id. Keep the FIRST file under the
-    # bare session_id key (the session-scoped reader in agent_executors.execute_skill
-    # resolves the primary input there) and register each additional file under a
-    # unique derived key so the global-scan readers (literature/KG PDF auto-pickup,
-    # save_file) see it too — instead of the last write clobbering every earlier
-    # file (audit F). The saved path is unique (ms-timestamp prefix), so no
-    # collisions; value stays a dict, so all received_files readers are unchanged.
-    if session_id not in core.received_files:
-        core.received_files[session_id] = entry
-    else:
-        core.received_files[f"{session_id}::{meta['path']}"] = entry
-
-
-def _reset_session_attachments(session_id: str) -> None:
-    """Drop this session's prior attachment entries (the bare ``session_id`` key +
-    any ``session_id::<path>`` derived keys) so a NEW upload batch REPLACES the old
-    one. Without this the bare key would stick to the first-ever file across turns,
-    and the session-exact reader (agent_executors.execute_skill) would run tools on
-    a stale file after a later upload. Called per-turn only when new files arrive."""
-    if not session_id:
-        return
-    core = _get_core()
-    prefix = f"{session_id}::"
-    stale = [
-        k
-        for k in list(core.received_files)
-        if k == session_id or (isinstance(k, str) and k.startswith(prefix))
-    ]
-    for k in stale:
-        core.received_files.pop(k, None)
-
-
-def _build_multimodal_content(
-    text: str,
-    files: list[dict],
-    *,
-    session_id: str = "",
-    workspace: str = "",
-) -> str | list[dict]:
-    """Convert text + FileAttachment list to OpenAI multimodal content.
-
-    Delegates to :mod:`omicsclaw.surfaces.desktop._attachments`. Non-image files are
-    saved to disk and referenced by absolute path in the user message
-    so the model can use ``parse_literature`` / ``inspect_file`` /
-    ``omicsclaw`` skill tools to open them. Images are forwarded inline
-    as multimodal ``image_url`` blocks (and also saved to disk for tool
-    access).
-    """
-    from omicsclaw.surfaces.desktop._attachments import build_chat_content
-
-    # A new upload batch replaces the previous one for this session (a later turn's
-    # files supersede an earlier turn's) — clear stale entries before re-registering
-    # so the session-exact reader never resolves a prior turn's file.
-    if files and session_id:
-        _reset_session_attachments(session_id)
-
-    uploads_dir = _resolve_uploads_dir(workspace)
-    return build_chat_content(
-        text,
-        files,
-        uploads_dir=uploads_dir,
-        on_file_saved=lambda meta: _register_attachment_for_session(session_id, meta),
-    )
-
-
-# ---------------------------------------------------------------------------
 # POST /chat/stream — SSE streaming chat
 # ---------------------------------------------------------------------------
 
@@ -1969,6 +1870,16 @@ async def chat_stream(req: ChatRequest):
       - {"type": "error",              "data": "..."}   — error
     """
     authoritative_runtime = _desktop_control_runtime
+    # ADR 0059: accepted inbound bytes live only in the Attachment Store, and
+    # `POST /v1/turns` is their only Desktop ingress.  This route rejects every
+    # attachment-shaped input unconditionally -- including when no
+    # authoritative runtime is bound -- so a Backend that somehow reached the
+    # legacy branch can neither persist a second copy nor silently drop files
+    # the caller believed were uploaded.
+    if req.files:
+        raise HTTPException(status_code=409, detail="attachments_not_supported")
+    if req.file_selections or req.attachment_descriptors:
+        raise HTTPException(status_code=409, detail="file_references_not_supported")
     installation_id, profile_id, source_namespace = _desktop_ingress_identity(req)
     existing_turn_id: str | None = None
     if req.job_id.strip():
@@ -1982,10 +1893,6 @@ async def chat_stream(req: ChatRequest):
                 status_code=422,
                 detail="source_request_id is required for authoritative Desktop ingress",
             )
-        if req.files:
-            raise HTTPException(status_code=409, detail="attachments_not_supported")
-        if req.file_selections or req.attachment_descriptors:
-            raise HTTPException(status_code=409, detail="file_references_not_supported")
         if req.provider_config is not None:
             raise HTTPException(
                 status_code=409,
@@ -2103,19 +2010,10 @@ async def chat_stream(req: ChatRequest):
 
     max_tokens_override = 16384 if req.context_1m else 0
 
-    # Convert file attachments to multimodal content. Non-image files are
-    # saved to disk under the active workspace's ``.uploads`` directory and
-    # registered in ``core.received_files`` so the model can locate them
-    # via the existing tool surface (parse_literature, omicsclaw skill
-    # runner with mode='file', etc.).
+    # Attachments never reach this point: `req.files` is rejected with 409
+    # above, and accepted bytes live only in the Attachment Store (ADR 0059),
+    # reached through `POST /v1/turns`.  This route carries text only.
     user_content: str | list = req.content
-    if req.files:
-        user_content = _build_multimodal_content(
-            req.content,
-            req.files,
-            session_id=session_id,
-            workspace=req.workspace,
-        )
 
     # asyncio.Queue bridges the dispatch() event loop (driving the
     # callbacks defined below) to the SSE generator running in the
@@ -3273,6 +3171,18 @@ def _turn_accepted_v1_payload(result) -> dict[str, Any]:
         duplicate=result.acceptance.status is TurnAcceptanceStatus.DUPLICATE,
         receipt_revision=receipt.revision,
         accepted_at_ms=receipt.created_at_ms,
+        attachments=tuple(
+            DesktopAttachmentReferenceV1(
+                schema_version=reference.schema_version,
+                attachment_id=reference.attachment_id,
+                ordinal=reference.ordinal,
+                content_sha256=reference.content_sha256,
+                byte_size=reference.byte_size,
+                display_name=reference.display_name,
+                media_type=reference.media_type,
+            )
+            for reference in result.attachment_refs
+        ),
     ).model_dump()
 
 

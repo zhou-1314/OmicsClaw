@@ -30,7 +30,22 @@ from .models import (
     SourceAttachmentDescriptorV1,
     references_sha256,
 )
-from .schema import MIGRATION_1_SHA256, MIGRATION_1_SQL, verify_migration_source
+from .schema import MIGRATIONS, verify_migration_source
+
+
+# Governed external reference kinds that may retain a Blob beyond its Records.
+# Kept closed so a typo cannot silently create an unreadable retention class.
+_RETENTION_HOLDER_KINDS = frozenset({"run_input", "transcript", "external"})
+
+
+def _require_digest(value: object, name: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise AttachmentValidationError(f"{name} must be a lowercase SHA-256 digest")
+    return value
 
 
 DEFAULT_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
@@ -336,36 +351,46 @@ class AttachmentStore:
             "SELECT 1 FROM sqlite_master WHERE type='table' "
             "AND name='attachment_schema_migrations'"
         ).fetchone()
-        if marker is None:
-            now = self._now()
-            script = (
-                "BEGIN IMMEDIATE;\n"
-                + MIGRATION_1_SQL
-                + "\nINSERT INTO attachment_schema_migrations "
-                "(version, name, checksum_sha256, applied_at_ms) VALUES "
-                f"(1, 'initial_attachment_store', '{MIGRATION_1_SHA256}', {now});\n"
-                "COMMIT;"
-            )
-            try:
-                self._conn.executescript(script)
-            except BaseException:
-                with suppress(sqlite3.DatabaseError):
-                    self._conn.execute("ROLLBACK")
-                raise
-            return
-        rows = self._conn.execute(
-            "SELECT version, name, checksum_sha256 "
-            "FROM attachment_schema_migrations ORDER BY version"
-        ).fetchall()
-        expected = [(1, "initial_attachment_store", MIGRATION_1_SHA256)]
-        actual = [
-            (int(row["version"]), str(row["name"]), str(row["checksum_sha256"]))
-            for row in rows
-        ]
-        if actual != expected:
+        applied: list[tuple[int, str, str]] = []
+        if marker is not None:
+            applied = [
+                (int(row["version"]), str(row["name"]), str(row["checksum_sha256"]))
+                for row in self._conn.execute(
+                    "SELECT version, name, checksum_sha256 "
+                    "FROM attachment_schema_migrations ORDER BY version"
+                ).fetchall()
+            ]
+        # An existing database must be a prefix of the known migration list:
+        # a tampered or newer-than-known schema fails closed rather than being
+        # "upgraded" on top of state this build does not understand.
+        if len(applied) > len(MIGRATIONS):
             raise AttachmentIntegrityError(
                 "attachments.db has unsupported or modified migrations"
             )
+        for existing, (version, name, _sql, checksum) in zip(applied, MIGRATIONS):
+            if existing != (version, name, checksum):
+                raise AttachmentIntegrityError(
+                    "attachments.db has unsupported or modified migrations"
+                )
+        pending = MIGRATIONS[len(applied) :]
+        if not pending:
+            return
+        now = self._now()
+        statements = ["BEGIN IMMEDIATE;"]
+        for version, name, sql, checksum in pending:
+            statements.append(sql)
+            statements.append(
+                "\nINSERT INTO attachment_schema_migrations "
+                "(version, name, checksum_sha256, applied_at_ms) VALUES "
+                f"({version}, '{name}', '{checksum}', {now});\n"
+            )
+        statements.append("COMMIT;")
+        try:
+            self._conn.executescript("".join(statements))
+        except BaseException:
+            with suppress(sqlite3.DatabaseError):
+                self._conn.execute("ROLLBACK")
+            raise
 
     def _assert_integrity(self) -> None:
         result = self._conn.execute("PRAGMA integrity_check").fetchone()
@@ -1097,6 +1122,90 @@ class AttachmentStore:
             )
         return self._rows_to_references(rows)
 
+    def claim_blob_retention(
+        self, content_sha256: str, *, holder_kind: str, holder_ref: str
+    ) -> str:
+        """Durably retain one Blob on behalf of an external governed reference.
+
+        ADR 0059 requires a Blob to survive until no accepted Record, Run input
+        or other governed durable reference needs it.  A holder that publishes
+        a reference to accepted content -- a Run Manifest input, for example --
+        must claim retention *before* publishing, so that garbage collection
+        can never observe the window where the Record is gone but the external
+        reference already exists.
+
+        Idempotent for one ``(holder_kind, holder_ref, content_sha256)`` triple.
+        """
+
+        _require_digest(content_sha256, "content_sha256")
+        if holder_kind not in _RETENTION_HOLDER_KINDS:
+            raise AttachmentValidationError("unsupported retention holder_kind")
+        if (
+            not isinstance(holder_ref, str)
+            or not holder_ref
+            or len(holder_ref) > 255
+            or "\x00" in holder_ref
+        ):
+            raise AttachmentValidationError("holder_ref must be a bounded string")
+        with self._transaction() as connection:
+            blob = connection.execute(
+                "SELECT 1 FROM attachment_blobs WHERE content_sha256 = ?",
+                (content_sha256,),
+            ).fetchone()
+            if blob is None:
+                raise AttachmentNotAcceptedError(
+                    "cannot retain an Attachment Blob that does not exist"
+                )
+            existing = connection.execute(
+                "SELECT claim_id FROM attachment_blob_retention_claims "
+                "WHERE holder_kind = ? AND holder_ref = ? AND content_sha256 = ?",
+                (holder_kind, holder_ref, content_sha256),
+            ).fetchone()
+            if existing is not None:
+                return str(existing["claim_id"])
+            claim_id = _new_id()
+            connection.execute(
+                "INSERT INTO attachment_blob_retention_claims ("
+                "claim_id, content_sha256, holder_kind, holder_ref, "
+                "claim_version, created_at_ms) VALUES (?, ?, ?, ?, 1, ?)",
+                (
+                    claim_id,
+                    content_sha256,
+                    holder_kind,
+                    holder_ref,
+                    self._now(),
+                ),
+            )
+        return claim_id
+
+    def release_blob_retention(self, *, holder_kind: str, holder_ref: str) -> int:
+        """Drop every retention claim held by one external reference."""
+
+        if holder_kind not in _RETENTION_HOLDER_KINDS:
+            raise AttachmentValidationError("unsupported retention holder_kind")
+        with self._transaction() as connection:
+            return int(
+                connection.execute(
+                    "DELETE FROM attachment_blob_retention_claims "
+                    "WHERE holder_kind = ? AND holder_ref = ?",
+                    (holder_kind, holder_ref),
+                ).rowcount
+            )
+
+    def blob_retention_holders(
+        self, content_sha256: str
+    ) -> tuple[tuple[str, str], ...]:
+        """Read the ordered ``(holder_kind, holder_ref)`` pairs retaining a Blob."""
+
+        _require_digest(content_sha256, "content_sha256")
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT holder_kind, holder_ref FROM attachment_blob_retention_claims "
+                "WHERE content_sha256 = ? ORDER BY holder_kind, holder_ref",
+                (content_sha256,),
+            ).fetchall()
+        return tuple((str(row["holder_kind"]), str(row["holder_ref"])) for row in rows)
+
     def resolve_bytes(
         self,
         reference: AttachmentReferenceV1,
@@ -1230,6 +1339,10 @@ class AttachmentStore:
                 WHERE NOT EXISTS (
                     SELECT 1 FROM attachment_records AS r
                     WHERE r.content_sha256 = b.content_sha256
+                )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM attachment_blob_retention_claims AS c
+                    WHERE c.content_sha256 = b.content_sha256
                 )
                   AND b.created_at_ms <= ?
                 """,

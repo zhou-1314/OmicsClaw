@@ -298,12 +298,14 @@ See [ADR 0005](docs/adr/0005-surfaces-umbrella-for-ingress.md) and
 ### Channel Surface — IM bots
 
 ```bash
-# Single platform
+# Single platform (telegram and feishu are the cut-over Channels)
 python -m omicsclaw.surfaces.channels --channels telegram
 python -m omicsclaw.surfaces.channels --channels feishu
 
-# Multiple platforms in one process
-python -m omicsclaw.surfaces.channels --channels telegram,feishu,slack
+# Multiple cut-over Channels in one process share ONE ControlRuntime, composed
+# by the runner (control.db takes an exclusive lifetime lock, so one Backend
+# process owns exactly one control plane).
+python -m omicsclaw.surfaces.channels --channels telegram,feishu
 
 # Makefile aliases
 make bot-telegram
@@ -323,6 +325,11 @@ Required env vars (typical Telegram + Feishu setup):
 - `LLM_BASE_URL` — LLM endpoint (if not OpenAI)
 - `TELEGRAM_BOT_TOKEN` — from @BotFather (Telegram only)
 - `FEISHU_APP_ID` + `FEISHU_APP_SECRET` — from Feishu dev console (Feishu only)
+- `FEISHU_ALLOWED_SENDERS` — comma-separated Owner `open_id` values; **required**,
+  authoritative Feishu ingress admits nobody else and refuses to start without it
+- `FEISHU_BOT_OPEN_ID` — this Bot's `open_id`; optional, but group chats fail
+  closed without it because a group @-mention cannot otherwise be attributed to
+  this Bot rather than to another mentioned human
 
 Photos sent to a Channel are routed through tissue-section analysis (H&E,
 fluorescence, spatial barcodes); the bot identifies tissue type and

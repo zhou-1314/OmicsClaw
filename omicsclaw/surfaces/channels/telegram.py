@@ -18,6 +18,8 @@ from typing import Any, AsyncIterator
 from .base import Channel
 from .capabilities import TELEGRAM as TELEGRAM_CAPS
 from .config import BaseChannelConfig
+from omicsclaw.control import ChannelSurfaceBinding
+
 from .telegram_delivery import TelegramDeliveryAdapter
 
 logger = logging.getLogger("omicsclaw.channel.telegram")
@@ -78,7 +80,52 @@ class TelegramChannel(Channel):
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
-    async def start(self) -> None:
+    async def prepare_control_binding(self) -> ChannelSurfaceBinding:
+        """Authenticate far enough to describe this Bot's control binding.
+
+        The shared ControlRuntime is composed by the runner, so this method
+        must bring the Application up to the point where the authenticated Bot
+        identity is readable and a Delivery Adapter can be built over its bot.
+        """
+
+        owners = self._owner_subjects()
+        if not owners:
+            raise RuntimeError(
+                "Telegram authoritative ingress requires TELEGRAM_CHAT_ID "
+                "or TELEGRAM_ALLOWED_SENDERS"
+            )
+        if self._app is None:
+            self._build_application()
+        try:
+            await self._app.initialize()
+            await self._app.start()
+            bot_identity = await self._app.bot.get_me()
+        except BaseException:
+            await self.stop()
+            raise
+        bot_id = getattr(bot_identity, "id", None)
+        if isinstance(bot_id, bool) or not isinstance(bot_id, int):
+            await self.stop()
+            raise RuntimeError("Telegram Bot identity is unavailable")
+        account_namespace = f"bot-{bot_id}"
+        configured_namespace = self.tg_config.account_namespace.strip()
+        if configured_namespace and configured_namespace != account_namespace:
+            await self.stop()
+            raise RuntimeError(
+                "TELEGRAM_ACCOUNT_NAMESPACE must equal the authenticated Bot identity"
+            )
+        self.tg_config.account_namespace = account_namespace
+        return ChannelSurfaceBinding(
+            adapter="telegram",
+            account_namespace=account_namespace,
+            owner_identities={
+                f"channel/telegram/{account_namespace}/telegram_user": owners
+            },
+            delivery_adapter=TelegramDeliveryAdapter(self._app.bot),
+            attachment_input_enabled=True,
+        )
+
+    def _build_application(self) -> None:
         if not self.tg_config.bot_token:
             raise RuntimeError("Telegram bot token is required")
 
@@ -129,22 +176,24 @@ class TelegramChannel(Channel):
             )
         )
 
-        # ── Start the polling loop ───────────────────────────────────
-        # When launched via ChannelManager (python -m omicsclaw.surfaces.channels.__main__), only
-        # start() is called. We must begin polling here, otherwise
-        # the bot is connected but deaf — no messages are received.
-        await self._activate_application()
+    async def start(self) -> None:
+        """Phase 2: begin polling once the shared ControlRuntime is bound."""
 
+        if self._control_runtime is None:
+            raise RuntimeError(
+                "Telegram requires the shared ControlRuntime to be bound "
+                "before start()"
+            )
+        if self._app is None:  # pragma: no cover - prepare runs first
+            raise RuntimeError("Telegram Application was not prepared")
+        await self._activate_application()
         self._running = True
         logger.info("Telegram channel started (polling)")
 
     async def _activate_application(self) -> None:
-        """Start App, Control and polling as one rollback-safe unit."""
+        """Begin polling, rolling the whole Channel back on failure."""
 
         try:
-            await self._app.initialize()
-            await self._app.start()
-            await self._start_control_runtime()
             self._updater = self._app.updater
             await self._updater.start_polling(
                 drop_pending_updates=False,
@@ -166,16 +215,10 @@ class TelegramChannel(Channel):
                 logger.warning(
                     "Telegram polling shutdown failed (%s)", type(error).__name__
                 )
-        if self._control_runtime is not None:
-            try:
-                await self._control_runtime.close()
-            except Exception as error:
-                logger.warning(
-                    "Telegram ControlRuntime shutdown failed (%s)",
-                    type(error).__name__,
-                )
-            finally:
-                self._control_runtime = None
+        # Detach only. The ControlRuntime is shared with every other cut-over
+        # Channel and owned by the runner; closing it here would tear down
+        # their control plane because this Channel's polling failed.
+        self._control_runtime = None
         if self._app:
             if self._app.running:
                 try:
@@ -196,40 +239,6 @@ class TelegramChannel(Channel):
         self._updater = None
         self._app = None
 
-    async def _start_control_runtime(self) -> None:
-        """Open the text and single-photo authoritative Channel composition root."""
-
-        from omicsclaw.control import ControlRuntime
-        from omicsclaw.runtime.agent import state as core
-
-        owners = self._owner_subjects()
-        if not owners:
-            raise RuntimeError(
-                "Telegram authoritative ingress requires TELEGRAM_CHAT_ID "
-                "or TELEGRAM_ALLOWED_SENDERS"
-            )
-        bot_identity = await self._app.bot.get_me()
-        bot_id = getattr(bot_identity, "id", None)
-        if isinstance(bot_id, bool) or not isinstance(bot_id, int):
-            raise RuntimeError("Telegram Bot identity is unavailable")
-        account_namespace = f"bot-{bot_id}"
-        configured_namespace = self.tg_config.account_namespace.strip()
-        if configured_namespace and configured_namespace != account_namespace:
-            raise RuntimeError(
-                "TELEGRAM_ACCOUNT_NAMESPACE must equal the authenticated Bot identity"
-            )
-        self.tg_config.account_namespace = account_namespace
-        self._control_runtime = ControlRuntime.for_channel_surface(
-            workspace_id=str(core.DATA_DIR),
-            adapter="telegram",
-            account_namespace=account_namespace,
-            owner_identities={
-                f"channel/telegram/{account_namespace}/telegram_user": owners
-            },
-            delivery_adapter=TelegramDeliveryAdapter(self._app.bot),
-            attachment_input_enabled=True,
-        )
-        await self._control_runtime.start()
 
     def run_polling(self) -> None:
         """Synchronous entry point — run the Telegram bot with polling.

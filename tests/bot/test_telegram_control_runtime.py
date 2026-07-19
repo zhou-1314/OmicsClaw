@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from omicsclaw.control import (
-    ControlRuntime,
     ControlRuntimeResult,
     TurnAcceptanceResult,
     TurnAcceptanceStatus,
@@ -480,50 +479,49 @@ async def test_owner_denied_control_rejection_is_also_silent():
 
 
 @pytest.mark.asyncio
-async def test_start_control_runtime_rejects_empty_owner_configuration():
+async def test_prepare_control_binding_rejects_empty_owner_configuration():
     channel = TelegramChannel(TelegramConfig(bot_token="test-token"))
 
     with pytest.raises(
         RuntimeError,
         match="requires TELEGRAM_CHAT_ID or TELEGRAM_ALLOWED_SENDERS",
     ):
-        await channel._start_control_runtime()
+        await channel.prepare_control_binding()
 
     assert channel._control_runtime is None
 
 
 @pytest.mark.asyncio
-async def test_start_control_runtime_derives_account_namespace_from_bot_identity(
-    monkeypatch,
-):
-    created: list[dict[str, object]] = []
-    runtime = SimpleNamespace(start=AsyncMock())
-
-    def build_runtime(**kwargs):
-        created.append(kwargs)
-        return runtime
-
-    monkeypatch.setattr(ControlRuntime, "for_channel_surface", build_runtime)
+async def test_prepare_control_binding_derives_account_namespace_from_bot_identity():
     bot = SimpleNamespace(
         get_me=AsyncMock(return_value=SimpleNamespace(id=123456)),
     )
     channel = TelegramChannel(TelegramConfig(bot_token="test-token", admin_chat_id=7))
-    channel._app = SimpleNamespace(bot=bot)
+    channel._app = SimpleNamespace(
+        bot=bot,
+        initialize=AsyncMock(),
+        start=AsyncMock(),
+        running=True,
+        stop=AsyncMock(),
+        shutdown=AsyncMock(),
+    )
 
-    await channel._start_control_runtime()
+    binding = await channel.prepare_control_binding()
 
     bot.get_me.assert_awaited_once()
-    runtime.start.assert_awaited_once()
     assert channel.tg_config.account_namespace == "bot-123456"
-    assert created[0]["account_namespace"] == "bot-123456"
-    assert created[0]["owner_identities"] == {
+    assert binding.adapter == "telegram"
+    assert binding.account_namespace == "bot-123456"
+    assert binding.owner_identities == {
         "channel/telegram/bot-123456/telegram_user": frozenset({"7"})
     }
-    assert created[0]["attachment_input_enabled"] is True
+    assert binding.attachment_input_enabled is True
+    # The Channel must NOT have composed a runtime of its own.
+    assert channel._control_runtime is None
 
 
 @pytest.mark.asyncio
-async def test_start_control_runtime_rejects_namespace_not_bound_to_bot_identity():
+async def test_prepare_control_binding_rejects_namespace_not_bound_to_bot_identity():
     channel = TelegramChannel(
         TelegramConfig(
             bot_token="test-token",
@@ -534,13 +532,19 @@ async def test_start_control_runtime_rejects_namespace_not_bound_to_bot_identity
     channel._app = SimpleNamespace(
         bot=SimpleNamespace(
             get_me=AsyncMock(return_value=SimpleNamespace(id=123456)),
-        )
+        ),
+        initialize=AsyncMock(),
+        start=AsyncMock(),
+        running=True,
+        stop=AsyncMock(),
+        shutdown=AsyncMock(),
     )
 
     with pytest.raises(RuntimeError, match="authenticated Bot identity"):
-        await channel._start_control_runtime()
+        await channel.prepare_control_binding()
 
     assert channel._control_runtime is None
+    assert channel._app is None  # rolled back
 
 
 @pytest.mark.asyncio
@@ -586,7 +590,7 @@ async def test_application_activation_preserves_pending_updates():
 
 
 @pytest.mark.asyncio
-async def test_polling_start_failure_releases_runtime_and_application():
+async def test_polling_start_failure_detaches_without_closing_shared_runtime():
     updater = SimpleNamespace(
         running=False,
         start_polling=AsyncMock(side_effect=RuntimeError("polling failed")),
@@ -603,16 +607,14 @@ async def test_polling_start_failure_releases_runtime_and_application():
     runtime = SimpleNamespace(close=AsyncMock())
     channel = TelegramChannel(TelegramConfig(bot_token="test-token", admin_chat_id=7))
     channel._app = app
-
-    async def start_control_runtime() -> None:
-        channel._control_runtime = runtime
-
-    channel._start_control_runtime = start_control_runtime
+    channel.bind_control_runtime(runtime)
 
     with pytest.raises(RuntimeError, match="polling failed"):
         await channel._activate_application()
 
-    runtime.close.assert_awaited_once()
+    # The runtime is SHARED with every other cut-over Channel and owned by the
+    # runner, so a polling failure must detach from it, never close it.
+    runtime.close.assert_not_awaited()
     app.stop.assert_awaited_once()
     app.shutdown.assert_awaited_once()
     assert channel._control_runtime is None
@@ -646,7 +648,8 @@ async def test_stop_attempts_every_cleanup_stage_and_sanitizes_failures(caplog):
 
     channel._typing_manager.stop_all.assert_awaited_once()
     updater.stop.assert_awaited_once()
-    runtime.close.assert_awaited_once()
+    # Shared runtime: the runner closes it, a Channel only detaches.
+    runtime.close.assert_not_awaited()
     app.stop.assert_awaited_once()
     app.shutdown.assert_awaited_once()
     assert "secret-" not in caplog.text

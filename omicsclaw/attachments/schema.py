@@ -172,10 +172,92 @@ END;
 MIGRATION_1_SHA256 = "213d7671f6695bdd8f0d5faf88edcbd578d8d543d7538c60a228e3f23304bef2"
 
 
+# ADR 0059 keeps a Blob alive until no accepted Attachment Record, Run input, or
+# other governed durable reference needs it.  Records are covered by the
+# migration 1 trigger; this migration adds the durable external half.
+#
+# The claims deliberately live inside `attachments.db` rather than behind a
+# caller-supplied predicate: a cross-store lookup that fails, times out, or
+# races a concurrent publisher would otherwise read as "unreferenced" and
+# delete accepted content.  A local row plus a BEFORE DELETE trigger makes the
+# guarantee fail closed even if a future garbage-collection query forgets it.
+MIGRATION_2_SQL = r"""
+CREATE TABLE attachment_blob_retention_claims (
+    claim_id            TEXT PRIMARY KEY,
+    content_sha256      TEXT NOT NULL
+                             REFERENCES attachment_blobs(content_sha256) ON DELETE RESTRICT,
+    holder_kind         TEXT NOT NULL CHECK (holder_kind IN
+                             ('run_input','transcript','external')),
+    holder_ref          TEXT NOT NULL CHECK (length(holder_ref) BETWEEN 1 AND 255),
+    claim_version       INTEGER NOT NULL CHECK (claim_version = 1),
+    created_at_ms       INTEGER NOT NULL,
+    UNIQUE (holder_kind, holder_ref, content_sha256)
+) STRICT;
+
+CREATE INDEX attachment_blob_retention_claims_blob_idx
+    ON attachment_blob_retention_claims(content_sha256);
+
+CREATE TRIGGER attachment_blob_retention_claims_immutable
+BEFORE UPDATE ON attachment_blob_retention_claims
+BEGIN
+  SELECT RAISE(ABORT, 'immutable Attachment Blob retention claim');
+END;
+
+CREATE TRIGGER attachment_blob_delete_requires_no_retention_claim
+BEFORE DELETE ON attachment_blobs
+WHEN EXISTS (
+  SELECT 1 FROM attachment_blob_retention_claims
+  WHERE content_sha256 = OLD.content_sha256
+)
+BEGIN
+  SELECT RAISE(ABORT, 'retained Attachment Blob cannot be deleted');
+END;
+"""
+
+# Pinned source checksum. Like MIGRATION_1_SHA256 this is a fixed literal, not a
+# value recomputed from the SQL at import time: a computed checksum would always
+# equal its own source and could never detect an accidental edit to
+# MIGRATION_2_SQL. Any deliberate change to the SQL must update this literal (and
+# is caught by test_attachment_schema_pinning + verify_migration_source).
+MIGRATION_2_SHA256 = "cc659fb02bd351d89d73a61891f264909af99a1444189cf255683e80e1c6a305"
+
+
+def _build_migrations() -> tuple[tuple[int, str, str, str], ...]:
+    return (
+        (
+            1,
+            "initial_attachment_store",
+            MIGRATION_1_SQL,
+            MIGRATION_1_SHA256,
+        ),
+        (
+            2,
+            "blob_retention_claims",
+            MIGRATION_2_SQL,
+            MIGRATION_2_SHA256,
+        ),
+    )
+
+
+MIGRATIONS: tuple[tuple[int, str, str, str], ...] = _build_migrations()
+
+
 def verify_migration_source() -> None:
     actual = hashlib.sha256(MIGRATION_1_SQL.encode("utf-8")).hexdigest()
     if actual != MIGRATION_1_SHA256:
         raise RuntimeError("Attachment Store migration source checksum mismatch")
+    for version, name, sql, checksum in MIGRATIONS:
+        if hashlib.sha256(sql.encode("utf-8")).hexdigest() != checksum:
+            raise RuntimeError(
+                f"Attachment Store migration {version} ({name}) checksum mismatch"
+            )
 
 
-__all__ = ["MIGRATION_1_SHA256", "MIGRATION_1_SQL", "verify_migration_source"]
+__all__ = [
+    "MIGRATION_1_SHA256",
+    "MIGRATION_1_SQL",
+    "MIGRATION_2_SHA256",
+    "MIGRATION_2_SQL",
+    "MIGRATIONS",
+    "verify_migration_source",
+]

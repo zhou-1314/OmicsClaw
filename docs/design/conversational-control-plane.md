@@ -1567,10 +1567,18 @@ codepoint-range rendering, committed-Transcript content verification,
 target-local claim barrier, cross-target bounded Pump, single-call Adapter,
 provider-hint plus bounded exponential retry with jitter, retry exhaustion, startup
 `sending -> unknown`, Adapter-account isolation, cancellation-resistant timeout
-quarantine, and atomic failed/unknown suffix suppression. The current
-hard renderer limit fails closed rather than synthesizing the target artifact
-fallback; that fallback, media Items and explicit resend/repair remain required
-follow-up work. No other Channel Adapter is enabled by the official runner.
+quarantine, and atomic failed/unknown suffix suppression.
+
+**Operator lifecycle update (2026-07-20).** The over-limit renderer no longer
+fails closed: it freezes one bounded fallback Item that keeps the reply's start
+plus a deterministic truncation notice (anchored to the immutable Transcript
+prefix and digest). Explicit Owner `retry_delivery` (expedite a `retry_wait`
+backoff) and `resend_delivery` (a capacity-gated `purpose=resend` Delivery that
+reuses frozen content and reruns no Turn/tool) are implemented, together with
+`describe_delivery`/`list_deliveries` operator reads. Outbound media Items — and
+therefore attaching the full over-limit reply as a durable artifact reference —
+remain required follow-up work. No other Channel Adapter is enabled by the
+official runner.
 
 ## 9. Surface protocols
 

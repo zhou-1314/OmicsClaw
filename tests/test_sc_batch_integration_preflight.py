@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 from anndata import AnnData
+
+# `skills.singlecell._lib.preflight` transitively imports scanpy. Without this
+# guard the ImportError happens at COLLECTION time, which aborts the entire
+# pytest run rather than skipping one file -- every full-suite invocation then
+# needs an explicit --ignore. Skip cleanly instead.
+pytest.importorskip("scanpy", reason="single-cell preflight needs the scanpy stack")
 
 from skills.singlecell._lib.preflight import preflight_sc_batch_integration
 

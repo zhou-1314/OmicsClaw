@@ -25,6 +25,14 @@ from .models import DeliveryItemPlan, DeliveryPlan, TurnTranscriptRef
 DEFAULT_TEXT_CHUNK_CODEPOINTS = 4096
 DEFAULT_MAX_TEXT_ITEMS = 64
 DELIVERY_TEXT_RENDER_VERSION = 1
+# Deterministic, sanitized suffix appended to a bounded fallback Item when a
+# terminal reply is too long to freeze verbatim.  It is a fixed constant rather
+# than Transcript content, so a truncated Item's resolved text is exactly the
+# frozen Transcript prefix plus this notice.
+DELIVERY_TEXT_TRUNCATION_NOTICE = (
+    "\n\n[OmicsClaw: reply truncated — the full response exceeded this channel's "
+    "delivery limit.]"
+)
 _EMPTY_TERMINAL_TEXT = MappingProxyType(
     {
         "succeeded": "Turn completed without a text response.",
@@ -147,9 +155,31 @@ def freeze_terminal_text_delivery(
     text = _renderable_terminal_text(entry, terminal_kind)
     required_items = (len(text) + max_chunk_codepoints - 1) // max_chunk_codepoints
     if required_items > max_items:
-        raise DeliveryContentLimitError(
-            f"Delivery text exceeds the configured {max_items} Item limit"
+        # An unbounded reply cannot be sent verbatim, but terminalization must
+        # still produce exactly one durable Delivery rather than fail closed.
+        # Freeze a single bounded fallback Item that keeps the start of the
+        # reply and appends a deterministic truncation notice.  The full reply
+        # stays in the immutable Transcript entry; a future media slice may
+        # additionally attach it as a durable artifact reference.
+        prefix_budget = max_chunk_codepoints - len(DELIVERY_TEXT_TRUNCATION_NOTICE)
+        prefix_len = min(len(text), prefix_budget) if prefix_budget > 0 else 0
+        fallback_text = text[:prefix_len] + DELIVERY_TEXT_TRUNCATION_NOTICE
+        fallback_item = DeliveryItemPlan(
+            item_kind="text",
+            content_store="transcript",
+            content_ref=transcript_ref.entry_id,
+            content_sha256=_text_sha256(fallback_text),
+            content_range=MappingProxyType(
+                {
+                    "unit": "unicode_codepoint",
+                    "start": 0,
+                    "end": prefix_len,
+                    "truncated": True,
+                }
+            ),
+            render_version=DELIVERY_TEXT_RENDER_VERSION,
         )
+        return DeliveryPlan(terminal_kind=terminal_kind, items=(fallback_item,))
     items = tuple(
         DeliveryItemPlan(
             item_kind="text",
@@ -199,19 +229,25 @@ def resolve_delivery_text(
         raise DeliveryContentIntegrityError("Delivery Transcript reference is missing")
     if render_version != DELIVERY_TEXT_RENDER_VERSION:
         raise DeliveryContentIntegrityError("unsupported Delivery text render version")
-    if not isinstance(content_range, Mapping) or set(content_range) != {
-        "unit",
-        "start",
-        "end",
-    }:
+    _required_range_keys = {"unit", "start", "end"}
+    if not isinstance(content_range, Mapping) or set(content_range) not in (
+        _required_range_keys,
+        _required_range_keys | {"truncated"},
+    ):
         raise DeliveryContentIntegrityError(
             "Delivery text Item has an invalid codepoint range"
         )
     unit = content_range.get("unit")
     start = content_range.get("start")
     end = content_range.get("end")
-    if unit != "unicode_codepoint" or any(
-        isinstance(value, bool) or not isinstance(value, int) for value in (start, end)
+    truncated = content_range.get("truncated", False)
+    if (
+        unit != "unicode_codepoint"
+        or any(
+            isinstance(value, bool) or not isinstance(value, int)
+            for value in (start, end)
+        )
+        or not isinstance(truncated, bool)
     ):
         raise DeliveryContentIntegrityError(
             "Delivery text Item has an invalid codepoint range"
@@ -239,11 +275,17 @@ def resolve_delivery_text(
         )
 
     text = _renderable_terminal_text(entry)
-    if start < 0 or end <= start or end > len(text):
+    # A verbatim Item requires a non-empty slice; a bounded fallback Item may
+    # freeze an empty prefix (start == end) because it still resolves to the
+    # deterministic truncation notice.
+    range_ok = (start <= end) if truncated else (start < end)
+    if start < 0 or not range_ok or end > len(text):
         raise DeliveryContentIntegrityError(
             "Delivery text Item codepoint range is out of bounds"
         )
     resolved = text[start:end]
+    if truncated:
+        resolved = resolved + DELIVERY_TEXT_TRUNCATION_NOTICE
     if (
         not isinstance(expected_digest, str)
         or _text_sha256(resolved) != expected_digest
@@ -256,6 +298,7 @@ __all__ = [
     "DEFAULT_MAX_TEXT_ITEMS",
     "DEFAULT_TEXT_CHUNK_CODEPOINTS",
     "DELIVERY_TEXT_RENDER_VERSION",
+    "DELIVERY_TEXT_TRUNCATION_NOTICE",
     "DeliveryContentIntegrityError",
     "DeliveryContentLimitError",
     "freeze_terminal_text_delivery",

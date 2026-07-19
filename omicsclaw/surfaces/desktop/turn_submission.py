@@ -220,6 +220,24 @@ class DesktopTurnSubmissionV1(BaseModel):
         )
 
 
+class DesktopAttachmentReferenceV1(BaseModel):
+    """Bounded read-only projection of one accepted Attachment Record.
+
+    Carries reference facts only: no bytes, no staging or Blob path, and no
+    provider handle.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    attachment_id: str = Field(pattern=_OPAQUE_ID_PATTERN)
+    ordinal: StrictInt = Field(ge=0)
+    content_sha256: str = Field(pattern=_SHA256_PATTERN)
+    byte_size: StrictInt = Field(ge=0)
+    display_name: str
+    media_type: str
+
+
 class DesktopTurnAcceptedV1(BaseModel):
     """Stable acceptance response shared by 200 duplicate and 202 novel paths."""
 
@@ -239,6 +257,7 @@ class DesktopTurnAcceptedV1(BaseModel):
     duplicate: bool
     receipt_revision: StrictInt = Field(ge=0)
     accepted_at_ms: StrictInt = Field(ge=0)
+    attachments: tuple[DesktopAttachmentReferenceV1, ...] = ()
 
 
 class DesktopMultipartAttachmentSource:
@@ -596,6 +615,7 @@ __all__ = [
     "DesktopMultipartError",
     "DesktopMultipartUpload",
     "DesktopSourceAttachmentDescriptorV1",
+    "DesktopAttachmentReferenceV1",
     "DesktopTurnAcceptedV1",
     "DesktopTurnSubmissionV1",
     "decode_desktop_multipart_submission",

@@ -13,6 +13,7 @@ from omicsclaw.attachments import (
     SourceAttachmentDescriptorV1,
 )
 from omicsclaw.control import (
+    ControlIntegrityError,
     ControlRuntime,
     ControlRuntimePorts,
     DeliveryAdapterResult,
@@ -219,8 +220,78 @@ async def test_concurrent_duplicate_attachment_opens_source_once_and_runs_one_tu
         assert source.opens == ["photo-1"]
         assert dispatch_count == 1
         assert len(runtime.repository.list_turn_attachment_commitments()) == 1
+        # ADR 0059: the duplicate observes the same ordered Records as the
+        # novel acceptance, without opening a second byte source.
+        assert len(first.attachment_refs) == 1
+        assert first.attachment_refs == duplicate.attachment_refs
+        assert first.attachment_refs == first.acceptance.attachment_refs
     finally:
         release_source.set()
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_sequential_duplicate_returns_original_ordered_attachment_records(
+    tmp_path,
+):
+    """ADR 0059: a settled retry re-observes the original Records verbatim."""
+
+    source = _BytesSource({"photo-1": PNG_BYTES})
+
+    async def dispatch_events(_envelope: MessageEnvelope):
+        yield Final("done")
+
+    runtime = _channel_runtime(tmp_path, dispatch_events=dispatch_events)
+    await runtime.start()
+    raw = _channel_raw("7001:404")
+    try:
+        first = await runtime.submit_and_wait(
+            raw,
+            ControlRuntimePorts(user_id="42"),
+            attachment_source=source,
+        )
+        assert first.acceptance.status is TurnAcceptanceStatus.ACCEPTED
+        assert len(first.attachment_refs) == 1
+
+        # The Turn is already terminal here, so this exercises the "every Turn
+        # state" clause rather than an in-flight race.
+        duplicate = await runtime.submit_and_wait(
+            raw,
+            ControlRuntimePorts(user_id="42"),
+            attachment_source=source,
+        )
+        assert duplicate.acceptance.status is TurnAcceptanceStatus.DUPLICATE
+        assert duplicate.attachment_refs == first.attachment_refs
+        assert source.opens == ["photo-1"]
+
+        reference = duplicate.attachment_refs[0]
+        assert reference.ordinal == 0
+        assert reference.content_sha256 == hashlib.sha256(PNG_BYTES).hexdigest()
+        assert reference.byte_size == len(PNG_BYTES)
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_text_only_duplicate_reports_no_attachment_records(tmp_path):
+    """A Turn that never carried bytes must not gain phantom References."""
+
+    async def dispatch_events(_envelope: MessageEnvelope):
+        yield Final("done")
+
+    runtime = _channel_runtime(tmp_path, dispatch_events=dispatch_events)
+    await runtime.start()
+    raw = _channel_raw("7001:405", source_id=None)
+    try:
+        first = await runtime.submit_and_wait(raw, ControlRuntimePorts(user_id="42"))
+        duplicate = await runtime.submit_and_wait(
+            raw, ControlRuntimePorts(user_id="42")
+        )
+        assert first.acceptance.status is TurnAcceptanceStatus.ACCEPTED
+        assert duplicate.acceptance.status is TurnAcceptanceStatus.DUPLICATE
+        assert first.attachment_refs == ()
+        assert duplicate.attachment_refs == ()
+    finally:
         await runtime.close()
 
 
@@ -708,5 +779,144 @@ async def test_non_attachment_content_factory_cannot_bypass_durable_content_poli
         assert not any(message.get("role") == "user" for message in history)
         assert "data:image" not in durable_json
         assert "attachment_ref" not in durable_json
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_enqueue_failure_result_carries_accepted_attachment_refs(
+    tmp_path,
+    monkeypatch,
+):
+    """A post-accept enqueue fault must not drop the accepted References.
+
+    The batch is durably accepted before the FIFO commit fails, so the novel
+    ``dispatch_enqueue_failed`` result must report the same ordered References a
+    later duplicate lookup returns.  Before the fix the novel result carried
+    none while the duplicate carried them, an observable contract split.
+    """
+
+    dispatch_count = 0
+
+    async def dispatch_events(_envelope: MessageEnvelope):
+        nonlocal dispatch_count
+        dispatch_count += 1
+        yield Final("must not run")
+
+    runtime = _channel_runtime(tmp_path, dispatch_events=dispatch_events)
+    await runtime.start()
+
+    def fail_queue_commit(*_args, **_kwargs):
+        raise RuntimeError("injected FIFO commit failure")
+
+    monkeypatch.setattr(runtime._sequencer, "_commit", fail_queue_commit)
+    try:
+        novel = await runtime.submit_and_wait(
+            _channel_raw("7001:enqueue"),
+            ControlRuntimePorts(user_id="42"),
+            attachment_source=_BytesSource({"photo-1": PNG_BYTES}),
+        )
+
+        assert novel.acceptance.status is TurnAcceptanceStatus.ACCEPTED
+        assert novel.acceptance.code == "dispatch_enqueue_failed"
+        assert novel.receipt is not None and novel.receipt.status == "failed"
+        assert len(novel.acceptance.attachment_refs) == 1
+        assert dispatch_count == 0
+
+        # A duplicate of the same failed Turn returns exactly the same
+        # References, so novel and duplicate now agree.
+        duplicate = await runtime.submit_and_wait(
+            _channel_raw("7001:enqueue"),
+            ControlRuntimePorts(user_id="42"),
+            attachment_source=_BytesSource({"photo-1": PNG_BYTES}),
+        )
+        assert duplicate.acceptance.status is TurnAcceptanceStatus.DUPLICATE
+        assert duplicate.acceptance.attachment_refs == novel.acceptance.attachment_refs
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_of_finalize_failed_turn_reads_empty_without_incident(
+    tmp_path,
+    monkeypatch,
+):
+    """A finalize failure never accepted a Record, so empty is legitimate.
+
+    The batch was not accepted, so the committed-but-unavailable guard must not
+    misfire: the Turn is terminally ``failed`` and honestly has no accepted
+    attachments, not lost content.
+    """
+
+    async def dispatch_events(_envelope: MessageEnvelope):
+        yield Final("must not run")
+
+    runtime = _channel_runtime(tmp_path, dispatch_events=dispatch_events)
+    await runtime.start()
+
+    def fail_accept_batch(_commitment):
+        raise AttachmentStoreError("simulated finalize failure")
+
+    monkeypatch.setattr(runtime.attachment_store, "accept_batch", fail_accept_batch)
+    try:
+        novel = await runtime.submit_and_wait(
+            _channel_raw("7001:finalize"),
+            ControlRuntimePorts(user_id="42"),
+            attachment_source=_BytesSource({"photo-1": PNG_BYTES}),
+        )
+        assert novel.acceptance.code == "attachment_finalize_failed"
+        assert novel.receipt is not None and novel.receipt.status == "failed"
+        assert novel.acceptance.attachment_refs == ()
+
+        duplicate = await runtime.submit_and_wait(
+            _channel_raw("7001:finalize"),
+            ControlRuntimePorts(user_id="42"),
+            attachment_source=_BytesSource({"photo-1": PNG_BYTES}),
+        )
+        assert duplicate.acceptance.status is TurnAcceptanceStatus.DUPLICATE
+        assert duplicate.acceptance.attachment_refs == ()
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_lost_committed_refs_for_succeeded_turn_is_an_integrity_incident(
+    tmp_path,
+    monkeypatch,
+):
+    """A succeeded Turn that committed attachments must still have them.
+
+    If the Store silently returns no References for a Turn the control plane
+    committed to and that actually ran, that is lost content and must fail
+    closed rather than resolve to a bare text Turn.
+    """
+
+    async def dispatch_events(_envelope: MessageEnvelope):
+        yield Final("done")
+
+    runtime = _channel_runtime(tmp_path, dispatch_events=dispatch_events)
+    await runtime.start()
+    try:
+        accepted = await runtime.submit_and_wait(
+            _channel_raw("7001:corrupt"),
+            ControlRuntimePorts(user_id="42"),
+            attachment_source=_BytesSource({"photo-1": PNG_BYTES}),
+        )
+        assert accepted.acceptance.status is TurnAcceptanceStatus.ACCEPTED
+        assert accepted.receipt is not None and accepted.receipt.status == "succeeded"
+        assert accepted.acceptance.attachment_refs
+
+        # Simulate the Store losing the committed accepted Records.
+        monkeypatch.setattr(
+            runtime.attachment_store,
+            "get_turn_references",
+            lambda *_args, **_kwargs: (),
+        )
+        with pytest.raises(ControlIntegrityError):
+            await runtime.submit_and_wait(
+                _channel_raw("7001:corrupt"),
+                ControlRuntimePorts(user_id="42"),
+                attachment_source=_BytesSource({"photo-1": PNG_BYTES}),
+            )
     finally:
         await runtime.close()
