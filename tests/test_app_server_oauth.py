@@ -8,6 +8,7 @@ real binary is needed.
 from __future__ import annotations
 
 import asyncio
+import os
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,6 +16,33 @@ import pytest
 pytest.importorskip("fastapi")
 
 from fastapi import HTTPException  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _restore_provider_environment():
+    """Undo provider-setting writes made indirectly through production code."""
+
+    keys = (
+        "LLM_PROVIDER",
+        "LLM_AUTH_MODE",
+        "LLM_BASE_URL",
+        "LLM_API_KEY",
+        "OMICSCLAW_MODEL",
+        "CCPROXY_PORT",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_KEY",
+    )
+    snapshot = {key: os.environ.get(key) for key in keys}
+    try:
+        yield
+    finally:
+        for key, value in snapshot.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def _run(coro):
@@ -175,14 +203,25 @@ def test_oauth_logout_invokes_ccproxy(monkeypatch):
 
     def _fake_run(cmd, **kw):
         captured["cmd"] = cmd
+        captured["env"] = kw["env"]
         return MagicMock(returncode=0, stdout="logged out", stderr="")
 
     import subprocess
 
+    control_keys = {
+        "OMICSCLAW_REMOTE_AUTH_TOKEN",
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN",
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD",
+    }
+    for key in control_keys:
+        monkeypatch.setenv(key, "must-not-reach-ccproxy")
+    monkeypatch.setenv("OMICSCLAW_CCProxy_TEST_KEEP", "ordinary-value")
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
     result = _run(server.oauth_logout("openai"))
     assert captured["cmd"] == ["/opt/venv/bin/ccproxy", "auth", "logout", "codex"]
+    assert captured["env"]["OMICSCLAW_CCProxy_TEST_KEEP"] == "ordinary-value"
+    assert not control_keys.intersection(captured["env"])
     assert result["ok"] is True
     assert result["provider"] == "openai"
 
@@ -342,10 +381,11 @@ def test_oauth_logout_non_active_provider_does_not_touch_env(monkeypatch, tmp_pa
 # ---------------------------------------------------------------------------
 
 
-def test_chat_provider_switch_clears_stale_oauth_env(monkeypatch, tmp_path):
-    """Switching provider through the chat request must reset LLM_AUTH_MODE
-    and drop CCPROXY_PORT; otherwise a restart re-enters the bad
-    (new_provider + oauth) combination."""
+def test_chat_provider_switch_is_runtime_only_and_preserves_default_env(
+    monkeypatch,
+    tmp_path,
+):
+    """A per-Turn model choice must not rewrite the configured default."""
     from omicsclaw.surfaces.desktop import server
 
     env_path = tmp_path / ".env"
@@ -372,11 +412,14 @@ def test_chat_provider_switch_clears_stale_oauth_env(monkeypatch, tmp_path):
     fake_core = FakeCore()
     server._apply_chat_provider_switch(fake_core, "deepseek", "")
 
-    body = env_path.read_text(encoding="utf-8")
-    assert "LLM_PROVIDER=deepseek" in body
-    assert "LLM_AUTH_MODE=api_key" in body
-    assert "CCPROXY_PORT=" not in body
-    assert "OMICSCLAW_MODEL=deepseek-chat" in body
+    assert env_path.read_text(encoding="utf-8") == (
+        "LLM_PROVIDER=anthropic\n"
+        "LLM_AUTH_MODE=oauth\n"
+        "CCPROXY_PORT=9000\n"
+        "OMICSCLAW_MODEL=claude-sonnet-4-6\n"
+    )
+    assert fake_core.LLM_PROVIDER_NAME == "deepseek"
+    assert fake_core.OMICSCLAW_MODEL == "deepseek-chat"
 
 
 def test_chat_provider_switch_failure_raises_and_leaves_env_untouched(monkeypatch, tmp_path):

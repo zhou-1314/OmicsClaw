@@ -45,6 +45,7 @@ For scaffolding NEW skills use `omics-skill-builder`.
 
 - `result.json`
 - `demo_report.txt`
+- Produces artifact `orchestrator.route_decision` as `result.json` (`json`)
 
 ## Flow
 

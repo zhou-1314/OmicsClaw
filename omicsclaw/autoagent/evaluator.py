@@ -2,8 +2,8 @@
 
 Two evaluation paths, tried in order:
 
-1. **adata path** (primary): Load ``processed.h5ad`` from the output
-   directory and compute metrics directly from the adata object via
+1. **adata path** (primary): Load the frozen trial-authority primary AnnData
+   artifact from the output directory and compute metrics directly via
    :mod:`metrics_compute`.  This works for all spatial and single-cell
    skills and requires *no* modifications to skill scripts.
 
@@ -21,9 +21,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from omicsclaw.autoagent.authority import TrialSkillAuthority
 from omicsclaw.autoagent.errors import MetricConfigError
 from omicsclaw.autoagent.metrics_registry import MetricDef
+from omicsclaw.autoagent.output_ownership import verify_child_trial_receipt
 from omicsclaw.autoagent.result_contract import normalize_result_payload
+from omicsclaw.common.output_claim import is_scientific_output_file
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +42,13 @@ class EvaluationResult:
 
 
 class Evaluator:
-    """Score a trial's output by computing or reading quality metrics."""
+    """Score a trial's output by computing or reading quality metrics.
+
+    Production callers provide ``skill_name`` and therefore must also pass a
+    matching frozen authority; the evaluator then verifies the exact child
+    receipt before reading scientific evidence.  An unnamed evaluator retains
+    the legacy local/unit scoring behavior.
+    """
 
     def __init__(
         self,
@@ -56,6 +65,8 @@ class Evaluator:
         self,
         output_dir: Path,
         params: dict[str, Any] | None = None,
+        *,
+        authority: TrialSkillAuthority | None = None,
     ) -> EvaluationResult:
         """Evaluate a trial output directory.
 
@@ -63,16 +74,83 @@ class Evaluator:
         """
         output_dir = Path(output_dir)
         params = params or {}
+        verified_result_payload: dict[str, Any] | None = None
 
-        # --- Path 1: compute from adata (primary) ---
-        adata_path = output_dir / "processed.h5ad"
-        if adata_path.exists() and self.skill_name:
-            adata_metrics = self._evaluate_from_adata(adata_path, params)
+        # ``result.json`` is the shared runner's completion authority.  A
+        # metric CSV or readable AnnData alone must not turn an unowned or
+        # incomplete trial into an evolution candidate.
+        if not is_scientific_output_file(
+            output_dir / "result.json",
+            output_root=output_dir,
+        ):
+            return EvaluationResult(
+                composite_score=float("-inf"),
+                raw_metrics={},
+                success=False,
+                missing_metrics=list(self.metrics),
+            )
+
+        if self.skill_name and authority is None:
+            return EvaluationResult(
+                composite_score=float("-inf"),
+                raw_metrics={},
+                success=False,
+                missing_metrics=list(self.metrics),
+            )
+
+        if (
+            authority is not None
+            and self.skill_name
+            and not authority.matches_skill_name(self.skill_name)
+        ):
+            return EvaluationResult(
+                composite_score=float("-inf"),
+                raw_metrics={},
+                success=False,
+                missing_metrics=list(self.metrics),
+            )
+
+        if self.skill_name:
+            assert authority is not None
+            try:
+                receipt = verify_child_trial_receipt(
+                    output_dir,
+                    canonical_skill_id=authority.canonical_skill_id,
+                    skill_version=authority.skill_version,
+                    manifest_hash=authority.manifest_hash,
+                    source_hash=authority.source_hash,
+                )
+            except (OSError, RuntimeError, ValueError):
+                return EvaluationResult(
+                    composite_score=float("-inf"),
+                    raw_metrics={},
+                    success=False,
+                    missing_metrics=list(self.metrics),
+                )
+            verified_result_payload = receipt.result_payload
+
+        # --- Path 1: compute from the frozen trial AnnData contract ---
+        primary_anndata = (
+            authority.primary_anndata_path if authority is not None else None
+        )
+        adata_path = output_dir / primary_anndata if primary_anndata else None
+        if (
+            adata_path is not None
+            and is_scientific_output_file(adata_path, output_root=output_dir)
+        ):
+            adata_metrics = self._evaluate_from_adata(
+                adata_path,
+                params,
+                skill_name=authority.canonical_skill_id,
+            )
             if adata_metrics is not None:
                 return adata_metrics
 
         # --- Path 2: read from result.json (fallback) ---
-        return self._evaluate_from_result_json(output_dir)
+        return self._evaluate_from_result_json(
+            output_dir,
+            verified_result_payload=verified_result_payload,
+        )
 
     # ----- adata path -----
 
@@ -80,8 +158,10 @@ class Evaluator:
         self,
         adata_path: Path,
         params: dict[str, Any],
+        *,
+        skill_name: str,
     ) -> EvaluationResult | None:
-        """Compute metrics from the processed adata file.
+        """Compute metrics from the frozen trial primary AnnData file.
 
         The raw metrics dict from ``metrics_compute`` may contain extra
         fields not declared in ``self.metrics``.  We filter to only the
@@ -94,7 +174,7 @@ class Evaluator:
 
             computed = compute_metrics_from_adata(
                 adata_path,
-                skill_name=self.skill_name,
+                skill_name=skill_name,
                 method=self.method,
                 params=params,
             )
@@ -138,13 +218,23 @@ class Evaluator:
 
     # ----- result.json path -----
 
-    def _evaluate_from_result_json(self, output_dir: Path) -> EvaluationResult:
+    def _evaluate_from_result_json(
+        self,
+        output_dir: Path,
+        *,
+        verified_result_payload: dict[str, Any] | None = None,
+    ) -> EvaluationResult:
         """Read metrics from result.json using the declared MetricDef sources."""
         raw: dict[str, float] = {}
         missing: list[str] = []
 
         for name, mdef in self.metrics.items():
-            value = _read_metric(output_dir, mdef.source, mdef.column)
+            value = _read_metric(
+                output_dir,
+                mdef.source,
+                mdef.column,
+                result_payload=verified_result_payload,
+            )
             if value is not None:
                 raw[name] = value
             else:
@@ -154,7 +244,10 @@ class Evaluator:
             # Distinguish "no result.json" from "result.json exists but
             # fields don't match" — the latter is a config error.
             result_path = output_dir / "result.json"
-            if result_path.exists():
+            if is_scientific_output_file(
+                result_path,
+                output_root=output_dir,
+            ):
                 raise MetricConfigError(
                     f"result.json exists but none of the declared metrics "
                     f"({list(self.metrics.keys())}) were found. "
@@ -228,22 +321,36 @@ def _read_metric(
     output_dir: Path,
     source: str,
     column: str | None = None,
+    *,
+    result_payload: dict[str, Any] | None = None,
 ) -> float | None:
     if source.startswith("result.json:"):
-        return _read_from_result_json(output_dir, source)
+        return _read_from_result_json(
+            output_dir,
+            source,
+            result_payload=result_payload,
+        )
     return _read_from_csv(output_dir, source, column)
 
 
-def _read_from_result_json(output_dir: Path, source: str) -> float | None:
-    result_path = output_dir / "result.json"
-    if not result_path.exists():
-        return None
-    try:
-        data = normalize_result_payload(
-            json.loads(result_path.read_text(encoding="utf-8"))
-        )
-    except (OSError, json.JSONDecodeError):
-        return None
+def _read_from_result_json(
+    output_dir: Path,
+    source: str,
+    *,
+    result_payload: dict[str, Any] | None = None,
+) -> float | None:
+    if result_payload is None:
+        result_path = output_dir / "result.json"
+        if not is_scientific_output_file(
+            result_path,
+            output_root=output_dir,
+        ):
+            return None
+        try:
+            result_payload = json.loads(result_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+    data = normalize_result_payload(result_payload)
     dot_path = source.split(":", 1)[1]
     return _resolve_dot_path(data, dot_path)
 
@@ -252,7 +359,10 @@ def _read_from_csv(
     output_dir: Path, source: str, column: str | None
 ) -> float | None:
     csv_path = output_dir / source
-    if not csv_path.exists() or column is None:
+    if (
+        column is None
+        or not is_scientific_output_file(csv_path, output_root=output_dir)
+    ):
         return None
     try:
         text = csv_path.read_text(encoding="utf-8")

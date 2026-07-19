@@ -26,7 +26,25 @@ from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
 
+from omicsclaw.common.output_claim import (
+    OutputClaimIdentity,
+    collect_output_claim_identities,
+    is_scientific_output_file,
+)
 from omicsclaw.runtime.consensus.member import ConsensusMember
+
+
+def _is_scientific_member_file(
+    path: Path,
+    *,
+    member_dir: Path,
+    claim_identities: frozenset[OutputClaimIdentity],
+) -> bool:
+    return is_scientific_output_file(
+        path,
+        output_root=member_dir,
+        claim_identities=claim_identities,
+    )
 
 
 @runtime_checkable
@@ -129,13 +147,30 @@ class SpatialDomainsArtifactReader:
     _SUMMARY_RELPATH_CANDIDATES = ("result.json", "summary.json")
     _INTRINSIC_DOTTED = "summary.mean_local_purity"
 
-    def _resolve_label_csv(self, member_dir: Path) -> Path | None:
+    def _resolve_label_csv(
+        self,
+        member_dir: Path,
+        *,
+        claim_identities: frozenset[OutputClaimIdentity],
+    ) -> Path | None:
         for relpath in self._LABEL_RELPATH_CANDIDATES:
             candidate = member_dir / relpath
-            if candidate.exists():
+            if _is_scientific_member_file(
+                candidate,
+                member_dir=member_dir,
+                claim_identities=claim_identities,
+            ):
                 return candidate
         for pattern in self._LABEL_FALLBACK_GLOBS:
-            matches = sorted(member_dir.glob(pattern))
+            matches = sorted(
+                candidate
+                for candidate in member_dir.glob(pattern)
+                if _is_scientific_member_file(
+                    candidate,
+                    member_dir=member_dir,
+                    claim_identities=claim_identities,
+                )
+            )
             if matches:
                 return matches[0]
         return None
@@ -144,7 +179,11 @@ class SpatialDomainsArtifactReader:
         self, member: ConsensusMember, output_root: Path
     ) -> pd.Series | None:
         member_dir = member.member_output_dir(output_root)
-        csv_path = self._resolve_label_csv(member_dir)
+        claim_identities = collect_output_claim_identities(member_dir)
+        csv_path = self._resolve_label_csv(
+            member_dir,
+            claim_identities=claim_identities,
+        )
         if csv_path is None:
             return None
         df = pd.read_csv(csv_path)
@@ -158,9 +197,14 @@ class SpatialDomainsArtifactReader:
         import json
 
         member_dir = member.member_output_dir(output_root)
+        claim_identities = collect_output_claim_identities(member_dir)
         for relpath in self._SUMMARY_RELPATH_CANDIDATES:
             summary_path = member_dir / relpath
-            if not summary_path.exists():
+            if not _is_scientific_member_file(
+                summary_path,
+                member_dir=member_dir,
+                claim_identities=claim_identities,
+            ):
                 continue
             try:
                 data: object = json.loads(summary_path.read_text())
@@ -203,8 +247,14 @@ class ScClusteringArtifactReader:
     def read_labels(
         self, member: ConsensusMember, output_root: Path
     ) -> pd.Series | None:
-        csv_path = member.member_output_dir(output_root) / self._LABELS_RELPATH
-        if not csv_path.exists():
+        member_dir = member.member_output_dir(output_root)
+        claim_identities = collect_output_claim_identities(member_dir)
+        csv_path = member_dir / self._LABELS_RELPATH
+        if not _is_scientific_member_file(
+            csv_path,
+            member_dir=member_dir,
+            claim_identities=claim_identities,
+        ):
             return None
         df = pd.read_csv(csv_path)
         if self._OBS_COLUMN not in df.columns:
@@ -224,8 +274,14 @@ class ScClusteringArtifactReader:
     def read_intrinsic_quality(
         self, member: ConsensusMember, output_root: Path
     ) -> float:
-        csv_path = member.member_output_dir(output_root) / self._SUMMARY_RELPATH
-        if not csv_path.exists():
+        member_dir = member.member_output_dir(output_root)
+        claim_identities = collect_output_claim_identities(member_dir)
+        csv_path = member_dir / self._SUMMARY_RELPATH
+        if not _is_scientific_member_file(
+            csv_path,
+            member_dir=member_dir,
+            claim_identities=claim_identities,
+        ):
             return 0.0
         try:
             df = pd.read_csv(csv_path)
@@ -257,8 +313,14 @@ class PseudotimeArtifactReader:
     def read_labels(
         self, member: ConsensusMember, output_root: Path
     ) -> pd.Series | None:
-        h5ad_path = member.member_output_dir(output_root) / self._H5AD_RELPATH
-        if not h5ad_path.exists():
+        member_dir = member.member_output_dir(output_root)
+        claim_identities = collect_output_claim_identities(member_dir)
+        h5ad_path = member_dir / self._H5AD_RELPATH
+        if not _is_scientific_member_file(
+            h5ad_path,
+            member_dir=member_dir,
+            claim_identities=claim_identities,
+        ):
             return None
         try:
             import anndata

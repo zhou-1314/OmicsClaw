@@ -1,11 +1,9 @@
 """
 Channel manager that coordinates multiple chat channels.
 
-Manages channel lifecycle (start/stop) and per-channel health
-monitoring. Each channel handles its own inbound flow by iterating
-``runtime.agent.dispatcher.dispatch`` from its platform handler (per
-ADR 0006) — the manager does not own a message bus or middleware
-pipeline.
+Manages channel lifecycle (start/stop) and per-channel health monitoring. The
+manager starts only Adapters that declare a verified authoritative ingress
+cutover; it does not own a message bus or middleware pipeline.
 
 Run multiple channels in one process::
 
@@ -23,7 +21,7 @@ import asyncio
 import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from .base import Channel
@@ -37,6 +35,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ChannelHealth:
     """Tracks message processing metrics per channel."""
+
     total_inbound: int = 0
     total_outbound: int = 0
     total_errors: int = 0
@@ -66,9 +65,8 @@ class ChannelManager:
     2. Starts/stops channels concurrently
     3. Provides a health check endpoint
 
-    Channels handle their own inbound flow by iterating
-    ``runtime.agent.dispatcher.dispatch`` from their platform handlers;
-    the manager only owns lifecycle and health.
+    Cut-over Channels handle their own RawInbound Adapter boundary; the manager
+    only owns lifecycle, the authoritative-cutover gate and health.
     """
 
     def __init__(self) -> None:
@@ -116,7 +114,18 @@ class ChannelManager:
         tasks = []
         for name, channel in self._channels.items():
             tasks.append(self._start_one(name, channel))
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        failures = [result for result in results if isinstance(result, BaseException)]
+        if failures:
+            await self.stop_all()
+            failed_names = [
+                name
+                for (name, _channel), result in zip(self._channels.items(), results)
+                if isinstance(result, BaseException)
+            ]
+            raise RuntimeError(
+                "Channel startup failed for: " + ", ".join(failed_names)
+            ) from None
 
         logger.info(
             f"ChannelManager started ({len(self.running_channels())}"
@@ -127,13 +136,18 @@ class ChannelManager:
         """Start a single channel with error handling."""
         health = self._health[name]
         try:
+            channel.require_authoritative_ingress()
             await channel.start()
             health.started_at = time.monotonic()
             health.record_success()
             logger.info(f"Channel '{name}' started successfully")
-        except Exception as e:
-            health.record_failure(str(e))
-            logger.error(f"Failed to start channel '{name}': {e}", exc_info=True)
+        except Exception as error:
+            error_type = type(error).__name__
+            health.record_failure(error_type)
+            logger.error("Failed to start channel '%s' (%s)", name, error_type)
+            raise RuntimeError(
+                f"Channel '{name}' failed to start ({error_type})"
+            ) from None
 
     async def start_channel(self, name: str) -> None:
         """Start a single already-registered channel.
@@ -176,8 +190,12 @@ class ChannelManager:
         try:
             await channel.stop()
             logger.info(f"Channel '{name}' stopped")
-        except Exception as e:
-            logger.error(f"Error stopping channel '{name}': {e}")
+        except Exception as error:
+            logger.error(
+                "Error stopping channel '%s' (%s)",
+                name,
+                type(error).__name__,
+            )
 
     async def run(self) -> None:
         """Run until stopped or interrupted.
@@ -225,10 +243,12 @@ class ChannelManager:
 
         Responds to ``GET /healthz`` with JSON health payload.
         """
+
         async def handle(reader, writer):
             try:
                 request_line = await asyncio.wait_for(
-                    reader.readline(), timeout=5.0,
+                    reader.readline(),
+                    timeout=5.0,
                 )
                 while True:
                     line = await reader.readline()

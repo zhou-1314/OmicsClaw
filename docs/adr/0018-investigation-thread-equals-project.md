@@ -2,6 +2,18 @@
 
 **Status:** accepted (2026-05-30)
 
+**Project-authority refinement (2026-07-14):**
+[ADR 0053](0053-make-control-plane-state-authoritative-for-project-conversation-and-turn.md)
+keeps one investigation thread equal to one Project but supersedes the claim
+below that `project://<id>` is the durable Project object. It is now Project
+knowledge associated with the authoritative control-plane Project Record.
+
+**Project-lifecycle refinement (2026-07-14):**
+[ADR 0055](0055-model-project-lifecycle-as-reversible-archive-and-restore.md)
+defines a Project as `active` or `archived`, preserves its thread knowledge and
+references across archive/restore, and replaces the legacy Bench soft-delete
+interpretation with an authoritative reversible archive.
+
 A Bench **investigation thread** is scoped to exactly one research project (课题),
 backed by a `project://<id>` memory subtree. Two distinct topics (e.g. a glioma study
 vs. a liver-cancer study) are two threads. A **manuscript** is a *child write-target*

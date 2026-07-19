@@ -12,6 +12,7 @@ from omicsclaw.core.external_env import (
     EnvNotFoundError,
     is_env_available,
     run_python_in_env,
+    run_script_in_env,
 )
 
 
@@ -73,3 +74,67 @@ def test_run_python_in_env_propagates_subprocess_error():
     name = _current_env_name()
     with pytest.raises(subprocess.CalledProcessError):
         run_python_in_env(name, "raise RuntimeError('boom')")
+
+
+def test_cross_environment_children_scrub_backend_control_credentials(monkeypatch):
+    import omicsclaw.core.external_env as external_env
+
+    control_keys = {
+        "OMICSCLAW_REMOTE_AUTH_TOKEN",
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN",
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD",
+    }
+    for key in control_keys:
+        monkeypatch.setenv(key, "must-not-reach-sub-environment")
+    monkeypatch.setenv("OMICSCLAW_EXTERNAL_ENV_TEST_KEEP", "ordinary-value")
+    monkeypatch.setattr(
+        external_env.shutil,
+        "which",
+        lambda name: "/bin/mamba" if name == "mamba" else None,
+    )
+    observed_environments: list[dict[str, str]] = []
+
+    def _run(cmd, **kwargs):
+        observed_environments.append(kwargs["env"])
+        if cmd[1:3] == ["env", "list"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout="# conda environments:\ntarget * /envs/target\n",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(external_env.subprocess, "run", _run)
+
+    assert run_python_in_env("target", "print('ok')") == "ok\n"
+    assert run_script_in_env("target", "/tmp/example.py") == "ok\n"
+    assert len(observed_environments) == 4
+    for child_env in observed_environments:
+        assert child_env["OMICSCLAW_EXTERNAL_ENV_TEST_KEEP"] == "ordinary-value"
+        assert not control_keys.intersection(child_env)
+
+
+def test_dependency_r_probe_scrubs_backend_control_credentials(monkeypatch):
+    from omicsclaw.core import dependency_manager
+
+    control_keys = {
+        "OMICSCLAW_REMOTE_AUTH_TOKEN",
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN",
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD",
+    }
+    for key in control_keys:
+        monkeypatch.setenv(key, "must-not-reach-r-probe")
+    monkeypatch.setenv("OMICSCLAW_DEPENDENCY_TEST_KEEP", "ordinary-value")
+    observed: list[dict[str, str]] = []
+
+    def fake_run(cmd, **kwargs):
+        observed.append(kwargs["env"])
+        return subprocess.CompletedProcess(cmd, 0, stdout="R version", stderr="")
+
+    monkeypatch.setattr(dependency_manager.subprocess, "run", fake_run)
+
+    assert dependency_manager._check_r_available() is True
+    assert len(observed) == 1
+    assert observed[0]["OMICSCLAW_DEPENDENCY_TEST_KEEP"] == "ordinary-value"
+    assert not control_keys.intersection(observed[0])

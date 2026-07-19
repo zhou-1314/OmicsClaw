@@ -62,11 +62,18 @@ MAX_BODY_LINES = 200
 MAX_DESCRIPTION_WORDS = 50
 
 
-def _parse_skill_md(skill_dir: Path) -> tuple[dict, str] | None:
-    skill_md = skill_dir / "SKILL.md"
-    if not skill_md.exists():
-        return None
-    text = skill_md.read_text(encoding="utf-8")
+def _parse_skill_md(
+    skill_dir: Path,
+    *,
+    skill_md_text: str | None = None,
+) -> tuple[dict, str] | None:
+    if skill_md_text is None:
+        skill_md = skill_dir / "SKILL.md"
+        if not skill_md.exists():
+            return None
+        text = skill_md.read_text(encoding="utf-8")
+    else:
+        text = skill_md_text
     if not text.startswith("---"):
         return {}, text
     parts = text.split("---", 2)
@@ -860,7 +867,11 @@ def _check_references(skill_dir: Path, sidecar: dict) -> list[str]:
 _V2_REQUIRED_SECTIONS = tuple(s for s in REQUIRED_SECTIONS if s != "## Inputs & Outputs")
 
 
-def _lint_v2(skill_dir: Path) -> list[str]:
+def _lint_v2(
+    skill_dir: Path,
+    *,
+    skill_md_text: str | None = None,
+) -> list[str]:
     """Lint a v2 skill (skill.yaml present, ADR 0037).
 
     Validates the machine contract against the schema, then runs the
@@ -918,7 +929,7 @@ def _lint_v2(skill_dir: Path) -> list[str]:
     # Narrative SKILL.md is still the human card in v2 (header generated from
     # skill.yaml). Lint its sections/length when present; tolerate its absence
     # during transition.
-    parsed = _parse_skill_md(skill_dir)
+    parsed = _parse_skill_md(skill_dir, skill_md_text=skill_md_text)
     body = parsed[1] if parsed else ""
     if body:
         line_count = len(body.splitlines())
@@ -963,17 +974,25 @@ def _lint_v2(skill_dir: Path) -> list[str]:
     return errors
 
 
-def lint_skill(skill_dir: Path) -> list[str]:
+def lint_skill(
+    skill_dir: Path,
+    *,
+    skill_md_text: str | None = None,
+) -> list[str]:
     """Return a list of lint errors for one skill directory.
 
     Empty list = clean.  v2 (skill.yaml present) lints via the schema + v2 path;
     v1 (parameters.yaml, no skill.yaml) keeps the legacy contract byte-unchanged;
     pre-migration skills (neither sidecar) always return [].
+
+    When ``skill_md_text`` is provided, lint that complete staged Skill card
+    against the directory's existing manifest, script, and references without
+    writing it to the live ``SKILL.md`` path.
     """
     if (skill_dir / "skill.yaml").exists():
-        return _lint_v2(skill_dir)
+        return _lint_v2(skill_dir, skill_md_text=skill_md_text)
 
-    parsed = _parse_skill_md(skill_dir)
+    parsed = _parse_skill_md(skill_dir, skill_md_text=skill_md_text)
     if parsed is None:
         return [f"{skill_dir}: SKILL.md missing or unparseable"]
     frontmatter, body = parsed

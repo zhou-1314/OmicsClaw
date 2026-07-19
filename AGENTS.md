@@ -101,7 +101,6 @@ python omicsclaw.py run spatial-preprocess --demo
 | `make install-oc` | (Re)install package + activate `oc` alias |
 | `make oc-link` | Quick wrapper script in `~/.local/bin/oc` (no pip) |
 | `make bot-telegram` | Start Telegram bot |
-| `make bot-feishu` | Start Feishu bot |
 
 ## Project Structure
 
@@ -115,11 +114,12 @@ OmicsClaw/
 ├── omicsclaw.py                # Main CLI script (SKILLS dict, DOMAINS registry, `oc list`/`oc run`/`oc desktop-server`)
 ├── omicsclaw/                  # The single top-level Python package
 │   ├── surfaces/               # ← Ingress layer (ADR 0005). The three user-facing entry points.
-│   │   ├── channels/           #   Channel Surface — 10 IM adapters + ChannelManager + `python -m`
+│   │   ├── channels/           #   Channel Surface — Telegram text + single photo authoritative; legacy adapters gated
 │   │   ├── desktop/            #   Desktop Surface — FastAPI server for Electron / Next.js frontends
 │   │   └── cli/                #   CLI Surface — prompt_toolkit REPL, Textual TUI, setup wizard, `oc` launcher
 │   ├── runtime/                # Agent loop, context assembly, tool registry, policy, transcript storage (ADR 0004 P3)
 │   │   ├── agent/, context/, tools/, policy/, storage/
+│   ├── control/                # Authoritative control.db schema, lifetime lock, typed repository commands (ADR 0053–0064)
 │   ├── skill/                  # Skill registry, runner, lookup, subprocess execution (ADR 0004 P2)
 │   ├── providers/              # LLM provider registry + OpenAI/ccproxy adapters (ADR 0004 P1)
 │   ├── memory/                 # Graph memory system (MemoryEngine, MemoryClient, ReviewLog)
@@ -175,6 +175,10 @@ Skills are registered in `omicsclaw/core/registry.py` and dynamically discovered
 ### Skill Metadata Rules
 
 - `skill.yaml` (ADR 0037) is the single machine-contract source of truth for skill metadata — canonical name, aliases, allowed flags, `saves_h5ad`, param hints, and so on; `SKILL.md` is generated from it by `scripts/generate_skill_md.py`.
+- `interface.outputs.files` is an output inventory. The shared runner enforces the declared `result.json` envelope and required keys, unconditional `outputs.artifacts`, and the matching `method_scopes` guarantees before reporting success; do not turn optional inventory entries into unconditional promises.
+- `security` is omitted until its three fields have been deliberately reviewed. An explicit block is a declarative capability statement propagated to audit surfaces, not proof of OS network/filesystem confinement.
+- `resources.compute`, when calibrated, must contain the complete static Candidate-plan admission reservation (`cpu_cores`, `memory_mib`, `gpu_devices`, `threads`, `temporary_disk_mib`). Do not invent defaults: uncalibrated skills must remain resource-unready for whole-plan execution. These reservations are not OS-enforced quotas.
+- `lifecycle.status: deprecated` requires one different canonical `superseded_by` Skill that is currently `mvp` or `stable` and `demo-validated` or higher; non-deprecated Skills must omit `superseded_by`. Use Backend Skill evolution governance for evidence-bound deprecation instead of hand-editing lifecycle state. Deprecated Skills remain auditable but are removed from automatic/LLM routing and blocked by the shared runner with a replacement hint.
 - All primary skill scripts must expose a lightweight direct `--help` path.
 - Skill scripts write native artifacts; the shared runner writes the top-level `README.md` and `reproducibility/analysis_notebook.ipynb`.
 - Bot skill execution uses the same shared runner contract as CLI, interactive, agent tools, app, and remote jobs.
@@ -206,7 +210,10 @@ evidence.
 ### Contract Tests
 
 Framework optimization guardrails are enforced by targeted contract tests:
-`tests/test_documentation_facts.py`, `tests/test_skill_runner_contract.py`, `tests/test_skill_metadata_contract.py`, `tests/test_skill_help_contract.py`, `tests/test_registry_alias_contract.py`, and `tests/test_output_ownership_contract.py`.
+`tests/test_documentation_facts.py`, `tests/test_skill_execution_contract.py`,
+`tests/test_skill_runner_contract.py`, `tests/test_skill_metadata_contract.py`,
+`tests/test_skill_help_contract.py`, `tests/test_registry_alias_contract.py`,
+and `tests/test_output_ownership_contract.py`.
 
 ### Architecture Contracts
 
@@ -273,7 +280,7 @@ restructure history is in [ADR 0005](docs/adr/0005-surfaces-umbrella-for-ingress
 
 | Surface | Location | Primary entry |
 |---|---|---|
-| **Channel Surface** | `omicsclaw/surfaces/channels/` | `python -m omicsclaw.surfaces.channels --channels <names>` |
+| **Channel Surface** | `omicsclaw/surfaces/channels/` | `python -m omicsclaw.surfaces.channels --channels telegram` |
 | **Desktop Surface** | `omicsclaw/surfaces/desktop/` | `oc desktop-server --host 127.0.0.1 --port 8765` |
 | **CLI Surface** | `omicsclaw/surfaces/cli/` | `oc interactive` (REPL) / `oc tui` (TUI) |
 
@@ -288,6 +295,14 @@ Binds `127.0.0.1:8765` by default and serves chat streaming, skills,
 providers, MCP, outputs, bridge control, and memory proxy endpoints
 for the OmicsClaw-App Electron/Next.js frontend.
 
+**Cross-repository ownership**: this repository owns Backend policy, execution,
+persistence, file mutation, and stable HTTP contracts. The separate
+`OmicsClaw-App` repository owns Electron/Next.js proxy routes, TypeScript view
+models, and UI interaction. Do not add React/Next.js UI here, and do not move
+Skill governance, manifest writes, registry refresh, or scientific validation
+into the App. Coordinate contract changes across repositories as separate
+milestones rather than duplicating logic.
+
 **Environment variables**:
 - `OMICSCLAW_MEMORY_DB_URL` — SQLAlchemy connection URL (e.g. `sqlite+aiosqlite:///~/.omicsclaw/memory.db`).
 - `OMICSCLAW_MEMORY_API_TOKEN` — Bearer token required when exposing the API beyond localhost.
@@ -297,23 +312,97 @@ for the OmicsClaw-App Electron/Next.js frontend.
 - `/providers/test` performs a short live LLM connectivity probe.
 - `/chat/stream` reinitializes the provider runtime when a request changes model, even if the provider id is unchanged.
 
-### Channel Surface — 10 IM platform adapters + `ChannelManager`
+**Authoritative attachment ingress**:
+- `POST /v1/turns` is the Backend-owned strict multipart image Interface: one
+  `request` JSON part plus 1–8 exactly matched JPEG/PNG/GIF/WebP file parts,
+  each with a client-generated 32-hex identity and declared full SHA-256.
+- Novel acceptance returns `202`; matching `Idempotency-Key` retry returns
+  `200` and never opens the upload source. Receipt/Event/cancel operations use
+  `/v1/turns/{turn_id}` (with unversioned compatibility aliases).
+- Keep the manual parser's counted transport cap, strict UTF-8/depth checks,
+  60-second body-read deadline, complete-boundary/provisional-spool proof and
+  two-slot in-flight cap together; every exit must close every created spool.
+- `/chat/stream` remains text-only for authoritative ingress. Never route the
+  new Adapter through legacy JSON `files`, `.uploads`, `received_files`, path,
+  or Base64 helpers. File Reference and OmicsClaw-App UI adoption are separate
+  milestones.
+
+**Canonical Simple Skill Run Runtime**:
+- `POST /v1/runs` is the Backend-owned JSON Adapter for one strict V1 subset:
+  canonical Skill id, demo input, empty parameters, explicit typed Scope and a
+  complete caller-declared simple resource contract. Novel acceptance returns
+  `202`; a matching 32-hex `Idempotency-Key` duplicate returns `200` before
+  current Registry, Project, budget or Dispatcher gates.
+- The prompt-toolkit REPL's exact `/run <canonical-skill> --demo` and the root
+  exact-demo Scope command family are canonical submission Adapters.
+  Each creates one fresh 32-hex Submission ID, resolves the canonical Skill and
+  complete resource request through Backend Registry authority, and never falls
+  back to the legacy runner after canonical routing. The REPL uses explicit
+  `UnassignedScope`; root accepts exactly omitted Scope, fixed-order
+  `--demo --project <32-lower-hex-id>`, or `--demo --no-project`. Only omission
+  may read the bounded, side-effect-free current-Project navigation hint.
+  Explicit Project and explicit Unassigned bypass it; novel missing/archived
+  explicit Projects fail without downgrade or execution. Every other
+  demo-shaped root request fails closed before Runtime and legacy execution.
+  Scope validation stays behind `RunRuntime`, and an unconfirmed Run owner
+  prevents Control close or a clean success/interrupt projection. Root
+  non-demo/unsupported-option forms, Textual TUI,
+  `/interpret`, and non-demo/option-bearing prompt-toolkit forms remain legacy.
+- CLI terminal waiting is a bounded pure-observation `RunRuntime` Interface.
+  Success deep-verifies Receipt, Assignment, Manifest completion and artifact
+  inventory before projecting local output paths; other terminal states expose
+  only a closed terminal code. The CLI must not read `control.db`, Run Store or
+  Manifest internals. Canceling a waiter never cancels the Run; Ctrl-C sends an
+  explicit `RunRuntime.cancel()` first and then observes the terminal result.
+- `GET /v1/runs/{run_id}` is pure Receipt observation and
+  `POST /v1/runs/{run_id}/cancel` is the only Desktop cancel command. Neither
+  observation nor legacy Job SSE may enqueue, lease, assign or resume a Run.
+- `GET /v1/run-integrity-incidents` is the bounded, content-free audit
+  Interface. It may filter by opaque Run ID and page by opaque Incident ID,
+  including while recovery quarantine is active, but must never read a
+  Manifest, inspect/stop an owner, mutate a Receipt, enqueue, lease, assign,
+  replay or repair work. Incident rows contain only closed type/reason codes,
+  opaque Run/Assignment IDs, Receipt revision, evidence version/digest and time;
+  never store or hash raw exceptions, paths, parameters, logs, credentials,
+  Manifest content or Execution References.
+- Keep the order owned by `RunRuntime`: bounded Dispatcher reservation,
+  verified Manifest header, atomic Receipt+Binding, FIFO enqueue, first
+  Resource Lease, sole Assignment+write-once Process Tree Owner CAS, shared
+  runner, verified completion evidence, fenced terminal Receipt. The canonical
+  Linux Adapter must use the exact persisted user-systemd scope, retain the
+  parent-death launcher plus bubblewrap PID/cgroup namespace, and prove the
+  unit absent or `cgroup.events populated=0` before stop/Lease release.
+- Restart and shutdown never reconstruct executable payloads. Unassigned queued
+  Runs may become interrupted directly; assigned Runs first reconcile the
+  durable Owner and then prefer exact verified Manifest completion. Missing or
+  unconfirmed ownership/evidence keeps the Receipt nonterminal and quarantines
+  novel scientific admission; duplicate, Receipt and cancel observation remain
+  available. Do not restore bulk assigned-Run interruption as a shortcut.
+- These Adapters do not authorize Workflow/Candidate-plan/Autonomous/legacy
+  Job, remaining CLI or Agent-tool migration, ADR 0062 dynamic envelopes,
+  optimistic resources, or a persistent/cross-process executable queue.
+
+### Channel Surface — authoritative Telegram text/single-photo + gated legacy adapters
 
 ```bash
 pip install -e ".[channels]"     # platform SDKs are extras
 python -m omicsclaw.surfaces.channels --channels telegram
-python -m omicsclaw.surfaces.channels --channels telegram,feishu,slack
 python -m omicsclaw.surfaces.channels --list
 make bot-telegram                # Makefile alias
-make bot-feishu
 ```
 
-Wired adapters: Telegram, Feishu, Slack, Discord, WeChat, WeCom,
-DingTalk, iMessage, Email, QQ. Lifecycle is managed by
-`omicsclaw/surfaces/channels/manager.py:ChannelManager`; each adapter
-calls `core.llm_tool_loop` directly (per ADR 0003 — there is no
-middleware pipeline). Cross-cutting concerns (rate limit, dedup,
-audit) live in `omicsclaw/services/`.
+Adapter implementations remain for Telegram, Feishu, Slack, Discord, WeChat,
+WeCom, DingTalk, iMessage, Email and QQ. Only Owner-only Telegram text and one
+ordinary photo with an optional caption are enabled production inputs: both
+normalize through `ControlRuntime`; photos use the Backend-owned Attachment
+Store and durable structured References; terminal text commits one canonical
+Outbound Delivery with the Turn and leaves through the persistent Delivery
+Pump. Telegram media groups, documents, audio/video and outbound media fail
+closed. The
+official runner and `ChannelManager` reject every other Adapter until it has an
+equivalent ControlRuntime + Delivery Adapter cutover; do not restore their
+legacy direct-dispatch startup as a compatibility shortcut. Cross-cutting
+concerns live in `omicsclaw/services/`.
 
 The OmicsBot persona used across all Channel adapters is in `SOUL.md`.
 Configuration goes in `.env` at the project root — see

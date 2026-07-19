@@ -9,7 +9,6 @@ SKILL.md and loaded via the skill registry) plus optional user overrides.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from typing import Any
 

@@ -20,6 +20,8 @@ import subprocess
 import time
 from dataclasses import dataclass
 
+from omicsclaw.skill.execution.environment import scrub_internal_control_credentials
+
 logger = logging.getLogger(__name__)
 
 
@@ -312,6 +314,7 @@ def check_ccproxy_auth(provider: str = "claude_api") -> tuple[bool, str]:
             capture_output=True,
             text=True,
             timeout=10,
+            env=scrub_internal_control_credentials(os.environ),
         )
         import re as _re
 
@@ -372,6 +375,7 @@ def start_ccproxy(port: int) -> subprocess.Popen:
         [exe, "serve", "--port", str(port)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env=scrub_internal_control_credentials(os.environ),
     )
 
     deadline = time.monotonic() + 30

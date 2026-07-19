@@ -323,8 +323,21 @@ def main():
     # Save tables
     tables_dir = output_dir / "tables"
     tables_dir.mkdir(exist_ok=True)
-    if variants:
-        pd.DataFrame(variants).to_csv(tables_dir / "phased_variants.csv", index=False)
+    # This table is an unconditional Semantic artifact.  Preserve its schema
+    # even when a valid input contains no variant records.
+    pd.DataFrame(
+        variants,
+        columns=[
+            "chrom",
+            "pos",
+            "ref",
+            "alt",
+            "gt",
+            "is_phased",
+            "is_het",
+            "phase_set",
+        ],
+    ).to_csv(tables_dir / "phased_variants.csv", index=False)
 
     # Phase block summary
     block_records = []

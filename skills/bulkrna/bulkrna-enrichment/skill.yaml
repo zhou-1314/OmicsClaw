@@ -38,6 +38,10 @@ interface:
   inputs:
     file_types:
     - csv
+    artifacts:
+    - kind: bulkrna.differential_results
+      formats:
+      - csv
   outputs:
     files:
     - tables/enrichment_results.csv

@@ -34,8 +34,11 @@ fed by `interface` auto-population (`omicsclaw/skill/interface_extract.py`). The
 catalog / `references/parameters.md` / SKILL.md-header / routing-table / per-domain
 `INDEX.md` / description-drift generators are all `--check`-gated in CI. The
 per-domain in-place rollout is **complete** (95/95 skills carry `skill.yaml`; 0
-`parameters.yaml` remain; merged in #23). Still pending: the 3-layer
-`result_json.required_keys` check and R/bash dep semantics.
+`parameters.yaml` remain; merged in #23). The shared-runner dynamic
+`result_json.required_keys` and output-guarantee checks landed under
+[ADR 0065](0065-verify-skill-output-guarantees-at-the-shared-runner.md).
+Fixture/demo-layer required-key coverage, AnnData structural verification, and
+R/bash dep semantics remain pending.
 
 ## Context
 
@@ -132,10 +135,14 @@ interface:
   inputs:                       # C — preconditions feed the generic preflight (§4)
     modalities: [...]
     file_types: [h5ad]
-    preconditions:              # 3 kinds — env/config relocated here from deps (they are NOT installs)
+    preconditions:              # 4 kinds — env/config relocated here from deps (they are NOT installs)
       data_shape: {requires_preprocessed: false, obs: [], obsm: [spatial]}  # AnnData/data preconditions
       env: []                   # required env vars (provider/channel/LLM key) — checked, never installed
       config: []                # required config state (MCP server / workspace / token) — checked, never installed
+      content:                  # optional bounded non-H5AD structure; only declared probes are enforced
+        tabular: {min_columns: 3, required_columns: [gene_id]}
+        # Alternatives: vcf header/INFO/FORMAT, fastq record/pairing,
+        # directory.any_of_signatures from the governed signature vocabulary.
   parameters:
     allowed_extra_flags: [...]  # name kept (Codex must-fix #1); --input/--output/--demo reserved
     hints: {...}
@@ -165,6 +172,12 @@ resources:                      # R
   figures: r_visualization/
   demo: examples/...
   tests: tests/
+  compute:                      # optional static admission reservation; no guessed defaults
+    cpu_cores: 2
+    memory_mib: 4096
+    gpu_devices: 0
+    threads: 2                  # must be <= cpu_cores
+    temporary_disk_mib: 4096
 
 lifecycle:
   status: stable                # draft | mvp | stable | deprecated
@@ -207,8 +220,8 @@ three concepts** — so it is collapsed:
   `tests/test_dep_spec.py`. A per-skill `conda:` field would create a second
   classification source of truth and break the "flat name list" contract.
 - **`env`/`config` are runtime *preconditions*, not installs** → moved to
-  `interface.inputs.preconditions` (3 kinds: data-shape / env-vars /
-  config-state). They were always empty (`[]`) under the old `requires:` block
+  `interface.inputs.preconditions` (now 4 kinds: data-shape / bounded content /
+  env-vars / config-state). They were always empty (`[]`) under the old `requires:` block
   and nothing installs them.
 - **`os` is a compatibility *marker*, not an install target** → moved to
   top-level `compatibility:` (`platforms` / `architectures`). Real platform is
@@ -252,8 +265,9 @@ registry to all domains or make "default pip" a documented, conscious fallback.
 - `S=(M,R,C)` is explicit; heterogeneous skills (python/R, leaf/workflow,
   migrated) are one schema's instances → `knowledge_base/` migration becomes
   "fill one table", not "stuff into a fake shell".
-- `security:` turns "data never leaves this machine" from prose into a
-  schema-enforceable, auditable field.
+- `security:` makes an explicitly reviewed expected capability surface
+  schema-validatable and auditable. Per ADR 0065, absence means unreviewed and
+  a declaration is not proof of OS-level confinement.
 - MCP export is *easier*, not harder: a structured contract generates a JSON
   tool schema instead of stripping YAML out of Markdown.
 - The `requires:` double-meaning is resolved by splitting installs (`deps.python`) from
@@ -318,7 +332,7 @@ registry to all domains or make "default pip" a documented, conscious fallback.
 - `omicsclaw/surfaces/channels/telegram.py` + `omicsclaw/extensions/validators.py` — use `SKILL.md` to judge skill-dir/extension validity → accept `skill.yaml`.
 
 **Hardening (this change)**
-- ✅ `pydantic>=2,<3` promoted to pip core deps (was environment.yml-only) so the core skill-loading path never silently degrades.
+- ✅ `pydantic>=2.1,<3` promoted to pip core deps (was environment.yml-only) so the core skill-loading path never silently degrades; 2.1 is the verified floor for the shared `StringConstraints` import surface.
 - ✅ `source` ("v2"/"v1") exposed in registry `skill_info` for detection.
 - ✅ Formal `SKILLS_DIR` loading now FAILS when a present `skill.yaml` is invalid; external/legacy roots retain the migration fallback and have a dedicated regression test.
 - ✅ Settle `summary.skip_when` parity — enforced in `_lint_v2` (≥1 rule), mirroring v1's required Skip clause.

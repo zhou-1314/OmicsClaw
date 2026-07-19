@@ -21,7 +21,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 
 from .base import Channel
@@ -37,8 +36,9 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SlackConfig(BaseChannelConfig):
     """Slack channel configuration."""
-    bot_token: str = ""   # xoxb-... (Bot User OAuth Token)
-    app_token: str = ""   # xapp-... (App-Level Token for Socket Mode)
+
+    bot_token: str = ""  # xoxb-... (Bot User OAuth Token)
+    app_token: str = ""  # xapp-... (App-Level Token for Socket Mode)
     text_chunk_limit: int = 4096
 
 
@@ -74,6 +74,7 @@ class SlackChannel(Channel):
     # ── Lifecycle ────────────────────────────────────────────────────
 
     async def start(self) -> None:
+        self.require_authoritative_ingress()
         cfg: SlackConfig = self.config
         if not cfg.bot_token:
             raise RuntimeError("SLACK_BOT_TOKEN not set")
@@ -102,7 +103,8 @@ class SlackChannel(Channel):
         # Authenticate and get bot user id
         try:
             auth = await asyncio.wait_for(
-                self._web_client.auth_test(), timeout=15,
+                self._web_client.auth_test(),
+                timeout=15,
             )
             self._bot_user_id = auth["user_id"]
             logger.info(f"Slack bot authenticated: {auth.get('user', 'unknown')}")
@@ -130,7 +132,9 @@ class SlackChannel(Channel):
                 event_type = event.get("type", "")
                 if event_type == "message" and "subtype" not in event:
                     is_dm = event.get("channel_type") == "im"
-                    await self._on_message(event, is_group=not is_dm, was_mentioned=is_dm)
+                    await self._on_message(
+                        event, is_group=not is_dm, was_mentioned=is_dm
+                    )
                 elif event_type == "app_mention":
                     await self._on_message(event, is_group=True, was_mentioned=True)
 
@@ -199,19 +203,23 @@ class SlackChannel(Channel):
             return
 
         logger.info(f"Slack message from {user_id}: {text[:80]}")
-        asyncio.create_task(
-            self._handle_message(channel_id, user_id, text, thread_ts)
-        )
+        asyncio.create_task(self._handle_message(channel_id, user_id, text, thread_ts))
 
     async def _handle_message(
-        self, channel_id: str, user_id: str, content: str, thread_ts: str,
+        self,
+        channel_id: str,
+        user_id: str,
+        content: str,
+        thread_ts: str,
     ) -> None:
         """Process message through core LLM and reply in thread."""
         try:
             await self.start_typing(channel_id)
 
             reply = await self.process_message(
-                channel_id, user_id, content,
+                channel_id,
+                user_id,
+                content,
                 platform="slack",
             )
 
@@ -233,7 +241,10 @@ class SlackChannel(Channel):
                 pass
 
     async def _send_to_channel(
-        self, channel_id: str, text: str, thread_ts: str = "",
+        self,
+        channel_id: str,
+        text: str,
+        thread_ts: str = "",
     ) -> None:
         """Send a message to a Slack channel, optionally in a thread."""
         if not self._web_client:

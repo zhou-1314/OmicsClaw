@@ -33,12 +33,29 @@ interface:
   inputs:
     file_types:
     - vcf
+    preconditions:
+      content:
+        vcf:
+          require_fileformat_header: true
+          required_columns:
+          - '#CHROM'
+          - POS
+          - ID
+          - REF
+          - ALT
+          - QUAL
+          - FILTER
+          - INFO
   outputs:
     files:
     - tables/variants.csv
     - filtered.vcf
     - report.md
     - result.json
+    artifacts:
+    - kind: genomics.filtered_variants
+      path: filtered.vcf
+      format: vcf
 runtime:
   entry: genomics_vcf_operations.py
 deps:
@@ -50,3 +67,9 @@ resources:
   - methodology.md
   - output_contract.md
   - parameters.md
+  compute:
+    cpu_cores: 1
+    memory_mib: 1024
+    gpu_devices: 0
+    threads: 1
+    temporary_disk_mib: 2048

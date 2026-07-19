@@ -32,11 +32,19 @@ interface:
   inputs:
     file_types:
     - csv
+    artifacts:
+    - kind: metabolomics.peak_table
+      formats:
+      - csv
   outputs:
     files:
     - tables/normalized.csv
     - report.md
     - result.json
+    artifacts:
+    - kind: metabolomics.feature_matrix
+      path: tables/normalized.csv
+      format: csv
 runtime:
   entry: metabolomics_normalization.py
 deps:

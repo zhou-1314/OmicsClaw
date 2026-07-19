@@ -1,13 +1,11 @@
-# OmicsClaw Bot dependencies
+# OmicsClaw legacy Channel dependency inventory
 # ─────────────────────────────────────────────────────────────────────
 #
-# INSTALL (core only):
-#     pip install -r bot/requirements.txt
+# Canonical installation (including the enabled Telegram path):
+#     pip install -e ".[channels]"
 #
-# INSTALL (all channels):
-#     pip install -r bot/requirements.txt -r bot/requirements-channels.txt
-#
-# Or install individual channel extras — see bot/README.md.
+# Python dependencies are governed by pyproject.toml.  This file is retained as
+# a migration inventory and is not the repository's installation contract.
 # ─────────────────────────────────────────────────────────────────────
 
 # ── Shared core ──────────────────────────────────────────────────────

@@ -10,43 +10,70 @@ is a Channel subclass with start/stop/_send_chunk lifecycle.
 from __future__ import annotations
 
 import asyncio
-import base64
 import logging
-import sys
-import tempfile
 import time
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, AsyncIterator
 
 from .base import Channel
 from .capabilities import TELEGRAM as TELEGRAM_CAPS
 from .config import BaseChannelConfig
+from .telegram_delivery import TelegramDeliveryAdapter
 
 logger = logging.getLogger("omicsclaw.channel.telegram")
+
+_PHOTO_REJECTED_NOTICE = "This Telegram photo was not accepted."
+_PHOTO_ALBUM_UNSUPPORTED_NOTICE = "Telegram photo albums are not supported yet."
+_DOCUMENT_UNSUPPORTED_NOTICE = (
+    "Telegram documents are not supported on the authoritative path yet."
+)
+_MAX_TELEGRAM_PHOTO_BYTES = 20 * 1024 * 1024
 
 
 @dataclass
 class TelegramConfig(BaseChannelConfig):
     """Telegram-specific configuration."""
+
     bot_token: str = ""
     admin_chat_id: int = 0
+    account_namespace: str = ""
+
+
+class _TelegramPhotoSource:
+    """Process-local capability translating opaque source IDs into Telegram bytes."""
+
+    def __init__(self, bot: Any, file_ids: dict[str, str]) -> None:
+        self._bot = bot
+        self._file_ids = dict(file_ids)
+
+    async def open(self, source_attachment_id: str) -> AsyncIterator[bytes]:
+        try:
+            file_id = self._file_ids[source_attachment_id]
+        except KeyError as exc:
+            raise ValueError("unknown Telegram attachment source") from exc
+        telegram_file = await self._bot.get_file(file_id)
+        payload = await telegram_file.download_as_bytearray()
+        yield bytes(payload)
 
 
 class TelegramChannel(Channel):
     """Telegram channel using python-telegram-bot with long polling.
 
-    Handles text messages, photos, documents, and bot commands.
-    Bridges to ``runtime.agent.dispatcher.dispatch()`` for LLM processing.
+    Text and one photo per message enter the authoritative ControlRuntime;
+    canonical terminal replies leave only through the persistent Delivery Pump.
+    Albums, documents and outbound media remain fail-closed.
     """
 
     name = "telegram"
     capabilities = TELEGRAM_CAPS
+    authoritative_ingress = True
 
     def __init__(self, config: TelegramConfig):
         super().__init__(config)
         self.tg_config = config
         self._app = None
+        self._updater = None
+        self._control_runtime = None
         self._token_redact_filter = None
 
     # ── Lifecycle ────────────────────────────────────────────────────
@@ -83,46 +110,126 @@ class TelegramChannel(Channel):
         self._app.add_error_handler(self._error_handler)
 
         # Message handlers
-        self._app.add_handler(MessageHandler(
-            filters.PHOTO | (filters.Document.IMAGE & ~filters.COMMAND),
-            self._handle_photo,
-        ))
-        self._app.add_handler(MessageHandler(
-            filters.Document.ALL & ~filters.Document.IMAGE & ~filters.COMMAND,
-            self._handle_document,
-        ))
-        self._app.add_handler(MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            self._handle_message,
-        ))
+        self._app.add_handler(
+            MessageHandler(
+                filters.PHOTO | (filters.Document.IMAGE & ~filters.COMMAND),
+                self._handle_photo,
+            )
+        )
+        self._app.add_handler(
+            MessageHandler(
+                filters.Document.ALL & ~filters.Document.IMAGE & ~filters.COMMAND,
+                self._handle_document,
+            )
+        )
+        self._app.add_handler(
+            MessageHandler(
+                filters.TEXT & ~filters.COMMAND,
+                self._handle_message,
+            )
+        )
 
         # ── Start the polling loop ───────────────────────────────────
         # When launched via ChannelManager (python -m omicsclaw.surfaces.channels.__main__), only
         # start() is called. We must begin polling here, otherwise
         # the bot is connected but deaf — no messages are received.
-        await self._app.initialize()
-        await self._app.start()
-        self._updater = self._app.updater
-        await self._updater.start_polling(
-            drop_pending_updates=True,
-        )
+        await self._activate_application()
 
         self._running = True
         logger.info("Telegram channel started (polling)")
 
+    async def _activate_application(self) -> None:
+        """Start App, Control and polling as one rollback-safe unit."""
+
+        try:
+            await self._app.initialize()
+            await self._app.start()
+            await self._start_control_runtime()
+            self._updater = self._app.updater
+            await self._updater.start_polling(
+                drop_pending_updates=False,
+            )
+        except BaseException:
+            await self.stop()
+            raise
+
     async def stop(self) -> None:
         self._running = False
-        await self._typing_manager.stop_all()
-        if self._app:
+        try:
+            await self._typing_manager.stop_all()
+        except Exception as error:
+            logger.warning("Telegram typing shutdown failed (%s)", type(error).__name__)
+        if self._updater and self._updater.running:
             try:
-                if self._updater and self._updater.running:
-                    await self._updater.stop()
-                if self._app.running:
+                await self._updater.stop()
+            except Exception as error:
+                logger.warning(
+                    "Telegram polling shutdown failed (%s)", type(error).__name__
+                )
+        if self._control_runtime is not None:
+            try:
+                await self._control_runtime.close()
+            except Exception as error:
+                logger.warning(
+                    "Telegram ControlRuntime shutdown failed (%s)",
+                    type(error).__name__,
+                )
+            finally:
+                self._control_runtime = None
+        if self._app:
+            if self._app.running:
+                try:
                     await self._app.stop()
+                except Exception as error:
+                    logger.warning(
+                        "Telegram Application stop failed (%s)",
+                        type(error).__name__,
+                    )
+            try:
                 await self._app.shutdown()
-            except Exception as e:
-                logger.warning(f"Telegram shutdown error (non-fatal): {e}")
+            except Exception as error:
+                logger.warning(
+                    "Telegram Application shutdown failed (%s)",
+                    type(error).__name__,
+                )
             logger.info("Telegram channel stopped")
+        self._updater = None
+        self._app = None
+
+    async def _start_control_runtime(self) -> None:
+        """Open the text and single-photo authoritative Channel composition root."""
+
+        from omicsclaw.control import ControlRuntime
+        from omicsclaw.runtime.agent import state as core
+
+        owners = self._owner_subjects()
+        if not owners:
+            raise RuntimeError(
+                "Telegram authoritative ingress requires TELEGRAM_CHAT_ID "
+                "or TELEGRAM_ALLOWED_SENDERS"
+            )
+        bot_identity = await self._app.bot.get_me()
+        bot_id = getattr(bot_identity, "id", None)
+        if isinstance(bot_id, bool) or not isinstance(bot_id, int):
+            raise RuntimeError("Telegram Bot identity is unavailable")
+        account_namespace = f"bot-{bot_id}"
+        configured_namespace = self.tg_config.account_namespace.strip()
+        if configured_namespace and configured_namespace != account_namespace:
+            raise RuntimeError(
+                "TELEGRAM_ACCOUNT_NAMESPACE must equal the authenticated Bot identity"
+            )
+        self.tg_config.account_namespace = account_namespace
+        self._control_runtime = ControlRuntime.for_channel_surface(
+            workspace_id=str(core.DATA_DIR),
+            adapter="telegram",
+            account_namespace=account_namespace,
+            owner_identities={
+                f"channel/telegram/{account_namespace}/telegram_user": owners
+            },
+            delivery_adapter=TelegramDeliveryAdapter(self._app.bot),
+            attachment_input_enabled=True,
+        )
+        await self._control_runtime.start()
 
     def run_polling(self) -> None:
         """Synchronous entry point — run the Telegram bot with polling.
@@ -132,6 +239,7 @@ class TelegramChannel(Channel):
         Calls start() internally, then blocks until interrupted.
         """
         from omicsclaw.runtime.agent import state as core
+
         logger.info(
             f"Starting OmicsClaw Telegram bot "
             f"(provider: {core.LLM_PROVIDER_NAME}, model: {core.OMICSCLAW_MODEL})"
@@ -139,31 +247,46 @@ class TelegramChannel(Channel):
         logger.info(f"OmicsClaw directory: {core.OMICSCLAW_DIR}")
         if self.tg_config.admin_chat_id:
             logger.info(f"Admin chat ID: {self.tg_config.admin_chat_id}")
-        logger.info(
-            f"Rate limit: {self.config.rate_limit_per_hour} msgs/hour per user"
-        )
         core.audit(
             "bot_start",
             platform="telegram",
             provider=core.LLM_PROVIDER_NAME,
             model=core.OMICSCLAW_MODEL,
             admin_chat=self.tg_config.admin_chat_id,
-            rate_limit=self.config.rate_limit_per_hour,
         )
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(self.start())
-        print("OmicsClaw Telegram bot is running. Press Ctrl+C to stop.")
         try:
-            loop.run_forever()
-        except KeyboardInterrupt:
-            pass
+            loop.run_until_complete(self.start())
+            print("OmicsClaw Telegram bot is running. Press Ctrl+C to stop.")
+            try:
+                loop.run_forever()
+            except KeyboardInterrupt:
+                pass
         finally:
-            loop.run_until_complete(self.stop())
-            loop.close()
+            try:
+                loop.run_until_complete(self.stop())
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
 
     # ── Core send implementation ─────────────────────────────────────
+
+    async def process_message(self, *args, **kwargs) -> str:
+        raise RuntimeError(
+            "Telegram messages must enter through the authoritative ControlRuntime"
+        )
+
+    async def send(
+        self,
+        chat_id: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        raise RuntimeError(
+            "Telegram terminal text must leave through the persistent Delivery Outbox"
+        )
 
     async def _send_chunk(
         self,
@@ -172,15 +295,9 @@ class TelegramChannel(Channel):
         raw_text: str,
         metadata: dict[str, Any],
     ) -> None:
-        """Send a single text chunk via Telegram."""
-        # strip_markup for plain-text safety in Telegram
-        from omicsclaw.runtime.agent import state as core
-        text = core.strip_markup(formatted_text)
-        if self._app:
-            await self._app.bot.send_message(
-                chat_id=int(chat_id),
-                text=text,
-            )
+        raise RuntimeError(
+            "Telegram text chunks must leave through the persistent Delivery Outbox"
+        )
 
     async def send_media(
         self,
@@ -189,32 +306,9 @@ class TelegramChannel(Channel):
         caption: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        """Send a media file via Telegram."""
-        if not self._app:
-            return False
-        try:
-            path = Path(file_path)
-            if not path.exists():
-                return False
-            ext = path.suffix.lower()
-            cid = int(chat_id)
-            if ext in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
-                await self._app.bot.send_photo(
-                    chat_id=cid,
-                    photo=open(path, "rb"),
-                    caption=caption or path.stem.replace("_", " ").title(),
-                )
-            else:
-                await self._app.bot.send_document(
-                    chat_id=cid,
-                    document=open(path, "rb"),
-                    filename=path.name,
-                    caption=caption or None,
-                )
-            return True
-        except Exception as e:
-            logger.error(f"Telegram send_media error: {e}")
-            return False
+        raise RuntimeError(
+            "Telegram media Delivery is disabled until durable artifact references land"
+        )
 
     # ── Typing indicator ─────────────────────────────────────────────
 
@@ -235,6 +329,23 @@ class TelegramChannel(Channel):
         except (ValueError, TypeError):
             return False
 
+    def _owner_subjects(self) -> frozenset[str]:
+        configured = {
+            str(value).strip()
+            for value in (self.config.allowed_senders or set())
+            if str(value).strip()
+        }
+        if self.tg_config.admin_chat_id:
+            configured.add(str(self.tg_config.admin_chat_id))
+        return frozenset(configured)
+
+    def _owner_update_allowed(self, update) -> bool:
+        user = getattr(update, "effective_user", None)
+        if user is None or str(user.id) not in self._owner_subjects():
+            logger.warning("Ignored Telegram update from a non-Owner")
+            return False
+        return True
+
     # ── Token redaction ──────────────────────────────────────────────
 
     def _setup_token_redaction(self) -> None:
@@ -250,124 +361,141 @@ class TelegramChannel(Channel):
 
             def filter(self, record: logging.LogRecord) -> bool:
                 if self._token and self._token in record.getMessage():
-                    record.msg = str(record.msg).replace(self._token, "[REDACTED]")
-                    if isinstance(record.args, tuple):
-                        record.args = tuple(
-                            str(a).replace(self._token, "[REDACTED]") for a in record.args
-                        )
+                    record.msg = record.getMessage().replace(
+                        self._token,
+                        "[REDACTED]",
+                    )
+                    record.args = ()
                 return True
 
         redact = _TokenRedactFilter(token)
-        for ln in ("httpx", "telegram", "httpcore"):
-            logging.getLogger(ln).addFilter(redact)
+        self._token_redact_filter = redact
+        protected_loggers = [
+            value
+            for name, value in logging.Logger.manager.loggerDict.items()
+            if isinstance(value, logging.Logger)
+            and name.startswith(("httpx", "telegram", "httpcore"))
+        ]
+        protected_loggers.extend(
+            logging.getLogger(name) for name in ("httpx", "telegram", "httpcore")
+        )
+        for protected_logger in protected_loggers:
+            protected_logger.addFilter(redact)
+            for handler in protected_logger.handlers:
+                handler.addFilter(redact)
+        # Descendant records are filtered by ancestor handlers, not ancestor
+        # Logger filters. Root handler coverage closes that propagation gap.
+        for handler in logging.getLogger().handlers:
+            handler.addFilter(redact)
 
     # ── Helpers ──────────────────────────────────────────────────────
 
     async def _send_long_message(self, update, text: str) -> None:
         """Send a potentially long text message, auto-chunking."""
         from omicsclaw.runtime.agent import state as core
+
         text = core.strip_markup(text)
         limit = self.capabilities.max_text_length
         if len(text) <= limit:
             await update.message.reply_text(text)
             return
         from .base import chunk_text
+
         for chunk in chunk_text(text, limit):
             if chunk.strip():
                 await update.message.reply_text(chunk)
 
-    async def _drain_pending_media(self, update, context) -> None:
-        """Send any pending media files queued by the LLM tool loop."""
-        from omicsclaw.runtime.agent import state as core
-        chat_id = update.effective_chat.id
-        items = core.pending_media.pop(chat_id, [])
-        for item in items:
-            try:
-                path = Path(item["path"])
-                if not path.exists():
-                    continue
-                if item["type"] == "document":
-                    await context.bot.send_document(
-                        chat_id=chat_id,
-                        document=open(path, "rb"),
-                        filename=path.name,
-                    )
-                elif item["type"] == "photo":
-                    await context.bot.send_photo(
-                        chat_id=chat_id,
-                        photo=open(path, "rb"),
-                        caption=path.stem.replace("_", " ").title(),
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to send media {item['path']}: {e}")
+    async def _submit_control_inbound(
+        self,
+        update,
+        text: str,
+        *,
+        attachments: tuple[object, ...] = (),
+        attachment_source: object | None = None,
+    ):
+        """Normalize one Telegram message and await its durable Turn Receipt."""
 
-    def _make_progress_fns(self, update):
-        """Create progress callback functions for the agent dispatch stream."""
+        from omicsclaw.control import (
+            ControlRuntimePorts,
+            RawContentBlockV1,
+            RawInboundV1,
+            TurnAcceptanceStatus,
+        )
         from omicsclaw.runtime.agent import state as core
 
-        async def _progress(msg: str):
-            return await update.message.reply_text(core.strip_markup(msg))
-
-        async def _progress_update(handle, msg: str):
-            try:
-                await handle.edit_text(core.strip_markup(msg))
-            except Exception:
-                pass
-
-        return _progress, _progress_update
-
-    async def _run_dispatch(self, update, content) -> str:
-        """Iterate ``dispatch(envelope)`` for one inbound message; return Final.text.
-
-        Per ADR 0006 — the four ``_cmd_demo`` / ``_handle_message`` /
-        ``_handle_photo`` / ``_handle_document`` paths all use this. The
-        ProgressStart / ProgressUpdate events are routed through the
-        per-update progress callbacks ``_make_progress_fns`` builds.
-        """
-        from omicsclaw.runtime.agent.dispatcher import dispatch
-        from omicsclaw.runtime.agent.envelope import MessageEnvelope
-        from omicsclaw.runtime.agent.events import (
-            Error as _DispatchError,
-            Final as _DispatchFinal,
-            PathologyDetected as _DispatchPathologyDetected,
-            ProgressStart as _DispatchProgressStart,
-            ProgressUpdate as _DispatchProgressUpdate,
+        if self._control_runtime is None:
+            raise RuntimeError("Telegram ControlRuntime is not started")
+        message = update.message
+        user = update.effective_user
+        chat = update.effective_chat
+        if message is None or user is None or chat is None:
+            return None
+        account_namespace = self.tg_config.account_namespace.strip()
+        reply_target: dict[str, object] = {
+            "schema_version": 1,
+            "kind": "channel",
+            "adapter": "telegram",
+            "account_namespace": account_namespace,
+            "destination_id": str(chat.id),
+        }
+        thread_id = getattr(message, "message_thread_id", None)
+        if thread_id is not None:
+            reply_target["thread_id"] = str(thread_id)
+        raw = RawInboundV1(
+            schema_version=1,
+            surface="channel",
+            source_namespace=f"channel/telegram/v1/{account_namespace}",
+            source_request_id=f"{chat.id}:{message.message_id}",
+            external_subject={"kind": "telegram_user", "value": str(user.id)},
+            reply_target=reply_target,
+            content=(RawContentBlockV1(kind="text", text=text),) if text else (),
+            attachments=attachments,
+            transport_facts={"provider_event_kind": "message"},
         )
-
-        progress_fn, progress_update_fn = self._make_progress_fns(update)
-        envelope = MessageEnvelope(
-            chat_id=update.effective_chat.id,
-            content=content,
-            user_id=str(update.effective_user.id),
-            platform="telegram",
+        ports = ControlRuntimePorts(
+            user_id=str(user.id),
+            workspace=str(core.DATA_DIR),
+            thread_id=str(thread_id) if thread_id is not None else "",
         )
+        if attachment_source is None:
+            result = await self._control_runtime.submit_and_wait(raw, ports)
+        else:
+            result = await self._control_runtime.submit_and_wait(
+                raw,
+                ports,
+                attachment_source=attachment_source,
+            )
+        if result.acceptance.status is TurnAcceptanceStatus.REJECTED:
+            if result.acceptance.code == "owner_denied":
+                logger.warning("Ignored Telegram message from a non-Owner")
+            else:
+                notices = {
+                    "delivery_backpressure": (
+                        "OmicsClaw is busy delivering earlier replies. "
+                        "Please retry later."
+                    ),
+                    "control_not_ready": "OmicsClaw is still starting. Please retry.",
+                }
+                if result.acceptance.code.startswith("attachment_"):
+                    notice = _PHOTO_REJECTED_NOTICE
+                else:
+                    notice = notices.get(
+                        result.acceptance.code,
+                        "This Telegram request was not accepted.",
+                    )
+                await message.reply_text(notice)
+        return result
 
-        progress_handles: dict[str, object] = {}
-        reply = ""
-        async for event in dispatch(envelope):
-            if isinstance(event, _DispatchProgressStart):
-                progress_handles[event.progress_id] = await progress_fn(event.text)
-            elif isinstance(event, _DispatchProgressUpdate):
-                handle = progress_handles.get(event.progress_id)
-                if handle is not None:
-                    await progress_update_fn(handle, event.text)
-            elif isinstance(event, _DispatchPathologyDetected):
-                logger.warning(
-                    "Loop detector fired (%s) on tool %s × %d: %s",
-                    event.kind,
-                    event.tool_name,
-                    event.count,
-                    event.reason,
-                )
-            elif isinstance(event, _DispatchFinal):
-                reply = event.text
-            elif isinstance(event, _DispatchError):
-                raise event.exception
-        return reply
+    async def _submit_control_text(self, update, text: str):
+        """Submit a text-only Telegram message through the shared helper."""
+
+        return await self._submit_control_inbound(update, text)
 
     # ── Command handlers ─────────────────────────────────────────────
 
     async def _cmd_start(self, update, context) -> None:
+        if not self._owner_update_allowed(update):
+            return
         await update.message.reply_text(
             "Welcome to OmicsClaw -- multi-omics analysis at your fingertips!\n\n"
             "I can analyze spatial, single-cell, genomics, proteomics, and metabolomics data "
@@ -377,50 +505,62 @@ class TelegramChannel(Channel):
             "  /demo <skill>  -- run a demo (preprocess, domains, de, genes, statistics, ...)\n"
             "  /status  -- bot info\n"
             "  /health  -- system health check\n\n"
-            "Or just chat -- ask any multi-omics analysis question.\n"
-            "Upload data files for personalized analysis.\n"
-            "Send an image when you need tissue/platform identification.\n\n"
+            "Or just chat -- ask any multi-omics analysis question, or send one "
+            "photo with an optional caption. Photo albums and documents are not "
+            "supported yet.\n\n"
             "OmicsClaw is a research tool, not a medical device. "
             "Consult a domain expert before making decisions based on these results."
         )
 
     async def _cmd_skills(self, update, context) -> None:
+        if not self._owner_update_allowed(update):
+            return
         try:
             from omicsclaw.runtime.agent import state as core
+
             output = core.format_skills_table()
             await self._send_long_message(update, output or "No skills found.")
-        except Exception as e:
-            await update.message.reply_text(f"Error listing skills: {e}")
+        except Exception:
+            logger.exception("Telegram skill listing failed")
+            await update.message.reply_text("Unable to list skills right now.")
 
     async def _cmd_demo(self, update, context) -> None:
-        if not self._check_rate(update):
+        if not self._owner_update_allowed(update):
             return
-        from omicsclaw.runtime.agent import state as core
         skill = context.args[0] if context.args else "preprocess"
-        await update.message.reply_text(f"Running {skill} demo -- this may take a moment...")
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        await update.message.reply_text(
+            f"Running {skill} demo -- this may take a moment..."
+        )
+        await context.bot.send_chat_action(
+            chat_id=update.effective_chat.id, action="typing"
+        )
         try:
-            reply = await self._run_dispatch(
+            await self._submit_control_text(
                 update,
                 f"Run the {skill} demo using the omicsclaw tool with mode='demo'.",
             )
-            await self._send_long_message(update, reply)
-            await self._drain_pending_media(update, context)
-        except Exception as e:
-            logger.error(f"Demo error: {e}", exc_info=True)
-            await update.message.reply_text(f"Demo failed: {e}")
+        except Exception:
+            logger.exception("Telegram demo submission failed")
 
     async def _cmd_status(self, update, context) -> None:
+        if not self._owner_update_allowed(update):
+            return
         from omicsclaw.runtime.agent import state as core
+
         uptime_secs = int(time.time() - core.BOT_START_TIME)
         hours, remainder = divmod(uptime_secs, 3600)
         minutes, secs = divmod(remainder, 60)
 
         skills_dir = core.OMICSCLAW_DIR / "skills"
-        skill_count = sum(
-            1 for d in skills_dir.iterdir()
-            if d.is_dir() and (d / "SKILL.md").exists()
-        ) if skills_dir.exists() else 0
+        skill_count = (
+            sum(
+                1
+                for d in skills_dir.iterdir()
+                if d.is_dir() and (d / "SKILL.md").exists()
+            )
+            if skills_dir.exists()
+            else 0
+        )
 
         provider_label = core.LLM_PROVIDER_NAME or "auto"
         status_msg = (
@@ -430,12 +570,14 @@ class TelegramChannel(Channel):
             f"LLM provider: {provider_label}\n"
             f"LLM model: {core.OMICSCLAW_MODEL}\n"
             f"Skills available: {skill_count}\n"
-            f"OmicsClaw dir: {core.OMICSCLAW_DIR}\n"
         )
         await update.message.reply_text(status_msg)
 
     async def _cmd_health(self, update, context) -> None:
+        if not self._owner_update_allowed(update):
+            return
         from omicsclaw.runtime.agent import state as core
+
         checks = []
         if core.OMICSCLAW_PY.exists():
             checks.append("OmicsClaw CLI: OK")
@@ -449,7 +591,8 @@ class TelegramChannel(Channel):
         skills_dir = core.OMICSCLAW_DIR / "skills"
         if skills_dir.exists():
             implemented = [
-                d.name for d in sorted(skills_dir.iterdir())
+                d.name
+                for d in sorted(skills_dir.iterdir())
                 if d.is_dir() and (d / "SKILL.md").exists() and any(d.glob("*.py"))
             ]
             checks.append(f"Skills (implemented): {len(implemented)}")
@@ -463,36 +606,23 @@ class TelegramChannel(Channel):
             checks.append("Output directory: not yet created")
 
         await update.message.reply_text(
-            "OmicsClaw Health Check\n"
-            "======================\n" + "\n".join(checks)
+            "OmicsClaw Health Check\n" "======================\n" + "\n".join(checks)
         )
 
     # ── Message handlers ─────────────────────────────────────────────
 
-    def _check_rate(self, update) -> bool:
-        """Check rate limit and send reply if exceeded. Returns True if OK."""
-        uid = str(update.effective_user.id) if update.effective_user else str(update.effective_chat.id)
-        if self._is_admin(uid):
-            return True
-        if not self.check_rate_limit(uid):
-            from omicsclaw.runtime.agent import state as core
-            core.audit("rate_limited", user_id=uid)
-            asyncio.create_task(update.message.reply_text(
-                f"You've reached the limit of {self.config.rate_limit_per_hour} messages per hour. "
-                "Please try again later."
-            ))
-            return False
-        return True
-
     async def _handle_message(self, update, context) -> None:
-        if not self._check_rate(update):
+        if not self._owner_update_allowed(update):
             return
         if not update.message or not update.message.text:
             return
 
         from omicsclaw.runtime.agent import state as core
+
         user_text = update.message.text
-        logger.info(f"Message from {update.effective_user.first_name}: {user_text[:100]}")
+        logger.info(
+            f"Message from {update.effective_user.first_name}: {user_text[:100]}"
+        )
         core.audit(
             "message",
             user_id=update.effective_user.id if update.effective_user else None,
@@ -500,204 +630,121 @@ class TelegramChannel(Channel):
         )
 
         try:
-            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-            reply = await self._run_dispatch(update, user_text)
-            await self._send_long_message(update, reply)
-            await self._drain_pending_media(update, context)
-        except Exception as e:
-            logger.error(f"Error handling message: {e}", exc_info=True)
-            await update.message.reply_text(
-                f"Sorry, something went wrong -- {type(e).__name__}: {e}"
+            await context.bot.send_chat_action(
+                chat_id=update.effective_chat.id, action="typing"
             )
+            await self._submit_control_text(update, user_text)
+        except Exception:
+            # The Turn may already be durably accepted. A direct fallback reply
+            # could then duplicate or overtake its canonical Outbox Delivery.
+            logger.exception("Telegram text submission failed")
 
     async def _handle_photo(self, update, context) -> None:
-        if not self._check_rate(update):
+        if not self._owner_update_allowed(update):
             return
         if not update.message:
             return
+        message = update.message
+        # The broad registration filter also routes image documents here. They
+        # remain a separate unsupported contract and must never be fetched.
+        if getattr(message, "document", None) is not None:
+            await message.reply_text(_DOCUMENT_UNSUPPORTED_NOTICE)
+            return
+        # Telegram emits every item in an album as an individual update. Reject
+        # before creating the process-local byte capability so no partial album
+        # can cross the acceptance seam.
+        if getattr(message, "media_group_id", None) is not None:
+            await message.reply_text(_PHOTO_ALBUM_UNSUPPORTED_NOTICE)
+            return
+        photos = tuple(getattr(message, "photo", ()) or ())
+        if not photos:
+            return
 
-        from omicsclaw.runtime.agent import state as core
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        photo = photos[-1]
+        source_attachment_id = getattr(photo, "file_unique_id", None)
+        file_id = getattr(photo, "file_id", None)
+        file_size = getattr(photo, "file_size", None)
+        if not isinstance(source_attachment_id, str) or not source_attachment_id:
+            await message.reply_text(_PHOTO_REJECTED_NOTICE)
+            return
+        if not isinstance(file_id, str) or not file_id:
+            await message.reply_text(_PHOTO_REJECTED_NOTICE)
+            return
+        if (
+            not isinstance(file_size, int)
+            or isinstance(file_size, bool)
+            or file_size <= 0
+            or file_size > _MAX_TELEGRAM_PHOTO_BYTES
+        ):
+            await message.reply_text(_PHOTO_REJECTED_NOTICE)
+            return
+
+        from omicsclaw.attachments import SourceAttachmentDescriptorV1
 
         try:
-            photo = update.message.photo[-1] if update.message.photo else None
-            doc = update.message.document if not photo else None
+            descriptor = SourceAttachmentDescriptorV1(
+                schema_version=1,
+                ordinal=0,
+                source_attachment_id=source_attachment_id,
+                display_name=f"telegram-photo-{message.message_id}.jpg",
+                declared_media_type="image/jpeg",
+                declared_size=file_size,
+                declared_sha256=None,
+            )
+        except (TypeError, ValueError):
+            await message.reply_text(_PHOTO_REJECTED_NOTICE)
+            return
 
-            if not photo and not doc:
-                return
-
-            if doc:
-                mime = doc.mime_type or ""
-                if not mime.startswith("image/"):
-                    return
-                file = await doc.get_file()
-                media_type = mime
-                filename = doc.file_name or "image.jpg"
-            else:
-                file = await photo.get_file()
-                media_type = "image/jpeg"
-                filename = "photo.jpg"
-
-            img_bytes = await file.download_as_bytearray()
-
-            if len(img_bytes) > core.MAX_PHOTO_BYTES:
-                await update.message.reply_text(
-                    f"Photo too large ({len(img_bytes) / (1024*1024):.1f} MB). "
-                    f"Maximum: {core.MAX_PHOTO_BYTES / (1024*1024):.0f} MB."
-                )
-                return
-
-            img_b64 = base64.standard_b64encode(bytes(img_bytes)).decode("ascii")
-            logger.info(f"Photo received: {len(img_bytes)} bytes, type={media_type}")
-            core.audit("photo", size_bytes=len(img_bytes), media_type=media_type)
-
-            filename = core.sanitize_filename(filename)
-            tmp_path = Path(tempfile.gettempdir()) / f"spatialclaw_{filename}"
-            tmp_path.write_bytes(bytes(img_bytes))
-            core.received_files[update.effective_chat.id] = {
-                "path": str(tmp_path), "filename": filename,
-            }
-
-            caption = update.message.caption or ""
-            content_blocks = [
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": media_type,
-                        "data": img_b64,
-                    },
-                },
-            ]
-            if caption:
-                content_blocks.append({"type": "text", "text": caption})
-            else:
-                content_blocks.append({
-                    "type": "text",
-                    "text": (
-                        "[Image sent without caption. Look at this image. "
-                        "If it shows a tissue section (H&E stain, fluorescence, IF, "
-                        "spatial barcode array, Visium capture area, or other histology): "
-                        "identify the tissue type, staining method, and likely spatial "
-                        "transcriptomics platform. Then suggest which OmicsClaw analysis "
-                        "skills would be appropriate (e.g. preprocess, domains, annotate). "
-                        "If the image is not a tissue section, describe what you see and "
-                        "ask if anything specific is needed.]"
-                    ),
-                })
-
-            reply = await self._run_dispatch(update, content_blocks)
-            await self._send_long_message(update, reply)
-
-        except Exception as e:
-            logger.error(f"Photo handling error: {e}", exc_info=True)
-            await update.message.reply_text(
-                f"Sorry, I couldn't process that image -- {type(e).__name__}: {e}"
+        source = _TelegramPhotoSource(
+            context.bot,
+            {source_attachment_id: file_id},
+        )
+        caption = getattr(message, "caption", None)
+        if not isinstance(caption, str):
+            caption = ""
+        try:
+            await context.bot.send_chat_action(
+                chat_id=update.effective_chat.id,
+                action="typing",
+            )
+            await self._submit_control_inbound(
+                update,
+                caption,
+                attachments=(descriptor,),
+                attachment_source=source,
+            )
+        except Exception as error:
+            # Acceptance may already be durable, so never race the canonical
+            # Delivery with a direct fallback response.
+            logger.error(
+                "Telegram photo submission failed (%s)",
+                type(error).__name__,
             )
 
     async def _handle_document(self, update, context) -> None:
-        if not self._check_rate(update):
+        if not self._owner_update_allowed(update):
             return
         if not update.message or not update.message.document:
             return
 
-        doc = update.message.document
-        mime = doc.mime_type or ""
-
-        if mime.startswith("image/"):
-            return
-
-        from omicsclaw.runtime.agent import state as core
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-
-        try:
-            file = await doc.get_file()
-            filename = core.sanitize_filename(doc.file_name or "document")
-            file_size = doc.file_size or 0
-
-            if file_size > core.MAX_UPLOAD_BYTES:
-                await update.message.reply_text(
-                    f"File too large ({file_size / (1024*1024):.1f} MB). "
-                    f"Maximum: {core.MAX_UPLOAD_BYTES / (1024*1024):.0f} MB."
-                )
-                return
-
-            tmp_path = Path(tempfile.gettempdir()) / f"spatialclaw_{filename}"
-            await file.download_to_drive(str(tmp_path))
-            logger.info(f"Document received: {filename} ({file_size} bytes, {mime})")
-            core.audit("document", filename=filename, size_bytes=file_size, mime=mime)
-
-            core.received_files[update.effective_chat.id] = {
-                "path": str(tmp_path), "filename": filename,
-            }
-
-            # Auto-create a spatial session
-            session_path = None
-            try:
-                upload_proc = await asyncio.create_subprocess_exec(
-                    sys.executable, str(core.OMICSCLAW_PY), "upload",
-                    "--input", str(tmp_path),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                up_stdout, _ = await asyncio.wait_for(upload_proc.communicate(), timeout=30)
-                up_out = up_stdout.decode(errors="replace")
-                for line in up_out.splitlines():
-                    if "session" in line.lower() and ("/" in line or "\\" in line):
-                        for token in line.split():
-                            if token.endswith(".json"):
-                                session_path = token
-                                break
-                if session_path:
-                    core.received_files[update.effective_chat.id]["session_path"] = session_path
-                    logger.info(f"Auto-created session: {session_path}")
-            except Exception as prof_err:
-                logger.warning(f"Auto-session creation failed (non-fatal): {prof_err}")
-
-            caption = update.message.caption or ""
-            parts = [f"[Document received: {filename} ({mime}, {file_size} bytes)]"]
-            if session_path:
-                parts.append(f"[Spatial session auto-created: {session_path}]")
-            if caption:
-                parts.append(caption)
-            else:
-                ext = Path(filename).suffix.lower()
-                file_routing = {
-                    ".h5ad": "preprocess",
-                    ".h5": "preprocess",
-                    ".loom": "velocity",
-                }
-                suggested = file_routing.get(ext, "auto")
-                parts.append(
-                    f"The user sent this spatial data file. Detect the file type and "
-                    f"run the appropriate OmicsClaw skill using mode='file'. "
-                    f"Suggested skill based on extension '{ext}': {suggested}. "
-                    f"If unsure, use skill='auto'."
-                )
-
-            reply = await self._run_dispatch(update, "\n\n".join(parts))
-            await self._send_long_message(update, reply)
-            await self._drain_pending_media(update, context)
-
-        except Exception as e:
-            logger.error(f"Document handling error: {e}", exc_info=True)
-            await update.message.reply_text(
-                f"Sorry, I couldn't process that document -- {type(e).__name__}: {e}"
-            )
+        await update.message.reply_text(_DOCUMENT_UNSUPPORTED_NOTICE)
 
     # ── Error handler ────────────────────────────────────────────────
 
     async def _error_handler(self, update, context) -> None:
         from omicsclaw.runtime.agent import state as core
+
         err = context.error
         if err is None:
             return
         err_name = type(err).__name__
         if "Forbidden" in err_name or "forbidden" in str(err).lower():
-            logger.info(f"User blocked bot: {err}")
+            logger.info("Telegram provider rejected access (%s)", err_name)
             return
         if err_name in ("TimedOut", "NetworkError", "RetryAfter"):
-            logger.warning(f"Transient error: {err}")
+            logger.warning("Transient Telegram provider error (%s)", err_name)
             return
-        logger.error(f"Unhandled error: {err}", exc_info=context.error)
-        core.audit("error", severity="HIGH", error_type=err_name, detail=str(err)[:300])
+        # Provider errors may embed credentials, request URLs or payloads. Keep
+        # logging and audit evidence to the bounded exception classification.
+        logger.error("Unhandled Telegram provider error (%s)", err_name)
+        core.audit("error", severity="HIGH", error_type=err_name)

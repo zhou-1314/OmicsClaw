@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+from types import SimpleNamespace
 
 import pytest
 
@@ -157,6 +158,95 @@ def test_returns_setup_prompt_when_llm_is_none() -> None:
     assert result == LLM_NOT_CONFIGURED_MESSAGE
     assert "LLM is not configured" in result
     assert "LLM_API_KEY" in result
+
+
+def test_engine_assembles_stored_content_with_the_same_message_context(monkeypatch):
+    rendered_content = [
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,EPHEMERAL"},
+        }
+    ]
+    durable_content = [
+        {"type": "attachment_ref", "attachment_id": "attachment-1"}
+    ]
+    message_context = "MESSAGE CONTEXT"
+    adapter = object()
+    captured = {}
+
+    async def fake_assemble_chat_context(**_kwargs):
+        return SimpleNamespace(
+            session_id="session-1",
+            system_prompt="SYSTEM",
+            user_message_content=[
+                {"type": "text", "text": message_context},
+                *rendered_content,
+            ],
+            prompt_context=SimpleNamespace(
+                request=object(),
+                message_context=message_context,
+            ),
+        )
+
+    async def fake_run_query_engine(**kwargs):
+        captured.update(kwargs)
+        return "done"
+
+    monkeypatch.setattr(
+        _engine_loop,
+        "_assemble_chat_context",
+        fake_assemble_chat_context,
+    )
+    monkeypatch.setattr(_engine_loop, "run_query_engine", fake_run_query_engine)
+    monkeypatch.setattr(
+        _engine_loop,
+        "build_default_lifecycle_hook_runtime",
+        lambda _root: None,
+    )
+
+    transcript_store = SimpleNamespace(
+        max_history=0,
+        max_history_chars=None,
+        max_conversations=0,
+        sanitizer=lambda messages, warn=True: messages,
+        get_history=lambda _chat_id: [],
+    )
+    tool_registry = SimpleNamespace(
+        to_openai_tools_for_request=lambda *_args, **_kwargs: []
+    )
+    deps = _make_deps(
+        llm=object(),
+        transcript_store=transcript_store,
+        tool_result_store=object(),
+        tool_runtime=object(),
+        tool_registry=tool_registry,
+        callbacks_builder=lambda **_kwargs: object(),
+    )
+
+    result = asyncio.run(
+        run_engine_loop(
+            deps=deps,
+            chat_id="chat-1",
+            user_content=rendered_content,
+            stored_user_content=durable_content,
+            content_adapter=adapter,
+            user_turn_context="VOLATILE CONTEXT",
+        )
+    )
+
+    assert result == "done"
+    context = captured["context"]
+    assert context.user_message_content == [
+        {"type": "text", "text": "VOLATILE CONTEXT"},
+        {"type": "text", "text": message_context},
+        *rendered_content,
+    ]
+    assert context.stored_user_content == [
+        {"type": "text", "text": "VOLATILE CONTEXT"},
+        {"type": "text", "text": message_context},
+        *durable_content,
+    ]
+    assert context.content_adapter is adapter
 
 
 class TestMaybeAppendCallerAddition:

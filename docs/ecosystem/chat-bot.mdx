@@ -1,9 +1,13 @@
 ---
-title: "聊天机器人 - Telegram + Feishu"
-description: "OmicsClaw 提供 Telegram 与 Feishu 双通道聊天机器人，共享 LLM 工具调用核心，复用 88 个 skill。"
+title: "聊天机器人 - Telegram"
+description: "OmicsClaw 当前提供 Owner-only Telegram 文本机器人，并以持久 Outbox 投递终态回复。"
 keywords: ["Telegram bot", "Feishu", "飞书", "聊天机器人", "LLM agent"]
 og:image: "/docs/images/og-cover.png"
 ---
+
+> **当前生产边界：** 仅配置 Owner 的 Telegram 文本已启用；附件在下载前
+> 拒绝，终态回复只经持久 Delivery Outbox。本文其余平台与媒体能力描述
+> 是迁移目标，不是当前可用性声明。
 
 ## 为什么需要 Bot 通道
 
@@ -25,23 +29,13 @@ og:image: "/docs/images/og-cover.png"
 
 ```bash
 # Telegram
-python -m bot.run --channels telegram
-# 或：
+python -m omicsclaw.surfaces.channels --channels telegram
+# 或
 make bot-telegram
 ```
 
-```bash
-# Feishu（飞书）
-python -m bot.run --channels feishu
-# 或：
-make bot-feishu
-```
-
-两个通道也可在同一进程中并发启动：
-
-```bash
-python -m bot.run --channels telegram,feishu
-```
+> Feishu 与其他旧 Adapter 仍保留配置参考，但生产 runner 会 fail closed，
+> 直到它们完成 `ControlRuntime` ingress 与持久 Delivery Adapter 迁移。
 
 ## 配置环境变量
 

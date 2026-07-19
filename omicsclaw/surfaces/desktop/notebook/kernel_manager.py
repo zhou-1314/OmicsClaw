@@ -32,6 +32,10 @@ from typing import Any, AsyncIterator, Optional
 
 from jupyter_client.manager import AsyncKernelManager
 
+from omicsclaw.skill.execution.environment import (
+    scrub_internal_control_credentials,
+)
+
 from .event_adapter import (
     adapt_iopub_message,
     adapt_shell_reply,
@@ -1005,7 +1009,11 @@ class NotebookKernelManager:
         )
         self._ensure_kernelspec()
         km = AsyncKernelManager(kernel_name="python3")
-        await km.start_kernel(cwd=cwd) if cwd else await km.start_kernel()
+        kernel_env = scrub_internal_control_credentials(os.environ)
+        if cwd:
+            await km.start_kernel(cwd=cwd, env=kernel_env)
+        else:
+            await km.start_kernel(env=kernel_env)
 
         client = km.client()
         client.start_channels()

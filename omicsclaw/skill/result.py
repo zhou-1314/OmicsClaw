@@ -3,9 +3,67 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+
+from .outcomes import classify_skill_error
+
+
+_SHA256_OR_UNKNOWN = re.compile(r"(?:(?:sha256:)?[0-9a-f]{64}|unknown)\Z")
+_ENVIRONMENT_OR_UNKNOWN = re.compile(r"(?:env:[0-9a-f]{20}|unknown)\Z")
+_CANONICAL_SKILL_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,127}\Z")
+
+
+@dataclass(frozen=True, slots=True)
+class SkillRunAuditIdentity:
+    """Frozen, privacy-minimal identity captured before subprocess spawn.
+
+    This value is internal execution provenance.  It is deliberately omitted
+    from the legacy result mapping so stable public adapter contracts do not
+    grow audit-only fields.
+    """
+
+    skill_id: str
+    skill_version: str
+    skill_hash: str
+    source_hash: str
+    environment_id: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.skill_id, str) or not _CANONICAL_SKILL_ID.fullmatch(
+            self.skill_id
+        ):
+            raise ValueError("audit skill_id must be a canonical Skill identifier")
+        if (
+            not isinstance(self.skill_version, str)
+            or not self.skill_version
+            or len(self.skill_version) > 128
+            or self.skill_version != self.skill_version.strip()
+            or any(
+                ord(character) < 32 or ord(character) == 127
+                for character in self.skill_version
+            )
+        ):
+            raise ValueError("audit skill_version must be bounded control-free text")
+        if not _SHA256_OR_UNKNOWN.fullmatch(self.skill_hash):
+            raise ValueError("audit skill_hash must be a SHA-256 digest or unknown")
+        if not _SHA256_OR_UNKNOWN.fullmatch(self.source_hash):
+            raise ValueError("audit source_hash must be a SHA-256 digest or unknown")
+        if not _ENVIRONMENT_OR_UNKNOWN.fullmatch(self.environment_id):
+            raise ValueError(
+                "audit environment_id must be a governed fingerprint or unknown"
+            )
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "skill_id": self.skill_id,
+            "skill_version": self.skill_version,
+            "skill_hash": self.skill_hash,
+            "source_hash": self.source_hash,
+            "environment_id": self.environment_id,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +84,12 @@ class SkillRunResult:
     # Adaptive-env provenance: which interpreter served this run —
     # ``base`` | ``skip`` | ``probe`` | ``venv:<key>`` (ADR: adaptive-environment-provisioning).
     runtime_source: str = "base"
+    error_kind: str = "none"
+    audit_identity: SkillRunAuditIdentity | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
     raw: Mapping[str, Any] = field(default_factory=dict)
 
     @property
@@ -102,6 +166,12 @@ def coerce_skill_run_result(result: Mapping[str, Any]) -> SkillRunResult:
     exit_code = _int_or_default(result.get("exit_code"), 0)
     output_dir_value = result.get("output_dir")
     method_value = result.get("method")
+    raw_audit_identity = result.get("_audit_identity")
+    audit_identity = (
+        raw_audit_identity
+        if isinstance(raw_audit_identity, SkillRunAuditIdentity)
+        else None
+    )
     return SkillRunResult(
         skill=skill,
         success=success,
@@ -115,7 +185,17 @@ def coerce_skill_run_result(result: Mapping[str, Any]) -> SkillRunResult:
         readme_path=str(result.get("readme_path") or ""),
         notebook_path=str(result.get("notebook_path") or ""),
         runtime_source=str(result.get("runtime_source") or "base"),
-        raw=dict(result),
+        error_kind=str(
+            result.get("error_kind")
+            or classify_skill_error(
+                success=success,
+                exit_code=exit_code,
+                stderr=str(result.get("stderr") or ""),
+                stdout=str(result.get("stdout") or ""),
+            ).value
+        ),
+        audit_identity=audit_identity,
+        raw={key: value for key, value in result.items() if key != "_audit_identity"},
     )
 
 
@@ -133,6 +213,8 @@ def build_skill_run_result(
     readme_path: str | Path | None = "",
     notebook_path: str | Path | None = "",
     runtime_source: str = "base",
+    error_kind: str = "",
+    audit_identity: SkillRunAuditIdentity | None = None,
 ) -> SkillRunResult:
     """Build a normalized result from runner-native values."""
     return SkillRunResult(
@@ -148,6 +230,17 @@ def build_skill_run_result(
         readme_path=str(readme_path or ""),
         notebook_path=str(notebook_path or ""),
         runtime_source=str(runtime_source or "base"),
+        error_kind=(
+            str(error_kind)
+            if error_kind
+            else classify_skill_error(
+                success=bool(success),
+                exit_code=int(exit_code),
+                stderr=str(stderr or ""),
+                stdout=str(stdout or ""),
+            ).value
+        ),
+        audit_identity=audit_identity,
     )
 
 
@@ -164,6 +257,7 @@ def result_json_fallback(result: SkillRunResult) -> str:
 
 
 __all__ = [
+    "SkillRunAuditIdentity",
     "SkillRunResult",
     "build_skill_run_result",
     "coerce_skill_run_result",

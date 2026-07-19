@@ -59,6 +59,7 @@ ENTRIES: tuple[LayoutEntry, ...] = (
     LayoutEntry("skill_calls", "skill_calls", Kind.DIR, Lifecycle.LAZY, Role.DELIVERABLE),
     LayoutEntry("rerun", "rerun", Kind.DIR, Lifecycle.LAZY, Role.RERUN),
     LayoutEntry("result_summary", "result_summary.md", Kind.FILE, Lifecycle.LAZY, Role.DELIVERABLE, required=True),
+    LayoutEntry("result", "result.json", Kind.FILE, Lifecycle.LAZY, Role.DELIVERABLE, required=True),
     LayoutEntry("analysis", "analysis.py", Kind.FILE, Lifecycle.LAZY, Role.DELIVERABLE),
     LayoutEntry("answer", "_oc_answer.txt", Kind.FILE, Lifecycle.LAZY, Role.SENTINEL),
     LayoutEntry("skill_calls_log", "skill_calls.jsonl", Kind.FILE, Lifecycle.LAZY, Role.PROVENANCE),
@@ -132,6 +133,10 @@ class RunPaths:
     @property
     def result_summary(self) -> Path:
         return self.path("result_summary")
+
+    @property
+    def result(self) -> Path:
+        return self.path("result")
 
     @property
     def analysis(self) -> Path:

@@ -283,6 +283,22 @@ def intrinsic_integration_panel(
     batch_labels = np.asarray(batch_labels)
     x_pca = np.asarray(x_pca)
 
+    # A member is one per-cell evidence bundle.  Reject the whole bundle before
+    # calling optional metric backends when its observation axis is malformed;
+    # some backends otherwise accept mismatched metadata and return a tiny but
+    # finite value, which would incorrectly turn corrupt evidence into a score.
+    n_obs = embedding.shape[0] if embedding.ndim == 2 else -1
+    if (
+        n_obs < 1
+        or x_pca.ndim != 2
+        or cluster_labels.ndim != 1
+        or batch_labels.ndim != 1
+        or x_pca.shape[0] != n_obs
+        or cluster_labels.shape[0] != n_obs
+        or batch_labels.shape[0] != n_obs
+    ):
+        return 0.0, {}
+
     metric_calls = {
         "ilisi_norm": lambda: _ilisi_norm(embedding, batch_labels, perplexity),
         "knn_preservation_norm": lambda: _knn_preservation_norm(embedding, x_pca, batch_labels, k),

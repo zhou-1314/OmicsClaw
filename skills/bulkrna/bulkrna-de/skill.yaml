@@ -36,6 +36,14 @@ interface:
   inputs:
     file_types:
     - csv
+    preconditions:
+      content:
+        tabular:
+          min_columns: 3
+    artifacts:
+    - kind: bulkrna.count_matrix
+      formats:
+      - csv
   outputs:
     files:
     - tables/counts.csv
@@ -48,6 +56,10 @@ interface:
     - figures/volcano_plot.png
     - report.md
     - result.json
+    artifacts:
+    - kind: bulkrna.differential_results
+      path: tables/de_results.csv
+      format: csv
 runtime:
   entry: bulkrna_de.py
 deps:

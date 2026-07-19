@@ -7,13 +7,10 @@ from pathlib import Path
 import pytest
 
 from omicsclaw.autoagent.edit_surface import (
-    ALL_LEVELS,
-    FROZEN_PATTERNS,
     LEVEL_1,
     LEVEL_2,
     LEVEL_3,
     LEVEL_4,
-    EditLevel,
     EditSurface,
     build_sc_preprocessing_surface,
     build_spatial_domains_surface,
@@ -109,6 +106,11 @@ class TestEditLevel:
         assert LEVEL_1.matches("skills/singlecell/scrna/sc-preprocessing/SKILL.md")
         assert LEVEL_1.matches("skills/spatial/spatial-domains/SKILL.md")
 
+    def test_level1_describes_only_human_owned_narrative(self):
+        assert "narrative" in LEVEL_1.description.lower()
+        assert "frontmatter" in LEVEL_1.description.lower()
+        assert "generated" in LEVEL_1.description.lower()
+
     def test_level1_rejects_python(self):
         assert not LEVEL_1.matches("skills/singlecell/scrna/sc-preprocessing/sc_preprocess.py")
 
@@ -156,9 +158,9 @@ class TestEditSurface:
         assert not surface.is_editable("omicsclaw/core/registry.py")
         assert not surface.is_editable("omicsclaw.py")
 
-    def test_explicit_files_override_levels(self, tmp_path):
+    def test_explicit_files_narrow_active_levels(self, tmp_path):
         surface = EditSurface(
-            max_level=4,
+            max_level=2,
             project_root=tmp_path,
             explicit_files=["skills/singlecell/_lib/qc.py"],
         )
@@ -172,6 +174,120 @@ class TestEditSurface:
                 max_level=4,
                 project_root=tmp_path,
                 explicit_files=["omicsclaw/autoagent/judge.py"],
+            )
+
+    @pytest.mark.parametrize(
+        "control_plane_file",
+        [
+            "omicsclaw/autoagent/__init__.py",
+            "omicsclaw/autoagent/authority.py",
+            "omicsclaw/autoagent/runner.py",
+            "omicsclaw/autoagent/harness_loop.py",
+            "omicsclaw/autoagent/optimization_loop.py",
+            "omicsclaw/autoagent/metrics_registry.py",
+            "omicsclaw/autoagent/output_ownership.py",
+            "omicsclaw/autoagent/edit_surface.py",
+            "omicsclaw/autoagent/search_space.py",
+            "omicsclaw/autoagent/patch_engine.py",
+            "omicsclaw/autoagent/llm_client.py",
+            "omicsclaw/autoagent/internal/hidden.py",
+        ],
+    )
+    def test_trial_authority_control_plane_is_frozen(
+        self,
+        tmp_path,
+        control_plane_file,
+    ):
+        with pytest.raises(ValueError, match="frozen"):
+            EditSurface(
+                max_level=4,
+                project_root=tmp_path,
+                explicit_files=[control_plane_file],
+            )
+
+    @pytest.mark.parametrize(
+        "authority_dependency",
+        [
+            "omicsclaw/skill/registry.py",
+            "omicsclaw/skill/runner.py",
+            "omicsclaw/skill/evolution.py",
+            "omicsclaw/skill/execution/output_ownership.py",
+            "omicsclaw/skill/execution_contract.py",
+            "omicsclaw/skill/future/nested_interpreter.py",
+            "omicsclaw/common/output_claim.py",
+            "omicsclaw/common/report.py",
+            "omicsclaw/common/future/nested_claim.py",
+            "omicsclaw/core/registry.py",
+            "omicsclaw/core/future/nested_protocol.py",
+        ],
+    )
+    def test_trial_interpretation_dependency_closure_is_frozen(
+        self,
+        tmp_path,
+        authority_dependency,
+    ):
+        with pytest.raises(ValueError, match="frozen"):
+            EditSurface(
+                max_level=4,
+                project_root=tmp_path,
+                explicit_files=[authority_dependency],
+            )
+
+    @pytest.mark.parametrize(
+        ("max_level", "editable_path"),
+        [
+            (1, "skills/singlecell/scrna/sc-preprocessing/SKILL.md"),
+            (2, "skills/singlecell/scrna/sc-preprocessing/sc_preprocess.py"),
+            (2, "skills/singlecell/_lib/qc.py"),
+            (3, "omicsclaw/agents/config.yaml"),
+            (3, "omicsclaw/agents/prompts.py"),
+        ],
+    )
+    def test_authority_freeze_preserves_intended_editable_boundaries(
+        self,
+        tmp_path,
+        max_level,
+        editable_path,
+    ):
+        surface = EditSurface(
+            max_level=max_level,
+            project_root=tmp_path,
+            explicit_files=[editable_path],
+        )
+
+        assert surface.is_editable(editable_path)
+
+    @pytest.mark.parametrize(
+        "governance_path",
+        [
+            "skills/singlecell/scrna/sc-preprocessing/skill.yaml",
+            "skills/skill_dag.json",
+            "skills/skill_dag_reviews.yaml",
+            "skills/catalog.json",
+            "scripts/skill_lint.py",
+            ".github/workflows/pr-ci.yml",
+        ],
+    )
+    def test_explicit_files_cannot_expand_into_machine_governance(
+        self,
+        tmp_path,
+        governance_path,
+    ):
+        with pytest.raises(ValueError, match="active editable levels"):
+            EditSurface(
+                max_level=4,
+                project_root=tmp_path,
+                explicit_files=[governance_path],
+            )
+
+    def test_level1_explicit_list_cannot_select_level2_python(self, tmp_path):
+        with pytest.raises(ValueError, match="active editable levels"):
+            EditSurface(
+                max_level=1,
+                project_root=tmp_path,
+                explicit_files=[
+                    "skills/singlecell/scrna/sc-preprocessing/sc_preprocess.py"
+                ],
             )
 
     def test_explicit_files_reject_project_escape(self, tmp_path):
@@ -217,11 +333,14 @@ class TestEditSurface:
         surface = EditSurface(
             max_level=2,
             project_root=tmp_path,
-            explicit_files=["a.py", "b.py"],
+            explicit_files=[
+                "skills/test/SKILL.md",
+                "skills/test/test.py",
+            ],
         )
         desc = surface.describe()
-        assert "Explicit file list" in desc
-        assert "a.py" in desc
+        assert "Explicit file subset" in desc
+        assert "skills/test/test.py" in desc
 
     def test_to_dict(self, tmp_path):
         surface = EditSurface(max_level=2, project_root=tmp_path)

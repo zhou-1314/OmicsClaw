@@ -18,7 +18,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from omicsclaw.autoagent.authority import (
+    TrialSkillAuthority,
+    capture_trial_skill_authority,
+    verify_trial_skill_authority,
+)
 from omicsclaw.autoagent.errors import OptimizationCancelled
+from omicsclaw.autoagent.output_ownership import (
+    bind_unclaimed_trial_output,
+    verify_child_trial_receipt,
+)
 from omicsclaw.autoagent.search_space import SearchSpace
 
 logger = logging.getLogger(__name__)
@@ -34,6 +43,8 @@ class TrialExecution:
     exit_code: int = 0
     stdout: str = ""
     stderr: str = ""
+    authority: TrialSkillAuthority | None = None
+    authority_error: str = ""
 
 
 def execute_trial(
@@ -51,8 +62,22 @@ def execute_trial(
     Converts the ``params`` dict to CLI arguments using the search space's
     CLI flag mapping, then runs the skill as a subprocess.
     """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    t0 = time.time()
+
+    if cancel_event and cancel_event.is_set():
+        raise OptimizationCancelled("Optimization cancelled before trial start")
+
+    try:
+        output_dir = bind_unclaimed_trial_output(output_dir)
+    except (OSError, RuntimeError, ValueError) as exc:
+        message = f"Trial output claim failed: {exc}"
+        return TrialExecution(
+            success=False,
+            output_dir=str(Path(output_dir).expanduser()),
+            duration_seconds=round(time.time() - t0, 2),
+            exit_code=-1,
+            stderr=message,
+        )
 
     # Default to the live repository, but allow harness sandboxes to provide
     # an isolated project snapshot that should be executed instead.
@@ -62,6 +87,22 @@ def execute_trial(
         else Path(__file__).resolve().parents[2]
     )
     cli_script = omicsclaw_dir / "omicsclaw.py"
+
+    try:
+        authority = capture_trial_skill_authority(omicsclaw_dir, skill_name)
+    except Exception as exc:
+        message = (
+            "Trial authority could not be established from the execution tree: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return TrialExecution(
+            success=False,
+            output_dir=str(output_dir),
+            duration_seconds=round(time.time() - t0, 2),
+            exit_code=-1,
+            stderr=message,
+            authority_error=message,
+        )
 
     python = sys.executable
     cmd = [python, str(cli_script), "run", skill_name]
@@ -86,22 +127,32 @@ def execute_trial(
         else:
             cmd.extend([flag, str(pvalue)])
 
-    if cancel_event and cancel_event.is_set():
-        raise OptimizationCancelled("Optimization cancelled before trial start")
-
     # Execute — only forward whitelisted env vars to avoid leaking secrets.
     from omicsclaw.autoagent.constants import SUBPROCESS_ENV_WHITELIST
 
     env = {k: v for k, v in os.environ.items() if k in SUBPROCESS_ENV_WHITELIST}
-    env["PYTHONPATH"] = str(omicsclaw_dir) + os.pathsep + env.get("PYTHONPATH", "")
+    # The frozen authority covers code in this exact Backend/sandbox tree.
+    # Inheriting arbitrary import roots would let unbound modules influence
+    # the child while leaving the manifest/source receipt unchanged.
+    env["PYTHONPATH"] = str(omicsclaw_dir)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
 
-    t0 = time.time()
     creationflags = 0
     popen_kwargs: dict[str, Any] = {}
     if os.name == "nt":
         creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     else:
         popen_kwargs["start_new_session"] = True
+
+    if os.path.lexists(output_dir):
+        message = f"Trial output claim failed: output already exists: {output_dir}"
+        return TrialExecution(
+            success=False,
+            output_dir=str(output_dir),
+            duration_seconds=round(time.time() - t0, 2),
+            exit_code=-1,
+            stderr=message,
+        )
 
     try:
         proc = subprocess.Popen(
@@ -123,48 +174,79 @@ def execute_trial(
     except OptimizationCancelled:
         raise
     except subprocess.TimeoutExpired:
+        message = "Trial timed out after 3600s; authority was not post-verified"
         return TrialExecution(
             success=False,
             output_dir=str(output_dir),
             duration_seconds=time.time() - t0,
             exit_code=-1,
-            stderr="Trial timed out after 3600s",
+            stderr=message,
+            authority_error=message,
         )
     except Exception as e:
+        message = f"Trial process failed before authority verification: {e}"
         return TrialExecution(
             success=False,
             output_dir=str(output_dir),
             duration_seconds=time.time() - t0,
             exit_code=-1,
-            stderr=str(e),
+            stderr=message,
+            authority_error=message,
         )
 
     duration = time.time() - t0
 
-    # The run command may rename the output dir — check result for actual path.
-    # In harness mode the subprocess cwd is the sandbox, so the skill may
-    # write its outputs inside the sandbox tree rather than the requested
-    # output_dir.  Search for the actual output and symlink key artifacts
-    # back so the evaluator finds them.
-    actual_output = str(output_dir)
-    if not (output_dir / "result.json").exists():
-        # 1. Check direct subdirectories of output_dir
-        for sub in output_dir.iterdir():
-            if sub.is_dir() and (sub / "result.json").exists():
-                actual_output = str(sub)
-                break
-        else:
-            # 2. Search inside the sandbox cwd for our trial directory name
-            if project_root is not None:
-                _recover_sandbox_output(Path(project_root), output_dir)
+    try:
+        verify_trial_skill_authority(omicsclaw_dir, authority)
+    except Exception as exc:
+        message = (
+            "Trial authority changed or could not be post-verified after execution: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        stderr = "\n".join(part for part in (stderr.strip(), message) if part)
+        return TrialExecution(
+            success=False,
+            output_dir=str(output_dir),
+            duration_seconds=round(duration, 2),
+            exit_code=-1,
+            stdout=stdout,
+            stderr=stderr,
+            authority_error=message,
+        )
+
+    if proc.returncode == 0:
+        try:
+            verify_child_trial_receipt(
+                output_dir,
+                canonical_skill_id=authority.canonical_skill_id,
+                skill_version=authority.skill_version,
+                manifest_hash=authority.manifest_hash,
+                source_hash=authority.source_hash,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            message = (
+                "Trial child did not produce an owned result.json and matching "
+                f"run claim in the exact output directory: {exc}"
+            )
+            stderr = "\n".join(part for part in (stderr.strip(), message) if part)
+            return TrialExecution(
+                success=False,
+                output_dir=str(output_dir),
+                duration_seconds=round(duration, 2),
+                exit_code=-1,
+                stdout=stdout,
+                stderr=stderr,
+                authority=authority,
+            )
 
     return TrialExecution(
         success=proc.returncode == 0,
-        output_dir=actual_output,
+        output_dir=str(output_dir),
         duration_seconds=round(duration, 2),
         exit_code=proc.returncode,
         stdout=stdout,
         stderr=stderr,
+        authority=authority,
     )
 
 
@@ -269,35 +351,3 @@ def _collect_terminated_output(proc: subprocess.Popen[str]) -> tuple[str, str]:
         return proc.communicate(timeout=1)
     except Exception:
         return "", ""
-
-
-_RECOVER_ARTIFACTS = ("processed.h5ad", "result.json")
-
-
-def _recover_sandbox_output(sandbox_root: Path, output_dir: Path) -> None:
-    """Search for trial artifacts inside the sandbox and symlink them back.
-
-    In harness mode the subprocess cwd is the sandbox repo, so skills may
-    write outputs into a mirrored path inside the sandbox instead of the
-    requested ``output_dir``.  This function finds those files and creates
-    symlinks so the evaluator can locate them at the expected path.
-    """
-    trial_name = output_dir.name  # e.g. "trial_0000"
-    for candidate in sandbox_root.rglob(trial_name):
-        if not candidate.is_dir():
-            continue
-        has_artifact = any((candidate / a).exists() for a in _RECOVER_ARTIFACTS)
-        if not has_artifact:
-            continue
-        # Found the actual output — symlink each artifact back
-        for artifact in _RECOVER_ARTIFACTS:
-            src = candidate / artifact
-            dst = output_dir / artifact
-            if src.exists() and not dst.exists():
-                try:
-                    dst.symlink_to(src)
-                except OSError:
-                    import shutil
-                    shutil.copy2(src, dst)
-        logger.info("Recovered sandbox output from %s → %s", candidate, output_dir)
-        return

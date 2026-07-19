@@ -80,6 +80,45 @@ def test_facade_materialise_run_reload(tmp_path: Path):
     assert Path(captured["input_path"]).name == "input.h5ad"
 
 
+def test_facade_does_not_reload_or_list_claim_aliases(tmp_path: Path):
+    from omicsclaw.common.output_claim import OUTPUT_CLAIM_FILENAME
+
+    class _Result:
+        success = True
+        method = "scanpy"
+        stdout = "ok"
+        stderr = ""
+
+        def __init__(self, output_dir: Path) -> None:
+            self.output_dir = str(output_dir)
+
+    def fake_runner(skill, *, input_path, output_dir, extra_args, cancel_event=None):
+        out = Path(output_dir)
+        (out / "tables").mkdir(parents=True)
+        (out / "figures").mkdir()
+        claim = out / OUTPUT_CLAIM_FILENAME
+        claim.write_text("{}\n", encoding="utf-8")
+        (out / "processed.h5ad").hardlink_to(claim)
+        (out / "manifest.json").hardlink_to(claim)
+        (out / "tables" / "claim.csv").hardlink_to(claim)
+        (out / "figures" / "claim.png").hardlink_to(claim)
+        return _Result(out)
+
+    facade = build_facade(tmp_path, run_skill=fake_runner, skill_catalog=_fake_catalog)
+    result = facade.run("spatial-preprocess", _tiny_adata())
+
+    assert result.success is True
+    assert result.primary_artifact == ""
+    assert result.adata is None
+    assert result.tables == []
+    assert result.figures == []
+    [record] = [
+        json.loads(line)
+        for line in (tmp_path / "skill_calls.jsonl").read_text().splitlines()
+    ]
+    assert record["manifest_path"] == ""
+
+
 def test_facade_writes_ordered_provenance(tmp_path: Path):
     facade = build_facade(tmp_path, run_skill=_fake_run_skill_factory({}), skill_catalog=_fake_catalog)
     facade.run("spatial-preprocess", _tiny_adata(), method="scanpy")

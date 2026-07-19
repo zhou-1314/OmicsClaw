@@ -2,6 +2,13 @@
 
 **Status:** accepted (2026-05-30)
 
+**Control-state refinement (2026-07-14):**
+[ADR 0053](0053-make-control-plane-state-authoritative-for-project-conversation-and-turn.md)
+preserves the Memory/KG knowledge boundary below but narrows "agent/study
+state": Control Plane State owns Project and Conversation identity/lifecycle,
+Memory owns associated Project knowledge, and KG owns scientific reading
+knowledge.
+
 Bench treats OmicsClaw-KG as an expected, bundled dependency rather than an optional
 add-on. Its **Read** and **Ideate** stages *are* the KG (paper ingest, `kg_search`,
 `ideate`), so without KG the lifecycle framing collapses. KG is mounted into the same

@@ -50,6 +50,7 @@ metadata only (no FDR re-thresholding is performed).
 - `tables/peptides.csv`
 - `report.md`
 - `result.json`
+- Produces artifact `proteomics.peptide_table` as `tables/peptides.csv` (`csv`)
 
 ## Flow
 

@@ -23,6 +23,70 @@ from omicsclaw.autoagent.metrics_registry import (
 )
 
 
+def _trial_authority(
+    requested: str,
+    *,
+    canonical: str | None = None,
+    primary_anndata: str | None = None,
+):
+    from omicsclaw.autoagent.authority import TrialSkillAuthority
+
+    revision = "sha256:" + "b" * 64
+    return TrialSkillAuthority(
+        requested_skill_name=requested,
+        canonical_skill_id=canonical or requested,
+        skill_version="1.0.0",
+        manifest_hash=revision,
+        source_hash=revision,
+        primary_anndata_path=primary_anndata,
+        skills_root="/test/skills",
+    )
+
+
+def _write_child_receipt(
+    output_dir: Path,
+    authority,
+    payload: dict | None = None,
+) -> None:
+    from omicsclaw.common.output_claim import OUTPUT_CLAIM_FILENAME
+
+    result = dict(payload or {})
+    result.update(
+        {
+            "skill": authority.canonical_skill_id,
+            "version": authority.skill_version,
+            "completed_at": "2026-07-17T00:00:00+00:00",
+            "input_checksum": "",
+            "summary": dict(result.get("summary") or {}),
+            "data": dict(result.get("data") or {}),
+            "status": "ok",
+        }
+    )
+    (output_dir / "result.json").write_text(
+        json.dumps(result),
+        encoding="utf-8",
+    )
+    (output_dir / OUTPUT_CLAIM_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "claim_id": "e" * 32,
+                "owner": f"skill:{authority.canonical_skill_id}",
+                "claimed_at": "2026-07-17T00:00:00+00:00",
+                "audit_identity": {
+                    "skill_id": authority.canonical_skill_id,
+                    "skill_version": authority.skill_version,
+                    "skill_hash": authority.manifest_hash,
+                    "source_hash": authority.source_hash,
+                    "environment_id": "env:" + "e" * 20,
+                },
+                "runtime_source": "base",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 class TestMetricDef:
     def test_valid_directions(self):
         m = MetricDef(source="result.json:summary.x", direction="maximize")
@@ -243,6 +307,37 @@ class TestTrialRecord:
         assert r2.evaluation_success is False
         assert r2.missing_metrics == ["clisi", "batch_asw"]
 
+    def test_roundtrip_preserves_frozen_trial_authority(self):
+        authority = _trial_authority(
+            "sc-integrate",
+            canonical="sc-batch-integration",
+            primary_anndata="integrated.h5ad",
+        )
+        record = TrialRecord(
+            trial_id=1,
+            params={"theta": 2.0},
+            composite_score=0.8,
+            status="keep",
+            authority=authority,
+        )
+
+        restored = TrialRecord.from_dict(record.to_dict())
+
+        assert restored.authority == authority
+        assert restored.to_dict()["authority"] == authority.to_dict()
+
+    def test_legacy_record_without_authority_still_loads(self):
+        restored = TrialRecord.from_dict(
+            {
+                "trial_id": 2,
+                "params": {},
+                "composite_score": 0.5,
+                "status": "baseline",
+            }
+        )
+
+        assert restored.authority is None
+
 
 class TestExperimentLedger:
     def test_append_and_read(self, tmp_path):
@@ -258,13 +353,22 @@ class TestExperimentLedger:
     def test_persistence(self, tmp_path):
         path = tmp_path / "ledger.jsonl"
         ledger1 = ExperimentLedger(path)
-        ledger1.append(TrialRecord(trial_id=0, params={}, composite_score=0.5, status="baseline"))
+        authority = _trial_authority("sc-batch-integration")
+        ledger1.append(TrialRecord(
+            trial_id=0,
+            params={},
+            composite_score=0.5,
+            status="baseline",
+            authority=authority,
+        ))
         ledger1.append(TrialRecord(trial_id=1, params={}, composite_score=0.8, status="keep"))
 
         # Re-open from disk
         ledger2 = ExperimentLedger(path)
         assert len(ledger2) == 2
         assert ledger2.best_trial().trial_id == 1
+        assert ledger2.all_trials()[0].authority == authority
+        assert ledger2.all_trials()[1].authority is None
 
     def test_best_trial_ignores_discard(self, tmp_path):
         path = tmp_path / "ledger.jsonl"
@@ -272,6 +376,40 @@ class TestExperimentLedger:
         ledger.append(TrialRecord(trial_id=0, params={}, composite_score=0.5, status="baseline"))
         ledger.append(TrialRecord(trial_id=1, params={}, composite_score=0.9, status="discard"))
         assert ledger.best_trial().trial_id == 0
+
+    def test_invalid_authority_line_is_skipped_without_losing_legacy_rows(
+        self,
+        tmp_path,
+    ):
+        path = tmp_path / "ledger.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "trial_id": 0,
+                            "params": {},
+                            "composite_score": 0.5,
+                            "status": "baseline",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "trial_id": 1,
+                            "params": {},
+                            "composite_score": 0.8,
+                            "status": "keep",
+                            "authority": {"manifest_hash": "forged"},
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        ledger = ExperimentLedger(path)
+
+        assert [record.trial_id for record in ledger.all_trials()] == [0]
 
 
 class TestDirective:
@@ -345,6 +483,110 @@ class TestEvaluator:
         (out / "result.json").write_text(json.dumps(result_json))
         return out
 
+    def test_evaluator_without_authority_does_not_query_global_registry(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(
+            "omicsclaw.skill.registry.ensure_registry_loaded",
+            lambda: pytest.fail("Evaluator must not query the global Registry"),
+        )
+        out = self._make_output_dir(tmp_path, {"summary": {"score": 0.4}})
+        metrics = {
+            "score": MetricDef(
+                source="result.json:summary.score",
+                direction="maximize",
+            )
+        }
+
+        result = Evaluator(metrics, skill_name="unknown-skill").evaluate(out)
+
+        assert result.success is False
+        assert result.composite_score == float("-inf")
+        assert result.raw_metrics == {}
+
+    def test_named_evaluator_rejects_plain_result_with_forged_authority(
+        self,
+        tmp_path,
+    ):
+        out = self._make_output_dir(
+            tmp_path,
+            {
+                "skill": "test-skill",
+                "version": "1.0.0",
+                "completed_at": "2026-07-17T00:00:00+00:00",
+                "input_checksum": "",
+                "summary": {"score": 0.9},
+                "data": {},
+                "status": "ok",
+            },
+        )
+        metrics = {
+            "score": MetricDef(
+                source="result.json:summary.score",
+                direction="maximize",
+            )
+        }
+
+        result = Evaluator(metrics, skill_name="test-skill").evaluate(
+            out,
+            authority=_trial_authority("test-skill"),
+        )
+
+        assert result.success is False
+        assert result.composite_score == float("-inf")
+        assert result.raw_metrics == {}
+
+    def test_named_evaluator_scores_the_verified_result_snapshot(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        from omicsclaw.autoagent import evaluator as evaluator_module
+
+        out = tmp_path / "verified-snapshot"
+        out.mkdir()
+        authority = _trial_authority("test-skill")
+        _write_child_receipt(
+            out,
+            authority,
+            {"summary": {"score": 0.4}},
+        )
+        real_verify = evaluator_module.verify_child_trial_receipt
+
+        def verify_then_replace(*args, **kwargs):
+            receipt = real_verify(*args, **kwargs)
+            replacement = dict(receipt.result_payload)
+            replacement["summary"] = {"score": 9.0}
+            (out / "result.json").write_text(
+                json.dumps(replacement),
+                encoding="utf-8",
+            )
+            return receipt
+
+        monkeypatch.setattr(
+            evaluator_module,
+            "verify_child_trial_receipt",
+            verify_then_replace,
+        )
+        metrics = {
+            "score": MetricDef(
+                source="result.json:summary.score",
+                direction="maximize",
+                range_min=0.0,
+                range_max=10.0,
+            )
+        }
+
+        result = Evaluator(metrics, skill_name="test-skill").evaluate(
+            out,
+            authority=authority,
+        )
+
+        assert result.success is True
+        assert result.raw_metrics == {"score": 0.4}
+
     def test_evaluate_from_result_json(self, tmp_path):
         out = self._make_output_dir(tmp_path, {
             "summary": {"mean_ilisi": 2.0, "mean_clisi": 1.1}
@@ -374,6 +616,76 @@ class TestEvaluator:
         assert not result.success
         assert result.composite_score == float("-inf")
 
+    def test_claim_alias_result_json_cannot_supply_metrics(self, tmp_path):
+        from omicsclaw.common.output_claim import OUTPUT_CLAIM_FILENAME
+
+        out = tmp_path / "claim_result"
+        out.mkdir()
+        claim = out / OUTPUT_CLAIM_FILENAME
+        claim.write_text(
+            json.dumps({"summary": {"mean_ilisi": 5.0}}),
+            encoding="utf-8",
+        )
+        (out / "result.json").hardlink_to(claim)
+
+        result = Evaluator(INTEGRATION_METRICS).evaluate(out)
+
+        assert result.success is False
+        assert result.composite_score == float("-inf")
+
+    def test_claim_alias_csv_cannot_supply_metrics(self, tmp_path):
+        from omicsclaw.common.output_claim import OUTPUT_CLAIM_FILENAME
+
+        out = tmp_path / "claim_csv"
+        (out / "tables").mkdir(parents=True)
+        claim = out / OUTPUT_CLAIM_FILENAME
+        claim.write_text("metric,value\nmean_ilisi,9.0\n", encoding="utf-8")
+        (out / "tables" / "metrics.csv").hardlink_to(claim)
+        metrics = {
+            "ilisi_csv": MetricDef(
+                source="tables/metrics.csv",
+                column="value",
+                direction="maximize",
+                weight=1.0,
+            ),
+        }
+
+        result = Evaluator(metrics).evaluate(out)
+
+        assert result.success is False
+        assert result.composite_score == float("-inf")
+
+    def test_escaping_adata_symlink_cannot_supply_metrics(self, tmp_path, monkeypatch):
+        out = tmp_path / "escaping_adata"
+        out.mkdir()
+        external = tmp_path / "external.h5ad"
+        external.write_text("external", encoding="utf-8")
+        (out / "processed.h5ad").symlink_to(external)
+        authority = _trial_authority(
+            "sc-preprocessing",
+            primary_anndata="processed.h5ad",
+        )
+        _write_child_receipt(out, authority, {"summary": {"score": 1.0}})
+        monkeypatch.setattr(
+            "omicsclaw.autoagent.metrics_compute.compute_metrics_from_adata",
+            lambda *args, **kwargs: {"score": 9.0},
+        )
+        metrics = {
+            "score": MetricDef(
+                source="result.json:summary.score",
+                direction="maximize",
+                weight=1.0,
+            )
+        }
+
+        result = Evaluator(metrics, skill_name="sc-preprocessing").evaluate(
+            out,
+            authority=authority,
+        )
+
+        assert result.success is True
+        assert result.raw_metrics == {"score": 1.0}
+
     def test_direction_normalization(self, tmp_path):
         """Minimize metrics should be flipped so higher composite is better."""
         # Two trials: one with high clisi (bad), one with low clisi (good)
@@ -400,6 +712,7 @@ class TestEvaluator:
     def test_csv_reading(self, tmp_path):
         out = tmp_path / "trial_csv"
         out.mkdir()
+        (out / "result.json").write_text("{}", encoding="utf-8")
         tables = out / "tables"
         tables.mkdir()
         (tables / "metrics.csv").write_text("metric,value\nmean_ilisi,2.5\n")
@@ -421,6 +734,11 @@ class TestEvaluator:
         out = tmp_path / "trial_adata"
         out.mkdir()
         (out / "processed.h5ad").write_text("stub", encoding="utf-8")
+        authority = _trial_authority(
+            "sc-batch-integration",
+            primary_anndata="processed.h5ad",
+        )
+        _write_child_receipt(out, authority)
 
         monkeypatch.setattr(
             "omicsclaw.autoagent.metrics_compute.compute_metrics_from_adata",
@@ -438,7 +756,10 @@ class TestEvaluator:
             skill_name="sc-batch-integration",
             method="harmony",
         )
-        result = ev.evaluate(out)
+        result = ev.evaluate(
+            out,
+            authority=authority,
+        )
 
         assert result.success
         assert set(result.raw_metrics) == {
@@ -456,8 +777,151 @@ class TestEvaluator:
         # composite = (0.25*0.4 + 1.0*0.3 + 0.4*0.15 + 0.9*0.15) / 1.0 = 0.595
         assert abs(result.composite_score - 0.595) < 0.001
 
+    @pytest.mark.parametrize(
+        "skill_name",
+        ["spatial-raw-processing", "spatial-raw-fastq-processing"],
+    )
+    def test_adata_path_uses_registry_declared_nonstandard_primary(
+        self,
+        tmp_path,
+        monkeypatch,
+        skill_name,
+    ):
+        out = tmp_path / "trial_raw_spatial"
+        out.mkdir()
+        declared = out / "raw_counts.h5ad"
+        declared.write_text("stub", encoding="utf-8")
+        observed_paths = []
+
+        def _compute(path, **_kwargs):
+            observed_paths.append(Path(path))
+            return {"score": 0.9}
+
+        monkeypatch.setattr(
+            "omicsclaw.autoagent.metrics_compute.compute_metrics_from_adata",
+            _compute,
+        )
+        metrics = {
+            "score": MetricDef(
+                source="result.json:summary.score",
+                direction="maximize",
+                weight=1.0,
+                range_min=0.0,
+                range_max=1.0,
+            )
+        }
+
+        canonical = "spatial-raw-processing"
+        authority = _trial_authority(
+            skill_name,
+            canonical=canonical,
+            primary_anndata="raw_counts.h5ad",
+        )
+        _write_child_receipt(out, authority, {"summary": {"score": 0.1}})
+        result = Evaluator(
+            metrics,
+            skill_name=skill_name,
+        ).evaluate(
+            out,
+            authority=authority,
+        )
+
+        assert observed_paths == [declared]
+        assert result.raw_metrics == {"score": 0.9}
+
+    def test_ambiguous_registry_anndata_contract_without_authority_fails_closed(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        out = tmp_path / "trial_ambiguous_contract"
+        out.mkdir()
+        (out / "result.json").write_text(
+            json.dumps({"summary": {"score": 0.1}}),
+            encoding="utf-8",
+        )
+        (out / "processed.h5ad").write_text("undeclared", encoding="utf-8")
+        monkeypatch.setattr(
+            "omicsclaw.skill.registry.ensure_registry_loaded",
+            lambda: pytest.fail("Evaluator must not query the global Registry"),
+        )
+        observed_paths = []
+
+        def _compute(path, **_kwargs):
+            observed_paths.append(Path(path))
+            return {"score": 0.9}
+
+        monkeypatch.setattr(
+            "omicsclaw.autoagent.metrics_compute.compute_metrics_from_adata",
+            _compute,
+        )
+        metrics = {
+            "score": MetricDef(
+                source="result.json:summary.score",
+                direction="maximize",
+                weight=1.0,
+                range_min=0.0,
+                range_max=1.0,
+            )
+        }
+
+        result = Evaluator(
+            metrics,
+            skill_name="ambiguous-skill",
+        ).evaluate(out)
+
+        assert observed_paths == []
+        assert result.success is False
+        assert result.composite_score == float("-inf")
+        assert result.raw_metrics == {}
+
+    def test_missing_authority_does_not_fall_back_when_global_registry_errors(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        out = tmp_path / "trial_registry_error"
+        out.mkdir()
+        (out / "result.json").write_text(
+            json.dumps({"summary": {"score": 0.2}}),
+            encoding="utf-8",
+        )
+        (out / "processed.h5ad").write_text("undeclared", encoding="utf-8")
+
+        def _registry_error():
+            raise RuntimeError("Registry unavailable")
+
+        monkeypatch.setattr(
+            "omicsclaw.skill.registry.ensure_registry_loaded",
+            _registry_error,
+        )
+        monkeypatch.setattr(
+            "omicsclaw.autoagent.metrics_compute.compute_metrics_from_adata",
+            lambda *_args, **_kwargs: pytest.fail(
+                "undeclared processed.h5ad must not be evaluated"
+            ),
+        )
+        metrics = {
+            "score": MetricDef(
+                source="result.json:summary.score",
+                direction="maximize",
+                weight=1.0,
+                range_min=0.0,
+                range_max=1.0,
+            )
+        }
+
+        result = Evaluator(
+            metrics,
+            skill_name="registry-error-skill",
+        ).evaluate(out)
+
+        assert result.success is False
+        assert result.composite_score == float("-inf")
+        assert result.raw_metrics == {}
+
     def test_sc_preprocessing_result_json_aliases_are_normalized(self, tmp_path):
-        out = self._make_output_dir(tmp_path, {
+        payload = {
             "skill": "sc-preprocessing",
             "summary": {
                 "method": "scanpy",
@@ -471,13 +935,22 @@ class TestEvaluator:
             "data": {
                 "effective_params": {"method": "scanpy"},
             },
-        })
+        }
+        out = self._make_output_dir(tmp_path, payload)
+        authority = _trial_authority(
+            "sc-preprocessing",
+            primary_anndata="processed.h5ad",
+        )
+        _write_child_receipt(out, authority, payload)
         ev = Evaluator(
             SC_PREPROCESSING_METRICS,
             skill_name="sc-preprocessing",
             method="scanpy",
         )
-        result = ev.evaluate(out)
+        result = ev.evaluate(
+            out,
+            authority=authority,
+        )
 
         assert result.success
         assert result.raw_metrics["cell_retention"] == 0.85

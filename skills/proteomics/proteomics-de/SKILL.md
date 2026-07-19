@@ -50,6 +50,7 @@ label-based TMT linear-mixed models, use MSstats / limma in R.
 **Inputs**
 
 - File types: `.csv`
+- Accepts artifact `proteomics.abundance_matrix` (`csv`)
 
 **Outputs**
 
@@ -57,6 +58,7 @@ label-based TMT linear-mixed models, use MSstats / limma in R.
 - `tables/significant.csv`
 - `report.md`
 - `result.json`
+- Produces artifact `proteomics.differential_results` as `tables/differential_abundance.csv` (`csv`)
 
 ## Flow
 

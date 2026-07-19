@@ -33,12 +33,20 @@ interface:
   inputs:
     file_types:
     - vcf
+    artifacts:
+    - kind: genomics.filtered_variants
+      formats:
+      - vcf
   outputs:
     files:
     - tables/phase_blocks.csv
     - tables/phased_variants.csv
     - report.md
     - result.json
+    artifacts:
+    - kind: genomics.phased_variants
+      path: tables/phased_variants.csv
+      format: csv
 runtime:
   entry: genomics_phasing.py
 deps:

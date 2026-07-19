@@ -162,6 +162,11 @@ def _v2_skill_dir(tmp_path):
         },
         "runtime": {"language": "python", "entry": "spatial_demo.py"},
         "deps": {"python": ["scanpy", "numpy"]},
+        "security": {
+            "data_egress": "none",
+            "network": "none",
+            "writes": "output_dir_only",
+        },
     }
     sd = tmp_path / "spatial-demo"
     sd.mkdir(parents=True)
@@ -223,10 +228,20 @@ async def test_get_skill_endpoint_v2(tmp_path, monkeypatch):
 
     payload = await s.get_skill("spatial", "spatial-demo")
     assert payload["version"] == "2.1.0"
+    assert payload["validation_level"] == "smoke-only"
+    assert payload["superseded_by"] is None
+    assert payload["readiness"] == "healthy"
     assert payload["author"] == "OmicsClaw"
     assert payload["license"] == "MIT"
     assert "demo" in payload["tags"]
     assert "scanpy" in payload["requires"]
+    assert payload["security"] == {
+        "reviewed": True,
+        "enforcement": "declarative",
+        "data_egress": "none",
+        "network": "none",
+        "writes": "output_dir_only",
+    }
     assert any(c["label"] == "skill.yaml" and c["status"] == "pass" for c in payload["diagnostics"])
 
 

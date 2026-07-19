@@ -20,14 +20,20 @@ from dataclasses import asdict, dataclass, field
 import json
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Mapping
 
 from .preconditions import (
     InputProfile,
     evaluate_skill_preconditions,
     probe_input_profile,
 )
-from .registry import OmicsRegistry, ensure_registry_loaded
+from .registry import (
+    OmicsRegistry,
+    ensure_registry_loaded,
+    governed_skill_replacement,
+    is_skill_automatically_routable,
+)
+from .skill_dag import supports_unified_method_binding
 
 try:
     from omicsclaw.loaders import detect_domain_from_path
@@ -148,6 +154,13 @@ _RESOLVE_CLOSE_SECOND_GAP = 1.5
 # near 1.0 without saturating on every clear-intent query.
 _RESOLVE_CONFIDENCE_DIVISOR = 14.0
 
+# Runtime compatibility is a reranking signal, not an execution grant.  A
+# blocked candidate remains visible (and an explicit alias can still win), but
+# otherwise-equivalent candidates that already accept the observed input rank
+# first.  The execution gate separately enforces ``execution_ready``.
+_SCORE_PRECONDITION_NEEDS_PREPARATION_PENALTY = 1.5
+_SCORE_PRECONDITION_BLOCKED_PENALTY = 3.0
+
 # Same idea but tighter, used only on the ``no_skill`` fallback path so that
 # a marginal top score doesn't claim higher confidence than the cap below.
 _RESOLVE_NO_SKILL_CONFIDENCE_DIVISOR = 10.0
@@ -155,11 +168,6 @@ _RESOLVE_NO_SKILL_CONFIDENCE_DIVISOR = 10.0
 # Confidence ceiling for the ``no_skill`` fallback path; we never claim
 # strong confidence when we're below the no-skill threshold.
 _RESOLVE_NO_SKILL_CONFIDENCE_CAP = 0.35
-
-# Only governed, released lifecycle stages participate in automatic routing.
-# ``draft`` remains available to explicit developer workflows through the
-# registry, while ``deprecated`` remains inspectable in catalogs/audit views.
-_ROUTABLE_LIFECYCLE_STATUSES = frozenset({"mvp", "stable"})
 
 # A structured Skip-when redirect is stronger than an alias mention: the user
 # may explicitly name a skill and then state the exact condition under which
@@ -415,6 +423,8 @@ class CapabilityCandidate:
     skill: str
     domain: str
     score: float
+    semantic_score: float = 0.0
+    precondition_penalty: float = 0.0
     reasons: list[str] = field(default_factory=list)
     precondition_status: str = "eligible"
     precondition_evaluated: bool = False
@@ -425,7 +435,8 @@ class CapabilityCandidate:
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
-        data["score"] = round(float(self.score), 3)
+        for field_name in ("score", "semantic_score", "precondition_penalty"):
+            data[field_name] = round(float(data[field_name]), 3)
         return data
 
 
@@ -553,6 +564,31 @@ def _mentions_phrase(text: str, phrase: str) -> bool:
     return phrase in text
 
 
+def _selects_method_explicitly(text: str, method: str) -> bool:
+    """Return true for a non-negated explicit method mention.
+
+    Method bindings authorize conditional output guarantees, so a phrase such
+    as ``without scanpy`` must not be treated like ``with scanpy`` merely
+    because both contain the same parameter-hint token.
+    """
+
+    method = (method or "").strip().lower()
+    if not method:
+        return False
+    words = [re.escape(word) for word in re.split(r"[ _-]+", method) if word]
+    pattern = r"(?<![a-z0-9])" + r"[ _-]+".join(words) + r"(?![a-z0-9])"
+    for match in re.finditer(pattern, text.lower()):
+        prefix = text[max(0, match.start() - 40) : match.start()].lower()
+        if re.search(
+            r"(?:without|avoid|not|do not use|don't use)"
+            r"(?:\s+(?:the|method|backend)){0,2}\s*$",
+            prefix,
+        ) or re.search(r"(?:不用|不要|避免)(?:使用|采用)?\s*$", prefix):
+            continue
+        return True
+    return False
+
+
 def _looks_like_analysis_request(query: str) -> bool:
     lower = query.lower()
     if any(h in lower for h in _NON_ANALYSIS_HINTS):
@@ -580,7 +616,9 @@ def _normalise_condition_text(text: str) -> str:
     )
 
 
-def _matching_skip_rule(info: dict[str, Any], query_lower: str) -> dict[str, str] | None:
+def _matching_skip_rule(
+    info: Mapping[str, Any], query_lower: str
+) -> dict[str, str] | None:
     """Return the first structured negative-routing rule supported by the query.
 
     This deliberately uses condition-token coverage rather than arbitrary
@@ -591,7 +629,7 @@ def _matching_skip_rule(info: dict[str, Any], query_lower: str) -> dict[str, str
     normalised_query = _normalise_condition_text(query_lower)
     query_tokens = _tokenize(normalised_query)
     for raw_rule in info.get("skip_when", []):
-        if not isinstance(raw_rule, dict):
+        if not isinstance(raw_rule, Mapping):
             continue
         condition = str(raw_rule.get("condition") or "").strip()
         if not condition:
@@ -725,9 +763,47 @@ def _score_skills_and_detect_domain(
             )
 
     candidates: list[CapabilityCandidate] = []
+    replacement_redirects: dict[str, CapabilityCandidate] = {}
     for alias, skill_info in registry.iter_primary_skills():
-        lifecycle_status = str(skill_info.get("lifecycle_status") or "mvp")
-        if lifecycle_status not in _ROUTABLE_LIFECYCLE_STATUSES:
+        if not is_skill_automatically_routable(skill_info):
+            mentioned = _mentions_phrase(query_lower, alias.lower()) or any(
+                _mentions_phrase(query_lower, str(legacy).lower())
+                for legacy in skill_info.get("legacy_aliases", [])
+                if str(legacy).strip()
+            )
+            replacement = (
+                governed_skill_replacement(registry, skill_info)
+                if mentioned
+                else None
+            )
+            if replacement is not None:
+                target_alias, target_info = replacement
+                validation_level = str(
+                    target_info.get("validation_level") or "smoke-only"
+                )
+                redirect_score = _SCORE_ALIAS_MENTION + _VALIDATION_SCORE.get(
+                    validation_level,
+                    0.0,
+                )
+                redirected = CapabilityCandidate(
+                    skill=target_alias,
+                    domain=str(target_info.get("domain", "")),
+                    score=redirect_score,
+                    semantic_score=redirect_score,
+                    reasons=[
+                        f"deprecated skill '{alias}' is superseded by "
+                        f"'{target_alias}'"
+                    ],
+                )
+                previous = replacement_redirects.get(target_alias)
+                if previous is None or redirected.score > previous.score:
+                    replacement_redirects[target_alias] = redirected
+                target_domain = redirected.domain
+                if target_domain:
+                    domain_scores[target_domain] = max(
+                        domain_scores.get(target_domain, 0.0),
+                        _DOMAIN_SCORE_ALIAS_MENTION,
+                    )
             continue
         # Iterate each skill's OWN trigger_keywords once and reuse the
         # match list on both the per-skill (limit=3) and per-domain
@@ -785,6 +861,18 @@ def _score_skills_and_detect_domain(
         domain_scores[skill_domain] = max(
             domain_scores.get(skill_domain, 0.0), delta
         )
+
+    for target_alias, redirected in replacement_redirects.items():
+        existing = next(
+            (candidate for candidate in candidates if candidate.skill == target_alias),
+            None,
+        )
+        if existing is None:
+            candidates.append(redirected)
+            continue
+        existing.score = max(existing.score, redirected.score)
+        existing.semantic_score = max(existing.semantic_score, redirected.semantic_score)
+        existing.reasons = redirected.reasons + existing.reasons
 
     # Domain-name and domain-key textual matches contribute independently of
     # any skill — keep these post-loop so the loop body has one concern.
@@ -921,8 +1009,42 @@ def _candidate_score(
         skill=alias,
         domain=str(info.get("domain", "")),
         score=score,
+        semantic_score=score,
         reasons=reasons,
     )
+
+
+def _apply_precondition_penalty(
+    candidate: CapabilityCandidate,
+    input_profile: InputProfile | dict[str, Any],
+    *,
+    registry: OmicsRegistry,
+) -> None:
+    """Attach observed-input evidence and apply a soft routing penalty."""
+    assessment = evaluate_skill_preconditions(
+        candidate.skill,
+        input_profile,
+        registry=registry,
+    )
+    candidate.precondition_status = assessment.status.value
+    candidate.precondition_evaluated = assessment.evaluated
+    candidate.execution_ready = assessment.execution_ready
+    candidate.missing_preconditions = list(assessment.missing)
+    candidate.precondition_reasons = list(assessment.reasons)
+    candidate.recommended_preparation = list(assessment.recommended_preparation)
+
+    if assessment.status.value == "blocked":
+        penalty = _SCORE_PRECONDITION_BLOCKED_PENALTY
+    elif assessment.status.value == "needs_preparation":
+        penalty = _SCORE_PRECONDITION_NEEDS_PREPARATION_PENALTY
+    else:
+        penalty = 0.0
+    candidate.precondition_penalty = penalty
+    candidate.score = max(0.0, candidate.semantic_score - penalty)
+    if penalty:
+        candidate.reasons.append(
+            f"precondition {assessment.status.value} soft penalty -{penalty}"
+        )
 
 
 def _resolve_composite_candidate_chain(
@@ -931,6 +1053,7 @@ def _resolve_composite_candidate_chain(
     file_path: str,
     domain_hint: str,
     input_profile: InputProfile | dict[str, Any] | None,
+    method_bindings: Mapping[str, str] | None,
 ) -> dict[str, Any]:
     """Resolve atomic clauses, then order only graph-connected selections.
 
@@ -943,7 +1066,9 @@ def _resolve_composite_candidate_chain(
     if len(clauses) < 2:
         return {}
 
+    registry = ensure_registry_loaded()
     selected: list[str] = []
+    inferred_bindings: dict[str, str] = {}
     for clause in clauses:
         decision = resolve_capability(
             clause,
@@ -955,11 +1080,31 @@ def _resolve_composite_candidate_chain(
         if not decision.chosen_skill or decision.chosen_skill in selected:
             continue
         selected.append(decision.chosen_skill)
+        info = registry.skills.get(decision.chosen_skill, {})
+        mentioned_methods = [
+            str(method)
+            for method in (info.get("param_hints") or {})
+            if _selects_method_explicitly(clause, str(method))
+        ]
+        if len(mentioned_methods) == 1:
+            if not supports_unified_method_binding(info):
+                return {}
+            inferred_bindings[decision.chosen_skill] = mentioned_methods[0]
     if len(selected) < 2:
         return {}
 
-    registry = ensure_registry_loaded()
-    return registry.build_candidate_skill_chain(selected)
+    bindings = dict(inferred_bindings)
+    bindings.update(method_bindings or {})
+    try:
+        return registry.build_candidate_skill_chain(
+            selected,
+            method_bindings=bindings,
+        )
+    except ValueError:
+        # Composite routing is advisory.  A profile that cannot be represented
+        # by the governed shared ``--method`` contract must not silently become
+        # an executable default plan.
+        return {}
 
 
 def _explicit_multi_skill_request(registry: OmicsRegistry, query: str) -> bool:
@@ -987,6 +1132,7 @@ def resolve_capability(
     file_path: str = "",
     domain_hint: str = "",
     input_profile: InputProfile | dict[str, Any] | None = None,
+    method_bindings: Mapping[str, str] | None = None,
     _build_composite_chain: bool = True,
 ) -> CapabilityDecision:
     """Resolve a user request into exact/partial/no-skill coverage."""
@@ -1095,8 +1241,7 @@ def resolve_capability(
 
         target_key = rule.get("use", "")
         target_info = registry.skills.get(target_key, {}) if target_key else {}
-        target_status = str(target_info.get("lifecycle_status") or "mvp")
-        if not target_info or target_status not in _ROUTABLE_LIFECYCLE_STATUSES:
+        if not target_info or not is_skill_automatically_routable(target_info):
             continue
 
         target_alias = str(target_info.get("alias") or target_key)
@@ -1112,6 +1257,10 @@ def resolve_capability(
                 existing.score if existing is not None else 0.0,
                 candidate.score + _SCORE_SKIP_WHEN_REDIRECT_BONUS,
             ),
+            semantic_score=max(
+                existing.semantic_score if existing is not None else 0.0,
+                candidate.semantic_score + _SCORE_SKIP_WHEN_REDIRECT_BONUS,
+            ),
             reasons=[redirect_reason] + (list(existing.reasons) if existing else []),
         )
         previous = redirected.get(target_alias)
@@ -1121,6 +1270,17 @@ def resolve_capability(
     redirected_aliases = set(redirected)
     candidates = [c for c in retained if c.skill not in redirected_aliases]
     candidates.extend(redirected.values())
+
+    # Evaluate every retained candidate against the same observed input before
+    # ranking.  Keeping incompatible candidates in the result makes the
+    # decision auditable; the penalty only breaks otherwise plausible ties.
+    if input_profile is not None:
+        for candidate in candidates:
+            _apply_precondition_penalty(
+                candidate,
+                input_profile,
+                registry=registry,
+            )
 
     # Sort by score DESC with a stable alphabetical tie-break on the skill
     # alias. Without the tie-break, the post-PR audit caught WGCNA flapping
@@ -1246,21 +1406,9 @@ def resolve_capability(
             f"second candidate '{second.skill}' is close ({round(second.score, 2)}), but no extra custom step was requested"
         )
 
-    assessment = None
-    if input_profile is not None:
-        assessment = evaluate_skill_preconditions(
-            top.skill,
-            input_profile,
-            registry=registry,
-        )
-        top.precondition_status = assessment.status.value
-        top.precondition_evaluated = assessment.evaluated
-        top.execution_ready = assessment.execution_ready
-        top.missing_preconditions = list(assessment.missing)
-        top.precondition_reasons = list(assessment.reasons)
-        top.recommended_preparation = list(assessment.recommended_preparation)
+    if top.precondition_evaluated:
         reasoning.append(
-            f"selected skill preconditions evaluated as '{assessment.status.value}'"
+            f"selected skill preconditions evaluated as '{top.precondition_status}'"
         )
 
     candidate_chain = (
@@ -1269,6 +1417,7 @@ def resolve_capability(
             file_path=file_path,
             domain_hint=domain_hint,
             input_profile=input_profile,
+            method_bindings=method_bindings,
         )
         if composite_requested and _build_composite_chain
         else {}
@@ -1304,14 +1453,12 @@ def resolve_capability(
         skill_candidates=candidates[:5],
         missing_capabilities=missing_capabilities,
         reasoning=reasoning,
-        precondition_status=(assessment.status.value if assessment else "eligible"),
-        precondition_evaluated=(assessment.evaluated if assessment else False),
-        execution_ready=(assessment.execution_ready if assessment else True),
-        missing_preconditions=(list(assessment.missing) if assessment else []),
-        precondition_reasons=(list(assessment.reasons) if assessment else []),
-        recommended_preparation=(
-            list(assessment.recommended_preparation) if assessment else []
-        ),
+        precondition_status=top.precondition_status,
+        precondition_evaluated=top.precondition_evaluated,
+        execution_ready=top.execution_ready,
+        missing_preconditions=list(top.missing_preconditions),
+        precondition_reasons=list(top.precondition_reasons),
+        recommended_preparation=list(top.recommended_preparation),
         candidate_chain=candidate_chain,
     )
 

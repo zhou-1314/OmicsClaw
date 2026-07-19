@@ -12,9 +12,7 @@ import asyncio
 import base64
 import json
 import logging
-import os
 import re
-import sys
 import tempfile
 import threading
 import time
@@ -32,6 +30,7 @@ logger = logging.getLogger("omicsclaw.channel.feishu")
 @dataclass
 class FeishuConfig(BaseChannelConfig):
     """Feishu-specific configuration."""
+
     app_id: str = ""
     app_secret: str = ""
     thinking_threshold_ms: int = 2500
@@ -54,9 +53,26 @@ class FeishuChannel(Channel):
 
     # Request verbs to detect intent in group chats
     _REQUEST_VERBS = [
-        "帮", "麻烦", "请", "能否", "可以", "解释", "看看", "排查",
-        "分析", "总结", "写", "改", "修", "查", "对比", "翻译",
-        "preprocess", "analyze", "run", "demo",
+        "帮",
+        "麻烦",
+        "请",
+        "能否",
+        "可以",
+        "解释",
+        "看看",
+        "排查",
+        "分析",
+        "总结",
+        "写",
+        "改",
+        "修",
+        "查",
+        "对比",
+        "翻译",
+        "preprocess",
+        "analyze",
+        "run",
+        "demo",
     ]
 
     def __init__(self, config: FeishuConfig):
@@ -75,6 +91,7 @@ class FeishuChannel(Channel):
     # ── Lifecycle ────────────────────────────────────────────────────
 
     async def start(self) -> None:
+        self.require_authoritative_ingress()
         if not self.feishu_config.app_id:
             raise RuntimeError("FEISHU_APP_ID is required")
         if not self.feishu_config.app_secret:
@@ -84,23 +101,24 @@ class FeishuChannel(Channel):
             import lark_oapi as lark
         except ImportError:
             raise RuntimeError(
-                "lark-oapi not installed. "
-                "Install with: pip install lark-oapi"
+                "lark-oapi not installed. " "Install with: pip install lark-oapi"
             )
 
-        self._lark_client = lark.Client.builder() \
-            .app_id(self.feishu_config.app_id) \
-            .app_secret(self.feishu_config.app_secret) \
+        self._lark_client = (
+            lark.Client.builder()
+            .app_id(self.feishu_config.app_id)
+            .app_secret(self.feishu_config.app_secret)
             .log_level(
-                lark.LogLevel.DEBUG if self.feishu_config.debug
-                else lark.LogLevel.INFO
-            ) \
+                lark.LogLevel.DEBUG if self.feishu_config.debug else lark.LogLevel.INFO
+            )
             .build()
+        )
 
         # Background async event loop for LLM calls
         self._loop = asyncio.new_event_loop()
         self._loop_thread = threading.Thread(
-            target=self._loop.run_forever, daemon=True,
+            target=self._loop.run_forever,
+            daemon=True,
         )
         self._loop_thread.start()
 
@@ -123,16 +141,19 @@ class FeishuChannel(Channel):
             _ws_mod.loop = ws_loop
 
             try:
-                event_handler = lark.EventDispatcherHandler.builder("", "") \
-                    .register_p2_im_message_receive_v1(self._handle_event) \
+                event_handler = (
+                    lark.EventDispatcherHandler.builder("", "")
+                    .register_p2_im_message_receive_v1(self._handle_event)
                     .build()
+                )
 
                 self._ws_client = lark.ws.Client(
                     self.feishu_config.app_id,
                     self.feishu_config.app_secret,
                     event_handler=event_handler,
                     log_level=(
-                        lark.LogLevel.DEBUG if self.feishu_config.debug
+                        lark.LogLevel.DEBUG
+                        if self.feishu_config.debug
                         else lark.LogLevel.INFO
                     ),
                 )
@@ -143,7 +164,8 @@ class FeishuChannel(Channel):
                 ws_loop.close()
 
         self._ws_thread = threading.Thread(
-            target=_ws_thread_target, daemon=True,
+            target=_ws_thread_target,
+            daemon=True,
         )
         self._ws_thread.start()
 
@@ -164,6 +186,7 @@ class FeishuChannel(Channel):
         Calls start() internally which sets up the WebSocket listener in a
         daemon thread, then blocks until interrupted.
         """
+        self.require_authoritative_ingress()
         from omicsclaw.runtime.agent import state as core
 
         logger.info(
@@ -255,6 +278,7 @@ class FeishuChannel(Channel):
                 return count
         try:
             from lark_oapi.api.im.v1 import GetChatRequest
+
             request = GetChatRequest.builder().chat_id(chat_id).build()
             response = self._lark_client.im.v1.chat.get(request)
             if response.success() and response.data:
@@ -338,11 +362,14 @@ class FeishuChannel(Channel):
         """Download a Feishu image and return as base64 data URL."""
         try:
             from lark_oapi.api.im.v1 import GetMessageResourceRequest
-            request = GetMessageResourceRequest.builder() \
-                .message_id(message_id) \
-                .file_key(image_key) \
-                .type("image") \
+
+            request = (
+                GetMessageResourceRequest.builder()
+                .message_id(message_id)
+                .file_key(image_key)
+                .type("image")
                 .build()
+            )
             response = self._lark_client.im.v1.message_resource.get(request)
             if not response.success():
                 logger.warning(f"Image download failed: {response.code} {response.msg}")
@@ -365,15 +392,20 @@ class FeishuChannel(Channel):
             logger.error(f"Image download error: {e}")
             return None
 
-    def _download_file_to_tmp(self, message_id: str, file_key: str, filename: str = "file.bin") -> str | None:
+    def _download_file_to_tmp(
+        self, message_id: str, file_key: str, filename: str = "file.bin"
+    ) -> str | None:
         """Download a Feishu file to a temp path and return the path."""
         try:
             from lark_oapi.api.im.v1 import GetMessageResourceRequest
-            request = GetMessageResourceRequest.builder() \
-                .message_id(message_id) \
-                .file_key(file_key) \
-                .type("file") \
+
+            request = (
+                GetMessageResourceRequest.builder()
+                .message_id(message_id)
+                .file_key(file_key)
+                .type("file")
                 .build()
+            )
             response = self._lark_client.im.v1.message_resource.get(request)
             if not response.success():
                 logger.warning(f"File download failed: {response.code} {response.msg}")
@@ -415,7 +447,7 @@ class FeishuChannel(Channel):
         elif message_type == "post":
             post_text, image_keys = self._extract_post_text(parsed)
             text = post_text
-            for k in image_keys[:self.feishu_config.max_attachments]:
+            for k in image_keys[: self.feishu_config.max_attachments]:
                 data_url = self._download_image_as_b64(message_id, k)
                 if data_url:
                     attachments.append({"type": "image", "content": data_url})
@@ -469,7 +501,9 @@ class FeishuChannel(Channel):
             return True
         if any(v in text for v in self._REQUEST_VERBS):
             return True
-        if re.match(r"^(omicsclaw|spatialclaw|bot|助手|智能体)[\s,:，：]", text, re.IGNORECASE):
+        if re.match(
+            r"^(omicsclaw|spatialclaw|bot|助手|智能体)[\s,:，：]", text, re.IGNORECASE
+        ):
             return True
         return False
 
@@ -483,15 +517,18 @@ class FeishuChannel(Channel):
             CreateMessageRequestBody,
         )
 
-        request = CreateMessageRequest.builder() \
-            .receive_id_type("chat_id") \
+        request = (
+            CreateMessageRequest.builder()
+            .receive_id_type("chat_id")
             .request_body(
                 CreateMessageRequestBody.builder()
                 .receive_id(chat_id)
                 .msg_type("text")
                 .content(json.dumps({"text": text}))
                 .build()
-            ).build()
+            )
+            .build()
+        )
 
         for attempt in range(1, retries + 1):
             try:
@@ -500,8 +537,10 @@ class FeishuChannel(Channel):
                     logger.error(f"Send text failed: {response.code} {response.msg}")
                     return None
                 return response.data.message_id if response.data else None
-            except (_requests.exceptions.SSLError,
-                    _requests.exceptions.ConnectionError) as e:
+            except (
+                _requests.exceptions.SSLError,
+                _requests.exceptions.ConnectionError,
+            ) as e:
                 if attempt < retries:
                     wait = attempt * 2
                     logger.warning(
@@ -519,14 +558,18 @@ class FeishuChannel(Channel):
             UpdateMessageRequest,
             UpdateMessageRequestBody,
         )
-        request = UpdateMessageRequest.builder() \
-            .message_id(message_id) \
+
+        request = (
+            UpdateMessageRequest.builder()
+            .message_id(message_id)
             .request_body(
                 UpdateMessageRequestBody.builder()
                 .msg_type("text")
                 .content(json.dumps({"text": text}))
                 .build()
-            ).build()
+            )
+            .build()
+        )
         try:
             response = self._lark_client.im.v1.message.update(request)
             if not response.success():
@@ -539,9 +582,8 @@ class FeishuChannel(Channel):
 
     def _delete_message(self, message_id: str) -> None:
         from lark_oapi.api.im.v1 import DeleteMessageRequest
-        request = DeleteMessageRequest.builder() \
-            .message_id(message_id) \
-            .build()
+
+        request = DeleteMessageRequest.builder().message_id(message_id).build()
         try:
             self._lark_client.im.v1.message.delete(request)
         except Exception:
@@ -561,7 +603,9 @@ class FeishuChannel(Channel):
                     first_mid = mid
         return first_mid
 
-    def _send_image_file(self, chat_id: str, filepath: str, caption: str | None = None) -> None:
+    def _send_image_file(
+        self, chat_id: str, filepath: str, caption: str | None = None
+    ) -> None:
         """Upload a local image file and send it to the chat."""
         import requests as _requests
         from lark_oapi.api.im.v1 import (
@@ -570,31 +614,40 @@ class FeishuChannel(Channel):
             CreateMessageRequest,
             CreateMessageRequestBody,
         )
+
         try:
             with open(filepath, "rb") as f:
-                upload_req = CreateImageRequest.builder() \
+                upload_req = (
+                    CreateImageRequest.builder()
                     .request_body(
                         CreateImageRequestBody.builder()
                         .image_type("message")
                         .image(f)
                         .build()
-                    ).build()
+                    )
+                    .build()
+                )
                 upload_resp = self._lark_client.im.v1.image.create(upload_req)
 
             if not upload_resp.success():
-                logger.error(f"Image upload failed: {upload_resp.code} {upload_resp.msg}")
+                logger.error(
+                    f"Image upload failed: {upload_resp.code} {upload_resp.msg}"
+                )
                 return
 
             image_key = upload_resp.data.image_key
-            request = CreateMessageRequest.builder() \
-                .receive_id_type("chat_id") \
+            request = (
+                CreateMessageRequest.builder()
+                .receive_id_type("chat_id")
                 .request_body(
                     CreateMessageRequestBody.builder()
                     .receive_id(chat_id)
                     .msg_type("image")
                     .content(json.dumps({"image_key": image_key}))
                     .build()
-                ).build()
+                )
+                .build()
+            )
             self._lark_client.im.v1.message.create(request)
 
             if caption and caption.strip():
@@ -604,7 +657,9 @@ class FeishuChannel(Channel):
         except Exception as e:
             logger.error(f"Send image failed: {e}")
 
-    def _send_document_file(self, chat_id: str, filepath: str, caption: str | None = None) -> None:
+    def _send_document_file(
+        self, chat_id: str, filepath: str, caption: str | None = None
+    ) -> None:
         """Upload and send a non-image file."""
         import requests as _requests
         from lark_oapi.api.im.v1 import (
@@ -613,33 +668,42 @@ class FeishuChannel(Channel):
             CreateMessageRequest,
             CreateMessageRequestBody,
         )
+
         try:
             fname = Path(filepath).name
             with open(filepath, "rb") as f:
-                upload_req = CreateFileRequest.builder() \
+                upload_req = (
+                    CreateFileRequest.builder()
                     .request_body(
                         CreateFileRequestBody.builder()
                         .file_type("stream")
                         .file_name(fname)
                         .file(f)
                         .build()
-                    ).build()
+                    )
+                    .build()
+                )
                 upload_resp = self._lark_client.im.v1.file.create(upload_req)
 
             if not upload_resp.success():
-                logger.error(f"File upload failed: {upload_resp.code} {upload_resp.msg}")
+                logger.error(
+                    f"File upload failed: {upload_resp.code} {upload_resp.msg}"
+                )
                 return
 
             file_key = upload_resp.data.file_key
-            request = CreateMessageRequest.builder() \
-                .receive_id_type("chat_id") \
+            request = (
+                CreateMessageRequest.builder()
+                .receive_id_type("chat_id")
                 .request_body(
                     CreateMessageRequestBody.builder()
                     .receive_id(chat_id)
                     .msg_type("file")
                     .content(json.dumps({"file_key": file_key}))
                     .build()
-                ).build()
+                )
+                .build()
+            )
             self._lark_client.im.v1.message.create(request)
 
             if caption and caption.strip():
@@ -652,6 +716,7 @@ class FeishuChannel(Channel):
     def _send_media_items(self, chat_id: str, items: list[dict]) -> None:
         """Send media items (figures, reports) to the Feishu chat."""
         import requests as _requests
+
         sent = 0
         for item in items:
             fpath = item.get("path", "")
@@ -661,7 +726,8 @@ class FeishuChannel(Channel):
             try:
                 if item["type"] == "photo":
                     self._send_image_file(
-                        chat_id, fpath,
+                        chat_id,
+                        fpath,
                         caption=Path(fpath).stem.replace("_", " ").title(),
                     )
                     sent += 1
@@ -671,8 +737,10 @@ class FeishuChannel(Channel):
                     else:
                         self._send_document_file(chat_id, fpath)
                     sent += 1
-            except (_requests.exceptions.SSLError,
-                    _requests.exceptions.ConnectionError) as e:
+            except (
+                _requests.exceptions.SSLError,
+                _requests.exceptions.ConnectionError,
+            ) as e:
                 logger.warning(f"Network error sending media {fpath}, retrying: {e}")
                 time.sleep(2)
                 try:
@@ -716,29 +784,33 @@ class FeishuChannel(Channel):
                     data_url = att["content"]
                     match = re.match(r"data:([^;]+);base64,(.*)", data_url, re.DOTALL)
                     if match:
-                        content_blocks.append({
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": match.group(1),
-                                "data": match.group(2),
-                            },
-                        })
+                        content_blocks.append(
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": match.group(1),
+                                    "data": match.group(2),
+                                },
+                            }
+                        )
             if text:
                 content_blocks.append({"type": "text", "text": text})
             elif not content_blocks:
                 content_blocks.append({"type": "text", "text": "[attachment]"})
             else:
-                content_blocks.append({
-                    "type": "text",
-                    "text": (
-                        "[Image sent. If it shows a tissue section (H&E stain, fluorescence, "
-                        "spatial barcode array, Visium capture area, or other histology): "
-                        "identify the tissue type, staining method, and likely spatial "
-                        "transcriptomics platform. Then suggest which OmicsClaw skills "
-                        "would be appropriate. If not a tissue section, describe what you see.]"
-                    ),
-                })
+                content_blocks.append(
+                    {
+                        "type": "text",
+                        "text": (
+                            "[Image sent. If it shows a tissue section (H&E stain, fluorescence, "
+                            "spatial barcode array, Visium capture area, or other histology): "
+                            "identify the tissue type, staining method, and likely spatial "
+                            "transcriptomics platform. Then suggest which OmicsClaw skills "
+                            "would be appropriate. If not a tissue section, describe what you see.]"
+                        ),
+                    }
+                )
             user_content = content_blocks
         else:
             session_key = f"feishu:{pure_chat_id}"
@@ -747,7 +819,10 @@ class FeishuChannel(Channel):
                 fpath = local_path_match.group(1)
                 if Path(fpath).exists():
                     fname = Path(fpath).name
-                    core.received_files[session_key] = {"path": fpath, "filename": fname}
+                    core.received_files[session_key] = {
+                        "path": fpath,
+                        "filename": fname,
+                    }
             user_content = text
 
         async def _progress(msg: str):
@@ -803,6 +878,7 @@ class FeishuChannel(Channel):
     def _handle_event(self, data) -> None:
         """Synchronous handler called by lark-oapi event dispatcher."""
         from omicsclaw.runtime.agent import state as core
+
         try:
             event = data.event
             message = event.message
@@ -821,10 +897,12 @@ class FeishuChannel(Channel):
                 return
 
             # Ignore messages sent before bot startup
-            if hasattr(message, 'create_time') and message.create_time:
+            if hasattr(message, "create_time") and message.create_time:
                 msg_time = int(message.create_time) / 1000.0
                 if msg_time < self._bot_start_time:
-                    logger.info(f"Ignoring cached message from before bot startup: {message_id}")
+                    logger.info(
+                        f"Ignoring cached message from before bot startup: {message_id}"
+                    )
                     return
 
             # Rate limiting
@@ -890,10 +968,14 @@ class FeishuChannel(Channel):
                 timer.start()
 
             try:
-                pure_chat_id = sender_id if chat_type == 'p2p' else chat_id
+                pure_chat_id = sender_id if chat_type == "p2p" else chat_id
                 reply = self._run_async(
                     self._process_message_async(
-                        chat_id, pure_chat_id, text, attachments, sender_id,
+                        chat_id,
+                        pure_chat_id,
+                        text,
+                        attachments,
+                        sender_id,
                     ),
                     timeout=None,
                 )
@@ -906,7 +988,7 @@ class FeishuChannel(Channel):
                     timer.cancel()
 
             # Retrieve media items
-            pure_chat_id = sender_id if chat_type == 'p2p' else chat_id
+            pure_chat_id = sender_id if chat_type == "p2p" else chat_id
             if sender_id:
                 session_id = f"feishu:{sender_id}:{pure_chat_id}"
             else:
@@ -938,7 +1020,9 @@ class FeishuChannel(Channel):
                 with placeholder_lock:
                     if placeholder_id:
                         try:
-                            self._update_text(placeholder_id, "✓ 分析完成，正在发送结果…")
+                            self._update_text(
+                                placeholder_id, "✓ 分析完成，正在发送结果…"
+                            )
                         except Exception:
                             pass
                         placeholder_id = ""

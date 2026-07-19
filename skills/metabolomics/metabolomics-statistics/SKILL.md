@@ -53,6 +53,7 @@ use `metabolomics-de`. For raw spectra use
 **Inputs**
 
 - File types: `.csv`
+- Accepts artifact `metabolomics.feature_matrix` (`csv`)
 
 **Outputs**
 

@@ -2,9 +2,10 @@
 # AUTO-GENERATED header from skill.yaml — do not edit by hand.
 # Edit skill.yaml, then run: python scripts/generate_skill_md.py <skill_dir>
 name: sc-velocity
-description: Load when computing RNA velocity vectors and latent time on a scRNA AnnData with spliced
-  / unspliced layers via scVelo (stochastic / dynamical / steady-state). Skip when input lacks spliced+unspliced
-  layers (use sc-velocity-prep); trajectory pseudotime ordering (use sc-pseudotime).
+description: Load when computing RNA velocity vectors on a scRNA AnnData with spliced / unspliced layers
+  via scVelo (stochastic / dynamical / steady-state); dynamical mode additionally exports latent time.
+  Skip when input lacks spliced+unspliced layers (use sc-velocity-prep); trajectory pseudotime ordering
+  (use sc-pseudotime).
 version: 0.4.0
 author: OmicsClaw
 license: MIT
@@ -81,7 +82,10 @@ FASTQs / cellranger output, run `sc-velocity-prep` first.
 - `processed.h5ad`
 - `report.md`
 - `result.json`
-- Processed AnnData (`saves_h5ad`) — adds `obs`: `latent_time`; `layers`: `velocity`
+- Processed AnnData (`saves_h5ad`) — adds `layers`: `velocity`
+- When `--method` is `scvelo_dynamical`:
+  - AnnData additionally guarantees `obs`: `latent_time`
+  - Produces artifact `singlecell.latent_time` as `processed.h5ad` (`h5ad`)
 
 ## Flow
 

@@ -47,6 +47,9 @@ samples).
 
 - Input kinds: `file`, `directory`
 - Modalities: scrna
+- File types: `.fastq`, `.fq`, `.h5ad`
+- FASTQ structure: valid first record; `paired` layout
+- Directory layouts (any): `paired-fastq`, `tenx-matrix`, `cellranger-output`, `starsolo-output`, `pseudoalign-output`
 
 **Outputs**
 

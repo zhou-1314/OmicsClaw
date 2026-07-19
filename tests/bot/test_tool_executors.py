@@ -84,6 +84,62 @@ import pytest_asyncio
 import sqlalchemy as sa
 
 
+class _FailedToolProcess:
+    returncode = 1
+
+    async def communicate(self):
+        return b"", b"expected test failure"
+
+
+@pytest.mark.asyncio
+async def test_direct_tool_subprocesses_scrub_backend_control_credentials(
+    tmp_path,
+    monkeypatch,
+):
+    import omicsclaw.runtime.agent.state  # noqa: F401 - initializes re-export cycle
+    import omicsclaw.runtime.tools.builders.agent_executors as executors
+
+    observed_envs: list[dict[str, str]] = []
+
+    async def capture_subprocess(*_cmd, **kwargs):
+        observed_envs.append(dict(kwargs["env"]))
+        return _FailedToolProcess()
+
+    monkeypatch.setenv("OMICSCLAW_REMOTE_AUTH_TOKEN", "must-not-reach-tools")
+    monkeypatch.setenv(
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN",
+        "must-not-reach-tools",
+    )
+    monkeypatch.setenv("OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD", "3")
+    monkeypatch.setattr(
+        executors.asyncio,
+        "create_subprocess_exec",
+        capture_subprocess,
+    )
+
+    replot_output = tmp_path / "replot-output"
+    (replot_output / "figure_data").mkdir(parents=True)
+    await executors.execute_replot_skill(
+        {"skill": "sc-qc", "output_path": str(replot_output)}
+    )
+    await executors.execute_parse_literature(
+        {"input_value": "10.1000/test-doi", "input_type": "doi"}
+    )
+    await executors.execute_generate_audio(
+        {
+            "text": "credential scrub regression",
+            "filename": "scrub.mp3",
+            "destination_folder": str(tmp_path),
+        }
+    )
+
+    assert len(observed_envs) == 3
+    for child_env in observed_envs:
+        assert "OMICSCLAW_REMOTE_AUTH_TOKEN" not in child_env
+        assert "OMICSCLAW_SKILL_EVOLUTION_TOKEN" not in child_env
+        assert "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD" not in child_env
+
+
 @pytest_asyncio.fixture
 async def memory_store(tmp_path, monkeypatch):
     """A real CompatMemoryStore wired to ``omicsclaw.runtime.agent.state.memory_store``.
@@ -504,8 +560,8 @@ async def test_autonomous_analysis_resolves_relative_input_paths(tmp_path, monke
         execute_autonomous_analysis_execute,
     )
 
-    # A trusted workspace with a data file under data/, registered the way
-    # server.py's _apply_runtime_workspace() registers a live Desktop workspace.
+    # A trusted workspace with a data file under data/, registered explicitly
+    # as this isolated executor test's path-validation input.
     ws = tmp_path / "omicsclaw-workspace"
     (ws / "data").mkdir(parents=True)
     data_file = ws / "data" / "demo.h5ad"
@@ -826,6 +882,93 @@ def test_autonomous_analysis_execute_toolspec_declares_thread_id_in_context_para
     specs = build_bot_tool_specs(BotToolContext(skill_names=()))
     spec = next(s for s in specs if s.name == "autonomous_analysis_execute")
     assert "thread_id" in spec.context_params
+
+
+def test_candidate_plan_execute_toolspec_binds_confirmation_gate_context():
+    from omicsclaw.runtime.tools.builders.agent import (
+        BotToolContext,
+        build_bot_tool_specs,
+    )
+
+    specs = build_bot_tool_specs(
+        BotToolContext(skill_names=("auto",), skill_desc_text="skills")
+    )
+    spec = next(item for item in specs if item.name == "candidate_plan_execute")
+
+    assert "candidate_chain_gate" in spec.context_params
+    assert set(spec.parameters["required"]) == {"plan_digest", "mode"}
+
+
+@pytest.mark.asyncio
+async def test_candidate_plan_execute_uses_gate_plan_not_model_supplied_plan(
+    tmp_path,
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    from omicsclaw.runtime.agent import state as _runtime_state  # noqa: F401
+    from omicsclaw.runtime.tools.builders import agent_executors
+    from omicsclaw.runtime.agent.state import pending_candidate_chain_confirmations
+    from omicsclaw.skill import plan_executor
+    from omicsclaw.skill.skill_dag import candidate_plan_digest
+
+    plan = {
+        "requested_skills": ["a"],
+        "skills": ["a"],
+        "phases": [["a"]],
+        "edges": [],
+        "validated_order": True,
+        "unresolved_pairs": [],
+    }
+    digest = candidate_plan_digest(plan)
+    observed = {}
+
+    async def fake_execute(received_plan, **kwargs):
+        observed["plan"] = received_plan
+        observed["kwargs"] = kwargs
+        return SimpleNamespace(
+            success=True,
+            to_dict=lambda: {"success": True, "plan_digest": digest},
+        )
+
+    monkeypatch.setattr(plan_executor, "execute_candidate_plan", fake_execute)
+    monkeypatch.setattr(agent_executors, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(agent_executors, "audit", lambda *_args, **_kwargs: None)
+    pending_candidate_chain_confirmations["candidate-plan-test"] = {
+        "candidate_chain": plan,
+        "plan_digest": digest,
+        "skills": ["a"],
+        "confirmed": True,
+    }
+
+    output = await agent_executors.execute_candidate_plan_execute(
+        {"plan_digest": digest, "mode": "demo"},
+        chat_id="candidate-plan-test",
+        candidate_chain_gate={
+            "candidate_chain": plan,
+            "plan_digest": digest,
+            "skills": ["a"],
+            "confirmed": True,
+        },
+    )
+
+    assert observed["plan"] is plan
+    assert observed["kwargs"]["confirmed_digest"] == digest
+    assert observed["kwargs"]["demo"] is True
+    assert '"success": true' in output.lower()
+    assert "candidate-plan-test" not in pending_candidate_chain_confirmations
+
+    replay = await agent_executors.execute_candidate_plan_execute(
+        {"plan_digest": digest, "mode": "demo"},
+        chat_id="candidate-plan-test",
+        candidate_chain_gate={
+            "candidate_chain": plan,
+            "plan_digest": digest,
+            "skills": ["a"],
+            "confirmed": True,
+        },
+    )
+    assert "already consumed" in replay
 
 
 @pytest.mark.asyncio

@@ -64,6 +64,39 @@ def test_collect_skill_catalog_check_warns_on_registry_catalog_drift(tmp_path):
     assert any("extra_in_catalog: literature" in detail for detail in check.details)
 
 
+def test_collect_r_check_scrubs_backend_control_credentials(monkeypatch):
+    control_keys = {
+        "OMICSCLAW_REMOTE_AUTH_TOKEN",
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN",
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD",
+    }
+    for key in control_keys:
+        monkeypatch.setenv(key, "must-not-reach-rscript")
+    monkeypatch.setenv("OMICSCLAW_DIAGNOSTIC_TEST_KEEP", "ordinary-value")
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda _name: "/usr/bin/Rscript")
+    observed_environments: list[dict[str, str]] = []
+
+    def _run(cmd, **kwargs):
+        observed_environments.append(kwargs["env"])
+        if cmd[1] == "--version":
+            return SimpleNamespace(returncode=0, stdout="R version 4.4.0", stderr="")
+        return SimpleNamespace(
+            returncode=0,
+            stdout="Seurat=1;SingleCellExperiment=1;edgeR=1;limma=1",
+            stderr="",
+        )
+
+    monkeypatch.setattr(diagnostics.subprocess, "run", _run)
+
+    check = diagnostics._collect_r_check()
+
+    assert check.status == DIAGNOSTIC_STATUS_OK
+    assert len(observed_environments) == 2
+    for child_env in observed_environments:
+        assert child_env["OMICSCLAW_DIAGNOSTIC_TEST_KEEP"] == "ordinary-value"
+        assert not control_keys.intersection(child_env)
+
+
 def test_collect_skill_catalog_check_ok_when_registry_and_catalog_match(tmp_path):
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir()

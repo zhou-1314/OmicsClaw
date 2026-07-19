@@ -9,10 +9,9 @@ DingTalk, Discord, etc.) must implement. Provides common functionality:
 - Message deduplication
 - Typing indicator management
 
-Channels iterate ``runtime.agent.dispatcher.dispatch`` from their
-platform handlers (per ADR 0006); cross-cutting concerns (rate limit,
-dedup, audit) live in ``omicsclaw.runtime.agent.state`` /
-``omicsclaw.services.rate_limit`` rather than a separate pipeline.
+The cut-over Telegram text Adapter enters ``ControlRuntime`` and delivers its
+terminal reply through the persistent Outbox. Legacy Adapters remain visible
+for migration but are startup-gated until they implement the same boundary.
 """
 
 from __future__ import annotations
@@ -23,8 +22,6 @@ import re
 import time
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from .capabilities import ChannelCapabilities
@@ -252,11 +249,14 @@ class Channel(ABC):
     - _strip_markup()     — remove markup for fallback
     - _is_admin()         — check admin status
 
-    Subclasses should set ``name`` to a unique identifier (e.g. "telegram").
+    Subclasses should set ``name`` to a unique identifier (e.g. "telegram")
+    and may set ``authoritative_ingress`` only after a verified ControlRuntime
+    plus persistent Delivery cutover.
     """
 
     name: str = "base"
     capabilities: ChannelCapabilities = ChannelCapabilities()
+    authoritative_ingress: bool = False
 
     def __init__(self, config: BaseChannelConfig | None = None):
         self.config = config or BaseChannelConfig()
@@ -285,6 +285,7 @@ class Channel(ABC):
 
     async def run(self) -> None:
         """Start the channel and run until stopped."""
+        self.require_authoritative_ingress()
         await self.start()
         self._running = True
         try:
@@ -292,6 +293,15 @@ class Channel(ABC):
                 await asyncio.sleep(0.5)
         finally:
             await self.stop()
+
+    def require_authoritative_ingress(self) -> None:
+        """Block legacy direct-dispatch Adapters from production startup."""
+
+        if not self.authoritative_ingress:
+            raise RuntimeError(
+                f"Channel '{self.name}' is disabled until its ControlRuntime "
+                "and persistent Delivery Adapter cutover is implemented"
+            )
 
     # ── Sending ──────────────────────────────────────────────────────
 

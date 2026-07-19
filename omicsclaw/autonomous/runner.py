@@ -8,6 +8,7 @@ from typing import Any
 
 from omicsclaw.common import run_paths
 from omicsclaw.common.manifest import StepRecord
+from omicsclaw.common.output_claim import atomic_write_owned_output_text
 from omicsclaw.runtime.policy.verification import (
     ARTIFACT_KIND_DIR,
     COMPLETION_STATUS_FAILED,
@@ -37,10 +38,11 @@ def autonomous_requirements() -> list[ArtifactRequirement]:
     """Artifact contract for mini-agent run workspaces — derived from ``run_layout``.
 
     The run-dir schema's deliverable entries (``run_layout.contract_entries``)
-    mapped onto the verification contract. Only ``result_summary.md`` is required;
-    everything else is optional, and the sentinel / provenance / rerun paths are
-    excluded by the schema's roles. Because this list and ``create_workspace``'s
-    eager set come from the *same* declaration, they can never drift apart (the
+    mapped onto the verification contract. ``result_summary.md`` and the
+    Desktop/acquisition authority marker ``result.json`` are required; the
+    remaining deliverables are optional, and sentinel / provenance / rerun
+    paths are excluded by role. Because this list and ``create_workspace``'s
+    eager set come from the *same* declaration, they cannot drift apart (the
     clutter bug, where required dirs the engine never wrote shipped empty).
     """
     from . import run_layout
@@ -66,6 +68,10 @@ def write_run_records(
 ) -> tuple[Path, Path]:
     """Write manifest and completion report for an autonomous run."""
     summary_path = _write_result_summary(workspace, request=request, result=result)
+    # Publish the Desktop marker before any complete acquisition authority.
+    # It is part of the required workspace contract, so a failed/aliased marker
+    # leaves no manifest or completion report that promotion could trust.
+    _write_result_json(workspace, request=request, result=result)
     requirements = autonomous_requirements()
     metadata: dict[str, Any] = {
         "source": AUTONOMOUS_CODE_RUNNER_SOURCE,
@@ -130,7 +136,9 @@ def write_run_records(
         metadata=metadata,
         append_step=False,
     )
-    if (workspace.root.parent / run_paths.PROJECT_META_FILENAME).exists():
+    project_meta = run_paths.read_project_meta(workspace.root.parent)
+    project_id = project_meta.get("project_id")
+    if isinstance(project_id, str) and project_id.strip():
         run_paths.finalize_run(
             workspace.root,
             skill="autonomous-code",
@@ -151,10 +159,6 @@ def write_run_records(
                 else None
             ),
         )
-    # Write result.json LAST: the desktop /outputs reader treats it as the
-    # completion marker (its mtime drives the freshness gate), so it must land
-    # after the manifest / completion report / index finalization (codex review).
-    _write_result_json(workspace, request=request, result=result)
     return manifest_path, completion_report_path
 
 
@@ -192,9 +196,12 @@ def _write_result_json(
     }
     if result.error:
         payload["error"] = str(result.error)
-    result_path = workspace.root / "result.json"
-    result_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    return result_path
+    return atomic_write_owned_output_text(
+        workspace.paths.result,
+        output_root=workspace.root,
+        text=json.dumps(payload, indent=2),
+        label="autonomous result marker",
+    )
 
 
 def _write_result_summary(
@@ -257,5 +264,9 @@ def _write_result_summary(
             "- OmicsClaw is a research and educational tool for multi-omics analysis. It is not a medical device and does not provide clinical diagnoses. Consult a domain expert before making decisions based on these results.",
         ]
     )
-    summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return summary_path
+    return atomic_write_owned_output_text(
+        summary_path,
+        output_root=workspace.root,
+        text="\n".join(lines) + "\n",
+        label="autonomous result summary",
+    )

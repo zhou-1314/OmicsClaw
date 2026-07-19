@@ -28,6 +28,8 @@ import logging
 import re
 from pathlib import Path
 
+from omicsclaw.common.output_claim import is_scientific_output_file
+
 from ..chain import run_omics_skill_step
 from ..lookup import lookup_skill_info
 
@@ -497,7 +499,10 @@ async def _auto_prepare_sc_batch_integration(
             message = guidance + f"\n\n---\n{failure}" if guidance else failure
             return {"final_message": message}
         standardized_path = standardize_result["out_dir"] / "processed.h5ad"
-        if not standardized_path.exists():
+        if not is_scientific_output_file(
+            standardized_path,
+            output_root=standardize_result["out_dir"],
+        ):
             return {
                 "final_message": (
                     "Automatic preparation stopped because `sc-standardize-input` did not produce "
@@ -524,7 +529,10 @@ async def _auto_prepare_sc_batch_integration(
             message = prefix + "\n\n---\n" + failure
             return {"final_message": guidance + "\n\n---\n" + message if guidance else message}
         processed_path = preprocess_result["out_dir"] / "processed.h5ad"
-        if not processed_path.exists():
+        if not is_scientific_output_file(
+            processed_path,
+            output_root=preprocess_result["out_dir"],
+        ):
             return {
                 "final_message": (
                     "Automatic preparation stopped because `sc-preprocessing` did not produce "

@@ -1,11 +1,12 @@
 import json
+from types import SimpleNamespace
 
 from omicsclaw.surfaces.cli._skill_management_support import (
+    InstalledSkillEntry,
+    InstalledSkillListView,
     SkillCommandStatus,
     SkillEnablementPlan,
     SkillInstallPlan,
-    InstalledSkillEntry,
-    InstalledSkillListView,
     SkillRemovalPlan,
     build_extension_install_usage_text,
     build_installed_extension_list_view,
@@ -24,6 +25,7 @@ from omicsclaw.surfaces.cli._skill_management_support import (
     prepare_extension_uninstall_plan,
     prepare_skill_install_plan,
     prepare_skill_uninstall_plan,
+    refresh_skill_registry,
     set_installed_extension_enabled,
 )
 
@@ -34,6 +36,43 @@ def test_prepare_skill_install_plan_rejects_empty_source(tmp_path):
     assert isinstance(result, SkillCommandStatus)
     assert result.level == "error"
     assert result.text == build_skill_install_usage_text()
+
+
+def test_refresh_skill_registry_uses_atomic_reload(monkeypatch):
+    import omicsclaw.skill.registry as registry_module
+
+    class ReloadOnlyRegistry:
+        def __init__(self):
+            self.calls = 0
+
+        def reload(self) -> None:
+            self.calls += 1
+
+    fake_registry = ReloadOnlyRegistry()
+    monkeypatch.setattr(registry_module, "registry", fake_registry)
+
+    assert refresh_skill_registry() == ""
+    assert fake_registry.calls == 1
+
+
+def test_refresh_skill_registry_failure_does_not_clear_published_data(monkeypatch):
+    import omicsclaw.skill.registry as registry_module
+
+    class FailingReloadRegistry:
+        def __init__(self):
+            self._loaded = True
+            self.skills = {"old-skill": {"alias": "old-skill"}}
+            self.lazy_skills = {"old-skill": object()}
+
+        def reload(self) -> None:
+            raise ValueError("candidate invalid")
+
+    fake_registry = FailingReloadRegistry()
+    monkeypatch.setattr(registry_module, "registry", fake_registry)
+
+    assert refresh_skill_registry() == "candidate invalid"
+    assert set(fake_registry.skills) == {"old-skill"}
+    assert set(fake_registry.lazy_skills) == {"old-skill"}
 
 
 def test_prepare_extension_install_plan_builds_github_tree_plan(tmp_path):
@@ -48,6 +87,43 @@ def test_prepare_extension_install_plan_builds_github_tree_plan(tmp_path):
     assert result.repo_url == "https://github.com/user/repo.git"
     assert result.repo_branch == "main"
     assert result.repo_subpath == "skills/my-skill"
+
+
+def test_github_skill_acquisition_scrubs_backend_control_credentials(
+    monkeypatch,
+    tmp_path,
+):
+    import omicsclaw.surfaces.cli._skill_management_support as support
+
+    staging_root = tmp_path / "staging"
+    staging_root.mkdir()
+    observed_envs: list[dict[str, str]] = []
+
+    def fake_run(command, **kwargs):
+        observed_envs.append(dict(kwargs["env"]))
+        if command[1] == "clone":
+            (staging_root / "repo").mkdir()
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setenv("OMICSCLAW_REMOTE_AUTH_TOKEN", "must-not-leak")
+    monkeypatch.setenv("OMICSCLAW_SKILL_EVOLUTION_TOKEN", "must-not-leak")
+    monkeypatch.setenv("OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD", "3")
+    monkeypatch.setattr(support.subprocess, "run", fake_run)
+    plan = SkillInstallPlan(
+        source_kind="github",
+        skill_name="demo-skill",
+        repo_url="https://github.com/example/demo.git",
+        repo_branch="main",
+    )
+
+    candidate, _status = support._stage_github_source(plan, staging_root)
+
+    assert candidate == staging_root / "repo"
+    assert len(observed_envs) == 2
+    for child_env in observed_envs:
+        assert "OMICSCLAW_REMOTE_AUTH_TOKEN" not in child_env
+        assert "OMICSCLAW_SKILL_EVOLUTION_TOKEN" not in child_env
+        assert "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD" not in child_env
 
 
 def test_prepare_extension_install_plan_rejects_missing_local_dir(tmp_path):

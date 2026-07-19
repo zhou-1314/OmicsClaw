@@ -19,6 +19,12 @@ import os
 import sys
 from pathlib import Path
 
+from omicsclaw.common.checksums import sha256_file
+from omicsclaw.common.output_claim import (
+    collect_output_claim_identities,
+    is_scientific_output_file,
+)
+from omicsclaw.common.report import write_result_json
 from omicsclaw.runtime.consensus.driver import InsufficientBCsError, ScoreConfig
 from omicsclaw.runtime.consensus.operators.lca_r import LCAUnavailableError
 from omicsclaw.runtime.consensus.report import format_typed_report
@@ -230,6 +236,55 @@ def _maybe_confirm_plan(members, confirm: bool) -> bool:
     return raw in ("", "y", "yes")
 
 
+def _write_consensus_result(
+    *,
+    source_name: str,
+    input_path: str,
+    output_dir: Path,
+    operator: str,
+    run,
+) -> None:
+    """Emit the same standard result envelope as ordinary leaf skills."""
+    from omicsclaw.skill.registry import ensure_registry_loaded
+
+    info = ensure_registry_loaded().skills.get(source_name, {})
+    version = str(info.get("version") or "0.1.0")
+    checksum = (
+        sha256_file(input_path)
+        if input_path and Path(input_path).is_file()
+        else ""
+    )
+    summary = {
+        "method": operator,
+        "members_planned": len(run.members),
+        "members_survived": int(run.team_result.n_survived),
+        "base_clusterings": len(run.selected_bcs),
+    }
+    claim_identities = collect_output_claim_identities(output_dir)
+    data = {
+        "run_id": run.run_id,
+        "selected_bcs": list(run.selected_bcs),
+        "artifacts": [
+            Path(path).name
+            for path in run.artifacts_written
+            if is_scientific_output_file(
+                Path(path),
+                output_root=output_dir,
+                claim_identities=claim_identities,
+            )
+        ],
+        "params": {"operator": operator},
+    }
+    write_result_json(
+        output_dir,
+        source_name,
+        version,
+        summary,
+        data,
+        input_checksum=checksum,
+    )
+
+
 async def _run(args: argparse.Namespace) -> int:
     source = CONSENSUS_SOURCES[args.source]
     output_dir = Path(args.output)
@@ -312,8 +367,20 @@ async def _run(args: argparse.Namespace) -> int:
         )
         return 6
 
+    if source.template != "continuous":
+        md = format_typed_report(run, title=source.report_title)
+        (run.output_dir / "report.md").write_text(md)
+
+    _write_consensus_result(
+        source_name=args.source,
+        input_path=args.input or "",
+        output_dir=run.output_dir,
+        operator=operator,
+        run=run,
+    )
+
     if source.template == "continuous":
-        # report.md is written by run_continuous_consensus itself (AC2); just report.
+        # report.md is written by run_continuous_consensus itself (AC2).
         print(
             f"[{args.source}] OK: {run.team_result.n_survived}/{run.team_result.total} members; "
             f"{len(run.selected_bcs)} entered consensus; operator={operator}; "
@@ -322,8 +389,6 @@ async def _run(args: argparse.Namespace) -> int:
         )
         return 0
 
-    md = format_typed_report(run, title=source.report_title)
-    (run.output_dir / "report.md").write_text(md)
     print(
         f"[{args.source}] OK: {run.team_result.n_survived}/{run.team_result.total} members; "
         f"{len(run.selected_bcs)} entered consensus; operator={operator}; "

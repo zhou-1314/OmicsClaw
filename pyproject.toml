@@ -61,7 +61,7 @@ dependencies = [
     # pydantic must be in the pip core (not only environment.yml) before v2 skills
     # land in the live tree — otherwise a lightweight `pip install -e .` env silently
     # falls back to v1 / degrades v2-only skills to minimal entries.
-    "pydantic>=2,<3",
+    "pydantic>=2.1,<3",
 ]
 
 [project.optional-dependencies]

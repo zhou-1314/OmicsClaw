@@ -4,19 +4,19 @@ Provides an extensible interface for different messaging channels
 (Telegram, Feishu, DingTalk, Discord, Slack, WeChat, etc.)
 to communicate with the OmicsClaw LLM engine.
 
-Architecture:
-    Channel handler → ``runtime.agent.dispatcher.dispatch`` → reply via channel.send
+Production architecture:
+    Telegram RawInbound → ``ControlRuntime`` → canonical Transcript
+    → persistent Delivery Outbox → single-attempt Telegram Adapter
 
-Each channel iterates ``dispatch(envelope)`` from its platform handler
-(per ADR 0006). Cross-cutting concerns (rate limit, dedup, audit) live
-in ``omicsclaw.runtime.agent.state`` / ``omicsclaw.services.rate_limit``
-rather than a separate middleware pipeline.
+Only configured-Owner Telegram text is enabled. Registered legacy Adapter
+classes remain migration source but fail closed at direct and managed startup;
+they must not be restored to their old direct ``dispatch(envelope)`` path.
 
 Components:
     - Channel ABC:          base interface for all channels
     - ChannelCapabilities:  feature declaration per channel
     - ChannelManager:       multi-channel lifecycle + health
-    - run.py:               CLI entry ``python -m omicsclaw.surfaces.channels.__main__ --channels telegram,feishu``
+    - ``__main__.py``:      CLI entry with ``--channels telegram``
 """
 
 from .base import Channel, chunk_text, DedupCache, RateLimiter, TypingManager
@@ -26,15 +26,15 @@ from .config import BaseChannelConfig
 # Channel registry: maps channel name → (module_path, class_name)
 # Channels are lazy-imported to avoid pulling in platform SDKs unless needed.
 CHANNEL_REGISTRY: dict[str, tuple[str, str]] = {
-    "telegram": ("omicsclaw.surfaces.channels.telegram",  "TelegramChannel"),
-    "feishu":   ("omicsclaw.surfaces.channels.feishu",    "FeishuChannel"),
-    "dingtalk": ("omicsclaw.surfaces.channels.dingtalk",  "DingTalkChannel"),
-    "discord":  ("omicsclaw.surfaces.channels.discord",   "DiscordChannel"),
-    "slack":    ("omicsclaw.surfaces.channels.slack",     "SlackChannel"),
-    "wechat":   ("omicsclaw.surfaces.channels.wechat",    "WeChatChannel"),
-    "qq":       ("omicsclaw.surfaces.channels.qq",        "QQChannel"),
-    "email":    ("omicsclaw.surfaces.channels.email",     "EmailChannel"),
-    "imessage": ("omicsclaw.surfaces.channels.imessage",  "IMessageChannel"),
+    "telegram": ("omicsclaw.surfaces.channels.telegram", "TelegramChannel"),
+    "feishu": ("omicsclaw.surfaces.channels.feishu", "FeishuChannel"),
+    "dingtalk": ("omicsclaw.surfaces.channels.dingtalk", "DingTalkChannel"),
+    "discord": ("omicsclaw.surfaces.channels.discord", "DiscordChannel"),
+    "slack": ("omicsclaw.surfaces.channels.slack", "SlackChannel"),
+    "wechat": ("omicsclaw.surfaces.channels.wechat", "WeChatChannel"),
+    "qq": ("omicsclaw.surfaces.channels.qq", "QQChannel"),
+    "email": ("omicsclaw.surfaces.channels.email", "EmailChannel"),
+    "imessage": ("omicsclaw.surfaces.channels.imessage", "IMessageChannel"),
 }
 
 
@@ -52,6 +52,7 @@ def get_channel_class(name: str) -> type:
         )
     module_path, class_name = CHANNEL_REGISTRY[name]
     import importlib
+
     mod = importlib.import_module(module_path)
     return getattr(mod, class_name)
 

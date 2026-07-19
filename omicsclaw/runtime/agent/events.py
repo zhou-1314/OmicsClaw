@@ -90,6 +90,8 @@ class Final:
 
     text: str
     kind: Literal["normal", "preflight"] = "normal"
+    transcript_entry_id: str = ""
+    transcript_content_sha256: str = ""
 
 
 @dataclass(frozen=True)

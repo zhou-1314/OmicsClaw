@@ -57,6 +57,8 @@ scRNA preprocessing use `sc-preprocessing`.
 - Input kinds: `file`, `directory`
 - Modalities: scrna
 - File types: `.loom`, `.fastq`, `.fq`
+- FASTQ structure: valid first record; `paired` layout
+- Directory layouts (any): `paired-fastq`, `cellranger-output`, `starsolo-velocity`
 
 **Outputs**
 

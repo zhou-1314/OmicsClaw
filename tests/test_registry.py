@@ -2,10 +2,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from omicsclaw.skill.registry import registry
+from omicsclaw.skill.registry import registry  # noqa: E402
 
 
 def test_registry_import_does_not_require_package_file():
@@ -131,35 +133,19 @@ def test_registry_reload_clears_stale_entries_for_runner():
     registry.load_all()
     assert "spatial-preprocess" in registry.skills
 
-    # Simulate the SKILL.md / parameters.yaml edit lifecycle: inject a fake
-    # entry, then call reload() and verify that both the registry AND the
-    # runner observe the rebuilt dict (i.e. the fake entry is gone).
-    registry.skills["__stale_only__"] = {
-        "alias": "__stale_only__",
-        "domain": "demo",
-        "script": Path("/does/not/exist"),
-        "demo_args": [],
-        "description": "synthetic stale entry",
-        "trigger_keywords": [],
-        "allowed_extra_flags": set(),
-        "legacy_aliases": [],
-        "saves_h5ad": False,
-        "requires_preprocessed": False,
-        "param_hints": {},
-    }
+    old_publication = registry.skills
     try:
-        # Before reload, the entry is observable.
-        assert "__stale_only__" in registry.skills
-
         registry.reload()
 
-        # After reload, both the registry and the runner's live read must
-        # show the rebuilt state, NOT the stale snapshot.
+        # Reload publishes a detached, freshly built tree. Both the Registry
+        # and runner must follow the new publication, while a caller holding
+        # the old immutable view cannot inject a stale entry into either one.
+        assert registry.skills is not old_publication
+        with pytest.raises(TypeError):
+            old_publication["__stale_only__"] = {}  # type: ignore[index]
         assert "__stale_only__" not in registry.skills
         assert "__stale_only__" not in ensure_registry_loaded().skills
-        # And the runner's resolver does not fall through to the stale dict.
         assert skill_runner.resolve_skill_alias("__stale_only__") == "__stale_only__"
         assert "spatial-preprocess" in registry.skills, "real skills came back"
     finally:
-        registry.skills.pop("__stale_only__", None)
         registry.load_all()

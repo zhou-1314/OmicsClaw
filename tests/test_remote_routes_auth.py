@@ -9,16 +9,18 @@ token is the second).
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("fastapi")
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from fastapi import FastAPI  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 
-from omicsclaw.remote.app_integration import register_remote_routers
+from omicsclaw.remote.app_integration import register_remote_routers  # noqa: E402
+from omicsclaw.remote.auth import capture_remote_bearer_authority  # noqa: E402
 
 
 @pytest.fixture()
@@ -31,6 +33,7 @@ def workspace(tmp_path: Path) -> Path:
 def _make_client(workspace: Path, monkeypatch) -> TestClient:
     monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(workspace))
     app = FastAPI()
+    capture_remote_bearer_authority(app, os.environ)
     register_remote_routers(app)
     return TestClient(app)
 

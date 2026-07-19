@@ -16,13 +16,31 @@ except ImportError:
     _NBFORMAT_AVAILABLE = False
 
 from omicsclaw.common.report import extract_method_name, load_result_json
+from omicsclaw.common.output_claim import (
+    OutputClaimIdentity,
+    atomic_write_owned_output_text,
+    collect_output_claim_identities,
+    is_scientific_output_file,
+)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _MAX_EMBEDDED_TEXT = 20000
 
 
-def _read_text(path: Path) -> str:
-    if not path.exists() or not path.is_file():
+def _read_text(
+    path: Path,
+    *,
+    output_root: Path | None = None,
+    claim_identities: frozenset[OutputClaimIdentity] | None = None,
+) -> str:
+    if not path.is_file() or (
+        output_root is not None
+        and not is_scientific_output_file(
+            path,
+            output_root=output_root,
+            claim_identities=claim_identities,
+        )
+    ):
         return ""
     try:
         return path.read_text(encoding="utf-8")
@@ -44,26 +62,51 @@ def _visible_files(paths: list[Path], base_dir: Path, limit: int = 12) -> list[s
     return [str(path.relative_to(base_dir)) for path in sorted(paths)[:limit]]
 
 
-def _read_requirements_bundle(repro_dir: Path) -> str:
+def _read_requirements_bundle(
+    repro_dir: Path,
+    *,
+    output_root: Path,
+    claim_identities: frozenset[OutputClaimIdentity],
+) -> str:
     """Read the best available environment description from reproducibility output."""
     for filename in ("requirements.txt", "environment.txt"):
-        text = _read_text(repro_dir / filename)
+        text = _read_text(
+            repro_dir / filename,
+            output_root=output_root,
+            claim_identities=claim_identities,
+        )
         if text:
             return text
     return ""
 
 
-def _find_primary_h5ad(output_dir: Path) -> Path | None:
+def _find_primary_h5ad(
+    output_dir: Path,
+    *,
+    claim_identities: frozenset[OutputClaimIdentity],
+) -> Path | None:
     """Return the most likely AnnData output for notebook inspection."""
     preferred = [
         output_dir / "processed.h5ad",
         output_dir / "processed.h5ad",
     ]
     for path in preferred:
-        if path.exists():
+        if is_scientific_output_file(
+            path,
+            output_root=output_dir,
+            claim_identities=claim_identities,
+        ):
             return path
 
-    h5ad_files = sorted(output_dir.glob("*.h5ad"))
+    h5ad_files = sorted(
+        path
+        for path in output_dir.glob("*.h5ad")
+        if is_scientific_output_file(
+            path,
+            output_root=output_dir,
+            claim_identities=claim_identities,
+        )
+    )
     if h5ad_files:
         return h5ad_files[0]
     return None
@@ -84,25 +127,81 @@ def write_analysis_notebook(
         import warnings
         warnings.warn("nbformat is not installed; skipping notebook export.", stacklevel=2)
         return Path(output_dir) / "reproducibility" / f"{skill_alias}_analysis.ipynb"
-    output_dir = Path(output_dir).resolve()
+    output_dir = Path(output_dir)
+    if output_dir.is_symlink():
+        raise RuntimeError(f"refusing symbolic-link output directory: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
+    if output_dir.is_symlink() or not output_dir.is_dir():
+        raise RuntimeError(f"refusing unowned output directory: {output_dir}")
+    output_dir = output_dir.resolve(strict=True)
     repro_dir = output_dir / "reproducibility"
+    if repro_dir.is_symlink():
+        raise RuntimeError(
+            f"refusing symbolic-link reproducibility directory: {repro_dir}"
+        )
     repro_dir.mkdir(parents=True, exist_ok=True)
+    if repro_dir.is_symlink() or not repro_dir.is_dir():
+        raise RuntimeError(f"refusing unowned reproducibility directory: {repro_dir}")
     notebook_path = repro_dir / "analysis_notebook.ipynb"
+    claim_identities = collect_output_claim_identities(output_dir)
 
     payload = result_payload or load_result_json(output_dir) or {}
-    summary = payload.get("summary", {}) if isinstance(payload, dict) else {}
     params = {}
     if isinstance(payload, dict):
         data_block = payload.get("data", {})
         params = data_block.get("effective_params") or data_block.get("params", {})
     method = extract_method_name(payload, fallback=preferred_method) or "not recorded"
-    report_text = _trim_text(_read_text(output_dir / "report.md"))
-    commands_text = _trim_text(_read_text(repro_dir / "commands.sh"))
-    requirements_text = _trim_text(_read_requirements_bundle(repro_dir))
-    figure_paths = [p for p in (output_dir / "figures").glob("*") if p.is_file()] if (output_dir / "figures").exists() else []
-    table_paths = [p for p in (output_dir / "tables").glob("*") if p.is_file()] if (output_dir / "tables").exists() else []
-    primary_h5ad = _find_primary_h5ad(output_dir)
+    report_text = _trim_text(
+        _read_text(
+            output_dir / "report.md",
+            output_root=output_dir,
+            claim_identities=claim_identities,
+        )
+    )
+    commands_text = _trim_text(
+        _read_text(
+            repro_dir / "commands.sh",
+            output_root=output_dir,
+            claim_identities=claim_identities,
+        )
+    )
+    requirements_text = _trim_text(
+        _read_requirements_bundle(
+            repro_dir,
+            output_root=output_dir,
+            claim_identities=claim_identities,
+        )
+    )
+    figure_paths = (
+        [
+            path
+            for path in (output_dir / "figures").glob("*")
+            if is_scientific_output_file(
+                path,
+                output_root=output_dir,
+                claim_identities=claim_identities,
+            )
+        ]
+        if (output_dir / "figures").exists()
+        else []
+    )
+    table_paths = (
+        [
+            path
+            for path in (output_dir / "tables").glob("*")
+            if is_scientific_output_file(
+                path,
+                output_root=output_dir,
+                claim_identities=claim_identities,
+            )
+        ]
+        if (output_dir / "tables").exists()
+        else []
+    )
+    primary_h5ad = _find_primary_h5ad(
+        output_dir,
+        claim_identities=claim_identities,
+    )
     params_json = json.dumps(params, indent=2, ensure_ascii=False, default=str)
     actual_cmd_str = _shell_join(actual_command) if actual_command else ""
     script_path_str = str(Path(script_path).resolve()) if script_path else ""
@@ -302,12 +401,13 @@ adata
         )
 
     if figure_paths:
+        figure_relpaths = [str(path.relative_to(output_dir)) for path in figure_paths]
         nb.cells.append(
             new_code_cell(
-                """from IPython.display import Image, display
+                f"""from IPython.display import Image, display
 
-fig_dir = OUTPUT_DIR / "figures"
-for figure_path in sorted(fig_dir.glob("*")):
+figure_paths = [OUTPUT_DIR / path for path in {json.dumps(figure_relpaths)}]
+for figure_path in figure_paths:
     if figure_path.is_file():
         print(figure_path.name)
         display(Image(filename=str(figure_path)))
@@ -316,12 +416,12 @@ for figure_path in sorted(fig_dir.glob("*")):
         )
 
     if table_paths:
+        table_relpaths = [str(path.relative_to(output_dir)) for path in table_paths]
         nb.cells.append(
             new_code_cell(
-                """import pandas as pd
+                f"""import pandas as pd
 
-tables_dir = OUTPUT_DIR / "tables"
-table_paths = sorted(p for p in tables_dir.glob("*") if p.is_file())
+table_paths = [OUTPUT_DIR / path for path in {json.dumps(table_relpaths)}]
 [p.name for p in table_paths]
 """
             )
@@ -337,6 +437,9 @@ table_paths = sorted(p for p in tables_dir.glob("*") if p.is_file())
         )
     )
 
-    with notebook_path.open("w", encoding="utf-8") as handle:
-        nbf.write(nb, handle)
-    return notebook_path
+    return atomic_write_owned_output_text(
+        notebook_path,
+        output_root=output_dir,
+        text=nbf.writes(nb),
+        label="analysis notebook",
+    )

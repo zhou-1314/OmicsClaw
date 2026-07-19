@@ -4,6 +4,40 @@
 
 Accepted (2026-05-16).
 
+**Clarification (2026-07-14):** [ADR 0043](0043-local-first-control-plane-extensible-run-execution.md)
+keeps this ADR's in-process dispatch decision but supersedes its single-user
+premise with a local-first, single-process, multi-user-isolated control plane.
+Cross-process scaling remains outside the current architecture.
+
+**Superseding clarification (2026-07-14):**
+[ADR 0044](0044-single-owner-control-plane-and-owner-only-channel-ingress.md)
+retracts ADR 0043's multi-user scope and restores the single-owner deployment
+premise. This ADR's in-process dispatch decision remains unchanged.
+
+**Ingress refinement (2026-07-14):**
+[ADR 0046](0046-normalize-all-conversational-ingress-before-dispatch.md)
+retains `dispatch() -> AsyncIterator[Event]` but requires every Surface to pass
+through one Ingress Normalizer. Surfaces no longer own final envelope assembly
+or call the Agent Loop directly.
+
+**Interface refinement (2026-07-14):**
+[ADR 0047](0047-separate-inbound-envelope-from-dispatch-context.md) changes the
+accepted call shape to `dispatch(InboundEnvelope, DispatchContext)` while
+retaining this ADR's in-process typed Event stream.
+
+**Retry and observation refinement (2026-07-14):**
+[ADR 0052](0052-bind-retried-ingress-to-one-turn-and-resume-observation.md)
+keeps the typed Event stream in process, gives live Turn Events a per-Turn
+sequence and bounded observation buffer, and prevents stream reconnection from
+submitting or replaying a Turn.
+
+**Terminal Channel delivery refinement (2026-07-14):**
+[ADR 0060](0060-deliver-terminal-channel-replies-through-a-persistent-outbox.md)
+keeps typed Events as the live execution/observation Interface but stops
+Channel observers from directly owning terminal send. Terminal Channel output
+is frozen and persisted as one Outbound Delivery before an independent
+Delivery Pump invokes provider Adapters.
+
 ## Context
 
 After ADR 0005 folded the three Surfaces under `omicsclaw/surfaces/`,

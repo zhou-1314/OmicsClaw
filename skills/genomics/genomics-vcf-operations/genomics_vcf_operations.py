@@ -19,6 +19,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import bz2
+import gzip
+import lzma
 import logging
 import sys
 from pathlib import Path
@@ -94,7 +97,12 @@ def parse_vcf(vcf_path: Path, min_qual: float = 0.0, min_dp: int = 0) -> tuple[l
     header_lines = []
     records = []
 
-    with open(vcf_path, "r") as f:
+    opener = {
+        ".gz": gzip.open,
+        ".bz2": bz2.open,
+        ".xz": lzma.open,
+    }.get(vcf_path.suffix.lower(), open)
+    with opener(vcf_path, "rt", encoding="utf-8") as f:
         for line in f:
             if line.startswith("##"):
                 header_lines.append(line.rstrip())
@@ -324,16 +332,27 @@ def main():
     if records:
         pd.DataFrame(records).to_csv(tables_dir / "variants.csv", index=False)
 
-    # Write filtered VCF
-    if args.min_qual > 0 or args.min_dp > 0:
-        filtered_vcf = output_dir / "filtered.vcf"
-        with open(filtered_vcf, "w") as fh:
-            for hl in header_lines:
-                fh.write(hl + "\n")
-            for r in records:
-                fh.write(f"{r['chrom']}\t{r['pos']}\t{r['id']}\t{r['ref']}\t{r['alt']}\t"
-                         f"{r['qual']}\t{r['filter']}\tDP={r['dp']}\tGT\t.\n")
-        logger.info(f"Wrote filtered VCF: {filtered_vcf}")
+    # ``filtered.vcf`` is a declared output artifact, so materialise it even
+    # when both thresholds are zero (in that case it is the normalized pass-
+    # through representation). Keep the row width consistent with #CHROM.
+    filtered_vcf = output_dir / "filtered.vcf"
+    chrom_header = next(
+        (line for line in header_lines if line.startswith("#CHROM")),
+        "",
+    )
+    has_samples = len(chrom_header.split("\t")) > 8
+    with open(filtered_vcf, "w", encoding="utf-8") as fh:
+        for hl in header_lines:
+            fh.write(hl + "\n")
+        for r in records:
+            row = (
+                f"{r['chrom']}\t{r['pos']}\t{r['id']}\t{r['ref']}\t{r['alt']}\t"
+                f"{r['qual']}\t{r['filter']}\tDP={r['dp']}"
+            )
+            if has_samples:
+                row += "\tGT\t."
+            fh.write(row + "\n")
+    logger.info(f"Wrote filtered VCF: {filtered_vcf}")
 
     # Report
     summary = {k: v for k, v in stats.items() if k != "variants_per_chrom"}

@@ -24,6 +24,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from omicsclaw.skill.execution.environment import (
+    scrub_internal_control_credentials,
+)
+
 try:
     import nbformat as nbf
     from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook, new_output
@@ -82,7 +86,10 @@ class NotebookSession:
 
         self.km = KernelManager(kernel_name=kernel_name)
         try:
-            self.km.start_kernel(cwd=str(self.path.parent))
+            self.km.start_kernel(
+                cwd=str(self.path.parent),
+                env=scrub_internal_control_credentials(os.environ),
+            )
             self.kc = self.km.client()
             self.kc.start_channels()
             self.kc.wait_for_ready(timeout=_KERNEL_TIMEOUT)
@@ -163,7 +170,10 @@ class NotebookSession:
 
         self.km = KernelManager()
         try:
-            self.km.start_kernel(cwd=str(self.path.parent))
+            self.km.start_kernel(
+                cwd=str(self.path.parent),
+                env=scrub_internal_control_credentials(os.environ),
+            )
             self.kc = self.km.client()
             self.kc.start_channels()
             self.kc.wait_for_ready(timeout=_KERNEL_TIMEOUT)

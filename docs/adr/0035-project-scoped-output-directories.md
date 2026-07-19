@@ -4,6 +4,34 @@
 Codex (gpt-5.5, 2026-06-24); the constraints in §"Required implementation constraints"
 below incorporate that review — they are part of the decision, not optional polish.
 
+**Project-authority refinement (2026-07-14):**
+[ADR 0053](0053-make-control-plane-state-authoritative-for-project-conversation-and-turn.md)
+keeps the Project-scoped output layout and `project_meta.json` as the durable
+Project-to-directory mapping inside the output subsystem. The file may mirror
+display metadata but no longer determines Project existence, current name or
+lifecycle; those facts belong to Control Plane State. The literal `default`
+directory remains a Run grouping, while whether it should have a Project Record
+is explicitly unresolved by ADR 0053; the older "default project" wording below
+does not decide that domain status.
+
+**Run-scope refinement (2026-07-14):**
+[ADR 0056](0056-keep-unassigned-runs-outside-project-lifecycle-and-freeze-run-scope.md)
+resolves that status. `default/` is the non-Project **Unassigned Run Grouping**,
+not a Project ID or Project Record. Every new Run freezes either
+`ProjectScope(project_id)` or `UnassignedScope` at admission, and v1 does not
+move, retag, copy or symlink an existing Run into another scope. Historical
+"default project" and mutable `project_id` wording below is superseded.
+
+**Run-identity and lifecycle refinement (2026-07-14):**
+[ADR 0057](0057-persist-minimal-run-lifecycle-receipts-in-control-plane-state.md)
+supersedes this ADR's use of the Run-directory leaf as canonical Run ID and its
+claim that directories/Manifests are the sole truth for all Run facts. The
+control plane now generates an opaque Run ID and persists the minimal Run
+Receipt for acceptance, Scope and operational lifecycle; the readable directory
+leaf is a storage name, while the Manifest remains scientific-provenance truth
+and `index.jsonl` remains a rebuildable projection. Historical layout details
+below are retained as implementation history.
+
 ## Context
 
 OmicsClaw writes every analysis Run into a flat `output/<skill>__<method>__<ts>__<uuid8>/`

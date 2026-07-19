@@ -24,6 +24,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 from omicsclaw.skill.capability_resolver import resolve_capability
 from omicsclaw.loaders import detect_domain_from_path
 from omicsclaw.routing.router import route_keyword, route_query_unified
+from omicsclaw.common.report import write_result_json
 from omicsclaw.skill.registry import registry
 
 SKILL_NAME = "orchestrator"
@@ -363,6 +364,17 @@ def main():
 
     if args.demo:
         run_demo(out_dir, args.routing_mode)
+        write_result_json(
+            out_dir,
+            SKILL_NAME,
+            SKILL_VERSION,
+            {
+                "method": args.routing_mode,
+                "domains": len(DEMO_QUERIES),
+                "queries": sum(len(queries) for queries in DEMO_QUERIES.values()),
+            },
+            {"params": {"routing_mode": args.routing_mode, "demo": True}},
+        )
         return
 
     domain = detect_domain(args.input, args.query)
@@ -396,20 +408,27 @@ def main():
         skill, confidence = route_query_with_mode(Path(args.input).name, domain, args.routing_mode)
         coverage = "exact_skill" if skill else "no_skill"
 
-    import json
-    result = {
-        "status": "success",
-        "data": {
+    write_result_json(
+        out_dir,
+        SKILL_NAME,
+        SKILL_VERSION,
+        {
+            "method": args.routing_mode,
+            "detected_domain": domain,
+            "detected_skill": skill,
+            "confidence": confidence,
+            "coverage": coverage,
+        },
+        {
             "detected_domain": domain,
             "detected_skill": skill,
             "confidence": confidence,
             "coverage": coverage,
             "should_search_web": should_search_web,
             "missing_capabilities": missing_capabilities,
-        }
-    }
-    out_json = out_dir / "result.json"
-    out_json.write_text(json.dumps(result, indent=2))
+            "params": {"routing_mode": args.routing_mode},
+        },
+    )
     logger.info("Multi-domain orchestrator completed and saved result.json")
 
 if __name__ == "__main__":

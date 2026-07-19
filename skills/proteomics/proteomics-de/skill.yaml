@@ -32,12 +32,20 @@ interface:
   inputs:
     file_types:
     - csv
+    artifacts:
+    - kind: proteomics.abundance_matrix
+      formats:
+      - csv
   outputs:
     files:
     - tables/differential_abundance.csv
     - tables/significant.csv
     - report.md
     - result.json
+    artifacts:
+    - kind: proteomics.differential_results
+      path: tables/differential_abundance.csv
+      format: csv
 runtime:
   entry: proteomics_de.py
 deps:

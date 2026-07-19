@@ -168,7 +168,6 @@ interface:
     - figures/r_hvg_violin.png
     - analysis_summary.txt
     - info.json
-    - input.h5ad
     - processed.h5ad
     - report.md
     - result.json
@@ -205,3 +204,9 @@ resources:
   - r_visualization.md
   tests: tests/
   homepage: https://github.com/OmicsClaw/OmicsClaw
+  compute:
+    cpu_cores: 2
+    memory_mib: 4096
+    gpu_devices: 0
+    threads: 2
+    temporary_disk_mib: 4096

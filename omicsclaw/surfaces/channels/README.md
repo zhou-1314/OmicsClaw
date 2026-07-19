@@ -1,6 +1,18 @@
-# OmicsClaw Messaging Bot System
+# OmicsClaw Channel Surface
 
-The `bot` module powers OmicsClaw's messaging-channel interfaces. It connects the core multi-omics skills engine with platforms such as Telegram, Feishu, DingTalk, Discord, Slack, WeChat, QQ, Email, and iMessage.
+The Channel Surface owns OmicsClaw's messaging adapters. Telegram text and one
+ordinary photo per message are the only production-enabled inputs; the
+remaining adapters are retained as migration sources and fail closed at startup.
+
+> **Production status (2026-07-16):** configured-Owner Telegram text and one
+> photo with an optional caption are enabled. They enter through
+> `ControlRuntime`; the photo is fetched lazily into the immutable Attachment
+> Store only after duplicate and admission checks, and terminal text replies
+> leave through the persistent Delivery Outbox. Photo albums, documents,
+> audio/video and outbound media remain disabled. The official runner and
+> `ChannelManager` reject every other Adapter
+> until it receives the same ingress and delivery cutover; the sections below
+> for those Adapters are configuration reference, not an enabled-path claim.
 
 ## Interactive Terminal Chat
 
@@ -25,45 +37,43 @@ omicsclaw interactive
 
 ## Architecture
 
-```
-User (Telegram / Feishu / DingTalk / Discord / Slack / WeChat / QQ / Email / iMessage)
-       │
-       ▼
-┌───────────────────────────────────────────────────────────────┐
-│         bot/channels/  (Channel ABC)                         │
-│  ┌──────────┬──────┬────────┬───────┬──────┬──────┬────────┐ │
-│  │ Telegram │Feishu│DingTalk│Discord│ Slack│WeChat│QQ/Email│ │
-│  └──────────┴──────┴────────┴───────┴──────┴──────┴────────┘ │
-│         ↓ each channel calls core.llm_tool_loop directly     │
-│  ┌──────────────────────────────────────────┐                │
-│  │  ChannelManager (lifecycle + health)     │                │
-│  └──────────────────────────────────────────┘                │
-│         ↓                                                    │
-│  ┌──────────────────────────────────────────┐                │
-│  │  bot/core.py  (LLM tool loop)            │───▶ omicsclaw.py (skills)
-│  └──────────────────────────────────────────┘                │
-└──────────────────────────────────────────────────────────────┘
+```text
+Telegram update
+  -> authenticity + configured-Owner gate
+  -> RawInboundV1 (`chat_id:message_id`; optional SourceAttachmentDescriptorV1)
+  -> duplicate/capacity checks
+  -> process-local Telegram photo source (photo only)
+  -> attachments.db + content-addressed Blob + Control Turn commitment
+  -> ControlRuntime / durable Turn / per-Conversation FIFO
+  -> canonical Transcript keeps structured Attachment References only
+  -> bounded ephemeral image rendering immediately before each model call
+  -> Agent runtime + shared Skill tools
+  -> canonical terminal Transcript
+  -> atomic Outbound Delivery plan in control.db
+  -> account-scoped Delivery Pump
+  -> one Telegram `send_message` attempt
+
+Feishu / DingTalk / Discord / Slack / WeChat / QQ / Email / iMessage
+  -> startup rejected until the same ingress + Delivery cutover exists
 ```
 
 ### Core Modules
 
 | Module | Purpose |
 |--------|--------|
-| `core.py` | LLM client, TOOLS, skill execution, security, audit |
-| `channels/base.py` | Channel ABC, chunk_text, DedupCache, RateLimiter |
-| `channels/manager.py` | ChannelManager — multi-channel lifecycle + /healthz |
-| `channels/telegram.py` | TelegramChannel (python-telegram-bot) |
-| `channels/feishu.py` | FeishuChannel (lark-oapi WebSocket) |
-| `channels/dingtalk.py` | DingTalkChannel (Stream Mode WebSocket) |
-| `channels/discord.py` | DiscordChannel (discord.py Gateway) |
-| `channels/slack.py` | SlackChannel (Socket Mode, no public IP) |
-| `channels/wechat.py` | WeChatChannel (WeCom + Official Account webhook) |
-| `channels/qq.py` | QQChannel (qq-botpy, WebSocket Gateway) |
-| `channels/email.py` | EmailChannel (IMAP + SMTP, stdlib only) |
-| `channels/imessage.py` | IMessageChannel (imsg CLI, macOS only) |
-| `run.py` | Unified CLI runner — `python -m omicsclaw.surfaces.channels` |
+| `telegram.py` | Authenticated Owner ingress, RawInbound construction, lifecycle |
+| `telegram_delivery.py` | Single-attempt text Delivery Adapter |
+| `omicsclaw/attachments/` | Immutable Records, content-addressed Blobs, reconciliation and bounded model rendering |
+| `manager.py` | Fail-closed lifecycle + `/healthz` |
+| `base.py` | Shared Adapter interface; legacy direct startup gate |
+| `omicsclaw/control/runtime.py` | Authoritative Turn + Transcript composition |
+| `omicsclaw/control/delivery.py` | Persistent Outbox Pump and retry/unknown policy |
+| `__main__.py` | Production runner — `python -m omicsclaw.surfaces.channels` |
 
-## Capability Matrix
+## Registered Adapter capability declarations
+
+Except for Telegram text/single-photo input, this matrix describes migration-source declarations,
+not enabled production behavior.
 
 | Channel | Format | Max Len | Media | Typing | Group | @Mention | No Public IP | Token Refresh |
 |:--------|:------:|:-------:|:-----:|:------:|:-----:|:--------:|:------------:|:-------------:|
@@ -102,8 +112,8 @@ Legend: **S** = send, **R** = receive, **—** = not applicable/unlimited
 ### Step 1: Core Dependencies
 
 ```bash
-# Install core dependencies (LLM client, HTTP, dotenv compatibility)
-pip install -r bot/requirements.txt
+# Install OmicsClaw plus the declared Channel extras
+pip install -e ".[channels]"
 ```
 
 OmicsClaw bot entrypoints automatically read the project-root `.env`. If `python-dotenv` is unavailable, OmicsClaw falls back to an internal `.env` parser, so normal `KEY=value` configuration still works.
@@ -112,10 +122,10 @@ OmicsClaw bot entrypoints automatically read the project-root `.env`. If `python
 
 Choose **one** of the following approaches:
 
-#### Option A: Install all channel dependencies
+#### Option A: Install declared Channel extras
 
 ```bash
-pip install -r bot/requirements-channels.txt
+pip install -e ".[channels]"
 ```
 
 #### Option B: Install only the channels you need
@@ -189,7 +199,9 @@ For a guided setup, run `oc onboard`. The wizard writes `.env` using the same va
 | `OMICSCLAW_LLM_TIMEOUT_SECONDS` | Total timeout for shared LLM requests in seconds (default: `120`) | All |
 | `OMICSCLAW_LLM_CONNECT_TIMEOUT_SECONDS` | Connection timeout for shared LLM requests in seconds (default: `10`) | All |
 | `TELEGRAM_BOT_TOKEN` | From @BotFather on Telegram | Telegram |
-| `TELEGRAM_CHAT_ID` | Admin chat ID (optional) | Telegram |
+| `TELEGRAM_ALLOWED_SENDERS` | Comma-separated Telegram user ids that identify the configured Owner | Telegram |
+| `TELEGRAM_CHAT_ID` | Optional legacy additional Owner user id | Telegram |
+| `TELEGRAM_ACCOUNT_NAMESPACE` | Optional assertion; when set it must equal `bot-<authenticated-bot-id>` | Telegram |
 | `FEISHU_APP_ID` | From Feishu developer console | Feishu |
 | `FEISHU_APP_SECRET` | From Feishu developer console | Feishu |
 | `DINGTALK_CLIENT_ID` | Robot App Key | DingTalk |
@@ -213,16 +225,15 @@ For a guided setup, run `oc onboard`. The wizard writes `.env` using the same va
 | `EMAIL_FROM_ADDRESS` | Sender address for outbound emails | Email |
 | `IMESSAGE_CLI_PATH` | Path to `imsg` CLI binary (macOS only) | iMessage |
 | `IMESSAGE_ALLOWED_SENDERS` | Comma-separated allow-list (phones/emails) | iMessage |
-| `RATE_LIMIT_PER_HOUR` | Max messages/user/hour (default: 10) | All |
-| `ALLOWED_SENDERS` | Global sender allowlist applied by runner middleware | All |
-| `GLOBAL_RATE_LIMIT` | Global inbound middleware rate limit per hour (default: 120) | All |
 | `OMICSCLAW_DATA_DIRS` | Extra trusted data directories (comma-separated absolute paths) | All |
 | `OMICSCLAW_MEMORY_DB_URL` | Persistent graph memory database URL | All |
 | `OMICSCLAW_MAX_HISTORY` | Max messages kept in transcript history (default: 50) | All |
 | `OMICSCLAW_MAX_HISTORY_CHARS` | Optional transcript character cap (default: 0 = disabled) | All |
 | `OMICSCLAW_MAX_TOOL_ITERATIONS` | Max tool iterations per request (default: 20) | All |
 
-`bot/core.py` applies these timeout settings to the shared `AsyncOpenAI` client. This prevents a stalled upstream provider from hanging the full conversation path indefinitely.
+The shared provider runtime applies its configured HTTP timeouts; the Delivery
+Pump separately bounds each Telegram provider Attempt and classifies ambiguity
+as `unknown` rather than replaying the Turn.
 
 ### LLM Provider Quick Start
 
@@ -314,10 +325,18 @@ OMICSCLAW_MODEL=deepseek-v4-pro   # Use Pro instead of default Flash
 
 ```bash
 TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrSTUvwxYZ
-TELEGRAM_CHAT_ID=           # Optional: admin user ID
+TELEGRAM_ALLOWED_SENDERS=123456789       # One Owner may have multiple ids
+TELEGRAM_CHAT_ID=                        # Optional legacy additional Owner id
 ```
 
-**Technical details:** Long polling mode, `drop_pending_updates=True` on startup. Markdown to Telegram HTML auto-conversion. Media routed by extension to `send_photo`/`send_video`/`send_audio`/`send_document`. In groups, only responds when @mentioned. Typing indicator refreshes every 4s. Retry: 3 attempts. Text chunk limit: 4000 chars.
+**Technical details:** Long polling preserves pending updates
+(`drop_pending_updates=False`). Owner text is normalized into `RawInboundV1`,
+processed by `ControlRuntime`, and the canonical terminal Transcript is rendered
+into deterministic Delivery Items. The Telegram Adapter performs exactly one
+plain-text `send_message` call per durable Attempt; the Delivery Pump owns
+ordering and reliable retry classification. Media is rejected before download.
+Group text from a configured Owner follows the same path and preserves the
+Telegram topic/thread id when present.
 
 ---
 
@@ -548,24 +567,13 @@ IMESSAGE_REGION=US                          # Optional: phone number region
 ## Usage
 
 ```bash
-# Multi-channel runner (runs any combination in one process)
+# Authoritative production runner
 python -m omicsclaw.surfaces.channels --channels telegram
-python -m omicsclaw.surfaces.channels --channels feishu
-python -m omicsclaw.surfaces.channels --channels telegram,feishu
-python -m omicsclaw.surfaces.channels --channels dingtalk
-python -m omicsclaw.surfaces.channels --channels discord
-python -m omicsclaw.surfaces.channels --channels slack
-python -m omicsclaw.surfaces.channels --channels wechat
-python -m omicsclaw.surfaces.channels --channels qq
-python -m omicsclaw.surfaces.channels --channels email
-python -m omicsclaw.surfaces.channels --channels imessage        # macOS only
-python -m omicsclaw.surfaces.channels --channels telegram,feishu,dingtalk --health-port 8080
-python -m omicsclaw.surfaces.channels --list  # list all 9 available channels
+python -m omicsclaw.surfaces.channels --channels telegram --health-port 8080
+python -m omicsclaw.surfaces.channels --list  # marks legacy Adapters disabled
 
 # Makefile shortcuts
 make bot-telegram
-make bot-feishu
-make bot-multi CHANNELS=telegram,feishu
 make bot-list
 ```
 
@@ -581,9 +589,19 @@ make bot-list
 
 ## Data Input
 
-### Small files (< 40 MB): Upload via messaging
+### One Telegram photo (declared size up to 20 MiB)
 
-Both platforms accept file uploads. The bot auto-detects omics data formats and routes to the appropriate skill.
+The configured Owner may send one ordinary Telegram photo, with or without a
+caption. The Adapter rejects a missing, zero or oversized provider-declared
+size before calling Telegram's file API. A stable `file_unique_id` participates
+in the ingress fingerprint; duplicate delivery therefore returns the original
+Turn before another download. Novel input is downloaded only through a
+process-local byte source, verified as immutable image content, and published
+as a per-Turn Attachment Record backed by a content-addressed Blob.
+
+Photo albums and documents—including image documents—are separate input shapes
+and remain rejected before download. This path does not accept arbitrary small
+files merely because they fit under the size limit.
 
 ### Large files: Server-side path mode (recommended)
 
@@ -617,39 +635,46 @@ OMICSCLAW_DATA_DIRS=/mnt/nas/spatial_data,/home/user/experiments
 
 Files are only readable from trusted directories. Paths outside these directories are rejected.
 
-### Tissue images
+### Other attachments
 
-Both platforms support:
-- **Tissue images** (H&E stain, fluorescence, spatial barcodes) — identifies tissue type and suggests analysis
-- **General images** — described and user asked for intent
+Telegram media groups, documents, audio and video are not accepted. Desktop
+uploads, CLI File References and every non-Telegram Adapter also remain outside
+this production slice. None falls back to temporary paths or a latest-file
+registry.
 
 ---
 
 ## Security and Access Control
 
-### Sender Allowlist
+### Telegram Owner boundary
 
-The runner supports one global allowlist plus several channel-native allowlists:
+Telegram requires at least one explicit identity for the single configured
+Owner. Multiple ids may represent that same Owner:
 
 ```bash
-ALLOWED_SENDERS=user1,user2                  # Global middleware allowlist
-EMAIL_ALLOWED_SENDERS=alice@example.com      # Email addresses
-IMESSAGE_ALLOWED_SENDERS=+1234567890         # Phone or email
-QQ_ALLOWED_SENDERS=12345678                  # QQ user IDs
+TELEGRAM_ALLOWED_SENDERS=<owner-user-id>[,<second-owner-identity>]
+# Optional compatibility identity:
+TELEGRAM_CHAT_ID=<additional-owner-user-id>
 ```
 
-`TELEGRAM_CHAT_ID` is an admin override for Telegram rate limits, not a general allowlist.
-
-> **For production deployments, always set an allowlist.** When no allowlist is configured, the bot accepts messages from any sender the channel exposes to it.
+Startup fails only when neither source supplies an Owner identity. Every update
+and command is checked against the merged identity set before durable ingress.
+These ids are aliases of one Owner, not tenants or independent user partitions.
+Other adapters are disabled regardless of their legacy allowlist variables.
 
 ### Data Security
 
-- All data stays on the local machine — no cloud uploads
-- File paths are validated against a trusted directory whitelist (`data/`, `examples/`, `output/`, `OMICSCLAW_DATA_DIRS`)
-- Path traversal attempts (e.g. `../../etc/passwd`) are blocked and logged
-- File size limits enforced for uploads (50 MB files, 20 MB photos)
-- Bot token redacted from all log output
-- All path resolutions are logged in the audit trail
+- Telegram accepts only one ordinary photo whose declared size is at most
+  20 MiB; albums, documents, audio/video and outbound media fail closed.
+- Attachment bytes are stored owner-private, digest-verified, and referenced by
+  opaque per-Turn identity; provider handles and Base64 never become durable
+  Transcript content.
+- Text enters only as a typed `RawInboundV1`; provider update objects are not a
+  durable contract.
+- The authenticated bot id fixes the Delivery account namespace, so one process
+  cannot claim another bot's queued work.
+- Bot tokens and provider error bodies are excluded from surfaced error evidence
+  and logging filters redact the configured token.
 
 ---
 
@@ -657,17 +682,18 @@ QQ_ALLOWED_SENDERS=12345678                  # QQ user IDs
 
 ### Bot not responding to messages
 
-1. Check that the channel is configured correctly (bot token, app ID, etc.)
-2. If using `allowed_senders`, ensure your user/chat ID is listed
-3. For group chats, ensure the bot is @mentioned (default behavior)
-4. Check logs for errors: `python -m omicsclaw.surfaces.channels --channels <name> --verbose`
+1. Check `TELEGRAM_BOT_TOKEN` and that `TELEGRAM_ALLOWED_SENDERS` contains
+   exactly the configured Owner id.
+2. Confirm the authenticated bot id matches any explicit account namespace.
+3. Check sanitized logs from
+   `python -m omicsclaw.surfaces.channels --channels telegram --verbose`.
 
 ### "channel X not found" or import errors
 
 Install the channel-specific dependencies:
 ```bash
-# See the Dependency Summary table above, or install all:
-pip install -r bot/requirements-channels.txt
+# Install the declared Channel extras:
+pip install -e ".[channels]"
 ```
 
 ### Webhook channels (WeChat) not receiving messages
@@ -683,7 +709,9 @@ Add your server's public IP to the WeCom app's **Trusted IP** list in the admin 
 
 ### Feishu "event loop already running" error
 
-This is a known issue with `lark_oapi` — it uses a module-level event loop variable. OmicsClaw patches this automatically when running via `python -m omicsclaw.surfaces.channels`. If you see this error, ensure you're using the latest version of `bot/channels/feishu.py`.
+This legacy migration note concerns `lark_oapi`, which uses a module-level event
+loop variable. Feishu is currently disabled; when its cutover resumes, use
+`omicsclaw/surfaces/channels/feishu.py` as the Adapter source.
 
 ### Token refresh failures
 
@@ -703,4 +731,6 @@ export LOG_LEVEL=DEBUG
 
 ## Logging
 
-Structured audit logs are written to `bot/logs/audit.jsonl`. Each entry includes timestamp, event type, and relevant metadata.
+The runner emits sanitized lifecycle and Delivery diagnostics through Python
+logging. `control.db` is the durable authority for Turn and Delivery state; log
+files are not lifecycle evidence.

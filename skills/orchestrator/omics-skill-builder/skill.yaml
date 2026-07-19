@@ -30,10 +30,14 @@ summary:
 interface:
   outputs:
     files:
-    - output_dir/SCAFFOLD_SUMMARY.md
-    - output_dir/report.md
-    - output_dir/result.json
+    - SCAFFOLD_SUMMARY.md
+    - report.md
+    - result.json
     - skills/<domain>/<skill-name>/
+    artifacts:
+    - kind: orchestrator.skill_scaffold
+      path: result.json
+      format: json
 runtime:
   entry: omics_skill_builder.py
 deps:

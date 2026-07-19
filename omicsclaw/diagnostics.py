@@ -35,6 +35,7 @@ from omicsclaw.runtime.storage.transcript import (
     build_selective_replay_summary,
     build_transcript_summary,
 )
+from omicsclaw.skill.execution.environment import scrub_internal_control_credentials
 
 
 DIAGNOSTIC_STATUS_OK = "ok"
@@ -329,6 +330,7 @@ def _collect_r_check() -> DiagnosticCheck:
             text=True,
             timeout=5,
             check=False,
+            env=scrub_internal_control_credentials(os.environ),
         )
         version_text = " ".join(
             part.strip()
@@ -358,6 +360,7 @@ def _collect_r_check() -> DiagnosticCheck:
             text=True,
             timeout=10,
             check=False,
+            env=scrub_internal_control_credentials(os.environ),
         )
     except Exception as exc:
         return DiagnosticCheck(

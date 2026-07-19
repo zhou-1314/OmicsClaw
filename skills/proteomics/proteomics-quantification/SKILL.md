@@ -50,12 +50,14 @@ quant first; this skill is intensity- / count-only.
 
 - Modalities: lfq
 - File types: `.csv`
+- Accepts artifact `proteomics.peptide_table` (`csv`)
 
 **Outputs**
 
 - `tables/protein_abundance.csv`
 - `report.md`
 - `result.json`
+- Produces artifact `proteomics.abundance_matrix` as `tables/protein_abundance.csv` (`csv`)
 
 ## Flow
 

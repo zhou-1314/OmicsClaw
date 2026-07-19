@@ -152,7 +152,7 @@ def test_frozen_list_is_full_bot_surface_set() -> None:
 _READ_WITHHELD_TOOLS: frozenset[str] = frozenset(
     {
         # heavyweight compute / skill creation
-        "omicsclaw", "autonomous_analysis_execute",
+        "omicsclaw", "candidate_plan_execute", "autonomous_analysis_execute",
         "create_omics_skill", "replot_skill",
         # NOTE: parse_literature is NO LONGER withheld from Read (Phase 3.3b): it is
         # allowed in Read with its download permission-gated (approval_mode=ASK).

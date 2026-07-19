@@ -1,5 +1,14 @@
 # Workspace & Output Optimization Plan
 
+> **Historical plan — Desktop Workspace switching is superseded.** The Desktop
+> Backend now freezes one Active Workspace at composition-root startup. Request
+> headers, chat turns, and in-loop tools cannot change that root, and no
+> production path mutates `OMICSCLAW_WORKSPACE` per request. Selecting another
+> Desktop Workspace requires an explicit Backend restart; see ADR 0054/0061 and
+> the current contract in `docs/CONTEXT.md`. The output-organization proposals
+> below remain historical design input and must be revalidated against current
+> ADRs before implementation.
+
 > Goal: (1) finish the deferred **multi-workspace KG isolation** so each project's
 > knowledge graph is its own store, and (2) make backend **outputs genuinely
 > browsable / un-piled**. Both unify under one spine: **"a workspace = the project
@@ -31,7 +40,7 @@
 |---|---|---|
 | 1.1 | Stamp `X-OmicsClaw-Workspace: ‹default_project_dir›` on all KG/thread proxy helpers (server-side `getSetting('default_project_dir')`) | App `src/lib/bench-proxy.ts` `proxyGet`/`proxyJson`/`proxyEmptyPost`/`proxyDelete` (~20/32/56/68) |
 | 1.2 | Teach the Bench **write** path to honor the header (today `_resolve_shared_kg_home` is env-only) — add a request-aware resolver used by the `/thread/*` handlers | backend `server.py` `_resolve_shared_kg_home` (~732) + call sites 3293/3321/3354/3395/3442/3467/3514 |
-| 1.3 | Confirm/أthread the per-turn workspace into in-loop KG tools (today reads `OMICSCLAW_WORKSPACE` env, set per turn by `_apply_runtime_workspace`); document the per-turn-global (vs per-request) caveat | backend `kg_tools._resolve_kg_home` (~66-81) |
+| 1.3 | **Superseded:** do not thread or mutate Workspace per turn. In-loop tools must consume the lifespan-frozen Active Workspace through their owning Runtime/Adapter boundary. | ADR 0054/0061 Active Workspace composition root |
 | 1.4 | Preserve the no-header fallback chain (`OMICSCLAW_KG_HOME` → `OMICSCLAW_WORKSPACE` → `DATA_DIR`) | (no change — assert in tests) |
 
 **Tests:** backend — `/thread/sources` (or formalize) with header=A vs B writes into A's vs B's `.omicsclaw/knowledge`; no-header → global fallback. App (node:test) — bench-proxy forwards the header with value = `default_project_dir`; remote-mode value is the backend path.

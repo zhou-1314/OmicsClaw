@@ -24,7 +24,8 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from omicsclaw.common.report import read_result_status
+from omicsclaw.common.report import load_result_json, read_result_status
+from omicsclaw.skill.execution.environment import scrub_internal_control_credentials
 
 
 _CANCEL_GRACE_SECONDS = 5.0
@@ -95,7 +96,7 @@ def drive_subprocess(
         text=True,
         bufsize=1,  # line-buffered so callbacks fire as the skill prints
         cwd=str(cwd),
-        env=env,
+        env=scrub_internal_control_credentials(env),
         start_new_session=True,
     )
 
@@ -184,7 +185,7 @@ def drive_subprocess(
         elif status in ("partial", "failed"):
             if return_code == 0:
                 return_code = 1
-        elif return_code == -9 and (out_dir / "result.json").exists():
+        elif return_code == -9 and load_result_json(out_dir) is not None:
             return_code = 0
 
     return subprocess.CompletedProcess(cmd, return_code, stdout, stderr)

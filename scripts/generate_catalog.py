@@ -39,13 +39,14 @@ def parse_yaml_frontmatter(text: str) -> dict:
     return loaded if isinstance(loaded, dict) else {}
 
 
-def build_cli_alias_map() -> dict[str, str]:
+def build_cli_alias_map(skills_dir: Path | None = None) -> dict[str, str]:
     """Build {absolute_skill_dir_path: canonical_cli_alias} from the Omics registry."""
     if str(OMICSCLAW_DIR) not in sys.path:
         sys.path.insert(0, str(OMICSCLAW_DIR))
-    from omicsclaw.skill.registry import registry
+    from omicsclaw.skill.registry import OmicsRegistry
 
-    registry.load_all()
+    registry = OmicsRegistry()
+    registry.load_all(skills_dir or SKILLS_DIR)
     alias_map: dict[str, str] = {}
     for _alias, info in registry.skills.items():
         script = info.get("script")
@@ -55,36 +56,43 @@ def build_cli_alias_map() -> dict[str, str]:
     return alias_map
 
 
-def _iter_skill_dirs() -> list[Path]:
+def _iter_skill_dirs(skills_dir: Path | None = None) -> list[Path]:
     """Skill dirs under SKILLS_DIR — v1 (SKILL.md) or v2 (skill.yaml) — sorted by path.
 
     Sorting by directory path matches the previous ``sorted(rglob('SKILL.md'))``
     order for v1 skills (identical suffix), so the catalog ordering is stable.
     """
+    effective_skills_dir = skills_dir or SKILLS_DIR
     dirs: set[Path] = set()
     for marker in ("SKILL.md", "skill.yaml"):
-        for path in SKILLS_DIR.rglob(marker):
+        for path in effective_skills_dir.rglob(marker):
             dirs.add(path.parent)
     result: list[Path] = []
     for skill_dir in sorted(dirs):
-        rel_parts = skill_dir.relative_to(SKILLS_DIR).parts
+        rel_parts = skill_dir.relative_to(effective_skills_dir).parts
         if any(part.startswith((".", "__")) for part in rel_parts):
             continue
         result.append(skill_dir)
     return result
 
 
-def generate_catalog() -> dict:
+def generate_catalog(skills_dir: Path | None = None) -> dict:
     """Scan skills/ and build the catalog via the dual-track metadata reader."""
     if str(OMICSCLAW_DIR) not in sys.path:
         sys.path.insert(0, str(OMICSCLAW_DIR))
     from omicsclaw.skill.lazy_metadata import LazySkillMetadata
     from omicsclaw.skill.registry import OmicsRegistry
+    from omicsclaw.skill.execution_contract import describe_skill_security
     from omicsclaw.skill.skill_dag import build_skill_dag, load_skill_dag_reviews
 
-    alias_map = build_cli_alias_map()
+    effective_skills_dir = skills_dir or SKILLS_DIR
+    alias_map = (
+        build_cli_alias_map()
+        if skills_dir is None
+        else build_cli_alias_map(effective_skills_dir)
+    )
     skills = []
-    for skill_dir in _iter_skill_dirs():
+    for skill_dir in _iter_skill_dirs(effective_skills_dir):
         lazy = LazySkillMetadata(skill_dir)
         name = lazy.name or skill_dir.name
 
@@ -104,6 +112,7 @@ def generate_catalog() -> dict:
             "description": lazy.description,
             "version": lazy.version or "0.1.0",
             "status": lazy.lifecycle_status,
+            "superseded_by": lazy.superseded_by or None,
             "origin": lazy.origin,
             "validation_level": lazy.validation_level,
             "has_script": has_script,
@@ -115,14 +124,20 @@ def generate_catalog() -> dict:
             ),
             "tags": lazy.tags,
             "trigger_keywords": lazy.trigger_keywords or [],
+            "security": describe_skill_security(
+                {
+                    "security_contract": lazy.security_contract,
+                    "security_reviewed": lazy.security_reviewed,
+                }
+            ).to_dict(),
         }
         skills.append(entry)
 
     graph_registry = OmicsRegistry()
-    graph_registry.load_all(SKILLS_DIR)
+    graph_registry.load_all(effective_skills_dir)
     graph = build_skill_dag(
         graph_registry,
-        reviews=load_skill_dag_reviews(SKILLS_DIR / "skill_dag_reviews.yaml"),
+        reviews=load_skill_dag_reviews(effective_skills_dir / "skill_dag_reviews.yaml"),
     )
     catalog = {
         "version": "1.0.0",

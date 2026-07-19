@@ -84,6 +84,40 @@ def _make_fake_handle(
     )
 
 
+@pytest.mark.asyncio
+async def test_desktop_notebook_kernel_scrubs_backend_control_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, str] = {}
+
+    class FailingAsyncKernelManager:
+        async def start_kernel(self, **kwargs) -> None:
+            observed.update(kwargs["env"])
+            raise RuntimeError("stop after environment capture")
+
+    monkeypatch.setenv("OMICSCLAW_REMOTE_AUTH_TOKEN", "must-not-reach-kernel")
+    monkeypatch.setenv(
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN",
+        "must-not-reach-kernel",
+    )
+    monkeypatch.setenv("OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD", "3")
+    monkeypatch.setattr(km_module, "install_live_session_support", lambda: None)
+    monkeypatch.setattr(
+        km_module,
+        "AsyncKernelManager",
+        lambda **_kwargs: FailingAsyncKernelManager(),
+    )
+    manager = NotebookKernelManager()
+    monkeypatch.setattr(manager, "_ensure_kernelspec", lambda: None)
+
+    with pytest.raises(RuntimeError, match="stop after environment capture"):
+        await manager._start_kernel("credential-test", None)
+
+    assert "OMICSCLAW_REMOTE_AUTH_TOKEN" not in observed
+    assert "OMICSCLAW_SKILL_EVOLUTION_TOKEN" not in observed
+    assert "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD" not in observed
+
+
 @pytest.fixture
 def manager(monkeypatch: pytest.MonkeyPatch) -> NotebookKernelManager:
     """A manager instance whose ``_start_kernel`` produces fake handles.

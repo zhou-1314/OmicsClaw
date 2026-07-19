@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
+from omicsclaw.common.report import validate_result_envelope
 from omicsclaw.runtime.consensus import run as run_mod
 
 
@@ -68,6 +70,9 @@ def test_run_entry_consensus_domains(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert banner.startswith("[A: Verified consensus]")
     # Title comes from the source row, not a hardcoded wrapper string.
     assert "spatial domains" in (out / "report.md").read_text()
+    result_payload = json.loads((out / "result.json").read_text(encoding="utf-8"))
+    assert validate_result_envelope(result_payload) == []
+    assert result_payload["summary"]["method"] == "kmode"
 
 
 def test_reserved_flags_are_accepted_but_not_consumed(
@@ -107,3 +112,32 @@ def test_reserved_flags_are_accepted_but_not_consumed(
 def test_run_entry_unknown_source_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(SystemExit):
         run_mod.main(["--source", "nope", "--output", "/tmp/x"])
+
+
+def test_consensus_result_inventory_rejects_claim_aliases(tmp_path: Path) -> None:
+    from omicsclaw.common.output_claim import OUTPUT_CLAIM_FILENAME
+
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    claim = output_dir / OUTPUT_CLAIM_FILENAME
+    claim.write_text("{}\n", encoding="utf-8")
+    alias = output_dir / "consensus_labels.tsv"
+    alias.hardlink_to(claim)
+    run = SimpleNamespace(
+        run_id="consensus-test",
+        members=(),
+        team_result=SimpleNamespace(n_survived=0),
+        selected_bcs=(),
+        artifacts_written=(alias,),
+    )
+
+    run_mod._write_consensus_result(
+        source_name="consensus-domains",
+        input_path="",
+        output_dir=output_dir,
+        operator="kmode",
+        run=run,
+    )
+
+    payload = json.loads((output_dir / "result.json").read_text(encoding="utf-8"))
+    assert payload["data"]["artifacts"] == []

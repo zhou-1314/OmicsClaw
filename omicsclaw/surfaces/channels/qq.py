@@ -23,7 +23,6 @@ import logging
 import re
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 
 from .base import Channel
@@ -55,6 +54,7 @@ def _strip_markdown(text: str) -> str:
 @dataclass
 class QQConfig(BaseChannelConfig):
     """QQ Bot channel configuration."""
+
     app_id: str = ""
     app_secret: str = ""
     text_chunk_limit: int = 4096
@@ -84,10 +84,19 @@ class QQChannel(Channel):
 
     # qq-botpy file_type constants: 1=image, 2=video, 3=audio
     _FILE_TYPE_MAP = {
-        ".jpg": 1, ".jpeg": 1, ".png": 1, ".gif": 1,
-        ".webp": 1, ".bmp": 1,
-        ".mp4": 2, ".mov": 2, ".avi": 2,
-        ".mp3": 3, ".ogg": 3, ".m4a": 3, ".wav": 3,
+        ".jpg": 1,
+        ".jpeg": 1,
+        ".png": 1,
+        ".gif": 1,
+        ".webp": 1,
+        ".bmp": 1,
+        ".mp4": 2,
+        ".mov": 2,
+        ".avi": 2,
+        ".mp3": 3,
+        ".ogg": 3,
+        ".m4a": 3,
+        ".wav": 3,
     }
 
     def __init__(self, config: QQConfig):
@@ -103,6 +112,7 @@ class QQChannel(Channel):
     # ── Lifecycle ────────────────────────────────────────────────────
 
     async def start(self) -> None:
+        self.require_authoritative_ingress()
         try:
             import botpy  # noqa: F401
         except ImportError:
@@ -195,12 +205,14 @@ class QQChannel(Channel):
                 return
 
             logger.info(f"QQ {msg_type} from {sender_id}: {content[:80]}")
-            asyncio.create_task(self._handle_llm(
-                chat_id=chat_id,
-                user_id=sender_id,
-                content=content,
-                metadata={"msg_type": msg_type, "event_id": message.id},
-            ))
+            asyncio.create_task(
+                self._handle_llm(
+                    chat_id=chat_id,
+                    user_id=sender_id,
+                    content=content,
+                    metadata={"msg_type": msg_type, "event_id": message.id},
+                )
+            )
         except Exception:
             logger.exception("Error in QQ _on_msg")
 
@@ -210,7 +222,9 @@ class QQChannel(Channel):
         """Run LLM and send reply."""
         try:
             reply = await self.process_message(
-                chat_id, user_id, content,
+                chat_id,
+                user_id,
+                content,
                 platform="qq",
                 metadata=metadata,
             )
@@ -219,7 +233,9 @@ class QQChannel(Channel):
         except Exception as e:
             logger.error(f"QQ LLM error: {e}", exc_info=True)
             try:
-                await self.send(chat_id, f"处理出错: {type(e).__name__}", metadata=metadata)
+                await self.send(
+                    chat_id, f"处理出错: {type(e).__name__}", metadata=metadata
+                )
             except Exception:
                 pass
 
@@ -288,9 +304,9 @@ class QQChannel(Channel):
             return False
 
         from pathlib import Path
+
         meta = metadata or {}
         msg_type = meta.get("msg_type", "c2c")
-        msg_id = meta.get("event_id", "")
         ext = Path(file_path).suffix.lower()
         file_type = self._FILE_TYPE_MAP.get(ext, 1)
 
@@ -303,7 +319,6 @@ class QQChannel(Channel):
             return True
 
         try:
-            seq = self._next_msg_seq(msg_id)
             if msg_type == "group":
                 await self._client.api.post_group_file(
                     group_openid=chat_id,

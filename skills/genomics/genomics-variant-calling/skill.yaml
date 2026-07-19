@@ -45,6 +45,10 @@ interface:
     - tables/variants_per_chrom.csv
     - report.md
     - result.json
+    artifacts:
+    - kind: genomics.variant_table
+      path: tables/variants.csv
+      format: csv
 runtime:
   entry: genomics_variant_calling.py
 deps:

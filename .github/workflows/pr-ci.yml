@@ -100,6 +100,17 @@ jobs:
       - name: Skill schema + v2 registry-wiring tests
         run: python -m pytest tests/test_skill_schema.py tests/test_registry_v2.py tests/test_skill_dag.py -v
 
+      - name: Shared Skill execution-contract tests
+        run: |
+          python -m pytest \
+            tests/test_skill_execution_contract.py \
+            tests/test_skill_evolution.py \
+            tests/test_skill_evolution_governance.py \
+            tests/test_genomics_phasing_contract.py \
+            tests/test_skill_runner_contract.py \
+            tests/test_registry_skills_snapshot.py \
+            -v
+
       - name: v2 lint + parameters.md generator tests (dual-track)
         run: python -m pytest tests/test_skill_lint_v2.py tests/test_generate_parameters_md.py -v
 
@@ -171,6 +182,7 @@ jobs:
             tests/test_context_assembler.py \
             tests/test_interactive_memory_command_support.py \
             tests/test_memory_server_security.py \
+            tests/test_desktop_skill_evolution.py \
             tests/test_scoped_memory.py \
             -v
 

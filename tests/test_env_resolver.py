@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import subprocess
 import sys
 
 import pytest
@@ -115,6 +116,31 @@ def test_probe_missing_real_subprocess_detects_present_and_absent():
 
 def test_probe_missing_empty_list_short_circuits():
     assert env_resolver._probe_missing(sys.executable, [], env={}) == []
+
+
+def test_probe_missing_scrubs_backend_control_credentials(monkeypatch):
+    control_keys = {
+        "OMICSCLAW_REMOTE_AUTH_TOKEN",
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN",
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD",
+    }
+    supplied_env = {key: "must-not-reach-probe" for key in control_keys}
+    supplied_env["OMICSCLAW_ENV_PROBE_TEST_KEEP"] = "ordinary-value"
+    observed: dict[str, str] = {}
+
+    def fake_run(cmd, **kwargs):
+        observed.update(kwargs["env"])
+        return subprocess.CompletedProcess(cmd, 0, stdout="[]", stderr="")
+
+    monkeypatch.setattr(env_resolver.subprocess, "run", fake_run)
+
+    assert env_resolver._probe_missing(
+        sys.executable,
+        ["json"],
+        env=supplied_env,
+    ) == []
+    assert observed["OMICSCLAW_ENV_PROBE_TEST_KEEP"] == "ordinary-value"
+    assert not control_keys.intersection(observed)
 
 
 def test_resolver_passes_cwd_to_probe(monkeypatch):

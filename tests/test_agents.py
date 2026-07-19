@@ -7,7 +7,13 @@ WITHOUT requiring deepagents/langchain (those are optional dependencies).
 from __future__ import annotations
 
 import json
+import os
+import shlex
+import signal
+import subprocess
+import sys
 import tempfile
+import types
 from pathlib import Path
 from unittest.mock import patch
 
@@ -66,6 +72,83 @@ class TestAgentConfig:
             # system_prompt or system_prompt_ref
             has_prompt = "system_prompt" in agent_def or "system_prompt_ref" in agent_def
             assert has_prompt, f"{agent_name} missing system_prompt or system_prompt_ref"
+
+
+def test_research_shell_backend_scrubs_backend_control_credentials(
+    monkeypatch,
+    tmp_path,
+):
+    """LLM-controlled shell commands must not see Backend bearer material."""
+    from omicsclaw.agents.backends import create_sandbox_backend
+
+    class ExecuteResponse:
+        def __init__(self, *, output, exit_code, truncated):
+            self.output = output
+            self.exit_code = exit_code
+            self.truncated = truncated
+
+    class LocalShellBackend:
+        def __init__(
+            self,
+            root_dir,
+            *,
+            env=None,
+            inherit_env=False,
+            **_kwargs,
+        ):
+            self.cwd = Path(root_dir)
+            self._env = os.environ.copy() if inherit_env else {}
+            if env:
+                self._env.update(env)
+
+        def execute(self, command, *, timeout=None):
+            completed = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd=self.cwd,
+                env=self._env,
+                timeout=timeout,
+                check=False,
+            )
+            return ExecuteResponse(
+                output=completed.stdout,
+                exit_code=completed.returncode,
+                truncated=False,
+            )
+
+    deepagents = types.ModuleType("deepagents")
+    deepagents.__path__ = []
+    backends = types.ModuleType("deepagents.backends")
+    backends.LocalShellBackend = LocalShellBackend
+    protocol = types.ModuleType("deepagents.backends.protocol")
+    protocol.ExecuteResponse = ExecuteResponse
+    monkeypatch.setitem(sys.modules, "deepagents", deepagents)
+    monkeypatch.setitem(sys.modules, "deepagents.backends", backends)
+    monkeypatch.setitem(sys.modules, "deepagents.backends.protocol", protocol)
+
+    control_keys = (
+        "OMICSCLAW_REMOTE_AUTH_TOKEN",
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN",
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD",
+    )
+    for key in control_keys:
+        monkeypatch.setenv(key, "must-not-reach-agent-shell")
+    monkeypatch.setenv("OMICSCLAW_AGENT_SHELL_TEST_KEEP", "ordinary-value")
+
+    backend = create_sandbox_backend(str(tmp_path))
+    code = (
+        "import os;"
+        "print(os.environ.get('OMICSCLAW_AGENT_SHELL_TEST_KEEP', ''));"
+        f"print(','.join(k for k in {control_keys!r} if k in os.environ))"
+    )
+    result = backend.execute(
+        f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}"
+    )
+
+    assert result.exit_code == 0
+    assert result.output.splitlines() == ["ordinary-value", ""]
 
     def test_reviewer_agent_has_search_tool(self):
         """reviewer-agent must have tavily_search for citation verification."""
@@ -193,6 +276,124 @@ class TestIntake:
         # verify the raw text appears somewhere in the output.
         assert "Title of Paper" in md
         assert "## Full Text" in md
+
+    def test_pdf_fallback_scrubs_backend_control_credentials(self, monkeypatch):
+        """The external PDF parser must not inherit Backend bearer material."""
+        import subprocess
+        from types import SimpleNamespace
+
+        from omicsclaw.agents.intake import _fallback_pdf_text
+
+        observed: dict[str, object] = {}
+
+        def fake_run(*_args, **kwargs):
+            observed.update(kwargs)
+            return SimpleNamespace(returncode=0, stdout="safe text")
+
+        monkeypatch.setenv("OMICSCLAW_REMOTE_AUTH_TOKEN", "must-not-leak")
+        monkeypatch.setenv("OMICSCLAW_SKILL_EVOLUTION_TOKEN", "must-not-leak")
+        monkeypatch.setenv("OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD", "3")
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        assert _fallback_pdf_text("paper.pdf") == "safe text"
+        child_env = observed["env"]
+        assert isinstance(child_env, dict)
+        assert "OMICSCLAW_REMOTE_AUTH_TOKEN" not in child_env
+        assert "OMICSCLAW_SKILL_EVOLUTION_TOKEN" not in child_env
+        assert "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD" not in child_env
+
+    def test_preferred_pdf_converter_runs_inside_a_scrubbed_python_child(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        """The ODL wrapper must cleanse env before its library spawns Java."""
+        import importlib.util
+        import subprocess
+        import sys
+
+        from omicsclaw.agents.intake import _convert_pdf_opendataloader
+
+        monkeypatch.setattr(importlib.util, "find_spec", lambda _name: object())
+        observed: dict[str, object] = {}
+
+        class FakeProcess:
+            pid = 12345
+            returncode = 0
+
+            def __init__(self, command, **kwargs):
+                observed["command"] = command
+                observed["env"] = kwargs["env"]
+                observed["stdout"] = kwargs["stdout"]
+                observed["stderr"] = kwargs["stderr"]
+                Path(command[-1], "converted.md").write_text(
+                    "# Converted\n\nUseful methods.",
+                    encoding="utf-8",
+                )
+
+            def wait(self, timeout=None):
+                return self.returncode
+
+        monkeypatch.setattr(subprocess, "Popen", FakeProcess)
+        monkeypatch.setenv("omicsclaw_remote_auth_token", "must-not-leak")
+        monkeypatch.setenv("OMICSCLAW_SKILL_EVOLUTION_TOKEN", "must-not-leak")
+        monkeypatch.setenv("OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD", "3")
+        monkeypatch.setenv("OMICSCLAW_ODL_TEST_KEEP", "ordinary-value")
+
+        converted = _convert_pdf_opendataloader("paper.pdf", str(tmp_path))
+
+        assert converted is not None and "Useful methods" in converted
+        command = observed["command"]
+        assert isinstance(command, list)
+        assert command[0] == sys.executable
+        assert observed["stdout"] is subprocess.DEVNULL
+        assert observed["stderr"] is subprocess.DEVNULL
+        child_env = observed["env"]
+        assert isinstance(child_env, dict)
+        assert child_env["OMICSCLAW_ODL_TEST_KEEP"] == "ordinary-value"
+        assert not any(
+            key.upper()
+            in {
+                "OMICSCLAW_REMOTE_AUTH_TOKEN",
+                "OMICSCLAW_SKILL_EVOLUTION_TOKEN",
+                "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD",
+            }
+            for key in child_env
+        )
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group contract")
+    def test_preferred_pdf_converter_timeout_kills_the_wrapper_process_group(
+        self,
+        monkeypatch,
+    ):
+        from omicsclaw.agents.intake import _run_odl_converter_process
+
+        signals: list[int] = []
+
+        class TimedOutProcess:
+            pid = 54321
+            returncode = None
+
+            def __init__(self, _command, **_kwargs):
+                self.waits = 0
+
+            def wait(self, timeout=None):
+                self.waits += 1
+                if self.waits == 1:
+                    raise subprocess.TimeoutExpired("odl", timeout)
+                self.returncode = -signal.SIGTERM
+                return self.returncode
+
+            def kill(self):
+                raise AssertionError("process-group cleanup should be used on POSIX")
+
+        monkeypatch.setattr(subprocess, "Popen", TimedOutProcess)
+        monkeypatch.setattr(os, "killpg", lambda _pid, sig: signals.append(sig))
+
+        with pytest.raises(subprocess.TimeoutExpired):
+            _run_odl_converter_process([sys.executable, "-c", "pass"], {"PATH": "/bin"})
+
+        assert signals == [signal.SIGTERM, signal.SIGKILL]
 
     def test_prepare_intake_mode_a(self):
         """prepare_intake should work in Mode A (PDF only)."""

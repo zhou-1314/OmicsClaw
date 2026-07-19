@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import os
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from omicsclaw.diagnostics import build_doctor_report
 from omicsclaw.remote.schemas import (
@@ -22,7 +22,7 @@ from omicsclaw.remote.schemas import (
     OverlayInfo,
     OverlayListResponse,
 )
-from omicsclaw.remote.storage import resolve_workspace
+from omicsclaw.remote.runtime_binding import get_remote_workspace
 
 router = APIRouter(tags=["remote"])
 
@@ -36,10 +36,10 @@ def _kill_switch_active() -> bool:
 def build_env_doctor_report_payload(*, workspace_dir: str = "") -> EnvDoctorReport:
     resolved_workspace = str(workspace_dir or "").strip()
     if not resolved_workspace:
-        try:
-            resolved_workspace = str(resolve_workspace())
-        except RuntimeError:
-            resolved_workspace = ""
+        frozen_workspace = get_remote_workspace()
+        if frozen_workspace is None:
+            raise RuntimeError("remote_workspace_unavailable")
+        resolved_workspace = str(frozen_workspace)
 
     # ``omicsclaw_dir`` mirrors what server.py exposes via /health.
     try:
@@ -73,7 +73,10 @@ def build_env_doctor_report_payload(*, workspace_dir: str = "") -> EnvDoctorRepo
 
 @router.get("/env/doctor", response_model=EnvDoctorReport)
 async def env_doctor() -> EnvDoctorReport:
-    return build_env_doctor_report_payload()
+    try:
+        return build_env_doctor_report_payload()
+    except RuntimeError as exc:
+        raise HTTPException(503, detail="remote_workspace_unavailable") from exc
 
 
 # ---------------------------------------------------------------------------

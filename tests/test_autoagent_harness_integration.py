@@ -7,6 +7,7 @@ surface/trace/gates/patch/failure_memory with mocked LLM + runner.
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch as mock_patch
 
@@ -19,11 +20,30 @@ from omicsclaw.autoagent.harness_loop import HarnessLoop, HarnessResult
 from omicsclaw.autoagent.metrics_registry import (
     SC_PREPROCESSING_METRICS,
     get_metrics_for_skill,
-    register_metrics,
 )
 from omicsclaw.autoagent.runner import TrialExecution
 from omicsclaw.autoagent.search_space import ParameterDef, SearchSpace
 from omicsclaw.autoagent.trace import clear_result_json_cache
+
+
+def _init_source_repository(source_root: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=source_root, check=True)
+    subprocess.run(
+        ["git", "config", "user.name", "OmicsClaw Test"],
+        cwd=source_root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "omicsclaw-test@local"],
+        cwd=source_root,
+        check=True,
+    )
+    subprocess.run(["git", "add", "-A"], cwd=source_root, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "test source baseline"],
+        cwd=source_root,
+        check=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -96,8 +116,14 @@ class TestMVPSurface:
 
 def _make_result_json(output_dir: Path, score_data: dict) -> None:
     """Write a result.json (and dummy processed.h5ad) with given metrics."""
+    from omicsclaw.common.output_claim import OUTPUT_CLAIM_FILENAME
+
+    authority = _trial_authority()
     result = {
         "skill": "sc-preprocessing",
+        "version": "1.0.0",
+        "completed_at": "2026-07-17T00:00:00+00:00",
+        "input_checksum": "",
         "summary": score_data,
         "data": {
             "effective_params": {
@@ -105,11 +131,46 @@ def _make_result_json(output_dir: Path, score_data: dict) -> None:
                 "min_genes": 200,
             },
         },
+        "status": "ok",
     }
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "result.json").write_text(json.dumps(result))
+    (output_dir / OUTPUT_CLAIM_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "claim_id": "e" * 32,
+                "owner": "skill:sc-preprocessing",
+                "claimed_at": "2026-07-17T00:00:00+00:00",
+                "audit_identity": {
+                    "skill_id": authority.canonical_skill_id,
+                    "skill_version": authority.skill_version,
+                    "skill_hash": authority.manifest_hash,
+                    "source_hash": authority.source_hash,
+                    "environment_id": "env:" + "e" * 20,
+                },
+                "runtime_source": "base",
+            }
+        ),
+        encoding="utf-8",
+    )
     # Hard gate requires processed.h5ad for adata-producing skills
     (output_dir / "processed.h5ad").write_bytes(b"")
+
+
+def _trial_authority():
+    from omicsclaw.autoagent.authority import TrialSkillAuthority
+
+    revision = "sha256:" + "e" * 64
+    return TrialSkillAuthority(
+        requested_skill_name="sc-preprocessing",
+        canonical_skill_id="sc-preprocessing",
+        skill_version="1.0.0",
+        manifest_hash=revision,
+        source_hash=revision,
+        primary_anndata_path="processed.h5ad",
+        skills_root="/test/skills",
+    )
 
 
 class TestHarnessLoopIntegration:
@@ -142,6 +203,7 @@ class TestHarnessLoopIntegration:
             "def batch_mad_outlier_detection(adata):\n"
             "    return adata\n"
         )
+        _init_source_repository(proj)
 
         from omicsclaw.autoagent.edit_surface import EditSurface
 
@@ -218,6 +280,7 @@ class TestHarnessLoopIntegration:
             return TrialExecution(
                 success=True, output_dir=str(od),
                 duration_seconds=5.0, exit_code=0,
+                authority=_trial_authority(),
             )
 
         # LLM returns a patch that adds MAD strategy option
@@ -282,6 +345,7 @@ class TestHarnessLoopIntegration:
             _make_result_json(od, {
                 "n_hvg": 2000,
                 "n_genes": 18000,
+                "n_cells": 4250,
                 "n_cells_before_filter": 5000,
                 "n_genes_before_filter": 20000,
                 "cells_retained_pct": 85.0,
@@ -289,6 +353,7 @@ class TestHarnessLoopIntegration:
             return TrialExecution(
                 success=True, output_dir=str(od),
                 duration_seconds=5.0, exit_code=0,
+                authority=_trial_authority(),
             )
 
         # LLM returns an invalid patch (targets wrong file)
@@ -304,7 +369,7 @@ class TestHarnessLoopIntegration:
         with mock_patch(
             "omicsclaw.autoagent.harness_loop.execute_trial", mock_execute,
         ), mock_patch.object(loop, "_call_llm", return_value=bad_patch):
-            result = loop.run()
+            loop.run()
 
         # Failure bank should have entries
         bank_path = tmp_path / "output" / "failure_bank.jsonl"
@@ -330,6 +395,7 @@ class TestHarnessLoopIntegration:
             _make_result_json(od, {
                 "n_hvg": 2000,
                 "n_genes": 18000,
+                "n_cells": 4250,
                 "n_cells_before_filter": 5000,
                 "n_genes_before_filter": 20000,
                 "cells_retained_pct": 85.0,
@@ -337,6 +403,7 @@ class TestHarnessLoopIntegration:
             return TrialExecution(
                 success=True, output_dir=str(od),
                 duration_seconds=5.0, exit_code=0,
+                authority=_trial_authority(),
             )
 
         converge = json.dumps({

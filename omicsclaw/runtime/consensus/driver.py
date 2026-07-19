@@ -36,6 +36,10 @@ from typing import Any, Callable, Literal, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from omicsclaw.common.output_claim import (
+    collect_output_claim_identities,
+    is_scientific_output_file,
+)
 from omicsclaw.runtime.consensus.member import ConsensusMember
 from omicsclaw.runtime.consensus.operators.categorical import (
     ConsensusResult,
@@ -248,9 +252,26 @@ def _load_integration_panel_inputs(
     max_batches = 0
     for member, member_dir in member_dirs.items():
         try:
-            summary = json.loads((Path(member_dir) / "result.json").read_text()).get("summary", {})
+            member_root = Path(member_dir)
+            claim_identities = collect_output_claim_identities(member_root)
+            result_path = member_root / "result.json"
+            h5ad_path = member_root / "processed.h5ad"
+            if (
+                not is_scientific_output_file(
+                    result_path,
+                    output_root=member_root,
+                    claim_identities=claim_identities,
+                )
+                or not is_scientific_output_file(
+                    h5ad_path,
+                    output_root=member_root,
+                    claim_identities=claim_identities,
+                )
+            ):
+                continue
+            summary = json.loads(result_path.read_text()).get("summary", {})
             rep_key = str(summary.get("representation_used") or "X_pca")
-            adata = anndata.read_h5ad(Path(member_dir) / "processed.h5ad")
+            adata = anndata.read_h5ad(h5ad_path)
             if rep_key not in adata.obsm or "X_pca" not in adata.obsm:
                 continue
             if batch_key not in adata.obs.columns:

@@ -7,6 +7,7 @@ both via a mocked command-builder (deterministic) and an opt-in network E2E.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 
 import pytest
@@ -106,6 +107,34 @@ def test_venv_lock_acquires(tmp_path):
 # --------------------------------------------------------------------------- #
 # install command builder (mocked, deterministic)                             #
 # --------------------------------------------------------------------------- #
+
+
+def test_adaptive_provisioning_never_inherits_backend_control_credentials(
+    monkeypatch,
+):
+    captured_envs: list[dict[str, str]] = []
+
+    def capture_run(cmd, **kwargs):
+        captured_envs.append(dict(kwargs["env"]))
+        return subprocess.CompletedProcess(cmd, 0, "3.11\n/test-prefix\n", "")
+
+    monkeypatch.setenv("OMICSCLAW_REMOTE_AUTH_TOKEN", "must-not-reach-provisioner")
+    monkeypatch.setenv(
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN",
+        "must-not-reach-provisioner",
+    )
+    monkeypatch.setenv("OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD", "3")
+    monkeypatch.setattr(vp.subprocess, "run", capture_run)
+    vp._interp_identity.cache_clear()
+
+    assert vp._interp_identity("/test/non-running-python")
+    assert vp._run(["test-command"], timeout=1) is True
+
+    assert len(captured_envs) == 2
+    for child_env in captured_envs:
+        assert "OMICSCLAW_REMOTE_AUTH_TOKEN" not in child_env
+        assert "OMICSCLAW_SKILL_EVOLUTION_TOKEN" not in child_env
+        assert "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD" not in child_env
 
 
 def test_install_into_venv_uses_venv_own_pip_not_uv(monkeypatch, tmp_path):

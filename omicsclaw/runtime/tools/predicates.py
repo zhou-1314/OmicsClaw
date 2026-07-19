@@ -6,7 +6,7 @@ mapping is inspectable in one file rather than scattered across 33
 absent from this map — their ``predicate`` stays ``None`` (always-on).
 
 Always-on (predicate=None):
-    omicsclaw, resolve_capability, consult_knowledge, inspect_data,
+    omicsclaw, candidate_plan_execute, resolve_capability, consult_knowledge, inspect_data,
     list_directory, glob_files, file_read, read_knowhow
 
 The 33 lazy-load tools below cover all remaining registered tools.

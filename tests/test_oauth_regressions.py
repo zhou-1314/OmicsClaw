@@ -14,12 +14,29 @@ All tests mock subprocess / httpx / shutil.which so they run offline.
 from __future__ import annotations
 
 import os
+import importlib.util
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from omicsclaw.providers import ccproxy as ccm
 from omicsclaw.providers import runtime as pr
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load_omicsclaw_script():
+    spec = importlib.util.spec_from_file_location(
+        "omicsclaw_main_oauth_environment_test",
+        ROOT / "omicsclaw.py",
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 @pytest.fixture(autouse=True)
@@ -79,6 +96,42 @@ def test_bug2_lookup_after_normalize_does_not_keyerror():
     """The original bug path: CLI alias → CCPROXY_PROVIDER_MAP lookup."""
     omics_name = ccm.normalize_cli_provider("claude")
     assert ccm.CCPROXY_PROVIDER_MAP[omics_name] == "claude_api"  # no KeyError
+
+
+def test_root_auth_cli_scrubs_backend_control_credentials(monkeypatch):
+    import subprocess
+
+    oc = _load_omicsclaw_script()
+    monkeypatch.setattr(ccm, "is_ccproxy_available", lambda: True)
+    monkeypatch.setattr(ccm, "ccproxy_executable", lambda: "/usr/bin/ccproxy")
+    control_keys = {
+        "OMICSCLAW_REMOTE_AUTH_TOKEN",
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN",
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD",
+    }
+    for key in control_keys:
+        monkeypatch.setenv(key, "must-not-reach-root-ccproxy")
+    monkeypatch.setenv("OMICSCLAW_ROOT_AUTH_TEST_KEEP", "ordinary-value")
+    observed: dict[str, object] = {}
+
+    def fake_call(cmd, **kwargs):
+        observed["cmd"] = cmd
+        observed["env"] = kwargs["env"]
+        return 0
+
+    monkeypatch.setattr(subprocess, "call", fake_call)
+
+    with pytest.raises(SystemExit) as exit_info:
+        oc._handle_auth_command(
+            SimpleNamespace(auth_command="login", provider="openai")
+        )
+
+    assert exit_info.value.code == 0
+    assert observed["cmd"] == ["/usr/bin/ccproxy", "auth", "login", "codex"]
+    child_env = observed["env"]
+    assert isinstance(child_env, dict)
+    assert child_env["OMICSCLAW_ROOT_AUTH_TEST_KEEP"] == "ordinary-value"
+    assert not control_keys.intersection(child_env)
 
 
 def test_bug2_maybe_start_ccproxy_error_message_uses_cli_alias(monkeypatch):

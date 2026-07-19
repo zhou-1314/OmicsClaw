@@ -1,57 +1,26 @@
-"""POST /sessions/{session_id}/resume — reattach to running jobs.
+"""Retired legacy Remote Session-resume compatibility Interface.
 
-When the App's tunnel drops or the window reopens, the session is asked
-"are any of your jobs still alive?". MVP-1 returns the list of active jobs
-owned by that session; deeper transcript replay belongs to the chat layer.
+The response shape remains available for older App clients, but this Adapter
+has no authority to discover or resume scientific work.  In particular it
+does not resolve a Workspace, inspect historical ``job.json`` files, or touch
+the canonical Run Runtime.  Canonical Run observation and cancellation live
+on the Run/Job Interfaces instead.
 """
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
+from fastapi import APIRouter
 
-from fastapi import APIRouter, HTTPException
-
-from omicsclaw.remote.schemas import Job, SessionResumeResponse
-from omicsclaw.remote.storage import jobs_root, resolve_workspace
+from omicsclaw.remote.schemas import SessionResumeResponse
 
 router = APIRouter(tags=["remote"])
 
 
-def _resolve_or_400() -> Path:
-    try:
-        return resolve_workspace()
-    except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-def _read_job(job_file: Path) -> Job | None:
-    if not job_file.is_file():
-        return None
-    try:
-        return Job.model_validate_json(job_file.read_text(encoding="utf-8"))
-    except (OSError, ValueError, json.JSONDecodeError):
-        return None
-
-
 @router.post("/sessions/{session_id}/resume", response_model=SessionResumeResponse)
 async def resume_session(session_id: str) -> SessionResumeResponse:
-    workspace = _resolve_or_400()
-    root = jobs_root(workspace)
-    active: list[str] = []
-    for entry in root.iterdir():
-        if not entry.is_dir():
-            continue
-        job = _read_job(entry / "job.json")
-        if job is None:
-            continue
-        if job.session_id != session_id:
-            continue
-        if job.status in ("queued", "running"):
-            active.append(entry.name)
     return SessionResumeResponse(
         session_id=session_id,
-        resumed=True,
-        reason="" if active else "no_active_jobs",
-        active_job_ids=active,
+        resumed=False,
+        reason="legacy_session_resume_retired",
+        active_job_ids=[],
     )

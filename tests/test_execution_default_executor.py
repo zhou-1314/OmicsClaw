@@ -145,10 +145,12 @@ def test_build_default_executor_returns_skill_runner_executor() -> None:
     assert isinstance(executor, SkillRunnerExecutor)
 
 
-def test_jobs_router_default_executor_is_skill_runner_executor() -> None:
+def test_jobs_router_has_no_legacy_executor_authority() -> None:
     from omicsclaw.remote.routers import jobs as jobs_module
 
-    assert isinstance(jobs_module._DEFAULT_EXECUTOR, SkillRunnerExecutor)
+    assert not hasattr(jobs_module, "_DEFAULT_EXECUTOR")
+    assert not hasattr(jobs_module, "_STUB_JOB_TASKS")
+    assert not hasattr(jobs_module, "_ensure_stub_job")
 
 
 def test_skill_runner_executor_maps_job_context_to_arun_skill(monkeypatch, tmp_path: Path) -> None:

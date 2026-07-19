@@ -480,38 +480,52 @@ def build_default_tool_execution_hooks(
 
 
 def build_candidate_chain_confirmation_hook() -> ToolExecutionHook:
-    """Build the hard execution gate for an unconfirmed composite plan."""
+    """Bind composite execution to its confirmed digest and dedicated action."""
 
     def pre_tool(
         request: ToolExecutionRequest,
         arguments: dict[str, Any],
         runtime_context: Mapping[str, Any] | None,
     ) -> ToolExecutionHookResult:
-        if request.name not in {"omicsclaw", "autonomous_analysis_execute"}:
+        if request.name not in {
+            "omicsclaw",
+            "autonomous_analysis_execute",
+            "candidate_plan_execute",
+        }:
             return ToolExecutionHookResult()
         gate = (runtime_context or {}).get("candidate_chain_gate") or {}
         if not isinstance(gate, Mapping) or not gate.get("skills"):
             return ToolExecutionHookResult()
         digest = _safe_text(gate.get("plan_digest")) or "missing-digest"
-        skills = {_safe_text(skill) for skill in gate.get("skills", [])}
-        requested_skill = (
-            _safe_text(arguments.get("skill"))
-            if request.name == "omicsclaw"
-            else "autonomous_analysis_execute"
-        )
-        if (
-            request.name == "omicsclaw"
-            and gate.get("confirmed") is True
-            and requested_skill in skills
-        ):
-            return ToolExecutionHookResult()
-        reason = (
-            "is outside the confirmed candidate plan"
-            if gate.get("confirmed") is True
-            else "requires explicit user confirmation"
-        )
+        if request.name == "candidate_plan_execute":
+            requested_digest = _safe_text(arguments.get("plan_digest"))
+            if gate.get("confirmed") is True and requested_digest == digest:
+                return ToolExecutionHookResult()
+            reason = (
+                "does not match the confirmed candidate plan"
+                if gate.get("confirmed") is True
+                else "requires explicit user confirmation"
+            )
+            requested_skill = "candidate_plan_execute"
+        else:
+            requested_digest = ""
+            requested_skill = (
+                _safe_text(arguments.get("skill"))
+                if request.name == "omicsclaw"
+                else "autonomous_analysis_execute"
+            )
+            reason = (
+                "must run through candidate_plan_execute so topology and failure "
+                "cascades remain bound to the confirmed plan"
+                if gate.get("confirmed") is True
+                else "requires explicit user confirmation"
+            )
         return ToolExecutionHookResult(
-            action=TOOL_POLICY_REQUIRE_APPROVAL,
+            action=(
+                TOOL_POLICY_DENY
+                if gate.get("confirmed") is True
+                else TOOL_POLICY_REQUIRE_APPROVAL
+            ),
             message=(
                 f"Skill {requested_skill or '<missing>'!r} {reason} "
                 f"(plan_digest={digest})."
@@ -520,6 +534,7 @@ def build_candidate_chain_confirmation_hook() -> ToolExecutionHook:
                 "plan_digest": digest,
                 "candidate_chain_blocked": True,
                 "requested_skill": requested_skill,
+                "requested_plan_digest": requested_digest,
             },
         )
 

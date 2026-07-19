@@ -60,12 +60,9 @@ Send these commands to @BotFather to customize your bot:
 ```bash
 TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz1234567890
 
-# Optional: Admin chat ID to bypass Telegram rate limits
+# Required Owner identity unless TELEGRAM_ALLOWED_SENDERS is configured
 # Get your chat ID by sending /start to @userinfobot
 # TELEGRAM_CHAT_ID=123456789
-
-# Optional: per-user rate limit for Telegram (default: 10, 0 = unlimited)
-# RATE_LIMIT_PER_HOUR=10
 ```
 
 ---
@@ -74,15 +71,16 @@ TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz1234567890
 
 **⚠️ CRITICAL WARNING:** Feishu's mechanism dictates that any changes to permissions or event subscriptions **do not take effect immediately upon saving! You must create and publish a new application version.** 90% of developers get stuck here.
 
-### 2.1 Prepare and Run the Connection Test
+### 2.1 Migration status
 
-Before diving into console configuration, you must have the long connection script running locally because Feishu validates webhook/connection status.
+Feishu configuration is retained here as migration reference. Its legacy
+direct-dispatch runtime is disabled until it receives a `ControlRuntime` ingress
+and persistent Delivery Adapter cutover equivalent to Telegram.
 
 ```bash
-# Start the bot locally first!
+# Expected to fail closed while the migration is incomplete
 python -m omicsclaw.surfaces.channels --channels feishu
 ```
-If you see debugging messages indicating WebSocket connection success, leave the terminal running and proceed to the next step.
 
 ### 2.2 Configure Permissions and Event Subscriptions
 

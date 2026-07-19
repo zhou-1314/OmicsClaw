@@ -83,6 +83,25 @@ def test_spatial_reader_missing_artifact_returns_none(tmp_path: Path) -> None:
     assert SpatialDomainsArtifactReader().read_labels(member, tmp_path) is None
 
 
+def test_spatial_reader_rejects_claim_alias_labels(tmp_path: Path) -> None:
+    from omicsclaw.common.output_claim import OUTPUT_CLAIM_FILENAME
+    from omicsclaw.runtime.consensus.source_registry import SpatialDomainsArtifactReader
+
+    member = ConsensusMember(
+        name="banksy",
+        skill_name="spatial-domains",
+        params={"method": "banksy"},
+    )
+    member_dir = tmp_path / "banksy"
+    figure_dir = member_dir / "figure_data"
+    figure_dir.mkdir(parents=True)
+    claim = member_dir / OUTPUT_CLAIM_FILENAME
+    claim.write_text("observation,spatial_domain\ns1,L1\n", encoding="utf-8")
+    (figure_dir / "domain_spatial_points.csv").hardlink_to(claim)
+
+    assert SpatialDomainsArtifactReader().read_labels(member, tmp_path) is None
+
+
 def test_spatial_reader_missing_summary_returns_zero(tmp_path: Path) -> None:
     from omicsclaw.runtime.consensus.source_registry import SpatialDomainsArtifactReader
 

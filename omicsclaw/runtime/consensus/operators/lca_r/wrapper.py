@@ -22,6 +22,9 @@ from omicsclaw.runtime.consensus.operators.categorical import (
     ConsensusResult,
     _align_all_to_reference,
 )
+from omicsclaw.skill.execution.environment import (
+    scrub_internal_control_credentials,
+)
 
 _THIS_DIR = Path(__file__).resolve().parent
 _LCA_R_SCRIPT = _THIS_DIR / "consensus_lca.r"
@@ -83,6 +86,7 @@ def lca_consensus(
             capture_output=True,
             text=True,
             check=False,
+            env=scrub_internal_control_credentials(os.environ),
         )
         if proc.returncode != 0:
             raise RuntimeError(

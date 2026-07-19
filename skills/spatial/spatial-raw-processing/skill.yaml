@@ -50,6 +50,14 @@ interface:
     - json
     - yaml
     - yml
+    preconditions:
+      content:
+        fastq:
+          require_valid_record: true
+          pairing: paired
+        directory:
+          any_of_signatures:
+          - paired-fastq
   parameters:
     hints:
       st_pipeline:

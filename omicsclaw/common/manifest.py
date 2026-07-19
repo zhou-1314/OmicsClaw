@@ -15,6 +15,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from omicsclaw.common.output_claim import (
+    atomic_write_owned_output_text,
+    is_scientific_output_file,
+)
+
 MANIFEST_FILENAME = "manifest.json"
 MANIFEST_SCHEMA_VERSION = 2
 
@@ -189,12 +194,18 @@ class PipelineManifest:
 
 
 def save_manifest(output_dir: str | Path, manifest: PipelineManifest) -> Path:
-    """Persist a manifest instance to ``manifest.json``."""
+    """Persist a manifest instance to an owned ``manifest.json`` atomically."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     path = output_dir / MANIFEST_FILENAME
-    path.write_text(json.dumps(manifest.to_dict(), indent=2, default=str), encoding="utf-8")
+    payload = json.dumps(manifest.to_dict(), indent=2, default=str)
+    atomic_write_owned_output_text(
+        path,
+        output_root=output_dir,
+        text=payload,
+        label="manifest",
+    )
     return path
 
 
@@ -242,11 +253,25 @@ def write_manifest(
 
 def read_manifest(directory: str | Path) -> PipelineManifest | None:
     """Read manifest.json from a directory, returning None if absent."""
-    path = Path(directory) / MANIFEST_FILENAME
-    if not path.exists():
+    root = Path(directory)
+    path = root / MANIFEST_FILENAME
+    if (
+        not path.exists()
+        or path.is_symlink()
+        or not is_scientific_output_file(path, output_root=root)
+    ):
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return None
         return PipelineManifest.from_dict(data)
-    except (json.JSONDecodeError, TypeError, KeyError):
+    except (
+        AttributeError,
+        json.JSONDecodeError,
+        TypeError,
+        KeyError,
+        ValueError,
+        OSError,
+    ):
         return None

@@ -4,6 +4,19 @@
 
 Accepted (2026-05-18).
 
+**Identity and carrier refinement (2026-07-14):**
+[ADR 0047](0047-separate-inbound-envelope-from-dispatch-context.md) moves the
+live cancellation token from serialized request data into Dispatch Context.
+[ADR 0051](0051-opaque-turn-id-and-durable-non-replayable-turn-receipt.md)
+makes opaque Turn ID the cancellation identity; Conversation or legacy
+`session_id` may only be a Surface convenience used to resolve the active Turn.
+This ADR's end-to-end subprocess propagation remains current.
+
+**Cancellation-trigger refinement (2026-07-14):**
+[ADR 0052](0052-bind-retried-ingress-to-one-turn-and-resume-observation.md)
+requires explicit `cancel(Turn ID)`. Losing a Desktop SSE connection or another
+Response Sink detaches the observer and is not cancellation.
+
 ## Context
 
 ADR 0006 §"Open questions" left one item explicitly deferred:

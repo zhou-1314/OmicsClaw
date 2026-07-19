@@ -12,7 +12,6 @@ from omicsclaw.autoagent.patch_engine import (
     FileDiff,
     Hunk,
     PatchPlan,
-    ValidationResult,
     apply_patch,
     backup_files,
     parse_patch_response,
@@ -61,6 +60,49 @@ def dispatch_method(method, adata):
 """,
         encoding="utf-8",
     )
+
+
+def _write_v2_skill_md(tmp_path: Path) -> Path:
+    skill_dir = tmp_path / "skills" / "test"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    target = skill_dir / "SKILL.md"
+    target.write_text(
+        """---
+# AUTO-GENERATED header from skill.yaml — do not edit by hand.
+name: test-skill
+version: 1.0.0
+---
+
+# test-skill
+
+## When to use
+
+Use this workflow for test data.
+
+## Inputs & Outputs
+
+<!-- AUTO-GENERATED from skill.yaml (interface) — do not edit by hand. Regenerate: python scripts/generate_skill_md.py <skill_dir> -->
+
+**Inputs**
+
+- File types: `.h5ad`
+
+**Outputs**
+
+- `result.json`
+
+## Flow
+
+1. Load the input.
+2. Run the analysis.
+
+## Gotchas
+
+- Check input quality before interpreting results.
+""",
+        encoding="utf-8",
+    )
+    return target
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +178,7 @@ class TestParsePatchResponse:
 
     def test_patch_plan_properties(self):
         plan = PatchPlan(
+            target_files=["a.py", "b.py"],
             diffs=[
                 FileDiff("a.py", [Hunk("x", "y"), Hunk("a", "b")]),
                 FileDiff("b.py", [Hunk("c", "d")]),
@@ -163,6 +206,166 @@ class TestParsePatchResponse:
 
 
 class TestValidatePatch:
+    def test_rejects_exact_frontmatter_hunk(self, tmp_path):
+        _write_v2_skill_md(tmp_path)
+        surface = EditSurface(
+            max_level=1,
+            project_root=tmp_path,
+            explicit_files=["skills/test/SKILL.md"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/SKILL.md"],
+            diffs=[
+                FileDiff("skills/test/SKILL.md", [
+                    Hunk("version: 1.0.0", "version: 2.0.0")
+                ])
+            ],
+        )
+
+        result = validate_patch(patch, surface)
+
+        assert result.valid is False
+        assert "YAML frontmatter" in result.error_summary
+
+    def test_rejects_legacy_v1_frontmatter_hunk(self, tmp_path):
+        skill_dir = tmp_path / "skills" / "legacy"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            """---
+name: legacy-skill
+description: Legacy runtime metadata.
+---
+
+# legacy-skill
+
+## Flow
+
+Run the legacy workflow.
+""",
+            encoding="utf-8",
+        )
+        surface = EditSurface(
+            max_level=1,
+            project_root=tmp_path,
+            explicit_files=["skills/legacy/SKILL.md"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/legacy/SKILL.md"],
+            diffs=[
+                FileDiff("skills/legacy/SKILL.md", [
+                    Hunk(
+                        "description: Legacy runtime metadata.",
+                        "description: Replaced runtime metadata.",
+                    )
+                ])
+            ],
+        )
+
+        result = validate_patch(patch, surface)
+
+        assert result.valid is False
+        assert "YAML frontmatter" in result.error_summary
+
+    def test_rejects_exact_generated_io_hunk(self, tmp_path):
+        _write_v2_skill_md(tmp_path)
+        surface = EditSurface(
+            max_level=1,
+            project_root=tmp_path,
+            explicit_files=["skills/test/SKILL.md"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/SKILL.md"],
+            diffs=[
+                FileDiff("skills/test/SKILL.md", [
+                    Hunk("- File types: `.h5ad`", "- File types: `.csv`")
+                ])
+            ],
+        )
+
+        result = validate_patch(patch, surface)
+
+        assert result.valid is False
+        assert "AUTO-GENERATED Inputs & Outputs" in result.error_summary
+
+    def test_rejects_whitespace_normalized_frontmatter_hunk(self, tmp_path):
+        _write_v2_skill_md(tmp_path)
+        surface = EditSurface(
+            max_level=1,
+            project_root=tmp_path,
+            explicit_files=["skills/test/SKILL.md"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/SKILL.md"],
+            diffs=[
+                FileDiff("skills/test/SKILL.md", [
+                    Hunk("  version:    1.0.0  ", "version: 2.0.0")
+                ])
+            ],
+        )
+
+        result = validate_patch(patch, surface)
+
+        assert result.valid is False
+        assert "YAML frontmatter" in result.error_summary
+
+    def test_rejects_hunk_spanning_generated_io_from_narrative_to_narrative(
+        self,
+        tmp_path,
+    ):
+        target = _write_v2_skill_md(tmp_path)
+        content = target.read_text(encoding="utf-8")
+        start = content.index("Use this workflow for test data.")
+        end = content.index("2. Run the analysis.") + len("2. Run the analysis.")
+        old_code = content[start:end]
+        surface = EditSurface(
+            max_level=1,
+            project_root=tmp_path,
+            explicit_files=["skills/test/SKILL.md"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/SKILL.md"],
+            diffs=[
+                FileDiff("skills/test/SKILL.md", [
+                    Hunk(
+                        old_code,
+                        old_code.replace(
+                            "Use this workflow for test data.",
+                            "Use this improved workflow for test data.",
+                        ),
+                    )
+                ])
+            ],
+        )
+
+        result = validate_patch(patch, surface)
+
+        assert result.valid is False
+        assert "AUTO-GENERATED Inputs & Outputs" in result.error_summary
+
+    def test_rejects_hunk_that_breaks_generated_io_heading_boundary(self, tmp_path):
+        _write_v2_skill_md(tmp_path)
+        surface = EditSurface(
+            max_level=1,
+            project_root=tmp_path,
+            explicit_files=["skills/test/SKILL.md"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/SKILL.md"],
+            diffs=[
+                FileDiff("skills/test/SKILL.md", [
+                    Hunk(
+                        "Use this workflow for test data.\n\n",
+                        "Use this workflow for test data.",
+                    )
+                ])
+            ],
+        )
+
+        result = validate_patch(patch, surface)
+
+        assert result.valid is False
+        assert "protected SKILL.md structure" in result.error_summary
+
     def test_valid_patch(self, tmp_path):
         # Create file
         skill_dir = tmp_path / "skills" / "test"
@@ -173,24 +376,318 @@ class TestValidatePatch:
             max_level=1, project_root=tmp_path,
             explicit_files=["skills/test/SKILL.md"],
         )
-        patch = PatchPlan(diffs=[
-            FileDiff("skills/test/SKILL.md", [
-                Hunk("min_genes: 200", "min_genes: 300")
-            ])
-        ])
+        patch = PatchPlan(
+            target_files=["skills/test/SKILL.md"],
+            diffs=[
+                FileDiff("skills/test/SKILL.md", [
+                    Hunk("min_genes: 200", "min_genes: 300")
+                ])
+            ],
+        )
         result = validate_patch(patch, surface)
         assert result.valid is True
+
+    def test_rejects_ambiguous_whitespace_normalized_hunk(self, tmp_path):
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "test.py").write_text(
+            """def first():
+    value   = 1
+    return value
+
+
+def second():
+    value =   1
+    return value
+""",
+            encoding="utf-8",
+        )
+        surface = EditSurface(
+            max_level=2,
+            project_root=tmp_path,
+            explicit_files=["skills/test/test.py"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/test.py"],
+            diffs=[
+                FileDiff(
+                    "skills/test/test.py",
+                    [Hunk("value = 1\nreturn value", "return 1")],
+                )
+            ],
+        )
+
+        result = validate_patch(patch, surface)
+
+        assert result.valid is False
+        assert "Ambiguous whitespace-normalized hunk" in result.error_summary
+        assert "appears 2 times" in result.error_summary
+
+    def test_rejects_diff_target_missing_from_target_files(self, tmp_path):
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "test.py").write_text("x = 1\n", encoding="utf-8")
+        surface = EditSurface(
+            max_level=2,
+            project_root=tmp_path,
+            explicit_files=["skills/test/test.py"],
+        )
+        patch = PatchPlan(
+            target_files=[],
+            diffs=[
+                FileDiff("skills/test/test.py", [Hunk("x = 1", "x = 10")]),
+            ],
+        )
+
+        result = validate_patch(patch, surface)
+
+        assert result.valid is False
+        assert "target_files is missing canonical diff target" in result.error_summary
+
+    def test_rejects_target_files_entry_without_diff(self, tmp_path):
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "a.py").write_text("a = 1\n", encoding="utf-8")
+        (skill_dir / "b.py").write_text("b = 2\n", encoding="utf-8")
+        surface = EditSurface(
+            max_level=2,
+            project_root=tmp_path,
+            explicit_files=["skills/test/a.py", "skills/test/b.py"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/a.py", "skills/test/b.py"],
+            diffs=[
+                FileDiff("skills/test/a.py", [Hunk("a = 1", "a = 10")]),
+            ],
+        )
+
+        result = validate_patch(patch, surface)
+
+        assert result.valid is False
+        assert "target_files has canonical target without diff" in result.error_summary
+        assert "skills/test/b.py" in result.error_summary
+
+    def test_rejects_duplicate_target_files_entries(self, tmp_path):
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "test.py").write_text("x = 1\n", encoding="utf-8")
+        surface = EditSurface(
+            max_level=2,
+            project_root=tmp_path,
+            explicit_files=["skills/test/test.py"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/test.py", "skills/test/test.py"],
+            diffs=[
+                FileDiff("skills/test/test.py", [Hunk("x = 1", "x = 10")]),
+            ],
+        )
+
+        result = validate_patch(patch, surface)
+
+        assert result.valid is False
+        assert "target_files contains duplicate canonical target" in result.error_summary
+        assert "skills/test/test.py" in result.error_summary
+
+    def test_rejects_target_files_aliases_for_same_canonical_target(self, tmp_path):
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "test.py").write_text("x = 1\n", encoding="utf-8")
+        surface = EditSurface(
+            max_level=2,
+            project_root=tmp_path,
+            explicit_files=["skills/test/test.py"],
+        )
+        patch = PatchPlan(
+            target_files=[
+                "skills/test/test.py",
+                "skills/test/../test/test.py",
+            ],
+            diffs=[
+                FileDiff("skills/test/test.py", [Hunk("x = 1", "x = 10")]),
+            ],
+        )
+
+        result = validate_patch(patch, surface)
+
+        assert result.valid is False
+        assert "target_files contains duplicate canonical target" in result.error_summary
+
+    def test_matches_target_files_and_diffs_by_canonical_path(self, tmp_path):
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "test.py").write_text("x = 1\n", encoding="utf-8")
+        surface = EditSurface(
+            max_level=2,
+            project_root=tmp_path,
+            explicit_files=["skills/test/test.py"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/../test/test.py"],
+            diffs=[
+                FileDiff("skills/test/test.py", [Hunk("x = 1", "x = 10")]),
+            ],
+        )
+
+        result = validate_patch(patch, surface)
+
+        assert result.valid is True
+
+    def test_rejects_non_list_target_files(self, tmp_path):
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "test.py").write_text("x = 1\n", encoding="utf-8")
+        surface = EditSurface(
+            max_level=2,
+            project_root=tmp_path,
+            explicit_files=["skills/test/test.py"],
+        )
+        patch = PatchPlan(
+            target_files="skills/test/test.py",  # type: ignore[arg-type]
+            diffs=[
+                FileDiff("skills/test/test.py", [Hunk("x = 1", "x = 10")]),
+            ],
+        )
+
+        result = validate_patch(patch, surface)
+
+        assert result.valid is False
+        assert "target_files must be a list of path strings" in result.error_summary
+
+    def test_rejects_non_string_target_files_item(self, tmp_path):
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "test.py").write_text("x = 1\n", encoding="utf-8")
+        surface = EditSurface(
+            max_level=2,
+            project_root=tmp_path,
+            explicit_files=["skills/test/test.py"],
+        )
+        patch = PatchPlan(
+            target_files=[123],  # type: ignore[list-item]
+            diffs=[
+                FileDiff("skills/test/test.py", [Hunk("x = 1", "x = 10")]),
+            ],
+        )
+
+        result = validate_patch(patch, surface)
+
+        assert result.valid is False
+        assert "target_files[0] must be a non-empty path string" in result.error_summary
+
+    @pytest.mark.parametrize(
+        "invalid_target",
+        ["", " skills/test/test.py", "skills/test/test.py "],
+        ids=["empty", "leading-whitespace", "trailing-whitespace"],
+    )
+    def test_rejects_invalid_target_files_path_string(
+        self,
+        tmp_path,
+        invalid_target,
+    ):
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "test.py").write_text("x = 1\n", encoding="utf-8")
+        surface = EditSurface(
+            max_level=2,
+            project_root=tmp_path,
+            explicit_files=["skills/test/test.py"],
+        )
+        patch = PatchPlan(
+            target_files=[invalid_target],
+            diffs=[
+                FileDiff("skills/test/test.py", [Hunk("x = 1", "x = 10")]),
+            ],
+        )
+
+        result = validate_patch(patch, surface)
+
+        assert result.valid is False
+        assert "target_files[0] must be a non-empty path string" in result.error_summary
+
+    def test_rejects_non_string_diff_file_without_raising(self, tmp_path):
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "test.py").write_text("x = 1\n", encoding="utf-8")
+        surface = EditSurface(
+            max_level=2,
+            project_root=tmp_path,
+            explicit_files=["skills/test/test.py"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/test.py"],
+            diffs=[
+                FileDiff(123, [Hunk("x = 1", "x = 10")]),  # type: ignore[arg-type]
+            ],
+        )
+
+        result = validate_patch(patch, surface)
+
+        assert result.valid is False
+        assert "diffs[0].file must be a non-empty path string" in result.error_summary
+
+    def test_rejects_duplicate_file_diffs_for_same_target(self, tmp_path):
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "test.py").write_text("x = 1\ny = 2\n", encoding="utf-8")
+        surface = EditSurface(
+            max_level=2,
+            project_root=tmp_path,
+            explicit_files=["skills/test/test.py"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/test.py"],
+            diffs=[
+                FileDiff("skills/test/test.py", [Hunk("x = 1", "x = 10")]),
+                FileDiff("skills/test/test.py", [Hunk("y = 2", "y = 20")]),
+            ],
+        )
+
+        result = validate_patch(patch, surface)
+
+        assert result.valid is False
+        assert "duplicate canonical target" in result.error_summary
+        assert "skills/test/test.py" in result.error_summary
+
+    def test_rejects_file_diffs_that_normalize_to_same_target(self, tmp_path):
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "test.py").write_text("x = 1\ny = 2\n", encoding="utf-8")
+        surface = EditSurface(
+            max_level=2,
+            project_root=tmp_path,
+            explicit_files=["skills/test/test.py"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/test.py"],
+            diffs=[
+                FileDiff("skills/test/test.py", [Hunk("x = 1", "x = 10")]),
+                FileDiff(
+                    "skills/test/../test/test.py",
+                    [Hunk("y = 2", "y = 20")],
+                ),
+            ],
+        )
+
+        result = validate_patch(patch, surface)
+
+        assert result.valid is False
+        assert "duplicate canonical target" in result.error_summary
+        assert "skills/test/test.py" in result.error_summary
 
     def test_outside_surface(self, tmp_path):
         surface = EditSurface(
             max_level=1, project_root=tmp_path,
             explicit_files=["skills/test/SKILL.md"],
         )
-        patch = PatchPlan(diffs=[
-            FileDiff("omicsclaw/runtime/tool_executor.py", [
-                Hunk("old", "new")
-            ])
-        ])
+        patch = PatchPlan(
+            target_files=["omicsclaw/runtime/tool_executor.py"],
+            diffs=[
+                FileDiff("omicsclaw/runtime/tool_executor.py", [
+                    Hunk("old", "new")
+                ])
+            ],
+        )
         result = validate_patch(patch, surface)
         assert result.valid is False
         assert "frozen" in result.errors[0]
@@ -204,26 +701,35 @@ class TestValidatePatch:
             max_level=1, project_root=tmp_path,
             explicit_files=["skills/test/SKILL.md"],
         )
-        patch = PatchPlan(diffs=[
-            FileDiff("skills/test/SKILL.md", [
-                Hunk("nonexistent code", "new code")
-            ])
-        ])
+        patch = PatchPlan(
+            target_files=["skills/test/SKILL.md"],
+            diffs=[
+                FileDiff("skills/test/SKILL.md", [
+                    Hunk("nonexistent code", "new code")
+                ])
+            ],
+        )
         result = validate_patch(patch, surface)
         assert result.valid is False
         assert "not found" in result.errors[0]
 
     def test_empty_diffs(self, tmp_path):
         surface = EditSurface(max_level=1, project_root=tmp_path)
-        patch = PatchPlan(diffs=[])
+        patch = PatchPlan(
+            target_files="not-a-list",  # type: ignore[arg-type]
+            diffs=[],
+        )
         result = validate_patch(patch, surface)
         assert result.valid is False
-        assert "no diffs" in result.errors[0].lower()
+        assert result.errors == ["Patch contains no diffs."]
 
     def test_rejects_project_escape(self, tmp_path):
-        patch = PatchPlan(diffs=[
-            FileDiff("../outside.py", [Hunk("old", "new")])
-        ])
+        patch = PatchPlan(
+            target_files=["../outside.py"],
+            diffs=[
+                FileDiff("../outside.py", [Hunk("old", "new")])
+            ],
+        )
         surface = EditSurface(max_level=4, project_root=tmp_path)
         result = validate_patch(patch, surface)
         assert result.valid is False
@@ -232,11 +738,14 @@ class TestValidatePatch:
     def test_rejects_non_target_method_patch_for_spatial_domains(self, tmp_path):
         _write_spatial_domains_fixture(tmp_path)
         surface = build_spatial_domains_surface(tmp_path, method="cellcharter")
-        patch = PatchPlan(diffs=[
-            FileDiff("skills/spatial/_lib/domains.py", [
-                Hunk('marker = "stagate"', 'marker = "stagate_v2"')
-            ])
-        ])
+        patch = PatchPlan(
+            target_files=["skills/spatial/_lib/domains.py"],
+            diffs=[
+                FileDiff("skills/spatial/_lib/domains.py", [
+                    Hunk('marker = "stagate"', 'marker = "stagate_v2"')
+                ])
+            ],
+        )
 
         result = validate_patch(patch, surface)
 
@@ -247,11 +756,14 @@ class TestValidatePatch:
     def test_allows_target_helper_patch_for_spatial_domains(self, tmp_path):
         _write_spatial_domains_fixture(tmp_path)
         surface = build_spatial_domains_surface(tmp_path, method="cellcharter")
-        patch = PatchPlan(diffs=[
-            FileDiff("skills/spatial/_lib/domains.py", [
-                Hunk('return "fixed"', 'return "fixed_v2"')
-            ])
-        ])
+        patch = PatchPlan(
+            target_files=["skills/spatial/_lib/domains.py"],
+            diffs=[
+                FileDiff("skills/spatial/_lib/domains.py", [
+                    Hunk('return "fixed"', 'return "fixed_v2"')
+                ])
+            ],
+        )
 
         result = validate_patch(patch, surface)
 
@@ -264,83 +776,371 @@ class TestValidatePatch:
 
 
 class TestApplyPatch:
+    @pytest.mark.parametrize(
+        ("old_code", "new_code"),
+        [
+            ("1. Load the input.", "1. Validate and load the input."),
+            (
+                "- Check input quality before interpreting results.",
+                "- Check input quality and batch balance before interpreting results.",
+            ),
+        ],
+        ids=["flow", "gotchas"],
+    )
+    def test_allows_skill_md_narrative_hunks(self, tmp_path, old_code, new_code):
+        target = _write_v2_skill_md(tmp_path)
+        surface = EditSurface(
+            max_level=1,
+            project_root=tmp_path,
+            explicit_files=["skills/test/SKILL.md"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/SKILL.md"],
+            diffs=[
+                FileDiff("skills/test/SKILL.md", [Hunk(old_code, new_code)])
+            ],
+        )
+
+        validation = validate_patch(patch, surface)
+        modified = apply_patch(patch, surface)
+
+        assert validation.valid is True
+        assert modified == ["skills/test/SKILL.md"]
+        assert new_code in target.read_text(encoding="utf-8")
+
+    def test_apply_rejects_frontmatter_without_prior_validation(self, tmp_path):
+        target = _write_v2_skill_md(tmp_path)
+        original = target.read_text(encoding="utf-8")
+        surface = EditSurface(
+            max_level=1,
+            project_root=tmp_path,
+            explicit_files=["skills/test/SKILL.md"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/SKILL.md"],
+            diffs=[
+                FileDiff("skills/test/SKILL.md", [
+                    Hunk("name: test-skill", "name: replaced-skill")
+                ])
+            ],
+        )
+
+        with pytest.raises(ValueError, match="YAML frontmatter"):
+            apply_patch(patch, surface)
+
+        assert target.read_text(encoding="utf-8") == original
+
+    def test_apply_rejects_generated_io_without_prior_validation(self, tmp_path):
+        target = _write_v2_skill_md(tmp_path)
+        original = target.read_text(encoding="utf-8")
+        surface = EditSurface(
+            max_level=1,
+            project_root=tmp_path,
+            explicit_files=["skills/test/SKILL.md"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/SKILL.md"],
+            diffs=[
+                FileDiff("skills/test/SKILL.md", [
+                    Hunk("- `result.json`", "- `unverified.json`")
+                ])
+            ],
+        )
+
+        with pytest.raises(ValueError, match="AUTO-GENERATED Inputs & Outputs"):
+            apply_patch(patch, surface)
+
+        assert target.read_text(encoding="utf-8") == original
+
+    def test_apply_rejects_normalized_generated_io_without_prior_validation(
+        self,
+        tmp_path,
+    ):
+        target = _write_v2_skill_md(tmp_path)
+        original = target.read_text(encoding="utf-8")
+        surface = EditSurface(
+            max_level=1,
+            project_root=tmp_path,
+            explicit_files=["skills/test/SKILL.md"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/SKILL.md"],
+            diffs=[
+                FileDiff("skills/test/SKILL.md", [
+                    Hunk("  -   File types:   `.h5ad`  ", "- File types: `.csv`")
+                ])
+            ],
+        )
+
+        with pytest.raises(ValueError, match="AUTO-GENERATED Inputs & Outputs"):
+            apply_patch(patch, surface)
+
+        assert target.read_text(encoding="utf-8") == original
+
     def test_apply_single_hunk(self, tmp_path):
-        (tmp_path / "test.py").write_text(
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        target = skill_dir / "test.py"
+        target.write_text(
             "def foo():\n    return 200\n"
         )
         surface = EditSurface(
-            max_level=4,
+            max_level=2,
             project_root=tmp_path,
-            explicit_files=["test.py"],
+            explicit_files=["skills/test/test.py"],
         )
-        patch = PatchPlan(diffs=[
-            FileDiff("test.py", [
-                Hunk("return 200", "return 300")
-            ])
-        ])
+        patch = PatchPlan(
+            target_files=["skills/test/test.py"],
+            diffs=[
+                FileDiff("skills/test/test.py", [
+                    Hunk("return 200", "return 300")
+                ])
+            ],
+        )
         modified = apply_patch(patch, surface)
-        assert modified == ["test.py"]
-        assert "return 300" in (tmp_path / "test.py").read_text()
+        assert modified == ["skills/test/test.py"]
+        assert "return 300" in target.read_text()
+
+    def test_apply_normalizes_native_crlf_to_deterministic_lf_bytes(self, tmp_path):
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        target = skill_dir / "test.py"
+        target.write_bytes(b"threshold = 1\r\n")
+        surface = EditSurface(
+            max_level=2,
+            project_root=tmp_path,
+            explicit_files=["skills/test/test.py"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/test.py"],
+            diffs=[
+                FileDiff(
+                    "skills/test/test.py",
+                    [Hunk("threshold = 1", "threshold = 2")],
+                )
+            ],
+        )
+
+        modified = apply_patch(patch, surface)
+
+        assert modified == ["skills/test/test.py"]
+        assert target.read_bytes() == b"threshold = 2\n"
+
+    def test_apply_rejects_ambiguous_whitespace_normalized_hunk_without_writing(
+        self,
+        tmp_path,
+    ):
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        target = skill_dir / "test.py"
+        original = """def first():
+    value   = 1
+    return value
+
+
+def second():
+    value =   1
+    return value
+"""
+        target.write_text(original, encoding="utf-8")
+        surface = EditSurface(
+            max_level=2,
+            project_root=tmp_path,
+            explicit_files=["skills/test/test.py"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/test.py"],
+            diffs=[
+                FileDiff(
+                    "skills/test/../test/test.py",
+                    [Hunk("value = 1\nreturn value", "return 1")],
+                )
+            ],
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="Ambiguous whitespace-normalized hunk: old_code appears 2 times",
+        ):
+            apply_patch(patch, surface)
+
+        assert target.read_text(encoding="utf-8") == original
+
+    def test_apply_uses_unique_whitespace_normalized_fallback(self, tmp_path):
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        target = skill_dir / "test.py"
+        target.write_text(
+            "def run():\n    value   = 1\n    return value\n",
+            encoding="utf-8",
+        )
+        surface = EditSurface(
+            max_level=2,
+            project_root=tmp_path,
+            explicit_files=["skills/test/test.py"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/test.py"],
+            diffs=[
+                FileDiff(
+                    "skills/test/test.py",
+                    [
+                        Hunk(
+                            "value = 1\nreturn value",
+                            "    value = 2\n    return value\n",
+                        )
+                    ],
+                )
+            ],
+        )
+
+        validation = validate_patch(patch, surface)
+        modified = apply_patch(patch, surface)
+
+        assert validation.valid is True
+        assert modified == ["skills/test/test.py"]
+        assert target.read_text(encoding="utf-8") == (
+            "def run():\n    value = 2\n    return value\n"
+        )
+
+    def test_apply_prefers_one_exact_match_over_normalized_equivalent(self, tmp_path):
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        target = skill_dir / "test.py"
+        target.write_text("value = 1\nvalue   = 1\n", encoding="utf-8")
+        surface = EditSurface(
+            max_level=2,
+            project_root=tmp_path,
+            explicit_files=["skills/test/test.py"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/test.py"],
+            diffs=[
+                FileDiff(
+                    "skills/test/test.py",
+                    [Hunk("value = 1", "value = 2")],
+                )
+            ],
+        )
+
+        validation = validate_patch(patch, surface)
+        modified = apply_patch(patch, surface)
+
+        assert validation.valid is True
+        assert modified == ["skills/test/test.py"]
+        assert target.read_text(encoding="utf-8") == "value = 2\nvalue   = 1\n"
 
     def test_apply_multiple_hunks(self, tmp_path):
-        (tmp_path / "test.py").write_text(
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        target = skill_dir / "test.py"
+        target.write_text(
             "x = 1\ny = 2\nz = 3\n"
         )
         surface = EditSurface(
-            max_level=4,
+            max_level=2,
             project_root=tmp_path,
-            explicit_files=["test.py"],
+            explicit_files=["skills/test/test.py"],
         )
-        patch = PatchPlan(diffs=[
-            FileDiff("test.py", [
-                Hunk("x = 1", "x = 10"),
-                Hunk("z = 3", "z = 30"),
-            ])
-        ])
+        patch = PatchPlan(
+            target_files=["skills/test/test.py"],
+            diffs=[
+                FileDiff("skills/test/test.py", [
+                    Hunk("x = 1", "x = 10"),
+                    Hunk("z = 3", "z = 30"),
+                ])
+            ],
+        )
         modified = apply_patch(patch, surface)
-        content = (tmp_path / "test.py").read_text()
+        assert modified == ["skills/test/test.py"]
+        content = target.read_text()
         assert "x = 10" in content
         assert "y = 2" in content
         assert "z = 30" in content
 
     def test_apply_multiple_files(self, tmp_path):
-        (tmp_path / "a.py").write_text("a = 1\n")
-        (tmp_path / "b.py").write_text("b = 2\n")
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "a.py").write_text("a = 1\n")
+        (skill_dir / "b.py").write_text("b = 2\n")
         surface = EditSurface(
-            max_level=4,
+            max_level=2,
             project_root=tmp_path,
-            explicit_files=["a.py", "b.py"],
+            explicit_files=["skills/test/a.py", "skills/test/b.py"],
         )
-        patch = PatchPlan(diffs=[
-            FileDiff("a.py", [Hunk("a = 1", "a = 10")]),
-            FileDiff("b.py", [Hunk("b = 2", "b = 20")]),
-        ])
+        patch = PatchPlan(
+            target_files=["skills/test/a.py", "skills/test/b.py"],
+            diffs=[
+                FileDiff("skills/test/a.py", [Hunk("a = 1", "a = 10")]),
+                FileDiff("skills/test/b.py", [Hunk("b = 2", "b = 20")]),
+            ],
+        )
         modified = apply_patch(patch, surface)
-        assert set(modified) == {"a.py", "b.py"}
+        assert set(modified) == {"skills/test/a.py", "skills/test/b.py"}
+
+    def test_apply_rejects_duplicate_canonical_file_diffs_before_writing(
+        self,
+        tmp_path,
+    ):
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        target = skill_dir / "test.py"
+        original = "x = 1\ny = 2\n"
+        target.write_text(original, encoding="utf-8")
+        surface = EditSurface(
+            max_level=2,
+            project_root=tmp_path,
+            explicit_files=["skills/test/test.py"],
+        )
+        patch = PatchPlan(
+            target_files=["skills/test/test.py"],
+            diffs=[
+                FileDiff("skills/test/test.py", [Hunk("x = 1", "x = 10")]),
+                FileDiff(
+                    "skills/test/../test/test.py",
+                    [Hunk("y = 2", "y = 20")],
+                ),
+            ],
+        )
+
+        with pytest.raises(ValueError, match="duplicate canonical target"):
+            apply_patch(patch, surface)
+
+        assert target.read_text(encoding="utf-8") == original
 
     def test_apply_hunk_not_found(self, tmp_path):
-        (tmp_path / "test.py").write_text("real content\n")
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "test.py").write_text("real content\n")
         surface = EditSurface(
-            max_level=4,
+            max_level=2,
             project_root=tmp_path,
-            explicit_files=["test.py"],
+            explicit_files=["skills/test/test.py"],
         )
-        patch = PatchPlan(diffs=[
-            FileDiff("test.py", [Hunk("nonexistent", "new")])
-        ])
+        patch = PatchPlan(
+            target_files=["skills/test/test.py"],
+            diffs=[
+                FileDiff("skills/test/test.py", [Hunk("nonexistent", "new")])
+            ],
+        )
         with pytest.raises(ValueError, match="not found"):
             apply_patch(patch, surface)
 
     def test_apply_rejects_paths_outside_surface(self, tmp_path):
-        (tmp_path / "test.py").write_text("value = 1\n")
+        skill_dir = tmp_path / "skills" / "test"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "test.py").write_text("value = 1\n")
         surface = EditSurface(
-            max_level=4,
+            max_level=2,
             project_root=tmp_path,
-            explicit_files=["allowed.py"],
+            explicit_files=["skills/test/allowed.py"],
         )
-        patch = PatchPlan(diffs=[
-            FileDiff("test.py", [Hunk("value = 1", "value = 2")])
-        ])
+        patch = PatchPlan(
+            target_files=["skills/test/test.py"],
+            diffs=[
+                FileDiff("skills/test/test.py", [Hunk("value = 1", "value = 2")])
+            ],
+        )
         with pytest.raises(PermissionError, match="explicit editable file list"):
             apply_patch(patch, surface)
 
@@ -348,9 +1148,12 @@ class TestApplyPatch:
         outside = tmp_path.parent / "outside.py"
         outside.write_text("value = 1\n")
         surface = EditSurface(max_level=4, project_root=tmp_path)
-        patch = PatchPlan(diffs=[
-            FileDiff("../outside.py", [Hunk("value = 1", "value = 2")])
-        ])
+        patch = PatchPlan(
+            target_files=["../outside.py"],
+            diffs=[
+                FileDiff("../outside.py", [Hunk("value = 1", "value = 2")])
+            ],
+        )
         with pytest.raises(ValueError, match="escapes project root"):
             apply_patch(patch, surface)
         assert outside.read_text() == "value = 1\n"

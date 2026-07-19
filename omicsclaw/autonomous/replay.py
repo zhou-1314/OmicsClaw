@@ -18,6 +18,8 @@ from pathlib import Path
 import shutil
 import tempfile
 
+from omicsclaw.common.output_claim import atomic_write_owned_output_text
+
 from . import run_layout
 from .budget import MiniAgentBudget
 from .kernel_session import KernelSession, KernelStartError
@@ -81,8 +83,12 @@ def emit_replay_script(
         process_guard=process_guard,
     )
     path = workspace / REPLAY_SCRIPT
-    path.write_text(script, encoding="utf-8")
-    return path
+    return atomic_write_owned_output_text(
+        path,
+        output_root=workspace,
+        text=script,
+        label="autonomous replay script",
+    )
 
 
 def validate_replay(

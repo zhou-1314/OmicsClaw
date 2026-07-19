@@ -41,6 +41,16 @@ interface:
     - loom
     - fastq
     - fq
+    preconditions:
+      content:
+        fastq:
+          require_valid_record: true
+          pairing: paired
+        directory:
+          any_of_signatures:
+          - paired-fastq
+          - cellranger-output
+          - starsolo-velocity
   parameters:
     hints:
       velocyto:

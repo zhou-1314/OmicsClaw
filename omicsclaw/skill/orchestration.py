@@ -24,8 +24,16 @@ descriptions for the disambiguation block.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+import math
 from pathlib import Path
+from typing import Any
+
+from omicsclaw.common.output_claim import (
+    collect_output_claim_identities,
+    is_scientific_output_file,
+)
 
 
 @dataclass(frozen=True)
@@ -45,8 +53,13 @@ def _collect_output_media_paths(out_dir: Path) -> OutputMediaPaths:
     if not out_dir.exists():
         return OutputMediaPaths(figure_paths, table_paths, notebook_paths, media_items)
 
+    claim_identities = collect_output_claim_identities(out_dir)
     for f in sorted(out_dir.rglob("*")):
-        if not f.is_file():
+        if not is_scientific_output_file(
+            f,
+            output_root=out_dir,
+            claim_identities=claim_identities,
+        ):
             continue
         if f.suffix in (".md", ".html"):
             media_items.append({"type": "document", "path": str(f)})
@@ -236,6 +249,96 @@ logger = logging.getLogger("omicsclaw.omicsclaw.skill.orchestration")
 
 
 _MAX_ARTIFACT_NAMES = 200
+_PLAN_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_CONSENSUS_OPERATORS = {
+    "categorical": frozenset({"kmode", "weighted", "lca"}),
+    "continuous": frozenset({"median", "weighted"}),
+}
+_CONSENSUS_DEFAULT_OPERATOR = {"categorical": "kmode", "continuous": "median"}
+
+
+def _bounded_plan_number(value: object, *, minimum: float, maximum: float) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if not math.isfinite(number) or not minimum <= number <= maximum:
+        return None
+    return number
+
+
+def _bounded_plan_members(value: object) -> list[dict[str, object]] | None:
+    if not isinstance(value, list) or not 1 <= len(value) <= 64:
+        return None
+    members: list[dict[str, object]] = []
+    for raw_member in value:
+        if not isinstance(raw_member, Mapping):
+            return None
+        name = str(raw_member.get("name", ""))
+        if not _PLAN_TOKEN_RE.fullmatch(name):
+            return None
+        raw_params = raw_member.get("params", {})
+        if not isinstance(raw_params, Mapping) or len(raw_params) > 64:
+            return None
+        params: dict[str, object] = {}
+        for raw_key, raw_value in raw_params.items():
+            key = str(raw_key)
+            if not _PLAN_TOKEN_RE.fullmatch(key):
+                return None
+            if isinstance(raw_value, str):
+                if len(raw_value) > 512:
+                    return None
+            elif isinstance(raw_value, float):
+                if not math.isfinite(raw_value):
+                    return None
+            elif raw_value is not None and not isinstance(raw_value, (bool, int)):
+                return None
+            params[key] = raw_value
+        members.append({"name": name, "params": params})
+    return members
+
+
+def _validated_consensus_plan_parameters(
+    plan: object,
+    *,
+    template: str,
+) -> tuple[str, dict[str, Any]]:
+    """Project an untrusted plan audit into a bounded Memory-safe schema."""
+
+    allowed_operators = _CONSENSUS_OPERATORS.get(template, frozenset({"kmode"}))
+    default_operator = _CONSENSUS_DEFAULT_OPERATOR.get(template, "kmode")
+    params: dict[str, Any] = {"operator": default_operator}
+    if not isinstance(plan, Mapping):
+        return default_operator, params
+
+    raw_operator = str(plan.get("operator", ""))
+    operator = raw_operator if raw_operator in allowed_operators else default_operator
+    params["operator"] = operator
+
+    members = _bounded_plan_members(plan.get("members"))
+    if members is not None:
+        params["members"] = members
+    for key in ("alpha", "beta", "max_class_frac", "max_class_fraction_cap"):
+        number = _bounded_plan_number(plan.get(key), minimum=0.0, maximum=1.0)
+        if number is not None:
+            params[key] = number
+
+    panel = plan.get("intrinsic_panel")
+    if panel in {"none", "spatial", "integration"}:
+        params["intrinsic_panel"] = panel
+
+    weights = plan.get("panel_weights")
+    if isinstance(weights, Mapping) and len(weights) <= 32:
+        normalized_weights: dict[str, float] = {}
+        for raw_key, raw_value in weights.items():
+            key = str(raw_key)
+            number = _bounded_plan_number(raw_value, minimum=0.0, maximum=100.0)
+            if not _PLAN_TOKEN_RE.fullmatch(key) or number is None:
+                normalized_weights = {}
+                break
+            normalized_weights[key] = number
+        if normalized_weights or not weights:
+            params["panel_weights"] = normalized_weights
+    return operator, params
 
 
 def _output_artifact_names(output_dir: Path) -> list[str]:
@@ -245,7 +348,17 @@ def _output_artifact_names(output_dir: Path) -> list[str]:
     memory record — ``output_path`` remains the source of truth for the full set;
     a truncation marker signals when more exist. Empty on any error."""
     try:
-        names = sorted(p.name for p in Path(output_dir).iterdir() if p.is_file())
+        output_root = Path(output_dir)
+        claim_identities = collect_output_claim_identities(output_root)
+        names = sorted(
+            p.name
+            for p in output_root.iterdir()
+            if is_scientific_output_file(
+                p,
+                output_root=output_root,
+                claim_identities=claim_identities,
+            )
+        )
     except Exception:
         return []
     if len(names) > _MAX_ARTIFACT_NAMES:
@@ -286,7 +399,7 @@ def _assisted_param_decision(skill: str, method: str, effective_params: dict) ->
     """
     try:
         method_lower, tip_info, _ = _resolve_param_hint_info(skill, method)
-        if not isinstance(tip_info, dict) or not tip_info:
+        if not isinstance(tip_info, Mapping) or not tip_info:
             return None
         defaults = tip_info.get("defaults", {}) or {}
         params = tip_info.get("params", []) or []
@@ -691,37 +804,33 @@ async def _auto_capture_consensus(
 
         mode = "typed" if provenance_of(source.template) == "typed" else "narrative"
 
-        # run_id + operator come from the driver's plan.json audit (run.py); the
-        # agent loop never passes --run-id, so run_id == output_dir.name, but we
-        # read the audit to honour an explicit --run-id if one is ever wired.
+        # The filesystem Run leaf is the Memory identity authority. plan.json is
+        # an audit payload only and may never redirect the graph URI.
         run_id = output_dir.name
-        operator = "kmode"
+        default_operator = _CONSENSUS_DEFAULT_OPERATOR.get(source.template, "kmode")
+        operator = default_operator
         # AN-PROV-CAPTURE-13 — the consensus run's effective config IS the plan
         # audit (operator + planned members + score weights); there is no SKILL.md
         # param-hint recommendation for a planner-driven flavour, so the
         # assisted-parameterization decision stays None.
-        effective_params: dict[str, Any] = {}
+        effective_params: dict[str, Any] = {"operator": default_operator}
         try:
-            plan = json.loads((output_dir / "plan.json").read_text(encoding="utf-8"))
-            run_id = str(plan.get("run_id") or run_id)
-            operator = str(plan.get("operator") or operator)
-            effective_params = {
-                k: plan[k]
-                for k in (
-                    "operator", "members", "alpha", "beta",
-                    # ``max_class_fraction_cap`` is the current plan.json key for the
-                    # hard-filter threshold; ``max_class_frac`` kept for older plans.
-                    "max_class_frac", "max_class_fraction_cap",
-                    # Panel family + weights drive panel-based rankings (ADR 0028/0029).
-                    "intrinsic_panel", "panel_weights",
+            plan_path = output_dir / "plan.json"
+            claim_identities = collect_output_claim_identities(output_dir)
+            if not plan_path.is_symlink() and is_scientific_output_file(
+                plan_path,
+                output_root=output_dir,
+                claim_identities=claim_identities,
+            ):
+                plan = json.loads(plan_path.read_text(encoding="utf-8"))
+                operator, effective_params = _validated_consensus_plan_parameters(
+                    plan,
+                    template=source.template,
                 )
-                if k in plan
-            }
         except Exception:
             pass
         if not run_id:
             return False
-        effective_params.setdefault("operator", operator)
 
         source_dataset_id = ""
         try:
@@ -868,7 +977,10 @@ async def _resolve_last_output_dir(session_id: str, skill: str) -> Path | None:
 def _read_result_json(out_dir: Path) -> dict | None:
     """Read result.json from the skill output directory, return parsed dict or None."""
     result_path = out_dir / "result.json"
-    if not result_path.exists():
+    if not is_scientific_output_file(
+        result_path,
+        output_root=out_dir,
+    ):
         return None
     try:
         import json as _json
@@ -1056,7 +1168,7 @@ def _build_method_preview(
 
     suitable = True
 
-    requires = tip_info.get("requires", []) if isinstance(tip_info, dict) else []
+    requires = tip_info.get("requires", []) if isinstance(tip_info, Mapping) else []
     requires_tokens = {str(r).strip().lower() for r in requires}
 
     if "spatial" in platform.lower() and "obsm.spatial" not in requires_tokens:
@@ -1101,7 +1213,7 @@ def _build_method_preview(
             size_note += " (large; start with fewer epochs)"
         _add_check(f"- Dataset size: {size_note}")
 
-    defaults = tip_info.get("defaults", {}) if isinstance(tip_info, dict) else {}
+    defaults = tip_info.get("defaults", {}) if isinstance(tip_info, Mapping) else {}
     param_lines = []
     recommended_args = [f"--method {method_lower}"]
     for p in tip_info.get("params", []):

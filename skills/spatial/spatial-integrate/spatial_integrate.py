@@ -798,16 +798,21 @@ def get_demo_data() -> tuple:
     """Generate synthetic multi-batch data from preprocess demo."""
     import scanpy as sc
 
-    main_runner = _PROJECT_ROOT / "omicsclaw.py"
-    if not main_runner.exists():
-        raise FileNotFoundError(f"OmicsClaw runner not found at {main_runner}")
+    preprocess_script = (
+        _PROJECT_ROOT / "skills" / "spatial" / "spatial-preprocess" / "spatial_preprocess.py"
+    )
+    if not preprocess_script.exists():
+        raise FileNotFoundError(f"spatial-preprocess not found at {preprocess_script}")
 
     with tempfile.TemporaryDirectory(prefix="spatial_int_demo_") as tmp_dir:
         tmp_path = Path(tmp_dir)
         logger.info("Running spatial-preprocess --demo into %s", tmp_path)
-        # Use centralized router instead of raw script execution
+        # Invoke the sibling skill's script directly (not via `omicsclaw.py
+        # run`, whose root `--demo` dispatch is a narrow canonical Run
+        # Adapter that only accepts the bare/`--project`/`--no-project`
+        # forms and rejects an accompanying `--output`).
         result = subprocess.run(
-            [sys.executable, str(main_runner), "run", "spatial-preprocess", "--demo", "--output", str(tmp_path)],
+            [sys.executable, str(preprocess_script), "--demo", "--output", str(tmp_path)],
             capture_output=True, text=True, timeout=180,
         )
         if result.returncode != 0:

@@ -141,7 +141,8 @@ OmicsClaw core initialised: provider=ollama model=gemma4:12b
 2. App 里打开 **Runtimes → New Runtime**，填 SSH Host / Port（`22`）/ User / Key Path，
    **Remote Port** 设 `8765`，**Auth Token** 填得与服务器的 `OMICSCLAW_REMOTE_AUTH_TOKEN` 一致。
 3. App 的 TunnelManager 会把一个本地动态端口转发到服务器的 `127.0.0.1:8765`。
-4. 点 **Run Ping**（先查 `/health`，再带 Bearer token 查 `/env/doctor`），再点 **Make Active**。
+4. 点 **Run Ping**（严格验证 `/health`；未激活 SSH 的一次性 probe 不执行
+   `/env/doctor`），再点 **Make Active**。需要完整环境诊断时，激活后单独运行。
 
 然后选模型：
 
@@ -172,7 +173,7 @@ ollama pull gemma4:26b   # 在服务器上
 | 服务器 CUDA / 显存 OOM | GPU 撑不住该标签或上下文 | 降一档标签（`gemma4:e4b` / `e2b`）或调小 context window。当前体积见 [Ollama 库页](https://ollama.com/library/gemma4/tags)，对照第 1 节选型表。 |
 | 启动日志 provider 不是 `ollama` | `.env` 没被加载 | 用 `oc desktop-server`（或 `oc onboard`）启动，别用 `python -m …server`（会绕过启动器的 `.env` 加载）。复核 `LLM_PROVIDER=ollama` / `LLM_BASE_URL` / `OMICSCLAW_MODEL`。 |
 | App **Run Ping** 的 `/health` 失败 | SSH 没连上或后端没起 | 确认 `ssh -i <key> <user>@<host>` 能登录；确认 Remote Port 是 `8765`；确认 desktop-server 进程在跑。 |
-| `/health` 绿、`/env/doctor` 红 | Bearer token 不匹配 | 让 App 配置里的 Auth Token 等于服务器的 `OMICSCLAW_REMOTE_AUTH_TOKEN`（两边都为空也算匹配）。 |
+| `/health` 通过但受保护请求返回 401 | Bearer token 不匹配 | 让 App 配置里的 Auth Token 等于服务器的 `OMICSCLAW_REMOTE_AUTH_TOKEN`；激活后单独运行 Environment diagnostics。 |
 
 ## 7. 进阶 —— llama.cpp 或任意 OpenAI 兼容服务
 

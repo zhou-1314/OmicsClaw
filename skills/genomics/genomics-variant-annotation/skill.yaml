@@ -35,12 +35,20 @@ interface:
   inputs:
     file_types:
     - csv
+    artifacts:
+    - kind: genomics.variant_table
+      formats:
+      - csv
   outputs:
     files:
     - tables/annotated_variants.csv
     - tables/impact_distribution.csv
     - report.md
     - result.json
+    artifacts:
+    - kind: genomics.annotated_variants
+      path: tables/annotated_variants.csv
+      format: csv
 runtime:
   entry: variant_annotation.py
 deps:

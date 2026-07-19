@@ -33,12 +33,15 @@ def extract_flag_value(tokens: list[str] | None, flag: str) -> str | None:
     """
     if not tokens:
         return None
+    value: str | None = None
     for idx, token in enumerate(tokens):
         if token == flag and idx + 1 < len(tokens):
-            return str(tokens[idx + 1]).strip()
+            value = str(tokens[idx + 1]).strip()
         if token.startswith(f"{flag}="):
-            return token.split("=", 1)[1].strip()
-    return None
+            value = token.split("=", 1)[1].strip()
+    # argparse applies the last occurrence of a repeated scalar option. Keep
+    # provenance and runtime selection aligned with that effective argv value.
+    return value
 
 
 def build_user_run_command(
@@ -71,13 +74,27 @@ def build_skill_argv(
     input_paths: Iterable[str] | None,
     output_dir: Path,
 ) -> list[str] | None:
-    """Build the ``[python, script.py, --input ..., --output ...]`` argv.
+    """Build the interpreter-bound Skill argv.
 
     Returns ``None`` when no input source is provided (no ``--input``,
     no ``--demo``, no multi-input list). The caller is expected to convert
     that into a stable ``_err`` result.
     """
-    cmd: list[str] = [python_executable, str(script_path)]
+    runtime_language = str(
+        skill_info.get("runtime_language") or "python"
+    ).strip().lower()
+    interpreters = {
+        "python": python_executable,
+        "bash": "bash",
+        "r": "Rscript",
+    }
+    try:
+        interpreter = interpreters[runtime_language]
+    except KeyError as exc:
+        raise ValueError(
+            f"unsupported Skill runtime language: {runtime_language!r}"
+        ) from exc
+    cmd: list[str] = [interpreter, str(script_path)]
     if demo:
         demo_args = skill_info.get("demo_args", ["--demo"])
         if not demo_args:

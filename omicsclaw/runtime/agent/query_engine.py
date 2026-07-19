@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import inspect
 import json
 import os
@@ -74,6 +75,7 @@ from .loop_state import (
     ToolErrorRecord,
     compute_args_digest,
 )
+from .envelope import MessageContentAdapter
 
 
 # C1: the stages that actually fold history into a frozen summary — the only turns
@@ -118,9 +120,7 @@ def _prepare_tool_runtime_context(
     prepared = dict(runtime_context or {})
     omicsclaw_dir = str(prepared.get("omicsclaw_dir", "") or "").strip()
     hooks = (
-        list(build_default_tool_execution_hooks(omicsclaw_dir))
-        if omicsclaw_dir
-        else []
+        list(build_default_tool_execution_hooks(omicsclaw_dir)) if omicsclaw_dir else []
     )
     if prepared.get("candidate_chain_gate"):
         hooks.append(build_candidate_chain_confirmation_hook())
@@ -149,6 +149,8 @@ class QueryEngineContext:
     session_id: str | None
     system_prompt: str
     user_message_content: Any
+    stored_user_content: Any = None
+    content_adapter: MessageContentAdapter | None = None
     surface: str = "bot"
     policy_state: ToolPolicyState | None = None
     hook_runtime: LifecycleHookRuntime | None = None
@@ -507,9 +509,7 @@ def _materialize_message_from_choice_message(message) -> MaterializedMessage:
     )
 
 
-_STREAM_INTERRUPTED_NOTE = (
-    "\n\n[Note: the previous response was interrupted by a streaming error and is incomplete.]"
-)
+_STREAM_INTERRUPTED_NOTE = "\n\n[Note: the previous response was interrupted by a streaming error and is incomplete.]"
 
 
 async def _materialize_message_from_stream(
@@ -653,6 +653,7 @@ def _persist_prepared_compaction(
     transcript_store: TranscriptStore,
     chat_id: int | str,
     prepared_messages: PreparedModelMessages,
+    content_adapter: MessageContentAdapter | None = None,
 ) -> None:
     if not prepared_messages.persisted_summary.strip():
         return
@@ -672,7 +673,62 @@ def _persist_prepared_compaction(
         },
         *prepared_messages.messages,
     ]
-    transcript_store.replace_history(chat_id, compacted_history)
+    transcript_store.replace_history(
+        chat_id,
+        _restore_messages(content_adapter, compacted_history),
+    )
+
+
+def _stored_user_content(context: QueryEngineContext) -> Any:
+    if context.stored_user_content is None:
+        return context.user_message_content
+    return context.stored_user_content
+
+
+def _render_messages(
+    content_adapter: MessageContentAdapter | None,
+    messages: list[dict],
+) -> list[dict]:
+    if content_adapter is None:
+        return messages
+    return content_adapter.render_messages(copy.deepcopy(messages))
+
+
+def _restore_messages(
+    content_adapter: MessageContentAdapter | None,
+    messages: list[dict],
+) -> list[dict]:
+    if content_adapter is None:
+        return messages
+    return content_adapter.restore_messages(copy.deepcopy(messages))
+
+
+def _validated_user_content_for_persistence(
+    content_adapter: MessageContentAdapter | None,
+    content: Any,
+) -> Any:
+    """Restore and validate one current user message before durable append.
+
+    Provider-only media, data URIs and reserved Attachment markers must fail
+    before the Transcript gains a row.  A real Attachment Turn supplies durable
+    ``attachment_ref`` blocks, which the Adapter revalidates without changing.
+    """
+
+    if content_adapter is None:
+        return content
+    restored = _restore_messages(
+        content_adapter,
+        [{"role": "user", "content": content}],
+    )
+    if (
+        not isinstance(restored, list)
+        or len(restored) != 1
+        or not isinstance(restored[0], dict)
+        or set(restored[0]) != {"role", "content"}
+        or restored[0].get("role") != "user"
+    ):
+        raise ValueError("content_adapter returned an invalid durable user message")
+    return restored[0]["content"]
 
 
 def _format_pathology_correction(signal: PathologySignal) -> str:
@@ -1045,8 +1101,7 @@ async def _resolve_tool_approval_flow(
         if (
             execution_result.status == EXECUTION_STATUS_POLICY_BLOCKED
             and execution_result.policy_decision is not None
-            and execution_result.policy_decision.action
-            == TOOL_POLICY_REQUIRE_APPROVAL
+            and execution_result.policy_decision.action == TOOL_POLICY_REQUIRE_APPROVAL
         ):
             resolution = await _maybe_await(
                 callbacks.request_tool_approval(request, execution_result)
@@ -1080,9 +1135,7 @@ async def _resolve_tool_approval_flow(
                         ),
                     )
                 approved_runtime_context = dict(request.runtime_context or {})
-                approved_runtime_context["policy_state"] = (
-                    effective_policy_state
-                )
+                approved_runtime_context["policy_state"] = effective_policy_state
                 approved_request = ToolExecutionRequest(
                     call_id=request.call_id,
                     name=request.name,
@@ -1100,9 +1153,7 @@ async def _resolve_tool_approval_flow(
                         runtime_context=approved_runtime_context,
                     ),
                 )
-                execution_result = (
-                    await execute_tool_requests([approved_request])
-                )[0]
+                execution_result = (await execute_tool_requests([approved_request]))[0]
                 if updated_policy_state is not None and approval_persist:
                     current_policy_state = updated_policy_state
             elif deny_message:
@@ -1170,7 +1221,14 @@ async def run_planned_tool_calls(
         # evicted, so the CACHE_DIAGNOSTICS sink can't grow unbounded.
         CACHE_DIAGNOSTICS.reset(_evicted_chat)
     if append_user_message:
-        transcript_store.append_user_message(context.chat_id, context.user_message_content)
+        durable_user_content = _validated_user_content_for_persistence(
+            context.content_adapter,
+            _stored_user_content(context),
+        )
+        transcript_store.append_user_message(
+            context.chat_id,
+            durable_user_content,
+        )
     transcript_store.prepare_history(context.chat_id)
 
     planned_tool_calls = [
@@ -1312,13 +1370,15 @@ async def _call_llm_with_reactive_compact_retry(
                     transcript_store=transcript_store,
                     chat_id=context.chat_id,
                     prepared_messages=reactive_messages,
+                    content_adapter=context.content_adapter,
                 )
                 if callbacks.on_context_compacted:
                     await _emit_compaction_event(
                         callbacks=callbacks,
                         pre_tokens=reactive_pre_tokens,
                         post_tokens=sum(
-                            estimate_message_tokens(m) for m in reactive_messages.messages
+                            estimate_message_tokens(m)
+                            for m in reactive_messages.messages
                         ),
                         history_len=len(history),
                         kept_len=len(reactive_messages.messages),
@@ -1331,6 +1391,31 @@ async def _call_llm_with_reactive_compact_retry(
                     )
                 continue
             raise
+
+
+def _defer_or_append_terminal_message(
+    transcript_store,
+    chat_id: int | str,
+    *,
+    content: str,
+    tool_calls: list[dict] | None = None,
+    reasoning_content: str | None = None,
+) -> dict:
+    """Keep legacy stores eager while canonical Turn Adapters stage later.
+
+    The control terminalizer, not the Query Engine, chooses the winner against
+    cancellation.  A canonical Adapter therefore retains the exact provider
+    payload without placing it in the active view until the Receipt commits.
+    """
+
+    defer = getattr(transcript_store, "defer_terminal_message", None)
+    target = defer if callable(defer) else transcript_store.append_assistant_message
+    return target(
+        chat_id,
+        content=content,
+        tool_calls=tool_calls,
+        reasoning_content=reasoning_content,
+    )
 
 
 async def run_query_engine(
@@ -1385,6 +1470,12 @@ async def run_query_engine(
                 )
             ).strip()
 
+    durable_user_content = _validated_user_content_for_persistence(
+        context.content_adapter,
+        _prepend_volatile_to_user_content(
+            _stored_user_content(context), session_hook_context
+        ),
+    )
     transcript_store.touch(context.chat_id)
     for _evicted_chat in transcript_store.evict_lru_conversations():
         # ADR 0024 — release per-chat cache diagnostics when its transcript is
@@ -1392,9 +1483,7 @@ async def run_query_engine(
         CACHE_DIAGNOSTICS.reset(_evicted_chat)
     transcript_store.append_user_message(
         context.chat_id,
-        _prepend_volatile_to_user_content(
-            context.user_message_content, session_hook_context
-        ),
+        durable_user_content,
     )
     transcript_store.prepare_history(context.chat_id)
 
@@ -1432,7 +1521,8 @@ async def run_query_engine(
     state = LoopState()
     for iteration_index in range(config.max_iterations):
         state.iteration = iteration_index
-        history = transcript_store.prepare_history(context.chat_id)
+        durable_history = transcript_store.prepare_history(context.chat_id)
+        history = _render_messages(context.content_adapter, durable_history)
         pre_tokens = sum(estimate_message_tokens(m) for m in history)
         prepared_messages = await prepare_model_messages(
             system_prompt=system_prompt,
@@ -1453,6 +1543,7 @@ async def run_query_engine(
             transcript_store=transcript_store,
             chat_id=context.chat_id,
             prepared_messages=prepared_messages,
+            content_adapter=context.content_adapter,
         )
         if prepared_messages.applied_stages and callbacks.on_context_compacted:
             await _emit_compaction_event(
@@ -1472,24 +1563,26 @@ async def run_query_engine(
                 or prepared_messages.local_budget_status,
             )
         try:
-            last_message, has_attempted_reactive_compact, sent_system_prompt = (
-                await _call_llm_with_reactive_compact_retry(
-                    llm=llm,
-                    context=context,
-                    tool_runtime=tool_runtime,
-                    config=config,
-                    callbacks=callbacks,
-                    system_prompt=system_prompt,
-                    history=history,
-                    request_system_prompt=request_system_prompt,
-                    request_messages=request_messages,
-                    transcript_store=transcript_store,
-                    tool_result_store=tool_result_store,
-                    compaction_metadata=compaction_metadata,
-                    compaction_workspace=compaction_workspace,
-                    on_usage_delta=_observe_usage_delta,
-                    has_attempted_reactive_compact=has_attempted_reactive_compact,
-                )
+            (
+                last_message,
+                has_attempted_reactive_compact,
+                sent_system_prompt,
+            ) = await _call_llm_with_reactive_compact_retry(
+                llm=llm,
+                context=context,
+                tool_runtime=tool_runtime,
+                config=config,
+                callbacks=callbacks,
+                system_prompt=system_prompt,
+                history=history,
+                request_system_prompt=request_system_prompt,
+                request_messages=request_messages,
+                transcript_store=transcript_store,
+                tool_result_store=tool_result_store,
+                compaction_metadata=compaction_metadata,
+                compaction_workspace=compaction_workspace,
+                on_usage_delta=_observe_usage_delta,
+                has_attempted_reactive_compact=has_attempted_reactive_compact,
             )
         except config.llm_error_types as exc:
             # Persist any partial content the stream already showed the user before
@@ -1535,13 +1628,6 @@ async def run_query_engine(
                 }
                 for tc in last_message.tool_calls
             ]
-        transcript_store.append_assistant_message(
-            context.chat_id,
-            content=last_message.content or "",
-            tool_calls=assistant_tool_calls,
-            reasoning_content=last_message.reasoning_content,
-        )
-
         if not last_message.tool_calls:
             current_response = last_message.content or ""
             # ADR 0027 — phantom completion: the model ended the turn with a
@@ -1559,6 +1645,11 @@ async def run_query_engine(
                 state.signals.append(phantom_signal)
                 if callbacks.on_pathology_signal is not None:
                     await _maybe_await(callbacks.on_pathology_signal(phantom_signal))
+                transcript_store.append_assistant_message(
+                    context.chat_id,
+                    content=current_response,
+                    reasoning_content=last_message.reasoning_content,
+                )
                 transcript_store.append_user_message(
                     context.chat_id,
                     _format_pathology_correction(phantom_signal),
@@ -1570,36 +1661,58 @@ async def run_query_engine(
             if budget_decision.action == "continue":
                 if current_response.strip():
                     accumulated_response_segments.append(current_response)
+                transcript_store.append_assistant_message(
+                    context.chat_id,
+                    content=current_response,
+                    reasoning_content=last_message.reasoning_content,
+                )
                 transcript_store.append_user_message(
                     context.chat_id,
                     budget_decision.nudge_message,
                 )
                 continue
-            return _merge_response_segments(
+            final_response = _merge_response_segments(
                 accumulated_response_segments, current_response
             )
-
-        _, interruption_message, current_policy_state = (
-            await _execute_planned_tool_calls(
-                planned_tool_calls=last_message.tool_calls,
-                context=context,
-                callbacks=callbacks,
-                tool_runtime=tool_runtime,
-                tool_result_store=tool_result_store,
-                transcript_store=transcript_store,
-                hook_runtime=hook_runtime,
-                tool_runtime_context=tool_runtime_context,
-                current_policy_state=current_policy_state,
-                state=state,
-                # The loop already recorded the real assistant message (content +
-                # reasoning + tool_calls) at append_assistant_message above; don't
-                # append a duplicate empty copy here.
-                append_assistant=False,
+            _defer_or_append_terminal_message(
+                transcript_store,
+                context.chat_id,
+                content=current_response,
+                reasoning_content=last_message.reasoning_content,
             )
+            return final_response
+
+        transcript_store.append_assistant_message(
+            context.chat_id,
+            content=last_message.content or "",
+            tool_calls=assistant_tool_calls,
+            reasoning_content=last_message.reasoning_content,
+        )
+
+        (
+            _,
+            interruption_message,
+            current_policy_state,
+        ) = await _execute_planned_tool_calls(
+            planned_tool_calls=last_message.tool_calls,
+            context=context,
+            callbacks=callbacks,
+            tool_runtime=tool_runtime,
+            tool_result_store=tool_result_store,
+            transcript_store=transcript_store,
+            hook_runtime=hook_runtime,
+            tool_runtime_context=tool_runtime_context,
+            current_policy_state=current_policy_state,
+            state=state,
+            # The loop already recorded the real assistant message (content +
+            # reasoning + tool_calls) at append_assistant_message above; don't
+            # append a duplicate empty copy here.
+            append_assistant=False,
         )
 
         if interruption_message:
-            transcript_store.append_assistant_message(
+            _defer_or_append_terminal_message(
+                transcript_store,
                 context.chat_id,
                 content=interruption_message,
             )

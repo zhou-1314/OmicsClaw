@@ -46,6 +46,7 @@ real ORA + GSEA + ssGSEA backends with hosted libraries).
 **Inputs**
 
 - File types: `.csv`
+- Accepts artifact `proteomics.differential_results` (`csv`)
 
 **Outputs**
 

@@ -28,13 +28,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
 import sys
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from omicsclaw.skill.execution.environment import scrub_internal_control_credentials
 
 from .base import Channel
 from .capabilities import IMESSAGE as IMESSAGE_CAPS
@@ -66,9 +68,10 @@ def _normalize_handle(handle: str) -> str:
 @dataclass
 class IMessageConfig(BaseChannelConfig):
     """iMessage channel configuration."""
+
     cli_path: str = "imsg"
     db_path: str | None = None
-    service: str = "auto"     # imessage | sms | auto
+    service: str = "auto"  # imessage | sms | auto
     region: str = "US"
     text_chunk_limit: int = 4096
 
@@ -103,6 +106,7 @@ class _ImsgRpcClient:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=scrub_internal_control_credentials(os.environ),
         )
         self._reader_task = asyncio.create_task(self._read_loop())
         logger.debug(f"imsg process started (pid={self._proc.pid})")
@@ -221,6 +225,7 @@ class IMessageChannel(Channel):
     # ── Lifecycle ────────────────────────────────────────────────────
 
     async def start(self) -> None:
+        self.require_authoritative_ingress()
         if sys.platform != "darwin":
             raise RuntimeError("iMessage channel requires macOS")
 
@@ -303,7 +308,7 @@ class IMessageChannel(Channel):
         annotations: list[str] = []
         media_paths: list[str] = []
         _VOICE_EXTS = {".caf", ".m4a", ".aac", ".ogg", ".opus", ".mp3", ".amr"}
-        for att in (message.get("attachments") or []):
+        for att in message.get("attachments") or []:
             file_path = att if isinstance(att, str) else att.get("path", "")
             if not file_path:
                 annotations.append("[附件: 路径缺失]")
@@ -317,7 +322,7 @@ class IMessageChannel(Channel):
                     shutil.copy2(str(att_path), str(dst))
                     media_paths.append(str(dst))
                     annotations.append(f"[{label}: {dst.name}]")
-                except Exception as e:
+                except Exception:
                     annotations.append(f"[{label}: {att_path.name} (复制失败)]")
             else:
                 annotations.append(f"[{label}: {file_path} (文件不存在)]")
@@ -339,12 +344,6 @@ class IMessageChannel(Channel):
             "chat_name": message.get("chat_name"),
         }
 
-        try:
-            ts_raw = message.get("created_at")
-            ts = datetime.fromisoformat(ts_raw) if ts_raw else datetime.now()
-        except Exception:
-            ts = datetime.now()
-
         logger.info(f"iMessage from {sender}: {full_text[:80]}")
         asyncio.create_task(self._handle_llm(chat_id, sender, full_text, meta))
 
@@ -353,7 +352,9 @@ class IMessageChannel(Channel):
     ) -> None:
         try:
             reply = await self.process_message(
-                chat_id, user_id, content,
+                chat_id,
+                user_id,
+                content,
                 platform="imessage",
                 metadata=metadata,
             )

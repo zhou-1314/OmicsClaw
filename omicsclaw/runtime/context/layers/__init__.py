@@ -7,9 +7,12 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from omicsclaw.skill.registry import ensure_registry_loaded, registry
+
+if TYPE_CHECKING:
+    from ...tools import hooks as events
 
 LOGGER = logging.getLogger("omicsclaw.runtime.context.layers")
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -332,6 +335,7 @@ def load_skill_context(
     candidate_skills: tuple[str, ...] | list[str] | None = None,
     max_candidates: int = 3,
     max_param_hints: int = 4,
+    _registry_skills: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> str:
     if not should_prefetch_skill_context(
         query=query,
@@ -340,7 +344,14 @@ def load_skill_context(
     ):
         return ""
 
-    ensure_registry_loaded()
+    if _registry_skills is None:
+        ensure_registry_loaded()
+        registry_skills = registry.skills
+    else:
+        # Governance uses a fresh, isolated registry here to prove that a
+        # just-written Gotcha reaches this exact runtime consumer without
+        # mutating the process-global registry for alternate Skill roots.
+        registry_skills = _registry_skills
     selected_skill = str(skill or "").strip()
     candidate_list = [
         str(name).strip()
@@ -352,7 +363,7 @@ def load_skill_context(
     if not selected_skill:
         return ""
 
-    info = registry.skills.get(selected_skill)
+    info = registry_skills.get(selected_skill)
     if info is None:
         return ""
 
@@ -404,25 +415,27 @@ def load_skill_context(
     # Phase 1 = inject all gotchas (no method-based filter); Phase 2 trigger
     # is data-driven from the telemetry log line below.
     gotchas = info.get("gotchas") or []
-    if gotchas:
+    gotcha_details = info.get("gotcha_details") or []
+    guidance_items = gotcha_details or gotchas
+    if guidance_items:
         lines.append("")
         lines.append("## Known pitfalls (from SKILL.md Gotchas)")
         lines.append("")
-        for lead in gotchas:
-            lead_str = str(lead).strip()
-            if lead_str:
-                lines.append(f"- {lead_str}")
+        for guidance in guidance_items:
+            guidance_text = str(guidance).strip()
+            if guidance_text:
+                lines.append(f"- {guidance_text}")
         # Telemetry: rough token estimate (4 chars / token) for Phase 2 gating.
-        approx_tokens = sum(len(str(g)) for g in gotchas) // 4
+        approx_tokens = sum(len(str(g)) for g in guidance_items) // 4
         LOGGER.info(
             "skill_context.gotchas_injected skill=%s gotcha_count=%d approx_tokens=%d",
             selected_skill,
-            len(gotchas),
+            len(guidance_items),
             approx_tokens,
             extra={
                 "event": "skill_context.gotchas_injected",
                 "skill": selected_skill,
-                "gotcha_count": len(gotchas),
+                "gotcha_count": len(guidance_items),
                 "approx_tokens": approx_tokens,
             },
         )

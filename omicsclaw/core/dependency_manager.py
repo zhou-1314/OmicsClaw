@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 from omicsclaw.core.external_env import is_env_available
+from omicsclaw.skill.execution.environment import scrub_internal_control_credentials
 
 # Mappings of packages to their respective domain tiers.
 DOMAIN_TIERS = {
@@ -164,6 +165,7 @@ def _check_r_available() -> bool:
                     capture_output=True,
                     text=True,
                     timeout=10,
+                    env=scrub_internal_control_credentials(os.environ),
                 )
             except FileNotFoundError:
                 continue

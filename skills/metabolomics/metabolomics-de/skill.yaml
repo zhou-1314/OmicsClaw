@@ -32,6 +32,10 @@ interface:
   inputs:
     file_types:
     - csv
+    artifacts:
+    - kind: metabolomics.feature_matrix
+      formats:
+      - csv
   outputs:
     files:
     - tables/differential_features.csv
@@ -39,6 +43,10 @@ interface:
     - figures/pca_scores.png
     - report.md
     - result.json
+    artifacts:
+    - kind: metabolomics.differential_results
+      path: tables/differential_features.csv
+      format: csv
 runtime:
   entry: met_diff.py
 deps:

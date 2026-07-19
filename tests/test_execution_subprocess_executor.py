@@ -13,6 +13,7 @@ class owns process lifecycle only.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import time
@@ -49,6 +50,41 @@ def test_subprocess_executor_captures_stdout(tmp_path: Path) -> None:
     assert outcome.error is None
     assert "hello-world" in ctx.stdout_log.read_text(encoding="utf-8")
     assert "hello-world" in outcome.stdout_text
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_subprocess_executor_scrubs_backend_control_credentials(
+    monkeypatch,
+    tmp_path: Path,
+    explicit: bool,
+) -> None:
+    from omicsclaw.execution.executors import SubprocessExecutor
+
+    control_keys = (
+        "OMICSCLAW_REMOTE_AUTH_TOKEN",
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN",
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD",
+    )
+    for key in control_keys:
+        monkeypatch.setenv(key, "must-not-reach-opt-in-executor")
+    monkeypatch.setenv("OMICSCLAW_EXECUTOR_TEST_KEEP", "ordinary-value")
+    explicit_env = os.environ.copy() if explicit else None
+    code = (
+        "import json, os;"
+        f"print(json.dumps({{k: os.environ.get(k) for k in {control_keys!r}}}));"
+        "print(os.environ.get('OMICSCLAW_EXECUTOR_TEST_KEEP', ''))"
+    )
+
+    outcome = asyncio.run(
+        SubprocessExecutor(
+            command_factory=lambda _ctx: [sys.executable, "-c", code],
+            env=explicit_env,
+        ).run(_ctx(tmp_path))
+    )
+
+    lines = outcome.stdout_text.splitlines()
+    assert json.loads(lines[0]) == {key: None for key in control_keys}
+    assert lines[1] == "ordinary-value"
 
 
 def test_subprocess_executor_nonzero_exit_is_failure(tmp_path: Path) -> None:

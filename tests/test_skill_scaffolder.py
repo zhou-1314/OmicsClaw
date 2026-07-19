@@ -18,6 +18,7 @@ from omicsclaw.skill.scaffolder import (
     create_skill_scaffold,
     find_latest_autonomous_analysis,
     infer_skill_name,
+    refresh_registry,
 )
 from omicsclaw.skill.schema import load_skill_yaml, validate_skill_yaml
 from omicsclaw.skill.execution.flag_introspection import derive_accepted_flags
@@ -49,6 +50,81 @@ assert scaffolder.SKILLS_DIR.name == "skills"
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_demo_smoke_gate_does_not_inherit_backend_control_credentials(
+    tmp_path,
+    monkeypatch,
+):
+    import omicsclaw.skill.scaffolder as scaffolder_module
+
+    observed: dict[str, str] = {}
+
+    def capture_run(argv, *, env, **_kwargs):
+        for key in (
+            "OMICSCLAW_SKILL_EVOLUTION_TOKEN",
+            "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD",
+            "OMICSCLAW_REMOTE_AUTH_TOKEN",
+        ):
+            if key in env:
+                observed[key] = env[key]
+        return subprocess.CompletedProcess(argv, 1, "", "expected gate failure")
+
+    monkeypatch.setenv(
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN",
+        "must-not-reach-the-candidate-skill",
+    )
+    monkeypatch.setenv(
+        "OMICSCLAW_REMOTE_AUTH_TOKEN",
+        "must-not-reach-the-candidate-skill",
+    )
+    monkeypatch.setenv("OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD", "3")
+    monkeypatch.setattr(scaffolder_module.subprocess, "run", capture_run)
+
+    outcome = scaffolder_module._run_demo_smoke_gate(
+        tmp_path / "candidate.py",
+        tmp_path / "candidate-output",
+    )
+
+    assert outcome.verdict == "rejected"
+    assert observed == {}
+
+
+def test_scaffolder_refresh_registry_uses_atomic_reload(monkeypatch):
+    import omicsclaw.skill.registry as registry_module
+
+    class ReloadOnlyRegistry:
+        def __init__(self):
+            self.calls = 0
+
+        def reload(self) -> None:
+            self.calls += 1
+
+    fake_registry = ReloadOnlyRegistry()
+    monkeypatch.setattr(registry_module, "registry", fake_registry)
+
+    assert refresh_registry() is True
+    assert fake_registry.calls == 1
+
+
+def test_scaffolder_refresh_failure_preserves_published_registry(monkeypatch):
+    import omicsclaw.skill.registry as registry_module
+
+    class FailingReloadRegistry:
+        def __init__(self):
+            self._loaded = True
+            self.skills = {"old-skill": {"alias": "old-skill"}}
+            self.lazy_skills = {"old-skill": object()}
+
+        def reload(self) -> None:
+            raise ValueError("candidate invalid")
+
+    fake_registry = FailingReloadRegistry()
+    monkeypatch.setattr(registry_module, "registry", fake_registry)
+
+    assert refresh_registry() is False
+    assert set(fake_registry.skills) == {"old-skill"}
+    assert set(fake_registry.lazy_skills) == {"old-skill"}
 
 
 def test_infer_skill_name_falls_back_to_request_tokens():
@@ -276,6 +352,21 @@ def test_create_skill_scaffold_creates_registry_loadable_skill(tmp_path: Path):
     assert (skill_dir / "references" / "r_visualization.md").exists()
     assert result.completion["status"] == "complete"
     assert result.completion["completed"] is True
+    completion = json.loads(
+        (skill_dir / "completion_report.json").read_text(encoding="utf-8")
+    )
+    workspace_manifest = json.loads(
+        (skill_dir / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert completion["workspace_root"] == str(skill_dir)
+    assert completion["manifest_path"] == str(skill_dir / "manifest.json")
+    assert completion["report_path"] == str(skill_dir / "completion_report.json")
+    assert workspace_manifest["workspace"]["root"] == str(skill_dir)
+    assert workspace_manifest["steps"][-1]["output_file"] == str(skill_dir)
+    assert workspace_manifest["verification"]["report_path"] == str(
+        skill_dir / "completion_report.json"
+    )
+    assert result.completion == completion
     assert lint_skill(skill_dir) == []
 
     # Acquisition P0 contract: a fresh scaffold is BORN unproven — `draft`
@@ -394,6 +485,21 @@ def test_create_skill_scaffold_can_promote_autonomous_analysis(tmp_path: Path):
         json.dumps({"domain": "orchestrator"}, ensure_ascii=False),
         encoding="utf-8",
     )
+    (source_dir / "completion_report.json").write_text(
+        json.dumps({"completed": True, "status": "complete"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="allow_legacy_source=True"):
+        create_skill_scaffold(
+            request="Package the successful peak detection run as a skill.",
+            domain="",
+            skill_name="legacy-default-rejected",
+            summary="Reusable peak detection skill.",
+            skills_root=tmp_path / "skills",
+            source_analysis_dir=source_dir,
+            output_root=output_root,
+        )
 
     result = create_skill_scaffold(
         request="Package the successful peak detection run as a skill.",
@@ -403,6 +509,7 @@ def test_create_skill_scaffold_can_promote_autonomous_analysis(tmp_path: Path):
         skills_root=tmp_path / "skills",
         source_analysis_dir=source_dir,
         output_root=output_root,
+        allow_legacy_source=True,
     )
 
     skill_dir = Path(result.skill_dir)
@@ -424,6 +531,9 @@ def test_create_skill_scaffold_can_promote_autonomous_analysis(tmp_path: Path):
     assert (skill_dir / "completion_report.json").exists()
     assert result.completion["status"] == "complete"
     assert result.completion["completed"] is True
+    assert result.quarantined is True
+    assert ".quarantine" in skill_dir.parts
+    assert (skill_dir / "references" / "quarantine.md").exists()
     assert lint_skill(skill_dir) == []
 
 
@@ -1124,7 +1234,10 @@ def test_promoted_skill_demo_gate_skips_without_crediting_when_bwrap_unavailable
     assert (skill_dir / "references" / "quarantine.md").exists()
 
     registry = OmicsRegistry()
-    registry.load_all(tmp_path / "skills")
+    empty_state = registry._state
+    with pytest.raises(ValueError, match="skills inventory is empty"):
+        registry.load_all(tmp_path / "skills")
+    assert registry._state is empty_state
     assert "no-sandbox-promote-skill" not in registry.skills
 
 
@@ -1368,6 +1481,7 @@ def test_create_skill_scaffold_rejects_incomplete_autonomous_analysis(tmp_path: 
             skill_name="failed-analysis-skill",
             skills_root=tmp_path / "skills",
             source_analysis_dir=source_dir,
+            output_root=tmp_path / "output",
         )
 
 
@@ -1380,6 +1494,10 @@ def test_find_latest_autonomous_analysis_returns_newest(tmp_path: Path):
         (path / "reproducibility" / "analysis_notebook.ipynb").write_text("{}", encoding="utf-8")
         (path / "analysis_plan.md").write_text("plan\n", encoding="utf-8")
         (path / "result_summary.md").write_text("summary\n", encoding="utf-8")
+        (path / "completion_report.json").write_text(
+            json.dumps({"completed": True, "status": "complete"}),
+            encoding="utf-8",
+        )
 
     future_ts = time.time() + 60
     for target in (
@@ -1389,7 +1507,11 @@ def test_find_latest_autonomous_analysis_returns_newest(tmp_path: Path):
         newer / "result_summary.md",
     ):
         os.utime(target, (future_ts, future_ts))
-    latest = find_latest_autonomous_analysis(output_root=output_root)
+    assert find_latest_autonomous_analysis(output_root=output_root) is None
+    latest = find_latest_autonomous_analysis(
+        output_root=output_root,
+        allow_legacy_source=True,
+    )
     assert latest == newer
 
 
@@ -1411,4 +1533,116 @@ def test_find_latest_autonomous_analysis_skips_incomplete_completion_reports(tmp
         encoding="utf-8",
     )
 
-    assert find_latest_autonomous_analysis(output_root=output_root) == complete
+    assert find_latest_autonomous_analysis(
+        output_root=output_root,
+        allow_legacy_source=True,
+    ) == complete
+
+
+def _write_minimal_mini_agent_source(path: Path, *, completed: bool = True) -> None:
+    path.mkdir(parents=True)
+    (path / "analysis.py").write_text(
+        "# === accepted step 1 ===\nReturnAnswer('done')\n",
+        encoding="utf-8",
+    )
+    (path / "result_summary.md").write_text("## Goal\nTest promotion\n", encoding="utf-8")
+    (path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "steps": [
+                    {"skill": "autonomous_code_runner", "version": "0.1.0"}
+                ],
+                "workspace": {
+                    "kind": "analysis_run",
+                    "purpose": "autonomous_code",
+                    "root": str(path),
+                },
+                "verification": {
+                    "status": "complete",
+                    "completed": True,
+                    "missing_required_artifacts": [],
+                },
+                "metadata": {"source": "autonomous_code_runner"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (path / "completion_report.json").write_text(
+        json.dumps(
+            {
+                "workspace_kind": "analysis_run",
+                "workspace_purpose": "autonomous_code",
+                "workspace_root": str(path),
+                "status": "complete" if completed else "failed",
+                "completed": completed,
+                "missing_required_artifacts": [],
+                "errors": [],
+                "metadata": {"source": "autonomous_code_runner"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_promotion_source_must_resolve_inside_explicit_output_root(tmp_path: Path):
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+    outside = tmp_path / "outside" / "autonomous-code__20260716__outside"
+    _write_minimal_mini_agent_source(outside)
+
+    with pytest.raises(ValueError, match="outside the configured output root"):
+        create_skill_scaffold(
+            request="Promote escaped analysis.",
+            domain="singlecell",
+            skill_name="escaped-source-skill",
+            skills_root=tmp_path / "skills",
+            source_analysis_dir=outside,
+            output_root=output_root,
+        )
+
+
+def test_promotion_source_directory_cannot_be_a_symlink(tmp_path: Path):
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+    outside = tmp_path / "outside" / "autonomous-code__20260716__external"
+    _write_minimal_mini_agent_source(outside)
+    alias = output_root / "autonomous-code__20260716__alias"
+    alias.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symbolic-link source directory"):
+        create_skill_scaffold(
+            request="Promote aliased analysis.",
+            domain="singlecell",
+            skill_name="aliased-source-skill",
+            skills_root=tmp_path / "skills",
+            source_analysis_dir=alias,
+            output_root=output_root,
+        )
+
+
+def test_autonomous_bundle_requires_owned_completed_authority(tmp_path: Path):
+    missing = tmp_path / "autonomous-code__20260716__missing"
+    _write_minimal_mini_agent_source(missing)
+    (missing / "completion_report.json").unlink()
+
+    with pytest.raises(ValueError, match="owned completion report"):
+        _load_autonomous_bundle(missing)
+
+
+@pytest.mark.parametrize("artifact", ["analysis.py", "result_summary.md", "skill_calls.jsonl"])
+def test_autonomous_bundle_rejects_aliased_source_evidence(tmp_path: Path, artifact: str):
+    source = tmp_path / f"autonomous-code__20260716__{artifact.replace('.', '-')}"
+    _write_minimal_mini_agent_source(source)
+    external = tmp_path / f"external-{artifact.replace('/', '-')}"
+    external.write_text(
+        "# === accepted step 1 ===\nReturnAnswer('outside')\n"
+        if artifact == "analysis.py"
+        else "outside\n",
+        encoding="utf-8",
+    )
+    target = source / artifact
+    target.unlink(missing_ok=True)
+    target.symlink_to(external)
+
+    with pytest.raises(ValueError, match="unowned source artifact"):
+        _load_autonomous_bundle(source)

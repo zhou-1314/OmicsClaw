@@ -81,10 +81,10 @@ def get_demo_data() -> tuple[pd.DataFrame, Path]:
     demo_path = project_root / "examples" / "demo_bulkrna_ppi_genes.csv"
     if demo_path.exists():
         return pd.read_csv(demo_path), demo_path
-    df = _generate_demo_de()
-    demo_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(demo_path, index=False)
-    return df, demo_path
+    # Demo generation is read-only with respect to the repository.  The
+    # generated table is consumed in memory and all durable outputs go to the
+    # caller's --output directory.
+    return _generate_demo_de(), Path("built-in-demo")
 
 
 # ---------------------------------------------------------------------------

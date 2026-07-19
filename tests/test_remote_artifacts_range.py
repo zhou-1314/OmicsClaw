@@ -18,10 +18,14 @@ import pytest
 
 pytest.importorskip("fastapi")
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from fastapi import FastAPI  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 
-from omicsclaw.remote.app_integration import register_remote_routers
+from omicsclaw.remote.app_integration import register_remote_routers  # noqa: E402
+from omicsclaw.remote.auth import capture_remote_bearer_authority  # noqa: E402
+from omicsclaw.remote.routers import artifacts as artifacts_module  # noqa: E402
+from omicsclaw.remote.routers import jobs as jobs_module  # noqa: E402
+from omicsclaw.remote.schemas import Job  # noqa: E402
 
 
 @pytest.fixture()
@@ -30,6 +34,7 @@ def client_with_artifact(monkeypatch, tmp_path: Path):
     workspace.mkdir()
     monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(workspace))
     monkeypatch.delenv("OMICSCLAW_REMOTE_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(artifacts_module, "get_remote_workspace", lambda: workspace)
 
     # Seed a fixed-content artifact of known size.
     job_id = "range-subject"
@@ -37,8 +42,21 @@ def client_with_artifact(monkeypatch, tmp_path: Path):
     artifact_dir.mkdir(parents=True)
     payload = bytes(range(256)) * 4  # 1024 bytes, each byte value known
     (artifact_dir / "data.bin").write_bytes(payload)
+    jobs_module._write_job(
+        workspace,
+        Job(
+            job_id=job_id,
+            skill="historical-skill",
+            status="succeeded",
+            workspace=str(workspace),
+            inputs={},
+            params={},
+            created_at="2025-01-01T00:00:00Z",
+        ),
+    )
 
     app = FastAPI()
+    capture_remote_bearer_authority(app, {})
     register_remote_routers(app)
     client = TestClient(app)
     return client, job_id, payload

@@ -86,6 +86,15 @@ async def test_register_literature_datasets_skips_metadata_and_scopes_thread(
 
     out_dir = tmp_path / "lit"
     out_dir.mkdir()
+    # Mirror the literature skill's real layout (skills/literature/literature_parse.py):
+    # downloads land under `<out_dir>/data/<gse_id>/...`, i.e. contained within the
+    # Run's own output tree. `_register_literature_datasets` now enforces that
+    # containment via `is_scientific_output_file` (ADR 0065), so fixture files must
+    # actually exist on disk under `out_dir` — not merely be referenced by path.
+    gse1_dir = out_dir / "data" / "GSE1"
+    gse1_dir.mkdir(parents=True)
+    (gse1_dir / "metadata.json").write_text("{}", encoding="utf-8")
+    (gse1_dir / "matrix.h5ad").write_bytes(b"")
     result = {
         "data": {
             "metadata": {"technology": "10x"},
@@ -94,8 +103,8 @@ async def test_register_literature_datasets_skips_metadata_and_scopes_thread(
                     "gse_id": "GSE1",
                     "status": "success",
                     "files": [
-                        str(tmp_path / "GSE1" / "metadata.json"),
-                        str(tmp_path / "GSE1" / "matrix.h5ad"),
+                        str(gse1_dir / "metadata.json"),
+                        str(gse1_dir / "matrix.h5ad"),
                     ],
                 },
                 {  # failed GSE → skipped entirely
@@ -135,12 +144,17 @@ async def test_register_literature_datasets_legacy_unscoped_when_thread_empty(
 
     out_dir = tmp_path / "lit"
     out_dir.mkdir()
+    # Fixture file must exist under out_dir — see containment note in the sibling
+    # test above (ADR 0065 / is_scientific_output_file).
+    gse1_dir = out_dir / "data" / "GSE1"
+    gse1_dir.mkdir(parents=True)
+    (gse1_dir / "matrix.h5ad").write_bytes(b"")
     result = {
         "data": {
             "metadata": {"technology": "10x"},
             "download_results": [
                 {"gse_id": "GSE1", "status": "success",
-                 "files": [str(tmp_path / "GSE1" / "matrix.h5ad")]},
+                 "files": [str(gse1_dir / "matrix.h5ad")]},
             ],
         }
     }

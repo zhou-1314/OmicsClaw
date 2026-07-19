@@ -37,6 +37,13 @@ interface:
     file_types:
     - fastq
     - fq
+    preconditions:
+      content:
+        fastq:
+          require_valid_record: true
+        directory:
+          any_of_signatures:
+          - fastq-collection
   parameters:
     hints:
       fastqc:

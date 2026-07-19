@@ -14,6 +14,7 @@ owns the A/B routing decision and the URI / banner conventions.
 from __future__ import annotations
 
 from typing import Literal
+from urllib.parse import quote
 
 from omicsclaw.runtime.consensus.sources import TYPED_CONSENSUS_REGISTRY
 from omicsclaw.runtime.consensus.templates import provenance_of
@@ -67,9 +68,11 @@ def consensus_namespace(run_id: str, mode: ConsensusMode, thread_id: str = "") -
     the typed/narrative routing decision.
     """
     sub = "typed" if mode == "typed" else "exploratory"
+    run_segment = quote(str(run_id), safe="")
     if thread_id:
-        return f"analysis://{thread_id}/{sub}/{run_id}"
-    return f"analysis://{sub}/{run_id}"
+        thread_segment = quote(str(thread_id), safe="")
+        return f"analysis://{thread_segment}/{sub}/{run_segment}"
+    return f"analysis://{sub}/{run_segment}"
 
 
 def output_banner(mode: ConsensusMode) -> str:

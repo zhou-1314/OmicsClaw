@@ -9,11 +9,13 @@ mask.  They run before the soft metric comparison and produce a clear
 pass/fail signal with diagnostics.
 
 Gate categories:
-1. **no_crash** — exit code must be 0.
-2. **artifacts_present** — required output files must exist.
-3. **cell_retention** — cell count must not collapse below threshold.
-4. **fallback_recorded** — if a fallback occurred it must be logged.
-5. **no_empty_output** — processed adata must have >0 cells and >0 genes.
+1. **authority_bound** — trace evidence is bound to the executed trial tree.
+2. **receipt_bound** — child claim/result evidence matches frozen authority.
+3. **no_crash** — exit code must be 0.
+4. **artifacts_present** — required output files must exist.
+5. **cell_retention** — cell count must not collapse below threshold.
+6. **fallback_recorded** — if a fallback occurred it must be logged.
+7. **no_empty_output** — declared primary AnnData must not be empty.
 """
 
 from __future__ import annotations
@@ -23,7 +25,16 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from omicsclaw.autoagent.authority import TrialSkillAuthority
+from omicsclaw.autoagent.output_ownership import (
+    VerifiedChildTrialReceipt,
+    verify_child_trial_receipt,
+)
 from omicsclaw.autoagent.trace import RunTrace
+from omicsclaw.common.output_claim import (
+    collect_output_claim_identities,
+    is_scientific_output_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +64,7 @@ class HardGateVerdict:
 
     all_passed: bool
     results: list[GateResult] = field(default_factory=list)
+    receipt: dict[str, Any] = field(default_factory=dict)
 
     @property
     def failed_gates(self) -> list[GateResult]:
@@ -84,12 +96,85 @@ class HardGateVerdict:
         return {
             "all_passed": self.all_passed,
             "results": [r.to_dict() for r in self.results],
+            "receipt": dict(self.receipt),
         }
 
 
 # ---------------------------------------------------------------------------
 # Gate definitions
 # ---------------------------------------------------------------------------
+
+
+def gate_authority_bound(trace: RunTrace) -> GateResult:
+    """The trace must carry the post-verified authority from its execution."""
+
+    authority = trace.authority
+    passed = (
+        isinstance(authority, TrialSkillAuthority)
+        and authority.matches_skill_name(trace.skill_name)
+    )
+    return GateResult(
+        name="authority_bound",
+        passed=passed,
+        message=(
+            "Trial trace is bound to its frozen sandbox authority."
+            if passed
+            else "Trial trace has no matching post-verified sandbox authority."
+        ),
+    )
+
+
+def gate_receipt_bound(
+    trace: RunTrace,
+    output_dir: Path,
+) -> GateResult:
+    """The exact child claim/result receipt must match frozen authority."""
+
+    authority = trace.authority
+    if not isinstance(authority, TrialSkillAuthority):
+        return GateResult(
+            name="receipt_bound",
+            passed=False,
+            message="Child receipt cannot be verified without trial authority.",
+        )
+
+    try:
+        receipt = verify_child_trial_receipt(
+            output_dir,
+            canonical_skill_id=authority.canonical_skill_id,
+            skill_version=authority.skill_version,
+            manifest_hash=authority.manifest_hash,
+            source_hash=authority.source_hash,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        return _receipt_gate_result(trace, None, str(exc))
+    return _receipt_gate_result(trace, receipt, "")
+
+
+def _receipt_gate_result(
+    trace: RunTrace,
+    receipt: VerifiedChildTrialReceipt | None,
+    verification_error: str,
+) -> GateResult:
+    """Build one receipt gate result from a verifier observation."""
+
+    authority = trace.authority
+    passed = (
+        isinstance(authority, TrialSkillAuthority)
+        and receipt is not None
+        and receipt.canonical_skill_id == authority.canonical_skill_id
+        and receipt.skill_version == authority.skill_version
+    )
+    return GateResult(
+        name="receipt_bound",
+        passed=passed,
+        message=(
+            "Child run claim and result envelope match frozen trial authority."
+            if passed
+            else "Child receipt is not bound to frozen trial authority: "
+            + (verification_error or "receipt mismatch")
+        ),
+    )
 
 
 def gate_no_crash(trace: RunTrace) -> GateResult:
@@ -110,20 +195,41 @@ def gate_artifacts_present(
     trace: RunTrace,
     output_dir: Path,
     required_files: list[str] | None = None,
+    *,
+    verified_receipt: VerifiedChildTrialReceipt | None = None,
 ) -> GateResult:
     """Required output files must exist in the output directory.
 
-    Default required files: ``result.json``.  For adata-producing skills,
-    ``processed.h5ad`` is also required.
+    Default required files: ``result.json``. For AnnData-producing Skills, the
+    trial-authority primary ``.h5ad`` inventory path is also required.
     """
     if required_files is None:
+        if not gate_authority_bound(trace).passed:
+            return GateResult(
+                name="artifacts_present",
+                passed=False,
+                message="Required artifacts cannot be derived without trial authority.",
+            )
         required_files = ["result.json"]
-        # If skill typically produces adata, also require it
-        if _is_adata_skill(trace.skill_name):
-            required_files.append("processed.h5ad")
+        primary_anndata = trace.authority.primary_anndata_path
+        if primary_anndata:
+            required_files.append(primary_anndata)
 
     output_dir = Path(output_dir)
-    missing = [f for f in required_files if not (output_dir / f).exists()]
+    claim_identities = (
+        frozenset({verified_receipt.claim_identity})
+        if verified_receipt is not None
+        else collect_output_claim_identities(output_dir)
+    )
+    missing = [
+        relative
+        for relative in required_files
+        if not is_scientific_output_file(
+            output_dir / relative,
+            output_root=output_dir,
+            claim_identities=claim_identities,
+        )
+    ]
 
     passed = len(missing) == 0
     if passed:
@@ -195,9 +301,18 @@ def gate_no_empty_output(trace: RunTrace) -> GateResult:
     n_obs = trace.data_shape.n_obs_after
     n_vars = trace.data_shape.n_vars_after
 
-    # Skip if data shape is unknown
-    if n_obs == 0 and n_vars == 0 and trace.execution.exit_code == 0:
-        # Might just not have shape info; don't fail
+    shape_known = (
+        trace.data_shape.n_obs_after_known
+        or trace.data_shape.n_vars_after_known
+    )
+
+    # A missing observation is different from a measured zero-sized output.
+    if (
+        not shape_known
+        and n_obs == 0
+        and n_vars == 0
+        and trace.execution.exit_code == 0
+    ):
         return GateResult(
             name="no_empty_output",
             passed=True,
@@ -262,6 +377,8 @@ def gate_fallback_recorded(trace: RunTrace) -> GateResult:
 
 # Default gate list in execution order
 DEFAULT_GATES = [
+    "authority_bound",
+    "receipt_bound",
     "no_crash",
     "artifacts_present",
     "cell_retention",
@@ -287,7 +404,8 @@ def run_hard_gates(
     output_dir:
         Path to the trial output directory.
     gates:
-        Subset of gate names to run. Defaults to :data:`DEFAULT_GATES`.
+        Quality gate names to run. Defaults to :data:`DEFAULT_GATES`;
+        ``receipt_bound`` is always added as an admission precondition.
     min_cell_retention:
         Minimum cell retention rate (0.0-1.0).
     required_artifacts:
@@ -299,12 +417,43 @@ def run_hard_gates(
         Aggregated pass/fail with per-gate details.
     """
     output_dir = Path(output_dir)
-    active_gates = gates or DEFAULT_GATES
+    configured_gates = list(DEFAULT_GATES if gates is None else gates)
+    # Receipt binding is an admission precondition, not an optional quality
+    # check.  A custom gate subset therefore cannot bypass it.
+    active_gates = list(configured_gates)
+    if "receipt_bound" not in active_gates:
+        active_gates.insert(0, "receipt_bound")
+
+    verified_receipt: VerifiedChildTrialReceipt | None = None
+    receipt_error = ""
+    authority = trace.authority
+    if isinstance(authority, TrialSkillAuthority):
+        try:
+            verified_receipt = verify_child_trial_receipt(
+                output_dir,
+                canonical_skill_id=authority.canonical_skill_id,
+                skill_version=authority.skill_version,
+                manifest_hash=authority.manifest_hash,
+                source_hash=authority.source_hash,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            receipt_error = str(exc)
+    else:
+        receipt_error = "trial authority is missing"
 
     gate_dispatch = {
+        "authority_bound": lambda: gate_authority_bound(trace),
+        "receipt_bound": lambda: _receipt_gate_result(
+            trace,
+            verified_receipt,
+            receipt_error,
+        ),
         "no_crash": lambda: gate_no_crash(trace),
         "artifacts_present": lambda: gate_artifacts_present(
-            trace, output_dir, required_artifacts,
+            trace,
+            output_dir,
+            required_artifacts,
+            verified_receipt=verified_receipt,
         ),
         "cell_retention": lambda: gate_cell_retention(
             trace, min_cell_retention,
@@ -317,7 +466,13 @@ def run_hard_gates(
     for gate_name in active_gates:
         gate_fn = gate_dispatch.get(gate_name)
         if gate_fn is None:
-            logger.warning("Unknown hard gate: %s", gate_name)
+            results.append(
+                GateResult(
+                    name=gate_name,
+                    passed=False,
+                    message=f"Unknown hard gate configuration: {gate_name}",
+                )
+            )
             continue
         try:
             result = gate_fn()
@@ -330,27 +485,12 @@ def run_hard_gates(
         results.append(result)
 
     all_passed = all(r.passed for r in results)
-    return HardGateVerdict(all_passed=all_passed, results=results)
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-_ADATA_SKILLS = frozenset({
-    "sc-preprocessing", "sc-batch-integration", "sc-cell-annotation",
-    "sc-clustering", "sc-doublet-detection", "sc-filter", "sc-qc",
-    "sc-ambient-removal", "sc-pseudotime", "sc-velocity", "sc-grn",
-    "sc-cell-communication", "sc-de", "sc-markers",
-    "spatial-preprocessing", "spatial-domains", "spatial-de",
-    "spatial-genes", "spatial-statistics", "spatial-annotate",
-    "spatial-deconvolution", "spatial-communication", "spatial-velocity",
-    "spatial-trajectory", "spatial-enrichment", "spatial-cnv",
-    "spatial-integration", "spatial-registration",
-    "spatial-condition-comparison",
-})
-
-
-def _is_adata_skill(skill_name: str) -> bool:
-    """Check if a skill typically produces processed.h5ad."""
-    return skill_name in _ADATA_SKILLS
+    return HardGateVerdict(
+        all_passed=all_passed,
+        results=results,
+        receipt=(
+            verified_receipt.to_audit_dict()
+            if verified_receipt is not None
+            else {}
+        ),
+    )

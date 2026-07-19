@@ -477,6 +477,38 @@ class TestIMessageChannel:
         assert cfg.region == "US"
         assert cfg.text_chunk_limit == 4096
 
+    def test_rpc_child_scrubs_backend_control_credentials(self, monkeypatch):
+        from omicsclaw.surfaces.channels import imessage as imessage_module
+
+        control_keys = {
+            "OMICSCLAW_REMOTE_AUTH_TOKEN",
+            "OMICSCLAW_SKILL_EVOLUTION_TOKEN",
+            "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD",
+        }
+        for key in control_keys:
+            monkeypatch.setenv(key, "must-not-reach-imsg")
+        monkeypatch.setenv("OMICSCLAW_IMESSAGE_TEST_KEEP", "ordinary-value")
+        observed: dict[str, object] = {}
+
+        async def fake_spawn(*_args, **kwargs):
+            observed.update(kwargs)
+            raise RuntimeError("stop after environment capture")
+
+        monkeypatch.setattr(
+            imessage_module.asyncio,
+            "create_subprocess_exec",
+            fake_spawn,
+        )
+        client = imessage_module._ImsgRpcClient("imsg", None, lambda *_args: None)
+
+        with pytest.raises(RuntimeError, match="environment capture"):
+            asyncio.run(client.start())
+
+        child_env = observed["env"]
+        assert isinstance(child_env, dict)
+        assert child_env["OMICSCLAW_IMESSAGE_TEST_KEEP"] == "ordinary-value"
+        assert not control_keys.intersection(child_env)
+
     def test_normalize_handle(self):
         from omicsclaw.surfaces.channels.imessage import _normalize_handle
         # Full E.164 number passes through unchanged

@@ -125,6 +125,7 @@ interface:
       obs:
       - leiden
       obsm:
+      - spatial
       - X_pca
       - X_umap
       var:
@@ -154,3 +155,9 @@ resources:
   figures: r_visualization/
   tests: tests/
   homepage: https://github.com/TianGzlab/OmicsClaw
+  compute:
+    cpu_cores: 2
+    memory_mib: 4096
+    gpu_devices: 0
+    threads: 2
+    temporary_disk_mib: 4096

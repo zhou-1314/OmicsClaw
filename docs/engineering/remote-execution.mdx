@@ -53,8 +53,12 @@ source .venv/bin/activate        # 或 conda activate omicsclaw
 export OMICSCLAW_WORKSPACE=/data/omicsclaw-workspace
 mkdir -p "$OMICSCLAW_WORKSPACE"
 
-# 设置 Bearer token（SSH 之外的第二层鉴权；留空则走 SSH-only 模式）
-export OMICSCLAW_REMOTE_AUTH_TOKEN="your-secret-token-here"
+# 设置 256-bit Bearer token（SSH 之外的第二层鉴权）
+export OMICSCLAW_REMOTE_AUTH_TOKEN="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+
+# 可选：启用远程 Skill Validation Review。当前 App profile 只有一个
+# bearer 字段，因此显式将同值另行授予 dedicated authority。
+export OMICSCLAW_SKILL_EVOLUTION_TOKEN="$OMICSCLAW_REMOTE_AUTH_TOKEN"
 
 # 启动 desktop-server（仅绑 127.0.0.1，勿暴露公网）
 oc desktop-server --host 127.0.0.1 --port 8765
@@ -65,15 +69,26 @@ oc desktop-server --host 127.0.0.1 --port 8765
 自检：
 
 ```bash
-# 公开探活端点（无需 token）
+# 公开最小探活（配置 token 后只返回 status/version/launch_id/auth_required）
 curl http://127.0.0.1:8765/health
 
-# 控制面端点（需要 Bearer token；当 OMICSCLAW_REMOTE_AUTH_TOKEN 未设置时也可省略 header）
+# 完整健康详情及其余 Desktop API（配置 token 后均需 Bearer token）
+curl http://127.0.0.1:8765/health \
+  -H "Authorization: Bearer $OMICSCLAW_REMOTE_AUTH_TOKEN"
 curl -X POST http://127.0.0.1:8765/connections/test \
   -H "Authorization: Bearer $OMICSCLAW_REMOTE_AUTH_TOKEN"
 curl http://127.0.0.1:8765/env/doctor \
   -H "Authorization: Bearer $OMICSCLAW_REMOTE_AUTH_TOKEN"
 ```
+
+`/skill-evolution/*` 使用独立治理凭据边界，且**不会**回退到 ordinary
+remote token。需要远程 Skill Validation Review 时，远端 Backend 必须显式
+配置 64 位小写十六进制 `OMICSCLAW_SKILL_EVOLUTION_TOKEN`；缺失时这些
+路由返回 `503`。当前 App profile 只有一个 bearer 字段，因此若需由同一
+profile 同时访问普通与治理路由，必须在远端分别把同一个 64 位值显式
+赋给 `OMICSCLAW_REMOTE_AUTH_TOKEN` 和
+`OMICSCLAW_SKILL_EVOLUTION_TOKEN`；这不是隐式 fallback。前置门会在
+路由和请求体解析前选择对应 authority，未知或编码含糊路径也不会绕过。
 
 **Step 2 — 在 Runtimes 页面新建 Remote Runtime**
 
@@ -82,6 +97,8 @@ curl http://127.0.0.1:8765/env/doctor \
 | 字段 | 存库键 | 示例 |
 |---|---|---|
 | Name | `name` | Lab GPU Server |
+| URL | `url` | `https://host.example:8765` |
+| SSH Alias | `ssh_alias` | lab-gpu |
 | SSH Host | `ssh_host` | 192.168.1.100 |
 | SSH Port | `ssh_port` | 22 |
 | SSH User | `ssh_user` | zhouwg |
@@ -92,9 +109,17 @@ curl http://127.0.0.1:8765/env/doctor \
 
 `remote_bootstrap_command` 为可选字段：填写后，App 激活该 runtime 时若远端端口未监听，会通过 SSH exec 自动执行该命令并轮询直到端口可用。留空则需手动完成 Step 1。命令中可继续沿用 App 内 Runtimes 页面预留的 `OMICSCLAW_WORKSPACE`、`OMICSCLAW_REMOTE_AUTH_TOKEN` 两个环境变量字段——它们会随启动命令一并 export。
 
+URL 只接受根 origin（例如 `https://host.example:8765`），不接受凭据、
+base path、query 或 fragment。目标优先级固定为 SSH Alias、SSH Host、direct
+URL；只有前两个字段都为空时 URL 才是执行目标。
+
 **Step 3 — 验证连接**
 
-保存 → 选中该条目 → 点 **Run Ping**。App 依次探测 `/health` 和 `/env/doctor`（携带 Bearer token），全绿后点 **Make Active**。
+保存 → 选中该条目 → 点 **Run Ping**。所有路径都会严格验证 `/health`。
+direct URL 与已有活动 tunnel 的 HTTP 目标可能再 best-effort 请求
+`/env/doctor` 以识别明确的 Bearer `401`；未保存或未激活 SSH 的一次性探测
+只请求 `/health`。需要完整环境诊断时，请先激活 profile，再单独运行
+Environment diagnostics。
 
 **Step 4 — 导入数据**
 
@@ -114,7 +139,7 @@ Job 完成后进入 **Artifacts** 面板，按 job 分组浏览：`report.md` / 
 | 症状 | 原因 | 解决 |
 |---|---|---|
 | Run Ping `/health` 失败 | SSH 无法连通或远端 `oc desktop-server` 未启动 | 先确认 `ssh -i <key> <user>@<host>` 可登录；再确认 `remote_port` 与远端监听端口一致；用 `ps -ef \| grep desktop-server` 检查进程 |
-| `/health` 绿但 `/env/doctor` 红 | Bearer token 不匹配 | 核对远端 `OMICSCLAW_REMOTE_AUTH_TOKEN` 与 profile `auth_token`（GET 返回遮罩值 `***<后8位>`），两边都为空也视为匹配 |
+| `/health` 通过但后续受保护请求返回 401 | Bearer token 不匹配 | 核对远端 `OMICSCLAW_REMOTE_AUTH_TOKEN` 与 profile `auth_token`（GET 返回遮罩值 `***<后8位>`）；激活 profile 后单独运行 Environment diagnostics |
 | workspace 未配置 / 目录不存在 | 远端未 export `OMICSCLAW_WORKSPACE` 或目录不存在 | 远端执行 `mkdir -p $OMICSCLAW_WORKSPACE` 并重新启动 `oc desktop-server` |
 | 沿用 `oc app-server` 报错 `unknown command` | ADR 0005 已把命令更名为 `oc desktop-server`，未保留别名 | 更新启动脚本 / `remote_bootstrap_command` 改为 `oc desktop-server` |
 | Job 很快失败 | 环境或数据问题 | 查看 job 的 `stdout.log` 和 `diagnostics/env_doctor.json` |

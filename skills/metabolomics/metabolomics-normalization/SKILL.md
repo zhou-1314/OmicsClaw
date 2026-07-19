@@ -43,12 +43,14 @@ For combined imputation + normalisation use `metabolomics-quantification`.
 **Inputs**
 
 - File types: `.csv`
+- Accepts artifact `metabolomics.peak_table` (`csv`)
 
 **Outputs**
 
 - `tables/normalized.csv`
 - `report.md`
 - `result.json`
+- Produces artifact `metabolomics.feature_matrix` as `tables/normalized.csv` (`csv`)
 
 ## Flow
 

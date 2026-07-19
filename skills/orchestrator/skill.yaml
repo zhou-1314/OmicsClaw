@@ -29,6 +29,10 @@ interface:
     files:
     - result.json
     - demo_report.txt
+    artifacts:
+    - kind: orchestrator.route_decision
+      path: result.json
+      format: json
 runtime:
   entry: omics_orchestrator.py
 deps:

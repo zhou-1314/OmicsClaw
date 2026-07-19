@@ -4,7 +4,9 @@
 > 其中“现状”“差距”“路线图”均是阶段性快照，不能单独作为完成证明。四阶段系统的
 > 当前目标边界、状态词汇、验收编号和完成判据，以
 > [`2026-07-13-skill-audit-system-design-assessment.md`](../reviews/2026-07-13-skill-audit-system-design-assessment.md)
-> 为准；ADR 0037/0041 等已接受决策仍分别是其领域内的架构真源。
+> 为准；ADR 0037/0041/0042 等已接受决策仍分别是其领域内的架构真源。2026-07-14
+> 已新增 typed run event、health ledger、pending proposal、人工审批三门重验与 rollback
+> substrate；本文 §4.2/4.3 的“完全缺失”描述只代表初始诊断快照。
 
 > 状态：草案 v0.4（v0.2 纳入 Codex 全文"必须修正"；v0.3 按维护者澄清重写 §1「技能表示」的 `knowledge_base` 整合路径；**v0.4 与维护者共同敲定「技能表示」目标结构（单一 `skill.yaml` + 叙事 `SKILL.md`），经 Codex/gpt-5.5(xhigh) 复核并落为 [ADR 0037](../adr/0037-unified-declarative-skill-representation.md)** → 待维护者审核）
 > 作者：OmicsClaw 维护团队（在 Claude 协助下，基于代码级审计生成）

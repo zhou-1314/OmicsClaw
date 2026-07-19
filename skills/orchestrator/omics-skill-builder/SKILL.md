@@ -40,10 +40,11 @@ existing skills, use `orchestrator`.
 
 **Outputs**
 
-- `output_dir/SCAFFOLD_SUMMARY.md`
-- `output_dir/report.md`
-- `output_dir/result.json`
+- `SCAFFOLD_SUMMARY.md`
+- `report.md`
+- `result.json`
 - `skills/<domain>/<skill-name>/`
+- Produces artifact `orchestrator.skill_scaffold` as `result.json` (`json`)
 
 ## Flow
 

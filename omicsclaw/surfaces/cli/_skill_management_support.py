@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -21,14 +22,17 @@ from omicsclaw.extensions import (
     write_extension_state,
     write_install_record,
 )
-from omicsclaw.surfaces.cli._session import format_relative_time
-from omicsclaw.runtime.tools.hooks import EVENT_EXTENSION_INSTALLED
-from omicsclaw.runtime.tools.hooks import ExtensionHookPayload
 from omicsclaw.runtime.tools.hooks import (
+    EVENT_EXTENSION_INSTALLED,
     HOOK_MODE_NOTICE,
+    ExtensionHookPayload,
     build_default_lifecycle_hook_runtime,
     format_hook_notice_block,
 )
+from omicsclaw.skill.execution.environment import (
+    scrub_internal_control_credentials,
+)
+from omicsclaw.surfaces.cli._session import format_relative_time
 
 
 @dataclass(slots=True)
@@ -660,6 +664,7 @@ def _stage_github_source(plan: SkillInstallPlan, staging_root: Path) -> tuple[Pa
         capture_output=True,
         text=True,
         timeout=120,
+        env=scrub_internal_control_credentials(os.environ),
     )
     if result.returncode != 0:
         raise RuntimeError(result.stderr[:500] or "git clone failed")
@@ -669,6 +674,7 @@ def _stage_github_source(plan: SkillInstallPlan, staging_root: Path) -> tuple[Pa
             capture_output=True,
             text=True,
             timeout=120,
+            env=scrub_internal_control_credentials(os.environ),
         )
         if checkout.returncode != 0:
             raise RuntimeError(checkout.stderr[:500] or f"git checkout {plan.repo_branch} failed")
@@ -1184,10 +1190,7 @@ def refresh_skill_registry() -> str:
     try:
         from omicsclaw.skill.registry import registry
 
-        registry._loaded = False
-        registry.skills.clear()
-        registry.lazy_skills.clear()
-        registry.load_all()
+        registry.reload()
         return ""
     except Exception as exc:
         return str(exc)

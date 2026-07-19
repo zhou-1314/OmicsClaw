@@ -177,3 +177,9 @@ resources:
   - parameters.md
   - r_visualization.md
   tests: tests/
+  compute:
+    cpu_cores: 2
+    memory_mib: 4096
+    gpu_devices: 0
+    threads: 2
+    temporary_disk_mib: 2048

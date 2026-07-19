@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 import hashlib
 import json
@@ -13,13 +15,20 @@ import subprocess
 from pathlib import Path
 import sys
 import textwrap
+import threading
 from typing import Iterable
 
-from omicsclaw.common.manifest import StepRecord
+from omicsclaw.common.manifest import StepRecord, read_manifest, save_manifest
+from omicsclaw.common.output_claim import (
+    OutputClaimIdentity,
+    collect_output_claim_identities,
+    is_scientific_output_file,
+)
 from omicsclaw.common.report import SCAFFOLD_STATUS, validate_result_envelope
 from omicsclaw.runtime.tools.hooks import build_default_lifecycle_hook_runtime
 from omicsclaw.runtime.policy.verification import (
     COMPLETION_REPORT_FILENAME,
+    COMPLETION_STATUS_COMPLETE,
     WORKSPACE_KIND_ANALYSIS_RUN,
     ArtifactRequirement,
     build_completion_report,
@@ -45,6 +54,29 @@ SKILL_TEMPLATE_PATH = OMICSCLAW_DIR / "templates" / "skill" / "SKILL.md"
 STAGING_ROOT = OMICSCLAW_DIR / ".omicsclaw-staging" / "skill-scaffolds"
 QUARANTINE_DIRNAME = ".quarantine"
 SKILL_SCAFFOLDER_VERSION = __version__
+_SCAFFOLD_PUBLICATION_THREAD_LOCK = threading.Lock()
+
+
+@contextmanager
+def _scaffold_publication_lock(skills_root: Path):
+    """Serialize cooperative final-tree publication across processes."""
+
+    root = Path(skills_root)
+    root.mkdir(parents=True, exist_ok=True)
+    lock_path = root / ".omicsclaw-scaffold.lock"
+    with _SCAFFOLD_PUBLICATION_THREAD_LOCK:
+        with lock_path.open("a+b") as handle:
+            try:
+                import fcntl
+            except ImportError:  # pragma: no cover - non-POSIX thread fallback
+                fcntl = None
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 # P1 acquisition gate (docs/proposals/skill-acquisition-p0-p1-landing.md): a
 # --demo smoke run is a lightweight sanity check, not a real analysis, so it
@@ -61,6 +93,38 @@ VALID_DOMAINS = (
     "bulkrna",
     "orchestrator",
 )
+
+
+def _resolve_promotion_source(
+    source_analysis_dir: Path | str,
+    *,
+    output_root: Path | None,
+) -> Path:
+    """Bind an explicit promotion source to the configured output tree."""
+
+    source = Path(source_analysis_dir).expanduser()
+    if not source.is_absolute():
+        source = OMICSCLAW_DIR / source
+    if source.is_symlink():
+        raise ValueError(f"refusing symbolic-link source directory: {source}")
+    try:
+        resolved_source = source.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError(f"autonomous analysis source does not exist: {source}") from exc
+    if not resolved_source.is_dir():
+        raise ValueError(f"autonomous analysis source is not a directory: {resolved_source}")
+
+    root = Path(output_root or OUTPUT_DIR).expanduser()
+    if not root.is_absolute():
+        root = OMICSCLAW_DIR / root
+    try:
+        resolved_root = root.resolve(strict=True)
+        resolved_source.relative_to(resolved_root)
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            f"source analysis is outside the configured output root: {resolved_source}"
+        ) from exc
+    return resolved_source
 
 _DOMAIN_PROFILES = {
     "spatial": {
@@ -1579,6 +1643,10 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from omicsclaw.common.report import mark_result_status, write_result_json
+from omicsclaw.common.output_claim import (
+    collect_output_claim_identities,
+    is_scientific_output_file,
+)
 from omicsclaw.skill.runner import run_skill
 
 
@@ -1611,10 +1679,23 @@ def _value_to_flags(key: str, value: object) -> list[str]:
 
 def _primary_h5ad(output_dir: str | Path) -> Path | None:
     root = Path(output_dir)
+    claim_identities = collect_output_claim_identities(root)
     preferred = root / "processed.h5ad"
-    if preferred.is_file():
+    if is_scientific_output_file(
+        preferred,
+        output_root=root,
+        claim_identities=claim_identities,
+    ):
         return preferred
-    candidates = sorted(root.glob("*.h5ad"))
+    candidates = sorted(
+        candidate
+        for candidate in root.glob("*.h5ad")
+        if is_scientific_output_file(
+            candidate,
+            output_root=root,
+            claim_identities=claim_identities,
+        )
+    )
     return candidates[0] if len(candidates) == 1 else None
 
 
@@ -1827,18 +1908,90 @@ def _skill_scaffold_requirements(
     return requirements
 
 
-def _load_completion_report(path: Path) -> dict[str, object]:
-    return json.loads(path.read_text(encoding="utf-8"))
+def _source_entry_exists(path: Path) -> bool:
+    """Return whether a source entry exists, including a dangling symlink."""
+
+    return path.exists() or path.is_symlink()
 
 
-def _load_notebook(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+def _is_owned_source_file(
+    path: Path,
+    *,
+    source_root: Path,
+    claim_identities: frozenset[OutputClaimIdentity] | None = None,
+) -> bool:
+    """Require promotion evidence to be a materialized, non-alias source file."""
+
+    return not path.is_symlink() and is_scientific_output_file(
+        path,
+        output_root=source_root,
+        claim_identities=claim_identities,
+    )
+
+
+def _read_owned_source_text(
+    path: Path,
+    *,
+    source_root: Path,
+    required: bool = False,
+    claim_identities: frozenset[OutputClaimIdentity] | None = None,
+) -> str:
+    if not _source_entry_exists(path):
+        if required:
+            raise ValueError(f"missing required source artifact: {path}")
+        return ""
+    if not _is_owned_source_file(
+        path,
+        source_root=source_root,
+        claim_identities=claim_identities,
+    ):
+        raise ValueError(f"unowned source artifact: {path}")
+    return path.read_text(encoding="utf-8")
+
+
+def _load_completion_report(
+    path: Path,
+    *,
+    source_root: Path,
+    claim_identities: frozenset[OutputClaimIdentity] | None = None,
+) -> dict[str, object]:
+    payload = json.loads(
+        _read_owned_source_text(
+            path,
+            source_root=source_root,
+            required=True,
+            claim_identities=claim_identities,
+        )
+    )
+    if not isinstance(payload, dict):
+        raise ValueError(f"completion report must be an object: {path}")
+    return payload
+
+
+def _load_notebook(
+    path: Path,
+    *,
+    source_root: Path,
+    claim_identities: frozenset[OutputClaimIdentity] | None = None,
+) -> dict:
+    return json.loads(
+        _read_owned_source_text(
+            path,
+            source_root=source_root,
+            required=True,
+            claim_identities=claim_identities,
+        )
+    )
 
 
 _ACCEPTED_STEP_RE = re.compile(r"^# === accepted step \d+ ===$", re.MULTILINE)
 
 
-def _load_autonomous_bundle(path: Path) -> AutonomousAnalysisBundle:
+def _load_autonomous_bundle(
+    path: Path,
+    *,
+    allow_legacy_source: bool = False,
+) -> AutonomousAnalysisBundle:
     """Load a promotable autonomous run, in either supported layout.
 
     Since the ADR 0032 single-engine consolidation the Autonomous Code Mini-Agent
@@ -1847,22 +2000,61 @@ def _load_autonomous_bundle(path: Path) -> AutonomousAnalysisBundle:
     ``custom_analysis_execute`` notebook layout is still read so older on-disk runs
     stay promotable.
     """
+    path = Path(path)
+    if path.is_symlink():
+        raise ValueError(f"refusing symbolic-link source directory: {path}")
+    if not path.is_dir():
+        raise ValueError(f"autonomous analysis source is not a directory: {path}")
+    path = path.resolve(strict=True)
+    claim_identities = collect_output_claim_identities(path)
+
     completion_path = path / COMPLETION_REPORT_FILENAME
-    if completion_path.exists():
-        completion = _load_completion_report(completion_path)
-        if not bool(completion.get("completed", False)):
-            status = str(completion.get("status", "")).strip() or "incomplete"
-            raise ValueError(
-                f"Autonomous analysis at {path} is not promotable yet (completion status: {status})."
-            )
+    if not _source_entry_exists(completion_path):
+        raise ValueError(
+            f"Autonomous analysis at {path} requires an owned completion report."
+        )
+    completion = _load_completion_report(
+        completion_path,
+        source_root=path,
+        claim_identities=claim_identities,
+    )
+    if (
+        completion.get("completed") is not True
+        or str(completion.get("status", "")).strip() != COMPLETION_STATUS_COMPLETE
+    ):
+        status = str(completion.get("status", "")).strip() or "incomplete"
+        raise ValueError(
+            f"Autonomous analysis at {path} is not promotable yet (completion status: {status})."
+        )
 
     notebook_path = path / "reproducibility" / "analysis_notebook.ipynb"
-    if notebook_path.exists():
-        return _load_legacy_notebook_bundle(path, notebook_path)
+    if _source_entry_exists(notebook_path):
+        if not allow_legacy_source:
+            raise ValueError(
+                "Legacy notebook promotion has no verifiable autonomous producer identity; "
+                "pass allow_legacy_source=True for an explicit quarantined import."
+            )
+        return _load_legacy_notebook_bundle(
+            path,
+            notebook_path,
+            claim_identities=claim_identities,
+        )
 
     analysis_path = path / "analysis.py"
-    if analysis_path.exists():
-        return _load_mini_agent_bundle(path, analysis_path)
+    if _source_entry_exists(analysis_path):
+        if (
+            not _is_autonomous_run_dir(path)
+            or not _completion_matches_modern_source(
+                completion,
+                source_root=path,
+            )
+        ):
+            raise ValueError(f"Autonomous mini-agent source has no valid producer manifest: {path}")
+        return _load_mini_agent_bundle(
+            path,
+            analysis_path,
+            claim_identities=claim_identities,
+        )
 
     raise FileNotFoundError(
         f"No promotable autonomous analysis found at {path}: expected a mini-agent "
@@ -1870,16 +2062,36 @@ def _load_autonomous_bundle(path: Path) -> AutonomousAnalysisBundle:
     )
 
 
-def _load_mini_agent_bundle(path: Path, analysis_path: Path) -> AutonomousAnalysisBundle:
+def _load_mini_agent_bundle(
+    path: Path,
+    analysis_path: Path,
+    *,
+    claim_identities: frozenset[OutputClaimIdentity] | None = None,
+) -> AutonomousAnalysisBundle:
     """Build a promotion bundle from a mini-agent run (ADR 0032 layout)."""
-    code = _extract_accepted_cells(analysis_path.read_text(encoding="utf-8"))
+    code = _extract_accepted_cells(
+        _read_owned_source_text(
+            analysis_path,
+            source_root=path,
+            required=True,
+            claim_identities=claim_identities,
+        )
+    )
     if not code.strip():
         raise ValueError(f"No executable analysis code found in {analysis_path}")
 
     summary_path = path / "result_summary.md"
-    result_summary = summary_path.read_text(encoding="utf-8") if summary_path.exists() else ""
-    goal, input_file = _read_run_goal_and_input(path)
-    steps, skill_calls, trace_warnings = _read_structured_run_trace(path)
+    result_summary = _read_owned_source_text(
+        summary_path,
+        source_root=path,
+        required=True,
+        claim_identities=claim_identities,
+    )
+    goal, input_file = _read_run_goal_and_input(path, claim_identities=claim_identities)
+    steps, skill_calls, trace_warnings = _read_structured_run_trace(
+        path,
+        claim_identities=claim_identities,
+    )
     if not goal:
         goal = _goal_from_summary(result_summary)
 
@@ -1902,14 +2114,23 @@ def _load_mini_agent_bundle(path: Path, analysis_path: Path) -> AutonomousAnalys
     )
 
 
-def _load_legacy_notebook_bundle(path: Path, notebook_path: Path) -> AutonomousAnalysisBundle:
+def _load_legacy_notebook_bundle(
+    path: Path,
+    notebook_path: Path,
+    *,
+    claim_identities: frozenset[OutputClaimIdentity] | None = None,
+) -> AutonomousAnalysisBundle:
     """Build a promotion bundle from a legacy ``custom_analysis_execute`` notebook."""
     plan_path = path / "analysis_plan.md"
     summary_path = path / "result_summary.md"
     sources_path = path / "web_sources.md"
     capability_path = path / "capability_decision.json"
 
-    notebook = _load_notebook(notebook_path)
+    notebook = _load_notebook(
+        notebook_path,
+        source_root=path,
+        claim_identities=claim_identities,
+    )
     code_cells = []
     goal = ""
     context = ""
@@ -1931,16 +2152,36 @@ def _load_legacy_notebook_bundle(path: Path, notebook_path: Path) -> AutonomousA
     if not code_cells:
         raise ValueError(f"No executable analysis code found in notebook: {notebook_path}")
 
-    capability = {}
-    if capability_path.exists():
-        capability = json.loads(capability_path.read_text(encoding="utf-8"))
+    plan_text = _read_owned_source_text(
+        plan_path,
+        source_root=path,
+        required=True,
+        claim_identities=claim_identities,
+    )
+    summary_text = _read_owned_source_text(
+        summary_path,
+        source_root=path,
+        required=True,
+        claim_identities=claim_identities,
+    )
+    sources_text = _read_owned_source_text(
+        sources_path,
+        source_root=path,
+        claim_identities=claim_identities,
+    )
+    capability_text = _read_owned_source_text(
+        capability_path,
+        source_root=path,
+        claim_identities=claim_identities,
+    )
+    capability = json.loads(capability_text) if capability_text else {}
 
     return AutonomousAnalysisBundle(
         source_dir=str(path),
         notebook_path=str(notebook_path),
-        analysis_plan=plan_path.read_text(encoding="utf-8") if plan_path.exists() else "",
-        result_summary=summary_path.read_text(encoding="utf-8") if summary_path.exists() else "",
-        web_sources=sources_path.read_text(encoding="utf-8") if sources_path.exists() else "",
+        analysis_plan=plan_text,
+        result_summary=summary_text,
+        web_sources=sources_text,
         capability_decision=capability,
         python_code="\n\n".join(code_cells).strip() + "\n",
         goal=goal,
@@ -2000,6 +2241,8 @@ def _extract_accepted_cells(script: str) -> str:
 
 def _read_structured_run_trace(
     path: Path,
+    *,
+    claim_identities: frozenset[OutputClaimIdentity] | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[str]]:
     """Read mini-agent intent and executed-call evidence without guessing.
 
@@ -2015,17 +2258,11 @@ def _read_structured_run_trace(
     """
     warnings: list[str] = []
     metadata: dict[str, object] = {}
-    manifest_path = path / "manifest.json"
-    if manifest_path.exists():
-        try:
-            raw_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            raw_metadata = raw_manifest.get("metadata", {}) if isinstance(raw_manifest, dict) else {}
-            if isinstance(raw_metadata, dict):
-                metadata = raw_metadata
-            else:
-                warnings.append("manifest metadata is not an object")
-        except (json.JSONDecodeError, OSError) as exc:
-            warnings.append(f"could not read manifest metadata: {type(exc).__name__}")
+    manifest = read_manifest(path)
+    if manifest is not None:
+        metadata = dict(manifest.metadata)
+    elif _source_entry_exists(path / "manifest.json"):
+        raise ValueError(f"unowned source artifact: {path / 'manifest.json'}")
 
     raw_steps = metadata.get("steps", [])
     steps = [dict(item) for item in raw_steps if isinstance(item, dict)] if isinstance(raw_steps, list) else []
@@ -2041,10 +2278,15 @@ def _read_structured_run_trace(
 
     jsonl_calls: list[dict[str, object]] = []
     calls_path = path / "skill_calls.jsonl"
-    if calls_path.exists():
+    if _source_entry_exists(calls_path):
         try:
             for line_number, line in enumerate(
-                calls_path.read_text(encoding="utf-8").splitlines(), start=1
+                _read_owned_source_text(
+                    calls_path,
+                    source_root=path,
+                    claim_identities=claim_identities,
+                ).splitlines(),
+                start=1,
             ):
                 if not line.strip():
                     continue
@@ -2063,25 +2305,34 @@ def _read_structured_run_trace(
     return steps, (jsonl_calls or manifest_calls), warnings
 
 
-def _read_run_goal_and_input(path: Path) -> tuple[str, str]:
+def _read_run_goal_and_input(
+    path: Path,
+    *,
+    claim_identities: frozenset[OutputClaimIdentity] | None = None,
+) -> tuple[str, str]:
     """Best-effort goal + first input path for a mini-agent run."""
     goal = ""
     input_file = ""
-    manifest_path = path / "manifest.json"
-    if manifest_path.exists():
-        try:
-            meta = json.loads(manifest_path.read_text(encoding="utf-8")).get("metadata", {}) or {}
-        except (json.JSONDecodeError, OSError):
-            meta = {}
+    manifest = read_manifest(path)
+    if manifest is not None:
+        meta = dict(manifest.metadata)
         goal = str(meta.get("goal", "") or "")
         inputs = meta.get("input_paths") or []
         if isinstance(inputs, list) and inputs:
             input_file = str(inputs[0])
+    elif _source_entry_exists(path / "manifest.json"):
+        raise ValueError(f"unowned source artifact: {path / 'manifest.json'}")
     if not input_file:
         refs_path = path / "inputs" / "references.json"
-        if refs_path.exists():
+        if _source_entry_exists(refs_path):
             try:
-                refs = json.loads(refs_path.read_text(encoding="utf-8")).get("references") or []
+                refs = json.loads(
+                    _read_owned_source_text(
+                        refs_path,
+                        source_root=path,
+                        claim_identities=claim_identities,
+                    )
+                ).get("references") or []
             except (json.JSONDecodeError, OSError):
                 refs = []
             if refs:
@@ -2666,41 +2917,111 @@ def _is_autonomous_run_dir(child: Path) -> bool:
     from omicsclaw.autonomous.contracts import (
         AUTONOMOUS_CODE_RUNNER_SOURCE,
         AUTONOMOUS_RUN_DIR_PREFIX,
+        AUTONOMOUS_WORKSPACE_PURPOSE,
     )
 
-    if child.name.startswith(AUTONOMOUS_RUN_DIR_PREFIX) or child.name.startswith("autonomous-analysis"):
-        return True
-    manifest = child / "manifest.json"
-    if manifest.is_file():
-        try:
-            meta = json.loads(manifest.read_text(encoding="utf-8")).get("metadata", {}) or {}
-        except (json.JSONDecodeError, OSError):
-            return False
-        return str(meta.get("source", "")) == AUTONOMOUS_CODE_RUNNER_SOURCE
-    return False
+    if child.is_symlink() or not child.name.startswith(f"{AUTONOMOUS_RUN_DIR_PREFIX}__"):
+        return False
+    manifest = read_manifest(child)
+    if (
+        manifest is None
+        or manifest.workspace is None
+        or manifest.verification is None
+        or str(manifest.metadata.get("source", "")) != AUTONOMOUS_CODE_RUNNER_SOURCE
+        or manifest.workspace.kind != WORKSPACE_KIND_ANALYSIS_RUN
+        or manifest.workspace.purpose != AUTONOMOUS_WORKSPACE_PURPOSE
+        or manifest.verification.status != COMPLETION_STATUS_COMPLETE
+        or not manifest.verification.completed
+        or manifest.verification.missing_required_artifacts
+        or not any(
+            step.skill == AUTONOMOUS_CODE_RUNNER_SOURCE for step in manifest.steps
+        )
+    ):
+        return False
+    try:
+        return Path(manifest.workspace.root).resolve(strict=True) == child.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return False
 
 
-def _autonomous_run_candidate(child: Path) -> tuple[float, Path] | None:
+def _completion_matches_modern_source(
+    completion: Mapping[str, object],
+    *,
+    source_root: Path,
+) -> bool:
+    from omicsclaw.autonomous.contracts import (
+        AUTONOMOUS_CODE_RUNNER_SOURCE,
+        AUTONOMOUS_WORKSPACE_PURPOSE,
+    )
+
+    metadata = completion.get("metadata")
+    if (
+        completion.get("workspace_kind") != WORKSPACE_KIND_ANALYSIS_RUN
+        or completion.get("workspace_purpose") != AUTONOMOUS_WORKSPACE_PURPOSE
+        or not isinstance(metadata, Mapping)
+        or metadata.get("source") != AUTONOMOUS_CODE_RUNNER_SOURCE
+        or completion.get("missing_required_artifacts") not in (None, [])
+        or completion.get("errors") not in (None, [])
+    ):
+        return False
+    try:
+        return Path(str(completion.get("workspace_root", ""))).resolve(
+            strict=True
+        ) == source_root.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return False
+
+
+def _autonomous_run_candidate(
+    child: Path,
+    *,
+    allow_legacy_source: bool = False,
+) -> tuple[float, Path] | None:
     """Return ``(mtime, dir)`` when ``child`` is a promotable autonomous run."""
-    if not child.is_dir():
+    if child.is_symlink() or not child.is_dir():
         return None
     completion_path = child / COMPLETION_REPORT_FILENAME
-    if completion_path.is_file():
-        try:
-            completion = _load_completion_report(completion_path)
-        except json.JSONDecodeError:
-            return None
-        if not bool(completion.get("completed", False)):
-            return None
+    if not _source_entry_exists(completion_path):
+        return None
+    claim_identities = collect_output_claim_identities(child)
+    try:
+        completion = _load_completion_report(
+            completion_path,
+            source_root=child,
+            claim_identities=claim_identities,
+        )
+    except (json.JSONDecodeError, OSError, ValueError):
+        return None
+    if (
+        completion.get("completed") is not True
+        or str(completion.get("status", "")).strip() != COMPLETION_STATUS_COMPLETE
+    ):
+        return None
     summary_path = child / "result_summary.md"
-    if not summary_path.is_file():
+    if not _is_owned_source_file(
+        summary_path,
+        source_root=child,
+        claim_identities=claim_identities,
+    ):
         return None
     legacy_nb = child / "reproducibility" / "analysis_notebook.ipynb"
     legacy_plan = child / "analysis_plan.md"
     mini_code = child / "analysis.py"
-    if legacy_nb.is_file() and legacy_plan.is_file():
+    if allow_legacy_source and _is_owned_source_file(
+        legacy_nb,
+        source_root=child,
+        claim_identities=claim_identities,
+    ) and _is_owned_source_file(
+        legacy_plan,
+        source_root=child,
+        claim_identities=claim_identities,
+    ):
         code_path = legacy_nb
-    elif mini_code.is_file() and _is_autonomous_run_dir(child):
+    elif _is_owned_source_file(
+        mini_code,
+        source_root=child,
+        claim_identities=claim_identities,
+    ) and _is_autonomous_run_dir(child):
         code_path = mini_code
     else:
         return None
@@ -2708,25 +3029,40 @@ def _autonomous_run_candidate(child: Path) -> tuple[float, Path] | None:
     return (latest_ts, child)
 
 
-def find_latest_autonomous_analysis(output_root: Path | None = None) -> Path | None:
+def find_latest_autonomous_analysis(
+    output_root: Path | None = None,
+    *,
+    allow_legacy_source: bool = False,
+) -> Path | None:
     root = Path(output_root or OUTPUT_DIR)
     if not root.exists():
         return None
     from omicsclaw.common.run_paths import PROJECT_META_FILENAME
 
     candidates: list[tuple[float, Path]] = []
+    root_claim_identities = collect_output_claim_identities(root)
     for child in root.iterdir():
-        if not child.is_dir():
+        if child.is_symlink() or not child.is_dir():
             continue
-        cand = _autonomous_run_candidate(child)
+        cand = _autonomous_run_candidate(
+            child,
+            allow_legacy_source=allow_legacy_source,
+        )
         if cand is not None:
             candidates.append(cand)
         # ADR 0035: a run nests under output_root/<project>/ when project_id is set.
         # Descend one level into real project dirs (they carry project_meta.json) so
         # Bench-thread runs are discoverable, without walking arbitrary subtrees.
-        if (child / PROJECT_META_FILENAME).is_file():
+        if _is_owned_source_file(
+            child / PROJECT_META_FILENAME,
+            source_root=root,
+            claim_identities=root_claim_identities,
+        ):
             for grandchild in child.iterdir():
-                cand = _autonomous_run_candidate(grandchild)
+                cand = _autonomous_run_candidate(
+                    grandchild,
+                    allow_legacy_source=allow_legacy_source,
+                )
                 if cand is not None:
                     candidates.append(cand)
 
@@ -2740,10 +3076,7 @@ def refresh_registry() -> bool:
     try:
         from .registry import registry
 
-        registry._loaded = False
-        registry.skills.clear()
-        registry.lazy_skills.clear()
-        registry.load_all()
+        registry.reload()
         return True
     except Exception:
         return False
@@ -2858,7 +3191,11 @@ def _run_demo_smoke_gate(
     tolerated as a "stale input" skip rather than a rejection (see
     ``_demo_gate_skip_reason``).
     """
-    env = os.environ.copy()
+    from omicsclaw.skill.execution.environment import (
+        scrub_internal_control_credentials,
+    )
+
+    env = scrub_internal_control_credentials(os.environ.copy())
     env["PYTHONPATH"] = str(OMICSCLAW_DIR) + os.pathsep + env.get("PYTHONPATH", "")
     env.setdefault("PYTHONNOUSERSITE", "1")
 
@@ -2927,6 +3264,14 @@ def _run_demo_smoke_gate(
         )
 
     result_path = output_dir / "result.json"
+    if not is_scientific_output_file(
+        result_path,
+        output_root=output_dir,
+    ):
+        return _DemoGateOutcome(
+            verdict="rejected",
+            reason="--demo exited 0 but result.json is missing or internal metadata",
+        )
     try:
         envelope = json.loads(result_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -3021,6 +3366,34 @@ by registry discovery and automatic routing.
 """
 
 
+def _render_legacy_quarantine_evidence(
+    script_name: str,
+    gate: _DemoGateOutcome,
+) -> str:
+    """Record the explicit compatibility exception for a legacy source."""
+
+    return f"""# Legacy Acquisition Quarantine Evidence
+
+This import was explicitly admitted with `allow_legacy_source=True`. The source
+uses the retired notebook layout and has no canonical Autonomous Code Runner
+producer manifest, so its self-described completion report cannot earn normal
+registry admission even when the sandboxed demo succeeds.
+
+**Attempted command:**
+
+```bash
+python {script_name} --demo --output <output_dir>
+```
+
+**Gate verdict:** `{gate.verdict}`
+
+**Reason:** {gate.reason}
+
+The generated Skill remains under `skills/{QUARANTINE_DIRNAME}/`. Move it into a
+domain directory only after an explicit human lineage and scientific review.
+"""
+
+
 def _render_parameter_lift_evidence(lift_result: LiftResult, *, fallback_reason: str | None = None) -> str:
     """Durable record of the P2a literal-lift pass (acquisition-plan.md §P2).
 
@@ -3095,6 +3468,7 @@ def create_skill_scaffold(
     source_analysis_dir: Path | str | None = None,
     promote_from_latest: bool = False,
     output_root: Path | None = None,
+    allow_legacy_source: bool = False,
     from_corpus: Path | str | None = None,
     corpus_source_kind: str = "paper",
     doc_ref: str = "",
@@ -3120,12 +3494,16 @@ def create_skill_scaffold(
         )
 
     if source_analysis_dir:
-        resolved_source_dir = Path(source_analysis_dir)
-        if not resolved_source_dir.is_absolute():
-            resolved_source_dir = (OMICSCLAW_DIR / resolved_source_dir).resolve()
+        resolved_source_dir = _resolve_promotion_source(
+            source_analysis_dir,
+            output_root=output_root,
+        )
 
     if resolved_source_dir is not None:
-        source_bundle = _load_autonomous_bundle(resolved_source_dir)
+        source_bundle = _load_autonomous_bundle(
+            resolved_source_dir,
+            allow_legacy_source=allow_legacy_source,
+        )
 
     corpus_bundle: CorpusDerivedBundle | None = None
     resolved_doc_ref = ""
@@ -3171,6 +3549,9 @@ def create_skill_scaffold(
         "template_path": str(SKILL_TEMPLATE_PATH),
         "source_analysis_dir": str(resolved_source_dir) if resolved_source_dir else "",
         "promoted_from_autonomous_analysis": bool(source_bundle),
+        "legacy_source_compatibility": bool(
+            source_bundle is not None and source_bundle.engine == "notebook"
+        ),
         "corpus_derived": bool(corpus_bundle),
         "corpus_source_kind": corpus_source_kind if corpus_bundle else "",
         "doc_ref": resolved_doc_ref,
@@ -3180,6 +3561,9 @@ def create_skill_scaffold(
         "skill_name": resolved_skill_name,
         "request": request,
         "promoted_from_autonomous_analysis": bool(source_bundle),
+        "legacy_source_compatibility": bool(
+            source_bundle is not None and source_bundle.engine == "notebook"
+        ),
         "source_analysis_dir": str(resolved_source_dir) if resolved_source_dir else "",
         "corpus_derived": bool(corpus_bundle),
         "doc_ref": resolved_doc_ref,
@@ -3330,8 +3714,8 @@ def create_skill_scaffold(
         reference_relative_paths: list[str] = []
         if source_bundle is not None:
             # references_dir already created above as part of the v2 layout.
+            source_claim_identities = collect_output_claim_identities(resolved_source_dir)
             reference_targets = {
-                "source_analysis_notebook.ipynb": Path(source_bundle.notebook_path),
                 "source_result_summary.md": resolved_source_dir / "result_summary.md",
                 "source_analysis_plan.md": resolved_source_dir / "analysis_plan.md",
                 "source_web_sources.md": resolved_source_dir / "web_sources.md",
@@ -3339,10 +3723,19 @@ def create_skill_scaffold(
                 "source_manifest.json": resolved_source_dir / "manifest.json",
                 "source_completion_report.json": resolved_source_dir / COMPLETION_REPORT_FILENAME,
             }
+            if source_bundle.notebook_path:
+                reference_targets["source_analysis_notebook.ipynb"] = Path(
+                    source_bundle.notebook_path
+                )
             for filename, source_path in reference_targets.items():
-                # is_file() (not exists()): a mini-agent bundle has no notebook, so
-                # notebook_path is "" → Path("") == Path(".") which exists as a dir
-                # and would make shutil.copy2 raise IsADirectoryError.
+                if not _source_entry_exists(source_path):
+                    continue
+                if not _is_owned_source_file(
+                    source_path,
+                    source_root=resolved_source_dir,
+                    claim_identities=source_claim_identities,
+                ):
+                    raise ValueError(f"unowned source artifact: {source_path}")
                 if source_path.is_file():
                     dest = references_dir / filename
                     shutil.copy2(source_path, dest)
@@ -3421,29 +3814,6 @@ def create_skill_scaffold(
                 "Skill scaffold verification failed.\n"
                 + format_completion_summary(completion_report)
             )
-        write_completion_report(
-            skill_dir,
-            completion_report,
-            hook_runtime=hook_runtime,
-            hook_context={
-                "workspace": str(skill_dir),
-                "source": "skill_scaffolder",
-            },
-        )
-        update_workspace_manifest(
-            skill_dir,
-            workspace_kind=WORKSPACE_KIND_ANALYSIS_RUN,
-            workspace_purpose=(
-                "skill_promotion"
-                if source_bundle is not None
-                else "skill_scaffold"
-            ),
-            requirements=requirements,
-            completion_report=completion_report,
-            isolation_mode="staging_copy",
-            metadata=manifest_metadata,
-            append_step=False,
-        )
         relative_created_paths.append(Path(COMPLETION_REPORT_FILENAME))
 
         # P1 acquisition gate: run --demo once, in staging, before this skill
@@ -3566,7 +3936,12 @@ def create_skill_scaffold(
             manifest.lifecycle = Lifecycle(status="mvp")
             (skill_dir / "skill.yaml").write_text(manifest.to_yaml(), encoding="utf-8")
 
-        if source_bundle is not None and demo_gate.verdict == "skipped":
+        legacy_compatibility = (
+            source_bundle is not None and source_bundle.engine == "notebook"
+        )
+        if source_bundle is not None and (
+            demo_gate.verdict == "skipped" or legacy_compatibility
+        ):
             quarantined = True
             committed_skill_dir = (
                 resolved_root / QUARANTINE_DIRNAME / domain / resolved_skill_name
@@ -3578,14 +3953,93 @@ def create_skill_scaffold(
             committed_skill_dir.parent.mkdir(parents=True, exist_ok=True)
             quarantine_evidence = references_dir / "quarantine.md"
             quarantine_evidence.write_text(
-                _render_quarantine_evidence(script_name, demo_gate), encoding="utf-8"
+                (
+                    _render_legacy_quarantine_evidence(script_name, demo_gate)
+                    if legacy_compatibility
+                    else _render_quarantine_evidence(script_name, demo_gate)
+                ),
+                encoding="utf-8",
             )
             relative_created_paths.append(Path("references") / "quarantine.md")
             quarantine_reason_path = str(
                 committed_skill_dir / "references" / "quarantine.md"
             )
 
-        shutil.move(str(skill_dir), str(committed_skill_dir))
+        with _scaffold_publication_lock(resolved_root):
+            if committed_skill_dir.exists():
+                raise FileExistsError(
+                    f"Skill publication destination already exists: {committed_skill_dir}"
+                )
+            shutil.move(str(skill_dir), str(committed_skill_dir))
+            try:
+                # The staging directory is deliberately ephemeral. Publish
+                # durable lineage only after the final normal/quarantine
+                # destination is known, then rebuild every recorded path.
+                committed_manifest = read_manifest(committed_skill_dir)
+                if committed_manifest is None or not committed_manifest.steps:
+                    raise RuntimeError("committed Skill scaffold has no readable manifest")
+                scaffold_steps = [
+                    step
+                    for step in committed_manifest.steps
+                    if step.skill == "create_omics_skill"
+                ]
+                if len(scaffold_steps) != 1:
+                    raise RuntimeError(
+                        "committed Skill scaffold has ambiguous creation lineage"
+                    )
+                scaffold_steps[0].output_file = str(committed_skill_dir)
+                if committed_manifest.workspace is None:
+                    raise RuntimeError("committed Skill scaffold has no workspace record")
+                committed_manifest.workspace.root = str(committed_skill_dir)
+                committed_manifest.verification = None
+                save_manifest(committed_skill_dir, committed_manifest)
+
+                manifest_path = committed_skill_dir / "manifest.json"
+                completion_report = build_completion_report(
+                    committed_skill_dir,
+                    workspace_kind=WORKSPACE_KIND_ANALYSIS_RUN,
+                    workspace_purpose=(
+                        "skill_promotion"
+                        if source_bundle is not None
+                        else "skill_scaffold"
+                    ),
+                    requirements=requirements,
+                    manifest_path=str(manifest_path),
+                    metadata=manifest_metadata,
+                )
+                if not completion_report.completed:
+                    raise RuntimeError(
+                        "Committed Skill scaffold verification failed.\n"
+                        + format_completion_summary(completion_report)
+                    )
+                write_completion_report(
+                    committed_skill_dir,
+                    completion_report,
+                    hook_runtime=hook_runtime,
+                    hook_context={
+                        "workspace": str(committed_skill_dir),
+                        "source": "skill_scaffolder",
+                    },
+                )
+                update_workspace_manifest(
+                    committed_skill_dir,
+                    workspace_kind=WORKSPACE_KIND_ANALYSIS_RUN,
+                    workspace_purpose=(
+                        "skill_promotion"
+                        if source_bundle is not None
+                        else "skill_scaffold"
+                    ),
+                    requirements=requirements,
+                    completion_report=completion_report,
+                    isolation_mode="staging_copy",
+                    metadata=manifest_metadata,
+                    append_step=False,
+                )
+            except Exception:
+                # The destination did not exist before this locked publication.
+                # Remove only the tree created by this cooperative publisher.
+                shutil.rmtree(committed_skill_dir, ignore_errors=True)
+                raise
 
     created_files = [str(committed_skill_dir / rel_path) for rel_path in relative_created_paths]
     manifest_path = committed_skill_dir / "manifest.json"

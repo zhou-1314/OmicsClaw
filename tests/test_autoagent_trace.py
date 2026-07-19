@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -95,6 +95,76 @@ class TestRunTrace:
         assert loaded.execution.duration_seconds == 5.0
         assert loaded.data_shape.n_obs_before == 100
         assert loaded.data_shape.cell_retention_rate == 0.9
+
+    def test_load_rejects_unvalidated_authority_json(self, tmp_path):
+        path = tmp_path / "run_trace.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "trial_id": 1,
+                    "skill_name": "test-skill",
+                    "method": "default",
+                    "authority": {
+                        "requested_skill_name": "test-skill",
+                        "canonical_skill_id": "test-skill",
+                        "skill_version": "1.0.0",
+                        "manifest_hash": "not-a-revision",
+                        "source_hash": "not-a-revision",
+                        "primary_anndata_path": "../processed.h5ad",
+                        "skills_root": "relative/skills",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="authority"):
+            RunTrace.load(path)
+
+    def test_save_refuses_symlink_target(self, tmp_path):
+        external = tmp_path / "external.json"
+        external.write_text("do not overwrite", encoding="utf-8")
+        output = tmp_path / "output"
+        output.mkdir()
+        (output / "run_trace.json").symlink_to(external)
+
+        with pytest.raises(RuntimeError, match="unowned RunTrace"):
+            RunTrace(trial_id=1).save(output)
+
+        assert external.read_text(encoding="utf-8") == "do not overwrite"
+
+    def test_save_refuses_hardlink_target(self, tmp_path):
+        external = tmp_path / "external.json"
+        external.write_text("do not overwrite", encoding="utf-8")
+        output = tmp_path / "output"
+        output.mkdir()
+        (output / "run_trace.json").hardlink_to(external)
+
+        with pytest.raises(RuntimeError, match="unowned RunTrace"):
+            RunTrace(trial_id=1).save(output)
+
+        assert external.read_text(encoding="utf-8") == "do not overwrite"
+
+    def test_save_preserves_existing_trace_when_atomic_replace_fails(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        from omicsclaw.common import output_claim
+
+        path = tmp_path / "run_trace.json"
+        path.write_text("previous trace", encoding="utf-8")
+
+        def fail_replace(_source, _destination):
+            raise OSError("replace failed")
+
+        monkeypatch.setattr(output_claim.os, "replace", fail_replace)
+
+        with pytest.raises(OSError, match="replace failed"):
+            RunTrace(trial_id=1).save(tmp_path)
+
+        assert path.read_text(encoding="utf-8") == "previous trace"
+        assert list(tmp_path.glob(".run_trace.json.*.tmp")) == []
 
     def test_diagnostic_summary_basic(self):
         trace = RunTrace(
@@ -260,6 +330,79 @@ class TestTraceCollector:
         assert trace.parameters.skill_defaults["n_pcs"] == 50
         # Effective should be merged defaults + user
         assert trace.parameters.effective_params["min_genes"] == 200
+
+    def test_collect_execution_failure_never_loads_artifacts(self, monkeypatch):
+        monkeypatch.setattr(
+            "omicsclaw.autoagent.trace._load_result_json",
+            lambda *_args, **_kwargs: pytest.fail(
+                "failure trace must not inspect result artifacts"
+            ),
+        )
+        execution = FakeExecution(
+            success=False,
+            output_dir="/stale/trial",
+            duration_seconds=2.5,
+            exit_code=1,
+            stderr="child failed",
+        )
+
+        trace = TraceCollector.collect_execution_failure(
+            trial_id=7,
+            skill_name="test-skill",
+            method="scanpy",
+            execution=execution,
+            user_params={"min_genes": 100},
+            skill_defaults={"min_genes": 200},
+        )
+
+        assert trace.execution.exit_code == 1
+        assert trace.execution.stderr == "child failed"
+        assert trace.data_shape.n_obs_after_known is False
+        assert trace.quality.quality_metrics == {}
+
+    def test_ambiguous_registry_contract_does_not_read_processed_h5ad(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        (tmp_path / "result.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "processed.h5ad").write_text("undeclared", encoding="utf-8")
+        monkeypatch.setattr(
+            "omicsclaw.skill.registry.ensure_registry_loaded",
+            lambda: SimpleNamespace(
+                skills={
+                    "ambiguous-skill": {
+                        "alias": "ambiguous-skill",
+                        "saves_h5ad": True,
+                        "output_contract": {
+                            "files": [
+                                "result.json",
+                                "first.h5ad",
+                                "second.h5ad",
+                            ],
+                            "anndata": {"saves_h5ad": True},
+                        },
+                    }
+                }
+            ),
+        )
+        monkeypatch.setattr(
+            "omicsclaw.autoagent.trace._read_adata_shape",
+            lambda *_args, **_kwargs: pytest.fail(
+                "undeclared processed.h5ad must not supply trace evidence"
+            ),
+        )
+
+        trace = TraceCollector.collect(
+            trial_id=0,
+            skill_name="ambiguous-skill",
+            method="default",
+            execution=FakeExecution(output_dir=str(tmp_path)),
+            output_dir=tmp_path,
+        )
+
+        assert trace.data_shape.n_obs_after_known is False
+        assert trace.data_shape.n_vars_after_known is False
 
     def test_collect_with_result_json(self, tmp_path):
         """Collect trace from a directory with result.json."""

@@ -123,6 +123,44 @@ def _write_legacy_skill(base: Path) -> Path:
     return skill
 
 
+def _write_manifest_v2_skill(base: Path) -> Path:
+    """Write the smallest valid ADR 0037 skill used by staged-card tests."""
+    from omicsclaw.skill.schema import parse_skill_manifest
+
+    skill = base
+    skill.mkdir(parents=True, exist_ok=True)
+    manifest = parse_skill_manifest(
+        {
+            "schema_version": 2,
+            "id": "demo",
+            "name": "demo",
+            "domain": "spatial",
+            "version": "1.0.0",
+            "summary": {
+                "load_when": "testing staged Skill cards",
+                "skip_when": [{"condition": "not a test", "use": "another-skill"}],
+            },
+            "runtime": {"language": "python", "entry": "demo.py"},
+        }
+    )
+    (skill / "skill.yaml").write_text(manifest.to_yaml(), encoding="utf-8")
+    (skill / "demo.py").write_text(
+        "\n".join(f"line_{line}" for line in range(1, 11)) + "\n",
+        encoding="utf-8",
+    )
+    (skill / "SKILL.md").write_text(
+        "---\nname: demo\n---\n\n"
+        "# Demo Skill\n\n"
+        "## When to use\nUse for staged lint tests.\n\n"
+        "## Flow\n1. Run the demo.\n\n"
+        "## Gotchas\n- The live anchor is `demo.py:5`.\n\n"
+        "## Key CLI\n`oc run demo --demo`\n\n"
+        "## See also\n- `skill.yaml`\n",
+        encoding="utf-8",
+    )
+    return skill
+
+
 # ---------------------------------------------------------------------------
 # Behavioural tests
 # ---------------------------------------------------------------------------
@@ -138,6 +176,44 @@ def test_legacy_skill_lints_clean_by_default(tmp_path: Path) -> None:
     skill = _write_legacy_skill(tmp_path / "old")
     errors = skill_lint.lint_skill(skill)
     assert errors == [], f"legacy skill should pass default lint, got {errors}"
+
+
+def test_staged_v2_skill_card_is_linted_without_mutating_live_file(
+    tmp_path: Path,
+) -> None:
+    skill = _write_manifest_v2_skill(tmp_path / "demo")
+    live_path = skill / "SKILL.md"
+    live_before = live_path.read_text(encoding="utf-8")
+    staged = live_before.replace("`demo.py:5`", "`demo.py:9999`")
+
+    errors = skill_lint.lint_skill(skill, skill_md_text=staged)
+
+    assert any("gotchas" in error.lower() and "9999" in error for error in errors)
+    assert live_path.read_text(encoding="utf-8") == live_before
+
+
+def test_staged_v2_skill_card_checks_required_sections(tmp_path: Path) -> None:
+    skill = _write_manifest_v2_skill(tmp_path / "demo")
+    live_path = skill / "SKILL.md"
+    live_before = live_path.read_text(encoding="utf-8")
+    staged = live_before.replace("## Flow", "### Flow")
+
+    errors = skill_lint.lint_skill(skill, skill_md_text=staged)
+
+    assert any("missing required section '## Flow'" in error for error in errors)
+    assert live_path.read_text(encoding="utf-8") == live_before
+
+
+def test_staged_v2_skill_card_checks_body_line_limit(tmp_path: Path) -> None:
+    skill = _write_manifest_v2_skill(tmp_path / "demo")
+    live_path = skill / "SKILL.md"
+    live_before = live_path.read_text(encoding="utf-8")
+    staged = live_before + ("staged filler\n" * 201)
+
+    errors = skill_lint.lint_skill(skill, skill_md_text=staged)
+
+    assert any("SKILL.md body" in error and "200" in error for error in errors)
+    assert live_path.read_text(encoding="utf-8") == live_before
 
 
 def test_description_must_start_with_load_when(tmp_path: Path) -> None:

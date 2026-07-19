@@ -1,9 +1,60 @@
 ---
 title: "OmicsClaw 整体架构"
-description: "OmicsClaw 由 5 层组成：用户接口（CLI / Bot / 桌面端）→ 编排器 → skill 注册表 → 95 个 skill → 数据层。各层通过明确接口通信。"
+description: "OmicsClaw 由 5 层组成：用户接口（CLI / Channel / Desktop）→ 单进程控制与编排 → Skill 注册表 → 执行面 → 数据与产物。"
 keywords: ["OmicsClaw 架构", "skill system", "orchestrator", "agent architecture"]
 og:image: "/docs/images/og-cover.png"
 ---
+
+> This is the public-facing architecture overview. The canonical internal
+> current-state architecture is [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md);
+> when the two disagree, record and resolve the documentation drift there.
+>
+> 2026-07-14 architecture baseline: one backend serves one Owner. Every
+> conversational input follows Raw Inbound → Ingress Normalizer → Inbound
+> Envelope → per-Conversation bounded Turn Sequencer → `dispatch()`; an explicit
+> non-chat Run Request may enter the Run Executor facade directly. Different
+> Conversations may execute concurrently. Every accepted Turn has an opaque ID
+> and a durable non-replayable lifecycle receipt; live Turn Execution remains
+> process-local. Retried Channel/Desktop submissions durably resolve to their
+> original Turn, while Desktop SSE reconnects observe that Turn by Turn ID and
+> Event sequence without resubmission or implicit cancellation. Authoritative
+> Control Plane State alone establishes Project, Conversation, active-binding,
+> Turn-receipt, Run-receipt, ingress-idempotency, Run-submission-binding,
+> Execution-Assignment and Outbound-Delivery identity/lifecycle facts. One
+> Backend-exclusive local SQLite `control.db` physically persists those facts
+> under a single-process lifetime lock. Project Memory, `transcripts.db`, the
+> Desktop App database and `project_meta.json` remain separate knowledge,
+> content, UI-cache and output stores. A separate Attachment Store owns
+> immutable per-Turn Attachment Records and content-addressed Blobs; ordered
+> structured Attachment References, rather than paths, Base64 or provider
+> handles, cross the Envelope/Transcript/tool boundary. Duplicate lookup occurs
+> before attachment staging, and novel batches are accepted all-or-nothing.
+> Each terminal Channel Turn also atomically creates at most one persistent
+> Outbound Delivery whose ordered Items reference durable Transcript/artifact
+> content. An in-process Delivery Pump retries only provider delivery; inbound
+> redelivery, failed sending and explicit resend never rerun the Turn. Desktop
+> and CLI remain observation Surfaces rather than Outbox consumers.
+> The shared ingress, control-state,
+> idempotency, sequencer, receipt, observation, migration and Run Executor seams
+> are accepted but only partially implemented. Project lifecycle has only
+> `active` and reversible `archived`: archive retains the same Conversations,
+> Memory, Runs and files but rejects novel Turns/Runs until restore. Permanent
+> cross-store purge is not a v1 Project operation. Every Run also freezes one
+> `ProjectScope(project_id)` or `UnassignedScope` at admission. The literal
+> `default/` output grouping is Unassigned storage rather than a Project, and
+> completed Runs cannot be moved or retagged into another scope. The control
+> caller-generated opaque Run Submission ID durably binds retry delivery to one
+> control-generated Run ID. Novel admission commits a minimal non-replayable Run
+> Receipt before granting that Run at most one Assignment-ID-fenced executor
+> start; Run storage separately owns the scientific Manifest and artifacts.
+> Directory names, remote Job IDs and PIDs are not Run identity. v1 has no
+> renewable Execution Lease, heartbeat reassignment or automatic replay. Every
+> accepted top-level Run enters one bounded process-local strict-FIFO Run
+> Dispatcher. It obtains capacity for the first execution unit before the sole
+> Assignment transition; one independent strict-FIFO Execution Resource
+> Scheduler atomically leases process, CPU, memory, GPU, thread and temporary
+> disk capacity to every scientific executor path. Neither queue nor Lease is
+> durable execution authority.
 
 ## 为什么是这个架构
 
@@ -11,7 +62,25 @@ og:image: "/docs/images/og-cover.png"
 
 **编排器路由**：OmicsClaw 当前包含 95 个 skill，覆盖 8 个 domain。用户不应该记住所有 skill 名称和参数，orchestrator 通过自然语言意图识别自动完成 skill 选择和参数补全。
 
-**多种用户接口**：不同用户在不同场景下使用相同的 skill 系统——命令行用户通过 `omicsclaw.py` 直接调用，机器人用户通过 Telegram / Feishu 对话触发，桌面端用户通过 App 界面操作。三种接口共享同一套 skill 注册表，结果格式完全一致。
+**多种交互界面**：同一个 Owner 可以在不同场景下使用相同的 Skill 系统——通过 CLI 直接执行，通过 Telegram / Feishu 等 Channel 对话触发，或通过 Desktop App 操作。三种 Surface 的聊天输入共享同一个 Ingress Normalizer、dispatcher 和 Agent runtime；非聊天 Run 则使用显式 Run Request。
+
+**一个权威控制状态边界**：Project、Conversation、当前会话绑定、Turn Receipt、Run Receipt、入站幂等绑定、Run Submission Binding、Execution Assignment 与 Outbound Delivery 只由 Control Plane State 决定，并统一持久化到 Backend 独占的本地 SQLite `control.db`。只有 Backend control-state Repository 可以打开该文件；第二个控制面进程、Desktop App 和远端 Worker 都不能直接访问。`project://` Memory、`transcripts.db`、App 数据库和 `project_meta.json` 分别保留知识、对话内容、UI 缓存和输出投影职责。
+
+**附件是不可变的消息证据，而不是临时路径**：每个已接受附件 occurrence 都有一个 opaque Attachment ID，并在专用 Attachment Store 中形成归属于唯一 Turn/Conversation 的不可变 Record。相同字节的新消息仍是不同 Record，但可以共享 full-SHA-256 Blob。重复投递先命中原 Turn，避免再次下载；新附件整批暂存、校验并以 all-or-nothing 方式接受。Envelope、Transcript、prompt 和工具只传 Attachment Reference，`/new`、取消、断线、压缩和 Project 归档都不会删除已接受附件。
+
+**回复交付失败不会重跑科研执行**：每个 Channel Turn 的终态事务最多创建一个 Outbound Delivery，并把有序 Delivery Items 持久化到 `control.db` 的控制状态中；正文和媒体本体仍由 Transcript/Run 等内容存储持有。单进程 Delivery Pump 负责跨重启交付，Adapter 每次只做一个 provider 请求并明确区分成功、已知未接受、永久失败与 acceptance unknown。无法证明安全的 unknown 不会盲目重发；Owner 显式 resend 创建新的关联 Delivery ID，但不创建新 Turn。
+
+**归档可恢复且不会伪装成删除**：Project 只有 `active` 与 `archived` 两种持久状态。归档保留原 Project ID、Conversation 绑定、Transcript、Memory、Run 与文件，但阻止新的 Conversation 绑定、Turn、Run 和科学内容写入；恢复后继续使用同一 Project。运行中工作不会被归档隐式取消，永久跨存储清除也不属于 v1。
+
+**Run Scope 在准入时冻结**：每个 Run 明确使用 `ProjectScope(project_id)` 或 `UnassignedScope`。Project Scope 必须引用一个已存在且处于 active 的 opaque Project ID；Unassigned 不含 Project ID。物理目录 `output/default/` 只保留为 **Unassigned Runs** 兼容分组，既不是 Project，也不能在运行后通过移动、改标签、复制或软链接改绑。
+
+**Run 提交、身份与科学产物分离**：调用方在准入前为一次顶层操作生成 opaque Run Submission ID，持久 Binding 让网络重试返回同一个控制面生成的 Run ID。新 Run 同时持久化最小 Run Receipt；它负责 Scope、排队/运行/取消/中断等运行生命周期。Run Store 的 Manifest 与 artifacts 负责参数、方法、环境、步骤和科学溯源。目录名、远程 Job ID、PID 与 Slurm ID 只是存储名称或 Execution Reference。
+
+**一次 Run 只有一次 fenced 启动授权**：每个 Run 整个生命周期最多获得一个进程绑定的 Execution Assignment，执行器回报必须携带 Run ID 和 Assignment ID。v1 不使用可续期 Execution Lease、心跳抢占、超时重分配或自动重放；Resource Lease 只做进程内资源记账，不能证明执行所有权。状态或 SSE 查询只观察已有 Run，绝不触发启动。
+
+**Run 排队与资源调度分层**：所有已接受的顶层 Skill、Workflow、Candidate-plan 与 Autonomous Run 进入唯一有界、进程内、严格 FIFO 的 Run Dispatcher；它负责 Run 顺序、活跃编排上限和 Assignment 机会，但不分配计算资源。独立共享的 Execution Resource Scheduler 是所有科研进程在 process/CPU/内存/GPU/线程/临时磁盘上的唯一容量权威。Dispatcher 先取得首个执行单元的 Resource Lease，再提交唯一 Assignment；v1 明确接受 FIFO 队首阻塞，不引入优先级、bypass、抢占或持久可重放队列。
+
+**重试不会重复执行**：Channel 平台重复投递和 Desktop 提交重试通过持久化 Ingress Idempotency Binding 返回原 Turn ID。Desktop 的 SSE 只负责观察既有 Turn；网络断开不会重新提交消息，也不会隐式取消科学工具。
 
 ## 五层架构 ASCII 图
 
@@ -20,8 +89,12 @@ og:image: "/docs/images/og-cover.png"
 │ 1. 用户接口层                                                │
 │    CLI (omicsclaw.py)  ·  Bot (Telegram + Feishu)  ·  App    │
 ├──────────────────────────────────────────────────────────────┤
-│ 2. 编排层 (orchestrator)                                     │
-│    自然语言意图 → skill 选择 → 参数补全                      │
+│ 2. 单进程控制与编排层                                        │
+│    control.db：Receipts + submission/assignment bindings    │
+│    聊天：Ingress/幂等 → Turn → Sequencer → dispatch/观察     │
+│    附件：descriptor → immutable Record → referenced Blob     │
+│    交付：terminal Delivery → persistent Outbox → Adapter      │
+│    直跑：提交绑定 → Run Dispatcher → 资源 Lease → Assignment │
 ├──────────────────────────────────────────────────────────────┤
 │ 3. Skill 注册表                                              │
 │    95 个 SKILL.md + 入口脚本，按 8 个 domain 分组            │
@@ -32,7 +105,8 @@ og:image: "/docs/images/og-cover.png"
 ├──────────────────────────────────────────────────────────────┤
 │ 5. 数据与产物层                                              │
 │    输入: h5ad / counts / FASTQ / mzML                        │
-│    输出: figures + figure_data + report.md                   │
+│    附件: per-Turn Record + content-addressed Blob             │
+│    控制: Receipt/Binding/Assignment；输出: Manifest/artifacts│
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -67,7 +141,8 @@ og:image: "/docs/images/og-cover.png"
 └──────────────────────────────────────────────┘
                        ▼
 ┌──────────────────────────────────────────────┐
-│  输出落到 output/<skill>_<timestamp>/        │
+│  Run Store：Manifest + artifacts             │
+│  Control Plane：Run Receipt + Binding + Assignment │
 └──────────────────────────────────────────────┘
 ```
 

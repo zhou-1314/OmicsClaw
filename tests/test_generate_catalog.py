@@ -17,8 +17,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -95,6 +93,7 @@ def test_catalog_emits_validation_level_default_and_preserves_status(tmp_path, m
     entry = _gen_one(tmp_path, monkeypatch, "no-sidecar")
     assert entry["validation_level"] == "smoke-only"
     assert entry["status"] == "mvp"  # availability semantics preserved
+    assert entry["superseded_by"] is None
 
 
 def test_catalog_emits_explicit_validation_level(tmp_path, monkeypatch):
@@ -112,6 +111,47 @@ def test_catalog_clamps_unknown_validation_level(tmp_path, monkeypatch):
         "domain: d\nvalidation_level: bogus-level\n",
     )
     assert entry["validation_level"] == "smoke-only"
+
+
+def test_catalog_exposes_explicit_security_without_claiming_enforcement(
+    tmp_path,
+    monkeypatch,
+):
+    from omicsclaw.skill.schema import parse_skill_manifest
+
+    skills_dir = tmp_path / "skills"
+    skill_dir = skills_dir / "spatial" / "secure-skill"
+    skill_dir.mkdir(parents=True)
+    manifest = parse_skill_manifest(
+        {
+            "schema_version": 2,
+            "id": "secure-skill",
+            "name": "secure-skill",
+            "domain": "spatial",
+            "version": "1.0.0",
+            "summary": {"load_when": "testing explicit security metadata"},
+            "runtime": {"entry": "secure_skill.py"},
+            "security": {
+                "data_egress": "optional",
+                "network": "optional",
+                "writes": "output_dir_only",
+            },
+        }
+    )
+    (skill_dir / "skill.yaml").write_text(manifest.to_yaml(), encoding="utf-8")
+    (skill_dir / "secure_skill.py").write_text("# stub\n", encoding="utf-8")
+    monkeypatch.setattr(generate_catalog, "SKILLS_DIR", skills_dir)
+    monkeypatch.setattr(generate_catalog, "build_cli_alias_map", lambda: {})
+
+    entry = generate_catalog.generate_catalog()["skills"][0]
+
+    assert entry["security"] == {
+        "reviewed": True,
+        "enforcement": "declarative",
+        "data_egress": "optional",
+        "network": "optional",
+        "writes": "output_dir_only",
+    }
 
 
 def test_parse_yaml_frontmatter_handles_indented_list_syntax():

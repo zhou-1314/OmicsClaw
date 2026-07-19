@@ -10,10 +10,10 @@ Schema (see ``pipelines/spatial-pipeline.yaml``):
 
     name                   str  required  pipeline alias (must end with ``-pipeline``)
     description            str  optional  one-line summary
-    chain_output_basename  str  optional  file the runner looks for in step N's
+    chain_output_basename  str  optional  safe basename the runner looks for in step N's
                                           output dir to feed step N+1 as ``--input``
                                           (default ``processed.h5ad``).
-    steps                  list required  ordered list of ``{skill: <alias>}`` dicts
+    steps                  list required  ordered list of ``{skill: <canonical-alias>}`` dicts
 
 Steps run sequentially; the chain stops at the first failure. Each step's
 result is recorded in the final ``pipeline_summary.json`` regardless of how
@@ -22,15 +22,33 @@ the chain terminates.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import yaml
 
+from omicsclaw.common.output_claim import is_output_claim_path
+
 from ..registry import OMICSCLAW_DIR
+from ..strict_yaml import load_unique_yaml
 
 
 _DEFAULT_CHAIN_OUTPUT = "processed.h5ad"
+_SIMPLE_ALIAS_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+_MAX_ALIAS_LENGTH = 128
+_PIPELINE_FIELDS = frozenset(
+    {"name", "description", "chain_output_basename", "steps"}
+)
+_PIPELINE_STEP_FIELDS = frozenset({"skill"})
+_WINDOWS_RESERVED_FILENAME_CHARS = frozenset('<>:"/\\|?*')
+_WINDOWS_RESERVED_STEMS = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{index}" for index in range(1, 10)}
+    | {f"lpt{index}" for index in range(1, 10)}
+    | {f"com{index}" for index in ("¹", "²", "³")}
+    | {f"lpt{index}" for index in ("¹", "²", "³")}
+)
 
 # Repository-root ``pipelines/`` directory. Shares the registry's
 # ``OMICSCLAW_DIR`` resolution so the ``OMICSCLAW_DIR`` env override that the
@@ -55,6 +73,12 @@ class PipelineConfig:
     chain_output_basename: str
     steps: tuple[PipelineStep, ...]
 
+    def __post_init__(self) -> None:
+        # ``run_pipeline`` is a public programmatic entry point, so YAML-only
+        # validation is insufficient.  Keep the constructor and runtime on the
+        # same invariant set; the runner revalidates as defense in depth.
+        validate_pipeline_config(self)
+
     @property
     def skill_names(self) -> tuple[str, ...]:
         """Convenience: list of skill aliases in run order."""
@@ -65,9 +89,99 @@ class PipelineConfigError(ValueError):
     """Raised when a YAML config is malformed or missing required fields."""
 
 
+def _is_simple_alias(value: str) -> bool:
+    return (
+        bool(value)
+        and len(value) <= _MAX_ALIAS_LENGTH
+        and _SIMPLE_ALIAS_RE.fullmatch(value) is not None
+    )
+
+
+def _is_safe_file_basename(value: str) -> bool:
+    if not value or len(value) > 255 or value in {".", ".."}:
+        return False
+    if is_output_claim_path(Path(value)):
+        return False
+    try:
+        if len(value.encode("utf-8")) > 255:
+            return False
+    except UnicodeEncodeError:
+        return False
+    if value.endswith((".", " ")):
+        return False
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        return False
+    if any(character in _WINDOWS_RESERVED_FILENAME_CHARS for character in value):
+        return False
+    reserved_stem = value.split(".", 1)[0].rstrip(" .").casefold()
+    if reserved_stem in _WINDOWS_RESERVED_STEMS:
+        return False
+    # A drive-relative Windows path (for example ``C:result.csv``) contains no
+    # separator, but it is still not a portable basename.
+    return not PureWindowsPath(value).drive
+
+
+def validate_pipeline_config(config: PipelineConfig) -> None:
+    """Validate invariants shared by YAML and programmatic pipeline configs."""
+    if not isinstance(config, PipelineConfig):
+        raise PipelineConfigError("pipeline config must be a PipelineConfig")
+    if (
+        not isinstance(config.name, str)
+        or not _is_simple_alias(config.name)
+        or not config.name.endswith("-pipeline")
+    ):
+        raise PipelineConfigError(
+            "pipeline ``name`` must be a canonical alias ending in '-pipeline'"
+        )
+    if not isinstance(config.description, str):
+        raise PipelineConfigError("pipeline ``description`` must be a string")
+    if not isinstance(config.chain_output_basename, str) or not _is_safe_file_basename(
+        config.chain_output_basename
+    ):
+        raise PipelineConfigError(
+            "pipeline ``chain_output_basename`` must be a safe file basename"
+        )
+    if not isinstance(config.steps, tuple) or not config.steps:
+        raise PipelineConfigError("pipeline ``steps`` must be a non-empty tuple")
+
+    seen_skills: set[str] = set()
+    for idx, step in enumerate(config.steps):
+        if not isinstance(step, PipelineStep):
+            raise PipelineConfigError(
+                f"pipeline step #{idx} must be a PipelineStep"
+            )
+        if not isinstance(step.skill, str) or not _is_simple_alias(step.skill):
+            raise PipelineConfigError(
+                f"pipeline step #{idx} ``skill`` must be a canonical skill alias"
+            )
+        if step.skill in seen_skills:
+            raise PipelineConfigError(
+                f"pipeline duplicate step skill {step.skill!r} is not supported"
+            )
+        seen_skills.add(step.skill)
+
+
 def pipeline_config_path(name: str, *, pipelines_dir: Path | None = None) -> Path:
-    """Return the canonical YAML path for a pipeline alias."""
-    return (pipelines_dir or PIPELINES_DIR) / f"{name}.yaml"
+    """Return a contained, resolved YAML path for a canonical pipeline alias."""
+    if (
+        not isinstance(name, str)
+        or not _is_simple_alias(name)
+        or not name.endswith("-pipeline")
+    ):
+        raise PipelineConfigError(
+            "pipeline lookup name must be a canonical pipeline alias ending in "
+            "'-pipeline'"
+        )
+
+    try:
+        root = Path(pipelines_dir or PIPELINES_DIR).resolve()
+        path = (root / f"{name}.yaml").resolve()
+        path.relative_to(root)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise PipelineConfigError(
+            "pipeline config path must resolve inside the pipelines directory"
+        ) from exc
+    return path
 
 
 def load_pipeline_config(
@@ -86,12 +200,18 @@ def load_pipeline_config(
         return None
 
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        raw = load_unique_yaml(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
         raise PipelineConfigError(f"{path}: invalid YAML: {exc}") from exc
 
     if not isinstance(raw, dict):
         raise PipelineConfigError(f"{path}: top-level must be a mapping")
+    unknown_fields = set(raw) - _PIPELINE_FIELDS
+    if unknown_fields:
+        fields = ", ".join(sorted(repr(field) for field in unknown_fields))
+        raise PipelineConfigError(
+            f"{path}: unsupported top-level fields: {fields}"
+        )
 
     config_name = raw.get("name")
     if not isinstance(config_name, str) or not config_name:
@@ -113,9 +233,11 @@ def load_pipeline_config(
         raise PipelineConfigError(f"{path}: ``description`` must be a string")
 
     chain_basename = raw.get("chain_output_basename", _DEFAULT_CHAIN_OUTPUT)
-    if not isinstance(chain_basename, str) or not chain_basename:
+    if not isinstance(chain_basename, str) or not _is_safe_file_basename(
+        chain_basename
+    ):
         raise PipelineConfigError(
-            f"{path}: ``chain_output_basename`` must be a non-empty string"
+            f"{path}: ``chain_output_basename`` must be a safe file basename"
         )
 
     raw_steps = raw.get("steps")
@@ -123,16 +245,30 @@ def load_pipeline_config(
         raise PipelineConfigError(f"{path}: ``steps`` must be a non-empty list")
 
     steps: list[PipelineStep] = []
+    seen_skills: set[str] = set()
     for idx, raw_step in enumerate(raw_steps):
         if not isinstance(raw_step, dict):
             raise PipelineConfigError(
                 f"{path}: step #{idx} must be a mapping with a ``skill`` key"
             )
         skill = raw_step.get("skill")
-        if not isinstance(skill, str) or not skill:
+        if not isinstance(skill, str) or not _is_simple_alias(skill):
             raise PipelineConfigError(
-                f"{path}: step #{idx} ``skill`` must be a non-empty string"
+                f"{path}: step #{idx} ``skill`` must be a canonical skill alias"
             )
+        unknown_step_fields = set(raw_step) - _PIPELINE_STEP_FIELDS
+        if unknown_step_fields:
+            fields = ", ".join(
+                sorted(repr(field) for field in unknown_step_fields)
+            )
+            raise PipelineConfigError(
+                f"{path}: step #{idx} has unsupported fields: {fields}"
+            )
+        if skill in seen_skills:
+            raise PipelineConfigError(
+                f"{path}: duplicate step skill {skill!r} is not supported"
+            )
+        seen_skills.add(skill)
         steps.append(PipelineStep(skill=skill))
 
     return PipelineConfig(
@@ -144,8 +280,16 @@ def load_pipeline_config(
 
 
 def list_available_pipelines(*, pipelines_dir: Path | None = None) -> list[str]:
-    """Return the alias of every ``*.yaml`` in the pipelines directory."""
-    target = pipelines_dir or PIPELINES_DIR
+    """Return contained ``*.yaml`` files whose stems are canonical aliases."""
+    target = Path(pipelines_dir or PIPELINES_DIR)
     if not target.exists():
         return []
-    return sorted(p.stem for p in target.glob("*.yaml") if p.is_file())
+    available: list[str] = []
+    for candidate in target.glob("*.yaml"):
+        try:
+            path = pipeline_config_path(candidate.stem, pipelines_dir=target)
+        except PipelineConfigError:
+            continue
+        if path.is_file():
+            available.append(candidate.stem)
+    return sorted(available)

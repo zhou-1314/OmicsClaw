@@ -2,7 +2,7 @@
         demo test list demo-all catalog audit-requires demo-orchestrator demo-bulkrna \
         install install-spatial-domains install-full install-dev \
         install-oc oc-link \
-        bot-telegram bot-feishu bot-multi bot-list \
+        bot-telegram bot-multi bot-list \
         memory-server
 
 ## ── Conda environment (recommended, full functionality) ──────────────
@@ -140,11 +140,8 @@ demo-bulkrna:
 bot-telegram:
 	python -m omicsclaw.surfaces.channels --channels telegram
 
-bot-feishu:
-	python -m omicsclaw.surfaces.channels --channels feishu
-
-# Multi-channel runner (runs multiple channels in one process)
-# Usage: make bot-multi CHANNELS=telegram,feishu
+# Legacy convenience target. The production runner intentionally rejects any
+# Adapter other than Telegram until its ControlRuntime + Delivery cutover lands.
 bot-multi:
 	python -m omicsclaw.surfaces.channels --channels $(CHANNELS)
 
@@ -155,4 +152,3 @@ bot-list:
 
 memory-server:
 	python omicsclaw.py memory-server
-

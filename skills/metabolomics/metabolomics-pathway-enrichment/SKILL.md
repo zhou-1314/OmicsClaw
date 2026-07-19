@@ -46,6 +46,7 @@ metabolite list through `bulkrna-enrichment` after gene-mapping.
 **Inputs**
 
 - File types: `.csv`
+- Accepts artifact `metabolomics.differential_results` (`csv`)
 
 **Outputs**
 

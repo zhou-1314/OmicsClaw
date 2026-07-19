@@ -30,6 +30,7 @@ from omicsclaw.runtime.agent.events import (
     ToolResult,
 )
 from omicsclaw.runtime.agent.loop_state import PathologySignal
+from omicsclaw.runtime.storage.canonical_transcript import CanonicalTranscript
 
 
 def _patch_llm_tool_loop(monkeypatch, fake):
@@ -79,6 +80,56 @@ async def test_empty_return_yields_final_with_empty_text(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_control_transcript_adapter_stages_exact_terminal_candidate(
+    monkeypatch,
+    tmp_path,
+):
+    transcript = CanonicalTranscript(tmp_path)
+    adapter = transcript.bind_turn("conversation-1", "turn-1")
+
+    async def fake_loop(**kwargs):
+        assert kwargs["transcript_store_override"] is adapter
+        adapter.defer_terminal_message(
+            "conversation-1",
+            content="provider final segment",
+            reasoning_content="reasoning",
+        )
+        return "public segment one\n\nprovider final segment"
+
+    _patch_llm_tool_loop(monkeypatch, fake_loop)
+    try:
+        events = await _collect(
+            MessageEnvelope(
+                chat_id="conversation-1",
+                content="hi",
+                transcript_turn=adapter,
+            )
+        )
+
+        final = events[-1]
+        assert isinstance(final, Final)
+        assert final.transcript_entry_id
+        entry = transcript.get_entry(final.transcript_entry_id)
+        assert entry.commit_state == "terminal_candidate"
+        assert entry.public_text == "public segment one\n\nprovider final segment"
+        assert transcript.get_history("conversation-1") == []
+
+        transcript.promote_terminal(
+            final.transcript_entry_id,
+            final.transcript_content_sha256,
+        )
+        assert transcript.get_history("conversation-1") == [
+            {
+                "role": "assistant",
+                "content": "provider final segment",
+                "reasoning_content": "reasoning",
+            }
+        ]
+    finally:
+        transcript.close()
+
+
+@pytest.mark.asyncio
 async def test_progress_callbacks_translate_to_events(monkeypatch):
     async def fake_loop(**kwargs):
         handle = await kwargs["progress_fn"]("starting")
@@ -121,7 +172,9 @@ async def test_tool_callbacks_translate_to_events(monkeypatch):
     _patch_llm_tool_loop(monkeypatch, fake_loop)
     events = await _collect(MessageEnvelope(chat_id="c1", content="hi"))
     assert events[0] == ToolCall(tool="run_skill", arguments={"name": "preprocess"})
-    assert events[1] == ToolResult(tool="run_skill", result={"status": "ok"}, metadata=None)
+    assert events[1] == ToolResult(
+        tool="run_skill", result={"status": "ok"}, metadata=None
+    )
     assert events[2] == Final(text="done", kind="normal")
 
 
@@ -158,6 +211,82 @@ async def test_stream_callbacks_translate_to_events(monkeypatch):
     assert events[1] == StreamContent(chunk="lo")
     assert events[2] == StreamReasoning(chunk="...")
     assert events[3] == Final(text="hello", kind="normal")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_handoff_backpressures_a_fast_producer(monkeypatch):
+    produced = 0
+
+    async def fake_loop(**kwargs):
+        nonlocal produced
+        for chunk in ("one", "two", "three", "four"):
+            await kwargs["on_stream_reasoning"](chunk)
+            produced += 1
+        return "done"
+
+    _patch_llm_tool_loop(monkeypatch, fake_loop)
+    stream = dispatch(MessageEnvelope(chat_id="c1", content="hi"))
+
+    first = await anext(stream)
+    await asyncio.sleep(0)
+
+    # One event was yielded and at most one more occupies the handoff.  The
+    # next callback must remain blocked until the consumer advances.
+    assert first == StreamReasoning(chunk="one")
+    assert produced <= 2
+
+    remaining = [event async for event in stream]
+    assert remaining == [
+        StreamReasoning(chunk="two"),
+        StreamReasoning(chunk="three"),
+        StreamReasoning(chunk="four"),
+        Final(text="done", kind="normal"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_slow_consumer_preserves_terminal_order(monkeypatch):
+    async def fake_loop(**kwargs):
+        await kwargs["on_stream_content"]("one")
+        await kwargs["on_stream_content"]("two")
+        return "done"
+
+    _patch_llm_tool_loop(monkeypatch, fake_loop)
+    observed = []
+    async for event in dispatch(MessageEnvelope(chat_id="c1", content="hi")):
+        observed.append(event)
+        await asyncio.sleep(0.01)
+
+    assert observed == [
+        StreamContent(chunk="one"),
+        StreamContent(chunk="two"),
+        Final(text="done", kind="normal"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_close_cancels_callback_blocked_on_handoff(monkeypatch):
+    callback_blocked = asyncio.Event()
+    producer_closed = asyncio.Event()
+
+    async def fake_loop(**kwargs):
+        try:
+            await kwargs["on_stream_reasoning"]("one")
+            await kwargs["on_stream_reasoning"]("two")
+            callback_blocked.set()
+            await kwargs["on_stream_reasoning"]("three")
+            return "unreachable"
+        finally:
+            producer_closed.set()
+
+    _patch_llm_tool_loop(monkeypatch, fake_loop)
+    stream = dispatch(MessageEnvelope(chat_id="c1", content="hi"))
+    assert await anext(stream) == StreamReasoning(chunk="one")
+    await asyncio.wait_for(callback_blocked.wait(), timeout=1)
+
+    await stream.aclose()
+
+    await asyncio.wait_for(producer_closed.wait(), timeout=1)
 
 
 @pytest.mark.asyncio
@@ -200,6 +329,7 @@ async def test_context_compacted_translates_compaction_event(monkeypatch):
 async def test_context_compacted_tolerates_mapping_payload(monkeypatch):
     """A plain mapping payload is passed through unchanged (defensive: the
     dispatcher must never crash on the payload type it is handed)."""
+
     async def fake_loop(**kwargs):
         await kwargs["on_context_compacted"]({"before": 100, "after": 30})
         return "ok"
@@ -228,6 +358,7 @@ async def test_exception_lands_as_error(monkeypatch):
 async def test_pending_media_left_for_surface_to_drain(monkeypatch):
     """The dispatcher must not touch ``pending_media`` — Surfaces drain it
     themselves (per the rationale captured in ``events.py``)."""
+
     async def fake_loop(**_kwargs):
         _core.pending_media["c1"] = [{"path": "/tmp/x.png", "filename": "x.png"}]
         return "done"
@@ -284,6 +415,38 @@ async def test_envelope_fields_passed_through(monkeypatch):
     assert captured["model_override"] == "claude-opus-4-7"
     assert captured["max_tokens_override"] == 4096
     assert captured["mode"] == "ask"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_forwards_process_local_content_fields(monkeypatch):
+    captured: dict = {}
+
+    class Adapter:
+        def render_messages(self, messages):
+            return messages
+
+        def restore_messages(self, messages):
+            return messages
+
+    adapter = Adapter()
+
+    async def fake_loop(**kwargs):
+        captured.update(kwargs)
+        return "ok"
+
+    _patch_llm_tool_loop(monkeypatch, fake_loop)
+    envelope = MessageEnvelope(
+        chat_id="c1",
+        content="provider content",
+        stored_user_content="durable content",
+        content_adapter=adapter,
+    )
+
+    await _collect(envelope)
+
+    assert captured["user_content"] == "provider content"
+    assert captured["stored_user_content"] == "durable content"
+    assert captured["content_adapter"] is adapter
 
 
 @pytest.mark.asyncio

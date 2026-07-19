@@ -17,7 +17,7 @@ and assert the target file still deserializes to the pre-write state.
 
 from __future__ import annotations
 
-import json
+import os
 from pathlib import Path
 
 import pytest
@@ -52,45 +52,28 @@ def test_write_job_crash_between_truncate_and_write_preserves_old_content(
     so sabotaging the final rename still leaves the target with its
     pre-write content."""
     workspace = tmp_path / "workspace"
+    workspace.mkdir()
     job_id = "atomic-subject"
 
     jobs_module._write_job(workspace, _make_job(job_id=job_id, status="running"))
     path_before = jobs_module._job_path(workspace, job_id)
     assert path_before.is_file()
 
-    real_write_text = Path.write_text
-    real_replace = Path.replace
+    real_replace = os.replace
 
-    def crash_direct_target_write(self: Path, *args, **kwargs):
-        # Non-atomic path: writer goes straight at the target. Simulate
-        # the kernel-level sequence of open(O_TRUNC) → crash-before-write.
-        if self == path_before:
-            with open(self, "wb"):
-                pass  # truncate to zero
-            raise RuntimeError("simulated crash after truncate")
-        return real_write_text(self, *args, **kwargs)
-
-    def crash_replace_into_target(self: Path, target):
-        # Atomic path: .tmp sibling was written, but the rename fails
-        # (simulating e.g. SIGKILL between write and rename). Target
-        # must remain untouched — because ``os.replace`` is atomic and
-        # hadn't landed.
-        if Path(target) == path_before:
+    def crash_replace_into_target(src, target, *args, **kwargs):
+        # The handle-relative temp inode was written, but its final atomic
+        # replacement fails. The old target must remain complete.
+        if target == "job.json":
             raise OSError("simulated crash mid-rename")
-        return real_replace(self, target)
+        return real_replace(src, target, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "write_text", crash_direct_target_write)
-    monkeypatch.setattr(Path, "replace", crash_replace_into_target)
+    monkeypatch.setattr(jobs_module.os, "replace", crash_replace_into_target)
 
-    try:
+    with pytest.raises(ValueError):
         jobs_module._write_job(
             workspace, _make_job(job_id=job_id, status="failed", error="x")
         )
-    except Exception:
-        pass
-
-    monkeypatch.setattr(Path, "write_text", real_write_text)
-    monkeypatch.setattr(Path, "replace", real_replace)
 
     preserved = jobs_module._read_job(workspace, job_id)
     assert preserved is not None, (
@@ -105,31 +88,22 @@ def test_write_job_failure_in_temp_leaves_target_untouched(
     """If the temp write itself errors, the original target must remain
     the pre-write version, not the partial new content."""
     workspace = tmp_path / "workspace"
+    workspace.mkdir()
     job_id = "atomic-2"
     jobs_module._write_job(workspace, _make_job(job_id=job_id, status="queued"))
 
     target = jobs_module._job_path(workspace, job_id)
     pre_content = target.read_text(encoding="utf-8")
 
-    real_write_text = Path.write_text
+    def fail_temp_sync(_fd: int) -> None:
+        raise OSError("simulated disk-full")
 
-    def fail_on_temp(self: Path, *args, **kwargs):
-        if self.name.endswith(".tmp"):
-            # Partially write then crash.
-            real_write_text(self, "{incomplete", *args[1:], **kwargs)
-            raise OSError("simulated disk-full")
-        return real_write_text(self, *args, **kwargs)
+    monkeypatch.setattr(jobs_module.os, "fsync", fail_temp_sync)
 
-    monkeypatch.setattr(Path, "write_text", fail_on_temp)
-
-    try:
+    with pytest.raises(ValueError):
         jobs_module._write_job(
             workspace, _make_job(job_id=job_id, status="running")
         )
-    except OSError:
-        pass
-
-    monkeypatch.setattr(Path, "write_text", real_write_text)
 
     assert target.read_text(encoding="utf-8") == pre_content
 
@@ -140,6 +114,7 @@ def test_write_job_completes_cleans_up_stray_tmp_files(
     """After a successful write, no ``.tmp`` sibling should linger next
     to the target (either it renamed into place, or nothing was left)."""
     workspace = tmp_path / "workspace"
+    workspace.mkdir()
     job_id = "atomic-3"
     jobs_module._write_job(
         workspace, _make_job(job_id=job_id, status="queued")
@@ -154,6 +129,7 @@ def test_write_job_roundtrips_content_unchanged(tmp_path: Path) -> None:
     """Sanity: the atomic write must produce a file the reader can parse
     — atomic semantics must not break the content format."""
     workspace = tmp_path / "workspace"
+    workspace.mkdir()
     job = _make_job(job_id="atomic-rt", status="succeeded")
     jobs_module._write_job(workspace, job)
 
@@ -164,6 +140,7 @@ def test_write_job_roundtrips_content_unchanged(tmp_path: Path) -> None:
 
 def test_write_job_overwrites_same_id_idempotently(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
+    workspace.mkdir()
     jid = "atomic-overwrite"
     jobs_module._write_job(workspace, _make_job(job_id=jid, status="queued"))
     jobs_module._write_job(workspace, _make_job(job_id=jid, status="running"))

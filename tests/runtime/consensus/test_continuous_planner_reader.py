@@ -93,6 +93,26 @@ def test_reader_missing_artifact_returns_none(tmp_path: Path):
     assert reader.read_labels(member, tmp_path) is None
 
 
+def test_reader_rejects_claim_alias_h5ad(tmp_path: Path):
+    from omicsclaw.common.output_claim import OUTPUT_CLAIM_FILENAME
+
+    anndata = pytest.importorskip("anndata")
+    member_dir = tmp_path / "dpt"
+    member_dir.mkdir()
+    adata = anndata.AnnData(X=np.zeros((2, 1), dtype=float))
+    adata.obs["pseudotime"] = [0.1, 0.9]
+    claim = member_dir / OUTPUT_CLAIM_FILENAME
+    adata.write_h5ad(claim)
+    (member_dir / "processed.h5ad").hardlink_to(claim)
+    member = ConsensusMember(
+        name="dpt",
+        skill_name="sc-pseudotime",
+        params={"method": "dpt"},
+    )
+
+    assert PseudotimeArtifactReader().read_labels(member, tmp_path) is None
+
+
 # ---- CLI operator routing -------------------------------------------------- #
 
 def test_cli_continuous_rejects_categorical_operator(tmp_path: Path):

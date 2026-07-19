@@ -33,11 +33,11 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from . import dep_spec
+from .environment import scrub_internal_control_credentials
 
 logger = logging.getLogger(__name__)
 
 _TRUE = {"1", "true", "yes", "on"}
-
 # Optional human-readable progress sink for surfaces (e.g. the desktop chat
 # routes these into the live skill-log stream). Never lets a callback error break
 # a run — the module's non-fatal contract.
@@ -131,7 +131,7 @@ def _probe_missing(
     try:
         proc = subprocess.run(
             [python_exe, "-c", _PROBE_CODE, payload],
-            env=env,
+            env=scrub_internal_control_credentials(env),
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -187,7 +187,9 @@ def resolve_skill_runtime(
         return base
 
     import_names = [dep_spec.import_name_for(pkg) for pkg in packages]
-    env = base_env if base_env is not None else os.environ.copy()
+    env = scrub_internal_control_credentials(
+        base_env if base_env is not None else os.environ.copy()
+    )
     missing_imports = _probe_missing(base_python, import_names, env, cwd=cwd)
 
     alias = skill_info.get("alias") or skill_info.get("canonical_name") or "skill"

@@ -33,6 +33,10 @@ interface:
   inputs:
     file_types:
     - csv
+    artifacts:
+    - kind: proteomics.differential_results
+      formats:
+      - csv
   outputs:
     files:
     - tables/enrichment_results.csv

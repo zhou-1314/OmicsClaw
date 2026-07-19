@@ -44,6 +44,7 @@ for functional impact (gene / consequence / impact) use
 **Inputs**
 
 - File types: `.vcf`
+- VCF structure: `##fileformat`; columns: `#CHROM`, `POS`, `ID`, `REF`, `ALT`, `QUAL`, `FILTER`, `INFO`
 
 **Outputs**
 
@@ -51,20 +52,21 @@ for functional impact (gene / consequence / impact) use
 - `filtered.vcf`
 - `report.md`
 - `result.json`
+- Produces artifact `genomics.filtered_variants` as `filtered.vcf` (`vcf`)
 
 ## Flow
 
-1. Load VCF (`--input <file.vcf>`) or generate a demo VCF at `output_dir/demo.vcf` (`genomics_vcf_operations.py:305`).
+1. Load plain/gzip VCF (`--input <file.vcf[.gz]>`) or generate a demo VCF at `output_dir/demo.vcf`.
 2. Parse records; classify each ALT into SNP / MNP / INS / DEL / COMPLEX.
-3. Apply `--min-qual` and `--min-dp` filters; write `filtered.vcf` if either threshold is active (`:329`).
+3. Apply `--min-qual` and `--min-dp` filters; always materialise the declared normalized `filtered.vcf` artifact (zero thresholds are pass-through).
 4. Compute Ti/Tv on biallelic SNPs; aggregate per-chromosome counts.
 5. Write `tables/variants.csv` (`genomics_vcf_operations.py:325`) + `report.md` + `result.json` (`:341`).
 
 ## Gotchas
 
 - **`--input` REQUIRED unless `--demo`.** `genomics_vcf_operations.py:310` raises `ValueError("--input required when not using --demo")`; non-existent paths raise `FileNotFoundError` at `:313`.
-- **`.vcf.gz` is not auto-decompressed.** The script reads plain text; gzipped VCFs raise an unintelligible parse error rather than a clean `bgzip` hint. Pre-decompress with `bgzip -d` (or `gunzip -k`) first.
-- **Filtered VCF only emitted when a filter is active.** `--min-qual 0` and `--min-dp 0` (defaults at `:296-297`) keep every record and SKIP the `filtered.vcf` write. Pass at least one threshold > 0 to get the filtered file.
+- **Plain `.vcf` plus gzip/bzip2/xz-compressed VCF are supported.** Unknown compression codecs are rejected by the content probe rather than passed to the parser.
+- **`filtered.vcf` is always emitted.** With the default zero thresholds it is a normalized pass-through; positive `--min-qual` / `--min-dp` values reduce the retained records.
 - **Multi-allelic rows are scored per-ALT but counted as one VCF line.** Per-allele Ti/Tv is computed correctly, but downstream tools that count "rows" will under-count vs `bcftools view`. Pre-normalise (`bcftools norm -m -`) for row-by-allele math.
 - **DP is read from `INFO/DP` only.** Per-sample `FORMAT/DP` (genotype-level) is ignored — single-sample VCFs that only put DP in FORMAT will see `DP=NA`, and `--min-dp` will drop them all.
 - **Demo VCF is a minimal SNV+indel set with random QUAL/DP.** Useful for orchestrator smoke tests; not biologically meaningful.

@@ -42,6 +42,10 @@ interface:
     - tables/unmapped_genes.csv
     - report.md
     - result.json
+    artifacts:
+    - kind: bulkrna.count_matrix
+      path: tables/mapped_counts.csv
+      format: csv
 runtime:
   entry: bulkrna_geneid_mapping.py
 deps:

@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
@@ -12,6 +14,7 @@ if str(_ROOT) not in sys.path:
 from omicsclaw.skill.schema import parse_skill_manifest  # noqa: E402
 from omicsclaw.skill.skill_md import (  # noqa: E402
     IO_MARKER,
+    append_gotcha_entry,
     render_frontmatter,
     render_io_section,
     render_skill_md,
@@ -97,6 +100,78 @@ def test_io_section_renders_non_default_input_path_kinds():
     assert "Input kinds: `directory`, `freeform`" in io
 
 
+def test_io_section_renders_content_preconditions() -> None:
+    io = render_io_section(
+        _manifest(
+            interface={
+                "inputs": {
+                    "path_kinds": ["file", "directory"],
+                    "file_types": ["csv", "vcf", "fastq"],
+                    "preconditions": {
+                        "content": {
+                            "tabular": {
+                                "min_columns": 3,
+                                "required_columns": ["gene_id"],
+                            },
+                            "vcf": {
+                                "require_fileformat_header": True,
+                                "required_columns": ["#CHROM", "POS"],
+                            },
+                            "fastq": {
+                                "require_valid_record": True,
+                                "pairing": "paired",
+                            },
+                            "directory": {
+                                "any_of_signatures": ["paired-fastq", "tenx-matrix"]
+                            },
+                        }
+                    },
+                }
+            }
+        )
+    )
+
+    assert io is not None
+    assert "Tabular structure: at least 3 columns; required: `gene_id`" in io
+    assert "VCF structure: `##fileformat`; columns: `#CHROM`, `POS`" in io
+    assert "FASTQ structure: valid first record; `paired` layout" in io
+    assert "Directory layouts (any): `paired-fastq`, `tenx-matrix`" in io
+
+
+def test_io_section_renders_method_scoped_output_guarantees():
+    io = render_io_section(
+        _manifest(
+            interface={
+                "parameters": {"hints": {"dynamical": {}}},
+                "outputs": {
+                    "files": ["processed.h5ad", "figures/latent.png"],
+                    "anndata": {"saves_h5ad": True, "layers": ["velocity"]},
+                    "method_scopes": [
+                        {
+                            "methods": ["dynamical"],
+                            "files": ["figures/latent.png"],
+                            "anndata": {"obs": ["latent_time"]},
+                            "artifacts": [
+                                {
+                                    "kind": "singlecell.latent_time",
+                                    "path": "processed.h5ad",
+                                    "format": "h5ad",
+                                }
+                            ],
+                        }
+                    ],
+                },
+            }
+        )
+    )
+
+    assert io is not None
+    assert "When `--method` is `dynamical`" in io
+    assert "Additional files: `figures/latent.png`" in io
+    assert "`obs`: `latent_time`" in io
+    assert "Produces artifact `singlecell.latent_time`" in io
+
+
 def test_render_replaces_io_and_regenerates_header():
     out = render_skill_md(_manifest(), _NARRATIVE)
     # header regenerated from skill.yaml (new version, not the stale one)
@@ -138,3 +213,26 @@ def test_render_without_existing_io_section():
     assert IO_MARKER in out
     assert out.index("## When to use") < out.index("## Inputs & Outputs") < out.index("## Flow")
     assert render_skill_md(_manifest(), out) == out  # idempotent
+
+
+def test_append_gotcha_entry_only_changes_gotchas_and_removes_placeholder():
+    original = render_skill_md(
+        _manifest(),
+        _NARRATIVE.replace("- **boom** detail", "- _None yet — append later._"),
+    )
+    bullet = "- **Sparse branch fails.** Use a bounded conversion. Evidence: `sk.py:1`."
+
+    changed = append_gotcha_entry(original, bullet)
+
+    before_prefix, before_suffix = original.split("## Gotchas", 1)
+    after_prefix, after_suffix = changed.split("## Gotchas", 1)
+    assert after_prefix == before_prefix
+    assert before_suffix.split("## Key CLI", 1)[1] == after_suffix.split(
+        "## Key CLI", 1
+    )[1]
+    assert "_None yet" not in changed
+    assert changed.splitlines().count(bullet) == 1
+    assert render_skill_md(_manifest(), changed) == changed
+
+    with pytest.raises(ValueError, match="already exists"):
+        append_gotcha_entry(changed, bullet)

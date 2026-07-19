@@ -3,11 +3,12 @@
     "surface": "bot",
     "query": ""
   },
-  "total_chars": 34644,
-  "tool_count": 48,
+  "total_chars": 36067,
+  "tool_count": 49,
   "tool_names": [
     "ask_user",
     "autonomous_analysis_execute",
+    "candidate_plan_execute",
     "consult_knowledge",
     "create_omics_skill",
     "fetch_geo_metadata",
@@ -126,6 +127,39 @@
           },
           "required": [
             "skill",
+            "mode"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "candidate_plan_execute",
+        "description": "Execute the exact composite skill plan shown by the Analysis Router. Use only after the user explicitly confirms that plan; pass the unchanged candidate_plan_digest from router context. This action preserves topo order, artifact propagation, and downstream failure cascades.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "plan_digest": {
+              "type": "string",
+              "description": "Exact candidate_plan_digest shown by the router."
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "file",
+                "path",
+                "demo"
+              ],
+              "description": "Input source mode for root plan steps."
+            },
+            "file_path": {
+              "type": "string",
+              "description": "Trusted server-side input path for mode='path'."
+            }
+          },
+          "required": [
+            "plan_digest",
             "mode"
           ]
         }
@@ -1036,6 +1070,64 @@
                 ""
               ],
               "description": "Optional domain hint if the user has already narrowed the domain."
+            },
+            "input_profile": {
+              "type": "object",
+              "description": "Optional caller-supplied facts for advisory planning only; these facts never authorize execution or override a readable file_path, which is probed automatically.",
+              "properties": {
+                "file_type": {
+                  "type": "string"
+                },
+                "modality": {
+                  "type": "string"
+                },
+                "preprocessed": {
+                  "type": "boolean"
+                },
+                "obs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "var": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "layers": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "obsm": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "uns": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "env": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "config": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
             }
           },
           "required": [

@@ -2,6 +2,7 @@
 
 import pytest
 
+from omicsclaw.skill.preconditions import InputProfile
 from omicsclaw.skill.registry import OmicsRegistry
 
 from omicsclaw.skill.capability_resolver import resolve_capability
@@ -210,7 +211,6 @@ def test_resolve_capability_excludes_draft_and_deprecated_skills(monkeypatch):
     from omicsclaw.skill import capability_resolver as cr
 
     registry = OmicsRegistry()
-    registry._loaded = True
     registry.domains = {"spatial": {"name": "Spatial Transcriptomics", "skills": []}}
     registry.skills = {
         "draft-cluster": {
@@ -243,6 +243,7 @@ def test_resolve_capability_excludes_draft_and_deprecated_skills(monkeypatch):
         },
     }
     registry.canonical_aliases = list(registry.skills)
+    registry._loaded = True
     monkeypatch.setattr(cr, "ensure_registry_loaded", lambda: registry)
 
     decision = cr.resolve_capability("clustering spatial transcriptomics data")
@@ -251,6 +252,49 @@ def test_resolve_capability_excludes_draft_and_deprecated_skills(monkeypatch):
     assert decision.chosen_skill == "stable-cluster"
     assert "draft-cluster" not in aliases
     assert "deprecated-cluster" not in aliases
+
+
+def test_explicit_deprecated_alias_routes_to_its_governed_replacement(monkeypatch):
+    from omicsclaw.skill import capability_resolver as cr
+
+    registry = OmicsRegistry()
+    registry.domains = {"spatial": {"name": "Spatial Transcriptomics", "skills": []}}
+    registry.skills = {
+        "old-cluster": {
+            "alias": "old-cluster",
+            "domain": "spatial",
+            "description": "Retired implementation.",
+            "trigger_keywords": [],
+            "legacy_aliases": ["legacy-cluster"],
+            "param_hints": {},
+            "lifecycle_status": "deprecated",
+            "superseded_by": "new-cluster",
+        },
+        "new-cluster": {
+            "alias": "new-cluster",
+            "domain": "spatial",
+            "description": "Current implementation.",
+            "trigger_keywords": [],
+            "legacy_aliases": [],
+            "param_hints": {},
+            "lifecycle_status": "stable",
+            "validation_level": "demo-validated",
+        },
+    }
+    registry.canonical_aliases = list(registry.skills)
+    registry._loaded = True
+    monkeypatch.setattr(cr, "ensure_registry_loaded", lambda: registry)
+
+    decision = cr.resolve_capability("run old-cluster")
+    legacy_decision = cr.resolve_capability("run legacy-cluster")
+
+    assert decision.chosen_skill == "new-cluster"
+    assert legacy_decision.chosen_skill == "new-cluster"
+    assert any("superseded" in reason for reason in decision.reasoning)
+    assert all(
+        candidate.skill != "old-cluster"
+        for candidate in decision.skill_candidates
+    )
 
 
 def test_resolve_capability_consumes_structured_skip_when():
@@ -278,6 +322,37 @@ def test_resolve_capability_cross_domain_skip_redirect_updates_domain():
 
     assert decision.chosen_skill == "sc-enrichment"
     assert decision.domain == "singlecell"
+
+
+def test_composite_plan_binds_an_explicitly_named_skill_method():
+    inferred = resolve_capability(
+        "run sc-preprocessing with scanpy and then sc-clustering"
+    )
+
+    assert inferred.candidate_chain["method_bindings"] == {
+        "sc-preprocessing": "scanpy"
+    }
+
+    supplied = resolve_capability(
+        "run sc-preprocessing and then sc-clustering",
+        method_bindings={"sc-preprocessing": "scanpy"},
+    )
+    assert supplied.candidate_chain["method_bindings"] == {
+        "sc-preprocessing": "scanpy"
+    }
+
+    negated = resolve_capability(
+        "run sc-preprocessing without scanpy and then sc-clustering"
+    )
+    assert "method_bindings" not in negated.candidate_chain
+
+
+def test_composite_profile_without_unified_method_flag_fails_closed():
+    decision = resolve_capability(
+        "run sc-preprocessing and then sc-clustering with tsne"
+    )
+
+    assert decision.candidate_chain == {}
 
 
 def test_resolve_capability_uses_singlecell_modality_to_disambiguate_preprocessing():
@@ -337,7 +412,6 @@ def test_resolve_capability_uses_validation_as_a_small_tie_break(monkeypatch):
     from omicsclaw.skill import capability_resolver as cr
 
     registry = OmicsRegistry()
-    registry._loaded = True
     registry.domains = {"spatial": {"name": "Spatial Transcriptomics", "skills": []}}
     common = {
         "domain": "spatial",
@@ -356,9 +430,67 @@ def test_resolve_capability_uses_validation_as_a_small_tie_break(monkeypatch):
         },
     }
     registry.canonical_aliases = list(registry.skills)
+    registry._loaded = True
     monkeypatch.setattr(cr, "ensure_registry_loaded", lambda: registry)
 
     decision = cr.resolve_capability("clustering spatial transcriptomics data")
 
     assert decision.chosen_skill == "z-fixture"
     assert "validation level fixture-validated" in " ".join(decision.reasoning)
+
+
+def test_candidate_wide_precondition_penalty_reranks_but_keeps_incompatible_candidates(
+    monkeypatch,
+):
+    from omicsclaw.skill import capability_resolver as cr
+
+    registry = OmicsRegistry()
+    registry.domains = {"spatial": {"name": "Spatial Transcriptomics", "skills": []}}
+    common = {
+        "domain": "spatial",
+        "description": "Run analysis on a scientific data table.",
+        "trigger_keywords": ["analysis"],
+        "legacy_aliases": [],
+        "param_hints": {},
+        "lifecycle_status": "mvp",
+        "validation_level": "smoke-only",
+        "output_contract": {},
+    }
+    registry.skills = {
+        "a-analysis": {
+            **common,
+            "alias": "a-analysis",
+            "input_contract": {
+                "file_types": ["vcf"],
+                "path_kinds": ["file"],
+                "preconditions": {"data_shape": {}},
+            },
+        },
+        "z-analysis": {
+            **common,
+            "alias": "z-analysis",
+            "input_contract": {
+                "file_types": ["csv"],
+                "path_kinds": ["file"],
+                "preconditions": {"data_shape": {}},
+            },
+        },
+    }
+    registry.canonical_aliases = list(registry.skills)
+    registry._loaded = True
+    monkeypatch.setattr(cr, "ensure_registry_loaded", lambda: registry)
+
+    decision = cr.resolve_capability(
+        "run analysis",
+        domain_hint="spatial",
+        input_profile=InputProfile(file_type="csv", path_kind="file"),
+    )
+
+    assert decision.chosen_skill == "z-analysis"
+    by_skill = {candidate.skill: candidate for candidate in decision.skill_candidates}
+    assert set(by_skill) == {"a-analysis", "z-analysis"}
+    assert by_skill["a-analysis"].precondition_status == "blocked"
+    assert by_skill["a-analysis"].precondition_penalty > 0
+    assert by_skill["a-analysis"].semantic_score == by_skill["z-analysis"].semantic_score
+    assert by_skill["z-analysis"].precondition_status == "eligible"
+    assert by_skill["z-analysis"].precondition_penalty == 0

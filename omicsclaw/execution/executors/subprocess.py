@@ -18,9 +18,12 @@ from __future__ import annotations
 import asyncio
 import collections
 import inspect
+import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Optional, Union
+
+from omicsclaw.skill.execution.environment import scrub_internal_control_credentials
 
 from .base import JobContext, JobOutcome
 
@@ -59,6 +62,9 @@ class SubprocessExecutor:
             )
 
         ctx.stdout_log.parent.mkdir(parents=True, exist_ok=True)
+        child_env = scrub_internal_control_credentials(
+            os.environ if self._env is None else self._env
+        )
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -66,7 +72,7 @@ class SubprocessExecutor:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=str(self._cwd or ctx.workspace),
-                env=self._env,
+                env=child_env,
             )
         except (OSError, FileNotFoundError) as exc:
             return JobOutcome(

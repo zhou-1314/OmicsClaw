@@ -85,6 +85,10 @@ from omicsclaw.services.path_validation import (
 )
 
 from omicsclaw.common import run_paths
+from omicsclaw.common.output_claim import (
+    collect_output_claim_identities,
+    is_scientific_output_file,
+)
 from omicsclaw.common.user_guidance import (
     extract_user_guidance_lines,
     extract_user_guidance_payloads,
@@ -93,8 +97,16 @@ from omicsclaw.common.user_guidance import (
     strip_user_guidance_lines,
 )
 from omicsclaw.skill.registry import ensure_registry_loaded, registry
-from omicsclaw.runtime.tools.builders.agent import build_bot_tool_registry, BotToolContext
-from omicsclaw.runtime.tools.builders.engineering import build_engineering_tool_executors
+from omicsclaw.skill.execution.environment import (
+    scrub_internal_control_credentials,
+)
+from omicsclaw.runtime.tools.builders.agent import (
+    build_bot_tool_registry,
+    BotToolContext,
+)
+from omicsclaw.runtime.tools.builders.engineering import (
+    build_engineering_tool_executors,
+)
 from omicsclaw.runtime.tools.kg_tools import KG_TOOL_EXECUTORS
 from omicsclaw.runtime.policy.verification import format_completion_mapping_summary
 
@@ -189,7 +201,10 @@ def _compute_omicsclaw_schema_arg_keys() -> frozenset[str]:
     tool spec auto-extends what the validator accepts and surfaces in
     error messages — no parallel hardcoded list to drift.
     """
-    from omicsclaw.runtime.tools.builders.agent import BotToolContext, build_bot_tool_specs
+    from omicsclaw.runtime.tools.builders.agent import (
+        BotToolContext,
+        build_bot_tool_specs,
+    )
 
     # Pass a placeholder domain_briefing so this import-time probe does NOT force a
     # registry load: an empty briefing makes build_bot_tool_specs call
@@ -225,9 +240,7 @@ def _validate_omicsclaw_args(args: dict) -> str:
 
     suggestions: list[str] = []
     for key in unknown:
-        matches = get_close_matches(
-            key, _OMICSCLAW_SCHEMA_ARG_KEYS, n=1, cutoff=0.6
-        )
+        matches = get_close_matches(key, _OMICSCLAW_SCHEMA_ARG_KEYS, n=1, cutoff=0.6)
         if matches:
             suggestions.append(f"  '{key}' → did you mean '{matches[0]}'?")
     if suggestions:
@@ -301,9 +314,7 @@ async def execute_omicsclaw(
     # Bind uploaded-file inspection and execution to the same session-scoped
     # record.  Never fall back to another chat's first received file.
     session_file_info = received_files.get(session_id) if session_id else None
-    session_input_path = (
-        session_file_info.get("path") if session_file_info else None
-    )
+    session_input_path = session_file_info.get("path") if session_file_info else None
 
     # --- Auto-routing via capability resolver ---
     if skill_key == "auto":
@@ -332,7 +343,9 @@ async def execute_omicsclaw(
                 input_profile = probe_input_profile(profile_path)
             decision = resolve_capability(
                 query or capability_input,
-                file_path=str(resolved_path or session_input_path or capability_input or ""),
+                file_path=str(
+                    resolved_path or session_input_path or capability_input or ""
+                ),
                 input_profile=input_profile,
             )
             if decision.chosen_skill:
@@ -341,9 +354,8 @@ async def execute_omicsclaw(
                         "This request is asking to add a reusable OmicsClaw skill.\n\n"
                         "Use create_omics_skill instead of auto-running an analysis skill."
                     )
-                if (
-                    getattr(decision, "precondition_evaluated", False)
-                    and not getattr(decision, "execution_ready", True)
+                if getattr(decision, "precondition_evaluated", False) and not getattr(
+                    decision, "execution_ready", True
                 ):
                     logger.info(
                         "Auto-routing refused to execute %s: precondition status=%s",
@@ -363,11 +375,16 @@ async def execute_omicsclaw(
                         logger.info(
                             "Auto-routing refused to execute: close tie "
                             "%s (%.2f) vs %s (%.2f), gap=%.2f < %.2f",
-                            cands[0].skill, cands[0].score,
-                            cands[1].skill, cands[1].score,
-                            gap, _AUTO_DISAMBIGUATE_GAP,
+                            cands[0].skill,
+                            cands[0].score,
+                            cands[1].skill,
+                            cands[1].score,
+                            gap,
+                            _AUTO_DISAMBIGUATE_GAP,
                         )
-                        return _format_auto_disambiguation(decision, query or capability_input)
+                        return _format_auto_disambiguation(
+                            decision, query or capability_input
+                        )
                 skill_key = decision.chosen_skill
                 auto_route_banner = _format_auto_route_banner(decision)
                 logger.info(
@@ -377,7 +394,9 @@ async def execute_omicsclaw(
                     decision.confidence,
                 )
             else:
-                missing = "; ".join(decision.missing_capabilities) or "no matching skill"
+                missing = (
+                    "; ".join(decision.missing_capabilities) or "no matching skill"
+                )
                 return (
                     "No existing OmicsClaw skill fully matches this request.\n"
                     f"Coverage: {decision.coverage}\n"
@@ -429,11 +448,15 @@ async def execute_omicsclaw(
             )
             return prepared["summary_prefix"] + "\n\n---\n" + final_result
 
-    workflow_clarification = _maybe_require_batch_integration_workflow(skill_key, input_path, args)
+    workflow_clarification = _maybe_require_batch_integration_workflow(
+        skill_key, input_path, args
+    )
     if workflow_clarification:
         return workflow_clarification
 
-    batch_key_clarification = _maybe_require_batch_key_selection(skill_key, input_path, args)
+    batch_key_clarification = _maybe_require_batch_key_selection(
+        skill_key, input_path, args
+    )
     if batch_key_clarification:
         return batch_key_clarification
 
@@ -482,7 +505,11 @@ async def execute_omicsclaw(
         extra_args.append("--confirmed-preflight")
 
     # Build a parameter hint block so the LLM can relay it to the user
-    hint_cmd = ["oc", "run", "spatial-pipeline" if skill_key == "pipeline" else skill_key]
+    hint_cmd = [
+        "oc",
+        "run",
+        "spatial-pipeline" if skill_key == "pipeline" else skill_key,
+    ]
     if mode == "demo":
         hint_cmd.append("--demo")
     elif input_path:
@@ -508,7 +535,9 @@ async def execute_omicsclaw(
     try:
         is_dl = method.lower() in DEEP_LEARNING_METHODS
         if is_dl:
-            logger.info(f"Starting {skill_key} with {method} (no timeout, may take 10-60 minutes)")
+            logger.info(
+                f"Starting {skill_key} with {method} (no timeout, may take 10-60 minutes)"
+            )
 
         runner_result = await _run_skill_via_shared_runner(
             skill_key=skill_key,
@@ -529,6 +558,7 @@ async def execute_omicsclaw(
         returncode = int(runner_result.get("returncode") or 0)
     except Exception as e:
         import traceback as _tb
+
         # Clean up empty output directory on crash
         if out_dir.exists():
             shutil.rmtree(out_dir, ignore_errors=True)
@@ -536,7 +566,11 @@ async def execute_omicsclaw(
 
     if returncode != 0:
         payloads = extract_user_guidance_payloads(stderr_str)
-        payload_prefix = "\n".join(format_user_guidance_payload(payload) for payload in payloads if isinstance(payload, dict))
+        payload_prefix = "\n".join(
+            format_user_guidance_payload(payload)
+            for payload in payloads
+            if isinstance(payload, dict)
+        )
         guidance_block = render_guidance_block(
             extract_user_guidance_lines(stderr_str),
             payloads=payloads,
@@ -551,26 +585,51 @@ async def execute_omicsclaw(
         )
         clean_stderr = strip_user_guidance_lines(stderr_str)
         clean_stdout = strip_user_guidance_lines(stdout_str)
-        err = clean_stderr[-1500:] if clean_stderr else clean_stdout[-1500:] if clean_stdout else "unknown error"
+        err = (
+            clean_stderr[-1500:]
+            if clean_stderr
+            else clean_stdout[-1500:]
+            if clean_stdout
+            else "unknown error"
+        )
         # Clean up empty output directory on failure
         if out_dir.exists():
             shutil.rmtree(out_dir, ignore_errors=True)
         # A preflight gate is not a failed analysis — don't record it as one.
         if session_id and not preflight_gate:
-            await _auto_capture_analysis(session_id, skill_key, args, None, False, thread_id=thread_id)
+            await _auto_capture_analysis(
+                session_id, skill_key, args, None, False, thread_id=thread_id
+            )
         # A preflight gate takes priority over env-error heuristics and the
         # legacy string check: render the guidance cleanly, no "failed (exit N)".
-        if guidance_block and (preflight_gate or "preflight check failed" in err.lower()):
-            return auto_route_banner + (payload_prefix + "\n" if payload_prefix else "") + guidance_block
+        if guidance_block and (
+            preflight_gate or "preflight check failed" in err.lower()
+        ):
+            return (
+                auto_route_banner
+                + (payload_prefix + "\n" if payload_prefix else "")
+                + guidance_block
+            )
         # Environment errors take priority — user needs to know it's not their data
         env_msg = _classify_env_error(err)
         if env_msg:
             return env_msg
         if guidance_block:
-            rendered = guidance_block + f"\n\n---\n{skill_key} failed (exit {returncode}):\n{err}"
-            return auto_route_banner + (payload_prefix + "\n" if payload_prefix else "") + rendered
+            rendered = (
+                guidance_block
+                + f"\n\n---\n{skill_key} failed (exit {returncode}):\n{err}"
+            )
+            return (
+                auto_route_banner
+                + (payload_prefix + "\n" if payload_prefix else "")
+                + rendered
+            )
         plain = f"{skill_key} failed (exit {returncode}):\n{err}"
-        return auto_route_banner + (payload_prefix + "\n" if payload_prefix else "") + plain
+        return (
+            auto_route_banner
+            + (payload_prefix + "\n" if payload_prefix else "")
+            + plain
+        )
 
     # Collect report + figures from output directory. The delivery plan is the
     # single place that gates artifacts on the user's `return_media` intent:
@@ -581,16 +640,25 @@ async def execute_omicsclaw(
     plan = build_media_delivery_plan(collected, return_media, out_dir)
     sent_names = plan.sent_names
     if out_dir.exists() and plan.pending_items and session_id:
-        pending_media[session_id] = pending_media.get(session_id, []) + plan.pending_items
+        pending_media[session_id] = (
+            pending_media.get(session_id, []) + plan.pending_items
+        )
         if sent_names:
-            logger.info(f"return_media='{return_media}': sending {len(sent_names)} item(s)")
+            logger.info(
+                f"return_media='{return_media}': sending {len(sent_names)} item(s)"
+            )
 
     # Read report for chat display
     report_text = ""
     if out_dir.exists():
+        claim_identities = collect_output_claim_identities(out_dir)
         for pattern in ["report.md", "*_report.md", "*.md"]:
             for md_file in sorted(out_dir.glob(pattern)):
-                if md_file.name.startswith("."):
+                if md_file.name.startswith(".") or not is_scientific_output_file(
+                    md_file,
+                    output_root=out_dir,
+                    claim_identities=claim_identities,
+                ):
                     continue
                 report_text = md_file.read_text(encoding="utf-8")
                 break
@@ -598,7 +666,11 @@ async def execute_omicsclaw(
                 break
 
     payloads = extract_user_guidance_payloads(stderr_str)
-    payload_prefix = "\n".join(format_user_guidance_payload(payload) for payload in payloads if isinstance(payload, dict))
+    payload_prefix = "\n".join(
+        format_user_guidance_payload(payload)
+        for payload in payloads
+        if isinstance(payload, dict)
+    )
     guidance_block = render_guidance_block(
         extract_user_guidance_lines(stderr_str),
         payloads=payloads,
@@ -608,9 +680,13 @@ async def execute_omicsclaw(
             rendered = guidance_block + "\n\n---\n" + stdout_str
             return (payload_prefix + "\n" if payload_prefix else "") + rendered
         if guidance_block:
-            rendered = guidance_block + f"\n\n---\n{skill_key} completed. Output: {out_dir}"
+            rendered = (
+                guidance_block + f"\n\n---\n{skill_key} completed. Output: {out_dir}"
+            )
             return (payload_prefix + "\n" if payload_prefix else "") + rendered
-        plain = stdout_str if stdout_str else f"{skill_key} completed. Output: {out_dir}"
+        plain = (
+            stdout_str if stdout_str else f"{skill_key} completed. Output: {out_dir}"
+        )
         return (payload_prefix + "\n" if payload_prefix else "") + plain
 
     # Trim verbose sections for chat readability; full report is on disk.
@@ -629,7 +705,9 @@ async def execute_omicsclaw(
     # Auto-capture dataset + analysis memory
     if session_id:
         if input_path:
-            await _auto_capture_dataset(session_id, input_path, data_type, thread_id=thread_id)
+            await _auto_capture_dataset(
+                session_id, input_path, data_type, thread_id=thread_id
+            )
         # Bench (AN-ROUTER-10): a successful typed-consensus run records its
         # lineage at the canonical thread-scoped namespace
         # (analysis://<thread_id>/typed/<run_id>, ADR 0010/0018) — one record per
@@ -638,7 +716,9 @@ async def execute_omicsclaw(
         if not await _auto_capture_consensus(
             session_id, skill_key, out_dir, True, thread_id=thread_id
         ):
-            await _auto_capture_analysis(session_id, skill_key, args, out_dir, True, thread_id=thread_id)
+            await _auto_capture_analysis(
+                session_id, skill_key, args, out_dir, True, thread_id=thread_id
+            )
 
     # Read result.json for preprocessing_state update and next_steps
     result_json = _read_result_json(out_dir)
@@ -659,7 +739,7 @@ async def execute_omicsclaw(
     if auto_route_banner:
         result_text = auto_route_banner + result_text
     notebook_path = out_dir / "reproducibility" / "analysis_notebook.ipynb"
-    if notebook_path.exists():
+    if is_scientific_output_file(notebook_path, output_root=out_dir):
         result_text += (
             "\n\n---\n"
             f"[Reproducibility notebook available: {notebook_path}. "
@@ -695,7 +775,8 @@ async def execute_omicsclaw(
             signals=[method, data_type] if method else [],
             severity="info",
             metrics={},
-            message=f"Completed {skill_key}" + (f" with method={method}" if method else ""),
+            message=f"Completed {skill_key}"
+            + (f" with method={method}" if method else ""),
         )
         resolver = get_resolver()
         advice = resolver.resolve(
@@ -706,8 +787,11 @@ async def execute_omicsclaw(
             advice_text = resolver.format_advice(advice, channel="bot")
             if advice_text:
                 result_text += f"\n\n{advice_text}"
-                logger.info("Post-execution advice appended for %s (%d snippets)",
-                            skill_key, len(advice))
+                logger.info(
+                    "Post-execution advice appended for %s (%d snippets)",
+                    skill_key,
+                    len(advice),
+                )
     except Exception as e:
         logger.debug("Post-execution advisory skipped: %s", e)
 
@@ -723,7 +807,9 @@ async def execute_omicsclaw(
 # ---------------------------------------------------------------------------
 
 
-async def execute_replot_skill(args: dict, session_id: str = None, chat_id: int | str = 0) -> str:
+async def execute_replot_skill(
+    args: dict, session_id: str = None, chat_id: int | str = 0
+) -> str:
     """Re-render R Enhanced plots from an existing skill output directory."""
     skill_key = args.get("skill", "")
     output_path_arg = args.get("output_path", "").strip()
@@ -760,7 +846,14 @@ async def execute_replot_skill(args: dict, session_id: str = None, chat_id: int 
         )
 
     # Build command
-    cmd = [get_skill_runner_python(), str(OMICSCLAW_PY), "replot", skill_key, "--output", str(out_dir)]
+    cmd = [
+        get_skill_runner_python(),
+        str(OMICSCLAW_PY),
+        "replot",
+        skill_key,
+        "--output",
+        str(out_dir),
+    ]
     if renderer:
         cmd.extend(["--renderer", renderer])
 
@@ -784,16 +877,24 @@ async def execute_replot_skill(args: dict, session_id: str = None, chat_id: int 
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=scrub_internal_control_credentials(os.environ),
         )
         stdout_bytes, stderr_bytes = await proc.communicate()
         stdout_str = stdout_bytes.decode(errors="replace")
         stderr_str = stderr_bytes.decode(errors="replace")
     except Exception:
         import traceback as _tb
+
         return f"replot crashed:\n{_tb.format_exc()[-1500:]}"
 
     if proc.returncode != 0:
-        err = stderr_str[-1500:] if stderr_str else stdout_str[-1500:] if stdout_str else "unknown error"
+        err = (
+            stderr_str[-1500:]
+            if stderr_str
+            else stdout_str[-1500:]
+            if stdout_str
+            else "unknown error"
+        )
         env_msg = _classify_env_error(err)
         if env_msg:
             return env_msg
@@ -804,7 +905,14 @@ async def execute_replot_skill(args: dict, session_id: str = None, chat_id: int 
     figure_names = []
     media_items = []
     if r_enhanced_dir.exists():
+        claim_identities = collect_output_claim_identities(out_dir)
         for f in sorted(r_enhanced_dir.rglob("*.png")):
+            if not is_scientific_output_file(
+                f,
+                output_root=out_dir,
+                claim_identities=claim_identities,
+            ):
+                continue
             media_items.append({"type": "photo", "path": str(f)})
             figure_names.append(f.name)
 
@@ -813,7 +921,9 @@ async def execute_replot_skill(args: dict, session_id: str = None, chat_id: int 
         # Check both stderr AND stdout — R errors from call_r_plot() are
         # wrapped in Python warnings and may appear in either stream.
         combined_output = f"{stderr_str}\n{stdout_str}"
-        env_msg = _classify_env_error(combined_output) if combined_output.strip() else None
+        env_msg = (
+            _classify_env_error(combined_output) if combined_output.strip() else None
+        )
         if env_msg:
             return env_msg
 
@@ -828,7 +938,9 @@ async def execute_replot_skill(args: dict, session_id: str = None, chat_id: int 
                     f"**修复方法（在终端运行）:**\n"
                     f"```\nRscript -e 'install.packages(c({install_cmd}))'\n```"
                 )
-        if "Rscript" in combined_output and ("not found" in combined_output or "No such file" in combined_output):
+        if "Rscript" in combined_output and (
+            "not found" in combined_output or "No such file" in combined_output
+        ):
             r_hints.append(
                 "**Rscript 未安装或不在 PATH 中。**\n\n"
                 "**修复方法:**\n"
@@ -845,7 +957,9 @@ async def execute_replot_skill(args: dict, session_id: str = None, chat_id: int 
         # Distinguish "no renderers registered" vs "renderers exist but all failed"
         no_renderers = "No R Enhanced renderers registered" in stdout_str
         stderr_snippet = stderr_str[-500:].strip() if stderr_str else ""
-        detail = f"\n\n**技术详情:**\n```\n{stderr_snippet}\n```" if stderr_snippet else ""
+        detail = (
+            f"\n\n**技术详情:**\n```\n{stderr_snippet}\n```" if stderr_snippet else ""
+        )
 
         if no_renderers:
             return (
@@ -873,7 +987,8 @@ async def execute_replot_skill(args: dict, session_id: str = None, chat_id: int 
         else:
             keywords = [k.strip() for k in return_media.split(",") if k.strip()]
             filtered = [
-                item for item in media_items
+                item
+                for item in media_items
                 if any(kw in Path(item["path"]).stem.lower() for kw in keywords)
             ]
         if filtered:
@@ -987,12 +1102,16 @@ async def execute_generate_audio(args: dict) -> str:
     try:
         proc = await asyncio.create_subprocess_exec(
             "edge-tts",
-            "--voice", voice,
+            "--voice",
+            voice,
             f"--rate={rate}",
-            "--file", str(text_path),
-            "--write-media", str(filepath),
+            "--file",
+            str(text_path),
+            "--write-media",
+            str(filepath),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=scrub_internal_control_credentials(os.environ),
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
         try:
@@ -1046,19 +1165,30 @@ async def _register_literature_datasets(
     Never raises into the loop.
     """
     try:
-        result_path = out_dir / "result.json"
-        if not result_path.exists():
+        payload = _read_result_json(out_dir)
+        if not isinstance(payload, dict):
             return
-        payload = json.loads(result_path.read_text(encoding="utf-8"))
         data = payload.get("data", {}) or {}
         platform = (data.get("metadata", {}) or {}).get("technology") or ""
         for dl in data.get("download_results", []) or []:
             if dl.get("status") not in ("success", "partial"):
                 continue
             for f in dl.get("files", []) or []:
-                if Path(f).name == "metadata.json":
+                dataset_path = Path(f)
+                if (
+                    dataset_path.name == "metadata.json"
+                    or not is_scientific_output_file(
+                        dataset_path,
+                        output_root=out_dir,
+                    )
+                ):
                     continue
-                await _auto_capture_dataset(session_id, str(f), platform, thread_id=thread_id)
+                await _auto_capture_dataset(
+                    session_id,
+                    str(dataset_path),
+                    platform,
+                    thread_id=thread_id,
+                )
     except Exception as e:
         logger.warning(f"Literature dataset registration failed: {e}")
 
@@ -1089,12 +1219,19 @@ async def _ingest_literature_into_kg(
     try:
         from omicsclaw.runtime.tools import kg_tools
 
-        result_path = out_dir / "result.json"
-        if not result_path.exists():
+        payload = _read_result_json(out_dir)
+        if not isinstance(payload, dict):
             return
-        data = (json.loads(result_path.read_text(encoding="utf-8")) or {}).get("data", {}) or {}
+        data = payload.get("data", {}) or {}
         source_text_path = data.get("source_text_path")
-        if isinstance(source_text_path, str) and source_text_path and Path(source_text_path).is_file():
+        if (
+            isinstance(source_text_path, str)
+            and source_text_path
+            and is_scientific_output_file(
+                Path(source_text_path),
+                output_root=out_dir,
+            )
+        ):
             result = await asyncio.wait_for(
                 kg_tools.ingest_source_into_kg(source_text_path),
                 timeout=_LIT_KG_INGEST_TIMEOUT,
@@ -1110,13 +1247,21 @@ async def _ingest_literature_into_kg(
             # paper is groundable in THIS thread's Ideate. Both "ingested" and
             # "skipped" (cache hit — cross-thread reuse) carry a slug now. No-op
             # without a thread (legacy/IM) — _capture_thread_source guards.
-            elif isinstance(result, dict) and result.get("status") in ("ingested", "skipped"):
+            elif isinstance(result, dict) and result.get("status") in (
+                "ingested",
+                "skipped",
+            ):
                 slug = result.get("slug")
                 if isinstance(slug, str) and slug and thread_id and session_id:
                     await _capture_thread_source(
-                        session_id, thread_id, slug, str(result.get("source_page") or "")
+                        session_id,
+                        thread_id,
+                        slug,
+                        str(result.get("source_page") or ""),
                     )
-    except Exception as e:  # incl. TimeoutError — never break the literature tool over a KG hiccup
+    except (
+        Exception
+    ) as e:  # incl. TimeoutError — never break the literature tool over a KG hiccup
         logger.warning(f"Literature→KG ingest failed (non-fatal): {e}")
 
 
@@ -1132,7 +1277,9 @@ def _spawn_literature_kg_ingest(
     from a mutated context."""
     try:
         task = asyncio.ensure_future(
-            _ingest_literature_into_kg(out_dir, thread_id=thread_id, session_id=session_id)
+            _ingest_literature_into_kg(
+                out_dir, thread_id=thread_id, session_id=session_id
+            )
         )
     except RuntimeError:  # no running loop (defensive — the tool path is async)
         return
@@ -1190,9 +1337,11 @@ async def execute_parse_literature(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=scrub_internal_control_credentials(os.environ),
         )
         stdout_bytes, stderr_bytes = await asyncio.wait_for(
-            proc.communicate(), timeout=180,
+            proc.communicate(),
+            timeout=180,
         )
         stdout_str = stdout_bytes.decode(errors="replace")
         stderr_str = stderr_bytes.decode(errors="replace")
@@ -1205,10 +1354,17 @@ async def execute_parse_literature(
         return "Literature parsing timed out after 180 seconds."
     except Exception as e:
         import traceback as _tb
+
         return f"Literature parsing crashed:\n{_tb.format_exc()[-1500:]}"
 
     if proc.returncode != 0:
-        err = stderr_str[-1500:] if stderr_str else stdout_str[-1500:] if stdout_str else "unknown error"
+        err = (
+            stderr_str[-1500:]
+            if stderr_str
+            else stdout_str[-1500:]
+            if stdout_str
+            else "unknown error"
+        )
         env_msg = _classify_env_error(err)
         if env_msg:
             return env_msg
@@ -1225,14 +1381,20 @@ async def execute_parse_literature(
     # ingest's slug so the paper is groundable in THIS thread's Ideate. Best-effort,
     # spawned in the BACKGROUND (bounded + self-logging) so KG/LLM latency never
     # delays this user-facing tool's response; thread_id/session_id bound at spawn.
-    _spawn_literature_kg_ingest(out_dir, thread_id=thread_id, session_id=session_id or "")
+    _spawn_literature_kg_ingest(
+        out_dir, thread_id=thread_id, session_id=session_id or ""
+    )
 
     # Read report
     report_file = out_dir / "report.md"
-    if report_file.exists():
+    if is_scientific_output_file(report_file, output_root=out_dir):
         return report_file.read_text(encoding="utf-8")
     else:
-        return stdout_str if stdout_str else "Literature parsing completed but no report generated."
+        return (
+            stdout_str
+            if stdout_str
+            else "Literature parsing completed but no report generated."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1269,11 +1431,13 @@ async def execute_fetch_geo_metadata(args: dict) -> str:
             f"\n**Platform**: {metadata.get('platform', 'N/A')}",
         ]
 
-        summary = metadata.get('summary', '')
+        summary = metadata.get("summary", "")
         if summary:
-            lines.append(f"\n**Summary**: {summary[:300]}{'...' if len(summary) > 300 else ''}")
+            lines.append(
+                f"\n**Summary**: {summary[:300]}{'...' if len(summary) > 300 else ''}"
+            )
 
-        samples = metadata.get('samples', [])
+        samples = metadata.get("samples", [])
         if samples:
             lines.append(f"\n**Samples**: {len(samples)} samples")
             lines.append(f"- {', '.join(samples[:5])}")
@@ -1281,15 +1445,19 @@ async def execute_fetch_geo_metadata(args: dict) -> str:
                 lines.append(f"- ... and {len(samples) - 5} more")
 
         # Download if requested
-        if download and accession.startswith('GSE'):
+        if download and accession.startswith("GSE"):
             lines.append(f"\n## Downloading {accession}...")
             result = download_geo_dataset(accession, DATA_DIR)
-            if result['status'] == 'success':
-                lines.append(f"\n✓ Downloaded {len(result['files'])} files to data/{accession}/")
+            if result["status"] == "success":
+                lines.append(
+                    f"\n✓ Downloaded {len(result['files'])} files to data/{accession}/"
+                )
             else:
-                lines.append(f"\n✗ Download failed: {', '.join(result.get('errors', ['Unknown error']))}")
+                lines.append(
+                    f"\n✗ Download failed: {', '.join(result.get('errors', ['Unknown error']))}"
+                )
 
-        return '\n'.join(lines)
+        return "\n".join(lines)
 
     except Exception as e:
         return f"Error fetching GEO metadata: {e}"
@@ -1316,7 +1484,9 @@ async def execute_list_directory(args: dict) -> str:
         for td in TRUSTED_DATA_DIRS
     ):
         dirs_str = ", ".join(str(d) for d in TRUSTED_DATA_DIRS)
-        return f"Access denied: {target_path} is not in trusted directories ({dirs_str})"
+        return (
+            f"Access denied: {target_path} is not in trusted directories ({dirs_str})"
+        )
 
     if not target_path.exists():
         return f"Directory not found: {target_path}"
@@ -1411,8 +1581,12 @@ async def execute_inspect_data(args: dict) -> str:
 
             # obs/var column names (drop internal HDF5 keys)
             _skip = {"_index", "__categories"}
-            info["obs_columns"] = [k for k in f["obs"].keys() if k not in _skip] if "obs" in f else []
-            info["var_columns"] = [k for k in f["var"].keys() if k not in _skip] if "var" in f else []
+            info["obs_columns"] = (
+                [k for k in f["obs"].keys() if k not in _skip] if "obs" in f else []
+            )
+            info["var_columns"] = (
+                [k for k in f["var"].keys() if k not in _skip] if "var" in f else []
+            )
 
             info["obsm_keys"] = list(f["obsm"].keys()) if "obsm" in f else []
             info["obsp_keys"] = list(f["obsp"].keys()) if "obsp" in f else []
@@ -1424,6 +1598,7 @@ async def execute_inspect_data(args: dict) -> str:
         # Fallback: use anndata backed mode (no full matrix loaded)
         try:
             import anndata as ad
+
             adata = ad.read_h5ad(file_path, backed="r")
             info = {
                 "n_obs": adata.n_obs,
@@ -1456,7 +1631,10 @@ async def execute_inspect_data(args: dict) -> str:
             "- **Cell-cell communication** (LIANA, CellPhoneDB): `spatial-cell-communication`",
             "- **Pathway enrichment** (GSEA, ORA): `spatial-enrichment`",
         ]
-    elif any(c in obs_cols_lower for c in ("leiden", "louvain", "cell_type", "celltype", "cluster")):
+    elif any(
+        c in obs_cols_lower
+        for c in ("leiden", "louvain", "cell_type", "celltype", "cluster")
+    ):
         platform = "Single-cell RNA-seq (already clustered/annotated)"
         suggestions = [
             "- **Differential expression** between groups: `sc-de`",
@@ -1466,7 +1644,10 @@ async def execute_inspect_data(args: dict) -> str:
             "- **Cell-cell communication** (LIANA, CellChat): `sc-cell-communication`",
             "- **Gene regulatory networks** (SCENIC): `sc-grn`",
         ]
-    elif any(c in obs_cols_lower for c in ("pct_counts_mt", "n_genes_by_counts", "total_counts")):
+    elif any(
+        c in obs_cols_lower
+        for c in ("pct_counts_mt", "n_genes_by_counts", "total_counts")
+    ):
         platform = "Single-cell RNA-seq (raw / QC stage)"
         suggestions = [
             "- **QC metrics & visualization**: `sc-qc`",
@@ -1492,7 +1673,9 @@ async def execute_inspect_data(args: dict) -> str:
 
     preview_skill = skill_arg
     if preview_params and not preview_skill and method_arg:
-        preview_skill = _infer_skill_for_method(method_arg, preferred_domain=domain_hint)
+        preview_skill = _infer_skill_for_method(
+            method_arg, preferred_domain=domain_hint
+        )
 
     # Format report
     n_obs = info.get("n_obs", "?")
@@ -1513,7 +1696,9 @@ async def execute_inspect_data(args: dict) -> str:
         f"",
         f"| Property | Value |",
         f"|---|---|",
-        f"| **Shape** | {n_obs:,} cells × {n_vars:,} genes |" if isinstance(n_obs, int) else f"| **Shape** | {n_obs} cells × {n_vars} genes |",
+        f"| **Shape** | {n_obs:,} cells × {n_vars:,} genes |"
+        if isinstance(n_obs, int)
+        else f"| **Shape** | {n_obs} cells × {n_vars} genes |",
         f"| **Platform** | {platform} |",
         f"| **Cell metadata (obs)** | {obs_cols} |",
         f"| **Gene metadata (var)** | {var_cols} |",
@@ -1539,20 +1724,30 @@ async def execute_inspect_data(args: dict) -> str:
             lines.append(preview_block)
         else:
             lines.append("### Method Suitability & Parameter Preview")
-            lines.append("- No `param_hints` found for this `skill/method` combination.")
-            lines.append("- Add method hints in `skill.yaml`: `interface.parameters.hints.<method>`.")
+            lines.append(
+                "- No `param_hints` found for this `skill/method` combination."
+            )
+            lines.append(
+                "- Add method hints in `skill.yaml`: `interface.parameters.hints.<method>`."
+            )
             if not preview_skill:
-                lines.append("- Tip: pass `skill` with `inspect_data` for accurate method preview.")
+                lines.append(
+                    "- Tip: pass `skill` with `inspect_data` for accurate method preview."
+                )
 
-    lines.extend([
-        "",
-        "**Suggested analyses for this dataset:**",
-    ])
+    lines.extend(
+        [
+            "",
+            "**Suggested analyses for this dataset:**",
+        ]
+    )
     lines.extend(suggestions)
-    lines.extend([
-        "",
-        "Tell me which analysis you'd like to run and I'll get started.",
-    ])
+    lines.extend(
+        [
+            "",
+            "Tell me which analysis you'd like to run and I'll get started.",
+        ]
+    )
 
     return "\n".join(lines)
 
@@ -1575,13 +1770,16 @@ async def execute_make_directory(args: dict) -> str:
 
     # Validate against trusted directories
     _ensure_trusted_dirs()
-    resolved = target_path.resolve() if target_path.exists() else target_path.parent.resolve() / target_path.name
-    if not any(
-        str(resolved).startswith(str(td.resolve()))
-        for td in TRUSTED_DATA_DIRS
-    ):
+    resolved = (
+        target_path.resolve()
+        if target_path.exists()
+        else target_path.parent.resolve() / target_path.name
+    )
+    if not any(str(resolved).startswith(str(td.resolve())) for td in TRUSTED_DATA_DIRS):
         dirs_str = ", ".join(str(d) for d in TRUSTED_DATA_DIRS)
-        return f"Access denied: {target_path} is not in trusted directories ({dirs_str})"
+        return (
+            f"Access denied: {target_path} is not in trusted directories ({dirs_str})"
+        )
 
     try:
         target_path.mkdir(parents=True, exist_ok=True)
@@ -1725,7 +1923,9 @@ async def execute_remember(args: dict, session_id: str = None) -> str:
             )
             mem_id = await _core.memory_store.save_memory(session_id, insight)
             logger.info(f"Memory saved: insight {entity_type} {entity_id} = {label}")
-            return f"✓ Insight saved: {entity_type} '{entity_id}' → {label} ({confidence})"
+            return (
+                f"✓ Insight saved: {entity_type} '{entity_id}' → {label} ({confidence})"
+            )
 
         elif mem_type == "project_context":
             from omicsclaw.memory.compat import ProjectContextMemory
@@ -1737,7 +1937,9 @@ async def execute_remember(args: dict, session_id: str = None) -> str:
                 disease_model=args.get("disease_model"),
             )
 
-            if not any([ctx.project_goal, ctx.species, ctx.tissue_type, ctx.disease_model]):
+            if not any(
+                [ctx.project_goal, ctx.species, ctx.tissue_type, ctx.disease_model]
+            ):
                 return "Error: project_context requires at least one of: project_goal, species, tissue_type, disease_model."
 
             mem_id = await _core.memory_store.save_memory(session_id, ctx)
@@ -1761,7 +1963,9 @@ async def execute_remember(args: dict, session_id: str = None) -> str:
         return f"Error saving memory: {e}"
 
 
-async def _recall_fetch(sid: str, query: str, mem_type: str, limit: int, thread_id: str):
+async def _recall_fetch(
+    sid: str, query: str, mem_type: str, limit: int, thread_id: str
+):
     """One recall pass: query → search, else list-by-type/all. ``thread_id``
     scopes to that thread (empty = unscoped, the cross-thread fallback pass)."""
     store = _core.memory_store
@@ -1775,7 +1979,9 @@ async def _recall_fetch(sid: str, query: str, mem_type: str, limit: int, thread_
         return await store.get_memories(sid, limit=limit, thread_id=thread_id)
 
 
-async def execute_recall(args: dict, session_id: str = None, thread_id: str = "") -> str:
+async def execute_recall(
+    args: dict, session_id: str = None, thread_id: str = ""
+) -> str:
     """Retrieve memories from persistent storage.
 
     Bench (BE-RECALL-6): when a ``thread_id`` is active, recall defaults to that
@@ -1793,6 +1999,7 @@ async def execute_recall(args: dict, session_id: str = None, thread_id: str = ""
         limit = int(args.get("limit", 10))
 
         if thread_id:
+
             def _gid(m):
                 return getattr(m, "memory_id", None)
 
@@ -1807,7 +2014,9 @@ async def execute_recall(args: dict, session_id: str = None, thread_id: str = ""
             globals_extra: list = []
             if not query and not mem_type:
                 for gt in ("preference", "insight", "project_context"):
-                    for m in await _core.memory_store.get_memories(sid, gt, limit=limit):
+                    for m in await _core.memory_store.get_memories(
+                        sid, gt, limit=limit
+                    ):
                         if _gid(m) not in seen:
                             seen.add(_gid(m))
                             globals_extra.append(m)
@@ -1833,8 +2042,12 @@ async def execute_recall(args: dict, session_id: str = None, thread_id: str = ""
                 if m.memory_type == "preference":
                     parts.append(f"[preference] {m.key}: {m.value} (scope: {m.domain})")
                 elif m.memory_type == "insight":
-                    confidence = "confirmed" if m.confidence == "user_confirmed" else "predicted"
-                    parts.append(f"[insight] {m.entity_type} {m.entity_id}: {m.biological_label} ({confidence})")
+                    confidence = (
+                        "confirmed" if m.confidence == "user_confirmed" else "predicted"
+                    )
+                    parts.append(
+                        f"[insight] {m.entity_type} {m.entity_id}: {m.biological_label} ({confidence})"
+                    )
                 elif m.memory_type == "project_context":
                     ctx_parts = []
                     if m.project_goal:
@@ -1847,7 +2060,9 @@ async def execute_recall(args: dict, session_id: str = None, thread_id: str = ""
                         ctx_parts.append(f"Disease: {m.disease_model}")
                     parts.append(f"[project_context] {' | '.join(ctx_parts)}")
                 elif m.memory_type == "dataset":
-                    parts.append(f"[dataset] {m.file_path} (preprocessed={m.preprocessing_state})")
+                    parts.append(
+                        f"[dataset] {m.file_path} (preprocessed={m.preprocessing_state})"
+                    )
                 elif m.memory_type == "analysis":
                     parts.append(f"[analysis] {m.skill} ({m.method}) - {m.status}")
                 else:
@@ -1873,7 +2088,9 @@ async def execute_forget(args: dict, session_id: str = None) -> str:
 
     try:
         search_term = memory_id or query
-        memories = await _core.memory_store.search_memories(session_id or "", search_term)
+        memories = await _core.memory_store.search_memories(
+            session_id or "", search_term
+        )
 
         if not memories:
             return f"No memory found matching '{search_term}'."
@@ -1881,6 +2098,7 @@ async def execute_forget(args: dict, session_id: str = None) -> str:
         # Delete the first match
         target = memories[0]
         from omicsclaw.memory.compat import _TYPE_TO_DOMAIN, _memory_to_uri_path
+
         domain = _TYPE_TO_DOMAIN.get(target.memory_type, "core")
         path = _memory_to_uri_path(target)
         uri = f"{domain}://{path}"
@@ -1923,6 +2141,7 @@ async def execute_consult_knowledge(args: dict, **kwargs) -> str:
     """Query the OmicsClaw knowledge base for analysis guidance."""
     try:
         import time as _t
+
         _ck_start = _t.monotonic()
 
         from omicsclaw.knowledge import KnowledgeAdvisor
@@ -1936,7 +2155,9 @@ async def execute_consult_knowledge(args: dict, **kwargs) -> str:
         if not query:
             return "Error: 'query' parameter is required."
         if not advisor.ensure_available(auto_build=True):
-            return "Knowledge base not built yet. Run: python omicsclaw.py knowledge build"
+            return (
+                "Knowledge base not built yet. Run: python omicsclaw.py knowledge build"
+            )
 
         domain = args.get("domain", "all")
         category = args.get("category", "all")
@@ -1972,6 +2193,7 @@ async def execute_consult_knowledge(args: dict, **kwargs) -> str:
         _ck_elapsed_ms = (_t.monotonic() - _ck_start) * 1000
         try:
             from omicsclaw.knowledge.telemetry import get_telemetry
+
             results_count = result.count("--- Result") if result else 0
             get_telemetry().log_consult_knowledge(
                 session_id=kwargs.get("session_id", "unknown"),
@@ -2163,9 +2385,13 @@ def _resolve_trusted_data_paths(
             resolved.append(str(found[0]))
         elif len(found) > 1:
             sample = ", ".join(str(f) for f in found[:6])
-            problems.append(f"{candidate} (matches multiple files — pass a full path: {sample})")
+            problems.append(
+                f"{candidate} (matches multiple files — pass a full path: {sample})"
+            )
         else:
-            problems.append(f"{candidate} (not found in the workspace or a trusted data directory)")
+            problems.append(
+                f"{candidate} (not found in the workspace or a trusted data directory)"
+            )
     return resolved, problems
 
 
@@ -2212,16 +2438,27 @@ def _autonomous_artifacts(workspace_root: str, *, limit: int = 40) -> list[str]:
     out: list[str] = []
     try:
         root = Path(workspace_root)
+        claim_identities = collect_output_claim_identities(root)
         figures = root / "figures"
         if figures.is_dir():
             out.extend(
-                f"figures/{p.name}" for p in sorted(figures.iterdir()) if p.is_file()
+                f"figures/{p.name}"
+                for p in sorted(figures.iterdir())
+                if is_scientific_output_file(
+                    p,
+                    output_root=root,
+                    claim_identities=claim_identities,
+                )
             )
         for p in sorted(root.iterdir()):
             if (
-                p.is_file()
-                and p.suffix.lower() in _AUTONOMOUS_ARTIFACT_SUFFIXES
+                p.suffix.lower() in _AUTONOMOUS_ARTIFACT_SUFFIXES
                 and p.name not in _AUTONOMOUS_BOOKKEEPING_FILES
+                and is_scientific_output_file(
+                    p,
+                    output_root=root,
+                    claim_identities=claim_identities,
+                )
             ):
                 out.append(p.name)
     except OSError:
@@ -2349,7 +2586,9 @@ def _register_autonomous_media(
         collected, str(return_media or "").strip().lower(), root, always_anchor=True
     )
     if plan.pending_items:
-        pending_media[session_id] = pending_media.get(session_id, []) + plan.pending_items
+        pending_media[session_id] = (
+            pending_media.get(session_id, []) + plan.pending_items
+        )
     return plan.pending_items
 
 
@@ -2397,7 +2636,9 @@ async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
             output_root=str(OUTPUT_DIR),
             input_paths=input_paths,
             upstream_paths=upstream_paths,
-            project_id=str(kwargs.get("thread_id", "") or ""),  # ADR 0035: nest under active project
+            project_id=str(
+                kwargs.get("thread_id", "") or ""
+            ),  # ADR 0035: nest under active project
             language=language,
             max_repair_attempts=max_repair_attempts,
             context=str(args.get("context", "") or ""),
@@ -2438,7 +2679,12 @@ async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
             session_id = str(kwargs.get("session_id", "") or "")
             thread_id = str(kwargs.get("thread_id", "") or "")
             await _auto_capture_autonomous_run(
-                session_id, thread_id, goal, result.run_id, result.workspace_root, str(result.status)
+                session_id,
+                thread_id,
+                goal,
+                result.run_id,
+                result.workspace_root,
+                str(result.status),
             )
             if result.ok:
                 suggestion = await _compute_promotion_suggestion(
@@ -2454,15 +2700,100 @@ async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
         return f"Error running autonomous analysis: {e}"
 
 
+async def execute_candidate_plan_execute(
+    args: dict,
+    *,
+    session_id: str | None = None,
+    chat_id: int | str = 0,
+    thread_id: str = "",
+    candidate_chain_gate: dict | None = None,
+) -> str:
+    """Execute only the composite plan bound to the current confirmation gate."""
+    from omicsclaw.skill.plan_executor import (
+        CandidatePlanValidationError,
+        execute_candidate_plan,
+    )
+    from omicsclaw.skill.resource_scheduler import (
+        ResourceConfigurationError,
+    )
+
+    gate = candidate_chain_gate if isinstance(candidate_chain_gate, dict) else {}
+    plan = gate.get("candidate_chain")
+    confirmed_digest = str(gate.get("plan_digest") or "")
+    requested_digest = str(args.get("plan_digest") or "")
+    if not isinstance(plan, dict) or not plan:
+        return "Error: no candidate plan is pending for this conversation."
+    if gate.get("confirmed") is not True:
+        return "Error: the candidate plan has not been explicitly confirmed."
+    if not requested_digest or requested_digest != confirmed_digest:
+        return "Error: candidate plan digest does not match the confirmed plan."
+    pending_gate = _core.pending_candidate_chain_confirmations.get(chat_id)
+    if not isinstance(pending_gate, dict) or (
+        pending_gate.get("confirmed") is not True
+        or str(pending_gate.get("plan_digest") or "") != confirmed_digest
+    ):
+        return (
+            "Error: candidate plan confirmation is missing, stale, or already consumed."
+        )
+
+    mode = str(args.get("mode") or "").strip().lower()
+    if mode not in {"file", "path", "demo"}:
+        return "Error: mode must be one of 'file', 'path', or 'demo'."
+    input_path = ""
+    if mode == "path":
+        requested_path = str(args.get("file_path") or "").strip()
+        resolved = validate_input_path(requested_path, allow_dir=True)
+        if resolved is None:
+            return f"Error: input path is not trusted or does not exist: {requested_path!r}"
+        input_path = str(resolved)
+    elif mode == "file":
+        file_info = received_files.get(session_id) if session_id else None
+        input_path = str((file_info or {}).get("path") or "")
+        if not input_path:
+            return "Error: no uploaded input file is available for this session."
+
+    output_root = (
+        OUTPUT_DIR
+        / "candidate-plans"
+        / f"{confirmed_digest[:12]}-{uuid.uuid4().hex[:8]}"
+    )
+    # One confirmation authorizes one execution attempt. Consume before the
+    # first await so duplicate tool calls in the same model turn cannot race.
+    _core.pending_candidate_chain_confirmations.pop(chat_id, None)
+    try:
+        result = await execute_candidate_plan(
+            plan,
+            confirmed=True,
+            confirmed_digest=confirmed_digest,
+            input_path=input_path,
+            output_root=output_root,
+            demo=mode == "demo",
+            project_id=str(thread_id or session_id or chat_id or ""),
+        )
+    except (CandidatePlanValidationError, ResourceConfigurationError) as exc:
+        return f"Error: candidate plan validation failed: {exc}"
+
+    audit(
+        "candidate_plan_execute",
+        session_id=session_id,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        plan_digest=confirmed_digest,
+        success=result.success,
+        output_root=str(output_root),
+    )
+    return json.dumps(result.to_dict(), ensure_ascii=False, indent=2)
 
 
 # ---------------------------------------------------------------------------
 # Dispatch table + tool runtime builder
 # ---------------------------------------------------------------------------
 
+
 def _available_tool_executors() -> dict[str, object]:
     executors = {
         "omicsclaw": execute_omicsclaw,
+        "candidate_plan_execute": execute_candidate_plan_execute,
         "replot_skill": execute_replot_skill,
         "save_file": execute_save_file,
         "write_file": execute_write_file,

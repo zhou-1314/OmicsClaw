@@ -1,10 +1,11 @@
-# OmicsClaw Bot — Channel-specific dependencies
+# OmicsClaw legacy Channel-specific dependency inventory
 # ─────────────────────────────────────────────────────────────────────
 #
-# Install ALL channel deps:
-#     pip install -r bot/requirements-channels.txt
+# Canonical installation for the enabled Telegram path:
+#     pip install -e ".[channels]"
 #
-# Or install only what you need:
+# The remaining entries document disabled migration-source adapters.  Install
+# one directly only when developing its future authoritative cutover:
 #     pip install python-telegram-bot>=21.0          # Telegram
 #     pip install lark-oapi>=1.3.0                   # Feishu
 #     pip install discord.py>=2.3.0                  # Discord

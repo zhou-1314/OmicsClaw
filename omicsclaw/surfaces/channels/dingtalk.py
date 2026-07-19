@@ -23,8 +23,7 @@ import asyncio
 import json
 import logging
 import time
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
@@ -50,8 +49,9 @@ FILE_DOWNLOAD_URL = "https://api.dingtalk.com/v1.0/robot/messageFiles/download"
 @dataclass
 class DingTalkConfig(BaseChannelConfig):
     """DingTalk channel configuration."""
-    client_id: str = ""         # Robot App Key
-    client_secret: str = ""     # Robot App Secret
+
+    client_id: str = ""  # Robot App Key
+    client_secret: str = ""  # Robot App Secret
     text_chunk_limit: int = 4096
 
 
@@ -90,6 +90,7 @@ class DingTalkChannel(Channel):
     # ── Lifecycle ────────────────────────────────────────────────────
 
     async def start(self) -> None:
+        self.require_authoritative_ingress()
         try:
             import httpx
         except ImportError:
@@ -214,21 +215,25 @@ class DingTalkChannel(Channel):
 
         # System ping — respond immediately
         if data.get("type") == "SYSTEM" and headers.get("topic") == "ping":
-            await self._ws_send_json({
-                "code": 200,
-                "headers": headers,
-                "message": "OK",
-                "data": data.get("data", ""),
-            })
+            await self._ws_send_json(
+                {
+                    "code": 200,
+                    "headers": headers,
+                    "message": "OK",
+                    "data": data.get("data", ""),
+                }
+            )
             return
 
         # ACK the message
-        await self._ws_send_json({
-            "code": 200,
-            "headers": {"contentType": "application/json", "messageId": msg_id},
-            "message": "OK",
-            "data": "{}",
-        })
+        await self._ws_send_json(
+            {
+                "code": 200,
+                "headers": {"contentType": "application/json", "messageId": msg_id},
+                "message": "OK",
+                "data": "{}",
+            }
+        )
 
         if data.get("type") != "CALLBACK":
             return
@@ -274,7 +279,9 @@ class DingTalkChannel(Channel):
         """Process message through core LLM and send reply."""
         try:
             reply = await self.process_message(
-                chat_id, sender_id, content,
+                chat_id,
+                sender_id,
+                content,
                 platform="dingtalk",
             )
             if reply:
@@ -282,7 +289,9 @@ class DingTalkChannel(Channel):
         except Exception as e:
             logger.error(f"DingTalk process error: {e}", exc_info=True)
             try:
-                await self.send(chat_id, f"Sorry, an error occurred: {type(e).__name__}")
+                await self.send(
+                    chat_id, f"Sorry, an error occurred: {type(e).__name__}"
+                )
             except Exception:
                 pass
 
@@ -304,10 +313,12 @@ class DingTalkChannel(Channel):
                 "robotCode": cfg.client_id,
                 "userIds": [chat_id],
                 "msgKey": "sampleMarkdown",
-                "msgParam": json.dumps({
-                    "text": raw_text,
-                    "title": "OmicsClaw",
-                }),
+                "msgParam": json.dumps(
+                    {
+                        "text": raw_text,
+                        "title": "OmicsClaw",
+                    }
+                ),
             },
             headers={"x-acs-dingtalk-access-token": token},
         )
@@ -353,7 +364,10 @@ class DingTalkChannel(Channel):
             return False
 
     async def _upload_media(
-        self, token: str, file_path: str, media_type: str = "image",
+        self,
+        token: str,
+        file_path: str,
+        media_type: str = "image",
     ) -> str | None:
         """Upload a file to DingTalk and return media_id."""
         try:

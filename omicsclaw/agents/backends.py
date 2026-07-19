@@ -17,6 +17,8 @@ import shlex
 import uuid
 from pathlib import Path
 
+from omicsclaw.skill.execution.environment import scrub_internal_control_credentials
+
 logger = logging.getLogger(__name__)
 
 # System path prefixes to block — only truly dangerous system areas.
@@ -121,7 +123,8 @@ def create_sandbox_backend(workspace_dir: str):
                 virtual_mode=False,
                 timeout=300,
                 max_output_bytes=100_000,
-                inherit_env=True,
+                env=scrub_internal_control_credentials(os.environ),
+                inherit_env=False,
                 **kwargs,
             )
             self._sandbox_id = f"omicsclaw-{uuid.uuid4().hex[:8]}"

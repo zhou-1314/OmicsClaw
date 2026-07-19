@@ -51,6 +51,7 @@ for SVs use `genomics-sv-detection`; for functional annotation use
 - `tables/variants_per_chrom.csv`
 - `report.md`
 - `result.json`
+- Produces artifact `genomics.variant_table` as `tables/variants.csv` (`csv`)
 
 ## Flow
 

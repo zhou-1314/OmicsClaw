@@ -37,10 +37,14 @@ interface:
     - pdf
   outputs:
     files:
-    - output_dir/extracted_metadata.json
-    - output_dir/report.md
-    - output_dir/result.json
+    - extracted_metadata.json
+    - report.md
+    - result.json
     - <--data-dir>/<GSEid>/...
+    artifacts:
+    - kind: literature.dataset_handoff
+      path: extracted_metadata.json
+      format: json
 runtime:
   entry: literature_parse.py
 deps:
@@ -57,3 +61,7 @@ resources:
   - output_contract.md
   - parameters.md
   homepage: https://github.com/OmicsClaw/OmicsClaw
+security:
+  data_egress: optional
+  network: optional
+  writes: unrestricted

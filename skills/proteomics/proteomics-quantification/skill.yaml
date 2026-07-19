@@ -34,11 +34,19 @@ interface:
     - lfq
     file_types:
     - csv
+    artifacts:
+    - kind: proteomics.peptide_table
+      formats:
+      - csv
   outputs:
     files:
     - tables/protein_abundance.csv
     - report.md
     - result.json
+    artifacts:
+    - kind: proteomics.abundance_matrix
+      path: tables/protein_abundance.csv
+      format: csv
 runtime:
   entry: proteomics_quantification.py
 deps:

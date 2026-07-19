@@ -8,6 +8,14 @@ pretending a unified loader exists.
 Runtime extension detection lives in `omicsclaw/loaders/__init__.py`. Actual
 analysis loading usually lives under `skills/<domain>/`.
 
+The shared execution Gate performs bounded structural inspection through
+`omicsclaw.skill.preconditions.probe_input_profile()`: up to 1 MiB of
+decompressed text for CSV/TSV headers, VCF headers, and the first FASTQ record,
+plus an entry/depth-bounded directory walk that returns governed semantic
+signatures instead of raw inventories. These facts are enforced only when a
+skill declares a matching `interface.inputs.preconditions.content` contract;
+the probe is not a replacement for each scientific loader's full validation.
+
 ## spatial
 
 **Supported suffixes**: `.h5ad`, `.h5`, `.hdf5`, `.zarr`, 10x Visium

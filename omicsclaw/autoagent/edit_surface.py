@@ -9,8 +9,8 @@ Level 3 (orchestration): Agent config, prompts, context layers
 Level 4 (generative):   Auto-generated skill wrappers
 
 Frozen infrastructure (never editable by Meta-Agent):
-  runtime/*, routing/*, memory/*, autoagent/api.py, judge.py,
-  tool_executor.py, context_assembler.py
+  runtime/*, routing/*, memory/*, AutoAgent execution/authority/scoring
+  control-plane modules, tool_executor.py, context_assembler.py
 """
 
 from __future__ import annotations
@@ -79,9 +79,9 @@ def resolve_path_within_root(
 class EditSurface:
     """The bounded editable surface for a harness evolution session.
 
-    Constructed with a maximum level (1-4) and an optional explicit
-    file list.  Files outside the surface are rejected before patch
-    application.
+    Constructed with a maximum level (1-4) and an optional explicit file
+    subset.  Explicit files may only narrow the active levels; they cannot
+    expand them.  Files outside the surface are rejected before patching.
     """
 
     max_level: int
@@ -121,6 +121,11 @@ class EditSurface:
                     f"Explicit file {surface_path.rel_path!r} is frozen and "
                     "cannot be edited."
                 )
+            if not self._matches_active_level(surface_path.rel_path):
+                raise ValueError(
+                    f"Explicit file {surface_path.rel_path!r} is outside the "
+                    f"active editable levels (max_level={self.max_level})."
+                )
             if surface_path.rel_path not in seen:
                 normalized.append(surface_path.rel_path)
                 seen.add(surface_path.rel_path)
@@ -137,12 +142,15 @@ class EditSurface:
         return normalized
 
     def _is_rel_path_editable(self, rel_path: str) -> bool:
-        if _is_frozen(rel_path):
+        if _is_frozen(rel_path) or not self._matches_active_level(rel_path):
             return False
 
         if self._explicit_file_set:
             return rel_path in self._explicit_file_set
 
+        return any(lv.matches(rel_path) for lv in self._resolved_levels)
+
+    def _matches_active_level(self, rel_path: str) -> bool:
         return any(lv.matches(rel_path) for lv in self._resolved_levels)
 
     def resolve_path(self, path: str | Path) -> SurfacePath:
@@ -159,17 +167,15 @@ class EditSurface:
                 f"File {rel_path!r} is frozen and cannot be edited."
             )
 
-        if self._explicit_file_set and rel_path not in self._explicit_file_set:
-            raise PermissionError(
-                f"File {rel_path!r} is outside the explicit editable file list."
-            )
-
-        if not self._explicit_file_set and not any(
-            lv.matches(rel_path) for lv in self._resolved_levels
-        ):
+        if not self._matches_active_level(rel_path):
             raise PermissionError(
                 f"File {rel_path!r} is outside the editable surface "
                 f"(max_level={self.max_level})."
+            )
+
+        if self._explicit_file_set and rel_path not in self._explicit_file_set:
+            raise PermissionError(
+                f"File {rel_path!r} is outside the explicit editable file list."
             )
 
         return surface_path
@@ -264,7 +270,7 @@ class EditSurface:
                 lines.append("")
 
         if self.explicit_files:
-            lines.append("  Explicit file list:")
+            lines.append("  Explicit file subset (within active levels):")
             for f in self.explicit_files:
                 lines.append(f"    - {f}")
         else:
@@ -299,7 +305,10 @@ class EditSurface:
 LEVEL_1 = EditLevel(
     level=1,
     name="skill_docs",
-    description="SKILL.md files — descriptions, param hints, defaults",
+    description=(
+        "SKILL.md human-owned narrative only; YAML frontmatter and generated "
+        "Inputs & Outputs remain read-only"
+    ),
     patterns=(
         "skills/**/SKILL.md",
     ),
@@ -348,15 +357,10 @@ FROZEN_PATTERNS = (
     "omicsclaw/runtime/*",
     "omicsclaw/routing/*",
     "omicsclaw/memory/*",
-    "omicsclaw/autoagent/api.py",
-    "omicsclaw/autoagent/judge.py",
-    "omicsclaw/autoagent/hard_gates.py",
-    "omicsclaw/autoagent/trace.py",
-    "omicsclaw/autoagent/evaluator.py",
-    "omicsclaw/autoagent/experiment_ledger.py",
-    "omicsclaw/autoagent/constants.py",
-    "omicsclaw/core/registry.py",
-    "omicsclaw/core/skill_protocol.py",
+    "omicsclaw/autoagent/*",
+    "omicsclaw/skill/*",
+    "omicsclaw/common/*",
+    "omicsclaw/core/*",
     "omicsclaw/execution/*",
     "omicsclaw/__init__.py",
     "omicsclaw.py",

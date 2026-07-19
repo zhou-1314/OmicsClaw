@@ -31,6 +31,10 @@ interface:
   inputs:
     file_types:
     - csv
+    artifacts:
+    - kind: metabolomics.differential_results
+      formats:
+      - csv
   outputs:
     files:
     - tables/pathway_enrichment.csv

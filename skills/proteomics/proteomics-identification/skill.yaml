@@ -40,6 +40,10 @@ interface:
     - tables/peptides.csv
     - report.md
     - result.json
+    artifacts:
+    - kind: proteomics.peptide_table
+      path: tables/peptides.csv
+      format: csv
 runtime:
   entry: proteomics_identification.py
 deps:

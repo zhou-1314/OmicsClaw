@@ -1,9 +1,14 @@
 """Tests for the shared query engine runtime."""
 
 import asyncio
+import copy
 import json
 from types import SimpleNamespace
 
+import pytest
+
+from omicsclaw.attachments import AttachmentIntegrityError
+from omicsclaw.attachments.rendering import AttachmentContentAdapter
 from omicsclaw.extensions import (
     ExtensionManifest,
     extension_store_dir,
@@ -34,6 +39,7 @@ from omicsclaw.runtime.tools.registry import ToolRegistry
 from omicsclaw.runtime.storage.tool_result import ToolResultStore
 from omicsclaw.runtime.tools.spec import APPROVAL_MODE_ASK, ToolSpec
 from omicsclaw.runtime.storage.transcript import TranscriptStore, sanitize_tool_history
+from omicsclaw.runtime.storage.canonical_transcript import CanonicalTranscript
 from omicsclaw.common.user_guidance import format_user_guidance_payload
 
 
@@ -130,6 +136,202 @@ class _FakeUsage:
         self.prompt_tokens = prompt_tokens
         self.completion_tokens = completion_tokens
         self.total_tokens = total_tokens or (prompt_tokens + completion_tokens)
+
+
+class _RecordingContentAdapter:
+    def __init__(self, *, durable_content, rendered_content):
+        self.durable_content = durable_content
+        self.rendered_content = rendered_content
+        self.render_inputs = []
+        self.restore_inputs = []
+
+    def render_messages(self, messages):
+        self.render_inputs.append(copy.deepcopy(messages))
+        return self._replace(messages, self.durable_content, self.rendered_content)
+
+    def restore_messages(self, messages):
+        self.restore_inputs.append(copy.deepcopy(messages))
+        return self._replace(messages, self.rendered_content, self.durable_content)
+
+    @staticmethod
+    def _replace(messages, source, target):
+        replaced = copy.deepcopy(messages)
+        for message in replaced:
+            if message.get("content") == source:
+                message["content"] = copy.deepcopy(target)
+        return replaced
+
+
+class _UnexpectedAttachmentResolver:
+    def resolve_bytes(self, _reference):
+        raise AssertionError("invalid current content must fail before byte resolution")
+
+
+@pytest.mark.parametrize(
+    "user_content",
+    (
+        "inspect data:image/png;base64,QUJD",
+        [
+            {
+                "type": "text",
+                "text": "[[OMICSCLAW_ATTACHMENT_V1:not-json]]",
+            }
+        ],
+        [{"type": "attachment_ref", "attachment": {"bad": "reference"}}],
+        [
+            {
+                "type": "image_url",
+                "image_url": {"url": "https://example.invalid/image.png"},
+            }
+        ],
+    ),
+)
+def test_query_engine_validates_current_user_content_before_canonical_append(
+    tmp_path,
+    user_content,
+):
+    transcript = CanonicalTranscript(tmp_path / "canonical")
+    conversation_id = "1" * 32
+    turn_id = "2" * 32
+    turn = transcript.bind_turn(conversation_id, turn_id)
+    adapter = AttachmentContentAdapter(_UnexpectedAttachmentResolver())
+
+    try:
+        with pytest.raises(AttachmentIntegrityError):
+            asyncio.run(
+                run_query_engine(
+                    llm=_FakeLLM(
+                        [_FakeResponse(_FakeMessage(content="must not run"))]
+                    ),
+                    context=QueryEngineContext(
+                        chat_id=conversation_id,
+                        session_id="session-current-content-validation",
+                        system_prompt="SYSTEM",
+                        user_message_content=user_content,
+                        content_adapter=adapter,
+                    ),
+                    tool_runtime=ToolRegistry([]).build_runtime({}),
+                    transcript_store=turn,
+                    tool_result_store=ToolResultStore(
+                        storage_dir=tmp_path / "tool_results"
+                    ),
+                    config=QueryEngineConfig(model="fake-model"),
+                )
+            )
+
+        assert transcript.get_history(conversation_id) == []
+    finally:
+        transcript.close()
+
+
+def test_run_query_engine_renders_provider_content_but_persists_stored_content(
+    tmp_path,
+):
+    durable_content = [
+        {"type": "attachment_ref", "attachment_id": "attachment-1"}
+    ]
+    rendered_content = [
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,EPHEMERAL"},
+        }
+    ]
+    adapter = _RecordingContentAdapter(
+        durable_content=durable_content,
+        rendered_content=rendered_content,
+    )
+    llm = _FakeLLM([_FakeResponse(_FakeMessage(content="done", tool_calls=None))])
+    transcript_store = TranscriptStore(sanitizer=sanitize_tool_history)
+
+    result = asyncio.run(
+        run_query_engine(
+            llm=llm,
+            context=QueryEngineContext(
+                chat_id="chat-content-adapter",
+                session_id="session-content-adapter",
+                system_prompt="SYSTEM",
+                user_message_content=rendered_content,
+                stored_user_content=durable_content,
+                content_adapter=adapter,
+            ),
+            tool_runtime=ToolRegistry([]).build_runtime({}),
+            transcript_store=transcript_store,
+            tool_result_store=ToolResultStore(storage_dir=tmp_path / "tool_results"),
+            config=QueryEngineConfig(model="fake-model"),
+        )
+    )
+
+    assert result == "done"
+    provider_user = next(
+        message for message in llm.calls[0]["messages"] if message["role"] == "user"
+    )
+    assert provider_user["content"] == rendered_content
+    history = transcript_store.get_history("chat-content-adapter")
+    assert history[0] == {"role": "user", "content": durable_content}
+    persisted = json.dumps(history, sort_keys=True)
+    assert "EPHEMERAL" not in persisted
+    assert adapter.__class__.__name__ not in persisted
+
+
+def test_run_query_engine_rerenders_durable_history_on_the_next_turn(tmp_path):
+    durable_content = [
+        {"type": "attachment_ref", "attachment_id": "attachment-1"}
+    ]
+    rendered_content = [
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,EPHEMERAL"},
+        }
+    ]
+    adapter = _RecordingContentAdapter(
+        durable_content=durable_content,
+        rendered_content=rendered_content,
+    )
+    llm = _FakeLLM(
+        [
+            _FakeResponse(_FakeMessage(content="first", tool_calls=None)),
+            _FakeResponse(_FakeMessage(content="second", tool_calls=None)),
+        ]
+    )
+    transcript_store = TranscriptStore(sanitizer=sanitize_tool_history)
+    tool_runtime = ToolRegistry([]).build_runtime({})
+    result_store = ToolResultStore(storage_dir=tmp_path / "tool_results")
+
+    for user_message, stored_message in (
+        (rendered_content, durable_content),
+        ("follow up", None),
+    ):
+        asyncio.run(
+            run_query_engine(
+                llm=llm,
+                context=QueryEngineContext(
+                    chat_id="chat-rerender",
+                    session_id="session-rerender",
+                    system_prompt="SYSTEM",
+                    user_message_content=user_message,
+                    stored_user_content=stored_message,
+                    content_adapter=adapter,
+                ),
+                tool_runtime=tool_runtime,
+                transcript_store=transcript_store,
+                tool_result_store=result_store,
+                config=QueryEngineConfig(model="fake-model"),
+            )
+        )
+
+    second_provider_history = llm.calls[1]["messages"]
+    assert any(
+        message.get("role") == "user" and message.get("content") == rendered_content
+        for message in second_provider_history
+    )
+    assert len(adapter.render_inputs) == 2
+    assert any(
+        message.get("content") == durable_content
+        for message in adapter.render_inputs[1]
+    )
+    assert "EPHEMERAL" not in json.dumps(
+        transcript_store.get_history("chat-rerender"), sort_keys=True
+    )
 
 
 
@@ -1251,6 +1453,74 @@ def test_run_query_engine_retries_once_with_reactive_compact_on_prompt_too_long(
     assert len(llm.calls[1]["messages"]) < len(llm.calls[0]["messages"])
 
 
+def test_run_query_engine_restores_rendered_content_before_compaction_persistence(
+    tmp_path,
+):
+    durable_content = [
+        {"type": "attachment_ref", "attachment_id": "attachment-compact"}
+    ]
+    rendered_content = [
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,EPHEMERAL_COMPACT"},
+        }
+    ]
+    adapter = _RecordingContentAdapter(
+        durable_content=durable_content,
+        rendered_content=rendered_content,
+    )
+    llm = _FakeLLM(
+        events=[
+            _FakePromptTooLongError(),
+            _FakeResponse(_FakeMessage(content="done after retry", tool_calls=None)),
+        ]
+    )
+    transcript_store = TranscriptStore(sanitizer=sanitize_tool_history)
+    transcript_store.messages_by_chat["chat-compact-restore"] = [
+        {"role": "user", "content": "older context " + ("A" * 1200)},
+        {"role": "assistant", "content": "older answer " + ("B" * 1200)},
+        {"role": "user", "content": "another question " + ("C" * 1200)},
+        {"role": "assistant", "content": "another answer " + ("D" * 1200)},
+    ]
+
+    result = asyncio.run(
+        run_query_engine(
+            llm=llm,
+            context=QueryEngineContext(
+                chat_id="chat-compact-restore",
+                session_id="session-compact-restore",
+                system_prompt="SYSTEM",
+                user_message_content=rendered_content,
+                stored_user_content=durable_content,
+                content_adapter=adapter,
+            ),
+            tool_runtime=ToolRegistry([]).build_runtime({}),
+            transcript_store=transcript_store,
+            tool_result_store=ToolResultStore(storage_dir=tmp_path / "tool_results"),
+            config=QueryEngineConfig(
+                model="fake-model",
+                llm_error_types=(_FakeAPIError,),
+                context_compaction=ContextCompactionConfig(
+                    max_prompt_tokens=12_500,
+                    reactive_preserve_messages=2,
+                    reactive_preserve_tokens=60,
+                    protected_tail_messages=1,
+                ),
+            ),
+        )
+    )
+
+    assert result == "done after retry"
+    assert adapter.restore_inputs
+    assert any(
+        message.get("content") == rendered_content
+        for message in adapter.restore_inputs[-1]
+    )
+    durable_history = transcript_store.get_history("chat-compact-restore")
+    assert any(message.get("content") == durable_content for message in durable_history)
+    assert "EPHEMERAL_COMPACT" not in json.dumps(durable_history, sort_keys=True)
+
+
 def test_run_query_engine_reactive_compact_only_attempts_once(tmp_path):
     llm = _FakeLLM(
         events=[
@@ -1343,6 +1613,76 @@ def test_run_query_engine_injects_token_budget_nudge_and_merges_final_response(t
     assert history[2]["role"] == "user"
     assert "Continue working on the same request." in history[2]["content"]
     assert history[3] == {"role": "assistant", "content": "phase two"}
+
+
+def test_canonical_transcript_separates_public_budget_merge_from_provider_view(
+    tmp_path,
+):
+    llm = _FakeLLM(
+        responses=[
+            _FakeResponse(
+                _FakeMessage(content="phase one", tool_calls=None),
+                usage=_FakeUsage(
+                    prompt_tokens=20,
+                    completion_tokens=200,
+                    total_tokens=220,
+                ),
+            ),
+            _FakeResponse(
+                _FakeMessage(content="phase two", tool_calls=None),
+                usage=_FakeUsage(
+                    prompt_tokens=25,
+                    completion_tokens=850,
+                    total_tokens=875,
+                ),
+            ),
+        ]
+    )
+    transcript = CanonicalTranscript(tmp_path / "canonical")
+    adapter = transcript.bind_turn("conversation-budget", "turn-budget")
+    result_store = ToolResultStore(storage_dir=tmp_path / "tool_results_canonical")
+    runtime = ToolRegistry([]).build_runtime({})
+    try:
+        result = asyncio.run(
+            run_query_engine(
+                llm=llm,
+                context=QueryEngineContext(
+                    chat_id="conversation-budget",
+                    session_id="session-budget",
+                    system_prompt="SYSTEM",
+                    user_message_content="finish the task",
+                    token_budget="+1000",
+                ),
+                tool_runtime=runtime,
+                transcript_store=adapter,
+                tool_result_store=result_store,
+                config=QueryEngineConfig(
+                    model="fake-model",
+                    llm_error_types=(_FakeAPIError,),
+                ),
+            )
+        )
+
+        assert result == "phase one\n\nphase two"
+        before_promotion = transcript.get_history("conversation-budget")
+        assert [message.get("content") for message in before_promotion] == [
+            "finish the task",
+            "phase one",
+            before_promotion[2]["content"],
+        ]
+        assert "Continue working on the same request." in before_promotion[2]["content"]
+
+        candidate = adapter.stage_terminal(result)
+        transcript.promote_terminal(
+            candidate.entry_id,
+            candidate.content_sha256,
+        )
+        after_promotion = transcript.get_history("conversation-budget")
+        assert after_promotion[-1] == {"role": "assistant", "content": "phase two"}
+        assert after_promotion[-1]["content"] != result
+        assert transcript.get_entry(candidate.entry_id).public_text == result
+    finally:
+        transcript.close()
 
 
 class _FakeMidStreamErrorResponse:

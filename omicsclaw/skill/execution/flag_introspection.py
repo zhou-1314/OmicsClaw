@@ -20,9 +20,11 @@ Two flag sources exist:
 
 from __future__ import annotations
 
+import ast
+import os
 import re
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping
 
 # Framework-injected flags the runner resolves itself; a skill never needs to
 # (and must not) re-declare them.  Mirrors ``schema.RESERVED_FLAGS`` and
@@ -35,6 +37,244 @@ RUNNER_BLOCKED_FLAGS = frozenset({"--input", "--output", "--demo"})
 # short flags (e.g. ``-m``) are correctly NOT captured.
 _ADD_ARGUMENT_OPEN_RE = re.compile(r"add_argument\s*\(")
 _FLAG_LITERAL_RE = re.compile(r"""["'](--[\w-]+)["']""")
+
+
+def _module_assignments(tree: ast.Module) -> dict[str, ast.AST]:
+    assignments: dict[str, ast.AST] = {}
+    for statement in tree.body:
+        if isinstance(statement, ast.Assign):
+            for target in statement.targets:
+                if isinstance(target, ast.Name):
+                    assignments[target.id] = statement.value
+        elif (
+            isinstance(statement, ast.AnnAssign)
+            and isinstance(statement.target, ast.Name)
+            and statement.value is not None
+        ):
+            assignments[statement.target.id] = statement.value
+    return assignments
+
+
+def _static_string_values(
+    node: ast.AST,
+    assignments: dict[str, ast.AST],
+    resolving: frozenset[str] = frozenset(),
+    external_values: Mapping[str, set[str]] | None = None,
+) -> set[str] | None:
+    """Resolve bounded literal values without importing or executing a Skill."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return {node.value}
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        values: set[str] = set()
+        for element in node.elts:
+            resolved = _static_string_values(
+                element,
+                assignments,
+                resolving,
+                external_values,
+            )
+            if resolved is None:
+                return None
+            values.update(resolved)
+        return values
+    if isinstance(node, ast.Dict):
+        values: set[str] = set()
+        for key in node.keys:
+            if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
+                return None
+            values.add(key.value)
+        return values
+    if isinstance(node, ast.Name):
+        if node.id in resolving:
+            return None
+        if node.id in assignments:
+            return _static_string_values(
+                assignments[node.id],
+                assignments,
+                resolving | {node.id},
+                external_values,
+            )
+        if external_values is not None and node.id in external_values:
+            return set(external_values[node.id])
+        return None
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _static_string_values(
+            node.left,
+            assignments,
+            resolving,
+            external_values,
+        )
+        right = _static_string_values(
+            node.right,
+            assignments,
+            resolving,
+            external_values,
+        )
+        if left is None or right is None:
+            return None
+        return left | right
+    if isinstance(node, ast.Call):
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id in {"list", "tuple", "set"}
+            and len(node.args) == 1
+            and not node.keywords
+        ):
+            return _static_string_values(
+                node.args[0],
+                assignments,
+                resolving,
+                external_values,
+            )
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "keys"
+            and not node.args
+            and not node.keywords
+        ):
+            return _static_string_values(
+                node.func.value,
+                assignments,
+                resolving,
+                external_values,
+            )
+    return None
+
+
+def argparse_flag_accepts_value(
+    script_text: str,
+    flag: str,
+    value: str,
+    *,
+    external_values: Mapping[str, set[str]] | None = None,
+) -> bool | None:
+    """Statically decide whether one argparse flag accepts a value.
+
+    ``True`` covers either an open string flag or a resolved literal choice.
+    ``False`` means the flag is absent or the resolved choices reject the
+    value. ``None`` means a choices expression exists but cannot be proven
+    without executing Skill code; governed plan binding must fail closed on
+    that state.
+    """
+    try:
+        tree = ast.parse(script_text)
+    except (SyntaxError, ValueError):
+        return None
+    assignments = _module_assignments(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        function = node.func
+        if not (
+            (isinstance(function, ast.Attribute) and function.attr == "add_argument")
+            or (isinstance(function, ast.Name) and function.id == "add_argument")
+        ):
+            continue
+        declared_flags = {
+            argument.value
+            for argument in node.args
+            if isinstance(argument, ast.Constant)
+            and isinstance(argument.value, str)
+            and argument.value.startswith("--")
+        }
+        if flag not in declared_flags:
+            continue
+        choices = next(
+            (keyword.value for keyword in node.keywords if keyword.arg == "choices"),
+            None,
+        )
+        if choices is None or (
+            isinstance(choices, ast.Constant) and choices.value is None
+        ):
+            return True
+        accepted = _static_string_values(
+            choices,
+            assignments,
+            external_values=external_values,
+        )
+        return None if accepted is None else value in accepted
+    return False
+
+
+def _project_root_for_script(script_path: Path) -> Path | None:
+    for parent in script_path.parents:
+        if parent.name == "skills":
+            return parent.parent
+    return None
+
+
+def _read_stable_python_source(path: Path) -> str:
+    if path.is_symlink():
+        raise ValueError(f"refusing symbolic-link Python source: {path}")
+    before = path.read_bytes()
+    text = before.decode("utf-8")
+    if path.read_bytes() != before:
+        raise ValueError(f"Python source changed while being inspected: {path}")
+    return text
+
+
+def _controlled_import_values(
+    tree: ast.Module,
+    *,
+    script_path: Path,
+) -> dict[str, set[str]]:
+    """Resolve literal constants imported from project-local ``skills`` modules."""
+    project_root = _project_root_for_script(script_path)
+    if project_root is None:
+        return {}
+    values: dict[str, set[str]] = {}
+    for statement in tree.body:
+        if (
+            not isinstance(statement, ast.ImportFrom)
+            or statement.level != 0
+            or not statement.module
+            or not statement.module.startswith("skills.")
+        ):
+            continue
+        relative = Path(*statement.module.split("."))
+        module_path = project_root / relative.with_suffix(".py")
+        if not module_path.is_file():
+            module_path = project_root / relative / "__init__.py"
+        try:
+            module_text = _read_stable_python_source(module_path)
+            module_tree = ast.parse(module_text)
+        except (OSError, UnicodeError, SyntaxError, ValueError):
+            continue
+        assignments = _module_assignments(module_tree)
+        for imported in statement.names:
+            if imported.name == "*" or imported.name not in assignments:
+                continue
+            resolved = _static_string_values(
+                assignments[imported.name],
+                assignments,
+            )
+            if resolved is not None:
+                values[imported.asname or imported.name] = resolved
+    return values
+
+
+def argparse_path_flag_accepts_value(
+    script_path: str | Path,
+    flag: str,
+    value: str,
+) -> bool | None:
+    """Path-aware value check with controlled project-local import resolution."""
+    path = Path(os.path.abspath(Path(script_path).expanduser()))
+    try:
+        text = _read_stable_python_source(path)
+        tree = ast.parse(text)
+        external_values = _controlled_import_values(tree, script_path=path)
+        accepted = argparse_flag_accepts_value(
+            text,
+            flag,
+            value,
+            external_values=external_values,
+        )
+        if _read_stable_python_source(path) != text:
+            raise ValueError(f"Python source changed while being inspected: {path}")
+        return accepted
+    except (OSError, UnicodeError, SyntaxError, ValueError):
+        return None
 
 
 def extract_argparse_flags(script_text: str) -> set[str]:

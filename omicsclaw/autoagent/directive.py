@@ -7,9 +7,6 @@ the experiment history, and asks it to suggest the next parameter set.
 
 from __future__ import annotations
 
-from typing import Any
-
-from omicsclaw.autoagent.evaluator import Evaluator
 from omicsclaw.autoagent.experiment_ledger import ExperimentLedger
 from omicsclaw.autoagent.metrics_registry import MetricDef
 from omicsclaw.autoagent.search_space import SearchSpace

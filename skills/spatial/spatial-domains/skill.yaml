@@ -230,3 +230,9 @@ resources:
   figures: r_visualization/
   tests: tests/
   homepage: https://github.com/TianGzlab/OmicsClaw
+  compute:
+    cpu_cores: 4
+    memory_mib: 8192
+    gpu_devices: 0
+    threads: 4
+    temporary_disk_mib: 4096

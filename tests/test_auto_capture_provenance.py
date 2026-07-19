@@ -132,6 +132,32 @@ def test_output_artifact_names_caps_large_dir(tmp_path):
     assert "more files" in names[-1]
 
 
+def test_output_artifact_names_hides_internal_run_claim(tmp_path):
+    from omicsclaw.common.output_claim import OUTPUT_CLAIM_FILENAME
+    from omicsclaw.skill.orchestration import _output_artifact_names
+
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    (output_dir / OUTPUT_CLAIM_FILENAME).write_text("{}\n", encoding="utf-8")
+    (output_dir / "result.json").write_text("{}\n", encoding="utf-8")
+
+    assert _output_artifact_names(output_dir) == ["result.json"]
+
+
+def test_output_artifact_names_hides_hardlink_to_internal_claim(tmp_path):
+    from omicsclaw.common.output_claim import OUTPUT_CLAIM_FILENAME
+    from omicsclaw.skill.orchestration import _output_artifact_names
+
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    claim = output_dir / OUTPUT_CLAIM_FILENAME
+    claim.write_text("{}\n", encoding="utf-8")
+    (output_dir / "claim-alias.json").hardlink_to(claim)
+    (output_dir / "result.json").write_text("{}\n", encoding="utf-8")
+
+    assert _output_artifact_names(output_dir) == ["result.json"]
+
+
 # --------------------------------------------------------------------------- #
 # _auto_capture_analysis — provenance from result.json                         #
 # --------------------------------------------------------------------------- #

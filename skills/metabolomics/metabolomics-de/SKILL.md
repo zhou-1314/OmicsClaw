@@ -45,6 +45,7 @@ analysis" output.
 **Inputs**
 
 - File types: `.csv`
+- Accepts artifact `metabolomics.feature_matrix` (`csv`)
 
 **Outputs**
 
@@ -53,6 +54,7 @@ analysis" output.
 - `figures/pca_scores.png`
 - `report.md`
 - `result.json`
+- Produces artifact `metabolomics.differential_results` as `tables/differential_features.csv` (`csv`)
 
 ## Flow
 

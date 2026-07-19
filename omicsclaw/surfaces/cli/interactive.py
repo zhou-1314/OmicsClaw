@@ -18,6 +18,7 @@ import random
 import re
 import shlex
 import sys
+import uuid
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,13 @@ except ImportError:
 
 from omicsclaw.common.runtime_env import load_project_dotenv
 from omicsclaw.common.user_guidance import strip_user_guidance_lines
+from omicsclaw.control import (
+    ControlRuntime,
+    ControlRuntimePorts,
+    RawContentBlockV1,
+    RawInboundV1,
+    RunRuntime,
+)
 
 from ._constants import (
     LOGO_GRADIENT,
@@ -100,6 +108,12 @@ from ._omicsclaw_actions import (
     list_skills_text,
     run_skill_command,
 )
+from ._canonical_run_support import (
+    build_canonical_demo_failure_result,
+    execute_canonical_demo_run,
+    open_cli_runtime_bundle,
+    reopen_cli_runtime_bundle,
+)
 from ._plan_mode_support import (
     build_approve_plan_command_view as build_interactive_approve_plan_command_view,
     build_do_current_task_command_view,
@@ -129,8 +143,10 @@ from ._interpret_command_support import (
 )
 from ._skill_run_support import (
     SkillRunExecutionView,
+    SkillRunRouteKind,
     build_skill_run_exception_result,
     build_skill_run_execution_view,
+    classify_skill_run_route,
     parse_skill_run_command,
 )
 from ._skill_management_support import (
@@ -187,7 +203,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # OmicsClaw paths
 # ---------------------------------------------------------------------------
-_OMICSCLAW_DIR = Path(__file__).resolve().parent.parent.parent
+# ``interactive.py`` moved under ``omicsclaw/surfaces/cli`` in ADR 0005.
+# Four parents reach the repository root; three only reach the package root.
+_OMICSCLAW_DIR = Path(__file__).resolve().parents[3]
 
 
 def _configure_cli_loggers() -> None:
@@ -709,8 +727,8 @@ def _print_skill_command_status(status: SkillCommandStatus) -> None:
         console.print(f"[dim]{text}[/dim]")
 
 
-def _handle_run(arg: str) -> SkillRunExecutionView | None:
-    """Run a skill inline via the shared `/run` command contract."""
+def _handle_legacy_run(arg: str) -> SkillRunExecutionView | None:
+    """Keep non-demo `/run` forms on their existing shared-runner path."""
     command = parse_skill_run_command(arg)
     if command is None:
         console.print(f"[yellow]Usage: {RUN_COMMAND_USAGE}[/yellow]")
@@ -725,11 +743,42 @@ def _handle_run(arg: str) -> SkillRunExecutionView | None:
             result=result,
         )
     except Exception as exc:
-        execution = build_skill_run_exception_result(
+        execution = build_skill_run_execution_view(
             arg,
             skill=command.skill,
-            exc=exc,
+            result=build_skill_run_exception_result(exc),
         )
+    _print_skill_run_execution(execution)
+    return execution
+
+
+async def _handle_run(
+    arg: str,
+    *,
+    run_runtime: RunRuntime,
+) -> SkillRunExecutionView | None:
+    """Route exact demo syntax into the canonical RunRuntime Interface."""
+
+    route = classify_skill_run_route(arg)
+    if route.kind is SkillRunRouteKind.LEGACY:
+        return _handle_legacy_run(arg)
+    command = parse_skill_run_command(arg)
+    if command is None:
+        console.print(f"[yellow]Usage: {RUN_COMMAND_USAGE}[/yellow]")
+        return None
+    if route.kind is SkillRunRouteKind.REJECT:
+        result = build_canonical_demo_failure_result(command.skill, route.code)
+    else:
+        with console.status(f"[cyan]Running canonical skill: {command.skill}...[/cyan]"):
+            result = await execute_canonical_demo_run(
+                command,
+                run_runtime=run_runtime,
+            )
+    execution = build_skill_run_execution_view(
+        arg,
+        skill=command.skill,
+        result=result,
+    )
     _print_skill_run_execution(execution)
     return execution
 
@@ -739,7 +788,7 @@ def _handle_interpret(arg: str) -> SkillRunExecutionView | None:
 
     Parses /interpret args (validates --input is a typed consensus run dir
     via the routing detector), builds the equivalent /run argstring, and
-    delegates to :func:`_handle_run`. Surfacing parse / detection failures
+    delegates to the explicit legacy path. Surfacing parse / detection failures
     early prevents the user from triggering consensus-interpret's exit-3/5
     fail-fast paths for avoidable input errors.
     """
@@ -747,7 +796,7 @@ def _handle_interpret(arg: str) -> SkillRunExecutionView | None:
     if isinstance(parsed, str):
         console.print(f"[yellow]{parsed}[/yellow]")
         return None
-    return _handle_run(to_run_command_string(parsed))
+    return _handle_legacy_run(to_run_command_string(parsed))
 
 
 def _handle_doctor(
@@ -1320,7 +1369,12 @@ async def _handle_resume_task(arg: str, state: SessionState) -> bool:
     return False
 
 
-async def _handle_do_current_task(arg: str, state: SessionState) -> bool:
+async def _handle_do_current_task(
+    arg: str,
+    state: SessionState,
+    *,
+    control_runtime: ControlRuntime | None = None,
+) -> bool:
     snapshot = load_interactive_plan_from_metadata(state.session_metadata)
     if snapshot is None and _should_route_plan_commands_to_pipeline("", state):
         console.print(
@@ -1338,7 +1392,11 @@ async def _handle_do_current_task(arg: str, state: SessionState) -> bool:
     if not view.success:
         return False
     if view.execution_prompt:
-        await _continue_interactive_turn(state, view.execution_prompt)
+        await _continue_interactive_turn(
+            state,
+            view.execution_prompt,
+            control_runtime=control_runtime,
+        )
     return view.persist_session or bool(view.execution_prompt)
 
 
@@ -1432,10 +1490,13 @@ async def _stream_llm_response(
     pipeline_workspace: str = "",
     scoped_memory_scope: str = "",
     output_style: str = "",
+    control_runtime: ControlRuntime | None = None,
+    reply_slot: str = "main",
 ) -> str:
-    """Iterate ``dispatch(envelope)`` and render events to the console.
+    """Execute one Turn and render typed Agent events to the console.
 
-    Returns the final assistant text response.
+    Production callers provide ``control_runtime``.  The direct legacy path is
+    retained temporarily for isolated renderer tests and migration rollback.
     """
     try:
         sys.path.insert(0, str(_OMICSCLAW_DIR))
@@ -1446,7 +1507,19 @@ async def _stream_llm_response(
         # list (excluding the last user message, which the loop will append
         # itself) and sync back after the dispatch stream completes.
         _INTERACTIVE_USER = "__interactive__"
-        user_text = seed_core_conversation(core, _INTERACTIVE_USER, messages)
+        control_chat_id = _INTERACTIVE_USER
+        if control_runtime is None:
+            user_text = seed_core_conversation(core, _INTERACTIVE_USER, messages)
+        else:
+            last_user_message = next(
+                (
+                    message
+                    for message in reversed(messages)
+                    if message.get("role") == "user"
+                ),
+                {"content": ""},
+            )
+            user_text = str(last_user_message.get("content", ""))
 
         # Snapshot usage before the call to compute per-turn delta
         usage_before = core.get_usage_snapshot()
@@ -1534,47 +1607,103 @@ async def _stream_llm_response(
                     ToolResult as _DispatchToolResult,
                 )
 
-                # ADR 0009 — wire a per-turn cancel_event. The ESC/Ctrl+C
-                # watcher below sets this before cancelling the dispatch
-                # task so the SIGTERM signal propagates through
-                # tool_runtime_context → run_skill → subprocess_driver,
-                # killing the skill process group instead of orphaning it.
-                import threading as _threading
+                final_text_value = ""
+                terminal_error_value: BaseException | None = None
+                cancel_event = None
 
-                cancel_event = _threading.Event()
-                envelope = MessageEnvelope(
-                    chat_id=_INTERACTIVE_USER,
-                    content=user_text,
-                    user_id="cli_user",
-                    platform="cli",
-                    plan_context=plan_context,
-                    workspace=workspace_dir or "",
-                    pipeline_workspace=pipeline_workspace or "",
-                    mcp_servers=active_mcp_servers,
-                    scoped_memory_scope=scoped_memory_scope or "",
-                    output_style=output_style or "",
-                    cancel_event=cancel_event,
-                )
+                async def _render_dispatch_event(event) -> None:
+                    nonlocal final_text_value, terminal_error_value
+                    if isinstance(event, _DispatchToolCall):
+                        sync_on_tool_call(event.tool, event.arguments)
+                    elif isinstance(event, _DispatchToolResult):
+                        sync_on_tool_result(event.tool, event.result)
+                    elif isinstance(event, _DispatchStreamContent):
+                        await sync_on_stream_content(event.chunk)
+                    elif isinstance(event, _DispatchPathologyDetected):
+                        console.print(
+                            f"[yellow]⚠ Loop detector ({event.kind}): "
+                            f"{event.reason}[/yellow]"
+                        )
+                    elif isinstance(event, _DispatchFinal):
+                        final_text_value = event.text
+                    elif isinstance(event, _DispatchError):
+                        if control_runtime is not None:
+                            terminal_error_value = event.exception
+                        else:
+                            raise event.exception
+
+                active_turn_id = ""
 
                 async def _consume_dispatch_stream() -> str:
-                    """Iterate dispatch(envelope), drive renderers, return Final text."""
-                    final_text_value = ""
-                    async for event in dispatch(envelope):
-                        if isinstance(event, _DispatchToolCall):
-                            sync_on_tool_call(event.tool, event.arguments)
-                        elif isinstance(event, _DispatchToolResult):
-                            sync_on_tool_result(event.tool, event.result)
-                        elif isinstance(event, _DispatchStreamContent):
-                            await sync_on_stream_content(event.chunk)
-                        elif isinstance(event, _DispatchPathologyDetected):
-                            console.print(
-                                f"[yellow]⚠ Loop detector ({event.kind}): "
-                                f"{event.reason}[/yellow]"
+                    """Drive either the Control Runtime or legacy dispatch Adapter."""
+                    nonlocal active_turn_id, cancel_event, control_chat_id
+                    if control_runtime is not None:
+                        def _remember_turn(turn_id: str) -> None:
+                            nonlocal active_turn_id
+                            active_turn_id = turn_id
+
+                        result = await control_runtime.submit_and_wait(
+                            RawInboundV1(
+                                schema_version=1,
+                                surface="cli",
+                                source_namespace="cli/v1/local/owner",
+                                source_request_id=uuid.uuid4().hex,
+                                reply_target={
+                                    "schema_version": 1,
+                                    "kind": "cli",
+                                    "installation_id": "local",
+                                    "profile_id": "owner",
+                                    "slot": reply_slot or "interactive",
+                                },
+                                content=(
+                                    RawContentBlockV1(kind="text", text=user_text),
+                                ),
+                            ),
+                            ControlRuntimePorts(
+                                response_sink=_render_dispatch_event,
+                                user_id="cli_user",
+                                plan_context=plan_context,
+                                pipeline_workspace=pipeline_workspace or "",
+                                mcp_servers=active_mcp_servers,
+                                scoped_memory_scope=scoped_memory_scope or "",
+                                output_style=output_style or "",
+                            ),
+                            on_accepted=_remember_turn,
+                        )
+                        control_chat_id = result.acceptance.conversation_id
+                        if result.receipt is None:
+                            raise RuntimeError(
+                                "Control plane rejected the Turn: "
+                                f"{result.acceptance.code or result.acceptance.status.value}"
                             )
-                        elif isinstance(event, _DispatchFinal):
-                            final_text_value = event.text
-                        elif isinstance(event, _DispatchError):
-                            raise event.exception
+                        if result.receipt.status != "succeeded":
+                            error_detail = str(terminal_error_value or "").strip()
+                            raise RuntimeError(
+                                "Control Turn ended with "
+                                f"{result.receipt.status}: "
+                                f"{error_detail or result.receipt.terminal_code or 'no_terminal_code'}"
+                            )
+                        return final_text_value
+
+                    # Temporary compatibility Adapter for direct renderer tests.
+                    import threading as _threading
+
+                    cancel_event = _threading.Event()
+                    envelope = MessageEnvelope(
+                        chat_id=_INTERACTIVE_USER,
+                        content=user_text,
+                        user_id="cli_user",
+                        platform="cli",
+                        plan_context=plan_context,
+                        workspace=workspace_dir or "",
+                        pipeline_workspace=pipeline_workspace or "",
+                        mcp_servers=active_mcp_servers,
+                        scoped_memory_scope=scoped_memory_scope or "",
+                        output_style=output_style or "",
+                        cancel_event=cancel_event,
+                    )
+                    async for event in dispatch(envelope):
+                        await _render_dispatch_event(event)
                     return final_text_value
 
                 llm_task = asyncio.create_task(_consume_dispatch_stream())
@@ -1600,7 +1729,8 @@ async def _stream_llm_response(
                             def _read():
                                 import select
                                 r, _, _ = select.select([sys.stdin], [], [], 0.05)
-                                if r: return sys.stdin.read(1)
+                                if r:
+                                    return sys.stdin.read(1)
                                 return None
                             char = await loop.run_in_executor(None, _read)
                             if char in ('\x1b', '\x03'): # ESC or Ctrl+C
@@ -1616,12 +1746,13 @@ async def _stream_llm_response(
 
                 if watcher_task in done and watcher_task.result() is True:
                     # User interrupted via ESC or Ctrl+C.
-                    # ADR 0009 — set cancel_event before cancelling the
-                    # task. Cancelling alone stops the dispatch coroutine
-                    # at its next await, not the skill subprocess in its
-                    # own process group; the event reaches that subprocess
-                    # via tool_runtime_context -> run_skill.
-                    cancel_event.set()
+                    # The production path requests cancellation through the
+                    # authoritative Turn ID.  The compatibility path retains
+                    # its legacy per-Surface event until it is retired.
+                    if control_runtime is not None and active_turn_id:
+                        control_runtime.cancel(active_turn_id)
+                    elif cancel_event is not None:
+                        cancel_event.set()
                     llm_task.cancel()
                     try:
                         await llm_task
@@ -1631,15 +1762,16 @@ async def _stream_llm_response(
                     status.stop()
                     sys.stdout.write("\r\033[K")
                     console.print("\n[yellow]Conversation interrupted - tell the model what to do differently. Something went wrong?[/yellow]")
-                    append_interruption_notice(
-                        core,
-                        _INTERACTIVE_USER,
-                        text=(
-                            "Conversation interrupted - tell the model what "
-                            "to do differently. Something went wrong?"
-                        ),
-                        messages=messages,
-                    )
+                    if control_runtime is None:
+                        append_interruption_notice(
+                            core,
+                            control_chat_id,
+                            text=(
+                                "Conversation interrupted - tell the model what "
+                                "to do differently. Something went wrong?"
+                            ),
+                            messages=messages,
+                        )
                     final_text = ""
                 else:
                     watcher_task.cancel()
@@ -1669,8 +1801,15 @@ async def _stream_llm_response(
         # Display per-turn usage statistics (inspired by EvoScientist)
         _display_usage_stats(core, usage_before)
 
-        # Sync the updated conversation history back to our messages list
-        sync_core_conversation(core, _INTERACTIVE_USER, messages)
+        # The production path reads the canonical active Transcript view.  The
+        # legacy renderer-test Adapter retains its in-memory sync helper.
+        if control_runtime is not None:
+            messages[:] = [
+                dict(message)
+                for message in control_runtime.transcript.get_history(control_chat_id)
+            ]
+        else:
+            sync_core_conversation(core, control_chat_id, messages)
 
         return final_text or ""
     except Exception as e:
@@ -1684,6 +1823,8 @@ async def _stream_llm_response(
 async def _continue_interactive_turn(
     state: SessionState,
     user_prompt: str,
+    *,
+    control_runtime: ControlRuntime | None = None,
 ) -> str:
     state.messages.append({"role": "user", "content": user_prompt})
     console.print()
@@ -1694,7 +1835,54 @@ async def _continue_interactive_turn(
         pipeline_workspace=_active_pipeline_workspace(state) or "",
         scoped_memory_scope=_active_scoped_memory_scope(state),
         output_style=_active_output_style(state) or "",
+        control_runtime=control_runtime,
+        reply_slot="main",
     )
+
+
+async def _start_new_control_conversation(
+    control_runtime: ControlRuntime,
+) -> bool:
+    """Move the stable CLI ReplyTarget to a new canonical Conversation."""
+
+    result = await control_runtime.submit_and_wait(
+        RawInboundV1(
+            schema_version=1,
+            surface="cli",
+            source_namespace="cli/v1/local/owner",
+            source_request_id=uuid.uuid4().hex,
+            reply_target={
+                "schema_version": 1,
+                "kind": "cli",
+                "installation_id": "local",
+                "profile_id": "owner",
+                "slot": "main",
+            },
+            content=(),
+            project_command={"kind": "new_conversation"},
+        ),
+        ControlRuntimePorts(),
+    )
+    if result.receipt is not None and result.receipt.status == "succeeded":
+        return True
+    code = result.acceptance.code
+    if result.receipt is not None:
+        code = str(result.receipt.terminal_code or result.receipt.status)
+    console.print(
+        f"[red]Could not create canonical Conversation: {escape(code or 'unknown')}[/red]"
+    )
+    return False
+
+
+async def _open_cli_control_runtime(workspace_dir: str) -> ControlRuntime:
+    runtime = ControlRuntime.for_local_surface(
+        workspace_id=str(Path(workspace_dir).resolve()),
+        surface="cli",
+        installation_id="local",
+        profile_id="owner",
+    )
+    await runtime.start()
+    return runtime
 
 
 def _display_usage_stats(core, usage_before: dict) -> None:
@@ -1902,6 +2090,12 @@ async def _async_interactive_loop(
     console.print()
     _print_separator()
 
+    runtime_bundle = await open_cli_runtime_bundle(
+        state.workspace_dir or effective_workspace
+    )
+    control_runtime = runtime_bundle.control_runtime
+    run_runtime = runtime_bundle.run_runtime
+
     # ── Main REPL loop ──
     while state.running:
         try:
@@ -1942,7 +2136,10 @@ async def _async_interactive_loop(
                 continue
 
             elif command is not None and command.name == "/run":
-                run_result = _handle_run(command.arg)
+                run_result = await _handle_run(
+                    command.arg,
+                    run_runtime=run_runtime,
+                )
                 if run_result:
                     state.messages.extend(run_result.history_messages)
                     await _persist_session_state(state, model=resolved_model)
@@ -1975,7 +2172,11 @@ async def _async_interactive_loop(
                 continue
 
             elif command is not None and command.name == "/do-current-task":
-                if await _handle_do_current_task(command.arg, state):
+                if await _handle_do_current_task(
+                    command.arg,
+                    state,
+                    control_runtime=control_runtime,
+                ):
                     await _persist_session_state(state, model=resolved_model)
                 _print_separator()
                 continue
@@ -1998,6 +2199,18 @@ async def _async_interactive_loop(
 
             elif command is not None and command.name == "/resume":
                 await _handle_resume(command.arg, state)
+                resumed_workspace_id = str(Path(state.workspace_dir).resolve())
+                if resumed_workspace_id != control_runtime.workspace_id:
+                    try:
+                        runtime_bundle = await reopen_cli_runtime_bundle(
+                            runtime_bundle,
+                            state.workspace_dir,
+                        )
+                        control_runtime = runtime_bundle.control_runtime
+                        run_runtime = runtime_bundle.run_runtime
+                    except Exception:
+                        state.stop()
+                        raise
                 _print_separator()
                 continue
 
@@ -2007,6 +2220,9 @@ async def _async_interactive_loop(
                 continue
 
             elif command is not None and command.name == "/new":
+                if not await _start_new_control_conversation(control_runtime):
+                    _print_separator()
+                    continue
                 _apply_session_command_view(
                     state,
                     build_new_session_command_view(generate_session_id()),
@@ -2094,21 +2310,17 @@ async def _async_interactive_loop(
                 continue
 
             elif command is not None and command.name == "/clear":
+                # Canonical Transcript entries are immutable and ordinary
+                # runtime code has no purge Interface.  Clearing the REPL
+                # therefore advances the stable ReplyTarget to a fresh
+                # Conversation, preserving the old history for audit/recovery.
+                if not await _start_new_control_conversation(control_runtime):
+                    _print_separator()
+                    continue
                 _apply_session_command_view(
                     state,
                     build_clear_conversation_command_view(),
                 )
-                # ADR 0040 D6: /clear deletes durable state and must fan out to BOTH
-                # stores. The view above only resets the REPL's local message list;
-                # tool outputs are recorded to the shared ToolResultStore under the
-                # constant "__interactive__" chat_id, so without this the blobs +
-                # records leak across every /clear.
-                try:
-                    import omicsclaw.runtime.agent.state as core
-
-                    core.clear_conversation("__interactive__")
-                except Exception:
-                    pass
                 _print_separator()
                 continue
 
@@ -2236,7 +2448,11 @@ async def _async_interactive_loop(
 
             # ── Regular LLM conversation ──
             _maybe_seed_interactive_plan(state, user_input)
-            response = await _continue_interactive_turn(state, user_input)
+            await _continue_interactive_turn(
+                state,
+                user_input,
+                control_runtime=control_runtime,
+            )
 
             # Save session after each exchange
             await _persist_session_state(state, model=resolved_model)
@@ -2253,14 +2469,20 @@ async def _async_interactive_loop(
             console.print("\n[dim]Goodbye![/dim]")
             state.running = False
             break
+        except asyncio.CancelledError:
+            await runtime_bundle.close()
+            raise
         except Exception as e:
             console.print(f"[red]Unexpected error: {escape(str(e))}[/red]")
             logger.exception("Interactive loop error")
             _print_separator()
 
     # Final session save on exit
-    if state.messages:
-        await _persist_session_state(state, model=resolved_model)
+    try:
+        if state.messages:
+            await _persist_session_state(state, model=resolved_model)
+    finally:
+        await runtime_bundle.close()
 
 
 # ---------------------------------------------------------------------------
@@ -2363,17 +2585,24 @@ async def _single_shot(
     console.print(f"[dim]Session: {session_id}[/dim]")
     console.print()
 
-    await _stream_llm_response(
-        messages,
-        workspace_dir=workspace_dir or str(_OMICSCLAW_DIR),
-        pipeline_workspace="",
-    )
+    effective_workspace = workspace_dir or str(_OMICSCLAW_DIR)
+    control_runtime = await _open_cli_control_runtime(effective_workspace)
+    try:
+        await _stream_llm_response(
+            messages,
+            workspace_dir=effective_workspace,
+            pipeline_workspace="",
+            control_runtime=control_runtime,
+            reply_slot="single-shot",
+        )
+    finally:
+        await control_runtime.close()
 
     await save_session(
         session_id,
         messages,
         model=resolved_model,
-        workspace=workspace_dir or str(_OMICSCLAW_DIR),
+        workspace=effective_workspace,
         metadata={},
         transcript=messages,
     )

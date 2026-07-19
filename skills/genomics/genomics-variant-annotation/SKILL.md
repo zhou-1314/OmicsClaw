@@ -47,6 +47,7 @@ parse a raw VCF — it only reads CSV. For raw calling use
 **Inputs**
 
 - File types: `.csv`
+- Accepts artifact `genomics.variant_table` (`csv`)
 
 **Outputs**
 
@@ -54,6 +55,7 @@ parse a raw VCF — it only reads CSV. For raw calling use
 - `tables/impact_distribution.csv`
 - `report.md`
 - `result.json`
+- Produces artifact `genomics.annotated_variants` as `tables/annotated_variants.csv` (`csv`)
 
 ## Flow
 

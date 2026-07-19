@@ -43,6 +43,7 @@ and a built-in hypergeometric implementation as fallbacks.
 **Inputs**
 
 - File types: `.csv`
+- Accepts artifact `bulkrna.differential_results` (`csv`)
 
 **Outputs**
 

@@ -90,6 +90,14 @@ def test_namespace_scopes_under_thread_id_when_set() -> None:
     )
 
 
+def test_namespace_encodes_each_identity_as_one_path_segment() -> None:
+    assert consensus_namespace(
+        "run/../../forged",
+        "typed",
+        thread_id="thread/other",
+    ) == "analysis://thread%2Fother/typed/run%2F..%2F..%2Fforged"
+
+
 def test_output_banner_mentions_verification_state() -> None:
     assert "Verified" in output_banner("typed")
     assert "Exploratory" in output_banner("narrative")

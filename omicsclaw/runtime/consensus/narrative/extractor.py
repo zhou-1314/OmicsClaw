@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Literal
+
+from omicsclaw.common.output_claim import is_scientific_output_file
 
 logger = logging.getLogger(__name__)
 
@@ -88,9 +89,13 @@ def extract_member_findings(
     lines as ``key_findings`` and ``confidence='low'`` — enough for the
     synthesiser to still produce a report.
     """
-    if not report_path.exists():
+    report_path = Path(report_path)
+    if report_path.is_symlink() or not is_scientific_output_file(
+        report_path,
+        output_root=report_path.parent,
+    ):
         raise FileNotFoundError(f"report not found: {report_path}")
-    report_text = report_path.read_text()
+    report_text = report_path.read_text(encoding="utf-8")
     prompt = render_extract_prompt(
         member_name=member_name, skill_name=skill_name, report_text=report_text
     )

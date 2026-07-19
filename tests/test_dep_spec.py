@@ -24,7 +24,10 @@ def test_requires_surfaces_into_skill_info():
     info = reg.skills.get("spatial-trajectory")
     assert info is not None
     requires = info.get("requires")
-    assert isinstance(requires, list) and requires, "spatial-trajectory should declare requires"
+    # The published registry snapshot freezes list fields into tuples for
+    # immutability (see `_deep_freeze_registry_value`); either sequence type
+    # satisfies this contract.
+    assert isinstance(requires, (list, tuple)) and requires, "spatial-trajectory should declare requires"
     # Reconciled surface includes optional backends, not just the base four.
     assert {"scanpy", "numpy"}.issubset(set(requires))
     assert any(pkg in requires for pkg in ("cellrank", "palantir", "scvelo"))
@@ -35,7 +38,9 @@ def test_requires_is_pip_list_not_parameters_yaml_contract():
     reg = ensure_registry_loaded()
     for _alias, info in reg.iter_primary_skills():
         requires = info.get("requires", [])
-        assert isinstance(requires, list)
+        # The published registry snapshot freezes list fields into tuples for
+        # immutability; either sequence type satisfies this contract.
+        assert isinstance(requires, (list, tuple))
         # A leaked {bins,env,config} dict would not be a list of strings.
         assert all(isinstance(pkg, str) for pkg in requires)
         assert "bins" not in requires and "config" not in requires
@@ -45,7 +50,9 @@ def test_every_primary_skill_has_requires_key():
     reg = ensure_registry_loaded()
     for _alias, info in reg.iter_primary_skills():
         assert "requires" in info, f"{_alias} missing requires key"
-        assert isinstance(info["requires"], list)
+        # The published registry snapshot freezes list fields into tuples for
+        # immutability; either sequence type satisfies this contract.
+        assert isinstance(info["requires"], (list, tuple))
 
 
 # --------------------------------------------------------------------------- #

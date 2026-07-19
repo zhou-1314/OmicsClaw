@@ -46,7 +46,6 @@ import re
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -91,11 +90,12 @@ def _parse_xml(xml_str: str) -> dict[str, str]:
 @dataclass
 class WeComConfig(BaseChannelConfig):
     """WeCom (企业微信) configuration."""
+
     corp_id: str = ""
     agent_id: str = ""
     secret: str = ""
-    token: str = ""                # Optional: callback verification
-    encoding_aes_key: str = ""     # Optional: encrypted mode
+    token: str = ""  # Optional: callback verification
+    encoding_aes_key: str = ""  # Optional: encrypted mode
     webhook_port: int = 9001
     text_chunk_limit: int = 4096
 
@@ -103,6 +103,7 @@ class WeComConfig(BaseChannelConfig):
 @dataclass
 class WeChatMPConfig(BaseChannelConfig):
     """WeChat Official Account (公众号) configuration."""
+
     app_id: str = ""
     app_secret: str = ""
     token: str = ""
@@ -150,15 +151,19 @@ class WeChatChannel(Channel):
     # ── Lifecycle ────────────────────────────────────────────────────
 
     async def start(self) -> None:
+        self.require_authoritative_ingress()
         try:
             import httpx  # noqa: F401
             from aiohttp import web  # noqa: F401
         except ImportError:
-            raise RuntimeError("httpx and aiohttp required. Run: pip install httpx aiohttp")
+            raise RuntimeError(
+                "httpx and aiohttp required. Run: pip install httpx aiohttp"
+            )
 
         self._validate_config()
 
         import httpx
+
         self._http_client = httpx.AsyncClient(timeout=15)
 
         # Get initial token
@@ -166,11 +171,14 @@ class WeChatChannel(Channel):
 
         # Start webhook server
         from aiohttp import web
+
         app = web.Application()
         app.router.add_get("/wechat/callback", self._handle_verify)
         app.router.add_post("/wechat/callback", self._handle_message)
 
-        port = self.config.webhook_port if hasattr(self.config, "webhook_port") else 9001
+        port = (
+            self.config.webhook_port if hasattr(self.config, "webhook_port") else 9001
+        )
         self._runner = web.AppRunner(app)
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, "0.0.0.0", port)
@@ -357,7 +365,9 @@ class WeChatChannel(Channel):
         """Process through core LLM and send reply."""
         try:
             reply = await self.process_message(
-                chat_id, user_id, content,
+                chat_id,
+                user_id,
+                content,
                 platform=f"wechat-{self._backend}",
             )
             if reply:
@@ -480,7 +490,9 @@ class WeChatChannel(Channel):
                     # MP doesn't support file; send as text
                     name = Path(file_path).name
                     await self._mp_send_text(
-                        token, chat_id, f"[文件] {name}\n{caption}" if caption else f"[文件] {name}"
+                        token,
+                        chat_id,
+                        f"[文件] {name}\n{caption}" if caption else f"[文件] {name}",
                     )
                     return True
                 url = f"https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token={token}"

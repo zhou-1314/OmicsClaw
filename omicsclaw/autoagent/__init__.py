@@ -16,18 +16,30 @@ Two operating modes:
 from __future__ import annotations
 
 import logging
-from pathlib import Path
+import os
 import re
 import subprocess
 import threading
+from pathlib import Path
 from typing import Any, Callable
+
+from omicsclaw.skill.execution.environment import (
+    scrub_internal_control_credentials,
+)
 
 _logger = logging.getLogger(__name__)
 
 # Branch names that are always considered protected.
-_PROTECTED_BRANCH_NAMES = frozenset({
-    "main", "master", "develop", "release", "production", "prod",
-})
+_PROTECTED_BRANCH_NAMES = frozenset(
+    {
+        "main",
+        "master",
+        "develop",
+        "release",
+        "production",
+        "prod",
+    }
+)
 
 
 def _check_protected_branch(project_root: Path) -> str | None:
@@ -47,8 +59,11 @@ def _check_protected_branch(project_root: Path) -> str | None:
     try:
         branch = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, cwd=project_root,
+            capture_output=True,
+            text=True,
+            cwd=project_root,
             timeout=5,
+            env=scrub_internal_control_credentials(os.environ),
         ).stdout.strip()
     except Exception:
         return None  # git not available — skip check
@@ -69,8 +84,11 @@ def _check_protected_branch(project_root: Path) -> str | None:
     try:
         default_ref = subprocess.run(
             ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
-            capture_output=True, text=True, cwd=project_root,
+            capture_output=True,
+            text=True,
+            cwd=project_root,
             timeout=5,
+            env=scrub_internal_control_credentials(os.environ),
         ).stdout.strip()
         # refs/remotes/origin/HEAD → refs/remotes/origin/main → "main"
         if default_ref:
@@ -106,29 +124,35 @@ def _resolve_optimization_output_root(
     cwd: str = "",
     output_dir: str = "",
 ) -> Path:
+    from omicsclaw.autoagent.output_ownership import canonical_output_path
+
     resolved_output_dir = output_dir.strip()
     if resolved_output_dir:
         output_root = Path(resolved_output_dir).expanduser()
-        if not output_root.is_absolute() and cwd.strip():
-            output_root = Path(cwd).expanduser().resolve() / output_root
-        return output_root
+        if not output_root.is_absolute():
+            base = Path(cwd).expanduser() if cwd.strip() else Path.cwd()
+            if not base.is_absolute():
+                base = Path.cwd() / base
+            output_root = base / output_root
+        return canonical_output_path(output_root)
 
     from datetime import datetime
+    from uuid import uuid4
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_name = (
         f"optimize_{_sanitize_output_token(skill_name)}_"
-        f"{_sanitize_output_token(method)}_{ts}"
+        f"{_sanitize_output_token(method)}_{ts}_{uuid4().hex}"
     )
 
     resolved_cwd = cwd.strip()
     if resolved_cwd:
-        workspace_dir = Path(resolved_cwd).expanduser().resolve()
+        workspace_dir = canonical_output_path(Path(resolved_cwd).expanduser())
         if not workspace_dir.is_dir():
             raise ValueError(f"Working directory does not exist: {workspace_dir}")
-        return workspace_dir / "output" / run_name
+        return canonical_output_path(workspace_dir / "output" / run_name)
 
-    return Path("output") / run_name
+    return canonical_output_path(Path.cwd() / "output" / run_name)
 
 
 def _is_missing_fixed_value(value: Any) -> bool:
@@ -169,9 +193,7 @@ def run_optimization(
     # 1. Resolve metrics
     metrics = get_metrics_for_skill(skill_name, method)
     if metrics is None:
-        error_message = (
-            f"No metrics registered for skill '{skill_name}'. Check metrics_registry.py."
-        )
+        error_message = f"No metrics registered for skill '{skill_name}'. Check metrics_registry.py."
         _emit_error_event(on_event, error_message)
         return {
             "success": False,
@@ -271,28 +293,27 @@ def run_optimization(
             cwd=cwd,
             output_dir=output_dir,
         )
-    except Exception as e:
+        loop = OptimizationLoop(
+            skill_name=skill_name,
+            method=method,
+            input_path=input_path,
+            output_root=output_root,
+            search_space=search_space,
+            evaluator=evaluator,
+            metrics=metrics,
+            max_trials=max_trials,
+            llm_provider=llm_provider,
+            llm_model=llm_model,
+            llm_provider_config=llm_provider_config,
+            demo=demo,
+            cancel_event=cancel_event,
+        )
+    except (OSError, RuntimeError, ValueError) as e:
         error_message = str(e)
         _emit_error_event(on_event, error_message)
         return {"success": False, "error": error_message}
 
     # 5. Run the loop
-    loop = OptimizationLoop(
-        skill_name=skill_name,
-        method=method,
-        input_path=input_path,
-        output_root=output_root,
-        search_space=search_space,
-        evaluator=evaluator,
-        metrics=metrics,
-        max_trials=max_trials,
-        llm_provider=llm_provider,
-        llm_model=llm_model,
-        llm_provider_config=llm_provider_config,
-        demo=demo,
-        cancel_event=cancel_event,
-    )
-
     result = loop.run(on_event=on_event)
     # Note: _finalize_result now emits the error event itself when
     # success=False, so we no longer need to emit it here.
@@ -333,6 +354,79 @@ def run_optimization(
 # ---------------------------------------------------------------------------
 
 
+def _build_target_skill_surface(
+    *,
+    project_root: Path,
+    skill_name: str,
+    skill_info: dict[str, Any],
+    surface_level: int,
+):
+    """Derive the default editable surface from one target Skill only.
+
+    Shared libraries and other Skills can affect more than the scored target,
+    so they require an explicit operator-provided file list.  The automatic
+    surface is intentionally limited to the target narrative and primary
+    Python entry point.
+    """
+
+    import os
+    import stat
+
+    from omicsclaw.autoagent.edit_surface import EditSurface
+
+    root = Path(project_root).expanduser().resolve(strict=True)
+    raw_script = Path(skill_info.get("script") or "").expanduser()
+    if not raw_script.is_absolute():
+        raw_script = root / raw_script
+    lexical_script = Path(os.path.abspath(raw_script))
+    try:
+        relative_script = lexical_script.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(
+            f"Skill {skill_name!r} has no plain target-local Python entry point."
+        ) from exc
+
+    current = root
+    for part in relative_script.parts:
+        current /= part
+        if current.is_symlink():
+            raise ValueError(
+                f"Skill {skill_name!r} has no plain target-local Python entry point."
+            )
+    try:
+        script_stat = lexical_script.lstat()
+        lexical_script.relative_to(root / "skills")
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            f"Skill {skill_name!r} has no plain target-local Python entry point."
+        ) from exc
+    if (
+        lexical_script.suffix.casefold() != ".py"
+        or not stat.S_ISREG(script_stat.st_mode)
+        or script_stat.st_nlink != 1
+    ):
+        raise ValueError(
+            f"Skill {skill_name!r} has no plain target-local Python entry point."
+        )
+
+    explicit: list[str] = []
+    skill_doc = lexical_script.parent / "SKILL.md"
+    if surface_level >= 1 and skill_doc.is_file() and not skill_doc.is_symlink():
+        explicit.append(skill_doc.relative_to(root).as_posix())
+    if surface_level >= 2:
+        explicit.append(relative_script.as_posix())
+    if not explicit:
+        raise ValueError(
+            f"Skill {skill_name!r} has no target-local files at surface level "
+            f"{surface_level}."
+        )
+    return EditSurface(
+        max_level=surface_level,
+        project_root=root,
+        explicit_files=explicit,
+    )
+
+
 def run_harness_evolution(
     skill_name: str,
     method: str,
@@ -351,6 +445,7 @@ def run_harness_evolution(
     demo: bool = False,
     on_event: Callable[[str, dict[str, Any]], None] | None = None,
     cancel_event: threading.Event | None = None,
+    output_claim_id: str | None = None,
 ) -> dict[str, Any]:
     """Run the harness evolution loop — code-level skill improvement.
 
@@ -419,11 +514,13 @@ def run_harness_evolution(
         return {"success": False, "error": error_message}
 
     normalized_fixed = {
-        k: v for k, v in (fixed_params or {}).items()
-        if not _is_missing_fixed_value(v)
+        k: v for k, v in (fixed_params or {}).items() if not _is_missing_fixed_value(v)
     }
     search_space = SearchSpace.from_param_hints(
-        skill_name, method, param_hints, normalized_fixed,
+        skill_name,
+        method,
+        param_hints,
+        normalized_fixed,
     )
 
     # 4. Build editable surface
@@ -442,9 +539,11 @@ def run_harness_evolution(
                 explicit_files=explicit_files,
             )
         else:
-            surface = EditSurface(
-                max_level=surface_level,
+            surface = _build_target_skill_surface(
                 project_root=project_root,
+                skill_name=skill_name,
+                skill_info=skill_info,
+                surface_level=surface_level,
             )
     except ValueError as e:
         error_message = str(e)
@@ -472,29 +571,29 @@ def run_harness_evolution(
             cwd=cwd,
             output_dir=output_dir,
         )
-    except Exception as e:
+        loop = HarnessLoop(
+            skill_name=skill_name,
+            method=method,
+            input_path=input_path,
+            output_root=output_root,
+            surface=surface,
+            evaluator=evaluator,
+            search_space=search_space,
+            max_iterations=max_iterations,
+            evolution_goal=evolution_goal,
+            auto_promote=auto_promote,
+            llm_provider=llm_provider,
+            llm_model=llm_model,
+            llm_provider_config=llm_provider_config,
+            demo=demo,
+            cancel_event=cancel_event,
+            output_claim_id=output_claim_id,
+        )
+    except (OSError, RuntimeError, ValueError) as e:
         _emit_error_event(on_event, str(e))
         return {"success": False, "error": str(e)}
 
     # 8. Run harness loop
-    loop = HarnessLoop(
-        skill_name=skill_name,
-        method=method,
-        input_path=input_path,
-        output_root=output_root,
-        surface=surface,
-        evaluator=evaluator,
-        search_space=search_space,
-        max_iterations=max_iterations,
-        evolution_goal=evolution_goal,
-        auto_promote=auto_promote,
-        llm_provider=llm_provider,
-        llm_model=llm_model,
-        llm_provider_config=llm_provider_config,
-        demo=demo,
-        cancel_event=cancel_event,
-    )
-
     result = loop.run(on_event=on_event)
 
     # 9. Build return summary

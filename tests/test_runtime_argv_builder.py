@@ -10,12 +10,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from omicsclaw.skill.execution.argv_builder import (
     build_skill_argv,
     build_user_run_command,
     extract_flag_value,
     filter_forwarded_args,
 )
+from omicsclaw.skill.execution.flag_introspection import argparse_flag_accepts_value
 
 
 # ---------------------------------------------------------------------------
@@ -29,6 +32,16 @@ def test_extract_flag_value_handles_space_separated_form():
 
 def test_extract_flag_value_handles_equals_form():
     assert extract_flag_value(["--method=cellcharter"], "--method") == "cellcharter"
+
+
+def test_extract_flag_value_uses_last_occurrence_like_argparse():
+    assert (
+        extract_flag_value(
+            ["--method", "scanpy", "--method=scvelo_dynamical"],
+            "--method",
+        )
+        == "scvelo_dynamical"
+    )
 
 
 def test_extract_flag_value_returns_none_when_flag_missing():
@@ -108,6 +121,42 @@ def test_filter_forwarded_args_returns_empty_when_no_args():
 # ---------------------------------------------------------------------------
 
 
+def test_argparse_flag_value_contract_resolves_registry_keys_and_literals():
+    source = """
+METHOD_REGISTRY: dict[str, object] = {
+    "none": object(),
+    "harmony": object(),
+}
+parser.add_argument(
+    "--method",
+    choices=list(METHOD_REGISTRY.keys()) + ["scanorama"],
+)
+"""
+
+    assert argparse_flag_accepts_value(source, "--method", "harmony") is True
+    assert argparse_flag_accepts_value(source, "--method", "scanorama") is True
+    assert argparse_flag_accepts_value(source, "--method", "default") is False
+
+
+def test_argparse_flag_value_contract_distinguishes_open_and_unknown_choices():
+    assert (
+        argparse_flag_accepts_value(
+            'parser.add_argument("--method")',
+            "--method",
+            "anything",
+        )
+        is True
+    )
+    assert (
+        argparse_flag_accepts_value(
+            'parser.add_argument("--method", choices=build_choices())',
+            "--method",
+            "anything",
+        )
+        is None
+    )
+
+
 def test_build_skill_argv_returns_none_when_no_input_demo_or_input_paths(tmp_path):
     """The runner converts ``None`` into a stable ``_err`` result; build_skill_argv
     surfaces the missing-source condition rather than emitting a half-built argv."""
@@ -145,6 +194,34 @@ def test_build_skill_argv_emits_demo_args_when_demo_set(tmp_path):
         "--output",
         str(out_dir),
     ]
+
+
+@pytest.mark.parametrize(
+    ("runtime_language", "interpreter"),
+    [("bash", "bash"), ("r", "Rscript")],
+)
+def test_build_skill_argv_uses_declared_non_python_runtime(
+    tmp_path: Path,
+    runtime_language: str,
+    interpreter: str,
+) -> None:
+    suffix = ".sh" if runtime_language == "bash" else ".R"
+    script = tmp_path / f"skill{suffix}"
+
+    argv = build_skill_argv(
+        python_executable="/must/not/be/used/python",
+        script_path=script,
+        skill_info={
+            "runtime_language": runtime_language,
+            "demo_args": ["--demo"],
+        },
+        demo=True,
+        input_path=None,
+        input_paths=None,
+        output_dir=tmp_path / "out",
+    )
+
+    assert argv[:2] == [interpreter, str(script)]
 
 
 def test_build_skill_argv_emits_multiple_input_flags_for_input_paths(tmp_path):

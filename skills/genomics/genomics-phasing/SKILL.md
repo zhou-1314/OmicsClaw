@@ -42,6 +42,7 @@ already been phased.
 **Inputs**
 
 - File types: `.vcf`
+- Accepts artifact `genomics.filtered_variants` (`vcf`)
 
 **Outputs**
 
@@ -49,6 +50,7 @@ already been phased.
 - `tables/phased_variants.csv`
 - `report.md`
 - `result.json`
+- Produces artifact `genomics.phased_variants` as `tables/phased_variants.csv` (`csv`)
 
 ## Flow
 

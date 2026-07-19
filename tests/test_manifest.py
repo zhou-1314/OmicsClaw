@@ -1,8 +1,11 @@
 """Tests for pipeline manifest read/write and lineage tracking."""
 
 import json
+import os
 import sys
 from pathlib import Path
+
+import pytest
 
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
@@ -18,6 +21,7 @@ from omicsclaw.common.manifest import (
     save_manifest,
     write_manifest,
 )
+from omicsclaw.common.output_claim import OUTPUT_CLAIM_FILENAME
 
 
 def test_step_record_auto_timestamp():
@@ -118,6 +122,15 @@ def test_read_manifest_corrupt_json(tmp_path):
     assert read_manifest(tmp_path) is None
 
 
+@pytest.mark.parametrize("payload", ([], "manifest", 7, None))
+def test_read_manifest_rejects_non_object_json(tmp_path: Path, payload) -> None:
+    """A syntactically valid non-object is malformed evidence, not an exception."""
+
+    (tmp_path / MANIFEST_FILENAME).write_text(json.dumps(payload), encoding="utf-8")
+
+    assert read_manifest(tmp_path) is None
+
+
 def test_manifest_json_structure(tmp_path):
     """The on-disk JSON should have the expected structure."""
     rec = StepRecord(skill="test", version="1.0", params={"a": 1})
@@ -172,3 +185,54 @@ def test_manifest_roundtrip_preserves_workspace_contract(tmp_path):
     assert loaded.verification is not None
     assert loaded.verification.status == "complete"
     assert loaded.metadata["phase"] == 6
+
+
+def test_read_manifest_rejects_output_claim_hardlink_alias(tmp_path):
+    claim = tmp_path / OUTPUT_CLAIM_FILENAME
+    claim.write_text('{"owner": "runner"}', encoding="utf-8")
+    os.link(claim, tmp_path / MANIFEST_FILENAME)
+
+    assert read_manifest(tmp_path) is None
+
+
+def test_read_manifest_rejects_symlink_that_escapes_output(tmp_path):
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    external = tmp_path / "external-manifest.json"
+    external.write_text('{"steps": []}', encoding="utf-8")
+    (output_dir / MANIFEST_FILENAME).symlink_to(external)
+
+    assert read_manifest(output_dir) is None
+
+
+def test_read_manifest_rejects_output_root_alias_erased_by_parent_reference(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "run"
+    write_manifest(output_dir, StepRecord(skill="test", version="1.0"))
+    deep = tmp_path / "deep"
+    deep.mkdir()
+    jump = tmp_path / "jump"
+    jump.symlink_to(deep, target_is_directory=True)
+    tainted_root = jump / ".." / output_dir.name
+
+    assert read_manifest(tainted_root) is None
+
+
+@pytest.mark.parametrize("alias_kind", ["symlink", "hardlink"])
+def test_save_manifest_refuses_alias_without_mutating_external_file(tmp_path, alias_kind):
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    external = tmp_path / "external-manifest.json"
+    original = '{"external": true}'
+    external.write_text(original, encoding="utf-8")
+    target = output_dir / MANIFEST_FILENAME
+    if alias_kind == "symlink":
+        target.symlink_to(external)
+    else:
+        os.link(external, target)
+
+    with pytest.raises(RuntimeError, match="unowned manifest"):
+        save_manifest(output_dir, PipelineManifest())
+
+    assert external.read_text(encoding="utf-8") == original

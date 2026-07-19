@@ -17,27 +17,26 @@ import pytest
 
 pytest.importorskip("fastapi")
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from fastapi import FastAPI  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 
-from omicsclaw.execution.executors import JobContext, JobOutcome
-from omicsclaw.remote.app_integration import register_remote_routers
-from omicsclaw.remote.routers import jobs as jobs_module
+from omicsclaw.control import RunObservationPage  # noqa: E402
+from omicsclaw.remote.app_integration import register_remote_routers  # noqa: E402
+from omicsclaw.remote.auth import capture_remote_bearer_authority  # noqa: E402
+from omicsclaw.remote.routers import artifacts as artifacts_module  # noqa: E402
+from omicsclaw.remote.routers import datasets as datasets_module  # noqa: E402
+from omicsclaw.remote.routers import env as env_module  # noqa: E402
+from omicsclaw.remote.routers import jobs as jobs_module  # noqa: E402
+from omicsclaw.remote.routers import sessions as sessions_module  # noqa: E402
+from omicsclaw.remote.schemas import Job  # noqa: E402
 
 
-class _NotImplementedStub:
-    """Instant-return ``Executor`` stub used by contract tests.
+class _EmptyRunRuntime:
+    lifecycle_ready = True
 
-    Contract tests pin the wire format, not executor behavior, so submitted
-    jobs must deterministically end in ``failed`` with a known stdout marker.
-    Inlined here in lieu of the removed ``LocalExecutor`` (OMI-12 P1.5);
-    real executor behaviour is covered by ``test_execution_default_executor``
-    and ``test_subprocess_executor``.
-    """
-
-    async def run(self, ctx: JobContext) -> JobOutcome:
-        text = "executor_not_implemented: stub executor for contract tests"
-        return JobOutcome(exit_code=1, error="executor_not_implemented", stdout_text=text)
+    def list_receipts(self, *, status=None, cursor=None, limit=50):
+        del status, cursor, limit
+        return RunObservationPage((), None)
 
 
 @pytest.fixture()
@@ -45,9 +44,15 @@ def client(monkeypatch, tmp_path: Path) -> TestClient:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(workspace))
-    monkeypatch.setattr(jobs_module, "_DEFAULT_EXECUTOR", _NotImplementedStub())
-
+    for module in (artifacts_module, datasets_module, env_module, jobs_module):
+        monkeypatch.setattr(module, "get_remote_workspace", lambda: workspace)
+    monkeypatch.setattr(
+        jobs_module,
+        "require_remote_run_runtime",
+        lambda: _EmptyRunRuntime(),
+    )
     app = FastAPI()
+    capture_remote_bearer_authority(app, {})
     register_remote_routers(app)
     return TestClient(app)
 
@@ -266,53 +271,59 @@ def test_import_remote_does_not_deduplicate_against_stale_dataset(
 # ---------------------------------------------------------------------------
 
 
-def _submit_job(
-    client: TestClient,
-    skill: str = "spatial-preprocess",
+def _seed_legacy_job(
+    *,
+    job_id: str,
+    status: str = "queued",
     session_id: str = "",
-) -> str:
-    payload = {"skill": skill, "inputs": {"dataset_id": "abc"}}
-    if session_id:
-        payload["session_id"] = session_id
-    response = client.post("/jobs", json=payload)
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["status"] == "queued"
-    assert isinstance(body["job_id"], str) and body["job_id"]
-    return body["job_id"]
+) -> Job:
+    import os
+
+    workspace = Path(os.environ["OMICSCLAW_WORKSPACE"])
+    job = Job(
+        job_id=job_id,
+        session_id=session_id,
+        skill="historical-skill",
+        status=status,
+        workspace=str(workspace),
+        inputs={"dataset_id": "historical-only"},
+        params={},
+        created_at="2025-01-01T00:00:00Z",
+    )
+    jobs_module._write_job(workspace, job)
+    return job
 
 
-def test_job_submit_list_get_round_trip(client: TestClient) -> None:
-    job_id = _submit_job(client)
-
-    detail = client.get(f"/jobs/{job_id}").json()
-    assert detail["job_id"] == job_id
-    assert detail["status"] == "queued"
-    assert detail["skill"] == "spatial-preprocess"
-    assert detail["inputs"] == {"dataset_id": "abc"}
-
-    listed = client.get("/jobs", params={"status": "queued"}).json()
-    assert any(j["job_id"] == job_id for j in listed["jobs"])
-
-
-def test_job_submit_uses_resolved_workspace_not_client_claim(client: TestClient) -> None:
+def test_legacy_scientific_submit_fails_closed_without_creating_job_json(
+    client: TestClient,
+) -> None:
     import os
 
     response = client.post(
         "/jobs",
-        json={"skill": "spatial-preprocess", "workspace": "/tmp/not-the-real-workspace"},
+        json={"skill": "spatial-preprocess", "inputs": {"dataset_id": "abc"}},
     )
-    assert response.status_code == 200, response.text
-    body = response.json()
-
-    detail = client.get(f"/jobs/{body['job_id']}")
-    assert detail.status_code == 200
-    assert detail.json()["workspace"] == os.environ["OMICSCLAW_WORKSPACE"]
+    assert response.status_code == 422
+    assert response.json()["detail"] == "invalid_job_submission"
+    assert not (Path(os.environ["OMICSCLAW_WORKSPACE"]) / ".omicsclaw").exists()
 
 
-def test_chat_display_job_submission_stays_queued_until_chat_stream_binds_it(
+def test_client_workspace_claim_is_rejected_before_any_job_write(
     client: TestClient,
 ) -> None:
+    response = client.post(
+        "/jobs",
+        json={"skill": "spatial-preprocess", "workspace": "/tmp/not-authority"},
+    )
+    assert response.status_code == 422
+
+
+def test_chat_display_job_submission_is_retired_without_creating_state(
+    client: TestClient,
+) -> None:
+    import os
+
+    workspace = Path(os.environ["OMICSCLAW_WORKSPACE"])
     response = client.post(
         "/jobs",
         json={
@@ -321,84 +332,51 @@ def test_chat_display_job_submission_stays_queued_until_chat_stream_binds_it(
             "params": {"job_kind": "chat_stream", "display_name": "chat turn"},
         },
     )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["status"] == "queued"
-
-    detail = client.get(f"/jobs/{body['job_id']}")
-    assert detail.status_code == 200
-    assert detail.json()["status"] == "queued"
+    assert response.status_code == 409
+    assert response.json()["detail"] == "legacy_chat_job_submission_retired"
+    assert not (workspace / ".omicsclaw").exists()
 
 
-def test_job_cancel_marks_canceled(client: TestClient) -> None:
-    job_id = _submit_job(client)
-    response = client.post(f"/jobs/{job_id}/cancel")
-    assert response.status_code == 200
-    assert response.json()["status"] == "canceled"
-    # Idempotent — second cancel does not flip status.
-    again = client.post(f"/jobs/{job_id}/cancel")
-    assert again.json()["status"] == "canceled"
+def test_legacy_cancel_and_retry_are_read_only_rejections(client: TestClient) -> None:
+    original = _seed_legacy_job(job_id="legacy-active")
+    assert client.post("/jobs/legacy-active/cancel").status_code == 409
+    assert client.post("/jobs/legacy-active/retry").status_code == 409
+    import os
+
+    assert jobs_module._read_job(
+        Path(os.environ["OMICSCLAW_WORKSPACE"]), original.job_id
+    ) == original
 
 
-def test_job_retry_creates_new_job(client: TestClient) -> None:
-    original = _submit_job(client)
-    # Drive to terminal state first — retry only works on finished jobs.
-    client.post(f"/jobs/{original}/cancel")
-    response = client.post(f"/jobs/{original}/retry")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "queued"
-    assert body["job_id"] != original
-
-
-def test_job_retry_rejects_active_job(client: TestClient) -> None:
-    queued = _submit_job(client)
-    response = client.post(f"/jobs/{queued}/retry")
-    assert response.status_code == 400
-    assert "terminal" in response.json()["detail"].lower() or "finished" in response.json()["detail"].lower()
-
-
-def test_job_events_streams_lifecycle(client: TestClient) -> None:
-    job_id = _submit_job(client)
-    with client.stream("GET", f"/jobs/{job_id}/events") as response:
-        assert response.status_code == 200
-        assert response.headers["content-type"].startswith("text/event-stream")
-        body = "".join(response.iter_text())
-    # Required SSE event names — App's EventSource subscribes to these.
-    for marker in ("event: job_queued", "event: job_started",
-                   "event: job_log", "event: job_failed", "event: done"):
-        assert marker in body, f"missing SSE marker: {marker}"
-
-
-def test_job_events_do_not_rewrite_canceled_job(client: TestClient) -> None:
-    job_id = _submit_job(client)
-    canceled = client.post(f"/jobs/{job_id}/cancel")
-    assert canceled.status_code == 200
-    assert canceled.json()["status"] == "canceled"
-
-    with client.stream("GET", f"/jobs/{job_id}/events") as response:
+def test_legacy_active_sse_is_interrupted_snapshot_without_replay_or_logs(
+    client: TestClient,
+) -> None:
+    original = _seed_legacy_job(job_id="legacy-sse", status="running")
+    with client.stream("GET", "/jobs/legacy-sse/events") as response:
         assert response.status_code == 200
         body = "".join(response.iter_text())
-
-    assert "event: job_canceled" in body
+    assert "event: job_interrupted" in body
+    assert "event: done" in body
+    assert "job_log" not in body
     assert "event: job_started" not in body
-    assert "event: job_failed" not in body
+    import os
 
-    final = client.get(f"/jobs/{job_id}")
-    assert final.status_code == 200
-    assert final.json()["status"] == "canceled"
+    assert jobs_module._read_job(
+        Path(os.environ["OMICSCLAW_WORKSPACE"]), original.job_id
+    ) == original
 
 
-def test_jobs_total_reports_matches_before_limit(client: TestClient) -> None:
-    _submit_job(client, skill="skill-a")
-    _submit_job(client, skill="skill-b")
-    _submit_job(client, skill="skill-c")
-
+def test_jobs_list_is_bounded_and_projects_legacy_active_as_interrupted(
+    client: TestClient,
+) -> None:
+    for index in range(3):
+        _seed_legacy_job(job_id=f"legacy-{index}")
     response = client.get("/jobs", params={"limit": 1})
     assert response.status_code == 200
     body = response.json()
     assert len(body["jobs"]) == 1
-    assert body["total"] == 3
+    assert body["total"] == 1
+    assert body["jobs"][0]["status"] == "interrupted"
 
 
 # ---------------------------------------------------------------------------
@@ -406,10 +384,25 @@ def test_jobs_total_reports_matches_before_limit(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _seed_terminal_artifact_job(workspace: Path, job_id: str) -> None:
+    jobs_module._write_job(
+        workspace,
+        Job(
+            job_id=job_id,
+            skill="historical-skill",
+            status="succeeded",
+            workspace=str(workspace),
+            inputs={},
+            params={},
+            created_at="2025-01-01T00:00:00Z",
+        ),
+    )
+
+
 def test_artifacts_list_empty_when_no_outputs(client: TestClient) -> None:
     response = client.get("/artifacts", params={"job_id": "nonexistent"})
     assert response.status_code == 200
-    assert response.json() == {"artifacts": [], "total": 0}
+    assert response.json() == {"artifacts": [], "total": 0, "next_cursor": None}
 
 
 def test_artifacts_list_picks_up_files(client: TestClient) -> None:
@@ -420,6 +413,7 @@ def test_artifacts_list_picks_up_files(client: TestClient) -> None:
     artifact_dir = ws / ".omicsclaw" / "remote" / "jobs" / job_id / "artifacts"
     artifact_dir.mkdir(parents=True)
     (artifact_dir / "report.md").write_text("# hi\n")
+    _seed_terminal_artifact_job(ws, job_id)
 
     response = client.get("/artifacts", params={"job_id": job_id})
     assert response.status_code == 200
@@ -434,6 +428,123 @@ def test_artifacts_list_picks_up_files(client: TestClient) -> None:
     assert download.text == "# hi\n"
 
 
+def test_artifacts_only_expose_owned_scientific_files(client: TestClient) -> None:
+    import os
+
+    ws = Path(os.environ["OMICSCLAW_WORKSPACE"])
+    job_id = "job_with_unowned_aliases"
+    artifact_dir = ws / ".omicsclaw" / "remote" / "jobs" / job_id / "artifacts"
+    artifact_dir.mkdir(parents=True)
+
+    (artifact_dir / "report.md").write_text("# owned\n")
+    (artifact_dir / ".omicsclaw-run-claim.json").write_text("{}\n")
+
+    outside_file = ws / "outside.txt"
+    outside_file.write_text("outside\n")
+    (artifact_dir / "escape.txt").symlink_to(outside_file)
+    (artifact_dir / "report-link.md").symlink_to("report.md")
+    os.link(outside_file, artifact_dir / "outside-hardlink.txt")
+
+    real_dir = artifact_dir / "real"
+    real_dir.mkdir()
+    (real_dir / "inside.txt").write_text("inside\n")
+    (artifact_dir / "aliased-dir").symlink_to(real_dir, target_is_directory=True)
+    _seed_terminal_artifact_job(ws, job_id)
+
+    response = client.get("/artifacts", params={"job_id": job_id})
+    assert response.status_code == 200
+    assert {artifact["relative_path"] for artifact in response.json()["artifacts"]} == {
+        "report.md",
+        "real/inside.txt",
+    }
+
+    for relative_path in (
+        ".omicsclaw-run-claim.json",
+        "escape.txt",
+        "report-link.md",
+        "outside-hardlink.txt",
+        "aliased-dir/inside.txt",
+    ):
+        download = client.get(f"/artifacts/{job_id}:{relative_path}/download")
+        assert download.status_code == 404, relative_path
+
+
+def test_artifacts_reject_jobs_root_symlink_alias(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    import os
+
+    ws = Path(os.environ["OMICSCLAW_WORKSPACE"])
+    job_id = "job_outside_jobs_alias"
+    outside_jobs = tmp_path / "outside-jobs"
+    artifact_dir = outside_jobs / job_id / "artifacts"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "secret.txt").write_text("outside\n")
+
+    remote_dir = ws / ".omicsclaw" / "remote"
+    remote_dir.mkdir(parents=True)
+    (remote_dir / "jobs").symlink_to(outside_jobs, target_is_directory=True)
+
+    listed = client.get("/artifacts", params={"job_id": job_id})
+    assert listed.status_code == 200
+    assert listed.json() == {"artifacts": [], "total": 0, "next_cursor": None}
+
+    downloaded = client.get(f"/artifacts/{job_id}:secret.txt/download")
+    assert downloaded.status_code == 404
+
+
+def test_artifacts_reject_remote_parent_symlink_alias(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """The jobs leaf is not trusted when an ancestor below workspace is aliased."""
+    import os
+
+    ws = Path(os.environ["OMICSCLAW_WORKSPACE"])
+    job_id = "job_outside_remote_alias"
+    outside_remote = tmp_path / "outside-remote"
+    artifact_dir = outside_remote / "jobs" / job_id / "artifacts"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "secret.txt").write_text("outside\n")
+
+    omicsclaw_dir = ws / ".omicsclaw"
+    omicsclaw_dir.mkdir()
+    (omicsclaw_dir / "remote").symlink_to(outside_remote, target_is_directory=True)
+
+    listed = client.get("/artifacts", params={"job_id": job_id})
+    assert listed.status_code == 200
+    assert listed.json() == {"artifacts": [], "total": 0, "next_cursor": None}
+
+    downloaded = client.get(f"/artifacts/{job_id}:secret.txt/download")
+    assert downloaded.status_code == 404
+
+
+def test_artifact_reads_do_not_materialize_state_through_remote_parent_alias(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """A read-only artifact request must reject an alias before mkdir side effects."""
+    import os
+
+    ws = Path(os.environ["OMICSCLAW_WORKSPACE"])
+    outside_remote = tmp_path / "empty-outside-remote"
+    outside_remote.mkdir()
+
+    omicsclaw_dir = ws / ".omicsclaw"
+    omicsclaw_dir.mkdir()
+    (omicsclaw_dir / "remote").symlink_to(outside_remote, target_is_directory=True)
+
+    listed = client.get("/artifacts", params={"job_id": "missing-job"})
+    assert listed.status_code == 200
+    assert listed.json() == {"artifacts": [], "total": 0, "next_cursor": None}
+    assert not (outside_remote / "jobs").exists()
+
+    downloaded = client.get("/artifacts/missing-job:result.txt/download")
+    assert downloaded.status_code == 404
+    assert not (outside_remote / "jobs").exists()
+
+
 def test_artifacts_created_at_is_stable_across_list_calls(client: TestClient) -> None:
     import os
     import time
@@ -444,6 +555,7 @@ def test_artifacts_created_at_is_stable_across_list_calls(client: TestClient) ->
     artifact_dir.mkdir(parents=True)
     report = artifact_dir / "report.md"
     report.write_text("# hi\n")
+    _seed_terminal_artifact_job(ws, job_id)
 
     first = client.get("/artifacts", params={"job_id": job_id})
     assert first.status_code == 200
@@ -462,54 +574,42 @@ def test_artifacts_reject_unsafe_job_id_query(client: TestClient) -> None:
     assert response.status_code == 400
 
 
+def test_artifacts_reject_symlink_loop_in_job_directory(client: TestClient) -> None:
+    import os
+
+    ws = Path(os.environ["OMICSCLAW_WORKSPACE"])
+    jobs_dir = ws / ".omicsclaw" / "remote" / "jobs"
+    jobs_dir.mkdir(parents=True)
+    job_id = "job_symlink_loop"
+    (jobs_dir / job_id).symlink_to(job_id, target_is_directory=True)
+
+    response = client.get("/artifacts", params={"job_id": job_id})
+    assert response.status_code == 200
+    assert response.json()["total"] == 0
+
+
 def test_artifact_download_rejects_unsafe_job_id_in_artifact_id(client: TestClient) -> None:
     response = client.get("/artifacts/..%2F..%2F..%2F..%2Foutside:secret.txt/download")
     assert response.status_code == 400
 
 
-def test_failed_job_persists_diagnostic_artifacts(client: TestClient) -> None:
+def test_unrecoverable_legacy_active_job_never_exposes_partial_artifacts(
+    client: TestClient,
+) -> None:
     import os
 
-    job_id = _submit_job(client, session_id="sess-diagnostics")
-
-    with client.stream("GET", f"/jobs/{job_id}/events") as response:
-        assert response.status_code == 200
-        body = "".join(response.iter_text())
-
-    assert "event: job_failed" in body
-
-    detail = client.get(f"/jobs/{job_id}")
-    assert detail.status_code == 200
-    job = detail.json()
-    assert job["status"] == "failed"
-    assert isinstance(job["artifact_root"], str) and job["artifact_root"]
-
     ws = Path(os.environ["OMICSCLAW_WORKSPACE"])
-    job_dir = ws / ".omicsclaw" / "remote" / "jobs" / job_id
-    stdout_path = job_dir / "stdout.log"
-    assert stdout_path.is_file()
-    stdout_text = stdout_path.read_text(encoding="utf-8")
-    assert "executor_not_implemented" in stdout_text
+    job = _seed_legacy_job(job_id="legacy-partial", status="running")
+    partial = jobs_module._artifact_root(ws, job.job_id) / "partial.txt"
+    partial.parent.mkdir(parents=True, exist_ok=True)
+    partial.write_text("untrusted partial\n", encoding="utf-8")
+    jobs_module.terminalize_legacy_active_jobs_at_startup(ws)
 
-    listed = client.get("/artifacts", params={"job_id": job_id})
+    listed = client.get("/artifacts", params={"job_id": job.job_id})
+    downloaded = client.get(f"/artifacts/{job.job_id}:partial.txt/download")
     assert listed.status_code == 200
-    artifacts = {artifact["relative_path"]: artifact for artifact in listed.json()["artifacts"]}
-    assert "diagnostics/env_doctor.json" in artifacts
-    assert "diagnostics/stdout.log" in artifacts
-
-    env_doctor = client.get(
-        f"/artifacts/{artifacts['diagnostics/env_doctor.json']['artifact_id']}/download"
-    )
-    assert env_doctor.status_code == 200
-    env_payload = env_doctor.json()
-    assert "overall_status" in env_payload
-    assert "checks" in env_payload
-
-    stdout_download = client.get(
-        f"/artifacts/{artifacts['diagnostics/stdout.log']['artifact_id']}/download"
-    )
-    assert stdout_download.status_code == 200
-    assert "executor_not_implemented" in stdout_download.text
+    assert listed.json()["total"] == 0
+    assert downloaded.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -517,36 +617,80 @@ def test_failed_job_persists_diagnostic_artifacts(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_session_resume_returns_active_jobs(client: TestClient) -> None:
-    queued = _submit_job(client, session_id="sess-xyz")
+def test_legacy_session_resume_is_a_fixed_retired_response(client: TestClient) -> None:
     response = client.post("/sessions/sess-xyz/resume")
     assert response.status_code == 200
-    body = response.json()
-    assert body["session_id"] == "sess-xyz"
-    assert body["resumed"] is True
-    assert queued in body["active_job_ids"]
+    assert response.json() == {
+        "session_id": "sess-xyz",
+        "resumed": False,
+        "reason": "legacy_session_resume_retired",
+        "active_job_ids": [],
+    }
 
 
-def test_session_resume_filters_active_jobs_by_session_id(client: TestClient) -> None:
-    session_a = client.post(
-        "/jobs",
-        json={"skill": "spatial-preprocess", "session_id": "sess-a"},
+def test_legacy_session_resume_never_discovers_active_jobs(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    _seed_legacy_job(job_id="historical-a", session_id="sess-a")
+    _seed_legacy_job(job_id="historical-b", session_id="sess-b")
+
+    def forbidden_job_read(*_args, **_kwargs):
+        raise AssertionError("retired Session resume read legacy job.json")
+
+    monkeypatch.setattr(
+        sessions_module,
+        "_read_job",
+        forbidden_job_read,
+        raising=False,
     )
-    assert session_a.status_code == 200
-    job_a = session_a.json()["job_id"]
-
-    session_b = client.post(
-        "/jobs",
-        json={"skill": "spatial-preprocess", "session_id": "sess-b"},
-    )
-    assert session_b.status_code == 200
-    job_b = session_b.json()["job_id"]
 
     resumed = client.post("/sessions/sess-a/resume")
     assert resumed.status_code == 200
-    body = resumed.json()
-    assert job_a in body["active_job_ids"]
-    assert job_b not in body["active_job_ids"]
+    assert resumed.json() == {
+        "session_id": "sess-a",
+        "resumed": False,
+        "reason": "legacy_session_resume_retired",
+        "active_job_ids": [],
+    }
+
+
+def test_legacy_session_resume_has_zero_workspace_or_runtime_authority(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(workspace))
+    calls: list[str] = []
+
+    def forbidden(*_args, **_kwargs):
+        calls.append("forbidden_authority")
+        raise AssertionError("retired Session resume reached legacy authority")
+
+    for name in (
+        "resolve_workspace",
+        "jobs_root",
+        "_read_job",
+        "get_remote_run_runtime",
+        "require_remote_run_runtime",
+    ):
+        monkeypatch.setattr(sessions_module, name, forbidden, raising=False)
+
+    app = FastAPI()
+    capture_remote_bearer_authority(app, {})
+    app.include_router(sessions_module.router)
+    response = TestClient(app).post("/sessions/legacy-session/resume")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "session_id": "legacy-session",
+        "resumed": False,
+        "reason": "legacy_session_resume_retired",
+        "active_job_ids": [],
+    }
+    assert calls == []
+    assert not (workspace / ".omicsclaw").exists()
 
 
 def test_dataset_upload_deduplicates_same_payload(client: TestClient) -> None:

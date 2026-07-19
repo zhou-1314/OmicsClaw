@@ -97,7 +97,10 @@ trajectory inference without spliced layers use `spatial-trajectory`.
 - `processed.h5ad`
 - `report.md`
 - `result.json`
-- Processed AnnData (`saves_h5ad`) — adds `obs`: `velocity_speed`, `latent_time`; `var`: `fit_scaling`, `velocity_genes`, `fit_t_`; `layers`: `velocity`, `latent_time_velovi`, `fit_t`
+- Processed AnnData (`saves_h5ad`) — adds `obs`: `velocity_speed`; `var`: `velocity_genes`; `layers`: `velocity`
+- When `--method` is `velovi`:
+  - AnnData additionally guarantees `obs`: `latent_time`; `var`: `fit_scaling`; `layers`: `latent_time_velovi`, `fit_t`
+  - Produces artifact `spatial.latent_time` as `processed.h5ad` (`h5ad`)
 
 ## Flow
 

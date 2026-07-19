@@ -94,6 +94,7 @@ from omicsclaw.skill.runner import (
     run_skill,
 )
 from omicsclaw.skill.registry import ensure_registry_loaded, registry
+from omicsclaw.skill.execution.environment import scrub_internal_control_credentials
 
 
 def _module_available(module_name: str) -> bool:
@@ -208,7 +209,10 @@ def _handle_auth_command(args) -> None:
 
     import subprocess as _sp
 
-    rc = _sp.call([ccproxy_executable(), "auth", op, provider.ccproxy_target])
+    rc = _sp.call(
+        [ccproxy_executable(), "auth", op, provider.ccproxy_target],
+        env=scrub_internal_control_credentials(os.environ),
+    )
     sys.exit(rc)
 
 # Canonical workflow order per domain — skills are displayed in this sequence.
@@ -661,6 +665,40 @@ def main():
         help="Workspace directory to validate (default: current working directory)",
     )
 
+    control_p = sub.add_parser(
+        "control",
+        help="Manage authoritative local control-plane state",
+    )
+    control_sub = control_p.add_subparsers(dest="control_command")
+    transcript_migrate_p = control_sub.add_parser(
+        "transcript-migrate",
+        help="Offline one-shot migration to canonical transcripts.db",
+    )
+    transcript_migrate_p.add_argument(
+        "migration_action",
+        choices=("plan", "apply", "verify"),
+    )
+    transcript_migrate_p.add_argument(
+        "--source",
+        required=True,
+        help="Legacy transcripts.db path",
+    )
+    transcript_migrate_p.add_argument(
+        "--state-root",
+        default=None,
+        help="Canonical state root (default: runtime state root)",
+    )
+    transcript_migrate_p.add_argument(
+        "--profile",
+        default=None,
+        help="Owner-reviewed legacy stream to ReplyTarget mapping JSON",
+    )
+    transcript_migrate_p.add_argument(
+        "--manifest-sha256",
+        default="",
+        help="Exact cutover manifest emitted by plan; required by apply",
+    )
+
     # knowledge — build / search / stats / list for the knowledge base
     kb_p = sub.add_parser("knowledge", help="Manage the knowledge base (build, search, stats, list)")
     kb_sub = kb_p.add_subparsers(dest="kb_command")
@@ -724,7 +762,21 @@ def main():
     _prei = project_sub.add_parser("reindex", help="Rebuild the run index for a project (or all)")
     _prei.add_argument("name", nargs="?", default="", help="Project name/id (default: all projects)")
 
-    run_p = sub.add_parser("run", help="Run a skill")
+    run_p = sub.add_parser(
+        "run",
+        help="Run a skill",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Canonical demo Scope (fixed order):\n"
+            "  SKILL --demo\n"
+            "  SKILL --demo --project PROJECT_ID\n"
+            "  SKILL --demo --no-project\n"
+            "PROJECT_ID must be exactly 32 lowercase hexadecimal characters; "
+            "--project default is rejected.\n"
+            "Non-demo --project retains legacy project name/id and "
+            "current/default behavior."
+        ),
+    )
     run_p.add_argument("skill", help="Skill alias (e.g. preprocess, domains) or 'spatial-pipeline'")
     run_p.add_argument("--demo", action="store_true")
     run_p.add_argument("--input", dest="input_paths", action="append", default=[],
@@ -735,8 +787,8 @@ def main():
                        help="Sample ID label (repeat once per --input for sc-multi-count)")
     run_p.add_argument("--output", dest="output_dir")
     run_p.add_argument("--project", dest="project", default="",
-                       help="Group this run under a research project (ADR 0035); defaults to "
-                            "the current project ('oc project use') or 'default'")
+                       help="Canonical demo requires an active 32-hex Control Project ID; "
+                            "non-demo retains legacy name/id and current/default behavior")
     run_p.add_argument("--session", dest="session_path")
     # Skill-specific flags (forwarded to the skill script)
     run_p.add_argument("--data-type", dest="data_type")
@@ -823,9 +875,38 @@ def main():
     run_p.add_argument("--clinical")
     run_p.add_argument("--cutoff-method")
 
-    # Use parse_known_args so `run` can pass through skill-specific flags that
-    # are not explicitly registered at the top-level CLI parser.
+    # Classify the root Run wire before argparse can reinterpret long-option
+    # abbreviations or reject an owned malformed ``--demo=...`` spelling.
+    # Every demo-shaped request belongs to the canonical boundary; only the
+    # exact root demo wires proceed to Runtime admission.
+    _root_run_route = None
+    if len(sys.argv) >= 2 and sys.argv[1] == "run":
+        from omicsclaw.surfaces.cli._skill_run_support import (
+            SkillRunRouteKind as _SkillRunRouteKind,
+            classify_root_skill_run_tokens as _classify_root_skill_run_tokens,
+        )
+
+        _root_run_tokens = tuple(sys.argv[2:])
+        _root_run_route = _classify_root_skill_run_tokens(_root_run_tokens)
+        if _root_run_route.kind is _SkillRunRouteKind.REJECT:
+            _rejected_skill = (
+                _root_run_tokens[0]
+                if _root_run_tokens and not _root_run_tokens[0].startswith("-")
+                else "run"
+            )
+            print(f"{RED}Failed{RESET}: {_rejected_skill}", file=sys.stderr)
+            print(_root_run_route.code, file=sys.stderr)
+            sys.exit(2)
+
+    # Use parse_known_args so legacy non-demo `run` can pass through
+    # skill-specific flags that are not registered at the top-level parser.
     args, unknown_args = parser.parse_known_args()
+
+    # A root Run is a positionally-owned wire boundary.  Do not let unknown
+    # leading tokens make argparse rediscover ``run`` later and thereby skip
+    # the raw canonical-demo classifier above.
+    if getattr(args, "command", None) == "run" and _root_run_route is None:
+        parser.error("the 'run' command must be the first argument")
 
     # Only `run` consumes unknown args. All other commands, including
     # `optimize`, must fail fast on unrecognized flags so users do not assume
@@ -843,6 +924,25 @@ def main():
 
     if args.command == "list":
         list_skills(domain_filter=getattr(args, "domain", None))
+        sys.exit(0)
+
+    if args.command == "control":
+        if getattr(args, "control_command", None) != "transcript-migrate":
+            control_p.print_help()
+            sys.exit(2)
+        import json as _json
+        from omicsclaw.runtime.storage.transcript_import import (
+            execute_transcript_migration,
+        )
+
+        result = execute_transcript_migration(
+            args.migration_action,
+            source=args.source,
+            profile=args.profile,
+            state_root=args.state_root,
+            expected_manifest_sha256=args.manifest_sha256,
+        )
+        print(_json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2))
         sys.exit(0)
 
     if args.command == "replot":
@@ -1419,6 +1519,38 @@ def main():
         sys.exit(0)
 
     if args.command == "run":
+        if (
+            _root_run_route is not None
+            and _root_run_route.kind is _SkillRunRouteKind.CANONICAL_DEMO
+        ):
+            from omicsclaw.surfaces.cli._canonical_run_support import (
+                run_root_canonical_demo,
+            )
+
+            canonical_result = run_root_canonical_demo(
+                args.skill,
+                workspace_dir=OMICSCLAW_DIR,
+                scope=_root_run_route.explicit_scope,
+            )
+            if canonical_result.get("success"):
+                print(f"{GREEN}Success{RESET}: {canonical_result['skill']}")
+                if canonical_result.get("output_dir"):
+                    print(f"  Output: {canonical_result['output_dir']}")
+                if canonical_result.get("readme_path"):
+                    print(f"  Guide:  {canonical_result['readme_path']}")
+                if canonical_result.get("notebook_path"):
+                    print(f"  Notebook: {canonical_result['notebook_path']}")
+                if canonical_result.get("run_id"):
+                    print(f"  Run:    {canonical_result['run_id']}")
+                return
+            print(
+                f"{RED}Failed{RESET}: {canonical_result.get('skill') or args.skill}",
+                file=sys.stderr,
+            )
+            if canonical_result.get("stderr"):
+                print(canonical_result["stderr"], file=sys.stderr)
+            sys.exit(int(canonical_result.get("exit_code") or 1))
+
         # Collect extra args from skill-specific flags
         extra: list[str] = []
         flag_map = {

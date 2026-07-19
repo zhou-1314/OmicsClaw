@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from omicsclaw.skill.execution.environment import scrub_internal_control_credentials
+
 logger = logging.getLogger(__name__)
 
 # Default location for OmicsClaw R scripts
@@ -248,6 +250,7 @@ class RScriptRunner:
         run_env = self._build_r_env()
         if env:
             run_env.update(env)
+        run_env = scrub_internal_control_credentials(run_env)
 
         t0 = time.time()
         try:
@@ -317,7 +320,7 @@ class RScriptRunner:
         This keeps reticulate/zellkonverter from silently pulling a managed Python
         runtime that differs from the current OmicsClaw environment.
         """
-        env = os.environ.copy()
+        env = scrub_internal_control_credentials(os.environ)
         resolved_prefix: str | None = None
         r_exec_path = Path(self.r_executable)
         if r_exec_path.is_absolute() and r_exec_path.name == "Rscript":

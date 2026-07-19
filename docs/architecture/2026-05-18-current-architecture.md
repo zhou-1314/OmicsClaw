@@ -1,5 +1,10 @@
 # OmicsClaw 当前架构设计文档
 
+> **Historical snapshot — not current authority.** This document records the
+> architecture as understood on 2026-05-18. The canonical current-state
+> architecture is [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md). Preserve this
+> file as historical evidence; do not update it to describe later architecture.
+>
 > 时间快照：2026-05-18
 > 范围：基于实际代码（不是 README 的宣传性描述），逐层拆解 OmicsClaw 的运行时与领域层结构。本文档为内部理解与优化使用，**不替代** `docs/CONTEXT.md`（领域语言）和 `docs/adr/`（决策记录）。
 
@@ -1048,6 +1053,5 @@ v1 ship 之后立即跑了一轮 `improve-codebase-architecture` 的深化审查
 注意：v1.1 deepening **没有引入新 ADR**——它是 ADR 0010 边界内的实现深化，A/B 路径决策、TYPED_CONSENSUS_REGISTRY allowlist 性质、failure semantics 一律不变。
 
 ---
-
 
 

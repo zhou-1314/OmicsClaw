@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-import hashlib
-import json
+from collections.abc import Callable, Mapping
 
 from omicsclaw.skill.capability_resolver import (
     CapabilityDecision,
     resolve_capability,
 )
 from omicsclaw.skill.preconditions import InputProfile
+from omicsclaw.skill.skill_dag import candidate_plan_digest
 
 from .models import AnalysisRoute, AnalysisRouteKind
 
@@ -54,6 +53,7 @@ class AnalysisRouter:
         file_path: str = "",
         domain_hint: str = "",
         input_profile: InputProfile | dict | None = None,
+        method_bindings: Mapping[str, str] | None = None,
     ) -> AnalysisRoute:
         resolver_kwargs = {
             "file_path": file_path,
@@ -61,10 +61,18 @@ class AnalysisRouter:
         }
         if input_profile is not None:
             resolver_kwargs["input_profile"] = input_profile
+        if method_bindings:
+            resolver_kwargs["method_bindings"] = dict(method_bindings)
         decision = self._resolver(query, **resolver_kwargs)
         kind = self._route_kind(query=query, file_path=file_path, decision=decision)
         preflight_required = bool(
             decision.precondition_evaluated and not decision.execution_ready
+        )
+        candidate_chain = decision.candidate_chain
+        candidate_plan_execution_ready = bool(
+            candidate_chain
+            and candidate_chain.get("validated_order") is True
+            and candidate_chain.get("resource_ready") is True
         )
         return AnalysisRoute(
             kind=kind,
@@ -75,17 +83,11 @@ class AnalysisRouter:
             ),
             metadata=(
                 {
-                    "candidate_chain": decision.candidate_chain,
-                    "requires_confirmation": True,
-                    "plan_digest": hashlib.sha256(
-                        json.dumps(
-                            decision.candidate_chain,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ).encode("utf-8")
-                    ).hexdigest(),
+                    "candidate_chain": candidate_chain,
+                    "requires_confirmation": candidate_plan_execution_ready,
+                    "plan_digest": candidate_plan_digest(candidate_chain),
                 }
-                if decision.candidate_chain
+                if candidate_chain
                 else {}
             ),
         )
@@ -131,6 +133,7 @@ def route_analysis_request(
     file_path: str = "",
     domain_hint: str = "",
     input_profile: InputProfile | dict | None = None,
+    method_bindings: Mapping[str, str] | None = None,
 ) -> AnalysisRoute:
     """Convenience function for callers that do not need a router instance."""
 
@@ -139,6 +142,7 @@ def route_analysis_request(
         file_path=file_path,
         domain_hint=domain_hint,
         input_profile=input_profile,
+        method_bindings=method_bindings,
     )
 
 

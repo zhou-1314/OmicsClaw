@@ -207,6 +207,19 @@ def _format_analysis_route_context(route: AnalysisRoute) -> str:
         lines.append(
             f"- candidate_chain_edges: {len(candidate_chain.get('edges', []))} provenance records"
         )
+        resource_ready = candidate_chain.get("resource_ready") is True
+        lines.append(f"- candidate_resource_ready: {str(resource_ready).lower()}")
+        missing_resources = candidate_chain.get("missing_resource_requests") or []
+        if missing_resources:
+            lines.append(
+                "- missing_resource_requests: "
+                + "; ".join(str(skill) for skill in missing_resources)
+            )
+        if not resource_ready:
+            lines.append(
+                "- candidate_plan_execution: blocked; do not ask for confirmation "
+                "or execute until every skill declares a complete compute reservation"
+            )
     if route.preflight_required:
         lines.extend(
             [
@@ -227,9 +240,14 @@ def _format_analysis_route_context(route: AnalysisRoute) -> str:
         lines.append(
             "- execution_rule: do not execute the selected skill until preflight succeeds"
         )
-    elif candidate_chain:
+    elif candidate_chain and route.metadata.get("requires_confirmation") is True:
         lines.append(
             "- execution_rule: candidate plan only; confirm the complete chain before executing any step"
+        )
+    elif candidate_chain:
+        lines.append(
+            "- execution_rule: candidate plan is not executable; resolve dependency "
+            "and resource contract gaps first"
         )
     elif route.kind is AnalysisRouteKind.EXACT_SKILL:
         lines.append(
@@ -334,11 +352,11 @@ def _candidate_chain_gate_for_turn(
     """Bind a composite plan confirmation to one chat and one plan digest."""
 
     if route.metadata.get("requires_confirmation"):
+        candidate_chain = dict(route.metadata.get("candidate_chain") or {})
         gate = {
             "plan_digest": str(route.metadata.get("plan_digest") or ""),
-            "skills": list(
-                (route.metadata.get("candidate_chain") or {}).get("skills", [])
-            ),
+            "skills": list(candidate_chain.get("skills", [])),
+            "candidate_chain": candidate_chain,
             "confirmed": False,
         }
         pending_candidate_chain_confirmations[chat_id] = dict(gate)
@@ -530,14 +548,20 @@ async def _build_exact_skill_assisted_param_context(user_content: str | list) ->
     return _format_exact_skill_assisted_param_block(skill_md, schema_report)
 
 
-def _build_engine_dependencies(*, usage_accumulator=None) -> EngineDependencies:
+def _build_engine_dependencies(
+    *, usage_accumulator=None, transcript_store_override=None
+) -> EngineDependencies:
     def _bind_callbacks_builder(**engine_kwargs):
         # Engine doesn't carry the bot's logger; bind it here so the
         # callback builder still gets the right ``logger_obj`` arg.
         return _build_bot_query_engine_callbacks(logger_obj=logger, **engine_kwargs)
 
     return EngineDependencies(
-        transcript_store=transcript_store,
+        transcript_store=(
+            transcript_store
+            if transcript_store_override is None
+            else transcript_store_override
+        ),
         tool_result_store=tool_result_store,
         llm=_core.llm,
         omicsclaw_model=_core.OMICSCLAW_MODEL or "",
@@ -964,6 +988,9 @@ async def llm_tool_loop(
     request_tool_approval=None,
     policy_state=None,
     cancel_event=None,
+    transcript_store_override=None,
+    stored_user_content=None,
+    content_adapter=None,
 ) -> str:
     """
     Run the LLM tool-use loop:
@@ -995,14 +1022,29 @@ async def llm_tool_loop(
         if slash_result is not None:
             return slash_result
 
+    active_transcript_store = (
+        transcript_store
+        if transcript_store_override is None
+        else transcript_store_override
+    )
+
     resumed_result = await _maybe_resume_pending_preflight_request(
         chat_id=chat_id,
         user_content=user_content,
         session_id=f"{platform}:{user_id}:{chat_id}" if user_id and platform else None,
     )
     if resumed_result is not None:
-        transcript_store.append_user_message(chat_id, user_content)
-        transcript_store.append_assistant_message(chat_id, content=resumed_result)
+        active_transcript_store.append_user_message(
+            chat_id,
+            user_content if stored_user_content is None else stored_user_content,
+        )
+        defer = getattr(active_transcript_store, "defer_terminal_message", None)
+        if callable(defer):
+            defer(chat_id, content=resumed_result)
+        else:
+            active_transcript_store.append_assistant_message(
+                chat_id, content=resumed_result
+            )
         return resumed_result
 
     user_text = _extract_user_text(user_content)
@@ -1028,12 +1070,17 @@ async def llm_tool_loop(
     )
 
     _ensure_system_prompt()
-    deps = _build_engine_dependencies(usage_accumulator=usage_accumulator)
+    deps = _build_engine_dependencies(
+        usage_accumulator=usage_accumulator,
+        transcript_store_override=transcript_store_override,
+    )
 
     return await run_engine_loop(
         deps=deps,
         chat_id=chat_id,
         user_content=user_content,
+        stored_user_content=stored_user_content,
+        content_adapter=content_adapter,
         user_id=user_id,
         platform=platform,
         plan_context=plan_context,

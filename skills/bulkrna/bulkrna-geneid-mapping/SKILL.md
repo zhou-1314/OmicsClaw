@@ -49,6 +49,7 @@ not supported — feed via `--mapping-file` if needed.
 - `tables/unmapped_genes.csv`
 - `report.md`
 - `result.json`
+- Produces artifact `bulkrna.count_matrix` as `tables/mapped_counts.csv` (`csv`)
 
 ## Flow
 

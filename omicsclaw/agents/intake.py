@@ -12,12 +12,23 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import signal
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from omicsclaw.skill.execution.environment import (
+    scrub_internal_control_credentials,
+)
+
 logger = logging.getLogger(__name__)
+
+_ODL_CONVERSION_TIMEOUT_SECONDS = 300
+_ODL_TERMINATION_GRACE_SECONDS = 2
 
 
 @dataclass
@@ -124,126 +135,121 @@ class IntakeResult:
 # =========================================================================
 
 
+def _run_odl_converter_process(argv: list[str], env: dict[str, str]) -> int:
+    """Run the ODL wrapper with bounded output memory and tree cleanup."""
+
+    options: dict[str, object] = {}
+    if os.name == "nt":  # pragma: no cover - exercised on Windows
+        options["creationflags"] = getattr(
+            subprocess,
+            "CREATE_NEW_PROCESS_GROUP",
+            0,
+        )
+    else:
+        options["start_new_session"] = True
+    process = subprocess.Popen(
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
+        **options,
+    )
+    try:
+        return process.wait(timeout=_ODL_CONVERSION_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":  # pragma: no cover - exercised on Windows
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                    check=False,
+                    env=env,
+                )
+            except (OSError, subprocess.SubprocessError):
+                process.kill()
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+            try:
+                process.wait(timeout=_ODL_TERMINATION_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                pass
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        raise
+
+
 def _convert_pdf_opendataloader(pdf_path: str, output_dir: str) -> str | None:
     """Convert PDF to Markdown using opendataloader-pdf (preferred engine).
 
     Returns the **post-processed** Markdown content string on success,
     or ``None`` if opendataloader-pdf is not installed or conversion fails.
 
-    All warnings from the Java/ODL runtime (which write directly to the
-    OS-level stderr via ``java.util.logging``) are suppressed by
-    temporarily redirecting file-descriptor 2 to ``/dev/null``.
+    ODL starts a JVM internally.  Run it behind a scrubbed Python process so
+    that the JVM can never inherit Backend control-plane bearer material.
 
     Requires:
         pip install opendataloader-pdf   # + Java 11+
     """
+    import importlib.util
+    import tempfile
+
     try:
-        import opendataloader_pdf
-    except ImportError:
+        available = importlib.util.find_spec("opendataloader_pdf") is not None
+    except (ImportError, ValueError):
+        available = False
+    if not available:
         logger.debug("opendataloader-pdf not installed — skipping")
         return None
 
-    import logging as _logging
-    import os
-    import sys
-    import tempfile
-    import warnings
-
-    # ── 1. Suppress Python-level loggers ──────────────────────────
-    _odl_loggers = [
-        "opendataloader_pdf",
-        "opendataloader",
-        "jpype",
-        "java",
-    ]
-    saved_levels: dict[str, int] = {}
-    for name in _odl_loggers:
-        lg = _logging.getLogger(name)
-        saved_levels[name] = lg.level
-        lg.setLevel(_logging.ERROR)
-
-    # ── 2. Redirect OS-level stdout (fd 1) and stderr (fd 2) ───────────
-    # Java's java.util.logging or sub-processes might write to native 
-    # file descriptors (fd 1 or 2) directly. Python's logging/warnings 
-    # cannot intercept this. We point fd 1 and 2 to /dev/null temporarily.
-    saved_stdout_fd = os.dup(1)          # save original fd 1
-    saved_stderr_fd = os.dup(2)          # save original fd 2
-    devnull_fd = os.open(os.devnull, os.O_WRONLY)
-    
-    # Also redirect Python's sys.stdout and sys.stderr
-    saved_sys_stdout = sys.stdout
-    saved_sys_stderr = sys.stderr
-
+    converter = (
+        "import sys\n"
+        "from opendataloader_pdf import convert\n"
+        "convert(input_path=[sys.argv[1]], output_dir=sys.argv[2], "
+        "format='markdown')\n"
+    )
     try:
-        os.dup2(devnull_fd, 1)           # stdout → /dev/null
-        os.dup2(devnull_fd, 2)           # stderr → /dev/null
-        sys.stdout = open(os.devnull, "w")  # noqa: SIM115
-        sys.stderr = open(os.devnull, "w")  # noqa: SIM115
-
         with tempfile.TemporaryDirectory(prefix="oc_odl_") as tmp_dir:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                opendataloader_pdf.convert(
-                    input_path=[pdf_path],
-                    output_dir=tmp_dir,
-                    format="markdown",
-                )
-            # Find the generated markdown file
-            md_files = list(Path(tmp_dir).glob("**/*.md"))
+            returncode = _run_odl_converter_process(
+                [sys.executable, "-P", "-c", converter, pdf_path, tmp_dir],
+                scrub_internal_control_credentials(os.environ),
+            )
+            if returncode != 0:
+                logger.warning("opendataloader-pdf failed for %s", pdf_path)
+                return None
+            md_files = sorted(Path(tmp_dir).glob("**/*.md"))
             if not md_files:
                 logger.warning("opendataloader-pdf produced no .md output")
                 return None
             md_content = md_files[0].read_text(encoding="utf-8")
-            
-            # Since we have logging redirected, we must restore before logging
-            sys.stdout.close()
-            sys.stderr.close()
-            sys.stdout = saved_sys_stdout
-            sys.stderr = saved_sys_stderr
-            os.dup2(saved_stdout_fd, 1)
-            os.dup2(saved_stderr_fd, 2)
-
-            if md_content.strip():
-                logger.info(
-                    "opendataloader-pdf converted %s (%d chars → post-process)",
-                    pdf_path, len(md_content),
-                )
-                md_content = _postprocess_odl_markdown(md_content)
-                logger.info(
-                    "Post-processed to %d chars",
-                    len(md_content),
-                )
-                return md_content
-            
-            logger.warning("opendataloader-pdf output was empty")
-            return None
-    except Exception as e:
-        # Restore before logging
-        try:
-            sys.stdout = saved_sys_stdout
-            sys.stderr = saved_sys_stderr
-            os.dup2(saved_stdout_fd, 1)
-            os.dup2(saved_stderr_fd, 2)
-        except Exception:
-            pass
-        logger.warning("opendataloader-pdf failed for %s: %s", pdf_path, e)
+    except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
+        logger.warning("opendataloader-pdf failed for %s: %s", pdf_path, exc)
         return None
-    finally:
-        # ── Restore stdout & stderr ────────────────────────────────────────
-        try:
-            sys.stdout = saved_sys_stdout
-            sys.stderr = saved_sys_stderr
-            os.dup2(saved_stdout_fd, 1)
-            os.dup2(saved_stderr_fd, 2)
-            os.close(saved_stdout_fd)
-            os.close(saved_stderr_fd)
-            os.close(devnull_fd)
-        except Exception:
-            pass
-            
-        # Restore Python logger levels
-        for name, level in saved_levels.items():
-            _logging.getLogger(name).setLevel(level)
+
+    if not md_content.strip():
+        logger.warning("opendataloader-pdf output was empty")
+        return None
+    logger.info(
+        "opendataloader-pdf converted %s (%d chars → post-process)",
+        pdf_path,
+        len(md_content),
+    )
+    processed = _postprocess_odl_markdown(md_content)
+    logger.info("Post-processed to %d chars", len(processed))
+    return processed
 
 
 # ── ODL Markdown post-processing ──────────────────────────────────────────
@@ -400,7 +406,10 @@ def _fallback_pdf_text(pdf_path: str) -> str:
     try:
         result = subprocess.run(
             ["pdftotext", "-layout", pdf_path, "-"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=scrub_internal_control_credentials(os.environ),
         )
         if result.returncode == 0:
             return result.stdout

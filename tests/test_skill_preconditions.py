@@ -491,3 +491,361 @@ def test_zarr_directory_remains_incompatible_when_not_declared(tmp_path) -> None
     assert routing_assessment.status is PreconditionStatus.BLOCKED
     assert execution_assessment is not None
     assert execution_assessment.status is PreconditionStatus.BLOCKED
+
+
+def test_tabular_probe_blocks_a_declared_missing_column(tmp_path) -> None:
+    from omicsclaw.skill.registry import OmicsRegistry
+
+    input_path = tmp_path / "counts.csv"
+    input_path.write_text("gene_id,ctrl_1\nG1,4\n", encoding="utf-8")
+    registry = OmicsRegistry()
+    registry.skills = {
+        "tabular-skill": {
+            "alias": "tabular-skill",
+            "domain": "bulkrna",
+            "input_contract": {
+                "modalities": [],
+                "file_types": ["csv"],
+                "path_kinds": ["file"],
+                "preconditions": {
+                    "content": {
+                        "tabular": {
+                            "min_columns": 3,
+                            "required_columns": ["gene_id", "treat_1"],
+                        }
+                    }
+                },
+            },
+        }
+    }
+
+    profile = probe_input_profile(input_path)
+    assessment = evaluate_skill_preconditions(
+        "tabular-skill",
+        profile,
+        registry=registry,
+        require_verified_modality=False,
+    )
+
+    assert profile.table_columns == {"gene_id", "ctrl_1"}
+    assert profile.table_column_count == 2
+    assert assessment.status is PreconditionStatus.BLOCKED
+    assert assessment.missing == [
+        "content.tabular.min_columns",
+        "content.tabular.column.treat_1",
+    ]
+
+
+def test_compressed_vcf_probe_reads_header_facts_without_scanning_records(
+    tmp_path,
+) -> None:
+    import gzip
+
+    from omicsclaw.skill.registry import OmicsRegistry
+
+    input_path = tmp_path / "variants.vcf.gz"
+    with gzip.open(input_path, "wt", encoding="utf-8") as handle:
+        handle.write(
+            "##fileformat=VCFv4.2\n"
+            "##INFO=<ID=DP,Number=1,Type=Integer,Description=\"Depth\">\n"
+            "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n"
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n"
+            "chr1\t1\t.\tA\tG\t30\tPASS\tDP=9\tGT\t0/1\n"
+        )
+    registry = OmicsRegistry()
+    registry.skills = {
+        "vcf-skill": {
+            "alias": "vcf-skill",
+            "domain": "genomics",
+            "input_contract": {
+                "modalities": [],
+                "file_types": ["vcf"],
+                "path_kinds": ["file"],
+                "preconditions": {
+                    "content": {
+                        "vcf": {
+                            "require_fileformat_header": True,
+                            "required_columns": ["#CHROM", "POS", "REF", "ALT"],
+                            "required_info_ids": ["DP"],
+                            "required_format_ids": ["GT"],
+                            "min_samples": 2,
+                        }
+                    }
+                },
+            },
+        }
+    }
+
+    profile = probe_input_profile(input_path)
+    assessment = evaluate_skill_preconditions(
+        "vcf-skill",
+        profile,
+        registry=registry,
+        require_verified_modality=False,
+    )
+
+    assert profile.vcf_fileformat == "VCFv4.2"
+    assert profile.vcf_columns == {
+        "#CHROM",
+        "POS",
+        "ID",
+        "REF",
+        "ALT",
+        "QUAL",
+        "FILTER",
+        "INFO",
+        "FORMAT",
+        "S1",
+    }
+    assert profile.vcf_info_ids == {"DP"}
+    assert profile.vcf_format_ids == {"GT"}
+    assert profile.vcf_sample_count == 1
+    assert assessment.status is PreconditionStatus.BLOCKED
+    assert assessment.missing == ["content.vcf.min_samples"]
+
+
+def test_fastq_probe_validates_first_record_and_declared_pairing(tmp_path) -> None:
+    from omicsclaw.skill.registry import OmicsRegistry
+
+    input_path = tmp_path / "sample_R1.fastq"
+    input_path.write_text("@read1\nACGT\n+\nFFFF\n", encoding="utf-8")
+    registry = OmicsRegistry()
+    registry.skills = {
+        "paired-fastq-skill": {
+            "alias": "paired-fastq-skill",
+            "domain": "spatial",
+            "input_contract": {
+                "modalities": [],
+                "file_types": ["fastq"],
+                "path_kinds": ["file"],
+                "preconditions": {
+                    "content": {
+                        "fastq": {
+                            "require_valid_record": True,
+                            "pairing": "paired",
+                        }
+                    }
+                },
+            },
+        }
+    }
+
+    profile = probe_input_profile(input_path)
+    assessment = evaluate_skill_preconditions(
+        "paired-fastq-skill",
+        profile,
+        registry=registry,
+        require_verified_modality=False,
+    )
+
+    assert profile.fastq_record_valid is True
+    assert profile.fastq_pairing == "single"
+    assert assessment.status is PreconditionStatus.BLOCKED
+    assert assessment.missing == ["content.fastq.pairing"]
+
+
+def test_directory_probe_matches_a_declared_semantic_signature(tmp_path) -> None:
+    from omicsclaw.skill.registry import OmicsRegistry
+
+    input_dir = tmp_path / "filtered_feature_bc_matrix"
+    input_dir.mkdir()
+    for name in ("matrix.mtx.gz", "barcodes.tsv.gz", "features.tsv.gz"):
+        (input_dir / name).touch()
+    registry = OmicsRegistry()
+    registry.skills = {
+        "count-import": {
+            "alias": "count-import",
+            "domain": "singlecell",
+            "input_contract": {
+                "modalities": [],
+                "file_types": [],
+                "path_kinds": ["directory"],
+                "preconditions": {
+                    "content": {
+                        "directory": {
+                            "any_of_signatures": ["paired-fastq", "tenx-matrix"]
+                        }
+                    }
+                },
+            },
+        }
+    }
+
+    profile = probe_input_profile(input_dir)
+    assessment = evaluate_skill_preconditions(
+        "count-import",
+        profile,
+        registry=registry,
+        require_verified_modality=False,
+        require_verified_file_type=False,
+    )
+
+    assert profile.directory_signatures == {"tenx-matrix"}
+    assert assessment.status is PreconditionStatus.ELIGIBLE
+    assert assessment.execution_ready is True
+
+
+def test_execution_gate_accepts_an_explicit_fastq_mate_path(tmp_path) -> None:
+    from omicsclaw.skill.registry import OmicsRegistry
+
+    read1 = tmp_path / "read1" / "sample_R1.fastq"
+    read2 = tmp_path / "read2" / "sample_R2.fastq"
+    read1.parent.mkdir()
+    read2.parent.mkdir()
+    for path in (read1, read2):
+        path.write_text("@read\nACGT\n+\nFFFF\n", encoding="utf-8")
+    registry = OmicsRegistry()
+    registry.skills = {
+        "paired-fastq-skill": {
+            "alias": "paired-fastq-skill",
+            "domain": "spatial",
+            "input_contract": {
+                "modalities": [],
+                "file_types": ["fastq"],
+                "path_kinds": ["file"],
+                "preconditions": {
+                    "content": {
+                        "fastq": {
+                            "require_valid_record": True,
+                            "pairing": "paired",
+                        }
+                    }
+                },
+            },
+        }
+    }
+
+    assessment = preflight_skill_execution(
+        "paired-fastq-skill",
+        input_path=str(read1),
+        companion_paths=[str(read2)],
+        registry=registry,
+    )
+
+    assert assessment is not None
+    assert assessment.status is PreconditionStatus.ELIGIBLE
+    assert assessment.execution_ready is True
+
+
+def test_real_non_h5ad_contracts_block_structurally_invalid_inputs(tmp_path) -> None:
+    short_counts = tmp_path / "counts.csv"
+    short_counts.write_text("gene_id,ctrl_1\nG1,1\n", encoding="utf-8")
+    malformed_vcf = tmp_path / "variants.vcf"
+    malformed_vcf.write_text("chr1\t1\t.\tA\tG\n", encoding="utf-8")
+    empty_fastq_dir = tmp_path / "fastqs"
+    empty_fastq_dir.mkdir()
+
+    assessments = [
+        preflight_skill_execution("bulkrna-de", input_path=str(short_counts)),
+        preflight_skill_execution(
+            "genomics-vcf-operations",
+            input_path=str(malformed_vcf),
+        ),
+        preflight_skill_execution("sc-fastq-qc", input_path=str(empty_fastq_dir)),
+    ]
+
+    assert all(assessment is not None for assessment in assessments)
+    assert [assessment.status for assessment in assessments] == [
+        PreconditionStatus.BLOCKED,
+        PreconditionStatus.BLOCKED,
+        PreconditionStatus.BLOCKED,
+    ]
+    assert assessments[0].missing == ["content.tabular.min_columns"]
+    assert assessments[1].missing == ["content.vcf.inspection"]
+    assert assessments[2].missing == ["content.directory.signature"]
+
+
+def test_vcf_execution_accepts_gzip_and_always_materialises_declared_artifact(
+    tmp_path,
+) -> None:
+    import gzip
+
+    from omicsclaw.skill.runner import run_skill
+
+    input_path = tmp_path / "variants.vcf.gz"
+    with gzip.open(input_path, "wt", encoding="utf-8") as handle:
+        handle.write(
+            "##fileformat=VCFv4.2\n"
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+            "chr1\t1\t.\tA\tG\t30\tPASS\tDP=9\n"
+        )
+    output_dir = tmp_path / "output"
+
+    result = run_skill(
+        "genomics-vcf-operations",
+        input_path=str(input_path),
+        output_dir=str(output_dir),
+    )
+
+    assert result.success is True, result.stderr
+    assert (output_dir / "tables" / "variants.csv").exists()
+    assert (output_dir / "filtered.vcf").exists()
+
+
+def test_starsolo_velocity_directory_signature_satisfies_real_contract(
+    tmp_path,
+) -> None:
+    velocity_dir = tmp_path / "Solo.out" / "Velocyto" / "raw"
+    velocity_dir.mkdir(parents=True)
+    for name in (
+        "spliced.mtx",
+        "unspliced.mtx",
+        "barcodes.tsv",
+        "features.tsv",
+    ):
+        (velocity_dir / name).touch()
+
+    profile = probe_input_profile(tmp_path)
+    assessment = preflight_skill_execution(
+        "sc-velocity-prep",
+        input_path=str(tmp_path),
+    )
+
+    assert profile.directory_signatures == {
+        "starsolo-output",
+        "starsolo-velocity",
+    }
+    assert assessment is not None
+    assert assessment.status is PreconditionStatus.ELIGIBLE
+
+
+def test_truncated_directory_probe_cannot_hard_prove_a_signature_is_absent(
+    tmp_path,
+) -> None:
+    from omicsclaw.skill.registry import OmicsRegistry
+
+    for index in range(2050):
+        (tmp_path / f"filler-{index:04d}.txt").touch()
+    registry = OmicsRegistry()
+    registry.skills = {
+        "directory-skill": {
+            "alias": "directory-skill",
+            "domain": "singlecell",
+            "input_contract": {
+                "modalities": [],
+                "file_types": [],
+                "path_kinds": ["directory"],
+                "preconditions": {
+                    "content": {
+                        "directory": {
+                            "any_of_signatures": ["tenx-matrix"],
+                        }
+                    }
+                },
+            },
+        }
+    }
+
+    profile = probe_input_profile(tmp_path)
+    assessment = evaluate_skill_preconditions(
+        "directory-skill",
+        profile,
+        registry=registry,
+        require_verified_modality=False,
+        require_verified_file_type=False,
+    )
+
+    assert profile.directory_probe_truncated is True
+    assert assessment.status is PreconditionStatus.NEEDS_PREPARATION
+    assert assessment.execution_ready is False
+    assert assessment.missing == ["content.directory.signature"]

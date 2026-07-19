@@ -15,31 +15,37 @@ import json
 import logging
 import math
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from omicsclaw.autoagent.authority import TrialSkillAuthority
+from omicsclaw.autoagent.constants import (
+    CONSECUTIVE_CRASH_LIMIT,
+    ERROR_OUTPUT_MAX_CHARS,
+    parse_bool,
+)
 from omicsclaw.autoagent.directive import build_directive
 from omicsclaw.autoagent.errors import MetricConfigError, OptimizationCancelled
-from omicsclaw.autoagent.evaluator import EvaluationResult, Evaluator
+from omicsclaw.autoagent.evaluator import Evaluator
 from omicsclaw.autoagent.experiment_ledger import ExperimentLedger, TrialRecord
-from omicsclaw.autoagent.judge import JudgmentResult, judge
+from omicsclaw.autoagent.hard_gates import (
+    GateResult,
+    HardGateVerdict,
+    run_hard_gates,
+)
+from omicsclaw.autoagent.judge import judge
 from omicsclaw.autoagent.metrics_registry import MetricDef
+from omicsclaw.autoagent.output_ownership import claim_session_output_root
 from omicsclaw.autoagent.reproduce import build_reproduce_command
 from omicsclaw.autoagent.runner import TrialExecution, execute_trial
 from omicsclaw.autoagent.search_space import SearchSpace
+from omicsclaw.autoagent.trace import TraceCollector
 
 logger = logging.getLogger(__name__)
 
 # Type alias for the event callback
 EventCallback = Callable[[str, dict[str, Any]], None] | None
-
-from omicsclaw.autoagent.constants import (
-    CONSECUTIVE_CRASH_LIMIT,
-    ERROR_OUTPUT_MAX_CHARS,
-    SCORE_DIFF_EPSILON,
-    parse_bool,
-)
 
 
 @dataclass
@@ -116,7 +122,7 @@ class OptimizationLoop:
         self.skill_name = skill_name
         self.method = method
         self.input_path = input_path
-        self.output_root = Path(output_root)
+        self.output_root = claim_session_output_root(output_root)
         self.search_space = search_space
         self.evaluator = evaluator
         self.metrics = metrics
@@ -127,7 +133,6 @@ class OptimizationLoop:
         self.demo = demo
         self.cancel_event = cancel_event
 
-        self.output_root.mkdir(parents=True, exist_ok=True)
         self.ledger = ExperimentLedger(self.output_root / "experiment_ledger.jsonl")
 
     def run(self, on_event: EventCallback = None) -> OptimizationResult:
@@ -169,7 +174,11 @@ class OptimizationLoop:
             error_detail = "Baseline trial crashed — skill execution failed."
             if baseline.error_output:
                 # Extract the most useful line (usually the last non-empty line)
-                lines = [l for l in baseline.error_output.splitlines() if l.strip()]
+                lines = [
+                    line
+                    for line in baseline.error_output.splitlines()
+                    if line.strip()
+                ]
                 tail = "\n".join(lines[-5:]) if len(lines) > 5 else "\n".join(lines)
                 error_detail += f"\n{tail}"
 
@@ -184,6 +193,27 @@ class OptimizationLoop:
                 converged=False,
                 success=False,
                 error_message=error_detail,
+                on_event=on_event,
+            )
+
+        # Production evaluators carry a Skill identity.  Every scored trial,
+        # including the baseline, must pass the same admission gates before it
+        # can enter the keep/discard comparison.
+        baseline_gates = self._admit_trial_hard_gates(baseline)
+        if baseline_gates is not None and not baseline_gates.all_passed:
+            baseline.status = "crash"
+            baseline.error_output = baseline_gates.to_diagnostic()
+            self.ledger.append(baseline)
+            emit("trial_complete", self._build_trial_complete_payload(baseline))
+            return self._finalize_result(
+                baseline=baseline,
+                best=baseline,
+                converged=False,
+                success=False,
+                error_message=(
+                    "Baseline hard gates failed — trial was not admitted: "
+                    f"{baseline_gates.summary()}"
+                ),
                 on_event=on_event,
             )
 
@@ -328,6 +358,7 @@ class OptimizationLoop:
                 on_event=on_event,
             )
             trial.reasoning = reasoning
+            self._admit_trial_hard_gates(trial)
             trial_crashed = trial.status == "crash"
 
             # Judge keep/discard
@@ -387,6 +418,82 @@ class OptimizationLoop:
 
     # ----- internal -----
 
+    def _admit_trial_hard_gates(
+        self,
+        trial: TrialRecord,
+    ) -> HardGateVerdict | None:
+        """Bind every production trial to the same hard-gate admission rule."""
+
+        if not self.evaluator.skill_name or trial.status == "crash":
+            return None
+        output = (
+            Path(trial.output_dir)
+            if trial.output_dir
+            else self.output_root / f"trial_{trial.trial_id:04d}"
+        )
+        trace = None
+        try:
+            trace = TraceCollector.collect(
+                trial_id=trial.trial_id,
+                skill_name=self.skill_name,
+                method=self.method,
+                execution=TrialExecution(
+                    success=True,
+                    output_dir=str(output),
+                    duration_seconds=trial.duration_seconds,
+                    exit_code=0,
+                    authority=trial.authority,
+                ),
+                output_dir=output,
+                user_params=trial.params,
+                skill_defaults=self.search_space.defaults_dict(),
+            )
+            verdict = run_hard_gates(trace, output)
+        except Exception as exc:
+            verdict = HardGateVerdict(
+                all_passed=False,
+                results=[
+                    GateResult(
+                        name="admission_evidence",
+                        passed=False,
+                        message=(
+                            "Trial hard-gate evidence could not be reconstructed: "
+                            f"{type(exc).__name__}: {exc}"
+                        ),
+                    )
+                ],
+            )
+        trial.hard_gate_verdict = verdict.to_dict()
+        trial.receipt = dict(verdict.receipt)
+        if trace is not None:
+            trace.hard_gate_verdict = verdict.to_dict()
+            trace.receipt = dict(verdict.receipt)
+            try:
+                trace.save(output)
+            except (OSError, RuntimeError, ValueError) as exc:
+                verdict = HardGateVerdict(
+                    all_passed=False,
+                    results=[
+                        *verdict.results,
+                        GateResult(
+                            name="durable_admission",
+                            passed=False,
+                            message=(
+                                "Trial admission evidence could not be persisted: "
+                                f"{type(exc).__name__}: {exc}"
+                            ),
+                        ),
+                    ],
+                    receipt=dict(verdict.receipt),
+                )
+                trial.hard_gate_verdict = verdict.to_dict()
+        if not verdict.all_passed:
+            trial.status = "crash"
+            trial.composite_score = float("-inf")
+            trial.evaluation_success = False
+            trial.error_output = verdict.to_diagnostic()
+        return verdict
+
     def _emit_progress(
         self,
         on_event: EventCallback,
@@ -424,7 +531,6 @@ class OptimizationLoop:
         """Execute a single trial and evaluate its output."""
         self._raise_if_cancelled()
         trial_output = self.output_root / f"trial_{trial_id:04d}"
-        trial_output.mkdir(parents=True, exist_ok=True)
 
         execution = execute_trial(
             skill_name=self.skill_name,
@@ -436,6 +542,13 @@ class OptimizationLoop:
             cancel_event=self.cancel_event,
         )
         self._raise_if_cancelled()
+
+        authority = execution.authority
+        if (
+            not isinstance(authority, TrialSkillAuthority)
+            or not authority.matches_skill_name(self.skill_name)
+        ):
+            authority = None
 
         if not execution.success:
             # Capture the last portion of stderr for diagnostics.
@@ -452,11 +565,32 @@ class OptimizationLoop:
                 output_dir=execution.output_dir,
                 duration_seconds=execution.duration_seconds,
                 error_output=error_output,
+                authority=authority,
+            )
+
+        if authority is None:
+            return TrialRecord(
+                trial_id=trial_id,
+                params=params,
+                composite_score=float("-inf"),
+                status="crash",
+                reasoning=description,
+                output_dir=execution.output_dir,
+                duration_seconds=execution.duration_seconds,
+                error_output=(
+                    execution.authority_error
+                    or "Trial execution has no matching post-verified authority."
+                ),
+                authority=None,
             )
 
         self._raise_if_cancelled()
         try:
-            eval_result = self.evaluator.evaluate(Path(execution.output_dir), params=params)
+            eval_result = self.evaluator.evaluate(
+                Path(execution.output_dir),
+                params=params,
+                authority=authority,
+            )
         except MetricConfigError as exc:
             logger.error("Metric config error for trial %d: %s", trial_id, exc)
             return TrialRecord(
@@ -468,6 +602,7 @@ class OptimizationLoop:
                 output_dir=execution.output_dir,
                 duration_seconds=execution.duration_seconds,
                 error_output=f"MetricConfigError: {exc}",
+                authority=authority,
             )
         except Exception as exc:
             logger.error("Evaluation failed for trial %d: %s", trial_id, exc)
@@ -480,6 +615,7 @@ class OptimizationLoop:
                 output_dir=execution.output_dir,
                 duration_seconds=execution.duration_seconds,
                 error_output=f"Evaluation error: {exc}",
+                authority=authority,
             )
 
         return TrialRecord(
@@ -493,6 +629,7 @@ class OptimizationLoop:
             duration_seconds=execution.duration_seconds,
             evaluation_success=eval_result.success,
             missing_metrics=eval_result.missing_metrics,
+            authority=authority,
         )
 
     def _build_trial_complete_payload(self, trial: TrialRecord) -> dict[str, Any]:

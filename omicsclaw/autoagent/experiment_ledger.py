@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from omicsclaw.autoagent.authority import TrialSkillAuthority
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,17 +36,31 @@ class TrialRecord:
     evaluation_success: bool | None = None
     missing_metrics: list[str] = field(default_factory=list)
     code_state: dict[str, Any] = field(default_factory=dict)
+    authority: TrialSkillAuthority | None = None
+    hard_gate_verdict: dict[str, Any] = field(default_factory=dict)
+    receipt: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.timestamp:
             self.timestamp = datetime.now(timezone.utc).isoformat()
+        if self.authority is not None and not isinstance(
+            self.authority,
+            TrialSkillAuthority,
+        ):
+            raise TypeError("TrialRecord authority must be a TrialSkillAuthority")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> TrialRecord:
-        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+        values = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        authority = values.get("authority")
+        if authority is not None and not isinstance(authority, TrialSkillAuthority):
+            if not isinstance(authority, dict):
+                raise ValueError("invalid TrialRecord authority")
+            values["authority"] = TrialSkillAuthority.from_dict(authority)
+        return cls(**values)
 
 
 class ExperimentLedger:
@@ -202,7 +218,7 @@ class ExperimentLedger:
             try:
                 d = json.loads(line)
                 self._records.append(TrialRecord.from_dict(d))
-            except (json.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError, ValueError):
                 skipped += 1
                 logger.warning(
                     "Skipping corrupted line %d in ledger %s", lineno, self.path,

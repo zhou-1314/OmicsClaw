@@ -22,7 +22,9 @@ These tests pin the four corners of that contract:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -239,6 +241,38 @@ def test_status_ok_overrides_non_zero_exit_code(tmp_path: Path):
     # Simulate the race: subprocess returns 1 but result.json says ok.
     proc = _run_status_script(tmp_path, status="ok", exit_code=1)
     assert proc.returncode == 0
+
+
+def test_sync_driver_scrubs_supplied_backend_control_credentials(tmp_path: Path):
+    control_keys = (
+        "OMICSCLAW_REMOTE_AUTH_TOKEN",
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN",
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD",
+    )
+    child_env = os.environ.copy()
+    child_env.update({key: "must-not-reach-skill" for key in control_keys})
+    child_env["OMICSCLAW_SYNC_DRIVER_TEST_KEEP"] = "ordinary-value"
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    script = tmp_path / "inspect_env.py"
+    script.write_text(
+        "import json, os\n"
+        f"keys = {control_keys!r}\n"
+        "print(json.dumps({key: os.environ.get(key) for key in keys}))\n"
+        "print(os.environ.get('OMICSCLAW_SYNC_DRIVER_TEST_KEEP', ''))\n",
+        encoding="utf-8",
+    )
+
+    completed = drive_subprocess(
+        [sys.executable, str(script)],
+        cwd=tmp_path,
+        env=child_env,
+        out_dir=out_dir,
+    )
+
+    lines = completed.stdout.splitlines()
+    assert json.loads(lines[0]) == {key: None for key in control_keys}
+    assert lines[1] == "ordinary-value"
 
 
 def test_status_failed_overrides_zero_exit_code(tmp_path: Path):

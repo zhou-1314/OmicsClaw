@@ -1,8 +1,9 @@
 """MessageEnvelope: the request DTO consumed by ``dispatch()``.
 
-Per ADR 0006 Q1/Q7. Every Surface — Channel, Desktop, CLI — constructs
-one of these per inbound turn and hands it off to
-``omicsclaw.runtime.agent.dispatcher.dispatch``.
+Per ADR 0006 Q1/Q7. Cut-over Surfaces submit Raw Inbound through
+``ControlRuntime``; its Agent Worker Adapter constructs this compatibility DTO
+only after Turn activation. Legacy uncut paths may still construct one at
+ingress before they migrate.
 
 Fields mirror the kwargs ``omicsclaw.runtime.agent.loop.llm_tool_loop``
 currently accepts. They are kept as a frozen dataclass so misuse (e.g.
@@ -12,8 +13,16 @@ mutating an envelope after dispatch starts) fails loudly.
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Protocol
+
+
+class MessageContentAdapter(Protocol):
+    """Process-local bridge between durable and provider message content."""
+
+    def render_messages(self, messages: list[dict]) -> list[dict]: ...
+
+    def restore_messages(self, messages: list[dict]) -> list[dict]: ...
 
 
 @dataclass(frozen=True)
@@ -45,6 +54,12 @@ class MessageEnvelope:
     usage_accumulator: Any = None
     request_tool_approval: Any = None
     policy_state: Any = None
+
+    # Live, process-local values injected by ControlRuntime. They are never part
+    # of InboundEnvelopeV1 or control.db and legacy Surfaces leave them unset.
+    stored_user_content: str | list | None = None
+    content_adapter: MessageContentAdapter | None = None
+    transcript_turn: Any = None
 
     cancel_event: threading.Event | None = None
     """Set by the Surface to request mid-flight cancellation (ADR 0009).

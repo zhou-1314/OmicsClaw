@@ -134,6 +134,43 @@ def _has_local_socket_runtime():
         return False
 
 
+def test_agent_notebook_kernel_scrubs_backend_control_credentials(
+    tmp_path,
+    monkeypatch,
+):
+    jupyter_client = pytest.importorskip("jupyter_client")
+    pytest.importorskip("nbformat")
+    from omicsclaw.agents.notebook_session import NotebookSession
+
+    observed: dict[str, str] = {}
+
+    class FailingKernelManager:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start_kernel(self, **kwargs):
+            observed.update(kwargs["env"])
+            raise RuntimeError("stop after environment capture")
+
+        def shutdown_kernel(self, **_kwargs):
+            pass
+
+    monkeypatch.setenv("OMICSCLAW_REMOTE_AUTH_TOKEN", "must-not-reach-kernel")
+    monkeypatch.setenv(
+        "OMICSCLAW_SKILL_EVOLUTION_TOKEN",
+        "must-not-reach-kernel",
+    )
+    monkeypatch.setenv("OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD", "3")
+    monkeypatch.setattr(jupyter_client, "KernelManager", FailingKernelManager)
+
+    with pytest.raises(RuntimeError, match="could not start"):
+        NotebookSession(str(tmp_path / "credential-test.ipynb"))
+
+    assert "OMICSCLAW_REMOTE_AUTH_TOKEN" not in observed
+    assert "OMICSCLAW_SKILL_EVOLUTION_TOKEN" not in observed
+    assert "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD" not in observed
+
+
 @pytest.mark.skipif(
     (not _has_notebook_deps()) or (not _has_local_socket_runtime()),
     reason="Notebook runtime unavailable (missing deps or local sockets blocked)",

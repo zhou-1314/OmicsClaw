@@ -34,6 +34,8 @@ import time
 from functools import lru_cache
 from pathlib import Path
 
+from .environment import scrub_internal_control_credentials
+
 logger = logging.getLogger(__name__)
 
 # Our overlay dirs are named by a 16-hex content key; used to gate destructive
@@ -100,7 +102,11 @@ def _interp_identity(base_python: str) -> str:
             return f"{sys.version}|{sys.prefix}"
         proc = subprocess.run(
             [base_python, "-c", "import sys;print(sys.version);print(sys.prefix)"],
-            capture_output=True, text=True, timeout=30, check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+            env=scrub_internal_control_credentials(os.environ),
         )
         if proc.returncode == 0:
             return proc.stdout.strip().replace("\n", "|")
@@ -268,9 +274,15 @@ def venv_lock(key_root: Path, *, timeout: float = _LOCK_TIMEOUT):
 
 
 def _run(cmd: list[str], *, timeout: float, env: dict[str, str] | None = None) -> bool:
+    child_env = scrub_internal_control_credentials(os.environ if env is None else env)
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout, check=False, env=env
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            env=child_env,
         )
     except subprocess.TimeoutExpired:
         logger.warning("adaptive-env: timed out: %s", " ".join(cmd[:3]))

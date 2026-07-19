@@ -60,16 +60,22 @@ def test_executor_protocol_accepts_duck_typed_implementations() -> None:
     assert outcome.stdout_text == "custom-run"
 
 
-def test_jobs_router_dispatches_via_executor(monkeypatch, tmp_path: Path) -> None:
-    """Swap the default executor and confirm a submitted job's terminal
-    state reflects the custom outcome — i.e. the router delegates to the
-    abstraction rather than hard-coding the stub behavior."""
+def test_jobs_router_has_no_legacy_executor_dispatch_path(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Remote scientific Jobs delegate only to the canonical RunRuntime.
+
+    The old generic Executor Protocol may remain available to explicit legacy
+    consumers, but `/jobs` must not import it, persist its payload, or accept
+    the former arbitrary Job wire shape.
+    """
     pytest.importorskip("fastapi")
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from omicsclaw.execution.executors import JobContext, JobOutcome
     from omicsclaw.remote.app_integration import register_remote_routers
+    from omicsclaw.remote.auth import capture_remote_bearer_authority
     from omicsclaw.remote.routers import jobs as jobs_module
 
     workspace = tmp_path / "workspace"
@@ -77,40 +83,16 @@ def test_jobs_router_dispatches_via_executor(monkeypatch, tmp_path: Path) -> Non
     monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(workspace))
     monkeypatch.delenv("OMICSCLAW_REMOTE_AUTH_TOKEN", raising=False)
 
-    class SuccessExecutor:
-        async def run(self, ctx: JobContext) -> JobOutcome:
-            return JobOutcome(
-                exit_code=0,
-                error=None,
-                stdout_text="custom-success-marker",
-            )
-
-    monkeypatch.setattr(jobs_module, "_DEFAULT_EXECUTOR", SuccessExecutor())
+    assert not hasattr(jobs_module, "_DEFAULT_EXECUTOR")
+    assert not hasattr(jobs_module, "_run_job")
+    assert not hasattr(jobs_module, "_ensure_stub_job")
 
     app = FastAPI()
+    capture_remote_bearer_authority(app, {})
     register_remote_routers(app)
     client = TestClient(app)
 
     response = client.post("/jobs", json={"skill": "noop", "inputs": {}})
-    assert response.status_code == 200, response.text
-    job_id = response.json()["job_id"]
-
-    with client.stream("GET", f"/jobs/{job_id}/events") as stream:
-        body = "".join(stream.iter_text())
-
-    assert "event: job_succeeded" in body
-    assert "event: job_failed" not in body
-
-    final = client.get(f"/jobs/{job_id}").json()
-    assert final["status"] == "succeeded"
-    assert final["exit_code"] == 0
-
-    stdout = (
-        workspace
-        / ".omicsclaw"
-        / "remote"
-        / "jobs"
-        / job_id
-        / "stdout.log"
-    ).read_text(encoding="utf-8")
-    assert "custom-success-marker" in stdout
+    assert response.status_code == 422
+    assert response.json()["detail"] == "invalid_job_submission"
+    assert not (workspace / ".omicsclaw" / "remote" / "jobs").exists()

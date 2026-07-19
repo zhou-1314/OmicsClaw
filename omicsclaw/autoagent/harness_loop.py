@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from omicsclaw.autoagent.authority import TrialSkillAuthority
 from omicsclaw.autoagent.constants import (
     CONSECUTIVE_CRASH_LIMIT,
     ERROR_OUTPUT_MAX_CHARS,
@@ -33,7 +34,7 @@ from omicsclaw.autoagent.errors import MetricConfigError, OptimizationCancelled
 from omicsclaw.autoagent.evaluator import Evaluator
 from omicsclaw.autoagent.experiment_ledger import ExperimentLedger, TrialRecord
 from omicsclaw.autoagent.failure_memory import FailureBank, FailureRecord
-from omicsclaw.autoagent.hard_gates import run_hard_gates
+from omicsclaw.autoagent.hard_gates import GateResult, HardGateVerdict, run_hard_gates
 from omicsclaw.autoagent.harness_directive import build_harness_directive
 from omicsclaw.autoagent.harness_workspace import (
     AcceptedPatchRecord,
@@ -46,6 +47,10 @@ from omicsclaw.autoagent.patch_engine import (
     apply_patch,
     parse_patch_response,
     validate_patch,
+)
+from omicsclaw.autoagent.output_ownership import (
+    adopt_preclaimed_session_output_root,
+    claim_session_output_root,
 )
 from omicsclaw.autoagent.runner import execute_trial
 from omicsclaw.autoagent.search_space import SearchSpace
@@ -128,11 +133,19 @@ class HarnessLoop:
         llm_provider_config: dict[str, str] | None = None,
         demo: bool = False,
         cancel_event: threading.Event | None = None,
+        output_claim_id: str | None = None,
     ) -> None:
         self.skill_name = skill_name
         self.method = method
         self.input_path = input_path
-        self.output_root = Path(output_root)
+        self.output_root = (
+            adopt_preclaimed_session_output_root(
+                output_root,
+                claim_id=output_claim_id,
+            )
+            if output_claim_id is not None
+            else claim_session_output_root(output_root)
+        )
         self.surface = surface
         self.evaluator = evaluator
         self.search_space = search_space
@@ -145,7 +158,6 @@ class HarnessLoop:
         self.demo = demo
         self.cancel_event = cancel_event
 
-        self.output_root.mkdir(parents=True, exist_ok=True)
         self.ledger = ExperimentLedger(self.output_root / "experiment_ledger.jsonl")
         self.failure_bank = FailureBank(self.output_root / "failure_bank.jsonl")
 
@@ -186,45 +198,111 @@ class HarnessLoop:
         )
 
         baseline_params = self.search_space.defaults_dict()
-        baseline, baseline_trace = self._run_and_trace(
-            trial_id=0,
-            params=baseline_params,
-            description="baseline (unmodified code)",
-            project_root=workspace.repo_root,
-        )
-        baseline.code_state = workspace.baseline_code_state()
-
-        if baseline.status == "crash":
-            self.ledger.append(baseline)
-            return self._finalize(
-                baseline=baseline,
-                best=baseline,
-                converged=False,
-                patches_accepted=0,
-                patches_rejected=0,
-                accepted_files=[],
-                accepted_patches=[],
-                promotion=None,
-                workspace=workspace,
-                success=False,
-                error_message=(
-                    "Baseline crashed — skill cannot run with current code. "
-                    f"stderr: {baseline.error_output[:300]}"
-                ),
-                on_event=on_event,
+        with workspace.trial_worktree(0, self.surface) as (
+            baseline_root,
+            _baseline_surface,
+        ):
+            baseline, baseline_trace = self._run_and_trace(
+                trial_id=0,
+                params=baseline_params,
+                description="baseline (unmodified code)",
+                project_root=baseline_root,
             )
+            baseline.code_state = workspace.baseline_code_state()
+
+            if baseline.status == "crash":
+                self.ledger.append(baseline)
+                return self._finalize(
+                    baseline=baseline,
+                    best=baseline,
+                    converged=False,
+                    patches_accepted=0,
+                    patches_rejected=0,
+                    accepted_files=[],
+                    accepted_patches=[],
+                    promotion=None,
+                    workspace=workspace,
+                    success=False,
+                    error_message=(
+                        "Baseline crashed — skill cannot run with current code. "
+                        f"stderr: {baseline.error_output[:300]}"
+                    ),
+                    on_event=on_event,
+                )
+
+            baseline_output = (
+                Path(baseline.output_dir)
+                if baseline.output_dir
+                else self.output_root / "trial_0000"
+            )
+            baseline_gates = run_hard_gates(baseline_trace, baseline_output)
+            baseline_gates = self._bind_admission_evidence(
+                baseline,
+                baseline_trace,
+                baseline_gates,
+                baseline_output,
+            )
+            if not baseline_gates.all_passed:
+                baseline.status = "crash"
+                baseline.error_output = baseline_gates.to_diagnostic()
+                self.ledger.append(baseline)
+                return self._finalize(
+                    baseline=baseline,
+                    best=baseline,
+                    converged=False,
+                    patches_accepted=0,
+                    patches_rejected=0,
+                    accepted_files=[],
+                    accepted_patches=[],
+                    promotion=None,
+                    workspace=workspace,
+                    success=False,
+                    error_message=(
+                        "Baseline hard gates failed — trial was not admitted: "
+                        f"{baseline_gates.summary()}"
+                    ),
+                    on_event=on_event,
+                )
+
+            try:
+                workspace.require_clean_baseline_worktree(baseline_root)
+            except ValueError as exc:
+                baseline.status = "crash"
+                baseline.error_output = str(exc)
+                self.ledger.append(baseline)
+                return self._finalize(
+                    baseline=baseline,
+                    best=baseline,
+                    converged=False,
+                    patches_accepted=0,
+                    patches_rejected=0,
+                    accepted_files=[],
+                    accepted_patches=[],
+                    promotion=None,
+                    workspace=workspace,
+                    success=False,
+                    error_message=(
+                        "Baseline worktree was not clean after execution — "
+                        f"trial was not admitted: {exc}"
+                    ),
+                    on_event=on_event,
+                )
 
         baseline.status = "baseline"
         self.ledger.append(baseline)
         best = baseline
+        best_trace = baseline_trace
         traces: list[RunTrace] = [baseline_trace]
 
-        emit("trial_complete", {
-            "trial_id": 0,
-            "iteration": 0,
-            "score": baseline.composite_score,
-            "status": "baseline",
-        })
+        emit(
+            "trial_complete",
+            {
+                "trial_id": 0,
+                "iteration": 0,
+                "score": baseline.composite_score,
+                "status": "baseline",
+            },
+        )
         self._emit_progress(
             emit,
             phase="baseline",
@@ -259,6 +337,7 @@ class HarnessLoop:
         accepted_files: list[str] = []
         accepted_patches: list[AcceptedPatchRecord] = []
         converged = False
+        terminal_error: str | None = None
 
         for iteration in range(1, self.max_iterations + 1):
             self._raise_if_cancelled()
@@ -272,7 +351,7 @@ class HarnessLoop:
 
             # Build directive
             gate_verdict = run_hard_gates(
-                traces[-1],
+                best_trace,
                 Path(best.output_dir) if best.output_dir else self.output_root,
             )
             directive = build_harness_directive(
@@ -289,11 +368,14 @@ class HarnessLoop:
 
             # Ask LLM for patch
             self._raise_if_cancelled()
-            emit("reasoning", {
-                "trial_id": iteration,
-                "iteration": iteration,
-                "phase": "asking_llm",
-            })
+            emit(
+                "reasoning",
+                {
+                    "trial_id": iteration,
+                    "iteration": iteration,
+                    "phase": "asking_llm",
+                },
+            )
 
             try:
                 response_text = self._call_llm(directive)
@@ -301,10 +383,17 @@ class HarnessLoop:
                 raise
             except Exception as exc:
                 logger.error("LLM call failed: %s", exc)
-                promotion = self._promote_workspace(workspace, accepted_files)
+                promotion = self._promote_workspace(
+                    workspace, accepted_files, accepted_patches
+                )
                 return self._finalize(
-                    baseline, best, converged, patches_accepted,
-                    patches_rejected, accepted_files, accepted_patches,
+                    baseline,
+                    best,
+                    converged,
+                    patches_accepted,
+                    patches_rejected,
+                    accepted_files,
+                    accepted_patches,
                     promotion=promotion,
                     workspace=workspace,
                     success=False,
@@ -328,10 +417,17 @@ class HarnessLoop:
                 )
                 consecutive_failures += 1
                 if consecutive_failures >= CONSECUTIVE_CRASH_LIMIT:
-                    promotion = self._promote_workspace(workspace, accepted_files)
+                    promotion = self._promote_workspace(
+                        workspace, accepted_files, accepted_patches
+                    )
                     return self._finalize(
-                        baseline, best, converged, patches_accepted,
-                        patches_rejected, accepted_files, accepted_patches,
+                        baseline,
+                        best,
+                        converged,
+                        patches_accepted,
+                        patches_rejected,
+                        accepted_files,
+                        accepted_patches,
                         promotion=promotion,
                         workspace=workspace,
                         success=False,
@@ -341,20 +437,26 @@ class HarnessLoop:
                 continue
 
             if patch.converged:
-                emit("reasoning", {
-                    "trial_id": iteration,
-                    "iteration": iteration,
-                    "reasoning": patch.reasoning,
-                })
+                emit(
+                    "reasoning",
+                    {
+                        "trial_id": iteration,
+                        "iteration": iteration,
+                        "reasoning": patch.reasoning,
+                    },
+                )
                 converged = True
                 break
 
-            emit("reasoning", {
-                "trial_id": iteration,
-                "iteration": iteration,
-                "reasoning": patch.reasoning,
-                "diff_summary": patch.diff_summary,
-            })
+            emit(
+                "reasoning",
+                {
+                    "trial_id": iteration,
+                    "iteration": iteration,
+                    "reasoning": patch.reasoning,
+                    "diff_summary": patch.diff_summary,
+                },
+            )
 
             trial: TrialRecord | None = None
             trial_trace: RunTrace | None = None
@@ -367,10 +469,12 @@ class HarnessLoop:
                 validation = validate_patch(patch, trial_surface)
                 if not validation.valid:
                     logger.warning(
-                        "Patch validation failed: %s", validation.error_summary,
+                        "Patch validation failed: %s",
+                        validation.error_summary,
                     )
                     self._record_failure(
-                        iteration, patch,
+                        iteration,
+                        patch,
                         gate_failures=["validation"],
                         error_summary=validation.error_summary,
                     )
@@ -385,19 +489,11 @@ class HarnessLoop:
                     consecutive_failures += 1
                     patches_rejected += 1
                     if consecutive_failures >= CONSECUTIVE_CRASH_LIMIT:
-                        promotion = self._promote_workspace(workspace, accepted_files)
-                        return self._finalize(
-                            baseline, best, converged, patches_accepted,
-                            patches_rejected, accepted_files, accepted_patches,
-                            promotion=promotion,
-                            workspace=workspace,
-                            success=False,
-                            error_message=(
-                                f"{CONSECUTIVE_CRASH_LIMIT} consecutive patch "
-                                "validation failures."
-                            ),
-                            on_event=on_event,
+                        terminal_error = (
+                            f"{CONSECUTIVE_CRASH_LIMIT} consecutive patch "
+                            "validation failures."
                         )
+                        break
                     continue
 
                 try:
@@ -405,7 +501,8 @@ class HarnessLoop:
                 except (PermissionError, ValueError) as exc:
                     logger.warning("Patch application failed: %s", exc)
                     self._record_failure(
-                        iteration, patch,
+                        iteration,
+                        patch,
                         gate_failures=["apply"],
                         error_summary=str(exc),
                     )
@@ -420,28 +517,56 @@ class HarnessLoop:
                     consecutive_failures += 1
                     patches_rejected += 1
                     if consecutive_failures >= CONSECUTIVE_CRASH_LIMIT:
-                        promotion = self._promote_workspace(workspace, accepted_files)
-                        return self._finalize(
-                            baseline, best, converged, patches_accepted,
-                            patches_rejected, accepted_files, accepted_patches,
-                            promotion=promotion,
-                            workspace=workspace,
-                            success=False,
-                            error_message=(
-                                f"{CONSECUTIVE_CRASH_LIMIT} consecutive patch "
-                                "application failures."
-                            ),
-                            on_event=on_event,
+                        terminal_error = (
+                            f"{CONSECUTIVE_CRASH_LIMIT} consecutive patch "
+                            "application failures."
                         )
+                        break
+                    continue
+
+                try:
+                    workspace.freeze_candidate_patch(
+                        iteration=iteration,
+                        worktree=trial_root,
+                        patch=patch,
+                        modified_files=modified,
+                    )
+                except ValueError as exc:
+                    logger.warning("Patch witness freeze failed: %s", exc)
+                    self._record_failure(
+                        iteration,
+                        patch,
+                        gate_failures=["freeze"],
+                        error_summary=str(exc),
+                    )
+                    self._record_iteration_rejection_without_trial(
+                        emit,
+                        iteration=iteration,
+                        params=baseline_params,
+                        reasoning=patch.reasoning,
+                        reason=str(exc),
+                        stage="freeze",
+                    )
+                    consecutive_failures += 1
+                    patches_rejected += 1
+                    if consecutive_failures >= CONSECUTIVE_CRASH_LIMIT:
+                        terminal_error = (
+                            f"{CONSECUTIVE_CRASH_LIMIT} consecutive patch "
+                            "witness failures."
+                        )
+                        break
                     continue
 
                 self._raise_if_cancelled()
-                emit("trial_start", {
-                    "trial_id": iteration,
-                    "iteration": iteration,
-                    "files": modified,
-                    "params": {},
-                })
+                emit(
+                    "trial_start",
+                    {
+                        "trial_id": iteration,
+                        "iteration": iteration,
+                        "files": modified,
+                        "params": {},
+                    },
+                )
 
                 trial, trial_trace = self._run_and_trace(
                     trial_id=iteration,
@@ -452,19 +577,66 @@ class HarnessLoop:
                 trial.reasoning = patch.reasoning
                 traces.append(trial_trace)
 
-                trial_output = Path(trial.output_dir) if trial.output_dir else (
-                    self.output_root / f"trial_{iteration:04d}"
+                trial_output = (
+                    Path(trial.output_dir)
+                    if trial.output_dir
+                    else (self.output_root / f"trial_{iteration:04d}")
                 )
+                if trial.status == "crash":
+                    failure_reason = trial.error_output or "Trial execution failed."
+                    self._record_failure(
+                        iteration,
+                        patch,
+                        gate_failures=["execution"],
+                        error_summary=failure_reason,
+                    )
+                    consecutive_failures += 1
+                    patches_rejected += 1
+                    self.ledger.append(trial)
+                    emit(
+                        "trial_judgment",
+                        {
+                            "trial_id": iteration,
+                            "iteration": iteration,
+                            "decision": "discard",
+                            "reason": failure_reason,
+                        },
+                    )
+                    emit(
+                        "trial_complete",
+                        {
+                            "trial_id": iteration,
+                            "iteration": iteration,
+                            "score": trial.composite_score,
+                            "status": trial.status,
+                        },
+                    )
+                    if consecutive_failures >= CONSECUTIVE_CRASH_LIMIT:
+                        terminal_error = (
+                            f"{CONSECUTIVE_CRASH_LIMIT} consecutive trial "
+                            "execution failures."
+                        )
+                        break
+                    continue
+
                 gate_result = run_hard_gates(trial_trace, trial_output)
+                gate_result = self._bind_admission_evidence(
+                    trial,
+                    trial_trace,
+                    gate_result,
+                    trial_output,
+                )
 
                 if not gate_result.all_passed:
                     logger.info(
                         "Iter %d: hard gates FAILED in sandbox — discarding. %s",
-                        iteration, gate_result.summary(),
+                        iteration,
+                        gate_result.summary(),
                     )
                     trial.status = "discard"
                     self._record_failure(
-                        iteration, patch,
+                        iteration,
+                        patch,
                         gate_failures=[g.name for g in gate_result.failed_gates],
                         error_summary=gate_result.summary(),
                     )
@@ -475,23 +647,31 @@ class HarnessLoop:
                     patches_rejected += 1
                     self.ledger.append(trial)
 
-                    emit("trial_judgment", {
-                        "trial_id": iteration,
-                        "iteration": iteration,
-                        "decision": "discard",
-                        "reason": gate_result.summary(),
-                    })
-                    emit("trial_complete", {
-                        "trial_id": iteration,
-                        "iteration": iteration,
-                        "score": trial.composite_score,
-                        "status": trial.status,
-                    })
+                    emit(
+                        "trial_judgment",
+                        {
+                            "trial_id": iteration,
+                            "iteration": iteration,
+                            "decision": "discard",
+                            "reason": gate_result.summary(),
+                        },
+                    )
+                    emit(
+                        "trial_complete",
+                        {
+                            "trial_id": iteration,
+                            "iteration": iteration,
+                            "score": trial.composite_score,
+                            "status": trial.status,
+                        },
+                    )
                     continue
 
                 prior_best_score = best.composite_score
                 judgment = judge(
-                    trial, best, self.ledger,
+                    trial,
+                    best,
+                    self.ledger,
                     baseline_params=baseline_params,
                     metrics=self.evaluator.metrics,
                 )
@@ -514,39 +694,53 @@ class HarnessLoop:
                         )
                         trial.status = "discard"
                         self._record_failure(
-                            iteration, patch,
+                            iteration,
+                            patch,
                             gate_failures=["record"],
                             error_summary=str(exc),
                         )
                         consecutive_failures += 1
                         patches_rejected += 1
                         self.ledger.append(trial)
-                        emit("trial_judgment", {
-                            "trial_id": iteration,
-                            "iteration": iteration,
-                            "decision": "discard",
-                            "reason": f"Failed to record accepted patch: {exc}",
-                        })
-                        emit("trial_complete", {
-                            "trial_id": iteration,
-                            "iteration": iteration,
-                            "score": trial.composite_score,
-                            "status": trial.status,
-                        })
+                        emit(
+                            "trial_judgment",
+                            {
+                                "trial_id": iteration,
+                                "iteration": iteration,
+                                "decision": "discard",
+                                "reason": f"Failed to record accepted patch: {exc}",
+                            },
+                        )
+                        emit(
+                            "trial_complete",
+                            {
+                                "trial_id": iteration,
+                                "iteration": iteration,
+                                "score": trial.composite_score,
+                                "status": trial.status,
+                            },
+                        )
                         if consecutive_failures >= CONSECUTIVE_CRASH_LIMIT:
+                            terminal_error = (
+                                f"{CONSECUTIVE_CRASH_LIMIT} consecutive accepted "
+                                "patch recording failures."
+                            )
                             break
                         continue
 
                     trial.code_state = accepted_record.to_dict()
                     best = trial
+                    best_trace = trial_trace
                     consecutive_failures = 0
                     patches_accepted += 1
                     accepted_files.extend(modified)
                     accepted_patches.append(accepted_record)
                     logger.info(
                         "Iter %d: ACCEPTED patch (%s). Score: %.4f -> %.4f",
-                        iteration, patch.diff_summary,
-                        prior_best_score, trial.composite_score,
+                        iteration,
+                        patch.diff_summary,
+                        prior_best_score,
+                        trial.composite_score,
                     )
                 else:
                     # Patch applied, executed, and scored — just didn't improve.
@@ -554,30 +748,54 @@ class HarnessLoop:
                     consecutive_failures = 0
                     patches_rejected += 1
                     self._record_failure(
-                        iteration, patch,
+                        iteration,
+                        patch,
                         gate_failures=[],
                         error_summary=f"Score did not improve: {judgment.reason}",
                     )
                     logger.info(
-                        "Iter %d: DISCARDED patch. %s", iteration, judgment.reason,
+                        "Iter %d: DISCARDED patch. %s",
+                        iteration,
+                        judgment.reason,
                     )
 
                 self.ledger.append(trial)
-                emit("trial_judgment", {
-                    "trial_id": iteration,
-                    "iteration": iteration,
-                    "decision": judgment.decision,
-                    "reason": judgment.reason,
-                    "new_best": judgment.new_best,
-                })
-                emit("trial_complete", {
-                    "trial_id": iteration,
-                    "iteration": iteration,
-                    "score": trial.composite_score,
-                    "status": trial.status,
-                })
+                emit(
+                    "trial_judgment",
+                    {
+                        "trial_id": iteration,
+                        "iteration": iteration,
+                        "decision": judgment.decision,
+                        "reason": judgment.reason,
+                        "new_best": judgment.new_best,
+                    },
+                )
+                emit(
+                    "trial_complete",
+                    {
+                        "trial_id": iteration,
+                        "iteration": iteration,
+                        "score": trial.composite_score,
+                        "status": trial.status,
+                    },
+                )
 
-        promotion = self._promote_workspace(workspace, accepted_files)
+        promotion = self._promote_workspace(workspace, accepted_files, accepted_patches)
+        if terminal_error is not None:
+            return self._finalize(
+                baseline,
+                best,
+                converged,
+                patches_accepted,
+                patches_rejected,
+                accepted_files,
+                accepted_patches,
+                promotion=promotion,
+                workspace=workspace,
+                success=False,
+                error_message=terminal_error,
+                on_event=on_event,
+            )
         if best is not None and best.status in {"baseline", "keep"}:
             best.code_state = (
                 accepted_patches[-1].to_dict()
@@ -586,8 +804,13 @@ class HarnessLoop:
             )
 
         return self._finalize(
-            baseline, best, converged, patches_accepted,
-            patches_rejected, accepted_files, accepted_patches,
+            baseline,
+            best,
+            converged,
+            patches_accepted,
+            patches_rejected,
+            accepted_files,
+            accepted_patches,
             promotion=promotion,
             workspace=workspace,
             success=True,
@@ -595,6 +818,42 @@ class HarnessLoop:
         )
 
     # ----- internal -----
+
+    @staticmethod
+    def _bind_admission_evidence(
+        trial: TrialRecord,
+        trace: RunTrace,
+        verdict: HardGateVerdict,
+        output_dir: Path,
+    ) -> HardGateVerdict:
+        """Persist the exact receipt and gate verdict used for admission."""
+
+        evidence = verdict.to_dict()
+        receipt = dict(getattr(verdict, "receipt", {}) or {})
+        trial.hard_gate_verdict = evidence
+        trial.receipt = receipt
+        trace.hard_gate_verdict = evidence
+        trace.receipt = receipt
+        try:
+            trace.save(output_dir)
+        except (OSError, RuntimeError, ValueError) as exc:
+            verdict = HardGateVerdict(
+                all_passed=False,
+                results=[
+                    *verdict.results,
+                    GateResult(
+                        name="durable_admission",
+                        passed=False,
+                        message=(
+                            "Trial admission evidence could not be persisted: "
+                            f"{type(exc).__name__}: {exc}"
+                        ),
+                    ),
+                ],
+                receipt=receipt,
+            )
+            trial.hard_gate_verdict = verdict.to_dict()
+        return verdict
 
     def _run_and_trace(
         self,
@@ -606,7 +865,6 @@ class HarnessLoop:
         """Execute a trial and collect its RunTrace."""
         self._raise_if_cancelled()
         trial_output = self.output_root / f"trial_{trial_id:04d}"
-        trial_output.mkdir(parents=True, exist_ok=True)
 
         clear_result_json_cache()
 
@@ -622,20 +880,15 @@ class HarnessLoop:
         )
         self._raise_if_cancelled()
 
-        # Collect trace
-        trace = TraceCollector.collect(
-            trial_id=trial_id,
-            skill_name=self.skill_name,
-            method=self.method,
-            execution=execution,
-            output_dir=Path(execution.output_dir),
-            user_params=params,
-            skill_defaults=self.search_space.defaults_dict(),
-        )
-        trace.save(Path(execution.output_dir))
-
-        # Build trial record
         if not execution.success:
+            trace = TraceCollector.collect_execution_failure(
+                trial_id=trial_id,
+                skill_name=self.skill_name,
+                method=self.method,
+                execution=execution,
+                user_params=params,
+                skill_defaults=self.search_space.defaults_dict(),
+            )
             error_output = (execution.stderr or execution.stdout or "").strip()
             if len(error_output) > ERROR_OUTPUT_MAX_CHARS:
                 error_output = "...\n" + error_output[-ERROR_OUTPUT_MAX_CHARS:]
@@ -648,12 +901,76 @@ class HarnessLoop:
                 output_dir=execution.output_dir,
                 duration_seconds=execution.duration_seconds,
                 error_output=error_output,
+                authority=trace.authority,
             )
             return record, trace
 
+        execution_authority = execution.authority
+        if not isinstance(
+            execution_authority, TrialSkillAuthority
+        ) or not execution_authority.matches_skill_name(self.skill_name):
+            trace = TraceCollector.collect_execution_failure(
+                trial_id=trial_id,
+                skill_name=self.skill_name,
+                method=self.method,
+                execution=execution,
+                user_params=params,
+                skill_defaults=self.search_space.defaults_dict(),
+            )
+            record = TrialRecord(
+                trial_id=trial_id,
+                params=params,
+                composite_score=float("-inf"),
+                status="crash",
+                reasoning=description,
+                output_dir=execution.output_dir,
+                duration_seconds=execution.duration_seconds,
+                error_output=(
+                    execution.authority_error
+                    or "Trial execution has no matching post-verified authority."
+                ),
+                authority=trace.authority,
+            )
+            return record, trace
+
+        # Collect trace
+        trace = TraceCollector.collect(
+            trial_id=trial_id,
+            skill_name=self.skill_name,
+            method=self.method,
+            execution=execution,
+            output_dir=Path(execution.output_dir),
+            user_params=params,
+            skill_defaults=self.search_space.defaults_dict(),
+        )
+
+        authority = trace.authority
+        if not isinstance(
+            authority, TrialSkillAuthority
+        ) or not authority.matches_skill_name(self.skill_name):
+            record = TrialRecord(
+                trial_id=trial_id,
+                params=params,
+                composite_score=float("-inf"),
+                status="crash",
+                reasoning=description,
+                output_dir=execution.output_dir,
+                duration_seconds=execution.duration_seconds,
+                error_output=(
+                    execution.authority_error
+                    or "Trial execution has no matching post-verified authority."
+                ),
+                authority=trace.authority,
+            )
+            return record, trace
+
+        trace.save(Path(execution.output_dir))
+
         try:
             eval_result = self.evaluator.evaluate(
-                Path(execution.output_dir), params=params,
+                Path(execution.output_dir),
+                params=params,
+                authority=authority,
             )
         except MetricConfigError as exc:
             logger.error("Metric config error for trial %d: %s", trial_id, exc)
@@ -666,6 +983,7 @@ class HarnessLoop:
                 output_dir=execution.output_dir,
                 duration_seconds=execution.duration_seconds,
                 error_output=f"MetricConfigError: {exc}",
+                authority=authority,
             )
             return record, trace
         except Exception as exc:
@@ -679,11 +997,16 @@ class HarnessLoop:
                 output_dir=execution.output_dir,
                 duration_seconds=execution.duration_seconds,
                 error_output=f"Evaluation error: {exc}",
+                authority=authority,
             )
             return record, trace
 
         # Enrich trace with evaluation metrics
         trace.quality.quality_metrics = dict(eval_result.raw_metrics)
+        # The pre-evaluation save preserves execution diagnostics when metric
+        # extraction fails.  Replace it atomically after scoring so durable
+        # evidence cannot lag behind the RunTrace used by gates and judgment.
+        trace.save(Path(execution.output_dir))
 
         record = TrialRecord(
             trial_id=trial_id,
@@ -696,6 +1019,7 @@ class HarnessLoop:
             duration_seconds=execution.duration_seconds,
             evaluation_success=eval_result.success,
             missing_metrics=eval_result.missing_metrics,
+            authority=authority,
         )
         return record, trace
 
@@ -713,7 +1037,7 @@ class HarnessLoop:
                 "- Read the existing skill code carefully before proposing changes.\n"
                 "- Make the smallest patch that addresses the reported failure or "
                 "quality issue.\n"
-                "- Don't refactor or \"improve\" code beyond what the failure log "
+                '- Don\'t refactor or "improve" code beyond what the failure log '
                 "requires.\n"
                 "- Don't introduce backwards-compat shims or speculative configurability.\n"
                 "- Don't add comments or docstrings to lines you didn't touch.\n"
@@ -740,15 +1064,17 @@ class HarnessLoop:
         error_summary: str,
     ) -> None:
         """Record a failed patch in the failure bank."""
-        self.failure_bank.append(FailureRecord(
-            iteration=iteration,
-            reasoning=patch.reasoning,
-            diff_summary=patch.diff_summary,
-            description=patch.description,
-            gate_failures=gate_failures,
-            error_summary=error_summary,
-            target_files=[d.file for d in patch.diffs],
-        ))
+        self.failure_bank.append(
+            FailureRecord(
+                iteration=iteration,
+                reasoning=patch.reasoning,
+                diff_summary=patch.diff_summary,
+                description=patch.description,
+                gate_failures=gate_failures,
+                error_summary=error_summary,
+                target_files=[d.file for d in patch.diffs],
+            )
+        )
 
     def _record_iteration_rejection_without_trial(
         self,
@@ -775,22 +1101,28 @@ class HarnessLoop:
             error_output=reason,
         )
         self.ledger.append(record)
-        emit("trial_judgment", {
-            "trial_id": iteration,
-            "iteration": iteration,
-            "decision": "discard",
-            "reason": reason,
-            "new_best": False,
-            "stage": stage,
-        })
-        emit("trial_complete", {
-            "trial_id": iteration,
-            "iteration": iteration,
-            "score": None,
-            "status": record.status,
-            "error": reason,
-            "stage": stage,
-        })
+        emit(
+            "trial_judgment",
+            {
+                "trial_id": iteration,
+                "iteration": iteration,
+                "decision": "discard",
+                "reason": reason,
+                "new_best": False,
+                "stage": stage,
+            },
+        )
+        emit(
+            "trial_complete",
+            {
+                "trial_id": iteration,
+                "iteration": iteration,
+                "score": None,
+                "status": record.status,
+                "error": reason,
+                "stage": stage,
+            },
+        )
         return record
 
     def _finalize(
@@ -812,7 +1144,13 @@ class HarnessLoop:
         improvement_pct = 0.0
         bs = baseline.composite_score if baseline else float("nan")
         bt = best.composite_score if best else float("nan")
-        if baseline and best and math.isfinite(bs) and math.isfinite(bt) and abs(bs) > 1e-12:
+        if (
+            baseline
+            and best
+            and math.isfinite(bs)
+            and math.isfinite(bt)
+            and abs(bs) > 1e-12
+        ):
             improvement_pct = ((bt - bs) / abs(bs)) * 100
 
         result = HarnessResult(
@@ -845,15 +1183,11 @@ class HarnessLoop:
             "improvement_pct": result.improvement_pct,
             "converged": converged,
             "accepted_files": result.accepted_patch_files,
-            "accepted_patch_commits": [
-                patch.commit_hash for patch in accepted_patches
-            ],
+            "accepted_patch_commits": [patch.commit_hash for patch in accepted_patches],
             "accepted_patch_artifacts": [
                 patch.artifact_path for patch in accepted_patches
             ],
-            "accepted_patches": [
-                patch.to_dict() for patch in accepted_patches
-            ],
+            "accepted_patches": [patch.to_dict() for patch in accepted_patches],
             "promotion": result.promotion,
             "sandbox_repo": result.sandbox_repo,
             "source_project_commit": result.source_project_commit,
@@ -872,19 +1206,22 @@ class HarnessLoop:
 
         if on_event:
             if success:
-                on_event("done", {
-                    "best_trial": best.to_dict() if best else None,
-                    "best_score": best.composite_score if best else None,
-                    "improvement_pct": result.improvement_pct,
-                    "total_trials": result.total_iterations,
-                    "total_iterations": result.total_iterations,
-                    "patches_accepted": patches_accepted,
-                    "patches_rejected": patches_rejected,
-                    "converged": converged,
-                    "accepted_files": result.accepted_patch_files,
-                    "accepted_patch_commits": summary["accepted_patch_commits"],
-                    "promotion": result.promotion,
-                })
+                on_event(
+                    "done",
+                    {
+                        "best_trial": best.to_dict() if best else None,
+                        "best_score": best.composite_score if best else None,
+                        "improvement_pct": result.improvement_pct,
+                        "total_trials": result.total_iterations,
+                        "total_iterations": result.total_iterations,
+                        "patches_accepted": patches_accepted,
+                        "patches_rejected": patches_rejected,
+                        "converged": converged,
+                        "accepted_files": result.accepted_patch_files,
+                        "accepted_patch_commits": summary["accepted_patch_commits"],
+                        "promotion": result.promotion,
+                    },
+                )
             else:
                 on_event("error", {"message": error_message or "Failed"})
 
@@ -922,8 +1259,18 @@ class HarnessLoop:
         self,
         workspace: HarnessWorkspace,
         accepted_files: list[str],
+        accepted_patches: list[AcceptedPatchRecord],
     ) -> PromotionResult:
-        if not accepted_files:
+        if not accepted_patches:
+            if accepted_files:
+                return PromotionResult(
+                    status="failed",
+                    message=(
+                        "Accepted files have no successful AcceptedPatchRecord; "
+                        "promotion authority is missing."
+                    ),
+                    journal_path=str(workspace.promotion_journal_path),
+                )
             return PromotionResult(
                 status="not_needed",
                 message="No accepted files to promote.",
@@ -944,7 +1291,9 @@ class HarnessLoop:
                 journal_path=str(workspace.promotion_journal_path),
             )
         try:
-            return workspace.promote_accepted_state(accepted_files)
+            return workspace.promote_accepted_state(
+                accepted_patch=accepted_patches[-1],
+            )
         except Exception as exc:
             logger.error("Failed to promote accepted sandbox state: %s", exc)
             return PromotionResult(

@@ -19,6 +19,47 @@ from pathlib import Path
 import pytest
 
 
+@pytest.mark.asyncio
+async def test_auto_prepare_rejects_claim_alias_processed_h5ad(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from omicsclaw.common.output_claim import OUTPUT_CLAIM_FILENAME
+    from omicsclaw.skill.preflight import sc_batch
+
+    monkeypatch.setattr(
+        sc_batch,
+        "_get_sc_batch_integration_workflow_plan",
+        lambda skill_key, input_path, args: {
+            "file_path": str(tmp_path / "input.h5ad"),
+            "start_step": 2,
+        },
+    )
+
+    async def fake_step(**kwargs):
+        output_dir = tmp_path / "prepared"
+        output_dir.mkdir()
+        claim = output_dir / OUTPUT_CLAIM_FILENAME
+        claim.write_text("{}\n", encoding="utf-8")
+        (output_dir / "processed.h5ad").hardlink_to(claim)
+        return {"success": True, "out_dir": output_dir}
+
+    monkeypatch.setattr(sc_batch, "run_omics_skill_step", fake_step)
+
+    result = await sc_batch._auto_prepare_sc_batch_integration(
+        skill_key="sc-batch-integration",
+        input_path=str(tmp_path / "input.h5ad"),
+        args={},
+        session_id=None,
+        chat_id=0,
+        output_root=tmp_path / "outputs",
+    )
+
+    assert result is not None
+    assert "final_message" in result
+    assert "did not produce" in result["final_message"]
+
+
 # ---------------------------------------------------------------------------
 # Pure helpers — no AnnData / disk
 # ---------------------------------------------------------------------------

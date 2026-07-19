@@ -47,9 +47,9 @@ def main():
     if args.data_dir:
         data_dir = Path(args.data_dir)
     else:
-        # Use project root data/ directory
-        project_root = Path(__file__).parent.parent.parent
-        data_dir = project_root / 'data'
+        # Keep default writes inside this Run.  An explicit --data-dir remains
+        # an intentionally broader user-selected write surface.
+        data_dir = output_dir / 'data'
     data_dir.mkdir(parents=True, exist_ok=True)
 
     input_value = DEMO_TEXT if args.demo else args.input
@@ -146,8 +146,10 @@ def write_result_json(
     """
     payload = {
         "skill": "literature",
+        "version": SKILL_VERSION,
         "success": True,
         "completed_at": datetime.now(timezone.utc).isoformat(),
+        "input_checksum": "",
         "summary": {
             "method": "metadata-extraction",
             "gse_count": len(metadata["geo_accessions"].get("gse", [])),

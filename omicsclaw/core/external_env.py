@@ -15,11 +15,14 @@ This module provides three call shapes:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Sequence
+
+from omicsclaw.skill.execution.environment import scrub_internal_control_credentials
 
 DEFAULT_TIMEOUT_SECONDS: float = 1800.0  # 30 min — banksy on a large slide
                                           # can take many minutes; longer than
@@ -62,7 +65,11 @@ def _env_list_lines() -> list[str]:
     """Return lines from the first working env-list command."""
     for runner in _available_runners():
         res = subprocess.run(
-            [runner, "env", "list"], capture_output=True, text=True, check=False
+            [runner, "env", "list"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=scrub_internal_control_credentials(os.environ),
         )
         if res.returncode == 0:
             return res.stdout.splitlines()
@@ -101,7 +108,12 @@ def run_python_in_env(env: str, code: str, *, timeout: float | None = None) -> s
     effective_timeout = DEFAULT_TIMEOUT_SECONDS if timeout is None else timeout
     try:
         res = subprocess.run(
-            cmd, capture_output=True, text=True, check=True, timeout=effective_timeout
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=effective_timeout,
+            env=scrub_internal_control_credentials(os.environ),
         )
     except subprocess.CalledProcessError as exc:
         stderr_tail = (exc.stderr or "").rstrip()
@@ -145,7 +157,12 @@ def run_script_in_env(
     effective_timeout = DEFAULT_TIMEOUT_SECONDS if timeout is None else timeout
     try:
         res = subprocess.run(
-            cmd, capture_output=True, text=True, check=True, timeout=effective_timeout
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=effective_timeout,
+            env=scrub_internal_control_credentials(os.environ),
         )
     except subprocess.CalledProcessError as exc:
         stderr_tail = (exc.stderr or "").rstrip()

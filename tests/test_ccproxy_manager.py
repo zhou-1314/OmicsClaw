@@ -15,6 +15,13 @@ import pytest
 from omicsclaw.providers import ccproxy as ccm
 
 
+_CONTROL_CREDENTIAL_KEYS = (
+    "OMICSCLAW_REMOTE_AUTH_TOKEN",
+    "OMICSCLAW_SKILL_EVOLUTION_TOKEN",
+    "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD",
+)
+
+
 @pytest.fixture(autouse=True)
 def _restore_oauth_env_vars():
     """Isolate tests that mutate ANTHROPIC_/OPENAI_ env vars via os.environ.
@@ -107,12 +114,23 @@ def test_check_ccproxy_auth_authenticated(monkeypatch):
     )
     completed = MagicMock(returncode=0, stdout=stdout, stderr="")
     monkeypatch.setattr(ccm, "_ccproxy_exe", lambda: "/usr/bin/ccproxy")
-    monkeypatch.setattr(ccm.subprocess, "run", lambda *a, **kw: completed)
+    observed: dict[str, str] = {}
+
+    def _run(*_args, **kwargs):
+        observed.update(kwargs["env"])
+        return completed
+
+    for key in _CONTROL_CREDENTIAL_KEYS:
+        monkeypatch.setenv(key, "must-not-reach-ccproxy")
+    monkeypatch.setenv("OMICSCLAW_CCProxy_TEST_KEEP", "ordinary-value")
+    monkeypatch.setattr(ccm.subprocess, "run", _run)
 
     ok, msg = ccm.check_ccproxy_auth("claude_api")
     assert ok is True
     assert "user@example.com" in msg
     assert "plus" in msg
+    assert observed["OMICSCLAW_CCProxy_TEST_KEEP"] == "ordinary-value"
+    assert not set(_CONTROL_CREDENTIAL_KEYS).intersection(observed)
 
 
 def test_check_ccproxy_auth_not_authenticated(monkeypatch):
@@ -185,14 +203,19 @@ def test_is_ccproxy_running_false_on_connection_error(monkeypatch):
 def test_start_ccproxy_succeeds_when_healthy(monkeypatch):
     fake_proc = MagicMock()
     fake_proc.poll.return_value = None
-    monkeypatch.setattr(
-        ccm.subprocess, "Popen", MagicMock(return_value=fake_proc)
-    )
+    popen = MagicMock(return_value=fake_proc)
+    for key in _CONTROL_CREDENTIAL_KEYS:
+        monkeypatch.setenv(key, "must-not-reach-ccproxy")
+    monkeypatch.setenv("OMICSCLAW_CCProxy_TEST_KEEP", "ordinary-value")
+    monkeypatch.setattr(ccm.subprocess, "Popen", popen)
     monkeypatch.setattr(ccm, "_ccproxy_exe", lambda: "/usr/bin/ccproxy")
     monkeypatch.setattr(ccm, "is_ccproxy_running", lambda port: True)
 
     proc = ccm.start_ccproxy(8765)
     assert proc is fake_proc
+    child_env = popen.call_args.kwargs["env"]
+    assert child_env["OMICSCLAW_CCProxy_TEST_KEEP"] == "ordinary-value"
+    assert not set(_CONTROL_CREDENTIAL_KEYS).intersection(child_env)
 
 
 def test_start_ccproxy_raises_on_early_exit(monkeypatch):

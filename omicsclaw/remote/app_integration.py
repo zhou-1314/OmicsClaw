@@ -23,8 +23,8 @@ def register_remote_routers(app: FastAPI) -> None:
     """Mount the remote control-plane routers onto ``app``.
 
     Every router shares the same bearer-token dependency — no back-door
-    endpoints. The gate is a no-op when ``OMICSCLAW_REMOTE_AUTH_TOKEN`` is
-    unset (local-dev / single-user SSH-tunnel default).
+    endpoints. The gate is a no-op when the process-lifetime remote authority
+    was explicitly captured without a token (local-dev / SSH-tunnel default).
     """
     deps = [Depends(require_bearer_token)]
     app.include_router(connections.router, dependencies=deps)

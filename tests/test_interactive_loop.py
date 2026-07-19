@@ -12,6 +12,8 @@ from types import SimpleNamespace
 import pytest
 from rich.console import Console
 
+from omicsclaw.control import ControlRuntime
+from omicsclaw.runtime.agent.events import Final, StreamContent
 from omicsclaw.runtime.storage.transcript import TranscriptStore
 from omicsclaw.skill.registry import OmicsRegistry
 from omicsclaw.surfaces.cli import interactive
@@ -21,6 +23,25 @@ from omicsclaw.surfaces.cli._session_command_support import (
     SessionListEntry,
     SessionListView,
 )
+
+
+def _install_agent_state_double(monkeypatch, core_module: ModuleType) -> None:
+    """Install a state double while preserving one canonical restore target."""
+
+    import omicsclaw.runtime.agent as agent_package
+
+    canonical_state = sys.modules.get("omicsclaw.runtime.agent.state")
+    if canonical_state is not None:
+        # Some Python import paths refresh the package attribute independently
+        # of sys.modules. Align both before monkeypatch records its old value so
+        # teardown cannot leave later dispatcher tests with split identities.
+        agent_package.state = canonical_state
+
+    bot_package = ModuleType("bot")
+    bot_package.core = core_module
+    monkeypatch.setitem(sys.modules, "bot", bot_package)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
+    monkeypatch.setattr(agent_package, "state", core_module, raising=False)
 
 
 def test_interactive_import_does_not_require_graph_memory_dependencies():
@@ -107,13 +128,7 @@ async def test_stream_llm_response_uses_explicit_workspace_context(monkeypatch):
     core_module.get_usage_snapshot = lambda: {}
     core_module.llm_tool_loop = _fake_llm_tool_loop
 
-    bot_package = ModuleType("bot")
-    bot_package.core = core_module
-
-    monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
-    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
-    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
+    _install_agent_state_double(monkeypatch, core_module)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 
@@ -139,6 +154,79 @@ async def test_stream_llm_response_uses_explicit_workspace_context(monkeypatch):
     ]
 
 
+@pytest.mark.asyncio
+async def test_stream_llm_response_uses_control_runtime_in_production_path(
+    monkeypatch,
+    tmp_path,
+):
+    captured_envelopes = []
+    output = io.StringIO()
+    import omicsclaw.runtime.agent.state as core_module
+
+    core_store = TranscriptStore()
+    monkeypatch.setattr(core_module, "transcript_store", core_store)
+    monkeypatch.setattr(core_module, "conversations", core_store.messages_by_chat)
+    monkeypatch.setattr(
+        core_module,
+        "_conversation_access",
+        core_store.access_by_chat,
+    )
+    monkeypatch.setattr(core_module, "get_usage_snapshot", lambda: {})
+
+    async def dispatch_events(envelope):
+        captured_envelopes.append(envelope)
+        envelope.transcript_turn.append_user_message(
+            envelope.chat_id,
+            envelope.content,
+        )
+        yield StreamContent("Controlled reply.")
+        yield Final("Controlled reply.")
+
+    async def no_mcp_servers():
+        return ()
+
+    monkeypatch.setattr(
+        interactive,
+        "load_active_mcp_server_entries_for_prompt",
+        no_mcp_servers,
+    )
+    monkeypatch.setattr(
+        interactive,
+        "console",
+        Console(file=output, force_terminal=False),
+    )
+
+    runtime = ControlRuntime.for_local_surface(
+        state_root=tmp_path,
+        workspace_id="workspace-test",
+        surface="cli",
+        installation_id="local",
+        profile_id="owner",
+        dispatch_events=dispatch_events,
+    )
+    await runtime.start()
+    try:
+        messages = [{"role": "user", "content": "controlled prompt"}]
+        result = await interactive._stream_llm_response(
+            messages,
+            workspace_dir="/tmp/workspace",
+            control_runtime=runtime,
+            reply_slot="main",
+        )
+    finally:
+        await runtime.close()
+
+    assert result == "Controlled reply."
+    assert len(captured_envelopes) == 1
+    assert captured_envelopes[0].chat_id != "__interactive__"
+    assert captured_envelopes[0].content == "controlled prompt"
+    assert messages == [
+        {"role": "user", "content": "controlled prompt"},
+        {"role": "assistant", "content": "Controlled reply."},
+    ]
+    assert output.getvalue().count("Controlled reply.") == 1
+
+
 def test_init_llm_does_not_force_registry_load(monkeypatch):
     calls: list[tuple[tuple, dict]] = []
     real_load_all = OmicsRegistry.load_all
@@ -152,7 +240,7 @@ def test_init_llm_does_not_force_registry_load(monkeypatch):
         "omicsclaw.runtime.context.assembler",
         "omicsclaw.runtime.context.layers",
     ):
-        sys.modules.pop(name, None)
+        monkeypatch.delitem(sys.modules, name, raising=False)
 
     monkeypatch.setattr(OmicsRegistry, "load_all", spy)
     monkeypatch.setenv("OMICSCLAW_MEMORY_ENABLED", "false")
@@ -180,13 +268,7 @@ def test_init_llm_prefers_explicit_config_over_environment(monkeypatch):
         core_module.LLM_PROVIDER_NAME = str(kwargs["provider"])
 
     core_module.init = _init
-    bot_package = ModuleType("bot")
-    bot_package.core = core_module
-
-    monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
-    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
-    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
+    _install_agent_state_double(monkeypatch, core_module)
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("LLM_API_KEY", "env-key")
     monkeypatch.setenv("OMICSCLAW_MODEL", "env-model")
@@ -287,13 +369,7 @@ async def test_stream_llm_response_formats_markdown_for_cli(monkeypatch):
     core_module.get_usage_snapshot = lambda: {}
     core_module.llm_tool_loop = _fake_llm_tool_loop
 
-    bot_package = ModuleType("bot")
-    bot_package.core = core_module
-
-    monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
-    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
-    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
+    _install_agent_state_double(monkeypatch, core_module)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 
@@ -340,13 +416,7 @@ async def test_stream_llm_response_passes_plan_context(monkeypatch):
     core_module.get_usage_snapshot = lambda: {}
     core_module.llm_tool_loop = _fake_llm_tool_loop
 
-    bot_package = ModuleType("bot")
-    bot_package.core = core_module
-
-    monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
-    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
-    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
+    _install_agent_state_double(monkeypatch, core_module)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 
@@ -472,13 +542,7 @@ async def test_stream_llm_response_formats_sectioned_markdown_lists(monkeypatch)
     core_module.get_usage_snapshot = lambda: {}
     core_module.llm_tool_loop = _fake_llm_tool_loop
 
-    bot_package = ModuleType("bot")
-    bot_package.core = core_module
-
-    monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
-    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
-    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
+    _install_agent_state_double(monkeypatch, core_module)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 
@@ -538,13 +602,7 @@ async def test_stream_llm_response_separates_tool_log_from_response(monkeypatch)
     core_module.get_usage_snapshot = lambda: {}
     core_module.llm_tool_loop = _fake_llm_tool_loop
 
-    bot_package = ModuleType("bot")
-    bot_package.core = core_module
-
-    monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
-    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
-    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
+    _install_agent_state_double(monkeypatch, core_module)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 
@@ -603,13 +661,7 @@ async def test_stream_llm_response_does_not_repeat_final_text_after_tool_interlu
     core_module.get_usage_snapshot = lambda: {}
     core_module.llm_tool_loop = _fake_llm_tool_loop
 
-    bot_package = ModuleType("bot")
-    bot_package.core = core_module
-
-    monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
-    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
-    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
+    _install_agent_state_double(monkeypatch, core_module)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 
@@ -676,13 +728,7 @@ async def test_stream_llm_response_marks_followup_tool_batches_as_updates(monkey
     core_module.get_usage_snapshot = lambda: {}
     core_module.llm_tool_loop = _fake_llm_tool_loop
 
-    bot_package = ModuleType("bot")
-    bot_package.core = core_module
-
-    monkeypatch.setitem(sys.modules, "bot", bot_package)
-    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core_module)
-    import omicsclaw.runtime.agent as _omicsclaw_agent_pkg
-    monkeypatch.setattr(_omicsclaw_agent_pkg, "state", core_module, raising=False)
+    _install_agent_state_double(monkeypatch, core_module)
     monkeypatch.setattr(interactive, "list_mcp_servers", lambda: [])
     monkeypatch.setattr(interactive, "console", Console(file=output, force_terminal=False))
 

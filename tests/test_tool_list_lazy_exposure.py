@@ -8,7 +8,8 @@ Coverage map (mirrors plan section "Wire 33 lazy-load tools to predicates"):
 
 | Predicate                          | Tools                                     |
 |------------------------------------|-------------------------------------------|
-| (none — always-on)                 | omicsclaw, resolve_capability,            |
+| (none — always-on)                 | omicsclaw, candidate_plan_execute,        |
+|                                    | resolve_capability,                       |
 |                                    | consult_knowledge, inspect_data,          |
 |                                    | list_directory, glob_files, file_read,    |
 |                                    | read_knowhow, ask_user, kg_search,        |
@@ -55,6 +56,7 @@ def _selected_names(query: str = "", **kwargs) -> set[str]:
 
 ALWAYS_ON = (
     "omicsclaw",
+    "candidate_plan_execute",
     "resolve_capability",
     "consult_knowledge",
     "inspect_data",

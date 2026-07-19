@@ -8,11 +8,8 @@ Usage:
     # Run Telegram only:
     python -m omicsclaw.surfaces.channels.__main__ --channels telegram
 
-    # Run Feishu only:
-    python -m omicsclaw.surfaces.channels.__main__ --channels feishu
-
-    # Run both in one process:
-    python -m omicsclaw.surfaces.channels.__main__ --channels telegram,feishu
+    # Other Adapters are listed for migration visibility but fail closed until
+    # they receive the same ControlRuntime + persistent Delivery cutover.
 
     # Run with health check server:
     python -m omicsclaw.surfaces.channels.__main__ --channels telegram --health-port 8080
@@ -49,7 +46,7 @@ for _p in [_PROJECT_ROOT / ".env", Path.cwd() / ".env"]:
         break
 
 from omicsclaw.runtime.agent import state as core  # noqa: E402
-from omicsclaw.surfaces.channels import CHANNEL_REGISTRY, get_channel_class  # noqa: E402
+from omicsclaw.surfaces.channels import CHANNEL_REGISTRY  # noqa: E402
 
 logger = logging.getLogger("omicsclaw.runner")
 
@@ -72,14 +69,14 @@ def _resolve_bootstrap_llm_config(
     resolved_url, resolved_model, resolved_key = resolve_provider(
         provider=explicit_provider,
         base_url=str(source.get("LLM_BASE_URL", "") or ""),
-        model=str(source.get("OMICSCLAW_MODEL", source.get("SPATIALCLAW_MODEL", "")) or ""),
+        model=str(
+            source.get("OMICSCLAW_MODEL", source.get("SPATIALCLAW_MODEL", "")) or ""
+        ),
         api_key=str(source.get("LLM_API_KEY", "") or ""),
         env=source,
     )
 
-    auth_mode = (
-        str(source.get("LLM_AUTH_MODE", "") or "").strip().lower() or "api_key"
-    )
+    auth_mode = str(source.get("LLM_AUTH_MODE", "") or "").strip().lower() or "api_key"
     try:
         ccproxy_port = int(source.get("CCPROXY_PORT", "11435") or "11435")
     except (TypeError, ValueError):
@@ -98,74 +95,100 @@ def _resolve_bootstrap_llm_config(
 def _build_telegram_channel():
     """Build a TelegramChannel from environment variables."""
     from omicsclaw.surfaces.channels.telegram import TelegramChannel, TelegramConfig
+
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
-    return TelegramChannel(TelegramConfig(
-        bot_token=token,
-        admin_chat_id=int(os.environ.get("TELEGRAM_CHAT_ID", "0") or "0"),
-        rate_limit_per_hour=int(os.environ.get("RATE_LIMIT_PER_HOUR", "10")),
-    ))
+    allowed_raw = os.environ.get("TELEGRAM_ALLOWED_SENDERS", "")
+    allowed = {value.strip() for value in allowed_raw.split(",") if value.strip()}
+    return TelegramChannel(
+        TelegramConfig(
+            bot_token=token,
+            admin_chat_id=int(os.environ.get("TELEGRAM_CHAT_ID", "0") or "0"),
+            account_namespace=os.environ.get("TELEGRAM_ACCOUNT_NAMESPACE", "").strip(),
+            allowed_senders=allowed or None,
+        )
+    )
 
 
 def _build_feishu_channel():
     """Build a FeishuChannel from environment variables."""
     from omicsclaw.surfaces.channels.feishu import FeishuChannel, FeishuConfig
+
     app_id = os.environ.get("FEISHU_APP_ID", "")
     app_secret = os.environ.get("FEISHU_APP_SECRET", "")
     if not app_id or not app_secret:
         raise RuntimeError("FEISHU_APP_ID and FEISHU_APP_SECRET required")
-    return FeishuChannel(FeishuConfig(
-        app_id=app_id,
-        app_secret=app_secret,
-        thinking_threshold_ms=int(os.environ.get("FEISHU_THINKING_THRESHOLD_MS", "2500")),
-        max_inbound_image_mb=int(os.environ.get("FEISHU_MAX_INBOUND_IMAGE_MB", "12")),
-        max_inbound_file_mb=int(os.environ.get("FEISHU_MAX_INBOUND_FILE_MB", "40")),
-        max_attachments=int(os.environ.get("FEISHU_MAX_ATTACHMENTS", "4")),
-        rate_limit_per_hour=int(os.environ.get("FEISHU_RATE_LIMIT_PER_HOUR", "60")),
-        debug=os.environ.get("FEISHU_BRIDGE_DEBUG", "") == "1",
-    ))
+    return FeishuChannel(
+        FeishuConfig(
+            app_id=app_id,
+            app_secret=app_secret,
+            thinking_threshold_ms=int(
+                os.environ.get("FEISHU_THINKING_THRESHOLD_MS", "2500")
+            ),
+            max_inbound_image_mb=int(
+                os.environ.get("FEISHU_MAX_INBOUND_IMAGE_MB", "12")
+            ),
+            max_inbound_file_mb=int(os.environ.get("FEISHU_MAX_INBOUND_FILE_MB", "40")),
+            max_attachments=int(os.environ.get("FEISHU_MAX_ATTACHMENTS", "4")),
+            rate_limit_per_hour=int(os.environ.get("FEISHU_RATE_LIMIT_PER_HOUR", "60")),
+            debug=os.environ.get("FEISHU_BRIDGE_DEBUG", "") == "1",
+        )
+    )
 
 
 def _build_dingtalk_channel():
     """Build a DingTalkChannel from environment variables."""
     from omicsclaw.surfaces.channels.dingtalk import DingTalkChannel, DingTalkConfig
+
     client_id = os.environ.get("DINGTALK_CLIENT_ID", "")
     client_secret = os.environ.get("DINGTALK_CLIENT_SECRET", "")
     if not client_id or not client_secret:
         raise RuntimeError("DINGTALK_CLIENT_ID and DINGTALK_CLIENT_SECRET required")
-    return DingTalkChannel(DingTalkConfig(
-        client_id=client_id,
-        client_secret=client_secret,
-        rate_limit_per_hour=int(os.environ.get("DINGTALK_RATE_LIMIT_PER_HOUR", "60")),
-    ))
+    return DingTalkChannel(
+        DingTalkConfig(
+            client_id=client_id,
+            client_secret=client_secret,
+            rate_limit_per_hour=int(
+                os.environ.get("DINGTALK_RATE_LIMIT_PER_HOUR", "60")
+            ),
+        )
+    )
 
 
 def _build_discord_channel():
     """Build a DiscordChannel from environment variables."""
     from omicsclaw.surfaces.channels.discord import DiscordChannel, DiscordConfig
+
     token = os.environ.get("DISCORD_BOT_TOKEN", "")
     if not token:
         raise RuntimeError("DISCORD_BOT_TOKEN not set")
-    return DiscordChannel(DiscordConfig(
-        bot_token=token,
-        rate_limit_per_hour=int(os.environ.get("DISCORD_RATE_LIMIT_PER_HOUR", "60")),
-        proxy=os.environ.get("DISCORD_PROXY"),
-    ))
+    return DiscordChannel(
+        DiscordConfig(
+            bot_token=token,
+            rate_limit_per_hour=int(
+                os.environ.get("DISCORD_RATE_LIMIT_PER_HOUR", "60")
+            ),
+            proxy=os.environ.get("DISCORD_PROXY"),
+        )
+    )
 
 
 def _build_slack_channel():
     """Build a SlackChannel from environment variables."""
     from omicsclaw.surfaces.channels.slack import SlackChannel, SlackConfig
+
     bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
     app_token = os.environ.get("SLACK_APP_TOKEN", "")
     if not bot_token or not app_token:
         raise RuntimeError("SLACK_BOT_TOKEN and SLACK_APP_TOKEN required")
-    return SlackChannel(SlackConfig(
-        bot_token=bot_token,
-        app_token=app_token,
-        rate_limit_per_hour=int(os.environ.get("SLACK_RATE_LIMIT_PER_HOUR", "60")),
-    ))
+    return SlackChannel(
+        SlackConfig(
+            bot_token=bot_token,
+            app_token=app_token,
+            rate_limit_per_hour=int(os.environ.get("SLACK_RATE_LIMIT_PER_HOUR", "60")),
+        )
+    )
 
 
 def _build_wechat_channel():
@@ -180,6 +203,7 @@ def _build_wechat_channel():
 
     if wecom_corp_id:
         from omicsclaw.surfaces.channels.wechat import WeChatChannel, WeComConfig
+
         return WeChatChannel(
             WeComConfig(
                 corp_id=wecom_corp_id,
@@ -193,6 +217,7 @@ def _build_wechat_channel():
         )
     elif wechat_app_id:
         from omicsclaw.surfaces.channels.wechat import WeChatChannel, WeChatMPConfig
+
         return WeChatChannel(
             WeChatMPConfig(
                 app_id=wechat_app_id,
@@ -213,23 +238,27 @@ def _build_wechat_channel():
 def _build_qq_channel():
     """Build a QQChannel from environment variables."""
     from omicsclaw.surfaces.channels.qq import QQChannel, QQConfig
+
     app_id = os.environ.get("QQ_APP_ID", "")
     app_secret = os.environ.get("QQ_APP_SECRET", "")
     if not app_id or not app_secret:
         raise RuntimeError("QQ_APP_ID and QQ_APP_SECRET required")
     allowed_raw = os.environ.get("QQ_ALLOWED_SENDERS", "")
     allowed = {s.strip() for s in allowed_raw.split(",") if s.strip()} or None
-    return QQChannel(QQConfig(
-        app_id=app_id,
-        app_secret=app_secret,
-        allowed_senders=allowed,
-        rate_limit_per_hour=int(os.environ.get("QQ_RATE_LIMIT_PER_HOUR", "60")),
-    ))
+    return QQChannel(
+        QQConfig(
+            app_id=app_id,
+            app_secret=app_secret,
+            allowed_senders=allowed,
+            rate_limit_per_hour=int(os.environ.get("QQ_RATE_LIMIT_PER_HOUR", "60")),
+        )
+    )
 
 
 def _build_email_channel():
     """Build an EmailChannel from environment variables."""
     from omicsclaw.surfaces.channels.email import EmailChannel, EmailConfig
+
     imap_host = os.environ.get("EMAIL_IMAP_HOST", "")
     imap_user = os.environ.get("EMAIL_IMAP_USERNAME", "")
     smtp_host = os.environ.get("EMAIL_SMTP_HOST", "")
@@ -241,59 +270,91 @@ def _build_email_channel():
         )
     allowed_raw = os.environ.get("EMAIL_ALLOWED_SENDERS", "")
     allowed = {s.strip() for s in allowed_raw.split(",") if s.strip()} or None
-    return EmailChannel(EmailConfig(
-        imap_host=imap_host,
-        imap_port=int(os.environ.get("EMAIL_IMAP_PORT", "993")),
-        imap_username=imap_user,
-        imap_password=os.environ.get("EMAIL_IMAP_PASSWORD", ""),
-        imap_mailbox=os.environ.get("EMAIL_IMAP_MAILBOX", "INBOX"),
-        imap_use_ssl=os.environ.get("EMAIL_IMAP_USE_SSL", "1") != "0",
-        smtp_host=smtp_host,
-        smtp_port=int(os.environ.get("EMAIL_SMTP_PORT", "587")),
-        smtp_username=smtp_user,
-        smtp_password=os.environ.get("EMAIL_SMTP_PASSWORD", ""),
-        smtp_starttls=os.environ.get("EMAIL_SMTP_STARTTLS", "1") != "0",
-        from_address=os.environ.get("EMAIL_FROM_ADDRESS", smtp_user),
-        poll_interval=int(os.environ.get("EMAIL_POLL_INTERVAL", "30")),
-        mark_seen=os.environ.get("EMAIL_MARK_SEEN", "1") != "0",
-        allowed_senders=allowed,
-    ))
+    return EmailChannel(
+        EmailConfig(
+            imap_host=imap_host,
+            imap_port=int(os.environ.get("EMAIL_IMAP_PORT", "993")),
+            imap_username=imap_user,
+            imap_password=os.environ.get("EMAIL_IMAP_PASSWORD", ""),
+            imap_mailbox=os.environ.get("EMAIL_IMAP_MAILBOX", "INBOX"),
+            imap_use_ssl=os.environ.get("EMAIL_IMAP_USE_SSL", "1") != "0",
+            smtp_host=smtp_host,
+            smtp_port=int(os.environ.get("EMAIL_SMTP_PORT", "587")),
+            smtp_username=smtp_user,
+            smtp_password=os.environ.get("EMAIL_SMTP_PASSWORD", ""),
+            smtp_starttls=os.environ.get("EMAIL_SMTP_STARTTLS", "1") != "0",
+            from_address=os.environ.get("EMAIL_FROM_ADDRESS", smtp_user),
+            poll_interval=int(os.environ.get("EMAIL_POLL_INTERVAL", "30")),
+            mark_seen=os.environ.get("EMAIL_MARK_SEEN", "1") != "0",
+            allowed_senders=allowed,
+        )
+    )
 
 
 def _build_imessage_channel():
     """Build an IMessageChannel from environment variables (macOS only)."""
     import sys
+
     if sys.platform != "darwin":
         raise RuntimeError("iMessage channel requires macOS")
     from omicsclaw.surfaces.channels.imessage import IMessageChannel, IMessageConfig
+
     allowed_raw = os.environ.get("IMESSAGE_ALLOWED_SENDERS", "")
     allowed = {s.strip() for s in allowed_raw.split(",") if s.strip()} or None
-    return IMessageChannel(IMessageConfig(
-        cli_path=os.environ.get("IMESSAGE_CLI_PATH", "imsg"),
-        service=os.environ.get("IMESSAGE_SERVICE", "auto"),
-        region=os.environ.get("IMESSAGE_REGION", "US"),
-        allowed_senders=allowed,
-    ))
+    return IMessageChannel(
+        IMessageConfig(
+            cli_path=os.environ.get("IMESSAGE_CLI_PATH", "imsg"),
+            service=os.environ.get("IMESSAGE_SERVICE", "auto"),
+            region=os.environ.get("IMESSAGE_REGION", "US"),
+            allowed_senders=allowed,
+        )
+    )
 
 
 # Channel factory registry
 CHANNEL_BUILDERS = {
     "telegram": _build_telegram_channel,
-    "feishu":   _build_feishu_channel,
+    "feishu": _build_feishu_channel,
     "dingtalk": _build_dingtalk_channel,
-    "discord":  _build_discord_channel,
-    "slack":    _build_slack_channel,
-    "wechat":   _build_wechat_channel,
-    "qq":       _build_qq_channel,
-    "email":    _build_email_channel,
+    "discord": _build_discord_channel,
+    "slack": _build_slack_channel,
+    "wechat": _build_wechat_channel,
+    "qq": _build_qq_channel,
+    "email": _build_email_channel,
     "imessage": _build_imessage_channel,
 }
 
+AUTHORITATIVE_CHANNELS = frozenset({"telegram"})
+
+
+def _require_authoritative_channels(channel_names: list[str]) -> None:
+    """Fail closed before starting a legacy direct-dispatch Channel."""
+
+    unsupported = sorted(set(channel_names) - AUTHORITATIVE_CHANNELS)
+    if unsupported:
+        names = ", ".join(unsupported)
+        raise RuntimeError(
+            f"Channel(s) {names} are disabled until their ControlRuntime and "
+            "persistent Delivery Adapter cutover is implemented"
+        )
+
+
+def _require_started_channels(
+    requested: list[str],
+    running: list[str],
+) -> None:
+    """Reject a partially started Channel set before advertising health."""
+
+    missing = sorted(set(requested) - set(running))
+    if missing:
+        raise RuntimeError("Channel startup failed for: " + ", ".join(missing))
 
 
 async def _run_channels(channel_names: list[str], health_port: int = 0) -> None:
     """Start and run the specified channels."""
     from omicsclaw.surfaces.channels.manager import ChannelManager
+
+    _require_authoritative_channels(channel_names)
 
     # Initialize core LLM engine
     provider, base_url, model, api_key, auth_mode, ccproxy_port = (
@@ -324,7 +385,9 @@ async def _run_channels(channel_names: list[str], health_port: int = 0) -> None:
     # Build and register requested channels
     for name in channel_names:
         if name not in CHANNEL_BUILDERS:
-            print(f"Error: Unknown channel '{name}'. Available: {', '.join(sorted(CHANNEL_BUILDERS))}")
+            print(
+                f"Error: Unknown channel '{name}'. Available: {', '.join(sorted(CHANNEL_BUILDERS))}"
+            )
             sys.exit(1)
         try:
             channel = CHANNEL_BUILDERS[name]()
@@ -336,12 +399,17 @@ async def _run_channels(channel_names: list[str], health_port: int = 0) -> None:
 
     # Start channels
     await manager.start_all()
+    running = manager.running_channels()
+    try:
+        _require_started_channels(channel_names, running)
+    except RuntimeError:
+        await manager.stop_all()
+        raise
 
     # Optional health check server
     if health_port > 0:
         await manager.start_health_server(port=health_port)
 
-    running = manager.running_channels()
     print(
         f"OmicsClaw bot running with {len(running)} channel(s): "
         f"{', '.join(running)}. Press Ctrl+C to stop."
@@ -370,13 +438,13 @@ def main():
         epilog=(
             "Examples:\n"
             "  python -m omicsclaw.surfaces.channels.__main__ --channels telegram\n"
-            "  python -m omicsclaw.surfaces.channels.__main__ --channels telegram,feishu\n"
             "  python -m omicsclaw.surfaces.channels.__main__ --channels telegram --health-port 8080\n"
             "  python -m omicsclaw.surfaces.channels.__main__ --list\n"
         ),
     )
     parser.add_argument(
-        "--channels", "-c",
+        "--channels",
+        "-c",
         type=str,
         default="",
         help="Comma-separated list of channels to start",
@@ -388,12 +456,14 @@ def main():
         help="Port for HTTP health-check endpoint (0 = disabled)",
     )
     parser.add_argument(
-        "--list", "-l",
+        "--list",
+        "-l",
         action="store_true",
         help="List available channels and exit",
     )
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Enable debug logging",
     )
@@ -410,7 +480,12 @@ def main():
         print("Available channels:")
         for name in sorted(CHANNEL_BUILDERS):
             cls_name = CHANNEL_REGISTRY[name][1]
-            print(f"  {name:12s} -> {cls_name}")
+            status = (
+                "authoritative"
+                if name in AUTHORITATIVE_CHANNELS
+                else "disabled pending cutover"
+            )
+            print(f"  {name:12s} -> {cls_name} [{status}]")
         sys.exit(0)
 
     if not args.channels:
@@ -425,6 +500,9 @@ def main():
 
     try:
         asyncio.run(_run_channels(channel_names, args.health_port))
+    except RuntimeError as error:
+        print(f"Error: {error}")
+        sys.exit(1)
     except KeyboardInterrupt:
         pass
 

@@ -226,6 +226,48 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
             policy_tags=("analysis", "workflow"),
         ),
         ToolSpec(
+            name="candidate_plan_execute",
+            description=(
+                "Execute the exact composite skill plan shown by the Analysis Router. "
+                "Use only after the user explicitly confirms that plan; pass the unchanged "
+                "candidate_plan_digest from router context. This action preserves topo order, "
+                "artifact propagation, and downstream failure cascades."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "plan_digest": {
+                        "type": "string",
+                        "description": "Exact candidate_plan_digest shown by the router.",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["file", "path", "demo"],
+                        "description": "Input source mode for root plan steps.",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Trusted server-side input path for mode='path'.",
+                    },
+                },
+                "required": ["plan_digest", "mode"],
+            },
+            surfaces=("bot",),
+            context_params=(
+                "session_id",
+                "chat_id",
+                "thread_id",
+                "candidate_chain_gate",
+            ),
+            read_only=False,
+            concurrency_safe=False,
+            result_policy=RESULT_POLICY_SUMMARY_OR_MEDIA,
+            progress_policy=PROGRESS_POLICY_ANALYSIS,
+            risk_level=RISK_LEVEL_MEDIUM,
+            writes_workspace=True,
+            policy_tags=("analysis", "workflow", "candidate_plan"),
+        ),
+        ToolSpec(
             name="replot_skill",
             description=(
                 "Re-render R Enhanced (ggplot2) plots from a prior skill "

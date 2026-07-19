@@ -11,54 +11,200 @@ Workspace layout::
             stdout.log
             artifacts/<...>
 
-Single source of truth for path resolution so every router resolves the
-same workspace via :func:`resolve_workspace`.
+Callers must supply the Workspace frozen by the Desktop Backend composition
+root.  This module deliberately does not re-resolve mutable process environment
+state at request time.
 """
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
-import os
 from datetime import datetime, timezone
+import os
 from pathlib import Path
+from typing import Iterator
 
 REMOTE_SUBDIR = ".omicsclaw/remote"
 _CHECKSUM_HEAD_BYTES = 64 * 1024
 
 
-def resolve_workspace(explicit: str = "") -> Path:
-    """Resolve the active workspace, raising ``RuntimeError`` if unset.
+class UnsafeRemoteStorageError(RuntimeError):
+    """A compatibility-state root is missing directory ownership proof."""
 
-    Resolution order matches existing server.py helpers (see
-    ``_resolve_scoped_memory_workspace``): explicit arg > env > unset.
+
+def _directory_open_flags() -> int:
+    required = ("O_DIRECTORY", "O_NOFOLLOW")
+    if any(not hasattr(os, name) for name in required):
+        raise UnsafeRemoteStorageError("secure_directory_handles_unavailable")
+    if os.open not in os.supports_dir_fd or os.mkdir not in os.supports_dir_fd:
+        raise UnsafeRemoteStorageError("secure_directory_handles_unavailable")
+    return (
+        os.O_RDONLY
+        | os.O_DIRECTORY
+        | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+
+
+@contextmanager
+def open_storage_directory(
+    workspace: Path,
+    *relative_parts: str,
+    create: bool,
+) -> Iterator[tuple[Path, int]]:
+    """Hold a no-follow directory handle across a storage operation.
+
+    A returned lexical ``Path`` is presentation metadata only.  Callers that
+    mutate compatibility state must address children through the yielded fd;
+    the fd continues to name the proven directory even if an attacker renames
+    or replaces its path after this function returns control.
     """
-    candidate = (explicit or "").strip() or os.environ.get("OMICSCLAW_WORKSPACE", "").strip()
-    if not candidate:
-        raise RuntimeError(
-            "OMICSCLAW_WORKSPACE is not set. Configure a workspace via PUT /workspace first."
-        )
-    path = Path(candidate).expanduser().resolve()
-    if not path.is_dir():
-        raise RuntimeError(f"workspace directory does not exist: {path}")
-    return path
+
+    boundary = Path(workspace).expanduser()
+    if not boundary.is_absolute():
+        raise UnsafeRemoteStorageError("remote_workspace_not_absolute")
+    flags = _directory_open_flags()
+    try:
+        current_fd = os.open(boundary, flags)
+    except OSError as exc:
+        raise UnsafeRemoteStorageError(
+            "remote_workspace_not_owned_directory"
+        ) from exc
+
+    lexical_path = boundary
+    try:
+        for raw_part in relative_parts:
+            for part in Path(raw_part).parts:
+                if part in {"", ".", ".."}:
+                    raise UnsafeRemoteStorageError(
+                        "unsafe_remote_storage_component"
+                    )
+                lexical_path = lexical_path / part
+                try:
+                    next_fd = os.open(part, flags, dir_fd=current_fd)
+                except FileNotFoundError:
+                    if not create:
+                        raise
+                    try:
+                        os.mkdir(part, mode=0o700, dir_fd=current_fd)
+                    except FileExistsError:
+                        pass
+                    except OSError as exc:
+                        raise UnsafeRemoteStorageError(
+                            "remote_storage_directory_create_failed"
+                        ) from exc
+                    try:
+                        next_fd = os.open(part, flags, dir_fd=current_fd)
+                    except OSError as exc:
+                        raise UnsafeRemoteStorageError(
+                            "remote_storage_directory_ownership_lost"
+                        ) from exc
+                except OSError as exc:
+                    raise UnsafeRemoteStorageError(
+                        "remote_storage_symlink_or_non_directory"
+                    ) from exc
+                os.close(current_fd)
+                current_fd = next_fd
+        yield lexical_path, current_fd
+    finally:
+        os.close(current_fd)
 
 
-def remote_root(workspace: Path) -> Path:
-    root = workspace / REMOTE_SUBDIR
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+def _storage_directory(
+    workspace: Path,
+    *relative_parts: str,
+    create: bool,
+) -> Path:
+    """Return one lexical Workspace child without following storage symlinks.
+
+    ``Path.mkdir(parents=True)`` follows an existing ``.omicsclaw``/``remote``
+    symlink.  Dataset deletion would then be able to remove state outside the
+    Active Workspace.  Walk and re-check every owned component before and
+    after creation instead.
+    """
+
+    boundary = Path(workspace).expanduser()
+    if not boundary.is_absolute():
+        raise UnsafeRemoteStorageError("remote_workspace_not_absolute")
+    if boundary.is_symlink() or not boundary.is_dir():
+        raise UnsafeRemoteStorageError("remote_workspace_not_owned_directory")
+
+    current = boundary
+    for raw_part in relative_parts:
+        for part in Path(raw_part).parts:
+            if part in {"", ".", ".."}:
+                raise UnsafeRemoteStorageError("unsafe_remote_storage_component")
+            current = current / part
+            if current.is_symlink():
+                raise UnsafeRemoteStorageError("remote_storage_symlink_not_allowed")
+            if current.exists():
+                if not current.is_dir():
+                    raise UnsafeRemoteStorageError(
+                        "remote_storage_component_not_directory"
+                    )
+                continue
+            if not create:
+                return boundary.joinpath(*relative_parts)
+            try:
+                current.mkdir()
+            except FileExistsError:
+                # A concurrent creator is acceptable only when it created the
+                # same ordinary directory, never a symlink or file.
+                pass
+            except OSError as exc:
+                raise UnsafeRemoteStorageError(
+                    "remote_storage_directory_create_failed"
+                ) from exc
+            if current.is_symlink() or not current.is_dir():
+                raise UnsafeRemoteStorageError(
+                    "remote_storage_directory_ownership_lost"
+                )
+            if boundary.is_symlink() or not boundary.is_dir():
+                raise UnsafeRemoteStorageError(
+                    "remote_workspace_directory_ownership_lost"
+                )
+
+    # Re-prove the complete chain after creation so a pre-existing symlink
+    # cannot be swapped in between an early check and the caller's write.
+    current = boundary
+    for raw_part in relative_parts:
+        for part in Path(raw_part).parts:
+            current = current / part
+            if current.is_symlink() or not current.is_dir():
+                raise UnsafeRemoteStorageError(
+                    "remote_storage_directory_ownership_lost"
+                )
+    return current
 
 
-def datasets_root(workspace: Path) -> Path:
-    root = remote_root(workspace) / "datasets"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+def remote_root(workspace: Path, *, create: bool = True) -> Path:
+    return _storage_directory(
+        workspace,
+        ".omicsclaw",
+        "remote",
+        create=create,
+    )
 
 
-def jobs_root(workspace: Path) -> Path:
-    root = remote_root(workspace) / "jobs"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+def datasets_root(workspace: Path, *, create: bool = True) -> Path:
+    return _storage_directory(
+        workspace,
+        ".omicsclaw",
+        "remote",
+        "datasets",
+        create=create,
+    )
+
+
+def jobs_root(workspace: Path, *, create: bool = True) -> Path:
+    return _storage_directory(
+        workspace,
+        ".omicsclaw",
+        "remote",
+        "jobs",
+        create=create,
+    )
 
 
 def utc_now_iso() -> str:

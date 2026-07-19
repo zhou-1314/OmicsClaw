@@ -39,6 +39,8 @@ t-test is the fallback for the single-replicate / no-PyDESeq2 case.
 **Inputs**
 
 - File types: `.csv`
+- Accepts artifact `bulkrna.count_matrix` (`csv`)
+- Tabular structure: at least 3 columns
 
 **Outputs**
 
@@ -52,6 +54,7 @@ t-test is the fallback for the single-replicate / no-PyDESeq2 case.
 - `figures/volcano_plot.png`
 - `report.md`
 - `result.json`
+- Produces artifact `bulkrna.differential_results` as `tables/de_results.csv` (`csv`)
 
 ## Flow
 

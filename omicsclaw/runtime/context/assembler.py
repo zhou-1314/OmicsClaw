@@ -250,6 +250,28 @@ def build_user_message_content(
     return oai_parts
 
 
+def build_stored_user_message_content(
+    stored_user_content: str | list[dict[str, Any]],
+    *,
+    message_context: str = "",
+) -> str | list[dict[str, Any]]:
+    """Apply message context without converting durable content blocks."""
+
+    message_context = str(message_context or "").strip()
+    if isinstance(stored_user_content, str):
+        return build_user_message_content(
+            stored_user_content,
+            message_context=message_context,
+        )
+
+    if not message_context:
+        return list(stored_user_content)
+    return [
+        {"type": "text", "text": message_context},
+        *stored_user_content,
+    ]
+
+
 def _default_capability_resolver(query: str, *, domain_hint: str = ""):
     from omicsclaw.skill.capability_resolver import resolve_capability
 

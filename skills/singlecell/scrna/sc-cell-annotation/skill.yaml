@@ -183,3 +183,7 @@ resources:
   - parameters.md
   - r_visualization.md
   tests: tests/
+security:
+  data_egress: none
+  network: optional
+  writes: unrestricted

@@ -21,6 +21,12 @@ from omicsclaw.common.manifest import (
     read_manifest,
     save_manifest,
 )
+from omicsclaw.common.output_claim import (
+    atomic_write_owned_output_text,
+    collect_output_claim_identities,
+    is_contained_output_path,
+    is_scientific_output_file,
+)
 from ..tools.hooks import EVENT_VERIFICATION_COMPLETED
 from ..tools.hooks import VerificationHookPayload
 from ..tools.hooks import LifecycleHookRuntime
@@ -157,15 +163,27 @@ def verify_workspace_artifacts(
     workspace: str | Path,
     requirements: Iterable[ArtifactRequirement],
 ) -> list[ArtifactVerification]:
-    """Check artifact presence inside a workspace."""
+    """Check that artifacts are owned, materialized entries in a workspace."""
     root = Path(workspace)
+    claim_identities = collect_output_claim_identities(root)
     results: list[ArtifactVerification] = []
     for requirement in requirements:
         target = root / requirement.path
         if requirement.kind == ARTIFACT_KIND_DIR:
-            present = target.exists() and target.is_dir()
+            present = (
+                not target.is_symlink()
+                and target.is_dir()
+                and is_contained_output_path(target, output_root=root)
+            )
         else:
-            present = target.exists() and target.is_file()
+            present = (
+                not target.is_symlink()
+                and is_scientific_output_file(
+                    target,
+                    output_root=root,
+                    claim_identities=claim_identities,
+                )
+            )
         results.append(
             ArtifactVerification(
                 name=requirement.name,
@@ -173,9 +191,9 @@ def verify_workspace_artifacts(
                 kind=requirement.kind,
                 required=requirement.required,
                 present=present,
-                resolved_path=str(target) if present else "",
+                resolved_path=str(target.resolve()) if present else "",
                 description=requirement.description,
-                detail="" if present else "artifact missing",
+                detail="" if present else "artifact missing or not owned by workspace",
                 metadata=dict(requirement.metadata),
             )
         )
@@ -204,16 +222,24 @@ def build_completion_report(
         artifact.path for artifact in artifact_checks if artifact.required and not artifact.present
     ]
 
-    if not status:
-        if error_list:
-            status = COMPLETION_STATUS_FAILED
-        elif missing_required:
-            status = COMPLETION_STATUS_INCOMPLETE
-        else:
-            status = COMPLETION_STATUS_COMPLETE
+    # Evidence and errors are authoritative: a caller-supplied optimistic
+    # status cannot promote an incomplete workspace to complete.
+    if error_list:
+        status = COMPLETION_STATUS_FAILED
+    elif missing_required:
+        status = COMPLETION_STATUS_INCOMPLETE
+    elif not status:
+        status = COMPLETION_STATUS_COMPLETE
 
     if completed is None:
         completed = status == COMPLETION_STATUS_COMPLETE and not missing_required and not error_list
+    else:
+        completed = (
+            bool(completed)
+            and status == COMPLETION_STATUS_COMPLETE
+            and not missing_required
+            and not error_list
+        )
 
     return CompletionReport(
         workspace_kind=workspace_kind,
@@ -242,7 +268,12 @@ def write_completion_report(
     root.mkdir(parents=True, exist_ok=True)
     path = root / filename
     report.report_path = str(path)
-    path.write_text(json.dumps(report.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_owned_output_text(
+        path,
+        output_root=root,
+        text=json.dumps(report.to_dict(), indent=2, ensure_ascii=False),
+        label="completion report",
+    )
     if hook_runtime is not None:
         hook_runtime.emit(
             EVENT_VERIFICATION_COMPLETED,
@@ -277,6 +308,8 @@ def update_workspace_manifest(
 ) -> Path:
     """Create or update the workspace manifest with verification contract data."""
     root = Path(workspace)
+    requirement_list = list(requirements)
+    artifact_checks = verify_workspace_artifacts(root, requirement_list)
     manifest = read_manifest(root) or PipelineManifest()
     if step is not None and (append_step or not manifest.steps):
         manifest.append(step)
@@ -290,11 +323,9 @@ def update_workspace_manifest(
     )
     manifest.required_artifacts = [
         requirement.to_manifest_record(
-            status="present"
-            if (root / requirement.path).exists()
-            else "missing"
+            status="present" if check.present else "missing"
         )
-        for requirement in requirements
+        for requirement, check in zip(requirement_list, artifact_checks, strict=True)
     ]
     if metadata:
         manifest.metadata.update(dict(metadata))

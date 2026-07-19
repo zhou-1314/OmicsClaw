@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ---------------------------------------------------------------------------
@@ -116,10 +116,22 @@ class DatasetImportRemoteRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-JobStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
+JobStatus = Literal[
+    "queued",
+    "running",
+    "cancel_requested",
+    "succeeded",
+    "failed",
+    "canceled",
+    "interrupted",
+]
 
 
 class JobSubmitRequest(BaseModel):
+    """Legacy chat-stream display projection; not a scientific executor wire."""
+
+    model_config = ConfigDict(extra="forbid")
+
     workspace: str = ""
     session_id: str = ""
     skill: str
@@ -145,16 +157,30 @@ class Job(BaseModel):
     # ("base" | "skip" | "probe" | "venv:<key>"). Optional/None for jobs created
     # before this field existed (backward-compatible deserialization).
     runtime_source: Optional[str] = None
+    # Canonical Remote Jobs are deterministic compatibility projections over
+    # one authoritative Run. Historical Job JSON and chat-stream display Jobs
+    # leave these fields unset.
+    run_id: Optional[str] = None
+    receipt_revision: Optional[int] = None
+    terminal_code: Optional[str] = None
+    assignment_id: Optional[str] = None
+    compatibility_kind: Literal["canonical_run", "legacy_job", "chat_stream"] = (
+        "legacy_job"
+    )
 
 
 class JobListResponse(BaseModel):
     jobs: list[Job]
     total: int
+    next_cursor: Optional[str] = None
 
 
 class JobSubmitResponse(BaseModel):
     job_id: str
     status: JobStatus
+    run_id: Optional[str] = None
+    duplicate: bool = False
+    receipt_revision: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -169,15 +195,18 @@ class Artifact(BaseModel):
     size_bytes: int
     mime_type: str
     created_at: str
+    run_id: Optional[str] = None
+    sha256: Optional[str] = None
 
 
 class ArtifactListResponse(BaseModel):
     artifacts: list[Artifact]
     total: int
+    next_cursor: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
-# /sessions/:id/resume
+# /sessions/:id/resume (retired compatibility response shape)
 # ---------------------------------------------------------------------------
 
 

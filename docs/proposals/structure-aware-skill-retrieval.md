@@ -7,12 +7,15 @@
 > decision/alias-hallucination 全局与逐域门。RET-04 已落地“输入探针 + 三态评估”，RET-04b
 > 又把可观测前置条件门接到 shared runner，使显式 skill、sync/async 与各执行 Surface 共享同一
 > Gate Seam；RET-05 又落地 AnnData compatibility graph、复合 candidate plan/topo chain 与
-> digest-bound 硬确认门。候选级 penalty、其余 6 域图边与 method-scoped filtering 仍未落地。当前验收状态以
+> digest-bound 硬确认门。2026-07-14 纵切继续落地 candidate-wide penalty、显式非 AnnData
+> artifact contract、accepted/rejected review overlay 与真正的 topo executor/失败级联；
+> 随后的 method-scoped output/binding、有界并发/取消传播、CSV/VCF/FASTQ/目录的
+> opt-in bounded Content precondition，以及 digest-bound 多维资源准入纵切也已落地。当前验收状态以
 > [`2026-07-13-skill-audit-system-design-assessment.md`](../reviews/2026-07-13-skill-audit-system-design-assessment.md)
 > §5/§8 为准；RET-04b 独立复核记录见
 > [`2026-07-13-ret04b-ask-codex-review.md`](../reviews/2026-07-13-ret04b-ask-codex-review.md)。
 >
-> 状态：实施草案 v0.5（RET-04/04b 执行安全纵切与 RET-05 AnnData compatibility 纵切已落地；v0.1 经 Codex/gpt-5.5(xhigh) 独立审阅，已纳入其"必须修正"6 项 + "建议优化"5 项；全记录见附录 C）
+> 状态：实施草案 v0.7（RET-04/04b、RET-05 及 2026-07-14 governed executor/evolution/resource-admission 纵切已落地；v0.1 经 Codex/gpt-5.5(xhigh) 独立审阅，已纳入其"必须修正"6 项 + "建议优化"5 项；全记录见附录 C）
 > 作者：OmicsClaw 维护团队（在 Claude 协助下，基于对三个外部参考系统 + 本仓 `omicsclaw/skill/` 的并行代码级审计生成）
 > 日期：2026-06-30
 > 评审：Codex（gpt-5.5, xhigh）独立审阅 717s，逐条核对了本仓 live tree 的 `file:line`；记录见附录 C
@@ -49,8 +52,11 @@
 
 - OmicsClaw 的 `capability_resolver` **本就是 domain-first 的粗到细稀疏召回**（`capability_resolver.py:701` 先按 detected domain 过滤候选再排序）。再加一层"task-type 中层"在 95 技能下收益有限，属**中等价值锦上添花**。
 - 真正高价值的是 **(B)**：本设计启动时 OmicsClaw **完全没有机器可读的跨技能依赖图**；
-  RET-05 现已关闭 AnnData singlecell/spatial 纵切，但其他 6 域、候选级 penalty 与完整 workflow
-  编排仍缺，不能把局部实现回写成原始缺口从未存在。
+  RET-05 先关闭 AnnData singlecell/spatial 纵切；2026-07-14 又以显式 semantic artifact
+  contract 覆盖 genomics/proteomics/metabolomics/Bulk RNA 的受审 handoff，并加入候选级 penalty
+  和 whole-plan executor。literature/orchestrator 只声明终端 artifact，不捏造科学消费边；
+  method-scoped contract/binding 已完成，但当前没有真实 consumer 形成生产条件边；更复杂组合仍缺，
+  不能把纵切外推成完整 workflow ontology。
 - **关键设计抓手（已在 RET-05 有限实现）**：依赖关系从 ADR 0037 的 `interface.outputs`→`interface.inputs.preconditions` **生产者-消费者匹配，自动派生为带出处/置信度的「候选兼容图」**（人工校订后才采信），而非手写、更非让 LLM 每次现编。边须带语义档位（`required|optional|preferred|alternative`）——因为许多技能在缺失输入时会自动补算（如 `spatial-domains` 缺 `X_pca` 时自算）或按 `--method` 条件产出（如 BBKNN 不产 `X_bbknn`），纯硬匹配会误判。`summary.skip_when` 是**路由负信号、不是 DAG 依赖边**，单独处理。该设计**复用** AgentSkillOS 的 DAG 调度骨架、**规避**其"边由 planner 每次现编"的硬伤——但**不夸大为"确定性事实"**（Codex 审阅后最重要的口径修正，见 §3.3 / 附录 C）。
 - **先决条件（数据就绪）**未补齐前，任何检索器都会被钝化：13 个 singlecell 技能无 `trigger_keywords`、`validation_level` 95/95 inert、路由预算门因 `ceiling.json` 缺失而不可运行（§2.4）。这些是 Phase 0 的硬门槛。
 
@@ -174,7 +180,7 @@ B.inputs.preconditions.data_shape                        每条边携带：
    .obsm:[X_pca]                                          · edge_kind: required | optional | preferred | alternative
 A.outputs.files:[processed.h5ad]                          · 出处: matched_output_key / matched_precondition_key
    + B.requires_preprocessed:true                         · confidence + reviewed(bool)
-                                                          · condition_scope: 仅当 B 的 --method ∈ {...}
+                                                          · condition_scope: 仅当 A 的 --method ∈ {...}
 ── skip_when 不入此图 ──  B.summary.skip_when:[{use:sc-de}] ─▶ 路由负信号（resolver 消费，extract_skip_when_cases.py 维护）
 ```
 > **Topo 约定**：边 `A→B` 表示"A 应在 B 之前"（A 是 B 的上游）；执行序由 `topological_sort` 给出。（修正 v0.1 图中 `A──requires──▶B` 的方向标注——producer 不"requires"consumer，Codex must-fix #1。）
@@ -231,7 +237,10 @@ A.outputs.files:[processed.h5ad]                          · 出处: matched_out
   自身的检索请求判为 exact coverage。
 
 Phase 0 完成不代表结构检索完成：RET-04/04b 已有安全纵切，RET-05 已完成 AnnData
-compatibility graph/candidate plan；候选级 penalty、更广文件格式探针与其余 6 域关系仍待补齐，
+compatibility graph/candidate plan；2026-07-14 又完成 candidate-wide penalty，并以 semantic
+artifact contract 覆盖 genomics、proteomics、metabolomics、Bulk RNA 的代表性主链，随后又
+完成 method-scoped compatibility/binding，并补齐 CSV/VCF/FASTQ/目录的首批内容探针；
+更多专用格式与其余长尾关系仍待补齐，
 dense retrieval 仍不应提前启用。
 
 ### Phase 1 — 声明式结构落地（拆 1a 字段 / 1b 内容质量）｜工作量 M｜优先级 高
@@ -252,13 +261,14 @@ dense retrieval 仍不应提前启用。
 - 风险：interface 契约不完整或与 prose 不一致 → 漏连/误连（spatial pipeline 当回归锚 + 人工 review 高置信边）；环（`detect_cycle` 拦下报警）；**把 preferred/optional 当 required 会过约束**。
 - 验收：派生图与 spatial pipeline 兼容；DAG 单测（给定 interface → 期望候选边集 + 档位）；高置信边人工 review 抽样准确率达标。
 
-**实施状态（2026-07-13，RET-05 verified 的有限口径）**：已生成 95-node / 52-edge 图
-（32 exact、20 generic、6 reviewed、无环），边只覆盖 singlecell 28 + spatial 24，故称
-**AnnData compatibility 纵切**而非全域 workflow graph。`processing_state` 显式后置条件取代
-文件名猜测；全库 graph 与 selected-plan DAG 分离；review overlay stale identity fail-closed；
-registry 查询、catalog/CI freshness、复合 plan provenance/unresolved intents 和 digest-bound
-execution gate 已落地。仍缺 reviewed rejection、标准 spatial pipeline 非空 induced-edge 锚点、
-method scope 和其他 6 域关系。
+**实施状态（2026-07-14）**：已生成 95-node / 74-edge 图（43 exact、20 generic、
+11 semantic artifact、18 reviewed、无环）。review overlay 已支持显式 accepted/rejected，
+stale identity fail-closed，并以 `spatial-preprocess → spatial-domains` 固定标准 spatial 前向锚点。
+四个非 AnnData 分析域以 exact kind+format+relative path 形成受审边；literature/orchestrator
+只声明终端 artifact。全库 graph 仍是 candidate evidence，只有 accepted reviewed dependency
+能进入 executor。`outputs.method_scopes` 已覆盖 2 个真实 skill，compiler/review/plan/executor
+均 fail closed；当前因没有真实 consumer 而为 0 conditional edge。首批非 H5AD 内容探针见
+Phase 2a 的 2026-07-14 落地状态；更多专用格式仍未完成。
 
 ### Phase 2a — 数据状态探测与缓存（precondition 过滤的前置）｜工作量 S–M｜优先级 高
 **目标**：precondition 过滤需要"当前数据的实际状态"，但 resolver 现仅收 `query/file_path/domain_hint`（`capability_resolver.py:637`），且通用 preflight 引擎尚不存在（`preflight/__init__.py:6`，仅 `sc_batch.py:11` 一个消费者）。**Codex must-fix #4 指出这是被遗漏的前置**。
@@ -288,10 +298,16 @@ method scope 和其他 6 域关系。
   只有声明 freeform 的技能可接受 DOI/URL/text。`InputProfile.path_kind` 让 routing 与 execution
   对普通点号目录和 suffix-typed `.zarr/` 使用同一判断。全库审计固定 12 个目录 consumer 与
   公开 file-type 合同，防止新 Gate 反向阻断原有合法输入。
-- 当前 Gate 只把可观测事实升级为硬判断：匹配声明类型但尚无内容探针的 CSV/FASTQ/PDF
-  不会被伪判为缺 modality/列；明确文件类型冲突仍拒绝。该限制必须保留在验收口径中。
-- 尚未完成：非 `.h5ad` 的结构化内容探针、把 `sc_batch` 迁为通用 evaluator 消费者、
-  candidate-wide penalty 与非 AnnData compatibility；因此 RET-05 纵切完成不等于完整 retrieval 完成。
+- 2026-07-14 已加入 opt-in `preconditions.content`：CSV/TSV 首行列结构、VCF metadata/
+  `#CHROM`、FASTQ 首记录与 mate layout、以及 entry/depth bounded 的 governed directory
+  signatures 均进入同一个 `InputProfile`/evaluator；探针最多读取 1 MiB 解压文本，不把任意
+  文件名或内容暴露给 routing。只有 manifest 明确声明的格式事实会硬判断，PDF/text 等未建模
+  语义继续保持兼容；directory probe 截断时只能给 preparation，不能伪证“缺失”。
+- 6 个真实 consumer 已采用：`bulkrna-de`、`genomics-vcf-operations`、`sc-fastq-qc`、
+  `sc-count`、`sc-velocity-prep`、`spatial-raw-processing`；同时修复 `.vcf.gz` 执行与
+  `filtered.vcf` 声明产物不总落盘的合同偏差。
+- 尚未完成：把 `sc_batch` 迁为通用 evaluator 消费者；
+  method-scoped compatibility、候选级 penalty 与显式非 AnnData artifact compatibility 已完成。
 
 ### Phase 3 — 结构感知检索消费（resolver API 扩展 + penalty-first）｜工作量 M–L｜优先级 高
 **目标**：让 resolver 用上 task_type / skip_when / precondition / 候选图（§3.4 的 1–5）。
@@ -300,14 +316,16 @@ method scope 和其他 6 域关系。
 - 风险：改 re-rank 动黄金快照——**必须先扩 Phase 0 eval 与黄金快照再改**；precondition 硬过滤会误杀自动补算/可选输入的技能（默认软、经 eval 才个别升级硬）。
 - 验收：Phase 0 eval 的 precision@1/消歧率/前置软信号正确率较 baseline 改善且无黄金快照回归；"复合查询→正确 topo 链"用例通过；"valid-without-upstream"负例不被误剔（见 §5）。
 
-**当前消费进度**：上述第 5 项“复合查询→候选 plan”已由 RET-05 落地；比较/how-to 请求不建
-执行计划，connected 选择给出 topo/provenance，disconnected intents 明确保留，执行前有硬确认。
-第 1–4 项中的 candidate-wide penalty、domain margin 回溯与 method-scoped filtering 仍属后续，
-不得因第 5 项通过而把 Phase 3 整体标为完成。
+**当前消费进度（2026-07-14）**：复合查询→候选 plan 与 candidate-wide precondition penalty
+均已落地；每个候选保留 `semantic_score`、三态评估和命名软惩罚，不兼容候选不会被静默删除，
+执行授权仍由独立 Gate 决定。比较/how-to 请求不建执行计划；connected 选择给出
+topo/provenance，disconnected intents 明确保留。method-scoped edge 只有 source method binding
+匹配时才进入 plan，未绑定/错绑均显式 unresolved；domain margin 回溯仍属后续，Phase 3 不能
+整体标成完成。
 
-**2026-07-13 落地状态：** resolver/候选/decision API 已携带选中技能的前置评估，29-case
-oracle 增加 `precondition_accuracy=1.000` 硬门并覆盖三态及 auto-computable 负例。当前策略是
-“语义排名保持 + 执行门禁”，尚未对全部候选施加 penalty，也尚未返回候选 topo 链。
+**2026-07-14 落地状态：** resolver/候选/decision API 已对所有保留候选执行同一输入评估，
+29-case oracle 的 `precondition_accuracy=1.000` 门保持通过；阻断/需准备分别施加命名软惩罚，
+显式 alias 仍可保留并由执行门拒绝，避免把 ranking signal 误当 authorization。
 
 ### Phase 4 — 依赖感知编排（泛化 pipeline runner）｜工作量 M｜优先级 中
 **目标**：把 DAG 真正执行——topo 有序、按层并行、失败级联跳过。
@@ -315,6 +333,23 @@ oracle 增加 `precondition_accuracy=1.000` 硬门并覆盖三态及 auto-comput
 - 动作：泛化 `pipelines/` runner（`chain.py`）为消费派生候选图的执行器，跑 LLM 确认过的链（确认后即为可执行 DAG）；保留人工确认门（生信任务多分钟、不可逆，**不自动连跑**）。
 - 风险：多分钟/不可逆任务的自动编排安全性——**必须人工确认 + 覆盖守卫**（与既有"覆盖前告警"一致）。
 - 验收：spatial pipeline 经派生 DAG 端到端跑通；失败级联跳过行为有测试。
+
+**2026-07-14 落地状态（执行纵切）**：新增独立 `plan_executor` Module 与专用
+`candidate_plan_execute` action。完整 plan 以 canonical SHA-256 绑定一次性人工确认；确认后
+普通 skill/autonomous 旁路仍被阻断。executor 只选 accepted reviewed dependency，按 phase
+并发，以上游声明的相对 artifact path 喂下游；缺产物记 contract failure，独立 sibling 继续，
+后代标 upstream_failed。unresolved 默认 block，程序调用方只有显式 `independent` 才可并行。
+phase runner 默认并发上限为 4；父任务取消会传到 async subprocess process group。
+
+**2026-07-14 落地状态（资源感知纵切）**：`resources.compute` 现声明 CPU、内存、GPU 数、线程与
+临时磁盘的静态准入预留，完整 request 随 Candidate plan 进入 digest。runtime/event-loop 共享的
+多维 FIFO scheduler 原子分配 process slot 与 GPU id，等待期间不创建 step 输出目录，成功、失败、
+取消均释放 lease；runner 只接受治理后的 CUDA/thread/TMPDIR 环境。6 个真实 skill 已接入首批
+静态预留基线（尚未完成代表性数据实测），
+`sc-preprocessing→sc-clustering` 与 `spatial-preprocess→spatial-domains` 可形成 resource-ready
+计划；其余未声明完整合同的链 fail closed，不使用乐观默认值。该机制是 admission accounting，不是 cgroup
+硬限额或数据规模峰值预测。尚未完成真实 spatial 全链科学 demo、全库资源校准、跨进程/远端调度、
+断点恢复与 net-utility 评测，故 Phase 4 仍是可验收纵切。
 
 ### Phase 5 — dense-embedding 兜底（实验性，默认关）｜工作量 S–M｜优先级 P4（先验证）
 **目标**：救回 no_skill / 破子阈值平局，**不替换**稀疏主路径。
@@ -329,6 +364,15 @@ oracle 增加 `precondition_accuracy=1.000` 硬门并覆盖三态及 auto-comput
 - 动作：与 §4.4 "失败→技能反馈闭环"合并实现（`result.py` 加 `error_kind` → `index.jsonl` 聚合 → 候选 Gotcha 须人工批准）。**反面教训**：演化产物必须**回灌到正确 task_type/algorithm 节点**，不可学 SkillRL 全塞 general 桶。
 - 风险：自动改技能库的安全性——**仅产候选、强制人工批准**。
 - 验收：失败聚合产出 per-skill 健康台账 + 候选 Gotcha（带 stderr/result key/file:line 证据）。
+
+**2026-07-14 substrate 状态**：shared runner 的 typed result 已区分 dependency/input/timeout/
+resource/cancel/script/contract/unknown；append-only event 不保存 raw stderr、输入路径或 secrets，
+只保存 fingerprint、result key 与安全 traceback anchor。health ledger 按
+`skill_id + version/hash + environment` 分桶，环境失败和取消不触发 Gotcha。重复成功/技能缺陷
+可生成带支持/反例 event id 的 pending proposal；唯一写回接口要求人类 approver 与
+representation/execution/retrieval 三类 validator，失败恢复 exact before bytes。尚缺正式
+proposal patch synthesis、审批 UI/CLI、validation level 晋降规则与 surface health 展示，
+因此 EVO-01/02 基本闭合，EVO-03～05 为 substrate，EVO-06 仍仅有既有 routing 纵切。
 
 ---
 

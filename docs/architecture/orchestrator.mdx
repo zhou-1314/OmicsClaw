@@ -81,24 +81,20 @@ python skills/orchestrator/omics_orchestrator.py \
 
 ### 2. 通过 Bot（自然对话）
 
-所有消息频道（Telegram、Feishu、DingTalk 等）的每条用户消息都经由 `bot/core.py` 的 LLM 工具调用循环，路由到对应 skill。无需用户指定 skill 名称：
+当前仅配置 Owner 的 Telegram 文本路径已完成权威控制面迁移；它经
+`ControlRuntime` 路由到 skill，终态回复通过持久 Delivery Outbox 投递。
+Feishu、DingTalk 等旧适配器在完成同等迁移前会拒绝启动：
 
 ```bash
 # 启动 Telegram 频道
-python -m bot.run --channels telegram
-
-# 启动飞书频道
-python -m bot.run --channels feishu
-
-# 多频道同时运行
-python -m bot.run --channels telegram,feishu
+python -m omicsclaw.surfaces.channels --channels telegram
 
 # Makefile 快捷方式
 make bot-telegram
-make bot-feishu
 ```
 
-需在项目根目录 `.env` 中配置 `LLM_API_KEY`、`LLM_BASE_URL` 及对应频道凭证（如 `TELEGRAM_BOT_TOKEN`）。
+需在项目根目录 `.env` 中配置 LLM 凭证、`TELEGRAM_BOT_TOKEN`，以及
+`TELEGRAM_CHAT_ID` 或 `TELEGRAM_ALLOWED_SENDERS`。
 
 ### 3. 通过桌面端聊天面板（规划中 / WIP）
 

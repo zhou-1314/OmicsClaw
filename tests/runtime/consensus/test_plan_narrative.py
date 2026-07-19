@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from omicsclaw.common.output_claim import OUTPUT_CLAIM_FILENAME
 from omicsclaw.runtime.consensus.dispatch import output_banner
 from omicsclaw.runtime.consensus.narrative.extractor import (
     MemberExtraction,
@@ -15,7 +16,6 @@ from omicsclaw.runtime.consensus.narrative.extractor import (
     render_extract_prompt,
 )
 from omicsclaw.runtime.consensus.narrative.synthesizer import (
-    NarrativeReport,
     synthesize_narrative,
 )
 from omicsclaw.runtime.consensus.plan import (
@@ -175,6 +175,42 @@ def test_extract_prompt_survives_curly_braces_in_report(tmp_path: Path) -> None:
     # Offline heuristic should successfully pick up the bullet lines that
     # contain braces.
     assert any("{literal_curly_in_finding}" in f for f in out.key_findings)
+
+
+@pytest.mark.parametrize(
+    "alias_kind",
+    ("symlink", "hardlink", "claim", "escaping_symlink"),
+)
+def test_extract_member_findings_rejects_unowned_report_aliases(
+    tmp_path: Path,
+    alias_kind: str,
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    owned_report = run_dir / "owned-report.md"
+    owned_report.write_text("- trusted finding\n", encoding="utf-8")
+
+    if alias_kind == "claim":
+        report_path = run_dir / OUTPUT_CLAIM_FILENAME
+        report_path.write_text("- internal metadata\n", encoding="utf-8")
+    else:
+        report_path = run_dir / "report.md"
+        if alias_kind == "symlink":
+            report_path.symlink_to(owned_report.name)
+        elif alias_kind == "hardlink":
+            report_path.hardlink_to(owned_report)
+        else:
+            outside_report = tmp_path / "outside-report.md"
+            outside_report.write_text("- outside finding\n", encoding="utf-8")
+            report_path.symlink_to(outside_report)
+
+    with pytest.raises(FileNotFoundError, match="report not found"):
+        extract_member_findings(
+            member_name="m1",
+            skill_name="spatial-domains",
+            report_path=report_path,
+            llm=lambda prompt: pytest.fail("untrusted report reached the LLM"),
+        )
 
 
 def test_synthesize_prompt_survives_curly_braces_in_extractions() -> None:

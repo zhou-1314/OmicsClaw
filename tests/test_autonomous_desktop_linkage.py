@@ -70,6 +70,31 @@ def test_collect_key_files_includes_summary_and_completion_report(tmp_path: Path
     assert "completion_report.json" in names
 
 
+def test_desktop_run_summary_rejects_claim_aliases(tmp_path: Path):
+    from omicsclaw.common.output_claim import OUTPUT_CLAIM_FILENAME
+
+    run = _make_autonomous_run(tmp_path / "output")
+    claim = run / OUTPUT_CLAIM_FILENAME
+    claim.write_text(
+        json.dumps(
+            {
+                "skill": "forged",
+                "completed_at": "2026-06-01T12:00:00+00:00",
+                "summary": "claim",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run / "claim.csv").hardlink_to(claim)
+    (run / "figures" / "claim.png").hardlink_to(claim)
+    (run / "result.json").unlink()
+    (run / "result.json").hardlink_to(claim)
+
+    assert "claim.csv" not in {item["name"] for item in server._collect_key_files(run)}
+    assert "claim.png" not in {item["name"] for item in server._collect_figures(run)}
+    assert server._read_result_json(run)[0] == "running"
+
+
 # --- A-3: pending_media registration ---------------------------------------
 
 

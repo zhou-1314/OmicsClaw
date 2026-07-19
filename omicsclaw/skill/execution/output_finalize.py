@@ -17,10 +17,17 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from omicsclaw.common.output_claim import atomic_write_owned_output_text
 from omicsclaw.common.report import (
     extract_method_name,
     load_result_json,
     write_output_readme,
+)
+
+from .output_ownership import (
+    collect_output_claim_identities,
+    is_contained_output_path,
+    is_scientific_output_file,
 )
 
 
@@ -126,10 +133,30 @@ def write_pipeline_readme(
         lines.append(f"| `{step_name}` | `{status}` | `{method}` | `{output_name}` | `{notebook_name}` |")
 
     lines.extend(["", "## Folder Contents", ""])
-    for path in sorted(output_dir.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
+    claim_identities = collect_output_claim_identities(output_dir)
+    for path in sorted(
+        (
+            candidate
+            for candidate in output_dir.iterdir()
+            if not candidate.is_symlink()
+            and is_contained_output_path(candidate, output_root=output_dir)
+            and (
+                candidate.is_dir()
+                or is_scientific_output_file(
+                    candidate,
+                    output_root=output_dir,
+                    claim_identities=claim_identities,
+                )
+            )
+        ),
+        key=lambda p: (p.is_file(), p.name.lower()),
+    ):
         suffix = "/" if path.is_dir() else ""
         lines.append(f"- `{path.name}{suffix}`")
 
-    readme_path = output_dir / "README.md"
-    readme_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return readme_path
+    return atomic_write_owned_output_text(
+        output_dir / "README.md",
+        output_root=output_dir,
+        text="\n".join(lines) + "\n",
+        label="pipeline output guide",
+    )

@@ -85,9 +85,27 @@ resources:
   - parameters.md
   - r_visualization.md
   tests: tests/
+  # Optional static admission reservation. Calibrate from representative runs;
+  # do not copy guessed defaults or treat this as an OS-enforced quota.
+  # compute:
+  #   cpu_cores: 2
+  #   memory_mib: 4096
+  #   gpu_devices: 0
+  #   threads: 2
+  #   temporary_disk_mib: 4096
 
 lifecycle:
   status: draft             # draft while filling in; -> mvp once it runs on real data
+  # deprecated requires one different canonical mvp/stable, demo-validated replacement:
+  # superseded_by: maintained-skill-id
 
 provenance:
   origin: human             # a hand-authored skill copied from templates/skill/
+
+# Security is intentionally absent until the implementation has been reviewed.
+# An explicit block is declarative metadata, not OS-level confinement. Once
+# reviewed, uncomment and choose all three values honestly:
+# security:
+#   data_egress: none       # none | optional
+#   network: none           # none | optional
+#   writes: output_dir_only # output_dir_only | workspace | unrestricted

@@ -38,6 +38,11 @@ _FRONTMATTER_NOTE = (
 _SECTION_RE = re.compile(r"(?m)^(## .*)$")
 _IO_HEADER = "## Inputs & Outputs"
 _WHEN_HEADER = "## When to use"
+_GOTCHAS_HEADER_RE = re.compile(r"(?m)^## Gotchas[ \t]*$")
+_NEXT_SECTION_RE = re.compile(r"(?m)^## ")
+_EMPTY_GOTCHA_RE = re.compile(
+    r"(?mi)^\s*-\s+_(?:none yet|no gotchas yet|no gotchas surfaced)\b[^\n]*\n?"
+)
 
 
 # ── frontmatter ──────────────────────────────────────────────────────────────
@@ -80,15 +85,16 @@ def render_io_section(manifest: SkillManifest) -> str | None:
     inp = iface.inputs
     out = iface.outputs
     ds = inp.preconditions.data_shape
+    content = inp.preconditions.content
     anndata = out.anndata
 
     has_inputs = bool(
         inp.modalities or inp.file_types or ds.requires_preprocessed or ds.obs or ds.obsm
         or inp.preconditions.env or inp.preconditions.config
-        or inp.path_kinds != ["file"]
+        or inp.path_kinds != ["file"] or inp.artifacts
     )
     has_outputs = bool(
-        out.files or out.result_json.required_keys
+        out.files or out.result_json.required_keys or out.artifacts or out.method_scopes
         or (anndata and (anndata.saves_h5ad or anndata.processing_state
                          or anndata.obs or anndata.obsm or anndata.var
                          or anndata.layers or anndata.uns))
@@ -109,6 +115,9 @@ def render_io_section(manifest: SkillManifest) -> str | None:
             lines.append(f"- Modalities: {', '.join(inp.modalities)}")
         if inp.file_types:
             lines.append("- File types: " + ", ".join(f"`.{ft}`" for ft in inp.file_types))
+        for artifact in inp.artifacts:
+            formats = ", ".join(f"`{value}`" for value in artifact.formats) or "any format"
+            lines.append(f"- Accepts artifact `{artifact.kind}` ({formats})")
         if ds.requires_preprocessed:
             lines.append("- Requires a preprocessed AnnData (`X` normalised, PCA/neighbours present)")
         if ds.obsm:
@@ -119,6 +128,57 @@ def render_io_section(manifest: SkillManifest) -> str | None:
             lines.append("- Env vars: " + ", ".join(f"`{e}`" for e in inp.preconditions.env))
         if inp.preconditions.config:
             lines.append("- Config: " + ", ".join(f"`{c}`" for c in inp.preconditions.config))
+        if content and content.tabular:
+            bits: list[str] = []
+            if content.tabular.min_columns is not None:
+                bits.append(f"at least {content.tabular.min_columns} columns")
+            if content.tabular.required_columns:
+                bits.append(
+                    "required: "
+                    + ", ".join(
+                        f"`{column}`" for column in content.tabular.required_columns
+                    )
+                )
+            lines.append("- Tabular structure: " + "; ".join(bits))
+        if content and content.vcf:
+            bits = []
+            if content.vcf.require_fileformat_header:
+                bits.append("`##fileformat`")
+            if content.vcf.required_columns:
+                bits.append(
+                    "columns: "
+                    + ", ".join(
+                        f"`{column}`" for column in content.vcf.required_columns
+                    )
+                )
+            if content.vcf.required_info_ids:
+                bits.append(
+                    "INFO ids: "
+                    + ", ".join(f"`{name}`" for name in content.vcf.required_info_ids)
+                )
+            if content.vcf.required_format_ids:
+                bits.append(
+                    "FORMAT ids: "
+                    + ", ".join(f"`{name}`" for name in content.vcf.required_format_ids)
+                )
+            if content.vcf.min_samples is not None:
+                bits.append(f"at least {content.vcf.min_samples} samples")
+            lines.append("- VCF structure: " + "; ".join(bits))
+        if content and content.fastq:
+            bits = []
+            if content.fastq.require_valid_record:
+                bits.append("valid first record")
+            if content.fastq.pairing != "any":
+                bits.append(f"`{content.fastq.pairing}` layout")
+            lines.append("- FASTQ structure: " + "; ".join(bits))
+        if content and content.directory:
+            lines.append(
+                "- Directory layouts (any): "
+                + ", ".join(
+                    f"`{signature}`"
+                    for signature in content.directory.any_of_signatures
+                )
+            )
         lines.append("")
 
     if has_outputs:
@@ -127,6 +187,11 @@ def render_io_section(manifest: SkillManifest) -> str | None:
         if out.files:
             for f in out.files:
                 lines.append(f"- `{f}`")
+        for artifact in out.artifacts:
+            lines.append(
+                f"- Produces artifact `{artifact.kind}` as `{artifact.path}` "
+                f"(`{artifact.format}`)"
+            )
         if anndata and anndata.saves_h5ad:
             schema_bits: list[str] = []
             if anndata.obs:
@@ -150,6 +215,30 @@ def render_io_section(manifest: SkillManifest) -> str | None:
             lines.append(
                 "- `result.json` keys: " + ", ".join(f"`{k}`" for k in out.result_json.required_keys)
             )
+        for scope in out.method_scopes:
+            methods = " or ".join(f"`{method}`" for method in scope.methods)
+            lines.append(f"- When `--method` is {methods}:")
+            if scope.files:
+                lines.append(
+                    "  - Additional files: "
+                    + ", ".join(f"`{path}`" for path in scope.files)
+                )
+            if scope.anndata:
+                scoped_bits: list[str] = []
+                for collection in ("obs", "obsm", "var", "layers", "uns"):
+                    values = getattr(scope.anndata, collection)
+                    if values:
+                        scoped_bits.append(
+                            f"`{collection}`: "
+                            + ", ".join(f"`{value}`" for value in values)
+                        )
+                if scoped_bits:
+                    lines.append("  - AnnData additionally guarantees " + "; ".join(scoped_bits))
+            for artifact in scope.artifacts:
+                lines.append(
+                    f"  - Produces artifact `{artifact.kind}` as `{artifact.path}` "
+                    f"(`{artifact.format}`)"
+                )
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
@@ -209,3 +298,36 @@ def render_skill_md(manifest: SkillManifest, existing_text: str) -> str:
         else:
             out += "\n" + header + "\n\n" + content.strip("\n") + "\n"
     return out
+
+
+def append_gotcha_entry(existing_text: str, bullet: str) -> str:
+    """Append one fixed one-line bullet to the narrative ``Gotchas`` section.
+
+    The caller owns semantic validation.  This renderer only accepts a
+    canonical bullet, removes the scaffold placeholder, refuses duplicates,
+    and leaves every byte outside the Gotchas section untouched.
+    """
+    if (
+        not bullet.startswith("- **")
+        or "\n" in bullet
+        or "\r" in bullet
+        or not bullet.strip()
+    ):
+        raise ValueError("Gotcha writeback requires one canonical bullet")
+    matches = list(_GOTCHAS_HEADER_RE.finditer(existing_text))
+    if len(matches) != 1:
+        raise ValueError("SKILL.md must contain exactly one ## Gotchas section")
+    heading = matches[0]
+    next_heading = _NEXT_SECTION_RE.search(existing_text, heading.end())
+    section_end = next_heading.start() if next_heading is not None else len(existing_text)
+    body = existing_text[heading.end():section_end]
+    if bullet in body.splitlines():
+        raise ValueError("Gotcha entry already exists")
+    preserved = _EMPTY_GOTCHA_RE.sub("", body).strip("\n")
+    new_body = "\n\n"
+    if preserved:
+        new_body += preserved + "\n\n"
+    new_body += bullet + "\n"
+    if next_heading is not None:
+        new_body += "\n"
+    return existing_text[: heading.end()] + new_body + existing_text[section_end:]

@@ -11,6 +11,38 @@ from pathlib import Path
 from omicsclaw.runtime.consensus.member import ConsensusMember
 
 
+def test_integration_panel_rejects_claim_alias_h5ad(tmp_path: Path) -> None:
+    import numpy as np
+
+    from omicsclaw.common.output_claim import OUTPUT_CLAIM_FILENAME
+    from omicsclaw.runtime.consensus.driver import _load_integration_panel_inputs
+
+    anndata = pytest.importorskip("anndata")
+    member_dir = tmp_path / "harmony"
+    member_dir.mkdir()
+    adata = anndata.AnnData(X=np.zeros((2, 1), dtype=float))
+    adata.obs_names = ["c1", "c2"]
+    adata.obs["batch"] = ["a", "b"]
+    adata.obsm["X_pca"] = np.zeros((2, 2), dtype=float)
+    adata.obsm["X_harmony"] = np.ones((2, 2), dtype=float)
+    claim = member_dir / OUTPUT_CLAIM_FILENAME
+    adata.write_h5ad(claim)
+    (member_dir / "processed.h5ad").hardlink_to(claim)
+    (member_dir / "result.json").write_text(
+        json.dumps({"summary": {"representation_used": "X_harmony"}}),
+        encoding="utf-8",
+    )
+
+    panel, max_batches = _load_integration_panel_inputs(
+        {"harmony": member_dir},
+        "batch",
+        pd.Index(["c1", "c2"]),
+    )
+
+    assert panel == {}
+    assert max_batches == 0
+
+
 # --------------------------------------------------------------------------- #
 # helpers — synthetic source + stub runner                                    #
 # --------------------------------------------------------------------------- #

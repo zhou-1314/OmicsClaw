@@ -4,6 +4,8 @@ import asyncio
 import json
 import logging
 
+import pytest
+
 from omicsclaw.surfaces.cli import _mcp
 from omicsclaw.extensions import write_extension_state, write_install_record
 from omicsclaw.runtime.context.layers import (
@@ -595,6 +597,84 @@ def test_mcp_runtime_config_skips_disabled_entries_and_forwards_headers(monkeypa
         "headers": {"Authorization": "Bearer token"},
     }
     assert _mcp._build_mcp_connection(all_config["disabled-remote"]) is None
+
+
+def test_mcp_stdio_connection_scrubs_backend_control_credentials():
+    connection = _mcp._build_mcp_connection(
+        {
+            "transport": "stdio",
+            "command": "mcp-server",
+            "env": {
+                "MCP_API_KEY": "server-specific-secret",
+                "OMICSCLAW_REMOTE_AUTH_TOKEN": "must-not-leak",
+                "OMICSCLAW_SKILL_EVOLUTION_TOKEN": "must-not-leak",
+                "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD": "3",
+            },
+        }
+    )
+
+    assert connection is not None
+    assert connection["env"] == {"MCP_API_KEY": "server-specific-secret"}
+
+
+@pytest.mark.parametrize(
+    ("variable_name", "server"),
+    (
+        (
+            "OMICSCLAW_REMOTE_AUTH_TOKEN",
+            {
+                "transport": "stdio",
+                "command": "mcp-server",
+                "env": {"MCP_API_KEY": "${OMICSCLAW_REMOTE_AUTH_TOKEN}"},
+            },
+        ),
+        (
+            "omicsclaw_skill_evolution_token",
+            {
+                "transport": "stdio",
+                "command": "mcp-server",
+                "args": ["--token", "${omicsclaw_skill_evolution_token}"],
+            },
+        ),
+        (
+            "OmicsClaw_Skill_Evolution_Token_Fd",
+            {
+                "transport": "http",
+                "url": "https://mcp.example.test",
+                "headers": {
+                    "Authorization": "Bearer ${OmicsClaw_Skill_Evolution_Token_Fd}"
+                },
+            },
+        ),
+    ),
+)
+def test_mcp_runtime_rejects_control_credential_interpolation(
+    monkeypatch,
+    caplog,
+    variable_name,
+    server,
+):
+    sentinel = "must-not-reach-mcp"
+    monkeypatch.setenv(variable_name, sentinel)
+    monkeypatch.setattr(
+        _mcp,
+        "_load_raw",
+        lambda: {
+            "blocked": server,
+            "safe": {
+                "transport": "stdio",
+                "command": "safe-mcp-server",
+                "env": {"MCP_API_KEY": "ordinary-server-secret"},
+            },
+        },
+    )
+
+    runtime_config = _mcp.load_mcp_config()
+
+    assert "blocked" not in runtime_config
+    assert runtime_config["safe"]["command"] == "safe-mcp-server"
+    assert sentinel not in repr(runtime_config)
+    assert "internal control credential" in caplog.text.lower()
 
 
 def test_assemble_chat_context_forwards_knowledge_guidance_into_message_context(monkeypatch):

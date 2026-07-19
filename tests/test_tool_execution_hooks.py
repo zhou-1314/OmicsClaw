@@ -206,7 +206,7 @@ def test_build_default_tool_execution_hooks_ignores_remote_extensions(tmp_path):
 
 
 def test_candidate_chain_confirmation_hook_blocks_executor_until_confirmed(tmp_path):
-    calls = {"count": 0, "autonomous": 0}
+    calls = {"count": 0, "autonomous": 0, "plan": 0}
 
     async def executor(args):
         calls["count"] += 1
@@ -215,6 +215,10 @@ def test_candidate_chain_confirmation_hook_blocks_executor_until_confirmed(tmp_p
     async def autonomous_executor(_args):
         calls["autonomous"] += 1
         return "autonomous-ran"
+
+    async def plan_executor(_args):
+        calls["plan"] += 1
+        return "plan-ran"
 
     runtime = ToolRegistry(
         [
@@ -232,11 +236,21 @@ def test_candidate_chain_confirmation_hook_blocks_executor_until_confirmed(tmp_p
                 description="Run autonomous analysis",
                 parameters={"type": "object", "properties": {}},
             ),
+            ToolSpec(
+                name="candidate_plan_execute",
+                description="Run confirmed plan",
+                parameters={
+                    "type": "object",
+                    "properties": {"plan_digest": {"type": "string"}},
+                    "required": ["plan_digest"],
+                },
+            ),
         ]
     ).build_runtime(
         {
             "omicsclaw": executor,
             "autonomous_analysis_execute": autonomous_executor,
+            "candidate_plan_execute": plan_executor,
         }
     )
     gate = {
@@ -293,7 +307,7 @@ def test_candidate_chain_confirmation_hook_blocks_executor_until_confirmed(tmp_p
     assert autonomous_blocked.status == EXECUTION_STATUS_HOOK_BLOCKED
     assert calls["autonomous"] == 0
 
-    allowed = asyncio.run(
+    ordinary_skill_blocked_after_confirmation = asyncio.run(
         execute_tool_requests(
             [
                 request(
@@ -306,8 +320,51 @@ def test_candidate_chain_confirmation_hook_blocks_executor_until_confirmed(tmp_p
         )
     )[0]
 
-    assert allowed.success is True
-    assert calls["count"] == 1
+    assert ordinary_skill_blocked_after_confirmation.status == EXECUTION_STATUS_HOOK_BLOCKED
+    assert ordinary_skill_blocked_after_confirmation.policy_decision is not None
+    assert ordinary_skill_blocked_after_confirmation.policy_decision.action == "deny"
+    assert calls["count"] == 0
+
+    plan_allowed = asyncio.run(
+        execute_tool_requests(
+            [
+                ToolExecutionRequest(
+                    call_id="candidate-plan-execute",
+                    name="candidate_plan_execute",
+                    arguments={"plan_digest": "abc123"},
+                    spec=runtime.specs_by_name["candidate_plan_execute"],
+                    executor=runtime.executors["candidate_plan_execute"],
+                    runtime_context=_prepare_tool_runtime_context(
+                        {"candidate_chain_gate": gate | {"confirmed": True}}
+                    ),
+                )
+            ]
+        )
+    )[0]
+
+    assert plan_allowed.success is True
+    assert calls["plan"] == 1
+
+    changed_plan_blocked = asyncio.run(
+        execute_tool_requests(
+            [
+                ToolExecutionRequest(
+                    call_id="candidate-plan-changed",
+                    name="candidate_plan_execute",
+                    arguments={"plan_digest": "changed"},
+                    spec=runtime.specs_by_name["candidate_plan_execute"],
+                    executor=runtime.executors["candidate_plan_execute"],
+                    runtime_context=_prepare_tool_runtime_context(
+                        {"candidate_chain_gate": gate | {"confirmed": True}}
+                    ),
+                )
+            ]
+        )
+    )[0]
+    assert changed_plan_blocked.status == EXECUTION_STATUS_HOOK_BLOCKED
+    assert changed_plan_blocked.policy_decision is not None
+    assert changed_plan_blocked.policy_decision.action == "deny"
+    assert calls["plan"] == 1
 
     out_of_plan = asyncio.run(
         execute_tool_requests(
@@ -327,4 +384,6 @@ def test_candidate_chain_confirmation_hook_blocks_executor_until_confirmed(tmp_p
     )[0]
 
     assert out_of_plan.status == EXECUTION_STATUS_HOOK_BLOCKED
-    assert calls["count"] == 1
+    assert out_of_plan.policy_decision is not None
+    assert out_of_plan.policy_decision.action == "deny"
+    assert calls["count"] == 0

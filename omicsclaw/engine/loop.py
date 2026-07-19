@@ -23,7 +23,9 @@ from openai import APIError
 
 from omicsclaw.runtime.context.assembler import (
     assemble_chat_context as _assemble_chat_context,
+    build_stored_user_message_content,
 )
+from omicsclaw.runtime.agent.envelope import MessageContentAdapter
 from omicsclaw.runtime.tools.hooks import build_default_lifecycle_hook_runtime
 from omicsclaw.runtime.policy.state import ToolPolicyState
 from omicsclaw.runtime.agent.query_engine import (
@@ -300,6 +302,8 @@ async def run_engine_loop(
     deps: EngineDependencies,
     chat_id: int | str,
     user_content: str | list,
+    stored_user_content: str | list | None = None,
+    content_adapter: MessageContentAdapter | None = None,
     user_id: str | None = None,
     platform: str | None = None,
     plan_context: str = "",
@@ -390,6 +394,12 @@ async def run_engine_loop(
         mcp_servers=tuple(mcp_servers or ()),
         output_style=output_style,
     )
+    assembled_stored_user_content = None
+    if stored_user_content is not None:
+        assembled_stored_user_content = build_stored_user_message_content(
+            stored_user_content,
+            message_context=chat_context.prompt_context.message_context,
+        )
 
     effective_model, effective_provider = resolve_effective_model_provider(
         model_override, deps.omicsclaw_model, deps.llm_provider_name
@@ -450,6 +460,15 @@ async def run_engine_loop(
             user_message_content=_prepend_user_turn_context(
                 chat_context.user_message_content, user_turn_context
             ),
+            stored_user_content=(
+                _prepend_user_turn_context(
+                    assembled_stored_user_content,
+                    user_turn_context,
+                )
+                if assembled_stored_user_content is not None
+                else None
+            ),
+            content_adapter=content_adapter,
             surface=surface,
             policy_state=resolved_policy_state,
             hook_runtime=hook_runtime,

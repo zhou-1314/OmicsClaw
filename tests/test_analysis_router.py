@@ -167,6 +167,31 @@ def test_router_passes_file_path_and_domain_hint_to_resolver() -> None:
     }
 
 
+def test_router_passes_method_bindings_to_resolver() -> None:
+    calls: dict[str, dict[str, str]] = {}
+
+    def resolver(
+        query: str,
+        *,
+        file_path: str = "",
+        domain_hint: str = "",
+        method_bindings: dict[str, str] | None = None,
+    ):
+        calls["method_bindings"] = method_bindings or {}
+        return _decision(
+            query=query,
+            coverage="partial_skill",
+            chosen_skill="sc-preprocessing",
+        )
+
+    AnalysisRouter(resolver=resolver).route(
+        "run preprocessing then clustering",
+        method_bindings={"sc-preprocessing": "scanpy"},
+    )
+
+    assert calls["method_bindings"] == {"sc-preprocessing": "scanpy"}
+
+
 def test_real_resolver_help_request_routes_to_chat() -> None:
     route = AnalysisRouter().route("What is OmicsClaw and how do I install it?")
 
@@ -250,6 +275,7 @@ def test_composite_candidate_chain_requires_confirmation_before_execution() -> N
     assert "candidate_topo_chain: sc-preprocessing -> sc-clustering" in context
     assert "confirm" in context.lower()
     assert first_gate["confirmed"] is False
+    assert first_gate["candidate_chain"] == route.metadata["candidate_chain"]
     assert confirmed_gate == first_gate | {"confirmed": True}
     assert continued_gate == confirmed_gate
     assert pending_candidate_chain_confirmations["ret05"] == confirmed_gate
@@ -261,6 +287,32 @@ def test_composite_candidate_chain_requires_confirmation_before_execution() -> N
     )
     assert replacement_gate == {}
     assert "ret05" not in pending_candidate_chain_confirmations
+
+
+def test_resource_unready_candidate_chain_is_visible_but_not_confirmable() -> None:
+    from omicsclaw.runtime.agent.loop import (
+        _candidate_chain_gate_for_turn,
+        _format_analysis_route_context,
+    )
+    from omicsclaw.runtime.agent.state import pending_candidate_chain_confirmations
+
+    chat_id = "resource-unready"
+    pending_candidate_chain_confirmations.pop(chat_id, None)
+    query = "run spatial-raw-processing and then spatial-preprocess"
+    route = AnalysisRouter().route(query)
+    context = _format_analysis_route_context(route)
+
+    assert route.metadata["candidate_chain"]["validated_order"] is True
+    assert route.metadata["candidate_chain"]["resource_ready"] is False
+    assert route.metadata["candidate_chain"]["missing_resource_requests"] == [
+        "spatial-raw-processing"
+    ]
+    assert route.metadata["requires_confirmation"] is False
+    assert "candidate_resource_ready: false" in context
+    assert "spatial-raw-processing" in context
+    assert "confirm the complete chain" not in context
+    assert _candidate_chain_gate_for_turn(chat_id, query, route) == {}
+    assert chat_id not in pending_candidate_chain_confirmations
 
 
 def test_new_no_skill_analysis_replaces_confirmed_candidate_plan() -> None:

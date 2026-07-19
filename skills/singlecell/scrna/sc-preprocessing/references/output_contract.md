@@ -7,7 +7,6 @@ output_directory/
 ├── analysis_summary.txt
 ├── commands.sh
 ├── info.json
-├── input.h5ad
 ├── manifest.json
 ├── processed.h5ad
 ├── requirements.txt
@@ -54,7 +53,6 @@ output_directory/
 - `analysis_summary.txt` — written by `sc_preprocess.py`.
 - `commands.sh` — written by `sc_preprocess.py`.
 - `info.json` — written by `sc_preprocess.py`.
-- `input.h5ad` — written by `sc_preprocess.py`.
 - `manifest.json` — written by `sc_preprocess.py`.
 - `processed.h5ad` — written by `sc_preprocess.py`.
 - `requirements.txt` — written by `sc_preprocess.py`.

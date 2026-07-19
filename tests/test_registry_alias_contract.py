@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 from omicsclaw.skill.registry import OmicsRegistry
@@ -91,27 +92,28 @@ _LOCKED_LEGACY_ALIASES: tuple[tuple[str, str], ...] = (
 )
 
 
-def test_alias_views_do_not_share_mutable_dict_with_canonical():
-    """Mutating a skill info dict reached through one alias must not propagate
-    to the same skill viewed through its canonical or legacy alias.
-
-    Pre-fix the registry stored the same dict object under every alias key,
-    so a future caller editing one view would silently corrupt every other.
-    """
+def test_alias_views_are_independent_deeply_immutable_publications():
+    """Canonical and legacy aliases cannot mutate published Registry authority."""
     registry = OmicsRegistry()
     registry.load_all()
 
     canonical_view = registry.skills["spatial-preprocess"]
     legacy_view = registry.skills["preprocess"]
 
-    # Top-level replacement.
-    canonical_view["description"] = "MUTATED"
+    assert canonical_view is not legacy_view
+    with pytest.raises(TypeError):
+        canonical_view["description"] = "MUTATED"
+    assert canonical_view.get("description") != "MUTATED"
     assert legacy_view.get("description") != "MUTATED"
 
-    # In-place mutation of a nested mutable container (set).
-    canonical_flags = canonical_view.setdefault("allowed_extra_flags", set())
-    canonical_flags.add("--injected-by-test")
-    assert "--injected-by-test" not in (legacy_view.get("allowed_extra_flags") or set())
+    canonical_flags = canonical_view.get("allowed_extra_flags")
+    legacy_flags = legacy_view.get("allowed_extra_flags")
+    assert isinstance(canonical_flags, frozenset)
+    assert canonical_flags is not legacy_flags
+    with pytest.raises(AttributeError):
+        canonical_flags.add("--injected-by-test")
+    assert "--injected-by-test" not in canonical_flags
+    assert "--injected-by-test" not in (legacy_flags or frozenset())
 
 
 def test_locked_legacy_aliases_resolve_to_canonical_names():

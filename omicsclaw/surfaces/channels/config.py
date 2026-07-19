@@ -7,8 +7,7 @@ Channel-specific configs inherit from BaseChannelConfig.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 
 @dataclass
@@ -23,4 +22,4 @@ class BaseChannelConfig:
     text_chunk_limit: int = 4096
     proxy: str | None = None
     include_attachments: bool = True
-    rate_limit_per_hour: int = 0    # 0 = no limit
+    rate_limit_per_hour: int = 0  # 0 = no limit

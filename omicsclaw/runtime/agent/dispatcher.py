@@ -33,7 +33,11 @@ from omicsclaw.runtime.agent.events import (
     ToolResult,
 )
 
-_SENTINEL: object = object()
+# One event may cross the producer/consumer handoff ahead of the Surface.  The
+# callbacks run in the LLM/tool task, so a larger or unbounded queue would let a
+# slow renderer accumulate arbitrarily many rich tool results before Surface
+# backpressure can take effect.
+DISPATCH_EVENT_QUEUE_MAX_ITEMS = 1
 
 
 def _compaction_payload(event: Any) -> dict[str, Any]:
@@ -63,7 +67,8 @@ async def dispatch(envelope: MessageEnvelope) -> AsyncIterator[Event]:
     If the consumer breaks out of the iteration early, the underlying loop
     task is cancelled.
     """
-    queue: asyncio.Queue = asyncio.Queue()
+    queue: asyncio.Queue = asyncio.Queue(maxsize=DISPATCH_EVENT_QUEUE_MAX_ITEMS)
+    producer_done = asyncio.Event()
 
     async def _progress_fn(text: str) -> str:
         progress_id = str(uuid.uuid4())
@@ -140,6 +145,13 @@ async def dispatch(envelope: MessageEnvelope) -> AsyncIterator[Event]:
                 request_tool_approval=envelope.request_tool_approval,
                 policy_state=envelope.policy_state,
                 cancel_event=envelope.cancel_event,
+                stored_user_content=envelope.stored_user_content,
+                content_adapter=envelope.content_adapter,
+                **(
+                    {"transcript_store_override": envelope.transcript_turn}
+                    if envelope.transcript_turn is not None
+                    else {}
+                ),
             )
 
             # ``pending_media`` is deliberately not touched here — see
@@ -147,20 +159,65 @@ async def dispatch(envelope: MessageEnvelope) -> AsyncIterator[Event]:
             # their existing per-surface drain.
             pending_preflight = getattr(_core, "pending_preflight_requests", None) or {}
             kind = "preflight" if envelope.chat_id in pending_preflight else "normal"
-            await queue.put(Final(text=final_text or "", kind=kind))
+            terminal_ref = None
+            if envelope.transcript_turn is not None:
+                terminal_ref = envelope.transcript_turn.stage_terminal(
+                    final_text or "",
+                    terminal_kind=kind,
+                )
+            await queue.put(
+                Final(
+                    text=final_text or "",
+                    kind=kind,
+                    transcript_entry_id=(
+                        terminal_ref.entry_id if terminal_ref is not None else ""
+                    ),
+                    transcript_content_sha256=(
+                        terminal_ref.content_sha256 if terminal_ref is not None else ""
+                    ),
+                )
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             await queue.put(Error(exception=exc))
         finally:
-            await queue.put(_SENTINEL)
+            # Completion has its own wake-up channel: cancellation of a
+            # callback blocked on the one-slot queue must not strand this task
+            # attempting to enqueue a sentinel after the consumer has closed.
+            producer_done.set()
 
     task = asyncio.create_task(_run())
 
     try:
         while True:
-            item = await queue.get()
-            if item is _SENTINEL:
+            if producer_done.is_set() and queue.empty():
+                break
+            get_task = asyncio.create_task(queue.get())
+            done_task = asyncio.create_task(producer_done.wait())
+            try:
+                completed, _ = await asyncio.wait(
+                    {get_task, done_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            except BaseException:
+                get_task.cancel()
+                done_task.cancel()
+                await asyncio.gather(get_task, done_task, return_exceptions=True)
+                raise
+            if get_task in completed:
+                item = get_task.result()
+                if not done_task.done():
+                    done_task.cancel()
+                await asyncio.gather(done_task, return_exceptions=True)
+                yield item
+                continue
+            if not get_task.done():
+                get_task.cancel()
+            await asyncio.gather(get_task, return_exceptions=True)
+            try:
+                item = queue.get_nowait()
+            except asyncio.QueueEmpty:
                 break
             yield item
     finally:
@@ -172,4 +229,4 @@ async def dispatch(envelope: MessageEnvelope) -> AsyncIterator[Event]:
                 pass
 
 
-__all__ = ["dispatch"]
+__all__ = ["DISPATCH_EVENT_QUEUE_MAX_ITEMS", "dispatch"]

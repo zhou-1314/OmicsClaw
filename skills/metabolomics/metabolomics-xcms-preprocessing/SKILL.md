@@ -50,6 +50,7 @@ For per-sample peak picking from a single intensity matrix use
 - `tables/peak_table.csv`
 - `report.md`
 - `result.json`
+- Produces artifact `metabolomics.peak_table` as `tables/peak_table.csv` (`csv`)
 
 ## Flow
 

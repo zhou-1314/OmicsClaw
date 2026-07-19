@@ -1,5 +1,12 @@
 # OmicsClaw 产品全景文档
 
+> **历史产品快照 — 不是当前架构权威。** 本文主体冻结在 2026-05-11，仍保留
+> 部分迁移前的 `bot/` 路径、能力矩阵和运行流说明，用于产品演进追溯；不得据此
+> 判断当前生产能力。当前事实以 [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)、
+> [`docs/CONTEXT.md`](CONTEXT.md)、已接受 ADR 及
+> [`omicsclaw/surfaces/channels/README.md`](../omicsclaw/surfaces/channels/README.md)
+> 为准。本文中 2026-07-16 的控制面补充是后续勘误，不表示其余章节已整体刷新。
+
 > **文档说明**
 >
 > 这份文档的目的是：**让任何没有写过代码的新同事，在 30 分钟内完全理解 OmicsClaw 这个产品到底有哪些能力、每块能力在整体中处于什么位置、一个模块和另一个模块如何协同**。
@@ -15,6 +22,16 @@
 > 它**不是**：开发者参考手册、架构决策记录（ADR）、或者销售话术。它是**功能事实的汇总**——每一条描述都能在代码、`SKILL.md` 或 API 路由里找到对应。
 >
 > 文档基于对整个仓库（`omicsclaw/`、`skills/`、`bot/`、`frontend/`、`knowledge_base/`、`docs/`）的系统性调研生成，与代码同步的截止日期 2026-05-11。
+>
+> **架构基线提示（更新至 2026-07-17）：** 本文中的 `Session`、`sessions.db`、App chat history 和 `project://` Project 描述是当前/历史实现事实，不是新的身份所有权目标。最新已接受架构以 [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) 为准：一个 Backend 独占的本地 SQLite `control.db` 是 Project、Conversation、Active Binding、Turn/Run Receipt、入站幂等、Run Submission Binding、Execution Assignment 与 Outbound Delivery 的物理权威；Transcript、Memory、App 数据和 Run Manifest/artifacts 保持独立。专用 Attachment Store 保存归属于唯一 Turn/Conversation 的不可变 Attachment Record 与 content-addressed Blob；重复判断先于暂存，Envelope、Transcript 与工具仅携带结构化 Attachment Reference，不能用 provider handle、Base64、临时路径、Workspace 路径或“Session 最新文件”注册表充当持久附件契约。Project 只有 `active` 与可恢复的 `archived` 两种持久状态；旧 `is_deleted` 迁移为 archive，永久跨存储清除不属于 v1。Canonical Desktop Simple Skill tracer 已使调用方提供 opaque Run Submission ID，以持久 Binding 将网络重试收敛到同一个控制面生成的 Run ID；该路径持久化不含执行载荷的最小 Run Receipt，冻结 `ProjectScope(project_id)` 或 `UnassignedScope`，并只允许一个 Assignment-ID-fenced、进程绑定的执行授权。目录名、Remote Job、PID/Slurm ID 只是存储名称或 Execution Reference；`output/default/` 是非 Project 的 Unassigned 兼容分组；重启失联收敛为 `interrupted` 且不自动重放或重分配。v1 不存在可续期 Execution Lease，Resource Lease 只做资源记账。Workflow、Candidate、Autonomous、Remote Job、CLI 与 Agent tool 等其余 Run 调用路径尚未收敛到这一 Interface。
+>
+> **交付基线补充：** 每个终态 Channel Turn 最多创建一个持久 Outbound Delivery；`control.db` 保存 Delivery/Item/Attempt 生命周期与持久内容引用，单进程 Delivery Pump 只负责 provider 交付。入站重复、交付重试、acceptance unknown 和 Owner 显式 resend 都不会重跑 Turn；Desktop/CLI 的 SSE/终端恢复及临时进度不属于该 Outbox。
+>
+> **Run 调度基线补充：** 目标是让所有已接受的顶层 Skill、Workflow、Candidate-plan 与 Autonomous Run 统一进入一个有界、进程内、严格 FIFO 的 Run Dispatcher。当前该 Dispatcher 已承载 canonical Desktop Simple Skill tracer；共享 Execution Resource Scheduler 已承载该 tracer 与 Candidate plans，但其余执行路径仍可能绕过二者。Dispatcher 只负责排队、活跃 Run 上限、queued 取消与唯一 Assignment 的机会，并在 Assignment 前取得首个执行单元的 Resource Lease。Resource Scheduler 独立原子核算 process/CPU/内存/GPU/线程/临时磁盘容量；Resource Lease 不代表执行所有权，任何队列都不能从 Run Receipt 重建并自动重放。v1 不采用优先级、bypass、抢占或分布式 Worker 调度。
+
+> **Run 完整性审计补充：** canonical tracer 的 Assignment fence 冲突、Manifest/Receipt 漂移、无法确认的 Process Tree Owner 与恢复终态提交失败已写入 `control.db` 的 append-only、content-free Run Integrity Incident Ledger。每条记录只含闭合代码、opaque Run/Assignment ID、Receipt revision、证据版本/摘要和时间；原始异常、路径、参数、日志、凭据、Manifest 内容和 Execution Reference 不落库也不参与摘要。Desktop `GET /v1/run-integrity-incidents` 只读、分页，并在恢复隔离期间保持可用；它不能触发检查、停止进程、重放或修复。
+
+> **执行所有权补充（2026-07-17）：** canonical Linux Simple Skill Assignment 在同一控制事务中绑定唯一、write-once 的 Process Tree Owner；实际启动必须使用该 user-systemd scope，并由 parent-death launcher 与 bubblewrap PID/cgroup namespace 封闭后代生命周期。启动/关闭只有在 unit 不存在或 cgroup `populated=0` 后才应用 verified Manifest 终态或 fenced interruption；无法确认 owner、Manifest 或 Control terminal transaction 时保留非终态 Receipt、隔离 novel admission，且绝不重放。
 
 ---
 
@@ -71,7 +88,7 @@ OmicsClaw 做的事：
 - **统一 Skill Runner 契约**：CLI、Interactive、Bot、桌面 App、远程 Job、研究流水线都通过同一个执行入口，参数白名单、产物布局、报告生成完全一致
 - **本地优先（Local-first）**：原始数据从不离开你配置的运行时；只有上下文摘要和工具结果进入 LLM 调用
 - **图记忆（Graph Memory）**：基于 SQLite/Postgres 的图数据库记录数据集、分析、洞见、偏好的血缘，按 Namespace 隔离不同用户和工作区
-- **多 Surface（多端）共享同一心脏**：CLI、TUI、桌面 App、Telegram/Feishu/Discord/Slack/WeChat 等 9 个 Bot 渠道、远程执行 API、研究流水线，全部 import 同一个 `bot/core.py` 中央枢纽
+- **多 Surface（多端）共享同一运行时**：prompt-toolkit CLI、Desktop text 与 Owner-only Telegram text 通过 `ControlRuntime` 进入同一 Agent runtime；Textual TUI 和其他 Channel Adapter 仍待迁移
 - **远程模式（Remote）**：桌面/网页 UI 在本地，分析作业通过 SSH 隧道交给远程 Linux 节点的 `oc desktop-server` 执行
 - **可演化（Self-Evolution）**：`omicsclaw/autoagent/` 用 LLM 元代理在受控 edit surface 内对参数和源代码做实验、评估、回滚——既能优化 Skill 参数，也能演化框架自身
 
@@ -88,7 +105,7 @@ OmicsClaw 是**单仓库 + 多 Surface** 的产品，所有形态共享同一份
 - **桌面 App / Web 前端**：`oc desktop-server` 跑 FastAPI 后端（默认 `127.0.0.1:8765`），前端是独立仓库 OmicsClaw-App 或浏览器
 - **远程执行**：在远端 Linux 节点上跑 `oc desktop-server`，绑定 localhost，桌面 App 通过 SSH 隧道 + `OMICSCLAW_REMOTE_AUTH_TOKEN` 接入
 - **Memory API（可选）**：`oc memory-server` 暴露图记忆 REST 接口（默认 `127.0.0.1:8766`），供桌面 Review & Audit 面板使用
-- **多渠道 Bot**：`python -m omicsclaw.surfaces.channels --channels telegram,feishu,...`，9 个聊天渠道用同一份 LLM tool loop
+- **Telegram Bot**：`python -m omicsclaw.surfaces.channels --channels telegram`；当前仅 Owner 文本路径启用，其他适配器完成同等控制面迁移前 fail closed
 
 > OmicsClaw 没有"云版本"——所有数据处理都在你自己控制的运行时里发生。只有 LLM API 调用走外部（你也可以指向自建模型/本地 ollama）。
 
@@ -133,9 +150,9 @@ OmicsClaw 的架构、Skill 设计和 local-first 理念受 [ClawBio](https://gi
 | **System Prompt Builder** | `omicsclaw.runtime.system_prompt.build_system_prompt(surface, ...)`——唯一的共享系统提示组装函数，从 SOUL.md、predicate-gated 层、KH headline、能力简报、工具前言里拼出一份请求级的 system prompt。**任何代码都必须调用它，不允许就地拼接** | `omicsclaw/runtime/system_prompt.py` |
 | **Surface 表面** | `build_system_prompt` 的参数之一，决定渲染哪种 prompt 形状：`bot`（完整对话）、`pipeline`（研究流水线编排器，自定义 base persona）等。不同 Surface 启用/关闭不同 predicate-gated 层和 KH 注入；同时也是产品语义上的"用户入口"概念（CLI、TUI、App、Bot） | `omicsclaw/runtime/system_prompt.py`、`omicsclaw/runtime/context_layers/` |
 | **Predicate-gated layer 谓词门控层** | 当某个谓词触发时才注入的 system prompt 片段（如 `plot_intent`、`web_or_url_intent`、`skill_creation_intent`）；定义在 `_PREDICATE_GATED_RULES`，由 PR #109 引入，目的是把 baseline token 成本压低 | `omicsclaw/runtime/predicates.py`、`omicsclaw/runtime/context_layers/__init__.py` |
-| **Preflight 预飞行检查** | 在 Skill 执行**之前**对用户输入文件做的校验（例如 `.h5ad` 是否带 `obs.batch` 列、count matrix 是否非负整数）。校验失败时不直接执行，而是把问题反问给用户 | `bot/preflight.py` |
-| **Central hub 中央枢纽** | `bot/core.py`——所有 User-facing Surface 都 import 它，拿到 LLM tool loop、工具执行、preflight 处理、计费、审计。当前约 648 行（外加 `bot/agent_loop.py` 935 行、`bot/skill_orchestration.py` 771 行、`bot/preflight.py` 280 行）；规划分解记录在 `docs/adr/0001` | `bot/core.py`、`bot/agent_loop.py`、`bot/skill_orchestration.py`、`bot/preflight.py` |
-| **User-facing entry 用户面入口** | 任何一个真人输入文字并读到回应的 Surface：`bot/`（9 个渠道）、`omicsclaw/surfaces/desktop/`（桌面/网页 App 后端）、`omicsclaw/surfaces/cli/`（CLI + Textual TUI）。三者目前都委托给 `bot.core.llm_tool_loop` 和 `build_system_prompt(surface=bot)` | `bot/`、`omicsclaw/surfaces/desktop/`、`omicsclaw/surfaces/cli/` |
+| **Preflight 预飞行检查** | 在 Skill 执行**之前**对输入契约做校验；校验失败时不启动科学执行 | `omicsclaw/skill/preconditions.py`、`omicsclaw/runtime/tools/` |
+| **ControlRuntime 控制面运行时** | 持有权威接纳、opaque Turn、per-Conversation FIFO、canonical Transcript 和 Surface Adapter 到 Agent runtime 的内部 seam | `omicsclaw/control/runtime.py`、`omicsclaw/runtime/agent/` |
+| **User-facing entry 用户面入口** | 真人输入文字并读到回应的 Surface。当前 prompt-toolkit CLI、Desktop text、Telegram text 已切到 `ControlRuntime`；Textual TUI 和其他 Channel Adapter 显式待迁移 | `omicsclaw/surfaces/cli/`、`omicsclaw/surfaces/desktop/`、`omicsclaw/surfaces/channels/` |
 | **Task-locked entry 任务锁定入口** | 跑固定非对话任务、用自有 micro-prompt 的入口；目前只有 `omicsclaw/autoagent/`（参数优化 + 框架自演化）。**故意**不共享用户面 builder | `omicsclaw/autoagent/` |
 | **Research Pipeline 研究流水线** | `omicsclaw/agents/`——受 EvoScientist 启发的多 Agent 工作流（intake → plan → research → execute → analyze → write → review）。使用 `build_system_prompt(surface=pipeline)`，自定义 base persona，关闭 KH 注入 | `omicsclaw/agents/pipeline.py` |
 | **Self-Evolution 自演化** | `omicsclaw/autoagent/`——元系统，要么 (a) 通过 directive loop 调参，要么 (b) 在受控 edit surface 内改源码。**作用于** OmicsClaw 而非**通过** OmicsClaw | `omicsclaw/autoagent/optimization_loop.py`、`omicsclaw/autoagent/harness_loop.py` |
@@ -230,7 +247,7 @@ deps:
 |---|---|---|
 | **CLI 用户** | `oc run <skill> --input <file> --output <dir>` 直接命令行执行 | `omicsclaw.py` |
 | **Interactive 用户** | `/run <skill>` slash 命令，或自然语言由 LLM 路由 | `omicsclaw/surfaces/cli/` |
-| **Bot 用户** | 发自然语言消息，LLM 触发 `omicsclaw(skill=...)` 工具调用 | `bot/core.py` |
+| **Telegram Owner** | 发文本消息，由 `ControlRuntime` 执行并通过持久 Delivery Outbox 返回终态文本 | `omicsclaw/surfaces/channels/telegram.py` |
 | **桌面 App 用户** | UI 的 Skills 面板浏览 + 一键执行；也可对话触发 | `omicsclaw/surfaces/desktop/server.py` 的 `/skills*` |
 | **远程 Job** | 桌面 App 通过 SSH 把 Skill 作业派给远端 `oc desktop-server` | `omicsclaw/remote/routers/jobs.py` |
 | **Research Pipeline** | execute 阶段的子 agent 在 plan 阶段挑出 Skill，按顺序执行 | `omicsclaw/agents/pipeline.py` |
@@ -816,53 +833,45 @@ POST /files/upload | /list | /open | /create | /save | /delete | /rename
 
 ---
 
-### 3.9 Bot 多渠道机器人
+### 3.9 Channel Surface
 
-> **角色**：让 OmicsClaw 在 9 个聊天平台变成"群里的同事"。
+> **当前角色**：仅配置 Owner 的 Telegram 文本是启用的生产路径；另外 8
+> 个注册 Adapter 保留为迁移源码，但会在启动时 fail closed。
 
-#### 9 个渠道
+#### Adapter 清单
 
 | 渠道 | 文件 | 配置入口 |
 |---|---|---|
-| Telegram | `bot/channels/telegram.py` | `TELEGRAM_BOT_TOKEN`（@BotFather） |
-| Feishu / 飞书 | `bot/channels/feishu.py` | `FEISHU_APP_ID` + `FEISHU_APP_SECRET`（飞书开放平台 + WebSocket） |
-| DingTalk / 钉钉 | `bot/channels/dingtalk.py` | 钉钉开放平台 |
-| Discord | `bot/channels/discord.py` | Discord Developer Portal Bot token |
-| Slack | `bot/channels/slack.py` | Slack App tokens（Socket Mode） |
-| WeChat / 微信 | `bot/channels/wechat.py` | 微信公众平台 |
-| QQ | `bot/channels/qq.py` | QQ 机器人开放接入 |
-| Email | `bot/channels/email.py` | SMTP/IMAP |
-| iMessage | `bot/channels/imessage.py` | macOS Messages 桥接（本地） |
+| Telegram | `omicsclaw/surfaces/channels/telegram.py` | 已启用：`TELEGRAM_BOT_TOKEN` + Owner allowlist |
+| Feishu / 飞书 | `omicsclaw/surfaces/channels/feishu.py` | 未迁移，disabled |
+| DingTalk / 钉钉 | `omicsclaw/surfaces/channels/dingtalk.py` | 未迁移，disabled |
+| Discord | `omicsclaw/surfaces/channels/discord.py` | 未迁移，disabled |
+| Slack | `omicsclaw/surfaces/channels/slack.py` | 未迁移，disabled |
+| WeChat / 微信 | `omicsclaw/surfaces/channels/wechat.py` | 未迁移，disabled |
+| QQ | `omicsclaw/surfaces/channels/qq.py` | 未迁移，disabled |
+| Email | `omicsclaw/surfaces/channels/email.py` | 未迁移，disabled |
+| iMessage | `omicsclaw/surfaces/channels/imessage.py` | 未迁移，disabled |
 
 #### 启动方式
 
 ```bash
 python -m omicsclaw.surfaces.channels --channels telegram                # 单渠道
-python -m omicsclaw.surfaces.channels --channels telegram,feishu,slack   # 多渠道并发
-python -m omicsclaw.surfaces.channels --list                             # 列可用
+python -m omicsclaw.surfaces.channels --list                             # 标注未迁移适配器为 disabled
 make bot-telegram                                    # Makefile alias
-make bot-feishu
 ```
 
-所有渠道共用一个进程，由 `bot/channels/manager.py` + `bot/channels/bus.py` 调度。
+当前 Telegram 文本由 `ControlRuntime` 与持久 Delivery Pump 闭环；下列旧
+Adapter 代码仅作迁移参考，生产 runner 不会启动它们。
 
-#### 共享心脏：`bot/core.py` + 拆分模块
+#### 当前共享执行与投递边界
 
 | 文件 | 行数（约） | 职责 |
 |---|---|---|
-| `bot/core.py` | 648 | 入口、Tool spec、安全、审计 |
-| `bot/agent_loop.py` | 935 | LLM tool-use 主循环 |
-| `bot/skill_orchestration.py` | 771 | 把 LLM 的 `omicsclaw(skill=...)` 调用变成 Skill Runner 执行 |
-| `bot/preflight.py` | 280 | 执行前的输入校验、追问 |
-| `bot/tool_executors.py` | — | 工具实现（save_file、write_file、generate_audio、omicsclaw） |
-| `bot/session.py` | — | 渠道无关的 session 抽象 |
-| `bot/path_validation.py` | — | 路径白名单 |
-| `bot/rate_limit.py` | — | 速率限制 |
-| `bot/billing.py` | — | Token 计费 / 上限 |
-| `bot/audit.py` | — | JSONL 审计日志 |
-| `bot/onboard.py` | — | 共享的交互式 onboarding wizard |
-
-> **拆分计划**：原 `bot/core.py` 单文件 5000+ 行，规划分解记录在 `docs/adr/0001-bot-core-decomposition.md`，当前的 5 个子文件是分解第一阶段的成果。
+| `omicsclaw/surfaces/channels/telegram.py` | — | 真实性边界、Owner 前置门、`RawInboundV1` 构造、生命周期 |
+| `omicsclaw/control/runtime.py` | — | 权威接纳、Turn FIFO、canonical Transcript、终态事务 |
+| `omicsclaw/control/delivery.py` | — | 持久 Outbox Pump、账户隔离、重试/unknown、目标内串行 |
+| `omicsclaw/surfaces/channels/telegram_delivery.py` | — | 每 Attempt 一次 `send_message` 的 Telegram Adapter |
+| `omicsclaw/runtime/agent/dispatcher.py` | — | ControlRuntime 内部复用的 Agent Worker Adapter seam |
 
 #### 工具集
 
@@ -1464,10 +1473,10 @@ OmicsClaw 在物理形态上是**一个 Python 包 + 一份共享数据存储 + 
 │                          User-facing Surfaces                            │
 │                                                                          │
 │  ┌──────────┐ ┌──────────┐ ┌──────────────┐ ┌─────────────────────────┐  │
-│  │ CLI      │ │ TUI      │ │ Desktop App  │ │ Bot (9 channels)        │  │
-│  │ oc       │ │ Textual  │ │ Electron /   │ │ telegram feishu         │  │
-│  │ interac. │ │ tui      │ │ browser →    │ │ dingtalk discord slack  │  │
-│  │          │ │          │ │ oc desktop-server│ │ wechat qq email imessage│  │
+│  │ CLI      │ │ TUI      │ │ Desktop App  │ │ Channel Surface         │  │
+│  │ oc       │ │ Textual  │ │ Electron /   │ │ Telegram text enabled   │  │
+│  │ interac. │ │ legacy   │ │ browser →    │ │ other Adapters gated    │  │
+│  │          │ │ pending  │ │ oc desktop-server│ │ attachments rejected  │  │
 │  └────┬─────┘ └────┬─────┘ └──────┬───────┘ └────────────┬────────────┘  │
 └───────┼────────────┼──────────────┼──────────────────────┼───────────────┘
         │            │              │                      │
@@ -1482,13 +1491,13 @@ OmicsClaw 在物理形态上是**一个 Python 包 + 一份共享数据存储 + 
         │            │              │                      │
         ▼            ▼              ▼                      ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│                            Central Hub                                   │
-│                          bot/core.py                                     │
-│                          (User-facing entries 全部 import 它)            │
+│                    ControlRuntime + Agent runtime                        │
+│                 omicsclaw/control/runtime.py                             │
+│             (CLI/Desktop/Telegram text cut-over paths)                   │
 │                                                                          │
 │  ┌─────────────────┐ ┌──────────────────┐ ┌──────────────────────────┐   │
-│  │ llm_tool_loop   │ │ preflight        │ │ tool_executors           │   │
-│  │ (agent_loop.py) │ │ (preflight.py)   │ │ omicsclaw / read_knowhow │   │
+│  │ Turn FIFO       │ │ context/policy   │ │ shared tool executors    │   │
+│  │ canonical tx    │ │ runtime/agent    │ │ skill / read_knowhow     │   │
 │  └────────┬────────┘ └────────┬─────────┘ └─────────┬────────────────┘   │
 │           │                   │                     │                    │
 └───────────┼───────────────────┼─────────────────────┼────────────────────┘
@@ -1553,7 +1562,7 @@ OmicsClaw 在物理形态上是**一个 Python 包 + 一份共享数据存储 + 
 |---|---|---|
 | **User-facing Surface**（CLI / TUI / App / Bot） | UI 表现、平台特性（消息上下文、文件上传、流式渲染）、Session 持久化 | 不直接调 LLM；不组装 system prompt；不做 Skill 执行 |
 | **App Backend（FastAPI）** | HTTP/SSE 路由、Notebook kernel 桥、远程作业调度、文件浏览 | 不写业务逻辑——所有 LLM 流都委托给 Central Hub |
-| **Central Hub（bot/core.py + agent_loop + skill_orchestration + preflight）** | 单 agent 主循环、工具调度、Preflight、计费、审计 | 不"思考"——LLM 在外，Central Hub 只编排 |
+| **ControlRuntime + Agent runtime** | 权威接纳、Turn 串行、上下文、单 agent 主循环、工具调度、计费与审计 | Channel Adapter 不拥有 Conversation/Turn/终态投递权威 |
 | **System Prompt Builder + KH Injector + Capability Resolver** | 把"业务上下文"翻译成 LLM 看得到的 prompt | 不持久化、不调用工具 |
 | **Skill Runner** | 把一次 Skill 调用变成一组标准化产物 | 不知道是谁触发的（CLI/Bot/Pipeline 对它透明） |
 | **Skills（95 个）** | 真正跑 Python/R 分析 | 不写 README、不组装通知——共享 runner 包办 |
@@ -1563,24 +1572,14 @@ OmicsClaw 在物理形态上是**一个 Python 包 + 一份共享数据存储 + 
 
 ### 数据流：一次"用 sc-de 跑差异表达"的全程
 
-1. **用户**在 Bot 里发消息："用我的 pbmc.h5ad 跑差异表达"
-2. **渠道 frontend**（如 `bot/channels/telegram.py`）解析消息，组成 `(session_id, user_id, content, attachments)`
-3. **bot/core.py** 拿到请求，根据 `(platform, user_id)` 派生 Namespace（`telegram/<user_id>`）
-4. **System Prompt Builder** 用 `surface='bot'` 渲染：
-   - SOUL.md base persona
-   - 当前 Active Guards 的 KH headlines（命中 KH-sc-de-guardrails 等）
-   - 能力简报（含 sc-de 的描述）
-   - 谓词层（如果消息提到"图" → 加 plot_intent 层）
-5. **LLM** 看到 prompt，决定调 `omicsclaw(skill='sc-de', input='pbmc.h5ad', output='out/')`
-6. **Preflight** 校验 `pbmc.h5ad` 是否有 `obs.group` 列；缺则反问用户
-7. **Capability Resolver** 跳过（已显式 skill）；参数白名单校验通过
-8. **Skill Runner** 在隔离 workdir 启动 `skills/singlecell/sc-de/sc_de.py` 子进程
-9. **Skill 脚本**写 `results/de_table.csv`、`figures/volcano.png`、`figure_data/volcano.pkl`
-10. **Skill Runner** 写 `README.md`、`reproducibility/analysis_notebook.ipynb`
-11. **Central Hub** 把 Run metadata 推到 `MemoryEngine`（`analysis://<uuid>`，overwrite），更新 `dataset://pbmc.h5ad` 的血缘 edge
-12. **LLM** 看到工具返回，根据 README 内容写自然语言总结
-13. **bot/core.py** 把总结回给渠道 frontend；附上 volcano.png；写 audit 日志
-14. **用户**在群里看到图 + 解读；可选"美化一下"触发 `oc replot sc-de`
+1. **Owner** 在 Telegram 发文本："用工作区里的 pbmc.h5ad 跑差异表达"；上传附件目前会在下载前拒绝。
+2. **Telegram Adapter** 验证 Bot/用户边界，以 `chat_id:message_id` 构造 `RawInboundV1`。
+3. **Ingress Normalizer** 先做持久幂等查找和 Owner/容量校验，再创建 opaque Conversation/Turn。
+4. **Turn Sequencer** 按 Conversation 串行激活完整 Turn；`ControlRuntime` 只在激活后组装进程内 Agent Worker Adapter。
+5. **Agent runtime** 构建上下文并调用共享 Skill 工具；Skill Runner 负责科学执行和可复现产物。
+6. **canonical Transcript** 保存终态文本候选；`control.db` 原子提交 Turn Receipt、Transcript ref、target sequence 与 Delivery Items。
+7. **Delivery Pump** 校验 committed Transcript 的范围和 SHA-256，只用与真实 Bot 绑定的 `(adapter, account_namespace)` Adapter 投递。
+8. **Telegram Delivery Adapter** 恰好调用一次 `send_message`；图表等产物保留在本地输出中，媒体 Delivery 尚未启用。
 
 ### 实时层（SSE 流）
 
@@ -1793,16 +1792,7 @@ DELETE /datasets/{dataset_id}
 | 命令 | 启动渠道 |
 |---|---|
 | `python -m omicsclaw.surfaces.channels --channels telegram` | Telegram |
-| `python -m omicsclaw.surfaces.channels --channels feishu` | Feishu / 飞书 |
-| `python -m omicsclaw.surfaces.channels --channels dingtalk` | DingTalk / 钉钉 |
-| `python -m omicsclaw.surfaces.channels --channels discord` | Discord |
-| `python -m omicsclaw.surfaces.channels --channels slack` | Slack |
-| `python -m omicsclaw.surfaces.channels --channels wechat` | WeChat / 微信 |
-| `python -m omicsclaw.surfaces.channels --channels qq` | QQ |
-| `python -m omicsclaw.surfaces.channels --channels email` | Email |
-| `python -m omicsclaw.surfaces.channels --channels imessage` | iMessage（仅 macOS） |
-| `python -m omicsclaw.surfaces.channels --channels telegram,feishu,slack` | 多渠道并发 |
-| `python -m omicsclaw.surfaces.channels --list` | 列可用渠道 |
+| `python -m omicsclaw.surfaces.channels --list` | 列出 Telegram 与尚未迁移的 disabled Adapter |
 
 ### 5.4 Interactive 内的 Slash 命令
 
@@ -1864,9 +1854,9 @@ OmicsClaw 的 Surface 设计原则是**共享心脏、差异化外壳**——95 
 
 **CLI 和 TUI 的差别**：本质同一个，TUI 多了 Textual 侧栏（会话列表、Skill 浏览、记忆面板）。CLI 适合 SSH 会话和 tmux 窗格，TUI 适合长时间工作的"工作台"形态。两者共享 `omicsclaw/surfaces/cli/`。
 
-**App 和 Bot 的差别**：App 是单用户、本机、有文件树和 Notebook 的"重客户端"——它假设你能看到文件系统、能操作图。Bot 是多用户、远程、消息合并的"轻交互"——它必须假设用户随时切走、消息可能延迟、附件不一定能立刻拿到。
+**App 和 Bot 的差别**：App 是本机、有文件树和 Notebook 的“重客户端”——它假设 Owner 能看到文件系统、能操作图。Bot 是远程、异步、消息可能重复的“轻交互”——目标架构仍只服务同一个配置 Owner，其他发送者在共享 Owner admission 前被忽略；它必须假设 Owner 随时切走、消息可能延迟、附件不一定能立刻拿到。表格中当前按 `<platform>/<user_id>` 分区与 Channel rate-limit 的描述是待迁移实现事实，不代表多用户领域模型。
 
-**App 与 CLI 的差别**：App 多了一个 FastAPI 进程作为桥梁；CLI 直接进程内调用。但二者通过 `bot/core.py` 看到的是同一份对话语义。
+**App 与 CLI 的差别**：App 多了一个 FastAPI 进程作为桥梁；CLI 直接进程内调用。两者的文本路径通过同一 `ControlRuntime` 与 Agent runtime 保持对话语义一致。
 
 **远程 vs 本地**：唯一的"重"差异在桌面 App 上。Remote 是把 App 用法**整体**搬到远端：远端跑 `oc desktop-server`，本地桌面通过 SSH 隧道连过去。Skill、记忆、Notebook 全部在远端，桌面只是 UI。
 
@@ -1931,25 +1921,18 @@ OmicsClaw **明确不做** SaaS 云版：
 | `omicsclaw/runtime/verification.py` | 工具结果验证 |
 | `omicsclaw/runtime/query_engine.py` | 查询引擎 |
 
-### 7.3 Central Hub（Bot 共享心脏）
+### 7.3 ControlRuntime 与 Channel Delivery
 
 | 模块 | 职责 |
 |---|---|
-| `bot/core.py` | 入口、Tool spec、安全、审计（约 648 行） |
-| `bot/agent_loop.py` | LLM tool-use 主循环（约 935 行） |
-| `bot/skill_orchestration.py` | Skill 编排（约 771 行） |
-| `bot/preflight.py` | Preflight 校验（约 280 行） |
-| `bot/tool_executors.py` | 工具实现 |
-| `bot/session.py` | Session 抽象 |
-| `bot/path_validation.py` | 路径白名单 |
-| `bot/rate_limit.py` | 速率限制 |
-| `bot/billing.py` | Token 计费 |
-| `bot/audit.py` | JSONL 审计 |
-| `bot/onboard.py` | 共享 onboarding |
-| `bot/run.py` | 多渠道统一启动 |
-| `bot/channels/manager.py` | 渠道调度 |
-| `bot/channels/bus.py` | 跨渠道事件总线 |
-| `bot/channels/{telegram,feishu,dingtalk,discord,slack,wechat,qq,email,imessage}.py` | 9 个渠道实现 |
+| `omicsclaw/control/runtime.py` | Surface composition、权威 Turn 生命周期、Agent Worker Adapter |
+| `omicsclaw/control/ingress.py` | Owner admission、幂等、Conversation 解析、容量门 |
+| `omicsclaw/control/turn_runtime.py` | bounded per-Conversation whole-Turn FIFO |
+| `omicsclaw/control/delivery.py` | 持久 Outbox Pump、账户隔离、重试与 unknown 策略 |
+| `omicsclaw/control/delivery_content.py` | 确定性文本计划与 committed Transcript 校验 |
+| `omicsclaw/surfaces/channels/telegram.py` | 当前唯一启用的 Channel ingress/lifecycle Adapter |
+| `omicsclaw/surfaces/channels/telegram_delivery.py` | 单次 Telegram provider 调用 Adapter |
+| `omicsclaw/surfaces/channels/manager.py` | fail-closed Channel 生命周期与健康状态 |
 
 ### 7.4 Memory
 
@@ -2119,7 +2102,7 @@ OmicsClaw 的设计可以归结为一句话：**把"研究者在终端里用 Pyt
 - 为了让本地数据安全 → **Local-first + Localhost binding + Bearer token + 路径白名单**
 - 为了让大数据可远程 → **Remote Execution + SSH 隧道 + 远端 oc desktop-server**
 - 为了让 OmicsClaw 自己变好 → **Self-Evolution (AutoAgent) + Edit surface + Hard gates**
-- 为了让 9 个聊天平台体验一致 → **bot/core.py 中央枢纽 + Surface 派生 Namespace**
+- 为了让 Telegram 停机/重试不重跑科学 Turn → **持久 ingress 幂等 + canonical Transcript + Delivery Outbox**
 - 为了让长流程可控 → **Research Pipeline + Plan 审批 + Stage 编排**
 
 当你读到某段文案、某个 UI 模块、某个 Python 文件时，请把它放回这个"研究者 + LLM + 本地工具栈"的坐标系里去理解它的位置。
@@ -2127,7 +2110,3 @@ OmicsClaw 的设计可以归结为一句话：**把"研究者在终端里用 Pyt
 ---
 
 > *"OmicsClaw is a research and educational tool for multi-omics analysis. It is not a medical device and does not provide clinical diagnoses. Consult a domain expert before making decisions based on these results."*
-
-
-
-

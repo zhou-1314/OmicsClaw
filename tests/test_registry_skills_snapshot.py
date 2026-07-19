@@ -17,10 +17,12 @@ Pinned dimensions:
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 import pytest
 
+from omicsclaw.skill.evolution import capture_skill_execution_identity
 from omicsclaw.skill.registry import OmicsRegistry
 
 
@@ -29,14 +31,16 @@ REQUIRED_FIELDS_AND_TYPES: dict[str, type | tuple[type, ...]] = {
     "domain": str,
     "alias": str,
     "directory_name": str,
-    "demo_args": list,
+    "demo_args": Sequence,
     "description": str,
-    "trigger_keywords": list,
-    "allowed_extra_flags": (set, frozenset, list),
-    "legacy_aliases": list,
+    "trigger_keywords": Sequence,
+    "allowed_extra_flags": (set, frozenset, Sequence),
+    "legacy_aliases": Sequence,
     "saves_h5ad": bool,
     "requires_preprocessed": bool,
-    "param_hints": dict,
+    "param_hints": Mapping,
+    "security_contract": Mapping,
+    "security_reviewed": bool,
 }
 
 
@@ -75,6 +79,34 @@ def test_registry_canonical_skill_set_is_stable(loaded_registry: OmicsRegistry):
         f"only {len(canonical_keys)} canonical skills loaded; "
         f"expected ≥80 — registry discovery may be broken"
     )
+
+
+def test_all_shipped_skills_have_stable_root_bound_execution_identities(
+    loaded_registry: OmicsRegistry,
+):
+    """Exercise the same root/directory binding used by the shared runner."""
+    skills_root = loaded_registry._loaded_dir
+    assert skills_root is not None
+    primary = loaded_registry.iter_primary_skills()
+    assert len(primary) == 95
+
+    failures: list[str] = []
+    for alias, info in primary:
+        script = Path(info["script"])
+        kwargs = {
+            "skills_root": skills_root,
+            "directory_name": str(info.get("directory_name") or ""),
+        }
+        try:
+            first = capture_skill_execution_identity(script, **kwargs)
+            second = capture_skill_execution_identity(script, **kwargs)
+        except Exception as exc:  # pragma: no cover - rendered in assertion
+            failures.append(f"{alias}: {type(exc).__name__}: {exc}")
+            continue
+        if first != second or not all(value.startswith("sha256:") for value in first):
+            failures.append(f"{alias}: unstable or malformed identity {first!r}")
+
+    assert not failures, "execution identity regressions:\n  " + "\n  ".join(failures)
 
 
 def test_registry_pre_rename_canonical_names_remain_resolvable(loaded_registry: OmicsRegistry):

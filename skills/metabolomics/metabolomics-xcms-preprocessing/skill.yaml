@@ -39,6 +39,10 @@ interface:
     - tables/peak_table.csv
     - report.md
     - result.json
+    artifacts:
+    - kind: metabolomics.peak_table
+      path: tables/peak_table.csv
+      format: csv
 runtime:
   entry: metabolomics_xcms_preprocessing.py
 deps:

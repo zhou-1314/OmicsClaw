@@ -258,15 +258,25 @@ interface:
       saves_h5ad: true
       obs:
       - velocity_speed
-      - latent_time
       var:
-      - fit_scaling
       - velocity_genes
-      - fit_t_
       layers:
       - velocity
-      - latent_time_velovi
-      - fit_t
+    method_scopes:
+    - methods:
+      - velovi
+      anndata:
+        obs:
+        - latent_time
+        var:
+        - fit_scaling
+        layers:
+        - latent_time_velovi
+        - fit_t
+      artifacts:
+      - kind: spatial.latent_time
+        path: processed.h5ad
+        format: h5ad
 runtime:
   entry: spatial_velocity.py
 deps:

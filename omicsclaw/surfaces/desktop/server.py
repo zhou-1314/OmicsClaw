@@ -18,31 +18,60 @@ from __future__ import annotations
 import asyncio
 import argparse
 import ast
+import base64
+import hmac
 import importlib.util
+import ipaddress
 import json
 import logging
 import mimetypes
 import os
 import platform
-import signal
+import queue
+import secrets
 import sys
 import time
 import uuid
 from collections import deque
 from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+import threading
+from typing import Annotated, Any, MutableMapping, Optional
 
-from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from openai import AsyncOpenAI
-from pydantic import BaseModel, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    StringConstraints,
+    ValidationError,
+    model_validator,
+)
+from starlette.background import BackgroundTask
+from starlette.types import Scope
+
+from omicsclaw.common.output_claim import (
+    OUTPUT_CLAIM_FILENAME,
+    atomic_write_owned_output_text,
+    collect_output_claim_identities,
+    is_contained_output_path,
+    is_scientific_output_file,
+)
+from omicsclaw.autoagent.http_guard import AutoAgentStartBodyGuardMiddleware
+
 try:
     from omicsclaw.surfaces.desktop.notebook.kernel_manager import get_kernel_manager
-    from omicsclaw.surfaces.desktop.notebook.live_session import install_live_session_support
+    from omicsclaw.surfaces.desktop.notebook.live_session import (
+        install_live_session_support,
+    )
     from omicsclaw.surfaces.desktop.notebook.router import router as notebook_router
+
     _NOTEBOOK_AVAILABLE = True
     _NOTEBOOK_IMPORT_ERROR: str = ""
 except ImportError as _nb_err:
@@ -55,13 +84,69 @@ except ImportError as _nb_err:
     install_live_session_support = None  # type: ignore[assignment]
     notebook_router = None  # type: ignore[assignment]
 from omicsclaw.runtime.policy.state import ToolPolicyState
-from omicsclaw.remote.routers.jobs import (
-    append_job_stdout_line,
-    bind_chat_stream_job,
-    finalize_chat_stream_job,
+from omicsclaw.control import (
+    ControlRuntime,
+    ControlRuntimePorts,
+    RawContentBlockV1,
+    RawInboundV1,
+    RunAcceptanceStatus,
+    TurnAcceptanceStatus,
 )
-from omicsclaw.remote.storage import resolve_workspace
+from omicsclaw.control.run_runtime import RunRuntime
+from omicsclaw.control.event_hub import EventHubCapacityError
+from omicsclaw.remote.auth import (
+    BearerGatePolicy,
+    RemoteBearerMiddleware,
+    capture_remote_bearer_authority,
+    release_remote_bearer_authority,
+    remote_bearer_authority_for_app,
+    require_bearer_token,
+)
+from omicsclaw.remote.routers.jobs import (
+    terminalize_legacy_active_jobs_at_startup,
+)
+from omicsclaw.remote.runtime_binding import require_remote_workspace
 from omicsclaw.version import __version__
+from omicsclaw.surfaces.desktop.turn_submission import (
+    DEFAULT_MULTIPART_READ_TIMEOUT_SECONDS,
+    DesktopMultipartCapacity,
+    DesktopMultipartError,
+    DesktopTurnAcceptedV1,
+    decode_desktop_multipart_submission,
+)
+from omicsclaw.surfaces.desktop.turn_observation import (
+    DesktopTurnCancelResultV1,
+    DesktopTurnReceiptV1,
+    DesktopTurnSSEBody,
+    desktop_turn_receipt_v1,
+)
+from omicsclaw.surfaces.desktop.run_wire import (
+    DESKTOP_RUN_INCIDENT_MAX_PAGE_SIZE,
+    DesktopRunAcceptedV1,
+    DesktopRunCancelResultV1,
+    DesktopRunIntegrityIncidentPageV1,
+    DesktopRunReceiptV1,
+    DesktopRunSubmissionV1,
+    DesktopRunWireError,
+    decode_desktop_run_submission,
+    desktop_run_integrity_incident_page_v1,
+    desktop_run_receipt_from_record,
+    desktop_run_receipt_v1,
+)
+from omicsclaw.surfaces.desktop.wire_contract import (
+    desktop_chat_contract,
+    desktop_run_contract,
+    desktop_turn_observation_contract,
+    desktop_turn_submission_contract,
+)
+from omicsclaw.surfaces.desktop._chat_sse import (
+    CHAT_SSE_QUEUE_MAX_ITEMS,
+    CHAT_STREAM_COMPARISON_MAX_BYTES,
+    render_chat_sse_frame,
+    utf8_size,
+)
+from omicsclaw.skill.resource_scheduler import detect_execution_resource_budget
+from omicsclaw.skill.execution.environment import scrub_internal_control_credentials
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -83,18 +168,30 @@ _DEFAULT_APP_CORS_ORIGINS: tuple[str, ...] = (
     "http://127.0.0.1:5173",
 )
 _OUTPUT_RUNNING_STALE_SECONDS = 30 * 60
-_FILE_TREE_IGNORED_DIRS: frozenset[str] = frozenset({
-    "node_modules",
-    ".git",
-    "dist",
-    ".next",
-    "__pycache__",
-    ".cache",
-    ".turbo",
-    "coverage",
-    ".output",
-    "build",
-})
+_SKILL_EVOLUTION_TOKEN_ENV = "OMICSCLAW_SKILL_EVOLUTION_TOKEN"
+_SKILL_EVOLUTION_TOKEN_FD_ENV = "OMICSCLAW_SKILL_EVOLUTION_TOKEN_FD"
+_SKILL_EVOLUTION_TOKEN_READ_TIMEOUT_SECONDS = 2.0
+_SKILL_EVOLUTION_AUTH_STATE_ATTR = "skill_evolution_bearer_authority"
+# Authenticated Backend identity for operation leases.  This value is created
+# once per Python server process, is never accepted from the environment, and
+# is intentionally omitted from the public remote liveness payload.  A client
+# must re-acquire ownership after any Backend restart instead of dispatching an
+# old resource id into a replacement process.
+_BACKEND_PROCESS_EPOCH = secrets.token_hex(32)
+_FILE_TREE_IGNORED_DIRS: frozenset[str] = frozenset(
+    {
+        "node_modules",
+        ".git",
+        "dist",
+        ".next",
+        "__pycache__",
+        ".cache",
+        ".turbo",
+        "coverage",
+        ".output",
+        "build",
+    }
+)
 
 # ---------------------------------------------------------------------------
 # Lazy references to omicsclaw.runtime.agent.state — resolved once at startup via lifespan
@@ -102,6 +199,166 @@ _FILE_TREE_IGNORED_DIRS: frozenset[str] = frozenset({
 
 _core = None  # omicsclaw.runtime.agent.state module
 _memory_client = None  # MemoryClient instance (optional)
+_desktop_control_runtime: ControlRuntime | None = None
+_desktop_run_runtime: RunRuntime | None = None
+_desktop_multipart_capacity = DesktopMultipartCapacity(max_active=2)
+
+
+@dataclass(frozen=True, slots=True)
+class _SkillEvolutionBearerAuthority:
+    """Process-lifetime bearer authority for repository-mutating governance."""
+
+    token: str = field(repr=False)
+    source: str
+
+    @classmethod
+    def capture(
+        cls,
+        environ: MutableMapping[str, str],
+    ) -> "_SkillEvolutionBearerAuthority":
+        token_fd = str(environ.pop(_SKILL_EVOLUTION_TOKEN_FD_ENV, "") or "").strip()
+        raw_environment_token = str(environ.pop(_SKILL_EVOLUTION_TOKEN_ENV, "") or "")
+        environment_token = (
+            raw_environment_token if raw_environment_token.strip() else ""
+        )
+        if token_fd:
+            dedicated = _read_skill_evolution_token_fd(token_fd)
+            source = "dedicated_pipe"
+        elif environment_token:
+            if not _is_valid_skill_evolution_dedicated_token(environment_token):
+                raise RuntimeError("invalid Skill Evolution credential")
+            dedicated = environment_token
+            source = "dedicated_environment"
+        else:
+            dedicated = ""
+            source = "unconfigured"
+        return cls(token=dedicated, source=source)
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.token)
+
+    def matches(self, candidate: str) -> bool:
+        return bool(self.token) and hmac.compare_digest(candidate, self.token)
+
+
+def _read_skill_evolution_token_fd(raw_fd: str) -> str:
+    """Consume one Electron-delivered 256-bit token from an inherited pipe.
+
+    A daemon reader keeps this portable across POSIX and Windows pipes while
+    the startup thread enforces a strict deadline.  Timeout is fatal and never
+    permits a lower-priority environment credential fallback.
+    """
+
+    try:
+        fd = int(raw_fd, 10)
+    except ValueError as exc:
+        raise RuntimeError("invalid Skill Evolution credential descriptor") from exc
+    if fd < 3:
+        raise RuntimeError("invalid Skill Evolution credential descriptor")
+
+    outcomes: queue.Queue[tuple[bytes | None, Exception | None]] = queue.Queue(
+        maxsize=1
+    )
+
+    def _consume() -> None:
+        payload = bytearray()
+        outcome: tuple[bytes | None, Exception | None]
+        try:
+            while True:
+                chunk = os.read(fd, 66 - len(payload))
+                if not chunk:
+                    break
+                payload.extend(chunk)
+                if len(payload) > 65:
+                    raise RuntimeError("invalid Skill Evolution credential payload")
+            outcome = (bytes(payload), None)
+        except Exception as exc:
+            outcome = (None, exc)
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        outcomes.put_nowait(outcome)
+
+    reader = threading.Thread(
+        target=_consume,
+        name="skill-evolution-credential-reader",
+        daemon=True,
+    )
+    try:
+        reader.start()
+    except Exception as exc:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise RuntimeError("unable to read Skill Evolution credential") from exc
+
+    try:
+        raw_payload, read_error = outcomes.get(
+            timeout=_SKILL_EVOLUTION_TOKEN_READ_TIMEOUT_SECONDS
+        )
+    except queue.Empty as exc:
+        raise RuntimeError("Skill Evolution credential read timed out") from exc
+
+    if read_error is not None:
+        if isinstance(read_error, RuntimeError):
+            raise read_error
+        raise RuntimeError("unable to read Skill Evolution credential") from read_error
+    payload = bytearray(raw_payload or b"")
+
+    if payload.endswith(b"\n"):
+        del payload[-1]
+    try:
+        token = payload.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError("invalid Skill Evolution credential payload") from exc
+    if not _is_valid_skill_evolution_dedicated_token(token):
+        raise RuntimeError("invalid Skill Evolution credential payload")
+    return token
+
+
+def _is_valid_skill_evolution_dedicated_token(token: str) -> bool:
+    """Accept only the 256-bit lowercase-hex local authority contract."""
+
+    return len(token) == 64 and all(
+        character in "0123456789abcdef" for character in token
+    )
+
+
+def _capture_skill_evolution_bearer_authority(
+    app: FastAPI,
+    environ: MutableMapping[str, str],
+) -> _SkillEvolutionBearerAuthority:
+    """Freeze the process-lifetime Skill Evolution authority at startup."""
+
+    authority = _SkillEvolutionBearerAuthority.capture(environ)
+    setattr(app.state, _SKILL_EVOLUTION_AUTH_STATE_ATTR, authority)
+    if authority.source == "dedicated_environment":
+        logger.warning(
+            "%s is a manually managed development fallback; packaged Desktop "
+            "launches must deliver this credential through the one-shot pipe",
+            _SKILL_EVOLUTION_TOKEN_ENV,
+        )
+    return authority
+
+
+def _skill_evolution_bearer_policy_for_scope(scope: Scope) -> BearerGatePolicy:
+    """Resolve the frozen governance authority for the pre-routing ASGI gate."""
+
+    app = scope.get("app")
+    state = getattr(app, "state", None)
+    authority = getattr(state, _SKILL_EVOLUTION_AUTH_STATE_ATTR, None)
+    token = (
+        authority.token if isinstance(authority, _SkillEvolutionBearerAuthority) else ""
+    )
+    return BearerGatePolicy(
+        token=token,
+        realm="omicsclaw-skill-evolution",
+        unconfigured_detail="skill evolution bearer token is not configured",
+    )
 
 
 def _get_core():
@@ -117,6 +374,15 @@ def _read_first_config_value(*keys: str) -> str:
         if value:
             return value
     return ""
+
+
+def _positive_environment_integer(name: str, default: int) -> int:
+    raw = str(os.environ.get(name, "") or "").strip()
+    if not raw:
+        return default
+    if not raw.isdigit() or int(raw) <= 0:
+        raise RuntimeError(f"{name} must be a positive integer")
+    return int(raw)
 
 
 def _app_cors_origins() -> list[str]:
@@ -216,9 +482,9 @@ def _resolve_backend_init_config() -> dict[str, str]:
         "api_key": _read_first_config_value("LLM_API_KEY", "OMICSCLAW_API_KEY"),
         "base_url": _read_first_config_value("LLM_BASE_URL", "OMICSCLAW_BASE_URL"),
         "model": _read_first_config_value("OMICSCLAW_MODEL"),
-        "auth_mode": (
-            _read_first_config_value("LLM_AUTH_MODE") or "api_key"
-        ).strip().lower(),
+        "auth_mode": (_read_first_config_value("LLM_AUTH_MODE") or "api_key")
+        .strip()
+        .lower(),
         "ccproxy_port": _read_first_config_value("CCPROXY_PORT") or "11435",
     }
 
@@ -247,17 +513,21 @@ def _oauth_port_conflict_message(ccproxy_port: int, app_port: int) -> str:
 
 # Providers whose APIs natively accept the ``thinking`` extra-body parameter.
 # For these, ``adaptive`` maps to ``enabled`` with a sensible default budget.
-_THINKING_NATIVE_PROVIDERS: frozenset[str] = frozenset({
-    "deepseek",
-})
+_THINKING_NATIVE_PROVIDERS: frozenset[str] = frozenset(
+    {
+        "deepseek",
+    }
+)
 
 # Providers where the ``thinking`` extra-body parameter is known to cause
 # gateway errors (e.g. SiliconFlow rejects ``{"type": "adaptive"}``).
 # For explicit ``enabled`` requests we still attempt delivery — the user
 # made a deliberate choice and should see the provider error if it fails.
-_THINKING_INCOMPATIBLE_PROVIDERS: frozenset[str] = frozenset({
-    "siliconflow",
-})
+_THINKING_INCOMPATIBLE_PROVIDERS: frozenset[str] = frozenset(
+    {
+        "siliconflow",
+    }
+)
 
 # Model-name substrings that imply thinking / reasoning support.  Used for
 # gateway providers (openrouter, nvidia, volcengine, …) whose capability
@@ -343,15 +613,92 @@ def _build_thinking_extra_body(
 # Active session tracking (for abort support)
 # ---------------------------------------------------------------------------
 
-# Maps session_id -> asyncio.Task running dispatch() per ADR 0006
-_active_sessions: dict[str, asyncio.Task] = {}
-# ADR 0009 — parallel registry of MessageEnvelopes keyed by session_id.
-# ``/chat/abort`` sets the envelope's ``cancel_event`` *before* cancelling
-# the task so the SIGTERM signal reaches the skill subprocess via
-# ``tool_runtime_context["cancel_event"]`` → ``run_skill(cancel_event=…)``
-# instead of stopping at the outer asyncio CancelledError boundary.
-_active_envelopes: dict[str, Any] = {}
+
+@dataclass(slots=True)
+class _ActiveDesktopExecution:
+    """One indivisible owner record for a live Desktop chat incarnation."""
+
+    task: asyncio.Task[None]
+    cancel_event: threading.Event
+    source_request_id: str
+    turn_id: str = ""
+    source_namespace: str = ""
+
+
+# Maps session_id -> the exact active execution incarnation.  Keeping task,
+# cancellation signal and source identity together prevents a predecessor's
+# delayed cleanup from mixing entries across parallel dictionaries.
+_active_sessions: dict[str, _ActiveDesktopExecution] = {}
+
+_ABORTED = "aborted"
+_ABORT_NOT_FOUND = "not_found"
+_ABORT_GENERATION_MISMATCH = "generation_mismatch"
+_ABORT_GENERATION_REQUIRED = "generation_required"
+_ABORT_TURN_UNRESOLVED = "turn_unresolved"
+
+
+def _cancel_active_execution(owner: _ActiveDesktopExecution) -> bool:
+    """Cancel one lifecycle, returning false when no canonical Turn exists yet."""
+
+    if _desktop_control_runtime is not None:
+        if not owner.turn_id and owner.source_namespace and owner.source_request_id:
+            owner.turn_id = (
+                _desktop_control_runtime.lookup_ingress_turn_id(
+                    surface="desktop",
+                    source_namespace=owner.source_namespace,
+                    source_request_id=owner.source_request_id,
+                )
+                or ""
+            )
+        if not owner.turn_id:
+            return False
+        owner.cancel_event.set()
+        _desktop_control_runtime.cancel(owner.turn_id)
+        return True
+
+    owner.cancel_event.set()
+    owner.task.cancel()
+    return True
+
+
+def _replace_active_execution(
+    session_id: str,
+    owner: _ActiveDesktopExecution,
+) -> None:
+    """Install the newest compatibility abort handle without lifecycle effects.
+
+    A second stream for the same Session can be a matching idempotent retry or
+    a distinct Turn queued on the same Conversation.  Replacing an observer
+    handle must never infer cancellation of either lifecycle.
+    """
+
+    previous = _active_sessions.get(session_id)
+    if previous is owner:
+        return
+    if (
+        previous is not None
+        and previous.turn_id
+        and previous.source_request_id == owner.source_request_id
+        and previous.source_namespace == owner.source_namespace
+    ):
+        owner.turn_id = previous.turn_id
+    _active_sessions[session_id] = owner
+
+
+def _release_active_execution(
+    session_id: str,
+    owner: _ActiveDesktopExecution,
+) -> bool:
+    """Remove ``owner`` only if it still owns ``session_id``."""
+
+    if _active_sessions.get(session_id) is not owner:
+        return False
+    _active_sessions.pop(session_id, None)
+    return True
+
+
 _pending_permission_requests: dict[str, dict[str, Any]] = {}
+_PERMISSION_APPROVAL_HMAC_KEY = secrets.token_bytes(32)
 _session_policy_states: dict[str, ToolPolicyState] = {}
 _session_permission_profiles: dict[str, str] = {}
 # Bound the per-session policy/profile maps so a long-running desktop backend
@@ -366,13 +713,140 @@ _mcp_entries: tuple = ()
 _mcp_load_fn = None  # lazy reference to omicsclaw.surfaces.cli._mcp
 
 
+def _permission_approval_token(
+    permission_request_id: str,
+    session_id: str,
+    tool_name: str,
+) -> str:
+    """Return a process-local capability bound to one pending approval."""
+
+    message = json.dumps(
+        [permission_request_id, session_id, tool_name],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    signature = hmac.digest(_PERMISSION_APPROVAL_HMAC_KEY, message, "sha256")
+    encoded = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
+    return f"v1.{encoded}"
+
+
 # ---------------------------------------------------------------------------
 # Lifespan — initialise OmicsClaw once
 # ---------------------------------------------------------------------------
 
+
+async def _shutdown_desktop_lifespan_state() -> BaseException | None:
+    """Attempt every owned cleanup even when one close operation fails."""
+
+    global _channel_manager, _bridge_task
+    global _desktop_control_runtime, _desktop_run_runtime, _memory_client
+    global _mcp_load_fn
+    first_error: BaseException | None = None
+
+    def remember(label: str, exc: BaseException) -> None:
+        nonlocal first_error
+        if first_error is None:
+            first_error = exc
+        logger.warning("%s: %s", label, exc)
+
+    channel_manager = _channel_manager
+    bridge_task = _bridge_task
+    _channel_manager = None
+    _bridge_task = None
+    if bridge_task and not bridge_task.done():
+        try:
+            bridge_task.cancel()
+            await bridge_task
+        except asyncio.CancelledError:
+            pass
+        except BaseException as exc:
+            remember("Error stopping bridge task during shutdown", exc)
+    if channel_manager is not None:
+        try:
+            await channel_manager.stop_all()
+        except BaseException as exc:
+            remember("Error stopping bridge during shutdown", exc)
+
+    # Every owner keeps its Task and cancellation signal together, preserving
+    # the ADR 0009 signal-before-cancel ordering.
+    session_tasks: list[asyncio.Task[Any]] = []
+    for owner in list(_active_sessions.values()):
+        session_tasks.append(owner.task)
+        if not _cancel_active_execution(owner):
+            owner.cancel_event.set()
+            owner.task.cancel()
+    _active_sessions.clear()
+    if session_tasks:
+        outcomes = await asyncio.gather(*session_tasks, return_exceptions=True)
+        for outcome in outcomes:
+            if isinstance(outcome, BaseException) and not isinstance(
+                outcome, asyncio.CancelledError
+            ):
+                remember("Active Desktop session shutdown failed", outcome)
+
+    run_runtime = _desktop_run_runtime
+    _desktop_run_runtime = None
+    if run_runtime is not None:
+        # Remote HTTP is only an Adapter over this same Backend-owned Runtime.
+        # Remove ingress availability before closing execution ownership.
+        from omicsclaw.remote.runtime_binding import unbind_remote_run_runtime
+
+        unbind_remote_run_runtime(run_runtime)
+        try:
+            run_shutdown = await run_runtime.close()
+            unconfirmed = tuple(getattr(run_shutdown, "unconfirmed_run_ids", ()) or ())
+            if unconfirmed:
+                remember(
+                    "RunRuntime shutdown left execution ownership unconfirmed",
+                    RuntimeError(
+                        f"{len(unconfirmed)} Run execution owner(s) remain unconfirmed"
+                    ),
+                )
+        except BaseException as exc:
+            remember("RunRuntime shutdown failed", exc)
+
+    control_runtime = _desktop_control_runtime
+    if control_runtime is not None:
+        autoagent_stopped = False
+        try:
+            from omicsclaw.autoagent.api import (
+                shutdown_autoagent_repository_binding,
+            )
+
+            await shutdown_autoagent_repository_binding(
+                control_runtime.repository,
+            )
+        except BaseException as exc:
+            remember("AutoAgent lifecycle shutdown failed", exc)
+        else:
+            autoagent_stopped = True
+        if autoagent_stopped:
+            _desktop_control_runtime = None
+            try:
+                await control_runtime.close()
+            except BaseException as exc:
+                remember("ControlRuntime shutdown failed", exc)
+
+    if _NOTEBOOK_AVAILABLE:
+        try:
+            await get_kernel_manager().shutdown_all()
+        except BaseException as exc:
+            remember("Notebook kernel shutdown failed during app shutdown", exc)
+
+    memory_client = _memory_client
+    _memory_client = None
+    if memory_client is not None:
+        try:
+            await memory_client.close()
+        except BaseException as exc:
+            remember("MemoryClient shutdown failed", exc)
+    _mcp_load_fn = None
+    return first_error
+
+
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    global _core, _memory_client
+async def _desktop_runtime_lifespan(app: FastAPI):
+    global _core, _memory_client, _desktop_control_runtime, _desktop_run_runtime
 
     # Resolve OmicsClaw project dir — either from env or auto-detect
     omicsclaw_dir = os.getenv("OMICSCLAW_DIR", "")
@@ -383,11 +857,13 @@ async def lifespan(app: FastAPI):
 
     try:
         import omicsclaw.runtime.agent.state as core
+
         _core = core
     except ImportError as exc:
         logger.error(
             "Cannot import omicsclaw.runtime.agent.state — is OmicsClaw on sys.path or "
-            "OMICSCLAW_DIR set? Error: %s", exc,
+            "OMICSCLAW_DIR set? Error: %s",
+            exc,
         )
         raise
 
@@ -431,8 +907,103 @@ async def lifespan(app: FastAPI):
         core.LLM_PROVIDER_NAME,
         core.OMICSCLAW_MODEL,
     )
+
+    desktop_workspace_path = (
+        Path(str(os.getenv("OMICSCLAW_WORKSPACE", "") or Path.cwd()))
+        .expanduser()
+        .resolve()
+    )
+    if not desktop_workspace_path.is_dir():
+        raise RuntimeError(
+            f"desktop workspace directory does not exist: {desktop_workspace_path}"
+        )
+    desktop_workspace = str(desktop_workspace_path)
+    _desktop_control_runtime = ControlRuntime.for_local_surface(
+        workspace_id=desktop_workspace,
+        surface="desktop",
+        installation_id="local",
+        profile_id="owner",
+        attachment_input_enabled=True,
+    )
+    try:
+        await _desktop_control_runtime.start()
+        from omicsclaw.autoagent.api import bind_governed_autoagent_repository
+
+        reconciled_autoagent = await bind_governed_autoagent_repository(
+            _desktop_control_runtime.repository
+        )
+        # Legacy closure writes are allowed only after this Backend owns the
+        # lifetime Control lock.  A competing process must fail before either
+        # instance mutates compatibility state.
+        legacy_interrupted_job_ids = terminalize_legacy_active_jobs_at_startup(
+            desktop_workspace_path
+        )
+    except BaseException:
+        await _shutdown_desktop_lifespan_state()
+        raise
+    logger.info(
+        "Desktop ControlRuntime initialised: state_root=%s",
+        _desktop_control_runtime.repository.state_root,
+    )
+    if reconciled_autoagent.interrupted_session_ids:
+        logger.warning(
+            "Interrupted %d inherited AutoAgent session(s) without replay",
+            len(reconciled_autoagent.interrupted_session_ids),
+        )
+    if reconciled_autoagent.unconfirmed_session_ids:
+        logger.warning(
+            "Quarantined %d inherited AutoAgent owner(s); novel starts are disabled",
+            len(reconciled_autoagent.unconfirmed_session_ids),
+        )
+    if legacy_interrupted_job_ids:
+        logger.warning(
+            "Closed %d unrecoverable legacy scientific Job(s) without replay",
+            len(legacy_interrupted_job_ids),
+        )
+    run_output_root = Path(
+        str(os.getenv("OMICSCLAW_OUTPUT_ROOT", "") or "").strip()
+        or str(Path(desktop_workspace) / "output")
+    )
+    try:
+        _desktop_run_runtime = RunRuntime.for_local_surface(
+            repository=_desktop_control_runtime.repository,
+            output_root=run_output_root,
+            resource_budget=detect_execution_resource_budget(run_output_root),
+            max_buffered_runs=_positive_environment_integer(
+                "OMICSCLAW_RUN_BUFFER_CAPACITY", 32
+            ),
+            max_active_runs=_positive_environment_integer(
+                "OMICSCLAW_RUN_MAX_ACTIVE", 2
+            ),
+        )
+        reconciled_runs = await _desktop_run_runtime.start()
+        from omicsclaw.remote.runtime_binding import bind_remote_run_runtime
+
+        bind_remote_run_runtime(
+            _desktop_run_runtime,
+            workspace=desktop_workspace,
+        )
+    except BaseException:
+        await _shutdown_desktop_lifespan_state()
+        raise
+    logger.info(
+        "Desktop RunRuntime initialised: output_root=%s interrupted_runs=%d "
+        "unconfirmed_runs=%d",
+        run_output_root,
+        len(reconciled_runs.interrupted_run_ids),
+        len(reconciled_runs.unconfirmed_run_ids),
+    )
+    if reconciled_runs.unconfirmed_run_ids:
+        logger.error(
+            "Run admission quarantined: %d inherited execution owner(s) or "
+            "completion evidence could not be confirmed",
+            len(reconciled_runs.unconfirmed_run_ids),
+        )
     if _NOTEBOOK_AVAILABLE:
-        install_live_session_support()
+        try:
+            install_live_session_support()
+        except Exception as exc:
+            logger.warning("Notebook live-session support unavailable: %s", exc)
     else:
         logger.info(
             "Notebook module not available (non-fatal): %s",
@@ -458,9 +1029,10 @@ async def lifespan(app: FastAPI):
 
         await seed_knowhows(get_memory_engine())
         _memory_client = get_memory_client(namespace=desktop_namespace())
-        logger.info(
-            "MemoryClient initialised (namespace=%s)", _memory_client.namespace
-        )
+        logger.info("MemoryClient initialised (namespace=%s)", _memory_client.namespace)
+    except asyncio.CancelledError:
+        await _shutdown_desktop_lifespan_state()
+        raise
     except Exception as exc:
         logger.warning("MemoryClient unavailable (non-fatal): %s", exc)
         _memory_client = None
@@ -471,52 +1043,50 @@ async def lifespan(app: FastAPI):
         from omicsclaw.surfaces.cli._mcp import (
             load_active_mcp_server_entries_for_prompt,
             list_mcp_servers,
-            add_mcp_server,
-            remove_mcp_server,
         )
+
         _mcp_load_fn = load_active_mcp_server_entries_for_prompt
-        logger.info("MCP support loaded (%d servers configured)", len(list_mcp_servers()))
-    except ImportError as exc:
+        logger.info(
+            "MCP support loaded (%d servers configured)", len(list_mcp_servers())
+        )
+    except Exception as exc:
         logger.info("MCP module not available (non-fatal): %s", exc)
         _mcp_load_fn = None
 
-    yield
+    try:
+        yield
+    finally:
+        original_error = sys.exc_info()[1]
+        cleanup_error = await _shutdown_desktop_lifespan_state()
+        if original_error is None and cleanup_error is not None:
+            raise cleanup_error
 
-    # Shutdown: stop bridge if running
-    global _channel_manager, _bridge_task
-    if _channel_manager is not None:
-        try:
-            if _bridge_task and not _bridge_task.done():
-                _bridge_task.cancel()
-                try:
-                    await _bridge_task
-                except asyncio.CancelledError:
-                    pass
-            await _channel_manager.stop_all()
-        except Exception as exc:
-            logger.warning("Error stopping bridge during shutdown: %s", exc)
-        _channel_manager = None
-        _bridge_task = None
 
-    # Shutdown: cancel any active sessions (ADR 0009 — set cancel_event
-    # first so subprocesses get SIGTERM'd through subprocess_driver, not
-    # just stranded as orphans of the cancelled asyncio Task).
-    for sid, envelope in list(_active_envelopes.items()):
-        if envelope is not None and envelope.cancel_event is not None:
-            envelope.cancel_event.set()
-    for task in _active_sessions.values():
-        task.cancel()
-    _active_sessions.clear()
-    _active_envelopes.clear()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Own immutable HTTP authorities for exactly one Backend lifespan."""
 
-    if _NOTEBOOK_AVAILABLE:
-        try:
-            await get_kernel_manager().shutdown_all()
-        except Exception as exc:
-            logger.warning("Notebook kernel shutdown failed during app shutdown: %s", exc)
-
-    if _memory_client:
-        await _memory_client.close()
+    # Runtime environment mutation cannot rotate or disable either authority;
+    # selecting new credentials requires a deliberate Backend restart.
+    remote_bearer_authority = capture_remote_bearer_authority(app, os.environ)
+    skill_evolution_authority: _SkillEvolutionBearerAuthority | None = None
+    try:
+        # Capture the narrow repository-mutation capability before any Runtime
+        # or Skill subprocess can inherit it. The remote token remains in the
+        # separately operated Backend environment; execution children scrub it.
+        skill_evolution_authority = _capture_skill_evolution_bearer_authority(
+            app, os.environ
+        )
+        async with _desktop_runtime_lifespan(app):
+            yield
+    finally:
+        release_remote_bearer_authority(app, remote_bearer_authority)
+        if (
+            skill_evolution_authority is not None
+            and getattr(app.state, _SKILL_EVOLUTION_AUTH_STATE_ATTR, None)
+            is skill_evolution_authority
+        ):
+            delattr(app.state, _SKILL_EVOLUTION_AUTH_STATE_ATTR)
 
 
 # ---------------------------------------------------------------------------
@@ -529,6 +1099,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(AutoAgentStartBodyGuardMiddleware)
+app.add_middleware(
+    RemoteBearerMiddleware,
+    public_paths=("/health",),
+    delegated_path_prefixes=("/skill-evolution",),
+    delegated_policy_resolver=_skill_evolution_bearer_policy_for_scope,
+    backend_process_epoch_resolver=lambda _scope: _BACKEND_PROCESS_EPOCH,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_app_cors_origins(),
@@ -540,6 +1118,7 @@ app.add_middleware(
 # Mount autoagent optimization router
 try:
     from omicsclaw.autoagent.api import router as optimize_router
+
     app.include_router(optimize_router)
 except ImportError:
     pass  # autoagent module not available
@@ -551,6 +1130,7 @@ if _NOTEBOOK_AVAILABLE:
 
 # Remote control-plane API consumed by OmicsClaw-App (see omicsclaw/remote/).
 from omicsclaw.remote.app_integration import register_remote_routers  # noqa: E402
+
 register_remote_routers(app)
 
 
@@ -558,8 +1138,10 @@ register_remote_routers(app)
 # Pydantic models
 # ---------------------------------------------------------------------------
 
+
 class ProviderConfig(BaseModel):
     """Optional per-request provider override."""
+
     provider: str = ""
     api_key: str = ""
     base_url: str = ""
@@ -568,6 +1150,17 @@ class ProviderConfig(BaseModel):
 
 class ChatRequest(BaseModel):
     """POST /chat/stream body."""
+
+    # Desktop ingress identity.  The production lifespan owns a ControlRuntime;
+    # direct dispatch remains only as a test Adapter for handler-level tests.
+    ingress_schema_version: StrictInt = Field(default=1, ge=1, le=1)
+    source_request_id: str = Field(
+        default="", max_length=32, pattern=r"^(?:|[0-9a-f]{32})$"
+    )
+    installation_id: str = Field(
+        default="", max_length=32, pattern=r"^(?:|[0-9a-f]{32})$"
+    )
+    profile_id: str = Field(default="", max_length=32, pattern=r"^(?:|owner)$")
     session_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     job_id: str = ""
     content: str
@@ -584,6 +1177,8 @@ class ChatRequest(BaseModel):
     context_1m: bool = False
     permission_profile: str = "default"
     files: Optional[list[dict]] = None
+    file_selections: Optional[list[dict]] = None
+    attachment_descriptors: Optional[list[dict]] = None
     system_prompt_append: str = ""
     # Bench — study-scoped investigation thread (ADR 0018) + lifecycle stage
     # lens (ADR 0020). Phase 0: both fields are accepted but inert (no thread
@@ -593,44 +1188,171 @@ class ChatRequest(BaseModel):
     stage: str = ""
 
 
+def _desktop_ingress_identity(req: ChatRequest) -> tuple[str, str, str]:
+    """Derive the local Desktop identity without accepting an Owner partition."""
+
+    installation_id = req.installation_id or "local"
+    profile_id = "owner"
+    source_namespace = f"desktop/v1/{installation_id}/{profile_id}"
+    return installation_id, profile_id, source_namespace
+
+
 class AbortRequest(BaseModel):
     """POST /chat/abort body."""
+
     session_id: str
+    source_request_id: str = Field(
+        default="", max_length=32, pattern=r"^(?:|[0-9a-f]{32})$"
+    )
 
 
 class PermissionResponseRequest(BaseModel):
     """POST /chat/permission body."""
+
     permissionRequestId: str
+    approvalToken: str = Field(
+        min_length=46,
+        max_length=46,
+        pattern=r"^v1\.[A-Za-z0-9_-]{43}$",
+    )
     decision: dict[str, Any]
 
 
 class SessionPermissionProfileRequest(BaseModel):
     """POST /chat/session-permission-profile body."""
+
     session_id: str
     permission_profile: str = "default"
 
 
 class SkillInstallRequest(BaseModel):
     """POST /skills/install body."""
+
     source: str
 
 
 class SkillUninstallRequest(BaseModel):
     """POST /skills/uninstall body."""
+
     name: str
+
+
+EvolutionIdentity = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=128),
+]
+EvolutionReason = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=1000),
+]
+EvolutionEventId = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=128),
+]
+EvolutionGotchaLead = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=160,
+        pattern=r"^[^\r\n`*<>\[\]!#\\{}|~]+$",
+    ),
+]
+EvolutionGotchaDetail = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=500,
+        pattern=r"^[^\r\n`*<>\[\]!#\\{}|~]+$",
+    ),
+]
+EvolutionGotchaAnchor = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_.-]+\.py:[1-9][0-9]*$",
+    ),
+]
+
+
+class _EvolutionRequest(BaseModel):
+    """Strict schema shared only by Skill evolution HTTP contracts."""
+
+    model_config = {"extra": "forbid"}
+
+
+class EvolutionApprovalRequest(_EvolutionRequest):
+    """Human decision for one evidence-bound evolution proposal."""
+
+    approver: EvolutionIdentity
+    reason: EvolutionReason
+
+
+class EvolutionRejectionRequest(_EvolutionRequest):
+    """Audited rejection for one evolution proposal."""
+
+    approver: EvolutionIdentity
+    reason: EvolutionReason
+
+
+class EvolutionReconciliationRequest(_EvolutionRequest):
+    """Operator audit fields for interrupted approval recovery."""
+
+    operator: EvolutionIdentity
+    reason: EvolutionReason
+
+
+class EvolutionDeprecationProposalRequest(_EvolutionRequest):
+    """Backend-owned evidence and replacement identity for a lifecycle candidate."""
+
+    target_skill: EvolutionIdentity
+    replacement_skill: EvolutionIdentity
+    proposer: EvolutionIdentity
+    reason: EvolutionReason
+    support_event_ids: list[EvolutionEventId] = Field(min_length=1, max_length=100)
+
+
+class EvolutionGotchaEntryRequest(_EvolutionRequest):
+    """Narrative fields rendered by Backend into one canonical Gotcha bullet."""
+
+    lead: EvolutionGotchaLead
+    condition: EvolutionGotchaDetail
+    guidance: EvolutionGotchaDetail
+    anchors: list[EvolutionGotchaAnchor] = Field(min_length=1, max_length=8)
+
+    @model_validator(mode="after")
+    def validate_governed_narrative(self):
+        # Reuse the Backend governance policy so HTTP validation cannot drift
+        # from the eventual proposal/materialization gate.  Raising here keeps
+        # malformed or privacy-sensitive narrative at a 422 boundary.
+        from omicsclaw.skill.evolution_governance import SkillEvolutionGovernance
+
+        SkillEvolutionGovernance._normalize_gotcha_entry(self.model_dump())
+        return self
+
+
+class EvolutionGotchaProposalRequest(_EvolutionRequest):
+    """Evidence identifiers plus structured narrative; never a path or patch."""
+
+    target_skill: EvolutionIdentity
+    proposer: EvolutionIdentity
+    reason: EvolutionReason
+    support_event_ids: list[EvolutionEventId] = Field(min_length=1, max_length=100)
+    entry: EvolutionGotchaEntryRequest
 
 
 # ---------------------------------------------------------------------------
 # SSE helpers
 # ---------------------------------------------------------------------------
 
+
 def _sse_line(event_type: str, data: Any) -> str:
-    """Format a single SSE data frame."""
-    if isinstance(data, (dict, list)):
-        payload = json.dumps(data, ensure_ascii=False, default=str)
-    else:
-        payload = str(data)
-    return f"data: {json.dumps({'type': event_type, 'data': payload}, ensure_ascii=False, default=str)}\n\n"
+    """Format one frame under the Desktop Chat 4 MiB wire contract."""
+
+    return render_chat_sse_frame(event_type, data)
 
 
 def _sse_error(message: str) -> str:
@@ -781,43 +1503,6 @@ def _resolve_scoped_memory_workspace(explicit_workspace: str = "") -> str:
         return str(getattr(core, "DATA_DIR", "") or "").strip()
     except Exception:
         return ""
-
-
-def _apply_runtime_workspace(core: Any, workspace: str) -> tuple[Path, Path, list[str]]:
-    """Apply the active Desktop workspace to runtime trust and outputs."""
-    ws = str(workspace or "").strip()
-    if not ws:
-        raise HTTPException(400, detail="workspace is required")
-    ws_path = Path(ws)
-    if not ws_path.is_absolute():
-        raise HTTPException(400, detail="workspace must be an absolute path")
-    if not ws_path.is_dir():
-        raise HTTPException(400, detail=f"directory does not exist: {ws}")
-
-    output_dir = ws_path / "output"
-    try:
-        output_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise HTTPException(500, detail=f"cannot create output directory: {exc}") from exc
-
-    trusted_dirs = getattr(core, "TRUSTED_DATA_DIRS", None)
-    if trusted_dirs is None:
-        trusted_dirs = []
-        setattr(core, "TRUSTED_DATA_DIRS", trusted_dirs)
-    if ws_path not in trusted_dirs:
-        trusted_dirs.append(ws_path)
-        logger.info("Added workspace to trusted dirs: %s", ws)
-
-    existing = os.environ.get("OMICSCLAW_DATA_DIRS", "")
-    dirs = [d.strip() for d in existing.split(",") if d.strip()] if existing else []
-    if ws not in dirs:
-        dirs.append(ws)
-    os.environ["OMICSCLAW_DATA_DIRS"] = ",".join(dirs)
-    os.environ["OMICSCLAW_WORKSPACE"] = ws
-    os.environ["OMICSCLAW_OUTPUT_DIR"] = str(output_dir)
-    setattr(core, "OUTPUT_DIR", output_dir)
-
-    return ws_path, output_dir, dirs
 
 
 def _permission_profile_to_policy_state(
@@ -1014,6 +1699,7 @@ def _extract_blocked_path(arguments: dict[str, Any]) -> str:
 # Multimodal content helpers
 # ---------------------------------------------------------------------------
 
+
 def _resolve_uploads_dir(workspace: str) -> Path:
     """Pick the directory used to persist chat attachments for this turn.
 
@@ -1068,7 +1754,8 @@ def _reset_session_attachments(session_id: str) -> None:
     core = _get_core()
     prefix = f"{session_id}::"
     stale = [
-        k for k in list(core.received_files)
+        k
+        for k in list(core.received_files)
         if k == session_id or (isinstance(k, str) and k.startswith(prefix))
     ]
     for k in stale:
@@ -1104,15 +1791,14 @@ def _build_multimodal_content(
         text,
         files,
         uploads_dir=uploads_dir,
-        on_file_saved=lambda meta: _register_attachment_for_session(
-            session_id, meta
-        ),
+        on_file_saved=lambda meta: _register_attachment_for_session(session_id, meta),
     )
 
 
 # ---------------------------------------------------------------------------
 # POST /chat/stream — SSE streaming chat
 # ---------------------------------------------------------------------------
+
 
 async def _handle_slash_command(command: str, arg: str, session_id: str) -> str | None:
     """
@@ -1172,6 +1858,7 @@ async def _handle_slash_command(command: str, arg: str, session_id: str) -> str 
 
     elif command == "/doctor":
         import platform as plat
+
         lines = [
             "## Environment Diagnostics",
             f"- Python: {plat.python_version()}",
@@ -1188,6 +1875,7 @@ async def _handle_slash_command(command: str, arg: str, session_id: str) -> str 
     elif command == "/help":
         try:
             from omicsclaw.surfaces.cli._constants import SLASH_COMMANDS
+
             lines = ["## Available Commands\n"]
             for cmd, desc in SLASH_COMMANDS:
                 lines.append(f"- `{cmd}` — {desc}")
@@ -1200,13 +1888,16 @@ async def _handle_slash_command(command: str, arg: str, session_id: str) -> str 
             return "MCP module not available."
         try:
             from omicsclaw.surfaces.cli._mcp import list_mcp_servers
+
             servers = list_mcp_servers()
             if not servers:
                 return "No MCP servers configured."
             lines = ["## MCP Servers\n"]
             for s in servers:
                 status = "active" if s.get("active") else "configured"
-                lines.append(f"- **{s['name']}** ({s.get('transport', 'stdio')}) — {status}")
+                lines.append(
+                    f"- **{s['name']}** ({s.get('transport', 'stdio')}) — {status}"
+                )
             return "\n".join(lines)
         except Exception as exc:
             return f"MCP error: {exc}"
@@ -1233,7 +1924,7 @@ async def _handle_slash_command(command: str, arg: str, session_id: str) -> str 
     return None
 
 
-@app.post("/chat/stream")
+@app.post("/chat/stream", dependencies=[Depends(require_bearer_token)])
 async def chat_stream(req: ChatRequest):
     """
     Run dispatch(envelope) and stream events via SSE (per ADR 0006).
@@ -1255,45 +1946,76 @@ async def chat_stream(req: ChatRequest):
       - {"type": "done",               "data": ""}      — stream finished
       - {"type": "error",              "data": "..."}   — error
     """
-    core = _get_core()
-    if req.workspace.strip():
-        _apply_runtime_workspace(core, req.workspace)
-    session_id = req.session_id
-    bound_remote_job_id = str(req.job_id or "").strip()
-    bound_remote_workspace: Path | None = None
-    if bound_remote_job_id:
-        try:
-            bound_remote_workspace = resolve_workspace()
-        except RuntimeError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        try:
-            bound_job = bind_chat_stream_job(
-                bound_remote_workspace,
-                bound_remote_job_id,
-                session_id=session_id,
+    authoritative_runtime = _desktop_control_runtime
+    installation_id, profile_id, source_namespace = _desktop_ingress_identity(req)
+    existing_turn_id: str | None = None
+    if req.job_id.strip():
+        # Legacy Remote chat Jobs had a production-impossible lifecycle: the
+        # canonical lifespan rejected binding after POST /jobs had already
+        # persisted a queued row.  Chat state is now owned only by the Turn.
+        raise HTTPException(status_code=409, detail="remote_job_binding_not_supported")
+    if authoritative_runtime is not None:
+        if not req.source_request_id:
+            raise HTTPException(
+                status_code=422,
+                detail="source_request_id is required for authoritative Desktop ingress",
             )
-        except LookupError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        # ``bind_chat_stream_job`` intentionally passes through
-        # already-canceled jobs so the cancel handler can finalize them
-        # without clobbering state — but that's not a valid input for
-        # starting the tool loop. Bail with 409 so the caller drops the
-        # request instead of running a chat turn whose job row is
-        # permanently ``canceled``.
-        if bound_job.status == "canceled":
+        if req.files:
+            raise HTTPException(status_code=409, detail="attachments_not_supported")
+        if req.file_selections or req.attachment_descriptors:
+            raise HTTPException(status_code=409, detail="file_references_not_supported")
+        if req.provider_config is not None:
             raise HTTPException(
                 status_code=409,
-                detail=f"chat stream job was canceled before bind: {bound_remote_job_id}",
+                detail="per_turn_provider_credentials_not_supported",
             )
+        existing_turn_id = authoritative_runtime.lookup_ingress_turn_id(
+            surface="desktop",
+            source_namespace=source_namespace,
+            source_request_id=req.source_request_id,
+        )
+    core = _get_core()
+    if authoritative_runtime is not None:
+        if existing_turn_id is None:
+            if req.provider_id and req.provider_id != core.LLM_PROVIDER_NAME:
+                raise HTTPException(
+                    status_code=409,
+                    detail="per_turn_provider_switch_not_supported",
+                )
+            if req.workspace.strip() and (
+                Path(req.workspace).resolve()
+                != Path(authoritative_runtime.workspace_id).resolve()
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="workspace_does_not_match_control_runtime",
+                )
+    elif req.workspace.strip():
+        try:
+            active_workspace = require_remote_workspace()
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=503, detail="remote_workspace_unavailable"
+            ) from exc
+        if Path(req.workspace).resolve() != active_workspace:
+            raise HTTPException(
+                status_code=409,
+                detail="workspace_does_not_match_backend_runtime",
+            )
+    session_id = req.session_id
+    # Created before the Task is registered so an immediate abort can signal
+    # the exact execution incarnation even before MessageEnvelope construction.
+    cancel_event = threading.Event()
+    active_owner: _ActiveDesktopExecution | None = None
 
     # If a provider config override is supplied, re-init the core.
     # NOTE: In a production multi-tenant setup you would scope this per-request
     # with a separate AsyncOpenAI client. For the desktop-app (single user) this
     # is acceptable.
     try:
-        if req.provider_config and req.provider_config.provider:
+        if authoritative_runtime is not None:
+            pass
+        elif req.provider_config and req.provider_config.provider:
             pc = req.provider_config
             provider = str(pc.provider or "").strip()
             model = str(pc.model or "").strip()
@@ -1312,7 +2034,9 @@ async def chat_stream(req: ChatRequest):
                 model=model,
                 provider=provider,
             )
-        elif _chat_request_requires_provider_reinit(core, req.provider_id, req.model or ""):
+        elif _chat_request_requires_provider_reinit(
+            core, req.provider_id, req.model or ""
+        ):
             _apply_chat_provider_switch(core, req.provider_id, req.model or "")
     except HTTPException:
         raise
@@ -1323,7 +2047,9 @@ async def chat_stream(req: ChatRequest):
             or ""
         )
         logger.warning(
-            "Provider switch to %s failed: %s", requested_provider or "<unspecified>", exc
+            "Provider switch to %s failed: %s",
+            requested_provider or "<unspecified>",
+            exc,
         )
         raise HTTPException(
             status_code=400,
@@ -1374,8 +2100,13 @@ async def chat_stream(req: ChatRequest):
     # response. The callbacks are still parameterless functions —
     # dispatch() yields typed events, this _run_loop dispatches each
     # event to the matching callback.
-    queue: asyncio.Queue[dict | None] = asyncio.Queue()
-    streamed_text = ""
+    queue: asyncio.Queue[str] = asyncio.Queue(maxsize=CHAT_SSE_QUEUE_MAX_ITEMS)
+    stream_observer_attached = True
+    stream_detached = asyncio.Event()
+    stream_done = asyncio.Event()
+    streamed_text_parts: list[str] = []
+    streamed_text_bytes = 0
+    streamed_text_complete = True
     streamed_text_chunks = 0
     usage_totals: dict[str, float] = {
         "input_tokens": 0.0,
@@ -1384,13 +2115,47 @@ async def chat_stream(req: ChatRequest):
         "cache_creation_input_tokens": 0.0,
     }
     usage_payload: dict[str, Any] = {"input_tokens": 0, "output_tokens": 0}
-    current_policy_state = _set_session_permission_profile(
-        session_id,
-        req.permission_profile,
+    current_policy_state = (
+        _permission_profile_to_policy_state(session_id, req.permission_profile)
+        if authoritative_runtime is not None
+        else _set_session_permission_profile(session_id, req.permission_profile)
     )
 
-    # Sentinel to signal end-of-stream
-    _DONE = None
+    stream_done_signaled = False
+
+    def _signal_stream_done() -> None:
+        """End the SSE queue exactly once, even if the Task never starts.
+
+        ``Task.cancel()`` can finish a freshly-created task before its coroutine
+        enters ``_run_loop``. In that case the coroutine's ``finally`` block is
+        never reached, so a task done-callback shares this idempotent signal.
+        """
+
+        nonlocal stream_done_signaled
+        if stream_done_signaled:
+            return
+        stream_done_signaled = True
+        # Completion is a separate wake-up channel, not a queue item.  It
+        # therefore cannot be dropped or blocked when the bounded event queue
+        # is full; the consumer drains every preceding frame before ``done``.
+        stream_done.set()
+
+    def _drain_renderer_queue() -> None:
+        while True:
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+    def _detach_stream_observer() -> None:
+        """Wake blocked renderer producers and release queued wire frames."""
+
+        nonlocal stream_observer_attached
+        if stream_observer_attached:
+            stream_observer_attached = False
+            stream_detached.set()
+        _drain_renderer_queue()
+
     # Keep-alive interval (seconds)
     _KEEPALIVE_INTERVAL = 25
 
@@ -1449,33 +2214,37 @@ async def chat_stream(req: ChatRequest):
         "output_style": req.output_style or "",
     }
 
-    def _finalize_bound_remote_job(status: str, error: str | None = None) -> None:
-        if not bound_remote_workspace or not bound_remote_job_id:
-            return
-        try:
-            finalize_chat_stream_job(
-                bound_remote_workspace,
-                bound_remote_job_id,
-                status=status,  # type: ignore[arg-type]
-                error=error,
-            )
-        except Exception:
-            logger.exception(
-                "Failed to finalize bound remote chat job %s with status %s",
-                bound_remote_job_id,
-                status,
-            )
-
     async def _queue_event(event_type: str, data: Any) -> None:
-        if (
-            bound_remote_workspace is not None
-            and bound_remote_job_id
-            and event_type == "tool_output"
-            and isinstance(data, str)
-        ):
-            for line in data.splitlines():
-                append_job_stdout_line(bound_remote_workspace, bound_remote_job_id, line)
-        await queue.put({"type": event_type, "data": data})
+        if not stream_observer_attached:
+            return
+        frame = _sse_line(event_type, data)
+        try:
+            queue.put_nowait(frame)
+            return
+        except asyncio.QueueFull:
+            pass
+
+        # The producer backpressures behind the renderer, but detach is an
+        # independent wake-up path so a disconnected observer never strands a
+        # Turn worker on a full compatibility queue.
+        put_task = asyncio.create_task(queue.put(frame))
+        detach_task = asyncio.create_task(stream_detached.wait())
+        try:
+            completed, _ = await asyncio.wait(
+                {put_task, detach_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if detach_task in completed and not put_task.done():
+                put_task.cancel()
+            if put_task in completed:
+                await put_task
+        finally:
+            for task in (put_task, detach_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(put_task, detach_task, return_exceptions=True)
+        if stream_detached.is_set():
+            _drain_renderer_queue()
 
     def _current_tool_use_id(tool_name: str) -> str:
         pending_ids = tool_call_ids_by_name.get(tool_name)
@@ -1569,8 +2338,20 @@ async def chat_stream(req: ChatRequest):
         return media
 
     async def on_stream_content(chunk: str):
-        nonlocal streamed_text, streamed_text_chunks
-        streamed_text += chunk
+        nonlocal streamed_text_bytes, streamed_text_complete, streamed_text_chunks
+        if streamed_text_complete:
+            chunk_size = utf8_size(chunk)
+            if streamed_text_bytes + chunk_size <= CHAT_STREAM_COMPARISON_MAX_BYTES:
+                streamed_text_parts.append(chunk)
+                streamed_text_bytes += chunk_size
+            else:
+                # The retained text is used only to suppress a duplicate Final
+                # suffix.  Once incomplete it cannot support that comparison,
+                # so release it instead of accumulating an unbounded transcript
+                # beside the canonical Transcript Store.
+                streamed_text_parts.clear()
+                streamed_text_bytes = 0
+                streamed_text_complete = False
         if chunk:
             streamed_text_chunks += 1
         await _queue_event("text", chunk)
@@ -1637,7 +2418,9 @@ async def chat_stream(req: ChatRequest):
         _finish_tool_progress(tool_use_id)
         timeout_seconds = _tool_timeout_seconds(metadata)
         if timeout_seconds is not None:
-            await _queue_event("tool_output", f"{tool_name} timed out after {timeout_seconds}s")
+            await _queue_event(
+                "tool_output", f"{tool_name} timed out after {timeout_seconds}s"
+            )
         else:
             await _queue_event("tool_output", f"Completed {tool_name}")
 
@@ -1673,7 +2456,7 @@ async def chat_stream(req: ChatRequest):
 
         await _queue_event(
             "tool_result",
-            json.dumps(result_data, ensure_ascii=False, default=str),
+            result_data,
         )
         preflight_payload = _tool_result_preflight_payload(metadata)
         if preflight_payload is not None:
@@ -1791,7 +2574,9 @@ async def chat_stream(req: ChatRequest):
         )
         return delta
 
-    async def request_tool_approval(request: Any, execution_result: Any) -> dict[str, Any]:
+    async def request_tool_approval(
+        request: Any, execution_result: Any
+    ) -> dict[str, Any]:
         nonlocal current_policy_state
 
         tool_use_id = _current_tool_use_id(request.name)
@@ -1816,7 +2601,12 @@ async def chat_stream(req: ChatRequest):
                 "persist": False,
             }
 
-        permission_request_id = f"perm_{uuid.uuid4().hex[:10]}"
+        permission_request_id = f"perm_{uuid.uuid4().hex}"
+        approval_token = _permission_approval_token(
+            permission_request_id,
+            session_id,
+            request.name,
+        )
         suggestions = [
             {
                 "type": "tool_permission",
@@ -1831,6 +2621,7 @@ async def chat_stream(req: ChatRequest):
         ]
         payload = {
             "permissionRequestId": permission_request_id,
+            "approvalToken": approval_token,
             "toolName": request.name,
             "toolInput": dict(request.arguments or {}),
             "suggestions": suggestions,
@@ -1839,9 +2630,7 @@ async def chat_stream(req: ChatRequest):
             ),
             "blockedPath": _extract_blocked_path(dict(request.arguments or {})),
             "toolUseId": tool_use_id,
-            "description": str(
-                getattr(request.spec, "description", "") or ""
-            ).strip(),
+            "description": str(getattr(request.spec, "description", "") or "").strip(),
         }
 
         loop = asyncio.get_running_loop()
@@ -1917,23 +2706,29 @@ async def chat_stream(req: ChatRequest):
 
     # ---- Background task running the tool loop ----
 
+    async def _load_mcp_servers_for_worker():
+        if _mcp_load_fn is None:
+            return ()
+        try:
+            return await _mcp_load_fn()
+        except Exception as mcp_exc:
+            logger.warning("Failed to load MCP servers: %s", mcp_exc)
+            return ()
+
     async def _run_loop():
         skill_log_coalescer = None
         _skill_log_token = None
         try:
-            # Load active MCP servers for this session
+            # Legacy direct dispatch still resolves MCP before its MessageEnvelope.
+            # Authoritative ingress passes a lazy factory to the novel Worker so a
+            # duplicate/conflict never connects to an MCP server.
             mcp_servers = ()
-            if _mcp_load_fn is not None:
-                try:
-                    mcp_servers = await _mcp_load_fn()
-                except Exception as mcp_exc:
-                    logger.warning("Failed to load MCP servers: %s", mcp_exc)
+            if authoritative_runtime is None:
+                mcp_servers = await _load_mcp_servers_for_worker()
 
             from omicsclaw.surfaces.desktop._compaction_event_bridge import (
-                make_compaction_event_handler,
+                build_compaction_sse_event,
             )
-
-            on_context_compacted = make_compaction_event_handler(queue)
 
             from omicsclaw.memory import desktop_chat_user_id
             from omicsclaw.runtime.agent.dispatcher import dispatch
@@ -1949,22 +2744,20 @@ async def chat_stream(req: ChatRequest):
                 ToolResult as _DispatchToolResult,
             )
 
-            # ADR 0009 — wire a per-session cancel_event. ``/chat/abort``
-            # will set this before cancelling the task so the SIGTERM
-            # signal reaches subprocess_driver._cancel_watcher.
-            import threading as _threading
-
-            cancel_event = _threading.Event()
-
             # Bench (ADR 0023 decision 3): resolve thread_id = request ?? session and
             # stamp a freshly-created session so binding is durable across turns that
             # omit the field. Best-effort — never blocks a turn.
-            resolved_thread_id = await _resolve_and_bind_thread_id(
-                getattr(_get_core(), "session_manager", None),
-                desktop_chat_user_id(),
-                session_id,
-                req.thread_id,
-            )
+            if authoritative_runtime is not None:
+                # Binding the legacy Desktop Session is a post-acceptance
+                # projection, never part of duplicate/conflict inspection.
+                resolved_thread_id = req.thread_id or session_id
+            else:
+                resolved_thread_id = await _resolve_and_bind_thread_id(
+                    getattr(_get_core(), "session_manager", None),
+                    desktop_chat_user_id(),
+                    session_id,
+                    req.thread_id,
+                )
 
             envelope = MessageEnvelope(
                 chat_id=session_id,
@@ -1991,7 +2784,6 @@ async def chat_stream(req: ChatRequest):
                 stage=(req.stage or "").strip().lower(),
                 cancel_event=cancel_event,
             )
-            _active_envelopes[session_id] = envelope
 
             # Install the live skill-log bridge for this turn. The ContextVar
             # must be set BEFORE dispatch() so the child task it spawns copies a
@@ -2003,14 +2795,17 @@ async def chat_stream(req: ChatRequest):
 
             skill_log_coalescer = SkillLogCoalescer(
                 loop=asyncio.get_running_loop(),
-                queue=queue,
+                event_sink=_queue_event,
             )
             skill_log_state["coalescer"] = skill_log_coalescer
             skill_log_coalescer.start()
             _skill_log_token = skill_log_emitter_var.set(skill_log_coalescer)
 
             result = ""
-            async for event in dispatch(envelope):
+            terminal_error: BaseException | None = None
+
+            async def _observe_agent_event(event) -> None:
+                nonlocal result, terminal_error
                 if isinstance(event, _DispatchToolCall):
                     await on_tool_call(event.tool, event.arguments)
                 elif isinstance(event, _DispatchToolResult):
@@ -2020,42 +2815,185 @@ async def chat_stream(req: ChatRequest):
                 elif isinstance(event, _DispatchStreamReasoning):
                     await on_stream_reasoning(event.chunk)
                 elif isinstance(event, _DispatchContextCompacted):
-                    # ``on_context_compacted`` (make_compaction_event_handler)
-                    # is synchronous — call it, do NOT await it. It pushes the
-                    # SSE 'status' frame via queue.put_nowait and returns None;
-                    # awaiting None raises TypeError. It coerces the neutral
-                    # dispatch payload into a CompactionEvent internally.
-                    on_context_compacted(event.payload)
+                    compaction_event = build_compaction_sse_event(event.payload)
+                    await _queue_event(
+                        compaction_event["type"], compaction_event["data"]
+                    )
                 elif isinstance(event, _DispatchPathologyDetected):
-                    await queue.put(
+                    await _queue_event(
+                        "pathology_detected",
                         {
-                            "type": "pathology_detected",
-                            "data": {
-                                "kind": event.kind,
-                                "tool_name": event.tool_name,
-                                "iteration": event.iteration,
-                                "count": event.count,
-                                "reason": event.reason,
-                            },
-                        }
+                            "kind": event.kind,
+                            "tool_name": event.tool_name,
+                            "iteration": event.iteration,
+                            "count": event.count,
+                            "reason": event.reason,
+                        },
                     )
                 elif isinstance(event, _DispatchFinal):
                     result = event.text
                 elif isinstance(event, _DispatchError):
-                    raise event.exception
+                    if authoritative_runtime is not None:
+                        terminal_error = event.exception
+                    else:
+                        raise event.exception
+
+            if authoritative_runtime is not None:
+                source_request_id = req.source_request_id
+
+                surface_options = {
+                    "provider_id": req.provider_id or "",
+                    "effort": req.effort or "",
+                    "thinking_json": (
+                        json.dumps(
+                            req.thinking,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                        if req.thinking is not None
+                        else ""
+                    ),
+                    "context_1m": bool(req.context_1m),
+                    "permission_profile": _normalize_permission_profile(
+                        req.permission_profile
+                    ),
+                    "pipeline_workspace": req.pipeline_workspace or "",
+                    "thread_id": req.thread_id or "",
+                    "stage": (req.stage or "").strip().lower(),
+                }
+                requested_options = {
+                    "mode": req.mode or "",
+                    "output_style": req.output_style or "",
+                    "model_override": model_override,
+                    "max_tokens": max_tokens_override,
+                    "system_prompt_append": req.system_prompt_append or "",
+                    "surface_options": surface_options,
+                }
+
+                async def _prepare_control_content(_envelope):
+                    nonlocal current_policy_state
+                    # Workspace/trust/output configuration was frozen by the
+                    # composition root before this ControlRuntime started.
+                    # A Turn may validate that binding above, but must never
+                    # re-apply mutable process configuration per request.
+                    current_policy_state = _set_session_permission_profile(
+                        session_id,
+                        req.permission_profile,
+                    )
+                    await _resolve_and_bind_thread_id(
+                        getattr(_get_core(), "session_manager", None),
+                        desktop_chat_user_id(),
+                        session_id,
+                        resolved_thread_id,
+                    )
+                    return user_content
+
+                async def _remember_turn(turn_id: str) -> None:
+                    if active_owner is not None:
+                        active_owner.turn_id = turn_id
+                        # A compatibility request may omit the source id.  Once
+                        # accepted, fence legacy session-based aborts with the
+                        # generated identity advertised in this same frame.
+                        active_owner.source_request_id = source_request_id
+                        active_owner.source_namespace = source_namespace
+                        current_owner = _active_sessions.get(session_id)
+                        if (
+                            current_owner is not None
+                            and current_owner.source_request_id == source_request_id
+                            and current_owner.source_namespace == source_namespace
+                        ):
+                            current_owner.turn_id = turn_id
+                    await _queue_event(
+                        "turn_accepted",
+                        json.dumps(
+                            {
+                                "turn_id": turn_id,
+                                "source_request_id": source_request_id,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
+
+                control_result = await authoritative_runtime.submit_and_wait(
+                    RawInboundV1(
+                        schema_version=1,
+                        surface="desktop",
+                        source_namespace=source_namespace,
+                        source_request_id=source_request_id,
+                        reply_target={
+                            "schema_version": 1,
+                            "kind": "desktop",
+                            "installation_id": installation_id,
+                            "profile_id": profile_id,
+                            "slot": session_id,
+                        },
+                        content=(RawContentBlockV1(kind="text", text=req.content),),
+                        requested_options=requested_options,
+                    ),
+                    ControlRuntimePorts(
+                        response_sink=_observe_agent_event,
+                        content_factory=_prepare_control_content,
+                        user_id=desktop_chat_user_id(),
+                        workspace=req.workspace,
+                        pipeline_workspace=req.pipeline_workspace,
+                        output_style=req.output_style,
+                        mcp_servers_factory=_load_mcp_servers_for_worker,
+                        usage_accumulator=usage_accumulator,
+                        request_tool_approval=request_tool_approval,
+                        policy_state=current_policy_state.to_dict(),
+                        model_override=model_override,
+                        extra_api_params=(
+                            extra_api_params if extra_api_params else None
+                        ),
+                        max_tokens_override=max_tokens_override,
+                        system_prompt_append=req.system_prompt_append,
+                        mode=req.mode,
+                        thread_id=resolved_thread_id,
+                        stage=(req.stage or "").strip().lower(),
+                    ),
+                    on_accepted=_remember_turn,
+                )
+                if control_result.receipt is None:
+                    raise RuntimeError(
+                        "Desktop Turn was rejected: "
+                        f"{control_result.acceptance.code or control_result.acceptance.status.value}"
+                    )
+                if control_result.receipt.status == "canceled":
+                    raise asyncio.CancelledError
+                if control_result.receipt.status != "succeeded":
+                    error_detail = str(terminal_error or "").strip()
+                    raise RuntimeError(
+                        "Desktop Turn ended with "
+                        f"{control_result.receipt.status}: "
+                        f"{error_detail or control_result.receipt.terminal_code or 'no_terminal_code'}"
+                    )
+            else:
+                # Direct-call compatibility Adapter for isolated tests that do
+                # not enter the FastAPI lifespan. Production always owns the
+                # ControlRuntime initialised above.
+                async for event in dispatch(envelope):
+                    await _observe_agent_event(event)
             # If the result contains text that was NOT streamed (non-streaming
             # path, or slash-command response), emit only the missing suffix.
             # queue.qsize() is not reliable here because the SSE consumer may
             # already have drained previously streamed chunks by the time the
             # tool loop returns.
             if result:
+                streamed_text = (
+                    "".join(streamed_text_parts) if streamed_text_complete else ""
+                )
                 if streamed_text_chunks == 0:
-                    await queue.put({"type": "text", "data": result})
-                elif isinstance(result, str) and result.startswith(streamed_text):
-                    suffix = result[len(streamed_text):]
+                    await _queue_event("text", result)
+                elif (
+                    streamed_text_complete
+                    and isinstance(result, str)
+                    and result.startswith(streamed_text)
+                ):
+                    suffix = result[len(streamed_text) :]
                     if suffix:
-                        await queue.put({"type": "text", "data": suffix})
-                elif result != streamed_text:
+                        await _queue_event("text", suffix)
+                elif streamed_text_complete and result != streamed_text:
                     logger.debug(
                         "Session %s returned final text differing from streamed content; "
                         "skipping replay to avoid duplicate assistant output",
@@ -2073,14 +3011,11 @@ async def chat_stream(req: ChatRequest):
                     default=str,
                 ),
             )
-            _finalize_bound_remote_job("succeeded")
         except asyncio.CancelledError:
             await _queue_event("error", "Session aborted")
-            _finalize_bound_remote_job("canceled", error="session_aborted")
         except Exception as exc:
             logger.exception("dispatch() error for session %s", session_id)
             await _queue_event("error", str(exc))
-            _finalize_bound_remote_job("failed", error=str(exc))
         finally:
             for permission_request_id in list(permission_request_ids):
                 pending = _pending_permission_requests.pop(permission_request_id, None)
@@ -2102,42 +3037,105 @@ async def chat_stream(req: ChatRequest):
             skill_log_state["coalescer"] = None
             if skill_log_coalescer is not None:
                 await skill_log_coalescer.aclose()
-            await queue.put(_DONE)
-            _active_sessions.pop(session_id, None)
-            _active_envelopes.pop(session_id, None)
+            _signal_stream_done()
+            if active_owner is not None:
+                _release_active_execution(session_id, active_owner)
 
     # ---- SSE generator ----
 
     async def event_generator():
-        yield _sse_line("status", status_payload)
-        yield _sse_line("mode_changed", effective_mode)
+        nonlocal active_owner
 
         task = asyncio.create_task(_run_loop())
-        _active_sessions[session_id] = task
+        owner = _ActiveDesktopExecution(
+            task=task,
+            cancel_event=cancel_event,
+            source_request_id=req.source_request_id,
+            source_namespace=source_namespace,
+        )
+        active_owner = owner
+        # Covers cancellation after registration but before ``_run_loop`` gets
+        # its first event-loop turn (and therefore before its finally exists).
+        task.add_done_callback(lambda _task: _signal_stream_done())
+        # Register before exposing the first SSE frame. An immediate interrupt
+        # can now always target this exact owner instead of racing a 404 window.
+        _replace_active_execution(session_id, owner)
 
         try:
-            while True:
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=_KEEPALIVE_INTERVAL)
-                except asyncio.TimeoutError:
-                    yield _sse_line("keep_alive", "")
-                    continue
+            yield _sse_line("status", status_payload)
+            yield _sse_line("mode_changed", effective_mode)
 
-                if event is _DONE:
+            while True:
+                if stream_done.is_set() and queue.empty():
                     yield _sse_done()
                     break
 
-                yield _sse_line(event["type"], event["data"])
+                get_task = asyncio.create_task(queue.get())
+                done_task = asyncio.create_task(stream_done.wait())
+                completed: set[asyncio.Task]
+                try:
+                    completed, _ = await asyncio.wait(
+                        {get_task, done_task},
+                        timeout=_KEEPALIVE_INTERVAL,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                except BaseException:
+                    get_task.cancel()
+                    done_task.cancel()
+                    await asyncio.gather(get_task, done_task, return_exceptions=True)
+                    raise
+
+                if not completed:
+                    get_task.cancel()
+                    done_task.cancel()
+                    await asyncio.gather(get_task, done_task, return_exceptions=True)
+                    yield _sse_line("keep_alive", "")
+                    continue
+
+                if get_task in completed:
+                    frame = get_task.result()
+                    if not done_task.done():
+                        done_task.cancel()
+                    await asyncio.gather(done_task, return_exceptions=True)
+                    yield frame
+                    continue
+
+                # Completion can win the race only after all producers have
+                # finished awaited queue writes.  Prefer a concurrently-ready
+                # frame, otherwise the queue is now durably empty.
+                if not get_task.done():
+                    get_task.cancel()
+                await asyncio.gather(get_task, return_exceptions=True)
+                try:
+                    frame = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                else:
+                    yield frame
+                    continue
+                yield _sse_done()
+                break
         except asyncio.CancelledError:
-            # Client disconnected (e.g. closed the tab) mid-run. Mirror /chat/abort:
-            # set the envelope's cancel_event BEFORE cancelling so a long-running
-            # skill subprocess is actually killed, not left orphaned (audit E).
-            _abort_active_session(session_id)
+            # A ControlRuntime-backed client disconnect detaches only this
+            # observer. Lifecycle cancellation is a separate Turn operation.
+            _detach_stream_observer()
+            coalescer = skill_log_state.get("coalescer")
+            if coalescer is not None:
+                coalescer.detach()
+            if _desktop_control_runtime is None:
+                _cancel_active_execution(owner)
             yield _sse_error("Client disconnected")
             yield _sse_done()
         finally:
-            _active_sessions.pop(session_id, None)
-            _active_envelopes.pop(session_id, None)
+            if not owner.task.done():
+                _detach_stream_observer()
+                if _desktop_control_runtime is not None:
+                    coalescer = skill_log_state.get("coalescer")
+                    if coalescer is not None:
+                        coalescer.detach()
+                else:
+                    _cancel_active_execution(owner)
+            _release_active_execution(session_id, owner)
 
     return StreamingResponse(
         event_generator(),
@@ -2154,35 +3152,591 @@ async def chat_stream(req: ChatRequest):
 # POST /chat/abort — cancel a running session
 # ---------------------------------------------------------------------------
 
-def _abort_active_session(session_id: str) -> bool:
-    """Cancel a running dispatch() session, setting its ``cancel_event`` *before*
-    cancelling the task (ADR 0009) so a skill subprocess in a detached process
-    group is actually SIGTERM'd via ``subprocess_driver._cancel_watcher`` rather
-    than orphaned — ``task.cancel()`` alone only raises ``CancelledError`` at the
-    outermost await. Shared by ``/chat/abort`` and the SSE client-disconnect
-    handler. Returns True if a session task was active. Idempotent.
+
+def _abort_active_session(
+    session_id: str,
+    expected_source_request_id: str | None = None,
+) -> str:
+    """Cancel only the active execution incarnation selected by the caller.
+
+    Modern Desktop clients must supply the ``source_request_id`` used to start
+    the stream. A missing generation remains compatible only with a genuinely
+    legacy owner whose source id is empty; it may never cancel a modern owner.
     """
-    task = _active_sessions.get(session_id)
-    envelope = _active_envelopes.get(session_id)
-    if envelope is not None and getattr(envelope, "cancel_event", None) is not None:
-        envelope.cancel_event.set()
-    if task is not None:
-        task.cancel()
-    _active_sessions.pop(session_id, None)
-    _active_envelopes.pop(session_id, None)
-    return task is not None
+
+    owner = _active_sessions.get(session_id)
+    if owner is None:
+        return _ABORT_NOT_FOUND
+
+    expected = str(expected_source_request_id or "")
+    if expected:
+        if owner.source_request_id != expected:
+            return _ABORT_GENERATION_MISMATCH
+    elif owner.source_request_id:
+        return _ABORT_GENERATION_REQUIRED
+
+    if not _cancel_active_execution(owner):
+        return _ABORT_TURN_UNRESOLVED
+    _release_active_execution(session_id, owner)
+    return _ABORTED
 
 
-@app.post("/chat/abort")
+@app.post("/chat/abort", dependencies=[Depends(require_bearer_token)])
 async def chat_abort(req: AbortRequest):
     """Cancel a running dispatch() session (see ``_abort_active_session``)."""
-    if _active_sessions.get(req.session_id) is None:
+    result = _abort_active_session(req.session_id, req.source_request_id)
+    if result == _ABORT_NOT_FOUND:
         raise HTTPException(404, detail="No active session with that ID")
-    _abort_active_session(req.session_id)
+    if result == _ABORT_GENERATION_MISMATCH:
+        raise HTTPException(409, detail="stale_stream_generation")
+    if result == _ABORT_GENERATION_REQUIRED:
+        raise HTTPException(409, detail="stream_generation_required")
+    if result == _ABORT_TURN_UNRESOLVED:
+        raise HTTPException(409, detail="canonical_turn_not_yet_bound")
     return {"status": "aborted", "session_id": req.session_id}
 
 
-@app.post("/chat/permission")
+def _desktop_control_runtime_required() -> ControlRuntime:
+    if _desktop_control_runtime is None:
+        raise HTTPException(503, detail="Desktop ControlRuntime is not ready")
+    return _desktop_control_runtime
+
+
+def _desktop_run_runtime_required() -> RunRuntime:
+    if _desktop_run_runtime is None or not _desktop_run_runtime.lifecycle_ready:
+        raise HTTPException(503, detail="Desktop RunRuntime is not ready")
+    return _desktop_run_runtime
+
+
+def _require_desktop_idempotency_key(value: str | None) -> str:
+    key = str(value or "")
+    if len(key) != 32 or any(character not in "0123456789abcdef" for character in key):
+        raise HTTPException(
+            422,
+            detail="Idempotency-Key must be 32 lowercase hexadecimal characters",
+        )
+    return key
+
+
+def _raise_desktop_turn_rejection(status, code: str) -> None:
+    detail = code or "turn_rejected"
+    if status is TurnAcceptanceStatus.CONFLICT:
+        raise HTTPException(409, detail=detail)
+    status_code = {
+        "project_not_found": 404,
+        "conversation_not_found": 404,
+        "conversation_address_mismatch": 409,
+        "project_archived": 409,
+        "proposed_conversation_id_conflict": 409,
+        "proposed_turn_id_conflict": 409,
+        "turn_backpressure": 429,
+        "admission_contention": 429,
+        "delivery_backpressure": 503,
+        "turn_execution_unavailable": 503,
+        "control_not_ready": 503,
+        "attachments_not_supported": 503,
+    }.get(detail, 422)
+    raise HTTPException(status_code, detail=detail)
+
+
+def _turn_accepted_v1_payload(result) -> dict[str, Any]:
+    receipt = result.receipt
+    if receipt is None:
+        raise RuntimeError("accepted Desktop submission has no durable Receipt")
+    return DesktopTurnAcceptedV1(
+        schema_version=1,
+        turn_id=receipt.turn_id,
+        conversation_id=receipt.conversation_id,
+        status=receipt.status,
+        duplicate=result.acceptance.status is TurnAcceptanceStatus.DUPLICATE,
+        receipt_revision=receipt.revision,
+        accepted_at_ms=receipt.created_at_ms,
+    ).model_dump()
+
+
+@app.post(
+    "/v1/turns",
+    dependencies=[Depends(require_bearer_token)],
+    status_code=202,
+    response_model=DesktopTurnAcceptedV1,
+    responses={
+        200: {
+            "model": DesktopTurnAcceptedV1,
+            "description": "Matching idempotent duplicate; no file part is read.",
+        },
+        400: {"description": "Malformed multipart transport or JSON encoding."},
+        408: {"description": "Multipart body read deadline exceeded."},
+        409: {"description": "Idempotency or authoritative state conflict."},
+        413: {"description": "Multipart transport or request document too large."},
+        415: {"description": "multipart/form-data is required."},
+        422: {"description": "Manifest, attachment, or Idempotency-Key rejected."},
+        429: {"description": "Multipart or Turn admission backpressure."},
+        503: {"description": "Authoritative runtime is not ready."},
+    },
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["request"],
+                        "properties": {
+                            "request": {
+                                "type": "string",
+                                "contentMediaType": "application/json",
+                                "description": "DesktopTurnSubmissionV1 JSON document.",
+                            }
+                        },
+                        "additionalProperties": {
+                            "type": "string",
+                            "format": "binary",
+                            "description": (
+                                "One file part named by each source_attachment_id."
+                            ),
+                        },
+                    },
+                    "encoding": {"request": {"contentType": "application/json"}},
+                }
+            },
+        }
+    },
+)
+async def submit_desktop_turn_v1(
+    request: Request,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+):
+    """Durably accept one bounded Desktop multipart image Turn.
+
+    The configured conditional bearer gate runs before this handler (local
+    loopback mode may intentionally have no token). Multipart parsing is manual
+    so the Adapter can cap the raw request stream and concurrent spool count.
+    """
+
+    header_keys = request.headers.getlist("idempotency-key")
+    if len(header_keys) > 1:
+        raise HTTPException(422, detail="exactly one Idempotency-Key is required")
+    if header_keys and idempotency_key != header_keys[0]:
+        raise HTTPException(422, detail="Idempotency-Key is ambiguous")
+    source_request_id = _require_desktop_idempotency_key(idempotency_key)
+    runtime = _desktop_control_runtime_required()
+    lease = _desktop_multipart_capacity.try_acquire()
+    if lease is None:
+        raise HTTPException(429, detail="desktop_multipart_backpressure")
+
+    upload = None
+    try:
+        try:
+            async with asyncio.timeout(DEFAULT_MULTIPART_READ_TIMEOUT_SECONDS):
+                upload = await decode_desktop_multipart_submission(
+                    request,
+                    max_attachments=runtime.attachment_store.max_attachments,
+                    max_batch_bytes=runtime.attachment_store.max_batch_bytes,
+                )
+        except TimeoutError as exc:
+            raise HTTPException(408, detail="multipart_read_timeout") from exc
+        except DesktopMultipartError as exc:
+            raise HTTPException(exc.status_code, detail=exc.code) from exc
+
+        raw = upload.submission.to_raw_inbound(
+            source_request_id=source_request_id,
+            source_namespace="desktop/v1/local/owner",
+            reply_target={
+                "schema_version": 1,
+                "kind": "desktop",
+                "installation_id": "local",
+                "profile_id": "owner",
+                "slot": "main",
+            },
+        )
+        from omicsclaw.memory import desktop_chat_user_id
+
+        result = await runtime.submit(
+            raw,
+            ControlRuntimePorts(
+                user_id=desktop_chat_user_id(),
+                workspace=runtime.workspace_id,
+                policy_state=ToolPolicyState(surface="app").to_dict(),
+            ),
+            attachment_source=upload.source,
+        )
+        if result.acceptance.status not in {
+            TurnAcceptanceStatus.ACCEPTED,
+            TurnAcceptanceStatus.DUPLICATE,
+        }:
+            _raise_desktop_turn_rejection(
+                result.acceptance.status,
+                result.acceptance.code,
+            )
+        status_code = (
+            200 if result.acceptance.status is TurnAcceptanceStatus.DUPLICATE else 202
+        )
+        return JSONResponse(
+            _turn_accepted_v1_payload(result),
+            status_code=status_code,
+            headers={"Location": f"/v1/turns/{result.acceptance.turn_id}"},
+        )
+    finally:
+        try:
+            if upload is not None:
+                try:
+                    await upload.aclose()
+                except asyncio.CancelledError:
+                    # Release transport capacity even if the request task is
+                    # canceled while closing spools; finish the close in a
+                    # detached task before propagating cancellation.
+                    if not upload.source.closed:
+                        cleanup = asyncio.create_task(upload.aclose())
+                        try:
+                            await asyncio.shield(cleanup)
+                        except asyncio.CancelledError:
+                            pass
+                    raise
+                except Exception as exc:  # pragma: no cover - OS cleanup failure
+                    logger.warning("Desktop multipart spool cleanup failed: %s", exc)
+        finally:
+            lease.release()
+
+
+def _turn_receipt_payload(runtime: ControlRuntime, turn_id: str) -> dict[str, Any]:
+    try:
+        snapshot = runtime.get_turn_snapshot(turn_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(404, detail="Turn not found") from exc
+    return desktop_turn_receipt_v1(snapshot).model_dump(mode="python")
+
+
+class _TurnEventStreamResponse(StreamingResponse):
+    """Advertise the actual SSE media type in OpenAPI and on the wire."""
+
+    media_type = "text/event-stream"
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        """Release the observer on every ASGI exit, including send failure."""
+
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            close = getattr(self.body_iterator, "aclose", None)
+            if close is not None:
+                await close()
+
+
+@app.get(
+    "/v1/turns/{turn_id}",
+    dependencies=[Depends(require_bearer_token)],
+    response_model=DesktopTurnReceiptV1,
+)
+@app.get(
+    "/turns/{turn_id}",
+    dependencies=[Depends(require_bearer_token)],
+    response_model=DesktopTurnReceiptV1,
+)
+async def get_turn_receipt(turn_id: str):
+    """Read a durable Receipt without submitting or replaying its Turn."""
+
+    return _turn_receipt_payload(_desktop_control_runtime_required(), turn_id)
+
+
+def _parse_turn_event_cursor(last_event_id: str | None) -> int:
+    if last_event_id in {None, ""}:
+        return 0
+    if last_event_id == "-1":
+        # Compatibility for the pre-one-based internal sentinel.
+        return -1
+    if (
+        not last_event_id.isascii()
+        or not last_event_id.isdigit()
+        or len(last_event_id) > 20
+        or int(last_event_id) > (2**64 - 1)
+    ):
+        raise ValueError
+    return int(last_event_id)
+
+
+@app.get(
+    "/v1/turns/{turn_id}/events",
+    dependencies=[Depends(require_bearer_token)],
+    response_class=_TurnEventStreamResponse,
+)
+@app.get(
+    "/turns/{turn_id}/events",
+    dependencies=[Depends(require_bearer_token)],
+    response_class=_TurnEventStreamResponse,
+)
+async def observe_turn_events(
+    turn_id: str,
+    last_event_id: str | None = Header(None, alias="Last-Event-ID"),
+):
+    """Reconnect to the bounded process-local Event stream of an existing Turn."""
+
+    runtime = _desktop_control_runtime_required()
+    # Classic FastAPI parameter declarations keep the supported 0.100 floor
+    # importable. Direct handler-level tests see the Header sentinel itself.
+    if not isinstance(last_event_id, (str, type(None))):
+        last_event_id = None
+    try:
+        after_sequence = _parse_turn_event_cursor(last_event_id)
+    except ValueError as exc:
+        raise HTTPException(
+            400,
+            detail="Last-Event-ID must be -1 or a non-negative integer",
+        ) from exc
+    try:
+        observation = runtime.open_turn_observation(
+            turn_id,
+            after_sequence=after_sequence,
+        )
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(404, detail="Turn not found") from exc
+    except EventHubCapacityError as exc:
+        raise HTTPException(429, detail="turn_observer_capacity_exceeded") from exc
+    if observation.gap is not None and observation.gap.reason == "cursor_ahead":
+        await observation.aclose()
+        raise HTTPException(
+            400,
+            detail="Last-Event-ID is ahead of the current Turn Event sequence",
+        )
+
+    try:
+        body = DesktopTurnSSEBody(
+            observation,
+            requested_after_sequence=after_sequence,
+        )
+    except BaseException:
+        await observation.aclose()
+        raise
+    return _TurnEventStreamResponse(
+        body,
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        background=BackgroundTask(body.aclose),
+    )
+
+
+@app.post(
+    "/v1/turns/{turn_id}/cancel",
+    dependencies=[Depends(require_bearer_token)],
+    response_model=DesktopTurnCancelResultV1,
+)
+@app.post(
+    "/turns/{turn_id}/cancel",
+    dependencies=[Depends(require_bearer_token)],
+    response_model=DesktopTurnCancelResultV1,
+)
+async def cancel_turn(turn_id: str):
+    """Explicit lifecycle cancellation by opaque Turn ID."""
+
+    runtime = _desktop_control_runtime_required()
+    result = runtime.cancel(turn_id)
+    if result.code == "turn_not_found":
+        raise HTTPException(404, detail="Turn not found")
+    if not result.changed and result.code not in {
+        "already_terminal",
+        "cancel_already_requested",
+    }:
+        raise HTTPException(409, detail=result.code)
+    snapshot = runtime.get_turn_snapshot(turn_id)
+    return DesktopTurnCancelResultV1(
+        schema_version=1,
+        turn_id=turn_id,
+        changed=result.changed,
+        code=result.code,
+        receipt=desktop_turn_receipt_v1(snapshot),
+    ).model_dump(mode="python")
+
+
+def _raise_desktop_run_rejection(status, code: str) -> None:
+    detail = code or "run_rejected"
+    if status is RunAcceptanceStatus.CONFLICT:
+        raise HTTPException(409, detail=detail)
+    status_code = {
+        "project_not_found": 404,
+        "parent_turn_not_found": 404,
+        "skill_not_found": 404,
+        "project_archived": 409,
+        "skill_not_canonical": 422,
+        "skill_deprecated": 422,
+        "skill_demo_not_supported": 422,
+        "run_kind_not_supported": 422,
+        "resource_contract_missing": 422,
+        "resource_contract_mismatch": 422,
+        "resource_unsupported": 422,
+        "skill_authority_unavailable": 503,
+        "run_backpressure": 429,
+        "admission_contention": 429,
+        "control_not_ready": 503,
+        "executor_isolation_unavailable": 503,
+    }.get(detail, 422)
+    raise HTTPException(status_code, detail=detail)
+
+
+@app.post(
+    "/v1/runs",
+    dependencies=[Depends(require_bearer_token)],
+    status_code=202,
+    response_model=DesktopRunAcceptedV1,
+    responses={
+        200: {
+            "model": DesktopRunAcceptedV1,
+            "description": "Matching idempotent duplicate; no work is admitted.",
+        },
+        400: {"description": "Malformed JSON transport or encoding."},
+        401: {"description": "Bearer authentication failed when configured."},
+        404: {"description": "Canonical Skill, Project, or parent Turn not found."},
+        408: {"description": "JSON body read deadline exceeded."},
+        409: {"description": "Run Submission ID or authoritative state conflict."},
+        413: {"description": "JSON transport exceeded the fixed byte limit."},
+        415: {"description": "A plain application/json body is required."},
+        422: {"description": "Run request or static execution contract rejected."},
+        429: {"description": "Bounded Run admission backpressure."},
+        503: {"description": "Authoritative Run runtime is unavailable."},
+    },
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": DesktopRunSubmissionV1.model_json_schema()
+                }
+            },
+        }
+    },
+)
+async def submit_desktop_run_v1(
+    request: Request,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+):
+    """Durably admit one strict demo-only Simple Skill Run."""
+
+    header_keys = request.headers.getlist("idempotency-key")
+    if len(header_keys) != 1 or idempotency_key != header_keys[0]:
+        raise HTTPException(422, detail="exactly one Idempotency-Key is required")
+    run_submission_id = _require_desktop_idempotency_key(idempotency_key)
+    try:
+        submission = await decode_desktop_run_submission(request)
+    except DesktopRunWireError as exc:
+        raise HTTPException(exc.status_code, detail=exc.code) from exc
+    runtime = _desktop_run_runtime_required()
+    result = await runtime.submit(submission.to_domain(run_submission_id))
+    if result.acceptance_status not in {
+        RunAcceptanceStatus.ACCEPTED,
+        RunAcceptanceStatus.DUPLICATE,
+    }:
+        _raise_desktop_run_rejection(result.acceptance_status, result.code)
+    receipt = result.receipt
+    if receipt is None:
+        raise HTTPException(503, detail="accepted_run_receipt_unavailable")
+    payload = DesktopRunAcceptedV1(
+        schema_version=1,
+        run_id=receipt.run_id,
+        status=receipt.status,
+        duplicate=result.acceptance_status is RunAcceptanceStatus.DUPLICATE,
+        receipt_revision=receipt.revision,
+        accepted_at_ms=receipt.created_at_ms,
+    )
+    status_code = (
+        200 if result.acceptance_status is RunAcceptanceStatus.DUPLICATE else 202
+    )
+    return JSONResponse(
+        payload.model_dump(mode="python"),
+        status_code=status_code,
+        headers={"Location": f"/v1/runs/{receipt.run_id}"},
+    )
+
+
+@app.get(
+    "/v1/runs/{run_id}",
+    dependencies=[Depends(require_bearer_token)],
+    response_model=DesktopRunReceiptV1,
+    responses={
+        401: {"description": "Bearer authentication failed when configured."},
+        404: {"description": "Run not found."},
+        503: {"description": "Authoritative Run runtime is unavailable."},
+    },
+)
+async def get_run_receipt_v1(run_id: str):
+    """Observe an existing durable Run without enqueue, Lease, or Assignment."""
+
+    try:
+        observation = _desktop_run_runtime_required().get_receipt(run_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(404, detail="Run not found") from exc
+    return desktop_run_receipt_v1(observation).model_dump(mode="python")
+
+
+@app.post(
+    "/v1/runs/{run_id}/cancel",
+    dependencies=[Depends(require_bearer_token)],
+    response_model=DesktopRunCancelResultV1,
+    responses={
+        401: {"description": "Bearer authentication failed when configured."},
+        404: {"description": "Run not found."},
+        409: {"description": "Run cannot accept the cancellation command."},
+        503: {"description": "Authoritative Run runtime is unavailable."},
+    },
+)
+async def cancel_run_v1(run_id: str):
+    """Explicitly cancel one canonical Run by opaque Run ID."""
+
+    try:
+        result = await _desktop_run_runtime_required().cancel(run_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(404, detail="Run not found") from exc
+    if result.code not in {
+        "canceled_before_assignment",
+        "cancel_requested",
+        "cancel_already_requested",
+        "already_terminal",
+    }:
+        raise HTTPException(409, detail=result.code)
+    return DesktopRunCancelResultV1(
+        schema_version=1,
+        run_id=run_id,
+        changed=result.changed,
+        code=result.code,
+        receipt=desktop_run_receipt_from_record(result.receipt),
+    ).model_dump(mode="python")
+
+
+@app.get(
+    "/v1/run-integrity-incidents",
+    dependencies=[Depends(require_bearer_token)],
+    response_model=DesktopRunIntegrityIncidentPageV1,
+    responses={
+        400: {"description": "The incident cursor is unknown or incompatible."},
+        401: {"description": "Bearer authentication failed when configured."},
+        422: {"description": "Query parameters are outside the closed V1 shape."},
+        503: {"description": "Authoritative Run runtime is unavailable."},
+    },
+)
+async def list_run_integrity_incidents_v1(
+    run_id: Annotated[
+        str | None,
+        Query(pattern=r"^[0-9a-f]{32}$", max_length=32),
+    ] = None,
+    cursor: Annotated[
+        str | None,
+        Query(pattern=r"^[0-9a-f]{32}$", max_length=32),
+    ] = None,
+    limit: Annotated[
+        int,
+        Query(ge=1, le=DESKTOP_RUN_INCIDENT_MAX_PAGE_SIZE),
+    ] = 50,
+):
+    """Observe content-free durable incidents without touching execution state."""
+
+    try:
+        page = _desktop_run_runtime_required().list_integrity_incidents(
+            run_id=run_id,
+            cursor=cursor,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, detail="invalid_incident_cursor") from exc
+    return desktop_run_integrity_incident_page_v1(page).model_dump(mode="json")
+
+
+@app.post("/chat/permission", dependencies=[Depends(require_bearer_token)])
 async def chat_permission(req: PermissionResponseRequest):
     """Resolve a pending chat permission request."""
     pending = _pending_permission_requests.get(req.permissionRequestId)
@@ -2191,6 +3745,18 @@ async def chat_permission(req: PermissionResponseRequest):
             "ok": False,
             "permissionRequestId": req.permissionRequestId,
             "status": "expired",
+        }
+
+    expected_token = _permission_approval_token(
+        req.permissionRequestId,
+        str(pending.get("session_id", "")),
+        str(pending.get("tool_name", "")),
+    )
+    if not hmac.compare_digest(req.approvalToken, expected_token):
+        return {
+            "ok": False,
+            "permissionRequestId": req.permissionRequestId,
+            "status": "invalid_token",
         }
 
     future = pending.get("future")
@@ -2226,10 +3792,15 @@ async def chat_permission(req: PermissionResponseRequest):
     }
 
 
-@app.post("/chat/session-permission-profile")
+@app.post(
+    "/chat/session-permission-profile",
+    dependencies=[Depends(require_bearer_token)],
+)
 async def chat_session_permission_profile(req: SessionPermissionProfileRequest):
     """Update the live permission profile for a session and release pending approvals."""
-    policy_state = _set_session_permission_profile(req.session_id, req.permission_profile)
+    policy_state = _set_session_permission_profile(
+        req.session_id, req.permission_profile
+    )
     profile = _effective_permission_profile(req.session_id, req.permission_profile)
     auto_approved_requests = 0
 
@@ -2242,12 +3813,14 @@ async def chat_session_permission_profile(req: SessionPermissionProfileRequest):
             if future is None or future.done():
                 continue
 
-            future.set_result({
-                "behavior": "allow",
-                "updated_input": None,
-                "updated_permissions": [],
-                "message": "",
-            })
+            future.set_result(
+                {
+                    "behavior": "allow",
+                    "updated_input": None,
+                    "updated_permissions": [],
+                    "message": "",
+                }
+            )
             auto_approved_requests += 1
 
     return {
@@ -2264,15 +3837,23 @@ async def chat_session_permission_profile(req: SessionPermissionProfileRequest):
 # GET /workspace — current runtime workspace configuration
 # ---------------------------------------------------------------------------
 
-@app.get("/workspace")
+
+@app.get("/workspace", dependencies=[Depends(require_bearer_token)])
 async def get_workspace():
+    try:
+        active_workspace = require_remote_workspace()
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503, detail="remote_workspace_unavailable"
+        ) from exc
     core = _get_core()
     trusted_dirs = [str(d) for d in getattr(core, "TRUSTED_DATA_DIRS", [])]
-    workspace = str(os.environ.get("OMICSCLAW_WORKSPACE", "") or "").strip()
-    if not workspace and trusted_dirs:
-        workspace = trusted_dirs[0]
     return {
-        "workspace": workspace or None,
+        # ``workspace`` is retained as the compatibility alias consumed by the
+        # current App.  ``active_workspace`` names the actual authority.
+        "workspace": str(active_workspace),
+        "active_workspace": str(active_workspace),
+        "restart_required": False,
         "trusted_dirs": trusted_dirs,
     }
 
@@ -2281,47 +3862,164 @@ async def get_workspace():
 # PUT /workspace — sync default project directory from frontend
 # ---------------------------------------------------------------------------
 
+
 class WorkspaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     workspace: str
 
-@app.put("/workspace")
-async def set_workspace(req: WorkspaceRequest):
-    """Update the default workspace directory.
 
-    Called by the frontend when the user selects a new project directory.
-    Adds the directory to OMICSCLAW_DATA_DIRS so the backend's tool
-    execution can read/write files there, and sets OMICSCLAW_WORKSPACE
-    so workspace-scoped features use the same root on subsequent requests.
+_WORKSPACE_REQUEST_MAX_BYTES = 4 * 1024
+_WORKSPACE_REQUEST_READ_TIMEOUT_SECONDS = 5.0
+
+
+def _workspace_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    document: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in document:
+            raise ValueError("duplicate_workspace_json_key")
+        document[key] = value
+    return document
+
+
+def _reject_workspace_json_constant(value: str) -> None:
+    raise ValueError(f"invalid_workspace_json_constant:{value}")
+
+
+async def _decode_workspace_request(request: Request) -> WorkspaceRequest:
+    """Count and strictly decode the tiny Workspace command body.
+
+    The route deliberately accepts ``Request`` rather than a Pydantic body
+    parameter so FastAPI can complete bearer authentication before reading or
+    validating attacker-controlled bytes.
     """
+
+    raw_content_type = request.headers.get("content-type", "")
+    media_type, _, raw_parameters = raw_content_type.partition(";")
+    if media_type.strip().lower() != "application/json":
+        raise HTTPException(415, detail="application_json_required")
+    parameters = [
+        parameter.strip().lower()
+        for parameter in raw_parameters.split(";")
+        if parameter.strip()
+    ]
+    if len(parameters) > 1 or any(
+        not parameter.startswith("charset=")
+        or parameter.removeprefix("charset=").strip('"') not in {"utf-8", "utf8"}
+        for parameter in parameters
+    ):
+        raise HTTPException(415, detail="utf8_json_required")
+    if request.headers.get("content-encoding", "").strip().lower() not in {
+        "",
+        "identity",
+    }:
+        raise HTTPException(415, detail="content_encoding_not_supported")
+
+    declared_lengths = request.headers.getlist("content-length")
+    if len(declared_lengths) > 1:
+        raise HTTPException(400, detail="invalid_content_length")
+    if declared_lengths:
+        declared = declared_lengths[0]
+        if not declared.isascii() or not declared.isdigit():
+            raise HTTPException(400, detail="invalid_content_length")
+        if int(declared, 10) > _WORKSPACE_REQUEST_MAX_BYTES:
+            raise HTTPException(413, detail="workspace_request_too_large")
+
+    async def _read_counted_body() -> bytes:
+        body = bytearray()
+        try:
+            async for chunk in request.stream():
+                if len(body) + len(chunk) > _WORKSPACE_REQUEST_MAX_BYTES:
+                    raise HTTPException(413, detail="workspace_request_too_large")
+                body.extend(chunk)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(400, detail="workspace_request_read_failed") from exc
+        return bytes(body)
+
+    try:
+        raw_body = await asyncio.wait_for(
+            _read_counted_body(),
+            timeout=_WORKSPACE_REQUEST_READ_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as exc:
+        raise HTTPException(408, detail="workspace_request_read_timeout") from exc
+    try:
+        document_text = raw_body.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(400, detail="invalid_workspace_json_encoding") from exc
+    try:
+        document = json.loads(
+            document_text,
+            object_pairs_hook=_workspace_json_object,
+            parse_constant=_reject_workspace_json_constant,
+        )
+    except (TypeError, ValueError, json.JSONDecodeError, RecursionError) as exc:
+        raise HTTPException(400, detail="invalid_workspace_json") from exc
+    if not isinstance(document, dict):
+        raise HTTPException(400, detail="invalid_workspace_json")
+    try:
+        return WorkspaceRequest.model_validate(document)
+    except (ValidationError, RecursionError) as exc:
+        raise HTTPException(422, detail="invalid_workspace_request") from exc
+
+
+@app.put("/workspace", dependencies=[Depends(require_bearer_token)])
+async def set_workspace(request: Request):
+    """Confirm the active Workspace or require an explicit Backend restart.
+
+    A Workspace is composition input frozen before ``ControlRuntime`` and
+    ``RunRuntime`` start.  Mutating environment variables or output/trust
+    roots here would create two authorities inside one Backend lifespan.
+    """
+    req = await _decode_workspace_request(request)
+    try:
+        active_workspace = require_remote_workspace()
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503, detail="remote_workspace_unavailable"
+        ) from exc
+
     ws = req.workspace.strip()
     if not ws:
         raise HTTPException(400, detail="workspace is required")
-    ws_path = Path(ws)
+    ws_path = Path(ws).expanduser()
     if not ws_path.is_absolute():
         raise HTTPException(400, detail="workspace must be an absolute path")
-    if not ws_path.is_dir():
-        raise HTTPException(400, detail=f"directory does not exist: {ws}")
-    core = _get_core()
-    ws_path, output_dir, dirs = _apply_runtime_workspace(core, ws)
-
-    # Persist to .env for next restart
-    env_path = _get_omicsclaw_env_path()
-    if env_path:
-        _update_env_file(
-            env_path,
-            {
-                "OMICSCLAW_DATA_DIRS": ",".join(dirs),
-                "OMICSCLAW_WORKSPACE": ws,
-                "OMICSCLAW_OUTPUT_DIR": str(output_dir),
+    try:
+        # Existence is validated by the next Backend lifespan, not by this
+        # no-mutation command.  Comparing first makes every different absolute
+        # root one deterministic restart-required response and keeps same-root
+        # confirmation idempotent even if external deletion occurs meanwhile.
+        requested_workspace = ws_path.resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(400, detail="invalid workspace path") from exc
+    if requested_workspace != active_workspace:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "error": "workspace_change_requires_backend_restart",
+                "workspace": str(active_workspace),
+                "active_workspace": str(active_workspace),
+                "requested_workspace": str(requested_workspace),
+                "restart_required": True,
             },
         )
 
+    core = _get_core()
+    trusted_dirs = [str(d) for d in getattr(core, "TRUSTED_DATA_DIRS", [])]
+    output_dir = getattr(core, "OUTPUT_DIR", None)
     return {
         "ok": True,
-        "workspace": ws,
-        "trusted_dirs": [str(d) for d in core.TRUSTED_DATA_DIRS],
-        "workspace_env": os.environ.get("OMICSCLAW_WORKSPACE", ""),
-        "output_dir": str(output_dir),
+        "workspace": str(active_workspace),
+        "active_workspace": str(active_workspace),
+        "requested_workspace": str(requested_workspace),
+        "restart_required": False,
+        "trusted_dirs": trusted_dirs,
+        "workspace_env": str(os.environ.get("OMICSCLAW_WORKSPACE", "") or ""),
+        "output_dir": str(output_dir) if output_dir is not None else "",
     }
 
 
@@ -2343,7 +4041,8 @@ async def set_workspace(req: WorkspaceRequest):
 # prevent the first-time-pick flow. `PUT /workspace` does the
 # is_dir() + absolute-path validation when the choice is committed.
 
-@app.get("/files/browse")
+
+@app.get("/files/browse", dependencies=[Depends(require_bearer_token)])
 async def browse_directories(path: Optional[str] = None):
     """List subdirectories under `path` (or $HOME when omitted).
 
@@ -2437,12 +4136,10 @@ def _trusted_file_roots() -> list[Path]:
             roots.append(Path(output_dir).expanduser().resolve(strict=True))
         except OSError:
             pass
-    workspace = str(os.getenv("OMICSCLAW_WORKSPACE", "") or "").strip()
-    if workspace:
-        try:
-            roots.append(Path(workspace).expanduser().resolve(strict=True))
-        except OSError:
-            pass
+    try:
+        roots.append(require_remote_workspace().resolve(strict=True))
+    except (OSError, RuntimeError):
+        pass
     unique: list[Path] = []
     for root in roots:
         if root not in unique:
@@ -2450,12 +4147,70 @@ def _trusted_file_roots() -> list[Path]:
     return unique
 
 
+def _recognized_output_run_root(path: Path) -> Path | None:
+    """Return the canonical Run containing ``path`` by its lexical location.
+
+    The lexical check matters for a symlink entry: resolving the candidate
+    first would erase the fact that an escaping alias was presented from
+    inside a Run.  Generic trusted input trees deliberately return ``None``.
+    """
+    try:
+        core = _get_core()
+    except RuntimeError:
+        return None
+    output_dir = getattr(core, "OUTPUT_DIR", None)
+    if not output_dir:
+        return None
+
+    from omicsclaw.common import run_paths
+
+    output_root = Path(output_dir).expanduser()
+    candidate = Path(os.path.abspath(Path(path).expanduser()))
+    candidate_locations = {candidate}
+    try:
+        candidate_locations.add(Path(path).expanduser().resolve(strict=True))
+    except (OSError, RuntimeError):
+        pass
+    try:
+        canonical_output_root = output_root.resolve(strict=True)
+        lexical_output_root = Path(os.path.abspath(output_root))
+        if not any(
+            _is_relative_to(location, root)
+            for location in candidate_locations
+            for root in (lexical_output_root, canonical_output_root)
+        ):
+            return None
+        runs = run_paths.iter_run_dirs(output_root)
+        for _, run_dir in runs:
+            if run_dir.is_symlink():
+                continue
+            try:
+                canonical_run = run_dir.resolve(strict=True)
+                canonical_run.relative_to(canonical_output_root)
+            except (OSError, RuntimeError, ValueError):
+                continue
+            lexical_roots = {
+                Path(os.path.abspath(run_dir)),
+                canonical_run,
+            }
+            if any(
+                _is_relative_to(location, root)
+                for location in candidate_locations
+                for root in lexical_roots
+            ):
+                return canonical_run
+    except OSError:
+        return None
+    return None
+
+
 def _resolve_trusted_file_path(raw_path: str) -> Path:
     raw = str(raw_path or "").strip()
     if not raw:
         raise HTTPException(400, detail="path is required")
+    candidate = Path(raw).expanduser()
     try:
-        target = Path(raw).expanduser().resolve(strict=True)
+        target = candidate.resolve(strict=True)
     except FileNotFoundError as exc:
         raise HTTPException(404, detail="file does not exist") from exc
     except (OSError, RuntimeError) as exc:
@@ -2465,14 +4220,32 @@ def _resolve_trusted_file_path(raw_path: str) -> Path:
     trusted_roots = _trusted_file_roots()
     if not any(_is_relative_to(target, root) for root in trusted_roots):
         raise HTTPException(403, detail="access denied")
+    run_root = _recognized_output_run_root(candidate)
+    if run_root is not None and not is_scientific_output_file(
+        candidate,
+        output_root=run_root,
+        claim_identities=collect_output_claim_identities(run_root),
+    ):
+        raise HTTPException(404, detail="file does not exist")
     return target
 
 
-def _scan_file_tree(base: Path, depth: int, visited: set[Path] | None = None) -> list[dict[str, Any]]:
+def _scan_file_tree(
+    base: Path,
+    depth: int,
+    visited: set[Path] | None = None,
+    *,
+    run_root: Path | None = None,
+    claim_identities: frozenset[tuple[int, int]] | None = None,
+) -> list[dict[str, Any]]:
     if depth <= 0:
         return []
 
     seen = visited if visited is not None else set()
+    active_run_root = run_root or _recognized_output_run_root(base)
+    active_claim_identities = claim_identities
+    if active_run_root is not None and active_claim_identities is None:
+        active_claim_identities = collect_output_claim_identities(active_run_root)
     try:
         entries = list(base.iterdir())
     except PermissionError as exc:
@@ -2499,6 +4272,13 @@ def _scan_file_tree(base: Path, depth: int, visited: set[Path] | None = None) ->
         if is_dir:
             if name in _FILE_TREE_IGNORED_DIRS:
                 continue
+            entry_run_root = active_run_root or _recognized_output_run_root(entry)
+            if entry_run_root is not None:
+                if entry.is_symlink() or not is_contained_output_path(
+                    entry,
+                    output_root=entry_run_root,
+                ):
+                    continue
             try:
                 real = entry.resolve(strict=True)
             except OSError:
@@ -2507,21 +4287,45 @@ def _scan_file_tree(base: Path, depth: int, visited: set[Path] | None = None) ->
                 continue
             next_seen = set(seen)
             next_seen.add(real)
-            nodes.append({
-                "name": name,
-                "path": str(entry),
-                "type": "directory",
-                "children": _scan_file_tree(entry, depth - 1, next_seen),
-            })
+            nodes.append(
+                {
+                    "name": name,
+                    "path": str(entry),
+                    "type": "directory",
+                    "children": _scan_file_tree(
+                        entry,
+                        depth - 1,
+                        next_seen,
+                        run_root=entry_run_root,
+                        claim_identities=(
+                            active_claim_identities
+                            if entry_run_root == active_run_root
+                            else None
+                        ),
+                    ),
+                }
+            )
         elif is_file:
             try:
+                entry_run_root = active_run_root or _recognized_output_run_root(entry)
+                entry_claim_identities = active_claim_identities
+                if entry_run_root is not None and entry_claim_identities is None:
+                    entry_claim_identities = collect_output_claim_identities(
+                        entry_run_root
+                    )
+                if entry_run_root is not None and not is_scientific_output_file(
+                    entry,
+                    output_root=entry_run_root,
+                    claim_identities=entry_claim_identities,
+                ):
+                    continue
                 nodes.append(_classify_tree_file(entry))
             except OSError:
                 continue
     return nodes
 
 
-@app.get("/files/tree")
+@app.get("/files/tree", dependencies=[Depends(require_bearer_token)])
 async def files_tree(
     path: str = Query(..., description="Directory path on the backend host"),
     depth: int = Query(3, ge=1, le=10),
@@ -2530,23 +4334,32 @@ async def files_tree(
     raw = str(path or "").strip()
     if not raw:
         raise HTTPException(400, detail="path is required")
+    candidate = Path(raw).expanduser()
     try:
-        base = Path(raw).expanduser().resolve(strict=True)
+        base = candidate.resolve(strict=True)
     except FileNotFoundError as exc:
         raise HTTPException(404, detail="directory does not exist") from exc
     except (OSError, RuntimeError) as exc:
         raise HTTPException(400, detail=f"invalid path: {exc}") from exc
     if not base.is_dir():
         raise HTTPException(400, detail="path is not a directory")
+    run_root = _recognized_output_run_root(candidate)
+    if run_root is not None and not is_contained_output_path(
+        candidate,
+        output_root=run_root,
+    ):
+        raise HTTPException(404, detail="directory does not exist")
 
     return {
         "root": str(base),
-        "tree": _scan_file_tree(base, depth),
+        "tree": _scan_file_tree(base, depth, run_root=run_root),
     }
 
 
-@app.get("/files/serve")
-async def files_serve(path: str = Query(..., description="Trusted file path on the backend host")):
+@app.get("/files/serve", dependencies=[Depends(require_bearer_token)])
+async def files_serve(
+    path: str = Query(..., description="Trusted file path on the backend host"),
+):
     """Serve a file from the backend host under trusted workspace/output roots."""
     target = _resolve_trusted_file_path(path)
     media_type, _ = mimetypes.guess_type(str(target))
@@ -2562,18 +4375,52 @@ async def files_serve(path: str = Query(..., description="Trusted file path on t
 # GET /health
 # ---------------------------------------------------------------------------
 
-@app.get("/health")
+
 async def health():
     core = _get_core()
-    return {
+    payload = {
         "status": "ok",
         "version": __version__,
+        "backend_process_epoch": _BACKEND_PROCESS_EPOCH,
         "provider": core.LLM_PROVIDER_NAME,
         "model": core.OMICSCLAW_MODEL,
         "skills_count": core._primary_skill_count(),
         "kg": _kg_status_payload(),
+        "contracts": {
+            "desktop_chat": desktop_chat_contract(),
+            "desktop_run": desktop_run_contract(),
+            "desktop_turn_observation": desktop_turn_observation_contract(),
+            "desktop_turn_submission": desktop_turn_submission_contract(),
+        },
         **_runtime_health_payload(core),
     }
+    # Production serves full health only after lifespan has bound the exclusive
+    # Control Runtime. Test-only direct function calls without lifespan retain
+    # their historical diagnostic payload, while every live authenticated
+    # Backend exposes the immutable Database authority identity.
+    if _desktop_control_runtime is not None:
+        payload["control_authority_id"] = (
+            _desktop_control_runtime.repository.control_authority_id
+        )
+    return payload
+
+
+@app.api_route("/health", methods=["GET", "HEAD"], name="health")
+async def _health_endpoint(request: Request):
+    authority = remote_bearer_authority_for_app(request.app)
+    if authority.configured:
+        authorization_values = request.headers.getlist("authorization")
+        if not authorization_values:
+            return {
+                "status": "ok",
+                "version": __version__,
+                "launch_id": str(os.getenv("OMICSCLAW_DESKTOP_LAUNCH_ID", "") or ""),
+                "auth_required": True,
+            }
+        authority.enforce(
+            authorization_values[0] if len(authorization_values) == 1 else ""
+        )
+    return await health()
 
 
 # ---------------------------------------------------------------------------
@@ -2582,6 +4429,7 @@ async def health():
 # (skill.yaml v2 / SKILL.md frontmatter + parameters.yaml v1) that is not part
 # of the in-memory registry info dict.
 # ---------------------------------------------------------------------------
+
 
 def _skill_metadata(skill_dir: Path | None):
     """Dual-track per-skill metadata, or ``None`` for a missing directory.
@@ -2597,6 +4445,18 @@ def _skill_metadata(skill_dir: Path | None):
     from omicsclaw.skill.lazy_metadata import LazySkillMetadata
 
     return LazySkillMetadata(skill_dir)
+
+
+def _skill_security_status(meta) -> dict[str, object]:
+    """Expose reviewed declaration status without implying OS confinement."""
+    from omicsclaw.skill.execution_contract import describe_skill_security
+
+    return describe_skill_security(
+        {
+            "security_contract": meta.security_contract if meta else {},
+            "security_reviewed": meta.security_reviewed if meta else False,
+        }
+    ).to_dict()
 
 
 def _skill_source(script_path: Path | None) -> str:
@@ -2626,7 +4486,11 @@ def _skill_resources(skill_dir: Path | None, script_path: Path | None) -> list[d
         resources.append({"path": script_path.name, "kind": "script"})
     # skill.yaml (v2 contract) and parameters.yaml (v1 sidecar) are both config;
     # a skill ships one or the other (or both, mid-migration) — list whatever exists.
-    for special, kind in (("SKILL.md", "doc"), ("skill.yaml", "config"), ("parameters.yaml", "config")):
+    for special, kind in (
+        ("SKILL.md", "doc"),
+        ("skill.yaml", "config"),
+        ("parameters.yaml", "config"),
+    ):
         if (skill_dir / special).exists():
             resources.append({"path": special, "kind": kind})
     ref_dir = skill_dir / "references"
@@ -2673,7 +4537,11 @@ def _skill_diagnostics(
         checks.append({"label": label, "status": status, "detail": detail})
 
     skill_md_exists = (skill_dir / "SKILL.md").exists()
-    add("SKILL.md", skill_md_exists, "skill definition found" if skill_md_exists else "SKILL.md missing")
+    add(
+        "SKILL.md",
+        skill_md_exists,
+        "skill definition found" if skill_md_exists else "SKILL.md missing",
+    )
     script_exists = script_path is not None and script_path.exists()
     add(
         "entry script",
@@ -2694,8 +4562,15 @@ def _skill_diagnostics(
         contract_label, contract_detail = "skill.yaml", "runtime contract declared (v2)"
     else:
         contract_label = "parameters.yaml"
-        contract_detail = "runtime contract declared" if params_exists else "no parameters.yaml"
-    add(contract_label, skill_yaml_exists or params_exists, contract_detail, warn_only=True)
+        contract_detail = (
+            "runtime contract declared" if params_exists else "no parameters.yaml"
+        )
+    add(
+        contract_label,
+        skill_yaml_exists or params_exists,
+        contract_detail,
+        warn_only=True,
+    )
     has_refs = (skill_dir / "references").is_dir()
     add(
         "references",
@@ -2709,6 +4584,7 @@ def _skill_diagnostics(
 # ---------------------------------------------------------------------------
 # GET /skills — list all skills grouped by domain
 # ---------------------------------------------------------------------------
+
 
 @app.get("/skills")
 async def list_skills():
@@ -2729,6 +4605,11 @@ async def list_skills():
         status = "ready" if (script_path and script_path.exists()) else "planned"
         meta = _skill_metadata(skill_dir)
         version = meta.version if meta else None
+        readiness = _skill_health(
+            status,
+            skill_md_exists=bool(skill_dir and (skill_dir / "SKILL.md").exists()),
+            script_exists=bool(script_path and script_path.exists()),
+        )
         entry = {
             "name": alias,
             "description": info.get("description", ""),
@@ -2737,13 +4618,15 @@ async def list_skills():
             # Governance lifecycle (draft/mvp/stable/deprecated) + authorship —
             # distinct from `status` above, which is script-on-disk availability.
             "lifecycle_status": meta.lifecycle_status if meta else "mvp",
+            "superseded_by": (meta.superseded_by if meta else "") or None,
+            "validation_level": meta.validation_level if meta else "smoke-only",
             "origin": meta.origin if meta else "human",
+            "security": _skill_security_status(meta),
             "version": str(version) if version else None,
-            "health": _skill_health(
-                status,
-                skill_md_exists=bool(skill_dir and (skill_dir / "SKILL.md").exists()),
-                script_exists=bool(script_path and script_path.exists()),
-            ),
+            # ``health`` is retained as a compatibility alias.  The value is
+            # file readiness, not the evidence ledger's runtime health.
+            "readiness": readiness,
+            "health": readiness,
         }
         domain_groups.setdefault(domain, []).append(entry)
 
@@ -2753,12 +4636,14 @@ async def list_skills():
         skills_in_domain = domain_groups.get(domain_key, [])
         if not skills_in_domain:
             continue
-        result.append({
-            "domain": domain_key,
-            "domain_name": domain_info.get("name", domain_key.title()),
-            "primary_data_types": domain_info.get("primary_data_types", []),
-            "skills": skills_in_domain,
-        })
+        result.append(
+            {
+                "domain": domain_key,
+                "domain_name": domain_info.get("name", domain_key.title()),
+                "primary_data_types": domain_info.get("primary_data_types", []),
+                "skills": skills_in_domain,
+            }
+        )
 
     # Include "other" domain for dynamically discovered skills
     known_domains = set(skill_registry.domains.keys())
@@ -2767,12 +4652,14 @@ async def list_skills():
         if domain_key not in known_domains:
             other_skills.extend(skills)
     if other_skills:
-        result.append({
-            "domain": "other",
-            "domain_name": "Other (Dynamically Discovered)",
-            "primary_data_types": [],
-            "skills": other_skills,
-        })
+        result.append(
+            {
+                "domain": "other",
+                "domain_name": "Other (Dynamically Discovered)",
+                "primary_data_types": [],
+                "skills": other_skills,
+            }
+        )
 
     return {"domains": result, "total": sum(len(d["skills"]) for d in result)}
 
@@ -2780,6 +4667,7 @@ async def list_skills():
 # ---------------------------------------------------------------------------
 # GET /skills/{domain}/{skill_name} — single skill detail
 # ---------------------------------------------------------------------------
+
 
 @app.get("/skills/{domain}/{skill_name}")
 async def get_skill(domain: str, skill_name: str):
@@ -2813,6 +4701,11 @@ async def get_skill(domain: str, skill_name: str):
     # Dual-track identity metadata (ADR 0037): sourced from skill.yaml (v2) or
     # SKILL.md frontmatter (v1) via the same reader the registry/catalog use.
     version = meta.version if meta else None
+    readiness = _skill_health(
+        status,
+        skill_md_exists=bool(skill_dir and (skill_dir / "SKILL.md").exists()),
+        script_exists=bool(script_path and script_path.exists()),
+    )
     return {
         "name": skill_name,
         "domain": skill_domain,
@@ -2821,22 +4714,23 @@ async def get_skill(domain: str, skill_name: str):
         # Governance lifecycle (draft/mvp/stable/deprecated) + authorship —
         # distinct from `status` above, which is script-on-disk availability.
         "lifecycle_status": meta.lifecycle_status if meta else "mvp",
+        "superseded_by": (meta.superseded_by if meta else "") or None,
+        "validation_level": meta.validation_level if meta else "smoke-only",
         "origin": meta.origin if meta else "human",
+        "security": _skill_security_status(meta),
         "script_path": str(script) if script else None,
         "aliases": [
-            a for a, i in skill_registry.skills.items()
+            a
+            for a, i in skill_registry.skills.items()
             if i.get("alias") == skill_name and a != skill_name
         ],
         # --- richer detail (skill.yaml v2 / SKILL.md+parameters.yaml v1) ---
         "version": str(version) if version else None,
         "source": _skill_source(script_path),
-        "health": _skill_health(
-            status,
-            # Existence — NOT read-success — mirrors list_skills so the two
-            # endpoints agree on health even when SKILL.md exists but is unreadable.
-            skill_md_exists=bool(skill_dir and (skill_dir / "SKILL.md").exists()),
-            script_exists=bool(script_path and script_path.exists()),
-        ),
+        # Existence — NOT read-success — mirrors list_skills so the two
+        # endpoints agree even when SKILL.md exists but is unreadable.
+        "readiness": readiness,
+        "health": readiness,
         "author": (meta.author if meta else "") or None,
         "license": (meta.license if meta else "") or None,
         "tags": [str(t) for t in (meta.tags if meta else []) if str(t).strip()],
@@ -2849,8 +4743,207 @@ async def get_skill(domain: str, skill_name: str):
 
 
 # ---------------------------------------------------------------------------
+# Skill evolution governance — evidence ledger + human-gated decisions
+# ---------------------------------------------------------------------------
+
+
+def _skill_evolution_governance():
+    from omicsclaw.skill.evolution_governance import (
+        default_skill_evolution_governance,
+    )
+
+    return default_skill_evolution_governance()
+
+
+async def _require_skill_evolution_bearer_token(
+    request: Request,
+) -> None:
+    """Fail closed for governance reads and mutations.
+
+    Remote execution routes intentionally retain their local-first no-token
+    default.  Skill evolution can mutate canonical repository state, so its
+    dedicated boundary is unavailable until an explicit shared token exists.
+    """
+
+    authorization_values = request.headers.getlist("authorization")
+    authorization: str | None = None
+    if len(authorization_values) == 1:
+        authorization = authorization_values[0]
+    elif authorization_values:
+        authorization = ""
+    _skill_evolution_bearer_policy_for_scope(request.scope).enforce(authorization)
+
+
+@app.get(
+    "/skill-evolution",
+    dependencies=[Depends(_require_skill_evolution_bearer_token)],
+)
+async def get_skill_evolution_snapshot():
+    governance = _skill_evolution_governance()
+    return await asyncio.to_thread(governance.snapshot)
+
+
+@app.post(
+    "/skill-evolution/refresh",
+    dependencies=[Depends(_require_skill_evolution_bearer_token)],
+)
+async def refresh_skill_evolution():
+    governance = _skill_evolution_governance()
+    try:
+        created = await asyncio.to_thread(governance.refresh)
+        snapshot = await asyncio.to_thread(governance.snapshot)
+    except Exception as exc:
+        logger.exception("Skill evolution refresh failed")
+        raise HTTPException(500, detail=str(exc)) from exc
+    return {
+        "created": [proposal.to_dict() for proposal in created],
+        **snapshot,
+    }
+
+
+@app.post(
+    "/skill-evolution/proposals/gotcha",
+    dependencies=[Depends(_require_skill_evolution_bearer_token)],
+)
+async def propose_skill_gotcha(req: EvolutionGotchaProposalRequest):
+    from omicsclaw.skill.evolution_governance import EvolutionRevalidationError
+
+    governance = _skill_evolution_governance()
+    try:
+        proposal = await asyncio.to_thread(
+            governance.propose_gotcha,
+            target_skill=req.target_skill,
+            proposer=req.proposer,
+            reason=req.reason,
+            support_event_ids=req.support_event_ids,
+            entry=req.entry.model_dump(),
+        )
+    except KeyError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+    except (EvolutionRevalidationError, ValueError) as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Skill Gotcha proposal failed")
+        raise HTTPException(500, detail=str(exc)) from exc
+    return proposal.to_dict()
+
+
+@app.post(
+    "/skill-evolution/proposals/deprecation",
+    dependencies=[Depends(_require_skill_evolution_bearer_token)],
+)
+async def propose_skill_deprecation(req: EvolutionDeprecationProposalRequest):
+    from omicsclaw.skill.evolution_governance import EvolutionRevalidationError
+
+    governance = _skill_evolution_governance()
+    try:
+        proposal = await asyncio.to_thread(
+            governance.propose_deprecation,
+            target_skill=req.target_skill,
+            replacement_skill=req.replacement_skill,
+            proposer=req.proposer,
+            reason=req.reason,
+            support_event_ids=req.support_event_ids,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+    except (EvolutionRevalidationError, ValueError) as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Skill deprecation proposal failed")
+        raise HTTPException(500, detail=str(exc)) from exc
+    return proposal.to_dict()
+
+
+@app.post(
+    "/skill-evolution/reconcile",
+    dependencies=[Depends(_require_skill_evolution_bearer_token)],
+)
+async def reconcile_skill_evolution(req: EvolutionReconciliationRequest):
+    from omicsclaw.skill.evolution_governance import EvolutionRevalidationError
+
+    governance = _skill_evolution_governance()
+    try:
+        return await asyncio.to_thread(
+            governance.reconcile,
+            operator=req.operator,
+            reason=req.reason,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+    except (EvolutionRevalidationError, ValueError) as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Skill evolution reconciliation failed")
+        raise HTTPException(500, detail=str(exc)) from exc
+
+
+@app.post(
+    "/skill-evolution/{proposal_id}/approve",
+    dependencies=[Depends(_require_skill_evolution_bearer_token)],
+)
+async def approve_skill_evolution(
+    proposal_id: str,
+    req: EvolutionApprovalRequest,
+):
+    from omicsclaw.skill.evolution_governance import EvolutionRevalidationError
+
+    governance = _skill_evolution_governance()
+    try:
+        receipt = await asyncio.to_thread(
+            governance.approve,
+            proposal_id,
+            approver=req.approver,
+            reason=req.reason,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+    except (EvolutionRevalidationError, ValueError) as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Skill evolution approval failed")
+        raise HTTPException(500, detail=str(exc)) from exc
+    return {
+        "proposal_id": receipt.proposal_id,
+        "status": receipt.status,
+        "approved_by": receipt.approved_by,
+        "before_hash": receipt.before_hash,
+        "after_hash": receipt.after_hash,
+    }
+
+
+@app.post(
+    "/skill-evolution/{proposal_id}/reject",
+    dependencies=[Depends(_require_skill_evolution_bearer_token)],
+)
+async def reject_skill_evolution(
+    proposal_id: str,
+    req: EvolutionRejectionRequest,
+):
+    from omicsclaw.skill.evolution_governance import EvolutionRevalidationError
+
+    governance = _skill_evolution_governance()
+    try:
+        proposal = await asyncio.to_thread(
+            governance.reject,
+            proposal_id,
+            approver=req.approver,
+            reason=req.reason,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+    except (EvolutionRevalidationError, ValueError) as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Skill evolution rejection failed")
+        raise HTTPException(500, detail=str(exc)) from exc
+    return proposal.to_dict()
+
+
+# ---------------------------------------------------------------------------
 # GET /skills/installed — list OmicsClaw user-installed skill packs
 # ---------------------------------------------------------------------------
+
 
 @app.get("/skills/installed")
 async def list_installed_skills():
@@ -2866,19 +4959,25 @@ async def list_installed_skills():
         result: list[dict[str, Any]] = []
         for entry in entries:
             record = entry.record
-            result.append({
-                "name": record.extension_name if record is not None else entry.path.name,
-                "directory_name": entry.path.name,
-                "manifest_name": record.manifest_name if record is not None else "",
-                "source": record.source if record is not None else "",
-                "source_kind": record.source_kind if record is not None else "",
-                "installed_at": record.installed_at if record is not None else "",
-                "path": str(entry.path),
-                "relative_install_path": record.relative_install_path if record is not None else "",
-                "tracked": record is not None,
-                "enabled": entry.state.enabled,
-                "disabled_reason": entry.state.disabled_reason,
-            })
+            result.append(
+                {
+                    "name": record.extension_name
+                    if record is not None
+                    else entry.path.name,
+                    "directory_name": entry.path.name,
+                    "manifest_name": record.manifest_name if record is not None else "",
+                    "source": record.source if record is not None else "",
+                    "source_kind": record.source_kind if record is not None else "",
+                    "installed_at": record.installed_at if record is not None else "",
+                    "path": str(entry.path),
+                    "relative_install_path": record.relative_install_path
+                    if record is not None
+                    else "",
+                    "tracked": record is not None,
+                    "enabled": entry.state.enabled,
+                    "disabled_reason": entry.state.disabled_reason,
+                }
+            )
 
         result.sort(
             key=lambda item: ((item["installed_at"] or ""), item["name"].lower()),
@@ -2894,6 +4993,7 @@ async def list_installed_skills():
 # POST /skills/install — install a user skill pack into OmicsClaw
 # ---------------------------------------------------------------------------
 
+
 @app.post("/skills/install")
 async def install_skill(req: SkillInstallRequest):
     source = req.source.strip()
@@ -2901,7 +5001,9 @@ async def install_skill(req: SkillInstallRequest):
         raise HTTPException(400, detail="source is required")
 
     try:
-        from omicsclaw.surfaces.cli._skill_management_support import install_skill_from_source
+        from omicsclaw.surfaces.cli._skill_management_support import (
+            install_skill_from_source,
+        )
 
         statuses = await asyncio.to_thread(
             install_skill_from_source,
@@ -2912,7 +5014,9 @@ async def install_skill(req: SkillInstallRequest):
         logger.exception("Skill install failed")
         raise HTTPException(500, detail=str(exc))
 
-    success = not any(str(getattr(status, "level", "")) == "error" for status in statuses)
+    success = not any(
+        str(getattr(status, "level", "")) == "error" for status in statuses
+    )
     return {
         "success": success,
         "source": source,
@@ -2923,6 +5027,7 @@ async def install_skill(req: SkillInstallRequest):
 # ---------------------------------------------------------------------------
 # POST /skills/uninstall — remove a user-installed skill pack
 # ---------------------------------------------------------------------------
+
 
 @app.post("/skills/uninstall")
 async def uninstall_skill(req: SkillUninstallRequest):
@@ -2943,7 +5048,9 @@ async def uninstall_skill(req: SkillUninstallRequest):
         logger.exception("Skill uninstall failed")
         raise HTTPException(500, detail=str(exc))
 
-    success = not any(str(getattr(status, "level", "")) == "error" for status in statuses)
+    success = not any(
+        str(getattr(status, "level", "")) == "error" for status in statuses
+    )
     return {
         "success": success,
         "name": name,
@@ -2954,6 +5061,7 @@ async def uninstall_skill(req: SkillUninstallRequest):
 # ---------------------------------------------------------------------------
 # GET /memory/browse — browse memory graph nodes
 # ---------------------------------------------------------------------------
+
 
 async def _decorate_analysis_titles(children: list) -> None:
     """Replace ``name`` with a derived display label for analysis://*
@@ -3046,6 +5154,7 @@ async def memory_browse(
 # GET /memory/search — full-text search across memories
 # ---------------------------------------------------------------------------
 
+
 @app.get("/memory/search")
 async def memory_search(
     q: str = Query(..., description="Search query"),
@@ -3071,6 +5180,7 @@ async def memory_search(
 # NOTE: static routes (/thread/create, /thread/list) are declared BEFORE the
 # dynamic /thread/{thread_id} so the literal paths are not captured by it.
 # ---------------------------------------------------------------------------
+
 
 class ThreadCreateRequest(BaseModel):
     name: str
@@ -3238,10 +5348,22 @@ async def thread_sources(thread_id: str):
     gracefully.
     """
     if not _KG_AVAILABLE:
-        return {"thread_id": thread_id, "sources": [], "returned": 0, "total": 0, "kg_available": False}
+        return {
+            "thread_id": thread_id,
+            "sources": [],
+            "returned": 0,
+            "total": 0,
+            "kg_available": False,
+        }
     home = _resolve_shared_kg_home()
     if not home:
-        return {"thread_id": thread_id, "sources": [], "returned": 0, "total": 0, "kg_available": False}
+        return {
+            "thread_id": thread_id,
+            "sources": [],
+            "returned": 0,
+            "total": 0,
+            "kg_available": False,
+        }
     from omicsclaw.surfaces.desktop import hypotheses as hyp_svc
 
     slugs = await _thread_source_slugs(thread_id) or []
@@ -3331,7 +5453,9 @@ def thread_confirm_verdict(thread_id: str, slug: str, req: ThreadConfirmVerdictR
 
 
 @app.post("/thread/{thread_id}/hypothesis/{slug}/route-preview")
-async def thread_route_preview(thread_id: str, slug: str, req: ThreadRoutePreviewRequest):
+async def thread_route_preview(
+    thread_id: str, slug: str, req: ThreadRoutePreviewRequest
+):
     """Preview the Analysis Router's recommendation for testing a hypothesis (ADR 0021 §4).
 
     Shows the recommended skill + route kind + the thread's bound dataset before the user
@@ -3349,9 +5473,19 @@ async def thread_route_preview(thread_id: str, slug: str, req: ThreadRoutePrevie
 
 
 class RunPacketRequest(BaseModel):
-    packet_id: str = Field(..., min_length=1, description="Outbox packet id (from kg_build_packet or experiment submit).")
-    input_path: str | None = Field(None, description="Explicit dataset path; defaults to the thread's bound dataset.")
-    verdict: str = Field("inconclusive", description="validated | refuted | inconclusive. Defaults to inconclusive (analysis ran; the user confirms the scientific verdict in Ideate).")
+    packet_id: str = Field(
+        ...,
+        min_length=1,
+        description="Outbox packet id (from kg_build_packet or experiment submit).",
+    )
+    input_path: str | None = Field(
+        None,
+        description="Explicit dataset path; defaults to the thread's bound dataset.",
+    )
+    verdict: str = Field(
+        "inconclusive",
+        description="validated | refuted | inconclusive. Defaults to inconclusive (analysis ran; the user confirms the scientific verdict in Ideate).",
+    )
 
 
 @app.get("/thread/{thread_id}/outbox")
@@ -3411,9 +5545,17 @@ async def thread_run_packet(thread_id: str, req: RunPacketRequest):
 
 
 class RunHypothesisRequest(BaseModel):
-    hypothesis_slug: str = Field(..., min_length=1, description="Hypothesis page slug to test.")
-    input_path: str | None = Field(None, description="Explicit dataset path; defaults to the thread's bound dataset.")
-    verdict: str = Field("inconclusive", description="validated | refuted | inconclusive (the user confirms the scientific verdict in Ideate).")
+    hypothesis_slug: str = Field(
+        ..., min_length=1, description="Hypothesis page slug to test."
+    )
+    input_path: str | None = Field(
+        None,
+        description="Explicit dataset path; defaults to the thread's bound dataset.",
+    )
+    verdict: str = Field(
+        "inconclusive",
+        description="validated | refuted | inconclusive (the user confirms the scientific verdict in Ideate).",
+    )
 
 
 @app.post("/thread/{thread_id}/run-hypothesis")
@@ -3453,7 +5595,9 @@ async def thread_run_hypothesis(thread_id: str, req: RunHypothesisRequest):
         # Router-authoritative skill on the SAME (claim, thread dataset) the
         # Ideate route-preview used (D-3) — then build + run the packet.
         dataset_path = await resolve_thread_dataset_path(_memory_client, thread_id)
-        target_skill = await asyncio.to_thread(kg_tools._router_skill_for_hypothesis, slug, home, dataset_path)
+        target_skill = await asyncio.to_thread(
+            kg_tools._router_skill_for_hypothesis, slug, home, dataset_path
+        )
         packet = await asyncio.to_thread(kg.build_packet, cfg, slug, target_skill, None)
         await asyncio.to_thread(kg.write_packet, cfg, packet)
         result = await outbox_svc.run_packet(
@@ -3471,7 +5615,12 @@ async def thread_run_hypothesis(thread_id: str, req: RunHypothesisRequest):
         raise HTTPException(500, detail=str(exc))
     if result.get("status") == "error":
         raise HTTPException(400, detail=result.get("error", "could not run hypothesis"))
-    return {"thread_id": thread_id, "hypothesis_slug": slug, "packet_id": packet.packet_id, **result}
+    return {
+        "thread_id": thread_id,
+        "hypothesis_slug": slug,
+        "packet_id": packet.packet_id,
+        **result,
+    }
 
 
 @app.put("/thread/{thread_id}")
@@ -3486,7 +5635,9 @@ async def thread_update(thread_id: str, req: ThreadUpdateRequest):
         )
         if tm is None:
             raise HTTPException(404, detail=f"thread not found: {thread_id}")
-        _seed_project_dir(tm.thread_id, tm.name)  # ADR 0035: keep project_meta name in sync
+        _seed_project_dir(
+            tm.thread_id, tm.name
+        )  # ADR 0035: keep project_meta name in sync
         return tm.model_dump()
     except HTTPException:
         raise
@@ -3554,6 +5705,7 @@ async def thread_set_preference(thread_id: str, req: ThreadPreferenceRequest):
 # ---------------------------------------------------------------------------
 # Onboarding & global bench preferences (Phase 5, BE-ONBOARD-8 / BE-PREF-7)
 # ---------------------------------------------------------------------------
+
 
 class OnboardUserRequest(BaseModel):
     # The frontend's (<=5) onboarding answers, stored verbatim to the versioned
@@ -3626,6 +5778,7 @@ async def set_bench_preference_route(req: BenchPreferenceRequest):
 
 # -- Pydantic models for memory endpoints -----------------------------------
 
+
 class MemoryCreateRequest(BaseModel):
     parent_path: str = ""
     content: str
@@ -3660,6 +5813,7 @@ class ScopedPruneRequest(BaseModel):
 
 # -- Helper: get graph / glossary / changeset services ----------------------
 
+
 def _get_review_log():
     """Return the singleton ReviewLog (cold-path operations).
 
@@ -3680,6 +5834,7 @@ def _get_glossary_service():
     """Return GlossaryService, raising 503 if the memory module is not available."""
     try:
         from omicsclaw.memory import get_glossary_service
+
         return get_glossary_service()
     except Exception as exc:
         raise HTTPException(503, detail=f"Memory glossary service unavailable: {exc}")
@@ -3689,6 +5844,7 @@ def _get_changeset_store():
     """Return ChangesetStore, raising 503 if the memory module is not available."""
     try:
         from omicsclaw.memory.snapshot import get_changeset_store
+
         return get_changeset_store()
     except Exception as exc:
         raise HTTPException(503, detail=f"Memory changeset store unavailable: {exc}")
@@ -3791,7 +5947,9 @@ async def _discard_pending_memory_review_changes() -> dict[str, Any]:
     changed_entries = [
         (key, entry)
         for key, entry in all_rows.items()
-        if not _rows_equal(entry.get("table", ""), entry.get("before"), entry.get("after"))
+        if not _rows_equal(
+            entry.get("table", ""), entry.get("before"), entry.get("after")
+        )
     ]
     if not changed_entries:
         return {"discarded": 0, "remaining": 0, "nodes_refreshed": 0}
@@ -3800,9 +5958,7 @@ async def _discard_pending_memory_review_changes() -> dict[str, Any]:
     delete_order = ("paths", "glossary_keywords", "edges", "memories", "nodes")
     restore_order = ("nodes", "memories", "edges", "paths", "glossary_keywords")
     affected_node_uuids: set[str] = set()
-    by_table: dict[str, list[dict[str, Any]]] = {
-        table: [] for table in model_map
-    }
+    by_table: dict[str, list[dict[str, Any]]] = {table: [] for table in model_map}
     for _, entry in changed_entries:
         table = str(entry.get("table", "") or "")
         if table in by_table:
@@ -3859,7 +6015,9 @@ async def _discard_pending_memory_review_changes() -> dict[str, Any]:
                 if table == "memories":
                     identity = _memory_snapshot_row_identity(table, before)
                     if identity is None:
-                        raise ValueError("Cannot restore memory review row without an identity")
+                        raise ValueError(
+                            "Cannot restore memory review row without an identity"
+                        )
                     existing = await session.get(model_cls, identity)
                     if existing is None and "content" not in payload:
                         raise ValueError(
@@ -3891,6 +6049,7 @@ async def _discard_pending_memory_review_changes() -> dict[str, Any]:
 
 
 # -- POST /memory/create ----------------------------------------------------
+
 
 @app.post("/memory/create")
 async def memory_create(req: MemoryCreateRequest):
@@ -3924,6 +6083,7 @@ async def memory_create(req: MemoryCreateRequest):
 
 # -- PUT /memory/update ------------------------------------------------------
 
+
 @app.put("/memory/update")
 async def memory_update(req: MemoryUpdateRequest):
     """Update an existing memory node's content or priority."""
@@ -3931,7 +6091,9 @@ async def memory_update(req: MemoryUpdateRequest):
         raise HTTPException(503, detail="Memory system not available")
 
     if req.content is None and req.priority is None:
-        raise HTTPException(400, detail="At least one of content or priority must be provided")
+        raise HTTPException(
+            400, detail="At least one of content or priority must be provided"
+        )
 
     try:
         result = await _memory_client.update_existing(
@@ -3948,6 +6110,7 @@ async def memory_update(req: MemoryUpdateRequest):
 
 
 # -- DELETE /memory/delete ---------------------------------------------------
+
 
 @app.delete("/memory/delete")
 async def memory_delete(
@@ -3970,6 +6133,7 @@ async def memory_delete(
 
 
 # -- GET /memory/children ---------------------------------------------------
+
 
 @app.get("/memory/children")
 async def memory_children(
@@ -3998,9 +6162,7 @@ async def memory_children(
         # to the path's child node. Front-end sends consistent
         # ``(node_uuid, domain, path)`` triples returned from a previous
         # list_children_rich call so the URI lookup hits the same parent.
-        parent_uri = (
-            f"{domain_str}://{path_str}" if path_str else f"{domain_str}://"
-        )
+        parent_uri = f"{domain_str}://{path_str}" if path_str else f"{domain_str}://"
         children = await _memory_client.list_children_rich(
             parent_uri,
             context_domain=domain_str,
@@ -4015,6 +6177,7 @@ async def memory_children(
 
 
 # -- GET /memory/domains ----------------------------------------------------
+
 
 @app.get("/memory/domains")
 async def memory_domains(
@@ -4069,8 +6232,7 @@ async def memory_domains(
             domain_counts[d] = domain_counts.get(d, 0) + 1
 
         domains = [
-            {"domain": d, "node_count": c}
-            for d, c in sorted(domain_counts.items())
+            {"domain": d, "node_count": c} for d, c in sorted(domain_counts.items())
         ]
         return {"domains": domains, "total_nodes": len(all_paths)}
     except Exception as exc:
@@ -4079,6 +6241,7 @@ async def memory_domains(
 
 
 # -- GET /memory/namespaces --------------------------------------------------
+
 
 @app.get("/memory/namespaces")
 async def memory_namespaces():
@@ -4108,6 +6271,7 @@ async def memory_namespaces():
 
 # -- GET /memory/recent ------------------------------------------------------
 
+
 @app.get("/memory/recent")
 async def memory_recent(
     limit: int = Query(10, ge=1, le=100, description="Max results"),
@@ -4121,9 +6285,7 @@ async def memory_recent(
         # core://agent/* alongside per-namespace rows. Multi-tenant bot
         # surfaces use the default (strict) so one user's shared writes
         # don't bleed into another's view.
-        results = await _memory_client.get_recent(
-            limit=limit, include_shared=True
-        )
+        results = await _memory_client.get_recent(limit=limit, include_shared=True)
         return {"results": results, "count": len(results)}
     except Exception as exc:
         logger.exception("Memory recent error")
@@ -4131,6 +6293,7 @@ async def memory_recent(
 
 
 # -- GET /memory/review/changes ----------------------------------------------
+
 
 @app.get("/memory/review/changes")
 async def memory_review_changes():
@@ -4151,6 +6314,7 @@ async def memory_review_changes():
 
 # -- POST /memory/review/approve ---------------------------------------------
 
+
 @app.post("/memory/review/approve")
 async def memory_review_approve():
     """Approve and clear all pending changes (integrate into memory)."""
@@ -4166,6 +6330,7 @@ async def memory_review_approve():
 
 
 # -- POST /memory/review/rollback --------------------------------------------
+
 
 @app.post("/memory/review/rollback")
 async def memory_review_rollback(req: MemoryRollbackRequest):
@@ -4203,6 +6368,7 @@ async def memory_review_rollback(req: MemoryRollbackRequest):
 
 
 # -- GET /memory/review/orphans ----------------------------------------------
+
 
 @app.get("/memory/review/orphans")
 async def memory_review_orphans(
@@ -4251,6 +6417,7 @@ async def memory_review_orphans(
 
 # -- GET /memory/review/version-chain ----------------------------------------
 
+
 @app.get("/memory/review/version-chain")
 async def memory_review_version_chain(
     uri: str = Query(..., description="Memory URI (e.g. 'core://agent')"),
@@ -4293,6 +6460,7 @@ async def memory_review_version_chain(
 
 # -- POST /memory/review/clear -----------------------------------------------
 
+
 @app.post("/memory/review/clear")
 async def memory_review_clear():
     """Discard all pending changes by rolling memory state back to snapshots."""
@@ -4309,6 +6477,7 @@ async def memory_review_clear():
 
 
 # -- POST /memory/glossary/add -----------------------------------------------
+
 
 @app.post("/memory/glossary/add")
 async def memory_glossary_add(req: GlossaryRequest):
@@ -4331,6 +6500,7 @@ async def memory_glossary_add(req: GlossaryRequest):
 
 # -- DELETE /memory/glossary/remove -------------------------------------------
 
+
 @app.delete("/memory/glossary/remove")
 async def memory_glossary_remove(req: GlossaryRequest):
     """Remove a glossary keyword binding from a memory node."""
@@ -4351,6 +6521,7 @@ async def memory_glossary_remove(req: GlossaryRequest):
 
 
 # -- GET /memory/scoped -------------------------------------------------------
+
 
 @app.get("/memory/scoped")
 async def memory_scoped_list(
@@ -4378,26 +6549,29 @@ async def memory_scoped_list(
 
     records = []
     for h in headers:
-        records.append({
-            "memory_id": h.memory_id,
-            "scope": h.scope,
-            "title": h.title,
-            "description": h.description,
-            "owner": h.owner,
-            "freshness": h.freshness,
-            "updated_at": h.updated_at,
-            "created_at": h.created_at,
-            "domain": h.domain,
-            "keywords": list(h.keywords),
-            "dataset_refs": list(h.dataset_refs),
-            "path": str(h.path),
-            "relative_path": h.relative_path,
-        })
+        records.append(
+            {
+                "memory_id": h.memory_id,
+                "scope": h.scope,
+                "title": h.title,
+                "description": h.description,
+                "owner": h.owner,
+                "freshness": h.freshness,
+                "updated_at": h.updated_at,
+                "created_at": h.created_at,
+                "domain": h.domain,
+                "keywords": list(h.keywords),
+                "dataset_refs": list(h.dataset_refs),
+                "path": str(h.path),
+                "relative_path": h.relative_path,
+            }
+        )
 
     return {"records": records, "count": len(records), "root": str(root)}
 
 
 # -- POST /memory/scoped/prune -----------------------------------------------
+
 
 @app.post("/memory/scoped/prune")
 async def memory_scoped_prune(req: ScopedPruneRequest):
@@ -4410,7 +6584,9 @@ async def memory_scoped_prune(req: ScopedPruneRequest):
     ws = _resolve_scoped_memory_workspace(req.workspace)
 
     if not ws:
-        raise HTTPException(400, detail="No workspace configured; provide 'workspace' in request body")
+        raise HTTPException(
+            400, detail="No workspace configured; provide 'workspace' in request body"
+        )
 
     try:
         result = prune_scoped_memories(
@@ -4420,13 +6596,15 @@ async def memory_scoped_prune(req: ScopedPruneRequest):
         )
         candidates = []
         for c in result.candidates:
-            candidates.append({
-                "memory_id": c.record.memory_id,
-                "title": c.record.title,
-                "scope": c.record.scope,
-                "reason": c.reason,
-                "path": str(c.record.path),
-            })
+            candidates.append(
+                {
+                    "memory_id": c.record.memory_id,
+                    "title": c.record.title,
+                    "scope": c.record.scope,
+                    "reason": c.reason,
+                    "path": str(c.record.path),
+                }
+            )
         return {
             "ok": True,
             "applied": req.apply,
@@ -4445,6 +6623,7 @@ async def memory_scoped_prune(req: ScopedPruneRequest):
 # ---------------------------------------------------------------------------
 # GET /settings — current OmicsClaw configuration
 # ---------------------------------------------------------------------------
+
 
 @app.get("/settings")
 async def get_settings():
@@ -4511,6 +6690,7 @@ async def put_claude_settings(req: ClaudeSettingsRequest):
 # GET /providers — list all supported LLM providers
 # ---------------------------------------------------------------------------
 
+
 def _read_first_env(*keys: str) -> str:
     for key in keys:
         value = str(os.environ.get(key, "") or "").strip()
@@ -4530,13 +6710,17 @@ def _provider_base_url_source(provider_name: str, active_provider: str) -> str:
         return "provider-base-url"
 
     generic_base_url = _read_first_env("LLM_BASE_URL", "OMICSCLAW_BASE_URL")
-    if generic_base_url and (explicit_provider == provider_name or active_provider == provider_name):
+    if generic_base_url and (
+        explicit_provider == provider_name or active_provider == provider_name
+    ):
         return "generic-base-url"
 
     return ""
 
 
-def _provider_configuration_source(provider_name: str, env_key: str, active_provider: str) -> str:
+def _provider_configuration_source(
+    provider_name: str, env_key: str, active_provider: str
+) -> str:
     explicit_provider = _configured_provider_name()
 
     if env_key and _read_first_env(env_key):
@@ -4570,7 +6754,11 @@ async def list_providers():
             build_provider_registry_entries,
         )
     except ImportError:
-        return {"providers": [], "current": core.LLM_PROVIDER_NAME, "current_model": core.OMICSCLAW_MODEL}
+        return {
+            "providers": [],
+            "current": core.LLM_PROVIDER_NAME,
+            "current_model": core.OMICSCLAW_MODEL,
+        }
 
     discovered_models = await _cached_ollama_models(PROVIDER_PRESETS)
 
@@ -4603,6 +6791,7 @@ async def list_providers():
     try:
         from omicsclaw.providers.ccproxy import provider_supports_oauth
     except ImportError:
+
         def provider_supports_oauth(_name: str) -> bool:  # type: ignore[no-redef]
             return False
 
@@ -4620,22 +6809,30 @@ async def list_providers():
                 or _read_first_env("LLM_BASE_URL", "OMICSCLAW_BASE_URL")
                 or str(entry_payload.get("base_url", "") or "")
             )
-        if active and core.OMICSCLAW_MODEL and not str(entry_payload.get("default_model", "") or "").strip():
+        if (
+            active
+            and core.OMICSCLAW_MODEL
+            and not str(entry_payload.get("default_model", "") or "").strip()
+        ):
             entry_payload["default_model"] = core.OMICSCLAW_MODEL
-        credential_source = _provider_configuration_source(name, env_key, core.LLM_PROVIDER_NAME)
+        credential_source = _provider_configuration_source(
+            name, env_key, core.LLM_PROVIDER_NAME
+        )
         oauth_supported = provider_supports_oauth(name)
-        providers.append({
-            **entry_payload,
-            "configured": bool(credential_source),
-            "configured_via": credential_source or None,
-            "active": active,
-            "oauth_supported": oauth_supported,
-            "oauth_authenticated": (
-                oauth_statuses.get(name, {}).get("authenticated", False)
-                if oauth_supported
-                else False
-            ),
-        })
+        providers.append(
+            {
+                **entry_payload,
+                "configured": bool(credential_source),
+                "configured_via": credential_source or None,
+                "active": active,
+                "oauth_supported": oauth_supported,
+                "oauth_authenticated": (
+                    oauth_statuses.get(name, {}).get("authenticated", False)
+                    if oauth_supported
+                    else False
+                ),
+            }
+        )
 
     return {
         "providers": providers,
@@ -4745,6 +6942,7 @@ def _cached_oauth_statuses() -> dict[str, dict[str, object]]:
             check_ccproxy_auth,
             is_ccproxy_available,
         )
+
         if is_ccproxy_available():
             for p in OAUTH_PROVIDERS.values():
                 ok, msg = check_ccproxy_auth(p.ccproxy_target)
@@ -4760,6 +6958,7 @@ def _cached_oauth_statuses() -> dict[str, dict[str, object]]:
 # ---------------------------------------------------------------------------
 # PUT /providers — switch LLM provider
 # ---------------------------------------------------------------------------
+
 
 class ProviderSwitchRequest(BaseModel):
     provider: str
@@ -4815,9 +7014,11 @@ async def switch_provider(req: ProviderSwitchRequest):
     try:
         from omicsclaw.providers.registry import PROVIDER_PRESETS
         from omicsclaw.providers.ccproxy import provider_supports_oauth
+
         if req.provider not in PROVIDER_PRESETS and req.provider != "custom":
             raise HTTPException(400, detail=f"Unknown provider: {req.provider}")
     except ImportError:
+
         def provider_supports_oauth(_name: str) -> bool:  # type: ignore[no-redef]
             return False
 
@@ -5074,14 +7275,14 @@ def _sanitize_generated_title(raw: str) -> str:
     # Drop a leading "Title:" / "标题：" style prefix.
     for prefix in ("title:", "标题:", "标题："):
         if title.lower().startswith(prefix):
-            title = title[len(prefix):].strip()
+            title = title[len(prefix) :].strip()
             break
     # Unwrap surrounding quotes / brackets.
     title = title.strip("\"'“”‘’《》「」 ").strip()
     return title
 
 
-@app.post("/chat/title")
+@app.post("/chat/title", dependencies=[Depends(require_bearer_token)])
 async def chat_title(req: ChatTitleRequest):
     """Generate a concise conversation title via a single cheap completion.
 
@@ -5099,7 +7300,9 @@ async def chat_title(req: ChatTitleRequest):
     client = getattr(core, "llm", None)
     model = str(getattr(core, "OMICSCLAW_MODEL", "") or "").strip()
     if client is None or not model:
-        raise HTTPException(400, detail="LLM client is not configured for title generation.")
+        raise HTTPException(
+            400, detail="LLM client is not configured for title generation."
+        )
 
     try:
         response = await client.chat.completions.create(
@@ -5132,6 +7335,7 @@ def _resolve_oauth_provider_alias(name: str) -> str:
     source of truth) and re-raises as HTTP 400 for FastAPI callers.
     """
     from omicsclaw.providers.ccproxy import normalize_oauth_provider
+
     try:
         return normalize_oauth_provider(name)
     except ValueError as exc:
@@ -5141,8 +7345,12 @@ def _resolve_oauth_provider_alias(name: str) -> str:
 # Proxy env vars httpx / requests / curl honor. Listed in both the lower-
 # and upper-case forms the stdlib / httpx actually consult.
 _PROXY_ENV_VAR_NAMES: tuple[str, ...] = (
-    "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
-    "ALL_PROXY", "all_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
 )
 
 
@@ -5178,9 +7386,7 @@ def _require_ccproxy_available() -> None:
             oauth_install_hint,
         )
     except Exception as exc:
-        raise HTTPException(
-            500, detail=f"ccproxy_manager import failed: {exc}"
-        )
+        raise HTTPException(500, detail=f"ccproxy_manager import failed: {exc}")
     if not is_ccproxy_available():
         raise HTTPException(
             400,
@@ -5202,6 +7408,7 @@ async def oauth_status(provider: str):
     omics_name = _resolve_oauth_provider_alias(provider)
     _require_ccproxy_available()
     from omicsclaw.providers.ccproxy import check_ccproxy_auth
+
     # check_ccproxy_auth accepts any alias; pass canonical for clarity.
     ok, msg = check_ccproxy_auth(omics_name)
     # invalidate cache so the next /providers poll reflects this probe
@@ -5276,6 +7483,7 @@ async def oauth_logout(provider: str):
             capture_output=True,
             text=True,
             timeout=10,
+            env=scrub_internal_control_credentials(os.environ),
         )
     except Exception as exc:
         raise HTTPException(500, detail=f"Failed to run ccproxy logout: {exc}")
@@ -5284,7 +7492,11 @@ async def oauth_logout(provider: str):
     # keep routing through the (now logged-out) local proxy.
     clear_ccproxy_env(omics_name)
     runtime = get_active_provider_runtime()
-    if runtime is not None and runtime.auth_mode == "oauth" and runtime.provider == omics_name:
+    if (
+        runtime is not None
+        and runtime.auth_mode == "oauth"
+        and runtime.provider == omics_name
+    ):
         clear_active_provider_runtime()
         try:
             core = _get_core()
@@ -5320,11 +7532,13 @@ async def oauth_logout(provider: str):
 # MCP Server Management — bridges frontend config with OmicsClaw runtime
 # ---------------------------------------------------------------------------
 
+
 @app.get("/mcp/servers")
 async def mcp_list_servers():
     """List all configured MCP servers and their active/probe status."""
     try:
         from omicsclaw.surfaces.cli._mcp import list_mcp_servers
+
         servers = list_mcp_servers()
     except ImportError:
         return {"servers": [], "error": "MCP module not available"}
@@ -5351,22 +7565,24 @@ async def mcp_list_servers():
     for srv in servers:
         name = srv.get("name", "")
         enabled = bool(srv.get("enabled", True))
-        result.append({
-            "name": name,
-            "transport": srv.get("transport", "stdio"),
-            "type": srv.get("transport", "stdio"),
-            "target": srv.get("command") or srv.get("url", ""),
-            "command": srv.get("command", ""),
-            "url": srv.get("url", ""),
-            "active": enabled and name in active_names,
-            "enabled": enabled,
-            "extra_args": srv.get("args", []),
-            "args": srv.get("args", []),
-            "env": srv.get("env", {}),
-            "headers": srv.get("headers", {}),
-            "header_keys": sorted((srv.get("headers") or {}).keys()),
-            "tools": srv.get("tools"),
-        })
+        result.append(
+            {
+                "name": name,
+                "transport": srv.get("transport", "stdio"),
+                "type": srv.get("transport", "stdio"),
+                "target": srv.get("command") or srv.get("url", ""),
+                "command": srv.get("command", ""),
+                "url": srv.get("url", ""),
+                "active": enabled and name in active_names,
+                "enabled": enabled,
+                "extra_args": srv.get("args", []),
+                "args": srv.get("args", []),
+                "env": srv.get("env", {}),
+                "headers": srv.get("headers", {}),
+                "header_keys": sorted((srv.get("headers") or {}).keys()),
+                "tools": srv.get("tools"),
+            }
+        )
 
     return {"servers": result}
 
@@ -5387,6 +7603,7 @@ async def mcp_add_server(req: McpAddRequest):
     """Add or update an MCP server in OmicsClaw config."""
     try:
         from omicsclaw.surfaces.cli._mcp import add_mcp_server
+
         add_mcp_server(
             name=req.name,
             target=req.target,
@@ -5409,6 +7626,7 @@ async def mcp_remove_server(name: str):
     """Remove an MCP server from OmicsClaw config."""
     try:
         from omicsclaw.surfaces.cli._mcp import remove_mcp_server
+
         removed = remove_mcp_server(name)
         if not removed:
             raise HTTPException(404, detail=f"Server '{name}' not found")
@@ -5423,7 +7641,11 @@ async def mcp_remove_server(name: str):
 
 def _reconcile_mcp_servers(incoming: Any) -> dict[str, Any]:
     try:
-        from omicsclaw.surfaces.cli._mcp import add_mcp_server, list_mcp_servers, remove_mcp_server
+        from omicsclaw.surfaces.cli._mcp import (
+            add_mcp_server,
+            list_mcp_servers,
+            remove_mcp_server,
+        )
     except ImportError:
         raise HTTPException(503, detail="MCP module not available")
 
@@ -5438,7 +7660,9 @@ def _reconcile_mcp_servers(incoming: Any) -> dict[str, Any]:
         if not name:
             raise HTTPException(400, detail="MCP server names must not be empty")
         if not isinstance(config, dict):
-            raise HTTPException(400, detail=f"Config for MCP server '{name}' must be an object")
+            raise HTTPException(
+                400, detail=f"Config for MCP server '{name}' must be an object"
+            )
 
         cmd = config.get("command", "")
         url = config.get("url", "")
@@ -5585,77 +7809,167 @@ def _classify_file(file_path: Path) -> str:
     return _OUTPUT_FILE_TYPES.get(file_path.suffix.lower(), "other")
 
 
-def _collect_figures(run_dir: Path) -> list[dict]:
+def _collect_figures(
+    run_dir: Path,
+    *,
+    claim_identities: frozenset[tuple[int, int]] | None = None,
+) -> list[dict]:
     """Collect image files from the ``figures/`` subdirectory."""
     figures_dir = run_dir / "figures"
     if not figures_dir.is_dir():
         return []
 
+    identities = (
+        collect_output_claim_identities(run_dir)
+        if claim_identities is None
+        else claim_identities
+    )
     results: list[dict] = []
     for f in sorted(figures_dir.iterdir()):
-        if not f.is_file():
+        if not is_scientific_output_file(
+            f,
+            output_root=run_dir,
+            claim_identities=identities,
+        ):
             continue
         ext = f.suffix.lower()
         mime = _IMAGE_MIME_MAP.get(ext)
         if mime:
-            results.append({
-                "name": f.name,
-                "path": str(f),
-                "mimeType": mime,
-            })
+            results.append(
+                {
+                    "name": f.name,
+                    "path": str(f),
+                    "mimeType": mime,
+                }
+            )
     return results
 
 
-def _collect_key_files(run_dir: Path) -> list[dict]:
+def _collect_key_files(
+    run_dir: Path,
+    *,
+    claim_identities: frozenset[tuple[int, int]] | None = None,
+) -> list[dict]:
     """
     Collect notable files from the run directory (non-recursive, top-level only).
 
     Includes: report.md, result.json, README.md, *.csv, *.h5ad, and similar.
     """
-    KEY_PATTERNS = {"report.md", "result.json", "readme.md", "result_summary.md", "completion_report.json"}
-    KEY_EXTENSIONS = {".csv", ".tsv", ".h5ad", ".h5", ".loom", ".rds", ".pdf", ".html", ".ipynb"}
+    KEY_PATTERNS = {
+        "report.md",
+        "result.json",
+        "readme.md",
+        "result_summary.md",
+        "completion_report.json",
+    }
+    KEY_EXTENSIONS = {
+        ".csv",
+        ".tsv",
+        ".h5ad",
+        ".h5",
+        ".loom",
+        ".rds",
+        ".pdf",
+        ".html",
+        ".ipynb",
+    }
 
+    identities = (
+        collect_output_claim_identities(run_dir)
+        if claim_identities is None
+        else claim_identities
+    )
     results: list[dict] = []
     for f in sorted(run_dir.iterdir()):
-        if not f.is_file():
+        if not is_scientific_output_file(
+            f,
+            output_root=run_dir,
+            claim_identities=identities,
+        ):
             continue
         if f.name.lower() in KEY_PATTERNS or f.suffix.lower() in KEY_EXTENSIONS:
-            results.append({
-                "name": f.name,
-                "path": str(f),
-                "size": f.stat().st_size,
-                "type": _classify_file(f),
-            })
+            results.append(
+                {
+                    "name": f.name,
+                    "path": str(f),
+                    "size": f.stat().st_size,
+                    "type": _classify_file(f),
+                }
+            )
     return results
 
 
 def _latest_file_mtime(run_dir: Path) -> float:
     latest = 0.0
+    saw_entry = False
+    claim_identities = collect_output_claim_identities(run_dir)
+    claim_marker = run_dir / OUTPUT_CLAIM_FILENAME
+    try:
+        claim_stat = claim_marker.stat()
+        if (
+            not claim_marker.is_symlink()
+            and claim_marker.is_file()
+            and claim_stat.st_nlink == 1
+            and is_contained_output_path(claim_marker, output_root=run_dir)
+        ):
+            latest = claim_stat.st_mtime
+    except OSError:
+        pass
     try:
         for entry in run_dir.rglob("*"):
+            saw_entry = True
             try:
+                if entry.is_dir():
+                    if (
+                        not entry.is_symlink()
+                        and is_contained_output_path(entry, output_root=run_dir)
+                        and next(entry.iterdir(), None) is None
+                    ):
+                        latest = max(latest, entry.stat().st_mtime)
+                    continue
+                if not is_scientific_output_file(
+                    entry,
+                    output_root=run_dir,
+                    claim_identities=claim_identities,
+                ):
+                    continue
                 latest = max(latest, entry.stat().st_mtime)
             except OSError:
                 continue
     except OSError:
         return 0.0
+    if not saw_entry:
+        try:
+            latest = run_dir.stat().st_mtime
+        except OSError:
+            return 0.0
     return latest
 
 
-def _read_result_json(run_dir: Path) -> tuple[str, Any]:
+def _read_result_json(
+    run_dir: Path,
+    *,
+    claim_identities: frozenset[tuple[int, int]] | None = None,
+) -> tuple[str, Any]:
     """
     Read ``result.json`` and extract status + summary.
 
     Returns (status, summary_or_None).
     """
     result_file = run_dir / "result.json"
-    if not result_file.is_file():
+    identities = (
+        collect_output_claim_identities(run_dir)
+        if claim_identities is None
+        else claim_identities
+    )
+    if not is_scientific_output_file(
+        result_file,
+        output_root=run_dir,
+        claim_identities=identities,
+    ):
         # result.json is the completion contract. Without it, a run is either
         # still active or was interrupted before finalization.
-        latest_mtime = max(
-            run_dir.stat().st_mtime,
-            _latest_file_mtime(run_dir),
-        )
+        latest_mtime = _latest_file_mtime(run_dir)
         if time.time() - latest_mtime > _OUTPUT_RUNNING_STALE_SECONDS:
             return (
                 "failed",
@@ -5751,10 +8065,19 @@ def _coerce_result_mapping(display_output: Any) -> dict[str, Any] | None:
 def _is_fresh_run_leaf(run_dir: Path) -> bool:
     """A real, just-produced Run leaf: it carries the completion contract
     (``result.json``/``manifest.json``) written within this turn's window."""
+    claim_identities = collect_output_claim_identities(run_dir)
     marker = run_dir / "result.json"
-    if not marker.is_file():
+    if marker.is_symlink() or not is_scientific_output_file(
+        marker,
+        output_root=run_dir,
+        claim_identities=claim_identities,
+    ):
         marker = run_dir / "manifest.json"
-        if not marker.is_file():
+        if marker.is_symlink() or not is_scientific_output_file(
+            marker,
+            output_root=run_dir,
+            claim_identities=claim_identities,
+        ):
             return False
     try:
         return (time.time() - marker.stat().st_mtime) <= _RUN_STAMP_RECENCY_SECONDS
@@ -5801,26 +8124,30 @@ def _write_session_sidecar(run_dir: Path, session_id: str) -> None:
         return
     sidecar = run_dir / _SESSION_SIDECAR_NAME
     try:
-        sidecar.write_text(
-            json.dumps(
+        atomic_write_owned_output_text(
+            sidecar,
+            output_root=run_dir,
+            text=json.dumps(
                 {
                     "session_id": session_id,
                     "stamped_at": datetime.now(timezone.utc).isoformat(),
                 },
                 ensure_ascii=False,
             ),
-            encoding="utf-8",
+            label="desktop session sidecar",
         )
-    except OSError:
+    except (OSError, RuntimeError):
         pass  # never let linkage bookkeeping break a run
 
 
 def _read_session_sidecar(run_dir: Path) -> str:
     sidecar = run_dir / _SESSION_SIDECAR_NAME
-    if not sidecar.is_file():
+    if not is_scientific_output_file(sidecar, output_root=run_dir):
         return ""
     try:
         data = json.loads(sidecar.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return ""
         sid = data.get("session_id")
         return str(sid) if isinstance(sid, str) else ""
     except (OSError, json.JSONDecodeError, ValueError):
@@ -5843,7 +8170,9 @@ def _stamp_session_for_run(
 
 @app.get("/outputs/latest")
 async def outputs_latest(
-    limit: int = Query(10, ge=1, le=200),  # E-(4): 50→200 so the dashboard can page past the old cap
+    limit: int = Query(
+        10, ge=1, le=200
+    ),  # E-(4): 50→200 so the dashboard can page past the old cap
     project: str = "",  # plain default (not Query): unit tests call this fn directly
 ):
     """
@@ -5864,21 +8193,43 @@ async def outputs_latest(
 
     # Walk one Project level (constraint 4); cache project_meta per project dir.
     meta_cache: dict[Path, dict[str, Any]] = {}
-    dir_entries: list[tuple[float, Path, str, str]] = []  # (mtime, run_dir, project_id, project_name)
+    dir_entries: list[
+        tuple[float, Path, str, str]
+    ] = []  # (mtime, run_dir, project_id, project_name)
     try:
         for project_dir, run_dir in run_paths.iter_run_dirs(output_dir):
+            if (
+                project_dir.is_symlink()
+                or run_dir.is_symlink()
+                or not is_contained_output_path(
+                    project_dir,
+                    output_root=output_dir,
+                )
+                or not is_contained_output_path(
+                    run_dir,
+                    output_root=output_dir,
+                )
+            ):
+                continue
             meta = meta_cache.get(project_dir)
             if meta is None:
                 meta = run_paths.read_project_meta(project_dir)
                 meta_cache[project_dir] = meta
-            project_id = str(meta.get("project_id") or (
-                run_paths.DEFAULT_PROJECT_ID if project_dir == output_dir else project_dir.name
-            ))
+            project_id = str(
+                meta.get("project_id")
+                or (
+                    run_paths.DEFAULT_PROJECT_ID
+                    if project_dir == output_dir
+                    else project_dir.name
+                )
+            )
             project_name = str(meta.get("display_name") or project_id)
             if project and project not in (project_id, project_dir.name):
                 continue
             try:
-                dir_entries.append((run_dir.stat().st_mtime, run_dir, project_id, project_name))
+                dir_entries.append(
+                    (run_dir.stat().st_mtime, run_dir, project_id, project_name)
+                )
             except OSError:
                 pass
     except OSError as exc:
@@ -5893,9 +8244,10 @@ async def outputs_latest(
     runs: list[dict] = []
     for mtime, d, project_id, project_name in dir_entries:
         skill, timestamp_iso = _parse_run_dir_name(d.name)
-        status, summary = _read_result_json(d)
-        figures = _collect_figures(d)
-        files = _collect_key_files(d)
+        claim_identities = collect_output_claim_identities(d)
+        status, summary = _read_result_json(d, claim_identities=claim_identities)
+        figures = _collect_figures(d, claim_identities=claim_identities)
+        files = _collect_key_files(d, claim_identities=claim_identities)
 
         # Use mtime as the authoritative timestamp (always timezone-correct).
         # Fall back to the parsed directory-name timestamp only if mtime fails.
@@ -5948,19 +8300,26 @@ async def outputs_run_files(run_id: str):
 
     files: list[dict] = []
     try:
+        claim_identities = collect_output_claim_identities(run_dir)
         for f in sorted(run_dir.rglob("*")):
-            if not f.is_file():
+            if not is_scientific_output_file(
+                f,
+                output_root=run_dir,
+                claim_identities=claim_identities,
+            ):
                 continue
             rel = f.relative_to(run_dir)
             mime, _ = mimetypes.guess_type(str(f))
-            files.append({
-                "name": f.name,
-                "relative_path": str(rel),
-                "path": str(f),
-                "size": f.stat().st_size,
-                "type": _classify_file(f),
-                "mimeType": mime or "application/octet-stream",
-            })
+            files.append(
+                {
+                    "name": f.name,
+                    "relative_path": str(rel),
+                    "path": str(f),
+                    "size": f.stat().st_size,
+                    "type": _classify_file(f),
+                    "mimeType": mime or "application/octet-stream",
+                }
+            )
     except OSError as exc:
         raise HTTPException(500, detail=f"Cannot read run directory: {exc}")
 
@@ -5983,58 +8342,94 @@ _bridge_task: asyncio.Task | None = None
 # Map each channel name to the env vars required for it to be considered
 # "configured". If ALL listed vars are non-empty the channel is configured.
 _CHANNEL_ENV_KEYS: dict[str, list[str]] = {
-    "telegram":  ["TELEGRAM_BOT_TOKEN"],
-    "feishu":    ["FEISHU_APP_ID", "FEISHU_APP_SECRET"],
-    "dingtalk":  ["DINGTALK_CLIENT_ID", "DINGTALK_CLIENT_SECRET"],
-    "discord":   ["DISCORD_BOT_TOKEN"],
-    "slack":     ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],
-    "wechat":    ["WECOM_CORP_ID"],  # or WECHAT_APP_ID — either backend
-    "qq":        ["QQ_APP_ID", "QQ_APP_SECRET"],
-    "email":     ["EMAIL_IMAP_HOST", "EMAIL_IMAP_USERNAME", "EMAIL_SMTP_HOST", "EMAIL_SMTP_USERNAME"],
-    "imessage":  [],  # macOS only, no secrets required
+    "telegram": ["TELEGRAM_BOT_TOKEN"],
+    "feishu": ["FEISHU_APP_ID", "FEISHU_APP_SECRET"],
+    "dingtalk": ["DINGTALK_CLIENT_ID", "DINGTALK_CLIENT_SECRET"],
+    "discord": ["DISCORD_BOT_TOKEN"],
+    "slack": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],
+    "wechat": ["WECOM_CORP_ID"],  # or WECHAT_APP_ID — either backend
+    "qq": ["QQ_APP_ID", "QQ_APP_SECRET"],
+    "email": [
+        "EMAIL_IMAP_HOST",
+        "EMAIL_IMAP_USERNAME",
+        "EMAIL_SMTP_HOST",
+        "EMAIL_SMTP_USERNAME",
+    ],
+    "imessage": [],  # macOS only, no secrets required
 }
 
 # Extended map: every env key relevant to a channel (for config endpoints).
 _CHANNEL_ALL_CONFIG_KEYS: dict[str, list[str]] = {
     "telegram": [
-        "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "RATE_LIMIT_PER_HOUR",
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_CHAT_ID",
+        "RATE_LIMIT_PER_HOUR",
     ],
     "feishu": [
-        "FEISHU_APP_ID", "FEISHU_APP_SECRET",
-        "FEISHU_THINKING_THRESHOLD_MS", "FEISHU_MAX_INBOUND_IMAGE_MB",
-        "FEISHU_MAX_INBOUND_FILE_MB", "FEISHU_MAX_ATTACHMENTS",
-        "FEISHU_RATE_LIMIT_PER_HOUR", "FEISHU_BRIDGE_DEBUG",
+        "FEISHU_APP_ID",
+        "FEISHU_APP_SECRET",
+        "FEISHU_THINKING_THRESHOLD_MS",
+        "FEISHU_MAX_INBOUND_IMAGE_MB",
+        "FEISHU_MAX_INBOUND_FILE_MB",
+        "FEISHU_MAX_ATTACHMENTS",
+        "FEISHU_RATE_LIMIT_PER_HOUR",
+        "FEISHU_BRIDGE_DEBUG",
     ],
     "dingtalk": [
-        "DINGTALK_CLIENT_ID", "DINGTALK_CLIENT_SECRET",
+        "DINGTALK_CLIENT_ID",
+        "DINGTALK_CLIENT_SECRET",
         "DINGTALK_RATE_LIMIT_PER_HOUR",
     ],
     "discord": [
-        "DISCORD_BOT_TOKEN", "DISCORD_RATE_LIMIT_PER_HOUR", "DISCORD_PROXY",
+        "DISCORD_BOT_TOKEN",
+        "DISCORD_RATE_LIMIT_PER_HOUR",
+        "DISCORD_PROXY",
     ],
     "slack": [
-        "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_RATE_LIMIT_PER_HOUR",
+        "SLACK_BOT_TOKEN",
+        "SLACK_APP_TOKEN",
+        "SLACK_RATE_LIMIT_PER_HOUR",
     ],
     "wechat": [
-        "WECOM_CORP_ID", "WECOM_AGENT_ID", "WECOM_SECRET",
-        "WECOM_TOKEN", "WECOM_ENCODING_AES_KEY", "WECOM_WEBHOOK_PORT",
-        "WECHAT_APP_ID", "WECHAT_APP_SECRET", "WECHAT_TOKEN",
-        "WECHAT_ENCODING_AES_KEY", "WECHAT_WEBHOOK_PORT",
+        "WECOM_CORP_ID",
+        "WECOM_AGENT_ID",
+        "WECOM_SECRET",
+        "WECOM_TOKEN",
+        "WECOM_ENCODING_AES_KEY",
+        "WECOM_WEBHOOK_PORT",
+        "WECHAT_APP_ID",
+        "WECHAT_APP_SECRET",
+        "WECHAT_TOKEN",
+        "WECHAT_ENCODING_AES_KEY",
+        "WECHAT_WEBHOOK_PORT",
     ],
     "qq": [
-        "QQ_APP_ID", "QQ_APP_SECRET", "QQ_ALLOWED_SENDERS",
+        "QQ_APP_ID",
+        "QQ_APP_SECRET",
+        "QQ_ALLOWED_SENDERS",
         "QQ_RATE_LIMIT_PER_HOUR",
     ],
     "email": [
-        "EMAIL_IMAP_HOST", "EMAIL_IMAP_PORT", "EMAIL_IMAP_USERNAME",
-        "EMAIL_IMAP_PASSWORD", "EMAIL_IMAP_MAILBOX", "EMAIL_IMAP_USE_SSL",
-        "EMAIL_SMTP_HOST", "EMAIL_SMTP_PORT", "EMAIL_SMTP_USERNAME",
-        "EMAIL_SMTP_PASSWORD", "EMAIL_SMTP_STARTTLS",
-        "EMAIL_FROM_ADDRESS", "EMAIL_POLL_INTERVAL", "EMAIL_MARK_SEEN",
+        "EMAIL_IMAP_HOST",
+        "EMAIL_IMAP_PORT",
+        "EMAIL_IMAP_USERNAME",
+        "EMAIL_IMAP_PASSWORD",
+        "EMAIL_IMAP_MAILBOX",
+        "EMAIL_IMAP_USE_SSL",
+        "EMAIL_SMTP_HOST",
+        "EMAIL_SMTP_PORT",
+        "EMAIL_SMTP_USERNAME",
+        "EMAIL_SMTP_PASSWORD",
+        "EMAIL_SMTP_STARTTLS",
+        "EMAIL_FROM_ADDRESS",
+        "EMAIL_POLL_INTERVAL",
+        "EMAIL_MARK_SEEN",
         "EMAIL_ALLOWED_SENDERS",
     ],
     "imessage": [
-        "IMESSAGE_CLI_PATH", "IMESSAGE_SERVICE", "IMESSAGE_REGION",
+        "IMESSAGE_CLI_PATH",
+        "IMESSAGE_SERVICE",
+        "IMESSAGE_REGION",
         "IMESSAGE_ALLOWED_SENDERS",
     ],
 }
@@ -6049,7 +8444,9 @@ def _is_channel_configured(name: str) -> bool:
     if not required:
         # wechat has two backends — check either
         if name == "wechat":
-            return bool(os.environ.get("WECOM_CORP_ID") or os.environ.get("WECHAT_APP_ID"))
+            return bool(
+                os.environ.get("WECOM_CORP_ID") or os.environ.get("WECHAT_APP_ID")
+            )
         # imessage: always "configured" on macOS, never on other platforms
         if name == "imessage":
             return sys.platform == "darwin"
@@ -6076,6 +8473,7 @@ def _get_omicsclaw_env_path() -> Path:
     # Fallback: try parent of the omicsclaw package location
     try:
         import omicsclaw
+
         return Path(omicsclaw.__file__).resolve().parent.parent / ".env"
     except Exception:
         return Path.cwd() / ".env"
@@ -6093,9 +8491,7 @@ def _update_env_file(
         lines = env_path.read_text(encoding="utf-8").splitlines()
 
     effective_remove_keys = {
-        str(key).strip()
-        for key in (remove_keys or set())
-        if str(key).strip()
+        str(key).strip() for key in (remove_keys or set()) if str(key).strip()
     }
     effective_remove_keys.difference_update(updates.keys())
 
@@ -6178,7 +8574,9 @@ def _apply_chat_provider_switch(core: Any, provider_id: str, model: str) -> None
     )
 
 
-def _chat_request_requires_provider_reinit(core: Any, provider_id: str, model: str) -> bool:
+def _chat_request_requires_provider_reinit(
+    core: Any, provider_id: str, model: str
+) -> bool:
     requested_provider = str(provider_id or "").strip()
     if not requested_provider:
         return False
@@ -6197,6 +8595,7 @@ def _chat_request_requires_provider_reinit(core: Any, provider_id: str, model: s
 
 # ---- Pydantic models for bridge endpoints --------------------------------
 
+
 class BridgeStartRequest(BaseModel):
     channels: list[str]
 
@@ -6207,11 +8606,13 @@ class BridgeStopRequest(BaseModel):
 
 class BridgeConfigUpdateRequest(BaseModel):
     """Key-value pairs to write into the .env file."""
+
     # Accept arbitrary env var names as keys
     model_config = {"extra": "allow"}
 
 
 # ---- GET /bridge/channels ------------------------------------------------
+
 
 @app.get("/bridge/channels")
 async def bridge_list_channels():
@@ -6242,19 +8643,22 @@ async def bridge_list_channels():
             }
             last_error = ch_health.get("last_error", "")
 
-        channels.append({
-            "name": name,
-            "class": class_name,
-            "configured": _is_channel_configured(name),
-            "running": running,
-            "stats": stats,
-            "last_error": last_error,
-        })
+        channels.append(
+            {
+                "name": name,
+                "class": class_name,
+                "configured": _is_channel_configured(name),
+                "running": running,
+                "stats": stats,
+                "last_error": last_error,
+            }
+        )
 
     return {"channels": channels, "total": len(channels)}
 
 
 # ---- POST /bridge/start --------------------------------------------------
+
 
 @app.post("/bridge/start")
 async def bridge_start(req: BridgeStartRequest):
@@ -6275,7 +8679,7 @@ async def bridge_start(req: BridgeStartRequest):
         raise HTTPException(
             400,
             detail=f"Unknown channel(s): {', '.join(unknown)}. "
-                   f"Available: {', '.join(sorted(CHANNEL_REGISTRY))}",
+            f"Available: {', '.join(sorted(CHANNEL_REGISTRY))}",
         )
 
     try:
@@ -6287,6 +8691,7 @@ async def bridge_start(req: BridgeStartRequest):
     # Load the OmicsClaw .env so channel builders can read their config
     try:
         from omicsclaw.common.runtime_env import load_env_file
+
         env_path = _get_omicsclaw_env_path()
         if env_path.exists():
             load_env_file(env_path, override=False)
@@ -6298,9 +8703,7 @@ async def bridge_start(req: BridgeStartRequest):
 
     # Skip channels that are already running
     already_running = (
-        _channel_manager.running_channels()
-        if _channel_manager is not None
-        else []
+        _channel_manager.running_channels() if _channel_manager is not None else []
     )
     to_start = [c for c in req.channels if c not in already_running]
     skipped = [c for c in req.channels if c in already_running]
@@ -6395,6 +8798,7 @@ async def bridge_start(req: BridgeStartRequest):
 
 # ---- POST /bridge/stop ---------------------------------------------------
 
+
 @app.post("/bridge/stop")
 async def bridge_stop(req: BridgeStopRequest = BridgeStopRequest()):
     """Stop running channels.
@@ -6419,7 +8823,10 @@ async def bridge_stop(req: BridgeStopRequest = BridgeStopRequest()):
                 except Exception as exc:
                     logger.warning("Error stopping channel '%s': %s", name, exc)
         # If no channels remain, tear down the manager entirely
-        if not _channel_manager.running_channels() and not _channel_manager.enabled_channels:
+        if (
+            not _channel_manager.running_channels()
+            and not _channel_manager.enabled_channels
+        ):
             if _bridge_task and not _bridge_task.done():
                 _bridge_task.cancel()
                 try:
@@ -6453,6 +8860,7 @@ async def bridge_stop(req: BridgeStopRequest = BridgeStopRequest()):
 
 # ---- GET /bridge/status --------------------------------------------------
 
+
 @app.get("/bridge/status")
 async def bridge_status():
     """Return overall bridge status with per-channel health."""
@@ -6476,6 +8884,7 @@ async def bridge_status():
 
 # ---- GET /bridge/config/{channel} ----------------------------------------
 
+
 @app.get("/bridge/config/{channel}")
 async def bridge_get_config(channel: str):
     """Return the configuration keys for a specific channel (secrets masked)."""
@@ -6483,7 +8892,7 @@ async def bridge_get_config(channel: str):
         raise HTTPException(
             404,
             detail=f"Unknown channel: {channel}. "
-                   f"Available: {', '.join(sorted(_CHANNEL_ALL_CONFIG_KEYS))}",
+            f"Available: {', '.join(sorted(_CHANNEL_ALL_CONFIG_KEYS))}",
         )
 
     keys = _CHANNEL_ALL_CONFIG_KEYS[channel]
@@ -6504,6 +8913,7 @@ async def bridge_get_config(channel: str):
 
 # ---- PUT /bridge/config/{channel} ----------------------------------------
 
+
 @app.put("/bridge/config/{channel}")
 async def bridge_update_config(channel: str, request: Request):
     """Update .env file at the OmicsClaw project root with provided key-value pairs."""
@@ -6511,12 +8921,14 @@ async def bridge_update_config(channel: str, request: Request):
         raise HTTPException(
             404,
             detail=f"Unknown channel: {channel}. "
-                   f"Available: {', '.join(sorted(_CHANNEL_ALL_CONFIG_KEYS))}",
+            f"Available: {', '.join(sorted(_CHANNEL_ALL_CONFIG_KEYS))}",
         )
 
     body = await request.json()
     if not body or not isinstance(body, dict):
-        raise HTTPException(400, detail="Request body must be a JSON object with key-value pairs")
+        raise HTTPException(
+            400, detail="Request body must be a JSON object with key-value pairs"
+        )
 
     # Validate that all keys belong to this channel
     allowed_keys = set(_CHANNEL_ALL_CONFIG_KEYS[channel])
@@ -6525,7 +8937,7 @@ async def bridge_update_config(channel: str, request: Request):
         raise HTTPException(
             400,
             detail=f"Keys not valid for channel '{channel}': {', '.join(invalid_keys)}. "
-                   f"Allowed: {', '.join(sorted(allowed_keys))}",
+            f"Allowed: {', '.join(sorted(allowed_keys))}",
         )
 
     env_path = _get_omicsclaw_env_path()
@@ -6574,7 +8986,9 @@ async def bridge_update_config(channel: str, request: Request):
 
     logger.info(
         "Updated %d config key(s) for channel '%s' in %s",
-        len(body), channel, env_path,
+        len(body),
+        channel,
+        env_path,
     )
 
     return {
@@ -6589,8 +9003,11 @@ async def bridge_update_config(channel: str, request: Request):
 # CLI entry point
 # ---------------------------------------------------------------------------
 
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Start the OmicsClaw desktop/web API server")
+    parser = argparse.ArgumentParser(
+        description="Start the OmicsClaw desktop/web API server"
+    )
     parser.add_argument(
         "--host",
         default=os.getenv("OMICSCLAW_APP_HOST", DEFAULT_APP_API_HOST),
@@ -6605,10 +9022,34 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--reload",
         action="store_true",
-        default=os.getenv("OMICSCLAW_APP_RELOAD", "false").lower() in ("true", "1", "yes"),
+        default=os.getenv("OMICSCLAW_APP_RELOAD", "false").lower()
+        in ("true", "1", "yes"),
         help="Enable uvicorn reload mode",
     )
     return parser.parse_args(argv)
+
+
+def _is_local_app_bind_host(host: str) -> bool:
+    value = str(host or "").strip()
+    if not value:
+        # Uvicorn treats an empty host as a wildcard bind.
+        return False
+    if value.casefold() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
+def _validate_app_server_security(host: str, auth_token: str) -> None:
+    if _is_local_app_bind_host(host) or str(auth_token or "").strip():
+        return
+    raise SystemExit(
+        "Refusing to expose the Desktop API on a non-local interface without "
+        "OMICSCLAW_REMOTE_AUTH_TOKEN. Bind to 127.0.0.1/::1/localhost or set "
+        "a bearer token."
+    )
 
 
 def main(argv: list[str] | None = None):
@@ -6625,6 +9066,10 @@ def main(argv: list[str] | None = None):
         raise SystemExit(1)
 
     args = _parse_args(argv)
+    _validate_app_server_security(
+        args.host,
+        os.environ.get("OMICSCLAW_REMOTE_AUTH_TOKEN", ""),
+    )
     os.environ["OMICSCLAW_APP_HOST"] = args.host
     os.environ["OMICSCLAW_APP_PORT"] = str(args.port)
 

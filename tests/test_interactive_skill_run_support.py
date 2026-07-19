@@ -1,9 +1,11 @@
 import json
 
 from omicsclaw.surfaces.cli._skill_run_support import (
+    SkillRunRouteKind,
     build_skill_run_display_view,
     build_skill_run_exception_result,
     build_skill_run_execution_view,
+    classify_skill_run_route,
     parse_skill_run_command,
 )
 
@@ -65,6 +67,39 @@ def test_parse_skill_run_command_accepts_inline_equals_flags():
 
 def test_parse_skill_run_command_rejects_missing_flag_value():
     assert parse_skill_run_command("spatial-preprocessing --method") is None
+
+
+def test_skill_run_route_exact_demo_is_canonical_and_non_demo_is_legacy():
+    assert (
+        classify_skill_run_route("genomics-vcf-operations --demo").kind
+        is SkillRunRouteKind.CANONICAL_DEMO
+    )
+    assert (
+        classify_skill_run_route("genomics-vcf-operations --input data.vcf").kind
+        is SkillRunRouteKind.LEGACY
+    )
+
+
+def test_skill_run_route_demo_variants_fail_closed_instead_of_falling_back():
+    variants = (
+        "genomics-vcf-operations --demo --input data.vcf",
+        "genomics-vcf-operations --demo --output out",
+        "genomics-vcf-operations --demo --method filter",
+        "genomics-vcf-operations --demo --unknown value",
+        "genomics-vcf-operations --demo --project " + "a" * 32,
+        "genomics-vcf-operations --demo --no-project",
+        "genomics-vcf-operations --demo --demo",
+        "genomics-vcf-operations --demo=true",
+        "genomics-vcf-operations --d",
+        "'genomics-vcf-operations --demo",
+    )
+    for value in variants:
+        route = classify_skill_run_route(value)
+        assert route.kind is SkillRunRouteKind.REJECT
+        assert route.code in {
+            "canonical_demo_options_not_supported",
+            "invalid_run_syntax",
+        }
 
 
 def test_build_skill_run_execution_view_success_builds_shared_summary_and_history():

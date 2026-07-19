@@ -47,10 +47,11 @@ For scaffolding a new skill from a paper use `omics-skill-builder`.
 
 **Outputs**
 
-- `output_dir/extracted_metadata.json`
-- `output_dir/report.md`
-- `output_dir/result.json`
+- `extracted_metadata.json`
+- `report.md`
+- `result.json`
 - `<--data-dir>/<GSEid>/...`
+- Produces artifact `literature.dataset_handoff` as `extracted_metadata.json` (`json`)
 
 ## Flow
 

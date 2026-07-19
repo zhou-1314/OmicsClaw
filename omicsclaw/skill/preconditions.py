@@ -7,9 +7,14 @@ into a small, deterministic preflight decision that routing surfaces can share.
 
 from __future__ import annotations
 
+import bz2
+import csv
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from functools import lru_cache
+import gzip
+import io
+import lzma
 import os
 from pathlib import Path
 import re
@@ -20,6 +25,9 @@ from .registry import OmicsRegistry, ensure_registry_loaded
 
 
 _SUFFIX_TYPED_DIRECTORY_FORMATS = frozenset({"zarr"})
+_CONTENT_PROBE_LIMIT_BYTES = 1024 * 1024
+_DIRECTORY_PROBE_MAX_ENTRIES = 2048
+_FASTQ_FILE_TYPES = frozenset({"fastq", "fq"})
 
 
 class PreconditionStatus(str, Enum):
@@ -56,7 +64,8 @@ class InputProfile:
 
     ``None`` means a collection was not inspected; an empty collection means
     it was inspected and the key was absent.  That distinction prevents a
-    filename-only route from pretending it verified AnnData internals.
+    filename-only route from pretending it verified AnnData internals, table
+    headers, VCF metadata, FASTQ records, or directory layouts.
     """
 
     file_type: str = ""
@@ -68,6 +77,21 @@ class InputProfile:
     layers: set[str] | None = None
     obsm: set[str] | None = None
     uns: set[str] | None = None
+    table_columns: set[str] | None = None
+    table_column_count: int | None = None
+    table_inspection_error: str = ""
+    vcf_fileformat: str | None = None
+    vcf_columns: set[str] | None = None
+    vcf_info_ids: set[str] | None = None
+    vcf_format_ids: set[str] | None = None
+    vcf_sample_count: int | None = None
+    vcf_inspection_error: str = ""
+    fastq_record_valid: bool | None = None
+    fastq_pairing: str = ""
+    fastq_inspection_error: str = ""
+    directory_signatures: set[str] | None = None
+    directory_probe_truncated: bool = False
+    directory_inspection_error: str = ""
     env: set[str] | None = None
     config: set[str] | None = None
     source_path: str = ""
@@ -82,7 +106,21 @@ class InputProfile:
         ):
             self.file_type = ""
         self.modality = str(self.modality or "").strip().lower()
-        for field_name in ("obs", "var", "layers", "obsm", "uns", "env", "config"):
+        self.fastq_pairing = str(self.fastq_pairing or "").strip().lower()
+        for field_name in (
+            "obs",
+            "var",
+            "layers",
+            "obsm",
+            "uns",
+            "table_columns",
+            "vcf_columns",
+            "vcf_info_ids",
+            "vcf_format_ids",
+            "directory_signatures",
+            "env",
+            "config",
+        ):
             setattr(self, field_name, _normalise_names(getattr(self, field_name)))
 
     @classmethod
@@ -188,6 +226,331 @@ def _read_h5ad_profile(path: str) -> dict[str, Any]:
             close()
 
 
+def _read_bounded_text(path: Path) -> str:
+    """Read at most one MiB of decompressed text for structural probes."""
+    suffix = path.suffix.lower()
+    opener = {
+        ".gz": gzip.open,
+        ".bz2": bz2.open,
+        ".xz": lzma.open,
+    }.get(suffix, open)
+    with opener(path, "rb") as handle:
+        payload = handle.read(_CONTENT_PROBE_LIMIT_BYTES + 1)
+    if len(payload) > _CONTENT_PROBE_LIMIT_BYTES:
+        payload = payload[:_CONTENT_PROBE_LIMIT_BYTES]
+    return payload.decode("utf-8-sig", errors="replace")
+
+
+def _read_tabular_profile(path: Path, file_type: str) -> dict[str, Any]:
+    try:
+        text = _read_bounded_text(path)
+        if not text:
+            return {
+                "table_columns": set(),
+                "table_column_count": 0,
+                "table_inspection_error": "tabular input is empty",
+            }
+        delimiter = "\t" if file_type == "tsv" else ","
+        row = next(csv.reader(io.StringIO(text), delimiter=delimiter), [])
+        columns = [column.strip() for column in row]
+        if not columns or not any(columns):
+            return {
+                "table_columns": set(),
+                "table_column_count": 0,
+                "table_inspection_error": "tabular header is empty",
+            }
+        return {
+            "table_columns": set(columns),
+            "table_column_count": len(columns),
+            "table_inspection_error": "",
+        }
+    except Exception as exc:
+        return {"table_inspection_error": str(exc)}
+
+
+def _read_vcf_profile(path: Path) -> dict[str, Any]:
+    try:
+        text = _read_bounded_text(path)
+        fileformat: str | None = None
+        columns: list[str] | None = None
+        info_ids: set[str] = set()
+        format_ids: set[str] = set()
+        for line in text.splitlines():
+            if line.startswith("##fileformat="):
+                fileformat = line.partition("=")[2].strip() or None
+            elif line.startswith("##INFO=<"):
+                match = re.search(r"(?:^|[,<])ID=([^,>]+)", line)
+                if match:
+                    info_ids.add(match.group(1).strip())
+            elif line.startswith("##FORMAT=<"):
+                match = re.search(r"(?:^|[,<])ID=([^,>]+)", line)
+                if match:
+                    format_ids.add(match.group(1).strip())
+            elif line.startswith("#CHROM"):
+                columns = [value.strip() for value in line.split("\t")]
+                break
+            elif line and not line.startswith("#"):
+                break
+
+        if columns is None:
+            return {
+                "vcf_fileformat": fileformat,
+                "vcf_columns": set(),
+                "vcf_info_ids": info_ids,
+                "vcf_format_ids": format_ids,
+                "vcf_sample_count": None,
+                "vcf_inspection_error": "VCF #CHROM header was not found within the probe limit",
+            }
+        return {
+            "vcf_fileformat": fileformat,
+            "vcf_columns": set(columns),
+            "vcf_info_ids": info_ids,
+            "vcf_format_ids": format_ids,
+            "vcf_sample_count": max(len(columns) - 9, 0),
+            "vcf_inspection_error": "",
+        }
+    except Exception as exc:
+        return {"vcf_inspection_error": str(exc)}
+
+
+def _fastq_pair_identity(path: Path) -> tuple[str, str | None]:
+    name = path.name.lower()
+    for suffix in (".gz", ".bz2", ".xz", ".zst"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    for suffix in (".fastq", ".fq"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    match = re.search(
+        r"(^|[._-])(?P<read>r1|r2|read1|read2|1|2)(?=$|[._-])",
+        name,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return name, None
+    token = match.group("read").lower()
+    role = "R1" if token in {"r1", "read1", "1"} else "R2"
+    key = name[: match.start("read")] + "readx" + name[match.end("read") :]
+    return key, role
+
+
+def _fastq_pairing_for_file(
+    path: Path,
+    companion_paths: list[str | Path] | None = None,
+) -> str:
+    key, role = _fastq_pair_identity(path)
+    if role is None:
+        return "single"
+    candidates = [Path(item).expanduser() for item in (companion_paths or [])]
+    match = re.search(
+        r"(^|[._-])(?P<read>r1|r2|read1|read2|1|2)(?=$|[._-])",
+        path.name,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        token = match.group("read")
+        replacement = {
+            "r1": "r2",
+            "r2": "r1",
+            "read1": "read2",
+            "read2": "read1",
+            "1": "2",
+            "2": "1",
+        }[token.lower()]
+        if token.isupper():
+            replacement = replacement.upper()
+        elif token[0].isupper():
+            replacement = replacement.capitalize()
+        mate_name = (
+            path.name[: match.start("read")]
+            + replacement
+            + path.name[match.end("read") :]
+        )
+        candidates.append(path.with_name(mate_name))
+    opposite = "R2" if role == "R1" else "R1"
+    for candidate in candidates:
+        candidate_type = _file_type_from_path(candidate)
+        candidate_key, candidate_role = _fastq_pair_identity(candidate)
+        if (
+            candidate.exists()
+            and candidate_type in _FASTQ_FILE_TYPES
+            and candidate.resolve() != path.resolve()
+            and candidate_key == key
+            and candidate_role == opposite
+        ):
+            return "paired"
+    return "single"
+
+
+def _read_fastq_profile(
+    path: Path,
+    *,
+    companion_paths: list[str | Path] | None = None,
+) -> dict[str, Any]:
+    pairing = _fastq_pairing_for_file(path, companion_paths)
+    try:
+        lines = _read_bounded_text(path).splitlines()
+        if len(lines) < 4:
+            raise ValueError("FASTQ input does not contain one complete record")
+        header, sequence, separator, quality = lines[:4]
+        if not header.startswith("@"):
+            raise ValueError("FASTQ record header must start with '@'")
+        if not sequence:
+            raise ValueError("FASTQ sequence is empty")
+        if not separator.startswith("+"):
+            raise ValueError("FASTQ separator must start with '+'")
+        if len(sequence) != len(quality):
+            raise ValueError("FASTQ sequence and quality lengths differ")
+        if any(ord(char) < 33 or ord(char) > 126 for char in quality):
+            raise ValueError("FASTQ quality contains invalid Phred characters")
+        return {
+            "fastq_record_valid": True,
+            "fastq_pairing": pairing,
+            "fastq_inspection_error": "",
+        }
+    except Exception as exc:
+        return {
+            "fastq_record_valid": False,
+            "fastq_pairing": pairing,
+            "fastq_inspection_error": str(exc),
+        }
+
+
+def _has_any(names: set[str], *candidates: str) -> bool:
+    return any(candidate.lower() in names for candidate in candidates)
+
+
+def _directory_layout_signatures(path: Path) -> dict[str, Any]:
+    """Recognise governed layouts from a bounded, non-symlink directory walk."""
+    directories = [path]
+    files: list[Path] = []
+    queue: list[tuple[Path, int]] = [(path, 0)]
+    visited = 0
+    truncated = False
+    try:
+        while queue:
+            current, depth = queue.pop(0)
+            for item in current.iterdir():
+                visited += 1
+                if visited > _DIRECTORY_PROBE_MAX_ENTRIES:
+                    truncated = True
+                    queue.clear()
+                    break
+                if item.is_symlink():
+                    continue
+                if item.is_dir():
+                    directories.append(item)
+                    if depth < 3:
+                        queue.append((item, depth + 1))
+                elif item.is_file():
+                    files.append(item)
+    except OSError as exc:
+        return {
+            "directory_signatures": set(),
+            "directory_probe_truncated": truncated,
+            "directory_inspection_error": str(exc),
+        }
+
+    names_by_directory: dict[Path, set[str]] = {directory: set() for directory in directories}
+    for directory in directories:
+        if directory != path:
+            names_by_directory.setdefault(directory.parent, set()).add(
+                directory.name.lower()
+            )
+    for file_path in files:
+        names_by_directory.setdefault(file_path.parent, set()).add(
+            file_path.name.lower()
+        )
+
+    signatures: set[str] = set()
+    fastq_files = [
+        file_path
+        for file_path in files
+        if _file_type_from_path(file_path) in _FASTQ_FILE_TYPES
+    ]
+    fastq_profile: dict[str, Any] = {}
+    if fastq_files:
+        signatures.add("fastq-collection")
+        groups: dict[str, set[str]] = {}
+        unpaired = False
+        for file_path in fastq_files:
+            key, role = _fastq_pair_identity(file_path)
+            if role is None:
+                unpaired = True
+                continue
+            groups.setdefault(key, set()).add(role)
+        complete_pairs = [roles for roles in groups.values() if roles == {"R1", "R2"}]
+        if complete_pairs:
+            signatures.add("paired-fastq")
+        if complete_pairs and len(complete_pairs) == len(groups) and not unpaired:
+            directory_pairing = "paired"
+        elif complete_pairs:
+            directory_pairing = "mixed"
+        else:
+            directory_pairing = "single"
+        fastq_profile = _read_fastq_profile(
+            fastq_files[0],
+            companion_paths=fastq_files[1:],
+        )
+        fastq_profile["fastq_pairing"] = directory_pairing
+
+    for directory, names in names_by_directory.items():
+        has_matrix = _has_any(names, "matrix.mtx", "matrix.mtx.gz")
+        has_barcodes = _has_any(names, "barcodes.tsv", "barcodes.tsv.gz")
+        has_features = _has_any(
+            names,
+            "features.tsv",
+            "features.tsv.gz",
+            "genes.tsv",
+            "genes.tsv.gz",
+        )
+        if has_matrix and has_barcodes and has_features:
+            signatures.add("tenx-matrix")
+        if (
+            _has_any(names, "quants_mat.mtx")
+            and _has_any(names, "quants_mat_rows.txt")
+            and _has_any(names, "quants_mat_cols.txt")
+        ) or (
+            _has_any(names, "cells_x_genes.mtx")
+            and _has_any(names, "cells_x_genes.genes.txt")
+            and _has_any(names, "cells_x_genes.barcodes.txt")
+        ):
+            signatures.add("pseudoalign-output")
+        if (
+            _has_any(names, "spliced.mtx", "spliced.mtx.gz")
+            and _has_any(names, "unspliced.mtx", "unspliced.mtx.gz")
+            and has_barcodes
+            and has_features
+        ):
+            signatures.add("starsolo-velocity")
+
+    for directory, names in names_by_directory.items():
+        if directory.name.lower() == "outs" or "outs" in names:
+            outs = directory if directory.name.lower() == "outs" else directory / "outs"
+            outs_names = names_by_directory.get(outs, set())
+            if _has_any(
+                outs_names,
+                "filtered_feature_bc_matrix.h5",
+                "filtered_feature_bc_matrix",
+                "possorted_genome_bam.bam",
+            ):
+                signatures.add("cellranger-output")
+        if directory.name.lower() == "solo.out" and _has_any(names, "gene", "velocyto"):
+            signatures.add("starsolo-output")
+        if _has_any(names, "solo.out"):
+            solo_names = names_by_directory.get(directory / "Solo.out", set())
+            if _has_any(solo_names, "gene", "velocyto"):
+                signatures.add("starsolo-output")
+    return {
+        "directory_signatures": signatures,
+        "directory_probe_truncated": truncated,
+        "directory_inspection_error": "",
+        **fastq_profile,
+    }
+
+
 @lru_cache(maxsize=64)
 def _cached_h5ad_profile(
     resolved_path: str,
@@ -204,13 +567,17 @@ def probe_input_profile(
     *,
     modality: str = "",
     use_cache: bool = True,
+    companion_paths: list[str | Path] | None = None,
 ) -> InputProfile:
-    """Inspect lightweight input metadata without loading the expression matrix.
+    """Inspect lightweight input structure without loading analysis payloads.
 
     All paths yield at least filename-derived facts.  ``.h5ad`` uses AnnData's
     backed read mode to expose declared obs/var/layer/obsm/uns keys and the
-    OmicsClaw input/matrix contracts.  Inspection failure is recorded rather
-    than raised so callers can fail into preflight instead of crashing routing.
+    OmicsClaw input/matrix contracts. CSV/TSV, VCF, and FASTQ readers consume at
+    most one MiB of decompressed text; directory traversal is depth- and entry-
+    bounded and emits only governed semantic signatures. Inspection failure is
+    recorded rather than raised so callers can fail into preflight instead of
+    crashing routing.
     """
     source = Path(path).expanduser()
     path_kind = "directory" if source.is_dir() else "file"
@@ -227,7 +594,24 @@ def probe_input_profile(
             inspection_error=f"input path does not exist: {source}",
         )
     if path_kind == "directory":
-        return InputProfile(**basic)
+        return InputProfile(**basic, **_directory_layout_signatures(source))
+    if not source.is_file():
+        return InputProfile(
+            **basic,
+            inspection_error=f"input is not a regular file: {source}",
+        )
+    if basic["file_type"] in {"csv", "tsv"}:
+        return InputProfile(
+            **basic,
+            **_read_tabular_profile(source, str(basic["file_type"])),
+        )
+    if basic["file_type"] == "vcf":
+        return InputProfile(**basic, **_read_vcf_profile(source))
+    if basic["file_type"] in _FASTQ_FILE_TYPES:
+        return InputProfile(
+            **basic,
+            **_read_fastq_profile(source, companion_paths=companion_paths),
+        )
     if basic["file_type"] != "h5ad":
         return InputProfile(**basic)
     if not source.is_file():
@@ -358,6 +742,7 @@ def preflight_skill_execution(
     input_paths: list[str] | None = None,
     demo: bool = False,
     session_path: str | None = None,
+    companion_paths: list[str] | None = None,
     registry: OmicsRegistry | None = None,
 ) -> PreconditionAssessment | None:
     """Audit explicit execution inputs through the shared runner seam.
@@ -465,12 +850,21 @@ def preflight_skill_execution(
         # Execution checks always inspect the current file instead of reusing
         # a resolver cache entry.  A later path replacement is still an OS-level
         # TOCTOU concern, but stale cached metadata cannot authorize this run.
-        profile = probe_input_profile(value, use_cache=False)
-        # RET-04's structural probe is currently authoritative for AnnData.
-        # For other declared formats it only knows the filename-derived type;
-        # treating unobserved modality/columns as absent would disable valid
-        # CSV/FASTQ/PDF executions.  Preserve those runs until a format probe
-        # exists, while still rejecting an explicit file-type mismatch below.
+        observed_companions = [
+            companion
+            for _, candidate, candidate_kind in classified_inputs
+            for companion in [candidate]
+            if candidate != value and candidate_kind == "file"
+        ]
+        observed_companions.extend(companion_paths or [])
+        profile = probe_input_profile(
+            value,
+            use_cache=False,
+            companion_paths=observed_companions,
+        )
+        # AnnData data-shape keys remain format-specific. Non-H5AD facts are
+        # enforced only when the manifest opts into a matching ``content``
+        # contract; unrepresented PDF/text semantics are never guessed.
         assessment = evaluate_skill_preconditions(
             skill_name,
             profile,
@@ -594,6 +988,7 @@ def evaluate_skill_preconditions(
     }
     preconditions = contract.get("preconditions") or {}
     data_shape = preconditions.get("data_shape") or {}
+    content = preconditions.get("content") or {}
 
     blocked: list[str] = []
     preparation: list[str] = []
@@ -658,6 +1053,130 @@ def evaluate_skill_preconditions(
         for name in sorted(absent):
             missing.append(f"{key}.{name}")
             blocked.append(f"required {key} value '{name}' is not available")
+
+    tabular = content.get("tabular") or {}
+    if tabular and profile.file_type in {"csv", "tsv"}:
+        if profile.table_inspection_error:
+            missing.append("content.tabular.inspection")
+            blocked.append(
+                f"tabular input inspection failed: {profile.table_inspection_error}"
+            )
+        elif profile.table_columns is None or profile.table_column_count is None:
+            missing.append("content.tabular.inspection")
+            preparation.append("tabular header has not been inspected")
+        else:
+            minimum = tabular.get("min_columns")
+            if minimum is not None and profile.table_column_count < int(minimum):
+                missing.append("content.tabular.min_columns")
+                blocked.append(
+                    "tabular input has "
+                    f"{profile.table_column_count} columns; at least {int(minimum)} required"
+                )
+            required_columns = _normalise_names(
+                tabular.get("required_columns", [])
+            ) or set()
+            for column in sorted(required_columns - profile.table_columns):
+                missing.append(f"content.tabular.column.{column}")
+                blocked.append(f"required tabular column '{column}' is not available")
+
+    vcf = content.get("vcf") or {}
+    if vcf and profile.file_type == "vcf":
+        if profile.vcf_inspection_error:
+            missing.append("content.vcf.inspection")
+            blocked.append(f"VCF input inspection failed: {profile.vcf_inspection_error}")
+        elif profile.vcf_columns is None:
+            missing.append("content.vcf.inspection")
+            preparation.append("VCF header has not been inspected")
+        else:
+            if vcf.get("require_fileformat_header") and not profile.vcf_fileformat:
+                missing.append("content.vcf.fileformat")
+                blocked.append("VCF ##fileformat header is not available")
+            required_columns = _normalise_names(
+                vcf.get("required_columns", [])
+            ) or set()
+            for column in sorted(required_columns - profile.vcf_columns):
+                missing.append(f"content.vcf.column.{column}")
+                blocked.append(f"required VCF column '{column}' is not available")
+            for field_name, observed in (
+                ("info", profile.vcf_info_ids),
+                ("format", profile.vcf_format_ids),
+            ):
+                required_ids = _normalise_names(
+                    vcf.get(f"required_{field_name}_ids", [])
+                ) or set()
+                if observed is None:
+                    for name in sorted(required_ids):
+                        missing.append(f"content.vcf.{field_name}.{name}")
+                        preparation.append(
+                            f"VCF {field_name.upper()} id '{name}' has not been inspected"
+                        )
+                else:
+                    for name in sorted(required_ids - observed):
+                        missing.append(f"content.vcf.{field_name}.{name}")
+                        blocked.append(
+                            f"required VCF {field_name.upper()} id '{name}' is not available"
+                        )
+            minimum_samples = vcf.get("min_samples")
+            if minimum_samples is not None:
+                if profile.vcf_sample_count is None:
+                    missing.append("content.vcf.min_samples")
+                    preparation.append("VCF sample count has not been inspected")
+                elif profile.vcf_sample_count < int(minimum_samples):
+                    missing.append("content.vcf.min_samples")
+                    blocked.append(
+                        f"VCF has {profile.vcf_sample_count} samples; "
+                        f"at least {int(minimum_samples)} required"
+                    )
+
+    fastq = content.get("fastq") or {}
+    if fastq and (
+        profile.file_type in _FASTQ_FILE_TYPES
+        or profile.fastq_record_valid is not None
+    ):
+        if fastq.get("require_valid_record"):
+            if profile.fastq_record_valid is None:
+                missing.append("content.fastq.record")
+                preparation.append("FASTQ record structure has not been inspected")
+            elif not profile.fastq_record_valid:
+                missing.append("content.fastq.record")
+                blocked.append(
+                    "FASTQ record inspection failed: "
+                    + (profile.fastq_inspection_error or "invalid record structure")
+                )
+        required_pairing = str(fastq.get("pairing") or "any").lower()
+        if required_pairing != "any":
+            if not profile.fastq_pairing:
+                missing.append("content.fastq.pairing")
+                preparation.append("FASTQ mate layout has not been inspected")
+            elif profile.fastq_pairing != required_pairing:
+                missing.append("content.fastq.pairing")
+                blocked.append(
+                    f"FASTQ layout is '{profile.fastq_pairing}'; "
+                    f"'{required_pairing}' required"
+                )
+
+    directory = content.get("directory") or {}
+    if directory and profile.path_kind == "directory":
+        required_signatures = _normalise_names(
+            directory.get("any_of_signatures", [])
+        ) or set()
+        if profile.directory_inspection_error:
+            missing.append("content.directory.inspection")
+            blocked.append(
+                "directory inspection failed: " + profile.directory_inspection_error
+            )
+        elif profile.directory_signatures is None:
+            missing.append("content.directory.signature")
+            preparation.append("directory layout has not been inspected")
+        elif not required_signatures.intersection(profile.directory_signatures):
+            missing.append("content.directory.signature")
+            reason = (
+                "directory probe was truncated before a required layout was found"
+                if profile.directory_probe_truncated
+                else "directory does not match any required semantic layout"
+            )
+            target = preparation if profile.directory_probe_truncated else blocked
+            target.append(f"{reason}; expected one of {sorted(required_signatures)}")
 
     canonical_skill = str(info.get("alias") or skill_name)
     if blocked:

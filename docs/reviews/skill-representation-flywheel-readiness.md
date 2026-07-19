@@ -64,6 +64,11 @@
 **为何对飞轮致命**：参数是飞轮的"可操纵单元"与 MCP/自动链接的底料，却是整个契约里**最不结构化**的部分。
 
 ### G3 —— I/O 类型的 AnnData 偏置（跨域不对称）
+
+> **2026-07-14 状态更新：部分关闭。** `interface.inputs/outputs.artifacts` 已提供 kind + format +
+> 真实相对路径的通用产物契约，并为 genomics、proteomics、metabolomics、Bulk RNA 建立代表性
+> handoff；这里保留的是原始诊断，长尾格式/schema 仍需增量覆盖。
+
 `Outputs`（`:172-175`）给了一个**类型化**的 `anndata{obs/obsm/var/layers/uns}`，其余一律 `files: list[str]`（无类型）；`DataShape`（`:117-125`）更是把 `obs/obsm` 作命名字段、并**唯一地** `extra='allow'`（`:121`，全 schema 唯一放松严格性处）——这是为容纳非 AnnData 形状开的"泄压阀"，本身即偏置的自证。实测：spatial `anndata=YES`，genomics/proteomics `anndata=None` 只有 4 个无类型 files。
 → OmicsClaw 号称 7 域，但 genomics(VCF/BAM)、proteomics/metabolomics(表/mzML)、bulkrna 的 skill **机器契约明显更薄**。跨域飞轮会系统性地厚此薄彼。
 
@@ -79,6 +84,10 @@
 `Runtime.entry: str`（`:185`）+ 协议假定 `main()`（`protocol.py:33`）——**单入口**。而飞轮的输入恰恰是 **promoted notebook / 组合 workflow / adapter / 多入口工具**；单入口假设对这些形态偏窄。
 
 ### G7 —— 契约无错误分类（Codex 补漏，对 P4 关键）
+
+> **2026-07-14 状态更新：地基已关闭。** `SkillRunResult.error_kind`、统一分类器与 privacy-minimal
+> run ledger 已落地；legacy result dict 保持兼容。proposal 自动改写与晋升策略仍是后续治理层工作。
+
 `SkillRunResult`（`result.py:11`）只有 success/exit/stderr/files，**无 typed `error_kind`**；子进程状态只有 `ok/partial/failed`（`subprocess_driver.py:172`）。→ 飞轮 P4"重复成功→晋升 / 反复失败→蒸馏 Gotcha"需要**结构化错误分类来打分/学习**，当前契约给不出。这是表示层缺口（不只是 §4 治理的 plumbing）。
 
 > 附：`lazy_metadata.py:27` 仍列 `knowledge/adapter` 而 `SkillManifest` 只允许 `leaf/workflow/consensus`——遗留词表不一致（迁移收尾项）。

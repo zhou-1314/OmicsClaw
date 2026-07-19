@@ -39,6 +39,22 @@ interface:
     - directory
     modalities:
     - scrna
+    file_types:
+    - fastq
+    - fq
+    - h5ad
+    preconditions:
+      content:
+        fastq:
+          require_valid_record: true
+          pairing: paired
+        directory:
+          any_of_signatures:
+          - paired-fastq
+          - tenx-matrix
+          - cellranger-output
+          - starsolo-output
+          - pseudoalign-output
   parameters:
     hints:
       cellranger:
@@ -164,3 +180,9 @@ resources:
   - r_visualization.md
   tests: tests/
   homepage: https://github.com/TianGzlab/OmicsClaw
+  compute:
+    cpu_cores: 4
+    memory_mib: 8192
+    gpu_devices: 0
+    threads: 4
+    temporary_disk_mib: 16384

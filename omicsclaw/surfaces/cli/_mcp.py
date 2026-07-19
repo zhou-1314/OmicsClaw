@@ -21,6 +21,11 @@ try:
 except ImportError:
     _HAS_YAML = False
 
+from omicsclaw.skill.execution.environment import (
+    is_internal_control_credential_name,
+    scrub_internal_control_credentials,
+)
+
 from ._constants import MCP_CONFIG_NAME
 
 logger = logging.getLogger(__name__)
@@ -47,6 +52,10 @@ _PROMPT_STATUS_CACHE_KEY: tuple[str, ...] | None = None
 _PROMPT_STATUS_CACHE_VALUE: tuple[dict[str, Any], ...] = ()
 _PROMPT_STATUS_CACHE_AT: float = 0.0
 _PROMPT_STATUS_CACHE_TTL_SECONDS = 15.0
+
+
+class _InternalControlCredentialReference(ValueError):
+    """An MCP entry attempted to consume Backend-owned authority material."""
 
 
 # ---------------------------------------------------------------------------
@@ -77,9 +86,14 @@ def _interpolate(value: Any) -> Any:
     """Replace ${VAR} placeholders with env var values."""
     if isinstance(value, str):
         def _replace(m: re.Match) -> str:
-            v = os.environ.get(m.group(1), "")
+            variable_name = m.group(1)
+            if is_internal_control_credential_name(variable_name):
+                raise _InternalControlCredentialReference(
+                    "MCP config references an internal control credential"
+                )
+            v = os.environ.get(variable_name, "")
             if not v:
-                logger.warning("MCP config: env var $%s is not set", m.group(1))
+                logger.warning("MCP config: env var $%s is not set", variable_name)
             return v
         return _ENV_VAR_RE.sub(_replace, value)
     if isinstance(value, dict):
@@ -174,7 +188,14 @@ def load_mcp_config(*, include_disabled: bool = False) -> dict[str, Any]:
     raw = _load_raw()
     normalized: dict[str, Any] = {}
     for name, server in raw.items():
-        normalized_entry = _normalize_server_config(server, interpolate=True)
+        try:
+            normalized_entry = _normalize_server_config(server, interpolate=True)
+        except _InternalControlCredentialReference:
+            logger.error(
+                "MCP server %r disabled: config references an internal control credential",
+                name,
+            )
+            continue
         if normalized_entry is None:
             continue
         if not include_disabled and not normalized_entry.get("enabled", True):
@@ -331,11 +352,14 @@ def _build_mcp_connection(server: dict[str, Any]) -> dict[str, Any] | None:
 
     transport = str(server.get("transport", "") or server.get("type", "") or "").strip()
     if transport == "stdio":
+        configured_env = scrub_internal_control_credentials(
+            _string_dict(server.get("env"))
+        )
         return {
             "transport": "stdio",
             "command": server.get("command", ""),
             "args": server.get("args", []),
-            **({"env": server["env"]} if "env" in server else {}),
+            **({"env": configured_env} if "env" in server else {}),
         }
     if transport in {"http", "streamable_http", "sse", "websocket"}:
         connection = {

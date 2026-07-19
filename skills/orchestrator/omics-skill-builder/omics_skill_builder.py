@@ -177,9 +177,19 @@ Next steps:
             f"--skill-name {result.skill_name}\n"
         ),
     )
-    (output_dir / "result.json").write_text(
-        json.dumps(result.to_dict(), indent=2, ensure_ascii=False),
-        encoding="utf-8",
+    from omicsclaw.common.report import write_result_json
+
+    write_result_json(
+        output_dir,
+        SKILL_NAME,
+        SKILL_VERSION,
+        {
+            "method": "skill-scaffolding",
+            "skill_name": result.skill_name,
+            "domain": result.domain,
+            "admission": admission,
+        },
+        result.to_dict(),
     )
 
     print(f"Created OmicsClaw skill scaffold at {result.skill_dir}")

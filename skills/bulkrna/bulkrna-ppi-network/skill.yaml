@@ -57,3 +57,7 @@ resources:
   - methodology.md
   - output_contract.md
   - parameters.md
+security:
+  data_egress: optional
+  network: optional
+  writes: output_dir_only

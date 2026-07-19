@@ -6,7 +6,13 @@ Read → Ideate → Analyze → Write lifecycle, over the existing agent loop. T
 names the vocabulary specific to that surface. Decisions:
 [ADR 0017](../adr/0017-bench-research-continuity-workspace.md),
 [0018](../adr/0018-investigation-thread-equals-project.md),
-[0019](../adr/0019-kg-first-class-dependency-for-bench.md).
+[0019](../adr/0019-kg-first-class-dependency-for-bench.md),
+[0053](../adr/0053-make-control-plane-state-authoritative-for-project-conversation-and-turn.md),
+[0055](../adr/0055-model-project-lifecycle-as-reversible-archive-and-restore.md),
+[0056](../adr/0056-keep-unassigned-runs-outside-project-lifecycle-and-freeze-run-scope.md),
+[0057](../adr/0057-persist-minimal-run-lifecycle-receipts-in-control-plane-state.md),
+[0058](../adr/0058-bind-retried-run-submissions-to-one-fenced-execution-assignment.md), and
+[0059](../adr/0059-store-accepted-inbound-attachments-as-immutable-per-turn-records.md).
 
 > **Scope.** Bench is a **page on the existing Desktop Surface**, not a fourth Surface.
 > It reuses `core.llm_tool_loop`, the Desktop SSE/permission plumbing, the Analysis
@@ -24,12 +30,13 @@ is a page *within* Desktop), "companion" (the persona-companion framing was expl
 rejected — ADR 0017). The name is a working codename, not final.
 
 **Investigation thread**:
-A durable Bench scope for exactly one research project (课题), backed by a `project://<id>`
-memory subtree. The unit of research continuity.
+A Bench presentation of exactly one durable **Project** (课题). Its opaque Project ID and
+lifecycle come from the authoritative Control Plane State Project Record; its
+`project://<id>` Memory subtree stores associated research knowledge. The Project, not
+the UI thread row or Memory subtree, is the unit of research continuity.
 _Avoid_: "workspace" (already overloaded — Surface dir-as-namespace vs ScopedMemory root,
-see docs/CONTEXT.md flagged ambiguities), "session" (`Session` is the chat-turn
-participant), bare "project" (that's the `project://` memory **domain** the thread is
-*backed by*, not the thread itself).
+see docs/CONTEXT.md flagged ambiguities), "session" (the domain term is Conversation),
+a separate thread identity, treating `project://` as the Project registry.
 
 **Manuscript**:
 A write-target child object of an investigation thread; a thread has 0..n. The Write stage
@@ -51,8 +58,14 @@ KG ingest and answers questions with KG-cited provenance.
 `ideate`, each offering a "test this hypothesis" handoff.
 
 **Analyze stage** _(v1)_: runs OmicsClaw skills bound to the thread through the existing
-Analysis Router / Workflow runtime; results roll up to `project://<id>` and write back to
-KG via `record_result`.
+Analysis Router / Workflow runtime. Each admitted Run freezes
+`ProjectScope(project_id)` from the investigation thread's active Project and receives a
+caller-generated opaque Run Submission ID, a control-generated Run ID, minimal Run
+Receipt and at most one Assignment-ID-fenced executor start. Re-delivery of the same
+Bench action returns that Run rather than starting another; its scientific Manifest and
+artifacts roll up to `project://<id>` and write back to KG via `record_result`. Bench
+never substitutes its UI row, display name, output directory or remote Job ID for
+Project, submission, Run or Assignment identity.
 
 **Write stage** _(v2)_: drafts a **Manuscript** from the thread's `analysis://` lineage +
 KG evidence subgraph via a new `writing` skill domain. Methods text is generated from the
@@ -67,24 +80,39 @@ is no parallel markdown store — ADR 0017).
 
 **Thread-scoped recall**:
 The default memory behaviour inside a thread: `recall`/`search` prefer the active thread's
-`project://<thread_id>` grouping, but may surface cross-thread results when useful
-(cross-project method transfer is a feature, not a leak). A thread is a soft grouping in the
-stable `app/<user_id>` namespace, never its own namespace.
+`project://<project_id>` grouping, but may surface cross-Project results when useful
+(cross-Project method transfer is a feature, not a leak). A Project is a soft Memory
+grouping referenced by its canonical Project ID, never a Memory Namespace; legacy
+`app/<user_id>` or transport-derived Namespace values are implementation drift, not the
+accepted state-ownership model.
 _Avoid_: "thread isolation" (implies a hard namespace boundary, which we rejected — ADR 0018).
 
-**Two-store boundary**:
-The rule that the graph **Memory System** owns agent/study *state* (`core://`,
-`project://`, `analysis://`, `insight://`, `preference://`, `session://`), while
-**OmicsClaw-KG** owns cross-study scientific *reading knowledge*
-(Source/Entity/Concept/Method/Hypothesis pages). Not merged.
-_Avoid_: using "the knowledge base" as a synonym for memory — they are two distinct stores.
+**Control/knowledge boundary**:
+The rule that authoritative **Control Plane State** owns Project, Conversation, Turn and
+Run Receipt identity/lifecycle; Run storage owns scientific Manifests/artifacts; the graph
+**Memory System** owns agent/Project knowledge (`core://`,
+`project://`, `analysis://`, `insight://`, `preference://`); and **OmicsClaw-KG** owns
+cross-study scientific reading knowledge (Source/Entity/Concept/Method/Hypothesis pages).
+These are distinct logical owners even if a future deployment shares physical storage.
+_Avoid_: calling Memory the Project registry, using "the knowledge base" as a synonym for
+all three owners, letting a KG or Memory write create a Project.
 
 ## Relationships
 
-- A **Bench** holds many **Investigation threads**; the user works one thread at a time.
-- An **Investigation thread** is backed by exactly one `project://<id>` subtree and rolls
-  up its KG **Source** pages, **Hypothesis** pages, `analysis://` runs and `insight://`
-  notes.
+- A **Bench** presents many **Investigation threads**; the Owner works on one at a time.
+- An **Investigation thread** presents exactly one existing Control Plane State **Project
+  Record**. Its `project://<id>` subtree, KG **Source** and **Hypothesis** pages,
+  `analysis://` Runs and `insight://` notes are associated knowledge or execution records,
+  not alternative Project registries.
+- An archived **Investigation thread** still presents the same Project and remains
+  inspectable and restorable, but its Read/Ideate/Analyze/Write actions cannot create new
+  scientific work until the Project returns to `active`.
+- Analyze-stage Run activity is determined by authoritative **Run Receipts**, not by
+  directory mtimes, Remote Job rows or `analysis://` projections; an accepted
+  non-terminal Project Run makes archive return `project_busy`.
+- A Bench Analyze action creates one Run Submission ID at its user-visible operation
+  boundary. UI or transport retry reuses it and returns the existing Run; observing a
+  Run never assigns or starts it.
 - An **Investigation thread** has 0..n **Manuscripts**; a **Manuscript** belongs to
   exactly one thread.
 - A **Stage** is the shared agent loop conditioned by a fragment + tool subset; switching
@@ -96,16 +124,23 @@ _Avoid_: using "the knowledge base" as a synonym for memory — they are two dis
 
 ## Example dialogue
 
-> **Dev:** "User reads two papers on glioma, then runs sc-de on their own data. One thread
+> **Dev:** "The Owner reads two papers on glioma, then runs sc-de on their own data. One thread
 > or two?"
-> **Architect:** "One **Investigation thread** (the glioma 课题). Both papers become KG
+> **Architect:** "One **Project**, presented as one **Investigation thread** (the glioma 课题). Both papers become KG
 > **Source** pages under it; the sc-de run is an `analysis://` node rolled up to the same
 > `project://<id>`. If the glioma study later splits into two journal submissions, that's
 > still one thread with two **Manuscripts**."
+>
+> **Dev:** "The Owner removes that thread from the active Bench list. Should we delete its
+> analyses and start a new Project if they reopen it?"
+> **Architect:** "No. That action is Project archive, not deletion. Archived Bench views
+> retain the same Project ID, Conversations and evidence; restore reopens that exact
+> Project."
 
 ## Scope sequencing (roadmap, not an ADR)
 
-- **v1**: Thread binding (`project://<id>` plumbed frontend→backend) + **Read** + **Analyze**
+- **v1**: Project binding (opaque Project ID plumbed frontend→backend and validated against
+  Control Plane State) + **Read** + **Analyze**
   + a light, skippable first-run onboarding that seeds `core://my_user` (domains, organism,
   platforms, target venue).
 - **v1.5**: **Ideate** (hypothesis cards + "test this hypothesis" handoff).
@@ -170,4 +205,7 @@ of `insight://` and `project://<thread>/daily/*`.
 
 - "workspace" — do NOT use for an investigation thread; it collides with the existing
   Surface/ScopedMemory senses. Use "investigation thread" / "thread".
+- "delete thread" previously meant hiding a legacy `ThreadMemory` row while retaining
+  content. Use **archive Project** in product language; permanent data purge is outside
+  Bench v1.
 - "Bench" is a working codename; final naming is an open question.

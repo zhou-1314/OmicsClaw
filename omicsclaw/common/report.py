@@ -10,6 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from omicsclaw.common.checksums import sha256_file
+from omicsclaw.common.output_claim import (
+    atomic_write_owned_output_text,
+    collect_output_claim_identities,
+    is_contained_output_path,
+    is_scientific_output_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +28,12 @@ DISCLAIMER = (
 
 def load_result_json(output_dir: str | Path) -> dict[str, Any] | None:
     """Load ``result.json`` from an output directory if present."""
-    result_path = Path(output_dir) / "result.json"
-    if not result_path.exists():
+    output_root = Path(output_dir)
+    result_path = output_root / "result.json"
+    if not is_scientific_output_file(
+        result_path,
+        output_root=output_root,
+    ):
         return None
     try:
         return json.loads(result_path.read_text(encoding="utf-8"))
@@ -95,8 +105,18 @@ def _format_scalar(value: Any) -> str:
 
 def _top_level_entries(output_dir: Path) -> list[str]:
     entries: list[str] = []
+    claim_identities = collect_output_claim_identities(output_dir)
     for path in sorted(output_dir.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
-        if path.name == "README.md":
+        if path.name == "README.md" or path.is_symlink() or not is_contained_output_path(
+            path,
+            output_root=output_dir,
+        ):
+            continue
+        if path.is_file() and not is_scientific_output_file(
+            path,
+            output_root=output_dir,
+            claim_identities=claim_identities,
+        ):
             continue
         suffix = "/" if path.is_dir() else ""
         entries.append(f"`{path.name}{suffix}`")
@@ -124,7 +144,10 @@ def write_output_readme(
         params = data_block.get("effective_params") or data_block.get("params", {})
     method = extract_method_name(payload, fallback=preferred_method) or "not recorded"
     completed_at = payload.get("completed_at", "")
-    report_exists = (output_dir / "report.md").exists()
+    report_exists = is_scientific_output_file(
+        output_dir / "report.md",
+        output_root=output_dir,
+    )
     readme_path = output_dir / "README.md"
     notebook_rel = ""
     if notebook_path:
@@ -184,7 +207,12 @@ def write_output_readme(
             lines.append(f"- {entry}")
 
     lines.extend(["", "## Notes", "", f"- {DISCLAIMER}"])
-    readme_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    atomic_write_owned_output_text(
+        readme_path,
+        output_root=output_dir,
+        text="\n".join(lines) + "\n",
+        label="output guide",
+    )
     return readme_path
 
 
@@ -333,9 +361,12 @@ def write_result_json(
     if lineage is not None:
         envelope["lineage"] = lineage
 
-    result_path = output_dir / "result.json"
-    result_path.write_text(json.dumps(envelope, indent=2, default=str))
-    return result_path
+    return atomic_write_owned_output_text(
+        output_dir / "result.json",
+        output_root=output_dir,
+        text=json.dumps(envelope, indent=2, default=str),
+        label="output ownership metadata",
+    )
 
 
 _RESULT_STATUS_VALUES = frozenset({"ok", "partial", "failed"})
@@ -424,8 +455,12 @@ def mark_result_status(
         )
         return False
 
-    result_path = Path(output_dir) / "result.json"
-    if not result_path.exists():
+    output_root = Path(output_dir)
+    result_path = output_root / "result.json"
+    if not is_scientific_output_file(
+        result_path,
+        output_root=output_root,
+    ):
         return False
     try:
         envelope = json.loads(result_path.read_text(encoding="utf-8"))
@@ -436,8 +471,13 @@ def mark_result_status(
 
     envelope["status"] = status
     try:
-        result_path.write_text(json.dumps(envelope, indent=2, default=str))
-    except OSError:
+        atomic_write_owned_output_text(
+            result_path,
+            output_root=output_root,
+            text=json.dumps(envelope, indent=2, default=str),
+            label="result status",
+        )
+    except (OSError, RuntimeError):
         return False
     return True
 
@@ -449,13 +489,7 @@ def read_result_status(output_dir: str | Path) -> str | None:
     ``"failed"``); any other shape is treated as "no status" so the
     runner falls back to its exit-code heuristic.
     """
-    result_path = Path(output_dir) / "result.json"
-    if not result_path.exists():
-        return None
-    try:
-        envelope = json.loads(result_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    envelope = load_result_json(output_dir)
     if not isinstance(envelope, dict):
         return None
     value = envelope.get("status")
@@ -483,7 +517,10 @@ def write_replot_hint(
     try:
         output_dir = Path(output_dir)
         result_path = output_dir / "result.json"
-        if not result_path.exists():
+        if not is_scientific_output_file(
+            result_path,
+            output_root=output_dir,
+        ):
             return
 
         try:
@@ -517,8 +554,12 @@ def write_replot_hint(
             "renderers": renderer_info,
         }
 
-        result_path.write_text(json.dumps(envelope, indent=2, default=str))
+        atomic_write_owned_output_text(
+            result_path,
+            output_root=output_dir,
+            text=json.dumps(envelope, indent=2, default=str),
+            label="result replot hint",
+        )
     except Exception:
         # write_replot_hint is informational only — never crash the skill over it
         pass
-

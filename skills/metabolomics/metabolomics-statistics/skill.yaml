@@ -33,6 +33,10 @@ interface:
   inputs:
     file_types:
     - csv
+    artifacts:
+    - kind: metabolomics.feature_matrix
+      formats:
+      - csv
   outputs:
     files:
     - tables/statistics.csv

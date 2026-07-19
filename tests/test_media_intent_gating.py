@@ -66,6 +66,22 @@ def test_return_media_all_queues_files_no_summary(tmp_path: Path):
     assert "umap.png" in plan.sent_names
 
 
+def test_media_collection_rejects_claim_aliases(tmp_path: Path):
+    from omicsclaw.common.output_claim import OUTPUT_CLAIM_FILENAME
+
+    out = _make_outputs(tmp_path / "run", figures=("umap.png",))
+    claim = out / OUTPUT_CLAIM_FILENAME
+    claim.write_text("{}\n", encoding="utf-8")
+    (out / "figures" / "claim.png").hardlink_to(claim)
+    (out / "claim.csv").hardlink_to(claim)
+
+    collected = _collect_output_media_paths(out)
+
+    assert [path.name for path in collected.figure_paths] == ["umap.png"]
+    assert [path.name for path in collected.table_paths] == ["metrics.csv"]
+    assert not any("claim" in Path(item["path"]).name for item in collected.media_items)
+
+
 def test_keyword_sends_match_and_summarises_rest(tmp_path: Path):
     """A keyword sends only matching figures as cards; the remainder become the
     collapsed summary."""

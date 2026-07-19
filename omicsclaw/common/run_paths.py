@@ -28,10 +28,13 @@ locked index append, path-safety assert) are part of the decision.
 from __future__ import annotations
 
 import hashlib
+import errno
 import json
 import os
 import re
+import stat
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -39,12 +42,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from omicsclaw.common.output_claim import (
+    atomic_write_owned_output_text,
+    first_filesystem_alias_component,
+    is_filesystem_alias,
+    stat_is_filesystem_alias,
+)
+
 try:  # POSIX advisory locking for the index append; degrade gracefully elsewhere.
     import fcntl
 
     _HAVE_FCNTL = True
 except ImportError:  # pragma: no cover - non-POSIX
     _HAVE_FCNTL = False
+
+try:  # Windows advisory locking for Project and stable index lock files.
+    import msvcrt
+
+    _HAVE_MSVCRT = True
+except ImportError:  # pragma: no cover - non-Windows
+    _HAVE_MSVCRT = False
 
 __all__ = [
     "DEFAULT_PROJECT_ID",
@@ -68,6 +85,7 @@ __all__ = [
     "list_projects",
     "resolve_cli_project",
     "get_current_project",
+    "peek_current_project",
     "set_current_project",
     "clear_current_project",
 ]
@@ -83,6 +101,12 @@ _UID_LEN = 8
 _SLUG_MAX = 48
 _PROJECT_LOCK_FILENAME = ".project-resolve.lock"
 _PROJECT_LOCK_MUTEX = threading.Lock()
+_INDEX_LOCK_FILENAME = ".index.lock"
+_INDEX_LOCK_MUTEX = threading.Lock()
+_CURRENT_PROJECT_LOCK_FILENAME = ".current-project.lock"
+_CURRENT_PROJECT_LOCK_MUTEX = threading.Lock()
+_CURRENT_PROJECT_MAX_BYTES = 4096
+_STATE_FILE_OPEN_RETRIES = 8
 
 # A run directory leaf: ``<skill>[__method]__YYYYMMDD_HHMMSS__<token>``. Matches
 # the frontend run-dir pattern in ``OmicsClaw-App/src/lib/chat/run-link.ts``.
@@ -184,13 +208,238 @@ class RunResolution:
 # ---------------------------------------------------------------------------
 
 
-def read_project_meta(project_dir: str | Path) -> dict[str, Any]:
-    path = Path(project_dir) / PROJECT_META_FILENAME
-    if not path.exists():
-        return {}
+def _has_filesystem_alias_component(path: Path) -> bool:
+    """Return whether a lexical path contains a shared filesystem alias."""
+
+    return first_filesystem_alias_component(path) is not None
+
+
+def _is_unaliased_directory(path: Path) -> bool:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        return (
+            not _has_filesystem_alias_component(path)
+            and stat.S_ISDIR(path.stat().st_mode)
+        )
+    except OSError:
+        return False
+
+
+def _validate_regular_single_link_stat(file_stat: os.stat_result, *, label: str) -> None:
+    if (
+        stat_is_filesystem_alias(file_stat)
+        or not stat.S_ISREG(file_stat.st_mode)
+        or file_stat.st_nlink != 1
+    ):
+        raise RuntimeError(f"refusing non-regular or multiply-linked {label}")
+
+
+def _open_regular_single_link_file(
+    path: Path,
+    *,
+    flags: int,
+    create: bool,
+    label: str,
+) -> int:
+    """Open one Backend-owned state file without following static aliases."""
+    candidate = Path(path)
+    if _has_filesystem_alias_component(candidate.parent):
+        raise RuntimeError(
+            f"refusing {label} through a symbolic-link parent or Windows reparse point"
+        )
+
+    safe_flags = (
+        flags
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    for _attempt in range(_STATE_FILE_OPEN_RETRIES):
+        try:
+            before = candidate.lstat()
+        except FileNotFoundError:
+            if not create:
+                raise
+            try:
+                fd = os.open(
+                    candidate,
+                    safe_flags | os.O_CREAT | os.O_EXCL,
+                    0o644,
+                )
+            except FileExistsError:
+                continue
+            try:
+                _validate_regular_single_link_stat(os.fstat(fd), label=label)
+            except BaseException:
+                os.close(fd)
+                raise
+            return fd
+
+        _validate_regular_single_link_stat(before, label=label)
+        try:
+            fd = os.open(candidate, safe_flags)
+        except FileNotFoundError:
+            if create:
+                continue
+            raise
+        try:
+            after = os.fstat(fd)
+            _validate_regular_single_link_stat(after, label=label)
+            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+                raise RuntimeError(f"refusing changed {label} during open")
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
+    raise RuntimeError(f"could not safely create or open {label}")
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    remaining = memoryview(data)
+    while remaining:
+        written = os.write(fd, remaining)
+        if written <= 0:  # pragma: no cover - defensive for unusual filesystems
+            raise OSError("short write while publishing run index")
+        remaining = remaining[written:]
+
+
+def _acquire_exclusive_state_lock(fd: int, *, label: str) -> None:
+    """Acquire one blocking cross-process lock or fail closed."""
+
+    if _HAVE_FCNTL:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return
+    if _HAVE_MSVCRT:  # pragma: no cover - exercised on Windows
+        if os.fstat(fd).st_size == 0:
+            os.lseek(fd, 0, os.SEEK_SET)
+            _write_all(fd, b"\0")
+            os.fsync(fd)
+        while True:
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                return
+            except OSError as exc:
+                if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                    raise RuntimeError(f"could not acquire {label}") from exc
+                time.sleep(0.05)
+    raise RuntimeError("cross-process file locking is unavailable")
+
+
+def _release_exclusive_state_lock(fd: int) -> None:
+    if _HAVE_FCNTL:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    elif _HAVE_MSVCRT:  # pragma: no cover - exercised on Windows
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+
+
+def _read_regular_single_link_text(path: Path, *, label: str) -> str | None:
+    try:
+        fd = _open_regular_single_link_file(
+            path,
+            flags=os.O_RDONLY,
+            create=False,
+            label=label,
+        )
+    except (OSError, RuntimeError):
+        return None
+    try:
+        if _HAVE_FCNTL:
+            fcntl.flock(fd, fcntl.LOCK_SH)
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks).decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    finally:
+        if _HAVE_FCNTL:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:  # pragma: no cover - descriptor cleanup is best effort
+                pass
+        os.close(fd)
+
+
+def _read_bounded_regular_single_link_snapshot(
+    path: Path,
+    *,
+    label: str,
+    max_bytes: int,
+) -> str | None:
+    """Read one small navigation snapshot without taking a blocking lock.
+
+    The current-Project pointer is only a hint and its writer publishes by
+    atomic replacement.  A no-follow open plus a bounded positional read is
+    therefore sufficient; inode/size identity checks reject concurrent or
+    adversarial mutation without creating a sibling lock file.
+    """
+
+    try:
+        fd = _open_regular_single_link_file(
+            path,
+            flags=os.O_RDONLY,
+            create=False,
+            label=label,
+        )
+    except (OSError, RuntimeError):
+        return None
+    try:
+        before = os.fstat(fd)
+        if before.st_size < 0 or before.st_size > max_bytes:
+            return None
+        if hasattr(os, "pread"):
+            payload = os.pread(fd, max_bytes + 1, 0)
+        else:  # pragma: no cover - Windows fallback
+            os.lseek(fd, 0, os.SEEK_SET)
+            payload = os.read(fd, max_bytes + 1)
+        after = os.fstat(fd)
+        if (
+            len(payload) > max_bytes
+            or len(payload) != after.st_size
+            or before.st_size != after.st_size
+            or before.st_mtime_ns != after.st_mtime_ns
+            or before.st_ctime_ns != after.st_ctime_ns
+        ):
+            return None
+        try:
+            current = path.lstat()
+            _validate_regular_single_link_stat(current, label=label)
+        except (OSError, RuntimeError):
+            return None
+        if (current.st_dev, current.st_ino) != (after.st_dev, after.st_ino):
+            return None
+        return payload.decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    finally:
+        os.close(fd)
+
+
+def read_project_meta(project_dir: str | Path) -> dict[str, Any]:
+    project_path = Path(project_dir)
+    path = project_path / PROJECT_META_FILENAME
+    try:
+        if _has_filesystem_alias_component(path):
+            return {}
+        file_stat = path.stat()
+        path.resolve(strict=True).relative_to(project_path.resolve(strict=True))
+        if (
+            not stat.S_ISREG(file_stat.st_mode)
+            or file_stat.st_nlink != 1
+        ):
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        project_id = data.get("project_id")
+        if not isinstance(project_id, str) or not project_id.strip():
+            return {}
+        return data
+    except (json.JSONDecodeError, OSError, RuntimeError, ValueError):
         return {}
 
 
@@ -211,7 +460,11 @@ def _find_project_dir_by_short_id(output_root: Path, project_id: str) -> Path | 
     suffix = f"__{project_short_id(project_id)}"
     try:
         for entry in sorted(output_root.iterdir()):
-            if entry.is_dir() and entry.name.endswith(suffix):
+            if (
+                not is_filesystem_alias(entry)
+                and entry.is_dir()
+                and entry.name.endswith(suffix)
+            ):
                 if str(read_project_meta(entry).get("project_id", "")) == project_id:
                     return entry
     except OSError:
@@ -253,31 +506,79 @@ def _write_project_meta(project_dir: Path, project_id: str, display_name: str) -
 
 
 @contextmanager
-def _project_resolution_lock(output_root: Path) -> Iterator[None]:
-    """Serialize project short-id scan/create/write across threads/processes."""
-    with _PROJECT_LOCK_MUTEX:
-        fd: int | None = None
-        if _HAVE_FCNTL:
-            fd = os.open(
-                str(output_root / _PROJECT_LOCK_FILENAME),
-                os.O_WRONLY | os.O_CREAT,
-                0o644,
-            )
-            fcntl.flock(fd, fcntl.LOCK_EX)
+def _index_mutation_lock(project_dir: Path) -> Iterator[None]:
+    """Serialize one Project's manifest-derived index publication.
+
+    Locking ``index.jsonl`` itself is insufficient because ``rebuild_index``
+    atomically replaces that inode.  A stable sibling lock coordinates both
+    append and rebuild across threads and POSIX processes.
+    """
+
+    with _INDEX_LOCK_MUTEX:
+        fd = _open_regular_single_link_file(
+            Path(project_dir) / _INDEX_LOCK_FILENAME,
+            flags=os.O_RDWR,
+            create=True,
+            label=_INDEX_LOCK_FILENAME,
+        )
+        _acquire_exclusive_state_lock(fd, label=_INDEX_LOCK_FILENAME)
         try:
             yield
         finally:
-            if fd is not None:
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_UN)
-                finally:
-                    os.close(fd)
+            try:
+                _release_exclusive_state_lock(fd)
+            finally:
+                os.close(fd)
+
+
+@contextmanager
+def _current_project_lock(output_root: Path) -> Iterator[None]:
+    """Serialize the active-Project pointer across threads and processes."""
+
+    with _CURRENT_PROJECT_LOCK_MUTEX:
+        fd = _open_regular_single_link_file(
+            Path(output_root) / _CURRENT_PROJECT_LOCK_FILENAME,
+            flags=os.O_RDWR,
+            create=True,
+            label=_CURRENT_PROJECT_LOCK_FILENAME,
+        )
+        _acquire_exclusive_state_lock(fd, label=_CURRENT_PROJECT_LOCK_FILENAME)
+        try:
+            yield
+        finally:
+            try:
+                _release_exclusive_state_lock(fd)
+            finally:
+                os.close(fd)
+
+
+@contextmanager
+def _project_resolution_lock(output_root: Path) -> Iterator[None]:
+    """Serialize project short-id scan/create/write across threads/processes."""
+    with _PROJECT_LOCK_MUTEX:
+        fd = _open_regular_single_link_file(
+            output_root / _PROJECT_LOCK_FILENAME,
+            flags=os.O_RDWR,
+            create=True,
+            label=_PROJECT_LOCK_FILENAME,
+        )
+        _acquire_exclusive_state_lock(fd, label=_PROJECT_LOCK_FILENAME)
+        try:
+            yield
+        finally:
+            try:
+                _release_exclusive_state_lock(fd)
+            finally:
+                os.close(fd)
 
 
 def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
-    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_owned_output_text(
+        path,
+        output_root=path.parent,
+        text=json.dumps(data, ensure_ascii=False, indent=2),
+        label=path.name,
+    )
 
 
 def _available_project_dir(output_root: Path, slug: str, short: str) -> Path:
@@ -307,6 +608,10 @@ def resolve_project_dir(
     folder regardless of whether this caller knows the display name.
     """
     output_root = Path(output_root)
+    if _has_filesystem_alias_component(output_root):
+        raise ValueError(
+            f"refusing aliased output root before Project creation: {output_root}"
+        )
     pid = (project_id or "").strip() or DEFAULT_PROJECT_ID
 
     if pid == DEFAULT_PROJECT_ID:
@@ -314,8 +619,8 @@ def resolve_project_dir(
         if create:
             output_root.mkdir(parents=True, exist_ok=True)
             with _project_resolution_lock(output_root):
-                if project_dir.is_symlink():
-                    raise ValueError(f"refusing symlinked project directory: {project_dir}")
+                if is_filesystem_alias(project_dir):
+                    raise ValueError(f"refusing aliased project directory: {project_dir}")
                 project_dir.mkdir(parents=True, exist_ok=True)
                 _write_project_meta(project_dir, DEFAULT_PROJECT_ID, DEFAULT_PROJECT_ID)
         return project_dir
@@ -331,8 +636,8 @@ def resolve_project_dir(
                 slug = slugify_token(project_name) if project_name else ""
                 slug = slug or "project"
                 project_dir = _available_project_dir(output_root, slug, short)
-            if project_dir.is_symlink():
-                raise ValueError(f"refusing symlinked project directory: {project_dir}")
+            if is_filesystem_alias(project_dir):
+                raise ValueError(f"refusing aliased project directory: {project_dir}")
             project_dir.mkdir(parents=True, exist_ok=True)
             # Pass the raw (possibly empty) name: ``_write_project_meta`` keeps an
             # existing readable display name when a later caller (e.g. the agent) has
@@ -406,8 +711,8 @@ def resolve_run_dir(
     output_root = Path(output_root)
     project_dir = resolve_project_dir(output_root, project_id, project_name, create=True)
     # Reject a symlinked project dir masquerading inside the root (constraint 10).
-    if project_dir.is_symlink():
-        raise ValueError(f"refusing symlinked project directory: {project_dir}")
+    if is_filesystem_alias(project_dir):
+        raise ValueError(f"refusing aliased project directory: {project_dir}")
 
     ts = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
     ds = dataset_slug(
@@ -437,9 +742,8 @@ def resolve_run_dir(
 # ---------------------------------------------------------------------------
 
 
-def _enrich_manifest(run_dir: Path, *, run_record: dict[str, Any]) -> Path | None:
+def _enrich_manifest(run_dir: Path, *, run_record: dict[str, Any]) -> Path:
     from omicsclaw.common.manifest import (  # local import keeps the graph shallow
-        MANIFEST_FILENAME,
         PipelineManifest,
         read_manifest,
         save_manifest,
@@ -449,10 +753,7 @@ def _enrich_manifest(run_dir: Path, *, run_record: dict[str, Any]) -> Path | Non
     run_meta = dict(manifest.metadata.get("run", {}))
     run_meta.update({k: v for k, v in run_record.items() if v is not None})
     manifest.metadata["run"] = run_meta
-    try:
-        return save_manifest(run_dir, manifest)
-    except OSError:  # pragma: no cover - defensive
-        return run_dir / MANIFEST_FILENAME
+    return save_manifest(run_dir, manifest)
 
 
 def _index_record(
@@ -480,22 +781,29 @@ def _index_record(
     }
 
 
-def _append_index_line(index_path: Path, record: dict[str, Any]) -> None:
-    """Single locked ``O_APPEND`` write so concurrent runs never interleave (constraint 5)."""
+def _append_index_line_unlocked(index_path: Path, record: dict[str, Any]) -> None:
+    """Append one row while the stable Project index lock is held."""
+
     line = json.dumps(record, ensure_ascii=False) + "\n"
     data = line.encode("utf-8")
-    fd = os.open(str(index_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    fd = _open_regular_single_link_file(
+        index_path,
+        flags=os.O_WRONLY | os.O_APPEND,
+        create=True,
+        label=RUN_INDEX_FILENAME,
+    )
     try:
-        if _HAVE_FCNTL:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        os.write(fd, data)
+        _write_all(fd, data)
+        os.fsync(fd)
     finally:
-        if _HAVE_FCNTL:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            except OSError:  # pragma: no cover
-                pass
         os.close(fd)
+
+
+def _append_index_line(index_path: Path, record: dict[str, Any]) -> None:
+    """Publish one complete row under the stable per-Project index lock."""
+
+    with _index_mutation_lock(index_path.parent):
+        _append_index_line_unlocked(index_path, record)
 
 
 def finalize_run(
@@ -534,28 +842,29 @@ def finalize_run(
         "input_path": input_path,
         "recorded_at": _utcnow_iso(),
     }
-    manifest_path = _enrich_manifest(run_dir, run_record=run_record)
-    mtime = 0.0
-    if manifest_path is not None and manifest_path.exists():
+    with _index_mutation_lock(project_dir):
+        manifest_path = _enrich_manifest(run_dir, run_record=run_record)
         try:
             mtime = manifest_path.stat().st_mtime
-        except OSError:  # pragma: no cover
-            mtime = 0.0
+        except OSError as exc:
+            raise RuntimeError(
+                f"manifest was not durably published for Run {run_id!r}"
+            ) from exc
 
-    _append_index_line(
-        project_dir / RUN_INDEX_FILENAME,
-        _index_record(
-            project_id=project_id,
-            run_id=run_id,
-            skill=skill,
-            method=method,
-            dataset=ds,
-            status=status,
-            manifest_mtime=mtime,
-            path_rel=run_id,
-        ),
-    )
-    return manifest_path if manifest_path is not None else run_dir
+        _append_index_line_unlocked(
+            project_dir / RUN_INDEX_FILENAME,
+            _index_record(
+                project_id=project_id,
+                run_id=run_id,
+                skill=skill,
+                method=method,
+                dataset=ds,
+                status=status,
+                manifest_mtime=mtime,
+                path_rel=run_id,
+            ),
+        )
+    return manifest_path
 
 
 def _dataset_from_run_id(run_id: str) -> str:
@@ -572,7 +881,11 @@ def _dataset_from_run_id(run_id: str) -> str:
 
 
 def _looks_like_run_dir(path: Path) -> bool:
-    return path.is_dir() and bool(_RUN_DIR_RE.match(path.name))
+    return (
+        not is_filesystem_alias(path)
+        and path.is_dir()
+        and bool(_RUN_DIR_RE.match(path.name))
+    )
 
 
 def iter_run_dirs(output_root: str | Path) -> Iterator[tuple[Path, Path]]:
@@ -582,14 +895,14 @@ def iter_run_dirs(output_root: str | Path) -> Iterator[tuple[Path, Path]]:
     the root (treated as the ``default`` project) for the no-migration cut-over.
     """
     output_root = Path(output_root)
-    if not output_root.is_dir():
+    if not _is_unaliased_directory(output_root):
         return
     try:
         entries = sorted(output_root.iterdir())
     except OSError:
         return
     for entry in entries:
-        if not entry.is_dir():
+        if is_filesystem_alias(entry) or not entry.is_dir():
             continue
         if _looks_like_run_dir(entry):
             yield output_root, entry  # legacy root-level run -> default
@@ -613,16 +926,18 @@ def find_run_dir(output_root: str | Path, run_id: str) -> Path | None:
     output_root = Path(output_root)
     if not run_id or "/" in run_id or "\\" in run_id or run_id in (".", ".."):
         return None
+    if not _is_unaliased_directory(output_root):
+        return None
     # Legacy root-level run.
     candidates: list[Path] = [output_root / run_id]
     try:
         for entry in output_root.iterdir():
-            if entry.is_dir():
+            if not is_filesystem_alias(entry) and entry.is_dir():
                 candidates.append(entry / run_id)
     except OSError:
         pass
     for cand in candidates:
-        if cand.is_dir() and not cand.is_symlink():
+        if not is_filesystem_alias(cand) and cand.is_dir():
             try:
                 assert_under_root(cand, output_root)
             except ValueError:
@@ -633,21 +948,29 @@ def find_run_dir(output_root: str | Path, run_id: str) -> Path | None:
 
 def read_index(project_dir: str | Path) -> list[dict[str, Any]]:
     """Parsed ``index.jsonl`` rows, skipping any corrupt/half-written line."""
-    path = Path(project_dir) / RUN_INDEX_FILENAME
-    if not path.exists():
+    project_path = Path(project_dir)
+    path = project_path / RUN_INDEX_FILENAME
+    lock_path = project_path / _INDEX_LOCK_FILENAME
+    if not os.path.lexists(path) and not os.path.lexists(lock_path):
+        return []
+    try:
+        with _index_mutation_lock(project_path):
+            text = _read_regular_single_link_text(path, label=RUN_INDEX_FILENAME)
+    except (OSError, RuntimeError):
+        return []
+    if text is None:
         return []
     rows: list[dict[str, Any]] = []
-    try:
-        for raw in path.read_text(encoding="utf-8").splitlines():
-            raw = raw.strip()
-            if not raw:
-                continue
-            try:
-                rows.append(json.loads(raw))
-            except json.JSONDecodeError:
-                continue
-    except OSError:
-        return []
+    for raw in text.splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            rows.append(data)
     return rows
 
 
@@ -663,14 +986,18 @@ def list_projects(output_root: str | Path) -> list[dict[str, Any]]:
     """
     root = Path(output_root)
     out: list[dict[str, Any]] = []
-    if not root.is_dir():
+    if not _is_unaliased_directory(root):
         return out
     try:
         entries = sorted(root.iterdir())
     except OSError:
         return out
     for entry in entries:
-        if not entry.is_dir() or _looks_like_run_dir(entry):
+        if (
+            is_filesystem_alias(entry)
+            or not entry.is_dir()
+            or _looks_like_run_dir(entry)
+        ):
             continue
         meta = read_project_meta(entry)
         try:
@@ -708,31 +1035,113 @@ def resolve_cli_project(output_root: str | Path, name: str) -> tuple[str, str]:
     return (pid, name)
 
 
-def get_current_project(output_root: str | Path) -> tuple[str, str]:
-    """Active CLI project ``(project_id, display_name)`` or ``("", "")``."""
-    path = Path(output_root) / CURRENT_PROJECT_FILENAME
-    if not path.exists():
+def _parse_current_project_text(text: str | None) -> tuple[str, str]:
+    if text is None:
         return ("", "")
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return (str(data.get("project_id", "")), str(data.get("display_name", "")))
-    except (json.JSONDecodeError, OSError):
+        data = json.loads(text)
+    except json.JSONDecodeError:
         return ("", "")
-
-
-def set_current_project(output_root: str | Path, project_id: str, display_name: str = "") -> None:
-    root = Path(output_root)
-    root.mkdir(parents=True, exist_ok=True)
-    _atomic_write_json(
-        root / CURRENT_PROJECT_FILENAME,
-        {"project_id": project_id, "display_name": display_name or project_id},
+    if not isinstance(data, dict):
+        return ("", "")
+    project_id = data.get("project_id")
+    display_name = data.get("display_name")
+    if not isinstance(project_id, str) or not project_id.strip():
+        return ("", "")
+    normalized_id = project_id.strip()
+    return (
+        normalized_id,
+        display_name if isinstance(display_name, str) else normalized_id,
     )
 
 
-def clear_current_project(output_root: str | Path) -> None:
+def peek_current_project(output_root: str | Path) -> tuple[str, str]:
+    """Read the bounded CLI navigation hint without locks or filesystem writes."""
+
     path = Path(output_root) / CURRENT_PROJECT_FILENAME
-    if path.exists():
-        path.unlink()
+    if not os.path.lexists(path):
+        return ("", "")
+    return _parse_current_project_text(
+        _read_bounded_regular_single_link_snapshot(
+            path,
+            label=CURRENT_PROJECT_FILENAME,
+            max_bytes=_CURRENT_PROJECT_MAX_BYTES,
+        )
+    )
+
+
+def get_current_project(output_root: str | Path) -> tuple[str, str]:
+    """Active CLI project ``(project_id, display_name)`` or ``("", "")``."""
+    root = Path(output_root)
+    path = root / CURRENT_PROJECT_FILENAME
+    lock_path = root / _CURRENT_PROJECT_LOCK_FILENAME
+    if not os.path.lexists(path) and not os.path.lexists(lock_path):
+        return ("", "")
+    try:
+        with _current_project_lock(root):
+            text = _read_bounded_regular_single_link_snapshot(
+                path,
+                label=CURRENT_PROJECT_FILENAME,
+                max_bytes=_CURRENT_PROJECT_MAX_BYTES,
+            )
+    except (OSError, RuntimeError):
+        return ("", "")
+    return _parse_current_project_text(text)
+
+
+def set_current_project(output_root: str | Path, project_id: str, display_name: str = "") -> None:
+    if not isinstance(project_id, str) or not project_id.strip():
+        raise ValueError("current Project requires a non-empty string project_id")
+    project_id = project_id.strip()
+    root = Path(output_root)
+    if _has_filesystem_alias_component(root):
+        raise RuntimeError("refusing to set current Project through an aliased output root")
+    root.mkdir(parents=True, exist_ok=True)
+    with _current_project_lock(root):
+        _atomic_write_json(
+            root / CURRENT_PROJECT_FILENAME,
+            {"project_id": project_id, "display_name": display_name or project_id},
+        )
+
+
+def clear_current_project(output_root: str | Path) -> None:
+    """Remove a real current-Project pointer; missing is an idempotent no-op.
+
+    Unsafe aliases and non-regular entries raise ``RuntimeError`` because this
+    operation mutates filesystem state and must not silently unlink them.
+    """
+    root = Path(output_root)
+    path = root / CURRENT_PROJECT_FILENAME
+    lock_path = root / _CURRENT_PROJECT_LOCK_FILENAME
+    if not os.path.lexists(path) and not os.path.lexists(lock_path):
+        return
+    with _current_project_lock(root):
+        try:
+            fd = _open_regular_single_link_file(
+                path,
+                flags=os.O_RDONLY,
+                create=False,
+                label=CURRENT_PROJECT_FILENAME,
+            )
+        except FileNotFoundError:
+            return
+        try:
+            opened = os.fstat(fd)
+            current = path.lstat()
+            _validate_regular_single_link_stat(
+                current,
+                label=CURRENT_PROJECT_FILENAME,
+            )
+            if (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
+                raise RuntimeError(
+                    "refusing changed current Project pointer before unlink"
+                )
+        finally:
+            os.close(fd)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
 
 
 def rebuild_index(project_dir: str | Path) -> int:
@@ -744,30 +1153,37 @@ def rebuild_index(project_dir: str | Path) -> int:
     from omicsclaw.common.manifest import read_manifest
 
     project_dir = Path(project_dir)
-    project_id = _project_id_of(project_dir)
-    lines: list[str] = []
-    count = 0
-    for child in sorted(project_dir.iterdir()) if project_dir.is_dir() else []:
-        if not _looks_like_run_dir(child):
-            continue
-        manifest = read_manifest(child)
-        run_meta = (manifest.metadata.get("run", {}) if manifest else {}) or {}
-        manifest_path = child / "manifest.json"
-        mtime = manifest_path.stat().st_mtime if manifest_path.exists() else 0.0
-        rec = _index_record(
-            project_id=project_id,
-            run_id=child.name,
-            skill=str(run_meta.get("skill", "")),
-            method=str(run_meta.get("method", "")) or None,
-            dataset=str(run_meta.get("dataset", "")) or _dataset_from_run_id(child.name),
-            status=str(run_meta.get("status", "")),
-            manifest_mtime=mtime,
-            path_rel=child.name,
+    with _index_mutation_lock(project_dir):
+        project_id = _project_id_of(project_dir)
+        lines: list[str] = []
+        count = 0
+        for child in sorted(project_dir.iterdir()) if project_dir.is_dir() else []:
+            if not _looks_like_run_dir(child):
+                continue
+            manifest = read_manifest(child)
+            run_meta = (manifest.metadata.get("run", {}) if manifest else {}) or {}
+            manifest_path = child / "manifest.json"
+            mtime = manifest_path.stat().st_mtime if manifest_path.exists() else 0.0
+            rec = _index_record(
+                project_id=project_id,
+                run_id=child.name,
+                skill=str(run_meta.get("skill", "")),
+                method=str(run_meta.get("method", "")) or None,
+                dataset=(
+                    str(run_meta.get("dataset", ""))
+                    or _dataset_from_run_id(child.name)
+                ),
+                status=str(run_meta.get("status", "")),
+                manifest_mtime=mtime,
+                path_rel=child.name,
+            )
+            lines.append(json.dumps(rec, ensure_ascii=False))
+            count += 1
+        index_path = project_dir / RUN_INDEX_FILENAME
+        atomic_write_owned_output_text(
+            index_path,
+            output_root=project_dir,
+            text=("\n".join(lines) + "\n") if lines else "",
+            label=RUN_INDEX_FILENAME,
         )
-        lines.append(json.dumps(rec, ensure_ascii=False))
-        count += 1
-    index_path = project_dir / RUN_INDEX_FILENAME
-    tmp = index_path.with_name(f".{RUN_INDEX_FILENAME}.tmp-{os.getpid()}")
-    tmp.write_text(("\n".join(lines) + "\n") if lines else "", encoding="utf-8")
-    os.replace(tmp, index_path)
     return count

@@ -3,6 +3,7 @@
 Lives in its own module so the wiring is unit-testable without importing
 the rest of ``server.py`` (which carries fastapi / httpx imports).
 """
+
 from __future__ import annotations
 
 import json
@@ -48,6 +49,13 @@ def _coerce_compaction_event(event: CompactionEventOrPayload) -> CompactionEvent
     )
 
 
+def build_compaction_sse_event(event: CompactionEventOrPayload) -> dict[str, str]:
+    """Build the neutral event for an async/backpressured Surface sink."""
+
+    payload = build_compaction_status_payload(_coerce_compaction_event(event))
+    return {"type": "status", "data": json.dumps(payload)}
+
+
 def make_compaction_event_handler(
     queue: Any,
 ) -> Callable[[CompactionEventOrPayload], None]:
@@ -62,10 +70,7 @@ def make_compaction_event_handler(
 
     def handle(event: CompactionEventOrPayload) -> None:
         try:
-            payload = build_compaction_status_payload(_coerce_compaction_event(event))
-            queue.put_nowait(
-                {"type": "status", "data": json.dumps(payload)}
-            )
+            queue.put_nowait(build_compaction_sse_event(event))
         except Exception:
             logger.warning(
                 "Failed to push compaction event to SSE queue; ignoring.",
@@ -75,4 +80,4 @@ def make_compaction_event_handler(
     return handle
 
 
-__all__ = ["make_compaction_event_handler"]
+__all__ = ["build_compaction_sse_event", "make_compaction_event_handler"]

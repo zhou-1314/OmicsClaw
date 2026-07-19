@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -23,18 +24,10 @@ import pytest
 @pytest.mark.asyncio
 async def test_chat_abort_sets_envelope_cancel_event_before_cancelling_task():
     pytest.importorskip("fastapi")
-    from fastapi import HTTPException
-
-    from omicsclaw.runtime.agent.envelope import MessageEnvelope
     from omicsclaw.surfaces.desktop import server as server_mod
 
     session_id = "test-session-abort-1"
     cancel_event = threading.Event()
-    envelope = MessageEnvelope(
-        chat_id=session_id,
-        content="long running task",
-        cancel_event=cancel_event,
-    )
 
     # Stand-in for the dispatch() task — a coroutine parked indefinitely.
     async def _parked():
@@ -45,12 +38,18 @@ async def test_chat_abort_sets_envelope_cancel_event_before_cancelling_task():
 
     task = asyncio.create_task(_parked())
 
-    # Register both in the module-level dicts the way the SSE handler does.
-    server_mod._active_sessions[session_id] = task
-    server_mod._active_envelopes[session_id] = envelope
+    source_request_id = "a" * 32
+    server_mod._active_sessions[session_id] = server_mod._ActiveDesktopExecution(
+        task=task,
+        cancel_event=cancel_event,
+        source_request_id=source_request_id,
+    )
 
     # Build an AbortRequest pydantic model and hit the endpoint handler.
-    abort_req = server_mod.AbortRequest(session_id=session_id)
+    abort_req = server_mod.AbortRequest(
+        session_id=session_id,
+        source_request_id=source_request_id,
+    )
     response = await server_mod.chat_abort(abort_req)
 
     assert response == {"status": "aborted", "session_id": session_id}
@@ -60,9 +59,8 @@ async def test_chat_abort_sets_envelope_cancel_event_before_cancelling_task():
     # The task must also be cancelled (preserves the prior behaviour).
     assert task.cancelled() or task.done() or task._must_cancel  # type: ignore[attr-defined]
 
-    # Both registries are cleaned up.
+    # The owner registry is cleaned up.
     assert session_id not in server_mod._active_sessions
-    assert session_id not in server_mod._active_envelopes
 
     # Drain the cancelled task so the event loop doesn't warn.
     with pytest.raises(asyncio.CancelledError):
@@ -83,10 +81,49 @@ async def test_chat_abort_returns_404_when_session_unknown():
 
 
 @pytest.mark.asyncio
-async def test_chat_abort_handles_session_without_envelope_gracefully():
-    """If a session was registered before ADR 0009 wiring (or by a code
-    path that doesn't construct envelopes), abort must still cancel the
-    task and return cleanly — no AttributeError on ``envelope.cancel_event``."""
+async def test_chat_abort_routes_control_turn_through_opaque_turn_id(monkeypatch):
+    pytest.importorskip("fastapi")
+    from omicsclaw.surfaces.desktop import server as server_mod
+
+    canceled_turns: list[str] = []
+    monkeypatch.setattr(
+        server_mod,
+        "_desktop_control_runtime",
+        SimpleNamespace(cancel=canceled_turns.append),
+    )
+
+    async def _parked():
+        await asyncio.sleep(60.0)
+
+    task = asyncio.create_task(_parked())
+    owner = server_mod._ActiveDesktopExecution(
+        task=task,
+        cancel_event=threading.Event(),
+        source_request_id="a" * 32,
+        turn_id="f" * 32,
+    )
+    server_mod._active_sessions["controlled-session"] = owner
+    try:
+        response = await server_mod.chat_abort(
+            server_mod.AbortRequest(
+                session_id="controlled-session",
+                source_request_id="a" * 32,
+            )
+        )
+
+        assert response["status"] == "aborted"
+        assert canceled_turns == ["f" * 32]
+        assert owner.cancel_event.is_set()
+        assert not task.cancelled()
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+@pytest.mark.asyncio
+async def test_chat_abort_keeps_legacy_empty_generation_compatible():
+    """A genuinely legacy owner with no source id remains session-abortable."""
     pytest.importorskip("fastapi")
 
     from omicsclaw.surfaces.desktop import server as server_mod
@@ -97,13 +134,60 @@ async def test_chat_abort_handles_session_without_envelope_gracefully():
         await asyncio.sleep(60.0)
 
     task = asyncio.create_task(_parked())
-    server_mod._active_sessions[session_id] = task
-    # Note: no entry in _active_envelopes — simulates a legacy path.
+    cancel_event = threading.Event()
+    server_mod._active_sessions[session_id] = server_mod._ActiveDesktopExecution(
+        task=task,
+        cancel_event=cancel_event,
+        source_request_id="",
+    )
 
     abort_req = server_mod.AbortRequest(session_id=session_id)
     response = await server_mod.chat_abort(abort_req)
 
     assert response == {"status": "aborted", "session_id": session_id}
+    assert cancel_event.is_set()
     assert session_id not in server_mod._active_sessions
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+@pytest.mark.asyncio
+async def test_chat_abort_rejects_stale_or_missing_generation_without_touching_owner():
+    pytest.importorskip("fastapi")
+    from fastapi import HTTPException
+
+    from omicsclaw.surfaces.desktop import server as server_mod
+
+    session_id = "test-session-generation-fence"
+    cancel_event = threading.Event()
+
+    async def _parked():
+        await asyncio.sleep(60.0)
+
+    task = asyncio.create_task(_parked())
+    current_source = "b" * 32
+    owner = server_mod._ActiveDesktopExecution(
+        task=task,
+        cancel_event=cancel_event,
+        source_request_id=current_source,
+    )
+    server_mod._active_sessions[session_id] = owner
+
+    try:
+        for supplied_source in ("", "c" * 32):
+            with pytest.raises(HTTPException) as exc_info:
+                await server_mod.chat_abort(
+                    server_mod.AbortRequest(
+                        session_id=session_id,
+                        source_request_id=supplied_source,
+                    )
+                )
+            assert exc_info.value.status_code == 409
+            assert server_mod._active_sessions.get(session_id) is owner
+            assert not cancel_event.is_set()
+            assert not task.cancelled()
+    finally:
+        server_mod._active_sessions.pop(session_id, None)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task

@@ -92,6 +92,35 @@ deps:
 sections — see `templates/skill/skill.yaml` for the full annotated template and
 `skills/singlecell/scrna/sc-qc/skill.yaml` for a filled-in example.
 
+`resources.compute` is optional until a reservation has been measured on a
+representative run. When present, declare all five fields: `cpu_cores`,
+`memory_mib`, `gpu_devices`, `threads`, and `temporary_disk_mib`; `threads`
+must not exceed `cpu_cores`. These values are Candidate-plan admission
+reservations, not OS-enforced limits or guessed defaults. An uncalibrated skill
+is deliberately resource-unready for whole-plan execution.
+
+`lifecycle.status: deprecated` must name one different canonical
+`superseded_by` Skill whose current lifecycle is `mvp` or `stable` and whose
+earned validation is `demo-validated` or higher.
+Non-deprecated Skills must omit `superseded_by`. For maintained repositories,
+submit evidence and the replacement through Backend Skill evolution governance
+instead of hand-editing the transition: approval reruns the replacement demo,
+refreshes registry/catalog/DAG projections, removes the old Skill from
+automatic/LLM routing, and makes the shared runner return the replacement hint.
+
+`interface.outputs.files` is the exhaustive inventory of possible native
+outputs, not a promise that every branch writes every file. Put only
+always-produced non-AnnData handoffs in `outputs.artifacts`; put
+method-dependent guarantees in `outputs.method_scopes`. After a subprocess
+returns zero, the shared runner validates the standard `result.json` envelope,
+`result_json.required_keys`, unconditional artifacts, and the scope matching
+the method that actually ran before it reports success.
+
+Omit `security` until you have deliberately reviewed the implementation's
+data-egress, network, and filesystem-write behavior. Once reviewed, all three
+fields are required. The block is an auditable declaration, not an OS sandbox
+or proof that the process stayed within those capabilities.
+
 `SKILL.md` is **generated** from `skill.yaml` by `scripts/generate_skill_md.py`:
 its frontmatter header and the `## Inputs & Outputs` summary are auto-populated
 (do **not** hand-edit them), while the narrative sections you author —
@@ -195,6 +224,12 @@ verifies every claimed path appears in the script):
 | `figures/<name>.png` | PNG/SVG visualizations | only if your script uses matplotlib |
 | `reproducibility/{commands.sh,requirements.txt,checksums.sha256}` | Replay artifacts | written by common report helper when applicable |
 | `processed.h5ad` | Output AnnData | only if `interface.outputs.anndata.saves_h5ad: true` in `skill.yaml` |
+
+Use `omicsclaw.common.report.write_result_json` instead of constructing an
+ad-hoc payload. A zero-exit process with a missing, malformed, scaffold, or
+contract-incomplete `result.json` is reported as `contract_failure`; its raw
+output directory is retained for diagnosis, but runner-owned success guides
+are not written.
 
 ### Step 4: (Recommended) Use `_lib` for core logic
 

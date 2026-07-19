@@ -43,6 +43,8 @@ otherwise so the skill always returns something useful.
 - Input kinds: `file`, `directory`
 - Modalities: scrna
 - File types: `.fastq`, `.fq`
+- FASTQ structure: valid first record
+- Directory layouts (any): `fastq-collection`
 
 **Outputs**
 

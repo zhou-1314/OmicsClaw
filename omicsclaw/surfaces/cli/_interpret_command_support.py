@@ -92,7 +92,7 @@ def to_run_command_string(cmd: InterpretCommand) -> str:
     """Convert to a /run argstring (skill name + flags).
 
     Suitable for handing to the existing /run dispatch:
-    ``_handle_run(to_run_command_string(cmd))``.
+    ``_handle_legacy_run(to_run_command_string(cmd))``.
     """
     parts: list[str] = [
         "consensus-interpret",

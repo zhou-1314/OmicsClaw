@@ -4,6 +4,8 @@ import asyncio
 import importlib.util
 import json
 import os
+import re
+import sqlite3
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -14,6 +16,38 @@ import omicsclaw.runtime.agent.state as bot_core
 
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture()
+def freeze_remote_authority():
+    """Install one frozen authority and restore only while still its owner."""
+
+    from omicsclaw.remote import auth as remote_auth
+
+    sentinel = object()
+    ownership = None
+
+    def freeze(app, environ) -> None:
+        nonlocal ownership
+        if ownership is not None:
+            raise AssertionError("remote authority was captured more than once")
+        state = app.state
+        attribute = remote_auth.AUTHORITY_STATE_ATTR
+        previous = getattr(state, attribute, sentinel)
+        authority = remote_auth.capture_remote_bearer_authority(app, environ)
+        ownership = (app, state, attribute, previous, authority)
+
+    yield freeze
+
+    if ownership is None:
+        return
+    app, state, attribute, previous, authority = ownership
+    if getattr(state, attribute, sentinel) is not authority:
+        return
+    if previous is sentinel:
+        remote_auth.release_remote_bearer_authority(app, authority)
+    else:
+        setattr(state, attribute, previous)
 
 
 def _load_omicsclaw_script():
@@ -132,7 +166,10 @@ def test_app_server_main_reports_missing_uvicorn(monkeypatch, capsys):
 
 
 @pytest.mark.asyncio
-async def test_app_server_lifespan_allows_startup_without_llm_credentials(monkeypatch):
+async def test_app_server_lifespan_allows_startup_without_llm_credentials(
+    monkeypatch,
+    tmp_path,
+):
     pytest.importorskip("fastapi")
 
     from omicsclaw.surfaces.desktop import server
@@ -165,6 +202,12 @@ async def test_app_server_lifespan_allows_startup_without_llm_credentials(monkey
     monkeypatch.setattr(server, "_core", None)
     monkeypatch.setattr(server, "_NOTEBOOK_AVAILABLE", False)
     monkeypatch.setattr(server, "_memory_client", None)
+    # Lifespan tests must not inherit or mutate a developer's real durable
+    # Control authority (which may also be at a newer local migration state).
+    monkeypatch.setenv(
+        "OMICSCLAW_CONTROL_STATE_ROOT",
+        str(tmp_path / "desktop-control"),
+    )
 
     async with server.lifespan(server.app):
         pass
@@ -324,7 +367,7 @@ def test_kg_status_payload_available_when_package_present(monkeypatch):
     assert "import_error" not in payload  # only included when unavailable
 
 
-def test_health_endpoint_includes_kg_block(monkeypatch):
+def test_health_endpoint_includes_kg_block(monkeypatch, freeze_remote_authority):
     """End-to-end: the /health endpoint wires in the KG availability sub-payload
     (Bench Phase 3.2). Uses a stubbed core so the endpoint runs without startup."""
     pytest.importorskip("fastapi")
@@ -343,6 +386,7 @@ def test_health_endpoint_includes_kg_block(monkeypatch):
         get_skill_runner_python=lambda: sys.executable,
     )
     monkeypatch.setattr(server, "_get_core", lambda: fake_core)
+    freeze_remote_authority(server.app, {})
 
     body = TestClient(server.app).get("/health").json()
     assert body["status"] == "ok"
@@ -997,53 +1041,54 @@ def test_memory_server_cli_fails_fast_when_uvicorn_missing(monkeypatch, capsys):
     assert 'pip install -e ".[memory]"' in captured.err
 
 
-@pytest.mark.asyncio
-async def test_set_workspace_updates_workspace_env_and_persistence(monkeypatch, tmp_path):
+def test_set_workspace_auth_rejection_has_zero_side_effects(
+    monkeypatch,
+    tmp_path,
+    freeze_remote_authority,
+):
     pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
 
     from omicsclaw.surfaces.desktop import server
 
-    fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[], OUTPUT_DIR=tmp_path / "old-output")
-    captured_updates: dict[str, str] = {}
     workspace_dir = tmp_path / "workspace"
     workspace_dir.mkdir()
+    calls: list[str] = []
 
-    monkeypatch.setattr(server, "_core", fake_core, raising=False)
-    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
-    monkeypatch.setattr(server, "_get_omicsclaw_env_path", lambda: tmp_path / ".env", raising=False)
-    monkeypatch.setattr(
-        server,
-        "_update_env_file",
-        lambda env_path, updates: captured_updates.update(updates),
-        raising=False,
-    )
+    def forbidden_core():
+        calls.append("core")
+        raise AssertionError("unauthenticated workspace request reached runtime state")
+
+    def forbidden_env_write(*_args, **_kwargs):
+        calls.append("env_write")
+        raise AssertionError("unauthenticated workspace request persisted configuration")
+
+    monkeypatch.setenv("OMICSCLAW_REMOTE_AUTH_TOKEN", "correct-token")
     monkeypatch.delenv("OMICSCLAW_DATA_DIRS", raising=False)
     monkeypatch.delenv("OMICSCLAW_WORKSPACE", raising=False)
     monkeypatch.delenv("OMICSCLAW_OUTPUT_DIR", raising=False)
+    monkeypatch.setattr(server, "_get_core", forbidden_core)
+    monkeypatch.setattr(server, "_update_env_file", forbidden_env_write)
+    freeze_remote_authority(server.app, os.environ)
 
-    result = await server.set_workspace(server.WorkspaceRequest(workspace=str(workspace_dir)))
+    response = TestClient(server.app).put(
+        "/workspace",
+        json={"workspace": str(workspace_dir)},
+    )
 
-    expected_output_dir = workspace_dir / "output"
-
-    assert result["ok"] is True
-    assert result["workspace"] == str(workspace_dir)
-    assert result["workspace_env"] == str(workspace_dir)
-    assert result["output_dir"] == str(expected_output_dir)
-    assert os.environ["OMICSCLAW_WORKSPACE"] == str(workspace_dir)
-    assert os.environ["OMICSCLAW_DATA_DIRS"] == str(workspace_dir)
-    assert os.environ["OMICSCLAW_OUTPUT_DIR"] == str(expected_output_dir)
-    assert captured_updates == {
-        "OMICSCLAW_DATA_DIRS": str(workspace_dir),
-        "OMICSCLAW_WORKSPACE": str(workspace_dir),
-        "OMICSCLAW_OUTPUT_DIR": str(expected_output_dir),
-    }
-    assert fake_core.TRUSTED_DATA_DIRS == [workspace_dir]
-    assert fake_core.OUTPUT_DIR == expected_output_dir
-    assert expected_output_dir.is_dir()
+    assert response.status_code == 401
+    assert calls == []
+    assert not (workspace_dir / "output").exists()
+    assert "OMICSCLAW_DATA_DIRS" not in os.environ
+    assert "OMICSCLAW_WORKSPACE" not in os.environ
+    assert "OMICSCLAW_OUTPUT_DIR" not in os.environ
 
 
 @pytest.mark.asyncio
-async def test_chat_stream_request_workspace_updates_output_dir_before_tool_loop(monkeypatch, tmp_path):
+async def test_chat_stream_request_workspace_uses_frozen_runtime_configuration(
+    monkeypatch,
+    tmp_path,
+):
     pytest.importorskip("fastapi")
 
     from omicsclaw.surfaces.desktop import server
@@ -1052,10 +1097,11 @@ async def test_chat_stream_request_workspace_updates_output_dir_before_tool_loop
     workspace_dir.mkdir()
     expected_output_dir = workspace_dir / "output"
     captured: dict[str, object] = {}
+    mcp_load_calls = 0
 
     class FakeCore:
-        TRUSTED_DATA_DIRS: list[Path] = []
-        OUTPUT_DIR = tmp_path / "old-output"
+        TRUSTED_DATA_DIRS: list[Path] = [workspace_dir]
+        OUTPUT_DIR = expected_output_dir
         LLM_PROVIDER_NAME = "test"
         OMICSCLAW_MODEL = "test-model"
         received_files: list[object] = []
@@ -1070,33 +1116,403 @@ async def test_chat_stream_request_workspace_updates_output_dir_before_tool_loop
 
         @staticmethod
         async def llm_tool_loop(**kwargs):
+            captured["calls"] = int(captured.get("calls", 0)) + 1
             captured["workspace"] = kwargs["workspace"]
             captured["output_dir"] = FakeCore.OUTPUT_DIR
+            return "done"
+
+    async def load_mcp_servers():
+        nonlocal mcp_load_calls
+        mcp_load_calls += 1
+        return ()
+
+    monkeypatch.setattr(server, "_core", FakeCore, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", FakeCore)
+    monkeypatch.setattr(server, "_mcp_load_fn", load_mcp_servers, raising=False)
+    monkeypatch.setenv("OMICSCLAW_DATA_DIRS", str(workspace_dir))
+    monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(workspace_dir))
+    monkeypatch.setenv("OMICSCLAW_OUTPUT_DIR", str(expected_output_dir))
+    before_env = dict(os.environ)
+
+    from omicsclaw.control import ControlRuntime
+
+    control_runtime = ControlRuntime.for_local_surface(
+        state_root=tmp_path / "control-state",
+        workspace_id=str(workspace_dir),
+        surface="desktop",
+        installation_id="local",
+        profile_id="owner",
+    )
+    await control_runtime.start()
+    monkeypatch.setattr(
+        server,
+        "_desktop_control_runtime",
+        control_runtime,
+        raising=False,
+    )
+
+    try:
+        response = await server.chat_stream(
+            server.ChatRequest(
+                session_id="session-output-dir",
+                source_request_id="9" * 32,
+                installation_id="3" * 32,
+                profile_id="owner",
+                content="run analysis",
+                workspace=str(workspace_dir),
+            )
+        )
+        payload = await _read_streaming_response(response)
+        duplicate_response = await server.chat_stream(
+            server.ChatRequest(
+                session_id="session-output-dir",
+                source_request_id="9" * 32,
+                installation_id="3" * 32,
+                profile_id="owner",
+                content="run analysis",
+                workspace=str(workspace_dir),
+            )
+        )
+        duplicate_payload = await _read_streaming_response(duplicate_response)
+        conflict_response = await server.chat_stream(
+            server.ChatRequest(
+                session_id="session-output-dir",
+                source_request_id="9" * 32,
+                installation_id="3" * 32,
+                profile_id="owner",
+                content="run analysis",
+                workspace=str(workspace_dir),
+                mode="plan",
+            )
+        )
+        conflict_payload = await _read_streaming_response(conflict_response)
+        conversation = control_runtime.repository.list_conversations()[0]
+    finally:
+        await control_runtime.close()
+
+    assert '"done"' in payload
+    assert '"done"' in duplicate_payload
+    assert "idempotency_conflict" in conflict_payload
+    assert captured["calls"] == 1
+    assert mcp_load_calls == 1
+    assert captured["workspace"] == str(workspace_dir)
+    assert captured["output_dir"] == expected_output_dir
+    assert dict(os.environ) == before_env
+    assert FakeCore.TRUSTED_DATA_DIRS == [workspace_dir]
+    assert not expected_output_dir.exists()
+    with sqlite3.connect(tmp_path / "control-state" / "control.db") as connection:
+        assert connection.execute(
+            "SELECT status FROM turns"
+        ).fetchone()[0] == "succeeded"
+    assert conversation.reply_target["installation_id"] == "3" * 32
+    assert conversation.reply_target["profile_id"] == "owner"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_provider", ["", "provider-a"])
+async def test_authoritative_desktop_retry_survives_runtime_provider_change(
+    monkeypatch,
+    tmp_path,
+    explicit_provider,
+):
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.control import ControlRuntime
+    from omicsclaw.surfaces.desktop import server
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    calls = 0
+
+    class FakeCore:
+        TRUSTED_DATA_DIRS: list[Path] = []
+        OUTPUT_DIR = workspace / "output"
+        LLM_PROVIDER_NAME = "provider-a"
+        OMICSCLAW_MODEL = "test-model"
+        received_files: list[object] = []
+
+        @staticmethod
+        def _skill_registry():
+            return SimpleNamespace(skills={})
+
+        @staticmethod
+        def get_tool_executors():
+            return {}
+
+        @staticmethod
+        async def llm_tool_loop(**_kwargs):
+            nonlocal calls
+            calls += 1
             return "done"
 
     monkeypatch.setattr(server, "_core", FakeCore, raising=False)
     monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", FakeCore)
     monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
-    monkeypatch.delenv("OMICSCLAW_DATA_DIRS", raising=False)
-    monkeypatch.delenv("OMICSCLAW_WORKSPACE", raising=False)
-    monkeypatch.delenv("OMICSCLAW_OUTPUT_DIR", raising=False)
-
-    response = await server.chat_stream(
-        server.ChatRequest(
-            session_id="session-output-dir",
-            content="run analysis",
-            workspace=str(workspace_dir),
-        )
+    runtime = ControlRuntime.for_local_surface(
+        state_root=tmp_path / "control-state",
+        workspace_id=str(workspace),
+        surface="desktop",
+        installation_id="local",
+        profile_id="owner",
     )
-    payload = await _read_streaming_response(response)
+    await runtime.start()
+    monkeypatch.setattr(server, "_desktop_control_runtime", runtime, raising=False)
+    request = server.ChatRequest(
+        session_id="provider-retry",
+        source_request_id="8" * 32,
+        installation_id="4" * 32,
+        profile_id="owner",
+        content="run once",
+        workspace=str(workspace),
+        provider_id=explicit_provider,
+    )
 
-    assert '"done"' in payload
-    assert captured["workspace"] == str(workspace_dir)
-    assert captured["output_dir"] == expected_output_dir
-    assert os.environ["OMICSCLAW_WORKSPACE"] == str(workspace_dir)
-    assert os.environ["OMICSCLAW_OUTPUT_DIR"] == str(expected_output_dir)
-    assert FakeCore.TRUSTED_DATA_DIRS == [workspace_dir]
-    assert expected_output_dir.is_dir()
+    try:
+        first_payload = await _read_streaming_response(await server.chat_stream(request))
+        FakeCore.LLM_PROVIDER_NAME = "provider-b"
+        retry_payload = await _read_streaming_response(await server.chat_stream(request))
+    finally:
+        await runtime.close()
+
+    assert '"done"' in first_payload
+    assert '"type": "turn_accepted"' in retry_payload
+    assert "idempotency_conflict" not in retry_payload
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_authoritative_desktop_preserves_worker_error_diagnostic(
+    monkeypatch,
+    tmp_path,
+):
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.control import ControlRuntime
+    from omicsclaw.surfaces.desktop import server
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    class FakeCore:
+        TRUSTED_DATA_DIRS: list[Path] = []
+        OUTPUT_DIR = workspace / "output"
+        LLM_PROVIDER_NAME = "test"
+        OMICSCLAW_MODEL = "test-model"
+        received_files: list[object] = []
+
+        @staticmethod
+        def _skill_registry():
+            return SimpleNamespace(skills={})
+
+        @staticmethod
+        def get_tool_executors():
+            return {}
+
+        @staticmethod
+        async def llm_tool_loop(**_kwargs):
+            raise RuntimeError("provider diagnostic survives observer isolation")
+
+    monkeypatch.setattr(server, "_core", FakeCore, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", FakeCore)
+    monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
+    runtime = ControlRuntime.for_local_surface(
+        state_root=tmp_path / "control-state",
+        workspace_id=str(workspace),
+        surface="desktop",
+        installation_id="local",
+        profile_id="owner",
+    )
+    await runtime.start()
+    monkeypatch.setattr(server, "_desktop_control_runtime", runtime, raising=False)
+    try:
+        response = await server.chat_stream(
+            server.ChatRequest(
+                session_id="failed-authoritative-turn",
+                source_request_id="d" * 32,
+                installation_id="5" * 32,
+                profile_id="owner",
+                content="fail with useful detail",
+                workspace=str(workspace),
+            )
+        )
+        payload = await _read_streaming_response(response)
+        receipt = runtime.repository.list_terminal_turns()[-1]
+    finally:
+        await runtime.close()
+
+    assert receipt.status == "failed"
+    assert "provider diagnostic survives observer isolation" in payload
+
+
+@pytest.mark.asyncio
+async def test_live_desktop_retry_attaches_without_canceling_original_turn(
+    monkeypatch,
+    tmp_path,
+):
+    pytest.importorskip("fastapi")
+    from omicsclaw.control import ControlRuntime
+    from omicsclaw.surfaces.desktop import server
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    class FakeCore:
+        TRUSTED_DATA_DIRS: list[Path] = []
+        OUTPUT_DIR = workspace / "output"
+        LLM_PROVIDER_NAME = "test"
+        OMICSCLAW_MODEL = "test-model"
+        received_files: list[object] = []
+
+        @staticmethod
+        def _skill_registry():
+            return SimpleNamespace(skills={})
+
+        @staticmethod
+        def get_tool_executors():
+            return {}
+
+        @staticmethod
+        async def llm_tool_loop(**_kwargs):
+            nonlocal calls
+            calls += 1
+            started.set()
+            await release.wait()
+            return "done"
+
+    monkeypatch.setattr(server, "_core", FakeCore, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", FakeCore)
+    monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
+    runtime = ControlRuntime.for_local_surface(
+        state_root=tmp_path / "control-state",
+        workspace_id=str(workspace),
+        surface="desktop",
+        installation_id="local",
+        profile_id="owner",
+    )
+    await runtime.start()
+    monkeypatch.setattr(server, "_desktop_control_runtime", runtime, raising=False)
+
+    request = server.ChatRequest(
+        session_id="retry-session",
+        source_request_id="a" * 32,
+        content="run once",
+        workspace=str(workspace),
+    )
+    try:
+        first_response = await server.chat_stream(request)
+        first_body_task = asyncio.create_task(
+            _read_streaming_response(first_response)
+        )
+        await started.wait()
+
+        retry_response = await server.chat_stream(request)
+        retry_body_task = asyncio.create_task(
+            _read_streaming_response(retry_response)
+        )
+        await asyncio.sleep(0)
+        release.set()
+        first_body, retry_body = await asyncio.gather(
+            first_body_task,
+            retry_body_task,
+        )
+
+        turn = runtime.repository.list_terminal_turns()[0]
+        assert turn.status == "succeeded"
+        assert calls == 1
+        assert '"type": "turn_accepted"' in first_body
+        assert '"type": "turn_accepted"' in retry_body
+    finally:
+        release.set()
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_authoritative_desktop_rejects_files_before_staging(
+    monkeypatch,
+    tmp_path,
+):
+    pytest.importorskip("fastapi")
+    from fastapi import HTTPException
+    from omicsclaw.control import ControlRuntime
+    from omicsclaw.surfaces.desktop import server
+
+    runtime = ControlRuntime.for_local_surface(
+        state_root=tmp_path / "control-state",
+        workspace_id=str(tmp_path),
+        surface="desktop",
+        installation_id="local",
+        profile_id="owner",
+    )
+    await runtime.start()
+    monkeypatch.setattr(server, "_desktop_control_runtime", runtime, raising=False)
+    monkeypatch.setattr(
+        server,
+        "_build_multimodal_content",
+        lambda *_args, **_kwargs: pytest.fail("file staging ran before admission"),
+    )
+    try:
+        with pytest.raises(HTTPException, match="attachments_not_supported"):
+            await server.chat_stream(
+                server.ChatRequest(
+                    session_id="file-session",
+                    source_request_id="b" * 32,
+                    content="inspect",
+                    files=[{"name": "data.csv", "data": "ignored"}],
+                )
+            )
+        with pytest.raises(HTTPException, match="file_references_not_supported"):
+            await server.chat_stream(
+                server.ChatRequest(
+                    session_id="reference-session",
+                    source_request_id="c" * 32,
+                    content="inspect",
+                    file_selections=[{"path": "data.csv"}],
+                )
+            )
+        with pytest.raises(HTTPException, match="file_references_not_supported"):
+            await server.chat_stream(
+                server.ChatRequest(
+                    session_id="descriptor-session",
+                    source_request_id="d" * 32,
+                    content="inspect",
+                    attachment_descriptors=[{"source_attachment_id": "ignored"}],
+                )
+            )
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_authoritative_desktop_requires_durable_source_request_id(
+    monkeypatch,
+    tmp_path,
+):
+    pytest.importorskip("fastapi")
+    from fastapi import HTTPException
+    from omicsclaw.control import ControlRuntime
+    from omicsclaw.surfaces.desktop import server
+
+    runtime = ControlRuntime.for_local_surface(
+        state_root=tmp_path / "control-state",
+        workspace_id=str(tmp_path),
+        surface="desktop",
+        installation_id="local",
+        profile_id="owner",
+    )
+    await runtime.start()
+    monkeypatch.setattr(server, "_desktop_control_runtime", runtime, raising=False)
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await server.chat_stream(
+                server.ChatRequest(session_id="missing-id", content="hello")
+            )
+        assert exc_info.value.status_code == 422
+        assert "source_request_id" in str(exc_info.value.detail)
+    finally:
+        await runtime.close()
 
 
 @pytest.mark.asyncio
@@ -1113,6 +1529,9 @@ async def test_outputs_latest_marks_stale_incomplete_run_failed(monkeypatch, tmp
     old_timestamp = 1_700_000_000
     os.utime(stdout_log, (old_timestamp, old_timestamp))
     os.utime(stale_run, (old_timestamp, old_timestamp))
+    outside_log = tmp_path / "outside.log"
+    outside_log.write_text("fresh update\n", encoding="utf-8")
+    (stale_run / "latest.log").symlink_to(outside_log)
 
     fake_core = SimpleNamespace(OUTPUT_DIR=output_dir)
     monkeypatch.setattr(server, "_core", fake_core, raising=False)
@@ -1124,6 +1543,275 @@ async def test_outputs_latest_marks_stale_incomplete_run_failed(monkeypatch, tmp
     assert result["runs"][0]["id"] == stale_run.name
     assert result["runs"][0]["status"] == "failed"
     assert "stale" in result["runs"][0]["summary"].lower()
+
+
+@pytest.mark.asyncio
+async def test_outputs_latest_keeps_new_empty_run_running(monkeypatch, tmp_path):
+    """The alias guard must preserve the startup grace period for an empty Run."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+
+    output_dir = tmp_path / "output"
+    run_dir = output_dir / "qc__20260717_120250__demo-a11ce000"
+    run_dir.mkdir(parents=True)
+    fake_core = SimpleNamespace(OUTPUT_DIR=output_dir)
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
+
+    result = await server.outputs_latest(limit=10)
+
+    assert result["runs"][0]["status"] == "running"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("alias_kind", ["symlink", "hardlink"])
+async def test_outputs_latest_does_not_publish_aliased_session_sidecar(
+    monkeypatch,
+    tmp_path: Path,
+    alias_kind: str,
+) -> None:
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+
+    output_dir = tmp_path / "output"
+    run_dir = output_dir / "qc__20260717_120250__demo-a11ce001"
+    run_dir.mkdir(parents=True)
+    (run_dir / "result.json").write_text(
+        '{"status": "completed"}\n',
+        encoding="utf-8",
+    )
+    forged = tmp_path / "forged-session.json"
+    forged.write_text('{"session_id": "attacker"}\n', encoding="utf-8")
+    sidecar = run_dir / server._SESSION_SIDECAR_NAME
+    if alias_kind == "symlink":
+        sidecar.symlink_to(forged)
+    else:
+        sidecar.hardlink_to(forged)
+
+    fake_core = SimpleNamespace(OUTPUT_DIR=output_dir)
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
+
+    result = await server.outputs_latest(limit=10)
+
+    assert "session_id" not in result["runs"][0]
+
+
+@pytest.mark.asyncio
+async def test_outputs_latest_does_not_follow_symlinked_project(
+    monkeypatch,
+    tmp_path,
+):
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    external_project = tmp_path / "external-project"
+    external_run = external_project / "qc__20260717_120251__demo-deadbeef"
+    external_run.mkdir(parents=True)
+    (external_run / "result.json").write_text(
+        '{"status": "completed", "summary": "external"}\n',
+        encoding="utf-8",
+    )
+    (output_dir / "project-link").symlink_to(
+        external_project,
+        target_is_directory=True,
+    )
+    fake_core = SimpleNamespace(OUTPUT_DIR=output_dir)
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
+
+    result = await server.outputs_latest(limit=10)
+
+    assert result["total"] == 0
+    assert result["runs"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("alias_kind", ["symlink", "hardlink"])
+async def test_outputs_latest_does_not_trust_aliased_project_metadata(
+    monkeypatch,
+    tmp_path: Path,
+    alias_kind: str,
+) -> None:
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+
+    output_dir = tmp_path / "output"
+    project_dir = output_dir / "safe-project"
+    run_dir = project_dir / "qc__20260717_120251__demo-a11ce002"
+    run_dir.mkdir(parents=True)
+    (run_dir / "result.json").write_text(
+        '{"status": "completed"}\n',
+        encoding="utf-8",
+    )
+    forged = tmp_path / "forged-project-meta.json"
+    forged.write_text(
+        '{"project_id": "attacker", "display_name": "Spoofed Display"}\n',
+        encoding="utf-8",
+    )
+    metadata_path = project_dir / "project_meta.json"
+    if alias_kind == "symlink":
+        metadata_path.symlink_to(forged)
+    else:
+        metadata_path.hardlink_to(forged)
+
+    fake_core = SimpleNamespace(OUTPUT_DIR=output_dir)
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
+
+    result = await server.outputs_latest(limit=10)
+    attacker_scope = await server.outputs_latest(limit=10, project="attacker")
+
+    assert result["total"] == 1
+    assert result["runs"][0]["project_id"] == "safe-project"
+    assert result["runs"][0]["project_name"] == "safe-project"
+    assert attacker_scope["runs"] == []
+
+
+@pytest.mark.asyncio
+async def test_outputs_latest_rejects_run_outside_output_root(
+    monkeypatch,
+    tmp_path,
+):
+    """The HTTP boundary re-checks iterator output before publishing it."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.common import run_paths
+    from omicsclaw.surfaces.desktop import server
+
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    external_project = tmp_path / "external-project"
+    external_run = external_project / "qc__20260717_120252__demo-bad0cafe"
+    external_run.mkdir(parents=True)
+    (external_run / "result.json").write_text(
+        '{"status": "completed", "summary": "external"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        run_paths,
+        "iter_run_dirs",
+        lambda _root: iter([(external_project, external_run)]),
+    )
+    fake_core = SimpleNamespace(OUTPUT_DIR=output_dir)
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
+
+    result = await server.outputs_latest(limit=10)
+
+    assert result["total"] == 0
+    assert result["runs"] == []
+
+
+def test_fresh_run_leaf_rejects_result_claim_hardlink_alias(tmp_path):
+    """Internal ownership state cannot impersonate a fresh completion marker."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+
+    run_dir = tmp_path / "qc__20260717_120300__demo-deadbeef"
+    run_dir.mkdir()
+    claim = run_dir / ".omicsclaw-run-claim.json"
+    claim.write_text("{}\n", encoding="utf-8")
+    (run_dir / "result.json").hardlink_to(claim)
+
+    assert server._is_fresh_run_leaf(run_dir) is False
+
+
+def test_fresh_run_leaf_rejects_result_symlink_alias(tmp_path):
+    """Completion authority belongs to result.json itself, not an in-Run alias."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+
+    run_dir = tmp_path / "qc__20260717_120301__demo-feedface"
+    run_dir.mkdir()
+    payload = run_dir / "payload.json"
+    payload.write_text('{"status": "completed"}\n', encoding="utf-8")
+    (run_dir / "result.json").symlink_to(payload.name)
+
+    assert server._is_fresh_run_leaf(run_dir) is False
+
+
+def test_result_status_rejects_contained_result_symlink(tmp_path):
+    """A same-Run payload cannot impersonate canonical result authority."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+
+    run_dir = tmp_path / "qc__20260717_120301__demo-0badf00d"
+    run_dir.mkdir()
+    payload = run_dir / "payload.json"
+    payload.write_text(
+        '{"status": "completed", "summary": "forged"}\n',
+        encoding="utf-8",
+    )
+    (run_dir / "result.json").symlink_to(payload.name)
+
+    status, summary = server._read_result_json(run_dir)
+
+    assert status == "running"
+    assert summary is None
+
+
+def test_fresh_run_leaf_rejects_manifest_symlink_alias(tmp_path):
+    """Fallback manifest authority also requires an owned marker inode."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+
+    run_dir = tmp_path / "qc__20260717_120302__demo-f00dbabe"
+    run_dir.mkdir()
+    payload = run_dir / "metadata.json"
+    payload.write_text('{"status": "completed"}\n', encoding="utf-8")
+    (run_dir / "manifest.json").symlink_to(payload.name)
+
+    assert server._is_fresh_run_leaf(run_dir) is False
+
+
+def test_fresh_run_leaf_accepts_owned_manifest(tmp_path):
+    """A regular contained manifest remains a valid fallback marker."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+
+    run_dir = tmp_path / "qc__20260717_120303__demo-0ddba11a"
+    run_dir.mkdir()
+    (run_dir / "manifest.json").write_text("{}\n", encoding="utf-8")
+
+    assert server._is_fresh_run_leaf(run_dir) is True
+
+
+def test_latest_file_mtime_ignores_claim_aliases_and_escaping_symlinks(tmp_path):
+    """Internal or escaping aliases cannot keep an incomplete Run alive."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+
+    run_dir = tmp_path / "qc__20260717_120302__demo-cafebabe"
+    run_dir.mkdir()
+    output = run_dir / "stdout.log"
+    output.write_text("started\n", encoding="utf-8")
+    old_timestamp = 1_700_000_000
+    os.utime(output, (old_timestamp, old_timestamp))
+
+    claim = run_dir / ".omicsclaw-run-claim.json"
+    claim.write_text("{}\n", encoding="utf-8")
+    (run_dir / "progress.log").hardlink_to(claim)
+    outside = tmp_path / "outside.log"
+    outside.write_text("updated\n", encoding="utf-8")
+    log_dir = run_dir / "logs"
+    log_dir.mkdir()
+    os.utime(log_dir, (old_timestamp, old_timestamp))
+    (log_dir / "latest.log").symlink_to(outside)
+
+    assert server._latest_file_mtime(run_dir) == old_timestamp
 
 
 @pytest.mark.asyncio
@@ -1160,10 +1848,57 @@ async def test_outputs_latest_lists_project_nested_runs(monkeypatch, tmp_path):
     # File lookup resolves a nested run_id via the index, not output_dir/run_id.
     (a.run_dir / "figures").mkdir()
     (a.run_dir / "figures" / "umap.png").write_bytes(b"x")
+    claim = a.run_dir / ".omicsclaw-run-claim.json"
+    claim.write_text("{}\n", encoding="utf-8")
+    (a.run_dir / "claim-alias.json").hardlink_to(claim)
     files = await server.outputs_run_files(a.run_id)
     assert any(f["relative_path"] == "figures/umap.png" for f in files["files"])
+    assert not any(
+        f["relative_path"] in {
+            ".omicsclaw-run-claim.json",
+            "claim-alias.json",
+        }
+        for f in files["files"]
+    )
     with pytest.raises(Exception):
         await server.outputs_run_files("does-not-exist")
+
+
+@pytest.mark.asyncio
+async def test_outputs_run_files_hides_contained_symlink_aliases(
+    monkeypatch,
+    tmp_path,
+):
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.common import run_paths
+    from omicsclaw.surfaces.desktop import server
+
+    output_dir = tmp_path / "output"
+    run = run_paths.resolve_run_dir(
+        output_root=output_dir,
+        skill="qc",
+        demo=True,
+        timestamp="20260717_120400",
+    )
+    payload = run.run_dir / "payload.json"
+    payload.write_text("{}\n", encoding="utf-8")
+    (run.run_dir / "payload-alias.json").symlink_to(payload.name)
+    real_dir = run.run_dir / "real"
+    real_dir.mkdir()
+    (real_dir / "table.csv").write_text("x\n1\n", encoding="utf-8")
+    (run.run_dir / "alias").symlink_to(real_dir.name, target_is_directory=True)
+    fake_core = SimpleNamespace(OUTPUT_DIR=output_dir)
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
+
+    result = await server.outputs_run_files(run.run_id)
+
+    relative_paths = {item["relative_path"] for item in result["files"]}
+    assert "payload.json" in relative_paths
+    assert "real/table.csv" in relative_paths
+    assert "payload-alias.json" not in relative_paths
+    assert "alias/table.csv" not in relative_paths
 
 
 @pytest.mark.asyncio
@@ -1191,6 +1926,134 @@ async def test_files_tree_returns_remote_files_and_directories(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_files_tree_hides_run_claim_hardlink_alias(monkeypatch, tmp_path):
+    """Run-aware browsing must not publish an internal ownership alias."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.common import run_paths
+    from omicsclaw.surfaces.desktop import server
+
+    output_dir = tmp_path / "output"
+    run = run_paths.resolve_run_dir(
+        output_root=output_dir,
+        skill="qc",
+        demo=True,
+        timestamp="20260717_120000",
+    )
+    figure = run.run_dir / "figure.png"
+    figure.write_bytes(b"PNGDATA")
+    claim = run.run_dir / ".omicsclaw-run-claim.json"
+    claim.write_text("{}\n", encoding="utf-8")
+    (run.run_dir / "figure-alias.png").hardlink_to(claim)
+    (run.run_dir / "claim-link.png").symlink_to(claim.name)
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"SECRET")
+    (run.run_dir / "escape.png").symlink_to(outside)
+
+    fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[tmp_path], OUTPUT_DIR=output_dir)
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
+
+    result = await server.files_tree(path=str(run.run_dir), depth=2)
+
+    names = {entry["name"] for entry in result["tree"]}
+    assert "figure.png" in names
+    assert names.isdisjoint({"figure-alias.png", "claim-link.png", "escape.png"})
+
+
+@pytest.mark.asyncio
+async def test_files_tree_hides_escaping_directory_alias_from_run(monkeypatch, tmp_path):
+    """Browsing a Run must not recurse through a directory symlink outside it."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.common import run_paths
+    from omicsclaw.surfaces.desktop import server
+
+    output_dir = tmp_path / "output"
+    run = run_paths.resolve_run_dir(
+        output_root=output_dir,
+        skill="qc",
+        demo=True,
+        timestamp="20260717_120100",
+    )
+    outside = tmp_path / "trusted-input"
+    outside.mkdir()
+    (outside / "secret.csv").write_text("secret\n", encoding="utf-8")
+    (run.run_dir / "export").symlink_to(outside, target_is_directory=True)
+
+    fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[tmp_path], OUTPUT_DIR=output_dir)
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
+
+    result = await server.files_tree(path=str(run.run_dir), depth=2)
+
+    assert "export" not in {entry["name"] for entry in result["tree"]}
+
+
+@pytest.mark.asyncio
+async def test_files_tree_hides_contained_directory_alias_from_run(
+    monkeypatch,
+    tmp_path,
+):
+    """Run browsing preserves directory identity, not just containment."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.common import run_paths
+    from omicsclaw.surfaces.desktop import server
+
+    output_dir = tmp_path / "output"
+    run = run_paths.resolve_run_dir(
+        output_root=output_dir,
+        skill="qc",
+        demo=True,
+        timestamp="20260717_120125",
+    )
+    real_dir = run.run_dir / "real"
+    real_dir.mkdir()
+    (real_dir / "table.csv").write_text("x\n1\n", encoding="utf-8")
+    (run.run_dir / "alias").symlink_to(real_dir.name, target_is_directory=True)
+    fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[tmp_path], OUTPUT_DIR=output_dir)
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
+
+    result = await server.files_tree(path=str(run.run_dir), depth=2)
+
+    assert "alias" not in {entry["name"] for entry in result["tree"]}
+    assert "real" in {entry["name"] for entry in result["tree"]}
+
+
+@pytest.mark.asyncio
+async def test_files_tree_rejects_escaping_run_alias_as_root(monkeypatch, tmp_path):
+    """A direct tree request must retain the Run context of its lexical path."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.common import run_paths
+    from omicsclaw.surfaces.desktop import server
+
+    output_dir = tmp_path / "output"
+    run = run_paths.resolve_run_dir(
+        output_root=output_dir,
+        skill="qc",
+        demo=True,
+        timestamp="20260717_120150",
+    )
+    outside = tmp_path / "trusted-input"
+    outside.mkdir()
+    (outside / "secret.csv").write_text("secret\n", encoding="utf-8")
+    alias = run.run_dir / "export"
+    alias.symlink_to(outside, target_is_directory=True)
+
+    fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[tmp_path], OUTPUT_DIR=output_dir)
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
+
+    with pytest.raises(server.HTTPException) as exc:
+        await server.files_tree(path=str(alias), depth=2)
+
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_files_serve_returns_trusted_workspace_file(monkeypatch, tmp_path):
     pytest.importorskip("fastapi")
 
@@ -1210,6 +2073,136 @@ async def test_files_serve_returns_trusted_workspace_file(monkeypatch, tmp_path)
     assert response.status_code == 200
     assert response.media_type == "image/png"
     assert response.path == str(figure.resolve())
+
+
+@pytest.mark.asyncio
+async def test_files_serve_rejects_run_claim_hardlink_alias(monkeypatch, tmp_path):
+    """A trusted Run path is not downloadable when it aliases ownership state."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.common import run_paths
+    from omicsclaw.surfaces.desktop import server
+
+    output_dir = tmp_path / "output"
+    run = run_paths.resolve_run_dir(
+        output_root=output_dir,
+        skill="qc",
+        demo=True,
+        timestamp="20260717_120200",
+    )
+    claim = run.run_dir / ".omicsclaw-run-claim.json"
+    claim.write_text("{}\n", encoding="utf-8")
+    alias = run.run_dir / "download.json"
+    alias.hardlink_to(claim)
+
+    fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[tmp_path], OUTPUT_DIR=output_dir)
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
+
+    with pytest.raises(server.HTTPException) as exc:
+        await server.files_serve(path=str(alias))
+
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_files_serve_rejects_run_symlink_aliases(monkeypatch, tmp_path):
+    """Claim and escaping symlink aliases inside a Run are not downloadable."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.common import run_paths
+    from omicsclaw.surfaces.desktop import server
+
+    output_dir = tmp_path / "output"
+    run = run_paths.resolve_run_dir(
+        output_root=output_dir,
+        skill="qc",
+        demo=True,
+        timestamp="20260717_120201",
+    )
+    claim = run.run_dir / ".omicsclaw-run-claim.json"
+    claim.write_text("{}\n", encoding="utf-8")
+    claim_alias = run.run_dir / "claim.json"
+    claim_alias.symlink_to(claim.name)
+    outside = tmp_path / "trusted-input.csv"
+    outside.write_text("secret\n", encoding="utf-8")
+    escape_alias = run.run_dir / "input.csv"
+    escape_alias.symlink_to(outside)
+
+    fake_core = SimpleNamespace(TRUSTED_DATA_DIRS=[tmp_path], OUTPUT_DIR=output_dir)
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
+
+    for alias in (claim_alias, escape_alias):
+        with pytest.raises(server.HTTPException) as exc:
+            await server.files_serve(path=str(alias))
+        assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_files_serve_applies_run_policy_through_trusted_directory_alias(
+    monkeypatch,
+    tmp_path,
+):
+    """A trusted alias to a Run cannot turn its internal marker into input data."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.common import run_paths
+    from omicsclaw.surfaces.desktop import server
+
+    output_dir = tmp_path / "output"
+    run = run_paths.resolve_run_dir(
+        output_root=output_dir,
+        skill="qc",
+        demo=True,
+        timestamp="20260717_120202",
+    )
+    claim = run.run_dir / ".omicsclaw-run-claim.json"
+    claim.write_text("{}\n", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    run_alias = workspace / "imported-run"
+    run_alias.symlink_to(run.run_dir, target_is_directory=True)
+
+    fake_core = SimpleNamespace(
+        TRUSTED_DATA_DIRS=[workspace],
+        OUTPUT_DIR=output_dir,
+    )
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
+
+    with pytest.raises(server.HTTPException) as exc:
+        await server.files_serve(path=str(run_alias / claim.name))
+
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_files_preserve_generic_trusted_input_symlink(monkeypatch, tmp_path):
+    """Run ownership filtering must not alter generic trusted input browsing."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    source = workspace / "source.csv"
+    source.write_text("a,b\n1,2\n", encoding="utf-8")
+    alias = workspace / "input.csv"
+    alias.symlink_to(source.name)
+
+    fake_core = SimpleNamespace(
+        TRUSTED_DATA_DIRS=[workspace],
+        OUTPUT_DIR=workspace / "output",
+    )
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
+
+    tree = await server.files_tree(path=str(workspace), depth=1)
+    assert "input.csv" in {entry["name"] for entry in tree["tree"]}
+    response = await server.files_serve(path=str(alias))
+    assert response.status_code == 200
+    assert response.path == str(source.resolve())
 
 
 @pytest.mark.asyncio
@@ -1279,6 +2272,10 @@ async def test_health_reports_runtime_python_and_dependency_status(monkeypatch):
     payload = await server.health()
 
     assert payload["status"] == "ok"
+    assert isinstance(payload["backend_process_epoch"], str)
+    assert len(payload["backend_process_epoch"]) == 64
+    assert all(ch in "0123456789abcdef" for ch in payload["backend_process_epoch"])
+    assert payload["backend_process_epoch"] == server._BACKEND_PROCESS_EPOCH
     assert payload["provider"] == "env"
     assert payload["model"] == "gpt-test"
     assert payload["skills_count"] == 42
@@ -1338,7 +2335,21 @@ async def test_chat_stream_emits_protocol_events_and_usage(monkeypatch):
         )
         await kwargs["on_stream_reasoning"]("reasoning delta")
         await kwargs["on_tool_call"]("task_update", {"task_id": "t1", "status": "in_progress"})
-        await kwargs["on_tool_result"]("task_update", "updated")
+        await kwargs["on_tool_result"](
+            "task_update",
+            json.dumps(
+                {
+                    "kind": "engineering_plan",
+                    "tasks": [
+                        {
+                            "id": "t1",
+                            "content": "exercise Desktop task updates",
+                            "status": "in_progress",
+                        }
+                    ],
+                }
+            ),
+        )
         await kwargs["on_stream_content"]("streamed output")
         return "streamed output"
 
@@ -1501,8 +2512,13 @@ async def test_chat_stream_emits_preflight_pending_event_for_omicsclaw_tool(monk
 
 
 @pytest.mark.asyncio
-async def test_chat_stream_updates_bound_remote_chat_job_lifecycle(monkeypatch, tmp_path: Path):
+async def test_chat_stream_rejects_retired_remote_job_binding_without_mutation(
+    monkeypatch,
+    tmp_path: Path,
+):
     pytest.importorskip("fastapi")
+
+    from fastapi import HTTPException
 
     from omicsclaw.surfaces.desktop import server
     from omicsclaw.remote.schemas import Job
@@ -1511,6 +2527,7 @@ async def test_chat_stream_updates_bound_remote_chat_job_lifecycle(monkeypatch, 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(workspace))
+    monkeypatch.setattr(server, "require_remote_workspace", lambda: workspace)
 
     job_dir = jobs_root(workspace) / "job-chat-1"
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -1526,45 +2543,21 @@ async def test_chat_stream_updates_bound_remote_chat_job_lifecycle(monkeypatch, 
     )
     (job_dir / "job.json").write_text(queued.model_dump_json(), encoding="utf-8")
 
-    async def fake_llm_tool_loop(**kwargs):
-        await kwargs["on_tool_call"]("task_update", {"task_id": "t1", "status": "in_progress"})
-        await kwargs["on_tool_result"]("task_update", "updated")
-        await kwargs["on_stream_content"]("remote chat output")
-        return "remote chat output"
-
-    fake_core = SimpleNamespace(
-        init=lambda **kwargs: None,
-        llm_tool_loop=fake_llm_tool_loop,
-        LLM_PROVIDER_NAME="env",
-        OMICSCLAW_MODEL="gpt-test",
-        OUTPUT_DIR=ROOT / "output",
-        _skill_registry=lambda: SimpleNamespace(skills={}),
-        get_tool_executors=lambda: {"task_update": object()},
-        _accumulate_usage=lambda response_usage: {},
-        _get_token_price=lambda model: (0.0, 0.0),
-    )
-
-    monkeypatch.setattr(server, "_core", fake_core, raising=False)
-    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
-    monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
-
-    response = await server.chat_stream(
-        server.ChatRequest(
-            session_id="session-chat-1",
-            content="hello",
-            workspace=str(workspace),
-            job_id="job-chat-1",
+    before = (job_dir / "job.json").read_bytes()
+    with pytest.raises(HTTPException) as excinfo:
+        await server.chat_stream(
+            server.ChatRequest(
+                session_id="session-chat-1",
+                content="hello",
+                workspace=str(workspace),
+                job_id="job-chat-1",
+            )
         )
-    )
-    await _read_streaming_response(response)
 
-    final_job = Job.model_validate_json((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert final_job.status == "succeeded"
-    assert final_job.started_at
-    assert final_job.finished_at
-    stdout_text = (job_dir / "stdout.log").read_text(encoding="utf-8")
-    assert "Starting task_update" in stdout_text
-    assert "Completed task_update" in stdout_text
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail == "remote_job_binding_not_supported"
+    assert (job_dir / "job.json").read_bytes() == before
+    assert not (job_dir / "stdout.log").exists()
 
 
 @pytest.mark.asyncio
@@ -1905,15 +2898,56 @@ async def test_chat_stream_delivers_output_summary_block(monkeypatch, tmp_path: 
     assert server._read_session_sidecar(run_dir) == "session-summary"
 
 
+def test_session_sidecar_write_does_not_follow_symlink_destination(
+    tmp_path: Path,
+) -> None:
+    from omicsclaw.surfaces.desktop import server
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    victim = tmp_path / "victim.json"
+    victim.write_text('{"owner": "external"}\n', encoding="utf-8")
+    (run_dir / server._SESSION_SIDECAR_NAME).symlink_to(victim)
+
+    server._write_session_sidecar(run_dir, "forged-session")
+
+    assert victim.read_text(encoding="utf-8") == '{"owner": "external"}\n'
+
+
+def test_session_sidecar_write_does_not_replace_hardlink_destination(
+    tmp_path: Path,
+) -> None:
+    from omicsclaw.surfaces.desktop import server
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    victim = tmp_path / "victim.json"
+    victim.write_text('{"owner": "external"}\n', encoding="utf-8")
+    (run_dir / server._SESSION_SIDECAR_NAME).hardlink_to(victim)
+
+    server._write_session_sidecar(run_dir, "forged-session")
+
+    assert victim.read_text(encoding="utf-8") == '{"owner": "external"}\n'
+
+
+def test_session_sidecar_read_safely_ignores_non_mapping_json(
+    tmp_path: Path,
+) -> None:
+    from omicsclaw.surfaces.desktop import server
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / server._SESSION_SIDECAR_NAME).write_text(
+        '["not", "a", "mapping"]\n',
+        encoding="utf-8",
+    )
+
+    assert server._read_session_sidecar(run_dir) == ""
+
+
 @pytest.mark.asyncio
 async def test_chat_stream_rejects_bind_when_job_already_canceled(monkeypatch, tmp_path: Path):
-    """Regression: ``bind_chat_stream_job`` intentionally passes canceled jobs
-    through so the cancel handler can finalize them without clobbering state.
-    Before this guard, ``chat_stream`` discarded that return value and marched
-    on into the tool loop, executing a full chat turn whose job row was
-    permanently ``canceled`` — backend state and actual execution forked.
-    The handler must bail with 409 instead.
-    """
+    """The retired binding wire rejects before inspecting historical state."""
     pytest.importorskip("fastapi")
 
     from fastapi import HTTPException
@@ -1925,6 +2959,7 @@ async def test_chat_stream_rejects_bind_when_job_already_canceled(monkeypatch, t
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(workspace))
+    monkeypatch.setattr(server, "require_remote_workspace", lambda: workspace)
 
     job_dir = jobs_root(workspace) / "job-chat-canceled"
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -1975,7 +3010,7 @@ async def test_chat_stream_rejects_bind_when_job_already_canceled(monkeypatch, t
         )
 
     assert excinfo.value.status_code == 409
-    assert "canceled" in str(excinfo.value.detail).lower()
+    assert excinfo.value.detail == "remote_job_binding_not_supported"
     assert not tool_loop_ran, "tool loop must not run for a pre-canceled job"
 
     # Job row must remain canceled — the guard explicitly avoids clobbering.
@@ -2713,7 +3748,7 @@ async def test_chat_permission_endpoint_resumes_pending_request(monkeypatch):
 
     captured_decision: dict[str, object] = {}
     permission_event = asyncio.Event()
-    permission_id_holder: dict[str, str] = {}
+    permission_holder: dict[str, str] = {}
 
     async def fake_llm_tool_loop(**kwargs):
         await kwargs["on_tool_call"]("remove_file", {"path": "/tmp/data.txt"})
@@ -2757,16 +3792,35 @@ async def test_chat_permission_endpoint_resumes_pending_request(monkeypatch):
             chunks.append(text)
             for event in _parse_sse_events(text):
                 if event["type"] == "permission_request":
-                    permission_id_holder["id"] = event["data"]["permissionRequestId"]
+                    permission_holder["id"] = event["data"]["permissionRequestId"]
+                    permission_holder["token"] = event["data"]["approvalToken"]
                     permission_event.set()
         return "".join(chunks)
 
     consumer = asyncio.create_task(consume_stream())
     await asyncio.wait_for(permission_event.wait(), timeout=2)
 
+    assert re.fullmatch(r"perm_[0-9a-f]{32}", permission_holder["id"])
+    assert re.fullmatch(r"v1\.[A-Za-z0-9_-]{43}", permission_holder["token"])
+
+    rejected_response = await server.chat_permission(
+        server.PermissionResponseRequest(
+            permissionRequestId=permission_holder["id"],
+            approvalToken="v1." + ("A" * 43),
+            decision={"behavior": "allow"},
+        )
+    )
+    assert rejected_response == {
+        "ok": False,
+        "permissionRequestId": permission_holder["id"],
+        "status": "invalid_token",
+    }
+    assert consumer.done() is False
+
     permission_response = await server.chat_permission(
         server.PermissionResponseRequest(
-            permissionRequestId=permission_id_holder["id"],
+            permissionRequestId=permission_holder["id"],
+            approvalToken=permission_holder["token"],
             decision={"behavior": "allow"},
         )
     )

@@ -4,13 +4,19 @@ from __future__ import annotations
 
 import shlex
 from dataclasses import dataclass, field
-from typing import Any
+from enum import Enum
+from typing import Any, Sequence
 
 from omicsclaw.common.user_guidance import (
     extract_user_guidance_lines,
     extract_user_guidance_payloads,
     render_guidance_block,
     strip_user_guidance_lines,
+)
+from omicsclaw.control.run_contract import (
+    ProjectScope,
+    RunScope,
+    UnassignedScope,
 )
 from ._history_support import (
     build_skill_run_history_messages,
@@ -32,6 +38,129 @@ class SkillRunCommandArgs:
         if self.method:
             args.extend(["--method", self.method])
         return args
+
+
+class SkillRunRouteKind(str, Enum):
+    CANONICAL_DEMO = "canonical_demo"
+    LEGACY = "legacy"
+    REJECT = "reject"
+
+
+@dataclass(frozen=True, slots=True)
+class SkillRunRoute:
+    kind: SkillRunRouteKind
+    code: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class RootSkillRunRoute:
+    """Root-only Run wire classification with an already frozen Scope.
+
+    ``explicit_scope`` is ``None`` only for the omitted-selector wire, whose
+    current-project navigation hint is resolved later by the Runtime.  An
+    explicit Project or Unassigned request is already typed here so argparse
+    and legacy project helpers cannot reinterpret it.
+    """
+
+    kind: SkillRunRouteKind
+    code: str = ""
+    explicit_scope: RunScope | None = None
+
+
+def classify_skill_run_route(arg: str) -> SkillRunRoute:
+    """Classify `/run` syntax before any Skill or resource lookup.
+
+    Every request containing ``--demo`` belongs to the canonical boundary.
+    Only the exact two-token form is supported in this slice; adding another
+    option must fail closed rather than becoming a legacy-runner bypass.
+    """
+
+    try:
+        tokens = shlex.split(arg.strip())
+    except ValueError:
+        return SkillRunRoute(SkillRunRouteKind.REJECT, "invalid_run_syntax")
+    return classify_skill_run_tokens(tokens)
+
+
+def classify_skill_run_tokens(tokens: Sequence[str]) -> SkillRunRoute:
+    """Classify the narrow prompt-toolkit Skill Run syntax.
+
+    Every ``--demo`` prefix abbreviation from ``--d`` onward belongs to the
+    canonical boundary too, but none is an accepted canonical wire spelling.
+    Owning even argparse-ambiguous ``--d`` conservatively prevents an intended
+    demo request from reaching the legacy runner.
+    """
+
+    tokens = tuple(tokens)
+    if not _has_demo_shape(tokens):
+        return SkillRunRoute(SkillRunRouteKind.LEGACY)
+    if (
+        len(tokens) == 2
+        and tokens[0]
+        and not tokens[0].startswith("-")
+        and tokens[1] == "--demo"
+    ):
+        return SkillRunRoute(SkillRunRouteKind.CANONICAL_DEMO)
+    return SkillRunRoute(
+        SkillRunRouteKind.REJECT,
+        "canonical_demo_options_not_supported",
+    )
+
+
+def classify_root_skill_run_tokens(tokens: Sequence[str]) -> RootSkillRunRoute:
+    """Classify the strict root ``run`` wire before argparse or legacy state.
+
+    Root accepts exactly three canonical demo forms, in fixed order: omitted
+    Scope, explicit Project, and explicit Unassigned.  Prompt-toolkit keeps the
+    narrower two-token grammar through :func:`classify_skill_run_tokens`.
+    """
+
+    tokens = tuple(tokens)
+    if not _has_demo_shape(tokens):
+        return RootSkillRunRoute(SkillRunRouteKind.LEGACY)
+    valid_skill = bool(tokens) and bool(tokens[0]) and not tokens[0].startswith("-")
+    if not valid_skill:
+        return RootSkillRunRoute(
+            SkillRunRouteKind.REJECT,
+            "canonical_demo_options_not_supported",
+        )
+    if len(tokens) == 2 and tokens[1] == "--demo":
+        return RootSkillRunRoute(SkillRunRouteKind.CANONICAL_DEMO)
+    if len(tokens) == 3 and tokens[1:] == ("--demo", "--no-project"):
+        return RootSkillRunRoute(
+            SkillRunRouteKind.CANONICAL_DEMO,
+            explicit_scope=UnassignedScope(),
+        )
+    if len(tokens) == 4 and tokens[1:3] == ("--demo", "--project"):
+        if not tokens[3] or tokens[3].startswith("-"):
+            return RootSkillRunRoute(
+                SkillRunRouteKind.REJECT,
+                "canonical_demo_options_not_supported",
+            )
+        try:
+            scope = ProjectScope(tokens[3])
+        except ValueError:
+            return RootSkillRunRoute(
+                SkillRunRouteKind.REJECT,
+                "invalid_project_id",
+            )
+        return RootSkillRunRoute(
+            SkillRunRouteKind.CANONICAL_DEMO,
+            explicit_scope=scope,
+        )
+    return RootSkillRunRoute(
+        SkillRunRouteKind.REJECT,
+        "canonical_demo_options_not_supported",
+    )
+
+
+def _has_demo_shape(tokens: Sequence[str]) -> bool:
+    demo_spellings = ("--demo", "--d", "--de", "--dem")
+    return any(
+        token == spelling or token.startswith(f"{spelling}=")
+        for token in tokens
+        for spelling in demo_spellings
+    )
 
 
 @dataclass(slots=True)

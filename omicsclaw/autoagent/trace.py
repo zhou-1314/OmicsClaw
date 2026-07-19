@@ -23,7 +23,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from omicsclaw.autoagent.authority import TrialSkillAuthority
 from omicsclaw.autoagent.result_contract import normalize_result_payload
+from omicsclaw.common.output_claim import (
+    atomic_write_owned_output_text,
+    is_scientific_output_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +62,8 @@ class DataShapeTrace:
     n_obs_after: int = 0
     n_vars_after: int = 0
     n_obs_before_known: bool = False
+    n_obs_after_known: bool = False
+    n_vars_after_known: bool = False
     layers: list[str] = field(default_factory=list)
     obs_columns: list[str] = field(default_factory=list)
     var_columns: list[str] = field(default_factory=list)
@@ -116,6 +123,9 @@ class RunTrace:
     skill_name: str = ""
     method: str = ""
     timestamp: str = ""
+    authority: TrialSkillAuthority | None = None
+    receipt: dict[str, Any] = field(default_factory=dict)
+    hard_gate_verdict: dict[str, Any] = field(default_factory=dict)
 
     execution: ExecutionTrace = field(default_factory=ExecutionTrace)
     data_shape: DataShapeTrace = field(default_factory=DataShapeTrace)
@@ -133,6 +143,9 @@ class RunTrace:
             "skill_name": self.skill_name,
             "method": self.method,
             "timestamp": self.timestamp,
+            "authority": self.authority.to_dict() if self.authority else None,
+            "receipt": dict(self.receipt),
+            "hard_gate_verdict": dict(self.hard_gate_verdict),
             "execution": self.execution.to_dict(),
             "data_shape": self.data_shape.to_dict(),
             "method_trace": self.method_trace.to_dict(),
@@ -144,11 +157,13 @@ class RunTrace:
         """Write the trace to ``run_trace.json`` in *output_dir*."""
         path = Path(output_dir) / "run_trace.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(self.to_dict(), indent=2, default=str),
+        return atomic_write_owned_output_text(
+            path,
+            output_root=path.parent,
+            text=json.dumps(self.to_dict(), indent=2, default=str),
             encoding="utf-8",
+            label="RunTrace",
         )
-        return path
 
     @classmethod
     def load(cls, path: Path) -> RunTrace:
@@ -159,6 +174,21 @@ class RunTrace:
             skill_name=data.get("skill_name", ""),
             method=data.get("method", ""),
             timestamp=data.get("timestamp", ""),
+            authority=(
+                TrialSkillAuthority.from_dict(data["authority"])
+                if data.get("authority")
+                else None
+            ),
+            receipt=(
+                dict(data.get("receipt", {}))
+                if isinstance(data.get("receipt", {}), dict)
+                else {}
+            ),
+            hard_gate_verdict=(
+                dict(data.get("hard_gate_verdict", {}))
+                if isinstance(data.get("hard_gate_verdict", {}), dict)
+                else {}
+            ),
             execution=ExecutionTrace(**data.get("execution", {})),
             data_shape=DataShapeTrace(**data.get("data_shape", {})),
             method_trace=MethodTrace(**data.get("method_trace", {})),
@@ -233,7 +263,9 @@ class RunTrace:
             parts.append("Traceback (tail):\n  " + "\n  ".join(tail))
         elif self.execution.exit_code != 0 and self.execution.stderr:
             stderr_lines = [
-                l for l in self.execution.stderr.splitlines() if l.strip()
+                line
+                for line in self.execution.stderr.splitlines()
+                if line.strip()
             ]
             tail = stderr_lines[-min(max_stderr_lines, len(stderr_lines)):]
             parts.append("Stderr (tail):\n  " + "\n  ".join(tail))
@@ -251,7 +283,7 @@ class TraceCollector:
 
     This reads data from:
     - The subprocess execution result (stdout, stderr, exit code)
-    - ``processed.h5ad`` (data shape, embeddings, layers)
+    - Registry-declared primary AnnData (data shape, embeddings, layers)
     - ``result.json`` (effective params, method info, summary stats)
     """
 
@@ -270,8 +302,20 @@ class TraceCollector:
         user_params = user_params or {}
         skill_defaults = skill_defaults or {}
 
+        authority = getattr(execution, "authority", None)
+        if (
+            not isinstance(authority, TrialSkillAuthority)
+            or not authority.matches_skill_name(skill_name)
+        ):
+            authority = None
+
         exec_trace = TraceCollector._extract_execution_trace(execution)
-        data_trace = TraceCollector._extract_data_shape_trace(output_dir)
+        data_trace = TraceCollector._extract_data_shape_trace(
+            output_dir,
+            primary_anndata_path=(
+                authority.primary_anndata_path if authority is not None else None
+            ),
+        )
         method_t = TraceCollector._extract_method_trace(output_dir, method)
         param_trace = TraceCollector._extract_parameter_trace(
             output_dir, user_params, skill_defaults
@@ -282,6 +326,7 @@ class TraceCollector:
             trial_id=trial_id,
             skill_name=skill_name,
             method=method,
+            authority=authority,
             execution=exec_trace,
             data_shape=data_trace,
             method_trace=method_t,
@@ -289,6 +334,41 @@ class TraceCollector:
             quality=quality_trace,
         )
         return trace
+
+    @staticmethod
+    def collect_execution_failure(
+        trial_id: int | str,
+        skill_name: str,
+        method: str,
+        execution: Any,
+        user_params: dict[str, Any] | None = None,
+        skill_defaults: dict[str, Any] | None = None,
+    ) -> RunTrace:
+        """Build an in-memory failure trace without touching trial artifacts."""
+
+        authority = getattr(execution, "authority", None)
+        if (
+            not isinstance(authority, TrialSkillAuthority)
+            or not authority.matches_skill_name(skill_name)
+        ):
+            authority = None
+        user_params = dict(user_params or {})
+        skill_defaults = dict(skill_defaults or {})
+        effective_params = dict(skill_defaults)
+        effective_params.update(user_params)
+        return RunTrace(
+            trial_id=trial_id,
+            skill_name=skill_name,
+            method=method,
+            authority=authority,
+            execution=TraceCollector._extract_execution_trace(execution),
+            method_trace=MethodTrace(requested_method=method),
+            parameters=ParameterTrace(
+                user_params=user_params,
+                skill_defaults=skill_defaults,
+                effective_params=effective_params,
+            ),
+        )
 
     # --- extraction helpers ---
 
@@ -314,8 +394,12 @@ class TraceCollector:
         )
 
     @staticmethod
-    def _extract_data_shape_trace(output_dir: Path) -> DataShapeTrace:
-        """Extract data shape from processed.h5ad or result.json."""
+    def _extract_data_shape_trace(
+        output_dir: Path,
+        *,
+        primary_anndata_path: str | None = None,
+    ) -> DataShapeTrace:
+        """Extract data shape from the primary AnnData or result.json."""
         trace = DataShapeTrace()
 
         # Try result.json first (cheaper than loading h5ad)
@@ -325,19 +409,17 @@ class TraceCollector:
             data = result_data.get("data", {})
 
             # Cell/gene counts from summary
-            trace.n_obs_after = _int_or(summary, "n_cells", 0) or _int_or(
-                summary, "n_obs", 0
+            trace.n_obs_after, trace.n_obs_after_known = _first_int(
+                summary, "n_cells", "n_obs"
             )
-            trace.n_vars_after = _int_or(summary, "n_genes", 0) or _int_or(
-                summary, "n_vars", 0
+            trace.n_vars_after, trace.n_vars_after_known = _first_int(
+                summary, "n_genes", "n_vars"
             )
-            trace.n_obs_before = _int_or(summary, "n_cells_before", 0) or _int_or(
-                summary, "initial_cells", 0
+            trace.n_obs_before, trace.n_obs_before_known = _first_int(
+                summary, "n_cells_before", "initial_cells"
             )
-            if "n_cells_before" in summary or "initial_cells" in summary:
-                trace.n_obs_before_known = True
-            trace.n_vars_before = _int_or(summary, "n_genes_before", 0) or _int_or(
-                summary, "initial_genes", 0
+            trace.n_vars_before, _ = _first_int(
+                summary, "n_genes_before", "initial_genes"
             )
             trace.n_clusters = _int_or(summary, "n_clusters", None)
             trace.n_batches = _int_or(summary, "n_batches", None)
@@ -352,14 +434,21 @@ class TraceCollector:
             if "embedding_key" in viz:
                 trace.embedding_keys = [viz["embedding_key"]]
 
-        # Try adata for richer info (only if h5ad exists and is small enough)
-        adata_path = output_dir / "processed.h5ad"
-        if adata_path.exists():
+        # Use only the primary AnnData path frozen from the executed tree.
+        adata_path = (
+            output_dir / primary_anndata_path if primary_anndata_path else None
+        )
+        if adata_path is not None and is_scientific_output_file(
+            adata_path,
+            output_root=output_dir,
+        ):
             try:
                 adata_info = _read_adata_shape(adata_path)
                 if adata_info:
                     trace.n_obs_after = adata_info["n_obs"]
                     trace.n_vars_after = adata_info["n_vars"]
+                    trace.n_obs_after_known = True
+                    trace.n_vars_after_known = True
                     trace.layers = adata_info.get("layers", [])
                     trace.obs_columns = adata_info.get("obs_columns", [])
                     trace.var_columns = adata_info.get("var_columns", [])
@@ -372,7 +461,9 @@ class TraceCollector:
                 logger.debug("Could not read adata for trace: %s", exc)
 
         # Compute cell retention
-        if trace.n_obs_before > 0 and trace.n_obs_after > 0:
+        if trace.n_obs_before > 0 and (
+            trace.n_obs_after > 0 or trace.n_obs_after_known
+        ):
             trace.cell_retention_rate = trace.n_obs_after / trace.n_obs_before
         elif trace.n_obs_after > 0:
             trace.cell_retention_rate = 1.0
@@ -473,7 +564,10 @@ def _load_result_json(output_dir: Path) -> dict[str, Any] | None:
         return _RESULT_JSON_CACHE[key]
 
     path = output_dir / "result.json"
-    if not path.exists():
+    if not is_scientific_output_file(
+        path,
+        output_root=output_dir,
+    ):
         _RESULT_JSON_CACHE[key] = None
         return None
 
@@ -589,6 +683,17 @@ def _int_or(d: dict, key: str, default: int | None) -> int | None:
         return int(val)
     except (ValueError, TypeError):
         return default
+
+
+def _first_int(d: dict, *keys: str) -> tuple[int, bool]:
+    """Return the first valid integer and whether its value is known."""
+    for key in keys:
+        if key not in d:
+            continue
+        value = _int_or(d, key, None)
+        if value is not None:
+            return value, True
+    return 0, False
 
 
 def _param_diff(

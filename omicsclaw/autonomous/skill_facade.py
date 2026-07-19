@@ -22,6 +22,12 @@ import threading
 import time
 from typing import Any, Callable
 
+from omicsclaw.common.output_claim import (
+    OutputClaimIdentity,
+    collect_output_claim_identities,
+    is_scientific_output_file,
+)
+
 from . import run_layout
 
 PRIMARY_H5AD_NAME = "processed.h5ad"
@@ -131,7 +137,15 @@ class SkillFacade:
 
         real_out = Path(getattr(result, "output_dir", "") or out_dir)
         success = bool(getattr(result, "success", False))
-        primary = self._find_primary_h5ad(real_out) if success else None
+        claim_identities = collect_output_claim_identities(real_out)
+        primary = (
+            self._find_primary_h5ad(
+                real_out,
+                claim_identities=claim_identities,
+            )
+            if success
+            else None
+        )
         adata = self._reload(primary) if primary else None
 
         handle = SkillHandleResult(
@@ -141,8 +155,16 @@ class SkillFacade:
             method=getattr(result, "method", None) or method,
             primary_artifact=str(primary) if primary else "",
             adata=adata,
-            tables=_list_dir(real_out / "tables"),
-            figures=_list_dir(real_out / "figures"),
+            tables=_list_dir(
+                real_out / "tables",
+                output_root=real_out,
+                claim_identities=claim_identities,
+            ),
+            figures=_list_dir(
+                real_out / "figures",
+                output_root=real_out,
+                claim_identities=claim_identities,
+            ),
             stdout=str(getattr(result, "stdout", "") or "")[-2000:],
             stderr=str(getattr(result, "stderr", "") or "")[-2000:],
             error="" if success else str(getattr(result, "stderr", "") or "")[-2000:],
@@ -238,11 +260,27 @@ class SkillFacade:
         writer(target)
 
     @staticmethod
-    def _find_primary_h5ad(out_dir: Path) -> Path | None:
+    def _find_primary_h5ad(
+        out_dir: Path,
+        *,
+        claim_identities: frozenset[OutputClaimIdentity],
+    ) -> Path | None:
         primary = out_dir / PRIMARY_H5AD_NAME
-        if primary.exists():
+        if is_scientific_output_file(
+            primary,
+            output_root=out_dir,
+            claim_identities=claim_identities,
+        ):
             return primary
-        candidates = sorted(out_dir.glob("*.h5ad"))
+        candidates = sorted(
+            candidate
+            for candidate in out_dir.glob("*.h5ad")
+            if is_scientific_output_file(
+                candidate,
+                output_root=out_dir,
+                claim_identities=claim_identities,
+            )
+        )
         return candidates[0] if len(candidates) == 1 else None
 
     @staticmethod
@@ -328,10 +366,23 @@ def _to_flags(method: str | None, params: dict[str, Any]) -> list[str]:
     return flags
 
 
-def _list_dir(path: Path) -> list[str]:
+def _list_dir(
+    path: Path,
+    *,
+    output_root: Path,
+    claim_identities: frozenset[OutputClaimIdentity],
+) -> list[str]:
     if not path.is_dir():
         return []
-    return sorted(p.name for p in path.iterdir() if p.is_file())
+    return sorted(
+        candidate.name
+        for candidate in path.iterdir()
+        if is_scientific_output_file(
+            candidate,
+            output_root=output_root,
+            claim_identities=claim_identities,
+        )
+    )
 
 
 def _flags_to_params(flags: list[str]) -> dict[str, Any]:
@@ -353,8 +404,18 @@ def _flags_to_params(flags: list[str]) -> dict[str, Any]:
 
 
 def _manifest_path(output_dir: str) -> str:
-    candidate = Path(output_dir) / "manifest.json"
-    return str(candidate) if candidate.exists() else ""
+    root = Path(output_dir)
+    candidate = root / "manifest.json"
+    claim_identities = collect_output_claim_identities(root)
+    return (
+        str(candidate)
+        if is_scientific_output_file(
+            candidate,
+            output_root=root,
+            claim_identities=claim_identities,
+        )
+        else ""
+    )
 
 
 def _safe(name: str) -> str:

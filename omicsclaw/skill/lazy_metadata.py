@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from pathlib import Path
@@ -14,6 +15,7 @@ logger = logging.getLogger(__name__)
 _RUNTIME_FIELDS = (
     "domain",
     "script",
+    "runtime_language",
     "type",
     "validation_level",
     "trigger_keywords",
@@ -24,6 +26,9 @@ _RUNTIME_FIELDS = (
     "input_contract",
     "output_contract",
     "param_hints",
+    "compute_resources",
+    "security_contract",
+    "security_reviewed",
 )
 
 # Declared skill types (ADR 0030).  `type` is optional in the sidecar; a
@@ -60,6 +65,7 @@ _DEFAULT_ORIGIN = "human"
 _RUNTIME_DEFAULTS: dict[str, object] = {
     "domain": "",
     "script": "",
+    "runtime_language": "python",
     "type": _DEFAULT_SKILL_TYPE,
     "validation_level": _DEFAULT_VALIDATION_LEVEL,
     "trigger_keywords": [],
@@ -70,11 +76,33 @@ _RUNTIME_DEFAULTS: dict[str, object] = {
     "input_contract": {},
     "output_contract": {},
     "param_hints": {},
+    "compute_resources": {},
+    "security_contract": {},
+    "security_reviewed": False,
 }
 
 
 _GOTCHA_BOLD_LEAD = re.compile(r"^\*\*(.+?)\*\*")
 _GOTCHA_PLACEHOLDER = re.compile(r"^_None\b", re.IGNORECASE)
+
+
+def _extract_gotcha_details(body: str) -> list[str]:
+    """Extract each non-placeholder one-line `## Gotchas` bullet body."""
+    in_section = False
+    details: list[str] = []
+    for line in body.splitlines():
+        if line.startswith("## "):
+            if in_section:
+                break
+            if line.startswith("## Gotchas"):
+                in_section = True
+            continue
+        if not in_section or not line.startswith("- "):
+            continue
+        detail = line[2:].strip()
+        if detail and not _GOTCHA_PLACEHOLDER.match(detail):
+            details.append(detail)
+    return details
 
 
 def _extract_gotcha_leads(body: str) -> list[str]:
@@ -86,27 +114,8 @@ def _extract_gotcha_leads(body: str) -> list[str]:
     the first '. '-terminated sentence.  Italic placeholder bullets like
     `- _None yet — append as failure modes are reported._` are filtered.
     """
-    in_section = False
-    bullets: list[str] = []
-    for line in body.splitlines():
-        stripped = line.lstrip()
-        if line.startswith("## "):
-            if in_section:
-                break
-            if line.startswith("## Gotchas"):
-                in_section = True
-            continue
-        if not in_section:
-            continue
-        if not line.startswith("- "):
-            continue
-        # `- ` at start = new bullet; capture the rest of the line.
-        bullets.append(stripped[2:].strip())
-
     leads: list[str] = []
-    for bullet in bullets:
-        if _GOTCHA_PLACEHOLDER.match(bullet):
-            continue
+    for bullet in _extract_gotcha_details(body):
         m = _GOTCHA_BOLD_LEAD.match(bullet)
         if m:
             leads.append(m.group(1).strip())
@@ -127,7 +136,9 @@ class LazySkillMetadata:
         self._basic = None
         self._full = None
         self._gotchas: list[str] | None = None
+        self._gotcha_details: list[str] | None = None
         self._source: str | None = None  # "v2" (skill.yaml) | "v1" (frontmatter+sidecar)
+        self._manifest_revision = "unknown"
 
     def _parse_frontmatter(self) -> dict | None:
         skill_md = self.path / "SKILL.md"
@@ -180,7 +191,7 @@ class LazySkillMetadata:
         if not sidecar.exists():
             return None
         try:
-            from .schema import load_skill_yaml
+            from .schema import parse_skill_manifest
         except Exception as exc:  # pydantic/schema unavailable
             if self.strict_v2:
                 raise RuntimeError(
@@ -193,7 +204,22 @@ class LazySkillMetadata:
             )
             return None
         try:
-            return load_skill_yaml(sidecar)
+            manifest_bytes = sidecar.read_bytes()
+            raw = yaml.safe_load(manifest_bytes.decode("utf-8"))
+            if not isinstance(raw, dict):
+                raise ValueError(
+                    f"{sidecar}: skill.yaml must be a mapping, "
+                    f"got {type(raw).__name__}"
+                )
+            manifest = parse_skill_manifest(raw)
+            if sidecar.read_bytes() != manifest_bytes:
+                raise ValueError(
+                    f"skill.yaml changed while Registry metadata was parsed: {sidecar}"
+                )
+            self._manifest_revision = (
+                "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()
+            )
+            return manifest
         except Exception as exc:
             if self.strict_v2:
                 raise
@@ -240,12 +266,24 @@ class LazySkillMetadata:
     def _basic_from_v2(self, m) -> dict:
         """Map a v2 SkillManifest onto the legacy property surface (zero consumer churn)."""
         anndata = m.interface.outputs.anndata
+        input_contract = m.interface.inputs.model_dump(exclude_none=True)
+        output_contract = m.interface.outputs.model_dump(exclude_none=True)
+        # Artifact contracts are additive. Preserve the pre-ADR-0042 legacy
+        # mapping byte shape for skills that do not declare them, while exposing
+        # the field verbatim when a manifest opts in.
+        if not m.interface.inputs.artifacts:
+            input_contract.pop("artifacts", None)
+        if not m.interface.outputs.artifacts:
+            output_contract.pop("artifacts", None)
+        if not m.interface.outputs.method_scopes:
+            output_contract.pop("method_scopes", None)
         return {
             "name": m.name,
             "description": self._reconstruct_description(m.summary),
             "requires": list(m.deps.python),
             "domain": m.domain,
             "script": m.runtime.entry,
+            "runtime_language": m.runtime.language,
             "type": m.type,
             "validation_level": m.validation.level,
             "origin": m.provenance.origin,
@@ -261,9 +299,18 @@ class LazySkillMetadata:
             "requires_preprocessed": bool(
                 m.interface.inputs.preconditions.data_shape.requires_preprocessed
             ),
-            "input_contract": m.interface.inputs.model_dump(exclude_none=True),
-            "output_contract": m.interface.outputs.model_dump(exclude_none=True),
+            "input_contract": input_contract,
+            "output_contract": output_contract,
             "param_hints": dict(m.interface.parameters.hints),
+            "compute_resources": (
+                m.resources.compute.model_dump()
+                if m.resources.compute is not None
+                else {}
+            ),
+            "security_contract": (
+                m.security.model_dump() if m.security is not None else {}
+            ),
+            "security_reviewed": m.security is not None,
             # identity metadata (catalog / desktop / generators read these)
             "version": m.version,
             "tags": list(m.summary.tags),
@@ -350,6 +397,12 @@ class LazySkillMetadata:
         return self._source or "v1"
 
     @property
+    def manifest_revision(self) -> str:
+        """Hash of the exact v2 manifest bytes parsed into this metadata."""
+        self._ensure_basic()
+        return self._manifest_revision
+
+    @property
     def name(self) -> str:
         self._ensure_basic()
         return self._basic.get("name", "")
@@ -405,6 +458,13 @@ class LazySkillMetadata:
     def script(self) -> str:
         self._ensure_basic()
         return self._basic.get("script", "")
+
+    @property
+    def runtime_language(self) -> str:
+        """Interpreter contract for the declared runtime entry."""
+        self._ensure_basic()
+        value = str(self._basic.get("runtime_language") or "python").lower()
+        return value if value in {"python", "r", "bash"} else "python"
 
     @property
     def type(self) -> str:
@@ -490,6 +550,24 @@ class LazySkillMetadata:
         return self._basic.get("param_hints", {})
 
     @property
+    def compute_resources(self) -> dict:
+        """Static Candidate-plan admission reservation from ``resources.compute``."""
+        self._ensure_basic()
+        return dict(self._basic.get("compute_resources", {}) or {})
+
+    @property
+    def security_contract(self) -> dict:
+        """Explicit declarative security statement, or empty when unreviewed."""
+        self._ensure_basic()
+        return dict(self._basic.get("security_contract", {}) or {})
+
+    @property
+    def security_reviewed(self) -> bool:
+        """Whether ``skill.yaml`` contains a complete explicit security block."""
+        self._ensure_basic()
+        return bool(self._basic.get("security_reviewed", False))
+
+    @property
     def gotchas(self) -> list[str]:
         """Lead sentences of each `## Gotchas` bullet from SKILL.md body.
 
@@ -512,6 +590,24 @@ class LazySkillMetadata:
             body = content
         self._gotchas = _extract_gotcha_leads(body)
         return self._gotchas
+
+    @property
+    def gotcha_details(self) -> list[str]:
+        """Full one-line Gotcha bullets for runtime guidance consumption."""
+        if self._gotcha_details is not None:
+            return self._gotcha_details
+        skill_md = self.path / "SKILL.md"
+        if not skill_md.exists():
+            self._gotcha_details = []
+            return self._gotcha_details
+        content = skill_md.read_text(encoding="utf-8")
+        if content.startswith("---"):
+            parts = content.split("---", 2)
+            body = parts[2] if len(parts) >= 3 else content
+        else:
+            body = content
+        self._gotcha_details = _extract_gotcha_details(body)
+        return self._gotcha_details
 
     def _load_full(self):
         skill_md = self.path / "SKILL.md"

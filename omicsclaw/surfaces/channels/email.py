@@ -32,7 +32,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import email as email_lib
-import email.utils
 import html
 import imaplib
 import logging
@@ -40,7 +39,6 @@ import re
 import smtplib
 import ssl
 from dataclasses import dataclass
-from datetime import datetime
 from email import encoders
 from email.header import decode_header, make_header
 from email.mime.base import MIMEBase
@@ -85,6 +83,7 @@ def _strip_html(text: str) -> str:
 @dataclass
 class EmailConfig(BaseChannelConfig):
     """Email channel configuration."""
+
     # IMAP (inbound)
     imap_host: str = ""
     imap_port: int = 993
@@ -97,7 +96,7 @@ class EmailConfig(BaseChannelConfig):
     smtp_port: int = 587
     smtp_username: str = ""
     smtp_password: str = ""
-    smtp_starttls: bool = True   # True=STARTTLS (587), False=implicit SSL (465)
+    smtp_starttls: bool = True  # True=STARTTLS (587), False=implicit SSL (465)
     from_address: str = ""
     # Behavior
     poll_interval: int = 30
@@ -134,6 +133,7 @@ class EmailChannel(Channel):
     # ── Lifecycle ────────────────────────────────────────────────────
 
     async def start(self) -> None:
+        self.require_authoritative_ingress()
         cfg = self.config
         if not cfg.imap_host or not cfg.imap_username:
             raise RuntimeError("EMAIL_IMAP_HOST and EMAIL_IMAP_USERNAME are required")
@@ -174,7 +174,8 @@ class EmailChannel(Channel):
         try:
             if cfg.imap_use_ssl:
                 self._imap = imaplib.IMAP4_SSL(
-                    cfg.imap_host, cfg.imap_port,
+                    cfg.imap_host,
+                    cfg.imap_port,
                     ssl_context=ssl.create_default_context(),
                 )
             else:
@@ -224,7 +225,7 @@ class EmailChannel(Channel):
             if status != "OK":
                 return []
 
-            for mid in data[0].split()[-20:]:   # Process at most 20 per cycle
+            for mid in data[0].split()[-20:]:  # Process at most 20 per cycle
                 status, msg_data = self._imap.fetch(mid, "(RFC822)")
                 if status != "OK" or not msg_data or not msg_data[0]:
                     continue
@@ -252,31 +253,39 @@ class EmailChannel(Channel):
                             payload = part.get_payload(decode=True)
                             if payload:
                                 if len(payload) > _MAX_ATTACHMENT_BYTES:
-                                    attachments.append({
-                                        "annotation": f"[附件: {filename} (过大, {len(payload)} bytes)]"
-                                    })
+                                    attachments.append(
+                                        {
+                                            "annotation": f"[附件: {filename} (过大, {len(payload)} bytes)]"
+                                        }
+                                    )
                                 else:
-                                    tmp_path = Path(f"/tmp/email_{mid.decode()}_{filename}")
+                                    tmp_path = Path(
+                                        f"/tmp/email_{mid.decode()}_{filename}"
+                                    )
                                     tmp_path.write_bytes(payload)
                                     lbl = "inline-image" if is_inline_img else "附件"
-                                    attachments.append({
-                                        "path": str(tmp_path),
-                                        "annotation": f"[{lbl}: {tmp_path.name}]",
-                                    })
+                                    attachments.append(
+                                        {
+                                            "path": str(tmp_path),
+                                            "annotation": f"[{lbl}: {tmp_path.name}]",
+                                        }
+                                    )
 
                 if self.config.mark_seen:
                     self._imap.store(mid, "+FLAGS", "\\Seen")
 
-                results.append({
-                    "from_addr": from_addr,
-                    "from_name": _decode_hdr(from_name),
-                    "subject": _decode_hdr(msg.get("Subject", "")),
-                    "body": body,
-                    "message_id": msg.get("Message-ID", ""),
-                    "date": msg.get("Date", ""),
-                    "references": msg.get("References", ""),
-                    "attachments": attachments,
-                })
+                results.append(
+                    {
+                        "from_addr": from_addr,
+                        "from_name": _decode_hdr(from_name),
+                        "subject": _decode_hdr(msg.get("Subject", "")),
+                        "body": body,
+                        "message_id": msg.get("Message-ID", ""),
+                        "date": msg.get("Date", ""),
+                        "references": msg.get("References", ""),
+                        "attachments": attachments,
+                    }
+                )
         except Exception as e:
             logger.error(f"IMAP fetch error: {e}", exc_info=True)
         return results
@@ -318,11 +327,6 @@ class EmailChannel(Channel):
         subject = m["subject"]
         text = f"[邮件] 主题: {subject}\n\n{m['body']}" if subject else m["body"]
 
-        try:
-            ts = email.utils.parsedate_to_datetime(m["date"])
-        except Exception:
-            ts = datetime.now()
-
         meta = {
             "chat_id": m["from_addr"],
             "subject": subject,
@@ -338,7 +342,9 @@ class EmailChannel(Channel):
         """Process the email through LLM and reply."""
         try:
             reply = await self.process_message(
-                from_addr, from_addr, content,
+                from_addr,
+                from_addr,
+                content,
                 platform="email",
                 metadata=metadata,
             )
@@ -360,7 +366,12 @@ class EmailChannel(Channel):
         loop = asyncio.get_running_loop()
         try:
             await loop.run_in_executor(
-                None, self._smtp_send_html, chat_id, formatted_text, raw_text, metadata or {}
+                None,
+                self._smtp_send_html,
+                chat_id,
+                formatted_text,
+                raw_text,
+                metadata or {},
             )
         except Exception as e:
             err = str(e).lower()
@@ -382,7 +393,8 @@ class EmailChannel(Channel):
                 srv.starttls()
             else:
                 srv = smtplib.SMTP_SSL(
-                    cfg.smtp_host, cfg.smtp_port,
+                    cfg.smtp_host,
+                    cfg.smtp_port,
                     context=ssl.create_default_context(),
                     timeout=30,
                 )
@@ -407,6 +419,7 @@ class EmailChannel(Channel):
 
     def _smtp_send_plain(self, to: str, content: str, meta: dict) -> None:
         from email.message import EmailMessage
+
         cfg = self.config
         from_addr = cfg.from_address or cfg.smtp_username
         msg = EmailMessage()
@@ -449,7 +462,10 @@ class EmailChannel(Channel):
             await loop.run_in_executor(
                 None,
                 self._smtp_send_attachment,
-                chat_id, file_path, caption, metadata or {}
+                chat_id,
+                file_path,
+                caption,
+                metadata or {},
             )
             return True
         except Exception as e:

@@ -12,11 +12,15 @@ token count for Phase 2 telemetry.
 from __future__ import annotations
 
 import logging
-from unittest.mock import patch
 
 import pytest
 
-from omicsclaw.runtime.context.layers import load_skill_context
+
+def _load_skill_context(**kwargs) -> str:
+    """Resolve the live module after import-isolation tests replace it."""
+    from omicsclaw.runtime.context import layers as context_layers
+
+    return context_layers.load_skill_context(**kwargs)
 
 
 def _stub_skill(monkeypatch, *, alias: str, gotchas: list[str], **extra) -> None:
@@ -58,23 +62,27 @@ def test_load_skill_context_appends_pitfalls_block_when_gotchas_present(monkeypa
             "`pydeseq2` requires `--sample-key` distinct from `--groupby`.",
             "Counts-layer fallback to `adata.X` is logged but not blocked.",
         ],
+        gotcha_details=[
+            "**`pydeseq2` keys differ.** Use distinct sample and group keys.",
+            "**Counts fallback.** Confirm that fallback to `adata.X` is intended.",
+        ],
     )
-    out = load_skill_context(skill="spatial-de")
+    out = _load_skill_context(skill="spatial-de")
     assert "## Known pitfalls (from SKILL.md Gotchas)" in out
-    assert "- `pydeseq2` requires `--sample-key` distinct from `--groupby`." in out
-    assert "- Counts-layer fallback to `adata.X` is logged but not blocked." in out
+    assert "- **`pydeseq2` keys differ.** Use distinct sample and group keys." in out
+    assert "- **Counts fallback.** Confirm that fallback to `adata.X` is intended." in out
 
 
 def test_load_skill_context_omits_pitfalls_block_when_no_gotchas(monkeypatch):
     _stub_skill(monkeypatch, alias="empty-skill", gotchas=[])
-    out = load_skill_context(skill="empty-skill")
+    out = _load_skill_context(skill="empty-skill")
     assert "Known pitfalls" not in out
     assert "Gotchas" not in out
 
 
 def test_load_skill_context_omits_block_when_skill_unknown(monkeypatch):
     _stub_skill(monkeypatch, alias="exists", gotchas=["x."])
-    out = load_skill_context(skill="does-not-exist")
+    out = _load_skill_context(skill="does-not-exist")
     assert out == ""
 
 
@@ -85,7 +93,7 @@ def test_load_skill_context_logs_telemetry_with_count_and_tokens(monkeypatch, ca
         gotchas=["First.", "Second.", "Third."],
     )
     with caplog.at_level(logging.INFO, logger="omicsclaw.runtime.context.layers"):
-        load_skill_context(skill="spatial-de")
+        _load_skill_context(skill="spatial-de")
     matched = [
         rec for rec in caplog.records
         if "skill_context.gotchas_injected" in rec.getMessage()
@@ -112,7 +120,7 @@ def test_load_skill_context_logs_telemetry_with_count_and_tokens(monkeypatch, ca
 
 def test_load_skill_context_real_spatial_de_includes_all_six_gotchas():
     """End-to-end: hit the real registry, real SKILL.md, real injection."""
-    out = load_skill_context(skill="spatial-de")
+    out = _load_skill_context(skill="spatial-de")
     if not out:
         pytest.skip("load_skill_context gated off in this environment")
     assert "## Known pitfalls (from SKILL.md Gotchas)" in out

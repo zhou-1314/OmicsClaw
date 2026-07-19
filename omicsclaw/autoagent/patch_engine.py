@@ -16,15 +16,18 @@ Patch lifecycle:
 from __future__ import annotations
 
 import ast
-import json
 import logging
 import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from omicsclaw.autoagent.edit_surface import EditSurface, resolve_path_within_root
+from omicsclaw.autoagent.edit_surface import (
+    EditSurface,
+    SurfacePath,
+    resolve_path_within_root,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -170,19 +173,69 @@ def validate_patch(
     patch: PatchPlan,
     surface: EditSurface,
 ) -> ValidationResult:
-    """Validate that a patch only touches editable files and hunks match."""
+    """Validate target declarations, editable paths, and hunk matches."""
     errors: list[str] = []
+    seen_targets: set[str] = set()
 
     if not patch.diffs:
         errors.append("Patch contains no diffs.")
         return ValidationResult(valid=False, errors=errors)
 
-    for diff in patch.diffs:
+    declared_targets: set[str] = set()
+    if not isinstance(patch.target_files, list):
+        errors.append("target_files must be a list of path strings.")
+        target_files: list[Any] = []
+    else:
+        target_files = patch.target_files
+
+    for target_index, target in enumerate(target_files):
+        if (
+            not isinstance(target, str)
+            or not target
+            or target.strip() != target
+        ):
+            errors.append(
+                f"target_files[{target_index}] must be a non-empty path string "
+                "without surrounding whitespace."
+            )
+            continue
+        try:
+            target_path = surface.resolve_editable_path(target)
+        except (PermissionError, ValueError) as exc:
+            errors.append(str(exc))
+            continue
+        if target_path.rel_path in declared_targets:
+            errors.append(
+                "target_files contains duplicate canonical target "
+                f"{target_path.rel_path!r}."
+            )
+            continue
+        declared_targets.add(target_path.rel_path)
+
+    for diff_index, diff in enumerate(patch.diffs):
+        if (
+            not isinstance(diff.file, str)
+            or not diff.file
+            or diff.file.strip() != diff.file
+        ):
+            errors.append(
+                f"diffs[{diff_index}].file must be a non-empty path string "
+                "without surrounding whitespace."
+            )
+            continue
         try:
             surface_path = surface.resolve_editable_path(diff.file)
         except (PermissionError, ValueError) as exc:
             errors.append(str(exc))
             continue
+
+        if surface_path.rel_path in seen_targets:
+            errors.append(
+                "Patch contains duplicate canonical target "
+                f"{surface_path.rel_path!r}; combine its hunks into one FileDiff."
+            )
+            continue
+        seen_targets.add(surface_path.rel_path)
 
         if not surface_path.abs_path.exists():
             errors.append(
@@ -197,17 +250,27 @@ def validate_patch(
             continue
 
         for i, hunk in enumerate(diff.hunks):
-            match_positions = _find_all_occurrences(content, hunk.old_code)
-            if not match_positions:
-                normalized_match = _find_normalized(content, hunk.old_code)
-                if normalized_match is None:
-                    errors.append(
-                        f"{surface_path.rel_path} hunk #{i}: "
-                        "old_code not found in file "
-                        f"(first 80 chars: {hunk.old_code[:80]!r})"
-                    )
-                    continue
-                match_positions = [normalized_match]
+            try:
+                match_position = _resolve_hunk_match(
+                    content,
+                    hunk.old_code,
+                    rel_path=surface_path.rel_path,
+                )
+            except ValueError as exc:
+                errors.append(f"{surface_path.rel_path} hunk #{i}: {exc}")
+                continue
+            match_positions = [match_position]
+
+            protected_region_error = _validate_skill_md_protected_hunk(
+                rel_path=surface_path.rel_path,
+                content=content,
+                hunk_index=i,
+                match_positions=match_positions,
+                new_code=hunk.new_code,
+            )
+            if protected_region_error:
+                errors.append(protected_region_error)
+                continue
 
             method_scope_error = _validate_method_scope_hunk(
                 surface=surface,
@@ -219,12 +282,73 @@ def validate_patch(
             if method_scope_error:
                 errors.append(method_scope_error)
 
+    missing_targets = sorted(seen_targets - declared_targets)
+    if missing_targets:
+        errors.append(
+            "target_files is missing canonical diff target(s): "
+            + ", ".join(repr(target) for target in missing_targets)
+        )
+    extra_targets = sorted(declared_targets - seen_targets)
+    if extra_targets:
+        errors.append(
+            "target_files has canonical target without diff(s): "
+            + ", ".join(repr(target) for target in extra_targets)
+        )
+
     return ValidationResult(valid=len(errors) == 0, errors=errors)
 
 
 # ---------------------------------------------------------------------------
 # Application
 # ---------------------------------------------------------------------------
+
+
+_HunkMatchValidator = Callable[
+    [int, str, list[tuple[int, int]], str],
+    None,
+]
+
+
+def render_hunks(
+    content: str,
+    hunks: list[Hunk],
+    *,
+    rel_path: str,
+) -> str:
+    """Deterministically render one accepted file from its parent text.
+
+    This is the same exact/whitespace-normalized replacement algorithm used by
+    :func:`apply_patch`.  The accepted-commit boundary replays persisted hunks
+    through this pure function so a manifest cannot describe different bytes
+    from the content-addressed Git commit.
+    """
+
+    return _render_hunks(content, hunks, rel_path=rel_path)
+
+
+def _render_hunks(
+    content: str,
+    hunks: list[Hunk],
+    *,
+    rel_path: str,
+    match_validator: _HunkMatchValidator | None = None,
+) -> str:
+    for hunk_index, hunk in enumerate(hunks):
+        match_pos = _resolve_hunk_match(
+            content,
+            hunk.old_code,
+            rel_path=rel_path,
+        )
+        if match_validator is not None:
+            match_validator(
+                hunk_index,
+                content,
+                [match_pos],
+                hunk.new_code,
+            )
+        start, end = match_pos
+        content = content[:start] + hunk.new_code + content[end:]
+    return content
 
 
 def apply_patch(
@@ -243,38 +367,52 @@ def apply_patch(
         If a path escapes the project root or a hunk cannot be found.
     """
     modified: list[str] = []
+    resolved_diffs: list[tuple[FileDiff, SurfacePath]] = []
+    seen_targets: set[str] = set()
 
     for diff in patch.diffs:
         surface_path = surface.resolve_editable_path(diff.file)
+        if surface_path.rel_path in seen_targets:
+            raise ValueError(
+                "Patch contains duplicate canonical target "
+                f"{surface_path.rel_path!r}; combine its hunks into one FileDiff."
+            )
+        seen_targets.add(surface_path.rel_path)
+        resolved_diffs.append((diff, surface_path))
+
+    for diff, surface_path in resolved_diffs:
         file_path = surface_path.abs_path
         content = file_path.read_text(encoding="utf-8")
         original = content
 
-        for hunk in diff.hunks:
-            if hunk.old_code in content:
-                occurrence_count = content.count(hunk.old_code)
-                if occurrence_count > 1:
-                    raise ValueError(
-                        f"Ambiguous hunk: old_code appears {occurrence_count} "
-                        f"times in {surface_path.rel_path}. Provide more "
-                        f"surrounding context in old_code to disambiguate. "
-                        f"(first 80 chars: {hunk.old_code[:80]!r})"
-                    )
-                content = content.replace(hunk.old_code, hunk.new_code, 1)
-            else:
-                # Try whitespace-normalized matching
-                match_pos = _find_normalized(content, hunk.old_code)
-                if match_pos is not None:
-                    start, end = match_pos
-                    content = content[:start] + hunk.new_code + content[end:]
-                else:
-                    raise ValueError(
-                        f"Hunk old_code not found in {surface_path.rel_path}: "
-                        f"{hunk.old_code[:80]!r}"
-                    )
+        def validate_protected_match(
+            hunk_index: int,
+            current_content: str,
+            match_positions: list[tuple[int, int]],
+            new_code: str,
+        ) -> None:
+            protected_region_error = _validate_skill_md_protected_hunk(
+                rel_path=surface_path.rel_path,
+                content=current_content,
+                hunk_index=hunk_index,
+                match_positions=match_positions,
+                new_code=new_code,
+            )
+            if protected_region_error:
+                raise ValueError(protected_region_error)
+
+        content = _render_hunks(
+            content,
+            diff.hunks,
+            rel_path=surface_path.rel_path,
+            match_validator=validate_protected_match,
+        )
 
         if content != original:
-            file_path.write_text(content, encoding="utf-8")
+            # The candidate raw-byte witness and durable PatchPlan replay use
+            # UTF-8/LF as the cross-platform output contract.  ``newline=''``
+            # disables TextIO's Windows ``\n`` -> ``\r\n`` translation.
+            file_path.write_text(content, encoding="utf-8", newline="")
             modified.append(surface_path.rel_path)
 
     return modified
@@ -316,6 +454,75 @@ def backup_files(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+_FRONTMATTER_OPEN_RE = re.compile(r"\A(?:\ufeff)?---[ \t]*(?:\r?\n|$)")
+_FRONTMATTER_CLOSE_RE = re.compile(r"(?m)^---[ \t]*(?:\r?\n|$)")
+_MARKDOWN_H2_RE = re.compile(r"(?m)^##[ \t]+[^\r\n]*(?:\r?\n|$)")
+_INPUTS_OUTPUTS_H2_RE = re.compile(
+    r"(?m)^##[ \t]+Inputs[ \t]*&[ \t]*Outputs[ \t]*(?:\r?\n|$)"
+)
+_GENERATED_IO_MARKER = "AUTO-GENERATED from skill.yaml (interface)"
+
+
+def _validate_skill_md_protected_hunk(
+    *,
+    rel_path: str,
+    content: str,
+    hunk_index: int,
+    match_positions: list[tuple[int, int]],
+    new_code: str,
+) -> str | None:
+    protected_regions = _skill_md_protected_regions(rel_path, content)
+    for label, start, end in protected_regions:
+        if any(_ranges_intersect(match, (start, end)) for match in match_positions):
+            return (
+                f"{rel_path} hunk #{hunk_index}: targets protected {label}; "
+                "only narrative SKILL.md sections are editable."
+            )
+
+    protected_content = _protected_skill_md_content(content, protected_regions)
+    for start, end in match_positions:
+        candidate = content[:start] + new_code + content[end:]
+        candidate_regions = _skill_md_protected_regions(rel_path, candidate)
+        if _protected_skill_md_content(candidate, candidate_regions) != protected_content:
+            return (
+                f"{rel_path} hunk #{hunk_index}: alters protected SKILL.md "
+                "structure; YAML frontmatter and AUTO-GENERATED Inputs & "
+                "Outputs boundaries must remain byte-identical."
+            )
+    return None
+
+
+def _skill_md_protected_regions(
+    rel_path: str,
+    content: str,
+) -> list[tuple[str, int, int]]:
+    if Path(rel_path).name != "SKILL.md":
+        return []
+
+    regions: list[tuple[str, int, int]] = []
+    opening = _FRONTMATTER_OPEN_RE.match(content)
+    if opening is not None:
+        closing = _FRONTMATTER_CLOSE_RE.search(content, opening.end())
+        end = closing.end() if closing is not None else len(content)
+        regions.append(("YAML frontmatter", 0, end))
+
+    for heading in _INPUTS_OUTPUTS_H2_RE.finditer(content):
+        next_heading = _MARKDOWN_H2_RE.search(content, heading.end())
+        end = next_heading.start() if next_heading is not None else len(content)
+        if _GENERATED_IO_MARKER in content[heading.end():end]:
+            regions.append(
+                ("AUTO-GENERATED Inputs & Outputs section", heading.start(), end)
+            )
+    return regions
+
+
+def _protected_skill_md_content(
+    content: str,
+    regions: list[tuple[str, int, int]],
+) -> list[tuple[str, str]]:
+    return [(label, content[start:end]) for label, start, end in regions]
 
 
 def _validate_method_scope_hunk(
@@ -393,6 +600,32 @@ def _find_all_occurrences(content: str, old_code: str) -> list[tuple[int, int]]:
     return matches
 
 
+def _resolve_hunk_match(
+    content: str,
+    old_code: str,
+    *,
+    rel_path: str,
+) -> tuple[int, int]:
+    """Resolve one exact or uniquely whitespace-normalized hunk match."""
+    matches = _find_all_occurrences(content, old_code)
+    match_kind = ""
+    if not matches:
+        matches = _find_all_normalized(content, old_code)
+        match_kind = " whitespace-normalized"
+
+    if not matches:
+        raise ValueError(
+            f"Hunk old_code not found in {rel_path}: {old_code[:80]!r}"
+        )
+    if len(matches) > 1:
+        raise ValueError(
+            f"Ambiguous{match_kind} hunk: old_code appears {len(matches)} "
+            f"times in {rel_path}. Provide more surrounding context in "
+            f"old_code. (first 80 chars: {old_code[:80]!r})"
+        )
+    return matches[0]
+
+
 def _resolve_python_function_regions(
     content: str,
     function_names: list[str],
@@ -436,33 +669,30 @@ def _region_intersects_any(
     return any(_ranges_intersect(match, (start, end)) for _name, start, end in regions)
 
 
-def _find_normalized(content: str, old_code: str) -> tuple[int, int] | None:
-    """Find old_code in content using whitespace-normalized matching.
-
-    Returns (start, end) positions in the original content, or None.
-    """
-    # Build a mapping from normalized positions to original positions
+def _find_all_normalized(content: str, old_code: str) -> list[tuple[int, int]]:
+    """Find every line-aligned whitespace-normalized old_code occurrence."""
     normalized_old = _normalize_ws(old_code)
     if not normalized_old:
-        return None
+        return []
 
     lines = content.splitlines(keepends=True)
-    # Try line-by-line normalized matching
     old_lines = old_code.strip().splitlines()
     if not old_lines:
-        return None
+        return []
 
     first_norm = _normalize_ws(old_lines[0])
+    line_offsets = [0]
+    for line in lines:
+        line_offsets.append(line_offsets[-1] + len(line))
+
+    matches: list[tuple[int, int]] = []
     for i, line in enumerate(lines):
         if first_norm in _normalize_ws(line):
-            # Try matching subsequent lines
             end_line = i + len(old_lines)
             if end_line > len(lines):
                 continue
             candidate = "".join(lines[i:end_line])
-            if _normalize_ws(candidate) == _normalize_ws(old_code):
-                start_pos = sum(len(l) for l in lines[:i])
-                end_pos = start_pos + len(candidate)
-                return start_pos, end_pos
+            if _normalize_ws(candidate) == normalized_old:
+                matches.append((line_offsets[i], line_offsets[end_line]))
 
-    return None
+    return matches

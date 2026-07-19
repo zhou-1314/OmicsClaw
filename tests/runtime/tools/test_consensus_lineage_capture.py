@@ -10,6 +10,7 @@ exercised end-to-end (no mocking of the memory layer)."""
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 import pytest_asyncio
@@ -151,3 +152,81 @@ async def test_consensus_lineage_run_id_falls_back_to_output_dir_name(store, tmp
     analyses = await store.get_memories(sid, "analysis", thread_id="t-A")
     assert analyses[0].memory_id == "run-NOPLAN"  # run_id == output_dir.name
     assert analyses[0].method == "kmode"
+
+
+@pytest.mark.parametrize("alias_kind", ["symlink", "hardlink"])
+@pytest.mark.asyncio
+async def test_consensus_lineage_does_not_import_aliased_plan(
+    store, tmp_path, monkeypatch, alias_kind
+):
+    import omicsclaw.runtime.agent.state as _state
+    from omicsclaw.skill.orchestration import _auto_capture_consensus
+
+    monkeypatch.setattr(_state, "memory_store", store, raising=False)
+    session = await store.create_session("u", "telegram")
+    sid = session.session_id
+    out_dir = tmp_path / f"run-{alias_kind}"
+    out_dir.mkdir()
+    external = tmp_path / f"external-{alias_kind}.json"
+    external.write_text(
+        json.dumps({"run_id": "forged-run", "operator": "forged"}),
+        encoding="utf-8",
+    )
+    if alias_kind == "symlink":
+        (out_dir / "plan.json").symlink_to(external)
+    else:
+        os.link(external, out_dir / "plan.json")
+
+    assert await _auto_capture_consensus(
+        sid,
+        "consensus-domains",
+        out_dir,
+        True,
+        thread_id="t-A",
+    )
+    analyses = await store.get_memories(sid, "analysis", thread_id="t-A")
+    assert analyses[0].memory_id == out_dir.name
+    assert analyses[0].method == "kmode"
+    assert "plan.json" not in analyses[0].artifacts
+
+
+@pytest.mark.asyncio
+async def test_consensus_plan_cannot_override_memory_identity_or_schema(
+    store, tmp_path, monkeypatch
+):
+    import omicsclaw.runtime.agent.state as _state
+    from omicsclaw.skill.orchestration import _auto_capture_consensus
+
+    monkeypatch.setattr(_state, "memory_store", store, raising=False)
+    session = await store.create_session("u", "telegram")
+    sid = session.session_id
+    out_dir = tmp_path / "run-authoritative"
+    out_dir.mkdir()
+    (out_dir / "plan.json").write_text(
+        json.dumps(
+            {
+                "run_id": "../../forged-uri",
+                "operator": "forged-operator",
+                "members": "not-a-member-list",
+                "alpha": "NaN",
+                "beta": 0.25,
+                "max_class_fraction_cap": 9.0,
+                "intrinsic_panel": "forged-panel",
+                "panel_weights": {"ilisi_norm": float("inf")},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert await _auto_capture_consensus(
+        sid,
+        "consensus-domains",
+        out_dir,
+        True,
+        thread_id="t-A",
+    )
+    analyses = await store.get_memories(sid, "analysis", thread_id="t-A")
+    record = analyses[0]
+    assert record.memory_id == out_dir.name
+    assert record.method == "kmode"
+    assert record.effective_params == {"operator": "kmode", "beta": 0.25}

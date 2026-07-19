@@ -7,8 +7,8 @@ author: OmicsClaw
 license: MIT
 emoji: S
 summary:
-  load_when: computing RNA velocity vectors and latent time on a scRNA AnnData with spliced / unspliced
-    layers via scVelo (stochastic / dynamical / steady-state)
+  load_when: computing RNA velocity vectors on a scRNA AnnData with spliced / unspliced layers via
+    scVelo (stochastic / dynamical / steady-state); dynamical mode additionally exports latent time
   skip_when:
   - condition: input lacks spliced+unspliced layers
     use: sc-velocity-prep
@@ -99,10 +99,18 @@ interface:
     - result.json
     anndata:
       saves_h5ad: true
-      obs:
-      - latent_time
       layers:
       - velocity
+    method_scopes:
+    - methods:
+      - scvelo_dynamical
+      anndata:
+        obs:
+        - latent_time
+      artifacts:
+      - kind: singlecell.latent_time
+        path: processed.h5ad
+        format: h5ad
 runtime:
   entry: sc_velocity.py
 deps:

@@ -4,7 +4,57 @@
 
 Accepted (2026-07-06). Shipped to `main` via PR #29 (transcript store + lazy rehydrate) and PR #30 (the `clear_conversation` fan-out seam); the surface wiring that routes every `/clear` through that seam lands alongside this status update. Resolves the previously-deferred **F14** (raw transcript durability across restart) — using a write-through derived-state mirror, explicitly **not** the per-turn-reload approach that review rejected. Extends `docs/CONTEXT.md` §"Prompt Prefix & Caching" vocabulary; preserves ADR 0024's prefix-cache invariants in full.
 
+**Deployment clarification (2026-07-14):** [ADR 0043](0043-local-first-control-plane-extensible-run-execution.md)
+defines this durability guarantee inside a local-first, single-process control
+plane that may serve multiple logically isolated users. Cross-process state
+ownership remains deferred.
+
+**Superseding deployment clarification (2026-07-14):**
+[ADR 0044](0044-single-owner-control-plane-and-owner-only-channel-ingress.md)
+makes restart resilience a single-owner guarantee. The multi-user motivation
+below remains part of this ADR's history, not the current product target.
+
+**Turn-ordering clarification (2026-07-14):**
+[ADR 0050](0050-serialize-turns-per-conversation-with-bounded-fifo.md) makes
+the entire Turn—not each SQLite mutation—the single-writer boundary for one
+Conversation. This ADR's database lock preserves write integrity but does not
+authorize concurrent Agent Loops over one Transcript.
+
+**Turn-attribution clarification (2026-07-14):**
+[ADR 0051](0051-opaque-turn-id-and-durable-non-replayable-turn-receipt.md)
+requires storage-side Turn attribution for Transcript mutations. That metadata
+must remain outside provider-visible message payloads so this ADR's
+byte-identical request serialization is unchanged.
+
+**Control-database boundary clarification (2026-07-14):**
+[ADR 0054](0054-persist-authoritative-control-state-in-backend-exclusive-sqlite.md)
+keeps this dedicated Transcript content store physically separate from the
+Backend-exclusive `control.db`. Transcript retention and compaction therefore
+cannot enlarge the failure domain of Project identity or ingress idempotency.
+
 **Implementation status (2026-07-06).** Decision 4's lazy-on-miss rehydrate is confirmed as shipped (`TranscriptStore.get_or_create` rehydrates only on an in-memory miss, never per-turn — `omicsclaw/runtime/storage/transcript.py`). Decision 6's fan-out is now routed through a single `clear_conversation(chat_id)` seam (`omicsclaw/runtime/agent/state.py`) that every surface (channels, CLI/TUI, interactive REPL) calls, so no surface can clear one store and orphan the other. The retention/GC of tool blobs + `records_by_chat` remains an **Open** pre-launch item (below).
+
+**Implementation update (Scheme 1, 2026-07-16).** The
+prompt-toolkit/single-shot CLI and Desktop text path no longer use the legacy
+write-through mirror as runtime Transcript authority. They use the independent
+canonical `omicsclaw/runtime/storage/canonical_transcript.py` Store: immutable
+Turn-attributed entries, an explicit replaceable active view, and an opaque
+immutable Transcript Store identity bound by Control rather than by path.
+Provider payload bytes remain unchanged. A terminal entry is staged as a
+candidate, its entry ID and digest are committed atomically with the terminal
+Turn Receipt, and only then is it promoted into the active view before Event
+publication. Startup verifies Store identity, candidates and every terminal
+reference and fails closed on loss or mismatch. A profile-driven offline
+`plan/apply/verify` importer takes a consistent backup of the legacy Backend
+`transcripts.db`, verifies an immutable staged baseline and atomically publishes
+the canonical Store; after cutover there is no runtime dual-read, dual-write or
+fallback to the old database. This update supersedes the mirror implementation
+only on those cut-over paths. Scheme 2 extends the same canonical Transcript to
+Owner-only Telegram, and Scheme 3 persists its single-photo user content as
+structured Attachment References while provider image bytes remain ephemeral.
+Textual TUI and non-Telegram Channel Adapters still use legacy Transcript
+compatibility; ToolResult retention and the wider CLI/App/Run migration remain
+open.
 
 ## Context
 

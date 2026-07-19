@@ -13,6 +13,7 @@ Usage:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 
@@ -430,10 +431,10 @@ def _canonicalize_skill_name(skill_name: str) -> str:
 def _has_optimizable_methods(param_hints: object) -> bool:
     from omicsclaw.autoagent.search_space import build_method_surface
 
-    if not isinstance(param_hints, dict):
+    if not isinstance(param_hints, Mapping):
         return False
     for method_name, hints in param_hints.items():
-        if not isinstance(hints, dict):
+        if not isinstance(hints, Mapping):
             continue
         surface = build_method_surface("unknown-skill", str(method_name).strip(), hints)
         if surface.tunable:

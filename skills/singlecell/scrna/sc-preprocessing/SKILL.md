@@ -74,7 +74,6 @@ transformation). The skill stops at PCA — UMAP / clustering live in
 - `figures/r_hvg_violin.png`
 - `analysis_summary.txt`
 - `info.json`
-- `input.h5ad`
 - `processed.h5ad`
 - `report.md`
 - `result.json`

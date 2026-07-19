@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DiscordConfig(BaseChannelConfig):
     """Discord channel configuration."""
+
     bot_token: str = ""
     text_chunk_limit: int = 2000  # Discord's message limit
 
@@ -71,12 +72,11 @@ class DiscordChannel(Channel):
     # ── Lifecycle ────────────────────────────────────────────────────
 
     async def start(self) -> None:
+        self.require_authoritative_ingress()
         try:
             import discord
         except ImportError:
-            raise RuntimeError(
-                "discord.py not installed. Run: pip install discord.py"
-            )
+            raise RuntimeError("discord.py not installed. Run: pip install discord.py")
 
         cfg: DiscordConfig = self.config
         if not cfg.bot_token:
@@ -175,12 +175,14 @@ class DiscordChannel(Channel):
             return
 
         logger.info(f"Discord message from {message.author}: {text[:80]}")
-        asyncio.create_task(
-            self._handle_message(channel_id, user_id, text, message)
-        )
+        asyncio.create_task(self._handle_message(channel_id, user_id, text, message))
 
     async def _handle_message(
-        self, channel_id: str, user_id: str, content: str, message,
+        self,
+        channel_id: str,
+        user_id: str,
+        content: str,
+        message,
     ) -> None:
         """Process message through core LLM and reply."""
         try:
@@ -188,7 +190,9 @@ class DiscordChannel(Channel):
             await self.start_typing(channel_id)
 
             reply = await self.process_message(
-                channel_id, user_id, content,
+                channel_id,
+                user_id,
+                content,
                 platform="discord",
             )
 
@@ -200,7 +204,9 @@ class DiscordChannel(Channel):
             await self.stop_typing(channel_id)
             logger.error(f"Discord process error: {e}", exc_info=True)
             try:
-                await self.send(channel_id, f"Sorry, an error occurred: {type(e).__name__}")
+                await self.send(
+                    channel_id, f"Sorry, an error occurred: {type(e).__name__}"
+                )
             except Exception:
                 pass
 
@@ -232,6 +238,7 @@ class DiscordChannel(Channel):
         """Send a file via Discord."""
         try:
             import discord
+
             if not self._client:
                 return False
             ch = self._client.get_channel(int(chat_id))

@@ -124,3 +124,15 @@ def test_autonomous_artifacts_lists_figures_and_skips_bookkeeping(tmp_path):
 
 def test_autonomous_artifacts_handles_missing_dir():
     assert _autonomous_artifacts("/nonexistent/path/xyz") == []
+
+
+def test_autonomous_artifacts_rejects_claim_aliases(tmp_path):
+    from omicsclaw.common.output_claim import OUTPUT_CLAIM_FILENAME
+
+    (tmp_path / "figures").mkdir()
+    claim = tmp_path / OUTPUT_CLAIM_FILENAME
+    claim.write_text("{}\n", encoding="utf-8")
+    (tmp_path / "claim.csv").hardlink_to(claim)
+    (tmp_path / "figures" / "claim.png").hardlink_to(claim)
+
+    assert _autonomous_artifacts(str(tmp_path)) == []
