@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from omicsclaw.providers.registry import (
     MODEL_NORMALIZATION_EXEMPT_PROVIDERS,
     PROVIDER_CHOICES,
@@ -13,43 +11,6 @@ from omicsclaw.providers.registry import (
     normalize_model_for_provider,
     resolve_provider,
 )
-
-
-@pytest.fixture(autouse=True)
-def _isolated_provider_env(monkeypatch):
-    """Clear ambient provider env vars so these tests are order-independent.
-
-    ``resolve_provider``/``detect_provider_from_env`` read ``os.environ`` at
-    call time. Importing modules such as ``omicsclaw.runtime.agent.state`` or
-    ``omicsclaw.routing.llm_router`` has the side effect of loading the
-    repo-root ``.env`` file via ``load_project_dotenv(..., override=False)``
-    (see ``omicsclaw/common/runtime_env.py``). When that happens earlier in a
-    full-suite run — from any test, not necessarily one in this file — real
-    local values like ``LLM_PROVIDER=deepseek`` or ``LLM_API_KEY=sk-...``
-    stick in the process-wide environment for the rest of the pytest session
-    and silently change what these tests observe (e.g. a developer's local
-    ``.env`` leaking a real API key into "no key configured" assertions).
-    Reset the relevant keys before every test so results depend only on what
-    each test explicitly sets via ``monkeypatch``.
-    """
-    generic_keys = (
-        "LLM_PROVIDER",
-        "OMICSCLAW_PROVIDER",
-        "LLM_BASE_URL",
-        "OMICSCLAW_BASE_URL",
-        "OMICSCLAW_MODEL",
-        "LLM_MODEL",
-        "SPATIALCLAW_MODEL",
-        "LLM_API_KEY",
-        "OMICSCLAW_API_KEY",
-    )
-    for key in generic_keys:
-        monkeypatch.delenv(key, raising=False)
-
-    for provider_name, (_url, _model, key_env) in PROVIDER_PRESETS.items():
-        monkeypatch.delenv(f"{provider_name.upper()}_BASE_URL", raising=False)
-        if key_env:
-            monkeypatch.delenv(key_env, raising=False)
 
 
 def test_provider_choices_match_registry_keys():

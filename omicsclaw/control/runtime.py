@@ -179,6 +179,26 @@ def default_control_state_root() -> Path:
     return Path.home() / ".local" / "state" / "omicsclaw"
 
 
+# The control-plane Surface vocabulary ("cli" | "desktop" | "channel") is
+# distinct from the legacy Session/Memory platform Literal
+# ("telegram" | "feishu" | "cli" | "tui" | "app") — "desktop" is not a valid
+# platform there, "app" is (see `desktop_namespace()` in `omicsclaw/memory`).
+_SURFACE_TO_LEGACY_SESSION_PLATFORM = {"cli": "cli", "desktop": "app"}
+
+
+def _legacy_session_platform(envelope: InboundEnvelopeV1) -> str:
+    """Translate an Inbound Envelope's Surface into the legacy Session
+    platform Literal, so passing it to ``SessionManager``/``Session`` never
+    raises a validation error the caller only logs as non-fatal.
+    """
+    if envelope.surface == "channel":
+        adapter = str(envelope.reply_target.get("adapter", ""))
+        if adapter in {"telegram", "feishu"}:
+            return adapter
+        return "app"
+    return _SURFACE_TO_LEGACY_SESSION_PLATFORM.get(envelope.surface, envelope.surface)
+
+
 async def _default_dispatch_events(
     envelope: MessageEnvelope,
 ) -> AsyncIterator[Event]:
@@ -1162,7 +1182,7 @@ class ControlRuntime:
             chat_id=envelope.conversation_id,
             content=content,
             user_id=ports.user_id,
-            platform=envelope.surface,
+            platform=_legacy_session_platform(envelope),
             workspace=ports.workspace or envelope.workspace_id,
             pipeline_workspace=ports.pipeline_workspace,
             scoped_memory_scope=ports.scoped_memory_scope,

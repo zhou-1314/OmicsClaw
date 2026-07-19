@@ -449,6 +449,52 @@ async def test_control_runtime_executes_cli_turn_through_durable_control_state(
 
 
 @pytest.mark.asyncio
+async def test_desktop_turn_maps_to_legacy_app_session_platform(tmp_path):
+    """Regression: the Worker Adapter used to pass the raw Surface string
+    ("desktop") straight through as the legacy Session/Memory `platform`,
+    which only accepts "app" for the Desktop surface — Session(...)
+    construction then raised a (caught, non-fatal) pydantic validation
+    error on every Desktop turn."""
+    dispatched: list[MessageEnvelope] = []
+
+    async def dispatch_events(envelope: MessageEnvelope):
+        dispatched.append(envelope)
+        yield Final("hello")
+
+    runtime = ControlRuntime.for_local_surface(
+        state_root=tmp_path,
+        workspace_id="workspace-test",
+        surface="desktop",
+        installation_id="local",
+        profile_id="owner",
+        dispatch_events=dispatch_events,
+    )
+    await runtime.start()
+    try:
+        raw = RawInboundV1(
+            schema_version=1,
+            surface="desktop",
+            source_namespace="desktop/v1/local/owner",
+            source_request_id="request-desktop-1",
+            reply_target={
+                "schema_version": 1,
+                "kind": "desktop",
+                "installation_id": "local",
+                "profile_id": "owner",
+                "slot": "main",
+            },
+            content=(RawContentBlockV1(kind="text", text="run a demo"),),
+        )
+        await runtime.submit_and_wait(
+            raw, ControlRuntimePorts(response_sink=lambda _event: None)
+        )
+        assert len(dispatched) == 1
+        assert dispatched[0].platform == "app"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_terminal_event_observer_sees_committed_receipt_and_transcript(tmp_path):
     terminal_observation = []
 
