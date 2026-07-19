@@ -1470,6 +1470,22 @@ def _resolve_shared_kg_home() -> str:
     return ""
 
 
+def _skills_count_payload(core: Any) -> dict[str, Any]:
+    """Primary skill count for /health. ``registry.load_all`` raises
+    (ADR 0042-0072 tightened a missing/invalid skills root from a silent
+    no-op to a hard error, and that's correct — see test_registry_discovery.py)
+    when the skills root hasn't been provisioned yet (e.g. first launch of the
+    bundled desktop runtime before ``OMICSCLAW_DIR/skills`` exists). That's a
+    real, expected state for /health to report, not a reason to 500 the whole
+    endpoint over one field — degrade to null + the error string instead,
+    mirroring _kg_status_payload's home-resolution fallback below.
+    """
+    try:
+        return {"skills_count": core._primary_skill_count()}
+    except Exception as exc:  # pragma: no cover - never break /health on skill-registry load failure
+        return {"skills_count": None, "skills_count_error": str(exc)}
+
+
 def _kg_status_payload() -> dict[str, Any]:
     """Availability of the optional OmicsClaw-KG integration, for the frontend
     (Bench Phase 3.2, ADR 0019). ``available`` is True iff the embedded ``/kg``
@@ -1859,13 +1875,19 @@ async def _handle_slash_command(command: str, arg: str, session_id: str) -> str 
     elif command == "/doctor":
         import platform as plat
 
+        skills_status = _skills_count_payload(core)
+        skills_line = (
+            f"- Skills: {skills_status['skills_count']}"
+            if skills_status.get("skills_count") is not None
+            else f"- Skills: unavailable ({skills_status.get('skills_count_error', 'unknown error')})"
+        )
         lines = [
             "## Environment Diagnostics",
             f"- Python: {plat.python_version()}",
             f"- Platform: {plat.platform()}",
             f"- Provider: {core.LLM_PROVIDER_NAME}",
             f"- Model: {core.OMICSCLAW_MODEL}",
-            f"- Skills: {core._primary_skill_count()}",
+            skills_line,
             f"- Tools: {len(core.get_tool_executors())}",
             f"- Memory: {'enabled' if _memory_client else 'disabled'}",
             f"- MCP: {'loaded' if _mcp_load_fn else 'not available'}",
@@ -4384,7 +4406,7 @@ async def health():
         "backend_process_epoch": _BACKEND_PROCESS_EPOCH,
         "provider": core.LLM_PROVIDER_NAME,
         "model": core.OMICSCLAW_MODEL,
-        "skills_count": core._primary_skill_count(),
+        **_skills_count_payload(core),
         "kg": _kg_status_payload(),
         "contracts": {
             "desktop_chat": desktop_chat_contract(),
@@ -6637,7 +6659,7 @@ async def get_settings():
         "max_history": core.MAX_HISTORY,
         "max_history_chars": core.MAX_HISTORY_CHARS,
         "max_tool_iterations": core.MAX_TOOL_ITERATIONS,
-        "skills_count": core._primary_skill_count(),
+        **_skills_count_payload(core),
         "tools_count": len(core.get_tool_executors()),
         "data_dir": str(core.DATA_DIR),
         "output_dir": str(core.OUTPUT_DIR),

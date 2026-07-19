@@ -2290,6 +2290,79 @@ async def test_health_reports_runtime_python_and_dependency_status(monkeypatch):
     }
 
 
+@pytest.mark.asyncio
+async def test_health_survives_skill_registry_load_failure(monkeypatch):
+    """Regression: a fresh/unprovisioned skills root (e.g. first launch of the
+    bundled desktop runtime, before OMICSCLAW_DIR/skills exists) makes
+    registry.load_all() raise FileNotFoundError by design (ADR 0042-0072
+    tightened this from a silent no-op) — /health must degrade gracefully
+    instead of 500ing the entire endpoint over one field, mirroring how
+    _kg_status_payload already never lets a KG-home resolution failure break
+    /health."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+
+    def _raise_missing_skills_root():
+        raise FileNotFoundError(
+            "skills root does not exist: /tmp/omicsclaw-smoke-w1_sawsh/skills"
+        )
+
+    fake_core = SimpleNamespace(
+        LLM_PROVIDER_NAME="env",
+        OMICSCLAW_MODEL="gpt-test",
+        _primary_skill_count=_raise_missing_skills_root,
+        get_skill_runner_python=lambda: sys.executable,
+        OMICSCLAW_DIR=Path("/tmp/omicsclaw-smoke-w1_sawsh"),
+    )
+
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
+    monkeypatch.setattr(server, "_module_available", lambda name: False, raising=False)
+
+    payload = await server.health()
+
+    assert payload["status"] == "ok"
+    assert payload["skills_count"] is None
+    assert "skills root does not exist" in payload["skills_count_error"]
+
+
+@pytest.mark.asyncio
+async def test_settings_survives_skill_registry_load_failure(monkeypatch):
+    """Same regression as test_health_survives_skill_registry_load_failure,
+    for GET /settings — it hit the exact same unguarded core._primary_skill_count()
+    pattern and would 500 the whole settings payload over one field."""
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+
+    def _raise_missing_skills_root():
+        raise FileNotFoundError("skills root does not exist: /tmp/omicsclaw-smoke/skills")
+
+    fake_core = SimpleNamespace(
+        LLM_PROVIDER_NAME="env",
+        OMICSCLAW_MODEL="gpt-test",
+        MAX_HISTORY=50,
+        MAX_HISTORY_CHARS=200_000,
+        MAX_TOOL_ITERATIONS=25,
+        _primary_skill_count=_raise_missing_skills_root,
+        get_tool_executors=lambda: {},
+        DATA_DIR=Path("/tmp/omicsclaw-smoke/data"),
+        OUTPUT_DIR=Path("/tmp/omicsclaw-smoke/output"),
+        get_usage_snapshot=lambda: {},
+        BOT_START_TIME=0.0,
+    )
+
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
+
+    payload = await server.get_settings()
+
+    assert payload["skills_count"] is None
+    assert "skills root does not exist" in payload["skills_count_error"]
+    assert payload["provider"] == "env"
+
+
 def test_health_echoes_desktop_launch_id(monkeypatch):
     pytest.importorskip("fastapi")
 
