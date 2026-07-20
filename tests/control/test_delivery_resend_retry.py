@@ -329,6 +329,15 @@ def test_insert_resend_delivery_rejects_oversized_historical_source(tmp_path):
         "{",
         json.dumps(
             {
+                "schema_version": 2,
+                "kind": "channel",
+                "adapter": "telegram",
+                "account_namespace": "primary",
+                "destination_id": "chat-historical",
+            }
+        ),
+        json.dumps(
+            {
                 "schema_version": 1,
                 "kind": "desktop",
                 "adapter": "telegram",
@@ -354,7 +363,13 @@ def test_insert_resend_delivery_rejects_oversized_historical_source(tmp_path):
             }
         ),
     ],
-    ids=("malformed-json", "non-channel", "missing-account", "empty-destination"),
+    ids=(
+        "malformed-json",
+        "unsupported-version",
+        "non-channel",
+        "missing-account",
+        "empty-destination",
+    ),
 )
 def test_insert_resend_delivery_rejects_invalid_historical_reply_target(
     tmp_path, reply_target_json
@@ -373,6 +388,32 @@ def test_insert_resend_delivery_rejects_invalid_historical_reply_target(
             assert connection.execute("SELECT COUNT(*) FROM deliveries").fetchone() == (
                 1,
             )
+
+
+def test_insert_resend_delivery_accepts_historical_v1_target_without_version(
+    tmp_path,
+):
+    reply_target = {
+        "kind": "channel",
+        "adapter": "telegram",
+        "account_namespace": "primary",
+        "destination_id": "chat-historical",
+    }
+    _write_historical_delivery(
+        tmp_path,
+        reply_target_json=json.dumps(reply_target),
+    )
+
+    with ControlStateRepository(tmp_path) as repository:
+        resend = repository.insert_resend_delivery(
+            "historical-delivery",
+            max_total=2,
+            max_per_account=2,
+        )
+
+        assert resend.purpose == "resend"
+        assert resend.resend_of_delivery_id == "historical-delivery"
+        assert len(repository.list_deliveries()) == 2
 
 
 def test_expedite_delivery_retries_pulls_retry_wait_forward(tmp_path):

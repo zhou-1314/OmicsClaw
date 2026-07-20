@@ -351,26 +351,26 @@ def _decode_channel_reply_target(raw: object) -> Mapping[str, Any]:
     try:
         value = json.loads(str(raw))
         required = {
-            "schema_version",
             "kind",
             "adapter",
             "account_namespace",
             "destination_id",
         }
-        optional = {"thread_id", "destination_kind"}
+        optional = {"schema_version", "thread_id", "destination_kind"}
         if not isinstance(value, dict) or set(value) - (required | optional):
             raise ValueError
         if not required.issubset(value):
             raise ValueError
-        if type(value.get("schema_version")) is not int:
+        schema_version = value.get("schema_version", 1)
+        if type(schema_version) is not int:
             raise ValueError
-        if value["schema_version"] != 1 or value.get("kind") != "channel":
+        if schema_version != 1 or value.get("kind") != "channel":
             raise ValueError
         for field_name in ("adapter", "account_namespace", "destination_id"):
             field = value.get(field_name)
             if not isinstance(field, str) or not field.strip():
                 raise ValueError
-        for field_name in optional:
+        for field_name in ("thread_id", "destination_kind"):
             field = value.get(field_name)
             if field is not None and (
                 not isinstance(field, str) or not field.strip()
