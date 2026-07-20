@@ -186,6 +186,100 @@ async def test_manager_surfaces_sanitized_stop_failure_and_keeps_channel_running
     assert "secret-provider-stop-detail" not in caplog.text
 
 
+@pytest.mark.asyncio
+async def test_health_server_duplicate_start_fails_closed() -> None:
+    from omicsclaw.surfaces.channels.manager import ChannelManager
+
+    manager = ChannelManager()
+    await manager.start_health_server(port=0)
+    try:
+        with pytest.raises(RuntimeError, match="Health server already started"):
+            await manager.start_health_server(port=0)
+    finally:
+        await manager.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_health_server_closes_when_channel_stop_fails_and_port_rebinds() -> None:
+    from omicsclaw.surfaces.channels.manager import ChannelManager
+
+    channel = _LifecycleChannel(
+        "telegram",
+        stop_error=RuntimeError("secret-provider-stop-detail"),
+    )
+    manager = ChannelManager()
+    manager.register(channel)
+    await manager.start_all()
+    await manager.start_health_server(port=0)
+    health_server = manager._health_server
+    assert health_server is not None
+    assert health_server.sockets
+    port = health_server.sockets[0].getsockname()[1]
+
+    with pytest.raises(RuntimeError, match="Channel shutdown failed for: telegram"):
+        await manager.stop_all()
+
+    assert manager._health_server is None
+    rebound = await asyncio.start_server(lambda _reader, _writer: None, "0.0.0.0", port)
+    rebound.close()
+    await rebound.wait_closed()
+
+    channel._stop_error = None
+    await manager.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_manager_combines_sanitized_channel_and_health_shutdown_failures(
+    caplog,
+) -> None:
+    from omicsclaw.surfaces.channels.manager import ChannelManager
+
+    class FailingHealthServer:
+        def __init__(self) -> None:
+            self.close_calls = 0
+            self.wait_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+        async def wait_closed(self) -> None:
+            self.wait_calls += 1
+            if self.wait_calls == 1:
+                raise RuntimeError("secret-health-stop-detail")
+
+    channel = _LifecycleChannel(
+        "telegram",
+        stop_error=RuntimeError("secret-provider-stop-detail"),
+    )
+    health_server = FailingHealthServer()
+    manager = ChannelManager()
+    manager.register(channel)
+    await manager.start_all()
+    manager._health_server = health_server  # type: ignore[assignment]
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"Channel shutdown failed for: telegram \(RuntimeError\); "
+            r"Health server shutdown failed \(RuntimeError\)"
+        ),
+    ):
+        await manager.stop_all()
+
+    assert health_server.close_calls == 1
+    assert health_server.wait_calls == 1
+    assert manager._health_server is health_server
+    assert manager.running_channels() == ["telegram"]
+    assert "secret-provider-stop-detail" not in caplog.text
+    assert "secret-health-stop-detail" not in caplog.text
+
+    channel._stop_error = None
+    await manager.stop_all()
+    assert health_server.close_calls == 2
+    assert health_server.wait_calls == 2
+    assert manager._health_server is None
+
+
 def test_telegram_declares_authoritative_ingress() -> None:
     from omicsclaw.surfaces.channels.telegram import TelegramChannel, TelegramConfig
 

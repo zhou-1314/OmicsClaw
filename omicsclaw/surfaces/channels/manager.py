@@ -74,6 +74,8 @@ class ChannelManager:
         self._health: dict[str, ChannelHealth] = {}
         self._start_time: float = 0.0
         self._running = False
+        self._health_server: asyncio.Server | None = None
+        self._health_server_starting = False
 
     # ── Properties ──────────────────────────────────────────────────
 
@@ -201,10 +203,38 @@ class ChannelManager:
             for (name, _channel), result in zip(self._channels.items(), results)
             if isinstance(result, BaseException)
         ]
+        failures = []
         if failed:
-            raise RuntimeError(
-                "Channel shutdown failed for: " + ", ".join(failed)
-            ) from None
+            failures.append("Channel shutdown failed for: " + ", ".join(failed))
+
+        health_server = self._health_server
+        if health_server is not None:
+            health_error_type: str | None = None
+            try:
+                health_server.close()
+            except BaseException as error:
+                health_error_type = type(error).__name__
+                logger.error(
+                    "Error closing Health server (%s)",
+                    health_error_type,
+                )
+            try:
+                await health_server.wait_closed()
+            except BaseException as error:
+                health_error_type = health_error_type or type(error).__name__
+                logger.error(
+                    "Error waiting for Health server shutdown (%s)",
+                    type(error).__name__,
+                )
+            if health_error_type is None:
+                self._health_server = None
+            else:
+                failures.append(
+                    f"Health server shutdown failed ({health_error_type})"
+                )
+
+        if failures:
+            raise RuntimeError("; ".join(failures)) from None
 
         logger.info("ChannelManager stopped")
 
@@ -273,6 +303,10 @@ class ChannelManager:
         Responds to ``GET /healthz`` with JSON health payload.
         """
 
+        if self._health_server is not None or self._health_server_starting:
+            raise RuntimeError("Health server already started")
+        self._health_server_starting = True
+
         async def handle(reader, writer):
             try:
                 request_line = await asyncio.wait_for(
@@ -312,6 +346,10 @@ class ChannelManager:
                 except Exception:
                     pass
 
-        server = await asyncio.start_server(handle, "0.0.0.0", port)
+        try:
+            server = await asyncio.start_server(handle, "0.0.0.0", port)
+        finally:
+            self._health_server_starting = False
+        self._health_server = server
         addrs = [s.getsockname() for s in server.sockets]
         logger.info(f"Health server listening on {addrs}")

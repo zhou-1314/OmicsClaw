@@ -192,6 +192,7 @@ def test_freeze_terminal_text_delivery_produces_bounded_fallback_over_item_bound
             "start": 0,
             "end": prefix_len,
             "truncated": True,
+            "notice_end": len(DELIVERY_TEXT_TRUNCATION_NOTICE),
         }
         assert item.content_sha256 == _sha256_text(
             text[:prefix_len] + DELIVERY_TEXT_TRUNCATION_NOTICE
@@ -226,6 +227,119 @@ def test_resolve_delivery_text_reconstructs_truncated_fallback(tmp_path):
             transcript, _candidate_from_plan(plan.items[0])
         )
         assert resolved == text[:prefix_len] + DELIVERY_TEXT_TRUNCATION_NOTICE
+    finally:
+        transcript.close()
+
+
+def test_truncated_fallback_respects_tiny_codepoint_bound(tmp_path):
+    transcript = CanonicalTranscript(tmp_path)
+    try:
+        text = "0123456789"
+        candidate_ref = transcript.bind_turn("conversation-1", "turn-1").stage_terminal(
+            text, terminal_kind="normal"
+        )
+        ref = TurnTranscriptRef(candidate_ref.entry_id, candidate_ref.content_sha256)
+        plan = freeze_terminal_text_delivery(
+            transcript,
+            ref,
+            "succeeded",
+            max_chunk_codepoints=8,
+            max_items=1,
+        )
+        transcript.promote_terminal(
+            ref.entry_id,
+            ref.content_sha256,
+            expected_conversation_id="conversation-1",
+            expected_turn_id="turn-1",
+        )
+
+        item = plan.items[0]
+        assert dict(item.content_range or {}) == {
+            "unit": "unicode_codepoint",
+            "start": 0,
+            "end": 0,
+            "truncated": True,
+            "notice_end": 8,
+        }
+        resolved = resolve_delivery_text(transcript, _candidate_from_plan(item))
+        assert resolved == DELIVERY_TEXT_TRUNCATION_NOTICE[:8]
+        assert len(resolved) == 8
+    finally:
+        transcript.close()
+
+
+def test_resolve_delivery_text_preserves_legacy_full_truncation_notice(tmp_path):
+    transcript = CanonicalTranscript(tmp_path)
+    try:
+        text = "y" * 9000
+        candidate_ref = transcript.bind_turn("conversation-1", "turn-1").stage_terminal(
+            text, terminal_kind="normal"
+        )
+        ref = TurnTranscriptRef(candidate_ref.entry_id, candidate_ref.content_sha256)
+        plan = freeze_terminal_text_delivery(
+            transcript,
+            ref,
+            "succeeded",
+            max_items=1,
+        )
+        transcript.promote_terminal(
+            ref.entry_id,
+            ref.content_sha256,
+            expected_conversation_id="conversation-1",
+            expected_turn_id="turn-1",
+        )
+
+        legacy_range = dict(plan.items[0].content_range or {})
+        legacy_range.pop("notice_end", None)
+        prefix_len = 4096 - len(DELIVERY_TEXT_TRUNCATION_NOTICE)
+        legacy_text = text[:prefix_len] + DELIVERY_TEXT_TRUNCATION_NOTICE
+        legacy_item = replace(
+            _candidate_from_plan(plan.items[0]),
+            content_range=legacy_range,
+            content_sha256=_sha256_text(legacy_text),
+        )
+
+        assert resolve_delivery_text(transcript, legacy_item) == legacy_text
+    finally:
+        transcript.close()
+
+
+@pytest.mark.parametrize(
+    "notice_end",
+    [True, None, -1, len(DELIVERY_TEXT_TRUNCATION_NOTICE) + 1],
+)
+def test_resolve_delivery_text_rejects_invalid_frozen_notice_end(
+    tmp_path,
+    notice_end,
+):
+    transcript = CanonicalTranscript(tmp_path)
+    try:
+        candidate_ref = transcript.bind_turn("conversation-1", "turn-1").stage_terminal(
+            "0123456789", terminal_kind="normal"
+        )
+        ref = TurnTranscriptRef(candidate_ref.entry_id, candidate_ref.content_sha256)
+        plan = freeze_terminal_text_delivery(
+            transcript,
+            ref,
+            "succeeded",
+            max_chunk_codepoints=8,
+            max_items=1,
+        )
+        transcript.promote_terminal(
+            ref.entry_id,
+            ref.content_sha256,
+            expected_conversation_id="conversation-1",
+            expected_turn_id="turn-1",
+        )
+        content_range = dict(plan.items[0].content_range or {})
+        content_range["notice_end"] = notice_end
+        item = replace(
+            _candidate_from_plan(plan.items[0]),
+            content_range=content_range,
+        )
+
+        with pytest.raises(DeliveryContentIntegrityError, match="codepoint range"):
+            resolve_delivery_text(transcript, item)
     finally:
         transcript.close()
 

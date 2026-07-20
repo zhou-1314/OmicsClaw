@@ -161,9 +161,15 @@ def freeze_terminal_text_delivery(
         # reply and appends a deterministic truncation notice.  The full reply
         # stays in the immutable Transcript entry; a future media slice may
         # additionally attach it as a durable artifact reference.
-        prefix_budget = max_chunk_codepoints - len(DELIVERY_TEXT_TRUNCATION_NOTICE)
-        prefix_len = min(len(text), prefix_budget) if prefix_budget > 0 else 0
-        fallback_text = text[:prefix_len] + DELIVERY_TEXT_TRUNCATION_NOTICE
+        notice_end = min(
+            len(DELIVERY_TEXT_TRUNCATION_NOTICE),
+            max_chunk_codepoints,
+        )
+        prefix_budget = max_chunk_codepoints - notice_end
+        prefix_len = min(len(text), prefix_budget)
+        fallback_text = (
+            text[:prefix_len] + DELIVERY_TEXT_TRUNCATION_NOTICE[:notice_end]
+        )
         fallback_item = DeliveryItemPlan(
             item_kind="text",
             content_store="transcript",
@@ -175,6 +181,7 @@ def freeze_terminal_text_delivery(
                     "start": 0,
                     "end": prefix_len,
                     "truncated": True,
+                    "notice_end": notice_end,
                 }
             ),
             render_version=DELIVERY_TEXT_RENDER_VERSION,
@@ -233,6 +240,7 @@ def resolve_delivery_text(
     if not isinstance(content_range, Mapping) or set(content_range) not in (
         _required_range_keys,
         _required_range_keys | {"truncated"},
+        _required_range_keys | {"truncated", "notice_end"},
     ):
         raise DeliveryContentIntegrityError(
             "Delivery text Item has an invalid codepoint range"
@@ -241,6 +249,8 @@ def resolve_delivery_text(
     start = content_range.get("start")
     end = content_range.get("end")
     truncated = content_range.get("truncated", False)
+    has_notice_end = "notice_end" in content_range
+    notice_end = content_range.get("notice_end")
     if (
         unit != "unicode_codepoint"
         or any(
@@ -248,6 +258,16 @@ def resolve_delivery_text(
             for value in (start, end)
         )
         or not isinstance(truncated, bool)
+        or (
+            has_notice_end
+            and (
+                not truncated
+                or isinstance(notice_end, bool)
+                or not isinstance(notice_end, int)
+                or notice_end < 0
+                or notice_end > len(DELIVERY_TEXT_TRUNCATION_NOTICE)
+            )
+        )
     ):
         raise DeliveryContentIntegrityError(
             "Delivery text Item has an invalid codepoint range"
@@ -285,7 +305,9 @@ def resolve_delivery_text(
         )
     resolved = text[start:end]
     if truncated:
-        resolved = resolved + DELIVERY_TEXT_TRUNCATION_NOTICE
+        resolved = resolved + DELIVERY_TEXT_TRUNCATION_NOTICE[
+            : notice_end if has_notice_end else len(DELIVERY_TEXT_TRUNCATION_NOTICE)
+        ]
     if (
         not isinstance(expected_digest, str)
         or _text_sha256(resolved) != expected_digest

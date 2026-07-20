@@ -926,12 +926,24 @@ async def _desktop_runtime_lifespan(app: FastAPI):
         profile_id="owner",
         attachment_input_enabled=True,
     )
+    control_runtime = _desktop_control_runtime
     try:
-        await _desktop_control_runtime.start()
+        await control_runtime.start()
+    except BaseException:
+        _desktop_control_runtime = None
+        try:
+            await control_runtime.close()
+        except BaseException as close_error:
+            logger.warning(
+                "ControlRuntime cleanup after start failure failed (%s)",
+                type(close_error).__name__,
+            )
+        raise
+    try:
         from omicsclaw.autoagent.api import bind_governed_autoagent_repository
 
         reconciled_autoagent = await bind_governed_autoagent_repository(
-            _desktop_control_runtime.repository
+            control_runtime.repository
         )
         # Legacy closure writes are allowed only after this Backend owns the
         # lifetime Control lock.  A competing process must fail before either

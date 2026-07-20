@@ -117,6 +117,50 @@ async def test_lifespan_acquires_control_ownership_before_legacy_closure(
 
 
 @pytest.mark.asyncio
+async def test_lifespan_preserves_control_start_failure_when_direct_close_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    close_calls = 0
+
+    class FailingControlRuntime:
+        async def start(self) -> None:
+            raise RuntimeError("original-control-start-failure")
+
+        async def close(self) -> None:
+            nonlocal close_calls
+            close_calls += 1
+            raise RuntimeError("secret-control-close-failure")
+
+    runtime = FailingControlRuntime()
+
+    class ControlFactory:
+        @staticmethod
+        def for_local_surface(**_kwargs):
+            return runtime
+
+    import omicsclaw.runtime.agent.state as core
+
+    monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(workspace))
+    monkeypatch.setattr(core, "init", lambda **_kwargs: None)
+    monkeypatch.setattr(core, "LLM_PROVIDER_NAME", "test", raising=False)
+    monkeypatch.setattr(core, "OMICSCLAW_MODEL", "test", raising=False)
+    monkeypatch.setattr(server, "ControlRuntime", ControlFactory)
+    monkeypatch.setattr(server, "_desktop_control_runtime", None, raising=False)
+    monkeypatch.setattr(server, "_desktop_run_runtime", None, raising=False)
+    monkeypatch.setattr(server, "_memory_client", None, raising=False)
+
+    with pytest.raises(RuntimeError, match="original-control-start-failure"):
+        async with server.lifespan(server.app):
+            raise AssertionError("lifespan unexpectedly admitted traffic")
+
+    assert close_calls == 1
+    assert server._desktop_control_runtime is None
+
+
+@pytest.mark.asyncio
 async def test_real_lifespan_binds_every_workspace_backed_remote_adapter_once(
     monkeypatch,
     tmp_path: Path,
