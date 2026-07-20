@@ -222,11 +222,11 @@ class FeishuChannel(Channel):
 
                 async def _connect_and_signal():
                     if self._ws_stopping.is_set():
-                        raise RuntimeError("Feishu WebSocket startup was stopped")
+                        raise asyncio.CancelledError
                     await connect()
                     if self._ws_stopping.is_set():
                         await disconnect()
-                        raise RuntimeError("Feishu WebSocket startup was stopped")
+                        raise asyncio.CancelledError
                     if getattr(client, "_conn", None) is None:
                         raise RuntimeError(
                             "Feishu WebSocket connection was not established"

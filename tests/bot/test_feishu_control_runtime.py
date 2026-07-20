@@ -127,7 +127,13 @@ def _install_fake_lark(monkeypatch):
     return client_mod, ws_mod
 
 
-def _sdk_client_type(client_mod, *, connect=None, disconnect=None):
+def _sdk_client_type(
+    client_mod,
+    *,
+    connect=None,
+    disconnect=None,
+    reconnect_on_connect_error=False,
+):
     """Build the lifecycle shape exposed by lark-oapi 1.7.1."""
 
     class _Client:
@@ -136,6 +142,9 @@ def _sdk_client_type(client_mod, *, connect=None, disconnect=None):
         def __init__(self, *_args, **_kwargs):
             self._conn = None
             self.force_exit = threading.Event()
+            self.reconnect_exit = threading.Event()
+            self.reconnect_caught = threading.Event()
+            self.reconnect_attempts = 0
             self.__class__.instances.append(self)
 
         async def _connect(self):
@@ -155,7 +164,18 @@ def _sdk_client_type(client_mod, *, connect=None, disconnect=None):
                 await asyncio.sleep(0.005)
 
         def start(self):
-            client_mod.loop.run_until_complete(self._connect())
+            while not self.reconnect_exit.is_set():
+                try:
+                    client_mod.loop.run_until_complete(self._connect())
+                    break
+                except Exception:
+                    if not reconnect_on_connect_error:
+                        raise
+                    self.reconnect_attempts += 1
+                    self.reconnect_caught.set()
+                    client_mod.loop.run_until_complete(asyncio.sleep(0.005))
+            else:
+                return
             client_mod.loop.run_until_complete(self._select())
 
     return _Client
@@ -604,6 +624,7 @@ async def test_start_timeout_never_signals_ready_after_stopping_connect(
         client_mod,
         connect=_connect,
         disconnect=_disconnect,
+        reconnect_on_connect_error=True,
     )
     ws_mod.Client = client_type
     channel = _channel()
@@ -629,6 +650,10 @@ async def test_start_timeout_never_signals_ready_after_stopping_connect(
         release_connect.set()
         assert await asyncio.to_thread(connect_returned.wait, 1.0)
         assert await asyncio.to_thread(disconnect_completed.wait, 1.0)
+        await asyncio.sleep(0.05)
+
+        assert client.reconnect_caught.is_set() is False
+        assert client.reconnect_attempts == 0
         assert await asyncio.to_thread(channel._ws_exit.wait, 1.0)
 
         assert channel._ws_ready.is_set() is False
@@ -644,6 +669,7 @@ async def test_start_timeout_never_signals_ready_after_stopping_connect(
         release_connect.set()
         for client in client_type.instances:
             client.force_exit.set()
+            client.reconnect_exit.set()
         thread = channel._ws_thread
         if thread is not None:
             thread.join(timeout=2.0)
