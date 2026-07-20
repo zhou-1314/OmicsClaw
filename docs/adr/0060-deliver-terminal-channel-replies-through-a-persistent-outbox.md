@@ -244,7 +244,11 @@ this branch was exactly:
 python -m pytest -q tests/control tests/bot tests/test_active_workspace_authority.py tests/test_control_plane_documentation_contract.py tests/test_documentation_facts.py tests/test_pyproject_thin_pip_layer.py tests/test_outbox_executor.py tests/test_run_hypothesis_endpoint.py
 ```
 
-It completed with `676 passed in 42.78s`. The required
+The follow-up consistency closure added five missing/blank Bot-ID startup cases,
+made the current-scope documentation contract section-scoped, and expanded it
+to `CONTEXT.md` and `ARCHITECTURE.md`; its required five-file set completed with
+`84 passed`. The exact final command then completed with
+`681 passed in 47.52s`. The required
 `python -m compileall -q omicsclaw/control omicsclaw/surfaces/channels omicsclaw/surfaces/desktop`
 and `git diff --check` commands both exited zero with no output. These are
 focused branch results, not a full-suite claim. Outbound media remains

@@ -43,18 +43,19 @@ non-replayable startup reconciliation. Scheme 1 adds an independent canonical
 Transcript Store bound to Control by opaque Store identity, the terminal
 candidate -> Receipt+ref -> promotion -> Event protocol, and a bounded
 process-local Event Hub with observer-only Response Sinks. Prompt-toolkit and
-single-shot CLI, the Desktop text/multipart-image paths, and Owner-only Telegram text/single-photo input now use
-those slices through `ControlRuntime`. Scheme 2 adds the persistent text
-Delivery Outbox, target-local sequencing, restart-resilient Delivery Pump and
-single-call Telegram Adapter. Scheme 3 adds the independent Attachment Store,
+single-shot CLI, the Desktop text/multipart-image paths, Owner-only Telegram
+text/single-photo, and Owner-only Feishu text-only input now use those slices
+through `ControlRuntime`. Scheme 2 adds the persistent text Delivery Outbox,
+target-local sequencing, restart-resilient Delivery Pump and single-call
+Telegram/Feishu Adapters. Scheme 3 adds the independent Attachment Store,
 content-free Control commitments, startup reconciliation, structured durable
 References and per-call-bounded ephemeral image rendering. Scheme 4 adds the
 strict Desktop multipart Adapter, non-blocking durable submission Interface and
 versioned receipt/Event/cancel routes. Its transport is byte/depth/time/concurrency
 bounded and proves complete multipart ownership before accepting; the Runtime
 compensates live-port or runner-wake failure into one canonical failed Receipt
-rather than leaving an accepted Turn queued. Textual TUI and all other Channel Adapters remain
-uncut and are gated off rather than started through their legacy entry-point
+rather than leaving an accepted Turn queued. Textual TUI and all remaining
+Channel Adapters remain uncut and are gated off rather than started through their legacy entry-point
 `MessageEnvelope` paths. Outbound media, CLI attachment input, every File
 Reference path, Desktop JSON/options/App adoption, tool/Run attachment
 consumption, Surface-wide Run Dispatcher convergence and the Memory projector
@@ -139,7 +140,9 @@ and separates durable submission from Turn receipt, Event observation and
 explicit cancel routes; disconnect only detaches its observer. Telegram derives a stable ingress key,
 admits only configured Owner subjects, accepts either text or one ordinary
 photo with an optional caption, and persists each terminal text reply as one
-canonical Delivery. Separately, the prompt-toolkit REPL's exact
+canonical Delivery. Feishu admits configured Owner text-only input, requires a
+proved mention of this Bot in groups, and uses the same `ControlRuntime` and
+persistent Delivery path. Separately, the prompt-toolkit REPL's exact
 `/run <canonical-skill> --demo` is a typed non-chat `UnassignedScope` Run
 Request submitted directly to `RunRuntime`; it creates no Conversation, Turn or
 Transcript. The root exact-demo Scope command family uses the same boundary and
@@ -160,9 +163,9 @@ their entry points. Canonical
 Transcript and bounded Event Hub integration are active on the cut-over paths.
 Desktop Attachments/File Selections, conversational `/chat/stream` legacy
 `job_id` binding and per-Turn provider credentials are rejected before durable
-acceptance. Telegram media groups,
-documents, audio/video and outbound media fail closed; other Channel Adapters
-fail closed at startup. A profile-driven one-shot importer covers legacy Backend
+acceptance. Telegram media groups/documents/audio/video, Feishu
+attachments/rich post/cards, and outbound media fail closed; the remaining
+Channel Adapters fail closed at startup. A profile-driven one-shot importer covers legacy Backend
 `transcripts.db` through read-only plan, manifest-bound apply, verification,
 consistent backup, isolated staging and atomic cutover; runtime never falls
 back to that legacy store. CLI `sessions.db`, Desktop App exports, the remaining
@@ -171,6 +174,15 @@ accepted target's
 concrete schemas, transactions, recovery rules and migration contract are
 defined in
 [`docs/design/conversational-control-plane.md`](design/conversational-control-plane.md).
+
+### Current production Channel scope
+
+The shared runner and `ControlRuntime` admit Owner-only Telegram text plus one
+ordinary photo and Owner-only Feishu text-only. Enabling Feishu requires both
+`FEISHU_ALLOWED_SENDERS` and `FEISHU_BOT_OPEN_ID`; the Bot open ID proves a
+group mention targets this Bot. The other Channel Adapters remain gated.
+Outbound media remains incomplete and fail-closed. This is not full ADR or
+media completion.
 
 ## Module ownership ledger
 
@@ -186,14 +198,14 @@ defined in
   and QQ.
 
 The prompt-toolkit/single-shot CLI conversational paths, Desktop
-text/multipart-image paths and Telegram text/single-photo path now submit
+text/multipart-image paths, Telegram text/single-photo and Feishu text-only now submit
 `RawInboundV1` and render typed Events observed through a process-local
 Response Sink. They do not choose canonical Turn or Conversation IDs, and
 cancellation targets the accepted Turn ID. Desktop retries with the same Source
 Request ID attach to the original Turn, while observer disconnect has no
-lifecycle effect. Telegram retries with the same provider message identity bind
-to the original Turn, while terminal publication leaves through the persistent
-Delivery Outbox rather than a Response Sink. Textual TUI and disabled legacy
+lifecycle effect. Telegram and Feishu retries with the same provider message
+identity bind to the original Turn, while terminal publication leaves through
+the persistent Delivery Outbox rather than a Response Sink. Textual TUI and disabled legacy
 Channel Adapters still construct a `MessageEnvelope` at their entry points.
 Outside conversational ingress, exact prompt-toolkit
 `/run <canonical-skill> --demo` and the three root exact-demo Scope wires submit
@@ -415,8 +427,9 @@ deployment boundary. Invalid and non-Owner Raw Inbound never reaches dispatch.
   the live Response Sink plus other runtime capabilities; it is never
   serialized or persisted.
 - The current `MessageEnvelope` remains an internal Agent Worker Adapter DTO on
-  prompt-toolkit/single-shot CLI, Desktop text/multipart-image and Telegram text/single-photo paths; Textual
-  TUI and disabled legacy Channel Adapters still construct it at ingress and
+  prompt-toolkit/single-shot CLI, Desktop text/multipart-image,
+  Telegram text/single-photo and Feishu text-only paths; Textual TUI and
+  disabled legacy Channel Adapters still construct it at ingress and
   must migrate behind normalization before they can be enabled.
 - A bounded process-local Turn Sequencer admits at most one active whole Turn
   per Conversation in FIFO order. Different Conversations may dispatch
@@ -834,9 +847,10 @@ runtime rather than owning a second agent engine.
 The re-baselining audit has already confirmed these issues:
 
 1. **Ingress normalization is production-wired but not Surface-wide.**
-   Prompt-toolkit/single-shot CLI, Desktop text/multipart-image and Owner-only Telegram text/single-photo input call
-   one Backend-owned Normalizer through `ControlRuntime`; Textual TUI and every
-   other Channel Adapter do not. The official Channel runner gates those legacy
+   Prompt-toolkit/single-shot CLI, Desktop text/multipart-image, Owner-only
+   Telegram text/single-photo and Owner-only Feishu text-only input call one
+   Backend-owned Normalizer through `ControlRuntime`; Textual TUI and every
+   remaining Channel Adapter do not. The official Channel runner gates those legacy
    Adapters off. Desktop `/chat/stream` rejects legacy JSON files, while the
    versioned multipart Adapter accepts only digest-declared images; File
    References, conversational `/chat/stream` legacy `job_id` binding, per-Turn
@@ -873,7 +887,7 @@ The re-baselining audit has already confirmed these issues:
    Unassigned layout. Remote arbitrary-input/parameter, Project-scoped and
    non-demo shapes remain outside the exact-demo Adapter.
 3. **Conversation keys are inconsistent outside the cut-over paths.** Canonical
-   CLI/Desktop/Telegram text, multipart-image and single-photo Conversations now use opaque IDs, immutable
+   CLI/Desktop/Telegram/Feishu text, multipart-image and single-photo Conversations now use opaque IDs, immutable
    addresses and durable Active Conversation Bindings, while Textual TUI,
    disabled legacy Channel Adapters, legacy Memory Session rows and
    uploaded-file lookup still use composite or
@@ -882,7 +896,8 @@ The re-baselining audit has already confirmed these issues:
 4. **Conversation Turn ordering is enforced only on cut-over production paths.**
    `ControlRuntime` owns one active lease through canonical Transcript terminal
    promotion and terminal Event publication for prompt-toolkit/single-shot CLI,
-   Desktop text/multipart-image and Telegram text/single-photo Turns. Same-Conversation FIFO and cross-Conversation
+   Desktop text/multipart-image, Telegram text/single-photo and Feishu text-only
+   Turns. Same-Conversation FIFO and cross-Conversation
    concurrency therefore hold there. Textual TUI and disabled legacy Channel
    Adapters can still start concurrent legacy dispatches if called outside the
    guarded production runner, so ADR 0050 is not yet a Surface-wide guarantee.
@@ -892,15 +907,16 @@ The re-baselining audit has already confirmed these issues:
    candidates, atomically commit Receipt plus Transcript ref, promote before
    Event publication, and fail startup closed on a missing/mismatched canonical
    Store or terminal ref. Startup also reconciles prior local nonterminal Turns
-   without replay. Telegram additionally persists terminal Delivery intent and
-   conservatively changes recovered open provider attempts to `unknown`.
+   without replay. Telegram and Feishu additionally persist terminal Delivery
+   intent and conservatively change recovered open provider attempts to
+   `unknown`.
    Attachment Store identity/commitment recovery now runs first and fails closed
    on missing/corrupt accepted bytes. Run Store recovery is implemented only for
    the canonical Simple Skill tracer; broader Run-kind and Projection Store
    recovery remains absent, and Textual TUI/disabled Channel Adapters do not
    carry canonical Turn authority.
-6. **Desktop and Telegram ingress idempotency are implemented; only Desktop has
-   resumable live observation.** Desktop requires one 32-hex `source_request_id`,
+6. **Desktop, Telegram and Feishu ingress idempotency are implemented; only
+   Desktop has resumable live observation.** Desktop requires one 32-hex `source_request_id`,
    reports `authoritative_ingress=true` and
    `durable_ingress_idempotency=true`, and matching live or terminal retries
    attach to the original Turn without re-execution. Multipart uses a separate
@@ -911,7 +927,9 @@ The re-baselining audit has already confirmed these issues:
    the observer. The Event Hub is process-local rather than restart-durable.
    Telegram binds `chat_id:message_id` to one durable Turn and duplicate lookup
    precedes Delivery capacity admission; its provider delivery lifecycle is
-   restart-resilient but has no live Event replay API. Disabled Channel Adapters
+   restart-resilient but has no live Event replay API. Feishu binds its globally
+   unique provider `message_id` to one durable Turn and follows the same
+   duplicate-first Delivery admission rule. Disabled Channel Adapters
    retain inconsistent legacy redelivery protection, and CLI has no external
    transport retry that persists a Source Request ID across process loss.
 7. **Transport identity still partitions state.** Channel Memory Namespace and
@@ -930,9 +948,9 @@ The re-baselining audit has already confirmed these issues:
    purge and outbound media are not implemented.
 9. **Production Owner admission is consistent only on enabled cut-over paths.**
    The Normalizer binds an Owner identity to adapter/account/subject kind and
-   Source Namespace. Telegram commands and text/attachment handlers perform the
-   same configured-Owner gate before submitting, and its novel accepted Turns
-   reserve durable Delivery capacity. Disabled Channel Adapters retain
+   Source Namespace. Telegram commands and text/attachment handlers and Feishu
+   text handlers perform the same configured-Owner gate before submitting, and
+   their novel accepted Turns reserve durable Delivery capacity. Disabled Channel Adapters retain
    distributed allow-list paths, some optional/default-open, so the production
    runner and `ChannelManager` keep them fail closed pending equivalent cutover.
 10. **Documentation has implementation drift.** Several context and public docs
@@ -987,17 +1005,17 @@ The re-baselining audit has already confirmed these issues:
    guarantees do not yet cover root non-demo/unsupported-option forms, Textual TUI,
    other prompt-toolkit Run forms, Agent tool, Bench, Workflow, Autonomous or
    broader Remote callers.
-13. **Terminal Channel delivery is canonical only for the enabled Telegram
-   text slice.** Owner-only Telegram text and single-photo Turns now commit one
-   canonical terminal text Delivery with the Turn; the bounded in-process
-   Delivery Pump consumes the persistent Outbox, serializes provider calls per
-   Reply Target, records provider evidence, and preserves acceptance-unknown
-   outcomes across restart without replaying the Turn. Outbound media,
-   explicit resend/repair, and every non-Telegram Adapter remain outside this
+13. **Terminal Channel delivery is canonical for the enabled Telegram and
+   Feishu text slices.** Owner-only Telegram text/single-photo and Feishu
+   text-only Turns commit one canonical terminal text Delivery with the Turn;
+   the bounded in-process Delivery Pump consumes the persistent Outbox,
+   serializes provider calls per Reply Target, records provider evidence, and
+   preserves acceptance-unknown outcomes across restart without replaying the
+   Turn. Outbound media and every remaining Adapter remain outside this
    production slice; disabled legacy handlers retain divergent direct-send
    behavior, and process-global `pending_media` plus local paths is not durable
-   outbound authority. Desktop `outbox.py` executes KG HandoffPackets and is a
-   scientific handoff queue, not this Outbound Delivery Outbox.
+   outbound authority. Desktop `outbox.py` executes KG HandoffPackets
+   and is a scientific handoff queue, not this Outbound Delivery Outbox.
 14. **Run dispatch and resource admission are not yet Surface-wide.** The
    multidimensional FIFO Resource Scheduler is shared by Candidate plans and
    the canonical Simple Skill Runtime reached by Desktop, exact prompt-toolkit

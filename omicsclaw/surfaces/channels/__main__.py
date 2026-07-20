@@ -132,12 +132,16 @@ def _build_feishu_channel():
             "FEISHU_ALLOWED_SENDERS is required: authoritative Feishu ingress "
             "admits only configured Owner open_id values"
         )
+    bot_open_id = os.environ.get("FEISHU_BOT_OPEN_ID", "").strip()
+    if not bot_open_id:
+        raise RuntimeError(
+            "FEISHU_BOT_OPEN_ID is required: authoritative Feishu ingress "
+            "must prove group mentions target this Bot"
+        )
     return FeishuChannel(
         FeishuConfig(
             allowed_senders=allowed_senders,
-            # Optional: without it group @-mentions cannot be attributed to this
-            # Bot, so group chats fail closed and only p2p messages are served.
-            bot_open_id=os.environ.get("FEISHU_BOT_OPEN_ID", "").strip(),
+            bot_open_id=bot_open_id,
             app_id=app_id,
             app_secret=app_secret,
             thinking_threshold_ms=int(

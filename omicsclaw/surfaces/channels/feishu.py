@@ -108,6 +108,20 @@ class FeishuChannel(Channel):
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
+    def _require_authoritative_identity(self) -> set[str]:
+        owners = self._owner_subjects()
+        if not owners:
+            raise RuntimeError(
+                "Feishu authoritative ingress requires FEISHU_ALLOWED_SENDERS "
+                "(Owner open_id values)"
+            )
+        if not self.feishu_config.bot_open_id.strip():
+            raise RuntimeError(
+                "Feishu authoritative ingress requires FEISHU_BOT_OPEN_ID "
+                "to prove group mentions target this Bot"
+            )
+        return owners
+
     def _build_lark_client(self):
         if not self.feishu_config.app_id:
             raise RuntimeError("FEISHU_APP_ID is required")
@@ -134,14 +148,7 @@ class FeishuChannel(Channel):
     async def prepare_control_binding(self) -> ChannelSurfaceBinding:
         """Authenticate far enough to describe this Bot's control binding."""
 
-        from .feishu_delivery import FeishuDeliveryAdapter
-
-        owners = self._owner_subjects()
-        if not owners:
-            raise RuntimeError(
-                "Feishu authoritative ingress requires FEISHU_ALLOWED_SENDERS "
-                "(Owner open_id values)"
-            )
+        owners = self._require_authoritative_identity()
         # The Feishu App ID is the account namespace: it is the stable identity
         # of the Bot whose token sends the reply, so one Backend serving two
         # Apps can never claim the other's Delivery target sequence.
@@ -150,6 +157,9 @@ class FeishuChannel(Channel):
             raise RuntimeError("Feishu account namespace is unavailable")
         if self._lark_client is None:
             self._lark_client = self._build_lark_client()
+
+        from .feishu_delivery import FeishuDeliveryAdapter
+
         return ChannelSurfaceBinding(
             adapter="feishu",
             account_namespace=account_namespace,
@@ -166,6 +176,7 @@ class FeishuChannel(Channel):
             raise RuntimeError(
                 "Feishu requires the shared ControlRuntime to be bound before start()"
             )
+        self._require_authoritative_identity()
         if self._lark_client is None:
             self._lark_client = self._build_lark_client()
 

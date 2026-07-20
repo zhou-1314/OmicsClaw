@@ -105,14 +105,14 @@ def test_architecture_ledger_distinguishes_scheme_4_cutover_from_remaining_targe
     assert "## Accepted target at a glance" in architecture
     assert "The diagram below is the accepted control-plane target" in architecture
     assert (
-        "Prompt-toolkit and single-shot CLI, the Desktop text/multipart-image paths, and "
-        "Owner-only Telegram text/single-photo input now use those slices "
-        "through `ControlRuntime`"
+        "Prompt-toolkit and single-shot CLI, the Desktop text/multipart-image paths, "
+        "Owner-only Telegram text/single-photo, and Owner-only Feishu text-only input "
+        "now use those slices through `ControlRuntime`"
     ) in normalized
     assert "Scheme 3 adds the independent Attachment Store" in normalized
     assert "Scheme 4 adds the strict Desktop multipart Adapter" in normalized
     assert "persistent text Delivery Outbox" in normalized
-    assert "all other Channel Adapters remain uncut" in normalized
+    assert "all remaining Channel Adapters remain uncut" in normalized
     assert "independent canonical Transcript Store" in normalized
     assert "CLI attachment input, every File Reference path" in normalized
     assert "profile-driven one-shot importer" in normalized

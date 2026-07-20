@@ -13,10 +13,10 @@ python -m omicsclaw.surfaces.channels --channels feishu
 Telegram photos enter the immutable Attachment Store only after duplicate and
 admission checks. Both Channels send terminal text only through the persistent
 Delivery Outbox. `FEISHU_ALLOWED_SENDERS` and `FEISHU_BOT_OPEN_ID` are
-mandatory; the Bot open ID proves group mention identity. The other Channel
-Adapters remain gated and their sections below are migration reference only.
-Outbound media remains incomplete and fail-closed; this is not full ADR or
-media completion.
+mandatory; the Bot open ID proves a group mention targets this Bot. The other
+Channel Adapters remain gated and their sections below are migration reference
+only. Outbound media remains incomplete and fail-closed; this is not full ADR
+or media completion.
 
 ## Interactive Terminal Chat
 

@@ -104,6 +104,38 @@ async def test_feishu_without_configured_owner_fails_closed() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bot_open_id", ["", "   "])
+async def test_feishu_without_configured_bot_identity_fails_before_provider_work(
+    monkeypatch,
+    bot_open_id: str,
+) -> None:
+    """Authoritative startup requires proof of this Bot's group identity."""
+
+    from omicsclaw.surfaces.channels.feishu import FeishuChannel, FeishuConfig
+
+    channel = FeishuChannel(
+        FeishuConfig(
+            app_id="app",
+            app_secret="secret",
+            allowed_senders={"ou_owner"},
+            bot_open_id=bot_open_id,
+        )
+    )
+
+    def provider_work_must_not_start():
+        raise AssertionError("provider client construction must not run")
+
+    monkeypatch.setattr(channel, "_build_lark_client", provider_work_must_not_start)
+
+    with pytest.raises(RuntimeError, match="FEISHU_BOT_OPEN_ID"):
+        await channel.prepare_control_binding()
+
+    assert channel._lark_client is None
+    assert channel._ws_client is None
+    assert channel._ws_thread is None
+
+
+@pytest.mark.asyncio
 async def test_manager_propagates_sanitized_zero_channel_startup_failure(
     monkeypatch,
     caplog,
@@ -389,6 +421,25 @@ def test_feishu_env_wiring_requires_configured_owners(monkeypatch) -> None:
     monkeypatch.delenv("FEISHU_ALLOWED_SENDERS", raising=False)
 
     with pytest.raises(RuntimeError, match="FEISHU_ALLOWED_SENDERS"):
+        _build_feishu_channel()
+
+
+@pytest.mark.parametrize("bot_open_id", [None, "", "   "])
+def test_feishu_env_wiring_requires_configured_bot_identity(
+    monkeypatch,
+    bot_open_id: str | None,
+) -> None:
+    from omicsclaw.surfaces.channels.__main__ import _build_feishu_channel
+
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_app")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret")
+    monkeypatch.setenv("FEISHU_ALLOWED_SENDERS", "ou_owner")
+    if bot_open_id is None:
+        monkeypatch.delenv("FEISHU_BOT_OPEN_ID", raising=False)
+    else:
+        monkeypatch.setenv("FEISHU_BOT_OPEN_ID", bot_open_id)
+
+    with pytest.raises(RuntimeError, match="FEISHU_BOT_OPEN_ID"):
         _build_feishu_channel()
 
 
