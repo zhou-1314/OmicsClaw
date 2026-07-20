@@ -3,16 +3,12 @@ Channel manager that coordinates multiple chat channels.
 
 Manages channel lifecycle (start/stop) and per-channel health monitoring. The
 manager starts only Adapters that declare a verified authoritative ingress
-cutover; it does not own a message bus or middleware pipeline.
+cutover; it does not compose or own the shared ControlRuntime.
 
-Run multiple channels in one process::
+Use the authoritative Channel runner, whose composition root creates and starts
+the shared ControlRuntime before opening Adapter ingress::
 
-    manager = ChannelManager()
-    manager.register(telegram_channel)
-    manager.register(feishu_channel)
-    await manager.start_all()
-    await manager.run()         # blocks until stop_all()
-    await manager.stop_all()
+    python -m omicsclaw.surfaces.channels --channels telegram,feishu
 """
 
 from __future__ import annotations

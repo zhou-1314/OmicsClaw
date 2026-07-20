@@ -1172,7 +1172,9 @@ class ControlRuntime:
 
     def _delivery_operations_available(self) -> bool:
         return (
-            self._delivery_pump is not None
+            self._started
+            and not self._closed
+            and self._delivery_pump is not None
             and self._delivery_max_total is not None
             and self._delivery_max_per_account is not None
         )

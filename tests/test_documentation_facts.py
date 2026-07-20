@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from collections import Counter
 from pathlib import Path
 
@@ -201,3 +202,15 @@ def test_channel_docs_do_not_bypass_the_shared_runner():
             found.append(f"{relative_path}: ChannelManager.start_all(")
 
     assert not found, "\n".join(found)
+
+
+def test_channel_manager_docstring_points_to_authoritative_runner():
+    source = (ROOT / "omicsclaw/surfaces/channels/manager.py").read_text(
+        encoding="utf-8"
+    )
+    module_docstring = ast.get_docstring(ast.parse(source), clean=False)
+
+    assert module_docstring is not None
+    assert "python -m omicsclaw.surfaces.channels" in module_docstring
+    assert "ChannelManager(" not in module_docstring
+    assert ".start_all(" not in module_docstring

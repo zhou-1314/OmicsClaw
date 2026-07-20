@@ -106,6 +106,8 @@ def _write_historical_delivery(
     tmp_path,
     *,
     reply_target_json: str,
+    reply_target_key: str = "historical-target",
+    reply_target_version: int = 1,
     item_count: int = 1,
 ):
     database_path = tmp_path / "control.db"
@@ -126,9 +128,14 @@ def _write_historical_delivery(
                 conversation_id, surface, reply_target_version,
                 reply_target_key, reply_target_json, project_id,
                 revision, created_at_ms, updated_at_ms
-            ) VALUES (?, 'channel', 1, ?, ?, NULL, 1, 1, 1)
+            ) VALUES (?, 'channel', ?, ?, ?, NULL, 1, 1, 1)
             """,
-            ("historical-conversation", "historical-target", reply_target_json),
+            (
+                "historical-conversation",
+                reply_target_version,
+                reply_target_key,
+                reply_target_json,
+            ),
         )
         connection.execute(
             """
@@ -147,14 +154,15 @@ def _write_historical_delivery(
                 surface, reply_target_version, reply_target_key,
                 reply_target_json, target_sequence, resend_of_delivery_id,
                 created_at_ms
-            ) VALUES (?, ?, ?, 'terminal', 'succeeded', 'channel', 1, ?, ?, 1,
+            ) VALUES (?, ?, ?, 'terminal', 'succeeded', 'channel', ?, ?, ?, 1,
                       NULL, 1)
             """,
             (
                 "historical-delivery",
                 "historical-turn",
                 "historical-conversation",
-                "historical-target",
+                reply_target_version,
+                reply_target_key,
                 reply_target_json,
             ),
         )
@@ -176,6 +184,23 @@ def _write_historical_delivery(
                 for ordinal in range(item_count)
             ),
         )
+
+
+def _canonical_reply_target(
+    reply_target: dict[str, object],
+) -> tuple[int, str, str]:
+    encoded = json.dumps(
+        reply_target,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return (
+        int(reply_target.get("schema_version", 1)),
+        hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+        encoded,
+    )
 
 
 def test_describe_delivery_returns_none_for_unknown_id(tmp_path):
@@ -390,6 +415,51 @@ def test_insert_resend_delivery_rejects_invalid_historical_reply_target(
             )
 
 
+@pytest.mark.parametrize(
+    "corruption",
+    ("key", "version", "noncanonical-json", "mismatched-json"),
+)
+def test_insert_resend_delivery_rejects_historical_reply_target_identity_mismatch(
+    tmp_path, corruption
+):
+    reply_target = {
+        "schema_version": 1,
+        "kind": "channel",
+        "adapter": "telegram",
+        "account_namespace": "primary",
+        "destination_id": "chat-historical-secret",
+    }
+    version, key, encoded = _canonical_reply_target(reply_target)
+    if corruption == "key":
+        key = "0" * 64
+    elif corruption == "version":
+        version = 2
+    elif corruption == "noncanonical-json":
+        encoded = json.dumps(reply_target)
+    else:
+        mismatched = dict(reply_target, destination_id="different-secret-target")
+        _, _, encoded = _canonical_reply_target(mismatched)
+    _write_historical_delivery(
+        tmp_path,
+        reply_target_json=encoded,
+        reply_target_key=key,
+        reply_target_version=version,
+    )
+
+    with ControlStateRepository(tmp_path) as repository:
+        with pytest.raises(ControlIntegrityError, match="Reply Target") as exc:
+            repository.insert_resend_delivery("historical-delivery")
+
+        assert "chat-historical-secret" not in str(exc.value)
+        assert "different-secret-target" not in str(exc.value)
+        assert exc.value.__cause__ is None
+        assert exc.value.__context__ is None
+        with sqlite3.connect(repository.database_path) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM deliveries").fetchone() == (
+                1,
+            )
+
+
 def test_insert_resend_delivery_accepts_historical_v1_target_without_version(
     tmp_path,
 ):
@@ -399,9 +469,12 @@ def test_insert_resend_delivery_accepts_historical_v1_target_without_version(
         "account_namespace": "primary",
         "destination_id": "chat-historical",
     }
+    version, key, encoded = _canonical_reply_target(reply_target)
     _write_historical_delivery(
         tmp_path,
-        reply_target_json=json.dumps(reply_target),
+        reply_target_json=encoded,
+        reply_target_key=key,
+        reply_target_version=version,
     )
 
     with ControlStateRepository(tmp_path) as repository:

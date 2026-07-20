@@ -4456,6 +4456,15 @@ class ControlStateRepository:
                     f"{len(outstanding)} unsettled Item(s)"
                 )
             reply_target = _decode_channel_reply_target(source["reply_target_json"])
+            target_version, target_key, target_json = _reply_target(reply_target)
+            if (
+                source["reply_target_version"] != target_version
+                or source["reply_target_key"] != target_key
+                or source["reply_target_json"] != target_json
+            ):
+                raise ControlIntegrityError(
+                    "resend source Delivery has an invalid Reply Target identity"
+                ) from None
             if max_total is not None and max_per_account is not None:
                 within_capacity = self._delivery_capacity_available(
                     connection,

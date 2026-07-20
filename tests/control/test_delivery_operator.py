@@ -228,6 +228,95 @@ async def test_delivery_operations_require_complete_delivery_authority(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_delivery_mutations_are_unavailable_before_runtime_start(tmp_path):
+    async def adapter(request: DeliveryAttemptRequest) -> DeliveryAdapterResult:
+        return DeliveryAdapterResult(DeliveryAttemptOutcome.ACCEPTED)
+
+    async def dispatch_events(_envelope: MessageEnvelope):
+        yield Final("unused")
+
+    runtime = _telegram_runtime(
+        tmp_path, adapter=adapter, dispatch_events=dispatch_events
+    )
+    try:
+        resend_source = _operator_delivery(runtime, "before-start-resend")
+        resend_item = runtime.repository.list_delivery_items(
+            resend_source.delivery_id
+        )[0]
+        resend_attempt = runtime.repository.begin_delivery_attempt(
+            resend_item.item_id
+        )
+        runtime.repository.finish_delivery_attempt(
+            resend_attempt.attempt_id,
+            DeliveryAttemptOutcome.ACCEPTANCE_UNKNOWN,
+        )
+
+        retry_source = _operator_delivery(runtime, "before-start-retry")
+        retry_item = runtime.repository.list_delivery_items(retry_source.delivery_id)[0]
+        retry_attempt = runtime.repository.begin_delivery_attempt(retry_item.item_id)
+        runtime.repository.finish_delivery_attempt(
+            retry_attempt.attempt_id,
+            DeliveryAttemptOutcome.NOT_ACCEPTED_RETRYABLE,
+            retry_at_ms=9_999_999_999_999,
+        )
+        delivery_ids_before = tuple(
+            delivery.delivery_id for delivery in runtime.list_deliveries()
+        )
+
+        resend = runtime.resend_delivery(resend_source.delivery_id)
+        retry = runtime.retry_delivery(retry_source.delivery_id)
+
+        assert resend.code == "delivery_unavailable"
+        assert retry.code == "delivery_unavailable"
+        assert tuple(
+            delivery.delivery_id for delivery in runtime.list_deliveries()
+        ) == delivery_ids_before
+        unchanged_retry = runtime.repository.list_delivery_items(
+            retry_source.delivery_id
+        )[0]
+        assert unchanged_retry.state == "retry_wait"
+        assert unchanged_retry.next_attempt_at_ms == 9_999_999_999_999
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_delivery_mutations_are_unavailable_after_runtime_close(
+    tmp_path, monkeypatch
+):
+    async def adapter(request: DeliveryAttemptRequest) -> DeliveryAdapterResult:
+        return DeliveryAdapterResult(DeliveryAttemptOutcome.ACCEPTED)
+
+    async def dispatch_events(_envelope: MessageEnvelope):
+        yield Final("unused")
+
+    runtime = _telegram_runtime(
+        tmp_path, adapter=adapter, dispatch_events=dispatch_events
+    )
+    await runtime.start()
+    await runtime.close()
+    repository_calls: list[str] = []
+
+    def repository_was_touched(*_args, **_kwargs):
+        repository_calls.append("touched")
+        raise AssertionError("closed repository was touched")
+
+    monkeypatch.setattr(
+        runtime.repository, "insert_resend_delivery", repository_was_touched
+    )
+    monkeypatch.setattr(
+        runtime.repository, "expedite_delivery_retries", repository_was_touched
+    )
+
+    resend = runtime.resend_delivery("closed-resend")
+    retry = runtime.retry_delivery("closed-retry")
+
+    assert resend.code == "delivery_unavailable"
+    assert retry.code == "delivery_unavailable"
+    assert repository_calls == []
+
+
+@pytest.mark.asyncio
 async def test_retry_delivery_on_delivered_reports_no_retryable_items(tmp_path):
     async def adapter(request: DeliveryAttemptRequest) -> DeliveryAdapterResult:
         return DeliveryAdapterResult(DeliveryAttemptOutcome.ACCEPTED)
