@@ -499,3 +499,42 @@ async def test_stop_shuts_down_the_websocket_client_and_thread():
     assert channel._ws_client is None
     assert channel._ws_thread is None
     assert channel._control_runtime is None
+
+
+@pytest.mark.asyncio
+async def test_stop_timeout_retains_live_websocket_and_runtime_ownership():
+    import threading as _threading
+
+    channel = _channel()
+    channel.feishu_config.ws_join_seconds = 0.0
+    runtime = _RecordingControlRuntime()
+    channel._control_runtime = runtime
+    channel._running = True
+    channel.activate_ingress()
+    release = _threading.Event()
+
+    class _Client:
+        def stop(self):
+            return None
+
+    client = _Client()
+    thread = _threading.Thread(target=release.wait, daemon=True)
+    thread.start()
+    channel._ws_client = client
+    channel._ws_thread = thread
+
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match=r"Feishu channel shutdown failed \(RuntimeError\)",
+        ):
+            await channel.stop()
+
+        assert channel.ingress_active is False
+        assert channel._running is True
+        assert channel._ws_client is client
+        assert channel._ws_thread is thread
+        assert channel._control_runtime is runtime
+    finally:
+        release.set()
+        thread.join(timeout=5)

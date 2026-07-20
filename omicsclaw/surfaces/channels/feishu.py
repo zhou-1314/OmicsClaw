@@ -288,8 +288,6 @@ class FeishuChannel(Channel):
         """
 
         client, thread = self._ws_client, self._ws_thread
-        self._ws_client = None
-        self._ws_thread = None
         if client is not None:
             # lark-oapi has spelled its shutdown hook differently across
             # releases. A build exposing none of them still stops when the
@@ -307,17 +305,17 @@ class FeishuChannel(Channel):
                         # it on the runner's loop.
                         result.close()
                 break
-        if thread is None or not thread.is_alive():
-            return
-        await asyncio.get_running_loop().run_in_executor(
-            None, thread.join, max(0.0, float(self.feishu_config.ws_join_seconds))
-        )
-        if thread.is_alive():
-            logger.warning(
-                "Feishu WebSocket thread did not stop within %.1fs; it is a "
-                "daemon thread and will not block process exit",
-                self.feishu_config.ws_join_seconds,
+        if thread is not None and thread.is_alive():
+            await asyncio.get_running_loop().run_in_executor(
+                None,
+                thread.join,
+                max(0.0, float(self.feishu_config.ws_join_seconds)),
             )
+            if thread.is_alive():
+                raise RuntimeError("Feishu WebSocket listener did not stop")
+
+        self._ws_client = None
+        self._ws_thread = None
 
     def run_sync(self) -> None:
         """Refuse the legacy standalone entry point.
