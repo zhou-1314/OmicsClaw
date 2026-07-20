@@ -296,7 +296,10 @@ async def test_builder_without_uuid_support_still_delivers():
 
 
 @pytest.mark.asyncio
-async def test_cancellation_waits_for_the_blocking_provider_thread():
+@pytest.mark.parametrize("provider_error", [False, True])
+async def test_repeated_cancellation_waits_for_the_blocking_provider_thread(
+    provider_error: bool,
+):
     """ADR 0063: the Pump may release a Reply Target only on proven termination.
 
     The lark SDK call is synchronous, and cancelling an executor future does NOT
@@ -310,6 +313,7 @@ async def test_cancellation_waits_for_the_blocking_provider_thread():
 
     release = threading.Event()
     entered = threading.Event()
+    exited = threading.Event()
 
     class _BlockingClient:
         def __init__(self):
@@ -320,8 +324,13 @@ async def test_cancellation_waits_for_the_blocking_provider_thread():
                 def create(self, request):
                     outer.calls.append(request)
                     entered.set()
-                    release.wait(timeout=10)
-                    return _FakeResponse(ok=True, message_id="om_late")
+                    try:
+                        release.wait(timeout=10)
+                        if provider_error:
+                            raise RuntimeError("late provider error")
+                        return _FakeResponse(ok=True, message_id="om_late")
+                    finally:
+                        exited.set()
 
             self.im = SimpleNamespace(v1=SimpleNamespace(message=_Message()))
 
@@ -330,13 +339,17 @@ async def test_cancellation_waits_for_the_blocking_provider_thread():
     await asyncio.to_thread(entered.wait, 5)
 
     task.cancel()
-    # The provider thread is still running, so the Adapter must NOT finish.
-    await asyncio.sleep(0.2)
+    await asyncio.sleep(0)
+    task.cancel()
+    # Repeated cancellation must not prove termination while the SDK still runs.
+    await asyncio.sleep(0.05)
     assert not task.done(), "Adapter claimed termination while the SDK still ran"
+    assert not exited.is_set()
 
     release.set()
     with pytest.raises(asyncio.CancelledError):
         await task
+    assert exited.is_set()
     assert len(client.calls) == 1
 
 
@@ -350,3 +363,50 @@ async def test_contradictory_success_false_with_code_zero_is_unknown():
 
     assert result.outcome is DeliveryAttemptOutcome.ACCEPTANCE_UNKNOWN
     assert result.error_code == "feishu_unclassified_response"
+
+
+@pytest.mark.asyncio
+async def test_unusable_client_is_permanent_not_ambiguous():
+    """A fault before the socket cannot have reached Feishu.
+
+    Classifying a missing SDK attribute as `acceptance_unknown` would halt the
+    ADR 0063 Reply Target barrier and block every later reply to this
+    destination over a purely local defect, with no operator recourse.
+    """
+
+    adapter = FeishuDeliveryAdapter(SimpleNamespace())
+
+    result = await adapter.attempt(_request())
+
+    assert result.outcome is DeliveryAttemptOutcome.REJECTED_PERMANENT
+    assert result.error_code == "feishu_client_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_shut_down_executor_is_permanent_not_ambiguous():
+    """A rejected executor submission never ran the provider call either."""
+
+    class _Loop:
+        def run_in_executor(self, *_args, **_kwargs):
+            raise RuntimeError("cannot schedule new futures after shutdown")
+
+    sent: list[object] = []
+    client = SimpleNamespace(
+        im=SimpleNamespace(
+            v1=SimpleNamespace(message=SimpleNamespace(create=sent.append))
+        )
+    )
+    adapter = FeishuDeliveryAdapter(client)
+
+    import omicsclaw.surfaces.channels.feishu_delivery as module
+
+    original = module.asyncio.get_running_loop
+    module.asyncio.get_running_loop = lambda: _Loop()
+    try:
+        result = await adapter.attempt(_request())
+    finally:
+        module.asyncio.get_running_loop = original
+
+    assert result.outcome is DeliveryAttemptOutcome.REJECTED_PERMANENT
+    assert result.error_code == "feishu_client_unavailable"
+    assert sent == []

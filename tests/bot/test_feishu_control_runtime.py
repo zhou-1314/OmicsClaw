@@ -75,7 +75,7 @@ def _mention(open_id: str):
 
 def _event(
     *,
-    text: str = "run a spatial preprocess",
+    text: object = "run a spatial preprocess",
     sender: str = "ou_owner",
     chat_id: str = "oc_chat_1",
     message_id: str = "om_msg_1",
@@ -447,6 +447,46 @@ def test_empty_text_is_not_submitted():
 
     _drive(channel, _event(text="   "))
 
+    assert runtime.calls == []
+
+
+@pytest.mark.parametrize("chat_type", [None, "", "future_group"])
+def test_unknown_chat_types_create_no_turn_or_rate_limit_work(chat_type):
+    channel = _channel()
+    runtime = _RecordingControlRuntime()
+    channel._control_runtime = runtime
+    duplicate_checks: list[str] = []
+    parse_calls: list[str] = []
+    rate_limit_calls: list[str] = []
+    channel._is_duplicate_feishu = lambda message_id: (
+        duplicate_checks.append(message_id) or False
+    )
+    channel._extract_owner_text = lambda content: parse_calls.append(content) or "text"
+    channel.check_rate_limit = lambda sender_id: (
+        rate_limit_calls.append(sender_id) or True
+    )
+
+    _drive(channel, _event(chat_type=chat_type))
+
+    assert duplicate_checks == []
+    assert parse_calls == []
+    assert rate_limit_calls == []
+    assert runtime.calls == []
+
+
+@pytest.mark.parametrize("text", [None, [], {}], ids=["null", "array", "object"])
+def test_non_string_text_creates_no_turn_or_rate_limit_work(text):
+    channel = _channel()
+    runtime = _RecordingControlRuntime()
+    channel._control_runtime = runtime
+    rate_limit_calls: list[str] = []
+    channel.check_rate_limit = lambda sender_id: (
+        rate_limit_calls.append(sender_id) or True
+    )
+
+    _drive(channel, _event(text=text))
+
+    assert rate_limit_calls == []
     assert runtime.calls == []
 
 

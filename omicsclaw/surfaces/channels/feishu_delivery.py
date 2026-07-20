@@ -172,24 +172,45 @@ class FeishuDeliveryAdapter:
                 retry_after_ms=None,
             )
 
-        loop = asyncio.get_running_loop()
-        worker = loop.run_in_executor(
-            None, self._client.im.v1.message.create, create_request
-        )
         try:
-            # The lark SDK is synchronous, so it runs off the Pump's event loop.
-            # `shield` matters: cancelling an executor future does NOT stop the
-            # blocking call. If this coroutine returned promptly on cancellation
-            # the Pump would read that as proof of termination, record `unknown`,
-            # and release the ADR 0063 Reply Target barrier while the provider
-            # call was still in flight -- allowing a later reply to overtake or
-            # duplicate it. Staying unfinished until the thread really stops is
-            # what makes the Pump halt fail closed instead.
-            response = await asyncio.shield(worker)
-        except asyncio.CancelledError:
-            with suppress(BaseException):
+            # Resolving the SDK method and handing it to the executor both
+            # happen strictly BEFORE any socket work. A missing client attribute
+            # or an already-shut-down executor therefore cannot have reached
+            # Feishu, and must not be reported as ambiguous: `unknown` would
+            # halt the ADR 0063 Reply Target barrier and block every later reply
+            # to this destination over a purely local fault.
+            send = self._client.im.v1.message.create
+            loop = asyncio.get_running_loop()
+            worker = loop.run_in_executor(None, send, create_request)
+        except Exception:
+            return DeliveryAdapterResult(
+                outcome=DeliveryAttemptOutcome.REJECTED_PERMANENT,
+                error_code="feishu_client_unavailable",
+                provider_evidence=None,
+                retry_after_ms=None,
+            )
+
+        # The lark SDK is synchronous, so it runs off the Pump's event loop.
+        # Cancelling an executor future does not stop the blocking call. Keep
+        # waiting through every cancellation so the Pump cannot release the
+        # Reply Target barrier until the provider thread has really stopped.
+        cancelled: asyncio.CancelledError | None = None
+        while not worker.done():
+            try:
                 await asyncio.shield(worker)
-            raise
+            except asyncio.CancelledError as error:
+                cancelled = cancelled or error
+            except Exception:
+                break
+
+        if cancelled is not None:
+            if not worker.cancelled():
+                with suppress(Exception):
+                    worker.exception()
+            raise cancelled
+
+        try:
+            response = worker.result()
         except Exception:
             # Timeouts, SSL and connection errors may have crossed the provider
             # acceptance seam.  The legacy path retried here; that is exactly

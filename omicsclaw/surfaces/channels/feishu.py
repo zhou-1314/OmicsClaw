@@ -572,6 +572,9 @@ class FeishuChannel(Channel):
             if sender_id not in self._owner_subjects():
                 logger.warning("Ignored Feishu message from a non-Owner")
                 return
+            if chat_type not in {"p2p", "group"}:
+                logger.warning("Ignored Feishu message with an unsupported chat_type")
+                return
             if not message.content:
                 return
 
@@ -679,7 +682,10 @@ class FeishuChannel(Channel):
             return None
         if not isinstance(parsed, dict):
             return None
-        text = self._normalize_text(str(parsed.get("text", "")))
+        raw_text = parsed.get("text")
+        if not isinstance(raw_text, str):
+            return None
+        text = self._normalize_text(raw_text)
         return text if text.strip() else None
 
     async def _submit_control_inbound(
