@@ -599,6 +599,66 @@ async def test_start_rolls_back_when_connect_fails(monkeypatch):
     assert channel._ws_loop is None
 
 
+@pytest.mark.asyncio
+async def test_start_waits_for_listener_exit_after_delayed_connect_failure(
+    monkeypatch,
+):
+    teardown_entered = threading.Event()
+    allow_listener_exit = threading.Event()
+    real_all_tasks = asyncio.all_tasks
+
+    def _pause_ws_teardown(loop=None):
+        if threading.current_thread().name == "feishu-ws":
+            teardown_entered.set()
+            allow_listener_exit.wait(2.0)
+        return real_all_tasks(loop)
+
+    async def _connect(_client):
+        await asyncio.sleep(0.01)
+        raise RuntimeError("delayed connection failure")
+
+    monkeypatch.setattr(asyncio, "all_tasks", _pause_ws_teardown)
+    client_mod, ws_mod = _install_fake_lark(monkeypatch)
+    client_type = _sdk_client_type(client_mod, connect=_connect)
+    ws_mod.Client = client_type
+    channel = _channel()
+    channel.feishu_config.ws_start_probe_seconds = 1.0
+    channel.feishu_config.ws_join_seconds = 0.02
+    channel._control_runtime = _RecordingControlRuntime()
+    channel._lark_client = object()
+    start_task = asyncio.create_task(channel.start())
+
+    try:
+        assert await asyncio.to_thread(teardown_entered.wait, 1.0)
+        assert channel._ws_error is not None
+        assert channel._ws_exit.is_set() is False
+
+        await asyncio.sleep(0.05)
+
+        assert start_task.done() is False
+        assert channel._ws_client is not None
+        assert channel._ws_thread is not None
+        assert channel._ws_loop is not None
+
+        allow_listener_exit.set()
+        with pytest.raises(RuntimeError, match="failed to become ready"):
+            await asyncio.wait_for(start_task, timeout=1.0)
+
+        assert channel._ws_exit.is_set() is True
+        assert channel._ws_client is None
+        assert channel._ws_thread is None
+        assert channel._ws_loop is None
+    finally:
+        allow_listener_exit.set()
+        await asyncio.wait_for(
+            asyncio.gather(start_task, return_exceptions=True),
+            timeout=2.0,
+        )
+        thread = channel._ws_thread
+        if thread is not None:
+            thread.join(timeout=2.0)
+
+
 def _start_owned_loop(channel, *, after_stop=None):
     loop_ready = threading.Event()
 

@@ -277,7 +277,7 @@ class FeishuChannel(Channel):
 
         deadline = time.monotonic() + timeout
         while True:
-            if self._ws_exit.is_set() or self._ws_error is not None:
+            if self._ws_exit.is_set():
                 return "exit"
             if self._ws_ready.is_set():
                 return "ready"
@@ -331,7 +331,11 @@ class FeishuChannel(Channel):
         thread = self._ws_thread
         timeout = max(0.0, float(self.feishu_config.ws_join_seconds))
 
-        if thread is not None and thread.is_alive():
+        if thread is not None and thread.is_alive() and self._ws_exit.is_set():
+            await asyncio.to_thread(thread.join, timeout)
+            if thread.is_alive():
+                raise RuntimeError("Feishu WebSocket listener did not stop")
+        elif thread is not None and thread.is_alive():
             disconnect = getattr(client, "_disconnect", None)
             if not callable(disconnect) or ws_loop is None:
                 raise RuntimeError(
