@@ -9,7 +9,6 @@ Uses lark-oapi Python SDK with WebSocket long-connection (no public IP required)
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import logging
 import re
@@ -38,9 +37,8 @@ class FeishuConfig(BaseChannelConfig):
     # THIS Bot; without the ID a group @-mention cannot be distinguished from
     # the Owner mentioning another human, so group chats fail closed.
     bot_open_id: str = ""
-    # The lark listener authenticates inside its own thread, so startup failure
-    # can only be observed as the thread dying. These bound how long start()
-    # watches for that and how long stop() waits for the thread to leave.
+    # Bound the initial authenticated connection and the async disconnect plus
+    # listener-thread join. Readiness is signalled by the SDK's `_connect` seam.
     ws_start_probe_seconds: float = 5.0
     ws_join_seconds: float = 10.0
     thinking_threshold_ms: int = 2500
@@ -95,8 +93,11 @@ class FeishuChannel(Channel):
         self.feishu_config = config
         self._lark_client = None
         self._ws_client = None
+        self._ws_loop = None
         self._ws_thread = None
+        self._ws_ready = threading.Event()
         self._ws_exit = threading.Event()
+        self._ws_stopping = threading.Event()
         self._ws_error: BaseException | None = None
         self._bot_start_time = time.time()
         self._seen: dict[str, float] = {}
@@ -180,13 +181,16 @@ class FeishuChannel(Channel):
         #
         # Fix: create a fresh loop in the thread and PATCH the module-
         # level `loop` variable so lark_oapi uses it.
+        self._ws_ready.clear()
         self._ws_exit.clear()
+        self._ws_stopping.clear()
         self._ws_error = None
 
         def _ws_thread_target():
             import lark_oapi.ws.client as _ws_mod
 
             ws_loop = asyncio.new_event_loop()
+            self._ws_loop = ws_loop
             asyncio.set_event_loop(ws_loop)
             # Monkey-patch the module-level loop variable
             _ws_mod.loop = ws_loop
@@ -198,7 +202,7 @@ class FeishuChannel(Channel):
                     .build()
                 )
 
-                self._ws_client = lark.ws.Client(
+                client = lark.ws.Client(
                     self.feishu_config.app_id,
                     self.feishu_config.app_secret,
                     event_handler=event_handler,
@@ -208,14 +212,43 @@ class FeishuChannel(Channel):
                         else lark.LogLevel.INFO
                     ),
                 )
-                self._ws_client.start()
+                self._ws_client = client
+                connect = getattr(client, "_connect", None)
+                disconnect = getattr(client, "_disconnect", None)
+                if not callable(connect) or not callable(disconnect):
+                    raise RuntimeError(
+                        "Feishu SDK lacks the required WebSocket lifecycle seams"
+                    )
+
+                async def _connect_and_signal():
+                    await connect()
+                    if getattr(client, "_conn", None) is None:
+                        raise RuntimeError(
+                            "Feishu WebSocket connection was not established"
+                        )
+                    self._ws_ready.set()
+
+                client._connect = _connect_and_signal
+                client.start()
             except BaseException as e:  # noqa: BLE001 - reported to start()
-                self._ws_error = e
-                logger.error(f"Feishu WebSocket thread error: {e}", exc_info=True)
+                if not self._ws_stopping.is_set():
+                    self._ws_error = e
+                    logger.error(
+                        "Feishu WebSocket thread failed (%s)",
+                        type(e).__name__,
+                    )
             finally:
-                self._ws_exit.set()
+                pending = asyncio.all_tasks(ws_loop)
+                for task in pending:
+                    task.cancel()
+                if pending and not ws_loop.is_closed():
+                    with suppress(Exception):
+                        ws_loop.run_until_complete(
+                            asyncio.gather(*pending, return_exceptions=True)
+                        )
                 with suppress(Exception):
                     ws_loop.close()
+                self._ws_exit.set()
 
         self._ws_thread = threading.Thread(
             target=_ws_thread_target,
@@ -224,27 +257,34 @@ class FeishuChannel(Channel):
         )
         self._ws_thread.start()
 
-        # The lark client authenticates inside `start()`, which then blocks for
-        # the connection's lifetime. Bad credentials therefore surface as the
-        # thread dying immediately, and reporting success anyway would let the
-        # runner advertise health for a Channel that can never hear the Owner.
-        # Thread exit inside the probe window is the only available failure
-        # proof; staying alive past it is treated as connected.
-        exited = await asyncio.get_running_loop().run_in_executor(
-            None,
-            self._ws_exit.wait,
+        outcome = await asyncio.to_thread(
+            self._wait_for_websocket_start,
             max(0.0, float(self.feishu_config.ws_start_probe_seconds)),
         )
-        if exited:
-            error = self._ws_error
-            self._ws_thread = None
+        if outcome != "ready":
+            with suppress(Exception):
+                await self._shutdown_websocket()
             raise RuntimeError(
-                "Feishu WebSocket listener stopped during startup; the App "
-                "credentials or long-connection permission are likely invalid"
-            ) from error
+                "Feishu WebSocket failed to become ready; verify the App "
+                "credentials, permissions, and lark-oapi compatibility"
+            ) from None
 
         self._running = True
         logger.info("Feishu channel initialized")
+
+    def _wait_for_websocket_start(self, timeout: float) -> str:
+        """Wait for one truthful initial outcome without owning the SDK loop."""
+
+        deadline = time.monotonic() + timeout
+        while True:
+            if self._ws_exit.is_set() or self._ws_error is not None:
+                return "exit"
+            if self._ws_ready.is_set():
+                return "ready"
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return "timeout"
+            self._ws_ready.wait(min(0.01, remaining))
 
     def _owner_subjects(self) -> frozenset[str]:
         """Configured Feishu Owner open_id values."""
@@ -254,7 +294,6 @@ class FeishuChannel(Channel):
             for value in (self.config.allowed_senders or set())
             if str(value).strip()
         )
-
 
     async def stop(self) -> None:
         self.deactivate_ingress()
@@ -287,35 +326,56 @@ class FeishuChannel(Channel):
         ControlRuntime the runner is about to close.
         """
 
-        client, thread = self._ws_client, self._ws_thread
-        if client is not None:
-            # lark-oapi has spelled its shutdown hook differently across
-            # releases. A build exposing none of them still stops when the
-            # daemon thread is abandoned at exit, so an absent hook must not
-            # fail stop() -- the bounded join below reports the difference.
-            for name in ("stop", "_disconnect", "disconnect", "close"):
-                hook = getattr(client, name, None)
-                if not callable(hook):
-                    continue
-                with suppress(Exception):
-                    result = hook()
-                    if inspect.isawaitable(result):
-                        # A coroutine belongs to the WS thread's loop, which is
-                        # already gone or busy; discard it rather than awaiting
-                        # it on the runner's loop.
-                        result.close()
-                break
+        client = self._ws_client
+        ws_loop = self._ws_loop
+        thread = self._ws_thread
+        timeout = max(0.0, float(self.feishu_config.ws_join_seconds))
+
         if thread is not None and thread.is_alive():
-            await asyncio.get_running_loop().run_in_executor(
-                None,
-                thread.join,
-                max(0.0, float(self.feishu_config.ws_join_seconds)),
-            )
+            disconnect = getattr(client, "_disconnect", None)
+            if not callable(disconnect) or ws_loop is None:
+                raise RuntimeError(
+                    "Feishu WebSocket listener has no usable shutdown seam"
+                )
+
+            self._ws_stopping.set()
+
+            async def _disconnect_on_owner_loop():
+                await disconnect()
+
+            coroutine = _disconnect_on_owner_loop()
+            try:
+                disconnect_future = asyncio.run_coroutine_threadsafe(
+                    coroutine,
+                    ws_loop,
+                )
+            except Exception as error:
+                coroutine.close()
+                raise RuntimeError(
+                    "Feishu WebSocket disconnect could not be scheduled"
+                ) from error
+
+            try:
+                await asyncio.wait_for(
+                    asyncio.wrap_future(disconnect_future),
+                    timeout=timeout,
+                )
+            except Exception as error:
+                raise RuntimeError(
+                    "Feishu WebSocket disconnect did not complete"
+                ) from error
+
+            with suppress(RuntimeError):
+                ws_loop.call_soon_threadsafe(ws_loop.stop)
+            await asyncio.to_thread(thread.join, timeout)
             if thread.is_alive():
                 raise RuntimeError("Feishu WebSocket listener did not stop")
 
         self._ws_client = None
+        self._ws_loop = None
         self._ws_thread = None
+        self._ws_ready.clear()
+        self._ws_stopping.clear()
 
     def run_sync(self) -> None:
         """Refuse the legacy standalone entry point.

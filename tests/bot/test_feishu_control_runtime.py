@@ -9,6 +9,7 @@ leave through the persistent Delivery Outbox.
 from __future__ import annotations
 
 import asyncio
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -101,6 +102,65 @@ def _event(
     )
 
 
+def _install_fake_lark(monkeypatch):
+    """Install an SDK-shaped lark module whose Client owns a blocking start()."""
+
+    import sys
+    from types import ModuleType, SimpleNamespace as NS
+
+    client_mod = ModuleType("lark_oapi.ws.client")
+    client_mod.loop = None
+    ws_mod = ModuleType("lark_oapi.ws")
+    ws_mod.client = client_mod
+    ws_mod.Client = None
+    fake = ModuleType("lark_oapi")
+    fake.LogLevel = NS(DEBUG=1, INFO=2)
+    fake.ws = ws_mod
+    fake.EventDispatcherHandler = NS(
+        builder=lambda *_a: NS(
+            register_p2_im_message_receive_v1=lambda *_a: NS(build=lambda: object())
+        )
+    )
+    monkeypatch.setitem(sys.modules, "lark_oapi", fake)
+    monkeypatch.setitem(sys.modules, "lark_oapi.ws", ws_mod)
+    monkeypatch.setitem(sys.modules, "lark_oapi.ws.client", client_mod)
+    return client_mod, ws_mod
+
+
+def _sdk_client_type(client_mod, *, connect=None, disconnect=None):
+    """Build the lifecycle shape exposed by lark-oapi 1.7.1."""
+
+    class _Client:
+        instances = []
+
+        def __init__(self, *_args, **_kwargs):
+            self._conn = None
+            self.force_exit = threading.Event()
+            self.__class__.instances.append(self)
+
+        async def _connect(self):
+            if connect is not None:
+                await connect(self)
+            else:
+                self._conn = object()
+
+        async def _disconnect(self):
+            if disconnect is not None:
+                await disconnect(self)
+            self._conn = None
+            self.force_exit.set()
+
+        async def _select(self):
+            while not self.force_exit.is_set():
+                await asyncio.sleep(0.005)
+
+        def start(self):
+            client_mod.loop.run_until_complete(self._connect())
+            client_mod.loop.run_until_complete(self._select())
+
+    return _Client
+
+
 @pytest.mark.asyncio
 async def test_submit_control_inbound_builds_stable_raw_inbound():
     channel = _channel()
@@ -140,9 +200,7 @@ async def test_submit_control_inbound_builds_stable_raw_inbound():
     assert tuple((block.kind, block.text) for block in raw.content) == (
         ("text", "frozen user text"),
     )
-    assert dict(raw.transport_facts) == {
-        "provider_event_kind": "im.message.receive_v1"
-    }
+    assert dict(raw.transport_facts) == {"provider_event_kind": "im.message.receive_v1"}
     assert ports.user_id == "ou_owner"
 
 
@@ -410,8 +468,11 @@ def test_rejected_message_types_do_not_consume_the_owner_rate_limit():
     _drive(channel, _event(message_type="image", message_id="om_img"))
     _drive(
         channel,
-        _event(chat_type="group", mentions=[_mention("ou_someone_else")],
-               message_id="om_group"),
+        _event(
+            chat_type="group",
+            mentions=[_mention("ou_someone_else")],
+            message_id="om_group",
+        ),
     )
     assert runtime.calls == []
 
@@ -422,106 +483,191 @@ def test_rejected_message_types_do_not_consume_the_owner_rate_limit():
 
 
 @pytest.mark.asyncio
-async def test_start_fails_when_the_websocket_listener_dies_immediately():
-    """A Channel that cannot connect must not report a successful start.
+async def test_start_reports_ready_only_after_connect_returns_with_connection(
+    monkeypatch,
+):
+    connect_entered = threading.Event()
+    allow_connect = threading.Event()
 
-    `lark`'s client authenticates inside its blocking `start()`, so bad
-    credentials surface only as the listener thread exiting. Reporting success
-    anyway would let the runner advertise health for a Bot that can never hear
-    the Owner.
-    """
+    async def _connect(client):
+        connect_entered.set()
+        while not allow_connect.is_set():
+            await asyncio.sleep(0.005)
+        client._conn = object()
 
+    client_mod, ws_mod = _install_fake_lark(monkeypatch)
+    client_type = _sdk_client_type(client_mod, connect=_connect)
+    ws_mod.Client = client_type
     channel = _channel()
-    channel.feishu_config.ws_start_probe_seconds = 2.0
+    channel.feishu_config.ws_start_probe_seconds = 1.0
+    channel._control_runtime = _RecordingControlRuntime()
+    channel._lark_client = object()
+    start_task = asyncio.create_task(channel.start())
+
+    try:
+        assert await asyncio.to_thread(connect_entered.wait, 1.0)
+        assert channel._ws_ready.is_set() is False
+        assert channel._running is False
+        assert start_task.done() is False
+
+        allow_connect.set()
+        await asyncio.wait_for(start_task, timeout=1.0)
+
+        assert channel._ws_ready.is_set() is True
+        assert channel._running is True
+        await channel.stop()
+    finally:
+        allow_connect.set()
+        for client in client_type.instances:
+            client.force_exit.set()
+        if not start_task.done():
+            await asyncio.wait_for(
+                asyncio.gather(start_task, return_exceptions=True),
+                timeout=2.0,
+            )
+        thread = channel._ws_thread
+        if thread is not None:
+            thread.join(timeout=2.0)
+
+
+@pytest.mark.asyncio
+async def test_start_timeout_rolls_back_a_delayed_connection(monkeypatch):
+    connect_entered = threading.Event()
+    release_connect = threading.Event()
+
+    async def _connect(client):
+        connect_entered.set()
+        while not release_connect.is_set():
+            await asyncio.sleep(0.005)
+        client._conn = object()
+
+    async def _disconnect(_client):
+        release_connect.set()
+
+    client_mod, ws_mod = _install_fake_lark(monkeypatch)
+    client_type = _sdk_client_type(
+        client_mod,
+        connect=_connect,
+        disconnect=_disconnect,
+    )
+    ws_mod.Client = client_type
+    channel = _channel()
+    channel.feishu_config.ws_start_probe_seconds = 0.2
+    channel.feishu_config.ws_join_seconds = 1.0
     channel._control_runtime = _RecordingControlRuntime()
     channel._lark_client = object()
 
-    import sys
-    from types import ModuleType, SimpleNamespace as NS
-
-    def _reject_credentials(*_args, **_kwargs):
-        raise RuntimeError("invalid app credentials")
-
-    client_mod = ModuleType("lark_oapi.ws.client")
-    client_mod.loop = None
-    ws_mod = ModuleType("lark_oapi.ws")
-    ws_mod.client = client_mod
-    ws_mod.Client = _reject_credentials
-    fake = ModuleType("lark_oapi")
-    fake.LogLevel = NS(DEBUG=1, INFO=2)
-    fake.ws = ws_mod
-    fake.EventDispatcherHandler = NS(
-        builder=lambda *_a: NS(
-            register_p2_im_message_receive_v1=lambda *_a: NS(build=lambda: object())
-        )
-    )
-    sys.modules["lark_oapi"] = fake
-    sys.modules["lark_oapi.ws"] = ws_mod
-    sys.modules["lark_oapi.ws.client"] = client_mod
     try:
-        with pytest.raises(RuntimeError, match="stopped during startup"):
+        with pytest.raises(RuntimeError, match="failed to become ready"):
             await channel.start()
+
+        assert connect_entered.is_set()
         assert channel._running is False
+        assert channel._ws_client is None
+        assert channel._ws_thread is None
+        assert channel._ws_loop is None
     finally:
-        for name in ("lark_oapi", "lark_oapi.ws", "lark_oapi.ws.client"):
-            sys.modules.pop(name, None)
+        release_connect.set()
+        for client in client_type.instances:
+            client.force_exit.set()
+        thread = channel._ws_thread
+        if thread is not None:
+            thread.join(timeout=2.0)
 
 
 @pytest.mark.asyncio
-async def test_stop_shuts_down_the_websocket_client_and_thread():
-    """stop() must prove the listener is no longer dispatching events.
+async def test_start_rolls_back_when_connect_fails(monkeypatch):
+    async def _connect(_client):
+        await asyncio.sleep(0.01)
+        raise RuntimeError("secret credential detail")
 
-    Returning while the WS thread still holds its socket would let a late event
-    submit a Turn into the shared ControlRuntime the runner is about to close.
-    """
-
-    import threading as _threading
-
+    client_mod, ws_mod = _install_fake_lark(monkeypatch)
+    client_type = _sdk_client_type(client_mod, connect=_connect)
+    ws_mod.Client = client_type
     channel = _channel()
+    channel.feishu_config.ws_start_probe_seconds = 1.0
     channel._control_runtime = _RecordingControlRuntime()
-    release = _threading.Event()
-    stopped: list[str] = []
+    channel._lark_client = object()
 
-    class _Client:
-        def stop(self):
-            stopped.append("stop")
-            release.set()
+    with pytest.raises(RuntimeError, match="failed to become ready") as raised:
+        await channel.start()
 
-    thread = _threading.Thread(target=release.wait, daemon=True)
-    thread.start()
-    channel._ws_client = _Client()
-    channel._ws_thread = thread
-
-    await channel.stop()
-
-    assert stopped == ["stop"]
-    assert not thread.is_alive()
+    assert "secret credential detail" not in str(raised.value)
+    assert channel._running is False
     assert channel._ws_client is None
     assert channel._ws_thread is None
-    assert channel._control_runtime is None
+    assert channel._ws_loop is None
+
+
+def _start_owned_loop(channel, *, after_stop=None):
+    loop_ready = threading.Event()
+
+    def _run():
+        asyncio.set_event_loop(channel._ws_loop)
+        loop_ready.set()
+        channel._ws_loop.run_forever()
+        if after_stop is not None:
+            after_stop()
+        channel._ws_loop.close()
+
+    thread = threading.Thread(target=_run, daemon=True, name="test-feishu-ws")
+    channel._ws_thread = thread
+    thread.start()
+    assert loop_ready.wait(1.0)
+    return thread
 
 
 @pytest.mark.asyncio
-async def test_stop_timeout_retains_live_websocket_and_runtime_ownership():
-    import threading as _threading
-
+async def test_stop_executes_async_disconnect_on_owning_loop_and_joins():
     channel = _channel()
-    channel.feishu_config.ws_join_seconds = 0.0
     runtime = _RecordingControlRuntime()
     channel._control_runtime = runtime
     channel._running = True
     channel.activate_ingress()
-    release = _threading.Event()
+    owner_loop = asyncio.new_event_loop()
+    channel._ws_loop = owner_loop
+    disconnect_call = {}
 
     class _Client:
-        def stop(self):
+        async def _disconnect(self):
+            disconnect_call["loop"] = asyncio.get_running_loop()
+            disconnect_call["thread"] = threading.current_thread()
+
+    client = _Client()
+    channel._ws_client = client
+    channel._ws_ready.set()
+    thread = _start_owned_loop(channel)
+
+    await channel.stop()
+
+    assert disconnect_call == {"loop": owner_loop, "thread": thread}
+    assert not thread.is_alive()
+    assert channel._ws_client is None
+    assert channel._ws_thread is None
+    assert channel._ws_loop is None
+    assert channel._ws_ready.is_set() is False
+    assert channel._control_runtime is None
+    assert channel._running is False
+
+
+@pytest.mark.asyncio
+async def test_stop_timeout_retains_live_websocket_and_runtime_ownership():
+    channel = _channel()
+    channel.feishu_config.ws_join_seconds = 0.01
+    runtime = _RecordingControlRuntime()
+    channel._control_runtime = runtime
+    channel._running = True
+    channel.activate_ingress()
+    channel._ws_loop = asyncio.new_event_loop()
+    release_thread = threading.Event()
+
+    class _Client:
+        async def _disconnect(self):
             return None
 
     client = _Client()
-    thread = _threading.Thread(target=release.wait, daemon=True)
-    thread.start()
     channel._ws_client = client
-    channel._ws_thread = thread
+    thread = _start_owned_loop(channel, after_stop=release_thread.wait)
 
     try:
         with pytest.raises(
@@ -534,7 +680,8 @@ async def test_stop_timeout_retains_live_websocket_and_runtime_ownership():
         assert channel._running is True
         assert channel._ws_client is client
         assert channel._ws_thread is thread
+        assert channel._ws_loop is not None
         assert channel._control_runtime is runtime
     finally:
-        release.set()
-        thread.join(timeout=5)
+        release_thread.set()
+        thread.join(timeout=2.0)
