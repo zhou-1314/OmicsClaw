@@ -98,3 +98,73 @@ def test_public_docs_do_not_claim_legacy_framework_facts():
                 found.append(f"{relative_path}: {fragment}")
 
     assert not found, "\n".join(found)
+
+
+def test_channel_docs_match_authoritative_production_scope():
+    common_fragments = [
+        "ControlRuntime",
+        "python -m omicsclaw.surfaces.channels --channels telegram",
+        "python -m omicsclaw.surfaces.channels --channels feishu",
+        "FEISHU_ALLOWED_SENDERS",
+        "FEISHU_BOT_OPEN_ID",
+    ]
+    localized_fragments = {
+        "README.md": [
+            "shared runner",
+            "Owner-only Telegram text plus one ordinary photo",
+            "Owner-only Feishu text-only",
+            "other Channel Adapters remain gated",
+            "outbound media remains incomplete and fail-closed",
+            "not full ADR or media completion",
+        ],
+        "README_zh-CN.md": [
+            "shared runner",
+            "仅 Owner 可用的 Telegram 文本与单张普通图片",
+            "仅 Owner 可用的飞书纯文本",
+            "其他 Channel Adapter 仍保持 gated",
+            "出站媒体仍未完成并保持 fail-closed",
+            "不代表 ADR 或媒体能力已全部完成",
+        ],
+        "AGENTS.md": [
+            "shared runner",
+            "Owner-only Telegram text plus one ordinary photo",
+            "Owner-only Feishu text-only",
+            "other Channel Adapters remain gated",
+            "outbound media remains incomplete and fail-closed",
+            "not full ADR or media completion",
+        ],
+        "omicsclaw/surfaces/channels/README.md": [
+            "shared runner",
+            "Owner-only Telegram text plus one ordinary photo",
+            "Owner-only Feishu text-only",
+            "other Channel Adapters remain gated",
+            "outbound media remains incomplete and fail-closed",
+            "not full ADR or media completion",
+        ],
+        "docs/adr/0060-deliver-terminal-channel-replies-through-a-persistent-outbox.md": [
+            "shared runner",
+            "Owner-only Telegram text plus one ordinary photo",
+            "Owner-only Feishu text-only",
+            "other Channel Adapters remain gated",
+            "outbound media remains incomplete and fail-closed",
+            "not full ADR or media completion",
+        ],
+    }
+
+    missing: list[str] = []
+    for relative_path, specific_fragments in localized_fragments.items():
+        text = (ROOT / relative_path).read_text(encoding="utf-8")
+        normalized = " ".join(text.split()).lower()
+        for fragment in [*common_fragments, *specific_fragments]:
+            if " ".join(fragment.split()).lower() not in normalized:
+                missing.append(f"{relative_path}: {fragment}")
+
+    assert not missing, "\n".join(missing)
+
+
+def test_channel_docs_do_not_bypass_the_shared_runner():
+    channel_readme = (
+        ROOT / "omicsclaw" / "surfaces" / "channels" / "README.md"
+    ).read_text(encoding="utf-8")
+
+    assert "ChannelManager.start_all(" not in channel_readme

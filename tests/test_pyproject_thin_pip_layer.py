@@ -124,3 +124,12 @@ def test_pydantic_verified_floor_matches_pip_and_conda_sources():
         assert requirement.specifier.contains("2.1.0")
         assert not requirement.specifier.contains("2.0.9")
         assert not requirement.specifier.contains("3.0.0")
+
+
+def test_channels_extra_installs_authoritative_channel_sdks():
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    optional_dependencies = pyproject["project"]["optional-dependencies"]
+
+    assert "channels" in optional_dependencies
+    assert "python-telegram-bot>=21.0" in optional_dependencies["channels"]
+    assert "lark-oapi>=1.3.0" in optional_dependencies["channels"]

@@ -1,18 +1,22 @@
 # OmicsClaw Channel Surface
 
-The Channel Surface owns OmicsClaw's messaging adapters. Telegram text and one
-ordinary photo per message are the only production-enabled inputs; the
-remaining adapters are retained as migration sources and fail closed at startup.
+The Channel Surface owns OmicsClaw's messaging adapters. Its production scope
+is the shared runner and `ControlRuntime`: Owner-only Telegram text plus one
+ordinary photo, and Owner-only Feishu text-only. Start either authoritative
+Adapter with the runner:
 
-> **Production status (2026-07-16):** configured-Owner Telegram text and one
-> photo with an optional caption are enabled. They enter through
-> `ControlRuntime`; the photo is fetched lazily into the immutable Attachment
-> Store only after duplicate and admission checks, and terminal text replies
-> leave through the persistent Delivery Outbox. Photo albums, documents,
-> audio/video and outbound media remain disabled. The official runner and
-> `ChannelManager` reject every other Adapter
-> until it receives the same ingress and delivery cutover; the sections below
-> for those Adapters are configuration reference, not an enabled-path claim.
+```bash
+python -m omicsclaw.surfaces.channels --channels telegram
+python -m omicsclaw.surfaces.channels --channels feishu
+```
+
+Telegram photos enter the immutable Attachment Store only after duplicate and
+admission checks. Both Channels send terminal text only through the persistent
+Delivery Outbox. `FEISHU_ALLOWED_SENDERS` and `FEISHU_BOT_OPEN_ID` are
+mandatory; the Bot open ID proves group mention identity. The other Channel
+Adapters remain gated and their sections below are migration reference only.
+Outbound media remains incomplete and fail-closed; this is not full ADR or
+media completion.
 
 ## Interactive Terminal Chat
 
@@ -38,12 +42,11 @@ omicsclaw interactive
 ## Architecture
 
 ```text
-Telegram update
+Telegram update / Feishu text event
   -> authenticity + configured-Owner gate
-  -> RawInboundV1 (`chat_id:message_id`; optional SourceAttachmentDescriptorV1)
+  -> RawInboundV1 (stable provider message id; optional Telegram photo descriptor)
   -> duplicate/capacity checks
-  -> process-local Telegram photo source (photo only)
-  -> attachments.db + content-addressed Blob + Control Turn commitment
+  -> Telegram only: process-local photo source -> attachments.db + Blob
   -> ControlRuntime / durable Turn / per-Conversation FIFO
   -> canonical Transcript keeps structured Attachment References only
   -> bounded ephemeral image rendering immediately before each model call
@@ -51,9 +54,9 @@ Telegram update
   -> canonical terminal Transcript
   -> atomic Outbound Delivery plan in control.db
   -> account-scoped Delivery Pump
-  -> one Telegram `send_message` attempt
+  -> one Telegram or Feishu provider attempt
 
-Feishu / DingTalk / Discord / Slack / WeChat / QQ / Email / iMessage
+DingTalk / Discord / Slack / WeChat / QQ / Email / iMessage
   -> startup rejected until the same ingress + Delivery cutover exists
 ```
 
@@ -61,8 +64,8 @@ Feishu / DingTalk / Discord / Slack / WeChat / QQ / Email / iMessage
 
 | Module | Purpose |
 |--------|--------|
-| `telegram.py` | Authenticated Owner ingress, RawInbound construction, lifecycle |
-| `telegram_delivery.py` | Single-attempt text Delivery Adapter |
+| `telegram.py` / `feishu.py` | Authenticated Owner ingress, RawInbound construction, lifecycle |
+| `telegram_delivery.py` / `feishu_delivery.py` | Single-attempt text Delivery Adapters |
 | `omicsclaw/attachments/` | Immutable Records, content-addressed Blobs, reconciliation and bounded model rendering |
 | `manager.py` | Fail-closed lifecycle + `/healthz` |
 | `base.py` | Shared Adapter interface; legacy direct startup gate |
@@ -72,22 +75,16 @@ Feishu / DingTalk / Discord / Slack / WeChat / QQ / Email / iMessage
 
 ## Registered Adapter capability declarations
 
-Except for Telegram text/single-photo input, this matrix describes migration-source declarations,
-not enabled production behavior.
+Only the first two rows are enabled production behavior. Other declarations
+remain source material and do not grant startup authority.
 
-| Channel | Format | Max Len | Media | Typing | Group | @Mention | No Public IP | Token Refresh |
-|:--------|:------:|:-------:|:-----:|:------:|:-----:|:--------:|:------------:|:-------------:|
-| Telegram | HTML | 4000 | S/R | 4s | ✓ | ✓ | ✓ | — |
-| Feishu | Post | 4096 | S/R | — | ✓ | ✓ | — | 2h |
-| DingTalk | MD | 4096 | S/R | — | ✓ | ✓ | ✓ | 2h |
-| Discord | MD | 2000 | S/R | 8s | ✓ | ✓ | ✓ | — |
-| Slack | Mrkdwn | 4000 | S/R | — | ✓ | ✓ | ✓ | — |
-| WeChat | MD | 4096 | S/R | — | ✓ | ✓ | — | 2h |
-| QQ | Plain | 4096 | S/R | — | ✓ | ✓ | ✓ | — |
-| Email | HTML | — | S/R | — | — | — | ✓ | — |
-| iMessage | Plain | — | S/R | — | ✓ | — | ✓ | — |
+| Channel | Inbound | Outbound | Production status |
+|:--------|:--------|:---------|:------------------|
+| Telegram | Owner text; one ordinary photo with optional caption | Persistent Outbox text | Enabled |
+| Feishu | Owner text; groups require a proved Bot mention | Persistent Outbox text | Enabled, text-only |
+| DingTalk, Discord, Slack, WeChat, QQ, Email, iMessage | None | None | Gated at startup |
 
-Legend: **S** = send, **R** = receive, **—** = not applicable/unlimited
+Outbound media is not enabled for any Channel.
 
 ### Connection Types
 
@@ -120,7 +117,9 @@ OmicsClaw bot entrypoints automatically read the project-root `.env`. If `python
 
 ### Step 2: Channel Dependencies
 
-Choose **one** of the following approaches:
+Choose **one** of the following approaches. The declared `channels` extra
+installs both production SDKs; packages below it are listed only for developers
+working on gated Adapter migrations.
 
 #### Option A: Install declared Channel extras
 
@@ -205,7 +204,7 @@ For a guided setup, run `oc onboard`. The wizard writes `.env` using the same va
 | `FEISHU_APP_ID` | From Feishu developer console | Feishu |
 | `FEISHU_APP_SECRET` | From Feishu developer console | Feishu |
 | `FEISHU_ALLOWED_SENDERS` | **Required.** Comma-separated Owner `open_id` values | Feishu |
-| `FEISHU_BOT_OPEN_ID` | This Bot's `open_id`; group chats fail closed without it | Feishu |
+| `FEISHU_BOT_OPEN_ID` | **Required.** This Bot's `open_id`, used to prove group @mentions | Feishu |
 | `DINGTALK_CLIENT_ID` | Robot App Key | DingTalk |
 | `DINGTALK_CLIENT_SECRET` | Robot App Secret | DingTalk |
 | `DISCORD_BOT_TOKEN` | Discord bot token | Discord |
@@ -336,9 +335,10 @@ TELEGRAM_CHAT_ID=                        # Optional legacy additional Owner id
 processed by `ControlRuntime`, and the canonical terminal Transcript is rendered
 into deterministic Delivery Items. The Telegram Adapter performs exactly one
 plain-text `send_message` call per durable Attempt; the Delivery Pump owns
-ordering and reliable retry classification. Media is rejected before download.
-Group text from a configured Owner follows the same path and preserves the
-Telegram topic/thread id when present.
+ordering and reliable retry classification. One ordinary photo follows the
+Attachment Store path; albums, documents, audio and video are rejected before
+download. Group text from a configured Owner follows the same path and
+preserves the Telegram topic/thread id when present.
 
 ---
 
@@ -357,9 +357,19 @@ Telegram topic/thread id when present.
 ```bash
 FEISHU_APP_ID=cli_xxxxxxx
 FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxx
+FEISHU_ALLOWED_SENDERS=ou_owner_open_id
+FEISHU_BOT_OPEN_ID=ou_bot_open_id
 ```
 
-**Technical details:** WebSocket long connection via `lark_oapi.ws.Client`. Event-driven message handling. Markdown to Feishu rich text conversion. Group @mention filtering. Media: images via `/im/v1/images`, files via `/im/v1/files`. Text chunk limit: 4096 chars.
+Both identity variables are mandatory. `FEISHU_ALLOWED_SENDERS` establishes
+Owner admission; `FEISHU_BOT_OPEN_ID` proves that a group @mention names this
+Bot rather than another member. Unknown chat types, non-text messages,
+attachments, rich posts and cards fail closed before Turn submission.
+
+**Technical details:** WebSocket long connection via `lark_oapi.ws.Client`.
+Owner text is normalized into `RawInboundV1` and processed by the shared
+`ControlRuntime`. The Feishu Adapter makes one text-only provider call per
+durable Attempt; the Delivery Pump owns ordering and retry classification.
 
 ---
 
@@ -571,8 +581,9 @@ IMESSAGE_REGION=US                          # Optional: phone number region
 ```bash
 # Authoritative production runner
 python -m omicsclaw.surfaces.channels --channels telegram
+python -m omicsclaw.surfaces.channels --channels feishu
 python -m omicsclaw.surfaces.channels --channels telegram --health-port 8080
-python -m omicsclaw.surfaces.channels --list  # marks legacy Adapters disabled
+python -m omicsclaw.surfaces.channels --list  # marks remaining Adapters disabled
 
 # Makefile shortcuts
 make bot-telegram
@@ -711,9 +722,16 @@ Add your server's public IP to the WeCom app's **Trusted IP** list in the admin 
 
 ### Feishu "event loop already running" error
 
-This legacy migration note concerns `lark_oapi`, which uses a module-level event
-loop variable. Feishu is currently disabled; when its cutover resumes, use
-`omicsclaw/surfaces/channels/feishu.py` as the Adapter source.
+This concerns `lark_oapi`, which caches a module-level event loop variable at
+import time. `FeishuChannel.start()` runs the listener in its own thread and
+patches that variable to a fresh loop, so the error should not appear on the
+cut-over path. If it does, check that nothing imported `lark_oapi.ws.client`
+from inside a running loop before `start()`.
+
+Feishu is an authoritative Channel (ADR 0060/0063 text-only slice): Owner text
+and group @-mentions enter the shared `ControlRuntime`, and terminal replies
+leave only through the persistent Delivery Outbox. Inbound attachments,
+outbound media, rich post/cards and placeholder editing remain fail-closed.
 
 ### Token refresh failures
 

@@ -40,7 +40,7 @@ conda activate OmicsClaw
 
 # Lightweight alternative (Python-only skills, no R or external CLIs):
 # pip install -e .
-# pip install -e ".[interactive]" / ".[tui]" / ".[memory]" / ".[full]"
+# pip install -e ".[interactive]" / ".[tui]" / ".[memory]" / ".[channels]" / ".[full]"
 
 python omicsclaw.py list   # or: oc list
 python omicsclaw.py run spatial-preprocess --demo
@@ -114,7 +114,7 @@ OmicsClaw/
 ├── omicsclaw.py                # Main CLI script (SKILLS dict, DOMAINS registry, `oc list`/`oc run`/`oc desktop-server`)
 ├── omicsclaw/                  # The single top-level Python package
 │   ├── surfaces/               # ← Ingress layer (ADR 0005). The three user-facing entry points.
-│   │   ├── channels/           #   Channel Surface — Telegram text + single photo authoritative; legacy adapters gated
+│   │   ├── channels/           #   Channel Surface — Telegram text/photo + Feishu text authoritative; legacy adapters gated
 │   │   ├── desktop/            #   Desktop Surface — FastAPI server for Electron / Next.js frontends
 │   │   └── cli/                #   CLI Surface — prompt_toolkit REPL, Textual TUI, setup wizard, `oc` launcher
 │   ├── runtime/                # Agent loop, context assembly, tool registry, policy, transcript storage (ADR 0004 P3)
@@ -280,7 +280,7 @@ restructure history is in [ADR 0005](docs/adr/0005-surfaces-umbrella-for-ingress
 
 | Surface | Location | Primary entry |
 |---|---|---|
-| **Channel Surface** | `omicsclaw/surfaces/channels/` | `python -m omicsclaw.surfaces.channels --channels telegram` |
+| **Channel Surface** | `omicsclaw/surfaces/channels/` | `python -m omicsclaw.surfaces.channels --channels telegram` / `--channels feishu` |
 | **Desktop Surface** | `omicsclaw/surfaces/desktop/` | `oc desktop-server --host 127.0.0.1 --port 8765` |
 | **CLI Surface** | `omicsclaw/surfaces/cli/` | `oc interactive` (REPL) / `oc tui` (TUI) |
 
@@ -382,27 +382,29 @@ milestones rather than duplicating logic.
   Job, remaining CLI or Agent-tool migration, ADR 0062 dynamic envelopes,
   optimistic resources, or a persistent/cross-process executable queue.
 
-### Channel Surface — authoritative Telegram text/single-photo + gated legacy adapters
+### Channel Surface — authoritative Telegram text/photo + Feishu text
 
 ```bash
 pip install -e ".[channels]"     # platform SDKs are extras
 python -m omicsclaw.surfaces.channels --channels telegram
+python -m omicsclaw.surfaces.channels --channels feishu
 python -m omicsclaw.surfaces.channels --list
 make bot-telegram                # Makefile alias
 ```
 
 Adapter implementations remain for Telegram, Feishu, Slack, Discord, WeChat,
-WeCom, DingTalk, iMessage, Email and QQ. Only Owner-only Telegram text and one
-ordinary photo with an optional caption are enabled production inputs: both
-normalize through `ControlRuntime`; photos use the Backend-owned Attachment
-Store and durable structured References; terminal text commits one canonical
-Outbound Delivery with the Turn and leaves through the persistent Delivery
-Pump. Telegram media groups, documents, audio/video and outbound media fail
-closed. The
-official runner and `ChannelManager` reject every other Adapter until it has an
-equivalent ControlRuntime + Delivery Adapter cutover; do not restore their
-legacy direct-dispatch startup as a compatibility shortcut. Cross-cutting
-concerns live in `omicsclaw/services/`.
+WeCom, DingTalk, iMessage, Email and QQ. The production scope is the shared
+runner and `ControlRuntime`: Owner-only Telegram text plus one ordinary photo
+with an optional caption, and Owner-only Feishu text-only. Telegram photos use
+the Backend-owned Attachment Store and durable structured References; terminal
+text commits one canonical Outbound Delivery with the Turn and leaves through
+the persistent Delivery Pump. `FEISHU_ALLOWED_SENDERS` and
+`FEISHU_BOT_OPEN_ID` are mandatory; the Bot open ID proves a group message
+mentioned this Bot. The other Channel Adapters remain gated. Telegram albums,
+documents and audio/video, Feishu attachments/rich post/cards, and all outbound
+media remains incomplete and fail-closed. This is not full ADR or media
+completion. Do not restore legacy direct-dispatch startup as a compatibility
+shortcut. Cross-cutting concerns live in `omicsclaw/services/`.
 
 The OmicsBot persona used across all Channel adapters is in `SOUL.md`.
 Configuration goes in `.env` at the project root — see

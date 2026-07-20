@@ -121,11 +121,6 @@ non-empty mention list is not sufficient — the Owner mentioning another human
 would otherwise produce an unsolicited reply — and an unconfigured Bot open ID
 fails group chats closed rather than guessing from member counts.
 
-Cross-validated by an independent `codex exec gpt-5.5 xhigh` read-only review
-(2026-07-20). It returned 1 P0, 4 P1 and 2 P2; all seven are resolved. The P0
-was the executor-cancellation barrier release described above, which had no
-Telegram precedent and was not covered by the reused Pump tests.
-
 **Shared composition root (2026-07-20).** The one-authoritative-Channel-per-
 process limit is lifted. `control.db` takes an exclusive lifetime lock, so one
 Backend process owns exactly one control plane; the `ControlRuntime` is now
@@ -156,14 +151,29 @@ Channel has stopped, and an individual Channel only *detaches* on stop or
 startup rollback. A Channel that closed the runtime because its own polling
 failed would tear down every other Channel's control plane.
 
-This slice remains text-only. Telegram photo/document ingress fails before
-download, Feishu inbound attachments/rich post/cards and outbound media fail
-closed, outbound media Items are not implemented (so the over-long fallback
-keeps the reply's start but does not yet attach the full text as a durable
-artifact reference), and the official Channel runner rejects every remaining
-Adapter until it has an equivalent ControlRuntime plus persistent Delivery
-Adapter cutover. The legacy Adapter implementations remain source material, not
-enabled production paths.
+The production scope is the shared runner and `ControlRuntime`: Owner-only
+Telegram text plus one ordinary photo, and Owner-only Feishu text-only. The
+supported runner commands are:
+
+```bash
+python -m omicsclaw.surfaces.channels --channels telegram
+python -m omicsclaw.surfaces.channels --channels feishu
+```
+
+`FEISHU_ALLOWED_SENDERS` and `FEISHU_BOT_OPEN_ID` are mandatory. The former
+establishes Owner admission and the latter proves that a group message mentions
+this Bot. The other Channel Adapters remain gated. Outbound media remains
+incomplete and fail-closed; this is not full ADR or media completion.
+
+This slice is text-only for *outbound* delivery. Telegram inbound accepts one
+ordinary photo with an optional caption through the ADR 0059 Attachment Store
+(albums and documents still fail before download); Feishu inbound attachments,
+rich post/cards and outbound media fail closed; outbound media Items are not
+implemented for either Channel (so the over-long fallback keeps the reply's
+start but does not yet attach the full text as a durable artifact reference);
+and the official Channel runner rejects every remaining Adapter until it has an
+equivalent ControlRuntime plus persistent Delivery Adapter cutover. The legacy
+Adapter implementations remain source material, not enabled production paths.
 
 Outbound media remains outside the implemented slice. Legacy tools may still
 write local paths into the process-global `pending_media` side channel, but the
@@ -173,10 +183,72 @@ authoritative Telegram path never drains it. Feishu no longer consumes it — it
 A future media slice must replace those with verified durable artifact
 references rather than treating the side channel as Delivery authority.
 
-`omicsclaw/surfaces/desktop/outbox.py` is unrelated: it executes KG
-HandoffPackets to close the idea-to-analysis-to-verdict workflow. It is a
+`omicsclaw/surfaces/desktop/handoff_executor.py` (renamed from `outbox.py` on
+2026-07-20, closing this ADR's Decision-level rename) is unrelated: it executes
+KG HandoffPackets to close the idea-to-analysis-to-verdict workflow. It is a
 scientific handoff queue/executor, not an Outbound Delivery Outbox, and must not
-be reused as the delivery authority.
+be reused as the delivery authority. The upstream `omicsclaw_kg` on-disk
+directory and the `/thread/{id}/outbox` HTTP route keep their names: both are
+external contracts this rename does not own.
+
+**Reliability closure (2026-07-20).** This branch also closes the following
+implementation defects found while auditing the two production text slices:
+
+* Feishu `start()` reported success even when its WebSocket listener thread died
+  on bad credentials, and `stop()` never stopped that thread -- it stopped a
+  `_loop` attribute that was never assigned. `start()` now fails if the listener
+  exits within a bounded probe window, and `stop()` shuts the client down and
+  joins the thread.
+* The shared composition root leaked on rollback: the runtime was constructed
+  outside the guard, a failed `runtime.start()` stopped Channels without closing
+  the runtime, and a health-port bind failure bypassed cleanup entirely. Because
+  `control.db` holds an exclusive lifetime lock, each leak made the control
+  plane unacquirable by any retry or other Backend.
+* `resend_delivery` checked capacity in one connection and inserted in another,
+  so two concurrent resends could both pass a bound of one. The check now runs
+  inside the insert's transaction.
+* `resend_delivery` accepted a source Delivery whose Items were still
+  `queued`/`sending`/`retry_wait`, so the original and the copy could both
+  reach the Owner. Resend is now scoped to a settled source, returning
+  `delivery_not_settled` otherwise, per this ADR's retry/resend split.
+* Feishu charged the Owner's rate-limit budget before the message-type and
+  group-mention gates, letting images or unrelated group chatter starve real
+  requests.
+* The Feishu Adapter resolved its SDK method and scheduled the executor outside
+  its classification guard, so a missing SDK attribute or a shut-down executor
+  became `acceptance_unknown` -- halting the ADR 0063 Reply Target barrier over
+  a fault that provably never reached the provider. Both are now
+  `rejected_permanent`.
+* The bounded Item-plan rule was enforced only by the text renderer; the store
+  accepted any non-empty plan. `MAX_DELIVERY_ITEMS` is now enforced where the
+  plan is committed.
+* Attempt history and per-Item provider evidence were persisted but unreadable:
+  `DeliveryItemRecord` omitted them and no attempt-history API existed. Added
+  `provider_evidence`/`delivered_at_ms` on the Item record and
+  `list_delivery_attempts` on the repository and `ControlRuntime`.
+* `Channel.run()`, `TelegramChannel.run_polling()` and `FeishuChannel.run_sync()`
+  still advertised themselves as backward-compatible entry points while calling
+  a `start()` that now requires a runner-composed runtime, so they could only
+  fail. They refuse up front and name the runner.
+* Public docs now consistently name Telegram text/single-photo and Feishu
+  text-only as the two authoritative Channel slices, while keeping outbound
+  media and every remaining Adapter fail-closed.
+
+**Task 6 verification (2026-07-20).** The three documentation/package modules
+first passed their existing baseline (`14 passed`), then the new contracts
+failed as intended (`2 failed, 15 passed`), and reached GREEN after the package
+and documentation updates (`17 passed`). The final focused command observed on
+this branch was exactly:
+
+```bash
+python -m pytest -q tests/control tests/bot tests/test_active_workspace_authority.py tests/test_control_plane_documentation_contract.py tests/test_documentation_facts.py tests/test_pyproject_thin_pip_layer.py tests/test_outbox_executor.py tests/test_run_hypothesis_endpoint.py
+```
+
+It completed with `676 passed in 42.78s`. The required
+`python -m compileall -q omicsclaw/control omicsclaw/surfaces/channels omicsclaw/surfaces/desktop`
+and `git diff --check` commands both exited zero with no output. These are
+focused branch results, not a full-suite claim. Outbound media remains
+incomplete and fail-closed.
 
 ## Context
 

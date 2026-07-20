@@ -336,6 +336,14 @@ memory = [
 ]
 
 # --------------------------------------------------------------------------- #
+# channels — authoritative Telegram and Feishu Channel SDKs                   #
+# --------------------------------------------------------------------------- #
+channels = [
+    "python-telegram-bot>=21.0",
+    "lark-oapi>=1.3.0",
+]
+
+# --------------------------------------------------------------------------- #
 # desktop — OmicsClaw-App / web frontend backend dependencies                 #
 # aiosqlite, sqlalchemy, fastapi, uvicorn, cryptography, requests, openai,    #
 # python-dotenv, pyyaml, nbformat, jupyter_client, ipykernel moved to         #
