@@ -51,6 +51,7 @@ def _channel_intent(request_id: str, destination_id: str) -> TurnAcceptanceInten
         fingerprint_version=1,
         fingerprint_sha256=_fingerprint(request_id[0]),
         reply_target={
+            "schema_version": 1,
             "kind": "channel",
             "adapter": "telegram",
             "account_namespace": "primary",
@@ -99,6 +100,82 @@ def _settle(repository, delivery, outcome=DeliveryAttemptOutcome.ACCEPTANCE_UNKN
         assert started.started
         repository.finish_delivery_attempt(started.attempt_id, outcome)
     return delivery
+
+
+def _write_historical_delivery(
+    tmp_path,
+    *,
+    reply_target_json: str,
+    item_count: int = 1,
+):
+    database_path = tmp_path / "control.db"
+    initial = MIGRATIONS[0]
+    with sqlite3.connect(database_path) as connection:
+        connection.executescript(initial.sql)
+        connection.execute(
+            """
+            INSERT INTO schema_migrations (
+                version, name, checksum_sha256, applied_at_ms
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (initial.version, initial.name, initial.checksum, 1),
+        )
+        connection.execute(
+            """
+            INSERT INTO conversations (
+                conversation_id, surface, reply_target_version,
+                reply_target_key, reply_target_json, project_id,
+                revision, created_at_ms, updated_at_ms
+            ) VALUES (?, 'channel', 1, ?, ?, NULL, 1, 1, 1)
+            """,
+            ("historical-conversation", "historical-target", reply_target_json),
+        )
+        connection.execute(
+            """
+            INSERT INTO turns (
+                turn_id, conversation_id, turn_kind, status, retry_of_turn_id,
+                terminal_code, created_at_ms, started_at_ms, finished_at_ms,
+                revision
+            ) VALUES (?, ?, 'agent', 'succeeded', NULL, NULL, 1, 1, 1, 2)
+            """,
+            ("historical-turn", "historical-conversation"),
+        )
+        connection.execute(
+            """
+            INSERT INTO deliveries (
+                delivery_id, turn_id, conversation_id, purpose, terminal_kind,
+                surface, reply_target_version, reply_target_key,
+                reply_target_json, target_sequence, resend_of_delivery_id,
+                created_at_ms
+            ) VALUES (?, ?, ?, 'terminal', 'succeeded', 'channel', 1, ?, ?, 1,
+                      NULL, 1)
+            """,
+            (
+                "historical-delivery",
+                "historical-turn",
+                "historical-conversation",
+                "historical-target",
+                reply_target_json,
+            ),
+        )
+        connection.executemany(
+            """
+            INSERT INTO delivery_items (
+                item_id, delivery_id, ordinal, item_kind, content_store,
+                content_ref, content_sha256, content_range_json,
+                render_version, media_type, caption_ref, caption_sha256,
+                state, attempt_count, next_attempt_at_ms, last_error_code,
+                provider_evidence_json, blocked_by_item_id, delivered_at_ms,
+                updated_at_ms
+            ) VALUES (?, 'historical-delivery', ?, 'text', 'transcript', ?, ?,
+                      NULL, 1, NULL, NULL, NULL, 'delivered', 1, NULL, NULL,
+                      NULL, NULL, 1, 1)
+            """,
+            (
+                (f"historical-item-{ordinal}", ordinal, f"entry-{ordinal}", "c" * 64)
+                for ordinal in range(item_count)
+            ),
+        )
 
 
 def test_describe_delivery_returns_none_for_unknown_id(tmp_path):
@@ -223,88 +300,79 @@ def test_insert_resend_delivery_unknown_source_raises(tmp_path):
 def test_insert_resend_delivery_rejects_oversized_historical_source(tmp_path):
     """A baseline database may contain more Items than the current bound."""
 
-    database_path = tmp_path / "control.db"
-    initial = MIGRATIONS[0]
     reply_target = {
+        "schema_version": 1,
         "kind": "channel",
         "adapter": "telegram",
         "account_namespace": "primary",
         "destination_id": "chat-historical",
     }
-    with sqlite3.connect(database_path) as connection:
-        connection.executescript(initial.sql)
-        connection.execute(
-            """
-            INSERT INTO schema_migrations (
-                version, name, checksum_sha256, applied_at_ms
-            ) VALUES (?, ?, ?, ?)
-            """,
-            (initial.version, initial.name, initial.checksum, 1),
-        )
-        connection.execute(
-            """
-            INSERT INTO conversations (
-                conversation_id, surface, reply_target_version,
-                reply_target_key, reply_target_json, project_id,
-                revision, created_at_ms, updated_at_ms
-            ) VALUES (?, 'channel', 1, ?, ?, NULL, 1, 1, 1)
-            """,
-            ("historical-conversation", "historical-target", json.dumps(reply_target)),
-        )
-        connection.execute(
-            """
-            INSERT INTO turns (
-                turn_id, conversation_id, turn_kind, status, retry_of_turn_id,
-                terminal_code, created_at_ms, started_at_ms, finished_at_ms,
-                revision
-            ) VALUES (?, ?, 'agent', 'succeeded', NULL, NULL, 1, 1, 1, 2)
-            """,
-            ("historical-turn", "historical-conversation"),
-        )
-        connection.execute(
-            """
-            INSERT INTO deliveries (
-                delivery_id, turn_id, conversation_id, purpose, terminal_kind,
-                surface, reply_target_version, reply_target_key,
-                reply_target_json, target_sequence, resend_of_delivery_id,
-                created_at_ms
-            ) VALUES (?, ?, ?, 'terminal', 'succeeded', 'channel', 1, ?, ?, 1,
-                      NULL, 1)
-            """,
-            (
-                "historical-delivery",
-                "historical-turn",
-                "historical-conversation",
-                "historical-target",
-                json.dumps(reply_target),
-            ),
-        )
-        connection.executemany(
-            """
-            INSERT INTO delivery_items (
-                item_id, delivery_id, ordinal, item_kind, content_store,
-                content_ref, content_sha256, content_range_json,
-                render_version, media_type, caption_ref, caption_sha256,
-                state, attempt_count, next_attempt_at_ms, last_error_code,
-                provider_evidence_json, blocked_by_item_id, delivered_at_ms,
-                updated_at_ms
-            ) VALUES (?, 'historical-delivery', ?, 'text', 'transcript', ?, ?,
-                      NULL, 1, NULL, NULL, NULL, 'delivered', 1, NULL, NULL,
-                      NULL, NULL, 1, 1)
-            """,
-            (
-                (f"historical-item-{ordinal}", ordinal, f"entry-{ordinal}", "c" * 64)
-                for ordinal in range(65)
-            ),
-        )
+    _write_historical_delivery(
+        tmp_path,
+        reply_target_json=json.dumps(reply_target),
+        item_count=65,
+    )
 
     with ControlStateRepository(tmp_path) as repository:
         with pytest.raises(ControlIntegrityError, match="exceeds"):
             repository.insert_resend_delivery("historical-delivery")
 
-        assert [delivery.delivery_id for delivery in repository.list_deliveries()] == [
-            "historical-delivery"
-        ]
+        with sqlite3.connect(repository.database_path) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM deliveries").fetchone() == (
+                1,
+            )
+
+
+@pytest.mark.parametrize(
+    "reply_target_json",
+    [
+        "{",
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "desktop",
+                "adapter": "telegram",
+                "account_namespace": "primary",
+                "destination_id": "chat-historical",
+            }
+        ),
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "channel",
+                "adapter": "telegram",
+                "destination_id": "chat-historical",
+            }
+        ),
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "channel",
+                "adapter": "telegram",
+                "account_namespace": "primary",
+                "destination_id": "",
+            }
+        ),
+    ],
+    ids=("malformed-json", "non-channel", "missing-account", "empty-destination"),
+)
+def test_insert_resend_delivery_rejects_invalid_historical_reply_target(
+    tmp_path, reply_target_json
+):
+    _write_historical_delivery(tmp_path, reply_target_json=reply_target_json)
+
+    with ControlStateRepository(tmp_path) as repository:
+        with pytest.raises(ControlIntegrityError, match="Reply Target"):
+            repository.insert_resend_delivery(
+                "historical-delivery",
+                max_total=2,
+                max_per_account=2,
+            )
+
+        with sqlite3.connect(repository.database_path) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM deliveries").fetchone() == (
+                1,
+            )
 
 
 def test_expedite_delivery_retries_pulls_retry_wait_forward(tmp_path):
@@ -437,3 +505,59 @@ def test_list_delivery_attempts_is_empty_for_an_unattempted_delivery(tmp_path):
         )
 
         assert repository.list_delivery_attempts(delivery.delivery_id) == ()
+
+
+@pytest.mark.parametrize(
+    "raw_evidence",
+    [
+        "{",
+        "[]",
+        json.dumps({"authorization_token": "sk_live_secret"}),
+        json.dumps({"provider_message_id": {"nested": "value"}}),
+    ],
+    ids=("malformed-json", "non-object", "credential", "nested-value"),
+)
+def test_historical_invalid_provider_evidence_fails_audit_closed(
+    tmp_path, raw_evidence
+):
+    with ControlStateRepository(tmp_path) as repository:
+        delivery = _terminal_delivery(
+            repository,
+            request_id="b-historical-evidence",
+            destination_id="chat-evidence",
+        )
+        item = repository.list_delivery_items(delivery.delivery_id)[0]
+        started = repository.begin_delivery_attempt(item.item_id)
+        repository.finish_delivery_attempt(
+            started.attempt_id,
+            DeliveryAttemptOutcome.ACCEPTED,
+        )
+        with sqlite3.connect(repository.database_path) as connection:
+            connection.execute(
+                """
+                UPDATE delivery_items SET provider_evidence_json = ?
+                WHERE item_id = ?
+                """,
+                (raw_evidence, item.item_id),
+            )
+            connection.execute(
+                """
+                UPDATE delivery_attempts SET provider_evidence_json = ?
+                WHERE attempt_id = ?
+                """,
+                (raw_evidence, started.attempt_id),
+            )
+
+        with pytest.raises(ControlIntegrityError, match="provider evidence") as item_exc:
+            repository.list_delivery_items(delivery.delivery_id)
+        with pytest.raises(
+            ControlIntegrityError, match="provider evidence"
+        ) as attempt_exc:
+            repository.list_delivery_attempts(delivery.delivery_id)
+
+        assert "sk_live_secret" not in str(item_exc.value)
+        assert "sk_live_secret" not in str(attempt_exc.value)
+        assert item_exc.value.__cause__ is None
+        assert item_exc.value.__context__ is None
+        assert attempt_exc.value.__cause__ is None
+        assert attempt_exc.value.__context__ is None

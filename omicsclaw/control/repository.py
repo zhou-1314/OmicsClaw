@@ -347,6 +347,42 @@ def _reply_target(value: Mapping[str, Any]) -> tuple[int, str, str]:
     return version, key, encoded
 
 
+def _decode_channel_reply_target(raw: object) -> Mapping[str, Any]:
+    try:
+        value = json.loads(str(raw))
+        required = {
+            "schema_version",
+            "kind",
+            "adapter",
+            "account_namespace",
+            "destination_id",
+        }
+        optional = {"thread_id", "destination_kind"}
+        if not isinstance(value, dict) or set(value) - (required | optional):
+            raise ValueError
+        if not required.issubset(value):
+            raise ValueError
+        if type(value.get("schema_version")) is not int:
+            raise ValueError
+        if value["schema_version"] != 1 or value.get("kind") != "channel":
+            raise ValueError
+        for field_name in ("adapter", "account_namespace", "destination_id"):
+            field = value.get(field_name)
+            if not isinstance(field, str) or not field.strip():
+                raise ValueError
+        for field_name in optional:
+            field = value.get(field_name)
+            if field is not None and (
+                not isinstance(field, str) or not field.strip()
+            ):
+                raise ValueError
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise ControlIntegrityError(
+            "resend source Delivery has an invalid Channel Reply Target"
+        ) from exc
+    return value
+
+
 def _validate_adapter_accounts(
     value: Sequence[tuple[str, str]] | None,
 ) -> tuple[tuple[str, str], ...]:
@@ -4419,18 +4455,14 @@ class ControlStateRepository:
                     "resend source Delivery still has "
                     f"{len(outstanding)} unsettled Item(s)"
                 )
+            reply_target = _decode_channel_reply_target(source["reply_target_json"])
             if max_total is not None and max_per_account is not None:
-                reply_target = json.loads(str(source["reply_target_json"]))
-                try:
-                    within_capacity = self._delivery_capacity_available(
-                        connection,
-                        reply_target,
-                        max_total=max_total,
-                        max_per_account=max_per_account,
-                    )
-                except ValueError:
-                    # A non-Channel Reply Target has no Channel capacity bound.
-                    within_capacity = True
+                within_capacity = self._delivery_capacity_available(
+                    connection,
+                    reply_target,
+                    max_total=max_total,
+                    max_per_account=max_per_account,
+                )
                 if not within_capacity:
                     raise DeliveryCapacityExceededError(
                         "resend would exceed the outstanding-delivery bound"
@@ -5539,19 +5571,21 @@ def _delivery_record(row: sqlite3.Row) -> DeliveryRecord:
 
 
 def _delivery_evidence(raw: object) -> Mapping[str, Any] | None:
-    """Decode stored provider evidence, tolerating a malformed legacy row.
+    """Decode stored provider evidence under the write-side audit contract."""
 
-    Evidence is audit material, not control authority: an unreadable blob must
-    not make an otherwise valid Delivery unreadable to the operator.
-    """
-
-    if not raw:
+    if raw is None:
         return None
+    invalid = False
     try:
         decoded = json.loads(str(raw))
+        validate_delivery_provider_evidence(decoded)
     except (json.JSONDecodeError, TypeError, ValueError):
-        return None
-    return MappingProxyType(decoded) if isinstance(decoded, dict) else None
+        invalid = True
+    if invalid:
+        raise ControlIntegrityError(
+            "stored Delivery provider evidence violates its contract"
+        )
+    return MappingProxyType(decoded)
 
 
 def _delivery_attempt_record(row: sqlite3.Row) -> DeliveryAttemptRecord:
