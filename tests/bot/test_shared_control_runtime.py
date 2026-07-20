@@ -371,6 +371,64 @@ async def test_failed_runtime_start_releases_channels_and_the_control_db(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_composition_rollback_stop_failure_keeps_runtime_open_and_is_sanitized(
+    caplog,
+):
+    from omicsclaw.surfaces.channels import __main__ as runner
+
+    stopped: list[str] = []
+    closed: list[str] = []
+
+    class _Channel:
+        def __init__(self, name: str, *, stop_fails: bool = False) -> None:
+            self.name = name
+            self._stop_fails = stop_fails
+
+        async def prepare_control_binding(self):
+            return SimpleNamespace(adapter=self.name)
+
+        async def stop(self):
+            stopped.append(self.name)
+            if self._stop_fails:
+                raise RuntimeError("secret-provider-stop-detail")
+
+        def bind_control_runtime(self, runtime, *, loop=None):
+            raise AssertionError("runtime start must fail before binding")
+
+    class _Runtime:
+        async def start(self):
+            raise RuntimeError("runtime start failed")
+
+        async def close(self):
+            closed.append("runtime")
+
+    manager = SimpleNamespace(
+        channels={
+            "telegram": _Channel("telegram", stop_fails=True),
+            "feishu": _Channel("feishu"),
+        }
+    )
+    import omicsclaw.control as control_module
+
+    real_for_channel_surfaces = control_module.ControlRuntime.for_channel_surfaces
+    control_module.ControlRuntime.for_channel_surfaces = staticmethod(
+        lambda **_kwargs: _Runtime()
+    )
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match=r"Channel shutdown failed for: telegram \(RuntimeError\)",
+        ):
+            await runner._compose_shared_control_runtime(manager)
+    finally:
+        control_module.ControlRuntime.for_channel_surfaces = real_for_channel_surfaces
+
+    assert stopped == ["telegram", "feishu"]
+    assert closed == []
+    assert "secret-provider-stop-detail" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_runner_does_not_close_runtime_under_a_channel_that_failed_to_stop():
     from omicsclaw.surfaces.channels import __main__ as runner
 

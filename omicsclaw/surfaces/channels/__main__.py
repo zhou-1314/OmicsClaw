@@ -376,6 +376,24 @@ def _require_started_channels(
         raise RuntimeError("Channel startup failed for: " + ", ".join(missing))
 
 
+async def _stop_composition_channels(channels) -> None:
+    """Stop every prepared Channel and surface only sanitized failures."""
+
+    failures: list[str] = []
+    for channel in channels:
+        deactivate = getattr(channel, "deactivate_ingress", None)
+        if callable(deactivate):
+            deactivate()
+        try:
+            await channel.stop()
+        except BaseException as error:
+            failures.append(f"{channel.name} ({type(error).__name__})")
+    if failures:
+        raise RuntimeError(
+            "Channel shutdown failed for: " + ", ".join(failures)
+        ) from None
+
+
 async def _compose_shared_control_runtime(manager):
     """Build, start and inject the one ControlRuntime every Channel shares.
 
@@ -402,9 +420,7 @@ async def _compose_shared_control_runtime(manager):
                 )
             bindings.append(binding)
     except BaseException:
-        for channel in channels:
-            with suppress(Exception):
-                await channel.stop()
+        await _stop_composition_channels(channels)
         raise
 
     runtime = None
@@ -419,15 +435,12 @@ async def _compose_shared_control_runtime(manager):
             channel.bind_control_runtime(runtime, loop=loop)
     except BaseException:
         # Composition is all-or-nothing. Every prepared Channel is released and
-        # the partially built runtime is closed, because `control.db` holds an
-        # exclusive lifetime lock: leaving it open would make a retry -- or any
-        # other Backend process -- unable to acquire the control plane at all.
+        # only then is the partially built runtime closed. A failed Channel stop
+        # keeps the runtime open so no live provider callback loses its owner.
+        await _stop_composition_channels(channels)
         if runtime is not None:
             with suppress(Exception):
                 await runtime.close()
-        for channel in channels:
-            with suppress(Exception):
-                await channel.stop()
         raise
     logger.info(
         "Shared ControlRuntime composed for %d Channel Adapter(s)", len(bindings)
