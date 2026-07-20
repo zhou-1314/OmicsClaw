@@ -248,7 +248,7 @@ The follow-up consistency closure added five missing/blank Bot-ID startup cases,
 made the current-scope documentation contract section-scoped, and expanded it
 to `CONTEXT.md` and `ARCHITECTURE.md`; its required five-file set completed with
 `84 passed`. The exact final command then completed with
-`681 passed in 47.52s`. The required
+`688 passed in 45.32s`. The required
 `python -m compileall -q omicsclaw/control omicsclaw/surfaces/channels omicsclaw/surfaces/desktop`
 and `git diff --check` commands both exited zero with no output. These are
 focused branch results, not a full-suite claim. Outbound media remains
