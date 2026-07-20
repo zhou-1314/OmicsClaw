@@ -33,6 +33,14 @@ class RepositoryClosedError(ControlStateError):
     """A command was attempted after repository shutdown."""
 
 
+class DeliveryCapacityExceededError(ControlStateError):
+    """A Delivery admission would exceed the bounded outstanding capacity."""
+
+
+class DeliveryResendNotSettledError(ControlStateError):
+    """Resend was requested for a Delivery that still has a live Item."""
+
+
 class TurnConversationUnavailableError(ControlIntegrityError):
     """A Conversation is quarantined after losing safe execution ownership."""
 
@@ -42,6 +50,8 @@ __all__ = [
     "AutoAgentCapacityError",
     "ControlDatabaseOwnedError",
     "ControlIntegrityError",
+    "DeliveryCapacityExceededError",
+    "DeliveryResendNotSettledError",
     "RunIntegrityIncidentError",
     "ControlStateError",
     "RepositoryClosedError",

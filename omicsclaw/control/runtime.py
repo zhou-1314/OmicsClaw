@@ -35,7 +35,11 @@ from omicsclaw.runtime.storage.canonical_transcript import (
     TurnTranscriptAdapter,
 )
 
-from .errors import ControlIntegrityError
+from .errors import (
+    ControlIntegrityError,
+    DeliveryCapacityExceededError,
+    DeliveryResendNotSettledError,
+)
 from .delivery import DeliveryAdapter, DeliveryPump
 from .delivery_content import (
     freeze_terminal_text_delivery,
@@ -55,6 +59,7 @@ from .ingress import IngressBackendConfig, IngressNormalizer
 from .models import (
     DeliveryOperationOutcome,
     DeliveryPlan,
+    DeliveryAttemptRecord,
     DeliveryRecord,
     DeliveryStatusSummary,
     InboundEnvelopeV1,
@@ -288,10 +293,9 @@ class ControlRuntime:
         self._dispatch_events = dispatch_events
         self._event_hub = event_hub or TurnEventHub()
         self._delivery_pump = delivery_pump
-        # Explicit Owner resend consumes fresh delivery capacity, so it must
-        # honour the same outstanding bounds as novel Channel ingress.  ``None``
-        # means the composing Surface did not configure a Channel bound (for
-        # example a local CLI/Desktop runtime), so no resend gate is applied.
+        # Explicit operator actions require the complete Channel Delivery
+        # authority: a Pump plus both outstanding-capacity bounds. A local
+        # CLI/Desktop runtime intentionally has none of those capabilities.
         self._delivery_max_total = max_outstanding_deliveries_total
         self._delivery_max_per_account = max_outstanding_deliveries_per_account
         self._live_turns: dict[str, _LiveTurn] = {}
@@ -1100,6 +1104,19 @@ class ControlRuntime:
 
         return self.repository.describe_delivery(delivery_id)
 
+    def list_delivery_attempts(
+        self, delivery_id: str
+    ) -> tuple[DeliveryAttemptRecord, ...]:
+        """Owner/operator audit: every provider call made for one Delivery.
+
+        `describe_delivery` answers "where does this Delivery stand"; this
+        answers "what was actually attempted, and what did the provider say" --
+        the evidence needed to decide between :meth:`retry_delivery` and
+        :meth:`resend_delivery` for an `unknown` outcome.
+        """
+
+        return self.repository.list_delivery_attempts(delivery_id)
+
     def resend_delivery(self, delivery_id: str) -> DeliveryOperationOutcome:
         """Explicit Owner resend of an existing Delivery's frozen content.
 
@@ -1107,16 +1124,29 @@ class ControlRuntime:
         reusing its immutable content references without touching the Turn, a
         tool or a Run.  It is the correct recovery after an ``unknown`` or
         already-``delivered`` outcome, where reopening the original Items is
-        unsafe.  A fresh resend honours the configured outstanding-delivery
-        capacity bound and then wakes the Pump.
+        unsafe.  A Delivery that still has a live Item is refused with
+        ``delivery_not_settled``: the Pump may yet deliver it, and copying it now
+        would show the Owner the same reply twice.
+
+        The settlement and capacity rules are evaluated inside the insert's own
+        transaction rather than here, so two concurrent operator resends cannot
+        both observe the last free capacity unit and both insert.
         """
 
-        summary = self.repository.describe_delivery(delivery_id)
-        if summary is None:
+        if not self._delivery_operations_available():
+            return DeliveryOperationOutcome("delivery_unavailable")
+        try:
+            record = self.repository.insert_resend_delivery(
+                delivery_id,
+                max_total=self._delivery_max_total,
+                max_per_account=self._delivery_max_per_account,
+            )
+        except KeyError:
             return DeliveryOperationOutcome("delivery_not_found")
-        if not self._resend_within_capacity(summary.delivery):
+        except DeliveryResendNotSettledError:
+            return DeliveryOperationOutcome("delivery_not_settled")
+        except DeliveryCapacityExceededError:
             return DeliveryOperationOutcome("delivery_backpressure")
-        record = self.repository.insert_resend_delivery(delivery_id)
         self._wake_delivery_pump()
         return DeliveryOperationOutcome("resent", delivery=record)
 
@@ -1129,6 +1159,8 @@ class ControlRuntime:
         with no waiting Item returns ``no_retryable_items``.
         """
 
+        if not self._delivery_operations_available():
+            return DeliveryOperationOutcome("delivery_unavailable")
         try:
             rearmed = self.repository.expedite_delivery_retries(delivery_id)
         except KeyError:
@@ -1138,20 +1170,12 @@ class ControlRuntime:
         self._wake_delivery_pump()
         return DeliveryOperationOutcome("retry_rearmed", rearmed_items=rearmed)
 
-    def _resend_within_capacity(self, delivery: DeliveryRecord) -> bool:
-        """Apply the configured outstanding-delivery bound to a resend."""
-
-        if self._delivery_max_total is None or self._delivery_max_per_account is None:
-            return True
-        try:
-            return self.repository.has_delivery_capacity(
-                delivery.reply_target,
-                max_total=self._delivery_max_total,
-                max_per_account=self._delivery_max_per_account,
-            )
-        except ValueError:
-            # A non-Channel Reply Target has no Channel capacity bound to apply.
-            return True
+    def _delivery_operations_available(self) -> bool:
+        return (
+            self._delivery_pump is not None
+            and self._delivery_max_total is not None
+            and self._delivery_max_per_account is not None
+        )
 
     def _register_live_turn(
         self,

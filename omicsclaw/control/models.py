@@ -601,6 +601,30 @@ class DeliveryItemRecord:
     next_attempt_at_ms: int | None
     last_error_code: str | None
     blocked_by_item_id: str | None
+    # ADR 0060 requires a terminal Item to retain provider evidence for audit.
+    # It is stored per Item as the outcome of the deciding Attempt; the full
+    # per-Attempt history is read separately via `list_delivery_attempts`.
+    provider_evidence: Mapping[str, Any] | None = None
+    delivered_at_ms: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryAttemptRecord:
+    """One recorded provider call against a Delivery Item.
+
+    This is the audit unit ADR 0060 promises for `delivered`, `failed` and
+    `unknown` Items: it says how many times the Backend really called the
+    provider, when, and what each call returned.
+    """
+
+    attempt_id: str
+    item_id: str
+    attempt_no: int
+    started_at_ms: int
+    finished_at_ms: int | None
+    outcome: str | None
+    error_code: str | None
+    provider_evidence: Mapping[str, Any] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -750,9 +774,11 @@ class DeliveryOperationOutcome:
     """The typed result of an explicit Owner/operator Delivery action.
 
     ``code`` is one of ``resent``, ``retry_rearmed``, ``no_retryable_items``,
-    ``delivery_not_found`` or ``delivery_backpressure``.  A ``resent`` outcome
-    carries the freshly created ``purpose=resend`` Delivery; a ``retry_rearmed``
-    outcome reports how many ``retry_wait`` Items had their backoff expedited.
+    ``delivery_not_found``, ``delivery_not_settled``,
+    ``delivery_backpressure`` or ``delivery_unavailable``.  A ``resent``
+    outcome carries the freshly created ``purpose=resend`` Delivery; a
+    ``retry_rearmed`` outcome reports how many ``retry_wait`` Items had their
+    backoff expedited.
     """
 
     code: str
@@ -1011,6 +1037,7 @@ __all__ = [
     "DeliveryCapacitySnapshot",
     "DeliveryStartupRecoveryResult",
     "DeliveryItemPlan",
+    "DeliveryAttemptRecord",
     "DeliveryItemRecord",
     "DeliveryPlan",
     "DeliveryRecord",

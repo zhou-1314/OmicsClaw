@@ -11,6 +11,7 @@ Deliveries.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 
 import pytest
 
@@ -20,8 +21,12 @@ from omicsclaw.control import (
     DeliveryAdapterResult,
     DeliveryAttemptOutcome,
     DeliveryAttemptRequest,
+    DeliveryItemPlan,
+    DeliveryPlan,
     RawContentBlockV1,
     RawInboundV1,
+    TurnAcceptanceIntent,
+    TurnTranscriptRef,
 )
 from omicsclaw.runtime.agent.envelope import MessageEnvelope
 from omicsclaw.runtime.agent.events import Final
@@ -56,6 +61,48 @@ def _telegram_runtime(tmp_path, *, adapter, dispatch_events, **overrides):
         dispatch_events=dispatch_events,
         **overrides,
     )
+
+
+def _operator_delivery(runtime: ControlRuntime, request_id: str):
+    repository = runtime.repository
+    accepted = repository.accept_turn(
+        TurnAcceptanceIntent(
+            surface="channel",
+            source_namespace="channel/telegram/v1/primary",
+            source_request_id=request_id,
+            fingerprint_version=1,
+            fingerprint_sha256="f" * 64,
+            reply_target={
+                "kind": "channel",
+                "adapter": "telegram",
+                "account_namespace": "primary",
+                "destination_id": "operator-chat",
+            },
+            new_conversation=True,
+        )
+    )
+    repository.start_turn(accepted.turn_id)
+    transcript_ref = TurnTranscriptRef(
+        hashlib.sha256(request_id.encode()).hexdigest()[:32], "c" * 64
+    )
+    terminal = repository.terminalize_turn(
+        accepted.turn_id,
+        terminal_status="succeeded",
+        transcript_ref=transcript_ref,
+        delivery_plan=DeliveryPlan(
+            terminal_kind="succeeded",
+            items=(
+                DeliveryItemPlan(
+                    item_kind="text",
+                    content_store="transcript",
+                    content_ref=transcript_ref.entry_id,
+                    content_sha256="c" * 64,
+                ),
+            ),
+        ),
+    )
+    assert terminal.delivery is not None
+    return terminal.delivery
 
 
 @pytest.mark.asyncio
@@ -128,6 +175,59 @@ async def test_resend_and_retry_unknown_delivery_report_not_found(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_delivery_operations_require_complete_delivery_authority(tmp_path):
+    runtime = ControlRuntime.for_local_surface(
+        state_root=tmp_path,
+        workspace_id="workspace-test",
+        surface="cli",
+        installation_id="installation-test",
+        profile_id="profile-test",
+    )
+    try:
+        resend_source = _operator_delivery(runtime, "resend-source")
+        resend_item = runtime.repository.list_delivery_items(
+            resend_source.delivery_id
+        )[0]
+        resend_attempt = runtime.repository.begin_delivery_attempt(
+            resend_item.item_id
+        )
+        runtime.repository.finish_delivery_attempt(
+            resend_attempt.attempt_id,
+            DeliveryAttemptOutcome.ACCEPTANCE_UNKNOWN,
+        )
+
+        retry_source = _operator_delivery(runtime, "retry-source")
+        retry_item = runtime.repository.list_delivery_items(retry_source.delivery_id)[0]
+        retry_attempt = runtime.repository.begin_delivery_attempt(retry_item.item_id)
+        runtime.repository.finish_delivery_attempt(
+            retry_attempt.attempt_id,
+            DeliveryAttemptOutcome.NOT_ACCEPTED_RETRYABLE,
+            retry_at_ms=9_999_999_999_999,
+        )
+        delivery_ids_before = tuple(
+            delivery.delivery_id for delivery in runtime.list_deliveries()
+        )
+
+        resend = runtime.resend_delivery(resend_source.delivery_id)
+        retry = runtime.retry_delivery(retry_source.delivery_id)
+
+        assert resend.code == "delivery_unavailable"
+        assert resend.delivery is None
+        assert retry.code == "delivery_unavailable"
+        assert retry.rearmed_items == 0
+        assert tuple(
+            delivery.delivery_id for delivery in runtime.list_deliveries()
+        ) == delivery_ids_before
+        unchanged_retry = runtime.repository.list_delivery_items(
+            retry_source.delivery_id
+        )[0]
+        assert unchanged_retry.state == "retry_wait"
+        assert unchanged_retry.next_attempt_at_ms == 9_999_999_999_999
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_retry_delivery_on_delivered_reports_no_retryable_items(tmp_path):
     async def adapter(request: DeliveryAttemptRequest) -> DeliveryAdapterResult:
         return DeliveryAdapterResult(DeliveryAttemptOutcome.ACCEPTED)
@@ -163,9 +263,10 @@ async def test_resend_delivery_honours_outstanding_capacity_bound(tmp_path):
 
     async def adapter(request: DeliveryAttemptRequest) -> DeliveryAdapterResult:
         calls.append(request.text)
-        if len(calls) == 1:
-            first_entered.set()
-            await gate.wait()
+        # Every call parks on the gate, so the test can hold exactly one
+        # outstanding delivery unit at whichever point it needs to.
+        first_entered.set()
+        await gate.wait()
         return DeliveryAdapterResult(DeliveryAttemptOutcome.ACCEPTED)
 
     async def dispatch_events(_envelope: MessageEnvelope):
@@ -188,21 +289,80 @@ async def test_resend_delivery_honours_outstanding_capacity_bound(tmp_path):
         await first_entered.wait()
         (terminal,) = runtime.list_deliveries(turn_id=turn_id)
 
-        # The first Delivery is still in flight (one outstanding unit), so a
-        # resend cannot reserve a second unit against the bound of one.
+        # Let the first Delivery settle so the capacity bound -- not the
+        # source-settlement rule -- is what the resend runs into below.
+        gate.set()
+        await runtime.wait_delivery_idle()
+        assert runtime.describe_delivery(terminal.delivery_id).state == "delivered"
+
+        # A second Turn now holds the single outstanding unit in its provider
+        # call, so an otherwise-admissible resend of the settled first Delivery
+        # cannot reserve one.
+        gate.clear()
+        first_entered.clear()
+        second = asyncio.ensure_future(
+            runtime.submit_and_wait(
+                _channel_raw("7001:4", text="go again"),
+                ControlRuntimePorts(user_id="42"),
+            )
+        )
+        await first_entered.wait()
+
         blocked = runtime.resend_delivery(terminal.delivery_id)
         assert blocked.code == "delivery_backpressure"
         assert blocked.delivery is None
 
         gate.set()
+        await second
         await runtime.wait_delivery_idle()
-        assert runtime.describe_delivery(terminal.delivery_id).state == "delivered"
 
         # With the unit released, the explicit resend is admitted and delivered.
         allowed = runtime.resend_delivery(terminal.delivery_id)
         assert allowed.code == "resent"
         await runtime.wait_delivery_idle()
-        assert calls == ["only-one", "only-one"]
+        assert calls == ["only-one", "only-one", "only-one"]
+    finally:
+        gate.set()
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_resend_delivery_refuses_a_source_that_is_still_in_flight(tmp_path):
+    """ADR 0060 scopes resend to a settled (`unknown`/`delivered`) outcome.
+
+    Copying a Delivery the Pump may still deliver would show the Owner the same
+    reply twice, with no record that the duplicate was intentional.
+    """
+
+    entered = asyncio.Event()
+    gate = asyncio.Event()
+
+    async def adapter(request: DeliveryAttemptRequest) -> DeliveryAdapterResult:
+        entered.set()
+        await gate.wait()
+        return DeliveryAdapterResult(DeliveryAttemptOutcome.ACCEPTED)
+
+    async def dispatch_events(_envelope: MessageEnvelope):
+        yield Final("in-flight")
+
+    runtime = _telegram_runtime(
+        tmp_path, adapter=adapter, dispatch_events=dispatch_events
+    )
+    await runtime.start()
+    try:
+        result = await runtime.submit_and_wait(
+            _channel_raw("7001:9", text="go"),
+            ControlRuntimePorts(user_id="42"),
+        )
+        (terminal,) = runtime.list_deliveries(turn_id=result.acceptance.turn_id)
+        await entered.wait()
+
+        refused = runtime.resend_delivery(terminal.delivery_id)
+
+        assert refused.code == "delivery_not_settled"
+        assert refused.delivery is None
+        # The refusal creates nothing: the source stands alone.
+        assert len(runtime.list_deliveries()) == 1
     finally:
         gate.set()
         await runtime.close()

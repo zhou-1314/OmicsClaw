@@ -19,14 +19,18 @@ import sqlite3
 import stat
 import threading
 import time
+from types import MappingProxyType
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from omicsclaw.attachments.models import AttachmentBatchCommitment
 
+from .delivery_content import DEFAULT_MAX_TEXT_ITEMS
 from .errors import (
     AutoAgentActiveCapacityError,
     AutoAgentCapacityError,
     ControlIntegrityError,
+    DeliveryCapacityExceededError,
+    DeliveryResendNotSettledError,
     RepositoryClosedError,
     RunIntegrityIncidentError,
 )
@@ -42,6 +46,7 @@ from .models import (
     DeliveryAttemptClaim,
     DeliveryAttemptOutcome,
     DeliveryAttemptRequest,
+    DeliveryAttemptRecord,
     DeliveryCandidate,
     DeliveryCapacitySnapshot,
     DeliveryStartupRecoveryResult,
@@ -107,6 +112,10 @@ _RUN_STATUSES = frozenset(
     }
 )
 _NONTERMINAL_DELIVERY_ITEMS = frozenset({"queued", "sending", "retry_wait"})
+# The store's own bound on one Delivery's provider-call plan. It tracks the text
+# renderer's default so a plan that renderer accepts is always committable,
+# while still refusing an unbounded plan from any other producer.
+MAX_DELIVERY_ITEMS = DEFAULT_MAX_TEXT_ITEMS
 _SOURCE_STORES = frozenset({"transcript", "run", "attachment", "tool_result"})
 _SURFACES = frozenset({"cli", "desktop", "channel"})
 _AUTOAGENT_TERMINAL_STATUSES = frozenset(
@@ -4192,6 +4201,15 @@ class ControlStateRepository:
     ) -> DeliveryRecord:
         if not plan.items:
             raise ValueError("Delivery plan must contain at least one Item")
+        # ADR 0060 requires a *bounded* provider-call plan. The text renderer
+        # applies its own bound, but the store is the authority: any other plan
+        # producer -- a future media renderer, a recovery path, a test -- must
+        # not be able to commit an unbounded fan-out of provider calls.
+        if len(plan.items) > MAX_DELIVERY_ITEMS:
+            raise ValueError(
+                f"Delivery plan has {len(plan.items)} Items, exceeding the "
+                f"bound of {MAX_DELIVERY_ITEMS}"
+            )
         if plan.terminal_kind != terminal_status:
             raise ValueError("Delivery terminal kind must match Turn terminal status")
         sequence_row = connection.execute(
@@ -4323,7 +4341,35 @@ class ControlStateRepository:
             state=_aggregate_delivery_state(items),
         )
 
-    def insert_resend_delivery(self, delivery_id: str) -> DeliveryRecord:
+    def list_delivery_attempts(
+        self, delivery_id: str
+    ) -> tuple[DeliveryAttemptRecord, ...]:
+        """Owner/operator audit read: every provider call this Delivery made.
+
+        Ordered by Item ordinal then attempt number, so the sequence reads the
+        way the Pump executed it.
+        """
+
+        _require_nonempty(delivery_id, "delivery_id")
+        with self._read() as connection:
+            rows = connection.execute(
+                """
+                SELECT a.* FROM delivery_attempts AS a
+                JOIN delivery_items AS i USING (item_id)
+                WHERE i.delivery_id = ?
+                ORDER BY i.ordinal, a.attempt_no
+                """,
+                (delivery_id,),
+            ).fetchall()
+        return tuple(_delivery_attempt_record(row) for row in rows)
+
+    def insert_resend_delivery(
+        self,
+        delivery_id: str,
+        *,
+        max_total: int | None = None,
+        max_per_account: int | None = None,
+    ) -> DeliveryRecord:
         """Create a new ``purpose=resend`` Delivery reusing frozen content.
 
         An explicit Owner resend re-freezes the source Delivery's immutable
@@ -4331,6 +4377,14 @@ class ControlStateRepository:
         linked through ``resend_of_delivery_id``.  It allocates the next target
         sequence, never reopens the Turn and never reruns a tool or Run.  The
         source may itself be a resend, forming an auditable chain.
+
+        Two admission rules are enforced HERE rather than by the caller, so a
+        concurrent operator action cannot slip between the check and the insert.
+        The source must be settled: ADR 0060 scopes resend to an ``unknown`` or
+        already-``delivered`` outcome, and duplicating a Delivery that still has
+        a live Item would let the original and the copy both reach the Owner.
+        And when the caller supplies a capacity bound, the outstanding-delivery
+        count is measured in this transaction.
         """
 
         _require_nonempty(delivery_id, "delivery_id")
@@ -4349,6 +4403,38 @@ class ControlStateRepository:
             ).fetchall()
             if not item_rows:
                 raise ControlIntegrityError("resend source Delivery has no Items")
+            if len(item_rows) > MAX_DELIVERY_ITEMS:
+                raise ControlIntegrityError(
+                    "resend source Delivery has "
+                    f"{len(item_rows)} Items, which exceeds the bound of "
+                    f"{MAX_DELIVERY_ITEMS}"
+                )
+            outstanding = [
+                str(row["item_id"])
+                for row in item_rows
+                if str(row["state"]) in _NONTERMINAL_DELIVERY_ITEMS
+            ]
+            if outstanding:
+                raise DeliveryResendNotSettledError(
+                    "resend source Delivery still has "
+                    f"{len(outstanding)} unsettled Item(s)"
+                )
+            if max_total is not None and max_per_account is not None:
+                reply_target = json.loads(str(source["reply_target_json"]))
+                try:
+                    within_capacity = self._delivery_capacity_available(
+                        connection,
+                        reply_target,
+                        max_total=max_total,
+                        max_per_account=max_per_account,
+                    )
+                except ValueError:
+                    # A non-Channel Reply Target has no Channel capacity bound.
+                    within_capacity = True
+                if not within_capacity:
+                    raise DeliveryCapacityExceededError(
+                        "resend would exceed the outstanding-delivery bound"
+                    )
             now = self._now()
             sequence_row = connection.execute(
                 """
@@ -4603,6 +4689,33 @@ class ControlStateRepository:
     ) -> bool:
         """Check durable and process-reserved Channel units for one account."""
 
+        with self._read() as connection:
+            return self._delivery_capacity_available(
+                connection,
+                reply_target,
+                max_total=max_total,
+                max_per_account=max_per_account,
+                reserved_total=reserved_total,
+                reserved_for_account=reserved_for_account,
+            )
+
+    def _delivery_capacity_available(
+        self,
+        connection: sqlite3.Connection,
+        reply_target: Mapping[str, Any],
+        *,
+        max_total: int,
+        max_per_account: int,
+        reserved_total: int = 0,
+        reserved_for_account: int = 0,
+    ) -> bool:
+        """Evaluate the capacity bound on a caller-supplied connection.
+
+        Taking the connection rather than opening one lets a writer apply the
+        bound inside the same transaction that consumes the unit, so two
+        concurrent admissions cannot both observe the last free slot.
+        """
+
         for name, value in (
             ("max_total", max_total),
             ("max_per_account", max_per_account),
@@ -4622,27 +4735,26 @@ class ControlStateRepository:
             "account_namespace",
         )
 
-        with self._read() as connection:
-            future_rows = connection.execute(
-                """
-                SELECT c.reply_target_json
-                FROM turns AS t
-                JOIN conversations AS c USING (conversation_id)
-                WHERE c.surface = 'channel' AND t.status IN ('queued','running')
-                """
-            ).fetchall()
-            actual_rows = connection.execute(
-                """
-                SELECT d.reply_target_json
-                FROM deliveries AS d
-                WHERE d.surface = 'channel'
-                  AND EXISTS (
-                      SELECT 1 FROM delivery_items AS i
-                      WHERE i.delivery_id = d.delivery_id
-                        AND i.state IN ('queued','sending','retry_wait')
-                  )
-                """
-            ).fetchall()
+        future_rows = connection.execute(
+            """
+            SELECT c.reply_target_json
+            FROM turns AS t
+            JOIN conversations AS c USING (conversation_id)
+            WHERE c.surface = 'channel' AND t.status IN ('queued','running')
+            """
+        ).fetchall()
+        actual_rows = connection.execute(
+            """
+            SELECT d.reply_target_json
+            FROM deliveries AS d
+            WHERE d.surface = 'channel'
+              AND EXISTS (
+                  SELECT 1 FROM delivery_items AS i
+                  WHERE i.delivery_id = d.delivery_id
+                    AND i.state IN ('queued','sending','retry_wait')
+              )
+            """
+        ).fetchall()
 
         targets = [
             json.loads(str(row["reply_target_json"]))
@@ -5426,6 +5538,37 @@ def _delivery_record(row: sqlite3.Row) -> DeliveryRecord:
     )
 
 
+def _delivery_evidence(raw: object) -> Mapping[str, Any] | None:
+    """Decode stored provider evidence, tolerating a malformed legacy row.
+
+    Evidence is audit material, not control authority: an unreadable blob must
+    not make an otherwise valid Delivery unreadable to the operator.
+    """
+
+    if not raw:
+        return None
+    try:
+        decoded = json.loads(str(raw))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    return MappingProxyType(decoded) if isinstance(decoded, dict) else None
+
+
+def _delivery_attempt_record(row: sqlite3.Row) -> DeliveryAttemptRecord:
+    return DeliveryAttemptRecord(
+        attempt_id=str(row["attempt_id"]),
+        item_id=str(row["item_id"]),
+        attempt_no=int(row["attempt_no"]),
+        started_at_ms=int(row["started_at_ms"]),
+        finished_at_ms=(
+            int(row["finished_at_ms"]) if row["finished_at_ms"] is not None else None
+        ),
+        outcome=str(row["outcome"]) if row["outcome"] else None,
+        error_code=str(row["error_code"]) if row["error_code"] else None,
+        provider_evidence=_delivery_evidence(row["provider_evidence_json"]),
+    )
+
+
 def _delivery_item_record(row: sqlite3.Row) -> DeliveryItemRecord:
     return DeliveryItemRecord(
         item_id=str(row["item_id"]),
@@ -5444,6 +5587,10 @@ def _delivery_item_record(row: sqlite3.Row) -> DeliveryItemRecord:
         ),
         last_error_code=(
             str(row["last_error_code"]) if row["last_error_code"] else None
+        ),
+        provider_evidence=_delivery_evidence(row["provider_evidence_json"]),
+        delivered_at_ms=(
+            int(row["delivered_at_ms"]) if row["delivered_at_ms"] is not None else None
         ),
         blocked_by_item_id=(
             str(row["blocked_by_item_id"]) if row["blocked_by_item_id"] else None
