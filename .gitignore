@@ -162,6 +162,7 @@ resources/
 # Codex config (local only)
 .codex
 .planning/
+.worktrees/
 e2e_test
 
 # Claude Code local state (settings, scheduled task locks)
