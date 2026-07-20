@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from types import SimpleNamespace
@@ -52,6 +51,15 @@ class _RecordingControlRuntime:
         self.calls.append((raw, ports))
         self.attachment_sources.append(attachment_source)
         return self._result
+
+
+def _bind_active_runtime(
+    channel: TelegramChannel,
+    runtime: _RecordingControlRuntime | SimpleNamespace,
+) -> None:
+    channel._control_runtime = runtime
+    channel._running = True
+    channel.activate_ingress()
 
 
 def _update(
@@ -113,7 +121,7 @@ def _download_context(payload: bytes = b"jpeg"):
 
 
 @pytest.mark.asyncio
-async def test_submit_control_text_builds_stable_raw_inbound_without_direct_final_reply():
+async def test_pre_activation_inbound_creates_no_turn() -> None:
     channel = TelegramChannel(
         TelegramConfig(
             bot_token="test-token",
@@ -123,6 +131,24 @@ async def test_submit_control_text_builds_stable_raw_inbound_without_direct_fina
     )
     runtime = _RecordingControlRuntime()
     channel._control_runtime = runtime
+
+    result = await channel._submit_control_text(_update(), "too early")
+
+    assert result is None
+    assert runtime.calls == []
+
+
+@pytest.mark.asyncio
+async def test_submit_control_text_builds_stable_raw_inbound_without_direct_final_reply():
+    channel = TelegramChannel(
+        TelegramConfig(
+            bot_token="test-token",
+            admin_chat_id=7,
+            account_namespace="research",
+        )
+    )
+    runtime = _RecordingControlRuntime()
+    _bind_active_runtime(channel, runtime)
     update = _update()
 
     result = await channel._submit_control_text(update, "frozen user text")
@@ -259,7 +285,7 @@ async def test_owner_single_photo_builds_descriptor_without_persisting_file_id(
         )
     )
     runtime = _RecordingControlRuntime()
-    channel._control_runtime = runtime
+    _bind_active_runtime(channel, runtime)
     photos = (
         _photo(unique_id="unique-small", file_id="secret-file-small", file_size=2),
         _photo(unique_id="unique-large", file_id="secret-file-large", file_size=4),
@@ -311,7 +337,7 @@ async def test_duplicate_photo_does_not_open_process_local_source():
     runtime = _RecordingControlRuntime(
         acceptance_status=TurnAcceptanceStatus.DUPLICATE,
     )
-    channel._control_runtime = runtime
+    _bind_active_runtime(channel, runtime)
     update = _update(
         photo=(_photo(unique_id="same-photo", file_id="secret-file"),),
         text="",
@@ -426,7 +452,7 @@ async def test_attachment_rejection_uses_stable_notice_without_detail():
         acceptance_status=TurnAcceptanceStatus.REJECTED,
         acceptance_code="attachment_rejected",
     )
-    channel._control_runtime = runtime
+    _bind_active_runtime(channel, runtime)
     update = _update(
         photo=(_photo(unique_id="bad-photo", file_id="secret-file"),),
         text="",
@@ -469,7 +495,7 @@ async def test_owner_denied_control_rejection_is_also_silent():
         acceptance_status=TurnAcceptanceStatus.REJECTED,
         acceptance_code="owner_denied",
     )
-    channel._control_runtime = runtime
+    _bind_active_runtime(channel, runtime)
     update = _update(user_id=9)
 
     await channel._submit_control_text(update, "untrusted text")
@@ -641,10 +667,11 @@ async def test_stop_attempts_every_cleanup_stage_and_sanitizes_failures(caplog):
         side_effect=RuntimeError("secret-typing-detail")
     )
     channel._updater = updater
-    channel._control_runtime = runtime
+    _bind_active_runtime(channel, runtime)
     channel._app = app
 
-    await channel.stop()
+    with pytest.raises(RuntimeError, match="Telegram channel shutdown failed"):
+        await channel.stop()
 
     channel._typing_manager.stop_all.assert_awaited_once()
     updater.stop.assert_awaited_once()
@@ -653,9 +680,11 @@ async def test_stop_attempts_every_cleanup_stage_and_sanitizes_failures(caplog):
     app.stop.assert_awaited_once()
     app.shutdown.assert_awaited_once()
     assert "secret-" not in caplog.text
-    assert channel._updater is None
-    assert channel._control_runtime is None
-    assert channel._app is None
+    assert channel.ingress_active is False
+    assert channel._running is True
+    assert channel._updater is updater
+    assert channel._control_runtime is runtime
+    assert channel._app is app
 
 
 @pytest.mark.asyncio
@@ -691,23 +720,19 @@ def test_token_redaction_covers_propagated_telegram_child_loggers(caplog):
     assert "[REDACTED]" in caplog.text
 
 
-def test_run_polling_closes_event_loop_when_startup_fails(monkeypatch):
-    created_loops: list[asyncio.AbstractEventLoop] = []
-    real_new_event_loop = asyncio.new_event_loop
+def test_run_polling_is_retired_and_names_the_runner():
+    """The standalone entry point cannot own a control plane.
 
-    def tracked_new_event_loop():
-        loop = real_new_event_loop()
-        created_loops.append(loop)
-        return loop
+    `control.db` admits one owner per process and the ControlRuntime is
+    composed by the runner, so this path could only fail on an unbound runtime
+    or build a second, conflicting control plane. It must refuse before doing
+    either, and say where to go instead.
+    """
 
-    monkeypatch.setattr(asyncio, "new_event_loop", tracked_new_event_loop)
     channel = TelegramChannel(TelegramConfig(bot_token="test-token", admin_chat_id=7))
-    channel.start = AsyncMock(side_effect=RuntimeError("startup failed"))
-    channel.stop = AsyncMock()
+    channel.start = AsyncMock()
 
-    with pytest.raises(RuntimeError, match="startup failed"):
+    with pytest.raises(RuntimeError, match="retired"):
         channel.run_polling()
 
-    channel.stop.assert_awaited_once()
-    assert len(created_loops) == 1
-    assert created_loops[0].is_closed()
+    channel.start.assert_not_awaited()

@@ -1,11 +1,46 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
+from omicsclaw.surfaces.channels.base import Channel
 from omicsclaw.surfaces.channels.__main__ import (
     _require_authoritative_channels,
     _require_started_channels,
 )
+
+
+class _LifecycleChannel(Channel):
+    authoritative_ingress = True
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        start_release: asyncio.Event | None = None,
+        stop_error: Exception | None = None,
+    ) -> None:
+        super().__init__()
+        self.name = name
+        self.started = asyncio.Event()
+        self._start_release = start_release
+        self._stop_error = stop_error
+
+    async def start(self) -> None:
+        self._running = True
+        self.started.set()
+        if self._start_release is not None:
+            await self._start_release.wait()
+
+    async def stop(self) -> None:
+        self.deactivate_ingress()
+        if self._stop_error is not None:
+            raise self._stop_error
+        self._running = False
+
+    async def _send_chunk(self, chat_id, formatted_text, raw_text, metadata) -> None:
+        raise AssertionError("not used")
 
 
 @pytest.mark.parametrize("channel", ["telegram", "feishu"])
@@ -96,6 +131,59 @@ async def test_manager_propagates_sanitized_zero_channel_startup_failure(
     assert health["channels"]["running"] == []
     assert health["channel_health"]["feishu"]["last_error"] == "RuntimeError"
     assert "secret-startup-detail" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_manager_activates_ingress_only_after_every_transport_starts() -> None:
+    from omicsclaw.surfaces.channels.manager import ChannelManager
+
+    release_second_start = asyncio.Event()
+    telegram = _LifecycleChannel("telegram")
+    feishu = _LifecycleChannel("feishu", start_release=release_second_start)
+    manager = ChannelManager()
+    manager.register(telegram)
+    manager.register(feishu)
+
+    start_task = asyncio.create_task(manager.start_all())
+    await telegram.started.wait()
+    await feishu.started.wait()
+
+    assert telegram.ingress_active is False
+    assert feishu.ingress_active is False
+
+    release_second_start.set()
+    await start_task
+
+    assert telegram.ingress_active is True
+    assert feishu.ingress_active is True
+
+
+@pytest.mark.asyncio
+async def test_manager_surfaces_sanitized_stop_failure_and_keeps_channel_running(
+    caplog,
+) -> None:
+    from omicsclaw.surfaces.channels.manager import ChannelManager
+
+    channel = _LifecycleChannel(
+        "telegram",
+        stop_error=RuntimeError("secret-provider-stop-detail"),
+    )
+    manager = ChannelManager()
+    manager.register(channel)
+    await manager.start_all()
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"Channel shutdown failed for: telegram \(RuntimeError\)",
+    ):
+        await manager.stop_all()
+
+    assert channel.ingress_active is False
+    assert manager.running_channels() == ["telegram"]
+    assert manager.get_health()["channel_health"]["telegram"]["last_error"] == (
+        "RuntimeError"
+    )
+    assert "secret-provider-stop-detail" not in caplog.text
 
 
 def test_telegram_declares_authoritative_ingress() -> None:

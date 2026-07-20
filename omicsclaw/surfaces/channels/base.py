@@ -261,6 +261,7 @@ class Channel(ABC):
     def __init__(self, config: BaseChannelConfig | None = None):
         self.config = config or BaseChannelConfig()
         self._running = False
+        self._ingress_active = False
         # Set by `bind_control_runtime`; a cut-over Channel never composes its own.
         self._control_runtime = None
         self._control_loop = None
@@ -275,6 +276,26 @@ class Channel(ABC):
         )
 
     # ── Lifecycle ────────────────────────────────────────────────────
+
+    @property
+    def ingress_active(self) -> bool:
+        """Whether provider callbacks may submit novel inbound Turns."""
+
+        return self._ingress_active
+
+    def activate_ingress(self) -> None:
+        """Open ingress after the manager's all-Channel startup barrier."""
+
+        if not self._running:
+            raise RuntimeError(
+                f"Channel '{self.name}' cannot activate ingress while stopped"
+            )
+        self._ingress_active = True
+
+    def deactivate_ingress(self) -> None:
+        """Close ingress synchronously before transport shutdown begins."""
+
+        self._ingress_active = False
 
     async def prepare_control_binding(self):
         """Phase 1: connect to the provider and describe this Channel's binding.
@@ -320,15 +341,21 @@ class Channel(ABC):
         ...
 
     async def run(self) -> None:
-        """Start the channel and run until stopped."""
+        """Start the channel and run until stopped.
+
+        A cut-over Channel cannot be started this way: `start()` requires a
+        ControlRuntime that only the runner's composition root can build, since
+        `control.db` admits exactly one owner per process. Calling this would
+        fail deep inside `start()` with a message about an unbound runtime, so
+        it refuses up front and names the supported entry point instead.
+        """
+
         self.require_authoritative_ingress()
-        await self.start()
-        self._running = True
-        try:
-            while self._running:
-                await asyncio.sleep(0.5)
-        finally:
-            await self.stop()
+        raise RuntimeError(
+            f"Channel '{self.name}' must be started by the runner, which owns "
+            "the shared ControlRuntime: "
+            f"python -m omicsclaw.surfaces.channels --channels {self.name}"
+        )
 
     def require_authoritative_ingress(self) -> None:
         """Block legacy direct-dispatch Adapters from production startup."""

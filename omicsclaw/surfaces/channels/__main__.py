@@ -407,25 +407,39 @@ async def _compose_shared_control_runtime(manager):
                 await channel.stop()
         raise
 
-    runtime = ControlRuntime.for_channel_surfaces(
-        workspace_id=str(core.DATA_DIR),
-        bindings=tuple(bindings),
-    )
+    runtime = None
     try:
+        runtime = ControlRuntime.for_channel_surfaces(
+            workspace_id=str(core.DATA_DIR),
+            bindings=tuple(bindings),
+        )
         await runtime.start()
+        loop = asyncio.get_running_loop()
+        for channel in channels:
+            channel.bind_control_runtime(runtime, loop=loop)
     except BaseException:
+        # Composition is all-or-nothing. Every prepared Channel is released and
+        # the partially built runtime is closed, because `control.db` holds an
+        # exclusive lifetime lock: leaving it open would make a retry -- or any
+        # other Backend process -- unable to acquire the control plane at all.
+        if runtime is not None:
+            with suppress(Exception):
+                await runtime.close()
         for channel in channels:
             with suppress(Exception):
                 await channel.stop()
         raise
-
-    loop = asyncio.get_running_loop()
-    for channel in channels:
-        channel.bind_control_runtime(runtime, loop=loop)
     logger.info(
         "Shared ControlRuntime composed for %d Channel Adapter(s)", len(bindings)
     )
     return runtime
+
+
+async def _stop_channels_then_close_runtime(manager, runtime) -> None:
+    """Close the shared runtime only after every provider transport stops."""
+
+    await manager.stop_all()
+    await runtime.close()
 
 
 async def _run_channels(channel_names: list[str], health_port: int = 0) -> None:
@@ -485,14 +499,15 @@ async def _run_channels(channel_names: list[str], health_port: int = 0) -> None:
         await manager.start_all()
         running = manager.running_channels()
         _require_started_channels(channel_names, running)
+        # The health server binds inside this guard on purpose: a port already
+        # in use must tear the process down the same way a failed Channel does,
+        # rather than leaking the exclusive `control.db` lock and every started
+        # Channel's provider connection.
+        if health_port > 0:
+            await manager.start_health_server(port=health_port)
     except BaseException:
-        await manager.stop_all()
-        await control_runtime.close()
+        await _stop_channels_then_close_runtime(manager, control_runtime)
         raise
-
-    # Optional health check server
-    if health_port > 0:
-        await manager.start_health_server(port=health_port)
 
     print(
         f"OmicsClaw bot running with {len(running)} channel(s): "
@@ -511,12 +526,10 @@ async def _run_channels(channel_names: list[str], health_port: int = 0) -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        await manager.stop_all()
         # The runner owns the shared control plane, so it closes it after every
         # Channel has stopped producing Turns -- letting the Delivery Pump drain
         # its in-flight Attempt rather than being recovered as `unknown`.
-        with suppress(Exception):
-            await control_runtime.close()
+        await _stop_channels_then_close_runtime(manager, control_runtime)
         print("OmicsClaw bot stopped.")
 
 

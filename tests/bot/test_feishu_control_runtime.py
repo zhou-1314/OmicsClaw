@@ -106,6 +106,8 @@ async def test_submit_control_inbound_builds_stable_raw_inbound():
     channel = _channel()
     runtime = _RecordingControlRuntime()
     channel._control_runtime = runtime
+    channel._running = True
+    channel.activate_ingress()
 
     result = await channel._submit_control_inbound(
         chat_id="oc_chat_1",
@@ -144,21 +146,34 @@ async def test_submit_control_inbound_builds_stable_raw_inbound():
     assert ports.user_id == "ou_owner"
 
 
-def _drive(channel: FeishuChannel, event) -> None:
+def _drive(channel: FeishuChannel, event, *, activate: bool = True) -> None:
     """Run `_handle_event` with a real background loop, as `start()` would."""
 
+    if activate and not channel.ingress_active:
+        channel._running = True
+        channel.activate_ingress()
     loop = asyncio.new_event_loop()
     import threading
 
     thread = threading.Thread(target=loop.run_forever, daemon=True)
     thread.start()
-    channel._loop = loop
+    channel._control_loop = loop
     try:
         channel._handle_event(event)
     finally:
         loop.call_soon_threadsafe(loop.stop)
         thread.join(timeout=5)
         loop.close()
+
+
+def test_pre_activation_event_creates_no_turn():
+    channel = _channel()
+    runtime = _RecordingControlRuntime()
+    channel._control_runtime = runtime
+
+    _drive(channel, _event(text="too early"), activate=False)
+
+    assert runtime.calls == []
 
 
 def test_owner_text_reaches_control_runtime_and_sends_no_reply():
@@ -370,3 +385,117 @@ def test_control_rejection_does_not_open_a_second_send_path(caplog):
 
     assert len(runtime.calls) == 1
     assert "delivery_backpressure" in caplog.text
+
+
+def test_rejected_message_types_do_not_consume_the_owner_rate_limit():
+    """Rate budget is spent on Turns, not on messages that fail the gates.
+
+    An image, or group chatter that never mentions this Bot, must not be able
+    to exhaust the Owner's hourly budget and starve their real requests.
+    """
+
+    channel = FeishuChannel(
+        FeishuConfig(
+            app_id="cli_app_1",
+            app_secret="secret",
+            allowed_senders={"ou_owner"},
+            bot_open_id="ou_bot",
+            rate_limit_per_hour=1,
+        )
+    )
+    runtime = _RecordingControlRuntime()
+    channel._control_runtime = runtime
+
+    # Neither of these may become a Turn, so neither may spend the one unit.
+    _drive(channel, _event(message_type="image", message_id="om_img"))
+    _drive(
+        channel,
+        _event(chat_type="group", mentions=[_mention("ou_someone_else")],
+               message_id="om_group"),
+    )
+    assert runtime.calls == []
+
+    # The Owner's first real text still gets through.
+    _drive(channel, _event(message_id="om_real"))
+
+    assert len(runtime.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_start_fails_when_the_websocket_listener_dies_immediately():
+    """A Channel that cannot connect must not report a successful start.
+
+    `lark`'s client authenticates inside its blocking `start()`, so bad
+    credentials surface only as the listener thread exiting. Reporting success
+    anyway would let the runner advertise health for a Bot that can never hear
+    the Owner.
+    """
+
+    channel = _channel()
+    channel.feishu_config.ws_start_probe_seconds = 2.0
+    channel._control_runtime = _RecordingControlRuntime()
+    channel._lark_client = object()
+
+    import sys
+    from types import ModuleType, SimpleNamespace as NS
+
+    def _reject_credentials(*_args, **_kwargs):
+        raise RuntimeError("invalid app credentials")
+
+    client_mod = ModuleType("lark_oapi.ws.client")
+    client_mod.loop = None
+    ws_mod = ModuleType("lark_oapi.ws")
+    ws_mod.client = client_mod
+    ws_mod.Client = _reject_credentials
+    fake = ModuleType("lark_oapi")
+    fake.LogLevel = NS(DEBUG=1, INFO=2)
+    fake.ws = ws_mod
+    fake.EventDispatcherHandler = NS(
+        builder=lambda *_a: NS(
+            register_p2_im_message_receive_v1=lambda *_a: NS(build=lambda: object())
+        )
+    )
+    sys.modules["lark_oapi"] = fake
+    sys.modules["lark_oapi.ws"] = ws_mod
+    sys.modules["lark_oapi.ws.client"] = client_mod
+    try:
+        with pytest.raises(RuntimeError, match="stopped during startup"):
+            await channel.start()
+        assert channel._running is False
+    finally:
+        for name in ("lark_oapi", "lark_oapi.ws", "lark_oapi.ws.client"):
+            sys.modules.pop(name, None)
+
+
+@pytest.mark.asyncio
+async def test_stop_shuts_down_the_websocket_client_and_thread():
+    """stop() must prove the listener is no longer dispatching events.
+
+    Returning while the WS thread still holds its socket would let a late event
+    submit a Turn into the shared ControlRuntime the runner is about to close.
+    """
+
+    import threading as _threading
+
+    channel = _channel()
+    channel._control_runtime = _RecordingControlRuntime()
+    release = _threading.Event()
+    stopped: list[str] = []
+
+    class _Client:
+        def stop(self):
+            stopped.append("stop")
+            release.set()
+
+    thread = _threading.Thread(target=release.wait, daemon=True)
+    thread.start()
+    channel._ws_client = _Client()
+    channel._ws_thread = thread
+
+    await channel.stop()
+
+    assert stopped == ["stop"]
+    assert not thread.is_alive()
+    assert channel._ws_client is None
+    assert channel._ws_thread is None
+    assert channel._control_runtime is None

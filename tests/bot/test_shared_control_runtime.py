@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -311,3 +312,75 @@ async def test_channels_adopt_the_shared_runtime_without_composing_their_own(tmp
     feishu._control_runtime = None
     with pytest.raises(RuntimeError, match="shared ControlRuntime"):
         await feishu.start()
+
+
+@pytest.mark.asyncio
+async def test_failed_runtime_start_releases_channels_and_the_control_db(tmp_path):
+    """Composition is all-or-nothing.
+
+    `control.db` takes an exclusive lifetime lock, so a runtime left open after
+    a failed start makes the control plane unacquirable -- by a retry in this
+    process or by any other Backend. The prepared Channels must be released too.
+    """
+
+    from omicsclaw.surfaces.channels import __main__ as runner
+
+    stopped: list[str] = []
+    closed: list[str] = []
+
+    class _Channel:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def prepare_control_binding(self):
+            return SimpleNamespace(adapter=self.name)
+
+        async def stop(self):
+            stopped.append(self.name)
+
+        def bind_control_runtime(self, runtime, *, loop=None):
+            raise AssertionError("no Channel may be bound to a runtime that failed")
+
+    class _Runtime:
+        async def start(self):
+            raise RuntimeError("control.db is owned by another process")
+
+        async def close(self):
+            closed.append("runtime")
+
+    manager = SimpleNamespace(
+        channels={"telegram": _Channel("telegram"), "feishu": _Channel("feishu")}
+    )
+    original = runner.ControlRuntime if hasattr(runner, "ControlRuntime") else None
+    import omicsclaw.control as control_module
+
+    real_for_channel_surfaces = control_module.ControlRuntime.for_channel_surfaces
+    control_module.ControlRuntime.for_channel_surfaces = staticmethod(
+        lambda **_kwargs: _Runtime()
+    )
+    try:
+        with pytest.raises(RuntimeError, match="owned by another process"):
+            await runner._compose_shared_control_runtime(manager)
+    finally:
+        control_module.ControlRuntime.for_channel_surfaces = real_for_channel_surfaces
+        if original is not None:
+            runner.ControlRuntime = original
+
+    assert closed == ["runtime"]
+    assert sorted(stopped) == ["feishu", "telegram"]
+
+
+@pytest.mark.asyncio
+async def test_runner_does_not_close_runtime_under_a_channel_that_failed_to_stop():
+    from omicsclaw.surfaces.channels import __main__ as runner
+
+    class _Manager:
+        async def stop_all(self):
+            raise RuntimeError("sanitized channel shutdown failure")
+
+    runtime = SimpleNamespace(close=AsyncMock())
+
+    with pytest.raises(RuntimeError, match="channel shutdown failure"):
+        await runner._stop_channels_then_close_runtime(_Manager(), runtime)
+
+    runtime.close.assert_not_awaited()

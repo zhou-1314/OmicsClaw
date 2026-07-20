@@ -9,11 +9,13 @@ Uses lark-oapi Python SDK with WebSocket long-connection (no public IP required)
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import re
 import threading
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,6 +38,11 @@ class FeishuConfig(BaseChannelConfig):
     # THIS Bot; without the ID a group @-mention cannot be distinguished from
     # the Owner mentioning another human, so group chats fail closed.
     bot_open_id: str = ""
+    # The lark listener authenticates inside its own thread, so startup failure
+    # can only be observed as the thread dying. These bound how long start()
+    # watches for that and how long stop() waits for the thread to leave.
+    ws_start_probe_seconds: float = 5.0
+    ws_join_seconds: float = 10.0
     thinking_threshold_ms: int = 2500
     max_inbound_image_mb: int = 12
     max_inbound_file_mb: int = 40
@@ -88,8 +95,9 @@ class FeishuChannel(Channel):
         self.feishu_config = config
         self._lark_client = None
         self._ws_client = None
-        self._loop = None
-        self._loop_thread = None
+        self._ws_thread = None
+        self._ws_exit = threading.Event()
+        self._ws_error: BaseException | None = None
         self._bot_start_time = time.time()
         self._seen: dict[str, float] = {}
         self._seen_ttl = 600
@@ -172,6 +180,9 @@ class FeishuChannel(Channel):
         #
         # Fix: create a fresh loop in the thread and PATCH the module-
         # level `loop` variable so lark_oapi uses it.
+        self._ws_exit.clear()
+        self._ws_error = None
+
         def _ws_thread_target():
             import lark_oapi.ws.client as _ws_mod
 
@@ -198,16 +209,39 @@ class FeishuChannel(Channel):
                     ),
                 )
                 self._ws_client.start()
-            except Exception as e:
+            except BaseException as e:  # noqa: BLE001 - reported to start()
+                self._ws_error = e
                 logger.error(f"Feishu WebSocket thread error: {e}", exc_info=True)
             finally:
-                ws_loop.close()
+                self._ws_exit.set()
+                with suppress(Exception):
+                    ws_loop.close()
 
         self._ws_thread = threading.Thread(
             target=_ws_thread_target,
             daemon=True,
+            name="feishu-ws",
         )
         self._ws_thread.start()
+
+        # The lark client authenticates inside `start()`, which then blocks for
+        # the connection's lifetime. Bad credentials therefore surface as the
+        # thread dying immediately, and reporting success anyway would let the
+        # runner advertise health for a Channel that can never hear the Owner.
+        # Thread exit inside the probe window is the only available failure
+        # proof; staying alive past it is treated as connected.
+        exited = await asyncio.get_running_loop().run_in_executor(
+            None,
+            self._ws_exit.wait,
+            max(0.0, float(self.feishu_config.ws_start_probe_seconds)),
+        )
+        if exited:
+            error = self._ws_error
+            self._ws_thread = None
+            raise RuntimeError(
+                "Feishu WebSocket listener stopped during startup; the App "
+                "credentials or long-connection permission are likely invalid"
+            ) from error
 
         self._running = True
         logger.info("Feishu channel initialized")
@@ -223,54 +257,83 @@ class FeishuChannel(Channel):
 
 
     async def stop(self) -> None:
-        self._running = False
+        self.deactivate_ingress()
+        failures: list[str] = []
+        try:
+            await self._shutdown_websocket()
+        except Exception as error:
+            failures.append(type(error).__name__)
+        try:
+            await self._typing_manager.stop_all()
+        except Exception as error:
+            failures.append(type(error).__name__)
+        if failures:
+            raise RuntimeError(
+                "Feishu channel shutdown failed (" + ", ".join(failures) + ")"
+            ) from None
+
         # The shared ControlRuntime is owned and closed by the runner, not by
         # any one Channel: several Channels observe the same control plane.
         self._control_runtime = None
-        if self._loop:
-            self._loop.call_soon_threadsafe(self._loop.stop)
-        await self._typing_manager.stop_all()
+        self._control_loop = None
+        self._running = False
         logger.info("Feishu channel stopped")
 
-    def run_sync(self) -> None:
-        """Synchronous entry point — start the Feishu bot with WebSocket.
+    async def _shutdown_websocket(self) -> None:
+        """Stop the lark listener and prove it is no longer dispatching events.
 
-        This is the primary way to start the Feishu bot (backward-compatible).
-        Calls start() internally which sets up the WebSocket listener in a
-        daemon thread, then blocks until interrupted.
+        Returning from stop() while the WebSocket thread still holds its socket
+        would let a late Feishu event submit a Turn into the shared
+        ControlRuntime the runner is about to close.
         """
-        self.require_authoritative_ingress()
-        from omicsclaw.runtime.agent import state as core
 
-        logger.info(
-            f"Starting OmicsClaw Feishu bot "
-            f"(provider: {core.LLM_PROVIDER_NAME}, model: {core.OMICSCLAW_MODEL})"
+        client, thread = self._ws_client, self._ws_thread
+        self._ws_client = None
+        self._ws_thread = None
+        if client is not None:
+            # lark-oapi has spelled its shutdown hook differently across
+            # releases. A build exposing none of them still stops when the
+            # daemon thread is abandoned at exit, so an absent hook must not
+            # fail stop() -- the bounded join below reports the difference.
+            for name in ("stop", "_disconnect", "disconnect", "close"):
+                hook = getattr(client, name, None)
+                if not callable(hook):
+                    continue
+                with suppress(Exception):
+                    result = hook()
+                    if inspect.isawaitable(result):
+                        # A coroutine belongs to the WS thread's loop, which is
+                        # already gone or busy; discard it rather than awaiting
+                        # it on the runner's loop.
+                        result.close()
+                break
+        if thread is None or not thread.is_alive():
+            return
+        await asyncio.get_running_loop().run_in_executor(
+            None, thread.join, max(0.0, float(self.feishu_config.ws_join_seconds))
         )
-        logger.info(f"OmicsClaw directory: {core.OMICSCLAW_DIR}")
-        logger.info(f"Feishu App ID: {self.feishu_config.app_id}")
-        core.audit(
-            "bot_start",
-            platform="feishu",
-            provider=core.LLM_PROVIDER_NAME,
-            model=core.OMICSCLAW_MODEL,
-            feishu_app_id=self.feishu_config.app_id,
+        if thread.is_alive():
+            logger.warning(
+                "Feishu WebSocket thread did not stop within %.1fs; it is a "
+                "daemon thread and will not block process exit",
+                self.feishu_config.ws_join_seconds,
+            )
+
+    def run_sync(self) -> None:
+        """Refuse the legacy standalone entry point.
+
+        Since the ADR 0060 cutover the Feishu Bot cannot own its control plane:
+        `control.db` admits one owner per process and the ControlRuntime is
+        composed by the runner from every Channel's binding. Starting here would
+        either fail on an unbound runtime or build a second, conflicting control
+        plane, so it refuses and names the supported entry point.
+        """
+
+        raise RuntimeError(
+            "FeishuChannel.run_sync() is retired; start the Bot through the "
+            "runner that owns the shared ControlRuntime: "
+            "python -m omicsclaw.surfaces.channels --channels feishu"
         )
-
-        # start() creates the WebSocket listener in a daemon thread.
-        # Use new_event_loop() to avoid DeprecationWarning on Python 3.10+.
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(self.start())
-
-        print("OmicsClaw Feishu bot is running. Press Ctrl+C to stop.")
-
-        # Block the main thread — the WS listener runs in _ws_thread
-        try:
-            self._ws_thread.join()
-        except KeyboardInterrupt:
-            pass
-        finally:
-            loop.close()
 
     # ── Core send implementation ─────────────────────────────────────
 
@@ -380,7 +443,7 @@ class FeishuChannel(Channel):
         THERE rather than to any Channel-local loop.
         """
 
-        loop = self._control_loop or self._loop
+        loop = self._control_loop
         if loop is None:
             raise RuntimeError("Feishu channel has no control event loop")
         future = asyncio.run_coroutine_threadsafe(coro, loop)
@@ -395,6 +458,9 @@ class FeishuChannel(Channel):
         reply: the terminal reply is committed with the Turn and delivered by the
         persistent Delivery Pump (ADR 0060/0063).
         """
+
+        if not self.ingress_active:
+            return
 
         from omicsclaw.runtime.agent import state as core
 
@@ -433,10 +499,6 @@ class FeishuChannel(Channel):
                     )
                     return
 
-            if not self.check_rate_limit(sender_id):
-                logger.warning("Feishu Owner exceeded the configured rate limit")
-                return
-
             # Gate on the provider message type BEFORE parsing. The legacy
             # parser downloads images and files as a side effect and, for
             # non-text types, synthesizes placeholder text such as "[image]" or
@@ -461,6 +523,14 @@ class FeishuChannel(Channel):
                 text = re.sub(r"@_user_\d+\s*", "", text).strip()
 
             if not text.strip():
+                return
+
+            # Consume rate-limit budget only for a message that is actually
+            # about to become a Turn. Charging it before the type and mention
+            # gates would let images, or group chatter that never mentions this
+            # Bot, exhaust the Owner's budget and starve their real requests.
+            if not self.check_rate_limit(sender_id):
+                logger.warning("Feishu Owner exceeded the configured rate limit")
                 return
 
             logger.info(f"Feishu message: chat_type={chat_type} text={text[:100]}")
@@ -531,6 +601,9 @@ class FeishuChannel(Channel):
         text: str,
     ):
         """Submit one normalized Feishu Turn and await its durable Receipt."""
+
+        if not self.ingress_active:
+            return None
 
         from omicsclaw.control import (
             ControlRuntimePorts,

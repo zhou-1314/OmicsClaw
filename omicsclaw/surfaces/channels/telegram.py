@@ -9,7 +9,6 @@ is a Channel subclass with start/stop/_send_chunk lifecycle.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from dataclasses import dataclass
@@ -203,82 +202,73 @@ class TelegramChannel(Channel):
             raise
 
     async def stop(self) -> None:
-        self._running = False
+        self.deactivate_ingress()
+        failures: list[str] = []
         try:
             await self._typing_manager.stop_all()
         except Exception as error:
-            logger.warning("Telegram typing shutdown failed (%s)", type(error).__name__)
+            error_type = type(error).__name__
+            failures.append(error_type)
+            logger.warning("Telegram typing shutdown failed (%s)", error_type)
         if self._updater and self._updater.running:
             try:
                 await self._updater.stop()
             except Exception as error:
+                error_type = type(error).__name__
+                failures.append(error_type)
                 logger.warning(
-                    "Telegram polling shutdown failed (%s)", type(error).__name__
+                    "Telegram polling shutdown failed (%s)", error_type
                 )
-        # Detach only. The ControlRuntime is shared with every other cut-over
-        # Channel and owned by the runner; closing it here would tear down
-        # their control plane because this Channel's polling failed.
-        self._control_runtime = None
         if self._app:
             if self._app.running:
                 try:
                     await self._app.stop()
                 except Exception as error:
+                    error_type = type(error).__name__
+                    failures.append(error_type)
                     logger.warning(
                         "Telegram Application stop failed (%s)",
-                        type(error).__name__,
+                        error_type,
                     )
             try:
                 await self._app.shutdown()
             except Exception as error:
+                error_type = type(error).__name__
+                failures.append(error_type)
                 logger.warning(
                     "Telegram Application shutdown failed (%s)",
-                    type(error).__name__,
+                    error_type,
                 )
-            logger.info("Telegram channel stopped")
+        if failures:
+            raise RuntimeError(
+                "Telegram channel shutdown failed (" + ", ".join(failures) + ")"
+            ) from None
+
+        # Detach only after every provider callback source has stopped. The
+        # runner owns the shared runtime and closes it after all Channels stop.
+        self._control_runtime = None
+        self._control_loop = None
         self._updater = None
         self._app = None
+        self._running = False
+        logger.info("Telegram channel stopped")
 
 
     def run_polling(self) -> None:
-        """Synchronous entry point — run the Telegram bot with polling.
+        """Refuse the legacy standalone entry point.
 
-        This replaces the old ``app.run_polling()`` and is the primary
-        way to start the Telegram bot (backward-compatible).
-        Calls start() internally, then blocks until interrupted.
+        Since the ADR 0060 cutover the Telegram Bot cannot own its control
+        plane: `control.db` admits one owner per process and the ControlRuntime
+        is composed by the runner from every Channel's binding. Starting here
+        would either fail on an unbound runtime or build a second, conflicting
+        control plane, so it refuses and names the supported entry point.
         """
-        from omicsclaw.runtime.agent import state as core
 
-        logger.info(
-            f"Starting OmicsClaw Telegram bot "
-            f"(provider: {core.LLM_PROVIDER_NAME}, model: {core.OMICSCLAW_MODEL})"
+        raise RuntimeError(
+            "TelegramChannel.run_polling() is retired; start the Bot through "
+            "the runner that owns the shared ControlRuntime: "
+            "python -m omicsclaw.surfaces.channels --channels telegram"
         )
-        logger.info(f"OmicsClaw directory: {core.OMICSCLAW_DIR}")
-        if self.tg_config.admin_chat_id:
-            logger.info(f"Admin chat ID: {self.tg_config.admin_chat_id}")
-        core.audit(
-            "bot_start",
-            platform="telegram",
-            provider=core.LLM_PROVIDER_NAME,
-            model=core.OMICSCLAW_MODEL,
-            admin_chat=self.tg_config.admin_chat_id,
-        )
-
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(self.start())
-            print("OmicsClaw Telegram bot is running. Press Ctrl+C to stop.")
-            try:
-                loop.run_forever()
-            except KeyboardInterrupt:
-                pass
-        finally:
-            try:
-                loop.run_until_complete(self.stop())
-            finally:
-                loop.close()
-                asyncio.set_event_loop(None)
 
     # ── Core send implementation ─────────────────────────────────────
 
@@ -423,6 +413,9 @@ class TelegramChannel(Channel):
         attachment_source: object | None = None,
     ):
         """Normalize one Telegram message and await its durable Turn Receipt."""
+
+        if not self.ingress_active:
+            return None
 
         from omicsclaw.control import (
             ControlRuntimePorts,

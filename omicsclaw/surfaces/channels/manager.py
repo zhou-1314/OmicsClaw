@@ -107,7 +107,7 @@ class ChannelManager:
     # ── Lifecycle ───────────────────────────────────────────────────
 
     async def start_all(self) -> None:
-        """Start all registered channels concurrently."""
+        """Start every transport, then open ingress as one process-local unit."""
         self._start_time = time.monotonic()
         self._running = True
 
@@ -126,6 +126,16 @@ class ChannelManager:
             raise RuntimeError(
                 "Channel startup failed for: " + ", ".join(failed_names)
             ) from None
+
+        not_running = [name for name, channel in self._channels.items() if not channel._running]
+        if not_running:
+            await self.stop_all()
+            raise RuntimeError(
+                "Channel startup failed for: " + ", ".join(not_running)
+            ) from None
+
+        for channel in self._channels.values():
+            channel.activate_ingress()
 
         logger.info(
             f"ChannelManager started ({len(self.running_channels())}"
@@ -161,6 +171,7 @@ class ChannelManager:
         if channel._running:
             return  # already running
         await self._start_one(name, channel)
+        channel.activate_ingress()
 
     async def stop_channel(self, name: str) -> None:
         """Stop and unregister a single channel.
@@ -175,27 +186,45 @@ class ChannelManager:
         self.unregister(name)
 
     async def stop_all(self) -> None:
-        """Stop all channels concurrently."""
+        """Close ingress, stop all transports, and aggregate sanitized failures."""
         self._running = False
+
+        for channel in self._channels.values():
+            channel.deactivate_ingress()
 
         tasks = []
         for name, channel in self._channels.items():
             tasks.append(self._stop_one(name, channel))
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        failed = [
+            f"{name} ({self._health[name].last_error or 'Exception'})"
+            for (name, _channel), result in zip(self._channels.items(), results)
+            if isinstance(result, BaseException)
+        ]
+        if failed:
+            raise RuntimeError(
+                "Channel shutdown failed for: " + ", ".join(failed)
+            ) from None
 
         logger.info("ChannelManager stopped")
 
     async def _stop_one(self, name: str, channel: Channel) -> None:
         """Stop a single channel with error handling."""
+        channel.deactivate_ingress()
         try:
             await channel.stop()
             logger.info(f"Channel '{name}' stopped")
         except Exception as error:
+            error_type = type(error).__name__
+            self._health[name].record_failure(error_type)
             logger.error(
                 "Error stopping channel '%s' (%s)",
                 name,
-                type(error).__name__,
+                error_type,
             )
+            raise RuntimeError(
+                f"Channel '{name}' failed to stop ({error_type})"
+            ) from None
 
     async def run(self) -> None:
         """Run until stopped or interrupted.
