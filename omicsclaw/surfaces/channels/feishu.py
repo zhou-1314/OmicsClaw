@@ -221,7 +221,12 @@ class FeishuChannel(Channel):
                     )
 
                 async def _connect_and_signal():
+                    if self._ws_stopping.is_set():
+                        raise RuntimeError("Feishu WebSocket startup was stopped")
                     await connect()
+                    if self._ws_stopping.is_set():
+                        await disconnect()
+                        raise RuntimeError("Feishu WebSocket startup was stopped")
                     if getattr(client, "_conn", None) is None:
                         raise RuntimeError(
                             "Feishu WebSocket connection was not established"
@@ -257,10 +262,14 @@ class FeishuChannel(Channel):
         )
         self._ws_thread.start()
 
-        outcome = await asyncio.to_thread(
-            self._wait_for_websocket_start,
-            max(0.0, float(self.feishu_config.ws_start_probe_seconds)),
-        )
+        try:
+            outcome = await asyncio.to_thread(
+                self._wait_for_websocket_start,
+                max(0.0, float(self.feishu_config.ws_start_probe_seconds)),
+            )
+        except asyncio.CancelledError:
+            await self._rollback_cancelled_start()
+            raise
         if outcome != "ready":
             with suppress(Exception):
                 await self._shutdown_websocket()
@@ -285,6 +294,25 @@ class FeishuChannel(Channel):
             if remaining <= 0:
                 return "timeout"
             self._ws_ready.wait(min(0.01, remaining))
+
+    async def _rollback_cancelled_start(self) -> None:
+        """Finish bounded WS rollback despite repeated caller cancellation."""
+
+        shutdown_task = asyncio.create_task(self._shutdown_websocket())
+        while not shutdown_task.done():
+            try:
+                await asyncio.shield(shutdown_task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        try:
+            shutdown_task.result()
+        except Exception as error:
+            raise RuntimeError(
+                "Feishu WebSocket shutdown failed during startup cancellation "
+                f"({type(error).__name__})"
+            ) from None
 
     def _owner_subjects(self) -> frozenset[str]:
         """Configured Feishu Owner open_id values."""

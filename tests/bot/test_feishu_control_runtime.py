@@ -576,6 +576,187 @@ async def test_start_timeout_rolls_back_a_delayed_connection(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_start_timeout_never_signals_ready_after_stopping_connect(
+    monkeypatch,
+):
+    lifecycle_lock = asyncio.Lock()
+    connect_entered = threading.Event()
+    release_connect = threading.Event()
+    connect_returned = threading.Event()
+    disconnect_entered = threading.Event()
+    disconnect_completed = threading.Event()
+
+    async def _connect(client):
+        async with lifecycle_lock:
+            connect_entered.set()
+            while not release_connect.is_set():
+                await asyncio.sleep(0.005)
+            client._conn = object()
+            connect_returned.set()
+
+    async def _disconnect(_client):
+        disconnect_entered.set()
+        async with lifecycle_lock:
+            disconnect_completed.set()
+
+    client_mod, ws_mod = _install_fake_lark(monkeypatch)
+    client_type = _sdk_client_type(
+        client_mod,
+        connect=_connect,
+        disconnect=_disconnect,
+    )
+    ws_mod.Client = client_type
+    channel = _channel()
+    channel.feishu_config.ws_start_probe_seconds = 0.02
+    channel.feishu_config.ws_join_seconds = 0.02
+    channel._control_runtime = _RecordingControlRuntime()
+    channel._lark_client = object()
+
+    try:
+        with pytest.raises(RuntimeError, match="failed to become ready"):
+            await channel.start()
+
+        client = client_type.instances[0]
+        thread = channel._ws_thread
+        assert connect_entered.is_set()
+        assert disconnect_entered.is_set()
+        assert channel._ws_stopping.is_set()
+        assert channel._ws_ready.is_set() is False
+        assert channel._ws_client is client
+        assert thread is not None
+        assert thread.is_alive()
+
+        release_connect.set()
+        assert await asyncio.to_thread(connect_returned.wait, 1.0)
+        assert await asyncio.to_thread(disconnect_completed.wait, 1.0)
+        assert await asyncio.to_thread(channel._ws_exit.wait, 1.0)
+
+        assert channel._ws_ready.is_set() is False
+        assert client._conn is None
+        assert channel._ws_client is client
+        assert channel._ws_thread is thread
+
+        await channel.stop()
+        assert channel._ws_client is None
+        assert channel._ws_thread is None
+        assert channel._ws_loop is None
+    finally:
+        release_connect.set()
+        for client in client_type.instances:
+            client.force_exit.set()
+        thread = channel._ws_thread
+        if thread is not None:
+            thread.join(timeout=2.0)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_start_rolls_back_before_propagating_cancellation(
+    monkeypatch,
+):
+    lifecycle_lock = asyncio.Lock()
+    connect_entered = threading.Event()
+    release_connect = threading.Event()
+    disconnect_entered = threading.Event()
+
+    async def _connect(client):
+        async with lifecycle_lock:
+            connect_entered.set()
+            while not release_connect.is_set():
+                await asyncio.sleep(0.005)
+            client._conn = object()
+
+    async def _disconnect(_client):
+        disconnect_entered.set()
+        release_connect.set()
+        async with lifecycle_lock:
+            return None
+
+    client_mod, ws_mod = _install_fake_lark(monkeypatch)
+    client_type = _sdk_client_type(
+        client_mod,
+        connect=_connect,
+        disconnect=_disconnect,
+    )
+    ws_mod.Client = client_type
+    channel = _channel()
+    channel.feishu_config.ws_start_probe_seconds = 1.0
+    channel.feishu_config.ws_join_seconds = 1.0
+    channel._control_runtime = _RecordingControlRuntime()
+    channel._lark_client = object()
+    start_task = asyncio.create_task(channel.start())
+
+    try:
+        assert await asyncio.to_thread(connect_entered.wait, 1.0)
+        start_task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(start_task, timeout=2.0)
+
+        assert disconnect_entered.is_set()
+        assert channel._ws_exit.is_set()
+        assert channel._ws_ready.is_set() is False
+        assert channel._ws_client is None
+        assert channel._ws_thread is None
+        assert channel._ws_loop is None
+        assert channel._running is False
+    finally:
+        release_connect.set()
+        for client in client_type.instances:
+            client.force_exit.set()
+        thread = channel._ws_thread
+        if thread is not None:
+            thread.join(timeout=2.0)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_start_retains_ownership_when_rollback_cannot_run(
+    monkeypatch,
+):
+    connect_entered = threading.Event()
+    release_connect = threading.Event()
+
+    async def _connect(client):
+        connect_entered.set()
+        release_connect.wait(2.0)
+        client._conn = object()
+
+    client_mod, ws_mod = _install_fake_lark(monkeypatch)
+    client_type = _sdk_client_type(client_mod, connect=_connect)
+    ws_mod.Client = client_type
+    channel = _channel()
+    channel.feishu_config.ws_start_probe_seconds = 1.0
+    channel.feishu_config.ws_join_seconds = 0.02
+    runtime = _RecordingControlRuntime()
+    channel._control_runtime = runtime
+    channel._lark_client = object()
+    start_task = asyncio.create_task(channel.start())
+
+    try:
+        assert await asyncio.to_thread(connect_entered.wait, 1.0)
+        start_task.cancel()
+
+        with pytest.raises(RuntimeError, match="shutdown failed"):
+            await asyncio.wait_for(start_task, timeout=1.0)
+
+        client = client_type.instances[0]
+        thread = channel._ws_thread
+        assert channel._ws_stopping.is_set()
+        assert channel._ws_client is client
+        assert thread is not None
+        assert thread.is_alive()
+        assert channel._ws_loop is not None
+        assert channel._control_runtime is runtime
+        assert channel._running is False
+    finally:
+        release_connect.set()
+        for client in client_type.instances:
+            client.force_exit.set()
+        thread = channel._ws_thread
+        if thread is not None:
+            thread.join(timeout=2.0)
+
+
+@pytest.mark.asyncio
 async def test_start_rolls_back_when_connect_fails(monkeypatch):
     async def _connect(_client):
         await asyncio.sleep(0.01)
