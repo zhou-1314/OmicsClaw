@@ -201,6 +201,7 @@ _FILE_TREE_IGNORED_DIRS: frozenset[str] = frozenset(
 _core = None  # omicsclaw.runtime.agent.state module
 _memory_client = None  # MemoryClient instance (optional)
 _desktop_control_runtime: ControlRuntime | None = None
+_desktop_control_runtime_publication_lock = threading.Lock()
 _desktop_run_runtime: RunRuntime | None = None
 _desktop_multipart_capacity = DesktopMultipartCapacity(max_active=2)
 
@@ -919,18 +920,16 @@ async def _desktop_runtime_lifespan(app: FastAPI):
             f"desktop workspace directory does not exist: {desktop_workspace_path}"
         )
     desktop_workspace = str(desktop_workspace_path)
-    _desktop_control_runtime = ControlRuntime.for_local_surface(
+    control_runtime = ControlRuntime.for_local_surface(
         workspace_id=desktop_workspace,
         surface="desktop",
         installation_id="local",
         profile_id="owner",
         attachment_input_enabled=True,
     )
-    control_runtime = _desktop_control_runtime
     try:
         await control_runtime.start()
     except BaseException:
-        _desktop_control_runtime = None
         try:
             await control_runtime.close()
         except BaseException as close_error:
@@ -939,6 +938,19 @@ async def _desktop_runtime_lifespan(app: FastAPI):
                 type(close_error).__name__,
             )
         raise
+    with _desktop_control_runtime_publication_lock:
+        published = _desktop_control_runtime is None
+        if published:
+            _desktop_control_runtime = control_runtime
+    if not published:
+        try:
+            await control_runtime.close()
+        except BaseException as close_error:
+            logger.warning(
+                "Unpublished ControlRuntime cleanup failed (%s)",
+                type(close_error).__name__,
+            )
+        raise RuntimeError("Desktop ControlRuntime is already started")
     try:
         from omicsclaw.autoagent.api import bind_governed_autoagent_repository
 
@@ -956,7 +968,7 @@ async def _desktop_runtime_lifespan(app: FastAPI):
         raise
     logger.info(
         "Desktop ControlRuntime initialised: state_root=%s",
-        _desktop_control_runtime.repository.state_root,
+        control_runtime.repository.state_root,
     )
     if reconciled_autoagent.interrupted_session_ids:
         logger.warning(
@@ -979,7 +991,7 @@ async def _desktop_runtime_lifespan(app: FastAPI):
     )
     try:
         _desktop_run_runtime = RunRuntime.for_local_surface(
-            repository=_desktop_control_runtime.repository,
+            repository=control_runtime.repository,
             output_root=run_output_root,
             resource_budget=detect_execution_resource_budget(run_output_root),
             max_buffered_runs=_positive_environment_integer(

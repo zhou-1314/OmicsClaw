@@ -33,6 +33,7 @@ DELIVERY_TEXT_TRUNCATION_NOTICE = (
     "\n\n[OmicsClaw: reply truncated — the full response exceeded this channel's "
     "delivery limit.]"
 )
+_DELIVERY_TEXT_COMPACT_TRUNCATION_NOTICE = "..."
 _EMPTY_TERMINAL_TEXT = MappingProxyType(
     {
         "succeeded": "Turn completed without a text response.",
@@ -161,29 +162,31 @@ def freeze_terminal_text_delivery(
         # reply and appends a deterministic truncation notice.  The full reply
         # stays in the immutable Transcript entry; a future media slice may
         # additionally attach it as a durable artifact reference.
-        notice_end = min(
-            len(DELIVERY_TEXT_TRUNCATION_NOTICE),
-            max_chunk_codepoints,
+        compact_notice = max_chunk_codepoints < 3
+        notice = (
+            _DELIVERY_TEXT_COMPACT_TRUNCATION_NOTICE
+            if compact_notice
+            else DELIVERY_TEXT_TRUNCATION_NOTICE
         )
+        notice_end = min(len(notice), max_chunk_codepoints)
         prefix_budget = max_chunk_codepoints - notice_end
         prefix_len = min(len(text), prefix_budget)
-        fallback_text = (
-            text[:prefix_len] + DELIVERY_TEXT_TRUNCATION_NOTICE[:notice_end]
-        )
+        fallback_text = text[:prefix_len] + notice[:notice_end]
+        content_range: dict[str, object] = {
+            "unit": "unicode_codepoint",
+            "start": 0,
+            "end": prefix_len,
+            "truncated": True,
+            "notice_end": notice_end,
+        }
+        if compact_notice:
+            content_range["notice_kind"] = "compact"
         fallback_item = DeliveryItemPlan(
             item_kind="text",
             content_store="transcript",
             content_ref=transcript_ref.entry_id,
             content_sha256=_text_sha256(fallback_text),
-            content_range=MappingProxyType(
-                {
-                    "unit": "unicode_codepoint",
-                    "start": 0,
-                    "end": prefix_len,
-                    "truncated": True,
-                    "notice_end": notice_end,
-                }
-            ),
+            content_range=MappingProxyType(content_range),
             render_version=DELIVERY_TEXT_RENDER_VERSION,
         )
         return DeliveryPlan(terminal_kind=terminal_kind, items=(fallback_item,))
@@ -241,6 +244,7 @@ def resolve_delivery_text(
         _required_range_keys,
         _required_range_keys | {"truncated"},
         _required_range_keys | {"truncated", "notice_end"},
+        _required_range_keys | {"truncated", "notice_end", "notice_kind"},
     ):
         raise DeliveryContentIntegrityError(
             "Delivery text Item has an invalid codepoint range"
@@ -251,6 +255,12 @@ def resolve_delivery_text(
     truncated = content_range.get("truncated", False)
     has_notice_end = "notice_end" in content_range
     notice_end = content_range.get("notice_end")
+    notice_kind = content_range.get("notice_kind")
+    notice = (
+        _DELIVERY_TEXT_COMPACT_TRUNCATION_NOTICE
+        if notice_kind == "compact"
+        else DELIVERY_TEXT_TRUNCATION_NOTICE
+    )
     if (
         unit != "unicode_codepoint"
         or any(
@@ -258,14 +268,15 @@ def resolve_delivery_text(
             for value in (start, end)
         )
         or not isinstance(truncated, bool)
+        or (notice_kind is not None and notice_kind != "compact")
         or (
             has_notice_end
             and (
                 not truncated
                 or isinstance(notice_end, bool)
                 or not isinstance(notice_end, int)
-                or notice_end < 0
-                or notice_end > len(DELIVERY_TEXT_TRUNCATION_NOTICE)
+                or notice_end < 1
+                or notice_end > len(notice)
             )
         )
     ):
@@ -305,9 +316,7 @@ def resolve_delivery_text(
         )
     resolved = text[start:end]
     if truncated:
-        resolved = resolved + DELIVERY_TEXT_TRUNCATION_NOTICE[
-            : notice_end if has_notice_end else len(DELIVERY_TEXT_TRUNCATION_NOTICE)
-        ]
+        resolved = resolved + notice[: notice_end if has_notice_end else len(notice)]
     if (
         not isinstance(expected_digest, str)
         or _text_sha256(resolved) != expected_digest

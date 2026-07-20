@@ -200,6 +200,60 @@ async def test_health_server_duplicate_start_fails_closed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_health_stop_waits_for_inflight_start_and_releases_listener(
+    monkeypatch,
+) -> None:
+    from omicsclaw.surfaces.channels import manager as manager_module
+
+    real_start_server = asyncio.start_server
+    listener_created = asyncio.Event()
+    release_start = asyncio.Event()
+    listener_port: int | None = None
+
+    async def paused_start_server(*args, **kwargs):
+        nonlocal listener_port
+        health_server = await real_start_server(*args, **kwargs)
+        assert health_server.sockets
+        listener_port = health_server.sockets[0].getsockname()[1]
+        listener_created.set()
+        await release_start.wait()
+        return health_server
+
+    monkeypatch.setattr(manager_module.asyncio, "start_server", paused_start_server)
+    manager = manager_module.ChannelManager()
+    start_task = asyncio.create_task(manager.start_health_server(port=0))
+    stop_task: asyncio.Task[None] | None = None
+    try:
+        await listener_created.wait()
+        stop_task = asyncio.create_task(manager.stop_all())
+        await asyncio.sleep(0)
+        release_start.set()
+        await start_task
+        await stop_task
+
+        assert manager._health_server is None
+        assert listener_port is not None
+        rebound = await real_start_server(
+            lambda _reader, _writer: None,
+            "0.0.0.0",
+            listener_port,
+        )
+        rebound.close()
+        await rebound.wait_closed()
+    finally:
+        release_start.set()
+        tasks = [start_task]
+        if stop_task is not None:
+            tasks.append(stop_task)
+        await asyncio.gather(*tasks, return_exceptions=True)
+        leaked_server = manager._health_server
+        if leaked_server is not None:
+            leaked_server.close()
+            await leaked_server.wait_closed()
+            manager._health_server = None
+
+
+@pytest.mark.asyncio
 async def test_health_server_closes_when_channel_stop_fails_and_port_rebinds() -> None:
     from omicsclaw.surfaces.channels.manager import ChannelManager
 

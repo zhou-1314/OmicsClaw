@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -158,6 +159,103 @@ async def test_lifespan_preserves_control_start_failure_when_direct_close_fails(
 
     assert close_calls == 1
     assert server._desktop_control_runtime is None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_control_start_failure_cannot_orphan_published_runtime(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    both_started = asyncio.Event()
+    fail_second = asyncio.Event()
+    first_bound = asyncio.Event()
+    release_first = asyncio.Event()
+    started: set[str] = set()
+
+    class CandidateRuntime:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.workspace_id = str(workspace)
+            self.repository = SimpleNamespace(state_root=tmp_path / name)
+            self.close_calls = 0
+
+        async def start(self) -> None:
+            started.add(self.name)
+            if len(started) == 2:
+                both_started.set()
+            await both_started.wait()
+            if self.name == "second":
+                await fail_second.wait()
+                raise RuntimeError("second-control-start-failure")
+
+        async def close(self) -> None:
+            self.close_calls += 1
+
+    first = CandidateRuntime("first")
+    second = CandidateRuntime("second")
+    candidates = iter((first, second))
+
+    class ControlFactory:
+        @staticmethod
+        def for_local_surface(**_kwargs):
+            return next(candidates)
+
+    async def block_first_binding(repository):
+        assert repository is first.repository
+        first_bound.set()
+        await release_first.wait()
+        raise RuntimeError("finish-first-lifespan")
+
+    async def shutdown_binding(_repository):
+        return None
+
+    import omicsclaw.autoagent.api as autoagent_api
+    import omicsclaw.runtime.agent.state as core
+
+    monkeypatch.setenv("OMICSCLAW_WORKSPACE", str(workspace))
+    monkeypatch.setattr(core, "init", lambda **_kwargs: None)
+    monkeypatch.setattr(core, "LLM_PROVIDER_NAME", "test", raising=False)
+    monkeypatch.setattr(core, "OMICSCLAW_MODEL", "test", raising=False)
+    monkeypatch.setattr(server, "ControlRuntime", ControlFactory)
+    monkeypatch.setattr(server, "_desktop_control_runtime", None, raising=False)
+    monkeypatch.setattr(server, "_desktop_run_runtime", None, raising=False)
+    monkeypatch.setattr(server, "_memory_client", None, raising=False)
+    monkeypatch.setattr(server, "_NOTEBOOK_AVAILABLE", False)
+    monkeypatch.setattr(
+        autoagent_api,
+        "bind_governed_autoagent_repository",
+        block_first_binding,
+    )
+    monkeypatch.setattr(
+        autoagent_api,
+        "shutdown_autoagent_repository_binding",
+        shutdown_binding,
+    )
+
+    first_context = server._desktop_runtime_lifespan(server.app)
+    second_context = server._desktop_runtime_lifespan(server.app)
+    first_task = asyncio.create_task(first_context.__aenter__())
+    second_task = asyncio.create_task(second_context.__aenter__())
+    try:
+        await both_started.wait()
+        await first_bound.wait()
+        fail_second.set()
+        with pytest.raises(RuntimeError, match="second-control-start-failure"):
+            await second_task
+
+        assert server._desktop_control_runtime is first
+        assert first.close_calls == 0
+        assert second.close_calls == 1
+    finally:
+        fail_second.set()
+        release_first.set()
+        await asyncio.gather(first_task, second_task, return_exceptions=True)
+        if first.close_calls == 0:
+            await first.close()
+
+    assert first.close_calls == 1
 
 
 @pytest.mark.asyncio

@@ -268,6 +268,49 @@ def test_truncated_fallback_respects_tiny_codepoint_bound(tmp_path):
         transcript.close()
 
 
+@pytest.mark.parametrize(("max_codepoints", "expected"), [(1, "."), (2, "..")])
+def test_truncated_fallback_uses_non_whitespace_compact_notice(
+    tmp_path,
+    max_codepoints,
+    expected,
+):
+    transcript = CanonicalTranscript(tmp_path)
+    try:
+        candidate_ref = transcript.bind_turn("conversation-1", "turn-1").stage_terminal(
+            "0123456789", terminal_kind="normal"
+        )
+        ref = TurnTranscriptRef(candidate_ref.entry_id, candidate_ref.content_sha256)
+        plan = freeze_terminal_text_delivery(
+            transcript,
+            ref,
+            "succeeded",
+            max_chunk_codepoints=max_codepoints,
+            max_items=1,
+        )
+        transcript.promote_terminal(
+            ref.entry_id,
+            ref.content_sha256,
+            expected_conversation_id="conversation-1",
+            expected_turn_id="turn-1",
+        )
+
+        item = plan.items[0]
+        assert dict(item.content_range or {}) == {
+            "unit": "unicode_codepoint",
+            "start": 0,
+            "end": 0,
+            "truncated": True,
+            "notice_end": max_codepoints,
+            "notice_kind": "compact",
+        }
+        resolved = resolve_delivery_text(transcript, _candidate_from_plan(item))
+        assert resolved == expected
+        assert len(resolved) == max_codepoints
+        assert not resolved.isspace()
+    finally:
+        transcript.close()
+
+
 def test_resolve_delivery_text_preserves_legacy_full_truncation_notice(tmp_path):
     transcript = CanonicalTranscript(tmp_path)
     try:
@@ -306,7 +349,7 @@ def test_resolve_delivery_text_preserves_legacy_full_truncation_notice(tmp_path)
 
 @pytest.mark.parametrize(
     "notice_end",
-    [True, None, -1, len(DELIVERY_TEXT_TRUNCATION_NOTICE) + 1],
+    [True, None, -1, 0, len(DELIVERY_TEXT_TRUNCATION_NOTICE) + 1],
 )
 def test_resolve_delivery_text_rejects_invalid_frozen_notice_end(
     tmp_path,
