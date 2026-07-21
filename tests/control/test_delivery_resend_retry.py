@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -184,6 +185,12 @@ def _write_historical_delivery(
                 for ordinal in range(item_count)
             ),
         )
+    # ControlStateRepository requires an owner-private (0600) control.db and
+    # fails closed on a pre-seeded file that is not. sqlite3 creates the file
+    # under the process umask (0644/0664 for the common 0022/0002 umasks), so
+    # match the repository's own hardening here; without it these historical-db
+    # tests only pass on a 0077-umask host.
+    os.chmod(database_path, 0o600)
 
 
 def _canonical_reply_target(
