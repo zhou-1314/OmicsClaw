@@ -26,7 +26,6 @@ from omicsclaw.runtime.consensus.team import (
     InsufficientSurvivorsError,
     MemberRunResult,
     TeamRunResult,
-    _compute_max_parallel,
     run_team,
 )
 
@@ -115,18 +114,10 @@ def test_member_to_extra_args_skips_empty_value_for_flag() -> None:
 # read_intrinsic_quality() helper was removed when the spatial / sc readers
 # absorbed the JSON-vs-CSV difference.
 
-# ----------------------------- concurrency budget -------------------------- #
-
-def test_compute_max_parallel_respects_ceiling() -> None:
-    assert _compute_max_parallel(10) <= 4
-
-
-def test_compute_max_parallel_respects_n_members() -> None:
-    assert _compute_max_parallel(2) == 2
-
-
-def test_compute_max_parallel_override_caps_at_n() -> None:
-    assert _compute_max_parallel(3, override=10) == 3
+# Concurrency is no longer a fan-out-local cpu-count cap: capacity is gated by
+# the process-global Execution Resource Scheduler (ADR 0061 D2) and the local
+# fairness window is resolved by ``fan_out._resolve_parallel_window``. Those are
+# covered where the primitive lives — see tests/runtime/workflow/test_fan_out.py.
 
 
 # ----------------------------- run_team tests ------------------------------ #

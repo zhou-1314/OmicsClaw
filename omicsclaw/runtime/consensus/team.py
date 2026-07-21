@@ -20,12 +20,10 @@ from typing import Any, Sequence
 
 from omicsclaw.runtime.workflow.fan_out import (  # noqa: F401
     DEFAULT_TIMEOUT_SECONDS,
-    MAX_PARALLEL_CEILING,
     FanOutResult as TeamRunResult,
     InsufficientSurvivorsError,
     StepRunResult as MemberRunResult,
     WorkflowStep,
-    _compute_max_parallel,  # re-exported: test_team_runtime imports it directly
     fan_out,
 )
 
@@ -54,7 +52,6 @@ async def run_team(
 
 __all__ = [
     "DEFAULT_TIMEOUT_SECONDS",
-    "MAX_PARALLEL_CEILING",
     "MIN_SURVIVING_MEMBERS",
     "InsufficientSurvivorsError",
     "MemberRunResult",
