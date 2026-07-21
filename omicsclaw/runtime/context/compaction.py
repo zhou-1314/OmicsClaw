@@ -70,6 +70,8 @@ def is_compaction_summary_message(message: dict[str, Any]) -> bool:
 # cold/re-warm/miss latency, so the working prompt is capped ~85k tokens below a
 # large model's window. See engine.resolve_max_prompt_tokens.
 DEFAULT_MAX_PROMPT_TOKENS = 85_000
+_ATTACHMENT_MARKER_PREFIX = "[[OMICSCLAW_ATTACHMENT_V1:"
+_ATTACHMENT_SUMMARY_PLACEHOLDER = "[attachment]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +190,8 @@ def _flatten_message_content(content: Any) -> str:
         for block in content:
             if isinstance(block, dict) and block.get("type") == "text":
                 text = str(block.get("text", "") or "").strip()
+                if text.startswith(_ATTACHMENT_MARKER_PREFIX):
+                    text = _ATTACHMENT_SUMMARY_PLACEHOLDER
                 if text:
                     parts.append(text)
         return "\n".join(parts).strip()

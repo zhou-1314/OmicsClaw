@@ -18,6 +18,7 @@ from omicsclaw.attachments import (
     AttachmentReferenceV1,
     AttachmentStore,
     InboundAttachmentSource,
+    references_sha256,
 )
 
 from .models import (
@@ -293,41 +294,43 @@ class IngressNormalizer:
 
         ADR 0059 requires a duplicate to observe the original Records, so the
         control-plane batch commitment — not the Store's answer alone — decides
-        what an empty result means.  A Turn with no commitment (it never carried
-        attachments) and a Backend with no Attachment Store both legitimately
-        read empty.  When the control plane committed to N attachments, the only
-        acceptable answers are exactly those N accepted References or a
-        recognised non-acceptance; anything else is an integrity incident rather
-        than a silent "text Turn with no attachments".
+        what an empty result means. A Turn with no commitment legitimately reads
+        empty. When the control plane committed to N attachments, the only
+        acceptable answer is exactly those N accepted References; anything else
+        is an integrity incident rather than a silent text Turn with no attachments.
         """
 
-        store = self._attachment_store
-        if store is None or not turn_id or not conversation_id:
+        if not turn_id or not conversation_id:
             return ()
+        commitment = self._repository.get_turn_attachment_commitment(turn_id)
+        if commitment is None:
+            return ()
+        store = self._attachment_store
+        if store is None:
+            raise ControlIntegrityError(
+                "accepted Attachment References are unavailable for this Turn"
+            )
+        if (
+            commitment.store_id != store.store_id
+            or commitment.turn_id != turn_id
+            or commitment.conversation_id != conversation_id
+        ):
+            raise ControlIntegrityError(
+                "Attachment commitment does not match its Turn or Store"
+            )
         try:
             references = store.get_turn_references(turn_id, conversation_id)
         except AttachmentIntegrityError as exc:
             raise ControlIntegrityError(
                 "accepted Attachment References are unavailable for this Turn"
             ) from exc
-        commitment = self._repository.get_turn_attachment_commitment(turn_id)
-        if commitment is None:
-            return references
-        if references:
-            if len(references) != commitment.record_count:
-                raise ControlIntegrityError(
-                    "committed Attachment References are incomplete for this Turn"
-                )
-            return references
-        # The control plane committed to >=1 attachment yet the Store returns
-        # none.  A Turn that actually ran with its attachments (succeeded) must
-        # still have them, so an empty answer there is lost committed content.
-        # Non-succeeded outcomes — a synchronous finalize failure in particular
-        # — legitimately never produced accepted Records.
-        receipt = self._repository.get_turn(turn_id)
-        if receipt is not None and receipt.status == "succeeded":
+        if (
+            len(references) != commitment.record_count
+            or references_sha256(references) != commitment.records_sha256
+        ):
             raise ControlIntegrityError(
-                "accepted Attachment References are unavailable for this Turn"
+                "accepted Attachment References do not match the control-plane "
+                "commitment"
             )
         return references
 
@@ -537,11 +540,13 @@ class IngressNormalizer:
                             "Attachment failure and terminal compensation both failed; "
                             "Conversation quarantined"
                         ) from terminal_error
-                    return TurnAcceptanceResult(
-                        TurnAcceptanceStatus.ACCEPTED,
-                        accepted.turn_id,
-                        accepted.conversation_id,
-                        "attachment_finalize_failed",
+                    return self._with_accepted_attachment_refs(
+                        TurnAcceptanceResult(
+                            TurnAcceptanceStatus.ACCEPTED,
+                            accepted.turn_id,
+                            accepted.conversation_id,
+                            "attachment_finalize_failed",
+                        )
                     )
 
                 receipt = self._repository.get_turn(accepted.turn_id)

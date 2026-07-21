@@ -6,6 +6,7 @@ from .models import (
     AttachmentReferenceV1,
     InboundAttachmentSource,
     SourceAttachmentDescriptorV1,
+    references_sha256,
 )
 from .store import (
     AttachmentError,
@@ -34,4 +35,5 @@ __all__ = [
     "AttachmentValidationError",
     "InboundAttachmentSource",
     "SourceAttachmentDescriptorV1",
+    "references_sha256",
 ]

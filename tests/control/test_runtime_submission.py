@@ -6,6 +6,7 @@ import hashlib
 import pytest
 
 from omicsclaw.control import (
+    ControlIntegrityError,
     ControlRuntime,
     ControlRuntimePorts,
     RawContentBlockV1,
@@ -181,25 +182,27 @@ async def test_local_attachment_finalize_failure_commits_canonical_terminal_ref(
 
     monkeypatch.setattr(runtime.attachment_store, "accept_batch", fail_accept_batch)
     try:
-        result = await runtime.submit(
-            raw,
-            ControlRuntimePorts(),
-            attachment_source=_BytesSource(),
-        )
-        assert result.acceptance.status is TurnAcceptanceStatus.ACCEPTED
-        assert result.acceptance.code == "attachment_finalize_failed"
-        assert result.receipt is not None
-        assert result.receipt.status == "failed"
-        assert result.receipt.terminal_code == "attachment_finalize_failed"
-        terminal_ref = runtime.repository.get_turn_terminal_ref(
-            result.acceptance.turn_id
-        )
+        with pytest.raises(
+            ControlIntegrityError,
+            match="do not match the control-plane commitment",
+        ):
+            await runtime.submit(
+                raw,
+                ControlRuntimePorts(),
+                attachment_source=_BytesSource(),
+            )
+        terminal = runtime.repository.list_terminal_turns()
+        assert len(terminal) == 1
+        receipt = terminal[0]
+        assert receipt.status == "failed"
+        assert receipt.terminal_code == "attachment_finalize_failed"
+        terminal_ref = runtime.repository.get_turn_terminal_ref(receipt.turn_id)
         assert terminal_ref is not None
         runtime.transcript.verify_committed_terminal(
             terminal_ref.entry_id,
             terminal_ref.content_sha256,
-            expected_conversation_id=result.acceptance.conversation_id,
-            expected_turn_id=result.acceptance.turn_id,
+            expected_conversation_id=receipt.conversation_id,
+            expected_turn_id=receipt.turn_id,
         )
         assert dispatch_count == 0
     finally:

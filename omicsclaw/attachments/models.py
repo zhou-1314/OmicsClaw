@@ -226,4 +226,5 @@ __all__ = [
     "AttachmentReferenceV1",
     "InboundAttachmentSource",
     "SourceAttachmentDescriptorV1",
+    "references_sha256",
 ]

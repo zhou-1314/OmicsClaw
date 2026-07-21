@@ -18,7 +18,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,10 +37,16 @@ from omicsclaw.control import (
 )
 from omicsclaw.runtime.agent.envelope import MessageEnvelope
 from omicsclaw.runtime.agent.events import Final
-from omicsclaw.runtime.context.compaction import (
-    ContextCompactionConfig,
-    compact_history,
+from omicsclaw.runtime.agent.query_engine import (
+    QueryEngineCallbacks,
+    QueryEngineConfig,
+    QueryEngineContext,
+    run_query_engine,
 )
+from omicsclaw.runtime.context.compaction import ContextCompactionConfig
+from omicsclaw.runtime.storage.tool_result import ToolResultStore
+from omicsclaw.runtime.storage.transcript import TranscriptStore
+from omicsclaw.runtime.tools.registry import ToolRegistry
 
 
 PNG_BYTES = base64.b64decode(
@@ -99,7 +107,9 @@ def _raw(request_id: str, *, text: str = "describe this image") -> RawInboundV1:
     )
 
 
-def _new_conversation_command(request_id: str) -> RawInboundV1:
+def _new_conversation_command(
+    request_id: str, *, project_id: str | None = None
+) -> RawInboundV1:
     """A real `/new`: a control command that replaces the Active Binding."""
 
     return RawInboundV1(
@@ -111,7 +121,10 @@ def _new_conversation_command(request_id: str) -> RawInboundV1:
         reply_target=_reply_target(),
         content=(),
         attachments=(),
-        project_command={"kind": "new_conversation"},
+        project_command={
+            "kind": "new_conversation",
+            **({"project_id": project_id} if project_id is not None else {}),
+        },
     )
 
 
@@ -130,6 +143,24 @@ def _runtime(state_root, *, dispatch_events) -> ControlRuntime:
 
 async def _dispatch_ok(_envelope: MessageEnvelope):
     yield Final("done")
+
+
+class _StaticLLM:
+    def __init__(self) -> None:
+        self.chat = self
+        self.completions = self
+        self.calls: list[dict] = []
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(
+            usage=None,
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="compacted", tool_calls=None)
+                )
+            ],
+        )
 
 
 def _store_counts(store) -> tuple[int, int]:
@@ -228,19 +259,22 @@ async def _accept_attachment_turn(
 
 @pytest.mark.asyncio
 async def test_project_archive_and_restore_preserve_accepted_attachments(tmp_path):
-    """Project lifecycle transitions never reach the attachment Store.
-
-    Channel attachment Turns are project-unassigned by construction, so this is
-    the realistic shape: archiving and restoring a coexisting Project must be a
-    durable, effective state change (asserted on the persisted lifecycle) that
-    still never deletes or rewrites an accepted Record/Blob owned outside it.
-    """
+    """Archive the Project that owns the attachment-backed Conversation."""
 
     runtime = _runtime(tmp_path, dispatch_events=_dispatch_ok)
     await runtime.start()
     try:
-        snapshot = await _accept_attachment_turn(runtime)
         project = runtime.repository.create_project("Spatial pilot")
+        bound = await runtime.submit_and_wait(
+            _new_conversation_command("7001:project", project_id=project.project_id),
+            ControlRuntimePorts(user_id="42"),
+        )
+        assert bound.acceptance.status is TurnAcceptanceStatus.ACCEPTED
+
+        snapshot = await _accept_attachment_turn(runtime)
+        assert snapshot.conversation_id == bound.acceptance.conversation_id
+        conversation = runtime.repository.get_conversation(snapshot.conversation_id)
+        assert conversation.project_id == project.project_id
 
         archived = runtime.repository.archive_project(project.project_id)
         assert archived.status is ProjectLifecycleStatus.CHANGED
@@ -274,9 +308,9 @@ async def test_new_conversation_and_binding_replacement_preserve_attachments(tmp
             ControlRuntimePorts(user_id="42"),
         )
         assert started.acceptance.status is TurnAcceptanceStatus.ACCEPTED
-        assert started.acceptance.conversation_id != snapshot.conversation_id, (
-            "the new_conversation command must activate a different Conversation"
-        )
+        assert (
+            started.acceptance.conversation_id != snapshot.conversation_id
+        ), "the new_conversation command must activate a different Conversation"
 
         # A follow-up attachment Turn now lands in the newly bound Conversation,
         # proving the Active Binding really moved rather than reusing the first.
@@ -311,25 +345,67 @@ async def test_new_conversation_and_binding_replacement_preserve_attachments(tmp
 
 
 @pytest.mark.asyncio
-async def test_observer_disconnect_preserves_accepted_attachments(tmp_path):
-    runtime = _runtime(tmp_path, dispatch_events=_dispatch_ok)
-    await runtime.start()
-    try:
-        snapshot = await _accept_attachment_turn(runtime)
+async def test_desktop_sse_disconnect_preserves_accepted_attachments(
+    tmp_path, monkeypatch
+):
+    pytest.importorskip("fastapi")
+    from omicsclaw.surfaces.desktop import server
 
-        # Abandoning a live observation iterator mid-stream exercises the same
-        # observer-detach path an SSE/observation disconnect triggers (the
-        # Desktop route drives its own observation primitive over the same Turn
-        # state).  Detaching must never touch accepted content.
-        stream = runtime.observe_events(snapshot.turn_id)
-        observed = 0
-        async for _frame in stream:
-            observed += 1
-            break
-        await stream.aclose()
-        assert observed == 1, "the disconnect test must really open a stream"
-        assert_attachment_unchanged(runtime, snapshot, operation="observer disconnect")
+    running = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_dispatch(_envelope: MessageEnvelope):
+        running.set()
+        await release.wait()
+        yield Final("done")
+
+    runtime = _runtime(tmp_path, dispatch_events=slow_dispatch)
+    await runtime.start()
+    monkeypatch.setattr(server, "_desktop_control_runtime", runtime)
+    turn_id = ""
+
+    def accepted(value: str) -> None:
+        nonlocal turn_id
+        turn_id = value
+
+    task = asyncio.create_task(
+        runtime.submit_and_wait(
+            _raw("7001:sse"),
+            ControlRuntimePorts(user_id="42"),
+            attachment_source=_BytesSource({"photo-1": PNG_BYTES}),
+            on_accepted=accepted,
+        )
+    )
+    try:
+        await asyncio.wait_for(running.wait(), timeout=5)
+        snapshot = _AttachmentSnapshot(
+            runtime,
+            turn_id,
+            runtime.repository.get_turn(turn_id).conversation_id,
+        )
+
+        response = await server.observe_turn_events(turn_id)
+        first_chunk = await anext(response.body_iterator)
+        first_text = (
+            first_chunk.decode() if isinstance(first_chunk, bytes) else str(first_chunk)
+        )
+        assert first_text.startswith("event: snapshot\n")
+        assert len(runtime._event_hub._streams[turn_id].subscribers) == 1
+        await response.body_iterator.aclose()
+        assert len(runtime._event_hub._streams[turn_id].subscribers) == 0
+        assert runtime.repository.get_turn(turn_id).status == "running"
+        assert_attachment_unchanged(
+            runtime, snapshot, operation="Desktop SSE disconnect"
+        )
+
+        release.set()
+        await task
+        assert_attachment_unchanged(
+            runtime, snapshot, operation="completion after Desktop SSE disconnect"
+        )
     finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
         await runtime.close()
 
 
@@ -409,22 +485,69 @@ async def test_transcript_compaction_preserves_accepted_attachments(tmp_path):
         rendered = adapter.render_messages([durable])
         assert adapter.restore_messages(rendered) == [durable]
 
-        # An actual on-demand compaction pass over a history that includes the
-        # attachment Turn.  The durable-history operation summarizes/trims
-        # messages and must never reach into or mutate the accepted Store.
-        history = [
-            durable,
-            {"role": "assistant", "content": "acknowledged"},
-            {"role": "user", "content": "and another message"},
-            {"role": "assistant", "content": "done"},
-        ]
-        result = compact_history(
-            history,
-            preserve_messages=1,
-            preserve_tokens=None,
-            config=ContextCompactionConfig(),
+        # Run the real QueryEngine collapse and its replace_history persistence
+        # seam. The provider sees rendered image data, while persistence must
+        # restore the exact durable attachment_ref form.
+        transcript_store = TranscriptStore()
+        chat_id = "attachment-compaction"
+        old_history = []
+        for index in range(8):
+            old_history.extend(
+                (
+                    {
+                        "role": "user",
+                        "content": f"old question {index} " + ("Q" * 1600),
+                    },
+                    {
+                        "role": "assistant",
+                        "content": f"old answer {index} " + ("A" * 1600),
+                    },
+                )
+            )
+        # One attachment occurrence is old enough to be summarized and one is
+        # in the retained tail. This covers both compaction transformations.
+        transcript_store.replace_history(chat_id, [durable, *old_history, durable])
+        compacted_events = []
+        llm = _StaticLLM()
+        final = await run_query_engine(
+            llm=llm,
+            context=QueryEngineContext(
+                chat_id=chat_id,
+                session_id="attachment-compaction",
+                system_prompt="SYSTEM",
+                user_message_content="continue",
+                content_adapter=adapter,
+            ),
+            tool_runtime=ToolRegistry([]).build_runtime({}),
+            transcript_store=transcript_store,
+            tool_result_store=ToolResultStore(
+                storage_dir=tmp_path / "query-tool-results"
+            ),
+            config=QueryEngineConfig(
+                model="fake-model",
+                context_compaction=ContextCompactionConfig(
+                    max_prompt_tokens=4000,
+                    collapse_trigger_ratio=0.45,
+                    auto_compact_trigger_ratio=0.99,
+                    collapse_preserve_messages=4,
+                    collapse_preserve_tokens=2000,
+                    protected_tail_messages=2,
+                    collapse_llm_summary_enabled=False,
+                ),
+            ),
+            callbacks=QueryEngineCallbacks(
+                on_context_compacted=lambda event: compacted_events.append(event)
+            ),
         )
-        assert result.omitted_count >= 1, "the compaction must actually run"
+        assert final == "compacted"
+        assert compacted_events and compacted_events[0].messages_compressed > 0
+        assert llm.calls
+        persisted = transcript_store.get_history(chat_id)
+        persisted_json = json.dumps(persisted, sort_keys=True)
+        assert "attachment_ref" in persisted_json
+        assert "OMICSCLAW_ATTACHMENT_V1" not in persisted_json
+        assert "image_url" not in persisted_json
+        assert "data:image" not in persisted_json
         assert_attachment_unchanged(
             runtime, snapshot, operation="transcript compaction"
         )
