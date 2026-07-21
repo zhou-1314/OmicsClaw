@@ -1,4 +1,14 @@
-"""Deterministic outbox executor — close the idea→analysis→verdict loop.
+"""Deterministic KG handoff-queue executor — close the idea→analysis→verdict loop.
+
+Named `handoff_executor` rather than `outbox` per ADR 0060, so that "Outbox"
+unambiguously means the Outbound Delivery Outbox in control-plane architecture.
+This module is a scientific handoff queue/executor: it schedules skill
+execution, whereas Delivery Outbox Items may only transmit already-computed
+terminal content. It must never be reused as the delivery authority.
+
+The upstream `omicsclaw_kg` on-disk directory and the `/thread/{id}/outbox`
+HTTP route keep their names: both are external contracts this rename does not
+own.
 
 Audit E (idea→analysis→verdict has no deterministic closure): a HandoffPacket
 written to the KG outbox today has **no consumer**, and a result is recorded
@@ -31,7 +41,7 @@ from omicsclaw.services.path_validation import validate_input_path
 from omicsclaw.skill.runner import arun_skill
 from omicsclaw.surfaces.desktop.hypotheses import _resolve_thread_dataset_path
 
-logger = logging.getLogger("omicsclaw.surfaces.desktop.outbox")
+logger = logging.getLogger("omicsclaw.surfaces.desktop.handoff_executor")
 
 # A skill run yields success + artifacts, not a scientific truth value. A
 # deterministic executor may only carry an explicitly-supplied verdict or the

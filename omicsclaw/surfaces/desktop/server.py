@@ -5455,7 +5455,7 @@ def thread_outbox(thread_id: str):
         raise HTTPException(400, detail="no workspace / KG home resolved")
     from omicsclaw_kg import config as kg_config
 
-    from omicsclaw.surfaces.desktop import outbox as outbox_svc
+    from omicsclaw.surfaces.desktop import handoff_executor as outbox_svc
 
     cfg = kg_config.resolve(home)
     return {"thread_id": thread_id, "packets": outbox_svc.list_outbox_packets(cfg)}
@@ -5480,7 +5480,7 @@ async def thread_run_packet(thread_id: str, req: RunPacketRequest):
         raise HTTPException(400, detail="no workspace / KG home resolved")
     from omicsclaw_kg import config as kg_config
 
-    from omicsclaw.surfaces.desktop import outbox as outbox_svc
+    from omicsclaw.surfaces.desktop import handoff_executor as outbox_svc
 
     cfg = kg_config.resolve(home)
     try:
@@ -5535,7 +5535,7 @@ async def thread_run_hypothesis(thread_id: str, req: RunHypothesisRequest):
         raise HTTPException(400, detail="no workspace / KG home resolved")
     from omicsclaw.memory.compat import resolve_thread_dataset_path
     from omicsclaw.runtime.tools import kg_tools
-    from omicsclaw.surfaces.desktop import outbox as outbox_svc
+    from omicsclaw.surfaces.desktop import handoff_executor as outbox_svc
 
     slug = req.hypothesis_slug.strip()
     # Security: slug is attacker-influenced at the HTTP boundary and flows into

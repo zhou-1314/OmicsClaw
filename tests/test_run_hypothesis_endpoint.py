@@ -54,7 +54,7 @@ def _setup(monkeypatch, *, run_result):
         cap["ran"] = {"packet_id": packet_id, "thread_id": thread_id, "input_path": input_path, "verdict": verdict}
         return run_result
 
-    monkeypatch.setattr("omicsclaw.surfaces.desktop.outbox.run_packet", fake_run_packet)
+    monkeypatch.setattr("omicsclaw.surfaces.desktop.handoff_executor.run_packet", fake_run_packet)
     return cap
 
 

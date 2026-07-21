@@ -14,7 +14,7 @@ import json
 import types
 from pathlib import Path
 
-import omicsclaw.surfaces.desktop.outbox as outbox
+import omicsclaw.surfaces.desktop.handoff_executor as outbox
 
 
 def _run(coro):
