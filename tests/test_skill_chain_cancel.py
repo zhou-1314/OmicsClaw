@@ -20,6 +20,15 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from omicsclaw.skill import resource_scheduler
+
+
+@pytest.fixture(autouse=True)
+def _reset_process_scheduler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate the scheduler singleton the chain runner now reserves against."""
+    monkeypatch.setattr(resource_scheduler, "_PROCESS_SCHEDULER", None)
+    monkeypatch.setattr(resource_scheduler, "_PROCESS_SCHEDULER_LOOP", None)
+
 
 @pytest.mark.asyncio
 async def test_run_skill_via_shared_runner_forwards_caller_cancel_event(

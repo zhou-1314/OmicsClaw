@@ -30,8 +30,30 @@ from omicsclaw.common.user_guidance import (
 )
 from .log_stream import skill_log_emitter_var
 from .lookup import lookup_skill_info
+from .resource_scheduler import (
+    ExecutionResourceRequest,
+    get_process_resource_scheduler,
+)
 
 logger = logging.getLogger("omicsclaw.skill.chain")
+
+# ADR 0061 D2: every scientific process reserves one indivisible slot from the
+# single global Execution Resource Scheduler before it launches, so concurrent
+# chain runs (agent tool dispatch, Bench ``execute_omicsclaw``, auto-prepare)
+# share the one capacity authority instead of silently overcommitting the host.
+# A chain step is an opaque skill subprocess that declares no resources of its
+# own, so it reserves the minimal process-count slot: memory/threads/disk are
+# pinned to the floor (never gate an undeclared step) and the process dimension
+# gates via the budget's ``max_processes``. Mirrors
+# ``runtime/workflow/fan_out._STEP_RESOURCE_REQUEST``; a shared home can wait
+# until the scheduler module's in-flight edits settle.
+_PROCESS_SLOT_REQUEST = ExecutionResourceRequest(
+    cpu_cores=1,
+    memory_mib=1,
+    gpu_devices=0,
+    threads=1,
+    temporary_disk_mib=0,
+)
 
 
 def normalize_extra_args(extra_args) -> list[str]:
@@ -158,11 +180,19 @@ async def run_skill_via_shared_runner(
             status_callback=_emit_status,
         )
 
-    try:
-        run_result = await asyncio.to_thread(_run)
-    except asyncio.CancelledError:
-        effective_cancel_event.set()
-        raise
+    # Admission gate: hold one global process slot for the lifetime of the
+    # subprocess, released on success, failure or cancellation by reserve()'s
+    # context manager. The chain never runs inside another lease — its callers
+    # are the agent loop, Bench executors and preflight, never a fan-out / plan /
+    # RunRuntime step that already holds one — so this reservation cannot nest
+    # and deadlock the process-global FIFO.
+    scheduler = get_process_resource_scheduler(out_dir)
+    async with scheduler.reserve(_PROCESS_SLOT_REQUEST):
+        try:
+            run_result = await asyncio.to_thread(_run)
+        except asyncio.CancelledError:
+            effective_cancel_event.set()
+            raise
     stdout_str = run_result.stdout
     stderr_str = run_result.stderr
     guidance_block = render_guidance_block(extract_user_guidance_lines(stderr_str))
