@@ -30,6 +30,7 @@ from .execution.output_ownership import (
 from .registry import RegistrySnapshot, ensure_registry_loaded
 from .result import SkillRunResult, coerce_skill_run_result
 from .resource_scheduler import (
+    ExecutionResourceBudget,
     ExecutionResourceRequest,
     ResourceConfigurationError,
     get_process_resource_scheduler,
@@ -501,10 +502,43 @@ def _validate_plan(
             edges.extend(alternatives)
             continue
         raise CandidatePlanValidationError(
-            "ambiguous reviewed producers for precondition "
-            f"{identity[0]}:{identity[1]}"
+            f"ambiguous reviewed producers for precondition {identity[0]}:{identity[1]}"
         )
     return skills, phases, edges, method_bindings, resource_requests, digest
+
+
+def _resolve_ready_step_window(
+    max_ready_steps: int | None,
+    budget: ExecutionResourceBudget,
+) -> int:
+    """Bound how many Steps may queue for resources at once.
+
+    ADR 0061 keeps exactly one global process-capacity authority — the
+    Execution Resource Scheduler. This window exists only so a single plan
+    cannot flood the process-global FIFO; it is explicitly *not* a second
+    capacity limit. It must therefore stay strictly above the scheduler's own
+    process bound, so the scheduler always binds first. A window at or below
+    ``max_processes`` would silently cap concurrency itself and hide the plan's
+    unmet demand from the scheduler, turning the documented
+    ``OMICSCLAW_PLAN_MAX_PROCESSES`` knob into a no-op above the window.
+    """
+
+    if max_ready_steps is None:
+        return budget.max_processes + 1
+    if (
+        isinstance(max_ready_steps, bool)
+        or not isinstance(max_ready_steps, int)
+        or max_ready_steps < 1
+    ):
+        raise CandidatePlanValidationError("max_ready_steps must be a positive integer")
+    if max_ready_steps <= budget.max_processes:
+        raise CandidatePlanValidationError(
+            f"max_ready_steps ({max_ready_steps}) must exceed the scheduler's "
+            f"max_processes ({budget.max_processes}); a smaller window would make "
+            "the plan, not the Execution Resource Scheduler, the authority for "
+            "process capacity"
+        )
+    return max_ready_steps
 
 
 async def execute_candidate_plan(
@@ -519,7 +553,7 @@ async def execute_candidate_plan(
     project_id: str = "",
     project_name: str = "",
     demo: bool = False,
-    max_concurrency: int = 4,
+    max_ready_steps: int | None = None,
 ) -> CandidatePlanExecutionResult:
     """Run one confirmed candidate plan and return per-step audit evidence."""
     skills, phases, edges, method_bindings, resource_requests, digest = _validate_plan(
@@ -528,14 +562,9 @@ async def execute_candidate_plan(
         confirmed_digest=confirmed_digest,
         unresolved_strategy=unresolved_strategy,
     )
-    if (
-        isinstance(max_concurrency, bool)
-        or not isinstance(max_concurrency, int)
-        or max_concurrency < 1
-    ):
-        raise CandidatePlanValidationError("max_concurrency must be a positive integer")
     scheduler = get_process_resource_scheduler(output_root)
     effective_budget = scheduler.budget
+    ready_window = _resolve_ready_step_window(max_ready_steps, effective_budget)
     oversized = [
         skill
         for skill, request in resource_requests.items()
@@ -639,7 +668,7 @@ async def execute_candidate_plan(
     incoming: dict[str, set[str]] = {skill: set() for skill in skills}
     incoming_paths: dict[tuple[str, str], set[str]] = {}
     outgoing_paths: dict[str, set[str]] = {skill: set() for skill in skills}
-    semaphore = asyncio.Semaphore(max_concurrency)
+    semaphore = asyncio.Semaphore(ready_window)
     for edge in edges:
         source = edge["source"]
         target = edge["target"]

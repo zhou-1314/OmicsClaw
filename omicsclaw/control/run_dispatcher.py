@@ -107,6 +107,13 @@ class RunDispatcher:
         if not callable(worker):
             raise TypeError("worker must be callable")
         async with self._condition:
+            # Quarantine outranks the raw `_ready` flag: a quarantined Dispatcher
+            # still carries `_ready`, so checking it first would silently no-op
+            # a restart attempt instead of failing closed.
+            if self._quarantined:
+                raise RunDispatcherIntegrityError(
+                    "quarantined Run Dispatcher cannot start"
+                )
             if self._ready:
                 return
             if self._closing:
@@ -334,35 +341,52 @@ class RunDispatcher:
             self._condition.notify_all()
 
     async def _pump(self) -> None:
-        while True:
+        try:
+            while True:
+                async with self._condition:
+                    await self._condition.wait_for(
+                        lambda: (
+                            self._closing
+                            or self._quarantined
+                            or (
+                                bool(self._queue)
+                                and len(self._active) < self.max_active_runs
+                            )
+                        )
+                    )
+                    if self._closing or self._quarantined:
+                        return
+                    payload = self._queue.popleft()
+                    run_id = payload.run_id
+                    if self._locations.get(run_id) != "waiting":
+                        raise RunDispatcherIntegrityError(
+                            "Run FIFO and location index diverged"
+                        )
+                    self._locations[run_id] = "active"
+                    self._buffered_entries -= 1
+                    if self._buffered_entries < 0:
+                        raise RunDispatcherIntegrityError(
+                            "Run Dispatcher capacity accounting underflow"
+                        )
+                    task = asyncio.create_task(
+                        self._execute(payload), name=f"omicsclaw-run-{run_id}"
+                    )
+                    task.add_done_callback(self._consume_worker_completion)
+                    self._active[run_id] = task
+                    self._condition.notify_all()
+        except asyncio.CancelledError:
+            raise
+        except BaseException:
+            # A dead pump must never leave an apparently-live Dispatcher. Without
+            # this the raw `_ready` flag keeps `ready` True, `try_reserve` keeps
+            # handing out capacity, and every accepted Run silently never starts.
             async with self._condition:
-                await self._condition.wait_for(
-                    lambda: self._closing
-                    or self._quarantined
-                    or (bool(self._queue) and len(self._active) < self.max_active_runs)
-                )
-                if self._closing or self._quarantined:
-                    return
-                payload = self._queue.popleft()
-                run_id = payload.run_id
-                if self._locations.get(run_id) != "waiting":
-                    raise RunDispatcherIntegrityError(
-                        "Run FIFO and location index diverged"
-                    )
-                self._locations[run_id] = "active"
-                self._buffered_entries -= 1
-                if self._buffered_entries < 0:
-                    raise RunDispatcherIntegrityError(
-                        "Run Dispatcher capacity accounting underflow"
-                    )
-                task = asyncio.create_task(
-                    self._execute(payload), name=f"omicsclaw-run-{run_id}"
-                )
-                task.add_done_callback(self._consume_worker_completion)
-                self._active[run_id] = task
+                self._quarantined = True
                 self._condition.notify_all()
+            raise
 
     async def _execute(self, payload: AcceptedRunPayload) -> None:
+        drift = False
         try:
             worker = self._worker
             if worker is None:
@@ -380,12 +404,19 @@ class RunDispatcher:
                 run_id = payload.run_id
                 current = self._active.get(run_id)
                 if current is not asyncio.current_task():
+                    # The slot belongs to another Task: quarantine, but never
+                    # evict its bookkeeping, and never raise from `finally` —
+                    # that would mask the exception already unwinding, including
+                    # CancelledError.
                     self._quarantined = True
-                    raise RunDispatcherIntegrityError("Run active-task ownership drift")
-                self._active.pop(run_id, None)
-                self._locations.pop(run_id, None)
-                self._cancel_reasons.pop(run_id, None)
+                    drift = True
+                else:
+                    self._active.pop(run_id, None)
+                    self._locations.pop(run_id, None)
+                    self._cancel_reasons.pop(run_id, None)
                 self._condition.notify_all()
+        if drift:
+            raise RunDispatcherIntegrityError("Run active-task ownership drift")
 
     @staticmethod
     def _consume_worker_completion(task: asyncio.Task[None]) -> None:

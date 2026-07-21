@@ -145,6 +145,71 @@ def test_cancelling_head_waiter_removes_ticket_and_unblocks_next() -> None:
     asyncio.run(scenario())
 
 
+def test_cancelling_a_later_waiter_preserves_the_earlier_waiters_ticket() -> None:
+    """Two waiters declaring identical resources are distinct queue entries.
+
+    A multi-Step plan normally declares the same request for every Step, so
+    equal-valued tickets are the common case rather than an edge case. Removing
+    a cancelled waiter by equality evicted the *earlier* waiter's ticket and
+    left the cancelled one orphaned at the head; because the wait predicate
+    matches on identity, that head never popped and the process-global FIFO
+    wedged permanently for every later arrival.
+    """
+
+    scheduler = ExecutionResourceScheduler(
+        ExecutionResourceBudget(
+            cpu_cores=1,
+            memory_mib=1024,
+            gpu_device_ids=(),
+            threads=1,
+            temporary_disk_mib=256,
+            max_processes=1,
+        )
+    )
+    request = ExecutionResourceRequest(
+        cpu_cores=1,
+        memory_mib=1024,
+        gpu_devices=0,
+        threads=1,
+        temporary_disk_mib=256,
+    )
+
+    async def scenario() -> None:
+        async def settle_until_queue_depth(depth: int) -> None:
+            for _ in range(200):
+                if len(scheduler._queue) == depth:
+                    return
+                await asyncio.sleep(0)
+            raise AssertionError(
+                f"resource FIFO never reached depth {depth} "
+                f"(observed {len(scheduler._queue)})"
+            )
+
+        holder = scheduler.reserve(request)
+        await holder.__aenter__()
+
+        async def reserve_once() -> None:
+            async with scheduler.reserve(request):
+                return
+
+        earlier = asyncio.create_task(reserve_once())
+        await settle_until_queue_depth(1)
+        later = asyncio.create_task(reserve_once())
+        await settle_until_queue_depth(2)
+
+        later.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await later
+        assert len(scheduler._queue) == 1
+
+        # The earlier waiter must still own the head and take the freed slot.
+        await holder.__aexit__(None, None, None)
+        await asyncio.wait_for(earlier, timeout=1)
+        assert scheduler._queue == []
+
+    asyncio.run(scenario())
+
+
 def test_resource_lease_preserves_run_and_step_correlation() -> None:
     scheduler = ExecutionResourceScheduler(
         ExecutionResourceBudget(

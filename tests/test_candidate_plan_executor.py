@@ -1000,7 +1000,13 @@ def test_executor_cascades_failure_only_to_dependants(tmp_path: Path):
     assert result.success is False
 
 
-def test_executor_bounds_parallel_steps_and_propagates_cancellation(tmp_path: Path):
+def test_executor_bounds_parallel_steps_and_propagates_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # ADR 0061 keeps one global process-capacity authority. Concurrent steps are
+    # bounded by the Execution Resource Scheduler's budget, never by a
+    # plan-local window, so pin the budget and assert the plan observes *it*.
+    monkeypatch.setenv("OMICSCLAW_PLAN_MAX_PROCESSES", "2")
     plan = _plan(
         skills=["a", "b", "c", "d"],
         phases=[["a", "b", "c", "d"]],
@@ -1030,7 +1036,6 @@ def test_executor_bounds_parallel_steps_and_propagates_cancellation(tmp_path: Pa
             input_path="",
             output_root=tmp_path / "bounded",
             runner=bounded_runner,
-            max_concurrency=2,
         )
     )
     assert result.success is True
@@ -1060,7 +1065,6 @@ def test_executor_bounds_parallel_steps_and_propagates_cancellation(tmp_path: Pa
                 input_path="",
                 output_root=tmp_path / "cancelled",
                 runner=blocking_runner,
-                max_concurrency=2,
             )
         )
         await asyncio.wait_for(two_started.wait(), timeout=1)
@@ -1070,6 +1074,51 @@ def test_executor_bounds_parallel_steps_and_propagates_cancellation(tmp_path: Pa
 
     asyncio.run(cancellation_scenario())
     assert len(cancelled) == 2
+
+
+def test_ready_step_window_may_not_undercut_the_scheduler(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A plan-local window at or below `max_processes` would bind first.
+
+    ADR 0061 allows a per-Run ready-Step window purely to stop one plan from
+    flooding the process-global FIFO, and explicitly rejects keeping it as a
+    second process-capacity authority. A window that undercuts the scheduler
+    caps concurrency itself and hides the plan's unmet demand, so it must fail
+    closed rather than silently shadow the scheduler.
+    """
+
+    monkeypatch.setenv("OMICSCLAW_PLAN_MAX_PROCESSES", "4")
+    plan = _plan(skills=["a", "b"], phases=[["a", "b"]], edges=[])
+
+    async def _runner(skill: str, **kwargs):
+        return build_skill_run_result(
+            skill=skill,
+            success=True,
+            exit_code=0,
+            output_dir=kwargs["output_dir"],
+        )
+
+    async def scenario(window: int | None):
+        return await execute_candidate_plan(
+            plan,
+            confirmed=True,
+            confirmed_digest=candidate_plan_digest(plan),
+            input_path="",
+            output_root=tmp_path / f"window-{window}",
+            runner=_runner,
+            max_ready_steps=window,
+        )
+
+    with pytest.raises(CandidatePlanValidationError, match="max_ready_steps"):
+        asyncio.run(scenario(4))
+    with pytest.raises(CandidatePlanValidationError, match="max_ready_steps"):
+        asyncio.run(scenario(1))
+
+    # Strictly above the scheduler's bound the window is legitimate.
+    assert asyncio.run(scenario(5)).success is True
+    # And omitting it derives a window that cannot undercut the scheduler.
+    assert asyncio.run(scenario(None)).success is True
 
 
 def test_missing_declared_artifact_is_audited_as_contract_failure(
@@ -1879,7 +1928,6 @@ def test_default_plan_identity_failure_cancels_and_drains_same_phase_siblings(
                     confirmed_digest=candidate_plan_digest(plan),
                     input_path="",
                     output_root=tmp_path / "out",
-                    max_concurrency=2,
                     unresolved_strategy="independent",
                 )
             return sibling_cancelled.is_set()

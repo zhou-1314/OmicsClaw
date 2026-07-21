@@ -37,6 +37,25 @@ class ResourceConfigurationError(ValueError):
     """Raised when a request or process budget is internally invalid."""
 
 
+class NestedResourceAcquisitionError(ResourceConfigurationError):
+    """Raised when a Run that already holds a global Lease acquires another.
+
+    ADR 0062: a governed Run must not submit a second global resource ticket
+    while it still holds part of its envelope. Enqueueing the reentrant ticket
+    would let the child wait for capacity the parent still holds while the
+    parent waits for the child — a strict-FIFO deadlock that cancellation
+    cannot safely break. The scheduler fails such an acquisition closed and
+    immediately, before it enqueues, instead of deadlocking the FIFO.
+    """
+
+    def __init__(self, run_id: str) -> None:
+        super().__init__(
+            f"Run {run_id!r} already holds a global Resource Lease; a nested "
+            "global acquisition would deadlock the strict-FIFO scheduler"
+        )
+        self.run_id = run_id
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutionResourceRequest:
     cpu_cores: int
@@ -184,8 +203,15 @@ class ResourceLease:
         }
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, eq=False)
 class _Ticket:
+    """One queued waiter, identified by object identity and never by value.
+
+    Two waiters carrying the same request, Run ID and Step ID are distinct
+    queue entries. With the dataclass default ``eq=True`` they would compare
+    equal, and the FIFO's wait predicate matches on ``is`` — see ``_acquire``.
+    """
+
     value: ResourceTicket
 
 
@@ -203,7 +229,16 @@ class ExecutionResourceScheduler:
         self._temporary_disk_mib = 0
         self._gpu_device_ids: set[str] = set()
         self._quarantined = False
-        self._retained_lease_ids: set[int] = set()
+        # Keyed by `id()`, but holding the Lease itself: storing bare ids would
+        # let CPython recycle a collected Lease's address onto a later Lease,
+        # which would then be treated as retained and never released.
+        self._retained_leases: dict[int, ResourceLease] = {}
+        # ADR 0062: Run IDs that currently hold a global Lease. A second global
+        # acquisition under the same Run ID is a nested acquisition, rejected
+        # before it enqueues (see `_acquire`) rather than deadlocking the FIFO.
+        # Untagged (`run_id is None`) Leases — fixed Workflow / Candidate / chain
+        # steps that hold no parent Lease — are never tracked here.
+        self._active_lease_run_ids: set[str] = set()
 
     @property
     def ready(self) -> bool:
@@ -222,7 +257,7 @@ class ExecutionResourceScheduler:
             and self._threads == 0
             and self._temporary_disk_mib == 0
             and not self._gpu_device_ids
-            and not self._retained_lease_ids
+            and not self._retained_leases
         )
 
     def _fits_available(self, request: ExecutionResourceRequest) -> bool:
@@ -260,6 +295,13 @@ class ExecutionResourceScheduler:
                 raise ResourceConfigurationError(
                     "the process resource scheduler is quarantined"
                 )
+            if (
+                value.run_id is not None
+                and value.run_id in self._active_lease_run_ids
+            ):
+                # Reject before enqueue: a queued reentrant ticket would sit
+                # behind capacity its own Run still holds and wedge the FIFO.
+                raise NestedResourceAcquisitionError(value.run_id)
             self._queue.append(ticket)
             try:
                 while not (self._queue[0] is ticket and self._fits_available(request)):
@@ -269,9 +311,17 @@ class ExecutionResourceScheduler:
                             "the process resource scheduler is quarantined"
                         )
             except BaseException:
-                if ticket in self._queue:
-                    self._queue.remove(ticket)
-                    self._condition.notify_all()
+                # Remove by identity. `list.remove()` deletes the first *equal*
+                # entry: for the identical resource requests a multi-Step plan
+                # normally declares, cancelling a later waiter would evict an
+                # earlier one and orphan this ticket at the head. Since the
+                # wait predicate above matches on `is`, that head would never
+                # pop and the process-global FIFO would wedge permanently.
+                for index, queued in enumerate(self._queue):
+                    if queued is ticket:
+                        del self._queue[index]
+                        self._condition.notify_all()
+                        break
                 raise
 
             self._queue.pop(0)
@@ -282,6 +332,8 @@ class ExecutionResourceScheduler:
             self._threads += request.threads
             self._temporary_disk_mib += request.temporary_disk_mib
             self._gpu_device_ids.update(gpu_ids)
+            if value.run_id is not None:
+                self._active_lease_run_ids.add(value.run_id)
             self._condition.notify_all()
         return ResourceLease(
             request=request,
@@ -300,6 +352,8 @@ class ExecutionResourceScheduler:
             self._threads -= request.threads
             self._temporary_disk_mib -= request.temporary_disk_mib
             self._gpu_device_ids.difference_update(lease.gpu_device_ids)
+            if lease.run_id is not None:
+                self._active_lease_run_ids.discard(lease.run_id)
             self._condition.notify_all()
 
     async def quarantine(self, lease: ResourceLease) -> None:
@@ -307,7 +361,7 @@ class ExecutionResourceScheduler:
 
         async with self._condition:
             self._quarantined = True
-            self._retained_lease_ids.add(id(lease))
+            self._retained_leases[id(lease)] = lease
             self._condition.notify_all()
 
     async def quarantine_unknown_owner(self) -> None:
@@ -328,7 +382,7 @@ class ExecutionResourceScheduler:
         try:
             yield lease
         finally:
-            if id(lease) not in self._retained_lease_ids:
+            if id(lease) not in self._retained_leases:
                 release = asyncio.create_task(self._release(lease))
                 caller_canceled = False
                 while True:
@@ -507,6 +561,7 @@ __all__ = [
     "ResourceLease",
     "ResourceTicket",
     "ResourceConfigurationError",
+    "NestedResourceAcquisitionError",
     "detect_execution_resource_budget",
     "get_process_resource_scheduler",
 ]
