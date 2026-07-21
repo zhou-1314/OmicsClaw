@@ -155,6 +155,7 @@ def run_morans(
         n_perms=n_perms_resolved,
         corr_method=corr_method,
         n_jobs=1,
+        seed=0,  # pin the permutation-test RNG → reproducible SVG p-values/scores
     )
 
     if "moranI" not in adata.uns:
