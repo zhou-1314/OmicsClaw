@@ -41,7 +41,7 @@ current prose. Read them in this effective order:
 | Historical starting point | ADR 0043 is superseded by ADR 0044 for Owner/tenancy semantics; only its local-first control-plane and extensible Run-execution principle is retained |
 | Owner, ingress, Conversation, Turn | ADR 0044–0052 |
 | Authority, persistence, Project and Run identity | ADR 0053–0058 |
-| Attachments and terminal Channel delivery | ADR 0059–0060 |
+| Attachments and terminal Channel delivery | ADR 0059, refined by ADR 0073 for Attachment Store ID minting; ADR 0060 for terminal delivery |
 | Run dispatch and global capacity | ADR 0061, refined by ADR 0062 for dynamic governed Runs |
 | Same-target Delivery ordering | ADR 0063 refines ADR 0060 |
 | Scientific Memory ownership and archive-safe projection | ADR 0064 refines ADR 0045 and ADR 0053–0055 |
@@ -54,7 +54,8 @@ output directories beneath every production execution Surface. ADR 0071
 defines the route-wide, pre-body Desktop remote-authentication boundary and the
 corresponding thin App credential adapter. ADR 0072 refines that boundary with
 durable cross-request operation bindings, receipt-bound AutoAgent recovery, and
-a governed AutoAgent process owner.
+a governed AutoAgent process owner. ADR 0073 refines ADR 0059 by moving opaque
+Attachment ID minting from the control plane to the Attachment Store.
 
 The concrete integrated contract is
 [`docs/design/conversational-control-plane.md`](../design/conversational-control-plane.md).

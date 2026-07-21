@@ -71,10 +71,12 @@ demo:
 	python omicsclaw.py run preprocess --demo --output /tmp/omicsclaw_demo
 
 # Full suite, parallel. pytest-xdist splits across processes; the suite is
-# ~6.3k mostly-small tests, so wall time is dominated by having one worker
-# rather than by any single file. Serial was 12m42s; -n 16 is ~1m40s.
-# Override workers with: make test PYTEST_WORKERS=32
-PYTEST_WORKERS ?= 16
+# ~6.3k mostly-small tests, so wall time is set by worker count, not by any
+# single slow file. Measured on the 128-core box:
+#   serial 12m42s | -n 16 ~78s | -n 24 ~70s | -n 48 ~61s
+# Deleting the 8 slowest FILES saves only ~3s and costs 269 tests, so the
+# lever here is workers, not coverage. Override: make test PYTEST_WORKERS=48
+PYTEST_WORKERS ?= 32
 
 test:
 	python -m pytest -q -n $(PYTEST_WORKERS)

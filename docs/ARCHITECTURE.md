@@ -259,18 +259,21 @@ the Backend downloads, copies, or republishes content.
 
 For novel accepted intent, the specialized Backend-owned **Attachment Store**
 stages the entire batch, validates count, size, media metadata and full SHA-256,
-then publishes immutable content-addressed Attachment Blobs and provisional
-per-Turn Attachment Records. The control plane commits the Turn Receipt and
-Ingress Idempotency Binding only after every Record is readable; the batch is
-all-or-nothing. A post-commit finalization marks the Records accepted.
+then mints each opaque Attachment ID and publishes immutable content-addressed
+Attachment Blobs plus provisional per-Turn Attachment Records. The control plane
+commits only the content-free batch commitment with the Turn Receipt and Ingress
+Idempotency Binding after every Record is readable; the batch is all-or-nothing.
+A post-commit finalization marks the Records accepted (ADR 0073).
 Publish-before-control reconciliation collects old provisional orphans when no
 Turn Receipt was committed and promotes Records when the Turn exists. Missing
 or corrupt bytes for an accepted Record are an integrity incident and never
 cause automatic Turn replay.
 
 Each accepted attachment occurrence has one opaque Attachment ID and belongs
-to exactly one Turn and Conversation. Two novel submissions containing equal
-bytes remain distinct Attachment Records but may share one Blob. Inbound
+to exactly one Turn and Conversation. The Store owns ID minting; the ID remains
+globally unique, opaque and free of Store, Turn or content semantics. Two novel
+submissions containing equal bytes remain distinct Attachment Records but may
+share one Blob. Inbound
 Envelope, Transcript, prompts and tools exchange ordered structured Attachment
 References rather than Base64, provider handles, signed URLs, temporary paths,
 Workspace paths, or a mutable latest-Session file registry. Prompt inlining is
