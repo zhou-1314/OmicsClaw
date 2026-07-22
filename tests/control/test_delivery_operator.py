@@ -455,3 +455,53 @@ async def test_resend_delivery_refuses_a_source_that_is_still_in_flight(tmp_path
     finally:
         gate.set()
         await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_describe_delivery_rolls_up_failed_and_unknown_outcomes(tmp_path):
+    """The operator-facing summary state must surface a settled failure.
+
+    ``describe_delivery`` is how an Owner decides between ``retry_delivery`` and
+    ``resend_delivery``; the ``failed``/``unknown`` rollup is the one branch
+    that governs that choice. Only the ``in_progress``/``delivered`` summaries
+    were previously asserted, so a regression in the terminal-failure mapping
+    would have been silent.
+    """
+
+    runtime = ControlRuntime.for_local_surface(
+        state_root=tmp_path,
+        workspace_id="workspace-test",
+        surface="cli",
+        installation_id="installation-test",
+        profile_id="profile-test",
+    )
+    try:
+        # A permanently rejected head Item rolls the Delivery up to ``failed``.
+        failed_source = _operator_delivery(runtime, "rollup-failed")
+        failed_item = runtime.repository.list_delivery_items(
+            failed_source.delivery_id
+        )[0]
+        failed_attempt = runtime.repository.begin_delivery_attempt(failed_item.item_id)
+        runtime.repository.finish_delivery_attempt(
+            failed_attempt.attempt_id,
+            DeliveryAttemptOutcome.REJECTED_PERMANENT,
+            error_code="provider_rejected",
+        )
+        assert runtime.describe_delivery(failed_source.delivery_id).state == "failed"
+
+        # An acceptance-unknown head Item rolls up to ``unknown`` (the source
+        # must be settled before the first is terminal, so seq 1 is done here).
+        unknown_source = _operator_delivery(runtime, "rollup-unknown")
+        unknown_item = runtime.repository.list_delivery_items(
+            unknown_source.delivery_id
+        )[0]
+        unknown_attempt = runtime.repository.begin_delivery_attempt(
+            unknown_item.item_id
+        )
+        runtime.repository.finish_delivery_attempt(
+            unknown_attempt.attempt_id,
+            DeliveryAttemptOutcome.ACCEPTANCE_UNKNOWN,
+        )
+        assert runtime.describe_delivery(unknown_source.delivery_id).state == "unknown"
+    finally:
+        await runtime.close()

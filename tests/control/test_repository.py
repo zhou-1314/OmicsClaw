@@ -1747,6 +1747,39 @@ def test_delivery_sequence_barrier_and_failure_suppression(tmp_path):
         assert unblocked.started is True
 
 
+def test_begin_attempt_rechecks_the_ordinal_barrier_at_claim_time(tmp_path):
+    """A higher Item cannot start until every lower ordinal is ``delivered``.
+
+    The Pump's due-selection already screens candidates, but ADR 0063 requires
+    the ordinal barrier to be re-checked inside the claim transaction so a
+    stale candidate cannot expose a later chunk before its predecessor. This
+    asserts the ``earlier_item_not_delivered`` recheck code directly rather
+    than only transitively through the Pump.
+    """
+
+    with ControlStateRepository(tmp_path) as repo:
+        turn = repo.accept_turn(_turn_intent("channel-ordinal", surface="channel"))
+        repo.start_turn(turn.turn_id)
+        ref = _transcript_ref("ordinal")
+        terminal = repo.terminalize_turn(
+            turn.turn_id,
+            terminal_status="succeeded",
+            transcript_ref=ref,
+            delivery_plan=_delivery_plan(ref.entry_id),
+        )
+        items = repo.list_delivery_items(terminal.delivery.delivery_id)
+        assert len(items) == 2
+
+        # The lower Item is still ``queued``, so its higher sibling is refused.
+        blocked = repo.begin_delivery_attempt(items[1].item_id)
+        assert blocked.started is False
+        assert blocked.code == "earlier_item_not_delivered"
+
+        # The head Item itself is claimable; the barrier only gates the suffix.
+        head = repo.begin_delivery_attempt(items[0].item_id)
+        assert head.started is True
+
+
 def test_concurrent_terminalization_allocates_unique_contiguous_target_sequences(
     tmp_path,
 ):
