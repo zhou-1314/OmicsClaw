@@ -218,6 +218,55 @@ async def test_app_server_lifespan_allows_startup_without_llm_credentials(
     assert captured["api_key"] == ""
 
 
+@pytest.mark.asyncio
+async def test_app_server_lifespan_starts_and_stops_projection_service(
+    monkeypatch,
+    tmp_path,
+):
+    # ADR 0064: the Desktop lifespan wires the background projection sweep, and
+    # tears it down on shutdown (before its repository/run-store/engine close).
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+
+    def fake_init(**kwargs):
+        pass
+
+    for key in (
+        "LLM_PROVIDER",
+        "OMICSCLAW_PROVIDER",
+        "LLM_API_KEY",
+        "OMICSCLAW_API_KEY",
+        "LLM_BASE_URL",
+        "OMICSCLAW_BASE_URL",
+        "OMICSCLAW_MODEL",
+        "LLM_AUTH_MODE",
+        "OPENAI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(bot_core, "init", fake_init)
+    monkeypatch.setattr(bot_core, "LLM_PROVIDER_NAME", "openai")
+    monkeypatch.setattr(bot_core, "OMICSCLAW_MODEL", "gpt-5.5")
+    monkeypatch.setattr(server, "_core", None)
+    monkeypatch.setattr(server, "_NOTEBOOK_AVAILABLE", False)
+    monkeypatch.setattr(server, "_projection_service", None)
+    monkeypatch.setenv(
+        "OMICSCLAW_CONTROL_STATE_ROOT",
+        str(tmp_path / "desktop-control"),
+    )
+
+    async with server.lifespan(server.app):
+        # The sweep runs whenever the Memory engine came up (the common case).
+        if server._memory_client is not None:
+            assert server._projection_service is not None
+
+    # Shutdown always cancels and clears it.
+    assert server._projection_service is None
+
+
 def test_app_server_mounts_native_notebook_routes():
     pytest.importorskip("fastapi")
 

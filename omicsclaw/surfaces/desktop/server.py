@@ -203,6 +203,8 @@ _memory_client = None  # MemoryClient instance (optional)
 _desktop_control_runtime: ControlRuntime | None = None
 _desktop_control_runtime_publication_lock = threading.Lock()
 _desktop_run_runtime: RunRuntime | None = None
+# ADR 0064 background projection sweep (lazily imported in the lifespan).
+_projection_service: "MemoryProjectionService | None" = None
 _desktop_multipart_capacity = DesktopMultipartCapacity(max_active=2)
 
 
@@ -742,7 +744,7 @@ async def _shutdown_desktop_lifespan_state() -> BaseException | None:
 
     global _channel_manager, _bridge_task
     global _desktop_control_runtime, _desktop_run_runtime, _memory_client
-    global _mcp_load_fn
+    global _mcp_load_fn, _projection_service
     first_error: BaseException | None = None
 
     def remember(label: str, exc: BaseException) -> None:
@@ -768,6 +770,16 @@ async def _shutdown_desktop_lifespan_state() -> BaseException | None:
             await channel_manager.stop_all()
         except BaseException as exc:
             remember("Error stopping bridge during shutdown", exc)
+
+    # Cancel the projection sweep before its dependencies (repository, Run Store,
+    # Memory engine) are closed below.
+    projection_service = _projection_service
+    _projection_service = None
+    if projection_service is not None:
+        try:
+            await projection_service.close()
+        except BaseException as exc:
+            remember("Error stopping projection service during shutdown", exc)
 
     # Every owner keeps its Task and cancellation signal together, preserving
     # the ADR 0009 signal-before-cancel ordering.
@@ -1061,6 +1073,35 @@ async def _desktop_runtime_lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("MemoryClient unavailable (non-fatal): %s", exc)
         _memory_client = None
+
+    # ADR 0064: start the background sweep that applies pending Project
+    # Projection Intents (frozen at Run terminalization) into Project-scoped
+    # Memory. Best-effort and non-fatal; requires the control repository, the Run
+    # Store, and a live Memory engine — all of which coexist only in this Desktop
+    # backend. A None _memory_client means the engine is down, so skip the sweep.
+    global _projection_service
+    try:
+        if (
+            _memory_client is not None
+            and _desktop_run_runtime is not None
+            and _desktop_control_runtime is not None
+        ):
+            from omicsclaw.memory import get_memory_client as _get_memory_client
+            from omicsclaw.memory.projection_service import MemoryProjectionService
+            from omicsclaw.memory.projection_source import RunManifestSourceReader
+
+            _projection_service = MemoryProjectionService(
+                repository=_desktop_control_runtime.repository,
+                read_source=RunManifestSourceReader(
+                    _desktop_run_runtime.run_store.read_manifest
+                ),
+                client_factory=lambda ns: _get_memory_client(namespace=ns),
+            )
+            _projection_service.start()
+            logger.info("Memory projection service started")
+    except Exception as exc:
+        logger.warning("Memory projection service unavailable (non-fatal): %s", exc)
+        _projection_service = None
 
     # Optionally load MCP server support
     global _mcp_load_fn
