@@ -505,3 +505,64 @@ async def test_describe_delivery_rolls_up_failed_and_unknown_outcomes(tmp_path):
         assert runtime.describe_delivery(unknown_source.delivery_id).state == "unknown"
     finally:
         await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_resend_reserves_against_in_flight_ingress_capacity(tmp_path):
+    """A concurrent novel-ingress reservation must block an Owner resend.
+
+    Ingress reserves the outstanding-delivery unit in an in-memory counter
+    *before* its Turn row is durable. ``insert_resend_delivery`` measures
+    capacity from durable rows only, so it could not see that reservation and a
+    novel Channel Turn plus a resend could both claim the last free unit.
+    ``resend_delivery`` now reserves through the same counter, closing the
+    cross-path window.
+    """
+
+    async def adapter(request: DeliveryAttemptRequest) -> DeliveryAdapterResult:
+        return DeliveryAdapterResult(DeliveryAttemptOutcome.ACCEPTED)
+
+    async def dispatch_events(_envelope: MessageEnvelope):
+        yield Final("go")
+
+    runtime = _telegram_runtime(
+        tmp_path,
+        adapter=adapter,
+        dispatch_events=dispatch_events,
+        max_outstanding_deliveries_total=1,
+        max_outstanding_deliveries_per_account=1,
+    )
+    await runtime.start()
+    try:
+        result = await runtime.submit_and_wait(
+            _channel_raw("7001:20", text="go"),
+            ControlRuntimePorts(user_id="42"),
+        )
+        await runtime.wait_delivery_idle()
+        (terminal,) = runtime.list_deliveries(turn_id=result.acceptance.turn_id)
+        assert runtime.describe_delivery(terminal.delivery_id).state == "delivered"
+
+        # Stand in for a concurrent novel Channel admission that has reserved the
+        # only unit but not yet committed its durable Delivery row.
+        in_flight = runtime._sequencer.try_reserve_delivery(
+            terminal.reply_target,
+            max_total=1,
+            max_per_account=1,
+        )
+        assert in_flight is not None
+
+        # The resend now shares that in-flight counter, so it sees backpressure
+        # instead of admitting a second unit past the bound.
+        blocked = runtime.resend_delivery(terminal.delivery_id)
+        assert blocked.code == "delivery_backpressure"
+        assert blocked.delivery is None
+        assert len(runtime.list_deliveries()) == 1
+
+        # With the in-flight unit released, the same resend is admitted.
+        in_flight.finish()
+        allowed = runtime.resend_delivery(terminal.delivery_id)
+        assert allowed.code == "resent"
+        await runtime.wait_delivery_idle()
+        assert len(runtime.list_deliveries()) == 2
+    finally:
+        await runtime.close()

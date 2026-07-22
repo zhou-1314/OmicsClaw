@@ -1128,13 +1128,28 @@ class ControlRuntime:
         ``delivery_not_settled``: the Pump may yet deliver it, and copying it now
         would show the Owner the same reply twice.
 
-        The settlement and capacity rules are evaluated inside the insert's own
-        transaction rather than here, so two concurrent operator resends cannot
-        both observe the last free capacity unit and both insert.
+        Capacity is gated in both contention domains.  This method first reserves
+        the outstanding-delivery unit through the same in-flight counter novel
+        Channel ingress uses, so a concurrent Turn admission and this resend
+        cannot both claim the last free unit -- the durable-only check inside
+        ``insert_resend_delivery`` cannot see an ingress reservation that has not
+        yet committed its Turn row.  ``insert_resend_delivery`` then re-checks the
+        durable bound and source settlement inside its own transaction, so two
+        concurrent resends still cannot both insert.
         """
 
         if not self._delivery_operations_available():
             return DeliveryOperationOutcome("delivery_unavailable")
+        summary = self.repository.describe_delivery(delivery_id)
+        if summary is None:
+            return DeliveryOperationOutcome("delivery_not_found")
+        reservation = self._sequencer.try_reserve_delivery(
+            summary.delivery.reply_target,
+            max_total=self._delivery_max_total,
+            max_per_account=self._delivery_max_per_account,
+        )
+        if reservation is None:
+            return DeliveryOperationOutcome("delivery_backpressure")
         try:
             record = self.repository.insert_resend_delivery(
                 delivery_id,
@@ -1147,6 +1162,8 @@ class ControlRuntime:
             return DeliveryOperationOutcome("delivery_not_settled")
         except DeliveryCapacityExceededError:
             return DeliveryOperationOutcome("delivery_backpressure")
+        finally:
+            reservation.finish()
         self._wake_delivery_pump()
         return DeliveryOperationOutcome("resent", delivery=record)
 
