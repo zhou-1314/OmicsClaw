@@ -40,31 +40,6 @@ from omicsclaw.skill.execution.environment import (
 
 logger = logging.getLogger(__name__)
 
-_IGNORED_TOP_LEVEL_DIRS = {
-    # VCS / caches
-    ".git",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".mypy_cache",
-    ".nox",
-    ".tox",
-    ".venv",
-    "__pycache__",
-    # Build / output artifacts
-    "build",
-    "output",
-    "workspace",
-    # Large data & non-code directories — these are never part of the
-    # editable surface and copying them would take hours on big projects.
-    "data",
-    "examples",
-    "frontend",
-    "website",
-    ".benchmarks",
-    "node_modules",
-    ".claude",
-}
-_IGNORED_NAMES = {".DS_Store"}
 _ACCEPTED_MANIFEST_MAX_BYTES = 1024 * 1024
 _ACCEPTED_PATCH_MAX_BYTES = 16 * 1024 * 1024
 _GIT_CONFIG_AUTHORITY_MAX_BYTES = 4096
@@ -5243,17 +5218,6 @@ class HarnessWorkspace:
         ) != expected_blobs:
             raise ValueError("Synthetic baseline Git tree does not match tracked bytes.")
 
-    def _detect_source_commit(self) -> str:
-        try:
-            return self._git_output(["rev-parse", "HEAD"], cwd=self.source_project_root)
-        except RuntimeError:
-            return ""
-
-    def _build_commit_message(self, iteration: int, patch: PatchPlan) -> str:
-        headline = patch.description.strip() or patch.diff_summary
-        headline = headline.splitlines()[0][:72]
-        return f"Harness iteration {iteration:04d}: {headline}"
-
     def _write_promotion_journal(self, payload: dict[str, Any]) -> None:
         atomic_write_owned_output_text(
             self.promotion_journal_path,
@@ -5268,33 +5232,6 @@ class HarnessWorkspace:
                 path.unlink()
         except OSError as exc:
             logger.warning("Failed to clean partial harness metadata %s: %s", path, exc)
-
-    def _should_skip_path(self, path: Path, excluded_roots: set[Path], *, is_dir: bool) -> bool:
-        if self._is_excluded(path, excluded_roots):
-            return True
-        if path.name in _IGNORED_NAMES:
-            return True
-        if is_dir and path.parent == self.source_project_root and path.name in _IGNORED_TOP_LEVEL_DIRS:
-            return True
-        return False
-
-    @staticmethod
-    def _is_excluded(path: Path, excluded_roots: set[Path]) -> bool:
-        resolved = path.resolve()
-        for excluded in excluded_roots:
-            try:
-                resolved.relative_to(excluded)
-                return True
-            except ValueError:
-                continue
-        return False
-
-    @staticmethod
-    def _copy_symlink(src: Path, dst: Path) -> None:
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if dst.exists() or dst.is_symlink():
-            dst.unlink()
-        os.symlink(os.readlink(src), dst)
 
     @staticmethod
     def _reset_path(path: Path) -> None:
