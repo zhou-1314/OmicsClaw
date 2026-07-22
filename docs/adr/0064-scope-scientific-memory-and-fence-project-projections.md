@@ -13,10 +13,11 @@ and
 
 ## Implementation
 
-Projection-fence repository foundation implemented (2026-07-15); the projection
-*consumer* path implemented and tested (2026-07-22); the production *producer*,
-a runnable Memory writer, and the Memory scope / dataset-identity migration
-remain not implemented.
+Projection-fence repository foundation implemented (2026-07-15); the full
+projection *mechanism* — record, sweep, apply, and land in Project-scoped Memory
+— implemented and tested end-to-end (2026-07-22); the production *producer* at
+terminalization, a real frozen-source reader, a runnable driver trigger, and the
+Memory scope / dataset-identity migration remain not implemented.
 
 The ControlStateRepository stores immutable, digest-bound Project Projection
 Intents atomically with Turn/Run terminal state and permits idempotent terminal
@@ -27,21 +28,27 @@ vocabulary and the canonical `(workspace_id, normalized_relative_path,
 content_sha256)` dataset-observation identity, plus a distinct provisional
 `(observed_size, observed_mtime_ns)` identity that never dedups against a
 settled one. `omicsclaw.memory.projection` applies a pending Intent idempotently
-— digest-verified, source-loss-safe, restart-safe, and archive-independent —
-and `omicsclaw.memory.projection_driver` drives a pending sweep over the real
-repository, proven end-to-end including post-archive completion.
+— digest-verified, source-loss-safe, restart-safe, and archive-independent — in
+both a sync and an async (`aapply_projection_intent`) form;
+`omicsclaw.memory.projection_driver` drives a pending sweep (sync + async) with
+per-Intent transient-fault deferral; and `omicsclaw.memory.projection_writer`
+lands the frozen projection in an explicit `project/<project_id>` namespace at
+`projection://<kind>/<intent_id>` (overwrite-mode, idempotent by Intent ID) —
+the first explicit-scope write target. Proven end-to-end over a real `control.db`
+plus a real `MemoryEngine`, including post-archive completion and absence from a
+legacy transport namespace.
 
 Still absent: no production code freezes a real Projection Intent at
 terminalization (`RunReport.projections` / `terminalize_turn(projections=)`
-remain unfed); no runnable driver wires a real source-reader and a
-Project-scoped Memory writer (blocked on a Project-scoped Memory target and on
-the sync-control / async-Memory boundary); and the scope vocabulary is not yet
-enforced on the write path. Current Memory Namespaces still mix Workspace,
-Desktop launch, and Channel sender identities; `_auto_capture_dataset` can
-therefore still create transport-partitioned `dataset://` records, and the
-scope / dataset-identity migration that would let Project archive distinguish a
-novel scientific Memory mutation from delayed projection of already-accepted
-work is unimplemented.
+remain unfed), so the driver has no production input yet; there is no real
+frozen-source reader over the Run/Transcript/Attachment stores (tests inject a
+reader) and no runnable driver trigger (background sweep or post-terminal hook);
+and the scope vocabulary is not yet enforced on the ad-hoc write path. Current
+Memory Namespaces still mix Workspace, Desktop launch, and Channel sender
+identities; `_auto_capture_dataset` can therefore still create
+transport-partitioned `dataset://` records, and the scope / dataset-identity
+migration that would let Project archive distinguish a novel scientific Memory
+mutation from delayed projection of already-accepted work is unimplemented.
 
 ## Context
 
