@@ -34,7 +34,8 @@ def _record_run_projection(
             run_kind="skill",
             scope_kind="project",
             project_id=project.project_id,
-            manifest_ref="run-store://manifest/1",
+            # ADR 0064: a run projection's source_ref must equal the Run's manifest_ref.
+            manifest_ref=source_ref,
         )
     )
     assignment = repo.assign_run(accepted.run_id, executor_kind="local")

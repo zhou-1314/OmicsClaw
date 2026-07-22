@@ -2139,3 +2139,66 @@ def test_successful_unassigned_run_freezes_no_projection(tmp_path: Path) -> None
         repo.close()
 
     asyncio.run(scenario())
+
+
+def test_load_projection_read_failure_propagates_but_unassigned_short_circuits(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    # ADR 0064 completeness: a projection-derivation read failure on a project
+    # Run PROPAGATES (so terminalization is not attempted and recovery re-freezes
+    # the Intent), while an unassigned Run short-circuits before reading the
+    # Manifest (a Run that needs no projection must never fail on that read).
+    async def scenario() -> None:
+        repo = ControlStateRepository(tmp_path / "state")
+        authority = _Authority()
+
+        async def executor(context):
+            return _successful_result(context)
+
+        runtime = _runtime(tmp_path, repo, authority, executor)
+
+        def _receipt(project_id):
+            return RunRecord(
+                run_id="a" * 32,
+                scope_kind="project" if project_id else "unassigned",
+                project_id=project_id,
+                run_kind="skill",
+                parent_turn_id=None,
+                retry_of_run_id=None,
+                status="running",
+                terminal_code=None,
+                manifest_ref="run-store://m/1",
+                created_at_ms=1,
+                started_at_ms=1,
+                finished_at_ms=None,
+                revision=1,
+            )
+
+        reads: list[str] = []
+
+        def _raise(ref):
+            reads.append(ref)
+            raise RuntimeError("transient manifest read fault")
+
+        monkeypatch.setattr(runtime.run_store, "read_manifest", _raise)
+
+        monkeypatch.setattr(runtime.repository, "get_run", lambda rid: _receipt("proj1"))
+        with pytest.raises(RuntimeError):
+            runtime._load_analysis_lineage_projections(
+                run_id="a" * 32, manifest_ref="run-store://m/1"
+            )
+
+        monkeypatch.setattr(runtime.repository, "get_run", lambda rid: _receipt(None))
+        assert (
+            runtime._load_analysis_lineage_projections(
+                run_id="a" * 32, manifest_ref="run-store://m/1"
+            )
+            == ()
+        )
+        assert reads == ["run-store://m/1"]  # only the project Run read the Manifest
+
+        await runtime.close()
+        repo.close()
+
+    asyncio.run(scenario())

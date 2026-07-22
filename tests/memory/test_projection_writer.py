@@ -60,7 +60,8 @@ def _record_run_projection(
                 ProjectionIntentInput(
                     projection_kind="analysis_lineage",
                     source_store="run",
-                    source_ref="run-store://completion/1",
+                    # Must equal the Run's manifest_ref (ADR 0064 binding).
+                    source_ref="run-store://manifest/1",
                     content_sha256=_digest(content),
                 ),
             ),

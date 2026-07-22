@@ -1289,7 +1289,7 @@ def test_run_submission_assignment_and_report_are_fenced(tmp_path):
                     ProjectionIntentInput(
                         projection_kind="analysis_lineage",
                         source_store="run",
-                        source_ref="run-store://completion/1",
+                        source_ref="run-store://manifest/1",
                         content_sha256=_fingerprint("f"),
                     ),
                 ),

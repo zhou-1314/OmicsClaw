@@ -2,6 +2,8 @@
 
 import hashlib
 
+import pytest
+
 from omicsclaw.control.projection_payload import (
     analysis_lineage_bytes,
     analysis_lineage_digest,
@@ -48,12 +50,17 @@ def test_reader_ignores_non_run_store():
     assert reader(source_store="transcript", source_ref="x") is None
 
 
-def test_reader_returns_none_on_unreadable_manifest():
+def test_reader_propagates_read_error_for_deferral():
+    # A read error propagates so the driver DEFERS/retries (transient-safe)
+    # rather than permanently failing the Intent as source_missing. The Run
+    # Store cannot distinguish missing from transient, and v1 never deletes
+    # Manifests, so deferral is the safe choice for both.
     def _raise(ref):
-        raise FileNotFoundError(ref)
+        raise RuntimeError("transient read fault")
 
     reader = RunManifestSourceReader(_raise)
-    assert reader(source_store="run", source_ref="gone") is None
+    with pytest.raises(RuntimeError):
+        reader(source_store="run", source_ref="x")
 
 
 def test_reader_returns_none_on_non_mapping_manifest():

@@ -25,10 +25,17 @@ class RunManifestSourceReader:
 
     Structurally a ``omicsclaw.memory.projection.SourceReader``. For the ``run``
     store it reads the Manifest via the injected reader and returns the canonical
-    analysis-lineage bytes; a missing/unreadable Manifest yields ``None`` (source
-    loss → the Intent fails for explicit repair). Any other store also yields
-    ``None`` — this reader only owns the ``run`` store, and the only Producer
-    today emits ``run`` Intents; a multi-store dispatcher is a future extension.
+    analysis-lineage bytes.
+
+    A read error PROPAGATES (so the driver defers the Intent and retries) rather
+    than being reported as ``None`` / source loss. The Run Store collapses a
+    genuinely-missing Manifest and a transient read fault into the same error, so
+    the reader cannot tell them apart; a transient fault must not permanently
+    fail the Intent, and Manifests are not deleted in v1, so deferral is the safe
+    choice for both. Genuine tampering surfaces instead as a digest mismatch in
+    the applicator. Any non-``run`` store yields ``None`` — this reader only owns
+    the ``run`` store, and the only Producer today emits ``run`` Intents; a
+    multi-store dispatcher is a future extension.
     """
 
     def __init__(self, read_manifest: Callable[[str], Mapping[str, Any]]):
@@ -40,13 +47,7 @@ class RunManifestSourceReader:
                 "RunManifestSourceReader cannot read source_store=%r", source_store
             )
             return None
-        try:
-            manifest = self._read_manifest(source_ref)
-        except Exception:  # noqa: BLE001 — a lost/unreadable Manifest is source loss
-            logger.warning(
-                "Projection source Manifest unreadable: %s", source_ref, exc_info=True
-            )
-            return None
+        manifest = self._read_manifest(source_ref)  # read errors propagate -> deferred
         if not isinstance(manifest, Mapping):
             return None
         return analysis_lineage_bytes(manifest)

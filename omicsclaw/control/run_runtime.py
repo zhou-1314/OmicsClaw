@@ -1874,22 +1874,24 @@ class RunRuntime:
     def _load_analysis_lineage_projections(
         self, *, run_id: str, manifest_ref: str
     ) -> tuple[ProjectionIntentInput, ...]:
-        """Best-effort load of the receipt + Manifest, then derive the projection.
+        """Load the receipt + Manifest and derive the projection for the live path.
 
-        Used by the live success path, which has not already loaded them. A
-        derivation failure logs and yields no projection: the Run still
-        terminalizes, and with no Intent frozen there is simply no Project Memory
-        effect to race against archive — best-effort projection never blocks
-        completion.
+        A read failure PROPAGATES rather than being swallowed. The terminal
+        transaction is then not attempted, so the (immutable, already-committed)
+        success Manifest stays durable with a still-`running` Receipt, and
+        startup recovery re-derives and freezes the Intent via
+        `_verified_manifest_terminal_report`. This preserves ADR 0064
+        completeness: a project success can never terminalize WITHOUT its Intent.
+        Swallowing here would be unrecoverable — a later `apply_run_report`
+        returns `already_terminal` without ever inserting the dropped projection.
         """
-        try:
-            receipt = self.repository.get_run(run_id)
-            manifest = self.run_store.read_manifest(manifest_ref)
-        except Exception:  # noqa: BLE001 — best-effort projection must not block terminalization
-            logger.warning(
-                "Could not load projection source for run %s", run_id, exc_info=True
-            )
+        receipt = self.repository.get_run(run_id)
+        if not receipt.project_id:
+            # Unassigned Run: no Project Memory, so short-circuit BEFORE reading
+            # the Manifest — an unassigned Run must never fail terminalization on
+            # a projection read it does not need.
             return ()
+        manifest = self.run_store.read_manifest(manifest_ref)
         return self._analysis_lineage_projections(
             receipt=receipt, manifest=manifest, manifest_ref=manifest_ref
         )

@@ -4108,9 +4108,27 @@ class ControlStateRepository:
         origin_id: str,
         projections: Sequence[ProjectionIntentInput],
     ) -> tuple[ProjectionIntentRecord, ...]:
+        # ADR 0064: a Run-sourced projection must cite that Run's own Manifest.
+        # The origin already fences the Intent to (Project, Run); this additionally
+        # binds the frozen source to the Run, so a malformed caller cannot record
+        # runA's Intent pointing at runB's Manifest and project the wrong lineage.
+        run_manifest_ref: str | None = None
+        if origin_kind == "run":
+            run_row = connection.execute(
+                "SELECT manifest_ref FROM runs WHERE run_id = ?", (origin_id,)
+            ).fetchone()
+            run_manifest_ref = str(run_row["manifest_ref"]) if run_row else None
         records: list[ProjectionIntentRecord] = []
         for projection in projections:
             _validate_projection(projection)
+            if (
+                origin_kind == "run"
+                and projection.source_store == "run"
+                and projection.source_ref != run_manifest_ref
+            ):
+                raise ValueError(
+                    "run projection source_ref must equal the Run's manifest_ref"
+                )
             now = self._now()
             intent_id = _new_id()
             try:
