@@ -34,6 +34,7 @@ from omicsclaw.skill.result import SkillRunResult
 from .errors import ControlIntegrityError, RunIntegrityIncidentError
 from .models import (
     AssignmentStatus,
+    ProjectionIntentInput,
     RunAcceptanceIntent,
     RunAcceptanceStatus,
     RunIntegrityEvidenceCode,
@@ -46,6 +47,7 @@ from .models import (
     RunReport,
     RunStartupReconciliationResult,
 )
+from .projection_payload import ANALYSIS_LINEAGE_KIND, analysis_lineage_digest
 from .repository import ControlStateRepository
 from .run_contract import (
     ProjectScope,
@@ -1575,6 +1577,10 @@ class RunRuntime:
                                 run_id=payload.run_id,
                                 assignment_id=assignment_id,
                                 terminal_status="succeeded",
+                                projections=self._load_analysis_lineage_projections(
+                                    run_id=payload.run_id,
+                                    manifest_ref=payload.manifest_ref,
+                                ),
                             )
                         )
                         if (
@@ -1836,6 +1842,58 @@ class RunRuntime:
                 ),
             ) from exc
 
+    @staticmethod
+    def _analysis_lineage_projections(
+        *,
+        receipt: RunRecord,
+        manifest: Mapping[str, Any],
+        manifest_ref: str,
+    ) -> tuple[ProjectionIntentInput, ...]:
+        """Freeze one analysis-lineage Project Projection Intent (ADR 0064).
+
+        Attached to the success RunReport so the Intent is inserted in the SAME
+        control transaction that terminalizes the Run — archive then observes
+        either nonterminal work or terminal work with its complete frozen
+        projection authority, never the gap between. The frozen source is the
+        immutable Run Manifest; the digest is the canonical analysis-lineage
+        derivation the projector re-verifies. Unassigned Runs contribute no
+        Project Memory (the repository also drops projections when project_id is
+        None), so they freeze nothing.
+        """
+        if not receipt.project_id:
+            return ()
+        return (
+            ProjectionIntentInput(
+                projection_kind=ANALYSIS_LINEAGE_KIND,
+                source_store="run",
+                source_ref=manifest_ref,
+                content_sha256=analysis_lineage_digest(manifest),
+            ),
+        )
+
+    def _load_analysis_lineage_projections(
+        self, *, run_id: str, manifest_ref: str
+    ) -> tuple[ProjectionIntentInput, ...]:
+        """Best-effort load of the receipt + Manifest, then derive the projection.
+
+        Used by the live success path, which has not already loaded them. A
+        derivation failure logs and yields no projection: the Run still
+        terminalizes, and with no Intent frozen there is simply no Project Memory
+        effect to race against archive — best-effort projection never blocks
+        completion.
+        """
+        try:
+            receipt = self.repository.get_run(run_id)
+            manifest = self.run_store.read_manifest(manifest_ref)
+        except Exception:  # noqa: BLE001 — best-effort projection must not block terminalization
+            logger.warning(
+                "Could not load projection source for run %s", run_id, exc_info=True
+            )
+            return ()
+        return self._analysis_lineage_projections(
+            receipt=receipt, manifest=manifest, manifest_ref=manifest_ref
+        )
+
     async def _verified_manifest_terminal_report(
         self,
         *,
@@ -1882,6 +1940,11 @@ class RunRuntime:
                     run_id=run_id,
                     assignment_id=assignment_id,
                     terminal_status="succeeded",
+                    projections=self._analysis_lineage_projections(
+                        receipt=observation.receipt,
+                        manifest=manifest,
+                        manifest_ref=manifest_ref,
+                    ),
                 )
             terminal_code = completion.get("terminal_code")
             if not isinstance(terminal_code, str):

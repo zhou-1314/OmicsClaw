@@ -29,6 +29,7 @@ from omicsclaw.control.run_contract import (
     UnassignedScope,
     canonical_run_fingerprint,
 )
+from omicsclaw.control.projection_payload import analysis_lineage_digest
 from omicsclaw.control.run_dispatcher import RunDispatcher
 from omicsclaw.control.run_runtime import (
     LocalVerifiedSkillOutput,
@@ -2074,6 +2075,67 @@ def test_runtime_close_closes_verified_artifact_descriptors(tmp_path: Path) -> N
 
         await runtime.close()
         assert reader.closed is True
+        repo.close()
+
+    asyncio.run(scenario())
+
+
+def test_successful_project_run_freezes_an_analysis_lineage_projection(
+    tmp_path: Path,
+) -> None:
+    # ADR 0064 Producer: a project-scoped Run that terminalizes as succeeded must
+    # freeze exactly one analysis_lineage Projection Intent, atomically, whose
+    # source is the Run Manifest and whose digest the projector can re-verify.
+    async def scenario() -> None:
+        repo = ControlStateRepository(tmp_path / "state")
+        project = repo.create_project("Projected study")
+        authority = _Authority()
+
+        async def executor(context):
+            return _successful_result(context)
+
+        runtime = _runtime(tmp_path, repo, authority, executor)
+        await runtime.start()
+        result = await runtime.submit(
+            _submission("1", scope=ProjectScope(project.project_id))
+        )
+        terminal = await _wait_terminal(repo, result.receipt.run_id)
+        assert terminal.status == "succeeded"
+
+        intents = repo.list_projection_intents(project.project_id)
+        assert len(intents) == 1
+        intent = intents[0]
+        assert intent.projection_kind == "analysis_lineage"
+        assert intent.source_store == "run"
+        assert intent.source_ref == terminal.manifest_ref
+        assert intent.state == "pending"
+        # The frozen digest matches a re-derivation from the durable Manifest.
+        manifest = runtime.run_store.read_manifest(terminal.manifest_ref)
+        assert intent.content_sha256 == analysis_lineage_digest(manifest)
+
+        await runtime.close()
+        repo.close()
+
+    asyncio.run(scenario())
+
+
+def test_successful_unassigned_run_freezes_no_projection(tmp_path: Path) -> None:
+    # An unassigned Run contributes no Project Memory, so it freezes no Intent.
+    async def scenario() -> None:
+        repo = ControlStateRepository(tmp_path / "state")
+        authority = _Authority()
+
+        async def executor(context):
+            return _successful_result(context)
+
+        runtime = _runtime(tmp_path, repo, authority, executor)
+        await runtime.start()
+        result = await runtime.submit(_submission("2"))  # UnassignedScope default
+        terminal = await _wait_terminal(repo, result.receipt.run_id)
+        assert terminal.status == "succeeded"
+        assert terminal.project_id is None
+
+        await runtime.close()
         repo.close()
 
     asyncio.run(scenario())
