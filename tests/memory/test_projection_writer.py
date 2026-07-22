@@ -167,6 +167,30 @@ async def test_reapply_is_idempotent_overwrite(engine, tmp_path):
     assert record is not None
     assert record.content == "v2"
 
+    # Prove a true overwrite (a single Memory row), not a latest-wins version
+    # chain — recall alone would pass either way.
+    import sqlalchemy as sa
+
+    from omicsclaw.memory.models import Edge, Memory, Path
+
+    async with engine.db.session() as session:
+        path = (
+            await session.execute(
+                sa.select(Path).where(
+                    Path.namespace == project_scope_namespace(project.project_id),
+                    Path.domain == "projection",
+                    Path.path == projection_memory_uri(intent).split("://", 1)[1],
+                )
+            )
+        ).scalar_one()
+        edge = await session.get(Edge, path.edge_id)
+        memories = (
+            await session.execute(
+                sa.select(Memory).where(Memory.node_uuid == edge.child_uuid)
+            )
+        ).scalars().all()
+    assert len(memories) == 1
+
 
 @pytest.mark.asyncio
 async def test_digest_mismatch_writes_nothing(engine, tmp_path):
