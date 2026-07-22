@@ -1323,6 +1323,23 @@ async def execute_parse_literature(
     if not lit_script.exists():
         return "Error: literature parsing skill not found."
 
+    # ADR 0070: this agent tool spawns the ``literature`` leaf Skill directly and
+    # never routes through the shared ``_prepare_skill_run`` runner, so it must
+    # claim a fresh, exclusively-owned output directory itself — exactly as
+    # ``oc run literature`` does at runner.py. Without the claim, two calls in the
+    # same wall-clock second reuse ``literature-parse_<ts>`` and the second
+    # inherits the first's result.json / datasets as if this execution produced
+    # them. Fail closed on a non-fresh target rather than read stale evidence.
+    from omicsclaw.skill.execution.output_ownership import (
+        OutputDirectoryClaimError,
+        claim_fresh_output_directory,
+    )
+
+    try:
+        out_dir = claim_fresh_output_directory(out_dir, owner="skill:literature")
+    except OutputDirectoryClaimError as exc:
+        return f"Error: {exc}"
+
     cmd = [get_skill_runner_python(), str(lit_script)]
     cmd.extend(["--input", input_value])
     cmd.extend(["--input-type", input_type])

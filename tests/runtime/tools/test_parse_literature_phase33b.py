@@ -177,3 +177,119 @@ async def test_register_literature_datasets_soft_fails_without_result_json(tmp_p
 
     # No result.json present → returns quietly, never raises.
     await ae._register_literature_datasets(tmp_path, "s1", "t-glioma")
+
+
+# ---- ADR 0070: execute_parse_literature claims a fresh output dir ------------
+#
+# execute_parse_literature spawns the `literature` leaf Skill directly (it does
+# NOT go through the shared `_prepare_skill_run` runner), so it must claim a
+# fresh, exclusively-owned output directory itself. These two tests guard the
+# ADR-0070 gate on this agent-tool Surface: fail closed on a non-fresh target,
+# and claim before spawn on a fresh one.
+
+
+class _FrozenClock:
+    """Freezes ``datetime.now()`` so ``literature-parse_<ts>`` is deterministic."""
+
+    @staticmethod
+    def now(tz=None):
+        import datetime as _dt
+
+        return _dt.datetime(2026, 7, 22, 12, 0, 0)
+
+
+def _stub_literature_skill(ae, monkeypatch, tmp_path):
+    """Point the executor at an isolated OUTPUT_DIR + a dummy literature script."""
+    monkeypatch.setattr(ae, "OUTPUT_DIR", tmp_path / "out")
+    monkeypatch.setattr(ae, "OMICSCLAW_DIR", tmp_path)
+    monkeypatch.setattr(ae, "datetime", _FrozenClock)
+    lit = tmp_path / "skills" / "literature"
+    lit.mkdir(parents=True)
+    (lit / "literature_parse.py").write_text("", encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_parse_literature_fails_closed_on_non_fresh_output_dir(
+    tmp_path, monkeypatch
+):
+    # Regression guard for ADR 0070 R9: a prior run's result.json must NOT be
+    # inherited by a new execution, and the child must never spawn against a
+    # dirty directory.
+    import omicsclaw.runtime.agent.state  # noqa: F401
+    import omicsclaw.runtime.tools.builders.agent_executors as ae
+
+    _stub_literature_skill(ae, monkeypatch, tmp_path)
+
+    # Pre-seed the EXACT directory this call will compute with stale evidence.
+    stale_dir = tmp_path / "out" / "literature-parse_20260722_120000"
+    stale_dir.mkdir(parents=True)
+    (stale_dir / "result.json").write_text('{"status": "ok"}', encoding="utf-8")
+
+    spawn_calls: list = []
+
+    async def _spy_spawn(*cmd, **kw):
+        spawn_calls.append(cmd)
+        raise AssertionError("must not spawn against a non-fresh output dir")
+
+    monkeypatch.setattr(ae.asyncio, "create_subprocess_exec", _spy_spawn)
+
+    result = await ae.execute_parse_literature(
+        {"input_value": "10.1234/x"}, session_id=None, thread_id=""
+    )
+
+    assert spawn_calls == []  # never spawned
+    assert result.startswith("Error:")
+    assert "fresh output directory" in result  # the claim's fail-closed message
+    # Existing user evidence is never deleted or rewritten (ADR 0070).
+    assert json.loads((stale_dir / "result.json").read_text()) == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_parse_literature_claims_fresh_output_dir_before_spawn(
+    tmp_path, monkeypatch
+):
+    # On a fresh target the executor claims the directory (durable marker present)
+    # and the child is spawned INTO the claimed dir — proving claim-before-spawn.
+    from omicsclaw.common.output_claim import OUTPUT_CLAIM_FILENAME
+
+    import omicsclaw.runtime.agent.state  # noqa: F401
+    import omicsclaw.runtime.tools.builders.agent_executors as ae
+
+    _stub_literature_skill(ae, monkeypatch, tmp_path)
+    # Keep the test hermetic: the KG ingest is a background best-effort spawn.
+    monkeypatch.setattr(ae, "_spawn_literature_kg_ingest", lambda *a, **k: None)
+
+    from pathlib import Path
+
+    seen: dict = {}
+
+    class _FakeProc:
+        returncode = 0
+
+        def __init__(self, out_dir):
+            self._out_dir = out_dir
+
+        async def communicate(self):
+            # The claim marker must already exist when the child runs.
+            assert (self._out_dir / OUTPUT_CLAIM_FILENAME).exists()
+            (self._out_dir / "report.md").write_text("# literature ok\n", encoding="utf-8")
+            return (b"done", b"")
+
+    async def _fake_spawn(*cmd, **kw):
+        args = list(cmd)
+        out = Path(args[args.index("--output") + 1])
+        seen["out"] = out
+        return _FakeProc(out)
+
+    monkeypatch.setattr(ae.asyncio, "create_subprocess_exec", _fake_spawn)
+
+    result = await ae.execute_parse_literature(
+        {"input_value": "10.1234/x", "auto_download": False},
+        session_id=None,
+        thread_id="",
+    )
+
+    assert "literature ok" in result
+    claimed = seen["out"]
+    assert claimed.name == "literature-parse_20260722_120000"
+    assert (claimed / OUTPUT_CLAIM_FILENAME).exists()  # durable claim survived
