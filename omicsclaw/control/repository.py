@@ -4222,6 +4222,31 @@ class ControlStateRepository:
             ).fetchall()
         return tuple(_projection_record(row) for row in rows)
 
+    def list_pending_projection_intents(
+        self, *, limit: int = 100
+    ) -> tuple[ProjectionIntentRecord, ...]:
+        """Pending Intents across *all* Projects, oldest first, for the driver.
+
+        Deliberately not filtered by Project lifecycle: a pending Intent frozen
+        while a Project was active must still be applied after archive (ADR 0064
+        "A projector may apply a matching pending Intent after the Project
+        becomes archived"). The projector — not this read — enforces that only
+        the frozen projection is written.
+        """
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        with self._read() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM project_projection_intents
+                WHERE state = 'pending'
+                ORDER BY created_at_ms, projection_intent_id
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return tuple(_projection_record(row) for row in rows)
+
     # ------------------------------------------------------------------
     # Persistent Outbound Delivery
     # ------------------------------------------------------------------
