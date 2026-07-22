@@ -16,10 +16,14 @@ from omicsclaw.control.models import ProjectionIntentRecord
 from omicsclaw.memory.memory_client import MemoryClient
 
 __all__ = [
+    "ClientFactory",
     "project_scope_namespace",
     "projection_memory_uri",
     "MemoryProjectionWriter",
 ]
+
+# namespace string -> a MemoryClient bound to that namespace (over a shared engine).
+ClientFactory = Callable[[str], MemoryClient]
 
 
 def project_scope_namespace(project_id: str) -> str:
@@ -51,7 +55,7 @@ def projection_memory_uri(intent: ProjectionIntentRecord) -> str:
 class MemoryProjectionWriter:
     """AsyncProjectionWriter landing frozen projections in Project-scoped Memory."""
 
-    def __init__(self, client_factory: Callable[[str], MemoryClient]):
+    def __init__(self, client_factory: ClientFactory):
         # ``client_factory``: namespace string -> MemoryClient. Injected so the
         # writer never owns engine/DB lifecycle; a runner supplies a factory
         # over its shared MemoryEngine (mirrors CompatMemoryStore._client_for_namespace).
