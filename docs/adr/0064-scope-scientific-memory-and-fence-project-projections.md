@@ -14,10 +14,10 @@ and
 ## Implementation
 
 Projection-fence repository foundation implemented (2026-07-15); the full
-projection *mechanism* — record, sweep, apply, and land in Project-scoped Memory
-— implemented and tested end-to-end (2026-07-22); the production *producer* at
-terminalization, a real frozen-source reader, a runnable driver trigger, and the
-Memory scope / dataset-identity migration remain not implemented.
+projection path — Producer at terminalization, frozen-source reader, background
+trigger, and application into Project-scoped Memory — implemented, wired into the
+Desktop backend, and tested end-to-end (2026-07-22). Only the scope /
+dataset-identity migration of the *ad-hoc* Memory write path remains.
 
 The ControlStateRepository stores immutable, digest-bound Project Projection
 Intents atomically with Turn/Run terminal state and permits idempotent terminal
@@ -34,21 +34,27 @@ both a sync and an async (`aapply_projection_intent`) form;
 per-Intent transient-fault deferral; and `omicsclaw.memory.projection_writer`
 lands the frozen projection in an explicit `project/<project_id>` namespace at
 `projection://<kind>/<intent_id>` (overwrite-mode, idempotent by Intent ID) —
-the first explicit-scope write target. Proven end-to-end over a real `control.db`
-plus a real `MemoryEngine`, including post-archive completion and absence from a
-legacy transport namespace.
+the first explicit-scope write target.
 
-Still absent: no production code freezes a real Projection Intent at
-terminalization (`RunReport.projections` / `terminalize_turn(projections=)`
-remain unfed), so the driver has no production input yet; there is no real
-frozen-source reader over the Run/Transcript/Attachment stores (tests inject a
-reader) and no runnable driver trigger (background sweep or post-terminal hook);
-and the scope vocabulary is not yet enforced on the ad-hoc write path. Current
-Memory Namespaces still mix Workspace, Desktop launch, and Channel sender
-identities; `_auto_capture_dataset` can therefore still create
-transport-partitioned `dataset://` records, and the scope / dataset-identity
-migration that would let Project archive distinguish a novel scientific Memory
-mutation from delayed projection of already-accepted work is unimplemented.
+The production path is now closed. A project-scoped Run that terminalizes as
+succeeded freezes exactly one `analysis_lineage` Projection Intent in the SAME
+control transaction that terminalizes it (`RunRuntime` attaches it to the
+success `RunReport`; the frozen source is the immutable Manifest, the digest the
+canonical `omicsclaw.control.projection_payload` derivation). A
+`RunManifestSourceReader` re-derives those bytes from the Manifest, and a
+`MemoryProjectionService` background sweep — wired into the Desktop backend
+lifespan next to the bridge task and cancelled before its repository / Run Store
+/ Memory engine dependencies close — applies pending Intents into
+`project/<project_id>` Memory, including after archive. Proven end-to-end over a
+real `control.db` + `MemoryEngine`.
+
+Still absent: only the scope / dataset-identity migration of the *ad-hoc* Memory
+write path. Current Memory Namespaces for direct writes still mix Workspace,
+Desktop launch, and Channel sender identities; `_auto_capture_dataset` can still
+create transport-partitioned `dataset://` records; and the explicit scope
+vocabulary is not yet enforced on those ad-hoc writes (novel Project-scoped
+mutation is transitively fenced only because Turn admission rejects archived
+Projects, not by a Memory-layer gate).
 
 ## Context
 
