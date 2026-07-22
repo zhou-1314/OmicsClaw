@@ -16,8 +16,9 @@ and
 Projection-fence repository foundation implemented (2026-07-15); the full
 projection path — Producer at terminalization, frozen-source reader, background
 trigger, and application into Project-scoped Memory — implemented, wired into the
-Desktop backend, and tested end-to-end (2026-07-22). Only the scope /
-dataset-identity migration of the *ad-hoc* Memory write path remains.
+Desktop backend, and tested end-to-end (2026-07-22). The scope /
+dataset-identity migration of the *ad-hoc* Memory write path is **deferred**
+(2026-07-22); see "Deferred" at the end of this section.
 
 The ControlStateRepository stores immutable, digest-bound Project Projection
 Intents atomically with Turn/Run terminal state and permits idempotent terminal
@@ -55,6 +56,32 @@ create transport-partitioned `dataset://` records; and the explicit scope
 vocabulary is not yet enforced on those ad-hoc writes (novel Project-scoped
 mutation is transitively fenced only because Turn admission rejects archived
 Projects, not by a Memory-layer gate).
+
+**Deferred (2026-07-22).** The ad-hoc write-path migration is deferred, not
+abandoned. Its Project fence is already effective by construction: an ad-hoc
+scientific Memory write only runs inside a live Turn, Turn admission rejects a
+Turn bound to a non-active Project (`project_archived`), and `archive_project`
+returns BUSY while the Project has any nonterminal Turn or Run
+(`_project_has_nonterminal_work`) on a single-writer `control.db` — so a novel
+Project-scoped write can never land against an already-archived Project. The
+missing Memory-layer gate is therefore defense-in-depth over an already-closed
+window, not a live hole.
+
+The remaining migration is also invasive out of proportion to that residual
+value. The Memory capture layer (`omicsclaw/skill/orchestration.py`,
+`omicsclaw/runtime/tools/builders/agent_executors.py`,
+`omicsclaw/runtime/agent/state.py`, `omicsclaw/memory/compat.py`) holds no
+`omicsclaw.control` import and no reachable control handle — a deliberate
+structural separation. An explicit Memory-layer scope/archive gate and a stable
+`workspace_id` for dataset identity both require injecting a control-plane handle
+across that separation; even the smallest slice pays that same cross-divorce
+cost, and threading `workspace_id` additionally forks on an unresolved
+reconciliation of the capture root (`OMICSCLAW_DIR`) with the control plane's
+authoritative `workspace_id`. The scope vocabulary and dataset-identity
+primitives (`omicsclaw.memory.scientific_scope`) are already in place, so the
+migration resumes without rework once a concrete driver appears — an observed
+cross-Surface dataset-identity fork, or a need for a Memory-layer archive gate
+independent of Turn admission.
 
 ## Context
 
