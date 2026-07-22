@@ -43,10 +43,12 @@ __all__ = [
     "ProjectionOutcome",
     "SourceReader",
     "ProjectionWriter",
+    "AsyncProjectionWriter",
     "IntentFinisher",
     "SOURCE_MISSING",
     "DIGEST_MISMATCH",
     "apply_projection_intent",
+    "aapply_projection_intent",
 ]
 
 # Permanent-failure codes frozen onto the Intent's ``last_error_code`` for
@@ -86,6 +88,15 @@ class ProjectionWriter(Protocol):
         """
 
 
+class AsyncProjectionWriter(Protocol):
+    async def __call__(self, *, intent: ProjectionIntentRecord, content: bytes) -> None:
+        """Async :class:`ProjectionWriter` — same idempotency/fault contract.
+
+        Exists because the real Memory store (``MemoryClient``) is async while
+        the control repository and the source stores are sync.
+        """
+
+
 class IntentFinisher(Protocol):
     def __call__(
         self, projection_intent_id: str, *, state: str, error_code: str | None = None
@@ -95,6 +106,35 @@ class IntentFinisher(Protocol):
 
 def _sha256_hex(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
+
+
+def _terminal_noop(intent: ProjectionIntentRecord) -> ProjectionOutcome | None:
+    """Restart / duplicate safety: an already-terminal Intent is a no-op.
+
+    Returns the no-op outcome for a settled Intent, or ``None`` when the Intent
+    is still ``pending`` and must be evaluated. Deliberately does not read the
+    source for a terminal Intent.
+    """
+    if intent.state == "applied":
+        return ProjectionOutcome(intent.projection_intent_id, ProjectionResult.ALREADY_APPLIED)
+    if intent.state == "failed":
+        return ProjectionOutcome(
+            intent.projection_intent_id, ProjectionResult.ALREADY_FAILED, intent.last_error_code
+        )
+    return None  # only ``pending`` remains (the table CHECK-constrains the rest)
+
+
+def _permanent_failure(intent: ProjectionIntentRecord, content: bytes | None) -> str | None:
+    """Return a permanent-failure ``error_code`` for this content, else ``None``.
+
+    ``None`` source is a vanished frozen source; a digest mismatch is drift
+    since the freeze. Both require explicit repair (never a legacy write).
+    """
+    if content is None:
+        return SOURCE_MISSING
+    if _sha256_hex(content) != intent.content_sha256:
+        return DIGEST_MISMATCH
+    return None
 
 
 def apply_projection_intent(
@@ -111,35 +151,57 @@ def apply_projection_intent(
     retry). The function never consults Project lifecycle — see the module
     docstring's archive-independence property.
     """
+    noop = _terminal_noop(intent)
+    if noop is not None:
+        return noop
+
     intent_id = intent.projection_intent_id
-
-    # Restart / duplicate safety: an already-terminal Intent is a no-op. We do
-    # not re-read the source or re-write Memory for a settled Intent.
-    if intent.state == "applied":
-        return ProjectionOutcome(intent_id, ProjectionResult.ALREADY_APPLIED)
-    if intent.state == "failed":
-        return ProjectionOutcome(
-            intent_id, ProjectionResult.ALREADY_FAILED, intent.last_error_code
-        )
-    # Only ``pending`` remains (the table CHECK-constrains state to these three).
-
     content = read_source(source_store=intent.source_store, source_ref=intent.source_ref)
-    if content is None:
-        finish_intent(intent_id, state="failed", error_code=SOURCE_MISSING)
-        return ProjectionOutcome(intent_id, ProjectionResult.FAILED, SOURCE_MISSING)
-
-    if _sha256_hex(content) != intent.content_sha256:
-        finish_intent(intent_id, state="failed", error_code=DIGEST_MISMATCH)
-        return ProjectionOutcome(intent_id, ProjectionResult.FAILED, DIGEST_MISMATCH)
+    error_code = _permanent_failure(intent, content)
+    if error_code is not None:
+        finish_intent(intent_id, state="failed", error_code=error_code)
+        return ProjectionOutcome(intent_id, ProjectionResult.FAILED, error_code)
 
     # Write exactly the frozen projection to the frozen Project. A raised writer
     # error propagates here on purpose: the Intent stays ``pending`` (unmarked)
     # so the driver retries, rather than being permanently failed by an
     # infrastructure blip.
+    assert content is not None  # _permanent_failure returned None => content present
     write_projection(intent=intent, content=content)
 
     # Commit point. ``finish_intent`` is idempotent by ID, so a concurrent
     # projector that already marked this Intent applied is tolerated — the
     # effect (the frozen write) is done either way.
+    finish_intent(intent_id, state="applied")
+    return ProjectionOutcome(intent_id, ProjectionResult.APPLIED)
+
+
+async def aapply_projection_intent(
+    intent: ProjectionIntentRecord,
+    *,
+    read_source: SourceReader,
+    write_projection: AsyncProjectionWriter,
+    finish_intent: IntentFinisher,
+) -> ProjectionOutcome:
+    """Async twin of :func:`apply_projection_intent`.
+
+    Identical safety semantics; only the Memory write is awaited. ``read_source``
+    and ``finish_intent`` stay sync because the source stores and the control
+    repository are sync — just the ``MemoryClient`` write is async.
+    """
+    noop = _terminal_noop(intent)
+    if noop is not None:
+        return noop
+
+    intent_id = intent.projection_intent_id
+    content = read_source(source_store=intent.source_store, source_ref=intent.source_ref)
+    error_code = _permanent_failure(intent, content)
+    if error_code is not None:
+        finish_intent(intent_id, state="failed", error_code=error_code)
+        return ProjectionOutcome(intent_id, ProjectionResult.FAILED, error_code)
+
+    assert content is not None
+    await write_projection(intent=intent, content=content)
+
     finish_intent(intent_id, state="applied")
     return ProjectionOutcome(intent_id, ProjectionResult.APPLIED)

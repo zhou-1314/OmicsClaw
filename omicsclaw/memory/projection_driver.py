@@ -24,16 +24,22 @@ from typing import Protocol
 
 from omicsclaw.control.models import ProjectionIntentRecord, StateChangeResult
 from omicsclaw.memory.projection import (
+    AsyncProjectionWriter,
     ProjectionOutcome,
     ProjectionResult,
     ProjectionWriter,
     SourceReader,
+    aapply_projection_intent,
     apply_projection_intent,
 )
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ProjectionDriveSummary", "drive_pending_projections"]
+__all__ = [
+    "ProjectionDriveSummary",
+    "drive_pending_projections",
+    "adrive_pending_projections",
+]
 
 
 class _ProjectionRepository(Protocol):
@@ -93,12 +99,52 @@ def drive_pending_projections(
             continue
         outcomes.append(outcome)
 
-    applied = sum(1 for o in outcomes if o.result is ProjectionResult.APPLIED)
-    failed = sum(1 for o in outcomes if o.result is ProjectionResult.FAILED)
+    return _summarize(outcomes, deferred)
+
+
+def _summarize(
+    outcomes: list[ProjectionOutcome], deferred: list[str]
+) -> ProjectionDriveSummary:
     return ProjectionDriveSummary(
         processed=len(outcomes),
-        applied=applied,
-        failed=failed,
+        applied=sum(1 for o in outcomes if o.result is ProjectionResult.APPLIED),
+        failed=sum(1 for o in outcomes if o.result is ProjectionResult.FAILED),
         deferred=tuple(deferred),
         outcomes=tuple(outcomes),
     )
+
+
+async def adrive_pending_projections(
+    repository: _ProjectionRepository,
+    *,
+    read_source: SourceReader,
+    write_projection: AsyncProjectionWriter,
+    limit: int = 100,
+) -> ProjectionDriveSummary:
+    """Async twin of :func:`drive_pending_projections` for an async Memory writer.
+
+    Same per-Intent fault isolation: a transient write fault defers that Intent
+    (left pending) and the sweep continues.
+    """
+    pending = repository.list_pending_projection_intents(limit=limit)
+    outcomes: list[ProjectionOutcome] = []
+    deferred: list[str] = []
+    for intent in pending:
+        try:
+            outcome = await aapply_projection_intent(
+                intent,
+                read_source=read_source,
+                write_projection=write_projection,
+                finish_intent=repository.finish_project_projection,
+            )
+        except Exception:  # noqa: BLE001 — a transient sweep fault must not abort the batch
+            logger.warning(
+                "Deferring projection intent %s after transient fault",
+                intent.projection_intent_id,
+                exc_info=True,
+            )
+            deferred.append(intent.projection_intent_id)
+            continue
+        outcomes.append(outcome)
+
+    return _summarize(outcomes, deferred)
