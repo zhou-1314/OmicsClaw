@@ -20,7 +20,7 @@ it is given, so the view is rebuildable from the ledger (AUD-02).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any, Callable, Iterable, Protocol, Sequence
 
 # Reuse the ledger's authoritative failure classification and event type so the
 # audit view can never drift from how ``SkillHealthLedger.summarize`` counts a
@@ -38,6 +38,8 @@ __all__ = [
     "SkillRevision",
     "SkillExperienceView",
     "derive_experience_view",
+    "CurrentRevision",
+    "SkillAuditRuntime",
 ]
 
 # ADR 0074 validation ladder, weakest -> strongest. The values match
@@ -253,3 +255,89 @@ def derive_experience_view(
         },
         evidence_refs=_bounded_evidence_refs(current),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentRevision:
+    """A Skill's current revision plus its last human-approved declared level.
+
+    Produced by a resolver over the live registry (the resolver — which computes
+    the current manifest/source identity — is wired in a later slice); the audit
+    runtime consumes it to project experience without touching the filesystem.
+    """
+
+    revision: SkillRevision
+    declared_validation_level: str
+
+
+class _EventSource(Protocol):
+    """Structural type for the append-only ledger (``SkillHealthLedger``)."""
+
+    def events(self) -> Sequence[SkillRunEvent]: ...
+
+
+# A resolver yields the current revision + declared level for each live Skill.
+RevisionResolver = Callable[[], Iterable[CurrentRevision]]
+
+
+class SkillAuditRuntime:
+    """Deep read-model Module over audit evidence (ADR 0074).
+
+    Accepts an evidence source (the existing ``SkillHealthLedger`` as an
+    Adapter) and a resolver for the current Skill revisions, and produces the
+    bounded, rebuildable Experience Views and a snapshot summary. It owns
+    identity-scoped aggregation, effective validation and freshness; it never
+    mutates canonical Skill files — ``SkillEvolutionGovernance`` remains the sole
+    mutation authority, and this Module only ever *reads*.
+
+    Deterministic and side-effect free given a fixed ledger snapshot: it reads
+    the ledger's events exactly once per call so every view in one snapshot is
+    derived from the same evidence set (AUD-02).
+    """
+
+    def __init__(self, ledger: _EventSource, revision_resolver: RevisionResolver):
+        self._ledger = ledger
+        self._resolve = revision_resolver
+
+    def experience_views(self) -> list[SkillExperienceView]:
+        """One Experience View per current Skill revision, sorted by skill id.
+
+        The resolver decides which revisions are "current"; the ledger supplies
+        the evidence. A revision the resolver omits earns no view even if the
+        ledger still has its historical events, and evidence for a superseded
+        revision surfaces only as the current view's ``stale`` state.
+        """
+        events = list(self._ledger.events())
+        views = [
+            derive_experience_view(cr.revision, cr.declared_validation_level, events)
+            for cr in self._resolve()
+        ]
+        views.sort(key=lambda v: (v.skill_revision.skill_id, v.skill_revision.version))
+        return views
+
+    def summary(self, views: Sequence[SkillExperienceView] | None = None) -> dict[str, Any]:
+        """Bounded aggregate for the additive Desktop snapshot (ADR 0074 §9.2).
+
+        Closed, count-only shape; no raw payloads. ``by_validation_state`` and
+        ``by_declared_level`` always carry every known key (zero-filled) so a
+        consumer never has to guess whether an absent key means zero.
+        """
+        if views is None:
+            views = self.experience_views()
+        by_state = {
+            _STATE_CURRENT: 0,
+            _STATE_STALE: 0,
+            _STATE_EVALUATION_REQUIRED: 0,
+            _STATE_REVIEW_REQUIRED: 0,
+        }
+        by_declared = {level: 0 for level in VALIDATION_LADDER}
+        for view in views:
+            if view.validation_state in by_state:
+                by_state[view.validation_state] += 1
+            if view.declared_validation_level in by_declared:
+                by_declared[view.declared_validation_level] += 1
+        return {
+            "total_skills": len(views),
+            "by_validation_state": by_state,
+            "by_declared_level": by_declared,
+        }

@@ -12,6 +12,8 @@ import pytest
 from omicsclaw.skill.evolution import SkillErrorKind, SkillRunEvent
 from omicsclaw.skill.skill_audit import (
     VALIDATION_LADDER,
+    CurrentRevision,
+    SkillAuditRuntime,
     SkillRevision,
     SkillExperienceView,
     derive_experience_view,
@@ -215,3 +217,79 @@ def test_ladder_order_and_unknown_level_floors():
     view = derive_experience_view(REV, "bogus-level", [_ev(evidence_kind="demo")])
     assert view.validation_state == "current"
     assert isinstance(view, SkillExperienceView)
+
+
+# ---- SkillAuditRuntime (increment 2) ---------------------------------------
+
+
+class _FakeLedger:
+    def __init__(self, events):
+        self._events = list(events)
+        self.reads = 0
+
+    def events(self):
+        self.reads += 1
+        return list(self._events)
+
+
+def _cr(skill_id="sc-de", version="1.0.0", manifest_hash="m1", source_hash="s1",
+        declared="demo-validated"):
+    return CurrentRevision(
+        SkillRevision(skill_id, version, manifest_hash, source_hash), declared
+    )
+
+
+def test_runtime_one_view_per_current_revision_sorted_by_id():
+    ledger = _FakeLedger([
+        _ev(evidence_kind="demo"),
+        _ev(skill_id="sc-annotate", evidence_kind="demo", event_id="2"),
+    ])
+    revs = [_cr(skill_id="sc-de"), _cr(skill_id="sc-annotate")]
+    runtime = SkillAuditRuntime(ledger, lambda: revs)
+    views = runtime.experience_views()
+    assert [v.skill_revision.skill_id for v in views] == ["sc-annotate", "sc-de"]
+    assert all(v.validation_state == "current" for v in views)
+
+
+def test_runtime_omits_revision_the_resolver_does_not_return():
+    # Ledger has sc-de evidence, but the resolver only knows sc-annotate.
+    ledger = _FakeLedger([_ev(evidence_kind="demo")])
+    runtime = SkillAuditRuntime(ledger, lambda: [_cr(skill_id="sc-annotate", declared="smoke-only")])
+    views = runtime.experience_views()
+    assert [v.skill_revision.skill_id for v in views] == ["sc-annotate"]
+    assert views[0].validation_state == "evaluation_required"  # no matching evidence
+
+
+def test_runtime_reads_ledger_once_per_snapshot():
+    ledger = _FakeLedger([_ev(evidence_kind="demo")])
+    runtime = SkillAuditRuntime(ledger, lambda: [_cr(), _cr(skill_id="sc-annotate")])
+    runtime.experience_views()
+    assert ledger.reads == 1  # one evidence snapshot shared by every view (AUD-02)
+
+
+def test_summary_is_zero_filled_and_counts_states_and_levels():
+    ledger = _FakeLedger([_ev(evidence_kind="demo")])  # sc-de current
+    revs = [
+        _cr(skill_id="sc-de", declared="demo-validated"),               # current
+        _cr(skill_id="sc-x", manifest_hash="mx", source_hash="sx",
+            declared="fixture-validated"),                              # evaluation_required
+    ]
+    runtime = SkillAuditRuntime(ledger, lambda: revs)
+    s = runtime.summary()
+    assert s["total_skills"] == 2
+    assert s["by_validation_state"]["current"] == 1
+    assert s["by_validation_state"]["evaluation_required"] == 1
+    assert s["by_validation_state"]["stale"] == 0            # zero-filled, present
+    assert s["by_validation_state"]["review_required"] == 0
+    assert s["by_declared_level"]["demo-validated"] == 1
+    assert s["by_declared_level"]["fixture-validated"] == 1
+    assert s["by_declared_level"]["production"] == 0          # zero-filled, present
+
+
+def test_summary_can_reuse_precomputed_views():
+    ledger = _FakeLedger([_ev(evidence_kind="demo")])
+    runtime = SkillAuditRuntime(ledger, lambda: [_cr()])
+    views = runtime.experience_views()
+    before = ledger.reads
+    runtime.summary(views)  # passing views must not re-read the ledger
+    assert ledger.reads == before
