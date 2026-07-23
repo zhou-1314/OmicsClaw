@@ -633,9 +633,30 @@ class Lifecycle(_Strict):
         return self
 
 
+ProtocolKind = Literal["demo", "fixture", "benchmark", "stability"]
+
+
+class EvaluationProtocol(_Strict):
+    """A versioned, digestible evaluation declaration (ADR 0074 §6.1).
+
+    Only a declared protocol can earn a validation level above ``smoke-only``.
+    The executable lives under ``tests/`` (an implementation resource); the
+    manifest declares the stable id, kind, entry, durable dataset reference and
+    repeat policy. ``repeats`` bounds the stability repetitions a protocol asks
+    for — there is no universal five-run rule.
+    """
+
+    id: str = Field(min_length=1)
+    kind: ProtocolKind
+    entry: str = Field(min_length=1)
+    dataset_ref: Optional[str] = None
+    repeats: int = Field(default=1, ge=1, le=100)
+
+
 class Validation(_Strict):
     level: ValidationLevel = "smoke-only"
     evidence: list[str] = Field(default_factory=list)
+    protocols: list[EvaluationProtocol] = Field(default_factory=list)
 
 
 class Provenance(_Strict):
