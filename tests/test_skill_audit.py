@@ -810,3 +810,39 @@ def test_stability_is_orthogonal_and_only_fresh():
     assert view.effective_validation_level == "smoke-only"
     assert "s1" in view.stability
     assert "s2" not in view.stability  # drifted digest contributes no stability
+
+
+# ---- protocol_digest dependency-version binding (ADR 0074 §6.4) -------------
+
+
+def test_manifest_protocol_digest_binds_declared_dependency_versions(tmp_path, monkeypatch):
+    import omicsclaw.skill.evolution_governance as gov_mod
+    from omicsclaw.skill.evolution_governance import _manifest_protocol_digests
+    from omicsclaw.skill.schema import parse_skill_manifest
+
+    def _manifest(deps):
+        d = {
+            "schema_version": 2, "id": "dep-skill", "name": "dep-skill",
+            "domain": "spatial", "version": "1.0.0",
+            "summary": {"load_when": "dep binding test", "trigger_keywords": ["dep"]},
+            "runtime": {"entry": "dep_skill.py"}, "type": "leaf",
+            "lifecycle": {"status": "mvp"},
+            "validation": {"level": "fixture-validated",
+                           "protocols": [{"id": "p1", "kind": "fixture", "entry": "tests/t.py"}]},
+        }
+        if deps is not None:
+            d["deps"] = {"python": deps}
+        return parse_skill_manifest(d)
+
+    skill_dir = tmp_path / "dep-skill"
+    (skill_dir / "tests").mkdir(parents=True)
+    (skill_dir / "tests" / "t.py").write_text("# p1\n", encoding="utf-8")
+
+    monkeypatch.setattr(gov_mod, "_installed_dependency_version", lambda pkg: "1.10.0")
+    with_dep = _manifest_protocol_digests(_manifest(["scanpy>=1.9"]), skill_dir)["p1"]
+    no_dep = _manifest_protocol_digests(_manifest(None), skill_dir)["p1"]
+    assert with_dep != no_dep  # a declared dependency participates in the digest
+
+    monkeypatch.setattr(gov_mod, "_installed_dependency_version", lambda pkg: "1.11.0")
+    upgraded = _manifest_protocol_digests(_manifest(["scanpy>=1.9"]), skill_dir)["p1"]
+    assert upgraded != with_dep  # a version change re-digests, staling prior evidence

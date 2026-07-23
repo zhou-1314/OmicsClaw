@@ -16,7 +16,9 @@ from __future__ import annotations
 import base64
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
+from functools import lru_cache
 import hashlib
+import importlib.metadata
 import json
 import logging
 import os
@@ -101,15 +103,57 @@ def _run_protocol_entry(skill_dir: Path, entry: str) -> str:
     return "succeeded" if proc.returncode == 0 else "failed"
 
 
+# Split a requirement string ("scanpy>=1.10", "leidenalg[extra]") to its bare
+# distribution name — the same normalization the environment probe uses.
+_DEP_NAME_SPLIT = re.compile(r"[<>=!~;\s\[]")
+
+
+@lru_cache(maxsize=4096)
+def _installed_dependency_version(package: str) -> str:
+    """Installed version of one distribution, or ``"missing"`` (memoized).
+
+    Resolved in-process, so it reflects the interpreter that runs Skills by
+    default (``get_skill_runner_python()`` is ``sys.executable`` unless
+    ``OMICSCLAW_RUN_PYTHON`` overrides it). Installed versions do not change
+    within a process, so memoizing keeps the per-resolve digest computation
+    cheap; a fresh Backend process re-resolves and picks up an upgrade.
+    """
+    try:
+        return importlib.metadata.version(package)
+    except importlib.metadata.PackageNotFoundError:
+        return "missing"
+    except Exception:  # a broken distribution must not break audit reads
+        return "missing"
+
+
+def _manifest_dependency_versions(manifest: SkillManifest) -> dict[str, str]:
+    """Resolved versions of a Skill's declared Python dependencies (ADR 0074 §6.4).
+
+    Binds the protocol digest to the runtime env's key dependency versions: when
+    a declared dependency's installed version changes, the digest changes and
+    evidence produced under the old version stops applying to the current one.
+    A Skill that declares no ``deps.python`` binds nothing (empty map). CLI / R
+    tool versions are a follow-up; the declared Python deps are the tractable,
+    author-controlled signal today.
+    """
+    packages: set[str] = set()
+    for requirement in manifest.deps.python:
+        name = _DEP_NAME_SPLIT.split(requirement.strip(), maxsplit=1)[0].strip().casefold()
+        if name:
+            packages.add(name)
+    return {name: _installed_dependency_version(name) for name in sorted(packages)}
+
+
 def _manifest_protocol_digests(manifest: SkillManifest, skill_dir: Path) -> dict[str, str]:
     """Current digest of each declared Evaluation Protocol (ADR 0074 §6.1).
 
-    Recomputed on every resolve (cheap: a few small test entries) so the digest
-    always reflects the current protocol bytes; a stored evaluation result earns
-    a level only while its protocol_digest still matches one of these. Dependency
-    versions are not yet bound (a follow-up once the runtime env probe feeds
-    them); the spec + entry-bytes binding already detects a protocol change.
+    Recomputed on every resolve (cheap: a few small test entries + memoized
+    dependency-version lookups) so the digest always reflects the current
+    protocol bytes and the current key dependency versions; a stored evaluation
+    result earns a level only while its protocol_digest still matches one of
+    these.
     """
+    dependency_versions = _manifest_dependency_versions(manifest)
     digests: dict[str, str] = {}
     for proto in manifest.validation.protocols:
         entry_path = skill_dir / proto.entry
@@ -127,7 +171,7 @@ def _manifest_protocol_digests(manifest: SkillManifest, skill_dir: Path) -> dict
                 "metrics": proto.metrics,
             },
             entry_bytes=entry_bytes,
-            dependency_versions={},
+            dependency_versions=dependency_versions,
         )
     return digests
 
