@@ -374,3 +374,128 @@ def test_resolver_feeds_runtime_end_to_end():
     assert len(views) == 1
     assert views[0].skill_revision == SkillRevision("sc-de", "1.0.0", "m1", "s1")
     assert views[0].validation_state == "current"
+
+
+# ---- governance snapshot wiring (increment 3b) -----------------------------
+
+
+class _FakeAuditRuntime:
+    """Returns successive canned summaries (last one repeats)."""
+
+    def __init__(self, summaries):
+        self._summaries = list(summaries)
+        self.calls = 0
+
+    def summary(self, views=None):
+        idx = min(self.calls, len(self._summaries) - 1)
+        self.calls += 1
+        return dict(self._summaries[idx])
+
+
+def _governance(tmp_path, *, audit_runtime):
+    from omicsclaw.skill.evolution import EvolutionProposalStore, SkillHealthLedger
+    from omicsclaw.skill.evolution_governance import SkillEvolutionGovernance
+
+    skills_root = tmp_path / "skills"
+    skills_root.mkdir(exist_ok=True)
+    return SkillEvolutionGovernance(
+        skills_root=skills_root,
+        ledger=SkillHealthLedger(tmp_path / "events.jsonl"),
+        proposals=EvolutionProposalStore(tmp_path / "proposals.jsonl"),
+        audit_runtime=audit_runtime,
+    )
+
+
+def test_governance_snapshot_is_additive_and_preserves_legacy(tmp_path):
+    gov = _governance(tmp_path, audit_runtime=_FakeAuditRuntime([{"total_skills": 7}]))
+    snap = gov.snapshot()
+    # legacy contract unchanged (an old App still consumes these):
+    assert isinstance(snap["proposals"], list)
+    assert isinstance(snap["health"], list)
+    # additive ADR-0074 fields:
+    assert snap["schema_version"] == 1
+    assert isinstance(snap["authority_epoch"], str) and len(snap["authority_epoch"]) == 32
+    assert snap["snapshot_revision"] == 0  # no refresh yet
+    assert "generated_at" in snap
+    assert "experience_view" in snap["capabilities"]
+    assert snap["summary"] == {"total_skills": 7}
+
+
+def test_snapshot_reads_cached_summary_without_recomputing_on_get(tmp_path):
+    fake = _FakeAuditRuntime([{"total_skills": 1}])
+    gov = _governance(tmp_path, audit_runtime=fake)
+    calls_after_init = fake.calls  # one call from summary([]) in __init__
+    gov.snapshot()
+    gov.snapshot()
+    assert fake.calls == calls_after_init  # a GET never recomputes the summary
+
+
+def test_refresh_bumps_snapshot_revision_when_summary_changes(tmp_path):
+    fake = _FakeAuditRuntime([{"total_skills": 1}, {"total_skills": 2}])
+    gov = _governance(tmp_path, audit_runtime=fake)
+    assert gov.snapshot()["snapshot_revision"] == 0
+    gov.refresh()  # empty skills_root -> no proposals; _recompute sees a changed summary
+    snap = gov.snapshot()
+    assert snap["snapshot_revision"] == 1
+    assert snap["summary"] == {"total_skills": 2}
+
+
+def test_refresh_keeps_revision_when_summary_unchanged(tmp_path):
+    fake = _FakeAuditRuntime([{"total_skills": 5}])  # always the same
+    gov = _governance(tmp_path, audit_runtime=fake)
+    gov.refresh()
+    assert gov.snapshot()["snapshot_revision"] == 0  # identical content -> no bump
+
+
+# ---- real registry-backed resolver builder ---------------------------------
+
+
+def _write_minimal_skill(skills_root, *, skill_id="aud-skill", domain="spatial",
+                         version="1.0.0", level="smoke-only"):
+    import yaml
+
+    skill_dir = skills_root / domain / skill_id
+    skill_dir.mkdir(parents=True)
+    script = skill_id.replace("-", "_") + ".py"
+    (skill_dir / script).write_text("if __name__ == '__main__':\n    pass\n", encoding="utf-8")
+    (skill_dir / "skill.yaml").write_text(
+        yaml.safe_dump({
+            "schema_version": 2, "id": skill_id, "name": skill_id, "domain": domain,
+            "version": version,
+            "summary": {
+                "load_when": "audit resolver test",
+                "skip_when": [{"condition": "n/a", "use": "another fixture"}],
+                "trigger_keywords": ["audit"],
+            },
+            "runtime": {"entry": script},
+            "type": "leaf",
+            "lifecycle": {"status": "mvp"},
+            "validation": {"level": level},
+        }),
+        encoding="utf-8",
+    )
+    return skill_dir
+
+
+def test_build_registry_resolver_empty_root_is_empty(tmp_path):
+    from omicsclaw.skill.evolution_governance import _build_registry_revision_resolver
+
+    (tmp_path / "skills").mkdir()
+    assert _build_registry_revision_resolver(tmp_path / "skills")() == []
+
+
+def test_build_registry_resolver_computes_real_identity(tmp_path):
+    from omicsclaw.skill.evolution_governance import _build_registry_revision_resolver
+
+    skills_root = tmp_path / "skills"
+    _write_minimal_skill(skills_root, skill_id="aud-skill", version="1.0.0",
+                         level="demo-validated")
+    revs = _build_registry_revision_resolver(skills_root)()
+    assert len(revs) == 1
+    cr = revs[0]
+    assert cr.revision.skill_id == "aud-skill"
+    assert cr.revision.version == "1.0.0"
+    assert cr.declared_validation_level == "demo-validated"
+    # real, computed identity (not the unknown-fallback)
+    assert cr.revision.manifest_hash not in ("", "unknown")
+    assert cr.revision.source_hash not in ("", "unknown")

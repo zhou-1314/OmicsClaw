@@ -18,12 +18,14 @@ from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import re
 import tempfile
 from typing import Any, Iterable, Mapping, Protocol
 import unicodedata
+from uuid import uuid4
 
 import yaml
 
@@ -49,7 +51,84 @@ from .evolution import (
 )
 from .registry import GOVERNED_REPLACEMENT_VALIDATION_LEVELS, OmicsRegistry
 from .schema import SkillManifest, load_skill_yaml, parse_skill_manifest
+from .skill_audit import CachedRevisionResolver, SkillAuditRuntime, SkillIdentityInput
 from .skill_md import append_gotcha_entry, render_skill_md
+
+logger = logging.getLogger(__name__)
+
+# ADR 0074 additive Desktop snapshot contract (see docs/design §9.2). These
+# fields are added to GET /skill-evolution without removing the existing
+# ``proposals``/``health`` shape, so an old App keeps working.
+_AUDIT_SNAPSHOT_SCHEMA_VERSION = 1
+_AUDIT_CAPABILITIES: tuple[str, ...] = (
+    "experience_view",
+    "effective_validation",
+    "audit_summary",
+)
+
+
+def _identity_mtime_signature(*paths: Path) -> str:
+    """Opaque token that changes when any of ``paths`` is modified.
+
+    Caches a Skill's expensive ``(manifest_hash, source_hash)`` identity keyed
+    by its own manifest + entry mtimes. A shared-library change that leaves those
+    untouched is picked up only on the next explicit resolver invalidate (the
+    refresh path) — a documented ADR-0074 first-slice bound, acceptable because
+    a Backend restart also mints a fresh authority epoch and cold cache.
+    """
+    parts: list[str] = []
+    for path in paths:
+        try:
+            parts.append(str(os.stat(path).st_mtime_ns))
+        except OSError:
+            parts.append("-")
+    return ":".join(parts)
+
+
+def _build_registry_revision_resolver(skills_root: Path) -> CachedRevisionResolver:
+    """A read-only CachedRevisionResolver over the on-disk canonical Skill tree.
+
+    It parses each ``skill.yaml`` for the cheap identity inputs and computes the
+    ADR-0069 ``(manifest_hash, source_hash)`` closure only on a cache miss. A
+    manifest that fails to parse is skipped; one whose identity cannot be
+    computed is surfaced with an ``unknown`` hash rather than breaking the whole
+    snapshot.
+    """
+    entry_by_dir: dict[str, Path] = {}
+
+    def enumerate_skills() -> Iterable[SkillIdentityInput]:
+        entry_by_dir.clear()
+        for manifest_path in sorted(skills_root.rglob("skill.yaml")):
+            try:
+                manifest = parse_skill_manifest(load_skill_yaml(manifest_path))
+            except Exception:
+                continue
+            skill_dir = manifest_path.parent
+            entry_path = skill_dir / manifest.runtime.entry
+            entry_by_dir[str(skill_dir)] = entry_path
+            yield SkillIdentityInput(
+                skill_id=manifest.id,
+                version=manifest.version,
+                declared_validation_level=manifest.validation.level,
+                cache_key=str(skill_dir),
+                mtime_signature=_identity_mtime_signature(manifest_path, entry_path),
+            )
+
+    def compute_identity(cache_key: str) -> tuple[str, str]:
+        entry_path = entry_by_dir.get(cache_key)
+        if entry_path is None:
+            return "unknown", "unknown"
+        try:
+            return capture_skill_execution_identity(
+                entry_path, skills_root=skills_root, skill_dir=Path(cache_key)
+            )
+        except Exception:
+            logger.warning(
+                "Skill identity computation failed for %s", cache_key, exc_info=True
+            )
+            return "unknown", "unknown"
+
+    return CachedRevisionResolver(enumerate_skills, compute_identity)
 
 
 _SKILL_DEFECT_KINDS = frozenset({"script_defect", "contract_failure"})
@@ -347,6 +426,7 @@ class SkillEvolutionGovernance:
         minimum_deprecation_defects: int = 3,
         minimum_gotcha_defects: int = 3,
         minimum_gotcha_counterexamples: int = 1,
+        audit_runtime: SkillAuditRuntime | None = None,
     ) -> None:
         if minimum_demo_executions < 1:
             raise ValueError("minimum_demo_executions must be at least 1")
@@ -373,6 +453,42 @@ class SkillEvolutionGovernance:
         self.minimum_deprecation_defects = minimum_deprecation_defects
         self.minimum_gotcha_defects = minimum_gotcha_defects
         self.minimum_gotcha_counterexamples = minimum_gotcha_counterexamples
+        # ADR 0074 additive audit read models. The revision resolver caches the
+        # expensive per-Skill identity and is invalidated on the explicit refresh
+        # path, so snapshot() stays cheap — it reads the last-refreshed summary
+        # and never recomputes source hashes on a GET. A fresh process mints a
+        # new authority epoch; snapshot_revision is monotonic within that epoch.
+        self._authority_epoch = uuid4().hex
+        self._snapshot_revision = 0
+        if audit_runtime is not None:
+            self._revision_resolver: CachedRevisionResolver | None = None
+            self._audit_runtime = audit_runtime
+        else:
+            self._revision_resolver = _build_registry_revision_resolver(self.skills_root)
+            self._audit_runtime = SkillAuditRuntime(self.ledger, self._revision_resolver)
+        self._audit_summary: dict[str, Any] = self._audit_runtime.summary([])
+
+    def _recompute_audit_readmodels(self) -> None:
+        """Refresh the cached audit summary on the explicit refresh path.
+
+        Recomputes the (cached) revision identities and the Experience-View
+        summary, bumping ``snapshot_revision`` only when the summary content
+        actually changes. Defensive: an audit-read failure keeps the prior
+        summary rather than breaking proposal synthesis — ADR 0074 treats an
+        audit failure as a framework incident, not a governance break.
+        """
+        try:
+            if self._revision_resolver is not None:
+                self._revision_resolver.invalidate()
+            summary = self._audit_runtime.summary()
+        except Exception:
+            logger.warning(
+                "Audit read-model refresh failed; keeping prior summary", exc_info=True
+            )
+            return
+        if summary != self._audit_summary:
+            self._audit_summary = summary
+            self._snapshot_revision += 1
 
     def refresh(self) -> list[EvolutionProposal]:
         """Synthesize earned promotion and explicit-demo demotion candidates."""
@@ -507,6 +623,7 @@ class SkillEvolutionGovernance:
                 continue
             if self.proposals.submit_if_absent(proposal):
                 created.append(proposal)
+        self._recompute_audit_readmodels()
         return created
 
     def _gotcha_evidence_candidates(
@@ -629,12 +746,26 @@ class SkillEvolutionGovernance:
         return candidates
 
     def snapshot(self) -> dict[str, Any]:
-        """Return privacy-minimal proposal and aggregate health state."""
+        """Return privacy-minimal proposal and aggregate health state.
+
+        ADR 0074 adds the ``schema_version`` / ``authority_epoch`` /
+        ``snapshot_revision`` / ``generated_at`` / ``capabilities`` / ``summary``
+        fields additively: the existing ``proposals`` and ``health`` keys and
+        their shapes are unchanged, so an old App keeps working while a new App
+        can negotiate the extra capabilities. ``summary`` is the last-refreshed
+        audit read model (cheap: no per-GET source-hash recomputation).
+        """
         return {
             "proposals": [
                 proposal.to_dict() for proposal in self.proposals.list_latest()
             ],
             "health": [asdict(bucket) for bucket in self.ledger.summarize()],
+            "schema_version": _AUDIT_SNAPSHOT_SCHEMA_VERSION,
+            "authority_epoch": self._authority_epoch,
+            "snapshot_revision": self._snapshot_revision,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "capabilities": list(_AUDIT_CAPABILITIES),
+            "summary": dict(self._audit_summary),
         }
 
     def _current_gotcha_snapshots(
