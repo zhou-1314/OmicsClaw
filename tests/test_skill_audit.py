@@ -14,12 +14,18 @@ from omicsclaw.skill.skill_audit import (
     VALIDATION_LADDER,
     CachedRevisionResolver,
     CurrentRevision,
+    ProtocolEvaluationResult,
     SkillAuditRuntime,
     SkillIdentityInput,
     SkillRevision,
     SkillExperienceView,
     derive_experience_view,
 )
+
+
+def _pr(*, protocol_id="p1", kind="fixture", digest="d1", outcome="succeeded",
+        occurred_at="2026-07-23T00:00:00Z"):
+    return ProtocolEvaluationResult(protocol_id, kind, digest, outcome, occurred_at)
 
 REV = SkillRevision(skill_id="sc-de", version="1.0.0", manifest_hash="m1", source_hash="s1")
 
@@ -127,6 +133,80 @@ def test_effective_never_exceeds_declared():
     view = derive_experience_view(REV, "smoke-only", [_ev(evidence_kind="demo")])
     assert view.effective_validation_level == "smoke-only"
     assert view.validation_state == "current"
+
+
+# ---- protocol-aware effective validation (M-B2) ----------------------------
+
+
+def test_fresh_passing_fixture_protocol_lifts_effective_to_fixture_validated():
+    v = derive_experience_view(
+        REV, "fixture-validated", [],
+        protocol_results=[_pr(kind="fixture", digest="d1")],
+        current_protocol_digests={"p1": "d1"},
+    )
+    assert v.effective_validation_level == "fixture-validated"
+    assert v.validation_state == "current"
+
+
+def test_fresh_passing_benchmark_protocol_earns_benchmarked():
+    v = derive_experience_view(
+        REV, "benchmarked", [],
+        protocol_results=[_pr(kind="benchmark", digest="d1")],
+        current_protocol_digests={"p1": "d1"},
+    )
+    assert v.effective_validation_level == "benchmarked"
+    assert v.validation_state == "current"
+
+
+def test_drifted_protocol_digest_earns_nothing():
+    v = derive_experience_view(
+        REV, "fixture-validated", [],
+        protocol_results=[_pr(kind="fixture", digest="OLD")],
+        current_protocol_digests={"p1": "NEW"},
+    )
+    assert v.effective_validation_level == "smoke-only"
+    assert v.validation_state == "evaluation_required"
+
+
+def test_failing_protocol_earns_nothing_but_is_evidence():
+    v = derive_experience_view(
+        REV, "fixture-validated", [],
+        protocol_results=[_pr(kind="fixture", digest="d1", outcome="failed")],
+        current_protocol_digests={"p1": "d1"},
+    )
+    assert v.effective_validation_level == "smoke-only"
+    assert v.validation_state == "evaluation_required"  # fresh result is evidence
+
+
+def test_current_defect_caps_supported_even_with_passing_protocol():
+    events = [_ev(outcome="failed", error_kind=SkillErrorKind.CONTRACT_FAILURE.value)]
+    v = derive_experience_view(
+        REV, "fixture-validated", events,
+        protocol_results=[_pr(kind="fixture", digest="d1")],
+        current_protocol_digests={"p1": "d1"},
+    )
+    assert v.effective_validation_level == "smoke-only"
+    assert v.validation_state == "review_required"
+
+
+def test_protocol_effective_never_exceeds_declared():
+    v = derive_experience_view(
+        REV, "demo-validated", [],
+        protocol_results=[_pr(kind="fixture", digest="d1")],
+        current_protocol_digests={"p1": "d1"},
+    )
+    assert v.effective_validation_level == "demo-validated"
+    assert v.validation_state == "current"
+
+
+def test_last_observed_at_includes_protocol_result_time():
+    events = [_ev(occurred_at="2026-07-23T00:00:01Z")]
+    v = derive_experience_view(
+        REV, "smoke-only", events,
+        protocol_results=[_pr(digest="d1", occurred_at="2026-07-23T00:00:09Z")],
+        current_protocol_digests={"p1": "d1"},
+    )
+    assert v.last_observed_at == "2026-07-23T00:00:09Z"
 
 
 # ---- revision isolation + health classification ----------------------------

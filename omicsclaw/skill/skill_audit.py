@@ -20,7 +20,7 @@ it is given, so the view is rebuildable from the ledger (AUD-02).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Protocol, Sequence
+from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
 
 # Reuse the ledger's authoritative failure classification and event type so the
 # audit view can never drift from how ``SkillHealthLedger.summarize`` counts a
@@ -42,6 +42,7 @@ __all__ = [
     "SkillAuditRuntime",
     "SkillIdentityInput",
     "CachedRevisionResolver",
+    "ProtocolEvaluationResult",
 ]
 
 # ADR 0074 validation ladder, weakest -> strongest. The values match
@@ -54,13 +55,6 @@ VALIDATION_LADDER: tuple[str, ...] = (
     "benchmarked",
     "production",
 )
-
-# The existing ``SkillHealthLedger`` can prove at most ``demo-validated``: the
-# higher levels require the Evaluation Protocols a later ADR-0074 slice
-# introduces. Until then, evidence-supported validation is honestly capped here
-# so a manually-declared higher level surfaces as ``evaluation_required`` rather
-# than silently claiming protocol evidence that does not exist.
-_MAX_EVIDENCE_SUPPORTED_LEVEL = "demo-validated"
 
 # Upper bound on evidence identifiers surfaced in one view (ADR 0074: read
 # models are bounded). Newest-first, deduplicated.
@@ -89,6 +83,20 @@ def _min_level(a: str, b: str) -> str:
     return a if _ladder_index(a) <= _ladder_index(b) else b
 
 
+def _max_level(a: str, b: str) -> str:
+    return a if _ladder_index(a) >= _ladder_index(b) else b
+
+
+# A passing protocol of this kind earns this validation level (ADR 0074 §6.2).
+# ``stability`` is an orthogonal result, not a ladder step; ``production``
+# additionally requires human approval and is never earned from evidence alone.
+_PROTOCOL_KIND_LEVEL: dict[str, str] = {
+    "demo": "demo-validated",
+    "fixture": "fixture-validated",
+    "benchmark": "benchmarked",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class SkillRevision:
     """The exact evaluatable Skill state (ADR 0074).
@@ -109,6 +117,45 @@ class SkillRevision:
             "manifest_hash": self.manifest_hash,
             "source_hash": self.source_hash,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class ProtocolEvaluationResult:
+    """One evaluation outcome bound to a declared protocol (ADR 0074 §6).
+
+    Counts toward effective validation only when it ``succeeded`` AND its
+    ``protocol_digest`` still equals the current protocol's digest — i.e. the
+    protocol's executable/spec/deps have not drifted since this result was
+    produced. Callers pass results already scoped to the target revision.
+    """
+
+    protocol_id: str
+    kind: str
+    protocol_digest: str
+    outcome: str
+    occurred_at: str = ""
+
+
+def _protocol_supported_level(
+    results: Sequence[ProtocolEvaluationResult],
+    current_protocol_digests: Mapping[str, str] | None,
+) -> str:
+    """Highest ladder level earned by fresh, passing protocol results.
+
+    A result is fresh only if its ``protocol_digest`` matches the current digest
+    declared for that ``protocol_id``; a drifted protocol earns nothing.
+    """
+    digests = current_protocol_digests or {}
+    supported = "smoke-only"
+    for result in results:
+        if result.outcome != "succeeded":
+            continue
+        if digests.get(result.protocol_id) != result.protocol_digest:
+            continue
+        level = _PROTOCOL_KIND_LEVEL.get(result.kind)
+        if level is not None:
+            supported = _max_level(supported, level)
+    return supported
 
 
 def _event_matches_revision(event: SkillRunEvent, revision: SkillRevision) -> bool:
@@ -179,6 +226,8 @@ def derive_experience_view(
     revision: SkillRevision,
     declared_validation_level: str,
     events: Sequence[SkillRunEvent],
+    protocol_results: Sequence[ProtocolEvaluationResult] = (),
+    current_protocol_digests: Mapping[str, str] | None = None,
 ) -> SkillExperienceView:
     """Derive one Skill Experience View for an exact revision (ADR 0074).
 
@@ -189,11 +238,15 @@ def derive_experience_view(
     ``stale`` (drifted since it was evaluated) from ``evaluation_required``
     (never evaluated).
 
-    First-slice semantics: evidence proves at most ``demo-validated`` (a current
-    ``demo`` success with no current defect); ``fixture-validated`` and above
-    need Evaluation Protocols from a later slice, so a higher *declared* level
-    without matching current evidence is honestly reported as
-    ``evaluation_required`` (never silently downgraded on disk).
+    ``protocol_results`` are evaluation outcomes bound to declared Evaluation
+    Protocols (ADR 0074 §6); a fresh, passing ``fixture``/``benchmark`` result
+    lifts the evidence-supported level above ``demo-validated``. A result counts
+    only when its ``protocol_digest`` still matches ``current_protocol_digests``
+    for that protocol id, so a drifted protocol earns nothing. Without protocol
+    evidence, execution evidence proves at most ``demo-validated`` (a current
+    ``demo`` success with no current defect); a higher *declared* level then
+    reports ``evaluation_required`` (never silently downgraded on disk).
+    ``production`` requires human approval and is never earned from evidence.
     """
     current = [e for e in events if _event_matches_revision(e, revision)]
 
@@ -213,20 +266,30 @@ def derive_experience_view(
     demo_success = any(
         e.evidence_kind == "demo" and e.outcome == "succeeded" for e in current
     )
+    demo_supported = "smoke-only" if (skill_defects or not demo_success) else "demo-validated"
 
-    # Highest level the current-revision evidence can prove (first slice).
-    if skill_defects or not demo_success:
+    fresh_protocol_results = [
+        r
+        for r in protocol_results
+        if (current_protocol_digests or {}).get(r.protocol_id) == r.protocol_digest
+    ]
+    supported = _max_level(
+        demo_supported,
+        _protocol_supported_level(protocol_results, current_protocol_digests),
+    )
+    if skill_defects:
+        # A reproducing current-revision defect caps support at the floor,
+        # regardless of any protocol result.
         supported = "smoke-only"
-    else:
-        supported = _MAX_EVIDENCE_SUPPORTED_LEVEL
 
     effective = _min_level(declared_validation_level, supported)
 
+    has_evidence = bool(current) or bool(fresh_protocol_results)
     if skill_defects:
         state = _STATE_REVIEW_REQUIRED
-    elif current and _ladder_index(supported) >= _ladder_index(declared_validation_level):
+    elif has_evidence and _ladder_index(supported) >= _ladder_index(declared_validation_level):
         state = _STATE_CURRENT
-    elif current:
+    elif has_evidence:
         # Current evidence exists but does not reach the declared level.
         state = _STATE_EVALUATION_REQUIRED
     elif same_id_version_drifted:
@@ -236,7 +299,11 @@ def derive_experience_view(
     else:
         state = _STATE_EVALUATION_REQUIRED
 
-    last_observed_at = max((e.occurred_at for e in current), default="")
+    last_observed_at = max(
+        [e.occurred_at for e in current]
+        + [r.occurred_at for r in fresh_protocol_results],
+        default="",
+    )
 
     return SkillExperienceView(
         skill_revision=revision,
