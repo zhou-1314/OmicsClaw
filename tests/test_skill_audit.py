@@ -368,6 +368,42 @@ def test_summary_is_zero_filled_and_counts_states_and_levels():
     assert s["by_declared_level"]["production"] == 0          # zero-filled, present
 
 
+def test_runtime_feeds_protocol_results_into_effective():
+    ledger = _FakeLedger([])  # no execution events; protocol evidence alone
+    rev = SkillRevision("sc-de", "1.0.0", "m1", "s1")
+    cr = CurrentRevision(rev, "fixture-validated", protocol_digests={"p1": "d1"})
+    results = {rev: [ProtocolEvaluationResult("p1", "fixture", "d1", "succeeded", "t")]}
+    runtime = SkillAuditRuntime(
+        ledger, lambda: [cr], protocol_results=lambda r: results.get(r, [])
+    )
+    view = runtime.experience_views()[0]
+    assert view.effective_validation_level == "fixture-validated"
+    assert view.validation_state == "current"
+
+
+def test_runtime_without_protocol_source_stays_execution_only():
+    ledger = _FakeLedger([_ev(evidence_kind="demo")])
+    cr = CurrentRevision(
+        SkillRevision("sc-de", "1.0.0", "m1", "s1"), "fixture-validated",
+        protocol_digests={"p1": "d1"},
+    )
+    runtime = SkillAuditRuntime(ledger, lambda: [cr])  # no protocol source
+    view = runtime.experience_views()[0]
+    assert view.effective_validation_level == "demo-validated"  # protocols ignored
+    assert view.validation_state == "evaluation_required"
+
+
+def test_runtime_protocol_digest_drift_earns_nothing():
+    ledger = _FakeLedger([])
+    rev = SkillRevision("sc-de", "1.0.0", "m1", "s1")
+    cr = CurrentRevision(rev, "fixture-validated", protocol_digests={"p1": "NEW"})
+    results = {rev: [ProtocolEvaluationResult("p1", "fixture", "OLD", "succeeded", "t")]}
+    runtime = SkillAuditRuntime(
+        ledger, lambda: [cr], protocol_results=lambda r: results.get(r, [])
+    )
+    assert runtime.experience_views()[0].effective_validation_level == "smoke-only"
+
+
 def test_summary_can_reuse_precomputed_views():
     ledger = _FakeLedger([_ev(evidence_kind="demo")])
     runtime = SkillAuditRuntime(ledger, lambda: [_cr()])

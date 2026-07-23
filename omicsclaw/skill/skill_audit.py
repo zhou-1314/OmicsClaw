@@ -333,10 +333,15 @@ class CurrentRevision:
     Produced by a resolver over the live registry (the resolver — which computes
     the current manifest/source identity — is wired in a later slice); the audit
     runtime consumes it to project experience without touching the filesystem.
+
+    ``protocol_digests`` maps each declared Evaluation Protocol id to its current
+    digest, so a stored evaluation result earns a level only while its protocol
+    has not drifted (ADR 0074 §6.4). Empty when a Skill declares no protocols.
     """
 
     revision: SkillRevision
     declared_validation_level: str
+    protocol_digests: Mapping[str, str] = field(default_factory=dict)
 
 
 class _EventSource(Protocol):
@@ -364,23 +369,40 @@ class SkillAuditRuntime:
     derived from the same evidence set (AUD-02).
     """
 
-    def __init__(self, ledger: _EventSource, revision_resolver: RevisionResolver):
+    def __init__(
+        self,
+        ledger: _EventSource,
+        revision_resolver: RevisionResolver,
+        protocol_results: Callable[[SkillRevision], Sequence[ProtocolEvaluationResult]] | None = None,
+    ):
         self._ledger = ledger
         self._resolve = revision_resolver
+        # Optional per-revision protocol-evaluation source (the eval store).
+        # When absent, views carry execution evidence only (no protocol lift).
+        self._protocol_results = protocol_results
 
     def experience_views(self) -> list[SkillExperienceView]:
         """One Experience View per current Skill revision, sorted by skill id.
 
         The resolver decides which revisions are "current"; the ledger supplies
-        the evidence. A revision the resolver omits earns no view even if the
-        ledger still has its historical events, and evidence for a superseded
-        revision surfaces only as the current view's ``stale`` state.
+        the execution evidence and (when configured) the evaluation store supplies
+        each revision's protocol results. A revision the resolver omits earns no
+        view even if the ledger still has its historical events, and evidence for
+        a superseded revision surfaces only as the current view's ``stale`` state.
         """
         events = list(self._ledger.events())
-        views = [
-            derive_experience_view(cr.revision, cr.declared_validation_level, events)
-            for cr in self._resolve()
-        ]
+        views: list[SkillExperienceView] = []
+        for cr in self._resolve():
+            results = self._protocol_results(cr.revision) if self._protocol_results else ()
+            views.append(
+                derive_experience_view(
+                    cr.revision,
+                    cr.declared_validation_level,
+                    events,
+                    protocol_results=results,
+                    current_protocol_digests=cr.protocol_digests,
+                )
+            )
         views.sort(key=lambda v: (v.skill_revision.skill_id, v.skill_revision.version))
         return views
 
