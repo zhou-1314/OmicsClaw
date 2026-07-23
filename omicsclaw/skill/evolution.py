@@ -1255,6 +1255,44 @@ class SkillHealthBucket:
     cancelled_count: int
 
 
+@dataclass(frozen=True, slots=True)
+class SkillHealthSummary:
+    """Per-skill run-health aggregate across all versions/hashes/environments.
+
+    ``other_count`` collects every failure whose ``error_kind`` is outside the
+    skill/environment/framework/cancelled attribution sets (e.g. ``bad_input``,
+    ``upstream_failed``, ``unknown``, ``none``) so the breakdown is fully closed:
+    ``success + skill_defect + environment + framework + cancelled + other
+    == total`` always holds. Without this, a UI summing only the four
+    attribution buckets would silently under-100%.
+    """
+
+    skill_id: str
+    total_count: int
+    success_count: int
+    skill_defect_count: int
+    environment_failure_count: int
+    framework_failure_count: int
+    cancelled_count: int
+    other_count: int
+
+    @property
+    def completion_rate(self) -> float:
+        return (self.success_count / self.total_count) if self.total_count else 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "total": self.total_count,
+            "success": self.success_count,
+            "skill_defect": self.skill_defect_count,
+            "environment": self.environment_failure_count,
+            "framework": self.framework_failure_count,
+            "cancelled": self.cancelled_count,
+            "other": self.other_count,
+            "completion_rate": round(self.completion_rate, 4),
+        }
+
+
 class SkillHealthLedger:
     """Append-only JSONL event ledger with deterministic health aggregation."""
 
@@ -1358,6 +1396,62 @@ def default_skill_health_ledger() -> SkillHealthLedger:
         else Path.home() / ".config" / "omicsclaw" / "audit" / "skill-runs.jsonl"
     )
     return SkillHealthLedger(path)
+
+
+def aggregate_skill_health(
+    ledger: SkillHealthLedger | None = None,
+) -> dict[str, SkillHealthSummary]:
+    """Aggregate the run-event ledger into one closed per-skill health summary.
+
+    Sums every :class:`SkillHealthBucket` for a skill across versions, hashes,
+    and environments, then derives ``other_count`` so the breakdown is fully
+    closed (see :class:`SkillHealthSummary`). This is a read-only projection of
+    the append-only ledger — safe to expose from unauthenticated catalog reads,
+    unlike the governance snapshot which mutates canonical repo state.
+
+    Returns a mapping keyed by ``skill_id``; skills with no recorded runs are
+    absent (callers treat "missing" as "no runs yet").
+    """
+    source = ledger if ledger is not None else default_skill_health_ledger()
+    totals: dict[str, dict[str, int]] = defaultdict(
+        lambda: {
+            "total": 0,
+            "success": 0,
+            "skill_defect": 0,
+            "environment": 0,
+            "framework": 0,
+            "cancelled": 0,
+        }
+    )
+    for bucket in source.summarize():
+        agg = totals[bucket.skill_id]
+        agg["total"] += bucket.total_count
+        agg["success"] += bucket.success_count
+        agg["skill_defect"] += bucket.skill_defect_count
+        agg["environment"] += bucket.environment_failure_count
+        agg["framework"] += bucket.framework_failure_count
+        agg["cancelled"] += bucket.cancelled_count
+
+    summaries: dict[str, SkillHealthSummary] = {}
+    for skill_id, agg in totals.items():
+        attributed = (
+            agg["success"]
+            + agg["skill_defect"]
+            + agg["environment"]
+            + agg["framework"]
+            + agg["cancelled"]
+        )
+        summaries[skill_id] = SkillHealthSummary(
+            skill_id=skill_id,
+            total_count=agg["total"],
+            success_count=agg["success"],
+            skill_defect_count=agg["skill_defect"],
+            environment_failure_count=agg["environment"],
+            framework_failure_count=agg["framework"],
+            cancelled_count=agg["cancelled"],
+            other_count=max(agg["total"] - attributed, 0),
+        )
+    return summaries
 
 
 def record_skill_run_result(

@@ -286,3 +286,94 @@ async def test_get_skill_endpoint_enriches_response(monkeypatch):
     assert any(r["kind"] == "reference" for r in payload["resources"])
     assert any(ref["path"] == "references/methodology.md" for ref in payload["references"])
     assert any(c["label"] == "SKILL.md" and c["status"] == "pass" for c in payload["diagnostics"])
+
+
+@pytest.mark.asyncio
+async def test_get_skill_endpoint_surfaces_structured_contract(tmp_path, monkeypatch):
+    """The detail endpoint serializes the structured skill.yaml contract the
+    desktop "Data & requirements" panel needs (inputs/outputs/compute/validation
+    evidence/methods/applicability/content hash) — these existed in the manifest
+    but were previously dropped from the response."""
+    from types import SimpleNamespace
+
+    from omicsclaw.skill.schema import parse_skill_manifest
+
+    # Empty ledger → run_health resolves to None deterministically.
+    monkeypatch.setenv(
+        "OMICSCLAW_SKILL_HEALTH_LEDGER", str(tmp_path / "empty-ledger.jsonl")
+    )
+
+    doc = {
+        "schema_version": 2,
+        "id": "spatial-rich",
+        "name": "spatial-rich",
+        "domain": "spatial",
+        "version": "2.2.0",
+        "summary": {
+            "load_when": "clustering spatial spots",
+            "skip_when": [{"condition": "single-cell data", "use": "sc-cluster"}],
+            "tags": ["spatial"],
+        },
+        "interface": {
+            "inputs": {
+                "file_types": ["h5ad"],
+                "preconditions": {"data_shape": {"requires_preprocessed": True}},
+            },
+            "outputs": {"files": ["clusters.csv"]},
+            "parameters": {"hints": {"leiden": {}, "louvain": {}}},
+        },
+        "runtime": {"language": "python", "entry": "spatial_rich.py"},
+        "deps": {"python": ["scanpy"]},
+        "resources": {
+            "compute": {
+                "cpu_cores": 4,
+                "memory_mib": 8192,
+                "gpu_devices": 0,
+                "threads": 4,
+                "temporary_disk_mib": 1024,
+            }
+        },
+        "validation": {"level": "demo-validated", "evidence": ["demo: 3 datasets"]},
+        "security": {"data_egress": "none", "network": "none", "writes": "output_dir_only"},
+    }
+    sd = tmp_path / "spatial-rich"
+    sd.mkdir(parents=True)
+    (sd / "skill.yaml").write_text(parse_skill_manifest(doc).to_yaml(), encoding="utf-8")
+    script = sd / "spatial_rich.py"
+    script.write_text("def main(argv=None):\n    pass\n", encoding="utf-8")
+    (sd / "SKILL.md").write_text(
+        "---\nname: spatial-rich\n---\n# spatial-rich\n", encoding="utf-8"
+    )
+
+    s = _server()
+    fake_core = SimpleNamespace(
+        _skill_registry=lambda: SimpleNamespace(
+            skills={
+                "spatial-rich": {
+                    "alias": "spatial-rich",
+                    "domain": "spatial",
+                    "description": "Rich",
+                    "script": str(script),
+                }
+            }
+        ),
+    )
+    monkeypatch.setattr(s, "_core", fake_core, raising=False)
+
+    payload = await s.get_skill("spatial", "spatial-rich")
+
+    assert payload["load_when"] == "clustering spatial spots"
+    assert payload["skip_when"] == [{"condition": "single-cell data", "use": "sc-cluster"}]
+    assert payload["requires_preprocessed"] is True
+    assert payload["validation_evidence"] == ["demo: 3 datasets"]
+    assert payload["compute_resources"]["cpu_cores"] == 4
+    assert payload["compute_resources"]["memory_mib"] == 8192
+    assert payload["methods"] == ["leiden", "louvain"]
+    assert isinstance(payload["input_contract"], dict) and payload["input_contract"]
+    assert isinstance(payload["output_contract"], dict)
+    assert payload["content_hash"].startswith("sha256:")
+    assert payload["run_health"] is None  # empty ledger → no recorded runs
+    # Compact io summary powers the catalog card's input → output line.
+    assert payload["io"]["input"] == ["h5ad"]
+    assert payload["io"]["output"] == ["clusters.csv"]
+    assert payload["io"]["requires_preprocessed"] is True

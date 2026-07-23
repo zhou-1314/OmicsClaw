@@ -286,9 +286,11 @@ class LazySkillMetadata:
             "runtime_language": m.runtime.language,
             "type": m.type,
             "validation_level": m.validation.level,
+            "validation_evidence": list(m.validation.evidence),
             "origin": m.provenance.origin,
             "lifecycle_status": m.lifecycle.status,
             "superseded_by": m.lifecycle.superseded_by or "",
+            "load_when": m.summary.load_when,
             "skip_when": [
                 rule.model_dump(exclude_none=True) for rule in m.summary.skip_when
             ],
@@ -382,6 +384,8 @@ class LazySkillMetadata:
             "origin": _DEFAULT_ORIGIN,
             "lifecycle_status": _DEFAULT_LIFECYCLE_STATUS,
             "superseded_by": "",
+            "load_when": "",
+            "validation_evidence": [],
             "skip_when": [],
             **runtime,
         }
@@ -481,6 +485,15 @@ class LazySkillMetadata:
         return value if value in VALIDATION_LEVELS else _DEFAULT_VALIDATION_LEVEL
 
     @property
+    def validation_evidence(self) -> list[str]:
+        """Evidence strings backing the earned validation level (``validation.evidence``).
+
+        Empty for v1 skills and for v2 manifests that declare no evidence.
+        """
+        self._ensure_basic()
+        return [str(item) for item in (self._basic.get("validation_evidence") or [])]
+
+    @property
     def origin(self) -> str:
         """Authorship provenance; `human` when unset, unknown, or pre-v2."""
         self._ensure_basic()
@@ -505,6 +518,12 @@ class LazySkillMetadata:
         """Structured negative-routing rules from ``skill.yaml`` summary."""
         self._ensure_basic()
         return [dict(rule) for rule in self._basic.get("skip_when", [])]
+
+    @property
+    def load_when(self) -> str:
+        """Positive applicability statement (``summary.load_when``); empty for v1."""
+        self._ensure_basic()
+        return str(self._basic.get("load_when") or "")
 
     @property
     def trigger_keywords(self) -> list[str]:

@@ -4578,6 +4578,62 @@ def _skill_diagnostics(
     return checks
 
 
+def _skill_run_health_map() -> dict[str, dict]:
+    """Read-only per-skill runtime-health aggregate from the evidence ledger.
+
+    Keyed by skill id (the canonical skill name/alias). Returns ``{}`` when the
+    ledger is absent or unreadable so catalog reads never fail on a malformed
+    audit file. Unlike the ``/skill-evolution`` snapshot this only projects the
+    append-only ledger and mutates nothing, so it is safe to call from the
+    unauthenticated catalog endpoints.
+    """
+    try:
+        from omicsclaw.skill.evolution import aggregate_skill_health
+
+        return {
+            skill_id: summary.to_dict()
+            for skill_id, summary in aggregate_skill_health().items()
+        }
+    except Exception:
+        return {}
+
+
+def _skill_io_summary(meta) -> dict:
+    """Compact input/output display summary derived from the structured contract.
+
+    Powers the catalog card's "input → output" line without shipping the full
+    ``interface`` contract to every card. Single source of truth: the detail
+    endpoint returns the same shape so the card and the drawer never disagree.
+    Empty lists when the skill declares no structured interface.
+    """
+    empty = {"input": [], "output": [], "requires_preprocessed": False}
+    if meta is None:
+        return empty
+
+    def _strs(contract: object, key: str) -> list[str]:
+        value = contract.get(key) if isinstance(contract, dict) else None
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if str(item).strip()]
+
+    inputs = meta.input_contract or {}
+    outputs = meta.output_contract or {}
+    input_summary = (
+        _strs(inputs, "file_types")
+        or _strs(inputs, "path_kinds")
+        or _strs(inputs, "modalities")
+    )
+    output_summary = _strs(outputs, "files")
+    anndata = outputs.get("anndata") if isinstance(outputs, dict) else None
+    if isinstance(anndata, dict) and anndata.get("saves_h5ad"):
+        output_summary = [*output_summary, "h5ad"]
+    return {
+        "input": input_summary,
+        "output": output_summary,
+        "requires_preprocessed": bool(getattr(meta, "requires_preprocessed", False)),
+    }
+
+
 # ---------------------------------------------------------------------------
 # GET /skills — list all skills grouped by domain
 # ---------------------------------------------------------------------------
@@ -4589,6 +4645,7 @@ async def list_skills():
     skill_registry = core._skill_registry()
 
     domain_groups: dict[str, list[dict]] = {}
+    run_health_map = _skill_run_health_map()
 
     for alias, info in skill_registry.skills.items():
         # Skip alias pointers (only show canonical entries)
@@ -4620,10 +4677,15 @@ async def list_skills():
             "origin": meta.origin if meta else "human",
             "security": _skill_security_status(meta),
             "version": str(version) if version else None,
-            # ``health`` is retained as a compatibility alias.  The value is
-            # file readiness, not the evidence ledger's runtime health.
+            # ``health``/``readiness`` are file readiness (script+SKILL.md on
+            # disk), NOT runtime health. ``run_health`` is the evidence-ledger
+            # aggregate ({total, success, skill_defect, …, other,
+            # completion_rate}) or None when the skill has no recorded runs.
             "readiness": readiness,
             "health": readiness,
+            "run_health": run_health_map.get(alias),
+            # Compact input/output for the card face (same shape as detail).
+            "io": _skill_io_summary(meta),
         }
         domain_groups.setdefault(domain, []).append(entry)
 
@@ -4703,6 +4765,7 @@ async def get_skill(domain: str, skill_name: str):
         skill_md_exists=bool(skill_dir and (skill_dir / "SKILL.md").exists()),
         script_exists=bool(script_path and script_path.exists()),
     )
+    run_health_map = _skill_run_health_map()
     return {
         "name": skill_name,
         "domain": skill_domain,
@@ -4736,6 +4799,29 @@ async def get_skill(domain: str, skill_name: str):
         "resources": _skill_resources(skill_dir, script_path),
         "references": _skill_references(skill_dir),
         "diagnostics": _skill_diagnostics(skill_dir, script_path, version),
+        # --- structured contract already in skill.yaml, now surfaced so the
+        #     desktop "Data & requirements" panel is not empty (was dropped
+        #     before; see LazySkillMetadata for the source of each field) ---
+        "load_when": (meta.load_when if meta else "") or None,
+        "skip_when": (meta.skip_when if meta else []),
+        "requires_preprocessed": bool(meta.requires_preprocessed) if meta else False,
+        "io": _skill_io_summary(meta),
+        "input_contract": (meta.input_contract if meta else {}),
+        "output_contract": (meta.output_contract if meta else {}),
+        "compute_resources": (meta.compute_resources if meta else {}),
+        "validation_evidence": (meta.validation_evidence if meta else []),
+        "param_hints": (meta.param_hints if meta else {}),
+        "methods": sorted((meta.param_hints or {}).keys()) if meta else [],
+        "gotchas": (meta.gotchas if meta else []),
+        "gotcha_details": (meta.gotcha_details if meta else []),
+        # Content fingerprint of the parsed skill.yaml bytes ("unknown" for v1).
+        "content_hash": (
+            meta.manifest_revision
+            if meta and meta.manifest_revision != "unknown"
+            else None
+        ),
+        # Evidence-ledger runtime health for THIS skill (or None = no runs).
+        "run_health": run_health_map.get(skill_name),
     }
 
 
