@@ -51,6 +51,8 @@ from .evolution import (
 )
 from .registry import GOVERNED_REPLACEMENT_VALIDATION_LEVELS, OmicsRegistry
 from .schema import SkillManifest, load_skill_yaml, parse_skill_manifest
+from .evaluation_protocol import protocol_digest
+from .evaluation_run import EvaluationResultStore, default_evaluation_result_store
 from .skill_audit import (
     CachedRevisionResolver,
     SkillAuditRuntime,
@@ -60,6 +62,36 @@ from .skill_audit import (
 from .skill_md import append_gotcha_entry, render_skill_md
 
 logger = logging.getLogger(__name__)
+
+
+def _manifest_protocol_digests(manifest: SkillManifest, skill_dir: Path) -> dict[str, str]:
+    """Current digest of each declared Evaluation Protocol (ADR 0074 §6.1).
+
+    Recomputed on every resolve (cheap: a few small test entries) so the digest
+    always reflects the current protocol bytes; a stored evaluation result earns
+    a level only while its protocol_digest still matches one of these. Dependency
+    versions are not yet bound (a follow-up once the runtime env probe feeds
+    them); the spec + entry-bytes binding already detects a protocol change.
+    """
+    digests: dict[str, str] = {}
+    for proto in manifest.validation.protocols:
+        entry_path = skill_dir / proto.entry
+        try:
+            entry_bytes = entry_path.read_bytes()
+        except OSError:
+            entry_bytes = b""
+        digests[proto.id] = protocol_digest(
+            protocol={
+                "id": proto.id,
+                "kind": proto.kind,
+                "entry": proto.entry,
+                "dataset_ref": proto.dataset_ref,
+                "repeats": proto.repeats,
+            },
+            entry_bytes=entry_bytes,
+            dependency_versions={},
+        )
+    return digests
 
 # ADR 0074 additive Desktop snapshot contract (see docs/design §9.2). These
 # fields are added to GET /skill-evolution without removing the existing
@@ -133,6 +165,7 @@ def _build_registry_revision_resolver(skills_root: Path) -> CachedRevisionResolv
                 declared_validation_level=manifest.validation.level,
                 cache_key=str(skill_dir),
                 mtime_signature=_identity_mtime_signature(manifest_path, entry_path),
+                protocol_digests=_manifest_protocol_digests(manifest, skill_dir),
             )
 
     def compute_identity(cache_key: str) -> tuple[str, str]:
@@ -448,6 +481,7 @@ class SkillEvolutionGovernance:
         minimum_gotcha_defects: int = 3,
         minimum_gotcha_counterexamples: int = 1,
         audit_runtime: SkillAuditRuntime | None = None,
+        evaluation_store: EvaluationResultStore | None = None,
     ) -> None:
         if minimum_demo_executions < 1:
             raise ValueError("minimum_demo_executions must be at least 1")
@@ -481,12 +515,17 @@ class SkillEvolutionGovernance:
         # new authority epoch; snapshot_revision is monotonic within that epoch.
         self._authority_epoch = uuid4().hex
         self._snapshot_revision = 0
+        self._evaluation_store = evaluation_store or default_evaluation_result_store()
         if audit_runtime is not None:
             self._revision_resolver: CachedRevisionResolver | None = None
             self._audit_runtime = audit_runtime
         else:
             self._revision_resolver = _build_registry_revision_resolver(self.skills_root)
-            self._audit_runtime = SkillAuditRuntime(self.ledger, self._revision_resolver)
+            self._audit_runtime = SkillAuditRuntime(
+                self.ledger,
+                self._revision_resolver,
+                protocol_results=self._evaluation_store.results_for,
+            )
         self._audit_views: tuple[SkillExperienceView, ...] = ()
         self._audit_summary: dict[str, Any] = self._audit_runtime.summary([])
 

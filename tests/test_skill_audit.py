@@ -583,13 +583,20 @@ def test_refresh_keeps_revision_when_summary_unchanged(tmp_path):
 
 
 def _write_minimal_skill(skills_root, *, skill_id="aud-skill", domain="spatial",
-                         version="1.0.0", level="smoke-only"):
+                         version="1.0.0", level="smoke-only", protocols=None):
     import yaml
 
     skill_dir = skills_root / domain / skill_id
     skill_dir.mkdir(parents=True)
     script = skill_id.replace("-", "_") + ".py"
     (skill_dir / script).write_text("if __name__ == '__main__':\n    pass\n", encoding="utf-8")
+    validation = {"level": level}
+    if protocols:
+        validation["protocols"] = protocols
+        for proto in protocols:  # materialize each protocol entry so its digest is real
+            entry = skill_dir / proto["entry"]
+            entry.parent.mkdir(parents=True, exist_ok=True)
+            entry.write_text(f"# protocol {proto['id']}\n", encoding="utf-8")
     (skill_dir / "skill.yaml").write_text(
         yaml.safe_dump({
             "schema_version": 2, "id": skill_id, "name": skill_id, "domain": domain,
@@ -602,11 +609,51 @@ def _write_minimal_skill(skills_root, *, skill_id="aud-skill", domain="spatial",
             "runtime": {"entry": script},
             "type": "leaf",
             "lifecycle": {"status": "mvp"},
-            "validation": {"level": level},
+            "validation": validation,
         }),
         encoding="utf-8",
     )
     return skill_dir
+
+
+def test_governance_experience_view_reflects_stored_protocol_evaluation(tmp_path):
+    # End-to-end read path: a skill declaring a fixture protocol + a stored,
+    # digest-matching evaluation result -> the live experience view reports
+    # fixture-validated / current (ADR 0074 M-C).
+    from omicsclaw.skill.evaluation_run import EvaluationResultStore
+    from omicsclaw.skill.evolution import EvolutionProposalStore, SkillHealthLedger
+    from omicsclaw.skill.evolution_governance import (
+        SkillEvolutionGovernance,
+        _build_registry_revision_resolver,
+    )
+
+    skills_root = tmp_path / "skills"
+    _write_minimal_skill(
+        skills_root, skill_id="aud-skill", version="1.0.0", level="fixture-validated",
+        protocols=[{"id": "p1", "kind": "fixture", "entry": "tests/t.py"}],
+    )
+    eval_store = EvaluationResultStore(tmp_path / "evals.jsonl")
+    gov = SkillEvolutionGovernance(
+        skills_root=skills_root,
+        ledger=SkillHealthLedger(tmp_path / "events.jsonl"),
+        proposals=EvolutionProposalStore(tmp_path / "proposals.jsonl"),
+        evaluation_store=eval_store,
+    )
+
+    # Before any evaluation: declared fixture-validated but no evidence -> stale/eval.
+    gov.refresh()
+    assert gov.experience_view("aud-skill")["validation_state"] == "evaluation_required"
+
+    # Store a passing result whose digest matches the manifest-derived protocol digest.
+    cr = _build_registry_revision_resolver(skills_root)()[0]
+    eval_store.append(
+        cr.revision,
+        ProtocolEvaluationResult("p1", "fixture", cr.protocol_digests["p1"], "succeeded", "t"),
+    )
+    gov.refresh()
+    view = gov.experience_view("aud-skill")
+    assert view["effective_validation_level"] == "fixture-validated"
+    assert view["validation_state"] == "current"
 
 
 def test_build_registry_resolver_empty_root_is_empty(tmp_path):

@@ -449,6 +449,7 @@ class SkillIdentityInput:
     declared_validation_level: str
     cache_key: str
     mtime_signature: str
+    protocol_digests: Mapping[str, str] = field(default_factory=dict)
 
 
 class CachedRevisionResolver:
@@ -500,6 +501,7 @@ class CachedRevisionResolver:
                         source_hash=source_hash,
                     ),
                     item.declared_validation_level,
+                    protocol_digests=item.protocol_digests,
                 )
             )
         return resolved
