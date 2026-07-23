@@ -58,6 +58,14 @@ class _Governance:
             return None
         return {"skill_revision": {"skill_id": skill_id}, "validation_state": "current"}
 
+    def evaluate(self, skill_id, run_one=None):
+        self.calls.append(("evaluate", skill_id))
+        if skill_id == "nope":
+            raise KeyError(f"unknown skill: {skill_id}")
+        from omicsclaw.skill.skill_audit import ProtocolEvaluationResult
+
+        return [ProtocolEvaluationResult("p1", "fixture", "d1", "succeeded", "t")]
+
     def propose_deprecation(
         self,
         *,
@@ -350,6 +358,28 @@ def test_skill_evolution_skills_bad_cursor_is_422(monkeypatch):
         "/skill-evolution/skills?cursor=BAD", headers=_EVOLUTION_AUTH
     )
     assert response.status_code == 422
+
+
+def test_skill_evolution_run_evaluation_route(monkeypatch):
+    client, governance = _evolution_client(monkeypatch)
+    response = client.post(
+        "/skill-evolution/evaluations", json={"skill_id": "aud-skill"},
+        headers=_EVOLUTION_AUTH,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["skill_id"] == "aud-skill"
+    assert body["results"][0]["outcome"] == "succeeded"
+    assert ("evaluate", "aud-skill") in governance.calls
+
+
+def test_skill_evolution_run_evaluation_unknown_skill_is_404(monkeypatch):
+    client, _ = _evolution_client(monkeypatch)
+    response = client.post(
+        "/skill-evolution/evaluations", json={"skill_id": "nope"},
+        headers=_EVOLUTION_AUTH,
+    )
+    assert response.status_code == 404
 
 
 def test_skill_evolution_routes_use_only_the_frozen_dedicated_authority(

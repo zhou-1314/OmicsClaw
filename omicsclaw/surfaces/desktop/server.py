@@ -1371,6 +1371,12 @@ class EvolutionReconciliationRequest(_EvolutionRequest):
     reason: EvolutionReason
 
 
+class EvolutionEvaluationRequest(_EvolutionRequest):
+    """The Skill whose declared Evaluation Protocols to run (ADR 0074 M-C)."""
+
+    skill_id: EvolutionIdentity
+
+
 class EvolutionDeprecationProposalRequest(_EvolutionRequest):
     """Backend-owned evidence and replacement identity for a lifecycle candidate."""
 
@@ -4897,6 +4903,31 @@ async def get_skill_experience(skill_id: str):
     if view is None:
         raise HTTPException(404, detail=f"unknown skill: {skill_id}")
     return view
+
+
+@app.post(
+    "/skill-evolution/evaluations",
+    dependencies=[Depends(_require_skill_evolution_bearer_token)],
+)
+async def run_skill_evaluation(req: EvolutionEvaluationRequest):
+    """ADR 0074 M-C: run a Skill's declared Evaluation Protocols + store results.
+
+    Phased shared-runner path: runs synchronously (in a worker thread) and
+    returns the produced results; the async AuditOperation/observation contract
+    (202 + operation polling) is the RunRuntime-queue follow-up. It never mutates
+    Skill files — a validation change still needs a proposal + human approval.
+    """
+    from dataclasses import asdict
+
+    governance = _skill_evolution_governance()
+    try:
+        results = await asyncio.to_thread(governance.evaluate, req.skill_id)
+    except KeyError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Skill evaluation failed")
+        raise HTTPException(500, detail=str(exc)) from exc
+    return {"skill_id": req.skill_id, "results": [asdict(r) for r in results]}
 
 
 @app.post(

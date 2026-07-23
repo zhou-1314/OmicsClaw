@@ -656,6 +656,47 @@ def test_governance_experience_view_reflects_stored_protocol_evaluation(tmp_path
     assert view["validation_state"] == "current"
 
 
+def test_governance_evaluate_runs_stores_and_lifts_effective(tmp_path):
+    # evaluate() with an injected runner runs each declared protocol, stores the
+    # digest-bound results, refreshes, and the view reflects the earned level.
+    from omicsclaw.skill.evaluation_run import EvaluationResultStore
+    from omicsclaw.skill.evolution import EvolutionProposalStore, SkillHealthLedger
+    from omicsclaw.skill.evolution_governance import SkillEvolutionGovernance
+
+    skills_root = tmp_path / "skills"
+    _write_minimal_skill(
+        skills_root, skill_id="aud-skill", version="1.0.0", level="fixture-validated",
+        protocols=[{"id": "p1", "kind": "fixture", "entry": "tests/t.py"}],
+    )
+    gov = SkillEvolutionGovernance(
+        skills_root=skills_root,
+        ledger=SkillHealthLedger(tmp_path / "events.jsonl"),
+        proposals=EvolutionProposalStore(tmp_path / "proposals.jsonl"),
+        evaluation_store=EvaluationResultStore(tmp_path / "evals.jsonl"),
+    )
+    results = gov.evaluate("aud-skill", run_one=lambda spec: "succeeded")
+    assert [(r.protocol_id, r.outcome) for r in results] == [("p1", "succeeded")]
+    view = gov.experience_view("aud-skill")
+    assert view["effective_validation_level"] == "fixture-validated"
+    assert view["validation_state"] == "current"
+
+
+def test_governance_evaluate_unknown_skill_raises(tmp_path):
+    from omicsclaw.skill.evaluation_run import EvaluationResultStore
+    from omicsclaw.skill.evolution import EvolutionProposalStore, SkillHealthLedger
+    from omicsclaw.skill.evolution_governance import SkillEvolutionGovernance
+
+    (tmp_path / "skills").mkdir()
+    gov = SkillEvolutionGovernance(
+        skills_root=tmp_path / "skills",
+        ledger=SkillHealthLedger(tmp_path / "events.jsonl"),
+        proposals=EvolutionProposalStore(tmp_path / "proposals.jsonl"),
+        evaluation_store=EvaluationResultStore(tmp_path / "evals.jsonl"),
+    )
+    with pytest.raises(KeyError):
+        gov.evaluate("nope", run_one=lambda spec: "succeeded")
+
+
 def test_build_registry_resolver_empty_root_is_empty(tmp_path):
     from omicsclaw.skill.evolution_governance import _build_registry_revision_resolver
 

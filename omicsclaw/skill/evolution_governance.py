@@ -52,7 +52,11 @@ from .evolution import (
 from .registry import GOVERNED_REPLACEMENT_VALIDATION_LEVELS, OmicsRegistry
 from .schema import SkillManifest, load_skill_yaml, parse_skill_manifest
 from .evaluation_protocol import protocol_digest
-from .evaluation_run import EvaluationResultStore, default_evaluation_result_store
+from .evaluation_run import (
+    EvaluationResultStore,
+    default_evaluation_result_store,
+    run_protocol_evaluations,
+)
 from .skill_audit import (
     CachedRevisionResolver,
     SkillAuditRuntime,
@@ -62,6 +66,38 @@ from .skill_audit import (
 from .skill_md import append_gotcha_entry, render_skill_md
 
 logger = logging.getLogger(__name__)
+
+
+def _run_protocol_entry(skill_dir: Path, entry: str) -> str:
+    """Run a test-backed protocol's entry in a bounded pytest subprocess.
+
+    Returns ``"succeeded"`` on exit 0, else ``"failed"``. Control credentials are
+    scrubbed from the child environment, stdout/stderr are discarded, and a
+    timeout is a failure. This is the phased shared-runner-adjacent executor
+    (ADR 0074 §10 "Deferred"): the RunRuntime governed queue — resource
+    scheduling, cancellation and full AuditOperation observability — is a
+    follow-up.
+    """
+    import subprocess
+
+    from .execution.environment import scrub_internal_control_credentials
+    from .execution.python_runtime import get_skill_runner_python
+
+    entry_path = skill_dir / entry
+    if not entry_path.is_file():
+        return "failed"
+    try:
+        proc = subprocess.run(
+            [get_skill_runner_python(), "-m", "pytest", "-q", str(entry_path)],
+            cwd=str(skill_dir),
+            env=scrub_internal_control_credentials(os.environ),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=600,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return "failed"
+    return "succeeded" if proc.returncode == 0 else "failed"
 
 
 def _manifest_protocol_digests(manifest: SkillManifest, skill_dir: Path) -> dict[str, str]:
@@ -601,6 +637,65 @@ class SkillEvolutionGovernance:
             "skills": [view.to_dict() for view in page],
             "next_cursor": next_cursor,
         }
+
+    def evaluate(self, skill_id: str, *, run_one=None) -> list:
+        """Run a Skill's declared Evaluation Protocols and store the results.
+
+        ADR 0074 M-C (phased shared-runner path): each declared protocol runs via
+        ``run_one`` (injectable for tests; the default runs ``demo`` protocols
+        through the shared runner and a test-backed protocol's entry in a bounded
+        subprocess), the digest-bound results are appended to the evaluation
+        store, and the audit read models are refreshed so effective validation
+        reflects them. Returns the produced ``ProtocolEvaluationResult`` list.
+
+        Read-only for Skill files: this never mutates ``skill.yaml`` / ``SKILL.md``
+        — a validation-level change still requires a Backend proposal + human
+        approval (``SkillEvolutionGovernance`` remains the sole mutation authority).
+        """
+        if self._revision_resolver is None:
+            raise RuntimeError("evaluate() requires the registry-backed resolver")
+        self._revision_resolver.invalidate()
+        current = next(
+            (cr for cr in self._revision_resolver() if cr.revision.skill_id == skill_id),
+            None,
+        )
+        if current is None:
+            raise KeyError(f"unknown skill: {skill_id}")
+        manifest_path, manifest, _hash = self._find_manifest(skill_id)
+        skill_dir = manifest_path.parent
+        protocols = [
+            (
+                {
+                    "id": proto.id,
+                    "kind": proto.kind,
+                    "entry": proto.entry,
+                    "dataset_ref": proto.dataset_ref,
+                    "repeats": proto.repeats,
+                },
+                current.protocol_digests.get(proto.id, ""),
+            )
+            for proto in manifest.validation.protocols
+        ]
+        runner = run_one or self._make_default_protocol_runner(skill_id, skill_dir)
+        results = run_protocol_evaluations(current.revision, protocols, runner)
+        for result in results:
+            self._evaluation_store.append(current.revision, result)
+        self._recompute_audit_readmodels()
+        return results
+
+    def _make_default_protocol_runner(self, skill_id: str, skill_dir: Path):
+        def run_one(spec: Mapping[str, Any]) -> str:
+            if str(spec.get("kind")) == "demo":
+                from .runner import run_skill
+
+                with tempfile.TemporaryDirectory(prefix="omicsclaw-eval-") as tmp:
+                    result = run_skill(
+                        skill_id, demo=True, output_dir=str(Path(tmp) / "output")
+                    )
+                return "succeeded" if getattr(result, "success", False) else "failed"
+            return _run_protocol_entry(skill_dir, str(spec.get("entry", "")))
+
+        return run_one
 
     def refresh(self) -> list[EvolutionProposal]:
         """Synthesize earned promotion and explicit-demo demotion candidates."""
