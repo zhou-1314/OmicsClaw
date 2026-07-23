@@ -380,16 +380,32 @@ def test_resolver_feeds_runtime_end_to_end():
 
 
 class _FakeAuditRuntime:
-    """Returns successive canned summaries (last one repeats)."""
+    """Returns canned Experience Views + successive summaries (last repeats)."""
 
-    def __init__(self, summaries):
-        self._summaries = list(summaries)
+    def __init__(self, summaries=None, views=()):
+        self._views = tuple(views)
+        self._summaries = list(summaries) if summaries else [{"total_skills": len(views)}]
         self.calls = 0
+
+    def experience_views(self):
+        return list(self._views)
 
     def summary(self, views=None):
         idx = min(self.calls, len(self._summaries) - 1)
         self.calls += 1
         return dict(self._summaries[idx])
+
+
+def _view(skill_id, *, state="current", declared="demo-validated"):
+    return SkillExperienceView(
+        skill_revision=SkillRevision(skill_id, "1.0.0", "m", "s"),
+        declared_validation_level=declared,
+        effective_validation_level="demo-validated",
+        validation_state=state,
+        last_observed_at="",
+        usage={"execution_count": 0, "routing_count": 0, "explicit_count": 0},
+        health={"successes": 0, "skill_defects": 0, "environment_failures": 0, "framework_failures": 0},
+    )
 
 
 def _governance(tmp_path, *, audit_runtime):
@@ -499,3 +515,53 @@ def test_build_registry_resolver_computes_real_identity(tmp_path):
     # real, computed identity (not the unknown-fallback)
     assert cr.revision.manifest_hash not in ("", "unknown")
     assert cr.revision.source_hash not in ("", "unknown")
+
+
+# ---- per-skill Experience View detail + pagination (increment 4) -----------
+
+
+def test_experience_view_detail_and_unknown(tmp_path):
+    fake = _FakeAuditRuntime(views=[_view("a"), _view("b", state="stale")])
+    gov = _governance(tmp_path, audit_runtime=fake)
+    gov.refresh()  # populates the cached views
+    assert gov.experience_view("b")["validation_state"] == "stale"
+    assert gov.experience_view("b")["skill_revision"]["skill_id"] == "b"
+    assert gov.experience_view("zzz") is None
+
+
+def test_experience_page_paginates_with_opaque_cursor(tmp_path):
+    fake = _FakeAuditRuntime(views=[_view("a"), _view("b"), _view("c")])
+    gov = _governance(tmp_path, audit_runtime=fake)
+    gov.refresh()
+    page1 = gov.experience_page(limit=2)
+    assert [s["skill_revision"]["skill_id"] for s in page1["skills"]] == ["a", "b"]
+    assert page1["next_cursor"]  # more to come
+    page2 = gov.experience_page(cursor=page1["next_cursor"], limit=2)
+    assert [s["skill_revision"]["skill_id"] for s in page2["skills"]] == ["c"]
+    assert page2["next_cursor"] is None  # exhausted
+
+
+def test_experience_page_filters_by_state(tmp_path):
+    fake = _FakeAuditRuntime(
+        views=[_view("a", state="current"), _view("b", state="stale"),
+               _view("c", state="current")]
+    )
+    gov = _governance(tmp_path, audit_runtime=fake)
+    gov.refresh()
+    got = gov.experience_page(state="current")
+    assert [s["skill_revision"]["skill_id"] for s in got["skills"]] == ["a", "c"]
+
+
+def test_experience_page_clamps_limit_and_rejects_bad_cursor(tmp_path):
+    fake = _FakeAuditRuntime(views=[_view(f"s{i:02d}") for i in range(5)])
+    gov = _governance(tmp_path, audit_runtime=fake)
+    gov.refresh()
+    assert len(gov.experience_page(limit=10_000)["skills"]) == 5  # clamped, all returned
+    with pytest.raises(ValueError):
+        gov.experience_page(cursor="not+valid+base64+@@")
+
+
+def test_experience_read_models_empty_before_refresh(tmp_path):
+    gov = _governance(tmp_path, audit_runtime=_FakeAuditRuntime(views=[_view("a")]))
+    assert gov.experience_page()["skills"] == []  # nothing until an explicit refresh
+    assert gov.experience_view("a") is None

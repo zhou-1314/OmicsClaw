@@ -51,7 +51,12 @@ from .evolution import (
 )
 from .registry import GOVERNED_REPLACEMENT_VALIDATION_LEVELS, OmicsRegistry
 from .schema import SkillManifest, load_skill_yaml, parse_skill_manifest
-from .skill_audit import CachedRevisionResolver, SkillAuditRuntime, SkillIdentityInput
+from .skill_audit import (
+    CachedRevisionResolver,
+    SkillAuditRuntime,
+    SkillExperienceView,
+    SkillIdentityInput,
+)
 from .skill_md import append_gotcha_entry, render_skill_md
 
 logger = logging.getLogger(__name__)
@@ -65,6 +70,22 @@ _AUDIT_CAPABILITIES: tuple[str, ...] = (
     "effective_validation",
     "audit_summary",
 )
+
+# Bounded per-Skill Experience View pagination (ADR 0074 §9.3).
+_DEFAULT_EXPERIENCE_PAGE = 50
+_MAX_EXPERIENCE_PAGE = 100
+
+
+def _encode_experience_cursor(skill_id: str) -> str:
+    """Opaque, fixed-shape resume token for a Skill-id-ordered page."""
+    return base64.urlsafe_b64encode(skill_id.encode("utf-8")).decode("ascii")
+
+
+def _decode_experience_cursor(cursor: str) -> str:
+    try:
+        return base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
+    except Exception as exc:
+        raise ValueError(f"invalid cursor: {cursor!r}") from exc
 
 
 def _identity_mtime_signature(*paths: Path) -> str:
@@ -466,29 +487,81 @@ class SkillEvolutionGovernance:
         else:
             self._revision_resolver = _build_registry_revision_resolver(self.skills_root)
             self._audit_runtime = SkillAuditRuntime(self.ledger, self._revision_resolver)
+        self._audit_views: tuple[SkillExperienceView, ...] = ()
         self._audit_summary: dict[str, Any] = self._audit_runtime.summary([])
 
     def _recompute_audit_readmodels(self) -> None:
-        """Refresh the cached audit summary on the explicit refresh path.
+        """Refresh the cached audit read models on the explicit refresh path.
 
-        Recomputes the (cached) revision identities and the Experience-View
-        summary, bumping ``snapshot_revision`` only when the summary content
-        actually changes. Defensive: an audit-read failure keeps the prior
-        summary rather than breaking proposal synthesis — ADR 0074 treats an
-        audit failure as a framework incident, not a governance break.
+        Recomputes the (cached) revision identities, the per-Skill Experience
+        Views and their summary, bumping ``snapshot_revision`` only when the
+        read models actually change. Defensive: an audit-read failure keeps the
+        prior read models rather than breaking proposal synthesis — ADR 0074
+        treats an audit failure as a framework incident, not a governance break.
         """
         try:
             if self._revision_resolver is not None:
                 self._revision_resolver.invalidate()
-            summary = self._audit_runtime.summary()
+            views = tuple(self._audit_runtime.experience_views())
+            summary = self._audit_runtime.summary(views)
         except Exception:
             logger.warning(
-                "Audit read-model refresh failed; keeping prior summary", exc_info=True
+                "Audit read-model refresh failed; keeping prior read models",
+                exc_info=True,
             )
             return
-        if summary != self._audit_summary:
-            self._audit_summary = summary
+        if views != self._audit_views or summary != self._audit_summary:
             self._snapshot_revision += 1
+        self._audit_views = views
+        self._audit_summary = summary
+
+    def experience_view(self, skill_id: str) -> dict[str, Any] | None:
+        """The last-refreshed Skill Experience View for one Skill id, or None."""
+        for view in self._audit_views:
+            if view.skill_revision.skill_id == skill_id:
+                return view.to_dict()
+        return None
+
+    def experience_page(
+        self,
+        cursor: str = "",
+        limit: int = _DEFAULT_EXPERIENCE_PAGE,
+        state: str = "",
+    ) -> dict[str, Any]:
+        """A bounded, opaque-cursor page of Skill Experience Views (ADR 0074 §9.3).
+
+        Views come from the last refresh (a cheap read; no per-request source
+        hashing). ``state`` optionally filters by validation state; the cursor
+        resumes after a Skill id in the id-sorted list; ``limit`` is clamped to a
+        fixed maximum. A malformed cursor raises ``ValueError`` (the route maps
+        it to 422). Never returns raw audit payloads — only the projected views.
+        """
+        views = self._audit_views
+        if state:
+            views = tuple(v for v in views if v.validation_state == state)
+        start = 0
+        if cursor:
+            after = _decode_experience_cursor(cursor)
+            start = next(
+                (
+                    index
+                    for index, view in enumerate(views)
+                    if view.skill_revision.skill_id > after
+                ),
+                len(views),
+            )
+        bounded = max(1, min(int(limit or _DEFAULT_EXPERIENCE_PAGE), _MAX_EXPERIENCE_PAGE))
+        page = views[start : start + bounded]
+        has_more = (start + bounded) < len(views)
+        next_cursor = (
+            _encode_experience_cursor(page[-1].skill_revision.skill_id)
+            if has_more and page
+            else None
+        )
+        return {
+            "skills": [view.to_dict() for view in page],
+            "next_cursor": next_cursor,
+        }
 
     def refresh(self) -> list[EvolutionProposal]:
         """Synthesize earned promotion and explicit-demo demotion candidates."""
