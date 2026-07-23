@@ -4030,3 +4030,200 @@ def test_snapshot_contains_aggregated_health_and_no_raw_paths(tmp_path: Path):
     assert snapshot["health"][0]["success_count"] == 1
     assert snapshot["proposals"][0]["target_skill"] == "evolution-test"
     assert str(tmp_path) not in serialized
+
+
+# ── ADR 0074 §8.2 — stage-one merge_candidate advisories ──────────────────────
+
+
+def _write_capability_skill(
+    root: Path,
+    *,
+    skill_id: str,
+    load_when: str,
+    trigger_keywords: list[str] | None = None,
+    domain: str = "spatial",
+    level: str = "smoke-only",
+    status: str = "mvp",
+) -> Path:
+    """A skill whose capability text (load_when + keywords) is caller-controlled."""
+    skill_dir = root / domain / skill_id
+    skill_dir.mkdir(parents=True)
+    script_name = skill_id.replace("-", "_") + ".py"
+    (skill_dir / script_name).write_text(
+        "if __name__ == '__main__':\n    pass\n", encoding="utf-8"
+    )
+    manifest = {
+        "schema_version": 2,
+        "id": skill_id,
+        "name": skill_id,
+        "domain": domain,
+        "version": "1.0.0",
+        "summary": {
+            "load_when": load_when,
+            "trigger_keywords": trigger_keywords or [],
+        },
+        "runtime": {"entry": script_name},
+        "type": "leaf",
+        "lifecycle": {"status": status},
+        "validation": {"level": level},
+    }
+    path = skill_dir / "skill.yaml"
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    return path
+
+
+_CLUSTER_A = (
+    "cluster spatial transcriptomics spots into tissue domains via leiden "
+    "louvain graph modularity neighborhood"
+)
+_CLUSTER_B = (
+    "cluster spatial transcriptomics spots into tissue domains via leiden "
+    "louvain graph modularity neighborhood resolution"
+)
+_VELOCITY = (
+    "estimate rna velocity latent time from spliced unspliced counts dynamical "
+    "trajectory"
+)
+
+
+def _merge_governance(tmp_path: Path, skills_root: Path) -> SkillEvolutionGovernance:
+    return SkillEvolutionGovernance(
+        skills_root=skills_root,
+        ledger=SkillHealthLedger(tmp_path / "events.jsonl"),
+        proposals=EvolutionProposalStore(tmp_path / "proposals.jsonl"),
+        execution_adapter=_ExecutionAdapter(),
+    )
+
+
+def _merge_candidates(created: list) -> list:
+    return [p for p in created if p.kind == "merge_candidate"]
+
+
+def test_refresh_flags_near_duplicate_skills_as_advisory_merge_candidate(
+    tmp_path: Path,
+):
+    skills_root = tmp_path / "skills"
+    _write_capability_skill(
+        skills_root, skill_id="spatial-cluster-a", load_when=_CLUSTER_A
+    )
+    _write_capability_skill(
+        skills_root, skill_id="spatial-cluster-b", load_when=_CLUSTER_B
+    )
+    governance = _merge_governance(tmp_path, skills_root)
+
+    merges = _merge_candidates(governance.refresh())
+
+    assert len(merges) == 1
+    candidate = merges[0]
+    assert candidate.kind == "merge_candidate"
+    assert candidate.status == "draft"
+    # Evidence is the static manifest overlap, not ledger events.
+    assert candidate.support_event_ids == []
+    change = candidate.proposed_change
+    assert change["advisory_only"] is True
+    assert change["action"] == "review_capability_overlap"
+    assert change["overlap_skills"] == ["spatial-cluster-a", "spatial-cluster-b"]
+    assert change["domain"] == "spatial"
+    assert change["shared_token_count"] >= 6
+    assert change["similarity"] >= 0.5
+    # The advisory points at the two-stage resolution and forbids concatenation.
+    assert "deprecation" in change["resolution_path"].lower()
+    assert "never concatenate" in change["resolution_path"].lower()
+    # It is surfaced through the existing additive snapshot proposals array.
+    kinds = {p["kind"] for p in governance.snapshot()["proposals"]}
+    assert "merge_candidate" in kinds
+
+    # Re-running refresh is idempotent: the same pair is not re-proposed.
+    assert _merge_candidates(governance.refresh()) == []
+    latest = [
+        p for p in governance.proposals.list_latest() if p.kind == "merge_candidate"
+    ]
+    assert len(latest) == 1
+
+
+def test_merge_candidate_excludes_distinct_cross_domain_and_non_routable(
+    tmp_path: Path,
+):
+    # Distinct capabilities in the same domain: no overlap advisory.
+    root_a = tmp_path / "distinct"
+    _write_capability_skill(root_a, skill_id="spatial-cluster-a", load_when=_CLUSTER_A)
+    _write_capability_skill(root_a, skill_id="spatial-velocity", load_when=_VELOCITY)
+    assert _merge_candidates(_merge_governance(tmp_path / "a", root_a).refresh()) == []
+
+    # Identical capability text but different domains: domains are disjoint
+    # capability spaces, so cross-domain overlap is never a merge signal.
+    root_b = tmp_path / "cross"
+    _write_capability_skill(
+        root_b, skill_id="spatial-cluster-a", load_when=_CLUSTER_A, domain="spatial"
+    )
+    _write_capability_skill(
+        root_b, skill_id="genomics-cluster-a", load_when=_CLUSTER_A, domain="genomics"
+    )
+    assert _merge_candidates(_merge_governance(tmp_path / "b", root_b).refresh()) == []
+
+    # Overlapping pair where one side is non-routable: no routable pair forms.
+    root_c = tmp_path / "nonroutable"
+    _write_capability_skill(
+        root_c, skill_id="spatial-cluster-a", load_when=_CLUSTER_A, status="mvp"
+    )
+    _write_capability_skill(
+        root_c, skill_id="spatial-cluster-b", load_when=_CLUSTER_B, status="draft"
+    )
+    assert _merge_candidates(_merge_governance(tmp_path / "c", root_c).refresh()) == []
+
+
+def test_merge_candidate_is_non_approvable_and_deprecation_stays_two_stage(
+    tmp_path: Path,
+):
+    skills_root = tmp_path / "skills"
+    _write_capability_skill(
+        skills_root, skill_id="spatial-cluster-a", load_when=_CLUSTER_A
+    )
+    _write_capability_skill(
+        skills_root, skill_id="spatial-cluster-b", load_when=_CLUSTER_B
+    )
+    # A routable-but-unvalidated replacement and a non-routable replacement.
+    _write_capability_skill(
+        skills_root,
+        skill_id="spatial-cluster-unified",
+        load_when=_VELOCITY,
+        level="smoke-only",
+        status="mvp",
+    )
+    _write_capability_skill(
+        skills_root,
+        skill_id="spatial-cluster-retired",
+        load_when=_VELOCITY,
+        level="demo-validated",
+        status="draft",
+    )
+    governance = _merge_governance(tmp_path, skills_root)
+    merges = _merge_candidates(governance.refresh())
+    assert len(merges) == 1
+
+    # Stage one is advisory: the merge_candidate itself can never be approved,
+    # so it cannot retire, hide, or rewrite either Skill.
+    with pytest.raises(EvolutionRevalidationError):
+        governance.approve(
+            merges[0].proposal_id, approver="local-human", reason="merge them"
+        )
+
+    # Stage two — the ONLY retirement path — is the replacement-backed
+    # deprecation, which refuses an under-validated replacement ...
+    with pytest.raises(EvolutionRevalidationError, match="demo-validated"):
+        governance.propose_deprecation(
+            target_skill="spatial-cluster-a",
+            replacement_skill="spatial-cluster-unified",
+            proposer="local-human",
+            reason="merge overlap into one skill",
+            support_event_ids=[],
+        )
+    # ... and a non-routable replacement.
+    with pytest.raises(EvolutionRevalidationError, match="routable"):
+        governance.propose_deprecation(
+            target_skill="spatial-cluster-a",
+            replacement_skill="spatial-cluster-retired",
+            proposer="local-human",
+            reason="merge overlap into one skill",
+            support_event_ids=[],
+        )

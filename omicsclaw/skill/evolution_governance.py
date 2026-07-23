@@ -49,6 +49,7 @@ from .evolution import (
     default_evolution_proposal_store,
     default_skill_health_ledger,
 )
+from .capability_resolver import _tokenize
 from .registry import GOVERNED_REPLACEMENT_VALIDATION_LEVELS, OmicsRegistry
 from .schema import SkillManifest, load_skill_yaml, parse_skill_manifest
 from .evaluation_protocol import protocol_digest
@@ -222,6 +223,18 @@ def _build_registry_revision_resolver(skills_root: Path) -> CachedRevisionResolv
 
 
 _SKILL_DEFECT_KINDS = frozenset({"script_defect", "contract_failure"})
+
+# ADR 0074 §8.2 stage-one merge pre-filter. A bounded, deterministic
+# description-similarity gate (Jaccard over two Skills' capability fingerprints)
+# calibrated well above the real catalog's maximum observed same-domain overlap
+# (~0.29 Jaccard) so it fires only on genuine near-duplicates a maintainer
+# should review, never on the current healthy catalog. It is advisory only: a
+# ``merge_candidate`` never merges, never concatenates code/methodology, and
+# being a non-approvable draft cannot mutate anything — retiring a Skill still
+# requires the ADR-0068 replacement-backed deprecation (stage two).
+_MERGE_SIMILARITY_THRESHOLD = 0.5
+_MERGE_MIN_SHARED_TOKENS = 6
+_MERGE_MAX_SHARED_TOKENS_SHOWN = 12
 _SUPPORTED_FROM_LEVEL = "smoke-only"
 _SUPPORTED_TO_LEVEL = "demo-validated"
 _DEMOTION_FROM_LEVEL = "demo-validated"
@@ -280,6 +293,19 @@ def _has_credential_assignment(value: str) -> bool:
 
 def _sha256(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
+
+
+def _skill_capability_tokens(manifest: SkillManifest) -> frozenset[str]:
+    """Deterministic capability fingerprint for the merge pre-filter (ADR 0074 §8.2).
+
+    Reuses the router's tokenizer so a merge advisory reflects the same
+    description overlap the resolver would see (name + load-when + trigger
+    keywords + tags), keeping the signal consistent with routing.
+    """
+    parts = [manifest.name, manifest.summary.load_when]
+    parts.extend(manifest.summary.trigger_keywords)
+    parts.extend(manifest.summary.tags)
+    return frozenset(_tokenize(" ".join(parts)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -830,8 +856,105 @@ class SkillEvolutionGovernance:
                 continue
             if self.proposals.submit_if_absent(proposal):
                 created.append(proposal)
+        for merge in self._merge_candidate_candidates(manifest_snapshots):
+            if self.proposals.submit_if_absent(merge):
+                created.append(merge)
         self._recompute_audit_readmodels()
         return created
+
+    def _merge_candidate_candidates(
+        self,
+        manifest_snapshots: list[tuple[Path, SkillManifest, str]],
+    ) -> list[EvolutionProposal]:
+        """Stage-one merge advisories from bounded description overlap (ADR 0074 §8.2).
+
+        A deterministic capability-fingerprint Jaccard over each same-domain,
+        routable, non-consensus Skill pair. A pair above the calibrated threshold
+        yields ONE non-approvable ``merge_candidate`` draft that only describes the
+        overlap and points at the two-stage replacement + deprecation resolution.
+        It never merges or concatenates code/methodology; being a draft it can
+        never be approved, so the sole retirement path stays the ADR-0068
+        replacement-backed deprecation. Same-domain only: the eight domains are
+        disjoint capability spaces, so cross-domain text overlap is not a merge
+        signal.
+        """
+        from itertools import combinations
+
+        by_domain: dict[str, list[tuple[str, str, str, frozenset[str], Path]]] = {}
+        for path, manifest, manifest_hash in manifest_snapshots:
+            if (
+                manifest.lifecycle.status not in _ROUTABLE_LIFECYCLES
+                or manifest.type == "consensus"
+            ):
+                continue
+            tokens = _skill_capability_tokens(manifest)
+            if len(tokens) < _MERGE_MIN_SHARED_TOKENS:
+                continue
+            by_domain.setdefault(manifest.domain, []).append(
+                (manifest.id, manifest.version, manifest_hash, tokens, path)
+            )
+
+        candidates: list[EvolutionProposal] = []
+        for domain, skills in by_domain.items():
+            for left, right in combinations(
+                sorted(skills, key=lambda item: item[0]), 2
+            ):
+                shared = left[3] & right[3]
+                if len(shared) < _MERGE_MIN_SHARED_TOKENS:
+                    continue
+                jaccard = len(shared) / len(left[3] | right[3])
+                if jaccard < _MERGE_SIMILARITY_THRESHOLD:
+                    continue
+                target_id, target_version, target_hash, _tokens, target_path = left
+                other_id, other_version, other_hash = right[0], right[1], right[2]
+                candidates.append(
+                    EvolutionProposal(
+                        proposal_id=self._merge_candidate_proposal_id(
+                            target_id, other_id
+                        ),
+                        created_at=datetime.now(timezone.utc).isoformat(),
+                        target_skill=target_id,
+                        skill_version=target_version,
+                        skill_hash=target_hash,
+                        kind="merge_candidate",
+                        status="draft",
+                        rationale=(
+                            f"{target_id} and {other_id} share {len(shared)} "
+                            f"capability tokens (jaccard={jaccard:.2f}) in domain "
+                            f"{domain}; a maintainer should review whether one "
+                            "should replace the other"
+                        ),
+                        support_event_ids=[],
+                        counterexample_event_ids=[],
+                        proposed_change={
+                            "field": "lifecycle.merge_review",
+                            "action": "review_capability_overlap",
+                            "advisory_only": True,
+                            "domain": domain,
+                            "overlap_skills": [target_id, other_id],
+                            "overlap_versions": [target_version, other_version],
+                            "overlap_manifest_hashes": [target_hash, other_hash],
+                            "shared_capability_tokens": sorted(shared)[
+                                :_MERGE_MAX_SHARED_TOKENS_SHOWN
+                            ],
+                            "shared_token_count": len(shared),
+                            "similarity": round(jaccard, 3),
+                            "resolution_path": (
+                                "acquire or select one replacement Skill, revalidate "
+                                "it to demo-validated or higher and pass routing "
+                                "regression, then file a replacement-backed "
+                                "deprecation (ADR 0068) for the other; never "
+                                "concatenate two Skills' code or methodology"
+                            ),
+                        },
+                        target_path_hash=_sha256(
+                            target_path.relative_to(self.skills_root)
+                            .as_posix()
+                            .encode("utf-8")
+                        ),
+                    )
+                )
+        return candidates
 
     def _gotcha_evidence_candidates(
         self,
@@ -2476,6 +2599,17 @@ class SkillEvolutionGovernance:
             f"- **{lead}.** {entry['condition']} {entry['guidance']} "
             f"Evidence: {anchors}."
         )
+
+    @staticmethod
+    def _merge_candidate_proposal_id(skill_a: str, skill_b: str) -> str:
+        # Stable per unordered pair (ADR 0074 §8.2): re-running refresh is
+        # idempotent, and one advisory covers the pair regardless of which side
+        # is the sorted target anchor.
+        basis = json.dumps(
+            ["merge_candidate", *sorted((skill_a, skill_b))],
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(basis).hexdigest()[:24]
 
     @staticmethod
     def _promotion_proposal_id(skill_id: str, version: str, skill_hash: str) -> str:

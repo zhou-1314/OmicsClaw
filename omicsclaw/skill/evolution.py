@@ -1921,6 +1921,14 @@ class EvolutionProposalStore:
 
     @staticmethod
     def _is_submittable_candidate(proposal: EvolutionProposal) -> bool:
+        # A merge candidate (ADR 0074 §8.2 stage one) is a non-approvable static
+        # overlap advisory: its evidence is the manifest overlap carried in
+        # ``proposed_change``, not ledger events, so it is submittable as a draft
+        # with no supporting event ids. Every other kind still requires them.
+        if proposal.kind == "merge_candidate":
+            return proposal.status == "draft"
+        if not proposal.support_event_ids:
+            return False
         return proposal.status == "pending" or (
             proposal.kind in {"gotcha_evidence", "gotcha_review"}
             and proposal.status == "draft"
@@ -1942,7 +1950,7 @@ class EvolutionProposalStore:
             self._append_unlocked(proposal)
 
     def submit(self, proposal: EvolutionProposal) -> None:
-        if not self._is_submittable_candidate(proposal) or not proposal.support_event_ids:
+        if not self._is_submittable_candidate(proposal):
             raise ValueError(
                 "evolution proposals require a reviewable status and supporting events"
             )
@@ -1953,7 +1961,7 @@ class EvolutionProposalStore:
 
     def submit_if_absent(self, proposal: EvolutionProposal) -> bool:
         """Submit a deterministic proposal once; return whether it was new."""
-        if not self._is_submittable_candidate(proposal) or not proposal.support_event_ids:
+        if not self._is_submittable_candidate(proposal):
             raise ValueError(
                 "evolution proposals require a reviewable status and supporting events"
             )
