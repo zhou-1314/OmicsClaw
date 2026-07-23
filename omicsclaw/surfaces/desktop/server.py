@@ -4866,6 +4866,39 @@ async def get_skill_evolution_snapshot():
     return await asyncio.to_thread(governance.snapshot)
 
 
+@app.get(
+    "/skill-evolution/skills",
+    dependencies=[Depends(_require_skill_evolution_bearer_token)],
+)
+async def list_skill_experience(cursor: str = "", limit: int = 50, state: str = ""):
+    """ADR 0074: a bounded, opaque-cursor page of per-Skill Experience Views.
+
+    Reads the last-refreshed audit read models (cheap); call POST
+    ``/skill-evolution/refresh`` first to populate them. Only projected views are
+    returned, never raw audit payloads.
+    """
+    governance = _skill_evolution_governance()
+    try:
+        return await asyncio.to_thread(
+            governance.experience_page, cursor, limit, state
+        )
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+
+
+@app.get(
+    "/skill-evolution/skills/{skill_id}",
+    dependencies=[Depends(_require_skill_evolution_bearer_token)],
+)
+async def get_skill_experience(skill_id: str):
+    """ADR 0074: the last-refreshed Skill Experience View for one Skill id."""
+    governance = _skill_evolution_governance()
+    view = await asyncio.to_thread(governance.experience_view, skill_id)
+    if view is None:
+        raise HTTPException(404, detail=f"unknown skill: {skill_id}")
+    return view
+
+
 @app.post(
     "/skill-evolution/refresh",
     dependencies=[Depends(_require_skill_evolution_bearer_token)],

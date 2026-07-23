@@ -43,6 +43,21 @@ class _Governance:
         self.calls.append(("refresh",))
         return [_Proposal()]
 
+    def experience_page(self, cursor="", limit=50, state=""):
+        self.calls.append(("experience_page", cursor, limit, state))
+        if cursor == "BAD":
+            raise ValueError("invalid cursor: 'BAD'")
+        return {
+            "skills": [{"skill_revision": {"skill_id": "sc-de"}}],
+            "next_cursor": None,
+        }
+
+    def experience_view(self, skill_id):
+        self.calls.append(("experience_view", skill_id))
+        if skill_id != "sc-de":
+            return None
+        return {"skill_revision": {"skill_id": skill_id}, "validation_state": "current"}
+
     def propose_deprecation(
         self,
         *,
@@ -292,6 +307,49 @@ def test_skill_evolution_routes_accept_the_dedicated_local_auth_token(
 
     assert response.status_code == 200
     assert response.json() == {"proposals": [], "health": []}
+
+
+def _evolution_client(monkeypatch):
+    governance = _Governance()
+    monkeypatch.setattr(server, "_skill_evolution_governance", lambda: governance)
+    _configure_skill_evolution_authority(
+        monkeypatch, dedicated_token=_LOCAL_EVOLUTION_TOKEN
+    )
+    client = TestClient(server.app, raise_server_exceptions=False)
+    return client, governance
+
+
+_EVOLUTION_AUTH = {"Authorization": f"Bearer {_LOCAL_EVOLUTION_TOKEN}"}
+
+
+def test_skill_evolution_skills_list_route_paginates(monkeypatch):
+    client, governance = _evolution_client(monkeypatch)
+    response = client.get(
+        "/skill-evolution/skills?limit=10&state=current", headers=_EVOLUTION_AUTH
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["skills"][0]["skill_revision"]["skill_id"] == "sc-de"
+    assert body["next_cursor"] is None
+    assert ("experience_page", "", 10, "current") in governance.calls
+
+
+def test_skill_evolution_skill_detail_route_and_404(monkeypatch):
+    client, _ = _evolution_client(monkeypatch)
+    ok = client.get("/skill-evolution/skills/sc-de", headers=_EVOLUTION_AUTH)
+    assert ok.status_code == 200
+    assert ok.json()["skill_revision"]["skill_id"] == "sc-de"
+
+    missing = client.get("/skill-evolution/skills/nope", headers=_EVOLUTION_AUTH)
+    assert missing.status_code == 404
+
+
+def test_skill_evolution_skills_bad_cursor_is_422(monkeypatch):
+    client, _ = _evolution_client(monkeypatch)
+    response = client.get(
+        "/skill-evolution/skills?cursor=BAD", headers=_EVOLUTION_AUTH
+    )
+    assert response.status_code == 422
 
 
 def test_skill_evolution_routes_use_only_the_frozen_dedicated_authority(
