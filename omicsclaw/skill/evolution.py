@@ -1921,11 +1921,12 @@ class EvolutionProposalStore:
 
     @staticmethod
     def _is_submittable_candidate(proposal: EvolutionProposal) -> bool:
-        # A merge candidate (ADR 0074 §8.2 stage one) is a non-approvable static
-        # overlap advisory: its evidence is the manifest overlap carried in
-        # ``proposed_change``, not ledger events, so it is submittable as a draft
-        # with no supporting event ids. Every other kind still requires them.
-        if proposal.kind == "merge_candidate":
+        # A merge candidate (ADR 0074 §8.2) and a protocol-revision candidate
+        # (§8.1) are non-approvable manifest-derived advisories: their evidence is
+        # the manifest/coverage state carried in ``proposed_change``, not ledger
+        # events, so they are submittable as drafts with no supporting event ids.
+        # Every other kind still requires them.
+        if proposal.kind in {"merge_candidate", "protocol_revision"}:
             return proposal.status == "draft"
         if not proposal.support_event_ids:
             return False

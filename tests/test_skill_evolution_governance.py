@@ -4227,3 +4227,97 @@ def test_merge_candidate_is_non_approvable_and_deprecation_stays_two_stage(
             reason="merge overlap into one skill",
             support_event_ids=[],
         )
+
+
+# ── ADR 0074 §8.1 — protocol_revision advisories (coverage gap / invalid) ─────
+
+
+def _write_protocol_skill(root, *, skill_id, level, protocols, make_entries=True,
+                          domain="spatial", status="mvp"):
+    """A skill with caller-controlled level + declared protocols (entries optional)."""
+    skill_dir = root / domain / skill_id
+    skill_dir.mkdir(parents=True)
+    script = skill_id.replace("-", "_") + ".py"
+    (skill_dir / script).write_text("if __name__ == '__main__':\n    pass\n", encoding="utf-8")
+    if make_entries:
+        for proto in protocols:
+            entry = skill_dir / proto["entry"]
+            entry.parent.mkdir(parents=True, exist_ok=True)
+            entry.write_text("# protocol\n", encoding="utf-8")
+    manifest = {
+        "schema_version": 2, "id": skill_id, "name": skill_id, "domain": domain,
+        "version": "1.0.0",
+        "summary": {"load_when": f"{skill_id} distinct unique isolated capability {skill_id}",
+                    "trigger_keywords": [skill_id]},
+        "runtime": {"entry": script}, "type": "leaf",
+        "lifecycle": {"status": status}, "validation": {"level": level, "protocols": protocols},
+    }
+    (skill_dir / "skill.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    return skill_dir
+
+
+def _protocol_revisions(created):
+    return [p for p in created if p.kind == "protocol_revision"]
+
+
+def test_protocol_revision_flags_coverage_gap_and_is_advisory(tmp_path):
+    skills_root = tmp_path / "skills"
+    _write_protocol_skill(skills_root, skill_id="gap-skill",
+                          level="fixture-validated", protocols=[])
+    governance = _merge_governance(tmp_path, skills_root)
+
+    revisions = _protocol_revisions(governance.refresh())
+    assert len(revisions) == 1
+    candidate = revisions[0]
+    assert candidate.kind == "protocol_revision" and candidate.status == "draft"
+    assert candidate.support_event_ids == []
+    change = candidate.proposed_change
+    assert change["advisory_only"] is True
+    assert change["problem_kind"] == "coverage_gap"
+    assert change["declared_level"] == "fixture-validated"
+    assert "fixture" in change["required_protocol_kinds"]
+    assert "benchmark" in change["required_protocol_kinds"]
+    assert change["action"] == "declare_evaluation_protocol"
+    # surfaced through the additive snapshot; advisory cannot be approved.
+    assert "protocol_revision" in {p["kind"] for p in governance.snapshot()["proposals"]}
+    with pytest.raises(EvolutionRevalidationError):
+        governance.approve(candidate.proposal_id, approver="local-human", reason="fix it")
+    # idempotent
+    assert _protocol_revisions(governance.refresh()) == []
+
+
+def test_protocol_revision_flags_invalid_protocol_entry(tmp_path):
+    skills_root = tmp_path / "skills"
+    _write_protocol_skill(
+        skills_root, skill_id="broken-skill", level="fixture-validated",
+        protocols=[{"id": "f2", "kind": "fixture", "entry": "tests/missing.py"}],
+        make_entries=False,
+    )
+    revisions = _protocol_revisions(_merge_governance(tmp_path, skills_root).refresh())
+    # Declares a fixture protocol (coverage satisfied) but its entry cannot load.
+    assert len(revisions) == 1
+    change = revisions[0].proposed_change
+    assert change["problem_kind"] == "protocol_invalid"
+    assert change["action"] == "repair_evaluation_protocol"
+    assert [p["id"] for p in change["invalid_protocols"]] == ["f2"]
+
+
+def test_protocol_revision_ignores_covered_low_level_and_non_routable(tmp_path):
+    # Covered: fixture-validated WITH a valid fixture protocol -> no advisory.
+    root_a = tmp_path / "covered"
+    _write_protocol_skill(root_a, skill_id="ok-skill", level="fixture-validated",
+                          protocols=[{"id": "f1", "kind": "fixture", "entry": "tests/f1.py"}])
+    assert _protocol_revisions(_merge_governance(tmp_path / "a", root_a).refresh()) == []
+
+    # Low levels never gap (demo-validated is earned from demo events; smoke-only
+    # needs nothing).
+    root_b = tmp_path / "low"
+    _write_protocol_skill(root_b, skill_id="demo-skill", level="demo-validated", protocols=[])
+    _write_protocol_skill(root_b, skill_id="smoke-skill", level="smoke-only", protocols=[])
+    assert _protocol_revisions(_merge_governance(tmp_path / "b", root_b).refresh()) == []
+
+    # Non-routable is out of scope even with a gap.
+    root_c = tmp_path / "draft"
+    _write_protocol_skill(root_c, skill_id="draft-skill", level="fixture-validated",
+                          protocols=[], status="draft")
+    assert _protocol_revisions(_merge_governance(tmp_path / "c", root_c).refresh()) == []

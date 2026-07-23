@@ -61,6 +61,7 @@ from .evaluation_run import (
     run_protocol_evaluations,
 )
 from .skill_audit import (
+    VALIDATION_LADDER,
     CachedRevisionResolver,
     SkillAuditRuntime,
     SkillExperienceView,
@@ -280,6 +281,22 @@ _SKILL_DEFECT_KINDS = frozenset({"script_defect", "contract_failure"})
 _MERGE_SIMILARITY_THRESHOLD = 0.5
 _MERGE_MIN_SHARED_TOKENS = 6
 _MERGE_MAX_SHARED_TOKENS_SHOWN = 12
+
+# ADR 0074 §8.1 protocol-revision coverage gap. A declared level is earned from
+# evidence only through a matching Evaluation Protocol kind; ``demo-validated``
+# is earned from demo execution evidence (no protocol needed) and ``smoke-only``
+# needs nothing, so those never gap. ``production`` is human-approved but still
+# needs benchmarked-level protocol substance beneath it.
+_PROTOCOL_KIND_EARNS = {
+    "demo": "demo-validated",
+    "fixture": "fixture-validated",
+    "benchmark": "benchmarked",
+}
+_LEVEL_NEEDS_PROTOCOL = {
+    "fixture-validated": "fixture-validated",
+    "benchmarked": "benchmarked",
+    "production": "benchmarked",
+}
 _SUPPORTED_FROM_LEVEL = "smoke-only"
 _SUPPORTED_TO_LEVEL = "demo-validated"
 _DEMOTION_FROM_LEVEL = "demo-validated"
@@ -351,6 +368,14 @@ def _skill_capability_tokens(manifest: SkillManifest) -> frozenset[str]:
     parts.extend(manifest.summary.trigger_keywords)
     parts.extend(manifest.summary.tags)
     return frozenset(_tokenize(" ".join(parts)))
+
+
+def _level_rank(level: str) -> int:
+    """Rank a validation level; an unknown level ranks at the floor."""
+    try:
+        return VALIDATION_LADDER.index(level)
+    except ValueError:
+        return 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -905,6 +930,9 @@ class SkillEvolutionGovernance:
         for merge in self._merge_candidate_candidates(manifest_snapshots):
             if self.proposals.submit_if_absent(merge):
                 created.append(merge)
+        for revision in self._protocol_revision_candidates(manifest_snapshots):
+            if self.proposals.submit_if_absent(revision):
+                created.append(revision)
         self._recompute_audit_readmodels()
         return created
 
@@ -1001,6 +1029,134 @@ class SkillEvolutionGovernance:
                     )
                 )
         return candidates
+
+    def _protocol_revision_candidates(
+        self,
+        manifest_snapshots: list[tuple[Path, SkillManifest, str]],
+    ) -> list[EvolutionProposal]:
+        """Non-approvable protocol-revision advisories (ADR 0074 §8.1 / §11.3).
+
+        Two deterministic, manifest-derived signals per routable, non-consensus
+        Skill:
+
+        - ``coverage_gap``: the declared validation level can only be earned
+          through a matching Evaluation Protocol kind (fixture/benchmark), but
+          the Skill declares none that earns it — so effective validation can
+          never reach the declared level from evidence. One advisory per Skill.
+        - ``protocol_invalid``: a declared protocol whose ``entry`` cannot be
+          loaded (§11.3). One advisory per Skill, listing the broken protocols.
+
+        Each is a non-approvable ``draft`` that only describes the gap and its
+        remediation (declare/fix a protocol); it never rewrites ``skill.yaml``.
+        The real fix flows through a maintainer/AutoAgent remediation brief and
+        the existing governed writeback, not this advisory.
+        """
+        candidates: list[EvolutionProposal] = []
+        for path, manifest, manifest_hash in manifest_snapshots:
+            if (
+                manifest.lifecycle.status not in _ROUTABLE_LIFECYCLES
+                or manifest.type == "consensus"
+            ):
+                continue
+            skill_dir = path.parent
+            path_hash = _sha256(
+                path.relative_to(self.skills_root).as_posix().encode("utf-8")
+            )
+            protocols = manifest.validation.protocols
+
+            needed = _LEVEL_NEEDS_PROTOCOL.get(manifest.validation.level)
+            if needed is not None:
+                best = max(
+                    (
+                        _level_rank(_PROTOCOL_KIND_EARNS.get(proto.kind, "smoke-only"))
+                        for proto in protocols
+                    ),
+                    default=0,
+                )
+                if best < _level_rank(needed):
+                    candidates.append(
+                        self._protocol_revision_proposal(
+                            manifest,
+                            manifest_hash,
+                            path_hash,
+                            problem_kind="coverage_gap",
+                            proposed_change={
+                                "field": "validation.protocols",
+                                "action": "declare_evaluation_protocol",
+                                "advisory_only": True,
+                                "problem_kind": "coverage_gap",
+                                "declared_level": manifest.validation.level,
+                                "required_protocol_kinds": sorted(
+                                    kind
+                                    for kind, earns in _PROTOCOL_KIND_EARNS.items()
+                                    if _level_rank(earns) >= _level_rank(needed)
+                                ),
+                                "resolution_path": (
+                                    "declare (and pass) an Evaluation Protocol whose "
+                                    f"kind earns {needed!r} so the declared level "
+                                    f"{manifest.validation.level!r} can be earned from "
+                                    "evidence; the effective level stays capped until "
+                                    "then"
+                                ),
+                            },
+                        )
+                    )
+
+            invalid = [
+                {"id": proto.id, "kind": proto.kind, "entry": proto.entry}
+                for proto in protocols
+                if not (skill_dir / proto.entry).is_file()
+            ]
+            if invalid:
+                candidates.append(
+                    self._protocol_revision_proposal(
+                        manifest,
+                        manifest_hash,
+                        path_hash,
+                        problem_kind="protocol_invalid",
+                        proposed_change={
+                            "field": "validation.protocols",
+                            "action": "repair_evaluation_protocol",
+                            "advisory_only": True,
+                            "problem_kind": "protocol_invalid",
+                            "invalid_protocols": invalid,
+                            "resolution_path": (
+                                "each declared protocol's entry must be a loadable "
+                                "file; repair or remove the broken entries — a "
+                                "protocol whose entry cannot load earns nothing and "
+                                "is classified protocol_invalid, never a demotion"
+                            ),
+                        },
+                    )
+                )
+        return candidates
+
+    def _protocol_revision_proposal(
+        self,
+        manifest: SkillManifest,
+        manifest_hash: str,
+        path_hash: str,
+        *,
+        problem_kind: str,
+        proposed_change: dict[str, Any],
+    ) -> EvolutionProposal:
+        return EvolutionProposal(
+            proposal_id=self._protocol_revision_proposal_id(manifest.id, problem_kind),
+            created_at=datetime.now(timezone.utc).isoformat(),
+            target_skill=manifest.id,
+            skill_version=manifest.version,
+            skill_hash=manifest_hash,
+            kind="protocol_revision",
+            status="draft",
+            rationale=(
+                f"{manifest.id} has a protocol {problem_kind.replace('_', ' ')}; a "
+                "maintainer should declare or repair an Evaluation Protocol"
+            ),
+            support_event_ids=[],
+            counterexample_event_ids=[],
+            proposed_change=proposed_change,
+            target_path_hash=path_hash,
+        )
 
     def _gotcha_evidence_candidates(
         self,
@@ -2653,6 +2809,16 @@ class SkillEvolutionGovernance:
         # is the sorted target anchor.
         basis = json.dumps(
             ["merge_candidate", *sorted((skill_a, skill_b))],
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(basis).hexdigest()[:24]
+
+    @staticmethod
+    def _protocol_revision_proposal_id(skill_id: str, problem_kind: str) -> str:
+        # Stable per (skill, problem kind) so re-running refresh is idempotent
+        # and one advisory tracks each open protocol gap for a Skill.
+        basis = json.dumps(
+            ["protocol_revision", skill_id, problem_kind],
             separators=(",", ":"),
         ).encode("utf-8")
         return hashlib.sha256(basis).hexdigest()[:24]
