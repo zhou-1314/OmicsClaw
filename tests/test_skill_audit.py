@@ -12,8 +12,10 @@ import pytest
 from omicsclaw.skill.evolution import SkillErrorKind, SkillRunEvent
 from omicsclaw.skill.skill_audit import (
     VALIDATION_LADDER,
+    CachedRevisionResolver,
     CurrentRevision,
     SkillAuditRuntime,
+    SkillIdentityInput,
     SkillRevision,
     SkillExperienceView,
     derive_experience_view,
@@ -293,3 +295,82 @@ def test_summary_can_reuse_precomputed_views():
     before = ledger.reads
     runtime.summary(views)  # passing views must not re-read the ledger
     assert ledger.reads == before
+
+
+# ---- CachedRevisionResolver (increment 3a) ---------------------------------
+
+
+def _sii(skill_id="sc-de", version="1.0.0", declared="demo-validated",
+         cache_key="/skills/sc-de", mtime="t0"):
+    return SkillIdentityInput(skill_id, version, declared, cache_key, mtime)
+
+
+def test_resolver_computes_identity_and_builds_current_revision():
+    computed: list[str] = []
+
+    def compute(key):
+        computed.append(key)
+        return ("m-" + key[-1], "s-" + key[-1])
+
+    resolver = CachedRevisionResolver(lambda: [_sii(cache_key="/skills/a")], compute)
+    revs = resolver()
+    assert computed == ["/skills/a"]
+    assert revs == [
+        CurrentRevision(SkillRevision("sc-de", "1.0.0", "m-a", "s-a"), "demo-validated")
+    ]
+
+
+def test_resolver_cache_hit_skips_recompute_when_mtime_unchanged():
+    calls: list[str] = []
+
+    def compute(key):
+        calls.append(key)
+        return ("m1", "s1")
+
+    inputs = [_sii(mtime="t0")]
+    resolver = CachedRevisionResolver(lambda: list(inputs), compute)
+    resolver()
+    resolver()  # same mtime -> cache hit, no recompute
+    assert calls == ["/skills/sc-de"]  # computed exactly once
+
+
+def test_resolver_recomputes_when_mtime_changes():
+    calls: list[str] = []
+
+    def compute(key):
+        calls.append(key)
+        return ("m", "s")
+
+    state = {"inputs": [_sii(mtime="t0")]}
+    resolver = CachedRevisionResolver(lambda: list(state["inputs"]), compute)
+    resolver()
+    state["inputs"] = [_sii(mtime="t1")]  # source bytes changed
+    resolver()
+    assert calls == ["/skills/sc-de", "/skills/sc-de"]  # recomputed on mtime change
+
+
+def test_resolver_invalidate_forces_recompute():
+    calls: list[str] = []
+
+    def compute(key):
+        calls.append(key)
+        return ("m", "s")
+
+    resolver = CachedRevisionResolver(lambda: [_sii(mtime="t0")], compute)
+    resolver()
+    resolver.invalidate()
+    resolver()
+    assert calls == ["/skills/sc-de", "/skills/sc-de"]
+
+
+def test_resolver_feeds_runtime_end_to_end():
+    ledger = _FakeLedger([_ev(evidence_kind="demo")])  # sc-de m1/s1
+    resolver = CachedRevisionResolver(
+        lambda: [_sii(cache_key="/skills/sc-de", mtime="t0")],
+        lambda key: ("m1", "s1"),
+    )
+    runtime = SkillAuditRuntime(ledger, resolver)
+    views = runtime.experience_views()
+    assert len(views) == 1
+    assert views[0].skill_revision == SkillRevision("sc-de", "1.0.0", "m1", "s1")
+    assert views[0].validation_state == "current"

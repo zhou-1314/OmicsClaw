@@ -40,6 +40,8 @@ __all__ = [
     "derive_experience_view",
     "CurrentRevision",
     "SkillAuditRuntime",
+    "SkillIdentityInput",
+    "CachedRevisionResolver",
 ]
 
 # ADR 0074 validation ladder, weakest -> strongest. The values match
@@ -341,3 +343,74 @@ class SkillAuditRuntime:
             "by_validation_state": by_state,
             "by_declared_level": by_declared,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class SkillIdentityInput:
+    """The cheap per-Skill inputs a resolver enumerates from the live registry.
+
+    ``cache_key`` identifies the Skill's source location (e.g. its directory);
+    ``mtime_signature`` is an opaque token that changes whenever the manifest or
+    source bytes could have changed, so the expensive identity computation is
+    reused while the Skill is unchanged.
+    """
+
+    skill_id: str
+    version: str
+    declared_validation_level: str
+    cache_key: str
+    mtime_signature: str
+
+
+class CachedRevisionResolver:
+    """Resolve current ``SkillRevision`` identities with an mtime-gated cache.
+
+    Computing a Skill's ``(manifest_hash, source_hash)`` walks the ADR-0069
+    conservative source closure and is too expensive to repeat for every Skill
+    on every snapshot. This resolver caches that pair per Skill and recomputes
+    only when the Skill's ``mtime_signature`` changes (or after ``invalidate``,
+    which the refresh path calls). It is otherwise a thin, deterministic mapping
+    from enumerated inputs to ``CurrentRevision`` values — it never mutates
+    Skill files.
+
+    ``compute_identity(cache_key)`` returns ``(manifest_hash, source_hash)``.
+    """
+
+    def __init__(
+        self,
+        enumerate_skills: Callable[[], Iterable[SkillIdentityInput]],
+        compute_identity: Callable[[str], tuple[str, str]],
+    ):
+        self._enumerate = enumerate_skills
+        self._compute = compute_identity
+        # cache_key -> (mtime_signature, (manifest_hash, source_hash))
+        self._cache: dict[str, tuple[str, tuple[str, str]]] = {}
+
+    def invalidate(self) -> None:
+        """Drop all cached identities (call when Skill sources may have changed)."""
+        self._cache.clear()
+
+    def __call__(self) -> list[CurrentRevision]:
+        resolved: list[CurrentRevision] = []
+        for item in self._enumerate():
+            cached = self._cache.get(item.cache_key)
+            if cached is not None and cached[0] == item.mtime_signature:
+                manifest_hash, source_hash = cached[1]
+            else:
+                manifest_hash, source_hash = self._compute(item.cache_key)
+                self._cache[item.cache_key] = (
+                    item.mtime_signature,
+                    (manifest_hash, source_hash),
+                )
+            resolved.append(
+                CurrentRevision(
+                    SkillRevision(
+                        skill_id=item.skill_id,
+                        version=item.version,
+                        manifest_hash=manifest_hash,
+                        source_hash=source_hash,
+                    ),
+                    item.declared_validation_level,
+                )
+            )
+        return resolved
