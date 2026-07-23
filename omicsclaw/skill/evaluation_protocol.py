@@ -24,7 +24,10 @@ from collections.abc import Mapping
 __all__ = ["protocol_digest"]
 
 # The declared protocol fields that participate in the digest, in a fixed order.
-_PROTOCOL_SPEC_KEYS = ("id", "kind", "entry", "dataset_ref", "repeats")
+# ``metrics`` is the (schema-normalized, sorted) allowlist; changing what a
+# protocol may publish is a protocol change, so it re-digests and stales prior
+# stability evidence (ADR 0074 §6.4).
+_PROTOCOL_SPEC_KEYS = ("id", "kind", "entry", "dataset_ref", "repeats", "metrics")
 
 
 def protocol_digest(

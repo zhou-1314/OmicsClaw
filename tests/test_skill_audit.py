@@ -769,3 +769,44 @@ def test_experience_read_models_empty_before_refresh(tmp_path):
     gov = _governance(tmp_path, audit_runtime=_FakeAuditRuntime(views=[_view("a")]))
     assert gov.experience_page()["skills"] == []  # nothing until an explicit refresh
     assert gov.experience_view("a") is None
+
+
+# ---- AUD-10: stability dispersion aggregation -------------------------------
+
+
+def _sr(protocol_id="s1", kind="stability", digest="d1", outcome="succeeded",
+        run_index=0, repeats=1, metrics=None):
+    return ProtocolEvaluationResult(protocol_id, kind, digest, outcome, "t",
+                                    run_index, repeats, metrics or {})
+
+
+def test_stability_view_aggregates_repeats_and_metric_dispersion():
+    results = [
+        _sr(run_index=0, repeats=3, metrics={"silhouette": 0.80}),
+        _sr(run_index=1, repeats=3, metrics={"silhouette": 0.82}),
+        _sr(run_index=2, repeats=3, outcome="failed", metrics={"silhouette": 0.60}),
+    ]
+    view = derive_experience_view(REV, "fixture-validated", [],
+                                  protocol_results=results,
+                                  current_protocol_digests={"s1": "d1"})
+    stab = view.stability["s1"]
+    assert stab["kind"] == "stability"
+    assert stab["repeats"] == 3 and stab["runs"] == 3 and stab["successes"] == 2
+    assert stab["success_rate"] == round(2 / 3, 4)
+    assert stab["outcomes_consistent"] is False
+    disp = stab["metric_dispersion"]["silhouette"]
+    assert disp["count"] == 3 and disp["min"] == 0.6 and disp["max"] == 0.82
+    assert disp["stddev"] > 0
+
+
+def test_stability_is_orthogonal_and_only_fresh():
+    fresh = _sr(protocol_id="s1", digest="d1", metrics={"m": 1.0})
+    drifted = _sr(protocol_id="s2", digest="OLD", metrics={"m": 9.0})
+    view = derive_experience_view(REV, "fixture-validated", [],
+                                  protocol_results=[fresh, drifted],
+                                  current_protocol_digests={"s1": "d1", "s2": "NEW"})
+    # A stability protocol earns no validation level; with no demo/fixture
+    # evidence the effective level stays at the floor (orthogonal to stability).
+    assert view.effective_validation_level == "smoke-only"
+    assert "s1" in view.stability
+    assert "s2" not in view.stability  # drifted digest contributes no stability

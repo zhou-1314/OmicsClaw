@@ -75,3 +75,24 @@ def test_protocol_digest_changes_on_entry_spec_or_dep_change():
     dep = protocol_digest(protocol=_SPEC, entry_bytes=b"c",
                           dependency_versions={"scanpy": "1.11.0"})
     assert len({base, entry, spec, dep}) == 4  # each change is distinct
+
+
+# ---- AUD-10: metrics allowlist ----------------------------------------------
+
+
+def test_metrics_allowlist_normalized_and_bounded():
+    p = EvaluationProtocol(id="p", kind="stability", entry="t.py",
+                           metrics=["silhouette", "ari", "silhouette", " runtime "])
+    assert p.metrics == ["ari", "runtime", "silhouette"]  # sorted, deduped, trimmed
+    with pytest.raises(ValidationError):
+        EvaluationProtocol(id="p", kind="stability", entry="t.py",
+                           metrics=[f"m{i}" for i in range(33)])
+    with pytest.raises(ValidationError):
+        EvaluationProtocol(id="p", kind="stability", entry="t.py", metrics=["x" * 65])
+
+
+def test_protocol_digest_changes_on_metrics_allowlist():
+    base = protocol_digest(protocol=_SPEC, entry_bytes=b"c")
+    with_ari = protocol_digest(protocol={**_SPEC, "metrics": ["ari"]}, entry_bytes=b"c")
+    with_sil = protocol_digest(protocol={**_SPEC, "metrics": ["silhouette"]}, entry_bytes=b"c")
+    assert len({base, with_ari, with_sil}) == 3

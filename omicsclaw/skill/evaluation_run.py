@@ -102,6 +102,12 @@ class EvaluationResultStore:
             if row.get("revision") != want:
                 continue
             result = row.get("result") or {}
+            raw_metrics = result.get("metrics") or {}
+            metrics = {
+                str(name): float(value)
+                for name, value in raw_metrics.items()
+                if isinstance(value, (int, float))
+            }
             out.append(
                 ProtocolEvaluationResult(
                     protocol_id=str(result.get("protocol_id", "")),
@@ -109,14 +115,59 @@ class EvaluationResultStore:
                     protocol_digest=str(result.get("protocol_digest", "")),
                     outcome=str(result.get("outcome", "")),
                     occurred_at=str(result.get("occurred_at", "")),
+                    run_index=int(result.get("run_index", 0) or 0),
+                    repeats=int(result.get("repeats", 1) or 1),
+                    metrics=metrics,
                 )
             )
         return out
 
 
-# A ``run_one`` maps one declared protocol spec to a run outcome string
-# ("succeeded" earns; anything else does not).
-ProtocolRunner = Callable[[Mapping[str, object]], str]
+# A ``run_one`` maps one declared protocol spec to a run outcome. It returns
+# either the outcome string ("succeeded" earns; anything else does not) or a
+# ``(outcome, metrics)`` pair whose metrics map is allowlist-filtered here.
+ProtocolRunner = Callable[
+    [Mapping[str, object]], "str | tuple[str, Mapping[str, object]]"
+]
+
+
+def _bounded_repeats(value: object) -> int:
+    """A protocol's repeat count, clamped to the schema's 1..100 bound."""
+    try:
+        return max(1, min(int(value), 100))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 1
+
+
+def _normalize_run(raw: object) -> tuple[str, Mapping[str, object]]:
+    """Split a runner return into ``(outcome, raw_metrics)``.
+
+    Back-compatible: a bare string is an outcome with no metrics; a
+    ``(outcome, metrics)`` pair carries a metrics map to be allowlist-filtered.
+    """
+    if isinstance(raw, tuple) and len(raw) == 2 and isinstance(raw[1], Mapping):
+        return str(raw[0]), raw[1]
+    return str(raw), {}
+
+
+def _allowlisted_metrics(
+    raw_metrics: Mapping[str, object], allowlist: frozenset[str]
+) -> dict[str, float]:
+    """Keep only allowlisted names with finite numeric (non-bool) values."""
+    if not allowlist:
+        return {}
+    out: dict[str, float] = {}
+    for name, value in raw_metrics.items():
+        if name not in allowlist or isinstance(value, bool):
+            continue
+        try:
+            number = float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+        if number != number or number in (float("inf"), float("-inf")):
+            continue
+        out[str(name)] = number
+    return out
 
 
 def run_protocol_evaluations(
@@ -128,22 +179,32 @@ def run_protocol_evaluations(
 ) -> list[ProtocolEvaluationResult]:
     """Run each ``(protocol_spec, protocol_digest)`` and build bound results.
 
-    ``run_one(spec)`` returns the outcome string; ``now()`` stamps the result.
+    A protocol declaring ``repeats > 1`` (a stability protocol) is run that many
+    times, one result per run, so the audit derivation can aggregate repeated-run
+    success rate and metric dispersion (ADR 0074 §6.3). Each run's published
+    metrics are filtered to the protocol's ``metrics`` allowlist, so a runner can
+    never inject arbitrary keys into the read model. ``now()`` stamps each result.
     Pure orchestration — persisting the results is the caller's decision, so this
     stays deterministic under an injected clock and runner.
     """
     results: list[ProtocolEvaluationResult] = []
     for spec, digest in protocols:
-        outcome = run_one(spec)
-        results.append(
-            ProtocolEvaluationResult(
-                protocol_id=str(spec.get("id", "")),
-                kind=str(spec.get("kind", "")),
-                protocol_digest=digest,
-                outcome=str(outcome),
-                occurred_at=now(),
+        repeats = _bounded_repeats(spec.get("repeats", 1))
+        allowlist = frozenset(str(name) for name in (spec.get("metrics") or ()))
+        for run_index in range(repeats):
+            outcome, raw_metrics = _normalize_run(run_one(spec))
+            results.append(
+                ProtocolEvaluationResult(
+                    protocol_id=str(spec.get("id", "")),
+                    kind=str(spec.get("kind", "")),
+                    protocol_digest=digest,
+                    outcome=outcome,
+                    occurred_at=now(),
+                    run_index=run_index,
+                    repeats=repeats,
+                    metrics=_allowlisted_metrics(raw_metrics, allowlist),
+                )
             )
-        )
     return results
 
 

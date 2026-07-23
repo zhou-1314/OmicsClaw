@@ -100,3 +100,36 @@ def test_run_then_store_then_derive_end_to_end(tmp_path):
     )
     assert view.effective_validation_level == "fixture-validated"
     assert view.validation_state == "current"
+
+
+# ---- AUD-10: repeats + metric allowlist -------------------------------------
+
+
+def test_repeats_runs_protocol_n_times():
+    protocols = [({"id": "s1", "kind": "stability", "repeats": 3}, "d1")]
+    results = run_protocol_evaluations(
+        REV, protocols, run_one=lambda spec: "succeeded", now=lambda: "t")
+    assert len(results) == 3
+    assert [r.run_index for r in results] == [0, 1, 2]
+    assert all(r.repeats == 3 for r in results)
+
+
+def test_metrics_are_allowlist_filtered_and_numeric():
+    protocols = [({"id": "s1", "kind": "stability", "repeats": 1,
+                   "metrics": ["silhouette"]}, "d1")]
+    results = run_protocol_evaluations(
+        REV, protocols,
+        run_one=lambda spec: ("succeeded", {"silhouette": 0.8, "denied": 1.0,
+                                            "bad": float("nan"), "notnum": "x"}),
+        now=lambda: "t")
+    assert results[0].metrics == {"silhouette": 0.8}
+
+
+def test_string_runner_yields_no_metrics_and_round_trips(tmp_path):
+    store = EvaluationResultStore(tmp_path / "ev.jsonl")
+    [r] = run_protocol_evaluations(
+        REV, [({"id": "s1", "kind": "stability", "repeats": 1, "metrics": ["m"]}, "d")],
+        run_one=lambda spec: "failed", now=lambda: "t")
+    assert r.metrics == {}
+    store.append(REV, r)
+    assert store.results_for(REV) == [r]  # run_index/repeats/metrics survive round-trip

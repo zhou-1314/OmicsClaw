@@ -124,6 +124,7 @@ def _manifest_protocol_digests(manifest: SkillManifest, skill_dir: Path) -> dict
                 "entry": proto.entry,
                 "dataset_ref": proto.dataset_ref,
                 "repeats": proto.repeats,
+                "metrics": proto.metrics,
             },
             entry_bytes=entry_bytes,
             dependency_versions={},
@@ -697,6 +698,7 @@ class SkillEvolutionGovernance:
                     "entry": proto.entry,
                     "dataset_ref": proto.dataset_ref,
                     "repeats": proto.repeats,
+                    "metrics": proto.metrics,
                 },
                 current.protocol_digests.get(proto.id, ""),
             )

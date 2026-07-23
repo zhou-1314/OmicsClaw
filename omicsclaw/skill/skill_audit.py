@@ -127,6 +127,11 @@ class ProtocolEvaluationResult:
     ``protocol_digest`` still equals the current protocol's digest — i.e. the
     protocol's executable/spec/deps have not drifted since this result was
     produced. Callers pass results already scoped to the target revision.
+
+    ``run_index``/``repeats`` locate one run within a stability batch, and
+    ``metrics`` carries the allowlisted, bounded numeric metrics that run
+    published (ADR 0074 §6.3). These feed the ORTHOGONAL stability view; they
+    never change the earned validation level.
     """
 
     protocol_id: str
@@ -134,6 +139,9 @@ class ProtocolEvaluationResult:
     protocol_digest: str
     outcome: str
     occurred_at: str = ""
+    run_index: int = 0
+    repeats: int = 1
+    metrics: Mapping[str, float] = field(default_factory=dict)
 
 
 def _protocol_supported_level(
@@ -220,6 +228,55 @@ def _bounded_evidence_refs(events: Sequence[SkillRunEvent]) -> tuple[str, ...]:
                 if len(refs) >= _MAX_EVIDENCE_REFS:
                     return tuple(refs)
     return tuple(refs)
+
+
+def _stability_view(
+    fresh_results: Sequence[ProtocolEvaluationResult],
+) -> dict[str, Any]:
+    """Per-protocol stability aggregation over fresh results (ADR 0074 §6.3).
+
+    An ORTHOGONAL view — never a single global score and never a ladder step, so
+    it does not change effective validation. For each protocol with fresh
+    (digest-current) results it reports the repeated-run success rate, whether
+    every run agreed on an outcome, and the dispersion of each allowlisted metric
+    across runs (count / min / max / mean / population stddev). A protocol run
+    once still reports ``runs=1`` with zero-variance dispersion.
+    """
+    from collections import defaultdict
+    from statistics import mean, pstdev
+
+    by_protocol: dict[str, list[ProtocolEvaluationResult]] = defaultdict(list)
+    for result in fresh_results:
+        by_protocol[result.protocol_id].append(result)
+
+    stability: dict[str, Any] = {}
+    for protocol_id in sorted(by_protocol):
+        runs = by_protocol[protocol_id]
+        successes = sum(1 for r in runs if r.outcome == "succeeded")
+        values: dict[str, list[float]] = defaultdict(list)
+        for r in runs:
+            for name, value in r.metrics.items():
+                values[name].append(float(value))
+        dispersion = {
+            name: {
+                "count": len(vals),
+                "min": round(min(vals), 6),
+                "max": round(max(vals), 6),
+                "mean": round(mean(vals), 6),
+                "stddev": round(pstdev(vals), 6) if len(vals) > 1 else 0.0,
+            }
+            for name, vals in sorted(values.items())
+        }
+        stability[protocol_id] = {
+            "kind": runs[0].kind,
+            "repeats": max(r.repeats for r in runs),
+            "runs": len(runs),
+            "successes": successes,
+            "success_rate": round(successes / len(runs), 4),
+            "outcomes_consistent": len({r.outcome for r in runs}) <= 1,
+            "metric_dispersion": dispersion,
+        }
+    return stability
 
 
 def derive_experience_view(
@@ -322,6 +379,7 @@ def derive_experience_view(
             "environment_failures": environment_failures,
             "framework_failures": framework_failures,
         },
+        stability=_stability_view(fresh_protocol_results),
         evidence_refs=_bounded_evidence_refs(current),
     )
 

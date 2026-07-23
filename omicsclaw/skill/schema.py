@@ -651,6 +651,23 @@ class EvaluationProtocol(_Strict):
     entry: str = Field(min_length=1)
     dataset_ref: Optional[str] = None
     repeats: int = Field(default=1, ge=1, le=100)
+    # Allowlist of scientific metric names this protocol may publish into the
+    # Experience View's stability dispersion. ONLY these names are captured from
+    # a run's output (ADR 0074 §5.2/§11.5); a runner cannot inject arbitrary
+    # metric keys into the public read model.
+    metrics: list[str] = Field(default_factory=list)
+
+    @field_validator("metrics")
+    @classmethod
+    def _clean_metrics(cls, v: list[str]) -> list[str]:
+        # Canonical (sorted, de-duplicated, bounded) so the protocol digest is
+        # allowlist-order-agnostic and the read model stays bounded.
+        cleaned = sorted({s.strip() for s in v if s and s.strip()})
+        if len(cleaned) > 32:
+            raise ValueError("metrics allowlist exceeds 32 entries")
+        if any(len(name) > 64 for name in cleaned):
+            raise ValueError("metric name exceeds 64 characters")
+        return cleaned
 
 
 class Validation(_Strict):
