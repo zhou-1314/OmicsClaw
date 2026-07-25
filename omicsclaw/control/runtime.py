@@ -987,6 +987,21 @@ class ControlRuntime:
             unavailable_reason=unavailable_reason,
         )
 
+    def conversation_id_for_turn(self, turn_id: str) -> str | None:
+        """The Conversation a live Turn belongs to, or ``None`` once it is gone.
+
+        Read-only and observation-only: it grants no execution authority and never
+        mutates Turn state. A Surface needs it because this runtime builds the
+        legacy envelope with ``chat_id=<conversation_id>``, so tool-side state
+        (``pending_media`` / ``pending_skill_promotion``) is keyed by the
+        Conversation — not by whatever session id the Surface used in its request.
+        Without this, a Surface can only guess that key, and a wrong guess drops
+        the state silently.
+        """
+
+        live = self._live_turns.get(turn_id)
+        return live.conversation_id if live is not None else None
+
     def lookup_ingress_turn_id(
         self,
         *,

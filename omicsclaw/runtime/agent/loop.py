@@ -59,6 +59,7 @@ from omicsclaw.runtime.agent.state import (
     tool_result_store,
     transcript_store,
 )
+from omicsclaw.runtime.agent.session import build_agent_session_id
 from omicsclaw.services.billing import accumulate_usage as _accumulate_usage
 from omicsclaw.surfaces.channels.commands import SlashCommandContext
 from omicsclaw.surfaces.channels.commands import dispatch as _dispatch_slash_command
@@ -1031,7 +1032,7 @@ async def llm_tool_loop(
     resumed_result = await _maybe_resume_pending_preflight_request(
         chat_id=chat_id,
         user_content=user_content,
-        session_id=f"{platform}:{user_id}:{chat_id}" if user_id and platform else None,
+        session_id=build_agent_session_id(platform, user_id, chat_id),
     )
     if resumed_result is not None:
         active_transcript_store.append_user_message(

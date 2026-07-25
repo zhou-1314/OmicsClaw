@@ -106,3 +106,35 @@ async def test_resolve_no_session_manager_returns_request_value():
 
     assert await _resolve_and_bind_thread_id(None, "u", "s", "A") == "A"
     assert await _resolve_and_bind_thread_id(None, "u", "s", "") == ""
+
+
+# --- session-key namespace integrity -----------------------------------------
+#
+# Tool-side state (``pending_media`` / ``pending_skill_promotion``) is keyed by
+# the namespaced agent session id, so a half-formed namespace is not a cosmetic
+# problem: it silently partitions state a Surface later fails to find. The
+# builder refuses to produce one, and SessionManager must not re-fabricate it.
+
+
+def test_build_agent_session_id_refuses_a_half_formed_namespace():
+    from omicsclaw.runtime.agent.session import build_agent_session_id
+
+    assert build_agent_session_id("app", "u", "c") == "app:u:c"
+    for platform, user_id in (("", "u"), ("app", ""), ("", ""), (None, "u"), ("app", None)):
+        assert build_agent_session_id(platform, user_id, "c") is None
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_rejects_an_unnamespaceable_session(sm):
+    # Both production callers already guard this (the assembler only calls when
+    # the built id is truthy; the desktop passes a literal platform and a user id
+    # that is never empty), so refusing is strictly better than inventing
+    # ":​:chat"-shaped keys that no drain will ever match.
+    with pytest.raises(ValueError):
+        await sm.get_or_create("", "app", "c-no-user")
+    with pytest.raises(ValueError):
+        await sm.get_or_create("u", "", "c-no-platform")
+
+    # The normal path is untouched.
+    s = await sm.get_or_create("u", "app", "c-ok")
+    assert s.session_id == "app:u:c-ok"

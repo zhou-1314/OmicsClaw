@@ -1435,6 +1435,52 @@ def _sse_done() -> str:
     return _sse_line("done", "")
 
 
+def _agent_session_key(chat_id: str) -> str:
+    """The key the runtime used for this chat's tool-side state.
+
+    A turn reaches tools with the NAMESPACED agent session id built by the context
+    assembler, so ``pending_media`` / ``pending_skill_promotion`` are keyed by that
+    — not by the bare ``chat_id`` this Surface carries in its request. Draining
+    with the bare id found nothing, which is why a successful autonomous run
+    produced neither media cards nor a convert-to-skill card. Falls back to the
+    bare id so a missing desktop user id degrades to the legacy key instead of
+    dropping the state entirely.
+    """
+    from omicsclaw.memory import desktop_chat_user_id
+    from omicsclaw.runtime.agent.session import build_agent_session_id
+
+    return build_agent_session_id("app", desktop_chat_user_id(), chat_id) or chat_id
+
+
+def _drain_session_side_channel(pending: dict, *chat_ids: str) -> list[Any]:
+    """Pop this turn's queued items under every key a producer may have used.
+
+    Which ``chat_id`` the runtime keyed tool-side state by depends on the ingress
+    path, and the Surface cannot assume one:
+
+    * authoritative (``ControlRuntime``, what Desktop production runs) builds the
+      legacy envelope with ``chat_id=<conversation_id>``, so pass the Conversation
+      id resolved from the accepted Turn;
+    * direct/legacy dispatch builds it with ``chat_id=<req.session_id>``.
+
+    Each id is drained in its namespaced form first and then bare, because a
+    producer outside the context assembler uses the raw id. Draining a key that
+    holds nothing is free; MISSING one is invisible — the item simply never
+    reaches the App — so every plausible key is consumed.
+    """
+    items: list[Any] = []
+    seen_keys: set[str] = set()
+    for chat_id in chat_ids:
+        if not chat_id:
+            continue
+        for key in (_agent_session_key(chat_id), chat_id):
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            items += list(pending.pop(key, []) or [])
+    return items
+
+
 def _skill_promotion_wire_block(item: Any) -> dict[str, Any] | None:
     """Map one queued convert-to-skill candidate to its App wire shape.
 
@@ -2330,11 +2376,20 @@ async def chat_stream(req: ChatRequest):
             pass
         return block
 
+    # The chat id the RUNTIME keyed this turn's tool-side state by. On the
+    # authoritative path that is the Control Conversation id, which only becomes
+    # known when the Turn is accepted (see ``_remember_turn``); until then the
+    # request's session id is the best available guess and is what the direct
+    # dispatch path actually uses.
+    runtime_chat_id = {"value": ""}
+
     def _consume_pending_media_for_session() -> list[dict[str, Any]]:
         pending = getattr(core, "pending_media", None)
         if not isinstance(pending, dict):
             return []
-        items = pending.pop(session_id, []) or []
+        items = _drain_session_side_channel(
+            pending, runtime_chat_id["value"], session_id
+        )
         media: list[dict[str, Any]] = []
         seen: set[str] = set()
         for item in items:
@@ -2357,7 +2412,9 @@ async def chat_stream(req: ChatRequest):
         pending = getattr(core, "pending_skill_promotion", None)
         if not isinstance(pending, dict):
             return []
-        items = pending.pop(session_id, []) or []
+        items = _drain_session_side_channel(
+            pending, runtime_chat_id["value"], session_id
+        )
         candidates: list[dict[str, Any]] = []
         seen: set[str] = set()
         for item in items:
@@ -2927,6 +2984,21 @@ async def chat_stream(req: ChatRequest):
                     return user_content
 
                 async def _remember_turn(turn_id: str) -> None:
+                    # The authoritative runtime keys this Turn's tool-side state by
+                    # its Conversation id, not by our request's session id. Resolve
+                    # it here — the only point where the Turn identity is known and
+                    # tools have not run yet — so the side-channel drains find it
+                    # instead of guessing a key that is silently wrong.
+                    try:
+                        conversation_id = authoritative_runtime.conversation_id_for_turn(
+                            turn_id
+                        )
+                        if conversation_id:
+                            runtime_chat_id["value"] = conversation_id
+                    except Exception:  # pragma: no cover - observation only
+                        logger.debug(
+                            "conversation id resolution failed", exc_info=True
+                        )
                     if active_owner is not None:
                         active_owner.turn_id = turn_id
                         # A compatibility request may omit the source id.  Once

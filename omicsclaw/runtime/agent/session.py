@@ -34,6 +34,27 @@ from omicsclaw.providers.runtime import (
 logger = logging.getLogger("omicsclaw.omicsclaw.runtime.agent.session")
 
 
+def build_agent_session_id(
+    platform: str | None, user_id: str | None, chat_id: str
+) -> str | None:
+    """The canonical agent-facing session id: ``"{platform}:{user_id}:{chat_id}"``.
+
+    This namespaced id — not the bare ``chat_id`` — is what the runtime hands to
+    tools (via the context assembler) and what keys the session store and the
+    ``pending_media`` / ``pending_skill_promotion`` side-channels.
+
+    It exists as ONE helper because the format used to be re-spelled at four call
+    sites, and a Surface that drained a side-channel with the bare ``chat_id``
+    silently found nothing: a successful autonomous run queued its convert-to-
+    skill candidate (and its media) under the namespaced key and never surfaced
+    either. Returns ``None`` when platform or user_id is missing, so a caller
+    cannot key state under a half-formed namespace.
+    """
+    if not platform or not user_id:
+        return None
+    return f"{platform}:{user_id}:{chat_id}"
+
+
 def effective_llm_proxy() -> str:
     """The proxy the LLM HTTP client (httpx/openai) will actually use, read from
     the process environment with credentials masked.
@@ -84,7 +105,17 @@ class SessionManager:
         immutable here (one thread per session; rebinding is v1.5) — the incoming
         thread_id only stamps a freshly-created session.
         """
-        session_id = f"{platform}:{user_id}:{chat_id}"
+        session_id = build_agent_session_id(platform, user_id, chat_id)
+        if session_id is None:
+            # Refuse rather than fabricate a half-formed namespace: tool-side
+            # state is keyed by this id, so a ":​:chat"-shaped key silently
+            # partitions state that no Surface drain will ever match. Both
+            # production callers already guarantee both parts (the context
+            # assembler only calls when the built id is truthy; the Desktop
+            # Surface passes a literal platform and a never-empty user id).
+            raise ValueError(
+                "cannot build an agent session id without both platform and user_id"
+            )
         session = await self.store.get_session(session_id)
         if not session:
             session = await self.store.create_session(

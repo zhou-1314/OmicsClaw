@@ -327,7 +327,11 @@ async def assemble_chat_context(
     scoped_memory_loader=None,
     research_stance_loader=None,
 ) -> AssembledChatContext:
-    session_id = f"{platform}:{user_id}:{chat_id}" if user_id and platform else None
+    # The namespaced agent session id (NOT the bare chat_id) — it is what tools
+    # receive and what keys the side-channels a Surface later drains.
+    from omicsclaw.runtime.agent.session import build_agent_session_id
+
+    session_id = build_agent_session_id(platform, user_id, chat_id)
     background_tasks: list[asyncio.Task[Any]] = []
 
     def _spawn(coro):
