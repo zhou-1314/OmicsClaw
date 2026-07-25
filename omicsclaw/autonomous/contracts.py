@@ -61,6 +61,12 @@ class AutonomousRunRequest:
     # Evidence-bound repairs allowed AFTER the first execution; mapped to the
     # budget's max_consecutive_failures (= repairs + the initial attempt).
     max_repair_attempts: int = 2
+    # Executed-step budget for the run; 0 keeps the engine default (which
+    # OMICSCLAW_AUTONOMOUS_MAX_STEPS may itself override). Present so a caller
+    # can size the budget to the analysis — a long multi-skill workflow needs
+    # more steps than a one-cell residual — instead of the value being reachable
+    # only through the benchmarking-only metadata override.
+    max_steps: int = 0
     context: str = ""
     web_context: str = ""
     data_schema: str = ""

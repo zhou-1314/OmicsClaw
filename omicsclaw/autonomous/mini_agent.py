@@ -29,8 +29,12 @@ from .validation import validate_generated_code
 ANSWER_FILE = run_layout.relpath("answer")
 
 # In-loop capability backstop: if the model never produces a single parseable,
-# lint-clean turn within this many opening steps, it cannot drive the contract
+# lint-clean turn within this many *rejected* turns, it cannot drive the contract
 # (distinct from a capable model hitting a hard runtime problem). ADR 0032 §8.
+# Counted against rejects rather than the step budget so it stays a fixed
+# three-strikes rule: clamping it to ``max_steps`` used to report a capable model
+# as MODEL_INCAPABLE after a single fumbled turn on the §7 cheap path
+# (``max_steps=1``), telling the user to switch models for no reason.
 WARMUP_STEPS = 3
 
 # Grace added to the kernel-cell timeout for cells that call ``oc.run(...)``.
@@ -131,7 +135,7 @@ def run_mini_agent(
             steps=[MiniAgentStep(index=0, purpose="kernel init", code="<init>", error=init.error_summary or init.stderr)],
         )
 
-    system_prompt = build_system_prompt(goal, data_schema, analysis_plan)
+    system_prompt = build_system_prompt(goal, data_schema, analysis_plan, budget=budget)
     ledger = BudgetLedger(budget=budget)
     transcript: list[str] = []
     steps: list[MiniAgentStep] = []
@@ -140,7 +144,6 @@ def run_mini_agent(
     answer = ""
     termination = TerminationReason.STEP_BUDGET
     produced_usable_turn = False
-    warmup_steps = max(1, min(WARMUP_STEPS, budget.max_steps))
     # Last post-execution variable snapshot, reused as the next step's "before"
     # set so each step costs one introspect round-trip instead of two.
     prev_names: set[str] | None = None
@@ -156,7 +159,7 @@ def run_mini_agent(
         # lint-clean turn by the end of the warmup window is not driving the
         # contract. Checked before the budget so it is reported as MODEL_INCAPABLE
         # rather than the coincident CONSECUTIVE_FAILURES / STEP_BUDGET.
-        if not produced_usable_turn and ledger.steps_used >= warmup_steps:
+        if not produced_usable_turn and ledger.rejected_turns >= WARMUP_STEPS:
             termination = TerminationReason.MODEL_INCAPABLE
             break
 
@@ -165,14 +168,22 @@ def run_mini_agent(
             termination = reason
             break
 
-        prompt = system_prompt + "\n\n" + "\n\n".join(transcript) + "\n\nProduce the next step."
+        prompt = (
+            system_prompt
+            + "\n\n"
+            + "\n\n".join(transcript)
+            + "\n\n"
+            + _next_step_directive(ledger.remaining_steps)
+        )
         raw = llm.complete(prompt, temperature=0.0)
-        index = ledger.steps_used + 1
+        # Turn number, not step number: rejected turns no longer advance
+        # ``steps_used``, so deriving the trace index from it would repeat.
+        index = len(steps) + 1
         tokens = _estimate_tokens(prompt) + _estimate_tokens(raw or "")
 
         if not raw:
             steps.append(MiniAgentStep(index=index, error="LLM returned no content."))
-            ledger.record_step(accepted=False, tokens=tokens)
+            ledger.record_step(accepted=False, tokens=tokens, executed=False)
             transcript.append(f"[step {index}] engine error: empty LLM response. Try again.")
             continue
 
@@ -181,7 +192,7 @@ def run_mini_agent(
         except TurnFormatError as exc:
             problems = "; ".join(exc.problems)
             steps.append(MiniAgentStep(index=index, error=f"format: {problems}", tokens=tokens))
-            ledger.record_step(accepted=False, tokens=tokens)
+            ledger.record_step(accepted=False, tokens=tokens, executed=False)
             transcript.append(
                 f"[step {index}] your response was rejected: {problems}. "
                 "Respond again with the required **Purpose**/**Reasoning**/**Next Goal**/**Code** sections."
@@ -200,7 +211,7 @@ def run_mini_agent(
                     tokens=tokens,
                 )
             )
-            ledger.record_step(accepted=False, tokens=tokens)
+            ledger.record_step(accepted=False, tokens=tokens, executed=False)
             transcript.append(
                 f"[step {index}] code rejected by the safety lint: {joined}. "
                 "Use the `oc` facade for skills; do not import subprocess/os/network."
@@ -348,8 +359,19 @@ print("[mini-agent kernel ready]")
 """ + guard
 
 
-def build_system_prompt(goal: str, data_schema: str, analysis_plan: str) -> str:
-    """Instruction prefix shared across steps."""
+def build_system_prompt(
+    goal: str,
+    data_schema: str,
+    analysis_plan: str,
+    *,
+    budget: MiniAgentBudget | None = None,
+) -> str:
+    """Instruction prefix shared across steps.
+
+    The step budget is stated up front: a planner that does not know its budget
+    cannot pace an analysis or reserve a step to land on, so it used to be cut
+    off mid-run with nothing to show (diagnosis 2026-07-25).
+    """
     parts = [
         "You are the OmicsClaw Autonomous Code Mini-Agent. You solve one bioinformatics",
         "analysis by writing small Python cells that run in a persistent, network-isolated",
@@ -377,6 +399,17 @@ def build_system_prompt(goal: str, data_schema: str, analysis_plan: str) -> str:
         "Rules: do NOT import subprocess/os.system/socket/requests or install packages.",
         "Write only inside the run workspace. Use `oc` for all skill execution.",
         "Inspect before you commit to parameters. Finish by calling ReturnAnswer(...).",
+    ]
+    if budget is not None:
+        parts += [
+            "",
+            f"STEP BUDGET: you have {budget.max_steps} executed steps for this whole run, and each",
+            "response is told how many remain. Plan the analysis to fit — prefer one `oc.run(...)`",
+            "skill call over several hand-rolled cells, and combine cheap operations into one cell.",
+            "ALWAYS keep one step in reserve to call ReturnAnswer(...): a run that stops without it",
+            "is reported as a failure even if every step before it succeeded.",
+        ]
+    parts += [
         "",
         f"GOAL: {goal}",
     ]
@@ -394,6 +427,25 @@ def build_system_prompt(goal: str, data_schema: str, analysis_plan: str) -> str:
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _next_step_directive(remaining_steps: int) -> str:
+    """Closing instruction for the next turn, carrying the remaining budget.
+
+    On the final affordable step this becomes an explicit landing order. Without
+    it the loop simply broke when the budget tripped, discarding an otherwise
+    successful analysis because no one had ever asked the model to wrap up.
+    """
+    if remaining_steps <= 1:
+        # Worded to fit both the final step of a long run and a one-step §7 cheap
+        # run, where this is also the *first* step and nothing is established yet.
+        return (
+            "This is your LAST STEP — there is no budget for another one. You MUST call "
+            "ReturnAnswer(...) in this step. Do not begin work you cannot finish here; "
+            "summarise what has been established and state plainly which parts of the "
+            "goal remain unfinished."
+        )
+    return f"Steps remaining: {remaining_steps}. Produce the next step."
 
 
 def _references_oc(code: str) -> bool:

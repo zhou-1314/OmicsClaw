@@ -3,7 +3,7 @@
     "surface": "bot",
     "query": ""
   },
-  "total_chars": 36067,
+  "total_chars": 36253,
   "tool_count": 49,
   "tool_names": [
     "ask_user",
@@ -1288,6 +1288,10 @@
             "max_repair_attempts": {
               "type": "integer",
               "description": "Maximum evidence-bound repairs after the first execution. Default: 2, max: 2."
+            },
+            "max_steps": {
+              "type": "integer",
+              "description": "Executed-step budget. Omit for the default; raise it for plans with many stages, since a run that runs out before ReturnAnswer fails."
             },
             "data_schema": {
               "type": "string",

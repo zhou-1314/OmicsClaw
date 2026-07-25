@@ -54,7 +54,9 @@ class RecoverLLM:
 class FakeSession:
     """Minimal kernel stand-in: init/cells 'succeed' but introspect is empty."""
 
-    def execute(self, code: str, *, timeout: float = 120.0) -> CellResult:
+    def execute(
+        self, code: str, *, timeout: float = 120.0, cancel_event=None
+    ) -> CellResult:
         return CellResult(ok=True, stdout="[mini-agent kernel ready]")
 
     def introspect(self) -> dict:

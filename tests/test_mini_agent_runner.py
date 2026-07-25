@@ -102,7 +102,14 @@ def test_runner_fails_when_no_answer(tmp_path: Path):
         budget=MiniAgentBudget(max_steps=2, wall_clock_seconds=120),
     )
     assert result.ok is False
-    assert "without an answer" in result.error
+    # A budget stop with successful steps behind it reports the salvageable work
+    # and how to finish, instead of a bare "stopped without an answer" that hid
+    # the artifacts already on disk (diagnosis 2026-07-25).
+    assert "ran out of budget" in result.error
+    assert "max_steps" in result.error
+    progress = result.metadata["partial_progress"]
+    assert progress["resumable"] is True
+    assert progress["completed_steps"] == 2
 
 
 def test_fail_closed_without_envelope(tmp_path: Path, monkeypatch):

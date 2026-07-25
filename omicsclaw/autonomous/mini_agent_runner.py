@@ -37,6 +37,19 @@ from .workspace import create_workspace
 
 MINI_AGENT_VERSION = "0.1.0"
 
+# Terminations that mean "ran out of room", not "could not do the work". A run
+# that trips one of these may still have produced usable artifacts.
+_BUDGET_TERMINATIONS = frozenset(
+    {
+        TerminationReason.STEP_BUDGET,
+        TerminationReason.WALL_CLOCK,
+        TerminationReason.TOKEN_BUDGET,
+        TerminationReason.SKILL_CALL_BUDGET,
+        TerminationReason.REJECTED_TURN_BUDGET,
+        TerminationReason.CONSECUTIVE_FAILURES,
+    }
+)
+
 # Budget fields a caller may override via request.metadata["mini_agent_budget"].
 _BUDGET_KEYS = (
     "max_steps",
@@ -162,6 +175,9 @@ def run_mini_agent_request(
         "skill_calls": skill_calls,
         "computed_results": _computed_results(outcome, skill_calls, replay_ok),
         "interpretive_notes": outcome.answer,
+        # Machine-readable "there is salvageable work here" flag, so a Surface can
+        # offer to continue rather than presenting a budget stop as a dead end.
+        "partial_progress": _partial_progress(outcome),
     }
 
     return _finalize(
@@ -218,6 +234,17 @@ def refused_result(request: AutonomousRunRequest, diagnostic: str) -> Autonomous
 # --------------------------------------------------------------------------- #
 
 
+def _env_int(name: str) -> int:
+    """Read a positive int from the environment; 0 when unset or malformed."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return 0
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+
+
 def _require_sandbox_default() -> bool:
     # Default is tiered (degrade to the in-kernel guard when no bwrap). Strict
     # OS-sandbox-only mode is opt-in via OMICSCLAW_AUTONOMOUS_REQUIRE_SANDBOX=1.
@@ -235,6 +262,15 @@ def _budget_from_request(request: AutonomousRunRequest) -> MiniAgentBudget:
         wall_clock_seconds=request.timeout_seconds,
         max_consecutive_failures=request.max_repair_attempts + 1,
     )
+    # Step budget precedence: engine default < env default < explicit request.
+    # Before this existed the only writer was the benchmarking metadata override
+    # below, which no production caller ever set — so every real run silently
+    # took the engine default no matter how long the analysis was.
+    env_steps = _env_int("OMICSCLAW_AUTONOMOUS_MAX_STEPS")
+    if env_steps:
+        base = base.with_overrides(max_steps=env_steps)
+    if request.max_steps > 0:
+        base = base.with_overrides(max_steps=request.max_steps)
     overrides = request.metadata.get("mini_agent_budget") if isinstance(request.metadata, dict) else None
     if isinstance(overrides, dict):
         return base.with_overrides(**{k: overrides[k] for k in _BUDGET_KEYS if k in overrides})
@@ -282,12 +318,43 @@ def _failure_message(outcome, replay_ok: bool, replay_error: str) -> str:
             "stronger model or run the analysis through a built-in skill."
         )
     if outcome.termination != TerminationReason.RETURNED_ANSWER:
+        # A budget-exhausted run is usually not an empty failure: the steps that
+        # did run left real artifacts on disk. Reporting a bare "stopped without
+        # an answer" hid that work and gave the caller nothing to resume from.
+        if outcome.accepted_cells and outcome.termination in _BUDGET_TERMINATIONS:
+            done = "; ".join(
+                s.purpose.strip() for s in outcome.steps if s.accepted and s.purpose.strip()
+            )
+            return (
+                f"mini-agent ran out of budget ({outcome.termination.value}) before calling "
+                f"ReturnAnswer, after {len(outcome.accepted_cells)} successful step(s)"
+                + (f": {done}. " if done else ". ")
+                + "The artifacts those steps produced are in the run workspace and are usable; "
+                "the run has no validated final answer. Re-run with a larger step budget "
+                "(max_steps) or a narrower goal to finish it."
+            )
         return f"mini-agent stopped without an answer ({outcome.termination.value})."
     if not outcome.accepted_cells:
         return "mini-agent returned an answer but produced no accepted code to reproduce."
     if not replay_ok:
         return f"replay validation failed (result not reproducible): {replay_error}"
     return "mini-agent run did not complete successfully."
+
+
+def _partial_progress(outcome) -> dict:
+    """Describe salvageable work from a run that stopped without an answer."""
+    if outcome.succeeded or not outcome.accepted_cells:
+        return {}
+    if outcome.termination not in _BUDGET_TERMINATIONS:
+        return {}
+    return {
+        "reason": outcome.termination.value,
+        "completed_steps": len(outcome.accepted_cells),
+        "completed_purposes": [
+            s.purpose.strip() for s in outcome.steps if s.accepted and s.purpose.strip()
+        ],
+        "resumable": True,
+    }
 
 
 def _computed_results(outcome, skill_calls: list, replay_ok: bool) -> str:

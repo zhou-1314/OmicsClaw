@@ -247,7 +247,28 @@ envelope, one replay gate, and one code path, while avoiding a second runner.
 The mini-agent is more demanding than the current one-shot generator. It must
 declare and enforce a budget envelope:
 
-- default v1 `max_steps=8`, upper bound 15 only behind benchmarking;
+- default `max_steps=12`, hard ceiling 25. (Revised 2026-07-25 from `8`/`15`.
+  A diagnosis found the v1 numbers unreachable in practice: `max_steps` metered
+  *every LLM turn*, so malformed / lint-blocked / empty-response turns were
+  charged to the same budget as analysis progress, and a standard multi-stage
+  workflow — inspect, QC, filter, normalise, HVG/PCA, cluster, annotate, DE,
+  plot, summarise — plus the closing `ReturnAnswer` does not fit in 8. The
+  budget now meters *executed* steps only.)
+- `max_rejected_turns=6` — turns rejected before execution are model/infra
+  noise, not analysis progress, so they are metered in their own lane. The
+  lane is bounded because an alternating reject/accept model would otherwise
+  never trip `max_consecutive_failures`;
+- the step budget is **disclosed to the model**: the system prompt states it and
+  every turn is told how many steps remain. On the final affordable step the
+  loop issues an explicit landing order instead of silently breaking, so a run
+  that runs out of room still returns a partial answer rather than nothing;
+- a run that stops on a budget rather than an answer reports its salvageable
+  work (`partial_progress` metadata + a failure message naming the completed
+  steps), because the artifacts those steps produced remain on disk;
+- `max_steps` is settable per run — `AutonomousRunRequest.max_steps`, the
+  `autonomous_analysis_execute` tool argument, or `OMICSCLAW_AUTONOMOUS_MAX_STEPS`
+  — since the benchmarking-only `metadata["mini_agent_budget"]` override had no
+  production writer, leaving every real run pinned to the default;
 - `max_consecutive_failures=3`;
 - raw generated cell timeout default 120 seconds;
 - facade skill-call timeout may be longer, defaulting to the skill runner's

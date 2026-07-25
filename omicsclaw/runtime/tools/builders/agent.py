@@ -1361,6 +1361,13 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                         "type": "integer",
                         "description": "Maximum evidence-bound repairs after the first execution. Default: 2, max: 2.",
                     },
+                    "max_steps": {
+                        "type": "integer",
+                        "description": (
+                            "Executed-step budget. Omit for the default; raise it for plans with "
+                            "many stages, since a run that runs out before ReturnAnswer fails."
+                        ),
+                    },
                     "data_schema": {
                         "type": "string",
                         "description": (

@@ -129,12 +129,15 @@ init cell (build_init_code): 注入 sys.path(repo) / matplotlib(Agg) /
    adata               → 若有 .h5ad 输入则 anndata.read_h5ad 预绑定
 
 while True:
-   [warmup 护栏]   未产出"可解析+过 lint"的 turn 且 步数≥min(3,max_steps) ⇒ MODEL_INCAPABLE
+   [warmup 护栏]   未产出"可解析+过 lint"的 turn 且 rejected_turns≥3 ⇒ MODEL_INCAPABLE
                    （排在预算检查之前，故报精确的 MODEL_INCAPABLE 而非巧合的 CONSECUTIVE_FAILURES）
-   [预算护栏]      ledger.exhausted_reason ⇒ STEP/CONSECUTIVE_FAILURES/SKILL/TOKEN/WALL_CLOCK
-   raw = llm.complete(system_prompt + transcript)        token 计入 ledger
-   turn = parse_turn(raw)            protocol         失败 → 回灌格式错误，continue
-   issues = validate_generated_code(turn.code)         lint 拦截 → 回灌，continue   （此后标记 produced_usable_turn）
+                   （2026-07-25：改为计 rejected_turns。原先钳到 min(3,max_steps)，
+                     §7 廉价路径 max_steps=1 时一次格式错误就把有能力的模型误判为 INCAPABLE）
+   [预算护栏]      ledger.exhausted_reason ⇒ STEP/REJECTED_TURN/CONSECUTIVE_FAILURES/SKILL/TOKEN/WALL_CLOCK
+   raw = llm.complete(system_prompt + transcript + 末尾指令)   token 计入 ledger
+                   末尾指令携带剩余步数；剩 1 步时改为 LAST STEP 落地令（强制 ReturnAnswer）
+   turn = parse_turn(raw)            protocol         失败 → 回灌格式错误，continue（计 rejected_turns，不耗 max_steps）
+   issues = validate_generated_code(turn.code)         lint 拦截 → 回灌，continue   （同上；此后标记 produced_usable_turn）
    timeout = 1800 if 引用 oc else 120
    cell = session.execute(turn.code, timeout)
    new_vars = introspect 差集 → 组装 feedback 回灌

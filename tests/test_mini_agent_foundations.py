@@ -186,7 +186,11 @@ def test_strip_thinking_is_idempotent_without_tags():
 
 def test_budget_defaults_match_adr():
     b = MiniAgentBudget()
-    assert b.max_steps == 8
+    # Raised from 8 (diagnosis 2026-07-25): 8 turns could not fit a standard
+    # multi-stage omics workflow plus the closing ReturnAnswer, and rejected
+    # turns used to eat the same budget. Steps now meter executed cells only.
+    assert b.max_steps == 12
+    assert b.max_rejected_turns == 6
     assert b.max_consecutive_failures == 3
     assert b.raw_cell_timeout_seconds == 120
     assert b.skill_call_timeout_seconds == 1800
@@ -194,7 +198,7 @@ def test_budget_defaults_match_adr():
 
 def test_budget_clamp_enforces_step_ceiling():
     b = MiniAgentBudget(max_steps=999).clamped()
-    assert b.max_steps == MiniAgentBudget.STEP_CEILING == 15
+    assert b.max_steps == MiniAgentBudget.STEP_CEILING == 25
     assert MiniAgentBudget(max_steps=0).clamped().max_steps == 1
 
 

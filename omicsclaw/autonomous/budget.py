@@ -20,6 +20,7 @@ class TerminationReason(StrEnum):
 
     RETURNED_ANSWER = "returned_answer"
     STEP_BUDGET = "step_budget_exhausted"
+    REJECTED_TURN_BUDGET = "rejected_turn_budget_exhausted"
     CONSECUTIVE_FAILURES = "consecutive_failures_exhausted"
     SKILL_CALL_BUDGET = "skill_call_budget_exhausted"
     TOKEN_BUDGET = "token_budget_exhausted"
@@ -33,13 +34,21 @@ class TerminationReason(StrEnum):
 class MiniAgentBudget:
     """Bounds for one autonomous mini-agent run (ADR 0032 §8 defaults).
 
-    ``max_steps`` defaults to 8; the 15 ceiling is only reached behind explicit
-    benchmarking via :meth:`with_overrides`. Raw generated cells get a short
-    timeout; vetted skill calls through the facade are allowed a much longer one
-    because a single skill can legitimately run for minutes.
+    ``max_steps`` meters *executed* steps — cells that actually reached the
+    kernel. Turns rejected before execution (malformed contract, safety-lint
+    block, empty provider response) are model/infra noise rather than analysis
+    progress, so they are metered by ``max_rejected_turns`` and the consecutive
+    failure lane instead. Charging them to ``max_steps`` silently shrank the
+    real analysis budget and pushed genuine work off the end of the run
+    (diagnosis 2026-07-25).
+
+    Raw generated cells get a short timeout; vetted skill calls through the
+    facade are allowed a much longer one because a single skill can
+    legitimately run for minutes.
     """
 
-    max_steps: int = 8
+    max_steps: int = 12
+    max_rejected_turns: int = 6
     max_consecutive_failures: int = 3
     raw_cell_timeout_seconds: int = 120
     skill_call_timeout_seconds: int = 1800
@@ -49,12 +58,13 @@ class MiniAgentBudget:
 
     # Hard ceiling on ``max_steps`` so an override cannot make the loop unbounded.
     # ClassVar (not a field) so it stays out of the constructor and slots.
-    STEP_CEILING: ClassVar[int] = 15
+    STEP_CEILING: ClassVar[int] = 25
 
     def with_overrides(self, **overrides: Any) -> "MiniAgentBudget":
         """Return a copy with selected fields overridden and re-clamped."""
         merged = {
             "max_steps": self.max_steps,
+            "max_rejected_turns": self.max_rejected_turns,
             "max_consecutive_failures": self.max_consecutive_failures,
             "raw_cell_timeout_seconds": self.raw_cell_timeout_seconds,
             "skill_call_timeout_seconds": self.skill_call_timeout_seconds,
@@ -69,6 +79,7 @@ class MiniAgentBudget:
         """Return a copy with every bound forced into a sane range."""
         return MiniAgentBudget(
             max_steps=max(1, min(int(self.max_steps), self.STEP_CEILING)),
+            max_rejected_turns=max(1, int(self.max_rejected_turns)),
             max_consecutive_failures=max(1, int(self.max_consecutive_failures)),
             raw_cell_timeout_seconds=max(5, int(self.raw_cell_timeout_seconds)),
             skill_call_timeout_seconds=max(30, int(self.skill_call_timeout_seconds)),
@@ -146,17 +157,34 @@ class BudgetLedger:
 
     budget: MiniAgentBudget
     steps_used: int = 0
+    rejected_turns: int = 0
     consecutive_failures: int = 0
     skill_calls_used: int = 0
     tokens_used: int = 0
 
-    def record_step(self, *, accepted: bool, tokens: int = 0) -> None:
-        self.steps_used += 1
+    def record_step(self, *, accepted: bool, tokens: int = 0, executed: bool = True) -> None:
+        """Charge one LLM turn to the ledger.
+
+        ``executed`` distinguishes the two lanes: a turn that reached the kernel
+        consumes the analysis step budget, while one rejected beforehand
+        (malformed contract, safety lint, empty response) consumes only the
+        reject lane. Both count toward tokens and the consecutive-failure lane,
+        so a degenerate model is still bounded.
+        """
+        if executed:
+            self.steps_used += 1
+        else:
+            self.rejected_turns += 1
         self.tokens_used += max(0, int(tokens))
         if accepted:
             self.consecutive_failures = 0
         else:
             self.consecutive_failures += 1
+
+    @property
+    def remaining_steps(self) -> int:
+        """Executed-step headroom left, floored at zero (for prompt disclosure)."""
+        return max(0, self.budget.max_steps - self.steps_used)
 
     def record_skill_call(self) -> None:
         self.skill_calls_used += 1
@@ -169,6 +197,10 @@ class BudgetLedger:
         """
         if self.steps_used >= self.budget.max_steps:
             return TerminationReason.STEP_BUDGET
+        # Rejects are off the analysis budget, so they need their own bound: an
+        # alternating reject/accept model never trips the *consecutive* lane.
+        if self.rejected_turns >= self.budget.max_rejected_turns:
+            return TerminationReason.REJECTED_TURN_BUDGET
         if self.consecutive_failures >= self.budget.max_consecutive_failures:
             return TerminationReason.CONSECUTIVE_FAILURES
         # Redundant safety net: the skill facade (skill_facade.py) is the hard
@@ -188,10 +220,12 @@ class BudgetLedger:
     def to_dict(self) -> dict[str, Any]:
         return {
             "steps_used": self.steps_used,
+            "rejected_turns": self.rejected_turns,
             "consecutive_failures": self.consecutive_failures,
             "skill_calls_used": self.skill_calls_used,
             "tokens_used": self.tokens_used,
             "max_steps": self.budget.max_steps,
+            "max_rejected_turns": self.budget.max_rejected_turns,
             "max_skill_calls": self.budget.max_skill_calls,
             "max_total_tokens": self.budget.max_total_tokens,
             "wall_clock_seconds": self.budget.wall_clock_seconds,

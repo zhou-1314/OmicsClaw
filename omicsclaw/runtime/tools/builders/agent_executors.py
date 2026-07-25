@@ -2686,6 +2686,12 @@ async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
 
         max_repair_attempts = int(args.get("max_repair_attempts", 2) or 2)
         max_repair_attempts = max(0, min(max_repair_attempts, 2))
+        # 0 = defer to the engine default / OMICSCLAW_AUTONOMOUS_MAX_STEPS; the
+        # budget re-clamps to the hard ceiling, so a bad value cannot unbound it.
+        try:
+            max_steps = max(0, int(args.get("max_steps", 0) or 0))
+        except (TypeError, ValueError):
+            max_steps = 0
         request = AutonomousRunRequest(
             goal=goal,
             output_root=str(OUTPUT_DIR),
@@ -2696,6 +2702,7 @@ async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
             ),  # ADR 0035: nest under active project
             language=language,
             max_repair_attempts=max_repair_attempts,
+            max_steps=max_steps,
             context=str(args.get("context", "") or ""),
             web_context=str(args.get("web_context", "") or ""),
             data_schema=str(args.get("data_schema", "") or ""),
