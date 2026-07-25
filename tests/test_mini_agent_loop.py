@@ -162,7 +162,13 @@ class FakeSession:
         self._results = list(results)
         self.executed: list[str] = []
 
-    def execute(self, code: str, *, timeout: float = 120.0) -> CellResult:
+    def execute(
+        self,
+        code: str,
+        *,
+        timeout: float = 120.0,
+        cancel_event: "threading.Event | None" = None,
+    ) -> CellResult:
         self.executed.append(code)
         if self._results:
             return self._results.pop(0)
@@ -227,3 +233,28 @@ def test_cell_timeout_stops_loop_without_reusing_session(tmp_path: Path):
     )
     assert outcome.termination is TerminationReason.ENGINE_ERROR
     assert len(session.executed) == 2
+
+
+def test_external_cancel_terminates_run_before_any_llm_step(tmp_path: Path):
+    """A cancel_event already set when the loop starts terminates the run
+    CANCELLED at the top guard, before spending any LLM step — the between-steps
+    half of the desktop-Stop fix (the in-cell half is covered by
+    test_mini_agent_kernel.test_external_cancel_interrupts_a_running_cell)."""
+    import threading
+
+    llm = ScriptedLLM([TURN("must not run", "x = 1")])
+    session = FakeSession([CellResult(ok=True, stdout="[mini-agent kernel ready]\n")])
+    cancel = threading.Event()
+    cancel.set()
+
+    outcome = run_mini_agent(
+        session=session,  # type: ignore[arg-type]
+        llm=llm,
+        goal="cancel immediately",
+        workspace_root=tmp_path,
+        budget=MiniAgentBudget(max_steps=5),
+        cancel_event=cancel,
+    )
+
+    assert outcome.termination is TerminationReason.CANCELLED
+    assert outcome.steps == []  # broke before any LLM turn was consumed

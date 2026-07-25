@@ -1435,6 +1435,27 @@ def _sse_done() -> str:
     return _sse_line("done", "")
 
 
+def _skill_promotion_wire_block(item: Any) -> dict[str, Any] | None:
+    """Map one queued convert-to-skill candidate to its App wire shape.
+
+    Module-level (unlike the media closure) so the ``tool_result``
+    ``skill_promotion`` contract the App depends on is unit-testable. Returns
+    ``None`` for a malformed item or one missing the ``workspace_root`` anchor
+    (the exact ``source_analysis_dir`` a later ``create_omics_skill`` needs)."""
+    if not isinstance(item, dict):
+        return None
+    workspace = str(item.get("workspace_root") or "").strip()
+    if not workspace:
+        return None
+    domains = item.get("valid_domains")
+    return {
+        "goal": str(item.get("goal") or ""),
+        "runId": str(item.get("run_id") or ""),
+        "workspaceRoot": workspace,
+        "validDomains": [str(d) for d in domains] if isinstance(domains, list) else [],
+    }
+
+
 def _omicsclaw_project_dir() -> Path:
     core = _get_core()
     omicsclaw_dir = getattr(core, "OMICSCLAW_DIR", "")
@@ -2328,6 +2349,25 @@ async def chat_stream(req: ChatRequest):
             media.append(block)
         return media
 
+    def _consume_pending_skill_promotion_for_session() -> list[dict[str, Any]]:
+        """Drain convert-to-skill candidates queued by a successful autonomous
+        run (mirrors ``_consume_pending_media_for_session``). Rides the
+        just-finished tool's ``tool_result`` event so the App can render a
+        user-gated "转为技能 / keep as script" card; dedup by workspace root."""
+        pending = getattr(core, "pending_skill_promotion", None)
+        if not isinstance(pending, dict):
+            return []
+        items = pending.pop(session_id, []) or []
+        candidates: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in items:
+            block = _skill_promotion_wire_block(item)
+            if not block or block["workspaceRoot"] in seen:
+                continue
+            seen.add(block["workspaceRoot"])
+            candidates.append(block)
+        return candidates
+
     async def on_stream_content(chunk: str):
         nonlocal streamed_text_bytes, streamed_text_complete, streamed_text_chunks
         if streamed_text_complete:
@@ -2444,6 +2484,12 @@ async def chat_stream(req: ChatRequest):
             result_data["is_error"] = True
         if media:
             result_data["media"] = media
+        # Convert-to-skill card: a successful autonomous run queues one candidate
+        # on the same side-channel as media; ride it out on this tool_result so
+        # it persists with the turn and re-renders on reload.
+        skill_promotion = _consume_pending_skill_promotion_for_session()
+        if skill_promotion:
+            result_data["skill_promotion"] = skill_promotion
 
         await _queue_event(
             "tool_result",

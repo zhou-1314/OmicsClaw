@@ -347,6 +347,18 @@ from omicsclaw.runtime.agent.cache_diagnostics import (  # noqa: E402
 
 # received_files moved to omicsclaw.runtime.agent.session (re-exported via the SessionManager import below).
 pending_media: dict[int | str, list[dict]] = {}
+# Convert-to-skill affordance (MUSE lifecycle / ADR 0013+0032 creation loop): a
+# SUCCESSFUL autonomous mini-agent run queues one structured "promote this
+# analysis into a reusable skill?" candidate here, keyed by session id. The
+# desktop Surface drains it onto the just-finished autonomous tool's
+# ``tool_result`` event exactly like ``pending_media``, so the App can render a
+# user-gated "转为技能 / keep as script" card. Nothing here mutates a skill: the
+# card only *offers* the ``create_omics_skill`` call, which stays
+# ``APPROVAL_MODE_ASK`` and passes the staging demo gate before anything is
+# published. Independent of the ≥N-prior-success text nudge
+# (``_compute_promotion_suggestion``) — whether a one-off script is worth keeping
+# is exactly the user's call, so this is offered on every successful run.
+pending_skill_promotion: dict[int | str, list[dict]] = {}
 pending_preflight_requests: dict[int | str, dict] = {}
 pending_candidate_chain_confirmations: dict[int | str, dict] = {}
 

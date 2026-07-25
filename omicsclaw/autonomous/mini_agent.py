@@ -104,11 +104,17 @@ def run_mini_agent(
     analysis_plan: str = "",
     budget: MiniAgentBudget | None = None,
     process_guard: bool = False,
+    cancel_event: "threading.Event | None" = None,
 ) -> MiniAgentOutcome:
     """Run the tactical loop against an already-started kernel session.
 
     ``process_guard=True`` (the non-bwrap tier) prepends an in-kernel guard cell
     that blocks network egress and confines writes to the workspace.
+
+    ``cancel_event`` (ADR 0009) lets a Surface stop the run mid-flight: it is
+    checked between steps and threaded into each cell's ``session.execute`` so a
+    stuck ``oc.run`` skill call is interrupted immediately instead of blocking
+    the whole run for ``skill_call_timeout_seconds``.
     """
     budget = (budget or MiniAgentBudget()).clamped()
     workspace = Path(workspace_root)
@@ -140,6 +146,12 @@ def run_mini_agent(
     prev_names: set[str] | None = None
 
     while True:
+        # Surface-requested cancel (desktop "Stop") wins before anything else, so
+        # a run is abandoned promptly between steps — the in-cell cancel below
+        # handles a stuck cell already in flight.
+        if cancel_event is not None and cancel_event.is_set():
+            termination = TerminationReason.CANCELLED
+            break
         # Capability backstop FIRST: a model that has not produced one parseable,
         # lint-clean turn by the end of the warmup window is not driving the
         # contract. Checked before the budget so it is reported as MODEL_INCAPABLE
@@ -208,7 +220,10 @@ def run_mini_agent(
             timeout = budget.skill_call_timeout_seconds + SKILL_CELL_TIMEOUT_GRACE_SECONDS
         else:
             timeout = budget.raw_cell_timeout_seconds
-        cell = session.execute(turn.code, timeout=timeout)
+        cell = session.execute(turn.code, timeout=timeout, cancel_event=cancel_event)
+        if cell.cancelled:
+            termination = TerminationReason.CANCELLED
+            break
         if cell.timed_out:
             new_vars = {}
         else:

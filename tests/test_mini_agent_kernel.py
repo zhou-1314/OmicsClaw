@@ -65,6 +65,35 @@ def test_timeout_is_reported(session: KernelSession):
     assert r.ok is False
 
 
+def test_external_cancel_interrupts_a_running_cell(session: KernelSession):
+    """An external cancel_event (the desktop Stop button) must interrupt a
+    running cell promptly, not wait out the full timeout.
+
+    Regression for the uncancellable autonomous-run hang: a stuck ``oc.run``
+    skill call blocked the whole run for ``skill_call_timeout_seconds`` (1800s)
+    and nothing could cancel it, because ``cancel_event`` was never threaded
+    into the autonomous path (it was absent from the tool's ``context_params``
+    and from ``KernelSession.execute``)."""
+    import threading
+    import time
+
+    cancel = threading.Event()
+
+    def _fire() -> None:
+        time.sleep(0.5)
+        cancel.set()
+
+    threading.Thread(target=_fire, daemon=True).start()
+    t0 = time.monotonic()
+    r = session.execute("while True:\n    pass", timeout=60, cancel_event=cancel)
+    elapsed = time.monotonic() - t0
+
+    assert r.cancelled is True
+    assert r.ok is False
+    # Interrupted at ~0.5s — nowhere near the 60s timeout.
+    assert elapsed < 8, f"external cancel was slow ({elapsed:.1f}s)"
+
+
 def test_timeout_marks_session_unusable_and_terminates(tmp_path: Path):
     class _Client:
         def execute(self, _code, store_history=True):

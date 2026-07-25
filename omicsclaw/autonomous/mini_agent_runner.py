@@ -120,6 +120,7 @@ def run_mini_agent_request(
             analysis_plan=request.analysis_plan,
             budget=budget,
             process_guard=process_guard,
+            cancel_event=request.cancel_event,
         )
     finally:
         session.shutdown()

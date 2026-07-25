@@ -86,10 +86,13 @@ class CellResult:
     evalue: str = ""
     traceback: str = ""
     timed_out: bool = False
+    cancelled: bool = False
     duration_seconds: float = 0.0
 
     @property
     def error_summary(self) -> str:
+        if self.cancelled:
+            return f"cancelled after {self.duration_seconds:.1f}s"
         if self.timed_out:
             return f"timed out after {self.duration_seconds:.1f}s"
         if self.ename:
@@ -221,11 +224,25 @@ class KernelSession:
 
     # -- execution ------------------------------------------------------- #
 
-    def execute(self, code: str, *, timeout: float = 120.0) -> CellResult:
+    def execute(
+        self,
+        code: str,
+        *,
+        timeout: float = 120.0,
+        cancel_event: "threading.Event | None" = None,
+    ) -> CellResult:
         """Run *code* in the kernel and collect stdout/stderr/error.
 
         On timeout the running cell is interrupted; if the kernel does not go
         idle the caller should treat the session as needing a restart.
+
+        ``cancel_event`` (ADR 0009) lets a Surface interrupt a running cell
+        mid-flight (the desktop "Stop" button). Without it the only way to stop
+        a stuck cell — notably an ``oc.run`` skill call blocked for up to
+        ``skill_call_timeout_seconds`` — was to wait out the full ``timeout``,
+        so an autonomous run appeared frozen. When set, the cell is interrupted
+        and the kernel restarted exactly like a timeout, but the result is
+        marked ``cancelled`` rather than ``timed_out``.
         """
         if self._client is None:
             raise KernelStartError("kernel session is not started")
@@ -239,8 +256,17 @@ class KernelSession:
         ename = evalue = tb_text = ""
         deadline = t0 + timeout
         timed_out = False
+        cancelled = False
+        # Poll more tightly when a cancel is watchable so "Stop" feels immediate;
+        # a plain cell keeps the original 1s cadence.
+        poll_cap = 0.2 if cancel_event is not None else 1.0
 
         while True:
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                self._interrupt()
+                self._restart_after_timeout()
+                break
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 timed_out = True
@@ -248,7 +274,7 @@ class KernelSession:
                 self._restart_after_timeout()
                 break
             try:
-                msg = client.get_iopub_msg(timeout=min(remaining, 1.0))
+                msg = client.get_iopub_msg(timeout=min(remaining, poll_cap))
             except queue.Empty:
                 continue
             if msg.get("parent_header", {}).get("msg_id") != msg_id:
@@ -270,7 +296,7 @@ class KernelSession:
 
         duration = time.monotonic() - t0
         return CellResult(
-            ok=not timed_out and not ename,
+            ok=not timed_out and not cancelled and not ename,
             stdout="".join(stdout),
             stderr="".join(stderr),
             result_text=result_text,
@@ -278,6 +304,7 @@ class KernelSession:
             evalue=evalue,
             traceback=_strip_ansi(tb_text),
             timed_out=timed_out,
+            cancelled=cancelled,
             duration_seconds=duration,
         )
 

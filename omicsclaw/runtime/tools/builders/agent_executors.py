@@ -66,6 +66,7 @@ from omicsclaw.runtime.agent.state import (
     get_skill_runner_python,
     pending_media,
     pending_preflight_requests,
+    pending_skill_promotion,
     received_files,
 )
 
@@ -2609,6 +2610,43 @@ def _register_autonomous_media(
     return plan.pending_items
 
 
+def _register_skill_promotion_candidate(
+    session_id: str, goal: str, run_id: str, workspace_root: str
+) -> dict | None:
+    """Queue a structured "convert this autonomous run into a skill?" candidate.
+
+    Rides the same ``pending_media``-style side-channel: the desktop Surface
+    drains it onto the just-finished autonomous tool's ``tool_result`` event, so
+    the App can render a user-gated "转为技能 / keep as script" card. This only
+    *offers* the conversion — the actual build still goes through
+    ``create_omics_skill`` (``APPROVAL_MODE_ASK``) and the staging demo gate, so
+    nothing here creates or mutates a skill.
+
+    Unlike ``_compute_promotion_suggestion`` (the ≥N-prior-success *text* nudge),
+    this is offered on every successful autonomous run: whether a one-off script
+    is worth keeping is exactly the user's call to make. The two are independent
+    by design — this carries no memory lookup and never raises into the tool loop.
+
+    ``valid_domains`` is sourced from the scaffolder so the card's domain picker
+    stays backend-authoritative (an autonomous bundle carries no target domain, so
+    the user MUST pick one — see ``create_skill_scaffold``).
+    """
+    if not session_id or not workspace_root:
+        return None
+    from omicsclaw.skill.scaffolder import VALID_DOMAINS
+
+    candidate = {
+        "goal": str(goal or ""),
+        "run_id": str(run_id or ""),
+        "workspace_root": str(workspace_root or ""),
+        "valid_domains": list(VALID_DOMAINS),
+    }
+    pending_skill_promotion[session_id] = (
+        pending_skill_promotion.get(session_id, []) + [candidate]
+    )
+    return candidate
+
+
 async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
     """Run the first-class Autonomous Code Runner loop."""
     try:
@@ -2664,6 +2702,11 @@ async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
             analysis_plan=str(args.get("analysis_plan", "") or ""),
             model_override=str(kwargs.get("model_override", "") or ""),
             provider_override=str(kwargs.get("provider_override", "") or ""),
+            # ADR 0009: the Surface's turn cancel_event, so the desktop "Stop"
+            # button interrupts a stuck autonomous run instead of leaving it
+            # blocked for up to skill_call_timeout_seconds. Delivered via the
+            # tool's context_params (see build_bot_tool_registry).
+            cancel_event=kwargs.get("cancel_event"),
             metadata={
                 "surface": str(kwargs.get("surface", "") or ""),
                 "chat_id": str(kwargs.get("chat_id", "") or ""),
@@ -2704,6 +2747,13 @@ async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
                 str(result.status),
             )
             if result.ok:
+                # Structured, always-offered convert-to-skill card. Rides the
+                # tool_result side-channel; the conversion itself stays
+                # user-gated downstream (create_omics_skill / APPROVAL_MODE_ASK).
+                # Independent of the ≥N-success text nudge below.
+                _register_skill_promotion_candidate(
+                    session_id, goal, result.run_id, result.workspace_root
+                )
                 suggestion = await _compute_promotion_suggestion(
                     session_id, thread_id, goal, result.run_id, result.workspace_root
                 )

@@ -85,3 +85,22 @@ async def test_omicsclaw_toolspec_declares_cancel_event_in_context_params():
     specs = build_bot_tool_specs(BotToolContext(skill_names=()))
     omicsclaw_spec = next(s for s in specs if s.name == "omicsclaw")
     assert "cancel_event" in omicsclaw_spec.context_params
+
+
+@pytest.mark.asyncio
+async def test_autonomous_toolspec_declares_cancel_event_in_context_params():
+    """The ``autonomous_analysis_execute`` ToolSpec must declare
+    ``cancel_event`` so the desktop "Stop" button reaches the mini-agent.
+
+    Regression guard for the uncancellable-autonomous-run hang: this signal was
+    absent from ``context_params``, so ``build_executor_kwargs`` never forwarded
+    it and a stuck ``oc.run`` skill call blocked the whole run for up to
+    ``skill_call_timeout_seconds`` (1800s) with no way to cancel."""
+    from omicsclaw.runtime.tools.builders.agent import (
+        BotToolContext,
+        build_bot_tool_specs,
+    )
+
+    specs = build_bot_tool_specs(BotToolContext(skill_names=()))
+    auto_spec = next(s for s in specs if s.name == "autonomous_analysis_execute")
+    assert "cancel_event" in auto_spec.context_params

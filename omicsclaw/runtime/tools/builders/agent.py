@@ -1383,6 +1383,10 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
             context_params=(
                 "session_id",
                 "chat_id",
+                # ADR 0009: the desktop "Stop" turn cancel_event, threaded through
+                # the request into the mini-agent so a stuck run is cancellable
+                # instead of blocking for up to skill_call_timeout_seconds.
+                "cancel_event",
                 "surface",
                 "policy_state",
                 "model_override",

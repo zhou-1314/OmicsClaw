@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -67,6 +68,13 @@ class AutonomousRunRequest:
     model_override: str = ""
     provider_override: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Surface-owned cancellation handle (ADR 0009). Threaded into the mini-agent
+    # so a stuck run — notably an ``oc.run`` skill call blocked for up to
+    # ``skill_call_timeout_seconds`` — can be interrupted from the desktop "Stop"
+    # button. Not serialized (a live threading.Event; excluded from repr/compare).
+    cancel_event: threading.Event | None = field(
+        default=None, repr=False, compare=False
+    )
 
 
 @dataclass(slots=True)
