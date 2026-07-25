@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .answer_paths import unresolved_answer_paths
 from .budget import MiniAgentBudget, TerminationReason
 from .code_loop import ProviderChatClient
 from .contracts import (
@@ -175,6 +176,13 @@ def run_mini_agent_request(
         "skill_calls": skill_calls,
         "computed_results": _computed_results(outcome, skill_calls, replay_ok),
         "interpretive_notes": outcome.answer,
+        # Path claims the answer makes that do not exist. The kernel is confined
+        # to the workspace but the answer text is free-form, so a run can succeed
+        # while naming outputs it never wrote; surfacing that here stops the
+        # outer loop from hunting the ghost path until its budget runs out.
+        "unresolved_answer_paths": unresolved_answer_paths(
+            outcome.answer, workspace_root=workspace.root
+        ),
         # Machine-readable "there is salvageable work here" flag, so a Surface can
         # offer to continue rather than presenting a budget stop as a dead end.
         "partial_progress": _partial_progress(outcome),

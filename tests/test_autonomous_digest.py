@@ -74,6 +74,61 @@ def test_digest_still_exposes_raw_paths_for_deep_dive():
     assert "/nonexistent/run/manifest.json" in digest
 
 
+def test_digest_corrects_answer_paths_that_do_not_exist():
+    """The 2026-07-25 storm: the answer named an output directory the run never
+    wrote, and the outer agent listed it three times before the turn hit the
+    tool-iteration cap. The digest must contradict the answer in the same
+    breath, and point at the directory that really holds the artifacts."""
+    digest = _format_autonomous_digest(
+        _result(
+            metadata={
+                "computed_results": "ARI = 0.988",
+                "answer": "Outputs saved to /workspace/output/synthetic_analysis/",
+                "interpretive_notes": "",
+                "unresolved_answer_paths": ["/workspace/output/synthetic_analysis"],
+            }
+        )
+    )
+    assert "/workspace/output/synthetic_analysis" in digest
+    assert "do not exist" in digest.lower()
+    # It must name the authoritative location so the correction is actionable.
+    assert "/nonexistent/run" in digest
+
+
+def test_digest_has_no_correction_when_answer_paths_all_resolve():
+    digest = _format_autonomous_digest(
+        _result(metadata={**_result().metadata, "unresolved_answer_paths": []})
+    )
+    assert "do not exist" not in digest.lower()
+
+
+def test_digest_tells_the_model_what_a_budget_stop_already_finished():
+    """A run that stops on a budget is not a blank failure — its completed steps
+    left artifacts on disk. Without that in the digest the outer agent restarts
+    the whole goal from scratch (the trace re-ran the analysis three times),
+    which is what drove the turn into MAX_TOOL_ITERATIONS."""
+    digest = _format_autonomous_digest(
+        _result(
+            ok=False,
+            error="mini-agent ran out of budget (step_budget_exhausted) ...",
+            metadata={
+                "computed_results": "- Steps: 12 (9 accepted)",
+                "answer": "",
+                "interpretive_notes": "",
+                "partial_progress": {
+                    "reason": "step_budget_exhausted",
+                    "completed_steps": 9,
+                    "completed_purposes": ["QC metrics", "normalize", "cluster"],
+                    "resumable": True,
+                },
+            },
+        )
+    )
+    assert "9" in digest
+    assert "cluster" in digest  # so the model resumes instead of redoing it
+    assert "resum" in digest.lower() or "continue" in digest.lower()
+
+
 def test_digest_stays_under_inline_threshold_even_when_huge():
     # A pathological, very large multibyte result must still fit inline so it is
     # not spilled to disk (which would force the model to re-fetch it).

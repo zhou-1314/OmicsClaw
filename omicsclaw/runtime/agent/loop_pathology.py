@@ -61,13 +61,20 @@ FAILURE_THRESHOLD = 4
 REPEATED_READ_WINDOW = 8
 REPEATED_READ_THRESHOLD = 3
 
-# Read-like tools and the argument(s) that name the single file they read,
+# Read-like tools and the argument(s) that name the single resource they read,
 # in priority order. ``grep_files`` and ``read_knowhow`` are handled specially
 # in ``read_access_target`` (root+glob / knowhow name).
+#
+# ``list_directory`` counts as a read: re-listing one directory yields the same
+# answer every time, so a repeat is pure waste. It is the workhorse of the
+# "where did my outputs go?" verification storm — in the trace behind
+# tests/test_loop_pathology_verification_storm.py it was a third of all calls,
+# and without a target here the detector could not see any of them.
 _READ_TARGET_ARGS: dict[str, tuple[str, ...]] = {
     "file_read": ("path", "file_path"),
     "inspect_file": ("file_path", "path"),
     "inspect_data": ("file_path", "path"),
+    "list_directory": ("path",),
 }
 
 

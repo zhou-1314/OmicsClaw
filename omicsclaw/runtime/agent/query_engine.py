@@ -831,6 +831,9 @@ async def _build_execution_requests(
             spec=tool_spec,
             executor=executor,
             runtime_context=runtime_context,
+            # Lets an unresolvable name come back with "did you mean …" instead
+            # of a bare rejection the model can only answer with a tool_search.
+            known_tool_names=tuple(tool_runtime.executors),
             policy_decision=evaluate_tool_policy(
                 tc.name,
                 tool_spec,

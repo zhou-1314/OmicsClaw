@@ -2507,8 +2507,32 @@ def _format_autonomous_digest(result) -> str:
         parts.append("## Computed results\n" + _clip_chars(computed, 1600))
     if answer:
         parts.append("## Answer\n" + _clip_chars(answer, 1600))
+    # Contradict a lying answer immediately after quoting it. The run's kernel is
+    # workspace-confined but its answer text is free-form, so it can name output
+    # paths that were never written; believing them cost a whole turn's tool
+    # budget to fruitless directory listings (diagnose 2026-07-25).
+    unresolved = [str(p) for p in (meta.get("unresolved_answer_paths") or [])]
+    if unresolved:
+        parts.append(
+            "## Correction — these paths from the Answer do not exist\n"
+            + "\n".join(f"- {p}" for p in unresolved[:10])
+            + "\nDo NOT list or read them. Everything this run produced is under "
+            f"{result.workspace_root} — use the artifact list above."
+        )
     if notes and notes != answer:
         parts.append("## Interpretive notes\n" + _clip_chars(notes, 600))
+    # A budget stop still banked work. Naming it stops the outer loop from
+    # restarting the whole goal — the trace behind this re-ran one analysis three
+    # times and hit MAX_TOOL_ITERATIONS (diagnose 2026-07-25).
+    progress = meta.get("partial_progress") or {}
+    if isinstance(progress, dict) and progress.get("resumable"):
+        done = [str(p) for p in (progress.get("completed_purposes") or [])][:10]
+        parts.append(
+            f"## Already completed ({progress.get('completed_steps', 0)} step(s)) — resume, do not restart\n"
+            + ("\n".join(f"- {p}" for p in done) if done else "- (see the step trace)")
+            + "\nThese steps' artifacts are already in the run workspace. Continue from "
+            "here — re-running the whole goal repeats work that succeeded."
+        )
 
     artifacts = _autonomous_artifacts(result.workspace_root)
     if artifacts:

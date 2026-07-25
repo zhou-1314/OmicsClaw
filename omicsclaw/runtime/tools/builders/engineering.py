@@ -347,11 +347,31 @@ def build_engineering_tool_specs() -> list[ToolSpec]:
                 "Update status or details for a persisted engineering task. Use this "
                 "to keep the live 待办 plan accurate: set status 'in_progress' right "
                 "before working a step and 'completed' (or 'failed'/'skipped') right "
-                "after, keeping exactly one step 'in_progress' at a time."
+                "after, keeping exactly one step 'in_progress' at a time. "
+                "Pass 'updates' to apply several at once — a hand-off ('finish step 2, "
+                "start step 3') is ONE call, not two."
             ),
             parameters={
                 "type": "object",
                 "properties": {
+                    "updates": {
+                        "type": "array",
+                        "description": (
+                            "Batch form: several updates in one call. Each item takes the "
+                            "same fields as a single update. Prefer this whenever more "
+                            "than one task changes."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "task_id": {"type": "string"},
+                                "status": {"type": "string", "enum": list(_TASK_STATUSES)},
+                                "summary": {"type": "string"},
+                                "artifact_ref": {"type": "string"},
+                            },
+                            "required": ["task_id"],
+                        },
+                    },
                     "task_id": {"type": "string", "description": "Task id to update."},
                     "status": {
                         "type": "string",
@@ -370,7 +390,9 @@ def build_engineering_tool_specs() -> list[ToolSpec]:
                         "description": "Artifact path or identifier to append.",
                     },
                 },
-                "required": ["task_id"],
+                # Neither key is schema-required: exactly one of 'task_id' (single)
+                # or 'updates' (batch) must be present, which the executor enforces.
+                "required": [],
             },
             surfaces=("bot", "interactive"),
             context_params=("session_id", "chat_id", "surface", "workspace", "pipeline_workspace"),
@@ -920,9 +942,12 @@ def build_engineering_tool_executors(
         workspace: str = "",
         pipeline_workspace: str = "",
     ) -> str:
-        task_id = str(args.get("task_id", "") or "").strip()
-        if not task_id:
-            return "Error: 'task_id' is required."
+        updates = args.get("updates")
+        batch = isinstance(updates, list) and bool(updates)
+        if not batch:
+            if not str(args.get("task_id", "") or "").strip():
+                return "Error: 'task_id' (or a non-empty 'updates' array) is required."
+            updates = [args]
 
         path, store = _load_engineering_task_store(
             runtime_state_root,
@@ -932,51 +957,42 @@ def build_engineering_tool_executors(
             workspace=workspace,
             pipeline_workspace=pipeline_workspace,
         )
-        task = store.get(task_id)
-        if task is None:
-            return _json_payload({"store_path": str(path), "error": f"Unknown task id: {task_id}"})
 
-        status = str(args.get("status", "") or "").strip()
-        if status:
-            if status not in _TASK_STATUSES:
-                return f"Error: unsupported status '{status}'."
-            store.set_task_status(
-                task_id,
-                status,
-                summary=str(args.get("summary", "") or "").strip(),
-                artifact_ref=str(args.get("artifact_ref", "") or "").strip(),
-                owner=str(args.get("owner", "") or "").strip(),
-            )
-            task = store.require(task_id)
-        else:
-            title = str(args.get("title", "") or "").strip()
-            description = str(args.get("description", "") or "").strip()
-            owner = str(args.get("owner", "") or "").strip()
-            if title:
-                task.title = title
-            if description:
-                task.description = description
-            if owner:
-                task.owner = owner
-            summary = str(args.get("summary", "") or "").strip()
-            artifact_ref = str(args.get("artifact_ref", "") or "").strip()
-            if summary:
-                task.metadata["summary"] = summary
-            if artifact_ref and artifact_ref not in task.artifact_refs:
-                task.artifact_refs.append(artifact_ref)
-            task.touch()
+        applied: list[Any] = []
+        errors: list[str] = []
+        for entry in updates:
+            if not isinstance(entry, dict):
+                errors.append(f"Ignored non-object update: {entry!r}")
+                continue
+            task, error = _apply_task_update(store, entry)
+            if error:
+                errors.append(error)
+            elif task is not None:
+                applied.append(task)
+
+        # A single-task call keeps its historical contract: a hard error, not a
+        # partial success, so existing callers see no behaviour change.
+        if not batch and errors:
+            first = errors[0]
+            if first.startswith("Unknown task id:"):
+                return _json_payload({"store_path": str(path), "error": first})
+            return f"Error: {first}"
 
         store.save(path)
         # Include the full list + kind so the desktop 待办 SSE event can use the
         # inline fast path instead of reloading the store from disk.
-        return _json_payload(
-            {
-                "store_path": str(path),
-                "task": task.to_dict(),
-                "kind": store.kind,
-                "tasks": [t.to_dict() for t in store.tasks],
-            }
-        )
+        payload: dict[str, Any] = {
+            "store_path": str(path),
+            "kind": store.kind,
+            "tasks": [t.to_dict() for t in store.tasks],
+        }
+        if not batch:
+            payload["task"] = applied[0].to_dict()
+        else:
+            payload["updated"] = [t.to_dict() for t in applied]
+        if errors:
+            payload["errors"] = errors
+        return _json_payload(payload)
 
     async def todo_write(
         args: dict[str, Any],
@@ -1098,6 +1114,52 @@ def build_engineering_tool_executors(
         "web_fetch": web_fetch,
         "ask_user": ask_user,
     }
+
+
+def _apply_task_update(store: Any, entry: dict[str, Any]) -> tuple[Any, str]:
+    """Apply one task mutation to ``store``; return ``(task, error_message)``.
+
+    Shared by the single-task and batched forms of ``task_update`` so both apply
+    exactly the same semantics. Does not save — the caller writes once for the
+    whole batch.
+    """
+    task_id = str(entry.get("task_id", "") or "").strip()
+    if not task_id:
+        return None, "'task_id' is required."
+    task = store.get(task_id)
+    if task is None:
+        return None, f"Unknown task id: {task_id}"
+
+    status = str(entry.get("status", "") or "").strip()
+    if status:
+        if status not in _TASK_STATUSES:
+            return None, f"unsupported status '{status}'."
+        store.set_task_status(
+            task_id,
+            status,
+            summary=str(entry.get("summary", "") or "").strip(),
+            artifact_ref=str(entry.get("artifact_ref", "") or "").strip(),
+            owner=str(entry.get("owner", "") or "").strip(),
+        )
+        return store.require(task_id), ""
+
+    title = str(entry.get("title", "") or "").strip()
+    description = str(entry.get("description", "") or "").strip()
+    owner = str(entry.get("owner", "") or "").strip()
+    if title:
+        task.title = title
+    if description:
+        task.description = description
+    if owner:
+        task.owner = owner
+    summary = str(entry.get("summary", "") or "").strip()
+    artifact_ref = str(entry.get("artifact_ref", "") or "").strip()
+    if summary:
+        task.metadata["summary"] = summary
+    if artifact_ref and artifact_ref not in task.artifact_refs:
+        task.artifact_refs.append(artifact_ref)
+    task.touch()
+    return task, ""
 
 
 def _resolve_state_root(state_root: str | Path | None) -> Path:

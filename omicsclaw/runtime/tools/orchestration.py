@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import inspect
 import time
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from ..policy.policy import (
     TOOL_POLICY_ALLOW,
@@ -42,6 +43,10 @@ class ToolExecutionRequest:
     executor: ToolCallable | None
     runtime_context: dict[str, Any] | None = None
     policy_decision: ToolPolicyDecision | None = None
+    # Names the caller could have dispatched. Used only to suggest alternatives
+    # when ``spec``/``executor`` did not resolve, so a guessed tool name costs
+    # one turn instead of an extra ``tool_search`` round-trip.
+    known_tool_names: tuple[str, ...] = ()
 
     @property
     def can_run_concurrently(self) -> bool:
@@ -469,6 +474,27 @@ async def _run_speculative_classifier(
     return {"label": str(result)}
 
 
+def _unknown_tool_message(name: str, known: Sequence[str]) -> str:
+    """Report an unresolvable tool name, naming the nearest real tools.
+
+    A bare "Unknown tool: X" gives the model nothing to act on, so it spends the
+    next tool iteration searching the registry. Close matches turn that into a
+    same-turn correction (diagnose 2026-07-25).
+    """
+    base = f"Unknown tool: {name}"
+    if not known:
+        return base
+    close = difflib.get_close_matches(name, list(known), n=3, cutoff=0.6)
+    if not close:
+        # Fall back to substring kinship ("run_shell" -> "run_shell_command"),
+        # which difflib's ratio can miss when the names differ a lot in length.
+        lowered = name.lower()
+        close = [k for k in known if lowered in k.lower() or k.lower() in lowered][:3]
+    if not close:
+        return f"{base}. Call tool_search to find the right tool."
+    return f"{base}. Did you mean: {', '.join(close)}?"
+
+
 async def _execute_single_request(request: ToolExecutionRequest) -> ToolExecutionResult:
     trace = ToolExecutionTrace(
         tool_name=request.name,
@@ -480,7 +506,7 @@ async def _execute_single_request(request: ToolExecutionRequest) -> ToolExecutio
     if request.spec is None or request.executor is None:
         return ToolExecutionResult(
             request=request,
-            output=f"Unknown tool: {request.name}",
+            output=_unknown_tool_message(request.name, request.known_tool_names),
             success=False,
             status=EXECUTION_STATUS_UNKNOWN_TOOL,
             trace=trace,

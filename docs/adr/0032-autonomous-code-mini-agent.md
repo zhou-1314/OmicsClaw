@@ -307,6 +307,13 @@ can drive the mini-agent.
   available to the local autonomous runtime.
 - All writes go under the autonomous run workspace; upstream skill outputs and
   inputs are referenced by manifest entry by default, not copied.
+- The answer's *path claims* are checked against the filesystem before the run
+  is reported (`answer_paths.unresolved_answer_paths`). Writes are confined to
+  the workspace but `ReturnAnswer` text is free-form, so a run can succeed while
+  naming outputs it never wrote. Added 2026-07-25: one such answer sent the
+  outer loop hunting a directory that did not exist, and the turn burned all 20
+  tool iterations on fruitless listings. Unresolvable claims are now contradicted
+  in the same digest that quotes them.
 - Replay in a fresh isolated process is required before a successful
   `ReturnAnswer` is accepted.
 - The outer loop performs final result validation against the user intent,

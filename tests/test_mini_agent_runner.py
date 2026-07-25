@@ -67,6 +67,38 @@ def test_runner_end_to_end_with_replay_and_manifest(tmp_path: Path):
     assert (ws / "analysis.py").exists()  # the replay artifact
 
 
+def test_answer_claiming_an_unwritten_path_is_reported(tmp_path: Path):
+    """A run can succeed while its answer names outputs it never wrote (the
+    kernel is workspace-confined, the answer text is not). The result must say
+    so, or the outer loop chases the ghost path until its budget runs out."""
+    if not IPC_AVAILABLE:
+        pytest.skip("ZMQ IPC sockets are unavailable in this test sandbox")
+    ghost = tmp_path / "output" / "synthetic_analysis"
+    request = AutonomousRunRequest(goal="save some outputs", output_root=str(tmp_path))
+    result = run_mini_agent_request(
+        request,
+        llm_client=ScriptedLLM(
+            [TURN("finish", f"ReturnAnswer('Outputs saved to {ghost}/: pca.png')")]
+        ),
+        require_sandbox=False,
+        budget=BUDGET,
+    )
+
+    assert result.metadata["answer"].startswith("Outputs saved to")
+    assert result.metadata["unresolved_answer_paths"] == [str(ghost)]
+
+
+def test_answer_naming_only_real_paths_reports_nothing(tmp_path: Path):
+    if not IPC_AVAILABLE:
+        pytest.skip("ZMQ IPC sockets are unavailable in this test sandbox")
+    request = AutonomousRunRequest(goal="compute the answer", output_root=str(tmp_path))
+    result = run_mini_agent_request(
+        request, llm_client=ScriptedLLM(_answer_turns()), require_sandbox=False, budget=BUDGET
+    )
+
+    assert result.metadata["unresolved_answer_paths"] == []
+
+
 def test_run_dir_has_no_kernel_machinery_or_empty_dirs(tmp_path: Path):
     """Regression for the workspace-clutter bug: a finished run must not ship
     kernel HOME machinery (.cache/.config/.ipython) or empty placeholder dirs

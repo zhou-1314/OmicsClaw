@@ -3,7 +3,7 @@
     "surface": "bot",
     "query": ""
   },
-  "total_chars": 36253,
+  "total_chars": 36820,
   "tool_count": 49,
   "tool_names": [
     "ask_user",
@@ -1598,10 +1598,42 @@
       "type": "function",
       "function": {
         "name": "task_update",
-        "description": "Update status or details for a persisted engineering task. Use this to keep the live 待办 plan accurate: set status 'in_progress' right before working a step and 'completed' (or 'failed'/'skipped') right after, keeping exactly one step 'in_progress' at a time.",
+        "description": "Update status or details for a persisted engineering task. Use this to keep the live 待办 plan accurate: set status 'in_progress' right before working a step and 'completed' (or 'failed'/'skipped') right after, keeping exactly one step 'in_progress' at a time. Pass 'updates' to apply several at once — a hand-off ('finish step 2, start step 3') is ONE call, not two.",
         "parameters": {
           "type": "object",
           "properties": {
+            "updates": {
+              "type": "array",
+              "description": "Batch form: several updates in one call. Each item takes the same fields as a single update. Prefer this whenever more than one task changes.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "task_id": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "pending",
+                      "in_progress",
+                      "completed",
+                      "skipped",
+                      "blocked",
+                      "failed"
+                    ]
+                  },
+                  "summary": {
+                    "type": "string"
+                  },
+                  "artifact_ref": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "task_id"
+                ]
+              }
+            },
             "task_id": {
               "type": "string",
               "description": "Task id to update."
@@ -1639,9 +1671,7 @@
               "description": "Artifact path or identifier to append."
             }
           },
-          "required": [
-            "task_id"
-          ]
+          "required": []
         }
       }
     },

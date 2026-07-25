@@ -172,8 +172,24 @@ if real traces motivate changes.
 
     pingpong:           same (tool_name, args_digest) appears ≥ 4 times
                         in the last 6 entries of state.tool_calls
+    repeated_read:      same target resource appears ≥ 3 times in the last 8
+                        entries of state.tool_calls, across read-like tools
     repeated_failure:   same tool_name appears ≥ 4 times in the last 8
                         entries of state.errors
+
+Revised 2026-07-25 — a real trace motivated widening `repeated_read`'s reach
+(as this section invited). A desktop turn spent all 20 tool iterations on 24
+calls, a third of them hunting output files in a directory the analysis had
+never written; the detector emitted **zero** signals for the whole run. The
+directory listings were invisible on every lane at once: `list_directory`
+carried no read target, "Directory not found" comes back as a *successful*
+call so it never reached `state.errors`, and the three identical calls spanned
+7 positions with a count of 3 — just outside pingpong on both axes.
+`list_directory` now carries a read target, so re-listing one directory counts
+as a repeated read. Note this lane is a backstop, not the primary defence: it
+can only fire on the third repeat. The trace's real fix was upstream — the
+run's answer named a path it had never written, and nothing validated that
+claim (see `omicsclaw/autonomous/answer_paths.py`).
 
 `args_digest` is the SHA-1 hex of a JSON-canonicalised argument dict.
 Storing the digest rather than raw arguments keeps `LoopState` from
