@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from omicsclaw.common.output_claim import (
@@ -10,7 +11,20 @@ from omicsclaw.common.output_claim import (
 )
 
 ARTIFACT_SUFFIXES = frozenset(
-    {".png", ".pdf", ".svg", ".csv", ".tsv", ".html", ".h5ad", ".xlsx"}
+    {
+        ".png",
+        ".pdf",
+        ".svg",
+        ".csv",
+        ".tsv",
+        ".html",
+        ".h5ad",
+        ".xlsx",
+        ".parquet",
+        ".npz",
+        ".loom",
+        ".rds",
+    }
 )
 BOOKKEEPING_FILES = frozenset(
     {"completion_report.json", "manifest.json", "analysis.py"}
@@ -18,15 +32,24 @@ BOOKKEEPING_FILES = frozenset(
 REFERENCE_DIRS = frozenset({"inputs", "upstream", "rerun"})
 
 
-def list_autonomous_artifacts(
+@dataclass(frozen=True, slots=True)
+class AutonomousArtifactInventory:
+    paths: tuple[str, ...]
+    total: int
+    truncated: bool
+
+
+def inventory_autonomous_artifacts(
     workspace_root: str | Path,
     *,
     limit: int = 40,
-) -> list[str]:
+) -> AutonomousArtifactInventory:
     root = Path(workspace_root)
+    max_paths = max(0, limit)
     try:
         claim_identities = collect_output_claim_identities(root)
         artifacts: list[str] = []
+        total = 0
         for path in sorted(root.rglob("*")):
             if not path.is_file():
                 continue
@@ -44,12 +67,16 @@ def list_autonomous_artifacts(
                 claim_identities=claim_identities,
             ):
                 continue
-            artifacts.append(relative.as_posix())
-            if len(artifacts) >= limit:
-                break
-        return artifacts
+            total += 1
+            if len(artifacts) < max_paths:
+                artifacts.append(relative.as_posix())
+        return AutonomousArtifactInventory(
+            paths=tuple(artifacts),
+            total=total,
+            truncated=total > len(artifacts),
+        )
     except OSError:
-        return []
+        return AutonomousArtifactInventory(paths=(), total=0, truncated=False)
 
 
-__all__ = ["list_autonomous_artifacts"]
+__all__ = ["AutonomousArtifactInventory", "inventory_autonomous_artifacts"]

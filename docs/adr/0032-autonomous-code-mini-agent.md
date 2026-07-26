@@ -310,9 +310,10 @@ can drive the mini-agent.
 
 - Skill dispatch remains primary. The mini-agent cannot reclassify an Exact
   skill route as generated code.
-- `autonomous_analysis_execute.input_paths` carries primary data, not executable
-  source. A resolved `.py` input is rejected before provider or kernel work;
-  callers must pass the full analysis objective and its data paths instead.
+- `autonomous_analysis_execute.input_paths` and `upstream_paths` carry data or
+  prior-run artifacts, not executable source. A resolved `.py` path in either
+  field is rejected before provider or kernel work; callers must pass the full
+  analysis objective and its data paths instead.
 - The `oc` / `skills` facade is an allowlist generated from the skill registry;
   it uses skill metadata and `allowed_extra_flags`, not arbitrary script paths.
 - v1 raw generated code is Python-only unless an equivalent R kernel safety
@@ -338,13 +339,24 @@ can drive the mini-agent.
 - The outer loop performs final result validation against the user intent,
   schema-grounded plan, artifacts, and replay report before presenting an
   interpretation. A successful autonomous digest moves the next provider turn
-  to a restricted landing surface that exposes only batched `task_update`; if
-  used, the following turn is forced to `tools=[]`. A provider-returned
-  list/read or other unexposed tool call in that landing phase is never
-  executed. Failed autonomous runs keep the ordinary recovery tools. The final
-  configured iteration remains a response-only `tools=[]` backstop. Replay and
-  the recursive artifact inventory are therefore authoritative after success,
-  without another list/glob/read verification cycle.
+  to a restricted landing surface whose schema exposes only one batched
+  `task_update`. Execution requires exactly one call with a non-empty `updates`
+  array; multiple, single-task, empty, malformed, list/read, or other unexposed
+  calls execute nothing and their companion text is discarded. A valid update
+  attempt always moves the following turn to `tools=[]`, and its final answer
+  must report success or failure from the recorded tool result. A direct landing
+  answer that needs token continuation also moves to `tools=[]`; a response-only
+  text answer is persisted and returned without another continuation, while an
+  illegal response-only tool call uses an honest runtime fallback rather than
+  provider companion text. Failed autonomous runs keep the ordinary recovery
+  tools. The final configured iteration remains a response-only `tools=[]`
+  backstop.
+- Replay and a complete recursive artifact inventory are authoritative after
+  success, without another list/glob/read verification cycle. The inventory
+  recognizes common scientific formats including Parquet, NPZ, LOOM, and RDS
+  and reports `total` plus `truncated`. When the inline digest is capped, it says
+  `showing N of total`; only the count and replay evidence remain authoritative,
+  and omitted names may be inspected when the user actually needs them.
 - Every report separates computed results from interpretive claims and keeps
   the OmicsClaw disclaimer.
 

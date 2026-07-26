@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .answer_paths import unresolved_answer_paths
-from .artifacts import list_autonomous_artifacts
+from .artifacts import inventory_autonomous_artifacts
 from .budget import MiniAgentBudget, TerminationReason
 from .code_loop import ProviderChatClient
 from .contracts import (
@@ -159,7 +159,9 @@ def run_mini_agent_request(
 
     accepted = outcome.succeeded and replay_ok
     status = _status_for(accepted, outcome.termination)
-    salvageable_artifacts = list_autonomous_artifacts(workspace.root)
+    salvageable_artifacts = list(
+        inventory_autonomous_artifacts(workspace.root).paths
+    )
     error = "" if accepted else _failure_message(
         outcome,
         replay_ok,

@@ -26,7 +26,7 @@ from types import SimpleNamespace
 import omicsclaw.runtime.agent.state  # noqa: F401  (resolve import cycle)
 from omicsclaw.runtime.tools.builders.agent_executors import (
     _AUTONOMOUS_DIGEST_MAX_BYTES,
-    _autonomous_artifacts,
+    _autonomous_artifact_inventory,
     _format_autonomous_digest,
 )
 
@@ -117,6 +117,20 @@ def test_success_digest_treats_replay_and_artifact_inventory_as_authoritative(
     assert "batch-update" in digest
 
 
+def test_success_digest_discloses_truncated_artifact_inventory(tmp_path):
+    for index in range(43):
+        (tmp_path / f"artifact_{index:02}.csv").write_text("x", encoding="utf-8")
+
+    digest = _format_autonomous_digest(
+        _result(workspace_root=str(tmp_path))
+    )
+
+    assert "showing 40 of 43" in digest
+    assert "truncated" in digest.lower()
+    assert "Replay validation and the artifact count are authoritative" in digest
+    assert "Replay validation and the artifact inventory are authoritative" not in digest
+
+
 def test_digest_tells_the_model_what_a_budget_stop_already_finished():
     digest = _format_autonomous_digest(
         _result(
@@ -182,17 +196,34 @@ def test_autonomous_artifacts_lists_nested_outputs_and_skips_bookkeeping(tmp_pat
     (tmp_path / "completion_report.json").write_text("x")
     (tmp_path / "analysis.py").write_text("x")
 
-    artifacts = _autonomous_artifacts(str(tmp_path))
+    artifacts = _autonomous_artifact_inventory(str(tmp_path)).paths
 
-    assert artifacts == [
+    assert artifacts == (
         "figures/fig_01.png",
         "marker_genes.csv",
         "output/pca_clusters.png",
-    ]
+    )
+
+
+def test_autonomous_artifacts_include_common_scientific_formats(tmp_path):
+    for name in (
+        "expression.loom",
+        "matrix.npz",
+        "model.rds",
+        "table.parquet",
+    ):
+        (tmp_path / name).write_text("x", encoding="utf-8")
+
+    assert _autonomous_artifact_inventory(str(tmp_path)).paths == (
+        "expression.loom",
+        "matrix.npz",
+        "model.rds",
+        "table.parquet",
+    )
 
 
 def test_autonomous_artifacts_handles_missing_dir():
-    assert _autonomous_artifacts("/nonexistent/path/xyz") == []
+    assert _autonomous_artifact_inventory("/nonexistent/path/xyz").paths == ()
 
 
 def test_autonomous_artifacts_rejects_claim_aliases(tmp_path):
@@ -204,4 +235,4 @@ def test_autonomous_artifacts_rejects_claim_aliases(tmp_path):
     (tmp_path / "claim.csv").hardlink_to(claim)
     (tmp_path / "figures" / "claim.png").hardlink_to(claim)
 
-    assert _autonomous_artifacts(str(tmp_path)) == []
+    assert _autonomous_artifact_inventory(str(tmp_path)).paths == ()

@@ -47,7 +47,10 @@ from pathlib import Path
 
 import requests
 
-from omicsclaw.autonomous.artifacts import list_autonomous_artifacts
+from omicsclaw.autonomous.artifacts import (
+    AutonomousArtifactInventory,
+    inventory_autonomous_artifacts,
+)
 
 # Late-binding handle for runtime-mutated omicsclaw.runtime.agent.state globals (memory_store,
 # llm, OMICSCLAW_MODEL, LLM_PROVIDER_NAME, session_manager). Set by
@@ -2441,9 +2444,13 @@ def _clip_to_bytes(text: str, max_bytes: int) -> str:
     return clipped + suffix
 
 
-def _autonomous_artifacts(workspace_root: str, *, limit: int = 40) -> list[str]:
-    """List produced scientific files without forcing the outer agent to scan."""
-    return list_autonomous_artifacts(workspace_root, limit=limit)
+def _autonomous_artifact_inventory(
+    workspace_root: str,
+    *,
+    limit: int = 40,
+) -> AutonomousArtifactInventory:
+    """Inventory produced scientific files without forcing the outer agent to scan."""
+    return inventory_autonomous_artifacts(workspace_root, limit=limit)
 
 
 def _format_autonomous_digest(result) -> str:
@@ -2500,16 +2507,35 @@ def _format_autonomous_digest(result) -> str:
             "with these files as inputs; do not repeat the completed steps."
         )
 
-    artifacts = _autonomous_artifacts(result.workspace_root)
-    if artifacts:
-        parts.append("## Artifacts produced\n" + "\n".join(f"- {a}" for a in artifacts))
-    if result.ok:
+    artifact_inventory = _autonomous_artifact_inventory(result.workspace_root)
+    if artifact_inventory.paths:
+        heading = "## Artifacts produced"
+        if artifact_inventory.truncated:
+            heading += (
+                f" (showing {len(artifact_inventory.paths)} of "
+                f"{artifact_inventory.total}; inline list truncated)"
+            )
         parts.append(
-            "## Next action\n"
-            "Replay validation and the artifact inventory are authoritative. Do not "
-            "list, glob, or re-read this run merely to verify it again; batch-update "
-            "any todo statuses that changed, then answer the user from this digest."
+            heading
+            + "\n"
+            + "\n".join(f"- {path}" for path in artifact_inventory.paths)
         )
+    if result.ok:
+        if artifact_inventory.truncated:
+            parts.append(
+                "## Next action\n"
+                "Replay validation and the artifact count are authoritative. The inline "
+                "artifact list is truncated; do not re-list merely to verify run success. "
+                "Inspect the raw output only if the user needs omitted artifact names. "
+                "Batch-update any todo statuses that changed, then answer from this digest."
+            )
+        else:
+            parts.append(
+                "## Next action\n"
+                "Replay validation and the artifact inventory are authoritative. Do not "
+                "list, glob, or re-read this run merely to verify it again; batch-update "
+                "any todo statuses that changed, then answer the user from this digest."
+            )
 
     attempt_lines = [
         f"- attempt {a.attempt_index}: {a.status.value}, "
@@ -2671,7 +2697,9 @@ async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
                 "or an absolute path."
             )
         script_inputs = [
-            path for path in input_paths if Path(path).suffix.lower() == ".py"
+            path
+            for path in [*input_paths, *upstream_paths]
+            if Path(path).suffix.lower() == ".py"
         ]
         if script_inputs:
             return (
