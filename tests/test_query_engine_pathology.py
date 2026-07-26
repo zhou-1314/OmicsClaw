@@ -32,6 +32,7 @@ from tests.test_query_engine import (  # type: ignore[import-not-found]
     _FakeMessage,
     _FakeResponse,
     _FakeToolCall,
+    _FakeUsage,
 )
 
 
@@ -76,6 +77,21 @@ def _named_tool_call_response(name: str):
     )
 
 
+def _task_update_response():
+    return _FakeResponse(
+        _FakeMessage(
+            content="",
+            tool_calls=[
+                _FakeToolCall(
+                    "call-task_update",
+                    "task_update",
+                    '{"updates":[{"task_id":"step-1","status":"completed"}]}',
+                )
+            ],
+        )
+    )
+
+
 def _build_execution_tool_runtime():
     """A runtime exposing ``omicsclaw`` — an EXECUTION_TOOLS member — so a
     recovery tool call clears the phantom-completion predicate."""
@@ -104,12 +120,15 @@ def _build_autonomous_landing_runtime(
         "## Computed results\nARI = 0.994\n\n"
         "## Artifacts produced\n- figures/pca.png\n- marker_table.csv"
     ),
+    task_update_output: str | BaseException = "ok",
 ):
     executed = executed if executed is not None else []
 
     def recording_executor(name: str, output: str):
         async def executor(args):
             executed.append(name)
+            if isinstance(output, BaseException):
+                raise output
             return output
 
         return executor
@@ -152,7 +171,7 @@ def _build_autonomous_landing_runtime(
             ),
             "list_directory": recording_executor("list_directory", "ok"),
             "file_read": recording_executor("file_read", "ok"),
-            "task_update": recording_executor("task_update", "ok"),
+            "task_update": recording_executor("task_update", task_update_output),
         }
     )
 
@@ -166,7 +185,16 @@ def _omicsclaw_call_response():
     )
 
 
-def _run(llm, runtime, config, signals, *, chat_id, tmp_path):
+def _run(
+    llm,
+    runtime,
+    config,
+    signals,
+    *,
+    chat_id,
+    tmp_path,
+    token_budget=None,
+):
     transcript_store = TranscriptStore(sanitizer=sanitize_tool_history)
     result_store = ToolResultStore(storage_dir=tmp_path / "tool_results")
     result = asyncio.run(
@@ -177,6 +205,7 @@ def _run(llm, runtime, config, signals, *, chat_id, tmp_path):
                 session_id="s",
                 system_prompt="SYSTEM",
                 user_message_content="对这个数据执行预处理分析",
+                token_budget=token_budget,
             ),
             tool_runtime=runtime,
             transcript_store=transcript_store,
@@ -560,6 +589,50 @@ def test_successful_autonomous_run_exposes_only_task_update_for_landing(tmp_path
     assert [tool["function"]["name"] for tool in llm.calls[1]["tools"]] == [
         "task_update"
     ]
+    landing_parameters = llm.calls[1]["tools"][0]["function"]["parameters"]
+    assert landing_parameters["required"] == ["updates"]
+    assert set(landing_parameters["properties"]) == {"updates"}
+    assert landing_parameters["properties"]["updates"]["minItems"] == 1
+
+
+def test_autonomous_landing_token_continuation_keeps_tools_closed(tmp_path):
+    executed: list[str] = []
+    runtime = _build_autonomous_landing_runtime(executed)
+    llm = _FakeLLM(
+        [
+            _named_tool_call_response("autonomous_analysis_execute"),
+            _FakeResponse(
+                _FakeMessage(content="Analysis summary, part one.", tool_calls=None),
+                usage=_FakeUsage(
+                    prompt_tokens=20,
+                    completion_tokens=200,
+                    total_tokens=220,
+                ),
+            ),
+            _FakeResponse(
+                _FakeMessage(content="Analysis summary, part two.", tool_calls=None),
+                usage=_FakeUsage(
+                    prompt_tokens=25,
+                    completion_tokens=850,
+                    total_tokens=875,
+                ),
+            ),
+        ]
+    )
+
+    result, _ = _run(
+        llm,
+        runtime,
+        QueryEngineConfig(model="fake", llm_error_types=(_FakeAPIError,)),
+        [],
+        chat_id="chat-autonomous-landing-continuation",
+        tmp_path=tmp_path,
+        token_budget="+1000",
+    )
+
+    assert result == "Analysis summary, part one.\n\nAnalysis summary, part two."
+    assert executed == ["autonomous_analysis_execute"]
+    assert llm.calls[2]["tools"] == []
 
 
 def test_task_update_after_autonomous_success_forces_response_only_turn(tmp_path):
@@ -568,7 +641,7 @@ def test_task_update_after_autonomous_success_forces_response_only_turn(tmp_path
     llm = _FakeLLM(
         [
             _named_tool_call_response("autonomous_analysis_execute"),
-            _named_tool_call_response("task_update"),
+            _task_update_response(),
             _final_response("Analysis complete; todo statuses are up to date."),
         ]
     )
@@ -585,6 +658,269 @@ def test_task_update_after_autonomous_success_forces_response_only_turn(tmp_path
     assert result == "Analysis complete; todo statuses are up to date."
     assert executed == ["autonomous_analysis_execute", "task_update"]
     assert llm.calls[2]["tools"] == []
+
+
+def test_failed_landing_task_update_requires_truthful_final_report(tmp_path):
+    executed: list[str] = []
+    runtime = _build_autonomous_landing_runtime(
+        executed,
+        task_update_output=RuntimeError("todo store unavailable"),
+    )
+    llm = _FakeLLM(
+        [
+            _named_tool_call_response("autonomous_analysis_execute"),
+            _task_update_response(),
+            _final_response(
+                "Analysis complete; the todo update failed because the store was unavailable."
+            ),
+        ]
+    )
+
+    result, _ = _run(
+        llm,
+        runtime,
+        QueryEngineConfig(model="fake", llm_error_types=(_FakeAPIError,)),
+        [],
+        chat_id="chat-autonomous-failed-task-update",
+        tmp_path=tmp_path,
+    )
+
+    assert "todo update failed" in result
+    assert executed == ["autonomous_analysis_execute", "task_update"]
+    response_only_contents = [
+        message.get("content", "")
+        for message in llm.calls[2]["messages"]
+        if isinstance(message, dict)
+    ]
+    assert any(
+        "update attempt" in content.lower()
+        and "succeeded or failed" in content.lower()
+        for content in response_only_contents
+    )
+    assert not any(
+        "reconciliation after the successful autonomous analysis is finished"
+        in content.lower()
+        for content in response_only_contents
+    )
+
+
+def test_autonomous_landing_rejects_multiple_task_update_calls(tmp_path):
+    executed: list[str] = []
+    runtime = _build_autonomous_landing_runtime(executed)
+    batch_args = '{"updates":[{"task_id":"step-1","status":"completed"}]}'
+    llm = _FakeLLM(
+        [
+            _named_tool_call_response("autonomous_analysis_execute"),
+            _FakeResponse(
+                _FakeMessage(
+                    content="",
+                    tool_calls=[
+                        _FakeToolCall("call-task-update-1", "task_update", batch_args),
+                        _FakeToolCall("call-task-update-2", "task_update", batch_args),
+                    ],
+                )
+            ),
+            _final_response(
+                "Analysis complete; duplicate todo updates were not applied."
+            ),
+        ]
+    )
+
+    result, _ = _run(
+        llm,
+        runtime,
+        QueryEngineConfig(model="fake", llm_error_types=(_FakeAPIError,)),
+        [],
+        chat_id="chat-autonomous-duplicate-task-update",
+        tmp_path=tmp_path,
+    )
+
+    assert result == "Analysis complete; duplicate todo updates were not applied."
+    assert executed == ["autonomous_analysis_execute"]
+    assert llm.calls[2]["tools"] == []
+
+
+def test_autonomous_landing_rejects_single_task_update_form(tmp_path):
+    executed: list[str] = []
+    runtime = _build_autonomous_landing_runtime(executed)
+    llm = _FakeLLM(
+        [
+            _named_tool_call_response("autonomous_analysis_execute"),
+            _FakeResponse(
+                _FakeMessage(
+                    content="",
+                    tool_calls=[
+                        _FakeToolCall(
+                            "call-task-update",
+                            "task_update",
+                            '{"task_id":"step-1","status":"completed"}',
+                        )
+                    ],
+                )
+            ),
+            _final_response(
+                "Analysis complete; the non-batch todo update was not applied."
+            ),
+        ]
+    )
+
+    result, _ = _run(
+        llm,
+        runtime,
+        QueryEngineConfig(model="fake", llm_error_types=(_FakeAPIError,)),
+        [],
+        chat_id="chat-autonomous-single-task-update",
+        tmp_path=tmp_path,
+    )
+
+    assert result == "Analysis complete; the non-batch todo update was not applied."
+    assert executed == ["autonomous_analysis_execute"]
+    response_only_contents = [
+        message.get("content", "")
+        for message in llm.calls[2]["messages"]
+        if isinstance(message, dict)
+    ]
+    assert any(
+        "exactly one task_update call with a non-empty updates array"
+        in content.lower()
+        and "was not executed" in content.lower()
+        for content in response_only_contents
+    )
+
+
+def test_autonomous_landing_rejects_empty_task_update_batch(tmp_path):
+    executed: list[str] = []
+    runtime = _build_autonomous_landing_runtime(executed)
+    llm = _FakeLLM(
+        [
+            _named_tool_call_response("autonomous_analysis_execute"),
+            _FakeResponse(
+                _FakeMessage(
+                    content="",
+                    tool_calls=[
+                        _FakeToolCall(
+                            "call-task-update",
+                            "task_update",
+                            '{"updates":[]}',
+                        )
+                    ],
+                )
+            ),
+            _final_response(
+                "Analysis complete; the empty todo update was not applied."
+            ),
+        ]
+    )
+
+    result, _ = _run(
+        llm,
+        runtime,
+        QueryEngineConfig(model="fake", llm_error_types=(_FakeAPIError,)),
+        [],
+        chat_id="chat-autonomous-empty-task-update",
+        tmp_path=tmp_path,
+    )
+
+    assert result == "Analysis complete; the empty todo update was not applied."
+    assert executed == ["autonomous_analysis_execute"]
+
+
+def test_invalid_autonomous_landing_discards_misleading_model_text(tmp_path):
+    executed: list[str] = []
+    runtime = _build_autonomous_landing_runtime(executed)
+    llm = _FakeLLM(
+        [
+            _named_tool_call_response("autonomous_analysis_execute"),
+            _FakeResponse(
+                _FakeMessage(
+                    content="Todo statuses are updated.",
+                    tool_calls=[
+                        _FakeToolCall(
+                            "call-task-update",
+                            "task_update",
+                            '{"updates":[]}',
+                        )
+                    ],
+                )
+            ),
+            _final_response(
+                "Analysis complete; the invalid todo update was not applied."
+            ),
+        ]
+    )
+
+    result, transcript_store = _run(
+        llm,
+        runtime,
+        QueryEngineConfig(model="fake", llm_error_types=(_FakeAPIError,)),
+        [],
+        chat_id="chat-autonomous-invalid-landing-text",
+        tmp_path=tmp_path,
+    )
+
+    assert result == "Analysis complete; the invalid todo update was not applied."
+    assert executed == ["autonomous_analysis_execute"]
+    assert not any(
+        message.get("content") == "Todo statuses are updated."
+        for message in transcript_store.get_history(
+            "chat-autonomous-invalid-landing-text"
+        )
+    )
+
+
+def test_autonomous_response_only_text_terminates_without_token_continuation(tmp_path):
+    executed: list[str] = []
+    runtime = _build_autonomous_landing_runtime(executed)
+    llm = _FakeLLM(
+        [
+            _named_tool_call_response("autonomous_analysis_execute"),
+            _task_update_response(),
+            _FakeResponse(
+                _FakeMessage(
+                    content="Analysis complete; todo statuses are up to date.",
+                    tool_calls=None,
+                ),
+                usage=_FakeUsage(
+                    prompt_tokens=20,
+                    completion_tokens=100,
+                    total_tokens=120,
+                ),
+            ),
+            _FakeResponse(
+                _FakeMessage(
+                    content="This response-only turn must never be continued.",
+                    tool_calls=None,
+                ),
+                usage=_FakeUsage(
+                    prompt_tokens=25,
+                    completion_tokens=900,
+                    total_tokens=925,
+                ),
+            ),
+        ]
+    )
+
+    result, transcript_store = _run(
+        llm,
+        runtime,
+        QueryEngineConfig(model="fake", llm_error_types=(_FakeAPIError,)),
+        [],
+        chat_id="chat-autonomous-response-only-terminal",
+        tmp_path=tmp_path,
+        token_budget="+1000",
+    )
+
+    assert result == "Analysis complete; todo statuses are up to date."
+    assert len(llm.calls) == 3
+    terminal = [
+        message
+        for message in transcript_store.get_history(
+            "chat-autonomous-response-only-terminal"
+        )
+        if message.get("role") == "assistant"
+        and message.get("content") == result
+    ]
+    assert len(terminal) == 1
 
 
 def test_successful_autonomous_landing_never_executes_unexposed_read_tool(tmp_path):
@@ -618,7 +954,7 @@ def test_autonomous_response_only_violation_reports_success_without_execution(tm
     llm = _FakeLLM(
         [
             _named_tool_call_response("autonomous_analysis_execute"),
-            _named_tool_call_response("task_update"),
+            _task_update_response(),
             _named_tool_call_response("file_read"),
         ]
     )
@@ -636,6 +972,41 @@ def test_autonomous_response_only_violation_reports_success_without_execution(tm
     assert "exhausted" not in result.lower()
     assert executed == ["autonomous_analysis_execute", "task_update"]
     assert llm.calls[2]["tools"] == []
+
+
+def test_autonomous_response_only_violation_ignores_misleading_model_text(tmp_path):
+    executed: list[str] = []
+    runtime = _build_autonomous_landing_runtime(executed)
+    llm = _FakeLLM(
+        [
+            _named_tool_call_response("autonomous_analysis_execute"),
+            _task_update_response(),
+            _FakeResponse(
+                _FakeMessage(
+                    content="I will inspect the file now.",
+                    tool_calls=[_FakeToolCall("call-file_read", "file_read", "{}")],
+                )
+            ),
+        ]
+    )
+
+    result, transcript_store = _run(
+        llm,
+        runtime,
+        QueryEngineConfig(model="fake", llm_error_types=(_FakeAPIError,)),
+        [],
+        chat_id="chat-autonomous-response-only-misleading-text",
+        tmp_path=tmp_path,
+    )
+
+    assert "I will inspect" not in result
+    assert "requested another tool" in result
+    assert executed == ["autonomous_analysis_execute", "task_update"]
+    terminal = transcript_store.get_history(
+        "chat-autonomous-response-only-misleading-text"
+    )[-1]
+    assert terminal["role"] == "assistant"
+    assert terminal["content"] == result
 
 
 def test_failed_autonomous_run_keeps_recovery_tools_available(tmp_path):

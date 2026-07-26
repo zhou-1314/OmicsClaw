@@ -344,14 +344,17 @@ _AUTONOMOUS_LANDING_MESSAGE = (
     "answer the user now from the digest."
 )
 _AUTONOMOUS_RESPONSE_ONLY_MESSAGE = (
-    "Todo status reconciliation after the successful autonomous analysis is "
-    "finished. Do not call or request any more tools. Answer the user now from "
-    "the replay-validated digest and artifact inventory already in the transcript."
+    "The post-analysis todo update attempt, if any, has finished. Do not call or "
+    "request any more tools. Answer the user now from the replay-validated digest "
+    "and artifact inventory already in the transcript. Report whether task_update "
+    "succeeded or failed strictly from its tool result; if no update ran, do not "
+    "claim that todo statuses changed."
 )
-_AUTONOMOUS_UNEXPOSED_TOOL_MESSAGE = (
-    "The requested post-analysis tool was not exposed in this landing phase and "
-    "was not executed. Do not retry it. Answer the user from the successful "
-    "autonomous digest and artifact inventory already in the transcript."
+_AUTONOMOUS_INVALID_LANDING_MESSAGE = (
+    "The requested post-analysis update was not executed because it did not "
+    "satisfy the landing contract: exactly one task_update call with a non-empty "
+    "updates array. Do not retry it. Answer the user from the successful autonomous "
+    "digest and artifact inventory already in the transcript."
 )
 _AUTONOMOUS_SUCCESS_PREFIX = "Autonomous analysis completed (run "
 
@@ -374,6 +377,50 @@ def _is_successful_autonomous_result(result: ToolExecutionResult) -> bool:
         and isinstance(result.output, str)
         and result.output.lstrip().startswith(_AUTONOMOUS_SUCCESS_PREFIX)
     )
+
+
+def _uses_batched_task_updates(tool_call: MaterializedToolCall) -> bool:
+    try:
+        arguments = json.loads(tool_call.arguments)
+    except (TypeError, ValueError):
+        return False
+    updates = arguments.get("updates") if isinstance(arguments, dict) else None
+    return isinstance(updates, list) and bool(updates)
+
+
+def _autonomous_landing_tools(
+    tools: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    landing_tools: list[dict[str, Any]] = []
+    for tool in tools:
+        function = tool.get("function", {})
+        if function.get("name") not in _AUTONOMOUS_LANDING_TOOL_NAMES:
+            continue
+        landing_tool = copy.deepcopy(tool)
+        landing_function = landing_tool.setdefault("function", {})
+        source_parameters = landing_function.get("parameters", {})
+        source_properties = (
+            source_parameters.get("properties", {})
+            if isinstance(source_parameters, dict)
+            else {}
+        )
+        source_updates = source_properties.get("updates", {})
+        updates_schema = (
+            copy.deepcopy(source_updates)
+            if isinstance(source_updates, dict)
+            else {}
+        )
+        updates_schema["type"] = "array"
+        updates_schema.setdefault("items", {"type": "object"})
+        updates_schema["minItems"] = 1
+        landing_function["parameters"] = {
+            "type": "object",
+            "properties": {"updates": updates_schema},
+            "required": ["updates"],
+            "additionalProperties": False,
+        }
+        landing_tools.append(landing_tool)
+    return landing_tools
 
 
 def _normalize_permission_resolution(
@@ -1571,12 +1618,7 @@ async def run_query_engine(
         if response_only:
             request_tool_payload = []
         elif autonomous_landing_turn:
-            request_tool_payload = [
-                tool
-                for tool in _diag_tool_payload
-                if tool.get("function", {}).get("name")
-                in _AUTONOMOUS_LANDING_TOOL_NAMES
-            ]
+            request_tool_payload = _autonomous_landing_tools(_diag_tool_payload)
         else:
             request_tool_payload = list(_diag_tool_payload)
         durable_history = transcript_store.prepare_history(context.chat_id)
@@ -1686,7 +1728,7 @@ async def run_query_engine(
                     "conversation."
                 )
             )
-            final_response = (last_message.content or "").strip() or fallback_response
+            final_response = fallback_response
             _defer_or_append_terminal_message(
                 transcript_store,
                 context.chat_id,
@@ -1702,16 +1744,14 @@ async def run_query_engine(
             exposed_names = {
                 tool.get("function", {}).get("name") for tool in request_tool_payload
             }
-            if any(tc.name not in exposed_names for tc in last_message.tool_calls):
-                if last_message.content:
-                    transcript_store.append_assistant_message(
-                        context.chat_id,
-                        content=last_message.content,
-                        reasoning_content=last_message.reasoning_content,
-                    )
+            if (
+                len(last_message.tool_calls) != 1
+                or any(tc.name not in exposed_names for tc in last_message.tool_calls)
+                or not _uses_batched_task_updates(last_message.tool_calls[0])
+            ):
                 transcript_store.append_user_message(
                     context.chat_id,
-                    _AUTONOMOUS_UNEXPOSED_TOOL_MESSAGE,
+                    _AUTONOMOUS_INVALID_LANDING_MESSAGE,
                 )
                 autonomous_response_only = True
                 continue
@@ -1731,6 +1771,17 @@ async def run_query_engine(
             ]
         if not last_message.tool_calls:
             current_response = last_message.content or ""
+            if response_only:
+                _defer_or_append_terminal_message(
+                    transcript_store,
+                    context.chat_id,
+                    content=current_response,
+                    reasoning_content=last_message.reasoning_content,
+                )
+                return _merge_response_segments(
+                    accumulated_response_segments,
+                    current_response,
+                )
             # ADR 0027 — phantom completion: the model ended the turn with a
             # message that *claims* analysis work but called no tool, and no
             # execution tool has run this loop. Nudge it once to actually call
@@ -1760,6 +1811,8 @@ async def run_query_engine(
                 continue
             budget_decision = check_token_budget(budget_tracker)
             if budget_decision.action == "continue":
+                if autonomous_landing_turn:
+                    autonomous_response_only = True
                 if current_response.strip():
                     accumulated_response_segments.append(current_response)
                 transcript_store.append_assistant_message(
