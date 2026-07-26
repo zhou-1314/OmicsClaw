@@ -46,7 +46,19 @@ jobs:
       - name: Install core dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest numpy pandas scikit-learn matplotlib PyYAML pydantic
+          # pandas is capped below 3.0 to match spatial-test. pandas 3 makes
+          # StringDtype the default for string columns, so the obs/var index
+          # anndata generates becomes a `pd.arrays.StringArray` — which
+          # anndata 0.11.4 refuses to write unless
+          # `settings.allow_write_nullable_strings` is opted into. That broke
+          # every `write_h5ad` in tests/test_skill_runner_contract.py.
+          #
+          # pytest-asyncio, requests and openai are import-surface deps of the
+          # test steps below, not of the generators above. Without them the
+          # async tests report "async def functions are not natively
+          # supported" and the routing tests fail to import at all.
+          pip install pytest pytest-asyncio numpy "pandas>=2.0,<3.0" \
+            scikit-learn matplotlib PyYAML pydantic requests openai
           pip install "anndata==0.11.4" h5py
 
       - name: Test OmicsClaw CLI
@@ -174,7 +186,8 @@ jobs:
             requests \
             openai \
             python-dotenv \
-            httpx
+            httpx \
+            python-multipart
 
       - name: Run memory tests
         run: |
@@ -213,7 +226,9 @@ jobs:
             python-dotenv \
             python-telegram-bot \
             lark-oapi \
-            edge-tts
+            edge-tts \
+            sqlalchemy \
+            aiosqlite
 
       - name: Run bot core tests
         run: |
