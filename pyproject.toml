@@ -513,13 +513,59 @@ ignore_missing_imports = true
 line-length = 88
 target-version = "py311"
 
+# `namespaces` defaults to true here, so `skills` and `skills.<domain>` are
+# discovered as namespace packages even though neither has an `__init__.py`.
+# The individual skill directories (`skills/spatial/spatial-preprocess/`, 93 of
+# them) can never be packages — a hyphen is not a valid Python identifier — so
+# their contents ship as package-data globs below, not via this list.
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["omicsclaw", "omicsclaw.*", "skills.*._lib", "skills.*._lib.*"]
-exclude = ["tests", "tests.*", "output", "sessions"]
+include = ["omicsclaw", "omicsclaw.*", "skills", "skills.*"]
+exclude = [
+    "tests",
+    "tests.*",
+    "output",
+    "sessions",
+    # Per-skill test suites are developer surface, not runtime surface.
+    "skills.*.tests",
+    "skills.*.*.tests",
+    "skills.*.*.*.tests",
+]
 
 [tool.setuptools.package-data]
 omicsclaw = ["py.typed"]
+# Ship the skill definitions themselves. Without these, an installed OmicsClaw
+# has a working CLI but an empty skill registry — `oc list` raises
+# "skills inventory is empty" — because the definitions are data files under
+# non-package directories. Roughly 6 MB / 855 files.
+#
+# Deliberately NOT globbed: `**/*.h5ad` and other demo datasets. One file
+# (`skills/singlecell/scrna/sc-de/data/pbmc3k_processed.h5ad`) is 23.5 MB on its
+# own — four times the entire rest of the tree. Demo data is fetched on demand,
+# not shipped.
+skills = [
+    # The skill runner scripts live in hyphenated directories, so they are data
+    # from setuptools' point of view even though they are Python.
+    "**/*.py",
+    "**/*.md",
+    "**/*.yaml",
+    "**/*.yml",
+    "**/*.json",
+    "**/*.R",
+    "**/*.tmpl",
+    "**/*.tsv",
+    "**/*.txt",
+]
+
+# The `packages.find` exclude list above only drops test *packages*; the
+# recursive package-data globs would still sweep the same files back in as
+# data. Both filters are needed.
+[tool.setuptools.exclude-package-data]
+skills = [
+    "**/tests/*",
+    "**/tests/**/*",
+    "**/__pycache__/*",
+]
 
 # ADR 2026-05-11: Negative routing eval extracted at write-time and frozen
 # as a snapshot.  The model used to extract Skip-when cases is pinned here
