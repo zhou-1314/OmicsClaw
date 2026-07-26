@@ -43,10 +43,51 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # test_lift_falls_back_to_verbatim_when_the_gate_rejects_the_lifted_script
+      # exercises the scaffolder's `require_sandbox=True` path, which runs a
+      # promoted skill body through ADR 0032's bubblewrap envelope. With bwrap
+      # absent the gate deliberately returns "skipped" rather than falling back
+      # to an unsandboxed run, so the test sees 'skipped' where it expects
+      # 'earned'. It is a system package, not a pip one.
+      - name: Install bubblewrap for the sandboxed demo gate
+        # Best-effort by design: every command here tolerates failure, so this
+        # step can never be the thing that reddens the job. If bwrap ends up
+        # unusable the scaffolder gate returns "skipped" — which is exactly
+        # what it is built to do — and only the one test below notices.
+        continue-on-error: true
+        run: |
+          sudo apt-get update -qq || true
+          sudo apt-get install -y --no-install-recommends bubblewrap || true
+          # Ubuntu 24.04 ships kernel.apparmor_restrict_unprivileged_userns=1,
+          # which blocks the unprivileged user namespace bwrap needs. Hosted
+          # runners are ephemeral and single-tenant, so relaxing it here costs
+          # nothing and is the documented workaround.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          # Smoke-check with the flags kernel_envelope actually uses
+          # (--unshare-net plus the pid/uts/ipc/cgroup set), not --unshare-all.
+          if bwrap --ro-bind / / --dev /dev --unshare-net --unshare-pid \
+                   --unshare-uts --unshare-ipc --unshare-cgroup true 2>/dev/null; then
+            echo "bwrap envelope works — the sandboxed demo gate will run"
+          else
+            echo "::warning::bwrap unusable on this runner; the sandboxed demo gate will report 'skipped'"
+          fi
+
       - name: Install core dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest numpy pandas scikit-learn matplotlib PyYAML pydantic
+          # pandas is capped below 3.0 to match spatial-test. pandas 3 makes
+          # StringDtype the default for string columns, so the obs/var index
+          # anndata generates becomes a `pd.arrays.StringArray` — which
+          # anndata 0.11.4 refuses to write unless
+          # `settings.allow_write_nullable_strings` is opted into. That broke
+          # every `write_h5ad` in tests/test_skill_runner_contract.py.
+          #
+          # pytest-asyncio, requests and openai are import-surface deps of the
+          # test steps below, not of the generators above. Without them the
+          # async tests report "async def functions are not natively
+          # supported" and the routing tests fail to import at all.
+          pip install pytest pytest-asyncio numpy "pandas>=2.0,<3.0" \
+            scikit-learn matplotlib PyYAML pydantic requests openai
           pip install "anndata==0.11.4" h5py
 
       - name: Test OmicsClaw CLI
@@ -174,7 +215,8 @@ jobs:
             requests \
             openai \
             python-dotenv \
-            httpx
+            httpx \
+            python-multipart
 
       - name: Run memory tests
         run: |
@@ -213,7 +255,9 @@ jobs:
             python-dotenv \
             python-telegram-bot \
             lark-oapi \
-            edge-tts
+            edge-tts \
+            sqlalchemy \
+            aiosqlite
 
       - name: Run bot core tests
         run: |
