@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .answer_paths import unresolved_answer_paths
+from .artifacts import list_autonomous_artifacts
 from .budget import MiniAgentBudget, TerminationReason
 from .code_loop import ProviderChatClient
 from .contracts import (
@@ -158,7 +159,13 @@ def run_mini_agent_request(
 
     accepted = outcome.succeeded and replay_ok
     status = _status_for(accepted, outcome.termination)
-    error = "" if accepted else _failure_message(outcome, replay_ok, replay_error)
+    salvageable_artifacts = list_autonomous_artifacts(workspace.root)
+    error = "" if accepted else _failure_message(
+        outcome,
+        replay_ok,
+        replay_error,
+        salvageable_artifacts=salvageable_artifacts,
+    )
 
     skill_calls = _read_jsonl(workspace.root / SKILL_CALLS_LOG)
     metadata = {
@@ -183,9 +190,9 @@ def run_mini_agent_request(
         "unresolved_answer_paths": unresolved_answer_paths(
             outcome.answer, workspace_root=workspace.root
         ),
-        # Machine-readable "there is salvageable work here" flag, so a Surface can
-        # offer to continue rather than presenting a budget stop as a dead end.
-        "partial_progress": _partial_progress(outcome),
+        # Machine-readable files that can seed a new narrowed run. The live
+        # kernel is already closed, so transient state is never called resumable.
+        "partial_progress": _partial_progress(outcome, salvageable_artifacts),
     }
 
     return _finalize(
@@ -318,7 +325,13 @@ def _attempts_from_steps(outcome) -> list[AutonomousAttempt]:
     return attempts
 
 
-def _failure_message(outcome, replay_ok: bool, replay_error: str) -> str:
+def _failure_message(
+    outcome,
+    replay_ok: bool,
+    replay_error: str,
+    *,
+    salvageable_artifacts: list[str],
+) -> str:
     if outcome.termination == TerminationReason.MODEL_INCAPABLE:
         return (
             "the active model could not drive the mini-agent code contract (no valid "
@@ -326,20 +339,30 @@ def _failure_message(outcome, replay_ok: bool, replay_error: str) -> str:
             "stronger model or run the analysis through a built-in skill."
         )
     if outcome.termination != TerminationReason.RETURNED_ANSWER:
-        # A budget-exhausted run is usually not an empty failure: the steps that
-        # did run left real artifacts on disk. Reporting a bare "stopped without
-        # an answer" hid that work and gave the caller nothing to resume from.
+        # A budget-exhausted run may have written reusable files. Distinguish
+        # those durable outputs from transient state in the now-closed kernel.
         if outcome.accepted_cells and outcome.termination in _BUDGET_TERMINATIONS:
             done = "; ".join(
                 s.purpose.strip() for s in outcome.steps if s.accepted and s.purpose.strip()
             )
+            if not salvageable_artifacts:
+                return (
+                    f"mini-agent ran out of budget ({outcome.termination.value}) before "
+                    f"calling ReturnAnswer, after {len(outcome.accepted_cells)} "
+                    "successful step(s)"
+                    + (f": {done}. " if done else ". ")
+                    + "The closed run produced no user-facing artifacts, and its "
+                    "transient kernel state cannot be resumed. Re-run with a larger "
+                    "step budget (max_steps) or a narrower goal."
+                )
+            artifact_list = ", ".join(salvageable_artifacts)
             return (
                 f"mini-agent ran out of budget ({outcome.termination.value}) before calling "
                 f"ReturnAnswer, after {len(outcome.accepted_cells)} successful step(s)"
                 + (f": {done}. " if done else ". ")
-                + "The artifacts those steps produced are in the run workspace and are usable; "
-                "the run has no validated final answer. Re-run with a larger step budget "
-                "(max_steps) or a narrower goal to finish it."
+                + "The closed run has no live kernel to resume. Reuse these artifacts "
+                f"as inputs to a new, narrower run: {artifact_list}. The run has no "
+                "validated final answer."
             )
         return f"mini-agent stopped without an answer ({outcome.termination.value})."
     if not outcome.accepted_cells:
@@ -349,11 +372,11 @@ def _failure_message(outcome, replay_ok: bool, replay_error: str) -> str:
     return "mini-agent run did not complete successfully."
 
 
-def _partial_progress(outcome) -> dict:
+def _partial_progress(outcome, salvageable_artifacts: list[str]) -> dict:
     """Describe salvageable work from a run that stopped without an answer."""
     if outcome.succeeded or not outcome.accepted_cells:
         return {}
-    if outcome.termination not in _BUDGET_TERMINATIONS:
+    if outcome.termination not in _BUDGET_TERMINATIONS or not salvageable_artifacts:
         return {}
     return {
         "reason": outcome.termination.value,
@@ -361,7 +384,7 @@ def _partial_progress(outcome) -> dict:
         "completed_purposes": [
             s.purpose.strip() for s in outcome.steps if s.accepted and s.purpose.strip()
         ],
-        "resumable": True,
+        "salvageable_artifacts": list(salvageable_artifacts),
     }
 
 

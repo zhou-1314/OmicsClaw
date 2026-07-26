@@ -102,11 +102,22 @@ def test_digest_has_no_correction_when_answer_paths_all_resolve():
     assert "do not exist" not in digest.lower()
 
 
+def test_success_digest_treats_replay_and_artifact_inventory_as_authoritative(
+    tmp_path,
+):
+    (tmp_path / "output").mkdir()
+    (tmp_path / "output" / "pca.png").write_text("x")
+    result = _result(workspace_root=str(tmp_path))
+
+    digest = _format_autonomous_digest(result)
+
+    assert "output/pca.png" in digest
+    assert "Replay validation and the artifact inventory are authoritative" in digest
+    assert "Do not list, glob, or re-read" in digest
+    assert "batch-update" in digest
+
+
 def test_digest_tells_the_model_what_a_budget_stop_already_finished():
-    """A run that stops on a budget is not a blank failure — its completed steps
-    left artifacts on disk. Without that in the digest the outer agent restarts
-    the whole goal from scratch (the trace re-ran the analysis three times),
-    which is what drove the turn into MAX_TOOL_ITERATIONS."""
     digest = _format_autonomous_digest(
         _result(
             ok=False,
@@ -119,14 +130,17 @@ def test_digest_tells_the_model_what_a_budget_stop_already_finished():
                     "reason": "step_budget_exhausted",
                     "completed_steps": 9,
                     "completed_purposes": ["QC metrics", "normalize", "cluster"],
-                    "resumable": True,
+                    "salvageable_artifacts": ["partial.h5ad"],
                 },
             },
         )
     )
     assert "9" in digest
-    assert "cluster" in digest  # so the model resumes instead of redoing it
-    assert "resum" in digest.lower() or "continue" in digest.lower()
+    assert "cluster" in digest
+    assert "partial.h5ad" in digest
+    assert "incomplete" in digest.lower()
+    assert "no live kernel" in digest.lower()
+    assert "resume, do not restart" not in digest.lower()
 
 
 def test_digest_stays_under_inline_threshold_even_when_huge():
@@ -157,24 +171,24 @@ def test_digest_reports_failure_and_error():
     assert "kernel died" in digest
 
 
-def test_autonomous_artifacts_lists_figures_and_skips_bookkeeping(tmp_path):
+def test_autonomous_artifacts_lists_nested_outputs_and_skips_bookkeeping(tmp_path):
+    (tmp_path / "output").mkdir()
     (tmp_path / "figures").mkdir()
+    (tmp_path / "output" / "pca_clusters.png").write_text("x")
     (tmp_path / "figures" / "fig_01.png").write_text("x")
-    (tmp_path / "figures" / "fig_02.png").write_text("x")
-    (tmp_path / "qc_metrics.csv").write_text("x")
-    # Bookkeeping files the storm used to read — must be excluded from the list.
+    (tmp_path / "marker_genes.csv").write_text("x")
+    (tmp_path / "inputs").mkdir()
+    (tmp_path / "inputs" / "source.csv").write_text("x")
     (tmp_path / "completion_report.json").write_text("x")
-    (tmp_path / "manifest.json").write_text("x")
     (tmp_path / "analysis.py").write_text("x")
 
-    arts = _autonomous_artifacts(str(tmp_path))
+    artifacts = _autonomous_artifacts(str(tmp_path))
 
-    assert "figures/fig_01.png" in arts
-    assert "figures/fig_02.png" in arts
-    assert "qc_metrics.csv" in arts
-    assert "completion_report.json" not in arts
-    assert "manifest.json" not in arts
-    assert "analysis.py" not in arts
+    assert artifacts == [
+        "figures/fig_01.png",
+        "marker_genes.csv",
+        "output/pca_clusters.png",
+    ]
 
 
 def test_autonomous_artifacts_handles_missing_dir():

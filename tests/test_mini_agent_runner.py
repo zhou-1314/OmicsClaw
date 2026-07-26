@@ -134,14 +134,37 @@ def test_runner_fails_when_no_answer(tmp_path: Path):
         budget=MiniAgentBudget(max_steps=2, wall_clock_seconds=120),
     )
     assert result.ok is False
-    # A budget stop with successful steps behind it reports the salvageable work
-    # and how to finish, instead of a bare "stopped without an answer" that hid
-    # the artifacts already on disk (diagnosis 2026-07-25).
     assert "ran out of budget" in result.error
-    assert "max_steps" in result.error
+    assert "no user-facing artifacts" in result.error
+    assert result.metadata["partial_progress"] == {}
+
+
+def test_runner_reports_only_real_artifacts_as_partial_progress(tmp_path: Path):
+    if not IPC_AVAILABLE:
+        pytest.skip("ZMQ IPC sockets are unavailable in this test sandbox")
+    request = AutonomousRunRequest(goal="write one partial table", output_root=str(tmp_path))
+    result = run_mini_agent_request(
+        request,
+        llm_client=ScriptedLLM(
+            [
+                TURN(
+                    "write partial table",
+                    "from pathlib import Path\n"
+                    "Path('partial.csv').write_text('cluster,count\\n0,10\\n', "
+                    "encoding='utf-8')",
+                )
+            ]
+        ),
+        require_sandbox=False,
+        budget=MiniAgentBudget(max_steps=1, wall_clock_seconds=120),
+    )
+
+    assert result.ok is False
     progress = result.metadata["partial_progress"]
-    assert progress["resumable"] is True
-    assert progress["completed_steps"] == 2
+    assert progress["salvageable_artifacts"] == ["partial.csv"]
+    assert "resumable" not in progress
+    assert "no live kernel" in result.error
+    assert "partial.csv" in result.error
 
 
 def test_fail_closed_without_envelope(tmp_path: Path, monkeypatch):

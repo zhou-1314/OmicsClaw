@@ -47,6 +47,8 @@ from pathlib import Path
 
 import requests
 
+from omicsclaw.autonomous.artifacts import list_autonomous_artifacts
+
 # Late-binding handle for runtime-mutated omicsclaw.runtime.agent.state globals (memory_store,
 # llm, OMICSCLAW_MODEL, LLM_PROVIDER_NAME, session_manager). Set by
 # omicsclaw.runtime.agent.session.init() after the modules load.
@@ -2418,12 +2420,6 @@ def _resolve_trusted_data_paths(
 # and replaces them with a preview — so the digest is byte-capped below that to
 # stay fully in-context (otherwise the outer agent would re-fetch it).
 _AUTONOMOUS_DIGEST_MAX_BYTES = 4800
-_AUTONOMOUS_ARTIFACT_SUFFIXES = frozenset(
-    {".png", ".pdf", ".svg", ".csv", ".tsv", ".html", ".h5ad", ".xlsx"}
-)
-_AUTONOMOUS_BOOKKEEPING_FILES = frozenset(
-    {"completion_report.json", "manifest.json", "analysis.py"}
-)
 
 
 def _clip_chars(text: str, max_chars: int) -> str:
@@ -2446,42 +2442,8 @@ def _clip_to_bytes(text: str, max_bytes: int) -> str:
 
 
 def _autonomous_artifacts(workspace_root: str, *, limit: int = 40) -> list[str]:
-    """List the analysis outputs (figures + data files), skipping bookkeeping.
-
-    Replaces the glob/list_directory calls the outer agent used to issue to
-    discover what a run produced.
-    """
-    from pathlib import Path
-
-    out: list[str] = []
-    try:
-        root = Path(workspace_root)
-        claim_identities = collect_output_claim_identities(root)
-        figures = root / "figures"
-        if figures.is_dir():
-            out.extend(
-                f"figures/{p.name}"
-                for p in sorted(figures.iterdir())
-                if is_scientific_output_file(
-                    p,
-                    output_root=root,
-                    claim_identities=claim_identities,
-                )
-            )
-        for p in sorted(root.iterdir()):
-            if (
-                p.suffix.lower() in _AUTONOMOUS_ARTIFACT_SUFFIXES
-                and p.name not in _AUTONOMOUS_BOOKKEEPING_FILES
-                and is_scientific_output_file(
-                    p,
-                    output_root=root,
-                    claim_identities=claim_identities,
-                )
-            ):
-                out.append(p.name)
-    except OSError:
-        pass
-    return out[:limit]
+    """List produced scientific files without forcing the outer agent to scan."""
+    return list_autonomous_artifacts(workspace_root, limit=limit)
 
 
 def _format_autonomous_digest(result) -> str:
@@ -2521,22 +2483,33 @@ def _format_autonomous_digest(result) -> str:
         )
     if notes and notes != answer:
         parts.append("## Interpretive notes\n" + _clip_chars(notes, 600))
-    # A budget stop still banked work. Naming it stops the outer loop from
-    # restarting the whole goal — the trace behind this re-ran one analysis three
-    # times and hit MAX_TOOL_ITERATIONS (diagnose 2026-07-25).
     progress = meta.get("partial_progress") or {}
-    if isinstance(progress, dict) and progress.get("resumable"):
+    salvageable = (
+        [str(path) for path in (progress.get("salvageable_artifacts") or [])][:40]
+        if isinstance(progress, dict)
+        else []
+    )
+    if salvageable:
         done = [str(p) for p in (progress.get("completed_purposes") or [])][:10]
         parts.append(
-            f"## Already completed ({progress.get('completed_steps', 0)} step(s)) — resume, do not restart\n"
+            f"## Incomplete run with reusable files ({progress.get('completed_steps', 0)} step(s))\n"
             + ("\n".join(f"- {p}" for p in done) if done else "- (see the step trace)")
-            + "\nThese steps' artifacts are already in the run workspace. Continue from "
-            "here — re-running the whole goal repeats work that succeeded."
+            + "\nReusable artifacts:\n"
+            + "\n".join(f"- {path}" for path in salvageable)
+            + "\nThis run is closed and has no live kernel. Start a new, narrower run "
+            "with these files as inputs; do not repeat the completed steps."
         )
 
     artifacts = _autonomous_artifacts(result.workspace_root)
     if artifacts:
         parts.append("## Artifacts produced\n" + "\n".join(f"- {a}" for a in artifacts))
+    if result.ok:
+        parts.append(
+            "## Next action\n"
+            "Replay validation and the artifact inventory are authoritative. Do not "
+            "list, glob, or re-read this run merely to verify it again; batch-update "
+            "any todo statuses that changed, then answer the user from this digest."
+        )
 
     attempt_lines = [
         f"- attempt {a.attempt_index}: {a.status.value}, "
