@@ -15,6 +15,7 @@ import ast
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
+import threading
 import time
 from typing import Protocol
 
@@ -135,7 +136,13 @@ def run_mini_agent(
             steps=[MiniAgentStep(index=0, purpose="kernel init", code="<init>", error=init.error_summary or init.stderr)],
         )
 
-    system_prompt = build_system_prompt(goal, data_schema, analysis_plan, budget=budget)
+    system_prompt = build_system_prompt(
+        goal,
+        data_schema,
+        analysis_plan,
+        input_paths=input_paths or [],
+        budget=budget,
+    )
     ledger = BudgetLedger(budget=budget)
     transcript: list[str] = []
     steps: list[MiniAgentStep] = []
@@ -364,6 +371,7 @@ def build_system_prompt(
     data_schema: str,
     analysis_plan: str,
     *,
+    input_paths: list[str] | None = None,
     budget: MiniAgentBudget | None = None,
 ) -> str:
     """Instruction prefix shared across steps.
@@ -399,7 +407,28 @@ def build_system_prompt(
         "Rules: do NOT import subprocess/os.system/socket/requests or install packages.",
         "Write only inside the run workspace. Use `oc` for all skill execution.",
         "Inspect before you commit to parameters. Finish by calling ReturnAnswer(...).",
+        "",
+        "Execution strategy:",
+        "- For a small self-contained workflow, prefer one self-contained cell that "
+        "finishes the work and calls ReturnAnswer(...) in that same cell.",
+        "- Split work only when an observed result is needed to choose the next step.",
+        "- After a failed cell, preserve valid prior state and make the smallest "
+        "correction supported by the concrete error; do not restart with an unrelated "
+        "approach.",
     ]
+    declared_inputs = [str(path) for path in (input_paths or [])]
+    if declared_inputs:
+        parts += [
+            "",
+            "DECLARED READ-ONLY INPUT PATHS (use these exact absolute paths):",
+            *(f"- {path}" for path in declared_inputs),
+        ]
+        if any(Path(path).suffix.lower() == ".py" for path in declared_inputs):
+            parts += [
+                "Python source inputs are reference-only. Never execute them with "
+                "exec, runpy, importlib, or module-import side effects; reproduce "
+                "only the needed logic in linted cells."
+            ]
     if budget is not None:
         parts += [
             "",

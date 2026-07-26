@@ -24,6 +24,7 @@ from omicsclaw.autonomous.kernel_envelope import (
     envelope_available,
     scrub_env,
 )
+from omicsclaw.autonomous.mini_agent import build_system_prompt
 from omicsclaw.autonomous.protocol import (
     TurnFormatError,
     code_calls_return_answer,
@@ -32,6 +33,32 @@ from omicsclaw.autonomous.protocol import (
     strip_thinking,
 )
 from omicsclaw.autonomous.validation import validate_generated_code
+
+
+# --------------------------------------------------------------------------- #
+# tactical prompt
+# --------------------------------------------------------------------------- #
+
+
+def test_system_prompt_prefers_compact_work_and_names_exact_inputs():
+    prompt = build_system_prompt(
+        "run a small synthetic analysis",
+        "shape=(500, 2000)",
+        "normalize -> PCA -> KMeans",
+        input_paths=[
+            "/workspace/data/counts.h5ad",
+            "/workspace/notes/reference.py",
+        ],
+        budget=MiniAgentBudget(max_steps=12),
+    )
+
+    assert "one self-contained cell" in prompt
+    assert "ReturnAnswer" in prompt
+    assert "only when an observed result" in prompt
+    assert "/workspace/data/counts.h5ad" in prompt
+    assert "/workspace/notes/reference.py" in prompt
+    assert "reference-only" in prompt
+    assert "smallest correction" in prompt
 
 
 # --------------------------------------------------------------------------- #
