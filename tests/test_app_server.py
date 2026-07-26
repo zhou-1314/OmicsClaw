@@ -51,11 +51,20 @@ def freeze_remote_authority():
 
 
 def _load_omicsclaw_script():
-    spec = importlib.util.spec_from_file_location("omicsclaw_main_app_server_test", ROOT / "omicsclaw.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    """Return the CLI module that owns ``_module_available`` and friends.
+
+    The CLI body used to be the repo-root ``omicsclaw.py`` and had to be loaded
+    by file path, because a top-level module named ``omicsclaw`` can never be
+    imported — it collides with the package. The body now lives inside the
+    package at ``omicsclaw.surfaces.cli._main`` so the console scripts work from
+    an installed distribution, and the repo-root file is a thin shim that
+    forwards to it. A plain import is therefore both correct and sufficient;
+    ``monkeypatch.setattr`` on the returned module behaves exactly as before and
+    is still reverted at teardown.
+    """
+    import omicsclaw.surfaces.cli._main as cli_main
+
+    return cli_main
 
 
 async def _read_streaming_response(response) -> str:

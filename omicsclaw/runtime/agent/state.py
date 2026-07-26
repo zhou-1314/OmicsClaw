@@ -30,6 +30,7 @@ from pathlib import Path
 from openai import APIError, AsyncOpenAI, OpenAIError  # APIError + OpenAIError kept for omicsclaw.runtime.agent.session.init() monkeypatch + omicsclaw.runtime.agent.session error-handling
 
 from omicsclaw.common.runtime_env import load_project_dotenv
+from omicsclaw.common.workspace import resolve_omicsclaw_dir
 from omicsclaw.providers.timeout import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     DEFAULT_LLM_TIMEOUT_SECONDS,
@@ -54,52 +55,12 @@ _PROVIDER_DETECT_ORDER = PROVIDER_DETECT_ORDER
 # ---------------------------------------------------------------------------
 
 
-def _resolve_omicsclaw_dir(start: Path | None = None) -> Path:
-    """Find a writable OmicsClaw workspace directory.
-
-    A source checkout wants the repo root, but two install shapes have no
-    usable repo root and need a per-user writable fallback instead:
-
-    1. **Pip-installed** (e.g. ``pip install omicsclaw``): the package
-       lives under site-packages/, with no project tree above it — and it
-       is usually read-only inside a packaged app bundle.
-    2. **OmicsClaw-App bundled runtime**: a signed/notarized .app bundle
-       on macOS puts site-packages under
-       ``/Applications/.../Contents/Resources``, which is strictly
-       read-only. ``_AUDIT_LOG_DIR.mkdir(...)`` a few lines down would
-       raise ``PermissionError`` at import time.
-
-    Resolution priority:
-      1. ``OMICSCLAW_DIR`` env var (explicit override — honoured first
-         so operators can point at a shared or external workspace).
-      2. Source-tree layout — the nearest ancestor that holds the
-         ``omicsclaw.py`` CLI entrypoint *next to* the ``omicsclaw/``
-         package. The depth is searched, not assumed: this code lived at
-         ``bot/core.py`` (one level under the root, so ``parent.parent``
-         was correct) and moved to ``omicsclaw/runtime/agent/state.py``
-         (three levels under it) in the ADR 0001 carve-out. A hardcoded
-         ``parent.parent`` made every source-tree / editable install fall
-         silently through to step 3. ``omicsclaw.py`` can never be an
-         importable module (it would collide with the ``omicsclaw``
-         package), so it only exists in a real checkout — a marker that
-         never false-matches site-packages.
-      3. ``~/.omicsclaw`` — the per-user writable fallback used by
-         pip-installed / bundled-runtime deployments. Mirrors the
-         convention used by jupyter / matplotlib / mypy.
-
-    ``start`` overrides the file the upward search begins from; it exists
-    for tests and defaults to this module's own location.
-    """
-    env = os.getenv("OMICSCLAW_DIR", "").strip()
-    if env:
-        return Path(env).expanduser().resolve()
-
-    here = (start or Path(__file__)).resolve()
-    for candidate in here.parents:
-        if (candidate / "omicsclaw.py").is_file() and (candidate / "omicsclaw").is_dir():
-            return candidate
-
-    return (Path.home() / ".omicsclaw").resolve()
+# The resolver itself lives in ``omicsclaw.common.workspace`` — a stdlib-only
+# module — so the CLI entrypoint can resolve the workspace without importing
+# this module and paying for its ``openai`` / ``requests`` import chain. Kept
+# under the historical private name here because callers (and
+# ``tests/test_state_resolve_omicsclaw_dir.py``) import it from this module.
+_resolve_omicsclaw_dir = resolve_omicsclaw_dir
 
 
 OMICSCLAW_DIR = _resolve_omicsclaw_dir()
