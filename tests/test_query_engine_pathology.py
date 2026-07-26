@@ -365,11 +365,15 @@ def test_pathology_repeated_failure_fires(tmp_path):
 
 
 def test_pathology_correction_is_not_repeated_for_same_pattern(tmp_path):
-    """If the LLM ignores the correction and keeps pingponging, MAX
-    iterations still terminates the loop — and only one correction is
-    injected (no spam)."""
     runtime = _build_tool_runtime()
-    llm = _FakeLLM([_tool_call_response() for _ in range(8)])
+    llm = _FakeLLM(
+        [_tool_call_response() for _ in range(7)]
+        + [
+            _final_response(
+                "I stopped after the bounded attempts and summarized the evidence."
+            )
+        ]
+    )
     transcript_store = TranscriptStore(sanitizer=sanitize_tool_history)
     result_store = ToolResultStore(storage_dir=tmp_path / "tool_results")
     signals: list = []
@@ -397,17 +401,71 @@ def test_pathology_correction_is_not_repeated_for_same_pattern(tmp_path):
         )
     )
 
-    assert "max tool iterations" in result.lower()
-    # Only one corrective injection for the same (kind, tool_name)
+    assert result == "I stopped after the bounded attempts and summarized the evidence."
+    assert llm.calls[-1]["tools"] == []
+    final_contents = [
+        message.get("content", "")
+        for message in llm.calls[-1]["messages"]
+        if isinstance(message, dict)
+    ]
+    assert any("final response-only turn" in content for content in final_contents)
     assert len(signals) == 1
+    terminal = [
+        message
+        for message in transcript_store.get_history("chat-cap")
+        if message.get("role") == "assistant"
+        and "summarized the evidence" in message.get("content", "")
+    ]
+    assert len(terminal) == 1
 
-    history = transcript_store.get_history("chat-cap")
-    corrective_count = sum(
-        1
-        for m in history
-        if m["role"] == "user" and "Loop detector:" in m.get("content", "")
+
+def test_final_response_only_turn_never_executes_returned_tool_calls(tmp_path):
+    executions = 0
+
+    async def executor(args):
+        nonlocal executions
+        executions += 1
+        return "ok"
+
+    runtime = ToolRegistry(
+        [
+            ToolSpec(
+                name="alpha",
+                description="Alpha tool",
+                parameters={"type": "object", "properties": {}},
+                read_only=True,
+                concurrency_safe=True,
+            )
+        ]
+    ).build_runtime({"alpha": executor})
+    llm = _FakeLLM([_tool_call_response() for _ in range(8)])
+    transcript_store = TranscriptStore(sanitizer=sanitize_tool_history)
+    result_store = ToolResultStore(storage_dir=tmp_path / "tool_results")
+
+    result = asyncio.run(
+        run_query_engine(
+            llm=llm,
+            context=QueryEngineContext(
+                chat_id="chat-final-tool",
+                session_id="s",
+                system_prompt="SYSTEM",
+                user_message_content="hi",
+            ),
+            tool_runtime=runtime,
+            transcript_store=transcript_store,
+            tool_result_store=result_store,
+            config=QueryEngineConfig(
+                model="fake",
+                max_iterations=8,
+                llm_error_types=(_FakeAPIError,),
+            ),
+            callbacks=QueryEngineCallbacks(),
+        )
     )
-    assert corrective_count == 1
+
+    assert executions == 7
+    assert "exhausted its tool-iteration budget" in result
+    assert llm.calls[-1]["tools"] == []
 
 
 def test_pathology_no_signal_under_threshold(tmp_path):

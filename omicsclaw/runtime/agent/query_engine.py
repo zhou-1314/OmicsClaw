@@ -329,6 +329,13 @@ _EMPTY_COMPLETION_MESSAGE = (
     "custom endpoints include the API base path such as /v1 when required."
 )
 
+_FINAL_RESPONSE_ONLY_MESSAGE = (
+    "The tool-iteration budget is now on its final response-only turn. "
+    "Do not call or request any more tools. Summarize only results already "
+    "present in the transcript, state any incomplete work plainly, and give "
+    "the user the best actionable final answer supported by that evidence."
+)
+
 
 def _merge_response_segments(segments: list[str], current: str) -> str:
     merged = [
@@ -1268,6 +1275,7 @@ async def _call_llm_with_reactive_compact_retry(
     *,
     llm,
     context: QueryEngineContext,
+    request_tools: list[dict[str, Any]],
     tool_runtime: ToolRuntime,
     config: QueryEngineConfig,
     callbacks: QueryEngineCallbacks,
@@ -1292,6 +1300,7 @@ async def _call_llm_with_reactive_compact_retry(
     Raises the underlying LLM error if reactive compaction cannot recover; the
     caller is responsible for routing the exception through ``on_llm_error``.
     """
+    base_request_tools = list(request_tools)
     while True:
         kwargs = {}
         if callbacks.on_stream_content is not None:
@@ -1300,15 +1309,7 @@ async def _call_llm_with_reactive_compact_retry(
             kwargs.update(config.extra_api_params)
 
         try:
-            # Phase 1 (tool-list-compression): use per-request tool
-            # list when caller provided one (via
-            # ``QueryEngineContext.request_tools``). Falls back to
-            # the full registry payload for backward compatibility.
-            request_tools = (
-                list(context.request_tools)
-                if context.request_tools is not None
-                else list(tool_runtime.openai_tools)
-            )
+            request_tools = list(base_request_tools)
             request_payload_messages = [
                 {"role": "system", "content": request_system_prompt}
             ] + request_messages
@@ -1503,15 +1504,13 @@ async def run_query_engine(
     )
     compaction_workspace = pipeline_workspace or workspace or None
 
-    # ADR 0024 — the tool segment is frozen for the whole call (the per-turn
-    # frozen tool list), so hash it once; ``_observe_usage_delta`` captures each
-    # call's usage so cache diagnostics can be emitted after the call returns.
+    # ADR 0024 — this is the normal per-turn tool prefix. The reserved landing
+    # turn replaces it with an empty list and hashes that exact request shape.
     _diag_tool_payload = (
         list(context.request_tools)
         if context.request_tools is not None
         else list(tool_runtime.openai_tools)
     )
-    diag_tool_hash = compute_segment_hash(_diag_tool_payload)
     _last_response_usage: dict[str, Any] = {"usage": None}
 
     def _observe_usage_delta(response_usage, delta) -> None:
@@ -1524,6 +1523,13 @@ async def run_query_engine(
     state = LoopState()
     for iteration_index in range(config.max_iterations):
         state.iteration = iteration_index
+        response_only = iteration_index == config.max_iterations - 1
+        if response_only:
+            transcript_store.append_user_message(
+                context.chat_id,
+                _FINAL_RESPONSE_ONLY_MESSAGE,
+            )
+        request_tool_payload = [] if response_only else list(_diag_tool_payload)
         durable_history = transcript_store.prepare_history(context.chat_id)
         history = _render_messages(context.content_adapter, durable_history)
         pre_tokens = sum(estimate_message_tokens(m) for m in history)
@@ -1573,6 +1579,7 @@ async def run_query_engine(
             ) = await _call_llm_with_reactive_compact_retry(
                 llm=llm,
                 context=context,
+                request_tools=request_tool_payload,
                 tool_runtime=tool_runtime,
                 config=config,
                 callbacks=callbacks,
@@ -1613,10 +1620,27 @@ async def run_query_engine(
             callbacks=callbacks,
             chat_id=context.chat_id,
             response_usage=_last_response_usage["usage"],
-            tool_hash=diag_tool_hash,
+            tool_hash=compute_segment_hash(request_tool_payload),
             system_hash=compute_segment_hash(sent_system_prompt),
         )
         _last_response_usage["usage"] = None
+
+        if response_only and last_message.tool_calls:
+            final_response = (last_message.content or "").strip() or (
+                "The analysis exhausted its tool-iteration budget before the model "
+                "produced a final summary. Completed tool results remain in this "
+                "conversation."
+            )
+            _defer_or_append_terminal_message(
+                transcript_store,
+                context.chat_id,
+                content=final_response,
+                reasoning_content=last_message.reasoning_content,
+            )
+            return _merge_response_segments(
+                accumulated_response_segments,
+                final_response,
+            )
 
         assistant_tool_calls = None
         if last_message.tool_calls:
