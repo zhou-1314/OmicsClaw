@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -21,14 +20,17 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def _load_omicsclaw_script():
-    spec = importlib.util.spec_from_file_location(
-        "omicsclaw_main_root_canonical_run_test",
-        ROOT / "omicsclaw.py",
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    """Return the CLI body module.
+
+    Was a by-path load of the repo-root ``omicsclaw.py``. The body now ships
+    inside the package as ``omicsclaw.surfaces.cli._main`` so the console
+    scripts work from an installed distribution, and that root file is a thin
+    shim — see the history note in ``omicsclaw/surfaces/cli/launcher.py``. A
+    plain import is therefore correct and sufficient.
+    """
+    import omicsclaw.surfaces.cli._main as cli_main
+
+    return cli_main
 
 
 def _result(skill: str, *, success: bool, code: str = "") -> dict[str, object]:
@@ -197,7 +199,11 @@ def test_installed_launcher_reaches_the_same_root_canonical_boundary(
         observed.append((skill, Path(workspace_dir), scope))
         return _result(skill, success=True)
 
-    monkeypatch.setattr(launcher, "_discover_cli_path", lambda: ROOT / "omicsclaw.py")
+    # No launcher patching needed any more. This used to stub
+    # `launcher._discover_cli_path` so the by-path load would find the
+    # repo-root `omicsclaw.py`; the launcher now simply re-exports
+    # `omicsclaw.surfaces.cli._main.main`, so the real console-script path is
+    # what runs here — which is what this test wanted to prove all along.
     monkeypatch.setattr(canonical, "run_root_canonical_demo", run_canonical)
     monkeypatch.setattr(
         skill_runner,

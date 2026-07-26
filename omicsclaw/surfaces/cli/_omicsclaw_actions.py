@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import importlib.util
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from ._skill_run_support import SkillRunCommandArgs
-
-_OMICSCLAW_DIR = Path(__file__).resolve().parent.parent.parent
 
 
 @dataclass(slots=True)
@@ -35,14 +31,34 @@ class SkillsCatalogView:
 
 
 def load_omicsclaw_script():
-    """Load the root-level ``omicsclaw.py`` script via importlib."""
-    script_path = _OMICSCLAW_DIR / "omicsclaw.py"
-    spec = importlib.util.spec_from_file_location("_omicsclaw_script", script_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot load omicsclaw.py from: {script_path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)  # type: ignore[union-attr]
-    return module
+    """Return the CLI body module, which owns ``SKILLS`` / ``DOMAINS``.
+
+    This used to load the repo-root ``omicsclaw.py`` through importlib, and it
+    had been broken for a while: it resolved ``script_path`` to
+    ``<repo>/omicsclaw/omicsclaw.py`` — one directory too deep — so it raised
+    ``FileNotFoundError`` on every call. Nothing noticed because
+    ``tests/test_interactive_omicsclaw_actions.py`` patches this function out.
+    Fixing the path arithmetic would only have moved the problem: an installed
+    distribution has no ``omicsclaw.py`` at all, so any by-path load fails
+    there by construction.
+
+    The CLI body now lives in the package as ``omicsclaw.surfaces.cli._main``,
+    so a plain import is correct in a source checkout and in every install
+    shape. Imported lazily to keep this module cheap and to avoid an import
+    cycle through the CLI package.
+
+    NOTE: ``build_skills_catalog_view`` below still reads ``SKILLS`` and
+    ``DOMAINS`` off the returned module, and those names have never existed on
+    the CLI body — only ``_WORKFLOW_ORDER`` does. That is a separate,
+    longer-standing defect: the real skill and domain tables live on the
+    registry (``ensure_registry_loaded().skills`` / ``.domains``). Fixing it
+    means changing what that function reads and retiring the contract encoded
+    in ``tests/test_interactive_omicsclaw_actions.py``, so it is deliberately
+    left alone here.
+    """
+    from . import _main
+
+    return _main
 
 
 def _resolve_domain_filter(

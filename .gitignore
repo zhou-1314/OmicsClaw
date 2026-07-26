@@ -176,3 +176,10 @@ e2e_test
 # Eval suite per-run artifacts (every UTC-timestamped run dir)
 tests/eval/results/*/
 !tests/eval/results/.gitkeep
+
+# npm distribution build output. `npm/build-runtime-package.mjs` assembles
+# @omicsclaw/runtime-<target> packages here, each carrying a ~270 MB Python
+# runtime. Built per release, never committed.
+npm/dist/
+npm/**/*.tgz
+npm/**/node_modules/

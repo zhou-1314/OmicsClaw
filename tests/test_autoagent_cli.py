@@ -1,21 +1,22 @@
 from __future__ import annotations
 
-import importlib.util
 import sys
-from pathlib import Path
 
 import pytest
 
 
-ROOT = Path(__file__).resolve().parent.parent
-
-
 def _load_omicsclaw_script():
-    spec = importlib.util.spec_from_file_location("omicsclaw_main_autoagent_cli_test", ROOT / "omicsclaw.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    """Return the CLI body module.
+
+    Was a by-path load of the repo-root ``omicsclaw.py``. The body now ships
+    inside the package as ``omicsclaw.surfaces.cli._main`` so the console
+    scripts work from an installed distribution, and that root file is a thin
+    shim — see the history note in ``omicsclaw/surfaces/cli/launcher.py``. A
+    plain import is therefore correct and sufficient.
+    """
+    import omicsclaw.surfaces.cli._main as cli_main
+
+    return cli_main
 
 
 def test_optimize_rejects_unknown_flags(monkeypatch, capsys):
