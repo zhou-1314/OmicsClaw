@@ -50,10 +50,27 @@ jobs:
       # to an unsandboxed run, so the test sees 'skipped' where it expects
       # 'earned'. It is a system package, not a pip one.
       - name: Install bubblewrap for the sandboxed demo gate
+        # Best-effort by design: every command here tolerates failure, so this
+        # step can never be the thing that reddens the job. If bwrap ends up
+        # unusable the scaffolder gate returns "skipped" — which is exactly
+        # what it is built to do — and only the one test below notices.
+        continue-on-error: true
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends bubblewrap
-          bwrap --ro-bind / / --dev /dev --unshare-all true && echo "bwrap works"
+          sudo apt-get update -qq || true
+          sudo apt-get install -y --no-install-recommends bubblewrap || true
+          # Ubuntu 24.04 ships kernel.apparmor_restrict_unprivileged_userns=1,
+          # which blocks the unprivileged user namespace bwrap needs. Hosted
+          # runners are ephemeral and single-tenant, so relaxing it here costs
+          # nothing and is the documented workaround.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          # Smoke-check with the flags kernel_envelope actually uses
+          # (--unshare-net plus the pid/uts/ipc/cgroup set), not --unshare-all.
+          if bwrap --ro-bind / / --dev /dev --unshare-net --unshare-pid \
+                   --unshare-uts --unshare-ipc --unshare-cgroup true 2>/dev/null; then
+            echo "bwrap envelope works — the sandboxed demo gate will run"
+          else
+            echo "::warning::bwrap unusable on this runner; the sandboxed demo gate will report 'skipped'"
+          fi
 
       - name: Install core dependencies
         run: |
