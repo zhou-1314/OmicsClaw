@@ -1345,7 +1345,11 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                     "input_paths": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Optional original data paths. They are referenced, not copied.",
+                        "description": (
+                            "Optional original data paths, referenced read-only rather "
+                            "than copied. Python source files are not executable inputs; "
+                            "pass the complete analysis objective in goal instead."
+                        ),
                     },
                     "upstream_paths": {
                         "type": "array",

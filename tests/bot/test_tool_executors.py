@@ -595,6 +595,48 @@ async def test_autonomous_analysis_resolves_relative_input_paths(tmp_path, monke
 
 
 @pytest.mark.asyncio
+async def test_autonomous_analysis_rejects_python_script_inputs_before_engine_start(
+    tmp_path,
+    monkeypatch,
+):
+    import omicsclaw.runtime.agent.state  # noqa: F401 - initializes re-export cycle
+    import omicsclaw.autonomous as autonomous_pkg
+    import omicsclaw.services.path_validation as pv
+    from omicsclaw.runtime.tools.builders.agent_executors import (
+        execute_autonomous_analysis_execute,
+    )
+
+    workspace = tmp_path / "omicsclaw-workspace"
+    workspace.mkdir()
+    script = workspace / "analysis.py"
+    script.write_text("print('hello')\n", encoding="utf-8")
+    pv._ensure_trusted_dirs()
+    monkeypatch.setattr(
+        pv,
+        "TRUSTED_DATA_DIRS",
+        [*pv.TRUSTED_DATA_DIRS, workspace],
+    )
+    called = {"engine": False}
+
+    async def fake_loop(request, **kwargs):
+        called["engine"] = True
+        raise AssertionError("engine started for an unsupported script input")
+
+    monkeypatch.setattr(autonomous_pkg, "run_autonomous_code_loop_async", fake_loop)
+
+    result = await execute_autonomous_analysis_execute(
+        {
+            "goal": "run the existing script",
+            "input_paths": [str(script)],
+        }
+    )
+
+    assert called["engine"] is False
+    assert "does not execute prewritten Python scripts" in result
+    assert "complete analysis objective" in result
+
+
+@pytest.mark.asyncio
 async def test_autonomous_analysis_reports_unresolvable_input_path(tmp_path, monkeypatch):
     """A path that exists nowhere trusted must yield a clear error and NOT start
     the engine — so the model gets actionable feedback instead of a sandboxed run

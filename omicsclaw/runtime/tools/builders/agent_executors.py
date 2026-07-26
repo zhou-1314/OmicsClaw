@@ -2697,6 +2697,18 @@ async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
                 + "\nPass a path under the active workspace (e.g. its data/ folder) "
                 "or an absolute path."
             )
+        script_inputs = [
+            path for path in input_paths if Path(path).suffix.lower() == ".py"
+        ]
+        if script_inputs:
+            return (
+                "Error: autonomous_analysis_execute does not execute prewritten "
+                "Python scripts. Its generated cells are linted and run inside the "
+                "Autonomous Code sandbox; executing a file would bypass that "
+                "contract. Pass the complete analysis objective plus primary data "
+                "paths instead. Script input(s): "
+                + ", ".join(script_inputs)
+            )
         language = str(args.get("language", "python") or "python").strip().lower()
         if language in {"r", "rscript"}:
             return (
