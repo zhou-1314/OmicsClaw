@@ -262,9 +262,16 @@ declare and enforce a budget envelope:
   every turn is told how many steps remain. On the final affordable step the
   loop issues an explicit landing order instead of silently breaking, so a run
   that runs out of room still returns a partial answer rather than nothing;
-- a run that stops on a budget rather than an answer reports its salvageable
-  work (`partial_progress` metadata + a failure message naming the completed
-  steps), because the artifacts those steps produced remain on disk;
+- for a small self-contained workflow, the tactical prompt prefers one complete
+  cell that performs the work and calls `ReturnAnswer`; it splits work only when
+  an observed result must choose the next step, and repairs a failed cell with
+  the smallest evidence-supported correction;
+- a run that stops on a budget reports `partial_progress` only when a recursive
+  inventory finds reusable scientific files. It names those files as inputs to
+  a new narrowed run; no-op cells and transient variables in the closed kernel
+  are not resumable. The inventory includes nested outputs such as
+  `output/pca_clusters.png` and excludes input/upstream/rerun references and
+  runtime bookkeeping;
 - `max_steps` is settable per run — `AutonomousRunRequest.max_steps`, the
   `autonomous_analysis_execute` tool argument, or `OMICSCLAW_AUTONOMOUS_MAX_STEPS`
   — since the benchmarking-only `metadata["mini_agent_budget"]` override had no
@@ -294,6 +301,9 @@ can drive the mini-agent.
 
 - Skill dispatch remains primary. The mini-agent cannot reclassify an Exact
   skill route as generated code.
+- `autonomous_analysis_execute.input_paths` carries primary data, not executable
+  source. A resolved `.py` input is rejected before provider or kernel work;
+  callers must pass the full analysis objective and its data paths instead.
 - The `oc` / `skills` facade is an allowlist generated from the skill registry;
   it uses skill metadata and `allowed_extra_flags`, not arbitrary script paths.
 - v1 raw generated code is Python-only unless an equivalent R kernel safety
@@ -318,7 +328,11 @@ can drive the mini-agent.
   `ReturnAnswer` is accepted.
 - The outer loop performs final result validation against the user intent,
   schema-grounded plan, artifacts, and replay report before presenting an
-  interpretation.
+  interpretation. Its final configured iteration is a response-only landing
+  turn with `tools=[]`; a provider-returned tool call on that turn is never
+  executed. A successful digest treats replay and the recursive artifact
+  inventory as authoritative, so the outer loop answers without another
+  list/glob/read verification cycle.
 - Every report separates computed results from interpretive claims and keeps
   the OmicsClaw disclaimer.
 
