@@ -1733,7 +1733,6 @@ async def run_query_engine(
                 transcript_store,
                 context.chat_id,
                 content=final_response,
-                reasoning_content=last_message.reasoning_content,
             )
             return _merge_response_segments(
                 accumulated_response_segments,

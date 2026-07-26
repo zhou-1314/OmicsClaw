@@ -348,15 +348,24 @@ can drive the mini-agent.
   answer that needs token continuation also moves to `tools=[]`; a response-only
   text answer is persisted and returned without another continuation, while an
   illegal response-only tool call uses an honest runtime fallback rather than
-  provider companion text. Failed autonomous runs keep the ordinary recovery
-  tools. The final configured iteration remains a response-only `tools=[]`
-  backstop.
+  provider companion text and discards the provider's content, reasoning, and
+  tool calls together. Failed autonomous runs keep the ordinary recovery tools.
+  A persisted todo projection may recover a compacted batch from requested
+  input only when a non-error result is present; failed or approval-denied
+  results are authoritative and must never project the requested statuses as
+  completed. The final configured iteration remains a response-only `tools=[]`
+  backstop. Cache diagnostics hash the exact full-tools -> landing-tools ->
+  empty-tools request sequence.
 - Replay and a complete recursive artifact inventory are authoritative after
   success, without another list/glob/read verification cycle. The inventory
   recognizes common scientific formats including Parquet, NPZ, LOOM, and RDS
-  and reports `total` plus `truncated`. When the inline digest is capped, it says
-  `showing N of total`; only the count and replay evidence remain authoritative,
-  and omitted names may be inspected when the user actually needs them.
+  and reports `total` plus `truncated`. It walks the output tree with bounded
+  retained-path memory and never descends filesystem aliases. Missing,
+  unreadable, or partially scanned workspaces return `complete=false` plus a
+  stable `scan_error`; their paths and counts are explicitly non-authoritative.
+  When a complete inline digest is capped, it says `showing N of total`; only
+  the count and replay evidence remain authoritative, and omitted names may be
+  inspected when the user actually needs them.
 - Every report separates computed results from interpretive claims and keeps
   the OmicsClaw disclaimer.
 

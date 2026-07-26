@@ -2509,8 +2509,12 @@ def _format_autonomous_digest(result) -> str:
 
     artifact_inventory = _autonomous_artifact_inventory(result.workspace_root)
     if artifact_inventory.paths:
-        heading = "## Artifacts produced"
-        if artifact_inventory.truncated:
+        heading = (
+            "## Artifacts discovered before incomplete scan"
+            if not artifact_inventory.complete
+            else "## Artifacts produced"
+        )
+        if artifact_inventory.complete and artifact_inventory.truncated:
             heading += (
                 f" (showing {len(artifact_inventory.paths)} of "
                 f"{artifact_inventory.total}; inline list truncated)"
@@ -2521,7 +2525,15 @@ def _format_autonomous_digest(result) -> str:
             + "\n".join(f"- {path}" for path in artifact_inventory.paths)
         )
     if result.ok:
-        if artifact_inventory.truncated:
+        if not artifact_inventory.complete:
+            parts.append(
+                "## Next action\n"
+                "Replay validation passed, but the Artifact inventory scan is incomplete "
+                f"({artifact_inventory.scan_error or 'unknown_scan_error'}) and is not "
+                "authoritative. Report that limitation; inspect the raw output only if "
+                "the user needs artifact details."
+            )
+        elif artifact_inventory.truncated:
             parts.append(
                 "## Next action\n"
                 "Replay validation and the artifact count are authoritative. The inline "

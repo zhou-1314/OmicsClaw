@@ -17,7 +17,10 @@ that the digest:
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 # agent_executors and agent.state have a pre-existing import cycle
 # (state.py imports _available_tool_executors; agent_executors imports state).
@@ -131,6 +134,65 @@ def test_success_digest_discloses_truncated_artifact_inventory(tmp_path):
     assert "Replay validation and the artifact inventory are authoritative" not in digest
 
 
+def test_artifact_inventory_streams_large_trees_without_path_rglob(
+    tmp_path,
+    monkeypatch,
+):
+    for index in range(75):
+        directory = tmp_path / f"group_{index % 5}"
+        directory.mkdir(exist_ok=True)
+        (directory / f"artifact_{index:03}.csv").write_text("x", encoding="utf-8")
+
+    def reject_rglob(self, pattern):
+        raise AssertionError("artifact inventory must not materialize Path.rglob")
+
+    monkeypatch.setattr(Path, "rglob", reject_rglob)
+
+    inventory = _autonomous_artifact_inventory(str(tmp_path), limit=40)
+
+    assert inventory.complete is True
+    assert inventory.scan_error is None
+    assert inventory.total == 75
+    assert inventory.truncated is True
+    assert len(inventory.paths) == 40
+    assert inventory.paths == tuple(sorted(inventory.paths))
+
+
+def test_artifact_inventory_marks_partial_walk_failure(tmp_path, monkeypatch):
+    (tmp_path / "partial.csv").write_text("x", encoding="utf-8")
+
+    def partial_walk(root, *, topdown, onerror, followlinks):
+        yield str(root), [], ["partial.csv"]
+        onerror(PermissionError("synthetic unreadable directory"))
+
+    monkeypatch.setattr("omicsclaw.autonomous.artifacts.os.walk", partial_walk)
+
+    inventory = _autonomous_artifact_inventory(str(tmp_path))
+
+    assert inventory.paths == ("partial.csv",)
+    assert inventory.total == 1
+    assert inventory.complete is False
+    assert inventory.scan_error == "filesystem_scan_failed"
+
+
+def test_artifact_inventory_does_not_descend_alias_directories(tmp_path):
+    run = tmp_path / "run"
+    outside = tmp_path / "outside"
+    run.mkdir()
+    outside.mkdir()
+    (run / "owned.csv").write_text("x", encoding="utf-8")
+    (outside / "escaped.csv").write_text("x", encoding="utf-8")
+    try:
+        (run / "alias").symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+
+    inventory = _autonomous_artifact_inventory(str(run))
+
+    assert inventory.complete is True
+    assert inventory.paths == ("owned.csv",)
+
+
 def test_digest_tells_the_model_what_a_budget_stop_already_finished():
     digest = _format_autonomous_digest(
         _result(
@@ -223,7 +285,18 @@ def test_autonomous_artifacts_include_common_scientific_formats(tmp_path):
 
 
 def test_autonomous_artifacts_handles_missing_dir():
-    assert _autonomous_artifact_inventory("/nonexistent/path/xyz").paths == ()
+    inventory = _autonomous_artifact_inventory("/nonexistent/path/xyz")
+
+    assert inventory.paths == ()
+    assert inventory.complete is False
+    assert inventory.scan_error == "workspace_not_found"
+
+    digest = _format_autonomous_digest(
+        _result(workspace_root="/nonexistent/path/xyz")
+    )
+    assert "Artifact inventory scan is incomplete" in digest
+    assert "artifact inventory are authoritative" not in digest
+    assert "artifact count are authoritative" not in digest
 
 
 def test_autonomous_artifacts_rejects_claim_aliases(tmp_path):

@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 import secrets
 import stat
 import tempfile
+from typing import Callable
 
 
 OUTPUT_CLAIM_FILENAME = ".omicsclaw-run-claim.json"
@@ -96,6 +97,8 @@ def _file_identity(path: Path) -> OutputClaimIdentity:
 
 def collect_output_claim_identities(
     output_root: Path,
+    *,
+    on_error: Callable[[OSError], None] | None = None,
 ) -> frozenset[OutputClaimIdentity]:
     """Index claim markers without descending filesystem aliases."""
 
@@ -113,12 +116,16 @@ def collect_output_claim_identities(
             ):
                 continue
             entries = tuple(directory.iterdir())
-        except OSError:
+        except OSError as exc:
+            if on_error is not None:
+                on_error(exc)
             continue
         for entry in entries:
             try:
                 entry_stat = os.lstat(entry)
-            except OSError:
+            except OSError as exc:
+                if on_error is not None:
+                    on_error(exc)
                 continue
             if stat_is_filesystem_alias(entry_stat):
                 continue

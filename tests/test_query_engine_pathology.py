@@ -15,16 +15,22 @@ from __future__ import annotations
 
 import asyncio
 
+from omicsclaw.runtime.agent.cache_diagnostics import (
+    REASON_COLD_START,
+    REASON_TOOL_LIST_CHANGED,
+    compute_segment_hash,
+)
 from omicsclaw.runtime.agent.query_engine import (
     QueryEngineCallbacks,
     QueryEngineConfig,
     QueryEngineContext,
     run_query_engine,
 )
+from omicsclaw.runtime.storage.canonical_transcript import CanonicalTranscript
 from omicsclaw.runtime.storage.tool_result import ToolResultStore
 from omicsclaw.runtime.storage.transcript import TranscriptStore, sanitize_tool_history
 from omicsclaw.runtime.tools.registry import ToolRegistry
-from omicsclaw.runtime.tools.spec import ToolSpec
+from omicsclaw.runtime.tools.spec import APPROVAL_MODE_ASK, ToolSpec
 
 from tests.test_query_engine import (  # type: ignore[import-not-found]
     _FakeAPIError,
@@ -121,6 +127,7 @@ def _build_autonomous_landing_runtime(
         "## Artifacts produced\n- figures/pca.png\n- marker_table.csv"
     ),
     task_update_output: str | BaseException = "ok",
+    task_update_approval_mode: str = "auto",
 ):
     executed = executed if executed is not None else []
 
@@ -161,6 +168,7 @@ def _build_autonomous_landing_runtime(
             parameters={"type": "object", "properties": {}},
             read_only=True,
             concurrency_safe=False,
+            approval_mode=task_update_approval_mode,
         ),
     ]
     return ToolRegistry(specs).build_runtime(
@@ -194,6 +202,8 @@ def _run(
     chat_id,
     tmp_path,
     token_budget=None,
+    request_tool_approval=None,
+    on_cache_diagnostics=None,
 ):
     transcript_store = TranscriptStore(sanitizer=sanitize_tool_history)
     result_store = ToolResultStore(storage_dir=tmp_path / "tool_results")
@@ -212,7 +222,9 @@ def _run(
             tool_result_store=result_store,
             config=config,
             callbacks=QueryEngineCallbacks(
-                on_pathology_signal=lambda s: signals.append(s)
+                on_pathology_signal=lambda s: signals.append(s),
+                request_tool_approval=request_tool_approval,
+                on_cache_diagnostics=on_cache_diagnostics,
             ),
         )
     )
@@ -660,6 +672,49 @@ def test_task_update_after_autonomous_success_forces_response_only_turn(tmp_path
     assert llm.calls[2]["tools"] == []
 
 
+def test_autonomous_cache_diagnostics_track_full_landing_empty_transition(tmp_path):
+    diagnostics = []
+    runtime = _build_autonomous_landing_runtime()
+    llm = _FakeLLM(
+        [
+            _named_tool_call_response("autonomous_analysis_execute"),
+            _task_update_response(),
+            _final_response("Analysis complete; todo statuses are up to date."),
+        ]
+    )
+
+    result, _ = _run(
+        llm,
+        runtime,
+        QueryEngineConfig(model="fake", llm_error_types=(_FakeAPIError,)),
+        [],
+        chat_id="chat-autonomous-cache-transition",
+        tmp_path=tmp_path,
+        on_cache_diagnostics=diagnostics.append,
+    )
+
+    assert result == "Analysis complete; todo statuses are up to date."
+    sent_tools = [call["tools"] for call in llm.calls]
+    assert [[tool["function"]["name"] for tool in tools] for tools in sent_tools] == [
+        [
+            "autonomous_analysis_execute",
+            "list_directory",
+            "file_read",
+            "task_update",
+        ],
+        ["task_update"],
+        [],
+    ]
+    assert [diagnostic.tool_hash for diagnostic in diagnostics] == [
+        compute_segment_hash(tools) for tools in sent_tools
+    ]
+    assert [diagnostic.miss_reason for diagnostic in diagnostics] == [
+        REASON_COLD_START,
+        REASON_TOOL_LIST_CHANGED,
+        REASON_TOOL_LIST_CHANGED,
+    ]
+
+
 def test_failed_landing_task_update_requires_truthful_final_report(tmp_path):
     executed: list[str] = []
     runtime = _build_autonomous_landing_runtime(
@@ -702,6 +757,55 @@ def test_failed_landing_task_update_requires_truthful_final_report(tmp_path):
         in content.lower()
         for content in response_only_contents
     )
+
+
+def test_denied_landing_task_update_forces_truthful_response_only_turn(tmp_path):
+    executed: list[str] = []
+    approvals: list[tuple[str, str]] = []
+    runtime = _build_autonomous_landing_runtime(
+        executed,
+        task_update_approval_mode=APPROVAL_MODE_ASK,
+    )
+
+    async def deny_task_update(request, execution_result):
+        approvals.append((request.name, execution_result.status))
+        return {
+            "behavior": "deny",
+            "message": "User denied todo reconciliation.",
+        }
+
+    llm = _FakeLLM(
+        [
+            _named_tool_call_response("autonomous_analysis_execute"),
+            _task_update_response(),
+            _final_response(
+                "Analysis complete; the todo update was not applied because approval was denied."
+            ),
+        ]
+    )
+
+    result, transcript_store = _run(
+        llm,
+        runtime,
+        QueryEngineConfig(model="fake", llm_error_types=(_FakeAPIError,)),
+        [],
+        chat_id="chat-autonomous-denied-task-update",
+        tmp_path=tmp_path,
+        request_tool_approval=deny_task_update,
+    )
+
+    assert "approval was denied" in result
+    assert executed == ["autonomous_analysis_execute"]
+    assert approvals == [("task_update", "policy_blocked")]
+    assert llm.calls[2]["tools"] == []
+    tool_messages = [
+        message.get("content", "")
+        for message in transcript_store.get_history(
+            "chat-autonomous-denied-task-update"
+        )
+        if message.get("role") == "tool"
+    ]
+    assert any("User denied todo reconciliation." in content for content in tool_messages)
 
 
 def test_autonomous_landing_rejects_multiple_task_update_calls(tmp_path):
@@ -985,6 +1089,7 @@ def test_autonomous_response_only_violation_ignores_misleading_model_text(tmp_pa
                 _FakeMessage(
                     content="I will inspect the file now.",
                     tool_calls=[_FakeToolCall("call-file_read", "file_read", "{}")],
+                    reasoning_content="I inspected the artifact and found a result.",
                 )
             ),
         ]
@@ -1007,6 +1112,61 @@ def test_autonomous_response_only_violation_ignores_misleading_model_text(tmp_pa
     )[-1]
     assert terminal["role"] == "assistant"
     assert terminal["content"] == result
+    assert not terminal.get("reasoning_content")
+
+
+def test_canonical_response_only_violation_discards_provider_reasoning(tmp_path):
+    runtime = _build_autonomous_landing_runtime()
+    llm = _FakeLLM(
+        [
+            _named_tool_call_response("autonomous_analysis_execute"),
+            _task_update_response(),
+            _FakeResponse(
+                _FakeMessage(
+                    content="I will inspect the file now.",
+                    tool_calls=[_FakeToolCall("call-file_read", "file_read", "{}")],
+                    reasoning_content="I inspected the artifact and found a result.",
+                )
+            ),
+        ]
+    )
+    transcript = CanonicalTranscript(tmp_path / "canonical-response-only")
+    adapter = transcript.bind_turn(
+        "conversation-response-only",
+        "turn-response-only",
+    )
+    result_store = ToolResultStore(storage_dir=tmp_path / "canonical-tool-results")
+    try:
+        result = asyncio.run(
+            run_query_engine(
+                llm=llm,
+                context=QueryEngineContext(
+                    chat_id="conversation-response-only",
+                    session_id="session-response-only",
+                    system_prompt="SYSTEM",
+                    user_message_content="run the analysis",
+                ),
+                tool_runtime=runtime,
+                transcript_store=adapter,
+                tool_result_store=result_store,
+                config=QueryEngineConfig(
+                    model="fake",
+                    llm_error_types=(_FakeAPIError,),
+                ),
+            )
+        )
+
+        candidate = adapter.stage_terminal(result)
+        entry = transcript.get_entry(candidate.entry_id)
+        provider_message = entry.payload.get("provider_message") or {}
+        assert provider_message.get("content") == result
+        assert not provider_message.get("reasoning_content")
+        transcript.promote_terminal(candidate.entry_id, candidate.content_sha256)
+        assert not transcript.get_history("conversation-response-only")[-1].get(
+            "reasoning_content"
+        )
+    finally:
+        transcript.close()
 
 
 def test_failed_autonomous_run_keeps_recovery_tools_available(tmp_path):
