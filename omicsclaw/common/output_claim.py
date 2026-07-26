@@ -43,18 +43,30 @@ def stat_is_filesystem_alias(entry_stat: os.stat_result) -> bool:
     return stat.S_ISLNK(entry_stat.st_mode) or _is_windows_reparse_point(entry_stat)
 
 
-def is_filesystem_alias(path: str | Path) -> bool:
+def is_filesystem_alias(
+    path: str | Path,
+    *,
+    on_error: Callable[[OSError], None] | None = None,
+) -> bool:
     """Return whether one existing entry is a symlink or Windows reparse alias."""
 
     try:
         return stat_is_filesystem_alias(os.lstat(Path(path)))
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
+        if on_error is not None:
+            on_error(exc)
         return False
-    except OSError:
+    except OSError as exc:
+        if on_error is not None:
+            on_error(exc)
         return True
 
 
-def first_filesystem_alias_component(path: str | Path) -> Path | None:
+def first_filesystem_alias_component(
+    path: str | Path,
+    *,
+    on_error: Callable[[OSError], None] | None = None,
+) -> Path | None:
     """Return the first alias in a lexical path without erasing ``..`` evidence.
 
     Both POSIX symbolic links and Windows reparse-point/name-surrogate aliases
@@ -77,7 +89,9 @@ def first_filesystem_alias_component(path: str | Path) -> Path | None:
         current = current / part
         try:
             entry_stat = os.lstat(current)
-        except FileNotFoundError:
+        except FileNotFoundError as exc:
+            if on_error is not None:
+                on_error(exc)
             continue
         if stat_is_filesystem_alias(entry_stat):
             return current
@@ -108,7 +122,10 @@ def collect_output_claim_identities(
     while directories:
         directory = directories.pop()
         try:
-            if first_filesystem_alias_component(directory) is not None:
+            if (
+                first_filesystem_alias_component(directory, on_error=on_error)
+                is not None
+            ):
                 continue
             directory_stat = os.lstat(directory)
             if stat_is_filesystem_alias(directory_stat) or not stat.S_ISDIR(
@@ -143,6 +160,7 @@ def is_output_claim_artifact(
     *,
     output_root: Path,
     claim_identities: frozenset[OutputClaimIdentity] | None = None,
+    on_error: Callable[[OSError], None] | None = None,
 ) -> bool:
     """Return whether a runtime path is the claim marker or an alias to it.
 
@@ -157,17 +175,23 @@ def is_output_claim_artifact(
         return True
     try:
         resolved = candidate.resolve(strict=True)
-    except (OSError, RuntimeError):
+    except OSError as exc:
+        if on_error is not None:
+            on_error(exc)
+        return False
+    except RuntimeError:
         return False
     if is_output_claim_path(resolved):
         return True
 
     try:
         identity = _file_identity(candidate)
-    except OSError:
+    except OSError as exc:
+        if on_error is not None:
+            on_error(exc)
         return False
     identities = (
-        collect_output_claim_identities(output_root)
+        collect_output_claim_identities(output_root, on_error=on_error)
         if claim_identities is None
         else claim_identities
     )
@@ -179,22 +203,40 @@ def is_scientific_output_file(
     *,
     output_root: Path,
     claim_identities: frozenset[OutputClaimIdentity] | None = None,
+    on_error: Callable[[OSError], None] | None = None,
 ) -> bool:
     """Return whether a runtime artifact is a contained, non-internal file."""
 
     candidate = Path(path)
     root = Path(output_root)
+    inspection_failed = False
+
+    def record_inspection_error(exc: OSError) -> None:
+        nonlocal inspection_failed
+        inspection_failed = True
+        if on_error is not None:
+            on_error(exc)
+
     # Inspect the caller's path before ``abspath``/``resolve`` normalises
     # parent references.  Otherwise ``alias/../artifact`` can erase the
     # symbolic-link component while still reaching a contained regular file.
     try:
         contains_alias = (
-            first_filesystem_alias_component(candidate) is not None
-            or first_filesystem_alias_component(root) is not None
+            first_filesystem_alias_component(
+                candidate,
+                on_error=record_inspection_error,
+            )
+            is not None
+            or first_filesystem_alias_component(
+                root,
+                on_error=record_inspection_error,
+            )
+            is not None
         )
-    except OSError:
+    except OSError as exc:
+        record_inspection_error(exc)
         return False
-    if contains_alias:
+    if contains_alias or inspection_failed:
         return False
     try:
         lexical_candidate = Path(os.path.abspath(candidate))
@@ -203,39 +245,62 @@ def is_scientific_output_file(
     except ValueError:
         return False
     current = lexical_root
-    if is_filesystem_alias(current):
+    if is_filesystem_alias(current, on_error=record_inspection_error):
+        return False
+    if inspection_failed:
         return False
     for part in relative.parts:
         current = current / part
-        if is_filesystem_alias(current):
+        if is_filesystem_alias(current, on_error=record_inspection_error):
+            return False
+        if inspection_failed:
             return False
 
     try:
-        stat = candidate.stat()
-    except OSError:
+        candidate_stat = candidate.stat()
+    except OSError as exc:
+        record_inspection_error(exc)
         return False
     if (
-        is_filesystem_alias(candidate)
-        or not candidate.is_file()
-        or stat.st_nlink != 1
-        or is_output_claim_artifact(
-            candidate,
-            output_root=root,
-            claim_identities=claim_identities,
-        )
+        is_filesystem_alias(candidate, on_error=record_inspection_error)
+        or inspection_failed
+        or not stat.S_ISREG(candidate_stat.st_mode)
+        or candidate_stat.st_nlink != 1
     ):
         return False
-    return is_contained_output_path(candidate, output_root=root)
+
+    is_claim_artifact = is_output_claim_artifact(
+        candidate,
+        output_root=root,
+        claim_identities=claim_identities,
+        on_error=record_inspection_error,
+    )
+    if inspection_failed or is_claim_artifact:
+        return False
+    return is_contained_output_path(
+        candidate,
+        output_root=root,
+        on_error=record_inspection_error,
+    )
 
 
-def is_contained_output_path(path: Path, *, output_root: Path) -> bool:
+def is_contained_output_path(
+    path: Path,
+    *,
+    output_root: Path,
+    on_error: Callable[[OSError], None] | None = None,
+) -> bool:
     """Return whether a filesystem entry resolves inside its output tree."""
 
     try:
         Path(path).resolve(strict=True).relative_to(
             Path(output_root).resolve(strict=True)
         )
-    except (OSError, RuntimeError, ValueError):
+    except OSError as exc:
+        if on_error is not None:
+            on_error(exc)
+        return False
+    except (RuntimeError, ValueError):
         return False
     return True
 

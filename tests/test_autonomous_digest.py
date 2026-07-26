@@ -17,6 +17,7 @@ that the digest:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -191,6 +192,174 @@ def test_artifact_inventory_does_not_descend_alias_directories(tmp_path):
 
     assert inventory.complete is True
     assert inventory.paths == ("owned.csv",)
+
+
+def test_artifact_inventory_marks_alias_workspace_root_incomplete(tmp_path):
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "owned.csv").write_text("x", encoding="utf-8")
+    alias = tmp_path / "run-alias"
+    try:
+        alias.symlink_to(run, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+
+    inventory = _autonomous_artifact_inventory(str(alias))
+
+    assert inventory.paths == ()
+    assert inventory.total == 0
+    assert inventory.complete is False
+    assert inventory.scan_error == "filesystem_alias_root"
+
+
+def test_artifact_inventory_marks_alias_workspace_ancestor_incomplete(tmp_path):
+    real_parent = tmp_path / "real-parent"
+    run = real_parent / "run"
+    run.mkdir(parents=True)
+    (run / "owned.csv").write_text("x", encoding="utf-8")
+    alias_parent = tmp_path / "alias-parent"
+    try:
+        alias_parent.symlink_to(real_parent, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+
+    inventory = _autonomous_artifact_inventory(str(alias_parent / "run"))
+
+    assert inventory.paths == ()
+    assert inventory.total == 0
+    assert inventory.complete is False
+    assert inventory.scan_error == "filesystem_alias_root"
+
+
+def test_artifact_inventory_marks_windows_reparse_workspace_root_incomplete(
+    tmp_path,
+    monkeypatch,
+):
+    root = tmp_path / "run"
+    root.mkdir()
+    root_stat = root.lstat()
+    root_identity = (root_stat.st_dev, root_stat.st_ino)
+
+    monkeypatch.setattr(
+        "omicsclaw.common.output_claim._is_windows_reparse_point",
+        lambda entry_stat: (entry_stat.st_dev, entry_stat.st_ino) == root_identity,
+    )
+
+    inventory = _autonomous_artifact_inventory(str(root))
+
+    assert inventory.paths == ()
+    assert inventory.total == 0
+    assert inventory.complete is False
+    assert inventory.scan_error == "filesystem_alias_root"
+
+
+def test_artifact_inventory_marks_candidate_inspection_failure_incomplete(
+    tmp_path,
+    monkeypatch,
+):
+    candidate = tmp_path / "marker_genes.csv"
+    candidate.write_text("x", encoding="utf-8")
+    real_stat = Path.stat
+
+    def deny_candidate_stat(path, *args, **kwargs):
+        if path == candidate:
+            raise PermissionError("synthetic candidate inspection denial")
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", deny_candidate_stat)
+
+    inventory = _autonomous_artifact_inventory(str(tmp_path))
+
+    assert inventory.paths == ()
+    assert inventory.total == 0
+    assert inventory.complete is False
+    assert inventory.scan_error == "filesystem_scan_failed"
+
+
+def test_artifact_inventory_excludes_candidate_when_claim_identity_stat_fails(
+    tmp_path,
+    monkeypatch,
+):
+    candidate = tmp_path / "marker_genes.csv"
+    candidate.write_text("x", encoding="utf-8")
+    real_stat = Path.stat
+    candidate_stat_calls = 0
+
+    def deny_claim_identity_stat(path, *args, **kwargs):
+        nonlocal candidate_stat_calls
+        if path == candidate:
+            candidate_stat_calls += 1
+            if candidate_stat_calls == 2:
+                raise PermissionError("synthetic claim identity denial")
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", deny_claim_identity_stat)
+
+    inventory = _autonomous_artifact_inventory(str(tmp_path))
+
+    assert candidate_stat_calls == 2
+    assert inventory.paths == ()
+    assert inventory.total == 0
+    assert inventory.complete is False
+    assert inventory.scan_error == "filesystem_scan_failed"
+
+
+def test_artifact_inventory_excludes_candidate_when_claim_resolve_fails(
+    tmp_path,
+    monkeypatch,
+):
+    candidate = tmp_path / "marker_genes.csv"
+    candidate.write_text("x", encoding="utf-8")
+    real_resolve = Path.resolve
+    candidate_resolve_calls = 0
+
+    def deny_claim_resolve(path, *args, **kwargs):
+        nonlocal candidate_resolve_calls
+        if path == candidate:
+            candidate_resolve_calls += 1
+            if candidate_resolve_calls == 1:
+                raise PermissionError("synthetic claim resolve denial")
+        return real_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", deny_claim_resolve)
+
+    inventory = _autonomous_artifact_inventory(str(tmp_path))
+
+    assert candidate_resolve_calls == 1
+    assert inventory.paths == ()
+    assert inventory.total == 0
+    assert inventory.complete is False
+    assert inventory.scan_error == "filesystem_scan_failed"
+
+
+@pytest.mark.parametrize("failure_call", [2, 3])
+def test_artifact_inventory_excludes_transiently_missing_candidate(
+    tmp_path,
+    monkeypatch,
+    failure_call,
+):
+    candidate = tmp_path / "marker_genes.csv"
+    candidate.write_text("x", encoding="utf-8")
+    real_lstat = os.lstat
+    candidate_lstat_calls = 0
+
+    def transient_candidate_missing(path, *args, **kwargs):
+        nonlocal candidate_lstat_calls
+        if Path(path) == candidate:
+            candidate_lstat_calls += 1
+            if candidate_lstat_calls == failure_call:
+                raise FileNotFoundError("synthetic transient candidate disappearance")
+        return real_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "lstat", transient_candidate_missing)
+
+    inventory = _autonomous_artifact_inventory(str(tmp_path))
+
+    assert candidate_lstat_calls >= failure_call
+    assert inventory.paths == ()
+    assert inventory.total == 0
+    assert inventory.complete is False
+    assert inventory.scan_error == "filesystem_scan_failed"
 
 
 def test_digest_tells_the_model_what_a_budget_stop_already_finished():

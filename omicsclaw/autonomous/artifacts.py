@@ -9,6 +9,7 @@ from pathlib import Path
 
 from omicsclaw.common.output_claim import (
     collect_output_claim_identities,
+    first_filesystem_alias_component,
     is_scientific_output_file,
     stat_is_filesystem_alias,
 )
@@ -52,13 +53,31 @@ def inventory_autonomous_artifacts(
     root = Path(workspace_root)
     max_paths = max(0, limit)
     try:
-        if not root.exists():
+        try:
+            root_stat = os.lstat(root)
+        except FileNotFoundError:
             return AutonomousArtifactInventory(
                 paths=(),
                 total=0,
                 truncated=False,
                 complete=False,
                 scan_error="workspace_not_found",
+            )
+        if stat_is_filesystem_alias(root_stat):
+            return AutonomousArtifactInventory(
+                paths=(),
+                total=0,
+                truncated=False,
+                complete=False,
+                scan_error="filesystem_alias_root",
+            )
+        if first_filesystem_alias_component(root) is not None:
+            return AutonomousArtifactInventory(
+                paths=(),
+                total=0,
+                truncated=False,
+                complete=False,
+                scan_error="filesystem_alias_root",
             )
         if not root.is_dir():
             return AutonomousArtifactInventory(
@@ -78,20 +97,22 @@ def inventory_autonomous_artifacts(
         )
     artifacts: list[str] = []
     total = 0
-    scan_errors: list[OSError] = []
+    scan_failed = False
+
+    def record_scan_error(_exc: OSError) -> None:
+        nonlocal scan_failed
+        scan_failed = True
+
     try:
         claim_identities = collect_output_claim_identities(
             root,
-            on_error=scan_errors.append,
+            on_error=record_scan_error,
         )
-
-        def record_walk_error(exc: OSError) -> None:
-            scan_errors.append(exc)
 
         for directory_name, dirnames, filenames in os.walk(
             root,
             topdown=True,
-            onerror=record_walk_error,
+            onerror=record_scan_error,
             followlinks=False,
         ):
             directory = Path(directory_name)
@@ -105,7 +126,7 @@ def inventory_autonomous_artifacts(
                     if stat_is_filesystem_alias(os.lstat(candidate)):
                         continue
                 except OSError as exc:
-                    scan_errors.append(exc)
+                    record_scan_error(exc)
                     continue
                 safe_dirnames.append(dirname)
             dirnames[:] = safe_dirnames
@@ -122,6 +143,7 @@ def inventory_autonomous_artifacts(
                     path,
                     output_root=root,
                     claim_identities=claim_identities,
+                    on_error=record_scan_error,
                 ):
                     continue
                 total += 1
@@ -133,11 +155,11 @@ def inventory_autonomous_artifacts(
             paths=tuple(artifacts),
             total=total,
             truncated=total > len(artifacts),
-            complete=not scan_errors,
-            scan_error="filesystem_scan_failed" if scan_errors else None,
+            complete=not scan_failed,
+            scan_error="filesystem_scan_failed" if scan_failed else None,
         )
     except OSError as exc:
-        scan_errors.append(exc)
+        record_scan_error(exc)
         return AutonomousArtifactInventory(
             paths=tuple(artifacts),
             total=total,

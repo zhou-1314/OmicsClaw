@@ -360,9 +360,15 @@ can drive the mini-agent.
   success, without another list/glob/read verification cycle. The inventory
   recognizes common scientific formats including Parquet, NPZ, LOOM, and RDS
   and reports `total` plus `truncated`. It walks the output tree with bounded
-  retained-path memory and never descends filesystem aliases. Missing,
-  unreadable, or partially scanned workspaces return `complete=false` plus a
-  stable `scan_error`; their paths and counts are explicitly non-authoritative.
+  retained-path memory and never descends filesystem aliases. A symlink or
+  Windows reparse alias in any workspace-root path component is rejected as
+  `filesystem_alias_root` before traversal. Any `OSError`, including a transient
+  `FileNotFoundError`, while inspecting a candidate file excludes that candidate
+  and propagates to the inventory's constant-space failure flag rather than
+  being mistaken for an ordinary non-artifact. Missing, unreadable,
+  aliased-root, or partially scanned workspaces therefore return `complete=false`
+  plus a stable `scan_error`; their paths and counts are explicitly
+  non-authoritative.
   When a complete inline digest is capped, it says `showing N of total`; only
   the count and replay evidence remain authoritative, and omitted names may be
   inspected when the user actually needs them.

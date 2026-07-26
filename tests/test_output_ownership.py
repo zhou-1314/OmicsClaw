@@ -273,7 +273,11 @@ def test_scientific_output_file_fails_closed_when_alias_inspection_fails(
     result = output_dir / "result.json"
     result.write_text("{}\n", encoding="utf-8")
 
-    def _deny_inspection(_path: str | Path) -> Path | None:
+    def _deny_inspection(
+        _path: str | Path,
+        *,
+        on_error=None,
+    ) -> Path | None:
         raise PermissionError("injected lstat denial")
 
     monkeypatch.setattr(
