@@ -336,6 +336,25 @@ _FINAL_RESPONSE_ONLY_MESSAGE = (
     "the user the best actionable final answer supported by that evidence."
 )
 
+_AUTONOMOUS_LANDING_TOOL_NAMES = frozenset({"task_update"})
+_AUTONOMOUS_LANDING_MESSAGE = (
+    "The autonomous analysis completed successfully and its replay-validated "
+    "digest plus artifact inventory are authoritative. Do not inspect its files "
+    "again. If todo statuses changed, batch them in one task_update call; otherwise "
+    "answer the user now from the digest."
+)
+_AUTONOMOUS_RESPONSE_ONLY_MESSAGE = (
+    "Todo status reconciliation after the successful autonomous analysis is "
+    "finished. Do not call or request any more tools. Answer the user now from "
+    "the replay-validated digest and artifact inventory already in the transcript."
+)
+_AUTONOMOUS_UNEXPOSED_TOOL_MESSAGE = (
+    "The requested post-analysis tool was not exposed in this landing phase and "
+    "was not executed. Do not retry it. Answer the user from the successful "
+    "autonomous digest and artifact inventory already in the transcript."
+)
+_AUTONOMOUS_SUCCESS_PREFIX = "Autonomous analysis completed (run "
+
 
 def _merge_response_segments(segments: list[str], current: str) -> str:
     merged = [
@@ -346,6 +365,15 @@ def _merge_response_segments(segments: list[str], current: str) -> str:
     if not merged:
         return _EMPTY_COMPLETION_MESSAGE
     return "\n\n".join(merged)
+
+
+def _is_successful_autonomous_result(result: ToolExecutionResult) -> bool:
+    return bool(
+        result.success
+        and result.request.name == "autonomous_analysis_execute"
+        and isinstance(result.output, str)
+        and result.output.lstrip().startswith(_AUTONOMOUS_SUCCESS_PREFIX)
+    )
 
 
 def _normalize_permission_resolution(
@@ -1512,6 +1540,8 @@ async def run_query_engine(
         else list(tool_runtime.openai_tools)
     )
     _last_response_usage: dict[str, Any] = {"usage": None}
+    autonomous_landing_pending = False
+    autonomous_response_only = False
 
     def _observe_usage_delta(response_usage, delta) -> None:
         _last_response_usage["usage"] = response_usage
@@ -1523,13 +1553,32 @@ async def run_query_engine(
     state = LoopState()
     for iteration_index in range(config.max_iterations):
         state.iteration = iteration_index
-        response_only = iteration_index == config.max_iterations - 1
+        response_only = (
+            autonomous_response_only
+            or iteration_index == config.max_iterations - 1
+        )
+        autonomous_landing_turn = autonomous_landing_pending and not response_only
+        autonomous_landing_pending = False
         if response_only:
             transcript_store.append_user_message(
                 context.chat_id,
-                _FINAL_RESPONSE_ONLY_MESSAGE,
+                (
+                    _AUTONOMOUS_RESPONSE_ONLY_MESSAGE
+                    if autonomous_response_only
+                    else _FINAL_RESPONSE_ONLY_MESSAGE
+                ),
             )
-        request_tool_payload = [] if response_only else list(_diag_tool_payload)
+        if response_only:
+            request_tool_payload = []
+        elif autonomous_landing_turn:
+            request_tool_payload = [
+                tool
+                for tool in _diag_tool_payload
+                if tool.get("function", {}).get("name")
+                in _AUTONOMOUS_LANDING_TOOL_NAMES
+            ]
+        else:
+            request_tool_payload = list(_diag_tool_payload)
         durable_history = transcript_store.prepare_history(context.chat_id)
         history = _render_messages(context.content_adapter, durable_history)
         pre_tokens = sum(estimate_message_tokens(m) for m in history)
@@ -1626,11 +1675,18 @@ async def run_query_engine(
         _last_response_usage["usage"] = None
 
         if response_only and last_message.tool_calls:
-            final_response = (last_message.content or "").strip() or (
-                "The analysis exhausted its tool-iteration budget before the model "
-                "produced a final summary. Completed tool results remain in this "
-                "conversation."
+            fallback_response = (
+                "The autonomous analysis completed successfully, but the model "
+                "requested another tool instead of providing its final summary. "
+                "Replay-validated results and artifacts remain in this conversation."
+                if autonomous_response_only
+                else (
+                    "The analysis exhausted its tool-iteration budget before the model "
+                    "produced a final summary. Completed tool results remain in this "
+                    "conversation."
+                )
             )
+            final_response = (last_message.content or "").strip() or fallback_response
             _defer_or_append_terminal_message(
                 transcript_store,
                 context.chat_id,
@@ -1641,6 +1697,24 @@ async def run_query_engine(
                 accumulated_response_segments,
                 final_response,
             )
+
+        if autonomous_landing_turn and last_message.tool_calls:
+            exposed_names = {
+                tool.get("function", {}).get("name") for tool in request_tool_payload
+            }
+            if any(tc.name not in exposed_names for tc in last_message.tool_calls):
+                if last_message.content:
+                    transcript_store.append_assistant_message(
+                        context.chat_id,
+                        content=last_message.content,
+                        reasoning_content=last_message.reasoning_content,
+                    )
+                transcript_store.append_user_message(
+                    context.chat_id,
+                    _AUTONOMOUS_UNEXPOSED_TOOL_MESSAGE,
+                )
+                autonomous_response_only = True
+                continue
 
         assistant_tool_calls = None
         if last_message.tool_calls:
@@ -1717,7 +1791,7 @@ async def run_query_engine(
         )
 
         (
-            _,
+            execution_results,
             interruption_message,
             current_policy_state,
         ) = await _execute_planned_tool_calls(
@@ -1736,6 +1810,15 @@ async def run_query_engine(
             # append a duplicate empty copy here.
             append_assistant=False,
         )
+
+        if any(_is_successful_autonomous_result(result) for result in execution_results):
+            autonomous_landing_pending = True
+            transcript_store.append_user_message(
+                context.chat_id,
+                _AUTONOMOUS_LANDING_MESSAGE,
+            )
+        elif autonomous_landing_turn:
+            autonomous_response_only = True
 
         if interruption_message:
             _defer_or_append_terminal_message(

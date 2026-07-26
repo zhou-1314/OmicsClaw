@@ -67,6 +67,15 @@ def _final_response(text: str):
     return _FakeResponse(_FakeMessage(content=text, tool_calls=None))
 
 
+def _named_tool_call_response(name: str):
+    return _FakeResponse(
+        _FakeMessage(
+            content="",
+            tool_calls=[_FakeToolCall(f"call-{name}", name, "{}")],
+        )
+    )
+
+
 def _build_execution_tool_runtime():
     """A runtime exposing ``omicsclaw`` — an EXECUTION_TOOLS member — so a
     recovery tool call clears the phantom-completion predicate."""
@@ -85,6 +94,67 @@ def _build_execution_tool_runtime():
             )
         ]
     ).build_runtime({"omicsclaw": executor})
+
+
+def _build_autonomous_landing_runtime(
+    executed: list[str] | None = None,
+    *,
+    autonomous_output: str = (
+        "Autonomous analysis completed (run run-1).\n\n"
+        "## Computed results\nARI = 0.994\n\n"
+        "## Artifacts produced\n- figures/pca.png\n- marker_table.csv"
+    ),
+):
+    executed = executed if executed is not None else []
+
+    def recording_executor(name: str, output: str):
+        async def executor(args):
+            executed.append(name)
+            return output
+
+        return executor
+
+    specs = [
+        ToolSpec(
+            name="autonomous_analysis_execute",
+            description="Run autonomous analysis",
+            parameters={"type": "object", "properties": {}},
+            read_only=True,
+            concurrency_safe=False,
+        ),
+        ToolSpec(
+            name="list_directory",
+            description="List a directory",
+            parameters={"type": "object", "properties": {}},
+            read_only=True,
+            concurrency_safe=True,
+        ),
+        ToolSpec(
+            name="file_read",
+            description="Read a file",
+            parameters={"type": "object", "properties": {}},
+            read_only=True,
+            concurrency_safe=True,
+        ),
+        ToolSpec(
+            name="task_update",
+            description="Batch-update todo statuses",
+            parameters={"type": "object", "properties": {}},
+            read_only=True,
+            concurrency_safe=False,
+        ),
+    ]
+    return ToolRegistry(specs).build_runtime(
+        {
+            "autonomous_analysis_execute": recording_executor(
+                "autonomous_analysis_execute",
+                autonomous_output,
+            ),
+            "list_directory": recording_executor("list_directory", "ok"),
+            "file_read": recording_executor("file_read", "ok"),
+            "task_update": recording_executor("task_update", "ok"),
+        }
+    )
 
 
 def _omicsclaw_call_response():
@@ -466,6 +536,139 @@ def test_final_response_only_turn_never_executes_returned_tool_calls(tmp_path):
     assert executions == 7
     assert "exhausted its tool-iteration budget" in result
     assert llm.calls[-1]["tools"] == []
+
+
+def test_successful_autonomous_run_exposes_only_task_update_for_landing(tmp_path):
+    runtime = _build_autonomous_landing_runtime()
+    llm = _FakeLLM(
+        [
+            _named_tool_call_response("autonomous_analysis_execute"),
+            _final_response("Analysis complete; the figure and marker table are ready."),
+        ]
+    )
+
+    result, _ = _run(
+        llm,
+        runtime,
+        QueryEngineConfig(model="fake", llm_error_types=(_FakeAPIError,)),
+        [],
+        chat_id="chat-autonomous-landing",
+        tmp_path=tmp_path,
+    )
+
+    assert result == "Analysis complete; the figure and marker table are ready."
+    assert [tool["function"]["name"] for tool in llm.calls[1]["tools"]] == [
+        "task_update"
+    ]
+
+
+def test_task_update_after_autonomous_success_forces_response_only_turn(tmp_path):
+    executed: list[str] = []
+    runtime = _build_autonomous_landing_runtime(executed)
+    llm = _FakeLLM(
+        [
+            _named_tool_call_response("autonomous_analysis_execute"),
+            _named_tool_call_response("task_update"),
+            _final_response("Analysis complete; todo statuses are up to date."),
+        ]
+    )
+
+    result, _ = _run(
+        llm,
+        runtime,
+        QueryEngineConfig(model="fake", llm_error_types=(_FakeAPIError,)),
+        [],
+        chat_id="chat-autonomous-todo-landing",
+        tmp_path=tmp_path,
+    )
+
+    assert result == "Analysis complete; todo statuses are up to date."
+    assert executed == ["autonomous_analysis_execute", "task_update"]
+    assert llm.calls[2]["tools"] == []
+
+
+def test_successful_autonomous_landing_never_executes_unexposed_read_tool(tmp_path):
+    executed: list[str] = []
+    runtime = _build_autonomous_landing_runtime(executed)
+    llm = _FakeLLM(
+        [
+            _named_tool_call_response("autonomous_analysis_execute"),
+            _named_tool_call_response("file_read"),
+            _final_response("Analysis complete without redundant file reads."),
+        ]
+    )
+
+    result, _ = _run(
+        llm,
+        runtime,
+        QueryEngineConfig(model="fake", llm_error_types=(_FakeAPIError,)),
+        [],
+        chat_id="chat-autonomous-unexposed-read",
+        tmp_path=tmp_path,
+    )
+
+    assert result == "Analysis complete without redundant file reads."
+    assert executed == ["autonomous_analysis_execute"]
+    assert llm.calls[2]["tools"] == []
+
+
+def test_autonomous_response_only_violation_reports_success_without_execution(tmp_path):
+    executed: list[str] = []
+    runtime = _build_autonomous_landing_runtime(executed)
+    llm = _FakeLLM(
+        [
+            _named_tool_call_response("autonomous_analysis_execute"),
+            _named_tool_call_response("task_update"),
+            _named_tool_call_response("file_read"),
+        ]
+    )
+
+    result, _ = _run(
+        llm,
+        runtime,
+        QueryEngineConfig(model="fake", llm_error_types=(_FakeAPIError,)),
+        [],
+        chat_id="chat-autonomous-response-only-violation",
+        tmp_path=tmp_path,
+    )
+
+    assert "autonomous analysis completed successfully" in result.lower()
+    assert "exhausted" not in result.lower()
+    assert executed == ["autonomous_analysis_execute", "task_update"]
+    assert llm.calls[2]["tools"] == []
+
+
+def test_failed_autonomous_run_keeps_recovery_tools_available(tmp_path):
+    executed: list[str] = []
+    runtime = _build_autonomous_landing_runtime(
+        executed,
+        autonomous_output=(
+            "Autonomous analysis failed (run run-1).\n\n"
+            "## Error\nkernel died before replay validation"
+        ),
+    )
+    llm = _FakeLLM(
+        [
+            _named_tool_call_response("autonomous_analysis_execute"),
+            _named_tool_call_response("file_read"),
+            _final_response("The autonomous run failed; I inspected recovery evidence."),
+        ]
+    )
+
+    result, _ = _run(
+        llm,
+        runtime,
+        QueryEngineConfig(model="fake", llm_error_types=(_FakeAPIError,)),
+        [],
+        chat_id="chat-autonomous-failed",
+        tmp_path=tmp_path,
+    )
+
+    assert result == "The autonomous run failed; I inspected recovery evidence."
+    assert "file_read" in [
+        tool["function"]["name"] for tool in llm.calls[1]["tools"]
+    ]
+    assert executed == ["autonomous_analysis_execute", "file_read"]
 
 
 def test_pathology_no_signal_under_threshold(tmp_path):
