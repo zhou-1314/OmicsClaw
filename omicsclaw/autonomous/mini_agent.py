@@ -242,12 +242,37 @@ def run_mini_agent(
         if cell.cancelled:
             termination = TerminationReason.CANCELLED
             break
+        discarded_names: list[str] = []
+        cleanup_error = ""
         if cell.timed_out:
             new_vars = {}
         else:
             after = session.introspect()
-            new_vars = {k: _fmt_var(v) for k, v in after.items() if k not in before}
-            prev_names = set(after)
+            introduced_names = sorted(set(after) - before)
+            if cell.ok:
+                new_vars = {
+                    key: _fmt_var(value)
+                    for key, value in after.items()
+                    if key in introduced_names
+                }
+                prev_names = set(after)
+            else:
+                new_vars = {}
+                discarded_names = introduced_names
+                if discarded_names:
+                    cleanup = session.execute(
+                        _discard_failed_cell_names_code(discarded_names),
+                        timeout=20,
+                    )
+                    if not cleanup.ok:
+                        cleanup_error = cleanup.error_summary or cleanup.stderr
+                prev_names = set(after) - set(discarded_names)
+
+        cell_error = cell.error_summary
+        if not cell.timed_out and discarded_names:
+            cell_error += "; discarded partial names: " + ", ".join(discarded_names)
+        if not cell.timed_out and cleanup_error:
+            cell_error += "; failed to discard partial state: " + cleanup_error
 
         step = MiniAgentStep(
             index=index,
@@ -257,7 +282,7 @@ def run_mini_agent(
             code=turn.code,
             stdout=cell.stdout,
             stderr=cell.stderr,
-            error=cell.error_summary,
+            error=cell_error,
             new_variables=new_vars,
             duration_seconds=cell.duration_seconds,
             accepted=cell.ok,
@@ -271,6 +296,10 @@ def run_mini_agent(
             accepted_cells.append(turn.code)
 
         transcript.append(_feedback(step))
+
+        if not cell.timed_out and cleanup_error:
+            termination = TerminationReason.ENGINE_ERROR
+            break
 
         if cell.timed_out:
             termination = TerminationReason.ENGINE_ERROR
@@ -415,6 +444,9 @@ def build_system_prompt(
         "- After a failed cell, preserve valid prior state and make the smallest "
         "correction supported by the concrete error; do not restart with an unrelated "
         "approach.",
+        "- Names introduced by a failed cell are discarded from the kernel. In the "
+        "corrected cell, repeat any required imports and assignments instead of relying "
+        "on partial state from the failure.",
     ]
     declared_inputs = [str(path) for path in (input_paths or [])]
     if declared_inputs:
@@ -491,6 +523,14 @@ def _references_oc(code: str) -> bool:
 def _fmt_var(info: dict) -> str:
     shape = info.get("shape")
     return f"{info.get('type', '?')}{f' shape={shape}' if shape else ''}"
+
+
+def _discard_failed_cell_names_code(names: list[str]) -> str:
+    return (
+        f"for _oc_failed_name in {names!r}:\n"
+        "    globals().pop(_oc_failed_name, None)\n"
+        "globals().pop('_oc_failed_name', None)"
+    )
 
 
 def _read_answer(path: Path) -> str:

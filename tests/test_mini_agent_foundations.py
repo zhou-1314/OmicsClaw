@@ -59,6 +59,8 @@ def test_system_prompt_prefers_compact_work_and_names_exact_inputs():
     assert "/workspace/notes/reference.py" in prompt
     assert "reference-only" in prompt
     assert "smallest correction" in prompt
+    assert "Names introduced by a failed cell are discarded" in prompt
+    assert "repeat any required imports" in prompt
 
 
 # --------------------------------------------------------------------------- #

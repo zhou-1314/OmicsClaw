@@ -189,6 +189,15 @@ failed cell, on mutated globals, or on execution order that a concatenated file
 does not reproduce. Therefore the mini-agent does not accept `ReturnAnswer`
 until replay has passed.
 
+After a non-timeout cell failure, the live loop also diffs the user-visible
+kernel namespace and discards names introduced by that failed cell. The model
+is told which partial names were removed and must repeat required imports and
+assignments in its correction. This prevents a later accepted cell from
+depending on an import or temporary created before the exception. It is a fast
+in-loop hygiene measure, not a replacement for replay: mutations to objects
+that already existed before the failed cell are not generally reversible, so
+the fresh-process replay remains the acceptance authority.
+
 On every successful step, the runner records:
 
 - a cell id, source code, stdout/stderr summary, produced variable diff, and
@@ -328,11 +337,14 @@ can drive the mini-agent.
   `ReturnAnswer` is accepted.
 - The outer loop performs final result validation against the user intent,
   schema-grounded plan, artifacts, and replay report before presenting an
-  interpretation. Its final configured iteration is a response-only landing
-  turn with `tools=[]`; a provider-returned tool call on that turn is never
-  executed. A successful digest treats replay and the recursive artifact
-  inventory as authoritative, so the outer loop answers without another
-  list/glob/read verification cycle.
+  interpretation. A successful autonomous digest moves the next provider turn
+  to a restricted landing surface that exposes only batched `task_update`; if
+  used, the following turn is forced to `tools=[]`. A provider-returned
+  list/read or other unexposed tool call in that landing phase is never
+  executed. Failed autonomous runs keep the ordinary recovery tools. The final
+  configured iteration remains a response-only `tools=[]` backstop. Replay and
+  the recursive artifact inventory are therefore authoritative after success,
+  without another list/glob/read verification cycle.
 - Every report separates computed results from interpretive claims and keeps
   the OmicsClaw disclaimer.
 

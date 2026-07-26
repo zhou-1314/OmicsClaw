@@ -7,6 +7,7 @@ is exercised end to end without a provider.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from omicsclaw.autonomous.budget import BudgetLedger, MiniAgentBudget, Terminati
 from omicsclaw.autonomous.kernel_envelope import envelope_available
 from omicsclaw.autonomous.kernel_session import CellResult, KernelSession, kernel_ipc_available
 from omicsclaw.autonomous.mini_agent import _sync_skill_calls, run_mini_agent
+from omicsclaw.autonomous.skill_facade import SKILL_CALLS_LOG
 
 SANDBOX = envelope_available()
 IPC_AVAILABLE = kernel_ipc_available()
@@ -61,8 +63,6 @@ def session(tmp_path: Path):
 def test_sync_skill_calls_mirrors_jsonl_into_ledger(tmp_path: Path):
     """The facade's per-call counter lives in the kernel, so the host mirrors
     skill_calls.jsonl into the ledger; this must be accurate and idempotent."""
-    from omicsclaw.autonomous.skill_facade import SKILL_CALLS_LOG
-
     ledger = BudgetLedger(budget=MiniAgentBudget())
     _sync_skill_calls(ledger, tmp_path)  # no log yet
     assert ledger.skill_calls_used == 0
@@ -84,8 +84,6 @@ def test_sync_skill_calls_mirrors_jsonl_into_ledger(tmp_path: Path):
 def test_sync_skill_calls_ignores_partial_json_lines(tmp_path: Path):
     """A half-written in-flight append must not be counted, so the live ledger
     stays consistent with the runner's JSON-parsing re-read of the same log."""
-    from omicsclaw.autonomous.skill_facade import SKILL_CALLS_LOG
-
     ledger = BudgetLedger(budget=MiniAgentBudget())
     log = tmp_path / SKILL_CALLS_LOG
     log.write_text('{"skill": "a"}\n{"skill": "b"', encoding="utf-8")  # second line partial
@@ -141,6 +139,36 @@ def test_safety_lint_blocks_subprocess(session: KernelSession, tmp_path: Path):
     )
     assert any("blocked" in s.error for s in outcome.steps)
     assert outcome.answer == "done"
+
+
+def test_failed_cell_names_cannot_leak_into_later_accepted_cells(
+    session: KernelSession,
+    tmp_path: Path,
+):
+    llm = ScriptedLLM(
+        [
+            TURN("establish valid state", "stable = 40"),
+            TURN(
+                "fail after creating partial state",
+                "import math\nleaked = math.sqrt(1764)\nraise RuntimeError('boom')",
+            ),
+            TURN("incorrectly depend on failed state", "ReturnAnswer(f'leaked={leaked}')"),
+            TURN("repair reproducibly", "ReturnAnswer(f'recovered={stable + 2}')"),
+        ]
+    )
+
+    outcome = run_mini_agent(
+        session=session,
+        llm=llm,
+        goal="recover without hidden failed-cell state",
+        workspace_root=tmp_path,
+    )
+
+    assert outcome.answer == "recovered=42"
+    assert outcome.termination is TerminationReason.RETURNED_ANSWER
+    assert "RuntimeError" in outcome.steps[1].error
+    assert "NameError" in outcome.steps[2].error
+    assert len(outcome.accepted_cells) == 2
 
 
 def test_step_budget_terminates(session: KernelSession, tmp_path: Path):
@@ -240,8 +268,6 @@ def test_external_cancel_terminates_run_before_any_llm_step(tmp_path: Path):
     CANCELLED at the top guard, before spending any LLM step — the between-steps
     half of the desktop-Stop fix (the in-cell half is covered by
     test_mini_agent_kernel.test_external_cancel_interrupts_a_running_cell)."""
-    import threading
-
     llm = ScriptedLLM([TURN("must not run", "x = 1")])
     session = FakeSession([CellResult(ok=True, stdout="[mini-agent kernel ready]\n")])
     cancel = threading.Event()
