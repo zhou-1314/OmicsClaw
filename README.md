@@ -15,7 +15,6 @@
   <a href="README_zh-CN.md"><b>简体中文</b></a> ·
   <a href="#-whats-new"><b>What's New</b></a> ·
   <a href="#-quick-start"><b>Quick Start</b></a> ·
-  <a href="#-architecture"><b>Architecture</b></a> ·
   <a href="#-domains"><b>Domains</b></a> ·
   <a href="https://TianGzlab.github.io/OmicsClaw/"><b>Docs Site</b></a>
 </p>
@@ -31,7 +30,7 @@
 
 </div>
 
-> **OmicsClaw turns local multi-omics tools into AI-callable skills.** The LLM plans and operates; Python, R, and CLI tools process your data in a local or remote runtime — raw matrices never leave your machine. One agent loop powers the cut-over CLI and Desktop paths plus production-enabled Owner-only Telegram (text + one photo) and Feishu (text-only) Channels; the other Channel Adapters remain gated pending equivalent control-plane cutover.
+> **OmicsClaw turns local multi-omics tools into AI-callable skills.** The LLM plans and operates; Python, R, and CLI tools process your data in a local or remote runtime — raw matrices never leave your machine. One agent loop serves the terminal, the desktop app, and chat platforms.
 
 ## 📢 What's New
 
@@ -71,11 +70,11 @@ The **[Releases](https://github.com/TianGzlab/OmicsClaw/releases)** tab hosts th
 
 | Platform | Installer |
 |---|---|
-| <picture><source media="(prefers-color-scheme: dark)" srcset="https://api.iconify.design/simple-icons:apple.svg?color=%23ffffff"><img alt="" width="14" height="14" src="https://api.iconify.design/simple-icons:apple.svg?color=%23000000"></picture> **macOS — Apple Silicon** (M1 / M2 / M3 / M4) | [`OmicsClaw-<ver>-arm64.dmg`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
-| <picture><source media="(prefers-color-scheme: dark)" srcset="https://api.iconify.design/simple-icons:apple.svg?color=%23ffffff"><img alt="" width="14" height="14" src="https://api.iconify.design/simple-icons:apple.svg?color=%23000000"></picture> **macOS — Intel** | [`OmicsClaw-<ver>-x64.dmg`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
-| <picture><source media="(prefers-color-scheme: dark)" srcset="https://api.iconify.design/simple-icons:windows.svg?color=%23ffffff"><img alt="" width="14" height="14" src="https://api.iconify.design/simple-icons:windows.svg?color=%230078D4"></picture> **Windows — x64 / ARM64** | [`OmicsClaw.Setup.<ver>-x64.exe`](https://github.com/TianGzlab/OmicsClaw/releases/latest) · [`OmicsClaw.Setup.<ver>-arm64.exe`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
-| <picture><source media="(prefers-color-scheme: dark)" srcset="https://api.iconify.design/simple-icons:linux.svg?color=%23ffffff"><img alt="" width="14" height="14" src="https://api.iconify.design/simple-icons:linux.svg?color=%23000000"></picture> **Linux — x64** | [`.AppImage`](https://github.com/TianGzlab/OmicsClaw/releases/latest) · [`.deb`](https://github.com/TianGzlab/OmicsClaw/releases/latest) · [`.rpm`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
-| <picture><source media="(prefers-color-scheme: dark)" srcset="https://api.iconify.design/simple-icons:linux.svg?color=%23ffffff"><img alt="" width="14" height="14" src="https://api.iconify.design/simple-icons:linux.svg?color=%23000000"></picture> **Linux — ARM64** | [`.AppImage`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
+| **macOS — Apple Silicon** (M1 / M2 / M3 / M4) | [`OmicsClaw-<ver>-arm64.dmg`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
+| **macOS — Intel** | [`OmicsClaw-<ver>-x64.dmg`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
+| **Windows — x64 / ARM64** | [`OmicsClaw.Setup.<ver>-x64.exe`](https://github.com/TianGzlab/OmicsClaw/releases/latest) · [`OmicsClaw.Setup.<ver>-arm64.exe`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
+| **Linux — x64** | [`.AppImage`](https://github.com/TianGzlab/OmicsClaw/releases/latest) · [`.deb`](https://github.com/TianGzlab/OmicsClaw/releases/latest) · [`.rpm`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
+| **Linux — ARM64** | [`.AppImage`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
 
 > Verify each download against `SHA256SUMS.txt` published alongside the installers. The desktop client and the CLI talk to the same backend — analyses, memory, and remote runtimes stay portable across both.
 
@@ -104,90 +103,9 @@ OmicsClaw prefers a matching built-in skill, but ships a first-class autonomous 
 - **Exact skill match** gets **data-grounded assisted parameterization**: the skill choice stays deterministic while the outer LLM recommends the method and parameters *within* it — grounded in the matched `SKILL.md` method menu and an `inspect_data` schema — asking a focused question only on consequential ambiguity.
 - **Partial / No skill match** is delegated to the autonomous code path.
 
-Generated-code analysis runs in the single autonomous engine — the **Autonomous Code Mini-Agent** (`omicsclaw/autonomous/`): a bounded, tiered-isolation Jupyter-kernel agent that drives vetted skills through a curated `oc` handle and gates acceptance on a replay rerun.
-
-Design note: [ADR 0032](docs/adr/0032-autonomous-code-mini-agent.md) defines this fallback's architecture — a bounded autonomous code mini-agent with curated skill handles, a persistent Jupyter kernel under **tiered isolation** (bubblewrap OS envelope when available, in-kernel guard otherwise), and replay validation. As of the 2026-06-22 single-engine consolidation it is the **only** autonomous engine — always on, no flag, no legacy one-shot runner. The earlier `off`/`assist`/`auto` router-mode selector (`OMICSCLAW_ANALYSIS_ROUTER_MODE`) was removed in the same consolidation.
+Generated-code analysis runs in the single autonomous engine — the **Autonomous Code Mini-Agent** (`omicsclaw/autonomous/`): a bounded Jupyter-kernel agent under tiered isolation (bubblewrap when available, in-kernel guard otherwise) that drives vetted skills through a curated `oc` handle and gates acceptance on a replay rerun. See [ADR 0032](docs/adr/0032-autonomous-code-mini-agent.md).
 
 </details>
-
-## 🏗️ Architecture
-
-**Three Surfaces, one agent loop.** Whatever you type — terminal, desktop app, or
-chat platform — is normalized into the same durable Turn, serialized per
-conversation, and executed by a single agent loop. Skills, memory, providers and
-remote execution all hang off that loop.
-
-```mermaid
-flowchart TD
-    U["🧑‍🔬 You — chat · commands · data"]
-
-    subgraph Surfaces["🧭 Surfaces"]
-        PCLI["💬 Canonical CLI chat<br/>prompt-toolkit REPL · single-shot"]
-        TUI["⏳ Legacy CLI chat<br/>Textual TUI"]
-        DESK["🌐 Desktop<br/>oc desktop-server · FastAPI/SSE"]
-        CHAN["📨 Channel<br/>Telegram text + photo · Feishu text"]
-    end
-
-    INGRESS["🚪 Ingress Normalizer<br/>Owner admission · canonical envelope"]
-    CONTROL["🗃️ Backend control.db<br/>Project · Conversation · Receipts · Bindings"]
-    ATTACH["📎 Attachment Store<br/>per-Turn Records · content-addressed Blobs"]
-    OUTBOX["📤 Persistent delivery Outbox<br/>terminal Channel replies only"]
-    TURN["🧾 Turn control<br/>opaque ID · bounded sequencer"]
-    RUNADAPTERS["🧩 Typed Simple Skill Run Adapters<br/>Desktop · prompt-toolkit · root exact demo scopes · Remote"]
-    RUNADM["🧾 Run admission<br/>submission binding · opaque ID · scope"]
-    ASSIGN["🔒 One fenced<br/>Execution Assignment"]
-    DISPATCH["⚙️ dispatch envelope → typed event stream"]
-    LOOP["🔁 Agent loop<br/>plan → tool calls → results → repeat<br/>pathology guard · approval gates"]
-
-    subgraph Capabilities["🧰 Capabilities"]
-        SKILLS["🧪 Skill runner<br/>95 skills · 8 domains"]
-        MEMORY["🧠 Graph memory<br/>Project knowledge · datasets · lineage"]
-        PROV["🔌 Providers<br/>any OpenAI-compatible LLM"]
-        REMOTE["📡 Remote<br/>SSH to Linux servers"]
-    end
-
-    OUT["📊 Run Store<br/>Manifest · artifacts"]
-
-    U --> PCLI & TUI & DESK & CHAN & RUNADAPTERS
-    PCLI & DESK & CHAN --> INGRESS
-    TUI -. legacy MessageEnvelope .-> DISPATCH
-    RUNADAPTERS --> RUNADM
-    INGRESS <--> CONTROL
-    INGRESS <--> ATTACH
-    INGRESS --> TURN
-    TURN --> CONTROL
-    TURN --> DISPATCH
-    DISPATCH --> CONTROL
-    CONTROL --> OUTBOX
-    OUTBOX --> CHAN
-    DISPATCH --> LOOP
-    LOOP --> RUNADM & MEMORY & PROV
-    RUNADM <--> CONTROL
-    RUNADM --> ASSIGN
-    ASSIGN <--> CONTROL
-    ASSIGN --> SKILLS
-    SKILLS --> REMOTE
-    SKILLS --> OUT
-    MEMORY -. resumes across runs .-> LOOP
-```
-
-Four properties are worth knowing before you read any code:
-
-| Property | What it means |
-|---|---|
-| **One loop, many doors** | Every Surface converges on the same agent loop. Surfaces observe a Turn; they never own its execution. |
-| **Durable control plane** | One Backend-exclusive `control.db` holds Projects, Conversations and Turn/Run receipts. Transcripts and attachments live in their own stores. |
-| **Observation ≠ ownership** | Closing a tab, dropping an SSE stream or killing the app never cancels a running Turn — only an explicit cancel does. |
-| **Runs are fenced** | Each Run gets one opaque ID and at most one fenced executor start. There is no automatic replay after a restart. |
-
-Beyond a single chat turn, two subsystems run longer jobs: a **multi-agent
-research pipeline** (`omicsclaw/agents/`, intake → plan → research → execute →
-analyze → write → review) and an **AutoAgent** experiment/optimization loop.
-
-📖 **Full detail:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the canonical
-ledger — it separates what is *as-built* from what is an *accepted target*, and
-names the drift between them. [`docs/architecture/`](docs/architecture/) holds the
-readable projections, and [`docs/adr/`](docs/adr/) records why each decision was made.
 
 ## ⚡ Quick Start
 
@@ -228,13 +146,9 @@ Pick the entry point that fits your workflow — they all reach the same backend
 
 Remote mode uses `127.0.0.1`, SSH tunneling, and `OMICSCLAW_REMOTE_AUTH_TOKEN`. See [remote execution](docs/engineering/remote-execution.mdx) and the [legacy remote guide](docs/_legacy/remote-connection-guide.md).
 
-The production Channel scope is the shared runner and `ControlRuntime`:
-Owner-only Telegram text plus one ordinary photo, and Owner-only Feishu
-text-only. Install both authoritative SDKs with `pip install -e ".[channels]"`.
-For Feishu, `FEISHU_ALLOWED_SENDERS` and `FEISHU_BOT_OPEN_ID` are mandatory;
-the latter is the identity used to prove a group message mentioned this Bot.
-The other Channel Adapters remain gated. Outbound media remains incomplete and
-fail-closed; this milestone is not full ADR or media completion.
+Channels are Owner-only: Feishu additionally requires `FEISHU_ALLOWED_SENDERS` and
+`FEISHU_BOT_OPEN_ID` (the identity that proves a group message mentioned this bot).
+Everything not listed above — other adapters, outbound media — fails closed.
 
 ## 📦 Installation
 
@@ -379,10 +293,4 @@ Apache-2.0. See [LICENSE](LICENSE).
 ```
 
 [⬆ Back to top](#top)
-
-## 📈 项目进展
-
-开发向的工程日志（ADR 落地、纵切进度、复审结论、开放问题）已移出本文件，
-由 Dream 自动维护在 **[`docs/PROGRESS.md`](docs/PROGRESS.md)**。
-面向用户的功能亮点见上方 [What's New](#-whats-new)。
 

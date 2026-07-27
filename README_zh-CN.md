@@ -15,7 +15,6 @@
   <b>简体中文</b> ·
   <a href="#-最新动态"><b>最新动态</b></a> ·
   <a href="#-快速开始"><b>快速开始</b></a> ·
-  <a href="#-架构"><b>架构</b></a> ·
   <a href="#-领域"><b>领域</b></a> ·
   <a href="https://TianGzlab.github.io/OmicsClaw/"><b>文档站</b></a>
 </p>
@@ -71,11 +70,11 @@
 
 | 平台 | 安装包 |
 |---|---|
-| <picture><source media="(prefers-color-scheme: dark)" srcset="https://api.iconify.design/simple-icons:apple.svg?color=%23ffffff"><img alt="" width="14" height="14" src="https://api.iconify.design/simple-icons:apple.svg?color=%23000000"></picture> **macOS — Apple Silicon** (M1 / M2 / M3 / M4) | [`OmicsClaw-<ver>-arm64.dmg`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
-| <picture><source media="(prefers-color-scheme: dark)" srcset="https://api.iconify.design/simple-icons:apple.svg?color=%23ffffff"><img alt="" width="14" height="14" src="https://api.iconify.design/simple-icons:apple.svg?color=%23000000"></picture> **macOS — Intel** | [`OmicsClaw-<ver>-x64.dmg`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
-| <picture><source media="(prefers-color-scheme: dark)" srcset="https://api.iconify.design/simple-icons:windows.svg?color=%23ffffff"><img alt="" width="14" height="14" src="https://api.iconify.design/simple-icons:windows.svg?color=%230078D4"></picture> **Windows — x64 / ARM64** | [`OmicsClaw.Setup.<ver>-x64.exe`](https://github.com/TianGzlab/OmicsClaw/releases/latest) · [`OmicsClaw.Setup.<ver>-arm64.exe`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
-| <picture><source media="(prefers-color-scheme: dark)" srcset="https://api.iconify.design/simple-icons:linux.svg?color=%23ffffff"><img alt="" width="14" height="14" src="https://api.iconify.design/simple-icons:linux.svg?color=%23000000"></picture> **Linux — x64** | [`.AppImage`](https://github.com/TianGzlab/OmicsClaw/releases/latest) · [`.deb`](https://github.com/TianGzlab/OmicsClaw/releases/latest) · [`.rpm`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
-| <picture><source media="(prefers-color-scheme: dark)" srcset="https://api.iconify.design/simple-icons:linux.svg?color=%23ffffff"><img alt="" width="14" height="14" src="https://api.iconify.design/simple-icons:linux.svg?color=%23000000"></picture> **Linux — ARM64** | [`.AppImage`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
+| **macOS — Apple Silicon** (M1 / M2 / M3 / M4) | [`OmicsClaw-<ver>-arm64.dmg`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
+| **macOS — Intel** | [`OmicsClaw-<ver>-x64.dmg`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
+| **Windows — x64 / ARM64** | [`OmicsClaw.Setup.<ver>-x64.exe`](https://github.com/TianGzlab/OmicsClaw/releases/latest) · [`OmicsClaw.Setup.<ver>-arm64.exe`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
+| **Linux — x64** | [`.AppImage`](https://github.com/TianGzlab/OmicsClaw/releases/latest) · [`.deb`](https://github.com/TianGzlab/OmicsClaw/releases/latest) · [`.rpm`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
+| **Linux — ARM64** | [`.AppImage`](https://github.com/TianGzlab/OmicsClaw/releases/latest) |
 
 > 下载后用同 release 里的 `SHA256SUMS.txt` 校验完整性。桌面端与 CLI 共用同一后端，分析、记忆、远程运行时在两端之间无缝迁移。
 
@@ -107,80 +106,7 @@ OmicsClaw 优先使用匹配的内置技能，但为其余情况内置了一等�
 
 旧的 `OMICSCLAW_ANALYSIS_ROUTER_ENABLED=true` 仍被当作 `auto` 接受。生成式代码分析由唯一的 autonomous 引擎 —— **Autonomous Code Mini-Agent**（`omicsclaw/autonomous/`）执行：一个分层隔离的常驻 Jupyter kernel 战术 agent，经受控 `oc` 句柄调用 vetted skill，并以 replay 重放作为验收闸门。
 
-设计说明：[ADR 0032](docs/adr/0032-autonomous-code-mini-agent.md) 定义了该 fallback 路径的架构：有界 autonomous code mini-agent、受控技能句柄、**分层隔离**的常驻 Jupyter kernel（有 bwrap 走 OS envelope、无 bwrap 走进程内 guard）与 replay validation。自 2026-06-22 单引擎合并起，它是**唯一**的 autonomous 引擎 —— 永远开、无 flag、无 legacy 一次性 runner。
-
 </details>
-
-## 🏗️ 架构
-
-**三个 Surface，一个 agent loop。** 无论你从终端、桌面 App 还是聊天平台输入，都会被规范化成同一个持久化
-Turn，按会话串行，交由同一个 agent loop 执行。技能、记忆、模型 provider 与远程执行都挂在这个 loop 上。
-
-```mermaid
-flowchart TD
-    U["🧑‍🔬 你 — 对话 · 命令 · 数据"]
-
-    subgraph Surfaces["🧭 Surfaces"]
-        CLI["💬 CLI<br/>oc interactive · oc tui"]
-        DESK["🌐 Desktop<br/>oc desktop-server · FastAPI/SSE"]
-        CHAN["📨 Channel<br/>Telegram 文本 + 单图 · 飞书纯文本"]
-    end
-
-    INGRESS["🚪 Ingress Normalizer<br/>Owner 准入 · 统一信封"]
-    CONTROL["🗃️ control.db<br/>Project · Conversation · Receipt · Binding"]
-    ATTACH["📎 Attachment Store<br/>每 Turn Record · content-addressed Blob"]
-    OUTBOX["📤 持久交付 Outbox<br/>仅 Channel 终态回复"]
-    TURN["🧾 Turn 控制<br/>opaque ID · 有界串行器"]
-    RUNADM["🧾 Run 准入<br/>提交绑定 · opaque ID · Scope"]
-    ASSIGN["🔒 唯一 fenced<br/>Execution Assignment"]
-    DISPATCH["⚙️ dispatch envelope → 类型化事件流"]
-    LOOP["🔁 Agent loop<br/>规划 → 工具调用 → 结果 → 循环<br/>pathology 守护 · 审批门控"]
-
-    subgraph Capabilities["🧰 能力层"]
-        SKILLS["🧪 技能运行器<br/>95 个技能 · 8 个领域"]
-        MEMORY["🧠 图记忆<br/>会话 · 数据集 · 血缘"]
-        PROV["🔌 Providers<br/>任意 OpenAI 兼容 LLM"]
-        REMOTE["📡 远程<br/>SSH 到 Linux 服务器"]
-    end
-
-    OUT["📊 Run Store<br/>Manifest · artifacts"]
-
-    U --> CLI & DESK & CHAN
-    CLI & DESK & CHAN --> INGRESS
-    INGRESS <--> CONTROL
-    INGRESS <--> ATTACH
-    INGRESS --> TURN
-    TURN --> CONTROL
-    TURN --> DISPATCH
-    DISPATCH --> CONTROL
-    CONTROL --> OUTBOX
-    OUTBOX --> CHAN
-    DISPATCH --> LOOP
-    LOOP --> RUNADM & MEMORY & PROV
-    RUNADM <--> CONTROL
-    RUNADM --> ASSIGN
-    ASSIGN <--> CONTROL
-    ASSIGN --> SKILLS
-    SKILLS --> REMOTE
-    SKILLS --> OUT
-    MEMORY -. 跨运行续接 .-> LOOP
-```
-
-读代码之前，先了解这四条性质：
-
-| 性质 | 含义 |
-|---|---|
-| **一个 loop，多个入口** | 所有 Surface 最终汇聚到同一个 agent loop。Surface 只是观察 Turn，从不拥有它的执行。 |
-| **持久化控制面** | 唯一由 Backend 独占的 `control.db` 保存 Project、Conversation 与 Turn/Run 收据；transcript 与附件各有独立存储。 |
-| **观察 ≠ 拥有** | 关掉页面、断开 SSE、甚至杀掉 App，都不会取消正在跑的 Turn —— 只有显式取消才会。 |
-| **Run 带围栏** | 每个 Run 有唯一不透明 ID，且至多一次带围栏的执行启动；重启后不会自动重放。 |
-
-在单次对话之外，还有两个独立子系统跑长任务：**多 agent 研究流水线**（`omicsclaw/agents/`，intake →
-plan → research → execute → analyze → write → review）与 **AutoAgent** 实验/优化循环。
-
-📖 **完整细节：**[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 是权威 ledger —— 它区分「已建成」
-与「已接受的目标」，并点明两者之间的偏差。[`docs/architecture/`](docs/architecture/) 是可读的投影版本，
-[`docs/adr/`](docs/adr/) 记录每个决策的缘由。
 
 ## ⚡ 快速开始
 
@@ -221,12 +147,9 @@ oc interactive
 
 远程模式使用 `127.0.0.1` + SSH 隧道 + `OMICSCLAW_REMOTE_AUTH_TOKEN`。详见 [remote execution](docs/engineering/remote-execution.mdx) 与 [legacy remote guide](docs/_legacy/remote-connection-guide.md)。
 
-生产 Channel 范围由 shared runner 与 `ControlRuntime` 共同承载：仅 Owner
-可用的 Telegram 文本与单张普通图片，以及仅 Owner 可用的飞书纯文本。
-使用 `pip install -e ".[channels]"` 安装两个权威 SDK。飞书必须配置
-`FEISHU_ALLOWED_SENDERS` 与 `FEISHU_BOT_OPEN_ID`，后者用于证明群消息确实
-@ 了当前 Bot。其他 Channel Adapter 仍保持 gated。出站媒体仍未完成并保持
-fail-closed；本里程碑不代表 ADR 或媒体能力已全部完成。
+Channel 仅 Owner 可用：飞书还必须配置 `FEISHU_ALLOWED_SENDERS` 与
+`FEISHU_BOT_OPEN_ID`（后者用于证明群消息确实 @ 了当前 Bot）。
+上表未列出的一切 —— 其他 adapter、出站媒体 —— 均 fail-closed。
 
 ## 📦 安装
 
