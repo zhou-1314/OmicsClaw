@@ -15,6 +15,7 @@
   <b>简体中文</b> ·
   <a href="#-最新动态"><b>最新动态</b></a> ·
   <a href="#-快速开始"><b>快速开始</b></a> ·
+  <a href="#npm-desktop"><b>npm + 桌面 App</b></a> ·
   <a href="#-领域"><b>领域</b></a> ·
   <a href="https://TianGzlab.github.io/OmicsClaw/"><b>文档站</b></a>
 </p>
@@ -162,6 +163,65 @@ Channel 仅 Owner 可用：飞书还必须配置 `FEISHU_ALLOWED_SENDERS` 与
 | 🧠 **记忆 API** | 通过 HTTP 检视图记忆 | `pip install -e ".[memory]"` 然后 `oc memory-server` |
 
 📖 详细见 [安装指南](docs/_legacy/INSTALLATION.md) 与 [快速上手](docs/introduction/quickstart.mdx)。依赖分别由 [`pyproject.toml`](pyproject.toml)、[`environment.yml`](environment.yml)、[`0_setup_env.sh`](0_setup_env.sh) 管理。
+
+<a id="npm-desktop"></a>
+
+## 🚀 npm 安装 & 桌面 App 配对
+
+一条 `npm install -g omicsclaw` 同时装好 CLI **和**一个自包含的 CPython 运行时 —— 不需要 conda、venv 或系统 Python。这个运行时也正是 [桌面 App](https://github.com/TianGzlab/OmicsClaw/releases/latest) 可以指向的解释器，装一次同时服务终端与 App。
+
+> **状态** —— wrapper 与四个平台运行时由 [`npm-release.yml`](.github/workflows/npm-release.yml) 构建；发布是手动、需 reviewer 审批的 dispatch，目前尚未执行，因此 `npm install -g omicsclaw` 在 registry 上仍是 404。在正式发布之前，请用上表的 conda 或 pip 路径安装后端。
+
+```bash
+npm install -g omicsclaw   # CLI + 与你平台匹配的那一个运行时
+omicsclaw --version        # `oc` 是同一个命令的短别名
+oc list                    # 按领域列出 95 个技能
+```
+
+唯一前置条件是 Node.js 18+。wrapper 本身不含运行时：它在 `optionalDependencies` 里为每个平台声明一个 `@omicsclaw/runtime-<platform>`，npm 的 `os` / `cpu` 过滤保证磁盘上只落地一个 —— 与 esbuild、biome 同一套模式。postinstall 会把该解释器记录到 `~/.omicsclaw/runtime.json`，并把此前用 pip 安装的 `omicsclaw` / `oc` shim 重命名为 `<name>-legacy`，让 npm 命令在 `PATH` 上胜出，同时不删除旧的。
+
+| 平台 | 运行时 |
+|---|---|
+| Linux x64 · Linux arm64 · macOS Apple Silicon · Windows x64 | ✅ 预编译，随包提供 |
+| macOS Intel · Windows arm64 | ❌ 无 `llvmlite` wheel / 无 CI runner —— 请克隆仓库执行 `0_setup_env.sh` |
+
+该运行时只带 agent 与 desktop server，**不含**科学计算栈（`scanpy`、`torch`、R、bioconda CLI，约 1.5 GiB）。需要它们的技能会提示往同一个解释器里装什么；要完整受支持的分析栈，请走 Linux conda 路径。
+
+### 与 OmicsClaw-App 配对
+
+桌面安装包不含 Python，也不会下载、创建、修复或自动选择解释器。解释器由你显式指定；App 只有在前置验证、临时启动、严格 `/health` 检查全部通过后才提交，任一环节失败都会恢复之前可用的运行时。
+
+| 模式 | 后端所在 | 在 App 里怎么做 |
+|---|---|---|
+| **本地** | 当前这台机器 | **运行环境 → 本地 Python**（或首次设置向导）。**检测已有环境** 会列出 npm 运行时（读 `~/.omicsclaw/runtime.json`）以及 conda 环境；点 **使用 …**，或点 **选择 Python** 自己选解释器。检测只在点击后执行，且从不替你选择。 |
+| **远程** | 一台 Linux 服务器 | 在服务器上跑 `oc desktop-server --host 127.0.0.1 --port 8765`，然后 **运行环境 → 新建运行环境**，填直连 URL 或 SSH 别名（后端要求认证时再填 bearer token），先 **运行 Ping**，再 **设为当前**。桌面这台机器完全不需要 Python。 |
+
+App 让你填解释器路径时，用这两条命令打印准确路径：
+
+```bash
+# npm 运行时
+python -c "import json, os; print(json.load(open(os.path.expanduser('~/.omicsclaw/runtime.json')))['pythonPath'])"
+# conda 环境
+conda run -n OmicsClaw python -c "import sys; print(sys.executable)"
+```
+
+后端绑定 `127.0.0.1:8765`（可用 `OMICSCLAW_APP_HOST` / `OMICSCLAW_APP_PORT` 覆盖）；远程连接档案用 `OMICSCLAW_REMOTE_AUTH_TOKEN` 认证。LLM 服务商可以在 App 的设置向导里配，也可以写在后端的 `.env` 里。由对话触发的分析写入 `<项目目录>/output`，也就是 App 结果看板读取的位置。
+
+<details>
+<summary><b>排错与升级</b></summary>
+
+| 现象 | 处理 |
+|---|---|
+| `command not found: omicsclaw` | npm 全局 bin 不在 `PATH` 上：`export PATH="$(npm prefix -g)/bin:$PATH"` |
+| 安装报 `EACCES` | 不要用 `sudo`。`npm config set prefix ~/.npm-global`，把 `~/.npm-global/bin` 加进 `PATH` 后重装 |
+| 平台运行时没装上 | 需要 npm ≥ 7，且不能带 `--no-optional` |
+| 8765 端口被占用 | `lsof -ti:8765 \| xargs kill -9`（macOS / Linux） |
+| App 显示后端离线 | 执行 `<选定的 python> -c "import omicsclaw; print(omicsclaw.__version__)"`，修好该环境后在 App 里重试激活 |
+| 升级 | `npm install -g omicsclaw@latest` —— 解释器路径保持不变，重启 App 即可继续使用 |
+
+</details>
+
+📖 分发机制细节 —— wrapper 结构、平台子包、`~/.omicsclaw/runtime.json` 契约 —— 见 [`npm/AGENTS.md`](npm/AGENTS.md) 与 [`npm/omicsclaw/README.md`](npm/omicsclaw/README.md)。
 
 ## 🧬 领域
 

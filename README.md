@@ -15,6 +15,7 @@
   <a href="README_zh-CN.md"><b>简体中文</b></a> ·
   <a href="#-whats-new"><b>What's New</b></a> ·
   <a href="#-quick-start"><b>Quick Start</b></a> ·
+  <a href="#npm-desktop"><b>npm + Desktop</b></a> ·
   <a href="#-domains"><b>Domains</b></a> ·
   <a href="https://TianGzlab.github.io/OmicsClaw/"><b>Docs Site</b></a>
 </p>
@@ -161,6 +162,65 @@ Everything not listed above — other adapters, outbound media — fails closed.
 | 🧠 **Memory API** | Inspect graph memory over HTTP | `pip install -e ".[memory]"` then `oc memory-server` |
 
 📖 Details: [installation guide](docs/_legacy/INSTALLATION.md), [quickstart](docs/introduction/quickstart.mdx). Dependencies live in [`pyproject.toml`](pyproject.toml), [`environment.yml`](environment.yml), and [`0_setup_env.sh`](0_setup_env.sh).
+
+<a id="npm-desktop"></a>
+
+## 🚀 npm install & Desktop pairing
+
+One `npm install -g omicsclaw` gives you the CLI **and** a self-contained CPython runtime — no conda, no venv, no system Python. That same runtime is the interpreter the [Desktop App](https://github.com/TianGzlab/OmicsClaw/releases/latest) can be pointed at, so a single install serves both the terminal and the App.
+
+> **Status** — the wrapper and its four platform runtimes are built by [`npm-release.yml`](.github/workflows/npm-release.yml); publishing is a manual, reviewer-gated dispatch that has not run yet, so `npm install -g omicsclaw` still 404s on the registry. Until it lands, install the backend through the conda or pip paths above.
+
+```bash
+npm install -g omicsclaw   # CLI + the one runtime matching your platform
+omicsclaw --version        # `oc` is the short alias for the same binary
+oc list                    # 95 skills, by domain
+```
+
+Node.js 18+ is the only prerequisite. The wrapper carries no runtime: it declares one `@omicsclaw/runtime-<platform>` per host in `optionalDependencies`, and npm's `os` / `cpu` filtering lands exactly one on disk — the pattern esbuild and biome use. The postinstall hook records that interpreter in `~/.omicsclaw/runtime.json` and renames any pip-installed `omicsclaw` / `oc` shim to `<name>-legacy`, so the npm command wins `PATH` without deleting the old one.
+
+| Host | Runtime |
+|---|---|
+| Linux x64 · Linux arm64 · macOS Apple Silicon · Windows x64 | ✅ prebuilt, ships with the package |
+| macOS Intel · Windows arm64 | ❌ no `llvmlite` wheels / no CI runner — clone the repo and run `0_setup_env.sh` |
+
+The runtime carries the agent and the desktop server, **not** the scientific stack (`scanpy`, `torch`, R, bioconda CLIs — roughly 1.5 GiB). Skills that need those tell you what to install into the same interpreter; for the full supported stack, use the Linux conda path.
+
+### Pairing with OmicsClaw-App
+
+The desktop installer contains no Python, and never downloads, creates, repairs, or auto-selects an interpreter. You pick one explicitly; the App commits it only after a preflight, a provisional launch, and a strict `/health` check, and restores the previous runtime if any of that fails.
+
+| Mode | Backend runs on | What you do in the App |
+|---|---|---|
+| **Local** | This machine | **Runtimes → Local Python** (or the first-run wizard). **Detect existing environments** lists the npm runtime — read from `~/.omicsclaw/runtime.json` — alongside conda envs; click **Use …**, or **Choose Python** and select the interpreter yourself. Detection runs only when clicked and never selects for you. |
+| **Remote** | A Linux server | Start `oc desktop-server --host 127.0.0.1 --port 8765` there, then **Runtimes → New Runtime** with a direct URL or an SSH alias (plus the bearer token if the backend requires one), **Run Ping**, then **Make Active**. The desktop host needs no Python at all. |
+
+Print the exact interpreter path when the App asks for one:
+
+```bash
+# npm runtime
+python -c "import json, os; print(json.load(open(os.path.expanduser('~/.omicsclaw/runtime.json')))['pythonPath'])"
+# conda env
+conda run -n OmicsClaw python -c "import sys; print(sys.executable)"
+```
+
+The backend binds `127.0.0.1:8765` (`OMICSCLAW_APP_HOST` / `OMICSCLAW_APP_PORT`); remote profiles authenticate with `OMICSCLAW_REMOTE_AUTH_TOKEN`. Configure the LLM provider in the App's setup wizard or in the backend's `.env`. Chat-triggered runs are written to `<project directory>/output`, which is what the App dashboard lists.
+
+<details>
+<summary><b>Troubleshooting & upgrades</b></summary>
+
+| Symptom | Fix |
+|---|---|
+| `command not found: omicsclaw` | npm's global bin is not on `PATH`: `export PATH="$(npm prefix -g)/bin:$PATH"` |
+| `EACCES` during install | Do not use `sudo`. `npm config set prefix ~/.npm-global`, add `~/.npm-global/bin` to `PATH`, reinstall |
+| No platform runtime installed | Requires npm ≥ 7 and no `--no-optional` flag |
+| Port 8765 already in use | `lsof -ti:8765 \| xargs kill -9` (macOS / Linux) |
+| App reports the backend offline | `<selected python> -c "import omicsclaw; print(omicsclaw.__version__)"`, fix that environment, then retry activation in the App |
+| Upgrading | `npm install -g omicsclaw@latest` — the interpreter path is stable, so the App keeps working after a restart |
+
+</details>
+
+📖 Distribution internals — wrapper layout, platform packages, and the `~/.omicsclaw/runtime.json` contract — are documented in [`npm/AGENTS.md`](npm/AGENTS.md) and [`npm/omicsclaw/README.md`](npm/omicsclaw/README.md).
 
 ## 🧬 Domains
 
