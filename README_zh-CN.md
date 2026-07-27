@@ -113,15 +113,8 @@ OmicsClaw 优先使用匹配的内置技能，但为其余情况内置了一等�
 
 ## 🏗️ 架构
 
-三个 Surface，**一个 agent loop**。Prompt-toolkit/single-shot CLI 的对话输入、Desktop 文本、Owner-only Telegram 文本/单图与 Owner-only 飞书纯文本现在都通过生产 `ControlRuntime`：统一规范化为 `RawInboundV1`，将可重试提交绑定到唯一 Turn，按 Conversation 串行执行完整 Turn，并以 Backend 独占的 `control.db` 作为 Conversation、Turn、入站幂等与 Delivery 生命周期权威。独立 `transcripts.db` 保存规范 Transcript；独立 `attachments.db` 与 content-addressed Blob 树保存每 Turn 不可变 Attachment Record。Telegram 单张普通图片可带 caption；重复判断先于惰性下载，控制事务只提交 Store identity、batch commitment 与结构化 Attachment Reference。飞书只接收已配置 Owner 的文本，群聊还必须精确提及已配置的 Bot。Transcript 永不持久化 Base64/provider handle/临时路径；每次模型调用前才在总图片数和总字节预算内临时解析并校验图片。Telegram 相册、文档和音视频、飞书附件/rich post/card、所有出站媒体、Desktop/CLI 附件与 File Reference、Textual TUI、其他 Channel Adapter、工具/Run 附件消费和迁移/清除仍显式关闭。更广的 Project、Run Dispatcher 与 Memory projector 目标尚未完整实现。
-
-Prompt-toolkit REPL 的精确 `/run <canonical-skill> --demo` 与根 exact-demo 命令族是两个独立 typed non-chat Run Adapter。根只接受三种固定顺序 wire：省略 Scope、`--demo --project <32位小写十六进制ID>`、`--demo --no-project`。省略时，legacy current-Project pointer 只作为有界、零写入的导航提示，并由 Control 验证 active Project；显式 Project 直接冻结 `ProjectScope`，missing/archived 必须拒绝且不得降级；显式 `--no-project` 直接冻结 `UnassignedScope`，完全不读取 current pointer。每次命令只生成一个新的 Submission ID，冻结 Backend Registry 资源合同并经同一 `RunRuntime` 执行；一旦进入 canonical 边界，alias、冲突、重复、倒序、缩写、attached-value、执行失败和关闭失败都绝不回落 legacy runner。根 non-demo/其他带选项形态、Control-backed Project 生命周期命令、Textual TUI、`/interpret`、其他 prompt-toolkit Run 与 broader Remote 仍属后续迁移。
-
-Channel 的终态交付也与 Turn 执行分离：Turn 的终态事务创建唯一持久 Outbound Delivery，其有序 Items 只引用已持久化的 Transcript/科学产物内容；单进程 Delivery Pump 只重试 provider 交付。入站重复投递、交付失败和显式 resend 都不能重跑 Turn，Desktop/CLI 仍通过观察既有状态恢复，而不是消费 Outbox。
-
-Run 排队与计算资源准入同样分离：Desktop `POST /v1/runs`、精确 prompt-toolkit demo、三种 root exact-demo Scope wire 与 Remote exact-demo `POST /jobs` 现在进入同一个 canonical Simple Skill Runtime 和唯一有界、进程内、严格 FIFO 的 Run Dispatcher；Dispatcher 在提交该 Run 唯一的 Execution Assignment 前，先取得首个执行单元的资源容量。共享 Execution Resource Scheduler 为该 Runtime 与 Candidate plan 原子核算进程槽、CPU、内存、GPU、线程和临时磁盘。Assignment 在启动前原子绑定 write-once Linux user-systemd scope；parent-death launcher 与 bubblewrap PID/cgroup namespace 约束完整进程树，恢复只在 unit 消失或 cgroup `populated=0` 后收口 Receipt。无法确认 owner 或完成证据时保留非终态 Receipt 并隔离 novel admission。Dispatcher 与 Scheduler 都不持久化可执行载荷，也不能授权重启重放；Resource Lease 只表示容量，不表示 Run 所有权。Workflow、Candidate-plan 顶层调度、Autonomous、root non-demo/其他 option-bearing 形态、Textual TUI、其他 prompt-toolkit Run、Agent/Bench 与 broader Remote 尚未收敛到同一组 Interface。
-
-Run 完整性证据也已从瞬态日志收口为持久控制事实：Migration 9 新增 append-only、content-free ledger，记录 Assignment fence 违规、冲突终态报告、Manifest/Receipt 漂移、无法确认的执行 owner 与恢复终态提交失败。相同事实按只含闭合生命周期字段的版本化摘要幂等去重；原始异常、路径、参数、日志、凭据、Manifest 内容和 Execution Reference 均不得进入记录或摘要。`GET /v1/run-integrity-incidents` 在恢复隔离期间仍可做有界纯观察，但不能读取 Run Store 内容、入队、申请 Lease、Assignment、重放或修复 Run；启动时对已终态且已 Assignment 的 tracer Run 只审计、不改写 Receipt 或 Manifest。
+**三个 Surface，一个 agent loop。** 无论你从终端、桌面 App 还是聊天平台输入，都会被规范化成同一个持久化
+Turn，按会话串行，交由同一个 agent loop 执行。技能、记忆、模型 provider 与远程执行都挂在这个 loop 上。
 
 ```mermaid
 flowchart TD
@@ -173,7 +166,21 @@ flowchart TD
     MEMORY -. 跨运行续接 .-> LOOP
 ```
 
-在单次对话之外，还有两个独立子系统跑长任务：**多 agent 研究流水线**（`omicsclaw/agents/`，intake → plan → research → execute → analyze → write → review）与 **AutoAgent** 实验/优化循环。完整拆解见 [`docs/architecture/`](docs/architecture/)。
+读代码之前，先了解这四条性质：
+
+| 性质 | 含义 |
+|---|---|
+| **一个 loop，多个入口** | 所有 Surface 最终汇聚到同一个 agent loop。Surface 只是观察 Turn，从不拥有它的执行。 |
+| **持久化控制面** | 唯一由 Backend 独占的 `control.db` 保存 Project、Conversation 与 Turn/Run 收据；transcript 与附件各有独立存储。 |
+| **观察 ≠ 拥有** | 关掉页面、断开 SSE、甚至杀掉 App，都不会取消正在跑的 Turn —— 只有显式取消才会。 |
+| **Run 带围栏** | 每个 Run 有唯一不透明 ID，且至多一次带围栏的执行启动；重启后不会自动重放。 |
+
+在单次对话之外，还有两个独立子系统跑长任务：**多 agent 研究流水线**（`omicsclaw/agents/`，intake →
+plan → research → execute → analyze → write → review）与 **AutoAgent** 实验/优化循环。
+
+📖 **完整细节：**[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 是权威 ledger —— 它区分「已建成」
+与「已接受的目标」，并点明两者之间的偏差。[`docs/architecture/`](docs/architecture/) 是可读的投影版本，
+[`docs/adr/`](docs/adr/) 记录每个决策的缘由。
 
 ## ⚡ 快速开始
 
