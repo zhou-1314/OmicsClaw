@@ -2,9 +2,9 @@
  * Locate the platform-specific runtime package for the host.
  *
  * The distribution follows the standard npm "thin wrapper + optional platform
- * packages" model (esbuild / swc / biome / @omicverse/omicos all use it): the
- * `omicsclaw` package itself carries no runtime, and lists one
- * `@omicsclaw/runtime-<target>` per supported host in `optionalDependencies`.
+ * packages" model (esbuild / swc / biome all use it): the `omicsclaw` package
+ * itself carries no runtime, and lists one `@omicsclaw/runtime-<target>` per
+ * supported host in `optionalDependencies`.
  * Each of those declares `os` / `cpu`, so npm refuses to install the ones that
  * do not match the host — and because they are *optional*, that refusal is a
  * silent skip rather than an install failure. Exactly one lands on disk.

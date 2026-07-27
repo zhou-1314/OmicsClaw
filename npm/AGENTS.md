@@ -15,10 +15,10 @@ working CLI with no Python prerequisite.
 ## The distribution model
 
 The standard npm "thin wrapper + platform packages" pattern (esbuild, swc,
-biome, `@omicverse/omicos`): the wrapper lists one
-`@omicsclaw/runtime-<target>` per host in `optionalDependencies`, each declaring
-`os` / `cpu`. npm refuses to install non-matching ones, and because they are
-*optional* that refusal is a silent skip. Exactly one runtime lands on disk.
+biome): the wrapper lists one `@omicsclaw/runtime-<target>` per host in
+`optionalDependencies`, each declaring `os` / `cpu`. npm refuses to install
+non-matching ones, and because they are *optional* that refusal is a silent
+skip. Exactly one runtime lands on disk.
 
 The runtime content itself comes from
 `OmicsClaw-App/scripts/build-backend-runtime.py` — python-build-standalone plus
