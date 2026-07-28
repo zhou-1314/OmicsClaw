@@ -11,6 +11,14 @@
 > [`skill-acquisition-plan.md`](../proposals/skill-acquisition-plan.md)、
 > [`structure-aware-skill-retrieval.md`](../proposals/structure-aware-skill-retrieval.md)
 > 和相关 ADR；这些文档不再各自定义“完成”。
+>
+> **Proposed extension（2026-07-22，尚未实现）：**
+> [Skill 审计持续评测与经验治理设计](../design/skill-audit-continuous-evaluation.md)
+> 与 [ADR 0074](../adr/0074-govern-skill-experience-and-continuous-evaluation.md)
+> 在不改写本文件当前 verified/partial 结论的前提下，提出深
+> `SkillAuditRuntime`、结构化 Skill Experience View、协议化持续评测、
+> declared/effective validation 分离，以及兼容 OmicsClaw-App 的版本化读模型。
+> ADR 仍为 Proposed，AUD-01–AUD-10 仍无实现证据，不能计入 M0–M3 完成度。
 
 ## 1. 目标与完成定义
 

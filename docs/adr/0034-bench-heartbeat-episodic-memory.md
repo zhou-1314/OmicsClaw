@@ -4,6 +4,12 @@
 resolve a number collision with [`0024-prompt-prefix-caching.md`](0024-prompt-prefix-caching.md),
 now the sole ADR 0024.*
 
+**Implementation (2026-07-21): Not started (accepted roadmap target).** An audit
+confirmed no heartbeat/episodic-memory implementation exists — no scheduler, no
+durable `last-heartbeat` timestamp, no `project://<thread>/daily/*` episodic
+writes, and no recency decay in recall. The decision stands; it is a not-yet-built
+target, not architecture drift from a shipped feature.
+
 The v2 proactive layer is deliberately minimal and read-only — ADR 0017 chose research-continuity over a
 companion. Eight decisions. Ground truth: the codebase has **no scheduler anywhere** (backend or
 Electron), **no temporal-decay/recency ranking** in recall, and `insight://` / `project://` are

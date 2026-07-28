@@ -13,6 +13,12 @@
 > and has not yet landed**. Present-tense "Decision" text below describes the
 > agreed design, not existing code; the reusable seams it depends on are verified
 > present (see *Implementation surface*).
+>
+> **Implementation update (2026-07-21):** the implementation has since landed —
+> `omicsclaw/runtime/consensus/continuous_driver.py` (`run_continuous_consensus`),
+> `TEMPLATES["continuous"]`, and the `skills/singlecell/scrna/sc-consensus-pseudotime`
+> skill are all present. The "has not yet landed" wording above is historical; the
+> decision status is unchanged (Accepted, now Implemented).
 
 ## Context
 

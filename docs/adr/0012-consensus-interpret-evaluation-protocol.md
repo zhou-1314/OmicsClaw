@@ -2,10 +2,12 @@
 
 ## Status
 
-Proposed (2026-05-20). Builds on ADR 0010 (typed-vs-narrative consensus
-runtime) and ADR 0011 (typed evaluation protocol). **Does not amend** the
-A/B binary established in ADR 0010 — the interpreted layer is a strictly
-downstream consumer of A-path output.
+Accepted (2026-05-20; status corrected 2026-07-21 — the design shipped as the
+`skills/spatial/consensus-interpret` skill, so the original `Proposed` label was
+stale). Builds on ADR 0010 (typed-vs-narrative consensus runtime) and ADR 0011
+(typed evaluation protocol). **Does not amend** the A/B binary established in
+ADR 0010 — the interpreted layer is a strictly downstream consumer of A-path
+output.
 
 ## Context
 

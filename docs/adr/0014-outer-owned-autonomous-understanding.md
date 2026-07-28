@@ -2,7 +2,11 @@
 
 ## Status
 
-Accepted (2026-05-29). Amends ADR 0013 (which remains Accepted). This ADR
+**Superseded in part by [ADR 0032](0032-autonomous-code-mini-agent.md)** for its
+core decision (status corrected 2026-07-21; previously labelled "Accepted",
+although the body already recorded the supersession below).
+
+Originally Accepted (2026-05-29). Amends ADR 0013 (which remains Accepted). This ADR
 revises *where* intent understanding, data inspection, and result validation
 live for the Autonomous Analysis Path, and narrows ADR 0013's `Evidence-bound
 repair` rule. Its central "runner has no brain" decision is superseded by

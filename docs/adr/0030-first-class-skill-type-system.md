@@ -7,6 +7,12 @@
 > **`consensus`** (it was only ever a consensus shim); `workflow` is now a
 > reserved type for future skill-composition. Read `workflow → consensus`
 > throughout the "consensus shim" discussion below.
+>
+> **Amended by [ADR 0037](0037-unified-declarative-skill-representation.md)
+> (2026-07-02):** the `type`/`validation_level` fields introduced here now live
+> in the unified `skill.yaml` v2 carrier, not the `parameters.yaml` sidecar this
+> ADR inherited — all 95 skills migrated (`parameters.yaml` count is now 0). The
+> first-class skill-type decision itself is retained and CURRENT.
 
 **Accepted (2026-06-16).** Implemented on branch
 `consensus-runtime-genericity`. Synthesises an in-session design diagnosis of

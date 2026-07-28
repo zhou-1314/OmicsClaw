@@ -9,6 +9,16 @@ Partial-skill autonomous routes to the **Exact skill match** route, and resolves
 ADR 0014's "Auto mode" open question by defining `auto` as an explicit
 no-understanding, run-as-typed mode.
 
+**Dated clarification (2026-07-21):** the `auto` half of this ADR is void. The
+`off`/`assist`/`auto` analysis-router mode selector and `OMICSCLAW_ANALYSIS_ROUTER_MODE`
+were removed on 2026-06-22 (see [ADR 0014](0014-outer-owned-autonomous-understanding.md)
+Status); routing is now unconditionally assist-style, so the "define `auto` as
+run-as-typed" decision has no remaining mechanism and is retired. The surviving,
+still-current half is **exact-skill assisted parameterization** (deterministic
+route + LLM-assisted preflight filling parameters), which is implemented and is
+current `docs/CONTEXT.md` vocabulary. This ADR stays `Proposed` only for that
+surviving half.
+
 ## Context
 
 `docs/CONTEXT.md` has long defined the Exact-skill execution rule as

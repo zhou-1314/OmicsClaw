@@ -4,6 +4,13 @@
 
 Accepted (2026-05-18).
 
+> **Refined by [ADR 0016](0016-consensus-as-workflow-runtime.md) (2026-05-30):**
+> the single-file consensus registry encoding introduced here was reworked into
+> the `runtime/workflow/` topology layer with a two-axis registry
+> (`omicsclaw/runtime/consensus/templates.py` self-cites "ADR 0016, amending
+> ADR 0010"). The typed-vs-narrative verified/exploratory boundary this ADR
+> established is retained.
+
 ## Context
 
 A grilling session on 2026-05-18 (`/grill-with-docs`, 9 rounds) examined

@@ -7,6 +7,13 @@ Accepted (2026-05-30). New subsystem vocabulary lands in `docs/CONTEXT.md`
 (`predicates.py`, Phase 1) and the per-turn history sliding window
 (`budget.trim_history_to_budget`) for cache-supporting providers.
 
+**Dated clarification (2026-07-21):** the char-budget stance of this ADR (the
+`max_prompt_chars` open item and `DEFAULT_MAX_PROMPT_CHARS` policy) is superseded
+by [ADR 0039](0039-token-native-context-budget.md) (2026-07-06), which collapses
+the context budget onto tokens (`DEFAULT_MAX_PROMPT_CHARS` / `resolve_max_prompt_chars`
+now grep to zero). Every prefix-cache invariant established here remains in force;
+the decision is otherwise CURRENT.
+
 ## Context
 
 A grilling session on 2026-05-30 (`/grill-with-docs`, seven branch-points)

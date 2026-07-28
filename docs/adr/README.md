@@ -57,6 +57,13 @@ durable cross-request operation bindings, receipt-bound AutoAgent recovery, and
 a governed AutoAgent process owner. ADR 0073 refines ADR 0059 by moving opaque
 Attachment ID minting from the control plane to the Attachment Store.
 
+ADR 0074 is **Proposed**, not part of the effective decision chain. It proposes
+a Backend-owned `SkillAuditRuntime`, protocol-bound continuous evaluation,
+derived Skill Experience Views, declared/effective validation separation, and
+an additive OmicsClaw-App-compatible `/skill-evolution` contract. Until it is
+accepted and implemented, ADR 0065–0069 and the current audit baseline remain
+authoritative.
+
 The concrete integrated contract is
 [`docs/design/conversational-control-plane.md`](../design/conversational-control-plane.md).
 When an older ADR body contains wording explicitly refined by a newer ADR, the
@@ -121,3 +128,23 @@ rewritten. The audit will distinguish:
 - implementation drift;
 - detailed designs or plans that were misfiled as ADRs;
 - missing decisions that require a new ADR.
+
+**Audit pass 2026-07-21 (ADR 0003–0073, full sweep).** The overwhelming majority
+are valid current decisions. The only decision-status changes:
+
+- **Superseded:** ADR 0043 (already self-marked, by ADR 0044); ADR 0014's core
+  "runner has no brain" decision is superseded in part by ADR 0032 — its two
+  outer judgment seams are retained.
+- **Stale (partial):** ADR 0015's `auto` = run-as-typed half is retired (the
+  analysis-router mode selector was removed 2026-06-22); its assisted-
+  parameterization half remains current.
+- **Cross-links added (no status change):** ADR 0024 → ADR 0039 (char-budget
+  stance superseded, all prefix-cache invariants retained); ADR 0030 → ADR 0037
+  (`type`/`validation_level` fields moved to the `skill.yaml` v2 carrier).
+- **Status hygiene (no decision change):** ADR 0012 and ADR 0031 relabelled to
+  match their shipped implementations; ADR 0010 now back-links ADR 0016; ADR 0034
+  carries an explicit `Implementation: Not started` note (accepted roadmap target,
+  not drift).
+
+No ADR files were moved, renumbered, or deleted; every change is an in-place edit
+permitted by the History-preserving rule above.
