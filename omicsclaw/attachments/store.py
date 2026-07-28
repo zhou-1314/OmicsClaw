@@ -38,6 +38,25 @@ from .schema import MIGRATIONS, verify_migration_source
 _RETENTION_HOLDER_KINDS = frozenset({"run_input", "transcript", "external"})
 
 
+def _restrict_descriptor(descriptor: int, mode: int = 0o600) -> None:
+    """Re-assert POSIX mode bits on an open descriptor, where the platform has them.
+
+    Every caller has already passed ``mode`` to ``os.open``; this defends against
+    a pre-existing file whose bits are wrong and against umask widening them. On
+    Windows there is no fd-based chmod before CPython 3.13, and the permission
+    model does not carry these bits anyway — so skipping there loses nothing
+    that ``os.open`` did not already do.
+
+    Calling ``os.fchmod`` unconditionally is what broke the desktop server on
+    Windows: ``AttachmentStore.__init__`` raised AttributeError inside the
+    lifespan, so startup failed before ``/health`` ever bound.
+    """
+
+    fchmod = getattr(os, "fchmod", None)
+    if fchmod is not None:
+        fchmod(descriptor, mode)
+
+
 def _require_digest(value: object, name: str) -> str:
     if (
         not isinstance(value, str)
@@ -243,7 +262,7 @@ class AttachmentStore:
         flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
         try:
             descriptor = os.open(self.lifetime_lock_path, flags, 0o600)
-            os.fchmod(descriptor, 0o600)
+            _restrict_descriptor(descriptor)
             if os.name == "nt":  # pragma: no cover - Windows only.
                 if os.fstat(descriptor).st_size == 0:
                     os.write(descriptor, b"\0")
@@ -338,7 +357,7 @@ class AttachmentStore:
                     raise AttachmentIntegrityError(
                         "Attachment Blob is not a regular file"
                     )
-                os.fchmod(descriptor, 0o600)
+                _restrict_descriptor(descriptor)
             finally:
                 os.close(descriptor)
         except AttachmentIntegrityError:
@@ -777,7 +796,7 @@ class AttachmentStore:
             flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
             final_fd = os.open(final, flags)
             try:
-                os.fchmod(final_fd, 0o600)
+                _restrict_descriptor(final_fd)
                 timestamp_ns = created_at_ms * 1_000_000
                 os.utime(final_fd, ns=(timestamp_ns, timestamp_ns))
                 os.fsync(final_fd)

@@ -133,3 +133,54 @@ def test_reopen_rejects_modified_migration_checksum(tmp_path):
 
     with pytest.raises(AttachmentIntegrityError, match="modified migrations"):
         AttachmentStore(tmp_path, require_existing=True)
+
+
+@pytest.mark.asyncio
+async def test_store_works_on_a_platform_without_fchmod(tmp_path, monkeypatch):
+    """Windows has no ``os.fchmod`` before CPython 3.13.
+
+    ``_acquire_lifetime_lock`` already branches on ``os.name == "nt"`` to take an
+    ``msvcrt`` lock, so Windows was meant to work — but three call sites reached
+    ``os.fchmod`` unconditionally first. The lifetime-lock one ran inside
+    ``AttachmentStore.__init__``, so the desktop server's lifespan raised
+    AttributeError on startup and ``/health`` never bound.
+
+    Exercising the whole publish path with the attribute removed covers all
+    three. The mode assertions matter as much as the round-trip: they show
+    ``os.open``'s mode argument alone still yields private bytes, which is why
+    skipping the re-assert costs nothing on a platform that lacks it.
+    """
+
+    monkeypatch.delattr("os.fchmod", raising=True)
+
+    descriptor = SourceAttachmentDescriptorV1(
+        schema_version=1,
+        ordinal=0,
+        source_attachment_id="photo-1",
+        display_name="photo.png",
+        declared_media_type="image/png",
+        declared_size=len(PNG_BYTES),
+        declared_sha256=hashlib.sha256(PNG_BYTES).hexdigest(),
+    )
+    store = AttachmentStore(tmp_path / "state")
+    try:
+        publication = await store.publish_batch(
+            proposed_turn_id="1" * 32,
+            proposed_conversation_id="2" * 32,
+            descriptors=(descriptor,),
+            source=Source(),
+        )
+        references = store.accept_batch(publication.commitment)
+
+        assert store.resolve_bytes(references[0]) == PNG_BYTES
+
+        blob_path = (
+            store.blob_root
+            / references[0].content_sha256[:2]
+            / references[0].content_sha256
+        )
+        assert stat.S_IMODE(blob_path.stat().st_mode) == 0o600
+        assert stat.S_IMODE(store.lifetime_lock_path.stat().st_mode) == 0o600
+    finally:
+        store.close()
+
