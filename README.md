@@ -38,7 +38,7 @@
 - **🤝 Consensus runtime** — multi-method consensus is now a declarative workflow runtime. Fan out N spatial-clustering or single-cell methods, then merge them with verified typed operators or an exploratory LLM synthesis. Triggered by the `consensus-domains` and `sc-consensus-clustering` skills.
 - **🧠 Autonomous Analysis Path** — an Analysis Router can parameterize an exact skill from your data, or run a generated-code analysis with approval-gated workspace writes and bounded LLM repair.
 - **⚡ Prompt-prefix caching** — automatic provider cache hits across turns to cut latency and token spend.
-- **🖥️ Desktop upgrades** — a live to-do task list with planning guidance, an interactive `ask_user` choice tool, and LLM-generated session titles.
+- **🖥️ Desktop upgrades** — a live to-do task list with planning guidance, an interactive `ask_user` choice tool, and request-bound session titles generated once from the first visible user message by the exact runtime that served the turn.
 
 <details>
 <summary><b>Earlier highlights</b></summary>
@@ -206,6 +206,14 @@ conda run -n OmicsClaw python -c "import sys; print(sys.executable)"
 
 The backend binds `127.0.0.1:8765` (`OMICSCLAW_APP_HOST` / `OMICSCLAW_APP_PORT`); remote profiles authenticate with `OMICSCLAW_REMOTE_AUTH_TOKEN`. Configure the LLM provider in the App's setup wizard or in the backend's `.env`. Chat-triggered runs are written to `<project directory>/output`, which is what the App dashboard lists.
 
+For automatic chat titles, a successful Desktop turn publishes one in-memory,
+five-minute ticket keyed by `source_request_id`. The ticket retains the exact
+client, provider, model, endpoint, and reasoning policy used by that turn and is
+consumed once by the versioned `/chat/title` request. The title call receives
+only the first user-visible text, has no tools or conversation history, never
+falls through to another provider, and returns only stable redacted errors.
+Title failure never changes the completed chat response.
+
 <details>
 <summary><b>Troubleshooting & upgrades</b></summary>
 
@@ -353,4 +361,3 @@ Apache-2.0. See [LICENSE](LICENSE).
 ```
 
 [⬆ Back to top](#top)
-

@@ -28,6 +28,10 @@ class TitleFailure:
     code: str
 
 
+class TitleOutputInvalidError(ValueError):
+    """Raised only when provider output contains no safe title."""
+
+
 @dataclass(frozen=True, slots=True)
 class TitleCallProfile:
     max_tokens: int
@@ -70,28 +74,83 @@ def _is_grapheme_extension(character: str) -> bool:
     codepoint = ord(character)
     return (
         unicodedata.category(character).startswith("M")
+        or codepoint in {0x200C, 0x200D}
         or 0xFE00 <= codepoint <= 0xFE0F
         or 0x1F3FB <= codepoint <= 0x1F3FF
+        or 0xE0020 <= codepoint <= 0xE007F
+    )
+
+
+def _is_regional_indicator(character: str) -> bool:
+    return 0x1F1E6 <= ord(character) <= 0x1F1FF
+
+
+def _is_virama(character: str) -> bool:
+    name = unicodedata.name(character, "")
+    return "VIRAMA" in name or "HALANT" in name
+
+
+def _hangul_syllable_type(character: str) -> str | None:
+    codepoint = ord(character)
+    if 0x1100 <= codepoint <= 0x115F or 0xA960 <= codepoint <= 0xA97C:
+        return "L"
+    if 0x1160 <= codepoint <= 0x11A7 or 0xD7B0 <= codepoint <= 0xD7C6:
+        return "V"
+    if 0x11A8 <= codepoint <= 0x11FF or 0xD7CB <= codepoint <= 0xD7FB:
+        return "T"
+    if 0xAC00 <= codepoint <= 0xD7A3:
+        return "LV" if (codepoint - 0xAC00) % 28 == 0 else "LVT"
+    return None
+
+
+def _continues_hangul_cluster(previous: str, character: str) -> bool:
+    previous_type = _hangul_syllable_type(previous)
+    current_type = _hangul_syllable_type(character)
+    return (
+        previous_type == "L" and current_type in {"L", "V", "LV", "LVT"}
+    ) or (
+        previous_type in {"LV", "V"} and current_type in {"V", "T"}
+    ) or (
+        previous_type in {"LVT", "T"} and current_type == "T"
+    )
+
+
+def _is_safe_format_character(character: str) -> bool:
+    codepoint = ord(character)
+    return (
+        codepoint in {0x200C, 0x200D}
+        or 0xE0020 <= codepoint <= 0xE007F
     )
 
 
 def _split_graphemes(value: str) -> list[str]:
     graphemes: list[str] = []
     current = ""
-    previous_was_joiner = False
+    previous = ""
+    regional_indicators = 0
     for character in value:
         if not current:
             current = character
+            regional_indicators = int(_is_regional_indicator(character))
         elif (
-            previous_was_joiner
+            previous == "\u200d"
+            or _continues_hangul_cluster(previous, character)
+            or (
+                _is_virama(previous)
+                and unicodedata.category(character).startswith("L")
+            )
             or character == "\u200d"
             or _is_grapheme_extension(character)
+            or (_is_regional_indicator(character) and regional_indicators == 1)
         ):
             current += character
+            if _is_regional_indicator(character):
+                regional_indicators += 1
         else:
             graphemes.append(current)
             current = character
-        previous_was_joiner = character == "\u200d"
+            regional_indicators = int(_is_regional_indicator(character))
+        previous = character
     if current:
         graphemes.append(current)
     return graphemes
@@ -117,6 +176,26 @@ def resolve_title_call_profile(base_url: str) -> TitleCallProfile:
     return DEFAULT_TITLE_PROFILE
 
 
+def _sanitize_title_line(value: str) -> str:
+    line = value.strip()
+    previous = None
+    while line != previous:
+        previous = line
+        line = _LEADING_MARKDOWN.sub("", line)
+        line = _TITLE_LABEL.sub("", line)
+        line = line.strip().strip("\"'`“”‘’「」『』《》＂")
+        line = re.sub(r"[*_~]+", "", line)
+        line = re.sub(r"\s+", " ", line).strip()
+    return unicodedata.normalize("NFC", line)
+
+
+def _has_substantive_title_character(value: str) -> bool:
+    return any(
+        not unicodedata.category(character).startswith(("P", "C", "Z"))
+        for character in value
+    )
+
+
 def sanitize_generated_title(raw: str | None) -> str:
     if not isinstance(raw, str) or not raw:
         return ""
@@ -124,6 +203,9 @@ def sanitize_generated_title(raw: str | None) -> str:
         (
             character
             if character in "\r\n"
+            else ""
+            if unicodedata.category(character) == "Cf"
+            and not _is_safe_format_character(character)
             else " "
             if unicodedata.category(character) == "Cc"
             else character
@@ -133,20 +215,11 @@ def sanitize_generated_title(raw: str | None) -> str:
     text = re.sub(r"```[A-Za-z0-9_-]*\s*", "", text)
     text = text.replace("```", "")
     text = _MARKDOWN_LINK.sub(r"\1", text)
-    line = next((part.strip() for part in text.splitlines() if part.strip()), "")
-    if not line:
-        return ""
-    line = _LEADING_MARKDOWN.sub("", line)
-    line = _TITLE_LABEL.sub("", line)
-    line = line.strip().strip("\"'`“”‘’「」『』《》＂")
-    line = re.sub(r"[*_~]+", "", line)
-    line = re.sub(r"\s+", " ", line).strip()
-    if not any(
-        not unicodedata.category(character).startswith(("P", "C", "Z"))
-        for character in line
-    ):
-        return ""
-    return _truncate_title(line)
+    for part in text.splitlines():
+        line = _sanitize_title_line(part)
+        if line and _has_substantive_title_character(line):
+            return _truncate_title(line)
+    return ""
 
 
 async def generate_title(
@@ -170,7 +243,7 @@ async def generate_title(
     raw = str(getattr(response.choices[0].message, "content", "") or "")
     title = sanitize_generated_title(raw)
     if not title:
-        raise ValueError("TITLE_OUTPUT_INVALID")
+        raise TitleOutputInvalidError("TITLE_OUTPUT_INVALID")
     return title
 
 

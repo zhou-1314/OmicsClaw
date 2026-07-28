@@ -282,12 +282,57 @@ This second line must never enter the sidebar.
     assert sanitize_generated_title(raw) == "PBMC clustering"
 
 
+def test_generated_title_sanitizer_repeats_label_and_markdown_cleanup() -> None:
+    from omicsclaw.surfaces.desktop.title_generation import sanitize_generated_title
+
+    assert sanitize_generated_title("Title: # PBMC clustering") == "PBMC clustering"
+    assert sanitize_generated_title("**Title:** PBMC clustering") == "PBMC clustering"
+
+
+def test_generated_title_sanitizer_selects_the_first_substantive_line() -> None:
+    from omicsclaw.surfaces.desktop.title_generation import sanitize_generated_title
+
+    assert sanitize_generated_title("!!!\nPBMC clustering") == "PBMC clustering"
+
+
 def test_generated_title_sanitizer_caps_graphemes_without_splitting_emoji() -> None:
     from omicsclaw.surfaces.desktop.title_generation import sanitize_generated_title
 
     family = "👨‍👩‍👧‍👦"
 
     assert sanitize_generated_title(family * 60) == family * 49 + "…"
+
+
+def test_generated_title_sanitizer_keeps_unicode_grapheme_boundaries() -> None:
+    from omicsclaw.surfaces.desktop.title_generation import sanitize_generated_title
+
+    flag = "🇺🇳"
+    tag_flag = "🏴\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067\U000e007f"
+    conjunct = "क्ष"
+    decomposed_hangul = "\u1100\u1161"
+    archaic_decomposed_hangul = "\u1113\u1161"
+    dangling_virama = "A" * 48 + "क् " + "B"
+
+    assert sanitize_generated_title(flag * 60) == flag * 49 + "…"
+    assert sanitize_generated_title(tag_flag * 60) == tag_flag * 49 + "…"
+    assert sanitize_generated_title(conjunct * 60) == conjunct * 49 + "…"
+    assert sanitize_generated_title(decomposed_hangul * 60) == "가" * 49 + "…"
+    assert (
+        sanitize_generated_title(archaic_decomposed_hangul * 60)
+        == archaic_decomposed_hangul * 49 + "…"
+    )
+    assert sanitize_generated_title(dangling_virama) == "A" * 48 + "क्…"
+
+
+def test_generated_title_sanitizer_removes_unsafe_format_controls() -> None:
+    from omicsclaw.surfaces.desktop.title_generation import sanitize_generated_title
+
+    tag_flag = "🏴\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067\U000e007f"
+    shaped_word = "می\u200cشود"
+
+    assert sanitize_generated_title(
+        f"PBMC\u202e title {shaped_word} {tag_flag}"
+    ) == f"PBMC title {shaped_word} {tag_flag}"
 
 
 def test_generated_title_sanitizer_rejects_control_and_punctuation_only_output() -> (
@@ -367,7 +412,9 @@ def test_messages_only_request_fails_before_any_provider_call(
     monkeypatch.setattr(server, "_get_core", lambda: fake_core)
 
     response = asyncio.run(
-        server.chat_title({"messages": [{"role": "user", "content": "private input"}]})
+        server._chat_title_payload(
+            {"messages": [{"role": "user", "content": "private input"}]}
+        )
     )
 
     assert response.status_code == 400
@@ -376,6 +423,46 @@ def test_messages_only_request_fails_before_any_provider_call(
         "error": {"code": "TITLE_REQUEST_INVALID"},
     }
     assert calls == []
+
+
+@pytest.mark.parametrize("body", (b"{", b"[]"))
+def test_malformed_title_body_returns_the_stable_invalid_request_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    body: bytes,
+) -> None:
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from omicsclaw.remote import auth as remote_auth
+    from omicsclaw.surfaces.desktop import server
+
+    monkeypatch.setattr(
+        server.title_ticket_registry,
+        "begin",
+        lambda _request_id: pytest.fail("invalid bodies must not consume a ticket"),
+    )
+    state = server.app.state
+    attribute = remote_auth.AUTHORITY_STATE_ATTR
+    sentinel = object()
+    previous = getattr(state, attribute, sentinel)
+    authority = remote_auth.capture_remote_bearer_authority(server.app, {})
+    try:
+        response = TestClient(server.app, raise_server_exceptions=False).post(
+            "/chat/title",
+            content=body,
+            headers={"Content-Type": "application/json"},
+        )
+    finally:
+        if previous is sentinel:
+            remote_auth.release_remote_bearer_authority(server.app, authority)
+        else:
+            setattr(state, attribute, previous)
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "schema_version": 1,
+        "error": {"code": "TITLE_REQUEST_INVALID"},
+    }
 
 
 def test_title_endpoint_uses_the_ticket_snapshot_after_global_runtime_changes(
@@ -431,7 +518,7 @@ def test_title_endpoint_uses_the_ticket_snapshot_after_global_runtime_changes(
     )
     try:
         response = asyncio.run(
-            server.chat_title(
+            server._chat_title_payload(
                 {
                     "schema_version": 1,
                     "source_request_id": request_id,
@@ -449,6 +536,52 @@ def test_title_endpoint_uses_the_ticket_snapshot_after_global_runtime_changes(
     }
     assert calls_a[0]["model"] == "model-a"
     assert calls_b == []
+
+
+def test_provider_value_error_is_not_misclassified_as_invalid_output() -> None:
+    pytest.importorskip("fastapi")
+    import json
+
+    from omicsclaw.surfaces.desktop import server
+    from omicsclaw.surfaces.desktop.title_generation import (
+        TitleRuntimeSnapshot,
+        title_ticket_registry,
+    )
+
+    async def create(**_kwargs):
+        raise ValueError("provider rejected its request")
+
+    request_id = "5" * 32
+    title_ticket_registry.reset_for_tests()
+    assert title_ticket_registry.publish(
+        request_id,
+        TitleRuntimeSnapshot(
+            client=SimpleNamespace(
+                chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+            ),
+            provider="openai",
+            model="model-a",
+            base_url="https://a.example/v1",
+        ),
+    )
+    try:
+        response = asyncio.run(
+            server._chat_title_payload(
+                {
+                    "schema_version": 1,
+                    "source_request_id": request_id,
+                    "user_text": "Analyze PBMC clusters",
+                }
+            )
+        )
+    finally:
+        title_ticket_registry.reset_for_tests()
+
+    assert response.status_code == 502
+    assert json.loads(response.body) == {
+        "schema_version": 1,
+        "error": {"code": "TITLE_PROVIDER_FAILED"},
+    }
 
 
 @pytest.mark.asyncio

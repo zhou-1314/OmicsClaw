@@ -136,6 +136,7 @@ from omicsclaw.surfaces.desktop.run_wire import (
 )
 from omicsclaw.surfaces.desktop.title_generation import (
     TitleFailure,
+    TitleOutputInvalidError,
     TitleRuntimeSnapshot,
     generate_title,
     title_ticket_registry,
@@ -7523,18 +7524,20 @@ async def test_provider(req: ProviderTestRequest):
 # ---------------------------------------------------------------------------
 
 
-@app.post("/chat/title", dependencies=[Depends(require_bearer_token)])
-async def chat_title(req: dict[str, Any]):
-    """Consume one title ticket without exposing broader chat context."""
+def _title_error_response(code: str, status_code: int) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"schema_version": 1, "error": {"code": code}},
+    )
 
-    def error(code: str, status_code: int) -> JSONResponse:
-        return JSONResponse(
-            status_code=status_code,
-            content={"schema_version": 1, "error": {"code": code}},
-        )
 
-    if set(req) != {"schema_version", "source_request_id", "user_text"}:
-        return error("TITLE_REQUEST_INVALID", 400)
+async def _chat_title_payload(req: object) -> JSONResponse:
+    if not isinstance(req, dict) or set(req) != {
+        "schema_version",
+        "source_request_id",
+        "user_text",
+    }:
+        return _title_error_response("TITLE_REQUEST_INVALID", 400)
     schema_version = req.get("schema_version")
     source_request_id = req.get("source_request_id")
     user_text = req.get("user_text")
@@ -7550,7 +7553,7 @@ async def chat_title(req: dict[str, Any]):
         or not user_text.strip()
         or len(user_text) > 4096
     ):
-        return error("TITLE_REQUEST_INVALID", 400)
+        return _title_error_response("TITLE_REQUEST_INVALID", 400)
 
     lease = title_ticket_registry.begin(source_request_id)
     if isinstance(lease, TitleFailure):
@@ -7559,21 +7562,35 @@ async def chat_title(req: dict[str, Any]):
             "TITLE_CONTEXT_EXPIRED": 410,
             "TITLE_BUSY": 429,
         }
-        return error(lease.code, status_by_code.get(lease.code, 409))
+        return _title_error_response(
+            lease.code,
+            status_by_code.get(lease.code, 409),
+        )
     try:
         title = await generate_title(lease.snapshot, user_text.strip())
     except TimeoutError:
-        return error("TITLE_TIMEOUT", 504)
-    except ValueError:
-        return error("TITLE_OUTPUT_INVALID", 502)
+        return _title_error_response("TITLE_TIMEOUT", 504)
+    except TitleOutputInvalidError:
+        return _title_error_response("TITLE_OUTPUT_INVALID", 502)
     except Exception:
-        return error("TITLE_PROVIDER_FAILED", 502)
+        return _title_error_response("TITLE_PROVIDER_FAILED", 502)
     finally:
         lease.release()
     return JSONResponse(
         status_code=200,
         content={"schema_version": 1, "title": title},
     )
+
+
+@app.post("/chat/title", dependencies=[Depends(require_bearer_token)])
+async def chat_title(request: Request):
+    """Consume one title ticket without exposing broader chat context."""
+
+    try:
+        payload = await request.json()
+    except Exception:
+        return _title_error_response("TITLE_REQUEST_INVALID", 400)
+    return await _chat_title_payload(payload)
 
 
 # ---------------------------------------------------------------------------
