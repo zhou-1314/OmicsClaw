@@ -117,6 +117,11 @@ from .run_runtime import (
     RunVerifiedArtifactReader,
     SimpleSkillRunTerminalResult,
 )
+from .locking import (
+    ControlLockHolder,
+    probe_control_lock,
+    read_control_lock_holder,
+)
 from .run_store import (
     FilesystemRunStore,
     RunManifestHeader,
@@ -172,6 +177,9 @@ __all__ = [
     "AttemptStartResult",
     "ControlDatabaseOwnedError",
     "ControlIntegrityError",
+    "ControlLockHolder",
+    "probe_control_lock",
+    "read_control_lock_holder",
     "RunIntegrityIncidentError",
     "ControlRuntime",
     "ControlRuntimePorts",
