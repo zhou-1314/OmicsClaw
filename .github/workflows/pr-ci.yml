@@ -184,6 +184,26 @@ jobs:
             tests/test_result_status_contract.py \
             -v
 
+  npm-wrapper-test:
+    # The wrapper's units had only ever run inside npm-release.yml's
+    # pre-publish sanity check — a job that does not run on pull requests and
+    # had never executed at all. A broken invocation there therefore sat
+    # undetected until the first real release attempt. Run them here too, on
+    # the same Node major the release job uses.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Wrapper units
+        run: node --test npm/omicsclaw/test/*.test.mjs
+
+      - name: Packager CLI contract
+        run: node npm/build-runtime-package.mjs --help
+
   memory-test:
     runs-on: ubuntu-latest
     steps:

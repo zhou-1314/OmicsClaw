@@ -185,7 +185,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node --test npm/omicsclaw/test/
+          # Pass files, not the directory. Node 22 stopped expanding a bare
+          # directory into the test files under it and tried to execute the
+          # directory as the entry module (MODULE_NOT_FOUND). The shell glob
+          # works on every version and does not depend on that behaviour.
+          node --test npm/omicsclaw/test/*.test.mjs
 
       - uses: actions/download-artifact@v6
         with:
