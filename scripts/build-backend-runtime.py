@@ -679,7 +679,23 @@ def _run_lifespan_probe(python_binary: Path) -> None:
 
 
 def _validate_desktop_chat_health_contract(health_body: str) -> None:
-    """Fail a bundled pair outside the App's current non-authoritative V1 stage."""
+    """Reject a runtime whose /health does not describe a usable chat contract.
+
+    This used to pin the App's *stage*: it demanded `authoritative_ingress` and
+    `durable_ingress_idempotency` be exactly ``False``, because a bundled App
+    was frozen against a backend that could not do either. Two things ended
+    that. The App stopped bundling a backend at all
+    (OmicsClaw-App@faf1e16), and its own validator — `src/lib/backend-health.ts`
+    — only ever required these to be *booleans*, then passed the values through
+    as capability flags. The gate was therefore stricter than its own consumer,
+    and pinned to a stage the backend has since moved past
+    (`desktop_chat_contract()` now reports both as ``True``).
+
+    What is still worth failing a build over is a runtime that does not boot
+    into something a client can negotiate with: unparseable JSON, no status, no
+    `contracts.desktop_chat`, or fields of the wrong type. That is what this
+    checks now — the same shape `backend-health.ts` accepts, no more.
+    """
 
     try:
         payload = json.loads(health_body)
@@ -692,22 +708,28 @@ def _validate_desktop_chat_health_contract(health_body: str) -> None:
     desktop_chat = contracts.get("desktop_chat") if isinstance(contracts, dict) else None
     if not isinstance(desktop_chat, dict):
         raise RuntimeError("Backend /health is missing contracts.desktop_chat")
-    if (
-        not isinstance(desktop_chat.get("request_schema_version"), int)
-        or isinstance(desktop_chat["request_schema_version"], bool)
-        or desktop_chat["request_schema_version"] != 1
-        or not isinstance(desktop_chat.get("sse_schema_version"), int)
-        or isinstance(desktop_chat["sse_schema_version"], bool)
-        or desktop_chat["sse_schema_version"] != 1
-        or not isinstance(desktop_chat.get("interrupt_schema_version"), int)
-        or isinstance(desktop_chat["interrupt_schema_version"], bool)
-        or desktop_chat["interrupt_schema_version"] != 1
-        or desktop_chat.get("authoritative_ingress") is not False
-        or desktop_chat.get("durable_ingress_idempotency") is not False
-    ):
+    def _is_version(key: str) -> bool:
+        value = desktop_chat.get(key)
+        # bool is an int subclass, so `True` would otherwise pass as a version.
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+    def _is_flag(key: str) -> bool:
+        return isinstance(desktop_chat.get(key), bool)
+
+    missing = [
+        key
+        for key in ("request_schema_version", "sse_schema_version", "interrupt_schema_version")
+        if not _is_version(key)
+    ] + [
+        key
+        for key in ("authoritative_ingress", "durable_ingress_idempotency")
+        if not _is_flag(key)
+    ]
+    if missing:
         raise RuntimeError(
-            "Backend contracts.desktop_chat is not compatible with the App's "
-            "current non-authoritative request/SSE/interrupt V1 stage"
+            "Backend contracts.desktop_chat is unusable — expected integer "
+            "schema versions and boolean ingress flags, but these are missing "
+            f"or the wrong type: {', '.join(missing)}"
         )
 
 

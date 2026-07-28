@@ -55,22 +55,40 @@ def _health_payload(**desktop_chat_overrides: object) -> str:
 
 
 class DesktopChatHealthContractTests(unittest.TestCase):
-    def test_accepts_only_the_current_non_authoritative_v1_contract(self) -> None:
-        BUILD_RUNTIME._validate_desktop_chat_health_contract(_health_payload())
+    def test_accepts_every_shape_the_app_itself_accepts(self) -> None:
+        """The gate must not be stricter than `src/lib/backend-health.ts`.
 
-    def test_rejects_invalid_health_or_contract_shapes(self) -> None:
+        That validator requires integer schema versions and boolean ingress
+        flags, then passes the values through as capability flags. Pinning them
+        to one stage is what broke the npm release: the backend advanced to
+        authoritative + durable ingress and the builder rejected its own
+        runtime.
+        """
+
+        accepted = (
+            _health_payload(),  # the old non-authoritative stage
+            _health_payload(  # what desktop_chat_contract() reports today
+                authoritative_ingress=True, durable_ingress_idempotency=True
+            ),
+            _health_payload(request_schema_version=2, sse_schema_version=3),
+        )
+        for payload in accepted:
+            with self.subTest(payload=payload):
+                BUILD_RUNTIME._validate_desktop_chat_health_contract(payload)
+
+    def test_rejects_unusable_contract_shapes(self) -> None:
         invalid_payloads = (
             "not-json",
             json.dumps({"status": 7, "contracts": {}}),
             json.dumps({"status": "ok", "contracts": {}}),
-            _health_payload(request_schema_version=2),
+            # bool is an int subclass — it must not pass as a schema version.
             _health_payload(request_schema_version=True),
-            _health_payload(sse_schema_version=1.0),
-            _health_payload(interrupt_schema_version=2),
             _health_payload(interrupt_schema_version=True),
+            _health_payload(sse_schema_version=1.0),
+            _health_payload(request_schema_version=0),
             _health_payload(authoritative_ingress="false"),
-            _health_payload(authoritative_ingress=True),
-            _health_payload(durable_ingress_idempotency=True),
+            _health_payload(durable_ingress_idempotency=None),
+            # interrupt_schema_version and durable_ingress_idempotency absent.
             json.dumps(
                 {
                     "status": "ok",
