@@ -60,6 +60,7 @@ class MessageEnvelope:
     stored_user_content: str | list | None = None
     content_adapter: MessageContentAdapter | None = None
     transcript_turn: Any = None
+    runtime_observer: Any = None
 
     cancel_event: threading.Event | None = None
     """Set by the Surface to request mid-flight cancellation (ADR 0009).

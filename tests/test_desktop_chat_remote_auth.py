@@ -28,7 +28,7 @@ _CHAT_REQUESTS = (
         200,
     ),
     ("/chat/session-permission-profile", {}, 422),
-    ("/chat/title", {"messages": "not-a-list"}, 422),
+    ("/chat/title", {"messages": "legacy-contract"}, 400),
 )
 
 

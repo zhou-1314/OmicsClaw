@@ -120,6 +120,7 @@ class ControlRuntimePorts:
     usage_accumulator: Any = None
     request_tool_approval: Any = None
     policy_state: Any = None
+    runtime_observer: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1434,6 +1435,7 @@ class ControlRuntime:
             stored_user_content=stored_user_content,
             content_adapter=content_adapter,
             transcript_turn=self._live_turns[envelope.turn_id].transcript_turn,
+            runtime_observer=ports.runtime_observer,
             cancel_event=cancel_event,
         )
 

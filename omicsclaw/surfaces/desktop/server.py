@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 import threading
-from typing import Annotated, Any, MutableMapping, Optional
+from typing import Annotated, Any, Mapping, MutableMapping, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -133,6 +133,12 @@ from omicsclaw.surfaces.desktop.run_wire import (
     desktop_run_integrity_incident_page_v1,
     desktop_run_receipt_from_record,
     desktop_run_receipt_v1,
+)
+from omicsclaw.surfaces.desktop.title_generation import (
+    TitleFailure,
+    TitleRuntimeSnapshot,
+    generate_title,
+    title_ticket_registry,
 )
 from omicsclaw.surfaces.desktop.wire_contract import (
     desktop_chat_contract,
@@ -2042,6 +2048,25 @@ async def chat_stream(req: ChatRequest):
             source_request_id=req.source_request_id,
         )
     core = _get_core()
+    title_runtime_snapshot: TitleRuntimeSnapshot | None = None
+
+    def _capture_title_runtime(runtime: Mapping[str, Any]) -> None:
+        nonlocal title_runtime_snapshot
+        if title_runtime_snapshot is not None:
+            return
+        client = runtime.get("client")
+        model = str(runtime.get("model") or "").strip()
+        if client is None or not model:
+            return
+        title_runtime_snapshot = TitleRuntimeSnapshot(
+            client=client,
+            provider=str(runtime.get("provider") or "").strip().lower(),
+            model=model,
+            base_url=str(
+                runtime.get("base_url") or getattr(client, "base_url", "") or ""
+            ).strip(),
+        )
+
     if authoritative_runtime is not None:
         if existing_turn_id is None:
             if req.provider_id and req.provider_id != core.LLM_PROVIDER_NAME:
@@ -2876,6 +2901,7 @@ async def chat_stream(req: ChatRequest):
                 # bypass the stage gate; unknown values still fall through to the
                 # permissive full-tool path downstream.
                 stage=(req.stage or "").strip().lower(),
+                runtime_observer=_capture_title_runtime,
                 cancel_event=cancel_event,
             )
 
@@ -3060,6 +3086,7 @@ async def chat_stream(req: ChatRequest):
                         mode=req.mode,
                         thread_id=resolved_thread_id,
                         stage=(req.stage or "").strip().lower(),
+                        runtime_observer=_capture_title_runtime,
                     ),
                     on_accepted=_remember_turn,
                 )
@@ -3083,6 +3110,11 @@ async def chat_stream(req: ChatRequest):
                 # ControlRuntime initialised above.
                 async for event in dispatch(envelope):
                     await _observe_agent_event(event)
+            if title_runtime_snapshot is not None and req.source_request_id:
+                title_ticket_registry.publish(
+                    req.source_request_id,
+                    title_runtime_snapshot,
+                )
             # If the result contains text that was NOT streamed (non-streaming
             # path, or slash-command response), emit only the missing suffix.
             # queue.qsize() is not reliable here because the SSE consumer may
@@ -7487,105 +7519,61 @@ async def test_provider(req: ProviderTestRequest):
 
 
 # ---------------------------------------------------------------------------
-# Session titling — summarise a conversation into a short sidebar title
+# Session titling — one request-bound attempt over first visible user text
 # ---------------------------------------------------------------------------
 
 
-class ChatTitleMessage(BaseModel):
-    role: str = ""
-    content: str = ""
-
-
-class ChatTitleRequest(BaseModel):
-    messages: list[ChatTitleMessage] = Field(default_factory=list)
-
-
-_TITLE_SYSTEM_PROMPT = (
-    "You name a bioinformatics analysis conversation for a sidebar. "
-    "Read the conversation and reply with ONE short title that captures the "
-    "main task, and the method and dataset when they are clear. "
-    "Keep it under 6 words or 20 Chinese characters. "
-    "Reply in the language the user writes in. "
-    "Reply with ONLY the title — no quotes, no trailing punctuation, no prefix "
-    "like 'Title:'."
-)
-
-_TITLE_MESSAGE_CHAR_LIMIT = 600
-_TITLE_MAX_TURNS = 8
-
-
-def _build_title_transcript(messages: list[ChatTitleMessage]) -> str:
-    """Render cleaned turns into a compact transcript for the titler. The
-    frontend already flattens structured content to plain text, so here we
-    only label roles, trim very long turns, and cap the number of turns."""
-    lines: list[str] = []
-    for message in messages[:_TITLE_MAX_TURNS]:
-        text = str(message.content or "").strip()
-        if not text:
-            continue
-        if len(text) > _TITLE_MESSAGE_CHAR_LIMIT:
-            text = text[:_TITLE_MESSAGE_CHAR_LIMIT].rstrip() + "…"
-        speaker = "User" if message.role == "user" else "Assistant"
-        lines.append(f"{speaker}: {text}")
-    return "\n".join(lines)
-
-
-def _sanitize_generated_title(raw: str) -> str:
-    """Strip the quoting / prefixes models sometimes wrap a title in."""
-    title = str(raw or "").strip()
-    if not title:
-        return ""
-    # Single-line only; models occasionally add reasoning on later lines.
-    title = title.splitlines()[0].strip()
-    # Drop a leading "Title:" / "标题：" style prefix.
-    for prefix in ("title:", "标题:", "标题："):
-        if title.lower().startswith(prefix):
-            title = title[len(prefix) :].strip()
-            break
-    # Unwrap surrounding quotes / brackets.
-    title = title.strip("\"'“”‘’《》「」 ").strip()
-    return title
-
-
 @app.post("/chat/title", dependencies=[Depends(require_bearer_token)])
-async def chat_title(req: ChatTitleRequest):
-    """Generate a concise conversation title via a single cheap completion.
+async def chat_title(req: dict[str, Any]):
+    """Consume one title ticket without exposing broader chat context."""
 
-    Reuses the core's already-authenticated LLM client (the same provider /
-    credentials the chat turn uses), so titling works without re-resolving
-    credentials from the environment. Best-effort by contract: the desktop app
-    falls back to its local heuristic when this returns an error, so failures
-    here are surfaced as HTTP errors rather than silently returning a bad title.
-    """
-    core = _get_core()
-    transcript = _build_title_transcript(req.messages)
-    if not transcript.strip():
-        raise HTTPException(400, detail="No conversation content to title.")
-
-    client = getattr(core, "llm", None)
-    model = str(getattr(core, "OMICSCLAW_MODEL", "") or "").strip()
-    if client is None or not model:
-        raise HTTPException(
-            400, detail="LLM client is not configured for title generation."
+    def error(code: str, status_code: int) -> JSONResponse:
+        return JSONResponse(
+            status_code=status_code,
+            content={"schema_version": 1, "error": {"code": code}},
         )
 
+    if set(req) != {"schema_version", "source_request_id", "user_text"}:
+        return error("TITLE_REQUEST_INVALID", 400)
+    schema_version = req.get("schema_version")
+    source_request_id = req.get("source_request_id")
+    user_text = req.get("user_text")
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version != 1
+        or not isinstance(source_request_id, str)
+        or len(source_request_id) != 32
+        or source_request_id != source_request_id.lower()
+        or any(character not in "0123456789abcdef" for character in source_request_id)
+        or not isinstance(user_text, str)
+        or not user_text.strip()
+        or len(user_text) > 4096
+    ):
+        return error("TITLE_REQUEST_INVALID", 400)
+
+    lease = title_ticket_registry.begin(source_request_id)
+    if isinstance(lease, TitleFailure):
+        status_by_code = {
+            "TITLE_CONTEXT_UNAVAILABLE": 409,
+            "TITLE_CONTEXT_EXPIRED": 410,
+            "TITLE_BUSY": 429,
+        }
+        return error(lease.code, status_by_code.get(lease.code, 409))
     try:
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": _TITLE_SYSTEM_PROMPT},
-                {"role": "user", "content": transcript},
-            ],
-            max_tokens=64,
-        )
-        raw = str(getattr(response.choices[0].message, "content", "") or "")
-    except Exception as exc:
-        raise HTTPException(502, detail=f"Title generation failed: {exc}") from exc
-
-    title = _sanitize_generated_title(raw)
-    if not title:
-        raise HTTPException(502, detail="Title generation returned no content.")
-    return {"title": title}
+        title = await generate_title(lease.snapshot, user_text.strip())
+    except TimeoutError:
+        return error("TITLE_TIMEOUT", 504)
+    except ValueError:
+        return error("TITLE_OUTPUT_INVALID", 502)
+    except Exception:
+        return error("TITLE_PROVIDER_FAILED", 502)
+    finally:
+        lease.release()
+    return JSONResponse(
+        status_code=200,
+        content={"schema_version": 1, "title": title},
+    )
 
 
 # ---------------------------------------------------------------------------

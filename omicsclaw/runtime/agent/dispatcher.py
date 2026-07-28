@@ -147,6 +147,7 @@ async def dispatch(envelope: MessageEnvelope) -> AsyncIterator[Event]:
                 cancel_event=envelope.cancel_event,
                 stored_user_content=envelope.stored_user_content,
                 content_adapter=envelope.content_adapter,
+                runtime_observer=envelope.runtime_observer,
                 **(
                     {"transcript_store_override": envelope.transcript_turn}
                     if envelope.transcript_turn is not None

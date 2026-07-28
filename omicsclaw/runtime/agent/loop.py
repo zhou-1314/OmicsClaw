@@ -33,6 +33,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MappingProxyType
 
 from openai import APIError, AsyncOpenAI, OpenAIError
 
@@ -992,6 +993,7 @@ async def llm_tool_loop(
     transcript_store_override=None,
     stored_user_content=None,
     content_adapter=None,
+    runtime_observer=None,
 ) -> str:
     """
     Run the LLM tool-use loop:
@@ -1075,6 +1077,23 @@ async def llm_tool_loop(
         usage_accumulator=usage_accumulator,
         transcript_store_override=transcript_store_override,
     )
+    if runtime_observer is not None:
+        try:
+            runtime_observer(
+                MappingProxyType(
+                    {
+                        "client": deps.llm,
+                        "provider": deps.llm_provider_name,
+                        "model": model_override or deps.omicsclaw_model,
+                        "base_url": str(getattr(deps.llm, "base_url", "") or ""),
+                    }
+                )
+            )
+        except Exception as exc:
+            logger.warning(
+                "LLM runtime observation failed: %s",
+                type(exc).__name__,
+            )
 
     return await run_engine_loop(
         deps=deps,
