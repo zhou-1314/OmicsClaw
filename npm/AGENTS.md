@@ -145,7 +145,7 @@ have, and nothing currently catches it.
 ## Verifying a change
 
 ```sh
-node --test npm/omicsclaw/test/            # pure units
+node --test npm/omicsclaw/test/*.test.mjs  # pure units
 node npm/build-runtime-package.mjs --help  # CLI contract
 
 # Full chain against a real runtime, sandboxed so it cannot touch your PATH:
