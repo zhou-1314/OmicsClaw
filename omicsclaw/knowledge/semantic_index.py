@@ -7,7 +7,7 @@ from typing import Optional
 # pulled into the import chain of omicsclaw.surfaces.desktop.server via
 # omicsclaw.runtime → hooks → extensions → validators → knowledge →
 # retriever → semantic_index. The desktop-app slim runtime
-# (OmicsClaw-App/scripts/build-backend-runtime.py) installs omicsclaw
+# (scripts/build-backend-runtime.py) installs omicsclaw
 # with `--no-deps` and deliberately does NOT ship sklearn — users
 # who need knowledge-semantic search install the scientific stack
 # themselves on demand. Keeping sklearn as a top-level import here

@@ -20,11 +20,15 @@ biome): the wrapper lists one `@omicsclaw/runtime-<target>` per host in
 non-matching ones, and because they are *optional* that refusal is a silent
 skip. Exactly one runtime lands on disk.
 
-The runtime content itself comes from
-`OmicsClaw-App/scripts/build-backend-runtime.py` — python-build-standalone plus
-the desktop dependency whitelist plus `pip install --no-deps omicsclaw`. Do not
-reimplement any of that here; there must be exactly one definition of what a
-runtime contains.
+The runtime content itself comes from `scripts/build-backend-runtime.py` at the
+repo root — python-build-standalone plus the `DESKTOP_DEPS` whitelist plus
+`pip install --no-deps omicsclaw`. Do not reimplement any of that here; there
+must be exactly one definition of what a runtime contains.
+
+That script used to live in the private OmicsClaw-App repo and be checked out
+over a PAT. OmicsClaw-App@faf1e16 dropped its embedded Python distribution and
+deleted it, so it now lives here — which is where it belonged anyway, since the
+environment it builds is defined by *this* project's dependencies.
 
 ## Hard constraints
 
@@ -73,8 +77,8 @@ Adding or removing a target means touching **all** of these:
 1. `NPM_TARGETS` in `build-runtime-package.mjs`
 2. `SUPPORTED_TARGETS` in `omicsclaw/lib/resolve-runtime.mjs`
 3. `optionalDependencies` in `omicsclaw/package.json`
-4. `SUPPORTED_TARGETS` in `OmicsClaw-App/scripts/build-backend-runtime.py`
-5. the CI matrix in `OmicsClaw-App/.github/workflows/backend-runtime.yml`
+4. `SUPPORTED_TARGETS` in `scripts/build-backend-runtime.py`
+5. the `build-runtime` matrix in `.github/workflows/npm-release.yml`
 
 `omicsclaw/test/units.test.mjs` asserts the current list, so (2) will fail loudly
 if it drifts — nothing guards the other four.
@@ -104,14 +108,14 @@ build a runtime and pack one platform package each; a separate `publish` job
 (opt-in via the `publish` input, gated on the `npm-publish` environment) pushes
 them to npm.
 
-Two prerequisites, both one-time:
+One prerequisite:
 
-- **`secrets.APP_REPO_TOKEN`** — a PAT with `contents: read` on the *private*
-  `OmicsClaw-App` repo. `build-backend-runtime.py` lives there and is not
-  duplicated here, so the default `GITHUB_TOKEN` cannot reach it. The workflow
-  fails fast with an explicit message when this is absent.
-- **`secrets.NPM_TOKEN`** — an automation token for the `omicsclaw` org. npm's
-  OIDC trusted publishing would remove the need for this; worth switching to.
+- **`secrets.NPM_TOKEN`** — an automation token for the `omicsclaw` org, held on
+  the `npm-publish` environment. npm's OIDC trusted publishing would remove the
+  need for this; worth switching to.
+
+`secrets.APP_REPO_TOKEN` is no longer read by this workflow — the builder is a
+local file now. The secret is still configured on the repo and can be deleted.
 
 Ordering is load-bearing: platform packages publish **before** the wrapper. The
 wrapper pins exact versions in `optionalDependencies`, and an optional
@@ -131,11 +135,12 @@ under the state dir, so the workflow points `XDG_STATE_HOME` at a scratch path.
 Without that, any other OmicsClaw process on the machine makes the probe fail —
 the normal outcome on a developer box or a self-hosted runner.
 
-**Follow-up worth doing:** move `build-backend-runtime.py` into this repository.
-It builds an environment defined by *this* project's dependencies, its
-`DESKTOP_DEPS` whitelist is a hand-maintained copy of this repo's `[desktop]`
-extras, and living in the app repo is what forces both that sync contract and
-the cross-repo token. Moving it deletes all three.
+**Follow-up worth doing:** derive `DESKTOP_DEPS` from `pyproject.toml` instead of
+hand-maintaining it. The list is 17 packages; `[desktop]` extras is one
+(`python-multipart`), so the two were never the parallel pair the old note here
+claimed — the whitelist is really a flattened runtime closure spanning several
+extras plus core. Drift here ships a runtime that imports something it does not
+have, and nothing currently catches it.
 
 ## Verifying a change
 
@@ -144,7 +149,7 @@ node --test npm/omicsclaw/test/            # pure units
 node npm/build-runtime-package.mjs --help  # CLI contract
 
 # Full chain against a real runtime, sandboxed so it cannot touch your PATH:
-python ../OmicsClaw-App/scripts/build-backend-runtime.py \
+python scripts/build-backend-runtime.py \
     --platform linux --arch x64 --omicsclaw-local . --project-root /tmp/rt
 node npm/build-runtime-package.mjs --target linux-x64 \
     --runtime-dir /tmp/rt/backend-runtime --out /tmp/npmdist

@@ -8,20 +8,13 @@ name: npm release
 # `optionalDependencies`; npm's `os` / `cpu` filtering means each machine
 # downloads exactly one.
 #
-# ## Why this workflow needs a token for a second repository
-#
 # The runtime content is defined by `scripts/build-backend-runtime.py`, which
-# lives in the PRIVATE `OmicsClaw-App` repository. It is not duplicated here on
-# purpose — there must be exactly one definition of what a runtime contains, and
-# a vendored copy would drift from the desktop app's. The default `GITHUB_TOKEN`
-# is scoped to this repository only, so checking that script out needs a PAT in
-# `secrets.APP_REPO_TOKEN` with `contents: read` on `OmicsClaw-App`.
-#
-# FOLLOW-UP worth doing: move `build-backend-runtime.py` into this repository.
-# It builds a Python environment defined by *this* project's dependencies, its
-# `DESKTOP_DEPS` whitelist is documented as a hand-maintained copy of this
-# repo's `[desktop]` extras, and living in the app repo is what forces both the
-# sync contract and this token. Moving it deletes all three problems.
+# lives in THIS repository. It used to be checked out of the private
+# OmicsClaw-App repo over a PAT; that repo dropped its embedded Python
+# distribution in OmicsClaw-App@faf1e16 and deleted the script, which forced
+# the move this workflow's header had already recommended. The script builds a
+# Python environment defined by *this* project's dependencies, so this is also
+# where it belongs.
 #
 # ## Publishing
 #
@@ -35,11 +28,6 @@ name: npm release
 on:
   workflow_dispatch:
     inputs:
-      app-repo-ref:
-        description: "OmicsClaw-App ref holding build-backend-runtime.py"
-        required: false
-        default: "main"
-        type: string
       publish:
         description: "Publish to npm after all four runtimes build"
         required: false
@@ -66,8 +54,7 @@ jobs:
           # Four targets, not six. `darwin-x64` is absent because llvmlite 0.47
           # no longer publishes macOS x86_64 wheels and the source build needs a
           # pinned LLVM toolchain; `win32-arm64` is absent because there is no
-          # native hosted runner and Windows has no Rosetta equivalent. Both are
-          # `skip-runtime: true` in OmicsClaw-App's backend-runtime.yml. Adding
+          # native hosted runner and Windows has no Rosetta equivalent. Adding
           # a target means touching all five places listed in npm/AGENTS.md.
           - target: linux-x64
             py-platform: linux
@@ -89,26 +76,6 @@ jobs:
     steps:
       - name: Check out OmicsClaw
         uses: actions/checkout@v6
-
-      - name: Fail early when the App-repo token is missing
-        shell: bash
-        env:
-          APP_REPO_TOKEN: ${{ secrets.APP_REPO_TOKEN }}
-        run: |
-          if [ -z "$APP_REPO_TOKEN" ]; then
-            echo "::error::secrets.APP_REPO_TOKEN is not set. It needs contents:read on the private zhou-1314/OmicsClaw-App repo so build-backend-runtime.py can be checked out. See the header of this workflow."
-            exit 1
-          fi
-
-      - name: Check out the runtime builder from OmicsClaw-App
-        uses: actions/checkout@v6
-        with:
-          repository: zhou-1314/OmicsClaw-App
-          ref: ${{ inputs.app-repo-ref || 'main' }}
-          token: ${{ secrets.APP_REPO_TOKEN }}
-          path: .app-builder
-          sparse-checkout: scripts/build-backend-runtime.py
-          sparse-checkout-cone-mode: false
 
       # The builder is stdlib-only, so any modern Python can run it. The
       # interpreter it *produces* is a pinned python-build-standalone download
@@ -138,7 +105,7 @@ jobs:
           # Deliberately NOT piped: a pipeline reports the LAST command's exit
           # code, so `... | tail` would mask a failed smoke test and let a
           # broken runtime through.
-          python .app-builder/scripts/build-backend-runtime.py \
+          python scripts/build-backend-runtime.py \
             --platform "${{ matrix.py-platform }}" \
             --arch "${{ matrix.py-arch }}" \
             --omicsclaw-local "$GITHUB_WORKSPACE" \
