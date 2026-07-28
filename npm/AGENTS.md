@@ -117,6 +117,14 @@ One prerequisite:
 `secrets.APP_REPO_TOKEN` is no longer read by this workflow — the builder is a
 local file now. The secret is still configured on the repo and can be deleted.
 
+`publish: true` also requires `confirm` to be the exact version in
+`npm/omicsclaw/package.json`. This repository is owned by a single user, so the
+`npm-publish` environment's required-reviewer rule cannot actually gate
+anything: its only reviewer is also the only person who can dispatch, and
+GitHub auto-approves that (`prevent_self_review: true` would deadlock instead
+of helping). Typing the version is the checkpoint that does work — it is what a
+re-run of a previous dispatch cannot supply by accident.
+
 Ordering is load-bearing: platform packages publish **before** the wrapper. The
 wrapper pins exact versions in `optionalDependencies`, and an optional
 dependency that fails to resolve fails *silently* — publishing the wrapper first
