@@ -9317,6 +9317,32 @@ def _validate_app_server_security(host: str, auth_token: str) -> None:
     )
 
 
+def _preflight_control_database() -> None:
+    """Refuse to boot when another Backend already owns the Control Database.
+
+    The lifespan lock in :class:`ControlStateRepository` is the authority; this
+    only moves the verdict forward so the operator reads one actionable line
+    instead of digging it out of a Starlette lifespan traceback.
+    """
+
+    from omicsclaw.control import default_control_state_root, probe_control_lock
+
+    lock_path = default_control_state_root().expanduser() / "control.lock"
+    holder = probe_control_lock(lock_path)
+    if holder is None:
+        return
+    print(
+        f"ERROR: another OmicsClaw Backend already owns {lock_path}\n"
+        f"  {holder.describe()}\n"
+        "  A Backend process owns exactly one control plane. Stop that process "
+        "(it may already be serving the App), or start this one against a "
+        "different state root via OMICSCLAW_CONTROL_STATE_ROOT.\n"
+        "  Deleting the lock file does not release the lock.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+
 def main(argv: list[str] | None = None):
     """Run the server from command line."""
     try:
@@ -9337,6 +9363,8 @@ def main(argv: list[str] | None = None):
     )
     os.environ["OMICSCLAW_APP_HOST"] = args.host
     os.environ["OMICSCLAW_APP_PORT"] = str(args.port)
+
+    _preflight_control_database()
 
     logger.info("Starting OmicsClaw app backend on %s:%d", args.host, args.port)
     uvicorn.run(

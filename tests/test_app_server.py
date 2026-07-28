@@ -116,7 +116,7 @@ async def _setup_memory_review_runtime(monkeypatch, tmp_path: Path):
     return helpers, store, memory_pkg
 
 
-def test_app_server_main_uses_default_contract(monkeypatch):
+def test_app_server_main_uses_default_contract(monkeypatch, tmp_path):
     pytest.importorskip("fastapi")
 
     from omicsclaw.surfaces.desktop import server
@@ -129,6 +129,9 @@ def test_app_server_main_uses_default_contract(monkeypatch):
     monkeypatch.delenv("OMICSCLAW_APP_HOST", raising=False)
     monkeypatch.delenv("OMICSCLAW_APP_PORT", raising=False)
     monkeypatch.delenv("OMICSCLAW_APP_RELOAD", raising=False)
+    # main() refuses to boot when another Backend owns the Control Database, so
+    # it must not read the developer's real one.
+    monkeypatch.setenv("OMICSCLAW_CONTROL_STATE_ROOT", str(tmp_path))
 
     server.main([])
 
@@ -138,7 +141,42 @@ def test_app_server_main_uses_default_contract(monkeypatch):
     assert captured["reload"] is False
 
 
-def test_app_server_main_exports_effective_port_to_env(monkeypatch):
+def test_app_server_main_refuses_when_the_control_database_is_owned(
+    monkeypatch, tmp_path, capsys
+):
+    """A second Backend must be turned away with one readable line.
+
+    The lifespan lock already refuses it, but only after Starlette has buried
+    the verdict under a lifespan traceback — which is what sent an operator
+    hunting through ``control.lock`` instead of the process holding it.
+    """
+
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.control import ControlStateRepository
+    from omicsclaw.surfaces.desktop import server
+
+    fake_uvicorn = SimpleNamespace(
+        run=lambda *_args, **_kwargs: pytest.fail("must not reach uvicorn.run")
+    )
+    monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
+    monkeypatch.setenv("OMICSCLAW_CONTROL_STATE_ROOT", str(tmp_path))
+
+    owner = ControlStateRepository(tmp_path)
+    try:
+        with pytest.raises(SystemExit) as excinfo:
+            server.main(["--host", "127.0.0.1", "--port", "8765"])
+    finally:
+        owner.close()
+
+    assert excinfo.value.code == 1
+    message = capsys.readouterr().err
+    assert str(os.getpid()) in message
+    assert "OMICSCLAW_CONTROL_STATE_ROOT" in message
+    assert "does not release the lock" in message
+
+
+def test_app_server_main_exports_effective_port_to_env(monkeypatch, tmp_path):
     pytest.importorskip("fastapi")
 
     from omicsclaw.surfaces.desktop import server
@@ -150,6 +188,7 @@ def test_app_server_main_exports_effective_port_to_env(monkeypatch):
     monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
     monkeypatch.delenv("OMICSCLAW_APP_PORT", raising=False)
     monkeypatch.delenv("OMICSCLAW_APP_HOST", raising=False)
+    monkeypatch.setenv("OMICSCLAW_CONTROL_STATE_ROOT", str(tmp_path))
 
     server.main(["--host", "127.0.0.1", "--port", "9000"])
 
