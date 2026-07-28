@@ -4,7 +4,7 @@
  * npm package.
  *
  * This script deliberately does NOT build the runtime. That job belongs to
- * `OmicsClaw-App/scripts/build-backend-runtime.py`, which downloads a
+ * `scripts/build-backend-runtime.py` at the repo root, which downloads a
  * python-build-standalone tarball, installs the desktop dependency whitelist,
  * installs `omicsclaw` with `--no-deps`, strips bytecode, and smoke-tests the
  * result. Reimplementing any of that here would create a second source of
@@ -12,9 +12,10 @@
  *
  * So the contract is a handoff:
  *
- *     python OmicsClaw-App/scripts/build-backend-runtime.py \
- *         --platform linux --arch x64 --omicsclaw-local /path/to/OmicsClaw
- *     # → OmicsClaw-App/backend-runtime/python/...
+ *     python scripts/build-backend-runtime.py \
+ *         --platform linux --arch x64 --omicsclaw-local . \
+ *         --project-root /tmp/rt
+ *     # → /tmp/rt/backend-runtime/python/...
  *
  *     node npm/build-runtime-package.mjs \
  *         --target linux-x64 \
@@ -297,7 +298,7 @@ await writeFile(
     '```',
     '',
     'Built by `npm/build-runtime-package.mjs` from the output of',
-    '`OmicsClaw-App/scripts/build-backend-runtime.py`.',
+    '`scripts/build-backend-runtime.py`.',
     '',
   ].join('\n'),
 );
