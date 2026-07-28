@@ -33,6 +33,11 @@ on:
         required: false
         default: false
         type: boolean
+      confirm:
+        description: "To publish, type the exact version being released (e.g. 0.1.2)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -180,6 +185,22 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
+
+      # A solo repository cannot have a working required-reviewer gate: the
+      # environment's only reviewer is also the only person who can dispatch,
+      # and GitHub auto-approves that (prevent_self_review would deadlock
+      # instead). So the human checkpoint is here — the dispatcher must type
+      # the version, which no accidental re-run can supply.
+      - name: Require the release version to be typed out
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./npm/omicsclaw/package.json').version")
+          if [ "${{ inputs.confirm }}" != "$version" ]; then
+            echo "::error::publish requires confirm='$version' (got '${{ inputs.confirm }}'). Nothing was published."
+            exit 1
+          fi
+          echo "Confirmed release of $version"
 
       - name: Sanity-check the wrapper before anything is published
         shell: bash
