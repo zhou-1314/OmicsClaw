@@ -192,6 +192,11 @@ class SkillExperienceView:
     usage: dict[str, int]
     health: dict[str, int]
     evidence_refs: tuple[str, ...] = ()
+    # The Evaluation Protocol ids this exact revision declares. A revision that
+    # declares none cannot produce any evaluation result, so a consumer can say
+    # so up front instead of offering a "run evaluation" action that is
+    # guaranteed to return nothing. Ids only — never entries or digests.
+    declared_protocol_ids: tuple[str, ...] = ()
     # Reserved ADR-0074 §7 fields, populated by later slices (protocols, Gotcha
     # linkage, proposal linkage). Present now so the view schema is stable.
     stability: dict[str, Any] = field(default_factory=dict)
@@ -208,6 +213,7 @@ class SkillExperienceView:
             "last_observed_at": self.last_observed_at,
             "usage": dict(self.usage),
             "health": dict(self.health),
+            "declared_protocol_ids": list(self.declared_protocol_ids),
             "stability": dict(self.stability),
             "approved_gotchas": list(self.approved_gotchas),
             "coverage_gaps": list(self.coverage_gaps),
@@ -380,6 +386,7 @@ def derive_experience_view(
             "framework_failures": framework_failures,
         },
         stability=_stability_view(fresh_protocol_results),
+        declared_protocol_ids=tuple(sorted(current_protocol_digests or {})),
         evidence_refs=_bounded_evidence_refs(current),
     )
 

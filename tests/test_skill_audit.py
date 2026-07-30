@@ -553,19 +553,27 @@ def test_governance_snapshot_is_additive_and_preserves_legacy(tmp_path):
     assert snap["summary"] == {"total_skills": 7}
 
 
-def test_snapshot_reads_cached_summary_without_recomputing_on_get(tmp_path):
+def test_snapshot_projects_once_then_reads_the_cache(tmp_path):
     fake = _FakeAuditRuntime([{"total_skills": 1}])
     gov = _governance(tmp_path, audit_runtime=fake)
     calls_after_init = fake.calls  # one call from summary([]) in __init__
     gov.snapshot()
+    calls_after_first_read = fake.calls
+    # The first audit read projects, so a reader is never told "no evidence"
+    # just because no refresh has happened yet in this process.
+    assert calls_after_first_read == calls_after_init + 1
     gov.snapshot()
-    assert fake.calls == calls_after_init  # a GET never recomputes the summary
+    gov.snapshot()
+    assert fake.calls == calls_after_first_read  # later GETs never recompute
 
 
 def test_refresh_bumps_snapshot_revision_when_summary_changes(tmp_path):
-    fake = _FakeAuditRuntime([{"total_skills": 1}, {"total_skills": 2}])
+    # Summaries are consumed by: __init__, the first-read projection, refresh.
+    fake = _FakeAuditRuntime(
+        [{"total_skills": 1}, {"total_skills": 1}, {"total_skills": 2}]
+    )
     gov = _governance(tmp_path, audit_runtime=fake)
-    assert gov.snapshot()["snapshot_revision"] == 0
+    assert gov.snapshot()["snapshot_revision"] == 0  # projection matched init
     gov.refresh()  # empty skills_root -> no proposals; _recompute sees a changed summary
     snap = gov.snapshot()
     assert snap["snapshot_revision"] == 1
@@ -765,10 +773,11 @@ def test_experience_page_clamps_limit_and_rejects_bad_cursor(tmp_path):
         gov.experience_page(cursor="not+valid+base64+@@")
 
 
-def test_experience_read_models_empty_before_refresh(tmp_path):
+def test_experience_read_models_project_on_first_read(tmp_path):
     gov = _governance(tmp_path, audit_runtime=_FakeAuditRuntime(views=[_view("a")]))
-    assert gov.experience_page()["skills"] == []  # nothing until an explicit refresh
-    assert gov.experience_view("a") is None
+    page = gov.experience_page()  # no explicit refresh needed to read the fleet
+    assert [v["skill_revision"]["skill_id"] for v in page["skills"]] == ["a"]
+    assert gov.experience_view("a") is not None
 
 
 # ---- AUD-10: stability dispersion aggregation -------------------------------
@@ -846,3 +855,18 @@ def test_manifest_protocol_digest_binds_declared_dependency_versions(tmp_path, m
     monkeypatch.setattr(gov_mod, "_installed_dependency_version", lambda pkg: "1.11.0")
     upgraded = _manifest_protocol_digests(_manifest(["scanpy>=1.9"]), skill_dir)["p1"]
     assert upgraded != with_dep  # a version change re-digests, staling prior evidence
+
+
+def test_view_reports_the_protocol_ids_the_revision_declares():
+    """A consumer must be able to tell "no protocol declared" apart from
+    "declared but never run" — otherwise every Skill gets a run-evaluation
+    action that can only ever return zero results."""
+    declared = derive_experience_view(
+        REV, "smoke-only", [], current_protocol_digests={"p2": "d2", "p1": "d1"}
+    )
+    assert declared.declared_protocol_ids == ("p1", "p2")
+    assert declared.to_dict()["declared_protocol_ids"] == ["p1", "p2"]
+
+    undeclared = derive_experience_view(REV, "smoke-only", [])
+    assert undeclared.declared_protocol_ids == ()
+    assert undeclared.to_dict()["declared_protocol_ids"] == []

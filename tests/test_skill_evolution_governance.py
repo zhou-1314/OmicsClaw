@@ -4321,3 +4321,65 @@ def test_protocol_revision_ignores_covered_low_level_and_non_routable(tmp_path):
     _write_protocol_skill(root_c, skill_id="draft-skill", level="fixture-validated",
                           protocols=[], status="draft")
     assert _protocol_revisions(_merge_governance(tmp_path / "c", root_c).refresh()) == []
+
+
+# ── ADR 0074 audit read-model lifetime ───────────────────────────────────────
+
+
+def test_audit_read_models_project_on_first_read_without_explicit_refresh(tmp_path):
+    """An audit reader must never be told "no evidence" merely because nothing
+    has been projected yet. Before this, `summary` / `experience_page` answered
+    from a zero-filled cache until somebody POSTed a refresh."""
+    governance, *_ = _governance(tmp_path)
+
+    page = governance.experience_page()
+    assert [view["skill_revision"]["skill_id"] for view in page["skills"]] == [
+        "evolution-test"
+    ]
+    assert governance.snapshot()["summary"]["total_skills"] == 1
+    assert governance.experience_view("evolution-test") is not None
+
+
+def test_audit_read_models_project_once_per_process(tmp_path, monkeypatch):
+    governance, *_ = _governance(tmp_path)
+    calls: list[int] = []
+    original = governance._audit_runtime.experience_views
+
+    def counted():
+        calls.append(1)
+        return original()
+
+    monkeypatch.setattr(governance._audit_runtime, "experience_views", counted)
+    governance.snapshot()
+    governance.snapshot()
+    governance.experience_page()
+    assert len(calls) == 1
+
+    # The explicit refresh path stays the invalidation authority.
+    governance.refresh()
+    governance.snapshot()
+    assert len(calls) == 2
+
+
+def test_default_governance_is_one_authority_per_durable_target(tmp_path, monkeypatch):
+    """A per-call instance discarded every read model the moment a refresh
+    response was serialized, so the Desktop audit surface could never fill."""
+    skills_root = tmp_path / "skills"
+    _write_skill(skills_root)
+    monkeypatch.setattr(governance_module, "_default_governance", None)
+    monkeypatch.setenv("OMICSCLAW_SKILL_HEALTH_LEDGER", str(tmp_path / "events.jsonl"))
+    monkeypatch.setenv("OMICSCLAW_EVOLUTION_PROPOSALS", str(tmp_path / "proposals.jsonl"))
+
+    first = governance_module.default_skill_evolution_governance(skills_root)
+    assert governance_module.default_skill_evolution_governance(skills_root) is first
+
+    # A read model computed by one request is visible to the next one.
+    first.refresh()
+    later = governance_module.default_skill_evolution_governance(skills_root)
+    assert later.snapshot()["summary"]["total_skills"] == 1
+    assert later.snapshot()["authority_epoch"] == first._authority_epoch
+
+    # Repointing any part of the durable target yields a distinct authority
+    # instead of serving the previous target's projections.
+    monkeypatch.setenv("OMICSCLAW_EVOLUTION_PROPOSALS", str(tmp_path / "other.jsonl"))
+    assert governance_module.default_skill_evolution_governance(skills_root) is not first

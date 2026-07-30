@@ -24,7 +24,9 @@ import logging
 import os
 from pathlib import Path
 import re
+import sys
 import tempfile
+import threading
 from typing import Any, Iterable, Mapping, Protocol
 import unicodedata
 from uuid import uuid4
@@ -660,6 +662,22 @@ class SkillEvolutionGovernance:
             )
         self._audit_views: tuple[SkillExperienceView, ...] = ()
         self._audit_summary: dict[str, Any] = self._audit_runtime.summary([])
+        self._audit_readmodels_computed = False
+
+    def _ensure_audit_readmodels(self) -> None:
+        """Compute the audit read models once, on the first read of this process.
+
+        Without this an audit reader sees a zero-filled summary and an empty
+        Experience page until somebody happens to POST a refresh, which reads as
+        "this Skill fleet has no audit evidence" rather than "nothing has been
+        projected yet". The one-time cost is paid by whichever read arrives
+        first; every later read still hits the cache, so the ADR 0074 promise
+        that reads never re-hash sources per request is preserved. The explicit
+        refresh and evaluation paths remain the only invalidation authority.
+        """
+        if self._audit_readmodels_computed:
+            return
+        self._recompute_audit_readmodels()
 
     def _recompute_audit_readmodels(self) -> None:
         """Refresh the cached audit read models on the explicit refresh path.
@@ -685,9 +703,11 @@ class SkillEvolutionGovernance:
             self._snapshot_revision += 1
         self._audit_views = views
         self._audit_summary = summary
+        self._audit_readmodels_computed = True
 
     def experience_view(self, skill_id: str) -> dict[str, Any] | None:
         """The last-refreshed Skill Experience View for one Skill id, or None."""
+        self._ensure_audit_readmodels()
         for view in self._audit_views:
             if view.skill_revision.skill_id == skill_id:
                 return view.to_dict()
@@ -707,6 +727,7 @@ class SkillEvolutionGovernance:
         fixed maximum. A malformed cursor raises ``ValueError`` (the route maps
         it to 422). Never returns raw audit payloads — only the projected views.
         """
+        self._ensure_audit_readmodels()
         views = self._audit_views
         if state:
             views = tuple(v for v in views if v.validation_state == state)
@@ -1284,9 +1305,11 @@ class SkillEvolutionGovernance:
         ``snapshot_revision`` / ``generated_at`` / ``capabilities`` / ``summary``
         fields additively: the existing ``proposals`` and ``health`` keys and
         their shapes are unchanged, so an old App keeps working while a new App
-        can negotiate the extra capabilities. ``summary`` is the last-refreshed
-        audit read model (cheap: no per-GET source-hash recomputation).
+        can negotiate the extra capabilities. ``summary`` is the last-projected
+        audit read model (cheap: computed once per process, then cached, so no
+        per-GET source-hash recomputation).
         """
+        self._ensure_audit_readmodels()
         return {
             "proposals": [
                 proposal.to_dict() for proposal in self.proposals.list_latest()
@@ -3757,16 +3780,68 @@ class SkillEvolutionGovernance:
             registry.reload(self.skills_root)
 
 
+_DefaultGovernanceKey = tuple[Path, Path, Path]
+
+_default_governance_lock = threading.Lock()
+_default_governance: tuple[_DefaultGovernanceKey, SkillEvolutionGovernance] | None = None
+
+
+def _default_governance_key(
+    skills_root: Path,
+    ledger: SkillHealthLedger,
+    proposals: EvolutionProposalStore,
+) -> _DefaultGovernanceKey:
+    """The durable audit target an instance owns: root + ledger + proposal store."""
+    return (skills_root.resolve(), ledger.path.resolve(), proposals.path.resolve())
+
+
+def reset_default_skill_evolution_governance() -> None:
+    """Drop the cached process authority so the next call builds a fresh one."""
+    global _default_governance
+    with _default_governance_lock:
+        _default_governance = None
+
+
 def default_skill_evolution_governance(
     skills_root: str | Path | None = None,
 ) -> SkillEvolutionGovernance:
+    """The process-lifetime governance authority for one durable audit target.
+
+    Returning a new instance per call is not equivalent to reusing one. The
+    ADR 0074 audit read models (the Experience Views behind
+    ``GET /skill-evolution/skills`` and the ``summary`` inside
+    ``GET /skill-evolution``) are in-memory projections recomputed only on the
+    explicit refresh and evaluation paths, and ``authority_epoch`` /
+    ``snapshot_revision`` are defined per process. A per-call instance discards
+    every read model the moment the refresh response is serialized, so both
+    reads answer from a never-populated cache — an empty audit surface no
+    amount of refreshing can fill.
+
+    The cache is keyed by the durable state the instance owns, so repointing
+    the skills root or either store (a test fixture, a workspace switch) yields
+    a distinct authority instead of serving the previous target's read models.
+    Both stores stay file-backed and are re-read per call, so pinning the
+    instance pins only the derived projections, never the durable evidence.
+    """
+    global _default_governance
     from .registry import SKILLS_DIR
 
-    return SkillEvolutionGovernance(
-        skills_root=skills_root or SKILLS_DIR,
-        ledger=default_skill_health_ledger(),
-        proposals=default_evolution_proposal_store(),
-    )
+    ledger = default_skill_health_ledger()
+    proposals = default_evolution_proposal_store()
+    root = Path(skills_root or SKILLS_DIR)
+    key = _default_governance_key(root, ledger, proposals)
+
+    with _default_governance_lock:
+        cached = _default_governance
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        governance = SkillEvolutionGovernance(
+            skills_root=root,
+            ledger=ledger,
+            proposals=proposals,
+        )
+        _default_governance = (key, governance)
+        return governance
 
 
 __all__ = [
@@ -3778,4 +3853,5 @@ __all__ = [
     "SharedRunnerEvolutionExecutionAdapter",
     "SkillEvolutionGovernance",
     "default_skill_evolution_governance",
+    "reset_default_skill_evolution_governance",
 ]
