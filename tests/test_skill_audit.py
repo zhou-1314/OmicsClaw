@@ -857,6 +857,86 @@ def test_manifest_protocol_digest_binds_declared_dependency_versions(tmp_path, m
     assert upgraded != with_dep  # a version change re-digests, staling prior evidence
 
 
+def test_dependency_versions_resolve_against_the_skill_runner_interpreter(monkeypatch):
+    """ADR 0074 §6.4 binds the digest to the env that RUNS the Skill.
+
+    Skills execute in ``get_skill_runner_python()``, which diverges from
+    ``sys.executable`` whenever ``OMICSCLAW_RUN_PYTHON`` is set. Resolving
+    in-process would judge runner-earned evidence against the orchestrator's
+    environment and silently drop it as stale, so the probe must follow the
+    runner — and two orchestrators sharing one runner must agree.
+    """
+    import omicsclaw.skill.evolution_governance as gov_mod
+
+    probed: list[str] = []
+
+    def _fake_probe(executable: str):
+        probed.append(executable)
+        return {"scanpy": "9.9.9"}
+
+    monkeypatch.setattr(gov_mod, "_runner_distribution_versions", _fake_probe)
+    monkeypatch.setattr(
+        "omicsclaw.skill.execution.python_runtime.get_skill_runner_python",
+        lambda: "/runner/bin/python",
+    )
+
+    assert gov_mod._installed_dependency_version("scanpy") == "9.9.9"
+    assert probed == ["/runner/bin/python"]  # not sys.executable
+
+
+def test_unprobeable_runner_reads_unresolved_not_the_orchestrator_versions(monkeypatch):
+    """A runner we cannot probe must stale evidence, never fake freshness."""
+    import omicsclaw.skill.evolution_governance as gov_mod
+
+    monkeypatch.setattr(gov_mod, "_runner_distribution_versions", lambda _exe: None)
+    monkeypatch.setattr(
+        "omicsclaw.skill.execution.python_runtime.get_skill_runner_python",
+        lambda: "/broken/python",
+    )
+
+    resolved = gov_mod._installed_dependency_version("scanpy")
+    assert resolved == "unresolved"
+    # Distinct from "probed and absent", so the two never collide in a digest.
+    assert resolved != "missing"
+
+
+def test_local_distribution_versions_keep_the_first_path_entry(monkeypatch):
+    """A shadowed duplicate must not overwrite the one Python actually imports.
+
+    ``distributions()`` yields every copy on the path (a user-site ``torch`` in
+    front of the env's, say); import resolution takes the FIRST, so the digest
+    must record that one to describe the environment the Skill really ran in.
+    """
+    import omicsclaw.skill.evolution_governance as gov_mod
+
+    class _Dist:
+        def __init__(self, name, version):
+            self.metadata = {"Name": name}
+            self.version = version
+
+    monkeypatch.setattr(
+        gov_mod.importlib.metadata,
+        "distributions",
+        lambda: iter([_Dist("torch", "2.5.1"), _Dist("torch", "2.12.0")]),
+    )
+    assert gov_mod._local_distribution_versions()["torch"] == "2.5.1"
+
+
+def test_distribution_lookup_normalizes_pep503_names(monkeypatch):
+    """``STAGATE-pyG`` in a manifest must match the ``stagate_pyg`` distribution."""
+    import omicsclaw.skill.evolution_governance as gov_mod
+
+    monkeypatch.setattr(
+        gov_mod, "_runner_distribution_versions", lambda _exe: {"stagate-pyg": "1.0.0"}
+    )
+    monkeypatch.setattr(
+        "omicsclaw.skill.execution.python_runtime.get_skill_runner_python",
+        lambda: "/runner/bin/python",
+    )
+    assert gov_mod._installed_dependency_version("STAGATE-pyG") == "1.0.0"
+    assert gov_mod._installed_dependency_version("stagate_pyg") == "1.0.0"
+
+
 def test_view_reports_the_protocol_ids_the_revision_declares():
     """A consumer must be able to tell "no protocol declared" apart from
     "declared but never run" — otherwise every Skill gets a run-evaluation

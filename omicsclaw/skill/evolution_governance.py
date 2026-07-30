@@ -111,22 +111,121 @@ def _run_protocol_entry(skill_dir: Path, entry: str) -> str:
 _DEP_NAME_SPLIT = re.compile(r"[<>=!~;\s\[]")
 
 
-@lru_cache(maxsize=4096)
-def _installed_dependency_version(package: str) -> str:
-    """Installed version of one distribution, or ``"missing"`` (memoized).
+# PEP 503 name normalization, so a requirement spelled ``STAGATE-pyG`` matches
+# the distribution ``stagate_pyg`` exactly the way ``importlib.metadata`` does.
+_DIST_NAME_SEPARATORS = re.compile(r"[-_.]+")
 
-    Resolved in-process, so it reflects the interpreter that runs Skills by
-    default (``get_skill_runner_python()`` is ``sys.executable`` unless
-    ``OMICSCLAW_RUN_PYTHON`` overrides it). Installed versions do not change
-    within a process, so memoizing keeps the per-resolve digest computation
-    cheap; a fresh Backend process re-resolves and picks up an upgrade.
+# Value recorded when the Skill runner's interpreter could not be probed at all.
+# It is deliberately distinct from ``"missing"`` (probed, not installed): an
+# unprobeable environment must make evidence STALE, never falsely fresh.
+_DEPENDENCY_VERSION_UNRESOLVED = "unresolved"
+
+# Dumps ``{canonical distribution name: version}`` from the target interpreter.
+_DISTRIBUTION_PROBE = (
+    "import json,re,sys\n"
+    "from importlib.metadata import distributions\n"
+    "out={}\n"
+    "for d in distributions():\n"
+    "    n=(d.metadata['Name'] or '')\n"
+    "    if not n: continue\n"
+    "    k=re.sub(r'[-_.]+','-',n).lower()\n"
+    "    if k not in out: out[k]=d.version or ''\n"
+    "json.dump(out,sys.stdout)\n"
+)
+
+
+def _canonical_distribution_name(name: str) -> str:
+    return _DIST_NAME_SEPARATORS.sub("-", name.strip()).lower()
+
+
+def _local_distribution_versions() -> dict[str, str]:
+    """In-process ``{canonical name: version}``, first-on-``sys.path`` wins.
+
+    ``importlib.metadata.distributions()`` yields every distribution on the
+    path, including shadowed duplicates (a user-site ``torch`` in front of the
+    env's, say). Import resolution — and therefore what the Skill actually
+    runs — takes the FIRST one, so a later duplicate must not overwrite it.
     """
+    versions: dict[str, str] = {}
+    for dist in importlib.metadata.distributions():
+        try:
+            name = dist.metadata["Name"] or ""
+        except Exception:  # a broken distribution must not break audit reads
+            continue
+        if not name:
+            continue
+        versions.setdefault(_canonical_distribution_name(name), dist.version or "")
+    return versions
+
+
+@lru_cache(maxsize=8)
+def _runner_distribution_versions(python_executable: str) -> Mapping[str, str] | None:
+    """Installed distributions of the interpreter that actually runs Skills.
+
+    ADR 0074 §6.4 binds the protocol digest to the *runtime env's* dependency
+    versions. Skills execute in ``get_skill_runner_python()``, which is
+    ``sys.executable`` only until ``OMICSCLAW_RUN_PYTHON`` overrides it — so
+    resolving in-process would judge runner-earned evidence against the
+    orchestrator's environment and silently drop it as stale.
+
+    The same-interpreter case stays in-process (no subprocess). A different
+    interpreter is probed ONCE per Backend process with a single bounded
+    subprocess, memoized on the executable path, so a changed override
+    re-probes while a steady deployment pays one probe.
+
+    Returns ``None`` when the interpreter could not be probed; callers record
+    ``unresolved`` rather than substituting the orchestrator's versions.
+    """
+    if python_executable == sys.executable:
+        return _local_distribution_versions()
+
+    import subprocess
+
     try:
-        return importlib.metadata.version(package)
-    except importlib.metadata.PackageNotFoundError:
-        return "missing"
-    except Exception:  # a broken distribution must not break audit reads
-        return "missing"
+        proc = subprocess.run(
+            [python_executable, "-c", _DISTRIBUTION_PROBE],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        logger.warning(
+            "skill-runner interpreter %s could not be probed for dependency "
+            "versions; protocol evidence will read as unresolved",
+            python_executable,
+        )
+        return None
+    if proc.returncode != 0:
+        logger.warning(
+            "skill-runner interpreter %s failed the dependency probe (exit %s); "
+            "protocol evidence will read as unresolved",
+            python_executable,
+            proc.returncode,
+        )
+        return None
+    try:
+        parsed = json.loads(proc.stdout)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return {str(k): str(v) for k, v in parsed.items()}
+
+
+def _installed_dependency_version(package: str) -> str:
+    """Version of one distribution in the Skill-runner interpreter.
+
+    ``"missing"`` means probed and not installed; ``"unresolved"`` means the
+    runner interpreter itself could not be probed. Both are stable digest
+    inputs, and both differ from a real version, so evidence earned under a
+    different environment correctly reads as stale rather than current.
+    """
+    from .execution.python_runtime import get_skill_runner_python
+
+    versions = _runner_distribution_versions(get_skill_runner_python())
+    if versions is None:
+        return _DEPENDENCY_VERSION_UNRESOLVED
+    return versions.get(_canonical_distribution_name(package), "missing")
 
 
 def _manifest_dependency_versions(manifest: SkillManifest) -> dict[str, str]:
