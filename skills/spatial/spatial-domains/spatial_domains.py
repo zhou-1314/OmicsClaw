@@ -802,7 +802,9 @@ def write_reproducibility(
     # Method-specific dependencies (minimal & accurate, avoids unrelated packages).
     # Custom mappings for methods requiring special package names or extra dependencies.
     method_packages: dict[str, list[list[str]]] = {
-        "leiden": [["igraph"], ["leidenalg"]],
+        # flavor="igraph" (see _lib/domains.identify_domains_leiden): scanpy
+        # calls igraph.Graph.community_leiden and never imports leidenalg.
+        "leiden": [["igraph"]],
         "louvain": [["igraph"], ["louvain"]],
         "spagcn": [["torch"], ["SpaGCN"]],
         "stagate": [["torch"], ["torch-geometric", "torch_geometric"]],

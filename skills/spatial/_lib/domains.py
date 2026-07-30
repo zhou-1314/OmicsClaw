@@ -105,6 +105,10 @@ def identify_domains_leiden(
     log-normalized expression + PCA. When spatial coordinates are
     available, the expression-based and spatial-based neighbor graphs are
     combined with configurable weighting.
+
+    Requires the ``python-igraph`` package. This path passes
+    ``flavor="igraph"``, so scanpy uses ``igraph.Graph.community_leiden`` and
+    never imports ``leidenalg`` — igraph alone is the real requirement.
     """
     logger.info(
         "Leiden: using pre-built neighbor graph (log-normalized + PCA); "
@@ -112,6 +116,16 @@ def identify_domains_leiden(
     )
     ensure_pca(adata, n_comps=n_pcs)
     ensure_neighbors(adata, n_neighbors=n_neighbors, n_pcs=min(n_pcs, 30))
+
+    try:
+        import igraph as _  # noqa: F401
+    except ImportError:
+        raise ImportError(
+            "'python-igraph' is not installed.\n\n"
+            "Install:     pip install python-igraph\n"
+            "Alternative: use --method louvain (also needs python-igraph) or a "
+            "graph-neural backend such as --method stagate"
+        )
 
     spatial_key = get_spatial_key(adata)
     adjacency = adata.obsp["connectivities"]
