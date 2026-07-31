@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import hmac
 import ipaddress
+import logging
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
@@ -23,12 +25,21 @@ from starlette.responses import JSONResponse
 from starlette.routing import get_route_path
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+logger = logging.getLogger("omicsclaw.remote.auth")
+
 TOKEN_ENV = "OMICSCLAW_REMOTE_AUTH_TOKEN"
 AUTHORITY_STATE_ATTR = "remote_bearer_authority"
 AUTHORITY_UNAVAILABLE_DETAIL = "remote bearer authority is not initialized"
 EXPECTED_BACKEND_PROCESS_EPOCH_HEADER = b"x-omicsclaw-expected-backend-process-epoch"
 BACKEND_PROCESS_EPOCH_MISMATCH_DETAIL = "backend_process_epoch_mismatch"
 _MAX_PATH_DECODE_ROUNDS = 8
+_REJECTION_LOG_INTERVAL_SECONDS = 60.0
+_REJECTION_GUIDANCE = (
+    "The client must send 'Authorization: Bearer <%s>'. In OmicsClaw-App set "
+    "that value as the connection profile's auth token (Settings -> "
+    "Connections). GET /health stays public by design, so a 200 there does NOT "
+    "prove the credential is configured." % TOKEN_ENV
+)
 
 
 class _PathAuthority(Enum):
@@ -170,6 +181,34 @@ async def require_bearer_token(
     remote_bearer_authority_for_app(request.app).enforce(authorization)
 
 
+class _BearerRejectionLog:
+    """Report each bearer rejection reason once, then at a bounded cadence.
+
+    ``GET /health`` is deliberately public, so a client with no (or a stale)
+    credential produces a steady stream of ``200 OK`` / ``401 Unauthorized``
+    access-log pairs that never explains itself. One throttled WARNING per
+    reason turns that stream into a diagnosis, while the interval keeps an
+    unauthenticated caller from flooding the log.
+    """
+
+    def __init__(self, monotonic: Callable[[], float] = time.monotonic) -> None:
+        self._monotonic = monotonic
+        self._last_logged: dict[str, float] = {}
+
+    def claim(self, reason: str) -> bool:
+        """Return True when this reason is due to be reported again."""
+
+        now = self._monotonic()
+        previous = self._last_logged.get(reason)
+        if (
+            previous is not None
+            and now - previous < _REJECTION_LOG_INTERVAL_SECONDS
+        ):
+            return False
+        self._last_logged[reason] = now
+        return True
+
+
 class RemoteBearerMiddleware:
     """Authenticate every Desktop HTTP request before route/body handling.
 
@@ -190,8 +229,10 @@ class RemoteBearerMiddleware:
         delegated_path_prefixes: Sequence[str] = (),
         delegated_policy_resolver: Callable[[Scope], BearerGatePolicy] | None = None,
         backend_process_epoch_resolver: Callable[[Scope], str] | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._app = app
+        self._rejection_log = _BearerRejectionLog(monotonic)
         self._public_paths = frozenset(public_paths)
         self._delegated_path_prefixes = tuple(
             prefix.rstrip("/") or "/" for prefix in delegated_path_prefixes
@@ -341,6 +382,32 @@ class RemoteBearerMiddleware:
                 detail=BACKEND_PROCESS_EPOCH_MISMATCH_DETAIL,
             )
 
+    def _report_rejection(
+        self,
+        exc: HTTPException,
+        *,
+        method: str,
+        route_path: str,
+    ) -> None:
+        """Explain an authentication rejection in the Backend's own log.
+
+        Only the credential verdict is reported. The rejected value is never
+        read here, so no candidate token can reach the log.
+        """
+
+        if exc.status_code != status.HTTP_401_UNAUTHORIZED:
+            return
+        reason = str(exc.detail)
+        if not self._rejection_log.claim(reason):
+            return
+        logger.warning(
+            "Rejected %s %s: %s. %s",
+            method or "WEBSOCKET",
+            route_path,
+            reason,
+            _REJECTION_GUIDANCE,
+        )
+
     @staticmethod
     async def _send_auth_failure(
         scope: Scope,
@@ -432,6 +499,7 @@ class RemoteBearerMiddleware:
             if scope["type"] == "http":
                 self._enforce_expected_backend_process_epoch(scope)
         except HTTPException as exc:
+            self._report_rejection(exc, method=method, route_path=route_path)
             await self._send_auth_failure(scope, receive, send, exc)
             return
         await self._app(scope, receive, send)
