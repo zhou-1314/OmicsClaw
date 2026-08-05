@@ -20,6 +20,7 @@ summary:
   - MetFrag
   - spectral matching
   - metabolite ID
+  - ppm tolerance
   tags:
   - metabolomics
   - annotation

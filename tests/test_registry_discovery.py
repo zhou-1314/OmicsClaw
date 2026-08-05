@@ -135,6 +135,21 @@ def test_load_all_uses_fixture_skills_dir(tmp_path):
     assert "spatial-preprocess" not in registry.skills
 
 
+def test_registry_exposes_run_derived_collection_without_changing_domain(tmp_path):
+    skills_root = tmp_path / "skills"
+    _write_skill(
+        skills_root / "bulkrna" / "run-derived" / "derived-rhythm",
+        skill_name="derived-rhythm",
+        domain_in_yaml="bulkrna",
+    )
+
+    registry = OmicsRegistry()
+    registry.load_all(skills_root)
+
+    assert registry.skills["derived-rhythm"]["domain"] == "bulkrna"
+    assert registry.skills["derived-rhythm"]["collection"] == "run-derived"
+
+
 def test_full_load_reparses_after_an_explicit_lightweight_snapshot(tmp_path):
     skills_root = tmp_path / "skills"
     skill_dir = skills_root / "spatial" / "fake-foo"

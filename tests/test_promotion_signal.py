@@ -134,11 +134,11 @@ async def test_promotion_suggestion_is_none_below_threshold(store, monkeypatch):
     sid = session.session_id
 
     await _auto_capture_autonomous_run(sid, "t", "cluster the cells by type", "run-1", "/tmp/1", "succeeded")
-    suggestion = await _compute_promotion_suggestion(sid, "t", "cluster the cells by type", "run-1", "/tmp/1")
+    suggestion = await _compute_promotion_suggestion(sid, "t", "cluster the cells by type", "run-1")
     assert suggestion is None
 
     await _auto_capture_autonomous_run(sid, "t", "cluster cells by type", "run-2", "/tmp/2", "succeeded")
-    suggestion = await _compute_promotion_suggestion(sid, "t", "cluster cells by type", "run-2", "/tmp/2")
+    suggestion = await _compute_promotion_suggestion(sid, "t", "cluster cells by type", "run-2")
     assert suggestion is None  # only 1 PRIOR success so far — below threshold
 
 
@@ -155,16 +155,15 @@ async def test_promotion_suggestion_fires_on_third_similar_success(store, monkey
     await _auto_capture_autonomous_run(sid, "t", "cluster cells by cell type please", "run-3", "/tmp/3", "succeeded")
 
     suggestion = await _compute_promotion_suggestion(
-        sid, "t", "cluster cells by cell type please", "run-3", "/tmp/3"
+        sid, "t", "cluster cells by cell type please", "run-3"
     )
     assert suggestion is not None
     assert "3rd time" in suggestion
-    assert "/tmp/3" in suggestion
-    assert "source_analysis_dir='/tmp/3'" in suggestion
+    assert "'run_id': 'run-3'" in suggestion
+    assert "source_analysis_dir" not in suggestion
+    assert "/tmp/3" not in suggestion
     # Must never suggest the code actually PASS promote_from_latest=True (the
-    # mtime-scan path this feature exists to avoid reintroducing) — mentioning
-    # the term in passing, to explain why source_analysis_dir is used instead,
-    # is fine and expected.
+    # mtime-scan path this feature exists to avoid reintroducing).
     assert "promote_from_latest=True" not in suggestion
 
 
@@ -181,7 +180,7 @@ async def test_promotion_suggestion_excludes_the_current_run_itself(store, monke
     await _auto_capture_autonomous_run(sid, "t", "cluster the cells", "run-1", "/tmp/1", "succeeded")
     await _auto_capture_autonomous_run(sid, "t", "cluster the cells", "run-1", "/tmp/1", "succeeded")
 
-    suggestion = await _compute_promotion_suggestion(sid, "t", "cluster the cells", "run-1", "/tmp/1")
+    suggestion = await _compute_promotion_suggestion(sid, "t", "cluster the cells", "run-1")
     assert suggestion is None  # only itself is on record — 0 genuine priors
 
 
@@ -198,7 +197,7 @@ async def test_promotion_suggestion_ignores_dissimilar_goals(store, monkeypatch)
             sid, "t", f"detect spatially variable genes run {i}", f"unrelated-{i}", f"/tmp/u{i}", "succeeded"
         )
 
-    suggestion = await _compute_promotion_suggestion(sid, "t", "cluster the cells by type", "run-x", "/tmp/x")
+    suggestion = await _compute_promotion_suggestion(sid, "t", "cluster the cells by type", "run-x")
     assert suggestion is None
 
 
@@ -215,7 +214,7 @@ async def test_promotion_suggestion_ignores_failed_prior_runs(store, monkeypatch
             sid, "t", "cluster the cells by type", f"failed-{i}", f"/tmp/f{i}", "failed"
         )
 
-    suggestion = await _compute_promotion_suggestion(sid, "t", "cluster the cells by type", "run-x", "/tmp/x")
+    suggestion = await _compute_promotion_suggestion(sid, "t", "cluster the cells by type", "run-x")
     assert suggestion is None
 
 
@@ -234,7 +233,7 @@ async def test_promotion_suggestion_is_thread_scoped(store, monkeypatch):
             sid, "other-thread", "cluster the cells by type", f"run-{i}", f"/tmp/{i}", "succeeded"
         )
 
-    suggestion = await _compute_promotion_suggestion(sid, "my-thread", "cluster the cells by type", "run-x", "/tmp/x")
+    suggestion = await _compute_promotion_suggestion(sid, "my-thread", "cluster the cells by type", "run-x")
     assert suggestion is None
 
 
@@ -243,7 +242,7 @@ async def test_promotion_suggestion_noop_without_memory_store(monkeypatch):
     import omicsclaw.runtime.agent.state as _state
 
     monkeypatch.setattr(_state, "memory_store", None, raising=False)
-    suggestion = await _compute_promotion_suggestion("sid", "t", "goal", "run-1", "/tmp/1")
+    suggestion = await _compute_promotion_suggestion("sid", "t", "goal", "run-1")
     assert suggestion is None
 
 
@@ -265,7 +264,7 @@ async def test_promotion_suggestion_declines_when_thread_id_is_empty(store, monk
     await _auto_capture_autonomous_run(sid, "thread-A", "cluster PBMC cells by type", "run-a", "/tmp/a", "succeeded")
     await _auto_capture_autonomous_run(sid, "thread-B", "cluster PBMC cells by type", "run-b", "/tmp/b", "succeeded")
 
-    suggestion = await _compute_promotion_suggestion(sid, "", "cluster PBMC cells by type", "run-c", "/tmp/c")
+    suggestion = await _compute_promotion_suggestion(sid, "", "cluster PBMC cells by type", "run-c")
     assert suggestion is None
 
 
@@ -283,7 +282,7 @@ async def test_promotion_suggestion_escapes_quotes_in_the_goal(store, monkeypatc
 
     await _auto_capture_autonomous_run(sid, "t", goal, "run-1", "/tmp/1", "succeeded")
     await _auto_capture_autonomous_run(sid, "t", goal, "run-2", "/tmp/2", "succeeded")
-    suggestion = await _compute_promotion_suggestion(sid, "t", goal, "run-3", "/tmp/3")
+    suggestion = await _compute_promotion_suggestion(sid, "t", goal, "run-3")
 
     assert suggestion is not None
     assert repr(goal) in suggestion

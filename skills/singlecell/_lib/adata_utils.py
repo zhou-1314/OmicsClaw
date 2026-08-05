@@ -310,7 +310,10 @@ def _best_qc_gene_name_index(adata: AnnData, *, species: str) -> tuple[pd.Index,
         values = adata.var[column]
         if values.isna().all():
             continue
-        normalized = pd.Index(values.fillna("").astype(str), dtype="object")
+        normalized = pd.Index(
+            values.astype("string").fillna("").to_numpy(),
+            dtype="object",
+        )
         score = _species_prefix_match_counts(normalized, species)
         if (score["mt"] + score["ribo"]) > (best_score["mt"] + best_score["ribo"]):
             best_names = normalized

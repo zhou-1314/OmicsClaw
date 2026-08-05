@@ -10,7 +10,7 @@ SKILLS_DIR = ROOT / "skills"
 RUNNER_OWNED_HELPERS = {
     "write_standard_run_artifacts",
     "write_output_readme",
-    "write_analysis_notebook",
+    "write_skill_replay_capsule",
 }
 
 
@@ -61,7 +61,9 @@ def test_skill_scripts_do_not_write_to_runner_owned_paths():
 
     runner_owned_constants = {
         "README.md",
-        "analysis_notebook.ipynb",
+        "replay.json",
+        "environment.json",
+        "replay.sh",
     }
     write_function_names = {"write_text", "write_bytes", "_write_text"}
 
@@ -118,8 +120,8 @@ def test_skill_docs_do_not_claim_skills_write_runner_owned_output_ux():
         "wrapper writes `README.md`",
         "writes `README.md`",
         "write `README.md`",
-        "Every successful standard run also writes `reproducibility/analysis_notebook.ipynb`",
-        "`analysis_notebook.ipynb` should be written on normal successful runs",
+        "skill writes `reproducibility/replay.json`",
+        "wrapper writes `reproducibility/replay.json`",
     )
 
     violations: list[str] = []

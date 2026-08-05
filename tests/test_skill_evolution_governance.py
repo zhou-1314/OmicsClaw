@@ -23,7 +23,8 @@ from omicsclaw.skill.evolution_governance import (
     RegistryProjectionAdapter,
     SkillEvolutionGovernance,
 )
-from omicsclaw.skill.registry import OmicsRegistry
+from omicsclaw.skill.evaluation_run import EvaluationResultStore, ProtocolRunOutcome
+from omicsclaw.skill.registry import OmicsRegistry, is_skill_automatically_routable
 from omicsclaw.skill.schema import load_skill_yaml
 from omicsclaw.skill.skill_md import render_skill_md
 
@@ -70,6 +71,30 @@ def _write_skill(
     }
     path = skill_dir / "skill.yaml"
     path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def _write_activation_candidate(
+    root: Path,
+    *,
+    skill_id: str = "golden-created-skill",
+) -> Path:
+    path = _write_skill(root, skill_id=skill_id)
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    raw["lifecycle"] = {"status": "draft"}
+    raw["validation"] = {
+        "level": "smoke-only",
+        "protocols": [
+            {
+                "id": "demo",
+                "kind": "demo",
+                "entry": skill_id.replace("-", "_") + ".py",
+                "runner": "shared_runner",
+                "repeats": 1,
+            }
+        ],
+    }
+    path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
     return path
 
 
@@ -3384,6 +3409,152 @@ def test_concurrent_failed_approval_cannot_erase_prior_successful_projections(
     assert store.get(proposals["evolution-b"]).status == "rolled_back"
     assert catalog.read_text(encoding="utf-8") == "a-complete"
     assert graph.read_text(encoding="utf-8") == "a-complete"
+
+
+def test_draft_candidate_is_evaluated_activated_and_becomes_routable(
+    tmp_path: Path,
+):
+    """Golden lifecycle slice: published draft -> evaluation -> human activation."""
+
+    skills_root = tmp_path / "skills"
+    manifest_path = _write_activation_candidate(skills_root)
+
+    registry_before = OmicsRegistry()
+    registry_before.load_all(skills_root)
+    assert not is_skill_automatically_routable(
+        registry_before.skills["golden-created-skill"]
+    )
+
+    evaluation_store = EvaluationResultStore(tmp_path / "evaluations.jsonl")
+    execution = _ExecutionAdapter()
+    governance = SkillEvolutionGovernance(
+        skills_root=skills_root,
+        ledger=SkillHealthLedger(tmp_path / "events.jsonl"),
+        proposals=EvolutionProposalStore(tmp_path / "proposals.jsonl"),
+        execution_adapter=execution,
+        projection_adapter=_ProjectionAdapter(),
+        evaluation_store=evaluation_store,
+        activation_run_one=lambda _spec: ProtocolRunOutcome(
+            "succeeded",
+            evidence_refs=("artifact:golden-demo",),
+        ),
+    )
+
+    proposal = governance.prepare_activation(
+        "golden-created-skill",
+        run_one=lambda _spec: ProtocolRunOutcome(
+            "succeeded",
+            evidence_refs=("artifact:golden-demo",),
+        ),
+    )
+
+    assert proposal is not None
+    assert proposal.kind == "skill_activation"
+    assert proposal.status == "pending"
+    assert proposal.support_evaluation_result_ids
+    candidate = load_skill_yaml(manifest_path)
+    assert candidate.lifecycle.status == "draft"
+    assert candidate.validation.level == "smoke-only"
+    assert execution.calls == []
+
+    governance.approve(
+        proposal.proposal_id,
+        approver="local-human",
+        reason="reviewed the exact-revision demo evaluation",
+    )
+
+    activated = load_skill_yaml(manifest_path)
+    assert activated.lifecycle.status == "mvp"
+    assert activated.validation.level == "demo-validated"
+    registry_after = OmicsRegistry()
+    registry_after.load_all(skills_root)
+    assert is_skill_automatically_routable(
+        registry_after.skills["golden-created-skill"]
+    )
+    experience = governance.experience_view("golden-created-skill")
+    assert experience is not None
+    assert experience["validation_state"] == "current"
+    assert experience["effective_validation_level"] == "demo-validated"
+
+
+def test_failed_candidate_evaluation_leaves_draft_without_activation(
+    tmp_path: Path,
+):
+    skills_root = tmp_path / "skills"
+    manifest_path = _write_activation_candidate(
+        skills_root,
+        skill_id="failed-created-skill",
+    )
+    governance = SkillEvolutionGovernance(
+        skills_root=skills_root,
+        ledger=SkillHealthLedger(tmp_path / "events.jsonl"),
+        proposals=EvolutionProposalStore(tmp_path / "proposals.jsonl"),
+        execution_adapter=_ExecutionAdapter(),
+        projection_adapter=_ProjectionAdapter(),
+        evaluation_store=EvaluationResultStore(tmp_path / "evaluations.jsonl"),
+    )
+
+    proposal = governance.prepare_activation(
+        "failed-created-skill",
+        run_one=lambda _spec: ProtocolRunOutcome(
+            "failed",
+            reason_code="protocol_failed",
+            evidence_refs=("artifact:failed-demo",),
+        ),
+    )
+
+    assert proposal is None
+    assert governance.proposals.list_latest() == []
+    candidate = load_skill_yaml(manifest_path)
+    assert candidate.lifecycle.status == "draft"
+    assert candidate.validation.level == "smoke-only"
+
+
+def test_failed_activation_projection_rolls_back_manifest_and_experience(
+    tmp_path: Path,
+):
+    skills_root = tmp_path / "skills"
+    manifest_path = _write_activation_candidate(
+        skills_root,
+        skill_id="rollback-created-skill",
+    )
+
+    def successful_protocol(_spec):
+        return ProtocolRunOutcome(
+            "succeeded",
+            evidence_refs=("artifact:rollback-demo",),
+        )
+
+    governance = SkillEvolutionGovernance(
+        skills_root=skills_root,
+        ledger=SkillHealthLedger(tmp_path / "events.jsonl"),
+        proposals=EvolutionProposalStore(tmp_path / "proposals.jsonl"),
+        execution_adapter=_ExecutionAdapter(),
+        projection_adapter=_FailingProjectionAdapter(),
+        evaluation_store=EvaluationResultStore(tmp_path / "evaluations.jsonl"),
+        activation_run_one=successful_protocol,
+    )
+    proposal = governance.prepare_activation(
+        "rollback-created-skill",
+        run_one=successful_protocol,
+    )
+    assert proposal is not None
+
+    with pytest.raises(EvolutionRevalidationError, match="projection refresh failed"):
+        governance.approve(
+            proposal.proposal_id,
+            approver="local-human",
+            reason="exercise atomic rollback",
+        )
+
+    candidate = load_skill_yaml(manifest_path)
+    assert candidate.lifecycle.status == "draft"
+    assert candidate.validation.level == "smoke-only"
+    assert governance.proposals.get(proposal.proposal_id).status == "rolled_back"
+    experience = governance.experience_view("rollback-created-skill")
+    assert experience is not None
+    assert experience["declared_validation_level"] == "smoke-only"
+    assert experience["effective_validation_level"] == "smoke-only"
 
 
 def test_persistent_proposal_store_failure_restores_files_but_cannot_record_rollback(

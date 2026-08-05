@@ -141,7 +141,7 @@ class LocalVerifiedSkillOutput:
 
     output_dir: str
     readme_path: str | None = None
-    notebook_path: str | None = None
+    replay_path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1173,7 +1173,7 @@ class RunRuntime:
             LocalVerifiedSkillOutput(
                 output_dir=projected.output.output_dir,
                 readme_path=projected.output.readme_path,
-                notebook_path=projected.output.notebook_path,
+                replay_path=projected.output.replay_path,
             )
             if projected.output is not None
             else None

@@ -124,7 +124,10 @@ def identify_domains_leiden(
             "'python-igraph' is not installed.\n\n"
             "Install:     pip install python-igraph\n"
             "Alternative: use --method louvain (also needs python-igraph) or a "
-            "graph-neural backend such as --method stagate"
+            "graph-neural backend such as --method cellcharter / --method spagcn "
+            "/ --method graphst (all pip-installable). Avoid --method stagate as a "
+            "fallback: STAGATE_pyG is not on PyPI and needs a manual GitHub "
+            "install plus torch_geometric."
         )
 
     spatial_key = get_spatial_key(adata)
@@ -377,10 +380,23 @@ def identify_domains_stagate(
     to highly variable genes when available.
     Spatial network is built preferably via scale-invariant KNN (`k_nn=6`)
     rather than a fixed radius to support diverse spatial resolutions.
+
+    ``STAGATE_pyG`` is NOT on PyPI, so it is never auto-provisioned — it must be
+    installed from GitHub. Fail fast with that command plus the pip-installable
+    alternatives rather than letting a bare ``ImportError`` surface.
     """
     from .dependency_manager import require
 
-    require("STAGATE_pyG", feature="STAGATE spatial domain identification")
+    try:
+        require("STAGATE_pyG", feature="STAGATE spatial domain identification")
+    except ImportError as exc:
+        raise ImportError(
+            f"{exc}\n"
+            "Alternative: STAGATE is the only backend here that cannot be "
+            "installed from PyPI. If you just want spatial domains, use "
+            "--method cellcharter / --method banksy / --method graphst / "
+            "--method spagcn instead — all install with plain pip."
+        ) from exc
     require("torch", feature="STAGATE (PyTorch backend)")
 
     import torch

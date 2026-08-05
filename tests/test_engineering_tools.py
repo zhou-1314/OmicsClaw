@@ -229,6 +229,38 @@ def test_file_tools_follow_workspace_and_safe_surface_defaults(tmp_path: Path):
     assert str(tmp_path / "repo" / "output" / "engineering" / "remote.txt") in safe_default_result
 
 
+def test_file_read_accepts_only_the_explicit_tool_result_root(tmp_path: Path):
+    executors = _build_executors(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    result_root = tmp_path / "runtime-state" / "tool-results"
+    result_root.mkdir(parents=True)
+    full_result = result_root / "large-result.txt"
+    full_result.write_text("verified full result", encoding="utf-8")
+
+    rendered = asyncio.run(
+        executors["file_read"](
+            {"path": str(full_result)},
+            surface="cli",
+            workspace=str(workspace),
+            tool_result_root=str(result_root),
+        )
+    )
+
+    assert "verified full result" in rendered
+    outside = tmp_path / "runtime-state" / "not-a-tool-result.txt"
+    outside.write_text("must stay unreadable", encoding="utf-8")
+    rejected = asyncio.run(
+        executors["file_read"](
+            {"path": str(outside)},
+            surface="cli",
+            workspace=str(workspace),
+            tool_result_root=str(result_root),
+        )
+    )
+    assert "outside allowed roots" in rejected
+
+
 def test_task_tools_persist_state_for_session(tmp_path: Path):
     executors = _build_executors(tmp_path)
 

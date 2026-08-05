@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from omicsclaw.core.r_script_runner import RScriptRunner
+
 SKILL_SCRIPT = Path(__file__).resolve().parent.parent / "sc_preprocess.py"
 
 
@@ -37,7 +39,7 @@ def test_demo_mode(tmp_output):
     assert (tmp_output / "tables" / "qc_metrics_per_cell.csv").exists()
     assert (tmp_output / "tables" / "pca_embedding.csv").exists()
     assert (tmp_output / "processed.h5ad").exists()
-    assert not (tmp_output / "reproducibility" / "analysis_notebook.ipynb").exists()
+    assert not (tmp_output / "reproducibility" / "replay.json").exists()
     assert (tmp_output / "reproducibility" / "requirements.txt").exists()
     assert not (tmp_output / "reproducibility" / "environment.txt").exists()
 
@@ -89,28 +91,68 @@ def test_seurat_backend_function_is_defined():
     assert hasattr(module, "run_seurat_preprocessing")
 
 
+def test_seurat_backend_preflight_requires_rhdf5(monkeypatch):
+    """The Python preflight must catch zellkonverter's H5AD dependency."""
+    spec = importlib.util.spec_from_file_location("sc_preprocess_r_preflight", SKILL_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    observed: list[str] = []
+
+    def stop_after_preflight(*, required_r_packages):
+        observed.extend(required_r_packages)
+        raise RuntimeError("stop after dependency preflight")
+
+    monkeypatch.setattr(module, "validate_r_environment", stop_after_preflight)
+    with pytest.raises(RuntimeError, match="stop after dependency preflight"):
+        module.run_seurat_preprocessing(object(), workflow="seurat")
+
+    assert "rhdf5" in observed
+
+
+def test_prepare_input_can_preserve_original_feature_axis():
+    import anndata as ad
+    import numpy as np
+    import pandas as pd
+
+    spec = importlib.util.spec_from_file_location("sc_preprocess_preserve", SKILL_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    adata = ad.AnnData(
+        X=np.array([[3, 1], [2, 1], [1, 0]], dtype=np.int32),
+        obs=pd.DataFrame(index=["cell1", "cell2", "cell3"]),
+        var=pd.DataFrame(
+            {"feature_name": ["MT-CO1", "RPS3"]},
+            index=pd.Index(["ENSG1", "ENSG2"], name="gene"),
+        ),
+    )
+    prepared, _summary, _params, contract = module.prepare_preprocessing_input(
+        adata,
+        method="scanpy",
+        effective_params={
+            **module.METHOD_PARAM_DEFAULTS["scanpy"],
+            "min_genes": 0,
+            "min_cells": 0,
+            "max_mt_pct": 100.0,
+            "remove_doublets": False,
+            "preserve_var_names": True,
+        },
+    )
+
+    assert prepared.var_names.tolist() == ["ENSG1", "ENSG2"]
+    assert prepared.var_names.name == "gene"
+    assert prepared.var["mt"].tolist() == [True, False]
+    assert contract["preserved_var_names"] is True
+
+
 def _has_seurat_r_stack() -> bool:
-    """Return True when the minimal R Seurat preprocessing stack is available."""
-    try:
-        result = subprocess.run(
-            [
-                "Rscript",
-                "-e",
-                (
-                    "cat("
-                    "requireNamespace('Seurat', quietly=TRUE) && "
-                    "requireNamespace('SingleCellExperiment', quietly=TRUE) && "
-                    "requireNamespace('zellkonverter', quietly=TRUE)"
-                    ")"
-                ),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0 and result.stdout.strip() == "TRUE"
+    """Probe the same R executable and library paths as production execution."""
+    runner = RScriptRunner(verbose=False)
+    packages = ["Seurat", "SingleCellExperiment", "zellkonverter", "rhdf5"]
+    return runner.check_r_available() and not runner.get_missing_packages(packages)
 
 
 @pytest.mark.skipif(not _has_seurat_r_stack(), reason="R Seurat preprocessing stack not installed")

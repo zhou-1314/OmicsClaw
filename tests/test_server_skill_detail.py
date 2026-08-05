@@ -218,6 +218,7 @@ async def test_get_skill_endpoint_v2(tmp_path, monkeypatch):
                 "spatial-demo": {
                     "alias": "spatial-demo",
                     "domain": "spatial",
+                    "collection": "run-derived",
                     "description": "Spatial demo",
                     "script": str(script),
                 }
@@ -227,6 +228,7 @@ async def test_get_skill_endpoint_v2(tmp_path, monkeypatch):
     monkeypatch.setattr(s, "_core", fake_core, raising=False)
 
     payload = await s.get_skill("spatial", "spatial-demo")
+    assert payload["collection"] == "run-derived"
     assert payload["version"] == "2.1.0"
     assert payload["validation_level"] == "smoke-only"
     assert payload["superseded_by"] is None

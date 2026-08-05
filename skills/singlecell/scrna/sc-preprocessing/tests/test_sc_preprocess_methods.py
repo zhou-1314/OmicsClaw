@@ -26,3 +26,4 @@ def test_method_specific_cli_args_are_exposed():
     assert '"--seurat-scale-factor"' in MODULE_TEXT
     assert '"--seurat-hvg-method"' in MODULE_TEXT
     assert '"--sctransform-regress-mt"' in MODULE_TEXT
+    assert '"--preserve-var-names"' in MODULE_TEXT

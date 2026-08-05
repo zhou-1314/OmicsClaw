@@ -4,7 +4,7 @@
 # See docs/superpowers/specs/2026-04-30-conda-env-management-design.md.
 
 [build-system]
-requires = ["setuptools>=64", "wheel"]
+requires = ["setuptools>=64,<82", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -51,7 +51,7 @@ requires-python = ">=3.11,<3.14"
 # --------------------------------------------------------------------------- #
 dependencies = [
     # ========== pkg_resources fallback for older packages ==========
-    "setuptools>=64",
+    "setuptools>=64,<82",
 
     # ========== SOCKS proxy bridge — not on conda-forge under this name ==========
     "socksio>=1.0.0",
@@ -73,6 +73,10 @@ dependencies = [
 spatial-domains = [
     "SpaGCN>=1.2.5,<2.0",
     # torch moved to environment.yml Tier 4
+    # STAGATE's *dependency* only. STAGATE_pyG itself is NOT on PyPI — do not add
+    # it here; `pip install STAGATE-pyG` cannot resolve. It is classified `vcs` in
+    # omicsclaw/skill/execution/dep_spec.py and installed manually from
+    # git+https://github.com/RucDongLab/STAGATE_pyG.git
     "torch_geometric",                # STAGATE dependency
     "GraphST>=1.1.0",                 # GraphST method
     # POT moved to environment.yml Tier 4
@@ -91,6 +95,8 @@ spatial-domains = [
 spatial = [
     # torch, scvi-tools moved to environment.yml Tier 4
     "GraphST>=1.1.0",                 # spatial-domains: GraphST method
+    # STAGATE's dependency only — STAGATE_pyG is GitHub-only, see the
+    # spatial-domains extra above.
     "torch_geometric",                # spatial-domains: STAGATE dependency
     "cellcharter>=0.2.0",             # spatial-domains: CellCharter method
     "tangram-sc>=1.0.0",              # spatial-annotate: Tangram method
@@ -420,6 +426,7 @@ dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.1.0",
+    "pytest-xdist>=3.5.0,<4.0",
     "black>=22.0.0,<26.0",
     "mypy>=1.0.0,<2.0",
     "ruff>=0.1.0",
@@ -442,7 +449,7 @@ minversion = "7.0"
 pythonpath = ["."]
 python_files = "test_*.py"
 python_functions = "test_*"
-addopts = "-v --import-mode=importlib -m 'not slow and not eval'"
+addopts = "-v --import-mode=importlib -m 'not slow and not demo and not eval'"
 testpaths = [
     "tests",
     "skills/spatial/spatial-preprocess/tests",
@@ -476,7 +483,7 @@ markers = [
     "slow: tests requiring full optional deps or significant runtime (excluded by default)",
     "requires_torch: tests requiring PyTorch (SpaGCN, Cell2Location, scVI)",
     "requires_r: tests requiring R (Rscript on PATH)",
-    "demo: demo-mode integration tests",
+    "demo: Skill demo-mode integration tests (excluded by default; Skill-local demo tests are classified during collection)",
     "eval: real-LLM behavioral parity tests; run manually or via nightly cron (excluded by default)",
 ]
 filterwarnings = [

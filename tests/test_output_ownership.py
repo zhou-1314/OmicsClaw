@@ -620,13 +620,13 @@ def test_owned_text_writer_rejects_in_tree_symlink_parent(tmp_path: Path) -> Non
 
     with pytest.raises(RuntimeError, match="symbolic-link output parent"):
         atomic_write_owned_output_text(
-            output_dir / "reproducibility" / "analysis_notebook.ipynb",
+            output_dir / "reproducibility" / "replay.json",
             output_root=output_dir,
             text="{}\n",
-            label="analysis notebook",
+            label="Skill replay capsule",
         )
 
-    assert not (real_dir / "analysis_notebook.ipynb").exists()
+    assert not (real_dir / "replay.json").exists()
 
 
 def test_owned_text_writer_rejects_windows_reparse_parent(

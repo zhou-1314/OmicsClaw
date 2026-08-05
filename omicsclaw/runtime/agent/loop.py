@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import importlib
 import inspect
 import json
 import logging
@@ -37,29 +38,30 @@ from types import MappingProxyType
 
 from openai import APIError, AsyncOpenAI, OpenAIError
 
-# Late-binding handle for runtime-mutated omicsclaw.runtime.agent.state globals.
-import omicsclaw.runtime.agent.state as _core
+# Bind the canonical state module through ``sys.modules``.  A dotted import can
+# follow a stale ``omicsclaw.runtime.agent.state`` package attribute after an
+# Adapter/test temporarily substitutes that module, splitting mutable runtime
+# state across two module objects.
+_core = importlib.import_module("omicsclaw.runtime.agent.state")
 
-# Stable omicsclaw.runtime.agent.state symbols.
-from omicsclaw.runtime.agent.state import (
-    BOT_START_TIME,
-    DATA_DIR,
-    DEEP_LEARNING_METHODS,
-    EXAMPLES_DIR,
-    MAX_CONVERSATIONS,
-    MAX_HISTORY,
-    MAX_HISTORY_CHARS,
-    OMICSCLAW_DIR,
-    OUTPUT_DIR,
-    _primary_skill_count,
-    _skill_registry,
-    audit,
-    format_skills_table,
-    pending_preflight_requests,
-    pending_candidate_chain_confirmations,
-    tool_result_store,
-    transcript_store,
-)
+# Stable state symbols.
+BOT_START_TIME = _core.BOT_START_TIME
+DATA_DIR = _core.DATA_DIR
+DEEP_LEARNING_METHODS = _core.DEEP_LEARNING_METHODS
+EXAMPLES_DIR = _core.EXAMPLES_DIR
+MAX_CONVERSATIONS = _core.MAX_CONVERSATIONS
+MAX_HISTORY = _core.MAX_HISTORY
+MAX_HISTORY_CHARS = _core.MAX_HISTORY_CHARS
+OMICSCLAW_DIR = _core.OMICSCLAW_DIR
+OUTPUT_DIR = _core.OUTPUT_DIR
+_primary_skill_count = _core._primary_skill_count
+_skill_registry = _core._skill_registry
+audit = _core.audit
+format_skills_table = _core.format_skills_table
+pending_preflight_requests = _core.pending_preflight_requests
+pending_candidate_chain_confirmations = _core.pending_candidate_chain_confirmations
+tool_result_store = _core.tool_result_store
+transcript_store = _core.transcript_store
 from omicsclaw.runtime.agent.session import build_agent_session_id
 from omicsclaw.services.billing import accumulate_usage as _accumulate_usage
 from omicsclaw.surfaces.channels.commands import SlashCommandContext
@@ -169,11 +171,11 @@ MAX_TOOL_ITERATIONS = int(os.getenv("OMICSCLAW_MAX_TOOL_ITERATIONS", "20"))  # I
 # ---------------------------------------------------------------------------
 
 def _format_analysis_route_context(route: AnalysisRoute) -> str:
-    """Render route metadata for the existing chat engine.
+    """Render route metadata for requests that still use the chat engine.
 
-    This is the first, non-disruptive integration slice: the router result is
-    made visible to the LLM, but execution still flows through the current
-    engine until exact/partial/no-skill executors land.
+    The Golden Slice executes only an explicitly named exact demo through a
+    deterministic planned call. All other exact, partial, and no-skill routes
+    retain this context for the existing LLM path.
     """
     if route.kind is AnalysisRouteKind.CHAT:
         return ""
@@ -264,6 +266,29 @@ def _format_analysis_route_context(route: AnalysisRoute) -> str:
             "- execution_rule: autonomous analysis path; execute through the autonomous code runner"
         )
     return "\n".join(lines)
+
+
+def _plan_exact_named_demo(
+    user_text: str,
+    route: AnalysisRoute,
+    *,
+    run_runtime,
+) -> list[tuple[str, dict]]:
+    """Return the one deterministic call admitted by the Golden Slice."""
+
+    if run_runtime is None or route.kind is not AnalysisRouteKind.EXACT_SKILL:
+        return []
+    skill = str(route.chosen_skill or "").strip()
+    normalized = str(user_text or "").lower()
+    if not skill or skill.lower() not in normalized:
+        return []
+    if not re.search(r"(?:--demo\b|\bdemo\b|演示)", normalized):
+        return []
+    if route.metadata.get("candidate_chain") or route.preflight_required:
+        return []
+    if extract_valid_input_paths(user_text):
+        return []
+    return [("omicsclaw", {"skill": skill, "mode": "demo"})]
 
 
 def _merge_system_prompt_additions(*additions: str) -> str:
@@ -994,6 +1019,7 @@ async def llm_tool_loop(
     stored_user_content=None,
     content_adapter=None,
     runtime_observer=None,
+    run_runtime=None,
 ) -> str:
     """
     Run the LLM tool-use loop:
@@ -1064,6 +1090,11 @@ async def llm_tool_loop(
         chat_id,
         user_text,
         analysis_route,
+    )
+    planned_tool_calls = _plan_exact_named_demo(
+        user_text,
+        analysis_route,
+        run_runtime=run_runtime,
     )
     autonomous_understanding_context = await _build_autonomous_understanding_context(
         user_content
@@ -1136,6 +1167,8 @@ async def llm_tool_loop(
         policy_state=policy_state,
         cancel_event=cancel_event,
         candidate_chain_gate=candidate_chain_gate,
+        planned_tool_calls=planned_tool_calls,
+        run_runtime=run_runtime,
     )
 
 

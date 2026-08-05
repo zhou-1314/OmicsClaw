@@ -1,0 +1,33 @@
+{
+  "request": "Create a reusable OmicsClaw Skill proposal from successful Autonomous Run 7787182985b2435997433fa94a7b7096. The Skill performs deterministic fixed-period 24-hour single-component cosinor OLS for a bulk RNA time-course CSV with gene rows and T{hh}_R{rep} columns. Primary outputs: cosinor_results.csv, semantic_summary.json, report.md. Method: fixed-period-cosinor-ols. Trigger keywords: cosinor, circadian rhythmicity, 24-hour rhythm, bulk RNA time course.",
+  "summary": "Deterministic fixed-period 24-hour single-component cosinor OLS rhythm analysis for a bulk RNA time-course CSV.",
+  "skill_name": "bulkrna-cosinor-rhythm",
+  "domain": "bulkrna",
+  "methods": [
+    "fixed-period-cosinor-ols"
+  ],
+  "input_formats": [
+    "CSV with gene rows and T{hh}_R{rep} columns"
+  ],
+  "primary_outputs": [
+    "cosinor_results.csv",
+    "semantic_summary.json",
+    "report.md"
+  ],
+  "trigger_keywords": [
+    "cosinor",
+    "circadian rhythmicity",
+    "24-hour rhythm",
+    "bulk RNA time course"
+  ],
+  "template_path": "templates/skill/SKILL.md",
+  "source": {
+    "kind": "run",
+    "run_id": "7787182985b2435997433fa94a7b7096"
+  },
+  "promoted_from_autonomous_analysis": true,
+  "legacy_source_compatibility": false,
+  "corpus_derived": false,
+  "corpus_source_kind": "",
+  "doc_ref": ""
+}

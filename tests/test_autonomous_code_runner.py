@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 
 import pytest
 
@@ -24,6 +25,7 @@ from omicsclaw.autonomous.runner import write_run_records
 from omicsclaw.autonomous.budget import MiniAgentBudget
 from omicsclaw.autonomous.replay import emit_replay_script
 from omicsclaw.common import run_paths
+from omicsclaw.common.output_claim import OUTPUT_CLAIM_FILENAME
 
 
 def test_create_workspace_uses_autonomous_shape(tmp_path: Path) -> None:
@@ -52,6 +54,22 @@ def test_create_workspace_uses_autonomous_shape(tmp_path: Path) -> None:
     assert json.loads((workspace.paths.upstream / "references.json").read_text()) == {
         "references": ["/runs/skill-output"]
     }
+
+
+def test_default_autonomous_run_has_canonical_id_and_durable_output_claim(
+    tmp_path: Path,
+) -> None:
+    workspace = create_workspace(
+        AutonomousRunRequest(goal="summarize a dataset", output_root=tmp_path)
+    )
+
+    assert re.fullmatch(r"[0-9a-f]{32}", workspace.run_id)
+    claim = json.loads(
+        (workspace.root / OUTPUT_CLAIM_FILENAME).read_text(encoding="utf-8")
+    )
+    assert claim["schema_version"] == 1
+    assert re.fullmatch(r"[0-9a-f]{32}", claim["claim_id"])
+    assert claim["owner"] == f"autonomous:{workspace.run_id}"
 
 
 def test_project_scoped_autonomous_run_is_indexed(tmp_path: Path) -> None:

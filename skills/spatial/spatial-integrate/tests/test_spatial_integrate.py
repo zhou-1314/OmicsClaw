@@ -6,6 +6,7 @@ import argparse
 import json
 import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -25,8 +26,25 @@ def tmp_output(tmp_path):
     return tmp_path / "integrate_out"
 
 
-def _make_multi_batch_adata(n_obs: int = 100, n_vars: int = 50):
-    """Create a minimal preprocessed multi-batch AnnData for unit tests."""
+@pytest.fixture(scope="module")
+def demo_output(tmp_path_factory):
+    """Run the default Demo once for all read-only output assertions."""
+
+    output_dir = tmp_path_factory.mktemp("spatial_integrate_demo")
+    result = subprocess.run(
+        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(output_dir)],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        cwd=str(SKILL_SCRIPT.parent),
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}"
+    return output_dir
+
+
+@lru_cache(maxsize=None)
+def _multi_batch_adata_template(n_obs: int, n_vars: int):
+    """Build and cache the expensive immutable base used by unit tests."""
     import anndata
     import pandas as pd
     import scanpy as sc
@@ -39,9 +57,7 @@ def _make_multi_batch_adata(n_obs: int = 100, n_vars: int = 50):
     adata.obsm["spatial"] = rng.uniform(0, 1000, size=(n_obs, 2))
 
     # Assign batches
-    adata.obs["batch"] = pd.Categorical(
-        rng.choice(["batch_A", "batch_B"], size=n_obs)
-    )
+    adata.obs["batch"] = pd.Categorical(rng.choice(["batch_A", "batch_B"], size=n_obs))
 
     # Log-normalize
     sc.pp.normalize_total(adata, target_sum=1e4)
@@ -55,61 +71,46 @@ def _make_multi_batch_adata(n_obs: int = 100, n_vars: int = 50):
     return adata
 
 
+def _make_multi_batch_adata(n_obs: int = 100, n_vars: int = 50):
+    """Return an isolated copy of the shared preprocessed test dataset."""
+
+    return _multi_batch_adata_template(n_obs, n_vars).copy()
+
+
 # -----------------------------------------------------------------------
 # CLI integration tests (existing)
 # -----------------------------------------------------------------------
 
 
-def test_demo_mode(tmp_output):
+def test_demo_mode(demo_output):
     """spatial-integrate --demo should run without error."""
-    result = subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
-        capture_output=True,
-        text=True,
-        timeout=180,
-        cwd=str(SKILL_SCRIPT.parent),
-    )
-    assert result.returncode == 0, f"stderr: {result.stderr}"
-    assert (tmp_output / "report.md").exists()
-    assert (tmp_output / "result.json").exists()
-    assert (tmp_output / "processed.h5ad").exists()
-    assert (tmp_output / "tables" / "integration_metrics.csv").exists()
+    assert (demo_output / "report.md").exists()
+    assert (demo_output / "result.json").exists()
+    assert (demo_output / "processed.h5ad").exists()
+    assert (demo_output / "tables" / "integration_metrics.csv").exists()
 
 
-def test_demo_outputs_gallery_contract(tmp_output):
+def test_demo_outputs_gallery_contract(demo_output):
     """Demo mode should export gallery manifests, figure data, and reproducibility helpers."""
-    result = subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
-        capture_output=True,
-        text=True,
-        timeout=180,
-        cwd=str(SKILL_SCRIPT.parent),
-    )
-    assert result.returncode == 0, f"stderr: {result.stderr}"
-    assert (tmp_output / "figures" / "manifest.json").exists()
-    assert (tmp_output / "figure_data" / "manifest.json").exists()
-    assert (tmp_output / "figure_data" / "batch_sizes.csv").exists()
-    assert (tmp_output / "figure_data" / "integration_metrics.csv").exists()
-    assert (tmp_output / "figure_data" / "umap_before_points.csv").exists()
-    assert (tmp_output / "figure_data" / "umap_after_points.csv").exists()
-    assert (tmp_output / "tables" / "batch_sizes.csv").exists()
-    assert (tmp_output / "tables" / "integration_observations.csv").exists()
-    assert (tmp_output / "reproducibility" / "r_visualization.sh").exists()
+    assert (demo_output / "figures" / "manifest.json").exists()
+    assert (demo_output / "figure_data" / "manifest.json").exists()
+    assert (demo_output / "figure_data" / "batch_sizes.csv").exists()
+    assert (demo_output / "figure_data" / "integration_metrics.csv").exists()
+    assert (demo_output / "figure_data" / "umap_before_points.csv").exists()
+    assert (demo_output / "figure_data" / "umap_after_points.csv").exists()
+    assert (demo_output / "tables" / "batch_sizes.csv").exists()
+    assert (demo_output / "tables" / "integration_observations.csv").exists()
+    assert (demo_output / "reproducibility" / "r_visualization.sh").exists()
 
 
-def test_demo_gallery_manifests_have_roles(tmp_output):
+def test_demo_gallery_manifests_have_roles(demo_output):
     """The standard integration gallery should emit figure and figure-data manifests."""
-    result = subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
-        capture_output=True,
-        text=True,
-        timeout=180,
-        cwd=str(SKILL_SCRIPT.parent),
+    figures_manifest = json.loads(
+        (demo_output / "figures" / "manifest.json").read_text()
     )
-    assert result.returncode == 0, f"stderr: {result.stderr}"
-
-    figures_manifest = json.loads((tmp_output / "figures" / "manifest.json").read_text())
-    figure_data_manifest = json.loads((tmp_output / "figure_data" / "manifest.json").read_text())
+    figure_data_manifest = json.loads(
+        (demo_output / "figure_data" / "manifest.json").read_text()
+    )
 
     assert figures_manifest["recipe_id"] == "standard-spatial-integration-gallery"
     assert any(plot["role"] == "overview" for plot in figures_manifest["plots"])
@@ -120,32 +121,30 @@ def test_demo_gallery_manifests_have_roles(tmp_output):
     assert figure_data_manifest["recipe_id"] == "standard-spatial-integration-gallery"
 
 
-def test_demo_report_content(tmp_output):
+def test_demo_report_content(demo_output):
     """Report should contain integration-related sections."""
-    subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
-        capture_output=True, text=True, timeout=180, cwd=str(SKILL_SCRIPT.parent),
-    )
-    report = (tmp_output / "report.md").read_text()
+    report = (demo_output / "report.md").read_text()
     assert "Integration" in report
     assert "Batch" in report
     assert "Disclaimer" in report
 
 
-def test_demo_result_json(tmp_output):
+def test_demo_result_json(demo_output):
     """result.json should contain expected keys."""
-    subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
-        capture_output=True, text=True, timeout=180, cwd=str(SKILL_SCRIPT.parent),
-    )
-    data = json.loads((tmp_output / "result.json").read_text())
+    data = json.loads((demo_output / "result.json").read_text())
     assert data["skill"] == "spatial-integrate"
     assert "summary" in data
     assert data["summary"]["n_batches"] >= 2
     assert "batch_mixing_before" in data["summary"]
     assert "batch_mixing_after" in data["summary"]
-    assert data["data"]["visualization"]["recipe_id"] == "standard-spatial-integration-gallery"
-    assert data["data"]["visualization"]["embedding_key"] == data["summary"]["embedding_key"]
+    assert (
+        data["data"]["visualization"]["recipe_id"]
+        == "standard-spatial-integration-gallery"
+    )
+    assert (
+        data["data"]["visualization"]["embedding_key"]
+        == data["summary"]["embedding_key"]
+    )
 
 
 # -----------------------------------------------------------------------
@@ -251,7 +250,9 @@ def test_run_integration_persists_visualization_snapshots(monkeypatch):
 
     monkeypatch.setattr(integration_lib, "integrate_harmony", _fake_integrate_harmony)
 
-    summary = integration_lib.run_integration(adata, method="harmony", batch_key="batch")
+    summary = integration_lib.run_integration(
+        adata, method="harmony", batch_key="batch"
+    )
 
     assert "X_umap_before_integration" in adata.obsm
     assert "X_umap_after_integration" in adata.obsm
@@ -277,16 +278,26 @@ def test_generate_figures_uses_persisted_after_umap_snapshot(tmp_path, monkeypat
     adata.obsm["X_pca_harmony"] = adata.obsm["X_pca"].copy()
     adata.obs["batch_entropy_before"] = np.linspace(0.1, 0.4, adata.n_obs)
     adata.obs["batch_entropy_after"] = np.linspace(0.3, 0.8, adata.n_obs)
-    adata.obs["batch_entropy_delta"] = adata.obs["batch_entropy_after"] - adata.obs["batch_entropy_before"]
+    adata.obs["batch_entropy_delta"] = (
+        adata.obs["batch_entropy_after"] - adata.obs["batch_entropy_before"]
+    )
 
     seen = []
 
-    def _fake_plot_integration(adata, params, subtype=None, batch_key=None, cluster_key=None):
+    def _fake_plot_integration(
+        adata, params, subtype=None, batch_key=None, cluster_key=None
+    ):
         seen.append(("integration", subtype, np.asarray(adata.obsm["X_umap"]).copy()))
         return plt.figure()
 
     def _fake_plot_features(adata, params=None, feature=None, basis=None):
-        seen.append(("feature", getattr(params, "feature", feature), np.asarray(adata.obsm["X_umap"]).copy()))
+        seen.append(
+            (
+                "feature",
+                getattr(params, "feature", feature),
+                np.asarray(adata.obsm["X_umap"]).copy(),
+            )
+        )
         return plt.figure()
 
     monkeypatch.setattr("spatial_integrate.plot_integration", _fake_plot_integration)

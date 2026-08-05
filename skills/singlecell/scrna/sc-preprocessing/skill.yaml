@@ -53,6 +53,7 @@ interface:
         - min_cells
         - normalization_target_sum
         - scanpy_hvg_flavor
+        - preserve_var_names
         defaults:
           min_genes: 200
           min_cells: 3
@@ -61,6 +62,7 @@ interface:
           n_pcs: 50
           normalization_target_sum: 10000.0
           scanpy_hvg_flavor: seurat
+          preserve_var_names: false
         requires:
         - raw_counts
         - scanpy
@@ -94,6 +96,7 @@ interface:
         - Seurat
         - SingleCellExperiment
         - zellkonverter
+        - rhdf5
         tips:
         - '--method seurat: R-backed LogNormalize workflow up to PCA export.'
       sctransform:
@@ -120,6 +123,7 @@ interface:
         - SingleCellExperiment
         - zellkonverter
         - sctransform
+        - rhdf5
         tips:
         - '--method sctransform: R-backed SCTransform workflow up to PCA export.'
       pearson_residuals:
@@ -210,3 +214,41 @@ resources:
     gpu_devices: 0
     threads: 2
     temporary_disk_mib: 4096
+validation:
+  protocols:
+  - id: omicbench-a02-normalize-log-v1
+    kind: benchmark
+    entry: tests/omicbench_preprocessing.py
+    runner: command
+    suite_id: omicbench
+    case_ids:
+    - A02_normalize_log
+    dataset_ref:
+      store: repository
+      path: data/benchmarks/omicbench/omicbench-A02_normalize_log
+      content_sha256: sha256:beddcd538b9584af7dac0be911ad265382b50ed8dcce89ca2456261297d4635e
+    pass_rule: all_runs
+    repeats: 1
+    timeout_seconds: 600
+    metrics:
+    - checks_passed
+    - checks_total
+    - score
+  - id: omicbench-a03-hvg-v1
+    kind: benchmark
+    entry: tests/omicbench_preprocessing.py
+    runner: command
+    suite_id: omicbench
+    case_ids:
+    - A03_hvg
+    dataset_ref:
+      store: repository
+      path: data/benchmarks/omicbench/omicbench-A03_hvg
+      content_sha256: sha256:acac3a34caf59663b62fe85d78dfdbc1e25e831e46b81f6f3c948f801b756b68
+    pass_rule: all_runs
+    repeats: 1
+    timeout_seconds: 600
+    metrics:
+    - checks_passed
+    - checks_total
+    - score

@@ -35,6 +35,8 @@
 
 ## 📢 最新动态
 
+- **🟢 Golden Agent Run + Replay 切片** — CLI REPL、single-shot 与 Desktop 文本对话中明确命名的 demo 请求会直接进入 Backend-owned `RunRuntime`，并以已验证的 Receipt、全新 Run ID、输出目录、README 和 Skill Replay Capsule 结束 Agent Turn。该路径绕过 LLM 工具发现且不回退 legacy runner。标准 Skill Run 不再自动拼装源码 notebook；`oc replay <输出目录>/reproducibility/replay.json` 会创建一次新 Run，并比较 Skill 修订、输入/参数证据、环境身份、结果语义与声明的科学产物，原 Run 保持不可变。
+- **🟢 Golden Skill 生命周期切片** — `create_omics_skill` 现在先发布不可路由的 `draft/smoke-only` 候选，再对已发布的精确版本运行声明式 demo Evaluation Protocol，并只生成待审批的 `skill_activation` 提案。Agent 无权审批；人工审核后的治理 CAS 才会原子切换为 `mvp/demo-validated`，复评激活后的新 manifest revision，刷新路由，随后由 Agent 通过 canonical `RunRuntime` 执行。评测失败时候选继续保持 draft。
 - **🤝 共识运行时** — 多方法共识现在是一个声明式工作流运行时。并行 fan-out N 个空间聚类或单细胞方法，再用经过验证的类型化算子或探索性 LLM 综合来合并。由 `consensus-domains` 与 `sc-consensus-clustering` 两个技能触发。
 - **🧠 自主分析路径** — Analysis Router 可以基于你的数据为精确匹配的技能补全参数，或运行生成式代码分析，并对工作区写入做审批门控、对 LLM 修复做有界约束。
 - **⚡ Prompt 前缀缓存** — 跨轮自动命中 provider 缓存，降低延迟与 token 开销。
@@ -92,9 +94,19 @@
 
 | | | | |
 |---|---|---|---|
-| 🧠 **记忆**<br/>会话、偏好、血缘 | 🔒 **本地优先**<br/>原始数据留在你的运行时 | 🧰 **95 个分析技能**<br/>自动生成目录 + demo | 🧭 **智能路由**<br/>自然语言映射到工具 |
+| 🧠 **记忆**<br/>会话、偏好、血缘 | 🔒 **本地优先**<br/>原始数据留在你的运行时 | 🧰 **96 个分析技能**<br/>自动生成目录 + demo | 🧭 **智能路由**<br/>自然语言映射到工具 |
 | 💬 **CLI Surface**<br/>`oc interactive`、`oc tui` | 🌐 **Desktop Surface**<br/>给桌面/Web 前端用的 FastAPI | 📨 **Channel Surface**<br/>Telegram 文本 + 单图、飞书纯文本；其余适配器关闭待迁移 | 📡 **远程模式**<br/>SSH 隧道到 Linux 服务器 |
 | 🤝 **共识**<br/>多方法合并 | 🤖 **自主路径**<br/>Router + 参数辅助 | 🔌 **任意 LLM**<br/>OpenAI 兼容 provider | 📊 **可复现**<br/>图 + 数据 + 报告 |
+
+Skill 生命周期现已具备真实生产证据：一个转录组 No-Skill 请求生成了 Autonomous
+Run `7787182985b2435997433fa94a7b7096`，Backend 仅凭不透明 `run_id` 完成提升，
+经 shared runner 两次评测和 Desktop 人工治理审批后，由 Agent 通过 canonical
+RunRuntime 重新执行为 `bulkrna-cosinor-rhythm`。其 Experience View 当前为
+`demo-validated/current`，并具有非空 stability 证据。
+当前发布 revision 又经 Desktop Agent canonical Run
+`f86b027da8a229aa00225a59a15d7435` 与 fresh Replay Run
+`4cba549f6a4b846903aa5d11f7bb0898` 复核；两个 Receipt 均成功，语义摘要与来源
+Run 及当前两次 shared-runner 评测（`38d5863c9eec41d68bdee07b7d9229c2`）完全一致。
 
 <details>
 <summary><b>自主分析路径 —— 路由模式怎么工作</b></summary>
@@ -143,14 +155,17 @@ oc interactive
 | 🌐 **Desktop Surface** | `oc desktop-server` | 给 OmicsClaw-App 与浏览器前端用的 FastAPI 后端 |
 | 📨 **Channel Surface** | `python -m omicsclaw.surfaces.channels --channels telegram`<br/>`python -m omicsclaw.surfaces.channels --channels feishu` | 仅 Owner 可用的 Telegram 文本 + 单图/caption 与飞书纯文本；其他媒体及适配器显式关闭 |
 | 🧪 技能运行器（非 Surface） | `oc run <skill> --demo` | 一次性可复现分析 |
+| ♻️ 技能回放（非 Surface） | `oc replay <replay.json>` | 创建新 Run，并与冻结证据比较验证 |
 | 🔌 MCP（非 Surface） | `oc mcp add ...` | 外部工具接入 |
 | 📡 远程模式 | SSH 上跑 `oc desktop-server` | 服务端数据与任务 |
 
 远程模式使用 `127.0.0.1` + SSH 隧道 + `OMICSCLAW_REMOTE_AUTH_TOKEN`。详见 [remote execution](docs/engineering/remote-execution.mdx) 与 [legacy remote guide](docs/_legacy/remote-connection-guide.md)。
 
-Channel 仅 Owner 可用：飞书还必须配置 `FEISHU_ALLOWED_SENDERS` 与
-`FEISHU_BOT_OPEN_ID`（后者用于证明群消息确实 @ 了当前 Bot）。
-上表未列出的一切 —— 其他 adapter、出站媒体 —— 均 fail-closed。
+生产 Channel 范围由 shared runner 与 `ControlRuntime` 共同约束：仅 Owner 的 Telegram
+文本和单张普通图片（可带说明），以及仅 Owner 的飞书纯文本。
+`FEISHU_ALLOWED_SENDERS` 与 `FEISHU_BOT_OPEN_ID` 必须同时配置；后者用于证明群消息确实
+@ 了当前 Bot。其他 Channel Adapter 保持 gated；出站媒体仍未完成并 fail-closed。
+这不代表 ADR 已完整完成。
 
 ## 📦 安装
 
@@ -175,7 +190,7 @@ Channel 仅 Owner 可用：飞书还必须配置 `FEISHU_ALLOWED_SENDERS` 与
 ```bash
 npm install -g omicsclaw   # CLI + 与你平台匹配的那一个运行时
 omicsclaw --version        # `oc` 是同一个命令的短别名
-oc list                    # 按领域列出 95 个技能
+oc list                    # 按领域列出 96 个技能
 ```
 
 唯一前置条件是 Node.js 18+。wrapper 本身不含运行时：它在 `optionalDependencies` 里为每个平台声明一个 `@omicsclaw/runtime-<platform>`，npm 的 `os` / `cpu` 过滤保证磁盘上只落地一个 —— 与 esbuild、biome 同一套模式。postinstall 会把该解释器记录到 `~/.omicsclaw/runtime.json`，并把此前用 pip 安装的 `omicsclaw` / `oc` shim 重命名为 `<name>-legacy`，让 npm 命令在 `PATH` 上胜出，同时不删除旧的。
@@ -225,16 +240,16 @@ conda run -n OmicsClaw python -c "import sys; print(sys.executable)"
 
 ## 🧬 领域
 
-`oc list` 与 `skills/catalog.json` 是全部 95 个技能的机器可读注册表，分布在 **8 个领域**。
+`oc list` 与 `skills/catalog.json` 是全部 96 个技能的机器可读注册表，分布在 **8 个领域**。
 
 | 领域 | 技能数 | 示例技能 | 文档 |
 |---|---|---|---|
 | 🧫 空间转录组 | 19 | QC、domain、注释、解卷积、CNV、轨迹 | [spatial](docs/domains/spatial.mdx) |
-| 🔬 单细胞组学 | 33 | QC、聚类、注释、doublet、velocity、GRN | [singlecell](docs/domains/singlecell.mdx) |
+| 🔬 单细胞组学 | 34 | QC、聚类、注释、doublet、velocity、GRN | [singlecell](docs/domains/singlecell.mdx) |
 | 🧬 基因组学 | 10 | QC、比对、变异、CNV、组装、表观 | [genomics](docs/domains/genomics.mdx) |
 | 🧪 蛋白组学 | 8 | DIA/DDA、PTM、网络、biomarker | [proteomics](docs/domains/proteomics.mdx) |
 | ⚗️ 代谢组学 | 8 | 峰、归一化、注释、通路 | [metabolomics](docs/domains/metabolomics.mdx) |
-| 📈 Bulk RNA-seq | 13 | DE、富集、共表达、解卷积、生存 | [bulkrna](docs/domains/bulkrna.mdx) |
+| 📈 Bulk RNA-seq | 14 | DE、富集、共表达、解卷积、生存、cosinor 节律 | [bulkrna](docs/domains/bulkrna.mdx) |
 | 🧠 编排 | 2 | 路由、规划、文献支持 | [orchestrator](docs/domains/orchestrator.mdx) |
 | 📚 文献 | 1 | PDF/DOI/PubMed/GEO 解析与数据集交接 | — |
 

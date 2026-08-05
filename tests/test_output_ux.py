@@ -61,8 +61,12 @@ def test_write_output_readme_surfaces_method_params_and_entrypoints(tmp_path):
     (tmp_path / "report.md").write_text("# report\n", encoding="utf-8")
     (tmp_path / "figures").mkdir()
     (tmp_path / "reproducibility").mkdir()
-    notebook_path = tmp_path / "reproducibility" / "analysis_notebook.ipynb"
-    notebook_path.write_text("{}", encoding="utf-8")
+    replay_path = tmp_path / "reproducibility" / "replay.json"
+    replay_path.write_text("{}", encoding="utf-8")
+    (tmp_path / "reproducibility" / "replay.sh").write_text(
+        "#!/bin/sh\noc replay replay.json\n",
+        encoding="utf-8",
+    )
     (tmp_path / "result.json").write_text(json.dumps(payload), encoding="utf-8")
 
     readme_path = write_output_readme(
@@ -70,7 +74,7 @@ def test_write_output_readme_surfaces_method_params_and_entrypoints(tmp_path):
         skill_alias="spatial-domain-identification",
         description="Identify tissue domains",
         result_payload=payload,
-        notebook_path=notebook_path,
+        replay_path=replay_path,
     )
 
     text = readme_path.read_text(encoding="utf-8")
@@ -78,7 +82,8 @@ def test_write_output_readme_surfaces_method_params_and_entrypoints(tmp_path):
     assert "`cellcharter`" in text
     assert "`resolution`: 1" in text
     assert "Open `report.md`" in text
-    assert "analysis_notebook.ipynb" in text
+    assert "reproducibility/replay.json" in text
+    assert "reproducibility/replay.sh" in text
     assert "`figures/`" in text
     assert "Identify tissue domains" in text
 
@@ -120,7 +125,10 @@ def test_build_output_dir_name_includes_method_when_available():
     assert name == "spatial-domain-identification__cellcharter__20260329_063000"
 
 
-def test_run_skill_generates_readme_and_human_readable_dir(monkeypatch, tmp_path):
+def test_run_skill_generates_replay_capsule_and_human_readable_dir(
+    monkeypatch,
+    tmp_path,
+):
     oc = _load_omicsclaw_script()
     from omicsclaw.skill import runner as skill_runner
 
@@ -174,24 +182,47 @@ def test_run_skill_generates_readme_and_human_readable_dir(monkeypatch, tmp_path
     assert result.method == "cellcharter"
     assert "__cellcharter__" in Path(result.output_dir).name
     assert Path(result.readme_path).exists()
-    assert Path(result.notebook_path).exists()
+    assert Path(result.replay_path).exists()
     assert "README.md" in result.files
-    assert "analysis_notebook.ipynb" in result.files
+    assert "replay.json" in result.files
+    assert "environment.json" in result.files
+    assert "replay.sh" in result.files
+    assert "analysis_notebook.ipynb" not in result.files
     assert ".omicsclaw-run-claim.json" not in result.files
     assert "claim-alias.json" not in result.files
     readme_text = Path(result.readme_path).read_text(encoding="utf-8")
     assert "Synthetic test skill" in readme_text
     assert "cellcharter" in readme_text
-    assert "analysis_notebook.ipynb" in readme_text
+    assert "reproducibility/replay.json" in readme_text
+    assert "reproducibility/replay.sh" in readme_text
+    assert "analysis_notebook.ipynb" not in readme_text
     assert ".omicsclaw-run-claim.json" not in readme_text
     assert "claim-alias.json" not in readme_text
 
-    notebook = nbformat.read(result.notebook_path, as_version=4)
-    assert notebook.metadata["omicsclaw"]["skill"] == "fake-skill"
-    sources = "\n".join(cell.source for cell in notebook.cells)
-    assert "load_skill" in sources
-    assert "ACTUAL_RUN_COMMAND" in sources
-    assert "preview_function" in sources
+    replay = json.loads(Path(result.replay_path).read_text(encoding="utf-8"))
+    assert replay["schema_version"] == 1
+    assert replay["kind"] == "omicsclaw.skill-replay"
+    assert replay["skill_revision"]["skill_id"] == "fake-skill"
+    assert replay["input"] == {"kind": "demo"}
+    assert replay["invocation"]["argv"] == [
+        "oc",
+        "run",
+        "fake-skill",
+        "--demo",
+        "--method",
+        "cellcharter",
+    ]
+    assert replay["environment"]["environment_id"].startswith("env:")
+    assert replay["verification"]["mode"] == "fresh-run-contract"
+    assert not (Path(result.output_dir) / "reproducibility" / "analysis_notebook.ipynb").exists()
+
+    environment = json.loads(
+        (Path(result.output_dir) / "reproducibility" / "environment.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert environment["environment_id"] == replay["environment"]["environment_id"]
+    assert environment["reconstruction"] == "evidence-only"
 
 
 def test_pipeline_readme_lists_step_methods(tmp_path):
@@ -210,13 +241,13 @@ def test_pipeline_readme_lists_step_methods(tmp_path):
                 "success": True,
                 "method": "scanpy",
                 "output_dir": str(tmp_path / "preprocess"),
-                "notebook_path": str(tmp_path / "preprocess" / "reproducibility" / "analysis_notebook.ipynb"),
+                "replay_path": str(tmp_path / "preprocess" / "reproducibility" / "replay.json"),
             },
             "domains": {
                 "success": True,
                 "method": "cellcharter",
                 "output_dir": str(tmp_path / "domains"),
-                "notebook_path": str(tmp_path / "domains" / "reproducibility" / "analysis_notebook.ipynb"),
+                "replay_path": str(tmp_path / "domains" / "reproducibility" / "replay.json"),
             },
         },
     )
@@ -226,7 +257,7 @@ def test_pipeline_readme_lists_step_methods(tmp_path):
     assert "scanpy" in text
     assert "cellcharter" in text
     assert "`preprocess`" in text
-    assert "analysis_notebook.ipynb" in text
+    assert "replay.json" in text
     assert OUTPUT_CLAIM_FILENAME not in text
     assert "claim-alias.json" not in text
 

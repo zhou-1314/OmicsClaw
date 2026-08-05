@@ -68,6 +68,22 @@ _PROBE_CODE = (
 )
 
 
+def _deferred_advice(deferred: list[str]) -> str:
+    """Actionable remediation for packages we refuse to overlay-install.
+
+    Packages with an authoritative install command (VCS-only leaves such as
+    ``STAGATE-pyG``, whose only install path is a git URL) get that exact command,
+    because the generic conda hint would never produce them. Everything else falls
+    back to the conda bootstrap.
+    """
+    hints = dep_spec.deferred_install_hints(deferred)
+    if not hints:
+        return "run `bash 0_setup_env.sh` (conda)"
+    if len(hints) == len(deferred):
+        return "install manually — " + "; ".join(hints)
+    return "run `bash 0_setup_env.sh` (conda); install manually — " + "; ".join(hints)
+
+
 @dataclass(frozen=True)
 class SkillRuntime:
     """Resolved runtime for one skill invocation.
@@ -227,14 +243,23 @@ def resolve_skill_runtime(
 
     # mode == "on": provision an overlay venv for the pip-installable misses.
     if not pip_specs:
-        # Everything missing is conda-preferred / R / deny — a pip overlay can't
-        # help. Degrade to base env with a clear, actionable hint (never a doomed
-        # pip mega-solve).
+        # Everything missing is conda-preferred / R / deny / VCS-only — a pip
+        # overlay can't help. Degrade to base env with a clear, actionable hint
+        # (never a doomed pip mega-solve).
+        advice = _deferred_advice(deferred)
         logger.warning(
             "adaptive-env[on] %s: missing deps %s are not pip-installable here; "
-            "run `bash 0_setup_env.sh` (conda) — falling back to base env",
+            "%s — falling back to base env",
             alias,
             deferred,
+            advice,
+        )
+        # Close the loop on the "Checking environment" line above: without this the
+        # desktop chat shows a provisioning message that never resolves.
+        _status(
+            status_cb,
+            f"Skipping auto-install for {', '.join(deferred)} "
+            f"(not installable here) — {advice}",
         )
         return SkillRuntime(
             python=base_python,
@@ -244,13 +269,13 @@ def resolve_skill_runtime(
 
     if deferred:
         # Mixed misses: we provision the pip-installable leaves below, but the
-        # heavy/conda/R ones cannot be overlay-installed — surface the same hint as
-        # the all-deferred case so the user knows to build the conda env.
+        # heavy/conda/R/VCS-only ones cannot be overlay-installed — surface the
+        # same hint as the all-deferred case so the user knows how to get them.
         logger.warning(
-            "adaptive-env[on] %s: %s are not pip-installable here; "
-            "run `bash 0_setup_env.sh` (conda) for those",
+            "adaptive-env[on] %s: %s are not pip-installable here; %s for those",
             alias,
             deferred,
+            _deferred_advice(deferred),
         )
 
     provisioned = _provision_overlay(

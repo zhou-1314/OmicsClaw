@@ -54,7 +54,7 @@ Use this quick guide when the user has not explicitly chosen a method:
 | **CellCharter** | Strong general-purpose spatial domains, especially when K is unknown | `auto_k=true`, `auto_k_min=2`, `auto_k_max=8~12`, `n_layers=3`, `use_rep=X_pca` | Higher `n_layers` increases memory and broadens neighborhoods |
 | **BANKSY** | Explicit control over fine niches vs broad domains | `lambda_param=0.2` for niches, `0.8` for broad domains | `lambda_param` strongly changes the biological meaning of clusters |
 | **SpaGCN** | Spatially smooth domains when user explicitly wants a GNN-style method | `n_domains=7`, `spagcn_p=0.5`, `epochs=100~200` | Slower on large data; current wrapper is coordinate-based, not histology-aware |
-| **STAGATE** | Deep spatial autoencoder with adaptive KNN graph | `n_domains=7`, `k_nn=6`, `epochs=100~200` | Radius mode is fragile if coordinate scales are inconsistent |
+| **STAGATE** | Deep spatial autoencoder with adaptive KNN graph | `n_domains=7`, `k_nn=6`, `epochs=100~200` | Radius mode is fragile if coordinate scales are inconsistent; **GitHub-only install, not auto-provisioned** |
 | **GraphST** | Self-supervised deep model when raw counts are available | `n_domains=7`, `epochs=50~100` on large data, `dim_output=64` | Can be slow and produce speckled labels on large tissues |
 
 Practical default decision order:
@@ -166,6 +166,11 @@ Guidance:
 
 Important warning:
 - Do not recommend `rad_cutoff` casually across platforms. A value that works for Visium may be wrong for Slide-seq or Stereo-seq.
+
+Availability:
+- `STAGATE_pyG` is **not on PyPI**, so it is never installed automatically — `pip install STAGATE-pyG` fails by design and the adaptive-env resolver deliberately defers it.
+- Before proposing STAGATE, prefer a method that is actually installed (Leiden / CellCharter / BANKSY / SpaGCN / GraphST). Only offer STAGATE when the user asks for it or has installed it.
+- If the user wants it, give them the real command: `pip install git+https://github.com/RucDongLab/STAGATE_pyG.git` (also needs `torch` and `torch_geometric`).
 
 ### GraphST
 

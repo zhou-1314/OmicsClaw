@@ -123,8 +123,9 @@ oc run spatial-domains --demo --output /tmp/domains_demo
 python omicsclaw.py run spatial-domains --demo
 ```
 
-Every successful runner-mediated standard run also adds `reproducibility/analysis_notebook.ipynb`
-and a top-level `README.md` to make the output directory easier to inspect.
+Every successful runner-mediated standard run also adds a
+`reproducibility/replay.json` Capsule and a top-level `README.md` to make the
+output directory easier to inspect and replay.
 
 
 ## Algorithm / Methodology
@@ -186,6 +187,12 @@ and a top-level `README.md` to make the output directory easier to inspect.
 - `stagate_alpha`: Cell type-aware module weight (default 0.0)
 - `pre_resolution`: Pre-clustering resolution for the cell type-aware extension
 - Source: Dong & Zhang, *Nature Communications* 2022
+
+> **Install note**: `STAGATE_pyG` is distributed only on GitHub, so it is never
+> auto-installed. Run
+> `pip install git+https://github.com/RucDongLab/STAGATE_pyG.git` (plus
+> `torch_geometric`) before selecting `--method stagate`; without it the method
+> raises `ImportError` while the other backends stay available.
 
 ### GraphST
 
@@ -265,7 +272,11 @@ and a top-level `README.md` to make the output directory easier to inspect.
 
 **Optional**:
 - `SpaGCN` — spatially-aware graph convolutional clustering
-- `STAGATE_pyG` — graph attention auto-encoder domains (requires PyTorch)
+- `STAGATE_pyG` — graph attention auto-encoder domains (requires PyTorch). **Not on
+  PyPI** — `pip install STAGATE-pyG` always fails. Install from GitHub:
+  `pip install git+https://github.com/RucDongLab/STAGATE_pyG.git` (also needs
+  `torch_geometric`). Because it cannot be auto-provisioned, the adaptive-env
+  resolver defers it and the skill runs in the base env until you install it.
 - `GraphST` — graph self-supervised contrastive learning (requires PyTorch)
 - `banksy` — spatial feature augmentation
 - `cellcharter` — neighborhood-aggregated clustering and Auto-K selection

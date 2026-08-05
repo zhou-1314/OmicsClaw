@@ -1374,6 +1374,7 @@ async def _handle_do_current_task(
     state: SessionState,
     *,
     control_runtime: ControlRuntime | None = None,
+    run_runtime: RunRuntime | None = None,
 ) -> bool:
     snapshot = load_interactive_plan_from_metadata(state.session_metadata)
     if snapshot is None and _should_route_plan_commands_to_pipeline("", state):
@@ -1396,6 +1397,7 @@ async def _handle_do_current_task(
             state,
             view.execution_prompt,
             control_runtime=control_runtime,
+            run_runtime=run_runtime,
         )
     return view.persist_session or bool(view.execution_prompt)
 
@@ -1491,6 +1493,7 @@ async def _stream_llm_response(
     scoped_memory_scope: str = "",
     output_style: str = "",
     control_runtime: ControlRuntime | None = None,
+    run_runtime: RunRuntime | None = None,
     reply_slot: str = "main",
 ) -> str:
     """Execute one Turn and render typed Agent events to the console.
@@ -1667,6 +1670,7 @@ async def _stream_llm_response(
                                 mcp_servers=active_mcp_servers,
                                 scoped_memory_scope=scoped_memory_scope or "",
                                 output_style=output_style or "",
+                                run_runtime=run_runtime,
                             ),
                             on_accepted=_remember_turn,
                         )
@@ -1701,6 +1705,7 @@ async def _stream_llm_response(
                         scoped_memory_scope=scoped_memory_scope or "",
                         output_style=output_style or "",
                         cancel_event=cancel_event,
+                        run_runtime=run_runtime,
                     )
                     async for event in dispatch(envelope):
                         await _render_dispatch_event(event)
@@ -1825,6 +1830,7 @@ async def _continue_interactive_turn(
     user_prompt: str,
     *,
     control_runtime: ControlRuntime | None = None,
+    run_runtime: RunRuntime | None = None,
 ) -> str:
     state.messages.append({"role": "user", "content": user_prompt})
     console.print()
@@ -1836,6 +1842,7 @@ async def _continue_interactive_turn(
         scoped_memory_scope=_active_scoped_memory_scope(state),
         output_style=_active_output_style(state) or "",
         control_runtime=control_runtime,
+        run_runtime=run_runtime,
         reply_slot="main",
     )
 
@@ -2176,6 +2183,7 @@ async def _async_interactive_loop(
                     command.arg,
                     state,
                     control_runtime=control_runtime,
+                    run_runtime=run_runtime,
                 ):
                     await _persist_session_state(state, model=resolved_model)
                 _print_separator()
@@ -2452,6 +2460,7 @@ async def _async_interactive_loop(
                 state,
                 user_input,
                 control_runtime=control_runtime,
+                run_runtime=run_runtime,
             )
 
             # Save session after each exchange
@@ -2576,7 +2585,7 @@ async def _single_shot(
     resolved_model, _ = _init_llm(init_config)
 
     session_id = generate_session_id()
-    messages: list[dict] = [{"role": "user", "content": prompt}]
+    messages: list[dict] = []
 
     width = console.size.width
     console.print(Text("─" * width, style="dim"))
@@ -2586,17 +2595,28 @@ async def _single_shot(
     console.print()
 
     effective_workspace = workspace_dir or str(_OMICSCLAW_DIR)
-    control_runtime = await _open_cli_control_runtime(effective_workspace)
+    runtime_bundle = await open_cli_runtime_bundle(effective_workspace)
     try:
-        await _stream_llm_response(
-            messages,
-            workspace_dir=effective_workspace,
-            pipeline_workspace="",
-            control_runtime=control_runtime,
-            reply_slot="single-shot",
-        )
+        command = parse_slash_command(prompt, CLI_SLASH_COMMAND_SPECS)
+        if command is not None and command.name == "/run":
+            execution = await _handle_run(
+                command.arg,
+                run_runtime=runtime_bundle.run_runtime,
+            )
+            if execution is not None:
+                messages.extend(execution.history_messages)
+        else:
+            messages.append({"role": "user", "content": prompt})
+            await _stream_llm_response(
+                messages,
+                workspace_dir=effective_workspace,
+                pipeline_workspace="",
+                control_runtime=runtime_bundle.control_runtime,
+                run_runtime=runtime_bundle.run_runtime,
+                reply_slot="single-shot",
+            )
     finally:
-        await control_runtime.close()
+        await runtime_bundle.close()
 
     await save_session(
         session_id,

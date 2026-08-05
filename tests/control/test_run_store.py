@@ -174,9 +174,9 @@ def test_terminal_projection_exposes_only_verified_owned_output_paths(
     provisional.artifacts_dir.mkdir()
     result = _successful_result(provisional.artifacts_dir)
     (provisional.artifacts_dir / "README.md").write_text("guide\n", encoding="utf-8")
-    notebook = provisional.artifacts_dir / "reproducibility" / "analysis_notebook.ipynb"
-    notebook.parent.mkdir()
-    notebook.write_text("{}\n", encoding="utf-8")
+    replay = provisional.artifacts_dir / "reproducibility" / "replay.json"
+    replay.parent.mkdir()
+    replay.write_text("{}\n", encoding="utf-8")
     store.commit_success(
         provisional.manifest_ref,
         result,
@@ -207,7 +207,7 @@ def test_terminal_projection_exposes_only_verified_owned_output_paths(
     output = projected.output
     assert output.output_dir == str(provisional.artifacts_dir)
     assert output.readme_path == str(provisional.artifacts_dir / "README.md")
-    assert output.notebook_path == str(notebook)
+    assert output.replay_path == str(replay)
 
     (provisional.artifacts_dir / "filtered.vcf").write_text(
         "tampered\n", encoding="utf-8"

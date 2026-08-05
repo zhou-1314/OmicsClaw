@@ -288,7 +288,7 @@ def run_pipeline(
             "method": result.method,
             "output_dir": result.output_dir or "",
             "readme_path": result.readme_path,
-            "notebook_path": result.notebook_path,
+            "replay_path": result.replay_path,
             "stderr": result.stderr if not result.success else "",
             "audit_identity": audit_identity,
         }
@@ -379,7 +379,7 @@ def run_pipeline(
                 result["duration"] for result in all_results.values()
             ),
             readme_path="",
-            notebook_path="",
+            replay_path="",
         )
 
     succeeded = sum(1 for result in all_results.values() if result["success"])
@@ -419,7 +419,7 @@ def run_pipeline(
         stderr=failure_stderr,
         duration_seconds=sum(result["duration"] for result in all_results.values()),
         readme_path=pipeline_readme,
-        notebook_path="",
+        replay_path="",
     )
 
 

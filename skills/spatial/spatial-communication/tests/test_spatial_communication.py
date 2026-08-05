@@ -21,9 +21,24 @@ if str(SKILL_SCRIPT.parent) not in sys.path:
     sys.path.insert(0, str(SKILL_SCRIPT.parent))
 
 
-@pytest.fixture
-def tmp_output(tmp_path):
-    return tmp_path / "comm_out"
+@pytest.fixture(scope="module")
+def demo_output(tmp_path_factory):
+    """Run the default Demo once for all read-only output assertions."""
+
+    pytest.importorskip(
+        "liana",
+        reason="spatial-communication Demo integration requires optional liana",
+    )
+    output_dir = tmp_path_factory.mktemp("spatial_communication_demo")
+    result = subprocess.run(
+        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(output_dir)],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        cwd=str(SKILL_SCRIPT.parent),
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}"
+    return output_dir
 
 
 def _make_comm_adata():
@@ -50,58 +65,37 @@ def _make_comm_adata():
     return adata
 
 
-def test_demo_mode(tmp_output):
+def test_demo_mode(demo_output):
     """spatial-communication --demo should run without error."""
-    result = subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
-        capture_output=True,
-        text=True,
-        timeout=180,
-        cwd=str(SKILL_SCRIPT.parent),
-    )
-    assert result.returncode == 0, f"stderr: {result.stderr}"
-    assert (tmp_output / "report.md").exists()
-    assert (tmp_output / "result.json").exists()
-    assert (tmp_output / "processed.h5ad").exists()
-    assert (tmp_output / "tables" / "lr_interactions.csv").exists()
-    assert (tmp_output / "tables" / "signaling_roles.csv").exists()
+    assert (demo_output / "report.md").exists()
+    assert (demo_output / "result.json").exists()
+    assert (demo_output / "processed.h5ad").exists()
+    assert (demo_output / "tables" / "lr_interactions.csv").exists()
+    assert (demo_output / "tables" / "signaling_roles.csv").exists()
 
 
-def test_demo_outputs_gallery_contract(tmp_output):
+def test_demo_outputs_gallery_contract(demo_output):
     """Demo mode should export gallery manifests, figure data, and the R helper."""
-    result = subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
-        capture_output=True,
-        text=True,
-        timeout=180,
-        cwd=str(SKILL_SCRIPT.parent),
-    )
-    assert result.returncode == 0, f"stderr: {result.stderr}"
-    assert (tmp_output / "figures" / "manifest.json").exists()
-    assert (tmp_output / "figure_data" / "manifest.json").exists()
-    assert (tmp_output / "figure_data" / "lr_interactions.csv").exists()
-    assert (tmp_output / "figure_data" / "top_interactions.csv").exists()
-    assert (tmp_output / "figure_data" / "communication_summary.csv").exists()
-    assert (tmp_output / "figure_data" / "signaling_roles.csv").exists()
-    assert (tmp_output / "figure_data" / "communication_run_summary.csv").exists()
-    assert (tmp_output / "figure_data" / "communication_spatial_points.csv").exists()
-    assert (tmp_output / "figure_data" / "communication_umap_points.csv").exists()
-    assert (tmp_output / "reproducibility" / "r_visualization.sh").exists()
+    assert (demo_output / "figures" / "manifest.json").exists()
+    assert (demo_output / "figure_data" / "manifest.json").exists()
+    assert (demo_output / "figure_data" / "lr_interactions.csv").exists()
+    assert (demo_output / "figure_data" / "top_interactions.csv").exists()
+    assert (demo_output / "figure_data" / "communication_summary.csv").exists()
+    assert (demo_output / "figure_data" / "signaling_roles.csv").exists()
+    assert (demo_output / "figure_data" / "communication_run_summary.csv").exists()
+    assert (demo_output / "figure_data" / "communication_spatial_points.csv").exists()
+    assert (demo_output / "figure_data" / "communication_umap_points.csv").exists()
+    assert (demo_output / "reproducibility" / "r_visualization.sh").exists()
 
 
-def test_demo_gallery_manifests_have_roles(tmp_output):
+def test_demo_gallery_manifests_have_roles(demo_output):
     """The standard communication gallery should emit figure and figure-data manifests."""
-    result = subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
-        capture_output=True,
-        text=True,
-        timeout=180,
-        cwd=str(SKILL_SCRIPT.parent),
+    figures_manifest = json.loads(
+        (demo_output / "figures" / "manifest.json").read_text()
     )
-    assert result.returncode == 0, f"stderr: {result.stderr}"
-
-    figures_manifest = json.loads((tmp_output / "figures" / "manifest.json").read_text())
-    figure_data_manifest = json.loads((tmp_output / "figure_data" / "manifest.json").read_text())
+    figure_data_manifest = json.loads(
+        (demo_output / "figure_data" / "manifest.json").read_text()
+    )
 
     assert figures_manifest["recipe_id"] == "standard-spatial-communication-gallery"
     assert any(plot["role"] == "overview" for plot in figures_manifest["plots"])
@@ -112,36 +106,25 @@ def test_demo_gallery_manifests_have_roles(tmp_output):
     assert figure_data_manifest["recipe_id"] == "standard-spatial-communication-gallery"
 
 
-def test_demo_report_content(tmp_output):
+def test_demo_report_content(demo_output):
     """Report should contain expected sections."""
-    subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
-        capture_output=True,
-        text=True,
-        timeout=180,
-        cwd=str(SKILL_SCRIPT.parent),
-    )
-    report = (tmp_output / "report.md").read_text()
+    report = (demo_output / "report.md").read_text()
     assert "Cell-Cell Communication" in report
     assert "Disclaimer" in report
     assert "Method" in report
     assert "Visualization Outputs" in report
 
 
-def test_demo_result_json(tmp_output):
+def test_demo_result_json(demo_output):
     """result.json should contain expected keys."""
-    subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
-        capture_output=True,
-        text=True,
-        timeout=180,
-        cwd=str(SKILL_SCRIPT.parent),
-    )
-    data = json.loads((tmp_output / "result.json").read_text())
+    data = json.loads((demo_output / "result.json").read_text())
     assert data["skill"] == "spatial-communication"
     assert "summary" in data
     assert "n_interactions_tested" in data["summary"]
-    assert data["data"]["visualization"]["recipe_id"] == "standard-spatial-communication-gallery"
+    assert (
+        data["data"]["visualization"]["recipe_id"]
+        == "standard-spatial-communication-gallery"
+    )
     assert data["data"]["visualization"]["cell_type_key"] == "leiden"
 
 

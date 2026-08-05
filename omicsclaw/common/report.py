@@ -130,7 +130,7 @@ def write_output_readme(
     description: str = "",
     result_payload: dict[str, Any] | None = None,
     preferred_method: str | None = None,
-    notebook_path: str | Path | None = None,
+    replay_path: str | Path | None = None,
 ) -> Path:
     """Write a human-friendly ``README.md`` into an analysis output directory."""
     output_dir = Path(output_dir)
@@ -149,12 +149,12 @@ def write_output_readme(
         output_root=output_dir,
     )
     readme_path = output_dir / "README.md"
-    notebook_rel = ""
-    if notebook_path:
+    replay_rel = ""
+    if replay_path:
         try:
-            notebook_rel = str(Path(notebook_path).resolve().relative_to(output_dir.resolve()))
+            replay_rel = str(Path(replay_path).resolve().relative_to(output_dir.resolve()))
         except ValueError:
-            notebook_rel = str(notebook_path)
+            replay_rel = str(replay_path)
 
     lines = [
         "# OmicsClaw Output Guide",
@@ -178,9 +178,10 @@ def write_output_readme(
             "",
             f"- {'Open `report.md` for the narrative report.' if report_exists else 'This run did not generate `report.md`; start from `result.json`.'}",
             "- Open `result.json` to inspect structured summary and parameters.",
-            f"- Open `{notebook_rel}` for a code-first walkthrough and rerunnable notebook." if notebook_rel else "- Notebook export is not available for this run.",
+            f"- Open `{replay_rel}` for the machine-readable replay contract." if replay_rel else "- Replay evidence is not available for this run.",
             "- Browse `figures/` for plots and `tables/` for tabular outputs when present.",
-            "- Use `reproducibility/commands.sh` to rerun with the same settings when available.",
+            "- Run `sh reproducibility/replay.sh` to start a fresh, verified replay.",
+            "- Inspect `reproducibility/environment.json` for bounded producer-environment evidence.",
         ]
     )
 
@@ -255,24 +256,8 @@ def write_standard_run_artifacts(
     script_path: str | Path,
     actual_command: list[str],
 ) -> None:
-    """Emit notebook and README artifacts when dependencies allow."""
+    """Emit the standard README for callers that already own replay evidence."""
     output_dir = Path(output_dir)
-    notebook_path = None
-    try:
-        from omicsclaw.common.notebook_export import write_analysis_notebook
-
-        notebook_path = write_analysis_notebook(
-            output_dir,
-            skill_alias=skill_alias,
-            description=description,
-            result_payload=result_payload,
-            preferred_method=preferred_method,
-            script_path=Path(script_path).resolve(),
-            actual_command=actual_command,
-        )
-    except Exception as exc:
-        logger.warning("Failed to write analysis notebook for %s: %s", skill_alias, exc)
-
     try:
         write_output_readme(
             output_dir,
@@ -280,7 +265,6 @@ def write_standard_run_artifacts(
             description=description,
             result_payload=result_payload,
             preferred_method=preferred_method,
-            notebook_path=notebook_path,
         )
     except Exception as exc:
         logger.warning("Failed to write README.md for %s: %s", skill_alias, exc)

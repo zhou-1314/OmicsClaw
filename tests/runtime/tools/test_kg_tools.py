@@ -392,13 +392,17 @@ def test_kg_specs_are_bot_surface_read_only_and_read_stage_allowed():
         for s in select_tool_specs(specs, request=req, surface_only=True, stage="read")
     }
 
-    # kg_ingest (Phase 3.3c) is the one KG *writer* — bot-surface + Read-stage like
-    # the rest, but read_only=False (it builds the citation substrate).
+    # kg_ingest builds the Read-stage citation substrate. The two handoff writers
+    # belong only to the unfiltered Analyze stage; every other KG tool is read-only.
+    analyze_only = {"kg_build_packet", "kg_record_result"}
     for name in kg_tools.KG_TOOL_EXECUTORS:
         assert name in by_name, f"{name} not registered as a ToolSpec"
         assert "bot" in by_name[name].surfaces
-        assert name in read, f"{name} should be allowed in the Read stage"
-        if name != "kg_ingest":
+        if name in analyze_only:
+            assert name not in read, f"{name} must remain Analyze-only"
+        else:
+            assert name in read, f"{name} should be allowed in the Read stage"
+        if name not in {"kg_ingest", *analyze_only}:
             assert by_name[name].read_only is True
 
 

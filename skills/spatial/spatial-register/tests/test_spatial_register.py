@@ -98,15 +98,21 @@ def test_demo_outputs_gallery_contract(demo_output):
     assert (demo_output / "figure_data" / "registration_run_summary.csv").exists()
     assert (demo_output / "reproducibility" / "r_visualization.sh").exists()
 
-    run_summary = (demo_output / "figure_data" / "registration_run_summary.csv").read_text()
+    run_summary = (
+        demo_output / "figure_data" / "registration_run_summary.csv"
+    ).read_text()
     assert "mean_disparity" in run_summary
     assert "shift_distance_column" in run_summary
 
 
 def test_demo_gallery_manifests_have_roles(demo_output):
     """The standard registration gallery should emit figure and figure-data manifests."""
-    figures_manifest = json.loads((demo_output / "figures" / "manifest.json").read_text())
-    figure_data_manifest = json.loads((demo_output / "figure_data" / "manifest.json").read_text())
+    figures_manifest = json.loads(
+        (demo_output / "figures" / "manifest.json").read_text()
+    )
+    figure_data_manifest = json.loads(
+        (demo_output / "figure_data" / "manifest.json").read_text()
+    )
 
     assert figures_manifest["recipe_id"] == "standard-spatial-register-gallery"
     assert any(plot["role"] == "overview" for plot in figures_manifest["plots"])
@@ -144,9 +150,15 @@ def test_demo_result_json(demo_output):
     assert data["summary"]["n_slices"] >= 2
     assert data["summary"]["method"] == "paste"
     assert "visualization" in data["data"]
-    assert data["data"]["visualization"]["recipe_id"] == "standard-spatial-register-gallery"
+    assert (
+        data["data"]["visualization"]["recipe_id"]
+        == "standard-spatial-register-gallery"
+    )
     assert data["data"]["visualization"]["aligned_coordinate_key"] == "spatial_aligned"
-    assert data["data"]["visualization"]["shift_distance_column"] == "registration_shift_distance"
+    assert (
+        data["data"]["visualization"]["shift_distance_column"]
+        == "registration_shift_distance"
+    )
 
 
 def test_collect_run_configuration_paste():
@@ -261,8 +273,12 @@ def test_write_report_records_effective_params(tmp_path):
     }
 
     module.export_tables(tmp_path, summary, gallery_context=gallery_context)
-    module.write_report(tmp_path, summary, None, params, gallery_context=gallery_context)
-    module.write_reproducibility(tmp_path, params, summary, input_file=None, demo_mode=False)
+    module.write_report(
+        tmp_path, summary, None, params, gallery_context=gallery_context
+    )
+    module.write_reproducibility(
+        tmp_path, params, summary, input_file=None, demo_mode=False
+    )
 
     report = (tmp_path / "report.md").read_text()
     assert "Effective Method Parameters" in report
@@ -272,8 +288,14 @@ def test_write_report_records_effective_params(tmp_path):
     result = json.loads((tmp_path / "result.json").read_text())
     assert result["skill"] == "spatial-register"
     assert result["data"]["effective_params"]["paste_dissimilarity"] == "kl"
-    assert result["data"]["visualization"]["recipe_id"] == "standard-spatial-register-gallery"
-    assert result["data"]["visualization"]["shift_distance_column"] == "registration_shift_distance"
+    assert (
+        result["data"]["visualization"]["recipe_id"]
+        == "standard-spatial-register-gallery"
+    )
+    assert (
+        result["data"]["visualization"]["shift_distance_column"]
+        == "registration_shift_distance"
+    )
 
     commands = (tmp_path / "reproducibility" / "commands.sh").read_text()
     assert "--paste-alpha 0.2" in commands
@@ -333,10 +355,14 @@ def test_run_registration_requires_real_slice_key():
     adata = anndata.AnnData(X=np.ones((10, 5), dtype=np.float32))
     adata.obsm["spatial"] = np.ones((10, 2), dtype=np.float32)
 
-    with pytest.raises(ValueError, match="Could not detect a slice label column automatically"):
+    with pytest.raises(
+        ValueError, match="Could not detect a slice label column automatically"
+    ):
         run_registration(adata, method="paste")
 
 
+@pytest.mark.slow
+@pytest.mark.requires_torch
 def test_stalign_requires_two_slices():
     """STalign should raise ValueError if not exactly 2 slices."""
     import anndata
@@ -354,14 +380,16 @@ def test_stalign_requires_two_slices():
     n = 90
     adata = anndata.AnnData(X=rng.poisson(5, (n, 20)).astype(np.float32))
     adata.obsm["spatial"] = rng.uniform(0, 1000, (n, 2)).astype(np.float32)
-    adata.obs["slice"] = pd.Categorical(
-        rng.choice(["s1", "s2", "s3"], size=n)
-    )
+    adata.obs["slice"] = pd.Categorical(rng.choice(["s1", "s2", "s3"], size=n))
 
     with pytest.raises(ValueError, match="pairwise registration"):
-        run_stalign(adata, slice_key="slice", reference_slice=None, spatial_key="spatial")
+        run_stalign(
+            adata, slice_key="slice", reference_slice=None, spatial_key="spatial"
+        )
 
 
+@pytest.mark.slow
+@pytest.mark.requires_torch
 def test_prepare_stalign_image():
     """Image preparation should produce normalized non-negative output."""
     try:

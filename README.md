@@ -35,6 +35,10 @@
 
 ## 📢 What's New
 
+- **🧪 Fast-by-default test tiers** — `pytest` / `make test` now run the deterministic regression suite without Skill demo, slow optional-stack, or real-LLM eval cases. `make test-slow` runs the retained Skill demo and slow scientific integration coverage with bounded concurrency; `make test-all` runs every non-eval tier. Repeated assertions over one Demo output share a single execution instead of relaunching the scientific subprocess.
+- **🟢 Golden Agent Run + Replay slice** — in the CLI REPL, single-shot mode, and Desktop text chat, an explicit natural-language request such as `run genomics-vcf-operations demo` becomes one deterministic planned `omicsclaw` call and executes through the Backend-owned canonical `RunRuntime`. It bypasses LLM tool discovery, fails closed without a legacy-runner fallback, and closes the Agent Turn from the verified Receipt, fresh Run ID, output directory, README, and Skill Replay Capsule. Standard Skill Runs no longer synthesize source-code notebooks. `oc replay <output>/reproducibility/replay.json` creates a new Run and compares Skill revision, input/parameter evidence, environment identity, result semantics, and declared scientific artifacts; the original Run remains immutable. Exact `/run <canonical-skill> --demo` single-shot commands use the same path. Root CLI also accepts the fixed forms `--demo --project <32-lower-hex-id>` and `--demo --no-project`. This first slice remains deliberately narrow: the Skill must be explicitly named and resource-ready; non-demo, preflight, Candidate-plan, partial, and no-Skill requests keep their existing routes.
+- **🟢 Golden Skill lifecycle slice** — the Agent's `create_omics_skill` path now publishes a passed candidate as non-routable `draft/smoke-only`, runs its declared demo Evaluation Protocol against the published exact revision, and submits a combined `skill_activation` proposal. The Agent cannot approve it. A human-reviewed governance CAS atomically changes `draft/smoke-only → mvp/demo-validated`, evaluates the newly activated manifest revision so its Experience View remains `current`, refreshes routing, and the next explicit Agent demo executes through canonical `RunRuntime`. Failed or incomplete evaluation leaves the draft inactive.
+- **🧪 Evidence-bound Skill lifecycle** — a partial-coverage three-suite pilot now binds OmicBench A02/A03, scAgentBench PAGA, and a deterministic BiomniBench-DA 12-2 preflight to exact Skill revisions, content, environments, grader metrics, and locally retained content-addressed evidence. Coverage is OmicBench **2/44**, scAgentBench main **1/50**, and BiomniBench-DA public tasks **1/50**; Biomni has no official LLM-judge score. These are Skill conformance results. The deterministic no-Skill creation-to-execution Golden Slice is now wired, but the broader MUSE-style no-Skill/curated/self-created Agent Campaign has not run, and the offline Campaign analyzer explicitly stops at matrix integrity until typed causal provenance is wired. See the [three-suite report](docs/evaluation/muse-three-suite-skill-lifecycle-benchmark.md).
 - **🤝 Consensus runtime** — multi-method consensus is now a declarative workflow runtime. Fan out N spatial-clustering or single-cell methods, then merge them with verified typed operators or an exploratory LLM synthesis. Triggered by the `consensus-domains` and `sc-consensus-clustering` skills.
 - **🧠 Autonomous Analysis Path** — an Analysis Router can parameterize an exact skill from your data, or run a generated-code analysis with approval-gated workspace writes and bounded LLM repair.
 - **⚡ Prompt-prefix caching** — automatic provider cache hits across turns to cut latency and token spend.
@@ -92,9 +96,27 @@ The **[Releases](https://github.com/TianGzlab/OmicsClaw/releases)** tab hosts th
 
 | | | | |
 |---|---|---|---|
-| 🧠 **Memory**<br/>Sessions, preferences, lineage | 🔒 **Local-first**<br/>Raw data stays in your runtime | 🧰 **95 skills**<br/>Generated catalog + demos | 🧭 **Smart routing**<br/>Natural language to tools |
+| 🧠 **Memory**<br/>Sessions, preferences, lineage | 🔒 **Local-first**<br/>Raw data stays in your runtime | 🧰 **96 skills**<br/>Generated catalog + demos | 🧭 **Smart routing**<br/>Natural language to tools |
 | 💬 **CLI Surface**<br/>`oc interactive`, `oc tui` | 🌐 **Desktop Surface**<br/>FastAPI for desktop/web | 📨 **Channel Surface**<br/>Telegram text + photo, Feishu text; others gated | 📡 **Remote mode**<br/>SSH tunnel to Linux servers |
 | 🤝 **Consensus**<br/>Multi-method merge | 🤖 **Autonomous path**<br/>Router + assisted params | 🔌 **Any LLM**<br/>OpenAI-compatible providers | 📊 **Reproducible**<br/>Figures + data + report |
+
+The Skill lifecycle now has a production-backed vertical slice: a real No-Skill
+transcriptomics request produced Autonomous Run `7787182985b2435997433fa94a7b7096`,
+which was promoted by opaque `run_id`, evaluated twice through the shared
+runner, approved through Desktop governance, and rerun by the Agent through
+canonical RunRuntime as `bulkrna-cosinor-rhythm`. Its current Experience View
+is `demo-validated/current` with non-empty stability evidence. Run-derived
+publications now live under `skills/<domain>/run-derived/<skill>` and are
+reported as `collection: run-derived` by the Registry, generated Catalog, and
+Desktop Skill API; collection is navigation metadata, while provenance and
+trust remain governed by `skill.yaml` plus current evaluation evidence.
+The current published revision was exercised again through Desktop Agent Run
+`f86b027da8a229aa00225a59a15d7435` and fresh Replay Run
+`4cba549f6a4b846903aa5d11f7bb0898`; both are canonical Receipts, and their
+semantic summary matches the source Run and the two current shared-runner
+evaluations (`38d5863c9eec41d68bdee07b7d9229c2`) exactly.
+
+For the cut-over text paths, terminal ordering is `terminal candidate -> Receipt + Transcript ref -> promotion -> Event`. This production slice 不代表 ADR 0042–0068 全量完成；non-cut-over Surfaces remain explicitly outside the claim.
 
 <details>
 <summary><b>Autonomous Analysis Path — how routing works</b></summary>
@@ -142,14 +164,18 @@ Pick the entry point that fits your workflow — they all reach the same backend
 | 🌐 **Desktop Surface** | `oc desktop-server` | FastAPI backend; authoritative text plus bounded `/v1/turns` multipart image ingress |
 | 📨 **Channel Surface** | `python -m omicsclaw.surfaces.channels --channels telegram`<br/>`python -m omicsclaw.surfaces.channels --channels feishu` | Owner-only Telegram text + one photo/caption and Feishu text-only; other media and adapters fail closed |
 | 🧪 Skill runner (non-Surface) | `oc run <skill> --demo` | Reproducible one-shot analysis |
+| ♻️ Skill replay (non-Surface) | `oc replay <replay.json>` | Create a fresh Run and verify it against frozen evidence |
 | 🔌 MCP (non-Surface) | `oc mcp add ...` | External tool integration |
 | 📡 Remote mode | `oc desktop-server` over SSH | Server-side data and jobs |
 
 Remote mode uses `127.0.0.1`, SSH tunneling, and `OMICSCLAW_REMOTE_AUTH_TOKEN`. See [remote execution](docs/engineering/remote-execution.mdx) and the [legacy remote guide](docs/_legacy/remote-connection-guide.md).
 
-Channels are Owner-only: Feishu additionally requires `FEISHU_ALLOWED_SENDERS` and
-`FEISHU_BOT_OPEN_ID` (the identity that proves a group message mentioned this bot).
-Everything not listed above — other adapters, outbound media — fails closed.
+The production Channel scope is the shared runner plus `ControlRuntime`:
+Owner-only Telegram text and one ordinary photo with an optional caption, and
+Owner-only Feishu text-only. `FEISHU_ALLOWED_SENDERS` and `FEISHU_BOT_OPEN_ID`
+are mandatory; the latter proves a group message mentioned this Bot. Other
+Channel Adapters remain gated. Outbound media is incomplete and fail-closed.
+This is not full ADR completion.
 
 ## 📦 Installation
 
@@ -174,7 +200,7 @@ One `npm install -g omicsclaw` gives you the CLI **and** a self-contained CPytho
 ```bash
 npm install -g omicsclaw   # CLI + the one runtime matching your platform
 omicsclaw --version        # `oc` is the short alias for the same binary
-oc list                    # 95 skills, by domain
+oc list                    # 96 skills, by domain
 ```
 
 Node.js 18+ is the only prerequisite. The wrapper carries no runtime: it declares one `@omicsclaw/runtime-<platform>` per host in `optionalDependencies`, and npm's `os` / `cpu` filtering lands exactly one on disk — the pattern esbuild and biome use. The postinstall hook records that interpreter in `~/.omicsclaw/runtime.json` and renames any pip-installed `omicsclaw` / `oc` shim to `<name>-legacy`, so the npm command wins `PATH` without deleting the old one.
@@ -232,7 +258,7 @@ Title failure never changes the completed chat response.
 
 ## 🧬 Domains
 
-`oc list` and `skills/catalog.json` currently agree on **95 registered skills** across **8 domains**.
+`oc list` and `skills/catalog.json` currently agree on **96 registered skills** across **8 domains**.
 
 | Domain | Skills | Examples | Docs |
 |---|---|---|---|
@@ -241,7 +267,7 @@ Title failure never changes the completed chat response.
 | 🧬 Genomics | 10 | QC, alignment, variants, CNV, assembly, epigenomics | [genomics](docs/domains/genomics.mdx) |
 | 🧪 Proteomics | 8 | DIA/DDA, PTM, networks, biomarkers | [proteomics](docs/domains/proteomics.mdx) |
 | ⚗️ Metabolomics | 8 | Peaks, normalization, annotation, pathways | [metabolomics](docs/domains/metabolomics.mdx) |
-| 📈 Bulk RNA-seq | 13 | DE, enrichment, co-expression, deconvolution, survival | [bulkrna](docs/domains/bulkrna.mdx) |
+| 📈 Bulk RNA-seq | 14 | DE, enrichment, co-expression, deconvolution, survival, cosinor rhythms | [bulkrna](docs/domains/bulkrna.mdx) |
 | 🧠 Orchestration | 2 | Routing, planning, literature support | [orchestrator](docs/domains/orchestrator.mdx) |
 | 📚 Literature | 1 | PDF/DOI/PubMed/GEO parsing and dataset handoff | — |
 
@@ -271,6 +297,7 @@ A reserved `__shared__` pool (core agent identity, knowledge handbook guards, gl
 | 📡 Remote execution | [engineering/remote-execution](docs/engineering/remote-execution.mdx) |
 | 🔒 Safety & data privacy | [data privacy](docs/safety/data-privacy.mdx) · [rules & disclaimer](docs/safety/rules-and-disclaimer.mdx) |
 | 🛠️ Building skills | [CONTRIBUTING.md](CONTRIBUTING.md) · [`templates/skill/`](templates/skill/) |
+| 🧪 Skill lifecycle evaluation | [MUSE-aligned three-suite pilot](docs/evaluation/muse-three-suite-skill-lifecycle-benchmark.md) · [OmicBench baseline](docs/evaluation/omicbench-skill-lifecycle-baseline.md) · [Skill system blueprint](docs/design/skill-system-blueprint.md) |
 | 🤖 Repo / agent contracts | [AGENTS.md](AGENTS.md) |
 
 Hosted docs site: **<https://TianGzlab.github.io/OmicsClaw/>**

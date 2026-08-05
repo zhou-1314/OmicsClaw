@@ -165,8 +165,8 @@ oc run scatac-preprocessing --demo --output /tmp/scatac_preprocess_demo
 
 - Normal `oc run` execution and direct script execution should produce the same
   core reproducibility bundle whenever the wrapper succeeds.
-- `analysis_notebook.ipynb` is runner-owned and should be generated when
-  the shared notebook export helper is available.
+- `replay.json`, `environment.json`, and `replay.sh` are runner-owned and are
+  generated for a successful shared-runner invocation.
 - Figures should be rendered from persisted `adata` / table state, not only from
   transient local variables created during preprocessing.
 

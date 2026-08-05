@@ -37,7 +37,7 @@ def test_demo_mode(tmp_output):
     assert (tmp_output / "tables" / "lsi_variance_ratio.csv").exists()
     assert (tmp_output / "tables" / "qc_metrics_per_cell.csv").exists()
     assert (tmp_output / "processed.h5ad").exists()
-    assert not (tmp_output / "reproducibility" / "analysis_notebook.ipynb").exists()
+    assert not (tmp_output / "reproducibility" / "replay.json").exists()
     assert (tmp_output / "reproducibility" / "requirements.txt").exists()
     assert not (tmp_output / "reproducibility" / "environment.txt").exists()
 

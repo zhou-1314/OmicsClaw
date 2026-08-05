@@ -25,7 +25,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from omicsclaw.common.report import (
+from omicsclaw.common.report import (  # noqa: E402
     generate_report_footer,
     generate_report_header,
     write_result_json,
@@ -40,6 +40,20 @@ SUPPORTED_METHODS = ("ora", "gsea", "ora_r", "gsea_r")
 
 # Ranking metric preference order (from Biomni prepare_gene_lists.R)
 RANKING_METRIC_PREFERENCE = ("stat", "scores", "logfoldchanges", "log2FoldChange")
+
+
+def _run_enrichment_r(
+    _de_df: pd.DataFrame,
+    *,
+    method: str,
+    padj_cutoff: float,
+    lfc_cutoff: float,
+) -> dict:
+    """Closed R-backend seam until a clusterProfiler adapter is implemented."""
+    raise RuntimeError(
+        "clusterProfiler backend is not implemented; "
+        f"falling back from {method} (padj={padj_cutoff}, lfc={lfc_cutoff})"
+    )
 
 
 def _resolve_ranking_metric(de_df: pd.DataFrame, requested: str | None = None) -> tuple[str, pd.Series]:
@@ -370,13 +384,19 @@ def core_analysis(
         raise ValueError(f"Unknown method '{method}'. Choose from: {SUPPORTED_METHODS}")
 
     # R-backed clusterProfiler methods (primary)
-    if method in ("gsea_r", "ora_r", "gsea", "ora"):
+    if gene_sets is None and method in ("gsea_r", "ora_r", "gsea", "ora"):
         r_method = method.replace("_r", "")
         try:
             return _run_enrichment_r(de_df, method=r_method,
                                      padj_cutoff=padj_cutoff, lfc_cutoff=lfc_cutoff)
         except Exception as exc:
             logger.warning("R clusterProfiler not available (%s); falling back to GSEApy/built-in.", exc)
+    elif gene_sets is not None:
+        logger.info("Using the caller-provided gene sets; skipping incompatible R databases.")
+
+    if method.endswith("_r"):
+        method = method.removesuffix("_r")
+        logger.info("Preserving %s semantics in the Python fallback.", method.upper())
 
     if gene_sets is None:
         gene_sets = _build_demo_gene_sets()
@@ -384,6 +404,8 @@ def core_analysis(
 
     n_input = len(de_df)
     method_used = method
+    background_gene_count: int | None = None
+    query_genes_in_background: int | None = None
 
     if method == "ora":
         # Filter significant genes
@@ -392,11 +414,29 @@ def core_analysis(
         sig_genes = sig["gene"].tolist()
         n_significant = len(sig_genes)
 
-        # Use all tested genes as background (from Biomni run_ora.R best practice)
-        background_size = n_input
+        background_genes = sorted(
+            {
+                str(gene)
+                for pathway_genes in gene_sets.values()
+                for gene in pathway_genes
+                if str(gene)
+            }
+        )
+        background_set = set(background_genes)
+        background_size = len(background_genes)
+        sig_genes_in_background = [
+            gene for gene in sig_genes if gene in background_set
+        ]
+        background_gene_count = background_size
+        query_genes_in_background = len(set(sig_genes_in_background))
         logger.info(
-            "ORA: %d significant genes (padj < %s, |log2FC| > %s) out of %d background genes.",
-            n_significant, padj_cutoff, lfc_cutoff, background_size,
+            "ORA: %d significant genes (%d in the %d-gene pathway universe; "
+            "padj < %s, |log2FC| > %s).",
+            n_significant,
+            query_genes_in_background,
+            background_size,
+            padj_cutoff,
+            lfc_cutoff,
         )
 
         # Separate up/down gene lists (from Biomni run_ora.R)
@@ -412,6 +452,7 @@ def core_analysis(
                 gene_list=sig_genes,
                 gene_sets=gene_sets,
                 organism="human",
+                background=background_genes,
                 outdir=None,
                 no_plot=True,
             )
@@ -434,7 +475,11 @@ def core_analysis(
                 logger.info("gseapy not available; using built-in hypergeometric ORA.")
             else:
                 logger.warning("gseapy ORA failed (%s); using built-in fallback.", exc)
-            enrichment_df = _run_hypergeometric_ora(sig_genes, gene_sets, background_size)
+            enrichment_df = _run_hypergeometric_ora(
+                sig_genes_in_background,
+                gene_sets,
+                background_size,
+            )
             method_used = "ora_builtin"
 
     else:  # gsea
@@ -496,6 +541,8 @@ def core_analysis(
         "method_used": method_used,
         "n_terms_tested": len(enrichment_df),
         "n_enriched_terms": n_enriched,
+        "background_genes": background_gene_count,
+        "query_genes_in_background": query_genes_in_background,
         "enrichment_df": enrichment_df,
     }
 
@@ -528,7 +575,7 @@ def generate_figures(output_dir: Path, summary: dict) -> list[str]:
     # --- Enrichment bar plot ---
     fig, ax = plt.subplots(figsize=(10, max(6, len(plot_df) * 0.4)))
     y_pos = np.arange(len(plot_df))
-    bars = ax.barh(
+    ax.barh(
         y_pos, plot_df["neg_log10_padj"].values,
         color="steelblue", edgecolor="black", linewidth=0.5, height=0.7,
     )
@@ -632,6 +679,11 @@ def write_report(
     ]
 
     enrichment_df = summary["enrichment_df"]
+    sort_columns = [
+        column for column in ("padj", "pvalue", "term") if column in enrichment_df
+    ]
+    if sort_columns:
+        enrichment_df = enrichment_df.sort_values(sort_columns).reset_index(drop=True)
     if not enrichment_df.empty and "padj" in enrichment_df.columns:
         sig = enrichment_df[enrichment_df["padj"] < 0.05].head(15)
         if not sig.empty:
@@ -642,7 +694,11 @@ def write_report(
                 term = str(r.get("term", ""))
                 overlap = r.get("overlap", r.get("n_genes", ""))
                 t_size = r.get("term_size", "")
-                size_str = f"{overlap}/{t_size}" if t_size else str(overlap)
+                size_str = (
+                    str(overlap)
+                    if "/" in str(overlap)
+                    else f"{overlap}/{t_size}" if t_size else str(overlap)
+                )
                 body_lines.append(f"| {term} | {size_str} | {r['padj']:.2e} |")
 
     body_lines.extend(["", "## Parameters\n"])

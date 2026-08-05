@@ -674,7 +674,6 @@ async def _compute_promotion_suggestion(
     thread_id: str,
     goal: str,
     run_id: str,
-    workspace_root: str,
 ) -> str | None:
     """Suggest promoting to a skill when a similar goal has succeeded before.
 
@@ -685,13 +684,12 @@ async def _compute_promotion_suggestion(
     and are similar to ``goal`` (excluding ``run_id`` itself, in case this
     exact run was somehow already captured), and — if at least
     ``_PROMOTION_SUGGESTION_MIN_PRIOR_SUCCESSES`` qualify — returns a
-    markdown suggestion naming ``workspace_root`` as the exact
-    ``source_analysis_dir`` for ``execute_create_omics_skill``.
+    markdown suggestion naming only the exact opaque ``run_id`` for
+    ``execute_create_omics_skill``.
 
     Deliberately never offers ``promote_from_latest``: that unsafe global
-    mtime-based admission path is disabled. Anchoring to this run's own
-    ``workspace_root`` (known immediately after the run, no disk scan) keeps
-    the suggestion correct even with other sessions running at once.
+    mtime-based admission path is disabled. The Backend resolves the claimed
+    Run output from ``run_id``; an Agent never selects a workspace path.
     """
     from omicsclaw.runtime.agent.state import memory_store
     if not memory_store or not session_id:
@@ -735,7 +733,8 @@ async def _compute_promotion_suggestion(
         f"This is the {_ordinal(occurrence)} time a similar goal has succeeded in "
         "this thread. Consider promoting it to a reusable skill:\n\n"
         "```\n"
-        f"execute_create_omics_skill(request={goal!r}, source_analysis_dir={workspace_root!r})\n"
+        f"execute_create_omics_skill(request={goal!r}, "
+        f"source={{'kind': 'run', 'run_id': {run_id!r}}})\n"
         "```\n\n"
         # An autonomous-analysis bundle never carries a target domain (nothing
         # in the run's lifecycle records one), so create_skill_scaffold cannot
@@ -746,7 +745,7 @@ async def _compute_promotion_suggestion(
         "Add `domain=\"...\"` before running this — it cannot be inferred "
         f"automatically for an autonomous-analysis run. Valid domains: "
         f"{', '.join(VALID_DOMAINS)}.\n\n"
-        "(Anchored to this exact run's own workspace; global `promote_from_latest` is disabled — "
+        "(Anchored to this exact claimed Run id; global `promote_from_latest` is disabled — "
         "stays correct even if other analyses are running concurrently.)"
     )
 

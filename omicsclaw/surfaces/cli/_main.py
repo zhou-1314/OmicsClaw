@@ -535,6 +535,7 @@ class OmicsClawParser(argparse.ArgumentParser):
         print(f"  {GREEN}tui        {RESET}  Advanced full-screen Textual interface", file=file)
         print(f"  {GREEN}list       {RESET}  List all 95 available skills", file=file)
         print(f"  {GREEN}run        {RESET}  Execute a specific skill (e.g., 'oc run preprocess')", file=file)
+        print(f"  {GREEN}replay     {RESET}  Create and verify a fresh Skill Run from replay.json", file=file)
         print(f"  {GREEN}version    {RESET}  Show the current OmicsClaw version", file=file)
 
         print(f"\n{BOLD}{BLUE}Utility Commands{RESET}", file=file)
@@ -784,6 +785,20 @@ def main():
     )
     _prei = project_sub.add_parser("reindex", help="Rebuild the run index for a project (or all)")
     _prei.add_argument("name", nargs="?", default="", help="Project name/id (default: all projects)")
+
+    replay_p = sub.add_parser(
+        "replay",
+        help="Create and verify a fresh Skill Run from replay.json",
+    )
+    replay_p.add_argument("capsule", help="Path to reproducibility/replay.json")
+    replay_p.add_argument(
+        "--input",
+        dest="input_paths",
+        action="append",
+        default=[],
+        metavar="INPUT",
+        help="Map a local input by capsule ordinal (repeat in original order)",
+    )
 
     run_p = sub.add_parser(
         "run",
@@ -1541,6 +1556,29 @@ def main():
         project_p.print_help()
         sys.exit(0)
 
+    if args.command == "replay":
+        from omicsclaw.surfaces.cli._replay_support import replay_skill_capsule
+
+        replay = replay_skill_capsule(
+            args.capsule,
+            workspace_dir=OMICSCLAW_DIR,
+            input_paths=args.input_paths,
+        )
+        if replay.success:
+            print(f"{GREEN}VERIFIED{RESET}: {replay.skill}")
+            if replay.run_id:
+                print(f"  Fresh Run: {replay.run_id}")
+            if replay.output_dir:
+                print(f"  Output:    {replay.output_dir}")
+            if replay.replay_path:
+                print(f"  Replay:    {replay.replay_path}")
+            return
+        print(f"{RED}NOT VERIFIED{RESET}: {replay.skill or 'replay'}", file=sys.stderr)
+        print(replay.code or "replay_failed", file=sys.stderr)
+        for mismatch in replay.mismatches:
+            print(f"  - {mismatch}", file=sys.stderr)
+        sys.exit(1)
+
     if args.command == "run":
         if (
             _root_run_route is not None
@@ -1561,8 +1599,8 @@ def main():
                     print(f"  Output: {canonical_result['output_dir']}")
                 if canonical_result.get("readme_path"):
                     print(f"  Guide:  {canonical_result['readme_path']}")
-                if canonical_result.get("notebook_path"):
-                    print(f"  Notebook: {canonical_result['notebook_path']}")
+                if canonical_result.get("replay_path"):
+                    print(f"  Replay: {canonical_result['replay_path']}")
                 if canonical_result.get("run_id"):
                     print(f"  Run:    {canonical_result['run_id']}")
                 return
@@ -1718,8 +1756,8 @@ def main():
                 print(f"  Output: {result.output_dir}")
             if result.readme_path:
                 print(f"  Guide:  {result.readme_path}")
-            if result.notebook_path:
-                print(f"  Notebook: {result.notebook_path}")
+            if result.replay_path:
+                print(f"  Replay: {result.replay_path}")
             if result.stdout:
                 print(result.stdout, end="")
         else:

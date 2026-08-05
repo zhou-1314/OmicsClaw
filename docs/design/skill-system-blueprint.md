@@ -1,6 +1,6 @@
 # OmicsClaw Skill 系统蓝图
 
-> 状态：设计蓝图（2026-07-29）。
+> 状态：设计蓝图（更新至 2026-08-05）。
 >
 > 角色：这是 Skill 系统的**总图**——它把 MUSE-Autoskill 的五阶段生命周期逐条映射到
 > OmicsClaw 的组件，记录哪些机制被采纳、哪些被**刻意拒绝**，并给出目标架构、不可违反
@@ -14,9 +14,9 @@
 >
 > 参照论文：Lin et al., *MUSE-Autoskill: Self-Evolving Agents via Skill Creation,
 > Memory, Management, and Evaluation*, arXiv:2605.27366v2（2026-07-03）。本文引用的
-> MUSE 数据全部来自**论文正文**；此前
-> [设计文档 §14](skill-audit-continuous-evaluation.md) 的批判表基于一份**非官方参考
-> 实现**，两者结论一致但证据来源不同，不可混用。
+> MUSE 数据来自**官方论文及附录**；
+> [设计文档 §14](skill-audit-continuous-evaluation.md) 也以官方论文为实验结构与定量真源。
+> 非官方参考实现只可用于实现观察，不能覆盖论文声明或作为 benchmark 结果来源。
 
 ---
 
@@ -29,10 +29,10 @@ MUSE 论文提出的核心主张——Skill 不应是一次性生成物，而应
 | | MUSE-Autoskill | OmicsClaw |
 | --- | --- | --- |
 | Skill 是什么 | 从一次成功轨迹蒸馏的**过程文档** | **可执行科学方法 + 唯一机器契约** |
-| 正确性证明 | 同一个 LLM 自撰的 unit test | 协议绑定的 demo/fixture/benchmark + 真实数据不变量 |
+| 验证信号 | Agent 生成的 unit test、sandbox 与运行反馈 | 协议绑定的 demo/fixture/benchmark + 真实数据不变量 |
 | 失败后 | 自动 patch 并重跑 | 生成候选 → 人工批准 → 固定验证门 → CAS 写回 |
 | 经验载体 | 每技能一份自由文本 `.memory.md` | 证据派生、可完全重建的 Experience View |
-| 错误的代价 | 任务失败，**可观测** | **貌似合理的错误生物学，不可观测** |
+| 错误的代价 | 常表现为任务失败，但论文承认 hallucination 和未检出风险 | 还可能是貌似合理的错误生物学，必须加强 provenance 与人工复核 |
 
 论文自己的数据支持这个分歧：
 
@@ -55,17 +55,18 @@ MUSE 论文提出的核心主张——Skill 不应是一次性生成物，而应
 
 ## 2. 五阶段映射
 
-| MUSE 阶段 | OmicsClaw 组件 | 相对强度 | 实测状态（2026-07-29） |
+| MUSE 阶段 | OmicsClaw 组件 | 相对强度 | 实测状态（2026-08-05） |
 | --- | --- | --- | --- |
-| **Creation** | `create_omics_skill`（Agent loop 内）+ `scaffolder.py` + staging demo gate（沙箱分级、原子发布） | ≥ MUSE | ❌ tracked 正式库 **0/95** 来自此路径 |
+| **Creation** | `create_omics_skill`（Agent loop 内）+ `scaffolder.py` + staging demo gate（沙箱分级、原子发布） | ≥ MUSE | 🟢 Real Run Promotion Slice 已贯通；正式库已有 **1/96** 个真实 run-derived Skill（`bulkrna-cosinor-rhythm`） |
 | **Memory** | `SkillAuditRuntime` → Skill Experience View | **强于 MUSE**：版本绑定、可重建、无第二真源 | 🟡 结构完整；3 个字段无生产者，usage 计数硬编码 |
 | **Management** | capability resolver + routing oracle + `merge_candidate` + ADR 0068 替代式弃用 | **强于 MUSE**：两阶段替代而非文档重生成 | 🟡 仅 stage-one 重叠 advisory |
-| **Evaluation** | Evaluation Protocol + digest（绑定 entry 字节与依赖版本）+ 稳定性离散度 | **强于 MUSE**：协议漂移即证据失效 | ❌ **0/95** 声明协议 |
+| **Evaluation** | Evaluation Protocol + digest（绑定 entry 字节与依赖版本）+ 稳定性离散度 | **强于 MUSE**：协议漂移即证据失效 | 🟡 **5/96** Skills 声明 6 个协议；三套 suite 仅 partial coverage |
 | **Refinement** | 候选提案 + 人工批准 + 固定验证门 + 中断对账 | **刻意弱于 MUSE**（见 §7） | 🟡 remediation brief → AutoAgent 未接线 |
 | *(MUSE 额外)* **Context** | 上下文装配 + 压缩 | **弱于 MUSE** | ⚠️ 已知债 |
 
-五个阶段中三个设计更强、一个刻意更弱、一个确实更差。**而三个更强的阶段全部因为缺少
-输入而空转。**
+五个阶段中三个设计更强、一个刻意更弱、一个确实更差。Evaluation 已有真实输入并形成
+证据；Creation 的真实 run-derived 闭环已由正式 Skill 验证，Management 和 Refinement
+的完整 Agent 闭环仍未形成。
 
 ---
 
@@ -101,6 +102,7 @@ MUSE 论文提出的核心主张——Skill 不应是一次性生成物，而应
 ┌─ L5 证据层（append-only，永不改写）──────────────────────────┐
 │  SkillHealthLedger      : SkillRunEvent                       │
 │  EvaluationResultStore  : ProtocolEvaluationResult            │
+│  EvaluationArtifactStore: bounded content-addressed evidence  │
 │  身份 = skill_id + version + manifest_hash + source_hash      │
 └───────────────────────────┬──────────────────────────────────┘
                             ▼  纯投影，可从 ledger 完全重建
@@ -129,7 +131,9 @@ MUSE 论文提出的核心主张——Skill 不应是一次性生成物，而应
 - **L6 → L7 是建议**：证据只能产生候选，不能自动执行。
 - **L7 → L2 是唯一写路径**：CAS + 人工门 + 固定验证器。
 
-MUSE 在这三处都是直连可写——这正是它的 `hvac-control` 回归无法被拦截的结构原因。
+MUSE 在这三处没有等价的人工门、CAS 和固定验证器，因此类似回归缺少发布前
+拦截。但论文对 `hvac-control` 回归的直接归因是 source-trajectory-specific
+calibration assumptions 造成的分布外过拟合，不是写入拓扑本身。
 
 ---
 
@@ -154,19 +158,30 @@ MUSE 在这三处都是直连可写——这正是它的 `hvac-control` 回归�
 
 区分「设计不对」和「没数据」是这份蓝图最重要的判断——前者要改架构，后者只要打开开关。
 
-### 5.1 结构缺口（必须改设计）——共 4 个
+### 5.1 结构缺口（必须改设计）——剩余 2 个
 
 | # | 缺口 | 证据 |
 | --- | --- | --- |
-| **S1** | Authoring Interface 丢失信息 | `scaffolder.py` 对所有技能写入同一句占位 `skip_when`；`interface.inputs` 建为空 `Inputs()`；`outputs` 硬编码 `report.md/result.json`；`input_formats`/`primary_outputs` 被显式 `del`，只进散文 |
-| **S2** | 准入证据无法成为审计证据 | 创建 gate 走裸 subprocess（不经 Shared Runner、不产生 `SkillRunEvent`）；gate 之后改写 `validation`/`lifecycle`，导致执行时 manifest ≠ 发布 manifest |
+| **S1** | Authoring Interface 仍丢失排除边界 | 可证明的 `input_formats` 已进入 `interface.inputs.file_types`，安全相对文件型 `primary_outputs` 已进入 `interface.outputs.files`；但 `scaffolder.py` 仍对所有新 Skill 写入同一句 generic `skip_when` |
 | **S3** | 缺少「零协议」信号 | `coverage_gap` 只在**声明等级高于协议可挣得等级**时触发；全库 `smoke-only` 时永不触发，系统对库级实际状态沉默 |
-| **S4** | run 身份用路径穿过 LLM | `SkillPromotionCandidate` 有 `runId` 却标记为 provenance-only 并丢弃，改把 `workspaceRoot` 拼进给 LLM 的自由文本指令 |
+
+**S2 已于 2026-08-04 的 Golden Slice 关闭**：staging demo 只生成
+`references/admission.md` 并发布 `draft/smoke-only`；manifest 自带系统派生 demo
+Evaluation Protocol；`prepare_activation()` 对已发布精确 revision 评测并生成
+`skill_activation`；人工审批 CAS 同时切换 lifecycle/validation，随后在提交批准记录前对新的
+manifest revision 再跑同一协议，确保 Experience View 不是一激活就 stale。
+
+**S4 已于 2026-08-05 的 Real Run Promotion Slice 关闭**：Agent 只提交类型化
+`SkillAuthoringRequest` 与不透明的 32-hex `run_id`；Backend 从已 claim 且已完成的
+Autonomous Run 权威解析输出并校验 provenance，任意 `source_analysis_dir` 或未知字段均
+被拒绝。正式 `bulkrna-cosinor-rhythm` 的来源绑定到
+`run:7787182985b2435997433fa94a7b7096`，全链未把工作区路径交给 LLM。
 
 ### 5.2 吞吐缺口（设计正确，缺数据）
 
-Experience View 的 `approved_gotchas` / `coverage_gaps` / `pending_proposal_ids`
-三个字段无生产者；`usage.routing_count` / `explicit_count` 硬编码 0；95 个技能零协议；
+Experience View 的 `approved_gotchas` 投影字段仍无生产者（已批准 Gotcha 另行经
+canonical `SKILL.md` / Registry 进入调用上下文）；`coverage_gaps` /
+`pending_proposal_ids` 也无生产者；`usage.routing_count` / `explicit_count` 硬编码 0；91 个技能零协议；
 merge stage-two；remediation handoff；AUD-09 / AUD-10。**这些不需要改架构。**
 
 ### 5.2b 「缺少证据」被当成「负面判决」（同一错误的两个实例）
@@ -175,7 +190,7 @@ merge stage-two；remediation handoff；AUD-09 / AUD-10。**这些不需要改�
 
 | 实例 | 表现 |
 | --- | --- |
-| `security` 未声明 | Backend 报中性事实 `reviewed:false / enforcement:"undeclared"`；**App 单方面**把它升级成红色警告徽章 + 关注排序 +100 权重 + 筛选维度。92/95 命中，筛选器返回 97% 语料 |
+| `security` 未声明 | Backend 报中性事实 `reviewed:false / enforcement:"undeclared"`；**App 单方面**把它升级成红色警告徽章 + 关注排序 +100 权重 + 筛选维度。93/96 命中，筛选器返回 97% 语料 |
 | `run_health` 缺失 | `faultRate()` 无运行记录时返回 `Infinity`（**faults 排序的哨兵**），而 `attentionScore` 拿它与阈值比较 ⇒ **「从未运行」与「每次都失败」同分** |
 
 两者共享一条根因：**把「尚无证据」渲染成「已判定有问题」**。这与 L5→L6 投影层的
@@ -190,7 +205,7 @@ remain separate, unaccepted work」，`security` 因此成为 `skill.yaml` 中**
 读模型完全忽略的治理字段**——Experience View 有 declared/effective validation、
 health、stability、gotchas、coverage gaps，独独没有 security。App 填补了这个空缺。
 
-**已修（App 侧）**：卡片只呈现**正向**状态（已声明，3/95，稀有即有信息量），
+**已修（App 侧）**：卡片只呈现**正向**状态（已声明，3/96，稀有即有信息量），
 未声明退回筛选器与详情页；关注排序权重改为 `缺陷 100 > 不可运行 40 > 元数据缺口 10`；
 新增 `hasReproducingDefects()` 使「无运行记录」不再计为缺陷；评分函数从 client
 组件抽为纯模块 `skill-sort.ts` 并补 8 条回归测试（此前**无测试接缝**）。
@@ -215,14 +230,17 @@ App 退回纯渲染，本节的越权自动消解。**在此之前，任何表�
 
 1. **ADR 0075**：`SkillAuthoringRequest`，`source.kind` 为唯一公开判别式，
    **`run` 分支为主引擎**。
-2. **修 S1**：`skip_when` 真实合成、`input_formats → interface.inputs` 打通、
-   `primary_outputs → outputs` 打通。这同时是 ADR 0075 的形状验证，应先于 ADR 落地。
-3. **ADR 0076**：先发布后评测；acquisition 在发布后调用 `governance.evaluate()`；
-   系统派生默认 `kind: demo` 协议。
+2. **修完 S1**：真实合成 `skip_when`。机器 I/O 形状已通过
+   `input_formats → interface.inputs` 与 `primary_outputs → outputs` 打通，并有回归测试。
+3. **✅ Golden Slice 已实现（ADR 0076 待正式记录）**：先以 `draft/smoke-only` 发布并声明系统派生的默认 `kind: demo`
+   协议，再对已发布的 exact revision 调用 `governance.evaluate()`。通过后生成 combined
+   activation proposal，在人工批准和 CAS 下原子完成 `draft/smoke-only` →
+   `mvp/demo-validated`；评测失败保留 draft，不回滚已发布资产。不得由 scaffolder 在评测后
+   直接改 manifest，否则刚产生的 revision-bound evidence 会立即 stale。
 4. **修 S3**：新增 `continuous_evaluation_unconfigured` 缺口类型（**不修改**现有
    `coverage_gap` 语义）。
-5. **修 S4**：App 提交 `run_id`，Backend 用现有 Run 权威解析已 claim 的输出目录
-   （ADR 0070）；`promotion_ref` 作为后续加固。
+5. **✅ S4 已关闭**：Agent 提交 `run_id`，Backend 用现有 Run 权威解析已 claim 的
+   输出目录（ADR 0070）；公开 authoring Interface 不再接受自由路径。
 
 **验收（可证伪）**：至少 1 个技能经 `run` 分支进入正式库，`declared=demo-validated`，
 `validation_state=current`，Experience View 的 `stability` 非空。
@@ -233,7 +251,7 @@ App 退回纯渲染，本节的越权自动消解。**在此之前，任何表�
 7. 为高频技能声明 `fixture` 协议 → 第一批 `fixture-validated`。
 8. **按 Skill 类型提供可覆盖的默认协议模板**——
    [设计文档 §6.1](skill-audit-continuous-evaluation.md) 早已预见「不给模板就没人写」，
-   缺它是 0 采用率的直接成因。
+   它仍是扩大当前 **5/96** Skills 协议覆盖率的必要工作。
 9. AUD-10 净效用 baseline/treatment。
 
 **验收**：`by_declared_level` 不再全是 `smoke-only`；`by_validation_state.current > 0`
@@ -259,10 +277,10 @@ App 退回纯渲染，本节的越权自动消解。**在此之前，任何表�
 | 项 | 拒绝理由 |
 | --- | --- |
 | `.memory.md` 或任何自由文本经验槽 | 无版本绑定、难以脱敏、会成为第二真源；由 L6 类型化投影取代 |
-| 自动 refinement 改写科学代码或默认参数 | `hvac-control` 回归即此路产物；绕过人工判断与 CAS 治理 |
+| 自动 refinement 改写科学代码或默认参数 | `hvac-control` 展示了 source-trajectory 过拟合的实际回归风险；无人工判断和 CAS 的自动写回无法在发布前拦截此类问题 |
 | 自动 merge / forget | 描述相似 ≠ 方法等价；低使用频率 ≠ 低价值 |
-| 以生成的 unit test 作为科学正确性证明 | 同一 LLM 自撰、可被 refiner 改绿；真实数据不变量更强 |
-| 跨 Agent skill transfer / 公共 skill hub | 与「基因数据不出本机」冲突；本地优先 |
+| 以生成的 unit test 作为科学正确性证明 | 论文也只称其为 validation signal/audit path；真实数据不变量更强 |
+| 公共 Skill Hub、自动发布或数据随包外传 | 违反本地优先、证据治理与人工批准；本地 package-only transfer benchmark 仍保留 |
 | 继续压缩 canonical `skill.yaml` | 复杂度不会消失，只会扩散到 Resolver / DAG / Runner / Desktop |
 | 新建 `SkillAuthoringRuntime` Module | 既有 scaffolder 已实现生成、推导、staging、验证、隔离、原子发布；只加类型化前门 |
 | 通用向量 Skill Memory / RAG | 见 [ADR 0074](../adr/0074-govern-skill-experience-and-continuous-evaluation.md) 非目标 |
@@ -271,7 +289,8 @@ App 退回纯渲染，本节的越权自动消解。**在此之前，任何表�
 
 ## 8. 一个战略结论：创作引擎应当 run-promotion-first
 
-论文数据：MUSE 在 75 个任务中 **28 个自创失败**，失败集中在没有成功轨迹的任务；
+论文数据：MUSE 在 75 个任务中有 **28 个任务未生成可用自创技能**，主要瓶颈是 Phase 1
+没有得到可复用的成功 source trajectory；
 而**有成功轨迹时，自创技能在覆盖子集上达到 85.24%，超过人工技能的 81.17%**。论文原文：
 「generated skills are strong when a successful source trajectory exists」。
 
@@ -283,9 +302,10 @@ OmicsClaw 的技能比 MUSE 重得多，`intent` 冷启动只会更难。因此�
 
 ---
 
-## 9. 已验证的首个闭环：`spatial-domains`（2026-07-29）
+## 9. 已验证的首个 Evaluation→Experience partial loop：`spatial-domains`（2026-07-29）
 
-P1 的验收目标已在一个既有技能上跑通（`创建` 阶段以「声明评测协议」代替——技能本身已存在）。
+该实验从既有 Skill 开始，没有经过 P1 要求的 `run` branch Creation 与发布，因此不能称为
+完整 P1 lifecycle。它验证的是 Evaluation → Experience → proposal/approval 这一段。
 
 **改动**：`skills/spatial/spatial-domains/skill.yaml` 纯加法 6 行——
 
@@ -298,7 +318,9 @@ validation:
     repeats: 2
 ```
 
-`validation.level` **未被手工修改**（它是 governance-owned，只能经提案 + 人工批准 + CAS 写回）。
+`validation.level` 在该次运行时未被手工修改；当前 manifest 已通过治理证据
+`evolution:61bfe63b8c6507105a1321aa:events=6781a7b0771a4d67b7921af10847109a`
+升级为 `demo-validated`。下表的 `effective=smoke-only` 是批准前快照。
 
 **闭环证据**：
 
@@ -308,7 +330,7 @@ validation:
 | Experience View | `validation_state: evaluation_required → **current**`；`usage.execution_count: 2`；`health.successes: 2`，0 缺陷 |
 | `stability` | `{spatial-domains-demo-v1: {runs:2, success_rate:1.0, outcomes_consistent:true}}` |
 | `effective_validation_level` | `smoke-only`——**被 declared 封顶**（`_min_level`），行为正确 |
-| `refresh()` | 生成 `validation_promotion` 提案（`smoke-only → demo-validated`），待人工批准 |
+| `refresh()` | 生成 `validation_promotion` 提案（`smoke-only → demo-validated`）；该历史提案后来获批 |
 | 库级 summary | `by_validation_state.current: 0 → 1` |
 
 **为什么只声明 `demo` 而不是 `fixture`**：`tests/` 下全部是 `test_demo_*`——跑 demo 后断言产物存在，
@@ -361,6 +383,49 @@ validation:
 > 一般教训：**当运行期依赖发生在第三方库内部时，静态生成的依赖契约必然漏项。**
 > 探针导入是把这类事实拉回单一真源的既有手段，应在同类方法分派处保持一致。
 
+### 9.3 首个外部 benchmark evaluation slice：OmicBench A02/A03（2026-08-02）
+
+`sc-preprocessing` 现在声明两个独立的 `kind: benchmark` protocol，每个只绑定一个
+OmicBench case。真实双协议 batch 的 A02 为 4/4、A03 为 3/3，且 Skill-owned adapter
+补充验证完整 obs/var identity；这捕获并修复了「原生 rubric 通过但 feature 轴被改写」的
+假阳性。
+
+结果按 exact Skill revision、protocol digest、dataset digest、runner environment、
+evaluation ID 和 result ID 绑定。Experience View 报告
+`evidence_supported_validation_level=benchmarked`，但 declared 仍为 `smoke-only`，所以
+effective 仍为 `smoke-only`。这证明外部 benchmark 可以形成晋级候选证据，但不会绕过
+人工审批。完整命令、摘要和 2/44 覆盖边界见
+[OmicBench Skill Lifecycle 基线](../evaluation/omicbench-skill-lifecycle-baseline.md)。
+
+### 9.4 三套 suite partial-coverage pilot（2026-08-02）
+
+OmicBench A02/A03、scAgentBench PAGA 与 BiomniBench-DA 12-2 已通过 content-bound
+Per-Skill protocols。Biomni 仅为 deterministic `fixture` preflight，官方 LLM judge 未运行。
+这些结果验证 Skill conformance，不证明 `no_skill / curated_skill / self_created_skill` 的 Agent
+lift；完整 denominator、MUSE 正交实验和 blockers 见
+[三套 suite 汇总](../evaluation/muse-three-suite-skill-lifecycle-benchmark.md)。
+
+### 9.5 Real Run Promotion Slice（2026-08-05）
+
+一个真实 Bulk RNA 时间序列 No-Skill 请求先由 Autonomous Code Mini-Agent 完成并通过
+Replay，来源 Run 为 `7787182985b2435997433fa94a7b7096`。Agent 随后只提交该
+`run_id` 创建 `bulkrna-cosinor-rhythm`；Backend 验证 claim/completion、冻结小型输入，
+并由真实 shared runner 执行两次 demo 协议。Desktop governance proposal
+`13e46b9703563dd4c220a344` 经 `local-human-operator` 人工审批后，Skill 才从
+`draft/smoke-only` 激活为 `mvp/demo-validated` 并进入 Registry。
+
+当前 manifest/source revision 分别为
+`sha256:ebd4d84ab440a50a6f741015b7dd1806a2ba3d1dbd0347016e3f9023bd4dfa1a` 与
+`sha256:d7848738c09edf735a971c32f07b15500b74f11872dcdd94ce7e0d2db19d538d`，
+并通过 evaluation batch `38d5863c9eec41d68bdee07b7d9229c2` 的 2/2 真实执行。
+Experience View 为 `validation_state=current`、`success_rate=1.0`。Desktop Agent 对
+当前 revision 创建 canonical Run `f86b027da8a229aa00225a59a15d7435`；其 Capsule
+又创建 fresh Replay Run `4cba549f6a4b846903aa5d11f7bb0898`，两者 Receipt 均为
+`succeeded`。来源 Run、两次当前评测、Desktop Agent Run 与 Replay Run 的规范化
+语义摘要完全一致（`sha256:365740665ee92dfdc0eeb81482c72783928e7441cb9f861b1dbbbb288770192b`）：
+5 个基因、3 个节律基因（`ARNTL`、`CLOCK`、`PER2`）；来源/Agent/Replay 的 CSV
+字节摘要也一致。整条链没有 notebook 或评测替身。
+
 ---
 
 ## 10. 文档关系
@@ -374,7 +439,7 @@ validation:
 | [ADR 0065–0069](../adr/0065-verify-skill-output-guarantees-at-the-shared-runner.md) | 输出契约验证与演化治理 |
 | [ADR 0074](../adr/0074-govern-skill-experience-and-continuous-evaluation.md) | 经验视图与持续评测 |
 | ADR 0075（计划） | Agent Authoring Request 与 canonical manifest 分离 |
-| ADR 0076（计划） | 发布后挣得获取证据（准入 ≠ 评测） |
+| ADR 0076（待正式记录；Golden Slice 已实现） | 发布后 exact-revision 评测 + combined activation proposal（准入 ≠ 评测） |
 | [v3 G1/G2 草案](../proposals/skill-representation-v3-g1-g2.md) | 组合签名与类型化参数 |
 | [自适应环境供给提案](../proposals/adaptive-environment-provisioning.md) | 横切环境缺口 |
 

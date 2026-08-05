@@ -286,6 +286,45 @@ def test_on_mode_deferred_only_falls_back_to_base(monkeypatch, tmp_path):
     assert any(n.startswith("deferred:torch") for n in rt.notes)
 
 
+def test_on_mode_vcs_only_dep_is_never_installed_and_hints_the_git_url(
+    monkeypatch, tmp_path, caplog
+):
+    """Regression: spatial-domains burned a doomed `pip install STAGATE-pyG` per run.
+
+    `STAGATE-pyG` is not on PyPI, so the install could only ever end in "No matching
+    distribution found". It must be deferred with the real git URL, and the install
+    must never be attempted.
+    """
+    import logging
+    monkeypatch.setenv("OMICSCLAW_ADAPTIVE_ENV", "on")
+    monkeypatch.setattr(
+        env_resolver.dep_spec, "required_packages", lambda info: ["STAGATE-pyG"]
+    )
+    _, calls = _stub_vp(monkeypatch, tmp_path, base_missing=["STAGATE_pyG"])
+
+    seen: list[str] = []
+    with caplog.at_level(logging.WARNING, logger="omicsclaw.skill.execution.env_resolver"):
+        rt = resolve_skill_runtime(
+            {"requires": ["STAGATE-pyG"], "alias": "spatial-domains"},
+            base_python=sys.executable,
+            base_env={"PATH": "/usr/bin"},
+            status_cb=seen.append,
+        )
+
+    # Ran in the base env, and NOTHING was installed.
+    assert rt.python == sys.executable and rt.env_overlay == {}
+    assert calls["installed"] is None
+    assert any(n.startswith("deferred:STAGATE-pyG") for n in rt.notes)
+
+    # The warning carries the only command that actually works.
+    warned = " ".join(r.message for r in caplog.records)
+    assert "git+https://github.com/" in warned
+    assert "0_setup_env" not in warned  # conda hint would be wrong advice here
+
+    # The desktop "Checking environment" line gets a resolution, not silence.
+    assert any("git+https://github.com/" in msg for msg in seen), seen
+
+
 def test_on_mode_provision_failure_falls_back_to_base(monkeypatch, tmp_path):
     monkeypatch.setenv("OMICSCLAW_ADAPTIVE_ENV", "on")
     monkeypatch.setattr(env_resolver.dep_spec, "required_packages", lambda info: ["infercnvpy"])

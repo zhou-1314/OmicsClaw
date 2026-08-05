@@ -45,6 +45,13 @@ def test_param_hint_backends_reads_v2_hints(tmp_path):
     assert "palantir" in audit.param_hint_backends(sd)
 
 
+def test_dependency_registry_parser_handles_commented_vcs_entry():
+    module_to_canonical, canonical = audit.load_registry()
+
+    assert module_to_canonical["STAGATE_pyG"] == "STAGATE-pyG"
+    assert "STAGATE-pyG" in canonical
+
+
 def test_write_deps_python_v2_round_trip(tmp_path):
     sd = _write_v2(tmp_path / "sk", ["numpy"])
     assert audit.write_deps_python_v2(sd, ["anndata", "numpy", "scanpy"]) is True

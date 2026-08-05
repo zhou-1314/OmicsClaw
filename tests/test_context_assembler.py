@@ -184,6 +184,7 @@ def test_assemble_chat_context_loads_memory_and_builds_prompt():
     calls = {
         "session": [],
         "resolver": None,
+        "experience": None,
     }
 
     class FakeSessionManager:
@@ -205,6 +206,24 @@ def test_assemble_chat_context_loads_memory_and_builds_prompt():
         calls["resolver"] = (query, domain_hint)
         return FakeDecision()
 
+    def fake_skill_experience_loader(skill_id):
+        calls["experience"] = skill_id
+        return {
+            "skill_revision": {"skill_id": skill_id},
+            "declared_validation_level": "benchmarked",
+            "evidence_supported_validation_level": "fixture-validated",
+            "effective_validation_level": "fixture-validated",
+            "validation_state": "evaluation_required",
+            "usage": {"execution_count": 1},
+            "health": {
+                "successes": 1,
+                "skill_defects": 0,
+                "environment_failures": 0,
+            },
+            "declared_protocol_ids": ["fixture-v1"],
+            "stability": {},
+        }
+
     context = asyncio.run(
         assemble_chat_context(
             chat_id="chat-1",
@@ -213,6 +232,7 @@ def test_assemble_chat_context_loads_memory_and_builds_prompt():
             platform="telegram",
             session_manager=FakeSessionManager(),
             capability_resolver=fake_capability_resolver,
+            skill_experience_loader=fake_skill_experience_loader,
             skill_aliases=("spatial-preprocess", "sc-qc"),
         )
     )
@@ -236,6 +256,7 @@ def test_assemble_chat_context_loads_memory_and_builds_prompt():
         "Analyze sample.h5ad with spatial-preprocess",
         "spatial",
     )
+    assert calls["experience"] == "spatial-preprocess"
     # F3 — assert the REAL assembled context instead of discarded builder kwargs.
     # memory_context is a SYSTEM layer: it renders into the system prompt.
     assert "preferred language: Chinese" in context.system_prompt
@@ -272,6 +293,8 @@ def test_assemble_chat_context_loads_memory_and_builds_prompt():
     assert "Selected skill: `spatial-preprocess`" in context.skill_context
     assert "- Domain: `spatial`" in context.skill_context
     assert "- Summary:" in context.skill_context
+    assert "## Governed Skill Experience" in context.skill_context
+    assert "effective `fixture-validated`" in context.skill_context
     assert context.skill_context in context.prompt_context.message_context
     assert "workspace_context" not in context.prompt_context.layer_stats
 

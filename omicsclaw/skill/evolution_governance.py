@@ -21,12 +21,15 @@ import hashlib
 import importlib.metadata
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
+import shutil
 import sys
 import tempfile
 import threading
+import time
 from typing import Any, Iterable, Mapping, Protocol
 import unicodedata
 from uuid import uuid4
@@ -58,10 +61,21 @@ from .registry import GOVERNED_REPLACEMENT_VALIDATION_LEVELS, OmicsRegistry
 from .schema import SkillManifest, load_skill_yaml, parse_skill_manifest
 from .evaluation_protocol import protocol_digest
 from .evaluation_run import (
+    EvaluationArtifactStore,
+    EvaluationArtifactStoreError,
     EvaluationResultStore,
+    PROTOCOL_OUTCOMES,
+    PROTOCOL_REASON_CODES,
+    ProtocolRunOutcome,
+    default_evaluation_artifact_store,
     default_evaluation_result_store,
     run_protocol_evaluations,
 )
+from .evaluation_dataset import (
+    DatasetIntegrityError,
+    resolve_repository_dataset,
+)
+from .inventory import discover_skill_inventory
 from .skill_audit import (
     VALIDATION_LADDER,
     CachedRevisionResolver,
@@ -73,37 +87,368 @@ from .skill_md import append_gotcha_entry, render_skill_md
 
 logger = logging.getLogger(__name__)
 
+_BWRAP_DATASET_ACCESS = "bwrap-read-only-v1"
+_DIGEST_GUARD_DATASET_ACCESS = "digest-guard-v1"
 
-def _run_protocol_entry(skill_dir: Path, entry: str) -> str:
-    """Run a test-backed protocol's entry in a bounded pytest subprocess.
 
-    Returns ``"succeeded"`` on exit 0, else ``"failed"``. Control credentials are
-    scrubbed from the child environment, stdout/stderr are discarded, and a
-    timeout is a failure. This is the phased shared-runner-adjacent executor
-    (ADR 0074 §10 "Deferred"): the RunRuntime governed queue — resource
-    scheduling, cancellation and full AuditOperation observability — is a
-    follow-up.
-    """
+@lru_cache(maxsize=1)
+def _bubblewrap_available() -> bool:
+    bwrap = shutil.which("bwrap")
+    if not sys.platform.startswith("linux") or not bwrap:
+        return False
     import subprocess
+
+    try:
+        completed = subprocess.run(
+            [
+                bwrap,
+                "--ro-bind",
+                "/",
+                "/",
+                "--dev-bind",
+                "/dev",
+                "/dev",
+                "--proc",
+                "/proc",
+                "--unshare-pid",
+                "--die-with-parent",
+                "/bin/true",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0
+
+
+def _evaluation_dataset_access_mode() -> str:
+    if _bubblewrap_available():
+        return _BWRAP_DATASET_ACCESS
+    return _DIGEST_GUARD_DATASET_ACCESS
+
+
+def _resolve_protocol_entry(skill_dir: Path, entry: str) -> Path | None:
+    """Resolve one regular protocol entry without traversing symbolic links."""
+    try:
+        skill_root = skill_dir.resolve(strict=True)
+        relative_entry = Path(entry)
+        if relative_entry.is_absolute() or ".." in relative_entry.parts:
+            return None
+        component = skill_root
+        for part in relative_entry.parts:
+            component = component / part
+            if component.is_symlink():
+                return None
+        resolved = component.resolve(strict=True)
+        resolved.relative_to(skill_root)
+    except (OSError, ValueError):
+        return None
+    return resolved if resolved.is_file() else None
+
+
+def _valid_protocol_metric(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (OverflowError, TypeError, ValueError):
+        return False
+
+
+def _run_protocol_entry(
+    skill_dir: Path,
+    spec: Mapping[str, Any],
+    *,
+    dataset_path: Path | None = None,
+    output_dir: Path,
+    artifact_store: EvaluationArtifactStore | None = None,
+    framework_root: Path | None = None,
+) -> ProtocolRunOutcome:
+    """Run one pytest/command protocol in fresh scratch with a bounded process tree."""
+    import subprocess
+    import signal
 
     from .execution.environment import scrub_internal_control_credentials
     from .execution.python_runtime import get_skill_runner_python
 
-    entry_path = skill_dir / entry
-    if not entry_path.is_file():
-        return "failed"
+    started = time.monotonic()
+    entry_path = _resolve_protocol_entry(skill_dir, str(spec.get("entry", "")))
+    if entry_path is None:
+        return ProtocolRunOutcome("failed", reason_code="invalid_entry")
+    skill_root = skill_dir.resolve()
+
+    runner = str(spec.get("runner") or "pytest")
+    if runner not in {"pytest", "command"}:
+        return ProtocolRunOutcome("failed", reason_code="invalid_runner")
     try:
-        proc = subprocess.run(
-            [get_skill_runner_python(), "-m", "pytest", "-q", str(entry_path)],
-            cwd=str(skill_dir),
-            env=scrub_internal_control_credentials(os.environ),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=600,
+        timeout = max(1, min(int(spec.get("timeout_seconds") or 600), 3600))
+    except (TypeError, ValueError, OverflowError):
+        return ProtocolRunOutcome("failed", reason_code="result_invalid")
+    scratch = output_dir
+    try:
+        scratch.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        return ProtocolRunOutcome("failed", reason_code="output_not_fresh")
+    except OSError:
+        return ProtocolRunOutcome("failed", reason_code="output_unavailable")
+
+    result_path = scratch / "evaluation_result.json"
+    stdout_path = scratch / "stdout.log"
+    stderr_path = scratch / "stderr.log"
+
+    def finalize(outcome: ProtocolRunOutcome) -> ProtocolRunOutcome:
+        if artifact_store is None:
+            return outcome
+        try:
+            bundle_ref = artifact_store.capture_protocol_output(
+                scratch,
+                outcome.evidence_refs,
+                protocol_id=str(spec.get("id") or ""),
+                protocol_kind=str(spec.get("kind") or ""),
+            )
+        except EvaluationArtifactStoreError:
+            return replace(
+                outcome,
+                outcome="failed",
+                reason_code="output_unavailable",
+            )
+        references = tuple(dict.fromkeys((*outcome.evidence_refs, bundle_ref)))
+        if len(references) > 20:
+            references = (*references[:19], bundle_ref)
+        return replace(outcome, evidence_refs=references)
+
+    environment = scrub_internal_control_credentials(os.environ)
+    environment.update(
+        {
+            "OMICSCLAW_EVALUATION_OUTPUT": str(scratch),
+            "OMICSCLAW_EVALUATION_RESULT": str(result_path),
+            # The protocol digest/environment contract is computed against the
+            # governed Skill runner. A nested shared-runner call must not select
+            # or provision a different adaptive overlay after that identity was
+            # frozen, otherwise the scientific producer and recorded evaluator
+            # environment diverge.
+            "OMICSCLAW_SKIP_ADAPTIVE_ENV": "1",
+            "OMICSCLAW_ADAPTIVE_ENV": "off",
+            "OMICSCLAW_EVALUATION_DATASET_ACCESS": str(
+                spec.get("dataset_access_mode") or _evaluation_dataset_access_mode()
+            ),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+    )
+    if framework_root is not None:
+        if framework_root.is_symlink() or not framework_root.is_dir():
+            return finalize(
+                ProtocolRunOutcome("failed", reason_code="execution_error")
+            )
+        environment["PYTHONPATH"] = str(framework_root.resolve())
+    if dataset_path is not None:
+        environment["OMICSCLAW_EVALUATION_DATASET"] = str(dataset_path)
+    expected_revision = spec.get("skill_revision")
+    if isinstance(expected_revision, Mapping):
+        environment["OMICSCLAW_EVALUATION_SKILL_REVISION"] = json.dumps(
+            dict(expected_revision), sort_keys=True, separators=(",", ":")
         )
-    except (subprocess.TimeoutExpired, OSError):
-        return "failed"
-    return "succeeded" if proc.returncode == 0 else "failed"
+
+    command = [get_skill_runner_python()]
+    if runner == "pytest":
+        command.extend(["-m", "pytest", "-q", str(entry_path)])
+    else:
+        command.append(str(entry_path))
+
+    dataset_access_mode = str(
+        spec.get("dataset_access_mode") or _evaluation_dataset_access_mode()
+    )
+    if dataset_path is not None:
+        if dataset_access_mode == _BWRAP_DATASET_ACCESS:
+            bwrap = shutil.which("bwrap")
+            if not bwrap:
+                return finalize(
+                    ProtocolRunOutcome("failed", reason_code="execution_error")
+                )
+            command = [
+                bwrap,
+                "--bind",
+                "/",
+                "/",
+                "--ro-bind",
+                str(dataset_path),
+                str(dataset_path),
+                "--dev-bind",
+                "/dev",
+                "/dev",
+                "--proc",
+                "/proc",
+                "--unshare-pid",
+                "--die-with-parent",
+                *command,
+            ]
+        elif dataset_access_mode != _DIGEST_GUARD_DATASET_ACCESS:
+            return finalize(
+                ProtocolRunOutcome("failed", reason_code="result_invalid")
+            )
+
+    process = None
+    timed_out = False
+
+    def stop_process_group() -> None:
+        if process is None or process.poll() is not None:
+            return
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                return
+            process.wait(timeout=5)
+
+    try:
+        with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+            process = subprocess.Popen(
+                command,
+                cwd=str(skill_root),
+                env=environment,
+                stdout=stdout,
+                stderr=stderr,
+                start_new_session=True,
+            )
+            try:
+                return_code = process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                stop_process_group()
+                timed_out = True
+    except (OSError, subprocess.SubprocessError):
+        try:
+            stop_process_group()
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return finalize(
+            ProtocolRunOutcome(
+                "failed",
+                reason_code="execution_error",
+                duration_seconds=time.monotonic() - started,
+            )
+        )
+    except BaseException:
+        try:
+            stop_process_group()
+        except (OSError, subprocess.SubprocessError):
+            pass
+        raise
+
+    duration = time.monotonic() - started
+    if timed_out:
+        return finalize(
+            ProtocolRunOutcome(
+                "failed",
+                reason_code="timeout",
+                duration_seconds=duration,
+            )
+        )
+    if runner == "pytest":
+        return finalize(
+            ProtocolRunOutcome(
+                "succeeded" if return_code == 0 else "failed",
+                reason_code="none" if return_code == 0 else "protocol_failed",
+                duration_seconds=duration,
+            )
+        )
+
+    try:
+        raw_result = result_path.read_bytes()
+        if len(raw_result) > 64 * 1024:
+            raise ValueError("protocol result exceeds 64 KiB")
+
+        def reject_duplicate_keys(pairs):
+            decoded = {}
+            for key, value in pairs:
+                if key in decoded:
+                    raise ValueError(f"duplicate JSON key: {key}")
+                decoded[key] = value
+            return decoded
+
+        payload = json.loads(
+            raw_result.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=lambda value: (_ for _ in ()).throw(
+                ValueError(f"non-finite JSON number: {value}")
+            ),
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        return finalize(
+            ProtocolRunOutcome(
+                "failed",
+                reason_code=("execution_error" if return_code != 0 else "result_invalid"),
+                duration_seconds=duration,
+            )
+        )
+    allowed = {
+        "schema_version",
+        "outcome",
+        "reason_code",
+        "metrics",
+        "evidence_refs",
+        "skill_revision",
+    }
+    if (
+        not isinstance(payload, dict)
+        or not set(payload).issubset(allowed)
+        or payload.get("schema_version") != 1
+        or payload.get("outcome") not in PROTOCOL_OUTCOMES
+        or payload.get("reason_code") not in PROTOCOL_REASON_CODES
+        or not isinstance(payload.get("metrics", {}), dict)
+        or len(payload.get("metrics", {})) > 32
+        or any(
+            not _valid_protocol_metric(value)
+            for value in payload.get("metrics", {}).values()
+        )
+        or not isinstance(payload.get("evidence_refs", []), list)
+        or len(payload.get("evidence_refs", [])) > 20
+        or any(
+            not isinstance(item, str) or not item or len(item) > 256
+            for item in payload.get("evidence_refs", [])
+        )
+    ):
+        return finalize(
+            ProtocolRunOutcome(
+                "failed", reason_code="result_invalid", duration_seconds=duration
+            )
+        )
+
+    if str(spec.get("kind")) == "benchmark" and (
+        not isinstance(expected_revision, Mapping)
+        or payload.get("skill_revision") != dict(expected_revision)
+    ):
+        return finalize(
+            ProtocolRunOutcome(
+                "failed", reason_code="revision_unverified", duration_seconds=duration
+            )
+        )
+    outcome = str(payload["outcome"])
+    reason_code = str(payload["reason_code"])
+    if return_code != 0 and outcome == "succeeded":
+        outcome = "failed"
+        reason_code = "protocol_failed"
+    return finalize(
+        ProtocolRunOutcome(
+            outcome,
+            reason_code=reason_code,
+            metrics=payload.get("metrics", {}),
+            evidence_refs=tuple(
+                item
+                for item in payload.get("evidence_refs", [])
+                if isinstance(item, str)
+            ),
+            duration_seconds=duration,
+        )
+    )
 
 
 # Split a requirement string ("scanpy>=1.10", "leidenalg[extra]") to its bare
@@ -131,6 +476,15 @@ _DISTRIBUTION_PROBE = (
     "    k=re.sub(r'[-_.]+','-',n).lower()\n"
     "    if k not in out: out[k]=d.version or ''\n"
     "json.dump(out,sys.stdout)\n"
+)
+_RUNTIME_IDENTITY_PROBE = (
+    "import json,platform,sys\n"
+    "json.dump({"
+    "'implementation':platform.python_implementation(),"
+    "'python_version':list(sys.version_info[:3]),"
+    "'platform':sys.platform,"
+    "'machine':platform.machine()"
+    "},sys.stdout)\n"
 )
 
 
@@ -246,6 +600,66 @@ def _manifest_dependency_versions(manifest: SkillManifest) -> dict[str, str]:
     return {name: _installed_dependency_version(name) for name in sorted(packages)}
 
 
+@lru_cache(maxsize=8)
+def _runner_runtime_identity(python_executable: str) -> Mapping[str, Any]:
+    """Bounded identity probe for the interpreter that executes protocols."""
+    import platform
+    import subprocess
+
+    if python_executable == sys.executable:
+        return {
+            "implementation": platform.python_implementation(),
+            "python_version": list(sys.version_info[:3]),
+            "platform": sys.platform,
+            "machine": platform.machine(),
+        }
+    try:
+        process = subprocess.run(
+            [python_executable, "-c", _RUNTIME_IDENTITY_PROBE],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        payload = json.loads(process.stdout) if process.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        payload = None
+    if not isinstance(payload, dict):
+        return {"runtime": "unresolved"}
+    return {str(key): payload[key] for key in sorted(payload)}
+
+
+def _invalidate_evaluation_environment_caches() -> None:
+    """Force the next explicit audit/evaluation refresh to probe live runtime state."""
+    _runner_distribution_versions.cache_clear()
+    _runner_runtime_identity.cache_clear()
+    _bubblewrap_available.cache_clear()
+
+
+def _evaluation_environment_id(manifest: SkillManifest) -> str:
+    """Opaque identity of the interpreter and declared dependency environment."""
+    from .execution.python_runtime import get_skill_runner_python
+
+    runner_python = get_skill_runner_python()
+    payload = {
+        "runner_python": str(Path(runner_python).resolve()),
+        "runtime": _runner_runtime_identity(runner_python),
+        "dependencies": _manifest_dependency_versions(manifest),
+        "dataset_access_mode": _evaluation_dataset_access_mode(),
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _protocol_spec(protocol: Any) -> dict[str, Any]:
+    """One canonical JSON-compatible protocol contract from the schema model."""
+    spec = dict(protocol.model_dump(mode="json"))
+    dataset_ref = spec.get("dataset_ref")
+    if isinstance(dataset_ref, dict) and not dataset_ref.get("members"):
+        # Preserve digests earned before selected-member bundles were added.
+        dataset_ref.pop("members", None)
+    return spec
+
+
 def _manifest_protocol_digests(manifest: SkillManifest, skill_dir: Path) -> dict[str, str]:
     """Current digest of each declared Evaluation Protocol (ADR 0074 §6.1).
 
@@ -258,24 +672,27 @@ def _manifest_protocol_digests(manifest: SkillManifest, skill_dir: Path) -> dict
     dependency_versions = _manifest_dependency_versions(manifest)
     digests: dict[str, str] = {}
     for proto in manifest.validation.protocols:
-        entry_path = skill_dir / proto.entry
-        try:
-            entry_bytes = entry_path.read_bytes()
-        except OSError:
-            entry_bytes = b""
+        spec = _protocol_spec(proto)
+        entry_path = _resolve_protocol_entry(skill_dir, proto.entry)
+        entry_bytes = entry_path.read_bytes() if entry_path is not None else b""
         digests[proto.id] = protocol_digest(
-            protocol={
-                "id": proto.id,
-                "kind": proto.kind,
-                "entry": proto.entry,
-                "dataset_ref": proto.dataset_ref,
-                "repeats": proto.repeats,
-                "metrics": proto.metrics,
-            },
+            protocol=spec,
             entry_bytes=entry_bytes,
             dependency_versions=dependency_versions,
         )
     return digests
+
+
+def _manifest_protocol_contracts(manifest: SkillManifest) -> dict[str, dict[str, Any]]:
+    """Current declarations used to validate stored evidence, not result claims."""
+    environment_id = _evaluation_environment_id(manifest)
+    contracts: dict[str, dict[str, Any]] = {}
+    for protocol in manifest.validation.protocols:
+        spec = _protocol_spec(protocol)
+        spec["environment_id"] = environment_id
+        spec["dataset_access_mode"] = _evaluation_dataset_access_mode()
+        contracts[protocol.id] = spec
+    return contracts
 
 # ADR 0074 additive Desktop snapshot contract (see docs/design §9.2). These
 # fields are added to GET /skill-evolution without removing the existing
@@ -283,6 +700,7 @@ def _manifest_protocol_digests(manifest: SkillManifest, skill_dir: Path) -> dict
 _AUDIT_SNAPSHOT_SCHEMA_VERSION = 1
 _AUDIT_CAPABILITIES: tuple[str, ...] = (
     "experience_view",
+    "invocation_experience",
     "effective_validation",
     "audit_summary",
 )
@@ -335,7 +753,13 @@ def _build_registry_revision_resolver(skills_root: Path) -> CachedRevisionResolv
 
     def enumerate_skills() -> Iterable[SkillIdentityInput]:
         entry_by_dir.clear()
-        for manifest_path in sorted(skills_root.rglob("skill.yaml")):
+        inventory = discover_skill_inventory(skills_root)
+        for location in inventory.locations:
+            if not location.enabled:
+                continue
+            manifest_path = location.skill_dir / "skill.yaml"
+            if not manifest_path.is_file():
+                continue
             try:
                 manifest = parse_skill_manifest(load_skill_yaml(manifest_path))
             except Exception:
@@ -350,6 +774,7 @@ def _build_registry_revision_resolver(skills_root: Path) -> CachedRevisionResolv
                 cache_key=str(skill_dir),
                 mtime_signature=_identity_mtime_signature(manifest_path, entry_path),
                 protocol_digests=_manifest_protocol_digests(manifest, skill_dir),
+                protocol_contracts=_manifest_protocol_contracts(manifest),
             )
 
     def compute_identity(cache_key: str) -> tuple[str, str]:
@@ -715,6 +1140,8 @@ class SkillEvolutionGovernance:
         minimum_gotcha_counterexamples: int = 1,
         audit_runtime: SkillAuditRuntime | None = None,
         evaluation_store: EvaluationResultStore | None = None,
+        evaluation_artifact_store: EvaluationArtifactStore | None = None,
+        activation_run_one=None,
     ) -> None:
         if minimum_demo_executions < 1:
             raise ValueError("minimum_demo_executions must be at least 1")
@@ -749,6 +1176,14 @@ class SkillEvolutionGovernance:
         self._authority_epoch = uuid4().hex
         self._snapshot_revision = 0
         self._evaluation_store = evaluation_store or default_evaluation_result_store()
+        self._evaluation_artifact_store = (
+            evaluation_artifact_store
+            or default_evaluation_artifact_store(self._evaluation_store)
+        )
+        # Testable seam for the mandatory post-commit evaluation of an activated
+        # manifest revision.  Production leaves this unset and uses the same
+        # shared-runner protocol path as an ordinary evaluate() request.
+        self._activation_run_one = activation_run_one
         if audit_runtime is not None:
             self._revision_resolver: CachedRevisionResolver | None = None
             self._audit_runtime = audit_runtime
@@ -783,21 +1218,16 @@ class SkillEvolutionGovernance:
 
         Recomputes the (cached) revision identities, the per-Skill Experience
         Views and their summary, bumping ``snapshot_revision`` only when the
-        read models actually change. Defensive: an audit-read failure keeps the
-        prior read models rather than breaking proposal synthesis — ADR 0074
-        treats an audit failure as a framework incident, not a governance break.
+        read models actually change. Projection failures propagate: serving an
+        old successful projection after the evidence store becomes corrupt would
+        make stale evidence look authoritative.
         """
-        try:
-            if self._revision_resolver is not None:
-                self._revision_resolver.invalidate()
-            views = tuple(self._audit_runtime.experience_views())
-            summary = self._audit_runtime.summary(views)
-        except Exception:
-            logger.warning(
-                "Audit read-model refresh failed; keeping prior read models",
-                exc_info=True,
-            )
-            return
+        self._audit_readmodels_computed = False
+        _invalidate_evaluation_environment_caches()
+        if self._revision_resolver is not None:
+            self._revision_resolver.invalidate()
+        views = tuple(self._audit_runtime.experience_views())
+        summary = self._audit_runtime.summary(views)
         if views != self._audit_views or summary != self._audit_summary:
             self._snapshot_revision += 1
         self._audit_views = views
@@ -811,6 +1241,25 @@ class SkillEvolutionGovernance:
             if view.skill_revision.skill_id == skill_id:
                 return view.to_dict()
         return None
+
+    def invocation_experience(self, skill_id: str) -> dict[str, Any] | None:
+        """Targeted, prompt-safe Experience View for one selected Skill.
+
+        Unlike the fleet audit endpoint this path resolves only ``skill_id`` so
+        Agent context assembly does not hash every Skill before each invocation.
+        The returned shape is still the same derived view and contains no raw
+        logs, paths, prompts, or scientific data.
+        """
+        normalized = str(skill_id or "").strip()
+        if not normalized:
+            return None
+        if self._audit_readmodels_computed:
+            for view in self._audit_views:
+                if view.skill_revision.skill_id == normalized:
+                    return view.to_dict()
+            return None
+        targeted = self._audit_runtime.experience_view(normalized)
+        return targeted.to_dict() if targeted is not None else None
 
     def experience_page(
         self,
@@ -870,6 +1319,7 @@ class SkillEvolutionGovernance:
         """
         if self._revision_resolver is None:
             raise RuntimeError("evaluate() requires the registry-backed resolver")
+        _invalidate_evaluation_environment_caches()
         self._revision_resolver.invalidate()
         current = next(
             (cr for cr in self._revision_resolver() if cr.revision.skill_id == skill_id),
@@ -879,38 +1329,260 @@ class SkillEvolutionGovernance:
             raise KeyError(f"unknown skill: {skill_id}")
         manifest_path, manifest, _hash = self._find_manifest(skill_id)
         skill_dir = manifest_path.parent
-        protocols = [
-            (
-                {
-                    "id": proto.id,
-                    "kind": proto.kind,
-                    "entry": proto.entry,
-                    "dataset_ref": proto.dataset_ref,
-                    "repeats": proto.repeats,
-                    "metrics": proto.metrics,
-                },
-                current.protocol_digests.get(proto.id, ""),
+        protocols: list[tuple[dict[str, Any], str]] = []
+        dataset_references = {}
+        for protocol in manifest.validation.protocols:
+            spec = _protocol_spec(protocol)
+            contract = current.protocol_contracts.get(protocol.id, {})
+            spec["environment_id"] = str(contract.get("environment_id") or "")
+            spec["dataset_access_mode"] = str(
+                contract.get("dataset_access_mode")
+                or _evaluation_dataset_access_mode()
             )
-            for proto in manifest.validation.protocols
-        ]
+            spec["skill_revision"] = current.revision.to_dict()
+            if protocol.dataset_ref is not None:
+                dataset_path, dataset_digest = resolve_repository_dataset(
+                    self.skills_root.parent,
+                    protocol.dataset_ref,
+                )
+                spec["dataset_path"] = str(dataset_path)
+                spec["dataset_digest"] = dataset_digest
+                dataset_references[protocol.id] = protocol.dataset_ref
+            protocols.append(
+                (spec, current.protocol_digests.get(protocol.id, ""))
+            )
         runner = run_one or self._make_default_protocol_runner(skill_id, skill_dir)
         results = run_protocol_evaluations(current.revision, protocols, runner)
+
+        # A command may import verifier code from the benchmark tree. Re-hash
+        # every referenced case before admitting any result so generated or
+        # modified benchmark bytes cannot silently earn evidence.
+        drifted_protocols: set[str] = set()
+        for protocol_id, reference in dataset_references.items():
+            try:
+                resolve_repository_dataset(self.skills_root.parent, reference)
+            except DatasetIntegrityError:
+                drifted_protocols.add(protocol_id)
+        if drifted_protocols:
+            results = [
+                replace(
+                    result,
+                    outcome="failed",
+                    reason_code="dataset_integrity_failed",
+                )
+                if result.protocol_id in drifted_protocols
+                else result
+                for result in results
+            ]
+
+        # Re-resolve after execution. A result is appended only when the exact
+        # revision and protocol digests frozen before spawn remain current.
+        self._revision_resolver.invalidate()
+        after = next(
+            (
+                revision
+                for revision in self._revision_resolver()
+                if revision.revision.skill_id == skill_id
+            ),
+            None,
+        )
+        if (
+            after is None
+            or after.revision != current.revision
+            or dict(after.protocol_digests) != dict(current.protocol_digests)
+        ):
+            raise RuntimeError("Skill revision changed during protocol evaluation")
         for result in results:
             self._evaluation_store.append(current.revision, result)
         self._recompute_audit_readmodels()
         return results
 
+    def prepare_activation(self, skill_id: str, *, run_one=None) -> EvolutionProposal | None:
+        """Evaluate one published draft and return its human-gated activation.
+
+        The Agent may call this method after scaffold publication.  It can run
+        declared protocols and submit a proposal, but it cannot approve or
+        mutate the Skill.  A failed/incomplete evaluation leaves the draft
+        non-routable and returns ``None``.
+        """
+        _path, manifest, _manifest_hash = self._find_manifest(skill_id)
+        if (
+            manifest.lifecycle.status != "draft"
+            or manifest.validation.level != _SUPPORTED_FROM_LEVEL
+        ):
+            raise EvolutionRevalidationError(
+                "activation preparation requires a draft/smoke-only Skill"
+            )
+        if not any(protocol.kind == "demo" for protocol in manifest.validation.protocols):
+            raise EvolutionRevalidationError(
+                "activation preparation requires a declared demo Evaluation Protocol"
+            )
+        self.evaluate(skill_id, run_one=run_one)
+        self.refresh()
+        candidates = [
+            proposal
+            for proposal in self.proposals.list_latest()
+            if proposal.target_skill == skill_id
+            and proposal.kind == "skill_activation"
+            and proposal.status == "pending"
+        ]
+        return max(candidates, key=lambda proposal: proposal.created_at, default=None)
+
+    def _current_revision(self, skill_id: str):
+        if self._revision_resolver is None:
+            raise EvolutionRevalidationError(
+                "activation requires the registry-backed revision resolver"
+            )
+        self._revision_resolver.invalidate()
+        current = next(
+            (
+                revision
+                for revision in self._revision_resolver()
+                if revision.revision.skill_id == skill_id
+            ),
+            None,
+        )
+        if current is None:
+            raise EvolutionRevalidationError(
+                f"activation target is not registry-visible: {skill_id}"
+            )
+        return current
+
+    def _eligible_activation_batches(self, skill_id: str) -> list[list[Any]]:
+        """Complete passing demo batches for the current exact revision."""
+        current = self._current_revision(skill_id)
+        results = self._evaluation_store.results_for(current.revision)
+        grouped: dict[tuple[str, str, str, str, str], list[Any]] = {}
+        for result in results:
+            contract = current.protocol_contracts.get(result.protocol_id, {})
+            expected_digest = current.protocol_digests.get(result.protocol_id, "")
+            expected_environment = str(contract.get("environment_id") or "")
+            expected_repeats = int(contract.get("repeats") or 1)
+            if (
+                str(contract.get("kind") or "") != "demo"
+                or result.kind != "demo"
+                or not expected_digest
+                or result.protocol_digest != expected_digest
+                or result.repeats != expected_repeats
+                or str(contract.get("pass_rule") or "all_runs") != "all_runs"
+                or (expected_environment and result.environment_id != expected_environment)
+            ):
+                continue
+            key = (
+                result.protocol_id,
+                result.protocol_digest,
+                result.evaluation_id,
+                result.environment_id,
+                result.dataset_digest,
+            )
+            grouped.setdefault(key, []).append(result)
+
+        eligible: list[list[Any]] = []
+        for batch in grouped.values():
+            repeats = batch[0].repeats
+            if (
+                len(batch) != repeats
+                or {result.run_index for result in batch} != set(range(repeats))
+                or any(
+                    result.outcome != "succeeded"
+                    or result.reason_code != "none"
+                    or not result.evidence_refs
+                    for result in batch
+                )
+            ):
+                continue
+            eligible.append(sorted(batch, key=lambda result: result.run_index))
+        return eligible
+
+    def _activation_support(self, skill_id: str) -> list[str]:
+        batches = self._eligible_activation_batches(skill_id)
+        if not batches:
+            return []
+        latest = max(
+            batches,
+            key=lambda batch: (
+                max(result.occurred_at for result in batch),
+                batch[0].evaluation_id,
+            ),
+        )
+        return sorted(result.result_id for result in latest)
+
     def _make_default_protocol_runner(self, skill_id: str, skill_dir: Path):
-        def run_one(spec: Mapping[str, Any]) -> str:
+        def run_one(spec: Mapping[str, Any]) -> ProtocolRunOutcome:
             if str(spec.get("kind")) == "demo":
-                from .runner import run_skill
+                from .registry import OmicsRegistry
+                from .runner import _run_skill_bound
+
+                # Bind evaluation to the governance instance's exact Registry
+                # root.  ``run_skill()`` intentionally resolves the process-wide
+                # production Registry; authoring/evolution may instead govern a
+                # freshly published draft in another repository root.  The
+                # private bound entry keeps the same shared-runner pipeline while
+                # preventing either a default-root fallback or a revision race.
+                evaluation_registry = OmicsRegistry()
+                evaluation_registry.load_all(self.skills_root)
+                expected_revision = spec.get("skill_revision")
+                bound_revision = (
+                    {
+                        "skill_id": str(expected_revision.get("skill_id") or ""),
+                        "skill_version": str(expected_revision.get("version") or ""),
+                        "manifest_hash": str(
+                            expected_revision.get("manifest_hash") or ""
+                        ),
+                        "source_hash": str(expected_revision.get("source_hash") or ""),
+                    }
+                    if isinstance(expected_revision, Mapping)
+                    else None
+                )
 
                 with tempfile.TemporaryDirectory(prefix="omicsclaw-eval-") as tmp:
-                    result = run_skill(
-                        skill_id, demo=True, output_dir=str(Path(tmp) / "output")
+                    output_dir = Path(tmp) / "output"
+                    result = _run_skill_bound(
+                        skill_id,
+                        demo=True,
+                        output_dir=str(output_dir),
+                        _registry_snapshot=evaluation_registry.snapshot(),
+                        _expected_skill_revision=bound_revision,
                     )
-                return "succeeded" if getattr(result, "success", False) else "failed"
-            return _run_protocol_entry(skill_dir, str(spec.get("entry", "")))
+                    captured_output = result.output_path or output_dir
+                    try:
+                        bundle_ref = self._evaluation_artifact_store.capture_protocol_output(
+                            captured_output,
+                            (),
+                            protocol_id=str(spec.get("id") or ""),
+                            protocol_kind="demo",
+                        )
+                    except EvaluationArtifactStoreError:
+                        return ProtocolRunOutcome(
+                            "failed",
+                            reason_code="output_unavailable",
+                            duration_seconds=float(
+                                getattr(result, "duration_seconds", 0.0) or 0.0
+                            ),
+                        )
+                return ProtocolRunOutcome(
+                    "succeeded" if getattr(result, "success", False) else "failed",
+                    reason_code=(
+                        "none"
+                        if getattr(result, "success", False)
+                        else str(getattr(result, "error_kind", "") or "skill_failed")
+                    ),
+                    duration_seconds=float(
+                        getattr(result, "duration_seconds", 0.0) or 0.0
+                    ),
+                    evidence_refs=(bundle_ref,),
+                )
+            dataset_value = spec.get("dataset_path")
+            dataset_path = Path(dataset_value) if isinstance(dataset_value, str) else None
+            with tempfile.TemporaryDirectory(prefix="omicsclaw-eval-") as tmp:
+                return _run_protocol_entry(
+                    skill_dir,
+                    spec,
+                    dataset_path=dataset_path,
+                    output_dir=Path(tmp) / "protocol",
+                    artifact_store=self._evaluation_artifact_store,
+                    framework_root=self.skills_root.parent,
+                )
 
         return run_one
 
@@ -947,6 +1619,56 @@ class SkillEvolutionGovernance:
             if self.proposals.submit_if_absent(review):
                 created.append(review)
         for path, manifest, manifest_hash in manifest_snapshots:
+            if (
+                manifest.lifecycle.status == "draft"
+                and manifest.validation.level == _SUPPORTED_FROM_LEVEL
+            ):
+                support = self._activation_support(manifest.id)
+                if support:
+                    current = self._current_revision(manifest.id)
+                    proposal = EvolutionProposal(
+                        proposal_id=self._activation_proposal_id(
+                            manifest.id,
+                            manifest.version,
+                            manifest_hash,
+                            support,
+                        ),
+                        created_at=datetime.now(timezone.utc).isoformat(),
+                        target_skill=manifest.id,
+                        skill_version=manifest.version,
+                        skill_hash=manifest_hash,
+                        source_hash=current.revision.source_hash,
+                        kind="skill_activation",
+                        status="pending",
+                        rationale=(
+                            "a complete declared demo Evaluation Protocol passed "
+                            "for the exact published draft revision"
+                        ),
+                        support_event_ids=[],
+                        support_evaluation_result_ids=support,
+                        counterexample_event_ids=[],
+                        proposed_change={
+                            "field": "lifecycle+validation",
+                            "lifecycle": {"from": "draft", "to": "mvp"},
+                            "validation": {
+                                "from": _SUPPORTED_FROM_LEVEL,
+                                "to": _SUPPORTED_TO_LEVEL,
+                            },
+                            "evidence_result_ids": support,
+                        },
+                        target_path_hash=_sha256(
+                            path.relative_to(self.skills_root)
+                            .as_posix()
+                            .encode("utf-8")
+                        ),
+                        proposed_by="system:evaluation",
+                        proposal_reason="exact-revision demo protocol passed",
+                    )
+                    if self.proposals.submit_if_absent(proposal):
+                        created.append(proposal)
+                # Draft Skills are deliberately excluded from ordinary health
+                # evolution, merge advice, and auto-routing until activation.
+                continue
             if manifest.lifecycle.status not in _ROUTABLE_LIFECYCLES:
                 continue
             events = grouped.get((manifest.id, manifest.version, manifest_hash), [])
@@ -2123,7 +2845,7 @@ class SkillEvolutionGovernance:
         target_before = target_path.read_bytes()
         self._validate_supporting_events(proposal)
         if (
-            proposal.kind == "validation_promotion"
+            proposal.kind in {"validation_promotion", "skill_activation"}
             and self._has_disqualifying_defect(proposal)
         ):
             self.proposals.mark_stale(
@@ -2186,14 +2908,16 @@ class SkillEvolutionGovernance:
                         "target Skill manifest changed before demo validation"
                     )
                 if (
-                    proposal.kind == "skill_deprecation"
+                    proposal.kind in {"skill_deprecation", "skill_activation"}
                     and validated_target_revision[1] != proposal.source_hash
                 ):
                     raise EvolutionRevalidationError(
-                        "deprecated target source no longer matches its evidence"
+                        "target source no longer matches its governed evidence"
                     )
 
-            if proposal.kind == "validation_promotion":
+            if proposal.kind == "skill_activation":
+                self._validate_supporting_evaluations(proposal)
+            elif proposal.kind == "validation_promotion":
                 self.execution_adapter.validate_demo(proposal.target_skill)
             elif proposal.kind == "validation_demotion":
                 self.execution_adapter.validate_demo_defect(proposal.target_skill)
@@ -2259,7 +2983,7 @@ class SkillEvolutionGovernance:
                         "target Skill execution source changed during demo validation"
                     )
             if (
-                proposal.kind == "validation_promotion"
+                proposal.kind in {"validation_promotion", "skill_activation"}
                 and self._has_disqualifying_defect(proposal)
             ):
                 raise EvolutionRevalidationError(
@@ -2283,10 +3007,22 @@ class SkillEvolutionGovernance:
             else:
                 parsed = load_skill_yaml(live_path)
                 self._validate_changed_manifest(parsed, proposal)
+            if proposal.kind == "skill_activation":
+                # The approval changes manifest identity.  Evaluate the newly
+                # activated exact revision before the transaction can commit so
+                # its Experience View is current, not stale on arrival.
+                self.evaluate(
+                    proposal.target_skill,
+                    run_one=self._activation_run_one,
+                )
+                if not self._activation_support(proposal.target_skill):
+                    raise EvolutionRevalidationError(
+                        "activated manifest revision did not pass its demo protocol"
+                    )
             if proposal.kind == "skill_deprecation":
                 self._validate_replacement_snapshot(proposal)
             if (
-                proposal.kind == "validation_promotion"
+                proposal.kind in {"validation_promotion", "skill_activation"}
                 and self._has_disqualifying_defect(proposal)
             ):
                 raise EvolutionRevalidationError(
@@ -2314,7 +3050,7 @@ class SkillEvolutionGovernance:
             # arrives in that final window rolls back this whole transaction
             # instead of approving a now-disqualified manifest.
             if (
-                proposal.kind == "validation_promotion"
+                proposal.kind in {"validation_promotion", "skill_activation"}
                 and self._has_disqualifying_defect(proposal)
             ):
                 raise EvolutionRevalidationError(
@@ -2325,6 +3061,11 @@ class SkillEvolutionGovernance:
             if projection_snapshot is not None:
                 self._restore_projection_files(projection_snapshot)
             self._reload_runtime_registry_if_owned()
+            if proposal.kind == "skill_activation":
+                # retrieval evaluated the transient activated revision before a
+                # later validator failed.  Once the manifest bytes are restored,
+                # rebuild the cache so that transient revision is not served.
+                self._recompute_audit_readmodels()
 
         def commit_approved(approved: EvolutionProposal) -> None:
             # The last defect recheck and durable approved record share the
@@ -2332,7 +3073,13 @@ class SkillEvolutionGovernance:
             # entirely before this check or entirely after the approval state
             # is durable; it cannot land in a final check/append gap.
             with self.ledger.locked_events() as events:
-                self._validate_supporting_events(proposal, events=events)
+                if proposal.kind == "skill_activation":
+                    if not self._activation_support(proposal.target_skill):
+                        raise EvolutionRevalidationError(
+                            "activated revision lost its demo evaluation evidence"
+                        )
+                else:
+                    self._validate_supporting_events(proposal, events=events)
                 if proposal.kind != "gotcha":
                     if expected_target_revision is None:
                         raise EvolutionRevalidationError(
@@ -2368,7 +3115,7 @@ class SkillEvolutionGovernance:
                         proposal,
                     )
                 if (
-                    proposal.kind == "validation_promotion"
+                    proposal.kind in {"validation_promotion", "skill_activation"}
                     and self._has_disqualifying_defect(proposal, events=events)
                 ):
                     raise EvolutionRevalidationError(
@@ -2736,9 +3483,17 @@ class SkillEvolutionGovernance:
 
     def _manifest_snapshots(self) -> list[tuple[Path, SkillManifest, str]]:
         snapshots: list[tuple[Path, SkillManifest, str]] = []
-        for path in sorted(self.skills_root.rglob("skill.yaml")):
-            relative = path.relative_to(self.skills_root)
-            if any(part.startswith((".", "__", "_")) for part in relative.parts[:-1]):
+        try:
+            inventory = discover_skill_inventory(self.skills_root)
+        except (OSError, ValueError) as exc:
+            raise EvolutionRevalidationError(
+                f"canonical Skill inventory is invalid: {exc}"
+            ) from exc
+        for location in inventory.locations:
+            if not location.enabled:
+                continue
+            path = location.skill_dir / "skill.yaml"
+            if not path.is_file():
                 continue
             payload = path.read_bytes()
             raw = yaml.safe_load(payload.decode("utf-8"))
@@ -2960,6 +3715,28 @@ class SkillEvolutionGovernance:
         return hashlib.sha256(basis).hexdigest()[:24]
 
     @staticmethod
+    def _activation_proposal_id(
+        skill_id: str,
+        version: str,
+        skill_hash: str,
+        result_ids: list[str],
+    ) -> str:
+        basis = json.dumps(
+            [
+                skill_id,
+                version,
+                skill_hash,
+                "draft",
+                "mvp",
+                _SUPPORTED_FROM_LEVEL,
+                _SUPPORTED_TO_LEVEL,
+                sorted(result_ids),
+            ],
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(basis).hexdigest()[:24]
+
+    @staticmethod
     def _demotion_proposal_id(skill_id: str, version: str, skill_hash: str) -> str:
         basis = json.dumps(
             [
@@ -3111,6 +3888,34 @@ class SkillEvolutionGovernance:
             if transition is not None
             else None
         )
+        if proposal.kind == "skill_activation":
+            support = proposal.support_evaluation_result_ids
+            expected = {
+                "field": "lifecycle+validation",
+                "lifecycle": {"from": "draft", "to": "mvp"},
+                "validation": {
+                    "from": _SUPPORTED_FROM_LEVEL,
+                    "to": _SUPPORTED_TO_LEVEL,
+                },
+                "evidence_result_ids": support,
+            }
+            if (
+                proposal.support_event_ids
+                or not support
+                or support != sorted(set(support))
+                or any(not re.fullmatch(r"[0-9a-f]{32}", result_id) for result_id in support)
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", proposal.source_hash)
+                or proposal.proposal_id
+                != self._activation_proposal_id(
+                    proposal.target_skill,
+                    proposal.skill_version,
+                    proposal.skill_hash,
+                    support,
+                )
+                or proposal.proposed_by != "system:evaluation"
+                or proposal.proposal_reason != "exact-revision demo protocol passed"
+            ):
+                expected = None
         if proposal.kind == "skill_deprecation":
             replacement = str(proposal.proposed_change.get("superseded_by") or "")
             source_status = str(proposal.proposed_change.get("from") or "")
@@ -3245,6 +4050,9 @@ class SkillEvolutionGovernance:
         *,
         events: Iterable[SkillRunEvent] | None = None,
     ) -> None:
+        if proposal.kind == "skill_activation":
+            self._validate_supporting_evaluations(proposal)
+            return
         available = self.ledger.events() if events is None else events
         by_id = {event.event_id: event for event in available}
         selected: list[SkillRunEvent] = []
@@ -3379,6 +4187,40 @@ class SkillEvolutionGovernance:
                 f"proposal lacks {label} evidence"
             )
 
+    def _validate_supporting_evaluations(
+        self,
+        proposal: EvolutionProposal,
+        *,
+        require_candidate_state: bool = True,
+    ) -> None:
+        _path, manifest, manifest_hash = self._find_manifest(proposal.target_skill)
+        current = self._current_revision(proposal.target_skill)
+        if (
+            manifest.version != proposal.skill_version
+            or manifest_hash != proposal.skill_hash
+            or current.revision.manifest_hash != proposal.skill_hash
+            or current.revision.source_hash != proposal.source_hash
+        ):
+            raise EvolutionRevalidationError(
+                "activation evaluation no longer matches the exact Skill revision"
+            )
+        if require_candidate_state and (
+            manifest.lifecycle.status != "draft"
+            or manifest.validation.level != _SUPPORTED_FROM_LEVEL
+        ):
+            raise EvolutionRevalidationError(
+                "activation target is no longer draft/smoke-only"
+            )
+        supported = set(proposal.support_evaluation_result_ids)
+        eligible = [
+            {result.result_id for result in batch}
+            for batch in self._eligible_activation_batches(proposal.target_skill)
+        ]
+        if supported not in eligible:
+            raise EvolutionRevalidationError(
+                "activation lacks one complete current demo evaluation batch"
+            )
+
     def _has_disqualifying_defect(
         self,
         proposal: EvolutionProposal,
@@ -3416,6 +4258,48 @@ class SkillEvolutionGovernance:
             f"evolution:{proposal.proposal_id}:events="
             + ",".join(proposal.support_event_ids)
         )
+        validation["level"] = _SUPPORTED_TO_LEVEL
+        validation["evidence"] = [
+            *[str(value) for value in evidence if str(value).strip()],
+            evidence_ref,
+        ]
+        parse_skill_manifest(raw)
+        return yaml.safe_dump(
+            raw,
+            sort_keys=False,
+            allow_unicode=True,
+            width=100,
+        ).encode("utf-8")
+
+    @staticmethod
+    def _activated_manifest_bytes(
+        before: bytes,
+        proposal: EvolutionProposal,
+    ) -> bytes:
+        raw = yaml.safe_load(before.decode("utf-8"))
+        if not isinstance(raw, dict):
+            raise EvolutionRevalidationError("skill.yaml must be a mapping")
+        lifecycle = raw.setdefault("lifecycle", {})
+        validation = raw.setdefault("validation", {})
+        if not isinstance(lifecycle, dict) or not isinstance(validation, dict):
+            raise EvolutionRevalidationError(
+                "lifecycle and validation must be mappings"
+            )
+        if str(lifecycle.get("status") or "mvp") != "draft":
+            raise EvolutionRevalidationError("activation requires lifecycle=draft")
+        if str(validation.get("level") or _SUPPORTED_FROM_LEVEL) != _SUPPORTED_FROM_LEVEL:
+            raise EvolutionRevalidationError(
+                "activation requires validation.level=smoke-only"
+            )
+        evidence = validation.setdefault("evidence", [])
+        if not isinstance(evidence, list):
+            raise EvolutionRevalidationError("validation.evidence must be a list")
+        evidence_ref = (
+            f"evolution:{proposal.proposal_id}:evaluation-results="
+            + ",".join(proposal.support_evaluation_result_ids)
+        )
+        lifecycle["status"] = "mvp"
+        lifecycle.pop("superseded_by", None)
         validation["level"] = _SUPPORTED_TO_LEVEL
         validation["evidence"] = [
             *[str(value) for value in evidence if str(value).strip()],
@@ -3498,6 +4382,8 @@ class SkillEvolutionGovernance:
         before: bytes,
         proposal: EvolutionProposal,
     ) -> bytes:
+        if proposal.kind == "skill_activation":
+            return cls._activated_manifest_bytes(before, proposal)
         if proposal.kind == "validation_promotion":
             return cls._promoted_manifest_bytes(before, proposal)
         if proposal.kind == "validation_demotion":
@@ -3656,6 +4542,26 @@ class SkillEvolutionGovernance:
             raise EvolutionRevalidationError("representation omitted evidence reference")
 
     @staticmethod
+    def _validate_activated_manifest(
+        manifest: SkillManifest,
+        proposal: EvolutionProposal,
+    ) -> None:
+        expected_ref = (
+            f"evolution:{proposal.proposal_id}:evaluation-results="
+            + ",".join(proposal.support_evaluation_result_ids)
+        )
+        if manifest.id != proposal.target_skill:
+            raise EvolutionRevalidationError("representation changed skill identity")
+        if manifest.version != proposal.skill_version:
+            raise EvolutionRevalidationError("representation changed skill version")
+        if manifest.lifecycle.status != "mvp":
+            raise EvolutionRevalidationError("representation did not activate lifecycle")
+        if manifest.validation.level != _SUPPORTED_TO_LEVEL:
+            raise EvolutionRevalidationError("representation did not validate activation")
+        if expected_ref not in manifest.validation.evidence:
+            raise EvolutionRevalidationError("representation omitted evaluation evidence")
+
+    @staticmethod
     def _validate_demoted_manifest(
         manifest: SkillManifest,
         proposal: EvolutionProposal,
@@ -3695,6 +4601,9 @@ class SkillEvolutionGovernance:
         manifest: SkillManifest,
         proposal: EvolutionProposal,
     ) -> None:
+        if proposal.kind == "skill_activation":
+            cls._validate_activated_manifest(manifest, proposal)
+            return
         if proposal.kind == "validation_promotion":
             cls._validate_promoted_manifest(manifest, proposal)
             return
@@ -3752,7 +4661,18 @@ class SkillEvolutionGovernance:
                     "retrieval revalidation did not observe deprecated replacement state"
                 )
             return
-        expected_level = str(proposal.proposed_change["to"])
+        if (
+            proposal.kind == "skill_activation"
+            and info.get("lifecycle_status") != "mvp"
+        ):
+            raise EvolutionRevalidationError(
+                "retrieval revalidation did not observe activated lifecycle"
+            )
+        expected_level = str(
+            proposal.proposed_change["validation"]["to"]
+            if proposal.kind == "skill_activation"
+            else proposal.proposed_change["to"]
+        )
         if info.get("validation_level") != expected_level:
             raise EvolutionRevalidationError(
                 f"retrieval revalidation did not observe {proposal.target_skill} "
@@ -3858,6 +4778,8 @@ class SkillEvolutionGovernance:
             self._reload_runtime_registry_if_owned()
             return
         self.projection_adapter.rebuild(self.skills_root)
+        if proposal.kind == "skill_activation":
+            self._recompute_audit_readmodels()
 
     def _restore_projection_files(self, snapshot: dict[str, bytes | None]) -> None:
         deleted_parents: set[Path] = set()

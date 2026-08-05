@@ -193,7 +193,7 @@ class KernelSession:
         client.load_connection_file(str(self._conn_file))
         client.start_channels()
         try:
-            client.wait_for_ready(timeout=self.startup_timeout)
+            self._wait_for_ready(client)
         except RuntimeError as exc:
             client.stop_channels()
             self._terminate_proc()
@@ -203,6 +203,33 @@ class KernelSession:
             ) from exc
         self._client = client
         self._alive = True
+
+    def _wait_for_ready(self, client) -> None:
+        """Wait through jupyter-client's transient IPC heartbeat race.
+
+        ``BlockingKernelClient`` has no KernelManager when OmicsClaw launches
+        bubblewrap itself.  During IPC startup its first heartbeat check can
+        therefore report ``Kernel died`` even though the owned process is still
+        alive and becomes ready a fraction of a second later.  Process liveness
+        is the authoritative early-failure signal; retries remain bounded by
+        the original startup deadline.
+        """
+
+        deadline = time.monotonic() + self.startup_timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("kernel_info reply timed out")
+            try:
+                client.wait_for_ready(timeout=remaining)
+                return
+            except RuntimeError:
+                if self._proc is None or self._proc.poll() is not None:
+                    raise
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise
+                time.sleep(min(0.25, remaining))
 
     def shutdown(self) -> None:
         if self._client is not None:

@@ -396,6 +396,21 @@ _Avoid_: "raw log", "analytics dump", "result.json copy"
 **Skill health ledger**: The append-only collection and aggregation of Skill run events, bucketed by skill id + version/hash + environment so dependency/resource failures and framework-validator failures are not counted as script defects.
 _Avoid_: "failure count", "leaderboard", "global skill score"
 
+**Skill collection**: The physical/navigation class emitted by the canonical Skill Inventory: `curated`, `run-derived`, or `user-installed`. It is not provenance, lifecycle, validation, routing eligibility, or a security boundary. Run-derived Skills use the domain-first path `skills/<domain>/run-derived/<skill>` so domain ownership and `_lib` source closure remain stable.
+_Avoid_: trust tier, provenance field, top-level run-derived domain, routing policy
+
+**Run-derived Skill**: A formal Skill whose typed authoring source was one Backend-resolved, successfully claimed Autonomous Run and whose physical collection is `run-derived`. Its `skill.yaml.provenance.source_ref` carries the opaque Run identity; no Agent-selected workspace path is part of the authoring contract. It becomes routable only after real Evaluation Protocol evidence and human governance, exactly like any other formal Skill.
+_Avoid_: generated folder, automatically trusted Skill, path-derived provenance, promoted notebook
+
+**Evaluation Protocol**: A versioned `skill.yaml` declaration that binds one exact Skill revision to an executable demo, fixture, benchmark, or stability check and its content, environment, repeat, metric, and pass contracts.
+_Avoid_: test file, suite leaderboard, Agent comparison, correctness proof
+
+**Benchmark Campaign**: A suite-level immutable experiment contract over a fixed case x Agent-condition x repeat matrix whose results never become validation evidence for one Skill.
+_Avoid_: Evaluation Protocol, benchmark Skill, pooled leaderboard, successful-case average
+
+**Coverage anchor condition**: The pre-registered Benchmark Campaign condition whose covered case set is reused as the common diagnostic subset for every condition while the strict denominator remains unchanged.
+_Avoid_: best-performing condition, post-hoc covered set, replacement denominator
+
 **Evolution proposal**: An append-only, evidence-bound candidate or decision for a Gotcha, validation change, promotion, deprecation, or replacement. It cannot write a formal Skill until a human approves it through Skill evolution governance and representation/execution/retrieval revalidation succeeds; failure rolls back exact governed bytes and any affected projections. Implemented writebacks are earned `smoke-only -> demo-validated`, reproduced-demo `demo-validated -> smoke-only`, exact-replacement `mvp|stable -> deprecated`, and exact-source conditional Gotcha narrative append to canonical `SKILL.md`. Automatic Gotcha evidence and post-approval source-drift review remain non-approvable `draft` states until a maintainer supplies or re-reviews structured wording. Parameter revision remains unimplemented.
 _Avoid_: "auto-fix", "self-edit", "automatic promotion"
 
@@ -442,6 +457,9 @@ _Avoid_: Run Manifest, persistent queue item, serialized Run Request, logs, arti
 
 **Run Manifest**: The Run-storage record of one Run's scientific provenance, including resolved inputs, parameters, methods, environment, Run Step lineage, artifact inventory and completion evidence.
 _Avoid_: Run Receipt, lifecycle registry, UI cache, output directory alone
+
+**Skill Replay Capsule**: The runner-owned, machine-readable reproduction contract for one completed standard Skill Run. `reproducibility/replay.json` freezes the exact Skill revision, content evidence for file/directory/free-form inputs, effective parameters, an allowlisted invocation, bounded producer-environment identity, result-semantic digest and declared scientific-artifact evidence; `environment.json` explains that the current environment evidence is not a complete lockfile, and `replay.sh` delegates to `oc replay`. Replay is an explicit Owner action that creates a fresh Run (and, for the canonical exact-demo slice, a fresh Run ID with explicit Unassigned Scope), then compares the two Capsules. It never mutates, resumes or automatically replays the original Run. It is distinct from the Autonomous Code Mini-Agent's **Replay artifact**, which owns genuinely generated `analysis.py`/notebook code.
+_Avoid_: generated Skill notebook, copied Skill source, Run Manifest, environment lockfile, restart recovery, overwrite-in-place rerun
 
 **Run Integrity Incident**: An append-only, content-free Control record that one closed Assignment, Receipt, Manifest or Process Tree Owner invariant failed; v1 stores only closed codes, opaque Run/Assignment IDs, Receipt revision, evidence version/digest and time, and never repairs or replays the Run.
 _Avoid_: exception log, traceback, path, Manifest body, Execution Reference, credential hash, incident acknowledgement, automatic retry
@@ -617,6 +635,9 @@ _Avoid_: "cache metrics" (too vague), "token accounting" (that is billing, a sup
 - A **Memory URI** with domain `core` and path starting with `agent` / `kh` / `my_user_default` is **routed to** `__shared__` by `namespace_policy` whenever something writes there. Both `core://agent` and `core://kh/*` are now wired: every memory-init path (Compat bot, MemoryClient legacy db_url, app/server.py chat lifespan, memory/server.py lifespan) calls `seed_knowhows()` after `init_db()`, mirroring the on-disk KH corpus into `__shared__` under `core://kh/<doc_id>`. `core://my_user_default` remains a reserved prefix awaiting a writer. Everything outside those three prefixes lives in the caller's current **Namespace**.
 - A **Versioned upsert**'s `migrated_to` chain is the only structure where **ReviewLog.rollback_to** can operate.
 - The **Analysis Router** classifies analysis-intent requests before execution; non-analysis chat stays on the normal conversational path.
+- An **Evaluation Protocol** can support the validation level of only the exact Skill revision, protocol digest, dataset content, and runner environment it evaluated.
+- A **Benchmark Campaign** compares Agent conditions on its frozen matrix; missing, failed, unsupported, and uncovered cells remain zero in the strict denominator.
+- The **Coverage anchor condition** defines one common covered-case diagnostic subset but never removes cells from a Benchmark Campaign's strict score.
 - An **Exact skill match** uses **Deterministic route, assisted parameterization**.
 - A **Partial skill match** uses **Skill-first composition**, then the **Autonomous Code Mini-Agent** handles the uncovered work through the **Autonomous Code Runner** boundary.
 - A **No skill match** enters the **Autonomous Analysis Path** and uses the **Autonomous Code Mini-Agent** directly.
@@ -688,6 +709,9 @@ _Avoid_: "cache metrics" (too vague), "token accounting" (that is billing, a sup
 >
 > **Dev:** "The user asks for a built-in clustering plus a custom publication figure."
 > **Architect:** "That is a **Partial skill match** using **Skill-first composition**: the clustering runs through the shared skill runner, then the figure is produced through the **Autonomous Analysis Path**."
+>
+> **Dev:** "A Skill passed one scAgentBench case. Can I report that Skills improve the Agent?"
+> **Architect:** "No. That **Evaluation Protocol** supports one exact Skill revision on one case. Agent lift requires a separate **Benchmark Campaign** with frozen no-Skill and Skill conditions, a strict denominator, and a pre-registered **Coverage anchor condition**."
 >
 > **Dev:** "The user typed a file path this turn, so the file tools appeared in the request. Next turn they didn't — does that hurt?"
 > **Architect:** "It used to: per-turn query-keyword gating changed the **Frozen tool list**, breaking the **Stable prefix invariant** at the tools segment and discarding the cache for the whole request. We dropped that gating — the tool list is now frozen per Conversation, so the path-mentioning turn and the next turn send a byte-identical **Prompt prefix**. The file-path *rule layer* still appears adaptively, but as **Volatile context** in the user message, where it costs nothing in cache."

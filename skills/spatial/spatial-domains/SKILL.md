@@ -24,6 +24,7 @@ tags:
 requires:
 - anndata
 - GraphST
+- igraph
 - louvain
 - matplotlib
 - numpy
@@ -114,6 +115,7 @@ cell-type labels use `spatial-annotate`.
 - **GNN methods auto-default `--n-domains` to 7.** `spatial_domains.py:962-968` silently sets `args.n_domains = 7` for `spagcn` / `stagate` / `graphst` and for `cellcharter` (when `--auto-k` is off). Override explicitly or these K-fixed methods quietly target 7 clusters.
 - **`obsm["spatial"]` ↔ `obsm["X_spatial"]` sync.** `spatial_domains.py:77-79` ensures both keys exist (copies one to the other if missing). Some upstream skills only write one; this skill normalises.
 - **Per-method `obsm` embedding key.** `spatial_domains.py:110-113` records: STAGATE → `obsm["X_stagate"]`, GraphST → `obsm["X_graphst"]`, BANKSY → `obsm["X_banksy_pca"]`, CellCharter → `obsm["X_cellcharter"]`. Leiden / Louvain / SpaGCN do NOT write a method-specific embedding.
+- **STAGATE is GitHub-only and never auto-installed.** `STAGATE_pyG` does not exist on PyPI, so `pip install STAGATE-pyG` always fails. It is classified `vcs` in `omicsclaw/skill/execution/dep_spec.py`, which means the adaptive-env resolver logs it as deferred and runs the skill in the base env instead of attempting an install. Every other method still works; only `--method stagate` raises `ImportError`. To enable it: `pip install git+https://github.com/RucDongLab/STAGATE_pyG.git` (needs `torch` + `torch_geometric`).
 - **Performance warning at 30K cells.** `spatial_domains.py:548` logs a warning when `n_cells > 30000` and method ∈ {`graphst`, `spagcn`, `stagate`}. The methods still run; consider downsampling or switching to `leiden` for large datasets.
 - **GraphST is unrecommended above 5K cells.** `spatial_domains.py:554` logs a separate warning specifically for `graphst` when `n_cells is None or n_cells > 5000`.
 

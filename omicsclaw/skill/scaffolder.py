@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 import hashlib
+import io
 import json
 import os
 import re
@@ -16,6 +17,7 @@ from pathlib import Path
 import sys
 import textwrap
 import threading
+import tokenize
 from typing import Iterable
 
 from omicsclaw.common.manifest import StepRecord, read_manifest, save_manifest
@@ -31,12 +33,18 @@ from omicsclaw.runtime.policy.verification import (
     COMPLETION_STATUS_COMPLETE,
     WORKSPACE_KIND_ANALYSIS_RUN,
     ArtifactRequirement,
+    CompletionReport,
     build_completion_report,
     format_completion_summary,
     isolated_workspace,
     update_workspace_manifest,
     write_completion_report,
 )
+from omicsclaw.skill.inventory import (
+    RUN_DERIVED_DIRNAME,
+    discover_skill_inventory,
+)
+from omicsclaw.skill.evaluation_dataset import digest_dataset_tree
 from omicsclaw.version import __version__
 
 
@@ -83,6 +91,7 @@ def _scaffold_publication_lock(skills_root: Path):
 # should finish in seconds; this bounds a genuine hang rather than a slow
 # computation (MF4 — this is demo validation, not a sandboxed execution tier).
 _DEMO_SMOKE_GATE_TIMEOUT_SECONDS = 120
+_MAX_BUNDLED_DEMO_INPUT_BYTES = 1024 * 1024
 
 VALID_DOMAINS = (
     "spatial",
@@ -92,6 +101,7 @@ VALID_DOMAINS = (
     "metabolomics",
     "bulkrna",
     "orchestrator",
+    "literature",
 )
 
 
@@ -225,6 +235,20 @@ _DOMAIN_PROFILES = {
             ("Output contract", "Markdown/JSON artifacts", "Needed for agent-to-agent handoff"),
         ],
     },
+    "literature": {
+        "title": "Literature",
+        "emoji": "📚",
+        "input_formats": [
+            ("Publication", ".pdf", "Local scientific article", "data/article.pdf"),
+            ("Identifier", "text", "DOI, PMID, GEO accession, or URL", "10.1000/example"),
+            ("Demo", "n/a", "--demo", "Built-in scaffold demo"),
+        ],
+        "requirements": [
+            ("Source reference", "PDF/DOI/PMID/URL", "Needed to identify the publication"),
+            ("Extraction goal", "Prompt or CLI flags", "Needed to bound the requested evidence"),
+            ("Citations", "Stable source identifiers", "Needed for traceable reporting"),
+        ],
+    },
 }
 
 _SLUG_TOKEN_RE = re.compile(r"[^a-z0-9]+")
@@ -268,13 +292,12 @@ class SkillScaffoldResult:
     created_files: list[str] | None = None
     template_path: str = str(SKILL_TEMPLATE_PATH)
     registry_refreshed: bool = False
-    # P1 --demo smoke gate outcome: "earned" (validation.level upgraded to
-    # demo-validated) or "skipped" (env/input limitation or an unimplemented
-    # placeholder — left at its prior validation level). A "rejected" verdict
-    # never reaches this dataclass: create_skill_scaffold raises instead. See
-    # _run_demo_smoke_gate.
+    # Admission smoke gate only. ``earned`` means the candidate may be
+    # published as draft/smoke-only and evaluated; it does not grant routing or
+    # validation. Governance is the sole activation authority.
     demo_gate_verdict: str = ""
     demo_gate_reason: str = ""
+    activation_status: str = ""
     # A promoted body whose required sandbox/demo gate was skipped is moved
     # under ``skills/.quarantine`` rather than the discoverable domain tree.
     quarantined: bool = False
@@ -298,7 +321,11 @@ class AutonomousAnalysisBundle:
     goal: str
     domain: str = ""
     input_file: str = ""
+    input_sha256: str = ""
+    input_byte_size: int = 0
+    bundled_demo_input: str = ""
     context: str = ""
+    run_id: str = ""
     # "mini_agent" code is authored against the oc/adata/show/ReturnAnswer facade
     # and needs a bootstrap in the promoted script; "notebook" code is self-contained.
     engine: str = "notebook"
@@ -531,7 +558,11 @@ def render_skill_markdown(
     description = _render_v2_description(skill_name, domain)
     summary_text = (summary or "").strip() or f"Scaffold for a new {profile['title']} workflow."
     if source_bundle:
-        promotion_note = f"Promoted from a successful autonomous analysis at `{source_bundle.source_dir}`."
+        promotion_note = (
+            "Promoted from successful Autonomous Run "
+            f"`{source_bundle.run_id}`; no source workspace path is part of "
+            "the published contract."
+        )
     elif corpus_bundle:
         promotion_note = (
             f"Scaffolded from a {corpus_bundle.source_kind.replace('_', ' ')} "
@@ -799,6 +830,34 @@ def _build_corpus_hints(candidates: list[CorpusParamCandidate], *, method: str, 
     }
 
 
+def _machine_input_file_types(values: Iterable[str]) -> list[str]:
+    """Keep only authoring values that unambiguously name one file extension."""
+    normalized: list[str] = []
+    for raw in values:
+        value = str(raw or "").strip().lower().lstrip(".")
+        if re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,31}", value):
+            normalized.append(value)
+    return _unique(normalized)
+
+
+def _machine_output_paths(values: Iterable[str]) -> list[str]:
+    """Keep safe relative file-like paths; prose remains narrative-only."""
+    normalized: list[str] = []
+    for raw in values:
+        value = str(raw or "").strip().replace("\\", "/")
+        path = Path(value)
+        if (
+            not value
+            or path.is_absolute()
+            or any(part in {"", ".", ".."} for part in path.parts)
+            or not path.suffix
+            or any(character.isspace() for character in value)
+        ):
+            continue
+        normalized.append(path.as_posix())
+    return _unique(normalized)
+
+
 def build_scaffold_manifest(
     *,
     skill_name: str,
@@ -810,6 +869,11 @@ def build_scaffold_manifest(
     request: str = "",
     summary: str = "",
     method: str = "default",
+    input_formats: Iterable[str] | None = None,
+    primary_outputs: Iterable[str] | None = None,
+    compute_resources: Mapping[str, int] | None = None,
+    demo_dataset_path: str = "",
+    demo_dataset_digest: str = "",
 ):
     """Build a minimal valid v2 ``SkillManifest`` (ADR 0037) for a scaffold.
 
@@ -841,7 +905,10 @@ def build_scaffold_manifest(
     # deferred schema import in lazy_metadata / generate_parameters_md).
     from .schema import (
         SCHEMA_VERSION,
+        ComputeResources,
         Deps,
+        EvaluationDatasetRef,
+        EvaluationProtocol,
         Interface,
         Inputs,
         Lifecycle,
@@ -853,6 +920,7 @@ def build_scaffold_manifest(
         SkillManifest,
         SkipRule,
         Summary,
+        Validation,
     )
 
     profile = _DOMAIN_PROFILES[domain]
@@ -866,7 +934,14 @@ def build_scaffold_manifest(
     provenance = (
         Provenance(origin="corpus", source_ref=corpus_bundle.doc_ref)
         if corpus_bundle
-        else Provenance(origin="promoted" if source_bundle else "scaffolded")
+        else Provenance(
+            origin="promoted" if source_bundle else "scaffolded",
+            source_ref=(
+                f"run:{source_bundle.run_id}"
+                if source_bundle is not None and source_bundle.run_id
+                else None
+            ),
+        )
     )
     return SkillManifest(
         schema_version=SCHEMA_VERSION,
@@ -888,9 +963,17 @@ def build_scaffold_manifest(
             aliases=[],
         ),
         interface=Interface(
-            inputs=Inputs(),
+            inputs=Inputs(file_types=_machine_input_file_types(input_formats or [])),
             parameters=Parameters(hints=hints),
-            outputs=Outputs(files=["report.md", "result.json"]),
+            outputs=Outputs(
+                files=_unique(
+                    [
+                        "report.md",
+                        "result.json",
+                        *_machine_output_paths(primary_outputs or []),
+                    ]
+                )
+            ),
         ),
         runtime=Runtime(language="python", entry=script_name),
         deps=Deps(python=list(deps_python or [])),
@@ -901,12 +984,39 @@ def build_scaffold_manifest(
                 "parameters.md",
                 "r_visualization.md",
             ],
+            compute=(
+                ComputeResources(**dict(compute_resources))
+                if compute_resources is not None
+                else None
+            ),
         ),
         provenance=provenance,
-        # Born unproven: a scaffold's science is a placeholder until the demo
-        # smoke gate credits it. `draft` (non-default) persists under
+        validation=Validation(
+            level="smoke-only",
+            protocols=[
+                EvaluationProtocol(
+                    id="demo",
+                    kind="demo",
+                    entry=script_name,
+                    runner="shared_runner",
+                    dataset_ref=(
+                        EvaluationDatasetRef(
+                            store="repository",
+                            path=demo_dataset_path,
+                            content_sha256=demo_dataset_digest,
+                        )
+                        if demo_dataset_path and demo_dataset_digest
+                        else None
+                    ),
+                    repeats=2 if source_bundle is not None else 1,
+                )
+            ],
+        ),
+        # Born unproven: the staging smoke gate is admission evidence only.
+        # The published exact revision must pass its declared demo Evaluation
+        # Protocol and receive human governance approval. `draft` persists under
         # to_yaml(exclude_defaults); skill_lint also exempts draft skills from the
-        # "entry script must exist" check. It graduates to `mvp` once earned.
+        # "entry script must exist" check.
         lifecycle=Lifecycle(status="draft"),
     )
 
@@ -1032,6 +1142,16 @@ def _render_parameters_md_from_manifest(manifest, script_text: str = "") -> str:
     return render_parameters_md(params, source="v2")
 
 
+def _render_project_root_bootstrap() -> str:
+    """Render a repository import fallback independent of Skill path depth."""
+
+    return """for _candidate_root in Path(__file__).resolve().parents:
+    if (_candidate_root / "omicsclaw" / "__init__.py").is_file():
+        if str(_candidate_root) not in sys.path:
+            sys.path.insert(0, str(_candidate_root))
+        break"""
+
+
 def render_skill_script(
     *,
     skill_name: str,
@@ -1062,14 +1182,13 @@ import json
 import sys
 from pathlib import Path
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
+{_render_project_root_bootstrap()}
 
 from omicsclaw.common.report import SCAFFOLD_STATUS, write_result_json
 
 
 SKILL_NAME = "{skill_name}"
+SKILL_VERSION = "0.1.0"
 DOMAIN = "{domain}"
 SUMMARY = {json.dumps(summary)}
 DEFAULT_METHOD = "{default_method}"
@@ -1271,14 +1390,13 @@ import json
 import sys
 from pathlib import Path
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
+{_render_project_root_bootstrap()}
 
 from omicsclaw.common.report import SCAFFOLD_STATUS, write_result_json
 
 
 SKILL_NAME = "{skill_name}"
+SKILL_VERSION = "0.1.0"
 DOMAIN = "{domain}"
 SUMMARY = {json.dumps(summary)}
 DEFAULT_METHOD = "{method}"
@@ -1383,32 +1501,69 @@ if __name__ == "__main__":
 """
 
 
-# Recreates the mini-agent kernel namespace (oc/adata/show/ReturnAnswer) inside a
-# promoted skill so its accepted code runs instead of crashing on NameError. Only
-# injected for ``engine == "mini_agent"`` bundles; notebook code is self-contained.
-_MINI_AGENT_FACADE_BOOTSTRAP = '''\
-# --- mini-agent facade bootstrap --------------------------------------------
-# This code was authored in the OmicsClaw Autonomous Code Mini-Agent kernel, which
-# provides `oc`, `adata`, `show()` and `ReturnAnswer()`. They are recreated here so
-# the promoted draft runs; adapt them as you harden it into a real skill.
-import anndata as _ad
-adata = _ad.read_h5ad(INPUT_FILE) if INPUT_FILE else None
-from omicsclaw.autonomous.skill_facade import build_facade as _build_facade
-oc = _build_facade(AUTONOMOUS_OUTPUT_DIR, max_skill_calls=20, skill_timeout_seconds=1800)
-import matplotlib as _matplotlib
-_matplotlib.use("Agg")
-import matplotlib.pyplot as _plt
-_oc_fig_count = [0]
-def show(*_a, **_k):
-    for _num in _plt.get_fignums():
-        _oc_fig_count[0] += 1
-        _plt.figure(_num).savefig(
-            str(OUTPUT_PATH / ("fig_%02d.png" % _oc_fig_count[0])), dpi=120, bbox_inches="tight"
+def _render_mini_agent_facade_bootstrap(body_code: str) -> str:
+    """Recreate only the Mini-Agent globals the accepted cells actually load.
+
+    Importing anndata, matplotlib, and the Skill facade unconditionally made a
+    tiny promoted CSV transformation pay several seconds of startup and falsely
+    declared heavy dependencies it never used.  AST name loads are enough here:
+    these globals are a closed producer-kernel contract, while ordinary imports
+    inside ``body_code`` remain untouched and are audited separately.
+    """
+    try:
+        tree = ast.parse(body_code)
+    except SyntaxError:
+        loaded = {"oc", "adata", "show", "ReturnAnswer"}
+    else:
+        loaded = {
+            node.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+        }
+
+    lines = [
+        "# --- mini-agent facade bootstrap (only referenced globals) -----------",
+    ]
+    if "adata" in loaded:
+        lines.extend(
+            [
+                "adata = None",
+                'if INPUT_FILE and Path(INPUT_FILE).suffix.lower() == ".h5ad":',
+                "    import anndata as _ad",
+                "    adata = _ad.read_h5ad(INPUT_FILE)",
+            ]
         )
-    _plt.close("all")
-def ReturnAnswer(text=""):
-    (OUTPUT_PATH / "answer.txt").write_text(str(text), encoding="utf-8")
-'''
+    if "oc" in loaded:
+        lines.extend(
+            [
+                "from omicsclaw.autonomous.skill_facade import build_facade as _build_facade",
+                "oc = _build_facade(AUTONOMOUS_OUTPUT_DIR, max_skill_calls=20, skill_timeout_seconds=1800)",
+            ]
+        )
+    if "show" in loaded:
+        lines.extend(
+            [
+                "import matplotlib as _matplotlib",
+                '_matplotlib.use("Agg")',
+                "import matplotlib.pyplot as _plt",
+                "_oc_fig_count = [0]",
+                "def show(*_a, **_k):",
+                "    for _num in _plt.get_fignums():",
+                "        _oc_fig_count[0] += 1",
+                "        _plt.figure(_num).savefig(",
+                '            str(OUTPUT_PATH / ("fig_%02d.png" % _oc_fig_count[0])), dpi=120, bbox_inches="tight"',
+                "        )",
+                '    _plt.close("all")',
+            ]
+        )
+    if "ReturnAnswer" in loaded:
+        lines.extend(
+            [
+                'def ReturnAnswer(text=""):',
+                '    (OUTPUT_PATH / "answer.txt").write_text(str(text), encoding="utf-8")',
+            ]
+        )
+    return "\n".join(lines) + "\n"
 
 
 def _render_lifted_add_argument_line(param: LiftedParam) -> str:
@@ -1451,12 +1606,14 @@ def render_promoted_skill_script(
     goal = source_bundle.goal or summary
     web_context = source_bundle.web_sources or ""
     analysis_context = source_bundle.context or ""
-    default_input = source_bundle.input_file or ""
-    requires_input = bool(default_input)
-    indented_code = textwrap.indent(body_code.rstrip() + "\n", "    ")
+    default_input_expression = _promoted_default_input_expression(source_bundle)
+    requires_input = bool(source_bundle.input_file)
+    indented_code = textwrap.indent(body_code.rstrip() + "\n", "        ")
     facade_bootstrap = ""
     if source_bundle.engine == "mini_agent":
-        facade_bootstrap = textwrap.indent(_MINI_AGENT_FACADE_BOOTSTRAP, "    ") + "\n"
+        facade_bootstrap = textwrap.indent(
+            _render_mini_agent_facade_bootstrap(body_code), "    "
+        ) + "\n"
 
     lifted_params = lifted_params or []
     lifted_arg_lines = "\n".join(_render_lifted_add_argument_line(p) for p in lifted_params)
@@ -1474,25 +1631,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
+{_render_project_root_bootstrap()}
 
 from omicsclaw.common.report import mark_result_status, write_result_json
 
 
 SKILL_NAME = "{skill_name}"
+SKILL_VERSION = "0.1.0"
 DOMAIN = "{domain}"
 SUMMARY = {json.dumps(summary or goal, ensure_ascii=False)}
 ANALYSIS_GOAL = {json.dumps(goal, ensure_ascii=False)}
 ANALYSIS_CONTEXT = {json.dumps(analysis_context, ensure_ascii=False)}
 WEB_CONTEXT = {json.dumps(web_context, ensure_ascii=False)}
-SOURCE_ANALYSIS_DIR = {json.dumps(source_bundle.source_dir, ensure_ascii=False)}
-SOURCE_NOTEBOOK = {json.dumps(source_bundle.notebook_path, ensure_ascii=False)}
-DEFAULT_INPUT_FILE = {json.dumps(default_input, ensure_ascii=False)}
+SOURCE_RUN_ID = {json.dumps(source_bundle.run_id, ensure_ascii=False)}
+DEFAULT_INPUT_FILE = {default_input_expression}
 REQUIRES_INPUT = {str(requires_input)}
 
 
@@ -1512,6 +1668,17 @@ def _write_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def _load_semantic_summary(path: Path) -> dict:
+    if not path.exists():
+        return {{}}
+    if not path.is_file() or path.stat().st_size > 1024 * 1024:
+        raise RuntimeError("semantic_summary.json is not a bounded regular file")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise RuntimeError("semantic_summary.json must contain a JSON object")
+    return payload
+
+
 def main() -> None:
     args = parse_args()
     effective_input = args.input_path or (DEFAULT_INPUT_FILE if args.demo else "")
@@ -1526,23 +1693,15 @@ def main() -> None:
     OUTPUT_PATH = skill_output_dir
     OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 
-{facade_bootstrap}{indented_code}
-
-    readme = f\"\"\"# {{SKILL_NAME}}
-
-This skill was promoted from a successful `autonomous_analysis_execute` run.
-
-- Domain: {{DOMAIN}}
-- Input: {{effective_input or "none"}}
-- Original source notebook: {{SOURCE_NOTEBOOK}}
-- Original autonomous analysis directory: {{SOURCE_ANALYSIS_DIR}}
-
-Inspect `report.md` and `references/` for the promotion provenance.
-\"\"\"
+{facade_bootstrap}    _previous_working_directory = Path.cwd()
+    try:
+        os.chdir(skill_output_dir)
+{indented_code}    finally:
+        os.chdir(_previous_working_directory)
 
     report = f\"\"\"# Promoted Skill Report
 
-This skill was generated from a successful autonomous analysis notebook.
+This skill was generated from a successful Autonomous Code Run.
 
 ## Original Goal
 
@@ -1550,7 +1709,7 @@ This skill was generated from a successful autonomous analysis notebook.
 
 ## Promotion Notes
 
-- This script started from notebook code that previously ran successfully.
+- This script started from `analysis.py` code that previously ran successfully.
 - Review imports, parameter handling, and output paths before considering it production-ready.
 - Expand tests and tighten the OmicsClaw output contract in follow-up edits.
 \"\"\"
@@ -1560,13 +1719,18 @@ This skill was generated from a successful autonomous analysis notebook.
         "skill": SKILL_NAME,
         "domain": DOMAIN,
         "input": effective_input,
-        "source_analysis_dir": SOURCE_ANALYSIS_DIR,
-        "source_notebook": SOURCE_NOTEBOOK,
+        "source_run_id": SOURCE_RUN_ID,
         "description": SUMMARY,
     }}
+    semantic_summary = _load_semantic_summary(skill_output_dir / "semantic_summary.json")
+    if semantic_summary:
+        data["semantic_summary"] = semantic_summary
 
-    _write_text(skill_output_dir / "README.md", readme)
-    _write_text(skill_output_dir / "report.md", report)
+    # README.md is owned by the shared runner. Preserve a scientific report
+    # emitted by the promoted body; only supply a bounded fallback when the
+    # source analysis did not create one.
+    if not (skill_output_dir / "report.md").exists():
+        _write_text(skill_output_dir / "report.md", report)
     _write_text(
         skill_output_dir / "reproducibility" / "commands.sh",
         f"oc run {{SKILL_NAME}} --output {{skill_output_dir}}\\n",
@@ -1615,7 +1779,7 @@ def render_structured_promoted_skill_script(
         raise ValueError("structured renderer requires a reusable facade-free abstraction")
 
     goal = source_bundle.goal or summary
-    default_input = source_bundle.input_file or ""
+    default_input_expression = _promoted_default_input_expression(source_bundle)
     arg_lines = "\n".join(
         _render_acquisition_argument_line(param) for param in abstraction.parameters
     )
@@ -1638,9 +1802,7 @@ import shutil
 import sys
 from pathlib import Path
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
+{_render_project_root_bootstrap()}
 
 from omicsclaw.common.report import mark_result_status, write_result_json
 from omicsclaw.common.output_claim import (
@@ -1651,11 +1813,12 @@ from omicsclaw.skill.runner import run_skill
 
 
 SKILL_NAME = {skill_name!r}
+SKILL_VERSION = "0.1.0"
 DOMAIN = {domain!r}
 SUMMARY = {summary or goal!r}
 ANALYSIS_GOAL = {goal!r}
-SOURCE_ANALYSIS_DIR = {source_bundle.source_dir!r}
-DEFAULT_INPUT_FILE = {default_input!r}
+SOURCE_RUN_ID = {source_bundle.run_id!r}
+DEFAULT_INPUT_FILE = {default_input_expression}
 CALL_SPECS = json.loads({json.dumps(json.dumps(call_specs, ensure_ascii=False))})
 
 
@@ -1765,7 +1928,7 @@ def main() -> None:
             shutil.copy2(final_primary, target)
 
     (output_dir / "README.md").write_text(
-        f"# {{SKILL_NAME}}\\n\\nFacade-free workflow acquired from `{{SOURCE_ANALYSIS_DIR}}`.\\n",
+        f"# {{SKILL_NAME}}\\n\\nFacade-free workflow acquired from Run `{{SOURCE_RUN_ID}}`.\\n",
         encoding="utf-8",
     )
     (output_dir / "report.md").write_text(
@@ -1783,7 +1946,7 @@ def main() -> None:
         data={{
             "skill": SKILL_NAME,
             "domain": DOMAIN,
-            "source_analysis_dir": SOURCE_ANALYSIS_DIR,
+            "source_run_id": SOURCE_RUN_ID,
             "steps": step_results,
         }},
     )
@@ -2026,6 +2189,12 @@ def _load_autonomous_bundle(
         raise ValueError(
             f"Autonomous analysis at {path} is not promotable yet (completion status: {status})."
         )
+    completion_metadata = completion.get("metadata")
+    source_run_id = (
+        str(completion_metadata.get("run_id") or "").strip()
+        if isinstance(completion_metadata, Mapping)
+        else ""
+    )
 
     notebook_path = path / "reproducibility" / "analysis_notebook.ipynb"
     if _source_entry_exists(notebook_path):
@@ -2053,6 +2222,7 @@ def _load_autonomous_bundle(
         return _load_mini_agent_bundle(
             path,
             analysis_path,
+            run_id=source_run_id,
             claim_identities=claim_identities,
         )
 
@@ -2066,6 +2236,7 @@ def _load_mini_agent_bundle(
     path: Path,
     analysis_path: Path,
     *,
+    run_id: str = "",
     claim_identities: frozenset[OutputClaimIdentity] | None = None,
 ) -> AutonomousAnalysisBundle:
     """Build a promotion bundle from a mini-agent run (ADR 0032 layout)."""
@@ -2087,7 +2258,9 @@ def _load_mini_agent_bundle(
         required=True,
         claim_identities=claim_identities,
     )
-    goal, input_file = _read_run_goal_and_input(path, claim_identities=claim_identities)
+    goal, input_file, input_sha256, input_byte_size = _read_run_goal_and_input(
+        path, claim_identities=claim_identities
+    )
     steps, skill_calls, trace_warnings = _read_structured_run_trace(
         path,
         claim_identities=claim_identities,
@@ -2106,7 +2279,10 @@ def _load_mini_agent_bundle(
         goal=goal,
         domain="",
         input_file=input_file,
+        input_sha256=input_sha256,
+        input_byte_size=input_byte_size,
         context="",
+        run_id=run_id,
         engine="mini_agent",
         steps=steps,
         skill_calls=skill_calls,
@@ -2309,10 +2485,12 @@ def _read_run_goal_and_input(
     path: Path,
     *,
     claim_identities: frozenset[OutputClaimIdentity] | None = None,
-) -> tuple[str, str]:
-    """Best-effort goal + first input path for a mini-agent run."""
+) -> tuple[str, str, str, int]:
+    """Read goal, first input, and its producer-recorded small-file identity."""
     goal = ""
     input_file = ""
+    input_sha256 = ""
+    input_byte_size = 0
     manifest = read_manifest(path)
     if manifest is not None:
         meta = dict(manifest.metadata)
@@ -2326,18 +2504,102 @@ def _read_run_goal_and_input(
         refs_path = path / "inputs" / "references.json"
         if _source_entry_exists(refs_path):
             try:
-                refs = json.loads(
+                reference_payload = json.loads(
                     _read_owned_source_text(
                         refs_path,
                         source_root=path,
                         claim_identities=claim_identities,
                     )
-                ).get("references") or []
+                )
+                refs = reference_payload.get("references") or []
             except (json.JSONDecodeError, OSError):
+                reference_payload = {}
                 refs = []
             if refs:
                 input_file = str(refs[0])
-    return goal, input_file
+    else:
+        reference_payload = {}
+
+    # A promotable demo input is never inferred from the current filesystem
+    # alone. It must match the small-file digest frozen when the claimed Run was
+    # created, preventing later path replacement from changing the Skill demo.
+    refs_path = path / "inputs" / "references.json"
+    if input_file and _source_entry_exists(refs_path):
+        try:
+            reference_payload = json.loads(
+                _read_owned_source_text(
+                    refs_path,
+                    source_root=path,
+                    claim_identities=claim_identities,
+                )
+            )
+        except (json.JSONDecodeError, OSError):
+            reference_payload = {}
+        identities = reference_payload.get("identities") or []
+        if isinstance(identities, list):
+            for identity in identities:
+                if not isinstance(identity, Mapping):
+                    continue
+                if str(identity.get("path") or "") != input_file:
+                    continue
+                digest = str(identity.get("sha256") or "")
+                try:
+                    byte_size = int(identity.get("byte_size") or 0)
+                except (TypeError, ValueError):
+                    byte_size = 0
+                if re.fullmatch(r"sha256:[0-9a-f]{64}", digest) and byte_size > 0:
+                    input_sha256 = digest
+                    input_byte_size = byte_size
+                break
+    return goal, input_file, input_sha256, input_byte_size
+
+
+def _materialize_promoted_demo_input(
+    bundle: AutonomousAnalysisBundle,
+    skill_dir: Path,
+) -> Path | None:
+    """Copy one digest-bound small Run input into the candidate Skill."""
+    if not bundle.input_file or not bundle.input_sha256:
+        return None
+    source = Path(bundle.input_file).expanduser()
+    if source.is_symlink() or not source.is_file():
+        raise ValueError("recorded Autonomous Run input is no longer a regular file")
+    try:
+        byte_size = source.stat().st_size
+        payload = source.read_bytes()
+    except OSError as exc:
+        raise ValueError("recorded Autonomous Run input could not be read") from exc
+    if (
+        byte_size != bundle.input_byte_size
+        or byte_size > _MAX_BUNDLED_DEMO_INPUT_BYTES
+        or len(payload) != byte_size
+    ):
+        raise ValueError("recorded Autonomous Run input size changed after execution")
+    observed = f"sha256:{hashlib.sha256(payload).hexdigest()}"
+    if observed != bundle.input_sha256:
+        raise ValueError("recorded Autonomous Run input digest changed after execution")
+
+    suffix = source.suffix.lower()
+    if not re.fullmatch(r"\.[a-z0-9]{1,16}", suffix):
+        suffix = ".bin"
+    relative = Path("data") / f"demo_input{suffix}"
+    destination = skill_dir / relative
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    if f"sha256:{hashlib.sha256(destination.read_bytes()).hexdigest()}" != observed:
+        raise ValueError("bundled demo input failed copy verification")
+    bundle.bundled_demo_input = relative.as_posix()
+    return relative
+
+
+def _promoted_default_input_expression(bundle: AutonomousAnalysisBundle) -> str:
+    if bundle.bundled_demo_input:
+        parts = Path(bundle.bundled_demo_input).parts
+        expression = "Path(__file__).resolve().parent"
+        for part in parts:
+            expression += f" / {json.dumps(part)}"
+        return f"str({expression})"
+    return json.dumps(bundle.input_file or "", ensure_ascii=False)
 
 
 def _goal_from_summary(summary: str) -> str:
@@ -2410,8 +2672,49 @@ def _strip_redundant_pathlib_import(code: str) -> str:
     return "\n".join(line for i, line in enumerate(lines, start=1) if i not in drop_lines)
 
 
-def _normalize_promoted_code(code: str, source_dir: str) -> str:
+def _replace_exact_string_literal(code: str, value: str, replacement: str) -> str:
+    """Replace one frozen path literal with a runtime-owned variable name.
+
+    Token rewriting preserves comments and formatting while avoiding unsafe
+    substring replacement inside reports or unrelated strings.  The promoted
+    code must consume the bundled/demo or caller-provided input selected by the
+    wrapper, never the original Run's host path.
+    """
+
+    if not value:
+        return code
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(code).readline))
+    except (IndentationError, tokenize.TokenError):
+        return code
+    changed = False
+    rewritten: list[tokenize.TokenInfo] = []
+    for token in tokens:
+        if token.type == tokenize.STRING:
+            try:
+                literal = ast.literal_eval(token.string)
+            except (SyntaxError, ValueError):
+                literal = None
+            if literal == value:
+                token = tokenize.TokenInfo(
+                    type=tokenize.NAME,
+                    string=replacement,
+                    start=token.start,
+                    end=token.end,
+                    line=token.line,
+                )
+                changed = True
+        rewritten.append(token)
+    return tokenize.untokenize(rewritten) if changed else code
+
+
+def _normalize_promoted_code(
+    code: str,
+    source_dir: str,
+    input_file: str = "",
+) -> str:
     normalized = code or ""
+    normalized = _replace_exact_string_literal(normalized, input_file, "INPUT_FILE")
     if source_dir:
         normalized = normalized.replace(str(source_dir), "AUTONOMOUS_OUTPUT_DIR")
     normalized = _strip_redundant_pathlib_import(normalized)
@@ -3082,6 +3385,78 @@ def refresh_registry() -> bool:
         return False
 
 
+def rebuild_scaffold_publication_metadata(
+    skill_dir: str | Path,
+) -> CompletionReport:
+    """Rebind one scaffold's live publication evidence after a safe move.
+
+    Historical ``references/source_*`` evidence remains byte-for-byte intact;
+    only the live workspace Manifest and Completion Report are rebuilt against
+    the new directory. The caller owns the physical move and Registry outage.
+    """
+
+    root = Path(skill_dir).expanduser()
+    if root.is_symlink():
+        raise ValueError("refusing symbolic-link Skill publication")
+    try:
+        root = root.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError(f"Skill publication does not exist: {root}") from exc
+    if not root.is_dir():
+        raise ValueError(f"Skill publication is not a directory: {root}")
+
+    manifest = read_manifest(root)
+    if manifest is None or manifest.workspace is None:
+        raise ValueError("Skill publication has no workspace Manifest")
+    scaffold_steps = [
+        step for step in manifest.steps if step.skill == "create_omics_skill"
+    ]
+    if len(scaffold_steps) != 1:
+        raise ValueError("Skill publication has ambiguous creation lineage")
+    if not manifest.required_artifacts:
+        raise ValueError("Skill publication has no artifact contract")
+
+    requirements = [
+        ArtifactRequirement(
+            name=record.name,
+            path=record.path,
+            kind=record.kind,
+            required=record.required,
+            description=record.description,
+            metadata=dict(record.metadata),
+        )
+        for record in manifest.required_artifacts
+    ]
+    scaffold_steps[0].output_file = str(root)
+    manifest.workspace.root = str(root)
+    manifest.verification = None
+    save_manifest(root, manifest)
+
+    report = build_completion_report(
+        root,
+        workspace_kind=manifest.workspace.kind,
+        workspace_purpose=manifest.workspace.purpose,
+        requirements=requirements,
+        manifest_path=str(root / "manifest.json"),
+        metadata=manifest.workspace.metadata,
+    )
+    if not report.completed:
+        raise RuntimeError(
+            "Relocated Skill publication verification failed.\n"
+            + format_completion_summary(report)
+        )
+    write_completion_report(root, report)
+    manifest.verification = report.to_verification_record()
+    status_by_path = {
+        artifact.path: "present" if artifact.present else "missing"
+        for artifact in report.artifacts
+    }
+    for record in manifest.required_artifacts:
+        record.status = status_by_path.get(record.path, "missing")
+    save_manifest(root, manifest)
+    return report
+
+
 @dataclass
 class _DemoGateOutcome:
     """Outcome of the P1 acquisition gate's one-shot ``--demo`` smoke run.
@@ -3089,8 +3464,8 @@ class _DemoGateOutcome:
     - ``earned``: the script ran to completion, its result.json satisfies
       :func:`~omicsclaw.common.report.validate_result_envelope`, and its
       status is not the scaffold-placeholder sentinel — a real or promoted
-      body that actually works. The caller upgrades ``validation.level`` to
-      ``demo-validated``.
+      body that is eligible for publication as a non-routable candidate. The
+      published exact revision must still pass governance evaluation.
     - ``skipped``: a legitimate reason NOT to judge this run — either an
       unimplemented placeholder (MF1: status == SCAFFOLD_STATUS is a
       deliberate "not implemented yet" signal, not a failure) or a promoted
@@ -3300,17 +3675,21 @@ def _run_demo_smoke_gate(
     )
 
 
-def _render_validation_evidence(
+def _render_admission_evidence(
     script_name: str, gate: _DemoGateOutcome, lift_result: LiftResult | None = None
 ) -> str:
-    """Durable record of the P1 --demo smoke gate credit.
+    """Durable record of the staging admission smoke gate.
 
-    SF1: the staging tmp dir this ran in is rmtree'd on ``create_skill_scaffold``
-    exit, so the evidence a ``demo-validated`` skill.yaml points to must live
-    here — a persisted file — rather than referencing the ephemeral tmp path.
+    This record explains why the candidate was publishable.  It deliberately
+    grants no validation level; Evaluation Protocol results and governance own
+    that later decision.
     """
     envelope = gate.envelope or {}
-    summary_json = json.dumps(envelope.get("summary", {}), indent=2, ensure_ascii=False)
+    summary = dict(envelope.get("summary", {}) or {})
+    input_value = summary.get("input")
+    if isinstance(input_value, str) and Path(input_value).is_absolute():
+        summary["input"] = f"<bundled-demo:{Path(input_value).name}>"
+    summary_json = json.dumps(summary, indent=2, ensure_ascii=False)
     status = envelope.get("status", "")
     lifted_note = (
         "\nThis skill also had literal `oc.run(...)` parameters lifted to CLI "
@@ -3318,10 +3697,11 @@ def _render_validation_evidence(
         if lift_result is not None and lift_result.lifted
         else ""
     )
-    return f"""# Demo Validation Evidence
+    return f"""# Candidate Admission Evidence
 
-Earned `demo-validated` via the acquisition-flywheel P1 `--demo` smoke gate at
-skill-creation time (see `docs/proposals/skill-acquisition-p0-p1-landing.md`).
+The candidate passed the staging `--demo` smoke gate and was published as
+`draft/smoke-only`. This admission run is not an Evaluation Protocol result and
+does not make the Skill routable.
 
 **Command re-run for a fresh check:**
 
@@ -3466,8 +3846,10 @@ def create_skill_scaffold(
     create_tests: bool = True,
     skills_root: Path | None = None,
     source_analysis_dir: Path | str | None = None,
+    source_run_id: str = "",
     promote_from_latest: bool = False,
     output_root: Path | None = None,
+    compute_resources: Mapping[str, int] | None = None,
     allow_legacy_source: bool = False,
     from_corpus: Path | str | None = None,
     corpus_source_kind: str = "paper",
@@ -3504,6 +3886,12 @@ def create_skill_scaffold(
             resolved_source_dir,
             allow_legacy_source=allow_legacy_source,
         )
+        if source_run_id and source_bundle.run_id != source_run_id:
+            raise ValueError("resolved Autonomous Run identity does not match source.run_id")
+
+    effective_source_run_id = (
+        source_run_id or (source_bundle.run_id if source_bundle is not None else "")
+    )
 
     corpus_bundle: CorpusDerivedBundle | None = None
     resolved_doc_ref = ""
@@ -3528,10 +3916,26 @@ def create_skill_scaffold(
     resolved_root = Path(skills_root or SKILLS_DIR)
     if not resolved_root.is_absolute():
         resolved_root = (OMICSCLAW_DIR / resolved_root).resolve()
+    resolved_root.mkdir(parents=True, exist_ok=True)
     target_root = resolved_root / domain
+    if source_bundle is not None:
+        target_root = target_root / RUN_DERIVED_DIRNAME
     target_root.mkdir(parents=True, exist_ok=True)
 
     resolved_skill_name = infer_skill_name(request, domain, preferred_name=skill_name)
+    existing_location = next(
+        (
+            location
+            for location in discover_skill_inventory(resolved_root).locations
+            if location.canonical_id == resolved_skill_name
+        ),
+        None,
+    )
+    if existing_location is not None:
+        raise FileExistsError(
+            "Skill identity already exists in collection "
+            f"{existing_location.collection}: {existing_location.skill_dir}"
+        )
     final_skill_dir = target_root / resolved_skill_name
     if final_skill_dir.exists():
         raise FileExistsError(f"Skill directory already exists: {final_skill_dir}")
@@ -3546,8 +3950,12 @@ def create_skill_scaffold(
         "input_formats": _unique(input_formats or []),
         "primary_outputs": _unique(primary_outputs or []),
         "trigger_keywords": _unique(trigger_keywords or []),
-        "template_path": str(SKILL_TEMPLATE_PATH),
-        "source_analysis_dir": str(resolved_source_dir) if resolved_source_dir else "",
+        "template_path": "templates/skill/SKILL.md",
+        "source": (
+            {"kind": "run", "run_id": effective_source_run_id}
+            if source_bundle is not None
+            else {"kind": "corpus" if corpus_bundle is not None else "intent"}
+        ),
         "promoted_from_autonomous_analysis": bool(source_bundle),
         "legacy_source_compatibility": bool(
             source_bundle is not None and source_bundle.engine == "notebook"
@@ -3564,7 +3972,11 @@ def create_skill_scaffold(
         "legacy_source_compatibility": bool(
             source_bundle is not None and source_bundle.engine == "notebook"
         ),
-        "source_analysis_dir": str(resolved_source_dir) if resolved_source_dir else "",
+        "source": (
+            {"kind": "run", "run_id": effective_source_run_id}
+            if source_bundle is not None
+            else {"kind": "corpus" if corpus_bundle is not None else "intent"}
+        ),
         "corpus_derived": bool(corpus_bundle),
         "doc_ref": resolved_doc_ref,
     }
@@ -3572,10 +3984,22 @@ def create_skill_scaffold(
     committed_skill_dir = final_skill_dir
     quarantined = False
     quarantine_reason_path = ""
+    refreshed = False
+    bundled_demo_input_rel: Path | None = None
+    bundled_demo_dataset_digest = ""
 
     with isolated_workspace(STAGING_ROOT, prefix="skill-scaffold") as staging_root:
         skill_dir = staging_root / resolved_skill_name
         skill_dir.mkdir(parents=True, exist_ok=False)
+        if source_bundle is not None:
+            bundled_demo_input_rel = _materialize_promoted_demo_input(
+                source_bundle, skill_dir
+            )
+            if bundled_demo_input_rel is not None:
+                relative_created_paths.append(bundled_demo_input_rel)
+                bundled_demo_dataset_digest = digest_dataset_tree(
+                    skill_dir / bundled_demo_input_rel
+                )
 
         skill_md_path = skill_dir / "SKILL.md"
         script_path = skill_dir / script_name
@@ -3596,7 +4020,11 @@ def create_skill_scaffold(
         abstraction_fallback_reason = ""
         corpus_method = "default"
         if source_bundle is not None:
-            normalized_code = _normalize_promoted_code(source_bundle.python_code, source_bundle.source_dir)
+            normalized_code = _normalize_promoted_code(
+                source_bundle.python_code,
+                source_bundle.source_dir,
+                source_bundle.input_file,
+            )
             abstraction = build_acquisition_abstraction(source_bundle)
             if abstraction.reusable:
                 script_text = render_structured_promoted_skill_script(
@@ -3654,6 +4082,17 @@ def create_skill_scaffold(
             request=request,
             summary=summary,
             method=corpus_method,
+            input_formats=input_formats,
+            primary_outputs=primary_outputs,
+            compute_resources=compute_resources,
+            demo_dataset_path=(
+                (final_skill_dir / bundled_demo_input_rel)
+                .relative_to(resolved_root.parent)
+                .as_posix()
+                if bundled_demo_input_rel is not None
+                else ""
+            ),
+            demo_dataset_digest=bundled_demo_dataset_digest,
         )
         (skill_dir / "skill.yaml").write_text(manifest.to_yaml(), encoding="utf-8")
         relative_created_paths.append(Path("skill.yaml"))
@@ -3711,7 +4150,11 @@ def create_skill_scaffold(
                 ]
             )
 
-        reference_relative_paths: list[str] = []
+        reference_relative_paths: list[str] = (
+            [bundled_demo_input_rel.as_posix()]
+            if bundled_demo_input_rel is not None
+            else []
+        )
         if source_bundle is not None:
             # references_dir already created above as part of the v2 layout.
             source_claim_identities = collect_output_claim_identities(resolved_source_dir)
@@ -3783,7 +4226,11 @@ def create_skill_scaffold(
             step=StepRecord(
                 skill="create_omics_skill",
                 version=SKILL_SCAFFOLDER_VERSION,
-                input_file=str(resolved_source_dir) if resolved_source_dir else request,
+                input_file=(
+                    f"run:{effective_source_run_id}"
+                    if effective_source_run_id
+                    else request
+                ),
                 output_file=str(final_skill_dir),
                 params={
                     "domain": domain,
@@ -3816,11 +4263,11 @@ def create_skill_scaffold(
             )
         relative_created_paths.append(Path(COMPLETION_REPORT_FILENAME))
 
-        # P1 acquisition gate: run --demo once, in staging, before this skill
-        # is allowed to enter the catalog. A genuine crash raises here so
+        # Acquisition admission gate: run --demo once in staging before this
+        # candidate may enter the canonical tree as a non-routable draft. A
+        # genuine crash raises here so
         # isolated_workspace rmtree's the staging dir (never reaches move); a
-        # skip (placeholder / env-limited promoted body) proceeds unchanged;
-        # an earn upgrades validation.level and rewrites skill.yaml in place.
+        # skip (placeholder / env-limited promoted body) proceeds unchanged.
         # require_sandbox=True whenever this is a promotion (source_bundle is
         # not None): that body is untrusted model-authored code, not a
         # self-authored scaffold/corpus template.
@@ -3828,7 +4275,11 @@ def create_skill_scaffold(
             script_path,
             staging_root / "_demo_smoke_gate_output",
             require_sandbox=source_bundle is not None,
-            input_file=source_bundle.input_file if source_bundle is not None else "",
+            input_file=(
+                str(skill_dir / bundled_demo_input_rel)
+                if bundled_demo_input_rel is not None
+                else (source_bundle.input_file if source_bundle is not None else "")
+            ),
         )
         lift_fallback_reason: str | None = None
         if (
@@ -3862,7 +4313,11 @@ def create_skill_scaffold(
                 script_path,
                 staging_root / "_demo_smoke_gate_output_abstraction_fallback",
                 require_sandbox=True,
-                input_file=source_bundle.input_file,
+                input_file=(
+                    str(skill_dir / bundled_demo_input_rel)
+                    if bundled_demo_input_rel is not None
+                    else source_bundle.input_file
+                ),
             )
         if demo_gate.verdict == "rejected" and lift_result is not None and lift_result.lifted:
             # P2a: the literal-lift pass can silently break otherwise-working
@@ -3889,7 +4344,11 @@ def create_skill_scaffold(
                 script_path,
                 staging_root / "_demo_smoke_gate_output_fallback",
                 require_sandbox=True,
-                input_file=source_bundle.input_file,
+                input_file=(
+                    str(skill_dir / bundled_demo_input_rel)
+                    if bundled_demo_input_rel is not None
+                    else source_bundle.input_file
+                ),
             )
             lift_result = LiftResult(code=normalized_code, skipped=[f"fell back to verbatim: {lift_fallback_reason}"])
         if demo_gate.verdict == "rejected":
@@ -3920,21 +4379,11 @@ def create_skill_scaffold(
             relative_created_paths.append(Path("references") / "parameter_lift.md")
 
         if demo_gate.verdict == "earned":
-            from .schema import Lifecycle, Validation
-
-            evidence_path = references_dir / "validation.md"
+            evidence_path = references_dir / "admission.md"
             evidence_path.write_text(
-                _render_validation_evidence(script_name, demo_gate, lift_result), encoding="utf-8"
+                _render_admission_evidence(script_name, demo_gate, lift_result), encoding="utf-8"
             )
-            relative_created_paths.append(Path("references") / "validation.md")
-            manifest.validation = Validation(
-                level="demo-validated", evidence=["references/validation.md"]
-            )
-            # A real implementation that passed its source-appropriate gate is
-            # eligible for normal routing. Placeholders never reach ``earned``
-            # because their result status is the explicit scaffold sentinel.
-            manifest.lifecycle = Lifecycle(status="mvp")
-            (skill_dir / "skill.yaml").write_text(manifest.to_yaml(), encoding="utf-8")
+            relative_created_paths.append(Path("references") / "admission.md")
 
         legacy_compatibility = (
             source_bundle is not None and source_bundle.engine == "notebook"
@@ -3966,6 +4415,9 @@ def create_skill_scaffold(
             )
 
         with _scaffold_publication_lock(resolved_root):
+            canonical_publication = (
+                not quarantined and resolved_root.resolve() == SKILLS_DIR.resolve()
+            )
             if committed_skill_dir.exists():
                 raise FileExistsError(
                     f"Skill publication destination already exists: {committed_skill_dir}"
@@ -4035,19 +4487,26 @@ def create_skill_scaffold(
                     metadata=manifest_metadata,
                     append_step=False,
                 )
+                if canonical_publication:
+                    if not refresh_registry():
+                        raise RuntimeError(
+                            "Skill publication failed because the Registry could not "
+                            "load the committed Skill"
+                        )
+                    refreshed = True
             except Exception:
                 # The destination did not exist before this locked publication.
                 # Remove only the tree created by this cooperative publisher.
                 shutil.rmtree(committed_skill_dir, ignore_errors=True)
+                if canonical_publication:
+                    # Best-effort restoration of the pre-publication projection
+                    # after removing the only tree this transaction introduced.
+                    refresh_registry()
                 raise
 
     created_files = [str(committed_skill_dir / rel_path) for rel_path in relative_created_paths]
     manifest_path = committed_skill_dir / "manifest.json"
     completion_report_path = committed_skill_dir / COMPLETION_REPORT_FILENAME
-
-    refreshed = False
-    if not quarantined and resolved_root.resolve() == SKILLS_DIR.resolve():
-        refreshed = refresh_registry()
 
     return SkillScaffoldResult(
         skill_name=resolved_skill_name,
@@ -4064,6 +4523,11 @@ def create_skill_scaffold(
         registry_refreshed=refreshed,
         demo_gate_verdict=demo_gate.verdict,
         demo_gate_reason=demo_gate.reason,
+        activation_status=(
+            "evaluation_required"
+            if demo_gate.verdict == "earned" and not quarantined
+            else "not_ready"
+        ),
         quarantined=quarantined,
         quarantine_reason_path=quarantine_reason_path,
     )
@@ -4085,6 +4549,7 @@ __all__ = [
     "create_skill_scaffold",
     "find_latest_autonomous_analysis",
     "infer_skill_name",
+    "rebuild_scaffold_publication_metadata",
     "refresh_registry",
     "render_structured_promoted_skill_script",
     "slugify_skill_name",

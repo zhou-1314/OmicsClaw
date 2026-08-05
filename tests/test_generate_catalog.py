@@ -96,6 +96,30 @@ def test_catalog_emits_validation_level_default_and_preserves_status(tmp_path, m
     assert entry["superseded_by"] is None
 
 
+def test_catalog_exposes_physical_collection_for_run_derived_skill(
+    tmp_path,
+    monkeypatch,
+):
+    skills_dir = tmp_path / "skills"
+    skill_dir = skills_dir / "bulkrna" / "run-derived" / "derived-rhythm"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        _FAKE_SKILL_MD.replace("fake-skill", "derived-rhythm"),
+        encoding="utf-8",
+    )
+    (skill_dir / "parameters.yaml").write_text(
+        "domain: bulkrna\nscript: derived_rhythm.py\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "derived_rhythm.py").write_text("# stub\n", encoding="utf-8")
+    monkeypatch.setattr(generate_catalog, "SKILLS_DIR", skills_dir)
+    monkeypatch.setattr(generate_catalog, "build_cli_alias_map", lambda: {})
+
+    entry = generate_catalog.generate_catalog()["skills"][0]
+
+    assert entry["collection"] == "run-derived"
+
+
 def test_catalog_emits_explicit_validation_level(tmp_path, monkeypatch):
     entry = _gen_one(
         tmp_path, monkeypatch, "graded",

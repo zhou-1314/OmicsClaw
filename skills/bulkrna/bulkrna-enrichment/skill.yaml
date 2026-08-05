@@ -65,3 +65,32 @@ resources:
   - output_contract.md
   - parameters.md
   tests: tests/
+validation:
+  protocols:
+  - id: biomnibench-da12-2-deterministic-preflight-v1
+    kind: fixture
+    entry: tests/biomnibench_da12_2.py
+    runner: command
+    suite_id: biomnibench-da
+    case_ids:
+    - da-12-2
+    dataset_ref:
+      store: repository
+      path: data/benchmarks/biomnibench-da/da-12-2
+      content_sha256: sha256:00c42c92536a615b7127e69c4691299e890a23264e503255cd5ba4081248e3e9
+    pass_rule: all_runs
+    repeats: 1
+    timeout_seconds: 600
+    metrics:
+    - checks_passed
+    - checks_total
+    - query_genes
+    - pathways_tested
+    - background_genes
+    - query_genes_in_background
+    - significant_pathways
+    - g2m_overlap_genes
+    - g2m_pathway_size
+    - g2m_pvalue
+    - g2m_fdr
+    - g2m_rank

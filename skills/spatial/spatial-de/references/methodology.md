@@ -126,9 +126,9 @@ python skills/spatial/spatial-de/spatial_de.py \
 ```
 
 Every successful standard OmicsClaw wrapper run, including `oc run` and
-conversational skill execution, also writes a top-level `README.md` and
-`reproducibility/analysis_notebook.ipynb` to make the output directory easier
-to inspect and rerun.
+conversational skill execution, also writes a top-level `README.md` and a
+`reproducibility/replay.json` Capsule to make the output directory easier to
+inspect and replay.
 
 
 ## Algorithm / Methodology

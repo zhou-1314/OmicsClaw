@@ -27,6 +27,19 @@ async def client(tmp_path):
     await db.close()
 
 
+@pytest.fixture
+def desktop_remote_authority():
+    """Mirror the empty-token loopback authority installed by app lifespan."""
+    from omicsclaw.remote import auth as remote_auth
+    from omicsclaw.surfaces.desktop import server
+
+    authority = remote_auth.capture_remote_bearer_authority(server.app, {})
+    try:
+        yield authority
+    finally:
+        remote_auth.release_remote_bearer_authority(server.app, authority)
+
+
 # ---- service layer ---------------------------------------------------------
 
 
@@ -88,7 +101,9 @@ async def test_list_threads_ignores_legacy_project_context(client):
 
 
 @pytest.mark.asyncio
-async def test_thread_rest_roundtrip_and_route_order(client, monkeypatch):
+async def test_thread_rest_roundtrip_and_route_order(
+    client, monkeypatch, desktop_remote_authority
+):
     pytest.importorskip("httpx")
     from httpx import ASGITransport, AsyncClient
 
@@ -96,7 +111,7 @@ async def test_thread_rest_roundtrip_and_route_order(client, monkeypatch):
 
     monkeypatch.setattr(server, "_memory_client", client)
     transport = ASGITransport(app=server.app)
-    async with AsyncClient(transport=transport, base_url="http://t") as http:
+    async with AsyncClient(transport=transport, base_url="http://127.0.0.1") as http:
         # create
         r = await http.post("/thread/create", json={"name": "Glioma", "domains": ["spatial"]})
         assert r.status_code == 200, r.text
@@ -135,14 +150,18 @@ async def test_thread_rest_roundtrip_and_route_order(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_thread_routes_503_when_memory_unavailable(monkeypatch):
+async def test_thread_routes_503_when_memory_unavailable(
+    monkeypatch, desktop_remote_authority
+):
     pytest.importorskip("httpx")
     from httpx import ASGITransport, AsyncClient
 
     from omicsclaw.surfaces.desktop import server
 
     monkeypatch.setattr(server, "_memory_client", None)
-    async with AsyncClient(transport=ASGITransport(app=server.app), base_url="http://t") as http:
+    async with AsyncClient(
+        transport=ASGITransport(app=server.app), base_url="http://127.0.0.1"
+    ) as http:
         assert (await http.get("/thread/list")).status_code == 503
         assert (await http.post("/thread/create", json={"name": "x"})).status_code == 503
         assert (await http.get("/thread/abc")).status_code == 503

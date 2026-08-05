@@ -4,7 +4,11 @@
 
 Proposed (2026-07-22).
 
-Implementation: Not started.
+Implementation: Phased. Experience View, Evaluation Protocol/result store,
+local content-addressed Evaluation Artifact Store, evidence-bound governance
+execution and protocol/merge proposal slices exist; RunRuntime-backed
+AuditOperation and full artifact-retention/cancel/resource interfaces remain
+deferred.
 
 Refines the target direction of
 [ADR 0030](0030-first-class-skill-type-system.md),
@@ -24,12 +28,13 @@ Skill and source identity; and earned promotion, demotion, Gotcha, deprecation,
 replacement, guarded writeback and recovery remain Backend-owned and
 human-gated.
 
-The current audit system is nevertheless event- and proposal-centric. It has
-no unified per-Skill experience view, no versioned evaluation protocol, no
-first-class stability result, and no distinction between a validation level
+When this ADR was proposed, the audit system was event- and proposal-centric.
+It had no unified per-Skill experience view, no versioned evaluation protocol,
+no first-class stability result, and no distinction between a validation level
 written after an earlier approval and the level supported by current source
 and protocol evidence. Runtime health, routing feedback, evaluation scripts
-and governance are therefore harder to inspect as one lifecycle.
+and governance were therefore harder to inspect as one lifecycle. The phased
+implementation status above records which of those gaps have since closed.
 
 MUSE-Autoskill correctly argues that Skills should accumulate experience and
 be evaluated throughout creation, use, management and refinement. Its direct
@@ -139,6 +144,41 @@ declare repeats and tolerances; results may report execution success, envelope
 and artifact consistency, allowlisted scientific metric dispersion, resource
 quantiles and target-environment consistency. There is no universal five-run
 or zero-variance requirement.
+
+### Separate suite-level Benchmark Campaigns from Skill validation
+
+An Evaluation Protocol answers whether one exact Skill revision satisfies one
+declared scientific case. A Benchmark Campaign answers whether an Agent
+condition improves over a frozen suite or pre-registered subset. Campaigns bind
+an explicit experiment kind; the complete case x condition x repeat matrix;
+model/runtime/Agent/environment/tool-policy/budget and per-condition
+configuration identities; data and grader digests; a baseline; and one
+coverage-manifest digest with exact pre-frozen anchor case IDs.
+
+Every declared matrix cell stays in the strict denominator. Missing,
+unsupported, uncovered, timeout, setup, infrastructure, invalid-output and
+other non-graded cells contribute zero and cannot pass merely because the score
+threshold is zero. Coverage and anchor-covered score are diagnostics: every
+condition's anchor-covered score uses the same pre-registered case set and never
+replaces the strict denominator.
+
+Every attempted run binds a unique trial/isolation identity and a
+content-addressed artifact bundle; graded runs also bind grader evidence.
+Covered Skill failures bind exact Skill revisions just like successes. Offline
+analysis reports `matrix-integrity-only` until an execution harness proves the
+experiment-specific causal chain; an opaque condition digest is a commitment,
+not semantic proof that no other variable changed.
+
+Campaign evidence is comparative Agent evidence. It cannot promote one Skill,
+enter that Skill's Experience View as validation evidence, or pool unlike native
+scores across suites. Main no-Skill/curated/self-created comparisons, memory
+on/off, refinement, transfer, and creation-versus-reuse cost remain distinct
+experiments. The first offline analysis Module is implemented in
+`omicsclaw/skill/benchmark_campaign.py`; an execution harness and full Agent
+Campaign remain future work. In particular, typed Phase-1-to-Phase-2 creation,
+memory state/leakage, refinement parent/held-out, and transfer source/target
+provenance are not yet implemented and therefore cannot support a causal lift
+claim.
 
 ### Separate declared validation from effective validation
 
@@ -295,15 +335,16 @@ until a causally current snapshot is loaded.
 - Declared and effective validation may temporarily disagree. That
   disagreement is intentional evidence visibility, not automatic mutation.
 - This proposal does not close the existing M1/M2/M3 partial status by itself.
-  Implementation and the AUD-01 through AUD-10 acceptance evidence remain
-  future work.
-- The lowest-risk first implementation slice is the Skill Experience View, the
-  declared/effective validation separation, and the additive snapshot fields,
-  all computed over the existing `SkillHealthLedger` evidence with no new
-  Evaluation Protocol schema or `AuditOperation` yet. It delivers honest
-  validation freshness and inspectable experience while validating AUD-01/02/04
-  and the AUD-07 additive contract before the heavier protocol and operation
-  machinery.
+  AUD-01/02/04 and the additive AUD-07 slice now have implemented evidence;
+  Evaluation Protocol/result execution, content-bound dataset bundles and the
+  offline Benchmark Campaign analyzer are also present. AUD-09 RunRuntime-backed
+  AuditOperation and the full AUD-10 remediation/management loop remain open.
+- The historical lowest-risk slice was the Skill Experience View,
+  declared/effective validation separation and additive snapshot fields over
+  `SkillHealthLedger`. That slice is implemented. Later slices added Evaluation
+  Protocol schema-v2 evidence, bounded local content-addressed artifacts, real
+  OmicBench/scAgentBench/BiomniBench-DA case adapters and suite-level Campaign
+  analysis without changing the governance mutation authority.
 - Moving candidate synthesis out of `SkillEvolutionGovernance.refresh()` into
   `SkillAuditRuntime` is a careful refactor of already-shipped ADR 0066/0068/0069
   code: `SkillAuditRuntime` produces only deterministic candidate inputs, while

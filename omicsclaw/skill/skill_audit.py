@@ -1,12 +1,10 @@
-"""Derived Skill audit read models (ADR 0074, first implementation slice).
+"""Derived Skill audit read models (ADR 0074).
 
 Pure derivation of the per-revision **Skill Experience View** and the
-**declared vs effective validation** separation over the *existing*
-``SkillHealthLedger`` evidence. There is no new event store, no Evaluation
-Protocol schema and no ``AuditOperation`` here — this is the lowest-risk
-ADR-0074 slice (see the ADR "first implementation slice" consequence). The
-``SkillAuditRuntime`` that reads the real ledger + registry, and the additive
-Desktop snapshot fields, land in later slices.
+**declared vs effective validation** separation over ``SkillHealthLedger``
+events plus protocol-bound ``EvaluationResultStore`` evidence. The production
+``SkillAuditRuntime`` reads the real ledger and current Registry identities;
+long-running ``AuditOperation`` orchestration remains outside this module.
 
 Design references:
 ``docs/adr/0074-govern-skill-experience-and-continuous-evaluation.md`` and
@@ -21,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
+from uuid import uuid4
 
 # Reuse the ledger's authoritative failure classification and event type so the
 # audit view can never drift from how ``SkillHealthLedger.summarize`` counts a
@@ -142,25 +141,92 @@ class ProtocolEvaluationResult:
     run_index: int = 0
     repeats: int = 1
     metrics: Mapping[str, float] = field(default_factory=dict)
+    result_id: str = field(default_factory=lambda: uuid4().hex)
+    evaluation_id: str = field(default_factory=lambda: uuid4().hex)
+    environment_id: str = ""
+    dataset_digest: str = ""
+    reason_code: str = "none"
+    evidence_refs: tuple[str, ...] = ()
+    duration_seconds: float = 0.0
 
 
 def _protocol_supported_level(
     results: Sequence[ProtocolEvaluationResult],
     current_protocol_digests: Mapping[str, str] | None,
+    current_protocol_contracts: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> str:
-    """Highest ladder level earned by fresh, passing protocol results.
+    """Highest level earned by one complete, all-successful protocol batch.
 
     A result is fresh only if its ``protocol_digest`` matches the current digest
-    declared for that ``protocol_id``; a drifted protocol earns nothing.
+    declared for that ``protocol_id``. Repeated runs earn a level only as one
+    complete evaluation batch; one success cannot mask a failed sibling run.
     """
+    from collections import defaultdict
+
     digests = current_protocol_digests or {}
-    supported = "smoke-only"
-    for result in results:
-        if result.outcome != "succeeded":
-            continue
+    contracts = current_protocol_contracts or {}
+    batches: dict[
+        tuple[str, str, str, str, str], list[ProtocolEvaluationResult]
+    ] = defaultdict(list)
+    for ordinal, result in enumerate(results):
         if digests.get(result.protocol_id) != result.protocol_digest:
             continue
-        level = _PROTOCOL_KIND_LEVEL.get(result.kind)
+        contract = contracts.get(result.protocol_id, {})
+        if result.kind == "benchmark" and not contract:
+            # Benchmark evidence is never accepted from a self-described result.
+            # It must be checked against the current manifest-derived contract.
+            continue
+        expected_kind = str(contract.get("kind") or result.kind)
+        expected_repeats = int(contract.get("repeats") or result.repeats or 1)
+        if (
+            result.kind != expected_kind
+            or result.repeats != expected_repeats
+            or str(contract.get("pass_rule") or "all_runs") != "all_runs"
+        ):
+            continue
+
+        dataset_ref = contract.get("dataset_ref")
+        expected_dataset = ""
+        if isinstance(dataset_ref, Mapping):
+            expected_dataset = str(dataset_ref.get("content_sha256") or "")
+        expected_environment = str(contract.get("environment_id") or "")
+        if expected_dataset and result.dataset_digest != expected_dataset:
+            continue
+        if expected_environment and result.environment_id != expected_environment:
+            continue
+        if result.kind == "benchmark" and (
+            not result.result_id
+            or not result.evaluation_id
+            or not result.dataset_digest
+            or not result.environment_id
+        ):
+            continue
+        evaluation_id = result.evaluation_id
+        if not evaluation_id:
+            if expected_repeats != 1 or result.kind not in {"demo", "fixture"}:
+                continue
+            evaluation_id = f"legacy-single:{ordinal}"
+        batches[
+            (
+                result.protocol_id,
+                result.protocol_digest,
+                evaluation_id,
+                result.environment_id,
+                result.dataset_digest,
+            )
+        ].append(result)
+
+    supported = "smoke-only"
+    for (protocol_id, _digest, _evaluation_id, _environment, _dataset), batch in batches.items():
+        contract = contracts.get(protocol_id, {})
+        expected_repeats = int(contract.get("repeats") or batch[0].repeats or 1)
+        expected_indices = set(range(expected_repeats))
+        observed_indices = {result.run_index for result in batch}
+        if len(batch) != expected_repeats or observed_indices != expected_indices:
+            continue
+        if any(result.outcome != "succeeded" for result in batch):
+            continue
+        level = _PROTOCOL_KIND_LEVEL.get(batch[0].kind)
         if level is not None:
             supported = _max_level(supported, level)
     return supported
@@ -186,6 +252,7 @@ class SkillExperienceView:
 
     skill_revision: SkillRevision
     declared_validation_level: str
+    evidence_supported_validation_level: str
     effective_validation_level: str
     validation_state: str  # current | stale | evaluation_required | review_required
     last_observed_at: str
@@ -197,8 +264,10 @@ class SkillExperienceView:
     # so up front instead of offering a "run evaluation" action that is
     # guaranteed to return nothing. Ids only — never entries or digests.
     declared_protocol_ids: tuple[str, ...] = ()
-    # Reserved ADR-0074 §7 fields, populated by later slices (protocols, Gotcha
-    # linkage, proposal linkage). Present now so the view schema is stable.
+    # Stability is populated from current protocol evidence. The remaining
+    # governance-link fields keep a stable read shape but still default empty;
+    # approved Gotcha text currently reaches invocation context through the
+    # canonical SKILL.md/Registry path rather than this projection.
     stability: dict[str, Any] = field(default_factory=dict)
     approved_gotchas: tuple[str, ...] = ()
     coverage_gaps: tuple[str, ...] = ()
@@ -208,6 +277,7 @@ class SkillExperienceView:
         return {
             "skill_revision": self.skill_revision.to_dict(),
             "declared_validation_level": self.declared_validation_level,
+            "evidence_supported_validation_level": self.evidence_supported_validation_level,
             "effective_validation_level": self.effective_validation_level,
             "validation_state": self.validation_state,
             "last_observed_at": self.last_observed_at,
@@ -239,25 +309,40 @@ def _bounded_evidence_refs(events: Sequence[SkillRunEvent]) -> tuple[str, ...]:
 def _stability_view(
     fresh_results: Sequence[ProtocolEvaluationResult],
 ) -> dict[str, Any]:
-    """Per-protocol stability aggregation over fresh results (ADR 0074 §6.3).
+    """Latest-batch stability aggregation per protocol (ADR 0074 §6.3).
 
     An ORTHOGONAL view — never a single global score and never a ladder step, so
-    it does not change effective validation. For each protocol with fresh
-    (digest-current) results it reports the repeated-run success rate, whether
-    every run agreed on an outcome, and the dispersion of each allowlisted metric
-    across runs (count / min / max / mean / population stddev). A protocol run
-    once still reports ``runs=1`` with zero-variance dispersion.
+    it does not change effective validation. Results from different evaluation
+    batches, environments, or datasets are independent experiments and must
+    never be pooled. For each protocol this view therefore selects the most
+    recently observed batch and reports its repeated-run success rate, outcome
+    agreement, and allowlisted metric dispersion. ``batch_count`` makes older
+    current-digest batches visible without contaminating those statistics.
     """
     from collections import defaultdict
     from statistics import mean, pstdev
 
-    by_protocol: dict[str, list[ProtocolEvaluationResult]] = defaultdict(list)
+    by_protocol: dict[
+        str,
+        dict[tuple[str, str, str], list[ProtocolEvaluationResult]],
+    ] = defaultdict(lambda: defaultdict(list))
     for result in fresh_results:
-        by_protocol[result.protocol_id].append(result)
+        evaluation_id = result.evaluation_id or f"legacy-single:{result.result_id}"
+        by_protocol[result.protocol_id][
+            (evaluation_id, result.environment_id, result.dataset_digest)
+        ].append(result)
 
     stability: dict[str, Any] = {}
     for protocol_id in sorted(by_protocol):
-        runs = by_protocol[protocol_id]
+        batches = by_protocol[protocol_id]
+        batch_key, runs = max(
+            batches.items(),
+            key=lambda item: (
+                max((run.occurred_at for run in item[1]), default=""),
+                item[0],
+            ),
+        )
+        evaluation_id, environment_id, dataset_digest = batch_key
         successes = sum(1 for r in runs if r.outcome == "succeeded")
         values: dict[str, list[float]] = defaultdict(list)
         for r in runs:
@@ -273,10 +358,21 @@ def _stability_view(
             }
             for name, vals in sorted(values.items())
         }
+        expected_repeats = max(r.repeats for r in runs)
+        run_indices = sorted({r.run_index for r in runs})
         stability[protocol_id] = {
             "kind": runs[0].kind,
-            "repeats": max(r.repeats for r in runs),
+            "evaluation_id": evaluation_id,
+            "environment_id": environment_id,
+            "dataset_digest": dataset_digest,
+            "batch_count": len(batches),
+            "repeats": expected_repeats,
             "runs": len(runs),
+            "run_indices": run_indices,
+            "batch_complete": (
+                len(runs) == expected_repeats
+                and run_indices == list(range(expected_repeats))
+            ),
             "successes": successes,
             "success_rate": round(successes / len(runs), 4),
             "outcomes_consistent": len({r.outcome for r in runs}) <= 1,
@@ -291,6 +387,7 @@ def derive_experience_view(
     events: Sequence[SkillRunEvent],
     protocol_results: Sequence[ProtocolEvaluationResult] = (),
     current_protocol_digests: Mapping[str, str] | None = None,
+    current_protocol_contracts: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> SkillExperienceView:
     """Derive one Skill Experience View for an exact revision (ADR 0074).
 
@@ -338,7 +435,11 @@ def derive_experience_view(
     ]
     supported = _max_level(
         demo_supported,
-        _protocol_supported_level(protocol_results, current_protocol_digests),
+        _protocol_supported_level(
+            protocol_results,
+            current_protocol_digests,
+            current_protocol_contracts,
+        ),
     )
     if skill_defects:
         # A reproducing current-revision defect caps support at the floor,
@@ -371,6 +472,7 @@ def derive_experience_view(
     return SkillExperienceView(
         skill_revision=revision,
         declared_validation_level=declared_validation_level,
+        evidence_supported_validation_level=supported,
         effective_validation_level=effective,
         validation_state=state,
         last_observed_at=last_observed_at,
@@ -395,9 +497,9 @@ def derive_experience_view(
 class CurrentRevision:
     """A Skill's current revision plus its last human-approved declared level.
 
-    Produced by a resolver over the live registry (the resolver — which computes
-    the current manifest/source identity — is wired in a later slice); the audit
-    runtime consumes it to project experience without touching the filesystem.
+    Produced by the live Registry resolver, which computes the current
+    manifest/source identity; the audit runtime consumes it to project
+    experience without mutating the filesystem.
 
     ``protocol_digests`` maps each declared Evaluation Protocol id to its current
     digest, so a stored evaluation result earns a level only while its protocol
@@ -407,6 +509,7 @@ class CurrentRevision:
     revision: SkillRevision
     declared_validation_level: str
     protocol_digests: Mapping[str, str] = field(default_factory=dict)
+    protocol_contracts: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
 
 class _EventSource(Protocol):
@@ -466,10 +569,42 @@ class SkillAuditRuntime:
                     events,
                     protocol_results=results,
                     current_protocol_digests=cr.protocol_digests,
+                    current_protocol_contracts=cr.protocol_contracts,
                 )
             )
         views.sort(key=lambda v: (v.skill_revision.skill_id, v.skill_revision.version))
         return views
+
+    def experience_view(self, skill_id: str) -> SkillExperienceView | None:
+        """Derive one selected Skill without hashing every Skill in the fleet."""
+        normalized = str(skill_id or "").strip()
+        if not normalized:
+            return None
+        events = list(self._ledger.events())
+        if isinstance(self._resolve, CachedRevisionResolver):
+            revisions = self._resolve.resolve({normalized})
+        else:
+            revisions = [
+                revision
+                for revision in self._resolve()
+                if revision.revision.skill_id == normalized
+            ]
+        if not revisions:
+            return None
+        current = revisions[0]
+        results = (
+            self._protocol_results(current.revision)
+            if self._protocol_results
+            else ()
+        )
+        return derive_experience_view(
+            current.revision,
+            current.declared_validation_level,
+            events,
+            protocol_results=results,
+            current_protocol_digests=current.protocol_digests,
+            current_protocol_contracts=current.protocol_contracts,
+        )
 
     def summary(self, views: Sequence[SkillExperienceView] | None = None) -> dict[str, Any]:
         """Bounded aggregate for the additive Desktop snapshot (ADR 0074 §9.2).
@@ -515,6 +650,7 @@ class SkillIdentityInput:
     cache_key: str
     mtime_signature: str
     protocol_digests: Mapping[str, str] = field(default_factory=dict)
+    protocol_contracts: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
 
 class CachedRevisionResolver:
@@ -545,9 +681,12 @@ class CachedRevisionResolver:
         """Drop all cached identities (call when Skill sources may have changed)."""
         self._cache.clear()
 
-    def __call__(self) -> list[CurrentRevision]:
+    def resolve(self, skill_ids: set[str] | None = None) -> list[CurrentRevision]:
+        """Resolve all revisions, or only the requested canonical Skill ids."""
         resolved: list[CurrentRevision] = []
         for item in self._enumerate():
+            if skill_ids is not None and item.skill_id not in skill_ids:
+                continue
             cached = self._cache.get(item.cache_key)
             if cached is not None and cached[0] == item.mtime_signature:
                 manifest_hash, source_hash = cached[1]
@@ -567,6 +706,10 @@ class CachedRevisionResolver:
                     ),
                     item.declared_validation_level,
                     protocol_digests=item.protocol_digests,
+                    protocol_contracts=item.protocol_contracts,
                 )
             )
         return resolved
+
+    def __call__(self) -> list[CurrentRevision]:
+        return self.resolve()

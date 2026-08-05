@@ -634,6 +634,51 @@ class Lifecycle(_Strict):
 
 
 ProtocolKind = Literal["demo", "fixture", "benchmark", "stability"]
+ProtocolRunner = Literal["shared_runner", "pytest", "command"]
+ProtocolPassRule = Literal["all_runs"]
+
+
+def _validate_protocol_relative_path(value: str, *, field: str) -> str:
+    normalized = str(value).strip()
+    path = PurePosixPath(normalized)
+    if (
+        not normalized
+        or "\\" in normalized
+        or path.is_absolute()
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        raise ValueError(f"{field} must be a safe POSIX relative path")
+    return path.as_posix()
+
+
+class EvaluationDatasetRef(_Strict):
+    """Immutable content identity for an evaluation dataset or suite case."""
+
+    store: Literal["repository"]
+    path: str = Field(min_length=1)
+    content_sha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    members: list[str] = Field(default_factory=list, max_length=64)
+
+    @field_validator("path")
+    @classmethod
+    def _safe_path(cls, value: str) -> str:
+        return _validate_protocol_relative_path(value, field="dataset_ref.path")
+
+    @field_validator("members")
+    @classmethod
+    def _safe_members(cls, value: list[str]) -> list[str]:
+        normalized = [
+            _validate_protocol_relative_path(member, field="dataset_ref.members")
+            for member in value
+        ]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("dataset_ref.members must be unique")
+        members = sorted(normalized)
+        for index, member in enumerate(members):
+            prefix = member + "/"
+            if any(other.startswith(prefix) for other in members[index + 1 :]):
+                raise ValueError("dataset_ref.members cannot contain overlapping paths")
+        return members
 
 
 class EvaluationProtocol(_Strict):
@@ -646,11 +691,16 @@ class EvaluationProtocol(_Strict):
     for — there is no universal five-run rule.
     """
 
-    id: str = Field(min_length=1)
+    id: str = Field(min_length=1, max_length=128, pattern=r"^[a-z0-9][a-z0-9._-]*$")
     kind: ProtocolKind
     entry: str = Field(min_length=1)
-    dataset_ref: Optional[str] = None
+    runner: ProtocolRunner = "pytest"
+    suite_id: Optional[str] = None
+    case_ids: list[str] = Field(default_factory=list)
+    dataset_ref: Optional[EvaluationDatasetRef] = None
+    pass_rule: ProtocolPassRule = "all_runs"
     repeats: int = Field(default=1, ge=1, le=100)
+    timeout_seconds: int = Field(default=600, ge=1, le=3600)
     # Allowlist of scientific metric names this protocol may publish into the
     # Experience View's stability dispersion. ONLY these names are captured from
     # a run's output (ADR 0074 §5.2/§11.5); a runner cannot inject arbitrary
@@ -669,11 +719,59 @@ class EvaluationProtocol(_Strict):
             raise ValueError("metric name exceeds 64 characters")
         return cleaned
 
+    @field_validator("entry")
+    @classmethod
+    def _safe_entry(cls, value: str) -> str:
+        return _validate_protocol_relative_path(value, field="entry")
+
+    @field_validator("case_ids")
+    @classmethod
+    def _clean_case_ids(cls, value: list[str]) -> list[str]:
+        cleaned = _clean_str_list(value)
+        if len(cleaned) > 64:
+            raise ValueError("case_ids exceeds 64 entries")
+        if any(len(case_id) > 128 for case_id in cleaned):
+            raise ValueError("case id exceeds 128 characters")
+        return cleaned
+
+    @model_validator(mode="after")
+    def _benchmark_is_content_bound(self):
+        self.suite_id = str(self.suite_id or "").strip() or None
+        if self.kind == "demo":
+            if "runner" not in self.model_fields_set:
+                self.runner = "shared_runner"
+            elif self.runner != "shared_runner":
+                raise ValueError("demo protocol requires runner=shared_runner")
+        elif self.runner == "shared_runner":
+            raise ValueError("runner=shared_runner is reserved for demo protocols")
+        if self.kind == "benchmark":
+            if self.runner != "command":
+                raise ValueError("benchmark protocol requires runner=command")
+            if not self.suite_id:
+                raise ValueError("benchmark protocol requires suite_id")
+            if not self.case_ids:
+                raise ValueError("benchmark protocol requires case_ids")
+            if len(self.case_ids) != 1:
+                raise ValueError(
+                    "benchmark protocol currently requires exactly one case_id"
+                )
+            if self.dataset_ref is None:
+                raise ValueError("benchmark protocol requires dataset_ref")
+        return self
+
 
 class Validation(_Strict):
     level: ValidationLevel = "smoke-only"
     evidence: list[str] = Field(default_factory=list)
     protocols: list[EvaluationProtocol] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _protocol_ids_are_unique(self):
+        ids = [protocol.id for protocol in self.protocols]
+        duplicates = sorted({protocol_id for protocol_id in ids if ids.count(protocol_id) > 1})
+        if duplicates:
+            raise ValueError(f"evaluation protocol ids must be unique: {duplicates}")
+        return self
 
 
 class Provenance(_Strict):

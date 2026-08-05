@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass, field
 import json
 from pathlib import Path
 import re
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from .preconditions import (
     InputProfile,
@@ -139,10 +139,14 @@ _DOMAIN_QUERY_ALIASES: dict[str, tuple[str, ...]] = {
 
 # ----- resolve_capability: decision thresholds -----
 
-# Below this top-1 score the resolver returns ``coverage="no_skill"`` instead
-# of guessing. Tuned so a single description-token overlap (~0.85) or a
-# single short keyword hit (~1.5) is not enough to commit.
+# Absolute commitment floor. A method/trigger match may clear this at 3.0.
 _RESOLVE_NO_SKILL_THRESHOLD = 3.0
+
+# Generic description overlap has a stricter floor: four broad modality words
+# score 3.4 and must not let "bulk / gene / matrix / RNA-seq" impersonate a
+# specific absent method such as cosinor. Explicit aliases, task names, trigger
+# keywords, or parameter methods remain eligible at the absolute floor above.
+_RESOLVE_GENERIC_ONLY_THRESHOLD = 4.0
 
 # If top-1 minus top-2 is smaller than this and the query also has composite
 # wording ("and then ...", "再 ..."), the resolver downgrades from
@@ -328,6 +332,21 @@ _SKILL_CREATION_HINTS = (
     "沉淀成 skill",
     "加入omicsclaw",
     "加入 omicsclaw",
+)
+
+_SKILL_CREATION_NEGATION_PATTERNS = (
+    re.compile(
+        r"\b(?:this\s+is\s+)?not\s+(?:yet\s+)?(?:a\s+)?request\s+to\s+"
+        r"(?:create|add|build|scaffold|package|persist)\s+"
+        r"(?:(?:a|an|new)\s+)?skills?\b(?:\s+yet)?"
+    ),
+    re.compile(
+        r"\b(?:please\s+)?(?:do\s+not|don't|dont|not\s+to)\s+"
+        r"(?:yet\s+)?(?:create|add|build|scaffold|package|persist)\s+"
+        r"(?:(?:a|an|new)\s+)?skills?\b(?:\s+yet)?"
+    ),
+    re.compile(r"\b(?:no|without)\s+skill\s+(?:creation|authoring|scaffolding)\b"),
+    re.compile(r"(?:不要|无需|暂不|先不).{0,12}(?:创建|新增|新建|封装|沉淀).{0,8}skill"),
 )
 
 _COMPOSITE_HINTS = (
@@ -606,6 +625,21 @@ def _method_mentions(query: str) -> set[str]:
     }
 
 
+def _candidate_has_specific_match(candidate: CapabilityCandidate) -> bool:
+    """Distinguish method/task identity from broad description overlap."""
+    prefixes = (
+        "query explicitly requests",
+        "query explicitly names task type",
+        "query explicitly names modality",
+        "query explicitly mentions skill",
+        "query mentions legacy alias",
+        "trigger keyword match",
+        "requested method",
+        "structured skip_when",
+    )
+    return any(reason.startswith(prefixes) for reason in candidate.reasons)
+
+
 def _normalise_condition_text(text: str) -> str:
     """Normalise common spelling variants before Skip-when token matching."""
     value = (text or "").lower()
@@ -663,6 +697,8 @@ def _matching_skip_rule(
 
 def _requests_skill_creation(query: str) -> bool:
     lower = (query or "").lower()
+    if any(pattern.search(lower) for pattern in _SKILL_CREATION_NEGATION_PATTERNS):
+        return False
     if any(hint in lower for hint in _SKILL_CREATION_HINTS):
         return True
 
@@ -732,6 +768,7 @@ def _score_skills_and_detect_domain(
     query: str,
     *,
     file_path: str = "",
+    experience_level_resolver: Callable[[str], str | None] | None = None,
 ) -> tuple[str, list["CapabilityCandidate"]]:
     """Single-pass scoring: walk every primary skill exactly once and emit
     both the detected domain *and* every skill's per-candidate score.
@@ -829,6 +866,9 @@ def _score_skills_and_detect_domain(
             query_tokens,
             method_tokens,
             keyword_matches=all_kw_matches,
+            validation_level_override=(
+                "smoke-only" if experience_level_resolver is not None else None
+            ),
         )
         if candidate is not None:
             candidates.append(candidate)
@@ -874,6 +914,27 @@ def _score_skills_and_detect_domain(
         existing.semantic_score = max(existing.semantic_score, redirected.semantic_score)
         existing.reasons = redirected.reasons + existing.reasons
 
+    if candidates and experience_level_resolver is not None:
+        max_semantic_score = max(candidate.semantic_score for candidate in candidates)
+        max_validation_bonus = max(_VALIDATION_SCORE.values())
+        for candidate in candidates:
+            if candidate.semantic_score < max_semantic_score - max_validation_bonus:
+                continue
+            try:
+                effective_level = (
+                    experience_level_resolver(candidate.skill) or "smoke-only"
+                )
+            except Exception:
+                effective_level = "smoke-only"
+            validation_score = _VALIDATION_SCORE.get(effective_level, 0.0)
+            if validation_score:
+                candidate.score += validation_score
+                candidate.semantic_score += validation_score
+                candidate.reasons.append(
+                    "effective validation level "
+                    f"{effective_level} tie-break +{validation_score}"
+                )
+
     # Domain-name and domain-key textual matches contribute independently of
     # any skill — keep these post-loop so the loop body has one concern.
     for domain_key in registry.domains:
@@ -903,6 +964,7 @@ def _candidate_score(
     method_tokens: set[str],
     *,
     keyword_matches: list[str] | None = None,
+    validation_level_override: str | None = None,
 ) -> CapabilityCandidate | None:
     score = 0.0
     reasons: list[str] = []
@@ -994,7 +1056,11 @@ def _candidate_score(
             score += _SCORE_PARAM_HINT_MATCH
             reasons.append(f"requested method '{kw_lower}' appears in param hints")
 
-    validation_level = str(info.get("validation_level") or "smoke-only")
+    validation_level = (
+        validation_level_override
+        if validation_level_override is not None
+        else str(info.get("validation_level") or "smoke-only")
+    )
     validation_score = _VALIDATION_SCORE.get(validation_level, 0.0)
     if score > 0 and validation_score:
         score += validation_score
@@ -1054,6 +1120,7 @@ def _resolve_composite_candidate_chain(
     domain_hint: str,
     input_profile: InputProfile | dict[str, Any] | None,
     method_bindings: Mapping[str, str] | None,
+    experience_level_resolver: Callable[[str], str | None] | None,
 ) -> dict[str, Any]:
     """Resolve atomic clauses, then order only graph-connected selections.
 
@@ -1075,6 +1142,7 @@ def _resolve_composite_candidate_chain(
             file_path=file_path,
             domain_hint=domain_hint,
             input_profile=input_profile,
+            _experience_level_resolver=experience_level_resolver,
             _build_composite_chain=False,
         )
         if not decision.chosen_skill or decision.chosen_skill in selected:
@@ -1133,6 +1201,7 @@ def resolve_capability(
     domain_hint: str = "",
     input_profile: InputProfile | dict[str, Any] | None = None,
     method_bindings: Mapping[str, str] | None = None,
+    _experience_level_resolver: Callable[[str], str | None] | None = None,
     _build_composite_chain: bool = True,
 ) -> CapabilityDecision:
     """Resolve a user request into exact/partial/no-skill coverage."""
@@ -1188,11 +1257,17 @@ def resolve_capability(
         # for that domain; do the single-pass scoring and discard the
         # detection result.
         _, all_candidates = _score_skills_and_detect_domain(
-            registry, query, file_path=file_path
+            registry,
+            query,
+            file_path=file_path,
+            experience_level_resolver=_experience_level_resolver,
         )
     else:
         domain, all_candidates = _score_skills_and_detect_domain(
-            registry, query, file_path=file_path
+            registry,
+            query,
+            file_path=file_path,
+            experience_level_resolver=_experience_level_resolver,
         )
 
     if _requests_new_literature_implementation(query_lower):
@@ -1301,7 +1376,14 @@ def resolve_capability(
         )
     )
 
-    if not candidates or candidates[0].score < _RESOLVE_NO_SKILL_THRESHOLD:
+    if (
+        not candidates
+        or candidates[0].score < _RESOLVE_NO_SKILL_THRESHOLD
+        or (
+            candidates[0].score < _RESOLVE_GENERIC_ONLY_THRESHOLD
+            and not _candidate_has_specific_match(candidates[0])
+        )
+    ):
         # Registry scoring must run before this check so niche but well-described
         # omics intents are still discoverable.  Once every candidate remains
         # below the commitment threshold, however, preserve the chat boundary:
@@ -1418,6 +1500,7 @@ def resolve_capability(
             domain_hint=domain_hint,
             input_profile=input_profile,
             method_bindings=method_bindings,
+            experience_level_resolver=_experience_level_resolver,
         )
         if composite_requested and _build_composite_chain
         else {}

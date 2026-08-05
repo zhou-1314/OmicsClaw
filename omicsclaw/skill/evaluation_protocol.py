@@ -2,17 +2,18 @@
 
 Only a declared Evaluation Protocol can earn a validation level above
 ``smoke-only``. This module owns the protocol's version identity: a deterministic
-digest that binds the executable protocol, its declared spec (id / kind / entry /
-dataset reference / repeats), and the relevant pinned dependency versions. A
+digest that binds the executable protocol, its declared spec (including runner,
+suite/case, content-bound dataset, pass rule, repeats and timeout), and the
+relevant pinned dependency versions. A
 change to any of those — the entry bytes that encode the pass conditions, the
 declared spec, or a tool version — produces a new digest, so evidence earned
 under the old protocol stops applying to the current one (the freshness rule of
 ADR 0074 §6.4).
 
 The module is intentionally pure: the caller reads the entry bytes and resolves
-dependency versions; this function only hashes them. The full multi-asset and
-dataset-content binding is layered on as later slices wire real evaluation
-execution; the spec + entry + deps binding here is the stable core.
+dependency versions; this function only hashes them. Dataset bytes are bound by
+the declared content digest and independently verified before and after
+execution by ``evaluation_dataset``.
 """
 
 from __future__ import annotations
@@ -27,7 +28,19 @@ __all__ = ["protocol_digest"]
 # ``metrics`` is the (schema-normalized, sorted) allowlist; changing what a
 # protocol may publish is a protocol change, so it re-digests and stales prior
 # stability evidence (ADR 0074 §6.4).
-_PROTOCOL_SPEC_KEYS = ("id", "kind", "entry", "dataset_ref", "repeats", "metrics")
+_PROTOCOL_SPEC_KEYS = (
+    "id",
+    "kind",
+    "entry",
+    "runner",
+    "suite_id",
+    "case_ids",
+    "dataset_ref",
+    "pass_rule",
+    "repeats",
+    "timeout_seconds",
+    "metrics",
+)
 
 
 def protocol_digest(

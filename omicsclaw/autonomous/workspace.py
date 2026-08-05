@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 import uuid
+
+from omicsclaw.skill.execution.output_ownership import (
+    claim_fresh_output_directory,
+)
 
 from . import run_layout
 from .contracts import (
@@ -20,6 +25,7 @@ from .contracts import (
 # single source of truth that create_workspace AND the artifact contract both
 # derive from, so they can never drift apart.
 WORKSPACE_SUBDIRS = run_layout.eager_dirs()
+_MAX_PROMOTABLE_INPUT_BYTES = 1024 * 1024
 
 
 def _timestamp_for_path() -> str:
@@ -29,7 +35,7 @@ def _timestamp_for_path() -> str:
 
 
 def _new_run_id() -> str:
-    return uuid.uuid4().hex[:8]
+    return uuid.uuid4().hex
 
 
 def build_run_dir_name(*, timestamp: str | None = None, run_id: str | None = None) -> str:
@@ -51,8 +57,10 @@ def create_workspace(request: AutonomousRunRequest) -> AutonomousWorkspace:
         base = resolve_project_dir(
             output_root, request.project_id, request.project_name, create=True
         )
-    root = base / build_run_dir_name(run_id=run_id)
-    root.mkdir(parents=True, exist_ok=False)
+    root = claim_fresh_output_directory(
+        base / build_run_dir_name(run_id=run_id),
+        owner=f"autonomous:{run_id}",
+    )
 
     # Only the eager dirs (those that receive a references.json) are materialised;
     # every other path is created lazily by its writer, per the run_layout schema.
@@ -66,5 +74,27 @@ def create_workspace(request: AutonomousRunRequest) -> AutonomousWorkspace:
 
 
 def _write_reference_manifest(path: Path, references: list[str | Path]) -> None:
+    identities: list[dict[str, object]] = []
+    for item in references:
+        reference = str(item)
+        source = Path(item).expanduser()
+        try:
+            if source.is_symlink() or not source.is_file():
+                continue
+            byte_size = source.stat().st_size
+            if byte_size > _MAX_PROMOTABLE_INPUT_BYTES:
+                continue
+            digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        except OSError:
+            continue
+        identities.append(
+            {
+                "path": reference,
+                "sha256": f"sha256:{digest}",
+                "byte_size": byte_size,
+            }
+        )
     payload = {"references": [str(item) for item in references]}
+    if identities:
+        payload["identities"] = identities
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")

@@ -8,6 +8,7 @@ from pathlib import Path
 import anndata as ad
 import numpy as np
 import pandas as pd
+from scipy import sparse
 
 STANDARDIZE_SCRIPT = Path("skills/singlecell/scrna/sc-standardize-input/sc_standardize_input.py").resolve()
 QC_SCRIPT = Path("skills/singlecell/scrna/sc-qc/sc_qc.py").resolve()
@@ -40,6 +41,53 @@ def _make_nonstandard_h5ad(path: Path) -> None:
     )
     adata.layers["counts"] = counts
     adata.write_h5ad(path)
+
+
+def test_canonicalize_accepts_categorical_gene_name_metadata(tmp_path):
+    from skills.singlecell._lib.adata_utils import canonicalize_singlecell_adata
+
+    adata = ad.AnnData(
+        X=np.array([[2, 1], [3, 0]], dtype=np.int32),
+        obs=pd.DataFrame(index=["cell1", "cell2"]),
+        var=pd.DataFrame(
+            {
+                "feature_name": pd.Categorical(["MT-CO1", "RPS3"]),
+            },
+            index=["ENSG1", "ENSG2"],
+        ),
+    )
+    adata.layers["counts"] = adata.X.copy()
+
+    standardized, prepared, _contract = canonicalize_singlecell_adata(
+        adata,
+        species="human",
+    )
+
+    assert prepared.gene_name_source == "var.feature_name"
+    assert standardized.var_names.tolist() == ["MT-CO1", "RPS3"]
+    standardized.write_h5ad(tmp_path / "standardized.h5ad")
+
+
+def test_standard_normalization_handles_scanpy_111_csr_path():
+    from skills.singlecell._lib.preprocessing import run_standard_normalization
+
+    counts = sparse.csr_array(
+        np.array([[1, 2, 0], [3, 0, 1]], dtype=np.float32)
+    )
+    adata = ad.AnnData(
+        X=counts,
+        obs=pd.DataFrame(index=["cell1", "cell2"]),
+        var=pd.DataFrame(index=["gene1", "gene2", "gene3"]),
+    )
+
+    normalized = run_standard_normalization(adata, target_sum=100.0)
+    assert sparse.issparse(normalized.X) and normalized.X.format == "csr"
+    np.testing.assert_allclose(
+        np.asarray(np.expm1(normalized.X).sum(axis=1)).ravel(),
+        [100.0, 100.0],
+        rtol=1e-5,
+    )
+    np.testing.assert_array_equal(normalized.layers["counts"].toarray(), counts.toarray())
 
 
 def test_standardize_input_creates_canonical_contract(tmp_path):

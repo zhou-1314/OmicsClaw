@@ -27,6 +27,7 @@ dependencies:
   # ────────── Tier 0: Python interpreter + build toolchain ──────────
   - python=3.11
   - pip
+  - setuptools>=64,<82          # louvain 0.8 imports pkg_resources; removed in 82
   - uv>=0.4                     # PubGrub-resolver pip front-end; >=0.4 needed
                                 # for reliable PEP 517 editable installs.
                                 # Used by 0_setup_env.sh Tier 2 for thin pip.
@@ -201,6 +202,7 @@ dependencies:
   - bioconductor-muscat
   - bioconductor-spatialexperiment
   - bioconductor-zellkonverter
+  - bioconductor-rhdf5
   - bioconductor-spotlight
   - bioconductor-deseq2
   - bioconductor-apeglm

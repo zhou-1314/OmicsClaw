@@ -84,7 +84,7 @@ LLM 负责理解你的科研问题、规划分析路径、组织参数和上下�
 
 OmicsClaw 做的事：
 
-- **95 个内置 Skill**横跨 8 大组学领域（spatial、singlecell、bulkrna、genomics、proteomics、metabolomics、orchestrator、literature），每个 Skill 都有 `SKILL.md` 方法学 + Python/R 脚本 + 演示数据
+- **96 个内置 Skill**横跨 8 大组学领域（spatial、singlecell、bulkrna、genomics、proteomics、metabolomics、orchestrator、literature），每个 Skill 都有 `SKILL.md` 方法学 + Python/R 脚本 + 演示数据
 - **统一 Skill Runner 契约**：CLI、Interactive、Bot、桌面 App、远程 Job、研究流水线都通过同一个执行入口，参数白名单、产物布局、报告生成完全一致
 - **本地优先（Local-first）**：原始数据从不离开你配置的运行时；只有上下文摘要和工具结果进入 LLM 调用
 - **图记忆（Graph Memory）**：基于 SQLite/Postgres 的图数据库记录数据集、分析、洞见、偏好的血缘，按 Namespace 隔离不同用户和工作区
@@ -190,7 +190,7 @@ OmicsClaw 的架构、Skill 设计和 local-first 理念受 [ClawBio](https://gi
 - **可执行脚本**（给 OS 跑）：Python（统一约定 `--input`、`--output`、`--demo`），可选 R 脚本/Bash 脚本
 - **演示数据**（给新手用）：`data/` 或共享 `examples/`，配 `--demo` 一键复现
 
-> 当前总计 **95 个 Skill**，由 `skills/catalog.json` 与 `oc list` 双向校验。
+> 当前总计 **96 个 Skill**，由 `skills/catalog.json` 与 `oc list` 双向校验。
 
 #### skill.yaml 与 SKILL.md 是什么
 
@@ -253,7 +253,7 @@ deps:
 | **Research Pipeline** | execute 阶段的子 agent 在 plan 阶段挑出 Skill，按顺序执行 | `omicsclaw/agents/pipeline.py` |
 | **AutoAgent** | 在 metrics-driven 优化循环里把 Skill 当成可调参的对象，反复跑、评估、回滚 | `omicsclaw/autoagent/optimization_loop.py` |
 
-无论谁触发，最终都走**同一个 Skill Runner 契约**：参数白名单校验 → 工作目录隔离 → 执行 → 标准化 README + 可复现 notebook + 产物清单。这是 OmicsClaw 跨 Surface 一致性的关键。
+无论谁触发，最终都走**同一个 Skill Runner 契约**：参数白名单校验 → 工作目录隔离 → 执行 → 标准化 README + Skill Replay Capsule + 产物清单。这是 OmicsClaw 跨 Surface 一致性的关键。
 
 #### Skill 的产出（Output Ownership Contract）
 
@@ -263,7 +263,9 @@ deps:
 output/<skill>/<run_name>/
 ├── README.md                              # 共享 runner 写，含命令、参数、产物列表
 ├── reproducibility/
-│   └── analysis_notebook.ipynb            # 共享 runner 写，复现笔记本
+│   ├── replay.json                        # 冻结 Skill/输入/参数/验证证据
+│   ├── environment.json                   # 有界环境证据，不冒充完整 lockfile
+│   └── replay.sh                          # 调用 oc replay 创建并验证新 Run
 ├── figures/                               # Skill 脚本写，主标准图
 ├── figure_data/                           # Skill 脚本写，给 R Enhanced 重绘用的中间数据
 ├── results/                               # Skill 脚本写，CSV/TSV/h5ad 等
@@ -285,7 +287,7 @@ output/<skill>/<run_name>/
 
 #### 对应代码
 
-- `skills/` — 95 个 Skill 实体
+- `skills/` — 96 个 Skill 实体
 - `skills/catalog.json` — 自动生成的 Skill 清单
 - `omicsclaw/core/registry.py` — Skill 注册表 + 别名解析
 - `omicsclaw/core/skill_result.py` — 共享结果模型
@@ -1295,14 +1297,16 @@ oc replot <skill> --output <dir> --renderer plot_de_volcano --top-n 30
 | "只改火山图" | `replot ... --renderer plot_de_volcano` |
 | "我能调哪些参数？" | `replot ... --list-renderers` |
 
-#### 报告（README + Notebook）
+#### 报告与回放（README + Replay Capsule）
 
 每次 Run 自动生成：
 
 - **`README.md`**：本次 Run 的命令、参数、产物清单、关键 metric、disclaimer
-- **`reproducibility/analysis_notebook.ipynb`**：可在 Jupyter 里复现
+- **`reproducibility/replay.json`**：机器可读的 Skill 修订、输入、参数、环境与验证证据
+- **`reproducibility/environment.json`**：有界 producer 环境证据，不是完整跨机器 lockfile
+- **`reproducibility/replay.sh`**：通过 `oc replay` 创建新 Run 并与原证据比较
 
-这两份**由 Skill Runner 而不是 Skill 脚本**写——保证 95 个 Skill 的 README/Notebook 长得一模一样。契约见 `docs/engineering/2026-05-07-output-ownership-contract.md`。
+这些文件**由 Skill Runner 而不是 Skill 脚本**写——保证 96 个 Skill 使用同一回放 Interface。标准 Skill Run 不自动生成 notebook；真正的 notebook 仍属于显式 Notebook 或 Autonomous Code Mini-Agent 工作流。契约见 `docs/engineering/2026-05-07-output-ownership-contract.md`。
 
 #### 安全免责声明
 
@@ -1517,14 +1521,14 @@ OmicsClaw 在物理形态上是**一个 Python 包 + 一份共享数据存储 + 
                                   │  • 参数白名单（allowed_extra_flags）   │
                                   │  • workdir 隔离                        │
                                   │  • 启动 Python/R 子进程                │
-                                  │  • 写 README + analysis_notebook.ipynb │
+                                  │  • 写 README + Skill Replay Capsule   │
                                   │  • 标准化 figures / figure_data / 结果 │
                                   └─────────────────┬──────────────────────┘
                                                     │
                        ┌────────────────────────────┼─────────────────────────────┐
                        ▼                            ▼                             ▼
               ┌─────────────────┐         ┌──────────────────┐         ┌─────────────────┐
-              │ 95 Skills       │         │ Remote Jobs      │         │ AutoAgent       │
+              │ 96 Skills       │         │ Remote Jobs      │         │ AutoAgent       │
               │ skills/         │         │ omicsclaw/       │         │ omicsclaw/      │
               │  spatial/...    │         │  remote/         │         │  autoagent/     │
               │  singlecell/... │         │  routers/jobs.py │         │  optimization   │
@@ -1565,7 +1569,7 @@ OmicsClaw 在物理形态上是**一个 Python 包 + 一份共享数据存储 + 
 | **ControlRuntime + Agent runtime** | 权威接纳、Turn 串行、上下文、单 agent 主循环、工具调度、计费与审计 | Channel Adapter 不拥有 Conversation/Turn/终态投递权威 |
 | **System Prompt Builder + KH Injector + Capability Resolver** | 把"业务上下文"翻译成 LLM 看得到的 prompt | 不持久化、不调用工具 |
 | **Skill Runner** | 把一次 Skill 调用变成一组标准化产物 | 不知道是谁触发的（CLI/Bot/Pipeline 对它透明） |
-| **Skills（95 个）** | 真正跑 Python/R 分析 | 不写 README、不组装通知——共享 runner 包办 |
+| **Skills（96 个）** | 真正跑 Python/R 分析 | 不写 README、不组装通知——共享 runner 包办 |
 | **Graph Memory** | 跨对话的事实/血缘/偏好持久化 | 不参与 system prompt 组装（只在 LLM 主动 recall/search 时被读） |
 | **AutoAgent / Research Pipeline** | 多 Run / 多 stage 编排 | 不复用对话 system prompt（自有 micro-prompt 或 pipeline persona） |
 | **LLM Provider** | 实际推理 | 不感知 OmicsClaw 数据模型——通过工具调用回读 |
@@ -1818,12 +1822,12 @@ DELETE /datasets/{dataset_id}
 
 ## 6. 跨 Surface 差异：CLI vs TUI vs App vs Bot
 
-OmicsClaw 的 Surface 设计原则是**共享心脏、差异化外壳**——95 个 Skill、记忆、KH、路由都共享，但每个 Surface 在 UX 上有自己的偏好。
+OmicsClaw 的 Surface 设计原则是**共享心脏、差异化外壳**——96 个 Skill、记忆、KH、路由都共享，但每个 Surface 在 UX 上有自己的偏好。
 
 ### 6.1 共享能力（全部 Surface 都有）
 
 - LLM 对话 + 工具调用循环
-- 95 个 Skill 的执行
+- 96 个 Skill 的执行
 - `omicsclaw(skill=...)` 工具
 - `read_knowhow` 工具
 - Memory recall / search（每个 Surface 在自己的 Namespace 下）
@@ -2098,7 +2102,7 @@ OmicsClaw 的设计可以归结为一句话：**把"研究者在终端里用 Pyt
 
 - 为了让 LLM 不胡说 → **KnowHow + Active Guards + Preflight**
 - 为了让分析能跨对话延续 → **图记忆 + Namespace + Session**
-- 为了让 95 个 Skill 长得一样 → **Skill Runner Contract + Output Ownership Contract**
+- 为了让 96 个 Skill 长得一样 → **Skill Runner Contract + Output Ownership Contract**
 - 为了让本地数据安全 → **Local-first + Localhost binding + Bearer token + 路径白名单**
 - 为了让大数据可远程 → **Remote Execution + SSH 隧道 + 远端 oc desktop-server**
 - 为了让 OmicsClaw 自己变好 → **Self-Evolution (AutoAgent) + Edit surface + Hard gates**

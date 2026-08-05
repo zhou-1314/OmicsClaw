@@ -112,7 +112,7 @@ def test_build_skill_run_execution_view_success_builds_shared_summary_and_histor
             "output_dir": "/tmp/output",
             "method": "scanpy",
             "readme_path": "/tmp/output/README.md",
-            "notebook_path": "/tmp/output/run.ipynb",
+            "replay_path": "/tmp/output/reproducibility/replay.json",
             "stdout": "analysis complete",
         },
     )
@@ -123,7 +123,7 @@ def test_build_skill_run_execution_view_success_builds_shared_summary_and_histor
         "  Output: /tmp/output",
         "  Method: scanpy",
         "  Guide: /tmp/output/README.md",
-        "  Notebook: /tmp/output/run.ipynb",
+        "  Replay: /tmp/output/reproducibility/replay.json",
     ]
     assert execution.system_message == "\n".join(execution.system_summary_lines)
     assert execution.stdout == "analysis complete"

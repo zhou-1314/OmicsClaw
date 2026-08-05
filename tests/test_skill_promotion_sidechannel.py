@@ -8,7 +8,7 @@ just-finished autonomous tool's ``tool_result`` event as ``skill_promotion``.
 
 These tests pin (a) the write side (the executor helper queues exactly one
 candidate keyed by session, with the fields a later ``create_omics_skill`` call
-needs — the ``workspace_root`` anchor above all), and (b) the App wire contract
+needs — the opaque ``run_id`` anchor above all), and (b) the App wire contract
 (the module-level mapper's key names + malformed-item rejection). Nothing here
 mutates a skill: the card only OFFERS ``create_omics_skill`` (APPROVAL_MODE_ASK).
 """
@@ -39,21 +39,22 @@ def test_write_side_shares_one_dict_with_core() -> None:
 
 def test_successful_run_queues_one_candidate_with_needed_fields() -> None:
     _clear()
+    run_id = "a" * 32
     cand = _register_skill_promotion_candidate(
-        "sess-1", "spatial niche detection", "run-abc", "/out/autonomous-code__x"
+        "sess-1", "spatial niche detection", run_id
     )
     assert cand is not None
     queued = core.pending_skill_promotion["sess-1"]
     assert len(queued) == 1
-    assert queued[0]["workspace_root"] == "/out/autonomous-code__x"
+    assert "workspace_root" not in queued[0]
     assert queued[0]["goal"] == "spatial niche detection"
-    assert queued[0]["run_id"] == "run-abc"
+    assert queued[0]["run_id"] == run_id
     _clear()
 
 
 def test_valid_domains_are_backend_authoritative() -> None:
     _clear()
-    cand = _register_skill_promotion_candidate("s", "g", "r", "/out/w")
+    cand = _register_skill_promotion_candidate("s", "g", "b" * 32)
     assert cand is not None
     # The card's domain picker must not drift from the scaffolder's truth (an
     # autonomous bundle carries no domain, so the user MUST pick a valid one).
@@ -61,10 +62,11 @@ def test_valid_domains_are_backend_authoritative() -> None:
     _clear()
 
 
-def test_missing_session_or_workspace_is_a_noop() -> None:
+def test_missing_session_or_invalid_run_id_is_a_noop() -> None:
     _clear()
-    assert _register_skill_promotion_candidate("", "g", "r", "/out/w") is None
-    assert _register_skill_promotion_candidate("s", "g", "r", "") is None
+    assert _register_skill_promotion_candidate("", "g", "a" * 32) is None
+    assert _register_skill_promotion_candidate("s", "g", "run-1") is None
+    assert _register_skill_promotion_candidate("s", "g", "") is None
     assert core.pending_skill_promotion == {}
 
 
@@ -72,18 +74,17 @@ def test_missing_session_or_workspace_is_a_noop() -> None:
 
 
 def test_wire_block_maps_keys_the_app_depends_on() -> None:
+    run_id = "9" * 32
     block = server._skill_promotion_wire_block(
         {
             "goal": "cell communication",
-            "run_id": "run-9",
-            "workspace_root": "/out/autonomous-code__y",
+            "run_id": run_id,
             "valid_domains": ["spatial", "singlecell"],
         }
     )
     assert block == {
         "goal": "cell communication",
-        "runId": "run-9",
-        "workspaceRoot": "/out/autonomous-code__y",
+        "runId": run_id,
         "validDomains": ["spatial", "singlecell"],
     }
 
@@ -91,12 +92,12 @@ def test_wire_block_maps_keys_the_app_depends_on() -> None:
 def test_wire_block_rejects_malformed_or_anchorless_items() -> None:
     assert server._skill_promotion_wire_block("not-a-dict") is None
     assert server._skill_promotion_wire_block({}) is None
-    # No workspace anchor => no source_analysis_dir => nothing to promote.
+    # A non-canonical Run id cannot become authoring provenance.
     assert server._skill_promotion_wire_block({"goal": "x", "run_id": "r"}) is None
     # Non-list valid_domains degrades to empty, not a crash.
     assert (
         server._skill_promotion_wire_block(
-            {"workspace_root": "/w", "valid_domains": "spatial"}
+            {"run_id": "c" * 32, "valid_domains": "spatial"}
         )["validDomains"]
         == []
     )
@@ -104,11 +105,12 @@ def test_wire_block_rejects_malformed_or_anchorless_items() -> None:
 
 def test_end_to_end_write_then_wire_shape() -> None:
     _clear()
-    _register_skill_promotion_candidate("sess-e2e", "trajectory", "run-e", "/out/w-e")
+    run_id = "d" * 32
+    _register_skill_promotion_candidate("sess-e2e", "trajectory", run_id)
     # Mirror the Surface drain: pop the session's items, map each to wire shape.
     items = core.pending_skill_promotion.pop("sess-e2e", [])
     blocks = [server._skill_promotion_wire_block(i) for i in items]
-    assert blocks[0]["workspaceRoot"] == "/out/w-e"
+    assert blocks[0]["runId"] == run_id
     assert blocks[0]["goal"] == "trajectory"
     _clear()
 
@@ -159,7 +161,7 @@ def test_desktop_drains_the_key_the_runtime_actually_wrote() -> None:
     # Queue exactly as the executor does during a real turn: under the id the
     # runtime put in the tool's kwargs, NOT under the bare chat id.
     _register_skill_promotion_candidate(
-        runtime_key, "cluster synthetic sc data", "run-1", "/ws/run-1"
+        runtime_key, "cluster synthetic sc data", "e" * 32
     )
     assert runtime_key in core.pending_skill_promotion
     assert chat_id not in core.pending_skill_promotion
@@ -168,7 +170,7 @@ def test_desktop_drains_the_key_the_runtime_actually_wrote() -> None:
     assert server._agent_session_key(chat_id) == runtime_key
     drained = core.pending_skill_promotion.pop(server._agent_session_key(chat_id), [])
     assert len(drained) == 1
-    assert drained[0]["workspace_root"] == "/ws/run-1"
+    assert drained[0]["run_id"] == "e" * 32
     _clear()
 
 
@@ -209,7 +211,7 @@ def test_authoritative_turn_keys_state_by_conversation_id_not_session_id() -> No
 
     # What the tools actually write on the authoritative path.
     runtime_key = build_agent_session_id("app", desktop_chat_user_id(), conversation_id)
-    _register_skill_promotion_candidate(runtime_key, "goal", "run-1", "/ws/run-1")
+    _register_skill_promotion_candidate(runtime_key, "goal", "f" * 32)
 
     # Guessing from the Surface's own session id must NOT find it...
     assert core.pending_skill_promotion.get(

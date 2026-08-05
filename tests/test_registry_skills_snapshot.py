@@ -88,7 +88,7 @@ def test_all_shipped_skills_have_stable_root_bound_execution_identities(
     skills_root = loaded_registry._loaded_dir
     assert skills_root is not None
     primary = loaded_registry.iter_primary_skills()
-    assert len(primary) == 95
+    assert len(primary) == 96
 
     failures: list[str] = []
     for alias, info in primary:

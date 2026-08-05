@@ -84,10 +84,13 @@ def build_skill_run_result_text(
     result: dict[str, Any],
 ) -> str:
     if result.get("success"):
-        return (
+        text = (
             f"Skill '{skill}' completed successfully. "
             f"Output: {result.get('output_dir', '?')}"
         )
+        if result.get("run_id"):
+            text += f" Run: {result['run_id']}"
+        return text
     error_text = str(result.get("stderr", "unknown error"))
     return f"Skill '{skill}' failed: {error_text[:200]}"
 

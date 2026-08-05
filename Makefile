@@ -1,5 +1,5 @@
 .PHONY: setup-env setup-env-name \
-        demo test list demo-all catalog audit-requires demo-orchestrator demo-bulkrna \
+        demo test test-serial test-slow test-all list demo-all catalog audit-requires demo-orchestrator demo-bulkrna \
         install install-spatial-domains install-full install-dev \
         install-oc oc-link \
         bot-telegram bot-multi bot-list \
@@ -70,13 +70,11 @@ setup-full: venv
 demo:
 	python omicsclaw.py run preprocess --demo --output /tmp/omicsclaw_demo
 
-# Full suite, parallel. pytest-xdist splits across processes; the suite is
-# ~6.3k mostly-small tests, so wall time is set by worker count, not by any
-# single slow file. Measured on the 128-core box:
-#   serial 12m42s | -n 16 ~78s | -n 24 ~70s | -n 48 ~61s
-# Deleting the 8 slowest FILES saves only ~3s and costs 269 tests, so the
-# lever here is workers, not coverage. Override: make test PYTEST_WORKERS=48
+# Deterministic fast suite. Skill demo executions, optional scientific stacks,
+# and real-LLM evaluations are separate because they have different dependency,
+# runtime, and failure semantics. Override worker counts when needed.
 PYTEST_WORKERS ?= 32
+SCIENTIFIC_TEST_WORKERS ?= 4
 
 test:
 	python -m pytest -q -n $(PYTEST_WORKERS)
@@ -85,9 +83,14 @@ test:
 test-serial:
 	python -m pytest -v
 
-# Includes the `slow` tests excluded by default (live conda/network queries).
+# Scientific/demo integration suite. Keep concurrency bounded: one scientific
+# subprocess can import more than 1 GiB of native Python/R dependencies.
 test-slow:
-	python -m pytest -q -n $(PYTEST_WORKERS) -m slow
+	python -m pytest -q -n $(SCIENTIFIC_TEST_WORKERS) -m "slow or demo"
+
+# Everything except real-LLM evals. Intended for release/nightly verification.
+test-all:
+	python -m pytest -q -n $(SCIENTIFIC_TEST_WORKERS) -m "not eval"
 
 list:
 	python omicsclaw.py list

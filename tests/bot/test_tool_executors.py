@@ -878,8 +878,9 @@ async def test_autonomous_analysis_appends_a_promotion_suggestion_on_the_third_s
 ):
     """P4 (docs/proposals/skill-acquisition-plan.md §P4) end-to-end wiring: a
     3rd similar-goal success in the same thread must append a promotion
-    suggestion to the digest, anchored to THIS run's own workspace_root. The
-    unsafe global `promote_from_latest` admission path is disabled."""
+    suggestion to the digest, anchored to THIS run's opaque identity. The
+    unsafe workspace-path and global `promote_from_latest` admission paths are
+    disabled."""
     import omicsclaw.autonomous as autonomous_pkg
     from omicsclaw.autonomous.contracts import AutonomousRunResult, AutonomousRunStatus
     from omicsclaw.runtime.tools.builders.agent_executors import (
@@ -891,6 +892,7 @@ async def test_autonomous_analysis_appends_a_promotion_suggestion_on_the_third_s
     sid = session.session_id
     thread_id = "thread-promo"
     goal = "cluster cells by cell type and annotate"
+    promoted_run_id = "3" * 32
 
     # Seed 2 PRIOR similar successes in the same thread.
     await _auto_capture_autonomous_run(sid, thread_id, "cluster the cells by cell type", "run-1", "/tmp/run-1", "succeeded")
@@ -898,7 +900,9 @@ async def test_autonomous_analysis_appends_a_promotion_suggestion_on_the_third_s
 
     async def _fake_loop(request, **kwargs):
         return AutonomousRunResult(
-            run_id="run-3", workspace_root="/tmp/run-3", status=AutonomousRunStatus.SUCCEEDED
+            run_id=promoted_run_id,
+            workspace_root="/tmp/run-3",
+            status=AutonomousRunStatus.SUCCEEDED,
         )
 
     monkeypatch.setattr(autonomous_pkg, "run_autonomous_code_loop_async", _fake_loop)
@@ -909,7 +913,8 @@ async def test_autonomous_analysis_appends_a_promotion_suggestion_on_the_third_s
 
     assert "Promotion candidate" in out
     assert "3rd time" in out
-    assert "source_analysis_dir='/tmp/run-3'" in out
+    assert f"'run_id': '{promoted_run_id}'" in out
+    assert "source_analysis_dir" not in out
     assert "promote_from_latest=True" not in out
     # Fix 6: an autonomous-analysis bundle never carries a domain, so the
     # snippet as printed would raise if run verbatim — the suggestion must
@@ -920,7 +925,7 @@ async def test_autonomous_analysis_appends_a_promotion_suggestion_on_the_third_s
     # The 3rd run's own lineage must also now be on record.
     recs = await memory_store.get_memories(sid, "autonomous_run", thread_id=thread_id)
     assert len(recs) == 3
-    assert any(r.run_id == "run-3" and r.status == "succeeded" for r in recs)
+    assert any(r.run_id == promoted_run_id and r.status == "succeeded" for r in recs)
 
 
 @pytest.mark.asyncio

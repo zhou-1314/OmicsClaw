@@ -55,6 +55,94 @@ def _decode_stream(chunks: list[str]) -> list[dict[str, object]]:
     ]
 
 
+@pytest.mark.asyncio
+async def test_chat_stream_injects_desktop_run_runtime_into_agent_dispatch(
+    monkeypatch,
+) -> None:
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+
+    desktop_run_runtime = object()
+    received: list[object | None] = []
+
+    async def fake_llm_tool_loop(**kwargs):
+        received.append(kwargs.get("run_runtime"))
+        return "done"
+
+    fake_core = _fake_desktop_core(fake_llm_tool_loop)
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setattr(server, "_desktop_control_runtime", None, raising=False)
+    monkeypatch.setattr(
+        server, "_desktop_run_runtime", desktop_run_runtime, raising=False
+    )
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", fake_core)
+    monkeypatch.setattr(server, "_mcp_load_fn", None, raising=False)
+
+    response = await server.chat_stream(
+        server.ChatRequest(
+            session_id="desktop-canonical-run-runtime",
+            content="run bulkrna-cosinor-rhythm demo",
+            permission_profile="full_access",
+        )
+    )
+    await _response_chunks(response)
+
+    assert received == [desktop_run_runtime]
+
+
+@pytest.mark.asyncio
+async def test_authoritative_chat_injects_desktop_run_runtime_into_control_ports(
+    monkeypatch,
+) -> None:
+    pytest.importorskip("fastapi")
+
+    from omicsclaw.surfaces.desktop import server
+
+    desktop_run_runtime = object()
+    received: list[object | None] = []
+
+    class ControlRuntime:
+        workspace_id = "/tmp/omicsclaw-desktop-authoritative"
+
+        @staticmethod
+        def lookup_ingress_turn_id(**_kwargs):
+            return None
+
+        @staticmethod
+        def conversation_id_for_turn(_turn_id):
+            return "authoritative-conversation"
+
+        @staticmethod
+        async def submit_and_wait(_raw, ports, *, on_accepted):
+            received.append(ports.run_runtime)
+            await on_accepted("a" * 32)
+            return SimpleNamespace(
+                receipt=SimpleNamespace(status="succeeded", terminal_code=""),
+            )
+
+    fake_core = _fake_desktop_core(lambda **_kwargs: None)
+    monkeypatch.setattr(server, "_core", fake_core, raising=False)
+    monkeypatch.setattr(
+        server, "_desktop_control_runtime", ControlRuntime(), raising=False
+    )
+    monkeypatch.setattr(
+        server, "_desktop_run_runtime", desktop_run_runtime, raising=False
+    )
+
+    response = await server.chat_stream(
+        server.ChatRequest(
+            source_request_id="b" * 32,
+            session_id="desktop-authoritative-canonical-runtime",
+            content="run bulkrna-cosinor-rhythm demo",
+            permission_profile="full_access",
+        )
+    )
+    await _response_chunks(response)
+
+    assert received == [desktop_run_runtime]
+
+
 def test_oversized_tool_result_has_bounded_visible_projection() -> None:
     from omicsclaw.surfaces.desktop._chat_sse import (
         CHAT_SSE_MAX_FRAME_BYTES,

@@ -7,21 +7,16 @@ from dataclasses import dataclass, field
 import os
 from pathlib import Path
 from typing import Any, Callable, Mapping
-import uuid
 
 from omicsclaw.common.run_paths import peek_current_project
 from omicsclaw.control import (
     ControlRuntime,
-    RunAcceptanceStatus,
     RunRuntime,
     RunScope,
 )
-from omicsclaw.control.run_runtime import (
-    RunAdmissionError,
-    RunTerminalProjectionIntegrityError,
-    RunTerminalResultUnavailable,
-    RunTerminalWaitBackpressure,
-    SimpleSkillRunTerminalResult,
+from omicsclaw.control.simple_skill_adapter import (
+    build_simple_skill_demo_failure,
+    execute_simple_skill_demo,
 )
 from omicsclaw.skill.resource_scheduler import (
     ExecutionResourceBudget,
@@ -268,106 +263,13 @@ async def execute_canonical_demo_run(
         return build_canonical_demo_failure_result(
             command.skill, "canonical_demo_options_not_supported"
         )
-    create_submission_id = submission_id_factory or (lambda: uuid.uuid4().hex)
-    try:
-        submission_id = create_submission_id()
-        submission = await run_runtime.build_simple_skill_demo_submission(
-            run_submission_id=submission_id,
-            skill_id=command.skill,
-            scope=scope,
-        )
-        submitted = await run_runtime.submit(submission)
-    except RunAdmissionError as exc:
-        return build_canonical_demo_failure_result(command.skill, exc.code)
-    except Exception:
-        return build_canonical_demo_failure_result(
-            command.skill, "canonical_run_unavailable"
-        )
-
-    if submitted.acceptance_status not in {
-        RunAcceptanceStatus.ACCEPTED,
-        RunAcceptanceStatus.DUPLICATE,
-    }:
-        return build_canonical_demo_failure_result(
-            command.skill,
-            submitted.code or submitted.acceptance_status.value,
-        )
-    if submitted.receipt is None:
-        return build_canonical_demo_failure_result(
-            command.skill, "canonical_run_receipt_missing"
-        )
-    run_id = submitted.receipt.run_id
-    try:
-        outcome = await run_runtime.wait_for_terminal_result(run_id)
-    except KeyboardInterrupt:
-        try:
-            await run_runtime.cancel(run_id)
-            outcome = await run_runtime.wait_for_terminal_result(run_id)
-        except Exception:
-            return build_canonical_demo_failure_result(
-                command.skill, "run_cancel_unconfirmed", run_id=run_id
-            )
-    except asyncio.CancelledError as cancelled:
-        cancel_task = asyncio.create_task(run_runtime.cancel(run_id))
-        try:
-            await asyncio.shield(cancel_task)
-            if confirm_task_cancellation:
-                terminal_task = asyncio.create_task(
-                    run_runtime.wait_for_terminal_result(run_id)
-                )
-                try:
-                    await asyncio.shield(terminal_task)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        raise cancelled
-    except RunTerminalProjectionIntegrityError as exc:
-        return build_canonical_demo_failure_result(
-            command.skill, exc.code, run_id=run_id
-        )
-    except RunTerminalWaitBackpressure:
-        return build_canonical_demo_failure_result(
-            command.skill, "wait_backpressure", run_id=run_id
-        )
-    except RunTerminalResultUnavailable:
-        return build_canonical_demo_failure_result(
-            command.skill, "runtime_closed", run_id=run_id
-        )
-    except Exception:
-        return build_canonical_demo_failure_result(
-            command.skill, "terminal_result_unavailable", run_id=run_id
-        )
-    return _terminal_result(outcome)
-
-
-def _terminal_result(outcome: SimpleSkillRunTerminalResult) -> dict[str, Any]:
-    receipt = outcome.receipt
-    duration_seconds = 0.0
-    if receipt.finished_at_ms is not None:
-        duration_seconds = max(
-            0.0,
-            (receipt.finished_at_ms - receipt.created_at_ms) / 1000.0,
-        )
-    output = outcome.output
-    return {
-        "skill": outcome.skill_id,
-        "success": outcome.success,
-        "exit_code": 0 if outcome.success else 1,
-        "output_dir": output.output_dir if output is not None else "",
-        "files": [],
-        "stdout": "",
-        "stderr": "" if outcome.success else str(receipt.terminal_code or receipt.status),
-        "duration_seconds": duration_seconds,
-        "method": None,
-        "readme_path": (
-            str(output.readme_path or "") if output is not None else ""
-        ),
-        "notebook_path": (
-            str(output.notebook_path or "") if output is not None else ""
-        ),
-        "run_id": receipt.run_id,
-    }
+    return await execute_simple_skill_demo(
+        command.skill,
+        run_runtime=run_runtime,
+        submission_id_factory=submission_id_factory,
+        scope=scope,
+        confirm_task_cancellation=confirm_task_cancellation,
+    )
 
 
 def build_canonical_demo_failure_result(
@@ -377,20 +279,12 @@ def build_canonical_demo_failure_result(
     run_id: str = "",
     exit_code: int = 1,
 ) -> dict[str, Any]:
-    return {
-        "skill": skill,
-        "success": False,
-        "exit_code": exit_code,
-        "output_dir": "",
-        "files": [],
-        "stdout": "",
-        "stderr": code,
-        "duration_seconds": 0.0,
-        "method": None,
-        "readme_path": "",
-        "notebook_path": "",
-        "run_id": run_id,
-    }
+    return build_simple_skill_demo_failure(
+        skill,
+        code,
+        run_id=run_id,
+        exit_code=exit_code,
+    )
 
 
 def resolve_root_run_scope(bundle: CliRuntimeBundle) -> RunScope:

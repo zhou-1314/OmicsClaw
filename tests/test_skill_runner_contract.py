@@ -359,7 +359,7 @@ def test_zero_exit_with_invalid_declared_output_is_a_contract_failure(
     assert result.output_dir == str(output_dir)
     assert "result_envelope_invalid" in result.stderr
     assert result.readme_path == ""
-    assert result.notebook_path == ""
+    assert result.replay_path == ""
     assert events == [result]
     assert evidence_kinds == ["demo"]
 

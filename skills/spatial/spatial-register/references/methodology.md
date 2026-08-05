@@ -82,9 +82,9 @@ python skills/spatial/spatial-register/spatial_register.py \
 ```
 
 Every successful standard OmicsClaw wrapper run, including `oc run` and
-conversational skill execution, also writes a top-level `README.md` and
-`reproducibility/analysis_notebook.ipynb` to make the output directory easier
-to inspect and rerun. Direct script execution primarily produces the
+conversational skill execution, also writes a top-level `README.md` and a
+`reproducibility/replay.json` Capsule to make the output directory easier to
+inspect and replay. Direct script execution primarily produces the
 skill-native outputs plus `reproducibility/commands.sh`.
 
 
@@ -145,7 +145,11 @@ skill-native outputs plus `reproducibility/commands.sh`.
 **Optional (Python)**:
 
 - `paste-bio` + `POT`
-- `STalign` + `torch`
+- `STalign` + `torch` — `STalign` is **not on PyPI**; `pip install STalign` always
+  fails. Install from GitHub:
+  `pip install git+https://github.com/JEFworks-Lab/STalign.git`. It is therefore
+  never auto-provisioned — the adaptive-env resolver defers it and `--method
+  stalign` raises `ImportError` until you install it manually.
 
 **Optional (R)**:
 

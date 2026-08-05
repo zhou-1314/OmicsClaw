@@ -46,13 +46,61 @@ async def test_execute_create_omics_skill_includes_gate_summary(monkeypatch):
     )
 
     message = await execute_create_omics_skill(
-        {"request": "Create a demo skill.", "domain": "spatial"}
+        {
+            "request": "Create a demo skill.",
+            "domain": "spatial",
+            "source": {"kind": "intent"},
+        }
     )
 
     assert "Created OmicsClaw skill scaffold." in message
     assert "Gate:" in message
     assert "Status: complete" in message
     assert "Completed: True" in message
+
+
+@pytest.mark.asyncio
+async def test_execute_create_omics_skill_evaluates_candidate_but_does_not_approve(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "omicsclaw.skill.scaffolder.create_skill_scaffold",
+        lambda **_kwargs: SkillScaffoldResult(
+            skill_name="evaluated-candidate",
+            domain="spatial",
+            skill_dir="/tmp/evaluated-candidate",
+            script_path="/tmp/evaluated-candidate/run.py",
+            skill_md_path="/tmp/evaluated-candidate/SKILL.md",
+            spec_path="/tmp/evaluated-candidate/scaffold_spec.json",
+            completion={"status": "complete", "completed": True},
+            demo_gate_verdict="earned",
+            activation_status="evaluation_required",
+        ),
+    )
+
+    class Governance:
+        def __init__(self):
+            self.calls = []
+
+        def prepare_activation(self, skill_id):
+            self.calls.append(skill_id)
+            return SimpleNamespace(proposal_id="1" * 24, status="pending")
+
+    governance = Governance()
+    message = await execute_create_omics_skill(
+        {
+            "request": "Create an evaluated skill.",
+            "domain": "spatial",
+            "source": {"kind": "intent"},
+        },
+        skill_evolution_governance=governance,
+    )
+
+    assert governance.calls == ["evaluated-candidate"]
+    assert "Evaluation: passed" in message
+    assert "Activation proposal: " + "1" * 24 in message
+    assert "Human approval required" in message
+    assert "approved" not in message.lower()
 
 
 @pytest.mark.asyncio
@@ -78,7 +126,11 @@ async def test_execute_create_omics_skill_reports_quarantine(monkeypatch):
     )
 
     message = await execute_create_omics_skill(
-        {"request": "Promote this analysis.", "domain": "singlecell"}
+        {
+            "request": "Promote this analysis.",
+            "domain": "singlecell",
+            "source": {"kind": "intent"},
+        }
     )
 
     assert "Admission: quarantined" in message
@@ -87,7 +139,7 @@ async def test_execute_create_omics_skill_reports_quarantine(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_execute_create_omics_skill_rejects_global_latest_promotion():
+async def test_execute_create_omics_skill_rejects_legacy_global_latest_field():
     message = await execute_create_omics_skill(
         {
             "request": "Promote the latest analysis.",
@@ -96,8 +148,9 @@ async def test_execute_create_omics_skill_rejects_global_latest_promotion():
         }
     )
 
-    assert "promote_from_latest is disabled" in message
-    assert "source_analysis_dir" in message
+    assert "unknown fields" in message
+    assert "promote_from_latest" in message
+    assert "source_analysis_dir" not in message
 
 
 @pytest.mark.asyncio

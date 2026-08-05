@@ -40,7 +40,7 @@ def test_skill_run_result_preserves_run_skill_legacy_dict_shape():
             "duration_seconds": 1.25,
             "method": "demo",
             "readme_path": "/tmp/demo/README.md",
-            "notebook_path": "/tmp/demo/reproducibility/analysis_notebook.ipynb",
+            "replay_path": "/tmp/demo/reproducibility/replay.json",
         }
     )
 
@@ -55,7 +55,7 @@ def test_skill_run_result_preserves_run_skill_legacy_dict_shape():
         "duration_seconds": 1.25,
         "method": "demo",
         "readme_path": "/tmp/demo/README.md",
-        "notebook_path": "/tmp/demo/reproducibility/analysis_notebook.ipynb",
+        "replay_path": "/tmp/demo/reproducibility/replay.json",
     }
 
 
@@ -71,7 +71,7 @@ def test_build_skill_run_result_normalizes_runner_fields_for_legacy_dict():
         duration_seconds=1.234,
         method="demo",
         readme_path=Path("/tmp/demo/README.md"),
-        notebook_path=Path("/tmp/demo/reproducibility/analysis_notebook.ipynb"),
+        replay_path=Path("/tmp/demo/reproducibility/replay.json"),
     )
 
     assert result.to_legacy_dict() == {
@@ -85,7 +85,7 @@ def test_build_skill_run_result_normalizes_runner_fields_for_legacy_dict():
         "duration_seconds": 1.23,
         "method": "demo",
         "readme_path": "/tmp/demo/README.md",
-        "notebook_path": "/tmp/demo/reproducibility/analysis_notebook.ipynb",
+        "replay_path": "/tmp/demo/reproducibility/replay.json",
     }
 
 

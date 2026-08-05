@@ -37,6 +37,7 @@ R_TIER_PACKAGES: dict[str, list[str]] = {
         "Seurat",
         "SingleCellExperiment",
         "zellkonverter",
+        "rhdf5",
     ],
     "singlecell-doublet-detection": [
         "Seurat",
@@ -145,6 +146,7 @@ for _tier, _pkgs in R_TIER_PACKAGES.items():
 # Packages that must be installed via BiocManager::install()
 _BIOCONDUCTOR_PACKAGES: set[str] = {
     "DESeq2", "SingleCellExperiment", "SingleR", "celldex",
+    "zellkonverter", "rhdf5",
     "S4Vectors", "IRanges", "GenomicRanges",
     "clusterProfiler", "org.Hs.eg.db", "org.Mm.eg.db",
     "scDblFinder", "scds", "batchelor", "sva", "SPARK", "slingshot",

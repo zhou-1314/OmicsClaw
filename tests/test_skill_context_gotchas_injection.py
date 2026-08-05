@@ -86,6 +86,38 @@ def test_load_skill_context_omits_block_when_skill_unknown(monkeypatch):
     assert out == ""
 
 
+def test_load_skill_context_injects_bounded_governed_experience(monkeypatch):
+    _stub_skill(monkeypatch, alias="spatial-de", gotchas=[])
+    out = _load_skill_context(
+        skill="spatial-de",
+        _experience_view={
+            "skill_revision": {"skill_id": "spatial-de"},
+            "declared_validation_level": "benchmarked",
+            "evidence_supported_validation_level": "fixture-validated",
+            "effective_validation_level": "fixture-validated",
+            "validation_state": "evaluation_required",
+            "usage": {"execution_count": 5},
+            "health": {
+                "successes": 4,
+                "skill_defects": 1,
+                "environment_failures": 0,
+            },
+            "declared_protocol_ids": ["fixture-v1"],
+            "stability": {
+                "fixture-v1": {"runs": 3, "successes": 2},
+            },
+            "evidence_refs": ["must-not-enter-the-prompt"],
+        },
+    )
+
+    assert "## Governed Skill Experience" in out
+    assert "effective `fixture-validated` (`evaluation_required`)" in out
+    assert "5 executions; 4 successes, 1 Skill defects" in out
+    assert "`fixture-v1` 2/3 latest-batch successes" in out
+    assert "do not treat the declared level as current" in out
+    assert "must-not-enter-the-prompt" not in out
+
+
 def test_load_skill_context_logs_telemetry_with_count_and_tokens(monkeypatch, caplog):
     _stub_skill(
         monkeypatch,

@@ -122,9 +122,9 @@ python skills/spatial/spatial-deconv/spatial_deconv.py \
 ```
 
 Every successful standard OmicsClaw wrapper run, including `oc run` and
-conversational skill execution, also writes a top-level `README.md` and
-`reproducibility/analysis_notebook.ipynb` to make the output directory easier
-to inspect and rerun. Direct script execution primarily produces the skill
+conversational skill execution, also writes a top-level `README.md` and a
+`reproducibility/replay.json` Capsule to make the output directory easier to
+inspect and replay. Direct script execution primarily produces the skill
 outputs plus `reproducibility/commands.sh`.
 
 

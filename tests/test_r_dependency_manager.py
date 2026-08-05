@@ -59,6 +59,7 @@ def test_deseq2_in_bulkrna_de():
 def test_seurat_in_singlecell():
     """Seurat should be in the singlecell-core tier."""
     assert "Seurat" in R_TIER_PACKAGES["singlecell-core"]
+    assert "rhdf5" in R_TIER_PACKAGES["singlecell-preprocessing"]
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +70,8 @@ def test_seurat_in_singlecell():
 def test_classify_bioconductor():
     assert _classify_source("DESeq2") == "bioc"
     assert _classify_source("SingleCellExperiment") == "bioc"
+    assert _classify_source("zellkonverter") == "bioc"
+    assert _classify_source("rhdf5") == "bioc"
 
 
 def test_classify_cran():

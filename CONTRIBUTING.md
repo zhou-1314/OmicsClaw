@@ -282,7 +282,15 @@ python omicsclaw.py run <skill-name> --demo --output /tmp/test_output
 
 # 3. Tests pass
 python -m pytest skills/<domain>/<skill-name>/tests/ -v
+
+# 4. A resource-ready exact demo uses the canonical Agent path
+oc interactive -p "run <skill-name> demo"
 ```
+
+The same explicit named-demo request in Desktop text chat must receive a fresh
+canonical Run ID and Replay Capsule with zero LLM discovery tokens. The Desktop
+authoritative adapter passes the process-local `RunRuntime` through
+`ControlRuntimePorts`; do not introduce a Desktop-only legacy-runner fallback.
 
 ### Step 7: Submit
 

@@ -14,7 +14,9 @@ import pytest
 from anndata import AnnData
 
 SKILL_SCRIPT = Path(__file__).resolve().parent.parent / "spatial_annotate.py"
-_SPEC = importlib.util.spec_from_file_location("omicsclaw_spatial_annotate_test_module", SKILL_SCRIPT)
+_SPEC = importlib.util.spec_from_file_location(
+    "omicsclaw_spatial_annotate_test_module", SKILL_SCRIPT
+)
 spatial_annotate_module = importlib.util.module_from_spec(_SPEC)
 assert _SPEC is not None and _SPEC.loader is not None
 _SPEC.loader.exec_module(spatial_annotate_module)
@@ -25,68 +27,63 @@ def tmp_output(tmp_path):
     return tmp_path / "annotate_out"
 
 
-def test_demo_mode(tmp_output):
-    """spatial-annotate --demo should run without error."""
+@pytest.fixture(scope="module")
+def demo_output(tmp_path_factory):
+    """Run the default Demo once for all read-only output assertions."""
+
+    output_dir = tmp_path_factory.mktemp("spatial_annotate_demo")
     result = subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
+        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(output_dir)],
         capture_output=True,
         text=True,
         timeout=180,
         cwd=str(SKILL_SCRIPT.parent),
     )
     assert result.returncode == 0, f"stderr: {result.stderr}"
-    assert (tmp_output / "report.md").exists()
-    assert (tmp_output / "result.json").exists()
-    assert (tmp_output / "processed.h5ad").exists()
+    return output_dir
 
 
-def test_demo_report_content(tmp_output):
+def test_demo_mode(demo_output):
+    """spatial-annotate --demo should run without error."""
+    assert (demo_output / "report.md").exists()
+    assert (demo_output / "result.json").exists()
+    assert (demo_output / "processed.h5ad").exists()
+
+
+def test_demo_report_content(demo_output):
     """Report should contain annotation sections."""
-    subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
-        capture_output=True, text=True, timeout=180, cwd=str(SKILL_SCRIPT.parent),
-    )
-    report = (tmp_output / "report.md").read_text()
+    report = (demo_output / "report.md").read_text()
     assert "Annotation" in report or "annotation" in report
     assert "Disclaimer" in report
 
 
-def test_demo_result_json(tmp_output):
+def test_demo_result_json(demo_output):
     """result.json should contain expected keys."""
-    subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
-        capture_output=True, text=True, timeout=180, cwd=str(SKILL_SCRIPT.parent),
-    )
-    data = json.loads((tmp_output / "result.json").read_text())
+    data = json.loads((demo_output / "result.json").read_text())
     assert data["skill"] == "spatial-annotate"
     assert "summary" in data
     assert "n_clusters" in data["summary"]
     assert data["summary"]["n_clusters"] > 0
-    assert data["data"]["visualization"]["recipe_id"] == "standard-spatial-annotation-gallery"
+    assert (
+        data["data"]["visualization"]["recipe_id"]
+        == "standard-spatial-annotation-gallery"
+    )
     assert data["data"]["visualization"]["cell_type_column"] == "cell_type"
 
 
-def test_demo_outputs_tables_and_commands(tmp_output):
+def test_demo_outputs_tables_and_commands(demo_output):
     """Demo mode should export tables and reproducibility commands."""
-    result = subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
-        capture_output=True,
-        text=True,
-        timeout=180,
-        cwd=str(SKILL_SCRIPT.parent),
-    )
-    assert result.returncode == 0, f"stderr: {result.stderr}"
-    assert (tmp_output / "tables" / "annotation_summary.csv").exists()
-    assert (tmp_output / "tables" / "cell_type_assignments.csv").exists()
-    assert (tmp_output / "tables" / "cluster_annotations.csv").exists()
-    assert (tmp_output / "tables" / "marker_overlap_scores.csv").exists()
-    assert (tmp_output / "reproducibility" / "commands.sh").exists()
-    assert (tmp_output / "reproducibility" / "r_visualization.sh").exists()
-    assert (tmp_output / "figures" / "manifest.json").exists()
-    assert (tmp_output / "figure_data" / "manifest.json").exists()
-    assert (tmp_output / "figure_data" / "annotation_spatial_points.csv").exists()
-    assert (tmp_output / "figure_data" / "annotation_umap_points.csv").exists()
-    assert (tmp_output / "figure_data" / "annotation_cell_type_counts.csv").exists()
+    assert (demo_output / "tables" / "annotation_summary.csv").exists()
+    assert (demo_output / "tables" / "cell_type_assignments.csv").exists()
+    assert (demo_output / "tables" / "cluster_annotations.csv").exists()
+    assert (demo_output / "tables" / "marker_overlap_scores.csv").exists()
+    assert (demo_output / "reproducibility" / "commands.sh").exists()
+    assert (demo_output / "reproducibility" / "r_visualization.sh").exists()
+    assert (demo_output / "figures" / "manifest.json").exists()
+    assert (demo_output / "figure_data" / "manifest.json").exists()
+    assert (demo_output / "figure_data" / "annotation_spatial_points.csv").exists()
+    assert (demo_output / "figure_data" / "annotation_umap_points.csv").exists()
+    assert (demo_output / "figure_data" / "annotation_cell_type_counts.csv").exists()
 
 
 def test_demo_custom_marker_flags_are_recorded(tmp_output):
@@ -117,19 +114,14 @@ def test_demo_custom_marker_flags_are_recorded(tmp_output):
     assert "--marker-overlap-method jaccard" in commands
 
 
-def test_demo_gallery_manifests_have_roles(tmp_output):
+def test_demo_gallery_manifests_have_roles(demo_output):
     """The standard gallery should emit figure and figure-data manifests."""
-    result = subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
-        capture_output=True,
-        text=True,
-        timeout=180,
-        cwd=str(SKILL_SCRIPT.parent),
+    figures_manifest = json.loads(
+        (demo_output / "figures" / "manifest.json").read_text()
     )
-    assert result.returncode == 0, f"stderr: {result.stderr}"
-
-    figures_manifest = json.loads((tmp_output / "figures" / "manifest.json").read_text())
-    figure_data_manifest = json.loads((tmp_output / "figure_data" / "manifest.json").read_text())
+    figure_data_manifest = json.loads(
+        (demo_output / "figure_data" / "manifest.json").read_text()
+    )
 
     assert figures_manifest["recipe_id"] == "standard-spatial-annotation-gallery"
     assert any(plot["role"] == "overview" for plot in figures_manifest["plots"])

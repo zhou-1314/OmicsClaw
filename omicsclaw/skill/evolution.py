@@ -73,6 +73,7 @@ _IGNORED_EXECUTION_SOURCE_DIRECTORIES = frozenset(
         "__pycache__",
         "output",
         "outputs",
+        "reproducibility",
         "references",
         "test",
         "tests",
@@ -1585,6 +1586,10 @@ class EvolutionProposal:
     reconciliation_reason: str = ""
     proposed_by: str = ""
     proposal_reason: str = ""
+    # Evaluation Protocol results are a distinct evidence authority from
+    # ordinary SkillRunEvent rows.  Activation proposals bind the exact result
+    # ids here instead of overloading ``support_event_ids`` with non-events.
+    support_evaluation_result_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1928,6 +1933,12 @@ class EvolutionProposalStore:
         # Every other kind still requires them.
         if proposal.kind in {"merge_candidate", "protocol_revision"}:
             return proposal.status == "draft"
+        if proposal.kind == "skill_activation":
+            return (
+                proposal.status == "pending"
+                and bool(proposal.support_evaluation_result_ids)
+                and not proposal.support_event_ids
+            )
         if not proposal.support_event_ids:
             return False
         return proposal.status == "pending" or (

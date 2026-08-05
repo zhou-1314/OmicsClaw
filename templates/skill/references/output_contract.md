@@ -85,13 +85,16 @@ output_directory/
 ```
 output_directory/
 └── reproducibility/
-    ├── commands.sh
-    └── analysis_notebook.ipynb
+    ├── replay.json
+    ├── environment.json
+    └── replay.sh
 ```
 
-- `reproducibility/commands.sh` — re-invocation script written by the common
-  report helper via `write_standard_run_artifacts`.
-- `reproducibility/analysis_notebook.ipynb` — Jupyter notebook scaffolding
-  the same analysis end-to-end.
+- `reproducibility/replay.json` — machine-readable Skill revision, input,
+  parameter, environment, result, and declared-artifact evidence.
+- `reproducibility/environment.json` — bounded producer-environment evidence;
+  it is not a complete cross-machine lockfile.
+- `reproducibility/replay.sh` — thin launcher for `oc replay`; replay creates a
+  fresh Run and never overwrites the original output.
 ==============================================================================
 -->

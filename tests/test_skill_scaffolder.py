@@ -15,10 +15,13 @@ from omicsclaw.skill.scaffolder import (
     _strip_redundant_pathlib_import,
     _synthesize_load_when,
     build_acquisition_abstraction,
+    build_scaffold_manifest,
     create_skill_scaffold,
     find_latest_autonomous_analysis,
     infer_skill_name,
+    rebuild_scaffold_publication_metadata,
     refresh_registry,
+    render_skill_script,
 )
 from omicsclaw.skill.schema import load_skill_yaml, validate_skill_yaml
 from omicsclaw.skill.execution.flag_introspection import derive_accepted_flags
@@ -29,6 +32,51 @@ from omicsclaw.common.report import SCAFFOLD_STATUS, validate_result_envelope
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 from skill_lint import lint_skill  # noqa: E402
+
+
+def test_generated_bootstrap_is_depth_independent() -> None:
+    script = render_skill_script(
+        skill_name="depth-independent",
+        domain="bulkrna",
+        summary="Exercise generated import bootstrap.",
+        methods=(),
+    )
+
+    assert "for _candidate_root in Path(__file__).resolve().parents:" in script
+    assert ".parent.parent.parent.parent" not in script
+    assert 'SKILL_VERSION = "0.1.0"' in script
+
+
+def test_rebuild_scaffold_publication_metadata_after_relocation(
+    tmp_path: Path,
+) -> None:
+    result = create_skill_scaffold(
+        request="Create a bulk RNA relocation fixture.",
+        domain="bulkrna",
+        skill_name="relocation-fixture",
+        create_tests=False,
+        skills_root=tmp_path / "skills",
+    )
+    old_dir = Path(result.skill_dir)
+    relocated = (
+        tmp_path
+        / "skills"
+        / "bulkrna"
+        / "run-derived"
+        / "relocation-fixture"
+    )
+    relocated.parent.mkdir(parents=True)
+    old_dir.rename(relocated)
+
+    report = rebuild_scaffold_publication_metadata(relocated)
+
+    assert report.completed is True
+    manifest_text = (relocated / "manifest.json").read_text(encoding="utf-8")
+    report_text = (relocated / "completion_report.json").read_text(encoding="utf-8")
+    assert str(relocated) in manifest_text
+    assert str(relocated) in report_text
+    assert str(old_dir) not in manifest_text
+    assert str(old_dir) not in report_text
 
 
 def test_skill_scaffolder_import_does_not_require_package_file():
@@ -319,6 +367,57 @@ def test_load_when_caps_pathological_input_length():
     assert len(result.split()) <= 24  # "the user needs to" (4 words) + 20-word topic cap
 
 
+def test_scaffold_manifest_preserves_machine_readable_authoring_io():
+    manifest = build_scaffold_manifest(
+        skill_name="sc-io-contract",
+        domain="singlecell",
+        trigger_keywords=["io contract"],
+        input_formats=[".h5ad", "CSV", "AnnData (.h5ad)"],
+        primary_outputs=[
+            "processed.h5ad",
+            "figures/qc.png",
+            "a narrative report",
+            "../outside.txt",
+        ],
+    )
+
+    assert manifest.interface.inputs.file_types == ["h5ad", "csv"]
+    assert manifest.interface.outputs.files == [
+        "report.md",
+        "result.json",
+        "processed.h5ad",
+        "figures/qc.png",
+    ]
+    assert manifest.lifecycle.status == "draft"
+    assert manifest.validation.level == "smoke-only"
+    assert [protocol.model_dump(mode="json") for protocol in manifest.validation.protocols] == [
+        {
+            "id": "demo",
+            "kind": "demo",
+            "entry": "sc_io_contract.py",
+            "runner": "shared_runner",
+            "suite_id": None,
+            "case_ids": [],
+            "dataset_ref": None,
+            "pass_rule": "all_runs",
+            "repeats": 1,
+            "timeout_seconds": 600,
+            "metrics": [],
+        }
+    ]
+
+
+def test_literature_is_a_supported_scaffold_domain():
+    manifest = build_scaffold_manifest(
+        skill_name="literature-evidence-extractor",
+        domain="literature",
+        trigger_keywords=["extract paper evidence"],
+    )
+
+    assert manifest.domain == "literature"
+    assert manifest.lifecycle.status == "draft"
+
+
 def test_create_skill_scaffold_creates_registry_loadable_skill(tmp_path: Path):
     result = create_skill_scaffold(
         request="Create a reusable kinase activity skill for phosphoproteomics.",
@@ -390,6 +489,33 @@ def test_create_skill_scaffold_creates_registry_loadable_skill(tmp_path: Path):
     description = LazySkillMetadata(skill_dir).description
     assert "Kinase activity inference" in description
     assert "explicitly asks to create a new" not in description
+
+
+def test_canonical_publication_rolls_back_when_registry_refresh_fails(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import omicsclaw.skill.scaffolder as scaffolder_module
+
+    skills_root = tmp_path / "skills"
+    refresh_calls: list[None] = []
+    monkeypatch.setattr(scaffolder_module, "SKILLS_DIR", skills_root)
+    monkeypatch.setattr(
+        scaffolder_module,
+        "refresh_registry",
+        lambda: (refresh_calls.append(None) or False),
+    )
+
+    with pytest.raises(RuntimeError, match="Registry could not load"):
+        create_skill_scaffold(
+            request="Create a temporary literature evidence skill.",
+            domain="literature",
+            skill_name="literature-refresh-failure",
+            skills_root=skills_root,
+        )
+
+    assert not (skills_root / "literature" / "literature-refresh-failure").exists()
+    assert len(refresh_calls) == 2
 
 
 def test_scaffold_load_when_survives_a_colon_in_the_request(tmp_path: Path):
@@ -1181,9 +1307,8 @@ def test_create_skill_scaffold_can_promote_mini_agent_analysis(tmp_path: Path):
     assert lint_skill(skill_dir) == []
 
     # ITEM 2: the promotion path seeds deps.python from the RENDERED script's
-    # real import surface — the mini-agent facade bootstrap imports anndata +
-    # matplotlib, and the accepted cells import scanpy — so a promoted skill
-    # under skills/ starts clean against audit_skill_requires.
+    # real import surface. This fixture loads AnnData + scanpy but never calls
+    # ``show``, so the lightweight facade must not pull matplotlib into startup.
     from audit_skill_requires import skill_import_surface
 
     from omicsclaw.skill.schema import load_skill_yaml
@@ -1191,7 +1316,8 @@ def test_create_skill_scaffold_can_promote_mini_agent_analysis(tmp_path: Path):
     manifest = load_skill_yaml(skill_dir / "skill.yaml")
     deps = manifest.deps.python
     assert deps == sorted(set(deps)), f"deps.python must be sorted + deduped: {deps}"
-    assert {"anndata", "matplotlib"}.issubset(deps), deps
+    assert {"anndata", "scanpy"}.issubset(deps), deps
+    assert "matplotlib" not in deps, deps
     assert "python" not in deps and "sys" not in deps, f"stdlib leaked into deps: {deps}"
     # The audit's computed import surface must be a subset of the seeded deps so
     # `audit_skill_requires --check` reports nothing missing.
@@ -1440,7 +1566,14 @@ def test_lift_falls_back_to_verbatim_when_the_gate_rejects_the_lifted_script(tmp
     # The verbatim retry ran for real (real_gate) and succeeded on its own merits.
     assert result.demo_gate_verdict == "earned"
     assert result.quarantined is False
-    assert load_skill_yaml(skill_dir / "skill.yaml").lifecycle.status == "mvp"
+    candidate = load_skill_yaml(skill_dir / "skill.yaml")
+    assert candidate.lifecycle.status == "draft"
+    assert candidate.validation.level == "smoke-only"
+    assert [(protocol.id, protocol.kind) for protocol in candidate.validation.protocols] == [
+        ("demo", "demo")
+    ]
+    assert result.activation_status == "evaluation_required"
+    assert (skill_dir / "references" / "admission.md").is_file()
 
 
 def test_find_latest_discovers_project_nested_mini_agent_run(tmp_path: Path):

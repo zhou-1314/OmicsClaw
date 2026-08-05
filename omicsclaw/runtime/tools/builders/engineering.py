@@ -150,7 +150,12 @@ def build_engineering_tool_specs() -> list[ToolSpec]:
                 "required": ["path"],
             },
             surfaces=("bot", "interactive"),
-            context_params=("surface", "workspace", "pipeline_workspace"),
+            context_params=(
+                "surface",
+                "workspace",
+                "pipeline_workspace",
+                "tool_result_root",
+            ),
             read_only=True,
             concurrency_safe=True,
             policy_tags=("workspace", "inspection"),
@@ -598,6 +603,7 @@ def build_engineering_tool_executors(
         surface: str = "",
         workspace: str = "",
         pipeline_workspace: str = "",
+        tool_result_root: str = "",
     ) -> str:
         path_arg = str(args.get("path", "") or "").strip()
         if not path_arg:
@@ -609,6 +615,7 @@ def build_engineering_tool_executors(
             surface=surface,
             workspace=workspace,
             pipeline_workspace=pipeline_workspace,
+            tool_result_root=tool_result_root,
         )
         if target is None:
             return f"Error: file not found or outside allowed roots: {path_arg}"
@@ -1334,6 +1341,7 @@ def _read_roots(
     surface: str,
     workspace: str,
     pipeline_workspace: str,
+    tool_result_root: str = "",
 ) -> list[Path]:
     roots = _explicit_roots(workspace=workspace, pipeline_workspace=pipeline_workspace)
     data_roots = [
@@ -1344,6 +1352,8 @@ def _read_roots(
     if str(surface or "").strip().lower() == "interactive":
         roots.append(omicsclaw_dir)
     roots.extend(data_roots)
+    if str(tool_result_root or "").strip():
+        roots.append(Path(tool_result_root).expanduser().resolve())
 
     extra = os.environ.get("OMICSCLAW_DATA_DIRS", "").strip()
     if extra:
@@ -1409,6 +1419,7 @@ def _resolve_path_for_read(
     surface: str,
     workspace: str,
     pipeline_workspace: str,
+    tool_result_root: str = "",
     expect_dir: bool = False,
 ) -> Path | None:
     raw_path = Path(path_arg).expanduser()
@@ -1417,6 +1428,7 @@ def _resolve_path_for_read(
         surface=surface,
         workspace=workspace,
         pipeline_workspace=pipeline_workspace,
+        tool_result_root=tool_result_root,
     )
     if raw_path.is_absolute():
         resolved = raw_path.resolve()

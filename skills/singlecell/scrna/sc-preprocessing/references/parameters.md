@@ -18,6 +18,7 @@
 - `--normalization-target-sum`
 - `--pearson-hvg-flavor`
 - `--pearson-theta`
+- `--preserve-var-names`
 - `--r-enhanced`
 - `--scanpy-hvg-flavor`
 - `--sctransform-regress-mt`
@@ -75,6 +76,7 @@
 | `min_cells` | `3` |
 | `normalization_target_sum` | `10000.0` |
 | `scanpy_hvg_flavor` | `seurat` |
+| `preserve_var_names` | `False` |
 
 **Requires:**
 - `raw_counts`
@@ -111,6 +113,7 @@
 - `SingleCellExperiment`
 - `zellkonverter`
 - `sctransform`
+- `rhdf5`
 
 **Tips:**
 - --method sctransform: R-backed SCTransform workflow up to PCA export.
@@ -143,6 +146,7 @@
 - `Seurat`
 - `SingleCellExperiment`
 - `zellkonverter`
+- `rhdf5`
 
 **Tips:**
 - --method seurat: R-backed LogNormalize workflow up to PCA export.

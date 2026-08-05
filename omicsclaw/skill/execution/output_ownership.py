@@ -324,6 +324,25 @@ def _read_owned_claim(path: Path) -> tuple[dict[str, Any], tuple[int, int]]:
     return decoded, identity
 
 
+def read_output_claim(path: str | Path) -> dict[str, Any]:
+    """Read one durable output claim through the ownership boundary.
+
+    This is intentionally the only public read used by Backend authorities that
+    resolve an opaque Run id to an already-claimed output.  It rejects aliased
+    ancestors as well as replaced, linked, oversized, or malformed claim files.
+    """
+
+    directory = Path(path).expanduser()
+    claim_path = directory / OUTPUT_CLAIM_FILENAME
+    alias = first_filesystem_alias_component(claim_path)
+    if alias is not None:
+        raise OutputDirectoryClaimError(
+            f"Refusing output claim '{claim_path}': path contains an alias ({alias})"
+        )
+    payload, _identity = _read_owned_claim(claim_path)
+    return dict(payload)
+
+
 def _fsync_directory(path: Path) -> None:
     """Make the atomic claim replacement durable where directory fsync exists."""
 
@@ -355,4 +374,5 @@ __all__ = [
     "is_output_claim_artifact",
     "is_output_claim_path",
     "is_scientific_output_file",
+    "read_output_claim",
 ]

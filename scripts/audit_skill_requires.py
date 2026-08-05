@@ -103,21 +103,51 @@ def load_registry():
     """Return (module_to_canonical, canonical_set) merged across domains."""
     mod_to_canon: dict[str, str] = {}
     canon: set[str] = set()
-    # The install_cmd arg may be single- OR double-quoted (entries with `.[extra]`
-    # use single quotes because they embed double quotes), so match the outer
-    # quote with a backreference and capture lazily.
-    pat = re.compile(
-        r'"([^"]+)"\s*:\s*DependencyInfo\(\s*"([^"]+)"\s*,\s*'
-        r"(?P<q>[\"'])(?P<install>.*?)(?P=q)",
-        re.S,
-    )
     for dm in SKILLS.rglob("_lib/dependency_manager.py"):
-        for m in pat.finditer(dm.read_text()):
-            key, module, install = m.group(1), m.group(2), m.group("install")
-            canonical = _canonical_from_install(install, key)
-            canon.add(canonical)
-            mod_to_canon[module] = canonical
-            mod_to_canon[key] = canonical  # key may itself be used as a token
+        try:
+            tree = ast.parse(dm.read_text(encoding="utf-8"), filename=str(dm))
+        except (OSError, SyntaxError):
+            continue
+        registry_values: list[ast.Dict] = []
+        for node in tree.body:
+            value: ast.expr | None = None
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                if node.target.id == "DEPENDENCY_REGISTRY":
+                    value = node.value
+            elif isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == "DEPENDENCY_REGISTRY"
+                for target in node.targets
+            ):
+                value = node.value
+            if isinstance(value, ast.Dict):
+                registry_values.append(value)
+
+        for registry_value in registry_values:
+            for key_node, info_node in zip(
+                registry_value.keys,
+                registry_value.values,
+                strict=True,
+            ):
+                if key_node is None or not isinstance(info_node, ast.Call):
+                    continue
+                if not (
+                    isinstance(info_node.func, ast.Name)
+                    and info_node.func.id == "DependencyInfo"
+                    and len(info_node.args) >= 2
+                ):
+                    continue
+                try:
+                    key = ast.literal_eval(key_node)
+                    module = ast.literal_eval(info_node.args[0])
+                    install = ast.literal_eval(info_node.args[1])
+                except (ValueError, TypeError):
+                    continue
+                if not all(isinstance(value, str) for value in (key, module, install)):
+                    continue
+                canonical = _canonical_from_install(install, key)
+                canon.add(canonical)
+                mod_to_canon[module] = canonical
+                mod_to_canon[key] = canonical  # key may itself be used as a token
     return mod_to_canon, canon
 
 

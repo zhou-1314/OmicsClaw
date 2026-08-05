@@ -1,0 +1,340 @@
+{
+  "schema_version": 2,
+  "steps": [
+    {
+      "skill": "create_omics_skill",
+      "version": "0.1.2",
+      "input_file": "run:7787182985b2435997433fa94a7b7096",
+      "input_checksum": "",
+      "output_file": "/work/zhouweige_data/project/OmicsClaw/skills/bulkrna/run-derived/bulkrna-cosinor-rhythm",
+      "params": {
+        "domain": "bulkrna",
+        "skill_name": "bulkrna-cosinor-rhythm",
+        "create_tests": false,
+        "promoted_from_autonomous_analysis": true
+      },
+      "completed_at": "2026-08-05T04:39:41.277522+00:00"
+    }
+  ],
+  "workspace": {
+    "kind": "analysis_run",
+    "purpose": "skill_promotion",
+    "root": "/work/zhouweige_data/project/OmicsClaw/skills/bulkrna/run-derived/bulkrna-cosinor-rhythm",
+    "isolation_mode": "staging_copy",
+    "created_at": "2026-08-05T04:39:41.857715+00:00",
+    "metadata": {
+      "domain": "bulkrna",
+      "skill_name": "bulkrna-cosinor-rhythm",
+      "request": "Create a reusable OmicsClaw Skill proposal from successful Autonomous Run 7787182985b2435997433fa94a7b7096. The Skill performs deterministic fixed-period 24-hour single-component cosinor OLS for a bulk RNA time-course CSV with gene rows and T{hh}_R{rep} columns. Primary outputs: cosinor_results.csv, semantic_summary.json, report.md. Method: fixed-period-cosinor-ols. Trigger keywords: cosinor, circadian rhythmicity, 24-hour rhythm, bulk RNA time course.",
+      "promoted_from_autonomous_analysis": true,
+      "legacy_source_compatibility": false,
+      "source": {
+        "kind": "run",
+        "run_id": "7787182985b2435997433fa94a7b7096"
+      },
+      "corpus_derived": false,
+      "doc_ref": ""
+    }
+  },
+  "required_artifacts": [
+    {
+      "name": "skill_markdown",
+      "path": "SKILL.md",
+      "required": true,
+      "kind": "file",
+      "description": "Generated skill contract markdown.",
+      "status": "present",
+      "metadata": {}
+    },
+    {
+      "name": "skill_script",
+      "path": "bulkrna_cosinor_rhythm.py",
+      "required": true,
+      "kind": "file",
+      "description": "Generated skill entrypoint.",
+      "status": "present",
+      "metadata": {}
+    },
+    {
+      "name": "skill_manifest",
+      "path": "skill.yaml",
+      "required": true,
+      "kind": "file",
+      "description": "v2 machine contract (ADR 0037): identity, summary, interface, runtime, deps.",
+      "status": "present",
+      "metadata": {}
+    },
+    {
+      "name": "reference_methodology",
+      "path": "references/methodology.md",
+      "required": true,
+      "kind": "file",
+      "description": "Algorithm rationale (lazy-loaded).",
+      "status": "present",
+      "metadata": {}
+    },
+    {
+      "name": "reference_output_contract",
+      "path": "references/output_contract.md",
+      "required": true,
+      "kind": "file",
+      "description": "Output schema (lint-validated against script writes).",
+      "status": "present",
+      "metadata": {}
+    },
+    {
+      "name": "reference_parameters",
+      "path": "references/parameters.md",
+      "required": true,
+      "kind": "file",
+      "description": "Auto-generated CLI flag reference.",
+      "status": "present",
+      "metadata": {}
+    },
+    {
+      "name": "reference_r_visualization",
+      "path": "references/r_visualization.md",
+      "required": true,
+      "kind": "file",
+      "description": "Optional R Enhanced renderer placeholder.",
+      "status": "present",
+      "metadata": {}
+    },
+    {
+      "name": "scaffold_spec",
+      "path": "scaffold_spec.json",
+      "required": true,
+      "kind": "file",
+      "description": "Structured scaffold specification.",
+      "status": "present",
+      "metadata": {}
+    },
+    {
+      "name": "workspace_manifest",
+      "path": "manifest.json",
+      "required": true,
+      "kind": "file",
+      "description": "Workspace lineage and verification ledger.",
+      "status": "present",
+      "metadata": {}
+    },
+    {
+      "name": "demo_input",
+      "path": "data/demo_input.csv",
+      "required": true,
+      "kind": "file",
+      "description": "Reference artifact copied from the promoted autonomous analysis.",
+      "status": "present",
+      "metadata": {}
+    },
+    {
+      "name": "source_result_summary",
+      "path": "references/source_result_summary.md",
+      "required": true,
+      "kind": "file",
+      "description": "Reference artifact copied from the promoted autonomous analysis.",
+      "status": "present",
+      "metadata": {}
+    },
+    {
+      "name": "source_manifest",
+      "path": "references/source_manifest.json",
+      "required": true,
+      "kind": "file",
+      "description": "Reference artifact copied from the promoted autonomous analysis.",
+      "status": "present",
+      "metadata": {}
+    },
+    {
+      "name": "source_completion_report",
+      "path": "references/source_completion_report.json",
+      "required": true,
+      "kind": "file",
+      "description": "Reference artifact copied from the promoted autonomous analysis.",
+      "status": "present",
+      "metadata": {}
+    }
+  ],
+  "verification": {
+    "status": "complete",
+    "completed": true,
+    "report_path": "/work/zhouweige_data/project/OmicsClaw/skills/bulkrna/run-derived/bulkrna-cosinor-rhythm/completion_report.json",
+    "verified_at": "2026-08-05T06:57:39.304234+00:00",
+    "missing_required_artifacts": [],
+    "warnings": [],
+    "metadata": {
+      "workspace_kind": "analysis_run",
+      "workspace_purpose": "skill_promotion",
+      "errors": [],
+      "artifact_checks": [
+        {
+          "name": "skill_markdown",
+          "path": "SKILL.md",
+          "kind": "file",
+          "required": true,
+          "present": true,
+          "resolved_path": "/work/zhouweige_data/project/OmicsClaw/skills/bulkrna/run-derived/bulkrna-cosinor-rhythm/SKILL.md",
+          "description": "Generated skill contract markdown.",
+          "detail": "",
+          "metadata": {}
+        },
+        {
+          "name": "skill_script",
+          "path": "bulkrna_cosinor_rhythm.py",
+          "kind": "file",
+          "required": true,
+          "present": true,
+          "resolved_path": "/work/zhouweige_data/project/OmicsClaw/skills/bulkrna/run-derived/bulkrna-cosinor-rhythm/bulkrna_cosinor_rhythm.py",
+          "description": "Generated skill entrypoint.",
+          "detail": "",
+          "metadata": {}
+        },
+        {
+          "name": "skill_manifest",
+          "path": "skill.yaml",
+          "kind": "file",
+          "required": true,
+          "present": true,
+          "resolved_path": "/work/zhouweige_data/project/OmicsClaw/skills/bulkrna/run-derived/bulkrna-cosinor-rhythm/skill.yaml",
+          "description": "v2 machine contract (ADR 0037): identity, summary, interface, runtime, deps.",
+          "detail": "",
+          "metadata": {}
+        },
+        {
+          "name": "reference_methodology",
+          "path": "references/methodology.md",
+          "kind": "file",
+          "required": true,
+          "present": true,
+          "resolved_path": "/work/zhouweige_data/project/OmicsClaw/skills/bulkrna/run-derived/bulkrna-cosinor-rhythm/references/methodology.md",
+          "description": "Algorithm rationale (lazy-loaded).",
+          "detail": "",
+          "metadata": {}
+        },
+        {
+          "name": "reference_output_contract",
+          "path": "references/output_contract.md",
+          "kind": "file",
+          "required": true,
+          "present": true,
+          "resolved_path": "/work/zhouweige_data/project/OmicsClaw/skills/bulkrna/run-derived/bulkrna-cosinor-rhythm/references/output_contract.md",
+          "description": "Output schema (lint-validated against script writes).",
+          "detail": "",
+          "metadata": {}
+        },
+        {
+          "name": "reference_parameters",
+          "path": "references/parameters.md",
+          "kind": "file",
+          "required": true,
+          "present": true,
+          "resolved_path": "/work/zhouweige_data/project/OmicsClaw/skills/bulkrna/run-derived/bulkrna-cosinor-rhythm/references/parameters.md",
+          "description": "Auto-generated CLI flag reference.",
+          "detail": "",
+          "metadata": {}
+        },
+        {
+          "name": "reference_r_visualization",
+          "path": "references/r_visualization.md",
+          "kind": "file",
+          "required": true,
+          "present": true,
+          "resolved_path": "/work/zhouweige_data/project/OmicsClaw/skills/bulkrna/run-derived/bulkrna-cosinor-rhythm/references/r_visualization.md",
+          "description": "Optional R Enhanced renderer placeholder.",
+          "detail": "",
+          "metadata": {}
+        },
+        {
+          "name": "scaffold_spec",
+          "path": "scaffold_spec.json",
+          "kind": "file",
+          "required": true,
+          "present": true,
+          "resolved_path": "/work/zhouweige_data/project/OmicsClaw/skills/bulkrna/run-derived/bulkrna-cosinor-rhythm/scaffold_spec.json",
+          "description": "Structured scaffold specification.",
+          "detail": "",
+          "metadata": {}
+        },
+        {
+          "name": "workspace_manifest",
+          "path": "manifest.json",
+          "kind": "file",
+          "required": true,
+          "present": true,
+          "resolved_path": "/work/zhouweige_data/project/OmicsClaw/skills/bulkrna/run-derived/bulkrna-cosinor-rhythm/manifest.json",
+          "description": "Workspace lineage and verification ledger.",
+          "detail": "",
+          "metadata": {}
+        },
+        {
+          "name": "demo_input",
+          "path": "data/demo_input.csv",
+          "kind": "file",
+          "required": true,
+          "present": true,
+          "resolved_path": "/work/zhouweige_data/project/OmicsClaw/skills/bulkrna/run-derived/bulkrna-cosinor-rhythm/data/demo_input.csv",
+          "description": "Reference artifact copied from the promoted autonomous analysis.",
+          "detail": "",
+          "metadata": {}
+        },
+        {
+          "name": "source_result_summary",
+          "path": "references/source_result_summary.md",
+          "kind": "file",
+          "required": true,
+          "present": true,
+          "resolved_path": "/work/zhouweige_data/project/OmicsClaw/skills/bulkrna/run-derived/bulkrna-cosinor-rhythm/references/source_result_summary.md",
+          "description": "Reference artifact copied from the promoted autonomous analysis.",
+          "detail": "",
+          "metadata": {}
+        },
+        {
+          "name": "source_manifest",
+          "path": "references/source_manifest.json",
+          "kind": "file",
+          "required": true,
+          "present": true,
+          "resolved_path": "/work/zhouweige_data/project/OmicsClaw/skills/bulkrna/run-derived/bulkrna-cosinor-rhythm/references/source_manifest.json",
+          "description": "Reference artifact copied from the promoted autonomous analysis.",
+          "detail": "",
+          "metadata": {}
+        },
+        {
+          "name": "source_completion_report",
+          "path": "references/source_completion_report.json",
+          "kind": "file",
+          "required": true,
+          "present": true,
+          "resolved_path": "/work/zhouweige_data/project/OmicsClaw/skills/bulkrna/run-derived/bulkrna-cosinor-rhythm/references/source_completion_report.json",
+          "description": "Reference artifact copied from the promoted autonomous analysis.",
+          "detail": "",
+          "metadata": {}
+        }
+      ],
+      "domain": "bulkrna",
+      "skill_name": "bulkrna-cosinor-rhythm",
+      "request": "Create a reusable OmicsClaw Skill proposal from successful Autonomous Run 7787182985b2435997433fa94a7b7096. The Skill performs deterministic fixed-period 24-hour single-component cosinor OLS for a bulk RNA time-course CSV with gene rows and T{hh}_R{rep} columns. Primary outputs: cosinor_results.csv, semantic_summary.json, report.md. Method: fixed-period-cosinor-ols. Trigger keywords: cosinor, circadian rhythmicity, 24-hour rhythm, bulk RNA time course.",
+      "promoted_from_autonomous_analysis": true,
+      "legacy_source_compatibility": false,
+      "source": {
+        "kind": "run",
+        "run_id": "7787182985b2435997433fa94a7b7096"
+      },
+      "corpus_derived": false,
+      "doc_ref": ""
+    }
+  },
+  "metadata": {
+    "domain": "bulkrna",
+    "skill_name": "bulkrna-cosinor-rhythm",
+    "request": "Create a reusable OmicsClaw Skill proposal from successful Autonomous Run 7787182985b2435997433fa94a7b7096. The Skill performs deterministic fixed-period 24-hour single-component cosinor OLS for a bulk RNA time-course CSV with gene rows and T{hh}_R{rep} columns. Primary outputs: cosinor_results.csv, semantic_summary.json, report.md. Method: fixed-period-cosinor-ols. Trigger keywords: cosinor, circadian rhythmicity, 24-hour rhythm, bulk RNA time course.",
+    "promoted_from_autonomous_analysis": true,
+    "legacy_source_compatibility": false,
+    "source": {
+      "kind": "run",
+      "run_id": "7787182985b2435997433fa94a7b7096"
+    },
+    "corpus_derived": false,
+    "doc_ref": ""
+  }
+}

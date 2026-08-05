@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Tuple, Union
 
 import numpy as np
+from scipy import sparse
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -68,13 +69,29 @@ def run_standard_normalization(
     logger.info("  Stored raw counts in adata.layers['counts']")
 
     # Library-size normalization
-    sc.pp.normalize_total(
-        adata,
-        target_sum=target_sum,
-        exclude_highly_expressed=exclude_highly_expressed,
-        max_fraction=max_fraction,
-        inplace=True,
-    )
+    # Scanpy 1.11.5's sparse fast path returns an unbound ``counts_per_cols``
+    # when highly-expressed-gene exclusion is disabled. This is the exact
+    # target-sum operation that path implements, expressed with SciPy sparse
+    # primitives until the upstream regression is fixed.
+    if sparse.issparse(adata.X) and not exclude_highly_expressed:
+        totals = np.asarray(adata.X.sum(axis=1)).ravel().astype(float)
+        scale = np.divide(
+            float(target_sum),
+            totals,
+            out=np.zeros_like(totals, dtype=float),
+            where=totals != 0,
+        )
+        if np.any(totals == 0):
+            logger.warning("Some cells have zero counts")
+        adata.X = sparse.csr_matrix(adata.X.multiply(scale[:, None]))
+    else:
+        sc.pp.normalize_total(
+            adata,
+            target_sum=target_sum,
+            exclude_highly_expressed=exclude_highly_expressed,
+            max_fraction=max_fraction,
+            inplace=True,
+        )
     logger.info("  Library-size normalization complete")
 
     # Log-transform

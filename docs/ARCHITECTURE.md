@@ -586,6 +586,18 @@ the output root after symlink resolution. A failure is typed
 runner-owned success projections. AnnData field/value verification is not yet
 implemented.
 
+As built after ADR 0075, the shared runner no longer synthesizes a standard
+Skill notebook. Its Reproducibility Module writes one Skill Replay Capsule
+(`replay.json`), bounded environment evidence (`environment.json`) and a thin
+`replay.sh` launcher. The CLI `oc replay` Adapter validates the frozen Skill and
+input evidence, creates a fresh output, and compares revision, parameters,
+environment, result semantics and declared artifacts. Exact demos use the
+canonical RunRuntime with explicit Unassigned Scope and a fresh Run ID;
+option-bearing and mapped-input replay still use the legacy shared runner. The
+original output and terminal Run state remain immutable. Genuine notebook code
+continues to belong to explicit Notebook and Autonomous Code Mini-Agent
+Interfaces.
+
 Skill security metadata is also represented honestly: an absent block is
 unreviewed; an explicit complete block is reported as a reviewed declarative
 capability statement in registry, catalog, and Desktop responses. This is not
@@ -842,6 +854,8 @@ runtime rather than owning a second agent engine.
   converged yet.
 - Project is the grouping axis for Bench continuity and Run outputs.
 - Skills remain independently declared and executable; Workflows compose them.
+- Standard Skill Runs expose `replay_path`, not a synthesized notebook; replay
+  is explicit fresh execution and never startup recovery or Receipt authority.
 - Public documentation and historical ADRs are not themselves current-state
   authority.
 
@@ -1033,7 +1047,7 @@ The re-baselining audit has already confirmed these issues:
    persists one immutable scope reference, contains nested scope/session escape,
    and refuses to release safety authority when stop cannot be proved. Remote
    canonical Job JSON is no longer executable authority, retry cannot clone it,
-   and SSE cannot start work. Only 6/95 Skills currently declare a
+   and SSE cannot start work. Only 7/96 Skills currently declare a
    complete static reservation, and Autonomous execution has neither the
    aggregate governed envelope nor nested-acquisition fence from ADR 0062.
 15. **Scientific Memory ownership is still encoded through legacy Namespace.**

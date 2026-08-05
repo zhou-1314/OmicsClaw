@@ -4,7 +4,8 @@
 >
 > 关联决策：
 > [ADR 0074](../adr/0074-govern-skill-experience-and-continuous-evaluation.md)
-> 当前仍为 Proposed；本文描述目标设计，不代表已实现能力。
+> 当前仍为 Proposed；其中 Experience View、Evaluation Protocol/result/artifact store、
+> governance evaluation 和部分 proposal 已分期实现，AuditOperation/RunRuntime 接入仍是目标设计。
 >
 > 现状验收真源：
 > [Skill 审计系统：设计基线与验收规格](../reviews/2026-07-13-skill-audit-system-design-assessment.md)
@@ -267,7 +268,14 @@ validation:
   - id: pbmc3k-fixture-v1
     kind: fixture
     entry: tests/test_pbmc3k_fixture.py
-    dataset_ref: fixture://pbmc3k
+    runner: command
+    dataset_ref:
+      store: repository
+      path: data/benchmarks/example-suite
+      members:
+      - inputs/pbmc3k.h5ad
+      - graders/pbmc3k.py
+      content_sha256: sha256:<64-lowercase-hex>
     repeats: 1
 ```
 
@@ -279,6 +287,11 @@ validation:
 可复现；小 fixture 提交入库，代表性 benchmark 数据置于持久存储而非临时路径。系统按 Skill
 类型提供可覆盖的默认协议模板，避免每个 Skill 手写稳定性/环境阈值导致
 `benchmarked`/`production` 实际不可达。
+
+对 10–80 GiB 的 suite，`dataset_ref.members` 只绑定一个 case 实际消费的 input、prompt、
+oracle 和 grader。成员必须唯一、不重叠、不可为 symlink；目录枚举失败和任一成员在整个
+bundle hash 窗口内变化都 fail closed。未声明的同 suite 大文件不进入该 case digest，不能
+据此声称整个 suite 的内容已验证。
 
 ### 6.2 等级语义
 
@@ -306,6 +319,31 @@ validation:
 
 MUSE 使用五次独立运行评估稳定性；OmicsClaw 采用协议级 repeats，避免把合理随机性误判为
 失败，也避免把所有算法强制成同一统计模型。
+
+### 6.3b Suite-level Benchmark Campaign
+
+Per-Skill Evaluation Protocol 只回答 exact Skill revision 的科学 conformance。Agent 的
+`no_skill / curated_skill / self_created_skill` 净效用由独立 Benchmark Campaign 评估，
+后者用显式 `experiment_kind` 冻结完整 case x condition x repeat 矩阵、
+model/runtime/Agent/environment/tool-policy/budget identity、每个 condition config digest，
+以及 coverage manifest digest 和预注册 anchor case IDs。
+
+Campaign 的严格 denominator 不丢弃 missing、unsupported、uncovered、timeout 或失败单元；
+它们均记 0。各条件 coverage 单列。所有条件另在 manifest 预冻结的同一 anchor case set
+上计算诊断分，不能从 Phase-2 到达的结果行反推，也禁止各用各的 covered subset。每个实际
+attempt 绑定唯一 trial/isolation identity 和 content-addressed artifact；graded record 还绑定
+grader evidence。covered Skill 的失败行同样必须绑定 exact revision，不能借 timeout 绕过
+memory/refinement identity 检查。
+
+`main_skill_effect`、`memory_ablation`、`refinement_ablation`、`transfer` 各自使用固定 condition
+集合，不能混轴。Memory on/off 保持同一 exact revision，R0/R1 保持同一 Skill ID。异构 suite
+native score 不直接 pooled。
+
+Campaign 结果不进入某个 Skill 的 Experience View，也不能挣 validation level。当前
+`omicsclaw.skill.benchmark_campaign` 只实现严格合同与离线分析，输出明确标记为
+`matrix-integrity-only`；Agent 执行 harness 尚未完成。因此它尚不能证明 Phase-1→Phase-2
+creation、memory two-pass state/leakage、R0→R1 parent/held-out 或 transfer source→target 的
+typed causal provenance，opaque condition digest 也不能单独证明只改变了目标实验变量。
 
 ### 6.4 新鲜度与有效等级
 
@@ -563,10 +601,10 @@ OmicsClaw-App 保存由该资产生成或同步的固定 snapshot 及摘要，�
 
 两仓按独立里程碑实施：
 
-1. Backend additive snapshot、read models 和 contract fixtures——**首切片即在此**：
-   Skill Experience View + declared/effective 分离 + additive snapshot 字段，全部基于现有
-   `SkillHealthLedger` 证据计算，不引入 Evaluation Protocol schema 或 AuditOperation，
-   先验证 AUD-01/02/04 与 AUD-07 additive 合同；
+1. Backend additive snapshot、read models 和 contract fixtures——**历史首切片已完成**：
+   Skill Experience View + declared/effective 分离 + additive snapshot 字段先基于现有
+   `SkillHealthLedger` 落地并验证 AUD-01/02/04 与 AUD-07；后续 Backend 里程碑已加入
+   Evaluation Protocol/result store、真实 case adapters 和离线 Benchmark Campaign analyzer；
 2. App capability negotiation、Experience/Evaluation 读视图；
 3. Backend AuditOperation 和 protocol execution；
 4. App evaluation observer/cancel UX；
@@ -577,18 +615,16 @@ OmicsClaw-App 保存由该资产生成或同步的固定 snapshot 及摘要，�
 
 ## 14. 采用 MUSE 思想的理由与调整
 
-> 说明：所据 MUSE 参考实现为非官方版本；其 refiner / merge-prune manager / `.memory.md`
-> 写入基本只存在于测试、从未接入运行的 agent。故下表批判的是 MUSE 的**模式**而非在跑系统，
-> 且已按参考代码校正了三处机制描述（稳定性、forget、merge）。
+> 说明：本节的实验结构与定量结论以官方 MUSE-Autoskill 论文及附录为准。非官方参考实现
+> 只能提供实现观察，不能覆盖论文声明或作为 benchmark 结果来源。
 
 | MUSE 思想 | 采用方式 | 为什么调整 |
 | --- | --- | --- |
-| Skill-level memory | 结构化 Experience View | 参考的 `.memory.md` 无版本、隐私弱、会成第二真源，且它在生产从不写入；真正在跑的是全局 `LongTermMemory`（自由文本注入每个 prompt），风险相同，一并以证据派生 View 取代 |
-| unit-test-driven evaluation | 协议化 demo/fixture/benchmark/stability | 参考的测试由同一 LLM 自撰、无测试目录即自动通过、refiner 还能改测试凑绿；生成 unit test 不能证明科学正确，真实数据不变量更强 |
-| failed test triggers refinement | 生成 remediation brief 和候选 | 参考的创建期 auto-patch 循环无门控；自动改科学方法会绕过人工判断和 CAS 治理 |
-| merge overlapping skills | replacement + deprecation 两阶段 | 参考并非「拼接」，而是 LLM 重生成 doc 并**丢弃全部 scripts/tests 且不重评**（比拼接更糟）；两阶段替代保住方法学、Interface 与证据 |
-| forget unused skills | strategic review signal | 参考的 prune 是 failure-gated（`failure≥3 且 usage==0`）、并非按使用量；无论如何，低频不等于低价值 |
-| repeated-run stability | 协议级 repeats 和 dispersion | 参考**未实现**任何稳定性机制（无「5 次运行」）；OmicsClaw 以协议级 repeats/dispersion 补上，且不同算法需不同随机性容差 |
+| Skill-level memory | 结构化 Experience View | 论文的 `.memory.md` 是自由文本且不随 transfer 包转移；OmicsClaw 需要 exact-revision、可重建、隐私可控的证据投影 |
+| unit-test-driven evaluation | 协议化 demo/fixture/benchmark/stability | 论文把生成测试称为 validation signal 和 audit path，不是 correctness guarantee；真实数据不变量更强 |
+| failed test triggers refinement | 生成 remediation brief 和候选 | 自动改科学方法会绕过人工判断、held-out 回归与 CAS 治理 |
+| merge / prune | replacement + deprecation 两阶段 | 描述相似不证明科学等价，低使用也不证明低价值；替代式治理保留历史与证据 |
+| repeated-run stability | 协议级 repeats 和 dispersion | 论文主 Agent benchmark 用 5 次运行并报告 std/MAD；确定性 command grader 可声明 1 次，随机算法按协议声明 |
 
 该设计不是给现有 governance 增加更多脚本，而是建立一个深 Module：调用者只需要提交
 typed evidence 或读取 typed snapshot，身份、归因、聚合、评测、新鲜度和候选策略集中在
@@ -596,14 +632,29 @@ typed evidence 或读取 typed snapshot，身份、归因、聚合、评测、�
 
 ## 15. 当前状态
 
-本文和 ADR 0074 均为 Proposed。当前实现仍以 ADR 0065–0069、现有
-`SkillHealthLedger`、`SkillEvolutionGovernance` 和 OmicsClaw-App validation review 为准。
-不得根据本文宣称以下能力已存在：
+本文和 ADR 0074 的决策状态仍为 Proposed，但实现已进入分期落地，不能再写成“未开始”。
 
-- `SkillAuditRuntime`；
-- Evaluation Protocol schema；
-- effective validation level；
-- Experience View；
-- AuditOperation；
-- merge/parameter/protocol revision proposal；
-- 新 App Overview/Skills/Evaluations 视图。
+已实现并有 contract test 的切片：
+
+- `SkillAuditRuntime`、可重建 Experience View、declared/effective/evidence-supported 分离；
+- Evaluation Protocol schema、protocol digest、schema-v2 result store 与保守 v1 读取；
+- 本地 content-addressed Evaluation Artifact Store，在 scratch 清理前保存有界日志、result
+  envelope 与 hash-matched verifier evidence，并以 opaque ref 进入 result evidence；单对象
+  64 MiB、最多枚举 4,096 files，过大或未匹配 evidence 在 bundle 中标记 unresolved；
+- demo/fixture/benchmark/stability 编排、协议内 repeat batch 完整性校验与聚合、metric dispersion；
+- content-bound multi-member case bundles、suite-level Benchmark Campaign 严格分母分析；
+- Campaign 的 experiment-specific condition 集、pre-frozen coverage anchor、run artifact/trial/
+  isolation identity，以及明确的 matrix-only causal-claim fence；
+- merge advisory、protocol revision 和既有 validation/gotcha/deprecation proposal 治理；
+- Desktop additive audit snapshot，以及 OmicBench A02/A03、scAgentBench PAGA 和
+  BiomniBench-DA 12-2 deterministic preflight 三套 partial-coverage evidence。
+
+仍未完成、不得根据本文宣称存在的切片：
+
+- RunRuntime-backed `AuditOperation`、artifact retention/GC 与观察 Interface、取消和资源调度；
+- 完整 OS 级 protocol sandbox（当前 Linux dataset-backed command 仅有 bubblewrap 只读挂载、
+  PID namespace 与 digest-guard fallback）；
+- parameter proposal 与 AutoAgent remediation 闭环；
+- 完整的新 App Overview/Skills/Evaluations 观察与取消体验；
+- 三套 suite 的完整覆盖及真正的 no-Skill/curated/self-created Agent Campaign。
+- Campaign execution harness 的 creation/memory/refinement/transfer typed causal provenance。

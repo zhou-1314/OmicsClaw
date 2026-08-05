@@ -19,25 +19,19 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from omicsclaw.skill.registry import OmicsRegistry, SKILLS_DIR
-from omicsclaw.skill.protocol import validate_skill_module
+from omicsclaw.skill.registry import OmicsRegistry, SKILLS_DIR  # noqa: E402
+from omicsclaw.skill.protocol import validate_skill_module  # noqa: E402
 
 
 def find_skill_scripts() -> list[Path]:
-    """Find all skill main scripts via registry directory scanning."""
+    """Find Python Skill entries through the canonical Registry inventory."""
     reg = OmicsRegistry()
-    scripts: list[Path] = []
-
-    for domain_path in SKILLS_DIR.iterdir():
-        if not domain_path.is_dir() or domain_path.name.startswith((".", "__")):
-            continue
-        for skill_path in reg._iter_skill_dirs(domain_path):
-            script_name = f"{skill_path.name.replace('-', '_')}.py"
-            script = skill_path / script_name
-            if script.exists():
-                scripts.append(script)
-
-    return sorted(scripts)
+    reg.load_all(SKILLS_DIR)
+    return sorted(
+        Path(info["script"])
+        for _alias, info in reg.iter_primary_skills()
+        if Path(info["script"]).suffix == ".py"
+    )
 
 
 def main():

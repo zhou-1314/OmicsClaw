@@ -171,7 +171,7 @@ class SkillRunDisplayView:
     output_dir: str = ""
     method: str = ""
     readme_path: str = ""
-    notebook_path: str = ""
+    replay_path: str = ""
     stdout: str = ""
     error: str = ""
     exception: bool = False
@@ -285,7 +285,7 @@ def build_skill_run_display_view(
         output_dir=str(result.get("output_dir", "") or ""),
         method=str(result.get("method", "") or ""),
         readme_path=str(result.get("readme_path", "") or ""),
-        notebook_path=str(result.get("notebook_path", "") or ""),
+        replay_path=str(result.get("replay_path", "") or ""),
         stdout=stdout,
         error=raw_error,
         exception=bool(result.get("exception")),
@@ -304,8 +304,8 @@ def format_skill_run_system_summary(
             lines.append(f"  Method: {view.method}")
         if view.readme_path:
             lines.append(f"  Guide: {view.readme_path}")
-        if view.notebook_path:
-            lines.append(f"  Notebook: {view.notebook_path}")
+        if view.replay_path:
+            lines.append(f"  Replay: {view.replay_path}")
         return lines
 
     if view.exception:

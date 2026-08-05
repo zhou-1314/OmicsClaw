@@ -45,7 +45,7 @@ def _result(skill: str, *, success: bool, code: str = "") -> dict[str, object]:
         "duration_seconds": 0.1,
         "method": None,
         "readme_path": "",
-        "notebook_path": "",
+        "replay_path": "",
         "run_id": "a" * 32,
     }
 

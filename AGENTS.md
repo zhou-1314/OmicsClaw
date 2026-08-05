@@ -20,7 +20,7 @@ Core rules:
 
 ## Project Overview
 
-OmicsClaw is a multi-omics analysis platform supporting 95 registered skills
+OmicsClaw is a multi-omics analysis platform supporting 96 registered skills
 across 8 domains: spatial transcriptomics, single-cell omics, genomics,
 proteomics, metabolomics, Bulk RNA-seq, orchestration, and literature. Each
 skill is a self-contained module that performs a specific analysis task via CLI
@@ -81,9 +81,10 @@ python omicsclaw.py run spatial-preprocess --demo
 
 | Command | Purpose |
 |---------|---------|
-| `oc list` | List all 95 skills across 8 domains |
+| `oc list` | List all 96 skills across 8 domains |
 | `oc run <skill> --demo` | Run a skill with demo data |
 | `oc run <skill> --input <file> --output <dir>` | Run with user data |
+| `oc replay <replay.json> [--input <file>]` | Create a fresh Skill Run and verify it against a Replay Capsule |
 | `oc interactive` | **Start interactive terminal chat (CLI mode)** |
 | `oc interactive --ui tui` | **Start full-screen Textual TUI** |
 | `oc interactive -p "<prompt>"` | **Single-shot mode (non-interactive)** |
@@ -95,8 +96,10 @@ python omicsclaw.py run spatial-preprocess --demo
 | `oc mcp remove <name>` | Remove an MCP server |
 | `oc mcp config` | Show MCP config file path |
 | `oc onboard` | Run interactive setup wizard for LLM, runtime, memory, and channels |
-| `python -m pytest -v` | Run all tests |
-| `make test` | Alias for pytest |
+| `python -m pytest -v` | Run the deterministic fast suite (excludes demo/slow/eval) |
+| `make test` | Run the fast suite in parallel |
+| `make test-slow` | Run Skill demo + slow scientific integration tests |
+| `make test-all` | Run all tests except real-LLM evals |
 | `make demo` | Run preprocess demo |
 | `make install-oc` | (Re)install package + activate `oc` alias |
 | `make oc-link` | Quick wrapper script in `~/.local/bin/oc` (no pip) |
@@ -143,7 +146,7 @@ OmicsClaw/
 │   ├── genomics/               # 10 genomics skills (+ _lib/)
 │   ├── proteomics/             # 8 proteomics skills (+ _lib/)
 │   ├── metabolomics/           # 8 metabolomics skills (+ _lib/)
-│   ├── bulkrna/                # 13 bulk RNA skills (+ _lib/)
+│   ├── bulkrna/                # 14 bulk RNA skills (+ _lib/)
 │   ├── orchestrator/           # 2 orchestration skills
 │   └── literature/             # 1 literature skill
 ├── docs/                       # Project docs (CONTEXT.md vocabulary, adr/ history)
@@ -157,6 +160,14 @@ OmicsClaw/
 ├── CLAUDE.md                   # Agent routing instructions (Claude Code entry)
 └── AGENTS.md                   # This file
 ```
+
+Within a domain, Backend-authored publications derived from claimed Autonomous
+Runs live at `skills/<domain>/run-derived/<skill>`. This `collection` is a
+physical/navigation distinction only; `skill.yaml` remains authoritative for
+provenance, lifecycle, validation, routing metadata, and resources. New runtime
+or projection consumers must use `omicsclaw.skill.inventory.SkillInventory`
+instead of adding another recursive scanner; raw validators/migrations may scan
+manifests directly when diagnosing malformed or legacy trees is their purpose.
 
 > **Import convention**: domain-specific skill utilities live in
 > `skills/<domain>/_lib/` and are imported via
@@ -180,7 +191,7 @@ Skills are registered in `omicsclaw/core/registry.py` and dynamically discovered
 - `resources.compute`, when calibrated, must contain the complete static Candidate-plan admission reservation (`cpu_cores`, `memory_mib`, `gpu_devices`, `threads`, `temporary_disk_mib`). Do not invent defaults: uncalibrated skills must remain resource-unready for whole-plan execution. These reservations are not OS-enforced quotas.
 - `lifecycle.status: deprecated` requires one different canonical `superseded_by` Skill that is currently `mvp` or `stable` and `demo-validated` or higher; non-deprecated Skills must omit `superseded_by`. Use Backend Skill evolution governance for evidence-bound deprecation instead of hand-editing lifecycle state. Deprecated Skills remain auditable but are removed from automatic/LLM routing and blocked by the shared runner with a replacement hint.
 - All primary skill scripts must expose a lightweight direct `--help` path.
-- Skill scripts write native artifacts; the shared runner writes the top-level `README.md` and `reproducibility/analysis_notebook.ipynb`.
+- Skill scripts write native artifacts; the shared runner writes the top-level `README.md` plus `reproducibility/replay.json`, `environment.json`, and `replay.sh`. Standard Skill Runs do not synthesize notebooks; genuine notebooks remain owned by explicit notebook/code-agent workflows.
 - Bot skill execution uses the same shared runner contract as CLI, interactive, agent tools, app, and remote jobs.
 - Shared result construction and adapter coercion live in `omicsclaw/core/skill_result.py`; new execution surfaces should reuse that model instead of rebuilding legacy result dictionaries.
 
@@ -333,8 +344,12 @@ milestones rather than duplicating logic.
   complete caller-declared simple resource contract. Novel acceptance returns
   `202`; a matching 32-hex `Idempotency-Key` duplicate returns `200` before
   current Registry, Project, budget or Dispatcher gates.
-- The prompt-toolkit REPL's exact `/run <canonical-skill> --demo` and the root
-  exact-demo Scope command family are canonical submission Adapters.
+- The prompt-toolkit REPL's exact `/run <canonical-skill> --demo`, the root
+  exact-demo Scope command family, and Desktop text chat's explicit named demo
+  request are canonical submission Adapters. Desktop authoritative dispatch
+  must propagate the process-local `RunRuntime` through `ControlRuntimePorts`;
+  a planned exact demo bypasses the LLM and must never fall back to the legacy
+  runner.
   Each creates one fresh 32-hex Submission ID, resolves the canonical Skill and
   complete resource request through Backend Registry authority, and never falls
   back to the legacy runner after canonical routing. The REPL uses explicit

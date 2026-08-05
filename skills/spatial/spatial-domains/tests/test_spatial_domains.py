@@ -25,11 +25,26 @@ def tmp_output(tmp_path):
     return tmp_path / "domains_out"
 
 
+@pytest.fixture(scope="module")
+def demo_output(tmp_path_factory):
+    """Run the default Demo once for all read-only output assertions."""
+
+    output_dir = tmp_path_factory.mktemp("spatial_domains_demo")
+    result = subprocess.run(
+        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(output_dir)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        cwd=str(SKILL_SCRIPT.parent),
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}"
+    return output_dir
+
+
 def _make_synthetic_adata(n_obs: int = 50, n_vars: int = 30):
     """Create a minimal preprocessed AnnData for unit tests."""
     import anndata
     import scanpy as sc
-    import scipy.sparse as sp
 
     rng = np.random.default_rng(42)
     counts = rng.poisson(5, size=(n_obs, n_vars)).astype(np.float32)
@@ -59,104 +74,64 @@ def _make_synthetic_adata(n_obs: int = 50, n_vars: int = 30):
 # -----------------------------------------------------------------------
 
 
-def test_demo_mode(tmp_output):
+def test_demo_mode(demo_output):
     """spatial-domains --demo should run without error."""
-    result = subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        cwd=str(SKILL_SCRIPT.parent),
-    )
-    assert result.returncode == 0, f"stderr: {result.stderr}"
-    assert (tmp_output / "report.md").exists()
-    assert (tmp_output / "result.json").exists()
-    assert (tmp_output / "processed.h5ad").exists()
+    assert (demo_output / "report.md").exists()
+    assert (demo_output / "result.json").exists()
+    assert (demo_output / "processed.h5ad").exists()
 
 
-def test_demo_report_content(tmp_output):
+def test_demo_report_content(demo_output):
     """Report should contain expected sections."""
-    subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        cwd=str(SKILL_SCRIPT.parent),
-    )
-    report = (tmp_output / "report.md").read_text()
+    report = (demo_output / "report.md").read_text()
     assert "Spatial Domain Identification Report" in report
     assert "Disclaimer" in report
     assert "Domain" in report
 
 
-def test_demo_result_json(tmp_output):
+def test_demo_result_json(demo_output):
     """result.json should contain expected keys."""
-    subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        cwd=str(SKILL_SCRIPT.parent),
-    )
-    data = json.loads((tmp_output / "result.json").read_text())
+    data = json.loads((demo_output / "result.json").read_text())
     assert data["skill"] == "spatial-domains"
     assert "summary" in data
     assert data["summary"]["n_domains"] > 0
-    assert data["data"]["visualization"]["recipe_id"] == "standard-spatial-domain-gallery"
+    assert (
+        data["data"]["visualization"]["recipe_id"] == "standard-spatial-domain-gallery"
+    )
     assert data["data"]["visualization"]["domain_column"] == "spatial_domain"
 
 
-def test_demo_figures(tmp_output):
+def test_demo_figures(demo_output):
     """Demo mode should produce spatial domain figures."""
-    subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        cwd=str(SKILL_SCRIPT.parent),
-    )
-    figures_dir = tmp_output / "figures"
+    figures_dir = demo_output / "figures"
     assert figures_dir.exists()
     assert (figures_dir / "spatial_domains.png").exists()
     assert (figures_dir / "umap_domains.png").exists()
 
 
-def test_demo_tables_and_gallery_contract(tmp_output):
+def test_demo_tables_and_gallery_contract(demo_output):
     """Demo mode should produce tables, manifests, and reproducibility helpers."""
-    result = subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        cwd=str(SKILL_SCRIPT.parent),
-    )
-    assert result.returncode == 0, f"stderr: {result.stderr}"
-    assert (tmp_output / "tables" / "domain_summary.csv").exists()
-    assert (tmp_output / "tables" / "domain_assignments.csv").exists()
-    assert (tmp_output / "tables" / "domain_neighbor_mixing.csv").exists()
-    assert (tmp_output / "figures" / "manifest.json").exists()
-    assert (tmp_output / "figure_data" / "manifest.json").exists()
-    assert (tmp_output / "figure_data" / "domain_counts.csv").exists()
-    assert (tmp_output / "figure_data" / "domain_spatial_points.csv").exists()
-    assert (tmp_output / "figure_data" / "domain_umap_points.csv").exists()
-    assert (tmp_output / "figure_data" / "domain_neighbor_mixing.csv").exists()
-    assert (tmp_output / "reproducibility" / "commands.sh").exists()
-    assert (tmp_output / "reproducibility" / "r_visualization.sh").exists()
+    assert (demo_output / "tables" / "domain_summary.csv").exists()
+    assert (demo_output / "tables" / "domain_assignments.csv").exists()
+    assert (demo_output / "tables" / "domain_neighbor_mixing.csv").exists()
+    assert (demo_output / "figures" / "manifest.json").exists()
+    assert (demo_output / "figure_data" / "manifest.json").exists()
+    assert (demo_output / "figure_data" / "domain_counts.csv").exists()
+    assert (demo_output / "figure_data" / "domain_spatial_points.csv").exists()
+    assert (demo_output / "figure_data" / "domain_umap_points.csv").exists()
+    assert (demo_output / "figure_data" / "domain_neighbor_mixing.csv").exists()
+    assert (demo_output / "reproducibility" / "commands.sh").exists()
+    assert (demo_output / "reproducibility" / "r_visualization.sh").exists()
 
 
-def test_demo_gallery_manifests_have_roles(tmp_output):
+def test_demo_gallery_manifests_have_roles(demo_output):
     """The standard domain gallery should emit figure and figure-data manifests."""
-    result = subprocess.run(
-        [sys.executable, str(SKILL_SCRIPT), "--demo", "--output", str(tmp_output)],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        cwd=str(SKILL_SCRIPT.parent),
+    figures_manifest = json.loads(
+        (demo_output / "figures" / "manifest.json").read_text()
     )
-    assert result.returncode == 0, f"stderr: {result.stderr}"
-
-    figures_manifest = json.loads((tmp_output / "figures" / "manifest.json").read_text())
-    figure_data_manifest = json.loads((tmp_output / "figure_data" / "manifest.json").read_text())
+    figure_data_manifest = json.loads(
+        (demo_output / "figure_data" / "manifest.json").read_text()
+    )
 
     assert figures_manifest["recipe_id"] == "standard-spatial-domain-gallery"
     assert any(plot["role"] == "overview" for plot in figures_manifest["plots"])
@@ -172,6 +147,7 @@ def test_demo_gallery_manifests_have_roles(tmp_output):
 # -----------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_leiden_uses_prebuilt_graph():
     """Leiden should cluster using the pre-built neighbor graph."""
     from skills.spatial._lib.domains import identify_domains_leiden
@@ -247,7 +223,9 @@ def test_dispatch_graphst_maps_data_type_to_datatype(monkeypatch):
 
 def test_graphst_datatype_infers_slide_from_input_filename():
     """Slide-seqV2 filenames should route GraphST away from dense 10X graph construction."""
-    spec = importlib.util.spec_from_file_location("spatial_domains_script", SKILL_SCRIPT)
+    spec = importlib.util.spec_from_file_location(
+        "spatial_domains_script", SKILL_SCRIPT
+    )
     assert spec is not None and spec.loader is not None
     spatial_domains_script = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(spatial_domains_script)
@@ -279,6 +257,8 @@ def test_graphst_large_slide_graph_preparation_uses_sparse_adjacency(monkeypatch
     assert adata_work.obsm["graph_neigh"].nnz <= adata_work.n_obs * 3
 
 
+@pytest.mark.slow
+@pytest.mark.requires_torch
 def test_graphst_sparse_init_patch_keeps_readout_mask_sparse():
     """GraphST's constructor must not densify Slide/Stereo readout masks."""
     import importlib
@@ -334,7 +314,9 @@ def test_graphst_large_embedding_clustering_uses_minibatch_kmeans():
 
 def test_large_gallery_does_not_compute_missing_umap(monkeypatch):
     """Large outputs should not spend extra time computing UMAP for the gallery."""
-    spec = importlib.util.spec_from_file_location("spatial_domains_script", SKILL_SCRIPT)
+    spec = importlib.util.spec_from_file_location(
+        "spatial_domains_script", SKILL_SCRIPT
+    )
     assert spec is not None and spec.loader is not None
     spatial_domains_script = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(spatial_domains_script)
@@ -371,9 +353,13 @@ def test_cli_accepts_epochs_and_data_type_flags(tmp_output):
     assert "--data-type" in result.stdout
 
 
+@pytest.mark.slow
 def test_refine_spatial_domains():
     """Spatial refinement should produce labels for all cells."""
-    from skills.spatial._lib.domains import identify_domains_leiden, refine_spatial_domains
+    from skills.spatial._lib.domains import (
+        identify_domains_leiden,
+        refine_spatial_domains,
+    )
 
     adata = _make_synthetic_adata()
     identify_domains_leiden(adata, resolution=0.5)

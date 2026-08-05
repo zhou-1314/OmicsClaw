@@ -80,7 +80,7 @@ class SkillRunResult:
     duration_seconds: float = 0.0
     method: str | None = None
     readme_path: str = ""
-    notebook_path: str = ""
+    replay_path: str = ""
     # Adaptive-env provenance: which interpreter served this run —
     # ``base`` | ``skip`` | ``probe`` | ``venv:<key>`` (ADR: adaptive-environment-provisioning).
     runtime_source: str = "base"
@@ -133,7 +133,7 @@ class SkillRunResult:
             "duration_seconds": self.duration_seconds,
             "method": self.method,
             "readme_path": self.readme_path,
-            "notebook_path": self.notebook_path,
+            "replay_path": self.replay_path,
         }
 
 
@@ -183,7 +183,7 @@ def coerce_skill_run_result(result: Mapping[str, Any]) -> SkillRunResult:
         duration_seconds=_float_or_default(result.get("duration_seconds"), 0.0),
         method=str(method_value) if method_value else None,
         readme_path=str(result.get("readme_path") or ""),
-        notebook_path=str(result.get("notebook_path") or ""),
+        replay_path=str(result.get("replay_path") or ""),
         runtime_source=str(result.get("runtime_source") or "base"),
         error_kind=str(
             result.get("error_kind")
@@ -211,7 +211,7 @@ def build_skill_run_result(
     duration_seconds: float = 0.0,
     method: str | None = None,
     readme_path: str | Path | None = "",
-    notebook_path: str | Path | None = "",
+    replay_path: str | Path | None = "",
     runtime_source: str = "base",
     error_kind: str = "",
     audit_identity: SkillRunAuditIdentity | None = None,
@@ -228,7 +228,7 @@ def build_skill_run_result(
         duration_seconds=round(float(duration_seconds or 0.0), 2),
         method=str(method) if method else None,
         readme_path=str(readme_path or ""),
-        notebook_path=str(notebook_path or ""),
+        replay_path=str(replay_path or ""),
         runtime_source=str(runtime_source or "base"),
         error_kind=(
             str(error_kind)

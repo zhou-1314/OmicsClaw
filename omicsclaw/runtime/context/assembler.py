@@ -274,8 +274,31 @@ def build_stored_user_message_content(
 
 def _default_capability_resolver(query: str, *, domain_hint: str = ""):
     from omicsclaw.skill.capability_resolver import resolve_capability
+    from omicsclaw.skill.evolution_governance import (
+        default_skill_evolution_governance,
+    )
 
-    return resolve_capability(query, domain_hint=domain_hint)
+    governance = default_skill_evolution_governance()
+
+    def effective_level(skill_id: str) -> str | None:
+        view = governance.invocation_experience(skill_id)
+        if not view:
+            return None
+        return str(view.get("effective_validation_level") or "smoke-only")
+
+    return resolve_capability(
+        query,
+        domain_hint=domain_hint,
+        _experience_level_resolver=effective_level,
+    )
+
+
+def _default_skill_experience_loader(skill_id: str):
+    from omicsclaw.skill.evolution_governance import (
+        default_skill_evolution_governance,
+    )
+
+    return default_skill_evolution_governance().invocation_experience(skill_id)
 
 
 async def _call_sync_in_background(func, /, *args, **kwargs):
@@ -326,6 +349,7 @@ async def assemble_chat_context(
     context_injectors: tuple[ContextLayerInjector, ...] | None = None,
     scoped_memory_loader=None,
     research_stance_loader=None,
+    skill_experience_loader=None,
 ) -> AssembledChatContext:
     # The namespaced agent session id (NOT the bare chat_id) — it is what tools
     # receive and what keys the side-channels a Surface later drains.
@@ -458,11 +482,24 @@ async def assemble_chat_context(
             def _load_skill_context() -> str:
                 from .layers import load_skill_context
 
+                selected_skill = skill_hint or skill_candidates[0]
+                experience_view = None
+                try:
+                    experience_loader = (
+                        skill_experience_loader or _default_skill_experience_loader
+                    )
+                    experience_view = experience_loader(selected_skill)
+                except Exception as exc:
+                    LOGGER.warning(
+                        "Skill Experience context preparation failed (non-fatal): %s",
+                        exc,
+                    )
                 return load_skill_context(
                     skill=skill_hint,
                     query=user_text[:200] if user_text else "",
                     domain=domain_hint,
                     candidate_skills=skill_candidates,
+                    _experience_view=experience_view,
                 )
 
             skill_context_task = _spawn(

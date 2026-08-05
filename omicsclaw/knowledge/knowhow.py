@@ -315,7 +315,9 @@ class KnowHowInjector:
         if "__all__" in skill_terms:
             return 1000.0 + meta.priority, "global"
 
-        # Primary-skill tier (800).
+        # Primary-skill tier (900). A one-skill or explicit-primary guide must
+        # outrank broad multi-skill guards so the canonical method guard remains
+        # visible under the bounded K=4 prompt budget.
         # When the KH declares an explicit primary (singular ``skill:``), only
         # that skill earns the 800 score; other ``related_skills`` entries are
         # demoted to the loose-related tier below. When no explicit primary is
@@ -325,7 +327,7 @@ class KnowHowInjector:
         if skill_lower:
             if primary_skill_lower:
                 if skill_lower == primary_skill_lower:
-                    return 800.0 + meta.priority, "primary_skill"
+                    return 900.0 + meta.priority, "primary_skill"
             elif skill_lower in skill_terms:
                 return 800.0 + meta.priority, "skill"
 
@@ -337,7 +339,7 @@ class KnowHowInjector:
 
         keyword_match = bool(query_lower) and self._contains_term(query_lower, keyword_terms)
 
-        # Loose-related tier (600). Only reachable when an explicit primary
+        # Corroborated related tier (850). Only reachable when an explicit primary
         # exists, the requested skill is in ``related_skills`` but is not
         # primary, the domain matches, AND there is corroborating signal in
         # the query (an explicit search_term hit or a cross-skill name/stem
@@ -356,7 +358,7 @@ class KnowHowInjector:
                 query=query_lower,
             )
             if keyword_match or cross_skill_signal:
-                return 600.0 + meta.priority, "related+domain+signal"
+                return 850.0 + meta.priority, "related+domain+signal"
 
         if domain_match and keyword_match:
             return 500.0 + meta.priority, "domain+query"

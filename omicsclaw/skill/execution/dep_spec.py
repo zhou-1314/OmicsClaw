@@ -10,7 +10,9 @@ importability, or chooses an interpreter. It answers, for a skill:
   * :func:`pip_spec_for` / :func:`is_pip_eligible` — whether a *missing* package can
     be pip-installed into an overlay venv here, and the exact pip spec to use.
   * :func:`partition_missing` — split a missing set into installable pip specs vs
-    deferred (deny-listed / conda-preferred / unknown-kind) packages.
+    deferred (deny-listed / conda-preferred / VCS-only / unknown-kind) packages.
+  * :func:`install_hint_for` — the real install command for a deferred package
+    (e.g. the ``git+https://…`` line for a package that is not on PyPI).
   * :func:`runtime_kind` — a coarse skill-level hint for logging / early skip.
 
 Sources of truth (reconciled 2026-06-29):
@@ -102,6 +104,26 @@ _CONDA_PREFERRED: frozenset[str] = frozenset({
 # so a probe on either form is recognised.
 _DENY: frozenset[str] = frozenset({
     "pybanksy", "banksy", "cnvkit", "velocyto", "cellranger", "cellranger-atac",
+})
+
+# Packages that do not exist on PyPI AT ALL — they ship only as VCS checkouts, so
+# ``pip install <name>`` can never resolve ("No matching distribution found") no
+# matter which index is configured. Declaring them pip-eligible costs a guaranteed
+# failed install per run and buries the real cause under a pip ERROR dump, so they
+# are deferred here and the resolver surfaces the registry's real ``git+https://…``
+# line instead (:func:`install_hint_for`).
+#
+# We deliberately do NOT auto-install the VCS URL into an overlay: it requires
+# ``git`` on PATH, resolves an unpinned HEAD (so the content-addressed overlay key
+# would no longer describe its contents), and — for STAGATE-pyG — builds against
+# the resident torch / torch_geometric ABI. Those belong in an explicit user
+# action, not a silent provisioning step. Both PyPI and import spellings are listed
+# so a probe on either form is recognised.
+_VCS_ONLY: frozenset[str] = frozenset({
+    # github.com/RucDongLab/STAGATE_pyG (formerly QIFEIDKN/STAGATE_pyG)
+    "STAGATE-pyG", "STAGATE_pyG",
+    # github.com/JEFworks-Lab/STalign
+    "STalign",
 })
 
 # install_cmd prefixes that mark a NON-pip backend (R / system). Such entries
@@ -199,6 +221,7 @@ def _install_index() -> dict[str, str]:
 
 
 _DENY_LOWER = frozenset(name.lower() for name in _DENY)
+_VCS_ONLY_LOWER = frozenset(name.lower() for name in _VCS_ONLY)
 _CONDA_PREFERRED_LOWER = frozenset(name.lower() for name in _CONDA_PREFERRED)
 _BASE_PIP_SAFE_LOWER = frozenset(name.lower() for name in _BASE_PIP_SAFE)
 
@@ -228,9 +251,11 @@ def required_packages(skill_info: dict) -> list[str]:
 
 
 def kind_of(pkg: str) -> str:
-    """Classify a package: ``pip`` | ``conda`` | ``non-pip`` | ``deny``.
+    """Classify a package: ``pip`` | ``vcs`` | ``conda`` | ``non-pip`` | ``deny``.
 
     * ``deny``    — never overlay-install (sub-env / proprietary).
+    * ``vcs``     — absent from PyPI; only installable from a git URL, so a plain
+                    ``pip install`` is guaranteed to fail (see ``_VCS_ONLY``).
     * ``non-pip`` — R/system backend (install_cmd is Rscript/conda/…).
     * ``conda``   — pip-hostile heavy stack; defer to conda on a bare env.
     * ``pip``     — installable into an overlay venv (base-safe, curated leaf,
@@ -240,6 +265,10 @@ def kind_of(pkg: str) -> str:
     low = pkg.lower()
     if low in _DENY_LOWER or import_name_for(pkg).lower() in _DENY_LOWER:
         return "deny"
+    # Not on PyPI at all. Checked BEFORE the base-safe/conda short-circuits so a
+    # VCS-only package can never fall through to a doomed ``pip install <name>``.
+    if low in _VCS_ONLY_LOWER or import_name_for(pkg).lower() in _VCS_ONLY_LOWER:
+        return "vcs"
     # Known lightweight base libs are pip-safe even on a bare venv — short-circuit
     # before the conda/install_cmd checks.
     if low in _BASE_PIP_SAFE_LOWER:
@@ -267,12 +296,43 @@ def pip_spec_for(pkg: str) -> str | None:
     return _load_pyproject_specs().get(pkg.lower(), pkg)
 
 
+def install_hint_for(pkg: str) -> str | None:
+    """The real install command for a package we refuse to auto-install.
+
+    Returns the domain registry's ``install_cmd`` — e.g. the ``pip install
+    git+https://…`` line for ``STAGATE-pyG`` — for the kinds where that command is
+    authoritative (``vcs`` / ``deny`` / ``non-pip``).
+
+    ``pip`` needs no hint (we just install it), and ``conda`` entries deliberately
+    get ``None``: their registry command is a bare ``pip install <name>`` that we
+    are actively choosing NOT to run, so echoing it would be the wrong advice —
+    the caller points at ``0_setup_env.sh`` instead.
+    """
+    if kind_of(pkg) in {"pip", "conda"}:
+        return None
+    return _install_index().get(pkg.lower()) or None
+
+
+def deferred_install_hints(deferred: list[str]) -> list[str]:
+    """``"<pkg>: <install cmd>"`` lines for deferred packages that have a real one.
+
+    Order-preserving; packages with no authoritative command are skipped so the
+    caller can fall back to the generic conda hint for them.
+    """
+    hints: list[str] = []
+    for pkg in deferred:
+        hint = install_hint_for(pkg)
+        if hint:
+            hints.append(f"{pkg}: {hint}")
+    return hints
+
+
 def partition_missing(missing: list[str]) -> tuple[list[str], list[str]]:
     """Split missing packages into (installable pip specs, deferred names).
 
     ``deferred`` are packages we deliberately will NOT overlay-install (deny /
-    conda-preferred / non-pip). The caller warns and falls back rather than
-    launching a doomed install.
+    conda-preferred / non-pip / VCS-only). The caller warns and falls back rather
+    than launching a doomed install.
     """
     pip_specs: list[str] = []
     deferred: list[str] = []
@@ -318,6 +378,8 @@ __all__ = [
     "kind_of",
     "is_pip_eligible",
     "pip_spec_for",
+    "install_hint_for",
+    "deferred_install_hints",
     "partition_missing",
     "runtime_kind",
 ]

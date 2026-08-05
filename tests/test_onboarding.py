@@ -28,6 +28,19 @@ async def client(tmp_path):
     await db.close()
 
 
+@pytest.fixture
+def desktop_remote_authority():
+    """Mirror the empty-token loopback authority installed by app lifespan."""
+    from omicsclaw.remote import auth as remote_auth
+    from omicsclaw.surfaces.desktop import server
+
+    authority = remote_auth.capture_remote_bearer_authority(server.app, {})
+    try:
+        yield authority
+    finally:
+        remote_auth.release_remote_bearer_authority(server.app, authority)
+
+
 # ---- service layer ---------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -109,14 +122,18 @@ async def test_status_tolerates_legacy_plain_rows(client):
 # ---- REST layer ------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_onboarding_rest_roundtrip(client, monkeypatch):
+async def test_onboarding_rest_roundtrip(
+    client, monkeypatch, desktop_remote_authority
+):
     pytest.importorskip("httpx")
     from httpx import ASGITransport, AsyncClient
 
     from omicsclaw.surfaces.desktop import server
 
     monkeypatch.setattr(server, "_memory_client", client)
-    async with AsyncClient(transport=ASGITransport(app=server.app), base_url="http://t") as http:
+    async with AsyncClient(
+        transport=ASGITransport(app=server.app), base_url="http://127.0.0.1"
+    ) as http:
         r = await http.get("/onboard/status")
         assert r.status_code == 200, r.text
         assert r.json() == {"onboarded": False, "user": None, "cross_thread_recall": False}
@@ -140,14 +157,16 @@ async def test_onboarding_rest_roundtrip(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_onboard_skip_rest(client, monkeypatch):
+async def test_onboard_skip_rest(client, monkeypatch, desktop_remote_authority):
     pytest.importorskip("httpx")
     from httpx import ASGITransport, AsyncClient
 
     from omicsclaw.surfaces.desktop import server
 
     monkeypatch.setattr(server, "_memory_client", client)
-    async with AsyncClient(transport=ASGITransport(app=server.app), base_url="http://t") as http:
+    async with AsyncClient(
+        transport=ASGITransport(app=server.app), base_url="http://127.0.0.1"
+    ) as http:
         r = await http.post("/onboard/skip")
         assert r.status_code == 200
         body = r.json()
@@ -155,14 +174,18 @@ async def test_onboard_skip_rest(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_onboarding_routes_503_when_memory_unavailable(monkeypatch):
+async def test_onboarding_routes_503_when_memory_unavailable(
+    monkeypatch, desktop_remote_authority
+):
     pytest.importorskip("httpx")
     from httpx import ASGITransport, AsyncClient
 
     from omicsclaw.surfaces.desktop import server
 
     monkeypatch.setattr(server, "_memory_client", None)
-    async with AsyncClient(transport=ASGITransport(app=server.app), base_url="http://t") as http:
+    async with AsyncClient(
+        transport=ASGITransport(app=server.app), base_url="http://127.0.0.1"
+    ) as http:
         assert (await http.get("/onboard/status")).status_code == 503
         assert (await http.post("/onboard/user", json={"profile": {}})).status_code == 503
         assert (await http.post("/onboard/skip")).status_code == 503

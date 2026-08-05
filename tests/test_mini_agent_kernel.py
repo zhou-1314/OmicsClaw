@@ -162,6 +162,64 @@ def test_cleanup_scratch_removes_conn_and_home_dirs(tmp_path: Path):
     assert ks._conn_dir is None and ks._home_dir is None and ks._conn_file is None
 
 
+def test_start_retries_transient_kernel_info_race_while_process_is_alive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """An early heartbeat miss is not proof that the kernel process died.
+
+    With IPC transport, ``jupyter_client.wait_for_ready`` can briefly raise
+    ``RuntimeError('Kernel died before replying to kernel_info')`` while the
+    bubblewrap/ipykernel process is still alive.  The same client becomes ready
+    on its next probe, so startup must retry within the original deadline.
+    """
+
+    class _Proc:
+        terminated = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout):
+            return 0
+
+    class _Client:
+        ready_calls = 0
+
+        def load_connection_file(self, _path):
+            pass
+
+        def start_channels(self):
+            pass
+
+        def wait_for_ready(self, *, timeout):
+            self.ready_calls += 1
+            if self.ready_calls == 1:
+                raise RuntimeError("Kernel died before replying to kernel_info")
+
+        def stop_channels(self):
+            pass
+
+    proc = _Proc()
+    client = _Client()
+    monkeypatch.setattr("subprocess.Popen", lambda *_args, **_kwargs: proc)
+    monkeypatch.setattr("jupyter_client.BlockingKernelClient", lambda: client)
+    monkeypatch.setattr(
+        "jupyter_client.connect.write_connection_file",
+        lambda *, fname, **_kwargs: Path(fname).write_text("{}", encoding="utf-8"),
+    )
+
+    ks = KernelSession(workspace_root=tmp_path, sandbox=False, startup_timeout=2)
+    ks.start()
+    try:
+        assert ks.alive is True
+        assert client.ready_calls == 2
+    finally:
+        ks.shutdown()
+
+
 def test_returnanswer_creates_missing_output_root(tmp_path: Path):
     """A re-run of analysis.py whose output root (e.g. a lazy rerun/ sibling) does
     not exist yet must still write the answer — ReturnAnswer mkdirs its parent."""

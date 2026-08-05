@@ -163,7 +163,7 @@ class VerifiedRunOutput:
     skill_id: str
     output_dir: str
     readme_path: str | None = None
-    notebook_path: str | None = None
+    replay_path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -516,7 +516,7 @@ class FilesystemRunStore:
             artifacts_dir = self.artifacts_dir(manifest_ref)
             inventory = verified["completion"]["artifacts"]
             readme_path: str | None = None
-            notebook_path: str | None = None
+            replay_path: str | None = None
             for item in inventory:
                 relative = PurePosixPath(str(item["path"]))
                 if (
@@ -528,17 +528,15 @@ class FilesystemRunStore:
                 rendered = str(artifacts_dir.joinpath(*relative.parts))
                 if relative.as_posix() == "README.md":
                     readme_path = rendered
-                elif relative.as_posix() == (
-                    "reproducibility/analysis_notebook.ipynb"
-                ):
-                    notebook_path = rendered
+                elif relative.as_posix() == "reproducibility/replay.json":
+                    replay_path = rendered
             return RunStoreTerminalProjection(
                 skill_id=header.skill_id,
                 output=VerifiedRunOutput(
                     skill_id=header.skill_id,
                     output_dir=str(artifacts_dir),
                     readme_path=readme_path,
-                    notebook_path=notebook_path,
+                    replay_path=replay_path,
                 ),
             )
         if completion.get("terminal_code") != terminal_code:

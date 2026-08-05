@@ -80,8 +80,12 @@ DEPENDENCY_REGISTRY: dict[str, DependencyInfo] = {
         "Spatial domain identification (SpaGCN)"
     ),
     "STAGATE-pyG": DependencyInfo(
-        "STAGATE_pyG", "pip install STAGATE-pyG",
-        "Spatial domain identification (STAGATE)"
+        "STAGATE_pyG",
+        # NOT on PyPI — GitHub-only. `pip install STAGATE-pyG` always fails with
+        # "No matching distribution found"; the git URL is the only install path.
+        "pip install git+https://github.com/RucDongLab/STAGATE_pyG.git "
+        "(requires torch + torch_geometric)",
+        "Spatial domain identification (STAGATE; GitHub-only, needs PyTorch Geometric)"
     ),
     "GraphST": DependencyInfo(
         "GraphST", "pip install GraphST",
@@ -110,8 +114,10 @@ DEPENDENCY_REGISTRY: dict[str, DependencyInfo] = {
         "Probabilistic alignment of spatial transcriptomics (PASTE)"
     ),
     "STalign": DependencyInfo(
-        "STalign", "pip install STalign",
-        "Spatial transcriptomics alignment (STalign)"
+        "STalign",
+        # NOT on PyPI — GitHub-only, same failure mode as STAGATE-pyG.
+        "pip install git+https://github.com/JEFworks-Lab/STalign.git",
+        "Spatial transcriptomics alignment (STalign; GitHub-only)"
     ),
     # ── Cell communication ───────────────────────────────────────────────────
     "liana": DependencyInfo(

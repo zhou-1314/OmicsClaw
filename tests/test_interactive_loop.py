@@ -207,10 +207,12 @@ async def test_stream_llm_response_uses_control_runtime_in_production_path(
     await runtime.start()
     try:
         messages = [{"role": "user", "content": "controlled prompt"}]
+        run_runtime = object()
         result = await interactive._stream_llm_response(
             messages,
             workspace_dir="/tmp/workspace",
             control_runtime=runtime,
+            run_runtime=run_runtime,
             reply_slot="main",
         )
     finally:
@@ -220,6 +222,7 @@ async def test_stream_llm_response_uses_control_runtime_in_production_path(
     assert len(captured_envelopes) == 1
     assert captured_envelopes[0].chat_id != "__interactive__"
     assert captured_envelopes[0].content == "controlled prompt"
+    assert captured_envelopes[0].run_runtime is run_runtime
     assert messages == [
         {"role": "user", "content": "controlled prompt"},
         {"role": "assistant", "content": "Controlled reply."},

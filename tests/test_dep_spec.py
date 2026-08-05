@@ -121,6 +121,45 @@ def test_deny_listed_not_pip_eligible():
         assert not dep_spec.is_pip_eligible(pkg)
 
 
+def test_vcs_only_packages_are_never_pip_attempted():
+    """Packages absent from PyPI must defer, not trigger a doomed `pip install`.
+
+    Regression: `STAGATE-pyG` fell through `kind_of` to the "unrecognised Python
+    package -> pip" default, so every spatial-domains run burned a install that
+    could only ever end in "No matching distribution found".
+    """
+    for pkg in ("STAGATE-pyG", "STalign"):
+        assert dep_spec.kind_of(pkg) == "vcs", f"{pkg} must classify as vcs"
+        assert not dep_spec.is_pip_eligible(pkg)
+        assert dep_spec.pip_spec_for(pkg) is None
+
+
+def test_vcs_only_matching_is_case_and_spelling_insensitive():
+    """The probe may report either the PyPI or the import spelling."""
+    for spelling in ("STAGATE-pyG", "stagate-pyg", "STAGATE_pyG", "stagate_pyg"):
+        assert dep_spec.kind_of(spelling) == "vcs", spelling
+
+
+def test_vcs_only_packages_expose_the_real_git_install_command():
+    hint = dep_spec.install_hint_for("STAGATE-pyG")
+    assert hint is not None
+    assert "git+https://github.com/" in hint
+    # The bare-name form is exactly what does not work — it must not be advised.
+    assert "pip install STAGATE-pyG" not in hint
+
+
+def test_install_hint_suppressed_for_pip_and_conda_kinds():
+    """pip needs no hint; a conda-deferred package's `pip install X` is wrong advice."""
+    assert dep_spec.install_hint_for("seaborn") is None
+    assert dep_spec.install_hint_for("torch") is None
+
+
+def test_deferred_install_hints_skips_packages_without_a_real_command():
+    hints = dep_spec.deferred_install_hints(["torch", "STAGATE-pyG"])
+    assert len(hints) == 1
+    assert hints[0].startswith("STAGATE-pyG: ")
+
+
 def test_non_pip_backend_classified_by_install_cmd():
     # metabolomics registry maps metaboanalyst -> Rscript install_cmd.
     assert dep_spec.kind_of("metaboanalyst") == "non-pip"
@@ -220,7 +259,7 @@ def test_expected_pip_packages_stay_eligible():
 
 def test_classification_covers_whole_union_without_unknown_kinds():
     """Every real package lands in a known bucket; only deny is pybanksy."""
-    valid = {"pip", "conda", "non-pip", "deny"}
+    valid = {"pip", "vcs", "conda", "non-pip", "deny"}
     deny = set()
     for pkg in _real_requires_union():
         kind = dep_spec.kind_of(pkg)
@@ -228,3 +267,19 @@ def test_classification_covers_whole_union_without_unknown_kinds():
         if kind == "deny":
             deny.add(pkg)
     assert deny <= {"pybanksy", "cnvkit", "velocyto", "cellranger"}
+
+
+def test_no_declared_package_is_pip_eligible_but_absent_from_pypi():
+    """Guard the whole `requires:` surface against the STAGATE-pyG class of bug.
+
+    Any package a skill declares that does not exist on PyPI MUST be listed in
+    ``_VCS_ONLY`` (or otherwise deferred) — otherwise the resolver will attempt an
+    install that can never succeed. This is an offline check against the known
+    non-PyPI set, so it stays deterministic in CI.
+    """
+    known_absent_from_pypi = {"stagate-pyg", "stagate_pyg", "stalign"}
+    offenders = [
+        pkg for pkg in _real_requires_union()
+        if pkg.lower() in known_absent_from_pypi and dep_spec.is_pip_eligible(pkg)
+    ]
+    assert not offenders, f"non-PyPI packages still marked pip-installable: {offenders}"

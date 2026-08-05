@@ -28,6 +28,7 @@ import mimetypes
 import os
 import platform
 import queue
+import re
 import secrets
 import sys
 import time
@@ -1493,18 +1494,17 @@ def _skill_promotion_wire_block(item: Any) -> dict[str, Any] | None:
 
     Module-level (unlike the media closure) so the ``tool_result``
     ``skill_promotion`` contract the App depends on is unit-testable. Returns
-    ``None`` for a malformed item or one missing the ``workspace_root`` anchor
-    (the exact ``source_analysis_dir`` a later ``create_omics_skill`` needs)."""
+    ``None`` for a malformed item or one missing the opaque canonical Run id.
+    Workspace paths are deliberately not serialized across this boundary."""
     if not isinstance(item, dict):
         return None
-    workspace = str(item.get("workspace_root") or "").strip()
-    if not workspace:
+    run_id = str(item.get("run_id") or "").strip()
+    if re.fullmatch(r"[0-9a-f]{32}", run_id) is None:
         return None
     domains = item.get("valid_domains")
     return {
         "goal": str(item.get("goal") or ""),
-        "runId": str(item.get("run_id") or ""),
-        "workspaceRoot": workspace,
+        "runId": run_id,
         "validDomains": [str(d) for d in domains] if isinstance(domains, list) else [],
     }
 
@@ -2434,7 +2434,7 @@ async def chat_stream(req: ChatRequest):
         """Drain convert-to-skill candidates queued by a successful autonomous
         run (mirrors ``_consume_pending_media_for_session``). Rides the
         just-finished tool's ``tool_result`` event so the App can render a
-        user-gated "转为技能 / keep as script" card; dedup by workspace root."""
+        user-gated "转为技能 / keep as script" card; dedup by opaque Run id."""
         pending = getattr(core, "pending_skill_promotion", None)
         if not isinstance(pending, dict):
             return []
@@ -2445,9 +2445,9 @@ async def chat_stream(req: ChatRequest):
         seen: set[str] = set()
         for item in items:
             block = _skill_promotion_wire_block(item)
-            if not block or block["workspaceRoot"] in seen:
+            if not block or block["runId"] in seen:
                 continue
-            seen.add(block["workspaceRoot"])
+            seen.add(block["runId"])
             candidates.append(block)
         return candidates
 
@@ -2903,6 +2903,7 @@ async def chat_stream(req: ChatRequest):
                 # permissive full-tool path downstream.
                 stage=(req.stage or "").strip().lower(),
                 runtime_observer=_capture_title_runtime,
+                run_runtime=_desktop_run_runtime,
                 cancel_event=cancel_event,
             )
 
@@ -3088,6 +3089,7 @@ async def chat_stream(req: ChatRequest):
                         thread_id=resolved_thread_id,
                         stage=(req.stage or "").strip().lower(),
                         runtime_observer=_capture_title_runtime,
+                        run_runtime=_desktop_run_runtime,
                     ),
                     on_accepted=_remember_turn,
                 )
@@ -4825,6 +4827,7 @@ async def list_skills():
             "name": alias,
             "description": info.get("description", ""),
             "domain": domain,
+            "collection": info.get("collection", "curated"),
             "status": status,
             # Governance lifecycle (draft/mvp/stable/deprecated) + authorship —
             # distinct from `status` above, which is script-on-disk availability.
@@ -4926,6 +4929,7 @@ async def get_skill(domain: str, skill_name: str):
     return {
         "name": skill_name,
         "domain": skill_domain,
+        "collection": info.get("collection", "curated"),
         "description": info.get("description", ""),
         "status": status,
         # Governance lifecycle (draft/mvp/stable/deprecated) + authorship —

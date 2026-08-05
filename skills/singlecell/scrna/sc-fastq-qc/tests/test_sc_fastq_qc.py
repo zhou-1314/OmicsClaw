@@ -50,7 +50,7 @@ def test_demo_mode(tmp_output):
     assert (tmp_output / "figures" / "manifest.json").exists()
     assert (tmp_output / "figure_data" / "manifest.json").exists()
     assert (tmp_output / "tables" / "fastq_per_sample_summary.csv").exists()
-    assert not (tmp_output / "reproducibility" / "analysis_notebook.ipynb").exists()
+    assert not (tmp_output / "reproducibility" / "replay.json").exists()
 
 
 def test_demo_result_json(tmp_output):

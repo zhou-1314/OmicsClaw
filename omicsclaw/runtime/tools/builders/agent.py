@@ -216,7 +216,13 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
             surfaces=("bot",),
             # Bench (ADR 0018) — thread_id rides tool_runtime_context into
             # execute_omicsclaw to scope auto-captured analysis:// lineage.
-            context_params=("session_id", "chat_id", "cancel_event", "thread_id"),
+            context_params=(
+                "session_id",
+                "chat_id",
+                "cancel_event",
+                "thread_id",
+                "run_runtime",
+            ),
             read_only=False,
             concurrency_safe=False,
             result_policy=RESULT_POLICY_SUMMARY_OR_MEDIA,
@@ -1251,11 +1257,13 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                 "Create a new OmicsClaw-native skill scaffold under skills/<domain>/<skill-name>/ "
                 "using the canonical v2 layout (SKILL.md + skill.yaml (ADR 0037 machine contract) + "
                 "references/{methodology,output_contract,parameters,r_visualization}.md). "
-                "The emitted skill is lint-clean against scripts/skill_lint.py and ready "
-                "to register via the runtime registry. "
+                "The emitted skill is lint-clean and published as a non-routable "
+                "draft/smoke-only candidate. A passed staging gate triggers its declared "
+                "Evaluation Protocol and creates a pending activation proposal; only a "
+                "human governance approval can make it mvp/demo-validated and routable. "
                 "Use this only when the user explicitly wants a reusable new skill added "
-                "to OmicsClaw. If a previous autonomous_analysis_execute run succeeded, you can "
-                "promote that workspace into the new skill."
+                "to OmicsClaw. Promote a successful autonomous_analysis_execute result by its "
+                "opaque Run id; never pass or infer an output-directory path."
             ),
             parameters={
                 "type": "object",
@@ -1272,7 +1280,7 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                         "type": "string",
                         "enum": [
                             "spatial", "singlecell", "genomics", "proteomics",
-                            "metabolomics", "bulkrna", "orchestrator",
+                            "metabolomics", "bulkrna", "orchestrator", "literature",
                         ],
                         "description": "Target OmicsClaw domain for the new skill. Optional if it can be inferred from a promoted autonomous analysis.",
                     },
@@ -1280,9 +1288,41 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                         "type": "string",
                         "description": "One-line summary of what the skill should do.",
                     },
-                    "source_analysis_dir": {
-                        "type": "string",
-                        "description": "Optional path to a successful autonomous_analysis_execute output directory to promote into a skill.",
+                    "source": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "kind": {
+                                "type": "string",
+                                "enum": ["intent", "run"],
+                                "description": "Use run for promotion; intent creates an unimplemented draft scaffold.",
+                            },
+                            "run_id": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{32}$",
+                                "description": "Required only for kind=run; resolved by Backend authority.",
+                            },
+                        },
+                        "required": ["kind"],
+                    },
+                    "compute_resources": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "description": "Optional complete, explicitly calibrated static reservation. Omit rather than invent values.",
+                        "properties": {
+                            "cpu_cores": {"type": "integer", "minimum": 1},
+                            "memory_mib": {"type": "integer", "minimum": 1},
+                            "gpu_devices": {"type": "integer", "minimum": 0},
+                            "threads": {"type": "integer", "minimum": 1},
+                            "temporary_disk_mib": {"type": "integer", "minimum": 0},
+                        },
+                        "required": [
+                            "cpu_cores",
+                            "memory_mib",
+                            "gpu_devices",
+                            "threads",
+                            "temporary_disk_mib",
+                        ],
                     },
                     "input_formats": {
                         "type": "array",
@@ -1309,7 +1349,7 @@ def build_bot_tool_specs(context: BotToolContext) -> list[ToolSpec]:
                         "description": "Whether to generate a minimal test scaffold. Default: true.",
                     },
                 },
-                "required": ["request"],
+                "required": ["request", "source"],
             },
             surfaces=("bot",),
             read_only=False,

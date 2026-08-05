@@ -33,11 +33,39 @@ def test_resolve_capability_no_skill():
     assert decision.should_search_web is True
 
 
+def test_resolve_capability_routes_promoted_cosinor_skill_after_activation():
+    decision = resolve_capability(
+        "Fit a 24-hour single-component cosinor model per gene on a tiny bulk "
+        "RNA-seq time-course matrix and report amplitude, peak phase, R-squared, "
+        "and rhythmic calls.",
+        file_path="examples/demo_bulkrna_cosinor.csv",
+        domain_hint="bulkrna",
+    )
+
+    assert decision.coverage == "exact_skill"
+    assert decision.chosen_skill == "bulkrna-cosinor-rhythm"
+    assert decision.domain == "bulkrna"
+    assert decision.skill_candidates[0].skill == "bulkrna-cosinor-rhythm"
+
+
 def test_resolve_capability_marks_skill_creation_requests():
     decision = resolve_capability(
         "Create a new OmicsClaw skill for CellCharter-based spatial domain analysis"
     )
     assert decision.should_create_skill is True
+
+
+def test_resolve_capability_honours_explicit_no_skill_creation_scope():
+    decision = resolve_capability(
+        "Fit a 24-hour cosinor model for this bulk RNA-seq matrix. "
+        "This is not a request to create a Skill yet.",
+        file_path="examples/demo_bulkrna_cosinor.csv",
+        domain_hint="bulkrna",
+    )
+
+    assert decision.should_create_skill is False
+    assert decision.coverage == "exact_skill"
+    assert decision.chosen_skill == "bulkrna-cosinor-rhythm"
 
 
 def test_resolve_capability_detects_domain_from_multi_suffix_file_path():
@@ -437,6 +465,52 @@ def test_resolve_capability_uses_validation_as_a_small_tie_break(monkeypatch):
 
     assert decision.chosen_skill == "z-fixture"
     assert "validation level fixture-validated" in " ".join(decision.reasoning)
+
+
+def test_resolve_capability_prefers_effective_experience_over_declared_level(
+    monkeypatch,
+):
+    from omicsclaw.skill import capability_resolver as cr
+
+    registry = OmicsRegistry()
+    registry.domains = {"spatial": {"name": "Spatial Transcriptomics", "skills": []}}
+    common = {
+        "domain": "spatial",
+        "description": "Load when clustering spatial transcriptomics data.",
+        "trigger_keywords": ["clustering"],
+        "legacy_aliases": [],
+        "param_hints": {},
+        "lifecycle_status": "mvp",
+    }
+    registry.skills = {
+        "a-declared": {
+            **common,
+            "alias": "a-declared",
+            "validation_level": "production",
+        },
+        "z-effective": {
+            **common,
+            "alias": "z-effective",
+            "validation_level": "smoke-only",
+        },
+    }
+    registry.canonical_aliases = list(registry.skills)
+    registry._loaded = True
+    monkeypatch.setattr(cr, "ensure_registry_loaded", lambda: registry)
+    effective = {
+        "a-declared": "smoke-only",
+        "z-effective": "fixture-validated",
+    }
+
+    decision = cr.resolve_capability(
+        "clustering spatial transcriptomics data",
+        _experience_level_resolver=effective.get,
+    )
+
+    assert decision.chosen_skill == "z-effective"
+    assert "effective validation level fixture-validated" in " ".join(
+        decision.reasoning
+    )
 
 
 def test_candidate_wide_precondition_penalty_reranks_but_keeps_incompatible_candidates(

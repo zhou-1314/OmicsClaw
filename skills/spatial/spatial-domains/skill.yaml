@@ -243,3 +243,6 @@ validation:
     kind: demo
     entry: spatial_domains.py
     repeats: 2
+  evidence:
+  - evolution:61bfe63b8c6507105a1321aa:events=6781a7b0771a4d67b7921af10847109a
+  level: demo-validated

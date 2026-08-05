@@ -57,23 +57,22 @@ def build_cli_alias_map(skills_dir: Path | None = None) -> dict[str, str]:
 
 
 def _iter_skill_dirs(skills_dir: Path | None = None) -> list[Path]:
-    """Skill dirs under SKILLS_DIR — v1 (SKILL.md) or v2 (skill.yaml) — sorted by path.
+    """Return enabled Skill directories from the canonical inventory."""
+    if str(OMICSCLAW_DIR) not in sys.path:
+        sys.path.insert(0, str(OMICSCLAW_DIR))
+    from omicsclaw.skill.inventory import discover_skill_inventory
 
-    Sorting by directory path matches the previous ``sorted(rglob('SKILL.md'))``
-    order for v1 skills (identical suffix), so the catalog ordering is stable.
-    """
     effective_skills_dir = skills_dir or SKILLS_DIR
-    dirs: set[Path] = set()
-    for marker in ("SKILL.md", "skill.yaml"):
-        for path in effective_skills_dir.rglob(marker):
-            dirs.add(path.parent)
-    result: list[Path] = []
-    for skill_dir in sorted(dirs):
-        rel_parts = skill_dir.relative_to(effective_skills_dir).parts
-        if any(part.startswith((".", "__")) for part in rel_parts):
-            continue
-        result.append(skill_dir)
-    return result
+    inventory = discover_skill_inventory(effective_skills_dir)
+    return [
+        location.skill_dir
+        for location in inventory.locations
+        if location.enabled
+        and (
+            (location.skill_dir / "SKILL.md").is_file()
+            or (location.skill_dir / "skill.yaml").is_file()
+        )
+    ]
 
 
 def generate_catalog(skills_dir: Path | None = None) -> dict:
@@ -81,6 +80,7 @@ def generate_catalog(skills_dir: Path | None = None) -> dict:
     if str(OMICSCLAW_DIR) not in sys.path:
         sys.path.insert(0, str(OMICSCLAW_DIR))
     from omicsclaw.skill.lazy_metadata import LazySkillMetadata
+    from omicsclaw.skill.inventory import discover_skill_inventory
     from omicsclaw.skill.registry import OmicsRegistry
     from omicsclaw.skill.execution_contract import describe_skill_security
     from omicsclaw.skill.skill_dag import build_skill_dag, load_skill_dag_reviews
@@ -92,6 +92,11 @@ def generate_catalog(skills_dir: Path | None = None) -> dict:
         else build_cli_alias_map(effective_skills_dir)
     )
     skills = []
+    collection_by_dir = {
+        location.skill_dir: location.collection
+        for location in discover_skill_inventory(effective_skills_dir).locations
+        if location.enabled
+    }
     for skill_dir in _iter_skill_dirs(effective_skills_dir):
         lazy = LazySkillMetadata(skill_dir)
         name = lazy.name or skill_dir.name
@@ -109,6 +114,7 @@ def generate_catalog(skills_dir: Path | None = None) -> dict:
             "name": name,
             "cli_alias": cli_alias,
             "type": skill_type,
+            "collection": collection_by_dir[skill_dir.resolve()],
             "description": lazy.description,
             "version": lazy.version or "0.1.0",
             "status": lazy.lifecycle_status,

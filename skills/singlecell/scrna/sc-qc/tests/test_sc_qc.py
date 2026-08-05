@@ -40,7 +40,7 @@ def test_demo_mode(tmp_output):
     assert (tmp_output / "tables" / "qc_metrics_per_cell.csv").exists()
     assert (tmp_output / "tables" / "barcode_rank_curve.csv").exists()
     assert (tmp_output / "tables" / "qc_metric_correlations.csv").exists()
-    assert not (tmp_output / "reproducibility" / "analysis_notebook.ipynb").exists()
+    assert not (tmp_output / "reproducibility" / "replay.json").exists()
     assert (tmp_output / "reproducibility" / "requirements.txt").exists()
     assert not (tmp_output / "reproducibility" / "environment.txt").exists()
     assert "sc-standardize-input" not in result.stderr

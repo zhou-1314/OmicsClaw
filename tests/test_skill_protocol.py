@@ -10,23 +10,19 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from omicsclaw.skill.registry import OmicsRegistry, SKILLS_DIR
-from omicsclaw.skill.protocol import validate_skill_module, ValidationResult
+from omicsclaw.skill.registry import OmicsRegistry, SKILLS_DIR  # noqa: E402
+from omicsclaw.skill.protocol import validate_skill_module  # noqa: E402
 
 
 def _find_all_skill_scripts() -> list[Path]:
-    """Discover all skill scripts via registry directory scanning."""
+    """Discover Python Skill entries through the canonical Registry."""
     reg = OmicsRegistry()
-    scripts: list[Path] = []
-    for domain_path in SKILLS_DIR.iterdir():
-        if not domain_path.is_dir() or domain_path.name.startswith((".", "__")):
-            continue
-        for skill_path in reg._iter_skill_dirs(domain_path):
-            script_name = f"{skill_path.name.replace('-', '_')}.py"
-            script = skill_path / script_name
-            if script.exists():
-                scripts.append(script)
-    return sorted(scripts)
+    reg.load_all(SKILLS_DIR)
+    return sorted(
+        Path(info["script"])
+        for _alias, info in reg.iter_primary_skills()
+        if Path(info["script"]).suffix == ".py"
+    )
 
 
 _SKILL_SCRIPTS = _find_all_skill_scripts()
@@ -74,4 +70,6 @@ def test_all_skills_pass_validation():
         result = validate_skill_module(script)
         if not result.passed:
             failures.append(f"{script.stem}: {result.errors}")
-    assert failures == [], f"Skills failing validation:\n" + "\n".join(str(f) for f in failures)
+    assert failures == [], "Skills failing validation:\n" + "\n".join(
+        str(failure) for failure in failures
+    )

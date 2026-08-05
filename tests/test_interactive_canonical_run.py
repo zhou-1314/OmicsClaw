@@ -103,6 +103,53 @@ def test_canonical_demo_generates_one_submission_and_projects_verified_result():
     asyncio.run(scenario())
 
 
+def test_single_shot_exact_run_uses_canonical_runtime_without_chat(monkeypatch, tmp_path):
+    class Bundle:
+        def __init__(self) -> None:
+            self.run_runtime = _SuccessfulRuntime()
+            self.control_runtime = object()
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    bundle = Bundle()
+    saved: dict[str, object] = {}
+
+    async def open_bundle(workspace_dir):
+        assert workspace_dir == str(tmp_path)
+        return bundle
+
+    async def fail_chat(*_args, **_kwargs):
+        raise AssertionError("exact /run single-shot reached chat dispatch")
+
+    async def save_session(*args, **kwargs):
+        saved["messages"] = list(args[1])
+
+    monkeypatch.setattr(interactive, "open_cli_runtime_bundle", open_bundle)
+    monkeypatch.setattr(interactive, "_stream_llm_response", fail_chat)
+    monkeypatch.setattr(interactive, "save_session", save_session)
+    monkeypatch.setattr(interactive, "_init_llm", lambda _config: ("model", "provider"))
+
+    asyncio.run(
+        interactive._single_shot(
+            prompt="/run genomics-vcf-operations --demo",
+            workspace_dir=str(tmp_path),
+        )
+    )
+
+    assert [event[0] for event in bundle.run_runtime.events] == [
+        "build",
+        "submit",
+        "wait",
+    ]
+    assert bundle.closed is True
+    messages = saved["messages"]
+    assert messages[0]["role"] == "user"
+    assert messages[-1]["role"] == "assistant"
+    assert RUN_ID in messages[-1]["content"]
+
+
 @pytest.mark.parametrize(
     "code",
     ["skill_not_found", "skill_not_canonical", "resource_contract_missing"],

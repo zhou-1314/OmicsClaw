@@ -15,6 +15,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 from weakref import WeakSet
 
+from .inventory import SkillInventory, discover_skill_inventory
 from .lazy_metadata import LazySkillMetadata
 
 logger = logging.getLogger(__name__)
@@ -585,26 +586,16 @@ class OmicsRegistry:
     @classmethod
     def _declared_manifest_skill_dirs(cls, skills_dir: Path) -> set[Path]:
         """Return every enabled, non-internal directory declaring a Skill."""
-        declared: set[Path] = set()
-        for filename in ("skill.yaml", "SKILL.md"):
-            manifest_paths = sorted(
-                skills_dir.rglob(filename),
-                key=lambda path: cls._relative_path_sort_key(path, skills_dir),
+        inventory = discover_skill_inventory(skills_dir)
+        return {
+            location.skill_dir
+            for location in inventory.locations
+            if location.enabled
+            and (
+                (location.skill_dir / "skill.yaml").is_file()
+                or (location.skill_dir / "SKILL.md").is_file()
             )
-            for manifest_path in manifest_paths:
-                skill_path = manifest_path.parent
-                relative_parts = skill_path.relative_to(skills_dir).parts
-                if any(part.startswith((".", "__", "_")) for part in relative_parts):
-                    continue
-                if (
-                    relative_parts
-                    and relative_parts[0] != "orchestrator"
-                    and "orchestrator" in relative_parts[1:]
-                ):
-                    continue
-                if cls._is_enabled_skill_dir(skill_path):
-                    declared.add(skill_path.resolve())
-        return declared
+        }
 
     def _register_skill_entry(
         self,
@@ -684,6 +675,7 @@ class OmicsRegistry:
         registered_manifest_dirs: set[Path],
         *,
         found_disabled_skills: bool = False,
+        declared_manifest_dirs: set[Path] | None = None,
     ) -> None:
         """Validate one private candidate before it can be published."""
         # An empty result is only suspicious when nothing skill-shaped was
@@ -693,7 +685,8 @@ class OmicsRegistry:
         if not self.canonical_aliases and not found_disabled_skills:
             raise ValueError(f"skills inventory is empty: {target_dir}")
 
-        declared_manifest_dirs = self._declared_manifest_skill_dirs(target_dir)
+        if declared_manifest_dirs is None:
+            declared_manifest_dirs = self._declared_manifest_skill_dirs(target_dir)
         missing_manifest_dirs = declared_manifest_dirs - registered_manifest_dirs
         stale_manifest_dirs = registered_manifest_dirs - declared_manifest_dirs
         if missing_manifest_dirs or stale_manifest_dirs:
@@ -767,145 +760,148 @@ class OmicsRegistry:
         if not target_dir.is_dir():
             raise NotADirectoryError(f"skills root is not a directory: {target_dir}")
 
+        inventory = discover_skill_inventory(target_dir)
+
         # Always parse the candidate's own fresh metadata. A caller may have
         # explicitly used ``load_lightweight`` earlier, but that snapshot must
         # not make a subsequent full load reuse stale on-disk metadata.
-        lazy_by_path = self._discover_lazy_skills(target_dir)
+        lazy_by_path = self._discover_lazy_skills(target_dir, inventory=inventory)
         self._lazy_skills_by_path = lazy_by_path
         self.lazy_skills = self._build_public_lazy_index(target_dir, lazy_by_path)
 
         registered_manifest_dirs: set[Path] = set()
-        disabled_skill_dirs: list[Path] = []
+        disabled_skill_dirs = [
+            location.skill_dir
+            for location in inventory.locations
+            if not location.enabled
+        ]
 
-        # Scan domain directories
-        for domain_path in self._sorted_children(target_dir):
-            if not domain_path.is_dir() or domain_path.name.startswith(('.', '__', '_')):
+        for location in inventory.locations:
+            if not location.enabled:
                 continue
+            skill_path = location.skill_dir
+            domain_name = location.domain or location.relative_path.parts[0]
+            skill_dir_name = skill_path.name
+            lazy = self._lazy_skills_by_path.get(skill_path)
+            collection = location.collection
 
-            domain_name = domain_path.name
+            script_path_candidate = self._resolve_script_path(skill_path, lazy=lazy)
+            if script_path_candidate is None:
+                raise ValueError(
+                    f"skill inventory entry {skill_path} has no runnable Python "
+                    "entry or declared non-Python runtime entry"
+                )
 
-            candidate_skill_dirs = []
-            if self._looks_like_skill_dir(domain_path):
-                candidate_skill_dirs.append(domain_path)
-            candidate_skill_dirs.extend(
-                self._iter_skill_dirs(domain_path, disabled_sink=disabled_skill_dirs)
+            canonical_alias = (
+                (lazy.name if lazy and lazy.name else "") or skill_dir_name
             )
-            candidate_skill_dirs.sort(
-                key=lambda path: self._relative_path_sort_key(path, domain_path)
+
+            # Build skill_info from SKILL.md metadata (single source of truth)
+            if lazy and lazy.description:
+                md_info: dict[str, Any] = {
+                    "domain": lazy.domain or domain_name,
+                    "collection": collection,
+                    "alias": canonical_alias,
+                    "canonical_name": canonical_alias,
+                    "directory_name": skill_dir_name,
+                    "script": script_path_candidate,
+                    "runtime_language": lazy.runtime_language,
+                    "source": lazy.source,  # "v2" (skill.yaml) | "v1" (ADR 0037)
+                    "type": lazy.type,
+                    "version": lazy.version,
+                    "validation_level": lazy.validation_level,
+                    "origin": lazy.origin,
+                    "lifecycle_status": lazy.lifecycle_status,
+                    "superseded_by": lazy.superseded_by,
+                    "skip_when": lazy.skip_when,
+                    # Consensus shims forward to the shared run parser, which
+                    # has no `--demo`; declare no demo so `oc run <cs> --demo`
+                    # is refused rather than aborting in argparse (ADR 0016/0030).
+                    "demo_args": [] if lazy.type == "consensus" else ["--demo"],
+                    "description": lazy.description,
+                    # Reconciled Python-package surface (frontmatter
+                    # `requires:`) for the adaptive env resolver.
+                    "requires": lazy.requires or [],
+                    "trigger_keywords": lazy.trigger_keywords or [],
+                    "allowed_extra_flags": lazy.allowed_extra_flags or set(),
+                    "legacy_aliases": self._unique_strings(list(lazy.legacy_aliases or [])),
+                    "saves_h5ad": lazy.saves_h5ad,
+                    "requires_preprocessed": lazy.requires_preprocessed,
+                    "input_contract": lazy.input_contract,
+                    "output_contract": lazy.output_contract,
+                    "param_hints": lazy.param_hints,
+                    "compute_resources": lazy.compute_resources,
+                    "security_contract": lazy.security_contract,
+                    "security_reviewed": lazy.security_reviewed,
+                    "gotchas": lazy.gotchas,
+                    "gotcha_details": lazy.gotcha_details,
+                }
+            else:
+                # SKILL.md missing or has no description — minimal dynamic entry.
+                # All metadata (legacy aliases, flags, saves_h5ad) defaults to
+                # empty; supply a SKILL.md to enrich.
+                md_info = {
+                    "domain": domain_name,
+                    "collection": collection,
+                    "alias": canonical_alias,
+                    "canonical_name": canonical_alias,
+                    "directory_name": skill_dir_name,
+                    "script": script_path_candidate,
+                    "runtime_language": lazy.runtime_language if lazy else "python",
+                    "source": lazy.source if lazy else "v1",
+                    "type": "leaf",
+                    "version": "",
+                    "validation_level": "smoke-only",
+                    "origin": "human",
+                    "lifecycle_status": "mvp",
+                    "superseded_by": "",
+                    "skip_when": [],
+                    "demo_args": ["--demo"],
+                    "description": f"Dynamically loaded {canonical_alias} skill",
+                    "requires": [],
+                    "trigger_keywords": [],
+                    "allowed_extra_flags": set(),
+                    "legacy_aliases": [],
+                    "saves_h5ad": False,
+                    "requires_preprocessed": False,
+                    "input_contract": {},
+                    "output_contract": {},
+                    "param_hints": {},
+                    "compute_resources": {},
+                    "security_contract": {},
+                    "security_reviewed": False,
+                    "gotchas": [],
+                    "gotcha_details": [],
+                }
+
+            self._register_skill_entry(
+                canonical_alias,
+                md_info,
+                skill_lookup_key=self._lazy_public_key(
+                    target_dir,
+                    skill_path,
+                    self._lazy_skills_by_path,
+                ),
             )
-
-            # Scan skill directories (handles subdomain nesting)
-            for skill_path in candidate_skill_dirs:
-                skill_dir_name = skill_path.name
-                lazy = self._lazy_skills_by_path.get(skill_path.resolve())
-
-                script_path_candidate = self._resolve_script_path(skill_path, lazy=lazy)
-                if script_path_candidate is None:
-                    raise ValueError(
-                        f"skill inventory entry {skill_path} has no runnable Python "
-                        "entry or declared non-Python runtime entry"
-                    )
-
-                canonical_alias = (
-                    (lazy.name if lazy and lazy.name else "")
-                    or skill_dir_name
-                )
-
-                # Build skill_info from SKILL.md metadata (single source of truth)
-                if lazy and lazy.description:
-                    md_info: dict[str, Any] = {
-                        "domain": lazy.domain or domain_name,
-                        "alias": canonical_alias,
-                        "canonical_name": canonical_alias,
-                        "directory_name": skill_dir_name,
-                        "script": script_path_candidate,
-                        "runtime_language": lazy.runtime_language,
-                        "source": lazy.source,  # "v2" (skill.yaml) | "v1" (ADR 0037)
-                        "type": lazy.type,
-                        "version": lazy.version,
-                        "validation_level": lazy.validation_level,
-                        "origin": lazy.origin,
-                        "lifecycle_status": lazy.lifecycle_status,
-                        "superseded_by": lazy.superseded_by,
-                        "skip_when": lazy.skip_when,
-                        # Consensus shims forward to the shared run parser, which
-                        # has no `--demo`; declare no demo so `oc run <cs> --demo`
-                        # is refused rather than aborting in argparse (ADR 0016/0030).
-                        "demo_args": [] if lazy.type == "consensus" else ["--demo"],
-                        "description": lazy.description,
-                        # Reconciled Python-package surface (frontmatter
-                        # `requires:`) for the adaptive env resolver.
-                        "requires": lazy.requires or [],
-                        "trigger_keywords": lazy.trigger_keywords or [],
-                        "allowed_extra_flags": lazy.allowed_extra_flags or set(),
-                        "legacy_aliases": self._unique_strings(list(lazy.legacy_aliases or [])),
-                        "saves_h5ad": lazy.saves_h5ad,
-                        "requires_preprocessed": lazy.requires_preprocessed,
-                        "input_contract": lazy.input_contract,
-                        "output_contract": lazy.output_contract,
-                        "param_hints": lazy.param_hints,
-                        "compute_resources": lazy.compute_resources,
-                        "security_contract": lazy.security_contract,
-                        "security_reviewed": lazy.security_reviewed,
-                        "gotchas": lazy.gotchas,
-                        "gotcha_details": lazy.gotcha_details,
-                    }
-                else:
-                    # SKILL.md missing or has no description — minimal dynamic entry.
-                    # All metadata (legacy aliases, flags, saves_h5ad) defaults to
-                    # empty; supply a SKILL.md to enrich.
-                    md_info = {
-                        "domain": domain_name,
-                        "alias": canonical_alias,
-                        "canonical_name": canonical_alias,
-                        "directory_name": skill_dir_name,
-                        "script": script_path_candidate,
-                        "runtime_language": lazy.runtime_language if lazy else "python",
-                        "source": lazy.source if lazy else "v1",
-                        "type": "leaf",
-                        "version": "",
-                        "validation_level": "smoke-only",
-                        "origin": "human",
-                        "lifecycle_status": "mvp",
-                        "superseded_by": "",
-                        "skip_when": [],
-                        "demo_args": ["--demo"],
-                        "description": f"Dynamically loaded {canonical_alias} skill",
-                        "requires": [],
-                        "trigger_keywords": [],
-                        "allowed_extra_flags": set(),
-                        "legacy_aliases": [],
-                        "saves_h5ad": False,
-                        "requires_preprocessed": False,
-                        "input_contract": {},
-                        "output_contract": {},
-                        "param_hints": {},
-                        "compute_resources": {},
-                        "security_contract": {},
-                        "security_reviewed": False,
-                        "gotchas": [],
-                        "gotcha_details": [],
-                    }
-
-                self._register_skill_entry(
-                    canonical_alias,
-                    md_info,
-                    skill_lookup_key=self._lazy_public_key(
-                        target_dir,
-                        skill_path.resolve(),
-                        self._lazy_skills_by_path,
-                    ),
-                )
-                self._state.skill_manifest_revisions[canonical_alias] = (
-                    lazy.manifest_revision if lazy is not None else "unknown"
-                )
-                if (skill_path / "skill.yaml").exists() or (skill_path / "SKILL.md").exists():
-                    registered_manifest_dirs.add(skill_path.resolve())
+            self._state.skill_manifest_revisions[canonical_alias] = (
+                lazy.manifest_revision if lazy is not None else "unknown"
+            )
+            if (skill_path / "skill.yaml").exists() or (skill_path / "SKILL.md").exists():
+                registered_manifest_dirs.add(skill_path)
 
         self._validate_candidate_inventory(
             target_dir,
             registered_manifest_dirs,
             found_disabled_skills=bool(disabled_skill_dirs),
+            declared_manifest_dirs={
+                location.skill_dir
+                for location in inventory.locations
+                if location.enabled
+                and (
+                    (location.skill_dir / "skill.yaml").is_file()
+                    or (location.skill_dir / "SKILL.md").is_file()
+                )
+            },
         )
         self._refresh_domain_skill_counts()
         self._loaded = True
@@ -915,34 +911,27 @@ class OmicsRegistry:
     def _discover_lazy_skills(
         cls,
         target_dir: Path,
+        *,
+        inventory: SkillInventory | None = None,
     ) -> dict[Path, LazySkillMetadata]:
         """Build a fresh index keyed by the exact root-relative Skill path."""
-        # The shipped 95/95 v2 tree is authoritative and must fail closed on
+        # The shipped v2 tree is authoritative and must fail closed on
         # an invalid present manifest. Alternate roots retain the dual-track
         # compatibility behavior for external/legacy skill collections.
         strict_v2 = target_dir == SKILLS_DIR.resolve()
         discovered: dict[Path, LazySkillMetadata] = {}
-
-        for domain_path in cls._sorted_children(target_dir):
-            if not domain_path.is_dir() or domain_path.name.startswith(('.', '__', '_')):
+        effective_inventory = inventory or discover_skill_inventory(target_dir)
+        for location in effective_inventory.locations:
+            if not location.enabled:
+                continue
+            skill_path = location.skill_dir
+            # v1 carries metadata in SKILL.md; v2 in skill.yaml (ADR 0037).
+            # Accept either so a v2 skill is registered with full metadata.
+            if not (skill_path / "SKILL.md").exists() and not (skill_path / "skill.yaml").exists():
                 continue
 
-            candidate_skill_dirs = []
-            if cls._looks_like_skill_dir(domain_path):
-                candidate_skill_dirs.append(domain_path)
-            candidate_skill_dirs.extend(cls._iter_skill_dirs(domain_path))
-            candidate_skill_dirs.sort(
-                key=lambda path: cls._relative_path_sort_key(path, domain_path)
-            )
-
-            for skill_path in candidate_skill_dirs:
-                # v1 carries metadata in SKILL.md; v2 in skill.yaml (ADR 0037).
-                # Accept either so a v2 skill is registered with full metadata.
-                if not (skill_path / "SKILL.md").exists() and not (skill_path / "skill.yaml").exists():
-                    continue
-
-                lazy = LazySkillMetadata(skill_path, strict_v2=strict_v2)
-                discovered[skill_path.resolve()] = lazy
+            lazy = LazySkillMetadata(skill_path, strict_v2=strict_v2)
+            discovered[skill_path] = lazy
         return discovered
 
     @classmethod
@@ -990,7 +979,11 @@ class OmicsRegistry:
                 )
             if not target_dir.exists():
                 return
-            lazy_by_path = self._discover_lazy_skills(target_dir)
+            inventory = discover_skill_inventory(target_dir)
+            lazy_by_path = self._discover_lazy_skills(
+                target_dir,
+                inventory=inventory,
+            )
             self._state = _freeze_registry_state(
                 replace(
                     self._state,

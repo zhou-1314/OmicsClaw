@@ -269,6 +269,7 @@ async def execute_omicsclaw(
     chat_id: int | str = 0,
     cancel_event: threading.Event | None = None,
     thread_id: str = "",
+    run_runtime=None,
 ) -> str:
     """Execute an OmicsClaw skill via the shared runner contract.
 
@@ -289,6 +290,41 @@ async def execute_omicsclaw(
     # Banner prepended to successful-execution output when we auto-routed.
     # Empty when the caller passed a specific skill.
     auto_route_banner: str = ""
+
+    # Golden vertical slice: an Agent-planned, explicitly named demo uses the
+    # same Backend-owned RunRuntime as the canonical CLI Adapter. Once selected,
+    # this path fails closed and never falls back to the legacy shared runner.
+    if (
+        run_runtime is not None
+        and skill_key != "auto"
+        and mode == "demo"
+        and set(args) <= {"skill", "mode"}
+    ):
+        from omicsclaw.control.simple_skill_adapter import execute_simple_skill_demo
+
+        canonical = await execute_simple_skill_demo(
+            skill_key,
+            run_runtime=run_runtime,
+        )
+        if not canonical["success"]:
+            run_line = (
+                f"\nRun: `{canonical['run_id']}`" if canonical["run_id"] else ""
+            )
+            return (
+                f"Canonical OmicsClaw demo failed for **{skill_key}**.\n"
+                f"Code: `{canonical['stderr']}`{run_line}"
+            )
+
+        lines = [
+            f"Canonical OmicsClaw demo completed for **{skill_key}**.",
+            f"Run: `{canonical['run_id']}`",
+            f"Output: `{canonical['output_dir']}`",
+        ]
+        if canonical["readme_path"]:
+            lines.append(f"Guide: `{canonical['readme_path']}`")
+        if canonical["replay_path"]:
+            lines.append(f"Replay: `{canonical['replay_path']}`")
+        return "\n".join(lines)
 
     # --- Resolve input file for path mode ---
     resolved_path: Path | None = None
@@ -744,12 +780,12 @@ async def execute_omicsclaw(
         result_text = payload_prefix + "\n" + result_text
     if auto_route_banner:
         result_text = auto_route_banner + result_text
-    notebook_path = out_dir / "reproducibility" / "analysis_notebook.ipynb"
-    if is_scientific_output_file(notebook_path, output_root=out_dir):
+    replay_path = out_dir / "reproducibility" / "replay.json"
+    if is_scientific_output_file(replay_path, output_root=out_dir):
         result_text += (
             "\n\n---\n"
-            f"[Reproducibility notebook available: {notebook_path}. "
-            "Tell the user they can open it in Jupyter to inspect code, outputs, and rerun the analysis.]"
+            f"[Replay capsule available: {replay_path}. "
+            "Tell the user they can run `oc replay` to create and verify a fresh analysis Run.]"
         )
 
     # Prepend parameter hint so the LLM relays it to the user
@@ -2292,34 +2328,39 @@ async def execute_list_skills_in_domain(args: dict, **kwargs) -> str:
 async def execute_create_omics_skill(args: dict, **kwargs) -> str:
     """Create a new OmicsClaw skill scaffold inside the repository."""
     try:
-        from omicsclaw.skill.scaffolder import create_skill_scaffold
+        from omicsclaw.skill.authoring import SkillAuthoringRequest, author_skill
 
-        request = args.get("request", "")
-        domain = args.get("domain", "")
-        if not request:
-            return "Error: 'request' parameter is required."
-        if args.get("promote_from_latest"):
-            return (
-                "Error: promote_from_latest is disabled because it can select "
-                "another session's run. Provide the exact source_analysis_dir."
-            )
-
-        result = create_skill_scaffold(
-            request=request,
-            domain=domain,
-            skill_name=args.get("skill_name", ""),
-            summary=args.get("summary", ""),
-            source_analysis_dir=args.get("source_analysis_dir", ""),
+        authoring_request = SkillAuthoringRequest.from_mapping(args)
+        result = author_skill(
+            authoring_request,
             output_root=OUTPUT_DIR,
-            input_formats=args.get("input_formats") or [],
-            primary_outputs=args.get("primary_outputs") or [],
-            methods=args.get("methods") or [],
-            trigger_keywords=args.get("trigger_keywords") or [],
-            create_tests=bool(args.get("create_tests", True)),
         )
+        activation_proposal = None
+        activation_error = ""
+        if (
+            not result.quarantined
+            and result.demo_gate_verdict == "earned"
+            and result.activation_status == "evaluation_required"
+        ):
+            try:
+                governance = kwargs.get("skill_evolution_governance")
+                if governance is None:
+                    from omicsclaw.skill.evolution_governance import (
+                        default_skill_evolution_governance,
+                    )
+
+                    governance = default_skill_evolution_governance()
+                activation_proposal = governance.prepare_activation(result.skill_name)
+            except Exception as exc:
+                activation_error = str(exc)
+                logger.error(
+                    "Created Skill candidate evaluation failed: %s",
+                    result.skill_name,
+                    exc_info=True,
+                )
         created = "\n".join(f"- {path}" for path in result.created_files or [])
         completion_summary = format_completion_mapping_summary(result.completion)
-        admission = "quarantined" if result.quarantined else "admitted"
+        admission = "quarantined" if result.quarantined else "draft candidate"
         quarantine_note = (
             "This skill is not available to registry/routing until it passes "
             "the required gate or receives explicit human validation.\n"
@@ -2327,6 +2368,25 @@ async def execute_create_omics_skill(args: dict, **kwargs) -> str:
             if result.quarantined
             else ""
         )
+        if activation_proposal is not None:
+            evaluation_note = (
+                "Evaluation: passed\n"
+                f"Activation proposal: {activation_proposal.proposal_id}\n"
+                "Human approval required: yes; the Agent did not activate the Skill.\n"
+            )
+        elif activation_error:
+            evaluation_note = (
+                "Evaluation: failed\n"
+                f"Evaluation reason: {activation_error}\n"
+                "Routing remains disabled.\n"
+            )
+        elif result.activation_status == "evaluation_required":
+            evaluation_note = (
+                "Evaluation: completed without activation evidence\n"
+                "Routing remains disabled.\n"
+            )
+        else:
+            evaluation_note = "Evaluation: not ready\nRouting remains disabled.\n"
         return (
             "Created OmicsClaw skill scaffold.\n"
             f"Skill: {result.skill_name}\n"
@@ -2334,11 +2394,13 @@ async def execute_create_omics_skill(args: dict, **kwargs) -> str:
             f"Directory: {result.skill_dir}\n"
             f"Admission: {admission}\n"
             f"{quarantine_note}"
+            f"{evaluation_note}"
             f"Registry refreshed: {result.registry_refreshed}\n"
             f"Manifest: {result.manifest_path or '<none>'}\n"
             f"Completion report: {result.completion_report_path or '<none>'}\n"
             f"Gate:\n{completion_summary or '<unavailable>'}\n"
-            f"Source analysis: {args.get('source_analysis_dir') or '<none>'}\n"
+            f"Source: {authoring_request.source.kind}\n"
+            f"Source Run ID: {authoring_request.source.run_id or '<none>'}\n"
             "Files:\n"
             f"{created}"
         )
@@ -2646,7 +2708,7 @@ def _register_autonomous_media(
 
 
 def _register_skill_promotion_candidate(
-    session_id: str, goal: str, run_id: str, workspace_root: str
+    session_id: str, goal: str, run_id: str
 ) -> dict | None:
     """Queue a structured "convert this autonomous run into a skill?" candidate.
 
@@ -2666,14 +2728,14 @@ def _register_skill_promotion_candidate(
     stays backend-authoritative (an autonomous bundle carries no target domain, so
     the user MUST pick one — see ``create_skill_scaffold``).
     """
-    if not session_id or not workspace_root:
+    normalized_run_id = str(run_id or "").strip()
+    if not session_id or re.fullmatch(r"[0-9a-f]{32}", normalized_run_id) is None:
         return None
     from omicsclaw.skill.scaffolder import VALID_DOMAINS
 
     candidate = {
         "goal": str(goal or ""),
-        "run_id": str(run_id or ""),
-        "workspace_root": str(workspace_root or ""),
+        "run_id": normalized_run_id,
         "valid_domains": list(VALID_DOMAINS),
     }
     pending_skill_promotion[session_id] = (
@@ -2808,10 +2870,10 @@ async def execute_autonomous_analysis_execute(args: dict, **kwargs) -> str:
                 # user-gated downstream (create_omics_skill / APPROVAL_MODE_ASK).
                 # Independent of the ≥N-success text nudge below.
                 _register_skill_promotion_candidate(
-                    session_id, goal, result.run_id, result.workspace_root
+                    session_id, goal, result.run_id
                 )
                 suggestion = await _compute_promotion_suggestion(
-                    session_id, thread_id, goal, result.run_id, result.workspace_root
+                    session_id, thread_id, goal, result.run_id
                 )
                 if suggestion:
                     digest += f"\n\n{suggestion}"

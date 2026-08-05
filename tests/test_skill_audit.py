@@ -28,6 +28,35 @@ def _pr(*, protocol_id="p1", kind="fixture", digest="d1", outcome="succeeded",
     return ProtocolEvaluationResult(protocol_id, kind, digest, outcome, occurred_at)
 
 REV = SkillRevision(skill_id="sc-de", version="1.0.0", manifest_hash="m1", source_hash="s1")
+BENCH_DATASET = "sha256:" + "a" * 64
+BENCH_ENVIRONMENT = "sha256:" + "b" * 64
+BENCH_CONTRACT = {
+    "kind": "benchmark",
+    "repeats": 1,
+    "pass_rule": "all_runs",
+    "dataset_ref": {
+        "store": "repository",
+        "path": "data/benchmarks/omicbench/omicbench-A03_hvg",
+        "content_sha256": BENCH_DATASET,
+    },
+    "environment_id": BENCH_ENVIRONMENT,
+}
+
+
+def _benchmark_result(**overrides):
+    values = {
+        "protocol_id": "p1",
+        "kind": "benchmark",
+        "protocol_digest": "d1",
+        "outcome": "succeeded",
+        "occurred_at": "2026-07-23T00:00:00Z",
+        "result_id": "result-1",
+        "evaluation_id": "batch-1",
+        "environment_id": BENCH_ENVIRONMENT,
+        "dataset_digest": BENCH_DATASET,
+    }
+    values.update(overrides)
+    return ProtocolEvaluationResult(**values)
 
 
 def _ev(
@@ -151,11 +180,109 @@ def test_fresh_passing_fixture_protocol_lifts_effective_to_fixture_validated():
 def test_fresh_passing_benchmark_protocol_earns_benchmarked():
     v = derive_experience_view(
         REV, "benchmarked", [],
-        protocol_results=[_pr(kind="benchmark", digest="d1")],
+        protocol_results=[_benchmark_result()],
         current_protocol_digests={"p1": "d1"},
+        current_protocol_contracts={"p1": BENCH_CONTRACT},
     )
     assert v.effective_validation_level == "benchmarked"
     assert v.validation_state == "current"
+
+
+def test_protocol_level_requires_one_complete_all_successful_evaluation_batch():
+    contract = {**BENCH_CONTRACT, "repeats": 2}
+    partial_failure = [
+        _benchmark_result(
+            occurred_at="t1", run_index=0, repeats=2, evaluation_id="batch-1"
+        ),
+        _benchmark_result(
+            outcome="failed",
+            occurred_at="t2",
+            run_index=1,
+            repeats=2,
+            result_id="result-2",
+            evaluation_id="batch-1",
+        ),
+    ]
+    failed_view = derive_experience_view(
+        REV,
+        "benchmarked",
+        [],
+        protocol_results=partial_failure,
+        current_protocol_digests={"p1": "d1"},
+        current_protocol_contracts={"p1": contract},
+    )
+    assert failed_view.effective_validation_level == "smoke-only"
+
+    complete_success = [
+        _benchmark_result(
+            occurred_at="t1", run_index=0, repeats=2, evaluation_id="batch-2"
+        ),
+        _benchmark_result(
+            occurred_at="t2",
+            run_index=1,
+            repeats=2,
+            result_id="result-2",
+            evaluation_id="batch-2",
+        ),
+    ]
+    passed_view = derive_experience_view(
+        REV,
+        "benchmarked",
+        [],
+        protocol_results=complete_success,
+        current_protocol_digests={"p1": "d1"},
+        current_protocol_contracts={"p1": contract},
+    )
+    assert passed_view.effective_validation_level == "benchmarked"
+
+
+def test_experience_view_exposes_evidence_supported_level_above_declared():
+    view = derive_experience_view(
+        REV,
+        "smoke-only",
+        [],
+        protocol_results=[
+            _benchmark_result(occurred_at="t")
+        ],
+        current_protocol_digests={"p1": "d1"},
+        current_protocol_contracts={"p1": BENCH_CONTRACT},
+    )
+
+    assert view.effective_validation_level == "smoke-only"
+    assert view.evidence_supported_validation_level == "benchmarked"
+    assert view.to_dict()["evidence_supported_validation_level"] == "benchmarked"
+
+
+def test_benchmark_cannot_self_declare_or_mix_dataset_and_environment():
+    unbound = derive_experience_view(
+        REV,
+        "benchmarked",
+        [],
+        protocol_results=[_benchmark_result()],
+        current_protocol_digests={"p1": "d1"},
+    )
+    assert unbound.evidence_supported_validation_level == "smoke-only"
+
+    contract = {**BENCH_CONTRACT, "repeats": 2}
+    mixed = [
+        _benchmark_result(run_index=0, repeats=2),
+        _benchmark_result(
+            run_index=1,
+            repeats=2,
+            result_id="result-2",
+            dataset_digest="sha256:" + "c" * 64,
+            environment_id="sha256:" + "d" * 64,
+        ),
+    ]
+    view = derive_experience_view(
+        REV,
+        "benchmarked",
+        [],
+        protocol_results=mixed,
+        current_protocol_digests={"p1": "d1"},
+        current_protocol_contracts={"p1": contract},
+    )
+    assert view.evidence_supported_validation_level == "smoke-only"
 
 
 def test_drifted_protocol_digest_earns_nothing():
@@ -349,6 +476,25 @@ def test_runtime_reads_ledger_once_per_snapshot():
     assert ledger.reads == 1  # one evidence snapshot shared by every view (AUD-02)
 
 
+def test_runtime_targeted_experience_resolves_only_the_selected_skill():
+    ledger = _FakeLedger([])
+    computed: list[str] = []
+    resolver = CachedRevisionResolver(
+        lambda: [
+            _sii(skill_id="skill-a", cache_key="/skills/a"),
+            _sii(skill_id="skill-b", cache_key="/skills/b"),
+        ],
+        lambda key: (computed.append(key) or ("m-" + key[-1], "s-" + key[-1])),
+    )
+    runtime = SkillAuditRuntime(ledger, resolver)
+
+    view = runtime.experience_view("skill-b")
+
+    assert view is not None
+    assert view.skill_revision.skill_id == "skill-b"
+    assert computed == ["/skills/b"]
+
+
 def test_summary_is_zero_filled_and_counts_states_and_levels():
     ledger = _FakeLedger([_ev(evidence_kind="demo")])  # sc-de current
     revs = [
@@ -436,6 +582,20 @@ def test_resolver_computes_identity_and_builds_current_revision():
     ]
 
 
+def test_resolver_can_filter_before_expensive_identity_computation():
+    computed: list[str] = []
+    resolver = CachedRevisionResolver(
+        lambda: [
+            _sii(skill_id="a", cache_key="/skills/a"),
+            _sii(skill_id="b", cache_key="/skills/b"),
+        ],
+        lambda key: (computed.append(key) or ("m", "s")),
+    )
+
+    assert [revision.revision.skill_id for revision in resolver.resolve({"b"})] == ["b"]
+    assert computed == ["/skills/b"]
+
+
 def test_resolver_cache_hit_skips_recompute_when_mtime_unchanged():
     calls: list[str] = []
 
@@ -516,6 +676,7 @@ def _view(skill_id, *, state="current", declared="demo-validated"):
     return SkillExperienceView(
         skill_revision=SkillRevision(skill_id, "1.0.0", "m", "s"),
         declared_validation_level=declared,
+        evidence_supported_validation_level="demo-validated",
         effective_validation_level="demo-validated",
         validation_state=state,
         last_observed_at="",
@@ -656,7 +817,14 @@ def test_governance_experience_view_reflects_stored_protocol_evaluation(tmp_path
     cr = _build_registry_revision_resolver(skills_root)()[0]
     eval_store.append(
         cr.revision,
-        ProtocolEvaluationResult("p1", "fixture", cr.protocol_digests["p1"], "succeeded", "t"),
+        ProtocolEvaluationResult(
+            "p1",
+            "fixture",
+            cr.protocol_digests["p1"],
+            "succeeded",
+            "t",
+            environment_id=cr.protocol_contracts["p1"]["environment_id"],
+        ),
     )
     gov.refresh()
     view = gov.experience_view("aud-skill")
@@ -684,9 +852,73 @@ def test_governance_evaluate_runs_stores_and_lifts_effective(tmp_path):
     )
     results = gov.evaluate("aud-skill", run_one=lambda spec: "succeeded")
     assert [(r.protocol_id, r.outcome) for r in results] == [("p1", "succeeded")]
+    assert results[0].environment_id.startswith("sha256:")
     view = gov.experience_view("aud-skill")
     assert view["effective_validation_level"] == "fixture-validated"
     assert view["validation_state"] == "current"
+
+
+def test_governance_default_command_runner_keeps_resolvable_artifacts(tmp_path):
+    from omicsclaw.skill.evaluation_run import (
+        EvaluationArtifactStore,
+        EvaluationResultStore,
+    )
+    from omicsclaw.skill.evolution import EvolutionProposalStore, SkillHealthLedger
+    from omicsclaw.skill.evolution_governance import SkillEvolutionGovernance
+
+    skills_root = tmp_path / "skills"
+    skill_dir = _write_minimal_skill(
+        skills_root,
+        skill_id="aud-skill",
+        protocols=[
+            {
+                "id": "fixture-command",
+                "kind": "fixture",
+                "entry": "tests/fixture_command.py",
+                "runner": "command",
+            }
+        ],
+    )
+    (skill_dir / "tests" / "fixture_command.py").write_text(
+        """
+import json
+import os
+from pathlib import Path
+
+print("governed command evidence")
+Path(os.environ["OMICSCLAW_EVALUATION_RESULT"]).write_text(json.dumps({
+    "schema_version": 1,
+    "outcome": "succeeded",
+    "reason_code": "none",
+    "metrics": {},
+}))
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    result_store = EvaluationResultStore(tmp_path / "audit" / "evals.jsonl")
+    artifact_store = EvaluationArtifactStore(tmp_path / "audit" / "artifacts")
+    governance = SkillEvolutionGovernance(
+        skills_root=skills_root,
+        ledger=SkillHealthLedger(tmp_path / "events.jsonl"),
+        proposals=EvolutionProposalStore(tmp_path / "proposals.jsonl"),
+        evaluation_store=result_store,
+        evaluation_artifact_store=artifact_store,
+    )
+
+    [result] = governance.evaluate("aud-skill")
+
+    [bundle_ref] = [
+        ref
+        for ref in result.evidence_refs
+        if ref.startswith("evaluation-artifact:sha256:")
+    ]
+    bundle = artifact_store.read_json(bundle_ref)
+    stdout = next(item for item in bundle["artifacts"] if item["role"] == "stdout")
+    assert artifact_store.read_bytes(stdout["ref"]) == b"governed command evidence\n"
+    revision = governance._revision_resolver()[0].revision
+    assert result_store.results_for(revision) == [result]
+    assert revision.skill_id == "aud-skill"
 
 
 def test_governance_evaluate_unknown_skill_raises(tmp_path):
@@ -703,6 +935,29 @@ def test_governance_evaluate_unknown_skill_raises(tmp_path):
     )
     with pytest.raises(KeyError):
         gov.evaluate("nope", run_one=lambda spec: "succeeded")
+
+
+def test_governance_audit_read_fails_closed_on_corrupt_evaluation_store(tmp_path):
+    from omicsclaw.skill.evaluation_run import (
+        EvaluationResultStore,
+        EvaluationStoreCorruptError,
+    )
+    from omicsclaw.skill.evolution import EvolutionProposalStore, SkillHealthLedger
+    from omicsclaw.skill.evolution_governance import SkillEvolutionGovernance
+
+    skills_root = tmp_path / "skills"
+    _write_minimal_skill(skills_root, skill_id="aud-skill")
+    store_path = tmp_path / "evals.jsonl"
+    store_path.write_text("{not-json\n", encoding="utf-8")
+    gov = SkillEvolutionGovernance(
+        skills_root=skills_root,
+        ledger=SkillHealthLedger(tmp_path / "events.jsonl"),
+        proposals=EvolutionProposalStore(tmp_path / "proposals.jsonl"),
+        evaluation_store=EvaluationResultStore(store_path),
+    )
+
+    with pytest.raises(EvaluationStoreCorruptError):
+        gov.experience_view("aud-skill")
 
 
 def test_build_registry_resolver_empty_root_is_empty(tmp_path):
@@ -784,9 +1039,21 @@ def test_experience_read_models_project_on_first_read(tmp_path):
 
 
 def _sr(protocol_id="s1", kind="stability", digest="d1", outcome="succeeded",
-        run_index=0, repeats=1, metrics=None):
-    return ProtocolEvaluationResult(protocol_id, kind, digest, outcome, "t",
-                                    run_index, repeats, metrics or {})
+        run_index=0, repeats=1, metrics=None, *, evaluation_id="batch-1",
+        environment_id="env-1", dataset_digest="data-1", occurred_at="t"):
+    return ProtocolEvaluationResult(
+        protocol_id,
+        kind,
+        digest,
+        outcome,
+        occurred_at,
+        run_index,
+        repeats,
+        metrics or {},
+        evaluation_id=evaluation_id,
+        environment_id=environment_id,
+        dataset_digest=dataset_digest,
+    )
 
 
 def test_stability_view_aggregates_repeats_and_metric_dispersion():
@@ -819,6 +1086,86 @@ def test_stability_is_orthogonal_and_only_fresh():
     assert view.effective_validation_level == "smoke-only"
     assert "s1" in view.stability
     assert "s2" not in view.stability  # drifted digest contributes no stability
+
+
+def test_stability_view_never_mixes_independent_evaluation_batches():
+    results = [
+        _sr(
+            run_index=0,
+            repeats=2,
+            metrics={"silhouette": 0.10},
+            evaluation_id="older-batch",
+            occurred_at="2026-08-01T00:00:01Z",
+        ),
+        _sr(
+            run_index=1,
+            repeats=2,
+            metrics={"silhouette": 0.20},
+            evaluation_id="older-batch",
+            occurred_at="2026-08-01T00:00:02Z",
+        ),
+        _sr(
+            run_index=0,
+            repeats=2,
+            metrics={"silhouette": 0.90},
+            evaluation_id="latest-batch",
+            occurred_at="2026-08-02T00:00:01Z",
+        ),
+        _sr(
+            run_index=1,
+            repeats=2,
+            metrics={"silhouette": 1.00},
+            evaluation_id="latest-batch",
+            occurred_at="2026-08-02T00:00:02Z",
+        ),
+    ]
+
+    view = derive_experience_view(
+        REV,
+        "smoke-only",
+        [],
+        protocol_results=results,
+        current_protocol_digests={"s1": "d1"},
+    )
+
+    stability = view.stability["s1"]
+    assert stability["evaluation_id"] == "latest-batch"
+    assert stability["batch_count"] == 2
+    assert stability["runs"] == 2
+    assert stability["metric_dispersion"]["silhouette"]["mean"] == 0.95
+
+
+def test_stability_view_keeps_environment_and_dataset_batches_separate():
+    results = [
+        _sr(
+            metrics={"score": 0.1},
+            evaluation_id="same-id",
+            environment_id="env-1",
+            dataset_digest="data-1",
+            occurred_at="2026-08-01T00:00:00Z",
+        ),
+        _sr(
+            metrics={"score": 0.9},
+            evaluation_id="same-id",
+            environment_id="env-2",
+            dataset_digest="data-2",
+            occurred_at="2026-08-02T00:00:00Z",
+        ),
+    ]
+
+    view = derive_experience_view(
+        REV,
+        "smoke-only",
+        [],
+        protocol_results=results,
+        current_protocol_digests={"s1": "d1"},
+    )
+
+    stability = view.stability["s1"]
+    assert stability["batch_count"] == 2
+    assert stability["environment_id"] == "env-2"
+    assert stability["dataset_digest"] == "data-2"
+    assert stability["runs"] == 1
 
 
 # ---- protocol_digest dependency-version binding (ADR 0074 §6.4) -------------
@@ -882,6 +1229,32 @@ def test_dependency_versions_resolve_against_the_skill_runner_interpreter(monkey
 
     assert gov_mod._installed_dependency_version("scanpy") == "9.9.9"
     assert probed == ["/runner/bin/python"]  # not sys.executable
+
+
+def test_explicit_environment_cache_invalidation_observes_runtime_upgrades(monkeypatch):
+    import sys
+    import omicsclaw.skill.evolution_governance as gov_mod
+
+    versions = {"scanpy": "1.10.0"}
+    monkeypatch.setattr(
+        gov_mod,
+        "_local_distribution_versions",
+        lambda: dict(versions),
+    )
+    monkeypatch.setattr(
+        "omicsclaw.skill.execution.python_runtime.get_skill_runner_python",
+        lambda: sys.executable,
+    )
+    gov_mod._invalidate_evaluation_environment_caches()
+    try:
+        assert gov_mod._installed_dependency_version("scanpy") == "1.10.0"
+        versions["scanpy"] = "1.11.0"
+        assert gov_mod._installed_dependency_version("scanpy") == "1.10.0"
+
+        gov_mod._invalidate_evaluation_environment_caches()
+        assert gov_mod._installed_dependency_version("scanpy") == "1.11.0"
+    finally:
+        gov_mod._invalidate_evaluation_environment_caches()
 
 
 def test_unprobeable_runner_reads_unresolved_not_the_orchestrator_versions(monkeypatch):

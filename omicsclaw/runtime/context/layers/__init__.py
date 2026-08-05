@@ -336,6 +336,7 @@ def load_skill_context(
     max_candidates: int = 3,
     max_param_hints: int = 4,
     _registry_skills: Mapping[str, Mapping[str, Any]] | None = None,
+    _experience_view: Mapping[str, Any] | None = None,
 ) -> str:
     if not should_prefetch_skill_context(
         query=query,
@@ -399,6 +400,76 @@ def load_skill_context(
         lines.append("- This skill expects preprocessed input.")
     if info.get("saves_h5ad"):
         lines.append("- This skill typically writes updated `.h5ad` outputs.")
+
+    if _experience_view:
+        revision = _experience_view.get("skill_revision")
+        revision_skill = (
+            str(revision.get("skill_id") or "")
+            if isinstance(revision, Mapping)
+            else ""
+        )
+        if revision_skill == selected_skill:
+            declared = str(
+                _experience_view.get("declared_validation_level") or "smoke-only"
+            )
+            supported = str(
+                _experience_view.get("evidence_supported_validation_level")
+                or "smoke-only"
+            )
+            effective = str(
+                _experience_view.get("effective_validation_level") or "smoke-only"
+            )
+            validation_state = str(
+                _experience_view.get("validation_state") or "evaluation_required"
+            )
+            lines.extend(
+                [
+                    "",
+                    "## Governed Skill Experience",
+                    "",
+                    (
+                        "- Validation: "
+                        f"declared `{declared}`, evidence-supported `{supported}`, "
+                        f"effective `{effective}` (`{validation_state}`)."
+                    ),
+                ]
+            )
+            usage = _experience_view.get("usage")
+            health = _experience_view.get("health")
+            if isinstance(usage, Mapping) and isinstance(health, Mapping):
+                lines.append(
+                    "- Current revision observations: "
+                    f"{int(usage.get('execution_count') or 0)} executions; "
+                    f"{int(health.get('successes') or 0)} successes, "
+                    f"{int(health.get('skill_defects') or 0)} Skill defects, "
+                    f"{int(health.get('environment_failures') or 0)} environment failures."
+                )
+            protocols = _experience_view.get("declared_protocol_ids")
+            if isinstance(protocols, list) and protocols:
+                lines.append(
+                    "- Declared evaluation protocols: "
+                    + ", ".join(f"`{str(item)}`" for item in protocols[:5])
+                    + "."
+                )
+            stability = _experience_view.get("stability")
+            if isinstance(stability, Mapping) and stability:
+                summaries: list[str] = []
+                for protocol_id in sorted(stability)[:3]:
+                    batch = stability[protocol_id]
+                    if not isinstance(batch, Mapping):
+                        continue
+                    summaries.append(
+                        f"`{protocol_id}` {int(batch.get('successes') or 0)}/"
+                        f"{int(batch.get('runs') or 0)} latest-batch successes"
+                    )
+                if summaries:
+                    lines.append("- Stability: " + "; ".join(summaries) + ".")
+            if validation_state in {"stale", "evaluation_required", "review_required"}:
+                lines.append(
+                    "- Invocation policy: do not treat the declared level as current; "
+                    "use the effective level and surface relevant failures or missing "
+                    "evaluation before relying on the Skill."
+                )
 
     nearby = [
         name for name in candidate_list

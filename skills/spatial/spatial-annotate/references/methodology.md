@@ -102,9 +102,9 @@ python skills/spatial/spatial-annotate/spatial_annotate.py \
 ```
 
 Every successful standard OmicsClaw wrapper run, including `oc run` and
-conversational skill execution, also writes a top-level `README.md` and
-`reproducibility/analysis_notebook.ipynb` to make the output directory easier
-to inspect and rerun.
+conversational skill execution, also writes a top-level `README.md` and a
+`reproducibility/replay.json` Capsule to make the output directory easier to
+inspect and replay.
 
 The current `spatial-annotate` implementation also writes a standard Python
 gallery manifest at `figures/manifest.json` plus `figure_data/manifest.json`

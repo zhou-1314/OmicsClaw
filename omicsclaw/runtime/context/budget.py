@@ -153,9 +153,14 @@ _TOKEN_ENCODING_CACHE: dict[str, Any] = {}
 def _resolve_encoding(model: str | None) -> Any | None:
     """Return a tiktoken encoding for ``model`` (or a default), or ``None`` to
     signal the ceil(chars/4) fallback (tiktoken absent / model unknown)."""
-    if _tiktoken is None:
+    # A model-less estimate is part of the deterministic local budget contract:
+    # it must not change merely because the optional ``tiktoken`` package happens
+    # to be installed. Production callers pass the resolved model and still get
+    # its tokenizer; tests and dependency-light callers get the documented
+    # ceil(chars/4) approximation.
+    if _tiktoken is None or not model:
         return None
-    key = model or _DEFAULT_ENCODING
+    key = model
     if key in _TOKEN_ENCODING_CACHE:
         return _TOKEN_ENCODING_CACHE[key]
     encoding = None

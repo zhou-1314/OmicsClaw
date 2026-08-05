@@ -13,6 +13,24 @@ from omicsclaw.agents.pipeline import ResearchPipeline
 from omicsclaw.providers.registry import PROVIDER_PRESETS
 
 
+@pytest.fixture(autouse=True)
+def _bind_session_init_to_collected_state(monkeypatch):
+    """Keep this module's patched state object authoritative during each test.
+
+    Desktop/CLI adapter tests intentionally replace the state module in
+    ``sys.modules``.  Under xdist load scheduling the package attribute can
+    still reference one of those doubles when this file starts, while the
+    ``core`` object collected above is the object these tests patch and assert.
+    Align both import identities explicitly so ``session.init`` and the test
+    always operate on the same state module.
+    """
+
+    import omicsclaw.runtime.agent as agent_package
+
+    monkeypatch.setitem(sys.modules, "omicsclaw.runtime.agent.state", core)
+    monkeypatch.setattr(agent_package, "state", core, raising=False)
+
+
 def _clear_llm_env(monkeypatch):
     for key in (
         "LLM_PROVIDER",

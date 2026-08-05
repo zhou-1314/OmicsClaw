@@ -774,7 +774,7 @@ def test_registry_exposes_canonical_graph_queries_and_provenance_chain():
     registry.load_all()
 
     graph = registry.build_compatibility_dag()
-    assert graph["summary"]["node_count"] == 95
+    assert graph["summary"]["node_count"] == 96
     assert graph["summary"]["reviewed_edge_count"] == 18
     assert graph["summary"]["method_scoped_skill_count"] == 2
     assert graph["summary"]["conditional_edge_count"] == 0

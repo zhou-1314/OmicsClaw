@@ -239,3 +239,31 @@ resources:
   - parameters.md
   - r_visualization.md
   tests: tests/
+validation:
+  protocols:
+  - id: scagentbench-paga-main-v1
+    kind: benchmark
+    entry: tests/scagentbench_paga.py
+    runner: command
+    suite_id: scagent-bench
+    case_ids:
+    - paga
+    dataset_ref:
+      store: repository
+      path: data/benchmarks/scagent-bench
+      members:
+      - bioagent-benchmark/evaluation/compute_result_consistency.py
+      - datasets_for_bioagent_benchmark/agent_benchmark/main/paga/paul15.h5
+      - datasets_for_bioagent_benchmark/groundtruth_code/main/script/paga_gold.py
+      - datasets_for_bioagent_benchmark/groundtruth_result/main/paga.csv
+      - datasets_for_bioagent_benchmark/input_prompt/main/prompt_gradient.json
+      content_sha256: sha256:29c073c6ee4c4f2f62e295222463c2692b2550e235ac5c375b28798eb7cbc93a
+    pass_rule: all_runs
+    repeats: 1
+    timeout_seconds: 600
+    metrics:
+    - aligned_cosine
+    - clusters
+    - edge_f1
+    - native_pairwise_mean
+    - relative_frobenius_error

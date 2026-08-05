@@ -16,6 +16,7 @@ preserved.
 
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 import re
@@ -300,7 +301,11 @@ def init(
     ``LLM_PROVIDER_NAME``, ``memory_store``, ``session_manager``) via a
     late import.
     """
-    import omicsclaw.runtime.agent.state as _core  # late import — _core fully loaded by call time
+    # Resolve from ``sys.modules`` instead of following the package's cached
+    # ``state`` attribute.  Adapters and tests may temporarily install a state
+    # double; Python's dotted ``import ... as`` can otherwise return a stale
+    # package attribute after the double has been removed.
+    _core = importlib.import_module("omicsclaw.runtime.agent.state")
 
     auth_mode_normalized = str(auth_mode or "api_key").strip().lower() or "api_key"
 
@@ -472,14 +477,14 @@ def _evict_lru_conversations():
     """Evict least-recently-used conversations when the conversation cap is
     exceeded. Late-imports ``transcript_store`` / ``tool_result_store`` /
     ``MAX_CONVERSATIONS`` from ``omicsclaw.runtime.agent.state`` since those globals live there."""
-    from omicsclaw.runtime.agent.state import MAX_CONVERSATIONS, transcript_store
+    core = importlib.import_module("omicsclaw.runtime.agent.state")
 
-    transcript_store.max_conversations = MAX_CONVERSATIONS
+    core.transcript_store.max_conversations = core.MAX_CONVERSATIONS
     # ADR 0040 D6 / B2: LRU eviction clears the in-memory working set ONLY. It must
     # NOT delete the durable transcripts.db rows or the ToolResultStore blobs — a
     # later revisit rehydrates the transcript, whose full_result_path refs must
     # still resolve. Only an explicit /clear deletes durable state (retention/GC of
     # unbounded blobs+rows is a separate pre-launch concern — ADR 0040 Open).
-    evicted = transcript_store.evict_lru_conversations()
+    evicted = core.transcript_store.evict_lru_conversations()
     if evicted:
         logger.debug(f"Evicted {len(evicted)} stale conversation(s) from memory")

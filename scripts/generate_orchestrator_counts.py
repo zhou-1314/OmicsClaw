@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Regenerate hardcoded skill counts inside ``skills/orchestrator/SKILL.md``.
+"""Regenerate hardcoded skill counts in the orchestrator methodology reference.
 
-The orchestrator SKILL.md contains three passages whose numbers must stay in
-sync with the real registry:
+The generated orchestrator card keeps long-form routing documentation in
+``references/methodology.md``. Three marked passages there must stay in sync
+with the real registry:
 
 * ``<!-- ORCH-INTRO-START -->`` ... ``<!-- ORCH-INTRO-END -->`` — the
   "Without it" bullet with the total skill count.
@@ -29,7 +30,7 @@ sys.path.insert(0, str(_ROOT))
 
 from omicsclaw.skill.registry import OmicsRegistry  # noqa: E402
 
-SKILL_MD = _ROOT / "skills" / "orchestrator" / "SKILL.md"
+SKILL_MD = _ROOT / "skills" / "orchestrator" / "references" / "methodology.md"
 
 MARKERS = {
     "intro": ("<!-- ORCH-INTRO-START -->", "<!-- ORCH-INTRO-END -->"),
@@ -111,7 +112,9 @@ def rewrite(current: str, blocks: dict[str, str]) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Regenerate orchestrator SKILL.md skill counts")
+    parser = argparse.ArgumentParser(
+        description="Regenerate orchestrator methodology skill counts"
+    )
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--apply", action="store_true", help="Rewrite the file in place")
     group.add_argument("--check", action="store_true", help="Exit 1 if file is out of date")
@@ -128,12 +131,12 @@ def main() -> int:
     if args.check:
         if current != expected:
             print(
-                "ERROR: skills/orchestrator/SKILL.md is out of date.\n"
+                "ERROR: orchestrator methodology counts are out of date.\n"
                 "       Run: python scripts/generate_orchestrator_counts.py --apply",
                 file=sys.stderr,
             )
             return 1
-        print("skills/orchestrator/SKILL.md is up to date.")
+        print("Orchestrator methodology counts are up to date.")
         return 0
 
     if args.apply:

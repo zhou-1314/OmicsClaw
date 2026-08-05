@@ -56,13 +56,19 @@ corresponding thin App credential adapter. ADR 0072 refines that boundary with
 durable cross-request operation bindings, receipt-bound AutoAgent recovery, and
 a governed AutoAgent process owner. ADR 0073 refines ADR 0059 by moving opaque
 Attachment ID minting from the control plane to the Attachment Store.
+ADR 0075 replaces the standard Skill runner's synthesized notebook with a
+runner-owned Skill Replay Capsule and explicit fresh-Run verification; genuine
+Autonomous Code Mini-Agent notebooks and Replay artifacts remain separate.
 
 ADR 0074 is **Proposed**, not part of the effective decision chain. It proposes
 a Backend-owned `SkillAuditRuntime`, protocol-bound continuous evaluation,
 derived Skill Experience Views, declared/effective validation separation, and
-an additive OmicsClaw-App-compatible `/skill-evolution` contract. Until it is
-accepted and implemented, ADR 0065–0069 and the current audit baseline remain
-authoritative.
+an additive OmicsClaw-App-compatible `/skill-evolution` contract. Experience
+Views, protocol/result evidence, bounded local content-addressed evaluation
+artifacts, content-bound case evaluation and offline Benchmark Campaign analysis
+are phased implementations; RunRuntime-backed AuditOperation and the remaining
+proposal/App slices are not. ADR 0065–0069 and the current audit baseline remain
+authoritative while ADR 0074 is Proposed.
 
 The concrete integrated contract is
 [`docs/design/conversational-control-plane.md`](../design/conversational-control-plane.md).

@@ -10,10 +10,12 @@ from pathlib import Path
 import pytest
 
 SKILL_SCRIPT = Path(__file__).resolve().parent.parent / "spatial_statistics.py"
+pytestmark = pytest.mark.demo
 
 # Optional heavy dependencies — skip affected tests when not installed
 try:
     import esda  # noqa: F401
+
     _ESDA_AVAILABLE = True
 except ImportError:
     _ESDA_AVAILABLE = False
@@ -71,16 +73,26 @@ def test_default_neighborhood_enrichment_demo(tmp_output):
     assert data["skill"] == "spatial-statistics"
     assert data["summary"]["analysis_type"] == "neighborhood_enrichment"
     assert "graph_params" in data["summary"]
-    assert data["data"]["visualization"]["recipe_id"] == "standard-spatial-statistics-gallery"
+    assert (
+        data["data"]["visualization"]["recipe_id"]
+        == "standard-spatial-statistics-gallery"
+    )
 
-    figures_manifest = json.loads((tmp_output / "figures" / "manifest.json").read_text())
-    figure_data_manifest = json.loads((tmp_output / "figure_data" / "manifest.json").read_text())
+    figures_manifest = json.loads(
+        (tmp_output / "figures" / "manifest.json").read_text()
+    )
+    figure_data_manifest = json.loads(
+        (tmp_output / "figure_data" / "manifest.json").read_text()
+    )
     assert figures_manifest["recipe_id"] == "standard-spatial-statistics-gallery"
     assert any(plot["role"] == "overview" for plot in figures_manifest["plots"])
     assert any(plot["role"] == "supporting" for plot in figures_manifest["plots"])
     assert any(plot["role"] == "uncertainty" for plot in figures_manifest["plots"])
     assert figure_data_manifest["analysis_type"] == "neighborhood_enrichment"
-    assert figure_data_manifest["available_files"]["analysis_summary"] == "analysis_summary.csv"
+    assert (
+        figure_data_manifest["available_files"]["analysis_summary"]
+        == "analysis_summary.csv"
+    )
 
     import scanpy as sc
 
@@ -118,7 +130,10 @@ def test_moran_custom_parameters_export_results(tmp_output):
     assert result["summary"]["n_genes"] == 3
     assert result["summary"]["graph_params"]["n_neighs"] == 8
     assert result["summary"]["corr_method"] == "fdr_bh"
-    assert result["data"]["visualization"]["recipe_id"] == "standard-spatial-statistics-gallery"
+    assert (
+        result["data"]["visualization"]["recipe_id"]
+        == "standard-spatial-statistics-gallery"
+    )
 
 
 @pytest.mark.skipif(not _ESDA_AVAILABLE, reason="esda not installed")
@@ -146,7 +161,10 @@ def test_getis_ord_exports_local_spot_tables(tmp_output):
     result = json.loads((out / "result.json").read_text())
     assert result["summary"]["analysis_type"] == "getis_ord"
     assert result["summary"]["getis_star"] is False
-    assert result["data"]["visualization"]["recipe_id"] == "standard-spatial-statistics-gallery"
+    assert (
+        result["data"]["visualization"]["recipe_id"]
+        == "standard-spatial-statistics-gallery"
+    )
 
 
 def test_spatial_centrality_uses_official_score_columns(tmp_output):
@@ -173,4 +191,7 @@ def test_spatial_centrality_uses_official_score_columns(tmp_output):
     result = json.loads((out / "result.json").read_text())
     assert result["summary"]["analysis_type"] == "spatial_centrality"
     assert "degree_centrality" in result["summary"]["selected_scores"]
-    assert result["data"]["visualization"]["recipe_id"] == "standard-spatial-statistics-gallery"
+    assert (
+        result["data"]["visualization"]["recipe_id"]
+        == "standard-spatial-statistics-gallery"
+    )

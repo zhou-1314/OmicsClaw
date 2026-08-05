@@ -582,6 +582,29 @@ async def test_dispatch_passes_none_cancel_event_when_envelope_has_none(monkeypa
     assert received["cancel_event"] is None
 
 
+@pytest.mark.asyncio
+async def test_dispatch_forwards_process_local_run_runtime(monkeypatch):
+    received: dict[str, object] = {}
+
+    async def fake_loop(**kwargs):
+        received["run_runtime"] = kwargs.get("run_runtime")
+        return "ok"
+
+    _patch_llm_tool_loop(monkeypatch, fake_loop)
+    run_runtime = object()
+
+    events = await _collect(
+        MessageEnvelope(
+            chat_id="c1",
+            content="run demo",
+            run_runtime=run_runtime,
+        )
+    )
+
+    assert events[-1] == Final(text="ok", kind="normal")
+    assert received["run_runtime"] is run_runtime
+
+
 # ---------------------------------------------------------------------------
 # Bench Phase 0 (ADR 0017/0020/0023) — thread_id + stage plumbing
 #

@@ -22,6 +22,22 @@
       "artifact_outputs": []
     },
     {
+      "skill": "bulkrna-cosinor-rhythm",
+      "domain": "bulkrna",
+      "type": "leaf",
+      "validation_level": "demo-validated",
+      "lifecycle_status": "mvp",
+      "compute_resources": {
+        "cpu_cores": 1,
+        "memory_mib": 256,
+        "gpu_devices": 0,
+        "threads": 1,
+        "temporary_disk_mib": 16
+      },
+      "artifact_inputs": [],
+      "artifact_outputs": []
+    },
+    {
       "skill": "bulkrna-de",
       "domain": "bulkrna",
       "type": "leaf",
@@ -923,7 +939,7 @@
       "skill": "spatial-domains",
       "domain": "spatial",
       "type": "leaf",
-      "validation_level": "smoke-only",
+      "validation_level": "demo-validated",
       "lifecycle_status": "mvp",
       "compute_resources": {
         "cpu_cores": 4,
@@ -1973,7 +1989,7 @@
     "rejected_edges": []
   },
   "summary": {
-    "node_count": 95,
+    "node_count": 96,
     "edge_count": 74,
     "method_scoped_skill_count": 2,
     "conditional_edge_count": 0,

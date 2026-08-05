@@ -31,6 +31,7 @@ from omicsclaw.runtime.policy.state import ToolPolicyState
 from omicsclaw.runtime.agent.query_engine import (
     QueryEngineConfig,
     QueryEngineContext,
+    run_planned_tool_calls,
     run_query_engine,
 )
 from omicsclaw.runtime.context.budget import effective_context_capacity
@@ -333,6 +334,8 @@ async def run_engine_loop(
     policy_state: Any = None,
     cancel_event: Any = None,
     candidate_chain_gate: dict[str, Any] | None = None,
+    planned_tool_calls: list[tuple[str, dict[str, Any]]] | None = None,
+    run_runtime: Any = None,
 ) -> str:
     """Drive the LLM-plus-tools loop for a single chat turn.
 
@@ -349,7 +352,7 @@ async def run_engine_loop(
     injected into ``tool_runtime_context`` so per-tool executors can
     forward it down to ``skill.runner.run_skill``.
     """
-    if deps.llm is None:
+    if deps.llm is None and not planned_tool_calls:
         return LLM_NOT_CONFIGURED_MESSAGE
 
     transcript_store = deps.transcript_store
@@ -451,47 +454,80 @@ async def run_engine_loop(
     surface = platform or "unknown"
     resolved_policy_state = ToolPolicyState.from_mapping(policy_state, surface=surface)
 
+    query_context = QueryEngineContext(
+        chat_id=chat_id,
+        session_id=chat_context.session_id,
+        system_prompt=system_prompt,
+        user_message_content=_prepend_user_turn_context(
+            chat_context.user_message_content, user_turn_context
+        ),
+        stored_user_content=(
+            _prepend_user_turn_context(
+                assembled_stored_user_content,
+                user_turn_context,
+            )
+            if assembled_stored_user_content is not None
+            else None
+        ),
+        content_adapter=content_adapter,
+        surface=surface,
+        policy_state=resolved_policy_state,
+        hook_runtime=hook_runtime,
+        tool_runtime_context={
+            "omicsclaw_dir": deps.omicsclaw_dir,
+            "workspace": workspace,
+            "pipeline_workspace": pipeline_workspace,
+            # Bench (ADR 0018/0020) — investigation-thread id + stage lens
+            # ride into per-tool executors. Phase 0: observable but inert
+            # (no consumer yet). Phase 1A reads thread_id to scope
+            # analysis://<thread_id>; Phase 2 reads stage for tool gating.
+            "thread_id": thread_id,
+            "stage": stage,
+            # ADR 0009 — surface-initiated cancel propagates through
+            # this dict into per-tool executors that forward it to
+            # skill.runner.run_skill(cancel_event=...).
+            "cancel_event": cancel_event,
+            # RET-05: the exact candidate plan digest is enforced by a
+            # pre-execution hook before any ``omicsclaw`` executor runs.
+            "candidate_chain_gate": dict(candidate_chain_gate or {}),
+            "tool_result_root": str(
+                getattr(deps.tool_result_store, "storage_dir", "") or ""
+            ),
+            # Process-local capability. It is never serialized or rebuilt
+            # from a Receipt; canonical submission remains RunRuntime-owned.
+            "run_runtime": run_runtime,
+        },
+        request_tools=request_tools,
+    )
+
+    if planned_tool_calls:
+        planned = await run_planned_tool_calls(
+            calls=planned_tool_calls,
+            context=query_context,
+            tool_runtime=deps.tool_runtime,
+            transcript_store=transcript_store,
+            tool_result_store=deps.tool_result_store,
+            callbacks=callbacks,
+        )
+        if planned.interruption_message:
+            final_text = planned.interruption_message
+        elif planned.execution_results:
+            final_text = "\n\n".join(
+                str(result.output) for result in planned.execution_results
+            )
+        else:
+            final_text = "No planned analysis call was executed."
+
+        defer = getattr(transcript_store, "defer_terminal_message", None)
+        if callable(defer):
+            defer(chat_id, content=final_text)
+        else:
+            transcript_store.append_assistant_message(chat_id, content=final_text)
+        return final_text
+
     return await run_query_engine(
         llm=deps.llm,
-        context=QueryEngineContext(
-            chat_id=chat_id,
-            session_id=chat_context.session_id,
-            system_prompt=system_prompt,
-            user_message_content=_prepend_user_turn_context(
-                chat_context.user_message_content, user_turn_context
-            ),
-            stored_user_content=(
-                _prepend_user_turn_context(
-                    assembled_stored_user_content,
-                    user_turn_context,
-                )
-                if assembled_stored_user_content is not None
-                else None
-            ),
-            content_adapter=content_adapter,
-            surface=surface,
-            policy_state=resolved_policy_state,
-            hook_runtime=hook_runtime,
-            tool_runtime_context={
-                "omicsclaw_dir": deps.omicsclaw_dir,
-                "workspace": workspace,
-                "pipeline_workspace": pipeline_workspace,
-                # Bench (ADR 0018/0020) — investigation-thread id + stage lens
-                # ride into per-tool executors. Phase 0: observable but inert
-                # (no consumer yet). Phase 1A reads thread_id to scope
-                # analysis://<thread_id>; Phase 2 reads stage for tool gating.
-                "thread_id": thread_id,
-                "stage": stage,
-                # ADR 0009 — surface-initiated cancel propagates through
-                # this dict into per-tool executors that forward it to
-                # skill.runner.run_skill(cancel_event=...).
-                "cancel_event": cancel_event,
-                # RET-05: the exact candidate plan digest is enforced by a
-                # pre-execution hook before any ``omicsclaw`` executor runs.
-                "candidate_chain_gate": dict(candidate_chain_gate or {}),
-            },
-            request_tools=request_tools,
-        ),
+        context=query_context,
         tool_runtime=deps.tool_runtime,
         transcript_store=transcript_store,
         tool_result_store=deps.tool_result_store,

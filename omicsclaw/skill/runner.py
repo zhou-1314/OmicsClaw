@@ -6,7 +6,7 @@ during OMI-12 P1.4:
 
 - ``runtime.argv_builder``    — argv + filtered LLM-supplied flags
 - ``runtime.subprocess_driver`` — Popen + reaper + cancel + log streaming
-- ``runtime.output_finalize`` — rename, README, reproducibility notebook
+- ``runtime.output_finalize`` — rename, README, Skill replay capsule
 - ``runtime.pipeline_runner`` — ``spatial-pipeline`` chain
 
 The repository-root ``omicsclaw.py`` file remains the CLI wrapper, but any
@@ -859,11 +859,11 @@ def _finalize_skill_run(
     final_out_dir = prepared.out_dir
     actual_method = prepared.requested_method
     readme_path = ""
-    notebook_path = ""
+    replay_path = ""
     if proc.returncode == 0:
         # Process success is necessary but insufficient.  Verify the subset of
         # ``skill.yaml`` outputs that are true guarantees before generating a
-        # success README/notebook or marking the Project Run completed.
+        # success README/replay capsule or marking the Project Run completed.
         contract_error_kind = "contract_failure"
         try:
             contract_report = verify_skill_run_outputs(
@@ -936,19 +936,12 @@ def _finalize_skill_run(
             )
             return result
 
-        user_command = build_user_run_command(
-            skill_name=prepared.skill_name,
-            demo=prepared.demo,
-            input_path=prepared.resolved_input,
-            output_dir=prepared.out_dir,
-            forwarded_args=prepared.filtered_extra_args,
-        )
         try:
             (
                 final_out_dir,
                 actual_method,
                 readme_path,
-                notebook_path,
+                replay_path,
                 _,
             ) = finalize_output_directory(
                 prepared.out_dir,
@@ -957,7 +950,16 @@ def _finalize_skill_run(
                 timestamp=prepared.generated_ts,
                 user_supplied_output_dir=prepared.user_supplied_output_dir,
                 preferred_method=prepared.requested_method,
-                actual_command=user_command,
+                audit_identity=_prepared_audit_identity(prepared),
+                runtime_source=prepared.runtime_source,
+                demo=prepared.demo,
+                input_paths=(
+                    []
+                    if prepared.demo
+                    else prepared.resolved_input_paths
+                    or ([prepared.resolved_input] if prepared.resolved_input else [])
+                ),
+                forwarded_args=prepared.filtered_extra_args,
             )
         except Exception as exc:
             if not _prepared_revision_is_current(prepared):
@@ -1020,7 +1022,7 @@ def _finalize_skill_run(
         duration_seconds=duration,
         method=actual_method,
         readme_path=readme_path,
-        notebook_path=notebook_path,
+        replay_path=replay_path,
         runtime_source=prepared.runtime_source,
         audit_identity=_prepared_audit_identity(prepared),
     )

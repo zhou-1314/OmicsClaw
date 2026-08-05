@@ -92,6 +92,7 @@ SHARED_PUBLIC_PARAM_KEYS = (
     "n_pcs",
     "remove_doublets",
     "doublet_score_threshold",
+    "preserve_var_names",
 )
 METHOD_SPECIFIC_PARAM_KEYS: dict[str, tuple[str, ...]] = {
     "scanpy": ("normalization_target_sum", "scanpy_hvg_flavor"),
@@ -111,6 +112,7 @@ METHOD_PARAM_DEFAULTS: dict[str, dict[str, object]] = {
         "normalization_target_sum": 10000.0,
         "remove_doublets": True,
         "doublet_score_threshold": 0.25,
+        "preserve_var_names": False,
     },
     "seurat": {
         "method": "seurat",
@@ -124,6 +126,7 @@ METHOD_PARAM_DEFAULTS: dict[str, dict[str, object]] = {
         "seurat_hvg_method": "vst",
         "remove_doublets": True,
         "doublet_score_threshold": 0.25,
+        "preserve_var_names": False,
     },
     "sctransform": {
         "method": "sctransform",
@@ -135,6 +138,7 @@ METHOD_PARAM_DEFAULTS: dict[str, dict[str, object]] = {
         "sctransform_regress_mt": True,
         "remove_doublets": True,
         "doublet_score_threshold": 0.25,
+        "preserve_var_names": False,
     },
     "pearson_residuals": {
         "method": "pearson_residuals",
@@ -147,6 +151,7 @@ METHOD_PARAM_DEFAULTS: dict[str, dict[str, object]] = {
         "pearson_theta": 100.0,
         "remove_doublets": True,
         "doublet_score_threshold": 0.25,
+        "preserve_var_names": False,
     },
 }
 
@@ -328,7 +333,12 @@ def run_seurat_preprocessing(
     sctransform_regress_mt: bool = True,
 ):
     """Run the Seurat / SCTransform preprocessing backend via the shared R script."""
-    required_packages = ["Seurat", "SingleCellExperiment", "zellkonverter"]
+    required_packages = [
+        "Seurat",
+        "SingleCellExperiment",
+        "zellkonverter",
+        "rhdf5",
+    ]
     if workflow == "sctransform":
         required_packages.append("sctransform")
     validate_r_environment(required_r_packages=required_packages)
@@ -486,6 +496,11 @@ def prepare_preprocessing_input(
     effective_params: dict,
 ):
     """Canonicalize the input and run shared QC/filter steps before backend-specific normalization."""
+    original_var_names = pd.Index(
+        [str(value) for value in adata.var_names],
+        dtype="object",
+        name=adata.var_names.name,
+    )
     species = infer_qc_species(adata)
     canonical_adata, prepared_input, input_contract = canonicalize_singlecell_adata(
         adata,
@@ -502,6 +517,15 @@ def prepare_preprocessing_input(
         species=species,
         inplace=True,
     )
+    if bool(effective_params.get("preserve_var_names", False)):
+        if not original_var_names.is_unique:
+            raise ValueError(
+                "--preserve-var-names requires unique input feature identifiers"
+            )
+        if len(original_var_names) != canonical_adata.n_vars:
+            raise ValueError("feature axis changed during input canonicalization")
+        canonical_adata.var_names = original_var_names
+        canonical_adata.uns["omicsclaw_input_contract"]["preserved_var_names"] = True
     filtered_adata, filter_summary, filter_params = sc_qc_utils.apply_threshold_filtering(
         canonical_adata,
         min_genes=int(effective_params["min_genes"]),
@@ -982,6 +1006,12 @@ def main():
                              "columns from sc-doublet-detection are present)")
     parser.add_argument("--doublet-score-threshold", type=float, default=None,
                         help="Score cutoff for doublet removal when only doublet_score is available (default: 0.25)")
+    parser.add_argument(
+        "--preserve-var-names",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Preserve the input feature axis after QC-name canonicalization.",
+    )
     parser.add_argument("--r-enhanced", action="store_true", default=False, help="Generate R-enhanced figures via ggplot2 renderers")
     parser.add_argument(
         "--confirmed-preflight",
