@@ -5,7 +5,8 @@
 Accepted (2026-08-04).
 
 Implementation: Implemented for shared-runner output generation, canonical
-exact-demo replay, CLI/Agent output projection, and fresh-result verification.
+exact-demo replay, CLI/Agent output projection, Desktop path-free Run-ID replay,
+and fresh-result verification.
 Option-bearing and mapped-input replay retain the existing shared-runner
 Adapter until those invocation families migrate to canonical `RunRuntime`.
 
@@ -75,9 +76,14 @@ but must not claim a canonical Control Run ID.
 
 Replay never overwrites the source output, resumes an interrupted Run, mutates
 a terminal Receipt or reconstructs executable work during restart. Automatic
-recovery remains prohibited by ADR 0057. A future replay/retry relation may be
-recorded as new-Run provenance, but cannot turn the original Receipt into
-replay authority.
+recovery remains prohibited by ADR 0057. The Desktop exact-demo command names
+only the opaque source Run ID; the Backend resolves its verified terminal
+Capsule, creates the fresh Run through the same `RunRuntime`, and records the
+source as `retry_of_run_id`. That relation enters the Run Request Fingerprint,
+so an Idempotency-Key reused for another source conflicts instead of silently
+replaying it. The wire result exposes only Skill ID, fresh Run ID, stable
+verification status/code and mismatch codes—never local output/Capsule paths.
+The original Receipt remains evidence, not executable replay authority.
 
 ### Keep real notebooks where code is genuinely authored
 

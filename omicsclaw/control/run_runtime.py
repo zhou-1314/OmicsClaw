@@ -840,6 +840,7 @@ class RunRuntime:
         run_submission_id: str,
         skill_id: str,
         scope: RunScope | None = None,
+        retry_of_run_id: str | None = None,
     ) -> SimpleSkillRunSubmission:
         """Resolve one CLI-style demo intent through Backend Skill authority.
 
@@ -854,6 +855,7 @@ class RunRuntime:
             scope=UnassignedScope() if scope is None else scope,
             skill_id=resolved.skill_id,
             resource_request=resolved.resource_request,
+            retry_of_run_id=retry_of_run_id,
         )
 
     def resolve_cli_navigation_scope(
@@ -2122,7 +2124,7 @@ class RunRuntime:
             scope_kind=submission.scope.kind,
             project_id=submission.scope.project_id,
             parent_turn_id=None,
-            retry_of_run_id=None,
+            retry_of_run_id=submission.retry_of_run_id,
             manifest_ref=manifest_ref,
         )
 

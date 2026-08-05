@@ -99,3 +99,18 @@ def test_resource_semantics_are_part_of_the_fingerprint() -> None:
         canonical_run_fingerprint(_submission())[1]
         != canonical_run_fingerprint(_submission(resource_request=larger))[1]
     )
+
+
+def test_retry_provenance_is_typed_and_part_of_the_fingerprint() -> None:
+    source_run_id = "a" * 32
+    replay = _submission(retry_of_run_id=source_run_id)
+
+    assert replay.retry_of_run_id == source_run_id
+    assert replay.fingerprint_document()["retry_of_run_id"] == source_run_id
+    assert (
+        canonical_run_fingerprint(replay)[1]
+        != canonical_run_fingerprint(_submission())[1]
+    )
+
+    with pytest.raises(ValueError, match="Retry Run ID"):
+        _submission(retry_of_run_id="source/output/replay.json")

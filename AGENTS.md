@@ -372,6 +372,11 @@ milestones rather than duplicating logic.
 - `GET /v1/runs/{run_id}` is pure Receipt observation and
   `POST /v1/runs/{run_id}/cancel` is the only Desktop cancel command. Neither
   observation nor legacy Job SSE may enqueue, lease, assign or resume a Run.
+- `POST /v1/runs/{run_id}/replay` is the explicit path-free Desktop replay
+  command. It resolves a successful source Run's Capsule behind `RunRuntime`,
+  creates a fresh Unassigned Run with `retry_of_run_id`, verifies both Capsules,
+  and returns no local path. Its 32-hex `Idempotency-Key` is the new Run
+  Submission ID; observation never starts replay.
 - `GET /v1/run-integrity-incidents` is the bounded, content-free audit
   Interface. It may filter by opaque Run ID and page by opaque Incident ID,
   including while recovery quarantine is active, but must never read a

@@ -79,6 +79,7 @@ class SimpleSkillRunSubmission:
     scope: RunScope
     skill_id: str
     resource_request: ExecutionResourceRequest
+    retry_of_run_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_opaque_id(self.run_submission_id, "Run Submission ID")
@@ -90,6 +91,8 @@ class SimpleSkillRunSubmission:
             raise ValueError("skill_id must be a canonical Skill identifier")
         if not isinstance(self.resource_request, ExecutionResourceRequest):
             raise ValueError("resource_request must be complete")
+        if self.retry_of_run_id is not None:
+            _require_opaque_id(self.retry_of_run_id, "Retry Run ID")
 
     @property
     def run_kind(self) -> str:
@@ -113,7 +116,7 @@ class SimpleSkillRunSubmission:
             "run_kind": self.run_kind,
             "scope": self.scope.to_dict(),
             "parent_turn_id": None,
-            "retry_of_run_id": None,
+            "retry_of_run_id": self.retry_of_run_id,
             "inputs": self.inputs,
             "parameters": self.parameters,
             "resource_contract": self.resource_contract,

@@ -701,8 +701,16 @@ def test_mcp_runtime_rejects_control_credential_interpolation(
 
 
 def test_assemble_chat_context_forwards_knowledge_guidance_into_message_context(monkeypatch):
-    monkeypatch.setattr(
-        "omicsclaw.runtime.context.layers.load_knowledge_guidance",
+    # Bind the loader in the exact injector module captured at collection.
+    # Some legacy tests reload ``layers``; patching by import string can then
+    # target a replacement module while this assembler retains the original.
+    injectors = assemble_prompt_context.__globals__["get_default_context_injectors"]()
+    knowledge_injector = next(
+        injector for injector in injectors if injector.name == "knowledge_guidance"
+    )
+    monkeypatch.setitem(
+        knowledge_injector.builder.__globals__,
+        "load_knowledge_guidance",
         lambda **_: "## Preloaded Knowledge Guidance\n\nPrefer Harmony for batch correction.",
     )
 
@@ -712,6 +720,7 @@ def test_assemble_chat_context_forwards_knowledge_guidance_into_message_context(
             user_content="Which method should I use for batch correction?",
             user_id="user-knowledge",
             platform="cli",
+            context_injectors=injectors,
         )
     )
 

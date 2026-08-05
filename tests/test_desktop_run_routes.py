@@ -26,12 +26,14 @@ from omicsclaw.surfaces.desktop.run_wire import (
     DESKTOP_RUN_MAX_JSON_NESTING,
     DESKTOP_RUN_MAX_REQUEST_BYTES,
     DesktopRunIntegrityIncidentPageV1,
+    DesktopRunReplayResultV1,
     DesktopRunSubmissionV1,
     DesktopRunWireError,
     decode_desktop_run_submission,
     desktop_run_integrity_incident_page_v1,
     desktop_run_receipt_v1,
 )
+from omicsclaw.skill.replay import SkillReplayResult, SkillReplaySourceError
 
 
 @pytest.fixture
@@ -175,6 +177,26 @@ def test_run_integrity_incident_wire_is_closed_and_content_free() -> None:
         )
 
 
+def test_run_replay_wire_is_closed_and_never_exposes_local_paths() -> None:
+    wire = DesktopRunReplayResultV1(
+        schema_version=1,
+        source_run_id="a" * 32,
+        run_id="b" * 32,
+        skill="genomics-vcf-operations",
+        success=True,
+        verified=True,
+        code="",
+        mismatches=[],
+    )
+
+    assert "output_dir" not in wire.model_dump(mode="json")
+    assert "replay_path" not in wire.model_dump(mode="json")
+    with pytest.raises(ValidationError):
+        DesktopRunReplayResultV1.model_validate(
+            {**wire.model_dump(mode="json"), "replay_path": "/private/replay.json"}
+        )
+
+
 @pytest.mark.asyncio
 async def test_v1_run_routes_are_typed_idempotent_read_only_and_cancelable(
     monkeypatch,
@@ -244,6 +266,139 @@ async def test_v1_run_routes_are_typed_idempotent_read_only_and_cancelable(
     assert runtime.submit_calls == 2
     assert runtime.get_calls == 1
     assert runtime.cancel_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_v1_run_replay_uses_opaque_source_and_returns_verified_fresh_run(
+    monkeypatch,
+    desktop_remote_authority,
+) -> None:
+    from omicsclaw.surfaces.desktop import server
+
+    class FakeRuntime:
+        lifecycle_ready = True
+
+    runtime = FakeRuntime()
+    observed: dict[str, object] = {}
+
+    async def replay(source_run_id, *, run_runtime, run_submission_id):
+        observed.update(
+            source_run_id=source_run_id,
+            run_runtime=run_runtime,
+            run_submission_id=run_submission_id,
+        )
+        return SkillReplayResult(
+            skill="genomics-vcf-operations",
+            success=True,
+            verified=True,
+            source_run_id=source_run_id,
+            run_id="b" * 32,
+            output_dir="/private/output",
+            replay_path="/private/output/reproducibility/replay.json",
+        )
+
+    monkeypatch.setattr(server, "_desktop_run_runtime", runtime)
+    monkeypatch.setattr(server, "replay_simple_skill_demo_run", replay)
+    monkeypatch.setenv("OMICSCLAW_REMOTE_AUTH_TOKEN", "secret-token")
+    headers = {
+        "Authorization": "Bearer secret-token",
+        "Idempotency-Key": "c" * 32,
+    }
+    transport = httpx.ASGITransport(app=server.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/v1/runs/" + "a" * 32 + "/replay", headers=headers)
+
+    assert response.status_code == 200
+    assert response.headers["location"] == "/v1/runs/" + "b" * 32
+    assert response.json() == {
+        "schema_version": 1,
+        "source_run_id": "a" * 32,
+        "run_id": "b" * 32,
+        "skill": "genomics-vcf-operations",
+        "success": True,
+        "verified": True,
+        "code": "",
+        "mismatches": [],
+    }
+    assert observed == {
+        "source_run_id": "a" * 32,
+        "run_runtime": runtime,
+        "run_submission_id": "c" * 32,
+    }
+
+
+@pytest.mark.asyncio
+async def test_v1_run_replay_maps_missing_source_without_starting_work(
+    monkeypatch,
+    desktop_remote_authority,
+) -> None:
+    from omicsclaw.surfaces.desktop import server
+
+    class FakeRuntime:
+        lifecycle_ready = True
+
+    async def replay(*_args, **_kwargs):
+        raise SkillReplaySourceError("source_run_not_found")
+
+    monkeypatch.setattr(server, "_desktop_run_runtime", FakeRuntime())
+    monkeypatch.setattr(server, "replay_simple_skill_demo_run", replay)
+    monkeypatch.setenv("OMICSCLAW_REMOTE_AUTH_TOKEN", "secret-token")
+    transport = httpx.ASGITransport(app=server.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/runs/" + "a" * 32 + "/replay",
+            headers={
+                "Authorization": "Bearer secret-token",
+                "Idempotency-Key": "c" * 32,
+            },
+        )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "source_run_not_found"}
+
+
+@pytest.mark.asyncio
+async def test_v1_run_replay_rejects_invalid_source_and_idempotency_conflict(
+    monkeypatch,
+    desktop_remote_authority,
+) -> None:
+    from omicsclaw.surfaces.desktop import server
+
+    class FakeRuntime:
+        lifecycle_ready = True
+
+    calls = 0
+
+    async def replay(source_run_id, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return SkillReplayResult(
+            skill="genomics-vcf-operations",
+            success=False,
+            verified=False,
+            source_run_id=source_run_id,
+            code="run_idempotency_conflict",
+        )
+
+    monkeypatch.setattr(server, "_desktop_run_runtime", FakeRuntime())
+    monkeypatch.setattr(server, "replay_simple_skill_demo_run", replay)
+    monkeypatch.setenv("OMICSCLAW_REMOTE_AUTH_TOKEN", "secret-token")
+    transport = httpx.ASGITransport(app=server.app)
+    headers = {
+        "Authorization": "Bearer secret-token",
+        "Idempotency-Key": "c" * 32,
+    }
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        invalid = await client.post("/v1/runs/not-a-run/replay", headers=headers)
+        conflict = await client.post(
+            "/v1/runs/" + "a" * 32 + "/replay",
+            headers=headers,
+        )
+
+    assert invalid.status_code == 404
+    assert conflict.status_code == 409
+    assert conflict.json() == {"detail": "run_idempotency_conflict"}
+    assert calls == 1
 
 
 @pytest.mark.asyncio
@@ -335,6 +490,20 @@ def test_v1_run_openapi_and_health_contract_are_versioned() -> None:
     assert "schema_version" in request_schema["required"]
     assert "$defs" in request_schema
     assert "/runs/{run_id}" not in server.app.openapi()["paths"]
+    replay_route = next(
+        item
+        for item in server.app.routes
+        if isinstance(item, APIRoute)
+        and item.path == "/v1/runs/{run_id}/replay"
+        and "POST" in item.methods
+    )
+    assert any(
+        dependency.call is require_bearer_token
+        for dependency in replay_route.dependant.dependencies
+    )
+    assert {"200", "401", "404", "409", "422", "503"} <= set(
+        server.app.openapi()["paths"]["/v1/runs/{run_id}/replay"]["post"]["responses"]
+    )
     incident_route = next(
         item
         for item in server.app.routes
@@ -361,6 +530,7 @@ def test_v1_run_openapi_and_health_contract_are_versioned() -> None:
         "submission_path": "/v1/runs",
         "receipt_path": "/v1/runs/{run_id}",
         "cancel_path": "/v1/runs/{run_id}/cancel",
+        "replay_path": "/v1/runs/{run_id}/replay",
         "integrity_incident_observation_schema_version": 1,
         "integrity_incident_list_path": "/v1/run-integrity-incidents",
         "max_integrity_incident_page_size": 100,
@@ -376,6 +546,8 @@ def test_v1_run_openapi_and_health_contract_are_versioned() -> None:
         "request_read_timeout_seconds": 60,
         "events_supported": False,
         "observation_starts_work": False,
+        "replay_uses_source_run_id": True,
+        "replay_exposes_local_paths": False,
     }
 
 

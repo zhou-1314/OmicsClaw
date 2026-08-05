@@ -115,6 +115,7 @@ def test_demo_result_json(demo_output):
     assert data["data"]["visualization"]["cluster_mean_speed_column"] == "velocity_cluster_mean_speed"
 
 
+@pytest.mark.demo
 def test_deterministic_custom_flags_are_recorded(tmp_output):
     """Deterministic runs should honor and report the new scVelo controls."""
     out = tmp_output.parent / "velocity_deterministic"

@@ -123,9 +123,16 @@ def bot_core(monkeypatch):
         sys.modules["openai"].AsyncOpenAI = _FakeAsyncOpenAI  # type: ignore[attr-defined]
         sys.modules["openai"].APIError = _FakeAPIError  # type: ignore[attr-defined]
     try:
-        return importlib.import_module("omicsclaw.runtime.agent.state")
+        state = importlib.import_module("omicsclaw.runtime.agent.state")
     except ImportError as exc:
         pytest.skip(f"omicsclaw.runtime.agent.state unavailable in this environment: {exc}")
+    builtins = importlib.import_module(
+        "omicsclaw.surfaces.channels.commands.builtins"
+    )
+    store = TranscriptStore(sanitizer=sanitize_tool_history)
+    monkeypatch.setattr(state, "transcript_store", store)
+    monkeypatch.setattr(builtins, "transcript_store", store)
+    return state
 
 
 def test_compact_slash_replaces_history_with_summary_and_tail(bot_core):

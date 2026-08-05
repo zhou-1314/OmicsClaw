@@ -128,12 +128,17 @@ from omicsclaw.surfaces.desktop.run_wire import (
     DesktopRunCancelResultV1,
     DesktopRunIntegrityIncidentPageV1,
     DesktopRunReceiptV1,
+    DesktopRunReplayResultV1,
     DesktopRunSubmissionV1,
     DesktopRunWireError,
     decode_desktop_run_submission,
     desktop_run_integrity_incident_page_v1,
     desktop_run_receipt_from_record,
     desktop_run_receipt_v1,
+)
+from omicsclaw.skill.replay import (
+    SkillReplaySourceError,
+    replay_simple_skill_demo_run,
 )
 from omicsclaw.surfaces.desktop.title_generation import (
     TitleFailure,
@@ -3818,6 +3823,66 @@ async def get_run_receipt_v1(run_id: str):
     except (KeyError, ValueError) as exc:
         raise HTTPException(404, detail="Run not found") from exc
     return desktop_run_receipt_v1(observation).model_dump(mode="python")
+
+
+@app.post(
+    "/v1/runs/{run_id}/replay",
+    dependencies=[Depends(require_bearer_token)],
+    response_model=DesktopRunReplayResultV1,
+    responses={
+        401: {"description": "Bearer authentication failed when configured."},
+        404: {"description": "Source Run not found."},
+        409: {"description": "Source Run or replay evidence is not eligible."},
+        422: {"description": "Idempotency key is malformed."},
+        503: {"description": "Authoritative Run runtime is unavailable."},
+    },
+)
+async def replay_run_v1(
+    run_id: str,
+    request: Request,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+):
+    """Create and verify a fresh demo Run from Backend-owned source evidence."""
+
+    if re.fullmatch(r"[0-9a-f]{32}", run_id) is None:
+        raise HTTPException(404, detail="source_run_not_found")
+    header_keys = request.headers.getlist("idempotency-key")
+    if len(header_keys) != 1 or idempotency_key != header_keys[0]:
+        raise HTTPException(422, detail="exactly one Idempotency-Key is required")
+    run_submission_id = _require_desktop_idempotency_key(idempotency_key)
+    try:
+        result = await replay_simple_skill_demo_run(
+            run_id,
+            run_runtime=_desktop_run_runtime_required(),
+            run_submission_id=run_submission_id,
+        )
+    except SkillReplaySourceError as exc:
+        if exc.code == "source_run_not_found":
+            raise HTTPException(404, detail=exc.code) from exc
+        if exc.code == "skill_revision_unavailable":
+            raise HTTPException(503, detail=exc.code) from exc
+        raise HTTPException(409, detail=exc.code) from exc
+    except Exception as exc:
+        raise HTTPException(503, detail="replay_unavailable") from exc
+
+    if result.code == "run_idempotency_conflict":
+        raise HTTPException(409, detail=result.code)
+
+    payload = DesktopRunReplayResultV1(
+        schema_version=1,
+        source_run_id=result.source_run_id,
+        run_id=result.run_id,
+        skill=result.skill,
+        success=result.success,
+        verified=result.verified,
+        code=result.code,
+        mismatches=list(result.mismatches),
+    )
+    headers = {"Location": f"/v1/runs/{result.run_id}"} if result.run_id else None
+    return JSONResponse(
+        payload.model_dump(mode="python"),
+        headers=headers,
+    )
 
 
 @app.post(

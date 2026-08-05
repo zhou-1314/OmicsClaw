@@ -320,7 +320,10 @@ def test_app_server_mounts_native_notebook_routes():
 
     from omicsclaw.surfaces.desktop import server
 
-    route_paths = {getattr(route, "path", "") for route in server.app.routes}
+    # FastAPI 0.116+ retains included routers as nested route nodes instead of
+    # flattening every child into ``app.routes``.  OpenAPI is the stable public
+    # route inventory across both representations.
+    route_paths = set(server.app.openapi()["paths"])
 
     assert "/notebook/kernel/start" in route_paths
     assert "/notebook/kernel/stop" in route_paths

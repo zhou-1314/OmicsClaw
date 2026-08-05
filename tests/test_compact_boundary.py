@@ -58,7 +58,7 @@ class TestWrapAndDetect:
 
 
 @pytest.fixture
-def bot_core():
+def bot_core(monkeypatch):
     if "httpx" not in sys.modules:
         httpx_stub = types.ModuleType("httpx")
 
@@ -84,9 +84,16 @@ def bot_core():
         sys.modules["openai"].AsyncOpenAI = _FakeAsyncOpenAI  # type: ignore[attr-defined]
         sys.modules["openai"].APIError = _FakeAPIError  # type: ignore[attr-defined]
     try:
-        return importlib.import_module("omicsclaw.runtime.agent.state")
+        state = importlib.import_module("omicsclaw.runtime.agent.state")
     except ImportError as exc:
         pytest.skip(f"omicsclaw.runtime.agent.state unavailable: {exc}")
+    builtins = importlib.import_module(
+        "omicsclaw.surfaces.channels.commands.builtins"
+    )
+    store = TranscriptStore(sanitizer=sanitize_tool_history)
+    monkeypatch.setattr(state, "transcript_store", store)
+    monkeypatch.setattr(builtins, "transcript_store", store)
+    return state
 
 
 def _seed_long_history(store: TranscriptStore, chat_id: str, *, turns: int = 10) -> None:

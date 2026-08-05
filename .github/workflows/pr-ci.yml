@@ -152,6 +152,13 @@ jobs:
             tests/test_registry_skills_snapshot.py \
             -v
 
+      - name: Published run-derived lifecycle canary
+        run: |
+          python -m pytest \
+            tests/test_published_skill_lifecycle_canary.py \
+            tests/test_skill_replay.py \
+            -v
+
       - name: v2 lint + parameters.md generator tests (dual-track)
         run: python -m pytest tests/test_skill_lint_v2.py tests/test_generate_parameters_md.py -v
 
@@ -245,6 +252,7 @@ jobs:
             tests/test_interactive_memory_command_support.py \
             tests/test_memory_server_security.py \
             tests/test_desktop_skill_evolution.py \
+            tests/test_desktop_run_routes.py \
             tests/test_scoped_memory.py \
             -v
 

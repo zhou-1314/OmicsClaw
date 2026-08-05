@@ -738,7 +738,11 @@ def test_command_protocol_keyboard_interrupt_stops_process_group(tmp_path, monke
         with pytest.raises(KeyboardInterrupt):
             _run_protocol_entry(
                 skill_dir,
-                {"entry": "tests/entry.py", "runner": "command"},
+                {
+                    "entry": "tests/entry.py",
+                    "runner": "command",
+                    "dataset_access_mode": "digest-guard-v1",
+                },
                 output_dir=tmp_path / "output",
             )
     finally:

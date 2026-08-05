@@ -303,6 +303,27 @@ class DesktopRunCancelResultV1(_StrictWireModel):
     receipt: DesktopRunReceiptV1
 
 
+class DesktopRunReplayResultV1(_StrictWireModel):
+    """Path-free result of one Backend-resolved canonical replay command."""
+
+    schema_version: Literal[1]
+    source_run_id: str = Field(pattern=r"^[0-9a-f]{32}$", max_length=32)
+    run_id: str = Field(default="", pattern=r"^(?:[0-9a-f]{32})?$", max_length=32)
+    skill: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[a-z0-9][a-z0-9_-]{0,127}$",
+    )
+    success: bool
+    verified: bool
+    code: str = Field(
+        default="",
+        max_length=128,
+        pattern=r"^(?:[a-z][a-z0-9_]{0,127})?$",
+    )
+    mismatches: list[str] = Field(default_factory=list, max_length=64)
+
+
 class DesktopRunIntegrityIncidentV1(_StrictWireModel):
     incident_id: str = Field(pattern=r"^[0-9a-f]{32}$", max_length=32)
     run_id: str = Field(pattern=r"^[0-9a-f]{32}$", max_length=32)
@@ -401,6 +422,7 @@ __all__ = [
     "DesktopRunIntegrityIncidentPageV1",
     "DesktopRunIntegrityIncidentV1",
     "DesktopRunReceiptV1",
+    "DesktopRunReplayResultV1",
     "DesktopRunSubmissionV1",
     "DesktopRunWireError",
     "decode_desktop_run_submission",

@@ -110,6 +110,7 @@ def desktop_run_contract() -> dict[str, int | bool | str]:
         "submission_path": "/v1/runs",
         "receipt_path": "/v1/runs/{run_id}",
         "cancel_path": "/v1/runs/{run_id}/cancel",
+        "replay_path": "/v1/runs/{run_id}/replay",
         "integrity_incident_observation_schema_version": (
             DESKTOP_RUN_INTEGRITY_INCIDENT_SCHEMA_VERSION
         ),
@@ -127,6 +128,8 @@ def desktop_run_contract() -> dict[str, int | bool | str]:
         "request_read_timeout_seconds": DESKTOP_RUN_READ_TIMEOUT_SECONDS,
         "events_supported": False,
         "observation_starts_work": False,
+        "replay_uses_source_run_id": True,
+        "replay_exposes_local_paths": False,
     }
 
 

@@ -24,6 +24,7 @@ async def execute_simple_skill_demo(
     run_runtime: RunRuntime,
     submission_id_factory: Callable[[], str] | None = None,
     scope: RunScope | None = None,
+    retry_of_run_id: str | None = None,
     confirm_task_cancellation: bool = False,
 ) -> dict[str, Any]:
     """Submit and observe one canonical demo without a legacy fallback."""
@@ -34,6 +35,7 @@ async def execute_simple_skill_demo(
             run_submission_id=create_submission_id(),
             skill_id=skill,
             scope=scope,
+            retry_of_run_id=retry_of_run_id,
         )
         submitted = await run_runtime.submit(submission)
     except RunAdmissionError as exc:
