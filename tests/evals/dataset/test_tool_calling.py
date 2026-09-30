@@ -51,7 +51,7 @@ CASES = [
         _write_then_read,
         ToolCalled("write_file"),
         ToolCalled("read_file"),
-        ToolResultContains("read_file", "Visium"),
+        ToolResultContains("read_file", "Visium-DELIBERATELY-BROKEN"),
         NoError(),
     ),
     seed(
