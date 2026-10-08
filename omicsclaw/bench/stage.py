@@ -33,8 +33,10 @@ def stage(run: RunSpec, campaign: Campaign) -> RunPaths:
     modification time.
 
     :returns: The run's paths.
-    :raises StageError: The case has no ``public/`` directory, or the
-        workspace or ``meta`` directory already exists.
+    :raises StageError: The case has no ``public/`` directory, a file in
+        it cannot be copied (a link whose target is missing, for one), or
+        the workspace or ``meta`` directory already exists. A workspace
+        that was only partly copied is removed.
     """
     paths = campaign.paths(run)
     public = campaign.public(run.case)
@@ -45,7 +47,13 @@ def stage(run: RunSpec, campaign: Campaign) -> RunPaths:
             raise StageError(f"{existing} already exists; set it aside first")
 
     paths.workspace.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(public, paths.workspace, symlinks=False)
+    try:
+        shutil.copytree(public, paths.workspace, symlinks=False)
+    except (shutil.Error, OSError) as exc:
+        shutil.rmtree(paths.workspace, ignore_errors=True)
+        raise StageError(
+            f"case {run.case.id!r}: cannot copy {public}: {_copy_failure(exc)}"
+        ) from exc
     for deliverable in run.case.deliverables:
         (paths.workspace / deliverable).parent.mkdir(parents=True, exist_ok=True)
 
@@ -87,6 +95,14 @@ def set_aside(paths: RunPaths, label: str) -> str | None:
     for path in present:
         os.replace(path, _aside(path, label, index))
     return f"{label}{index}"
+
+
+def _copy_failure(error: Exception) -> str:
+    """The files :func:`shutil.copytree` could not copy, and why, in one line."""
+    failures = error.args[0] if isinstance(error, shutil.Error) else None
+    if not isinstance(failures, list):
+        return str(error)
+    return "; ".join(f"{source}: {reason}" for source, _, reason in failures)
 
 
 def _aside(path: Path, label: str, index: int) -> Path:

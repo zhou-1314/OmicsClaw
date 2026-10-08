@@ -169,13 +169,13 @@ def self_check(grader: Grader) -> list[str]:
                 deliverables=delivered,
             )
             try:
-                verdict = grader.grade(submission, oracle).passed
+                verdict = bool(grader.grade(submission, oracle).passed)
             except Exception as exc:  # noqa: BLE001 - reported as a problem
                 problems.append(
                     f"control {control.name!r} raised {type(exc).__name__}: {exc}"
                 )
                 continue
-        if verdict is not control.expect_pass:
+        if verdict != control.expect_pass:
             expected = "pass" if control.expect_pass else "fail"
             got = "passed" if verdict else "failed"
             problems.append(f"control {control.name!r} must {expected} but {got}")
@@ -241,10 +241,15 @@ def grade_campaign(
     ``grader_error``. Runs that ended on a timeout or a turn limit are
     graded when their deliverables exist; the row keeps their outcome.
 
-    :raises GraderError: A grader failed its controls, or a case to be
-        graded has no ``oracle/`` directory. Nothing is written.
+    :raises GraderError: Nothing has been run under the output root, a
+        grader failed its controls, or a case to be graded has no
+        ``oracle/`` directory. Nothing is written.
     :raises ManifestError: A grader or adapter cannot be loaded.
     """
+    if not campaign.meta.is_dir():
+        raise GraderError(
+            f"nothing has been run under {campaign.out}; run the campaign first"
+        )
     graders: dict[str, Grader] = {}
     for case in manifest.cases:
         if not case.grader or case.grader in graders:

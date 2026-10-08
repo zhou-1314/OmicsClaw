@@ -87,8 +87,8 @@ def tool(span_id, parent, name, *, status="ok", error="", arguments=""):
     return span("tool", span_id, parent, error, **attributes)
 
 
-def interaction(stop_reason="converged", turns=1, error=""):
-    attributes = {"agent.type": "main", "session.id": "s1"}
+def interaction(stop_reason="converged", turns=1, error="", agent="main"):
+    attributes = {"agent.type": agent, "session.id": "s1"}
     if stop_reason:
         attributes.update({"agent.stop_reason": stop_reason, "agent.turns": turns})
     return span("interaction", "root", "", error, **attributes)
@@ -551,6 +551,28 @@ def test_a_turn_limit_is_read_from_telemetry_because_the_exit_code_is_zero(tmp_p
     )
 
     assert classify(EXITED, evidence, [])[0] == MAX_TURNS
+
+
+def test_the_ending_is_read_from_the_main_agents_last_exchange(tmp_path):
+    """One exchange per process is what the command makes today. Should a
+    process ever leave more than one such span, the last one by the main
+    agent is how it ended, and a span of any other agent type does not
+    speak for it.
+    """
+    twice = collected(tmp_path / "twice", [
+        llm("a", "turn1"),
+        interaction(stop_reason="converged", turns=1),
+        llm("b", "turn2"),
+        interaction(stop_reason="max_turns", turns=8),
+    ])
+    with_sub = collected(tmp_path / "sub", [
+        llm("a", "turn1"),
+        interaction(stop_reason="max_turns", turns=8),
+        interaction(stop_reason="converged", turns=1, agent="sub"),
+    ])
+
+    assert (twice.stop_reason, twice.turns) == ("max_turns", 8)
+    assert (with_sub.stop_reason, with_sub.turns) == ("max_turns", 8)
 
 
 def test_the_agents_own_deadline_is_a_timeout(tmp_path):

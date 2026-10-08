@@ -268,7 +268,15 @@ class OmicsClawAdapter:
         tools = trace.named(_SPAN_TOOL)
         tool_ids = {str(span.get("span_id", "")) for span in tools}
         interactions = trace.named(_SPAN_INTERACTION)
-        ending = _attributes(interactions[-1]) if interactions else {}
+        # How the run ended is what the main agent's last exchange says. A
+        # span of another agent type does not speak for it.
+        mains = [
+            span
+            for span in interactions
+            if _attributes(span).get("agent.type", "main") == "main"
+        ]
+        last = (mains or interactions)[-1] if interactions else {}
+        ending = _attributes(last)
 
         approvals = [match.group(1) for match in _APPROVAL.finditer(transcript)]
         required = approvals.count("required")
@@ -304,9 +312,7 @@ class OmicsClawAdapter:
             notes={
                 "omicsclaw_file": trace.launched_from,
                 "session_id": str(ending.get("session.id", "")),
-                "ended_with": str(interactions[-1].get("error", ""))
-                if interactions
-                else "",
+                "ended_with": str(last.get("error", "")),
                 "meter": _meter_check(trace.metrics, calls),
             },
         )

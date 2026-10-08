@@ -157,6 +157,34 @@ def test_retry_infra_reruns_only_infrastructure_failures(tmp_path):
     ]
 
 
+def test_every_attempt_is_listed_so_the_total_spend_can_be_added_up(tmp_path):
+    """``usage.jsonl`` has one row per run and so leaves out what earlier
+    attempts cost. ``attempts.jsonl`` has one row per attempt on disk: two
+    infrastructure failures set aside, an attempt cut short before it left
+    a record, and the attempt that counted.
+    """
+    toy = Toy(tmp_path)
+    spent = {"usage": {"input_tokens": 500, "output_tokens": 5, "llm_calls": 1}}
+    failed = {"exit": 1, "evidence": {"infra_reason": "provider_error: x", **spent}}
+    toy.play({"default": [failed, ok("sum-a"), ok("sum-a")]})
+    run_campaign(toy.manifest, toy.campaign, **QUIET)
+    run_campaign(toy.manifest, toy.campaign, retry_infra=True, **QUIET)
+    toy.paths("a/m/sum-a/r1").done.unlink()  # the harness died before recording
+    run_campaign(toy.manifest, toy.campaign, **QUIET)
+
+    rows = read_jsonl(toy.out / "attempts.jsonl")
+
+    assert [(row["attempt_dir"], row["outcome"], row["current"]) for row in rows] == [
+        ("r1.infra1", "infra_failure", False),
+        ("r1.incomplete1", "incomplete", False),
+        ("r1", "completed", True),
+    ]
+    assert [row["attempt"] for row in rows] == [1, 2, 3]
+    assert [row["input_tokens"] for row in rows] == [500, None, 120]
+    assert {row["run"] for row in rows} == {"a/m/sum-a/r1"}
+    assert len(read_jsonl(toy.campaign.usage)) == 1
+
+
 def test_an_infrastructure_failure_is_not_recorded_as_a_result(tmp_path):
     """The stand-in delivers the right answer and exits ``0`` while
     reporting an unrecovered model failure. The row says ``infra_failure``.

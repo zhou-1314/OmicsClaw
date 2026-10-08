@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -11,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from omicsclaw.bench.__main__ import main
+from omicsclaw.bench.__main__ import _env_file, main
 from omicsclaw.bench.layout import read_jsonl
 from omicsclaw.bench.run import run_campaign
 
@@ -149,7 +150,27 @@ def test_results_and_cases_inside_the_repository_are_refused(tmp_path, capsys):
     status = main(["run", *arguments(toy)])
 
     assert status == 2
-    assert "inside the repository" in capsys.readouterr().err
+    assert "--cases" in capsys.readouterr().err
+    assert not toy.out.exists()
+
+
+def test_an_output_root_inside_the_repository_is_refused_by_name(tmp_path, capsys):
+    """The cases are outside the checkout and only the results would land
+    in it. That is refused too, and the message names ``--out``.
+    """
+    repository = tmp_path / "repo"
+    (repository / ".git").mkdir(parents=True)
+    toy = Toy(repository)
+    outside = tmp_path / "cases"
+    shutil.copytree(toy.cases, outside)
+
+    status = main([
+        "run", str(toy.manifest_path), "--cases", str(outside), "--out", str(toy.out),
+    ])
+
+    error = capsys.readouterr().err
+    assert status == 2
+    assert "--out" in error and "inside the repository" in error
     assert not toy.out.exists()
 
 
@@ -164,6 +185,32 @@ def test_an_output_root_inside_the_cases_root_is_refused(tmp_path, capsys):
     assert status == 2
     assert "overlap" in capsys.readouterr().err
     assert not inside.exists()
+
+
+def test_grading_before_anything_ran_says_so(tmp_path, capsys):
+    toy = Toy(tmp_path)
+
+    status = main(["grade", *arguments(toy)])
+
+    assert status == 2
+    assert "nothing has been run" in capsys.readouterr().err
+    assert not toy.out.exists()
+
+
+def test_a_case_that_cannot_be_staged_is_a_message_not_a_traceback(tmp_path):
+    toy = Toy(tmp_path)
+    os.symlink(tmp_path / "nowhere", toy.cases / "sum-a" / "public" / "dangling")
+
+    done = subprocess.run(
+        [sys.executable, "-m", "omicsclaw.bench", "stage", *arguments(toy)],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        timeout=60,
+    )
+
+    assert done.returncode == 2
+    assert "dangling" in done.stderr and "Traceback" not in done.stderr
 
 
 def test_a_bad_manifest_is_exit_status_two(tmp_path, capsys):
@@ -196,6 +243,64 @@ def test_the_env_file_fills_in_only_what_is_not_set(tmp_path, monkeypatch, capsy
     assert seen["BENCH_FROM_FILE"] == "from file"
     assert seen["BENCH_ALREADY_SET"] == "shell"
     capsys.readouterr()
+
+
+ENV_SAMPLE = """\
+# a comment line
+
+A=1 # trailing comment
+export B="two words"
+C=plain
+D='q'
+E = spaced
+F=
+G="a#b"
+H=a#b
+"""
+"""Lines the agent's own ``.env`` loader reads the same way with and without
+python-dotenv installed."""
+
+ENV_EXPECTED = {
+    "A": "1", "B": "two words", "C": "plain", "D": "q", "E": "spaced",
+    "F": "", "G": "a#b", "H": "a#b",
+}
+
+
+def test_the_env_file_is_parsed_into_names_and_values(tmp_path):
+    """A comment after a value is not part of the value. Read as
+    ``'1 # trailing comment'``, a key with a note beside it would be sent
+    to the backend whole and refused.
+    """
+    path = tmp_path / "sample.env"
+    path.write_text(ENV_SAMPLE + 'I="quoted" # note\n')
+
+    assert _env_file(path) == {**ENV_EXPECTED, "I": "quoted"}
+
+
+def test_the_env_file_is_read_the_way_the_agent_reads_its_own(tmp_path):
+    """The same file is given to the agent's loader in a clean process, and
+    the two agree on every line of the sample.
+    """
+    path = tmp_path / "sample.env"
+    path.write_text(ENV_SAMPLE)
+    probe = (
+        "import json, os, sys\n"
+        "from omicsclaw.common.runtime_env import load_env_file\n"
+        "load_env_file(sys.argv[1], override=True)\n"
+        "print(json.dumps({k: os.environ.get(k) for k in sys.argv[2:]}))\n"
+    )
+
+    done = subprocess.run(
+        [sys.executable, "-c", probe, str(path), *ENV_EXPECTED],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        env={"PATH": "/usr/bin:/bin"},
+        timeout=60,
+    )
+
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout) == _env_file(path) == ENV_EXPECTED
 
 
 def test_example_writes_the_toy_cases(tmp_path, capsys):

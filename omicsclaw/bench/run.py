@@ -4,7 +4,8 @@ A run is finished when its ``meta`` directory holds ``done.json``. Running
 a campaign again skips finished runs, so an interrupted campaign continues
 where it stopped. ``predictions.jsonl`` and ``usage.jsonl`` are rewritten
 from the ``done.json`` files after every run and hold one row per finished
-run of the manifest.
+run of the manifest. ``attempts.jsonl`` is rewritten with them and holds
+one row per attempt that was started, whatever became of it.
 
 One invocation at a time may stage or run under an output root. It holds a
 lock on ``<out>/.bench.lock`` and a second one is refused.
@@ -27,9 +28,17 @@ from typing import Any
 
 from .access import audit_access, run_patterns
 from .adapters import Adapter, build_adapter
-from .layout import Campaign, RunPaths, read_json, write_json, write_jsonl
+from .layout import (
+    COMMAND,
+    DONE,
+    Campaign,
+    RunPaths,
+    read_json,
+    write_json,
+    write_jsonl,
+)
 from .manifest import Manifest, RunSpec
-from .outcome import INFRA_FAILURE, classify
+from .outcome import INFRA_FAILURE, Usage, classify
 from .process import Interrupted, run_process
 from .stage import StageError, set_aside, stage, staged_files
 
@@ -266,17 +275,22 @@ def _run_locked(
 
 
 def rebuild_indexes(manifest: Manifest, campaign: Campaign) -> None:
-    """Rewrite ``predictions.jsonl`` and ``usage.jsonl`` from the run records.
+    """Rewrite the per-run and per-attempt files from the run records.
 
-    One row per finished run of the manifest, ordered by arm, model, case
-    and repeat.
+    ``predictions.jsonl`` and ``usage.jsonl`` get one row per finished run
+    of the manifest, ordered by arm, model, case and repeat.
+    ``attempts.jsonl`` gets one row per attempt directory that was started:
+    the current one and every one set aside. An attempt that left no
+    ``done.json`` is listed as ``incomplete`` with no usage, so a total
+    over the file is a lower bound when such rows exist.
     """
-    predictions, usage = [], []
+    predictions, usage, attempts = [], [], []
     ordered = sorted(
         manifest.runs(),
         key=lambda run: (run.arm.id, run.model.id, run.case.id, run.repeat),
     )
     for run in ordered:
+        attempts.extend(_attempt_rows(manifest, campaign, run))
         record = finished(campaign.paths(run))
         if record is None:
             continue
@@ -310,6 +324,37 @@ def rebuild_indexes(manifest: Manifest, campaign: Campaign) -> None:
     campaign.out.mkdir(parents=True, exist_ok=True)
     write_jsonl(campaign.predictions, predictions)
     write_jsonl(campaign.usage, usage)
+    write_jsonl(campaign.attempts, attempts)
+
+
+def _attempt_rows(
+    manifest: Manifest, campaign: Campaign, run: RunSpec
+) -> list[dict[str, Any]]:
+    """One row per started attempt of *run*, oldest first."""
+    current = campaign.paths(run).meta
+    if not current.parent.is_dir():
+        return []
+    rows = []
+    for directory in current.parent.iterdir():
+        if directory != current and not directory.name.startswith(current.name + "."):
+            continue
+        record = read_json(directory / DONE)
+        launch = read_json(directory / COMMAND)
+        if record is None and launch is None:
+            continue
+        source = record or {}
+        rows.append({
+            "campaign": manifest.name,
+            **run.identity(),
+            "attempt_dir": directory.name,
+            "current": directory == current,
+            "attempt": source.get("attempt", (launch or {}).get("attempt")),
+            "outcome": source.get("outcome", "incomplete"),
+            "wall_s": source.get("wall_s"),
+            **Usage().as_row(),
+            **source.get("usage", {}),
+        })
+    return sorted(rows, key=lambda row: (row["attempt"] or 0, row["attempt_dir"]))
 
 
 def deliverable_state(run: RunSpec, workspace: Path) -> list[dict[str, Any]]:
@@ -375,6 +420,7 @@ def _execute(
     attempt = _attempt(paths)
     launch = adapter.launch(run, paths, manifest.budget, environment)
     write_json(paths.command, {
+        "attempt": attempt,
         "argv": list(launch.argv),
         "cwd": str(launch.cwd),
         "harness_env": dict(launch.harness_env),

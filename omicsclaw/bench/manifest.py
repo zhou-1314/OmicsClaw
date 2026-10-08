@@ -65,7 +65,7 @@ __all__ = [
     "load_manifest",
 ]
 
-_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 class ManifestError(ValueError):
@@ -297,7 +297,7 @@ def _tables(value: Any, where: str) -> Sequence[Mapping[str, Any]]:
 
 
 def _identifier(value: Any, where: str) -> str:
-    if not isinstance(value, str) or not _ID.match(value):
+    if not isinstance(value, str) or not _ID.fullmatch(value):
         raise ManifestError(
             f"{where}: {value!r} is not an identifier (letters, digits, "
             "'.', '_' and '-', starting with a letter or digit)"
@@ -453,10 +453,10 @@ def _relative(value: Any, where: str) -> str:
     """A deliverable path that stays inside the workspace."""
     text = _text(value, f"{where}: deliverables")
     path = PurePosixPath(text)
-    if not text or path.is_absolute() or ".." in path.parts:
+    if not path.parts or path.is_absolute() or ".." in path.parts:
         raise ManifestError(
-            f"{where}: deliverable {text!r} must be a relative path inside "
-            "the workspace"
+            f"{where}: deliverable {text!r} must be a relative path to a file "
+            "inside the workspace"
         )
     return path.as_posix()
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -17,7 +18,7 @@ import pytest
 
 from omicsclaw.bench.process import MARKER_VARIABLE, Interrupted, run_process
 
-from ._support import FAKE_AGENT, alive
+from ._support import FAKE_AGENT, alive, wait_for
 
 
 def start(tmp_path: Path, spec: dict, **options):
@@ -109,6 +110,53 @@ def test_a_stray_is_killed_after_a_timeout_too(tmp_path):
 
     assert exit.killed and exit.strays == 1
     assert not alive(int(pid_file.read_text()))
+
+
+def test_stopping_the_harness_also_kills_what_the_run_started(tmp_path):
+    """The harness is stopped while the agent has a detached child
+    running. Killing the agent's process group does not reach that child,
+    so it is found by its marker here as well as after a normal exit.
+    """
+    if not Path("/proc/self/environ").exists():
+        pytest.skip("needs /proc")
+    pid_file = tmp_path / "stray.pid"
+    stop = threading.Event()
+
+    def stop_once_the_stray_is_up() -> None:
+        wait_for(pid_file)
+        stop.set()
+
+    threading.Thread(target=stop_once_the_stray_is_up, daemon=True).start()
+    with pytest.raises(Interrupted):
+        start(tmp_path, {"stray": str(pid_file), "sleep": 60}, stop=stop)
+
+    assert not alive(int(pid_file.read_text()))
+
+
+def test_the_sweep_leaves_other_processes_alone(tmp_path):
+    """Two bystanders run beside the agent: one carrying another run's
+    marker, as a second campaign's agent would, and one carrying none. The
+    agent's own stray is killed and both bystanders are still running.
+    """
+    if not Path("/proc/self/environ").exists():
+        pytest.skip("needs /proc")
+    pid_file = tmp_path / "stray.pid"
+    plain = {
+        name: value for name, value in os.environ.items() if name != MARKER_VARIABLE
+    }
+    other_run = subprocess.Popen(
+        ["sleep", "60"], env={**plain, MARKER_VARIABLE: "f" * 32}
+    )
+    unmarked = subprocess.Popen(["sleep", "60"], env=plain)
+    try:
+        exit, _ = start(tmp_path, {"stray": str(pid_file)})
+
+        assert exit.strays == 1 and not alive(int(pid_file.read_text()))
+        assert alive(other_run.pid) and alive(unmarked.pid)
+    finally:
+        for bystander in (other_run, unmarked):
+            bystander.kill()
+            bystander.wait()
 
 
 def test_a_command_that_cannot_start_is_not_an_exception(tmp_path):

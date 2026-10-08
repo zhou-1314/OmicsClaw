@@ -61,6 +61,24 @@ class CrashesOnRuns(SumGrader):
         return super().grade(submission, oracle)
 
 
+class Flag:
+    """A truth value that is not a ``bool``, as ``numpy.bool_`` is not."""
+
+    def __init__(self, value: bool) -> None:
+        self.value = value
+
+    def __bool__(self) -> bool:
+        return self.value
+
+
+class FlagVerdicts(SumGrader):
+    """Reaches the right verdicts and returns them as :class:`Flag`."""
+
+    def grade(self, submission: Submission, oracle: Path) -> Grade:
+        grade = super().grade(submission, oracle)
+        return Grade(Flag(grade.passed), grade.score)  # type: ignore[arg-type]
+
+
 # ---- the grader's own controls ---------------------------------------------
 
 
@@ -74,6 +92,13 @@ def test_a_grader_that_passes_a_wrong_answer_fails_its_controls():
     assert problems
     assert all("must fail but passed" in problem for problem in problems)
     assert any("'wrong-sum'" in problem for problem in problems)
+
+
+def test_a_verdict_is_read_for_its_truth_and_not_its_type():
+    """A grader built on numpy returns ``numpy.bool_``. Its controls pass;
+    comparing by identity with ``True`` reported "must pass but passed".
+    """
+    assert self_check(FlagVerdicts()) == []
 
 
 def test_a_grader_needs_a_control_of_each_kind():

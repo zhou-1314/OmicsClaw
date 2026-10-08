@@ -14,6 +14,7 @@ import argparse
 import dataclasses
 import json
 import os
+import re
 import signal
 import sys
 from collections.abc import Iterator, Sequence
@@ -76,7 +77,9 @@ def _parser() -> argparse.ArgumentParser:
         "--env-file",
         type=Path,
         help="KEY=VALUE lines added to the agents' environment; a variable "
-        "already set keeps its value",
+        "already set keeps its value. Read like the agent's own .env: "
+        "'export', quotes and a ' # comment' after a value are understood. "
+        "${VAR} references are not expanded and a value cannot span lines",
     )
     run.set_defaults(handler=_run)
 
@@ -231,11 +234,14 @@ def _example(arguments: argparse.Namespace) -> int:
 
 
 def _env_file(path: Path) -> dict[str, str]:
-    """``KEY=VALUE`` pairs from *path*.
+    """``KEY=VALUE`` pairs from *path*, read the way the agent reads its ``.env``.
 
-    Blank lines and lines starting with ``#`` are skipped, a leading
-    ``export`` is dropped, and one pair of matching quotes around a value
-    is removed.
+    Blank lines and lines starting with ``#`` are skipped and a leading
+    ``export`` is dropped. A value in quotes is what the quotes enclose,
+    with ``\\n``, ``\\t`` and escaped quotes decoded inside double quotes;
+    anything after the closing quote is ignored. An unquoted value ends
+    where whitespace followed by ``#`` starts a comment. ``${VAR}`` is kept
+    as written and a value cannot continue on the next line.
 
     :raises ManifestError: The file cannot be read.
     """
@@ -246,14 +252,37 @@ def _env_file(path: Path) -> dict[str, str]:
     pairs = {}
     for line in lines:
         text = line.strip()
-        if not text or text.startswith("#") or "=" not in text:
+        if not text or text.startswith("#"):
             continue
-        name, _, value = text.removeprefix("export ").partition("=")
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
-        pairs[name.strip()] = value
+        name, separator, raw = text.removeprefix("export ").partition("=")
+        if separator and name.strip():
+            pairs[name.strip()] = _env_value(raw.strip())
     return pairs
+
+
+_ESCAPES = {"n": "\n", "r": "\r", "t": "\t", "\\": "\\", '"': '"', "'": "'"}
+
+
+def _env_value(raw: str) -> str:
+    """One value of an env file, unquoted and without its trailing comment."""
+    quote = raw[:1]
+    if quote not in ("'", '"'):
+        return re.sub(r"\s+#.*", "", raw).rstrip()
+    decoded = []
+    position = 1
+    while position < len(raw):
+        character = raw[position]
+        if character == quote:
+            return "".join(decoded)
+        following = raw[position + 1 : position + 2]
+        known = following in _ESCAPES if quote == '"' else following in ("\\", "'")
+        if character == "\\" and known:
+            decoded.append(_ESCAPES[following])
+            position += 2
+            continue
+        decoded.append(character)
+        position += 1
+    return raw  # no closing quote: taken as written
 
 
 if __name__ == "__main__":

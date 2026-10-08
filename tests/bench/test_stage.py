@@ -58,6 +58,22 @@ def test_a_link_in_the_public_files_is_copied_as_a_file(tmp_path):
     assert copied.is_file() and not copied.is_symlink()
 
 
+def test_a_broken_link_in_the_public_files_is_a_stage_error(tmp_path):
+    """A link whose target is gone cannot be copied. That is reported as a
+    case that cannot be staged, naming the file, and no half-copied
+    workspace is left for the next attempt to trip over.
+    """
+    toy = Toy(tmp_path)
+    run = toy.manifest.runs()[0]
+    os.symlink(tmp_path / "nowhere", toy.campaign.public(run.case) / "dangling")
+
+    with pytest.raises(StageError, match="dangling"):
+        stage(run, toy.campaign)
+
+    paths = toy.campaign.paths(run)
+    assert not paths.workspace.exists() and not paths.meta.exists()
+
+
 def test_staging_over_an_existing_run_is_refused(tmp_path):
     toy = Toy(tmp_path)
     run = toy.manifest.runs()[0]
@@ -75,6 +91,27 @@ def test_a_case_without_public_files_cannot_be_staged(tmp_path):
 
     with pytest.raises(StageError, match="no public directory"):
         stage(run, toy.campaign)
+
+
+def test_setting_aside_skips_a_name_taken_on_either_side(tmp_path):
+    """Something already sits at ``r1.infra1`` in the workspace tree only.
+    The attempt is set aside under the next number in both trees, so the
+    two halves of one attempt keep the same name and nothing is
+    overwritten.
+    """
+    toy = Toy(tmp_path)
+    paths = stage(toy.manifest.runs()[0], toy.campaign)
+    taken = paths.workspace.with_name("r1.infra1")
+    taken.mkdir()
+    (taken / "keep.txt").write_text("not ours")
+
+    assert set_aside(paths, "infra") == "infra2"
+
+    assert (taken / "keep.txt").read_text() == "not ours"
+    assert sorted(entry.name for entry in taken.iterdir()) == ["keep.txt"]
+    assert paths.workspace.with_name("r1.infra2").is_dir()
+    assert paths.meta.with_name("r1.infra2").is_dir()
+    assert not paths.meta.with_name("r1.infra1").exists()
 
 
 def test_setting_aside_renames_both_directories_alike(tmp_path):

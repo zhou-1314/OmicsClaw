@@ -9,10 +9,13 @@ One campaign owns two directories, both outside the repository:
 
     <out>/cells/<arm>/<model>/<case>/r<k>/   the agent's workspace
     <out>/meta/<arm>/<model>/<case>/r<k>/    prompt, output, logs, done.json
-    <out>/predictions.jsonl  usage.jsonl  grades.jsonl
+    <out>/predictions.jsonl  usage.jsonl  grades.jsonl  attempts.jsonl
 
 A run's ``meta`` directory is not inside its workspace. An earlier attempt
 that was set aside keeps its files under ``r<k>.<label><n>`` in both trees.
+``predictions.jsonl``, ``usage.jsonl`` and ``grades.jsonl`` hold one row per
+run; ``attempts.jsonl`` holds one row per attempt, the ones set aside
+included, which is what a campaign's total spend is added up from.
 """
 
 from __future__ import annotations
@@ -117,6 +120,10 @@ class Campaign:
     def grades(self) -> Path:
         return self.out / "grades.jsonl"
 
+    @property
+    def attempts(self) -> Path:
+        return self.out / "attempts.jsonl"
+
     def paths(self, run: RunSpec) -> RunPaths:
         """The workspace and ``meta`` directory of *run*."""
         return RunPaths(self.cells / run.key, self.meta / run.key)
@@ -131,13 +138,22 @@ class Campaign:
 
 
 def write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    """Write *payload* to *path* so a reader sees the old file or the new one."""
+    """Write *payload* to *path* so a reader sees the old file or the new one.
+
+    The text goes to a temporary file beside *path*, which then takes its
+    place. A write that fails leaves *path* as it was and removes the
+    temporary file.
+    """
     temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temporary, path)
+    try:
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def read_json(path: Path) -> dict[str, Any] | None:
