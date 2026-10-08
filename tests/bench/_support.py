@@ -184,119 +184,138 @@ class Toy:
 
 # ---- a scripted model backend for the real ``oc cli`` ----------------------
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
 SHIM = '''\
-"""Script the model backend before the command starts."""
+"""Script the model backend of ``oc cli`` when its assembly module loads."""
 import asyncio
+import importlib.abc
+import importlib.util
 import json
 import os
 import sys
 
-sys.path.insert(0, {root!r})
-
-from omicsclaw.entry import assembly
-from omicsclaw.provider import Completion, ProviderError
-from omicsclaw.schema import (
-    Message, Role, StreamChunk, StreamChunkType, ToolCall, Usage,
-)
-
-USAGE = Usage(input_tokens=1000, output_tokens=10, cache_read_tokens=400)
+TARGET = "omicsclaw.entry.assembly"
 
 
-def answer():
-    """The ``write_file`` arguments holding the right sum for this workspace."""
-    with open("data/numbers.txt", encoding="utf-8") as handle:
-        total = sum(int(line) for line in handle.read().split())
-    return json.dumps({{"path": {answer!r}, "content": json.dumps({{"sum": total}})}})
+def install(assembly):
+    """Replace ``assembly.provider_from_env`` with the scripted backend."""
+    from omicsclaw.provider import Completion, ProviderError
+    from omicsclaw.schema import (
+        Message, Role, StreamChunk, StreamChunkType, ToolCall, Usage,
+    )
 
+    usage = Usage(input_tokens=1000, output_tokens=10, cache_read_tokens=400)
 
-def call(name, arguments):
-    payload = arguments if isinstance(arguments, str) else json.dumps(arguments)
-    return Message(
-        role=Role.ASSISTANT,
-        tool_calls=(ToolCall(id="call_1", name=name, arguments=payload),),
+    def answer():
+        with open("data/numbers.txt", encoding="utf-8") as handle:
+            total = sum(int(line) for line in handle.read().split())
+        content = json.dumps({{"sum": total}})
+        return json.dumps({{"path": {answer!r}, "content": content}})
+
+    def call(name, arguments):
+        payload = arguments if isinstance(arguments, str) else json.dumps(arguments)
+        return Message(
+            role=Role.ASSISTANT,
+            tool_calls=(ToolCall(id="call_1", name=name, arguments=payload),),
+        )
+
+    def say(text):
+        return Message(role=Role.ASSISTANT, content=text)
+
+    def down():
+        raise ProviderError("backend refused", provider="scripted", status_code=401)
+
+    class Scripted:
+        name = "scripted"
+
+        def __init__(self, scenario):
+            self.scenario = scenario
+
+        def reply(self, messages, tools):
+            results = sum(1 for message in messages if message.role is Role.TOOL)
+            parent = any(tool.name == "task" for tool in tools or ())
+            scenario = self.scenario
+            delegate = ("task", {{"subagent_type": "general-purpose",
+                                 "description": "add numbers",
+                                 "prompt": "Add 3, 14, 15, 92 and 65."}})
+            target = os.environ.get("BENCH_ORACLE", "/nonexistent/oracle")
+            first = {{
+                "": None,
+                "write": None,
+                "subagent": delegate,
+                "subfail": delegate,
+                "danger": ("bash", {{"command": "rm -rf " + target}}),
+                "web": ("web_fetch", {{"url": "https://example.com/"}}),
+                "sleepy": ("bash", {{"command": "sleep 120"}}),
+            }}
+            if scenario == "fail":
+                down()
+            if scenario == "loop":
+                return call("bash", {{"command": "echo step-%d" % results}})
+            if not parent:
+                if scenario == "subfail":
+                    down()
+                return say("The sum is 189.")
+            steps = [first[scenario]] if first[scenario] else []
+            steps.append(("write_file", answer()))
+            if results < len(steps):
+                return call(*steps[results])
+            return say("Done.")
+
+        async def generate(self, messages, tools=None):
+            if self.scenario == "hang":
+                await asyncio.sleep(120)
+            return Completion(message=self.reply(messages, tools), usage=usage)
+
+        async def _stream(self, messages, tools=None):
+            completion = await self.generate(messages, tools)
+            if completion.message.content:
+                yield StreamChunk(
+                    type=StreamChunkType.TEXT_DELTA, delta=completion.message.content
+                )
+            yield StreamChunk(
+                type=StreamChunkType.DONE, message=completion.message, usage=usage
+            )
+
+        def generate_stream(self, messages, tools=None):
+            return self._stream(messages, tools)
+
+        def bind(self, **overrides):
+            return self
+
+    assembly.provider_from_env = lambda provider="", model="", *a, **k: Scripted(
+        model.removeprefix("stub-")
     )
 
 
-def say(text):
-    return Message(role=Role.ASSISTANT, content=text)
+class Hook(importlib.abc.MetaPathFinder):
+    """Runs :func:`install` right after the assembly module is executed."""
+
+    def find_spec(self, name, path, target=None):
+        if name != TARGET:
+            return None
+        sys.meta_path.remove(self)
+        spec = importlib.util.find_spec(name)
+        execute = spec.loader.exec_module
+
+        def exec_module(module):
+            execute(module)
+            install(module)
+
+        spec.loader.exec_module = exec_module
+        return spec
 
 
-def down():
-    raise ProviderError("backend refused", provider="scripted", status_code=401)
-
-
-class Scripted:
-    name = "scripted"
-
-    def __init__(self, scenario):
-        self.scenario = scenario
-
-    def reply(self, messages, tools):
-        results = sum(1 for message in messages if message.role is Role.TOOL)
-        parent = any(tool.name == "task" for tool in tools or ())
-        scenario = self.scenario
-        delegate = ("task", {{"subagent_type": "general-purpose",
-                             "description": "add numbers",
-                             "prompt": "Add 3, 14, 15, 92 and 65."}})
-        target = os.environ.get("BENCH_ORACLE", "/nonexistent/oracle")
-        first = {{
-            "": None,
-            "write": None,
-            "subagent": delegate,
-            "subfail": delegate,
-            "danger": ("bash", {{"command": "rm -rf " + target}}),
-            "web": ("web_fetch", {{"url": "https://example.com/"}}),
-            "sleepy": ("bash", {{"command": "sleep 120"}}),
-        }}
-        if scenario == "fail":
-            down()
-        if scenario == "loop":
-            return call("bash", {{"command": "echo step-%d" % results}})
-        if not parent:
-            if scenario == "subfail":
-                down()
-            return say("The sum is 189.")
-        steps = [first[scenario]] if first[scenario] else []
-        steps.append(("write_file", answer()))
-        if results < len(steps):
-            return call(*steps[results])
-        return say("Done.")
-
-    async def generate(self, messages, tools=None):
-        if self.scenario == "hang":
-            await asyncio.sleep(120)
-        return Completion(message=self.reply(messages, tools), usage=USAGE)
-
-    async def _stream(self, messages, tools=None):
-        completion = await self.generate(messages, tools)
-        if completion.message.content:
-            yield StreamChunk(
-                type=StreamChunkType.TEXT_DELTA, delta=completion.message.content
-            )
-        yield StreamChunk(
-            type=StreamChunkType.DONE, message=completion.message, usage=USAGE
-        )
-
-    def generate_stream(self, messages, tools=None):
-        return self._stream(messages, tools)
-
-    def bind(self, **overrides):
-        return self
-
-
-assembly.provider_from_env = lambda provider="", model="", *a, **k: Scripted(
-    model.removeprefix("stub-")
-)
+sys.meta_path.insert(0, Hook())
 '''
 """A ``sitecustomize`` module that replaces the model backend of ``oc cli``.
 
-:mod:`site` imports it before the command starts, and it swaps
-``omicsclaw.entry.assembly.provider_from_env`` for a scripted backend, the
-way ``tests/launch/test_cli_command.py`` does. The model name picks the
-script: ``stub-<scenario>``, or no model for the plain one, which writes
-the right sum for the workspace it runs in and stops.
+:mod:`site` imports it before the command starts. It waits for
+``omicsclaw.entry.assembly`` to be imported and then swaps that module's
+``provider_from_env`` for a scripted backend. It imports nothing from
+``omicsclaw`` itself and leaves the import path alone, so which checkout
+the command runs is decided by the adapter under test. The model name
+picks the script: ``stub-<scenario>``, or no model for the plain one,
+which writes the right sum for the workspace it runs in and stops.
 """
 
 
@@ -306,6 +325,6 @@ def scripted_backend(root: Path) -> Path:
     shim = root / "shim"
     shim.mkdir()
     (shim / "sitecustomize.py").write_text(
-        SHIM.format(root=str(REPO_ROOT), answer=ANSWER), encoding="utf-8"
+        SHIM.format(answer=ANSWER), encoding="utf-8"
     )
     return shim
