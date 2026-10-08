@@ -153,6 +153,22 @@ def open_memory(config: AppConfig) -> MemoryBinding | None:
     return MemoryBinding(database, store, Precis(store, precis_path(config)))
 
 
+def _failure_name(error: BaseException) -> str:
+    """How a failure is named in a log line, without its message.
+
+    The message is left out because SQLite can quote the row it failed
+    on: a row holding bytes that are not UTF-8 is reported with its
+    text, and what was remembered must not reach a log.
+
+    :param error: The exception that was caught.
+    :returns: The exception's class name, followed by SQLite's own name
+        for the error, such as ``SQLITE_CORRUPT_VTAB``, when it has one.
+    """
+    name = type(error).__name__
+    sqlite_name = getattr(error, "sqlite_errorname", "")
+    return f"{name} {sqlite_name}" if sqlite_name else name
+
+
 async def prepare_memory(binding: MemoryBinding | None) -> int:
     """Bring the search index up to date, delete expired entries, rewrite the précis.
 
@@ -161,6 +177,9 @@ async def prepare_memory(binding: MemoryBinding | None) -> int:
     it cannot be read or rewritten, the entries are still purged and the
     précis still rewritten, search answers from the index as it is, and
     the next start tries again.
+
+    A failure is logged by the name :func:`_failure_name` gives it and
+    never by its message.
 
     :param binding: Memory to maintain; ``None`` does nothing.
     :returns: How many expired entries were deleted.
@@ -171,9 +190,10 @@ async def prepare_memory(binding: MemoryBinding | None) -> int:
         respaced = await binding.store.respace_index()
     except Exception as error:  # noqa: BLE001 - start-up must not fail here
         _log.warning(
-            "could not bring the memory search index up to date, so entries "
-            "indexed by an earlier version may not match Han queries: %s",
-            error,
+            "the memory search index could not be read or brought up to "
+            "date (%s); memory_search may miss entries or fail, and the "
+            "next start tries again",
+            _failure_name(error),
         )
     else:
         if respaced:
@@ -183,7 +203,7 @@ async def prepare_memory(binding: MemoryBinding | None) -> int:
         purged = await binding.store.purge_expired()
         await binding.precis.regenerate()
     except Exception as error:  # noqa: BLE001 - start-up must not fail here
-        _log.warning("memory maintenance failed: %s", error)
+        _log.warning("memory maintenance failed (%s)", _failure_name(error))
         return purged
     _log.info(
         "memory ready: %d expired entry(s) purged, précis at %s",
