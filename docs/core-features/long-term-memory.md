@@ -92,7 +92,7 @@ OmicsClaw 把"记住"拆成两件性质完全不同的事，它们共用一个 S
 | `memory_tools` | `omicsclaw/entry/memory.py` | `memory_search` + `memory_write` |
 | `build_memory_extractor` / `PrecisRefreshingExtractor` | `omicsclaw/entry/memory.py` | 派生提取器，存入后重建精华，记日志 |
 | `session_store` | `omicsclaw/entry/memory.py` | 在同一个 `Database` 上构造 `SqliteSessionStore` |
-| `prepare_memory` | `omicsclaw/entry/memory.py` | 启动维护：清过期 + 重建精华 |
+| `prepare_memory` | `omicsclaw/entry/memory.py` | 启动维护：补齐检索索引 + 清过期 + 重建精华 |
 | `Session` / `SessionStore` / `SessionRegistry` / `attach_sessions` | `omicsclaw/entry/session.py` | 会话对象、存储协议、按会话串行的队列与持久化时机 |
 
 **依赖方向**：`schema ← context ← memory ← entry`。`omicsclaw/memory/` 绝不 import `omicsclaw.entry`——`SessionStore` 是 Protocol，`StoredSession` 与 `entry.Session` 字段一致，所以 store 直接传给 `attach_sessions(app, store=...)` 无需适配器。这条由 `tests/memory/test_memory_is_a_leaf_layer.py` 钉住。提取器复用 `omicsclaw.context.Summarizer` Protocol，因此本层也不 import `omicsclaw.provider`。
@@ -205,7 +205,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
 - `messages` 里**不存 system 消息**：`SqliteSessionStore.save` 过滤 `Role.SYSTEM`，因为 prompt 组装每轮都会加一条新的，存下来会在当前 persona 旁边叠一条陈旧的。
 - `sessions` 表**没有 owner / scope 列**。`SqliteSessionStore.list` 的 docstring 明说："范围就是数据库文件本身，本方法不做任何隔离"。
 - `memories_fts` 是 **standalone** FTS5 表（不是 external-content），由 `LongTermStore` 每个写方法手动同步（`_reindex` / `DELETE FROM memories_fts`），不依赖触发器。索引里存的是 `_spaced(title)` 与 `_spaced(content)`：每个汉字与相邻字符之间多一个空格，原文只在 `long_term_memories` 里。
-- 没有 schema 版本号，也没有迁移逻辑——每次打开都是 `CREATE ... IF NOT EXISTS`。
+- 没有 schema 版本号，每次打开都是 `CREATE ... IF NOT EXISTS`。唯一的迁移是索引文本形式的重写，建表语句不变，由启动维护里的 `respace_index` 完成（见 §6）。
 
 ### 4.3 Python 数据结构
 
@@ -336,12 +336,13 @@ CLI 的会话命令（`omicsclaw/entry/cli/_repl.py`）：
 | `soft_delete(id)` | `disabled=1`、`signature=NULL`（释放 UNIQUE 槽位）、`updated_at=now`，移出 FTS；行保留供审计 |
 | `stale_candidates(now=, max_importance=1, after_days=60.0)` | 同时满足 `importance <= 1`、`use_count = 0`、`updated_at` 早于 60 天前的未禁用条目，最旧优先。只回答问题，不删除 |
 | `purge_expired(now=)` | **物理删除** TTL 已过（`updated_at + ttl_days*86400 < now`）的条目及其 FTS 行，返回删除数 |
+| `respace_index()` | 读一遍索引，把早先版本留下的未分隔行按 `long_term_memories` 重写（一个事务），返回重写或丢弃的行数；没有这样的行时只读、不取写锁；失败抛 `sqlite3.Error`，索引保持原样 |
 
 **查询转义**（`_escape_fts`）：把每个空白分隔的词包成双引号字面量，用 `OR` 连接（而非 FTS5 默认的隐式 AND），NUL 替换为空格。理由：查询常是整句，AND 语义下任一词缺失都会零命中；排序交给 FTS5 的 rank。
 
-**汉字**：FTS5 默认分词器按空格和标点切词，一串连续汉字连同紧贴它的字母数字会成为一个 token。所以索引按 `_spaced` 的形式存，每个汉字是一个 token；查询里的一串汉字拆成相邻两字的短语（`"聚 类"`），单个汉字就查这个字，夹在汉字之间的字母数字另成一项。记忆与查询只要共有任意相邻两字就命中，共有的越多排得越前。英文的分词与排序不受影响。
+**汉字**：FTS5 默认分词器按空格和标点切词，一串连续汉字连同紧贴它的字母数字会成为一个 token。所以索引按 `_spaced` 的形式存，每个汉字是一个 token；查询里的一串汉字拆成相邻两字的短语（`"聚 类"`），单个汉字就查这个字，夹在汉字之间的字母数字另成一项。记忆与查询只要共有任意相邻两字就命中，共有的越多排得越前。查询里重复出现的两字对只查一次。英文的分词不变；纯英文的库排序也不变，但含汉字的记忆现在每个汉字算一个 token，文档变长，同一个英文词的查询里它们会比以前排得靠后。
 
-**旧索引**：构造 `LongTermStore` 时读一遍 `memories_fts`，把文本与 `_spaced` 结果不同的行在一个事务里按 `long_term_memories` 重写；没有这样的行就只读不写。早先版本写入的未分隔行因此在下次打开时变得可按中文子串检索。重写失败会回滚并抛出 `sqlite3.Error`。
+**旧索引**：`LongTermStore.respace_index()` 读一遍 `memories_fts`，把文本与 `_spaced` 结果不同的行在一个事务里按 `long_term_memories` 重写；没有这样的行就只读不写，也不取写锁。构造 `LongTermStore` 本身不碰数据库。`prepare_memory` 在启动维护的第一步调用它（经 `arun`，在工作线程上跑）：早先版本写入的未分隔行因此在下次启动后可按中文子串检索。读索引或重写失败时方法回滚并抛出 `sqlite3.Error`，`prepare_memory` 记一条 warning 后继续清过期、重建精华，应用照常启动，检索按现有索引回答，下次启动重试。
 
 ---
 
@@ -510,6 +511,7 @@ sections = default_sections(config, ..., memory=remembering)
 # AgentApp(memory=remembering, ...)；build_app 中途抛异常则关闭连接后重抛
 
 # 2. open_app（async）：_swept(app) → prepare_memory(app.memory)
+await binding.store.respace_index()         # 失败只记 warning，后两步照做
 purged = await binding.store.purge_expired()
 await binding.precis.regenerate()          # 失败只记 warning，进程照常启动
 
@@ -560,7 +562,7 @@ await binding.precis.regenerate()          # 失败只记 warning，进程照常
   exchange 结束 → SessionRegistry save：messages + summary/anchors 写入 memory.db
 
 进程退出，第二天重启 oc cli
-  open_app → prepare_memory：清过期条目、重建 MEMORY.md
+  open_app → prepare_memory：补齐检索索引、清过期条目、重建 MEMORY.md
   新会话 B：system prompt 末尾出现 "## Long-term memory" 段，含上面的偏好
   用户：/resume → 选择 visium-01 → 历史与压缩摘要从 memory.db 读回，继续 spatial-de
 ```
@@ -591,16 +593,16 @@ await binding.precis.regenerate()          # 失败只记 warning，进程照常
 
 ## 16. 已知限制
 
-1. **中文检索按相邻两字匹配，偏松。** 查询"差异分析"会命中只含"分析"的记忆，靠排序把共有更多的放在前面。日文假名和谚文没有分隔，仍按整串成词。每次构造 `LongTermStore` 要读一遍索引（实测约 15 ms / 1000 条，随文本量线性增长）。另一个进程里的早先版本写入的行，要到当前版本下次打开才可按中文子串检索（plan 0055 §10）。
+1. **中文检索按相邻两字匹配，偏松。** 查询"差异分析"会命中只含"分析"的记忆，靠排序把共有更多的放在前面。与记忆只共有单个汉字的长查询不命中。日文假名、谚文和全角字符没有处理，仍按整串成词。每次启动维护要读一遍索引（实测约 15 ms / 1000 条，随文本量线性增长）。另一个进程里的早先版本写入的行，要到当前版本下次启动才可按中文子串检索；而早先版本的进程读重写后的索引，整串中文的查询不再命中，英文照常（plan 0055 §10）。
 2. **记忆提醒的默认间隔未经真实会话验证。** 10 轮沿用参考实现的取值。取消或失败的交换不落库，下一次交换会从同一个计数开始，可能再提醒一次。
-3. **文件权限。** `memory.db`、`memory.db-wal`、`memory.db-shm` 与 `MEMORY.md` 按进程 umask 创建（通常 0644 / 目录 0755），多用户机器上同机可读。offload 与 compaction log 已是 0700 / 0600（plan 0033 §9 B7、plan 0040 §10-2）。
+3. **文件权限。** 新建的 `memory.db` 及其 `-wal`、`-shm` 是 0600，`MEMORY.md` 每次重写后也是 0600。已存在的库文件保持原有权限，早先版本建的库可能仍是 0644；`.omicsclaw/` 目录按进程 umask 创建（通常 0755）。offload 与 compaction log 是 0700 / 0600（plan 0033 §9 B7、plan 0040 §10-2）。
 4. **精华标题与 prompt 章节同级。** `render` 用 `## ` 作条目标题，内容由模型写入并原样注入；一条被注入的记忆可以渲染成 `## Safety rules` 之类的伪章节，并因记忆段位于最后而排在真正的安全规则之后（plan 0040 §10-5）。
-5. **`MEMORY.md` 写入不是原子的。** `Precis.regenerate` 用 `Path.write_text`（先截断再写），并发读者可能读到撕裂的文件，也就是撕裂的 system prompt。多进程写同一 `memory.db` 本身已实测可行（3 进程 × 60 次 add 全部落库），问题只在 `MEMORY.md`（plan 0040 §10-9）。
+5. **`MEMORY.md` 的并发写入后写者胜。** `Precis.regenerate` 先写同目录的临时文件再 `os.replace`，读者不会读到半个文件；两个进程同时重写时留下的是后完成的那份。多进程写同一 `memory.db` 已实测可行（3 进程 × 60 次 add 全部落库，plan 0040 §10-9）。
 6. **`stale_candidates` 与 `touch` 没有调用者。** 陈旧识别只是一个可查询的能力，没有任何自动清理；`touch` 被 `search` 内联的计数更新取代。
 7. **没有会话删除入口。** `SqliteSessionStore.delete`、`FileOffloadStore.purge`、`JsonlCompactionLog.purge` 都存在，但没有命令或 API 调用它们；会话、卸载文件与压缩日志只增不减。
 8. **`list()` 没有隔离。** `sessions` 表无 owner 列，`/sessions` 列出该文件中的全部会话。多人共用一个 workspace（例如一个 Channel 进程服务多个群）时，隔离完全取决于谁能访问 CLI 列表；Channel 本身不暴露 `/sessions`。
 9. **`save` 整段重写消息。** 每次 exchange 结束都 `DELETE` 该会话全部消息再插入，长会话的保存成本随历史线性增长；`list()` 对每个会话再 `_load` 一次（N+1）。
-10. **没有 schema 版本与迁移。** 任何建表语句变更都需要自己处理既有库。索引文本形式的变化不改建表语句，由 `LongTermStore` 打开时重写（见 §6）。
+10. **没有 schema 版本与迁移。** 任何建表语句变更都需要自己处理既有库。索引文本形式的变化不改建表语句，由启动维护调用 `respace_index` 重写（见 §6）。
 11. **`Database` 用 `Lock` 而非 `RLock`。** `run()` 内部若重入会永久死锁；当前没有重入路径，但 `run` 是公开 API（plan 0033 §9 B8）。
 12. **提取质量未经评估。** 没有真实模型上的数据说明一次压缩提取出几条、有多少是噪声（plan 0040 §10-7）。
 13. **子代理只读长期记忆。** `task` 派生的子代理继承父代理除 `task`、`plan_write`、`memory_write` 外的全部工具（`entry/subagent.py` 的 `_WITHHELD_FROM_SUB_AGENTS`），因此能 `memory_search`、不能 `memory_write`：写入的条目会进入以后每个会话的系统提示，读到恶意文件的子代理不能借此种下永久注入。子代理自己没有压缩器，也就没有提取。
