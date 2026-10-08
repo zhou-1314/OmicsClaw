@@ -324,6 +324,9 @@ model decides whether to open your skill at all.
 
 ### Test markers and CI
 
+How much to run for a change is set by Risk-Matched Verification in
+[`SPEC.md`](SPEC.md#testing-risk-matched-verification).
+
 Plain `pytest` skips tests marked `slow`, `demo` and `eval`, and runs
 the ones marked `scripted_eval`. Those are the scripted agent evals in
 `tests/evals/dataset/`: the model's replies are written into each case,
@@ -431,7 +434,7 @@ AI coding agents should follow the same workflow, plus:
 4. Read the target skill's `SKILL.md` before modifying code
 5. Use a concise plan, root-cause debugging, focused tests, and verification evidence for non-trivial repository changes.
 6. Use `make list` to verify skills load correctly, and check `i.skipped` is empty
-7. Run `python -m pytest -v` to confirm all tests pass
+7. Test at the level [`SPEC.md`](SPEC.md#testing-risk-matched-verification) sets under Risk-Matched Verification. A change to one skill needs that skill's tests and its example step; the full suite is for level 4 changes and runs in CI on every pull request
 8. Add an entry at the top of [`CHANGELOG.md`](CHANGELOG.md) if the work introduces an important decision, milestone, or lasting contributor workflow change; change `README.md` only when a user-facing entry point, install step or headline feature changes, and keep its What's New to at most five items of one sentence each
 
 ## Skill Ideas We Need

@@ -15,8 +15,10 @@ developer-facing tasks rather than end-user omics analysis:
    decisions and milestones.
 2. Then read root `SPEC.md` and `AGENTS.md`.
 3. Reply in the user's language and stay concise and execution-focused.
-4. Use a concise plan, root-cause debugging, focused tests, and verification
-   evidence for non-trivial repository changes.
+4. Use a concise plan and root-cause debugging for non-trivial repository
+   changes. Test by Risk-Matched Verification (`SPEC.md`): choose the level
+   from what the change can break, run that level's checks, and report what
+   you ran and what you did not. Do not run the full suite by default.
 5. When you make an important repository decision or complete a milestone,
    add an entry at the top of `CHANGELOG.md`. Change `README.md` only when a
    user-facing entry point, install step or headline feature changes; its

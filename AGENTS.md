@@ -449,6 +449,14 @@ and the verification evidence you actually ran.
 
 ### Running the tests
 
+Testing follows Risk-Matched Verification, defined in `SPEC.md`: choose a
+level from what the change can break and run that level's checks. Most
+changes need one package's test directory, for example
+
+```bash
+python -m pytest tests/entry -p no:cacheprovider -q -o addopts=""
+```
+
 The interpreter matters: the repo needs Python 3.11+ and the default
 `python3` on a dev box is often older. The rebuilt stack's own suite is
 
@@ -460,8 +468,10 @@ python -m pytest tests/schema tests/provider tests/engine tests/tools \
 # 4982 passed, 12 skipped   <- measured 2026-09-21; see the note below
 ```
 
-Treat that as the regression signal. The old CLI's suites were deleted
-with `omicsclaw/surfaces/cli/`.
+Run it for a level 4 change. The unit job in `.github/workflows/eval.yml`
+holds the current selection, and `Eval CI` runs it on every pull request and
+push to `main`. The old CLI's suites were deleted with
+`omicsclaw/surfaces/cli/`.
 
 > **Several sessions write this tree at once.** Before reading a red suite
 > as evidence about your own change, check `git status` for files you did
