@@ -25,7 +25,11 @@ import time
 
 import pytest
 
-from omicsclaw.entry.cli._input import PromptToolkitSource, StreamSource
+from omicsclaw.entry.cli._input import (
+    PromptToolkitSource,
+    StreamSource,
+    is_interactive,
+)
 
 WAIT_S = 10.0
 
@@ -439,3 +443,42 @@ def test_keys_go_to_the_question_asked_first():
             return answer, await asyncio.wait_for(picked, WAIT_S)
 
     assert asyncio.run(drive()) == ("hello", 1)
+
+
+class _Terminal(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+def _closed() -> io.StringIO:
+    stream = io.StringIO()
+    stream.close()
+    return stream
+
+
+@pytest.mark.parametrize(
+    ("stream", "expected"),
+    [
+        pytest.param(_Terminal(), True, id="a terminal"),
+        pytest.param(io.StringIO("piped\n"), False, id="a pipe"),
+        pytest.param(_closed(), False, id="a closed stream"),
+        pytest.param(object(), False, id="a stream with no isatty"),
+    ],
+)
+def test_only_a_stream_that_says_it_is_a_terminal_is_interactive(stream, expected):
+    """A closed stream raises :exc:`ValueError` from ``isatty`` and a
+    stand-in for stdin may have no ``isatty`` at all. Neither has a person
+    typing at it, and a surface told otherwise would wait at a question
+    nobody can answer.
+
+    Mutation: answer ``True`` from the ``except`` in ``is_interactive``
+    and the last two cases fail.
+    """
+    assert is_interactive(stream) is expected
+
+
+def test_a_process_with_no_stdin_is_not_interactive(monkeypatch):
+    """``sys.stdin`` is ``None`` in a process started without one."""
+    monkeypatch.setattr("sys.stdin", None)
+
+    assert is_interactive() is False

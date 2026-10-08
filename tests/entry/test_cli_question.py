@@ -33,6 +33,7 @@ import io
 import json
 import logging
 import pathlib
+import types
 from typing import Any
 
 import pytest
@@ -55,6 +56,7 @@ from omicsclaw.tools import (
     ToolPolicy,
 )
 from tests.entry.test_cli_activity import (  # type: ignore[import-not-found]
+    Slow,
     frames,
     terminal_screen,
 )
@@ -152,15 +154,19 @@ def _converse(tmp_path, provider, lines, *, source=None, repl_class=Repl, **over
         pytest.param({"options": OPTIONS}, "y", [], id="an approval word"),
         pytest.param({"options": OPTIONS}, "/auto", [], id="a command's name"),
         pytest.param({}, "/exit", [], id="the command that ends the REPL"),
+        pytest.param(
+            {"options": OPTIONS}, "  2 ", ["Louvain"], id="a number with spaces around it"
+        ),
     ],
 )
 def test_a_line_typed_at_the_question_is_the_answer(tmp_path, fields, typed, selected):
-    """Whatever is typed goes to the model as typed. A leading ``/`` does
-    not make it a command: ``/auto`` leaves the permission mode alone and
-    ``/exit`` leaves the REPL running.
+    """Whatever is typed goes to the model as typed, spaces included. A
+    leading ``/`` does not make it a command: ``/auto`` leaves the
+    permission mode alone and ``/exit`` leaves the REPL running.
 
-    Mutation: dispatch a line that starts with ``/`` as a command in
-    ``Repl._question`` and the three slash cases fail.
+    Mutations: dispatch a line that starts with ``/`` as a command in
+    ``Repl._question`` and the three slash cases fail; hand ``read_reply``
+    the stripped line and the reply of the last case loses its spaces.
     """
     provider = Scripted(
         _model(_asks("Which clustering?", **fields)), _says("understood")
@@ -425,7 +431,45 @@ def test_a_question_nobody_answered_does_not_outlive_its_exchange(tmp_path, capl
     assert "never retrieved" not in caplog.text
 
 
-# ---- a question whose deadline passes ---------------------------------------------
+def test_a_failed_question_task_is_logged_and_not_merely_dropped(
+    tmp_path, caplog, monkeypatch
+):
+    """A Task that could not settle its question still leaves ``_asking``,
+    and its exception is read and logged. Left unread, the event loop
+    reports it when the Task is collected, into a terminal somebody is
+    reading.
+
+    Mutation: do not give the Task ``_forget_asking`` as its done callback
+    and it stays in ``_asking`` with nothing logged.
+    """
+
+    async def boom(self, handle, request_id, event) -> None:
+        raise RuntimeError("could not settle the question")
+
+    async def drive():
+        app = _build(tmp_path, Scripted(_says("unused")))
+        repl = Repl(
+            app, source=ScriptedSource(["/exit"]), screen=Screen.into(io.StringIO())
+        )
+        repl._ask_question(None, types.SimpleNamespace(request_id="r1"))
+        started = tuple(repl._asking)
+        await asyncio.wait_for(
+            asyncio.gather(*started, return_exceptions=True), WAIT_S
+        )
+        await asyncio.sleep(0)  # done callbacks run on the next iteration
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return repl, started
+
+    monkeypatch.setattr(Repl, "_question", boom)
+    with caplog.at_level(logging.ERROR, logger="omicsclaw.entry.cli._repl"):
+        repl, started = asyncio.run(drive())
+
+    assert len(started) == 1
+    assert not repl._asking, "the finished task was dropped from the set"
+    assert "could not settle the question" in caplog.text
+
+
+# ---- the live line, and a question whose deadline passes --------------------------
 
 
 class _AtTheQuestion(ScriptedSource):
@@ -460,6 +504,64 @@ class _AtTheQuestion(ScriptedSource):
         self.during.append(self._buffer.getvalue()[mark:])
         self.answered_at = len(self._buffer.getvalue())
         return self._reply
+
+
+def _a_question_then_a_slow_tool(tmp_path, monkeypatch):
+    """Ask, have the person take a while to reply, then run a tool that
+    takes a while. Returns the source and everything written to a screen
+    that claims to be a terminal."""
+    monkeypatch.setattr(_activity, "TICK_S", 0.01)
+
+    async def drive():
+        provider = Scripted(
+            _model(
+                _asks("Which clustering?"),
+                ToolCall(id="s1", name="slowly", arguments="{}"),
+            ),
+            _says("settled"),
+        )
+        app = _build(tmp_path, provider, tools=(Slow(delay_s=0.25),))
+        screen, buffer = terminal_screen()
+        source = _AtTheQuestion([], buffer, reply="Leiden")
+        repl = Repl(app, source=source, screen=screen, animated=True)
+        await asyncio.wait_for(repl.ask("cluster it"), WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return source, buffer.getvalue()
+
+    source, printed = asyncio.run(drive())
+    assert source.during, "the question's prompt was never put"
+    assert "settled" in printed
+    return source, printed
+
+
+def test_nothing_is_painted_while_a_question_is_open(tmp_path, monkeypatch):
+    """On a real terminal the open prompt owns the cursor, and a spinner
+    frame written under it lands in the middle of what the person types.
+
+    Mutation: do not call ``activity.hold()`` in ``Repl._ask_question``
+    and frames are painted while the prompt is open.
+    """
+    source, _printed = _a_question_then_a_slow_tool(tmp_path, monkeypatch)
+
+    for window in source.during:
+        assert "\x1b" not in window, f"painted under the prompt: {window!r}"
+
+
+def test_the_live_line_comes_back_once_the_question_is_answered(
+    tmp_path, monkeypatch
+):
+    """A tool runs after the reply, so the line has work to show. A hold
+    that was never given back would leave the rest of the exchange with
+    nothing on screen.
+
+    Mutation: drop the ``finally`` that calls ``activity.release()`` from
+    ``Repl._answer_question`` and no frame is painted after the reply.
+    """
+    source, printed = _a_question_then_a_slow_tool(tmp_path, monkeypatch)
+
+    assert frames(printed[source.answered_at :]), (
+        "the line never came back after the question was answered"
+    )
 
 
 class _Gated:

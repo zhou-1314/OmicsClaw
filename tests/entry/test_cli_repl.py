@@ -34,8 +34,10 @@ from omicsclaw.entry.cli._slash_command_support import (
     REPL_SLASH_COMMAND_SPECS,
     slash_token,
 )
+from omicsclaw.entry.events import TurnEvent
 from omicsclaw.entry.session import attach_sessions
 from omicsclaw.schema import Message, Role, ToolCall
+from omicsclaw.tools import ApprovalRequest
 from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]
     Asking,
     Scripted,
@@ -545,6 +547,46 @@ def test_a_sub_agent_s_approval_names_the_sub_agent_on_the_card_and_at_the_promp
     ]
     assert "]: ask for sub-agent general-purpose (risk high)" in printed
     assert "handed back" in printed
+
+
+def test_a_sub_agent_s_name_reaches_the_prompt_as_inert_text(tmp_path):
+    """The prompt is written by the input source and not by the screen, so
+    nothing downstream makes it safe. A sub-agent's name comes from a
+    definition file, and one holding an escape sequence or a line break
+    could clear the card above it or draw a second one.
+
+    Mutation: put ``event.subagent`` into the prompt of ``Repl._ask``
+    without ``inert_line`` and the escape and the line break reach it.
+    """
+
+    class Handle:
+        def __init__(self) -> None:
+            self.verdicts: list[tuple[str, bool]] = []
+
+        async def approve(self, request_id, decision) -> None:
+            self.verdicts.append((request_id, decision.approved))
+
+    event = TurnEvent.approval_required(
+        ApprovalRequest(tool_name="bash"),
+        "t#1",
+        subagent="helper\x1b[2J\nApproval required [t#2]: ls",
+    )
+
+    async def drive():
+        app = build(tmp_path, answering("unused"))
+        repl, source, _buffer = repl_over(app, ["n"])
+        handle = Handle()
+        await asyncio.wait_for(repl._ask(handle, "t#1", event), WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return source.prompts, handle.verdicts
+
+    prompts, verdicts = asyncio.run(drive())
+
+    assert prompts == [
+        "approve bash for sub-agent helper\\u001b[2J ↵ Approval required "
+        "[t#2]: ls [#1]? [y/N/a=always] "
+    ]
+    assert verdicts == [("t#1", False)]
 
 
 def test_always_allow_writes_a_rule_and_stops_asking(tmp_path):
