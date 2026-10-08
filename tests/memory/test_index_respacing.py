@@ -3,7 +3,7 @@
 Earlier versions wrote each title and body into ``memories_fts`` as it
 was written, which left a run of Han characters as one token. The tests
 here build such a database with ``legacy_add``, which indexes the way
-those versions did, and then open it with the current store.
+those versions did, and then call ``respace_index`` on a current store.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import uuid
 import pytest
 
 from omicsclaw.memory import Database, LongTermStore, MemoryEntry
+from omicsclaw.memory import database as database_module
 from omicsclaw.memory.longterm import signature
 
 LEGACY_NOTES = (
@@ -59,6 +60,13 @@ def legacy_database(path=":memory:") -> Database:
     return db
 
 
+def respaced(db: Database) -> LongTermStore:
+    """A store over *db* whose index has been brought up to date."""
+    lt = LongTermStore(db)
+    run(lt.respace_index())
+    return lt
+
+
 def index_rows(db: Database) -> list[tuple[str, str]]:
     return db.run(
         lambda c: [
@@ -81,24 +89,63 @@ def entries(db: Database) -> list[tuple[str, str, str]]:
     )
 
 
-def test_opening_a_store_makes_legacy_han_entries_searchable() -> None:
+def rows_holding(db: Database, phrase: str) -> int:
+    """How many index rows hold *phrase*, counted without writing anything."""
+    return db.run(
+        lambda c: c.execute(
+            "SELECT COUNT(*) FROM memories_fts WHERE memories_fts MATCH ?",
+            (f'"{phrase}"',),
+        ).fetchone()[0]
+    )
+
+
+def traced(db: Database, work) -> list[str]:
+    """The SQL statements the connection runs while *work* is called."""
+    statements: list[str] = []
+    db.run(lambda c: c.set_trace_callback(statements.append))
+    try:
+        work()
+    finally:
+        db.run(lambda c: c.set_trace_callback(None))
+    return statements
+
+
+def test_respacing_makes_legacy_han_entries_searchable() -> None:
     db = legacy_database()
     lt = LongTermStore(db)
+    before = run(lt.search("域识别"))
+    rewritten = run(lt.respace_index())
     by_two = run(lt.search("批次"))
     by_three = run(lt.search("域识别"))
     by_glued_word = run(lt.search("harmony"))
     by_english = run(lt.search("mouse brain"))
     db.close()
+    assert before == []
+    assert rewritten == 2
     assert [h.title for h in by_two] == ["批次校正"]
     assert [h.title for h in by_three] == ["空间域识别"]
     assert [h.title for h in by_glued_word] == ["批次校正"]
     assert [h.title for h in by_english] == ["Visium QC"]
 
 
+def test_building_a_store_does_not_touch_the_database() -> None:
+    """A damaged index cannot stop a store being built.
+
+    Reading the index is left to ``respace_index``, which the caller may
+    guard.
+    """
+    db = legacy_database()
+    statements = traced(db, lambda: LongTermStore(db))
+    rows = index_rows(db)
+    db.close()
+    assert statements == []
+    assert ("批次校正", "批次效应用harmony校正") in rows
+
+
 def test_respacing_rewrites_the_index_and_leaves_the_entries_alone() -> None:
     db = legacy_database()
     before = entries(db)
-    LongTermStore(db)
+    respaced(db)
     after = entries(db)
     rows = index_rows(db)
     db.close()
@@ -112,15 +159,54 @@ def test_respacing_rewrites_the_index_and_leaves_the_entries_alone() -> None:
     )
 
 
-def test_opening_a_respaced_database_again_writes_nothing() -> None:
-    db = legacy_database()
-    LongTermStore(db)
-    changes = db.run(lambda c: c.total_changes)
-    LongTermStore(db)
-    LongTermStore(db)
-    again = db.run(lambda c: c.total_changes)
+def test_a_row_whose_title_alone_holds_han_text_is_respaced() -> None:
+    db = Database()
+    entry_id = legacy_add(db, "批次校正", "use harmony, never combat")
+    lt = LongTermStore(db)
+    rewritten = run(lt.respace_index())
+    found = run(lt.search("校正"))
+    rows = index_rows(db)
     db.close()
-    assert again == changes
+    assert rewritten == 1
+    assert [h.id for h in found] == [entry_id]
+    assert rows == [("批 次 校 正", "use harmony, never combat")]
+
+
+def test_a_respaced_row_is_built_from_the_entry_not_from_the_old_row() -> None:
+    """``long_term_memories`` is the source of truth for the index.
+
+    The old index row here has drifted from its entry. What the entry
+    says is what must be searchable afterwards.
+    """
+    db = Database()
+    entry_id = legacy_add(db, "聚类方法", "聚类一律用louvain")
+    db.run(
+        lambda c: c.execute(
+            "UPDATE long_term_memories SET title = ?, content = ? WHERE id = ?",
+            ("分群方法", "分群改用leiden", entry_id),
+        )
+    )
+    lt = respaced(db)
+    by_entry = run(lt.search("分群"))
+    by_old_row = run(lt.search("louvain"))
+    rows = index_rows(db)
+    db.close()
+    assert [h.id for h in by_entry] == [entry_id]
+    assert by_old_row == []
+    assert rows == [("分 群 方 法", "分 群 改 用 leiden")]
+
+
+def test_respacing_again_writes_nothing() -> None:
+    db = legacy_database()
+    lt = LongTermStore(db)
+    first = run(lt.respace_index())
+    changes = db.run(lambda c: c.total_changes)
+    again = [run(lt.respace_index()), run(LongTermStore(db).respace_index())]
+    after = db.run(lambda c: c.total_changes)
+    db.close()
+    assert first == 2
+    assert again == [0, 0]
+    assert after == changes
 
 
 def test_a_database_with_no_han_text_is_only_read() -> None:
@@ -128,14 +214,48 @@ def test_a_database_with_no_han_text_is_only_read() -> None:
     legacy_add(db, "Visium QC", "min_counts is 500")
     legacy_add(db, "Clustering", "leiden resolution 1.0")
     changes = db.run(lambda c: c.total_changes)
-    LongTermStore(db)
+    lt = LongTermStore(db)
+    statements = traced(db, lambda: run(lt.respace_index()))
     after = db.run(lambda c: c.total_changes)
     db.close()
     assert after == changes
+    assert not any(s.startswith("BEGIN") for s in statements), statements
+
+
+def test_with_nothing_to_respace_another_writer_is_not_waited_for(
+    tmp_path, monkeypatch
+) -> None:
+    """A start beside a busy process must not queue for the write lock.
+
+    The second connection holds the write lock throughout. Reading the
+    index needs no write lock, so the call answers at once. Asking for
+    one would fail when the shortened busy timeout runs out.
+    """
+    monkeypatch.setattr(database_module, "BUSY_TIMEOUT_S", 0.2)
+    path = tmp_path / "memory.db"
+    with Database(path) as seeded:
+        respaced_store = respaced(seeded)
+        run(respaced_store.add(MemoryEntry(title="降维", content="降维用UMAP")))
+    holder = sqlite3.connect(path, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        with Database(path) as db:
+            lt = LongTermStore(db)
+            rewritten = run(lt.respace_index())
+            found = rows_holding(db, "降 维")
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    assert rewritten == 0
+    assert found == 1
 
 
 def test_a_respacing_that_fails_part_way_changes_nothing(monkeypatch) -> None:
-    """One transaction: every row is rewritten, or none is."""
+    """One transaction: every row is rewritten, or none is.
+
+    The failure reaches the caller, the index is as it was, and the next
+    call does the whole rewrite.
+    """
     db = legacy_database()
     before = index_rows(db)
     index = LongTermStore._index
@@ -148,26 +268,50 @@ def test_a_respacing_that_fails_part_way_changes_nothing(monkeypatch) -> None:
         index(conn, entry_id, title, content)
 
     monkeypatch.setattr(LongTermStore, "_index", staticmethod(fail_on_the_second))
+    lt = LongTermStore(db)
     with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
-        LongTermStore(db)
+        run(lt.respace_index())
     after_failure = index_rows(db)
+    still_usable = run(lt.search("leiden"))
     monkeypatch.undo()
 
-    lt = LongTermStore(db)
+    retried = run(lt.respace_index())
     recovered = run(lt.search("域识别"))
     db.close()
     assert len(calls) == 2, "the failure must come after one row was rewritten"
     assert after_failure == before
+    assert [h.title for h in still_usable] == ["空间域识别"]
+    assert retried == 2
     assert [h.title for h in recovered] == ["空间域识别"]
+
+
+def test_respacing_runs_off_the_event_loop_thread(monkeypatch) -> None:
+    """Reading a large index must not hold up whatever else the loop serves."""
+    db = legacy_database()
+    work = LongTermStore._respace_index.__func__
+    threads: list[threading.Thread] = []
+
+    def recording(cls, conn):
+        threads.append(threading.current_thread())
+        return work(cls, conn)
+
+    monkeypatch.setattr(LongTermStore, "_respace_index", classmethod(recording))
+
+    async def scenario() -> threading.Thread:
+        await LongTermStore(db).respace_index()
+        return threading.current_thread()
+
+    loop_thread = run(scenario())
+    db.close()
+    assert len(threads) == 1
+    assert threads[0] is not loop_thread
 
 
 def test_respacing_reads_the_entries_under_the_write_lock() -> None:
     """An entry another connection edits meanwhile must not be indexed stale."""
     db = legacy_database()
-    statements: list[str] = []
-    db.run(lambda c: c.set_trace_callback(statements.append))
-    LongTermStore(db)
-    db.run(lambda c: c.set_trace_callback(None))
+    lt = LongTermStore(db)
+    statements = traced(db, lambda: run(lt.respace_index()))
     db.close()
     order = [
         "begin" if s.startswith("BEGIN") else "read"
@@ -187,7 +331,7 @@ def test_a_stale_index_row_with_no_live_entry_is_dropped() -> None:
             "UPDATE long_term_memories SET disabled = 1 WHERE id = ?", (gone,)
         )
     )
-    lt = LongTermStore(db)
+    lt = respaced(db)
     found = run(lt.search("停用"))
     remaining = db.run(
         lambda c: c.execute(
@@ -199,18 +343,18 @@ def test_a_stale_index_row_with_no_live_entry_is_dropped() -> None:
     assert remaining == 0
 
 
-def test_an_entry_an_earlier_version_adds_later_is_respaced_on_the_next_open(
+def test_an_entry_an_earlier_version_adds_later_is_respaced_the_next_time(
     tmp_path,
 ) -> None:
     """Two versions taking turns on one file lose nothing.
 
     The earlier version neither knows nor needs the spaced form: it adds
     its own rows unspaced, and they become searchable by Han substring
-    the next time a current store opens the file.
+    the next time a current process brings the index up to date.
     """
     path = tmp_path / "memory.db"
     with legacy_database(path) as first:
-        lt = LongTermStore(first)
+        lt = respaced(first)
         current = run(lt.add(MemoryEntry(title="降维", content="降维用UMAP")))
         first.run(
             lambda c: c.execute(
@@ -234,6 +378,8 @@ def test_an_entry_an_earlier_version_adds_later_is_respaced_on_the_next_open(
 
     with Database(path) as second:
         lt = LongTermStore(second)
+        before = run(lt.search("注释"))
+        rewritten = run(lt.respace_index())
         found_late = run(lt.search("注释"))
         found_current = run(lt.search("降维"))
         after = entries(second)
@@ -245,6 +391,8 @@ def test_an_entry_an_earlier_version_adds_later_is_respaced_on_the_next_open(
         )
 
     assert old_style == [current]
+    assert before == []
+    assert rewritten == 1
     assert [h.id for h in found_late] == [late]
     assert [h.id for h in found_current] == [current]
     assert after == snapshot
@@ -266,7 +414,7 @@ def test_two_connections_may_respace_the_same_file_at_once(tmp_path) -> None:
         db = Database(path)
         try:
             barrier.wait(timeout=10)
-            lt = LongTermStore(db)
+            lt = respaced(db)
             counts.append(len(run(lt.search("批次", limit=500))))
         except BaseException as exc:  # noqa: BLE001
             failures.append(exc)
@@ -307,7 +455,7 @@ def test_tags_and_counters_survive_respacing() -> None:
             ).fetchone()
         )
     )
-    lt = LongTermStore(db)
+    lt = respaced(db)
     row_after = db.run(
         lambda c: tuple(
             c.execute(

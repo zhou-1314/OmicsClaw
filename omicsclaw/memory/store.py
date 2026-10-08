@@ -120,19 +120,31 @@ class LongTermStore:
     index is kept in step with it by every method that writes.
 
     The index holds each title and body in the form :func:`_spaced`
-    gives it. Building a store reads the whole index once and rewrites
-    the rows that are not in that form, which is how a database written
-    by a version that indexed the text as written becomes searchable by
-    Han substring. A database with no such rows is only read.
+    gives it. A database written by a version that indexed the text as
+    written still has rows in the old form, and those match a Han query
+    only for a whole unbroken run until :meth:`respace_index` rewrites
+    them. Building a store does not read the index.
 
     :param database: Open database to read and write through.
-    :raises sqlite3.Error: If the index rows cannot be rewritten. The
-        rewrite is one transaction, so the index is then as it was.
     """
 
     def __init__(self, database: Database) -> None:
         self._db = database
-        database.run(self._respace_index)
+
+    async def respace_index(self) -> int:
+        """Rewrite the index rows whose text is not in the spaced form.
+
+        Reads the whole index once. Each row found in the old form is
+        rebuilt from its entry in ``long_term_memories``, or dropped when
+        that entry is gone or disabled, all in one transaction. With no
+        such row nothing is written and no write lock is taken, so this
+        can run at every start.
+
+        :returns: How many index rows were rewritten or dropped.
+        :raises sqlite3.Error: If the index cannot be read or rewritten.
+            The index is then as it was, and a later call tries again.
+        """
+        return await self._db.arun(self._respace_index)
 
     async def add(self, entry: MemoryEntry) -> str:
         """Store *entry*, merging into any entry with the same content.
@@ -282,13 +294,9 @@ class LongTermStore:
 
     @classmethod
     def _respace_index(cls, conn: sqlite3.Connection) -> int:
-        """Rewrite every index row whose text is not in its spaced form.
+        """What :meth:`respace_index` does, on a connection the caller commits.
 
-        Each such row is rebuilt from its entry in ``long_term_memories``,
-        or dropped when that entry is gone or disabled. Nothing is
-        written when no row needs it, so calling this again is a read.
-
-        :param conn: Connection to work on; the caller commits.
+        :param conn: Connection to work on.
         :returns: How many index rows were rewritten or dropped.
         """
         if not cls._unspaced_rows(conn):

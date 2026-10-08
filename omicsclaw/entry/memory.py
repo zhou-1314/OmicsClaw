@@ -154,16 +154,30 @@ def open_memory(config: AppConfig) -> MemoryBinding | None:
 
 
 async def prepare_memory(binding: MemoryBinding | None) -> int:
-    """Delete expired entries and rewrite the précis from what survives.
+    """Bring the search index up to date, delete expired entries, rewrite the précis.
 
-    Neither step may stop a deployment starting, so a failure in either
-    is logged and swallowed.
+    No step may stop a deployment starting, so a failure in any of them
+    is logged and swallowed. The index comes first and stands alone: if
+    it cannot be read or rewritten, the entries are still purged and the
+    précis still rewritten, search answers from the index as it is, and
+    the next start tries again.
 
     :param binding: Memory to maintain; ``None`` does nothing.
     :returns: How many expired entries were deleted.
     """
     if binding is None:
         return 0
+    try:
+        respaced = await binding.store.respace_index()
+    except Exception as error:  # noqa: BLE001 - start-up must not fail here
+        _log.warning(
+            "could not bring the memory search index up to date, so entries "
+            "indexed by an earlier version may not match Han queries: %s",
+            error,
+        )
+    else:
+        if respaced:
+            _log.info("memory search index: %d row(s) rewritten", respaced)
     purged = 0
     try:
         purged = await binding.store.purge_expired()

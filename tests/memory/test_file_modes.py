@@ -106,6 +106,7 @@ def test_respacing_a_legacy_index_keeps_the_files_0600(tmp_path, loose_umask) ->
         ))
     db = Database(target)
     store = LongTermStore(db)
+    asyncio.run(store.respace_index())
     found = asyncio.run(store.search("域识别"))
     siblings = [Path(f"{target}{suffix}") for suffix in ("-wal", "-shm")]
     modes = {path.name: _mode(path) for path in (target, *siblings) if path.exists()}

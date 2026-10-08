@@ -32,7 +32,9 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import logging
 import pathlib
+import sqlite3
 from typing import Sequence
 
 import pytest
@@ -61,6 +63,8 @@ from omicsclaw.entry.memory import (
 from omicsclaw.entry.session import InMemorySessionStore, attach_sessions
 from omicsclaw.memory import (
     EXTRACTION_SYSTEM_PROMPT,
+    Database,
+    LongTermStore,
     MemoryEntry,
     SqliteSessionStore,
 )
@@ -895,6 +899,166 @@ def test_a_broken_memory_does_not_stop_the_process_starting(tmp_path, offline):
 
 def test_no_memory_at_all_is_a_sweep_that_does_nothing(tmp_path):
     assert _run(prepare_memory(None)) == 0
+
+
+LEGACY_NOTE = ("空间域识别", "这个项目的空间域识别一律用 leiden")
+INDEX_WARNING = "could not bring the memory search index up to date"
+
+
+def _legacy_memory(config: AppConfig, corrupt: bool = False) -> None:
+    """A memory database whose index an earlier version wrote unspaced.
+
+    :param corrupt: Also zero every block of the index's own data, which
+        makes any write to the index fail.
+    """
+    title, content = LEGACY_NOTE
+
+    def write(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """INSERT INTO long_term_memories
+               (id, title, content, importance, created_at, updated_at)
+               VALUES ('e1', ?, ?, 5, 0, 0)""",
+            (title, content),
+        )
+        conn.execute(
+            "INSERT INTO memories_fts (id, title, content) VALUES ('e1', ?, ?)",
+            (title, content),
+        )
+        if corrupt:
+            conn.execute(
+                "UPDATE memories_fts_data SET block = zeroblob(length(block))"
+            )
+
+    with Database(memory_db_path(config)) as db:
+        db.run(write)
+
+
+def _search(app, query: str) -> list[str]:
+    """Titles ``memory_search`` answers *query* with."""
+    tool = _tool(app.memory, MEMORY_SEARCH_TOOL_NAME)
+    answer = _run(tool.execute(_call({"query": query})))
+    return [hit["title"] for hit in json.loads(answer)]
+
+
+def _index_warnings(caplog) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING and INDEX_WARNING in record.getMessage()
+    ]
+
+
+def test_starting_up_makes_a_legacy_index_searchable_by_han_substring(
+    tmp_path, offline, caplog
+):
+    config = _config(tmp_path)
+    _legacy_memory(config)
+
+    app = _run(open_app(config))
+    try:
+        found = _search(app, "域识别")
+    finally:
+        _run(_aclose(app))
+
+    assert found == [LEGACY_NOTE[0]]
+    assert _index_warnings(caplog) == []
+
+
+def test_building_an_app_alone_leaves_a_legacy_index_as_it_is(tmp_path, offline):
+    """The index is brought up to date by start-up maintenance, not by opening."""
+    config = _config(tmp_path)
+    _legacy_memory(config)
+
+    app = build_app(config)
+    try:
+        before = _search(app, "域识别")
+        _run(prepare_memory(app.memory))
+        after = _search(app, "域识别")
+    finally:
+        _run(_aclose(app))
+
+    assert before == []
+    assert after == [LEGACY_NOTE[0]]
+
+
+@pytest.mark.parametrize(
+    ("broken", "error"),
+    [
+        ("_unspaced_rows", sqlite3.DatabaseError("database disk image is malformed")),
+        ("_index", sqlite3.OperationalError("disk I/O error")),
+    ],
+    ids=["the index cannot be read", "the index cannot be rewritten"],
+)
+def test_an_index_that_cannot_be_brought_up_to_date_does_not_stop_start_up(
+    tmp_path, offline, monkeypatch, caplog, broken, error
+):
+    """The app starts, says why, and tries again at the next start.
+
+    What is lost meanwhile is Han substring search over the entries the
+    earlier version indexed. The précis is still rebuilt, and search
+    still answers from the index as it stands.
+    """
+    config = _config(tmp_path)
+    _legacy_memory(config)
+
+    def fail(*args, **kwargs):
+        raise error
+
+    with monkeypatch.context() as patch:
+        patch.setattr(LongTermStore, broken, staticmethod(fail))
+        app = _run(open_app(config))
+        try:
+            prompt = app.prompt.render().system_prompt
+            by_han = _search(app, "域识别")
+            by_word = _search(app, "leiden")
+        finally:
+            _run(_aclose(app))
+    warnings = _index_warnings(caplog)
+
+    caplog.clear()
+    again = _run(open_app(config))
+    try:
+        retried = _search(again, "域识别")
+    finally:
+        _run(_aclose(again))
+
+    assert len(warnings) == 1 and str(error) in warnings[0]
+    assert LEGACY_NOTE[0] in prompt
+    assert by_han == []
+    assert by_word == [LEGACY_NOTE[0]]
+    assert retried == [LEGACY_NOTE[0]]
+    assert _index_warnings(caplog) == []
+
+
+def test_a_corrupt_index_does_not_stop_start_up(tmp_path, offline, caplog):
+    """Real damage, not a patched method: the index's data blocks are zeroed."""
+    config = _config(tmp_path)
+    _legacy_memory(config, corrupt=True)
+
+    app = _run(open_app(config))
+    try:
+        prompt = app.prompt.render().system_prompt
+        stored = _run(app.memory.store.list())
+    finally:
+        _run(_aclose(app))
+
+    assert len(_index_warnings(caplog)) == 1
+    assert LEGACY_NOTE[0] in prompt
+    assert [entry.title for entry in stored] == [LEGACY_NOTE[0]]
+
+
+def test_the_index_warning_does_not_carry_what_was_remembered(
+    tmp_path, offline, caplog
+):
+    config = _config(tmp_path)
+    _legacy_memory(config, corrupt=True)
+
+    app = _run(open_app(config))
+    _run(_aclose(app))
+
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    assert INDEX_WARNING in logged
+    assert LEGACY_NOTE[0] not in logged and "leiden" not in logged
 
 
 # ---- lifetime -----------------------------------------------------------
