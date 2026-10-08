@@ -226,8 +226,9 @@ def question_card(
         The card, and ``True`` when anything of it was cut.
 
     Raises:
-        ValueError: *width* leaves fewer than 10 characters beside the
-            card's header.
+        ValueError: *width* is not an integer, or leaves fewer than 10
+            characters beside the card's header. The message names *width*
+            as it was passed.
     """
     head = f"Question [{inert_line(ref)}]"
     lines = [request.question]
@@ -236,12 +237,20 @@ def question_card(
         if option.description:
             line += f" - {inert_line(option.description)}"
         lines.append(line)
-    body, cut = inert_body(
-        "\n".join(lines),
-        max_lines=MAX_APPROVAL_BODY_LINES,
-        max_chars=MAX_APPROVAL_BODY_CHARS,
-        width=None if width is None else width - len(head) - len(": "),
-    )
+    try:
+        body, cut = inert_body(
+            "\n".join(lines),
+            max_lines=MAX_APPROVAL_BODY_LINES,
+            max_chars=MAX_APPROVAL_BODY_CHARS,
+            width=None if width is None else width - len(head) - len(": "),
+        )
+    except ValueError as error:
+        if width is None:
+            raise
+        raise ValueError(
+            f"width must be an integer that leaves at least 10 characters beside "
+            f"the {len(head) + len(': ')} of the card's header, not {width!r}"
+        ) from error
     return (f"{head}: {body}" if body else head), cut
 
 

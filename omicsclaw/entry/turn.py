@@ -841,9 +841,9 @@ class TurnHandle:
             ),
             on_observer_change=self._observers_changed,
         )
+        # The ``n`` of every ``<turn id>#<n>`` request id of this exchange,
+        # shared by everything that asks the person something.
         self._numbering = itertools.count(1)
-        """The ``n`` of every ``<turn id>#<n>`` request id of this exchange,
-        shared by everything that asks the person something."""
         self.approvals = ApprovalBroker(
             self.stream, timeout_s=approval_timeout_s, numbering=self._numbering
         )

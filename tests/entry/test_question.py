@@ -437,8 +437,15 @@ def test_with_a_width_no_line_of_the_card_is_longer_than_it(width):
 
 
 def test_a_width_with_no_room_beside_the_header_is_refused():
-    with pytest.raises(ValueError, match="width"):
-        question_card(_open(), "t#1", width=len("Question [t#1]: ") + 9)
+    """The error names the width the caller passed, which is the number
+    they can find in their own code, and one more character is enough."""
+    header = len("Question [t#1]: ")
+
+    with pytest.raises(ValueError, match=rf"width .* not {header + 9}$"):
+        question_card(_open(), "t#1", width=header + 9)
+
+    card, _cut = question_card(_open(), "t#1", width=header + 10)
+    assert max(len(line) for line in card.split("\n")) <= header + 10
 
 
 def test_a_card_over_the_bounds_is_cut_and_says_so():

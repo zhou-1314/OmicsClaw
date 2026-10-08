@@ -187,7 +187,7 @@ def test_the_database_and_the_precis_sit_beside_the_other_state(tmp_path):
 # ---- the two tools ------------------------------------------------------
 
 
-def test_the_memory_tools_are_mounted_after_everything_else(tmp_path, offline):
+def test_the_memory_tools_follow_the_tools_mounted_without_memory(tmp_path, offline):
     """Appended, not inserted: the tool table is a cached prompt prefix.
 
     ``ask_user`` is switched off here because it is mounted behind the
