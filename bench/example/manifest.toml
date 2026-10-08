@@ -1,0 +1,43 @@
+# A toy campaign for trying the harness end to end: add up a column of
+# integers. It tests the harness and measures nothing about an agent.
+#
+#   python -m omicsclaw.bench example <cases dir>
+#   python -m omicsclaw.bench run   bench/example/manifest.toml --cases <cases dir> --out <out dir>
+#   python -m omicsclaw.bench grade bench/example/manifest.toml --cases <cases dir> --out <out dir>
+#
+# The cases directory and the output directory are outside the repository.
+
+name = "example"
+seed = 20261008
+repeats = 1
+
+[budget]
+wall_clock_s = 600
+max_turns = 30
+
+[audit]
+# Searched for in tool calls and in files the run leaves behind, in
+# addition to the cases root and the meta root. A match marks the run.
+patterns = ['\bpip3? install\b', '\b(curl|wget)\b']
+
+# With provider and model left out, the agent uses whatever its own
+# environment or .env configures. A real campaign names both.
+[[models]]
+id = "default"
+
+[[arms]]
+id = "oc"
+adapter = "omicsclaw"
+permission_rules = "permission_rules.json"
+
+[[cases]]
+id = "sum-a"
+prompt_file = "prompt.md"
+deliverables = ["output/answer.json"]
+grader = "omicsclaw.bench.example:SumGrader"
+
+[[cases]]
+id = "sum-b"
+prompt_file = "prompt.md"
+deliverables = ["output/answer.json"]
+grader = "omicsclaw.bench.example:SumGrader"
