@@ -507,7 +507,7 @@ plan_write [{a, completed}, {b, completed}]            （两者先前都是 pen
 
 1. **计划块不计入压缩预算。** 它在压缩之后追加，压缩器测量时看不到它；条目内容长度没有上限（只靠工具描述要求"一个条目一个动作"），模型往 `content` 里塞长段落会直接增加每次调用的 token（plan 0039 §5）。
 2. **多挂一个工具会移动上下文预算。** `plan_write` 的声明计入 `reserve_tool_tokens`，默认开启让每个部署的可用窗口略小、压缩档位触发点略前移；预算卡得很紧的测试对工具数量敏感（plan 0039 §5、§8.4）。
-3. **规划闸门在压缩后可能不触发，EMERGENCY 截断后可能提前触发。** 窗口依赖可见的 assistant 消息数，压缩刚把尾部换掉时凑不满 `gate_turns`（plan 0039 §4.4）。EMERGENCY 截断可能丢掉本 exchange 开头的 user 消息而不留摘要，计数就会越过原来的位置，数到更早的一条 user 消息为止；提醒因此可能提前，仍是每 exchange 至多一次（plan 0039 §9）。
+3. **规划闸门在压缩后可能不触发，不带摘要的截断后可能提前触发。** 窗口依赖可见的 assistant 消息数，压缩刚把尾部换掉时凑不满 `gate_turns`（plan 0039 §4.4）。有两种截断会丢掉本 exchange 开头的 user 消息而不留摘要：EMERGENCY 截断，以及 SOFT、FULL 档在摘要器失败（抛错，或超时后返回空串）时走的降级截断。计数这时会越过原来的位置，数到更早的一条 user 消息为止，提醒因此可能提前，仍是每 exchange 至多一次。降级截断的结果只用于当次模型调用，不写回历史（plan 0039 §9.5）。
 4. **单进程写者假设。** `PlanBook` 每会话只读一次归档；两个进程写同一 workspace 的同一会话计划会静默互相覆盖，没有任何报错（`book.py` docstring、plan 0039 §8.5）。
 5. **`forget` 没有调用者。** `SessionRegistry._evict_sessions` 淘汰空闲会话时不通知 `PlanBook`，book 中的 store 字典随进程内接触过的会话数增长。
 6. **计划文件没有清理。** 没有删除 `plans/<session>.json` / `.md` 的入口；目录权限按 umask（文件本身是 0600）。

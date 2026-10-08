@@ -349,9 +349,10 @@ CLI、Desktop、channel 都拒绝空消息，compaction-only 的交换不调模�
 但要求注入器恰好活一次交换、每次模型调用恰好被问一次，闸门也不再只由模型当前能看到
 的内容决定。
 
-测试：辅助函数改成引擎的历史形状。新增 9 条单元用例，其中 4 条在修复前的代码上是红的
+测试：辅助函数改成引擎的历史形状。新增 11 条单元用例，其中 4 条在修复前的代码上是红的
 （之前的交换全是纯文字回答、之前的交换有很多只读轮次、新交换差一轮不触发、前一次
-交换写文件之后的只读轮次不计入）。`test_a_turn_that_only_talked_counts_as_read_only`
+交换写文件之后的只读轮次不计入），最后 2 条是独立审核之后补的（见 §9.4）。
+`test_a_turn_that_only_talked_counts_as_read_only`
 原来用两条相邻的纯文字回答触发闸门，改写成 `test_a_turn_that_only_talked_counts_as_a_turn`，
 放进一次没有新 user 消息的续跑里。新增脚本化 eval `planning/gate_ignores_earlier_exchanges`：
 经 `SessionRegistry` 连续三次一句话问答，任何请求都不带闸门文本；它在修复前也是红的。
@@ -365,10 +366,20 @@ CLI、Desktop、channel 都拒绝空消息，compaction-only 的交换不调模�
   说明是同一个会话。每条请求记录都带 import 到的 `omicsclaw/__init__.py` 路径。
 - 正向对照，修复后单次交换连续 12 条 `bash echo`：15 次模型调用，只有第 9 次带闸门
   文本，模型随后调用了 `plan_write`。
+- 独立审核在 `26054cdb` 上用同一组提示重跑了 18 次交换的读写混合会话：34 次模型调用，
+  0 次带闸门文本，答复正文里没有关于不建计划的解释。`68970e06` 上是 38 次调用里 3 次
+  带闸门文本，在第 11、12、16 次交换，三次的答复正文都出现了这类解释。这两次和 §9.1
+  里的不是同一次运行，模型每次走的轮次不同，触发的位置也不同。
 - 13 处定点变异全部有测试转红，包括去掉边界、把边界放在 `Role.TOOL` 上、计数早一轮
   和晚一轮。第一轮里"去掉 `gate_turns <= 0` 的判断"没有测试转红，为此补了
   `test_zero_or_fewer_turns_disable_the_gate_when_there_is_no_plan`。每次变异后文件按
   SHA-256 核对恢复。
+- 独立审核另做了 31 处变异，25 处转红。存活的 6 处里 4 处是等价变异，2 处是这次修复
+  之前就有的缺口：同一次交换里窗口之前的写入不解除闸门，以及带多个并行调用的
+  assistant 消息只算一轮。为这两处补了
+  `test_a_write_before_the_window_does_not_disarm_the_gate` 和
+  `test_a_turn_with_parallel_calls_counts_once`。用审核方这两处变异的原文重做，补之前
+  两处都存活，补之后各有一条用例转红。
 - `SPEC.md` 第 3 档（`tests/planning`、`tests/entry`、`tests/engine`、分层守卫、顶层
   `tests/test_*.py`、`tests/evals`）：`main` 上 3206 passed、48 skipped；`a2584028` 上
   3216 passed、47 skipped，没有失败，两边都是 3 xfailed、1 xpassed。多出的 10 条是当时
@@ -376,13 +387,16 @@ CLI、Desktop、channel 都拒绝空消息，compaction-only 的交换不调模�
   跳过、这次跑了。需要 fastapi 的四个 Desktop 测试文件在 OmicsClaw 环境里另跑：
   188 passed、1 skipped。`tests/entry/golden/` 没有变。
 
-### 9.5 没验证的部分
+### 9.5 已知边角和没验证的部分
 
-- EMERGENCY 截断可能丢掉本次交换的用户输入而不留摘要。用真实的 `compact()` 构造出了
-  这种视图：计数越过原来的位置，把前一次交换的 2 轮也数了进去（本次交换可见 6 轮，
-  数到 8 轮）。这时闸门可能提前提醒，仍是每次交换至多一次。没有改，记在
-  `docs/core-features/planning.md` §13。SOFT、FULL 的降级截断按代码读也可能丢掉用户
-  输入，扫描里没有构造出来。
+- 不带摘要的截断会丢掉本次交换的用户输入，计数就越过原来的位置，数进更早的交换。
+  闸门因此可能提前提醒，仍是每次交换至多一次。两种情况都用真实的 `compact()` 构造
+  出来了。代码没有改，记在 `_gate_fires` 的 docstring 和
+  `docs/core-features/planning.md` §13。
+  - EMERGENCY 截断：本次交换可见 6 轮，数到 8 轮。
+  - SOFT、FULL 档在摘要器抛错或超时返回空串时走的降级截断，由独立审核构造，实现方
+    复跑结果一致。前一次交换是 9 轮只读加一条答复，本次交换实际 4 轮：SOFT 数到
+    11 轮，FULL 数到 12 轮，`gate_turns=8` 触发。本次交换实际 3 轮时数到 7 轮，不
+    触发。降级截断的结果不写回历史。
 - 真实会话只在 DeepSeek 和 CLI 上跑过。Desktop 和 channel 没有跑真实会话；它们和 CLI
   一样走 `SessionRegistry` 到 `TurnRunner`，脚本化 eval 覆盖的是这一段共用路径。
-- 修复后没有重跑那段 18 次交换的读写混合会话。
