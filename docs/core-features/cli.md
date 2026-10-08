@@ -239,6 +239,9 @@ Tab 补全（`_input.build_completer`）只补 14 个命令；首个 token 含�
 `a` 刻意只覆盖精确调用：规则优先于危险命令模式，`bash(git *)` 会放过 `git status; rm -rf /`。
 要"别再问 bash"，用 `s` 或 `--permission-mode auto-approve`。
 
+回答要在卡片的提示符打开之后键入。工具还在运行时提前敲的 `y` 不会批准随后出现的卡片：它被丢弃，卡片上方多一行
+`input typed before this prompt was discarded`，见 §7.5。
+
 ### 7.2 总是询问的卡片
 
 - `ApprovalRequest.ask_every_time` 为真（危险命令模式、显式 `ask` 规则、改动 `.omicsclaw/`、规则文件或 `.env`、
@@ -289,17 +292,61 @@ answer [#2]>
 | 空行 | `declined`：模型被告知不要再问，按自己的判断继续并写明假设 |
 | Ctrl-C | 取消这次 exchange，回到提示符，对话历史不变 |
 
-- 提问提示符上**没有斜杠命令**：`/data/ref.h5ad` 是回答，`/auto`、`/exit` 在这里也只是文字。`y`、`s`、`a` 同样只是文字，不授予任何权限。
+- 提问提示符上**没有斜杠命令**：`/data/ref.h5ad` 是回答，`/auto`、`/exit` 在这里也只是文字。在这个提示符上键入的 `y`、`s`、`a`
+  同样只是文字，不授予任何权限。提示符收回之后才键入的 `y` 也批准不了后面的审批卡，见 §7.5。
 - 审批与提问共用 `#n` 编号，同一次 exchange 里不重号；`ask_user` 单独成批执行，所以同一时刻只有一张卡。
 - 回答和其他输入一样进入 `~/.config/omicsclaw/history`。问题与回答留在对话历史里，不写日志。
 - 没有期限（`approval_timeout_s=None`）时提问会一直等。设了 `--approval-timeout` 则到期返回 `no_answer`，本次 exchange 之后的提问不再等待。
-- 提问到期后提示符会收回：`_pump` 收到 `QUESTION_SETTLED` 时取消读回答的 Task 并等它结束（`_retract_question`），`No answer [...]` 打在提示符的下一行，
-  活动行恢复。之后键入的内容不再当作这个问题的回答；它留在终端的输入缓冲里，由下一个提示符读走，通常是 exchange 结束后的主提示符，
-  于是作为下一条消息发给模型。
+- 提问到期后提示符会收回：`_pump` 收到 `QUESTION_SETTLED` 时取消读回答的 Task 并等它结束（`_retract_question`），Task 结束时让输入源
+  收起提示符（`FreshSource.withdraw`）。两种终端输入源下 `No answer [...]` 都另起一行，活动行随后恢复。两者做法不同：
+  - prompt_toolkit：`prompt_async` 被取消时自己把提示符画成结束状态并换行。到期前键入、还没回车的字随提示符一起丢弃。
+  - 没装 prompt_toolkit 时的 `StreamSource`：提示符是直接写到标准输出的，后面没有换行。`withdraw` 补上这个换行，并清空终端的输入队列
+    （`termios.tcflush`），到期前键入的半行因此丢弃，不会和之后的回车拼成一行。
+- 到期之后才键入的整行不再是这个问题的回答，去向取决于接下来打开的是什么：
+  - 是卡片（审批卡，或下一个提问）：这一行被丢弃，卡片照常等待，见 §7.5；
+  - 没有卡片：exchange 结束后由主提示符读走，作为下一条消息发给模型。
 - 审批卡片到期后目前**不会**收回：`approve …?` 提示符留到 exchange 结束，这段时间没有活动行，在它上面键入的内容被丢弃。
 - 只有终端里的 REPL 会提问。`--prompt` / `--prompt-file`、管道输入、`oc desktop`、`oc channel` 下不挂载这个工具
   （`launch/_surfaces.py` 的 `surface_config`），子代理也没有它。
 - `--ask-user false` 或 `OMICSCLAW_ASK_USER=false` 整体关闭。开了 `/auto` 之后要离开终端的会话建议关掉，否则模型一问就停在那里。
+
+### 7.5 卡片只接受它出现之后键入的内容
+
+终端会留住没人读的输入。审批卡和提问卡都只读自己的提示符打开之后键入的内容（`Repl._read_at_card` 经 `FreshSource.read_fresh` 读）。
+提示符打开之前键入的内容既不结算这张卡，也不拼进它的回答。下面三种来路都算"之前"：
+
+- 工具还在运行、没有任何提示符时键入的；
+- 提问到期、提示符收回之后补的回答；
+- 一条模型消息里连着两张卡时，第一张答完之后、第二张的提示符打开之前键入的，包括在第一张的提示符上一口气键入的第二行。
+
+有输入被丢弃时，卡片的图例与提示符之间多一行弱化的 `input typed before this prompt was discarded`。
+提前键入 `y` 的人看到卡片还在等，从这一行知道原因，在提示符上重新回答即可。丢弃发生在这张卡拿到终端的那一刻，
+所以两张卡排队时，第二张等到自己的提示符打开才丢弃，在那之前键入的都算提前。
+
+主提示符（`❯`）不受影响：没有卡片打开时，提前或迟到键入的行照旧由主提示符读走，作为下一条消息。
+
+| 提示符打开之前已有的输入 | prompt_toolkit（`PromptToolkitSource`） | 没装 prompt_toolkit（终端上的 `StreamSource`） |
+|---|---|---|
+| 敲完并回车的行 | 丢弃，打印提示行 | 丢弃，打印提示行 |
+| 敲了一半、没回车的字 | 丢弃，打印提示行 | 丢弃，没有提示行：终端在回车之前不上报这半行 |
+| 上一个提示符多读到、prompt_toolkit 留给下一个提示符的键 | 丢弃，打印提示行 | 不适用 |
+| 被取消的读留下的 `readline` 已经读走的那一行 | 不适用 | 丢弃，打印提示行 |
+| 终端自己回的光标位置报告 | 丢弃，没有提示行 | 不适用 |
+
+prompt_toolkit 下，`_drop_keys` 先清掉它自己的预读缓存（`get_typeahead`），再在 raw 模式里把终端里等着的键读空。
+`StreamSource` 下，`_drop_typed` 先用 `termios.tcflush` 清空终端输入队列，再给被取消的读留下的那个 `readline` 线程
+`_HANDOVER_S`（0.05 秒）来报告。这段时间内报告的行是提示符打开之前键入的，丢弃。没有报告的线程还在等下一行，留给这张卡用。
+这 0.05 秒在提示符上屏之前，所以期间键入的行同样算提前。
+
+标准输入不是终端时没有这条规则：
+
+- 管道和文件（`oc cli < questions.txt`）：行是写脚本的人事先按顺序排好的，没有先后可言，卡片照旧读下一行。
+  丢弃的话，管道里每张审批卡都会读到输入结束而被拒。`ask_user` 在管道下不挂载，所以这里只有审批卡。
+- `ScriptedSource`（测试与一次性执行）不实现 `FreshSource`，卡片读它的下一行。
+
+没有 `termios` 的平台上，`StreamSource` 清不了终端的输入队列：整行和半行都留着，会回答接下来的卡片，§7.4 里到期前的半行
+也会和之后的回车拼成一行。prompt_toolkit 那一路走它自己的输入接口（`Input.raw_mode`、`Input.read_keys`），不调用 `termios.tcflush`；
+它在没有 `termios` 的平台（Windows）上没有实测过。
 
 ---
 
@@ -366,6 +413,10 @@ answer [#2]>
 | `ScriptedSource` | 固定列表：测试与一次性执行 |
 
 `open_prompt_source()` 按上述顺序降级而不是失败；prompt_toolkit 在函数体内导入，不是硬依赖。
+
+`PromptToolkitSource` 与 `StreamSource` 还实现可选协议 `FreshSource`：`read_fresh(prompt, discarded=…)` 只返回提示符打开之后键入的行，
+`withdraw()` 收起一个被取消的读留下的提示符。卡片用 `read_fresh` 读（§7.5），主提示符仍用 `read`。`StreamSource` 的流不是终端时，
+`read_fresh` 与 `read` 相同。`ScriptedSource` 不实现这个协议。
 
 ---
 

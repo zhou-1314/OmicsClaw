@@ -580,9 +580,26 @@ The REPL prints a card, `Question [<id>]: …` with numbered options, and reads
 one line at `answer [#n]> `: an option number (several, separated by commas,
 when the card allows it), an option's label, or anything in the person's own
 words. A line that starts with `/` is an answer there and runs no command;
-`y`, `s` and `a` grant nothing. An empty line skips the question and Ctrl-C
-cancels the exchange. Answers go into `~/.config/omicsclaw/history` like every
-other line typed. Only the REPL at a terminal asks: `--prompt` /
+`y`, `s` and `a` typed at that prompt grant nothing. An empty line skips the
+question and Ctrl-C cancels the exchange. Answers go into
+`~/.config/omicsclaw/history` like every other line typed. With
+`--approval-timeout` set, a question nobody answers is settled as `no_answer`
+at the deadline and its prompt is taken down: `No answer [<id>]` starts on a
+line of its own, and a reply typed after that is no longer this question's
+(the next paragraph says where it goes).
+
+A card, approval or question, takes only what is typed after its prompt
+opens. Input typed earlier is discarded when the prompt opens: a `y` typed
+while a tool was still running, a reply typed after a question's prompt was
+taken down, or a second line typed at one card before the next card's prompt
+is up. The card then prints `input typed before this prompt was discarded`
+above its prompt and waits. With `prompt_toolkit` this covers half-typed
+lines as well. Without it, the line reader that `oc cli` falls back to drops
+a half-typed line without printing the notice, and needs `termios` to drop
+anything. The REPL's own `❯` prompt is not a card: a line typed early or late
+with no card open is read there and sent as the next message. Piped input
+(`oc cli < script.txt`) has no earlier and later, so its lines answer
+approval cards in the order they were written. Only the REPL at a terminal asks: `--prompt` /
 `--prompt-file`, piped stdin, `oc desktop` and `oc channel` run without the
 tool (`surface_config` in `launch/_surfaces.py`), and sub-agents never get it.
 `--ask-user false` or `OMICSCLAW_ASK_USER=false` removes it. Set that for a
