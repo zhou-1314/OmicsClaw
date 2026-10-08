@@ -697,6 +697,24 @@ def test_commands_are_the_calls_that_ran_plus_the_ones_refused(tmp_path):
     ]
 
 
+def test_a_run_without_content_capture_has_no_commands_to_scan(tmp_path):
+    """Tool arguments reach the harness only through captured telemetry.
+    A run launched with capture off has none to offer, which is reported
+    as ``None`` so the access audit can say it scanned no commands. The
+    setting is read from the run's own launch record.
+    """
+    def launched(capture: str) -> dict:
+        return {"harness_env": {"OMICSCLAW_OTEL_CAPTURE_CONTENT": capture}}
+
+    lines = [llm("a", "turn1"), tool("t1", "turn1", "bash"), interaction()]
+
+    off = collected(tmp_path / "off", lines, command=launched("false"))
+    on = collected(tmp_path / "on", lines, command=launched("true"))
+
+    assert off.commands is None
+    assert on.commands == ()
+
+
 def test_model_output_that_was_cut_is_kept_as_text(tmp_path):
     cut = (
         '[{"id":"1","name":"bash","arguments":"{\\"command\\": \\"cat /cases/c1'

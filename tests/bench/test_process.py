@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -19,6 +20,22 @@ import pytest
 from omicsclaw.bench.process import MARKER_VARIABLE, Interrupted, run_process
 
 from ._support import FAKE_AGENT, alive, wait_for
+
+
+@pytest.fixture(autouse=True)
+def no_stray_outlives_its_test(tmp_path):
+    """Kill the detached child a test's stand-in started, if it is still up.
+
+    The tests below expect the runner to have killed it. When one of them
+    fails, this keeps its ``sleep`` from lingering on the machine. The pid
+    comes from the file the stand-in wrote, so nothing else is touched.
+    """
+    yield
+    pid_file = tmp_path / "stray.pid"
+    if pid_file.exists() and pid_file.read_text().strip():
+        pid = int(pid_file.read_text())
+        if alive(pid):
+            os.kill(pid, signal.SIGKILL)
 
 
 def start(tmp_path: Path, spec: dict, **options):
