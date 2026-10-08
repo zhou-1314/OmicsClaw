@@ -826,6 +826,71 @@ def test_an_approval_nobody_answered_does_not_outlive_its_exchange(tmp_path):
     assert not repl._asking
 
 
+class LeavesTheCardOpen(ScriptedSource):
+    """A person who never answers an approval card, and when its prompt
+    was closed."""
+
+    def __init__(self, lines, buffer) -> None:
+        super().__init__(lines)
+        self._buffer = buffer
+        self.on_screen_when_closed: str | None = None
+
+    async def read(self, prompt: str) -> str:
+        if not prompt.startswith("approve"):
+            return await super().read(prompt)
+        self.prompts.append(prompt)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.on_screen_when_closed = self._buffer.getvalue()
+            raise
+
+
+def test_an_approval_card_s_prompt_stays_open_past_its_deadline(tmp_path):
+    """What happens today, held so that it changes only on purpose. A
+    question's prompt is taken down when its deadline passes; an approval
+    card's is not, and stays until the exchange ends. Whether it should
+    come down too is a separate decision.
+
+    Mutation: record the approval's Task in ``Repl._replying`` and retract
+    on ``APPROVAL_SETTLED`` as well, and the prompt is closed as soon as
+    the denial is printed.
+    """
+
+    async def drive():
+        sleeping = Sleeping()
+        app = build(
+            tmp_path,
+            Scripted(calling("ask_a", "sleep")),
+            tools=(Asking("ask_a"), sleeping),
+            approval_timeout_s=0.2,
+        )
+        buffer = io.StringIO()
+        source = LeavesTheCardOpen(["do it"], buffer)
+        repl = Repl(app, source=source, screen=Screen.into(buffer))
+        loop = asyncio.create_task(repl.run())
+        for _ in range(int(WAIT_S / 0.005)):
+            if "Approval denied [" in buffer.getvalue():
+                break
+            await asyncio.sleep(0.005)
+        await asyncio.sleep(0.05)  # room for a retraction, were there one
+        denied = buffer.getvalue()
+        still_reading = [task for task in repl._asking if not task.done()]
+        closed_before_the_end = source.on_screen_when_closed
+        assert repl.interrupt() is True
+        await asyncio.wait_for(loop, WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return denied, still_reading, closed_before_the_end, source
+
+    denied, still_reading, closed_before_the_end, source = asyncio.run(drive())
+
+    assert "no answer before the approval deadline" in denied
+    assert len(still_reading) == 1, "the card's prompt was taken down"
+    assert closed_before_the_end is None
+    assert source.on_screen_when_closed is not None, "the exchange's end closes it"
+    assert source.prompts.count("approve ask_a [#1]? [y/N/a=always] ") == 1
+
+
 class InterruptedAtTheCard(ScriptedSource):
     """A person who presses Ctrl-C at every approval card.
 

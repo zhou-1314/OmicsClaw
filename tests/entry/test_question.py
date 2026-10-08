@@ -448,6 +448,22 @@ def test_a_width_with_no_room_beside_the_header_is_refused():
     assert max(len(line) for line in card.split("\n")) <= header + 10
 
 
+def test_the_refusal_says_how_long_the_card_s_header_is():
+    """The header's length is the message's other number. Ten more than
+    it is the narrowest width that fits, so a caller can pick one without
+    reading this module.
+
+    Mutation: leave the ``": "`` out of the count in ``question_card``
+    and the message says 14 for a header 16 characters long.
+    """
+    header = len("Question [t#1]: ")
+
+    with pytest.raises(ValueError) as refused:
+        question_card(_open(), "t#1", width=header + 9)
+
+    assert f"beside the {header} of the card's header" in str(refused.value)
+
+
 def test_a_card_over_the_bounds_is_cut_and_says_so():
     """401 lines are within the tool's 2,000 characters and over the card's
     400 lines. The flag is what a chat surface will refuse to send on, so

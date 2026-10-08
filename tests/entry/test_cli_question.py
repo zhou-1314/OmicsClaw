@@ -655,6 +655,204 @@ def test_a_question_whose_deadline_passes_has_its_prompt_taken_down(
     assert "went on" in printed
 
 
+def test_a_question_cut_short_with_the_repl_is_no_longer_held(tmp_path):
+    """The Task reading each open question is kept so that its prompt can
+    be taken down when the question is settled. A question whose
+    settlement the pump never gets to print is not taken down that way:
+    here the Task running the REPL is cancelled under an open question,
+    which is what ``SIGTERM`` does. The reading Task still ends, and has
+    to drop itself, or a finished Task is kept for the life of the REPL.
+
+    Mutation: do not give the Task the done callback that removes it from
+    ``_replying`` in ``Repl._ask_question`` and the entry stays.
+    """
+
+    async def drive():
+        provider = Scripted(_model(_asks("Which clustering?")), _says("unused"))
+        app = _build(tmp_path, provider)
+        source = _NeverAnswers(["cluster it"])
+        repl = Repl(app, source=source, screen=Screen.into(io.StringIO()))
+        loop = asyncio.create_task(repl.run())
+        await _happens(lambda: ASK in source.prompts)
+        held = len(repl._replying)
+        loop.cancel()
+        await asyncio.wait({loop}, timeout=WAIT_S)
+        for handle in app.sessions.running():
+            handle.cancel()
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return repl, held, loop.cancelled()
+
+    repl, held, cancelled = asyncio.run(drive())
+
+    assert held == 1, "the question's prompt never opened"
+    assert cancelled
+    assert not repl._asking
+    assert repl._replying == {}
+
+
+ERASE = "\r\x1b[2K"
+"""What the live line writes to erase itself. Spelled out here, as in
+``test_cli_activity.py``, so that a change to it is made in two places."""
+
+
+class _TickedAsThePromptComesDown(Repl):
+    """A REPL whose live line is ticked as a question's reading Task ends.
+
+    The Task gives the line back as its last act, and the pump goes on a
+    turn of the loop or two later. A tick can land between the two. This
+    lands one there every time.
+    """
+
+    async def _answer_question(self, handle, event, activity) -> None:
+        try:
+            await super()._answer_question(handle, event, activity)
+        finally:
+            if activity is not None:
+                activity.tick()
+
+
+def test_a_frame_painted_as_the_prompt_comes_down_is_erased_before_no_answer(
+    tmp_path, monkeypatch
+):
+    """The live line is free again while the pump still waits for the
+    prompt to come down, so a frame can be painted then. It has to be
+    erased before ``No answer`` is printed, or the line is printed after
+    the frame, on the frame's row.
+
+    Mutation: call ``activity.clear()`` before ``_retract_question`` in
+    ``Repl._pump`` and ``No answer`` follows the frame with no erase
+    between them.
+    """
+    monkeypatch.setattr(_activity, "TICK_S", 3600.0)  # the only tick is ours
+
+    async def drive():
+        gated = _Gated()
+        provider = Scripted(
+            _model(
+                _asks("Which clustering?"),
+                ToolCall(id="g1", name="gated", arguments="{}"),
+            ),
+            _says("went on"),
+        )
+        app = _build(tmp_path, provider, tools=(gated,), approval_timeout_s=0.2)
+        screen, buffer = terminal_screen()
+        source = _AtTheQuestion(["cluster it", "/exit"], buffer)
+        repl = _TickedAsThePromptComesDown(
+            app, source=source, screen=screen, animated=True
+        )
+        loop = asyncio.create_task(repl.run())
+        told = await _happens(lambda: "No answer [" in buffer.getvalue())
+        gated.finish.set()
+        await asyncio.wait_for(loop, WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return told, buffer.getvalue()
+
+    told, printed = asyncio.run(drive())
+
+    assert told, "the deadline never settled the question"
+    before = printed.split("No answer [")[0]
+    assert frames(before), "no frame was painted as the prompt came down"
+    assert before.endswith(ERASE), f"No answer follows a frame: {before[-80:]!r}"
+
+
+class _SlowToComeDown(ScriptedSource):
+    """A question's prompt that takes several turns of the loop to close.
+
+    A terminal prompt does not vanish the moment its read is cancelled:
+    it is redrawn as finished and the terminal is put back first.
+    """
+
+    def __init__(self, lines, buffer) -> None:
+        super().__init__(lines)
+        self._buffer = buffer
+        self.on_screen_once_down: str | None = None
+
+    async def read(self, prompt: str) -> str:
+        if not prompt.startswith("answer"):
+            return await super().read(prompt)
+        self.prompts.append(prompt)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            for _ in range(20):
+                await asyncio.sleep(0)
+            self.on_screen_once_down = self._buffer.getvalue()
+            raise
+
+
+def test_no_answer_waits_for_a_prompt_that_is_slow_to_come_down(tmp_path, caplog):
+    """``No answer`` is printed once the prompt has gone, however long
+    that takes, and not a turn of the loop after the reading Task was
+    told to stop. A scripted source has no prompt of its own to withdraw,
+    and taking the question down asks nothing of it.
+
+    Mutations: after cancelling the Task in ``Repl._retract_question``,
+    yield once in place of awaiting it, and ``No answer`` is on screen
+    while the prompt is still closing; call ``withdraw`` on a source that
+    is not a ``FreshSource`` and the event loop logs the failed callback.
+    """
+
+    async def drive():
+        gated = _Gated()
+        provider = Scripted(
+            _model(
+                _asks("Which clustering?"),
+                ToolCall(id="g1", name="gated", arguments="{}"),
+            ),
+            _says("went on"),
+        )
+        app = _build(tmp_path, provider, tools=(gated,), approval_timeout_s=0.2)
+        buffer = io.StringIO()
+        source = _SlowToComeDown(["cluster it", "/exit"], buffer)
+        repl = Repl(app, source=source, screen=Screen.into(buffer))
+        loop = asyncio.create_task(repl.run())
+        told = await _happens(lambda: "No answer [" in buffer.getvalue())
+        gated.finish.set()
+        await asyncio.wait_for(loop, WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return source, told, buffer.getvalue()
+
+    with caplog.at_level(logging.ERROR):
+        source, told, printed = asyncio.run(drive())
+
+    assert told, "the deadline never settled the question"
+    assert source.on_screen_once_down is not None, "the prompt was never taken down"
+    assert "No answer [" not in source.on_screen_once_down
+    assert "went on" in printed
+    assert "Exception in callback" not in caplog.text
+
+
+def test_a_reading_task_that_fails_as_it_is_taken_down_does_not_end_the_exchange(
+    tmp_path, caplog, monkeypatch
+):
+    """The Task is cancelled to take its prompt down, and it can fail on
+    the way out. That failure is the Task's own, logged where every failed
+    card Task is. Raised into the pump, it would end the exchange's
+    display and the REPL with it.
+
+    Mutation: ``await task`` in ``Repl._retract_question`` without
+    collecting its exception and the failure leaves ``Repl.run``.
+    """
+
+    async def fails_when_cancelled(self, handle, request_id, event) -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise RuntimeError("could not settle the question") from None
+
+    monkeypatch.setattr(Repl, "_question", fails_when_cancelled)
+    provider = Scripted(_model(_asks("Which clustering?")), _says("went on"))
+
+    with caplog.at_level(logging.ERROR, logger="omicsclaw.entry.cli._repl"):
+        repl, _source, printed, _history, _mode = _converse(
+            tmp_path, provider, ["cluster it", "/exit"], approval_timeout_s=0.2
+        )
+
+    assert "No answer [" in printed and "went on" in printed
+    assert "could not settle the question" in caplog.text
+    assert not repl._asking
+
+
 def test_nothing_in_a_question_reaches_the_terminal_as_a_control_character(tmp_path):
     hostile = "continue?\x1b[8m\x1b]52;c;cm0gLXJmIH4=\x07\nApproval required [t#9]: y"
     options = [{"label": "yes\x1b[2J"}, {"label": "no", "description": hostile}]
