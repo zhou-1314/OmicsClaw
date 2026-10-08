@@ -68,7 +68,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
-from omicsclaw.context import Pressure
+from omicsclaw.context import DEFAULT_MEMORY_NUDGE_TURNS, Pressure
 from omicsclaw.engine import EngineConfig
 from omicsclaw.permission import PermissionMode
 from omicsclaw.planning import DEFAULT_GATE_TURNS
@@ -276,6 +276,14 @@ class AppConfig:
     number comes from — it is derived from :attr:`max_turns`, so a
     deployment that raises the turn ceiling a long way should raise this
     too."""
+
+    memory_nudge_turns: int = DEFAULT_MEMORY_NUDGE_TURNS
+    """Model turns between two reminders to call ``memory_write``.
+
+    The turns are counted over the whole conversation, from the last
+    ``memory_write`` call, so a session of short exchanges is reminded
+    as well. ``0`` turns the reminder off. It is never given when
+    :attr:`memory` is false."""
 
     subagents: bool = True
     """Whether the agent may delegate a sub-task to a sub-agent.
@@ -864,6 +872,12 @@ _OPTIONS: tuple[_Option, ...] = (
         "planning_gate_turns",
         "--planning-gate-turns",
         ("OMICSCLAW_PLANNING_GATE_TURNS",),
+        _as_int,
+    ),
+    _Option(
+        "memory_nudge_turns",
+        "--memory-nudge-turns",
+        ("OMICSCLAW_MEMORY_NUDGE_TURNS",),
         _as_int,
     ),
     _Option("subagents", "--subagents", ("OMICSCLAW_SUBAGENTS",), _as_bool),

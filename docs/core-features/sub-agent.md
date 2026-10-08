@@ -424,7 +424,7 @@ oc cli --permission-mode read-only       # 注意：这同时禁用了委派（5
 
 1. **只有前台委派。** 没有 `background` 参数，没有 `TaskTracker`，没有"下次 dispatch 前注入结果"，没有 `@agent` 直跑，也没有后台任务查看器。原因：后台结果必须在 `SessionRegistry.submit` 组 prompt 之前前置拼入，而 `submit` 今天没有这样的接缝；脱离父 turn 的 `asyncio.Task` 还需要有人持有引用、在 `shutdown` 时等待或取消，并且要显式重绑 `ToolContext`（父 turn 结束后它的 broker 已经 `abandon`）。计划 0047 第二版把后台委派标为**暂缓**。CLI 的 `/tasks` 显示的是执行计划的任务状态，不是后台子代理。
 2. **委派是一道屏障，引擎侧没有上界。** `concurrency_safe=False`，本轮其余工具要排在它后面等；委派期间每工具超时被暂停。真正的上界是 `turn_timeout_s`，**默认是 `None`**（`AppConfig` 默认值，CLI 也不另设），所以一次跑飞的委派没有任何自动上界，只能 Ctrl+C。
-3. **子代理的 token 用量不计入父代理。** 两次运行是两个 `RunResult`，本层不合并，所以 `/usage` 会少算。计划 0047 把"用量并入父会话"列为唯一可实施任务，尚未实现。
+3. **子代理的 token 用量不进父代理的 `RunResult.usage`，由交换另记一份。** 两次运行是两个 `RunResult`，引擎不合并。子引擎每轮结束时经 `report_usage` 上报，`TurnRunner` 给每次交换绑定一个 `DelegatedUsage`，从 `TurnHandle.delegated` 读；CLI 的 `/usage` 把它加进总量（计划 0047 A3）。Desktop 的 `result` 帧还没有并入，它的 `usage` 和 `model_calls` 只含主代理的调用。仍有不计的情况：交换被取消或 `turn_timeout_s` 到期时，子代理正在执行工具的那一轮（它的 `TURN_END` 没有发出，主代理自己被打断的那一轮同样不计）；不经 `TurnRunner` 的 `run_turn`、`stream_turn`；后端没报用量的调用只计次数，不计 token。
 4. **`task` 的 `approval_mode=AUTO` 是刻意的宽松默认。** 它成立的前提是"子代理用到的每个工具都保留自己的 gate"。一旦这条性质被破坏，AUTO 就会变成漏洞，配套测试不能删。
 5. **`read-only` 模式禁用委派**（5.4），这是用户能直接看到的效果，不只是内部细节。
 6. **审批卡片不显示是哪个子代理在请求。** `values["subagent"]` 已经绑定，但还没有 Surface 读取它（计划 0052 T1）。

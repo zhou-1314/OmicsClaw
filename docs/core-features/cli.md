@@ -206,7 +206,7 @@ REPL 真正实现的是 `REPL_SLASH_COMMAND_SPECS` 这个子集——共 14 个�
 | `/resume [id\|number]` | 无参数且在终端、prompt_toolkit ≥ 3.0.52 时弹出方向键选择器（↑/↓、Enter、Esc）；管道中打印列表；恢复后回显上一问一答 |
 | `/compact` | 立即压缩本会话，保留近期消息，报告节省情况；本会话有 exchange 在跑时拒绝 |
 | `/plan`、`/tasks` | 只读显示本会话的执行计划（`AgentApp.plans`），图标 `▶ ✔ ⊘ ○` |
-| `/usage` | 本 REPL 累计的输入/输出 tokens（仅累加后端报告过的 usage） |
+| `/usage` | 本 REPL 累计的输入/输出 tokens（仅累加后端报告过的 usage）。总量含子代理花掉的；子代理有花费时在括号里单列，如 `Session total: 307 in / 33 out (sub-agents: 7 in / 3 out)` |
 | `/mcp` | 读取实时 `MCPManager.statuses()`：每个 `.mcp.json` 服务器的状态与工具数 |
 | `/auto [on\|off\|status]` | 在 `default` 与 `auto-approve` 间切换（§7.3） |
 | `/exit` | 退出；别名 `/quit`、`/q` |
@@ -336,7 +336,7 @@ answer [#2]>
 | `QUESTION_ASKED` | 卡片按行以正常样式打印（不弱化），独立 Task 读回答（§7.4） |
 | `PROGRESS` | 更新活动行的细节 |
 | `CONTEXT` / `COMPACTION` / `QUEUED` / `APPROVAL_SETTLED` / `QUESTION_SETTLED` / `GAP` | `TextRenderer` 的一行控制文本；已回答的提问不出字。`QUESTION_SETTLED` 到达时提示符还开着的话先收回它（§7.4） |
-| `TURN_END` | 累加 usage 供 `/usage`（`usage=None` 跳过，零值照加） |
+| `TURN_END` | 累加 usage 供 `/usage`（`usage=None` 跳过，零值照加）。子代理的轮次不在这条流里，它们的用量在 exchange 结束后从 `TurnHandle.delegated` 读一次 |
 | `EXCHANGE_END` | `converged` 不打印（每个回答下面一行 "Done." 是噪音）；`cancelled` / `failed` 打印 |
 
 `TextRenderer`（`omicsclaw/entry/render.py`）在 CLI 以 `batched=False` 使用：token 一到就上屏。它从不渲染工具参数或输出的原始载荷

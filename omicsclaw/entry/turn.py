@@ -74,15 +74,17 @@ from omicsclaw.tools.context import (
     QuestionAnswer,
     current_context,
     use_tool_context,
+    use_usage_sink,
 )
 
 from .approval import ApprovalBroker
 from .assembly import AgentApp
 from .compaction import PINNED_SYSTEM_MESSAGES, build_compactor
 from .events import Terminal, TurnEvent
-from .planning import build_injector
+from .nudges import build_augmentor
 from .question import QuestionBroker
 from .stream import DEFAULT_RING_SIZE, TurnObservation, TurnStream
+from .subagent import DelegatedUsage
 
 __all__ = [
     "PINNED_SYSTEM_MESSAGES",
@@ -265,9 +267,10 @@ def _assemble(
 ) -> _Exchange:
     """Everything one exchange needs before the engine is called.
 
-    *plan_block* is false for the compaction-only path, which never
-    calls a model: asking for the injector would restore the session's
-    plan from its archive for an exchange that has no turn to remind.
+    *plan_block* decides whether the exchange gets an augmentor at all.
+    It is false for the compaction-only path, which never calls a model:
+    building the augmentor would restore the session's plan from its
+    archive for an exchange that has no turn to remind.
     """
     return _Exchange(
         conversation=_Carried(tuple(history)),
@@ -278,7 +281,7 @@ def _assemble(
             on_measure=on_measure,
             on_compact=on_compact,
         ),
-        augmentor=build_injector(app, session_id=session_id) if plan_block else None,
+        augmentor=build_augmentor(app, session_id=session_id) if plan_block else None,
     )
 
 
@@ -490,6 +493,7 @@ class TurnRunner:
         "_stream",
         "_user_text",
         "_values",
+        "delegated",
         "error",
         "outcome",
         "session_id",
@@ -511,8 +515,13 @@ class TurnRunner:
         approval: ApprovalBroker | None = None,
         questions: QuestionBroker | None = None,
         force_compaction: bool = False,
+        delegated: DelegatedUsage | None = None,
     ) -> None:
         """*history* must already be free of a system message (Q3).
+
+        *delegated* receives the sub-agent model calls of this exchange.
+        Pass the one a caller will read after the Task has ended;
+        ``None`` creates one, readable as :attr:`delegated`.
 
         *approval* is typed as the broker rather than as the wider
         :data:`~omicsclaw.tools.ApprovalChannel` because this layer owes
@@ -541,6 +550,7 @@ class TurnRunner:
         self.terminal: Terminal = "failed"
         self.error: BaseException | None = None
         self.outcome: TurnOutcome | None = None
+        self.delegated = delegated if delegated is not None else DelegatedUsage()
 
     async def run(self) -> TurnOutcome:
         """Run the exchange, publishing every step, and return what to keep.
@@ -560,6 +570,12 @@ class TurnRunner:
         genuinely cancelled, because folding cancellation into a return
         value is how a cancelled Task starts looking finished to
         :mod:`asyncio`.
+
+        Each model turn of a sub-agent this exchange delegates to is
+        recorded in :attr:`delegated` when that turn ends. The turns that
+        finished before a cancellation, a failure or the deadline are
+        therefore counted, and :attr:`delegated` can be read whatever
+        :attr:`terminal` says.
         """
         self._publish(
             TurnEvent.exchange_start(
@@ -570,7 +586,7 @@ class TurnRunner:
             "exchange started: session=%s turn=%s", self.session_id, self.turn_id
         )
         try:
-            with use_tool_context(
+            with use_usage_sink(self.delegated.add), use_tool_context(
                 approval=self._approval,
                 progress=self._on_progress,
                 values=self.turn_values(),
@@ -768,6 +784,7 @@ class TurnHandle:
         "_timer",
         "approvals",
         "compaction_only",
+        "delegated",
         "error",
         "outcome",
         "questions",
@@ -827,6 +844,10 @@ class TurnHandle:
         self.terminal: Terminal | None = None
         self.error: BaseException | None = None
         self.outcome: TurnOutcome | None = None
+        self.delegated = DelegatedUsage()
+        """The model calls sub-agents made for this exchange. Filled while
+        the exchange runs and kept after it ends, including when it was
+        cancelled or failed and :attr:`outcome` is ``None``."""
         self._task: asyncio.Task[TurnOutcome] | None = None
         self._settled = asyncio.Event()
         self._had_observer = False

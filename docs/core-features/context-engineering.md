@@ -42,7 +42,7 @@ ReAct 引擎（`omicsclaw/engine/`）本身不知道对话从哪里来：`AgentE
 │    SessionRegistry ── SessionStore = SqliteSessionStore | InMemorySessionStore    │
 │                                                                                  │
 │  TurnRunner._sequence() (entry/turn.py)  —— 每个 exchange 一次                    │
-│    _assemble(): _Carried(history) + build_compactor() + build_injector()          │
+│    _assemble(): _Carried(history) + build_compactor() + build_augmentor()         │
 │    app.engine.exchange_stream(user_text, conversation=, prompt=app.prompt,        │
 │                               compactor=, augmentor=)                             │
 └───────────────┬──────────────────────────────────────────────────────────────────┘
@@ -323,7 +323,7 @@ SessionRegistry._attempt(handle)
      _assemble():
         _Carried(history)                           Conversation 协议（messages / commit）
         build_compactor(app, session_id, state=compaction, on_measure, on_compact)
-        build_injector(app, session_id)             执行计划块（TurnAugmentor）
+        build_augmentor(app, session_id)            记忆提醒与执行计划块（TurnAugmentor）
      app.engine.exchange_stream(user_text, conversation=, prompt=app.prompt,
                                 compactor=, augmentor=)
         _opening: [system(render), *history, user]

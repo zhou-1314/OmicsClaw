@@ -1,8 +1,10 @@
 # 计划 0047 — 子代理后续：用量并入父会话（可实施）与后台委派（暂缓）
 
-**状态**：第三版（2026-09-23）。经一轮独立只读审核（需修改后实施），owner 按推荐裁定，已据此返工：A0/A1 移入缺陷修复，A2 归 0052，B 部分拆至 0055，后台委派暂缓；第三版经架构审核与 harness9 对照小改（S4 的处置、子代理不再获得 `memory_write`、后台恢复时的 harness9 参考）。待 owner 过目。未写任何生产代码。
+**状态**：第三版（2026-09-23）。经一轮独立只读审核（需修改后实施），owner 按推荐裁定，已据此返工：A0/A1 移入缺陷修复，A2 归 0052，B 部分拆至 0055，后台委派暂缓；第三版经架构审核与 harness9 对照小改（S4 的处置、子代理不再获得 `memory_write`、后台恢复时的 harness9 参考）。A3 的核心与 CLI 已交付（2026-10-08），Desktop 部分延后，见下。
 
 **2026-10-07 核对**：A0、A1 已随缺陷修复批次交付；A2、A3 未实现（子代理会调 `report_usage`，但生产代码没有安装 usage sink，`/usage` 仍不含子代理用量）；A4–A7 暂缓。
+
+**2026-10-08 交付**：A3 的核心与 CLI 已交付，Desktop 部分延后。分支 `feat/subagent-usage`（基线 `90a3bec3`）让每次交换各有一个子代理用量的计数，CLI 的 `/usage` 总量含子代理并单列，已通过独立审核与复核。Desktop 的 `result` 帧仍然只含主代理的用量：owner 于 2026-10-08 裁定这部分暂不合入，等 App 的上下文占用指示改用单独的数值之后再合。记录见 §11；A2 归 0052，A4–A7 仍暂缓。
 
 **缘起**。0046（子代理层）把四件事推给了 0047：后台委派（`task` 的 `background`
 模式）与 `TaskTracker`、分离运行的结果注入下一轮、`@agent` 直跑（0046 :41-44、
@@ -380,3 +382,55 @@ harness9 的后台委派（`internal/subagent/task_tool.go:96-120`、`tracker.go
 | 第三轮 A3 / S4 行 | A3 维持；S4 按上行改编 | §3、§6 |
 | 第三轮 O3 行"子代理不给 `memory_write`"（缺陷修复 G1） | 记录；M2 部分解决 | §6；§7.3；§7.4 M2 |
 | 第三轮"后台（暂缓）"行 | 恢复时参考：借鉴 tracker、换 sink、失败转结论；不照搬 ctx 语义、不过滤工具、结果处理与非 TUI 丢结果 | §7.6 |
+
+## 11. A3 交付记录：核心与 CLI（2026-10-08）
+
+### 11.1 做了什么
+
+- 计入点沿用现状：`ChildRunner.delegate` 自 0057 T8 起就对子引擎的每个 `TURN_END` 调 `report_usage(event.usage)`，但生产代码没有任何地方调 `use_usage_sink`，上报全部落空。这次没有改 `delegate`。
+- 新增 `DelegatedUsage`（`entry/subagent.py`）。它的 `add` 就是一个 usage sink，记 `total`、`calls`、`unreported`。`None`、不是 `Usage` 的值、计数相加时抛 `TypeError` 的 `Usage`，都记为一次未上报的调用。
+- 每次交换各有一个计数：`TurnHandle.delegated` 持有，`SessionRegistry._attempt` 交给 `TurnRunner`，`TurnRunner.run` 用 `use_usage_sink(self.delegated.add)` 绑定。交换被取消或失败后 handle 还在，计数照样读得到。
+- CLI：`Repl._drive` 在 `handle.wait()` 之后从 handle 读一次并累加；`/usage` 打印 `Session total: 307 in / 33 out (sub-agents: 7 in / 3 out)`。
+
+### 11.2 与本计划的差异
+
+1. 复用现有的 usage sink，没有建 §3.2 的 `counting_delegated_usage`。`_USAGE_SINK` 已是独立于 `ToolContext` 的 contextvar，§3.2 担心的"重绑时漏转交"对它不成立，再建一个会有两套机制并存。代价是 `TurnRunner` 的绑定在交换期间顶掉外层绑的 sink；仓库内没有这样的调用方，`_USAGE_SINK` 的 docstring 已写明。
+2. §3.1 写"`usage is not None` 才加"；实际每轮都上报，`None` 记为一次未上报的调用，不加 token。
+3. §2 说子引擎的 `TURN_END` 落空，已不成立。§2 末条和 §8 说 Desktop 不汇总用量，也已不成立：`result` 帧是计划之后才有的，它汇总主代理各次调用的用量。
+4. 行号漂移（符号未变，均为基线 `90a3bec3` 的行号）：`delegate` 在 `entry/subagent.py:277`，`_attempt` 在 `entry/session.py:753`，`_count` 在 `_repl.py:1304`，`/usage` 在 `:643`，`TaskTool.execute` 的重绑在 `task_tool.py:176`，`_WITHHELD_FROM_SUB_AGENTS` 在 `entry/subagent.py:61`。
+5. 测试：`_ScriptedProvider` 没改，按调用报用量的脚本放在子类里；验收 3 之外另测了失败、超时、子代理运行中被取消或超时。变异 4 改写为"`handle.outcome is None` 时不读"，变异 5 改写为"合计存成 `ContextVar` 里的不可变 `Usage`、用 `set` 累加"。
+
+### 11.3 CLI 的设计决定
+
+| 项 | 取法 | 理由 |
+|---|---|---|
+| `/usage` 的总量 | 含子代理，括号里单列 | Q17 |
+| 括号段何时出现 | 子代理的输入或输出 token 有一个非零 | 没有委派时输出逐字不变 |
+| 子代理有未上报的调用 | 不提示，只是不加 token | 主代理未上报的轮次在 `/usage` 里也只是跳过 |
+| 一次性运行的标准输出 | 不改 | 它只逐轮打印主代理的 `Turn N done, tokens: …`，没有总量 |
+| 外层 sink | 交换期间收不到上报 | 见 11.2 第 1 条 |
+
+### 11.4 验证
+
+- 测试选择如下，用 rapids_singlecell 的解释器跑；它没有 fastapi，Desktop 的 HTTP 测试会整文件跳过，所以 `tests/entry/test_desktop_*.py` 另用 OmicsClaw 环境的解释器再跑一遍：
+
+  ```bash
+  python -m pytest -q -p no:randomly -p no:cacheprovider tests/subagent \
+    tests/entry/test_subagent_wiring.py tests/entry/test_session.py tests/entry/test_turn_runner.py \
+    tests/entry/test_cli_commands.py tests/entry/test_cli_render.py tests/entry/test_desktop_*.py \
+    tests/tools/test_context.py tests/evals tests/test_*.py
+  ```
+
+  这一段的树上：rapids_singlecell 1137 passed、15 skipped、27 deselected（基线 1117 passed，其余相同）；OmicsClaw 环境 566 passed、3 skipped，与基线相同，因为这一段不碰 Desktop。新增测试函数 16 个。
+- 定点变异 11 条，在这一段的树上逐条跑过，对应测试变红，复原后文件哈希与原文件相同：§5 的 5 条；独立审核提出的 3 条（同一会话的交换共用一个计数、`_count_delegated` 的 `+=` 改 `=`、括号段条件 `or` 改 `and`）；`add` 的 3 条（先计数后相加、去掉 `try`、`isinstance` 换成 `is not None`）。
+- 没有委派时逐字不变：同一脚本在基线树和这一段的树上各跑一次，REPL（含 `/usage`）和一次性运行的输出 `cmp` 相同。
+- 真实会话（deepseek-v4-flash，首轮代码，import 的是 worktree 的 `omicsclaw`）：`/usage` 打印 `Session total: 18266 in / 1322 out (sub-agents: 8713 in / 610 out)`，与同一次运行的遥测 span 逐项相等（5 次模型调用，3 次在 `task` 工具 span 下）。按主代理两轮推算，改动前这一行是 `9553 in / 712 out`。
+
+### 11.5 没做的事
+
+- Desktop 的 `result` 帧并入子代理用量。owner 于 2026-10-08 裁定延后：App 把最近一条消息的 `usage.input_tokens` 当作当前上下文大小，而按 0071 交付记录，`module-reviewer` 审查一个模块的输入是 168,575 到 1,094,258 token（中位数 300,191）。并入后，"独立审查"那一轮在 App 默认的 200,000 token 窗口下至少占 84%，指示条进入琥珀色（80% 起）或红色（95% 起）；窗口为 1,000,000 的模型上是 17% 到封顶的 100%。等 App 改用单独的数值之后再合。
+- `/usage` 在子代理有未上报的调用时不提示。
+- 一次性运行（`--prompt`、`--prompt-file`）的标准输出不含子代理用量。外部进程设 `OTEL_ENABLED=1`、`OTEL_EXPORTER_TYPE=stdout`，可以从标准错误的 `omicsclaw.llm_request` span 读到含子代理的用量（实测）。
+- 交换被取消或 `turn_timeout_s` 到期时，子代理正在执行工具的那一轮不计（它的 `TURN_END` 没发出），主代理同此；两种情形各有一条测试。
+- `run_turn`、`stream_turn` 不绑定，仍不计。Channel 默认不投递 `TURN_END`，没有汇总用量的地方，未改。
+- `CHANGELOG.md`、`README.md` 未改；`docs/FRAMEWORK-REBUILD.md` Step 6.12 里"`/usage` under-reports"一句是当时的记录，也未改。

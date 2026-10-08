@@ -443,7 +443,7 @@ surface（entry/cli、entry/desktop、entry/channel）
     exchange = _assemble(app, history, session_id=…, state=…)
        conversation = _Carried(history)                 # 满足 Conversation，只存在内存里
        compactor    = build_compactor(...)              # context.ProgressiveCompactor，满足 HistoryCompactor
-       augmentor    = build_injector(...)               # planning.PlanInjector，满足 TurnAugmentor
+       augmentor    = build_augmentor(...)              # 记忆提醒与 planning.PlanInjector 串成一个 TurnAugmentor
     async with app.telemetry.run(...) as scope:
        async for event in app.engine.exchange_stream(user_text, conversation=…,
                                                     prompt=app.prompt, compactor=…, augmentor=…):

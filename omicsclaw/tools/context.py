@@ -847,11 +847,13 @@ UsageSink: TypeAlias = Callable[[Any], Any]
 _USAGE_SINK: ContextVar[UsageSink | None] = ContextVar("omicsclaw.tools.usage_sink", default=None)
 """Where :func:`report_usage` delivers, or ``None``.
 
-A variable of its own rather than a field on :class:`ToolContext`: it is
-bound by whoever needs to count a whole run's model usage (a benchmark
-driver), around that run, and must reach tools that start model calls of
-their own — a sub-agent above all — without every surface having to
-forward it.
+Kept apart from :class:`ToolContext` because :func:`use_tool_context`
+replaces the whole context, and a sink stored there would be lost at any
+rebinding that did not carry it over. Whoever counts a run's model usage
+binds a sink around that run, and it reaches the tools that start model
+calls of their own, a sub-agent above all. The entry layer binds one for
+every exchange it runs; until that exchange ends, its sink receives the
+reports and a sink bound further out receives none.
 """
 
 

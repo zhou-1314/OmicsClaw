@@ -8,6 +8,9 @@ unreadable files reported here because that package may not log.
 :class:`ChildRunner` is the other half — the
 :class:`~omicsclaw.subagent.Delegate` that builds a child engine over the
 parent's own provider and tools and drives one exchange with it.
+
+:class:`DelegatedUsage` is where an exchange keeps count of the model calls
+its sub-agents made.
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ from omicsclaw.engine import (
 )
 from omicsclaw.planning import PLAN_WRITE_TOOL_NAME
 from omicsclaw.provider import LLMProvider
-from omicsclaw.schema import Role
+from omicsclaw.schema import Role, Usage
 from omicsclaw.skills import SkillIndex
 from omicsclaw.subagent import (
     SUBAGENT_VALUE_KEY,
@@ -54,6 +57,7 @@ __all__ = [
     "GENERAL_PURPOSE",
     "MODULE_REVIEWER",
     "ChildRunner",
+    "DelegatedUsage",
     "DelegationIncomplete",
     "build_subagent_registry",
 ]
@@ -214,6 +218,66 @@ class DelegationIncomplete(RuntimeError):
     Raised by :meth:`ChildRunner.delegate`; the ``task`` tool's registry
     reports it to the parent model as an ``is_error`` Observation.
     """
+
+
+class DelegatedUsage:
+    """The model calls sub-agents made during one exchange, and their cost.
+
+    :meth:`add` has the signature of a
+    :data:`~omicsclaw.tools.context.UsageSink`. Bound with
+    :func:`~omicsclaw.tools.context.use_usage_sink`, it records every model
+    turn a sub-agent finishes inside the block, including turns that ran in
+    a Task started there.
+    """
+
+    __slots__ = ("_calls", "_total", "_unreported")
+
+    def __init__(self) -> None:
+        self._total = Usage()
+        self._calls = 0
+        self._unreported = 0
+
+    def add(self, usage: Usage | None) -> None:
+        """Record one sub-agent model call.
+
+        :param usage: what the call cost, or ``None`` when the backend
+            reported nothing for it.
+
+        A ``None`` is counted in :attr:`calls` and :attr:`unreported` and
+        adds no tokens. So is a value that is not a
+        :class:`~omicsclaw.schema.Usage`, and a ``Usage`` whose counts
+        raise :exc:`TypeError` when they are added to the total. Any other
+        exception raised by that addition propagates, and the call is not
+        recorded.
+        """
+        # The sum is worked out before anything is recorded, so a report
+        # that cannot be added leaves the three counts consistent.
+        summed: Usage | None = None
+        if isinstance(usage, Usage):
+            try:
+                summed = self._total + usage
+            except TypeError:  # a count that is not a number
+                summed = None
+        self._calls += 1
+        if summed is None:
+            self._unreported += 1
+        else:
+            self._total = summed
+
+    @property
+    def total(self) -> Usage:
+        """The summed usage of the calls that reported one."""
+        return self._total
+
+    @property
+    def calls(self) -> int:
+        """How many sub-agent model calls were recorded."""
+        return self._calls
+
+    @property
+    def unreported(self) -> int:
+        """How many of :attr:`calls` reported no usage."""
+        return self._unreported
 
 
 def build_subagent_registry(config: AppConfig) -> SubAgentRegistry | None:
