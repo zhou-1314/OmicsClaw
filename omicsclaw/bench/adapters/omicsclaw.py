@@ -246,14 +246,21 @@ class OmicsClawAdapter:
     def collect(self, run: RunSpec, paths: RunPaths, exit: ProcessExit) -> Evidence:
         """Read the run's telemetry and transcript. Never raises.
 
-        The source tree the process should have imported from is the one
-        recorded in the run's ``command.json``; this adapter's own setting
-        is used only when the run has no such record.
+        The source tree the process should have imported from, and
+        whether it captured tool arguments, are taken from the run's
+        ``command.json``; this adapter's own settings are used only when
+        the run has no such record. Without capture there are no commands
+        to hand to the access audit, and ``commands`` is ``None``.
         """
-        recorded = (read_json(paths.command) or {}).get("provenance")
+        command = read_json(paths.command) or {}
+        recorded = command.get("provenance")
         expected_root = self._source_root
         if isinstance(recorded, dict) and isinstance(recorded.get("source_root"), str):
             expected_root = recorded["source_root"]
+        captured = self._capture
+        launched_with = command.get("harness_env")
+        if isinstance(launched_with, dict):
+            captured = launched_with.get("OMICSCLAW_OTEL_CAPTURE_CONTENT") == "true"
         trace = read_trace(paths.stderr)
         transcript = _ANSI.sub("", _read(paths.stdout))
 
@@ -293,7 +300,7 @@ class OmicsClawAdapter:
             turns=turns if isinstance(turns, int) else None,
             model_resolved=",".join(models),
             usage=_usage(calls, tool_ids),
-            commands=_commands(calls, tools),
+            commands=_commands(calls, tools) if captured else None,
             notes={
                 "omicsclaw_file": trace.launched_from,
                 "session_id": str(ending.get("session.id", "")),
@@ -448,7 +455,6 @@ def _commands(
     before it ran has no tool span, so the model's own output is read as
     well and contributes the calls not already seen. Each recorded value
     holds at most 4096 bytes; output that was cut is kept as raw text.
-    Empty when the run did not capture content.
     """
     commands = [
         Command(str(_attributes(span).get("tool.name", "")), str(text))

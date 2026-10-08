@@ -286,7 +286,9 @@ def test_a_flagged_run_is_marked_and_still_counted(tmp_path):
 
     done = toy.done("a/m/sum-a/r1")
     assert done["outcome"] == "completed"
-    assert done["access"] == {"flagged": True, "matches": 2}
+    assert done["access"] == {
+        "flagged": True, "matches": 2, "commands_scanned": 1,
+    }
     report = json.loads(toy.paths("a/m/sum-a/r1").access.read_text())
     assert {hit["source"] for hit in report["hits"]} == {"command", "file"}
     assert {hit["pattern"] for hit in report["hits"]} == {"cases_root"}

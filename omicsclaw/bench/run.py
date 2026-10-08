@@ -18,14 +18,14 @@ import os
 import sys
 import threading
 from collections import Counter
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .access import Pattern, audit_access, campaign_patterns
+from .access import audit_access, run_patterns
 from .adapters import Adapter, build_adapter
 from .layout import Campaign, RunPaths, read_json, write_json, write_jsonl
 from .manifest import Manifest, RunSpec
@@ -200,9 +200,6 @@ def _run_locked(
     report: Callable[[str], None],
 ) -> RunSummary:
     """The body of :func:`run_campaign`, with the output root's lock held."""
-    patterns = campaign_patterns(
-        campaign.cases, campaign.meta, manifest.audit_patterns
-    )
     summary = RunSummary()
     pending: list[RunSpec] = []
     for run in selected(manifest, select):
@@ -222,7 +219,6 @@ def _run_locked(
             manifest,
             campaign,
             adapters[run.arm.id],
-            patterns,
             environment,
             stop,
         )
@@ -297,6 +293,9 @@ def rebuild_indexes(manifest: Manifest, campaign: Campaign) -> None:
             "deliverables": record.get("deliverables", []),
             "access_flagged": bool(record.get("access", {}).get("flagged")),
             "access_matches": record.get("access", {}).get("matches", 0),
+            "access_commands_scanned": record.get("access", {}).get(
+                "commands_scanned"
+            ),
             "approvals_refused": approvals.get("denied", 0)
             + approvals.get("pending", 0),
             "started_at": record.get("started_at", ""),
@@ -366,7 +365,6 @@ def _execute(
     manifest: Manifest,
     campaign: Campaign,
     adapter: Adapter,
-    patterns: Sequence[Pattern],
     environment: Mapping[str, str],
     stop: threading.Event,
 ) -> dict[str, Any]:
@@ -398,7 +396,9 @@ def _execute(
     missing = [entry["path"] for entry in deliverables if not entry["exists"]]
     outcome, reason = classify(exit, evidence, missing)
     access = audit_access(
-        patterns=patterns,
+        patterns=run_patterns(
+            campaign.cases, campaign.out, paths.workspace, manifest.audit_patterns
+        ),
         commands=evidence.commands,
         audit_log=paths.audit_log,
         workspace=paths.workspace,
@@ -432,7 +432,11 @@ def _execute(
         },
         "deliverables": deliverables,
         "usage": evidence.usage.as_row(),
-        "access": {"flagged": access["flagged"], "matches": access["matches"]},
+        "access": {
+            "flagged": access["flagged"],
+            "matches": access["matches"],
+            "commands_scanned": access["commands_scanned"],
+        },
         "notes": dict(evidence.notes),
     }
     write_json(paths.done, record)

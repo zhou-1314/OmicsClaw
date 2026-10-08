@@ -56,8 +56,10 @@ class SumGrader:
         """Compare ``output/answer.json`` with ``truth.json``.
 
         Anything but a JSON object with an integer ``sum`` fails with a
-        score of ``0.0``. ``metrics`` carries ``abs_error`` when the answer
-        is an integer.
+        score of ``0.0``. Neither ``detail`` nor ``metrics`` says what the
+        sum is or how far off an answer was: grades are written under the
+        output root, where a later attempt at the same case could read
+        them.
         """
         truth = json.loads((oracle / "truth.json").read_text(encoding="utf-8"))["sum"]
         try:
@@ -65,16 +67,21 @@ class SumGrader:
                 submission.deliverables[ANSWER].read_text(encoding="utf-8")
             )
         except (OSError, ValueError):
-            return Grade(False, 0.0, detail="the answer is not JSON")
+            return Grade(
+                False, 0.0, {"well_formed": False}, "the answer is not JSON"
+            )
         value = answer.get("sum") if isinstance(answer, dict) else None
         if isinstance(value, bool) or not isinstance(value, int):
-            return Grade(False, 0.0, detail="'sum' is missing or not an integer")
+            return Grade(
+                False, 0.0, {"well_formed": False},
+                "'sum' is missing or not an integer",
+            )
         correct = value == truth
         return Grade(
             correct,
             1.0 if correct else 0.0,
-            metrics={"abs_error": abs(value - truth)},
-            detail="" if correct else f"expected {truth}, got {value}",
+            metrics={"well_formed": True},
+            detail="" if correct else "the sum is wrong",
         )
 
     def controls(self) -> Sequence[Control]:

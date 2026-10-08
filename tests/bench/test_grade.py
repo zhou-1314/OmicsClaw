@@ -99,6 +99,27 @@ def test_a_grader_that_fails_its_controls_grades_nothing(tmp_path, grader):
     assert not toy.campaign.grades.exists()
 
 
+def test_a_failed_grade_does_not_give_the_answer_away(tmp_path):
+    """``grades.jsonl`` sits under the output root, which an agent retrying
+    the case can reach. A wrong answer's row says it is wrong and nothing
+    about the right one: not the sum, and not a distance from which the sum
+    follows.
+    """
+    answer = tmp_path / "answer.json"
+    oracle = tmp_path / "oracle"
+    oracle.mkdir()
+    (oracle / "truth.json").write_text('{"sum": 123456789}')
+    answer.write_text('{"sum": 123400000}')
+
+    grade = SumGrader().grade(
+        Submission("r", "c", tmp_path, {ANSWER: answer}), oracle
+    )
+
+    assert grade.passed is False
+    written = json.dumps([grade.detail, dict(grade.metrics), grade.score])
+    assert "123456789" not in written and "56789" not in written
+
+
 # ---- which runs are graded -------------------------------------------------
 
 
@@ -115,7 +136,7 @@ def test_right_and_wrong_answers_are_graded_as_such(tmp_path):
     assert rows["sum-a"]["graded"] and rows["sum-a"]["passed"] is True
     assert rows["sum-a"]["score"] == 1.0
     assert rows["sum-b"]["passed"] is False and rows["sum-b"]["score"] == 0.0
-    assert rows["sum-b"]["metrics"] == {"abs_error": 1005}
+    assert rows["sum-b"]["metrics"] == {"well_formed": True}
     for row in rows.values():
         assert {"arm", "model_id", "case", "repeat", "outcome", "grader"} <= set(row)
 

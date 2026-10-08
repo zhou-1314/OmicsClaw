@@ -2,24 +2,40 @@
 
 The audit reads three things: the tool calls the adapter recovered, the
 agent's audit log, and the text files the run left in its workspace. Each
-is searched for a list of patterns. A match is recorded and the run is
-flagged; nothing is blocked and no run is changed.
+is searched for:
+
+``cases_root``
+    Any mention of the cases root, where the oracle lives.
+``out_root``
+    Any mention of the output root other than the run's own workspace:
+    another arm's workspace, an earlier attempt kept beside this one, the
+    run records, the result files.
+``leaves_workspace``
+    A relative path that climbs out of the workspace with ``..``.
+patterns from the manifest
+    Regular expressions, reported under their own text.
+
+A match is recorded and the run is flagged; nothing is blocked and no run
+is changed.
 
 It finds what was written down. A path assembled at run time, or a file
-reached by listing a directory, leaves nothing to match.
+reached by listing a directory, leaves nothing to match. ``leaves_workspace``
+takes a command's paths as relative to the workspace root, so a command
+that first changes into a subdirectory and then uses ``..`` is matched
+though it stays inside.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .outcome import Command
 
-__all__ = ["Pattern", "audit_access", "campaign_patterns"]
+__all__ = ["LEAVES_WORKSPACE", "Pattern", "audit_access", "run_patterns"]
 
 MAX_FILE_BYTES = 1_048_576
 """Workspace files larger than this are not read."""
@@ -27,7 +43,16 @@ MAX_FILE_BYTES = 1_048_576
 MAX_HITS = 50
 """Matches recorded per run; the report says when there were more."""
 
+LEAVES_WORKSPACE = "leaves_workspace"
+
 _EXCERPT = 80
+_NAME_END = r"(?![\w-]|\.[\w-])"
+"""What must follow a directory's path for the text to name that directory
+and not a sibling whose name merely starts the same way. A full stop that
+ends a sentence does not continue a name; one followed by a letter does."""
+
+_PATHISH = re.compile(r"[^\s\"'`;|&<>(){}\[\]$=,:\\]+")
+"""A run of characters that can be one path in a command or in source text."""
 
 
 @dataclass(frozen=True)
@@ -42,21 +67,29 @@ class Pattern:
     regex: re.Pattern[str]
 
 
-def campaign_patterns(
-    cases: Path, meta: Path, extra: Sequence[str] = ()
+def run_patterns(
+    cases: Path, out: Path, workspace: Path, extra: Sequence[str] = ()
 ) -> tuple[Pattern, ...]:
-    """The patterns of one campaign.
+    """The patterns one run is searched for.
 
-    :param cases: The cases root; any mention of it is a match, since the
-        oracle lives there and a workspace only holds copies.
-    :param meta: The campaign's ``meta`` root, where run records are kept.
+    :param cases: The cases root.
+    :param out: The campaign's output root.
+    :param workspace: The run's own workspace, the one place under *out*
+        it may name.
     :param extra: Regular expressions from the manifest.
+
+    A root is matched as a whole path, under the spelling given and under
+    its resolved one: ``/x/bench`` does not match inside ``/x/bench-out``.
     """
-    patterns = []
-    for label, root in (("cases_root", cases), ("meta_root", meta)):
-        spellings = {str(root), str(root.resolve())}
-        expression = "|".join(re.escape(spelling) for spelling in sorted(spellings))
-        patterns.append(Pattern(label, re.compile(expression)))
+    try:
+        relative = workspace.resolve().relative_to(out.resolve())
+        own = f"(?!/{re.escape(relative.as_posix())}{_NAME_END})"
+    except ValueError:
+        own = ""
+    patterns = [
+        Pattern("cases_root", re.compile(_spellings(cases) + _NAME_END)),
+        Pattern("out_root", re.compile(_spellings(out) + _NAME_END + own)),
+    ]
     patterns.extend(Pattern(text, re.compile(text)) for text in extra)
     return tuple(patterns)
 
@@ -64,15 +97,18 @@ def campaign_patterns(
 def audit_access(
     *,
     patterns: Sequence[Pattern],
-    commands: Iterable[Command],
+    commands: Iterable[Command] | None,
     audit_log: Path,
     workspace: Path,
     unchanged: Mapping[str, tuple[int, int]],
     skip: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """Search one run for *patterns* and report what matched.
+    """Search one run and report what matched.
 
-    :param commands: Tool calls recovered by the adapter.
+    :param patterns: What :func:`run_patterns` returned for the run.
+    :param commands: Tool calls recovered by the adapter, or ``None`` when
+        it could recover none. The report then says the commands were not
+        scanned, which is not the same as finding nothing in them.
     :param audit_log: The agent's audit log; a missing file is skipped.
     :param workspace: The run's workspace. Files over
         :data:`MAX_FILE_BYTES` and files containing a NUL byte are not
@@ -81,28 +117,40 @@ def audit_access(
         files; one that still matches is the case's own input and is not
         read.
     :param skip: Workspace-relative paths not to descend into.
-    :returns: ``flagged``, ``hits`` (at most :data:`MAX_HITS`, each with
-        ``source``, ``where``, ``pattern`` and ``excerpt``), ``truncated``
-        and the number of files read and skipped.
+    :returns: ``flagged``, ``matches``, ``hits`` (at most
+        :data:`MAX_HITS`, each with ``source``, ``where``, ``pattern`` and
+        ``excerpt``), ``truncated``, ``commands_scanned`` (``None`` when
+        *commands* was), the number of files read and skipped, and the
+        labels searched for.
     """
     hits: list[dict[str, str]] = []
     total = 0
+    home = {str(workspace), str(workspace.resolve())}
 
-    def search(source: str, where: str, text: str) -> None:
+    def record(source: str, where: str, label: str, text: str, span: range) -> None:
         nonlocal total
+        total += 1
+        if len(hits) < MAX_HITS:
+            hits.append({
+                "source": source,
+                "where": where,
+                "pattern": label,
+                "excerpt": _excerpt(text, span.start, span.stop),
+            })
+
+    def search(source: str, where: str, text: str, depth: int = 0) -> None:
         for pattern in patterns:
             for match in pattern.regex.finditer(text):
-                total += 1
-                if len(hits) < MAX_HITS:
-                    hits.append({
-                        "source": source,
-                        "where": where,
-                        "pattern": pattern.label,
-                        "excerpt": _excerpt(text, match.start(), match.end()),
-                    })
+                record(source, where, pattern.label, text, range(*match.span()))
+        for span in _climbs(text, depth, home):
+            record(source, where, LEAVES_WORKSPACE, text, span)
 
-    for command in commands:
-        search("command", command.tool, command.text)
+    scanned: int | None = None
+    if commands is not None:
+        scanned = 0
+        for command in commands:
+            scanned += 1
+            search("command", command.tool, command.text)
     try:
         lines = audit_log.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
@@ -128,17 +176,58 @@ def audit_access(
             skipped += 1
             continue
         read += 1
-        search("file", relative, raw.decode("utf-8", errors="replace"))
+        depth = len(PurePosixPath(relative).parent.parts)
+        search("file", relative, raw.decode("utf-8", errors="replace"), depth)
 
     return {
         "flagged": total > 0,
         "matches": total,
         "hits": hits,
         "truncated": total > len(hits),
+        "commands_scanned": scanned,
         "files_read": read,
         "files_skipped": skipped,
-        "patterns": [pattern.label for pattern in patterns],
+        "patterns": [pattern.label for pattern in patterns] + [LEAVES_WORKSPACE],
     }
+
+
+def _spellings(root: Path) -> str:
+    """An expression for *root* as given and as resolved."""
+    spellings = sorted({str(root), str(root.resolve())})
+    return "(?:" + "|".join(re.escape(spelling) for spelling in spellings) + ")"
+
+
+def _climbs(text: str, depth: int, home: set[str]) -> Iterator[range]:
+    """Where *text* holds a path that climbs out of the workspace.
+
+    :param depth: How many directories below the workspace root a relative
+        path starts from: ``0`` for a command, the depth of its own
+        directory for a file.
+    :param home: Spellings of the workspace's absolute path. An absolute
+        path is judged only when it starts with one of them, on the part
+        after it.
+    """
+    for match in _PATHISH.finditer(text):
+        token = match.group()
+        if ".." not in token:
+            continue
+        level = depth
+        if token.startswith("/"):
+            inside = [
+                token[len(prefix):]
+                for prefix in home
+                if token.startswith(prefix + "/")
+            ]
+            if not inside:
+                continue
+            token, level = inside[0], 0
+        for segment in token.split("/"):
+            if segment in ("", "."):
+                continue
+            level += -1 if segment == ".." else 1
+            if level < 0:
+                yield range(*match.span())
+                break
 
 
 def _files(workspace: Path, skip: Sequence[str]) -> list[Path]:

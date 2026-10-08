@@ -168,6 +168,9 @@ class Evidence:
     :param turns: Turns the agent's main loop made, when known.
     :param model_resolved: The model name the agent reports having called,
         which is the only record of it when the manifest names none.
+    :param commands: The tool calls the agent asked for, for the access
+        audit. ``None`` when the adapter could not recover them, which is
+        different from an agent that made none.
     :param notes: Adapter-specific facts recorded with the run.
     """
 
@@ -180,7 +183,7 @@ class Evidence:
     turns: int | None = None
     model_resolved: str = ""
     usage: Usage = field(default_factory=Usage)
-    commands: tuple[Command, ...] = ()
+    commands: tuple[Command, ...] | None = ()
     notes: Mapping[str, Any] = field(default_factory=dict)
 
 
