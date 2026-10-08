@@ -781,6 +781,7 @@ class SessionRegistry:
             values={**session.values, **handle.values},
             approval=handle.approvals,
             force_compaction=handle.compaction_only,
+            delegated=handle.delegated,
         )
         task = asyncio.create_task(
             runner.run(), name=f"omicsclaw-turn-{handle.turn_id}"
