@@ -236,7 +236,10 @@ class OmicsClawAdapter:
         denied = approvals.count("denied")
         settled = denied + approvals.count("granted")
 
-        failed = _FAILED.search(transcript)
+        # The command prints ``Failed: <Error>`` for a failed exchange and
+        # then exits 1. With any other exit status the words are the
+        # agent's own text.
+        failed = _FAILED.search(transcript) if exit.returncode == 1 else None
         failure = f"Failed: {failed.group(1)}" if failed else ""
         stop_reason = str(ending.get("agent.stop_reason", ""))
         if failed and failed.group(1) == "TimeoutError":
@@ -279,11 +282,20 @@ class OmicsClawAdapter:
 
         Two things qualify. The process imported ``omicsclaw`` from
         somewhere other than the configured source tree. Or a model call
-        failed and was not recovered: the last call made under one parent
-        span (a turn of the main loop, or the tool call a sub-agent runs
-        in) ended in an error that is not a cancellation. A sub-agent that
-        dies this way hands its parent an error the parent can talk its
-        way past, so the run may still exit ``0``.
+        was not answered and nothing recovered it. That is judged per
+        parent span (a turn of the main loop, or the tool call a sub-agent
+        runs in) on the last call made under it, leaving out calls that
+        were cancelled because the run was being stopped:
+
+        - the call ended in an error: ``provider_error: <Error>``;
+        - the call ended without an error and reported no input tokens:
+          ``provider_error: empty_response``. A backend that answers has
+          read the prompt, so this is a reply with nothing behind it, such
+          as a ``200`` carrying an error body or a stream cut short.
+
+        Either way the agent may carry on and exit ``0``, so neither shows
+        in the exit status. A reply that reports its input tokens and has
+        no text is left alone; it may be what the model said.
         """
         imported = trace.launched_from
         if self._source_root and imported:
@@ -292,15 +304,17 @@ class OmicsClawAdapter:
                 return f"source_mismatch: imported omicsclaw from {imported}"
         last: dict[str, Mapping[str, Any]] = {}
         for span in calls:
-            last[str(span.get("parent_span_id", ""))] = span
+            if _error(span) not in _CANCELLED:
+                last[str(span.get("parent_span_id", ""))] = span
         for parent, span in last.items():
-            error = _error(span)
-            if not error or error in _CANCELLED:
-                continue
-            status = _attributes(span).get("error.status_code")
             where = " in a sub-agent" if parent in tool_ids else ""
-            detail = f" status={status}" if status is not None else ""
-            return f"provider_error: {error}{detail}{where}"
+            error = _error(span)
+            if error:
+                status = _attributes(span).get("error.status_code")
+                detail = f" status={status}" if status is not None else ""
+                return f"provider_error: {error}{detail}{where}"
+            if not _answered(span):
+                return f"provider_error: empty_response{where}"
         return ""
 
 
@@ -329,12 +343,20 @@ def _number(value: Any) -> int:
     return int(value) if isinstance(value, (int, float)) else 0
 
 
+def _answered(span: Mapping[str, Any]) -> bool:
+    """Whether a model call reported input tokens, which an answer always has."""
+    return _number(_attributes(span).get(_TOKENS_IN)) > 0
+
+
 def _usage(calls: list[Mapping[str, Any]], tool_ids: set[str]) -> Usage:
     """Token and call totals over every model call of the run.
 
-    A call belongs to a sub-agent when its parent span is a tool call.
+    A call belongs to a sub-agent when its parent span is a tool call. A
+    call counts towards ``calls_without_usage`` when it reported no input
+    tokens: it failed, was cancelled, came back empty, or its backend
+    reports no usage.
     """
-    reported = [span for span in calls if _TOKENS_IN in _attributes(span)]
+    reported = [span for span in calls if _answered(span)]
     errors = [_error(span) for span in calls]
     return Usage(
         input_tokens=sum(_number(_attributes(s)[_TOKENS_IN]) for s in reported),

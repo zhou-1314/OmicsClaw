@@ -221,14 +221,17 @@ def install(assembly):
     def say(text):
         return Message(role=Role.ASSISTANT, content=text)
 
-    def down():
-        raise ProviderError("backend refused", provider="scripted", status_code=401)
+    def down(status=401):
+        raise ProviderError(
+            "backend refused", provider="scripted", status_code=status
+        )
 
     class Scripted:
         name = "scripted"
 
         def __init__(self, scenario):
             self.scenario = scenario
+            self.calls = 0
 
         def reply(self, messages, tools):
             results = sum(1 for message in messages if message.role is Role.TOOL)
@@ -246,9 +249,15 @@ def install(assembly):
                 "danger": ("bash", {{"command": "rm -rf " + target}}),
                 "web": ("web_fetch", {{"url": "https://example.com/"}}),
                 "sleepy": ("bash", {{"command": "sleep 120"}}),
+                "peek": ("bash", {{"command": "ls .. ../.. ; cat "
+                                  "../r1.infra1/output/answer.json"}}),
             }}
             if scenario == "fail":
                 down()
+            if scenario == "errhang":
+                if self.calls == 2:
+                    down(500)
+                return call("bash", {{"command": "echo step-one"}})
             if scenario == "loop":
                 return call("bash", {{"command": "echo step-%d" % results}})
             if not parent:
@@ -262,8 +271,12 @@ def install(assembly):
             return say("Done.")
 
         async def generate(self, messages, tools=None):
-            if self.scenario == "hang":
+            self.calls += 1
+            hangs = self.scenario == "errhang" and self.calls > 2
+            if self.scenario == "hang" or hangs:
                 await asyncio.sleep(120)
+            if self.scenario == "hollow":
+                return Completion(message=say(""), usage=Usage())
             return Completion(message=self.reply(messages, tools), usage=usage)
 
         async def _stream(self, messages, tools=None):
@@ -273,7 +286,9 @@ def install(assembly):
                     type=StreamChunkType.TEXT_DELTA, delta=completion.message.content
                 )
             yield StreamChunk(
-                type=StreamChunkType.DONE, message=completion.message, usage=usage
+                type=StreamChunkType.DONE,
+                message=completion.message,
+                usage=completion.usage,
             )
 
         def generate_stream(self, messages, tools=None):

@@ -114,6 +114,15 @@ def evidence(**fields) -> Evidence:
             TIMEOUT,
             "agent_deadline",
         ),
+        (
+            ProcessExit(started=True, returncode=1),
+            evidence(
+                stop_reason="timeout", usage=Usage(llm_calls=1, llm_cancelled=1)
+            ),
+            ["x"],
+            INFRA_FAILURE,
+            "timeout_before_any_model_response",
+        ),
     ],
 )
 def test_each_ending_has_one_outcome(exit, found, missing, outcome, reason):

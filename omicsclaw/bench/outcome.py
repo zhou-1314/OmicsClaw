@@ -93,13 +93,15 @@ class Usage:
         included.
     :param cached_input_tokens: The part of *input_tokens* served from a
         cache.
-    :param llm_calls: Model calls made, retries and failures included.
+    :param llm_calls: Model calls the agent made, counting each attempt it
+        made itself. Retries hidden inside a client library are not seen.
     :param llm_errors: Model calls that failed.
     :param llm_cancelled: Model calls cut short when the run was stopped.
     :param subagent_llm_calls: The part of *llm_calls* made by sub-agents.
-    :param calls_without_usage: Calls the token totals leave out, because
-        they failed, were cancelled or reported nothing. Above zero, the
-        totals are a lower bound.
+    :param calls_without_usage: Calls that reported no input tokens and
+        so add nothing to the totals: failed, cancelled, answered with
+        nothing, or made to a backend that reports no usage. Above zero,
+        the totals are a lower bound.
     :param includes_subagents: Whether the totals count sub-agent calls.
     :param source: Where the numbers were read from.
     """
@@ -116,9 +118,15 @@ class Usage:
     source: str = ""
 
     def answered(self) -> int | None:
-        """Model calls that returned an answer, or ``None`` when unknown."""
+        """Model calls that were answered, or ``None`` when unknown.
+
+        The calls that reported input tokens, when the adapter counts
+        those; otherwise the calls that neither failed nor were cancelled.
+        """
         if self.llm_calls is None:
             return None
+        if self.calls_without_usage is not None:
+            return self.llm_calls - self.calls_without_usage
         return self.llm_calls - (self.llm_errors or 0) - (self.llm_cancelled or 0)
 
     def as_row(self) -> dict[str, Any]:
@@ -187,22 +195,20 @@ def classify(
     :returns: ``(outcome, reason)``. *reason* is empty for ``completed``.
 
     The first rule that applies wins: a process that never started; an
-    infrastructure failure the adapter found; the wall clock (an
-    infrastructure failure when no model call ever succeeded); the agent's
+    infrastructure failure the adapter found; the wall clock; the agent's
     own deadline; any other non-zero exit; the agent's turn or output
     limit; a run whose ending nobody recorded; a refused approval; a
-    missing deliverable.
+    missing deliverable. A run stopped by either clock before any model
+    call was answered is an infrastructure failure, not a timeout.
     """
     if not exit.started:
         return INFRA_FAILURE, f"spawn_failed: {exit.error}"
     if evidence.infra_reason:
         return INFRA_FAILURE, evidence.infra_reason
-    if exit.timed_out:
+    if exit.timed_out or evidence.stop_reason == "timeout":
         if evidence.usage.answered() == 0:
             return INFRA_FAILURE, "timeout_before_any_model_response"
-        return TIMEOUT, "wall_clock"
-    if evidence.stop_reason == "timeout":
-        return TIMEOUT, "agent_deadline"
+        return TIMEOUT, "wall_clock" if exit.timed_out else "agent_deadline"
     if exit.returncode != 0:
         return INFRA_FAILURE, _exit_reason(exit.returncode, evidence.failure)
     if evidence.stop_reason == "max_turns":

@@ -22,6 +22,7 @@ from omicsclaw.bench.outcome import (
     COMPLETED,
     INFRA_FAILURE,
     MAX_TURNS,
+    NO_DELIVERABLE,
     TIMEOUT,
     ProcessExit,
     classify,
@@ -235,17 +236,22 @@ def test_a_sub_agents_calls_are_counted_though_the_transcript_omits_them(tmp_pat
 
 
 def test_calls_that_reported_no_tokens_are_counted_as_such(tmp_path):
+    """Four calls: one answered, one that reported nothing, one that
+    reported zero tokens, one cancelled. Only the first adds to the
+    totals and only the first counts as answered.
+    """
     evidence = collected(tmp_path, [
         llm("a", "turn1"),
         llm("b", "turn2", tokens=None),
-        llm("c", "turn3", error="CancelledError"),
+        llm("c", "turn2", tokens=(0, 0, 0)),
+        llm("d", "turn3", error="CancelledError"),
         interaction(),
     ])
 
     usage = evidence.usage
-    assert usage.llm_calls == 3 and usage.calls_without_usage == 2
+    assert usage.llm_calls == 4 and usage.calls_without_usage == 3
     assert usage.llm_cancelled == 1 and usage.llm_errors == 0
-    assert usage.input_tokens == 1000 and usage.answered() == 2
+    assert usage.input_tokens == 1000 and usage.answered() == 1
 
 
 def test_the_processes_own_counters_are_compared_with_the_spans(tmp_path):
@@ -354,6 +360,107 @@ def test_a_call_cut_short_by_stopping_the_run_is_not_a_provider_error(tmp_path):
     assert classify(exit, evidence, ["x"])[0] == TIMEOUT
 
 
+def test_a_provider_error_just_before_the_wall_clock_is_infrastructure(tmp_path):
+    """The second model call fails with a 500 and its retry is still in
+    flight when the wall clock stops the run. The cancelled retry is how
+    the run was stopped; the last call that got an answer from the
+    backend was the failure, so the run is not a timeout.
+    """
+    exit = ProcessExit(started=True, returncode=143, timed_out=True)
+    evidence = collected(tmp_path, [
+        llm("a", "turn1"),
+        span("turn", "turn1", "root"),
+        llm("b", "turn2", error="ProviderError", status=500),
+        llm("c", "turn2", error="CancelledError"),
+        span("turn", "turn2", "root"),
+        interaction(stop_reason="", error="CancelledError"),
+    ], exit=exit)
+
+    assert evidence.infra_reason == "provider_error: ProviderError status=500"
+    assert classify(exit, evidence, ["x"])[0] == INFRA_FAILURE
+
+
+@pytest.mark.parametrize("tokens", [(0, 0, 0), None], ids=["zero", "unreported"])
+def test_a_reply_without_input_tokens_is_an_empty_response(tmp_path, tokens):
+    """A 200 with an error body, or a stream that ends after one chunk,
+    reaches the agent as an answer with nothing in it: no error, no
+    tokens. The agent stops on it and the process exits ``0`` saying it
+    converged. A backend that answered read the prompt, so a last call
+    with no input tokens was not answered.
+    """
+    evidence = collected(tmp_path, [
+        llm("a", "turn1", tokens=tokens),
+        span("turn", "turn1", "root"),
+        interaction(),
+    ])
+
+    assert evidence.stop_reason == "converged"
+    assert evidence.infra_reason == "provider_error: empty_response"
+    assert evidence.usage.calls_without_usage == 1
+    assert classify(EXITED, evidence, ["output/a.json"])[0] == INFRA_FAILURE
+
+
+def test_an_empty_response_after_a_draft_is_not_graded_as_a_wrong_answer(tmp_path):
+    """The agent writes a first draft, and the call that would have
+    corrected it comes back empty. The deliverable exists, so without this
+    rule the draft would be graded as the agent's answer.
+    """
+    evidence = collected(tmp_path, [
+        llm("a", "turn1"),
+        tool("t1", "turn1", "write_file"),
+        span("turn", "turn1", "root"),
+        llm("b", "turn2", tokens=(0, 0, 0)),
+        span("turn", "turn2", "root"),
+        interaction(turns=2),
+    ])
+
+    assert classify(EXITED, evidence, []) == (
+        INFRA_FAILURE, "provider_error: empty_response",
+    )
+
+
+def test_an_empty_response_in_a_sub_agent_is_infrastructure(tmp_path):
+    evidence = collected(tmp_path, [
+        llm("a", "turn1"),
+        llm("s1", "task1", tokens=(0, 0, 0)),
+        tool("task1", "turn1", "task"),
+        span("turn", "turn1", "root"),
+        llm("b", "turn2"),
+        interaction(turns=2),
+    ])
+
+    assert evidence.infra_reason == "provider_error: empty_response in a sub-agent"
+
+
+def test_an_empty_response_followed_by_an_answer_is_not_a_failure(tmp_path):
+    evidence = collected(tmp_path, [
+        llm("a", "turn1", tokens=(0, 0, 0)),
+        llm("b", "turn1"),
+        span("turn", "turn1", "root"),
+        interaction(),
+    ])
+
+    assert evidence.infra_reason == ""
+    assert evidence.usage.calls_without_usage == 1
+    assert classify(EXITED, evidence, [])[0] == COMPLETED
+
+
+def test_a_reply_with_usage_and_no_text_is_still_the_agents_result(tmp_path):
+    """The backend read the prompt and returned nothing. That may be the
+    model's doing, and a model that does it every time would be retried
+    for ever if it counted as an infrastructure failure, so it stays a
+    result: no deliverable.
+    """
+    evidence = collected(tmp_path, [
+        llm("a", "turn1", tokens=(100, 0, 0)),
+        span("turn", "turn1", "root"),
+        interaction(),
+    ])
+
+    assert evidence.infra_reason == ""
+    assert classify(EXITED, evidence, ["output/a.json"])[0] == NO_DELIVERABLE
+
+
 def test_a_process_running_other_code_is_infrastructure(tmp_path):
     """The run imported ``omicsclaw`` from a different checkout than the
     one the arm names, so it did not test what the manifest says.
@@ -401,6 +508,49 @@ def test_the_agents_own_deadline_is_a_timeout(tmp_path):
     )
 
     assert classify(exit, evidence, ["x"]) == (TIMEOUT, "agent_deadline")
+
+
+def test_the_agents_own_deadline_with_no_answer_is_infrastructure(tmp_path):
+    """The same rule as for the wall clock: a run in which no model call
+    was ever answered says nothing about the agent, whichever clock ended
+    it.
+    """
+    exit = ProcessExit(started=True, returncode=1)
+    evidence = collected(
+        tmp_path,
+        [
+            llm("a", "turn1", error="CancelledError"),
+            interaction(stop_reason="", error="CancelledError"),
+        ],
+        stdout="Failed: TimeoutError\n",
+        exit=exit,
+    )
+
+    assert classify(exit, evidence, ["x"]) == (
+        INFRA_FAILURE, "timeout_before_any_model_response",
+    )
+
+
+@pytest.mark.parametrize(
+    ("returncode", "outcome"), [(0, COMPLETED), (-9, INFRA_FAILURE)]
+)
+def test_a_failed_line_counts_only_when_the_command_failed(
+    tmp_path, returncode, outcome
+):
+    """``Failed: <Error>`` is what the command prints when an exchange
+    fails, and it then exits ``1``. The same words at the start of a line
+    of the agent's own answer are not that report.
+    """
+    exit = ProcessExit(started=True, returncode=returncode)
+    evidence = collected(
+        tmp_path,
+        [llm("a", "turn1"), interaction()],
+        stdout="Here is my note:\nFailed: TimeoutError happened earlier\n",
+        exit=exit,
+    )
+
+    assert evidence.stop_reason == "converged"
+    assert classify(exit, evidence, [])[0] == outcome
 
 
 # ---- approval cards --------------------------------------------------------

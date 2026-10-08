@@ -35,12 +35,16 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 SCENARIOS = (
     "write", "subagent", "subfail", "fail", "loop", "danger", "web", "sleepy", "hang",
+    "hollow", "errhang",
 )
 WALL_CLOCK_S = 10
-"""Budget of every scenario. Two of them run into it on purpose, so it sets
-this module's duration. The ``sleepy`` scenario must get its first model
-answer before it runs out; a process starts in well under a second here,
-and the rest is room for a loaded CI runner."""
+"""Budget of every scenario. Three of them run into it on purpose, so it
+sets this module's duration. The ``sleepy`` scenario must get its first
+model answer before it runs out; a process starts in well under a second
+here, and the rest is room for a loaded CI runner."""
+
+DEADLINE_S = 2
+"""The command's own exchange deadline in the ``deadline`` arm."""
 
 MANIFEST = """\
 name = "contract"
@@ -58,6 +62,14 @@ id = "oc"
 adapter = "omicsclaw"
 permission_rules = "rules.json"
 
+[[arms]]
+id = "deadline"
+adapter = "omicsclaw"
+provider = "custom"
+model = "stub-hang"
+model_id = "hang"
+env = {{ OMICSCLAW_TURN_TIMEOUT_S = "{deadline}" }}
+
 [[cases]]
 id = "sum-a"
 prompt = "Add the numbers in data/numbers.txt and write output/answer.json."
@@ -73,14 +85,14 @@ class Contract:
         self.campaign = campaign
         self.manifest = load_manifest(manifest_path)
 
-    def meta(self, scenario: str) -> Path:
-        return self.campaign.meta / "oc" / scenario / "sum-a" / "r1"
+    def meta(self, scenario: str, arm: str = "oc") -> Path:
+        return self.campaign.meta / arm / scenario / "sum-a" / "r1"
 
-    def workspace(self, scenario: str) -> Path:
-        return self.campaign.cells / "oc" / scenario / "sum-a" / "r1"
+    def workspace(self, scenario: str, arm: str = "oc") -> Path:
+        return self.campaign.cells / arm / scenario / "sum-a" / "r1"
 
-    def done(self, scenario: str) -> dict:
-        return json.loads((self.meta(scenario) / "done.json").read_text())
+    def done(self, scenario: str, arm: str = "oc") -> dict:
+        return json.loads((self.meta(scenario, arm) / "done.json").read_text())
 
     def audited_tools(self, scenario: str) -> list[str]:
         log = self.meta(scenario) / "audit.jsonl"
@@ -106,13 +118,15 @@ def contract(tmp_path_factory) -> Contract:
     )
     manifest_path = suite / "manifest.toml"
     manifest_path.write_text(
-        MANIFEST.format(wall=WALL_CLOCK_S, models=models, answer=ANSWER)
+        MANIFEST.format(
+            wall=WALL_CLOCK_S, models=models, answer=ANSWER, deadline=DEADLINE_S
+        )
     )
     campaign = Campaign(out=root / "out", cases=cases)
     summary = run_campaign(
         load_manifest(manifest_path),
         campaign,
-        jobs=4,
+        jobs=5,
         base_env={
             "PATH": "/usr/bin:/bin",
             "HOME": str(root / "home"),
@@ -122,7 +136,7 @@ def contract(tmp_path_factory) -> Contract:
         },
         report=lambda message: None,
     )
-    assert summary.executed == len(SCENARIOS), summary
+    assert summary.executed == len(SCENARIOS) + 1, summary
     return Contract(campaign, manifest_path)
 
 
@@ -283,20 +297,69 @@ def test_a_backend_that_never_answers_is_infrastructure_not_a_timeout(contract):
     assert done["reason"] == "timeout_before_any_model_response"
 
 
+def test_an_empty_reply_is_infrastructure_though_the_command_converged(contract):
+    """The backend returns an answer with no text and no tokens, which is
+    what a ``200`` with an error body looks like once it has passed through
+    the provider layer. The command takes it as the agent's last word and
+    exits ``0``.
+    """
+    done = contract.done("hollow")
+
+    assert (done["exit_code"], done["stop_reason"]) == (0, "converged")
+    assert done["usage"]["llm_calls"] == 1 and done["usage"]["llm_errors"] == 0
+    assert done["usage"]["calls_without_usage"] == 1
+    assert (done["outcome"], done["reason"]) == (
+        "infra_failure", "provider_error: empty_response",
+    )
+
+
+def test_a_provider_error_followed_by_the_wall_clock_is_infrastructure(contract):
+    """The second model call fails with a 500 and the command's retry never
+    comes back, so the wall clock ends the run. The run was already broken
+    by the failed call; it is not recorded as a timeout.
+    """
+    done = contract.done("errhang")
+
+    assert done["timed_out"] is True and done["exit_code"] == 143
+    assert (done["usage"]["llm_errors"], done["usage"]["llm_cancelled"]) == (1, 1)
+    assert (done["outcome"], done["reason"]) == (
+        "infra_failure", "provider_error: ProviderError status=500",
+    )
+
+
+def test_the_commands_own_deadline_with_no_answer_is_infrastructure(contract):
+    """``OMICSCLAW_TURN_TIMEOUT_S`` ends an exchange whose backend never
+    answered. The command exits ``1`` long before the wall clock, and the
+    run is recorded the way the wall clock would have recorded it.
+    """
+    done = contract.done("hang", arm="deadline")
+    transcript = (contract.meta("hang", arm="deadline") / "stdout.txt").read_text()
+
+    assert done["exit_code"] == 1 and "Failed: TimeoutError" in transcript
+    assert done["timed_out"] is False and done["wall_s"] < WALL_CLOCK_S
+    assert (done["outcome"], done["reason"]) == (
+        "infra_failure", "timeout_before_any_model_response",
+    )
+
+
 def test_grading_real_runs_skips_the_infrastructure_failures(contract):
     """The health check reads each real run's evidence again and agrees
-    with what was recorded; the three infrastructure failures get a row
-    and no grade.
+    with what was recorded; the infrastructure failures get a row and no
+    grade.
     """
     summary = grade_campaign(contract.manifest, contract.campaign)
 
-    rows = {row["model_id"]: row for row in read_jsonl(contract.campaign.grades)}
-    assert summary.skipped == {"infra_failure": 3, "no_deliverable": 2}
+    rows = {
+        row["run"].removesuffix("/sum-a/r1"): row
+        for row in read_jsonl(contract.campaign.grades)
+    }
+    assert summary.skipped == {"infra_failure": 6, "no_deliverable": 2}
     assert {name for name, row in rows.items() if row["skip"] == "infra_failure"} == {
-        "subfail", "fail", "hang",
+        "oc/subfail", "oc/fail", "oc/hang", "oc/hollow", "oc/errhang",
+        "deadline/hang",
     }
     assert all(not row["health"] for row in rows.values())
-    for graded in ("write", "subagent", "danger", "web"):
+    for graded in ("oc/write", "oc/subagent", "oc/danger", "oc/web"):
         assert rows[graded]["graded"] and rows[graded]["passed"] is True, graded
-    assert rows["danger"]["outcome"] == "approval_denied"
-    assert rows["danger"]["access_flagged"] is True
+    assert rows["oc/danger"]["outcome"] == "approval_denied"
+    assert rows["oc/danger"]["access_flagged"] is True
