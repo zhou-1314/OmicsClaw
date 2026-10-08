@@ -30,6 +30,7 @@ from omicsclaw.provider import LLMProvider
 from omicsclaw.schema import Role
 from omicsclaw.skills import SkillIndex
 from omicsclaw.subagent import (
+    SUBAGENT_VALUE_KEY,
     TASK_TOOL_NAME,
     ChildPrompt,
     SubAgentDefinition,
@@ -37,9 +38,10 @@ from omicsclaw.subagent import (
     load_agents,
 )
 from omicsclaw.tools import ToolRegistry, report_progress
-from omicsclaw.tools.context import current_context, report_usage
+from omicsclaw.tools.context import current_context, report_usage, use_tool_context
 from omicsclaw.subagent.task_tool import REVIEW_MODULE_KEY
 from omicsclaw.tools.base import Tool
+from omicsclaw.tools.builtin.ask_user import TOOL_NAME as ASK_USER_TOOL_NAME
 from omicsclaw.tools.function_tool import ToolArgumentError
 
 from .config import AppConfig
@@ -62,6 +64,7 @@ _WITHHELD_FROM_SUB_AGENTS: Mapping[str, str] = MappingProxyType(
     {
         PLAN_WRITE_TOOL_NAME: "acts on the calling conversation's plan",
         MEMORY_WRITE_TOOL_NAME: "writes memory that every later conversation reads",
+        ASK_USER_TOOL_NAME: "asks a person, and a sub-agent has nobody to ask",
     }
 )
 """Parent tools no sub-agent is given, each mapped to the reason why.
@@ -302,6 +305,27 @@ class ChildRunner:
         No conversation is passed to the child engine, which is the whole
         of the context isolation: there is no path by which the parent's
         history could reach it.
+
+        The run has a tool context rebound from the caller's. The approval
+        channel, the progress sink and every value are carried over, the
+        sub-agent's name is added under
+        :data:`~omicsclaw.subagent.SUBAGENT_VALUE_KEY`, and the question
+        channel is left out: a sub-agent's tools can ask for approval and
+        cannot put a question to the person.
+        """
+        outer = current_context()
+        with use_tool_context(
+            approval=outer.approval,
+            question=None,
+            progress=outer.progress,
+            values={**outer.values, SUBAGENT_VALUE_KEY: definition.name},
+        ):
+            return await self._run_child(definition, prompt)
+
+    async def _run_child(self, definition: SubAgentDefinition, prompt: str) -> str:
+        """Run *definition* over *prompt* in the tool context :meth:`delegate` bound.
+
+        Returns and raises what :meth:`delegate` documents.
         """
         values = current_context().values
         if (

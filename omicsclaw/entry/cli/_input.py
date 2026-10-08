@@ -61,6 +61,7 @@ __all__ = [
     "PromptToolkitSource",
     "ScriptedSource",
     "StreamSource",
+    "is_interactive",
     "open_prompt_source",
 ]
 
@@ -445,6 +446,23 @@ def build_completer(
     return _OmniCompleter()
 
 
+def is_interactive(stream: TextIO | None = None) -> bool:
+    """Whether *stream* is a terminal a person is typing at.
+
+    Args:
+        stream: The input to test; ``None`` tests :data:`sys.stdin`.
+
+    Returns:
+        ``False`` for a pipe or a file, and for a stream that is closed or
+        has no ``isatty``.
+    """
+    source = stream if stream is not None else sys.stdin
+    try:
+        return bool(source.isatty())
+    except (AttributeError, ValueError):
+        return False
+
+
 def open_prompt_source(
     *,
     stream: TextIO | None = None,
@@ -470,10 +488,7 @@ def open_prompt_source(
     """
     source = stream if stream is not None else sys.stdin
     if interactive is None:
-        try:
-            interactive = bool(source.isatty())
-        except (AttributeError, ValueError):
-            interactive = False
+        interactive = is_interactive(source)
     if not interactive:
         return StreamSource(source)
 

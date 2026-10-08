@@ -71,6 +71,7 @@ from omicsclaw.schema import Message, Role
 from omicsclaw.tools.context import (
     ApprovalDecision,
     ProgressUpdate,
+    QuestionAnswer,
     current_context,
     use_tool_context,
 )
@@ -80,6 +81,7 @@ from .assembly import AgentApp
 from .compaction import PINNED_SYSTEM_MESSAGES, build_compactor
 from .events import Terminal, TurnEvent
 from .planning import build_injector
+from .question import QuestionBroker
 from .stream import DEFAULT_RING_SIZE, TurnObservation, TurnStream
 
 __all__ = [
@@ -352,13 +354,14 @@ def _session_bound(session_id: str) -> Iterator[None]:
     to do it: that function *replaces* rather than merges, so binding a
     bare ``values`` here would silently unbind an approval channel a
     caller had set around this call, and every gated tool would start
-    failing closed.
+    failing closed. The question channel is carried inwards the same way.
     """
     outer = current_context()
     with use_tool_context(
         approval=outer.approval,
         progress=outer.progress,
         values={**outer.values, "session_id": session_id},
+        question=outer.question,
     ):
         yield
 
@@ -482,6 +485,7 @@ class TurnRunner:
         "_compaction",
         "_force",
         "_history",
+        "_questions",
         "_shortfall_reported",
         "_stream",
         "_user_text",
@@ -505,6 +509,7 @@ class TurnRunner:
         user_text: str = "",
         values: Mapping[str, object] | None = None,
         approval: ApprovalBroker | None = None,
+        questions: QuestionBroker | None = None,
         force_compaction: bool = False,
     ) -> None:
         """*history* must already be free of a system message (Q3).
@@ -514,6 +519,12 @@ class TurnRunner:
         two things a bare callable cannot give: an outstanding question
         that can be answered **by id** from another Task, and a way to
         fail every outstanding question closed when the exchange ends.
+
+        *questions* is the broker tools reach through
+        :func:`~omicsclaw.tools.ask_question`. It is bound only when
+        :attr:`~omicsclaw.entry.config.AppConfig.ask_user` is on, and
+        whatever it still has outstanding when the exchange ends is settled
+        as unanswered.
         """
         self._app = app
         self._stream = stream
@@ -524,6 +535,7 @@ class TurnRunner:
         self._user_text = user_text
         self._values = dict(values or {})
         self._approval = approval
+        self._questions = questions
         self._force = force_compaction
         self._shortfall_reported = False
         self.terminal: Terminal = "failed"
@@ -562,6 +574,7 @@ class TurnRunner:
                 approval=self._approval,
                 progress=self._on_progress,
                 values=self.turn_values(),
+                question=self._questions if self._app.config.ask_user else None,
             ):
                 outcome = await self._deadline()
             self.outcome = outcome
@@ -576,6 +589,8 @@ class TurnRunner:
         finally:
             if self._approval is not None:
                 self._approval.abandon()
+            if self._questions is not None:
+                self._questions.abandon()
             self._publish(
                 TurnEvent.exchange_end(
                     self.terminal,
@@ -755,6 +770,7 @@ class TurnHandle:
         "compaction_only",
         "error",
         "outcome",
+        "questions",
         "session_id",
         "state",
         "stream",
@@ -831,6 +847,9 @@ class TurnHandle:
         self.approvals = ApprovalBroker(
             self.stream, timeout_s=approval_timeout_s, numbering=self._numbering
         )
+        self.questions = QuestionBroker(
+            self.stream, timeout_s=approval_timeout_s, numbering=self._numbering
+        )
 
     def observe(self, *, after_seq: int = 0) -> TurnObservation:
         """Open a cursor over this exchange. May be called many times.
@@ -860,6 +879,21 @@ class TurnHandle:
             return
         _log.debug(
             "approval %s on turn %s had nothing to settle",
+            request_id,
+            self.turn_id,
+        )
+
+    async def answer(self, request_id: str, answer: QuestionAnswer) -> None:
+        """Answer one of this exchange's outstanding questions.
+
+        An unknown or already-answered ``request_id`` changes nothing and
+        raises nothing, as with :meth:`approve`: an answer that arrives
+        after the deadline or after a cancellation is ordinary input.
+        """
+        if self.questions.settle(request_id, answer):
+            return
+        _log.debug(
+            "answer to %s on turn %s had nothing to settle",
             request_id,
             self.turn_id,
         )

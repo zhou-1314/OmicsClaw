@@ -780,6 +780,7 @@ class SessionRegistry:
             user_text=handle.text,
             values={**session.values, **handle.values},
             approval=handle.approvals,
+            questions=handle.questions,
             force_compaction=handle.compaction_only,
         )
         task = asyncio.create_task(
