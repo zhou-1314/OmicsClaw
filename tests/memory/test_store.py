@@ -738,6 +738,19 @@ def test_a_word_outside_han_text_is_kept_as_often_as_it_occurs() -> None:
     assert _escape_fts("the cell the") == '"the" OR "cell" OR "the"'
 
 
+def test_the_pairs_after_a_repeated_pair_are_still_searched() -> None:
+    """Skipping a repeat must not end the run it stands in."""
+    from omicsclaw.memory.store import _escape_fts
+
+    assert _escape_fts("聚类聚类方法") == '"聚 类" OR "类 聚" OR "类 方" OR "方 法"'
+
+    db, lt = store()
+    run(lt.add(MemoryEntry(title="later pair", content="方法见附录")))
+    hits = run(lt.search("聚类聚类方法"))
+    db.close()
+    assert [h.title for h in hits] == ["later pair"]
+
+
 @pytest.mark.parametrize(
     "han",
     ["\u3400\u3401\u3402\u3403", "\uf900\uf901\uf902\uf903"],
