@@ -49,6 +49,14 @@ the card and starts a Task (:meth:`Repl._ask_question`) that reads one
 line at an ``answer [#n]> `` prompt. The line is the answer, whatever it
 is: an empty one skips the question and Ctrl-C cancels the exchange.
 
+**A card takes only what is typed after its prompt opens.** A terminal
+keeps what is typed while nothing reads it, so a ``y`` typed while a tool
+ran, or the late reply to a question whose prompt was taken down, would
+otherwise answer the next card to open. :meth:`Repl._read_at_card` asks
+the source for a fresh line and says so on screen when input was thrown
+away. The loop's own prompt reads whatever is waiting, as before: a line
+typed while an answer was printing is the next message.
+
 **What this loop does not do.** Part of the ported catalogue (see
 :data:`~omicsclaw.entry.cli._slash_command_support.REPL_SLASH_COMMAND_SPECS`),
 because the skill runner, the research pipeline and the memory commands
@@ -141,7 +149,7 @@ from ._auto import (
     saved_cli_mode,
 )
 from ._constants import WELCOME_SLOGANS
-from ._input import ChoiceSource, PromptSource
+from ._input import ChoiceSource, FreshSource, PromptSource
 from ._markdown import MarkdownStreamFormatter
 from ._reasoning import ReasoningStreamWriter
 from ._screen import Screen
@@ -214,6 +222,13 @@ _QUESTION_LEGEND = "  empty line skips · Ctrl-C cancels the request"
 """Printed between a question card and its prompt: the two things a reply
 cannot say. Everything else typed is the answer, a line that starts with
 ``/`` included."""
+
+_TYPED_EARLY_NOTICE = "  input typed before this prompt was discarded"
+"""Printed above a card's prompt when the source threw input away.
+
+A card takes only what is typed after its prompt opens. Somebody who typed
+``y`` while a tool was still running sees the card waiting all the same,
+and this line is why."""
 
 _INTERRUPTED_REASON = "interrupted at the terminal"
 """The reason a card is settled with when Ctrl-C is pressed at it."""
@@ -1468,6 +1483,26 @@ class Repl:
         if failure is not None:
             _log.error("approval task failed: %r", failure)
 
+    async def _read_at_card(self, prompt: str) -> str:
+        """One line typed at a card's prompt, after the prompt opened.
+
+        A terminal source throws away what was typed before the prompt,
+        and when it says it did, :data:`_TYPED_EARLY_NOTICE` is printed
+        above the prompt. A source that cannot tell earlier from later (a
+        script, a pipe) hands over its next line.
+
+        :param prompt: the card's prompt line.
+        :returns: the line typed.
+        """
+        source = self._source
+        if isinstance(source, FreshSource):
+            return await source.read_fresh(prompt, discarded=self._say_typed_early)
+        return await source.read(prompt)
+
+    def _say_typed_early(self) -> None:
+        """Print :data:`_TYPED_EARLY_NOTICE`."""
+        self._screen.print(Text(_TYPED_EARLY_NOTICE, style="dim"))
+
     async def _read_card(
         self,
         prompt: str,
@@ -1502,7 +1537,7 @@ class Repl:
         :raises Exception: whatever *refuse* raises.
         """
         try:
-            return await self._source.read(prompt)
+            return await self._read_at_card(prompt)
         except KeyboardInterrupt:
             try:
                 await refuse(_INTERRUPTED_REASON)
@@ -1664,20 +1699,35 @@ class Repl:
         self._replying[request_id] = task
         task.add_done_callback(lambda _done: self._replying.pop(request_id, None))
 
+    def _withdraw_prompt(self, _reading: "asyncio.Task[None]") -> None:
+        """Have the source take down the prompt its cancelled read left open.
+
+        The done callback of a reading Task that :meth:`_retract_question`
+        cancelled. A source that is not a
+        :class:`~omicsclaw.entry.cli._input.FreshSource` has nothing to
+        take down.
+        """
+        source = self._source
+        if isinstance(source, FreshSource):
+            source.withdraw()
+
     async def _retract_question(self, request_id: str) -> None:
         """Take down the prompt of a question that has been settled.
 
         A question whose deadline passes is settled while its prompt is
-        still open. The Task reading the reply is cancelled and awaited, so
-        the caller prints below the prompt, the live line is given back,
-        and a line typed later is not read as the reply. A question the
-        reply settled has no prompt left, and nothing happens.
+        still open. The Task reading the reply is cancelled and awaited,
+        and as it ends the source takes the prompt down
+        (:meth:`_withdraw_prompt`). So the caller prints below the prompt,
+        the live line is given back, and a line typed later is not read as
+        the reply. A question the reply settled has no prompt left, and
+        nothing happens.
 
         :param request_id: the question that was settled.
         """
         task = self._replying.pop(request_id, None)
         if task is None or task.done():
             return
+        task.add_done_callback(self._withdraw_prompt)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 
