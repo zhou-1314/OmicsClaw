@@ -182,7 +182,9 @@ class PlanInjector:
         message, which is the request that opened the exchange or the
         summary a compaction left in its place. Tool results are
         ``Role.TOOL`` messages and do not end it. A history with no user
-        message is counted whole.
+        message is counted whole. An emergency truncation can drop the
+        request without leaving a summary, and the count then reaches
+        back to an older user message.
 
         Four conditions, and the first three are all ways of saying "this
         would be noise":
