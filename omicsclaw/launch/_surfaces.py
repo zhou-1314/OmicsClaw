@@ -410,7 +410,7 @@ other than a terminal. ``desktop`` and ``channel`` are the other two
 commands.
 """
 
-_ASKING_SURFACES: frozenset[str] = frozenset()
+_ASKING_SURFACES: frozenset[str] = frozenset({"repl"})
 """Entry points that show a question to a person and read the answer back."""
 
 

@@ -79,7 +79,7 @@ def resolve_tools(self, all_names: Iterable[str]) -> tuple[str, ...]:
 
 ### 2.3 内置 `general-purpose`
 
-`entry/subagent.py` 的 `GENERAL_PURPOSE` 是每个部署都有的子代理，`source="builtin"`，`tools`、`model`、`max_turns` 全部留空：继承父模型，继承父的全部工具，**但 `task`、`plan_write`、`memory_write` 除外**（后两者来自 `_WITHHELD_FROM_SUB_AGENTS`，description 由这份映射渲染，逐个写明不给的工具及理由）。
+`entry/subagent.py` 的 `GENERAL_PURPOSE` 是每个部署都有的子代理，`source="builtin"`，`tools`、`model`、`max_turns` 全部留空：继承父模型，继承父的全部工具，**但 `task`、`plan_write`、`memory_write`、`ask_user` 除外**（后三者来自 `_WITHHELD_FROM_SUB_AGENTS`，description 由这份映射渲染，逐个写明不给的工具及理由）。
 
 它的 description 告诉模型：适合跨多个文件调研一个问题、把多步分析跑到结论，或者前几次尝试未必能找到答案的搜索。它的 system prompt 强调三点：
 
@@ -148,7 +148,7 @@ config.subagents 为 False → 返回 None（不挂载 task，模型看不到任
 
 - `load_agents` 按文件名排序，结果在不同机器上稳定。读不了、解析失败、校验失败的文件交给 `on_error`，跳过后继续扫描。`omicsclaw.subagent` 本身不写日志，`entry` 的 `_report` 以 warning 级别记录**路径和错误**，**不记录文件内容**，因为定义文件就是 system prompt。
 - `SubAgentRegistry.register` 遇到同名定义时**原位替换**而不是拒绝：写一个 `general-purpose.md` 就能覆盖内置定义，而且不改变 `subagent_type` 枚举的顺序。
-- 定义的 `tools:` 如果点名了 `task` 或 `_WITHHELD_FROM_SUB_AGENTS` 中的工具（`plan_write`、`memory_write`），定义照常注册，同时记一条 warning，逐个写明这些工具不会给子代理及理由（见 5.3）。
+- 定义的 `tools:` 如果点名了 `task` 或 `_WITHHELD_FROM_SUB_AGENTS` 中的工具（`plan_write`、`memory_write`、`ask_user`），定义照常注册，同时记一条 warning，逐个写明这些工具不会给子代理及理由（见 5.3）。
 
 ---
 
@@ -233,7 +233,7 @@ TaskTool.execute(arguments)
         ├─ provider = parent.bind(model=definition.model) if model else parent
         ├─ registry = _child_registry(definition)
         │     for name in definition.resolve_tools(parent.names()):
-        │         跳过 _WITHHELD_FROM_SUB_AGENTS（plan_write、memory_write）
+        │         跳过 _WITHHELD_FROM_SUB_AGENTS（plan_write、memory_write、ask_user）
         │         child.register(parent.get(name), parent.policy_for(name))
         ├─ config   = _engine_config(definition)   # max_turns > 0 时覆盖
         ├─ prompt   = _child_prompt(definition)    # ChildPrompt
@@ -311,6 +311,7 @@ child.register(tool, self._parent.policy_for(name))
 | 权限不升级 | 子工具就是父注册表里已 gate、已 hook 的对象，并带着父注册表解析出的策略 | `entry/subagent.py` `_child_registry` |
 | 只能更窄 | 白名单 ∩ 父工具表 − 黑名单 − `task` − `_WITHHELD_FROM_SUB_AGENTS` | 同上 |
 | 父会话计划与持久记忆隔离 | `plan_write`、`memory_write` 不给任何子代理 | `_WITHHELD_FROM_SUB_AGENTS` |
+| 子代理不向人提问 | `ask_user` 不给任何子代理；委派的工具上下文不带提问通道 | `_WITHHELD_FROM_SUB_AGENTS`、`ChildRunner.delegate` |
 | 上下文隔离 | 不传 `conversation`，不注入父 prompt | `ChildRunner.delegate` |
 | 审批不丢失 | 子代理的审批请求经 contextvars 送到父 turn 的 `ApprovalBroker` | 见 5.2 |
 
@@ -334,14 +335,15 @@ Surface 绑定 ApprovalBroker 到 ToolContext
 
 `contextvars` 会被复制进每个新 Task，所以审批通道能穿过两层 Task 边界。计划 0027 §12.6 预测过这一点，Step 6.12 用真实的 `ApprovalBroker`（不是测试桩）验证了它（`test_the_child_s_approval_request_reaches_the_parent_s_broker`、`test_the_child_s_approval_request_becomes_a_parent_turn_frame`）。子代理被拒绝的调用照样被拒绝，不会执行（`test_a_denied_child_call_is_refused_rather_than_run`）。
 
-`TaskTool` 在工具上下文里加了 `values["subagent"] = <name>`（`SUBAGENT_VALUE_KEY`），用于让审批卡片标明是哪个子代理在请求。**目前还没有任何 Surface 读取这个值**，审批卡片看起来和父代理自己的请求一样。显示子代理名字的工作归计划 0052 T1，尚未实现。
+`TaskTool` 和 `ChildRunner.delegate` 都在工具上下文里写入 `values["subagent"] = <name>`（`SUBAGENT_VALUE_KEY`）。`ApprovalBroker` 发审批帧时读它，放进 `TurnEvent.subagent`；渲染行在工具名后加 ` for sub-agent <name>`，CLI 提示符为 `approve <tool> for sub-agent <name> [#n]? …`。父代理自己的请求没有这一段。Desktop 的线协议不带这个字段，App 上的卡片仍不显示子代理名。
 
-### 5.3 为什么 `plan_write`、`memory_write` 不给子代理
+### 5.3 为什么 `plan_write`、`memory_write`、`ask_user` 不给子代理
 
-`_WITHHELD_FROM_SUB_AGENTS` 是"不下发给子代理的工具 → 理由"的映射，是剔除清单的唯一出处：`_child_registry` 按它剔除，不管定义要求了什么；`general-purpose` 的 description 由它渲染；定义文件点名其中工具（或 `task`）时 `build_subagent_registry` 记一条带理由的 warning。目前两项：
+`_WITHHELD_FROM_SUB_AGENTS` 是"不下发给子代理的工具 → 理由"的映射，是剔除清单的唯一出处：`_child_registry` 按它剔除，不管定义要求了什么；`general-purpose` 的 description 由它渲染；定义文件点名其中工具（或 `task`）时 `build_subagent_registry` 记一条带理由的 warning。目前三项：
 
 - `plan_write`：子代理的工具调用沿用父 turn 的 `session_id`，持有它的子代理会改写**父会话**的执行计划。
 - `memory_write`：写入的条目进入以后每个会话的系统提示，读到恶意文件的子代理可借此种下一条永久注入。`memory_search` 只读，子代理保留。
+- `ask_user`：用户只看到父代理把任务交出去，没看到子代理做了什么，子代理的提问缺少作答所需的上下文。`ChildRunner.delegate` 重绑工具上下文时也不带提问通道，所以委派内部没有可以提问的人。
 
 ### 5.4 `--permission-mode read-only` 会禁用委派
 

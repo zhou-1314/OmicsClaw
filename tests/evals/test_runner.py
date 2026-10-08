@@ -53,6 +53,30 @@ def test_a_minimal_case_passes_and_records_its_run(tmp_path):
     assert result.provider_calls[0].tools[0] == "read_file"
 
 
+def test_a_case_runs_without_ask_user_unless_its_config_turns_it_on(tmp_path):
+    """The Runner reads approval frames and answers them from the case's
+    script. It does not read question frames, so a model that called
+    ``ask_user`` would wait until the case timed out, and a live routing
+    case would record a timeout where it should record a choice. The tool
+    is therefore left out of every case that does not ask for it."""
+
+    def tools_shown(config: dict) -> tuple[str, ...]:
+        case = Case(
+            id="tool_calling/table",
+            category="tool_calling",
+            prompt="say hello",
+            provider=lambda: ScriptedProvider(ScriptedTurn(text="hello")),
+            assertions=(NoError(),),
+            config=config,
+        )
+        result = run_case(case, tmp_path / ("on" if config else "off"))
+        assert result.passed, result.failures
+        return result.provider_calls[0].tools
+
+    assert "ask_user" not in tools_shown({})
+    assert "ask_user" in tools_shown({"ask_user": True})
+
+
 def test_an_unscripted_approval_is_denied_and_fails_the_case(tmp_path):
     case = Case(
         id="safety/unscripted",

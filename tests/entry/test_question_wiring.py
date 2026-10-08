@@ -11,10 +11,12 @@ Design choices recorded here because the code only shows their result:
 - One switch, ``AppConfig.ask_user``, decides both the mount and the
   binding. A tool mounted without a channel tells the model nobody can be
   asked, and a channel without the tool is dead weight.
-- The switch is off by default in this layer and nothing in
-  :mod:`omicsclaw.launch` turns it on yet. With it on and no surface
-  answering, a question would wait until the exchange ended, which on a
-  CLI with no approval deadline is for ever.
+- The switch is on by default, and :mod:`omicsclaw.launch` turns it off
+  for every entry point that cannot answer. With it on and no surface
+  answering, a question would wait until the exchange ended, which with
+  no approval deadline is for ever; that is why an app built directly,
+  as these tests build theirs, answers through the handle or sets a
+  deadline.
 - A sub-agent never gets ``ask_user``. The person watched the parent hand
   a task over and saw nothing of the sub-agent's work, so a question from
   inside it would arrive without the context needed to answer it.
@@ -143,15 +145,14 @@ async def _answer_every_question(handle: TurnHandle, reply: str) -> list[str]:
 # ---- the switch -----------------------------------------------------------------
 
 
-def test_the_switch_is_off_until_a_surface_can_answer_and_both_spellings_set_it(
-    tmp_path,
-):
-    assert AppConfig(workspace=tmp_path).ask_user is False
-    assert resolve_app_config(argv=[], env={}).ask_user is False
-    assert resolve_app_config(argv=["--ask-user", "true"], env={}).ask_user is True
-    assert resolve_app_config(argv=[], env={"OMICSCLAW_ASK_USER": "on"}).ask_user
-    assert not resolve_app_config(
-        argv=["--ask-user", "false"], env={"OMICSCLAW_ASK_USER": "true"}
+def test_the_switch_is_on_by_default_and_both_spellings_turn_it_off(tmp_path):
+    """The flag and the variable reach different code, so both are read."""
+    assert AppConfig(workspace=tmp_path).ask_user is True
+    assert resolve_app_config(argv=[], env={}).ask_user is True
+    assert resolve_app_config(argv=["--ask-user", "false"], env={}).ask_user is False
+    assert not resolve_app_config(argv=[], env={"OMICSCLAW_ASK_USER": "off"}).ask_user
+    assert resolve_app_config(
+        argv=["--ask-user", "true"], env={"OMICSCLAW_ASK_USER": "false"}
     ).ask_user
 
 
@@ -160,7 +161,7 @@ def test_ask_user_is_mounted_after_the_memory_tools_only_when_the_switch_is_on(
 ):
     """Behind the memory pair and ahead of MCP and ``task``, which are
     appended after the foundation tools."""
-    off = make_app(tmp_path, Scripted())
+    off = make_app(tmp_path, Scripted(), ask_user=False)
     on = make_app(tmp_path, Scripted(), ask_user=True)
     try:
         without = [definition.name for definition in off.tools_snapshot]
@@ -243,7 +244,7 @@ def test_the_question_reaches_the_exchange_s_own_broker_only_with_the_switch_on(
         return probe.seen[0].question, handle
 
     bound, handle = _bounded(drive(ask_user=True))
-    unbound, _handle = _bounded(drive())
+    unbound, _handle = _bounded(drive(ask_user=False))
 
     assert bound is handle.questions
     assert unbound is None

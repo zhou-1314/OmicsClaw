@@ -17,10 +17,12 @@ The INFO record is unconditional when the value changes. The shell cannot
 tell a deliberate ``--ask-user true`` from a default, and may not read the
 flag or the environment a second time to find out.
 
-Entry points that ask are listed in ``_ASKING_SURFACES``. While it is
-empty every row of the table below is off, the REPL included: the REPL
-cannot read an answer until the CLI's question card exists, and a mounted
-tool with nobody reading would hang the first exchange that used it.
+Entry points that ask are listed in ``_ASKING_SURFACES``, and the REPL at
+a terminal is the only one: it prints the question card and reads the
+reply. One exchange from ``--prompt`` has no next line to read, a piped
+standard input would hand the script's next line over as the person's
+decision, Desktop has no route for an answer, and a chat has no reply
+handling yet.
 """
 
 from __future__ import annotations
@@ -52,9 +54,12 @@ def _records(caplog) -> list[str]:
 # ---- the function ---------------------------------------------------------------
 
 
-def test_the_entry_points_are_the_five_the_shell_starts():
+def test_the_entry_points_are_the_five_the_shell_starts_and_one_of_them_asks():
+    """Mutation: add ``piped`` or ``once`` to ``_ASKING_SURFACES`` and a
+    run with nobody at a prompt mounts a tool that waits for somebody."""
     assert SURFACES == ("repl", "once", "piped", "desktop", "channel")
-    assert _surfaces._ASKING_SURFACES <= set(SURFACES)
+    assert _surfaces._ASKING_SURFACES == {"repl"}
+    assert CANNOT_ASK == ("once", "piped", "desktop", "channel")
 
 
 @pytest.mark.parametrize("surface", CANNOT_ASK)
@@ -222,6 +227,47 @@ def test_the_repl_s_prompt_source_is_opened_with_what_the_shell_decided(
 
     assert code == 0
     assert opened == [{"interactive": interactive}]
+
+
+@pytest.mark.parametrize(
+    ("surface", "surface_argv", "interactive"),
+    [
+        ("once", ["--prompt", "summarise the run"], True),
+        ("piped", [], False),
+        ("repl", [], True),
+    ],
+)
+def test_the_app_is_assembled_from_the_configuration_the_entry_point_was_given(
+    monkeypatch, tmp_path, surface, surface_argv, interactive
+):
+    """The same three runs with nothing between ``start_cli`` and
+    ``open_app`` replaced, so what is asserted is the configuration the
+    deployment is really built from."""
+    assembled: list[AppConfig] = []
+
+    async def open_app(config):
+        assembled.append(config)
+        return _App()
+
+    async def run_once(_app, _prompt, **_kwargs):
+        return None
+
+    monkeypatch.setattr(_surfaces, "is_interactive", lambda: interactive)
+    monkeypatch.setattr(_surfaces, "open_app", open_app)
+    monkeypatch.setattr(_surfaces, "attach_sessions", lambda given: given)
+    monkeypatch.setattr(_surfaces, "open_prompt_source", lambda **_kwargs: _Source())
+    monkeypatch.setattr(_surfaces, "Screen", lambda *a, **k: None)
+    monkeypatch.setattr(_surfaces, "Repl", _Repl)
+    monkeypatch.setattr(_surfaces, "run_once", run_once)
+
+    _surfaces.start_cli(
+        ["--ask-user", "true", "--workspace", str(tmp_path)],
+        surface_argv,
+        {"LLM_API_KEY": "k"},
+    )
+
+    (config,) = assembled
+    assert config.ask_user is (surface == "repl")
 
 
 # ---- oc desktop and oc channel ----------------------------------------------------

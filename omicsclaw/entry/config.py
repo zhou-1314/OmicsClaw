@@ -288,17 +288,18 @@ class AppConfig:
     On by default. Off is a deployment that wants every tool call to
     happen in the one conversation a person is watching."""
 
-    ask_user: bool = False
+    ask_user: bool = True
     """Whether the agent may put a question to the person mid-exchange.
 
     One switch: it mounts or unmounts the ``ask_user`` tool, and decides
     whether an exchange binds the question channel that tool asks through.
     A deployment that passes its own ``tools`` mounts what it passes.
 
-    Off by default. Every entry point of :mod:`omicsclaw.launch` runs with
-    it off whatever is set here, because none of them yet shows a question
-    and reads the answer back. An app assembled directly with this on must
-    answer ``QUESTION_ASKED`` frames through
+    On by default, and in effect only where a person can answer. Of the
+    entry points of :mod:`omicsclaw.launch`, the terminal REPL keeps it;
+    one exchange from a prompt, a piped standard input, Desktop and
+    Channel run with it off whatever is set here. An app assembled
+    directly with this on must answer ``QUESTION_ASKED`` frames through
     :meth:`~omicsclaw.entry.turn.TurnHandle.answer`, or set
     :attr:`approval_timeout_s`: without either, a question waits until the
     exchange ends."""

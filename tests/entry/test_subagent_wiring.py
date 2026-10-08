@@ -591,9 +591,10 @@ def test_the_child_never_gets_the_delegation_tool(tmp_path, offline):
 def test_the_child_inherits_the_rest_of_the_parent_s_table_in_order(
     tmp_path, offline
 ):
-    """Everything but delegation, the parent's plan, and lasting memory.
+    """Everything but delegation, the parent's plan, lasting memory, and
+    questions to the person.
 
-    The three names are spelled out rather than read off
+    The four names are spelled out rather than read off
     ``_WITHHELD_FROM_SUB_AGENTS``, so a name dropped from that mapping
     shows up here as a tool the child was handed.
     """
@@ -605,11 +606,17 @@ def test_the_child_inherits_the_rest_of_the_parent_s_table_in_order(
     offered = tuple(definition.name for definition in provider.seen_tools[0])
     assert PLAN_WRITE_TOOL_NAME in app.registry.names()
     assert MEMORY_WRITE_TOOL_NAME in app.registry.names()
+    assert "ask_user" in app.registry.names()
     assert offered == tuple(
         name
         for name in app.registry.names()
         if name
-        not in {TASK_TOOL_NAME, PLAN_WRITE_TOOL_NAME, MEMORY_WRITE_TOOL_NAME}
+        not in {
+            TASK_TOOL_NAME,
+            PLAN_WRITE_TOOL_NAME,
+            MEMORY_WRITE_TOOL_NAME,
+            "ask_user",
+        }
     )
 
 

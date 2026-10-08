@@ -572,8 +572,22 @@ oc cli --session <id>           # continue a stored conversation
 
 `oc cli --help` lists the REPL's own flags. The deployment flags (provider,
 model, workspace, `--permission-mode`, `--skills-index`, `--memory`,
-`--subagents`) are read by `omicsclaw.entry.resolve_app_config`; run it with
-an unknown one to see the list it refuses.
+`--subagents`, `--ask-user`) are read by `omicsclaw.entry.resolve_app_config`;
+run it with an unknown one to see the list it refuses.
+
+The `ask_user` tool lets the agent stop and put one question to the person.
+The REPL prints a card, `Question [<id>]: …` with numbered options, and reads
+one line at `answer [#n]> `: an option number (several, separated by commas,
+when the card allows it), an option's label, or anything in the person's own
+words. A line that starts with `/` is an answer there and runs no command;
+`y`, `s` and `a` grant nothing. An empty line skips the question and Ctrl-C
+cancels the exchange. Answers go into `~/.config/omicsclaw/history` like every
+other line typed. Only the REPL at a terminal asks: `--prompt` /
+`--prompt-file`, piped stdin, `oc desktop` and `oc channel` run without the
+tool (`surface_config` in `launch/_surfaces.py`), and sub-agents never get it.
+`--ask-user false` or `OMICSCLAW_ASK_USER=false` removes it. Set that for a
+session started under `/auto` and left alone: a question has no deadline unless
+`--approval-timeout` sets one, so the exchange stops at the first one asked.
 
 `--permission-mode read-only` turns delegation off as a side effect, and
 that is user-visible rather than internal: `task` cannot honestly declare

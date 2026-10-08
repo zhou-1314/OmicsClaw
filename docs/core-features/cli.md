@@ -263,6 +263,40 @@ Tab 补全（`_input.build_completer`）只补 14 个命令；首个 token 含�
 `oc cli` 权限模式的优先级：`--permission-mode` flag > `OMICSCLAW_PERMISSION_MODE`（任何来源）> `OMICSCLAW_CLI_PERMISSION_MODE` > `default`。
 被更高优先级压住时 `/auto status` 会说明。`auto-approve` 下仍会询问：危险命令、显式 `ask` 规则、对 `.omicsclaw/` 或 `.env` 的改动。
 
+### 7.4 提问卡片（`ask_user`）
+
+模型缺一个只有你知道或只能由你决定的事实时（哪一组是对照、用哪个基因组版本、要不要覆盖已有报告），可以调用 `ask_user`
+提一个问题，拿到回答后在同一次 exchange 里继续。事件流里出现 `QUESTION_ASKED`，REPL 同样在独立的 Task 里读回答
+（`_ask_question` → `_question`）。卡片与提示如下：
+
+```
+Question [<turn id>#2]: Which clustering?
+  │ 1. Leiden - recommended
+  │ 2. Louvain
+Reply with an option number, or in your own words.
+(3) -> ask_user
+  empty line skips · Ctrl-C cancels the request
+answer [#2]>
+```
+
+`(3) -> ask_user` 是这次工具调用在转写稿里的那一行，它排在卡片之后、图例之前，与审批卡片上 `-> bash` 的位置相同。
+
+| 输入 | 模型读到的结果 |
+|---|---|
+| 选项编号（卡片写明可多选时用逗号或空格分隔多个） | `answered`，`selected` 是对应的 label，`reply` 是原文 |
+| 与某个 label 相同的整行（不分大小写） | `answered`，`selected` 是这个 label |
+| 其他任何文字，包括越界的编号、单选题上的多个编号 | `answered`，`selected` 为空，`reply` 是原文 |
+| 空行 | `declined`：模型被告知不要再问，按自己的判断继续并写明假设 |
+| Ctrl-C | 取消这次 exchange，回到提示符，对话历史不变 |
+
+- 提问提示符上**没有斜杠命令**：`/data/ref.h5ad` 是回答，`/auto`、`/exit` 在这里也只是文字。`y`、`s`、`a` 同样只是文字，不授予任何权限。
+- 审批与提问共用 `#n` 编号，同一次 exchange 里不重号；`ask_user` 单独成批执行，所以同一时刻只有一张卡。
+- 回答和其他输入一样进入 `~/.config/omicsclaw/history`。问题与回答留在对话历史里，不写日志。
+- 没有期限（`approval_timeout_s=None`）时提问会一直等。设了 `--approval-timeout` 则到期返回 `no_answer`，本次 exchange 之后的提问不再等待。
+- 只有终端里的 REPL 会提问。`--prompt` / `--prompt-file`、管道输入、`oc desktop`、`oc channel` 下不挂载这个工具
+  （`launch/_surfaces.py` 的 `surface_config`），子代理也没有它。
+- `--ask-user false` 或 `OMICSCLAW_ASK_USER=false` 整体关闭。开了 `/auto` 之后要离开终端的会话建议关掉，否则模型一问就停在那里。
+
 ---
 
 ## 8. Shell 模式：`!<cmd>`
@@ -295,8 +329,9 @@ Tab 补全（`_input.build_completer`）只补 14 个命令；首个 token 含�
 | `TOOL_START` / `TOOL_RESULT` | `TextRenderer` 给出头行，`ToolTranscript` 加调用编号、参数预览（`ARGUMENT_CHARS = 120`）、输出预览（`OUTPUT_LINES = 3`、`OUTPUT_CHARS = 160`），结果按 `tool_call_id` 配对；控制字符被替换 |
 | `TOOL_RESULT` of `plan_write` | 计划有变化时打印完整计划快照（与上次打印的比较，未变则不打印） |
 | `APPROVAL_REQUIRED` | 独立 Task 弹审批卡片（§7） |
+| `QUESTION_ASKED` | 卡片按行以正常样式打印（不弱化），独立 Task 读回答（§7.4） |
 | `PROGRESS` | 更新活动行的细节 |
-| `CONTEXT` / `COMPACTION` / `QUEUED` / `APPROVAL_SETTLED` / `GAP` | `TextRenderer` 的一行控制文本 |
+| `CONTEXT` / `COMPACTION` / `QUEUED` / `APPROVAL_SETTLED` / `QUESTION_SETTLED` / `GAP` | `TextRenderer` 的一行控制文本；已回答的提问不出字 |
 | `TURN_END` | 累加 usage 供 `/usage`（`usage=None` 跳过，零值照加） |
 | `EXCHANGE_END` | `converged` 不打印（每个回答下面一行 "Done." 是噪音）；`cancelled` / `failed` 打印 |
 
@@ -386,7 +421,8 @@ workspace 默认是启动时的当前目录（`--workspace` / `OMICSCLAW_WORKSPA
 | `--tool-timeout` | `OMICSCLAW_TOOL_TIMEOUT_S` | `600` | 工具上限的唯一来源；`bash` 用它减 15 s |
 | `--max-turns` | `OMICSCLAW_MAX_TURNS` | `50` | 每次 exchange 的模型调用上限 |
 | `--turn-timeout` | `OMICSCLAW_TURN_TIMEOUT_S` | 无 | 单次 exchange 墙钟上限 |
-| `--approval-timeout` | `OMICSCLAW_APPROVAL_TIMEOUT_S` | 无 | 单次审批期限，到期拒绝 |
+| `--approval-timeout` | `OMICSCLAW_APPROVAL_TIMEOUT_S` | 无 | 单次审批期限，到期拒绝；提问共用这个期限，到期为 `no_answer` |
+| `--ask-user` | `OMICSCLAW_ASK_USER` | 开 | `ask_user` 工具；只在终端 REPL 生效（§7.4） |
 | `--system-prompt-file` | `OMICSCLAW_SYSTEM_PROMPT_FILES` | skill 树旁的 `OMICSCLAW.md` | 替换契约，`:` 分隔 |
 | `--skills-dir` / `--skills-index` | `OMICSCLAW_SKILLS_DIR` / `OMICSCLAW_SKILLS_INDEX` | `<workspace>/skills` / `full` | 见 agent-skills.md |
 | `--compact-at` | `OMICSCLAW_COMPACT_AT` | `warn` | 触发压缩的最低压力档 |
@@ -406,7 +442,7 @@ workspace 默认是启动时的当前目录（`--workspace` / `OMICSCLAW_WORKSPA
 ## 14. 已知限制
 
 1. **没有 TUI**。Textual TUI 未移植（会拖入整个 `RunRuntime` 与旧记忆族），`textual` 也未安装。
-2. **一次性执行无法审批**：`--prompt` 下所有 `ASK` 工具被拒，需要 `--permission-mode auto-approve`。
+2. **一次性执行无法审批，也不提问**：`--prompt` 下所有 `ASK` 工具被拒，需要 `--permission-mode auto-approve`；`ask_user` 在 `--prompt` 与管道输入下不挂载。
 3. **日志只保留尾部**：退出后只回放最后 4000 字符；`--log-file` 部署 flag 记为 plan 0037 附录 A 的债务。
 4. **目录中有大量不实现的旧命令**（`/run`、`/research`、`/memory`、`/install-skill` …），出于移植保真测试保留，只回答"不可用"。
 5. **会话 id 与 `/clear`**：`/clear` 并不清空当前会话，而是开一个新 id；旧会话仍可 `/resume`。
@@ -426,7 +462,8 @@ workspace 默认是启动时的当前目录（`--workspace` / `OMICSCLAW_WORKSPA
 | `omicsclaw/launch/_surfaces.py` | `CLI_USAGE`、`CLI_FLAGS`、`ReplOptions`、`start_cli`、`_run_cli`、`_release`、`_interrupts`、`_replay`；Desktop/Channel 启动 |
 | `omicsclaw/entry/config.py` | `AppConfig`、`resolve_app_config`、全部部署 flag |
 | `omicsclaw/entry/cli/__init__.py` | 包说明与公开符号 |
-| `omicsclaw/entry/cli/_repl.py` | `Repl`、`run_once`、审批、`/sessions` `/resume` `/compact` 等 |
+| `omicsclaw/entry/cli/_repl.py` | `Repl`、`run_once`、审批、提问卡片、`/sessions` `/resume` `/compact` 等 |
+| `omicsclaw/entry/question.py` | `QuestionBroker`、`question_card`、`reply_hint`、`read_reply` |
 | `omicsclaw/entry/cli/_slash_command_support.py`、`_constants.py` | 命令目录、`REPL_SLASH_COMMAND_SPECS`、`slash_token` |
 | `omicsclaw/entry/cli/_activity.py` | `ActivityLine` 活动行 |
 | `omicsclaw/entry/cli/_transcript.py` | `ToolTranscript` |

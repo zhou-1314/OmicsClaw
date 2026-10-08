@@ -44,6 +44,11 @@ return is that **a question that cannot be put is still answered**:
 approval deadline and an unsettled request is an exchange that never
 ends.
 
+**A question from ``ask_user`` is read the same way.** The pump prints
+the card and starts a Task (:meth:`Repl._ask_question`) that reads one
+line at an ``answer [#n]> `` prompt. The line is the answer, whatever it
+is: an empty one skips the question and Ctrl-C cancels the exchange.
+
 **What this loop does not do.** Part of the ported catalogue (see
 :data:`~omicsclaw.entry.cli._slash_command_support.REPL_SLASH_COMMAND_SPECS`),
 because the skill runner, the research pipeline and the memory commands
@@ -110,12 +115,19 @@ from omicsclaw.context import CompactionRecord, is_summary_message
 from omicsclaw.entry.assembly import AgentApp
 from omicsclaw.entry.display import approval_body_note, inert_line, inert_prose
 from omicsclaw.entry.events import TurnEvent, TurnEventType
+from omicsclaw.entry.question import read_reply
 from omicsclaw.entry.render import TextRenderer
 from omicsclaw.entry.session import Session, SubmissionRefused, new_turn_id
 from omicsclaw.entry.turn import TurnHandle
 from omicsclaw.planning import PLAN_WRITE_TOOL_NAME, PlanItem, PlanStatus
 from omicsclaw.schema import Message, Role
-from omicsclaw.tools.context import ApprovalDecision, ApprovalRequest
+from omicsclaw.tools.context import (
+    AnswerStatus,
+    ApprovalDecision,
+    ApprovalRequest,
+    QuestionAnswer,
+    QuestionRequest,
+)
 
 from omicsclaw.permission import PermissionMode
 
@@ -192,6 +204,16 @@ terminal, which costs more than it tells.
 *size* is ``""``, or a space and the note the card's body opens with
 (:func:`~omicsclaw.entry.display.approval_body_note`) when the body has
 one: its line and character counts, and what was folded or cut."""
+
+_QUESTION_PROMPT = "answer [{card}]> "
+"""The prompt under a question card. *card* is the ``#n`` of the request
+id, as in :data:`_APPROVAL_PROMPT`, and approvals and questions of one
+exchange are numbered from the same count."""
+
+_QUESTION_LEGEND = "  empty line skips · Ctrl-C cancels the request"
+"""Printed between a question card and its prompt: the two things a reply
+cannot say. Everything else typed is the answer, a line that starts with
+``/`` included."""
 
 _INTERRUPTED_REASON = "interrupted at the terminal"
 """The reason a card is settled with when Ctrl-C is pressed at it."""
@@ -1202,6 +1224,8 @@ class Repl:
                     self._note_activity(event, activity)
                     if event.type is TurnEventType.APPROVAL_REQUIRED:
                         self._ask_human(handle, event)
+                    if event.type is TurnEventType.QUESTION_ASKED:
+                        self._ask_question(handle, event)
                     if event.type is TurnEventType.TURN_END:
                         self._count(event)
                     if event.type is TurnEventType.EXCHANGE_END:
@@ -1581,6 +1605,65 @@ class Repl:
             request_id,
             ApprovalDecision(approved, "" if approved else reason),
         )
+
+    # ---- questions -------------------------------------------------------
+
+    def _ask_question(self, handle: TurnHandle, event: TurnEvent) -> None:
+        """Start reading the reply to a question, and return to the pump at once.
+
+        As :meth:`_ask_human` does for an approval: the live line is held
+        before the Task that reads the reply exists, and that Task is
+        tracked in :attr:`_asking` so that an exchange which ends first
+        takes it down.
+        """
+        activity = self._activity
+        if activity is not None:
+            activity.hold()
+        task = asyncio.create_task(
+            self._answer_question(handle, event, activity),
+            name=f"omicsclaw-cli-question-{event.request_id}",
+        )
+        self._asking.add(task)
+        task.add_done_callback(self._forget_asking)
+
+    async def _answer_question(
+        self,
+        handle: TurnHandle,
+        event: TurnEvent,
+        activity: ActivityLine | None,
+    ) -> None:
+        """Read the reply, and give the live line back however that ends."""
+        try:
+            await self._question(handle, event.request_id, event)
+        finally:
+            if activity is not None:
+                activity.release()
+
+    async def _question(
+        self, handle: TurnHandle, request_id: str, event: TurnEvent
+    ) -> None:
+        """Read one line at a question's prompt and answer the question with it.
+
+        The card itself was printed by the pump. Whatever is typed is the
+        answer, read by :func:`~omicsclaw.entry.question.read_reply`: an
+        empty line skips the question, and a line that starts with ``/``
+        is an answer like any other, not a command. A prompt that yields
+        no line settles the question as unanswered (see
+        :meth:`_read_card`); Ctrl-C also cancels the exchange.
+        """
+        request = event.question or QuestionRequest(question="")
+        self._screen.print(Text(_QUESTION_LEGEND, style="dim"))
+        line = await self._read_card(
+            _QUESTION_PROMPT.format(card=inert_line(_card(request_id))),
+            subject="the question",
+            settled_as="Not answered",
+            refuse=lambda reason: handle.answer(
+                request_id, QuestionAnswer(AnswerStatus.NO_ANSWER, reason=reason)
+            ),
+        )
+        if line is None:
+            return
+        await handle.answer(request_id, read_reply(request, line))
 
     def _approval_legend(self, always_asked: bool, rememberable: bool = True) -> str:
         """The grants, and ``/auto`` where it would stop cards like this one.

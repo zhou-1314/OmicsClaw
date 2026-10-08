@@ -325,6 +325,8 @@ approve bash [#1]? [y/N/a=always]
 
 `/auto` 开启时，屏幕会说明哪些情况仍然会问：高危命令、显式 `ask` 规则、对 `.omicsclaw/` 或 `.env` 的改动；`deny` 规则仍然拒绝。同时提醒：高危模式是黑名单，不是隔离边界。
 
+`ask_user` 的提问卡片（[cli.md](cli.md) §7.4）与审批是两条通道。`/auto`、`auto-approve`、`bypass-all` 都不会替人回答问题；在提问提示符上输入 `y`、`s`、`a`、`/auto` 只是回答的文字，不授予任何权限。`ask_user` 自己声明 `read_only`、`AUTO`，在 `read-only` 模式下可用，提问前也不出审批卡；`deny` 规则可以拒绝它。
+
 ### 8.3 一个多组学场景下的判定表
 
 规则文件为 `deny: ["bash(rm -rf *)"]`，`allow: ["bash(python skills/*)", "bash(git status)"]`。以下结果来自对 `PermissionGate.resolve` 的实际调用：
@@ -350,7 +352,7 @@ approve bash [#1]? [y/N/a=always]
 
 - `task` 和其他工具一样经过 `gate_tools(hook_tools(...))` 挂载，挂在工具表末尾。
 - 子代理的 registry 由 `ChildRunner._child_registry` 从父 registry 中挑出**已经 gate 过的对象**，按父 registry 解析出的策略重新注册。所以子代理的权限不可能比父代理宽，部署通过 `register(policy=)` 做的收紧也会带过去。
-- 审批不需要额外管道：`contextvars` 会复制进新 Task，子代理里 `bash` 的审批请求会经过两层 Task 边界，到达父 exchange 的同一个 `ApprovalBroker`。`TaskTool` 还把子代理名写进 tool context（`SUBAGENT_VALUE_KEY`），设计上是让审批卡片显示哪个子代理在请求；但 `omicsclaw/entry/` 目前还没有代码读取这个值。
+- 审批不需要额外管道：`contextvars` 会复制进新 Task，子代理里 `bash` 的审批请求会经过两层 Task 边界，到达父 exchange 的同一个 `ApprovalBroker`。`TaskTool` 与 `ChildRunner.delegate` 把子代理名写进 tool context（`SUBAGENT_VALUE_KEY`），`ApprovalBroker` 读出后放进审批帧的 `TurnEvent.subagent`：卡片标题写成 `<tool> for sub-agent <name>`，CLI 提示符同样带上；父代理的请求不带这一段，Desktop 的线协议不带这个字段。
 - **只读分支**：`--permission-mode read-only` 下，网关的第 2 阶段会拒掉 `task`，因为它无法如实声明 `read_only=True`。所以只读模式下**委派整体不可用**。这是 fail-closed 的方向，但用户能直接感知到（FRAMEWORK-REBUILD Step 6.12 列为已知代价）。
 
 ### 9.2 Desktop：卡片、`/chat/permission` 与 `/chat/abort`

@@ -147,7 +147,7 @@ def test_install_inserts_the_tool_before_task_and_changes_nothing_else(tmp_path,
         tools = serialised_tools(app.registry.available_tools())
         names = [tool["name"] for tool in tools]
         position = names.index("install_skill_deps")
-        assert names[position - 1] == "memory_write" and names[position + 1] == "task"
+        assert names[position - 1] == "ask_user" and names[position + 1] == "task"
         assert dump_tools(tools[:position] + tools[position + 1:]) == TOOLS_FILE.read_text(encoding="utf-8")
         assert app.skill_env is not None and app.skill_env.tool is not None
     finally:
@@ -158,7 +158,7 @@ def test_the_tool_comes_before_every_mcp_tool(tmp_path, offline):
     _, config = _golden_install(tmp_path)
     app = assembly.build_app(config, mcp=_FakeMCP())
     try:
-        assert _names(app)[-4:] == ["memory_write", "install_skill_deps", "mcp__demo__echo", "task"]
+        assert _names(app)[-4:] == ["ask_user", "install_skill_deps", "mcp__demo__echo", "task"]
     finally:
         _close(app)
 
