@@ -127,8 +127,13 @@ def test_only_the_last_write_counts() -> None:
     assert len(ask(nudge, history)) == 1
 
 
-def test_a_write_among_other_calls_of_one_turn_counts() -> None:
-    nudge = MemoryNudge(write_tool=WRITE, every=2)
+def test_a_write_that_is_not_the_first_call_of_its_turn_counts() -> None:
+    """Three turns in all, but only one since the write.
+
+    An interval of three tells the two apart: missing the write would
+    count all three turns and remind here.
+    """
+    nudge = MemoryNudge(write_tool=WRITE, every=3)
     history = reading(1)
     history.append(
         Message.assistant(
@@ -140,6 +145,9 @@ def test_a_write_among_other_calls_of_one_turn_counts() -> None:
     )
     history.extend(turn(index=91))
     assert ask(nudge, history) == ()
+    history.extend(turn(index=92))
+    history.extend(turn(index=93))
+    assert len(ask(nudge, history)) == 1
 
 
 def test_there_is_no_reminder_without_the_write_tool_on_the_call() -> None:

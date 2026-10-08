@@ -631,6 +631,18 @@ def test_a_note_sharing_more_of_a_han_query_ranks_higher() -> None:
     assert [h.title for h in hits] == ["whole", "part"]
 
 
+def test_any_adjacent_pair_of_a_han_query_matches() -> None:
+    """Each note holds one pair of the query, at its start, middle or end."""
+    db, lt = store()
+    run(lt.add(MemoryEntry(title="first pair", content="这批次的数据")))
+    run(lt.add(MemoryEntry(title="middle pair", content="需要校正")))
+    run(lt.add(MemoryEntry(title="last pair", content="方法见附录")))
+    run(lt.add(MemoryEntry(title="no pair", content="批量处理，正在校对，想个办法")))
+    hits = run(lt.search("批次校正方法"))
+    db.close()
+    assert {h.title for h in hits} == {"first pair", "middle pair", "last pair"}
+
+
 def test_latin_words_touching_han_text_are_searchable() -> None:
     """Without a space between them, the two scripts used to be one token."""
     db, lt = store()
@@ -707,6 +719,19 @@ def test_a_very_long_han_query_is_still_a_search() -> None:
 
 
 @pytest.mark.parametrize(
+    "han",
+    ["\u3400\u3401\u3402\u3403", "\uf900\uf901\uf902\uf903"],
+    ids=["Extension A", "compatibility ideographs"],
+)
+def test_han_outside_the_main_block_is_searchable_by_substring(han: str) -> None:
+    db, lt = store()
+    eid = run(lt.add(MemoryEntry(title="t", content=f"x{han}y")))
+    hits = run(lt.search(han[1:3]))
+    db.close()
+    assert [h.id for h in hits] == [eid]
+
+
+@pytest.mark.parametrize(
     ("written", "indexed"),
     [
         ("这个项目的空间域识别一律用 leiden", "这 个 项 目 的 空 间 域 识 别 一 律 用 leiden"),
@@ -715,6 +740,12 @@ def test_a_very_long_han_query_is_still_a_search() -> None:
         ("批次，校正", "批 次 ， 校 正"),
         ("域", "域"),
         ("𠀀𠀁x", "𠀀 𠀁 x"),
+        # The first and last characters of Extension A, then of the
+        # compatibility block.
+        ("\u3400\u4dbfx", "\u3400 \u4dbf x"),
+        ("\uf900\ufad9x", "\uf900 \ufad9 x"),
+        # Just outside those blocks: a unit sign, a hexagram, a ligature.
+        ("\u33ffa\u4dc0b\ufb00", "\u33ffa\u4dc0b\ufb00"),
         ("min_counts is 500; café, naïve", "min_counts is 500; café, naïve"),
         ("", ""),
     ],
