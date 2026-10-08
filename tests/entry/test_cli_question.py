@@ -38,14 +38,26 @@ from typing import Any
 import pytest
 
 from omicsclaw.entry.cli import PROMPT, Repl, ScriptedSource, Screen
+from omicsclaw.entry.cli import _activity
 from omicsclaw.entry.cli._transcript import ToolTranscript
 from omicsclaw.entry.display import CONTINUATION_PREFIX
 from omicsclaw.entry.events import TurnEvent
+from omicsclaw.entry.question import QUESTION_TIMEOUT_REASON
 from omicsclaw.entry.render import TextRenderer
 from omicsclaw.entry.session import attach_sessions
 from omicsclaw.permission import PermissionMode
-from omicsclaw.schema import Message, Role, ToolCall
-from omicsclaw.tools import AskUserTool, QuestionOption, QuestionRequest
+from omicsclaw.schema import Message, Role, ToolCall, ToolDefinition
+from omicsclaw.tools import (
+    ApprovalMode,
+    AskUserTool,
+    QuestionOption,
+    QuestionRequest,
+    ToolPolicy,
+)
+from tests.entry.test_cli_activity import (  # type: ignore[import-not-found]
+    frames,
+    terminal_screen,
+)
 from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]
     Asking,
     Scripted,
@@ -411,6 +423,134 @@ def test_a_question_nobody_answered_does_not_outlive_its_exchange(tmp_path, capl
     assert "Cancelled." in printed
     assert not repl._asking
     assert "never retrieved" not in caplog.text
+
+
+# ---- a question whose deadline passes ---------------------------------------------
+
+
+class _AtTheQuestion(ScriptedSource):
+    """A person at the question's prompt, and what the screen received
+    while that prompt was open.
+
+    With a *reply* they type it after *pause_s*. With none they leave the
+    prompt open until it is taken down.
+    """
+
+    def __init__(self, lines, buffer, *, reply=None, pause_s=0.25) -> None:
+        super().__init__(lines)
+        self._buffer = buffer
+        self._reply = reply
+        self._pause_s = pause_s
+        self.during: list[str] = []
+        self.answered_at = 0
+        self.on_screen_when_taken_down: str | None = None
+
+    async def read(self, prompt: str) -> str:
+        if not prompt.startswith("answer"):
+            return await super().read(prompt)
+        self.prompts.append(prompt)
+        mark = len(self._buffer.getvalue())
+        try:
+            if self._reply is None:
+                await asyncio.Event().wait()
+            await asyncio.sleep(self._pause_s)
+        except asyncio.CancelledError:
+            self.on_screen_when_taken_down = self._buffer.getvalue()
+            raise
+        self.during.append(self._buffer.getvalue()[mark:])
+        self.answered_at = len(self._buffer.getvalue())
+        return self._reply
+
+
+class _Gated:
+    """A tool that works until the test lets it finish."""
+
+    name = "gated"
+    policy = ToolPolicy(approval_mode=ApprovalMode.AUTO, concurrency_safe=False)
+
+    def __init__(self) -> None:
+        self.finish = asyncio.Event()
+
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description="Works until told to stop.",
+            input_schema={"type": "object", "properties": {}},
+        )
+
+    async def execute(self, arguments: str) -> str:
+        await self.finish.wait()
+        return "gated done"
+
+
+async def _happens(condition) -> bool:
+    """Whether *condition* comes to hold within a bounded wait."""
+    for _ in range(600):
+        if condition():
+            return True
+        await asyncio.sleep(0.005)
+    return False
+
+
+def test_a_question_whose_deadline_passes_has_its_prompt_taken_down(
+    tmp_path, monkeypatch
+):
+    """With a deadline set, a question is settled while its prompt is still
+    open. The Task reading the reply ends before ``No answer`` is printed,
+    so the line is not written onto an open prompt, a line typed later is
+    not taken as the reply, and the live line runs again for the tool that
+    follows.
+
+    The gated tool keeps the exchange running past the deadline, so what
+    ends the reading Task here is the settlement and not the end of the
+    exchange.
+
+    Mutation: do not retract the question on ``QUESTION_SETTLED`` in
+    ``Repl._pump`` and the Task is still reading when ``No answer`` is on
+    screen.
+    """
+    monkeypatch.setattr(_activity, "TICK_S", 0.01)
+
+    async def drive():
+        gated = _Gated()
+        provider = Scripted(
+            _model(
+                _asks("Which clustering?"),
+                ToolCall(id="g1", name="gated", arguments="{}"),
+            ),
+            _says("went on"),
+        )
+        app = _build(tmp_path, provider, tools=(gated,), approval_timeout_s=0.2)
+        screen, buffer = terminal_screen()
+        source = _AtTheQuestion(["cluster it", "/exit"], buffer)
+        repl = Repl(app, source=source, screen=screen, animated=True)
+        loop = asyncio.create_task(repl.run())
+
+        told = await _happens(lambda: "No answer [" in buffer.getvalue())
+        still_reading = tuple(repl._asking)
+        told_at = len(buffer.getvalue())
+        painted_again = await _happens(
+            lambda: bool(frames(buffer.getvalue()[told_at:]))
+        )
+
+        gated.finish.set()
+        await asyncio.wait_for(loop, WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return provider, source, told, still_reading, painted_again, buffer.getvalue()
+
+    provider, source, told, still_reading, painted_again, printed = asyncio.run(
+        drive()
+    )
+
+    assert told, "the deadline never settled the question"
+    assert still_reading == (), "the prompt outlived its question"
+    assert source.on_screen_when_taken_down is not None
+    assert "No answer [" not in source.on_screen_when_taken_down
+    assert painted_again, "the live line never came back after the deadline"
+    read = _read_back(provider)
+    assert (read["status"], read["reason"]) == ("no_answer", QUESTION_TIMEOUT_REASON)
+    assert source.prompts == [PROMPT, ASK, PROMPT]
+    assert "went on" in printed
 
 
 def test_nothing_in_a_question_reaches_the_terminal_as_a_control_character(tmp_path):

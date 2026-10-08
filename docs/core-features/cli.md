@@ -293,6 +293,10 @@ answer [#2]>
 - 审批与提问共用 `#n` 编号，同一次 exchange 里不重号；`ask_user` 单独成批执行，所以同一时刻只有一张卡。
 - 回答和其他输入一样进入 `~/.config/omicsclaw/history`。问题与回答留在对话历史里，不写日志。
 - 没有期限（`approval_timeout_s=None`）时提问会一直等。设了 `--approval-timeout` 则到期返回 `no_answer`，本次 exchange 之后的提问不再等待。
+- 提问到期后提示符会收回：`_pump` 收到 `QUESTION_SETTLED` 时取消读回答的 Task 并等它结束（`_retract_question`），`No answer [...]` 打在提示符的下一行，
+  活动行恢复。之后键入的内容不再当作这个问题的回答；它留在终端的输入缓冲里，由下一个提示符读走，通常是 exchange 结束后的主提示符，
+  于是作为下一条消息发给模型。
+- 审批卡片到期后目前**不会**收回：`approve …?` 提示符留到 exchange 结束，这段时间没有活动行，在它上面键入的内容被丢弃。
 - 只有终端里的 REPL 会提问。`--prompt` / `--prompt-file`、管道输入、`oc desktop`、`oc channel` 下不挂载这个工具
   （`launch/_surfaces.py` 的 `surface_config`），子代理也没有它。
 - `--ask-user false` 或 `OMICSCLAW_ASK_USER=false` 整体关闭。开了 `/auto` 之后要离开终端的会话建议关掉，否则模型一问就停在那里。
@@ -331,7 +335,7 @@ answer [#2]>
 | `APPROVAL_REQUIRED` | 独立 Task 弹审批卡片（§7） |
 | `QUESTION_ASKED` | 卡片按行以正常样式打印（不弱化），独立 Task 读回答（§7.4） |
 | `PROGRESS` | 更新活动行的细节 |
-| `CONTEXT` / `COMPACTION` / `QUEUED` / `APPROVAL_SETTLED` / `QUESTION_SETTLED` / `GAP` | `TextRenderer` 的一行控制文本；已回答的提问不出字 |
+| `CONTEXT` / `COMPACTION` / `QUEUED` / `APPROVAL_SETTLED` / `QUESTION_SETTLED` / `GAP` | `TextRenderer` 的一行控制文本；已回答的提问不出字。`QUESTION_SETTLED` 到达时提示符还开着的话先收回它（§7.4） |
 | `TURN_END` | 累加 usage 供 `/usage`（`usage=None` 跳过，零值照加） |
 | `EXCHANGE_END` | `converged` 不打印（每个回答下面一行 "Done." 是噪音）；`cancelled` / `failed` 打印 |
 

@@ -512,6 +512,7 @@ class Repl:
         "_heartbeat_s",
         "_permission_mode_source",
         "_plan_shown",
+        "_replying",
         "_running",
         "_screen",
         "_shell_records",
@@ -557,6 +558,8 @@ class Repl:
         self._shell_timeout_s = shell_timeout_s
         self._running: TurnHandle | None = None
         self._asking: set[asyncio.Task[None]] = set()
+        # The Task reading the reply to each open question, by request id.
+        self._replying: dict[str, asyncio.Task[None]] = {}
         self._granted: set[tuple[str, str]] = set()
         """``(session id, tool name)`` a person said "for this
         conversation" about. Keyed by the *tool*, so it grants more than
@@ -1219,6 +1222,10 @@ class Repl:
                         streaming = False
                         answering = False
                         activity.release()
+                    if event.type is TurnEventType.QUESTION_SETTLED:
+                        # Before the erase below: a tick can paint while
+                        # this waits for the prompt to come down.
+                        await self._retract_question(event.request_id)
                     # Whatever is printed below starts at column 0.
                     activity.clear()
                     self._note_activity(event, activity)
@@ -1625,6 +1632,26 @@ class Repl:
         )
         self._asking.add(task)
         task.add_done_callback(self._forget_asking)
+        request_id = event.request_id
+        self._replying[request_id] = task
+        task.add_done_callback(lambda _done: self._replying.pop(request_id, None))
+
+    async def _retract_question(self, request_id: str) -> None:
+        """Take down the prompt of a question that has been settled.
+
+        A question whose deadline passes is settled while its prompt is
+        still open. The Task reading the reply is cancelled and awaited, so
+        the caller prints below the prompt, the live line is given back,
+        and a line typed later is not read as the reply. A question the
+        reply settled has no prompt left, and nothing happens.
+
+        :param request_id: the question that was settled.
+        """
+        task = self._replying.pop(request_id, None)
+        if task is None or task.done():
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
     async def _answer_question(
         self,
