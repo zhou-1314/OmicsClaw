@@ -11,9 +11,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Sequence
 
+from omicsclaw.context import MemoryNudge
 from omicsclaw.engine import TurnAugmentor
 from omicsclaw.schema import Message, ToolDefinition
 
+from .memory import MEMORY_WRITE_TOOL_NAME
 from .planning import build_injector
 
 if TYPE_CHECKING:  # pragma: no cover - a type-only import
@@ -75,12 +77,30 @@ def chain(*members: TurnAugmentor | None) -> TurnAugmentor | None:
 def build_augmentor(app: "AgentApp", *, session_id: str = "") -> TurnAugmentor | None:
     """The augmentor for one main-agent exchange of *session_id*, or ``None``.
 
-    Building it restores the session's plan, as
+    The memory reminder comes first and the plan injector last, so the
+    plan block stays the last thing the model reads. Building it restores
+    the session's plan, as
     :func:`~omicsclaw.entry.planning.build_injector` does.
+
+    Sub-agent exchanges do not go through here and get no memory
+    reminder.
 
     :param app: The deployment the exchange runs in.
     :param session_id: The session whose plan is injected.
     :returns: What the engine should consult before each model call of
         the exchange, or ``None`` when the deployment has nothing to add.
     """
-    return chain(build_injector(app, session_id=session_id))
+    return chain(_memory_nudge(app), build_injector(app, session_id=session_id))
+
+
+def _memory_nudge(app: "AgentApp") -> MemoryNudge | None:
+    """The memory reminder for *app*, or ``None`` when it has none.
+
+    :returns: ``None`` when the deployment keeps no long-term memory or
+        :attr:`~omicsclaw.entry.config.AppConfig.memory_nudge_turns` is
+        ``0`` or less.
+    """
+    every = app.config.memory_nudge_turns
+    if app.memory is None or every <= 0:
+        return None
+    return MemoryNudge(write_tool=MEMORY_WRITE_TOOL_NAME, every=every)

@@ -296,6 +296,7 @@ import sys
 from omicsclaw.schema import Message, Role, ToolCall, ToolDefinition
 from omicsclaw.context import (
     ContextBudget,
+    MemoryNudge,
     PromptAssembler,
     Section,
     assemble,
@@ -388,6 +389,13 @@ async def main():
     assert len(repaired) == 2, repaired
     assert repaired[1].role is Role.TOOL, repaired
 
+    nudge = MemoryNudge(write_tool="memory_write", every=2)
+    remembering = [*TOOLS, ToolDefinition("memory_write", "记住", {"type": "object"})]
+    two_turns = [Message.assistant("one"), Message.assistant("two")]
+    reminded = await nudge.augment(two_turns, remembering)
+    assert len(reminded) == 1 and "memory_write" in reminded[0].content, reminded
+    assert await nudge.augment(two_turns[:1], remembering) == ()
+
 
 asyncio.run(main())
 print(sorted(m for m in sys.modules if m.startswith("omicsclaw.runtime")))
@@ -405,8 +413,10 @@ render including one section that disappears; :func:`assemble`;
 :func:`measure` over real tool definitions; a compaction that summarizes
 successfully; one whose summarizer raises, taking the degradation path;
 one forced into the emergency tier, which must reach the truncation code
-rather than the summarizer; and :func:`repair_tool_pairs` in both of its
-directions at once. The list has to grow when a public function does.
+rather than the summarizer; :func:`repair_tool_pairs` in both of its
+directions at once; and a :class:`MemoryNudge` on a call where it reminds
+and on one where it stays silent. The list has to grow when a public
+function does.
 """
 
 
@@ -463,11 +473,13 @@ def test_every_context_module_imports_with_no_tokenizer_installed(
 def test_the_public_surface_is_exactly_what_plan_0030_delivered():
     """``__init__`` is an interface, so widening it should be deliberate.
 
-    Widened once, by plan 0035: the offload vocabulary, ``MemoryExtractor``,
+    Widened by plan 0035: the offload vocabulary, ``MemoryExtractor``,
     ``ProgressiveCompactor`` / ``should_write_back`` and the tier ordering
     (``PRESSURE_ORDER`` / ``at_least``) moved down from the entry layer.
+    Widened again for the memory reminder: ``MemoryNudge`` and its two
+    constants.
 
-    Six modules' worth of names, and the shape of the list is the
+    Seven modules' worth of names, and the shape of the list is the
     argument: every Protocol on it (``TokenCounter``, ``Summarizer``)
     and every callable type behind it (``SectionSource``) is a seam
     through which knowledge this package is not allowed to hold gets in.
@@ -486,12 +498,15 @@ def test_the_public_surface_is_exactly_what_plan_0030_delivered():
         "CompactionRecord",
         "CompactionState",
         "ContextBudget",
+        "DEFAULT_MEMORY_NUDGE_TURNS",
         "DEFAULT_MIN_TAIL",
         "FIRST_TEMPLATE",
         "INCREMENTAL_TEMPLATE",
         "MAX_REFERENCES",
+        "MEMORY_NUDGE_TEXT",
         "MISSING_TOOL_RESULT",
         "MemoryExtractor",
+        "MemoryNudge",
         "OFFLOAD_MARKER",
         "OFFLOAD_RULE",
         "OffloadEntry",
