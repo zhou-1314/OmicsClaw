@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import time
 
@@ -9,7 +10,7 @@ import pytest
 
 from omicsclaw.bench.layout import read_jsonl
 from omicsclaw.bench.manifest import ManifestError
-from omicsclaw.bench.run import run_campaign, stage_campaign
+from omicsclaw.bench.run import CampaignLocked, run_campaign, stage_campaign
 from omicsclaw.bench.stage import StageError
 
 from ._support import OK_EVIDENCE, Toy, ok
@@ -238,6 +239,20 @@ def test_an_interrupt_stops_the_campaign_and_leaves_open_runs_open(tmp_path):
     assert (summary.outcomes, summary.unfinished) == ({"completed": 1}, 3)
     finished = sorted(path.parent.name for path in toy.out.rglob("done.json"))
     assert len(finished) == 1 and toy.paths(first).done.exists()
+
+
+def test_a_held_lock_refuses_stage_and_run_until_it_is_released(tmp_path):
+    toy = Toy(tmp_path)
+    toy.out.mkdir()
+    with open(toy.out / ".bench.lock", "a+") as holder:
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(CampaignLocked, match="in use by another"):
+            run_campaign(toy.manifest, toy.campaign, **QUIET)
+        with pytest.raises(CampaignLocked):
+            stage_campaign(toy.manifest, toy.campaign, **QUIET)
+        assert not (toy.out / "cells").exists()
+
+    assert run_campaign(toy.manifest, toy.campaign, **QUIET).executed == 1
 
 
 def test_select_narrows_what_is_run(tmp_path):

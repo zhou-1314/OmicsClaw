@@ -5,17 +5,22 @@ a campaign again skips finished runs, so an interrupted campaign continues
 where it stopped. ``predictions.jsonl`` and ``usage.jsonl`` are rewritten
 from the ``done.json`` files after every run and hold one row per finished
 run of the manifest.
+
+One invocation at a time may stage or run under an output root. It holds a
+lock on ``<out>/.bench.lock`` and a second one is refused.
 """
 
 from __future__ import annotations
 
+import fcntl
 import fnmatch
 import os
 import sys
 import threading
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -29,6 +34,7 @@ from .process import Interrupted, run_process
 from .stage import StageError, set_aside, stage, staged_files
 
 __all__ = [
+    "CampaignLocked",
     "RunSummary",
     "finished",
     "rebuild_indexes",
@@ -38,6 +44,39 @@ __all__ = [
 ]
 
 SCHEMA = 1
+LOCK = ".bench.lock"
+
+
+class CampaignLocked(RuntimeError):
+    """Another invocation is staging or running under the same output root."""
+
+
+@contextmanager
+def _locked(campaign: Campaign) -> Iterator[None]:
+    """Hold the output root's lock for the length of the block.
+
+    The lock is advisory and tied to this process: it goes when the
+    process does, however it ends, and child processes do not inherit it.
+
+    :raises CampaignLocked: Another process holds it.
+    """
+    campaign.out.mkdir(parents=True, exist_ok=True)
+    handle = open(campaign.out / LOCK, "a+", encoding="utf-8")
+    try:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise CampaignLocked(
+                f"{campaign.out} is in use by another stage or run; wait for "
+                "it to end"
+            ) from exc
+        handle.seek(0)
+        handle.truncate()
+        handle.write(f"{os.getpid()}\n")
+        handle.flush()
+        yield
+    finally:
+        handle.close()
 
 
 @dataclass
@@ -92,17 +131,20 @@ def stage_campaign(
     """Stage every selected run that has nothing on disk yet.
 
     :returns: How many runs were staged.
-    :raises StageError: A case has no ``public/`` directory.
+    :raises StageError: A case has no ``public/`` directory, or its files
+        cannot be copied.
+    :raises CampaignLocked: Another invocation is using the output root.
     """
     _require_public(manifest, campaign)
     count = 0
-    for run in selected(manifest, select):
-        paths = campaign.paths(run)
-        if paths.meta.exists() or paths.workspace.exists():
-            continue
-        stage(run, campaign)
-        report(f"[staged] {run.key}")
-        count += 1
+    with _locked(campaign):
+        for run in selected(manifest, select):
+            paths = campaign.paths(run)
+            if paths.meta.exists() or paths.workspace.exists():
+                continue
+            stage(run, campaign)
+            report(f"[staged] {run.key}")
+            count += 1
     return count
 
 
@@ -129,6 +171,7 @@ def run_campaign(
     :raises ManifestError: An arm names an unknown adapter or sets a
         variable its adapter reserves.
     :raises StageError: A case has no ``public/`` directory.
+    :raises CampaignLocked: Another invocation is using the output root.
 
     A run left unfinished by an earlier invocation is set aside as
     ``r<k>.incomplete<n>`` and started over in a new workspace. On
@@ -137,12 +180,29 @@ def run_campaign(
     """
     adapters = {arm.id: build_adapter(arm) for arm in manifest.arms}
     _require_public(manifest, campaign)
+    environment = dict(os.environ if base_env is None else base_env)
+    with _locked(campaign):
+        return _run_locked(
+            manifest, campaign, adapters, environment,
+            jobs=jobs, retry_infra=retry_infra, select=select, report=report,
+        )
+
+
+def _run_locked(
+    manifest: Manifest,
+    campaign: Campaign,
+    adapters: Mapping[str, Adapter],
+    environment: Mapping[str, str],
+    *,
+    jobs: int,
+    retry_infra: bool,
+    select: str,
+    report: Callable[[str], None],
+) -> RunSummary:
+    """The body of :func:`run_campaign`, with the output root's lock held."""
     patterns = campaign_patterns(
         campaign.cases, campaign.meta, manifest.audit_patterns
     )
-    environment = dict(os.environ if base_env is None else base_env)
-    campaign.out.mkdir(parents=True, exist_ok=True)
-
     summary = RunSummary()
     pending: list[RunSpec] = []
     for run in selected(manifest, select):
@@ -170,9 +230,11 @@ def run_campaign(
             rebuild_indexes(manifest, campaign)
         return record
 
+    futures: dict[Future[dict[str, Any]], RunSpec] = {}
     with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-        futures = {pool.submit(one, run): run for run in pending}
         try:
+            for run in pending:
+                futures[pool.submit(one, run)] = run
             for future in as_completed(futures):
                 run = futures[future]
                 try:

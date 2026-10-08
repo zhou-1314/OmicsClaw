@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from omicsclaw.bench.__main__ import main
 from omicsclaw.bench.layout import read_jsonl
 from omicsclaw.bench.run import run_campaign
 
-from ._support import Toy, ok
+from ._support import OK_EVIDENCE, Toy, alive, ok, wait_for
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INFRA = {"exit": 1, "evidence": {"infra_reason": "provider_error: ProviderError"}}
@@ -61,6 +65,78 @@ def test_run_reports_infrastructure_failures_in_its_exit_status(tmp_path, capsys
     assert main(["run", *arguments(toy), "--retry-infra"]) == 0
     assert main(["grade", *arguments(toy)]) == 0
     capsys.readouterr()
+
+
+@pytest.mark.parametrize(("name", "status"), [("SIGTERM", 143), ("SIGHUP", 129)])
+def test_a_signal_to_the_harness_stops_its_agent(tmp_path, name, status):
+    """A harness stopped by its supervisor, or by its terminal going away,
+    takes the agent in progress with it and leaves the run unfinished,
+    the way Ctrl-C does. Left alone, the agent would run on, spending
+    model calls into a workspace nobody is recording.
+    """
+    toy = Toy(tmp_path)
+    pid_file = tmp_path / "agent.pid"
+    toy.play({"default": [
+        {"pid": str(pid_file), "sleep": 60, "evidence": OK_EVIDENCE}
+    ]})
+    harness = subprocess.Popen(
+        [sys.executable, "-m", "omicsclaw.bench", "run", *arguments(toy)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=str(REPO_ROOT),
+    )
+    agent = 0
+    try:
+        agent = int(wait_for(pid_file))
+        harness.send_signal(getattr(signal, name))
+        output, _ = harness.communicate(timeout=20)
+        gone = not alive(agent)
+    finally:
+        if harness.poll() is None:
+            harness.kill()
+        if agent and alive(agent):
+            os.kill(agent, signal.SIGKILL)
+
+    assert harness.returncode == status
+    assert gone
+    assert json.loads(output)["interrupted"] is True
+    assert not toy.paths("a/m/sum-a/r1").done.exists()
+
+
+def test_a_second_run_on_the_same_output_root_is_refused(tmp_path):
+    """Two invocations sharing an output root would set each other's runs
+    aside as interrupted and start them twice. The second one is turned
+    away at once and the first finishes undisturbed.
+    """
+    toy = Toy(tmp_path)
+    pid_file, log = tmp_path / "agent.pid", tmp_path / "starts.log"
+    toy.play({"default": [
+        {"pid": str(pid_file), "log": str(log), "sleep": 3,
+         "write": "right", "evidence": OK_EVIDENCE}
+    ]})
+    command = [sys.executable, "-m", "omicsclaw.bench", "run", *arguments(toy)]
+    first = subprocess.Popen(
+        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=str(REPO_ROOT),
+    )
+    try:
+        wait_for(pid_file)
+        second = subprocess.run(
+            command, capture_output=True, text=True, cwd=str(REPO_ROOT), timeout=30
+        )
+        output, _ = first.communicate(timeout=30)
+    finally:
+        if first.poll() is None:
+            first.kill()
+
+    assert second.returncode == 2
+    assert "is in use by another" in second.stderr
+    assert first.returncode == 0
+    assert json.loads(output)["outcomes"] == {"completed": 1}
+    assert log.read_text().count("start ") == 1
+    attempts = toy.paths("a/m/sum-a/r1").meta.parent
+    assert sorted(path.name for path in attempts.iterdir()) == ["r1"]
 
 
 def test_results_and_cases_inside_the_repository_are_refused(tmp_path, capsys):

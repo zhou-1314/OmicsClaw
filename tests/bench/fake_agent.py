@@ -4,6 +4,7 @@ Run as ``python fake_agent.py <spec.json>`` with the workspace as the
 working directory. The spec says what this process does; every key is
 optional:
 
+``pid``         a file to write this process's pid to, before anything else
 ``stdin``       read standard input to its end and print the byte count
 ``write``       ``{relative path: text}`` written under the working directory
 ``log``         a file to append ``start``/``end`` lines with a clock to
@@ -18,6 +19,7 @@ optional:
 from __future__ import annotations
 
 import json
+import os
 import signal
 import subprocess
 import sys
@@ -28,6 +30,8 @@ from pathlib import Path
 def main() -> int:
     spec = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     label = spec.get("label", "")
+    if spec.get("pid"):
+        Path(spec["pid"]).write_text(str(os.getpid()), encoding="utf-8")
     if spec.get("ignore_term"):
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
     if spec.get("log"):

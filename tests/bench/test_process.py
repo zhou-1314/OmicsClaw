@@ -17,7 +17,7 @@ import pytest
 
 from omicsclaw.bench.process import MARKER_VARIABLE, Interrupted, run_process
 
-from ._support import FAKE_AGENT
+from ._support import FAKE_AGENT, alive
 
 
 def start(tmp_path: Path, spec: dict, **options):
@@ -37,15 +37,6 @@ def start(tmp_path: Path, spec: dict, **options):
         **options,
     )
     return exit, time.monotonic() - began
-
-
-def alive(pid: int) -> bool:
-    """Whether *pid* is a running process (a zombie does not count)."""
-    try:
-        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
-    except OSError:
-        return False
-    return state != "Z"
 
 
 def test_a_process_that_exits_is_reported_with_its_status(tmp_path):

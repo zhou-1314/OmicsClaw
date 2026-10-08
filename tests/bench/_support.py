@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,28 @@ OK_EVIDENCE = {
     "usage": {"input_tokens": 120, "cached_input_tokens": 20, "output_tokens": 7,
               "llm_calls": 2, "llm_errors": 0, "llm_cancelled": 0},
 }
+
+
+def alive(pid: int) -> bool:
+    """Whether *pid* is a running process (a zombie does not count)."""
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except OSError:
+        return False
+    return state != "Z"
+
+
+def wait_for(path: Path, timeout_s: float = 20.0) -> str:
+    """The text of *path* once it exists and is not empty.
+
+    :raises AssertionError: It did not appear within *timeout_s*.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if path.exists() and path.read_text():
+            return path.read_text()
+        time.sleep(0.05)
+    raise AssertionError(f"{path} did not appear within {timeout_s}s")
 
 
 def ok(case: str, **extra: Any) -> dict[str, Any]:

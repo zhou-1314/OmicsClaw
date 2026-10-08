@@ -3,8 +3,9 @@
 Exit status: ``0`` when the command did what it was asked and every run it
 looked at has a result that describes the agent; ``1`` when some run is
 unfinished, failed for infrastructure reasons or could not be graded; ``2``
-for a manifest, argument or grader that cannot be used; ``130`` when
-interrupted.
+for a manifest, argument or grader that cannot be used, or an output root
+another invocation is using; ``130`` when interrupted, ``143`` and ``129``
+when stopped by ``SIGTERM`` or ``SIGHUP``.
 """
 
 from __future__ import annotations
@@ -13,8 +14,10 @@ import argparse
 import dataclasses
 import json
 import os
+import signal
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 
 from .example import write_cases
@@ -22,7 +25,13 @@ from .grade import GraderError, grade_campaign
 from .layout import Campaign
 from .manifest import Manifest, ManifestError, load_manifest
 from .outcome import INFRA_FAILURE
-from .run import finished, run_campaign, selected, stage_campaign
+from .run import (
+    CampaignLocked,
+    finished,
+    run_campaign,
+    selected,
+    stage_campaign,
+)
 from .stage import StageError
 
 __all__ = ["main"]
@@ -34,7 +43,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     try:
         return int(arguments.handler(arguments))
-    except (ManifestError, StageError, GraderError) as exc:
+    except (ManifestError, StageError, GraderError, CampaignLocked) as exc:
         print(f"bench: {exc}", file=sys.stderr)
         return 2
 
@@ -149,17 +158,21 @@ def _run(arguments: argparse.Namespace) -> int:
     if arguments.env_file is not None:
         for name, value in _env_file(arguments.env_file).items():
             environment.setdefault(name, value)
-    summary = run_campaign(
-        manifest,
-        campaign,
-        jobs=arguments.jobs,
-        retry_infra=arguments.retry_infra,
-        select=arguments.select,
-        base_env=environment,
-    )
+    with _stop_signals() as received:
+        try:
+            summary = run_campaign(
+                manifest,
+                campaign,
+                jobs=arguments.jobs,
+                retry_infra=arguments.retry_infra,
+                select=arguments.select,
+                base_env=environment,
+            )
+        except KeyboardInterrupt:  # arrived when no run was in progress
+            return 128 + received[0] if received else 130
     print(json.dumps(dataclasses.asdict(summary), sort_keys=True))
     if summary.interrupted:
-        return 130
+        return 128 + received[0] if received else 130
     records = [
         finished(campaign.paths(run)) for run in selected(manifest, arguments.select)
     ]
@@ -169,6 +182,37 @@ def _run(arguments: argparse.Namespace) -> int:
         if record is None or record.get("outcome") == INFRA_FAILURE
     ]
     return 1 if summary.errors or open_runs else 0
+
+
+@contextmanager
+def _stop_signals() -> Iterator[list[int]]:
+    """Treat ``SIGTERM`` and ``SIGHUP`` like Ctrl-C while the block runs.
+
+    The first of them raises :exc:`KeyboardInterrupt` in the main thread,
+    which is the stop :func:`~omicsclaw.bench.run.run_campaign` already
+    handles by killing the runs in progress. Later ones are ignored, so the
+    stop is not cut short. Outside the main thread nothing is installed.
+
+    :returns: A list that receives the number of the signal that arrived.
+    """
+    received: list[int] = []
+
+    def stop(number: int, frame: object) -> None:
+        if not received:
+            received.append(number)
+            raise KeyboardInterrupt
+
+    previous = {}
+    try:
+        for number in (signal.SIGTERM, signal.SIGHUP):
+            previous[number] = signal.signal(number, stop)
+    except ValueError:
+        pass
+    try:
+        yield received
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
 
 
 def _grade(arguments: argparse.Namespace) -> int:
