@@ -538,24 +538,189 @@ def test_latin_terms_inside_chinese_content_are_searchable() -> None:
     assert [h.title for h in hits] == ["空间域"]
 
 
-def test_chinese_matches_only_a_whole_unbroken_run() -> None:
-    """A standing limitation, written down rather than left to be found.
+NOTES = (
+    ("空间域识别", "这个项目的空间域识别一律用 leiden"),
+    ("批次校正", "批次效应用 harmony 校正，不要用 combat"),
+    ("QC 阈值", "QC 时 min_counts=500，线粒体比例上限 20%"),
+    ("细胞注释", "细胞类型注释先跑 CellTypist，再人工核对 marker 基因"),
+    ("差异表达", "DE 分析默认用 wilcoxon，pseudobulk 时改用 DESeq2"),
+    ("聚类分辨率", "聚类分辨率从 0.5 开始试，用户偏好较粗的分群"),
+    ("数据路径", "原始数据放在 /data/visium/mouse_brain，10x平台"),
+    ("参考基因组", "STAR index 建在 /ref/mm10，注释用 GENCODE vM25"),
+    ("去批次后的评估", "去批次以后用 LISI 和 kBET 评估混合程度"),
+    ("Visium QC", "min_counts is 500 for the mouse brain sections"),
+    ("Clustering", "leiden resolution 1.0 worked best; louvain was unstable"),
+    ("Model choice", "the deconvolution model is cell2location"),
+)
+"""Notes of the kind a Chinese-speaking omics user leaves behind."""
 
-    FTS5's default tokenizer splits on whitespace and punctuation, and a
-    run of Han characters contains neither — so ``域识别默认用`` is one
-    token. Searching it whole matches; searching ``域识别``, a prefix of
-    it, does not.
 
-    That makes recall for Chinese queries close to zero in practice,
-    which matters here because this project's notes are written in
-    Chinese. Switching the table to ``tokenize='trigram'`` is what fixes
-    it; this test is the marker for that change, and is expected to be
-    rewritten — not deleted — when it lands.
-    """
+def noted() -> tuple[Database, LongTermStore]:
     db, lt = store()
-    run(lt.add(MemoryEntry(title="空间域", content="域识别默认用 leiden 方法")))
-    whole_run = run(lt.search("域识别默认用"))
-    prefix = run(lt.search("域识别"))
+    for title, content in NOTES:
+        run(lt.add(MemoryEntry(title=title, content=content)))
+    return db, lt
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        # Two-character Han words, the commonest Chinese query.
+        ("聚类", {"聚类分辨率"}),
+        ("批次", {"批次校正", "去批次后的评估"}),
+        ("注释", {"细胞注释", "参考基因组"}),
+        # Longer substrings of a note.
+        ("域识别", {"空间域识别"}),
+        ("这个项目", {"空间域识别"}),
+        ("线粒体比例", {"QC 阈值"}),
+        # One Han character.
+        ("域", {"空间域识别"}),
+        # Two-letter abbreviations match as words, not inside "leiden"
+        # or "model".
+        ("QC", {"QC 阈值", "Visium QC"}),
+        ("DE", {"差异表达"}),
+        # English that matched before the index was respaced.
+        ("leiden", {"空间域识别", "Clustering"}),
+        ("min_counts=500", {"QC 阈值"}),
+        ("cell2location", {"Model choice"}),
+        ("mouse brain", {"Visium QC", "数据路径"}),
+    ],
+)
+def test_search_finds_exactly_the_notes_that_hold_the_query(
+    query: str, expected: set[str]
+) -> None:
+    db, lt = noted()
+    hits = run(lt.search(query, limit=len(NOTES)))
     db.close()
-    assert [h.title for h in whole_run] == ["空间域"]
-    assert prefix == [], "substring search started working; rewrite this test"
+    assert {h.title for h in hits} == expected
+
+
+@pytest.mark.parametrize(
+    ("query", "best"),
+    [
+        # Han and Latin in one term.
+        ("leiden聚类", {"聚类分辨率", "空间域识别", "Clustering"}),
+        ("10x平台", {"数据路径"}),
+        # Several terms in two scripts.
+        ("空间 聚类 leiden", {"空间域识别", "聚类分辨率", "Clustering"}),
+        ("QC 阈值 min_counts", {"QC 阈值", "Visium QC"}),
+        # Phrases a model writes that no note holds word for word.
+        ("空间域识别方法", {"空间域识别"}),
+        ("批次校正方法", {"批次校正"}),
+        ("这个项目用什么方法做空间域识别", {"空间域识别"}),
+        # A sentence in English, as before.
+        ("what is the min_counts threshold for visium", {"Visium QC"}),
+    ],
+)
+def test_search_ranks_the_notes_nearest_the_query_first(
+    query: str, best: set[str]
+) -> None:
+    """Any shared word or Han pair matches, so the order carries the answer."""
+    db, lt = noted()
+    hits = run(lt.search(query, limit=len(NOTES)))
+    db.close()
+    assert {h.title for h in hits[: len(best)]} == best
+
+
+def test_a_note_sharing_more_of_a_han_query_ranks_higher() -> None:
+    db, lt = store()
+    run(lt.add(MemoryEntry(title="part", content="去批次以后再评估")))
+    run(lt.add(MemoryEntry(title="whole", content="批次校正用 harmony")))
+    hits = run(lt.search("批次校正"))
+    db.close()
+    assert [h.title for h in hits] == ["whole", "part"]
+
+
+def test_latin_words_touching_han_text_are_searchable() -> None:
+    """Without a space between them, the two scripts used to be one token."""
+    db, lt = store()
+    run(lt.add(MemoryEntry(title="域识别", content="用leiden聚类，取前30个主成分")))
+    by_word = run(lt.search("leiden"))
+    by_number = run(lt.search("30"))
+    by_han = run(lt.search("主成分"))
+    db.close()
+    assert [h.title for h in by_word] == ["域识别"]
+    assert [h.title for h in by_number] == ["域识别"]
+    assert [h.title for h in by_han] == ["域识别"]
+
+
+def test_a_hit_carries_the_text_as_it_was_written() -> None:
+    """The spaced form stays inside the index."""
+    db, lt = store()
+    run(lt.add(MemoryEntry(title="空间域", content="域识别默认用leiden方法")))
+    (hit,) = run(lt.search("域识别"))
+    db.close()
+    assert hit.title == "空间域"
+    assert hit.content == "域识别默认用leiden方法"
+
+
+def test_search_sees_updated_han_content() -> None:
+    db, lt = store()
+    eid = run(lt.add(MemoryEntry(title="聚类", content="分辨率用 0.5")))
+    run(lt.update(eid, content="改用层次聚类"))
+    stale = run(lt.search("分辨率"))
+    fresh = run(lt.search("层次"))
+    db.close()
+    assert stale == []
+    assert [h.id for h in fresh] == [eid]
+
+
+def test_han_queries_treat_operator_characters_as_literals() -> None:
+    """Splitting a term into pairs must not let FTS5 syntax through."""
+    db, lt = store()
+    run(lt.add(MemoryEntry(title="聚类", content="聚类分辨率从 0.5 开始试")))
+    hostile_queries = (
+        '聚类"',
+        '"聚类"',
+        '聚"类',
+        "聚类*",
+        "聚类 NOT 分辨率",
+        "(聚类 OR",
+        "聚类\x00分辨率",
+        "聚类，分辨率",
+        "title:聚类",
+        "^聚类",
+        "聚类 NEAR(分辨率)",
+        "-聚类",
+        "聚类+分辨率",
+    )
+    for hostile in hostile_queries:
+        hits = run(lt.search(hostile))
+        assert [h.title for h in hits] == ["聚类"], repr(hostile)
+    db.close()
+
+
+@pytest.mark.parametrize("query", ['"', "，", "。、", "* -", "()"])
+def test_a_query_of_punctuation_alone_finds_nothing(query: str) -> None:
+    db, lt = noted()
+    assert run(lt.search(query)) == []
+    db.close()
+
+
+def test_a_very_long_han_query_is_still_a_search() -> None:
+    """A pasted paragraph becomes thousands of pairs, and still runs."""
+    db, lt = noted()
+    paragraph = "这个项目的空间域识别一律用什么方法" * 300
+    hits = run(lt.search(paragraph))
+    db.close()
+    assert hits[0].title == "空间域识别"
+
+
+@pytest.mark.parametrize(
+    ("written", "indexed"),
+    [
+        ("这个项目的空间域识别一律用 leiden", "这 个 项 目 的 空 间 域 识 别 一 律 用 leiden"),
+        ("用leiden聚类", "用 leiden 聚 类"),
+        ("前30个主成分", "前 30 个 主 成 分"),
+        ("批次，校正", "批 次 ， 校 正"),
+        ("域", "域"),
+        ("𠀀𠀁x", "𠀀 𠀁 x"),
+        ("min_counts is 500; café, naïve", "min_counts is 500; café, naïve"),
+        ("", ""),
+    ],
+)
+def test_spacing_sets_each_han_character_apart(written: str, indexed: str) -> None:
+    from omicsclaw.memory.store import _spaced
+
+    assert _spaced(written) == indexed
+    assert _spaced(indexed) == indexed, "spacing a spaced text must change nothing"

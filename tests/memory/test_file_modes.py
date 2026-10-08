@@ -90,3 +90,25 @@ def test_a_failed_memory_md_write_leaves_the_old_file_and_no_temporary(tmp_path,
     db.close()
     assert target.read_text(encoding="utf-8") == "old"
     assert sorted(p.name for p in tmp_path.iterdir()) == ["MEMORY.md"]
+
+
+def test_respacing_a_legacy_index_keeps_the_files_0600(tmp_path, loose_umask) -> None:
+    """Rewriting index rows must not leave any of the three files looser."""
+    target = tmp_path / "memory.db"
+    with Database(target) as legacy:
+        legacy.run(lambda c: c.execute(
+            "INSERT INTO long_term_memories (id, title, content, created_at, updated_at) "
+            "VALUES ('e1', '空间域', '域识别默认用leiden方法', 0, 0)"
+        ))
+        legacy.run(lambda c: c.execute(
+            "INSERT INTO memories_fts (id, title, content) "
+            "VALUES ('e1', '空间域', '域识别默认用leiden方法')"
+        ))
+    db = Database(target)
+    store = LongTermStore(db)
+    found = asyncio.run(store.search("域识别"))
+    siblings = [Path(f"{target}{suffix}") for suffix in ("-wal", "-shm")]
+    modes = {path.name: _mode(path) for path in (target, *siblings) if path.exists()}
+    db.close()
+    assert [entry.id for entry in found] == ["e1"]
+    assert modes == {"memory.db": 0o600, "memory.db-wal": 0o600, "memory.db-shm": 0o600}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 import uuid
@@ -43,6 +44,36 @@ def _row_to_entry(row: sqlite3.Row) -> MemoryEntry:
     )
 
 
+_HAN = (
+    "\u3400-\u4dbf"  # CJK Unified Ideographs Extension A
+    "\u4e00-\u9fff"  # CJK Unified Ideographs
+    "\uf900-\ufaff"  # CJK Compatibility Ideographs
+    "\U00020000-\U0003ffff"  # Extension B and later
+)
+"""The Han characters, as the inside of a regular-expression class."""
+
+_HAN_RUN = re.compile(f"([{_HAN}]+)")
+_HAN_EDGE = re.compile(f"(?<=[{_HAN}])(?=\\S)|(?<=\\S)(?=[{_HAN}])")
+
+
+def _spaced(text: str) -> str:
+    """*text* with a space between each Han character and its neighbours.
+
+    The index's tokenizer splits on spaces and punctuation, so an
+    unbroken run of Han characters, together with any letters or digits
+    touching it, is one token and only matches a query for the whole
+    run. Spaced apart, every Han character is a token of its own and a
+    phrase of them matches wherever those characters stand side by side.
+
+    Text with no Han characters comes back unchanged, and so does text
+    that is already spaced.
+
+    :param text: A title or a body as it was written.
+    :returns: The form of *text* the index stores.
+    """
+    return _HAN_EDGE.sub(" ", text)
+
+
 def _escape_fts(query: str) -> str:
     """Turn *query* into a MATCH expression FTS5 reads as literals.
 
@@ -57,13 +88,29 @@ def _escape_fts(query: str) -> str:
     from the entry. Ranking, not filtering, is what puts the best match
     on top.
 
+    Han text has no spaces to split on, so a run of Han characters is
+    searched as its adjacent pairs, each a two-character phrase, and a
+    run of one character as that character. An entry that shares any
+    pair with the query matches, and the more pairs it shares the higher
+    it ranks. Letters and digits touching a run are a term of their own.
+
     :param query: Raw search text.
     :returns: A MATCH expression, or ``""`` when there is nothing to
         search for.
     """
     cleaned = query.replace("\x00", " ")
-    terms = [t.replace('"', '""') for t in cleaned.split() if t.strip()]
-    return " OR ".join(f'"{t}"' for t in terms)
+    phrases: list[str] = []
+    for term in cleaned.split():
+        # A split on a capturing pattern alternates: text between runs
+        # at even positions, the runs themselves at odd ones.
+        for position, piece in enumerate(_HAN_RUN.split(term)):
+            if not piece:
+                continue
+            if position % 2 == 0 or len(piece) == 1:
+                phrases.append(piece)
+            else:
+                phrases.extend(f"{a} {b}" for a, b in zip(piece, piece[1:]))
+    return " OR ".join('"' + p.replace('"', '""') + '"' for p in phrases)
 
 
 class LongTermStore:
@@ -72,11 +119,20 @@ class LongTermStore:
     ``long_term_memories`` is the source of truth; the ``memories_fts``
     index is kept in step with it by every method that writes.
 
+    The index holds each title and body in the form :func:`_spaced`
+    gives it. Building a store reads the whole index once and rewrites
+    the rows that are not in that form, which is how a database written
+    by a version that indexed the text as written becomes searchable by
+    Han substring. A database with no such rows is only read.
+
     :param database: Open database to read and write through.
+    :raises sqlite3.Error: If the index rows cannot be rewritten. The
+        rewrite is one transaction, so the index is then as it was.
     """
 
     def __init__(self, database: Database) -> None:
         self._db = database
+        database.run(self._respace_index)
 
     async def add(self, entry: MemoryEntry) -> str:
         """Store *entry*, merging into any entry with the same content.
@@ -113,7 +169,10 @@ class LongTermStore:
     async def search(self, query: str, limit: int = 10) -> Sequence[MemoryEntry]:
         """Entries matching *query*, best match first.
 
-        Disabled and expired entries are left out.
+        Disabled and expired entries are left out. An entry matches when
+        it holds any word of *query*. Han text has no word breaks, so it
+        matches by any two adjacent characters of the query, and a Han
+        character standing alone matches by itself.
 
         **This writes.** Every hit has its ``use_count`` raised and its
         ``last_used_at`` set, which is what tells
@@ -192,13 +251,66 @@ class LongTermStore:
         return await self._db.arun(lambda c: self._purge(c, now))
 
     @staticmethod
-    def _reindex(conn: sqlite3.Connection, entry_id: str, title: str,
-                 content: str) -> None:
-        conn.execute("DELETE FROM memories_fts WHERE id = ?", (entry_id,))
+    def _index(conn: sqlite3.Connection, entry_id: str, title: str,
+               content: str) -> None:
+        """Add an index row for one entry, its text in the spaced form."""
         conn.execute(
             "INSERT INTO memories_fts (id, title, content) VALUES (?, ?, ?)",
-            (entry_id, title, content),
+            (entry_id, _spaced(title), _spaced(content)),
         )
+
+    @classmethod
+    def _reindex(cls, conn: sqlite3.Connection, entry_id: str, title: str,
+                 content: str) -> None:
+        conn.execute("DELETE FROM memories_fts WHERE id = ?", (entry_id,))
+        cls._index(conn, entry_id, title, content)
+
+    @staticmethod
+    def _unspaced_rows(conn: sqlite3.Connection) -> list[tuple[int, str]]:
+        """The index rows whose text is not in its spaced form.
+
+        :returns: The ``rowid`` and the entry id of each such row.
+        """
+        return [
+            (row["rowid"], row["id"])
+            for row in conn.execute(
+                "SELECT rowid, id, title, content FROM memories_fts"
+            )
+            if _spaced(row["title"]) != row["title"]
+            or _spaced(row["content"]) != row["content"]
+        ]
+
+    @classmethod
+    def _respace_index(cls, conn: sqlite3.Connection) -> int:
+        """Rewrite every index row whose text is not in its spaced form.
+
+        Each such row is rebuilt from its entry in ``long_term_memories``,
+        or dropped when that entry is gone or disabled. Nothing is
+        written when no row needs it, so calling this again is a read.
+
+        :param conn: Connection to work on; the caller commits.
+        :returns: How many index rows were rewritten or dropped.
+        """
+        if not cls._unspaced_rows(conn):
+            return 0
+        # Another connection may be rewriting the same rows. Reading them
+        # again under the write lock leaves this one only the rows that
+        # are still stale, and each is indexed as its entry stands when
+        # this transaction commits.
+        conn.execute("BEGIN IMMEDIATE")
+        stale = cls._unspaced_rows(conn)
+        for rowid, entry_id in stale:
+            entry = conn.execute(
+                """SELECT title, content FROM long_term_memories
+                   WHERE id = ? AND disabled = 0""",
+                (entry_id,),
+            ).fetchone()
+            # By rowid: ``id`` is not indexed, and a scan per row would
+            # make this quadratic in the number of rows to rewrite.
+            conn.execute("DELETE FROM memories_fts WHERE rowid = ?", (rowid,))
+            if entry is not None:
+                cls._index(conn, entry_id, entry["title"], entry["content"])
+        return len(stale)
 
     @classmethod
     def _add(cls, conn: sqlite3.Connection, entry: MemoryEntry) -> str:
