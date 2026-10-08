@@ -2,7 +2,7 @@
 
 **日期**：2026-10-08。**分支**：本地 `feat/ask-user`，基线 `main` 的 `90a3bec3`，未 push，未开 PR。
 **范围**：0052 T1、0052 §4.7 显示层前置步、0054 任务 A、B、C。0052 的 T0、T2、T3 与 0054 任务 D 没做，`entry/channel/` 零改动。
-**状态**：待独立审核与 owner 过目。
+**状态**：独立审核通过（2026-10-08），审核之后的修复见 §8；待 owner 过目。
 
 ## 1. 提交
 
@@ -82,9 +82,9 @@
 
 ## 6. 没验证的部分和已知的小毛病
 
-- 模型在没有明确指示时会不会恰当地使用 `ask_user`（过度提问、该问不问）没有评估，pty 验收的四条提示都点名要求调用它。
+- 模型在没有明确指示时会不会恰当地使用 `ask_user`（过度提问、该问不问）没有评估，pty 验收的四条提示都点名要求调用它。审核方之后补测了几例，见 §8。
 - 只在 DeepSeek 上做了 pty 验收；Anthropic、OpenAI 没测。
-- `--approval-timeout` 下提问到期的路径只有单元测试，没有在 pty 里走。
+- `--approval-timeout` 下提问到期的路径当时只有单元测试。审核之后在 pty 里走过，并修了一个缺陷，见 §8。
 - `prompt_toolkit` 的补全菜单在提问提示符上照常弹出斜杠命令（计划接受的现状），没有在 pty 里专门看。
 - 屏幕上工具调用行 `(n) -> ask_user` 落在卡片与图例之间，和审批卡片上 `-> bash` 的位置相同，是既有的帧顺序。
 - `<- ask_user ok, 3.3s elapsed (includes any approval wait)`：这个后缀是共用常量，对提问来说包含的是等回答的时间，措辞没有改。
@@ -101,3 +101,38 @@
 - **理由常量**：`QUESTION_TIMEOUT_REASON`、`QUESTION_ABANDONED_REASON` 的值在 `echo` 区分 LAPSED 时会被比对，之后不要随意改。
 - **事件**：`QUESTION_ASKED` / `QUESTION_SETTLED` 不在 `DEFAULT_DELIVERED_TYPES` 里，pump 要在过滤之前把它们交给 desk。
 - **结构测试**：`entry/replies.py` 落地后，`test_question.py` 里互不导入的断言自动生效。
+
+## 8. 审核之后（2026-10-08）
+
+独立审核的结论是通过，没有必须修的问题：88 处变异里 81 处转红。存活的 7 处和审核方指出的一个缺陷用追加提交处理，已审过的提交没有改写。
+
+| 提交 | 内容 |
+|---|---|
+| `38f9cdc7` | 提问到期后收回提示符，附测试与 `cli.md` §7.4 的说明 |
+| `d7b39fe2` | 存活的 7 处变异各补测试，不改生产代码 |
+| `b8ccfd5f` | `question_card` 的宽度报错改报调用方传的值；`TurnHandle._numbering` 的说明改成注释；一条记忆工具测试改名 |
+
+**提问到期后收回提示符。** 设了 `--approval-timeout` 时，提问会在提示符还开着的时候被期限结算。修之前，读回答的 Task 留到 exchange 结束：`No answer` 打在开着的提示符那一行，活动行不再出现，迟到的回答被读走后丢弃。现在 `_pump` 收到 `QUESTION_SETTLED` 先取消并等待这个 Task，再打印这一帧。只改了提问侧；审批卡片到期后提示符仍然留着，`cli.md` §7.4 两种情况都写了。
+
+- 审核方的 `late_answer.py question`：修前 `events` 是 `["typed at the stale prompt 'answer [#1]> '"]`，修后是 `[]`；`late_answer.py approval` 前后相同。
+- 真实终端（pty，DeepSeek，`--approval-timeout 12`）：修前 `No answer` 盖在提示符所在行，没有活动行，迟到的 `2` 混进模型正在输出的文字里，随后被丢弃；修后 `No answer` 另起一行，活动行恢复，迟到的 `2` 由主提示符读走，作为下一条消息发给模型。
+
+**存活的 7 处变异**按审核方脚本里的原文重做，全部转红：
+
+| 变异 | 转红的测试 |
+|---|---|
+| R6：`abandon` 不置 `_abandoning`，日志写成 settled | `test_approval.py::test_the_log_tells_an_abandoned_question_from_an_answered_one` |
+| E17：`is_interactive` 的异常分支返回 `True` | `test_cli_input.py::test_only_a_stream_that_says_it_is_a_terminal_is_interactive`（两例）、`test_a_process_with_no_stdin_is_not_interactive` |
+| C3：去掉 `finally: activity.release()` | `test_cli_question.py::test_the_live_line_comes_back_once_the_question_is_answered` |
+| C4：提示符里的子代理名不经 `inert_line` | `test_cli_repl.py::test_a_sub_agent_s_name_reaches_the_prompt_as_inert_text` |
+| C7：不调 `activity.hold()` | `test_cli_question.py::test_nothing_is_painted_while_a_question_is_open` |
+| C8：`read_reply` 收到 `line.strip()` | `test_cli_question.py::test_a_line_typed_at_the_question_is_the_answer[a number with spaces around it]` |
+| C9：提问 Task 不挂 `_forget_asking` | `test_cli_question.py::test_a_failed_question_task_is_logged_and_not_merely_dropped` |
+
+`tests/entry/test_cli_input.py` 不在审核方脚本的 FOCUS 列表里，复跑 E17 时要把它加上，或用 `BROAD=1`。
+
+只记录、这一轮不改的三条：
+
+- **"`ask_user` 已关闭"的提示没人看得到。** `surface_config` 在不能提问的入口关掉它时写一条 INFO 日志，这条日志在 CLI 和 Desktop 上都不上屏。有人传 `--ask-user true --prompt …`，不会得到任何提示。
+- **`/auto` 开着、没设期限、又没人作答时会一直等。** 审核方实测 90 秒内没有任何输出，Ctrl-C 能回到提示符。无人值守时设 `OMICSCLAW_ASK_USER=false`。
+- **真实模型的使用情况**（审核方实测，DeepSeek）：6 个不同场景里 2 个提了问，两次都是先查看再问，问的都是只有人能定的事；同一个有歧义的请求跑 3 次，3 次都问了。
