@@ -582,11 +582,16 @@ when the card allows it), an option's label, or anything in the person's own
 words. A line that starts with `/` is an answer there and runs no command;
 `y`, `s` and `a` typed at that prompt grant nothing. An empty line skips the
 question and Ctrl-C cancels the exchange. Answers go into
-`~/.config/omicsclaw/history` like every other line typed. With
-`--approval-timeout` set, a question nobody answers is settled as `no_answer`
-at the deadline and its prompt is taken down: `No answer [<id>]` starts on a
-line of its own, and a reply typed after that is no longer this question's
-(the next paragraph says where it goes).
+`~/.config/omicsclaw/history` like every other line typed. Only the REPL at a
+terminal asks: `--prompt` / `--prompt-file`, piped stdin, `oc desktop` and
+`oc channel` run without the tool (`surface_config` in `launch/_surfaces.py`),
+and sub-agents never get it. `--ask-user false` or `OMICSCLAW_ASK_USER=false`
+removes it. Set that for a session started under `/auto` and left alone: a
+question has no deadline unless `--approval-timeout` sets one, so the exchange
+stops at the first one asked. With a deadline set, a question nobody answers
+is settled as `no_answer` when it passes and its prompt is taken down:
+`No answer [<id>]` starts on a line of its own, and a reply typed after that
+is no longer this question's.
 
 A card, approval or question, takes only what is typed after its prompt
 opens. Input typed earlier is discarded when the prompt opens: a `y` typed
@@ -599,12 +604,7 @@ a half-typed line without printing the notice, and needs `termios` to drop
 anything. The REPL's own `❯` prompt is not a card: a line typed early or late
 with no card open is read there and sent as the next message. Piped input
 (`oc cli < script.txt`) has no earlier and later, so its lines answer
-approval cards in the order they were written. Only the REPL at a terminal asks: `--prompt` /
-`--prompt-file`, piped stdin, `oc desktop` and `oc channel` run without the
-tool (`surface_config` in `launch/_surfaces.py`), and sub-agents never get it.
-`--ask-user false` or `OMICSCLAW_ASK_USER=false` removes it. Set that for a
-session started under `/auto` and left alone: a question has no deadline unless
-`--approval-timeout` sets one, so the exchange stops at the first one asked.
+approval cards in the order they were written.
 
 `--permission-mode read-only` turns delegation off as a side effect, and
 that is user-visible rather than internal: `task` cannot honestly declare
