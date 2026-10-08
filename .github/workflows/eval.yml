@@ -31,8 +31,8 @@ jobs:
       # (tests/entry/test_desktop_*.py) run here instead of skipping.
       # nbclient and ipykernel let tests/sdk/notebook start real kernels.
       - run: pip install -e . pytest numpy "pandas>=2.0,<3.0" scipy scikit-learn matplotlib seaborn networkx PyYAML requests "anndata==0.11.4" h5py rich nbformat nbclient ipykernel fastapi httpx uvicorn
-      # The framework layers, the launch shell, attachments and the
-      # top-level tests. Tests known to fail are listed in
+      # The framework layers, the launch shell, attachments, the benchmark
+      # harness and the top-level tests. Tests known to fail are listed in
       # tests/ci_known_failures.txt and run as xfail.
       - name: Run unit tests
         run: >-
@@ -41,7 +41,7 @@ jobs:
           tests/permission tests/hooks tests/memory tests/planning
           tests/observability tests/schema tests/skills tests/subagent
           tests/sandbox tests/skillenv tests/mcp tests/sdk tests/evals
-          tests/launch tests/attachments tests/test_*.py
+          tests/launch tests/attachments tests/bench tests/test_*.py
           -m "not slow and not demo and not eval and not scripted_eval and not skill_example"
           -p no:cacheprovider
 

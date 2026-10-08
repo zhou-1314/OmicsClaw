@@ -263,6 +263,11 @@ MODULE_GUARDS = {
         "real and saves its output as a stub fixture. Parses only the "
         "skill, the script arguments and the fixture path."
     ),
+    "bench/__main__.py": (
+        "python -m omicsclaw.bench, plans, stages, runs and grades a "
+        "benchmark campaign. Parses a manifest path and its own flags, "
+        "never a deployment: each run it starts is an oc cli process."
+    ),
 }
 """Every ``__main__`` guard under ``omicsclaw/``, with its reason."""
 
