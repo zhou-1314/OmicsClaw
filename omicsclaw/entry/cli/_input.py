@@ -33,6 +33,13 @@ collide: ``prompt_toolkit`` asserts ``Application is already running`` on
 the second overlapping prompt, and two ``readline`` threads on one stdin
 hand the same typed line to whichever wakes first.
 
+**A terminal keeps what is typed while nothing is reading.** Whole lines,
+half a line, a line handed to a reader that was then cancelled: the next
+:meth:`PromptSource.read` gets all of it. The REPL's own prompt wants
+that, and a card does not, because a ``y`` typed while a tool was running
+would answer the approval card that opens afterwards. A card therefore
+reads through :class:`FreshSource` where the source offers it.
+
 **Nothing here is imported at module scope that is not installed
 everywhere** (plan 0031 trap 13). ``prompt_toolkit`` is imported inside
 :func:`open_prompt_source` in plainly visible ``import`` syntax — not
@@ -44,9 +51,18 @@ to :class:`StreamSource` is what makes the package usable without it.
 from __future__ import annotations
 
 import asyncio
+import struct
 import sys
 import threading
-from typing import Any, Iterable, Protocol, Sequence, TextIO, runtime_checkable
+from typing import (
+    Any,
+    Callable,
+    Iterable,
+    Protocol,
+    Sequence,
+    TextIO,
+    runtime_checkable,
+)
 
 from ._slash_command_support import (
     REPL_SLASH_COMMAND_SPECS,
@@ -57,6 +73,7 @@ from ._slash_command_support import (
 
 __all__ = [
     "ChoiceSource",
+    "FreshSource",
     "PromptSource",
     "PromptToolkitSource",
     "ScriptedSource",
@@ -111,6 +128,43 @@ class ChoiceSource(Protocol):
         ...
 
 
+@runtime_checkable
+class FreshSource(Protocol):
+    """A source that can read only what is typed from now on.
+
+    Optional, like :class:`ChoiceSource`: a surface checks
+    ``isinstance(source, FreshSource)`` and reads with
+    :meth:`PromptSource.read` when it is not one. Both terminal sources
+    implement it. :class:`ScriptedSource` does not: its lines were all
+    written before anything was asked, and they are the answers.
+    """
+
+    async def read_fresh(
+        self, prompt: str, *, discarded: Callable[[], None] | None = None
+    ) -> str:
+        """The next line typed after *prompt* is shown.
+
+        What was typed earlier is thrown away once this reader holds the
+        terminal. With readers queued, that happens as this one's prompt
+        opens, which can be long after the call.
+
+        :param prompt: as for :meth:`PromptSource.read`.
+        :param discarded: called once, before the prompt is shown, when
+            the source saw that there was something to throw away.
+        :returns: the line, without its newline.
+        :raises EOFError: as :meth:`PromptSource.read`.
+        """
+        ...
+
+    def withdraw(self) -> None:
+        """Take down the prompt of a read that was just cancelled.
+
+        Afterwards the cursor is at the start of a line, and nothing
+        half-typed at that prompt is left for a later read.
+        """
+        ...
+
+
 class ScriptedSource:
     """A fixed sequence of lines, then :exc:`EOFError`.
 
@@ -118,6 +172,9 @@ class ScriptedSource:
     loop with, and also what ``--prompt-file`` uses in production: one
     element, the whole file (see
     :func:`~omicsclaw.entry.cli.__main__.single_prompt`).
+
+    Not a :class:`FreshSource`: a card reads the next line of the script
+    like any other prompt.
     """
 
     __slots__ = ("_lines", "prompts")
@@ -169,9 +226,20 @@ class StreamSource:
     another: every line read is returned to exactly one reader, in the
     order the stream gave them. A line read after :meth:`close`, or after
     the loop has closed, is discarded.
+
+    :meth:`read_fresh` is the exception to "every line": at a terminal it
+    throws away what was typed before its prompt.
     """
 
-    __slots__ = ("_closed", "_echo", "_pending", "_reading", "_stream", "_write")
+    __slots__ = (
+        "_closed",
+        "_echo",
+        "_left_open",
+        "_pending",
+        "_reading",
+        "_stream",
+        "_write",
+    )
 
     def __init__(
         self,
@@ -189,6 +257,9 @@ class StreamSource:
         self._closed = False
         self._reading = asyncio.Lock()
         self._pending: asyncio.Future[str] | None = None
+        # The echo stream, while the last prompt written to it belongs to
+        # a read that was cancelled and the cursor still sits on its line.
+        self._left_open: TextIO | None = None
 
     async def read(self, prompt: str) -> str:
         """The next line, waiting for any earlier reader to be answered.
@@ -205,14 +276,55 @@ class StreamSource:
             cancelled; a line still being read goes to the next read.
         :raises Exception: Whatever ``readline`` raised.
         """
+        return await self._read(prompt, fresh=False, discarded=None)
+
+    async def read_fresh(
+        self, prompt: str, *, discarded: Callable[[], None] | None = None
+    ) -> str:
+        """The next line typed after *prompt* is shown, at a terminal.
+
+        Once this reader holds the stream, and before the prompt is
+        echoed, what was typed earlier is thrown away: lines waiting in
+        the terminal's input queue, a line the terminal holds half-typed,
+        and a line that a ``readline`` left running by a cancelled read
+        has already returned. *discarded* is called when a whole line was
+        thrown away. A half-typed line goes without the call, because the
+        terminal reports nothing of a line until Enter.
+
+        A stream that is not a terminal has no earlier and later: the
+        lines of a pipe or a file were all written in advance, in the
+        order their author meant them. They are handed out in that order,
+        as :meth:`read` does, and *discarded* is never called.
+
+        :param prompt: Written to the echo stream first, if there is one.
+        :param discarded: Called at most once, before the prompt.
+        :returns: The line, without its line ending.
+        :raises EOFError: At the end of the stream, or once closed.
+        :raises asyncio.CancelledError: As :meth:`read`.
+        :raises Exception: Whatever ``readline`` raised.
+        """
+        return await self._read(prompt, fresh=True, discarded=discarded)
+
+    async def _read(
+        self,
+        prompt: str,
+        *,
+        fresh: bool,
+        discarded: Callable[[], None] | None,
+    ) -> str:
+        """One line for *prompt*; see :meth:`read` and :meth:`read_fresh`."""
         if self._closed:
             raise EOFError
         async with self._reading:
             if self._closed:
                 raise EOFError
+            if fresh and is_interactive(self._stream):
+                if await self._drop_typed() and discarded is not None:
+                    discarded()
             if self._write is not None:
                 self._write.write(prompt)
                 self._write.flush()
+            self._left_open = None
             if self._pending is None:
                 self._pending = _readline_on_a_thread(self._stream)
             pending = self._pending
@@ -221,6 +333,7 @@ class StreamSource:
             except asyncio.CancelledError:
                 if pending.cancelled():
                     self._pending = None
+                self._left_open = self._write
                 raise
             except BaseException:
                 self._pending = None
@@ -230,8 +343,91 @@ class StreamSource:
             raise EOFError
         return line.rstrip("\n").rstrip("\r")
 
+    async def _drop_typed(self) -> bool:
+        """Throw away what was typed at the terminal before now.
+
+        The input queue is emptied first. A ``readline`` left running by
+        a cancelled read is then given :data:`_HANDOVER_S` to report. One
+        that reports had its line before the queue was emptied, and the
+        line is dropped. One that stays silent is still waiting for a
+        line nobody has typed, and is kept for the caller to read.
+
+        :returns: Whether a whole line was thrown away.
+        """
+        dropped = _flush_typed(self._stream)
+        pending = self._pending
+        if pending is not None:
+            done, _waiting = await asyncio.wait({pending}, timeout=_HANDOVER_S)
+            if done:
+                self._pending = None
+                pending.exception()  # read, so the loop does not report it
+                dropped = True
+        return dropped
+
+    def withdraw(self) -> None:
+        """End the line that a cancelled read left its prompt on.
+
+        The prompt was echoed without a newline and the Enter that would
+        have ended the line never came. This writes that newline, and
+        empties the terminal's input queue of whatever was half-typed at
+        the prompt. It does nothing when the last read was answered, when
+        the cancelled read was still queued and had shown no prompt, or
+        when prompts are not echoed.
+        """
+        echo, self._left_open = self._left_open, None
+        if echo is None:
+            return
+        _flush_typed(self._stream)
+        echo.write("\n")
+        echo.flush()
+
     def close(self) -> None:
         self._closed = True
+
+
+_HANDOVER_S = 0.05
+"""How long :meth:`StreamSource.read_fresh` waits, before it shows its
+prompt, for a ``readline`` left running by an earlier read to report a
+line it already holds.
+
+The thread reports as soon as it gets the interpreter back: well under a
+millisecond on an idle loop, up to one switch interval (5 ms by default)
+on a busy one. A line that arrives during the wait was typed before the
+prompt was shown, so it is dropped whichever side of the wait's start it
+was typed on."""
+
+
+def _flush_typed(stream: TextIO) -> bool:
+    """Empty the input queue of the terminal behind *stream*.
+
+    Does nothing when *stream* has no terminal behind it, and on a
+    platform that has no ``termios``.
+
+    :param stream: The stream a source reads.
+    :returns: Whether at least one whole line was waiting and was
+        emptied. A half-typed line is emptied with the rest and is not
+        counted, because the terminal reports nothing of a line until
+        Enter.
+    """
+    try:
+        import fcntl
+        import termios
+    except ImportError:
+        return False
+    try:
+        descriptor = stream.fileno()
+    except (AttributeError, OSError, ValueError):
+        return False
+    try:
+        counted = fcntl.ioctl(descriptor, termios.FIONREAD, struct.pack("i", 0))
+        waiting = struct.unpack("i", counted)[0] > 0
+    except OSError:
+        waiting = False
+    try:
+        termios.tcflush(descriptor, termios.TCIFLUSH)
+    except (OSError, termios.error):
+        return False
+    return waiting
 
 
 def _readline_on_a_thread(stream: TextIO) -> "asyncio.Future[str]":
@@ -267,6 +463,40 @@ def _readline_on_a_thread(stream: TextIO) -> "asyncio.Future[str]":
 
     threading.Thread(target=read, name="omicsclaw-stdin", daemon=True).start()
     return future
+
+
+_DRAIN_READS = 1024
+"""The most reads :func:`_drop_keys` makes of one input. Each returns up
+to 1024 bytes, so about a megabyte of typed-ahead input is thrown away
+and a terminal that never stops sending cannot hold the event loop."""
+
+
+def _drop_keys(keys: Any) -> bool:
+    """Throw away the key presses waiting at a ``prompt_toolkit`` input.
+
+    They wait in two places. ``prompt_toolkit`` keeps the keys it read
+    past the end of one prompt and feeds them to the next. The terminal
+    queues what is typed while no prompt is open, and in raw mode a read
+    returns all of it, a half-typed line included.
+
+    :param keys: The session's ``Input``.
+    :returns: Whether a person had pressed any of them. A cursor position
+        report is the terminal's own, and is thrown away without counting.
+    """
+    from prompt_toolkit.input.typeahead import get_typeahead
+    from prompt_toolkit.keys import Keys
+
+    waiting = list(get_typeahead(keys))
+    with keys.raw_mode():
+        for _ in range(_DRAIN_READS):
+            # ``flush_keys`` hands over a sequence the parser was still
+            # holding open, such as an Escape pressed on its own. Left
+            # there, it would join the first key typed at the prompt.
+            presses = keys.read_keys() or keys.flush_keys()
+            if not presses:
+                break
+            waiting.extend(presses)
+    return any(press.key is not Keys.CPRResponse for press in waiting)
 
 
 class _PickerCancelled(Exception):
@@ -308,6 +538,37 @@ class PromptToolkitSource:
             if session is None:
                 raise EOFError
             return await session.prompt_async(prompt)
+
+    async def read_fresh(
+        self, prompt: str, *, discarded: Callable[[], None] | None = None
+    ) -> str:
+        """Show *prompt* once the terminal is free, and return what is typed at it.
+
+        Keys pressed before the prompt opens are thrown away first, whole
+        lines and half lines alike: those the terminal queued while no
+        prompt was open, and those ``prompt_toolkit`` read past the end of
+        the previous prompt and kept for the next. *discarded* is called
+        when there were any.
+
+        :param discarded: Called at most once, before the prompt.
+        :raises EOFError: the source was closed, including while this call
+            was queued behind another question.
+        """
+        async with self._reading:
+            session = self._session
+            if session is None:
+                raise EOFError
+            if _drop_keys(session.input) and discarded is not None:
+                discarded()
+            return await session.prompt_async(prompt)
+
+    def withdraw(self) -> None:
+        """Nothing to take down.
+
+        A ``prompt_async`` that is cancelled redraws its prompt as
+        finished, moves the cursor to the next line and forgets the text
+        typed at it.
+        """
 
     async def choose(
         self, message: str, options: Sequence[str], *, default: int = 0
