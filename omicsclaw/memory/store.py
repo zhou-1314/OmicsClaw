@@ -93,6 +93,8 @@ def _escape_fts(query: str) -> str:
     run of one character as that character. An entry that shares any
     pair with the query matches, and the more pairs it shares the higher
     it ranks. Letters and digits touching a run are a term of their own.
+    A pair or a lone Han character the query repeats is searched once.
+    Other terms are kept as often as they occur, as they always were.
 
     :param query: Raw search text.
     :returns: A MATCH expression, or ``""`` when there is nothing to
@@ -100,16 +102,21 @@ def _escape_fts(query: str) -> str:
     """
     cleaned = query.replace("\x00", " ")
     phrases: list[str] = []
+    han_seen: set[str] = set()
     for term in cleaned.split():
         # A split on a capturing pattern alternates: text between runs
         # at even positions, the runs themselves at odd ones.
         for position, piece in enumerate(_HAN_RUN.split(term)):
             if not piece:
                 continue
-            if position % 2 == 0 or len(piece) == 1:
+            if position % 2 == 0:
                 phrases.append(piece)
-            else:
-                phrases.extend(f"{a} {b}" for a, b in zip(piece, piece[1:]))
+                continue
+            pairs = [f"{a} {b}" for a, b in zip(piece, piece[1:])] or [piece]
+            for pair in pairs:
+                if pair not in han_seen:
+                    han_seen.add(pair)
+                    phrases.append(pair)
     return " OR ".join('"' + p.replace('"', '""') + '"' for p in phrases)
 
 

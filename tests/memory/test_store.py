@@ -711,11 +711,31 @@ def test_a_query_of_punctuation_alone_finds_nothing(query: str) -> None:
 
 def test_a_very_long_han_query_is_still_a_search() -> None:
     """A pasted paragraph becomes thousands of pairs, and still runs."""
+    from omicsclaw.memory.store import _escape_fts
+
     db, lt = noted()
     paragraph = "这个项目的空间域识别一律用什么方法" * 300
     hits = run(lt.search(paragraph))
     db.close()
     assert hits[0].title == "空间域识别"
+    # Seventeen characters repeated: sixteen pairs inside one copy and
+    # one more where two copies meet.
+    assert _escape_fts(paragraph).count(" OR ") == 16
+
+
+def test_a_han_pair_the_query_repeats_is_searched_once() -> None:
+    from omicsclaw.memory.store import _escape_fts
+
+    assert _escape_fts("聚类聚类 聚类") == '"聚 类" OR "类 聚"'
+    assert _escape_fts("域 域 域识 域") == '"域" OR "域 识"'
+
+
+def test_a_word_outside_han_text_is_kept_as_often_as_it_occurs() -> None:
+    """Repeating a word weights it, and that is how such queries ranked before."""
+    from omicsclaw.memory.store import _escape_fts
+
+    assert _escape_fts("leiden leiden 聚类") == '"leiden" OR "leiden" OR "聚 类"'
+    assert _escape_fts("the cell the") == '"the" OR "cell" OR "the"'
 
 
 @pytest.mark.parametrize(
