@@ -342,6 +342,29 @@ def test_the_commands_own_deadline_with_no_answer_is_infrastructure(contract):
     )
 
 
+def test_real_runs_can_be_graded_from_another_checkout(contract, tmp_path):
+    """The same campaign, graded by an adapter that believes the source
+    tree is somewhere else, as it would after the results were copied to
+    another machine. Every run is still healthy, because each is checked
+    against the source tree its own record names.
+    """
+    record = contract.done("write")["agent_code"]
+    moved = tmp_path / "manifest.toml"
+    text = contract.manifest.path.read_text().replace(
+        'permission_rules = "rules.json"',
+        f'options = {{ source_root = "{tmp_path}" }}',
+    )
+    moved.write_text(text)
+
+    grade_campaign(load_manifest(moved), contract.campaign)
+
+    rows = read_jsonl(contract.campaign.grades)
+    assert record["source_root"] == str(REPO_ROOT)
+    assert re.fullmatch(r"[0-9a-f]{40}", record["git_commit"])
+    assert [row["run"] for row in rows if row["health"]] == []
+    assert sum(row["graded"] for row in rows) == 4
+
+
 def test_grading_real_runs_skips_the_infrastructure_failures(contract):
     """The health check reads each real run's evidence again and agrees
     with what was recorded; the infrastructure failures get a row and no

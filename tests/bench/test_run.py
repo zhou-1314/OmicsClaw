@@ -51,6 +51,8 @@ def test_a_finished_run_leaves_its_record_and_one_row_in_each_file(tmp_path):
     assert usage[0]["model_resolved"] == predictions[0]["model_resolved"] == (
         "fake-model"
     )
+    command = json.loads(toy.paths(key).command.read_text())
+    assert done["agent_code"] == command["provenance"] == {"source_root": "fake"}
     assert usage[0]["wall_s"] == done["wall_s"]
 
 

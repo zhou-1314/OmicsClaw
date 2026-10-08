@@ -21,19 +21,26 @@ Arm options, all optional:
 Usage is the sum over ``omicsclaw.llm_request`` spans, one per model call.
 That includes the calls sub-agents make, which the per-turn token lines on
 standard output leave out.
+
+Each launch records the source tree, its git commit and whether
+``omicsclaw/`` or ``skills/`` had local changes. Reading a run back checks
+the process against the source tree in that record, so results can be
+graded from another checkout.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..layout import RunPaths
+from ..layout import RunPaths, read_json
 from ..manifest import Arm, Budget, ManifestError, RunSpec
 from ..outcome import Command, Evidence, ProcessExit, Usage
 from ..process import MARKER_VARIABLE
@@ -168,6 +175,8 @@ class OmicsClawAdapter:
         self._python = python
         self._source_root = str(Path(source_root).resolve()) if source_root else ""
         self._capture = capture
+        self._code: dict[str, Any] | None = None
+        self._code_lock = threading.Lock()
 
     def launch(
         self,
@@ -217,11 +226,34 @@ class OmicsClawAdapter:
             argv += ["--model", run.model.model]
         argv += ["--", "--prompt-file", str(paths.prompt)]
         return Launch(
-            argv=tuple(argv), env=env, cwd=paths.workspace, harness_env=harness
+            argv=tuple(argv),
+            env=env,
+            cwd=paths.workspace,
+            harness_env=harness,
+            provenance=self._provenance(),
         )
 
+    def _provenance(self) -> dict[str, Any]:
+        """The source tree with its git state, looked up once per adapter."""
+        with self._code_lock:
+            if self._code is None:
+                self._code = {
+                    "source_root": self._source_root,
+                    **_git_state(self._source_root),
+                }
+            return dict(self._code)
+
     def collect(self, run: RunSpec, paths: RunPaths, exit: ProcessExit) -> Evidence:
-        """Read the run's telemetry and transcript. Never raises."""
+        """Read the run's telemetry and transcript. Never raises.
+
+        The source tree the process should have imported from is the one
+        recorded in the run's ``command.json``; this adapter's own setting
+        is used only when the run has no such record.
+        """
+        recorded = (read_json(paths.command) or {}).get("provenance")
+        expected_root = self._source_root
+        if isinstance(recorded, dict) and isinstance(recorded.get("source_root"), str):
+            expected_root = recorded["source_root"]
         trace = read_trace(paths.stderr)
         transcript = _ANSI.sub("", _read(paths.stdout))
 
@@ -253,7 +285,7 @@ class OmicsClawAdapter:
         turns = ending.get("agent.turns")
         return Evidence(
             stop_reason=stop_reason,
-            infra_reason=self._infra_reason(trace, calls, tool_ids),
+            infra_reason=_infra_reason(trace, calls, tool_ids, expected_root),
             failure=failure,
             approvals_required=required,
             approvals_denied=denied,
@@ -272,55 +304,86 @@ class OmicsClawAdapter:
             },
         )
 
-    def _infra_reason(
-        self,
-        trace: Trace,
-        calls: list[Mapping[str, Any]],
-        tool_ids: set[str],
-    ) -> str:
-        """Why this run is not the agent's doing, or ``""``.
 
-        Two things qualify. The process imported ``omicsclaw`` from
-        somewhere other than the configured source tree. Or a model call
-        was not answered and nothing recovered it. That is judged per
-        parent span (a turn of the main loop, or the tool call a sub-agent
-        runs in) on the last call made under it, leaving out calls that
-        were cancelled because the run was being stopped:
+def _infra_reason(
+    trace: Trace,
+    calls: list[Mapping[str, Any]],
+    tool_ids: set[str],
+    source_root: str,
+) -> str:
+    """Why a run is not the agent's doing, or ``""``.
 
-        - the call ended in an error: ``provider_error: <Error>``;
-        - the call ended without an error and reported no input tokens:
-          ``provider_error: empty_response``. A backend that answers has
-          read the prompt, so this is a reply with nothing behind it, such
-          as a ``200`` carrying an error body or a stream cut short.
+    Two things qualify. The process imported ``omicsclaw`` from somewhere
+    other than *source_root* (not checked when that is empty). Or a model
+    call was not answered and nothing recovered it. That is judged per
+    parent span (a turn of the main loop, or the tool call a sub-agent
+    runs in) on the last call made under it, leaving out calls that were
+    cancelled because the run was being stopped:
 
-        Either way the agent may carry on and exit ``0``, so neither shows
-        in the exit status. A reply that reports its input tokens and has
-        no text is left alone; it may be what the model said.
-        """
-        imported = trace.launched_from
-        if self._source_root and imported:
-            root = Path(self._source_root)
-            if imported == "None" or root not in Path(imported).resolve().parents:
-                return f"source_mismatch: imported omicsclaw from {imported}"
-        last: dict[str, Mapping[str, Any]] = {}
-        for span in calls:
-            if _error(span) not in _CANCELLED:
-                last[str(span.get("parent_span_id", ""))] = span
-        for parent, span in last.items():
-            where = " in a sub-agent" if parent in tool_ids else ""
-            error = _error(span)
-            if error:
-                status = _attributes(span).get("error.status_code")
-                detail = f" status={status}" if status is not None else ""
-                return f"provider_error: {error}{detail}{where}"
-            if not _answered(span):
-                return f"provider_error: empty_response{where}"
-        return ""
+    - the call ended in an error: ``provider_error: <Error>``;
+    - the call ended without an error and reported no input tokens:
+      ``provider_error: empty_response``. A backend that answers has read
+      the prompt, so this is a reply with nothing behind it, such as a
+      ``200`` carrying an error body or a stream cut short.
+
+    Either way the agent may carry on and exit ``0``, so neither shows in
+    the exit status. A reply that reports its input tokens and has no text
+    is left alone; it may be what the model said.
+    """
+    imported = trace.launched_from
+    if source_root and imported:
+        root = Path(source_root)
+        if imported == "None" or root not in Path(imported).parents:
+            return f"source_mismatch: imported omicsclaw from {imported}"
+    last: dict[str, Mapping[str, Any]] = {}
+    for span in calls:
+        if _error(span) not in _CANCELLED:
+            last[str(span.get("parent_span_id", ""))] = span
+    for parent, span in last.items():
+        where = " in a sub-agent" if parent in tool_ids else ""
+        error = _error(span)
+        if error:
+            status = _attributes(span).get("error.status_code")
+            detail = f" status={status}" if status is not None else ""
+            return f"provider_error: {error}{detail}{where}"
+        if not _answered(span):
+            return f"provider_error: empty_response{where}"
+    return ""
 
 
 def _checkout() -> Path:
     """The source tree this module was imported from."""
     return Path(__file__).resolve().parents[3]
+
+
+def _git_state(root: str) -> dict[str, Any]:
+    """The commit of the checkout at *root* and whether its agent code is dirty.
+
+    :returns: ``git_commit`` (the full hash) and ``git_dirty`` (whether
+        ``omicsclaw/`` or ``skills/`` differ from that commit, untracked
+        files included). Both are ``None`` when *root* is empty, is not a
+        git checkout, or git cannot be run.
+    """
+    unknown = {"git_commit": None, "git_dirty": None}
+    if not root:
+        return unknown
+    try:
+        commit = subprocess.run(
+            ["git", "-C", root, "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=60,
+        )
+        status = subprocess.run(
+            ["git", "-C", root, "status", "--porcelain", "--", "omicsclaw", "skills"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return unknown
+    if commit.returncode != 0 or status.returncode != 0:
+        return unknown
+    return {
+        "git_commit": commit.stdout.strip(),
+        "git_dirty": bool(status.stdout.strip()),
+    }
 
 
 def _read(path: Path) -> str:

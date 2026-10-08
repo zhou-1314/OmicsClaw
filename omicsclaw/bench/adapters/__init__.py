@@ -13,7 +13,7 @@ the adapter.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
 from typing import Any, Protocol
@@ -35,12 +35,15 @@ class Launch:
     :param harness_env: The variables in *env* the harness set itself,
         recorded with the run. Values the process merely inherited are not
         written anywhere.
+    :param provenance: What code the run uses, as far as the adapter can
+        say: recorded with the run and handed back to nobody.
     """
 
     argv: tuple[str, ...]
     env: Mapping[str, str]
     cwd: Path
     harness_env: Mapping[str, str]
+    provenance: Mapping[str, Any] = field(default_factory=dict)
 
 
 class Adapter(Protocol):
@@ -69,8 +72,11 @@ class Adapter(Protocol):
     def collect(self, run: RunSpec, paths: RunPaths, exit: ProcessExit) -> Evidence:
         """Read back what the finished process left in ``paths.meta``.
 
-        Must not raise on missing or malformed files: a run that left
-        nothing readable is reported as evidence with empty fields.
+        Called when the run ends and again when it is graded, possibly
+        from another checkout or machine, so what it concludes has to
+        follow from the run's own files. Must not raise on missing or
+        malformed files: a run that left nothing readable is reported as
+        evidence with empty fields.
         """
         ...
 

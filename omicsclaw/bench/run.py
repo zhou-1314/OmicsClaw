@@ -381,6 +381,7 @@ def _execute(
         "cwd": str(launch.cwd),
         "harness_env": dict(launch.harness_env),
         "inherited_env_names": sorted(set(launch.env) - set(launch.harness_env)),
+        "provenance": dict(launch.provenance),
     })
     exit = run_process(
         launch.argv,
@@ -410,6 +411,7 @@ def _execute(
         "campaign": manifest.name,
         **run.identity(),
         "adapter": run.arm.adapter,
+        "agent_code": dict(launch.provenance),
         "attempt": attempt,
         "outcome": outcome,
         "reason": reason,

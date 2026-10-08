@@ -99,6 +99,7 @@ class FakeAdapter:
             env={**base_env, **harness},
             cwd=paths.workspace,
             harness_env=harness,
+            provenance={"source_root": "fake"},
         )
 
     def collect(self, run: RunSpec, paths: RunPaths, exit: ProcessExit) -> Evidence:

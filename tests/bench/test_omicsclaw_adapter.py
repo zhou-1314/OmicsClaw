@@ -8,6 +8,7 @@ shape against the real command.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -93,11 +94,15 @@ def interaction(stop_reason="converged", turns=1, error=""):
     return span("interaction", "root", "", error, **attributes)
 
 
-def collected(tmp_path, lines, *, stdout="", exit=EXITED, arm=None, launched=HERE):
+def collected(
+    tmp_path, lines, *, stdout="", exit=EXITED, arm=None, launched=HERE, command=None
+):
     found = paths(tmp_path)
     head = [f"bench-launch omicsclaw={launched}"] if launched else []
     found.stderr.write_text("\n".join([*head, *lines]) + "\n")
     found.stdout.write_text(stdout)
+    if command is not None:
+        found.command.write_text(json.dumps(command))
     arm = arm or Arm("oc", "omicsclaw")
     return OmicsClawAdapter(arm).collect(run_spec(arm), found, exit)
 
@@ -133,6 +138,35 @@ def test_the_command_is_one_oc_cli_exchange_from_this_checkout(tmp_path):
         "OMICSCLAW_OTEL_CAPTURE_CONTENT": "true",
     }
     assert found.workspace not in Path(launch.env["OMICSCLAW_AUDIT_LOG"]).parents
+
+
+def test_the_launch_says_which_code_the_run_uses(tmp_path):
+    """The source tree, its commit and whether the agent's code had local
+    changes go into the run's record, so a result can be traced to the
+    code that produced it after the checkout has moved or gone.
+    """
+    arm = Arm("oc", "omicsclaw")
+
+    launch = OmicsClawAdapter(arm).launch(
+        run_spec(arm), paths(tmp_path), Budget(60), {}
+    )
+
+    code = launch.provenance
+    assert code["source_root"] == str(REPO_ROOT)
+    assert re.fullmatch(r"[0-9a-f]{40}", code["git_commit"])
+    assert code["git_dirty"] in (True, False)
+
+
+def test_a_source_tree_that_is_not_a_checkout_has_no_commit(tmp_path):
+    arm = Arm("oc", "omicsclaw", options={"source_root": str(tmp_path)})
+
+    launch = OmicsClawAdapter(arm).launch(
+        run_spec(arm), paths(tmp_path / "run"), Budget(60), {}
+    )
+
+    assert launch.provenance == {
+        "source_root": str(tmp_path), "git_commit": None, "git_dirty": None,
+    }
 
 
 def test_an_arm_sets_the_skills_root_rules_environment_and_interpreter(tmp_path):
@@ -476,6 +510,27 @@ def test_a_process_running_other_code_is_infrastructure(tmp_path):
     assert evidence.infra_reason.startswith("source_mismatch")
     assert namespace.infra_reason.startswith("source_mismatch")
     assert classify(EXITED, evidence, [])[0] == INFRA_FAILURE
+
+
+def test_the_source_tree_is_checked_against_the_one_recorded_with_the_run(
+    tmp_path,
+):
+    """Results are graded after the fact, perhaps from another checkout or
+    after the original one was removed. The run's own record says where
+    its code was meant to come from; the checkout doing the reading does
+    not enter into it.
+    """
+    elsewhere = {"provenance": {"source_root": "/elsewhere/checkout"}}
+    lines = [llm("a", "turn1"), interaction()]
+
+    moved = collected(
+        tmp_path / "moved", lines,
+        launched="/elsewhere/checkout/omicsclaw/__init__.py", command=elsewhere,
+    )
+    wrong = collected(tmp_path / "wrong", lines, launched=HERE, command=elsewhere)
+
+    assert moved.infra_reason == ""
+    assert wrong.infra_reason.startswith("source_mismatch")
 
 
 def test_a_run_that_left_no_telemetry_is_not_a_result(tmp_path):
