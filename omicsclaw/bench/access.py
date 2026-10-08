@@ -117,19 +117,24 @@ def audit_access(
         files; one that still matches is the case's own input and is not
         read.
     :param skip: Workspace-relative paths not to descend into.
-    :returns: ``flagged``, ``matches``, ``hits`` (at most
-        :data:`MAX_HITS`, each with ``source``, ``where``, ``pattern`` and
-        ``excerpt``), ``truncated``, ``commands_scanned`` (``None`` when
-        *commands* was), the number of files read and skipped, and the
-        labels searched for.
+    :returns: ``flagged``, ``matches``, ``by_pattern`` (every label
+        searched for with its number of matches, zero included), ``hits``
+        (at most :data:`MAX_HITS`, each with ``source``, ``where``,
+        ``pattern`` and ``excerpt``), ``truncated``, ``commands_scanned``
+        (``None`` when *commands* was), and the number of files read and
+        skipped. ``cases_root`` and ``out_root`` match a path that was
+        written out; ``leaves_workspace`` is a judgement about a relative
+        path and can be wrong, so the counts are kept apart.
     """
     hits: list[dict[str, str]] = []
     total = 0
+    counts = {pattern.label: 0 for pattern in patterns} | {LEAVES_WORKSPACE: 0}
     home = {str(workspace), str(workspace.resolve())}
 
     def record(source: str, where: str, label: str, text: str, span: range) -> None:
         nonlocal total
         total += 1
+        counts[label] += 1
         if len(hits) < MAX_HITS:
             hits.append({
                 "source": source,
@@ -182,12 +187,13 @@ def audit_access(
     return {
         "flagged": total > 0,
         "matches": total,
+        "by_pattern": counts,
         "hits": hits,
         "truncated": total > len(hits),
         "commands_scanned": scanned,
         "files_read": read,
         "files_skipped": skipped,
-        "patterns": [pattern.label for pattern in patterns] + [LEAVES_WORKSPACE],
+        "patterns": list(counts),
     }
 
 

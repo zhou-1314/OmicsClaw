@@ -8,11 +8,12 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
-from omicsclaw.bench.__main__ import _env_file, main
+from omicsclaw.bench.__main__ import _env_file, _stop_signals, main
 from omicsclaw.bench.layout import read_jsonl
 from omicsclaw.bench.run import run_campaign
 
@@ -103,6 +104,33 @@ def test_a_signal_to_the_harness_stops_its_agent(tmp_path, name, status):
     assert gone
     assert json.loads(output)["interrupted"] is True
     assert not toy.paths("a/m/sum-a/r1").done.exists()
+
+
+def test_only_the_first_stop_signal_interrupts(tmp_path):
+    """A supervisor that sends SIGTERM twice, or a terminal that hangs up
+    during the stop, must not cut the stop short: the first signal starts
+    it and later ones are absorbed. The handlers in place before are put
+    back afterwards.
+    """
+    before = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP))
+
+    with _stop_signals() as received:
+        if signal.getsignal(signal.SIGTERM) is before[0]:
+            pytest.skip("signal handlers can only be installed in the main thread")
+        with pytest.raises(KeyboardInterrupt):
+            os.kill(os.getpid(), signal.SIGTERM)
+            time.sleep(5)  # the handler interrupts this
+        try:
+            os.kill(os.getpid(), signal.SIGHUP)
+            os.kill(os.getpid(), signal.SIGTERM)
+            time.sleep(0.2)
+        except KeyboardInterrupt:
+            pytest.fail("a later stop signal interrupted the stop")
+
+    assert received == [signal.SIGTERM]
+    assert (
+        signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP)
+    ) == before
 
 
 def test_a_second_run_on_the_same_output_root_is_refused(tmp_path):

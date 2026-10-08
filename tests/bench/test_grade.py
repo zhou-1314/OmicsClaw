@@ -336,3 +336,6 @@ def test_a_flagged_run_is_graded_and_carries_its_mark(tmp_path):
 
     row = read_jsonl(toy.campaign.grades)[0]
     assert (row["graded"], row["passed"], row["access_flagged"]) == (True, True, True)
+    assert row["access_by_pattern"] == {
+        "cases_root": 1, "out_root": 0, "leaves_workspace": 0,
+    }

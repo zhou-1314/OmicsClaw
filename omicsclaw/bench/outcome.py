@@ -99,9 +99,9 @@ class Usage:
     :param llm_cancelled: Model calls cut short when the run was stopped.
     :param subagent_llm_calls: The part of *llm_calls* made by sub-agents.
     :param calls_without_usage: Calls that reported no input tokens and
-        so add nothing to the totals: failed, cancelled, answered with
-        nothing, or made to a backend that reports no usage. Above zero,
-        the totals are a lower bound.
+        so add nothing to the totals: failed, cancelled, not delivered
+        whole, or made to a backend that reports no usage. Above zero, the
+        totals are a lower bound.
     :param includes_subagents: Whether the totals count sub-agent calls.
     :param source: Where the numbers were read from.
     """

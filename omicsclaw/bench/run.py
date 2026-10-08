@@ -310,6 +310,7 @@ def rebuild_indexes(manifest: Manifest, campaign: Campaign) -> None:
             "access_commands_scanned": record.get("access", {}).get(
                 "commands_scanned"
             ),
+            "access_by_pattern": record.get("access", {}).get("by_pattern", {}),
             "approvals_refused": approvals.get("denied", 0)
             + approvals.get("pending", 0),
             "started_at": record.get("started_at", ""),
@@ -482,6 +483,7 @@ def _execute(
             "flagged": access["flagged"],
             "matches": access["matches"],
             "commands_scanned": access["commands_scanned"],
+            "by_pattern": access["by_pattern"],
         },
         "notes": dict(evidence.notes),
     }

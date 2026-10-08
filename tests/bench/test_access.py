@@ -84,6 +84,9 @@ def test_each_source_is_searched(tmp_path):
     )
 
     assert report["flagged"] is True and report["matches"] == 3
+    assert report["by_pattern"] == {
+        "cases_root": 2, "out_root": 1, "leaves_workspace": 0,
+    }
     found = {(hit["source"], hit["where"], hit["pattern"]) for hit in report["hits"]}
     assert found == {
         ("command", "bash", "out_root"),
@@ -215,6 +218,8 @@ def test_sibling_roots_that_share_a_name_prefix_are_told_apart(tmp_path):
     assert flagged(f"cat {cases}/sum-a/oracle/truth.json") == {"cases_root"}
     assert flagged(f"ls {cases}") == {"cases_root"}
     assert flagged(f"ls {out}") == {"out_root"}
+    assert flagged(f"ls {out}-old/cells/b/m/sum-a/r1") == set()
+    assert flagged(f"cat {out}.bak/grades.jsonl") == set()
 
 
 def test_the_cases_root_is_matched_under_its_real_path_too(tmp_path):
@@ -287,6 +292,7 @@ def test_the_report_is_capped_and_says_so(tmp_path):
 
     assert report["matches"] == MAX_HITS + 5
     assert len(report["hits"]) == MAX_HITS and report["truncated"] is True
+    assert report["by_pattern"]["cases_root"] == MAX_HITS + 5
 
 
 def test_the_audit_changes_nothing(tmp_path):

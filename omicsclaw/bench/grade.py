@@ -312,6 +312,9 @@ def _row(
         "metrics": {},
         "detail": "",
         "access_flagged": bool(record and record.get("access", {}).get("flagged")),
+        "access_by_pattern": (
+            record.get("access", {}).get("by_pattern", {}) if record else {}
+        ),
     }
     if record is None:
         row["skip"] = "unfinished"

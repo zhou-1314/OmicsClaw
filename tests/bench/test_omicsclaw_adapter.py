@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -155,6 +156,54 @@ def test_the_launch_says_which_code_the_run_uses(tmp_path):
     assert code["source_root"] == str(REPO_ROOT)
     assert re.fullmatch(r"[0-9a-f]{40}", code["git_commit"])
     assert code["git_dirty"] in (True, False)
+
+
+def code_state(root: Path, tmp_path: Path, name: str) -> dict:
+    """What a new adapter records about the source tree at *root*."""
+    arm = Arm("oc", "omicsclaw", options={"source_root": str(root)})
+    launch = OmicsClawAdapter(arm).launch(
+        run_spec(arm), paths(tmp_path / name), Budget(60), {}
+    )
+    return dict(launch.provenance)
+
+
+def test_local_changes_to_the_agents_code_are_recorded_as_dirty(tmp_path):
+    """A small repository with ``omicsclaw/``, ``skills/`` and ``docs/``.
+    Clean, it is recorded as not dirty. An untracked file under ``skills/``
+    or an edit under ``omicsclaw/`` makes it dirty: the run used code the
+    commit does not describe. A new file under ``docs/`` does not.
+    """
+    repo = tmp_path / "repo"
+    for folder in ("omicsclaw", "skills", "docs"):
+        (repo / folder).mkdir(parents=True)
+        (repo / folder / "kept.txt").write_text("v1\n")
+
+    def git(*words: str) -> None:
+        subprocess.run(
+            ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t",
+             *words],
+            check=True, capture_output=True,
+        )
+
+    git("init", "-q")
+    git("add", "-A")
+    git("commit", "-q", "-m", "first")
+
+    clean = code_state(repo, tmp_path, "clean")
+    (repo / "docs" / "note.md").write_text("not agent code\n")
+    docs_only = code_state(repo, tmp_path, "docs")
+    (repo / "skills" / "new_skill.py").write_text("x = 1\n")
+    untracked = code_state(repo, tmp_path, "untracked")
+    (repo / "skills" / "new_skill.py").unlink()
+    (repo / "omicsclaw" / "kept.txt").write_text("v2\n")
+    edited = code_state(repo, tmp_path, "edited")
+
+    assert re.fullmatch(r"[0-9a-f]{40}", clean["git_commit"])
+    assert clean["git_dirty"] is False
+    assert docs_only["git_dirty"] is False
+    assert untracked["git_dirty"] is True
+    assert edited["git_dirty"] is True
+    assert edited["git_commit"] == clean["git_commit"]
 
 
 def test_a_source_tree_that_is_not_a_checkout_has_no_commit(tmp_path):
@@ -415,7 +464,7 @@ def test_a_provider_error_just_before_the_wall_clock_is_infrastructure(tmp_path)
 
 
 @pytest.mark.parametrize("tokens", [(0, 0, 0), None], ids=["zero", "unreported"])
-def test_a_reply_without_input_tokens_is_an_empty_response(tmp_path, tokens):
+def test_a_reply_without_input_tokens_is_an_incomplete_response(tmp_path, tokens):
     """A 200 with an error body, or a stream that ends after one chunk,
     reaches the agent as an answer with nothing in it: no error, no
     tokens. The agent stops on it and the process exits ``0`` saying it
@@ -429,12 +478,16 @@ def test_a_reply_without_input_tokens_is_an_empty_response(tmp_path, tokens):
     ])
 
     assert evidence.stop_reason == "converged"
-    assert evidence.infra_reason == "provider_error: empty_response"
+    assert evidence.infra_reason == (
+        "provider_error: incomplete_response (no usage reported)"
+    )
     assert evidence.usage.calls_without_usage == 1
     assert classify(EXITED, evidence, ["output/a.json"])[0] == INFRA_FAILURE
 
 
-def test_an_empty_response_after_a_draft_is_not_graded_as_a_wrong_answer(tmp_path):
+def test_an_incomplete_response_after_a_draft_is_not_graded_as_a_wrong_answer(
+    tmp_path,
+):
     """The agent writes a first draft, and the call that would have
     corrected it comes back empty. The deliverable exists, so without this
     rule the draft would be graded as the agent's answer.
@@ -449,11 +502,11 @@ def test_an_empty_response_after_a_draft_is_not_graded_as_a_wrong_answer(tmp_pat
     ])
 
     assert classify(EXITED, evidence, []) == (
-        INFRA_FAILURE, "provider_error: empty_response",
+        INFRA_FAILURE, "provider_error: incomplete_response (no usage reported)",
     )
 
 
-def test_an_empty_response_in_a_sub_agent_is_infrastructure(tmp_path):
+def test_an_incomplete_response_in_a_sub_agent_is_infrastructure(tmp_path):
     evidence = collected(tmp_path, [
         llm("a", "turn1"),
         llm("s1", "task1", tokens=(0, 0, 0)),
@@ -463,10 +516,30 @@ def test_an_empty_response_in_a_sub_agent_is_infrastructure(tmp_path):
         interaction(turns=2),
     ])
 
-    assert evidence.infra_reason == "provider_error: empty_response in a sub-agent"
+    assert evidence.infra_reason == (
+        "provider_error: incomplete_response (no usage reported) in a sub-agent"
+    )
 
 
-def test_an_empty_response_followed_by_an_answer_is_not_a_failure(tmp_path):
+def test_a_reply_cut_off_mid_sentence_is_named_for_what_is_known(tmp_path):
+    """A stream that delivered half a sentence and then ended has text on
+    its span, and so has every reply from a backend that reports no usage.
+    Neither is empty. What the two share, and what the reason says, is
+    that the call reported no usage.
+    """
+    evidence = collected(tmp_path, [
+        llm("a", "turn1", tokens=None, output="The sum of the numbers is"),
+        span("turn", "turn1", "root"),
+        interaction(),
+    ])
+
+    assert evidence.infra_reason == (
+        "provider_error: incomplete_response (no usage reported)"
+    )
+    assert "empty" not in evidence.infra_reason
+
+
+def test_an_incomplete_response_followed_by_an_answer_is_not_a_failure(tmp_path):
     evidence = collected(tmp_path, [
         llm("a", "turn1", tokens=(0, 0, 0)),
         llm("b", "turn1"),
@@ -575,6 +648,28 @@ def test_the_ending_is_read_from_the_main_agents_last_exchange(tmp_path):
     assert (with_sub.stop_reason, with_sub.turns) == ("max_turns", 8)
 
 
+def test_without_the_main_agents_span_nobody_says_how_the_run_ended(tmp_path):
+    """Only a sub-agent's span survived and it says ``converged``. That is
+    the sub-agent's ending. The main agent's is unknown, which makes the
+    run an infrastructure failure although the process exited ``0``. A
+    span that names no agent type is the main agent's, as before.
+    """
+    lost = collected(tmp_path / "lost", [
+        llm("a", "turn1"),
+        interaction(stop_reason="converged", agent="sub"),
+    ])
+    untyped = json.dumps({
+        "name": "omicsclaw.interaction", "span_id": "root", "parent_span_id": "",
+        "attributes": {"agent.stop_reason": "converged", "agent.turns": 1},
+    })
+    plain = collected(tmp_path / "plain", [llm("a", "turn1"), untyped])
+
+    assert lost.stop_reason == ""
+    assert classify(EXITED, lost, [])[0] == INFRA_FAILURE
+    assert "no_stop_reason" in classify(EXITED, lost, [])[1]
+    assert classify(EXITED, plain, [])[0] == COMPLETED
+
+
 def test_the_agents_own_deadline_is_a_timeout(tmp_path):
     exit = ProcessExit(started=True, returncode=1)
     evidence = collected(
@@ -628,6 +723,27 @@ def test_a_failed_line_counts_only_when_the_command_failed(
 
     assert evidence.stop_reason == "converged"
     assert classify(exit, evidence, [])[0] == outcome
+
+
+def test_the_commands_own_failed_line_is_the_last_one(tmp_path):
+    """The agent's answer happens to start a line with ``Failed:
+    TimeoutError``, and the exchange then fails for another reason. The
+    command prints its own report after everything the agent wrote, so the
+    last such line is the one to read: this run is not a timeout.
+    """
+    exit = ProcessExit(started=True, returncode=1)
+    evidence = collected(
+        tmp_path,
+        [llm("a", "turn1"), interaction(stop_reason="", error="ValueError")],
+        stdout="Notes so far:\nFailed: TimeoutError on the first try\n"
+        "Failed: ValueError\n",
+        exit=exit,
+    )
+
+    assert evidence.failure == "Failed: ValueError"
+    assert classify(exit, evidence, ["x"]) == (
+        INFRA_FAILURE, "exit_1: Failed: ValueError",
+    )
 
 
 # ---- approval cards --------------------------------------------------------

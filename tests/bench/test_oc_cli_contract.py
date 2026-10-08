@@ -273,6 +273,9 @@ def test_looking_outside_the_workspace_is_recorded(contract):
     assert done["outcome"] == "completed"
     assert done["access"]["flagged"] is True
     assert done["access"]["commands_scanned"] > 0
+    counts = done["access"]["by_pattern"]
+    assert counts["leaves_workspace"] > 0
+    assert (counts["cases_root"], counts["out_root"]) == (0, 0)
     assert {(hit["source"], hit["pattern"]) for hit in access["hits"]} == {
         ("command", "leaves_workspace")
     }
@@ -326,7 +329,7 @@ def test_an_empty_reply_is_infrastructure_though_the_command_converged(contract)
     assert done["usage"]["llm_calls"] == 1 and done["usage"]["llm_errors"] == 0
     assert done["usage"]["calls_without_usage"] == 1
     assert (done["outcome"], done["reason"]) == (
-        "infra_failure", "provider_error: empty_response",
+        "infra_failure", "provider_error: incomplete_response (no usage reported)",
     )
 
 

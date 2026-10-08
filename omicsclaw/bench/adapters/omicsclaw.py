@@ -79,6 +79,9 @@ _CONTENT_OUT = "langfuse.observation.output"
 _CANCELLED = frozenset({"CancelledError", "GeneratorExit", "KeyboardInterrupt"})
 """Errors a model call ends with when the run around it is being stopped."""
 
+_NO_USAGE = "incomplete_response (no usage reported)"
+"""Reason for a call that ended without an error and without input tokens."""
+
 _OPTIONS = frozenset({"python", "source_root", "capture_content"})
 
 
@@ -269,13 +272,15 @@ class OmicsClawAdapter:
         tool_ids = {str(span.get("span_id", "")) for span in tools}
         interactions = trace.named(_SPAN_INTERACTION)
         # How the run ended is what the main agent's last exchange says. A
-        # span of another agent type does not speak for it.
+        # span that names no agent type is the main agent's. A span of
+        # another type does not speak for it, so with no main span the
+        # ending is unknown.
         mains = [
             span
             for span in interactions
             if _attributes(span).get("agent.type", "main") == "main"
         ]
-        last = (mains or interactions)[-1] if interactions else {}
+        last = mains[-1] if mains else {}
         ending = _attributes(last)
 
         approvals = [match.group(1) for match in _APPROVAL.finditer(transcript)]
@@ -285,8 +290,10 @@ class OmicsClawAdapter:
 
         # The command prints ``Failed: <Error>`` for a failed exchange and
         # then exits 1. With any other exit status the words are the
-        # agent's own text.
-        failed = _FAILED.search(transcript) if exit.returncode == 1 else None
+        # agent's own text. The command's line comes after everything the
+        # agent wrote, so the last match is the one read.
+        reports = list(_FAILED.finditer(transcript)) if exit.returncode == 1 else []
+        failed = reports[-1] if reports else None
         failure = f"Failed: {failed.group(1)}" if failed else ""
         stop_reason = str(ending.get("agent.stop_reason", ""))
         if failed and failed.group(1) == "TimeoutError":
@@ -335,9 +342,11 @@ def _infra_reason(
 
     - the call ended in an error: ``provider_error: <Error>``;
     - the call ended without an error and reported no input tokens:
-      ``provider_error: empty_response``. A backend that answers has read
-      the prompt, so this is a reply with nothing behind it, such as a
-      ``200`` carrying an error body or a stream cut short.
+      ``provider_error: incomplete_response (no usage reported)``. A
+      backend that answers has read the prompt and says how much, so the
+      reply did not arrive whole: a ``200`` carrying an error body, a
+      stream cut short with or without some text delivered. A backend
+      that never reports usage looks the same.
 
     Either way the agent may carry on and exit ``0``, so neither shows in
     the exit status. A reply that reports its input tokens and has no text
@@ -360,7 +369,7 @@ def _infra_reason(
             detail = f" status={status}" if status is not None else ""
             return f"provider_error: {error}{detail}{where}"
         if not _answered(span):
-            return f"provider_error: empty_response{where}"
+            return f"provider_error: {_NO_USAGE}{where}"
     return ""
 
 
@@ -429,7 +438,7 @@ def _usage(calls: list[Mapping[str, Any]], tool_ids: set[str]) -> Usage:
 
     A call belongs to a sub-agent when its parent span is a tool call. A
     call counts towards ``calls_without_usage`` when it reported no input
-    tokens: it failed, was cancelled, came back empty, or its backend
+    tokens: it failed, was cancelled, did not arrive whole, or its backend
     reports no usage.
     """
     reported = [span for span in calls if _answered(span)]
