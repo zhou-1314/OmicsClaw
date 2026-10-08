@@ -238,11 +238,14 @@ class DelegatedUsage:
         """Record one sub-agent model call.
 
         :param usage: what the call cost, or ``None`` when the backend
-            reported nothing for it. Such a call is counted in
-            :attr:`calls` and :attr:`unreported` and adds no tokens. A
-            value that is not a :class:`~omicsclaw.schema.Usage`, or one
-            whose counts cannot be summed, is recorded the same way and
-            raises nothing.
+            reported nothing for it.
+
+        A ``None`` is counted in :attr:`calls` and :attr:`unreported` and
+        adds no tokens. So is a value that is not a
+        :class:`~omicsclaw.schema.Usage`, and a ``Usage`` whose counts
+        raise :exc:`TypeError` when they are added to the total. Any other
+        exception raised by that addition propagates, and the call is not
+        recorded.
         """
         # The sum is worked out before anything is recorded, so a report
         # that cannot be added leaves the three counts consistent.
