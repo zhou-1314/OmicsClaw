@@ -94,14 +94,21 @@ def _campaign_arguments(parser: argparse.ArgumentParser) -> None:
 def _open(arguments: argparse.Namespace) -> tuple[Manifest, Campaign]:
     """The manifest and the campaign directories the arguments name.
 
-    :raises ManifestError: The cases root is missing, or either directory
-        is inside the repository the manifest belongs to.
+    :raises ManifestError: The cases root is missing, one directory is
+        inside the other, or either is inside the repository the manifest
+        belongs to.
     """
     manifest = load_manifest(arguments.manifest)
     cases = arguments.cases.expanduser().resolve()
     out = arguments.out.expanduser().resolve()
     if not cases.is_dir():
         raise ManifestError(f"the cases root {cases} is not a directory")
+    if cases == out or cases in out.parents or out in cases.parents:
+        raise ManifestError(
+            f"--cases {cases} and --out {out} overlap; a workspace would sit "
+            "beside the oracle, and every path in it would look like a "
+            "reference to the cases root"
+        )
     repository = _repository(manifest.path)
     for label, path in (("--cases", cases), ("--out", out)):
         if repository is not None and (

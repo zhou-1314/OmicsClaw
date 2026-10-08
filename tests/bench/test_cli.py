@@ -77,6 +77,19 @@ def test_results_and_cases_inside_the_repository_are_refused(tmp_path, capsys):
     assert not toy.out.exists()
 
 
+def test_an_output_root_inside_the_cases_root_is_refused(tmp_path, capsys):
+    toy = Toy(tmp_path)
+    inside = toy.cases / "runs"
+
+    status = main(
+        ["run", str(toy.manifest_path), "--cases", str(toy.cases), "--out", str(inside)]
+    )
+
+    assert status == 2
+    assert "overlap" in capsys.readouterr().err
+    assert not inside.exists()
+
+
 def test_a_bad_manifest_is_exit_status_two(tmp_path, capsys):
     toy = Toy(tmp_path)
     toy.manifest_path.write_text("name = ")
