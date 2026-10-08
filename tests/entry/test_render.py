@@ -386,6 +386,49 @@ def test_an_approval_prompt_shows_the_arguments_that_will_actually_run() -> None
     assert wire["request_id"] == "req-1"
 
 
+def _approval_by(subagent: str) -> TurnEvent:
+    request = ApprovalRequest(
+        tool_name="bash",
+        arguments='{"command": "ls"}',
+        reason="run: ls",
+        risk_level=RiskLevel.HIGH,
+        reason_shows_call=True,
+    )
+    return TurnEvent.approval_required(request, "t#1", seq=3, subagent=subagent)
+
+
+def test_an_approval_line_names_the_sub_agent_whose_call_is_asking() -> None:
+    """A person approving ``bash`` needs to know it is a sub-agent's
+    ``bash``: they saw the parent's reasoning and none of the sub-agent's.
+
+    The parent's own line is spelled out whole, because it is the line
+    every existing approval prints and it must stay as it is.
+
+    Mutations: drop the suffix in ``_approval_line`` and the second
+    assertion fails; add it unconditionally and the first does.
+    """
+    assert TextRenderer().feed(_approval_by("")) == (
+        "Approval required [t#1]: bash (risk high) - run: ls"
+    )
+    assert TextRenderer().feed(_approval_by("general-purpose")) == (
+        "Approval required [t#1]: bash for sub-agent general-purpose "
+        "(risk high) - run: ls"
+    )
+
+
+def test_the_sub_agent_name_does_not_cross_the_wire() -> None:
+    """The Desktop contract has no field for the name, so a client receives
+    the frame it received before the name existed.
+
+    Mutation: add ``subagent`` to ``_approval_payload`` and both
+    assertions fail.
+    """
+    named = to_wire(_approval_by("general-purpose"))
+
+    assert named == to_wire(_approval_by(""))
+    assert "general-purpose" not in json.dumps(named)
+
+
 def test_the_terminal_frame_keeps_the_error_type_and_drops_its_text() -> None:
     """``wire_contract.py`` promises ``terminal_error_type_preserved``; the
     text is withheld because an exception message can carry a fetched URL
@@ -619,6 +662,12 @@ def _hostile_frames() -> dict[str, TurnEvent]:
         ),
         "approval id": TurnEvent.approval_required(
             ApprovalRequest(tool_name="bash", reason="r"), _HOSTILE, seq=1
+        ),
+        "approval sub-agent": TurnEvent.approval_required(
+            ApprovalRequest(tool_name="bash", reason="r"),
+            "t#1",
+            seq=1,
+            subagent=_HOSTILE,
         ),
     }
 

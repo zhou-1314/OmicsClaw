@@ -36,6 +36,7 @@ the conversation to keep and the compaction state to pass in next time.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -746,6 +747,7 @@ class TurnHandle:
     __slots__ = (
         "_grace_s",
         "_had_observer",
+        "_numbering",
         "_settled",
         "_task",
         "_timer",
@@ -823,7 +825,12 @@ class TurnHandle:
             ),
             on_observer_change=self._observers_changed,
         )
-        self.approvals = ApprovalBroker(self.stream, timeout_s=approval_timeout_s)
+        self._numbering = itertools.count(1)
+        """The ``n`` of every ``<turn id>#<n>`` request id of this exchange,
+        shared by everything that asks the person something."""
+        self.approvals = ApprovalBroker(
+            self.stream, timeout_s=approval_timeout_s, numbering=self._numbering
+        )
 
     def observe(self, *, after_seq: int = 0) -> TurnObservation:
         """Open a cursor over this exchange. May be called many times.

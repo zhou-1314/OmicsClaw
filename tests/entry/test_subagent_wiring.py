@@ -1103,6 +1103,49 @@ def test_the_child_s_approval_request_becomes_a_parent_turn_frame(
     assert [event.approval.tool_name for event in asked] == ["bash"]
 
 
+def test_the_approval_frame_names_the_sub_agent_that_asked_and_nobody_for_the_parent(
+    tmp_path, offline
+):
+    """The same ``bash`` call, once inside a delegation and once from the
+    parent: only the first frame carries a sub-agent's name.
+
+    The broker reads the name from the tool context it is called in, the
+    one place where both the request and the name are at hand.
+
+    Mutations: stop reading ``SUBAGENT_VALUE_KEY`` in
+    ``ApprovalBroker._asked`` and the first name is ``""``; hard-code a
+    name there and the parent's frame carries it.
+    """
+    offline(
+        _ScriptedProvider([_calls("bash", command="echo hi"), _says("ran it")])
+    )
+    app = build_app(_config(tmp_path))
+    stream = TurnStream("s-1", "t-1")
+    broker = ApprovalBroker(stream)
+    direct = ToolCall(
+        id="c2", name="bash", arguments=json.dumps({"command": "echo hi"})
+    )
+
+    async def drive() -> None:
+        with use_tool_context(approval=broker, values={"session_id": "s-1"}):
+            for call in (_task_call(), direct):
+                running = asyncio.ensure_future(app.registry.execute(call))
+                broker.settle(
+                    await _first_pending(broker), ApprovalDecision(approved=True)
+                )
+                await running
+
+    asyncio.run(drive())
+
+    asked = [
+        event
+        for event in stream.retained()
+        if event.type is TurnEventType.APPROVAL_REQUIRED
+    ]
+    assert [event.approval.tool_name for event in asked] == ["bash", "bash"]
+    assert [event.subagent for event in asked] == ["general-purpose", ""]
+
+
 def test_a_denied_child_call_is_refused_rather_than_run(tmp_path, offline):
     offline(
         _ScriptedProvider(

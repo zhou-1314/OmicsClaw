@@ -220,7 +220,7 @@ class TurnEvent:
         PROGRESS          -> progress
         TOOL_START        -> engine
         TOOL_RESULT       -> engine
-        APPROVAL_REQUIRED -> approval, request_id
+        APPROVAL_REQUIRED -> approval, request_id, subagent
         APPROVAL_SETTLED  -> request_id, decision
         TURN_END          -> engine
         GAP               -> gap
@@ -296,6 +296,10 @@ class TurnEvent:
     approval whose outcome cannot be read renders as "something was
     decided", which is not a thing a Surface can show anyone.
     """
+
+    subagent: str = ""
+    """On ``APPROVAL_REQUIRED``, the sub-agent whose run the asking tool
+    call belongs to; ``""`` when the parent agent asks."""
 
     # ---- constructors ---------------------------------------------------
     #
@@ -414,6 +418,7 @@ class TurnEvent:
         seq: int = 0,
         session_id: str = "",
         turn_id: str = "",
+        subagent: str = "",
     ) -> TurnEvent:
         return cls(
             type=TurnEventType.APPROVAL_REQUIRED,
@@ -422,6 +427,7 @@ class TurnEvent:
             turn_id=turn_id,
             approval=request,
             request_id=request_id,
+            subagent=subagent,
         )
 
     @classmethod

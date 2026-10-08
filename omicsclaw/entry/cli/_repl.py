@@ -179,6 +179,9 @@ tool twice, ``web_fetch`` over two URLs being what the model does with
 reader at a time), so the name alone leaves two identical questions in a
 row and no way to tell which is being answered.
 
+*name* is the tool, followed by `` for sub-agent <agent>`` when the call
+that asks belongs to a sub-agent's run.
+
 *card* is the request id's within-exchange suffix, the ``#1`` of the
 ``[<turn id>#1]`` the approval card was printed with, so the prompt and
 the card that explains it carry the same label. The turn id itself is
@@ -1488,8 +1491,13 @@ class Repl:
             await handle.approve(request_id, ApprovalDecision(True, ""))
             return
         note = approval_body_note(request) if request is not None else ""
+        asker = (
+            f"{name} for sub-agent {inert_line(event.subagent)}"
+            if event.subagent
+            else name
+        )
         prompt = _APPROVAL_PROMPT.format(
-            name=name,
+            name=asker,
             card=inert_line(_card(request_id)),
             size=f" {note}" if note else "",
         )

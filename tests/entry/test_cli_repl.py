@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import io
+import json
 import logging
 import pathlib
 import types
@@ -34,7 +35,7 @@ from omicsclaw.entry.cli._slash_command_support import (
     slash_token,
 )
 from omicsclaw.entry.session import attach_sessions
-from omicsclaw.schema import Message, Role
+from omicsclaw.schema import Message, Role, ToolCall
 from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]
     Asking,
     Scripted,
@@ -493,6 +494,57 @@ def test_two_concurrent_approvals_are_both_answered(tmp_path):
     assert "both settled" in printed
     assert "<- ask_a ok" in printed
     assert "<- ask_b error" in printed
+
+
+def test_a_sub_agent_s_approval_names_the_sub_agent_on_the_card_and_at_the_prompt(
+    tmp_path,
+):
+    """The person saw the parent hand a task over and nothing of what the
+    sub-agent did next, so a bare ``approve ask`` would read as the parent
+    asking. Card and prompt both say whose call it is; the parent's own
+    prompt, pinned by the test above, stays as it was.
+
+    Mutation: format the prompt with the tool name alone in ``Repl._ask``
+    and the prompt assertion fails.
+    """
+    delegating = Message(
+        role=Role.ASSISTANT,
+        tool_calls=(
+            ToolCall(
+                id="d1",
+                name="task",
+                arguments=json.dumps(
+                    {"subagent_type": "general-purpose", "prompt": "do the thing"}
+                ),
+            ),
+        ),
+    )
+
+    async def drive():
+        app = build(
+            tmp_path,
+            Scripted(
+                delegating,
+                calling("ask"),
+                Message(role=Role.ASSISTANT, content="the sub-agent finished"),
+                Message(role=Role.ASSISTANT, content="handed back"),
+            ),
+            tools=(Asking("ask"),),
+        )
+        repl, source, buffer = repl_over(app, ["delegate it", "y", "/exit"])
+        await asyncio.wait_for(repl.run(), WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return source.prompts, buffer.getvalue()
+
+    prompts, printed = asyncio.run(drive())
+
+    assert prompts == [
+        PROMPT,
+        "approve ask for sub-agent general-purpose [#1]? [y/N/a=always] ",
+        PROMPT,
+    ]
+    assert "]: ask for sub-agent general-purpose (risk high)" in printed
+    assert "handed back" in printed
 
 
 def test_always_allow_writes_a_rule_and_stops_asking(tmp_path):

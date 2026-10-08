@@ -370,16 +370,18 @@ def _tool_result_line(event: TurnEvent) -> str:
 def _approval_line(event: TurnEvent) -> str:
     """The card for an approval: a header, then the request's body.
 
-    The header is ``Approval required [<id>]: <tool> (risk <level>)``; the
-    body, :func:`~omicsclaw.entry.display.approval_body` with its default
-    bounds, follows it after `` - `` when there is one.
+    The header is ``Approval required [<id>]: <tool> (risk <level>)``,
+    with `` for sub-agent <name>`` after the tool when a sub-agent's call
+    is asking; the body, :func:`~omicsclaw.entry.display.approval_body`
+    with its default bounds, follows it after `` - `` when there is one.
     """
     request_id = inert_line(event.request_id)
     request = event.approval
     if request is None:
         return f"Approval required [{request_id}]"
+    asker = f" for sub-agent {inert_line(event.subagent)}" if event.subagent else ""
     header = (
-        f"Approval required [{request_id}]: {inert_line(request.tool_name)} "
+        f"Approval required [{request_id}]: {inert_line(request.tool_name)}{asker} "
         f"(risk {request.risk_level.value})"
     )
     body, _cut = approval_body(request)
