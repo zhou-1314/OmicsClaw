@@ -183,6 +183,15 @@ def test_a_recent_plan_write_disarms_the_gate():
     assert _augment(injector, history) == ()
 
 
+def test_a_write_before_the_window_does_not_disarm_the_gate():
+    """Only the last ``gate_turns`` turns are examined. A write earlier in
+    the same exchange leaves the gate armed."""
+    injector = PlanInjector(_store(), gate_turns=3)
+    history = _exchange(_acted("write_file"), *_reads(3))
+
+    assert _augment(injector, history) != ()
+
+
 def test_bash_does_not_count_as_progress():
     """It is how you run a script and how you grep; counting it disarms
     the gate for a model that is only exploring."""
@@ -208,6 +217,17 @@ def test_a_turn_that_only_talked_counts_as_a_turn():
     resumed = _exchange(*_reads(2), _said("still looking"))
 
     assert _augment(injector, resumed) != ()
+
+
+def test_a_turn_with_parallel_calls_counts_once():
+    """Two turns of two read-only calls each are two turns, one short of
+    the threshold."""
+    injector = PlanInjector(_store(), gate_turns=3)
+    history = _exchange(
+        _acted("read_file", "read_file"), _acted("read_file", "read_file")
+    )
+
+    assert _augment(injector, history) == ()
 
 
 def test_a_history_with_no_user_message_is_counted_whole():
