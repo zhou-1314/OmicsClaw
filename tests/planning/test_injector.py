@@ -45,12 +45,29 @@ def _said(text: str = "thinking") -> Message:
     return Message(role=Role.ASSISTANT, content=text)
 
 
+def _exchange(*turns: Message, ask: str = "do the analysis") -> tuple[Message, ...]:
+    """One exchange as the engine records it.
+
+    The user's message, then each model turn followed by one
+    ``Role.TOOL`` result for every call the turn made.
+    """
+    messages: list[Message] = [Message.user(ask)]
+    for turn in turns:
+        messages.append(turn)
+        messages.extend(
+            Message.tool(tool_call_id=call.id, name=call.name, content="…output…")
+            for call in turn.tool_calls
+        )
+    return tuple(messages)
+
+
+def _reads(count: int) -> tuple[Message, ...]:
+    return tuple(_acted("read_file") for _ in range(count))
+
+
 def _read_only_turns(count: int) -> tuple[Message, ...]:
-    turns: list[Message] = [Message(role=Role.USER, content="do the analysis")]
-    for _ in range(count):
-        turns.append(_acted("read_file"))
-        turns.append(Message(role=Role.USER, content="…file contents…"))
-    return tuple(turns)
+    """One exchange in which the model read a file *count* times."""
+    return _exchange(*_reads(count))
 
 
 # ---- the plan block ------------------------------------------------------
@@ -127,8 +144,8 @@ def test_the_gate_does_not_fire_early():
 
 def test_the_gate_fires_at_most_once_per_exchange():
     injector = PlanInjector(_store(), gate_turns=2)
-    _augment(injector, _read_only_turns(5))
 
+    assert _augment(injector, _read_only_turns(5)) != ()
     assert _augment(injector, _read_only_turns(9)) == ()
 
 
@@ -154,14 +171,14 @@ def test_a_completed_plan_still_counts_as_having_planned():
 
 def test_a_recent_write_disarms_the_gate():
     injector = PlanInjector(_store(), gate_turns=3)
-    history = (*_read_only_turns(3), _acted("write_file"))
+    history = _exchange(*_reads(3), _acted("write_file"))
 
     assert _augment(injector, history) == ()
 
 
 def test_a_recent_plan_write_disarms_the_gate():
     injector = PlanInjector(_store(), gate_turns=3)
-    history = (*_read_only_turns(3), _acted("plan_write"))
+    history = _exchange(*_reads(3), _acted("plan_write"))
 
     assert _augment(injector, history) == ()
 
@@ -170,7 +187,7 @@ def test_bash_does_not_count_as_progress():
     """It is how you run a script and how you grep; counting it disarms
     the gate for a model that is only exploring."""
     injector = PlanInjector(_store(), gate_turns=2)
-    history = (_acted("bash"), _acted("bash"), _acted("bash"))
+    history = _exchange(_acted("bash"), _acted("bash"), _acted("bash"))
 
     assert _augment(injector, history) != ()
 
@@ -179,10 +196,96 @@ def test_progress_tools_are_the_two_that_change_the_workspace():
     assert PROGRESS_TOOL_NAMES == frozenset({"write_file", "edit_file"})
 
 
-def test_a_turn_that_only_talked_counts_as_read_only():
+def test_a_turn_that_only_talked_counts_as_a_turn():
+    """Every assistant message is one turn, with or without a tool call.
+
+    The engine ends a run at a turn that calls no tool, so a later call
+    finds one behind it only when a caller continues the conversation
+    without a new user message. The request is then still the same one,
+    and the turn that only talked is one more turn spent on it.
+    """
+    injector = PlanInjector(_store(), gate_turns=3)
+    resumed = _exchange(*_reads(2), _said("still looking"))
+
+    assert _augment(injector, resumed) != ()
+
+
+def test_a_history_with_no_user_message_is_counted_whole():
     injector = PlanInjector(_store(), gate_turns=2)
 
-    assert _augment(injector, (_said(), _said())) != ()
+    assert _augment(injector, (_acted("bash"), _acted("bash"))) != ()
+
+
+# ---- which turns the gate counts -----------------------------------------
+
+
+def test_one_line_answers_in_earlier_exchanges_do_not_arm_the_gate():
+    """A chat of short answers has no exploration to interrupt.
+
+    Each earlier exchange is one question and one turn that only talked.
+    None of those turns belongs to the request the model is about to
+    answer.
+    """
+    injector = PlanInjector(_store(), gate_turns=3)
+    chat = _exchange(_said("2"), ask="1+1?") * 5
+
+    assert _augment(injector, (*chat, *_exchange(ask="and 2+3?"))) == ()
+
+
+def test_reading_in_earlier_exchanges_does_not_arm_the_gate():
+    injector = PlanInjector(_store(), gate_turns=3)
+    earlier = _exchange(*_reads(6), _said("found it"))
+
+    assert _augment(injector, (*earlier, *_exchange(ask="and the other file?"))) == ()
+
+
+def test_a_new_exchange_starts_its_own_count():
+    """One turn short of the threshold, whatever the session did before."""
+    injector = PlanInjector(_store(), gate_turns=3)
+    earlier = _exchange(*_reads(6), _said("found it"))
+
+    assert _augment(injector, (*earlier, *_read_only_turns(2))) == ()
+
+
+def test_enough_read_only_turns_in_a_later_exchange_fire_the_gate():
+    injector = PlanInjector(_store(), gate_turns=3)
+    earlier = _exchange(*_reads(6), _said("found it"))
+
+    appended = _augment(injector, (*earlier, *_read_only_turns(3)))
+
+    assert [m.content for m in appended] == [PLANNING_GATE_TEXT]
+
+
+def test_a_write_in_an_earlier_exchange_does_not_disarm_this_one():
+    injector = PlanInjector(_store(), gate_turns=3)
+    earlier = _exchange(_acted("write_file"), _said("written"))
+
+    assert _augment(injector, (*earlier, *_read_only_turns(3))) != ()
+
+
+def test_reading_after_a_write_in_an_earlier_exchange_is_not_counted_here():
+    """The earlier exchange wrote a file, read twice and answered.
+
+    Its last three turns hold no write. They are still not this
+    exchange's turns, and this exchange has made one.
+    """
+    injector = PlanInjector(_store(), gate_turns=3)
+    earlier = _exchange(_acted("write_file"), *_reads(2), _said("checked"))
+
+    assert _augment(injector, (*earlier, *_read_only_turns(1))) == ()
+
+
+def test_turns_after_a_compaction_summary_are_counted():
+    """A summary stands where the request was once compaction replaced it.
+
+    The turns kept after it are the ones the model can still see, and
+    enough of them fire the gate.
+    """
+    injector = PlanInjector(_store(), gate_turns=3)
+    summary = Message.user("[Context Compaction]\n## Anchors\n…")
+    kept = _read_only_turns(3)[1:]
+
+    assert _augment(injector, (summary, *kept)) != ()
 
 
 def test_zero_turns_disables_the_gate_and_leaves_the_block():

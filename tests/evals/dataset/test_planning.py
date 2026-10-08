@@ -40,9 +40,24 @@ def _read_only_exploration():
     )
 
 
+def _three_short_answers():
+    return ScriptedProvider(
+        ScriptedTurn(text="2"),
+        ScriptedTurn(text="5"),
+        ScriptedTurn(text="Paris"),
+    )
+
+
 def _plan_files(result) -> int:
     plans = result.workspace / ".omicsclaw" / "plans"
     return sum(1 for path in plans.rglob("*") if path.is_file()) if plans.is_dir() else 0
+
+
+def _gate_texts_sent(result) -> int:
+    return sum(
+        occurrences(result, PLANNING_GATE_TEXT, call=call)
+        for call in range(len(result.provider_calls))
+    )
 
 
 CASES = [
@@ -64,6 +79,15 @@ CASES = [
         CountIs("gate text on call 3", lambda r: occurrences(r, PLANNING_GATE_TEXT, call=3), 0),
         CountIs("gate text on call 1", lambda r: occurrences(r, PLANNING_GATE_TEXT, call=1), 0),
         files={"a.txt": "alpha\n", "b.txt": "beta\n"},
+        config={"planning_gate_turns": 2},
+    ),
+    seed(
+        "planning/gate_ignores_earlier_exchanges",
+        "What is 1+1? Answer with the number only.",
+        _three_short_answers,
+        CountIs("model calls", lambda r: len(r.provider_calls), 3),
+        CountIs("gate text on any call", _gate_texts_sent, 0),
+        followups=("And 2+3?", "What is the capital of France?"),
         config={"planning_gate_turns": 2},
     ),
 ]
