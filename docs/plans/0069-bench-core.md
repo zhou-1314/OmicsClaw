@@ -102,7 +102,7 @@ $P -m omicsclaw.bench grade bench/example/manifest.toml --cases <cases> --out <o
 
 ## 8. 验证证据
 
-- `rapids_singlecell` 的 python 跑 `-m pytest -q -p no:randomly tests/bench`：151 passed，22 秒；`OmicsClaw` 环境（Python 3.11，editable 安装指向主检出）下同样 151 passed。其中 `test_oc_cli_contract.py` 起 9 个真实 `oc cli` 进程（脚本化后端），`test_example_suite.py` 用仓库里的 manifest 走完四个子命令。
+- `rapids_singlecell` 的 python 跑 `-m pytest -q -p no:randomly tests/bench`：151 passed，26 秒；`OmicsClaw` 环境（Python 3.11，editable 安装指向主检出）下同样 151 passed。其中 `test_oc_cli_contract.py` 起 9 个真实 `oc cli` 进程（脚本化后端），`test_example_suite.py` 用仓库里的 manifest 走完四个子命令。
 - `tests/launch/test_grammar.py` 和分层守卫共 6 个文件：211 passed，1 skipped，29 秒（`MODULE_GUARDS` 登记了 `bench/__main__.py`；登记前这个测试是红的）。顶层 `tests/test_*.py`：224 passed，8 skipped，1 deselected，1 xpassed，36 秒；xpassed 是 `tests/ci_known_failures.txt` 里标了 `env` 的那条，与本分支无关。
 - 变异验证 23 处，逐个改坏、跑对应测试、还原并确认工作树干净，全部变红：续跑、`--retry-infra`（两个方向）、改名保留、只拷 `public/`、`meta/` 位置、基础设施失败优先级、非零退出、子代理报错、用量含子代理、停止原因、审批卡片、源码根、审计打标（两处）、自检（三处）、健康检查、基础设施失败不判分、残留进程清理、stdin、各臂交错。第一轮"源码根"那条没红，原因是测试用的后端垫片自己改了 `sys.path`，已修。
 - 真实冒烟（deepseek-v4-flash，凭据经 `--env-file` 传入）。产物在 `/tmp/claude-0/-workspace-dataset-private-zhouwg-data-OmicsClaw/c9ac411b-8fa2-4e24-a998-5f5f8f957642/scratchpad/bench-smoke/runs/`：`smoke3` 是仓库里的示例 manifest 在 `57686cb0` 上走 stage、run、grade，两次运行都 `completed` 并判为通过，各 4 次模型调用，输入 61,538 和 61,605 token（缓存 56,832），输出 226 和 349，墙钟 16.9 秒；`smoke2` 先用错误的 key 跑，真实后端返回 401，记为 `infra_failure`（4.2 秒），再 `--retry-infra` 得到 `completed`（43.6 秒，即 §5 那次委派运行），第一次尝试留在 `r1.infra1`。84 个产物文件里没有搜到 API key。

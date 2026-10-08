@@ -36,7 +36,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCENARIOS = (
     "write", "subagent", "subfail", "fail", "loop", "danger", "web", "sleepy", "hang",
 )
-WALL_CLOCK_S = 6
+WALL_CLOCK_S = 10
+"""Budget of every scenario. Two of them run into it on purpose, so it sets
+this module's duration. The ``sleepy`` scenario must get its first model
+answer before it runs out; a process starts in well under a second here,
+and the rest is room for a loaded CI runner."""
 
 MANIFEST = """\
 name = "contract"
