@@ -30,14 +30,18 @@ from omicsclaw.entry.cli import Repl, ScriptedSource, Screen
 from omicsclaw.entry.session import SessionRegistry, attach_sessions
 from omicsclaw.memory import SqliteSessionStore, StoredSession
 from omicsclaw.planning import PLAN_WRITE_TOOL_NAME
-from omicsclaw.schema import Message, Role, ToolCall
+from omicsclaw.schema import Message, Role, ToolCall, Usage
 from tests.entry.test_cli_repl import (  # type: ignore[import-not-found]
     WAIT_S,
     answering,
     build,
     repl_over,
 )
-from tests.entry.test_session import Canned  # type: ignore[import-not-found]
+from tests.entry.test_session import (  # type: ignore[import-not-found]
+    Canned,
+    Metered,
+    delegating,
+)
 from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]
     Scripted,
     Sleeping,
@@ -641,6 +645,101 @@ def test_compact_is_refused_while_this_conversation_is_busy(tmp_path):
     assert "This conversation is busy" in printed
     assert "Compacted:" not in printed
     assert "Nothing to compact" not in printed
+
+
+# ---- /usage -----------------------------------------------------------
+
+
+def _usage_lines(printed: str) -> list[str]:
+    """The lines ``/usage`` printed, without the padding a console adds."""
+    return [
+        line.rstrip()
+        for line in printed.splitlines()
+        if line.startswith("Session total")
+    ]
+
+
+def _says(text: str) -> Message:
+    return Message(role=Role.ASSISTANT, content=text)
+
+
+def test_usage_without_a_delegation_is_the_main_agent_s_total_and_nothing_else(
+    tmp_path,
+):
+    """The line as it read before sub-agents were counted, character for
+    character: no delegation happened, so nothing is added to it."""
+
+    async def drive():
+        app = build(
+            tmp_path,
+            Metered((_says("answered"), Usage(12, 3))),
+        )
+        printed = await drive_repl(app, ["hello", "/usage", "/exit"])
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return printed
+
+    assert _usage_lines(asyncio.run(drive())) == ["Session total: 12 in / 3 out"]
+
+
+def test_usage_adds_what_a_sub_agent_spent_and_names_its_share(tmp_path):
+    """The total is the session's whole cost, and the sub-agent's part of it
+    is repeated beside it."""
+
+    async def drive():
+        app = build(
+            tmp_path,
+            Metered(
+                (delegating(), Usage(100, 10)),
+                (_says("the child concluded"), Usage(7, 3)),
+                (_says("answered"), Usage(200, 20)),
+            ),
+        )
+        printed = await drive_repl(app, ["go", "/usage", "/exit"])
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return printed
+
+    assert _usage_lines(asyncio.run(drive())) == [
+        "Session total: 307 in / 33 out (sub-agents: 7 in / 3 out)"
+    ]
+
+
+def test_usage_keeps_a_sub_agent_s_tokens_when_the_exchange_is_cancelled_later(
+    tmp_path,
+):
+    """The delegation finishes, then ``Ctrl-C`` lands while the parent is in
+    a tool. The parent's second turn never ended and is not counted; the
+    sub-agent's turn had, and is.
+
+    Mutation: make ``Repl._count_delegated`` return when
+    ``handle.outcome`` is ``None``, as reading the count off the outcome
+    would. The sub-agent's share disappears from this line.
+    """
+
+    async def drive():
+        sleeping = Sleeping()
+        app = build(
+            tmp_path,
+            Metered(
+                (delegating(), Usage(100, 10)),
+                (_says("the child concluded"), Usage(7, 3)),
+                (calling("sleep"), Usage(200, 20)),
+            ),
+            tools=(sleeping,),
+        )
+        repl, _source, buffer = repl_over(app, ["go", "/usage", "/exit"])
+        loop = asyncio.create_task(repl.run())
+        await asyncio.wait_for(sleeping.entered.wait(), WAIT_S)
+        assert repl.interrupt() is True
+        await asyncio.wait_for(loop, WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return buffer.getvalue()
+
+    printed = asyncio.run(drive())
+
+    assert "Cancelled." in printed
+    assert _usage_lines(printed) == [
+        "Session total: 107 in / 13 out (sub-agents: 7 in / 3 out)"
+    ]
 
 
 # ---- /plan and /tasks -------------------------------------------------
