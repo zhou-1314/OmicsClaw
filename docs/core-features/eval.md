@@ -4,7 +4,7 @@
 
 ```
 开发阶段 ──→ Test（确定性测试）      ScriptedProvider + Assertion
-CI 阶段  ──→ Eval（脚本化用例集）    29 个用例 + Quality Gate（全部通过）
+CI 阶段  ──→ Eval（脚本化用例集）    30 个用例 + Quality Gate（全部通过）
 生产阶段 ──→ Observability（追踪）  OTEL Traces + Metrics → Langfuse
 ```
 
@@ -251,7 +251,7 @@ def test_case(case, tmp_path, eval_results):
 
 ## 2. Eval 子系统：用例集
 
-### 2.1 当前用例（29 个）
+### 2.1 当前用例（30 个）
 
 用例在 `tests/evals/dataset/test_<category>.py`，写成 Python 代码。每条默认都带 `NoWriteOutside()`。
 
@@ -262,6 +262,7 @@ def test_case(case, tmp_path, eval_results):
 | `tool_calling` | `parallel_read_only_calls` | 一轮两个 `read_file`，两条观测按请求顺序进入下一次请求 |
 | `planning` | `plan_then_execute` | `plan_write` 写计划并逐步更新，下一次请求末尾带计划块 |
 | `planning` | `gate_nudges_read_only_exploration` | 连续两轮只读、不写计划，第三次请求恰好带一次 planning gate 提示，第四次不再带 |
+| `planning` | `gate_ignores_earlier_exchanges` | 同一会话连续三次一句话问答（`planning_gate_turns = 2`），三次请求都不带 planning gate 提示 |
 | `context` | `tool_error_is_observation` | 读不存在的文件得到 `is_error` 观测，循环继续并收敛 |
 | `context` | `history_carried_across_exchanges` | 第二次交换带上第一次的问答，而且只有一条 system 消息 |
 | `error_handling` | `provider_error_fails_exchange` | 400 错误不重试，交换以失败结束，只调用一次 |

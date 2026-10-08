@@ -289,7 +289,7 @@ augmentor=build_augmentor(app, session_id=session_id) if plan_block else None
 
 ## 8. 规划闸门（Planning Gate）
 
-长时间只读探索、既不写计划也不改动任何东西的运行，会在某次模型调用前收到一次提醒：
+一个 exchange 里长时间只读探索、既不写计划也不改动任何东西，会在某次模型调用前收到一次提醒：
 
 ```python
 DEFAULT_GATE_TURNS = 8
@@ -305,16 +305,18 @@ PROGRESS_TOOL_NAMES = frozenset({"write_file", "edit_file"})
 
 1. 本 exchange 尚未提醒过，且 `gate_turns > 0`；
 2. 计划为空（`store.is_empty`）——有计划的会话每轮都已被告知计划，再催它写计划既错又乱；这也覆盖了从上一个会话恢复的计划；
-3. 从视图末尾往前数，**最近 `gate_turns` 条 assistant 消息**都没有调用 `plan_write` 或 `PROGRESS_TOOL_NAMES` 中的工具；
-4. 视图中可见的 assistant 消息少于 `gate_turns` 条时不触发。
+3. 只数本 exchange 的模型轮次。从视图末尾往前数，遇到第一条 user 消息就停：它是开启本 exchange 的用户输入，或者是压缩留在它位置上的摘要。工具结果是 `Role.TOOL` 消息，不会让计数停下；视图里没有 user 消息时整段都数；
+4. 这段里**最近 `gate_turns` 条 assistant 消息**都没有调用 `plan_write` 或 `PROGRESS_TOOL_NAMES` 中的工具。不带工具调用的 assistant 消息也算一轮；
+5. 这段里的 assistant 消息少于 `gate_turns` 条时不触发。
 
-对组学分析的含义：**`bash` 不算进展**。它既是跑 skill 脚本的方式，也是 `grep` / `ls` 的方式，算作进展会让只在探索的模型永远不被提醒。因此一个连续 8 个 turn 只用 `bash` 查看 `.h5ad`、跑 `--help`、读 SKILL.md 而没有写计划的运行会被提醒一次。
+对组学分析的含义：**`bash` 不算进展**。它既是跑 skill 脚本的方式，也是 `grep` / `ls` 的方式，算作进展会让只在探索的模型永远不被提醒。因此同一个 exchange 里连续 8 个 turn 只用 `bash` 查看 `.h5ad`、跑 `--help`、读 SKILL.md 而没有写计划，会被提醒一次。
 
 阈值为 8，约占部署轮次预算（`EngineConfig.max_turns = 50`）的六分之一；它明显长于一个普通组学问答所需的几个 turn，不会教模型为单步任务写计划。
 
 闸门看的是**窗口**，不是计数器：
+- 窗口不跨 exchange。之前的 exchange 读过多少轮、答过多少句都不计入，所以一串一句话问答的会话不会被提醒；
 - 压缩把尾部换掉后可见的 assistant 消息可能不足 8 条，此时不触发。接受这一点：刚压缩意味着模型刚拿到新摘要，那一轮不是追加指令的好时机；
-- 20 个 turn 前编辑过文件、之后一直在读的模型，仍会被提醒；每 exchange 至多一次的约束防止它变成重复骚扰。
+- 同一个 exchange 里 20 个 turn 前编辑过文件、之后一直在读的模型，仍会被提醒；每 exchange 至多一次的约束防止它变成重复骚扰。
 
 `planning_gate_turns = 0` 关闭闸门，计划块照常注入。
 
@@ -492,7 +494,7 @@ plan_write [{a, completed}, {b, completed}]            （两者先前都是 pen
 | 配置 | 命令行 / 环境变量 | 默认 | 说明 |
 |------|------------------|------|------|
 | `AppConfig.planning` | `--planning` / `OMICSCLAW_PLANNING` | `True` | 一个开关三件事：挂载 `plan_write`、加 `## Planning` 段、注入计划块 |
-| `AppConfig.planning_gate_turns` | `--planning-gate-turns` / `OMICSCLAW_PLANNING_GATE_TURNS` | `DEFAULT_GATE_TURNS = 8` | 规划闸门窗口；`0` 关闭闸门但保留其余规划功能。提高 `max_turns` 时应同步提高 |
+| `AppConfig.planning_gate_turns` | `--planning-gate-turns` / `OMICSCLAW_PLANNING_GATE_TURNS` | `DEFAULT_GATE_TURNS = 8` | 规划闸门窗口，按单个 exchange 内的模型轮次计；`0` 关闭闸门但保留其余规划功能。提高 `max_turns` 时应同步提高 |
 | `AppConfig.plans_root()` | 不可单独配置 | `<workspace>/.omicsclaw/plans` | 与卸载结果、压缩记录同一个状态目录 |
 | `MAX_DIRECT_COMPLETIONS` | 常量 | `1` | 一次写入允许的直接完成数 |
 | `EngineConfig.max_turns` | — | `50` | 闸门阈值的推导依据 |
@@ -505,7 +507,7 @@ plan_write [{a, completed}, {b, completed}]            （两者先前都是 pen
 
 1. **计划块不计入压缩预算。** 它在压缩之后追加，压缩器测量时看不到它；条目内容长度没有上限（只靠工具描述要求"一个条目一个动作"），模型往 `content` 里塞长段落会直接增加每次调用的 token（plan 0039 §5）。
 2. **多挂一个工具会移动上下文预算。** `plan_write` 的声明计入 `reserve_tool_tokens`，默认开启让每个部署的可用窗口略小、压缩档位触发点略前移；预算卡得很紧的测试对工具数量敏感（plan 0039 §5、§8.4）。
-3. **规划闸门在压缩后可能不触发。** 窗口依赖可见的 assistant 消息数，压缩刚把尾部换掉时凑不满 `gate_turns`（plan 0039 §4.4）。
+3. **规划闸门在压缩后可能不触发，不带摘要的截断后可能提前触发。** 窗口依赖可见的 assistant 消息数，压缩刚把尾部换掉时凑不满 `gate_turns`（plan 0039 §4.4）。有两种截断可能丢掉本 exchange 开头的 user 消息而不留摘要：EMERGENCY 截断，以及 SOFT、FULL 档在摘要器失败（抛错，或超时后返回空串）时走的降级截断。计数这时会越过原来的位置，数到更早的一条 user 消息为止，提醒因此可能提前，仍是每 exchange 至多一次。降级截断的结果只用于当次模型调用，不写回历史（plan 0039 §9.5）。
 4. **单进程写者假设。** `PlanBook` 每会话只读一次归档；两个进程写同一 workspace 的同一会话计划会静默互相覆盖，没有任何报错（`book.py` docstring、plan 0039 §8.5）。
 5. **`forget` 没有调用者。** `SessionRegistry._evict_sessions` 淘汰空闲会话时不通知 `PlanBook`，book 中的 store 字典随进程内接触过的会话数增长。
 6. **计划文件没有清理。** 没有删除 `plans/<session>.json` / `.md` 的入口；目录权限按 umask（文件本身是 0600）。
@@ -525,7 +527,7 @@ plan_write [{a, completed}, {b, completed}]            （两者先前都是 pen
 | `tests/planning/test_plan.py` | `PlanStore` 读写、restore 不触发 sink、`active_count`、并发 |
 | `tests/planning/test_rules.py` | 防作弊阈值、`cancelled → completed`、合并保留 / 裁剪、顺序稳定、重复 id |
 | `tests/planning/test_tool.py` | 读 / 写模式、`steps=[]` 为读、参数错误带下标、会话解析、policy |
-| `tests/planning/test_injector.py` | 注入块与闸门的条件、顺序、至多一次 |
+| `tests/planning/test_injector.py` | 注入块与闸门的条件、顺序、至多一次、只数本 exchange 的轮次 |
 | `tests/planning/test_render.py` | `format_plan` 只含活跃条目、`render_document` 四种标记 |
 | `tests/planning/test_archive.py` | 原子写（在 `os.replace` 注入失败）、JSON 先于 Markdown、坏文件整体拒绝 |
 | `tests/planning/test_book.py` | 每会话隔离、首次恢复、空 id 不持久化、错误 sink |

@@ -9,8 +9,8 @@ Two things are appended, in this order, and both only to the copy that is
 sent:
 
 1. the **planning gate** — one nudge, at most once per exchange, when the
-   model has been reading for a long time without writing a plan or
-   touching anything;
+   model has spent many turns of that exchange reading without writing a
+   plan or touching anything;
 2. the **plan block** — every outstanding item, verbatim, with a header
    saying it outranks whatever the history now says.
 
@@ -49,7 +49,7 @@ __all__ = [
 
 
 DEFAULT_GATE_TURNS = 8
-"""Consecutive read-only model turns before the planning gate fires.
+"""Consecutive read-only model turns in one exchange before the planning gate fires.
 
 **Re-derived, not ported.** The reference harness uses 12, and says why
 (``cmd/swebench/runner.go:52-55``): 12 is offset from its stall window of
@@ -177,6 +177,18 @@ class PlanInjector:
     def _gate_fires(self, history: Sequence[Message]) -> bool:
         """Whether this call should carry the nudge.
 
+        Only the model turns of the current exchange are counted. The
+        count runs from the end of *history* back to the nearest user
+        message, which is the request that opened the exchange or the
+        summary a compaction left in its place. Tool results are
+        ``Role.TOOL`` messages and do not end it. A history with no user
+        message is counted whole.
+
+        A compaction that truncates without summarizing can drop the
+        request and leave no summary. That is an emergency truncation, or
+        the fallback the soft and full tiers take when the summarizer
+        fails. The count then reaches back to an older user message.
+
         Four conditions, and the first three are all ways of saying "this
         would be noise":
 
@@ -187,18 +199,19 @@ class PlanInjector:
           (``loop_phases.go:255``) expressed as a fact about the store
           instead of as a flag, which means it also covers a plan
           restored from a previous session;
-        - fewer than :attr:`_gate_turns` model turns are visible — either
-          the exchange has just started, or a compaction just replaced
-          the ones that were. **The consequence is stated in plan 0039
-          §4.4 rather than fixed**: the reference harness counts in the
-          engine, so its counter survives a compaction and can fire
-          where this cannot. Accepted, because a compaction has just
-          handed the model a fresh summary, and that is the one turn on
-          which an extra instruction is least likely to help.
+        - fewer than :attr:`_gate_turns` model turns of this exchange are
+          visible — either the exchange has just started, or a compaction
+          just replaced the ones that were. **The consequence is stated
+          in plan 0039 §4.4 rather than fixed**: the reference harness
+          counts in the engine, so its counter survives a compaction and
+          can fire where this cannot. Accepted, because a compaction has
+          just handed the model a fresh summary, and that is the one turn
+          on which an extra instruction is least likely to help.
 
         The fourth is the actual test: none of the last :attr:`_gate_turns`
-        assistant turns called ``plan_write`` or a
-        :data:`PROGRESS_TOOL_NAMES` tool.
+        assistant turns of this exchange called ``plan_write`` or a
+        :data:`PROGRESS_TOOL_NAMES` tool. An assistant message is one
+        turn whether or not it called a tool.
 
         That fourth condition is a **window**, where the reference
         harness's counter is permanent — a model that edited a file
@@ -213,6 +226,10 @@ class PlanInjector:
             return False
         seen = 0
         for message in reversed(history):
+            if message.role is Role.USER:
+                # The request that opened this exchange, or the summary
+                # a compaction left in its place.
+                return False
             if message.role is not Role.ASSISTANT:
                 continue
             for call in message.tool_calls:

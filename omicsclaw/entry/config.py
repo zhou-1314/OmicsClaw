@@ -264,7 +264,8 @@ class AppConfig:
     that defaults to off is a mode with extra steps."""
 
     planning_gate_turns: int = DEFAULT_GATE_TURNS
-    """Consecutive read-only turns before the model is nudged to plan.
+    """Consecutive read-only turns in one exchange before the model is
+    nudged to plan. Turns of earlier exchanges are not counted.
 
     ``0`` disables the nudge and leaves the rest of planning intact,
     which is what a surface with its own idea of when to interrupt should

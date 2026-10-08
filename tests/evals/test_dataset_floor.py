@@ -12,7 +12,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-BASELINE = 29
+BASELINE = 30
 CATEGORIES = {
     "tool_calling",
     "planning",

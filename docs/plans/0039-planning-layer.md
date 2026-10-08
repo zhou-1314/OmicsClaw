@@ -1,6 +1,6 @@
 # 计划 0039 — `omicsclaw/planning/`：Agent 原生的执行计划层
 
-**状态**：已实现，两轮独立只读审核已完成，返工已合入（见 §8）。
+**状态**：已实现，两轮独立只读审核已完成，返工已合入（见 §8）。2026-10-08 的规划闸门修正见 §9。
 **参考实现**：harness9 `internal/planning/`、`internal/tools/plan_write.go`、
 `internal/engine/loop_phases.go`（4b''/4c/checkpointPlan/savePlan）、
 `internal/hooks/plan_writer.go`。
@@ -150,6 +150,7 @@ Desktop 的计划面板）复用而不需要绕道工具。
    **代价写在 docstring 里**：压缩把尾部换掉之后，可见的 assistant 消息可能
    不足 K 条，此时不触发——参考实现的计数器会照常触发。这个差异是可接受的：
    压缩刚发生意味着模型刚拿到一份新摘要，那一轮不是催规划的好时机。
+   2026-10-08 补充：这 K 条只在本次交换的轮次里数，见 §9。
 5. **`cancelled → completed` 的拒绝措辞带上恢复路径**，与参考实现一致；
    但"一次最多 1 个直接完成"的阈值**连同它的理由一起**抄进了 docstring：
    阈值取 1 而非 0 是为了保住"真干完了一件事就直接标完成"的正常用法。
@@ -293,3 +294,109 @@ compactor，却没有传给工具——于是工具写进匿名 store、注入�
 并对扫到什么下断言的测试，在多会话共写的树里是环境依赖的。**
 
 除 `tests/launch/` 外全栈 = **3,554 passed, 6 skipped**，无失败。
+
+## 9. 2026-10-08：规划闸门只数本次交换的轮次
+
+### 9.1 现象
+
+没有计划的会话，只要最近 8 条 assistant 消息里没有 `plan_write`、`write_file`、`edit_file`，
+之后每次交换的第一次模型调用都带 `PLANNING_GATE_TEXT`，用户只问一句话也一样。
+真实会话（DeepSeek，CLI，一次交换一个进程，同一个 `--session`）里有三种情况：
+
+- 13 次一句话问答、没有工具调用：第 9 到 13 次交换的请求都带闸门文本，模型在其中
+  几次的思考里讨论要不要照做；
+- 18 次交换的读写混合会话：第 10、11、12、17、18 次交换带闸门文本，其中两次模型在
+  答复正文里向用户解释为什么不建计划；
+- 单次交换里连续 12 条 `bash echo`：第 9 次模型调用带闸门文本，模型写了计划。这一条
+  是设计内的行为。
+
+### 9.2 原因
+
+`PlanInjector._gate_fires` 从 `history` 末尾往前数 assistant 消息，没有在本次交换的
+user 消息处停下，数的是整段会话，纯文字回答也算一条。"每次交换至多一次"的 `_nudged`
+记在注入器上，注入器每次交换重建（`entry/planning.py` 的 `build_injector`），所以每次
+交换都能再触发一次。§4 第 4 条只写了"视图尾部的 K 条 assistant 消息"，没有写窗口从
+哪里开始。
+
+`tests/planning/test_injector.py` 的辅助函数把工具结果建成 user 消息，引擎写进历史的是
+`Role.TOOL` 消息，用例里也没有跨交换的历史，所以测试一直是绿的。
+
+### 9.3 改动
+
+`_gate_fires` 往回数时遇到第一条 user 消息就返回不触发。交换内的行为没有变：同一次
+交换里连续 `gate_turns` 轮没有 `plan_write` 和进展工具仍然提醒一次；已有计划、
+`gate_turns <= 0`、压缩后可见轮次不足都不提醒；不带工具调用的 assistant 消息仍算一轮。
+
+会进入持久历史的 user 消息只有两种，都适合做边界：
+
+| 来源 | 位置 | 往回数到它时 |
+|---|---|---|
+| 本次交换的用户输入（`engine/loop.py` 的 `_opening`；CLI 的 shell 记录拼在同一条里） | 本次交换所有模型轮次之前 | 数到的正好是本次交换的轮次 |
+| 压缩摘要（`context/summary.py` 的 `build_compaction_message`） | 紧跟 system 消息，后面全是原样保留的尾部 | 用户输入还在尾部时先遇到用户输入；已被摘要替换时在摘要处停，数到的是摘要之后可见的轮次，和 §4 第 4 条的压缩后行为一致 |
+
+其余的 user 消息不在 `_gate_fires` 看到的 `history` 里。闸门文本、计划块和记忆提醒只进
+发送副本，`AugmentorChain` 给每个成员的是同一份未追加的历史。摘要器、Desktop 标题、
+provider 探测和子代理各有自己的对话，不经过 `PlanInjector`。工具结果和压缩补的占位
+都是 `Role.TOOL`。`SqliteSessionStore` 按原角色读回历史。
+
+CLI、Desktop、channel 都拒绝空消息，compaction-only 的交换不调模型，所以三个 surface 上
+每次带模型调用的交换都以一条 user 消息开头。库调用方用 `run_turn(app, history)` 而不给
+`user_text` 时没有新的 user 消息，计数会接着上一次交换往下数；请求没有换，按同一次
+请求算。引擎在不带工具调用的轮次上结束运行，所以只有这种续跑能让一条纯文字回答后面
+还有模型调用。
+
+另一种边界是让注入器自己数 `augment` 被调用的次数，没有采用。它不依赖历史的形状，
+但要求注入器恰好活一次交换、每次模型调用恰好被问一次，闸门也不再只由模型当前能看到
+的内容决定。
+
+测试：辅助函数改成引擎的历史形状。新增 11 条单元用例，其中 4 条在修复前的代码上是红的
+（之前的交换全是纯文字回答、之前的交换有很多只读轮次、新交换差一轮不触发、前一次
+交换写文件之后的只读轮次不计入），最后 2 条是独立审核之后补的（见 §9.4）。
+`test_a_turn_that_only_talked_counts_as_read_only`
+原来用两条相邻的纯文字回答触发闸门，改写成 `test_a_turn_that_only_talked_counts_as_a_turn`，
+放进一次没有新 user 消息的续跑里。新增脚本化 eval `planning/gate_ignores_earlier_exchanges`：
+经 `SessionRegistry` 连续三次一句话问答，任何请求都不带闸门文本；它在修复前也是红的。
+`BASELINE` 调到 30。
+
+### 9.4 证据
+
+- 同一组 13 条一句话提示，DeepSeek，CLI，一次交换一个进程，同一个 `--session`，临时
+  工作区和临时 HOME。`main`（`68970e06`）：13 次模型调用里 5 次带闸门文本，在第 9 到
+  13 次交换。修复后（`a2584028`）：13 次里 0 次，第 13 次交换的请求带着前 12 次问答，
+  说明是同一个会话。每条请求记录都带 import 到的 `omicsclaw/__init__.py` 路径。
+- 正向对照，修复后单次交换连续 12 条 `bash echo`：15 次模型调用，只有第 9 次带闸门
+  文本，模型随后调用了 `plan_write`。
+- 独立审核在 `26054cdb` 上用同一组提示重跑了 18 次交换的读写混合会话：34 次模型调用，
+  0 次带闸门文本，答复正文里没有关于不建计划的解释。`68970e06` 上是 38 次调用里 3 次
+  带闸门文本，在第 11、12、16 次交换，三次的答复正文都出现了这类解释。这两次和 §9.1
+  里的不是同一次运行，模型每次走的轮次不同，触发的位置也不同。
+- 13 处定点变异全部有测试转红，包括去掉边界、把边界放在 `Role.TOOL` 上、计数早一轮
+  和晚一轮。第一轮里"去掉 `gate_turns <= 0` 的判断"没有测试转红，为此补了
+  `test_zero_or_fewer_turns_disable_the_gate_when_there_is_no_plan`。每次变异后文件按
+  SHA-256 核对恢复。
+- 独立审核另做了 31 处变异，25 处转红。存活的 6 处里 4 处是等价变异，2 处是这次修复
+  之前就有的缺口：同一次交换里窗口之前的写入不解除闸门，以及带多个并行调用的
+  assistant 消息只算一轮。为这两处补了
+  `test_a_write_before_the_window_does_not_disarm_the_gate` 和
+  `test_a_turn_with_parallel_calls_counts_once`。用审核方这两处变异的原文重做，补之前
+  两处都存活，补之后各有一条用例转红。
+- `SPEC.md` 第 3 档（`tests/planning`、`tests/entry`、`tests/engine`、分层守卫、顶层
+  `tests/test_*.py`、`tests/evals`）：`main` 上 3206 passed、48 skipped；`a2584028` 上
+  3216 passed、47 skipped，没有失败，两边都是 3 xfailed、1 xpassed。多出的 10 条是当时
+  已有的 8 条新单元用例和 1 条新 eval，加上一条依赖网络的 `conda search` 用例在基线里
+  跳过、这次跑了。需要 fastapi 的四个 Desktop 测试文件在 OmicsClaw 环境里另跑：
+  188 passed、1 skipped。`tests/entry/golden/` 没有变。
+
+### 9.5 已知边角和没验证的部分
+
+- 不带摘要的截断可能丢掉本次交换的用户输入，计数就越过原来的位置，数进更早的交换。
+  闸门因此可能提前提醒，仍是每次交换至多一次。两种情况都用真实的 `compact()` 构造
+  出来了。代码没有改，记在 `_gate_fires` 的 docstring 和
+  `docs/core-features/planning.md` §13。
+  - EMERGENCY 截断：本次交换可见 6 轮，数到 8 轮。
+  - SOFT、FULL 档在摘要器抛错或超时返回空串时走的降级截断，由独立审核构造，实现方
+    复跑结果一致。前一次交换是 9 轮只读加一条答复，本次交换实际 4 轮：SOFT 数到
+    11 轮，FULL 数到 12 轮，`gate_turns=8` 触发。本次交换实际 3 轮时数到 7 轮，不
+    触发。降级截断的结果不写回历史。
+- 真实会话只在 DeepSeek 和 CLI 上跑过。Desktop 和 channel 没有跑真实会话；它们和 CLI
+  一样走 `SessionRegistry` 到 `TurnRunner`，脚本化 eval 覆盖的是这一段共用路径。
