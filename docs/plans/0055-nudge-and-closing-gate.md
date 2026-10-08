@@ -1,6 +1,6 @@
 # 计划 0055 — nudge/gate 家族：组合接缝、收尾提示与记忆提醒
 
-**状态**：第二版（2026-09-23）。经架构审核与 harness9 对照，owner 按推荐裁定，已据此返工。待收敛审核与 owner 过目。未写任何生产代码。
+**状态**：第二版（2026-09-23）。经架构审核与 harness9 对照，owner 按推荐裁定，已据此返工。B1、B3 已于 2026-10-08 交付（分支 `feat/memory-search-and-nudge`，待审核与 owner 验收），交付记录见 §10；B2 `ClosingGate` 未做。
 
 **2026-10-07 核对**：本计划的任务都还没有实现。
 
@@ -320,3 +320,70 @@ helper（S10）；按 surface 区分 nudge 或把它上线格式；自动提取�
 | 第三轮总结论（维持原方案）；O2、M5 行 | 采纳细化（旁证、测试位置、`write_tool` 字符串、组合器语义与位置） | §3.1、§3.2；Q1；B1、B3 |
 | 第三轮 M6 行（保留抑制、方法、收尾 5 未经验证、轮数语义一致） | 采纳 | §2、§3.5、§8 |
 | 第三轮 O3 行"子代理不给 `memory_write`"（缺陷修复 G1） | 已确认：子代理在挂载与触发两层都不会收到记忆提醒 | §3.4；B2 验收 6 |
+
+## 10. 交付记录（2026-10-08：B1、B3，以及 0040 §10-3 的中文检索）
+
+分支 `feat/memory-search-and-nudge`，基线 `90a3bec3`。中文检索、B1、B3 各一个提交，可单独回滚。B2 `ClosingGate` 与 `StallNudge` 没做。
+
+### 10.1 实际做法
+
+B1 按 §3.2：`entry/nudges.py` 提供 `AugmentorChain`、`chain`、`build_augmentor`，`_assemble` 改调 `build_augmentor`。只有规划时，引擎拿到的仍是 `PlanInjector` 实例本身。
+
+B3 按 §3.4：`context/nudge.py` 的 `MemoryNudge` 数历史里最后一次 `memory_write` 之后的 assistant 消息，到 `every` 的倍数时追加一条 user 消息。`build_augmentor` 在 `app.memory` 非空且 `memory_nudge_turns > 0` 时挂上它，排在 `PlanInjector` 之前。旋钮 `memory_nudge_turns` / `--memory-nudge-turns` / `OMICSCLAW_MEMORY_NUDGE_TURNS`，默认 10，`0` 关闭。`quiet` 参数保留，目前没有调用方传它。
+
+中文检索没有用 `tokenize='trigram'`，建表语句不变。写索引时在每个汉字与相邻字符之间插一个空格（`store.py` 的 `_spaced`），默认分词器就把每个汉字当成一个 token。查询里的一串汉字拆成相邻两字的短语，用 `OR` 连接；单个汉字就查这个字；其余部分照旧整词加引号。英文的分词和原来一样。
+
+### 10.2 短查询方案及其代价
+
+两字词是一个两 token 的短语查询，"QC""DE" 仍是整词 token，都走 FTS 索引，没有 `LIKE` 扫描，也没有按长度分叉的路径。笔记里不逐字出现的中文短语（"空间域识别方法"）靠共有的两字对命中，bm25 排序。
+
+不用 trigram 的依据是 15 条笔记、22 条查询的对比（scratch 的 `proto_compare.py`）：旧实现 9 条达标，trigram 加短词 `LIKE` 14 条，本方案 21 条（剩下那条是只有 `%` 的查询，标点不进索引）。trigram 方案丢的是 "DE"（按子串会淹没在 leiden、model 里）、英文整句（"is" 走 `LIKE` 把无关笔记排到前面）、混合词 "leiden聚类" 和 5 条非逐字的中文短语。给它补词边界匹配和两字拆分能追回一部分，但两字对只能全表扫描。
+
+代价（SQLite 3.51.1，内存库，每行约 250 字节的中英混合合成数据）：
+
+| 行数 | 每次打开扫描索引 | 一次性重写旧索引 | 一次 14 字中文查询 |
+|---|---|---|---|
+| 1,000 | 15 ms | 0.14 s | 4 ms |
+| 3,000 | 45 ms | 0.5 s | 8 ms |
+| 10,000 | 150 到 170 ms | 1.8 s | 25 ms |
+
+扫描随索引文本量线性增长，每次构造 `LongTermStore` 都要付。查询数字取自几乎每行都命中的合成数据。两字对匹配偏松："差异分析" 会命中只含"分析"的笔记。汉字在索引里约占原文 1.3 倍的字节。排序上，含汉字的笔记 token 变多，同一个英文词在中英笔记之间的先后可能和以前不同。去重没动。
+
+### 10.3 迁移
+
+没有 DDL。构造 `LongTermStore` 时读一遍索引，找出文本与 `_spaced` 结果不同的行。有这样的行才 `BEGIN IMMEDIATE`，在写锁下重读，按 rowid 删旧行并从 `long_term_memories` 重建；对应条目已删除或已停用的索引行直接丢掉。整个重写是一个事务，失败就回滚并把 `sqlite3.Error` 抛给调用方，下次打开重试。没有旧行的库只读不写，所以不需要版本标记。文件不重建，0600 权限不受影响。
+
+旧版本进程之后写进来的行是未分隔的，新版本下次打开时补上。旧版本读新索引，英文照常。新版本进程运行期间旧版本写入的行，要等新版本下次启动才能按中文子串搜到。
+
+### 10.4 和计划的差异
+
+- §3.2 要把 `_assemble` 的形参 `plan_block` 改名为 `augment`，没改：改名要动 `TurnRunner._sequence` 的调用行，那里另有两个分支在改。
+- `MemoryNudge` 多一条 `every <= 0` 时不提醒的判断，否则取模会除零。`quiet` 只在本该提醒的那次调用上被问到。
+- `MEMORY_NUDGE_TEXT` 照 §3.4 原文，含破折号；它是发给模型的文本，没有过 humanizer。
+- `.env.example` 的新变量放在 `OMICSCLAW_MEMORY` 下一行，和 `OMICSCLAW_PLANNING_GATE_TURNS` 隔一行，避开别的分支在节尾的追加。
+- §5 末尾要求同步 README 里程碑、`FRAMEWORK-REBUILD.md`、0030 §11.B-12 与 0035 的指向，这次没做；改了本文件、0040 §10，以及 `docs/core-features/` 里四份文档中已不成立的句子。
+- §2 的行号多数已漂移，`_WITHHELD_FROM_SUB_AGENTS` 已是提交过的代码。`READ_BY_THE_STACK` 是抽样清单，原本没有 `OMICSCLAW_PLANNING_GATE_TURNS`，新变量照计划加了。
+
+### 10.5 验证
+
+- 约定范围的测试：基线 1803 passed、1 failed、14 skipped；交付后 1897 passed、1 failed、14 skipped。那 1 条是 `test_golden_deployment`，基线就红（`1540fca7` 改了 `task` 工具描述而没更新 golden 文件）；改动后 system prompt 与 golden 逐字相同，工具表只差那一行。新增与改动的测试在 Python 3.11.15 / SQLite 3.53.0 下也全绿。
+- 29 条脚本化 eval 全绿。默认间隔 10 下，`skill_routing/review_then_accept` 的第 14 次调用带上了提醒，其余 28 条没有。
+- 定点变异全部变红并逐字节还原：检索与迁移 16 条（去掉单字分支、不回填、引号不转义、不在写锁下重读等），B1 9 条（含 §5 的三条），B3 22 条（含 §5 的五条）。
+- 迁移：线上库经 backup API 复制到 scratch。它有 26 个会话、443 条消息、0 条长期记忆，新代码打开后没有任何写入。在副本上用基线代码写入笔记后，新旧版本轮流打开五次：条目与消息的哈希不变，`integrity_check` 为 ok，三个文件保持 0600。3000 行重写到一半 `SIGKILL`：索引全部回滚，下次打开完成重写。
+- 真实模型（deepseek-v4-flash，`python -m omicsclaw cli`，`--memory-nudge-turns 2`）：提醒出现在线上请求体里对应那次调用的末尾，下一次请求里没有它，`memory.db` 里也搜不到。会话 A 里模型在提醒之前已自己写了记忆，之后两次提醒都没有重复写，道别那轮的回复多了一段话交代哪些没有记。会话 B 里用户顺口提到常用数据和方法，模型在带提醒的那次调用上回答了问题并写了记忆。提醒关闭的对照会话里模型在最后一轮也自己写了，所以这组对比说明不了提醒的净效果。
+
+### 10.6 没验证的
+
+- CI 没跑（没有 push）。runner 的 SQLite 版本是查文档得到的：ubuntu-24.04 镜像的 libsqlite3 是 3.45.1，setup-python 的 CPython 链接系统库，trigram 自 3.34.0 起可用。本方案只用到基线已在用的 FTS5 功能。
+- 默认间隔 10 没有在真实会话上跑过，真实会话用的是 2。
+- 只跑了 CLI。Desktop 与 channel 走同一个 `_assemble`，没有实际跑。
+- §3.4 记下的偏差里，"取消或失败的交换会再提醒一次" 没有测试。
+- 两个进程同时迁移只用同进程的两个连接测过。日文假名和谚文没有分隔，行为和以前一样。
+
+### 10.7 等 owner 定
+
+1. 检索用"汉字逐字加两字对"，还是回到 trigram 加短词扫描。
+2. 每次打开全量扫描索引是否可接受；要 O(1) 就得加一个记录已检查 rowid 的标记。
+3. 迁移失败时让 `LongTermStore` 构造抛错，还是记日志后继续用旧索引。
+4. 假名与谚文要不要一并分隔。
+5. 道别轮次上模型会向用户交代记忆情况，提醒文案要不要改。

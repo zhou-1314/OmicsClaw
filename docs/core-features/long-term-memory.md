@@ -204,7 +204,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
 - 时间戳是 `REAL`（epoch 秒，`time.time()`），不是整数。
 - `messages` 里**不存 system 消息**：`SqliteSessionStore.save` 过滤 `Role.SYSTEM`，因为 prompt 组装每轮都会加一条新的，存下来会在当前 persona 旁边叠一条陈旧的。
 - `sessions` 表**没有 owner / scope 列**。`SqliteSessionStore.list` 的 docstring 明说："范围就是数据库文件本身，本方法不做任何隔离"。
-- `memories_fts` 是 **standalone** FTS5 表（不是 external-content），由 `LongTermStore` 每个写方法手动同步（`_reindex` / `DELETE FROM memories_fts`），不依赖触发器。
+- `memories_fts` 是 **standalone** FTS5 表（不是 external-content），由 `LongTermStore` 每个写方法手动同步（`_reindex` / `DELETE FROM memories_fts`），不依赖触发器。索引里存的是 `_spaced(title)` 与 `_spaced(content)`：每个汉字与相邻字符之间多一个空格，原文只在 `long_term_memories` 里。
 - 没有 schema 版本号，也没有迁移逻辑——每次打开都是 `CREATE ... IF NOT EXISTS`。
 
 ### 4.3 Python 数据结构
@@ -339,6 +339,10 @@ CLI 的会话命令（`omicsclaw/entry/cli/_repl.py`）：
 
 **查询转义**（`_escape_fts`）：把每个空白分隔的词包成双引号字面量，用 `OR` 连接（而非 FTS5 默认的隐式 AND），NUL 替换为空格。理由：查询常是整句，AND 语义下任一词缺失都会零命中；排序交给 FTS5 的 rank。
 
+**汉字**：FTS5 默认分词器按空格和标点切词，一串连续汉字连同紧贴它的字母数字会成为一个 token。所以索引按 `_spaced` 的形式存，每个汉字是一个 token；查询里的一串汉字拆成相邻两字的短语（`"聚 类"`），单个汉字就查这个字，夹在汉字之间的字母数字另成一项。记忆与查询只要共有任意相邻两字就命中，共有的越多排得越前。英文的分词与排序不受影响。
+
+**旧索引**：构造 `LongTermStore` 时读一遍 `memories_fts`，把文本与 `_spaced` 结果不同的行在一个事务里按 `long_term_memories` 重写；没有这样的行就只读不写。早先版本写入的未分隔行因此在下次打开时变得可按中文子串检索。重写失败会回滚并抛出 `sqlite3.Error`。
+
 ---
 
 ## 7. MEMORY.md 物化视图（`Precis`）
@@ -422,9 +426,14 @@ ProgressiveCompactor（每次模型调用前）
   5. 逐条 `store.add`（去重）。
 - **fail-open 且不打日志**：模型异常、非 JSON、store 失败都不抛，原因写在 `ExtractionResult.failure`。日志由 entry 层的 `PrecisRefreshingExtractor` 负责——只记条数，不记内容。即便提取器意外抛出，`compaction.py` 也只把它记进 `CompactionRecord.advisories`，不影响压缩本身。
 
-### 8.5 没有 Turn 粒度的 nudge
+### 8.5 按轮次的记忆提醒（`MemoryNudge`）
 
-**OmicsClaw 没有按轮次提醒模型调用 `memory_write` 的机制**（plan 0040 §10-4）。后果：除了模型主动调用 `memory_write`，"记"完全依赖压缩前提取，而一个从未触发 SOFT/FULL 压缩的短会话不会自动记下任何东西。
+压缩前提取只在 SOFT/FULL 压缩时运行，从不压缩的短会话靠它什么也记不下。`MemoryNudge`（`omicsclaw/context/nudge.py`，plan 0055 §3.4）补这一段：每次模型调用前，它数可见历史里最后一次调用 `memory_write` 之后的 assistant 消息数，到 `memory_nudge_turns` 的倍数时在发送副本末尾追加一条 user 消息，提醒模型把值得跨会话保留的东西写进 `memory_write`。
+
+- 计数来自历史本身，跨交换累计，实例不存状态。三次各 4 轮的交换会在第三次交换的第三次调用被提醒一次；重启进程后结果相同。调用 `memory_write` 后从零重数。压缩把 assistant 消息换成摘要后计数随之变小。
+- 提醒只进发送副本，不进 `RunResult.messages`，也不落库。
+- 只挂在主代理上：`build_augmentor`（`omicsclaw/entry/nudges.py`）在 `app.memory` 非空且 `memory_nudge_turns > 0` 时把它排在 `PlanInjector` 之前。本次调用的工具表里没有 `memory_write` 时不提醒，子代理因此两层都收不到。
+- 旋钮：`AppConfig.memory_nudge_turns` / `--memory-nudge-turns` / `OMICSCLAW_MEMORY_NUDGE_TURNS`，默认 10，`0` 关闭。
 
 ---
 
@@ -582,8 +591,8 @@ await binding.precis.regenerate()          # 失败只记 warning，进程照常
 
 ## 16. 已知限制
 
-1. **中文检索基本不可用于子串。** FTS5 默认分词器把一串连续汉字当成一个 token：对"这个项目的空间域识别一律用 leiden"这条记忆，搜"域识别"或"这个项目"都是 0 命中，只有整段原文或被标点/空格切开的片段能中。而 `EXTRACTION_SYSTEM_PROMPT` 要求用对话语言写记忆，中文用户的默认路径就会产出自己搜不到的记忆。`tokenize='trigram'` 可解，但要改建表语句并迁移既有库（plan 0033 §9 B9、plan 0040 §10-3；`tests/memory/test_store.py::test_chinese_matches_only_a_whole_unbroken_run` 标记了现状）。
-2. **没有 Turn 粒度的记忆 nudge。** 不触发 SOFT/FULL 压缩的短会话，除非模型主动调用 `memory_write`，否则什么也不会被记下（plan 0040 §10-4）。
+1. **中文检索按相邻两字匹配，偏松。** 查询"差异分析"会命中只含"分析"的记忆，靠排序把共有更多的放在前面。日文假名和谚文没有分隔，仍按整串成词。每次构造 `LongTermStore` 要读一遍索引（实测约 15 ms / 1000 条，随文本量线性增长）。另一个进程里的早先版本写入的行，要到当前版本下次打开才可按中文子串检索（plan 0055 §10）。
+2. **记忆提醒的默认间隔未经真实会话验证。** 10 轮沿用参考实现的取值。取消或失败的交换不落库，下一次交换会从同一个计数开始，可能再提醒一次。
 3. **文件权限。** `memory.db`、`memory.db-wal`、`memory.db-shm` 与 `MEMORY.md` 按进程 umask 创建（通常 0644 / 目录 0755），多用户机器上同机可读。offload 与 compaction log 已是 0700 / 0600（plan 0033 §9 B7、plan 0040 §10-2）。
 4. **精华标题与 prompt 章节同级。** `render` 用 `## ` 作条目标题，内容由模型写入并原样注入；一条被注入的记忆可以渲染成 `## Safety rules` 之类的伪章节，并因记忆段位于最后而排在真正的安全规则之后（plan 0040 §10-5）。
 5. **`MEMORY.md` 写入不是原子的。** `Precis.regenerate` 用 `Path.write_text`（先截断再写），并发读者可能读到撕裂的文件，也就是撕裂的 system prompt。多进程写同一 `memory.db` 本身已实测可行（3 进程 × 60 次 add 全部落库），问题只在 `MEMORY.md`（plan 0040 §10-9）。
@@ -591,7 +600,7 @@ await binding.precis.regenerate()          # 失败只记 warning，进程照常
 7. **没有会话删除入口。** `SqliteSessionStore.delete`、`FileOffloadStore.purge`、`JsonlCompactionLog.purge` 都存在，但没有命令或 API 调用它们；会话、卸载文件与压缩日志只增不减。
 8. **`list()` 没有隔离。** `sessions` 表无 owner 列，`/sessions` 列出该文件中的全部会话。多人共用一个 workspace（例如一个 Channel 进程服务多个群）时，隔离完全取决于谁能访问 CLI 列表；Channel 本身不暴露 `/sessions`。
 9. **`save` 整段重写消息。** 每次 exchange 结束都 `DELETE` 该会话全部消息再插入，长会话的保存成本随历史线性增长；`list()` 对每个会话再 `_load` 一次（N+1）。
-10. **没有 schema 版本与迁移。** 任何建表语句变更（包括上面的 trigram 修复）都需要自己处理既有库。
+10. **没有 schema 版本与迁移。** 任何建表语句变更都需要自己处理既有库。索引文本形式的变化不改建表语句，由 `LongTermStore` 打开时重写（见 §6）。
 11. **`Database` 用 `Lock` 而非 `RLock`。** `run()` 内部若重入会永久死锁；当前没有重入路径，但 `run` 是公开 API（plan 0033 §9 B8）。
 12. **提取质量未经评估。** 没有真实模型上的数据说明一次压缩提取出几条、有多少是噪声（plan 0040 §10-7）。
 13. **子代理只读长期记忆。** `task` 派生的子代理继承父代理除 `task`、`plan_write`、`memory_write` 外的全部工具（`entry/subagent.py` 的 `_WITHHELD_FROM_SUB_AGENTS`），因此能 `memory_search`、不能 `memory_write`：写入的条目会进入以后每个会话的系统提示，读到恶意文件的子代理不能借此种下永久注入。子代理自己没有压缩器，也就没有提取。
