@@ -113,7 +113,7 @@
 
 ## 4. 事件流：`entry/events.py` 与 `entry/stream.py`
 
-### 4.1 `TurnEventType`（14 种）
+### 4.1 `TurnEventType`（16 种）
 
 | 类型 | 来源 | 可丢弃 | 说明 |
 |---|---|---|---|
@@ -126,6 +126,7 @@
 | `PROGRESS` | 工具 | **是** | 工具进度（如 `bash` 输出） |
 | `TOOL_START` / `TOOL_RESULT` | 引擎 | 否 | 工具调用开始 / 结果 |
 | `APPROVAL_REQUIRED` / `APPROVAL_SETTLED` | entry | 否 | 需要人审批 / 已决定 |
+| `QUESTION_ASKED` / `QUESTION_SETTLED` | entry | 否 | `ask_user` 向人提了一个问题 / 已回答、跳过或无人回答。只有 CLI 的 REPL 呈现；线协议只带身份字段，Desktop 不产生帧，Channel 不投递 |
 | `TURN_END` | 引擎 | 否 | **每次模型调用**一次（一个 exchange 有 N 个） |
 | `GAP` | stream | 否 | 观察者落后，丢了一段可丢弃帧；`seq` 即恢复游标 |
 | `EXCHANGE_END` | entry | 否 | 恰一次，`terminal` ∈ `converged` / `cancelled` / `failed` |
