@@ -153,23 +153,57 @@ def open_memory(config: AppConfig) -> MemoryBinding | None:
     return MemoryBinding(database, store, Precis(store, precis_path(config)))
 
 
-async def prepare_memory(binding: MemoryBinding | None) -> int:
-    """Delete expired entries and rewrite the précis from what survives.
+def _failure_name(error: BaseException) -> str:
+    """How a failure is named in a log line, without its message.
 
-    Neither step may stop a deployment starting, so a failure in either
-    is logged and swallowed.
+    The message is left out because SQLite can quote the row it failed
+    on: a row holding bytes that are not UTF-8 is reported with its
+    text, and what was remembered must not reach a log.
+
+    :param error: The exception that was caught.
+    :returns: The exception's class name, followed by SQLite's own name
+        for the error, such as ``SQLITE_CORRUPT_VTAB``, when it has one.
+    """
+    name = type(error).__name__
+    sqlite_name = getattr(error, "sqlite_errorname", "")
+    return f"{name} {sqlite_name}" if sqlite_name else name
+
+
+async def prepare_memory(binding: MemoryBinding | None) -> int:
+    """Bring the search index up to date, delete expired entries, rewrite the précis.
+
+    No step may stop a deployment starting, so a failure in any of them
+    is logged and swallowed. The index comes first and stands alone: if
+    it cannot be read or rewritten, the entries are still purged and the
+    précis still rewritten, search answers from the index as it is, and
+    the next start tries again.
+
+    A failure is logged by the name :func:`_failure_name` gives it and
+    never by its message.
 
     :param binding: Memory to maintain; ``None`` does nothing.
     :returns: How many expired entries were deleted.
     """
     if binding is None:
         return 0
+    try:
+        respaced = await binding.store.respace_index()
+    except Exception as error:  # noqa: BLE001 - start-up must not fail here
+        _log.warning(
+            "the memory search index could not be read or brought up to "
+            "date (%s); memory_search may miss entries or fail, and the "
+            "next start tries again",
+            _failure_name(error),
+        )
+    else:
+        if respaced:
+            _log.info("memory search index: %d row(s) rewritten", respaced)
     purged = 0
     try:
         purged = await binding.store.purge_expired()
         await binding.precis.regenerate()
     except Exception as error:  # noqa: BLE001 - start-up must not fail here
-        _log.warning("memory maintenance failed: %s", error)
+        _log.warning("memory maintenance failed (%s)", _failure_name(error))
         return purged
     _log.info(
         "memory ready: %d expired entry(s) purged, précis at %s",

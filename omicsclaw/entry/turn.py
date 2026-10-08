@@ -79,7 +79,7 @@ from .approval import ApprovalBroker
 from .assembly import AgentApp
 from .compaction import PINNED_SYSTEM_MESSAGES, build_compactor
 from .events import Terminal, TurnEvent
-from .planning import build_injector
+from .nudges import build_augmentor
 from .stream import DEFAULT_RING_SIZE, TurnObservation, TurnStream
 from .subagent import DelegatedUsage
 
@@ -264,9 +264,10 @@ def _assemble(
 ) -> _Exchange:
     """Everything one exchange needs before the engine is called.
 
-    *plan_block* is false for the compaction-only path, which never
-    calls a model: asking for the injector would restore the session's
-    plan from its archive for an exchange that has no turn to remind.
+    *plan_block* decides whether the exchange gets an augmentor at all.
+    It is false for the compaction-only path, which never calls a model:
+    building the augmentor would restore the session's plan from its
+    archive for an exchange that has no turn to remind.
     """
     return _Exchange(
         conversation=_Carried(tuple(history)),
@@ -277,7 +278,7 @@ def _assemble(
             on_measure=on_measure,
             on_compact=on_compact,
         ),
-        augmentor=build_injector(app, session_id=session_id) if plan_block else None,
+        augmentor=build_augmentor(app, session_id=session_id) if plan_block else None,
     )
 
 

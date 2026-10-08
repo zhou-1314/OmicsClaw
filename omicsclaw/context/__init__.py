@@ -89,6 +89,7 @@ from .compaction import (
     compact,
     plan_compaction,
 )
+from .nudge import DEFAULT_MEMORY_NUDGE_TURNS, MEMORY_NUDGE_TEXT, MemoryNudge
 from .offload import (
     MAX_REFERENCES,
     OFFLOAD_MARKER,
@@ -152,12 +153,15 @@ __all__ = [
     "CompactionRecord",
     "CompactionState",
     "ContextBudget",
+    "DEFAULT_MEMORY_NUDGE_TURNS",
     "DEFAULT_MIN_TAIL",
     "FIRST_TEMPLATE",
     "INCREMENTAL_TEMPLATE",
     "MAX_REFERENCES",
+    "MEMORY_NUDGE_TEXT",
     "MISSING_TOOL_RESULT",
     "MemoryExtractor",
+    "MemoryNudge",
     "OFFLOAD_MARKER",
     "OFFLOAD_RULE",
     "OffloadEntry",

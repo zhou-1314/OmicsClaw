@@ -45,7 +45,8 @@ omicsclaw/engine/
 omicsclaw/entry/
 ├── planning.py   build_plan_book（每部署一次）/ build_injector（每 exchange 一次）/ _report
 ├── assembly.py   foundation_tools(plans=) / default_sections(plan_tool=) / build_app / AgentApp.plans
-├── turn.py       _assemble → augmentor=build_injector(app, session_id=...)
+├── nudges.py     build_augmentor：记忆提醒与 build_injector 的结果串成一个 augmentor
+├── turn.py       _assemble → augmentor=build_augmentor(app, session_id=...)
 ├── subagent.py   _WITHHELD_FROM_SUB_AGENTS = {plan_write: …, memory_write: …}
 └── cli/_repl.py  /plan、/tasks、_show_plan
 ```
@@ -276,9 +277,10 @@ if augmentor is not None:
 `entry/turn.py: _assemble` 为每个 exchange 构造协作者：
 
 ```python
-augmentor=build_injector(app, session_id=session_id) if plan_block else None
+augmentor=build_augmentor(app, session_id=session_id) if plan_block else None
 ```
 
+- `build_augmentor`（`entry/nudges.py`）把记忆提醒（`MemoryNudge`）和 `build_injector` 的结果按这个顺序串起来；只有规划时它原样返回 `PlanInjector`，两者都没有时返回 `None`。
 - `build_injector` 返回 `PlanInjector(app.plans.for_session(session_id), gate_turns=app.config.planning_gate_turns)`；`app.plans is None` 时返回 `None`。
 - `for_session` 同时是**恢复路径**：进程内首次取用该会话时从归档读回计划，发生在该 exchange 的第一次模型调用之前。
 - `plan_block=False` 用于 compaction-only 路径（`/compact`）：那条路径不调模型，没有 turn 需要提醒，也就不去触发恢复。
