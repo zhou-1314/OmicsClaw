@@ -1505,6 +1505,56 @@ def test_usage_reported_from_a_nested_task_lands_on_the_bound_tally():
     assert tally.calls == 2
 
 
+class _AddsToAnything:
+    """Not a usage, yet ``Usage() + _AddsToAnything()`` returns a value."""
+
+    def __radd__(self, other: object) -> int:
+        return 42
+
+
+@pytest.mark.parametrize(
+    "unusable",
+    [
+        {"input_tokens": 5, "output_tokens": 1},
+        "5 in / 1 out",
+        Usage(input_tokens=None),  # type: ignore[arg-type]
+        _AddsToAnything(),
+    ],
+    ids=[
+        "a mapping",
+        "a string",
+        "a usage without numbers",
+        "an object that adds to anything",
+    ],
+)
+def test_a_report_that_cannot_be_summed_counts_as_an_unreported_call(unusable):
+    """A sink is handed whatever its caller reports. A report that cannot be
+    added is a call whose cost is unknown, and the tally has to say so: a
+    call counted as reported that added nothing would let a short sum pass
+    for a complete one.
+
+    ``report_usage`` answers whether the sink took the report, and a sink
+    that raises is treated as absent, so ``True`` here means nothing was
+    raised.
+
+    Mutation: count the call first and add afterwards, with no check. The
+    addition then raises after the count, and the tally reads two calls,
+    none unreported. With the last case the addition succeeds and the
+    total stops being a ``Usage``.
+    """
+    from omicsclaw.tools.context import report_usage, use_usage_sink
+
+    tally = DelegatedUsage()
+
+    async def main() -> tuple[bool, bool]:
+        with use_usage_sink(tally.add):
+            return await report_usage(Usage(7, 3)), await report_usage(unusable)
+
+    assert asyncio.run(main()) == (True, True)
+    assert tally.total == Usage(7, 3)
+    assert (tally.calls, tally.unreported) == (2, 1)
+
+
 def test_a_deny_rule_on_bash_holds_inside_a_sub_agent(tmp_path, offline):
     """The free-orchestration arm denies bash by rule; a sub-agent uses the
     parent's gated tools, so the rule holds there too."""

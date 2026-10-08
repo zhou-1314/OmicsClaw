@@ -239,13 +239,24 @@ class DelegatedUsage:
 
         :param usage: what the call cost, or ``None`` when the backend
             reported nothing for it. Such a call is counted in
-            :attr:`calls` and :attr:`unreported` and adds no tokens.
+            :attr:`calls` and :attr:`unreported` and adds no tokens. A
+            value that is not a :class:`~omicsclaw.schema.Usage`, or one
+            whose counts cannot be summed, is recorded the same way and
+            raises nothing.
         """
+        # The sum is worked out before anything is recorded, so a report
+        # that cannot be added leaves the three counts consistent.
+        summed: Usage | None = None
+        if isinstance(usage, Usage):
+            try:
+                summed = self._total + usage
+            except TypeError:  # a count that is not a number
+                summed = None
         self._calls += 1
-        if usage is None:
+        if summed is None:
             self._unreported += 1
         else:
-            self._total = self._total + usage
+            self._total = summed
 
     @property
     def total(self) -> Usage:
