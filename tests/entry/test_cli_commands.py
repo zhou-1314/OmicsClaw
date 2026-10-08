@@ -742,6 +742,76 @@ def test_usage_keeps_a_sub_agent_s_tokens_when_the_exchange_is_cancelled_later(
     ]
 
 
+def test_usage_adds_up_the_sub_agents_of_every_exchange(tmp_path):
+    """Two exchanges in one REPL, each with a delegation of a different
+    size. ``/usage`` after the first shows that one; after the second, the
+    share is the two added together.
+
+    Mutation: assign in ``Repl._count_delegated`` where it adds. The second
+    line then shows the second delegation alone.
+    """
+
+    async def drive():
+        app = build(
+            tmp_path,
+            Metered(
+                (delegating(), Usage(100, 10)),
+                (_says("the first child concluded"), Usage(7, 3)),
+                (_says("answered"), Usage(200, 20)),
+                (delegating(), Usage(100, 10)),
+                (_says("the second child concluded"), Usage(5, 2)),
+                (_says("answered again"), Usage(200, 20)),
+            ),
+        )
+        printed = await drive_repl(
+            app, ["go", "/usage", "and again", "/usage", "/exit"]
+        )
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return printed
+
+    assert _usage_lines(asyncio.run(drive())) == [
+        "Session total: 307 in / 33 out (sub-agents: 7 in / 3 out)",
+        "Session total: 612 in / 65 out (sub-agents: 12 in / 5 out)",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("spent", "line"),
+    [
+        (
+            Usage(11, 0),
+            "Session total: 311 in / 30 out (sub-agents: 11 in / 0 out)",
+        ),
+        (
+            Usage(0, 4),
+            "Session total: 300 in / 34 out (sub-agents: 0 in / 4 out)",
+        ),
+    ],
+    ids=["input only", "output only"],
+)
+def test_usage_names_a_share_that_is_zero_on_one_side(tmp_path, spent, line):
+    """The share is shown when sub-agents spent anything at all.
+
+    Mutation: require both counts to be non-zero before appending the
+    share. The total still includes the sub-agent, with nothing saying so.
+    """
+
+    async def drive():
+        app = build(
+            tmp_path,
+            Metered(
+                (delegating(), Usage(100, 10)),
+                (_says("the child concluded"), spent),
+                (_says("answered"), Usage(200, 20)),
+            ),
+        )
+        printed = await drive_repl(app, ["go", "/usage", "/exit"])
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return printed
+
+    assert _usage_lines(asyncio.run(drive())) == [line]
+
+
 # ---- /plan and /tasks -------------------------------------------------
 
 
