@@ -298,6 +298,15 @@ def test_zero_turns_disables_the_gate_and_leaves_the_block():
     assert appended[0].content.startswith(INJECTION_HEADER)
 
 
+def test_zero_or_fewer_turns_disable_the_gate_when_there_is_no_plan():
+    """With no plan and a long read-only exchange, only the setting keeps
+    the gate quiet."""
+    for turns in (0, -1):
+        injector = PlanInjector(_store(), gate_turns=turns)
+
+        assert _augment(injector, _read_only_turns(30)) == ()
+
+
 def test_a_history_shortened_by_compaction_does_not_fire_the_gate():
     """Named in plan 0039 §4.4 rather than fixed.
 
