@@ -223,6 +223,7 @@ def rebuild_indexes(manifest: Manifest, campaign: Campaign) -> None:
         if record is None:
             continue
         head = {"campaign": manifest.name, **run.identity()}
+        head["model_resolved"] = record.get("model_resolved", "")
         head["attempt"] = record.get("attempt")
         head["outcome"] = record.get("outcome")
         approvals = record.get("approvals", {})
@@ -359,6 +360,7 @@ def _execute(
         "strays_killed": exit.strays,
         "stop_reason": evidence.stop_reason,
         "turns": evidence.turns,
+        "model_resolved": evidence.model_resolved,
         "approvals": {
             "required": evidence.approvals_required,
             "denied": evidence.approvals_denied,

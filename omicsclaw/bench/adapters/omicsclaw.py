@@ -256,11 +256,11 @@ class OmicsClawAdapter:
             approvals_denied=denied,
             approvals_pending=max(0, required - settled),
             turns=turns if isinstance(turns, int) else None,
+            model_resolved=",".join(models),
             usage=_usage(calls, tool_ids),
             commands=_commands(calls, tools),
             notes={
                 "omicsclaw_file": trace.launched_from,
-                "model_resolved": ",".join(models),
                 "session_id": str(ending.get("session.id", "")),
                 "ended_with": str(interactions[-1].get("error", ""))
                 if interactions

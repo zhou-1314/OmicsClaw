@@ -149,6 +149,7 @@ def test_a_converged_run_is_completed_with_usage_from_telemetry(contract):
     assert usage["output_tokens"] == 20 and usage["calls_without_usage"] == 0
     assert usage["includes_subagents"] is True
     assert done["notes"]["meter"] == "agrees"
+    assert done["model_resolved"] == "stub-write"
     assert (contract.workspace("write") / ANSWER).read_text() == '{"sum": 189}'
 
 

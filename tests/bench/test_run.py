@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -46,6 +47,9 @@ def test_a_finished_run_leaves_its_record_and_one_row_in_each_file(tmp_path):
     assert usage[0]["output_tokens"] == 7
     assert usage[0]["llm_calls"] == 2
     assert usage[0]["outcome"] == "completed"
+    assert usage[0]["model_resolved"] == predictions[0]["model_resolved"] == (
+        "fake-model"
+    )
     assert usage[0]["wall_s"] == done["wall_s"]
 
 
@@ -211,6 +215,29 @@ def test_jobs_sets_how_many_runs_are_in_progress_at_once(tmp_path):
     assert summary.executed == 8 and summary.outcomes == {"completed": 8}
     assert peak == 3
     assert len(read_jsonl(toy.campaign.usage)) == 8
+
+
+def test_an_interrupt_stops_the_campaign_and_leaves_open_runs_open(tmp_path):
+    """The harness is interrupted when the first run reports in. The run
+    then in progress is killed without a ``done.json`` and the ones not
+    yet started never start, so the next invocation picks all three up.
+    """
+    toy = Toy(tmp_path, cases=("sum-a", "sum-b"), repeats=2)
+    first = toy.manifest.runs()[0].key
+    toy.play({"default": [LOGGED | {"sleep": 30}], first: [LOGGED]})
+
+    def interrupt(message: str) -> None:
+        if message.startswith("[done]"):
+            raise KeyboardInterrupt
+
+    began = time.monotonic()
+    summary = run_campaign(toy.manifest, toy.campaign, jobs=2, report=interrupt)
+
+    assert time.monotonic() - began < 10
+    assert summary.interrupted and summary.executed == 1
+    assert (summary.outcomes, summary.unfinished) == ({"completed": 1}, 3)
+    finished = sorted(path.parent.name for path in toy.out.rglob("done.json"))
+    assert len(finished) == 1 and toy.paths(first).done.exists()
 
 
 def test_select_narrows_what_is_run(tmp_path):

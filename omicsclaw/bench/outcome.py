@@ -154,9 +154,12 @@ class Evidence:
     :param infra_reason: Non-empty when the adapter found a failure that is
         not the agent's doing, such as an unrecovered model call.
     :param failure: The agent's own one-line account of a failed run.
+    :param approvals_required: Approval requests the run raised.
     :param approvals_denied: Approval requests that were refused.
     :param approvals_pending: Approval requests left unanswered.
     :param turns: Turns the agent's main loop made, when known.
+    :param model_resolved: The model name the agent reports having called,
+        which is the only record of it when the manifest names none.
     :param notes: Adapter-specific facts recorded with the run.
     """
 
@@ -167,6 +170,7 @@ class Evidence:
     approvals_denied: int = 0
     approvals_pending: int = 0
     turns: int | None = None
+    model_resolved: str = ""
     usage: Usage = field(default_factory=Usage)
     commands: tuple[Command, ...] = ()
     notes: Mapping[str, Any] = field(default_factory=dict)

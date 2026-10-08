@@ -93,6 +93,7 @@ class FakeAdapter:
             approvals_required=reported.get("approvals_denied", 0),
             approvals_denied=reported.get("approvals_denied", 0),
             turns=reported.get("turns"),
+            model_resolved=run.model.model,
             usage=Usage(source="fake", **reported.get("usage", {})),
             commands=tuple(
                 Command(tool, text) for tool, text in reported.get("commands", [])

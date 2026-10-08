@@ -203,7 +203,7 @@ def test_usage_is_summed_over_every_model_call(tmp_path):
     assert usage.subagent_llm_calls == 0 and usage.calls_without_usage == 0
     assert usage.includes_subagents is True
     assert evidence.turns == 2 and evidence.stop_reason == "converged"
-    assert evidence.notes["model_resolved"] == "v4"
+    assert evidence.model_resolved == "v4"
     assert evidence.notes["session_id"] == "s1"
 
 
