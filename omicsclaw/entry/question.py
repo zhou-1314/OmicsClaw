@@ -226,9 +226,10 @@ def question_card(
         The card, and ``True`` when anything of it was cut.
 
     Raises:
-        ValueError: *width* is not an integer, or leaves fewer than 10
-            characters beside the card's header. The message names *width*
-            as it was passed.
+        ValueError: *width* is a number that is not an integer, or leaves
+            fewer than 10 characters beside the card's header. The message
+            names *width* as it was passed.
+        TypeError: *width* is not a number, such as a string.
     """
     head = f"Question [{inert_line(ref)}]"
     lines = [request.question]

@@ -464,6 +464,23 @@ def test_the_refusal_says_how_long_the_card_s_header_is():
     assert f"beside the {header} of the card's header" in str(refused.value)
 
 
+@pytest.mark.parametrize(
+    ("width", "error"),
+    [
+        pytest.param(80.0, ValueError, id="a float"),
+        pytest.param(True, ValueError, id="a bool"),
+        pytest.param("80", TypeError, id="a string"),
+        pytest.param([80], TypeError, id="a list"),
+    ],
+)
+def test_a_width_of_the_wrong_type_is_refused_as_the_docstring_says(width, error):
+    """A number that is not an integer is a :exc:`ValueError` naming it.
+    Something that is not a number fails where the header's length is
+    taken from it, as a :exc:`TypeError`."""
+    with pytest.raises(error):
+        question_card(_open(), "t#1", width=width)
+
+
 def test_a_card_over_the_bounds_is_cut_and_says_so():
     """401 lines are within the tool's 2,000 characters and over the card's
     400 lines. The flag is what a chat surface will refuse to send on, so
