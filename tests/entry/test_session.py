@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import dataclasses
+import json
 import pathlib
 
 import pytest
@@ -28,11 +29,20 @@ from omicsclaw.entry.session import (
 )
 from omicsclaw.entry.turn import TurnHandle
 from omicsclaw.provider import Completion
-from omicsclaw.schema import Message, Role
+from omicsclaw.schema import (
+    Message,
+    Role,
+    StreamChunk,
+    StreamChunkType,
+    ToolCall,
+    Usage,
+)
+from omicsclaw.subagent import TASK_TOOL_NAME
 from omicsclaw.tools.context import ApprovalDecision
 from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]
     Asking,
     Exploding,
+    Reporting,
     Scripted,
     Sleeping,
     calling,
@@ -348,6 +358,236 @@ def test_a_failed_exchange_leaves_the_history_alone(tmp_path):
     assert handle.terminal == "failed"
     assert session is not None and session.history == ()
     assert store.saved == [("s1", 0)]
+
+
+# ---- what an exchange's sub-agents spent outlives how it ended ----------
+
+
+class Metered(Scripted):
+    """A scripted backend that reports a usage with each streamed reply.
+
+    *turns* pairs each reply with what that call reports, parent and
+    sub-agent calls in the order they happen. With *fails_at* set, the
+    call of that index raises where it would have answered.
+    """
+
+    def __init__(
+        self, *turns: tuple[Message, Usage | None], fails_at: int | None = None
+    ) -> None:
+        super().__init__(*(reply for reply, _usage in turns))
+        self._usages = [usage for _reply, usage in turns]
+        self._fails_at = fails_at
+
+    async def _stream(self, messages, tools=None):
+        index = self.calls
+        if index == self._fails_at:
+            raise RuntimeError("the backend fell over")
+        completion = await self.generate(messages, tools)
+        yield StreamChunk(
+            type=StreamChunkType.DONE,
+            message=completion.message,
+            usage=self._usages[index] if index < len(self._usages) else None,
+        )
+
+
+def delegating(prompt: str = "do the thing") -> Message:
+    """One assistant message handing *prompt* to ``general-purpose``."""
+    return Message(
+        role=Role.ASSISTANT,
+        tool_calls=(
+            ToolCall(
+                id="c-task",
+                name=TASK_TOOL_NAME,
+                arguments=json.dumps(
+                    {"subagent_type": "general-purpose", "prompt": prompt}
+                ),
+            ),
+        ),
+    )
+
+
+def test_a_cancelled_exchange_keeps_what_its_sub_agent_spent(tmp_path):
+    """The delegation finishes, then the parent is cancelled inside a tool.
+
+    ``wait()`` returns ``None`` for a cancelled exchange, so the count has
+    to be on the handle, and the handle's tally has to be the one the
+    runner filled.
+
+    Mutation: stop passing ``delegated=handle.delegated`` in
+    ``SessionRegistry._attempt``. The runner then fills a tally of its own
+    and the handle's reads zero.
+    """
+    sleeping = Sleeping()
+    _app, sessions = registry_for(
+        tmp_path,
+        Metered(
+            (delegating(), Usage(100, 10)),
+            (Message(role=Role.ASSISTANT, content="the child concluded"), Usage(7, 3)),
+            (calling("sleep"), Usage(200, 20)),
+        ),
+        tools=[sleeping],
+    )
+
+    async def drive():
+        handle = await sessions.submit("s1", "delegate, then hang")
+        await asyncio.wait_for(sleeping.entered.wait(), WAIT_S)
+        handle.cancel()
+        return handle, await drain(handle)
+
+    handle, outcome = asyncio.run(drive())
+
+    assert handle.terminal == "cancelled"
+    assert outcome is None
+    assert handle.delegated.total == Usage(7, 3)
+    assert handle.delegated.calls == 1
+
+
+def test_a_sub_agent_cancelled_mid_run_is_counted_up_to_its_last_finished_turn(
+    tmp_path,
+):
+    """The exchange is cancelled while the sub-agent's second turn is inside
+    a tool. Its first turn had ended and is counted. The second never
+    reached its end and is not, which is the rule the parent's own turns
+    are counted by."""
+    sleeping = Sleeping()
+    _app, sessions = registry_for(
+        tmp_path,
+        Metered(
+            (delegating(), Usage(100, 10)),
+            (calling("report"), Usage(5, 2)),
+            (calling("sleep"), Usage(2, 1)),
+        ),
+        tools=[Reporting(), sleeping],
+    )
+
+    async def drive():
+        handle = await sessions.submit("s1", "delegate")
+        await asyncio.wait_for(sleeping.entered.wait(), WAIT_S)
+        handle.cancel()
+        await drain(handle)
+        return handle
+
+    handle = asyncio.run(drive())
+
+    assert handle.terminal == "cancelled"
+    assert handle.delegated.total == Usage(5, 2)
+    assert handle.delegated.calls == 1
+
+
+def test_a_failed_exchange_keeps_what_its_sub_agent_spent(tmp_path):
+    """The parent's backend fails on the call after the delegation."""
+    _app, sessions = registry_for(
+        tmp_path,
+        Metered(
+            (delegating(), Usage(100, 10)),
+            (Message(role=Role.ASSISTANT, content="the child concluded"), Usage(7, 3)),
+            fails_at=2,
+        ),
+    )
+
+    async def drive():
+        handle = await sessions.submit("s1", "delegate")
+        return handle, await drain(handle)
+
+    handle, outcome = asyncio.run(drive())
+
+    assert handle.terminal == "failed"
+    assert outcome is None
+    assert handle.delegated.total == Usage(7, 3)
+
+
+def test_an_exchange_that_ran_out_of_time_keeps_what_its_sub_agent_spent(tmp_path):
+    """The delegation finishes, the parent then hangs in a tool, and the
+    turn deadline ends the exchange as a failure."""
+    sleeping = Sleeping()
+    _app, sessions = registry_for(
+        tmp_path,
+        Metered(
+            (delegating(), Usage(100, 10)),
+            (Message(role=Role.ASSISTANT, content="the child concluded"), Usage(7, 3)),
+            (calling("sleep"), Usage(200, 20)),
+        ),
+        tools=[sleeping],
+        turn_timeout_s=0.5,
+    )
+
+    async def drive():
+        handle = await sessions.submit("s1", "delegate, then hang")
+        await asyncio.wait_for(sleeping.entered.wait(), WAIT_S)
+        await drain(handle)
+        return handle
+
+    handle = asyncio.run(drive())
+
+    assert handle.terminal == "failed"
+    assert isinstance(handle.error, TimeoutError)
+    assert handle.delegated.total == Usage(7, 3)
+
+
+def test_a_sub_agent_cut_off_by_the_turn_deadline_is_counted_like_a_cancelled_one(
+    tmp_path,
+):
+    """The deadline expires while the sub-agent's second turn is inside a
+    tool. As after a cancellation, its first turn is counted and the turn
+    that never ended is not."""
+    sleeping = Sleeping()
+    _app, sessions = registry_for(
+        tmp_path,
+        Metered(
+            (delegating(), Usage(100, 10)),
+            (calling("report"), Usage(5, 2)),
+            (calling("sleep"), Usage(2, 1)),
+        ),
+        tools=[Reporting(), sleeping],
+        turn_timeout_s=0.5,
+    )
+
+    async def drive():
+        handle = await sessions.submit("s1", "delegate")
+        await asyncio.wait_for(sleeping.entered.wait(), WAIT_S)
+        await drain(handle)
+        return handle
+
+    handle = asyncio.run(drive())
+
+    assert handle.terminal == "failed"
+    assert isinstance(handle.error, TimeoutError)
+    assert handle.delegated.total == Usage(5, 2)
+    assert handle.delegated.calls == 1
+
+
+def test_each_exchange_of_a_session_counts_its_own_sub_agents(tmp_path):
+    """Two exchanges on one session: the first delegates, the second does
+    not. The count belongs to the exchange, so the second handle's is
+    empty and the first keeps its own after the second has run.
+
+    Mutation: give the handles of one session a shared ``DelegatedUsage``
+    in ``SessionRegistry.submit``. The second handle then reports the
+    first exchange's sub-agent.
+    """
+    _app, sessions = registry_for(
+        tmp_path,
+        Metered(
+            (delegating(), Usage(100, 10)),
+            (Message(role=Role.ASSISTANT, content="the child concluded"), Usage(7, 3)),
+            (Message(role=Role.ASSISTANT, content="answered"), Usage(200, 20)),
+            (Message(role=Role.ASSISTANT, content="answered again"), Usage(50, 5)),
+        ),
+    )
+
+    async def drive():
+        first = await sessions.submit("s1", "delegate")
+        await drain(first)
+        second = await sessions.submit("s1", "and a plain question")
+        await drain(second)
+        return first, second
+
+    first, second = asyncio.run(drive())
+
+    assert (first.terminal, second.terminal) == ("converged", "converged")
+    assert second.outcome.reply == "answered again"
+    assert (second.delegated.calls, second.delegated.total) == (0, Usage())
+    assert (first.delegated.calls, first.delegated.total) == (1, Usage(7, 3))
 
 
 # ---- trap 1b, where trap 3b moved it: a store that raises ---------------

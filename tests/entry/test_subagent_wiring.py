@@ -71,6 +71,7 @@ from omicsclaw.entry.subagent import (
     _WITHHELD_FROM_SUB_AGENTS,
     GENERAL_PURPOSE,
     ChildRunner,
+    DelegatedUsage,
     DelegationIncomplete,
     _general_purpose_description,
     build_subagent_registry,
@@ -87,6 +88,7 @@ from omicsclaw.schema import (
     ToolCall,
     ToolDefinition,
     ToolResult,
+    Usage,
 )
 from omicsclaw.subagent import TASK_TOOL_NAME, SUBAGENT_VALUE_KEY
 from omicsclaw.tools import ApprovalDecision, ProgressUpdate, ToolPolicy
@@ -1346,6 +1348,211 @@ def test_the_child_s_usage_reaches_a_caller_counting_tokens(tmp_path, offline):
     asyncio.run(main())
     assert len(seen) == 2
     assert sum(u.input_tokens for u in seen) == 14 and sum(u.output_tokens for u in seen) == 6
+
+
+# ---- an exchange counts what its sub-agents spent --------------------------
+
+
+@dataclasses.dataclass
+class _UsageScript(_ScriptedProvider):
+    """Reports a scripted usage with each streamed reply.
+
+    One list covers the parent's calls and the child's in the order they
+    happen, as :attr:`replies` does.
+    """
+
+    usages: list[Usage | None] = dataclasses.field(default_factory=list)
+    """Per-call usage, index-aligned with :attr:`replies`. ``None``, and any
+    call past the end of the list, reports nothing."""
+
+    async def _stream(self, messages, tools):
+        completion = await self.generate(messages, tools)
+        index = len(self.seen) - 1
+        yield StreamChunk(
+            type=StreamChunkType.DONE,
+            message=completion.message,
+            finish_reason=completion.finish_reason,
+            usage=self.usages[index] if index < len(self.usages) else None,
+        )
+
+
+def _exchange(app) -> tuple[TurnRunner, TurnStream, Any]:
+    """Run one exchange through a real runner; return it, its stream and
+    its outcome."""
+    stream = TurnStream("s-1", "t-1")
+    runner = TurnRunner(app, stream, session_id="s-1", turn_id="t-1", user_text="go")
+    return runner, stream, asyncio.run(runner.run())
+
+
+def test_an_exchange_counts_its_sub_agent_s_usage_apart_from_its_own(
+    tmp_path, offline
+):
+    """Both child turns land in the exchange's tally, and neither is in the
+    parent's own ``RunResult.usage``.
+
+    Mutation: drop ``use_usage_sink`` from ``TurnRunner.run`` and the tally
+    stays empty.
+    """
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    offline(
+        _UsageScript(
+            [
+                _delegates("read a.txt"),
+                _calls("read_file", path="a.txt"),
+                _says("the child read it"),
+                _says("the parent reports"),
+            ],
+            usages=[Usage(100, 10), Usage(5, 2), Usage(2, 1), Usage(200, 20)],
+        )
+    )
+    app = build_app(_config(tmp_path))
+
+    runner, _stream, outcome = _exchange(app)
+
+    assert outcome.reply == "the parent reports"
+    assert runner.delegated.total == Usage(7, 3)
+    assert (runner.delegated.calls, runner.delegated.unreported) == (2, 0)
+    assert outcome.result.usage == Usage(300, 30)
+
+
+def test_a_delegation_stopped_at_its_turn_limit_is_still_counted(tmp_path, offline):
+    """A run that hits its turn ceiling is handed back as an error and never
+    reaches a conclusion, so its turns are counted as each one ends.
+
+    Mutation: report ``result.usage`` once in ``ChildRunner.delegate``,
+    after ``_conclusion`` has returned, in place of every ``TURN_END``.
+    This delegation then counts as zero.
+    """
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    _write_agent(tmp_path, "reader", "max_turns: 1\n")
+    offline(
+        _UsageScript(
+            [
+                _delegates("read a.txt", "reader"),
+                _calls("read_file", path="a.txt"),
+                _says("the reader ran out of turns"),
+            ],
+            usages=[Usage(100, 10), Usage(7, 3), Usage(200, 20)],
+        )
+    )
+    app = build_app(_config(tmp_path))
+
+    runner, stream, _outcome = _exchange(app)
+
+    handed_back = [
+        event.engine.tool_result
+        for event in stream.retained()
+        if event.type is TurnEventType.TOOL_RESULT
+    ]
+    assert [(result.name, result.is_error) for result in handed_back] == [
+        (TASK_TOOL_NAME, True)
+    ]
+    assert "turn limit (1)" in handed_back[0].output
+    assert runner.delegated.total == Usage(7, 3)
+
+
+def test_a_sub_agent_turn_that_reported_no_usage_adds_no_tokens(tmp_path, offline):
+    """The silent turn is counted as a call and as unreported; the turn after
+    it is added as usual."""
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    offline(
+        _UsageScript(
+            [
+                _delegates("read a.txt"),
+                _calls("read_file", path="a.txt"),
+                _says("the child read it"),
+                _says("the parent reports"),
+            ],
+            usages=[Usage(100, 10), None, Usage(2, 1), Usage(200, 20)],
+        )
+    )
+    app = build_app(_config(tmp_path))
+
+    runner, _stream, _outcome = _exchange(app)
+
+    assert runner.delegated.total == Usage(2, 1)
+    assert (runner.delegated.calls, runner.delegated.unreported) == (2, 1)
+
+
+def test_usage_reported_from_a_nested_task_lands_on_the_bound_tally():
+    """The engine runs a delegation in the Task of its tool call, which gets
+    a copy of the context. What is bound is the tally's own method, so the
+    nested Task and the binder add to one object.
+
+    Outside the block nothing is bound: the report is refused without an
+    error and the tally is left as it was.
+
+    Mutation: keep the total as an immutable ``Usage`` in a ``ContextVar``
+    and add to it with ``set``. A ``set`` made in a nested Task is not
+    visible outside it, and the tally reads zero.
+    """
+    from omicsclaw.tools.context import report_usage, use_usage_sink
+
+    tally = DelegatedUsage()
+
+    async def two_tasks_down() -> bool:
+        return await asyncio.create_task(report_usage(Usage(2, 1)))
+
+    async def main() -> tuple[bool, bool, bool]:
+        with use_usage_sink(tally.add):
+            one = await asyncio.create_task(report_usage(Usage(5, 2)))
+            two = await asyncio.create_task(two_tasks_down())
+        unbound = await report_usage(Usage(9, 9))
+        return one, two, unbound
+
+    assert asyncio.run(main()) == (True, True, False)
+    assert tally.total == Usage(7, 3)
+    assert tally.calls == 2
+
+
+class _AddsToAnything:
+    """Not a usage, yet ``Usage() + _AddsToAnything()`` returns a value."""
+
+    def __radd__(self, other: object) -> int:
+        return 42
+
+
+@pytest.mark.parametrize(
+    "unusable",
+    [
+        {"input_tokens": 5, "output_tokens": 1},
+        "5 in / 1 out",
+        Usage(input_tokens=None),  # type: ignore[arg-type]
+        _AddsToAnything(),
+    ],
+    ids=[
+        "a mapping",
+        "a string",
+        "a usage without numbers",
+        "an object that adds to anything",
+    ],
+)
+def test_a_report_that_cannot_be_summed_counts_as_an_unreported_call(unusable):
+    """A sink is handed whatever its caller reports. A report that cannot be
+    added is a call whose cost is unknown, and the tally has to say so: a
+    call counted as reported that added nothing would let a short sum pass
+    for a complete one.
+
+    ``report_usage`` answers whether the sink took the report, and a sink
+    that raises is treated as absent, so ``True`` here means nothing was
+    raised.
+
+    Mutation: count the call first and add afterwards, with no check. The
+    addition then raises after the count, and the tally reads two calls,
+    none unreported. With the last case the addition succeeds and the
+    total stops being a ``Usage``.
+    """
+    from omicsclaw.tools.context import report_usage, use_usage_sink
+
+    tally = DelegatedUsage()
+
+    async def main() -> tuple[bool, bool]:
+        with use_usage_sink(tally.add):
+            return await report_usage(Usage(7, 3)), await report_usage(unusable)
+
+    assert asyncio.run(main()) == (True, True)
+    assert tally.total == Usage(7, 3)
+    assert (tally.calls, tally.unreported) == (2, 1)
 
 
 def test_a_deny_rule_on_bash_holds_inside_a_sub_agent(tmp_path, offline):

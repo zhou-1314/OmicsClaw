@@ -482,6 +482,7 @@ class Repl:
         "_animated",
         "_app",
         "_asking",
+        "_delegated_usage",
         "_dotenv_path",
         "_granted",
         "_heartbeat_s",
@@ -545,6 +546,10 @@ class Repl:
         """The ``!`` command running in the foreground, for
         :meth:`interrupt` to cancel. ``None`` when there is none."""
         self._usage = [0, 0]
+        self._delegated_usage = [0, 0]
+        """Input and output tokens the sub-agents of this run's exchanges
+        spent. ``/usage`` adds them to :attr:`_usage`, which holds the
+        main agent's alone."""
         self._animated = animated
         self._heartbeat_s = heartbeat_s
         self._activity: ActivityLine | None = None
@@ -641,10 +646,7 @@ class Repl:
             self._mcp()
             return
         if name == "/usage":
-            self._screen.print(
-                f"[dim]Session total: {self._usage[0]} in / "
-                f"{self._usage[1]} out[/dim]"
-            )
+            self._screen.print(f"[dim]{self._usage_total()}[/dim]")
             return
         if name == "/current":
             # ``Text``: a workspace path is not this file's to trust, and
@@ -1111,6 +1113,7 @@ class Repl:
             # here is what makes ``handle.terminal`` readable by the caller
             # and stops the next prompt racing a save.
             await handle.wait()
+            self._count_delegated(handle)
         finally:
             self._running = None
             await self._reap_asking()
@@ -1318,6 +1321,31 @@ class Repl:
             return
         self._usage[0] += usage.input_tokens
         self._usage[1] += usage.output_tokens
+
+    def _count_delegated(self, handle: TurnHandle) -> None:
+        """Add what the sub-agents of *handle*'s exchange spent.
+
+        Called once the exchange has ended. The handle holds the count
+        after a cancelled or failed exchange too, when it has no outcome.
+        """
+        spent = handle.delegated.total
+        self._delegated_usage[0] += spent.input_tokens
+        self._delegated_usage[1] += spent.output_tokens
+
+    def _usage_total(self) -> str:
+        """The line ``/usage`` prints.
+
+        The total is the main agent's tokens plus the sub-agents'. When
+        sub-agents spent any, their share follows in parentheses.
+        """
+        delegated_in, delegated_out = self._delegated_usage
+        line = (
+            f"Session total: {self._usage[0] + delegated_in} in / "
+            f"{self._usage[1] + delegated_out} out"
+        )
+        if delegated_in or delegated_out:
+            line += f" (sub-agents: {delegated_in} in / {delegated_out} out)"
+        return line
 
     # ---- interruption ----------------------------------------------------
 
