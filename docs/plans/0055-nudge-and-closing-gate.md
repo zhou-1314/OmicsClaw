@@ -361,7 +361,9 @@ B3 按 §3.4：`context/nudge.py` 的 `MemoryNudge` 数历史里最后一次 `me
 | 另一进程持写锁 19 秒 | 作答，会话保存 | 15.5 秒后 exit 1，没有作答 | 作答，会话保存；启动时等锁 15 秒后放弃重写 |
 | 另一进程持写锁 40 秒 | 作答，保存会话时报锁 | 15.5 秒后 exit 1，没有作答 | 同基线，启动多等 15 秒 |
 
-`oc desktop` 在第一个场景上同样是修复前起不来、修复后 `/health` 200。两个损坏场景里 `memory_search` 的结果与基线逐项相同。这条 warning 走 `omicsclaw.entry` 的 logger：CLI 把该 logger 压到 ERROR，Desktop 没装 handler，所以两处都看不到它，同一个 logger 上既有的 "memory maintenance failed" 也是这样。
+`oc desktop` 在第一个场景上同样是修复前起不来、修复后 `/health` 200。`memory_search` 在块清零的库上与基线相同。在内容表读不了的库上，英文查询两边都是工具报错；中文查询在基线是 0 命中，在本分支上索引已是分隔形式时，匹配到了才去读损坏的行，变成工具报错。
+
+两条启动 warning 只带异常类名和 SQLite 的错误名，不带报错原文：行里有非法 UTF-8 时 SQLite 的报错会带出该行正文（复核方发现，已修）。它们走 `omicsclaw.entry` 的 logger，CLI 把该 logger 压到 ERROR，Desktop 没装 handler，所以这两处看不到，Channel 看得到。
 
 旧版本进程之后写进来的行是未分隔的，新版本下次启动时补上。旧版本读重写后的索引，英文照常，但整串中文的查询不再命中（实测 2 条变 0 条，审核方 5 条变 0 条）。
 
@@ -375,8 +377,8 @@ B3 按 §3.4：`context/nudge.py` 的 `MemoryNudge` 数历史里最后一次 `me
 
 ### 10.5 验证
 
-- 第一轮约定范围：基线 1803 passed、1 failed；交付后 1897 passed、1 failed，失败的是基线就红的 golden 用例。修复轮只跑相关部分（`tests/memory`、`tests/context`、entry 的四个接线文件、`tests/evals`）：810 passed，29 条脚本化 eval 全绿。
-- 定点变异全部变红并逐字节还原：第一轮检索与迁移 16 条、B1 9 条、B3 22 条；修复轮启动修复 7 条、去重与范围边界 3 条，以及审核方 34 处变异里原先没变红的 7 处。
+- 第一轮约定范围：基线 1803 passed、1 failed；交付后 1897 passed、1 failed，失败的是基线就红的 golden 用例。修复轮只跑相关部分（`tests/memory`、`tests/context`、entry 的四个接线文件、`tests/evals`）：810 passed。收尾轮（`tests/memory`、memory 接线与 open_app 两个文件、`tests/evals`）：450 passed。两轮里 29 条脚本化 eval 都全绿。
+- 定点变异全部变红并逐字节还原：第一轮检索与迁移 16 条、B1 9 条、B3 22 条；修复轮启动修复 7 条、去重与范围边界 3 条，以及审核方 34 处变异里原先没变红的 7 处；收尾轮日志内容 5 条，以及复核方在去重上存活的 1 处。
 - 迁移：线上库经 backup API 复制到 scratch，它有 0 条长期记忆，新代码打开后没有写入。在副本上新旧版本轮流打开五次，条目与消息的哈希不变，三个文件保持 0600。3000 行重写到一半 `SIGKILL`，索引全部回滚。审核方另测了四进程并发。
 - 真实模型（deepseek-v4-flash，CLI，间隔设 2）：提醒出现在线上请求体对应那次调用的末尾，下一次请求里没有它，`memory.db` 里也搜不到。
 
@@ -386,11 +388,13 @@ B3 按 §3.4：`context/nudge.py` 的 `MemoryNudge` 数历史里最后一次 `me
 - 提醒原文不落任何地方，但模型的 reasoning 会转述它，CLI 的 thinking 和 Desktop 的 `thinking` 帧能看到，这段 reasoning 随历史带到下一次调用（审核方实测）。
 - 提醒的实际收益没有被证明。审核方按默认间隔跑的三个真实会话里，模型不靠提醒就写了记忆，提醒出现一次且没有改变结果；我的对照会话也是关掉提醒后模型自己写了。
 - 失败的 `memory_write` 调用同样让计数清零。取消或失败的交换可能再提醒一次，这一条没有测试。
+- 库里有旧行、同时别的进程持写锁时，启动会停满 15 秒 busy timeout 才放弃重写。这期间 CLI 没有输出，Desktop 端口不监听，Ctrl-C 和 SIGTERM 也要等到那时才生效（后三点是复核方实测）。没有旧行时不等。
 - CI 没跑。runner 的 libsqlite3 是 3.45.1（查文档），本方案只用基线已在用的 FTS5 功能。只跑了 CLI 和一次 Desktop 启动，channel 没跑。
 
 ### 10.7 等 owner 定
 
-1. 索引维护失败的 warning 在 CLI 和 Desktop 上看不到，要不要另找地方提示。
-2. 每次启动全量扫描索引是否可接受；要 O(1) 就得加水位标记。
-3. 假名、谚文、全角字符要不要处理。
-4. 提醒文案与默认间隔，在收益没有证据的情况下是否保留默认开启。
+1. 索引维护失败在 CLI 和 Desktop 上没有任何可见提示，要不要另找地方；可选的去处是 Desktop `/env/doctor` 里 memory 那一项。
+2. 重写拿不到写锁时是否直接跳过、留到下次启动，免掉那 15 秒。
+3. 每次启动全量扫描索引是否可接受；要 O(1) 就得加水位标记。
+4. 假名、谚文、全角字符要不要处理。
+5. 提醒文案与默认间隔，在收益没有证据的情况下是否保留默认开启。
