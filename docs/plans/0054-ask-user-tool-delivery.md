@@ -2,7 +2,7 @@
 
 **日期**：2026-10-08。**分支**：本地 `feat/ask-user`，基线 `main` 的 `90a3bec3`，未 push，未开 PR。
 **范围**：0052 T1、0052 §4.7 显示层前置步、0054 任务 A、B、C。0052 的 T0、T2、T3 与 0054 任务 D 没做，`entry/channel/` 零改动。
-**状态**：独立审核通过（2026-10-08），审核之后的修复见 §8；待 owner 过目。
+**状态**：独立审核通过（2026-10-08），审核之后的修复与合并见 §8；待 owner 过目。
 
 ## 1. 提交
 
@@ -136,3 +136,13 @@
 - **"`ask_user` 已关闭"的提示没人看得到。** `surface_config` 在不能提问的入口关掉它时写一条 INFO 日志，这条日志在 CLI 和 Desktop 上都不上屏。有人传 `--ask-user true --prompt …`，不会得到任何提示。
 - **`/auto` 开着、没设期限、又没人作答时会一直等。** 审核方实测 90 秒内没有任何输出，Ctrl-C 能回到提示符。无人值守时设 `OMICSCLAW_ASK_USER=false`。
 - **真实模型的使用情况**（审核方实测，DeepSeek）：6 个不同场景里 2 个提了问，两次都是先查看再问，问的都是只有人能定的事；同一个有歧义的请求跑 3 次，3 次都问了。
+
+**合并 `main`。** `58edf3e6` 把 `main` 的 `e1be31c4` 合进分支，用的是合并提交，之前的提交原样保留。冲突两处：`entry/turn.py` 的 import 块（`main` 把 `build_injector` 换成 `build_augmentor`，分支在相邻一行加了 `QuestionBroker`，两条新 import 都留下）；`cli.md` 事件表相邻两行（控制帧一行留分支的 `QUESTION_SETTLED` 说明，`TURN_END` 一行留 `main` 关于子代理用量的说明）。其余两边都改过的 11 个文件自动合并。
+
+合并后的树上各跑一次：
+
+- 测试：`tests/tools tests/entry tests/launch tests/permission tests/subagent tests/skillenv tests/memory tests/context tests/planning tests/evals tests/bench tests/test_*.py` 为 5447 passed、23 skipped、3 xfailed、2 xpassed、0 failed；Desktop 为 569 passed、3 skipped。
+- golden：`deployment_prompt.txt` 与 `main` 相同；`deployment_tools.json` 相对 `main` 只多 `ask_user` 一项和 `task` 描述里的半句。
+- 真实的 `oc cli -- --prompt-file` 进程（bench 的启动方式，标准输入关闭）交给模型 11 个工具，没有 `ask_user`，加 `--ask-user true` 也一样。
+- 记忆提醒只在发给模型的副本里。一次 exchange 里先后出审批卡和提问卡、`memory_nudge_turns=2` 时，提醒只出现在第 3 次模型调用，不进保存的历史，也不上屏。
+- pty（DeepSeek）：原来的四种情形通过；`--approval-timeout 12` 下无人作答、到期后再输入的情形通过，表现同上面"修后"。
