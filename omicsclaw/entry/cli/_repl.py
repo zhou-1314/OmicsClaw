@@ -255,6 +255,17 @@ the same model message passed its deadline.
 The model reads it in the tool's result. It says that no person refused
 and that the call may be made again, which a bare denial would not."""
 
+_SETTLED_ALREADY_NOTICE = (
+    "{name} [{card}] was already settled: this line changed nothing."
+)
+"""Printed under an approval prompt when its card had been settled before
+the line typed at it was read.
+
+An approval card's prompt stays open after the card's deadline, and a
+later card queues behind it. A line typed there, perhaps at the sight of
+the later card, approves nothing and records nothing, whatever it says.
+*name* is the tool the old card was about and *card* its ``#n``."""
+
 _NO_OPERATOR_REASON = "no operator at the terminal"
 """The reason a card is settled with when the input ended or the Task
 reading it was cancelled."""
@@ -1655,6 +1666,13 @@ class Repl:
         for the question would be read as the answer to it. A tool already
         allowed for this conversation is not asked about at all, so it
         runs whatever *unasked* says.
+
+        ``s`` and ``a`` are acted on only when the answer settled the
+        request. The prompt stays open after the request's deadline, and
+        a line read there later settles nothing: no grant is recorded, no
+        rule is written, and :data:`_SETTLED_ALREADY_NOTICE` is printed.
+        ``/auto`` typed there still switches the mode, because it is a
+        command and not an answer to this card.
         """
         request = event.approval
         name = inert_line(request.tool_name) if request is not None else "a tool"
@@ -1720,6 +1738,28 @@ class Repl:
         always = verdict in _ALWAYS
         for_session = verdict in _FOR_THIS_SESSION
         approved = always or for_session or verdict in _YES
+        reason = answer.strip()
+        if reason.startswith("/"):
+            # A command typed at the wrong prompt is not a message for the
+            # model; sending "/usage" as the reason a call was refused would
+            # be a refusal it cannot act on.
+            reason = "denied at the terminal"
+        settled = await handle.approve(
+            request_id,
+            ApprovalDecision(approved, "" if approved else reason),
+        )
+        if not settled:
+            # The card's prompt outlives the card's deadline, and the line
+            # may have been typed at the sight of a later card.
+            self._screen.print(
+                Text(
+                    _SETTLED_ALREADY_NOTICE.format(
+                        name=name, card=inert_line(_card(request_id))
+                    ),
+                    style="dim",
+                )
+            )
+            return
         if always and request is not None:
             if rememberable:
                 self._remember(request)
@@ -1750,16 +1790,6 @@ class Repl:
                         style="dim",
                     )
                 )
-        reason = answer.strip()
-        if reason.startswith("/"):
-            # A command typed at the wrong prompt is not a message for the
-            # model; sending "/usage" as the reason a call was refused would
-            # be a refusal it cannot act on.
-            reason = "denied at the terminal"
-        await handle.approve(
-            request_id,
-            ApprovalDecision(approved, "" if approved else reason),
-        )
 
     # ---- questions -------------------------------------------------------
 

@@ -882,7 +882,7 @@ class TurnHandle:
         """
         return self.stream.observe(after_seq=after_seq)
 
-    async def approve(self, request_id: str, decision: ApprovalDecision) -> None:
+    async def approve(self, request_id: str, decision: ApprovalDecision) -> bool:
         """Answer one of this exchange's outstanding approval requests.
 
         An unknown or already-settled ``request_id`` is a **no-op and not
@@ -895,14 +895,22 @@ class TurnHandle:
         coroutine is the shape that stays right when that answer has to
         travel. The blocking work is elsewhere by construction — the
         exchange's own Task is what resumes.
+
+        :returns: whether *decision* settled the request. ``False`` means
+            it changed nothing: the id is unknown, or the request had been
+            settled already, by an earlier answer or by its deadline. A
+            surface that keeps a record of what a person allowed (a grant
+            for the conversation, a rule on disk) writes it only on
+            ``True``.
         """
         if self.approvals.settle(request_id, decision):
-            return
+            return True
         _log.debug(
             "approval %s on turn %s had nothing to settle",
             request_id,
             self.turn_id,
         )
+        return False
 
     async def answer(self, request_id: str, answer: QuestionAnswer) -> None:
         """Answer one of this exchange's outstanding questions.

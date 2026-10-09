@@ -50,6 +50,7 @@ WAIT_S = 10.0
 NOTICE = "input typed before this prompt was discarded"
 HALF_LINE_NOTICE = "what is typed up to the next Enter is discarded too"
 NOBODY_ASKED = "nobody was asked"
+SETTLED_ALREADY = "was already settled: this line changed nothing"
 
 ANSWER = "answer [#{n}]> "
 APPROVE = "approve ask_a [#{n}]? [y/N/a=always] "
@@ -829,6 +830,119 @@ def test_under_auto_approve_the_call_after_the_question_runs(tmp_path):
     assert "Approval required [" not in session.printed
     assert "Approval denied [" not in session.printed
     assert _approval_prompts(session) == []
+
+
+# ---- a line typed at a card whose own deadline has passed ---------------------------
+#
+# An approval card's prompt stays open after the card's deadline, until the
+# exchange ends. A card that comes later queues behind it, so the line a
+# person types at the sight of the later card is read by the old prompt.
+
+
+@pytest.mark.parametrize(
+    ("typed", "would_have_printed"),
+    [
+        pytest.param("s", "Will not ask about", id="s"),
+        pytest.param("a", "Remembered: always allow", id="a"),
+        pytest.param("y", "Approval granted [", id="y"),
+    ],
+)
+def test_a_line_typed_at_a_card_past_its_deadline_allows_nothing(
+    tmp_path, typed, would_have_printed
+):
+    """The card was denied at its deadline and the exchange went on. ``s``
+    typed at the prompt it left open does not allow the tool for the
+    conversation, ``a`` writes no rule, and ``y`` approves nothing. The
+    line under the prompt says the card was already settled. In the next
+    exchange the tool is asked about as if nothing had been typed.
+
+    Mutation: record what ``s`` and ``a`` ask for before the answer is
+    known to have settled the card in ``Repl._ask``, and the next call to
+    the tool runs without a card.
+    """
+
+    async def drive():
+        session = _Session(
+            tmp_path,
+            Scripted(
+                _model(_needs_approval()),
+                _model(_gated()),
+                _says("first done"),
+                _model(ToolCall(id="a2", name="ask_a", arguments="{}")),
+                _says("second done"),
+            ),
+            approval_timeout_s=0.3,
+        )
+        session.keyboard.type("once")
+        await session.shows("no answer before the approval deadline")
+        await session.shows("-> gated")
+        session.keyboard.type(typed)
+        await session.shows(SETTLED_ALREADY)
+        after_the_line = session.printed
+        granted = set(session.repl._granted)
+        session.gated.finish.set()
+        await session.shows("first done")
+        await session.opens(PROMPT, times=2)
+        session.keyboard.type("twice")
+        await session.opens(APPROVE.format(n=1), times=2)
+        session.keyboard.type("n")
+        await session.shows("second done")
+        await session.opens(PROMPT, times=3)
+        await session.leave()
+        return session, after_the_line, granted
+
+    session, after_the_line, granted = asyncio.run(drive())
+
+    assert would_have_printed not in session.printed
+    assert "ask_a [#1] was already settled" in after_the_line
+    assert granted == set()
+    assert not (tmp_path / ".omicsclaw" / "settings.json").exists()
+    assert _approval_prompts(session) == [APPROVE.format(n=1)] * 2
+    assert "allowed for this conversation" not in session.printed
+    assert session.printed.count(SETTLED_ALREADY) == 1
+
+
+def test_a_grant_typed_while_the_card_is_waiting_is_recorded_as_before(tmp_path):
+    """The other side of the test above: ``s`` typed in time settles the
+    card, is recorded and said, and the tool's next call runs without a
+    card. Nothing says the card was already settled.
+
+    Mutation: record a grant only when the answer did *not* settle the
+    card and the second call is asked about.
+    """
+
+    async def drive():
+        session = _Session(
+            tmp_path,
+            Scripted(
+                _model(_needs_approval()),
+                _says("first done"),
+                _model(ToolCall(id="a2", name="ask_a", arguments="{}")),
+                _says("second done"),
+            ),
+            approval_timeout_s=30.0,
+        )
+        session.keyboard.type("once")
+        await session.opens(APPROVE.format(n=1))
+        session.keyboard.type("s")
+        await session.shows("first done")
+        await session.opens(PROMPT, times=2)
+        session.keyboard.type("twice")
+        await session.shows("second done")
+        await session.opens(PROMPT, times=3)
+        await session.leave()
+        return session
+
+    session = asyncio.run(drive())
+
+    printed = session.printed
+    assert _approval_prompts(session) == [APPROVE.format(n=1)]
+    assert printed.index("Will not ask about ask_a again") < printed.index(
+        "Approval granted ["
+    )
+    assert "ask_a: allowed for this conversation." in printed
+    assert printed.count("<- ask_a ok") == 2
+    assert SETTLED_ALREADY not in printed
 
 
 # ---- input that is not typed ----------------------------------------------------

@@ -38,7 +38,7 @@ from omicsclaw.schema import (
     Usage,
 )
 from omicsclaw.subagent import TASK_TOOL_NAME
-from omicsclaw.tools.context import ApprovalDecision
+from omicsclaw.tools.context import ApprovalDecision, ApprovalRequest
 from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]
     Asking,
     Exploding,
@@ -979,6 +979,35 @@ def test_approving_a_finished_exchange_does_not_raise(tmp_path):
         await handle.approve("whatever", ApprovalDecision(approved=True))
 
     asyncio.run(drive())
+
+
+def test_approving_says_whether_the_decision_settled_the_request():
+    """A surface that keeps a record of what a person allowed has to know
+    whether their answer still counted. The first answer to a waiting
+    request settles it. A second answer, an answer to an id nobody asked
+    with, and an answer that arrives after the deadline settle nothing.
+
+    Mutations: return ``True`` from ``TurnHandle.approve`` whatever the
+    broker said, and the last three are ``True``; return nothing, and the
+    first is not ``True``.
+    """
+    handle = TurnHandle(session_id="s1", turn_id="t1", approval_timeout_s=0.05)
+    yes = ApprovalDecision(approved=True)
+
+    async def drive():
+        asked = asyncio.create_task(handle.approvals(ApprovalRequest(tool_name="bash")))
+        await asyncio.sleep(0)
+        first = await handle.approve("t1#1", yes)
+        again = await handle.approve("t1#1", yes)
+        unknown = await handle.approve("t1#9", yes)
+        answered = await asyncio.wait_for(asked, WAIT_S)
+        expired = await asyncio.wait_for(
+            handle.approvals(ApprovalRequest(tool_name="bash")), WAIT_S
+        )
+        late = await handle.approve("t1#2", yes)
+        return first, again, unknown, answered.approved, expired.approved, late
+
+    assert asyncio.run(drive()) == (True, False, False, True, False, False)
 
 
 def test_approving_reaches_the_tool_through_the_handle(tmp_path):
