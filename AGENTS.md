@@ -636,7 +636,14 @@ line allows nothing: the request is settled already, `s` records no grant,
 `a` writes no rule, and the REPL prints
 `<tool> [#n] was already settled: this line changed nothing.` before the later
 card's prompt opens. `/auto` typed there is a command and still switches the
-mode.
+mode. It settles neither the card past its deadline nor a later card already
+printed, which is still answered at its own prompt. At a card that is always
+asked about, `/auto` is not the last line read: that card's legend is printed
+again and its prompt comes back, after the prompt of any card already waiting
+for the terminal. The line read there next gets the same notice. Meanwhile the
+old card's legend sits right above the later card's prompt, and it says
+`y or s = allow it once`, while `s` at an ordinary later card allows the whole
+tool.
 
 The REPL's own `❯` prompt is not a card: a line typed early or late with no
 card open is read there and sent as the next message. Piped input
