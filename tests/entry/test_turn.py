@@ -446,6 +446,32 @@ def test_streaming_a_turn_composes_the_same_prompt(tmp_path):
     assert "- spatial-de: Load when running DE." in provider.seen[0][0].content
 
 
+def test_streaming_a_turn_leaves_out_a_call_nothing_answered(tmp_path, caplog):
+    """``stream_turn`` starts from the cleaned history, with no session id too.
+
+    The log line names a session that has no id as ``-``.
+    """
+    stuck = (
+        Message.user("write the notes"),
+        requesting(tool_call("w1", "write_file", CUT_ARGUMENTS), text="Writing."),
+    )
+    provider = Finishing(Message.assistant("Done."))
+    app = make_app(tmp_path, provider)
+
+    async def drive():
+        return [event async for event in stream_turn(app, stuck, "please continue")]
+
+    with caplog.at_level("INFO", logger="omicsclaw.entry.turn"):
+        events = asyncio.run(drive())
+
+    assert any(e.type is EngineEventType.DONE for e in events)
+    assert unanswered_calls(provider.seen[-1]) == []
+    assert_both_dialects_accept(provider.seen[-1])
+    assert "session -: 1 tool call(s) with no result left out of the history" in [
+        record.getMessage() for record in caplog.records
+    ]
+
+
 # ---- the catalogue switch ----------------------------------------------
 
 

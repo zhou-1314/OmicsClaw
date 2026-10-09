@@ -494,6 +494,11 @@ def test_only_the_unanswered_call_of_a_turn_goes():
             _answer("c1"),
             _answer("nobody-asked"),
         ),
+        (
+            Message.user("go"),
+            _asks(_call("c1")),
+            Message.tool(tool_call_id="c1", content=MISSING_TOOL_RESULT),
+        ),
     ],
     ids=[
         "empty",
@@ -505,6 +510,7 @@ def test_only_the_unanswered_call_of_a_turn_goes():
         "assistant-turns-with-no-text-and-no-call",
         "results-out-of-call-order",
         "a-result-nobody-asked-for-behind-the-turn",
+        "answered-by-a-compaction-placeholder",
     ],
 )
 def test_a_conversation_with_every_call_answered_comes_back_message_for_message(
@@ -657,6 +663,61 @@ def test_whitespace_text_stays_on_a_turn_that_keeps_a_call():
     cleaned = drop_unanswered_calls((Message.user("go"), turn, _answer("c1")))
 
     assert cleaned[1] == Message.assistant("\n", tool_calls=(_call("c1"),))
+
+
+def test_an_unanswered_call_with_an_empty_id_is_removed():
+    """An empty id is an id, and with no result carrying it the call goes.
+
+    Both adapters leave the id empty when the vendor sends none.
+    """
+    request = Message.user("write the notes")
+    cut = _asks(_call("", "write_file", _CUT), text="Writing.")
+
+    assert drop_unanswered_calls((request, cut)) == (
+        request,
+        Message.assistant("Writing."),
+    )
+
+
+def test_the_answered_calls_of_a_turn_keep_their_order():
+    """The calls that stay are in the order the turn made them."""
+    turn = _asks(_call("c1"), _call("w1", "write_file", _CUT), _call("c2"))
+
+    cleaned = drop_unanswered_calls(
+        (Message.user("go"), turn, _answer("c1"), _answer("c2"))
+    )
+
+    assert cleaned[1].tool_calls == (_call("c1"), _call("c2"))
+
+
+def test_a_turn_emptied_in_the_middle_of_a_conversation_is_removed_too():
+    """A turn with no text is removed wherever it sits.
+
+    The requests on either side of it end up next to each other.
+    """
+    conversation = (
+        Message.user("write the notes"),
+        _asks(_call("w1", "write_file", _CUT), reasoning="The user wants notes."),
+        Message.user("please continue"),
+        Message.assistant("Continuing."),
+    )
+
+    cleaned = drop_unanswered_calls(conversation)
+
+    remaining = (conversation[0], conversation[2], conversation[3])
+    assert len(cleaned) == len(remaining)
+    assert all(got is given for got, given in zip(cleaned, remaining))
+
+
+def test_the_cleaned_conversation_is_a_tuple_that_is_not_the_callers_list():
+    """With nothing to remove the result is still a new tuple."""
+    messages = [Message.user("task"), *_turn(0)]
+
+    cleaned = drop_unanswered_calls(messages)
+    messages.append(Message.user("added later"))
+
+    assert isinstance(cleaned, tuple)
+    assert len(cleaned) == 3
 
 
 # --- split_head_tail ------------------------------------------------------
