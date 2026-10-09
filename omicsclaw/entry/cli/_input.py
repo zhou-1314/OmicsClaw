@@ -508,8 +508,9 @@ def _drop_keys(keys: Any) -> tuple[bool, bool]:
     :returns: Whether a person had pressed any of them, and whether they
         left a line unfinished: a character or a paste after the last
         Enter. A key that puts no text on the line, such as an arrow or
-        an Escape, starts no line. A cursor position report is the
-        terminal's own, and is thrown away without counting.
+        an Escape, starts no line. What the terminal sent of its own
+        accord is thrown away without counting (see
+        :func:`_pressed_by_a_person`).
     """
     from prompt_toolkit.input.typeahead import get_typeahead
     from prompt_toolkit.keys import Keys
@@ -524,7 +525,7 @@ def _drop_keys(keys: Any) -> tuple[bool, bool]:
             if not presses:
                 break
             waiting.extend(presses)
-    pressed = [press for press in waiting if press.key is not Keys.CPRResponse]
+    pressed = _pressed_by_a_person(waiting)
     unfinished = False
     for press in pressed:
         if press.key in (Keys.ControlM, Keys.ControlJ):
@@ -533,6 +534,62 @@ def _drop_keys(keys: Any) -> tuple[bool, bool]:
         elif not isinstance(press.key, Keys) or press.key is Keys.BracketedPaste:
             unfinished = True
     return bool(pressed), unfinished
+
+
+def _pressed_by_a_person(waiting: Sequence[Any]) -> list[Any]:
+    """*waiting* without what the terminal sent of its own accord.
+
+    Two kinds of key press are left out. A cursor position report, which
+    ``prompt_toolkit`` recognises. And a control sequence it does not
+    recognise, such as the focus report (``ESC [ I``) of a terminal that
+    was left reporting focus: read as typed, its characters would look
+    like the start of a line. A sequence that was cut short is kept,
+    because the rest of it will arrive at the prompt as characters.
+
+    :param waiting: Key presses, in the order they were read.
+    :returns: The ones a person pressed, in the same order.
+    """
+    from prompt_toolkit.keys import Keys
+
+    pressed: list[Any] = []
+    index = 0
+    while index < len(waiting):
+        after = _control_sequence_end(waiting, index)
+        if after:
+            index = after
+            continue
+        if waiting[index].key is not Keys.CPRResponse:
+            pressed.append(waiting[index])
+        index += 1
+    return pressed
+
+
+def _control_sequence_end(presses: Sequence[Any], start: int) -> int:
+    """Where the unrecognised control sequence at ``presses[start]`` ends.
+
+    ``prompt_toolkit`` hands such a sequence over one key press a byte:
+    an Escape, ``[``, any number of parameter and intermediate bytes
+    (``0x20`` to ``0x3F``) and one final byte (``0x40`` to ``0x7E``).
+
+    :returns: The index after the final byte. ``0`` when the key presses
+        from *start* are not such a sequence, or stop before its final
+        byte.
+    """
+    from prompt_toolkit.keys import Keys
+
+    if presses[start].key is not Keys.Escape:
+        return 0
+    if start + 1 >= len(presses) or presses[start + 1].key != "[":
+        return 0
+    for index in range(start + 2, len(presses)):
+        key = presses[index].key
+        if isinstance(key, Keys):
+            return 0
+        if "\x40" <= key <= "\x7e":
+            return index + 1
+        if not "\x20" <= key <= "\x3f":
+            return 0
+    return 0
 
 
 class _PickerCancelled(Exception):

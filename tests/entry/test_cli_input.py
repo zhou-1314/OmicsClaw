@@ -538,6 +538,10 @@ def _record_prompts(source: PromptToolkitSource) -> list[str]:
         pytest.param("\x1b[A", "y\r", "y", 1, id="an arrow key"),
         pytest.param("", "y\r", "y", 0, id="nothing"),
         pytest.param("\x1b[12;1R", "y\r", "y", 0, id="the terminal's own report"),
+        pytest.param("\x1b[I", "y\r", "y", 0, id="a focus report"),
+        pytest.param("\x1b[O\x1b[I", "y\r", "y", 0, id="focus lost and regained"),
+        pytest.param("\x1b[?62;22c", "y\r", "y", 0, id="a device report"),
+        pytest.param("yes\r\x1b[I", "n\r", "n", 1, id="a line, then a focus report"),
     ],
 )
 def test_a_fresh_read_at_the_terminal_takes_only_what_is_typed_after_it_opens(
@@ -552,6 +556,12 @@ def test_a_fresh_read_at_the_terminal_takes_only_what_is_typed_after_it_opens(
     stores Enter as a line feed, which ends a line as a carriage return
     does, and a key that puts no text on the line begins none.
 
+    A terminal with focus reporting left on sends ``ESC [ I`` when its
+    window is clicked. The library does not know that sequence and hands
+    it over as an Escape and two characters. Nobody typed them: read as
+    the start of a line, they would cost the person who then answers the
+    card their first answer.
+
     Mutations: skip the reads in ``_drop_keys`` and the first three cases
     return what was typed before; read once instead of ``_DRAIN_READS``
     times and the 3000-character case returns its tail; leave out
@@ -559,7 +569,9 @@ def test_a_fresh_read_at_the_terminal_takes_only_what_is_typed_after_it_opens(
     call *discarded* unconditionally and the ``nothing`` case reports;
     count every key press and the last case reports; take only a carriage
     return for Enter and the line-feed case drops the ``n``; take any key
-    for the start of a line and the Escape and arrow cases drop the ``y``.
+    for the start of a line and the Escape and arrow cases drop the ``y``;
+    keep the control sequences the library did not recognise among the
+    key presses and the three report cases drop the ``y`` and report.
     """
     waiting, read, seen = _fresh_at_the_terminal(typed_before, typed_after)
 
@@ -576,6 +588,8 @@ def test_a_fresh_read_at_the_terminal_takes_only_what_is_typed_after_it_opens(
         pytest.param("a\rb\rc", "d\r", id="two lines and a half"),
         pytest.param("y\x7f", "y\r", id="a letter and a backspace"),
         pytest.param("\x1b[200~ye\x1b[201~", "s\r", id="a paste"),
+        pytest.param("ye\x1b[I", "s\r", id="half a word, then a focus report"),
+        pytest.param("\x1b[20;", "1Ry\r", id="a cursor report cut short"),
     ],
 )
 def test_a_line_half_typed_before_a_fresh_read_is_dropped_up_to_its_enter(
@@ -588,12 +602,18 @@ def test_a_line_half_typed_before_a_fresh_read_is_dropped_up_to_its_enter(
     typed after that. Both reports are made, once each, and the prompt is
     shown a second time for the line that counts.
 
+    A cursor position report that was cut short is kept as the start of a
+    line on purpose. Its last bytes are still to come, and they reach the
+    prompt as characters: ``1R`` in front of whatever is typed next.
+
     Mutations: return what the first prompt read in
     ``PromptToolkitSource.read_fresh`` and the read returns the rest of
     the line; do not call *unfinished*, or call it first, and what was
     seen differs; treat a line as finished unless its last key is a
     character and the backspace case returns ``y``; leave a paste out of
-    what starts a line and the last case returns ``s``.
+    what starts a line and the paste case returns ``s``; drop a control
+    sequence that has no final byte yet and the last case returns
+    ``1Ry``.
     """
     waiting, read, seen = _fresh_at_the_terminal(typed_before, rest, "n\r")
 
@@ -626,6 +646,51 @@ def test_ctrl_c_ends_a_fresh_read_that_is_waiting_out_a_half_line():
                 return None
 
     assert asyncio.run(drive()) is None
+
+
+@pytest.mark.parametrize(
+    ("sent", "kept"),
+    [
+        pytest.param("\x1b[I", "", id="a focus report"),
+        pytest.param("\x1b[@", "", id="the lowest final byte"),
+        pytest.param("\x1b[99~", "", id="the highest final byte"),
+        pytest.param("\x1b[0 q", "", id="the lowest intermediate byte"),
+        pytest.param("\x1b[?1;2c", "", id="the highest parameter byte"),
+        pytest.param("\x1b[I\x1b[20;1R", "", id="a focus report and a cursor report"),
+        pytest.param("a\x1b[Ib", "ab", id="text on both sides"),
+        pytest.param("\x1b[20;", "\x1b[20;", id="cut short"),
+        pytest.param("\x1b[", "\x1b[", id="cut short at the bracket"),
+        pytest.param("\x1by", "\x1by", id="an Escape and a letter"),
+        pytest.param("a[1m", "a[1m", id="a bracket with no Escape before it"),
+        pytest.param("\x1b[\x7fI", "\x1b[\x7fI", id="a key in the middle"),
+        pytest.param("\x1b[好I", "\x1b[好I", id="a character out of range"),
+    ],
+)
+def test_what_the_terminal_sent_by_itself_is_not_what_a_person_pressed(sent, kept):
+    """``prompt_toolkit`` hands a control sequence it does not know over
+    as an Escape, a ``[`` and one key press for each byte after it. A
+    whole one, parameter and intermediate bytes and then a final byte, is
+    the terminal's and is left out. Anything else stays: a sequence with
+    no final byte yet, an Escape followed by a letter (Alt and that
+    letter), and one with a key or a character in it that no control
+    sequence has.
+
+    Mutations: move either end of the final-byte range, or of the range
+    before it, in ``_control_sequence_end`` and one of the first five
+    cases keeps its bytes; take a sequence for complete when the key
+    presses run out and the two cut-short cases are dropped; do not ask
+    for the Escape and ``a[1m`` is dropped as a sequence.
+    """
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit.input import create_pipe_input
+
+    with create_pipe_input() as keys:
+        keys.send_text(sent)
+        presses = list(keys.read_keys()) + list(keys.flush_keys())
+
+    pressed = _input._pressed_by_a_person(presses)
+
+    assert "".join(press.data for press in pressed) == kept
 
 
 def _two_lines_in_one_write(second: str):
