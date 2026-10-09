@@ -48,13 +48,13 @@
 | 档位 | 走到的代码 | 修不修 | 结果写不写回历史 |
 |---|---|---|---|
 | NONE | `ProgressiveCompactor.compact` 返回 `None`（`progressive.py:147-148`） | 不修 | 不涉及 |
-| WARN | `plan_compaction` 原样通过（`compaction.py:289-290`），`apply_compaction` 最后一行（`:333`） | 不修 | 只在 offload 了东西时写回 |
+| WARN | `plan_compaction` 原样通过（`context/compaction.py:289-290`），`apply_compaction` 最后一行（`:333`） | 不修 | 只在 offload 了东西时写回 |
 | SOFT、FULL，摘要成功 | `apply_compaction` 的 `needs_summary` 分支（`:325-330`） | 修，补占位 | 写回 |
 | SOFT、FULL，降级截断 | `fall_back`（`:680`）调 `fit_to_budget`；已经放得下或没有 head 时原样返回（`transcript.py:238-243`），真的截了才修（`:245-250`） | 截了才修 | 不写回（`should_write_back`，`progressive.py:41`） |
 | SOFT、FULL，pin 之后不超过 6 条 | `split_head_tail` 没有 head（`transcript.py:186-187`），`needs_summary` 为假，走 `:333` | 不修 | 不写回 |
 | EMERGENCY | `apply_compaction` 的 EMERGENCY 分支（`:331-332`） | 修，补占位 | 写回 |
 
-低档位不修是有意的。`apply_compaction` 的 docstring（`compaction.py:319-323`）写的理由是：原样通过的档位必须和输入逐字节相同，否则每个不需要压缩的轮次都要重新预热前缀缓存。
+低档位不修是有意的。`apply_compaction` 的 docstring（`context/compaction.py:319-323`）写的理由是：原样通过的档位必须和输入逐字节相同，否则每个不需要压缩的轮次都要重新预热前缀缓存。
 
 卡住的会话到不了 SOFT。失败的交换不往历史里加东西，历史不增长，压力不变；DeepSeek 的窗口在 `_model_limits.py:89` 是 1M。只有截断发生时已经在 SOFT 以上的会话，下一次调用才会被补上占位。
 
@@ -224,7 +224,7 @@ X5 只降低频率，救不了已经存进库的会话。两个方言的情况�
 | L1 | 引擎源头：`_kernel` 在 `TRUNCATED` 时改写或不记这条消息 | 今后的截断，覆盖所有引擎调用方 | 已经存进库的会话；调用方自己给的历史 | 改引擎的契约（`_stop_reason_for` 的 docstring、`agent-loop.md:229`、`:499`）。`RunResult.messages` 不再是模型的原话，追踪和 eval 读的是它 | 不值。救不了存量；有了 L3 之后它没有新增的覆盖，仓库里不经过 `entry/turn.py` 的引擎调用方只有不带历史的子代理 |
 | L2 | entry 提交时：`_outcome` 在 `stop_reason` 是 `TRUNCATED` 时清理 `TurnOutcome.history` | 今后的截断；库里存的历史始终合法 | 存量会话；调用方自己给的历史 | 一处调用。`TurnOutcome.history` 不再等于 `result.messages` 去掉 system 消息 | 单独不够。和 L3 一起时只多管"两次交换之间库里的样子"，读这段历史的只有 CLI 恢复会话时的回顾（`entry/cli/_repl.py:402`、`:918`）。不做 |
 | L3 | entry 开场时：`_assemble` 和 `compose` | 今后的截断（在下一次交换开场时）、存量会话、`run_turn` 和 `stream_turn` 的库调用方、`/compact` | 直接调 `engine.exchange` 或 `engine.run` 的库调用方，引擎的契约照旧由他们自己处理。从截断到下一次交换之间，库里存的仍是原样 | 一个纯函数，两处调用，每次交换开场把历史扫一遍。没有问题的历史原对象返回，请求字节不变 | 值。推荐 |
-| L4 | 每次发送前：压缩器在所有档位都修，或者两个适配器各自检查 | 任何来源的未答调用 | 适配器方案没有旁路 | 压缩器方案违背低档位逐字节原样通过的约定（`compaction.py:319-323`）。适配器方案要在两个文件里各写一遍，provider 层不能 import context 层（`tests/provider/test_provider_layering.py:94`），改的是 `SPEC.md` 第 4 档的代码，Anthropic 一侧还要处理参数 | 现在不值。交换进行中引擎保证每个调用都有结果（`_answer_every_call`，`loop.py:724-811`），压缩删消息之后已有修复。L4 比 L3 多防的只有直接调引擎的库调用方 |
+| L4 | 每次发送前：压缩器在所有档位都修，或者两个适配器各自检查 | 任何来源的未答调用 | 适配器方案没有旁路 | 压缩器方案违背低档位逐字节原样通过的约定（`context/compaction.py:319-323`）。适配器方案要在两个文件里各写一遍，provider 层不能 import context 层（`tests/provider/test_provider_layering.py:94`），改的是 `SPEC.md` 第 4 档的代码，Anthropic 一侧还要处理参数 | 现在不值。交换进行中引擎保证每个调用都有结果（`_answer_every_call`，`loop.py:724-811`），压缩删消息之后已有修复。L4 比 L3 多防的只有直接调引擎的库调用方 |
 | L5 | 读库时：`SqliteSessionStore._load` | 存量会话 | `InMemorySessionStore` 和别的 `SessionStore` 实现；调用方自己给的历史 | 让存储层懂线上协议 | 不值 |
 | L6 | 一次性迁移，或者一条修复命令 | 存量会话 | 迁移之后再发生的；命令要用户先知道原因，而界面只显示 `Failed: ProviderError` | 一段只跑一次的代码，或者一个新的 surface | 不值。已知的存量是 0 个会话 |
 
@@ -633,10 +633,10 @@ owner 2026-10-09 批准了计划，并就第 2 版列的 Q1 至 Q10 作了裁定
 8. Q9 修完之后"继续"会不声不响地原样重来（K1），这一点先接受。
 9. Q10 重复 id：一条结果回答一个调用，按调用先后认领。条文是规则 2。
 
-Q6 的事实。第 1 版说这行日志是"今后知道这件事发生过几次的唯一落盘记录"，不成立。第 2 版改了大半，Desktop 那一条仍然写错，这一版再改（`SCR/logs/r2_out_11_log_levels.log`，`r3_out_10_facts.log` 的 b 段；审核方的 `RV80/logs/rv80_out17_log_levels.log`、`r2_out8_desktop_warning.log`、`r2_out8_desktop_stderr.txt`）：
+Q6 的事实。第 1 版说这行日志是"今后知道这件事发生过几次的唯一落盘记录"，不成立。第 2 版改了大半，Desktop 那一条仍然写错，这一版再改（`SCR/logs/r2_out_11_log_levels.log`，`r3_out_10_facts.log` 的 b 段，`r3_out_15_facts_base.log`；审核方的 `RV80/logs/rv80_out17_log_levels.log`、`r2_out8_desktop_warning.log`、`r2_out8_desktop_stderr.txt`）：
 
 - CLI 占着终端时，`terminal_owned_logging` 把 `omicsclaw.entry` 压到 ERROR，根 logger 的处理器换成一个内存缓冲（`entry/cli/_screen.py:179-213`，`launch/_surfaces.py:618`）。INFO 和 WARNING 都不产生，ERROR 进那个缓冲。
-- Desktop 用 `uvicorn.Config(log_level="info")`（`launch/_surfaces.py:1245-1247`），它不动根 logger。INFO 级别不够，不产生。WARNING 和 ERROR 级别够，也没有输出：`omicsclaw.entry` 上挂着一个 `NullHandler`（`entry/assembly.py:193`），而 logging 的兜底处理器只在整条链上一个处理器都没有时才用。照 `oc desktop` 的方式配置日志之后，从 `omicsclaw.entry.turn` 发 INFO、WARNING、ERROR 各一条，stderr 上一条都没有；同一时刻，一个链上没有任何处理器的 logger 发的 WARNING 到了 stderr。第 2 版写的"WARNING 会经兜底处理器打到 stderr"是只量了 `isEnabledFor` 得出的，级别够不等于有输出。审核方上一轮"升到 WARNING 后 Desktop 会打到 stderr"出自同一个推断，它撤回了。
+- Desktop 用 `uvicorn.Config(log_level="info")`（`launch/_surfaces.py:1245-1247`），它不动根 logger。INFO 级别不够，不产生。WARNING 和 ERROR 级别够，也没有输出：`omicsclaw.entry` 上挂着一个 `NullHandler`（`entry/assembly.py:193`），而 logging 的兜底处理器只在整条链上一个处理器都没有时才用。照 `oc desktop` 的方式配置日志之后，从 `omicsclaw.entry.turn` 发 INFO、WARNING、ERROR 各一条，stderr 上一条都没有；同一时刻，一个链上没有任何处理器的 logger 发的 WARNING 到了 stderr。在基线和原型的树上各跑了一遍，结果相同。第 2 版写的"WARNING 会经兜底处理器打到 stderr"是只量了 `isEnabledFor` 得出的，级别够不等于有输出。审核方上一轮"升到 WARNING 后 Desktop 会打到 stderr"出自同一个推断，它撤回了。
 - 只有 `oc channel` 调了 `basicConfig(level=INFO)`（`launch/_surfaces.py:1373-1376`），根 logger 有了处理器，INFO 会打到 stderr。
 - T15 用 `caplog` 把级别调到了 INFO，所以它是绿的，说明不了默认配置下有输出。
 
@@ -663,7 +663,7 @@ Q6 的事实。第 1 版说这行日志是"今后知道这件事发生过几次�
 | P2-4 R7 对 `repair_tool_pairs` 的描述不准 | 属实。两个函数只有相邻这一半相同 | §5.1 改了措辞，规则 2 定下一条结果回答一个调用；原型改了；T19、变异 R2、R4、R6；列为 Q10 |
 | P2-5 Desktop 的用例该跑 | 属实 | §7.2 加了第三条命令，基线和第 2 版原型都是 566 passed、3 skipped |
 | P3 两处 docstring 落地后不成立 | 属实，另找到一处：`SessionRegistry.compact`（`entry/session.py:400-402`） | §6.1 列了三处 |
-| P3 短会话上 CLI 仍打印"Nothing to compact" | 属实，另有一句"left as it was"同样对不上（`r2_out_10_facts_prototype.log` 的 g 段） | §5.4、§6.3 |
+| P3 短会话上 CLI 仍打印"Nothing to compact" | 属实（`r2_out_10_facts_prototype.log` 的 g 段）。另有一句"left as it was"同样对不上，g 段没有跑到它，证据是审核方第 2 轮的 `r2_out11_compact_texts.log` | §5.4、§6.3 |
 | P3 规则 3 的范围有歧义 | 属实 | 规则 4 写死只管被去掉过调用的消息；T4 的新形状和变异 R3 |
 | P3 今天的占位等于告诉模型调用跑过了 | 属实（`r2_out_10_facts_today.log` 的 d 段） | §1.2、§4.1、§5.3 |
 | P3 "无法恢复"指的是会话上下文 | 属实 | §0、§1.4、§5.4 |
@@ -679,14 +679,14 @@ Q6 的事实。第 1 版说这行日志是"今后知道这件事发生过几次�
 
 | 复核意见或裁定 | 核实的结果 | 处理 |
 |---|---|---|
-| 必须改：Desktop 上 WARNING 会打到 stderr，不成立 | 属实。自己跑了一遍，三条记录在 stderr 上一条都没有，对照的那一条有（`r3_out_10_facts.log` 的 b 段） | §10.1 的 Q6 事实、K10、§9 末尾 |
+| 必须改：Desktop 上 WARNING 会打到 stderr，不成立 | 属实。自己在原型和基线的树上各跑了一遍，三条记录在 stderr 上一条都没有，对照的那一条有（`r3_out_10_facts.log` 的 b 段，`r3_out_15_facts_base.log`） | §10.1 的 Q6 事实、K10、§9 末尾 |
 | owner 的裁定 | | §10 分成已裁定和仍要定的；状态行、摘要、§4.1、§5.1、§7.3、§8、§9 里"待裁定"的说法都按裁定改了 |
 | K1 两处措辞 | 重读了回复原文，属实：4 次明确写出没有调用，`x1_rich_go` 没有提 | K1；去掉了加在转述上的引号 |
 | 四处存活的变异 W1、W2、W7、W8 | 属实，在第 2 版的测试上都存活 | 四处都补了用例：T20 换样本，T4 加两种形状，新增 T23。42 处变异重跑，存活的只剩 N8、N13 |
 | 规则 4 写明空白的定义 | | 规则 4、§5.1 的说明、§6.3 |
 | "要压力到 SOFT 以上才会碰到"不全 | 属实，够长的会话用 `/compact` 也走修复 | §9 末尾 |
 | "`ollama` 预设给空 id"没有人实测 | 属实。代码事实是厂商不给 id 时两个适配器都留空 | §5.1、§9 末尾 |
-| g 段只覆盖 "Nothing to compact" | 属实 | §5.4 另引了审核方的 `r2_out11_compact_texts.log` |
+| g 段只覆盖 "Nothing to compact" | 属实 | §5.4 和 §11.1 的那一行另引了审核方的 `r2_out11_compact_texts.log` |
 | "4.7 之后的每个型号"不全 | 属实。自己跑了 `claude-opus-4-5`、`claude-opus-4-1`，也是 8,192（`r3_out_10_facts.log` 的 a 段） | §0、§3 的表、§4.1 |
 | 范围外观察补两句 | 核对了 `entry/assembly.py:711` 和参考文档原文 | §4.1、§9 末尾 |
 | 用 DeepSeek 的回复大小比 Anthropic 的 8,192 | 属实，只能当估计 | §0、§3 |
@@ -704,7 +704,7 @@ Q6 的事实。第 1 版说这行日志是"今后知道这件事发生过几次�
 |---|---|---|
 | `r3_proposed/test_plan0080_r3_proposed.py` | `r3_out_03_proposed_base.log`、`r3_out_03_proposed_r2_proto.log` | §6.2：T1 至 T23，在今天和原型上 |
 | `r3_mutate.py` | `r3_out_05_mutations.log` | §6.2：42 处变异 |
-| `probes/r3_probe_04_facts.py` | `r3_out_10_facts.log` | §3 的表、Q6：a、b 段 |
+| `probes/r3_probe_04_facts.py` | `r3_out_10_facts.log`、`r3_out_15_facts_base.log` | §3 的表、Q6：a、b 段，在原型的树上；后一份是 b 段在基线上 |
 | `r3_proposed/test_plan0080_r3_proposed.py`，在 `r2_combo/` 上 | `r3_out_14_combo_0080_tests.log` | §8：与 0078 第 3 版原型合并后的树 |
 
 第 2 版：
