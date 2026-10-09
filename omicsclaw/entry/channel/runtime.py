@@ -645,11 +645,29 @@ class ChannelRuntime:
         with. Returns ``""`` for anything that did not converge: a cancelled
         or failed exchange has already been reported by its terminal frame,
         and a half-written answer is not one.
+
+        Only the messages this exchange added are read. The trajectory
+        starts with the history the exchange was given, so the search runs
+        from the end back to the nearest user message and stops there. That
+        message is the request that opened the exchange, or the summary a
+        compaction left in its place. Tool results are ``Role.TOOL``
+        messages and do not stop the search. The answer is the last
+        assistant message with text in that span, whichever turn of the
+        exchange wrote it. An exchange that wrote no text returns ``""``,
+        and nothing is sent for it.
+
+        An emergency truncation can drop the request and leave no summary.
+        The search then stops at an older user message, and an exchange
+        that wrote no text can return an earlier exchange's answer.
         """
         outcome = await handle.wait()
         if outcome is None or handle.terminal != _CONVERGED:
             return ""
         for message in reversed(outcome.result.messages):
+            if message.role is Role.USER:
+                # Everything in front of this is history the exchange was
+                # given, an earlier exchange's answer included.
+                break
             if message.role is Role.ASSISTANT and message.content:
                 return message.content
         return ""
