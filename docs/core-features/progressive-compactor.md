@@ -528,7 +528,7 @@ async def force(history, tools=()) -> tuple[tuple[Message, ...], CompactionRecor
 - **没有 session_id 时共用目录**：`run_turn` / `prepare` 不传 `session_id` 时，文件落在 `tool_results/default/` 与 `compaction_records/default.jsonl`；`prepare()` 作为预览也会写文件。
 - **没有清理入口**：`FileOffloadStore.purge`、`JsonlCompactionLog.purge` 无调用方，offload 文件与日志只增不减；`JsonlCompactionLog.list` 也没有被任何 surface 读取。
 - **没有执行期 offload**：超大工具输出在进入历史时不拦截，要等到下一次压缩（WARN 起）才被移出；各工具自带的输出截断是唯一的源头防线。
-- **`/compact` 的回话不知道清理的事**：会话历史里有没被回答的工具调用时，`/compact` 开场就把它们去掉了（§9.2），而 CLI 的 `_compaction_verdict` 和 Channel 的 `_describe_compaction` 读的是压缩记录。短会话上它们仍然说 `Nothing to compact…`，摘要失败时仍然说 `…the conversation was left as it was`。
+- **`/compact` 的回话不知道清理的事**：会话历史里有没被回答的工具调用时，`/compact` 开场就把它们去掉了（§9.2），而 CLI 的 `_compaction_verdict` 和 Channel 的 `_describe_compaction` 读的是压缩记录。短会话上它们仍然说 `Nothing to compact…`，摘要失败时仍然说 `…the conversation was left as it was`。Desktop 的 `status` 帧出自同一条记录：这两种情形下 `written_back` 是 `false`，`msgs_before` 和 `msgs_after` 是在清理过的对话上数的，两个数相等，帧里看不出会话历史少了调用，或者少了一整轮。
 - **图片不计成本**：见 [context-engineering.md](context-engineering.md) §12。
 
 ---

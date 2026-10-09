@@ -1,10 +1,10 @@
 # 计划 0080：被输出上限截断的交换留下没被回答的工具调用，会话此后卡死
 
-**状态**：已实现，待独立审核和 owner 下令合并（2026-10-09）。实现在分支 `fix/unanswered-tool-calls` 上，没有合并，没有 push；提交、与计划的差异和验证结果见 §13。计划是定稿的第 3 版：第 2 版（提交 `f317fa37`）经同一审核方复核，owner 2026-10-09 批准了计划，并就 Q1 至 Q10 作了裁定（§10），这一版把裁定和复核意见并进正文。§0 至 §12 是派发实现之前写的，没有随实现改动。
+**状态**：已实现，独立审核通过，审核意见已处理，待 owner 过目和下令合并（2026-10-09）。实现在分支 `fix/unanswered-tool-calls` 上，没有合并，没有 push；提交、与计划的差异和验证结果见 §13，审核意见的处理见 §13.9。计划是定稿的第 3 版：第 2 版（提交 `f317fa37`）经同一审核方复核，owner 2026-10-09 批准了计划，并就 Q1 至 Q10 作了裁定（§10），这一版把裁定和复核意见并进正文。§0 至 §12 是派发实现之前写的，没有随实现改动。
 
 **基线**：`main` 的 `5daf5482`，行号以它为准，实施时按符号名重新定位。
 
-**编号**：环节 C1 至 C9，入口 P1 至 P8，处理方式 X1 至 X5，位置 L1 至 L6，测试 T1 至 T23，变异 M1 至 M15（第 1 版自己的）、N1 至 N15（审核方第 1 轮的）、R1 至 R6（第 2 版新加的）、W1 至 W8（审核方第 2 轮的），真实请求 V1 至 V10，风险 K1 至 K10，问题 Q1 至 Q10（都已裁定）。实施记录（§13）另有测试 T24 至 T29、变异 S1 至 S13、真实请求 V11 至 V13。
+**编号**：环节 C1 至 C9，入口 P1 至 P8，处理方式 X1 至 X5，位置 L1 至 L6，测试 T1 至 T23，变异 M1 至 M15（第 1 版自己的）、N1 至 N15（审核方第 1 轮的）、R1 至 R6（第 2 版新加的）、W1 至 W8（审核方第 2 轮的），真实请求 V1 至 V10，风险 K1 至 K10，问题 Q1 至 Q10（都已裁定）。实施记录（§13）另有测试 T24 至 T33、变异 S1 至 S16、真实请求 V11 至 V13，并引用了审核方第 3 轮的变异 F0 至 F9、E1 至 E7。
 
 **证据**：探针、原型和输出在 `/tmp/claude-0/-workspace-dataset-private-zhouwg-data-OmicsClaw/9885f10a-3799-4309-9dfb-0981c166422a/scratchpad/plan-0080/`，下面记作 `SCR`，第 2 版新做的以 `r2_` 开头，第 3 版新做的以 `r3_` 开头，清单见 §12。审核方的脚本和输出在同级的 `review-plan-0080/`，记作 `RV80`，只读引用；它第 2 轮的文件名也以 `r2_` 开头。第 1 版对真实 DeepSeek 接口发了 10 次请求，逐条记在 `SCR/logs/ledger.txt`，其中 2 次没有得到信息；第 2、3 版没有再发。审核方另发了 8 次（`RV80/logs/rv80_ledger.txt`）。本机没有 Anthropic 凭据，Anthropic 一侧的结论只有文档和本仓库适配器代码两种依据，文中逐处标明。官方文档是 2026-10-09 抓取的。更早的既有证据在 `/tmp/claude-0/-workspace-dataset-private-zhouwg-data-OmicsClaw/58ae2e35-0792-4055-933c-1cfb79c727a6/scratchpad/review-plan-0079/`，记作 `RV79`。各版之间改了什么见 §11。
 
@@ -756,7 +756,12 @@ Q6 的事实。第 1 版说这行日志是"今后知道这件事发生过几次�
 | `4e4a74d3` `test(context): pin six mutations of the unanswered-call cleaning` | 追加的 6 个用例 T24 至 T29（§13.5） |
 | `17700f03` `test(context): say where plain string roles come from` | T7 的 docstring 一行（§13.8 第 6 条） |
 | `5e92a8e6` `docs(entry): record the implementation of plan 0080` | 这一节、状态行、编号行 |
-| 本提交 | `TurnOutcome.history` 和 `TurnRunner` 两处 docstring 的措辞，这张表的最后两行 |
+| `daa04fd7` `docs(entry): tighten two docstrings about the cleaned history` | `TurnOutcome.history` 和 `TurnRunner` 两处 docstring 的措辞，这张表当时的最后两行 |
+| `c9f87056` `fix(entry): take a history that is not a list or a tuple again` | 审核之后：`_assemble` 和 `compose` 先把历史读成 tuple，T30 至 T32，`_Carried` 的两处 docstring（§13.9） |
+| `a33a1704` `test(context): pin an answered call with cut-off arguments and untrimmed text` | 审核之后：T33，T1 的样本，`transcript.py` 模块 docstring 的措辞（§13.9） |
+| 本提交 | 审核之后：`progressive-compactor.md` §12 补 Desktop 一句，§13.9，状态行、编号行和这张表 |
+
+前五个提交是审核之前的，§13.2 至 §13.8 记的是那时的情况。后三个是按审核意见追加的，记在 §13.9；它取代前面的说法的地方在 §13.9 里标出。
 
 动过的文件：
 
@@ -880,3 +885,70 @@ S3 的后果比别的几处重。把不带工具名的结果当成不算回答�
 7. `/compact` 的交换里清理算了两遍，`_assemble` 一遍，`compose` 一遍，日志只在 `_assemble` 那一遍写。`prepare` 和直接调 `compose` 的调用方去掉调用时没有日志。
 8. T10 的测试名让 `def` 那一行有 89 列，超过 black 的 88。标识符折不了行，仓库里别的测试文件也有这样的行。跑测试用的两个 conda 环境里都没有 black 和 ruff，新代码是手工按 88 列排的，没有用工具核过格式。
 9. `tests/entry/test_turn.py` 现在从 `tests/entry/test_turn_runner.py` import 替身和帮助函数，以前只有 `test_session.py` 这样做。
+
+### 13.9 审核意见的处理
+
+审核方审的是 `daa04fd7`。派发方转来的结论是通过，没有合并前必须处理的问题，另有两条应该处理的（P2）和几处小项（P3）。它这一轮的日志在 `RV80/logs/`，以 `r3_` 开头，脚本是 `RV80/scripts/r3_mutate.py` 和 `r3_probe_exposed.py`，只读引用。下面每一条都是先读它的证据、自己复现过再改的。
+
+这一轮没有发真实模型请求。发给模型的内容没有变：生产代码的改动只有入口多出的两处 `tuple()` 和几处 docstring，`drop_unanswered_calls` 的函数体从 `c17a9062` 起没有动过。`probe_01_stuck.py` 的 A 至 D 段在修完的代码上重跑，输出和第一轮逐字节相同（`32_stuck_on_branch_round2.log`）。fuzz 探针没有重跑，它只测那个函数。
+
+**P2-1：不是 list 或 tuple 的历史抛错。** 属实，而且比意见里写的多两个入口。复现用 `IMP/repro_non_sequence.py`，历史里有一轮完整的工具调用：
+
+| | 生成器 | `deque` |
+|---|---|---|
+| 基线，`run_turn`、`stream_turn`、`compose`、`prepare` | 都接受 | 都接受 |
+| `daa04fd7`，同样四个入口 | 都抛 `TypeError: object of type 'generator' has no len()` | 都抛 `TypeError: sequence index must be integer, not 'slice'` |
+| `c9f87056`，同样四个入口 | 都接受 | 都接受 |
+
+修完之后的输出和基线逐行相同（`50_non_sequence_baseline.log`、`51_non_sequence_daa04fd7.log`、`53_non_sequence_after_the_fix.log`）。基线能接受这两种输入，是因为 `_assemble` 做了 `tuple(history)`，`assemble` 用的是 `*history`。
+
+修法是 `_assemble` 和 `compose` 在清理之前先把历史读成 tuple，函数本身没有改。没有选在函数里转，理由有三条：`_assemble` 还要第二次读历史来数去掉了几个调用，函数里转管不到这一处，生成器读第二遍是空的；`transcript.py` 里别的函数同样只接受序列；函数体不动，计划方和审核方各自做过的随机比对仍然适用。规则 6 不受影响，没有可去掉的东西时返回的仍是原来那些消息对象。
+
+**P2-2：已经回答、参数却被截的调用要原样留着。** 属实，F6 在 `daa04fd7` 的测试上存活。T4 加了第 11 种形状。
+
+P3 各条：
+
+- Desktop 的 `status` 帧。跑实了，不只是读代码。`IMP/probe_desktop_compact.py` 在进程内经 `open_chat_stream` 发 `/compact`，没有开端口，三种会话：短会话、被截的一轮带文字；短会话、不带文字；长会话、摘要失败。三种的帧都是 `written_back=false`，`msgs_before` 等于 `msgs_after`（3 和 3、2 和 2、19 和 19，数的是清理过的对话，含 system 消息），而会话历史里的调用都去掉了，不带文字的那一种从 2 条变成 1 条（`54_desktop_compact_status_frame.log`）。已补进 `progressive-compactor.md` §12。探针第一次读得太早：流在终止帧处结束，那时 registry 还没有把历史存回去，等交换 settle 之后读到的才是存下的历史。这个先后是既有的，和本计划无关。
+- `_Carried.carried` 的 docstring 改成"commit，或者 `history`"，并写明 `history` 已经去掉了未答调用，可能和调用方传进来的不一样。`_Carried.history` 的 docstring 补了同一点。§13.8 第 5 条说的行为没有变，现在 docstring 写明了。
+- `transcript.py` 模块 docstring 里 "so that the conversation is one the API accepts" 说满了。改成只说它做的事，并写明清理之后找不到调用的结果、已答但参数解析不了的调用都还在。§13.2 第 2 条说的那一段现在是这个写法。
+- F8：T1 的文字加了一个尾部换行，清理之后换行还在。
+- E2：加了 T32，`prepare` 的用例。它用的是未答调用在历史中间的形状，所以 E4 也转红了，不再是只记一句的存活项。
+- F7、F9、E6 不钉，理由各一句。F7（空白写成一个不含不换行空格的显式字符集）：测试的样本只能列有限几个字符，T20 列了换行、制表符、全角空格和空格，规则写的是 `str.strip()`，实现里就是这一个调用。F9（system 消息不打断结果串）：经 entry 层进来的历史里没有 system 消息，`_settle` 和 `SqliteSessionStore._save` 都按角色去掉了。E6（`/compact` 时 `compose` 再写一行日志）：`/compact` 上的那行日志本来就没有测试钉，N13 是同一件事，而它不当记录用（Q6）。
+- 规则 10 的日志行数不等于发生次数。复现用 `IMP/repro_log_repeats.py`：存着一个未答调用的会话，后端让接下来两次交换失败、第三次成功，日志写了 3 行，说的是同一个调用（`55_log_line_repeats.log`）。失败和取消的交换不改存着的历史，下一次开场会再清理一遍、再写一行。
+
+这一轮加的用例：
+
+| 编号 | 测试 | 钉住的 |
+|---|---|---|
+| T30 | `test_compose_takes_a_history_that_is_not_a_list_or_a_tuple`，生成器和 `deque` 两种 | `compose` 对这两种输入给出和 list 相同的对话，未答调用照样去掉 |
+| T31 | `test_run_turn_takes_a_history_that_is_not_a_list_or_a_tuple`，同样两种 | `_assemble` 这一处：发给模型的、交回的历史、日志里的调用数都和 list 相同 |
+| T32 | `test_prepare_leaves_out_a_call_nothing_answered` | 规则 9：`prepare` 从清理过的历史开始，未答调用在历史中间时也一样 |
+| T33 | T4 的第 11 种形状 `an-answered-call-with-cut-off-arguments` | 规则 3：已经回答的调用不动，参数解析不了也不动 |
+
+T30 至 T32 在 `tests/entry/test_turn.py`，T33 和改过样本的 T1 在 `tests/context/test_transcript.py`。新增用例现在一共 48 个：计划的 36，审核前追加的 6，这一轮的 6。在修之前的代码上，T30、T31 的 4 个用例是红的，原因就是上表的两种 `TypeError`；T32、T33 和 T1 是绿的，它们钉的是代码本来就有的行为（`52_round2_tests_before_the_fix.log`）。
+
+变异在修完的代码上全部重跑，74 处，69 处转红（`22_mutations_round2_worktree.log`）：
+
+- 计划的 42 处：40 处转红，N8、N13 存活，和之前相同。涉及入口的 M1、M2、M12、M14、M15、N4、N5、N12、W6、W7 都转红，M2、N5 按 `compose` 现在的那一行重新定了锚点。
+- S1 至 S13：都转红。
+- 这一轮自选的 3 处，都转红：
+
+| 变异 | 转红的测试 |
+|---|---|
+| S14 `_assemble` 不先把历史读成 tuple | T31 的两种 |
+| S15 `compose` 把历史原样交给清理 | T30 的两种 |
+| S16 `_assemble` 清理的是 tuple，数调用时读的却是调用方的对象 | T31 的生成器那一种，日志里的数对不上 |
+
+- 审核方第 3 轮的 17 处里重跑了 16 处，编辑照它的脚本，E4、E6 按 `compose` 现在的那一行重新定了锚点。13 处转红，其中 F6 由 T33、F8 由 T1、E2 和 E4 由 T32 转红。存活的是 F7、F9、E6。E7（`omicsclaw.context` 不导出这个名字）没有重跑，转红它的是公开面清单那条测试，不在这个脚本选的新增用例里。
+
+§7.2 的三条命令在 `a33a1704` 上都重跑了，这取代 §13.4 表里"没有重跑"的两格和 §13.7 的第三条：
+
+| 命令 | 基线 | `a33a1704` |
+|---|---|---|
+| 第一条 | 2842 passed、11 skipped、26 deselected、3 xfailed | 2890 passed，其余相同，112 秒 |
+| 第二条 | 842 passed、14 skipped、1 deselected、1 xpassed | 相同，86 秒 |
+| 第三条 | 566 passed、3 skipped | 相同，8 秒 |
+
+第一条多出的 48 就是新增的用例。日志是 `13_branch_a33a1704_*.log`。`a33a1704` 之后的提交只改文档。
+
+这一轮没有跑的：真实模型请求，理由在本小节开头；fuzz 探针；PR 上的 `Eval CI`，分支仍然没有 push。
