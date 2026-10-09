@@ -771,7 +771,7 @@ def test_a_failed_approval_task_is_logged_and_not_merely_dropped(
     surface means into a log sink the REPL holds until the process exits.
     """
 
-    async def boom(self, handle, request_id, event) -> None:
+    async def boom(self, handle, request_id, event, **_how) -> None:
         raise RuntimeError("could not settle it")
 
     async def drive():

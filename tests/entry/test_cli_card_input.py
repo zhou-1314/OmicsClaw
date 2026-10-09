@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import os
 from typing import Callable
 
@@ -27,7 +28,9 @@ import pytest
 
 from omicsclaw.entry.cli import PROMPT, Repl, Screen, StreamSource
 from omicsclaw.entry.cli._input import FreshSource
-from omicsclaw.schema import Role, ToolCall
+from omicsclaw.permission import PermissionMode
+from omicsclaw.schema import Message, Role, ToolCall
+from omicsclaw.tools import ApprovalMode, ToolPolicy
 from tests.entry.test_cli_input import Typist  # type: ignore[import-not-found]
 from tests.entry.test_cli_question import (  # type: ignore[import-not-found]
     _asks,
@@ -45,6 +48,7 @@ from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]
 WAIT_S = 10.0
 
 NOTICE = "input typed before this prompt was discarded"
+NOBODY_ASKED = "nobody was asked"
 
 ANSWER = "answer [#{n}]> "
 APPROVE = "approve ask_a [#{n}]? [y/N/a=always] "
@@ -123,14 +127,19 @@ def _needs_approval() -> ToolCall:
 class _Session:
     """One REPL over a :class:`Keyboard`, with what the scenarios share."""
 
-    def __init__(self, tmp_path, provider, **overrides) -> None:
+    def __init__(
+        self, tmp_path, provider, *, tools=(), keyboard=None, **overrides
+    ) -> None:
         self.gated = _Gated()
         self.provider = provider
         self.app = _build(
-            tmp_path, provider, tools=(self.gated, Asking("ask_a")), **overrides
+            tmp_path,
+            provider,
+            tools=(self.gated, Asking("ask_a"), *tools),
+            **overrides,
         )
         self.buffer = io.StringIO()
-        self.keyboard = Keyboard()
+        self.keyboard = keyboard if keyboard is not None else Keyboard()
         self.repl = Repl(
             self.app, source=self.keyboard, screen=Screen.into(self.buffer)
         )
@@ -403,6 +412,363 @@ def test_a_late_reply_with_no_card_open_is_the_next_message(tmp_path):
     assert said[-1] == "2"
     assert NOTICE not in session.printed
     assert session.keyboard.withdrawn == 1
+
+
+# ---- a call that needs approval, after a question nobody answered -----------------
+#
+# One model message can carry ``ask_user`` and, after it, a call that needs
+# approval. That call's card would open in the instant the question's
+# deadline passes, so a ``yes`` typed for the question a moment too late
+# would be typed after the card opened, and would approve it.
+
+
+class _AsksAlone(Asking):
+    """An approval tool that runs with nothing else of its message beside it."""
+
+    policy = ToolPolicy(approval_mode=ApprovalMode.ASK, concurrency_safe=False)
+
+
+def _results(sent: tuple[Message, ...], name: str) -> list[Message]:
+    """The results of the calls to *name* among the messages *sent* to the model."""
+    return [
+        message
+        for message in sent
+        if message.role is Role.TOOL and message.name == name
+    ]
+
+
+def _approval_prompts(session: _Session) -> list[str]:
+    return [one for one in session.keyboard.prompts if one.startswith("approve ")]
+
+
+def test_a_call_after_a_question_nobody_answered_is_refused_without_a_prompt(
+    tmp_path,
+):
+    """The question and a call that needs approval come in one model
+    message, and the question's deadline passes. The call is refused and
+    its prompt never opens. The ``yes`` typed for the question a moment
+    late has no card to land on: it waits for the REPL's own prompt and is
+    the next message. The model reads why the call was refused and that
+    it may make the call again.
+
+    Mutation: open the card all the same in ``Repl._ask`` and the late
+    ``yes`` approves a call nobody was shown.
+    """
+
+    async def drive():
+        session = _Session(
+            tmp_path,
+            Scripted(
+                _model(_asks("May I print a greeting?"), _needs_approval()),
+                _says("went on"),
+                _says("second answer"),
+            ),
+            approval_timeout_s=0.3,
+        )
+        session.keyboard.type("go")
+        await session.shows("No answer [")
+        session.keyboard.type("yes")
+        await session.shows("second answer")
+        await session.opens(PROMPT, times=3)
+        await session.leave()
+        return session
+
+    session = asyncio.run(drive())
+
+    assert _approval_prompts(session) == []
+    assert "Approval granted [" not in session.printed
+    assert "<- ask_a error" in session.printed
+    denied = [
+        line
+        for line in session.printed.splitlines()
+        if line.startswith("Approval denied [")
+    ]
+    assert len(denied) == 1 and NOBODY_ASKED in denied[0]
+    (refused,) = _results(session.provider.seen[1], "ask_a")
+    assert refused.is_error
+    assert NOBODY_ASKED in refused.content
+    assert "got no answer" in refused.content
+    assert "again in a later message" in refused.content
+    said = [
+        message.content
+        for message in session.provider.seen[-1]
+        if message.role is Role.USER
+    ]
+    assert said[-1] == "yes"
+    assert NOTICE not in session.printed
+
+
+def test_the_call_made_again_in_a_later_message_is_asked_about(tmp_path):
+    """Only the message that carried the unanswered question is affected.
+    The model makes the call again in its next message, the card opens,
+    and ``y`` typed at it approves.
+
+    Mutation: do not clear the mark at ``TURN_END`` in ``Repl._pump`` and
+    the second call is refused like the first.
+    """
+
+    async def drive():
+        session = _Session(
+            tmp_path,
+            Scripted(
+                _model(_asks("May I print a greeting?"), _needs_approval()),
+                _model(ToolCall(id="a2", name="ask_a", arguments="{}")),
+                _says("done"),
+            ),
+            approval_timeout_s=1.0,
+        )
+        session.keyboard.type("go")
+        await session.opens(APPROVE.format(n=3))
+        session.keyboard.type("y")
+        await session.shows("<- ask_a ok")
+        await session.opens(PROMPT, times=2)
+        await session.leave()
+        return session
+
+    session = asyncio.run(drive())
+
+    assert _approval_prompts(session) == [APPROVE.format(n=3)]
+    assert session.printed.count("Approval denied [") == 1
+    assert "Approval granted [" in session.printed
+
+
+def test_every_call_that_needs_approval_in_that_message_is_refused(tmp_path):
+    """Two calls follow the unanswered question and run one after the
+    other. Neither is asked about.
+
+    Mutation: clear the mark once a call has been refused and the second
+    call's card opens.
+    """
+
+    async def drive():
+        session = _Session(
+            tmp_path,
+            Scripted(
+                _model(
+                    _asks("May I print a greeting?"),
+                    ToolCall(id="x1", name="alone_a", arguments="{}"),
+                    ToolCall(id="x2", name="alone_b", arguments="{}"),
+                ),
+                _says("done"),
+            ),
+            tools=(_AsksAlone("alone_a"), _AsksAlone("alone_b")),
+            approval_timeout_s=0.3,
+        )
+        session.keyboard.type("go")
+        await session.shows("done")
+        await session.opens(PROMPT, times=2)
+        await session.leave()
+        return session
+
+    session = asyncio.run(drive())
+
+    assert _approval_prompts(session) == []
+    assert session.printed.count("Approval denied [") == 2
+    for name in ("alone_a", "alone_b"):
+        (refused,) = _results(session.provider.seen[-1], name)
+        assert refused.is_error and NOBODY_ASKED in refused.content
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [pytest.param("Leiden", id="answered"), pytest.param("", id="skipped")],
+)
+def test_a_question_that_got_a_reply_leaves_the_call_after_it_asked_about(
+    tmp_path, reply
+):
+    """A deadline is set and the person replies inside it, with an answer
+    or with the empty line that skips. The card of the call after the
+    question opens as it always did.
+
+    Mutation: mark every settled question in ``Repl._pump``, or every one
+    that was not answered, and the call is refused.
+    """
+
+    async def drive():
+        session = _Session(
+            tmp_path,
+            Scripted(
+                _model(_asks("Which clustering?"), _needs_approval()), _says("done")
+            ),
+            approval_timeout_s=30.0,
+        )
+        session.keyboard.type("go")
+        await session.opens(ANSWER.format(n=1))
+        session.keyboard.type(reply)
+        await session.opens(APPROVE.format(n=2))
+        session.keyboard.type("y")
+        await session.shows("<- ask_a ok")
+        await session.opens(PROMPT, times=2)
+        await session.leave()
+        return session
+
+    session = asyncio.run(drive())
+
+    assert "Approval granted [" in session.printed
+    assert NOBODY_ASKED not in session.printed
+
+
+class _CannotShowTheQuestion(Keyboard):
+    """A terminal that fails when the question's prompt is put up."""
+
+    async def read_fresh(self, prompt: str, **reports) -> str:
+        if prompt.startswith("answer"):
+            self.prompts.append(prompt)
+            raise RuntimeError("no tty")
+        return await super().read_fresh(prompt, **reports)
+
+
+def test_a_question_unanswered_for_another_reason_leaves_the_call_asked_about(
+    tmp_path,
+):
+    """The question could not be put, which the model also reads as
+    ``no_answer``. No deadline passed, nobody was typing a reply, and the
+    call after it is asked about.
+
+    Mutation: mark a question settled as ``no_answer`` whatever its reason
+    and the call is refused.
+    """
+
+    async def drive():
+        session = _Session(
+            tmp_path,
+            Scripted(
+                _model(_asks("Which clustering?"), _needs_approval()), _says("done")
+            ),
+            keyboard=_CannotShowTheQuestion(),
+            approval_timeout_s=30.0,
+        )
+        session.keyboard.type("go")
+        await session.opens(APPROVE.format(n=2))
+        session.keyboard.type("y")
+        await session.shows("<- ask_a ok")
+        await session.opens(PROMPT, times=2)
+        await session.leave()
+        return session
+
+    session = asyncio.run(drive())
+
+    assert "the terminal could not ask: no tty" in session.printed
+    assert "Approval granted [" in session.printed
+    assert NOBODY_ASKED not in session.printed
+
+
+def test_a_tool_allowed_for_the_conversation_runs_after_the_question(tmp_path):
+    """``s`` at an earlier card stopped the asking about this tool, so its
+    call would have opened no prompt. It runs after the unanswered
+    question as it runs anywhere else.
+
+    Mutation: refuse before looking at the grant in ``Repl._ask`` and the
+    second call is refused.
+    """
+
+    async def drive():
+        session = _Session(
+            tmp_path,
+            Scripted(
+                _model(_needs_approval()),
+                _says("first done"),
+                _model(_asks("May I print a greeting?"), _needs_approval()),
+                _says("second done"),
+            ),
+            approval_timeout_s=1.0,
+        )
+        session.keyboard.type("once")
+        await session.opens(APPROVE.format(n=1))
+        session.keyboard.type("s")
+        await session.shows("first done")
+        await session.opens(PROMPT, times=2)
+        session.keyboard.type("twice")
+        await session.shows("No answer [")
+        await session.shows("second done")
+        await session.opens(PROMPT, times=3)
+        await session.leave()
+        return session
+
+    session = asyncio.run(drive())
+
+    assert _approval_prompts(session) == [APPROVE.format(n=1)]
+    assert session.printed.count("<- ask_a ok") == 2
+    assert "ask_a: allowed for this conversation." in session.printed
+    assert NOBODY_ASKED not in session.printed
+
+
+def test_a_sub_agent_s_call_after_the_question_is_asked_about(tmp_path):
+    """The message that carried the unanswered question also hands a task
+    to a sub-agent. A sub-agent calls its model before it calls a tool,
+    so its card opens later, as the card of a next message does, and it
+    is asked about. Refused, the sub-agent would read that it may make
+    the call again in a later message, and be refused again for as long
+    as the task ran.
+
+    Mutation: refuse a sub-agent's request too in ``Repl._pump`` and the
+    prompt below never opens.
+    """
+    delegating = _model(
+        _asks("May I print a greeting?"),
+        ToolCall(
+            id="d1",
+            name="task",
+            arguments=json.dumps(
+                {"subagent_type": "general-purpose", "prompt": "do the thing"}
+            ),
+        ),
+    )
+    asked = "approve ask_a for sub-agent general-purpose [#2]? [y/N/a=always] "
+
+    async def drive():
+        session = _Session(
+            tmp_path,
+            Scripted(
+                delegating,
+                _model(_needs_approval()),
+                _says("the sub-agent finished"),
+                _says("handed back"),
+            ),
+            approval_timeout_s=1.0,
+        )
+        session.keyboard.type("go")
+        await session.opens(asked)
+        session.keyboard.type("y")
+        await session.shows("handed back")
+        await session.opens(PROMPT, times=2)
+        await session.leave()
+        return session
+
+    session = asyncio.run(drive())
+
+    assert _approval_prompts(session) == [asked]
+    assert "No answer [" in session.printed
+    assert "Approval granted [" in session.printed
+    assert NOBODY_ASKED not in session.printed
+
+
+def test_under_auto_approve_the_call_after_the_question_runs(tmp_path):
+    """In ``auto-approve`` the call asks nobody, so there is no card to
+    keep closed and nothing to refuse."""
+
+    async def drive():
+        session = _Session(
+            tmp_path,
+            Scripted(
+                _model(_asks("May I print a greeting?"), _needs_approval()),
+                _says("done"),
+            ),
+            approval_timeout_s=0.3,
+            permission_mode=PermissionMode.AUTO_APPROVE,
+        )
+        session.keyboard.type("go")
+        await session.shows("No answer [")
+        await session.shows("<- ask_a ok")
+        await session.opens(PROMPT, times=2)
+        await session.leave()
+        return session
+
+    session = asyncio.run(drive())
+
+    assert "Approval required [" not in session.printed
+    assert "Approval denied [" not in session.printed
+    assert _approval_prompts(session) == []
 
 
 # ---- input that is not typed ----------------------------------------------------

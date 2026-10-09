@@ -123,7 +123,7 @@ from omicsclaw.context import CompactionRecord, is_summary_message
 from omicsclaw.entry.assembly import AgentApp
 from omicsclaw.entry.display import approval_body_note, inert_line, inert_prose
 from omicsclaw.entry.events import TurnEvent, TurnEventType
-from omicsclaw.entry.question import read_reply
+from omicsclaw.entry.question import QUESTION_TIMEOUT_REASON, read_reply
 from omicsclaw.entry.render import TextRenderer
 from omicsclaw.entry.session import Session, SubmissionRefused, new_turn_id
 from omicsclaw.entry.turn import TurnHandle
@@ -232,6 +232,16 @@ and this line is why."""
 
 _INTERRUPTED_REASON = "interrupted at the terminal"
 """The reason a card is settled with when Ctrl-C is pressed at it."""
+
+_NOBODY_ASKED_REASON = (
+    "nobody was asked, because the question earlier in the same message got "
+    "no answer; make the call again in a later message if it is still needed"
+)
+"""The reason an approval is refused with, unasked, after a question of
+the same model message passed its deadline.
+
+The model reads it in the tool's result. It says that no person refused
+and that the call may be made again, which a bare denial would not."""
 
 _NO_OPERATOR_REASON = "no operator at the terminal"
 """The reason a card is settled with when the input ended or the Task
@@ -366,6 +376,22 @@ def _card(request_id: str) -> str:
     """
     _turn, hash_mark, index = request_id.rpartition("#")
     return f"#{index}" if hash_mark else request_id
+
+
+def _passed_its_deadline(event: TurnEvent) -> bool:
+    """Whether *event* settles a question because its deadline passed.
+
+    True for a ``QUESTION_SETTLED`` frame whose answer is ``no_answer``
+    with the broker's deadline reason. A question that was answered or
+    skipped has another status. One that was cancelled, ended with its
+    exchange or could not be put has another reason.
+    """
+    answer = event.answer
+    return (
+        answer is not None
+        and answer.status is AnswerStatus.NO_ANSWER
+        and answer.reason == QUESTION_TIMEOUT_REASON
+    )
 
 
 def _task_lines(items: Sequence[PlanItem]) -> list[Text]:
@@ -1195,6 +1221,10 @@ class Repl:
         streaming = False
         answering = False
         wrote_lines = False
+        # A question of the model message now being carried out passed
+        # its deadline. Until that message's TURN_END, no approval prompt
+        # is opened for a call of that message: see ``_ask``.
+        unanswered = False
         try:
             async with handle.observe() as observation:
                 async for event in observation:
@@ -1244,14 +1274,22 @@ class Repl:
                         # Before the erase below: a tick can paint while
                         # this waits for the prompt to come down.
                         await self._retract_question(event.request_id)
+                        if _passed_its_deadline(event):
+                            unanswered = True
                     # Whatever is printed below starts at column 0.
                     activity.clear()
                     self._note_activity(event, activity)
                     if event.type is TurnEventType.APPROVAL_REQUIRED:
-                        self._ask_human(handle, event)
+                        # A sub-agent's call is not one of that message's:
+                        # its card opens a model call later, as the card
+                        # of the next message does.
+                        self._ask_human(
+                            handle, event, unasked=unanswered and not event.subagent
+                        )
                     if event.type is TurnEventType.QUESTION_ASKED:
                         self._ask_question(handle, event)
                     if event.type is TurnEventType.TURN_END:
+                        unanswered = False
                         self._count(event)
                     if event.type is TurnEventType.EXCHANGE_END:
                         if event.terminal == "converged":
@@ -1426,19 +1464,23 @@ class Repl:
 
     # ---- approvals -------------------------------------------------------
 
-    def _ask_human(self, handle: TurnHandle, event: TurnEvent) -> None:
+    def _ask_human(
+        self, handle: TurnHandle, event: TurnEvent, *, unasked: bool = False
+    ) -> None:
         """Start asking, and return to the pump immediately (trap 1).
 
         The hold is taken **here** rather than inside :meth:`_ask`, so
         that it is in force before the new Task has had a chance to run:
         a tick landing between ``create_task`` and the prompt would paint
         a spinner that ``prompt_toolkit`` is about to draw over.
+
+        *unasked* is passed on to :meth:`_ask`.
         """
         activity = self._activity
         if activity is not None:
             activity.hold()
         task = asyncio.create_task(
-            self._answer(handle, event.request_id, event, activity),
+            self._answer(handle, event.request_id, event, activity, unasked),
             name=f"omicsclaw-cli-approval-{event.request_id}",
         )
         self._asking.add(task)
@@ -1450,6 +1492,7 @@ class Repl:
         request_id: str,
         event: TurnEvent,
         activity: ActivityLine | None,
+        unasked: bool = False,
     ) -> None:
         """Ask, and give the live line back however the question ends.
 
@@ -1460,7 +1503,7 @@ class Repl:
         which is the defect this mechanism exists to remove.
         """
         try:
-            await self._ask(handle, request_id, event)
+            await self._ask(handle, request_id, event, unasked=unasked)
         finally:
             if activity is not None:
                 activity.release()
@@ -1561,7 +1604,12 @@ class Repl:
         return None
 
     async def _ask(
-        self, handle: TurnHandle, request_id: str, event: TurnEvent
+        self,
+        handle: TurnHandle,
+        request_id: str,
+        event: TurnEvent,
+        *,
+        unasked: bool = False,
     ) -> None:
         """Put one question to the person and send back what they said.
 
@@ -1575,6 +1623,15 @@ class Repl:
         A card that gets no answer — Ctrl-C at it, the input ending, the
         Task being cancelled, the source failing — denies the request (see
         :meth:`_read_card`); Ctrl-C also cancels the exchange.
+
+        With *unasked* the request is denied with
+        :data:`_NOBODY_ASKED_REASON` and no prompt is opened. The pump
+        sets it for a call of the agent's own that follows, in the same
+        model message, a question whose deadline passed: the prompt would
+        open as the question's came down, and a reply typed a moment late
+        for the question would be read as the answer to it. A tool already
+        allowed for this conversation is not asked about at all, so it
+        runs whatever *unasked* says.
         """
         request = event.approval
         name = inert_line(request.tool_name) if request is not None else "a tool"
@@ -1583,6 +1640,11 @@ class Repl:
                 Text(f"{name}: allowed for this conversation.", style="dim")
             )
             await handle.approve(request_id, ApprovalDecision(True, ""))
+            return
+        if unasked:
+            await handle.approve(
+                request_id, ApprovalDecision(False, _NOBODY_ASKED_REASON)
+            )
             return
         note = approval_body_note(request) if request is not None else ""
         asker = (
