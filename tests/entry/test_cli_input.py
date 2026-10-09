@@ -661,6 +661,7 @@ def test_ctrl_c_ends_a_fresh_read_that_is_waiting_out_a_half_line():
         pytest.param("\x1b[20;", "\x1b[20;", id="cut short"),
         pytest.param("\x1b[", "\x1b[", id="cut short at the bracket"),
         pytest.param("\x1by", "\x1by", id="an Escape and a letter"),
+        pytest.param("\x1bye", "\x1bye", id="an Escape and two letters"),
         pytest.param("a[1m", "a[1m", id="a bracket with no Escape before it"),
         pytest.param("\x1b[\x7fI", "\x1b[\x7fI", id="a key in the middle"),
         pytest.param("\x1b[好I", "\x1b[好I", id="a character out of range"),
@@ -679,7 +680,8 @@ def test_what_the_terminal_sent_by_itself_is_not_what_a_person_pressed(sent, kep
     before it, in ``_control_sequence_end`` and one of the first five
     cases keeps its bytes; take a sequence for complete when the key
     presses run out and the two cut-short cases are dropped; do not ask
-    for the Escape and ``a[1m`` is dropped as a sequence.
+    for the Escape and ``a[1m`` is dropped as a sequence; do not ask for
+    the ``[`` and Alt-y followed by ``e`` is dropped as one.
     """
     pytest.importorskip("prompt_toolkit")
     from prompt_toolkit.input import create_pipe_input
@@ -718,17 +720,23 @@ def test_the_line_typed_after_the_discarded_one_is_the_answer():
 # the rest of the word at the card that opens later.
 
 
-async def _taken_down(source: PromptToolkitSource, keys, typed: str) -> list[str]:
+async def _taken_down(
+    source: PromptToolkitSource, keys, typed: str, how: str = "read_fresh"
+) -> list[str]:
     """Open a read, type *typed* at it without Enter, and cancel it.
+
+    *how* names the method that reads: ``read_fresh`` for a card's
+    prompt, ``read`` for the ordinary one.
 
     :returns: the list in which *source* notes what it shows from now on.
     """
-    reading = asyncio.create_task(source.read_fresh("answer> "))
+    reading = asyncio.create_task(getattr(source, how)("answer> "))
     await asyncio.sleep(0.05)
     keys.send_text(typed)
     await asyncio.sleep(SETTLE_S)
     reading.cancel()
     await asyncio.wait({reading})
+    assert reading.cancelled(), "the read did not end as a cancelled one"
     source.withdraw()
     return _record_prompts(source)
 
@@ -777,18 +785,30 @@ def _after_a_prompt_was_taken_down(typed_at_it: str, between, *typed_at_the_card
     return asyncio.run(drive())
 
 
-def test_a_line_begun_at_a_prompt_that_was_taken_down_is_dropped_up_to_its_enter():
+@pytest.mark.parametrize(
+    "how",
+    [
+        pytest.param("read_fresh", id="a card's prompt"),
+        pytest.param("read", id="the ordinary prompt"),
+    ],
+)
+def test_a_line_begun_at_a_prompt_that_was_taken_down_is_dropped_up_to_its_enter(how):
     """``ye`` typed at a question's prompt, the prompt cancelled at the
     deadline, ``s`` and Enter typed at the approval card that opens next.
     The card reports both things, reads the rest of the line away and
-    waits for a line typed after it.
+    waits for a line typed after it. A line begun at the ordinary prompt
+    is treated the same way when that prompt is the one taken down.
 
     The line is over once its Enter has been read: the card after that
     one takes the first line typed at it.
 
     Mutations: do not remember that the cancelled prompt held text in
     ``PromptToolkitSource`` and the card returns ``s``; keep the mark
-    after a card has acted on it and the second card throws ``y`` away.
+    after a card has acted on it and the second card throws ``y`` away;
+    call ``prompt_async`` directly in ``PromptToolkitSource.read`` and the
+    card after the ordinary prompt returns ``s``; swallow the cancellation
+    in ``PromptToolkitSource._prompt`` and the read that was cancelled
+    returns instead.
     """
     pytest.importorskip("prompt_toolkit")
     from prompt_toolkit.input import create_pipe_input
@@ -796,7 +816,7 @@ def test_a_line_begun_at_a_prompt_that_was_taken_down_is_dropped_up_to_its_enter
     async def drive():
         with create_pipe_input() as keys:
             source = _picker_source(keys)
-            seen = await _taken_down(source, keys, "ye")
+            seen = await _taken_down(source, keys, "ye", how)
             first = await _card_after(source, keys, seen, "s\r", "n\r")
             at_the_first = list(seen)
             del seen[:]
