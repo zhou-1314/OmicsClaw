@@ -1,23 +1,24 @@
 # 计划 0078：降级截断先丢什么（`fit_to_budget`）
 
-**状态**：第 2 版（2026-10-08）。第 1 版（提交 `065ad974`）经独立审核，结论是"修改后可以做"，owner 就待裁定的问题给了答复。这一版按审核意见和裁定修订，待同一审核方复核、owner 批准。本计划没有改生产代码和测试。
+**状态**：定稿，第 3 版（2026-10-09）。第 2 版（提交 `afba2c1e`）经同一审核方复核，owner 2026-10-09 批准，并就第 2 版留下的问题 N1 作了裁定：采纳尾部一侧，`pinned` 一侧不加、只写明。这一版把裁定和复核意见并进正文。批准的是计划，实现还没有下令派发。本计划没有改生产代码和测试。
 
 **基线**：`main` 的 `5daf5482`，行号以它为准，实施时按符号名重新定位。参考实现 harness9 读的是本机 `/workspace/dataset/private/zhouwg_data/harness9`（`f92e839`）。
 
-**编号**：方案 A 至 G+，场景 S1 至 S14，边界情形 E1 至 E12，测试 T1 至 T18，变异 M1 至 M17，风险 R1 至 R10，仍待裁定的问题 N1。
+**编号**：方案 A 至 G+，场景 S1 至 S14，边界情形 E1 至 E13，测试 T1 至 T24，变异 M1 至 M28，风险 R1 至 R11。N1 是第 2 版留给 owner 的问题，已裁定，条文是 §4.1 的 2f。
 
-**证据**：探针脚本和输出在 `/tmp/claude-0/-workspace-dataset-private-zhouwg-data-OmicsClaw/58ae2e35-0792-4055-933c-1cfb79c727a6/scratchpad/plan-0078/`，第 2 版新做的以 `r2_` 开头，清单见 §11。审核方的证据在同级的 `review-plan-0078/`，下面记作 `RV`。正文里的 token 数都是 `estimate_messages_tokens` 的估算值，没有调用真实模型。第 1 版相对这一版改了什么见 §10。
+**证据**：探针脚本和输出在两个目录。第 1、2 版的在 `/tmp/claude-0/-workspace-dataset-private-zhouwg-data-OmicsClaw/58ae2e35-0792-4055-933c-1cfb79c727a6/scratchpad/plan-0078/`，第 2 版的以 `r2_` 开头。第 3 版的在 `/tmp/claude-0/-workspace-dataset-private-zhouwg-data-OmicsClaw/9885f10a-3799-4309-9dfb-0981c166422a/scratchpad/plan-0078-r3/`，以 `r3_` 开头。清单见 §11。审核方的证据在第一个目录同级的 `review-plan-0078/` 和它下面的 `r2/`，下面记作 `RV` 和 `RV2`。正文里的 token 数都是 `estimate_messages_tokens` 的估算值，没有调用真实模型。各版之间改了什么见 §10。
 
 ## 0. 摘要
 
 1. `fit_to_budget` 保留 head 里最旧的一段，从靠近尾部的一端开始丢。它的 docstring 和两份功能文档写的是反方向。名字叫"最旧的先走"的那条测试，对话是 849 token，预算是 900，函数在第一个判断就原样返回，剥离循环没有执行。
 2. 多交换会话里，本次交换的请求在 head 靠后的位置，会连同它前后的几条一起被丢，更早的交换反而留着。head 和 tail 的边界切开一轮工具调用时，最先丢的就是那条调用，tail 里它的结果随即被修复删掉。
 3. 参考实现的代码是同一个方向。它自己的功能文档写的是"保留放得下的最大后缀"，和代码不一致。
-4. owner 裁定用方案 G+：压缩摘要、开头的 system 消息和当前请求不丢；其余从最旧的开始逐条丢；一次交换只要还有回复留着，它的请求就留着；tail 以回复开头时，这条回复所属交换的请求也留着。规则条文和边界情形在 §4。
-5. G+ 的代价是降级期间会话部分基本不命中前缀缓存（探针里可复用前缀从 73% 至 82% 降到 4% 至 5%），以及丢到底时 tail 里的工具结果仍可能被删。后一条是这次修订新看到的，列为 N1 请 owner 定。
-6. 改动是 `omicsclaw/context/transcript.py` 的一个函数加两个私有辅助函数，几处 docstring，四份功能文档，15 条单元测试（其中 2 条替换现有测试）加两组参数化用例，1 条脚本化 eval。按 `SPEC.md` 属于第 3 档。合并之前要做一对真实模型会话的对比。
-7. G+ 落地后，SOFT、FULL 降级截断导致的闸门误触发不再发生。EMERGENCY 的任务锚点这次不改。
-8. "发给模型的第一条消息必须是 user"不在本计划内，另行立项在 provider 适配器层处理；G+ 之后还会出现这种视图的情形写在 R1。
+4. owner 裁定用方案 G+，再加 N1 的尾部一侧：压缩摘要、开头的 system 消息和当前请求不丢；其余从最旧的开始逐条丢；一次交换只要还有回复留着，它的请求就留着；tail 以回复开头时，这条回复所属交换的请求也留着；tail 以工具结果开头时，被 head 和 tail 的边界切开的那一轮整轮不丢。规则条文和边界情形在 §4。
+5. 主要的代价有三项。降级期间会话部分基本不命中前缀缓存，探针里可复用前缀从 73% 至 82% 降到 4% 至 5%。被切开的那一轮不丢以后，丢到底时结果高于目标的情形比第 2 版多：按生产的目标范围量 6,000 段对话，高于目标的从 107 段升到 315 段（system 提示 50 token）、从 791 段升到 1,188 段（10,000 token），结果仍不大于输入。`pinned` 前缀以一条调用结尾的调用方式不在保护之列，它的结果最先丢并被补上占位；entry 层不是这种调用方式。
+6. 改动是 `omicsclaw/context/transcript.py` 的一个函数加三个私有辅助函数，几处 docstring，四份功能文档，`test_transcript.py` 里 21 条单元测试（其中 2 条替换现有测试，2 条各带两种角色写法），另外两个测试文件里各一组参数化用例，合起来 35 条用例，再加 1 条脚本化 eval。按 `SPEC.md` 属于第 3 档。合并之前要做一对真实模型会话的对比。
+7. 规则落地后，SOFT、FULL 降级截断导致的闸门误触发不再发生。EMERGENCY 的任务锚点这次不改。
+8. "发给模型的第一条消息必须是 user"不在本计划内，另行立项在 provider 适配器层处理；规则落地后还会出现这种视图的情形写在 R1。
+9. 修订时看到一处第 2 版没有写的后果：较早的一次交换没有最终答复就结束，截断又正好停在它最后一轮的调用已经丢掉、结果还没丢完的地方时，这次交换的请求会独自留在视图里（§4.2 的 E13、R11）。它来自第 2 版已批准的条文，和 N1 无关。这一版写明了它，没有改规则。
 
 ## 1. 现状
 
@@ -44,7 +45,7 @@
 
 ### 1.2 单次长交换（S1）
 
-一条用户请求后跟 12 轮工具往返，26 条，1411 token。输出在 `out_01_current.log`。
+一条用户请求后跟 12 轮工具往返，26 条，1411 token。输出在 `r3_out_26_current.log`，是第 1 版的探针原样重跑，和当时的 `out_01_current.log` 逐行相同。
 
 ```
 截断前        S U1 a1.1 t1.1 a1.2 t1.2 ... a1.12 t1.12
@@ -96,7 +97,7 @@ EMERGENCY     S U1 a1.1 t1.1* a1.2 t1.2* a1.3 t1.3* a1.4 t1.4 A1 U2 ... A2 U3 a3
 
 ### 1.4 经过真实装配的一次
 
-用脚本化 eval 的 Runner（`SessionRegistry` 到 `TurnRunner` 到引擎，system 提示和工具表是真实的，模型是 `ScriptedProvider`）跑两次交换：第一次读三遍小文件后答复，第二次读三遍小文件再同时读两张表。窗口用 `Headroom` 定在第 9 次模型调用前到 FULL 档，摘要器返回空串（摘要超时的返回值）。用例在 `eval_plan0078_scratch.py`，输出在 `out_15_eval_today.log`。
+用脚本化 eval 的 Runner（`SessionRegistry` 到 `TurnRunner` 到引擎，system 提示和工具表是真实的，模型是 `ScriptedProvider`）跑两次交换：第一次读三遍小文件后答复，第二次读三遍小文件再同时读两张表。窗口用 `Headroom` 定在第 9 次模型调用前到 FULL 档，摘要器返回空串（摘要超时的返回值）。用例在 `r3_eval_section_1_4.py`，输出在 `r3_out_28_eval_section_1_4.log`。
 
 第 9 次模型调用收到 6 条消息，角色依次是 system、assistant、tool、assistant、tool、tool。两次交换的请求都不在里面。截断前的对话是 17,174 token，其中第一次调用时的 system 提示加第一条请求就有 11,808，两张表在 tail 里，head 再怎么丢也到不了目标，循环走到最后一行，把整个 head 丢掉。
 
@@ -104,7 +105,7 @@ EMERGENCY     S U1 a1.1 t1.1* a1.2 t1.2* a1.3 t1.3* a1.4 t1.4 A1 U2 ... A2 U3 a3
 
 边界落在一轮工具调用中间时（调用在 head 末尾，结果在 tail 开头；或者一条并行调用的结果一半在 head、一半在 tail），今天最先丢的就是这一轮留在 head 里的部分。调用一丢，tail 里它的结果成了孤儿，被修复删掉。并行调用越宽越容易出现，宽度不小于 `min_tail` 时整个 tail 都是它的结果。S13 是一个例子：最后一轮是 6 个并行调用，今天的降级视图是 `S U1 ... A1 U2 a2.1 t2.1 a2.2 t2.2*`，tail 的 6 条结果一条不剩，视图只有目标的 59%。
 
-`r2_probe_tail.py` 按生产的目标范围量了这件事的频率：格式完好的随机对话 6,000 段（调用宽度 1 到 6，目标取对话的 0.74 到 0.875，对应 SOFT、FULL 两档的回退目标），边界切开一轮的有 3,793 段，今天的截断在 3,474 段里删掉了 tail 的消息，其中 684 段把 tail 删光（`r2_out_05_tail.log`）。这个生成器里并行调用比真实会话多，数字偏高；它说明的是边界切开一轮时今天几乎必然丢 tail。
+`r3_probe_tail.py` 的第一组按生产的目标范围量了这件事的频率：格式完好的随机对话 6,000 段（调用宽度 1 到 6，目标取对话的 0.74 到 0.875，对应 SOFT、FULL 两档的回退目标），边界切开一轮的有 3,793 段，今天的截断在 3,474 段里删掉了 tail 的消息，其中 684 段把 tail 删光（`r3_out_05_tail.log`）。这个生成器里并行调用比真实会话多，数字偏高；它说明的是边界切开一轮时今天几乎必然丢 tail。
 
 ### 1.6 文字和代码的出入
 
@@ -112,14 +113,14 @@ EMERGENCY     S U1 a1.1 t1.1* a1.2 t1.2* a1.3 t1.3* a1.4 t1.4 A1 U2 ... A2 U3 a3
 - `tests/context/test_summary_gates.py:188` 的 docstring 写 "It peels the oldest compactible messages one at a time"。
 - `docs/core-features/context-engineering.md:284` 和 `docs/core-features/progressive-compactor.md:342` 都写"从 head 最旧处逐条剥离"。
 - `docs/plans/0030-context-assembly-layer.md` 写的是"逐条剥头"（`:349`、`:1273`、`:2517` 等），没有说哪一端。`:1273` 说它取代的旧层是"块感知的最新后缀裁剪"，也就是保留最新的。
-- `tests/context/test_transcript.py:556` 的 `test_the_oldest_compactible_message_goes_first_and_one_at_a_time`：对话 849 token，预算 900，`fit_to_budget` 返回的就是输入本身（`out_13_existing_test.log`）。三条断言对任何实现都成立。把预算调到 500 至 800 让它真的要截，这三条断言在两个方向上仍然都成立。
+- `tests/context/test_transcript.py:556` 的 `test_the_oldest_compactible_message_goes_first_and_one_at_a_time`：对话 849 token，预算 900，`fit_to_budget` 返回的就是输入本身（`r3_out_27_existing_test.log`）。三条断言对任何实现都成立。把预算调到 500 至 800 让它真的要截，这三条断言在两个方向上仍然都成立。
 - `tests/context/test_transcript.py:591` 的 `test_peeling_the_head_strands_a_tool_call_and_the_repair_papers_over_it` 是唯一一条结果取决于方向的现有测试：它断言留下一条调用和一条占位，这只在从 head 后端丢时成立。
 
 ## 2. 参考实现
 
 读到的：
 
-- `internal/memory/compaction.go:95-132` 的 `TokenBudgetCompactor.Compact` 是 `rest[:headEnd]`，`headEnd` 递减，和这里的代码同向。把它的源码复制到暂存目录跑同样两段对话（`out_02_reference_go.log`），同样是留 head 最旧的一段、丢靠近尾部的几条，切点落在调用和结果之间时补一条占位。
+- `internal/memory/compaction.go:95-132` 的 `TokenBudgetCompactor.Compact` 是 `rest[:headEnd]`，`headEnd` 递减，和这里的代码同向。把它的源码复制到暂存目录跑同样两段对话（`out_02_reference_go.log`，第 1 版跑的，第 3 版没有重跑），同样是留 head 最旧的一段、丢靠近尾部的几条，切点落在调用和结果之间时补一条占位。
 - 循环上的注释 `:116` 是"逐条剥离头部旧消息，直到 token 预算满足或头部清空"，没有说哪一端。它在 `610898a`（2026-05-30，注释中文化）之前是 "Shrink head one message at a time"（`f4299b3`，2026-05-19）。类型上的注释 `:76` 是"从中间删除旧消息，保留 system 消息和最近 MinTailMessages 条消息"。
 - 它的功能文档 `docs/核心功能/context-engineering.md` §6.2 写的算法是二分搜索最大的 `tailLen`，使 `[system] + msgs[N-tailLen:]` 不超过 `MaxTokens`，也就是保留放得下的最大后缀，和它的代码不一致。
 - 它的测试也没有钉方向。`compaction_test.go:235` 的 `TestTokenBudgetCompactor_CompactsOldMessages` 里 head 被整个丢掉，两个方向都通过。
@@ -152,11 +153,13 @@ EMERGENCY     S U1 a1.1 t1.1* a1.2 t1.2* a1.3 t1.3* a1.4 t1.4 A1 U2 ... A2 U3 a3
 
 "当前请求"指对话里位置最靠后的 user 角色消息。进入持久历史的 user 消息只有两种：一次交换的用户输入，和压缩摘要（计划 0039 §9.3 核对过，这次重新 grep 了 `Message.user(` 和 `Role.USER`，结论相同）。所以它要么是本次交换的请求，要么是代替了这条请求的摘要，和规划闸门往回数时停下的是同一条。
 
-G 和 G+ 是用这份计划自己的实现跑的（`r2_rules.py`），和审核方的对照实现的比对见 §4.4。表里的 G+ 是 §4 的定稿规则，比裁定的字面多两个条件（system 消息、摘要要看角色），这两个条件在下面的场景里不起作用。
+G 和 G+ 是用这份计划自己的实现跑的（`r3_r2_rules_copy.g_as_ruled`、`r3_rules.gplus_r2`），和审核方的对照实现的比对见 §4.4。表里的 G+ 是第 2 版的规则，比裁定的字面多两个条件（system 消息、摘要要看角色），这两个条件在下面的场景里不起作用。
+
+定稿规则是 G+ 再加 N1 裁定的那一条（§4.1 的 2f）。第 3 版把它作为另一行加进同一个探针重跑（`r3_probe_scenarios.py`，`r3_out_02_scenarios.log`）：§3.2 的 28 次和 §3.3 的 24 次里，定稿规则发出的视图和 G+ 那一行逐条相同，所以这两节的表不用改。这些场景里目标都够得着，没有丢到被边界切开的那一轮。
 
 ### 3.2 十四个场景
 
-每个方案都替换进真实的 `compact()` 跑（探针进程里换掉 `omicsclaw.context.compaction.fit_to_budget` 这个模块属性），offload、定档、降级目标和记录都是生产代码。摘要器抛错，SOFT 和 FULL 各一次，每个方案 28 次降级压缩。脚本是 `r2_probe_scenarios.py`，输出在 `r2_out_02_scenarios.log`。
+每个方案都替换进真实的 `compact()` 跑（探针进程里换掉 `omicsclaw.context.compaction.fit_to_budget` 这个模块属性），offload、定档、降级目标和记录都是生产代码。摘要器抛错，SOFT 和 FULL 各一次，每个方案 28 次降级压缩。脚本是 `r3_probe_scenarios.py`，输出在 `r3_out_02_scenarios.log`。
 
 场景：S1 单次长交换；S2 三次交换，本次 5 轮；S3 较早的一次交换 9 轮只读，本次 4 轮；S4 之前写回过摘要，之后来了新请求；S5 请求已被摘要代替；S6 三次交换，本次 2 轮；S7 并行工具调用；S8、S9 本次请求很大；S10 对话里没有 user 消息；S11 较早的一次交换 12 轮，本次 1 轮；S12 较早的一次交换 30 轮，新请求刚发出；S13 最后一轮是 6 个并行调用，结果占满 tail；S14 较早交换的请求很大。S11 至 S14 是这一版加的，S6、S11、S12 是请求在 tail 里的形状。
 
@@ -198,7 +201,7 @@ S2，SOFT 降级，目标 1341：
 
 ### 3.3 请求在 tail 里的形状
 
-`min_tail` 是 6，所以每次新交换的前 0 到 2 轮，当前请求都在 tail 里，tail 的开头还是上一次交换最后的几条回复。第 1 版的 10 个场景里只有 S6 是这个形状，而且 S6 的 head 里有两次较早的交换，没有暴露问题。审核方指出了它（`RV/rv_out9_request_in_tail.log`），这里用自己的探针重做：较早的一次交换 6、12、30 轮，本次 0 到 3 轮，SOFT 和 FULL，共 24 次（`r2_out_02_scenarios.log` 的第二部分）。
+`min_tail` 是 6，所以每次新交换的前 0 到 2 轮，当前请求都在 tail 里，tail 的开头还是上一次交换最后的几条回复。第 1 版的 10 个场景里只有 S6 是这个形状，而且 S6 的 head 里有两次较早的交换，没有暴露问题。审核方指出了它（`RV/rv_out9_request_in_tail.log`），这里用自己的探针重做：较早的一次交换 6、12、30 轮，本次 0 到 3 轮，SOFT 和 FULL，共 24 次（`r3_out_02_scenarios.log` 的第二部分）。
 
 | 方案 | 第一轮不是 user | 当前请求丢失 | 视图里有占位 | 保留量与目标之比 |
 |---|---|---|---|---|
@@ -215,9 +218,9 @@ G 和 G+ 在这 24 次和上面的 28 次里结果相同。两者的差别只在
 
 ### 3.4 对四件事的影响
 
-工具调用配对修复。从 head 后端丢（B、E）时，切点前面可能留下一条结果被丢的调用，修复给它补占位，28 次里 B 有 24 次、E 有 26 次出现占位。从最旧的开始丢时，切点后面可能留下调用已被丢的结果，修复把它删掉，不补任何东西。输入里本来就缺结果的调用，在任何方案下都仍由修复补占位。边界切开一轮时的情况见 §1.5 和 N1。
+工具调用配对修复。从 head 后端丢（B、E）时，切点前面可能留下一条结果被丢的调用，修复给它补占位，28 次里 B 有 24 次、E 有 26 次出现占位。从最旧的开始丢时，切点后面可能留下调用已被丢的结果，修复把它删掉，不补任何东西。输入里本来就缺结果的调用，在任何方案下都仍由修复补占位。边界切开一轮时的情况见 §1.5 和 §4.1 的 2f。
 
-提示前缀缓存。降级结果不写回，每次调用重新截。`r2_probe_sequence.py` 用真实的 `ProgressiveCompactor` 按引擎的方式逐次调用，摘要器一直抛错，统计降级调用发送的 token 里，与上一次请求逐条相同的前缀占多少（`r2_out_06_sequence.log`）：
+提示前缀缓存。降级结果不写回，每次调用重新截。`r3_probe_sequence.py` 用真实的 `ProgressiveCompactor` 按引擎的方式逐次调用，摘要器一直抛错，统计降级调用发送的 token 里，与上一次请求逐条相同的前缀占多少（`r3_out_06_sequence.log`）：
 
 | 方案 | 单次长交换，9 次降级调用 | 两次较早的交换后一次长交换，12 次 | 一次 16 轮的交换后新交换从头开始，11 次 |
 |---|---|---|---|
@@ -226,6 +229,8 @@ G 和 G+ 在这 24 次和上面的 28 次里结果相同。两者的差别只在
 | D | 5% | 64% | 47% |
 | C+ | 5% | 3% | 3% |
 | G、G+ | 5% | 4% | 4% |
+
+定稿规则在这三个序列的每一次调用上发出的视图和 G+ 相同（`r3_probe_sequence.py`，`r3_out_06_sequence.log`）。这三个序列每轮只有一个调用，tail 总是以调用开头，2f 不起作用。
 
 B、E 的切点在尾部一侧，head 前面那一段每次都一样。从最旧的开始丢时，历史每长一轮，切点就往后挪一轮，切点之后的内容每次都变。D 在多交换会话里的 64% 来自切点停在交换边界上不动，去掉规则 4 之后这一点没有了。探针里的 system 消息只有 51 token；真实部署里 system 提示和工具声明在任何方案下都是稳定前缀（§1.4 那次会话的第一次调用是 11,808 token），真实比例会比表里高，差别在会话部分。只有按前缀自动缓存的后端（OpenAI、DeepSeek）受影响。经 OpenAI 兼容网关访问 Anthropic 系模型时断点只打在 system 和最后一个工具上（`provider/openai_provider.py` 的 `apply_cache_breakpoints`），会话部分本来就不缓存；`anthropic_provider.py` 里没有打缓存断点的代码。
 
@@ -247,27 +252,35 @@ issue #117 的实测是第一种形状。第三种形状里 `rest[0]` 是一条�
 
 降级截断不用 `rest[0]` 这个定义。EMERGENCY 的任务锚点按裁定这次不改，以后另开计划，届时它的"不丢"要用 §4.1 第 2 条的同一个定义。第 1 版为它做的对照探针（`probe_06_gate.py`）留着备查。
 
-## 4. 定稿的规则（G+）
+## 4. 定稿的规则（G+ 加 2f）
 
 ### 4.1 条文
 
-用到的词：请求是 user 角色的消息，压缩摘要也是 user 角色，规则里和请求同样对待；回复是 assistant 和 tool 角色的消息；一次交换是一条请求和它后面直到下一条请求之前的回复。
+用到的词：请求是 user 角色的消息，压缩摘要也是 user 角色，规则里和请求同样对待；回复是 assistant 和 tool 角色的消息；一次交换是一条请求和它后面直到下一条请求之前的回复。出现在对话中间的 system 消息按回复处理，本仓库的流程不会产生它。一轮是一条带 `tool_calls` 的 assistant 消息和紧跟在它后面的那一串 tool 消息，和 `repair_tool_pairs` 一样按相邻关系配对。
 
 1. 原样返回输入，不重建也不修复：对话为空；已经不超过目标；没有 head；head 里每一条都不能丢。
 2. 不丢的消息：
-   - a. 前 `pinned` 条和最后 `min_tail` 条。
-   - b. head 最前面连续的 system 消息。`pinned` 盖住了 system 消息时这一条不起作用，它管的是 `pinned=0` 这类调用。
+   - a. 前 `pinned` 条和最后 `min_tail` 条。截断不碰它们。第 6 条的修复只会删掉其中在输入里就没有配对的 tool 消息，也就是 `repair_tool_pairs` 直接作用在输入上也会删的那些。
+   - b. head 最前面连续的 system 消息，有几条留几条。`pinned` 盖住了 system 消息时这一条不起作用，它管的是 `pinned=0` 这类调用。
    - c. head 里的压缩摘要：user 角色，并且 `is_summary_message` 为真。
    - d. 当前请求，也就是对话里最后一条请求，当它在 head 里时。
    - e. tail 的第一条是回复时，这条回复所属交换的请求，也就是 head 里最后一条请求。
-   
-   d 和 e 合起来是一句话：head 里最后一条请求不丢，除非 tail 的第一条本身就是请求。
-3. head 里其余的消息从最旧的开始丢，一次一条，每丢一条量一次，不超过目标就停。
-4. 请求跟着回复走：一次交换只要还有回复留着，它的请求就留着。轮到一条请求时，它后面还有自己的回复没丢，就先留着它，接着丢它的回复；它最后一条回复被丢的那一步，它一起被丢。后面没有回复的请求（紧跟着另一条请求）轮到时直接丢。
-5. 能丢的都丢完还超过目标，就返回 pinned、第 2 条列的那些消息和 tail。这时结果高于目标。
-6. 最后过一遍 `repair_tool_pairs`。量 token 在修复之前。
+   - f. 被 head 和 tail 的边界切开的那一轮留在 head 里的部分：tail 以工具结果开头时，head 末尾发出这次调用的 assistant 消息和它在 head 里的结果不丢。判定分三步，都成立才留：
+     1. 从 head 的最后一条往前，跳过连续的 tool 消息，停在第一条不是 tool 的消息上。head 全是 tool 消息时停不下来，这一项不起作用。
+     2. 停下的那一条是带 `tool_calls` 的 assistant 消息。
+     3. tail 开头连续的 tool 消息里，至少有一条的 `tool_call_id` 是这条 assistant 消息发出的调用之一。
 
-很多次交换时的先后：先丢最旧那次交换的回复，从它最旧的一条开始；这次交换的回复丢完时它的请求一起走；然后是下一次交换，依此类推；最后是本次交换自己的回复，从最旧的开始，本次的请求不丢。`r2_out_04_edges.log` 的 E11 把目标一步步调低，看到的顺序是：
+     成立时，这条 assistant 消息和它之后 head 里的所有消息都不丢。
+
+   d 和 e 合起来是一句话：head 里最后一条请求不丢，除非 tail 的第一条本身就是请求。f 成立时 tail 的第一条是工具结果，所以那一轮所属交换的请求已经由这一句留着，第 4 条不用为 f 另作处理。
+
+   f 只管 head 和 tail 的边界。`pinned` 前缀以一条调用结尾、它的结果在 head 开头时，这些结果不在不丢之列（§4.2 的 E12）。owner 2026-10-09 裁定这一侧不加，只写明。以后若要加，用 `compaction.py` 的 `_answers_owed_by(pinned, head)` 数出 head 开头还欠着的结果有几条，把它们列进第 2 条。`compaction.py` 已经从 `transcript.py` 引入名字，反过来引入会成环，所以要先把这个函数挪到 `transcript.py`。
+3. head 里其余的消息从最旧的开始丢，一次一条，每丢一条量一次，不超过目标就停。
+4. 请求跟着回复走：一次交换只要还有回复留着，它的请求就留着。轮到一条请求时，它后面还有自己的回复没丢，就先留着它，接着丢它的回复；它最后一条回复被丢的那一步，它一起被丢。后面没有回复的请求（紧跟着另一条请求）轮到时直接丢。"留着"按修复之前的候选算：调用已经被丢、自己还没轮到的工具结果也算留着，后果见 §4.2 的 E13。
+5. 能丢的都丢完还超过目标，就返回 pinned、第 2 条列的那些消息和 tail。这时结果高于目标。
+6. 最后过一遍 `repair_tool_pairs`。量 token 在修复之前：修复补的占位不计入，修复要删的孤儿结果计入。
+
+很多次交换时的先后：先丢最旧那次交换的回复，从它最旧的一条开始；这次交换的回复丢完时它的请求一起走；然后是下一次交换，依此类推；最后是本次交换自己的回复，从最旧的开始，本次的请求不丢。`r3_out_04_edges.log` 的 E11 把目标一步步调低，看到的顺序是：
 
 ```
 输入          S U1 a1.1 t1.1 a1.2 t1.2 A1 U2 a2.1 ... A2 U3 ... A3 U4 ... A4 U5 a5.1 t5.1 ... a5.5 t5.5
@@ -281,9 +294,11 @@ issue #117 的实测是第一种形状。第三种形状里 `rest[0]` 是一条�
 目标  619     S U5 a5.2 t5.2 ... a5.5 t5.5             本次交换最旧的一轮开始走，U5 不丢
 ```
 
+这段对话的 tail 以调用开头，2f 不起作用，每一个目标下的视图都和第 2 版相同。
+
 ### 4.2 边界情形
 
-每条都在 `r2_probe_edges.py` 里用一段对话跑过，输出在 `r2_out_04_edges.log`。"今天"是今天的函数在同一段对话上的结果。
+每条都在 `r3_probe_edges.py` 里用一段对话跑过，输出在 `r3_out_04_edges.log`。"今天"是今天的函数在同一段对话上的结果，"不加 2f"是第 2 版的规则。和第 2 版的 G+ 相比，结果变了的只有 E6c 和 E6e。E12 的结果没有变，文字按裁定重写。E6f、E6h、E6i、E12a、E12b、E13 是第 3 版加的。
 
 | 情形 | 规则怎么走 | 例子 |
 |---|---|---|
@@ -295,19 +310,27 @@ issue #117 的实测是第一种形状。第三种形状里 `rest[0]` 是一条�
 | 同上，目标够不着（E4b） | head 丢到只剩 2e 那一条 | `S U2 A2 U3 a3.1 t3.1 a3.2 t3.2`。G 没有 2e，结果和今天一样是 `S A2 U3 ...`，以回复开头 |
 | tail 的第一条就是当前请求（E4c，T12） | 2d、2e 都不起作用，较早交换的请求按第 4 条和它最后一条回复一起走 | 目标够不着时结果是 pinned 加 tail |
 | `pinned=0`，首条是 system（E5） | 2b，system 不丢 | `S U1 a1.4 t1.4 A1 U2 a2.1 ... t2.5` |
-| 切点落在一条并行调用和它的结果之间（E6a） | 调用被丢，留下的结果是孤儿，修复删掉，不补占位 | 今天在这里补了一条占位 `t2.1c*` |
-| head 和 tail 的边界切开一轮（E6c、E6e） | 那条调用在 head 最后，按第 3 条最后才轮到。轮到它被丢时，tail 里它的结果成孤儿被删 | E6e，6 个并行调用占满 tail，目标够不着：结果是 `S U2`。今天是 `S`。见 N1 |
-| 两条请求连着（E7a） | 前一条后面没有回复，轮到时直接丢；后一条是当前请求 | `S U2b a2.1 ... t2.5` |
+| 切点落在 head 里一条并行调用和它的结果之间（E6a） | 调用被丢，留下的结果是孤儿，修复删掉，不补占位 | 今天在这里补了一条占位 `t2.1c*` |
+| 边界切开一轮，目标够得着（E6b、E6d） | 还没丢到那一轮就停了，2f 不改变结果 | E6b：`S U2 a2.1 t2.1 a2.2 t2.2 a2.3 t2.3a t2.3b t2.3c a2.4 ... t2.5`，1452 对目标 1491。今天丢的正是这一轮：`... a2.2 t2.2* a2.4 ...`，844，tail 开头的 `t2.3b t2.3c` 被删 |
+| 边界切开一轮，目标够不着（E6c，T23） | head 丢到只剩当前请求和按 2f 留着的那一轮，结果高于目标 | `S U2 a2.3 t2.3a t2.3b t2.3c a2.4 t2.4 a2.5 t2.5`，1232 对目标 600。不加 2f：`S U2 a2.4 t2.4 a2.5 t2.5`，302，`t2.3b t2.3c` 被删。今天：`S a2.4 t2.4 a2.5 t2.5`，271 |
+| 6 个并行调用的结果占满 tail，目标够不着（E6e，T22） | 同上，那一轮在 head 里只有调用这一条 | `S U2 a2.5 t2.5a ... t2.5f`，589 对目标 500。不加 2f：`S U2`，82，模型只看得到请求。今天：`S` |
+| head 只有请求和那条调用（E6f） | 2d、2f 把 head 占满，head 里每一条都不能丢，原样返回 | `S U1 a1.1 t1.1a ... t1.1f`，589 对目标 100 |
+| 没有 user 消息，最后一轮的结果占满 tail（E6h） | 2f 照常起作用，没有请求可留 | `S a1.5 t1.5a ... t1.5f`，558 对目标 100，以回复开头。不加 2f 和今天都是 `S` |
+| 输入不规整：tail 的第一条是没有调用的结果，后两条才应答 head 末尾的调用（E6i，T24） | 2f 第 3 步看的是 tail 开头那一串，那一轮留着；没有调用的那条由修复删掉 | `S U2 a2.3 t2.3a t2.3b a2.4 t2.4 A2`，414 对目标 300。只看 tail 第一条的写法得到 `S U2 a2.4 t2.4 A2`，两条配得上对的结果被删 |
+| 两条请求连着（E7a，T20） | 前一条后面没有回复，轮到时直接丢；后一条是当前请求 | `S U2b a2.1 ... t2.5` |
 | 一问一答的闲聊之后一次带工具的交换（E7b） | 每次较早的交换是一条请求一条答复，成对走 | `S U4 A4 U5 a5.1 ... t5.4` |
-| 一条 assistant 消息恰好以压缩标记开头（E8） | 不是 user 角色，不算摘要，和别的回复一样丢 | 它夹在第 3、4 轮之间：`S U1 a1.5 t1.5 ... a1.9 t1.9`。今天也不特殊对待它；审核方的对照实现会留着它 |
+| 一条 assistant 消息恰好以压缩标记开头（E8） | 不是 user 角色，不算摘要，和别的回复一样丢 | 它夹在第 3、4 轮之间：`S U1 a1.5 t1.5 ... a1.9 t1.9`。今天也不特殊对待它 |
 | 较早的交换 30 轮，只超目标 5%（E9） | 只丢最旧的两轮 | 3747 对目标 3768。审核方在同样的形状上量到第 1 版的 D 只剩 522（`RV/rv_out8_edges.log`） |
 | 较早交换的请求很大（E10） | 请求按第 4 条留到它最后一条回复，占着位置 | 请求 600 token：`S U1 A1 U2 a2.1 ... t2.4`，6 轮都丢了，1174 对目标 1283 |
-| pinned 前缀以一条调用结尾，结果在 head 开头（E12） | 这些结果是 head 里最旧的，最先丢，修复给 pinned 里的调用补占位 | `pinned=3`：`S U1 a1.1 t1.1a* t1.1b* a1.3 ...`。entry 层的 `pinned` 是 1，盖的是 system 消息，走不到这里。见 N1 |
-| 角色是普通字符串（T15） | 比较一律用 `==`，理由同 `repair_tool_pairs` 的 docstring | |
+| pinned 前缀以一条调用结尾，结果在 head 开头（E12） | 2f 不管这一侧。这些结果是 head 里最旧的，第一步就丢，修复给 pinned 里的调用补占位 | `pinned=3`：`S U1 a1.1 t1.1a* t1.1b* a1.3 ...`，893 对目标 906。entry 层的 `pinned` 是 1，盖的是 system 消息，走不到这里 |
+| 同上，结果很小，目标只比输入少 1（E12a） | 占位比它顶替的结果大，结果比输入还大 | 输入 985，目标 984，结果 994 |
+| pinned 前缀以一条 8 路并行调用结尾，head 是它的前两条结果，tail 是后六条（E12b） | head 全是 tool 消息，2f 第 1 步停不下来。head 的两条被丢并补占位，tail 的六条留着 | `S U1 a1.1 t1.1a* t1.1b* t1.1c ... t1.1h`，627 对目标 100。今天的结果相同 |
+| 较早的交换以一轮工具调用结束，没有最终答复，截断停在这一轮的调用已丢、结果还没丢完的地方（E13） | 调用已丢、结果还没轮到时，请求按第 4 条留着；修复随后删掉这些孤儿结果，请求独自留在视图里 | `S U1 U2 a2.1 ... t2.5`，663 对目标 823。这次交换后面有一条答复时是 `S U1 A1 U2 ...`。见 R11 |
+| 角色是普通字符串（T15、T22、T23） | 比较一律用 `==`，理由同 `repair_tool_pairs` 的 docstring | |
 
 ### 4.3 原型
 
-暂存副本里的原型由 `r2_apply_prototype.py` 写入，实施时可以另写，以 §5.2 的测试为准：
+暂存副本里的原型由 `r3_apply_prototype.py` 写入，`r3_check_plan_block.py` 核对过下面这段和写进副本的文本逐字相同。实施时可以另写，以 §5.2 的测试为准：
 
 ```python
 def fit_to_budget(messages, budget, *, pinned=0, min_tail, counter=None, target_tokens=None):
@@ -339,11 +362,12 @@ def fit_to_budget(messages, budget, *, pinned=0, min_tail, counter=None, target_
 def _held(head: tuple[Message, ...], tail: tuple[Message, ...]) -> frozenset[int]:
     """Positions in *head* that a truncation never drops.
 
-    A system message that opens the head, every compaction summary, and
+    The system messages the head opens on, every compaction summary, and
     the last user message in the head unless the tail itself opens on a
     user message. That last one is the request in flight when the tail
     holds no request, and otherwise the request whose replies the tail
-    opens on.
+    opens on. The tool round the tail finishes is held too, so the
+    results the tail opens on keep the call they answer.
     """
     held: set[int] = set()
     for index, message in enumerate(head):
@@ -360,7 +384,36 @@ def _held(head: tuple[Message, ...], tail: tuple[Message, ...]) -> frozenset[int
             if head[index].role == Role.USER:
                 held.add(index)
                 break
+    held.update(_round_the_tail_finishes(head, tail))
     return frozenset(held)
+
+
+def _round_the_tail_finishes(
+    head: tuple[Message, ...], tail: tuple[Message, ...]
+) -> range:
+    """Positions in *head* of a tool round whose results run on into *tail*.
+
+    The call is the assistant message in front of the tool results the
+    head ends on, and the round counts when one of the tool results the
+    tail opens on answers it. Pairing is by adjacency, the way
+    :func:`repair_tool_pairs` reads it. A call that sits in the pinned
+    prefix is not looked for.
+    """
+    start = len(head)
+    while start and head[start - 1].role == Role.TOOL:
+        start -= 1
+    if start == 0:
+        return range(0)
+    caller = head[start - 1]
+    if caller.role != Role.ASSISTANT or not caller.tool_calls:
+        return range(0)
+    asked = {call.id for call in caller.tool_calls}
+    for message in tail:
+        if message.role != Role.TOOL:
+            break
+        if message.tool_call_id in asked:
+            return range(start - 1, len(head))
+    return range(0)
 
 
 def _request_of_oldest_reply(
@@ -384,52 +437,92 @@ def _request_of_oldest_reply(
     return frozenset()
 ```
 
-裁定里 G+ 那一条的字面是"head 丢光而 tail 以回复开头时，保留 tail 所在交换的请求"。原型把它写成"tail 以回复开头时 head 里最后一条请求从一开始就不丢"。两种写法的结果相同：head 里最后一条请求后面只有它自己的回复，按第 4 条它本来就要到 head 丢光那一步才会被丢。§4.4 的比对证实了这一点。
+和第 2 版的原型相比，`_held` 的末尾多一行，另加一个辅助函数 `_round_the_tail_finishes`；`_held` 的 docstring 改了第一句（开头的 system 消息写成复数，对应 2b 的"有几条留几条"），末尾加了一句。第 2 版 `r2_rules.py` 里的 `gplus_straddle` 没有沿用：它建在"先丢前 n 条再放回请求"的那种写法上，那种写法在没有可丢的消息时把输入修复一遍再返回，和第 1 条不符，审核方第 2 轮在 `RV2/rv2_out10_plan_straddle_variant.log` 里量到了这个差别。
 
-### 4.4 和审核方对照实现的比对
+`_request_of_oldest_reply` 里 `if index in held: continue` 这两行去掉以后结果不变：三个生成器共 48,564 段有 head 的对话里差异 0 段，其中 18,492 段走到过这两行（`r3_probe_equivalent.py`，`r3_out_20_equivalent.log`）。它是第 2 版已批准的原型里的写法，这里原样留着，实施时去留都可以。变异检查里对应的那一项不会有测试转红，见 §5.2。
 
-`r2_probe_fuzz.py` 在两个生成器上各跑 40,000 段随机对话（这份计划自己写的一个，审核方 `rv_probe7_fuzz.py` 的一个），目标取对话的 0.2 到 0.99，`min_tail` 取 0 到 8。输出在 `r2_out_01_fuzz.log`。审核方的 `rv_strategies.py` 复制到 `rv_copy/` 使用。
+裁定里 G+ 那一条的字面是"head 丢光而 tail 以回复开头时，保留 tail 所在交换的请求"。原型把它写成"tail 以回复开头时 head 里最后一条请求从一开始就不丢"。两种写法的结果相同：head 里最后一条请求后面只有它自己的回复，按第 4 条它本来就要到 head 丢光那一步才会被丢。第 2 版的比对证实了这一点（`r2_out_01_fuzz.log`）。
 
-- 定稿规则的三种写法：打过补丁的生产函数、`r2_rules.gplus`、按"先丢前 n 条再放回请求"重写的 `gplus_second_writing`。前两者 64,322 次比对差异 0 次。第三种在 9 次上不同，都是同一种情况：输入里没有可丢的消息，前两者原样返回，第三种把输入修复一遍再返回。
-- 照裁定字面写的 G 对审核方的 `anchor_request`：差异 0 次。
-- 照裁定字面写的 G+ 对审核方的 `anchor_request_tail`：在审核方的生成器上差异 0 次，在自己的生成器上 2 次。`r2_probe_reading.py` 专门去找，60,000 段里找到 308 段，每一段都有一条以压缩标记开头的 assistant 消息排在 head 的最后。审核方的代码把这种消息当摘要留着，并且在它后面不再给 tail 找请求；字面读法会给。定稿规则里摘要要看角色，这种消息按普通回复处理，两种读法的分歧也就不存在了。
-- 定稿规则对审核方的 `anchor_request_tail`：自己的生成器上 11,475 次不同，全部落在三类里，没有解释不了的：head 以 system 消息开头的 6,989 次（裁定 3，定稿规则留着它）；有一条非 user 的消息以标记开头的 4,484 次（定稿规则不留它）；输入里没有可丢的消息、一边原样返回一边修复后返回的 2 次。审核方的生成器上只有第三类，7 次。
+### 4.4 随机比对和性质表
 
-所以定稿规则和审核方的 G+ 有三处不同，都是有意的：system 消息不丢；摘要看角色；没有可丢的消息时原样返回而不是修复后返回。第三处请审核方复核时确认：这里取的是"原样返回的输入不修复"，和函数已有的另外三种原样返回一致。
+`r3_probe_fuzz.py` 在三个生成器上各跑 40,000 段随机对话，目标取对话的 0.2 到 0.99，`min_tail` 取 0 到 8，输出在 `r3_out_01_fuzz.log`。前两个生成器是第 2 版用的那两个（这份计划自己写的一个，审核方 `rv_probe7_fuzz.py` 的一个），种子和取数的顺序都没变，所以对话就是第 2 版量过的那些。第三个是第 3 版加的：在第一个的基础上让 `pinned` 前缀可以停在任何位置，包括一轮的中间。三个生成器里有 head 的对话分别是 33,552、30,770、32,673 段。
 
-同一个探针在定稿规则的每个截断结果上数了规则声称的性质（自己的生成器 32,980 次截断，审核方的生成器 30,137 次）：
+- 定稿规则的三种写法：打过补丁的生产函数；`r3_rules.final`；只照 §4.1 的条文另写的 `r3_rules.from_text`，它先列出每一步丢哪几条，再逐步执行。三个生成器上差异都是 0。
+- 定稿规则对审核方第 2 轮的 `from_text_straddle_tail`：三个生成器上差异都是 0。这是审核方照第 2 版 §4.1 的文字加上尾部一侧另写的实现（`RV2/rv2_rules.py`，复制到 `r3_rv_copy/` 使用）。两边对 2f 第 3 步的读法不同，审核方只看 tail 的第一条；这三个生成器里没有两种读法分得开的对话，分得开的是 §4.2 的 E6i。
+- 定稿规则对不加 2f 的第 2 版规则：4,223、3,859、5,106 段不同，每一段都是第 2 版规则删掉了一条输入自己修复后还留着的 tail 消息，没有别的原因。其中结果从不超过目标变成高于目标的有 2,366、1,264、2,238 段，两种规则都高于目标的有 1,854、2,594、2,864 段，余下 3、1、4 段修复之后量到的两边都不超过目标。2f 多留的 token，中位数是 713、405、680。
+
+第 2 版对审核方第 1 轮实现的比对没有重做，结论不变：定稿规则和它有三处有意的不同，system 消息不丢、摘要看角色、没有可丢的消息时原样返回而不是修复后返回（`r2_out_01_fuzz.log`）。
+
+同一个探针在定稿规则的每个截断结果上数了规则声称的性质。截断的结果分别是 32,267、29,631、31,670 个：
 
 | 性质 | 违反次数 |
 |---|---|
-| 当前请求在结果里 | 0、0 |
-| user 角色的摘要在结果里 | 0、0 |
-| head 开头的 system 消息在结果里 | 0、0 |
-| 留下的回复，它的请求（输入里它前面最近的 user 消息）也留着 | 0、0 |
-| 结果里的占位都对应输入里本来就没应答的调用 | 0、0 |
-| 留下的消息保持原来的先后 | 0、0 |
-| 高于目标时，要么已经丢到第 5 条的底线，要么只多出输入里未应答调用的占位 | 0、0 |
-| 第一轮不是 user 时，输入里那条回复前面确实没有请求 | 0、0 |
+| 当前请求在结果里 | 0、0、0 |
+| user 角色的摘要在结果里 | 0、0、0 |
+| head 开头连续的 system 消息都在结果里 | 0、0、0 |
+| 留下的回复，它的请求（输入里它前面最近的 user 消息）也留着 | 0、0、0 |
+| `pinned` 前缀不以欠着结果的调用结尾时，结果里的占位都对应输入里本来就没应答的调用 | 0、0、0 |
+| 留下的消息保持原来的先后 | 0、0、0 |
+| 输入自己修复后还留着的 tail 消息都在结果里 | 0、0、0 |
+| 输入自己修复后还留着的 pinned 消息都在结果里 | 0、0、0 |
+| 高于目标时，要么已经丢到第 5 条的底线，要么只多出占位 | 0、0、0 |
+| 结果比输入大时，结果里有占位 | 0、0、0 |
+| 第一轮不是 user 时，那条回复要么在 pinned 前缀里，要么输入里它前面确实没有请求 | 0、0、0 |
 
-高于目标的有 3,722 次和 5,570 次，其中 3,162 次和 5,244 次是丢到了底线，560 次和 326 次是只多出占位。第一轮不是 user 的有 681 次和 1,128 次。
+第 5 行的限定是第 3 版加的，第 2 版写的是无条件成立。"欠着结果"用 `_answers_owed_by(pinned, head) > 0` 判定，也就是 `pinned` 前缀以一条调用结尾、它的结果有一部分在 head 开头。第三个生成器里有 11,866 个截断结果属于这种情况，每一个都带着截断造成的占位：那些结果是 head 里最旧的，第一步就丢。前两个生成器的 `pinned` 只盖 system 消息，没有这种截断，第 2 版报的 0 次是这个原因。
+
+其余的计数：
+
+- 高于目标的有 5,375、6,328、8,442 个。其中丢到底线的 4,825、6,006、7,052 个，只多出输入里未应答调用的占位的 550、322、336 个，第三个生成器另有 1,054 个只多出占位、占位里有截断造成的。
+- 结果比输入大的有 27、14、162 个，都带占位；第三个生成器的 162 个里有 143 个属于 `pinned` 前缀欠着结果的情况。
+- 第一轮不是 user 的有 701、1,113、1,243 个，第三个生成器里有 959 个是那条回复在 pinned 前缀里。
+- tail 里有消息不在结果里的有 939、887、951 个，都是输入自己修复也会删的孤儿结果。
+
+前两个生成器上有三个数和第 2 版不同，`r3_probe_r2_to_r3.py` 在同样的对话上把两版规则并排跑了一遍（`r3_out_23_r2_to_r3.log`）：
+
+| | 第 2 版 | 第 3 版 | 原因 |
+|---|---|---|---|
+| 截断的结果 | 32,980、30,137 | 32,267、29,631 | 713、506 段对话在 2f 之下 head 里每一条都不能丢，改为原样返回 |
+| 高于目标 | 3,722、5,570 | 5,375、6,328 | 两版都截断的对话里，1,971、1,106 段只在定稿规则下高于目标；改为原样返回的那些里有 318、348 段在第 2 版下高于目标，不再计入 |
+| 第一轮不是 user | 681、1,128 | 701、1,113 | 两版都截断的对话里多出 34、11 段：2f 留下的那一轮前面没有请求，视图以它开头，第 2 版在这些对话上要么 system 之后什么都没剩（27、10 段），要么以更靠后的一条请求开头（7、1 段）；改为原样返回的那些里有 14、26 段不再计入 |
 
 ### 4.5 理由
 
 - 请求一定在视图里，摘要也在。
 - 留下的是最近的工作。SOFT 的正常路径摘要较旧的一半、原样留较新的一半，EMERGENCY 从新到旧装，今天只有降级截断留旧丢新。计划 0030 §5.2 说它取代的旧层是"最新后缀裁剪"，docstring 写"最旧的先走"，两处的本意都是留新的。
 - 截断点不再造占位，模型不会看到自己发过、结果却写着"不可用"的调用。例外是 E12 那种 `pinned` 前缀以调用结尾的调用方式。
-- 最新的一轮不再是最先丢的。§1.5 的探针里，今天在 6,000 段中的 3,474 段删掉了 tail 的消息，G+ 是 236 段（`r2_out_05_tail.log`）。剩下的 236 段见 N1。这一条是审核方补的理由（`RV/rv_out10_parallel_tail.log`），这里用自己的探针重做了。
-- 较早的交换可以只留一部分，留下的部分带着它的请求。28 次场景里 G+ 平均用到目标的 97%，没有一次低于 60%；D 是 72%，有 8 次低于 60%。
+- 最新的一轮不再因为截断丢掉。§1.5 的探针里，今天在 6,000 段中的 3,474 段删掉了 tail 的消息，不加 2f 的 G+ 是 236 段，定稿规则是 0 段（`r3_out_05_tail.log`）。`min_tail` 的含义是最后几条消息原样留着，`split_head_tail` 的 docstring 写的是 "kept whatever happens"，加了 2f 降级截断才做到这一点。"最新一轮不该最先丢"是审核方第 1 轮补的理由（`RV/rv_out10_parallel_tail.log`）。
+- 较早的交换可以只留一部分，留下的部分带着它的请求。28 次场景里平均用到目标的 97%，没有一次低于 60%；D 是 72%，有 8 次低于 60%。
 - 视图以 user 消息开头，除非输入里第一条留下的回复前面本来就没有请求。
-- 改动小：一个函数的循环，两个辅助函数。暂存副本里跑 `tests/context tests/planning tests/engine tests/entry tests/evals`，基线 2842 passed，换上原型后 2841 passed、1 failed，红的是 §1.6 最后那一条（`out_07_baseline_layers.log`、`r2_out_17_prototype_layers.log`）。
+- 改动小：一个函数的循环，三个辅助函数。暂存副本里跑 `tests/context tests/planning tests/engine tests/entry tests/evals`，基线 2842 passed，换上定稿原型后 2841 passed、1 failed，红的是 §1.6 最后那一条（`r3_out_29_baseline_layers.log`、`r3_out_17_prototype_layers.log`）。
 
 ### 4.6 代价
 
 - 降级期间的前缀缓存。三个序列里可复用前缀从 77%、82%、73% 降到 5%、4%、4%。单次长交换里每次降级调用重新读的 token 从 371 升到 1,522（每次发送约 1,600）。影响限于摘要器持续失败、压力又在 SOFT 以上的那些调用，每次这样的调用本来也要先付一次失败的摘要请求（超时的话是 90 秒）。有一种缓解办法这份计划没有评估：让切点分步挪动而不是每次挪一条。审核方试过每 8 条挪一次（`RV/rv_out5_sequence.log`），单次长交换回到 54%，多交换序列里 G 是 48%，代价是每次少发约 7% 到 14% 的 token。这次不做。
-- 单次长交换里最早的几轮先丢。今天看不到的是中间几轮，G+ 之后看不到的是最早几轮。
-- 较早交换的请求按第 4 条留到它最后一条回复，请求很大时占位置（E10、S14：S14 里 G+ 用到目标的 95%，较早的 6 轮丢了 4 轮）。
-- 丢到底时，tail 里的工具结果仍可能被修复删掉。条件是 head 和 tail 的边界切开一轮，并且 head 丢到了那条调用。见 N1。
+- 单次长交换里最早的几轮先丢。今天看不到的是中间几轮，规则落地后看不到的是最早几轮。
+- 较早交换的请求按第 4 条留到它最后一条回复，请求很大时占位置（E10、S14：S14 里用到目标的 95%，较早的 6 轮丢了 4 轮）。
+- 结果高于目标的情形比不加 2f 时多。被边界切开的那一轮不丢，丢到底时这一轮的 token 留在结果里。`r3_probe_tail.py` 按生产的目标范围量了四组各 6,000 段格式完好的对话（`pinned=1`，`min_tail=6`，目标取对话的 0.74 到 0.875，`r3_out_05_tail.log`）：
+
+  | | 今天 | 不加 2f | 定稿规则 |
+  |---|---|---|---|
+  | 并行调用多，system 提示 50 token：tail 的消息被删 | 3,474 | 236 | 0 |
+  | 其中 tail 被删光 | 684 | 10 | 0 |
+  | 高于目标 | 245 | 107 | 315 |
+  | 并行调用多，system 提示 10,000 token：tail 的消息被删 | 3,829 | 802 | 0 |
+  | 其中 tail 被删光 | 682 | 86 | 0 |
+  | 高于目标 | 878 | 791 | 1,188 |
+  | 多数是单个调用，system 提示 50 token：tail 的消息被删 | 1,629 | 200 | 0 |
+  | 高于目标 | 367 | 275 | 411 |
+  | 多数是单个调用，system 提示 10,000 token：tail 的消息被删 | 1,656 | 643 | 0 |
+  | 高于目标 | 1,801 | 1,840 | 2,000 |
+
+  定稿规则和不加 2f 的规则在 236、802、200、643 段对话上不同，每一段都是后者删了 tail 的消息；其中 208、397、136、160 段的结果从不超过目标变成高于目标。2f 多发的 token，中位数是 1,420、1,318、410、410，最大 4,438、4,560、2,226、2,726。结果最大是目标的 1.35 倍，那是目标取到对话的 0.74 而整段对话原样返回的情形；四组里结果都没有大于输入的。能走到回退的对话压力低于 EMERGENCY，总量低于 `usable × 0.95`，所以结果仍低于 `usable`。
+
+  前两组和第 2 版 §9.2 的表数字相同。第 2 版"G+ 加这一条"那一列是用两侧都加的 `gplus_straddle` 量的，这些对话的 `pinned` 是 1，`pinned` 一侧不起作用，所以数字没有变。后两组是第 3 版加的，20 个调用里 18 个是单个调用，比前两组接近真实会话。system 提示大的时候更容易丢到底，脚本化 eval 的装配里 system 提示约 11,800 token。单个例子见 E6c：1232 对目标 600，不加 2f 是 302。
+- tail 的消息不再因为截断被删，这一项代价第 2 版有，这一版没有了。修复仍会删掉输入里本来就没有配对的工具结果，那和截断无关，§4.1 的 2a 写的是同一件事。
 - 视图仍可能以回复开头，见 R1。
-- `pinned` 前缀以一条调用结尾的调用方，它的结果会最先丢并被补上占位（E12）。entry 层不是这种调用方式。
+- `pinned` 前缀以一条调用结尾的调用方，它在 head 开头的结果最先丢并被补上占位，每次截断都如此；结果很小时占位比结果大，视图可以比输入还大（E12、E12a）。entry 层不是这种调用方式。
+- 较早的交换没有最终答复就结束时，它的请求可能独自留在视图里（E13、R11）。
 
 ## 5. 改动范围
 
@@ -437,8 +530,8 @@ def _request_of_oldest_reply(
 
 | 文件 | 改动 |
 |---|---|
-| `omicsclaw/context/transcript.py` | `fit_to_budget` 的循环按 §4.3 改；新增私有函数 `_held` 和 `_request_of_oldest_reply`；从 `.summary` 引入 `is_summary_message`（`summary.py` 只依赖 `offload.py` 和 schema，没有环）。`fit_to_budget` 的 docstring 重写，写清 §4.1 的六条、结果可能高于目标、切点只会留下孤儿结果。模块 docstring `:18` 的 "peels them off the front" 改掉。签名和 `__all__` 不变 |
-| `omicsclaw/context/compaction.py` | 没有逻辑改动。`compact` 的 docstring 在讲回退的那一段加一句：回退不丢压缩摘要、开头的 system 消息和当前请求 |
+| `omicsclaw/context/transcript.py` | `fit_to_budget` 的循环按 §4.3 改；新增私有函数 `_held`、`_round_the_tail_finishes` 和 `_request_of_oldest_reply`；从 `.summary` 引入 `is_summary_message`（`summary.py` 只依赖 `offload.py` 和 schema，没有环）。`fit_to_budget` 的 docstring 重写，要写的内容列在 §5.3。模块 docstring `:18` 的 "peels them off the front" 改掉。签名和 `__all__` 不变 |
+| `omicsclaw/context/compaction.py` | 没有逻辑改动。`compact` 的 docstring 在讲回退的那一段加一句：回退不丢压缩摘要、开头的 system 消息、当前请求，以及 tail 接着应答的那一轮 |
 | `omicsclaw/planning/injector.py` | 只改 `_gate_fires` 的 docstring：`:187-190` 那一段现在把 SOFT、FULL 的回退和 EMERGENCY 并列，改成只剩 EMERGENCY |
 
 `pinned=0` 而首条是 system 消息时，`compact()` 仍会在 `advisories` 里写"it was treated as compactible history"。这句话对摘要路径仍然成立（system 消息在 head 里，会被摘要掉），对降级截断不再成立。这次不改它的措辞，在 `fit_to_budget` 的 docstring 里写明降级截断留着它。
@@ -447,7 +540,7 @@ def _request_of_oldest_reply(
 
 ### 5.2 测试
 
-T1 至 T17 写在 `r2_test_proposed.py` 里跑过，共 27 条用例（含参数化）：在今天的代码上 25 红 2 绿，在原型上 27 条全绿，在第 1 版的 D 上 5 红（`r2_out_08_proposed_today.log`、`r2_out_09_proposed_prototype.log`、`r2_out_11_proposed_first_version_rule.log`）。
+T1 至 T17 和 T19 至 T24 写在 `r3_test_proposed.py` 里跑过，共 35 条用例（含参数化）。T1 至 T17 是第 2 版的 27 条，没有改；T19 至 T24 是第 3 版加的 8 条。在今天的代码上 33 红 2 绿，在定稿原型上 35 条全绿，在不加 2f 的第 2 版原型上 5 红，红的是 T22 至 T24（`r3_out_08_proposed_today.log`、`r3_out_09_proposed_prototype.log`、`r3_out_11_proposed_without_2f.log`）。第 2 版在第 1 版的 D 上量到 5 红（`r2_out_11_proposed_first_version_rule.log`），这一项没有重做。
 
 `tests/context/test_transcript.py`：
 
@@ -468,6 +561,12 @@ T1 至 T17 写在 `r2_test_proposed.py` 里跑过，共 27 条用例（含参数
 | T13 | `test_a_system_message_outside_the_pinned_prefix_is_kept` | `pinned=0` 时 system 消息和请求都留着，后面是最新的一段 | 红 |
 | T14 | `test_a_message_that_only_quotes_the_marker_is_dropped_like_any_other` | 以标记开头的 assistant 消息和别的回复一样丢 | 红 |
 | T15 | `test_a_request_whose_role_arrives_as_a_plain_string_is_still_a_request` | 角色是普通字符串时，较早的请求照样跟着它的回复留下，当前请求照样不丢 | 红 |
+| T19 | `test_every_system_message_that_opens_the_head_is_kept` | 2b。`pinned=0`，开头两条 system 消息：两条都留着，后面是请求和最新的一段 | 红 |
+| T20 | `test_a_request_nothing_answers_goes_when_its_turn_comes` | 第 4 条最后一句。一条请求后面紧跟着重发的请求：目标只比输入少 1 时，丢的就是前一条；丢到底时它也不在 | 红 |
+| T21 | `test_every_earlier_request_goes_with_its_last_reply` | 第 4 条，对不是最旧的那次交换。两次较早的交换：目标容得下第二次交换的请求、容不下请求加答复时，两次交换的请求都不留 | 红 |
+| T22 | `test_a_round_the_tail_finishes_is_kept_whole`，角色用枚举和普通字符串各一条 | 2f。最后一轮是 6 个并行调用、结果占满 tail、目标够不着：结果是 pinned、当前请求、那条调用和 6 条结果，没有占位 | 2 条全红 |
+| T23 | `test_the_round_the_tail_finishes_keeps_its_results_in_the_head`，同样两种角色写法 | 2f。3 个并行调用的一轮，一条结果在 head、两条在 tail，目标够不着：这一轮整轮留着，没有哪条结果被换成占位，结果高于目标 | 2 条全红 |
+| T24 | `test_only_results_that_answer_the_call_hold_it` | 2f 的第 3 步，两个方向各一段对话。tail 第一条是没有调用的结果、后两条应答 head 末尾的调用时，那一轮留着；tail 开头的结果都不应答 head 末尾的调用时，那条调用照常丢 | 红 |
 
 `tests/context/test_summary_gates.py`：
 
@@ -491,7 +590,7 @@ T1 至 T17 写在 `r2_test_proposed.py` 里跑过，共 27 条用例（含参数
 
 第 1 版的 T13 按 §1.4 的形状写，审核方指出它钉不住方向：head 在那里被丢光，D、E、C+、G 在触发的那次调用上得到同一个视图，"没有占位"那条断言在今天的代码上也是绿的。T18 换成 head 不被丢光的形状，做法参考了审核方的 R2（`RV/rv_probe3_assembly.py`）：第一次交换读 6 个各不相同的中等文件（每个约 800 token，低于 offload 的 1,000 token 阈值，WARN 档不会把它们移走）再答复，第二次交换读 7 遍小文件。SOFT 落在第 15 次模型调用（`trigger_call=14`）。每个中等文件第一行有自己的标记，所以断言能分辨留下的是哪几个。
 
-在第 15 次调用上断言：user 消息里有第二次交换的请求；user 消息里有第一次交换的请求；最新的中等文件的标记出现一次；最旧的中等文件的标记不出现；没有占位结果；system 消息在最前；有一条没写回的 SOFT 降级记录。`r2_probe_assembly.py` 把每个方案换进去跑同一个用例（`r2_out_13_assembly.log`）：
+在第 15 次调用上断言：user 消息里有第二次交换的请求；user 消息里有第一次交换的请求；最新的中等文件的标记出现一次；最旧的中等文件的标记不出现；没有占位结果；system 消息在最前；有一条没写回的 SOFT 降级记录。`r3_probe_assembly.py` 把每个方案换进去跑同一个用例（`r3_out_13_assembly.log`）：
 
 | 方案 | 第 15 次调用的角色序列 | 视图里的中等文件 | 没通过的断言 |
 |---|---|---|---|
@@ -499,47 +598,82 @@ T1 至 T17 写在 `r2_test_proposed.py` 里跑过，共 27 条用例（含参数
 | E | `suatatatatuatatat` | 1、2、3 | 最新文件、最旧文件、占位 |
 | C+ | `satatauatatatatatatat` | 5、6 | 第一次的请求 |
 | D | `suatatatatatatat` | 无 | 第一次的请求、最新文件 |
-| G、G+ | `suatatauatatatatatatat` | 5、6 | 无 |
+| G、G+、定稿规则 | `suatatauatatatatatatat` | 5、6 | 无 |
 
-用 pytest 的形式在暂存副本里也跑了：今天红在 4 条断言上，换上原型后通过（`r2_eval_scratch.py`、`r2_out_14_eval_today.log`、`r2_out_16_eval_prototype.log`）。G 和 G+ 在这个用例上没有区别，两者的区别由 T11 和变异 M4 钉住。
+T18 的用例第 3 版没有改。用 pytest 的形式在暂存副本里重跑：今天红在 4 条断言上，换上定稿原型后通过（`r3_eval_scratch.py`、`r3_out_14_eval_today.log`、`r3_out_16_eval_prototype.log`）。这个用例每轮只有一个调用，G、G+ 和定稿规则在它上面没有区别；G 和 G+ 的区别由 T11 和变异 M4 钉住，2f 由 T22 至 T24 和变异 M18 至 M25 钉住。
 
-`Headroom` 用的是 `target=SOFT, trigger_call=14, trigger_tokens=6150`：量到第 14 次调用的增长是 6,031，第 15 次是 6,213（`r2_out_12_assembly_measure.log`），取两者之间。实施时 system 提示或工具表变了要重量。`tests/evals/test_dataset_floor.py` 的 `BASELINE` 从 30 调到 31。
+`Headroom` 用的是 `target=SOFT, trigger_call=14, trigger_tokens=6150`：量到第 14 次调用的增长是 6,031，第 15 次是 6,213（`r3_out_12_assembly_measure.log`），取两者之间。实施时 system 提示或工具表变了要重量。`tests/evals/test_dataset_floor.py` 的 `BASELINE` 从 30 调到 31。
 
-变异。对原型做了 17 处定点变异（`r2_mutate.py`，`r2_out_10_mutations.log`），每一处都至少让一条新测试转红，变异后文件按内容核对恢复：
+审核方第 2 轮指出的三处缺口。审核方照 §4.1 的文字另写了一份实现，在上面做了 21 处变异，第 2 版的 27 条用例放过了 5 处（`RV2/rv2_out3_proposed_tests_matrix.log`）。派发第 3 版时点名了其中三处，用的是这三句话："只保留第一条开头的 system 消息""后面没有回复的请求永远不丢""第二次较早交换的请求在回复丢完后仍留着"。对照 §4.1 核实下来，这三句写的都是变异体的行为，规则要求的正好相反，所以测试钉的是规则那一面：
+
+| 审核方的变异 | 变异体的行为 | 规则的哪一条 | 第 2 版为什么钉不住 | 补的测试 |
+|---|---|---|---|---|
+| m15 | 只保留第一条开头的 system 消息 | 2b：head 最前面连续的 system 消息有几条留几条 | T13 的夹具只有一条 system 消息 | T19 |
+| m17 | 后面没有回复的请求永远不丢 | 第 4 条最后一句：这种请求轮到时直接丢 | 27 条用例里没有两条请求连着的对话，E7a 只在边界探针里 | T20 |
+| m09 | 第二次较早交换的请求在回复丢完后仍留着 | 第 4 条：每一次交换的请求都在它最后一条回复被丢的那一步一起丢 | T6 只钉了最旧的那次交换。这个变异把"回复的请求"取成 head 里第一条请求，对最旧的交换没有区别；T5 的断言里第二次交换的请求本来就该在 | T21 |
+
+`r3_reviewer_matrix.py` 把审核方的 21 处变异原样拿来（`rv2_mutants.py` 没有改），用第 3 版的用例重跑（`r3_out_21_reviewer_mutants.log`）。审核方的实现里没有 2f，T22 至 T24 在这一轮里排除，剩下 30 条用例：m09 红在 T20、T21，m15 红在 T19，m17 红在 T20。
+
+审核方的矩阵里还有两处存活，派发时没有点名，这一版没有为它们加测试：
+
+- m16，head 里任何位置的 system 消息都不丢。规则只留开头连续的那几条，中间的按回复处理。本仓库的流程不会产生中间的 system 消息（§9.1 第 3 条），加测试钉的是一种不会出现的输入。
+- m18，量 token 放在修复之后。对格式完好、`pinned` 只盖 system 消息的对话，只有较早的交换没有最终答复就结束时两种量法才分得开：6,000 段里 146 段，变异体都是多留一条没有回复的请求；每次交换都有答复时是 0 段（`r3_probe_m18.py`，`r3_out_25_m18.log`）。另一类差别在修复要补占位的时候，也就是输入里有没应答的调用，或者 `pinned` 前缀以调用结尾。
+
+要补的话各一条测试就够。m16：一段 head 中间夹着 system 消息的对话，断言它随所在的交换一起丢。m18：一段 tail 里有未应答调用的对话，把目标定成候选在修复前的大小，断言结果比目标多出的正好是那条占位。
+
+变异。对定稿原型做了 28 处定点变异（`r3_mutate.py`，`r3_out_10_mutations.log`），每一处都至少让一条新测试转红，变异后文件按内容核对恢复。M1 至 M17 是第 2 版的，M18 至 M25 变的是 2f，M26 至 M28 是上面三处缺口在原型这种写法下的对应：
 
 | 变异 | 转红的新测试 |
 |---|---|
-| M1 改回今天的方向 | T1、T5、T7、T8、T9、T13、T14、T15 等 |
+| M1 改回今天的方向 | T1、T5、T6、T7、T8、T9、T13、T14、T15、T19、T20、T21 |
 | M2 摘要不再不丢 | T4 |
-| M3 head 里最后一条请求从不保留 | T3、T11、T15 |
+| M3 head 里最后一条请求从不保留 | T3、T11、T15、T20、T22、T23、T24 |
 | M4 去掉 2e（即 G） | T11 |
 | M5 head 里最后一条请求无论 tail 怎么开头都保留 | T12 |
-| M6 请求不跟着回复留（即 C+） | T5、T6、T15 |
+| M6 请求不跟着回复留（即 C+） | T5、T6、T15、T21 |
 | M7 请求在没有回复之后仍然留着 | T6 |
-| M8 head 开头的 system 消息不保留 | T13 |
+| M8 head 开头的 system 消息不保留 | T13、T19 |
 | M9 以标记开头的消息不看角色都算摘要 | T14 |
 | M10、M11 两处角色比较改成 `is` | T15 |
-| M12 回复的请求取 head 里第一条请求而不是最近的一条 | T5 |
+| M12 回复的请求取 head 里第一条请求而不是最近的一条 | T5、T21 |
 | M13 没有可丢的消息时重建 | T10 |
-| M14 第一个候选就返回 | T1、T3、T5、T11 等 |
-| M15 不修复 | T7 |
-| M16 head 里每条 user 消息都保留 | T5、T6、T15 |
+| M14 第一个候选就返回 | T1、T2、T3、T5、T6、T8、T11、T12、T14 至 T17、T20 至 T24 |
+| M15 不修复 | T7、T24 |
+| M16 head 里每条 user 消息都保留 | T5、T6、T15、T20 至 T24 |
 | M17 2e 看 tail 的最后一条而不是第一条 | T12 |
+| M18 去掉 2f（即第 2 版的规则） | T22、T23、T24 |
+| M19 2f 只留调用，不留它在 head 里的结果 | T23 |
+| M20 2f 的第 3 步只看 tail 的第一条 | T24 |
+| M21 2f 的第 3 步不比对 `tool_call_id` | T24 |
+| M22 2f 第 1 步的角色比较改成 `is` | T23 的普通字符串那一条 |
+| M23 2f 第 2 步的角色比较改成 `is` | T22、T23 的普通字符串那一条 |
+| M24 2f 第 3 步的角色比较改成 `is` | T22、T23 的普通字符串那一条 |
+| M25 不管 tail 接不接着应答，head 的最后一轮都留着 | T3、T11、T15、T20、T24 |
+| M26 开头的 system 消息只留第一条（审核方的 m15） | T19 |
+| M27 后面没有回复的请求不丢（审核方的 m17） | T20 |
+| M28 只有 head 第一条位置上的请求会随回复一起丢，后面的请求都留着（审核方 m09 的症状） | T20、T21 |
 
-现有测试里只有 §1.6 最后那一条会红，由 T7 替换。`test_a_history_that_fits_exactly_is_still_a_history_that_fits`、`test_every_transform_honours_an_injected_counter`、`test_every_way_a_summarizer_can_fail_degrades_and_leaves_a_trace` 等在原型上都通过，不用改。
+同一轮里还试了一处不算变异的改动：去掉 `_request_of_oldest_reply` 里的 `if index in held: continue`。没有测试转红，结果也确实不变（§4.3）。实施方对落地的代码重做变异时会碰到它，不用为它补测试。
+
+现有测试里只有 §1.6 最后那一条会红，由 T7 替换。`test_a_history_that_fits_exactly_is_still_a_history_that_fits`、`test_every_transform_honours_an_injected_counter`、`test_every_way_a_summarizer_can_fail_degrades_and_leaves_a_trace` 等在定稿原型上都通过，不用改。
 
 ### 5.3 文档
 
 | 文件 | 改动 |
 |---|---|
+| `omicsclaw/context/transcript.py` 里 `fit_to_budget` 的 docstring | 要写清的有：§4.1 的六条；结果可能高于目标，原因是不丢的那几条加 tail 本身超过目标，或者修复补了占位；切点在 head 里只会留下孤儿结果，由修复删掉，不造占位；tail 接着应答的那一轮整轮留着；`pinned=0` 时开头的 system 消息照样留着；`pinned` 一侧的限制，见表后 |
 | `docs/core-features/context-engineering.md` | `:284` 表格里 `fit_to_budget` 那一行改成新规则 |
-| `docs/core-features/progressive-compactor.md` | §5.3 最后一句（`:342`）改成新规则；§11 设计决策表加一行；§12 已知限制加四条：降级期间会话部分不命中前缀缓存；降级视图的第一条仍可能是回复，另行立项在 provider 适配器层处理；丢到底时 tail 里的工具结果可能被删（N1 裁定后按结果写）；EMERGENCY 的任务锚点仍按位置取 `rest[0]`，以后另开计划，届时用降级截断的同一个定义 |
+| `docs/core-features/progressive-compactor.md` | §5.3 最后一句（`:342`）改成新规则；§11 设计决策表加一行；§12 已知限制加五条：降级期间会话部分不命中前缀缓存；降级视图的第一条仍可能是回复，另行立项在 provider 适配器层处理；`pinned` 一侧的限制，见表后；较早的交换没有最终答复就结束时，它的请求可能独自留在降级视图里（E13）；EMERGENCY 的任务锚点仍按位置取 `rest[0]`，以后另开计划，届时用降级截断的同一个定义 |
 | `docs/core-features/planning.md` | §13 第 3 条：去掉 SOFT、FULL 降级截断那一种，只留 EMERGENCY |
 | `docs/core-features/eval.md` | 用例数有两处，`:7` 和 `:254`，都从 30 改成 31；§2.1 的表加 T18 |
 | `docs/plans/0039-planning-layer.md` | §9.5 末尾加一条带日期的记录：SOFT、FULL 降级那一种由本计划关闭。原文不动 |
 | `docs/plans/0055-nudge-and-closing-gate.md` | §10.6 的已知行为里记一条：持续降级时 `MemoryNudge` 可能连续提醒（§3.4） |
 | `docs/plans/0078-fallback-truncation-order.md` | 加交付记录一节 |
-| `CHANGELOG.md` | 合并时在顶部加一条 |
+| `CHANGELOG.md` | 合并时在顶部加一条，要求见表后 |
+
+`pinned` 一侧的限制，docstring 和 `progressive-compactor.md` §12 都要写，内容是：降级截断只保住被 head 和 tail 的边界切开的那一轮。`pinned` 前缀以一条工具调用结尾、它的结果有一部分在 `pinned` 之外时，这些结果是 head 里最旧的消息，每次截断都最先丢，修复给那条调用补占位；结果很小时占位比它顶替的结果大，返回的视图可以比输入还大。调用方让 `pinned` 停在一轮的边界上就不会遇到。`entry/compaction.py` 的 `build_compactor` 传的是 `pinned=1`，盖的是 system 消息，走不到这里。§12 里另写一句：这一侧 2026-10-09 裁定不做，以后要做的话用 `_answers_owed_by`（§4.1）。
+
+`CHANGELOG.md` 的条目要写明 `fit_to_budget` 的行为变了。它在 `omicsclaw.context` 的公开面上，名字和签名都不变，变的是两件事：丢的顺序从 head 靠近 tail 的一端改成最旧的一端；有了不丢的消息，包括压缩摘要、开头的 system 消息、当前请求和 tail 接着应答的那一轮。今天的函数在 pinned 加 tail 超过目标时结果也会高于目标，多了不丢的消息以后这种情形更多，条目里要提到。仓库外的调用方要靠这一条判断自己受不受影响。
 
 ### 5.4 不改的
 
@@ -564,18 +698,20 @@ T1 至 T17 写在 `r2_test_proposed.py` 里跑过，共 27 条用例（含参数
 
 在 `5daf5482` 的暂存副本上，两条命令的结果是：
 
-| 命令 | 基线 | 换上 G+ 原型 |
+| 命令 | 基线 | 换上定稿原型 |
 |---|---|---|
-| 第一条 | 2842 passed、11 skipped、26 deselected、3 xfailed，约 130 秒 | 2841 passed、1 failed，其余相同。红的是 T7 要替换的那一条 |
-| 第二条 | 842 passed、14 skipped、1 deselected、1 xpassed，约 120 秒 | 相同 |
+| 第一条 | 2842 passed、11 skipped、26 deselected、3 xfailed，132 秒 | 2841 passed、1 failed，其余相同，134 秒。红的是 T7 要替换的那一条 |
+| 第二条 | 842 passed、14 skipped、1 deselected、1 xpassed，103 秒 | 相同，105 秒 |
+
+两列都是第 3 版跑的，基线在 `r3_base/` 里（`r3_out_29_baseline_layers.log`、`r3_out_30_baseline_guards.log`），定稿原型在 `r3_proto/` 里（`r3_out_17_prototype_layers.log`、`r3_out_18_prototype_guards.log`）。通过和失败的条数和第 2 版在基线、G+ 原型上得到的相同。
 
 第一条里 deselected 的 26 条是 `tests/evals/live` 的真实模型路由用例，被 `pyproject.toml` 的 `addopts` 按 `eval` 标记排除。命令行上覆盖掉 `addopts` 时它们改为 skipped，跳过数是 37，审核方量到的就是这个数。用时取决于机器当时的负载，审核方同一条命令量到约 6 分钟。
 
 另外：
 
 - 写测试时先在没改的代码上跑新测试，确认红绿和 §5.2 的表一致，再改代码。
-- 变异检查：对落地的实现重做 §5.2 的 17 处变异（`r2_mutate.py` 改一下路径可以直接用），每处至少一条测试转红。
-- 探针 `r2_probe_scenarios.py`、`r2_probe_sequence.py`、`r2_probe_gate.py` 在落地的实现上重跑，"B today"那一行应当和"G+"那一行相同。`r2_probe_fuzz.py` 重跑，三种写法之间和 §4.4 的性质表都应当是 0。
+- 变异检查：对落地的实现重做 §5.2 的 28 处变异（`r3_mutate.py` 改一下路径可以直接用），每处至少一条测试转红。脚本里最后那一项 EQ 不算变异，不会有测试转红。
+- 探针 `r3_probe_scenarios.py`、`r3_probe_sequence.py`、`r3_probe_gate.py` 在落地的实现上重跑，"B today"那一行应当和定稿规则那一行相同。`r3_probe_fuzz.py` 重跑，三种写法之间的差异和 §4.4 性质表里的违反次数都应当是 0。`r3_probe_tail.py` 重跑，"today"那一行应当和"final rule"那一行相同。
 - 合并到 `main` 属于第 4 档，由 `Eval CI` 跑。
 
 需要 fastapi 的 Desktop 用例不单独跑：`CompactionRecord` 的字段和 COMPACTION 事件都没变。汇报时按"没跑"写。
@@ -595,24 +731,33 @@ T1 至 T17 写在 `r2_test_proposed.py` 里跑过，共 27 条用例（含参数
 
 - 第一次：读 6 个 panel 文件，说出哪一个的阈值和别的不一样。
 - 第二次，依赖上一次的答复：针对刚才指出的那个 panel，再读小文件，然后回答那个 panel 的编号和阈值。不重读文件的话，这一问只有看得到上一次的答复才答得出。
-- 第三次，依赖一条会被丢掉的旧工具结果：把第 1 个 panel 文件第 3 行的原文抄出来。G+ 下最旧的读取最先丢，这一问看的是模型发现内容不在视图里时怎么办。
+- 第三次，依赖一条会被丢掉的旧工具结果：把第 1 个 panel 文件第 3 行的原文抄出来。规则落地后最旧的读取最先丢，这一问看的是模型发现内容不在视图里时怎么办。
 
 同一组输入在 `main` 和修复分支上各跑一次。记录和判断：
 
 - 每条 `degraded` 非空、`written_back` 为假的压缩记录之后的那次请求里，有没有当前请求、上一次交换的请求和答复、哪几个文件的读取结果。
 - 第二问答对没有，之前有没有重读 panel 文件。
 - 第三问是重读了文件、明说看不到，还是编了一行。重读一次是这条规则可以接受的代价，编造不是。
-- 两个分支上模型调用的次数和输入 token（`RecordingProvider.usage`），用来看前缀缓存的代价在真实后端上有多大。
+- 两个分支上模型调用的次数，和 `RecordingProvider.usage` 里的缓存命中，用来看前缀缓存的代价在真实后端上有多大。取哪几个数见下面第三条。
+
+四个操作上的细节，每条都在 `5daf5482` 的代码里核对过：
+
+- `run_case` 的 `timeout_s` 要显式传。默认值是 `CASE_TIMEOUT_S`，30 秒（`evals/runner.py:71`、`:503`），真实模型的三次交换跑不完。超时后这次运行记一条 `case_timeout`，后面的交换不再提交（`:423-428`）。`tests/evals/live/test_live_routing.py:37` 给单次交换的用例传的是 300 秒；这里是三次交换加十几次工具往返，从那个量级往上取。
+- 压缩记录里出现 EMERGENCY，这次运行作废，放宽 `trigger_tokens` 重跑。记录在 `Result.compactions` 里，看每条的 `pressure`。EMERGENCY 的结果总是写回历史（`context/progressive.py:41` 的 `should_write_back`），写回之后两个分支面对的历史不再是同一段，比的也就不再是 SOFT、FULL 的降级截断。真实模型的工具结果有多大不由脚本控制，窗口又是按 SOFT 收紧的，一条大结果就能把压力推过 EMERGENCY 的 0.95。
+- 前缀缓存的代价看 `Usage.cache_read_tokens`。只看 `input_tokens` 看不出来：OpenAI 兼容的后端里它已经包含命中缓存的部分（`provider/openai_provider.py:375`）。缓存命中读自 `prompt_tokens_details.cached_tokens`，DeepSeek 读 `prompt_cache_hit_tokens`（`:386-392`）。`RecordingProvider.usage` 是整次运行所有调用的合计，侧线调用也在内，没有按调用拆开（`evals/live.py:258`、`:284`）。两个分支各取 `cache_read_tokens`、`input_tokens` 和 `uncached_input_tokens`（`schema/message.py:285`、`:295`）来比。
+- 提示里要求一次调用只读一个文件，跑完检查每条压缩记录的 `offloaded`，非空就作废重跑。`Offloader.min_tokens` 是 1000（`context/offload.py:109`），head 里超过它的工具结果在 WARN 及以上各档都会被 offload（`context/compaction.py:642`），而 `compact_at` 默认就是 WARN（`entry/config.py:341`）。每个 panel 文件约 800 token，单读不会超。模型一次读两个以上时，比如一条 `bash` 里 `cat` 几个文件，那条结果超过 1000 token，等它排进 head、压力又到了 WARN，就被换成预览并写回历史。之后两个分支上模型手里的 panel 内容都只剩预览，第二、三问比的不再是截断顺序。写回发生在 `trigger_call` 之前时 Runner 还会记一条 `headroom_missed`（`evals/runner.py:201-228`）。
 
 真实模型每次走的轮次和推理文字长度不同，`trigger_tokens` 可能要调一两次才让降级落在第二次交换里。把窗口再收紧一档、让第一次交换在第二问时被整段丢掉，可以再跑一对，用来看最坏的情况；这一对建议做，不算前置条件。
+
+真实会话里并行调用是模型自己决定的，这对会话顺带能看到 2f 在真实形状下起不起作用：看降级记录之后的那次请求里，最新一轮的工具结果是不是都在。这一项只记录，不作为通过条件。
 
 这对会话本计划没有做。
 
 ## 7. 对规划闸门残留误触发的影响
 
-SOFT、FULL 降级那一种，G+ 落地后不再发生。当前请求要么在 tail 里，要么按 2d 留在 head 里，`_gate_fires` 往回数一定先遇到它。
+SOFT、FULL 降级那一种，规则落地后不再发生。当前请求要么在 tail 里，要么按 2d 留在 head 里，`_gate_fires` 往回数一定先遇到它。第 3 版把定稿规则加进了下面这个探针，160 次里它在每一个夹具上的触发次数和数到的轮数都和 G+ 相同。
 
-`r2_probe_gate.py` 用计划 0039 §9.5 的形状（上一次交换 9 轮只读加一条答复，本次 3、4、5、7 轮，两档，摘要器抛错或返回空串，每个夹具 16 次）。今天误触发多少次取决于夹具，所以把工具结果的大小和 FULL 档取的比例都扫了一遍（`r2_out_07_gate.log`）：
+`r3_probe_gate.py` 用计划 0039 §9.5 的形状（上一次交换 9 轮只读加一条答复，本次 3、4、5、7 轮，两档，摘要器抛错或返回空串，每个夹具 16 次）。今天误触发多少次取决于夹具，所以把工具结果的大小和 FULL 档取的比例都扫了一遍（`r3_out_07_gate.log`）：
 
 | 工具结果的字符数 | FULL 取 0.85 | FULL 取 0.88 |
 |---|---|---|
@@ -622,7 +767,7 @@ SOFT、FULL 降级那一种，G+ 落地后不再发生。当前请求要么在 t
 | 400 | 12 次，数到 10、11、12，另有 4 次数到 4 没触发 | 12 次 |
 | 800 | 12 次 | 12 次 |
 
-10 个夹具共 160 次：今天 134 次误触发，请求被丢的也是 134 次；G+ 是 0 次，数到的正好是 3、4、5、7；E 也是 0 次，但数得偏少，本次 7 轮时只数到 3 到 5。第 1 版写的"16 次都误触发，数到 12 或 13"只对 40 字符那一行成立，审核方在 400 字符的夹具上量到的是 12 次（`RV/rv_out6_gate.log`）。
+10 个夹具共 160 次：今天 134 次误触发，请求被丢的也是 134 次；G+ 和定稿规则都是 0 次，数到的正好是 3、4、5、7；E 也是 0 次，但数得偏少，本次 7 轮时只数到 3 到 5。第 1 版写的"16 次都误触发，数到 12 或 13"只对 40 字符那一行成立，审核方在 400 字符的夹具上量到的是 12 次（`RV/rv_out6_gate.log`）。
 
 逐次调用的序列里（§3.4）：多交换序列今天在第 6 次调用触发，G+ 和不压缩时一样在第 9 次；第三个序列今天在第 4 次调用触发，G+ 在第 9 次。
 
@@ -630,25 +775,27 @@ SOFT、FULL 降级那一种，G+ 落地后不再发生。当前请求要么在 t
 
 有两种情况计数仍会数进更早的交换，都不是降级截断造成的：库调用方用 `run_turn(app, history)` 而不给 `user_text`（计划 0039 §9.3 按同一次请求算）；之前某次 EMERGENCY 已经把请求从历史里丢掉并写回，之后的降级截断恢复不了它。
 
-EMERGENCY 那一种不变。EMERGENCY 不经过 `fit_to_budget`，探针里三个场景在今天、E、G+ 下的视图逐条相同，其中两个误触发：当前请求很大、前面是一次 9 轮只读的交换时数到 11（实际 1）；当前请求 300 token、本次交换的结果很大时，贪心走到请求时剩余预算不够，请求被跳过，更旧更小的消息还放得下，数到 14（实际 6）。按裁定这次不改。
+EMERGENCY 那一种不变。EMERGENCY 不经过 `fit_to_budget`，探针里三个场景在今天、E、G+ 和定稿规则下的视图逐条相同，其中两个误触发：当前请求很大、前面是一次 9 轮只读的交换时数到 11（实际 1）；当前请求 300 token、本次交换的结果很大时，贪心走到请求时剩余预算不够，请求被跳过，更旧更小的消息还放得下，数到 14（实际 6）。按裁定这次不改。
 
 ## 8. 风险和没验证的部分
 
-- R1 视图的第一条仍可能是回复。G+ 之后，这只在输入里第一条留下的回复前面本来就没有请求时出现：对话里根本没有 user 消息（S10、E1），或者 head 开头是一段请求已经不在的回复。随机探针的 32,980 次截断里有 681 次，全部属于这一类。Anthropic 的 Messages API 是否拒绝这种对话没有核实，`anthropic_provider.py` 的 `encode_conversation` 也不处理它。按裁定这不并进本计划，另行立项在 provider 适配器层处理；本计划只把它记进已知限制。
+- R1 视图的第一条仍可能是回复。规则落地后，这只在输入里第一条留下的回复前面本来就没有请求时出现：对话里根本没有 user 消息（S10、E1、E6h），或者 head 开头是一段请求已经不在的回复。随机探针第一个生成器的 32,267 个截断结果里有 701 个，全部属于这一类（§4.4）。Anthropic 的 Messages API 是否拒绝这种对话没有核实，`anthropic_provider.py` 的 `encode_conversation` 也不处理它。按裁定这不并进本计划，另行立项在 provider 适配器层处理；本计划只把它记进已知限制。
 - R2 "留新的比留旧的有用"是判断。§6.3 的会话是它唯一的真实模型证据，还没有做。
 - R3 前缀缓存的数字来自探针里按消息逐条比较的前缀，system 消息只有 51 token。真实后端的缓存命中没有量，§6.3 会顺带量一次。
-- R4 丢到底时 tail 里的工具结果可能被删，见 N1。
-- R5 结果可能高于降级目标。原因有两种：不丢的那几条加 tail 本身就超过目标（当前请求很大、较早的请求按 2e 留着、摘要很大）；输入里本来就有没应答的调用，占位在判断之后补上。第 1 版只写了第一种，漏了第二种。两种都不会让结果高于 `usable`：能走到回退的对话压力低于 EMERGENCY，总量低于 `usable × 0.95`，占位每条只有十几个 token。
+- R4 tail 里的工具结果被截断删掉。第 2 版把它列为 N1，2026-10-09 裁定采纳尾部一侧，条文是 §4.1 的 2f。定稿规则下，输入自己修复后还留着的 tail 消息都在结果里（§4.4 的性质表，三个生成器 0 次违反）。没有覆盖的是 `pinned` 一侧，见 R7。
+- R5 结果可能高于降级目标。原因有三种：不丢的那几条加 tail 本身就超过目标（当前请求很大、较早的请求按 2e 留着、摘要很大、按 2f 留着的那一轮很大）；输入里本来就有没应答的调用，占位在判断之后补上；`pinned` 前缀以调用结尾时截断造成的占位（R7）。第 1 版只写了第一种，第 2 版补了第二种，2f 和第三种是第 3 版补的。`pinned` 只盖 system 消息、输入里又没有未应答的调用时，结果不大于输入。能走到回退的对话压力低于 EMERGENCY，总量低于 `usable × 0.95`，所以结果仍低于 `usable`。有占位时结果可以比输入大，每条占位十几个 token；§4.4 的三个生成器里这样的结果有 27、14、162 个。
 - R6 tail 的第一条是回复、head 里又没有任何请求时（比如一次很长的交换，它的请求之前被 EMERGENCY 丢掉并写回了），2e 没有可留的，视图以回复开头。归入 R1。
-- R7 `fit_to_budget` 在 `omicsclaw.context` 的公开面上，名字和签名不变，行为变了。仓库内只有一个调用方；仓库外有没有调用方不知道。`pinned` 前缀以调用结尾的调用方见 E12。
-- R8 合并冲突。本地还没合并进 `main` 的分支（`feat/ask-user`、`feat/ask-user-r3`、`feat/subagent-usage-desktop`）相对 `main` 没有改 §5 列的文件，在 `tests/evals` 下只动了 `test_runner.py`。它们如果新增脚本化 eval，`BASELINE` 和 `docs/core-features/eval.md` 的用例数要以合并时的数字为准。
+- R7 `fit_to_budget` 在 `omicsclaw.context` 的公开面上，名字和签名不变，行为变了。仓库内只有一个调用方；仓库外有没有调用方不知道，所以 `CHANGELOG.md` 的条目要把变了什么写全（§5.3）。`pinned` 前缀以调用结尾的调用方不在 2f 的保护之内：它在 head 开头的结果每次截断都最先丢并被补上占位（E12、E12a、E12b；§4.4 第三个生成器里这样的 11,866 个截断结果无一例外）。2026-10-09 裁定这一侧不做，只写明，写在哪里见 §5.3。
+- R8 合并冲突。2026-10-09 重新核对：本地还没合并进 `main` 的分支里，改了代码、测试或功能文档的有 `feat/ask-user`、`feat/ask-user-r3`、`feat/ask-user-r4`、`feat/subagent-usage-desktop` 和 `backup/subagent-usage-reviewed`。它们相对 `main` 都没有改 §5 列的文件：`docs/core-features/` 下动的是 `cli.md`、`sub-agent.md` 等另外几份，`tests/evals` 下只动了 `test_runner.py`。它们如果新增脚本化 eval，`BASELINE` 和 `docs/core-features/eval.md` 的用例数要以合并时的数字为准。
 - R9 Desktop 和 channel 没有跑。它们和 CLI 一样经 `SessionRegistry` 到 `TurnRunner`，T18 覆盖的是这一段共用路径。
 - R10 裁定 3 只管降级截断。`pinned=0` 而首条是 system 消息的调用方，摘要成功时 system 消息仍在 head 里、仍会被摘要掉；EMERGENCY 时它是 `rest[0]`，被当成任务无条件保留，真正的请求反而没有锚点。这两条路径这次都不动。
+- R11 较早的交换没有最终答复就结束时，它的请求可能独自留在视图里。要同时满足三件事：这次交换不是当前这一次；它以一轮工具调用结束，后面没有最终答复，用户中断、达到轮数上限或出错时会这样；截断正好停在这一轮的调用已经丢了、结果还剩至少一条的地方。剩下的结果在候选里算"回复还留着"，请求按第 4 条不丢；修复随后把这些孤儿结果删掉，视图里就剩一条没有任何回复的旧请求，后面紧跟下一条请求（E13）。它来自第 2 版已批准的第 4 条和第 6 条，和 2f 无关：`r3_probe_lone_request.py` 在 §4.6 第一组的 6,000 段对话上量到不加 2f 时 232 段、定稿规则 230 段、今天的代码 0 段（`r3_out_22_lone_request.log`）。那个生成器里多数长交换没有最终答复，比真实会话多得多；给每次较早的交换补上一条答复之后，定稿规则和不加 2f 的规则都是 0 段。后果是模型看到一条没人回应过的旧请求，会不会回头去做它，没有用真实模型验证过。定稿规则不处理这种情形，记进已知限制（§5.3）。探针里顺带量了一种改法：找最旧的留下的回复时，跳过紧挨切点、调用已经被丢掉的工具结果（`r3_rules.final_orphans_do_not_count`）。它把 230 段降到 0 段，视图和定稿规则的差别只有这 230 段里那条旧请求，高于目标和 tail 的数字不变。这种改法没有跑测试矩阵和变异，也不在 2026-10-09 的裁定之内，这一版没有采用。
 
-按裁定只记录、不处理的两件事：
+按裁定只记录、不处理的三件事：
 
 - 持续降级时 `MemoryNudge` 可能连续提醒。今天的代码在多交换序列的第 17、18、19 次调用连续提醒了三次（§3.4）。记进计划 0055 §10.6。
 - `_emergency_survivors` 会留下结果被跳过的调用消息，每次补 3 到 5 条占位，补完之后可能高于它自己的目标（§1.2、§1.3）。留给以后的 EMERGENCY 计划。
+- 摘要成功的 FULL 档也会删掉 tail 里的工具结果，并且写回历史。复现条件：压力到 FULL，摘要器正常返回，head 和 tail 的边界切开一轮工具调用。FULL 把整个 head 交给摘要，那条调用在 head 里，被摘要代替；`apply_compaction` 把 pinned、摘要消息和 tail 拼起来再修复，tail 里失去调用的结果被删。最后一轮是 6 个并行调用、6 条结果正好占满 tail 时，压缩后的对话只剩 system 消息和摘要，最新的 6 条结果一条不剩。这次压缩不算降级，`should_write_back` 为真，被删的结果从历史里也没有了，后面的调用恢复不了。一轮 3 个并行调用、一条结果在 head 两条在 tail 时，丢的是 tail 里那两条。SOFT 的摘要路径和 EMERGENCY 在这两个形状上都不丢 tail：SOFT 只摘要 head 较旧的一半，那条调用在留下的一半里。这是审核方第 2 轮顺带发现的（`RV2/rv2_out9_boundary_other_paths.log`）。第 3 版用这份计划自己的夹具在 `5daf5482` 上重现了：1551 token 的对话压缩成 100 token，`ProgressiveCompactor.compact` 返回的写回标志为真，14 条工具结果剩 0 条（`r3_probe_full_tier.py`，`r3_out_19_full_tier.log`）。它不经过 `fit_to_budget`，本计划的改动碰不到它。2026-10-09 没有另立项。
 
 ## 9. 裁定
 
@@ -660,33 +807,17 @@ EMERGENCY 那一种不变。EMERGENCY 不经过 `fit_to_budget`，探针里三�
 4. 一对真实会话的对比是合并的前置条件，要有一条依赖上一次交换答复的追问（§6.3）。
 5. EMERGENCY 的任务锚点这次不改，以后另开计划，届时定义和 §4.1 第 2 条一致。
 6. 代码、测试、文档一起改，不拆两次。第 1 版 Q5 的两件范围外观察只记录（§8 末尾）。
+7. N1，2026-10-09：采纳尾部一侧。tail 以工具结果开头时，head 末尾发出这次调用的 assistant 消息和它在 head 里的结果不丢，也就是被 head 和 tail 的边界切开的那一轮整轮不丢。条文是 §4.1 的 2f。`pinned` 一侧不加，只写明（§5.3）。
+8. 2026-10-09：第 2 版批准。批准的是计划，实现另行下令派发。
+9. 2026-10-09：审核中顺带发现的"摘要成功的 FULL 档也会删掉尾部工具结果并写回历史"不另立项，记在 §8 末尾。
 
 ### 9.2 仍要 owner 定的
 
-N1 被固定边界切开的一轮工具调用，要不要整轮不丢。
+没有。第 2 版在这里的 N1 已由上面第 7 条裁定；它的频率表按定稿规则更新后放在 §4.6。第 3 版修订时新看到的 R11 记在 §8，定稿规则不处理它。
 
-这是修订时新看到的后果，裁定里没有覆盖。`min_tail` 的含义是最后几条消息原样留着（`split_head_tail` 的 docstring 写的是 "kept whatever happens"，`test_the_fallback_still_keeps_the_pinned_prefix_and_the_tail` 断言了 `result[-6:]`）。但 head 的最后一条是调用、它的结果在 tail 开头时，这条调用一旦被丢，tail 里的结果就被修复删掉。今天这是最先发生的事；G+ 之下要等 head 里别的都丢完才轮到它，也就是只在丢到底的时候。
+## 10. 各版之间改了什么
 
-发生的频率，按生产的目标范围（`r2_out_05_tail.log`，各 6,000 段，并行调用比真实会话多）：
-
-| | 今天 | G+ | G+ 加这一条 |
-|---|---|---|---|
-| system 提示 50 token：tail 的消息被删 | 3,474 | 236 | 0 |
-| 其中 tail 被删光 | 684 | 10 | 0 |
-| 高于目标 | 245 | 107 | 315 |
-| system 提示 10,000 token：tail 的消息被删 | 3,829 | 802 | 0 |
-| 其中 tail 被删光 | 682 | 86 | 0 |
-| 高于目标 | 878 | 791 | 1,188 |
-
-system 提示大的时候更容易丢到底，脚本化 eval 的装配里 system 提示就有约 11,800 token。最坏的例子是 E6e：最后一轮 6 个并行调用占满 tail，目标够不着，G+ 发出去的是 `S U2`，模型只看得到请求；加上这一条是 `S U2 a2.5 t2.5a ... t2.5f`，589 对目标 500。E6c 是代价的例子：加上这一条之后结果是 1232 对目标 600，不加是 302。
-
-加的话是 §4.1 第 2 条多一项：tail 以工具结果开头时，head 末尾发出这次调用的 assistant 消息和它在 head 里的结果不丢。`pinned` 前缀以调用结尾时 head 开头属于它的结果同理（E12），这一侧在 entry 层走不到，可以一起加也可以不加。`r2_rules.py` 的 `gplus_straddle` 是两侧都加的原型，约 25 行；没有为它跑测试矩阵和变异，采纳的话要补 2 到 3 条测试。
-
-不加的话，`fit_to_budget` 的 docstring 和 `docs/core-features/progressive-compactor.md` §12 要写明：tail 里失去调用的工具结果会被修复删掉。
-
-建议加 tail 这一侧。理由是 `min_tail` 的承诺已经写在 docstring 和测试里，最新一轮的结果是模型最需要的东西，而代价只是丢到底时多超出目标一些，仍低于 `usable`。`pinned` 那一侧建议不加，只写明。
-
-## 10. 第 1 版到第 2 版改了什么
+### 10.1 第 1 版到第 2 版
 
 | 审核意见或裁定 | 处理 |
 |---|---|
@@ -708,29 +839,105 @@ system 提示大的时候更容易丢到底，脚本化 eval 的装配里 system
 
 第 1 版的 §3.4 末尾（EMERGENCY 的对照做法）、Q1 至 Q5、测试 T1 至 T13 的编号都不再沿用。第 1 版的探针和输出留在原处，文件名不带 `r2_`。
 
+### 10.2 第 2 版到第 3 版
+
+| 裁定或复核意见 | 处理 |
+|---|---|
+| N1 采纳尾部一侧 | §4.1 加 2f，写成三步判定；§4.2 按定稿规则重写 E6c、E6e、E12，加 E6f、E6h、E6i、E12a、E12b；§4.3 的原型在 `_held` 末尾加一行、加一个辅助函数；§9.2 清空，N1 移到 §9.1 第 7 条 |
+| `pinned` 一侧不加，只写明 | §4.1 写了以后要做时用 `_answers_owed_by`，并且要先把它挪到 `transcript.py`；§5.3 列了 docstring 和 `progressive-compactor.md` §12 要写的内容 |
+| §4.1 的 2a 和 §4.6 矛盾 | 2a 写明修复只删输入里本来就没有配对的 tool 消息；§4.6 去掉"tail 里的工具结果仍可能被删"，换成 2f 的代价；§4.4 的性质表加了对应的一行，三个生成器 0 次违反 |
+| `gplus_straddle` 建在错误的底子上 | 没有沿用。定稿原型在第 2 版 §4.3 那段代码上改，另照条文写了一份 `from_text` 来比对（§4.3、§4.4） |
+| 性质表第 5 行只在 `pinned` 前缀不以调用结尾时成立 | 加了限定；加了第三个生成器专门量这种情况，11,866 个截断结果每一个都带截断造成的占位（§4.4） |
+| 测试的三处缺口 | 对照 §4.1 核实：派发时的三句话写的是变异体的行为，规则相反。补 T19、T20、T21，审核方的 m15、m17、m09 转红。同一矩阵里的 m16、m18 没有点名，没有加测试，原因写在 §5.2 |
+| N1 的测试 | 补 T22、T23、T24，其中 T22、T23 各带枚举和普通字符串两种角色写法；变异 M18 至 M25（§5.2） |
+| docstring 和 §12 要写 `pinned` 一侧的限制 | §5.3 |
+| §6.3 的四个操作细节 | 逐条在代码里核对后写进 §6.3，带文件和行号 |
+| CHANGELOG 要写明 `fit_to_budget` 的行为变了 | §5.3 |
+| FULL 档摘要成功时删尾部工具结果，不另立项 | 在 `5daf5482` 上重现后记在 §8 末尾和 §9.1 第 9 条 |
+| 批准的是计划，实现没有下令派发 | 状态行、§9.1 第 8 条 |
+
+修订时新看到、不在裁定和复核意见里的：
+
+- 较早的交换没有最终答复就结束时，它的请求可能独自留在视图里（E13、R11）。来自第 2 版已批准的条文，这一版写明了，没有改规则。
+- `_request_of_oldest_reply` 里有两行去掉以后结果不变（§4.3）。原样留着。
+- `pinned` 一侧在结果很小时会让视图比输入大（E12a）。审核方第 2 轮的随机比对里有"结果比输入大"的计数（`RV2/rv2_out1_fuzz.log` 的 P9，32 次），第 2 版的正文没有写这种情形。
+- R8 的分支列表按 2026-10-09 的状态重新核对，多了两个分支。
+
+和第 2 版不同的数字：
+
+- §4.4 的截断数、高于目标数、第一轮不是 user 的次数，原因在该节的表里。
+- §4.6 "高于目标"的数字换成定稿规则的。前两组和第 2 版 §9.2 的表相同，后两组是新加的。
+- §5.2 的用例数从 27 变成 35，变异从 17 处变成 28 处。M1、M3、M6、M8、M12、M14、M15、M16 转红的测试比第 2 版多，多出来的是新加的 T19 至 T24。
+- §3、§7 的数字没有变：定稿规则在那些探针上发出的视图和 G+ 相同。
+
+第 2 版的探针和输出留在原处。第 3 版要用的第 2 版脚本是复制到 `plan-0078-r3/` 之后再改的。
+
 ## 11. 证据清单
 
-目录：`/tmp/claude-0/-workspace-dataset-private-zhouwg-data-OmicsClaw/58ae2e35-0792-4055-933c-1cfb79c727a6/scratchpad/plan-0078/`。探针用 `/opt/conda/envs/rapids_singlecell/bin/python` 跑，`PYTHONPATH` 指向 `5daf5482` 的检出；标"原型"的指向暂存副本 `proto_g/`（`git archive 5daf5482` 导出的包和三个测试目录，`r2_apply_prototype.py` 只改了其中的 `transcript.py`）。`proto_full/` 是整棵树的导出，两条命令的基线和原型运行、T18 的 pytest 形式在里面跑，跑完后它的 `transcript.py` 已恢复成 `5daf5482` 的内容。`rv_copy/` 是审核方 `rv_strategies.py`、`rv_common.py`、`rv_probe7_fuzz.py` 的副本。
+### 11.1 第 3 版
 
-第 2 版：
+目录：`/tmp/claude-0/-workspace-dataset-private-zhouwg-data-OmicsClaw/9885f10a-3799-4309-9dfb-0981c166422a/scratchpad/plan-0078-r3/`。`r3_base/` 和 `r3_proto/` 是 `git archive 5daf5482` 导出的整棵树，`r3_apply_prototype.py` 只改了 `r3_proto/` 里的 `omicsclaw/context/transcript.py`。`r3_proto_no_n1/` 只有 `omicsclaw` 包，打的是不带 2f 的补丁。`r3_mut/` 是变异用的副本，跑完后它的 `transcript.py` 和 `r3_proto/` 的逐字相同。探针用 `/opt/conda/envs/rapids_singlecell/bin/python` 经 `r3_run.sh` 跑，`PYTHONPATH` 指向其中一个副本；`r3_common.py` 在 `omicsclaw.__file__` 不在该副本下时拒绝运行，每个输出的第一行是这个路径。标"原型"的跑在 `r3_proto/` 上，其余跑在 `r3_base/` 上，规则由 `r3_rules.py` 提供，需要经过 `compact()` 时临时换进去。
+
+前两版里正文还在引用数字的探针都在这个目录里重跑了一遍，所以正文的数字除下面列出的三处以外都能在 `r3_` 开头的输出里找到。
 
 | 脚本 | 输出 | 内容 |
 |---|---|---|
-| `r2_rules.py` | | G、G+ 的实现：定稿规则、照裁定字面的两条、第二种写法、N1 的变体 |
-| `r2_apply_prototype.py` | | 把定稿规则写进暂存副本 |
+| `r3_rules.py` | | 定稿规则 `final`；不加 2f 的第 2 版规则 `gplus_r2`；照 §4.1 的条文另写的 `from_text`；2f 第 3 步只看 tail 第一条的读法；R11 里量的那种改法 |
+| `r3_apply_prototype.py`、`r3_check_plan_block.py` | `r3_out_24_plan_block.log` | 把定稿规则写进暂存副本；核对 §4.3 的代码块和写进去的文本相同（原型） |
+| `r3_probe_fuzz.py` | `r3_out_01_fuzz.log` | §4.4：三种写法、对审核方第 2 轮实现的比对、2f 改了什么、性质表（原型） |
+| `r3_probe_r2_to_r3.py` | `r3_out_23_r2_to_r3.log` | §4.4：三个数和第 2 版不同的原因（原型） |
+| `r3_probe_equivalent.py` | `r3_out_20_equivalent.log` | §4.3：去掉以后结果不变的那两行（原型） |
+| `r3_probe_scenarios.py` | `r3_out_02_scenarios.log`、`.json` | §3.2、§3.3：十个规则，14 个场景加请求在 tail 里的 24 次 |
+| `r3_probe_edges.py` | `r3_out_04_edges.log` | §4.1、§4.2：E1 至 E13 |
+| `r3_probe_tail.py` | `r3_out_05_tail.log` | §1.5、§4.5、§4.6：tail 的消息被删和高于目标的频率，四组对话 |
+| `r3_probe_sequence.py` | `r3_out_06_sequence.log`、`.json` | §3.4：三个逐次调用的序列 |
+| `r3_probe_gate.py` | `r3_out_07_gate.log` | §7：闸门，10 个夹具 |
+| `r3_test_proposed.py`、`r3_pytest.sh` | `r3_out_08_proposed_today.log`、`r3_out_09_proposed_prototype.log`、`r3_out_11_proposed_without_2f.log`，各带一份 `.raw` | §5.2：T1 至 T17、T19 至 T24 |
+| `r3_mutate.py` | `r3_out_10_mutations.log` | §5.2：28 处变异，加一处不改结果的改动 |
+| `r3_reviewer_matrix.py` | `r3_out_21_reviewer_mutants.log` | §5.2：第 3 版的用例对审核方的 21 处变异 |
+| `r3_probe_m18.py` | `r3_out_25_m18.log` | §5.2：m18 什么时候分得开 |
+| `r3_probe_assembly.py` | `r3_out_12_assembly_measure.log`、`r3_out_13_assembly.log` | §5.2：T18 的形状在每个方案下，以及 `trigger_tokens` 的量法 |
+| `r3_eval_scratch.py`、`r3_eval.sh` | `r3_out_14_eval_today.log`、`r3_out_16_eval_prototype.log` | T18 的 pytest 形式 |
+| `r3_suite.sh` | `r3_out_29_baseline_layers.log`、`r3_out_30_baseline_guards.log`、`r3_out_17_prototype_layers.log`、`r3_out_18_prototype_guards.log` | §6.2：两条命令在基线和定稿原型上 |
+| `r3_probe_current.py` | `r3_out_26_current.log` | §1.2、§1.3：今天各函数留什么丢什么。第 1 版的探针原样重跑 |
+| `r3_probe_existing_test.py` | `r3_out_27_existing_test.log` | §1.6：那条名字叫"最旧的先走"的测试。第 1 版的探针原样重跑 |
+| `r3_eval_section_1_4.py`、`r3_eval.sh` | `r3_out_28_eval_section_1_4.log` | §1.4：经过真实装配的一次。第 1 版的用例原样重跑 |
+| `r3_probe_full_tier.py` | `r3_out_19_full_tier.log` | §8 末尾：FULL 档摘要成功时删尾部工具结果 |
+| `r3_probe_lone_request.py` | `r3_out_22_lone_request.log` | R11：请求独自留下的频率和成因 |
+
+从前两版和审核方复制过来的：`r3_common.py`（原 `common.py`，只改了开头确认 `omicsclaw` 路径的几行）、`r3_strategies.py`（原 `strategies.py`）、`r3_r2_rules_copy.py`（原 `r2_rules.py`，只用其中照裁定字面写的 G），以及 `r3_rv_copy/` 里审核方的 `rv_common.py`、`rv_strategies.py`、`rv_probe7_fuzz.py`、`rv2_rules.py`、`rv2_plan_block.py`、`rv2_mutants.py`，内容没有改。`r3_plan_sec*.md`、`r3_splice_plan.py` 和 `r3_update_refs.py` 是写这份文档用的草稿和脚本。`r3_check_figures.py` 核对正文引用的主要数字都在这些输出里。
+
+没有在第 3 版重跑、正文仍引用前两版输出的三处：
+
+- §2 参考实现的 Go 运行（`out_02_reference_go.log`）。这次修订不涉及 harness9。
+- §5.2 里"第 1 版的 D 上 5 红"（`r2_out_11_proposed_first_version_rule.log`）。
+- §4.3、§4.4 里第 2 版对审核方第 1 轮实现、对裁定字面读法的比对（`r2_out_01_fuzz.log`）。那些比对的对象是不带 2f 的规则，结论是定性的，正文没有再引用其中的数字。
+
+只读引用的审核方输出：第 1 轮的 `RV/rv_out3_assembly.log`、`rv_probe3_assembly.py`、`rv_out5_sequence.log`、`rv_out6_gate.log`、`rv_out8_edges.log`、`rv_out9_request_in_tail.log`、`rv_out10_parallel_tail.log`；第 2 轮的 `RV2/rv2_out1_fuzz.log`、`rv2_out3_proposed_tests_matrix.log`、`rv2_out5_n1.log`、`rv2_out9_boundary_other_paths.log`、`rv2_out10_plan_straddle_variant.log`。
+
+### 11.2 第 1、2 版
+
+目录：`/tmp/claude-0/-workspace-dataset-private-zhouwg-data-OmicsClaw/58ae2e35-0792-4055-933c-1cfb79c727a6/scratchpad/plan-0078/`，第 3 版没有动它。探针用 `/opt/conda/envs/rapids_singlecell/bin/python` 跑，`PYTHONPATH` 指向 `5daf5482` 的检出；标"原型"的指向暂存副本 `proto_g/`（`git archive 5daf5482` 导出的包和三个测试目录，`r2_apply_prototype.py` 只改了其中的 `transcript.py`）。`proto_full/` 是整棵树的导出，两条命令的基线和原型运行、T18 的 pytest 形式在里面跑，跑完后它的 `transcript.py` 已恢复成 `5daf5482` 的内容。`rv_copy/` 是审核方 `rv_strategies.py`、`rv_common.py`、`rv_probe7_fuzz.py` 的副本。
+
+第 2 版，表里的章节号是第 2 版的：
+
+| 脚本 | 输出 | 内容 |
+|---|---|---|
+| `r2_rules.py` | | G、G+ 的实现：第 2 版的规则、照裁定字面的两条、第二种写法、N1 的变体（第 3 版没有沿用） |
+| `r2_apply_prototype.py` | | 把第 2 版的规则写进暂存副本 |
 | `r2_probe_fuzz.py` | `r2_out_01_fuzz.log` | §4.4：三种写法、对审核方实现的比对、性质表（原型） |
 | `r2_probe_reading.py` | `r2_out_03_reading.log` | §4.4：裁定字面和审核方代码的分歧在哪 |
 | `r2_probe_scenarios.py` | `r2_out_02_scenarios.log`、`.json` | §3.2、§3.3：九个方案，14 个场景加请求在 tail 里的 24 次 |
 | `r2_probe_edges.py` | `r2_out_04_edges.log` | §4.1、§4.2：E1 至 E12 |
-| `r2_probe_tail.py` | `r2_out_05_tail.log` | §1.5、N1：tail 的消息被删的频率 |
+| `r2_probe_tail.py` | `r2_out_05_tail.log` | §1.5 和第 2 版的 N1：tail 的消息被删的频率 |
 | `r2_probe_sequence.py` | `r2_out_06_sequence.log`、`.json` | §3.4：三个逐次调用的序列 |
 | `r2_probe_gate.py` | `r2_out_07_gate.log` | §7：闸门，10 个夹具 |
 | `r2_test_proposed.py` | `r2_out_08_proposed_today.log`、`r2_out_09_proposed_prototype.log`、`r2_out_11_proposed_first_version_rule.log` | §5.2：T1 至 T17 |
-| `r2_mutate.py` | `r2_out_10_mutations.log` | §5.2：17 处变异 |
+| `r2_mutate.py` | `r2_out_10_mutations.log` | §5.2：第 2 版的 17 处变异 |
 | `r2_probe_assembly.py` | `r2_out_12_assembly_measure.log`、`r2_out_13_assembly.log` | §5.2：T18 的形状在每个方案下 |
 | `r2_eval_scratch.py` | `r2_out_14_eval_today.log`、`r2_out_16_eval_prototype.log` | T18 的 pytest 形式 |
-| 现有测试 | `out_07_baseline_layers.log`、`r2_out_15_baseline_guards.log`、`r2_out_17_prototype_layers.log`、`r2_out_18_prototype_guards.log` | §6.2：两条命令的基线和原型 |
+| 现有测试 | `out_07_baseline_layers.log`、`r2_out_15_baseline_guards.log`、`r2_out_17_prototype_layers.log`、`r2_out_18_prototype_guards.log` | §6.2：两条命令的基线和 G+ 原型 |
 
-第 1 版仍在引用的：`common.py` 和 `strategies.py`（对话的搭法和方案 A 至 F 的实现，第 2 版的探针接着用）、`probe_01_current.py`（`out_01_current.log`，§1.2、§1.3）、`h9ref/internal/memory/zz_probe0078_test.go`（`out_02_reference_go.log`，§2）、`probe_07_existing_test.py`（`out_13_existing_test.log`，§1.6）、`eval_plan0078_scratch.py`（`out_15_eval_today.log`，§1.4）。
+第 1 版的：`common.py` 和 `strategies.py`（对话的搭法和方案 A 至 F 的实现）、`probe_01_current.py`（`out_01_current.log`）、`h9ref/internal/memory/zz_probe0078_test.go`（`out_02_reference_go.log`，§2）、`probe_07_existing_test.py`（`out_13_existing_test.log`）、`eval_plan0078_scratch.py`（`out_15_eval_today.log`）。
 
-只读引用的：审核方的 `RV/rv_out9_request_in_tail.log`、`rv_out3_assembly.log`、`rv_probe3_assembly.py`、`rv_out5_sequence.log`、`rv_out6_gate.log`、`rv_out8_edges.log`、`rv_out10_parallel_tail.log`；更早的 `.../scratchpad/review-gate/evidence/fit_direction.log`、`tiers.log`、`tiers2.log`。
+更早的只读引用：`.../scratchpad/review-gate/evidence/fit_direction.log`、`tiers.log`、`tiers2.log`。
