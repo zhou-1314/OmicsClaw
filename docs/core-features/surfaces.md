@@ -502,6 +502,11 @@ start_channel
 - 运行期间只推送"需要用户注意"的帧：`DEFAULT_DELIVERED_TYPES = {QUEUED, APPROVAL_REQUIRED, APPROVAL_SETTLED, EXCHANGE_END}`。
 - **答案在 exchange 结束后从轨迹一次性投递**，而不是逐 token：平台都限流；增量帧按契约可丢弃。
   长文本按 `binding.text_chunk_limit`（`DEFAULT_TEXT_CHUNK_LIMIT = 4096`）用 `chunk_text` 切块。
+- 答案是本次 exchange 写下的最后一条有文字的 assistant 消息。`ChannelRuntime._answer` 从轨迹末尾往回找，
+  遇到第一条 user 消息就停。这条 user 消息是本次的用户输入，或者压缩留在它位置上的摘要；工具结果是
+  `Role.TOOL` 消息，不会让查找停下。同一次 exchange 里较早一轮写在工具调用旁边的文字也算答案。
+  本次 exchange 没有写文字时不发送答案，用户收不到消息（§9.8、§10 第 10 条）。
+  失败和取消的 exchange 没有轨迹可读，发出去的是终止帧渲染的 `Failed: <类型名>` 或 `Cancelled.`。
 - `delivery.deliver`：单条消息最多 `MAX_DELIVERY_ATTEMPTS = 3` 次、每次 `ATTEMPT_TIMEOUT_S = 30.0` 秒；适配器返回
   `ACCEPTED` / `NOT_ACCEPTED_RETRYABLE` / `REJECTED_PERMANENT` / `ACCEPTANCE_UNKNOWN`，只有可证明可重试的才重试，
   `ACCEPTANCE_UNKNOWN` 不盲目重发。不持久化——回复只活在进程里（持久 outbox 是被删控制面的能力）。
@@ -526,6 +531,77 @@ start_channel
 `ChannelSurfaceBinding.attachment_input_enabled` 被钉为 `False`：`omicsclaw.schema.Message` 只有 `content: str`，没有内容分片，
 入站图片无处可去（plan 0031 §5.3）。因此发给 Channel 的照片不会交给模型：Telegram 回一句不支持，其余适配器拒收或丢弃非文本消息。
 
+### 9.8 2026-10-09：答案只取本次 exchange 的消息
+
+#### 现象
+
+同一个会话里，一次没有写文字的 exchange 会把上一次 exchange 的回答再发一遍。经真实的 `ChannelRuntime`
+和它的回复泵、脚本化的模型，第一次回答 `FIRST ANSWER.`，第二次是下表前六种形状之一时，发出去的都是
+`['FIRST ANSWER.', 'FIRST ANSWER.']`：
+
+| 第二次 exchange | 引擎的停止原因 | 修复前发出 | 修复后发出 |
+|---|---|---|---|
+| 空回复 | `converged` | 上一次的回答 | 不发 |
+| 只有思考，没有正文 | `converged` | 上一次的回答 | 不发 |
+| 一次工具调用，之后空回复 | `converged` | 上一次的回答 | 不发 |
+| 被输出上限截断，只有工具调用 | `truncated` | 上一次的回答 | 不发 |
+| 被输出上限截断，什么都没有 | `truncated` | 上一次的回答 | 不发 |
+| 跑满 `max_turns`，每轮只有工具调用 | `max_turns` | 上一次的回答 | 不发 |
+| 先在工具调用旁边写一句，最后一轮为空 | `converged` | 那一句 | 那一句 |
+| 被截断，有半截正文 | `truncated` | 半截正文 | 半截正文 |
+| 跑满 `max_turns`，其中一轮写过文字 | `max_turns` | 那段文字 | 那段文字 |
+| 失败 | 无结果 | `Failed: <类型名>` | `Failed: <类型名>` |
+| 取消 | 无结果 | `Cancelled.` | `Cancelled.` |
+
+前六种作为会话的第一次 exchange 时，修复前后都不发任何消息。触发条件是本次 exchange 没有写文字，
+截断只是其中两种。
+
+#### 根因
+
+`_answer` 读的是 `TurnOutcome.result.messages`，也就是引擎的 `RunResult.messages`。这份轨迹含输入：
+`[system, 带进来的历史, 本次的 user 消息, 本次新增的消息]`，压缩写回之后是压缩过的版本，其中没有标记
+本次 exchange 从哪里开始。`_answer` 从末尾往回找最后一条有文字的 assistant 消息，没有在本次的 user 消息
+处停下，本次没有文字时就找到了历史里的回答。`TurnHandle.terminal == "converged"` 涵盖引擎的三种停止原因，
+所以被截断和跑满轮数的 exchange 也走这条路。
+
+#### 改动
+
+`_answer` 往回找时遇到第一条 user 消息就停（`omicsclaw/entry/channel/runtime.py`）。这条边界和规划闸门
+用的是同一条（`docs/plans/0039-planning-layer.md` §9.3）：会进入轨迹的 user 消息只有本次的用户输入
+（`engine/loop.py` 的 `_opening`）和压缩摘要（`context/summary.py` 的 `build_compaction_message`）。
+摘要紧跟 system 消息，后面是原样保留的尾部。用户输入还在尾部时先遇到用户输入；已被摘要替换时在摘要处停，
+摘要之后的消息都是本次 exchange 写的。Channel 拒绝空消息，`/compact` 不经过回复泵，所以走到 `_answer`
+的 exchange 都以一条 user 消息开头。
+
+没有文字时发什么没有改。修复后沿用的是第一次 exchange 没有文字时的既有行为：不发送答案，没有新增任何
+发给用户的文字。同一次 exchange 里较早一轮的文字仍然作为答案发出。
+
+测试在 `tests/entry/test_channel_runtime.py`，都经 `ChannelRuntime.submit` 和回复泵：
+`test_an_exchange_without_text_sends_no_answer`（六种形状，各作为第一次和第二次 exchange，12 条用例，
+其中作为第二次的 6 条在修复前是红的）、`test_an_exchange_delivers_the_last_text_it_wrote`（5 条）、
+`test_an_exchange_with_no_result_sends_its_notice_and_no_answer`（失败和取消，2 条）。对这段查找做了
+11 处定点变异，10 处有测试转红。剩下的一处是"压缩摘要不算边界"，行为上和原代码等价：摘要前面只有
+system 消息，没有哪次 exchange 写的东西。
+
+按 `SPEC.md` 第 2 档验证。`tests/entry` 加 `tests/launch/test_channel_command.py`：基线 `5daf5482` 上
+1851 passed、6 skipped、3 xfailed，修复后 1870 passed、6 skipped、3 xfailed，多出的 19 条是上面三组用例。
+`tests/entry/test_desktop_*.py` 在装了 fastapi 的 OmicsClaw 环境里另跑，两边都是 566 passed、3 skipped。
+
+#### 没验证和没改的部分
+
+- 真实的聊天平台没有验收。测试里的投递适配器是记录发送内容的替身，七个平台都没有真实收发过，
+  "什么都不发"在各平台上是什么样子（例如 Telegram 的 typing 提示过期之后没有下文）没有看过。
+- 没有请求真实模型。真实模型什么时候会给出没有正文的回复，这次没有采样。
+- 压缩之后的边界只用探针核对过（真实的 `compact` 产出的轨迹交给 `_answer`），仓库里没有为它加测试。
+- EMERGENCY 截断丢掉本次请求时仍可能重发更早的回答，见 §10 第 11 条。
+- 只有空白字符的回复仍然原样发出（修复前后相同）。
+- `delivered_types` 里带 `TEXT_DELTA` 的部署走同一个 `_answer`，没有文字时同样不再重发。这种部署里
+  短于一个批次的回答会发两遍（`flush` 一遍，`_answer` 一遍），与本次修复无关，没有改；仓库里没有
+  调用方传这个参数。
+- `TurnOutcome.reply`（`entry/turn.py`）是同样的找法，eval Runner 的 `Result.final_output` 读的是它，
+  这次没有改。CLI 恢复会话时的回顾行（`_recap`）各取历史里最后一条提问和最后一条回答，最后一次
+  exchange 没有文字时两行不属于同一次 exchange，也没有改。
+
 ---
 
 ## 10. 已知限制
@@ -540,6 +616,13 @@ start_channel
 8. **文档漂移**：`docs/ARCHITECTURE.md` 仍描述 `ControlRuntime`、`control.db`（iMessage 与 WeChat 适配器已随代码移除，ARCHITECTURE 也不再列出）。
    以本文与 `entry/` 代码为准。
 9. `/demo`（Channel）示例里的 `spatial-domain-identification` 不是现有 skill 名（应为 `spatial-domains`）。
+10. **Channel 上没有文字的 exchange 不发任何消息**：空回复、只有思考、被输出上限截断且没有正文、跑满 `max_turns`
+    且没有写过文字的 exchange 都以 `converged` 结束，`_answer` 返回空串，用户收不到任何提示。被截断但有正文的
+    回复原样发出，不带"被截断"的说明（§9.8）。
+11. **EMERGENCY 截断丢掉本次请求时，Channel 仍可能重发更早的回答**：EMERGENCY 截断从新到旧保留放得下的消息，
+    放不下的跳过，不留摘要，结果写回轨迹。本次的用户输入太大放不下、更早的回答却放得下时，`_answer` 往回找
+    会越过原来的位置，停在更早的一条 user 消息上；本次 exchange 又没有写文字，就会把那条更早的回答发出去。
+    SOFT、FULL 档的降级截断不写回轨迹，不受影响。
 
 ---
 
