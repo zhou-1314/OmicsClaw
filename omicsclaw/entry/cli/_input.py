@@ -140,7 +140,11 @@ class FreshSource(Protocol):
     """
 
     async def read_fresh(
-        self, prompt: str, *, discarded: Callable[[], None] | None = None
+        self,
+        prompt: str,
+        *,
+        discarded: Callable[[], None] | None = None,
+        unfinished: Callable[[], None] | None = None,
     ) -> str:
         """The next line typed after *prompt* is shown.
 
@@ -148,9 +152,19 @@ class FreshSource(Protocol):
         terminal. With readers queued, that happens as this one's prompt
         opens, which can be long after the call.
 
+        A line begun before the prompt and finished at it was not typed
+        after the prompt either. A source that can see such a line throws
+        the whole of it away: what is typed at the prompt up to the next
+        Enter, that Enter included, and only a line typed after that is
+        returned. A source that cannot see it returns the rest of the
+        line, and says which it is in its own ``read_fresh``.
+
         :param prompt: as for :meth:`PromptSource.read`.
         :param discarded: called once, before the prompt is shown, when
             the source saw that there was something to throw away.
+        :param unfinished: called once, after *discarded* and before the
+            prompt is shown, when the source saw that the last line among
+            it had no Enter yet.
         :returns: the line, without its newline.
         :raises EOFError: as :meth:`PromptSource.read`.
         """
@@ -279,7 +293,11 @@ class StreamSource:
         return await self._read(prompt, fresh=False, discarded=None)
 
     async def read_fresh(
-        self, prompt: str, *, discarded: Callable[[], None] | None = None
+        self,
+        prompt: str,
+        *,
+        discarded: Callable[[], None] | None = None,
+        unfinished: Callable[[], None] | None = None,
     ) -> str:
         """The next line typed after *prompt* is shown, at a terminal.
 
@@ -291,6 +309,11 @@ class StreamSource:
         thrown away. A half-typed line goes without the call, because the
         terminal reports nothing of a line until Enter.
 
+        For the same reason this source cannot tell that a line was left
+        unfinished. *unfinished* is never called, and what is typed at
+        the prompt to finish such a line is returned as the line: after
+        ``ye`` typed early, ``s`` and Enter at the prompt return ``s``.
+
         A stream that is not a terminal has no earlier and later: the
         lines of a pipe or a file were all written in advance, in the
         order their author meant them. They are handed out in that order,
@@ -298,6 +321,8 @@ class StreamSource:
 
         :param prompt: Written to the echo stream first, if there is one.
         :param discarded: Called at most once, before the prompt.
+        :param unfinished: Accepted for :class:`FreshSource` and never
+            called.
         :returns: The line, without its line ending.
         :raises EOFError: At the end of the stream, or once closed.
         :raises asyncio.CancelledError: As :meth:`read`.
@@ -471,7 +496,7 @@ to 1024 bytes, so about a megabyte of typed-ahead input is thrown away
 and a terminal that never stops sending cannot hold the event loop."""
 
 
-def _drop_keys(keys: Any) -> bool:
+def _drop_keys(keys: Any) -> tuple[bool, bool]:
     """Throw away the key presses waiting at a ``prompt_toolkit`` input.
 
     They wait in two places. ``prompt_toolkit`` keeps the keys it read
@@ -480,8 +505,11 @@ def _drop_keys(keys: Any) -> bool:
     returns all of it, a half-typed line included.
 
     :param keys: The session's ``Input``.
-    :returns: Whether a person had pressed any of them. A cursor position
-        report is the terminal's own, and is thrown away without counting.
+    :returns: Whether a person had pressed any of them, and whether they
+        left a line unfinished: a character or a paste after the last
+        Enter. A key that puts no text on the line, such as an arrow or
+        an Escape, starts no line. A cursor position report is the
+        terminal's own, and is thrown away without counting.
     """
     from prompt_toolkit.input.typeahead import get_typeahead
     from prompt_toolkit.keys import Keys
@@ -496,7 +524,15 @@ def _drop_keys(keys: Any) -> bool:
             if not presses:
                 break
             waiting.extend(presses)
-    return any(press.key is not Keys.CPRResponse for press in waiting)
+    pressed = [press for press in waiting if press.key is not Keys.CPRResponse]
+    unfinished = False
+    for press in pressed:
+        if press.key in (Keys.ControlM, Keys.ControlJ):
+            # Enter. A terminal in its line mode stores it as a line feed.
+            unfinished = False
+        elif not isinstance(press.key, Keys) or press.key is Keys.BracketedPaste:
+            unfinished = True
+    return bool(pressed), unfinished
 
 
 class _PickerCancelled(Exception):
@@ -540,7 +576,11 @@ class PromptToolkitSource:
             return await session.prompt_async(prompt)
 
     async def read_fresh(
-        self, prompt: str, *, discarded: Callable[[], None] | None = None
+        self,
+        prompt: str,
+        *,
+        discarded: Callable[[], None] | None = None,
+        unfinished: Callable[[], None] | None = None,
     ) -> str:
         """Show *prompt* once the terminal is free, and return what is typed at it.
 
@@ -550,7 +590,17 @@ class PromptToolkitSource:
         the previous prompt and kept for the next. *discarded* is called
         when there were any.
 
+        When they left a line unfinished, the rest of that line goes with
+        it. *unfinished* is called, the prompt is shown, and what is typed
+        at it up to the next Enter is read and thrown away. The prompt is
+        then shown a second time, for the line this returns. Until that
+        Enter the prompt behaves as any other: Ctrl-C raises
+        :exc:`KeyboardInterrupt`, and the text thrown away is written to
+        the session's history like a line that was kept.
+
         :param discarded: Called at most once, before the prompt.
+        :param unfinished: Called at most once, after *discarded* and
+            before the prompt.
         :raises EOFError: the source was closed, including while this call
             was queued behind another question.
         """
@@ -558,8 +608,13 @@ class PromptToolkitSource:
             session = self._session
             if session is None:
                 raise EOFError
-            if _drop_keys(session.input) and discarded is not None:
+            typed, half_typed = _drop_keys(session.input)
+            if typed and discarded is not None:
                 discarded()
+            if half_typed:
+                if unfinished is not None:
+                    unfinished()
+                await session.prompt_async(prompt)
             return await session.prompt_async(prompt)
 
     def withdraw(self) -> None:

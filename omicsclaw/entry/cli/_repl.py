@@ -230,6 +230,18 @@ A card takes only what is typed after its prompt opens. Somebody who typed
 ``y`` while a tool was still running sees the card waiting all the same,
 and this line is why."""
 
+_HALF_LINE_NOTICE = (
+    "  its last line had no Enter: what is typed up to the next Enter is "
+    "discarded too"
+)
+"""Printed under :data:`_TYPED_EARLY_NOTICE` when the input thrown away
+ended in a line nobody had finished.
+
+What is typed next would finish that line. ``ye`` before the card and
+``s`` after it is one ``yes``, and the ``s`` alone would be read as a
+grant for the rest of the conversation. The source drops it with the
+rest, and this line is why the first Enter at the card settles nothing."""
+
 _INTERRUPTED_REASON = "interrupted at the terminal"
 """The reason a card is settled with when Ctrl-C is pressed at it."""
 
@@ -1531,20 +1543,31 @@ class Repl:
 
         A terminal source throws away what was typed before the prompt,
         and when it says it did, :data:`_TYPED_EARLY_NOTICE` is printed
-        above the prompt. A source that cannot tell earlier from later (a
-        script, a pipe) hands over its next line.
+        above the prompt. When it also says that the last line of it was
+        unfinished, :data:`_HALF_LINE_NOTICE` is printed under that, and
+        the source drops what is typed up to the next Enter before it
+        reads the line returned here. A source that cannot tell earlier
+        from later (a script, a pipe) hands over its next line.
 
         :param prompt: the card's prompt line.
         :returns: the line typed.
         """
         source = self._source
         if isinstance(source, FreshSource):
-            return await source.read_fresh(prompt, discarded=self._say_typed_early)
+            return await source.read_fresh(
+                prompt,
+                discarded=self._say_typed_early,
+                unfinished=self._say_half_line,
+            )
         return await source.read(prompt)
 
     def _say_typed_early(self) -> None:
         """Print :data:`_TYPED_EARLY_NOTICE`."""
         self._screen.print(Text(_TYPED_EARLY_NOTICE, style="dim"))
+
+    def _say_half_line(self) -> None:
+        """Print :data:`_HALF_LINE_NOTICE`."""
+        self._screen.print(Text(_HALF_LINE_NOTICE, style="dim"))
 
     async def _read_card(
         self,

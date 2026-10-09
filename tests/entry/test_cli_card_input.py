@@ -48,6 +48,7 @@ from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]
 WAIT_S = 10.0
 
 NOTICE = "input typed before this prompt was discarded"
+HALF_LINE_NOTICE = "what is typed up to the next Enter is discarded too"
 NOBODY_ASKED = "nobody was asked"
 
 ANSWER = "answer [#{n}]> "
@@ -59,11 +60,14 @@ class Keyboard:
 
     :meth:`read` hands over the oldest waiting line, which is what a
     terminal's input queue does. :meth:`read_fresh` forgets the lines that
-    were waiting when it was called and reports that it did.
+    were waiting when it was called and reports that it did. After
+    :meth:`begin_a_line` it also reports the unfinished line and throws
+    away the next line typed, as the ``prompt_toolkit`` source does.
     """
 
     def __init__(self) -> None:
         self._waiting: list[str] = []
+        self._begun = False
         self._typed = asyncio.Event()
         self.prompts: list[str] = []
         self.withdrawn = 0
@@ -71,6 +75,10 @@ class Keyboard:
     def type(self, line: str) -> None:
         self._waiting.append(line)
         self._typed.set()
+
+    def begin_a_line(self) -> None:
+        """Type the start of a line and no Enter."""
+        self._begun = True
 
     async def _next(self, prompt: str) -> str:
         self.prompts.append(prompt)
@@ -83,12 +91,21 @@ class Keyboard:
         return await self._next(prompt)
 
     async def read_fresh(
-        self, prompt: str, *, discarded: Callable[[], None] | None = None
+        self,
+        prompt: str,
+        *,
+        discarded: Callable[[], None] | None = None,
+        unfinished: Callable[[], None] | None = None,
     ) -> str:
-        if self._waiting:
+        begun, self._begun = self._begun, False
+        if self._waiting or begun:
             self._waiting.clear()
             if discarded is not None:
                 discarded()
+        if begun:
+            if unfinished is not None:
+                unfinished()
+            await self._next(prompt)
         return await self._next(prompt)
 
     def withdraw(self) -> None:
@@ -256,6 +273,49 @@ def test_a_card_with_nothing_typed_early_says_nothing_about_it(tmp_path):
 
     assert "<- ask_a ok" in printed
     assert NOTICE not in printed
+
+
+def test_a_line_half_typed_before_the_card_is_announced_and_dropped_whole(tmp_path):
+    """``ye`` while the tool before it is still running, then ``s`` and
+    Enter once the card is up. Read on its own, the ``s`` would allow the
+    tool for the rest of the conversation. The card says that the
+    unfinished line is discarded up to its Enter, stays open past that
+    Enter, and takes the ``y`` typed afterwards.
+
+    Mutation: do not pass ``unfinished`` to ``read_fresh`` in
+    ``Repl._read_at_card`` and nothing on the card says why the ``s`` was
+    not taken.
+    """
+
+    async def drive():
+        session = _Session(
+            tmp_path,
+            Scripted(_model(_gated()), _model(_needs_approval()), _says("done")),
+        )
+        session.keyboard.type("go")
+        await session.shows("-> gated")
+        session.keyboard.begin_a_line()
+        session.gated.finish.set()
+        await session.opens(APPROVE.format(n=1))
+        at_the_open_card = session.printed
+        session.keyboard.type("s")
+        await session.opens(APPROVE.format(n=1), times=2)
+        await _a_moment()
+        after_the_enter = session.printed
+        session.keyboard.type("y")
+        await session.shows("<- ask_a")
+        await session.opens(PROMPT, times=2)
+        await session.leave()
+        return at_the_open_card, after_the_enter, session.printed
+
+    at_the_open_card, after_the_enter, printed = asyncio.run(drive())
+
+    assert NOTICE in at_the_open_card and HALF_LINE_NOTICE in at_the_open_card
+    assert at_the_open_card.index(NOTICE) < at_the_open_card.index(HALF_LINE_NOTICE)
+    assert "Approval granted [" not in after_the_enter
+    assert "Will not ask about" not in printed
+    assert "<- ask_a ok" in printed
+    assert (printed.count(NOTICE), printed.count(HALF_LINE_NOTICE)) == (1, 1)
 
 
 # ---- two cards in one model message -------------------------------------------
