@@ -278,7 +278,7 @@ registry = build_registry(config, mounted)
 - `abandon(reason)`：exchange 在 `finally` 中调用，把仍未回答的问题全部按拒绝处理，并发布 `APPROVAL_SETTLED`；
 - `timeout_s`：来自 `AppConfig.approval_timeout_s`。`None` 表示无限等待（适合 CLI）。**到期即拒绝**，原因文本为 `TIMEOUT_REASON`；非正数在构造时直接拒绝。
 
-`TurnHandle`（`omicsclaw/entry/turn.py`）为每个 exchange 持有一个 `approvals: ApprovalBroker`，界面通过 `TurnHandle.approve(request_id, decision)` 作答。Channel 运行时强制要求 `approval_timeout_s` 为数字（`ChannelRuntime` 构造时检查）。它的 `settle_approval_threadsafe` 负责把厂商 SDK 线程上的回调转到事件循环线程。
+`TurnHandle`（`omicsclaw/entry/turn.py`）为每个 exchange 持有一个 `approvals: ApprovalBroker`，界面通过 `TurnHandle.approve(request_id, decision)` 作答，它返回这次回答有没有结算请求：id 未知、请求已经由先到的回答或期限结算时返回 `False`。Channel 运行时强制要求 `approval_timeout_s` 为数字（`ChannelRuntime` 构造时检查）。它的 `settle_approval_threadsafe` 负责把厂商 SDK 线程上的回调转到事件循环线程。
 
 **日志不记录参数。** `ApprovalRequest` 里有原始 `bash` 命令行或 `write_file` 内容，broker 只记录工具名、请求 id、风险等级和结果；`GatedTool` 也只记录工具名和 `DecisionSource`。
 
@@ -313,6 +313,7 @@ approve bash [#1]? [y/N/a=always]
 - 受保护文件的卡片上 `a` 不可用（`can_remember_approval` 为 `False`），图例为 `this call is always asked about, and no rule can change that: y = allow it once · anything else denies`。
 - `a` 写的是精确规则。对 `bash` 来说几乎等于只放行这一条命令，所以 CLI 会补一句提示：想让这个工具在本会话不再询问，用 `s`。
 - 没有规则文件可写（`PermissionGate.store is None`）时，屏幕上会显示 `This run has nowhere to remember that.`，不会假装已经记住。
+- `s` 和 `a` 只在这一行结算了请求时才生效：`Repl._ask` 先调用 `TurnHandle.approve`，返回 `True` 才写入 `Repl._granted` 或调用 `remember_approval`。卡片到期之后它的提示符还留在屏幕上，在那里读到的行返回 `False`，不记授权、不写规则，屏幕上显示 `<tool> [#n] was already settled: this line changed nothing.`（[cli.md](cli.md) §7.4）。`/auto` 是命令，在那里照样切换模式。
 
 ### 8.2 `/auto [on|off|status]`
 
