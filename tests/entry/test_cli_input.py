@@ -702,13 +702,14 @@ def test_half_a_line_the_library_kept_is_dropped_up_to_its_enter_too():
 
 
 def test_a_reader_queued_behind_a_half_line_waits_for_the_line_that_counts():
-    """The card that opened on a half line shows its prompt twice. The
-    card queued behind it does not get the terminal in between, or it
-    would take the answer typed for the first.
+    """The card that opened on a half line shows its prompt twice, and
+    holds the terminal from the first showing until it is answered. The
+    card queued behind it drops what was typed only after that, so a
+    second line sent with the first card's answer does not answer it.
 
     Mutation: let go of the lock between the two prompts in
-    ``PromptToolkitSource.read_fresh`` and the second read returns
-    ``one``.
+    ``PromptToolkitSource.read_fresh`` and the queued read does its
+    dropping before the first card is answered. It then returns ``two``.
     """
     pytest.importorskip("prompt_toolkit")
     from prompt_toolkit.input import create_pipe_input
@@ -724,14 +725,14 @@ def test_a_reader_queued_behind_a_half_line_waits_for_the_line_that_counts():
             keys.send_text("s\r")
             await asyncio.sleep(SETTLE_S)
             waiting = not first.done() and not second.done()
-            keys.send_text("one\r")
+            keys.send_text("one\rtwo\r")
             answered = await asyncio.wait_for(first, WAIT_S)
             await asyncio.sleep(SETTLE_S)
             still_waiting = not second.done()
-            keys.send_text("two\r")
+            keys.send_text("three\r")
             return waiting, answered, still_waiting, await asyncio.wait_for(second, WAIT_S)
 
-    assert asyncio.run(drive()) == (True, "one", True, "two")
+    assert asyncio.run(drive()) == (True, "one", True, "three")
 
 
 def test_a_queued_fresh_read_drops_what_was_typed_until_its_own_prompt_opens():
