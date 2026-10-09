@@ -839,6 +839,20 @@ def test_a_prompt_taken_down_with_nothing_typed_leaves_the_next_card_alone():
     assert (waiting, line, seen) == ([True], "y", ["approve? "])
 
 
+def test_a_blank_typed_at_a_prompt_that_was_taken_down_is_a_line_begun():
+    """A space is a key a person pressed, and the line it begins is as
+    unfinished as one with letters in it. ``s`` and Enter typed at the
+    next card finish that line and are read away with it.
+
+    Mutation: strip the text before asking whether the cancelled prompt
+    held any in ``_holds_text`` and the card returns ``s``.
+    """
+    waiting, line, seen = _after_a_prompt_was_taken_down(" ", None, "s\r", "n\r")
+
+    assert (waiting, line) == ([True, True], "n")
+    assert seen == ["discarded", "unfinished", "approve? ", "approve? "]
+
+
 def test_an_enter_typed_before_the_next_card_finishes_the_line_begun_earlier():
     """The rest of the word and its Enter are typed while no prompt is
     open. The line is over: the card drops what was typed before it,
