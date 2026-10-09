@@ -564,7 +564,7 @@ def test_a_result_that_is_not_directly_behind_its_turn_does_not_answer_it():
 
 
 def test_roles_that_arrive_as_plain_strings_are_read_the_same():
-    """A history rebuilt from a stored row may carry ``str`` roles."""
+    """A caller or a session store may hand over roles as plain ``str``."""
 
     def as_text(message: Message) -> Message:
         return dataclasses.replace(message, role=str(message.role))
