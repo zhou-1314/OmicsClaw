@@ -513,10 +513,13 @@ def test_a_call_after_a_question_nobody_answered_is_refused_without_a_prompt(
     its prompt never opens. The ``yes`` typed for the question a moment
     late has no card to land on: it waits for the REPL's own prompt and is
     the next message. The model reads why the call was refused and that
-    it may make the call again.
+    it may make the call again. The card's text is printed and nothing
+    under it that invites an answer: no legend of what ``y``, ``s`` and
+    ``a`` do, and no prompt.
 
-    Mutation: open the card all the same in ``Repl._ask`` and the late
-    ``yes`` approves a call nobody was shown.
+    Mutations: open the card all the same in ``Repl._ask`` and the late
+    ``yes`` approves a call nobody was shown; print the legend before
+    refusing and the screen offers keys that nothing reads.
     """
 
     async def drive():
@@ -541,6 +544,8 @@ def test_a_call_after_a_question_nobody_answered_is_refused_without_a_prompt(
 
     assert _approval_prompts(session) == []
     assert "Approval granted [" not in session.printed
+    assert "Approval required [" in session.printed
+    assert "allow once" not in session.printed, "a legend was printed"
     assert "<- ask_a error" in session.printed
     denied = [
         line
@@ -833,6 +838,51 @@ def test_under_auto_approve_the_call_after_the_question_runs(tmp_path):
     assert "Approval required [" not in session.printed
     assert "Approval denied [" not in session.printed
     assert _approval_prompts(session) == []
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        pytest.param(PermissionMode.DEFAULT, id="default"),
+        pytest.param(PermissionMode.AUTO_APPROVE, id="auto-approve"),
+    ],
+)
+def test_a_call_that_is_always_asked_about_is_refused_in_either_mode(tmp_path, mode):
+    """An ``ask`` rule names the tool. Its call is put to a person under
+    ``auto-approve`` too, and no grant for the conversation answers it.
+    It would have opened a prompt, so after the unanswered question it is
+    refused like any other call that would.
+
+    Mutations: leave a call marked ``ask_every_time`` out of the refusal
+    in ``Repl._ask`` and its prompt opens in both modes; refuse nothing
+    under ``auto-approve`` and its prompt opens in that mode.
+    """
+    rules = tmp_path / ".omicsclaw" / "settings.json"
+    rules.parent.mkdir()
+    rules.write_text(json.dumps({"permissions": {"ask": ["ask_a"]}}), encoding="utf-8")
+
+    async def drive():
+        session = _Session(
+            tmp_path,
+            Scripted(
+                _model(_asks("May I print a greeting?"), _needs_approval()),
+                _says("done"),
+            ),
+            approval_timeout_s=0.3,
+            permission_mode=mode,
+        )
+        session.keyboard.type("go")
+        await session.shows("done")
+        await session.opens(PROMPT, times=2)
+        await session.leave()
+        return session
+
+    session = asyncio.run(drive())
+
+    assert _approval_prompts(session) == []
+    assert "Approval required [" in session.printed
+    (refused,) = _results(session.provider.seen[-1], "ask_a")
+    assert refused.is_error and NOBODY_ASKED in refused.content
 
 
 # ---- a line typed at a card whose own deadline has passed ---------------------------

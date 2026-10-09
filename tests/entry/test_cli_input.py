@@ -693,6 +693,24 @@ def test_what_the_terminal_sent_by_itself_is_not_what_a_person_pressed(sent, kep
     assert "".join(press.data for press in pressed) == kept
 
 
+def test_the_line_typed_after_the_discarded_one_is_the_answer():
+    """What is dropped ends at the Enter of the line begun early. A line
+    typed after that Enter is typed at the card, whose prompt has been
+    open all along, and it is the answer even when it comes in the same
+    burst. Dropping it too would make a card ignore, without a word, what
+    is typed at its own open prompt.
+
+    Mutation: drop the waiting keys once more after the rest of the line
+    has been read in ``PromptToolkitSource.read_fresh`` and the read
+    never returns ``y``.
+    """
+    waiting, read, seen = _fresh_at_the_terminal("ye", "s\ry\r")
+
+    assert waiting == [True]
+    assert read == "y"
+    assert seen == ["discarded", "unfinished", "approve? ", "approve? "]
+
+
 # ---- a prompt taken down with a line begun at it ---------------------------
 #
 # A question's prompt is cancelled when the question's deadline passes. Text
