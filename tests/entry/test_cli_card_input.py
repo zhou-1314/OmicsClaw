@@ -898,6 +898,8 @@ def test_a_call_that_is_always_asked_about_is_refused_in_either_mode(tmp_path, m
         pytest.param("s", "Will not ask about", id="s"),
         pytest.param("a", "Remembered: always allow", id="a"),
         pytest.param("y", "Approval granted [", id="y"),
+        pytest.param("n", "Approval granted [", id="n"),
+        pytest.param("not now", "Approval granted [", id="other words"),
     ],
 )
 def test_a_line_typed_at_a_card_past_its_deadline_allows_nothing(
@@ -906,12 +908,15 @@ def test_a_line_typed_at_a_card_past_its_deadline_allows_nothing(
     """The card was denied at its deadline and the exchange went on. ``s``
     typed at the prompt it left open does not allow the tool for the
     conversation, ``a`` writes no rule, and ``y`` approves nothing. The
-    line under the prompt says the card was already settled. In the next
-    exchange the tool is asked about as if nothing had been typed.
+    line under the prompt says the card was already settled, and it says
+    so for a refusal as well, ``n`` or any other words: that line too was
+    most likely meant for a later card. In the next exchange the tool is
+    asked about as if nothing had been typed.
 
-    Mutation: record what ``s`` and ``a`` ask for before the answer is
+    Mutations: record what ``s`` and ``a`` ask for before the answer is
     known to have settled the card in ``Repl._ask``, and the next call to
-    the tool runs without a card.
+    the tool runs without a card; print the notice only for a line that
+    would have approved, and the last two cases never see it.
     """
 
     async def drive():
