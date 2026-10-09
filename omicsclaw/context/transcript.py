@@ -25,9 +25,10 @@ those bytes. A truncated argument payload is also an *invalid* one,
 which the model will be handed and will retry against forever.
 
 :func:`drop_unanswered_calls` is the one function here that edits a
-message. It takes whole tool calls off a turn so that the conversation
-is one the API accepts, and it leaves the text and the arguments of what
-it keeps as they were.
+message. It takes whole tool calls off a turn when no tool result
+answers them, and it leaves the text and the arguments of what it keeps
+as they were. A tool result with no call, and an answered call whose
+arguments do not parse, are still there afterwards.
 """
 
 from __future__ import annotations

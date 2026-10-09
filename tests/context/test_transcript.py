@@ -410,11 +410,14 @@ def _unanswered(messages) -> list[str]:
 
 
 def test_an_unanswered_call_is_taken_off_its_turn_and_the_text_stays():
-    """A turn that loses its call keeps its text and its reasoning."""
+    """A turn that loses its call keeps its text and its reasoning.
+
+    The text is not trimmed: the newline it ends on is still there.
+    """
     request = Message.user("write the notes")
     cut = _asks(
         _call("c1", "write_file", _CUT),
-        text="I will write them now.",
+        text="I will write them now.\n",
         reasoning="plan",
     )
 
@@ -422,7 +425,7 @@ def test_an_unanswered_call_is_taken_off_its_turn_and_the_text_stays():
 
     assert cleaned == (
         request,
-        Message.assistant("I will write them now.", reasoning_content="plan"),
+        Message.assistant("I will write them now.\n", reasoning_content="plan"),
     )
 
 
@@ -499,6 +502,11 @@ def test_only_the_unanswered_call_of_a_turn_goes():
             _asks(_call("c1")),
             Message.tool(tool_call_id="c1", content=MISSING_TOOL_RESULT),
         ),
+        (
+            Message.user("go"),
+            _asks(_call("w1", "write_file", _CUT)),
+            _answer("w1", "the arguments were not valid JSON"),
+        ),
     ],
     ids=[
         "empty",
@@ -511,6 +519,7 @@ def test_only_the_unanswered_call_of_a_turn_goes():
         "results-out-of-call-order",
         "a-result-nobody-asked-for-behind-the-turn",
         "answered-by-a-compaction-placeholder",
+        "an-answered-call-with-cut-off-arguments",
     ],
 )
 def test_a_conversation_with_every_call_answered_comes_back_message_for_message(
