@@ -116,9 +116,9 @@ class TurnOutcome:
     fresh one; keeping it would stack a stale persona beside the current
     one on every exchange.
 
-    After a run that the output ceiling cut off, this still ends on the
-    tool calls that run never executed. Passed back in, they are left
-    out before the next exchange starts.
+    After a run that the output ceiling cut off inside a tool call, this
+    still ends on the calls that run never executed. Passed back in,
+    they are left out before the next exchange starts.
     """
 
     prompt: AssembledPrompt
@@ -487,9 +487,9 @@ class TurnRunner:
     ``force_compaction=True`` makes the exchange a compaction only: the
     session's history is summarized as a FULL compaction regardless of
     pressure and no model turn runs. Tool calls that no tool result
-    answers are left out of the history whatever the compaction does.
-    Beyond that the history is replaced only when the compaction is
-    written back.
+    answers are left out of the history whether or not the compaction
+    is written back. Beyond that the history is replaced only when it
+    is.
 
     **Await it inside a Task of its own.** :meth:`run` binds the tool
     context with :func:`~omicsclaw.tools.use_tool_context`, and

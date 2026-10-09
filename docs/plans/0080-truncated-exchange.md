@@ -755,7 +755,8 @@ Q6 的事实。第 1 版说这行日志是"今后知道这件事发生过几次�
 | `c17a9062` `fix(entry): drop unanswered tool calls when an exchange opens` | `drop_unanswered_calls`，`compose` 和 `_assemble` 的两处调用，日志，docstring，T1 至 T23，公开面清单，三份 core-features 文档 |
 | `4e4a74d3` `test(context): pin six mutations of the unanswered-call cleaning` | 追加的 6 个用例 T24 至 T29（§13.5） |
 | `17700f03` `test(context): say where plain string roles come from` | T7 的 docstring 一行（§13.8 第 6 条） |
-| 本提交 | 这一节、状态行、编号行 |
+| `5e92a8e6` `docs(entry): record the implementation of plan 0080` | 这一节、状态行、编号行 |
+| 本提交 | `TurnOutcome.history` 和 `TurnRunner` 两处 docstring 的措辞，这张表的最后两行 |
 
 动过的文件：
 
@@ -802,7 +803,7 @@ Q6 的事实。第 1 版说这行日志是"今后知道这件事发生过几次�
 | 第二条 | 842 passed、14 skipped、1 deselected、1 xpassed，85 秒 | 相同，87 秒 | 没有重跑 |
 | 第三条 | 566 passed、3 skipped，8 秒 | 相同，9 秒 | 没有重跑 |
 
-基线的三个数和 §7.2 写的一致。第一条多出来的 36 和 42 就是新增的用例。日志是 `10_baseline_*.log`、`11_branch_c17a9062_*.log`、`12_branch_4e4a74d3_1_layers.log`。第二、三条没有在 `4e4a74d3` 上重跑：`4e4a74d3` 和 `17700f03` 只改了 `tests/context/test_transcript.py` 和 `tests/entry/test_turn.py`，这两条命令不收集它们。`17700f03` 之后只跑了 `tests/context/test_transcript.py`，62 passed。`tests/entry/test_cli_repl.py::test_an_approval_nobody_answered_does_not_outlive_its_exchange` 靠 `asyncio.sleep(0)` 让出执行，机器负载高时在别的分支上偶发失败过，在这几次里都过了。
+基线的三个数和 §7.2 写的一致。第一条多出来的 36 和 42 就是新增的用例。日志是 `10_baseline_*.log`、`11_branch_c17a9062_*.log`、`12_branch_4e4a74d3_1_layers.log`。第二、三条没有在 `4e4a74d3` 上重跑：`4e4a74d3` 和 `17700f03` 只改了 `tests/context/test_transcript.py` 和 `tests/entry/test_turn.py`，这两条命令不收集它们。`17700f03` 之后只跑了 `tests/context/test_transcript.py`，62 passed。最后一个提交只改了 `omicsclaw/entry/turn.py` 里两处 docstring 的措辞，之后跑了 `tests/entry/test_turn.py`、`test_turn_runner.py`、`test_session.py`，99 passed、2 xfailed。`tests/entry/test_cli_repl.py::test_an_approval_nobody_answered_does_not_outlive_its_exchange` 靠 `asyncio.sleep(0)` 让出执行，机器负载高时在别的分支上偶发失败过，在这几次里都过了。
 
 `probe_01_stuck.py` 的 A 至 D 段在 `4e4a74d3` 上：27 次交换都是 `converged`，被替身后端拒绝的调用 0 次，`failed` 0 次，D 段没有抛错，Anthropic 请求都组得出来。输出除第一行外和 `SCR/logs/r2_out_02_stuck_prototype.log` 逐行相同（`30_stuck_on_branch.log`）。
 
