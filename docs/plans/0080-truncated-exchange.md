@@ -1,25 +1,25 @@
 # 计划 0080：被输出上限截断的交换留下没被回答的工具调用，会话此后卡死
 
-**状态**：第 2 版（2026-10-09）。第 1 版（提交 `ec0a5ccd`）经独立审核，结论是"修改后可以做"。这一版按审核意见做事实修正和补测试，推荐的做法没有换。§10 的每一条都待 owner 裁定，没有一条已经定了。本计划没有改生产代码和测试。
+**状态**：定稿，第 3 版（2026-10-09）。第 2 版（提交 `f317fa37`）经同一审核方复核，owner 2026-10-09 批准了计划，并就 Q1 至 Q10 作了裁定（§10）。这一版把裁定和复核意见并进正文。按裁定，实现在定稿后派发。本计划没有改生产代码和测试。
 
 **基线**：`main` 的 `5daf5482`，行号以它为准，实施时按符号名重新定位。
 
-**编号**：环节 C1 至 C9，入口 P1 至 P8，处理方式 X1 至 X5，位置 L1 至 L6，测试 T1 至 T22，变异 M1 至 M15（第 1 版自己的）、N1 至 N15（审核方的）、R1 至 R6（第 2 版新加的），真实请求 V1 至 V10，风险 K1 至 K10，待裁定问题 Q1 至 Q10。
+**编号**：环节 C1 至 C9，入口 P1 至 P8，处理方式 X1 至 X5，位置 L1 至 L6，测试 T1 至 T23，变异 M1 至 M15（第 1 版自己的）、N1 至 N15（审核方第 1 轮的）、R1 至 R6（第 2 版新加的）、W1 至 W8（审核方第 2 轮的），真实请求 V1 至 V10，风险 K1 至 K10，问题 Q1 至 Q10（都已裁定）。
 
-**证据**：探针、原型和输出在 `/tmp/claude-0/-workspace-dataset-private-zhouwg-data-OmicsClaw/9885f10a-3799-4309-9dfb-0981c166422a/scratchpad/plan-0080/`，下面记作 `SCR`，第 2 版新做的以 `r2_` 开头，清单见 §12。审核方的脚本和输出在同级的 `review-plan-0080/`，记作 `RV80`，只读引用。第 1 版对真实 DeepSeek 接口发了 10 次请求，逐条记在 `SCR/logs/ledger.txt`，其中 2 次没有得到信息；第 2 版没有再发。审核方另发了 8 次（`RV80/logs/rv80_ledger.txt`）。本机没有 Anthropic 凭据，Anthropic 一侧的结论只有文档和本仓库适配器代码两种依据，文中逐处标明。官方文档是 2026-10-09 抓取的。更早的既有证据在 `/tmp/claude-0/-workspace-dataset-private-zhouwg-data-OmicsClaw/58ae2e35-0792-4055-933c-1cfb79c727a6/scratchpad/review-plan-0079/`，记作 `RV79`。各版之间改了什么见 §11。
+**证据**：探针、原型和输出在 `/tmp/claude-0/-workspace-dataset-private-zhouwg-data-OmicsClaw/9885f10a-3799-4309-9dfb-0981c166422a/scratchpad/plan-0080/`，下面记作 `SCR`，第 2 版新做的以 `r2_` 开头，第 3 版新做的以 `r3_` 开头，清单见 §12。审核方的脚本和输出在同级的 `review-plan-0080/`，记作 `RV80`，只读引用；它第 2 轮的文件名也以 `r2_` 开头。第 1 版对真实 DeepSeek 接口发了 10 次请求，逐条记在 `SCR/logs/ledger.txt`，其中 2 次没有得到信息；第 2、3 版没有再发。审核方另发了 8 次（`RV80/logs/rv80_ledger.txt`）。本机没有 Anthropic 凭据，Anthropic 一侧的结论只有文档和本仓库适配器代码两种依据，文中逐处标明。官方文档是 2026-10-09 抓取的。更早的既有证据在 `/tmp/claude-0/-workspace-dataset-private-zhouwg-data-OmicsClaw/58ae2e35-0792-4055-933c-1cfb79c727a6/scratchpad/review-plan-0079/`，记作 `RV79`。各版之间改了什么见 §11。
 
 ## 0. 摘要
 
 1. 引擎遇到被输出上限截断的回复时，把整条 assistant 消息记进轨迹，不执行它带的工具调用，然后结束这次运行。它的 docstring 写明：从这里接着往下走的调用方要自己回答或丢掉这些调用。entry 层是这个调用方，它两样都没做，把轨迹原样提交进 `session.history` 并存库。
 2. 下一条用户消息排在那条没被回答的调用后面。DeepSeek 返回 400，这次交换失败，历史不变，所以这个会话之后每条消息都同样失败，重启后也一样。失去的是这段会话的上下文：`/new` 和 `/clear` 一直可用，工作区里已经写出的文件不受影响。低压力时压缩器不修配对；失败的交换不让历史增长，压力升不上去。用户在 CLI 上只看到 `Failed: ProviderError`。
 3. 用真实 DeepSeek 走完了整条路径：把输出上限绑到 2,000，一次真实交换被截断在 `write_file` 的参数中间，存进 SQLite；今天的代码发下一条消息得到 400，原型发同一条消息得到 200。
-4. 按现有数据，它在 owner 日常的配置下很难自然发生。OpenAI 方言默认不发 `max_tokens`，DeepSeek 文档写的默认值是思考模式 64K，实测一条回复写到 12,934 个输出 token 正常结束。主检出的会话库样本很薄（19 个有消息的会话，27 条用户消息），里面没有这种形状，最大的一条回复估算是 64K 的 8%。Anthropic 方言近得多：适配器对 `claude-haiku-4-5` 和 4.7 之后的每个型号发的 `max_tokens` 都是 8,192，库里已经有一条回复过了它的一半。
+4. 按现有数据，它在 owner 日常的配置下很难自然发生。OpenAI 方言默认不发 `max_tokens`，DeepSeek 文档写的默认值是思考模式 64K，实测一条回复写到 12,934 个输出 token 正常结束。主检出的会话库样本很薄（19 个有消息的会话，27 条用户消息），里面没有这种形状，最大的一条回复估算是 64K 的 8%。Anthropic 方言近得多：适配器对 `claude-haiku-4-5` 和输出上限表里没有的每个型号发的 `max_tokens` 都是 8,192。库里有一条回复估算过了 8,192 的一半；那是 DeepSeek 会话里的回复，模型和分词都不同，只能当估计。
 5. 推荐做法没有变：每次交换开场时，从带进来的历史里去掉没被回答的工具调用，那一轮的文字留着；一轮既没有剩下的调用、也没有空白以外的文字时整轮去掉。不补任何结果，不加任何给模型看的文字。改动是 `omicsclaw/context/transcript.py` 的一个纯函数和 `omicsclaw/entry/turn.py` 的两处调用。
 6. 已经卡死的会话不需要迁移：下一条消息或 `/compact` 都会经过同一处清理，成功后存回去的就是干净的历史。
-7. 第 2 版把规则里两处没写死的地方写死了：同一个 id 出现多次时一条结果只回答一个调用；只含空白的文字不算文字。新测试从 15 条加到 22 条（参数化后 33 个用例），在今天的代码上 31 红 2 绿，在原型上全绿。34 处定点变异里 32 处有测试转红，剩下 2 处在产品路径上和原型等价（§6.2）。现有测试要改 1 条。按 `SPEC.md` 属于第 3 档。
-8. 这个做法不告诉模型和用户"回复被截断了"，今天也不告诉。审核方在真实 DeepSeek 上各取了 1 个样本：去掉调用之后用户说"继续"，模型没有提到截断，打算照原样一次写完；换成补一条"被输出上限截断、没有执行"的结果时，模型的思考里提到了截断和再撞上限的风险。要不要告诉、怎么告诉，是行为和措辞改动，列在 Q4 和 Q9。
-9. 我对优先级的看法：这一项值得先做，理由是它便宜、独立、消掉一个进去就出不来的失败状态，不是因为它影响面大。排在哪里由 owner 定。
-10. 与计划 0078（已定稿的第 3 版）和规划闸门没有顺序依赖，改的不是同一个函数，两份原型按文本合并没有冲突，合并后两边的提议测试都过。待裁定的问题 10 条，见 §10。
+7. 规则里有两处是第 2 版才写死的：同一个 id 出现多次时一条结果只回答一个调用；只含空白的文字不算文字。新测试 23 条（参数化后 36 个用例），在今天的代码上 34 红 2 绿，在原型上全绿。42 处定点变异里 40 处有测试转红，剩下 2 处在产品路径上和原型等价，审核方同意（§6.2）。现有测试要改 1 条。按 `SPEC.md` 属于第 3 档。
+8. 这个做法不告诉模型和用户"回复被截断了"，今天也不告诉。审核方在真实 DeepSeek 上各取了 1 个样本：去掉调用之后用户说"继续"，模型没有提到截断，打算照原样一次写完；换成补一条"被输出上限截断、没有执行"的结果时，模型的思考里提到了截断和再撞上限的风险。owner 裁定先接受这一点（Q9）；截断时 CLI 显示一句话另开一项，编号预留 0081（Q4）。
+9. 值得做的理由是它便宜、独立、消掉一个进去就出不来的失败状态，不是因为它影响面大。owner 2026-10-09 批准了计划，合并的前置条件是 3 次 DeepSeek 请求的真实模型验收（§7.3）。
+10. 与计划 0078 和规划闸门没有顺序依赖，改的不是同一个函数。和 0078 第 3 版的原型按文本合并没有冲突，合并后两边的提议测试都过。Q1 至 Q10 都已裁定，见 §10。
 
 ## 1. 现状
 
@@ -168,9 +168,10 @@ Anthropic 方言：每次必发，值是 `config.max_output_tokens`（`anthropic
 | `claude-sonnet-4-6`（预设的默认模型） | 64,000 | 128K |
 | `claude-opus-4-6`、`claude-opus-4-7` | 32,000 | 128K |
 | `claude-haiku-4-5` | 8,192 | 64K |
-| 4.7 之后的型号，表里没有：`claude-opus-4-8`、`claude-opus-5`、`claude-opus-5-5`、`claude-sonnet-5`、`claude-sonnet-5-5`、`claude-fable-5-1` | 8,192（落到 `DEFAULT_MODEL_LIMITS`，`_model_limits.py:52`） | 128K |
+| 表里没有的型号，4.7 之后的：`claude-opus-4-8`、`claude-opus-5`、`claude-opus-5-5`、`claude-sonnet-5`、`claude-sonnet-5-5`、`claude-fable-5`、`claude-fable-5-1` | 8,192（落到 `DEFAULT_MODEL_LIMITS`，`_model_limits.py:52`） | 128K |
+| 表里没有的型号，更早的：`claude-opus-4-5`、`claude-opus-4-1` | 8,192，同上 | 参考文档的旧型号表没有列输出上限 |
 
-左边一列是空跑 `AnthropicProvider._request_params` 得到的（`SCR/logs/r2_out_10_facts_prototype.log` 的 a 段；审核方的 `RV80/logs/rv80_out12_payload_dry.log` 相同）。右边一列出自随 Claude Code 分发的 API 参考（`claude-api` skill 的 `shared/models.md`，缓存日期 2026-09-25），没有对真实接口或 Models API 核实。
+左边一列是空跑 `AnthropicProvider._request_params` 得到的（`SCR/logs/r3_out_10_facts.log` 的 a 段；审核方的 `RV80/logs/r2_out9_anthropic_max_tokens.log` 相同）。右边一列出自随 Claude Code 分发的 API 参考（`claude-api` skill 的 `shared/models.md`，缓存日期 2026-09-25），没有对真实接口或 Models API 核实。
 
 什么样的回复会撞上。一条回复的输出是思考、正文和工具调用参数三者之和（V1 里 700 个 token 有 550 个是思考）。主检出的库里，参数最长的工具是 `write_file`（17 次调用，中位数 2,497 字符，最大 11,711），其次是 `task`、`edit_file`、`bash`。撞上限的会是一次写很长的文件，或者很长的思考后面跟一个调用。
 
@@ -188,7 +189,7 @@ Anthropic 方言：每次必发，值是 `config.max_output_tokens`（`anthropic
 
 估算用的是 ASCII 每 4.7 个字符一个 token（V1 和 V8 两条真实回复量出来的都是 4.7），非 ASCII 每个字符算一个 token，偏高估。按这个估算，174 条里没有一条达到 8,192，只有一条超过它的一半；最大的一条是 64K 的 8%。
 
-能说的有这些。样本很薄，19 个会话说明不了"很少发生"，只说明这个库里没发生过。站得住的一句是：owner 日常的配置下（DeepSeek，思考模式，不设上限），库里最大的回复是文档上限的 8%，差一个数量级。Anthropic 方言不一样：用 haiku 或 4.7 之后的任何型号时适配器发的都是 8,192，库里已经有一条回复过了它的一半。把表补上能把这一侧的上限抬到 64K 或 128K（Q7），那是降频，救不了已经存进库的会话。
+能说的有这些。样本很薄，19 个会话说明不了"很少发生"，只说明这个库里没发生过。站得住的一句是：owner 日常的配置下（DeepSeek，思考模式，不设上限），库里最大的回复是文档上限的 8%，差一个数量级。Anthropic 方言不一样：用 haiku 或表里没有的任何型号时适配器发的都是 8,192。库里有一条回复估算过了这个数的一半，但那些回复是 DeepSeek 写的，换一个模型回复的长短会不同，分词也不同，所以这只是一个估计，说明量级上离得不远。把表补上能把这一侧的上限抬到 64K 或 128K，那是降频，救不了已经存进库的会话；owner 裁定这次不立项，记在 §9 末尾。
 
 量不到的部分：其他工作区和 Desktop 用户的库不在这台机器上。`/tmp` 下还有几百个测试和验收遗留的 `memory.db`，没有扫（本会话的权限层拒绝了批量读取，没有绕过）。没有找到带 `stop_reason` 的落盘记录：`agent.stop_reason` 只写进 OTel span（`observability/scope.py:594`），主检出里没有 bench 或 live eval 的结果文件带这个字段。派发时说的"已复现"是脚本化模型加真实接口对形状的拒绝，V8 至 V10 是把上限人为绑低之后的真实复现，都不是默认配置下自然发生的。
 
@@ -214,7 +215,7 @@ X3 让带调用的截断丢文字，不带调用的截断（今天合法，文�
 
 X4 是 Anthropic 文档建议的方向，也是能把用户的任务做完的做法。它要改引擎循环、定重试次数和一句给模型的话。上限不变时原样重试会再截一次，再烧一次上限那么多的输出 token，所以那句话得让模型换一种做法（比如分块写）。这句话如果进持久历史，就是第三种 user 消息，而规划闸门（计划 0039 §9.3）和计划 0078 的规则都建立在"持久历史里的 user 消息只有请求和摘要"之上；只进发送副本的话要给 augmentor 加状态。这是行为和措辞改动，按惯例要先做真实会话对比。它也救不了已经存进库的会话。
 
-X5 只降低频率，救不了已经存进库的会话。两个方言的情况不同。DeepSeek 不设时已经是文档上的 64K。Anthropic 方言发的是 `_model_limits.py` 表里的数，这张表落后于模型（§3 的表）：haiku 和 4.7 之后的型号都只发 8,192。把表补上是 Anthropic 一侧便宜的降频手段，但有两件事要另算。这个数同时是上下文预算的输出预留（`entry/assembly.py:663`），调大会缩小可用窗口。参考文档写 128K 这么大的 `max_tokens` 要用流式请求，而 `run_turn` 走的是阻塞的 `generate`。所以它是一项单独的小改动，列在 Q7，替代不了本计划。
+X5 只降低频率，救不了已经存进库的会话。两个方言的情况不同。DeepSeek 不设时已经是文档上的 64K。Anthropic 方言发的是 `_model_limits.py` 表里的数，这张表落后于模型（§3 的表）：haiku 和表里没有的型号都只发 8,192。把表补上是 Anthropic 一侧便宜的降频手段，但有两件事要另算。这个数同时是上下文预算的输出预留（`entry/assembly.py:663`），调大会缩小可用窗口。参考文档写 128K 这么大的 `max_tokens` 要用流式请求，而 `run_turn` 和摘要器（`entry/assembly.py:711`）走的都是阻塞的 `generate`。所以它是一项单独的改动，替代不了本计划。owner 裁定这次不立项（Q7）。
 
 ### 4.2 在哪里处理：每道防线的账
 
@@ -233,30 +234,30 @@ X5 只降低频率，救不了已经存进库的会话。两个方言的情况�
 
 ### 5.1 规则
 
-处理方式用 X1，位置用 L3。第 2 版把第 1 版没写死的三处写进了条文：第 2 条的重复 id，第 4 条的空白和范围。
+处理方式用 X1，位置用 L3，owner 已裁定（Q1、Q2、Q10）。第 2 条的重复 id、第 4 条的空白和范围是第 2 版写进条文的，第 3 版给空白补了定义。
 
 1. 能回答一轮调用的，只有紧跟在那条 assistant 消息后面的那一串连续的 `Role.TOOL` 消息。相邻这一点和 `repair_tool_pairs` 相同。
 2. 一条结果回答一个调用。按调用在消息里的先后，每个调用认领一条带着它 id 的结果，认领不到的就是没被回答。id 原样比较，空 id 也是 id。`is_error` 的结果照样算回答。
 3. 没被回答的调用从它那条消息上去掉。消息的文字、思考和被回答了的调用不动。
-4. 被去掉过调用的那条消息，如果剩下的既没有调用、文字去掉空白后也是空的，整条去掉，思考随它一起去掉。这一条只管被去掉过调用的消息：本来就没有调用的 assistant 消息不动，不管它有没有文字。
+4. 被去掉过调用的那条消息，如果剩下的既没有调用、文字去掉空白后也是空的，整条去掉，思考随它一起去掉。空白按 `str.strip()` 判断，制表符和全角空格也算。这一条只管被去掉过调用的消息：本来就没有调用的 assistant 消息不动，不管它有没有文字。
 5. 不补任何结果，不加任何文字。
 6. 没有可去掉的东西时，返回的是原来那些消息对象，顺序不变。
 7. 找不到调用的工具结果不归它管，留给 `repair_tool_pairs`。
 8. 角色比较用 `==`，理由同 `repair_tool_pairs` 的 docstring。
 9. 这个函数在两个地方调用：`_assemble` 建 `_Carried` 时，以及 `compose` 把历史交给 `assemble` 时。前者管所有带模型调用的交换，后者管 `/compact` 和 `prepare`。
-10. `_assemble` 去掉了调用时写一行 INFO 日志，带会话 id 和去掉的调用数。这一条留不留见 Q6。
+10. `_assemble` 去掉了调用时写一行 INFO 日志，带会话 id 和去掉的调用数。它不是记录：CLI 和 Desktop 上默认看不到（Q6）。
 
-第 2 条为什么选"一条结果回答一个调用"。第 1 版的原型用集合判断：只要有一条结果带着这个 id，带这个 id 的调用就都算回答了，于是两个同 id 的调用配一条结果时两个都留下，发出去的是两个调用一条结果。按一条对一条来配，清理之后每个留下的调用都有自己的一条结果。引擎写出来的历史里结果数等于调用数（`_answer_every_call` 按位置配并把 id 盖成调用的 id），两种读法在产品路径上没有差别；`ollama` 预设给出空 id 时也一样，两个空 id 的调用配两条空 id 的结果，两种读法都原样留着。主检出的库里没有重复的 id，也没有空 id。这一条的语义列为 Q10。
+第 2 条为什么选"一条结果回答一个调用"。第 1 版的原型用集合判断：只要有一条结果带着这个 id，带这个 id 的调用就都算回答了，于是两个同 id 的调用配一条结果时两个都留下，发出去的是两个调用一条结果。按一条对一条来配，清理之后每个留下的调用都有自己的一条结果。引擎写出来的历史里结果数等于调用数（`_answer_every_call` 按位置配并把 id 盖成调用的 id），两种读法在产品路径上没有差别；调用的 id 为空时也一样，两个空 id 的调用配两条空 id 的结果，两种读法都原样留着。空 id 是这样来的：厂商不给 id 时两个适配器都把它留空（`openai_provider.py:336`，`anthropic_provider.py:143`、`:772`）。`loop.py:745-748` 的 docstring 说 `ollama` 预设会走到这里，没有人对真实的 Ollama 测过。主检出的库里没有重复的 id，也没有空 id。owner 裁定用一条对一条的读法（Q10）。
 
 它和 `repair_tool_pairs` 的判据不完全相同，第 1 版说"是同一个"不准。相邻这一半相同。重复 id 这一半，`repair_tool_pairs` 用 `setdefault` 存结果、用 `pop` 取（`transcript.py:143-150`），同一个 id 的第二条结果被忽略：两个同 id 的调用配两条结果时，它留下第一条结果，把第二条换成占位（`SCR/logs/r2_out_10_facts_today.log` 的 e 段）。那是它今天的行为，不在本计划范围里，记在 §9 末尾。
 
-第 4 条的理由。Anthropic 适配器本来就不发没有内容的 assistant 轮（§2.2），整条去掉之后两个方言看到的是同一段对话；留着的话 DeepSeek 上会把几千字符的思考当 `reasoning_content` 重放，对模型没有用处。DeepSeek 接受正文为空的 assistant 消息（V4），所以空的这一半不是为了躲 400。空白那一半是为了 Anthropic：只含空白的文字会被适配器编成一个 text block，第三方的报告说接口会拒绝它（§2.2，没有核实）。第 1 版的原型按 `message.content` 的真假值判断，这样的一轮去掉调用之后会被留下。空白只在这一处判断，留下来的消息不改文字。
+第 4 条的理由。Anthropic 适配器本来就不发没有内容的 assistant 轮（§2.2），整条去掉之后两个方言看到的是同一段对话；留着的话 DeepSeek 上会把几千字符的思考当 `reasoning_content` 重放，对模型没有用处。DeepSeek 接受正文为空的 assistant 消息（V4），所以空的这一半不是为了躲 400。空白那一半是为了 Anthropic：只含空白的文字会被适配器编成一个 text block，第三方的报告说接口会拒绝它（§2.2，没有核实）。第 1 版的原型按 `message.content` 的真假值判断，这样的一轮去掉调用之后会被留下。空白只在这一处判断，用的是 `str.strip()`，留下来的消息不改文字。
 
 去掉之后，下一次请求里那个位置有三种样子，都是今天就在发的形状（§2.1）：那一轮有文字时是 `… A U`；没有文字、前面是工具结果时是 `… a t U`；没有文字、前面就是请求时是 `U U`。
 
 ### 5.2 原型
 
-`SCR/r2_apply_prototype.py` 写进 `SCR/r2_proto/`（`git archive 5daf5482` 的导出）。实施时可以另写，以 §6.2 的测试为准。和第 1 版的原型（`SCR/proto/`）相比，函数里改了两处：认领结果的循环，和 `message.content.strip()`；`entry/turn.py` 的改动没有变。
+`SCR/r2_apply_prototype.py` 写进 `SCR/r2_proto/`（`git archive 5daf5482` 的导出）。实施时可以另写，以 §6.2 的测试为准。和第 1 版的原型（`SCR/proto/`）相比，函数里改了两处：认领结果的循环，和 `message.content.strip()`；`entry/turn.py` 的改动没有变。第 3 版没有改原型。
 
 `omicsclaw/context/transcript.py`，从 schema 多引入一个 `ToolCall`，函数加进本模块和 `omicsclaw.context` 的 `__all__`：
 
@@ -353,7 +354,7 @@ def drop_unanswered_calls(messages: Sequence[Message]) -> tuple[Message, ...]:
 
 - 主检出会话库的副本里 19 个有消息的会话，逐个过这个函数，返回的都是原来的消息对象（`SCR/logs/r2_out_10_facts_prototype.log` 的 f 段）。审核方对第 1 版原型做过同样的检查（`RV80/logs/rv80_out18_real_sessions_identity.log`）。
 - 20 万段随机历史（游离的结果、放错位置的结果、重复和空的 id、只含空白的文字、字符串角色），原型和照条文另写的一份实现比对，差异 0 次；清理后还有未答调用、第二遍还会再改、非 assistant 消息被改动、OpenAI 载荷里调用多于结果，都是 0 次（`SCR/probes/r2_probe_03_fuzz.py`，`SCR/logs/r2_out_16_fuzz.log`）。
-- 审核方照第 1 版条文独立写的实现，按字面读时和第 1 版原型在 20 万段上差异 0 次（`RV80/logs/rv80_out1_fuzz.log`）。它量出条文没写死的三处各会差多少段：空白 81,770，范围 53,712，重复 id 3,029。第 2 版的第 2、4 条就是冲着这三处写的。
+- 审核方照条文独立写的实现。第 1 轮按第 1 版条文的字面读，和第 1 版原型在 20 万段上差异 0 次（`RV80/logs/rv80_out1_fuzz.log`），并量出条文没写死的三处各会差多少段：空白 81,770，范围 53,712，重复 id 3,029。第 2、4 条就是冲着这三处写的。第 2 轮只照第 2 版的条文另写，和第 2 版原型在 20 万段上差异 0 次；把空白读成只有空格、制表符和换行时差 48,349 段（`RV80/logs/r2_out1_fuzz.log`），所以第 3 版在规则 4 里写明了 `str.strip()`。
 
 ### 5.3 理由
 
@@ -374,7 +375,7 @@ def drop_unanswered_calls(messages: Sequence[Message]) -> tuple[Message, ...]:
 - 从截断到下一次交换之间，库里存的历史仍然以没被回答的调用结尾。
 - 整轮去掉时，那一轮的思考不再留在历史里。
 - 直接调 `engine.exchange` 的库调用方不受保护，引擎的契约没有变。
-- CLI 的 `/compact` 有两句话会和事实对不上。短会话上它仍然打印 "Nothing to compact: this conversation is already short."，摘要失败时仍然打印 "…the conversation was left as it was"（`entry/cli/_repl.py:446-467`），而历史里没被回答的调用其实已经去掉了（`SCR/logs/r2_out_10_facts_prototype.log` 的 g 段）。这两句话读的是压缩记录，记录不知道清理的事。本计划不改它们，记进已知限制。
+- CLI 的 `/compact` 有两句话会和事实对不上。短会话上它仍然打印 "Nothing to compact: this conversation is already short."，摘要失败时仍然打印 "…the conversation was left as it was"（`entry/cli/_repl.py:446-467`），而历史里没被回答的调用其实已经去掉了。前一句见 `SCR/logs/r2_out_10_facts_prototype.log` 的 g 段，后一句见审核方的 `RV80/logs/r2_out11_compact_texts.log`。这两句话读的是压缩记录，记录不知道清理的事。本计划不改它们，记进已知限制。
 
 ## 6. 改动范围
 
@@ -391,16 +392,16 @@ def drop_unanswered_calls(messages: Sequence[Message]) -> tuple[Message, ...]:
 
 ### 6.2 测试
 
-T1 至 T22 写在 `SCR/r2_proposed/test_plan0080_r2_proposed.py` 里，参数化后 33 个用例。在三棵树上各跑过一遍（`SCR/logs/r2_out_03_proposed_base.log`、`r2_out_03_proposed_proto.log`、`r2_out_03_proposed_r2_proto.log`）：今天 31 红 2 绿；第 1 版原型 2 红（T19、T20，就是第 2 版改了语义的两处）；第 2 版原型 33 绿。日志里的总数各多 1，是打印 `omicsclaw.__file__` 的那一条。
+T1 至 T23 写在 `SCR/r3_proposed/test_plan0080_r3_proposed.py` 里，参数化后 36 个用例（`SCR/logs/r3_out_03_proposed_base.log`、`r3_out_03_proposed_r2_proto.log`）：今天 34 红 2 绿，原型 36 绿。日志里的总数各多 1，是打印 `omicsclaw.__file__` 的那一条。第 2 版的 33 个用例审核方重跑过，结果和第 2 版写的一致（`RV80/logs/r2_out2_proposed_base.log`、`r2_out2_proposed_r2_proto.log`）。第 3 版多出的 3 个用例是 T4 的两种形状和 T23，另外改了 T20 的样本。
 
-`tests/context/test_transcript.py`，纯函数。今天的红是函数不存在。T16 至 T21 是第 2 版加的，括号里是它们堵上的审核方变异：
+`tests/context/test_transcript.py`，纯函数。今天的红是函数不存在。括号里是这条测试堵上的审核方变异：
 
 | 编号 | 测试 | 钉住的规则 |
 |---|---|---|
 | T1 | `test_an_unanswered_call_is_taken_off_its_turn_and_the_text_stays` | 规则 3：调用去掉，文字和思考留着 |
 | T2 | `test_a_turn_left_with_no_text_and_no_call_is_removed` | 规则 4 |
-| T3 | `test_only_the_unanswered_call_of_a_turn_goes`，第 2 版给那一轮加了文字和思考（N11） | 规则 3：留着已答调用的那一轮，文字、思考和结果都在 |
-| T4 | `test_a_conversation_with_every_call_answered_comes_back_message_for_message`，7 种形状。第 2 版加了 3 种：一个空 id 的调用和它的结果（N7）；两个空 id 的调用和两条结果；没有文字也没有调用的 assistant 消息 | 规则 6：返回的是原对象。规则 2：空 id 也是 id。规则 4 的范围 |
+| T3 | `test_only_the_unanswered_call_of_a_turn_goes`，那一轮带文字和思考（N11） | 规则 3：留着已答调用的那一轮，文字、思考和结果都在 |
+| T4 | `test_a_conversation_with_every_call_answered_comes_back_message_for_message`，9 种形状。第 2 版加了 3 种：一个空 id 的调用和它的结果（N7）；两个空 id 的调用和两条结果；没有文字也没有调用的 assistant 消息。第 3 版加了 2 种：结果的先后和调用相反（W2）；一轮后面多出一条没有调用认领的结果（W8） | 规则 6：返回的是原对象。规则 2：空 id 也是 id，结果不必按调用的先后排。规则 4 的范围。规则 7 |
 | T5 | `test_an_unanswered_call_in_the_middle_of_a_conversation_is_removed_too` | 不只看末尾 |
 | T6 | `test_a_result_that_is_not_directly_behind_its_turn_does_not_answer_it` | 规则 1、7：相邻才算；游离的结果不动 |
 | T7 | `test_roles_that_arrive_as_plain_strings_are_read_the_same` | 规则 8 |
@@ -408,7 +409,7 @@ T1 至 T22 写在 `SCR/r2_proposed/test_plan0080_r2_proposed.py` 里，参数化
 | T17 | `test_a_call_is_matched_to_its_result_by_id_not_by_position`（N1） | 规则 2：按 id 配，不按位置 |
 | T18 | `test_every_turn_with_an_unanswered_call_is_cleaned`（N6） | 一段历史里两处未答调用都处理 |
 | T19 | `test_one_result_answers_one_call_when_two_calls_share_an_id`（N9） | 规则 2：两个同 id 的调用配一条结果，留下先发的那一个 |
-| T20 | `test_a_turn_whose_only_text_is_whitespace_is_removed_with_its_call`（N2） | 规则 4：空白不算文字 |
+| T20 | `test_a_turn_whose_only_text_is_whitespace_is_removed_with_its_call`（N2、W1）。样本是换行、制表符、全角空格和空格 | 规则 4：空白不算文字，空白按 `str.strip()` |
 | T21 | `test_whitespace_text_stays_on_a_turn_that_keeps_a_call` | 规则 3：留下来的消息不改文字 |
 
 `tests/entry/test_session.py`，经 `SessionRegistry`，后端是能报 `finish_reason` 的替身（现有的 `Scripted` 报不出，要加一个子类）：
@@ -419,9 +420,10 @@ T1 至 T22 写在 `SCR/r2_proposed/test_plan0080_r2_proposed.py` 里，参数化
 | T9 | `test_a_stored_session_that_ends_on_an_unanswered_call_works_after_a_restart` | 直接往 SQLite 写一行今天的代码会留下的历史，另建一个 app 提交消息：不需要迁移，文字留着 | 红 |
 | T10 | `test_compacting_a_session_that_ends_on_an_unanswered_call_stores_it_without_the_call` | 短会话上 `/compact` 之后历史是干净的 | 红 |
 | T11 | `test_a_session_with_every_call_answered_is_sent_as_it_was_stored` | 对照：并行调用的正常会话，发出去的就是存着的那些消息对象 | 绿。变异 M6、M10、M11 让它转红 |
-| T12 | `test_a_cut_off_exchange_still_reports_the_turn_as_the_model_wrote_it` | 截断的那次交换自己的 `result.messages` 仍以原话结尾，`stop_reason` 是 `TRUNCATED` | 绿。它记下 L1、L2 没有做是有意的，Q2 改了裁定就改它 |
-| T15 | `test_leaving_a_call_out_is_logged_with_the_session_and_the_count` | 规则 10：三次交换只在去掉调用的那一次写一行，数的是调用。它用 `caplog` 把级别调到 INFO，说明不了默认配置下有没有这条记录（Q6） | 红 |
-| T22 | `test_compacting_a_long_session_after_a_cut_off_turn_stores_no_placeholder`，第 2 版加的 | 8 轮工具之后被截断的会话，`/compact` 摘要成功并写回：存回去的历史里没有 `MISSING_TOOL_RESULT`，最后一条是那一轮的文字 | 红。今天存回去的是那条调用加一条占位 |
+| T12 | `test_a_cut_off_exchange_still_reports_the_turn_as_the_model_wrote_it` | 截断的那次交换自己的 `result.messages` 仍以原话结尾，`stop_reason` 是 `TRUNCATED` | 绿。它记下 L1、L2 没有做是有意的 |
+| T15 | `test_leaving_a_call_out_is_logged_with_the_session_and_the_count` | 规则 10：三次交换只在去掉调用的那一次写一行，数的是调用。它用 `caplog` 把级别调到 INFO，说明不了默认配置下有没有这条输出 | 红 |
+| T22 | `test_compacting_a_long_session_after_a_cut_off_turn_stores_no_placeholder` | 8 轮工具之后被截断的会话，`/compact` 摘要成功并写回：存回去的历史里没有 `MISSING_TOOL_RESULT`，最后一条是那一轮的文字 | 红。今天存回去的是那条调用加一条占位 |
+| T23 | `test_a_stored_session_with_an_unanswered_call_in_its_middle_is_cleaned_too`（W7），第 3 版加的 | 未答调用在存着的历史中间、后面还有一问一答：下一次请求里没有它，两个方言都接受，存回去的历史干净。对应的存量是宽松的后端上截断之后又聊了下去、再换到严格后端的会话 | 红 |
 
 `tests/entry/test_turn.py`：
 
@@ -430,35 +432,35 @@ T1 至 T22 写在 `SCR/r2_proposed/test_plan0080_r2_proposed.py` 里，参数化
 | T13 | `test_run_turn_accepts_the_history_a_cut_off_run_handed_back` | 阻塞路径 | 红 |
 | T14 | `test_compose_leaves_out_a_call_nothing_answered` | 规则 9 的后一半 | 红 |
 
-变异。三组一共 34 处，在第 2 版的原型和测试上重跑（`SCR/r2_mutate.py`，`SCR/logs/r2_out_05_mutations.log`），文件按 SHA-256 核对恢复。32 处有测试转红，2 处存活。
+变异。四组一共 42 处，在原型和 T1 至 T23 上跑（`SCR/r3_mutate.py`，`SCR/logs/r3_out_05_mutations.log`），文件按 SHA-256 核对恢复。40 处有测试转红，2 处存活。第 2 版的 34 处审核方重跑过，结果一致（`RV80/logs/r2_out4_planner_mutations_rerun.log`）。
 
 第 1 版自己的 15 处，全部转红：
 
 | 变异 | 转红的测试 |
 |---|---|
-| M1 `_assemble` 不清理 | T8、T9、T13、T15 |
+| M1 `_assemble` 不清理 | T8、T9、T13、T15、T23 |
 | M2 `compose` 不清理 | T10、T14、T22 |
-| M3 还有文字的那一轮也整条去掉 | T1、T5、T6、T7、T9、T10、T14、T18、T22 |
+| M3 还有文字的那一轮也整条去掉 | T1、T5、T6、T7、T9、T10、T14、T18、T22、T23 |
 | M4 去空了的那一轮留着 | T2、T20 |
 | M5 对话里任何位置的结果都算回答 | T6 |
 | M6 所有调用都当成没被回答 | T3、T4、T7、T11、T16、T17、T18、T19、T21 |
 | M7、M8 两处角色比较改成 `is` | T7 |
-| M9 只看最后一条消息 | T3、T5、T6、T7、T17、T18、T19、T21 |
+| M9 只看最后一条消息 | T3、T5、T6、T7、T17、T18、T19、T21、T23 |
 | M10 没动过的消息也重建一份 | T4、T7、T11、T16、T18 |
 | M11 只读紧跟的第一条结果 | T4、T11、T16 |
-| M12 改成补占位（X2） | T8 的 5 种形状、T9、T13、T15 |
+| M12 改成补占位（X2） | T8 的 5 种形状、T9、T13、T15、T23 |
 | M13 留下文字的那一轮丢掉思考 | T1、T3 |
 | M14 不写日志 | T15 |
 | M15 日志数的是消息 | T15 |
 
-审核方的 15 处（定义在 `RV80/scripts/rv80_mutate.py`）。在第 1 版的原型和测试上有 9 处存活，我用它的脚本重跑得到同样的结果（`SCR/logs/r2_out_04_reviewer_mutations_on_r1.log`）。第 2 版改了它们所在的几行，变异按原意重写：
+审核方第 1 轮的 15 处（定义在 `RV80/scripts/rv80_mutate.py`）。在第 1 版的原型和测试上有 9 处存活。第 2 版改了它们所在的几行，变异按原意重写：
 
-| 变异 | 第 1 版 | 第 2 版 |
+| 变异 | 第 1 版 | 现在 |
 |---|---|---|
 | N1 按位置配：有几条结果就留前几个调用 | 存活 | T17 转红 |
 | N2 只含空白的文字不算文字 | 存活 | 成了规则 4。反过来的变异是 R1 |
 | N3 只有思考、没有文字的一轮留着 | 转红 | T2 |
-| N4 清理了、记了日志，带进去的却是原样的历史 | 转红 | T8、T9、T13、T15 |
+| N4 清理了、记了日志，带进去的却是原样的历史 | 转红 | T8、T9、T13、T15、T23 |
 | N5 `compose` 只在有用户文字时清理 | 转红 | T10、T22 |
 | N6 只处理第一处未答调用 | 存活 | T18 转红 |
 | N7 空 id 的调用一律算没回答 | 存活 | T4 转红 |
@@ -482,21 +484,34 @@ T1 至 T22 写在 `SCR/r2_proposed/test_plan0080_r2_proposed.py` 里，参数化
 | R5 留下来的一轮，只含空白的文字被清成空串 | T21 |
 | R6 id 重复时留下的是后发的那个调用 | T19 |
 
-存活的两处在产品路径上和原型等价，没有补测试：
+审核方第 2 轮的 8 处（定义在 `RV80/scripts/r2_mutate.py`，照原样拿来用）。在第 2 版的测试上有 4 处存活（W1、W2、W7、W8，`RV80/logs/r2_out3_mutations.log`）。第 3 版四处都补了用例，没有哪一处是靠"接受"过去的，现在 8 处都转红：
 
-- N8。调用只出现在 assistant 消息上：`Message.tool_calls` 的 docstring 这样规定（`schema/message.py:193-195`），`Message.user`、`Message.system`、`Message.tool` 三个构造器都不接受调用，存储层按原样写回。要让这处变异现形，得手工造一条带调用的 user 消息。审核方也认为它走不到。
-- N13。只做压缩的交换不调模型，`_sequence` 在那条路径上用的是 `compose` 交出的对话（`entry/turn.py:678-680`），`_assemble` 建的 `_Carried` 没有人读。这处变异只让 `/compact` 少写规则 10 的那一行日志。日志留不留是 Q6，定了之后再决定要不要钉它。
+| 变异 | 第 2 版 | 现在 |
+|---|---|---|
+| W1 只把空格和换行当空白，制表符和全角空格算文字 | 存活 | T20 转红 |
+| W2 结果必须按调用的先后出现才算回答 | 存活 | T4 转红 |
+| W3 第一个带这个 id 的调用认领所有带它的结果 | 转红 | T4 |
+| W4 留下来的一轮，文字被去掉首尾空白 | 转红 | T21 |
+| W5 id 重复时留下的是后发的调用 | 转红 | T19 |
+| W6 `/compact` 先压缩原样的历史，之后才清理 | 转红 | T22 |
+| W7 只有历史以带调用的一轮结尾时才清理 | 存活 | T23 转红 |
+| W8 一轮后面没有调用认领的结果被丢掉 | 存活 | T4 转红 |
+
+存活的两处在产品路径上和原型等价，没有补测试，审核方复核时同意：
+
+- N8。调用只出现在 assistant 消息上：`Message.tool_calls` 的 docstring 这样规定（`schema/message.py:193-195`），`Message.user`、`Message.system`、`Message.tool` 三个构造器都不接受调用，存储层按原样写回。要让这处变异现形，得手工造一条带调用的 user 消息。
+- N13。只做压缩的交换不调模型，`_sequence` 在那条路径上用的是 `compose` 交出的对话（`entry/turn.py:678-680`），`_assemble` 建的 `_Carried` 没有人读。这处变异只让 `/compact` 少写规则 10 的那一行日志，而那行日志不当记录用（Q6）。
 
 现有测试要改的只有一条：`tests/context/test_context_is_a_leaf_layer.py:473` 的 `test_the_public_surface_is_exactly_what_plan_0030_delivered`，清单里加 `"drop_unanswered_calls"`。`tests/engine/test_loop.py:408` 的 `test_a_truncated_turn_does_not_execute_the_tool_calls_it_carried` 钉的是引擎照样记下这一轮，不用改。
 
-不加脚本化 eval。`ScriptedTurn` 没有 `finish_reason` 字段（§1.3 的 P5），加一条 eval 要先改 `omicsclaw/evals/provider.py`。T8 至 T10、T22 走的就是 eval Runner 走的那段 `SessionRegistry` 路径。`tests/evals/test_dataset_floor.py` 的 `BASELINE` 不变。
+不加脚本化 eval。`ScriptedTurn` 没有 `finish_reason` 字段（§1.3 的 P5），加一条 eval 要先改 `omicsclaw/evals/provider.py`。T8 至 T10、T22、T23 走的就是 eval Runner 走的那段 `SessionRegistry` 路径。`tests/evals/test_dataset_floor.py` 的 `BASELINE` 不变。
 
 ### 6.3 文档
 
 | 文件 | 改动 |
 |---|---|
 | `docs/core-features/agent-loop.md` | `:229` 那一段补一句：entry 层在下一次交换开场时去掉这些调用。`:499` 的已知限制改写成：`RunResult` 和 `TurnOutcome.history` 仍以没被回答的调用结尾；经 `entry/turn.py` 的路径在下一次开场时去掉它们；直接调 `engine.exchange` 的调用方要自己处理。`:444` 的伪代码里 `_Carried(history)` 一行同步 |
-| `docs/core-features/context-engineering.md` | §7 的函数表（`:280` 起）加一行 `drop_unanswered_calls`，写明一条结果回答一个调用、空白不算文字；`:45`、`:68`、`:94`、`:323`、`:466` 几处列函数名和 `_Carried(history)` 的地方同步 |
+| `docs/core-features/context-engineering.md` | §7 的函数表（`:280` 起）加一行 `drop_unanswered_calls`，写明一条结果回答一个调用、空白（按 `str.strip()`）不算文字；`:45`、`:68`、`:94`、`:323`、`:466` 几处列函数名和 `_Carried(history)` 的地方同步 |
 | `docs/core-features/progressive-compactor.md` | §9.2（`:467`）补一句：`compose` 交出的对话里没有未答调用，所以 `/compact` 即使没有写回，也会把它们从历史里去掉。§12 已知限制加一条：这种情况下 CLI 仍然打印"Nothing to compact"或"left as it was"。§13 文件索引（`:541`）同步 |
 | `docs/plans/0080-truncated-exchange.md` | 加交付记录一节 |
 | `CHANGELOG.md` | 合并时在顶部加一条 |
@@ -504,6 +519,15 @@ T1 至 T22 写在 `SCR/r2_proposed/test_plan0080_r2_proposed.py` 里，参数化
 `README.md` 不动。`tests/entry/golden/` 是 system 提示和工具表，这次不变，不用重录。
 
 估计工作量：代码和测试三小时，文档一小时。
+
+### 6.4 给实现方
+
+- 依据是 §5.1 的十条规则和 §6.2 的测试表。两者有出入时以规则的条文为准，并把出入报回来。
+- 原型（§5.2）是参考，可以另写。草稿测试在 `SCR/r3_proposed/test_plan0080_r3_proposed.py`，是一个文件，落地时按 §6.2 分到三个测试文件里；`Finishing` 这个替身放在 `tests/entry/test_turn_runner.py` 的 `Scripted` 旁边，两个测试文件都要用。`SCR` 在 `/tmp` 下，不保证一直在，丢了就照 §6.2 的表重写。
+- 先在没改的代码上跑新测试，确认是 34 红 2 绿，再改代码。
+- 代码、测试、§6.1 列的 docstring 和 §6.3 的文档在一次改动里完成。
+- 不在范围里的：给模型或用户的任何提示文字，`_compaction_verdict` 的措辞，`repair_tool_pairs`，两个适配器，`_model_limits.py`，引擎。
+- 合并之前：§7.2 的三条命令，§7.3 的真实模型验收（3 次 DeepSeek 请求），PR 上的 `Eval CI`。
 
 ## 7. 验证
 
@@ -529,17 +553,17 @@ T1 至 T22 写在 `SCR/r2_proposed/test_plan0080_r2_proposed.py` 里，参数化
 | 第二条 | 842 passed、14 skipped、1 deselected、1 xpassed，约 100 秒 | 841 passed、1 failed，其余相同 |
 | 第三条 | 566 passed、3 skipped，约 9 秒 | 566 passed、3 skipped |
 
-前两条里红的是同一条：§6.2 要改的公开面清单。审核方在第 1 版原型上跑第一条和第三条，数字相同（`RV80/logs/rv80_out14_layers_proto.log`、`rv80_out16_desktop_proto.log`）。
+前两条里红的是同一条：§6.2 要改的公开面清单。审核方在第 2 版原型上把三条都重跑了，数字相同（`RV80/logs/r2_out10_level3_r2_proto.log`）。第 3 版没有改原型，没有重跑。
 
 另外：
 
 - 写测试时先在没改的代码上跑新测试，确认红绿和 §6.2 的表一致，再改代码。
-- 变异检查：对落地的实现重做 34 处变异，除 N8、N13 外每处至少一条测试转红。
+- 变异检查：对落地的实现重做 42 处变异（`r3_mutate.py` 改一下锚点可以直接用），除 N8、N13 外每处至少一条测试转红。
 - `probe_01_stuck.py` 在落地的实现上重跑，被拒绝的调用和 `failed` 的交换都应当是 0。`r2_probe_03_fuzz.py` 重跑，每一行都应当是 0。
 
 ### 7.3 真实模型的验收
 
-建议作为合并的前置条件，量很小。保留什么、去掉什么是确定性的，上面的测试已经覆盖；这一步确认的是真实接口接受清理之后的请求。
+owner 裁定它是合并的前置条件（Q5），3 次 DeepSeek 请求。保留什么、去掉什么是确定性的，上面的测试已经覆盖；这一步确认的是真实接口接受清理之后的请求。
 
 做法是在实施分支上重跑 `SCR/probes/live_02_e2e.py`，3 次请求：`truncate` 一次，造出一个真实的截断会话；把工作区复制两份，`continue` 在 `main` 和实施分支上各一次。预期和 V8 至 V10 相同：`main` 上 400、`failed`、历史不变；分支上 200、`converged`、存回去的历史没有未答调用。
 
@@ -547,14 +571,14 @@ T1 至 T22 写在 `SCR/r2_proposed/test_plan0080_r2_proposed.py` 里，参数化
 
 ## 8. 与在办事项的关系
 
-计划 0078，已定稿的第 3 版（分支 `docs/plan-0078-r3`，`c9726a8a`）。owner 2026-10-09 批准的是计划，实现还没有派发。它的规则是 G+ 加 §4.1 的 2f：tail 以工具结果开头时，被 head 和 tail 的边界切开的那一轮整轮不丢。第 1 版对的是它的第 2 版，这一版对着第 3 版重新核了一遍：
+计划 0078。下面对的是它的第 3 版（分支 `docs/plan-0078-r3`，`c9726a8a`），规则是 G+ 加 §4.1 的 2f：tail 以工具结果开头时，被 head 和 tail 的边界切开的那一轮整轮不丢。它的第 4 版正在出，这里只引用已经提交的第 3 版和派发时转述的一条裁定：
 
 - 没有顺序依赖，谁先落地都可以。
 - 改的不是同一个函数。0078 改 `fit_to_budget`，新增私有函数 `_held`、`_round_the_tail_finishes`、`_request_of_oldest_reply`，从 `.summary` 引入 `is_summary_message`。本计划新增 `drop_unanswered_calls`，从 schema 多引入 `ToolCall`，改 `entry/turn.py` 的 `compose` 和 `_assemble`。两边都动的文件是 `omicsclaw/context/transcript.py`、`tests/context/test_transcript.py`、`docs/core-features/context-engineering.md` §7 的表、`docs/core-features/progressive-compactor.md` §12 和 `CHANGELOG.md` 的顶部，动的都是不同的行。
-- 两份原型的 `transcript.py` 用 `diff3 -m` 三方合并，没有冲突。合并出来的树上，本计划的 33 个用例和 0078 第 3 版的 35 个用例都通过（`SCR/r2_combo/`，`SCR/logs/r2_out_14_combo_0080_tests.log`、`r2_out_15_combo_0078_tests.log`）。审核方用第 1 版原型和 0078 第 2 版的原型做过同样的事，结果相同（`RV80/logs/rv80_out7_combo_tests.log`）。
+- 两份原型的 `transcript.py` 用 `diff3 -m` 三方合并，没有冲突。合并出来的树上，本计划的 36 个用例和 0078 第 3 版的 35 个用例都通过（`SCR/r2_combo/`，`SCR/logs/r3_out_14_combo_0080_tests.log`、`r2_out_15_combo_0078_tests.log`）。审核方两轮各做了一次，第 2 轮用的也是 0078 第 3 版的原型，结果相同（`RV80/logs/rv80_out7_combo_tests.log`、`r2_out6_combo_tests.log`）。
 - 0078 的降级截断末尾会过 `repair_tool_pairs`，对"输入里本来就没应答的调用"补占位（它的 R5）。本计划落地后，会话历史在进压缩器之前已经清理过，这个来源的占位不再出现；T22 钉的是摘要成功那条路径上的同一件事。
 - 本计划可能让历史里出现两条相邻的请求（`U U`）。0078 的规则 4 和边界情形 E7a 已经覆盖：后面没有回复的请求轮到时直接丢，它的 T20 钉着。
-- 本计划给 0078 的 R11 多了一个来源。R11 说的是较早的一次交换以一轮工具调用结束、没有最终答复时，它的请求在降级视图里可能独自留下。被截断的交换清理之后正是这种形状（§5.2 的 A-d：`U a1 t`，然后是下一条请求）。后果限于没有写回的降级视图，0078 已经把它记成已知限制，本计划不改变它的性质，只是多一种走到那里的方式。
+- 被截断的交换清理之后，可能以一轮工具调用结束、没有最终答复（§5.2 的 A-d：`U a1 t`，然后是下一条请求）。0078 第 3 版的 R11 说的就是这种交换：它的请求在没有写回的降级视图里可能独自留下。审核方在两份原型合并出来的树上看到了这一情形（`RV80/logs/r2_out7_r11_source.log`）。派发第 3 版时转述的裁定是：owner 已决定把 R11 的改法并进 0078 的定稿，请求在它最后一条 assistant 回复被丢的那一步一起丢。按这句话推断，本计划清理出来的这种交换不会再留下一条孤零零的旧请求；这一点没有在 0078 新的原型上跑过。本计划不依赖它先落地。
 
 规划闸门（`docs/plans/0039-planning-layer.md` §9，已在基线里）。
 
@@ -563,87 +587,68 @@ T1 至 T22 写在 `SCR/r2_proposed/test_plan0080_r2_proposed.py` 里，参数化
 
 计划 0079 已搁置，和本计划无关。它推荐的首条消息占位在 provider 适配器里，本计划不碰适配器。
 
-排期。派发本计划时的说明是 owner 裁定它排在在办事项的最前面。这一版给出的频率数据比派发时多（§3），排在哪里由 owner 定。它不需要等 0078。
+排期。owner 2026-10-09 批准了本计划，实现在定稿后派发。它不需要等 0078。Q4 另开的那一项编号预留 0081，由别的计划方写。
 
 ## 9. 风险和没验证的部分
 
 - K1 修完之后，触发截断的那个任务会不声不响地原样重来。审核方在真实 DeepSeek 上补测了 8 次，system 提示和工具表是产品自己的，历史是按清理后的形状手工搭的，每次回复限 1,500 token，只读回复的开头（`RV80/logs/rv80_out13_live_a.log`、`rv80_out13_live_b.log`）。看到的两件事：
-  - 留下的那句文字（"现在把说明写入 …"）没有让模型以为文件已经写了。留着文字的 5 次里，5 次都认出调用没有发生，先去核实或者直接说还没写。
-  - 用户说"继续"时两种做法各 1 个样本。X1 下模型的思考里没有提到截断，打算一次调用写完约 3000 字。X2（补一条"被输出上限截断、没有执行"的结果）下模型的思考里写了上次是被输出上限截断、这次有再撞上的风险、要控制篇幅，随后仍打算一次调用写完。审核意见把后一种概括成"会主动缩小篇幅"；日志里看到的是它意识到了风险，没有看到篇幅真的变小，那次回复在动笔之前就结束了。
+  - 留下的那句文字（"现在把说明写入 …"）没有让模型以为文件已经写了。留着文字的 5 次里，没有一次把文件当成写过了：4 次明确写出调用没有发生，`x1_rich_go` 那 1 次没有提，直接着手去写。
+  - 用户说"继续"时两种做法各 1 个样本。X1 下模型的思考里没有提到截断，打算一次调用写完约 3000 字。X2（补一条"被输出上限截断、没有执行"的结果）下模型的思考里写了上次是被输出上限截断、这次有再撞上的风险、要控制篇幅，随后仍打算一次调用写完。证据只支持到这里：模型知道上次被截断，知道有再撞上的风险。篇幅有没有真的变小看不到，那次回复在动笔之前就结束了。审核方复核时同意这个读法。
   
-  这说明 X1 之下内容确实超过上限时会再截一次，再花一次上限那么多的输出 token，用户仍然看不到原因。样本量是 1 对 1，不够定措辞。它是 Q4 和 Q9 的起点。
+  这说明 X1 之下内容确实超过上限时会再截一次，再花一次上限那么多的输出 token，用户仍然看不到原因。样本量是 1 对 1，不够定措辞。owner 裁定先接受这一点（Q9）。
 - K2 用户仍然看不到截断的说明。本计划没有改这一点。
 - K3 Anthropic 一侧没有对真实接口核实。依据是文档里的配对规则、适配器代码和第三方的报错原文。接口如果比文档宽松，本计划的清理对它是多余的，没有害处。
 - K4 OpenAI 兼容后端只测了 DeepSeek。`U U`、`a t U` 这两种相邻今天有计划块的会话每次调用都在发，别的后端如果拒绝，今天就已经在拒绝。
 - K5 频率只在一个工作区的库上量过，样本很薄（§3）。默认上限 64K 来自 DeepSeek 文档，实测只确认了它高于 12,934。
 - K6 `omicsclaw.context` 的公开面多一个函数。`compose` 的名字和签名不变，行为在一种输入上变了：带未答调用的历史。仓库外有没有调用方依赖旧行为不知道；想不出依赖它的用法，因为引擎从不执行历史里的调用。
-- K7 重复 id 的语义是第 2 版定的（规则 2），产品路径上走不到，没有真实数据能说明哪种读法更好（Q10）。清理之后 `repair_tool_pairs` 仍可能给重复 id 的一轮补占位：20 万段随机历史里有 1,271 段，每一段都是同一轮里有重复的 id（`SCR/logs/r2_out_16_fuzz.log`）。那是 `repair_tool_pairs` 自己对重复 id 的处理，见本节末尾。
+- K7 重复 id 的语义（规则 2）在产品路径上走不到，没有真实数据能说明哪种读法更好；owner 裁定用一条对一条（Q10）。清理之后 `repair_tool_pairs` 仍可能给重复 id 的一轮补占位：20 万段随机历史里有 1,271 段，每一段都是同一轮里有重复的 id（`SCR/logs/r2_out_16_fuzz.log`）。那是 `repair_tool_pairs` 自己对重复 id 的处理，见本节末尾。
 - K8 "已经回答、参数却解析不了"的调用，本计划不处理，它在 Anthropic 方言上仍然发不出去。它有两个来源。
   - 修复之前已经被压缩补过占位的截断调用。要同时满足流式截断、截断时压力已在 SOFT 以上或对长会话用过 `/compact`。已知 0 例。本计划落地后不会再产生，因为清理在压缩之前。
   - 不算截断的中断。`_TRUNCATING_FINISH_REASONS` 只有 `length` 和 `max_tokens`（`loop.py:93`）。`finish_reason` 是 `tool_calls`、`content_filter`、`insufficient_system_resource`、`refusal`、`pause_turn` 而回复里带着半截调用时，引擎把调用交给工具层，工具层回一条 `is_error` 的结果（`ToolArgumentError: the arguments were not valid JSON`），调用算被回答了，模型在同一次交换里接着做。OpenAI 方言下这次交换正常结束，历史里留下 `A+a1~ t`；Anthropic 方言下适配器在同一次交换的下一次调用上本地抛错，试满 3 次后 `failed`，什么都不提交，不卡死（`SCR/logs/r2_out_10_facts_today.log` 的 c 段；审核方的 `RV80/logs/rv80_out9_paths_base.log` 还跑了 `''`、`aborted`、`model_context_window_exceeded`，结果相同）。
   
-  残余的卡死路径是：这样的历史在 OpenAI 方言下产生，之后换到 Anthropic 方言续接同一个会话。出路是 `/clear` 或 `/new`。要不要另立一项见 Q8。
-- K9 channel 没有跑。它和 CLI 走同一个 `SessionRegistry`，T8 至 T10、T22 覆盖的是这一段共用路径。Desktop 的用例跑了（§7.2），真实的 Desktop 会话没有跑。
-- K10 规则 10 的日志在默认配置下基本看不到（Q6），所以落地之后仍然没有手段知道它在用户那里发生过几次。
+  残余的卡死路径是：这样的历史在 OpenAI 方言下产生，之后换到 Anthropic 方言续接同一个会话。出路是 `/clear` 或 `/new`。owner 裁定这次不立项（Q8）。
+- K9 channel 没有跑。它和 CLI 走同一个 `SessionRegistry`，T8 至 T10、T22、T23 覆盖的是这一段共用路径。Desktop 的用例跑了（§7.2），真实的 Desktop 会话没有跑。
+- K10 规则 10 的日志在 CLI 和 Desktop 上默认没有输出，只有 `oc channel` 会把它打到 stderr（Q6），所以落地之后仍然没有手段知道它在用户那里发生过几次。
 
-这次顺带看到、不在本计划范围里的：
+这次顺带看到、不在本计划范围里的。前两条 owner 裁定这次不立项，只记录（Q7、Q8）：
 
-- Anthropic 方言的输出上限表落后于模型（§3）。OpenAI 方言没有给用户设输出上限的入口；`_model_limits.py:89` 里 `deepseek-v4-flash` 的输出上限是 8,192，表里的意思是"未知"，上下文预算拿它当输出预留（`entry/assembly.py:663`），和文档上的 64K 默认值对不上。见 Q7。
-- 不算截断的中断怎么处理（K8 的第二个来源）。见 Q8。
-- `repair_tool_pairs` 对重复 id 的处理会丢真实的结果。两个空 id 的调用配两条结果，是 `ollama` 预设下引擎自己写出来的形状（`loop.py:745-748`），`repair_tool_pairs` 留下第一条结果，把第二条换成占位（`SCR/logs/r2_out_10_facts_today.log` 的 e 段）。它只在压缩删了消息的路径上跑，所以要压力到 SOFT 以上才会碰到。
-- `omicsclaw.entry` 的 INFO 日志在 CLI 和 Desktop 上默认不产生（Q6 的事实部分）。`exchange started`、`exchange ended` 这两行现有的日志也是这样。
+- Anthropic 方言的输出上限表落后于模型（§3）。补它的时候要算上这个数的另外两处用途：它是上下文预算的输出预留（`entry/assembly.py:663`）；它进每一次阻塞的 `generate`，摘要器（`entry/assembly.py:711`）和 `run_turn` 都是，而参考文档写 128K 这么大的 `max_tokens` 要用流式请求。OpenAI 方言没有给用户设输出上限的入口；`_model_limits.py:89` 里 `deepseek-v4-flash` 的输出上限是 8,192，表里的意思是"未知"，和文档上的 64K 默认值对不上。
+- 不算截断的中断怎么处理（K8 的第二个来源）。Anthropic 文档列了 7 个停止原因，引擎只把 `max_tokens` 当截断。`model_context_window_exceeded` 的说明是 "Claude stopped because it reached the model's context window limit"。随 Claude Code 分发的参考对 `refusal` 的说法是它可能把 `tool_use` 截在一半，那一轮的工具不要执行（`shared/tool-use-concepts.md`）。今天这两种情况下半截调用都会交给工具层。
+- `repair_tool_pairs` 对重复 id 的处理会丢真实的结果。两个空 id 的调用配两条结果，是厂商不给 id 时引擎自己写出来的形状（§5.1），`repair_tool_pairs` 留下第一条结果，把第二条换成占位（`SCR/logs/r2_out_10_facts_today.log` 的 e 段；审核方的 `RV80/logs/r2_out5_repair_duplicate_ids.log`）。它只在压缩删了消息的路径上跑：压力到 SOFT 以上，或者对够长的会话用 `/compact`。
+- 没有配置日志时，`omicsclaw.entry` 在 Desktop 上哪一级都不输出，原因和细节在 Q6。CLI 上 INFO 和 WARNING 不产生，ERROR 进一个内存缓冲。`exchange started`、`exchange ended` 这两行现有的 INFO 日志也是这样。
 
-## 10. 需要 owner 裁定的问题
+## 10. 裁定
 
-下面每一条都没有裁定。每条先写事实和选项，再并列我的建议和审核方的建议。Q1 至 Q6 是第 1 版就有的，Q7 至 Q10 是审核之后加的。
+### 10.1 已裁定
 
-Q1 截断留下的调用怎么处理：X1（去掉，留文字）还是 X2（补一条"没有执行"的结果，参数被截的另外去掉）。X2 让模型知道发生了什么（K1 里有 1 个样本），但只在调用参数完整时有效，实测的两次截断都断在参数中间；它还要定一句占位的措辞。
-- 我的建议：X1，只含空白的文字不算文字（规则 4）。
-- 审核方的建议：同意 X1，并要求把空白算作没有文字。
+owner 2026-10-09 批准了计划，并就第 2 版列的 Q1 至 Q10 作了裁定。实现在定稿后派发。
 
-Q2 位置：只在交换开场清理（L3），还是提交时也清理一次（L2 加 L3）。加 L2 的好处是库里存的历史始终合法，代价是 `TurnOutcome.history` 不再等于 `result.messages` 去掉 system 消息，多一处调用和一条测试。
-- 我的建议：只做 L3。
-- 审核方的建议：同意只做 L3。它补了一条理由：开场时恰好知道去掉了几个调用，Q4 里给模型的那句提示可以挂在这里。
+1. Q1 截断留下的调用：去掉未答调用，留文字；只含空白的文字不算文字。条文是 §5.1 的规则 3、4。
+2. Q2 位置：只在交换开场清理。条文是规则 9。
+3. Q3 函数放在 `omicsclaw/context/transcript.py` 的公开面。
+4. Q4 另开一项，范围只有"截断时 CLI 显示一句"：只是显示，不碰给模型的文字和 Desktop 的线上契约。由别的计划方另写，编号预留 0081。给模型的提示、循环内续写这次没有立项，只记录（§4.1 的 X4，K1）。
+5. Q5 真实模型验收（3 次 DeepSeek 请求）是合并的前置条件。做法在 §7.3。
+6. Q6 规则 10 的那行日志留在 INFO，不当记录用。它在哪里看得到见下面的事实。
+7. Q7（Anthropic 输出上限表）、Q8（不算截断的中断）这次没有立项，只记录在 §9 末尾的范围外观察里。
+8. Q9 修完之后"继续"会不声不响地原样重来（K1），这一点先接受。
+9. Q10 重复 id：一条结果回答一个调用，按调用先后认领。条文是规则 2。
 
-Q3 函数放在哪。甲：`omicsclaw/context/transcript.py` 的公开函数，和 `repair_tool_pairs` 并排，要改公开面清单那一条测试，和 0078 同文件不同函数。乙：`omicsclaw/entry/turn.py` 的私有函数，不动 `omicsclaw.context` 的公开面，和 0078 没有任何文件重叠。
-- 我的建议：甲。它是消息列表上的纯变换，配对的相邻判据写在那个文件里。
-- 审核方的建议：同意甲。它和我各做了一次与 0078 原型的三方合并，都没有冲突（§8）。
+Q6 的事实。第 1 版说这行日志是"今后知道这件事发生过几次的唯一落盘记录"，不成立。第 2 版改了大半，Desktop 那一条仍然写错，这一版再改（`SCR/logs/r2_out_11_log_levels.log`，`r3_out_10_facts.log` 的 b 段；审核方的 `RV80/logs/rv80_out17_log_levels.log`、`r2_out8_desktop_warning.log`、`r2_out8_desktop_stderr.txt`）：
 
-Q4 截断时不告诉用户、也不让模型续写，这件事要不要另开计划、怎么排。
-- 我的建议：另开一份计划，本计划不含。
-- 审核方的建议：另开，但要排期，并且拆成三件。第一件是截断时 CLI 显示一句话，只是显示，可以最先做。第二件是开场去掉过调用时给模型一句只进发送副本的提示，要先做措辞对比，K1 是起点。第三件是循环内续写（X4）。
+- CLI 占着终端时，`terminal_owned_logging` 把 `omicsclaw.entry` 压到 ERROR，根 logger 的处理器换成一个内存缓冲（`entry/cli/_screen.py:179-213`，`launch/_surfaces.py:618`）。INFO 和 WARNING 都不产生，ERROR 进那个缓冲。
+- Desktop 用 `uvicorn.Config(log_level="info")`（`launch/_surfaces.py:1245-1247`），它不动根 logger。INFO 级别不够，不产生。WARNING 和 ERROR 级别够，也没有输出：`omicsclaw.entry` 上挂着一个 `NullHandler`（`entry/assembly.py:193`），而 logging 的兜底处理器只在整条链上一个处理器都没有时才用。照 `oc desktop` 的方式配置日志之后，从 `omicsclaw.entry.turn` 发 INFO、WARNING、ERROR 各一条，stderr 上一条都没有；同一时刻，一个链上没有任何处理器的 logger 发的 WARNING 到了 stderr。第 2 版写的"WARNING 会经兜底处理器打到 stderr"是只量了 `isEnabledFor` 得出的，级别够不等于有输出。审核方上一轮"升到 WARNING 后 Desktop 会打到 stderr"出自同一个推断，它撤回了。
+- 只有 `oc channel` 调了 `basicConfig(level=INFO)`（`launch/_surfaces.py:1373-1376`），根 logger 有了处理器，INFO 会打到 stderr。
+- T15 用 `caplog` 把级别调到了 INFO，所以它是绿的，说明不了默认配置下有输出。
 
-Q5 真实模型验收（§7.3）要不要作为合并的前置条件。
-- 我的建议：要。
-- 审核方的建议：同意要，按重跑 `truncate` 算 3 次请求。§7.3 已经按 3 次写。
+所以这行日志默认只有 channel 部署看得到，而且在 stderr 上，谈不上落盘。它的用处是有人配置了日志来排查时，能看到发出去的历史和存着的不一样是这里造成的。
 
-Q6 开场清理时写的那行 INFO 日志（规则 10）留不留、放哪一级。第 1 版说它是"今后知道这件事发生过几次的唯一落盘记录"，这句话不成立，审核方指出后我自己核了一遍（`SCR/logs/r2_out_11_log_levels.log`；审核方的是 `RV80/logs/rv80_out17_log_levels.log`）：
-- CLI 占着终端时，`terminal_owned_logging` 把 `omicsclaw.entry` 压到 ERROR，根 logger 的处理器换成一个内存缓冲（`entry/cli/_screen.py:179-213`，`launch/_surfaces.py:618`）。INFO 和 WARNING 都不产生。
-- Desktop 用 `uvicorn.Config(log_level="info")`（`launch/_surfaces.py:1245-1247`），它不动根 logger。INFO 不产生；WARNING 会经 logging 的兜底处理器打到 stderr。
-- 只有 `oc channel` 调了 `basicConfig(level=INFO)`（`launch/_surfaces.py:1373-1376`），INFO 会打到 stderr。
-- T15 用 `caplog` 把级别调到了 INFO，所以它是绿的，说明不了默认配置下有记录。
+### 10.2 仍要 owner 定的
 
-所以这行日志在默认配置下只有 channel 部署看得到，而且在 stderr 上，谈不上落盘。它的用处是有人开着日志排查时，能看到"发出去的历史和存着的不一样"是这里造成的。
-- 我的建议：留在 INFO，和旁边 `exchange started`、`exchange ended` 两行同级，文档里不把它说成记录。要统计发生过几次，放进 Q4 的用户提示里做。
-- 审核方的建议：留着无害，但别当记录用。要真的留痕，放进 Q4 的用户提示，或者升到 WARNING；升到 WARNING 后 Desktop 会打到 stderr，CLI 仍然没有。
+没有。
 
-Q7 Anthropic 方言的输出上限表要不要补。事实在 §3 的表：haiku 和 4.7 之后的每个型号，适配器发的都是 8,192，参考文档写的模型上限是 64K 和 128K。补表能把这一侧撞上限的门槛抬高一个数量级，救不了存量，替代不了本计划。要另算的两件事在 §4.1 的 X5：这个数也是上下文预算的输出预留；很大的 `max_tokens` 在阻塞路径上有超时方面的限制。`_model_limits.py` 在 provider 包里，按 `SPEC.md` 是第 4 档。
-- 我的建议：补，另立一个小项，不并进本计划。数字落地前用 Models API 或真实请求核一遍，现在手里只有随 Claude Code 分发的参考。
-- 审核方的看法：补表是 Anthropic 一侧便宜的降频手段，替代不了 0080。
+## 11. 各版之间改了什么
 
-Q8 不算截断的中断要不要另立一项（K8）。Anthropic 文档列了 7 个停止原因，引擎只把 `max_tokens` 当截断。其余的里面，`model_context_window_exceeded` 的说明是 "Claude stopped because it reached the model's context window limit"，`refusal` 是安全分类器拒绝生成。要定的有三件：这两个停止原因带着半截调用时算不算截断；这时半截调用该不该交给工具层；Anthropic 适配器遇到已经回答、参数却解析不了的调用时，是继续本地抛错，还是换一种处理。
-- 我的建议：另立一项，排在本计划之后。`model_context_window_exceeded` 按文档的意思就是输出被切断，我倾向算截断；`refusal` 要先看真实回复的样子再定。三件事里第三件最该先定，因为它决定跨方言续接的会话卡不卡；它改的是适配器，属于第 4 档。
-- 审核方的看法：这不在 0080 的范围里，应当如实记录。
-
-Q9 修完之后"继续"会不声不响地原样重来（K1），是接受到 Q4 落地为止，还是把给模型的那句提示提前到本计划里。提前的话，本计划就多出一句给模型看的文字和一轮措辞对比。
-- 我的建议：接受到 Q4 落地为止。措辞改动按惯例先做真实会话对比，手里的样本是 1 对 1。Q4 的第一件（CLI 显示一句话）不涉及措辞对比，可以紧跟本计划做，它能让用户自己把话说给模型。
-- 审核方的看法：这是 owner 应该知道的后果；它把提示列为 Q4 的第二件，以 K1 为起点。
-
-Q10 重复 id 的语义（规则 2）。三种读法：甲，一条结果回答一个调用，按调用先后认领，第 2 版原型是这样；乙，有一条结果带这个 id，带这个 id 的调用就都算回答了，第 1 版原型是这样；丙，同一个 id 只认第一条结果，`repair_tool_pairs` 今天是这样。产品路径上三种读法只有丙会出错：它会把 `ollama` 下引擎自己写出的"两个空 id、两条结果"拆掉一条。甲和乙在引擎写出的历史上结果相同，差别只在手工造的历史上。
-- 我的建议：甲。清理之后每个留下的调用都有自己的一条结果，T4、T19 和变异 R2、R4、R6 钉着它。
-- 审核方的看法：它指出第 1 版的原型和 `repair_tool_pairs` 在这里判据不同，要求把语义写进规则并钉一条测试，没有表示倾向哪一种。
-
-## 11. 第 1 版到第 2 版改了什么
+### 11.1 第 1 版到第 2 版
 
 推荐的做法、位置和改动的文件没有变。审核方核实成立、这一版没有动的：根因链，X1 加 L3，与 0078 和规划闸门没有顺序依赖，没有绕过清理的模型调用路径，没有误伤，94 处代码位置（`RV80/logs/rv80_out15_locations.log`），第 1 版的 15 处变异。
 
@@ -652,7 +657,7 @@ Q10 重复 id 的语义（规则 2）。三种读法：甲，一条结果回答�
 | P1-1 提议的测试钉不住规则，它的 15 处变异有 9 处存活 | 属实。用它的脚本在第 1 版原型上重跑，同样是 9 处（`r2_out_04_reviewer_mutations_on_r1.log`） | 加 T16 至 T22，改 T3，T4 加 3 种形状。34 处变异重跑，存活 2 处（N8、N13），逐条说明在 §6.2。长会话 `/compact` 不留占位由 T22 钉住 |
 | P1-2 Q6 的前提不成立 | 属实。自己的探针结果和审核方相同（`r2_out_11_log_levels.log`） | Q6 按事实重写；§0、§5.3、K10 里和它有关的说法都改了；T15 的说明加了一句 |
 | P1-3 §4.1 对 X5 的说法会误导 | 属实。表里的数是适配器发的，不是模型的上限；自己空跑了一遍（`r2_out_10_facts_prototype.log` 的 a 段） | §3 加了对照表，§4.1 的 X5 重写，补表列为 Q7 和范围外观察 |
-| P2-1 修完之后任务会原样重来 | 读了 8 次请求的回复原文。"5 次里 5 次认出没写"属实。"X2 下会主动缩小篇幅"我读到的是它意识到风险，没有看到篇幅变小 | 写进 K1，样本量和这处读法的出入都照实写了；列为 Q9 |
+| P2-1 修完之后任务会原样重来 | 读了 8 次请求的回复原文。留着文字的 5 次里没有一次把文件当成写过了（细分见 §11.2）。转给我的意见里说 X2 下模型会主动缩小篇幅，我读到的是它意识到风险，没有看到篇幅变小 | 写进 K1，样本量和这处读法的出入都照实写了；列为 Q9 |
 | P2-2 别的中断方式没有查完 | 属实。自己跑了 5 种停止原因和 Anthropic 一侧（`r2_out_10_facts_today.log` 的 c 段），结果和审核方一致 | K8 重写，写明两个来源和残余的卡死路径；列为 Q8 |
 | P2-3 规则 3 的"文字"没定义空白 | 属实。第 1 版原型会留下只含空白的一轮。依据是第三方的报错原文，没有在真实接口上核实 | 规则 4 写死空白不算文字；原型改成 `content.strip()`；T20、T21、变异 R1、R5 |
 | P2-4 R7 对 `repair_tool_pairs` 的描述不准 | 属实。两个函数只有相邻这一半相同 | §5.1 改了措辞，规则 2 定下一条结果回答一个调用；原型改了；T19、变异 R2、R4、R6；列为 Q10 |
@@ -668,23 +673,53 @@ Q10 重复 id 的语义（规则 2）。三种读法：甲，一条结果回答�
 
 编号的变化：风险从 R 改成 K，因为 R1 至 R6 给了第 2 版的变异。第 1 版的规则 3 现在是规则 4，规则 8、9 现在是规则 9、10。
 
+### 11.2 第 2 版到第 3 版
+
+规则、原型和改动的文件没有变。复核方重跑后和第 2 版一致的：只照条文另写的实现在 20 万段随机历史上和原型差异 0；33 个用例今天 31 红 2 绿、原型全绿；34 处变异 32 处转红，N8、N13 存活，它同意是等价的；§7.2 的三条命令；与 0078 第 3 版原型的三方合并没有冲突。
+
+| 复核意见或裁定 | 核实的结果 | 处理 |
+|---|---|---|
+| 必须改：Desktop 上 WARNING 会打到 stderr，不成立 | 属实。自己跑了一遍，三条记录在 stderr 上一条都没有，对照的那一条有（`r3_out_10_facts.log` 的 b 段） | §10.1 的 Q6 事实、K10、§9 末尾 |
+| owner 的裁定 | | §10 分成已裁定和仍要定的；状态行、摘要、§4.1、§5.1、§7.3、§8、§9 里"待裁定"的说法都按裁定改了 |
+| K1 两处措辞 | 重读了回复原文，属实：4 次明确写出没有调用，`x1_rich_go` 没有提 | K1；去掉了加在转述上的引号 |
+| 四处存活的变异 W1、W2、W7、W8 | 属实，在第 2 版的测试上都存活 | 四处都补了用例：T20 换样本，T4 加两种形状，新增 T23。42 处变异重跑，存活的只剩 N8、N13 |
+| 规则 4 写明空白的定义 | | 规则 4、§5.1 的说明、§6.3 |
+| "要压力到 SOFT 以上才会碰到"不全 | 属实，够长的会话用 `/compact` 也走修复 | §9 末尾 |
+| "`ollama` 预设给空 id"没有人实测 | 属实。代码事实是厂商不给 id 时两个适配器都留空 | §5.1、§9 末尾 |
+| g 段只覆盖 "Nothing to compact" | 属实 | §5.4 另引了审核方的 `r2_out11_compact_texts.log` |
+| "4.7 之后的每个型号"不全 | 属实。自己跑了 `claude-opus-4-5`、`claude-opus-4-1`，也是 8,192（`r3_out_10_facts.log` 的 a 段） | §0、§3 的表、§4.1 |
+| 范围外观察补两句 | 核对了 `entry/assembly.py:711` 和参考文档原文 | §4.1、§9 末尾 |
+| 用 DeepSeek 的回复大小比 Anthropic 的 8,192 | 属实，只能当估计 | §0、§3 |
+| 0078 那边 R11 的改法并进定稿 | 它的第 4 版没有提交，没有读到 | §8 那一条只引用转述的裁定，推断的部分标明没有跑过 |
+
+另外加了 §6.4，写给实现方。
+
 ## 12. 证据清单
 
-目录：`SCR`，即 `/tmp/claude-0/-workspace-dataset-private-zhouwg-data-OmicsClaw/9885f10a-3799-4309-9dfb-0981c166422a/scratchpad/plan-0080/`。`base/` 是 `git archive 5daf5482` 的导出。`proto/` 是第 1 版原型，`r2_proto/` 是第 2 版原型，各由 `apply_prototype.py`、`r2_apply_prototype.py` 改三个文件，原文留在旁边的 `.orig` 里。`proto_mut/`、`r2_proto_mut/` 是做变异用的副本，做完和原型用 `diff -rq` 核对相同。`r2_combo/` 是第 2 版原型加上 0078 第 3 版原型的 `transcript.py`。探针用 `/opt/conda/envs/rapids_singlecell/bin/python` 跑，`PYTHONPATH` 指向要测的那棵树，每份输出的第一行是 `omicsclaw.__file__`。要用 `openai` SDK、uvicorn 或 fastapi 的用 `/opt/conda/envs/OmicsClaw/bin/python`，同样由 `PYTHONPATH` 指向这些树。
+目录：`SCR`，即 `/tmp/claude-0/-workspace-dataset-private-zhouwg-data-OmicsClaw/9885f10a-3799-4309-9dfb-0981c166422a/scratchpad/plan-0080/`。`base/` 是 `git archive 5daf5482` 的导出。`proto/` 是第 1 版原型，`r2_proto/` 是第 2 版原型，各由 `apply_prototype.py`、`r2_apply_prototype.py` 改三个文件，原文留在旁边的 `.orig` 里。`proto_mut/`、`r2_proto_mut/`、`r3_proto_mut/` 是做变异用的副本，做完和原型用 `diff -rq` 核对相同。第 3 版没有新的原型，`r3_proto_mut/` 是 `r2_proto/` 的副本。`r2_combo/` 是第 2 版原型加上 0078 第 3 版原型的 `transcript.py`。探针用 `/opt/conda/envs/rapids_singlecell/bin/python` 跑，`PYTHONPATH` 指向要测的那棵树，每份输出的第一行是 `omicsclaw.__file__`。要用 `openai` SDK、uvicorn 或 fastapi 的用 `/opt/conda/envs/OmicsClaw/bin/python`，同样由 `PYTHONPATH` 指向这些树。
 
-第 2 版（输出都在 `logs/` 下）：
+第 3 版（输出都在 `logs/` 下）：
+
+| 脚本 | 输出 | 内容 |
+|---|---|---|
+| `r3_proposed/test_plan0080_r3_proposed.py` | `r3_out_03_proposed_base.log`、`r3_out_03_proposed_r2_proto.log` | §6.2：T1 至 T23，在今天和原型上 |
+| `r3_mutate.py` | `r3_out_05_mutations.log` | §6.2：42 处变异 |
+| `probes/r3_probe_04_facts.py` | `r3_out_10_facts.log` | §3 的表、Q6：a、b 段 |
+| `r3_proposed/test_plan0080_r3_proposed.py`，在 `r2_combo/` 上 | `r3_out_14_combo_0080_tests.log` | §8：与 0078 第 3 版原型合并后的树 |
+
+第 2 版：
 
 | 脚本 | 输出 | 内容 |
 |---|---|---|
 | `r2_apply_prototype.py` | | 第 2 版原型 |
-| `r2_proposed/test_plan0080_r2_proposed.py` | `r2_out_03_proposed_base.log`、`r2_out_03_proposed_proto.log`、`r2_out_03_proposed_r2_proto.log` | §6.2：T1 至 T22，在今天、第 1 版原型、第 2 版原型上 |
+| `r2_proposed/test_plan0080_r2_proposed.py` | `r2_out_03_proposed_base.log`、`r2_out_03_proposed_proto.log`、`r2_out_03_proposed_r2_proto.log` | 第 2 版的 T1 至 T22，在今天、第 1 版原型、第 2 版原型上。数字已被第 3 版的取代 |
 | `RV80/scripts/rv80_mutate.py`，只读使用 | `r2_out_04_reviewer_mutations_on_r1.log` | §6.2：审核方的 15 处变异在第 1 版上，9 处存活 |
-| `r2_mutate.py` | `r2_out_05_mutations.log` | §6.2：34 处变异 |
+| `r2_mutate.py` | `r2_out_05_mutations.log` | 第 2 版的 34 处变异。已被第 3 版的取代 |
 | `probes/probe_01_stuck.py` | `r2_out_02_stuck_prototype.log` | §5.2：第 2 版原型上的 A 至 D 段 |
 | 现有测试 | `r2_out_07_layers_prototype.log`、`r2_out_09_guards_prototype.log`、`r2_out_12_desktop_baseline.log`、`r2_out_13_desktop_prototype.log` | §7.2 |
 | `probes/r2_probe_02_facts.py` | `r2_out_10_facts_today.log`、`r2_out_10_facts_prototype.log`、`r2_out_11_log_levels.log` | §1.2、§3、§5.1、§5.4、K8、Q6：a 至 g 段 |
 | `probes/r2_probe_03_fuzz.py` | `r2_out_16_fuzz.log` | §5.2、K7：20 万段随机历史 |
-| `diff3 -m`，文件在 `r2_combo_tests/` | `r2_out_14_combo_0080_tests.log`、`r2_out_15_combo_0078_tests.log` | §8：与 0078 第 3 版原型合并 |
+| `diff3 -m`，文件在 `r2_combo_tests/` | `r2_out_14_combo_0080_tests.log`、`r2_out_15_combo_0078_tests.log` | §8：与 0078 第 3 版原型合并。前一份是第 2 版的用例，已被 `r3_out_14` 取代 |
 
 第 1 版仍在引用的：
 
@@ -703,8 +738,8 @@ Q10 重复 id 的语义（规则 2）。三种读法：甲，一条结果回答�
 
 密钥从主检出的 `.env` 读进探针进程，没有打印，没有写进任何文件。真实交换里工具在只读权限模式下运行，工作区在 `SCR/runs/live/`。
 
-只读引用的审核方证据，`RV80/logs/` 下：`rv80_out1_fuzz.log`、`rv80_out5_mutations.log`、`rv80_out7_combo_tests.log`、`rv80_out8_freq_db.log`、`rv80_out9_paths_base.log`、`rv80_out10_tiers_base.log`、`rv80_out12_payload_dry.log`、`rv80_out13_live_a.log`、`rv80_out13_live_b.log`、`rv80_out14_layers_proto.log`、`rv80_out15_locations.log`、`rv80_out16_desktop_proto.log`、`rv80_out17_log_levels.log`、`rv80_out18_real_sessions_identity.log`、`rv80_ledger.txt`，以及 `RV80/scripts/rv80_mutate.py`。
+只读引用的审核方证据，`RV80/logs/` 下：`rv80_out1_fuzz.log`、`rv80_out5_mutations.log`、`rv80_out7_combo_tests.log`、`rv80_out8_freq_db.log`、`rv80_out9_paths_base.log`、`rv80_out10_tiers_base.log`、`rv80_out12_payload_dry.log`、`rv80_out13_live_a.log`、`rv80_out13_live_b.log`、`rv80_out14_layers_proto.log`、`rv80_out15_locations.log`、`rv80_out16_desktop_proto.log`、`rv80_out17_log_levels.log`、`rv80_out18_real_sessions_identity.log`、`rv80_ledger.txt`，以及 `RV80/scripts/rv80_mutate.py`。它第 2 轮的：`r2_out1_fuzz.log`、`r2_out2_proposed_base.log`、`r2_out2_proposed_r2_proto.log`、`r2_out3_mutations.log`、`r2_out4_planner_mutations_rerun.log`、`r2_out5_repair_duplicate_ids.log`、`r2_out6_combo_tests.log`、`r2_out7_r11_source.log`、`r2_out8_desktop_warning.log`、`r2_out8_desktop_stderr.txt`、`r2_out9_anthropic_max_tokens.log`、`r2_out10_level3_r2_proto.log`、`r2_out11_compact_texts.log`，以及 `RV80/scripts/r2_mutate.py`。
 
 更早的既有证据：`RV79/rv_out3_deepseek.log`（r4、r5）、`rv_out2c_truncated.log`、`rv_out2d_force_sqlite.log`，以及计划 0079 的 §2.3、§2.4（`git show docs/plan-0079-first-message-shape:docs/plans/0079-first-message-shape.md`）。计划 0078 第 3 版读的是 `git show docs/plan-0078-r3:docs/plans/0078-fallback-truncation-order.md`，它的原型和提议测试在 `SCR` 同级的 `plan-0078-r3/`（`r3_proto/`、`r3_test_proposed.py`）。
 
-官方文档页面：`api-docs.deepseek.com/api/create-chat-completion`，`platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls`、`…/build-with-claude/handling-stop-reasons`、`…/api/messages/create`。页面是经抓取工具读的，引文以页面为准。模型上限出自 `claude-api` skill 的 `shared/models.md`。只含空白的 text block 那条报错取自搜索结果的摘要，原页面没有逐个打开。
+官方文档页面：`api-docs.deepseek.com/api/create-chat-completion`，`platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls`、`…/build-with-claude/handling-stop-reasons`、`…/api/messages/create`。页面是经抓取工具读的，引文以页面为准。模型上限出自 `claude-api` skill 的 `shared/models.md`，`refusal` 那一句出自同一个 skill 的 `shared/tool-use-concepts.md`。只含空白的 text block 那条报错取自搜索结果的摘要，原页面没有逐个打开。
