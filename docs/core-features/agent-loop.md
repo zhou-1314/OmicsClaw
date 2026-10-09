@@ -226,7 +226,7 @@ yield DONE(RunResult(tuple(history), stop, usage, turns))
 
 `StopReason` **没有** `ERROR` 或 `CANCELLED`：provider 失败以 `ProviderError` 抛出，取消以 `asyncio.CancelledError` 原样传播。所以只要拿到 `RunResult`，就说明循环是自己停下来的。
 
-`_stop_reason_for` **先判断截断**。被截断的 Turn 可能带着从中途断掉的流里累积出来的工具调用，看起来格式正确，但模型其实没说完，执行它比停下更糟。这个 Turn 仍会追加到历史，于是轨迹以"没被回答的工具调用"结尾；从这里恢复的调用方需要自己回答或丢弃这些调用，引擎不会为没执行的调用编造 Observation。
+`_stop_reason_for` **先判断截断**。被截断的 Turn 可能带着从中途断掉的流里累积出来的工具调用，看起来格式正确，但模型其实没说完，执行它比停下更糟。这个 Turn 仍会追加到历史，于是轨迹以"没被回答的工具调用"结尾；从这里恢复的调用方需要自己回答或丢弃这些调用，引擎不会为没执行的调用编造 Observation。entry 层选的是丢弃：下一次 exchange 开场时，`entry/turn.py` 的 `_assemble` 和 `compose` 用 `context.drop_unanswered_calls` 把这些调用从带进来的历史里去掉，那一轮的文字留着（规则见 [context-engineering.md](context-engineering.md) §7）。
 
 `max_turns` 在**每次模型调用之前**检查，`max_turns=1` 恰好允许一次调用；`<= 0` 表示不设上限。
 
@@ -441,7 +441,8 @@ surface（entry/cli、entry/desktop、entry/channel）
 每次用户消息：
   entry.turn.TurnRunner._sequence  （surface 通过 SessionRegistry 提交）
     exchange = _assemble(app, history, session_id=…, state=…)
-       conversation = _Carried(history)                 # 满足 Conversation，只存在内存里
+       carried      = drop_unanswered_calls(history)    # 去掉没被回答的工具调用，去掉了就写一行 INFO 日志
+       conversation = _Carried(carried)                 # 满足 Conversation，只存在内存里
        compactor    = build_compactor(...)              # context.ProgressiveCompactor，满足 HistoryCompactor
        augmentor    = build_augmentor(...)              # 记忆提醒与 planning.PlanInjector 串成一个 TurnAugmentor
     async with app.telemetry.run(...) as scope:
@@ -496,7 +497,7 @@ DONE    RunResult(messages=…, stop_reason=converged, turns=3, usage=Σ, prompt
 | `EngineEventType` 里没有审批 | surface 从引擎事件流无法得知正在等人，只能靠 entry 层的 `TurnEvent` |
 | 阻塞路径无法表达"用量未报告" | `Completion.usage` 不可为 None，阻塞 Turn 的 `TURN_END.usage` 为零值时，可能是免费，也可能是没报告。要解决需要改 `omicsclaw.provider` |
 | 流式重试会重放文本 | 第 2 次尝试从头生成，UI 上会看到文本重新开始 |
-| `TRUNCATED` 的轨迹以没被回答的工具调用结尾 | 调用方如果要从这里恢复，必须自己补上 Observation 或丢弃这些调用 |
+| `TRUNCATED` 的轨迹以没被回答的工具调用结尾 | `RunResult.messages` 和 `TurnOutcome.history` 仍以这些调用结尾，下一次 exchange 成功之前会话库里存的也是。经 `entry/turn.py` 的路径（`run_turn`、`stream_turn`、`TurnRunner`，包括 `/compact`）在下一次 exchange 开场时把它们去掉，不补 Observation；直接调 `engine.exchange` 或 `engine.run` 的调用方仍要自己回答或丢弃。清理不告诉模型和用户上一轮被截断过 |
 | Anthropic 的 thinking 无法回放 | `Message` 没有地方存 thinking 签名，适配器发出请求时会丢掉 `reasoning_content`（见 [provider.md](provider.md)） |
 | "引擎不打日志、不做 I/O"没有测试强制 | `test_engine_is_a_leaf_layer.py` 只检查导入边界 |
 | `_outcome` 依赖 compactor 的具体属性 | R3 形状的缺陷面从三处收敛成一处，但没有消除；`_compact_only` 仍然单独调用 `compose` |

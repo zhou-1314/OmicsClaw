@@ -29,6 +29,14 @@ from omicsclaw.schema import (
     StreamChunkType,
     ToolCall,
 )
+from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]
+    CUT_ARGUMENTS,
+    Finishing,
+    assert_both_dialects_accept,
+    requesting,
+    tool_call,
+    unanswered_calls,
+)
 
 
 class _Scripted:
@@ -162,6 +170,24 @@ def test_a_history_carried_forward_does_not_stack_system_messages(tmp_path):
     assert sum(m.role is Role.SYSTEM for m in second) == 1
 
 
+def test_compose_leaves_out_a_call_nothing_answered(tmp_path):
+    """``prepare`` and ``/compact`` start from what ``compose`` returns."""
+    app = make_app(tmp_path, _Scripted())
+    stuck = (
+        Message.user("write the notes"),
+        requesting(tool_call("w1", "write_file", CUT_ARGUMENTS), text="Writing."),
+    )
+
+    messages, _prompt = compose(app, stuck, "please continue")
+
+    assert messages[0].role is Role.SYSTEM
+    assert messages[1:] == (
+        Message.user("write the notes"),
+        Message.assistant("Writing."),
+        Message.user("please continue"),
+    )
+
+
 # ---- the engine actually receives it ------------------------------------
 
 
@@ -234,6 +260,31 @@ def test_two_turns_in_a_row_keep_exactly_one_system_message(tmp_path):
 
     assert sum(m.role is Role.SYSTEM for m in provider.seen[1]) == 1
     assert provider.seen[1][-1].content == "two"
+
+
+def test_run_turn_accepts_the_history_a_cut_off_run_handed_back(tmp_path):
+    """The history a cut-off run returns still ends on the call it never ran.
+
+    Passed back in, it reaches the model without that call.
+    """
+    cut = requesting(tool_call("w1", "write_file", CUT_ARGUMENTS), text="Writing.")
+    provider = Finishing((cut, "length"), Message.assistant("Done."))
+    app = make_app(tmp_path, provider)
+
+    async def drive():
+        first = await run_turn(app, (), "write the notes", session_id="s1")
+        second = await run_turn(
+            app, first.history, "please continue", session_id="s1"
+        )
+        return first, second
+
+    first, second = asyncio.run(drive())
+
+    assert first.result.stop_reason is StopReason.TRUNCATED
+    assert unanswered_calls(first.history) == ["w1"]
+    assert_both_dialects_accept(provider.seen[-1])
+    assert unanswered_calls(second.history) == []
+    assert second.reply == "Done."
 
 
 def test_the_outcome_reports_which_section_cost_what(tmp_path):

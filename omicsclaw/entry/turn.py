@@ -58,6 +58,7 @@ from omicsclaw.context import (
     ProgressiveCompactor,
     assemble,
     at_least,
+    drop_unanswered_calls,
 )
 from omicsclaw.engine import (
     EngineError,
@@ -114,6 +115,10 @@ class TurnOutcome:
     system message is stripped because :func:`compose` always adds a
     fresh one; keeping it would stack a stale persona beside the current
     one on every exchange.
+
+    After a run that the output ceiling cut off, this still ends on the
+    tool calls that run never executed. Passed back in, they are left
+    out before the next exchange starts.
     """
 
     prompt: AssembledPrompt
@@ -156,11 +161,14 @@ def compose(
     contain a system message of its own; :class:`TurnOutcome.history` is
     already stripped of one.
 
+    Tool calls in *history* that no tool result answers are left out
+    (:func:`~omicsclaw.context.drop_unanswered_calls`).
+
     The render happens here rather than at start-up, which is what makes
     a mid-run edit to any prompt file visible on the next exchange.
     """
     prompt = app.prompt.render()
-    return assemble(prompt, history, user_text), prompt
+    return assemble(prompt, drop_unanswered_calls(history), user_text), prompt
 
 
 async def prepare(
@@ -264,13 +272,28 @@ def _assemble(
 ) -> _Exchange:
     """Everything one exchange needs before the engine is called.
 
+    The exchange starts from *history* without the tool calls that no
+    tool result answers
+    (:func:`~omicsclaw.context.drop_unanswered_calls`). When any are
+    left out, one INFO line gives the session and how many.
+
     *plan_block* decides whether the exchange gets an augmentor at all.
     It is false for the compaction-only path, which never calls a model:
     building the augmentor would restore the session's plan from its
     archive for an exchange that has no turn to remind.
     """
+    carried = drop_unanswered_calls(history)
+    removed = sum(len(m.tool_calls) for m in history) - sum(
+        len(m.tool_calls) for m in carried
+    )
+    if removed:
+        _log.info(
+            "session %s: %d tool call(s) with no result left out of the history",
+            session_id or "-",
+            removed,
+        )
     return _Exchange(
-        conversation=_Carried(tuple(history)),
+        conversation=_Carried(carried),
         compactor=build_compactor(
             app,
             session_id=session_id,
@@ -463,8 +486,10 @@ class TurnRunner:
 
     ``force_compaction=True`` makes the exchange a compaction only: the
     session's history is summarized as a FULL compaction regardless of
-    pressure, no model turn runs, and the history is replaced only when
-    the compaction is written back.
+    pressure and no model turn runs. Tool calls that no tool result
+    answers are left out of the history whatever the compaction does.
+    Beyond that the history is replaced only when the compaction is
+    written back.
 
     **Await it inside a Task of its own.** :meth:`run` binds the tool
     context with :func:`~omicsclaw.tools.use_tool_context`, and
@@ -702,7 +727,11 @@ class TurnRunner:
         messages: tuple[Message, ...],
         prompt: AssembledPrompt,
     ) -> TurnOutcome:
-        """Summarize the session now; keep the result only if written back."""
+        """Summarize the session now; keep the result only if written back.
+
+        *messages* is what :func:`compose` returned, so the history
+        handed back has no unanswered tool call in either case.
+        """
         compacted, record = await compactor.force(messages, self._app.tools_snapshot)
         kept = compacted if record.written_back else messages
         return TurnOutcome(

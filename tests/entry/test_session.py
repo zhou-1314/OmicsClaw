@@ -16,8 +16,10 @@ import pathlib
 
 import pytest
 
-from omicsclaw.context import ContextBudget
+from omicsclaw.context import MISSING_TOOL_RESULT, ContextBudget
+from omicsclaw.engine import StopReason
 from omicsclaw.entry.events import TurnEventType
+from omicsclaw.entry.memory import session_store
 from omicsclaw.entry.session import (
     DEFAULT_ABANDON_GRACE_S,
     InMemorySessionStore,
@@ -40,13 +42,20 @@ from omicsclaw.schema import (
 from omicsclaw.subagent import TASK_TOOL_NAME
 from omicsclaw.tools.context import ApprovalDecision
 from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]
+    CUT_ARGUMENTS,
     Asking,
     Exploding,
+    Finishing,
     Reporting,
     Scripted,
     Sleeping,
+    assert_both_dialects_accept,
     calling,
     make_app,
+    requesting,
+    result_for,
+    tool_call,
+    unanswered_calls,
 )
 
 WAIT_S = 5.0
@@ -864,6 +873,332 @@ def test_a_second_compaction_extends_the_first_instead_of_restarting(tmp_path):
         "the second compaction started from a blank page"
     )
     assert session is not None and session.compaction.summary
+
+
+# ---- a reply cut off by the output ceiling leaves calls nobody answered --
+
+ROUND = requesting(tool_call("c0"))
+"""A complete round: the engine runs ``report`` and records its result."""
+
+DONE = Message.assistant("Done.")
+
+
+def cut_write(text: str = "", reasoning: str = "") -> Message:
+    """A turn whose one ``write_file`` call was cut off inside its arguments."""
+    return requesting(
+        tool_call("w1", "write_file", CUT_ARGUMENTS), text=text, reasoning=reasoning
+    )
+
+
+CUT_OFF_REPLIES = {
+    "first-turn-text-and-cut-call": [
+        (cut_write(text="I will write them now."), "length"),
+    ],
+    "first-turn-cut-call-only": [
+        (cut_write(reasoning="The user wants notes."), "length"),
+    ],
+    "after-a-round-complete-call": [
+        ROUND,
+        (requesting(tool_call("c1"), text="Once more."), "length"),
+    ],
+    "after-a-round-cut-call-only": [ROUND, (cut_write(), "length")],
+    "two-calls-last-one-cut": [
+        (
+            requesting(
+                tool_call("c1"), tool_call("w1", "write_file", CUT_ARGUMENTS)
+            ),
+            "length",
+        ),
+    ],
+    "anthropic-spelling": [
+        (cut_write(text="I will write them now."), "max_tokens"),
+    ],
+}
+"""What the model replied before the ceiling cut it off, one shape per key."""
+
+
+@pytest.mark.parametrize(
+    "replies", CUT_OFF_REPLIES.values(), ids=CUT_OFF_REPLIES.keys()
+)
+def test_the_message_after_a_cut_off_tool_call_reaches_the_model_without_that_call(
+    tmp_path, replies
+):
+    """The request after a truncation is one both API dialects accept."""
+    provider = Finishing(*replies, DONE)
+    _app, sessions = registry_for(
+        tmp_path, provider, tools=[Reporting()], memory=False
+    )
+
+    async def drive():
+        first = await sessions.submit("s1", "write the notes")
+        await drain(first)
+        second = await sessions.submit("s1", "please continue")
+        await drain(second)
+        return first, second
+
+    first, second = asyncio.run(drive())
+
+    assert first.outcome is not None
+    assert first.outcome.result.stop_reason is StopReason.TRUNCATED
+    sent = provider.seen[-1]
+    assert sent[-1] == Message.user("please continue")
+    assert unanswered_calls(sent) == []
+    assert_both_dialects_accept(sent)
+    assert second.terminal == "converged"
+    assert unanswered_calls(sessions.session("s1").history) == []
+
+
+def test_a_stored_session_that_ends_on_an_unanswered_call_works_after_a_restart(
+    tmp_path,
+):
+    """A row stored with an unanswered call at its end needs no migration.
+
+    The next message goes through, and the text of the cut-off turn is
+    still in the history that is stored afterwards.
+    """
+    stuck = (
+        Message.user("write the notes"),
+        ROUND,
+        result_for("c0"),
+        cut_write(text="Now the notes."),
+    )
+
+    async def write_the_row():
+        app = make_app(tmp_path, Scripted())
+        try:
+            await session_store(app.memory).save(
+                Session(session_id="s1", history=stuck)
+            )
+        finally:
+            await app.aclose()
+
+    asyncio.run(write_the_row())
+
+    provider = Finishing(DONE)
+    app, sessions = registry_for(tmp_path, provider, tools=[Reporting()])
+
+    async def drive():
+        try:
+            loaded = await sessions.load_session("s1")
+            handle = await sessions.submit("s1", "please continue")
+            await drain(handle)
+            stored = await session_store(app.memory).load("s1")
+            return loaded, handle, stored
+        finally:
+            await app.aclose()
+
+    loaded, handle, stored = asyncio.run(drive())
+
+    assert unanswered_calls(loaded.history) == ["w1"], "the row is not the stuck shape"
+    assert handle.terminal == "converged"
+    assert_both_dialects_accept(provider.seen[-1])
+    assert unanswered_calls(stored.history) == []
+    assert [
+        m.content for m in stored.history if m.role == Role.ASSISTANT and m.content
+    ] == ["Now the notes.", "Done."]
+
+
+def test_compacting_a_session_that_ends_on_an_unanswered_call_stores_it_without_the_call(
+    tmp_path,
+):
+    """``/compact`` on a session too short to summarize still removes the call."""
+    provider = Finishing((cut_write(text="Writing."), "length"))
+    _app, sessions = registry_for(
+        tmp_path, provider, tools=[Reporting()], memory=False
+    )
+
+    async def drive():
+        await drain(await sessions.submit("s1", "write the notes"))
+        before = sessions.session("s1").history
+        handle = await sessions.compact("s1")
+        await drain(handle)
+        return before, handle
+
+    before, handle = asyncio.run(drive())
+
+    assert unanswered_calls(before) == ["w1"]
+    assert handle.terminal == "converged"
+    assert sessions.session("s1").history == (
+        Message.user("write the notes"),
+        Message.assistant("Writing."),
+    )
+
+
+def test_a_session_with_every_call_answered_is_sent_as_it_was_stored(tmp_path):
+    """A history with nothing to remove reaches the model as the same objects."""
+    provider = Finishing(
+        requesting(tool_call("c0"), tool_call("c1"), text="Two at once."), DONE, DONE
+    )
+    _app, sessions = registry_for(
+        tmp_path, provider, tools=[Reporting()], memory=False
+    )
+
+    async def drive():
+        await drain(await sessions.submit("s1", "report twice"))
+        stored = sessions.session("s1").history
+        await drain(await sessions.submit("s1", "thanks"))
+        return stored
+
+    stored = asyncio.run(drive())
+
+    sent = provider.seen[-1][1 : 1 + len(stored)]
+    assert [m.role for m in stored] == [
+        Role.USER,
+        Role.ASSISTANT,
+        Role.TOOL,
+        Role.TOOL,
+        Role.ASSISTANT,
+    ]
+    assert len(sent) == len(stored)
+    assert all(got is given for got, given in zip(sent, stored))
+
+
+def test_a_cut_off_exchange_still_reports_the_turn_as_the_model_wrote_it(tmp_path):
+    """The run's own record keeps the cut-off call and its arguments.
+
+    Only the history carried into the next exchange loses the call.
+    """
+    cut = cut_write(text="Writing.")
+    provider = Finishing((cut, "length"))
+    _app, sessions = registry_for(
+        tmp_path, provider, tools=[Reporting()], memory=False
+    )
+
+    async def drive():
+        handle = await sessions.submit("s1", "write the notes")
+        await drain(handle)
+        return handle
+
+    handle = asyncio.run(drive())
+
+    assert handle.terminal == "converged"
+    assert handle.outcome.result.stop_reason is StopReason.TRUNCATED
+    assert handle.outcome.result.messages[-1] == cut
+    assert handle.outcome.result.messages[-1].tool_calls[0].arguments == CUT_ARGUMENTS
+
+
+def test_leaving_a_call_out_is_logged_with_the_session_and_the_count(
+    tmp_path, caplog
+):
+    """One INFO line, on the exchange that left calls out, counting calls.
+
+    Three exchanges run and only the second starts from a history with
+    unanswered calls. That turn has two of them, so a count of messages
+    would say one.
+    """
+    provider = Finishing(
+        (
+            requesting(
+                tool_call("c1"),
+                tool_call("w1", "write_file", CUT_ARGUMENTS),
+                text="Writing.",
+            ),
+            "length",
+        ),
+        DONE,
+        DONE,
+    )
+    _app, sessions = registry_for(
+        tmp_path, provider, tools=[Reporting()], memory=False
+    )
+
+    async def drive():
+        await drain(await sessions.submit("s1", "write the notes"))
+        await drain(await sessions.submit("s1", "please continue"))
+        await drain(await sessions.submit("s1", "thanks"))
+
+    with caplog.at_level("INFO", logger="omicsclaw.entry.turn"):
+        asyncio.run(drive())
+
+    lines = [
+        (record.levelname, record.getMessage())
+        for record in caplog.records
+        if "left out of the history" in record.getMessage()
+    ]
+    assert lines == [
+        (
+            "INFO",
+            "session s1: 2 tool call(s) with no result left out of the history",
+        )
+    ]
+
+
+def test_compacting_a_long_session_after_a_cut_off_turn_stores_no_placeholder(
+    tmp_path,
+):
+    """A summary that succeeds does not answer the cut-off call with a placeholder.
+
+    The history that is written back ends on the text of the cut-off turn.
+    """
+    app = make_app(
+        tmp_path, Scripted(), tools=[Reporting()], memory=False, subagents=False
+    )
+    attached = attach_sessions(dataclasses.replace(app, summarizer=Canned()))
+    sessions = attached.sessions
+    assert sessions is not None
+    rounds: list[Message] = [Message.user("write the notes " + "q" * 300)]
+    for index in range(8):
+        rounds.append(requesting(tool_call(f"r{index}")))
+        rounds.append(result_for(f"r{index}", "reported " + "r" * 300))
+    stuck = (*rounds, cut_write(text="Now the notes."))
+
+    async def drive():
+        await sessions._store.save(Session(session_id="s1", history=stuck))
+        handle = await sessions.compact("s1")
+        await drain(handle)
+        return handle
+
+    handle = asyncio.run(drive())
+    stored = sessions.session("s1").history
+
+    assert handle.terminal == "converged"
+    assert handle.outcome.compaction.written_back, handle.outcome.compaction
+    assert handle.outcome.compaction.summarized > 0
+    assert unanswered_calls(stored) == []
+    assert not [m for m in stored if m.content == MISSING_TOOL_RESULT]
+    assert stored[-1] == Message.assistant("Now the notes.")
+
+
+def test_a_stored_session_with_an_unanswered_call_in_its_middle_is_cleaned_too(
+    tmp_path,
+):
+    """An unanswered call is removed wherever it sits in the stored history.
+
+    A backend that accepts such a history lets the session go on past
+    the cut-off turn, so the history no longer ends on the call.
+    """
+    went_on = (
+        Message.user("write the notes"),
+        cut_write(text="Writing."),
+        Message.user("hello?"),
+        Message.assistant("Still here."),
+    )
+    provider = Finishing(DONE)
+    _app, sessions = registry_for(
+        tmp_path, provider, tools=[Reporting()], memory=False
+    )
+
+    async def drive():
+        await sessions._store.save(Session(session_id="s1", history=went_on))
+        handle = await sessions.submit("s1", "please continue")
+        await drain(handle)
+        return handle
+
+    handle = asyncio.run(drive())
+    stored = sessions.session("s1").history
+
+    assert handle.terminal == "converged"
+    assert unanswered_calls(provider.seen[-1]) == []
+    assert_both_dialects_accept(provider.seen[-1])
+    assert [m.content for m in stored] == [
+        "write the notes",
+        "Writing.",
+        "hello?",
+        "Still here.",
+        "please continue",
+        "Done.",
+    ]
+    assert unanswered_calls(stored) == []
 
 
 # ---- trap 9: the last observer leaving, not any iterator breaking -------
