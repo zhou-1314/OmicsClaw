@@ -515,10 +515,12 @@ def _request_of_oldest_reply(
 | | 第 3 版 | 第 4 版 | 原因 |
 |---|---|---|---|
 | 高于目标 | 5,375、6,328、8,442 | 5,366、6,325、8,427 | 9、3、15 个结果在第 3 版的规则下只因为那条独自留着的请求才高于目标 |
-| 其中丢到底线 | 4,825、6,006、7,052 | 4,825、6,006、7,054 | 第三个生成器里有 2 个结果换了归类，原因没有逐例核对 |
+| 其中丢到底线 | 4,825、6,006、7,052 | 4,825、6,006、7,054 | 第三个生成器里有 2 个结果去掉那条独自留着的请求以后正好是底线，仍因为截断造成的占位高于目标，从最后一类换到这一类 |
 | 其中只多出输入里未应答调用的占位 | 550、322、336 | 541、319、332 | 同第一行 |
-| 其中只多出占位、有截断造成的 | 0、0、1,054 | 0、0、1,041 | 同第一行 |
+| 其中只多出占位、有截断造成的 | 0、0、1,054 | 0、0、1,041 | 少的 13 个里 11 个同第一行，2 个换到了"丢到底线"那一类 |
 | 第 5 行那一类的截断结果 | 0、0、11,866 | 0、0、11,876 | 判定从 `_answers_owed_by` 换成按位置。多出的 10 个按位置算停在一轮中间，`_answers_owed_by` 数出来是 0，它们都没有截断造成的占位 |
+
+第三个生成器的归类变化是 `r4_probe_reclassified.py` 重放同一串对话、把每个结果在两版规则下各归一次类比出来的：17 个结果换了类，4 个和 11 个不再高于目标，2 个换到底线那一类，每一个的定稿视图都只比第 3 版的视图少了请求（`r4_out_34_reclassified.log`）。
 
 截断的结果数、第一轮不是 user 的次数、结果比输入大的次数和 tail 里孤儿结果的次数都没有变。第 3 版相对第 2 版的三处差别仍见 `r3_out_23_r2_to_r3.log`。
 
@@ -993,6 +995,7 @@ EMERGENCY 那一种不变。EMERGENCY 不经过 `fit_to_budget`，探针里三�
 | `r4_apply_prototype.py`、`r4_check_plan_block.py` | `r4_out_24_plan_block.log` | 把定稿规则写进 `r4_proto/`；核对 §4.3 的代码块和写进去的文本相同（原型） |
 | `r4_probe_fuzz.py` | `r4_out_01_fuzz_own.log`、`r4_out_01_fuzz_rv3.log` | §4.4：三种写法、R11 改法的两种写法、对第 3 版规则的差别、性质表，六个生成器（原型） |
 | `r4_probe_order.py` | `r4_out_33_order.log` | §4.4：C 族里带着输入自己修复会删掉的结果的 44 个截断结果（原型） |
+| `r4_probe_reclassified.py` | `r4_out_34_reclassified.log` | §4.4：第三个生成器上高于目标的结果在两版规则下各属哪一类（原型） |
 | `r4_probe_equivalent.py` | `r4_out_20_equivalent.log` | §4.3：去掉以后结果不变的三处（原型） |
 | `r4_probe_scenarios.py`、`r4_probe_sequence.py`、`r4_probe_gate.py`、`r4_probe_assembly.py`，由 `r4_port_probes.py` 从第 3 版的探针生成 | `r4_out_02_scenarios.log`、`r4_out_06_sequence.log`，各带 `.json`；`r4_out_07_gate.log`；`r4_out_13_assembly.log` | §3.2 至 §3.4、§7、§5.2 的 T18：定稿规则和第 3 版的规则各占一行 |
 | `r4_probe_edges.py` | `r4_out_04_edges.log` | §4.1、§4.2：E1 至 E13，逐条和第 3 版的规则比 |
@@ -1007,7 +1010,7 @@ EMERGENCY 那一种不变。EMERGENCY 不经过 `fit_to_budget`，探针里三�
 | `r4_probe_duplicate_ids.py` | `r4_out_32_duplicate_ids.log`、`r4_out_32b_duplicate_ids_final.log` | §8 末尾：调用 id 相同时修复补的占位 |
 | `r4_check_figures.py` | | 核对正文引用的主要数字都在输出里 |
 
-复制来的：`r4_common.py` 是 `r3_common.py` 的副本，只放宽了路径检查；`r4_rv3_copy/rv3_common.py` 是复核方第 3 轮的生成器，只把路径检查换成这边的；`r4_rv3_copy/rv3_test_extra.py` 是复核方的候选测试，原样。`r4_plan_0080_tip.md` 和 `r4_plan_0080_f317fa37.md` 是从分支上取出来的计划 0080，核对 R11 里那一句用。`r4_plan_sec*.md`、`r4_edit_*.py`、`r4_extract_section.py`、`r4_splice_plan.py`、`r4_build_tail_sections.py` 是写这份文档用的草稿和脚本，`r4_wait_for.py` 只用来等后台的探针跑完。
+复制来的：`r4_common.py` 是 `r3_common.py` 的副本，只放宽了路径检查；`r4_rv3_copy/rv3_common.py` 是复核方第 3 轮的生成器，只把路径检查换成这边的；`r4_rv3_copy/rv3_test_extra.py` 是复核方的候选测试，原样。`r4_plan_0080_tip.md` 和 `r4_plan_0080_f317fa37.md` 是从分支上取出来的计划 0080，核对 R11 里那一句用。`r4_plan_sec*.md`、`r4_edit_*.py`、`r4_extract_section.py`、`r4_splice_plan.py`、`r4_build_tail_sections.py` 是写这份文档用的草稿和脚本。`r4_wait_for.py`、`r4_find_message.py`、`r4_find_handback.py` 和两份 `r4_commit_message*.txt` 也在目录里，都不是证据：等后台的探针、回看派发的原文、存提交说明用的。
 
 第 4 版没有重跑、正文仍引用第 3 版输出的：基线上的两条命令（`r3_out_29`、`r3_out_30`）；§1.2、§1.3、§1.4、§1.6 的现状（`r3_out_26`、`r3_out_27`、`r3_out_28`）；T18 的 `trigger_tokens` 量法和它在今天代码上的结果（`r3_out_12_assembly_measure.log`、`r3_out_14_eval_today.log`）；2f 相对第 2 版规则的差别（`r3_out_01_fuzz.log`、`r3_out_23_r2_to_r3.log`）；较早的交换都有答复时的对照（`r3_out_22_lone_request.log`）；FULL 档在基线上的重现（`r3_out_19_full_tier.log`）。这些说的是没有变的基线，或者没有变的那部分规则。
 
