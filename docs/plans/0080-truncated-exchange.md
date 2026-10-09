@@ -1,10 +1,10 @@
 # 计划 0080：被输出上限截断的交换留下没被回答的工具调用，会话此后卡死
 
-**状态**：定稿，第 3 版（2026-10-09）。第 2 版（提交 `f317fa37`）经同一审核方复核，owner 2026-10-09 批准了计划，并就 Q1 至 Q10 作了裁定（§10）。这一版把裁定和复核意见并进正文。按裁定，实现在定稿后派发。本计划没有改生产代码和测试。
+**状态**：已实现，待独立审核和 owner 下令合并（2026-10-09）。实现在分支 `fix/unanswered-tool-calls` 上，没有合并，没有 push；提交、与计划的差异和验证结果见 §13。计划是定稿的第 3 版：第 2 版（提交 `f317fa37`）经同一审核方复核，owner 2026-10-09 批准了计划，并就 Q1 至 Q10 作了裁定（§10），这一版把裁定和复核意见并进正文。§0 至 §12 是派发实现之前写的，没有随实现改动。
 
 **基线**：`main` 的 `5daf5482`，行号以它为准，实施时按符号名重新定位。
 
-**编号**：环节 C1 至 C9，入口 P1 至 P8，处理方式 X1 至 X5，位置 L1 至 L6，测试 T1 至 T23，变异 M1 至 M15（第 1 版自己的）、N1 至 N15（审核方第 1 轮的）、R1 至 R6（第 2 版新加的）、W1 至 W8（审核方第 2 轮的），真实请求 V1 至 V10，风险 K1 至 K10，问题 Q1 至 Q10（都已裁定）。
+**编号**：环节 C1 至 C9，入口 P1 至 P8，处理方式 X1 至 X5，位置 L1 至 L6，测试 T1 至 T23，变异 M1 至 M15（第 1 版自己的）、N1 至 N15（审核方第 1 轮的）、R1 至 R6（第 2 版新加的）、W1 至 W8（审核方第 2 轮的），真实请求 V1 至 V10，风险 K1 至 K10，问题 Q1 至 Q10（都已裁定）。实施记录（§13）另有测试 T24 至 T29、变异 S1 至 S13、真实请求 V11 至 V13。
 
 **证据**：探针、原型和输出在 `/tmp/claude-0/-workspace-dataset-private-zhouwg-data-OmicsClaw/9885f10a-3799-4309-9dfb-0981c166422a/scratchpad/plan-0080/`，下面记作 `SCR`，第 2 版新做的以 `r2_` 开头，第 3 版新做的以 `r3_` 开头，清单见 §12。审核方的脚本和输出在同级的 `review-plan-0080/`，记作 `RV80`，只读引用；它第 2 轮的文件名也以 `r2_` 开头。第 1 版对真实 DeepSeek 接口发了 10 次请求，逐条记在 `SCR/logs/ledger.txt`，其中 2 次没有得到信息；第 2、3 版没有再发。审核方另发了 8 次（`RV80/logs/rv80_ledger.txt`）。本机没有 Anthropic 凭据，Anthropic 一侧的结论只有文档和本仓库适配器代码两种依据，文中逐处标明。官方文档是 2026-10-09 抓取的。更早的既有证据在 `/tmp/claude-0/-workspace-dataset-private-zhouwg-data-OmicsClaw/58ae2e35-0792-4055-933c-1cfb79c727a6/scratchpad/review-plan-0079/`，记作 `RV79`。各版之间改了什么见 §11。
 
@@ -743,3 +743,139 @@ Q6 的事实。第 1 版说这行日志是"今后知道这件事发生过几次�
 更早的既有证据：`RV79/rv_out3_deepseek.log`（r4、r5）、`rv_out2c_truncated.log`、`rv_out2d_force_sqlite.log`，以及计划 0079 的 §2.3、§2.4（`git show docs/plan-0079-first-message-shape:docs/plans/0079-first-message-shape.md`）。计划 0078 第 3 版读的是 `git show docs/plan-0078-r3:docs/plans/0078-fallback-truncation-order.md`，它的原型和提议测试在 `SCR` 同级的 `plan-0078-r3/`（`r3_proto/`、`r3_test_proposed.py`）。
 
 官方文档页面：`api-docs.deepseek.com/api/create-chat-completion`，`platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls`、`…/build-with-claude/handling-stop-reasons`、`…/api/messages/create`。页面是经抓取工具读的，引文以页面为准。模型上限出自 `claude-api` skill 的 `shared/models.md`，`refusal` 那一句出自同一个 skill 的 `shared/tool-use-concepts.md`。只含空白的 text block 那条报错取自搜索结果的摘要，原页面没有逐个打开。
+
+## 13. 实施记录
+
+2026-10-09，实现方写。分支 `fix/unanswered-tool-calls` 从计划分支的 tip `fe684b26` 开出，`fe684b26` 的代码和 `main` 的 `5daf5482` 相同。脚本和日志在 `SCR` 同级的 `impl-0080/`，下面记作 `IMP`，日志在 `IMP/logs/`。`SCR` 里的东西只读使用。探针复制到 `IMP/probes/` 再跑，内容没有改，因为 `p80_live.py` 把请求记在自己旁边的 `logs/ledger.txt` 里。
+
+### 13.1 提交和文件
+
+| 提交 | 内容 |
+|---|---|
+| `c17a9062` `fix(entry): drop unanswered tool calls when an exchange opens` | `drop_unanswered_calls`，`compose` 和 `_assemble` 的两处调用，日志，docstring，T1 至 T23，公开面清单，三份 core-features 文档 |
+| `4e4a74d3` `test(context): pin six mutations of the unanswered-call cleaning` | 追加的 6 个用例 T24 至 T29（§13.5） |
+| `17700f03` `test(context): say where plain string roles come from` | T7 的 docstring 一行（§13.8 第 6 条） |
+| 本提交 | 这一节、状态行、编号行 |
+
+动过的文件：
+
+- 生产代码：`omicsclaw/context/transcript.py`、`omicsclaw/context/__init__.py`、`omicsclaw/entry/turn.py`；`omicsclaw/entry/session.py` 只改了 `SessionRegistry.compact` 的 docstring。
+- 测试：`tests/context/test_transcript.py`、`tests/context/test_context_is_a_leaf_layer.py`、`tests/entry/test_session.py`、`tests/entry/test_turn.py`、`tests/entry/test_turn_runner.py`。
+- 文档：`docs/core-features/agent-loop.md`、`context-engineering.md`、`progressive-compactor.md`，和本文件。
+
+`omicsclaw/engine/`、`omicsclaw/provider/`、`omicsclaw/memory/`、`repair_tool_pairs`、`entry/cli/`、`entry/channel/` 没有动。`CHANGELOG.md` 没有写，留给合并时。
+
+### 13.2 与计划的差异
+
+1. 函数体用的是 §5.2 原型的写法，没有另写。docstring 重写了：原型写的 "Both API dialects reject a request that carries it" 改成 DeepSeek 返回 400、Anthropic 的文档写着同样的要求，因为 Anthropic 一侧没有在真实接口上核实（K3）；另外写明了空白按 `str.strip`、`is_error` 的结果算回答、返回的是新 tuple、为什么不用 `repair_tool_pairs` 的占位。
+2. §6.1 没有列的一处 docstring：`transcript.py` 的模块 docstring 写着 "Nothing here truncates a message"，新函数会从一条消息上去掉调用，所以在它末尾加了一段，说明这是本模块唯一改动单条消息的函数，去掉的是整个调用。§6.1 列的六处（`compose`、`_assemble`、`TurnOutcome.history`、`TurnRunner`、`_compact_only`、`SessionRegistry.compact`）都改了。
+3. 测试落地时和草稿不一样的地方：
+   - 草稿经模块属性取函数，`tests/context/test_transcript.py` 按这个文件的惯例直接 import。所以在没改生产代码时，这个文件是整个收集失败，逐条的红绿是用一份只改了 import 的副本量的（`IMP/make_red_copy.py`，§13.3）。
+   - 两个测试文件共用的东西放在 `tests/entry/test_turn_runner.py`：`Finishing`、`CUT_ARGUMENTS`、`tool_call`、`requesting`、`result_for`、`unanswered_calls`、`assert_both_dialects_accept`。`tests/context/test_transcript.py` 里是另一套带下划线的私有帮助函数，没有跨到 `tests/entry` 去 import。
+   - `unanswered_calls` 和 `assert_both_dialects_accept` 按规则 2 一条结果对一个调用来数，草稿按"有没有带这个 id 的结果"数。在这些测试的输入上两种数法结果相同。
+   - T15 多断言了日志级别是 INFO。草稿靠 `caplog` 的级别挡住 DEBUG，把日志写成 WARNING 时测不出来（S2）。
+   - T13、T14 用 `tests/entry/test_turn.py` 自己的 `make_app`（默认工具表，memory 打开），草稿用的是 `test_turn_runner.py` 的。T7 用 `dataclasses.replace` 把角色换成 `str`，和同一个文件里 `repair_tool_pairs` 的测试做法相同。T11 的断言从"切片相等加逐个 `is`"改成"长度相等加逐个 `is`"。
+   - 测试的 docstring 里没有写 T 编号，编号和测试名的对应以 §6.2 和 §13.5 的表为准。
+4. 追加了 6 个用例（T24 至 T29），原因和对应的变异在 §13.5。
+5. 文档比 §6.3 多写的：`progressive-compactor.md` §12 的那一条把 Channel 也写上了，因为 `entry/channel/commands/builtins.py` 的 `_describe_compaction` 有同样的两句话，§5.4 只提了 CLI。两处的文字本身都没有改。`context-engineering.md` §7 除了表里的一行，另加了一段规则；§8.2 的要点加了一条。
+6. 公开面清单那条测试，除了清单里加一个名字，docstring 加了一句。
+
+规则条文和 §6.2 的测试表之间，没有发现互相矛盾的地方。条文里写了而表里的测试没有钉住的有四处：规则 2 的两处（S3、S9），规则 3 的一处（S5），规则 4 的一处（S4）。另外 S1 对应的是 `transcript.py` 模块自己的约定（返回值都是新 tuple，不是调用方的列表），S10、S13 对应的是规则 9 在 `stream_turn` 这条路径上。都补了用例，见 §13.5。
+
+### 13.3 先红后绿
+
+| 步骤 | 结果 | 日志 |
+|---|---|---|
+| 草稿 `SCR/r3_proposed/test_plan0080_r3_proposed.py` 原样在 `fe684b26` 上 | 34 failed、3 passed。3 条里有 1 条是打印 `omicsclaw.__file__` 的 | `01_draft_on_unchanged_tree.log` |
+| 落地的三个测试文件，生产代码没改 | `tests/context/test_transcript.py` 收集失败：`ImportError: cannot import name 'drop_unanswered_calls'` | `02_landed_tests_before_the_change.log` |
+| 同上，`test_transcript.py` 换成只改了 import 的副本 | 36 个新用例 34 红 2 绿，绿的是 T11、T12。红的 21 条是函数不存在，另外 13 条是未答调用到了模型或存进了历史、压缩给它补了占位、没有那行日志。日志里多出的 1 条 passed 是 `-k` 顺带选中的既有测试 `test_a_tool_call_left_unanswered_gets_a_placeholder_result` | `03_landed_tests_before_the_change_per_case.log` |
+| `c17a9062` | 36 个新用例和公开面清单那一条都绿 | `04_landed_tests_after_the_change.log` |
+| `4e4a74d3` | 新用例 42 个，都绿 | `21_mutations_on_4e4a74d3.log` 的第 2 行 |
+
+### 13.4 第 3 档的三条命令和两个探针
+
+基线是 `git archive fe684b26` 的导出（`IMP/base/`），分支是这个 worktree。每份日志的开头是 `omicsclaw.__file__`。
+
+| 命令 | 基线 | `c17a9062` | `4e4a74d3` |
+|---|---|---|---|
+| 第一条 | 2842 passed、11 skipped、26 deselected、3 xfailed，114 秒 | 2878 passed，其余相同，115 秒 | 2884 passed，其余相同，114 秒 |
+| 第二条 | 842 passed、14 skipped、1 deselected、1 xpassed，85 秒 | 相同，87 秒 | 没有重跑 |
+| 第三条 | 566 passed、3 skipped，8 秒 | 相同，9 秒 | 没有重跑 |
+
+基线的三个数和 §7.2 写的一致。第一条多出来的 36 和 42 就是新增的用例。日志是 `10_baseline_*.log`、`11_branch_c17a9062_*.log`、`12_branch_4e4a74d3_1_layers.log`。第二、三条没有在 `4e4a74d3` 上重跑：`4e4a74d3` 和 `17700f03` 只改了 `tests/context/test_transcript.py` 和 `tests/entry/test_turn.py`，这两条命令不收集它们。`17700f03` 之后只跑了 `tests/context/test_transcript.py`，62 passed。`tests/entry/test_cli_repl.py::test_an_approval_nobody_answered_does_not_outlive_its_exchange` 靠 `asyncio.sleep(0)` 让出执行，机器负载高时在别的分支上偶发失败过，在这几次里都过了。
+
+`probe_01_stuck.py` 的 A 至 D 段在 `4e4a74d3` 上：27 次交换都是 `converged`，被替身后端拒绝的调用 0 次，`failed` 0 次，D 段没有抛错，Anthropic 请求都组得出来。输出除第一行外和 `SCR/logs/r2_out_02_stuck_prototype.log` 逐行相同（`30_stuck_on_branch.log`）。
+
+`r2_probe_03_fuzz.py`，20 万段，种子 80，在 `4e4a74d3` 上：152,960 段被改动，十行检查都是 0，`repair_tool_pairs` 之后仍补占位的 1,271 段都是同一轮里有重复 id 的，和 `SCR/logs/r2_out_16_fuzz.log` 的数字相同（`31_fuzz_on_branch.log`）。
+
+### 13.5 变异和追加的用例
+
+变异在 `git archive` 的导出上做（`IMP/mut/`），不在 worktree 里做，脚本是 `IMP/mutate_landed.py`，每处做完按 SHA-256 核对恢复。测试只选新增的用例。
+
+计划的 42 处，在 `c17a9062` 和 `4e4a74d3` 上各跑一遍，结果相同：40 处转红，存活的是 N8、N13。每处转红的测试和 §6.2 的表一致，`4e4a74d3` 上多出来的是追加的用例。
+
+自选的 13 处。S1 至 S10 先在 `c17a9062` 上跑，6 处存活；补了用例之后和 S11 至 S13 一起在 `4e4a74d3` 上跑，13 处都转红。
+
+| 变异 | `c17a9062` | `4e4a74d3` |
+|---|---|---|
+| S1 没有可去掉的东西时，交回的是调用方自己的那个序列 | 存活 | T28 |
+| S2 日志写在 WARNING | T15 | T15 |
+| S3 不带工具名的结果不算回答 | 存活 | T24 |
+| S4 去空的一轮只在它是最后一条消息时才去掉 | 存活 | T27 |
+| S5 留下来的已答调用顺序颠倒 | 存活 | T26 |
+| S6 `/compact` 没有写回时交回原样的历史 | T10 | T10 |
+| S7 日志行不带会话 id | T15 | T15 |
+| S8 留着文字的一轮连已答调用也丢掉 | T3、T21 | T3、T21 |
+| S9 空 id 的调用一律算已回答 | 存活 | T25 |
+| S10 交换只在有 session id 时才清理 | 存活 | T29 |
+| S11 每次交换都写那行日志 | 没有跑 | T15 |
+| S12 日志数的是丢了调用的轮数 | 没有跑 | T15 |
+| S13 `stream_turn` 用原样的历史建交换 | 没有跑 | T29 |
+
+追加的用例。前五个在 `tests/context/test_transcript.py`，T29 在 `tests/entry/test_turn.py`：
+
+| 编号 | 测试 | 钉住的 |
+|---|---|---|
+| T24 | T4 的第 10 种形状 `answered-by-a-compaction-placeholder` | 规则 2：结果只看 id。`repair_tool_pairs` 补的占位不带工具名，它回答的调用要留着 |
+| T25 | `test_an_unanswered_call_with_an_empty_id_is_removed` | 规则 2：空 id 的调用没有结果时照样去掉。厂商不给 id 时两个适配器都把 id 留空 |
+| T26 | `test_the_answered_calls_of_a_turn_keep_their_order` | 规则 3：留下来的调用保持原来的先后 |
+| T27 | `test_a_turn_emptied_in_the_middle_of_a_conversation_is_removed_too` | 规则 4：整轮去掉不看位置，前后两条请求变成相邻 |
+| T28 | `test_the_cleaned_conversation_is_a_tuple_that_is_not_the_callers_list` | 没有可去掉的东西时返回的也是新 tuple。`_Carried` 以前拿到的是 `tuple(history)` |
+| T29 | `test_streaming_a_turn_leaves_out_a_call_nothing_answered` | 规则 9：`stream_turn` 这条路径，不带 session id；规则 10 的日志在没有 id 时写的是 `session -:` |
+
+S3 的后果比别的几处重。把不带工具名的结果当成不算回答，会把压缩补过占位的调用去掉，留下一条找不到调用的占位结果。按 `repair_tool_pairs` 的 docstring，这是 Anthropic 会拒绝的另一种不配对；在真实接口上没有测过。
+
+日志是 `20_mutations_on_c17a9062.log` 和 `21_mutations_on_4e4a74d3.log`。
+
+### 13.6 真实模型验收
+
+按 §7.3 重跑 `live_02_e2e.py`（复制到 `IMP/probes/`，没有改），对真实 DeepSeek 发了 3 次请求，一次模型调用就是一次请求，逐条记在 `IMP/logs/ledger.txt`。分支一侧跑的是 `4e4a74d3`，它的 `omicsclaw/` 和 `c17a9062` 相同。
+
+| 编号 | 请求 | 返回 | 交换和存下的历史 |
+|---|---|---|---|
+| V11 | `truncate`，基线树，`max_tokens=2000`，`su`，11 个工具 | 200，`finish_reason='length'`，`in=15176 out=2000`。正文为空，思考 1,292 字符，一个 `write_file` 调用，参数 9,274 字符、解析不了 | `converged`、`stop=truncated`，存下 `U a1!~` |
+| V12 | `continue`，基线树，V11 工作区的一份副本，`suau` | 400：`An assistant message with 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'. (insufficient tool messages following tool_calls message)` | `failed`，历史不变 |
+| V13 | `continue`，实施分支，V11 工作区的另一份副本，`suu` | 200，`finish_reason='stop'`，`in=15169 out=37`，正文 2 个字符 | `converged`，存回去的是 `U U A` |
+
+三次都和 §7.3 的预期一致。另外只读打开两份副本的 `memory.db` 看了 `messages` 表：基线那份是 `user` 和一条带 9,434 字符 `tool_calls` 的 `assistant`；分支那份是 `user`、`user`、`assistant`，`tool_calls` 列都是空的。日志是 `40_live_truncate_baseline.log`、`41_live_continue_baseline.log`、`42_live_continue_branch.log`、`43_live_db_rows.log`。密钥从主检出的 `.env` 读进探针进程，没有打印，没有写进任何文件。
+
+### 13.7 没有跑的
+
+- 全量测试。按 `SPEC.md` 第 3 档不需要。
+- PR 上的 `Eval CI`。分支没有 push，没有开 PR。
+- §7.2 的第二、三条命令在 `4e4a74d3` 之后没有重跑，理由在 §13.4。
+- Anthropic 的真实接口，DeepSeek 以外的 OpenAI 兼容后端。
+- 真实的 `oc` CLI、Desktop、channel 进程。跑的是测试、探针和探针里的真实装配。
+- 计划 0078：只把落地的 `transcript.py` 和它第 3 版原型的 `transcript.py` 做了三方合并，没有冲突，合并出来的文件上本计划的 42 个用例都过。0078 的提议测试没有在合并出来的文件上跑，它的第 4 版没有看。
+
+### 13.8 实施中看到的、计划没有写的
+
+1. Channel 的 `/compact` 和 CLI 一样有两句话会和事实对不上。`_describe_compaction` 在短会话上回 "Nothing to compact yet: the conversation is already short."，摘要失败时回 "Compaction failed and the conversation was left as it was: …"，而未答调用已经去掉了。文字没有改，只记进了 `progressive-compactor.md` §12。
+2. `transcript.py` 的模块 docstring 那一句（§13.2 第 2 条）。
+3. 测试表没有钉住的那几处（§13.2 末尾、§13.5）。
+4. 规则 10 的日志在没有 session id 时写的是 `session -:`。`run_turn`、`stream_turn` 的 `session_id` 默认是空串，库调用方不传时看到的就是这个。
+5. `_Carried.carried` 在引擎没有 commit 时返回的是它拿到的历史，现在那是清理过的一份，不再是调用方给的原样。今天走不到这里：`_outcome` 只在拿到结果之后才读它，而引擎交出结果之前已经 commit 过。
+6. 规则 8 的理由在今天的 SQLite 存储上走不到。`SqliteSessionStore._load` 用 `Role(m["role"])` 重建角色，读回来的不是 `str`。`==` 仍然要留着，别的 `SessionStore` 实现和库调用方可以交来字符串角色。T7 的 docstring 原先照草稿写的是"从存储行重建的历史"，`17700f03` 改成了"调用方或某个会话存储"。
+7. `/compact` 的交换里清理算了两遍，`_assemble` 一遍，`compose` 一遍，日志只在 `_assemble` 那一遍写。`prepare` 和直接调 `compose` 的调用方去掉调用时没有日志。
+8. T10 的测试名让 `def` 那一行有 89 列，超过 black 的 88。标识符折不了行，仓库里别的测试文件也有这样的行。跑测试用的两个 conda 环境里都没有 black 和 ruff，新代码是手工按 88 列排的，没有用工具核过格式。
+9. `tests/entry/test_turn.py` 现在从 `tests/entry/test_turn_runner.py` import 替身和帮助函数，以前只有 `test_session.py` 这样做。
