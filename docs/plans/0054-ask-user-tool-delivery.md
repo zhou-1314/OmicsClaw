@@ -2,7 +2,7 @@
 
 **日期**：2026-10-08。**分支**：本地 `feat/ask-user`，基线 `main` 的 `90a3bec3`，未 push，未开 PR。
 **范围**：0052 T1、0052 §4.7 显示层前置步、0054 任务 A、B、C。0052 的 T0、T2、T3 与 0054 任务 D 没做，`entry/channel/` 零改动。
-**状态**：独立审核通过（2026-10-08），审核之后的修复与合并见 §8；第二轮审核有条件通过，它的修复见 §9，待复核。
+**状态**：独立审核通过（2026-10-08），审核之后的修复与合并见 §8；第二轮审核有条件通过，它的修复见 §9；第三轮复核认定还有两条路开着，owner 裁定后的修复见 §10，待复核。
 
 ## 1. 提交
 
@@ -176,6 +176,8 @@
 | 上一个提示符多读到、prompt_toolkit 留给下一个提示符的键 | 丢弃，有提示行 | 不适用 |
 | 被取消的读留下的 `readline` 已经读走的那一行 | 不适用 | 丢弃，有提示行 |
 
+表里说的是提示符打开之前的那一半。半行被丢弃之后，在卡片上键入的后半截这一轮仍然是这张卡的回答，§10.3 改了 prompt_toolkit 那一路。
+
 - prompt_toolkit：`_drop_keys` 先取走它自己的预读缓存（`get_typeahead`），再在 raw 模式里用 `Input.read_keys` 把终端里等着的键读空，半行在 raw 模式下一并读出。终端自己回的光标位置报告不算键入，丢弃但不提示。
 - `StreamSource`：`_drop_typed` 先 `termios.tcflush` 清空终端输入队列，整行和半行都清掉。能数出来的只有整行（`FIONREAD`），所以半行被丢弃时没有提示行。然后给被取消的读留下的 `readline` 线程 0.05 秒报告：这段时间内报告的行是提示符打开之前键入的，丢弃；没有报告的线程还在等下一行，留给这张卡用，不另起第二个线程。
 
@@ -214,7 +216,7 @@ N5 只在泵没有处理到 `QUESTION_SETTLED` 的路径上才有区别，因为
 
 真实模型（DeepSeek，经 `AI_PROXY`），两种输入源结果相同：
 
-- 迟到的 `yes` 遇上审批卡（`--approval-timeout 15`）：提问到期后敲 `yes` 回车，bash 审批卡打开后 3 秒内没有被结算，提示行出现一次；之后在卡上敲 `y` 才 `Approval granted`，命令执行。
+- 迟到的 `yes` 遇上审批卡（`--approval-timeout 15`）：审批卡在模型的下一条消息里，`yes` 敲在它打开之前。提问到期后敲 `yes` 回车，bash 审批卡打开后 3 秒内没有被结算，提示行出现一次；之后在卡上敲 `y` 才 `Approval granted`，命令执行。
 - 工具运行中提前敲 `yes` 回车：第一张卡出现后敲 `y` 正常批准；它的命令还在跑时敲 `yes` 回车；第二张卡打开后 3 秒内没有被结算，有提示行，卡上敲 `y` 才批准。
 - 第一阶段的五种情形：选项作答；`/data/ref.h5ad` 作自由文本并被原样复述；一条模型消息里两个 `ask_user`，第二张卡出现后才键入，编号 `#1`、`#2`；提问处 Ctrl-C 取消后 REPL 接下一行并作答；设期限无人作答，到期后键入的 `2` 由主提示符读走，成为下一条消息。退出码都是 0。
 
@@ -222,7 +224,7 @@ N5 只在泵没有处理到 `QUESTION_SETTLED` 的路径上才有区别，因为
 
 - 不该变的情形修前修后屏幕相同：审批卡到期后再键入、卡片出现后批准、期限内作答，以及 prompt_toolkit 下的迟到行和到期前的半行。
 - 回退源上，迟到行那一例只多了提示符后面的换行；到期前的半行那一例多了换行，`Lou` 不再发给模型。
-- 提前键入整行、提前键入半行、一次键入两行、两张提问卡之间键入、迟到的 `yes` 遇上审批卡：修前卡片被提前键入的内容结算，半行那一例是拼进了回答；修后卡片保持打开，卡上键入的才算。半行那一例，prompt_toolkit 有提示行，回退源没有，在卡上只按回车得到拒绝。
+- 提前键入整行、提前键入半行、一次键入两行、两张提问卡之间键入、迟到的 `yes` 遇上审批卡：修前卡片被提前键入的内容结算，半行那一例是拼进了回答；修后卡片保持打开，卡上键入的才算。半行那一例验的是提前敲的半行不再拼进回答：prompt_toolkit 有提示行，回退源没有，在卡上只按回车，审批卡得到拒绝，提问卡记为跳过（`declined`）。半行之后在卡上把词敲完的情形当时没有验。
 - 只在修后跑的两种：提问到期后什么都不敲，等审批卡出现再敲 `y`，正常批准，之后主提示符照常读下一行；提问到期后敲半行，等审批卡出现只按回车，得到拒绝。
 
 审核方首轮的 `late_answer.py`：`question` 与 `approval` 两种在 `31bea84a` 与本分支上的输出，归一化 turn id 之后逐行相同。它的输入源是 `ScriptedSource` 的子类，不实现 `FreshSource`，卡片照旧用 `read` 读。
@@ -239,13 +241,204 @@ N5 只在泵没有处理到 `QUESTION_SETTLED` 的路径上才有区别，因为
 
 没有跑的：全量测试；`tests/tools`、`tests/permission`、`tests/subagent` 等这一轮没有碰到的层；Anthropic、OpenAI 两个 provider；Windows。
 
+这一节验过的"迟到的 `yes`"和"提前敲 `yes`"，都是 `yes` 在卡片打开之前敲完的情形。第三轮复核在真实模型下找到另外两种当时没有关上的：
+审批卡和提问在同一条模型消息里，卡片在提问到期的同一刻打开，迟到的 `yes` 是敲在已经打开的卡上的；以及卡片打开时一个词敲到一半，
+后半截落在卡上。修复和仍然开着的部分见 §10。
+
 ### 9.5 只记录，这一轮不改
 
 - **读回答的 Task 在第一步之前被取消时，活动行的占用不释放。** 直接构造能复现；审核方经真实 broker 压测 600 次没有出现。
 - **Ctrl-C 与收回落在同一轮事件循环时 Ctrl-C 丢失。** 审核方模拟出来的，没有用真实 prompt_toolkit 复现。
 - **`rendezvous.py` 的 `settle()` 返回 True 之后，同一轮里期限仍会赢。** 回答丢失，结果是 `no_answer`。`26f13823` 上就有。
-- **回退源上的半行没有提示行。** 终端在回车之前不上报这半行，`tcflush` 能清掉它，数不出它。提前敲了 `y` 没回车的人，在卡片上只按回车会得到一次拒绝。
+- **回退源上的半行没有提示行。** 终端在回车之前不上报这半行，`tcflush` 能清掉它，数不出它。提前敲了 `y` 没回车的人，在卡片上只按回车：审批卡得到一次拒绝，提问卡记为跳过（`declined`），模型被告知不要再问。这一轮结束时两种输入源都是这样；§10.3 之后 prompt_toolkit 下这个回车被丢弃，卡片继续等。
 - **回退源上被读线程拿走、0.05 秒内没报告的行会被当作卡片的回答。** 需要读线程在这段时间里一直没被调度到，而且回车恰好落在卡片打开之前的一瞬间。没有复现。
 - **回退源上收回提示符时可能留下一帧活动行。** 读回答的 Task 结束到 `withdraw` 之间若正好落下一次 tick，这一帧画在提示符那一行，换行之后不再被擦掉。只是推演，没有复现；prompt_toolkit 下这一帧会被 `activity.clear()` 擦掉。
 - **两条既有测试在高负载下会偶发失败。** `test_cli_question.py::test_a_question_nobody_answered_does_not_outlive_its_exchange` 与 `test_cli_repl.py::test_an_approval_nobody_answered_does_not_outlive_its_exchange` 用固定次数的 `sleep(0)` 等提示符出现，机器忙时等不到。同一时段在 `31bea84a` 的导出树和本分支上各跑 25 次，两边都是 11 次失败。没有改。
 - **没有 `termios` 的平台没有验证。** prompt_toolkit 那一路走它自己的输入接口，不调用 `termios.tcflush`，但没有在 Windows 上跑过。
+
+## 10. 第三轮复核之后（2026-10-09）
+
+第三轮复核认定 §9 之后还有两条路能让一张审批卡被没看到它的人批准，都在真实模型下复现过，另提了三条 P3。owner 2026-10-09 裁定只治这两处。修复追加在本地分支 `feat/ask-user-r4` 上，从 `d69edae4` 开出。`d69edae4` 是 `feat/ask-user-r3` 的 tip，那个分支名被另一个 worktree 占着。`d69edae4` 及之前的提交没有改写，没有 rebase，没有再合并 `main`，没有 push。
+
+| 提交 | 内容 |
+|---|---|
+| `2198c929` | 提问到期后，同一条模型消息里排在它后面、需要审批的调用直接拒绝，不打开提示符 |
+| `ff0ac1c8` | `FreshSource.read_fresh` 新增 `unfinished` 回调。prompt_toolkit 输入源发现提示符打开前有一行敲到一半，就把后半截一起丢到下一个回车，卡片多一行提示 |
+| `22facde6` | 第三轮存活的 3 处变异各补一条测试，不改生产代码 |
+| `f54d2dd9` | 这一轮自己的变异里存活的 1 处：把对应的测试改到能发现它，不改生产代码 |
+| `70beafc6` | `cli.md` §7.4、§7.5 与 `AGENTS.md` 的 CLI 一节改成实际关到的程度 |
+
+本记录在这之后的一个提交里。`entry/approval.py`、`entry/question.py`、`entry/turn.py`、`omicsclaw/permission/`、`omicsclaw/tools/` 和 `tests/entry/golden/` 相对 `d69edae4` 零 diff。
+
+### 10.1 修前复现
+
+在 `d69edae4` 的导出树上，四种情形两种输入源各走一遍。
+
+真实模型（DeepSeek，`--approval-timeout 15`）：
+
+| 情形 | prompt_toolkit | 没装 prompt_toolkit |
+|---|---|---|
+| 一条消息里 `ask_user` 加 `bash`，提问到期后 0.5 秒敲 `yes` 回车 | `Approval granted`，命令执行，没有提示行 | 同左 |
+| 提问到期后敲 `ye`，下一条消息的 bash 卡打开 0.25 秒后敲 `s` 回车 | 批准，并打印 `Will not ask about bash again in this conversation`；有提示行 | 同样批准并放行，没有提示行 |
+
+脚本化后端（真实终端），按 100 毫秒一个键敲 `y`、`e`、`s`、回车，起点相对提问期限或工具结束挪动：
+
+| 情形 | 偏移 | 每种输入源的结果，两种源相同 |
+|---|---|---|
+| 提问与审批在同一条消息（`typing_through_deadline`） | 9 个，-0.40 到 +1.00 秒 | 7 次批准：5 次是整个 `yes`，2 次是剩下的 `s`，放行了整个工具。2 次拒绝：一次只剩回车，一次剩 `es` |
+| 工具结束后下一条消息的审批卡（`straddle_timed`） | 12 个，-0.45 到 +0.15 秒 | 6 次批准：3 次是四个键都敲在卡片打开之后，3 次是剩下的 `s`。6 次拒绝：3 次只剩回车，3 次剩 `es` |
+
+### 10.2 同一条消息里排在到期提问之后的调用：直接拒绝
+
+`Repl._pump` 读到理由是 `QUESTION_TIMEOUT_REASON` 的 `QUESTION_SETTLED` 时记下一个标记，到这条消息的 `TURN_END` 清掉。标记在的时候到达的 `APPROVAL_REQUIRED`，`_ask_human` 带着 `unasked` 交给 `_ask`：不打印图例，不打开提示符，以下面这句话拒绝。
+
+```
+nobody was asked, because the question earlier in the same message got no answer; make the call again in a later message if it is still needed
+```
+
+模型在工具结果里读到的是 `tool 'bash' raised ApprovalDenied: bash was not approved: nobody was asked, …`。"same message" 和 "later message" 是 `ask_user` 的工具描述里已有的说法。屏幕上，卡片正文照常打印，下面一行 `Approval denied [...]: nobody was asked, …`。
+
+放在 REPL 这一层，理由三条：
+
+- 这条路是终端造成的。到期的提示符和新开的提示符读同一个键盘，键入的一行不带卡片编号。`ask_user` 现在也只在终端的 REPL 里挂载。
+- 一个调用本来会不会打开提示符，只有 REPL 知道全：用 `s` 放行的工具记在 `Repl._granted` 里，broker 看不到。
+- 生产代码只动 `entry/cli/_repl.py` 一个文件，所有入口共用的审批通道没有变。
+
+"同一条消息"靠帧的顺序判定。`ask_user` 独占一批（`concurrency_safe=False`），引擎跑完一条消息的全部工具才发 `TURN_END`（`engine/loop.py`），所以到期的 `QUESTION_SETTLED` 和下一个 `TURN_END` 之间的 `APPROVAL_REQUIRED` 都来自同一条消息。标记是 `_pump` 的局部变量，随 exchange 结束。子代理的回合不在父流里发 `TURN_END`，标记不会在 `task` 运行中途被清掉。
+
+"因期限到期"靠 `status is NO_ANSWER` 加理由等于 `QUESTION_TIMEOUT_REASON` 判定，§7 已经写明这个常量会被比对。Ctrl-C、输入结束、输入源出错、exchange 结束时的 `no_answer` 理由不同，不触发。
+
+不变的行为逐条核实过：
+
+| 情形 | 行为 | 怎么核实的 |
+|---|---|---|
+| 提问被回答，或被空行跳过 | 审批卡照常打开 | `test_a_question_that_got_a_reply_leaves_the_call_after_it_asked_about` 两例；pty `in_time_same_message` 两种源修前修后相同 |
+| 提问因输入源出错而问不出来 | 审批卡照常打开 | `test_a_question_unanswered_for_another_reason_leaves_the_call_asked_about` |
+| 提问处 Ctrl-C | 取消整个 exchange，没有后面的调用 | 既有测试，没有改 |
+| 不需要审批的调用 | 照常执行 | 既有的 `test_a_question_whose_deadline_passes_has_its_prompt_taken_down`：到期提问之后的 `gated` 工具照常运行 |
+| `auto-approve` 下不询问的调用 | 照常执行，没有 `APPROVAL_REQUIRED` 帧 | `test_under_auto_approve_the_call_after_the_question_runs` |
+| `auto-approve` 下仍要询问的调用（危险命令、`ask` 规则、受保护文件） | 和 `default` 下一样被拒绝 | 没有单独跑。它们同样是 `APPROVAL_REQUIRED` 帧，走同一个分支 |
+| 被 `allow` 规则放行的调用 | 照常执行 | 没有单独跑。门直接放行，不产生帧 |
+| 用 `s` 放行过的工具 | 照常执行，打印 `allowed for this conversation` | `test_a_tool_allowed_for_the_conversation_runs_after_the_question` |
+| 子代理发起的审批 | 照常询问 | `test_a_sub_agent_s_call_after_the_question_is_asked_about` |
+| 下一条消息里的审批 | 照常询问 | `test_the_call_made_again_in_a_later_message_is_asked_about`，既有的 `test_a_late_reply_to_a_question_does_not_approve_the_card_that_follows` |
+| Desktop、Channel、管道、`--prompt` | 不挂载 `ask_user`，没有会到期的提问 | 相关代码没有动 |
+
+子代理这一条裁定里没有写，是我定的。它的审批不拒绝，是因为它的卡片要等子代理先调用一次模型才会打开，和下一条消息里的卡片是同一种情形。拒绝的话，子代理读到"在后面的消息里重新调用"，重新调用时父消息的 `task` 还没结束，又被拒绝。
+
+考虑过又放弃的做法：
+
+- **放在 `ApprovalBroker`，连 `APPROVAL_REQUIRED` 帧都不发。** 屏幕更干净，但 broker 看不到 `s` 放行，已经放行的工具也会被拒；改的是所有入口共用的通道，等于替第二阶段的 Channel 先做了决定。
+- **放在工具层或权限门。** 每个调用在自己的 Task 里拿到的是上下文的副本，"这条消息里有提问到期"传不过去，要动引擎或上下文；碰权限门还要把验证升到第 4 档。
+- **延后打开提示符。** owner 已经否决。
+- **连卡片正文也不打印。** 泵里要再判一次这个调用是不是已经被 `s` 放行，而且来的人看不到被拒的是什么。现在的做法和 `s` 放行对称：正文照打，一行说明，不开提示符。owner 要改的话是泵里几行。
+- **在 `ask_user` 的工具描述里写明这条规则。** 会改契约文本和 golden。模型从被拒调用的结果里得知，实测见 §10.6。
+
+### 10.3 提示符打开时敲到一半的行
+
+`_drop_keys` 现在返回两个值：有没有人按过键，以及最后一个回车之后有没有字符或粘贴。回车认 `ControlM` 和 `ControlJ`：终端在行模式下把回车存成换行，raw 模式读出来是后者。方向键、Esc 这类不往行里放字的键不算开了一行，所以提前按过 Esc 或方向键之后，卡片上敲的第一个 `y` 照旧批准：既有的 Escape 用例没有改，pty `arrow_before` 修前修后相同。
+
+`PromptToolkitSource.read_fresh` 在一次持锁之内做完三件事：丢弃并调用 `discarded`；有半行时调用 `unfinished`，打开提示符读一行丢掉；再打开提示符读真正的回答。两次提示符之间不放锁，排在后面的卡片插不进来。卡片在第一行提示下面多打印一行 `its last line had no Enter: what is typed up to the next Enter is discarded too`。
+
+用"多读一行丢掉"而没有在提示符里吞键，是因为吞键要拦住每一个按键绑定，Ctrl-C 也在其中。多读的那一行就是一个普通的提示符：回显、Ctrl-C、输入结束都照旧，pty 里验过等回车时按 Ctrl-C 得到 `interrupted at the terminal` 并取消 exchange。代价有两条：被丢弃的后半截回显在第一行提示符上，并且和其他输入一样写进历史文件。
+
+提前敲了 `y` 没回车、到卡片上只按回车的情形随之变了：prompt_toolkit 下这个回车属于被丢弃的那一行，审批卡和提问卡都继续等。
+
+**回退输入源做不到，确认过。** `StreamSource` 让终端留在行模式，用 `readline` 读。探针在内核 5.4 的伪终端上敲 `ye` 不回车：`FIONREAD` 是 0，`select` 不就绪；`tcflush` 之后敲 `s` 回车，`readline` 得到 `s\n`。它数不出半行，也分不出后来的一行是不是后半截。简报说"做不到"，准确的说法是在行模式里做不到：同一个探针关掉 `ICANON` 之后 `FIONREAD` 是 2。那样做等于给回退源另造一套 raw 模式的读法，还要处理被取消的读留下的 `readline` 线程：模式一切换它可能被唤醒并把半行读走，这一点是按内核的行为推的，没有实测。按裁定没有做，只写进文档。
+
+### 10.4 文档与三条 P3
+
+- `cli.md` §7.4：删掉"提示符收回之后才键入的 `y` 也批准不了后面的审批卡"和"到期之后的整行遇到卡片一定被丢弃"两处说法，改成按键入那一刻有没有卡片开着分三种去向；新增同一条消息里直接拒绝的规则。
+- `cli.md` §7.5：表里半行一行改写；新增敲到一半的行、回退源的限制、规则拦不住的三种情形、伪终端脚本。
+- `AGENTS.md` 的 CLI 一节同步。
+- 本记录 §9.1、§9.4、§9.5 各补一处，说明当时验的是哪种情形。
+
+三条 P3：
+
+- **提问卡上"提前敲了没回车、到卡上只按回车"被记成跳过。** `d69edae4` 上两种输入源都是这样（pty `ask_half_enter`：`Skipped`）。§9.4、§9.5 补上了提问卡这一半。这一轮之后 prompt_toolkit 下卡片继续等，回退源不变。
+- **三处没被测试钉住的代码**，见 §10.5。
+- **用伪终端提前写入回答的脚本。** 写进 `cli.md` §7.5 末尾和 `AGENTS.md`：回答被丢弃，卡片一直等，脚本要等提示符出现再写。
+
+### 10.5 变异
+
+审核方 `mutate3.py` 里存活的 3 处，各补一条测试：
+
+| 变异 | 转红的测试 |
+|---|---|
+| X12c：队列里已经清出一行时，不再等被取消的读留下的 `readline` | `test_cli_input.py::test_a_line_the_cancelled_read_took_is_dropped_while_another_still_waits` |
+| X19：`tcflush` 失败时报告"丢弃了" | `test_cli_input.py::test_a_queue_that_could_not_be_emptied_is_not_reported_as_dropped`（两例） |
+| X22：`_drop_keys` 不进 raw 模式 | `test_cli_input.py::test_keys_waiting_at_a_real_terminal_are_read_in_raw_mode` |
+
+X12c 的测试等到终端队列的字节数显示线程已经取走第一行才开始读，变异不会因为时序侥幸通过。X22 的测试在行模式的伪终端上敲半行，那是两个提示符之间终端所处的状态。
+
+审核方 X 系列 46 处在 `f54d2dd9` 的导出树上原样重跑：39 处转红。另 7 处的原文被这一轮改写，套不上，各由这一轮的一处同义变异覆盖，也都转红：X23 对 I9，X25b 对 I3b，X26 对 I26，X27 对 I27，X28 对 I28，X31 对 R25，X32 对 R24。
+
+这一轮新写的生产代码自己做了 56 处变异：`_repl.py` 27 处（拒绝 21 处，第二行提示 6 处），`_input.py` 29 处。每次还原后比对 SHA-256。在 `22facde6` 上 55 处转红，存活 1 处：I18，把两次提示符之间的锁放开再重新取。原来的测试只看两张卡按顺序作答，放锁之后每个读者都同样让出一次，顺序没变；变的是排队的读者丢弃输入的时刻提前到了第一张卡作答之前。`f54d2dd9` 把第一张卡的回答和它后面的一行一起送进去，排队的卡片必须在自己的提示符打开时丢掉那一行。在 `f54d2dd9` 上三张表重跑，56 处全部转红。
+
+变异跑的是 `tests/entry/test_cli_*.py` 加 `tests/launch/test_cli_signals.py`、`tests/launch/test_surfaces.py`，带 `-x`。每张表先在没改动的树上跑一遍，确认是绿的再开始。
+
+### 10.6 验收
+
+按 Risk-Matched Verification 第 3 档：改动落在 `omicsclaw/entry/cli`，被 `launch` 导入；没有碰权限门、工具表、契约文本和 golden。新增的是一条不询问就拒绝的路和多丢弃的一截输入，两处都只减少能批准的方式。命令是 `python -m pytest -q -p no:randomly -p no:cacheprovider -o addopts="" <路径>`。
+
+| 范围 | `d69edae4`（导出树） | 分支末端 |
+|---|---|---|
+| `tests/entry tests/launch`，不含 `tests/entry/test_desktop_*.py` | 2002 passed、2 skipped、3 xfailed | 2025 passed、2 skipped、3 xfailed |
+| `tests/entry/test_desktop_*.py`（OmicsClaw 解释器） | 569 passed、3 skipped | 569 passed、3 skipped |
+| 15 个分层守卫、顶层 `tests/test_*.py`、`tests/evals`，加 `-m "not slow and not demo and not eval and not skill_example"` | 937 passed、14 skipped、27 deselected、1 xpassed | 937 passed、14 skipped、27 deselected、1 xpassed |
+
+第一行多出的 23 条是这一轮新增的测试。第一行在 `f54d2dd9` 上跑，后两行在 `22facde6` 上跑，之后的提交只动了 `tests/entry/test_cli_input.py` 的一条测试和文档。第三行比 §9.4 的表少 13 条：那一轮用的清单我没有找到，这一轮按 `SPEC.md` 的写法取 `tests/*/test_*layer*.py`（不含 `tests/entry` 下已经在第一行里的那个）、`tests/sdk/test_boundary.py`、`tests/sdk/test_public_surface.py`，修前修后用的是同一份清单。
+
+既有测试改了一处：`test_cli_repl.py::test_a_failed_approval_task_is_logged_and_not_merely_dropped` 里顶替 `Repl._ask` 的函数多收一个关键字参数。
+
+真实终端（pty）里两种输入源各走一遍，做法同 §9.4：每次运行先用同一环境的探针确认输入源和 `omicsclaw.__file__`。
+
+真实模型（DeepSeek，`--approval-timeout 15`），修后：
+
+| 情形 | prompt_toolkit | 没装 prompt_toolkit |
+|---|---|---|
+| 一条消息里 `ask_user` 加 `bash`，提问到期后 0.5 秒敲 `yes` 回车 | 审批提示符没有打开，`No answer` 之后紧跟 `Approval denied [...]: nobody was asked, …`。`yes` 由主提示符读走成为下一条消息，模型重新调用 bash，这次卡片打开，3 秒内没有被结算，敲 `y` 才批准 | 同左 |
+| 提问到期后敲 `ye`，下一条消息的 bash 卡打开 0.25 秒后敲 `s` 回车 | 两行提示，卡片 6 秒内没有被结算，没有放行；之后敲 `y` 才批准 | **仍然开着**：批准并放行整个工具，没有提示行 |
+| 回归 §9.4：迟到的 `yes` 遇上下一条消息的审批卡 | 卡片 4 秒内没有被结算，有提示行，敲 `y` 才批准 | 同左 |
+| 回归 §9.4：工具运行中提前敲 `yes` 回车 | 第二张卡 4 秒内没有被结算，有提示行，敲 `y` 才批准 | 同左 |
+
+前两种情形在分支末端的生产代码上跑。后两种在加上"子代理不拒绝"那一行之前的工作树上跑，那一行只在帧带子代理名时起作用，这两种情形里没有子代理。
+
+同一条消息那种情形修后一共跑了 6 次，每次都是提示符没有打开、调用被拒。被拒之后，1 次模型在同一次 exchange 的下一条消息里直接重新调用（卡片在 `No answer` 之后 3.1 秒打开，先前敲的 `yes` 被丢弃，有提示行），5 次先用文字说明原因，等 `yes` 作为下一条消息到达后才重新调用。这 6 次里有 3 次驱动脚本没跟上模型自己开始的第二次 exchange：一次在它运行中途发了 Ctrl-D，两次把审批卡出现的那段输出读掉了没有作答，卡片到自己的期限被拒，其中一次连着错了五张卡。表里用的是脚本改对之后的两次。这一轮真实模型共 18 次运行、67 次模型调用，脚本没跟上的 3 次占 22 次，其中一次 14 次。
+
+脚本化后端（真实终端），分支末端：
+
+| 情形 | prompt_toolkit | 没装 prompt_toolkit |
+|---|---|---|
+| `typing_through_deadline`，9 个偏移 | 9 次都没有打开审批提示符，以 `nobody was asked` 拒绝 | 同左 |
+| `straddle_timed`，12 个偏移 | 前 9 个偏移（词跨在卡片打开的时刻，或只剩回车）卡片都保持打开；后 3 个偏移四个键都敲在卡片打开之后，批准 | 和修前相同：3 次 `s` 放行，6 次拒绝，3 次批准 |
+
+另有 23 种不计时的情形乘两种输入源，在 `d69edae4` 和分支末端各跑一遍，逐项比对结果：
+
+- 两种源都变了的 3 种，都是提问和审批在同一条消息里：迟到的 `yes`，到期前敲 `ye`、到期后敲 `s` 回车，到期前敲 `yes`、到期后只按回车。修前审批提示符打开并被结算（批准、放行、拒绝各一），修后提示符不打开。
+- 只在 prompt_toolkit 下变了的 4 种：提前敲 `ye`、卡上敲 `s` 回车；提前敲了字没回车、卡上只按回车（审批卡、提问卡、提问到期后的审批卡各一）。修前卡片被后半截结算，修后卡片保持打开，再敲的才算。
+- 其余 36 项修前修后相同，其中有提问在期限内作答之后，同一条消息里的审批卡照常打开并由 `y` 批准。
+
+以上 pty 运行都关着光标位置报告。prompt_toolkit 那一路另把报告打开、由驱动脚本像终端那样应答，在分支末端再走 6 种（半行两种、整行、卡片出现后作答、提前按方向键、同一条消息里迟到的 `yes`），结果和关着时相同。
+
+没有跑的：全量测试；`tests/tools`、`tests/permission`、`tests/subagent` 等这一轮没有碰到的层；`Eval CI`；Anthropic、OpenAI 两个 provider；Windows 和没有 `termios` 的平台。
+
+### 10.7 没关上的和只记录的
+
+这一轮按裁定只治两处。下面这些路仍然能让一张审批卡被没看到它的人结算，都没有动：
+
+- **没装 prompt_toolkit 时的半行。** 上表第二行。`ye` 被 `tcflush` 清掉，`s` 加回车是卡片的回答。没有提示行。
+- **卡片打开之后才键入的内容。** 规则按键入的时刻判断，分辨不出键入的人看没看到卡片。下一条消息里的审批卡在 `No answer` 之后隔一次模型调用打开，DeepSeek 下实测 2.7 到 3.4 秒；到期之后隔了这么久才敲的 `yes` 落在卡上。被拒的调用告诉模型可以重新发起，重新发起的卡片也属于这一种。脚本化后端下这个间隔接近零，`straddle_timed` 偏移不小于 0 的 3 例两种源都是批准。
+- **提问的提示符还开着时敲了一半的字。** 提示符到期收回时半行被丢弃，没有留下记录；之后下一条消息的审批卡打开，在卡上敲完后半截，`s` 放行了整个工具。两种输入源都是这样（pty `question_half_then_card`），修前修后相同。要关上，prompt_toolkit 那一路可以在 `withdraw` 时看一眼被取消的提示符里有没有字，留给下一次 `read_fresh`。
+- **子代理的审批卡。** 这一轮决定不拒绝，它和下一条消息里的卡片是同一种情形。
+- **没有 `termios` 的平台。** `StreamSource` 清不了输入队列，§9 和这一轮的规则在那里都不成立。不把 prompt_toolkit 声明为依赖。
+- **§9.5 里的一条仍在**：回退源上被读线程拿走、0.05 秒内没报告的行会被当作卡片的回答。
+
+只记录的：
+
+- 回退源上半行被丢时没有提示行，按裁定不做。
+- 被丢弃的后半截写进历史文件。
+- 被拒的调用仍然打印卡片正文，见 §10.2。
+- 0052/0054 第二阶段（Channel）不在这一轮。这一轮的规则只在 CLI 的 REPL 里；Channel 若用文字回复作答，同样的问题要在那里另行处理。
+- 两条在高负载下偶发失败的既有测试这一轮遇到过一次：一张变异表开始前的基线跑里失败了其中一条，脚本按审核方的做法把两条都排除后重跑，569 passed。没有改。
+- README、CHANGELOG 没改，和前几轮一样留给合并时处理。
