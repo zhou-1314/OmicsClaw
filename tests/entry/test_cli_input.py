@@ -693,6 +693,209 @@ def test_what_the_terminal_sent_by_itself_is_not_what_a_person_pressed(sent, kep
     assert "".join(press.data for press in pressed) == kept
 
 
+# ---- a prompt taken down with a line begun at it ---------------------------
+#
+# A question's prompt is cancelled when the question's deadline passes. Text
+# typed at it and not entered goes with the prompt, and the person may type
+# the rest of the word at the card that opens later.
+
+
+async def _taken_down(source: PromptToolkitSource, keys, typed: str) -> list[str]:
+    """Open a read, type *typed* at it without Enter, and cancel it.
+
+    :returns: the list in which *source* notes what it shows from now on.
+    """
+    reading = asyncio.create_task(source.read_fresh("answer> "))
+    await asyncio.sleep(0.05)
+    keys.send_text(typed)
+    await asyncio.sleep(SETTLE_S)
+    reading.cancel()
+    await asyncio.wait({reading})
+    source.withdraw()
+    return _record_prompts(source)
+
+
+async def _card_after(source: PromptToolkitSource, keys, seen: list[str], *typed: str):
+    """Read fresh at ``approve? `` and type each of *typed* at it.
+
+    :returns: whether the read was still waiting before each of *typed*,
+        and the line it returned.
+    """
+    reading = asyncio.create_task(
+        source.read_fresh(
+            "approve? ",
+            discarded=lambda: seen.append("discarded"),
+            unfinished=lambda: seen.append("unfinished"),
+        )
+    )
+    waiting = []
+    for line in typed:
+        await asyncio.sleep(SETTLE_S)
+        waiting.append(not reading.done())
+        keys.send_text(line)
+    return waiting, await asyncio.wait_for(reading, WAIT_S)
+
+
+def _after_a_prompt_was_taken_down(typed_at_it: str, between, *typed_at_the_card: str):
+    """Take a prompt down with *typed_at_it* in it, run *between*, then
+    read fresh and type *typed_at_the_card*.
+
+    *between* is an async function of the source and its keys, for what
+    happens while no card is open.
+    """
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit.input import create_pipe_input
+
+    async def drive():
+        with create_pipe_input() as keys:
+            source = _picker_source(keys)
+            seen = await _taken_down(source, keys, typed_at_it)
+            if between is not None:
+                await between(source, keys)
+                del seen[:]
+            waiting, line = await _card_after(source, keys, seen, *typed_at_the_card)
+            return waiting, line, seen
+
+    return asyncio.run(drive())
+
+
+def test_a_line_begun_at_a_prompt_that_was_taken_down_is_dropped_up_to_its_enter():
+    """``ye`` typed at a question's prompt, the prompt cancelled at the
+    deadline, ``s`` and Enter typed at the approval card that opens next.
+    The card reports both things, reads the rest of the line away and
+    waits for a line typed after it.
+
+    The line is over once its Enter has been read: the card after that
+    one takes the first line typed at it.
+
+    Mutations: do not remember that the cancelled prompt held text in
+    ``PromptToolkitSource`` and the card returns ``s``; keep the mark
+    after a card has acted on it and the second card throws ``y`` away.
+    """
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit.input import create_pipe_input
+
+    async def drive():
+        with create_pipe_input() as keys:
+            source = _picker_source(keys)
+            seen = await _taken_down(source, keys, "ye")
+            first = await _card_after(source, keys, seen, "s\r", "n\r")
+            at_the_first = list(seen)
+            del seen[:]
+            second = await _card_after(source, keys, seen, "y\r")
+            return first, at_the_first, second, seen
+
+    first, at_the_first, second, at_the_second = asyncio.run(drive())
+
+    assert first == ([True, True], "n"), "the rest of the word answered the card"
+    assert at_the_first == ["discarded", "unfinished", "approve? ", "approve? "]
+    assert second == ([True], "y")
+    assert at_the_second == ["approve? "]
+
+
+def test_a_prompt_taken_down_with_nothing_typed_leaves_the_next_card_alone():
+    """Mutation: take every cancelled prompt for one that held a line and
+    the first answer typed at the next card is thrown away."""
+    waiting, line, seen = _after_a_prompt_was_taken_down("", None, "y\r")
+
+    assert (waiting, line, seen) == ([True], "y", ["approve? "])
+
+
+def test_an_enter_typed_before_the_next_card_finishes_the_line_begun_earlier():
+    """The rest of the word and its Enter are typed while no prompt is
+    open. The line is over: the card drops what was typed before it,
+    says so once, and takes the first line typed at it.
+
+    Mutation: let the line begun at the earlier prompt outlast an Enter
+    in ``_drop_keys`` and the ``y`` is read away as the rest of it.
+    """
+
+    async def the_rest(source, keys):
+        keys.send_text("s\r")
+
+    waiting, line, seen = _after_a_prompt_was_taken_down("ye", the_rest, "y\r")
+
+    assert (waiting, line, seen) == ([True], "y", ["discarded", "approve? "])
+
+
+def test_a_line_read_at_the_ordinary_prompt_ends_the_line_begun_earlier():
+    """No card opens before the exchange ends, and the REPL's own prompt
+    reads the rest of the word as the next message, as it always did. A
+    card of a later exchange has nothing to do with that line.
+
+    Mutation: keep the mark through an ordinary read in
+    ``PromptToolkitSource.read`` and the card of the next exchange throws
+    away the first answer typed at it.
+    """
+
+    async def the_next_message(source, keys):
+        keys.send_text("s\r")
+        assert await asyncio.wait_for(source.read("> "), WAIT_S) == "s"
+
+    waiting, line, seen = _after_a_prompt_was_taken_down("ye", the_next_message, "y\r")
+
+    assert (waiting, line, seen) == ([True], "y", ["approve? "])
+
+
+def test_a_card_taken_down_while_it_waits_out_a_half_line_leaves_it_unfinished():
+    """Half a word is typed while a tool runs, and the card that opens is
+    a question. It waits for the Enter of that line, nothing is typed, and
+    its deadline takes the prompt down empty. The line is as unfinished
+    as before, and the approval card that opens later treats it so.
+
+    Mutation: go by the text in the cancelled prompt alone in
+    ``PromptToolkitSource._prompt`` and the later card returns ``s``.
+    """
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit.input import create_pipe_input
+
+    async def drive():
+        with create_pipe_input() as keys:
+            source = _picker_source(keys)
+            keys.send_text("ye")
+            seen = await _taken_down(source, keys, "")
+            waiting, line = await _card_after(source, keys, seen, "s\r", "n\r")
+            return waiting, line, seen
+
+    waiting, line, seen = asyncio.run(drive())
+
+    assert waiting == [True, True]
+    assert line == "n"
+    assert seen == ["discarded", "unfinished", "approve? ", "approve? "]
+
+
+def test_a_read_cancelled_while_it_was_queued_leaves_no_line_behind():
+    """A question queued behind another prompt is taken down before its
+    own prompt ever opened. The text on the terminal then belongs to the
+    prompt that is still open, and is entered there.
+
+    Mutation: look at the session's text whenever a read is withdrawn,
+    whoever was holding the terminal, and the card that opens after both
+    throws away the first answer typed at it.
+    """
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit.input import create_pipe_input
+
+    async def drive():
+        with create_pipe_input() as keys:
+            source = _picker_source(keys)
+            open_prompt = asyncio.create_task(source.read_fresh("approve first? "))
+            await asyncio.sleep(0.05)
+            keys.send_text("ye")
+            queued = asyncio.create_task(source.read_fresh("answer> "))
+            await asyncio.sleep(SETTLE_S)
+            queued.cancel()
+            await asyncio.wait({queued})
+            source.withdraw()
+            keys.send_text("s\r")
+            entered = await asyncio.wait_for(open_prompt, WAIT_S)
+            seen = _record_prompts(source)
+            waiting, line = await _card_after(source, keys, seen, "y\r")
+            return entered, waiting, line, seen
+
+    assert asyncio.run(drive()) == ("yes", [True], "y", ["approve? "])
+
+
 def _two_lines_in_one_write(second: str):
     """Answer one prompt with two lines sent together, then read again.
 

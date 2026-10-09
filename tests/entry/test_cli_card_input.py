@@ -27,11 +27,14 @@ from typing import Callable
 import pytest
 
 from omicsclaw.entry.cli import PROMPT, Repl, Screen, StreamSource
-from omicsclaw.entry.cli._input import FreshSource
+from omicsclaw.entry.cli._input import FreshSource, PromptToolkitSource
 from omicsclaw.permission import PermissionMode
 from omicsclaw.schema import Message, Role, ToolCall
 from omicsclaw.tools import ApprovalMode, ToolPolicy
-from tests.entry.test_cli_input import Typist  # type: ignore[import-not-found]
+from tests.entry.test_cli_input import (  # type: ignore[import-not-found]
+    Typist,
+    _record_prompts,
+)
 from tests.entry.test_cli_question import (  # type: ignore[import-not-found]
     _asks,
     _build,
@@ -943,6 +946,78 @@ def test_a_grant_typed_while_the_card_is_waiting_is_recorded_as_before(tmp_path)
     assert "ask_a: allowed for this conversation." in printed
     assert printed.count("<- ask_a ok") == 2
     assert SETTLED_ALREADY not in printed
+
+
+# ---- half a word typed at a question whose deadline passes ---------------------------
+
+
+def test_half_a_word_typed_at_a_question_is_not_finished_at_the_next_card(tmp_path):
+    """``ye`` is typed at the question's prompt and the deadline passes
+    before the rest. The prompt is taken down with the two letters in it.
+    The model's next message needs approval, and ``s`` and Enter typed at
+    that card finish the word the person began: on its own the ``s``
+    would allow the tool for the rest of the conversation. The card says
+    that the line is discarded up to its Enter, stays open, and takes the
+    ``y`` typed after that.
+
+    The source here is the real ``prompt_toolkit`` one, fed through its
+    pipe input, because what is held is that it remembers the unfinished
+    line of a prompt that was cancelled.
+
+    Mutation: forget that the cancelled prompt held text in
+    ``PromptToolkitSource`` and the ``s`` settles the card.
+    """
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    asked, approve = ANSWER.format(n=1), APPROVE.format(n=2)
+
+    async def drive():
+        gated = _Gated()
+        provider = Scripted(
+            _model(_asks("May I print a greeting?"), _gated()),
+            _model(_needs_approval()),
+            _says("done"),
+        )
+        app = _build(
+            tmp_path, provider, tools=(gated, Asking("ask_a")), approval_timeout_s=1.5
+        )
+        buffer = io.StringIO()
+        with create_pipe_input() as keys:
+            source = PromptToolkitSource(
+                PromptSession(input=keys, output=DummyOutput())
+            )
+            shown = _record_prompts(source)
+            repl = Repl(app, source=source, screen=Screen.into(buffer))
+            loop = asyncio.create_task(repl.run())
+            await _until(lambda: PROMPT in shown, "the REPL's prompt")
+            keys.send_text("go\r")
+            await _until(lambda: asked in shown, "the question's prompt")
+            keys.send_text("ye")
+            await _until(lambda: "No answer [" in buffer.getvalue(), "the deadline")
+            gated.finish.set()
+            await _until(lambda: approve in shown, "the approval card's prompt")
+            keys.send_text("s\r")
+            await _until(lambda: shown.count(approve) == 2, "the prompt again")
+            await _a_moment()
+            after_the_enter = buffer.getvalue()
+            keys.send_text("y\r")
+            await _until(lambda: "<- ask_a" in buffer.getvalue(), "the card settled")
+            await _until(lambda: shown.count(PROMPT) == 2, "the REPL's prompt again")
+            keys.send_text("/exit\r")
+            await asyncio.wait_for(loop, WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return after_the_enter, buffer.getvalue()
+
+    after_the_enter, printed = asyncio.run(drive())
+
+    assert NOTICE in after_the_enter and HALF_LINE_NOTICE in after_the_enter
+    assert "Approval granted [" not in after_the_enter
+    assert "Will not ask about" not in printed
+    assert "<- ask_a ok" in printed
+    assert (printed.count(NOTICE), printed.count(HALF_LINE_NOTICE)) == (1, 1)
 
 
 # ---- input that is not typed ----------------------------------------------------

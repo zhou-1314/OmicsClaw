@@ -496,7 +496,7 @@ to 1024 bytes, so about a megabyte of typed-ahead input is thrown away
 and a terminal that never stops sending cannot hold the event loop."""
 
 
-def _drop_keys(keys: Any) -> tuple[bool, bool]:
+def _drop_keys(keys: Any, begun: bool = False) -> tuple[bool, bool]:
     """Throw away the key presses waiting at a ``prompt_toolkit`` input.
 
     They wait in two places. ``prompt_toolkit`` keeps the keys it read
@@ -505,12 +505,14 @@ def _drop_keys(keys: Any) -> tuple[bool, bool]:
     returns all of it, a half-typed line included.
 
     :param keys: The session's ``Input``.
-    :returns: Whether a person had pressed any of them, and whether they
-        left a line unfinished: a character or a paste after the last
-        Enter. A key that puts no text on the line, such as an arrow or
-        an Escape, starts no line. What the terminal sent of its own
-        accord is thrown away without counting (see
-        :func:`_pressed_by_a_person`).
+    :param begun: Whether a line was unfinished before any of these keys
+        were pressed, begun at a prompt that has since been taken down.
+    :returns: Whether a person had pressed any of them, and whether a
+        line is left unfinished: a character or a paste after the last
+        Enter, or, when there is no Enter among them, *begun*. A key that
+        puts no text on the line, such as an arrow or an Escape, starts
+        no line. What the terminal sent of its own accord is thrown away
+        without counting (see :func:`_pressed_by_a_person`).
     """
     from prompt_toolkit.input.typeahead import get_typeahead
     from prompt_toolkit.keys import Keys
@@ -526,7 +528,7 @@ def _drop_keys(keys: Any) -> tuple[bool, bool]:
                 break
             waiting.extend(presses)
     pressed = _pressed_by_a_person(waiting)
-    unfinished = False
+    unfinished = begun
     for press in pressed:
         if press.key in (Keys.ControlM, Keys.ControlJ):
             # Enter. A terminal in its line mode stores it as a line feed.
@@ -592,6 +594,12 @@ def _control_sequence_end(presses: Sequence[Any], start: int) -> int:
     return 0
 
 
+def _holds_text(session: Any) -> bool:
+    """Whether text typed at *session*'s prompt is still there, not entered."""
+    buffer = getattr(session, "default_buffer", None)
+    return bool(getattr(buffer, "text", ""))
+
+
 class _PickerCancelled(Exception):
     """Raised inside the picker by Esc or Ctrl-C, and caught by ``choose``."""
 
@@ -614,14 +622,21 @@ class PromptToolkitSource:
     turns two simultaneous cards into two cards in a row.
     """
 
-    __slots__ = ("_reading", "_session")
+    __slots__ = ("_begun", "_reading", "_session")
 
     def __init__(self, session: Any) -> None:
         self._session = session
         self._reading = asyncio.Lock()
+        # A prompt of this source was cancelled with a line begun at it
+        # and not entered. The next read takes that line over.
+        self._begun = False
 
     async def read(self, prompt: str) -> str:
         """Show *prompt* once the terminal is free, and return the answer.
+
+        A line that a cancelled prompt left unfinished ends here: whatever
+        is typed to finish it is part of the line this returns, and a
+        later :meth:`read_fresh` knows nothing of it.
 
         :raises EOFError: the source was closed, including while this call
             was queued behind another question.
@@ -630,7 +645,25 @@ class PromptToolkitSource:
             session = self._session
             if session is None:
                 raise EOFError
+            self._begun = False
+            return await self._prompt(session, prompt)
+
+    async def _prompt(self, session: Any, prompt: str, *, begun: bool = False) -> str:
+        """Show *prompt* and return the line typed at it.
+
+        When the prompt is cancelled, whether it leaves a line unfinished
+        is kept for the next read: it does when text was typed at it and
+        not entered, and when *begun* says a line already was unfinished.
+        The text itself goes with the prompt.
+
+        :param begun: Whether what is typed at this prompt finishes a
+            line begun before it.
+        """
+        try:
             return await session.prompt_async(prompt)
+        except asyncio.CancelledError:
+            self._begun = begun or _holds_text(session)
+            raise
 
     async def read_fresh(
         self,
@@ -655,6 +688,12 @@ class PromptToolkitSource:
         :exc:`KeyboardInterrupt`, and the text thrown away is written to
         the session's history like a line that was kept.
 
+        A line is also unfinished when the last prompt of this source was
+        cancelled with text typed at it and no Enter has been pressed
+        since, as when a question's prompt is taken down at its deadline
+        with half a word in it. That text went with its prompt, and both
+        callbacks are called for it as for keys dropped here.
+
         :param discarded: Called at most once, before the prompt.
         :param unfinished: Called at most once, after *discarded* and
             before the prompt.
@@ -665,21 +704,23 @@ class PromptToolkitSource:
             session = self._session
             if session is None:
                 raise EOFError
-            typed, half_typed = _drop_keys(session.input)
-            if typed and discarded is not None:
+            begun, self._begun = self._begun, False
+            typed, half_typed = _drop_keys(session.input, begun)
+            if (typed or begun) and discarded is not None:
                 discarded()
             if half_typed:
                 if unfinished is not None:
                     unfinished()
-                await session.prompt_async(prompt)
-            return await session.prompt_async(prompt)
+                await self._prompt(session, prompt, begun=True)
+            return await self._prompt(session, prompt)
 
     def withdraw(self) -> None:
         """Nothing to take down.
 
         A ``prompt_async`` that is cancelled redraws its prompt as
         finished, moves the cursor to the next line and forgets the text
-        typed at it.
+        typed at it. That a line was begun there is kept by the read that
+        was cancelled, for the next :meth:`read_fresh`.
         """
 
     async def choose(
