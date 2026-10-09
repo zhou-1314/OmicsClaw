@@ -831,6 +831,27 @@ def terminal():
         opened.close()
 
 
+def test_keys_waiting_at_a_real_terminal_are_read_in_raw_mode(terminal):
+    """Between prompts the terminal is in its line mode, where a read is
+    given nothing of a line until Enter. ``_drop_keys`` reads in raw mode,
+    which is what lets it take a half-typed line out of the terminal and
+    see that it is unfinished.
+
+    Mutation: read without ``keys.raw_mode()`` in ``_drop_keys`` and the
+    half line is neither reported nor dropped: the line read afterwards
+    is ``yes``.
+    """
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit.input.vt100 import Vt100Input
+
+    terminal.type("ye")
+    dropped = _input._drop_keys(Vt100Input(terminal.stream))
+    terminal.type("s\n")
+
+    assert dropped == (True, True)
+    assert terminal.stream.readline() == "s\n"
+
+
 PATIENT_S = 2.0
 """A wait for a leftover ``readline`` that a busy machine cannot outlast.
 It ends as soon as the thread reports, so a test only spends it when the
@@ -1047,6 +1068,54 @@ def test_a_line_the_cancelled_read_has_not_reported_yet_is_dropped_too(
         )
         terminal.type("late\n")
         time.sleep(0.05)  # the thread takes the line; the loop has not run
+        await _echoed(echo, "approve? ")
+        await asyncio.sleep(0.05)
+        waiting = not reading.done()
+        terminal.type("y\n")
+        return waiting, await asyncio.wait_for(reading, WAIT_S), len(dropped)
+
+    assert asyncio.run(drive()) == (True, "y", 1)
+
+
+def _queued(stream) -> int:
+    """How many characters of finished lines wait in *stream*'s terminal."""
+    import fcntl
+    import struct
+    import termios
+
+    counted = fcntl.ioctl(stream.fileno(), termios.FIONREAD, struct.pack("i", 0))
+    return struct.unpack("i", counted)[0]
+
+
+def test_a_line_the_cancelled_read_took_is_dropped_while_another_still_waits(
+    terminal, patient
+):
+    """Two replies are typed too late. The ``readline`` left behind takes
+    the first out of the terminal and the second stays in the queue.
+    Emptying the queue finds a line to drop, and the first is still to be
+    collected from the thread.
+
+    Mutation: skip the wait for the leftover ``readline`` when the queue
+    already gave a line to drop in ``StreamSource._drop_typed`` and the
+    fresh read returns ``late``.
+    """
+
+    async def drive():
+        echo = io.StringIO()
+        source = StreamSource(terminal.stream, echo=echo)
+        dropped: list[int] = []
+        first = asyncio.create_task(source.read("answer> "))
+        await _echoed(echo, "answer> ")
+        first.cancel()
+        await asyncio.wait({first})
+        terminal.type("late\nlater\n")
+        deadline = time.monotonic() + WAIT_S
+        while _queued(terminal.stream) != len("later\n"):
+            assert time.monotonic() < deadline, "the first line was never taken"
+            await asyncio.sleep(0.001)
+        reading = asyncio.create_task(
+            source.read_fresh("approve? ", discarded=lambda: dropped.append(1))
+        )
         await _echoed(echo, "approve? ")
         await asyncio.sleep(0.05)
         waiting = not reading.done()
@@ -1292,6 +1361,30 @@ def test_a_terminal_with_no_descriptor_is_read_without_flushing():
         return await asyncio.wait_for(source.read_fresh("approve? "), WAIT_S)
 
     assert asyncio.run(drive()) == "y"
+
+
+@pytest.mark.parametrize("failure", ["termios.error", "OSError"])
+def test_a_queue_that_could_not_be_emptied_is_not_reported_as_dropped(
+    terminal, monkeypatch, failure
+):
+    """``tcflush`` can fail, for one on a terminal that has gone away.
+    Nothing was thrown away then. Reporting a drop would print the notice
+    above a card that the waiting line goes on to answer.
+
+    Mutation: return ``True`` when ``tcflush`` fails in ``_flush_typed``.
+    """
+    import termios
+
+    def refuse(descriptor: int, queue: int) -> None:
+        raise {"termios.error": termios.error, "OSError": OSError}[failure](
+            5, "Input/output error"
+        )
+
+    monkeypatch.setattr(termios, "tcflush", refuse)
+    terminal.type("yes\n")
+
+    assert _input._flush_typed(terminal.stream) is False
+    assert terminal.stream.readline() == "yes\n"
 
 
 def _closed() -> io.StringIO:
