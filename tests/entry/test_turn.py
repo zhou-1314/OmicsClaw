@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import dataclasses
 import pathlib
 
@@ -34,6 +35,7 @@ from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]
     Finishing,
     assert_both_dialects_accept,
     requesting,
+    result_for,
     tool_call,
     unanswered_calls,
 )
@@ -188,6 +190,34 @@ def test_compose_leaves_out_a_call_nothing_answered(tmp_path):
     )
 
 
+STUCK_AFTER_A_ROUND = (
+    Message.user("report, then write the notes"),
+    requesting(tool_call("c0")),
+    result_for("c0"),
+    requesting(tool_call("w1", "write_file", CUT_ARGUMENTS), text="Writing."),
+)
+"""One complete tool round, then a turn whose call nothing answered."""
+
+CLEANED = (*STUCK_AFTER_A_ROUND[:3], Message.assistant("Writing."))
+"""The same history with the unanswered call left out."""
+
+NOT_A_SEQUENCE = {
+    "a-generator": lambda messages: (message for message in messages),
+    "a-deque": collections.deque,
+}
+"""A history with no length, and one that cannot be sliced."""
+
+
+@pytest.mark.parametrize("wrap", NOT_A_SEQUENCE.values(), ids=NOT_A_SEQUENCE.keys())
+def test_compose_takes_a_history_that_is_not_a_list_or_a_tuple(tmp_path, wrap):
+    """A generator or a deque is composed, and cleaned, like a list."""
+    app = make_app(tmp_path, _Scripted())
+
+    messages, _prompt = compose(app, wrap(STUCK_AFTER_A_ROUND), "again")
+
+    assert messages[1:] == (*CLEANED, Message.user("again"))
+
+
 # ---- the engine actually receives it ------------------------------------
 
 
@@ -287,6 +317,31 @@ def test_run_turn_accepts_the_history_a_cut_off_run_handed_back(tmp_path):
     assert second.reply == "Done."
 
 
+@pytest.mark.parametrize("wrap", NOT_A_SEQUENCE.values(), ids=NOT_A_SEQUENCE.keys())
+def test_run_turn_takes_a_history_that_is_not_a_list_or_a_tuple(
+    tmp_path, caplog, wrap
+):
+    """A generator or a deque reaches the model cleaned, like a list.
+
+    The log line counts the one call that was left out, and counting
+    reads the history a second time.
+    """
+    provider = Finishing(Message.assistant("Done."))
+    app = make_app(tmp_path, provider)
+
+    with caplog.at_level("INFO", logger="omicsclaw.entry.turn"):
+        outcome = asyncio.run(run_turn(app, wrap(STUCK_AFTER_A_ROUND), "again"))
+
+    carried = (*CLEANED, Message.user("again"))
+    assert provider.seen[-1][1 : 1 + len(carried)] == carried
+    assert outcome.history == (*carried, Message.assistant("Done."))
+    assert [
+        record.getMessage()
+        for record in caplog.records
+        if "left out of the history" in record.getMessage()
+    ] == ["session -: 1 tool call(s) with no result left out of the history"]
+
+
 def test_the_outcome_reports_which_section_cost_what(tmp_path):
     write_skill(tmp_path, "spatial", "spatial-de", "Load when running DE.")
     app = make_app(tmp_path, _Scripted())
@@ -308,6 +363,30 @@ def test_a_conversation_that_fits_is_not_compacted(tmp_path):
 
     assert record is None
     assert messages[0].role is Role.SYSTEM
+
+
+def test_prepare_leaves_out_a_call_nothing_answered(tmp_path):
+    """The preview starts from the cleaned history, wherever the call sits."""
+    app = make_app(tmp_path, _Scripted())
+    went_on = (
+        Message.user("write the notes"),
+        requesting(tool_call("w1", "write_file", CUT_ARGUMENTS), text="Writing."),
+        Message.user("hello?"),
+        Message.assistant("Still here."),
+    )
+
+    messages, _prompt, _state, record = asyncio.run(
+        prepare(app, went_on, "please continue")
+    )
+
+    assert record is None
+    assert messages[1:] == (
+        Message.user("write the notes"),
+        Message.assistant("Writing."),
+        Message.user("hello?"),
+        Message.assistant("Still here."),
+        Message.user("please continue"),
+    )
 
 
 def test_a_conversation_over_the_tier_is_compacted_before_the_engine(tmp_path):

@@ -168,7 +168,9 @@ def compose(
     a mid-run edit to any prompt file visible on the next exchange.
     """
     prompt = app.prompt.render()
-    return assemble(prompt, drop_unanswered_calls(history), user_text), prompt
+    # ``tuple`` first: a caller may pass a generator or a deque, and the
+    # cleaning takes the length of the history and slices it.
+    return assemble(prompt, drop_unanswered_calls(tuple(history)), user_text), prompt
 
 
 async def prepare(
@@ -222,7 +224,8 @@ class _Carried:
     """
 
     history: tuple[Message, ...] = ()
-    """What this exchange starts from, free of a system message (Q3)."""
+    """What this exchange starts from, free of a system message (Q3) and
+    of tool calls that no tool result answers."""
 
     committed: tuple[Message, ...] | None = None
     """What the engine handed back, or ``None`` if it never got that far."""
@@ -235,11 +238,13 @@ class _Carried:
 
     @property
     def carried(self) -> tuple[Message, ...]:
-        """The conversation to keep: the commit, or the input unchanged.
+        """The conversation to keep: the commit, or :attr:`history`.
 
         An exchange that raised or was abandoned never committed, and
-        the right history for it is the one it was given — cancelling an
-        exchange discards *it*, not the conversation (plan 0031 trap 3).
+        the right history for it is the one it started from: cancelling
+        an exchange discards *it*, not the conversation (plan 0031 trap
+        3). :attr:`history` has unanswered tool calls already left out,
+        so it can differ from what the caller passed in.
         """
         return self.history if self.committed is None else self.committed
 
@@ -282,6 +287,9 @@ def _assemble(
     building the augmentor would restore the session's plan from its
     archive for an exchange that has no turn to remind.
     """
+    # Read *history* once: a caller may pass a generator or a deque, the
+    # cleaning slices it, and the count below reads it a second time.
+    history = tuple(history)
     carried = drop_unanswered_calls(history)
     removed = sum(len(m.tool_calls) for m in history) - sum(
         len(m.tool_calls) for m in carried
