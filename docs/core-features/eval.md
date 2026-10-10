@@ -141,6 +141,8 @@ memory 用 tmp 工作区里的 SQLite（`build_app` 固定打开 `<workspace>/.o
 
 `Result` 除了 harness9 有的字段（`passed`、`turn_count`、`tool_calls_executed`、`final_output`、`run_error`、`failures`、`warnings`、`duration_s`），还记录 `provider_calls`（每次调用送进模型的消息）、`side_calls`、`tool_results`、`skill_runs`、`approvals`、`fs_changes`、`compactions`、`stop_reasons`、`engine_turns`。`turn_count` 统计主线模型调用次数，包括重试；`engine_turns` 是引擎 `RunResult.turns` 之和。
 
+`final_output` 是最后一次交换的 `TurnOutcome.reply`：那次交换自己写下的最后一段 assistant 文字，写在工具调用旁边的也算。最后一次交换没有写文字时它是空串，取不到前面某次交换的回答（2026-10-10 起，记录在 [surfaces.md](surfaces.md) §3.3）。所以带 `followups` 的用例里，followup 没有文字时 `OutputContains` 失败，`OutputExcludes` 没有东西可找，通过。交换以失败或取消结束时没有结果，`final_output` 也是空串。
+
 Runner 修改的环境变量和 `bash` 的本地执行函数都是进程级的，所以同一进程里用例依次运行。`pytest-xdist` 的每个 worker 是独立进程，互不干扰。
 
 ### 1.5 skill 打桩

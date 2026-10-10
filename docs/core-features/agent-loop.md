@@ -450,7 +450,7 @@ surface（entry/cli、entry/desktop、entry/channel）
                                                     prompt=app.prompt, compactor=…, augmentor=…):
            scope.observe(event)                         # 可观测层消费事件，引擎没有 observer 接缝
            publish(TurnEvent.from_engine(event, …))     # 转为面向 surface 的 TurnEvent
-    return _outcome(result, exchange)                   # TurnOutcome：要保留的历史 + 压缩状态
+    return _outcome(result, exchange)                   # TurnOutcome：要保留的历史 + 压缩状态 + 本次的回答
 ```
 
 - 阻塞路径 `run_turn` 用 `_run` 调 `engine.exchange`；流式路径 `stream_turn` 和 `TurnRunner` 用 `_stream` 调 `engine.exchange_stream`。三条路径都走同一个 `_assemble`。
