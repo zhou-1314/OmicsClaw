@@ -10,18 +10,25 @@ ran, walks the workspace for files it declares, and registers what it
 finds as artifacts — **zero LLM cost**, which is why it is the first
 capture channel.
 
-The parser is deliberately a tokenizer, not a markdown parser. Two shapes
-carry every real declaration this repository's 88 contracts use:
+The parser is deliberately a tokenizer, not a markdown parser. Three
+shapes carry the declarations this repository's 88 contracts use:
 
 * backtick spans anywhere in the text — ``​`figures/mean_program_usage.png`​``;
 * fenced code blocks holding a directory tree, whose ``├──`` /
-  ``└──`` lines name one file each.
+  ``└──`` lines name one file each;
+* bare path-shaped words — list items (``- tables/Summary.csv: counts``)
+  and prose mentions (``writes processed.h5ad, report.md, result.json``).
+  The curated contracts are not uniform: a bare ``-`` list with no
+  backticks is a real style, and the auto-generated ones name their root
+  outputs in plain sentences.
 
 A token survives only when it *looks like a file path*: no spaces or
 brackets, a short alphanumeric suffix, relative, not a directory, no
 ``..``. Everything else — ``run_info``, ``obsm["X_gene_programs"]``,
 ``--r-enhanced``, ``figures/r_enhanced/`` — is prose about the outputs,
-not a declaration, and is dropped.
+not a declaration, and is dropped. A declared path still registers only
+when the file exists in the workspace and passes the attribution rules
+below, so a prose mention of a file the run never wrote is inert.
 
 **The fallback.** A contract that is missing, unparseable (no token
 survived) or that matched nothing in the workspace turns the scan over
@@ -112,6 +119,13 @@ _TREE_ENTRY: Final = re.compile(
     r"^(?P<prefix>[│\s]*)(?P<marker>[├└])──\s*(?P<name>.+?)\s*$"
 )
 _BACKTICK: Final = re.compile(r"`([^`\n]+)`")
+_BARE_WORD: Final = re.compile(r"[^\s`(){}\[\]<>\"'`;,:?!]+")
+"""One punctuation-delimited word of the contract text. Colons and commas
+delimit on purpose: ``- tables/x.csv: counts`` yields ``tables/x.csv``,
+prose like ``writes a.h5ad, b.md,`` yields both files clean. Leading and
+trailing ``.``/``-`` are stripped before the shape rules judge the word,
+so ``commands.sh.`` becomes ``commands.sh`` and a list marker never
+survives into the token."""
 _BAD_CHARS: Final = re.compile(r"[\s(){}\[\]<>\"'|*?:$#]")
 _SUFFIX: Final = re.compile(r"\.[A-Za-z0-9]{1,8}$")
 
@@ -123,14 +137,14 @@ handed — ``JobsManager._emit`` bound to one job id."""
 def parse_output_contract(text: str) -> list[str]:
     """The declared relative paths of one contract's text, in order.
 
-    Backtick spans from the prose and file lines from fenced trees, kept
-    only when they look like a relative file path (see the module
-    docstring). Tree nesting is followed, so ``└── tables/`` with an
-    indented ``├── Summary.csv`` beneath it declares
-    ``tables/Summary.csv``. Deduplicated, order-preserving, never
-    raising — a contract is data about a skill, and malformed data
-    parses to fewer declarations, which the caller turns into the
-    fallback scan.
+    Backtick spans from the prose, file lines from fenced trees, and bare
+    path-shaped words (list items and prose mentions), kept only when
+    they look like a relative file path (see the module docstring). Tree
+    nesting is followed, so ``└── tables/`` with an indented
+    ``├── Summary.csv`` beneath it declares ``tables/Summary.csv``.
+    Deduplicated, order-preserving, never raising — a contract is data
+    about a skill, and malformed data parses to fewer declarations, which
+    the caller turns into the fallback scan.
     """
     declared: list[str] = []
     seen: set[str] = set()
@@ -144,11 +158,32 @@ def parse_output_contract(text: str) -> list[str]:
         seen.add(cleaned)
         declared.append(cleaned)
 
-    for token in _BACKTICK.findall(text or ""):
+    stripped = text or ""
+    for token in _BACKTICK.findall(stripped):
         _consider(token)
-    for block in re.findall(r"```[^\n]*\n(.*?)```", text or "", flags=re.DOTALL):
+    for block in re.findall(r"```[^\n]*\n(.*?)```", stripped, flags=re.DOTALL):
         _parse_tree(block, _consider)
+    for word in _BARE_WORD.findall(_mask_tree_blocks(stripped)):
+        _consider(word.strip(".-"))
     return declared
+
+
+def _mask_tree_blocks(text: str) -> str:
+    """Blank out fenced blocks that carry directory-tree markers.
+
+    A tree's file lines are claimed by :func:`_parse_tree` with their
+    directory prefixes reconstructed; letting the bare-word pass see the
+    same lines would declare ``Summary.csv`` a second time without its
+    ``tables/`` prefix. A fenced block without tree markers is left in —
+    a plain fenced list of paths is prose-shaped and fair game.
+    """
+    def _mask(match: re.Match[str]) -> str:
+        block = match.group(0)
+        if "├" in block or "└" in block:
+            return " " * len(block)
+        return block
+
+    return re.sub(r"```.*?```", _mask, text, flags=re.DOTALL)
 
 
 def _parse_tree(block: str, consider) -> None:
@@ -197,8 +232,11 @@ def scan_workspace_files(workspace: Path) -> dict[str, Path]:
     Hidden directories (``.omicsclaw``, ``.git``) are pruned, which keeps
     the store's own database and any repository plumbing out of the
     artifact space — and matches what ``/files/serve`` is willing to
-    serve, so a registered artifact is always a servable one. Never
-    raises: a walk that trips on one unreadable directory keeps going.
+    serve, so a registered artifact is always a servable one. A file
+    symlink whose target resolves outside the workspace is skipped for
+    the same reason: the row would describe a file the serve route would
+    refuse. Never raises: a walk that trips on one unreadable directory
+    keeps going.
     """
     found: dict[str, Path] = {}
     root = workspace.resolve()
@@ -209,6 +247,12 @@ def scan_workspace_files(workspace: Path) -> dict[str, Path]:
             if name.startswith("."):
                 continue
             path = Path(current) / name
+            if path.is_symlink():
+                try:
+                    if not path.resolve().is_relative_to(root):
+                        continue
+                except OSError:
+                    continue
             found[path.relative_to(root).as_posix()] = path
             counted += 1
             if counted >= MAX_SCAN_FILES:

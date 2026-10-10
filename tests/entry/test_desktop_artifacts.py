@@ -226,6 +226,62 @@ def test_parse_output_contract_answers_nothing_for_prose_only():
     assert parse_output_contract("") == []
 
 
+def test_parse_output_contract_takes_bare_list_items_and_prose_paths():
+    """M1's shapes: the curated contracts are not uniform — a bare ``-``
+    list with no backticks is a real style, and the auto-generated ones
+    name their root outputs in plain prose sentences."""
+    bare_list = (
+        "# Output contract\n\n"
+        "- tables/differential_abundance.csv\n"
+        "- tables/significant.csv\n"
+        "- report.md\n"
+        "- result.json\n"
+        "- `reproducibility/commands.sh` records the CLI invocation template.\n"
+    )
+    assert parse_output_contract(bare_list) == [
+        "tables/differential_abundance.csv",
+        "tables/significant.csv",
+        "report.md",
+        "result.json",
+    ]
+
+    prose = (
+        "The CLI writes processed.h5ad, report.md, result.json, commands.sh,\n"
+        "requirements.txt and r_visualization.sh. figure_data/manifest.json\n"
+        "records which gallery inputs and rendered outputs are available.\n\n"
+        "## Tables\n\n"
+        "- tables/domain_summary.csv: per-domain counts and percentages.\n"
+        "- figure_data/domain_counts.csv: gallery counts.\n"
+    )
+    declared = parse_output_contract(prose)
+    for expected in (
+        "processed.h5ad",
+        "report.md",
+        "result.json",
+        "figure_data/manifest.json",
+        "tables/domain_summary.csv",
+        "figure_data/domain_counts.csv",
+    ):
+        assert expected in declared, declared
+
+
+def test_every_real_contract_parses_to_at_least_one_declaration():
+    """M1's regression fence over the real corpus: every curated
+    ``output_contract.md`` must yield at least one declaration through
+    the tokenizer (backticks, fenced trees, bare lists or prose), so no
+    skill silently loses the contract scan to the fallback and its root
+    outputs (``processed.h5ad``, ``report.md``) drop off the tray."""
+    root = pathlib.Path(__file__).resolve().parents[2] / "skills"
+    contracts = sorted(root.rglob("references/output_contract.md"))
+    assert len(contracts) >= 80, len(contracts)
+    empty = [
+        str(path.relative_to(root))
+        for path in contracts
+        if not parse_output_contract(path.read_text(encoding="utf-8"))
+    ]
+    assert empty == [], empty
+
+
 # ---- health and the wire contract ------------------------------------------
 
 
@@ -450,3 +506,89 @@ def test_save_artifact_refuses_a_file_that_does_not_exist(tmp_path):
         with use_tool_context(approval=_yes()):
             _run(tool.execute(json.dumps({"path": "figures/never.png"})))
     assert not (tmp_path / ".omicsclaw" / "jobs.db").exists()
+
+
+def test_save_artifact_refuses_hidden_segments(tmp_path):
+    """m4's fence: ``/files/serve`` refuses every dot-leading segment, so
+    registering one would surface a tray entry that 403s when clicked."""
+    hidden = tmp_path / ".omicsclaw" / "cache.png"
+    hidden.parent.mkdir()
+    hidden.write_bytes(b"png")
+    nested = tmp_path / "results" / ".hidden" / "x.png"
+    nested.parent.mkdir(parents=True)
+    nested.write_bytes(b"x")
+    tool = SaveArtifactTool(Workspace(tmp_path), sink=WorkspaceArtifactSink(tmp_path))
+
+    for bad in (".omicsclaw/cache.png", "results/.hidden/x.png"):
+        with pytest.raises(ToolArgumentError, match="hidden"):
+            with use_tool_context(approval=_yes()):
+                _run(tool.execute(json.dumps({"path": bad})))
+    store = ArtifactStore(Database(tmp_path / ".omicsclaw" / "jobs.db"))
+    assert store.list_artifacts(limit=500) == []
+
+
+def test_scan_skips_symlinks_pointing_outside_the_workspace(tmp_path):
+    """m3's fence: the row for an escaping symlink would describe a file
+    ``/files/serve`` refuses to hand out."""
+    plant_skills(tmp_path)
+    outside = tmp_path.parent / "outside-artifact.png"
+    outside.write_bytes(b"outside")
+    figures = tmp_path / "figures"
+    figures.mkdir()
+    (figures / "hello.png").write_bytes(PNG_BYTES)
+    (figures / "leak.png").symlink_to(outside)
+
+    store = ArtifactStore(Database(":memory:"))
+    registered = register_job_artifacts(
+        store,
+        job_id="job-sym",
+        session_id="s",
+        skill_directory=tmp_path / "skills" / "demo" / "artifact-skill",
+        workspace=tmp_path,
+        since=None,
+    )
+    paths = [row.path for row in registered]
+    assert any(path.endswith("figures/hello.png") for path in paths)
+    assert not any(path.endswith("leak.png") for path in paths)
+
+
+def test_unique_index_is_the_cross_connection_idempotency_floor(tmp_path):
+    """m1's floor: the checked insert guards one ``Database`` instance;
+    the UNIQUE ``(job_id, path)`` index is what stops two connections
+    (the jobs-plane store and the save_artifact sink) from both landing
+    a row for the same pair."""
+    import sqlite3
+    import time as time_module
+
+    from omicsclaw.memory.artifacts import new_artifact_id
+
+    database = Database(tmp_path / "artifacts.db")
+    store = ArtifactStore(database)
+    path = str(tmp_path / "x.png")
+
+    def _record() -> object:
+        from omicsclaw.memory.artifacts import ArtifactRecord
+
+        return ArtifactRecord(
+            id=new_artifact_id(),
+            job_id="job-dup",
+            session_id="s",
+            kind="figure",
+            path=path,
+            title="x",
+            created_at=time_module.time(),
+        )
+
+    assert store.insert_artifact(_record()) is not None
+    assert store.insert_artifact(_record()) is None  # the checked no-op
+
+    def _raw(conn: object) -> None:
+        conn.execute(
+            "INSERT INTO artifacts (id, job_id, session_id, kind, path,"
+            " title, sha256, size, created_at)"
+            " VALUES ('zz', 'job-dup', 's', 'figure', ?, 'x', '', 0, 1.0)",
+            (path,),
+        )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        database.run(_raw)

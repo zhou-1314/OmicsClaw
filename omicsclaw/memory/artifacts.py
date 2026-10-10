@@ -134,10 +134,15 @@ class ArtifactStore:
     synchronous single-row writes under the ``Database`` lock, no web
     framework anywhere in sight.
 
-    Idempotency is by ``(job_id, path)``: the same job scanned twice
-    registers nothing the second time, which is what makes a re-scan (or
-    a scan racing a retry) a no-op rather than a duplicate tray. A
-    session-level artifact (empty ``job_id``) is checked the same way, so
+    Idempotency is by ``(job_id, path)`` twice over: the checked insert
+    below serializes writers that share one :class:`Database`, and the
+    ``UNIQUE`` index on ``(job_id, path)`` is the belt under that
+    suspenders — two connections (the jobs-plane store and the
+    ``save_artifact`` sink hold separate ones) cannot both land a row for
+    the same pair. The same job scanned twice registers nothing the
+    second time, which is what makes a re-scan (or a scan racing a
+    retry) a no-op rather than a duplicate tray. A session-level
+    artifact (empty ``job_id``) is checked the same way, so
     ``save_artifact`` called twice on one file also answers the same row
     rather than a second one.
     """
@@ -159,7 +164,8 @@ class ArtifactStore:
                 " title, mime, thumb_path, sha256, size, produced_by,"
                 " parent_ids_json, meta_json, created_at)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                " ON CONFLICT(id) DO NOTHING",
+                " ON CONFLICT(id) DO NOTHING"
+                " ON CONFLICT(job_id, path) DO NOTHING",
                 _as_row(record),
             )
             inserted.append(cursor.rowcount == 1)

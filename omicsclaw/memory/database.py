@@ -112,7 +112,11 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_job
 CREATE INDEX IF NOT EXISTS idx_artifacts_session
     ON artifacts (session_id, created_at);
 
-CREATE INDEX IF NOT EXISTS idx_artifacts_job_path
+-- UNIQUE is the database-level half of scanner idempotency: the
+-- checked insert below guards one Database instance, and this index
+-- guards the case of two connections (the job-plane store and the
+-- save_artifact sink) racing on the same (job_id, path).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_job_path
     ON artifacts (job_id, path);
 """
 

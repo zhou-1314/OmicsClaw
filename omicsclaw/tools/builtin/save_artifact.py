@@ -15,9 +15,11 @@ decoded-and-reconstructed payload would not.
 :class:`~omicsclaw.tools._workspace.Workspace.resolve`, so a symlink
 pointing out of the workspace, a ``..`` climb and a sensitive name
 (``.env`` and friends) are all refused before anything is registered —
-the same boundary ``read``/``write``/``edit`` stand on, which is also
-the boundary ``/files/serve`` enforces, so a registered artifact is
-always a servable one.
+the same boundary ``read``/``write``/``edit`` stand on. One more rule is
+enforced here to match ``/files/serve`` exactly: any path segment that
+starts with a dot (``.omicsclaw/jobs.db``, ``results/.hidden/x.png``)
+is refused, because the serve route refuses every hidden segment and a
+registered artifact must always be a servable one.
 
 **The registrar is injected** (:class:`ArtifactSink`), because this
 layer is a leaf: it may import ``omicsclaw.schema`` and nothing else,
@@ -26,7 +28,10 @@ root (:func:`~omicsclaw.entry.assembly.build_app`) binds the sink over
 the workspace's shared artifact store; a tool constructed without one
 refuses at execution time with a :exc:`RuntimeError`, the same "the
 surface binds it" refusal ``resolve_workspace`` makes, because no
-argument the model can send could supply a database.
+argument the model can send could supply a database. The sink call runs
+in ``asyncio.to_thread``: it hashes the file (up to the store's
+half-gigabyte ceiling) before writing its row, and that read must not
+pause the event loop that is serving every other HTTP and SSE client.
 
 **Approval follows the write category**, per the P2 plan: ``HIGH`` risk,
 ``ASK`` mode. The blast radius is not the filesystem (nothing is
@@ -44,7 +49,9 @@ tool: a tool call with no job has no stream to speak on.
 
 from __future__ import annotations
 
+import asyncio
 import copy
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from omicsclaw.schema import ToolDefinition
@@ -195,6 +202,16 @@ class SaveArtifactTool:
             declared_title = None
 
         workspace = resolve_workspace(self._workspace)
+        # Hidden segments are refused here even though ``Workspace.resolve``
+        # allows some of them: ``/files/serve`` refuses every dot-leading
+        # segment, and a registered artifact must be servable, not a dead
+        # tray entry that 403s when clicked.
+        if any(part.startswith(".") for part in Path(target).parts):
+            raise ToolArgumentError(
+                f"{target!r} names a hidden path; save_artifact registers "
+                "files the results tray can serve, and hidden paths are "
+                "not servable"
+            )
         resolved = workspace.resolve(target)
 
         if not resolved.is_file():
@@ -223,7 +240,12 @@ class SaveArtifactTool:
                 "save_artifact has no artifact sink bound; the surface "
                 "assembling the registry must provide one"
             )
-        return self._sink.save(
+        # ``sink.save`` reads and hashes the file before writing its row —
+        # up to half a gigabyte of disk IO that must not pause the event
+        # loop serving every other client. The job-plane scanner hashes
+        # through ``asyncio.to_thread`` for the same reason.
+        return await asyncio.to_thread(
+            self._sink.save,
             path=str(resolved),
             kind=kind,
             title=title,
