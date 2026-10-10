@@ -497,7 +497,7 @@ DONE    RunResult(messages=…, stop_reason=converged, turns=3, usage=Σ, prompt
 | `EngineEventType` 里没有审批 | surface 从引擎事件流无法得知正在等人，只能靠 entry 层的 `TurnEvent` |
 | 阻塞路径无法表达"用量未报告" | `Completion.usage` 不可为 None，阻塞 Turn 的 `TURN_END.usage` 为零值时，可能是免费，也可能是没报告。要解决需要改 `omicsclaw.provider` |
 | 流式重试会重放文本 | 第 2 次尝试从头生成，UI 上会看到文本重新开始 |
-| `TRUNCATED` 的轨迹以没被回答的工具调用结尾 | `RunResult.messages` 和 `TurnOutcome.history` 仍以这些调用结尾，下一次 exchange 成功之前会话库里存的也是。经 `entry/turn.py` 的路径（`run_turn`、`stream_turn`、`TurnRunner`，包括 `/compact`）在下一次 exchange 开场时把它们去掉，不补 Observation；直接调 `engine.exchange` 或 `engine.run` 的调用方仍要自己回答或丢弃。清理不告诉模型和用户上一轮被截断过 |
+| `TRUNCATED` 的轨迹以没被回答的工具调用结尾 | `RunResult.messages` 和 `TurnOutcome.history` 仍以这些调用结尾，下一次 exchange 成功之前会话库里存的也是。经 `entry/turn.py` 的路径（`run_turn`、`stream_turn`、`TurnRunner`，包括 `/compact`）在下一次 exchange 开场时把它们去掉，不补 Observation；直接调 `engine.exchange` 或 `engine.run` 的调用方仍要自己回答或丢弃。清理不告诉模型和用户上一轮被截断过；`oc cli` 在被截断的那次 exchange 结束时给用户显示一行说明（[cli.md](cli.md) §9.2），Desktop 和 Channel 没有，模型在哪个界面都不知道 |
 | Anthropic 的 thinking 无法回放 | `Message` 没有地方存 thinking 签名，适配器发出请求时会丢掉 `reasoning_content`（见 [provider.md](provider.md)） |
 | "引擎不打日志、不做 I/O"没有测试强制 | `test_engine_is_a_leaf_layer.py` 只检查导入边界 |
 | `_outcome` 依赖 compactor 的具体属性 | R3 形状的缺陷面从三处收敛成一处，但没有消除；`_compact_only` 仍然单独调用 `compose` |

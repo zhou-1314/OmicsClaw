@@ -33,7 +33,12 @@ from omicsclaw.entry.stream import DEFAULT_OBSERVER_QUEUE, TurnStream
 from omicsclaw.entry.turn import TurnHandle
 from omicsclaw.provider import Completion
 from omicsclaw.schema import Message, Role, StreamChunk, StreamChunkType, Usage
-from omicsclaw.tools import ApprovalRequest
+from omicsclaw.tools import (
+    AnswerStatus,
+    ApprovalRequest,
+    QuestionAnswer,
+    QuestionRequest,
+)
 from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]
     Exploding,
     Scripted,
@@ -632,6 +637,8 @@ def test_a_gap_becomes_an_event_omitted_frame():
         TurnEventType.CONTEXT,
         TurnEventType.TURN_END,
         TurnEventType.APPROVAL_SETTLED,
+        TurnEventType.QUESTION_ASKED,
+        TurnEventType.QUESTION_SETTLED,
     ],
 )
 def test_an_event_with_no_frame_in_the_contract_produces_none(kind: TurnEventType):
@@ -639,9 +646,30 @@ def test_an_event_with_no_frame_in_the_contract_produces_none(kind: TurnEventTyp
 
     ``TURN_END`` is not a frame of its own: its usage is summed into the
     ``result`` frame the body sends before ``done``.
+
+    The two question types have no frame because the Desktop surface runs
+    with ``ask_user`` off and has no route an answer could come back on.
     """
     event = TurnEvent(type=kind, seq=1, session_id="s", turn_id="t")
     assert desktop_chat_frame(event) is None
+
+
+def test_a_question_frame_with_its_payload_still_produces_no_desktop_frame():
+    """The parametrised case above builds bare frames; this one carries a
+    real question and a real answer, which is what a branch added to
+    ``desktop_chat_frame`` by mistake would project."""
+    asked = TurnEvent.question_asked(
+        QuestionRequest(question="which build?"), "t#1", session_id="s", turn_id="t"
+    )
+    settled = TurnEvent.question_settled(
+        "t#1",
+        QuestionAnswer(AnswerStatus.ANSWERED, reply="hg38"),
+        session_id="s",
+        turn_id="t",
+    )
+
+    assert desktop_chat_frame(asked) is None
+    assert desktop_chat_frame(settled) is None
 
 
 def a_reasoning_delta(delta: str) -> TurnEvent:

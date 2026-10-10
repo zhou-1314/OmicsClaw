@@ -191,15 +191,20 @@ def test_the_database_and_the_precis_sit_beside_the_other_state(tmp_path):
 # ---- the two tools ------------------------------------------------------
 
 
-def test_the_memory_tools_are_mounted_after_everything_else(tmp_path, offline):
-    """Appended, not inserted: the tool table is a cached prompt prefix."""
-    memory = open_memory(_config(tmp_path))
+def test_the_memory_tools_follow_the_tools_mounted_without_memory(tmp_path, offline):
+    """Appended, not inserted: the tool table is a cached prompt prefix.
+
+    ``ask_user`` is switched off here because it is mounted behind the
+    memory pair, as ``install_skill_deps`` is;
+    ``tests/entry/test_question_wiring.py`` pins that order.
+    """
+    config = _config(tmp_path, ask_user=False)
+    memory = open_memory(config)
     assert memory is not None
     try:
-        names = [tool.name for tool in foundation_tools(_config(tmp_path))]
+        names = [tool.name for tool in foundation_tools(config)]
         with_memory = [
-            tool.name
-            for tool in foundation_tools(_config(tmp_path), memory=memory)
+            tool.name for tool in foundation_tools(config, memory=memory)
         ]
     finally:
         memory.close()

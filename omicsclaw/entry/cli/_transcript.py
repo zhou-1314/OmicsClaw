@@ -3,7 +3,8 @@
 Turns one ``TOOL_START`` or ``TOOL_RESULT`` frame into the lines a
 terminal prints for it: the neutral head line it is handed, a call
 number, the call's arguments and a bounded preview of its output.
-Every other frame comes back as the single line it arrived as.
+Every other frame comes back as the single line it arrived as, except a
+question card, which comes back line by line in the normal style.
 
 Behaviour that decides how this is called:
 
@@ -45,6 +46,7 @@ from omicsclaw.entry.display import (
 )
 from omicsclaw.entry.events import TurnEvent, TurnEventType
 from omicsclaw.planning import PLAN_WRITE_TOOL_NAME
+from omicsclaw.tools.builtin.ask_user import TOOL_NAME as ASK_USER_TOOL_NAME
 from omicsclaw.tools.preview import redact_credentials
 
 __all__ = [
@@ -75,15 +77,19 @@ the person's preview, and ``read_file`` is how they see the rest.
 OUTPUT_CHARS = 160
 """Characters kept from each previewed output line."""
 
-_RENDERED_ELSEWHERE = frozenset({PLAN_WRITE_TOOL_NAME})
+_RENDERED_ELSEWHERE = frozenset({PLAN_WRITE_TOOL_NAME, ASK_USER_TOOL_NAME})
 """Tools whose payload the surface prints itself, so neither half is
 previewed here and only the head line remains.
 
-``plan_write`` is the one: :meth:`~omicsclaw.entry.cli._repl.Repl.
+``plan_write`` is one: :meth:`~omicsclaw.entry.cli._repl.Repl.
 _show_plan` prints the resulting list underneath in the shape a person
 reads, its output is that list as JSON, and its arguments are the items
 being changed — previewing either would put the same plan on screen
 twice, in the worse of the two forms.
+
+``ask_user`` is the other: its arguments are the question, which is shown
+as a card, and its output repeats the question and what the person just
+typed.
 """
 
 _ELLIPSIS = "…"
@@ -176,12 +182,16 @@ class ToolTranscript:
             :class:`~omicsclaw.entry.render.TextRenderer` made of it.
         :returns: One line for anything that is not a tool call, and for
             one that is, the head with its call number and argument
-            preview plus any output preview beneath it.
+            preview plus any output preview beneath it. A question card
+            comes back one line per line of its head, in the normal style
+            and not dimmed, because it is addressed to the person.
         """
         if event.type is TurnEventType.TOOL_START:
             return self._call(event, head)
         if event.type is TurnEventType.TOOL_RESULT:
             return self._result(event, head)
+        if event.type is TurnEventType.QUESTION_ASKED:
+            return tuple(Text(line) for line in inert_prose(head).split("\n"))
         return (Text(inert_prose(head), style="dim"),)
 
     def _call(self, event: TurnEvent, head: str) -> tuple[Text, ...]:

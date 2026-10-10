@@ -61,6 +61,11 @@ three were built to prove:
   ``write_file`` and ``bash``, both hand-written against
   :class:`~omicsclaw.tools.base.Tool`.
 
+``ask_user`` (:class:`~omicsclaw.tools.builtin.ask_user.AskUserTool`) has
+no boundary argument either. It reads and writes nothing: it puts one
+question to the person through the tool context's question channel and
+returns the answer.
+
 **Standard library only, and the constraint shaped these tools too.**
 ``omicsclaw/tools/`` may import ``omicsclaw.schema`` and nothing else
 inside this namespace, which ``tests/tools/test_tools_is_a_leaf_layer.py``
@@ -68,6 +73,7 @@ enforces by walking every module under the package — this subpackage
 included, from the moment its files exist.
 """
 
+from .ask_user import AskUserTool
 from .bash import BashTool
 from .edit import EditTool
 from .read import read_tool
@@ -76,6 +82,7 @@ from .web_search import WebSearchTool
 from .write import WriteTool
 
 __all__ = [
+    "AskUserTool",
     "BashTool",
     "EditTool",
     "WebFetchTool",

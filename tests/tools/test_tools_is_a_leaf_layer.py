@@ -289,6 +289,7 @@ import tempfile
 
 from omicsclaw.schema import ToolCall
 from omicsclaw.tools import (
+    AskUserTool,
     BashTool,
     EditTool,
     MCPTool,
@@ -329,6 +330,8 @@ CALLS = [
     ("web_fetch", '{"url": "https://example.org/p"}', False),
     ("web_fetch", '{"url": "file:///etc/passwd"}', True),
     ("web_search", '{"query": "anything"}', False),
+    ("ask_user", '{"question": "which build?"}', False),
+    ("ask_user", '{"question": ""}', True),
     ("mcp__srv__remote", '{"q": 1}', False),
     ("no_such_tool", "{}", True),
 ]
@@ -345,6 +348,7 @@ async def main():
                 BashTool(workspace),
                 WebFetchTool(transport=Canned()),
                 WebSearchTool(transport=Canned()),
+                AskUserTool(),
             )
         )
         registry.register(
@@ -354,6 +358,7 @@ async def main():
             approval=lambda request: True,
             progress=lambda update: None,
             values={"workspace": root},
+            question=lambda request: None,
         ):
             for name, arguments, expected in CALLS:
                 call = ToolCall(id="c", name=name, arguments=arguments)
@@ -372,12 +377,13 @@ empty leak list. The product is the line after ``asyncio.run``: what
 :data:`sys.modules` holds **once the tools have run**, which is the only
 question a lazy ``import_module`` in a function body answers honestly.
 
-Twelve calls, chosen to cover each way into the layer:
+Fourteen calls, chosen to cover each way into the layer:
 :class:`~omicsclaw.tools.function_tool.FunctionTool` succeeding, failing
 validation and failing to decode; **every foundation tool**, including
 the ones that need a workspace, an approval channel and a progress sink,
-and the two that stand on the network boundary rather than the filesystem
-one; :meth:`~omicsclaw.tools.mcp_tool.MCPTool.execute`; and the
+the two that stand on the network boundary rather than the filesystem
+one, and ``ask_user`` asking through a question channel and refusing a
+blank question; :meth:`~omicsclaw.tools.mcp_tool.MCPTool.execute`; and the
 registry's unknown-name path.
 
 The list has to grow when a tool does. It did not when ``edit_file``,
@@ -520,16 +526,27 @@ def test_the_public_surface_is_exactly_what_the_two_plans_delivered():
     ``ask_every_time`` (plan 0049) is here for the same reason
     ``use_effective_policy`` is: it is the permission gate's half of a
     channel whose other half, :func:`require_approval`, a tool calls.
+
+    **Plan 0054 adds eight: ``AskUserTool`` and the question channel.** The
+    seven context names are the channel's two ends, as with approval. A
+    surface binds a ``QuestionChannel`` and answers a ``QuestionRequest``
+    (with its ``QuestionOption`` entries) with a ``QuestionAnswer`` whose
+    ``AnswerStatus`` says how it ended; a tool calls ``ask_question`` and
+    may catch ``QuestionUnavailable``. ``option_numbers`` and the tool's
+    bounds stay in ``omicsclaw.tools.builtin.ask_user``, as each other
+    tool's constants stay in its own module.
     """
     import omicsclaw.tools as tools
 
     assert tools.__all__ == [
+        "AnswerStatus",
         "ApprovalChannel",
         "ApprovalDecision",
         "ApprovalDenied",
         "ApprovalMode",
         "ApprovalRequest",
         "ApprovalUnavailable",
+        "AskUserTool",
         "BashTool",
         "EditTool",
         "FunctionTool",
@@ -537,6 +554,11 @@ def test_the_public_surface_is_exactly_what_the_two_plans_delivered():
         "MCPTool",
         "ProgressSink",
         "ProgressUpdate",
+        "QuestionAnswer",
+        "QuestionChannel",
+        "QuestionOption",
+        "QuestionRequest",
+        "QuestionUnavailable",
         "RiskLevel",
         "TimeoutPause",
         "Tool",
@@ -551,6 +573,7 @@ def test_the_public_surface_is_exactly_what_the_two_plans_delivered():
         "WebSearchTool",
         "WriteTool",
         "ask_every_time",
+        "ask_question",
         "context_value",
         "current_context",
         "effective_policy",

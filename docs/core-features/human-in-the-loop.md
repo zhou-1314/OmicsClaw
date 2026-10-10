@@ -278,7 +278,7 @@ registry = build_registry(config, mounted)
 - `abandon(reason)`：exchange 在 `finally` 中调用，把仍未回答的问题全部按拒绝处理，并发布 `APPROVAL_SETTLED`；
 - `timeout_s`：来自 `AppConfig.approval_timeout_s`。`None` 表示无限等待（适合 CLI）。**到期即拒绝**，原因文本为 `TIMEOUT_REASON`；非正数在构造时直接拒绝。
 
-`TurnHandle`（`omicsclaw/entry/turn.py`）为每个 exchange 持有一个 `approvals: ApprovalBroker`，界面通过 `TurnHandle.approve(request_id, decision)` 作答。Channel 运行时强制要求 `approval_timeout_s` 为数字（`ChannelRuntime` 构造时检查）。它的 `settle_approval_threadsafe` 负责把厂商 SDK 线程上的回调转到事件循环线程。
+`TurnHandle`（`omicsclaw/entry/turn.py`）为每个 exchange 持有一个 `approvals: ApprovalBroker`，界面通过 `TurnHandle.approve(request_id, decision)` 作答，它返回这次回答有没有结算请求：id 未知、请求已经由先到的回答或期限结算时返回 `False`。Channel 运行时强制要求 `approval_timeout_s` 为数字（`ChannelRuntime` 构造时检查）。它的 `settle_approval_threadsafe` 负责把厂商 SDK 线程上的回调转到事件循环线程。
 
 **日志不记录参数。** `ApprovalRequest` 里有原始 `bash` 命令行或 `write_file` 内容，broker 只记录工具名、请求 id、风险等级和结果；`GatedTool` 也只记录工具名和 `DecisionSource`。
 
@@ -313,6 +313,7 @@ approve bash [#1]? [y/N/a=always]
 - 受保护文件的卡片上 `a` 不可用（`can_remember_approval` 为 `False`），图例为 `this call is always asked about, and no rule can change that: y = allow it once · anything else denies`。
 - `a` 写的是精确规则。对 `bash` 来说几乎等于只放行这一条命令，所以 CLI 会补一句提示：想让这个工具在本会话不再询问，用 `s`。
 - 没有规则文件可写（`PermissionGate.store is None`）时，屏幕上会显示 `This run has nowhere to remember that.`，不会假装已经记住。
+- `s` 和 `a` 只在这一行结算了请求时才生效：`Repl._ask` 先调用 `TurnHandle.approve`，返回 `True` 才写入 `Repl._granted` 或调用 `remember_approval`。卡片到期之后它的提示符还留在屏幕上，在那里读到的行返回 `False`，不记授权、不写规则，屏幕上显示 `<tool> [#n] was already settled: this line changed nothing.`（[cli.md](cli.md) §7.4）。`/auto` 是命令，在那里照样切换模式。
 
 ### 8.2 `/auto [on|off|status]`
 
@@ -324,6 +325,8 @@ approve bash [#1]? [y/N/a=always]
 优先级（`omicsclaw/launch/_surfaces.py` 的 `_with_the_cli_permission_mode`），从高到低：`--permission-mode` flag，然后 `OMICSCLAW_PERMISSION_MODE`，然后 `OMICSCLAW_CLI_PERMISSION_MODE`，最后 `default`。CLI 专用的 key 只影响 `oc cli`，所以在终端里打 `/auto` 不会让无人值守的 Channel bot 开始自动放行。`/auto status` 会显示当前模式、启动时的来源、`.env` 中的值，以及沙箱状态。
 
 `/auto` 开启时，屏幕会说明哪些情况仍然会问：高危命令、显式 `ask` 规则、对 `.omicsclaw/` 或 `.env` 的改动；`deny` 规则仍然拒绝。同时提醒：高危模式是黑名单，不是隔离边界。
+
+`ask_user` 的提问卡片（[cli.md](cli.md) §7.4）与审批是两条通道。`/auto`、`auto-approve`、`bypass-all` 都不会替人回答问题；在提问提示符上输入 `y`、`s`、`a`、`/auto` 只是回答的文字，不授予任何权限。`ask_user` 自己声明 `read_only`、`AUTO`，在 `read-only` 模式下可用，提问前也不出审批卡；`deny` 规则可以拒绝它。
 
 ### 8.3 一个多组学场景下的判定表
 
@@ -350,7 +353,7 @@ approve bash [#1]? [y/N/a=always]
 
 - `task` 和其他工具一样经过 `gate_tools(hook_tools(...))` 挂载，挂在工具表末尾。
 - 子代理的 registry 由 `ChildRunner._child_registry` 从父 registry 中挑出**已经 gate 过的对象**，按父 registry 解析出的策略重新注册。所以子代理的权限不可能比父代理宽，部署通过 `register(policy=)` 做的收紧也会带过去。
-- 审批不需要额外管道：`contextvars` 会复制进新 Task，子代理里 `bash` 的审批请求会经过两层 Task 边界，到达父 exchange 的同一个 `ApprovalBroker`。`TaskTool` 还把子代理名写进 tool context（`SUBAGENT_VALUE_KEY`），设计上是让审批卡片显示哪个子代理在请求；但 `omicsclaw/entry/` 目前还没有代码读取这个值。
+- 审批不需要额外管道：`contextvars` 会复制进新 Task，子代理里 `bash` 的审批请求会经过两层 Task 边界，到达父 exchange 的同一个 `ApprovalBroker`。`TaskTool` 与 `ChildRunner.delegate` 把子代理名写进 tool context（`SUBAGENT_VALUE_KEY`），`ApprovalBroker` 读出后放进审批帧的 `TurnEvent.subagent`：卡片标题写成 `<tool> for sub-agent <name>`，CLI 提示符同样带上；父代理的请求不带这一段，Desktop 的线协议不带这个字段。
 - **只读分支**：`--permission-mode read-only` 下，网关的第 2 阶段会拒掉 `task`，因为它无法如实声明 `read_only=True`。所以只读模式下**委派整体不可用**。这是 fail-closed 的方向，但用户能直接感知到（FRAMEWORK-REBUILD Step 6.12 列为已知代价）。
 
 ### 9.2 Desktop：卡片、`/chat/permission` 与 `/chat/abort`

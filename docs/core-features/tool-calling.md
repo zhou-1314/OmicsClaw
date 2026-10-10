@@ -158,7 +158,7 @@ result = await registry.execute(call)    # → ToolResult，永不抛出
 
 ### 5.3 顺序是保证，不是巧合
 
-工具定义位于系统提示词与对话之间，处于 prompt 前缀缓存的 key 范围内；provider 层会把缓存断点打在 `tools[-1]` 上。因此工具列表必须每轮字节稳定，`replace` 保留原位，`assembly.py` 中后加入的工具（`use_skill`、`plan_write`、`memory_*`、MCP、`task`）一律追加在末尾。
+工具定义位于系统提示词与对话之间，处于 prompt 前缀缓存的 key 范围内；provider 层会把缓存断点打在 `tools[-1]` 上。因此工具列表必须每轮字节稳定，`replace` 保留原位，`assembly.py` 中后加入的工具（`use_skill`、`plan_write`、`memory_*`、`ask_user`、MCP、`task`）一律追加在末尾。
 
 ### 5.4 不加锁
 
@@ -314,8 +314,9 @@ safe?    yes        yes        no          yes        yes        no
 | 8 | `plan_write` | `planning/tool.py` `plan_write_tool()` | `planning` 开启 | LOW / AUTO | 否 |
 | 9 | `memory_search` | `entry/memory.py` `memory_search_tool()` | `memory` 开启 | LOW / AUTO | 是 |
 | 10 | `memory_write` | `entry/memory.py` `memory_write_tool()` | `memory` 开启 | LOW / AUTO | 否 |
-| 11 | `mcp__{server}__{tool}` | `tools/mcp_tool.py` `MCPTool`，由 `MCPManager.tools()` 提供 | `.mcp.json` 中有已连接的服务器 | HIGH / ASK | 否（默认） |
-| 12 | `task` | `subagent/task_tool.py` `TaskTool` | `subagents` 开启 | HIGH / AUTO | 否 |
+| 11 | `ask_user` | `tools/builtin/ask_user.py` `AskUserTool` | `ask_user` 开启；launch 只在终端 REPL 保留它 | LOW / AUTO，`read_only` | 否 |
+| 12 | `mcp__{server}__{tool}` | `tools/mcp_tool.py` `MCPTool`，由 `MCPManager.tools()` 提供 | `.mcp.json` 中有已连接的服务器 | HIGH / ASK | 否（默认） |
+| 13 | `task` | `subagent/task_tool.py` `TaskTool` | `subagents` 开启 | HIGH / AUTO | 否 |
 
 说明：
 
@@ -323,6 +324,7 @@ safe?    yes        yes        no          yes        yes        no
 - 所有工具（包括调用方自带的和每个 MCP 工具）先经 `hook_tools(mounted, chain)` 包成 `HookedTool`，再经 `gate_tools(mounted, gate)` 包成 `GatedTool`，然后才进注册表。`task` 最后单独注册，同样经过 hook 链与权限门。
 - `_apply_bash_policy` 在注册后按 `entry/sandbox.py` 的 `bash_policy()` 结果用 `registry.replace()` 重新登记 `bash` 的策略，并且替换进去的是**门控后的包装对象**；`_is_bash` 会逐层剥开 `GatedTool` / `HookedTool` 识别内层 `BashTool`。
 - `plan_write` 若未实际挂载，`build_app` 会把 `plans` 置空，保证提示词不会指示模型调用不存在的工具。
+- `ask_user` 经 `ToolContext.question` 向人提一个问题并等回答，不走审批通道；`skill_env=install` 时 `install_skill_deps` 排在它之后、MCP 之前。卡片与作答见 [cli.md](cli.md) §7.4。
 
 ### 9.1 各内置工具要点
 

@@ -1335,11 +1335,11 @@ Decisions worth not re-litigating:
   JSON payload and a second write path cannot reach the store without it.
 - **The planning gate is a window over the sent view, not an engine
   counter.** The window covers the current exchange only: it ends at the
-  nearest user message. The consequence is named rather than fixed: a compaction
-  that shortens the visible history can stop the gate firing where the
-  reference's counter would have. Accepted — a compaction has just handed
-  the model a fresh summary, which is the worst turn to add an
-  instruction to.
+  nearest user message, or at a nearer turn that called `ask_user`. The
+  consequence is named rather than fixed: a compaction that shortens the
+  visible history can stop the gate firing where the reference's counter
+  would have. Accepted — a compaction has just handed the model a fresh
+  summary, which is the worst turn to add an instruction to.
 
 Literals re-derived rather than pasted: the gate threshold (the
 reference's 12 is 15% of *its* 80-turn budget against a 28-turn median;

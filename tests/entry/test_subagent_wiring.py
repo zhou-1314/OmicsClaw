@@ -593,9 +593,10 @@ def test_the_child_never_gets_the_delegation_tool(tmp_path, offline):
 def test_the_child_inherits_the_rest_of_the_parent_s_table_in_order(
     tmp_path, offline
 ):
-    """Everything but delegation, the parent's plan, and lasting memory.
+    """Everything but delegation, the parent's plan, lasting memory, and
+    questions to the person.
 
-    The three names are spelled out rather than read off
+    The four names are spelled out rather than read off
     ``_WITHHELD_FROM_SUB_AGENTS``, so a name dropped from that mapping
     shows up here as a tool the child was handed.
     """
@@ -607,11 +608,17 @@ def test_the_child_inherits_the_rest_of_the_parent_s_table_in_order(
     offered = tuple(definition.name for definition in provider.seen_tools[0])
     assert PLAN_WRITE_TOOL_NAME in app.registry.names()
     assert MEMORY_WRITE_TOOL_NAME in app.registry.names()
+    assert "ask_user" in app.registry.names()
     assert offered == tuple(
         name
         for name in app.registry.names()
         if name
-        not in {TASK_TOOL_NAME, PLAN_WRITE_TOOL_NAME, MEMORY_WRITE_TOOL_NAME}
+        not in {
+            TASK_TOOL_NAME,
+            PLAN_WRITE_TOOL_NAME,
+            MEMORY_WRITE_TOOL_NAME,
+            "ask_user",
+        }
     )
 
 
@@ -1103,6 +1110,49 @@ def test_the_child_s_approval_request_becomes_a_parent_turn_frame(
         if event.type is TurnEventType.APPROVAL_REQUIRED
     ]
     assert [event.approval.tool_name for event in asked] == ["bash"]
+
+
+def test_the_approval_frame_names_the_sub_agent_that_asked_and_nobody_for_the_parent(
+    tmp_path, offline
+):
+    """The same ``bash`` call, once inside a delegation and once from the
+    parent: only the first frame carries a sub-agent's name.
+
+    The broker reads the name from the tool context it is called in, the
+    one place where both the request and the name are at hand.
+
+    Mutations: stop reading ``SUBAGENT_VALUE_KEY`` in
+    ``ApprovalBroker._asked`` and the first name is ``""``; hard-code a
+    name there and the parent's frame carries it.
+    """
+    offline(
+        _ScriptedProvider([_calls("bash", command="echo hi"), _says("ran it")])
+    )
+    app = build_app(_config(tmp_path))
+    stream = TurnStream("s-1", "t-1")
+    broker = ApprovalBroker(stream)
+    direct = ToolCall(
+        id="c2", name="bash", arguments=json.dumps({"command": "echo hi"})
+    )
+
+    async def drive() -> None:
+        with use_tool_context(approval=broker, values={"session_id": "s-1"}):
+            for call in (_task_call(), direct):
+                running = asyncio.ensure_future(app.registry.execute(call))
+                broker.settle(
+                    await _first_pending(broker), ApprovalDecision(approved=True)
+                )
+                await running
+
+    asyncio.run(drive())
+
+    asked = [
+        event
+        for event in stream.retained()
+        if event.type is TurnEventType.APPROVAL_REQUIRED
+    ]
+    assert [event.approval.tool_name for event in asked] == ["bash", "bash"]
+    assert [event.subagent for event in asked] == ["general-purpose", ""]
 
 
 def test_a_denied_child_call_is_refused_rather_than_run(tmp_path, offline):

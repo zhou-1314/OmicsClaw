@@ -43,6 +43,8 @@ follow-ups), plus
 :class:`~omicsclaw.tools.builtin.web_search.WebSearchTool` — the hands
 the agent works with, not a starter set. The fifty tools under
 ``omicsclaw.runtime.tools`` are migrated later, one at a time.
+:class:`~omicsclaw.tools.builtin.ask_user.AskUserTool` is there too: it
+asks the person one question through the context's question channel.
 
 The three file tools stand on this package's private helpers —
 ``_workspace.py``, the sandbox boundary every filesystem tool shares, and
@@ -73,6 +75,7 @@ does, by walking the AST of every module here.
 from ._workspace import Workspace
 from .base import ApprovalMode, RiskLevel, Tool, ToolPolicy
 from .builtin import (
+    AskUserTool,
     BashTool,
     EditTool,
     WebFetchTool,
@@ -81,6 +84,7 @@ from .builtin import (
     read_tool,
 )
 from .context import (
+    AnswerStatus,
     ApprovalChannel,
     ApprovalDecision,
     ApprovalDenied,
@@ -88,9 +92,15 @@ from .context import (
     ApprovalUnavailable,
     ProgressSink,
     ProgressUpdate,
+    QuestionAnswer,
+    QuestionChannel,
+    QuestionOption,
+    QuestionRequest,
+    QuestionUnavailable,
     TimeoutPause,
     ToolContext,
     ask_every_time,
+    ask_question,
     context_value,
     current_context,
     effective_policy,
@@ -113,12 +123,14 @@ from .registry import (
 )
 
 __all__ = [
+    "AnswerStatus",
     "ApprovalChannel",
     "ApprovalDecision",
     "ApprovalDenied",
     "ApprovalMode",
     "ApprovalRequest",
     "ApprovalUnavailable",
+    "AskUserTool",
     "BashTool",
     "EditTool",
     "FunctionTool",
@@ -126,6 +138,11 @@ __all__ = [
     "MCPTool",
     "ProgressSink",
     "ProgressUpdate",
+    "QuestionAnswer",
+    "QuestionChannel",
+    "QuestionOption",
+    "QuestionRequest",
+    "QuestionUnavailable",
     "RiskLevel",
     "TimeoutPause",
     "Tool",
@@ -140,6 +157,7 @@ __all__ = [
     "WebSearchTool",
     "WriteTool",
     "ask_every_time",
+    "ask_question",
     "context_value",
     "current_context",
     "effective_policy",

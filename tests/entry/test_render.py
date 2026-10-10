@@ -35,7 +35,9 @@ import pytest
 from omicsclaw.context.budget import BudgetReport, ContextBudget, Pressure
 from omicsclaw.context.compaction import CompactionRecord
 from omicsclaw.engine.types import EngineEvent
+from omicsclaw.entry.display import CONTINUATION_PREFIX
 from omicsclaw.entry.events import TurnEvent, TurnEventType
+from omicsclaw.entry.question import QUESTION_TIMEOUT_REASON
 from omicsclaw.entry.render import (
     BATCH_CHARS,
     DESKTOP_CHAT_FRAME_TYPE,
@@ -48,7 +50,15 @@ from omicsclaw.entry.render import (
 )
 from omicsclaw.schema import ToolCall, ToolResult, Usage
 from omicsclaw.tools.base import ApprovalMode, RiskLevel
-from omicsclaw.tools.context import ApprovalDecision, ApprovalRequest, ProgressUpdate
+from omicsclaw.tools.context import (
+    AnswerStatus,
+    ApprovalDecision,
+    ApprovalRequest,
+    ProgressUpdate,
+    QuestionAnswer,
+    QuestionOption,
+    QuestionRequest,
+)
 
 _ARGUMENTS = '{"z":1,\n  "a":   [2,3],  "nested":{"b":false}}'
 """Deliberately un-canonical: key order, whitespace and a newline that a
@@ -128,6 +138,15 @@ def _record() -> CompactionRecord:
     )
 
 
+_QUESTION = QuestionRequest(
+    question="Which group is the control?",
+    options=(
+        QuestionOption("DMSO", "the vehicle; recommended"),
+        QuestionOption("untreated"),
+    ),
+)
+
+
 def _one_of_every_type() -> dict[TurnEventType, TurnEvent]:
     """One frame per member, so no projection branch goes unexercised."""
     request = ApprovalRequest(
@@ -165,6 +184,14 @@ def _one_of_every_type() -> dict[TurnEventType, TurnEvent]:
         ),
         TurnEventType.APPROVAL_SETTLED: TurnEvent.approval_settled(
             "req-1", ApprovalDecision(approved=False, reason="not today"), seq=11
+        ),
+        TurnEventType.QUESTION_ASKED: TurnEvent.question_asked(
+            _QUESTION, "req-2", seq=12
+        ),
+        TurnEventType.QUESTION_SETTLED: TurnEvent.question_settled(
+            "req-2",
+            QuestionAnswer(AnswerStatus.NO_ANSWER, reason=QUESTION_TIMEOUT_REASON),
+            seq=13,
         ),
         TurnEventType.TURN_END: _turn_end(Usage(input_tokens=10, output_tokens=4)),
         TurnEventType.GAP: TurnEvent.gap_at(8, 11, session_id="s", turn_id="t"),
@@ -384,6 +411,100 @@ def test_an_approval_prompt_shows_the_arguments_that_will_actually_run() -> None
     assert wire["arguments"] == _ARGUMENTS
     assert wire["risk_level"] == "high"
     assert wire["request_id"] == "req-1"
+
+
+def _approval_by(subagent: str) -> TurnEvent:
+    request = ApprovalRequest(
+        tool_name="bash",
+        arguments='{"command": "ls"}',
+        reason="run: ls",
+        risk_level=RiskLevel.HIGH,
+        reason_shows_call=True,
+    )
+    return TurnEvent.approval_required(request, "t#1", seq=3, subagent=subagent)
+
+
+def test_an_approval_line_names_the_sub_agent_whose_call_is_asking() -> None:
+    """A person approving ``bash`` needs to know it is a sub-agent's
+    ``bash``: they saw the parent's reasoning and none of the sub-agent's.
+
+    The parent's own line is spelled out whole, because it is the line
+    every existing approval prints and it must stay as it is.
+
+    Mutations: drop the suffix in ``_approval_line`` and the second
+    assertion fails; add it unconditionally and the first does.
+    """
+    assert TextRenderer().feed(_approval_by("")) == (
+        "Approval required [t#1]: bash (risk high) - run: ls"
+    )
+    assert TextRenderer().feed(_approval_by("general-purpose")) == (
+        "Approval required [t#1]: bash for sub-agent general-purpose "
+        "(risk high) - run: ls"
+    )
+
+
+def test_the_sub_agent_name_does_not_cross_the_wire() -> None:
+    """The Desktop contract has no field for the name, so a client receives
+    the frame it received before the name existed.
+
+    Mutation: add ``subagent`` to ``_approval_payload`` and both
+    assertions fail.
+    """
+    named = to_wire(_approval_by("general-purpose"))
+
+    assert named == to_wire(_approval_by(""))
+    assert "general-purpose" not in json.dumps(named)
+
+
+# ---- a question to the person ----------------------------------------------
+
+
+def test_a_question_renders_as_its_card_and_how_to_reply() -> None:
+    """Mutation: return ``None`` for ``QUESTION_ASKED`` in ``_control_line``
+    and a surface that prints what the renderer gives it shows nothing,
+    while the tool waits for an answer."""
+    frames = _one_of_every_type()
+
+    assert TextRenderer().feed(frames[TurnEventType.QUESTION_ASKED]) == (
+        "Question [req-2]: Which group is the control?\n"
+        f"{CONTINUATION_PREFIX}1. DMSO - the vehicle; recommended\n"
+        f"{CONTINUATION_PREFIX}2. untreated\n"
+        "Reply with an option number, or in your own words."
+    )
+
+
+def test_an_answered_question_prints_nothing_and_an_unanswered_one_says_why() -> None:
+    """The person just typed the answer, so repeating it back is noise; a
+    question that ended any other way is the one they need to hear about."""
+
+    def line(answer: QuestionAnswer) -> str | None:
+        return TextRenderer().feed(TurnEvent.question_settled("t#2", answer, seq=4))
+
+    assert line(QuestionAnswer(AnswerStatus.ANSWERED, reply="1")) is None
+    assert line(QuestionAnswer(AnswerStatus.DECLINED)) == "Skipped [t#2]."
+    assert line(QuestionAnswer(AnswerStatus.NO_ANSWER, reason="nobody here")) == (
+        "No answer [t#2]: nobody here"
+    )
+    assert line(QuestionAnswer(AnswerStatus.NO_ANSWER)) == "No answer [t#2]"
+
+
+def test_a_question_crosses_the_wire_as_identity_and_nothing_else() -> None:
+    """No client reads these frames yet, so nothing is published for one to
+    come to depend on: the question's text and the reply stay out of the
+    wire projection, and the Desktop frame table has no entry for either."""
+    frames = _one_of_every_type()
+    for kind in (TurnEventType.QUESTION_ASKED, TurnEventType.QUESTION_SETTLED):
+        wire = to_wire(frames[kind])
+
+        assert set(wire) == {
+            "schema_version",
+            "type",
+            "sequence",
+            "session_id",
+            "turn_id",
+        }
+        assert "control" not in json.dumps(wire, allow_nan=False)
+        assert kind not in DESKTOP_CHAT_FRAME_TYPE
 
 
 def test_the_terminal_frame_keeps_the_error_type_and_drops_its_text() -> None:
@@ -620,6 +741,21 @@ def _hostile_frames() -> dict[str, TurnEvent]:
         "approval id": TurnEvent.approval_required(
             ApprovalRequest(tool_name="bash", reason="r"), _HOSTILE, seq=1
         ),
+        "approval sub-agent": TurnEvent.approval_required(
+            ApprovalRequest(tool_name="bash", reason="r"),
+            "t#1",
+            seq=1,
+            subagent=_HOSTILE,
+        ),
+        "unanswered reason": TurnEvent.question_settled(
+            "t#1", QuestionAnswer(AnswerStatus.NO_ANSWER, reason=_HOSTILE), seq=1
+        ),
+        "unanswered id": TurnEvent.question_settled(
+            _HOSTILE, QuestionAnswer(AnswerStatus.NO_ANSWER, reason="r"), seq=1
+        ),
+        "skipped id": TurnEvent.question_settled(
+            _HOSTILE, QuestionAnswer(AnswerStatus.DECLINED), seq=1
+        ),
     }
 
 
@@ -636,3 +772,51 @@ def test_no_text_field_of_a_control_line_reaches_a_surface_raw(field) -> None:
     assert [c for c in line if unicodedata.category(c) in _UNSAFE_CATEGORIES] == []
     assert "\\u001b[8m" in line
     assert "\n" not in line
+
+
+def _hostile_questions() -> dict[str, TurnEvent]:
+    """One ``QUESTION_ASKED`` frame per text field of a question card."""
+    plain = (QuestionOption("yes"), QuestionOption("no", "keep the file"))
+    return {
+        "question": TurnEvent.question_asked(
+            QuestionRequest(question=_HOSTILE, options=plain), "t#1", seq=1
+        ),
+        "label": TurnEvent.question_asked(
+            QuestionRequest(
+                question="q", options=(QuestionOption(_HOSTILE), plain[1])
+            ),
+            "t#1",
+            seq=1,
+        ),
+        "description": TurnEvent.question_asked(
+            QuestionRequest(
+                question="q", options=(plain[0], QuestionOption("no", _HOSTILE))
+            ),
+            "t#1",
+            seq=1,
+        ),
+        "id": TurnEvent.question_asked(
+            QuestionRequest(question="q", options=plain), _HOSTILE, seq=1
+        ),
+    }
+
+
+@pytest.mark.parametrize("field", sorted(_hostile_questions()))
+def test_no_text_field_of_a_question_card_reaches_a_surface_raw(field) -> None:
+    """The question and its options are written by the model, which may
+    have read a hostile file. A card has several lines, so the property is
+    per line: the first is the card's own header, the last is the fixed
+    reply hint, and every line between them starts with the continuation
+    prefix, so none of the model's text begins a line and none can pass for
+    the header of a second card, an approval's included."""
+    text = TextRenderer().feed(_hostile_questions()[field])
+
+    assert text is not None
+    lines = text.split("\n")
+    unsafe = [c for c in text if unicodedata.category(c) in _UNSAFE_CATEGORIES]
+    assert unsafe == ["\n"] * (len(lines) - 1)
+    assert "\\u001b[8m" in text
+    assert lines[0].startswith("Question [")
+    assert lines[-1] == "Reply with an option number, or in your own words."
+    assert all(line.startswith(CONTINUATION_PREFIX) for line in lines[1:-1])
+    assert "Approval required [t#9]: y" in text, "the forged header is shown, inert"

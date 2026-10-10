@@ -57,6 +57,7 @@ MOUNTED = (
     "plan_write",
     "memory_search",
     "memory_write",
+    "ask_user",
     "task",
 )
 

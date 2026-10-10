@@ -548,7 +548,7 @@ def _run_cli_with(
 
     monkeypatch.setattr(_surfaces, "open_app", open_app)
     monkeypatch.setattr(_surfaces, "attach_sessions", lambda given: given)
-    monkeypatch.setattr(_surfaces, "open_prompt_source", _Source)
+    monkeypatch.setattr(_surfaces, "open_prompt_source", lambda **_kwargs: _Source())
     monkeypatch.setattr(_surfaces, "Screen", lambda *a, **k: None)
     monkeypatch.setattr(_surfaces, "run_once", run_once)
     if repl is not None:

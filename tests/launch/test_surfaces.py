@@ -833,7 +833,7 @@ def _cli_doubles(monkeypatch, repl_class) -> tuple[_App, _Source]:
 
     monkeypatch.setattr(_surfaces, "open_app", open_app)
     monkeypatch.setattr(_surfaces, "attach_sessions", lambda given: given)
-    monkeypatch.setattr(_surfaces, "open_prompt_source", lambda: source)
+    monkeypatch.setattr(_surfaces, "open_prompt_source", lambda **_kwargs: source)
     monkeypatch.setattr(_surfaces, "Screen", lambda *a, **k: None)
     monkeypatch.setattr(_surfaces, "Repl", repl_class)
     return app, source

@@ -20,23 +20,33 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import io
+import json
 import logging
 import pathlib
 import types
 
 import pytest
+from rich.text import Text
 
+from omicsclaw.engine import RunResult, StopReason
 from omicsclaw.entry.cli import PROMPT, Repl, ScriptedSource, Screen, run_once
+from omicsclaw.entry.cli import _repl
 from omicsclaw.entry.cli._constants import LOGO_LINES
 from omicsclaw.entry.cli._slash_command_support import (
     CLI_SLASH_COMMAND_SPECS,
     REPL_SLASH_COMMAND_SPECS,
     slash_token,
 )
+from omicsclaw.entry.events import TurnEvent
 from omicsclaw.entry.session import attach_sessions
-from omicsclaw.schema import Message, Role
+from omicsclaw.schema import Message, Role, ToolCall
+from omicsclaw.tools import ApprovalRequest
 from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]
+    CUT_ARGUMENTS,
     Asking,
+    Exploding,
+    Finishing,
+    Reporting,
     Scripted,
     Sleeping,
     calling,
@@ -495,6 +505,97 @@ def test_two_concurrent_approvals_are_both_answered(tmp_path):
     assert "<- ask_b error" in printed
 
 
+def test_a_sub_agent_s_approval_names_the_sub_agent_on_the_card_and_at_the_prompt(
+    tmp_path,
+):
+    """The person saw the parent hand a task over and nothing of what the
+    sub-agent did next, so a bare ``approve ask`` would read as the parent
+    asking. Card and prompt both say whose call it is; the parent's own
+    prompt, pinned by the test above, stays as it was.
+
+    Mutation: format the prompt with the tool name alone in ``Repl._ask``
+    and the prompt assertion fails.
+    """
+    delegating = Message(
+        role=Role.ASSISTANT,
+        tool_calls=(
+            ToolCall(
+                id="d1",
+                name="task",
+                arguments=json.dumps(
+                    {"subagent_type": "general-purpose", "prompt": "do the thing"}
+                ),
+            ),
+        ),
+    )
+
+    async def drive():
+        app = build(
+            tmp_path,
+            Scripted(
+                delegating,
+                calling("ask"),
+                Message(role=Role.ASSISTANT, content="the sub-agent finished"),
+                Message(role=Role.ASSISTANT, content="handed back"),
+            ),
+            tools=(Asking("ask"),),
+        )
+        repl, source, buffer = repl_over(app, ["delegate it", "y", "/exit"])
+        await asyncio.wait_for(repl.run(), WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return source.prompts, buffer.getvalue()
+
+    prompts, printed = asyncio.run(drive())
+
+    assert prompts == [
+        PROMPT,
+        "approve ask for sub-agent general-purpose [#1]? [y/N/a=always] ",
+        PROMPT,
+    ]
+    assert "]: ask for sub-agent general-purpose (risk high)" in printed
+    assert "handed back" in printed
+
+
+def test_a_sub_agent_s_name_reaches_the_prompt_as_inert_text(tmp_path):
+    """The prompt is written by the input source and not by the screen, so
+    nothing downstream makes it safe. A sub-agent's name comes from a
+    definition file, and one holding an escape sequence or a line break
+    could clear the card above it or draw a second one.
+
+    Mutation: put ``event.subagent`` into the prompt of ``Repl._ask``
+    without ``inert_line`` and the escape and the line break reach it.
+    """
+
+    class Handle:
+        def __init__(self) -> None:
+            self.verdicts: list[tuple[str, bool]] = []
+
+        async def approve(self, request_id, decision) -> None:
+            self.verdicts.append((request_id, decision.approved))
+
+    event = TurnEvent.approval_required(
+        ApprovalRequest(tool_name="bash"),
+        "t#1",
+        subagent="helper\x1b[2J\nApproval required [t#2]: ls",
+    )
+
+    async def drive():
+        app = build(tmp_path, answering("unused"))
+        repl, source, _buffer = repl_over(app, ["n"])
+        handle = Handle()
+        await asyncio.wait_for(repl._ask(handle, "t#1", event), WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return source.prompts, handle.verdicts
+
+    prompts, verdicts = asyncio.run(drive())
+
+    assert prompts == [
+        "approve bash for sub-agent helper\\u001b[2J ↵ Approval required "
+        "[t#2]: ls [#1]? [y/N/a=always] "
+    ]
+    assert verdicts == [("t#1", False)]
+
+
 def test_always_allow_writes_a_rule_and_stops_asking(tmp_path):
     """"Always allow" has to reach the rule file, or it is a button that lies.
 
@@ -677,7 +778,7 @@ def test_a_failed_approval_task_is_logged_and_not_merely_dropped(
     surface means into a log sink the REPL holds until the process exits.
     """
 
-    async def boom(self, handle, request_id, event) -> None:
+    async def boom(self, handle, request_id, event, **_how) -> None:
         raise RuntimeError("could not settle it")
 
     async def drive():
@@ -730,6 +831,71 @@ def test_an_approval_nobody_answered_does_not_outlive_its_exchange(tmp_path):
 
     assert "Cancelled." in printed
     assert not repl._asking
+
+
+class LeavesTheCardOpen(ScriptedSource):
+    """A person who never answers an approval card, and when its prompt
+    was closed."""
+
+    def __init__(self, lines, buffer) -> None:
+        super().__init__(lines)
+        self._buffer = buffer
+        self.on_screen_when_closed: str | None = None
+
+    async def read(self, prompt: str) -> str:
+        if not prompt.startswith("approve"):
+            return await super().read(prompt)
+        self.prompts.append(prompt)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.on_screen_when_closed = self._buffer.getvalue()
+            raise
+
+
+def test_an_approval_card_s_prompt_stays_open_past_its_deadline(tmp_path):
+    """What happens today, held so that it changes only on purpose. A
+    question's prompt is taken down when its deadline passes; an approval
+    card's is not, and stays until the exchange ends. Whether it should
+    come down too is a separate decision.
+
+    Mutation: record the approval's Task in ``Repl._replying`` and retract
+    on ``APPROVAL_SETTLED`` as well, and the prompt is closed as soon as
+    the denial is printed.
+    """
+
+    async def drive():
+        sleeping = Sleeping()
+        app = build(
+            tmp_path,
+            Scripted(calling("ask_a", "sleep")),
+            tools=(Asking("ask_a"), sleeping),
+            approval_timeout_s=0.2,
+        )
+        buffer = io.StringIO()
+        source = LeavesTheCardOpen(["do it"], buffer)
+        repl = Repl(app, source=source, screen=Screen.into(buffer))
+        loop = asyncio.create_task(repl.run())
+        for _ in range(int(WAIT_S / 0.005)):
+            if "Approval denied [" in buffer.getvalue():
+                break
+            await asyncio.sleep(0.005)
+        await asyncio.sleep(0.05)  # room for a retraction, were there one
+        denied = buffer.getvalue()
+        still_reading = [task for task in repl._asking if not task.done()]
+        closed_before_the_end = source.on_screen_when_closed
+        assert repl.interrupt() is True
+        await asyncio.wait_for(loop, WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return denied, still_reading, closed_before_the_end, source
+
+    denied, still_reading, closed_before_the_end, source = asyncio.run(drive())
+
+    assert "no answer before the approval deadline" in denied
+    assert len(still_reading) == 1, "the card's prompt was taken down"
+    assert closed_before_the_end is None
+    assert source.on_screen_when_closed is not None, "the exchange's end closes it"
+    assert source.prompts.count("approve ask_a [#1]? [y/N/a=always] ") == 1
 
 
 class InterruptedAtTheCard(ScriptedSource):
@@ -1086,3 +1252,349 @@ def test_the_logo_rows_are_all_the_same_width():
     means one row is ~200 bytes on one line, which is why it is split.
     """
     assert {len(row) for row in LOGO_LINES} == {74}
+
+
+# ---- a reply the output limit cut off -----------------------------------
+#
+# The helper and the two sentences are reached through ``_repl``, so that
+# on a tree without them each test fails by itself and the file still
+# collects.
+
+OPENS_WITH = "The reply was cut off at the output limit"
+"""How both forms of the line begin.
+
+Written out here on purpose. ``oc cli --prompt`` prints the line on
+standard output and exits 0, so these words are what a script matches,
+and changing them is changing an interface.
+"""
+
+
+def says(text: str) -> Message:
+    return Message(role=Role.ASSISTANT, content=text)
+
+
+def writes(text: str = "", *names: str) -> Message:
+    """An assistant message whose calls all carry a cut-off payload."""
+    return Message.assistant(
+        text,
+        tool_calls=tuple(
+            ToolCall(id=f"c{index}", name=name, arguments=CUT_ARGUMENTS)
+            for index, name in enumerate(names or ("write_file",))
+        ),
+    )
+
+
+def outcome_of(stop: StopReason, *messages: Message):
+    """What ``_cut_off_notice`` reads, without running an exchange."""
+    return types.SimpleNamespace(
+        result=RunResult(messages=tuple(messages), stop_reason=stop)
+    )
+
+
+def run_repl(tmp_path, provider, lines, **overrides):
+    """Run a REPL over *lines*; return its source and what it printed."""
+
+    async def drive():
+        app = build(tmp_path, provider, **overrides)
+        repl, source, buffer = repl_over(app, lines)
+        await asyncio.wait_for(repl.run(), WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return source, buffer.getvalue()
+
+    return asyncio.run(drive())
+
+
+def lines_that_open_with_it(printed: str) -> list[str]:
+    return [line for line in printed.splitlines() if line.startswith(OPENS_WITH)]
+
+
+@pytest.mark.parametrize("finish", ["length", "max_tokens"])
+def test_a_reply_cut_off_at_the_output_limit_is_reported_under_it(tmp_path, finish):
+    """One line, after the text that was cut, before the next prompt.
+
+    ``length`` is the OpenAI dialect's word and ``max_tokens`` Anthropic's.
+    """
+    provider = Finishing((says("Moran's I measures spatial autocorre"), finish))
+
+    source, printed = run_repl(tmp_path, provider, ["what is Moran's I?", "/exit"])
+
+    assert lines_that_open_with_it(printed) == [_repl._CUT_OFF_NOTICE]
+    assert printed.index("spatial autocorre") < printed.index(OPENS_WITH)
+    assert printed.index(OPENS_WITH) < printed.index("Goodbye")
+    assert source.prompts == [PROMPT, PROMPT]
+
+
+@pytest.mark.parametrize(
+    "text", ["Writing the notes now.", ""], ids=["text", "no-text"]
+)
+def test_a_cut_off_reply_names_the_tool_calls_that_did_not_run(tmp_path, text):
+    """The calls reach the screen no other way: nothing starts them.
+
+    With no text the line is the only thing the exchange prints about
+    what the model did.
+    """
+    provider = Finishing((writes(text, "write_file"), "length"))
+
+    _source, printed = run_repl(tmp_path, provider, ["write the notes", "/exit"])
+
+    assert lines_that_open_with_it(printed) == [
+        _repl._CUT_OFF_CALLS_NOTICE.format(names="write_file")
+    ]
+    assert "-> write_file" not in printed
+
+
+def test_a_cut_in_a_later_model_call_is_reported_once_at_the_end(tmp_path):
+    """The first call's tool ran; the second call is the one cut off."""
+    provider = Finishing(
+        (calling("report"), "tool_calls"),
+        (writes("Read it. Writing the notes now.", "write_file"), "length"),
+    )
+
+    _source, printed = run_repl(
+        tmp_path, provider, ["read, then write", "/exit"], tools=[Reporting()]
+    )
+
+    assert lines_that_open_with_it(printed) == [
+        _repl._CUT_OFF_CALLS_NOTICE.format(names="write_file")
+    ]
+    assert printed.index("<- report ok") < printed.index(OPENS_WITH)
+
+
+@pytest.mark.parametrize(
+    ("provider", "overrides"),
+    [
+        (Finishing(says("An ordinary answer.")), {}),
+        (Finishing((says("An ordinary answer."), "")), {}),
+        (
+            Finishing((calling("report"), "tool_calls")),
+            {"max_turns": 1, "tools": [Reporting()]},
+        ),
+        (Exploding(), {}),
+    ],
+    ids=["stop", "no-finish-reason", "turn-ceiling", "failed"],
+)
+def test_an_exchange_that_was_not_cut_off_prints_no_such_line(
+    tmp_path, provider, overrides
+):
+    """An answer that finished, the turn ceiling and a failure all print none."""
+    _source, printed = run_repl(tmp_path, provider, ["go", "/exit"], **overrides)
+
+    assert "cut off" not in printed
+
+
+def test_the_line_is_not_repeated_by_compact_or_by_the_next_answer(tmp_path):
+    """``/compact`` goes through the same ``_drive`` and reports its own way."""
+    provider = Finishing(
+        (says("Moran's I measures spatial autocorre"), "length"),
+        says("Moran's I measures spatial autocorrelation."),
+    )
+
+    _source, printed = run_repl(
+        tmp_path, provider, ["what is Moran's I?", "/compact", "go on", "/exit"]
+    )
+
+    assert printed.count(OPENS_WITH) == 1
+    assert printed.index(OPENS_WITH) < printed.index("Nothing to compact")
+    assert "spatial autocorrelation." in printed
+
+
+def test_a_second_cut_off_reply_in_the_same_repl_is_reported_too(tmp_path):
+    """Each exchange is judged by itself.
+
+    Two cuts are two lines, each in the form of its own reply, and the
+    ordinary answer after them gets none.
+    """
+    provider = Finishing(
+        (says("Moran's I measures spatial autocorre"), "length"),
+        (writes("Shorter, and written down.", "write_file"), "length"),
+        says("Moran's I measures spatial autocorrelation."),
+    )
+
+    _source, printed = run_repl(
+        tmp_path,
+        provider,
+        ["what is Moran's I?", "shorter please", "once more", "/exit"],
+    )
+
+    assert lines_that_open_with_it(printed) == [
+        _repl._CUT_OFF_NOTICE,
+        _repl._CUT_OFF_CALLS_NOTICE.format(names="write_file"),
+    ]
+    assert printed.rindex(OPENS_WITH) < printed.index("spatial autocorrelation.")
+
+
+def test_a_single_shot_run_reports_the_cut_and_still_converges(tmp_path):
+    """Same line, same screen; the verdict the exit code reads is unchanged."""
+
+    async def drive():
+        provider = Finishing((says("Moran's I measures spatial autocorre"), "length"))
+        app = build(tmp_path, provider)
+        buffer = io.StringIO()
+        handle = await asyncio.wait_for(
+            run_once(app, "what is Moran's I?", screen=Screen.into(buffer)), WAIT_S
+        )
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return handle, buffer.getvalue()
+
+    handle, printed = asyncio.run(drive())
+
+    assert lines_that_open_with_it(printed) == [_repl._CUT_OFF_NOTICE]
+    assert handle is not None and handle.terminal == "converged"
+    assert handle.outcome.result.stop_reason is StopReason.TRUNCATED
+
+
+def test_the_line_is_printed_after_open_cards_are_taken_down(tmp_path):
+    """A card's prompt can outlive its exchange; the line waits for it to go."""
+
+    class Marking(Repl):
+        async def _reap_asking(self) -> None:
+            await super()._reap_asking()
+            self._screen.print("-- cards taken down --")
+
+    async def drive():
+        app = build(tmp_path, Finishing((says("half a sente"), "length")))
+        buffer = io.StringIO()
+        repl = Marking(
+            app, source=ScriptedSource(["go", "/exit"]), screen=Screen.into(buffer)
+        )
+        await asyncio.wait_for(repl.run(), WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return buffer.getvalue()
+
+    printed = asyncio.run(drive())
+
+    assert printed.index("-- cards taken down --") < printed.index(OPENS_WITH)
+
+
+def test_a_text_only_cut_after_a_tool_ran_does_not_name_that_tool(tmp_path):
+    """Only the reply that was cut is read. ``report`` ran, and is not listed."""
+    provider = Finishing(
+        (calling("report"), "tool_calls"),
+        (says("It reports twelve clu"), "length"),
+    )
+
+    _source, printed = run_repl(
+        tmp_path, provider, ["read it to me", "/exit"], tools=[Reporting()]
+    )
+
+    assert "<- report ok" in printed
+    assert lines_that_open_with_it(printed) == [_repl._CUT_OFF_NOTICE]
+    assert "were not run" not in printed
+
+
+def test_a_tool_name_with_square_brackets_reaches_the_screen_as_it_is(tmp_path):
+    """The line is printed as text. Read as markup, ``[/]`` raises."""
+    provider = Finishing((writes("", "write[/]file", "[red]x"), "length"))
+
+    _source, printed = run_repl(tmp_path, provider, ["write the notes", "/exit"])
+
+    assert lines_that_open_with_it(printed) == [
+        _repl._CUT_OFF_CALLS_NOTICE.format(names="write[/]file, [red]x")
+    ]
+
+
+def test_the_line_is_handed_to_the_screen_as_yellow_text(tmp_path):
+    """A ``Text`` styled yellow, the colour this surface warns in."""
+
+    class Keeping(Screen):
+        def __init__(self, sink) -> None:
+            super().__init__(Screen.into(sink).console)
+            self.handed: list[object] = []
+
+        def print(self, *args: object, **kwargs: object) -> None:
+            self.handed.extend(args)
+            super().print(*args, **kwargs)
+
+    async def drive():
+        app = build(tmp_path, Finishing((says("half a sente"), "length")))
+        screen = Keeping(io.StringIO())
+        repl = Repl(app, source=ScriptedSource(["go", "/exit"]), screen=screen)
+        await asyncio.wait_for(repl.run(), WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return screen.handed
+
+    handed = asyncio.run(drive())
+
+    ours = [
+        item
+        for item in handed
+        if isinstance(item, Text) and item.plain.startswith(OPENS_WITH)
+    ]
+    assert [item.plain for item in ours] == [_repl._CUT_OFF_NOTICE]
+    assert str(ours[0].style) == "yellow"
+    assert not [item for item in handed if isinstance(item, str) and OPENS_WITH in item]
+
+
+def test_the_notice_is_empty_for_every_ending_but_a_cut():
+    """No outcome is a cancelled or failed exchange."""
+    cut = says("half a sente")
+
+    assert _repl._cut_off_notice(None) == ""
+    assert _repl._cut_off_notice(outcome_of(StopReason.CONVERGED, cut)) == ""
+    assert _repl._cut_off_notice(outcome_of(StopReason.MAX_TURNS, writes())) == ""
+    assert (
+        _repl._cut_off_notice(outcome_of(StopReason.TRUNCATED, cut))
+        == _repl._CUT_OFF_NOTICE
+    )
+    assert (
+        _repl._cut_off_notice(outcome_of(StopReason.TRUNCATED))
+        == _repl._CUT_OFF_NOTICE
+    )
+    after_a_round = outcome_of(
+        StopReason.TRUNCATED, Message.user("go"), calling("report"), cut
+    )
+    assert _repl._cut_off_notice(after_a_round) == _repl._CUT_OFF_NOTICE
+
+
+def test_the_notice_lists_every_call_of_the_cut_message_in_order():
+    """One name per call, the complete ones and the repeats included.
+
+    However many there are: the number of names is the number of calls
+    that did not run.
+    """
+    earlier = calling("report")
+    cut = Message.assistant(
+        "",
+        tool_calls=(
+            ToolCall(id="c0", name="read_file", arguments='{"path": "notes.md"}'),
+            ToolCall(id="c1", name="write_file", arguments=CUT_ARGUMENTS),
+            ToolCall(id="c2", name="write_file", arguments=CUT_ARGUMENTS),
+        ),
+    )
+    many = ["read_file"] * 8 + ["write_file"]
+
+    notice = _repl._cut_off_notice(
+        outcome_of(StopReason.TRUNCATED, Message.user("go"), earlier, cut)
+    )
+    of_many = _repl._cut_off_notice(outcome_of(StopReason.TRUNCATED, writes("", *many)))
+
+    assert notice == _repl._CUT_OFF_CALLS_NOTICE.format(
+        names="read_file, write_file, write_file"
+    )
+    assert "report" not in notice
+    assert of_many == _repl._CUT_OFF_CALLS_NOTICE.format(names=", ".join(many))
+
+
+def test_a_tool_name_cannot_act_on_the_terminal_through_the_notice():
+    """The name is the model's text; a blank or missing one is shown as ``?``."""
+    hostile = writes("", "write\x1b[2J_file\r\n", "", "   ")
+
+    notice = _repl._cut_off_notice(outcome_of(StopReason.TRUNCATED, hostile))
+
+    assert "\x1b" not in notice and "\r" not in notice and "\n" not in notice
+    assert notice.startswith(OPENS_WITH)
+    assert ", ?, ?." in notice
+
+
+def test_the_two_forms_read_as_agreed_and_open_with_the_same_words():
+    """The wording is written out once, here; see :data:`OPENS_WITH`."""
+    assert _repl._CUT_OFF_NOTICE == (
+        "The reply was cut off at the output limit and is incomplete. "
+        "Ask for a shorter answer, or for it in parts."
+    )
+    assert _repl._CUT_OFF_CALLS_NOTICE.format(names="write_file") == (
+        "The reply was cut off at the output limit, so the tool calls in it "
+        "were not run: write_file. Ask for the work in smaller pieces."
+    )
+    assert _repl._CUT_OFF_NOTICE.startswith(OPENS_WITH)
+    assert _repl._CUT_OFF_CALLS_NOTICE.startswith(OPENS_WITH)

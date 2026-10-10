@@ -29,10 +29,19 @@ from omicsclaw.entry.events import (
     is_droppable,
 )
 from omicsclaw.schema import ToolCall, ToolResult, Usage
-from omicsclaw.tools.context import ApprovalDecision, ApprovalRequest, ProgressUpdate
+from omicsclaw.tools.context import (
+    AnswerStatus,
+    ApprovalDecision,
+    ApprovalRequest,
+    ProgressUpdate,
+    QuestionAnswer,
+    QuestionRequest,
+)
 
 
-def test_the_vocabulary_is_the_fourteen_members_the_plan_froze() -> None:
+def test_the_vocabulary_is_the_sixteen_members_the_plans_froze() -> None:
+    """Plan 0031's fourteen, and plan 0054's two for a question to the
+    person, placed after the approval pair they resemble."""
     assert [member.value for member in TurnEventType] == [
         "exchange_start",
         "queued",
@@ -45,6 +54,8 @@ def test_the_vocabulary_is_the_fourteen_members_the_plan_froze() -> None:
         "tool_result",
         "approval_required",
         "approval_settled",
+        "question_asked",
+        "question_settled",
         "turn_end",
         "gap",
         "exchange_end",
@@ -71,6 +82,8 @@ def test_only_increments_are_droppable() -> None:
         TurnEventType.TOOL_RESULT,
         TurnEventType.APPROVAL_REQUIRED,
         TurnEventType.APPROVAL_SETTLED,
+        TurnEventType.QUESTION_ASKED,
+        TurnEventType.QUESTION_SETTLED,
         TurnEventType.TURN_END,
         TurnEventType.GAP,
         TurnEventType.EXCHANGE_END,
@@ -86,6 +99,33 @@ def test_an_approval_prompt_is_never_droppable() -> None:
     assert not is_droppable(TurnEventType.APPROVAL_REQUIRED)
     assert not is_droppable(TurnEventType.APPROVAL_SETTLED)
     assert not is_droppable(TurnEventType.EXCHANGE_END)
+
+
+def test_a_question_to_the_person_is_never_droppable() -> None:
+    """A dropped ``QUESTION_ASKED`` is a tool waiting on an answer to a
+    question nobody was shown, which without a deadline is forever."""
+    assert not is_droppable(TurnEventType.QUESTION_ASKED)
+    assert not is_droppable(TurnEventType.QUESTION_SETTLED)
+
+
+def test_the_question_frames_carry_the_question_the_answer_and_one_id() -> None:
+    request = QuestionRequest(question="which build?")
+    answer = QuestionAnswer(AnswerStatus.ANSWERED, reply="hg38")
+
+    asked = TurnEvent.question_asked(request, "t#2", session_id="s", turn_id="t")
+    settled = TurnEvent.question_settled("t#2", answer, session_id="s", turn_id="t")
+
+    assert (asked.type, asked.question, asked.request_id) == (
+        TurnEventType.QUESTION_ASKED,
+        request,
+        "t#2",
+    )
+    assert (settled.type, settled.answer, settled.request_id) == (
+        TurnEventType.QUESTION_SETTLED,
+        answer,
+        "t#2",
+    )
+    assert asked.subagent == "" and asked.approval is None and asked.answer is None
 
 
 def test_every_engine_event_type_is_accounted_for() -> None:

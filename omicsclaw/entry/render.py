@@ -15,7 +15,8 @@ rather than two classes with one shared bug.
 
 Every text field a control line is built from — a tool name, a progress
 message, a request id, a refusal's reason, a compaction's failure, an
-error's type name, an approval card's reason and arguments — is made
+error's type name, an approval card's reason and arguments, a question
+card's question and options — is made
 inert by ``omicsclaw/entry/display.py`` before it is put in the line, so
 no surface receives a control character from one. Text and reasoning
 deltas are returned as they arrived; a surface that prints them makes
@@ -96,6 +97,8 @@ from typing import Any, Final
 
 from omicsclaw.entry.display import approval_body, inert_line
 from omicsclaw.entry.events import TurnEvent, TurnEventType
+from omicsclaw.entry.question import question_card, reply_hint
+from omicsclaw.tools.context import AnswerStatus
 
 ELAPSED_INCLUDES_APPROVAL_WAIT: Final = "s elapsed (includes any approval wait)"
 """Mandatory suffix for every rendered ``TOOL_RESULT`` timing.
@@ -289,6 +292,10 @@ class TextRenderer:
             return _approval_line(event)
         if kind is TurnEventType.APPROVAL_SETTLED:
             return _settled_line(event)
+        if kind is TurnEventType.QUESTION_ASKED:
+            return _question_line(event)
+        if kind is TurnEventType.QUESTION_SETTLED:
+            return _answered_line(event)
         if kind is TurnEventType.TURN_END:
             return _usage_line(event)
         if kind is TurnEventType.GAP:
@@ -370,16 +377,18 @@ def _tool_result_line(event: TurnEvent) -> str:
 def _approval_line(event: TurnEvent) -> str:
     """The card for an approval: a header, then the request's body.
 
-    The header is ``Approval required [<id>]: <tool> (risk <level>)``; the
-    body, :func:`~omicsclaw.entry.display.approval_body` with its default
-    bounds, follows it after `` - `` when there is one.
+    The header is ``Approval required [<id>]: <tool> (risk <level>)``,
+    with `` for sub-agent <name>`` after the tool when a sub-agent's call
+    is asking; the body, :func:`~omicsclaw.entry.display.approval_body`
+    with its default bounds, follows it after `` - `` when there is one.
     """
     request_id = inert_line(event.request_id)
     request = event.approval
     if request is None:
         return f"Approval required [{request_id}]"
+    asker = f" for sub-agent {inert_line(event.subagent)}" if event.subagent else ""
     header = (
-        f"Approval required [{request_id}]: {inert_line(request.tool_name)} "
+        f"Approval required [{request_id}]: {inert_line(request.tool_name)}{asker} "
         f"(risk {request.risk_level.value})"
     )
     body, _cut = approval_body(request)
@@ -396,6 +405,38 @@ def _settled_line(event: TurnEvent) -> str:
     if decision.reason:
         line += f": {inert_line(decision.reason)}"
     return line
+
+
+def _question_line(event: TurnEvent) -> str:
+    """The card for a question, then a line saying how to reply.
+
+    The card is :func:`~omicsclaw.entry.question.question_card` headed by
+    the request id and the last line is
+    :func:`~omicsclaw.entry.question.reply_hint`.
+    """
+    request = event.question
+    if request is None:
+        return f"Question [{inert_line(event.request_id)}]"
+    card, _cut = question_card(request, event.request_id)
+    return f"{card}\n{reply_hint(request)}"
+
+
+def _answered_line(event: TurnEvent) -> str | None:
+    """How a question ended, or ``None`` when the person answered it.
+
+    ``Skipped [<id>].`` when they declined, and ``No answer [<id>]`` with
+    the reason after a colon when nobody answered.
+    """
+    request_id = inert_line(event.request_id)
+    answer = event.answer
+    if answer is None:
+        return f"Question settled [{request_id}]"
+    if answer.status is AnswerStatus.ANSWERED:
+        return None
+    if answer.status is AnswerStatus.DECLINED:
+        return f"Skipped [{request_id}]."
+    line = f"No answer [{request_id}]"
+    return f"{line}: {inert_line(answer.reason)}" if answer.reason else line
 
 
 def _usage_line(event: TurnEvent) -> str:

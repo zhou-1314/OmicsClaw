@@ -277,8 +277,50 @@
   }
  },
  {
+  "name": "ask_user",
+  "description": "Ask the person you are working for one question, and wait for the answer.\n\nUse it only when you cannot do the task well without something only they know or decide: which group is the control, which organism or genome build, whether to overwrite an existing report, which of two defensible analyses they want. Look first: a question the data, the files, the metadata or a SKILL.md can answer is not a question for the person.\n\nDo not use it to ask whether you may run a tool (tools that need consent ask for it themselves), to ask whether to continue, or to confirm a plan you could simply carry out. Do not ask about parameters or thresholds a skill's methodology already fixes. Never ask for a password, API key, token or other secret.\n\nOffer 2 to 6 options when the choice is among known alternatives, with a short label each and a description where the label is not enough. Put the option you recommend first and say so in its description. Set multi_select when more than one may apply. The person can always answer in their own words instead.\n\nOne question per call. Calls placed after this one in the same message wait for the answer but were decided before it; put anything that depends on the answer in a later message.\n\nThe result is JSON with status answered, declined or no_answer, and repeats the question. After declined or no_answer, do not ask the same question again in this request.",
+  "input_schema": {
+   "type": "object",
+   "required": [
+    "question"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "question": {
+     "type": "string",
+     "description": "The whole question, self-contained: the person may read it away from this conversation, on a phone."
+    },
+    "options": {
+     "type": "array",
+     "description": "2 to 6 answers to offer when the choice is among known alternatives. Omit for an open question.",
+     "items": {
+      "type": "object",
+      "required": [
+       "label"
+      ],
+      "additionalProperties": false,
+      "properties": {
+       "label": {
+        "type": "string",
+        "description": "Short answer text, at most 80 characters, not a bare number."
+       },
+       "description": {
+        "type": "string",
+        "description": "What choosing it means, if the label does not say."
+       }
+      }
+     }
+    },
+    "multi_select": {
+     "type": "boolean",
+     "description": "True when more than one option may be chosen."
+    }
+   }
+  }
+ },
+ {
   "name": "task",
-  "description": "Hand a self-contained sub-task to a specialised agent that runs with its own context and its own narrowed tool set, and return only its conclusion.\nUse it when a sub-task is well defined and its intermediate steps are noise for this conversation — a wide search, a survey of many files, a self-checking analysis. Do not use it for a step you can do in one or two tool calls yourself.\nThe sub-agent cannot see this conversation, cannot ask you anything, and reports once when it is done. Available sub-agents:\n- general-purpose: General-purpose agent for open-ended sub-tasks: researching a question across many files, running a multi-step analysis to a conclusion, or any search where you are not confident the first few attempts will find the answer. Runs on the same model as the main agent with every tool except task, which would let a sub-agent start sub-agents of its own; plan_write, which acts on the calling conversation's plan; memory_write, which writes memory that every later conversation reads.\n- module-reviewer: Only when the user requests independent review (the review button in Desktop). Reviews one analysis module after it has been replayed and before the user accepts it: reads its step files, outputs, manifest and report, and returns VERDICT: APPROVE or VERDICT: REVISE with findings. Read-only.",
+  "description": "Hand a self-contained sub-task to a specialised agent that runs with its own context and its own narrowed tool set, and return only its conclusion.\nUse it when a sub-task is well defined and its intermediate steps are noise for this conversation — a wide search, a survey of many files, a self-checking analysis. Do not use it for a step you can do in one or two tool calls yourself.\nThe sub-agent cannot see this conversation, cannot ask you anything, and reports once when it is done. Available sub-agents:\n- general-purpose: General-purpose agent for open-ended sub-tasks: researching a question across many files, running a multi-step analysis to a conclusion, or any search where you are not confident the first few attempts will find the answer. Runs on the same model as the main agent with every tool except task, which would let a sub-agent start sub-agents of its own; plan_write, which acts on the calling conversation's plan; memory_write, which writes memory that every later conversation reads; ask_user, which asks a person, and a sub-agent has nobody to ask.\n- module-reviewer: Only when the user requests independent review (the review button in Desktop). Reviews one analysis module after it has been replayed and before the user accepts it: reads its step files, outputs, manifest and report, and returns VERDICT: APPROVE or VERDICT: REVISE with findings. Read-only.",
   "input_schema": {
    "type": "object",
    "properties": {

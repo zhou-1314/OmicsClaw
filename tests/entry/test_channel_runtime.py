@@ -31,6 +31,7 @@ import threading
 
 import pytest
 
+from omicsclaw.engine import StopReason
 from omicsclaw.entry.approval import TIMEOUT_REASON
 from omicsclaw.entry.channel.runtime import (
     DEFAULT_DELIVERED_TYPES,
@@ -42,7 +43,7 @@ from omicsclaw.entry.events import TurnEventType
 from omicsclaw.entry.ingress import InboundMessage
 from omicsclaw.entry.session import attach_sessions
 from omicsclaw.provider import Completion
-from omicsclaw.schema import Message, Role, StreamChunk, StreamChunkType
+from omicsclaw.schema import Message, Role, StreamChunk, StreamChunkType, ToolCall
 from omicsclaw.tools.context import ApprovalDecision
 from tests.entry.test_channel_ingress import (  # type: ignore[import-not-found]
     OWNER,
@@ -52,6 +53,7 @@ from tests.entry.test_channel_ingress import (  # type: ignore[import-not-found]
 )
 from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]
     Asking,
+    Reporting,
     Scripted,
     calling,
     make_app,
@@ -674,6 +676,267 @@ def test_a_failed_exchange_says_so_instead_of_going_quiet(tmp_path):
 
     assert handle.terminal == "failed"
     assert transport.sent and "Failed" in transport.sent[-1]
+
+
+# ---- the answer is the exchange's own ----------------------------------
+
+
+FIRST_ANSWER = "FIRST ANSWER."
+
+CUT_ARGUMENTS = (
+    '{"path": "notes.md", "content": "# Notes\\n\\nResolution 1.0 kept twelve clu'
+)
+"""The arguments of a ``write_file`` call, cut off inside a string."""
+
+
+class Ending(Scripted):
+    """``Scripted`` that also reports why each reply ended.
+
+    A reply is a message or a ``(message, finish_reason)`` pair, and a bare
+    message ends with ``"stop"``. The engine reads ``"length"`` as a reply
+    cut off by the output ceiling.
+    """
+
+    def __init__(self, *replies: Message | tuple[Message, str]) -> None:
+        pairs = [
+            reply if isinstance(reply, tuple) else (reply, "stop") for reply in replies
+        ]
+        super().__init__(*(reply for reply, _ in pairs))
+        self.reasons = [reason for _, reason in pairs]
+
+    async def generate(self, messages, tools=None):
+        reason = self.reasons[min(self.calls, len(self.reasons) - 1)]
+        completion = await super().generate(messages, tools)
+        return dataclasses.replace(completion, finish_reason=reason)
+
+    async def _stream(self, messages, tools=None):
+        completion = await self.generate(messages, tools)
+        if completion.message.content:
+            yield StreamChunk(
+                type=StreamChunkType.TEXT_DELTA, delta=completion.message.content
+            )
+        yield StreamChunk(
+            type=StreamChunkType.DONE,
+            message=completion.message,
+            finish_reason=completion.finish_reason,
+        )
+
+
+def saying(text: str) -> Message:
+    """An assistant message that says *text* and asks for ``report``."""
+    return Message.assistant(
+        text, tool_calls=(ToolCall(id="c0", name="report", arguments="{}"),)
+    )
+
+
+WITHOUT_TEXT = {
+    "an empty reply": ((Message.assistant(""),), {}, StopReason.CONVERGED),
+    "reasoning and no text": (
+        (Message.assistant("", reasoning_content="Nothing to add."),),
+        {},
+        StopReason.CONVERGED,
+    ),
+    "a tool call, then an empty reply": (
+        (calling("report"), Message.assistant("")),
+        {},
+        StopReason.CONVERGED,
+    ),
+    "cut off inside a tool call": (
+        (
+            (
+                Message.assistant(
+                    "",
+                    reasoning_content="I will write the file.",
+                    tool_calls=(
+                        ToolCall(id="c9", name="write_file", arguments=CUT_ARGUMENTS),
+                    ),
+                ),
+                "length",
+            ),
+        ),
+        {},
+        StopReason.TRUNCATED,
+    ),
+    "cut off before any text": (
+        ((Message.assistant(""), "length"),),
+        {},
+        StopReason.TRUNCATED,
+    ),
+    "the turn limit, on a tool result": (
+        (calling("report"), calling("report")),
+        {"max_turns": 2},
+        StopReason.MAX_TURNS,
+    ),
+}
+"""Exchanges that end with a result and no text of their own.
+
+Each entry holds the model's replies, the configuration the shape needs
+and the stop reason the engine reports. The handle of every one of them
+ends ``converged``.
+"""
+
+WITH_TEXT = {
+    "a plain answer": ((Message.assistant("SECOND ANSWER."),), {}, "SECOND ANSWER."),
+    "an answer after a tool result": (
+        (calling("report"), Message.assistant("SECOND ANSWER.")),
+        {},
+        "SECOND ANSWER.",
+    ),
+    "text beside a tool call, then an answer": (
+        (saying("Let me look."), Message.assistant("SECOND ANSWER.")),
+        {},
+        "SECOND ANSWER.",
+    ),
+    "text beside a tool call, then an empty reply": (
+        (saying("Let me look."), Message.assistant("")),
+        {},
+        "Let me look.",
+    ),
+    "a reply cut off mid-sentence": (
+        ((Message.assistant("Moran's I measures spatial autocorre"), "length"),),
+        {},
+        "Moran's I measures spatial autocorre",
+    ),
+    "the turn limit, after text beside a tool call": (
+        (saying("Looking once."), calling("report")),
+        {"max_turns": 2},
+        "Looking once.",
+    ),
+}
+"""Exchanges that wrote text: the replies, the configuration, the answer."""
+
+
+async def conversation(tmp_path, provider, exchanges: int, **overrides):
+    """Send *exchanges* messages to one chat, one after another.
+
+    The reply pump of each exchange has finished before the next message
+    is submitted, so ``transport.sent`` is in exchange order. Returns the
+    transport and the handle of every exchange.
+    """
+    transport = Transport()
+    app = deployment(tmp_path, provider, tools=(Reporting(),), **overrides)
+    runtime = await started(app, transport)
+    handles = []
+    for index in range(exchanges):
+        result = await runtime.submit(
+            message(f"question {index}", request=f"r{index}")
+        )
+        handle = result.handle
+        assert handle is not None
+        await asyncio.wait_for(handle.wait(), WAIT_S)
+        await until(lambda: handle.turn_id not in runtime._replies)
+        handles.append(handle)
+    await runtime.close(WAIT_S)
+    return transport, handles
+
+
+@pytest.mark.parametrize("earlier", [0, 1], ids=["first exchange", "second exchange"])
+@pytest.mark.parametrize("shape", sorted(WITHOUT_TEXT))
+def test_an_exchange_without_text_sends_no_answer(tmp_path, shape, earlier):
+    """The answer is read from what this exchange wrote, and from nothing older.
+
+    The trajectory an exchange hands back starts with the history it was
+    given, so in a second exchange the first one's answer is in it. An
+    exchange that wrote no text sends nothing in either position.
+    """
+    replies, overrides, stop = WITHOUT_TEXT[shape]
+    before = [Message.assistant(FIRST_ANSWER)] * earlier
+    provider = Ending(*before, *replies)
+
+    transport, handles = run(
+        conversation(tmp_path, provider, earlier + 1, **overrides)
+    )
+
+    last = handles[-1]
+    assert last.terminal == "converged"
+    assert last.outcome.result.stop_reason is stop
+    assert transport.sent == [FIRST_ANSWER] * earlier
+
+
+@pytest.mark.parametrize("shape", sorted(WITH_TEXT))
+def test_an_exchange_delivers_the_last_text_it_wrote(tmp_path, shape):
+    """The answer is the text of the last turn of the exchange that has any.
+
+    A turn that asks for a tool may also say something, and when no later
+    turn of the exchange has text, that is what the person is sent. Tool
+    results sit between the turns and do not end the search.
+    """
+    replies, overrides, answer = WITH_TEXT[shape]
+    provider = Ending(Message.assistant(FIRST_ANSWER), *replies)
+
+    transport, _ = run(conversation(tmp_path, provider, 2, **overrides))
+
+    assert transport.sent == [FIRST_ANSWER, answer]
+
+
+def test_a_reply_of_only_whitespace_is_sent_as_it_is(tmp_path):
+    """What the pump does today, pinned so that changing it is deliberate.
+
+    Any non-empty content counts as text, so a reply of a blank and a
+    newline is delivered unchanged. Whether such a reply should count as
+    no text has not been decided.
+    """
+    provider = Ending(Message.assistant(FIRST_ANSWER), Message.assistant(" \n"))
+
+    transport, _ = run(conversation(tmp_path, provider, 2))
+
+    assert transport.sent == [FIRST_ANSWER, " \n"]
+
+
+class Halting(Scripted):
+    """Answers the first call. The second raises, or waits to be cancelled."""
+
+    def __init__(self, how: str) -> None:
+        super().__init__(Message.assistant(FIRST_ANSWER))
+        self.how = how
+        self.entered = asyncio.Event()
+
+    async def generate(self, messages, tools=None):
+        if self.calls:
+            self.entered.set()
+            if self.how == "failed":
+                raise RuntimeError("the backend fell over")
+            await asyncio.Event().wait()
+        return await super().generate(messages, tools)
+
+
+@pytest.mark.parametrize(
+    ("how", "notice"), [("failed", "Failed"), ("cancelled", "Cancelled")]
+)
+def test_an_exchange_with_no_result_sends_its_notice_and_no_answer(
+    tmp_path, how, notice
+):
+    """A failed or cancelled exchange has no trajectory to read an answer from.
+
+    Its terminal frame is rendered and sent. The answer of the exchange
+    before it is not sent again.
+    """
+
+    async def scenario():
+        provider = Halting(how)
+        transport = Transport()
+        app = deployment(tmp_path, provider)
+        runtime = await started(app, transport)
+        first = await runtime.submit(message("question 0", request="r0"))
+        assert first.handle is not None
+        await asyncio.wait_for(first.handle.wait(), WAIT_S)
+        await until(lambda: first.handle.turn_id not in runtime._replies)
+        second = await runtime.submit(message("question 1", request="r1"))
+        assert second.handle is not None
+        await asyncio.wait_for(provider.entered.wait(), WAIT_S)
+        if how == "cancelled":
+            second.handle.cancel()
+        await asyncio.wait_for(second.handle.wait(), WAIT_S)
+        await runtime.close(WAIT_S)
+        return transport, second.handle
+
+    transport, handle = run(scenario())
+
+    assert handle.terminal == how
+    assert len(transport.sent) == 2
+    assert transport.sent[0] == FIRST_ANSWER
+    assert notice in transport.sent[1]
+    assert FIRST_ANSWER not in transport.sent[1]
 
 
 # ---- Q6: two conversations, two pumps ----------------------------------

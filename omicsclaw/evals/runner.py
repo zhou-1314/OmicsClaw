@@ -96,8 +96,9 @@ def eval_config(case: Case, workspace: Path) -> AppConfig:
     """The :class:`~omicsclaw.entry.AppConfig` a case runs under.
 
     The repository's skills, the ``claude-sonnet-4-5`` window, no skill
-    environment probing, no sandbox, and auto-approve or default
-    permission mode, with the case's ``config`` applied last.
+    environment probing, no sandbox, no ``ask_user`` tool (the Runner
+    answers approvals and does not answer questions), and auto-approve or
+    default permission mode, with the case's ``config`` applied last.
     """
     fields: dict[str, object] = {
         "workspace": workspace,
@@ -106,6 +107,7 @@ def eval_config(case: Case, workspace: Path) -> AppConfig:
         "model": EVAL_MODEL,
         "skill_env": SkillEnvMode.OFF,
         "sandbox": SandboxMode.OFF,
+        "ask_user": False,
         "permission_mode": (
             PermissionMode.AUTO_APPROVE if case.permission == "auto" else PermissionMode.DEFAULT
         ),
