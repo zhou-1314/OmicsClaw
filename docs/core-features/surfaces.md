@@ -88,6 +88,7 @@
 | `submit(session_id, text, *, values=None, source_request_id="")` | 提交一条消息；同一会话内重复的 `source_request_id` 返回**同一个** handle（幂等，键按会话作用域） |
 | `deliver(message: InboundMessage)` | `submit` 的 ingress 版，Desktop 与 Channel 用 |
 | `compact(session_id)` | 在该会话 lane 中排一个仅压缩的 exchange（CLI `/compact`、Channel `/compact`） |
+| `clear(session_id)` | 在该会话 lane 中排一个只清空会话的条目：轮到它时把 `history` 和 `compaction` 清空并写进存储，不调用模型（Channel `/clear`、`/new`，见 §9.9） |
 | `observe(turn_id, *, after_seq=0)` / `handle(turn_id)` | 按 id 重新观察 / 取 handle |
 | `list_sessions(limit=10)` / `load_session` / `persistent` | CLI `/sessions`、`/resume` |
 | `running()` / `shutdown(grace_s)` | 运行中的 handle / 关闭 |
@@ -511,6 +512,9 @@ start_channel
   终止帧是 `failed` 或 `cancelled` 的 exchange 没有轨迹可读，发出去的是这一帧渲染的 `Failed: <类型名>` 或
   `Cancelled.`。会话存储保存失败时不一样：终止帧已经是 `converged`，handle 之后才记为 `failed`，
   答案和失败提示都不发（§10 第 12 条）。
+- 提示和答案是各自独立的消息。排队提示、审批卡、审批结果、终止提示没有被平台接受时，回复泵记一条 WARNING，
+  继续观察这次 exchange，答案照常发出。审批卡没送达时请求等到 `approval_timeout_s` 按超时拒绝（§9.9、§10 第 13 条）。
+  含回答文字的消息没送达时回复泵才停下，默认部署里这样的消息只有最后的答案。
 - `delivery.deliver`：单条消息最多 `MAX_DELIVERY_ATTEMPTS = 3` 次、每次 `ATTEMPT_TIMEOUT_S = 30.0` 秒；适配器返回
   `ACCEPTED` / `NOT_ACCEPTED_RETRYABLE` / `REJECTED_PERMANENT` / `ACCEPTANCE_UNKNOWN`，只有可证明可重试的才重试，
   `ACCEPTANCE_UNKNOWN` 不盲目重发。不持久化——回复只活在进程里（持久 outbox 是被删控制面的能力）。
@@ -522,6 +526,10 @@ start_channel
 `entry/channel/commands/builtins.py` 注册：`/clear`、`/compact`、`/new`、`/files`、`/outputs`、`/recent`、`/skills`、`/status`、`/version`、
 `/demo`、`/examples`、`/help`（`/help` 只列出实际注册的命令）。斜杠命令不会到达模型（一致性规则之一）。
 旧的 `/forget`、`/plan` 未恢复。`/demo` 只是返回几条"用自然语言请求 demo"的示例文本，并不直接执行 skill。
+
+`/clear` 和 `/new` 做同一件事，只是回话不同（`Conversation history cleared.`、`New conversation started.`）：
+经 `SessionRegistry.clear` 在会话的 lane 里把对话历史和压缩摘要清空并写进存储，session id 不变。命令在排在它前面的
+exchange 结束之后才回话；队列已满或存储写不进去时回 `That command failed.`，会话保持原样（§9.9、§10 第 14 条）。
 
 ### 9.6 一致性测试代替基类
 
@@ -619,6 +627,110 @@ Channel 拒绝空消息，`/compact` 不经过回复泵，所以走到 `_answer`
   这次没有改。CLI 恢复会话时的回顾行（`_recap`）各取历史里最后一条提问和最后一条回答，最后一次
   exchange 没有文字时两行不属于同一次 exchange，也没有改。
 
+### 9.9 2026-10-10：`/clear`、`/new` 写进存储，提示没送达不再丢掉答案
+
+这一节修的是复核 §9.8 时记下的两个既有问题。两个都在 `bd5dde25` 上经真实的 `ChannelRuntime`、`SessionRegistry`
+和 SQLite 会话存储复现，模型是脚本化的，投递适配器是记录发送内容的替身，命令经真实的
+`Channel.answer_slash_command` 进入。
+
+#### 现象
+
+`/clear` 和 `/new` 走同一段代码，下表两条命令的结果相同。"旧历史"指命令之前的对话。
+
+| 情形 | 修复前的回话 | 修复前下一次模型调用收到 | 修复后下一次模型调用收到 |
+|---|---|---|---|
+| 会话已在内存里，没有 exchange 在跑 | 立刻回 `Conversation history cleared.` | 只有新消息（存储里仍是旧历史） | 只有新消息，存储同时清空 |
+| 进程重启后，会话还没有加载 | 同上 | 旧历史加新消息 | 只有新消息 |
+| 命令之后进程重启，再发消息 | 同上 | 旧历史加新消息 | 只有新消息 |
+| 会话里有一次 exchange 正在跑 | 同上，不等它 | 旧历史、在跑的那次、新消息 | 只有新消息；命令等那次 exchange 结束才回话 |
+| 一次在跑、一次在排队 | 同上 | 全部历史，什么都没清 | 只有新消息；排队的那次仍带着它之前的历史运行 |
+| 会话从没有保存过 | 同上 | 只有新消息 | 只有新消息，存储里不新建会话 |
+
+回复泵在默认的 `DEFAULT_DELIVERED_TYPES` 下：
+
+| 没有被平台接受的消息 | 修复前 | 修复后 |
+|---|---|---|
+| 排队提示，结果是 `REJECTED` 或 `UNKNOWN` | 答案不发。exchange 在回复泵离开 30 秒后还没结束就被取消，历史里没有它 | 答案照发，exchange 跑完 |
+| 审批卡 | 答案不发。审批期限比 30 秒长时，exchange 等不到期限就被取消 | 请求等到期限按超时拒绝，`Approval denied [...]` 一行和答案照发 |
+| `Approval denied [...]` 或 `Approval granted [...]` 一行 | 答案不发 | 答案照发 |
+| `Failed: <类型名>` 或 `Cancelled.` | 之后没有别的消息 | 相同 |
+| 没有 reply target 的消息，排在另一次 exchange 后面 | 排队提示一出回复泵就离开，exchange 30 秒后还没结束就被取消 | 回复泵留到 exchange 结束 |
+
+提示没送达之后，exchange 只有在 30 秒内结束才跑得完：回复泵离开时关掉了这次 exchange 唯一的观察，放弃计时
+随之开始。30 秒是 `DEFAULT_ABANDON_GRACE_S`，复现时把它设成 0.5 秒，审批期限设成 3 秒。审批卡的那一半原先只读过
+代码，这次跑过，结果和排队提示一样。
+
+#### 根因
+
+`/clear`：`builtins._clear` 直接改注册表内存里的 `Session` 对象。`SessionRegistry.session()` 只返回已经加载的
+会话，重启后是 `None`，命令把它当成没有东西可清，照样回答成功。会话在内存里时也有两处漏洞：注册表只在
+exchange 结束后保存会话，命令清掉的内容要等下一次 exchange 才写进存储；在跑的 exchange 结束时把自己的轨迹
+写回 `session.history`，盖掉刚清空的结果。CLI 的 `/new` 和 `/clear` 换一个新的 session id，不改已有会话
+（`Repl._new_session`）；Desktop 的路由里没有清空会话的操作，`/chat/stream` 只把 `/compact` 当命令。
+这两处没有这个问题。
+
+回复泵：`_pump_reply` 的循环里每次发送后都是 `if not landed: return`。提示和答案是各自独立的消息，提示没送达时
+回复泵整个退出，后面的答案没有人发。退出同时关闭了 `async with handle.observe()` 打开的观察，`TurnHandle`
+在观察者归零时开始计时，`DEFAULT_ABANDON_GRACE_S`（30 秒）后还没结束的 exchange 被取消。
+
+#### 改动
+
+`SessionRegistry.clear(session_id)`（`entry/session.py`）在会话的 lane 里排一个只做清空的条目，和 `compact`
+一样返回 `TurnHandle`，`TurnHandle` 为此多了一个 `clear_only` 标记（`entry/turn.py`）。轮到它时 `_clear_session`
+从内存或存储取出会话，清空 `history` 和 `compaction` 并保存；只在存储里的会话不会被留在内存里，从没保存过的会话
+不新建。存储写不进去时这几项恢复原值，handle 以 `failed` 结束。排在它前面的 exchange 带着原来的历史跑完，
+排在它后面的从空历史开始。`builtins._clear` 改为调用它并等 handle 结束，`converged` 才回答成功，两条命令的
+回话文字没有改。队列已满、注册表正在关闭、存储写失败时命令抛异常，`Channel.answer_slash_command` 照旧回
+`That command failed.` 并把异常记进日志。
+
+`_pump_reply` 按消息里带的是什么来决定发送失败之后怎么办。只含提示的消息没送达时记一条 WARNING，回复泵留在这次
+exchange 上，最后照常发答案。含回答文字的消息没送达时仍然停下，理由没有变：平台刚拒收或者可能已经收下一份时，
+接着推后面的段落会让对话读不通。含回答文字的消息有三种：答案本身；`delivered_types` 带 `TEXT_DELTA` 的部署里
+的一批流式文字和 `flush` 出来的尾巴；这种部署里渲染器攒着的文字和下一条提示合成的那条消息。仓库里没有调用方传
+这个参数，这部分行为没有改。
+
+这次定下的几处取舍：
+
+- 清空排进 lane，不立刻改内存。立刻改要么被在跑的 exchange 写回覆盖，要么得丢掉那次 exchange 的结果，
+  而排队中的 exchange 会失去它提问时的上下文。代价是会话里有 exchange 时 `/clear` 要等，回话变晚。
+  命令的回话和那次 exchange 的答案走两条发送路径，到达用户的先后不保证。
+- 排队中的清空占 `max_queued_per_session`（默认 2）的一个位置，和 `/compact` 一样。一次在跑、一次在排队、
+  再加一条 `/clear` 之后，第四条消息会被 `queue_full` 拒绝；修复前它会被接受。
+- 审批卡没送达时不提前拒绝请求，照旧等到 `approval_timeout_s`，只多一条日志。`UNKNOWN` 的卡片可能已经到了，
+  提前拒绝会让用户对着一张已经失效的卡片；提前拒绝还需要一条新的拒绝理由，它会出现在 `Approval denied [...]`
+  这一行和工具结果里。Channel 上目前也没有回答审批的入口（§10 第 2 条），卡片送达与否，请求都是到期被拒。
+- 发送失败的日志级别没有动。修复前后都是两条 WARNING：`omicsclaw.entry.channel.delivery` 每次尝试一条
+  （`delivery attempt 1/3 for <item id> ended rejected_permanent (...)`），`omicsclaw.entry.channel.runtime`
+  每条消息一条。后者原来一律写 `reply for <turn id> ended <结果>; not sending the rest of it`，现在只有回答文字
+  没送达时这样写；提示写 `<帧类型> notice for <turn id> ended <结果>; what follows is still sent`，审批卡写
+  `approval card <request id> ended <结果>; the request stays open until its deadline, and what follows is still sent`。
+  日志里只有 id 和帧类型，没有消息正文，审批卡的正文引用了待批准的调用。
+
+测试：`tests/entry/test_session.py` 里 `clear` 的 7 条，`tests/entry/test_channel_commands.py` 里 10 条，
+`tests/entry/test_channel_runtime.py` 里 12 条。其中 25 条在 `bd5dde25` 的生产代码上是红的，另外 4 条钉住没有改的
+行为（没保存过的会话不新建、流式文字没送达仍然停下的两条、答案没送达的日志）。
+`test_a_pump_that_stops_early_detaches_while_the_exchange_runs` 原来靠"排队提示被拒收后回复泵离开"来制造提前
+离开，这条路没有了，改用流式文字被拒收，断言的仍是 exchange 还没结束时观察已经关闭。
+对新增的生产代码做了 27 处定点变异，全部有测试转红。
+
+#### 没验证和没改的部分
+
+- 真实的聊天平台没有验收，七个平台都没有真实收发过。真实平台上 `/clear` 的回话和在跑的 exchange 的答案谁先到没有看过。
+- 命令等待期间占着适配器的入站回调。Feishu 在 SDK 的 WebSocket 线程上同步等结果（`FeishuChannel._run_async`），
+  DingTalk 和 Email 的接收循环逐条 `await` 处理器，所以 `/clear` 等一次长 exchange 期间，这个平台收不了别的消息。
+  `/compact` 原来就是这样。这只读了代码，没有在真实的连接上看过；Slack、Discord、QQ 取决于各自 SDK 怎么派发回调，没有核实。
+- Telegram 只注册了 `/start`、`/skills`、`/demo`、`/status`、`/health` 五个处理器，文本处理器又排除了命令，
+  所以 `/clear`、`/new`、`/compact` 在真实的 Telegram 上到不了 `dispatch`。这也只读了代码，
+  测试环境里没有装 `python-telegram-bot`，一致性测试是直接调用 `_run_command` 的。
+- 会话的计划不随 `/clear` 清空（§10 第 14 条）。
+- 审批卡没送达时用户仍然不知道有请求在等（§10 第 13 条）。可选的做法都需要新的用户可见文字，没有做：
+  平台明确拒收时立刻拒绝请求并写明原因；或者在之后的 `Approval denied [...]` 一行里说明卡片没有送达。
+- 平台一直超时的时候，每条提示各自要等满一次尝试的上限（`ATTEMPT_TIMEOUT_S`，30 秒）才轮到下一条。
+  修复前回复泵在第一条失败后就离开了。
+- `/clear` 在队列已满时回的是 `That command failed.`，没有 `/compact` 那样的 `Cannot compact now: ...`。
+  要说清原因需要一句新的回话。
+- `/compact` 对从没保存过的会话会在存储里留下一条空会话，`/clear` 不会。没有改。
+
 ---
 
 ## 10. 已知限制
@@ -647,16 +759,20 @@ Channel 拒绝空消息，`/compact` 不经过回复泵，所以走到 `_answer`
     得到没有正文的回复，没有用真实模型验证过。SOFT、FULL 档的降级截断不写回轨迹，不受影响。
 12. **会话存储保存失败时，Channel 既不发答案也不发失败提示**：`SessionStore.save` 抛错时终止帧已经是 `converged`，
     handle 记为 `failed`；回复泵跳过 `converged` 的终止帧，`_answer` 对不是 `converged` 的 handle 返回空串。
-13. **一条提示没有被平台接受时，本次 exchange 的答案不再发出**：排队提示或审批卡的投递结果不是 `ACCEPTED`，
-    回复泵就返回，exchange 照常跑完，写出的回答留在记录里，没有发给用户。
-14. **进程重启后，`/clear` 和 `/new` 可能没有清掉历史**：会话还没有被加载进内存时，这两个命令照常回答
-    `Conversation history cleared.` 和 `New conversation started.`，存储里的历史没有动，下一条消息仍然带着它。
+13. **审批卡没有送达时，用户不知道有请求在等**：回复泵记一条 WARNING 后继续，请求等到 `approval_timeout_s`
+    按超时拒绝，用户之后收到的是 `Approval denied [...]: no answer before the approval deadline` 和答案，
+    卡片不重发（§9.9）。`delivered_types` 带 `TEXT_DELTA` 的部署里，含回答文字的消息没送达时回复泵仍然离开，
+    exchange 在 30 秒后还没结束就被取消。
+14. **Channel 的 `/clear` 和 `/new` 只清对话历史和压缩摘要**：会话的计划（`PlanBook`，按 session id 存档）不清，
+    之后的模型调用仍然带着 `## Current execution plan` 这一块，重启后也一样；长期记忆也不动。会话里有 exchange
+    在跑或排队时，命令等它们结束才回话，等待期间占 `max_queued_per_session` 的一个位置，队列已满时回
+    `That command failed.`（§9.9）。
 15. **`/compact` 的回执会出现负的百分比**：摘要比它替换的消息长、消息条数却减少时结果照样写回，回执是
     `Compacted: 376 -> 406 tokens (-8% smaller); 4 messages summarized.` 这样的文字。
 
-第 12 至 15 条是复核 §9.8 的修复时查到的既有问题，与那次修复无关，代码没有改。四条都用脚本化的模型经真实的
-`ChannelRuntime` 或斜杠命令的 `dispatch` 复现过；第 13 条里审批卡的那一半只读了代码，它和排队提示走的是
-`_pump_reply` 里的同一个分支。
+第 12 和 15 条是复核 §9.8 的修复时查到的既有问题，代码没有改，都用脚本化的模型经真实的 `ChannelRuntime`
+或斜杠命令的 `dispatch` 复现过。同一次复核查到的另外两个问题在 §9.9 修了，第 13、14 条是修完之后还留着的部分，
+其中计划不随 `/clear` 清空这一点同样复现过。
 
 ---
 
