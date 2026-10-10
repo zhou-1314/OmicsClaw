@@ -219,7 +219,7 @@ class Assertion(Protocol):
 与 harness9 的语义差别：
 
 - `tool_calls_executed` 取自 `TOOL_START` 帧，即引擎确实派发了的调用，包括随后被权限拒绝、参数校验失败或工具不存在的调用。harness9 在 hook 链最前端记录，效果相同；OmicsClaw 的 hook 装在权限门里面（`assembly.py:1263-1281`），被拒的调用到不了 hook，所以不能用 hook 记录。
-- `final_output` 是 `TurnOutcome.reply`（`entry/turn.py:133-138`，最后一条有文本的 assistant 消息），取自真实轨迹，而 harness9 是倒着扫脚本（`harness.go:161-168`）。多次交换的用例取最后一次。
+- `final_output` 是 `TurnOutcome.reply`（`entry/turn.py`，由同一文件里的 `_reply` 算出；最后一条有文本的 assistant 消息），取自真实轨迹，而 harness9 是倒着扫脚本（`harness.go:161-168`）。多次交换的用例取最后一次。2026-10-10 起 `reply` 只读最后一次交换新增的消息，那次交换没有写文字时 `final_output` 是空串，取不到更早交换的回答（`docs/core-features/surfaces.md` §3.3）。
 - `run_error` 是回合以 `terminal="failed"` 结束时的原异常（`EXCHANGE_END.error`）。`MAX_TURNS` 不是错误，`Error()` 测不到它；撞顶用 `result.stop_reason` 判断（见下）。
 - `turn_count` 是所有交换里主线模型调用的总数（`len(provider.calls)`），重试也计入，这和 harness9 的 `TurnIndex` 口径一致。引擎自己的 `RunResult.turns` 另存为 `result.engine_turns`。
 

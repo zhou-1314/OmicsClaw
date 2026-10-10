@@ -7,18 +7,21 @@ how it answers approvals.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import socket
 
 import pytest
 
 from omicsclaw.context import Pressure
+from omicsclaw.engine import StopReason
 from omicsclaw.evals import (
     Case,
     Headroom,
     NoError,
     NoWriteOutside,
     OutputContains,
+    OutputExcludes,
     ScriptedProvider,
     ScriptedTurn,
     ToolCalled,
@@ -51,6 +54,59 @@ def test_a_minimal_case_passes_and_records_its_run(tmp_path):
     assert (tmp_path / "ws" / "n.md").read_text() == "hi"
     assert any(change.path.endswith("n.md") and change.kind == "created" for change in result.fs_changes)
     assert result.provider_calls[0].tools[0] == "read_file"
+
+
+FIRST_REPLY = "It used log1p after total-count scaling (ANSWER-ONE)."
+_READ = ScriptedTurn(tool_calls=(tool_call("read_file", {"path": "missing.txt"}),))
+
+
+def _followup_case(case_id, *second, assertions):
+    """A case of two exchanges: the first is answered, the second replays *second*."""
+    return Case(
+        id=case_id,
+        category="context",
+        prompt="Which normalization did the run use?",
+        provider=lambda: ScriptedProvider(ScriptedTurn(text=FIRST_REPLY), *second),
+        assertions=assertions,
+        followups=("And what comes next?",),
+    )
+
+
+@pytest.mark.parametrize(
+    "second",
+    [(ScriptedTurn(text=""),), (_READ, ScriptedTurn(text=""))],
+    ids=["an empty reply", "a tool call, then an empty reply"],
+)
+def test_a_followup_without_text_is_not_scored_on_the_reply_before_it(tmp_path, second):
+    """``final_output`` is the reply of the last exchange and of no earlier one.
+
+    The follow-up writes no text, so its output is empty and an assertion
+    that looks for the first answer fails. ``OutputExcludes`` has nothing
+    to find in an empty output and passes.
+    """
+    case = _followup_case(
+        "context/followup_without_text",
+        *second,
+        assertions=(OutputContains("ANSWER-ONE"), OutputExcludes("ANSWER-ONE"), NoError()),
+    )
+    result = run_case(case, tmp_path)
+    assert result.stop_reasons == (StopReason.CONVERGED, StopReason.CONVERGED)
+    assert result.final_output == ""
+    assert _names(result) == ["OutputContains('ANSWER-ONE')"]
+    assert not result.passed
+
+
+def test_a_followup_is_scored_on_the_last_text_it_wrote(tmp_path):
+    """Text beside a tool call is the follow-up's output when nothing follows it."""
+    case = _followup_case(
+        "context/followup_with_text",
+        dataclasses.replace(_READ, text="Reading it now."),
+        ScriptedTurn(text=""),
+        assertions=(OutputContains("Reading it now."), OutputExcludes("ANSWER-ONE")),
+    )
+    result = run_case(case, tmp_path)
+    assert result.passed, result.failures
+    assert result.final_output == "Reading it now."
 
 
 def test_a_case_runs_without_ask_user_unless_its_config_turns_it_on(tmp_path):

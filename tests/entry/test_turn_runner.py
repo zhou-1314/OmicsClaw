@@ -52,7 +52,16 @@ hang, and there is no timeout plugin on this machine."""
 
 
 class Scripted:
-    """A provider that replays fixed replies and records what it was sent."""
+    """A provider that replays fixed replies and records what it was sent.
+
+    Each reply is returned as the object that was passed in, and the last
+    one answers every call after the script runs out. When one message
+    object answers several exchanges and a compaction that is written
+    back drops an earlier occurrence of it from the history,
+    ``TurnOutcome.reply`` is ``""`` for an exchange that did answer. A
+    test of several exchanges under compaction should pass a message of
+    its own for each call.
+    """
 
     def __init__(self, *replies: Message) -> None:
         self.replies = list(replies) or [Message(role=Role.ASSISTANT, content="ok")]
@@ -96,7 +105,9 @@ class Finishing(Scripted):
 
     A reply is a message or a ``(message, finish_reason)`` pair, and a
     bare message ends with ``"stop"``. The engine reads ``"length"`` and
-    ``"max_tokens"`` as a reply cut off by the output ceiling.
+    ``"max_tokens"`` as a reply cut off by the output ceiling. Message
+    objects are replayed as ``Scripted`` replays them, with the same
+    effect on ``TurnOutcome.reply`` under compaction.
     """
 
     def __init__(self, *replies: Message | tuple[Message, str]) -> None:

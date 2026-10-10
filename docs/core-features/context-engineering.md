@@ -343,6 +343,7 @@ SessionRegistry._attempt(handle)
         每个 Turn：compactor.compact → augmentor.augment → 模型 → 工具
         _settle: 去掉 system 消息 → _Carried.commit(trajectory)
      _outcome → TurnOutcome(history=无 system 的轨迹, prompt=本轮渲染,
+                            reply=本次新增消息里最后一段 assistant 文字,
                             state=compactor.state, compaction=last_record, compactions=records)
   if converged: session.history = outcome.history; session.compaction = outcome.state
   session.updated_at = time.time(); await store.save(session)
