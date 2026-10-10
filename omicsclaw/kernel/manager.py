@@ -107,6 +107,12 @@ NOTICE_TAIL = (
     "recomputing long steps.]"
 )
 
+_RETRY_DISCLOSURE = (
+    "note: the kernel died mid-cell before this result; the cell was "
+    "re-run on a fresh kernel and may have partially executed once — "
+    "side effects (files written, external calls) may have happened twice"
+)
+
 
 @dataclass(slots=True)
 class SessionState:
@@ -126,6 +132,10 @@ class SessionState:
     executing: bool = False
     current_job: str = ""
     last_error: str = ""
+    resetting: bool = False
+    """Set while a cancel is killing this kernel (tier 3): the execute
+    in flight must report its death instead of retrying the cell, or a
+    cancelled cell would silently re-run on the replacement kernel."""
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -222,6 +232,7 @@ class PersistentKernelManager:
                         state, reason=state.restart_needed, with_summary=True
                     )
                 attempt = 0
+                mid_cell_retry = False
                 while True:
                     attempt += 1
                     notice = ""
@@ -253,24 +264,39 @@ class PersistentKernelManager:
                         timeout_s=float(timeout_s or self.cell_timeout_s),
                         callbacks=callbacks,
                     )
-                    if result.status == "dead" and attempt == 1:
+                    if (
+                        result.status == "dead"
+                        and attempt == 1
+                        and not state.resetting
+                    ):
                         # A kernel that dies *mid-cell* is not the cell's
                         # fault: park it, and retry the cell once on a
                         # cold-started kernel that carries the notice — the
                         # caller asked for work, and the work has not had a
-                        # chance to run. A second death is reported as-is.
+                        # chance to run. A second death is reported as-is,
+                        # and a death caused by a cancel's tier-3 kill is
+                        # never retried (the caller asked for the opposite).
+                        # The retry is disclosed below: a cell that already
+                        # had side effects may have run them twice.
                         self._park_with_obituary(
                             state,
                             summary=None,
                             reason="the previous kernel died mid-cell",
                         )
+                        mid_cell_retry = True
                         continue
-                    result.notice = notice
+                    notices = []
                     if notice:
+                        notices.append(notice)
+                    if mid_cell_retry:
+                        notices.append(_RETRY_DISCLOSURE)
+                    result.notice = "\n".join(notices)
+                    if notices:
                         # The plan puts the handover notice at the *top* of
                         # the next cell's stderr — the first thing a model
-                        # or a person reads — not in a side channel.
-                        result.stderr = notice + "\n" + result.stderr
+                        # or a person reads — with the retry disclosure
+                        # second, never in front of it.
+                        result.stderr = "\n".join(notices) + "\n" + result.stderr
                     if sync_info is not None:
                         result.usage["adata_sync"] = sync_info
                     state.cells += 1
@@ -384,8 +410,20 @@ class PersistentKernelManager:
                 return "dead"
             probe = await self._probe(state)
             return "interrupted" if probe else "dead"
-        # Tier 3: the interrupt did not land inside the grace.
+        # Tier 3: the interrupt did not land inside the grace. Kill the
+        # process *before* taking the session lock: kill is safe from any
+        # thread, and it is what makes the executing poll loop detect the
+        # death and let go of the lock promptly — a SIGINT-immune C
+        # extension would otherwise hold the lock (and the UI's cancel
+        # button) hostage until the cell timeout. The ``resetting`` flag
+        # keeps the in-flight execute from retrying the cell on the
+        # replacement kernel.
+        state.resetting = True
+        await asyncio.to_thread(kernel.kill)
         async with state.lock:
+            # The lock is free only once the in-flight execute has
+            # returned, which is exactly when the flag has done its job.
+            state.resetting = False
             if state.kernel is kernel:
                 self._park_with_obituary(
                     state,

@@ -123,12 +123,21 @@ class JobError(ValueError):
 
 
 class JobFailure(Exception):
-    """A runner's own report that the job failed, with a phase for the wire."""
+    """A runner's own report that the job failed, with a phase for the wire.
 
-    def __init__(self, error: str, phase: str = "run") -> None:
+    ``terminal_status`` lets a runner end the job somewhere other than
+    ``failed``: an interrupted cell reports ``interrupted`` (a terminal
+    state the wire already knows), which lands as ``job.done`` rather
+    than ``job.failed``.
+    """
+
+    def __init__(
+        self, error: str, phase: str = "run", *, terminal_status: str = "failed"
+    ) -> None:
         super().__init__(error)
         self.error = error
         self.phase = phase
+        self.terminal_status = terminal_status
 
 
 @dataclass(frozen=True, slots=True)
@@ -970,6 +979,10 @@ class CodeRunRunner:
                     },
                 )
         summary = format_cell_summary(result)
+        if result.status == "interrupted":
+            raise JobFailure(
+                "the cell was interrupted", phase="run", terminal_status="interrupted"
+            )
         if result.status == "error" and result.error is not None:
             raise JobFailure(
                 str(result.error.get("ename", "Error"))
@@ -1333,10 +1346,16 @@ class JobsManager:
             terminal = ("job.done", {"status": "canceled"})
             self.store.update_job(job_id, status="canceled", finished_at=time.time())
         except JobFailure as exc:
-            terminal = ("job.failed", {"error": exc.error, "phase": exc.phase})
-            self.store.update_job(
-                job_id, status="failed", error=exc.error, finished_at=time.time()
-            )
+            if exc.terminal_status == "interrupted":
+                terminal = ("job.done", {"status": "interrupted"})
+                self.store.update_job(
+                    job_id, status="interrupted", error=exc.error, finished_at=time.time()
+                )
+            else:
+                terminal = ("job.failed", {"error": exc.error, "phase": exc.phase})
+                self.store.update_job(
+                    job_id, status="failed", error=exc.error, finished_at=time.time()
+                )
         except Exception as exc:  # noqa: BLE001 - one job must never take the plane down
             _log.exception("job %s crashed the runner", job_id)
             named = type(exc).__name__ + ": " + str(exc)

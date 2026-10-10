@@ -670,3 +670,25 @@ def test_health_declares_the_kernel_capability(tmp_path):
     with http as client:
         payload = client.get("/health").json()
     assert payload["capabilities"]["kernel"] is True
+
+
+def test_code_run_interrupted_is_not_a_success(tmp_path):
+    """P4 review m8: an interrupted cell ends the job ``interrupted`` —
+    job.done with the status, not a success over a half-run cell."""
+    manager, http = code_run_client(tmp_path)
+    with http as client:
+        created = client.post(
+            "/jobs",
+            json={
+                "kind": "code_run",
+                "code": "raise KeyboardInterrupt",
+                "session_id": "p4-j4",
+            },
+        )
+        job_id = created.json()["job_id"]
+        record = wait_terminal(client, job_id)
+        assert record["status"] == "interrupted"
+        frames = drain_sse(client, "/jobs/" + job_id + "/events")
+        last = frames[-1][1]
+        assert last["type"] == "job.done"
+        assert last["data"]["status"] == "interrupted"

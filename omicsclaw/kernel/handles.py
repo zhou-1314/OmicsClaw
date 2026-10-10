@@ -116,10 +116,12 @@ class HandleRegistry:
 
         Returns ``{adata_id, variable, skipped, revision, summary}``;
         ``skipped=True`` means the revision matched and nothing was read.
-        *read_h5ad* is injectable for tests (default
-        ``anndata.read_h5ad`` resolved lazily); *kernel* is anything with
-        ``execute(code, timeout_s=...) -> CellResult`` — the manager
-        always passes the live :class:`~omicsclaw.kernel.session.SessionKernel`.
+        *kernel* is anything with ``execute(code, timeout_s=...) ->
+        CellResult`` — the manager always passes the live
+        :class:`~omicsclaw.kernel.session.SessionKernel`. The h5ad read
+        itself happens inside the kernel (the registry only ships code
+        and snapshots); tests exercise the gating with utime, not by
+        injecting a reader.
         """
         existing = self._handles.get(adata_id)
         if existing is not None and existing.session_id != session_id:
@@ -248,9 +250,3 @@ class HandleRegistry:
                 "adata source must be an h5ad path or an object with write_h5ad"
             ) from exc
         return snapshot, True
-
-
-def _lazy_read_h5ad(path: Any) -> Any:
-    import anndata  # noqa: PLC0415 - deliberately lazy: heavy import
-
-    return anndata.read_h5ad(path)

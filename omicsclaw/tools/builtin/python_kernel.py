@@ -152,7 +152,9 @@ class _StreamGate:
     A runaway ``print`` loop would otherwise turn one cell into hundreds
     of ``tool_output`` frames; the kernel-side 10 MB streaming ceiling
     eventually stops the source, and this keeps the channel quiet until
-    then. Pending text is never dropped — only delayed.
+    then. The progress frame keeps only the latest tail (~2000 chars);
+    nothing is lost — the full text rides the CellResult that ends the
+    call.
     """
 
     def __init__(self, loop: asyncio.AbstractEventLoop) -> None:

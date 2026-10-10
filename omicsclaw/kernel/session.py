@@ -178,10 +178,17 @@ class _StreamTally:
         return out[: max(0, budget - len(marker))] + marker
 
 
+def _session_slug(session_id: str) -> str:
+    """The session id made filename-safe (shared by the basename and the
+    seeding scan, so the two can never disagree)."""
+    return re.sub(r"[^0-9A-Za-z_.-]", "-", session_id)[:32].strip("-") or "s"
+
+
 def figure_basename(session_id: str, number: int) -> str:
-    """``kernel_<session>_<N>.png`` with the session id made filename-safe."""
-    safe = re.sub(r"[^0-9A-Za-z_.-]", "-", session_id)[:32].strip("-") or "s"
-    return f"kernel_{safe}_{number}.png"
+    """``kernel_<session>_<N>.png``; *number* is a per-kernel monotonic
+    sequence seeded past anything earlier kernels of this session wrote,
+    so neither a second cell nor a lazy cold restart overwrites history."""
+    return f"kernel_{_session_slug(session_id)}_{number}.png"
 
 
 class SessionKernel:
@@ -213,6 +220,11 @@ class SessionKernel:
         self._scratch: Path | None = None
         self.started_at = 0.0
         self.cells = 0
+        # Per-kernel monotonic figure number; seeded in start() past
+        # whatever earlier kernels of this session already wrote, so the
+        # second cell (and the lazy cold restart) never overwrite the
+        # first cell's figures — the collision the review proved.
+        self._figure_seq = 0
 
     # ---- lifecycle ----
 
@@ -292,6 +304,31 @@ class SessionKernel:
         self._kc = client
         self._scratch = scratch
         self.started_at = time.time()
+        self._seed_figure_sequence()
+
+    def _seed_figure_sequence(self) -> None:
+        """Start figure numbering past this session's earlier kernels.
+
+        A dead kernel's figures stay on disk; a lazily cold-started
+        replacement begins at zero like the first one did and would
+        write ``kernel_<sess>_1.png`` over the history. Scanning the
+        figures directory for the highest existing number makes the
+        sequence monotonic across incarnations, not just within one.
+        """
+        prefix = f"kernel_{_session_slug(self.session_id)}_"
+        best = 0
+        directory = self.workspace / "figures"
+        try:
+            entries = list(directory.iterdir()) if directory.is_dir() else []
+        except OSError:
+            entries = []
+        for entry in entries:
+            name = entry.name
+            if name.startswith(prefix) and name.endswith(".png"):
+                tail = name[len(prefix) : -len(".png")]
+                if tail.isdigit():
+                    best = max(best, int(tail))
+        self._figure_seq = best
 
     def interrupt(self) -> None:
         """Tier 1 of the cancel ladder. Safe from any thread."""
@@ -394,7 +431,6 @@ class SessionKernel:
         }
         figures: list[FigureRef] = []
         error: dict[str, Any] | None = None
-        figure_count = 0
         began = time.monotonic()
         last_output = began
         idle_noticed = False
@@ -479,8 +515,8 @@ class SessionKernel:
                 data = content.get("data") or {}
                 png = data.get("image/png")
                 if isinstance(png, str) and png:
-                    figure_count += 1
-                    ref = self._save_figure(png, figure_count)
+                    self._figure_seq += 1
+                    ref = self._save_figure(png, self._figure_seq)
                     if ref is not None:
                         figures.append(ref)
                         if callbacks.on_display is not None:

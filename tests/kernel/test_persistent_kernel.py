@@ -385,3 +385,98 @@ def test_each_cell_reports_usage_with_rss(workspace):
 
 def test_summary_cell_code_compiles():
     compile(SUMMARY_CELL_CODE, "<summary>", "exec")
+
+
+# ---- P4 review fixes: figure numbering, retry disclosure, prompt cancel ------
+
+
+def test_each_cells_figures_get_their_own_files_across_cells_and_restarts(workspace):
+    """M1: the figure number is a per-kernel sequence seeded past this
+    session's earlier files — neither a second cell nor a lazy cold
+    restart overwrites the first cell's figure."""
+    import asyncio as _asyncio
+
+    code = "import matplotlib.pyplot as plt\nplt.plot([1, 2], [3, 4])\nplt.show()"
+
+    async def scenario() -> list[pathlib.Path]:
+        manager = make_manager(workspace)
+        try:
+            await manager.execute("fig-unique", code)
+            await manager.execute("fig-unique", code)
+            kernel = manager.state_for("fig-unique").kernel
+            if kernel is not None:
+                kernel.kill()
+            await manager.execute("fig-unique", code)
+        finally:
+            await manager.aclose()
+        return sorted((workspace / "figures").glob("kernel_fig-unique_*.png"))
+
+    files = _asyncio.run(_asyncio.wait_for(scenario(), 240))
+    assert len(files) == 3, files
+    assert len({f.name for f in files}) == 3, files
+    assert all(f.stat().st_size > 0 for f in files)
+
+
+def test_mid_cell_death_retry_discloses_the_double_run(workspace):
+    """M2: the single mid-cell retry is disclosed in the result — a cell
+    whose side effects ran before the death may have run them twice."""
+    import asyncio as _asyncio
+
+    marker = workspace / "side_effect.log"
+    code = (
+        "import os\n"
+        f"p = {str(marker)!r}\n"
+        "if not os.path.exists(p):\n"
+        "    open(p, 'a').write('x\\n')\n"
+        "    os.kill(os.getpid(), 9)\n"
+        "print('survived')\n"
+    )
+
+    async def scenario():
+        manager = make_manager(workspace)
+        try:
+            return await manager.execute("retry-s1", code)
+        finally:
+            await manager.aclose()
+
+    result = _asyncio.run(_asyncio.wait_for(scenario(), 180))
+    assert result.status == "ok", result.status
+    assert "may have partially executed once" in result.stderr, result.stderr
+    assert "side effects" in result.stderr, result.stderr
+
+
+def test_cancel_returns_promptly_when_the_cell_ignores_sigint(workspace):
+    """M3: tier 3 kills the kernel before taking the session lock, so a
+    SIGINT-immune cell cannot hold the cancel hostage until the cell
+    timeout — and the cancelled cell is not retried on the replacement."""
+    import asyncio as _asyncio
+    import time as _time
+
+    marker = workspace / "cancel_marker.log"
+    code = (
+        "import signal, time\n"
+        "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
+        f"open({str(marker)!r}, 'a').write('once\\n')\n"
+        "time.sleep(300)\n"
+    )
+
+    async def scenario():
+        manager = make_manager(workspace)
+        try:
+            task = _asyncio.create_task(
+                manager.execute("cancel-s1", code, timeout_s=290)
+            )
+            await _asyncio.sleep(2.0)
+            began = _time.monotonic()
+            answer = await manager.cancel("cancel-s1")
+            elapsed = _time.monotonic() - began
+            result = await task
+            return answer, elapsed, result
+        finally:
+            await manager.aclose()
+
+    answer, elapsed, result = _asyncio.run(_asyncio.wait_for(scenario(), 180))
+    assert answer == "reset", answer
+    assert elapsed < 30.0, elapsed
+    assert result.status == "dead", result.status
+    assert marker.read_text(encoding="utf-8").count("once") == 1
