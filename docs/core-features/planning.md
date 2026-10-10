@@ -47,7 +47,7 @@ omicsclaw/entry/
 ├── assembly.py   foundation_tools(plans=) / default_sections(plan_tool=) / build_app / AgentApp.plans
 ├── nudges.py     build_augmentor：记忆提醒与 build_injector 的结果串成一个 augmentor
 ├── turn.py       _assemble → augmentor=build_augmentor(app, session_id=...)
-├── subagent.py   _WITHHELD_FROM_SUB_AGENTS = {plan_write: …, memory_write: …}
+├── subagent.py   _WITHHELD_FROM_SUB_AGENTS = {plan_write: …, memory_write: …, ask_user: …}
 └── cli/_repl.py  /plan、/tasks、_show_plan
 ```
 
@@ -306,8 +306,9 @@ PROGRESS_TOOL_NAMES = frozenset({"write_file", "edit_file"})
 1. 本 exchange 尚未提醒过，且 `gate_turns > 0`；
 2. 计划为空（`store.is_empty`）——有计划的会话每轮都已被告知计划，再催它写计划既错又乱；这也覆盖了从上一个会话恢复的计划；
 3. 只数本 exchange 的模型轮次。从视图末尾往前数，遇到第一条 user 消息就停：它是开启本 exchange 的用户输入，或者是压缩留在它位置上的摘要。工具结果是 `Role.TOOL` 消息，不会让计数停下；视图里没有 user 消息时整段都数；
-4. 这段里**最近 `gate_turns` 条 assistant 消息**都没有调用 `plan_write` 或 `PROGRESS_TOOL_NAMES` 中的工具。不带工具调用的 assistant 消息也算一轮；
-5. 这段里的 assistant 消息少于 `gate_turns` 条时不触发。
+4. 调用了 `ask_user` 的那一轮和 user 消息一样让计数停下，这一轮自己不计入，提问之后的第一轮是第 1 轮。只看调用的名字：提问被回答、被跳过、到期无人作答、没有问出去，处理都一样；同一条消息里还有别的调用时整条消息是一轮；问过几次就从最近的一次数起；
+5. 这段里**最近 `gate_turns` 条 assistant 消息**都没有调用 `plan_write` 或 `PROGRESS_TOOL_NAMES` 中的工具。不带工具调用的 assistant 消息也算一轮；
+6. 这段里的 assistant 消息少于 `gate_turns` 条时不触发。
 
 对组学分析的含义：**`bash` 不算进展**。它既是跑 skill 脚本的方式，也是 `grep` / `ls` 的方式，算作进展会让只在探索的模型永远不被提醒。因此同一个 exchange 里连续 8 个 turn 只用 `bash` 查看 `.h5ad`、跑 `--help`、读 SKILL.md 而没有写计划，会被提醒一次。
 
@@ -315,6 +316,7 @@ PROGRESS_TOOL_NAMES = frozenset({"write_file", "edit_file"})
 
 闸门看的是**窗口**，不是计数器：
 - 窗口不跨 exchange。之前的 exchange 读过多少轮、答过多少句都不计入，所以一串一句话问答的会话不会被提醒；
+- 窗口不跨提问。模型在 exchange 中途用 `ask_user` 问过人之后，提问之前读过的轮次不再计入，带着回答的那一次模型调用不会收到提醒。提问之后再连续只读 `gate_turns` 轮才提醒。提问之前已经提醒过的 exchange 不再提醒第二次（plan 0039 §10）。这几句以发送视图里还有提问那一轮为前提：不带摘要的截断把它丢掉之后，计数会越过它数到提问之前的轮次，提醒可能在回答之后不足 `gate_turns` 轮时出现（§13 第 3 条）；
 - 压缩把尾部换掉后可见的 assistant 消息可能不足 8 条，此时不触发。接受这一点：刚压缩意味着模型刚拿到新摘要，那一轮不是追加指令的好时机；
 - 同一个 exchange 里 20 个 turn 前编辑过文件、之后一直在读的模型，仍会被提醒；每 exchange 至多一次的约束防止它变成重复骚扰。
 
@@ -432,6 +434,7 @@ _WITHHELD_FROM_SUB_AGENTS: Mapping[str, str] = MappingProxyType(
     {
         PLAN_WRITE_TOOL_NAME: "acts on the calling conversation's plan",
         MEMORY_WRITE_TOOL_NAME: "writes memory that every later conversation reads",
+        ASK_USER_TOOL_NAME: "asks a person, and a sub-agent has nobody to ask",
     }
 )
 ```
@@ -494,7 +497,7 @@ plan_write [{a, completed}, {b, completed}]            （两者先前都是 pen
 | 配置 | 命令行 / 环境变量 | 默认 | 说明 |
 |------|------------------|------|------|
 | `AppConfig.planning` | `--planning` / `OMICSCLAW_PLANNING` | `True` | 一个开关三件事：挂载 `plan_write`、加 `## Planning` 段、注入计划块 |
-| `AppConfig.planning_gate_turns` | `--planning-gate-turns` / `OMICSCLAW_PLANNING_GATE_TURNS` | `DEFAULT_GATE_TURNS = 8` | 规划闸门窗口，按单个 exchange 内的模型轮次计；`0` 关闭闸门但保留其余规划功能。提高 `max_turns` 时应同步提高 |
+| `AppConfig.planning_gate_turns` | `--planning-gate-turns` / `OMICSCLAW_PLANNING_GATE_TURNS` | `DEFAULT_GATE_TURNS = 8` | 规划闸门窗口，按单个 exchange 内的模型轮次计，调用 `ask_user` 之后重新数；`0` 关闭闸门但保留其余规划功能。提高 `max_turns` 时应同步提高 |
 | `AppConfig.plans_root()` | 不可单独配置 | `<workspace>/.omicsclaw/plans` | 与卸载结果、压缩记录同一个状态目录 |
 | `MAX_DIRECT_COMPLETIONS` | 常量 | `1` | 一次写入允许的直接完成数 |
 | `EngineConfig.max_turns` | — | `50` | 闸门阈值的推导依据 |
@@ -507,7 +510,7 @@ plan_write [{a, completed}, {b, completed}]            （两者先前都是 pen
 
 1. **计划块不计入压缩预算。** 它在压缩之后追加，压缩器测量时看不到它；条目内容长度没有上限（只靠工具描述要求"一个条目一个动作"），模型往 `content` 里塞长段落会直接增加每次调用的 token（plan 0039 §5）。
 2. **多挂一个工具会移动上下文预算。** `plan_write` 的声明计入 `reserve_tool_tokens`，默认开启让每个部署的可用窗口略小、压缩档位触发点略前移；预算卡得很紧的测试对工具数量敏感（plan 0039 §5、§8.4）。
-3. **规划闸门在压缩后可能不触发，不带摘要的截断后可能提前触发。** 窗口依赖可见的 assistant 消息数，压缩刚把尾部换掉时凑不满 `gate_turns`（plan 0039 §4.4）。有两种截断可能丢掉本 exchange 开头的 user 消息而不留摘要：EMERGENCY 截断，以及 SOFT、FULL 档在摘要器失败（抛错，或超时后返回空串）时走的降级截断。计数这时会越过原来的位置，数到更早的一条 user 消息为止，提醒因此可能提前，仍是每 exchange 至多一次。降级截断的结果只用于当次模型调用，不写回历史（plan 0039 §9.5）。
+3. **规划闸门在压缩后可能不触发，不带摘要的截断后可能提前触发。** 窗口依赖可见的 assistant 消息数，压缩刚把尾部换掉时凑不满 `gate_turns`（plan 0039 §4.4）。有两种截断可能丢掉本 exchange 开头的 user 消息而不留摘要：EMERGENCY 截断，以及 SOFT、FULL 档在摘要器失败（抛错，或超时后返回空串）时走的降级截断。计数这时会越过原来的位置，数到更早的一条 user 消息为止，提醒因此可能提前，仍是每 exchange 至多一次。降级截断的结果只用于当次模型调用，不写回历史（plan 0039 §9.5）。同样的截断也会丢掉调用 `ask_user` 的那一轮：降级截断（`fit_to_budget`）保留最后 6 条消息，从较早那一段里最新的一条丢起，提问之后走满 3 轮，提问那一轮就在最先被丢的位置上。实测读 5 轮、提问、再读 4 轮，`gate_turns = 8`、摘要器失败时，第 11 次调用带提醒，这时回答之后只读了 4 轮。这种情况只在摘要器失败或没有配置时出现过。调整 `fit_to_budget` 丢弃顺序的改动（plan 0078，还没有合入）落地后这种情况不再出现（plan 0039 §10.5）。
 4. **单进程写者假设。** `PlanBook` 每会话只读一次归档；两个进程写同一 workspace 的同一会话计划会静默互相覆盖，没有任何报错（`book.py` docstring、plan 0039 §8.5）。
 5. **`forget` 没有调用者。** `SessionRegistry._evict_sessions` 淘汰空闲会话时不通知 `PlanBook`，book 中的 store 字典随进程内接触过的会话数增长。
 6. **计划文件没有清理。** 没有删除 `plans/<session>.json` / `.md` 的入口；目录权限按 umask（文件本身是 0600）。
@@ -517,6 +520,7 @@ plan_write [{a, completed}, {b, completed}]            （两者先前都是 pen
 10. **`active_count()` 是无消费者的接缝**，保留给未来想展示进度的 surface。
 11. **`entry/planning.py: build_injector` 的 docstring 与现行为有出入**：它说 `app.plans` 只在规划关闭时为 `None`，但 `build_app` 在调用方自带工具且未挂 `plan_write` 时也会置 `None`（`AgentApp.plans` 的 docstring 是准确的）。
 12. **部分更新会裁剪省略的 pending 条目。** 这是设计而非缺陷，但模型若误以为"只发变化条目"是安全的，就会丢掉尚未开始的步骤；防线只有工具描述与准则里的说明。
+13. **规划闸门只按工具名认提问。** 历史里出现名为 `ask_user` 的调用就重新计数，不看这个问题有没有问出去。模型每隔不到 `gate_turns` 轮就调用一次 `ask_user` 时，这个 exchange 里不会提醒，每次调用都失败也一样。MCP 服务器自己的 `ask_user` 注册名是 `mcp__<server>__ask_user`，不算提问。没有挂载 `ask_user` 的入口（Desktop、Channel、一次性执行、管道输入）上，模型调用它会得到未知工具的错误结果，计数同样重新开始；模型不调用没有给它的工具时，这些入口的行为才和以前完全一样（plan 0039 §10.5）。
 
 ---
 
@@ -527,12 +531,12 @@ plan_write [{a, completed}, {b, completed}]            （两者先前都是 pen
 | `tests/planning/test_plan.py` | `PlanStore` 读写、restore 不触发 sink、`active_count`、并发 |
 | `tests/planning/test_rules.py` | 防作弊阈值、`cancelled → completed`、合并保留 / 裁剪、顺序稳定、重复 id |
 | `tests/planning/test_tool.py` | 读 / 写模式、`steps=[]` 为读、参数错误带下标、会话解析、policy |
-| `tests/planning/test_injector.py` | 注入块与闸门的条件、顺序、至多一次、只数本 exchange 的轮次 |
+| `tests/planning/test_injector.py` | 注入块与闸门的条件、顺序、至多一次、只数本 exchange 的轮次、`ask_user` 之后重新计数 |
 | `tests/planning/test_render.py` | `format_plan` 只含活跃条目、`render_document` 四种标记 |
 | `tests/planning/test_archive.py` | 原子写（在 `os.replace` 注入失败）、JSON 先于 Markdown、坏文件整体拒绝 |
 | `tests/planning/test_book.py` | 每会话隔离、首次恢复、空 id 不持久化、错误 sink |
 | `tests/planning/test_planning_is_a_leaf_layer.py` | 分层守卫 |
-| `tests/entry/test_planning.py` | 接线：开关、prompt 段、`--planning-gate-turns`、三条 exchange 路径的会话绑定 |
+| `tests/entry/test_planning.py` | 接线：开关、prompt 段、`--planning-gate-turns`、三条 exchange 路径的会话绑定、真实 `ask_user` 之后闸门落在哪一次调用 |
 
 ---
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import itertools
 import json
 import pathlib
 from typing import Any, AsyncIterator, Sequence
@@ -25,12 +26,14 @@ from omicsclaw.entry.turn import run_turn
 from omicsclaw.planning import (
     PLAN_WRITE_TOOL_NAME,
     INJECTION_HEADER,
+    PLANNING_GATE_TEXT,
     PlanArchiveError,
     PlanItem,
     PlanStatus,
 )
 from omicsclaw.provider import Completion
 from omicsclaw.tools.base import ApprovalMode, ToolPolicy
+from omicsclaw.tools.builtin.ask_user import TOOL_NAME as ASK_USER_TOOL_NAME
 from omicsclaw.schema import (
     Message,
     Role,
@@ -557,3 +560,150 @@ def test_the_session_registry_path_writes_and_injects(tmp_path, monkeypatch):
     assert provider.seen[1][-1].content.startswith(INJECTION_HEADER)
     assert "load the matrix" in provider.seen[1][-1].content
     assert (tmp_path / ".omicsclaw" / "plans" / "sess-T.json").is_file()
+
+
+# ---- the gate and a question to the person -------------------------------
+
+
+_call_ids = itertools.count(1)
+
+
+def _calling(name: str, **arguments: object) -> Message:
+    """One assistant message that calls *name* once."""
+    return Message(
+        role=Role.ASSISTANT,
+        tool_calls=(
+            ToolCall(
+                id=f"g{next(_call_ids)}", name=name, arguments=json.dumps(arguments)
+            ),
+        ),
+    )
+
+
+def _reads_asks_then_reads() -> list[Message]:
+    """Two reads, one question, four reads and a closing answer."""
+
+    def read() -> Message:
+        return _calling("read_file", path="notes.txt")
+
+    return [
+        read(),
+        read(),
+        _calling(ASK_USER_TOOL_NAME, question="Which group is the control?"),
+        read(),
+        read(),
+        read(),
+        read(),
+        Message(role=Role.ASSISTANT, content="done"),
+    ]
+
+
+def _nudged_calls(provider: _ScriptedProvider) -> list[int]:
+    """The model calls, counted from one, that were sent the gate's text."""
+    return [
+        number
+        for number, sent in enumerate(provider.seen, start=1)
+        if any(message.content == PLANNING_GATE_TEXT for message in sent)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("typed", "status", "overrides"),
+    [
+        ("group A", "answered", {}),
+        ("", "declined", {}),
+        (None, "no_answer", {"approval_timeout_s": 0.05}),
+    ],
+    ids=["answered", "skipped", "deadline passed"],
+)
+def test_the_gate_counts_from_a_question_in_a_real_exchange(
+    tmp_path, monkeypatch, typed, status, overrides
+):
+    """The real tool in a real exchange, with the gate at three turns.
+
+    The fourth call carries the question's result and has no nudge,
+    however the question ended. The nudge goes out on the seventh call,
+    after three turns of reading since the question.
+    """
+    from omicsclaw.entry import attach_sessions
+    from omicsclaw.entry.events import TurnEventType
+    from omicsclaw.entry.question import read_reply
+
+    (tmp_path / "notes.txt").write_text("hello\n", encoding="utf-8")
+    provider = _ScriptedProvider(replies=_reads_asks_then_reads())
+    app = attach_sessions(
+        _app_with(
+            tmp_path,
+            monkeypatch,
+            provider,
+            ask_user=True,
+            planning_gate_turns=3,
+            **overrides,
+        )
+    )
+
+    async def drive():
+        handle = await app.sessions.submit("sess-Q", "compare the two groups")
+        async with handle.observe() as observation:
+            async for frame in observation:
+                if frame.type is TurnEventType.QUESTION_ASKED and typed is not None:
+                    await handle.answer(
+                        frame.request_id, read_reply(frame.question, typed)
+                    )
+        outcome = await handle.wait()
+        await app.aclose()
+        return outcome
+
+    outcome = asyncio.run(asyncio.wait_for(drive(), 20.0))
+
+    (result,) = [
+        message
+        for message in outcome.history
+        if message.role is Role.TOOL and message.name == ASK_USER_TOOL_NAME
+    ]
+    assert json.loads(result.content)["status"] == status
+    assert len(provider.seen) == 8
+    assert _nudged_calls(provider) == [7]
+
+
+def test_a_cancelled_question_leaves_the_next_exchange_nothing_to_count(
+    tmp_path, monkeypatch
+):
+    """Cancelling at a question discards the exchange, its turns included.
+
+    The next request starts from its own message. It reads three times
+    before the nudge, which goes out on the seventh call overall.
+    """
+    from omicsclaw.entry import attach_sessions
+    from omicsclaw.entry.events import TurnEventType
+
+    (tmp_path / "notes.txt").write_text("hello\n", encoding="utf-8")
+    provider = _ScriptedProvider(replies=_reads_asks_then_reads())
+    app = attach_sessions(
+        _app_with(
+            tmp_path, monkeypatch, provider, ask_user=True, planning_gate_turns=3
+        )
+    )
+
+    async def drive():
+        first = await app.sessions.submit("sess-Q", "compare the two groups")
+        async with first.observe() as observation:
+            async for frame in observation:
+                if frame.type is TurnEventType.QUESTION_ASKED:
+                    first.cancel()
+        await first.wait()
+        second = await app.sessions.submit("sess-Q", "group A is the control")
+        await second.wait()
+        await app.aclose()
+        return first.terminal, second.terminal
+
+    terminals = asyncio.run(asyncio.wait_for(drive(), 20.0))
+
+    assert terminals == ("cancelled", "converged")
+    assert len(provider.seen) == 8
+    assert not any(
+        call.name == ASK_USER_TOOL_NAME
+        for message in provider.seen[3]
+        for call in message.tool_calls
+    )
+    assert _nudged_calls(provider) == [7]
