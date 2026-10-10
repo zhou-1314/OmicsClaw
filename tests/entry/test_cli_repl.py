@@ -1289,10 +1289,13 @@ def writes(text: str = "", *names: str) -> Message:
 def outcome_of(stop: StopReason, *messages: Message, turns: int = 0) -> TurnOutcome:
     """An outcome for the notice helpers to read, without running an exchange.
 
-    Only the run is filled in. The helpers read nothing else.
+    Only the run is filled in. The helpers read nothing else, so the
+    history, the prompt and the reply are left empty.
     """
     result = RunResult(messages=tuple(messages), stop_reason=stop, turns=turns)
-    return TurnOutcome(result=result, history=(), prompt=None)  # type: ignore[arg-type]
+    return TurnOutcome(
+        result=result, history=(), prompt=None, reply=""  # type: ignore[arg-type]
+    )
 
 
 def run_repl(tmp_path, provider, lines, **overrides):
