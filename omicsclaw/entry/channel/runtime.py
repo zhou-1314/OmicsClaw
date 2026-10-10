@@ -642,9 +642,15 @@ class ChannelRuntime:
         Waits, because the verdict is recorded by the registry *after* the
         terminal frame is published — the frame says the exchange ended, and
         :meth:`~omicsclaw.entry.turn.TurnHandle.wait` says what it ended
-        with. Returns ``""`` for anything that did not converge: a cancelled
-        or failed exchange has already been reported by its terminal frame,
-        and a half-written answer is not one.
+        with. Returns ``""`` when the handle did not end ``converged``:
+        there is no outcome to read. A run that was cancelled or that
+        failed has been reported by its terminal frame. When the session
+        store cannot save an exchange, the run has already ended
+        ``converged`` and only the handle says ``failed``, so no frame
+        reports it and neither an answer nor a failure notice is sent. A
+        reply the output limit cut off and a run that stopped at the turn
+        limit end ``converged`` like any other, and the text they wrote is
+        delivered as it is.
 
         Only the messages this exchange added are read. The trajectory
         starts with the history the exchange was given, so the search runs
@@ -654,19 +660,23 @@ class ChannelRuntime:
         messages and do not stop the search. The answer is the last
         assistant message with text in that span, whichever turn of the
         exchange wrote it. An exchange that wrote no text returns ``""``,
-        and nothing is sent for it.
+        and no answer is sent for it.
 
         An emergency truncation can drop the request and leave no summary.
-        The search then stops at an older user message, and an exchange
-        that wrote no text can return an earlier exchange's answer.
+        The search then runs past where the request was. It stops at an
+        older user message, or at a summary written later in the same
+        exchange with an earlier answer still behind it, and an exchange
+        that wrote no text can return that earlier answer.
         """
         outcome = await handle.wait()
         if outcome is None or handle.terminal != _CONVERGED:
             return ""
         for message in reversed(outcome.result.messages):
-            if message.role is Role.USER:
+            if message.role == Role.USER:
                 # Everything in front of this is history the exchange was
-                # given, an earlier exchange's answer included.
+                # given, an earlier exchange's answer included. Compared
+                # with ``==`` as the context layer does: a caller or a
+                # session store may supply roles as plain strings.
                 break
             if message.role is Role.ASSISTANT and message.content:
                 return message.content
