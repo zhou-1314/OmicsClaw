@@ -47,7 +47,7 @@ omicsclaw/entry/
 ├── assembly.py   foundation_tools(plans=) / default_sections(plan_tool=) / build_app / AgentApp.plans
 ├── nudges.py     build_augmentor：记忆提醒与 build_injector 的结果串成一个 augmentor
 ├── turn.py       _assemble → augmentor=build_augmentor(app, session_id=...)
-├── subagent.py   _WITHHELD_FROM_SUB_AGENTS = {plan_write: …, memory_write: …}
+├── subagent.py   _WITHHELD_FROM_SUB_AGENTS = {plan_write: …, memory_write: …, ask_user: …}
 └── cli/_repl.py  /plan、/tasks、_show_plan
 ```
 
@@ -316,7 +316,7 @@ PROGRESS_TOOL_NAMES = frozenset({"write_file", "edit_file"})
 
 闸门看的是**窗口**，不是计数器：
 - 窗口不跨 exchange。之前的 exchange 读过多少轮、答过多少句都不计入，所以一串一句话问答的会话不会被提醒；
-- 窗口不跨提问。模型在 exchange 中途用 `ask_user` 问过人之后，提问之前读过的轮次不再计入，带着回答的那一次模型调用不会收到提醒。提问之后再连续只读 `gate_turns` 轮才提醒。提问之前已经提醒过的 exchange 不再提醒第二次（plan 0039 §10）；
+- 窗口不跨提问。模型在 exchange 中途用 `ask_user` 问过人之后，提问之前读过的轮次不再计入，带着回答的那一次模型调用不会收到提醒。提问之后再连续只读 `gate_turns` 轮才提醒。提问之前已经提醒过的 exchange 不再提醒第二次（plan 0039 §10）。这几句以发送视图里还有提问那一轮为前提：不带摘要的截断把它丢掉之后，计数会越过它数到提问之前的轮次，提醒可能在回答之后不足 `gate_turns` 轮时出现（§13 第 3 条）；
 - 压缩把尾部换掉后可见的 assistant 消息可能不足 8 条，此时不触发。接受这一点：刚压缩意味着模型刚拿到新摘要，那一轮不是追加指令的好时机；
 - 同一个 exchange 里 20 个 turn 前编辑过文件、之后一直在读的模型，仍会被提醒；每 exchange 至多一次的约束防止它变成重复骚扰。
 
@@ -434,6 +434,7 @@ _WITHHELD_FROM_SUB_AGENTS: Mapping[str, str] = MappingProxyType(
     {
         PLAN_WRITE_TOOL_NAME: "acts on the calling conversation's plan",
         MEMORY_WRITE_TOOL_NAME: "writes memory that every later conversation reads",
+        ASK_USER_TOOL_NAME: "asks a person, and a sub-agent has nobody to ask",
     }
 )
 ```
@@ -509,7 +510,7 @@ plan_write [{a, completed}, {b, completed}]            （两者先前都是 pen
 
 1. **计划块不计入压缩预算。** 它在压缩之后追加，压缩器测量时看不到它；条目内容长度没有上限（只靠工具描述要求"一个条目一个动作"），模型往 `content` 里塞长段落会直接增加每次调用的 token（plan 0039 §5）。
 2. **多挂一个工具会移动上下文预算。** `plan_write` 的声明计入 `reserve_tool_tokens`，默认开启让每个部署的可用窗口略小、压缩档位触发点略前移；预算卡得很紧的测试对工具数量敏感（plan 0039 §5、§8.4）。
-3. **规划闸门在压缩后可能不触发，不带摘要的截断后可能提前触发。** 窗口依赖可见的 assistant 消息数，压缩刚把尾部换掉时凑不满 `gate_turns`（plan 0039 §4.4）。有两种截断可能丢掉本 exchange 开头的 user 消息而不留摘要：EMERGENCY 截断，以及 SOFT、FULL 档在摘要器失败（抛错，或超时后返回空串）时走的降级截断。计数这时会越过原来的位置，数到更早的一条 user 消息为止，提醒因此可能提前，仍是每 exchange 至多一次。降级截断的结果只用于当次模型调用，不写回历史（plan 0039 §9.5）。
+3. **规划闸门在压缩后可能不触发，不带摘要的截断后可能提前触发。** 窗口依赖可见的 assistant 消息数，压缩刚把尾部换掉时凑不满 `gate_turns`（plan 0039 §4.4）。有两种截断可能丢掉本 exchange 开头的 user 消息而不留摘要：EMERGENCY 截断，以及 SOFT、FULL 档在摘要器失败（抛错，或超时后返回空串）时走的降级截断。计数这时会越过原来的位置，数到更早的一条 user 消息为止，提醒因此可能提前，仍是每 exchange 至多一次。降级截断的结果只用于当次模型调用，不写回历史（plan 0039 §9.5）。同样的截断也会丢掉调用 `ask_user` 的那一轮：降级截断（`fit_to_budget`）保留最后 6 条消息，从较早那一段里最新的一条丢起，提问之后走满 3 轮，提问那一轮就在最先被丢的位置上。实测读 5 轮、提问、再读 4 轮，`gate_turns = 8`、摘要器失败时，第 11 次调用带提醒，这时回答之后只读了 4 轮。这种情况只在摘要器失败或没有配置时出现过。调整 `fit_to_budget` 丢弃顺序的改动（plan 0078，还没有合入）落地后这种情况不再出现（plan 0039 §10.5）。
 4. **单进程写者假设。** `PlanBook` 每会话只读一次归档；两个进程写同一 workspace 的同一会话计划会静默互相覆盖，没有任何报错（`book.py` docstring、plan 0039 §8.5）。
 5. **`forget` 没有调用者。** `SessionRegistry._evict_sessions` 淘汰空闲会话时不通知 `PlanBook`，book 中的 store 字典随进程内接触过的会话数增长。
 6. **计划文件没有清理。** 没有删除 `plans/<session>.json` / `.md` 的入口；目录权限按 umask（文件本身是 0600）。
@@ -519,7 +520,7 @@ plan_write [{a, completed}, {b, completed}]            （两者先前都是 pen
 10. **`active_count()` 是无消费者的接缝**，保留给未来想展示进度的 surface。
 11. **`entry/planning.py: build_injector` 的 docstring 与现行为有出入**：它说 `app.plans` 只在规划关闭时为 `None`，但 `build_app` 在调用方自带工具且未挂 `plan_write` 时也会置 `None`（`AgentApp.plans` 的 docstring 是准确的）。
 12. **部分更新会裁剪省略的 pending 条目。** 这是设计而非缺陷，但模型若误以为"只发变化条目"是安全的，就会丢掉尚未开始的步骤；防线只有工具描述与准则里的说明。
-13. **规划闸门只按工具名认提问。** 历史里出现名为 `ask_user` 的调用就重新计数，不看这个问题有没有问出去。模型每隔不到 `gate_turns` 轮就调用一次 `ask_user` 时，这个 exchange 里不会提醒，每次调用都失败也一样。MCP 服务器自己的 `ask_user` 注册名是 `mcp__<server>__ask_user`，不算提问（plan 0039 §10.5）。
+13. **规划闸门只按工具名认提问。** 历史里出现名为 `ask_user` 的调用就重新计数，不看这个问题有没有问出去。模型每隔不到 `gate_turns` 轮就调用一次 `ask_user` 时，这个 exchange 里不会提醒，每次调用都失败也一样。MCP 服务器自己的 `ask_user` 注册名是 `mcp__<server>__ask_user`，不算提问。没有挂载 `ask_user` 的入口（Desktop、Channel、一次性执行、管道输入）上，模型调用它会得到未知工具的错误结果，计数同样重新开始；模型不调用没有给它的工具时，这些入口的行为才和以前完全一样（plan 0039 §10.5）。
 
 ---
 
