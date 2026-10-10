@@ -42,7 +42,8 @@ ReAct 引擎（`omicsclaw/engine/`）本身不知道对话从哪里来：`AgentE
 │    SessionRegistry ── SessionStore = SqliteSessionStore | InMemorySessionStore    │
 │                                                                                  │
 │  TurnRunner._sequence() (entry/turn.py)  —— 每个 exchange 一次                    │
-│    _assemble(): _Carried(history) + build_compactor() + build_augmentor()         │
+│    _assemble(): _Carried(drop_unanswered_calls(history)) + build_compactor()      │
+│                 + build_augmentor()                                               │
 │    app.engine.exchange_stream(user_text, conversation=, prompt=app.prompt,        │
 │                               compactor=, augmentor=)                             │
 └───────────────┬──────────────────────────────────────────────────────────────────┘
@@ -65,7 +66,8 @@ ReAct 引擎（`omicsclaw/engine/`）本身不知道对话从哪里来：`AgentE
 │  prompt.py    PromptAssembler / AssembledPrompt / assemble                        │
 │  tokens.py    estimate_* / TokenCounter / format_token_count                      │
 │  budget.py    ContextBudget / Pressure / measure / BudgetReport                   │
-│  transcript.py repair_tool_pairs / split_head_tail / fit_to_budget / emergency_fit│
+│  transcript.py repair_tool_pairs / drop_unanswered_calls / split_head_tail /      │
+│                fit_to_budget / emergency_fit                                      │
 │  offload.py / summary.py / compaction.py / progressive.py   —— 压缩（另篇）        │
 └──────────────────────────────────────────────────────────────────────────────────┘
                 │ 结构化满足的 Protocol（SessionStore / OffloadStore / MemoryExtractor）
@@ -91,7 +93,7 @@ ReAct 引擎（`omicsclaw/engine/`）本身不知道对话从哪里来：`AgentE
 | `assemble()` | `omicsclaw/context/prompt.py` | `[system, *history, user?]`，恰好添加一条 system |
 | `estimate_*` / `TokenCounter` | `omicsclaw/context/tokens.py` | token 估算规则与精确分词器注入口 |
 | `ContextBudget` / `Pressure` / `measure()` | `omicsclaw/context/budget.py` | 可用空间、五档压力、调用前预检 |
-| `repair_tool_pairs` 等 | `omicsclaw/context/transcript.py` | 纯函数：工具对修复、头尾切分、按预算裁剪、紧急截断、摘要输入渲染 |
+| `repair_tool_pairs` 等 | `omicsclaw/context/transcript.py` | 纯函数：工具对修复、去掉没被回答的工具调用、头尾切分、按预算裁剪、紧急截断、摘要输入渲染 |
 | `get_model_limits()` | `omicsclaw/provider/_model_limits.py` | 模型 → `ModelLimits(context_tokens, output_tokens)` |
 | `default_sections` / `build_prompt` / `build_budget` / `build_summarizer` | `omicsclaw/entry/assembly.py` | 组合根：决定有哪些段、按什么顺序、预算与摘要模型 |
 | `compose` / `prepare` / `TurnRunner` / `_Carried` | `omicsclaw/entry/turn.py` | 一个 exchange 的装配与收尾 |
@@ -275,17 +277,28 @@ def measure(messages, tools, budget, *, counter=None) -> BudgetReport
 
 ## 7. 纯变换：`context/transcript.py`
 
-所有函数都是 `(messages, …) -> tuple[Message, ...]`，无时钟、无 I/O、无模型；返回值永远是新 tuple，不是调用方列表的切片。**不截断任何单条消息**：容量问题只以整条消息为粒度解决，`ToolCall.arguments` 永远是模型原样输出的 JSON 文本。
+所有函数都是 `(messages, …) -> tuple[Message, ...]`，无时钟、无 I/O、无模型；返回值永远是新 tuple，不是调用方列表的切片。**不截断任何单条消息**：容量问题只以整条消息为粒度解决，`ToolCall.arguments` 永远是模型原样输出的 JSON 文本。会改动单条消息的只有 `drop_unanswered_calls`，它去掉的是整个调用，留下来的文字和参数不改。
 
 | 函数 | 作用 |
 |------|------|
 | `repair_tool_pairs(messages, *, placeholder=MISSING_TOOL_RESULT)` | 双向修复：丢弃找不到调用的 tool 结果；为没有结果的调用在其后插入 `Role.TOOL` 占位消息 |
+| `drop_unanswered_calls(messages)` | 去掉没被紧随其后的 tool 结果回答的调用，不补占位。一条结果回答一个调用；那一轮的文字、思考和已答调用留着；去掉之后既没有调用、文字也只剩空白（按 `str.strip()`）的一轮整条去掉 |
 | `split_head_tail(messages, *, pinned, min_tail)` | 切成 `(pinned, head, tail)`；pin 之后的消息不超过 `min_tail` 条时 head 为空 |
 | `fit_to_budget(messages, budget, *, pinned=0, min_tail, target_tokens=None)` | 从 head 最旧处逐条剥离直到放得下，然后修复工具对 |
 | `emergency_fit(messages, budget, *, pinned=0)` | 无条件保留 pin 之后第一条（任务消息），其余从新到旧贪心装入，装不下的跳过而非截短 |
 | `render_for_summary(messages)` | 把消息拍平成给摘要模型看的纯文本：`[tool_result <id>]: …` / `[<role>]: …` / `[tool_call <name>(<id>)]: <arguments>` |
 
 `repair_tool_pairs` 的配对判据是**相邻**而不是"列表里某处存在"：Anthropic 要求一个 assistant 轮的每个 `tool_use` 都在**紧接着的** user 轮里有 `tool_result`。并行调用 `c0`、`c1` 中 `c1` 的结果被压缩摘要隔开时，成员判定会放行、API 返回 400；这里只承认紧跟在 assistant 后面那段连续的 `Role.TOOL` 消息。判断"是不是工具结果"用的是 `role == Role.TOOL`（与 Anthropic 适配器相同），占位消息也是真正的 `Role.TOOL` 消息，`is_error=False`（没有失败，标成错误会让模型重试一个已经成功的调用）。比较用 `==` 而不是 `is`：从 session 行反序列化出来的角色可能是普通 `str`。
+
+`drop_unanswered_calls` 管的是被输出上限截断的回复留下的调用：引擎记下那一轮，不执行它带的调用（[agent-loop.md](agent-loop.md) §4.1）。带着这种调用的请求，DeepSeek 返回 400；Anthropic 的文档写着同样的配对要求，没有在真实接口上核实。它的规则：
+
+- 能回答一轮调用的，只有紧跟其后那段连续的 `Role.TOOL` 消息，和 `repair_tool_pairs` 的相邻判据相同。
+- 一条结果回答一个调用。调用按它们在消息里的先后，各认领一条带着自己 id 的结果，认领不到的就是没被回答。id 原样比较，空 id 也算 id；`is_error` 的结果照样算回答。两个同 id 的调用只有一条结果时，留下先发的那个。
+- 没被回答的调用从那一轮上去掉，文字、思考和已答调用不动。去掉之后既没有调用、文字去掉空白（`str.strip()`）后也为空的一轮整条去掉。本来就没有调用的 assistant 消息不动。
+- 不补任何结果。`repair_tool_pairs` 的占位说的是结果在压缩时被拿掉了，对一个从未执行的调用不成立；被截断的参数也可能不是合法 JSON，Anthropic 适配器不编码这样的调用。
+- 没有可去掉的东西时，返回的是原来那些消息对象。找不到调用的 tool 结果不归它管，留给 `repair_tool_pairs`。
+
+调用它的是 entry 层：`_assemble` 建 `_Carried` 时，以及 `compose` 把历史交给 `assemble` 时（§8.2）。压缩器不调用它。
 
 **没有人猜下标 0 是 system prompt。** 本项目的引擎不注入 system，假定 `msgs[0]` 是 system 会让压缩器对另一种组装方式静默失效。所以由调用方用 `pinned` 说明前面有几条受保护——entry 层固定传 `PINNED_SYSTEM_MESSAGES = 1`。
 
@@ -321,7 +334,7 @@ SessionRegistry._attempt(handle)
   session = await _session(id)                     内存缓存 → store.load() → 新建
   TurnRunner(app, history=session.history, compaction=session.compaction, ...)
      _assemble():
-        _Carried(history)                           Conversation 协议（messages / commit）
+        _Carried(drop_unanswered_calls(history))    Conversation 协议（messages / commit）
         build_compactor(app, session_id, state=compaction, on_measure, on_compact)
         build_augmentor(app, session_id)            记忆提醒与执行计划块（TurnAugmentor）
      app.engine.exchange_stream(user_text, conversation=, prompt=app.prompt,
@@ -341,6 +354,7 @@ SessionRegistry._attempt(handle)
 - **压缩在每次模型调用前**，由引擎通过 `HistoryCompactor` 协议调用；返回 `(messages, keep)`，`keep` 为真时替换运行中的 history（写回）。详见另篇。
 - **执行计划块在压缩之后、只加到本次发送的副本上**（`TurnAugmentor`），不写入 history：先加后压会被压缩掉，写进 history 会每轮累积一份。
 - **历史里不存 system 消息**：`_settle` 按角色剔除，`SqliteSessionStore.save` 也会再过滤一遍。
+- **没被回答的工具调用在开场时去掉**：`_assemble` 和 `compose` 都先过 `drop_unanswered_calls`（§7）。被输出上限截断的 exchange 存下的历史以这种调用结尾，下一次 exchange 或 `/compact` 开场时把它们去掉，成功后存回去的历史里就没有了，已经存进库的会话不需要迁移。`_assemble` 去掉了调用时写一行 INFO 日志，带会话 id 和调用数。
 - **exchange 是原子的**：只有 `converged` 的 exchange 才替换 `history` 与 `compaction`；取消或失败的 exchange 保持会话原样（仍会保存一次以更新 `updated_at`）。保存由 registry 在回收 Task **之后**进行，避免 `finally: await save()` 在被取消的 Task 里执行不完。
 - `compose()` / `prepare()`：`prepare` 组装一次对话并按第一次模型调用的方式压缩，用于预览（会写 offload 文件与压缩日志，但不附加计划块）。
 
@@ -463,7 +477,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages (session_id, positio
 | `omicsclaw/context/prompt.py` | `PromptAssembler`、`AssembledPrompt`、`assemble` |
 | `omicsclaw/context/tokens.py` | token 估算、`TokenCounter`、`format_token_count` |
 | `omicsclaw/context/budget.py` | `ContextBudget`、`Pressure`、`PRESSURE_ORDER`、`at_least`、`measure`、`BudgetReport` |
-| `omicsclaw/context/transcript.py` | `repair_tool_pairs`、`split_head_tail`、`fit_to_budget`、`emergency_fit`、`render_for_summary` |
+| `omicsclaw/context/transcript.py` | `repair_tool_pairs`、`drop_unanswered_calls`、`split_head_tail`、`fit_to_budget`、`emergency_fit`、`render_for_summary` |
 | `omicsclaw/provider/_model_limits.py` | `ModelLimits`、`DEFAULT_MODEL_LIMITS`、`get_model_limits` |
 | `omicsclaw/engine/loop.py` | `exchange` / `_opening` / `_settle`、每 Turn 调用 compactor 与 augmentor |
 | `omicsclaw/engine/compactor.py` | `HistoryCompactor` 协议 |

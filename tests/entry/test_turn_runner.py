@@ -7,7 +7,8 @@ this file is about live between those pieces rather than inside any one
 of them.
 
 The fakes below are exported for ``test_session.py``, which needs the
-same app over the same scripted backend one layer further out.
+same app over the same scripted backend one layer further out, and for
+``test_turn.py``.
 """
 
 from __future__ import annotations
@@ -29,6 +30,8 @@ from omicsclaw.entry.events import TurnEventType
 from omicsclaw.entry.stream import TurnStream
 from omicsclaw.entry.turn import TurnRunner
 from omicsclaw.provider import Completion
+from omicsclaw.provider.anthropic_provider import encode_conversation
+from omicsclaw.provider.openai_provider import encode_messages
 from omicsclaw.schema import (
     Message,
     Role,
@@ -86,6 +89,42 @@ class Exploding(Scripted):
 
     async def generate(self, messages, tools=None):
         raise RuntimeError("the backend fell over")
+
+
+class Finishing(Scripted):
+    """``Scripted`` that also reports why each reply ended.
+
+    A reply is a message or a ``(message, finish_reason)`` pair, and a
+    bare message ends with ``"stop"``. The engine reads ``"length"`` and
+    ``"max_tokens"`` as a reply cut off by the output ceiling.
+    """
+
+    def __init__(self, *replies: Message | tuple[Message, str]) -> None:
+        pairs = [
+            reply if isinstance(reply, tuple) else (reply, "stop") for reply in replies
+        ]
+        super().__init__(*(message for message, _ in pairs))
+        self.reasons = [reason for _, reason in pairs] or ["stop"]
+
+    async def generate(self, messages, tools=None):
+        self.seen.append(tuple(messages))
+        index = min(self.calls, len(self.replies) - 1)
+        self.calls += 1
+        return Completion(
+            message=self.replies[index], finish_reason=self.reasons[index]
+        )
+
+    async def _stream(self, messages, tools=None):
+        completion = await self.generate(messages, tools)
+        if completion.message.content:
+            yield StreamChunk(
+                type=StreamChunkType.TEXT_DELTA, delta=completion.message.content
+            )
+        yield StreamChunk(
+            type=StreamChunkType.DONE,
+            message=completion.message,
+            finish_reason=completion.finish_reason,
+        )
 
 
 class Asking:
@@ -204,6 +243,78 @@ def calling(*names: str) -> Message:
             for index, name in enumerate(names)
         ),
     )
+
+
+CUT_ARGUMENTS = (
+    '{"path": "notes.md", "content": "# Notes\\n\\nResolution 1.0 kept twelve clu'
+)
+"""The arguments of a ``write_file`` call, cut off inside a string."""
+
+
+def tool_call(call_id: str, name: str = "report", arguments: str = "{}") -> ToolCall:
+    return ToolCall(id=call_id, name=name, arguments=arguments)
+
+
+def requesting(*calls: ToolCall, text: str = "", reasoning: str = "") -> Message:
+    """One assistant message asking for *calls*, with its text and reasoning."""
+    return Message.assistant(text, reasoning_content=reasoning, tool_calls=calls)
+
+
+def result_for(call_id: str, text: str = "reported") -> Message:
+    """The result the ``report`` tool gives the call *call_id*."""
+    return Message.tool(tool_call_id=call_id, content=text, name="report")
+
+
+def unanswered_calls(messages) -> list[str]:
+    """Ids of the calls that no tool result directly behind their turn answers.
+
+    One result answers one call, so two calls that share an id need two
+    results.
+    """
+    found: list[str] = []
+    for index, message in enumerate(messages):
+        if message.role != Role.ASSISTANT:
+            continue
+        behind: list[str] = []
+        for later in messages[index + 1 :]:
+            if later.role != Role.TOOL:
+                break
+            behind.append(later.tool_call_id)
+        for call in message.tool_calls:
+            if call.id in behind:
+                behind.remove(call.id)
+            else:
+                found.append(call.id)
+    return found
+
+
+def assert_both_dialects_accept(messages) -> None:
+    """Encode *messages* for both API dialects and check every call is answered.
+
+    The Anthropic encoder raises on a call whose arguments are not a JSON
+    object, so arguments cut off inside a string fail here as well.
+    """
+    wire = encode_messages(messages)
+    for index, entry in enumerate(wire):
+        if entry["role"] != "assistant":
+            continue
+        behind: list[str] = []
+        for later in wire[index + 1 :]:
+            if later["role"] != "tool":
+                break
+            behind.append(later["tool_call_id"])
+        for call in entry.get("tool_calls", ()):
+            assert call["id"] in behind, f"OpenAI dialect: no result for {call}"
+            behind.remove(call["id"])
+
+    _system, turns = encode_conversation(messages)
+    for index, turn in enumerate(turns):
+        asked = [b["id"] for b in turn["content"] if b["type"] == "tool_use"]
+        following = turns[index + 1]["content"] if index + 1 < len(turns) else []
+        answered = [b["tool_use_id"] for b in following if b["type"] == "tool_result"]
+        for call_id in asked:
+            assert call_id in answered, f"Anthropic dialect: no result for {call_id}"
+            answered.remove(call_id)
 
 
 def make_app(tmp_path: pathlib.Path, provider, *, tools=None, **overrides):

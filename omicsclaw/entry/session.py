@@ -398,9 +398,11 @@ class SessionRegistry:
         Runs in the session's lane like any exchange, so it never overlaps
         one: it compacts the history as the exchanges ahead of it left it.
         The history is summarized as a FULL compaction whatever its
-        pressure; it is replaced only when the compaction is written back,
-        so a failed summary leaves it as it was. The outcome's
-        ``compaction`` says what happened.
+        pressure. Tool calls that no tool result answers are removed from
+        it first, and they stay removed whether or not the summary
+        succeeds. Apart from that the history is replaced only when the
+        compaction is written back, so a failed summary leaves the rest
+        as it was. The outcome's ``compaction`` says what happened.
 
         :raises QueueFull: this session already has
             ``max_queued_per_session`` exchanges waiting.

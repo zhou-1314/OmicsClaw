@@ -477,7 +477,8 @@ def test_the_public_surface_is_exactly_what_plan_0030_delivered():
     ``ProgressiveCompactor`` / ``should_write_back`` and the tier ordering
     (``PRESSURE_ORDER`` / ``at_least``) moved down from the entry layer.
     Widened again for the memory reminder: ``MemoryNudge`` and its two
-    constants.
+    constants. Widened once more with ``drop_unanswered_calls``, which
+    the entry layer calls when an exchange opens.
 
     Seven modules' worth of names, and the shape of the list is the
     argument: every Protocol on it (``TokenCounter``, ``Summarizer``)
@@ -531,6 +532,7 @@ def test_the_public_surface_is_exactly_what_plan_0030_delivered():
         "build_summary_prompt",
         "collect_references",
         "compact",
+        "drop_unanswered_calls",
         "emergency_fit",
         "estimate_message_tokens",
         "estimate_messages_tokens",
