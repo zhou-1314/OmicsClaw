@@ -400,3 +400,8 @@ CLI、Desktop、channel 都拒绝空消息，compaction-only 的交换不调模�
     触发。降级截断的结果不写回历史。
 - 真实会话只在 DeepSeek 和 CLI 上跑过。Desktop 和 channel 没有跑真实会话；它们和 CLI
   一样走 `SessionRegistry` 到 `TurnRunner`，脚本化 eval 覆盖的是这一段共用路径。
+- 2026-10-10 补记：上面第一条里 SOFT、FULL 档降级截断那一种，由计划 0078 关闭。降级
+  截断改成从最旧的消息丢起，当前请求不丢。同一个夹具（前一次交换 9 轮只读加一条答复，
+  本次交换 4 轮）下闸门数到 4 轮，不触发，由 `tests/entry/test_planning.py` 的
+  `test_the_gate_counts_only_this_exchange_after_a_degraded_compaction` 钉住。EMERGENCY
+  截断那一种不变。

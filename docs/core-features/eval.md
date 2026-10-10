@@ -4,7 +4,7 @@
 
 ```
 开发阶段 ──→ Test（确定性测试）      ScriptedProvider + Assertion
-CI 阶段  ──→ Eval（脚本化用例集）    30 个用例 + Quality Gate（全部通过）
+CI 阶段  ──→ Eval（脚本化用例集）    31 个用例 + Quality Gate（全部通过）
 生产阶段 ──→ Observability（追踪）  OTEL Traces + Metrics → Langfuse
 ```
 
@@ -251,7 +251,7 @@ def test_case(case, tmp_path, eval_results):
 
 ## 2. Eval 子系统：用例集
 
-### 2.1 当前用例（30 个）
+### 2.1 当前用例（31 个）
 
 用例在 `tests/evals/dataset/test_<category>.py`，写成 Python 代码。每条默认都带 `NoWriteOutside()`。
 
@@ -273,6 +273,7 @@ def test_case(case, tmp_path, eval_results):
 | `memory` | `precis_reaches_next_exchange` | 写入的记忆出现在下一次交换系统提示的 "## Long-term memory" 一节 |
 | `compaction` | `large_result_offloaded` | 大的 `read_file` 结果离开保留尾部后，在 `WARN` 档被 offload 成占位，模型能按占位路径取回 |
 | `compaction` | `summary_replaces_head` | 到 `FULL` 档时历史开头换成摘要，system 消息保留，摘要器只调用一次 |
+| `compaction` | `degraded_truncation_keeps_requests_and_recent_rounds` | 摘要器返回空串，`SOFT` 档走降级截断：那次请求里两次交换的请求都在，最新读的文件在、最旧读的不在，没有占位结果，压缩记录不写回 |
 | `skill_routing` | `step_calls_a_skill_function` | `use_skill` → `new` → 写步骤（`load_skill`、`read_input`、`cluster`、`write_output`）→ `run`；记账里有 `sc-clustering.cluster`，notebook 与 manifest 已建 |
 | `skill_routing` | `first_module_builds_the_skeleton` | 第一次 `new` 只补齐缺的目录与 `STRATEGY.md`，预置文件不动，不出现 `PROJECT.md`、`METHODS_LEDGER.md` |
 | `skill_routing` | `unchanged_step_is_skipped` | 连续两次 `run`，第二次输出 `up to date`，只有一份记账 |
