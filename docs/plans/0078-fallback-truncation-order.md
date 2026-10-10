@@ -1150,7 +1150,7 @@ EMERGENCY 那一种不变。EMERGENCY 不经过 `fit_to_budget`，探针里三�
 
 - `r4_probe_scenarios.py`：28 次加 24 次，"B today" 一行和定稿规则一行每个字段都相同（`out_probe_scenarios.log`，`compare_rows.py`）。
 - `r4_probe_sequence.py`：三个序列的两行相同，可复用前缀 5%、4%、4%（`out_probe_sequence.log`）。
-- `r4_probe_gate.py`：10 个夹具 160 次，误触发 0 次，请求被丢 0 次，数到的是 3、4、5、7（`out_probe_gate.log`）。
+- `r4_probe_gate.py`：10 个夹具 160 次，误触发 0 次，请求被丢 0 次，数到的是 3、4、5、7（`out_probe_gate.log`）。同一个探针在基线上是 134 次误触发、134 次请求被丢，和 §7 的数相同（`out_probe_gate_base.log`）。
 - `r4_probe_tail.py` 加了 "landed" 一行的副本：四组各 6,000 段，落地的函数和 `r4_rules.final` 的差异都是 0；tail 的消息被删 0 段，高于目标 315、1,188、411、2,000 段，和 §4.6 的表相同（`out_probe_tail.log`）。
 
 没有跑的：
