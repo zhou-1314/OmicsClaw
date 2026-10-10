@@ -528,10 +528,17 @@ The reply was cut off at the output limit, so the tool calls in it were not run:
 
 一次性执行（`--prompt`、`--prompt-file`）走同一个 `_drive`，这一行在标准输出上，跟在被截断的回答后面，退出码仍是 0。
 
-两种形式都以 `The reply was cut off at the output limit` 开头。脚本判断"这次回复被截断了"时按这个开头匹配行首，不要比整句：
-输出不是终端时 rich 按 80 列折行，第一种折成两行，第二种的行数随名字多少变，折出来的行有的行尾带空格。
-这个开头是脚本匹配的事实接口，改这几个字要当接口改。
+两种形式都以 `The reply was cut off at the output limit` 开头。这个开头是脚本匹配的事实接口，改这几个字要当接口改，
 `tests/entry/test_cli_repl.py::test_the_two_forms_read_as_agreed_and_open_with_the_same_words` 把两句原文和这个开头都写死了。
+脚本判断"这次回复被截断了"时匹配行首的这个开头，不要比整句：这一行按 rich 探到的宽度折行，宽度小于整句的长度时整句不在一行上，折出来的行有的行尾带空格。
+
+- 宽度从哪里来：设了 `COLUMNS`（正整数）就用它，不再看终端。没设时 rich 依次问 stdin、stdout、stderr，用第一个连着终端的流的宽度；三个都不连终端才是 80 列。
+  所以 stdout 进了文件或管道，折行位置也不一定是 80 列。在终端里敲 `oc cli --prompt … > answer.txt` 时 stdin 和 stderr 还连着终端，用的是那个终端的宽度。
+- 宽度放得下整句时不折行。第一种形式 106 个字符；第二种带一个 `write_file` 时 128 个字符，名字越多越长。
+- 宽度太小时开头也会被折断，按行首匹配就找不到它：第一种形式在宽度小于 41 列时，第二种在宽度小于 42 列时（`limit` 后面的逗号和它不分行）。
+- 要稳妥，调用时设一个比整句长的 `COLUMNS`，如 `COLUMNS=1000 oc cli --prompt … > answer.txt`。整句在一行上，行首就是这个开头。回答的正文不按这个宽度折行（`MarkdownStreamFormatter` 用 `soft_wrap` 写），不受这个值影响。
+
+这些是在 Linux 上用 rich 14.2.0 和 15.0.0 量到的，Windows 上没有量。
 
 下面这些场合不出这一行：
 
