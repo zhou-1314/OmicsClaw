@@ -228,7 +228,7 @@ yield DONE(RunResult(tuple(history), stop, usage, turns))
 
 `_stop_reason_for` **先判断截断**。被截断的 Turn 可能带着从中途断掉的流里累积出来的工具调用，看起来格式正确，但模型其实没说完，执行它比停下更糟。这个 Turn 仍会追加到历史，于是轨迹以"没被回答的工具调用"结尾；从这里恢复的调用方需要自己回答或丢弃这些调用，引擎不会为没执行的调用编造 Observation。entry 层选的是丢弃：下一次 exchange 开场时，`entry/turn.py` 的 `_assemble` 和 `compose` 用 `context.drop_unanswered_calls` 把这些调用从带进来的历史里去掉，那一轮的文字留着（规则见 [context-engineering.md](context-engineering.md) §7）。
 
-`max_turns` 在**每次模型调用之前**检查，`max_turns=1` 恰好允许一次调用；`<= 0` 表示不设上限。
+`max_turns` 在**每次模型调用之前**检查，`max_turns=1` 恰好允许一次调用；`<= 0` 表示不设上限。以 `MAX_TURNS` 停下时，最后一个 Turn 请求的工具已经执行，轨迹以这些工具的结果结尾，`RunResult.turns` 等于 `max_turns`。下一次 exchange 直接接在这些结果后面。`oc cli` 在这样的 exchange 结束时给用户显示一行说明（[cli.md](cli.md) §9.3），Desktop 和 Channel 没有，模型在哪个界面都不知道自己是被上限拦下的。
 
 ### 4.2 每 Turn 重读工具列表
 
