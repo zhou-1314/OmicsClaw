@@ -1139,6 +1139,11 @@ def open_remote_plane(config: AppConfig) -> RemotePlaneBinding | None:
     The one thing this function never does is probe: opening the plane
     costs a local file, and a probe costs an SSH round-trip a
     deployment that never submits anything should not pay at start-up.
+
+    The workspace root travels in with the database: uploads and
+    downloads are anchored to it (a ``src`` outside it, a ``dest``
+    resolving away from it, are refused), and a plane without one is a
+    plane that refuses both rather than guessing.
     """
     if not config.remote_execution:
         return None
@@ -1147,7 +1152,7 @@ def open_remote_plane(config: AppConfig) -> RemotePlaneBinding | None:
     except (OSError, sqlite3.Error) as exc:
         _log.warning("remote execution disabled: %s", exc)
         return None
-    return RemotePlaneBinding(database)
+    return RemotePlaneBinding(database, workspace=config.workspace)
 
 
 def build_app(

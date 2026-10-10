@@ -41,6 +41,7 @@ travels" rule made concrete.
 from __future__ import annotations
 
 import json
+import posixpath
 import secrets
 import tempfile
 import time
@@ -79,6 +80,8 @@ from .probe import PROBE_SCRIPT, HostProbe, _from_decoded, parse_probe_output
 from .ssh import (
     RemoteHostRefused,
     RemoteHostUnreachable,
+    RemotePathRefused,
+    RemoteTransferError,
     SshSpawner,
     SystemSshSpawner,
     build_sftp_argv,
@@ -135,13 +138,27 @@ class RemoteExecutor:
         *,
         scheduler: str = "auto",
         files: dict[str, str] | None = None,
+        uploads: list[tuple[str, str]] | None = None,
         timeout: float = DEFAULT_SUBMIT_TIMEOUT_S,
     ) -> RemoteJobHandle:
-        """Create *workdir*, upload *files*, start the job, read the number."""
+        """Create *workdir*, upload *files* and *uploads*, start the job.
+
+        *files* are contents staged locally and pushed by name;
+        *uploads* are ``(local path, remote path)`` pairs of files that
+        already exist — the caller's input files — verified to land
+        inside *workdir* before anything moves.
+        """
         kind = detect_scheduler(command, scheduler)
         scripts = build_job_scripts(command, kind)
+        for local, remote in uploads or ():
+            if not _inside_remote_dir(workdir, remote):
+                raise RemotePathRefused(
+                    f"an input's dst {remote!r} escapes the job's work "
+                    f"directory {workdir!r}; dst is relative to that "
+                    "directory and may not climb out of it"
+                )
         await self.run(build_mkdir_command(workdir), timeout=UPLOAD_TIMEOUT_S)
-        await self._upload(workdir, {**scripts, **(files or {})})
+        await self._upload(workdir, {**scripts, **(files or {})}, uploads)
         outcome = await self.run(
             build_submit_command(workdir, kind), timeout=timeout
         )
@@ -216,8 +233,15 @@ class RemoteExecutor:
         )
         return outcome.output
 
-    async def _upload(self, workdir: str, files: dict[str, str]) -> None:
-        """Write *files* locally, then push them in one SFTP batch."""
+    async def _upload(
+        self,
+        workdir: str,
+        files: dict[str, str],
+        uploads: list[tuple[str, str]] | None = None,
+    ) -> None:
+        """Write *files* locally, then push them — and *uploads* — in one
+        SFTP batch. A batch that does not exit zero is a failed upload,
+        not a silent one."""
         pairs: list[tuple[str, str]] = []
         with tempfile.TemporaryDirectory(
             prefix=f"omicsclaw-upload-{secrets.token_hex(4)}-"
@@ -226,21 +250,35 @@ class RemoteExecutor:
                 local = Path(staging) / name
                 local.write_text(content, encoding="utf-8")
                 pairs.append((str(local), remote_join(workdir, name)))
-            await self._spawner.spawn(
-                build_sftp_argv(self.host),
-                timeout=UPLOAD_TIMEOUT_S,
-                stdin_text=build_sftp_batch(puts=pairs),
-            )
+            pairs.extend(uploads or ())
+            await self._sftp(build_sftp_batch(puts=pairs), UPLOAD_TIMEOUT_S)
 
     async def download(
         self, pairs: list[tuple[str, str]], *, timeout: float = FETCH_TIMEOUT_S
     ) -> None:
-        """Pull *pairs* of ``(remote, local)`` paths in one SFTP batch."""
-        await self._spawner.spawn(
-            build_sftp_argv(self.host),
-            timeout=timeout,
-            stdin_text=build_sftp_batch(gets=pairs),
+        """Pull *pairs* of ``(remote, local)`` paths in one SFTP batch.
+
+        :raises RemoteTransferError: the batch exited non-zero — the
+            files the caller was about to report as downloaded were not.
+        """
+        await self._sftp(build_sftp_batch(gets=pairs), timeout)
+
+    async def _sftp(self, batch: str, timeout: float) -> None:
+        """One SFTP session over stdin; non-zero exits are errors.
+
+        The transport's merged output (stderr included) travels in the
+        exception, so the model reads the reason the transfer gave —
+        "no such file", "permission denied" — rather than a generic
+        complaint it cannot act on.
+        """
+        outcome = await self._spawner.spawn(
+            build_sftp_argv(self.host), timeout=timeout, stdin_text=batch
         )
+        if outcome.exit_code != 0:
+            tail = outcome.output.strip()[-400:]
+            raise RemoteTransferError(
+                f"sftp on {self.host} exited {outcome.exit_code}: {tail}"
+            )
 
 
 def remote_join(workdir: str, name: str) -> str:
@@ -248,12 +286,36 @@ def remote_join(workdir: str, name: str) -> str:
     return workdir.rstrip("/") + "/" + name.lstrip("/")
 
 
+def _inside_remote_dir(workdir: str, candidate: str) -> bool:
+    """Whether *candidate* — an already-joined remote path — stays
+    inside *workdir*.
+
+    The remote side is POSIX no matter what this machine is, so the
+    test is spelled in :mod:`posixpath`: normalize both, and the
+    candidate must be the directory itself or live under its prefix.
+    :func:`posixpath.normpath` collapses ``a/../b`` before the
+    comparison, so a ``dst`` that climbs out and comes back reads as
+    itself, and one that climbs out and stays out fails the prefix —
+    both doors are the same assertion.
+    """
+    root = posixpath.normpath(workdir).rstrip("/")
+    normalized = posixpath.normpath(candidate)
+    return normalized == root or normalized.startswith(root + "/")
+
+
 class RemotePlaneBinding:
     """The :class:`~omicsclaw.tools.builtin.remote.RemotePlane` implementation.
 
     Holds the two stores (one :class:`~omicsclaw.memory.database.Database`
-    behind both) and the spawner; builds a :class:`RemoteExecutor` per
-    host per call.
+    behind both), the spawner and — since uploads and downloads cross
+    the workspace boundary — the workspace root both are anchored to;
+    builds a :class:`RemoteExecutor` per host per call.
+
+    ``workspace=None`` is the refused state, not the permissive one: a
+    plane that cannot check a ``src`` against a root, or resolve a
+    ``dest`` inside one, declines uploads and fetches rather than
+    guessing where files should go. The composition root always binds
+    one; a bare binding in a test binds one or tests the refusal.
     """
 
     def __init__(
@@ -261,11 +323,13 @@ class RemotePlaneBinding:
         database: Any,
         *,
         spawner: SshSpawner | None = None,
+        workspace: str | Path | None = None,
     ) -> None:
         self._database = database
         self._hosts = RemoteHostStore(database)
         self._jobs = RemoteJobStore(database)
         self._spawner = spawner if spawner is not None else SystemSshSpawner()
+        self._workspace = Path(workspace).resolve() if workspace is not None else None
 
     def close(self) -> None:
         """Close the database this binding was constructed over.
@@ -294,7 +358,7 @@ class RemotePlaneBinding:
         host: str,
         command: str,
         *,
-        inputs: tuple[str, ...] = (),
+        inputs: tuple[tuple[str, str], ...] = (),
         outputs: tuple[str, ...] = (),
         scheduler: str = "auto",
         timeout: float = DEFAULT_SUBMIT_TIMEOUT_S,
@@ -302,17 +366,26 @@ class RemotePlaneBinding:
         local_job_id: str = "",
     ) -> SubmitOutcome:
         validate_host(host)
+        resolved_inputs = self._resolve_inputs(inputs)
         executor = RemoteExecutor(host, self._spawner)
         probe = await self._probe_into_store(executor, host)
         workdir = remote_join(
             probe.scratch_root(),
             "omicsclaw/" + time.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(3),
         )
+        uploads = [
+            (local, remote_join(workdir, dst)) for local, dst in resolved_inputs
+        ]
         files: dict[str, str] = {}
         if outputs:
             files[OUTPUTS_FILE] = "\n".join(outputs) + "\n"
         handle = await executor.submit_in(
-            workdir, command, scheduler=scheduler, files=files, timeout=timeout
+            workdir,
+            command,
+            scheduler=scheduler,
+            files=files,
+            uploads=uploads,
+            timeout=timeout,
         )
         handle = RemoteJobHandle(
             kind=handle.kind,
@@ -368,6 +441,7 @@ class RemotePlaneBinding:
     async def fetch(
         self, source: str, dest: str, max_mb: float = DEFAULT_FETCH_MAX_MB
     ) -> FetchOutcome:
+        local_root = self._resolve_dest(dest)
         host, workdir, names = await self._resolve_source(source)
         if not host:
             return FetchOutcome(
@@ -386,8 +460,21 @@ class RemotePlaneBinding:
             )
         executor = RemoteExecutor(host, self._spawner)
         sizes = await executor.sizes(workdir, names)
+        missing = [
+            name for name, size in zip(names, sizes) if size is None or size < 0
+        ]
+        if missing:
+            # A size the host could not answer means the file is not
+            # there (or not stat-able); downloading anyway would either
+            # fail the batch or — worse — succeed for the others and
+            # let the caller report a fetch that did not happen.
+            raise RemoteTransferError(
+                "no size was answered for "
+                f"{', '.join(missing)} under {workdir} on {host} — the "
+                "file does not exist there or cannot be read"
+            )
         limit_bytes = int(max_mb * 1024 * 1024)
-        total = sum(max(0, size) for size in sizes)
+        total = sum(sizes)
         if any(size > limit_bytes for size in sizes):
             biggest = names[sizes.index(max(sizes))]
             reference = f"remote://{host}/{remote_join(workdir, biggest).lstrip('/')}"
@@ -399,7 +486,6 @@ class RemotePlaneBinding:
                 ),
                 bytes_total=total,
             )
-        local_root = Path(dest)
         local_root.mkdir(parents=True, exist_ok=True)
         pairs = [
             (remote_join(workdir, name), str(local_root / Path(name).name))
@@ -444,6 +530,93 @@ class RemotePlaneBinding:
         return RemoteExecutor(host_alias, self._spawner)
 
     # ---- internals ---------------------------------------------------------
+
+    def _resolve_inputs(
+        self, inputs: tuple[tuple[str, str], ...]
+    ) -> list[tuple[str, str]]:
+        """``(src, dst)`` declarations to ``(local path, dst name)`` pairs.
+
+        The local half is anchored to the workspace the way every file
+        tool's is: a relative ``src`` resolves against the root, an
+        absolute one must already be inside it, and anything that walks
+        out — or names something that is not a file — is refused here,
+        before a single remote command runs. The remote half keeps its
+        bare name; whether the name stays inside the work directory is
+        checked in :meth:`RemoteExecutor.submit_in`, where the workdir
+        exists to check against.
+        """
+        if not inputs:
+            return []
+        if self._workspace is None:
+            raise RemotePathRefused(
+                "this plane has no workspace bound, so input uploads "
+                "cannot be anchored to one; refusing rather than guessing "
+                "which files may travel"
+            )
+        pairs: list[tuple[str, str]] = []
+        for src, dst in inputs:
+            root = self._workspace
+            candidate = Path(src)
+            local = (candidate if candidate.is_absolute() else root / candidate)
+            local = local.resolve()
+            if local != root and root not in local.parents:
+                raise RemotePathRefused(
+                    f"input src {src!r} resolves to {local}, outside the "
+                    f"workspace {root}; uploads stay inside the workspace"
+                )
+            if not local.is_file():
+                raise RemotePathRefused(
+                    f"input src {src!r} is not a file inside the workspace "
+                    f"({local} does not exist or is not a regular file)"
+                )
+            if not dst.strip():
+                raise RemotePathRefused(
+                    f"input dst for src {src!r} is empty; name where the "
+                    "file lands inside the job's work directory"
+                )
+            # The bare name is checked before any joining, because
+            # remote_join strips a leading slash — an absolute dst would
+            # otherwise be silently re-anchored inside the workdir
+            # instead of refused. The prefix assertion in submit_in is
+            # the second lock; this one keeps the first lock honest.
+            normalized_dst = posixpath.normpath(dst)
+            if (
+                normalized_dst.startswith("/")
+                or normalized_dst == ".."
+                or normalized_dst.startswith("../")
+            ):
+                raise RemotePathRefused(
+                    f"input dst {dst!r} is not a name inside the job's "
+                    "work directory; it may not be absolute and may not "
+                    "climb out with .."
+                )
+            pairs.append((str(local), dst))
+        return pairs
+
+    def _resolve_dest(self, dest: str) -> Path:
+        """A fetch destination as an absolute path inside the workspace.
+
+        Relative to the workspace root — that is what the tool's schema
+        promises — with an absolute path tolerated only when it is
+        already inside. A ``..`` climb or an outside absolute path is
+        refused before any transfer starts.
+        """
+        if self._workspace is None:
+            raise RemotePathRefused(
+                "this plane has no workspace bound, so a fetch destination "
+                "cannot be anchored to one; refusing rather than writing "
+                "anywhere reachable"
+            )
+        root = self._workspace
+        candidate = Path(dest)
+        local = (candidate if candidate.is_absolute() else root / candidate)
+        local = local.resolve()
+        if local != root and root not in local.parents:
+            raise RemotePathRefused(
+                f"dest {dest!r} resolves to {local}, outside the workspace "
+                f"{root}; downloads land inside the workspace"
+            )
+        return local
 
     async def _probe_into_store(
         self, executor: RemoteExecutor, host: str

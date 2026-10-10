@@ -220,14 +220,21 @@ class RemotePlane(Protocol):
         host: str,
         command: str,
         *,
-        inputs: tuple[str, ...] = (),
+        inputs: tuple[tuple[str, str], ...] = (),
         outputs: tuple[str, ...] = (),
         scheduler: str = "auto",
         timeout: float = DEFAULT_SUBMIT_TIMEOUT_S,
         label: str = "",
         local_job_id: str = "",
     ) -> SubmitOutcome:
-        """Place *command* on *host* as a job; return its handle."""
+        """Place *command* on *host* as a job; return its handle.
+
+        ``inputs`` are ``(src, dst)`` pairs: a file inside the local
+        workspace, and the name it lands under in the job's remote work
+        directory. An implementation refuses a ``src`` outside the
+        workspace and a ``dst`` that would climb out of the work
+        directory — both before anything is uploaded.
+        """
         ...
 
     async def status(self, job_ref: str) -> StatusReport:
@@ -467,9 +474,11 @@ class RemoteSubmitTool:
                 "Submit a command as a long-running job on a remote host and "
                 "return immediately with a job reference. The command runs "
                 "from a fresh work directory under the host's scratch; "
-                "upload input files first and name outputs so they can be "
-                "fetched back. If the command contains #SBATCH lines it is "
-                "submitted with sbatch; otherwise it runs under "
+                "declare input files as {src, dst} pairs — src inside the "
+                "session workspace, uploaded to dst inside that work "
+                "directory before the job starts — and name outputs so they "
+                "can be fetched back. If the command contains #SBATCH lines "
+                "it is submitted with sbatch; otherwise it runs under "
                 "setsid+nohup with its process group recorded. Track it with "
                 "remote_status, stop it with remote_cancel, and bring "
                 "outputs back with remote_fetch."
@@ -494,7 +503,23 @@ class RemoteSubmitTool:
                 "command line; an empty string submits nothing"
             )
         intent = str(decoded.get("intent") or "")
-        inputs = tuple(str(item) for item in decoded.get("inputs", []))
+        raw_inputs = decoded.get("inputs", [])
+        if not isinstance(raw_inputs, list) or not all(
+            isinstance(item, dict)
+            and isinstance(item.get("src"), str)
+            and isinstance(item.get("dst"), str)
+            and item["src"].strip()
+            and item["dst"].strip()
+            for item in raw_inputs
+        ):
+            raise ToolArgumentError(
+                "input.inputs must be a list of {src, dst} objects: src "
+                "names a file inside the workspace, dst names where it "
+                "lands inside the job's work directory"
+            )
+        inputs = tuple(
+            (str(item["src"]), str(item["dst"])) for item in raw_inputs
+        )
         outputs = tuple(str(item) for item in decoded.get("outputs", []))
         scheduler = str(decoded.get("scheduler") or "auto")
         if scheduler not in SCHEDULERS:
@@ -554,10 +579,32 @@ REMOTE_SUBMIT_SCHEMA: dict[str, Any] = {
         },
         "inputs": {
             "type": "array",
-            "items": {"type": "string"},
+            "items": {
+                "type": "object",
+                "properties": {
+                    "src": {
+                        "type": "string",
+                        "description": (
+                            "File to upload, inside the session workspace "
+                            "and relative to its root (e.g. 'data/counts.csv')."
+                        ),
+                    },
+                    "dst": {
+                        "type": "string",
+                        "description": (
+                            "Name it lands under in the job's work "
+                            "directory, relative to that directory (e.g. "
+                            "'counts.csv'); it may not climb out of it."
+                        ),
+                    },
+                },
+                "required": ["src", "dst"],
+                "additionalProperties": False,
+            },
             "description": (
-                "Local workspace files to upload into the job's work "
-                "directory before it starts."
+                "Workspace files to upload into the job's work directory "
+                "before it starts, as {src, dst} pairs: src inside the "
+                "workspace, dst inside the work directory."
             ),
         },
         "outputs": {
@@ -799,8 +846,10 @@ REMOTE_FETCH_SCHEMA: dict[str, Any] = {
         "dest": {
             "type": "string",
             "description": (
-                "Directory inside the workspace to receive the files; "
-                "defaults to artifacts/remote."
+                "Directory to receive the files, relative to the session "
+                "workspace root (an absolute path must already be inside "
+                "it); anything resolving outside the workspace is "
+                "refused. Defaults to artifacts/remote."
             ),
         },
         "max_mb": {

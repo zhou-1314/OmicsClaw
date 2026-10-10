@@ -47,12 +47,35 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import getpass
 import os
 import signal
 import tempfile
 from typing import Protocol, runtime_checkable
 
 from omicsclaw.tools.builtin.remote import ExecOutcome, valid_host
+
+
+def _mux_token() -> str:
+    """The local-user component of the ControlPath.
+
+    ``/tmp`` is world-writable and shared, so two users of one machine
+    multiplexing to the same destination would collide on one socket —
+    and the socket is mode 600, so for the second user the collision
+    reads as "connection failed". The uid prefixes the hash so each
+    local user gets a lane of their own. Windows has no ``os.getuid``
+    (the one platform this package does not target but refuses to crash
+    on), so the user name stands in, reduced to the socket-name
+    alphabet.
+    """
+    try:
+        return "u" + str(os.getuid())
+    except AttributeError:  # pragma: no cover - Windows
+        cleaned = "".join(
+            ch for ch in (getpass.getuser() or "") if ch.isalnum() or ch in "-_"
+        )
+        return cleaned or "shared"
+
 
 SSH_OPTIONS: tuple[str, ...] = (
     "-o", "BatchMode=yes",
@@ -61,7 +84,7 @@ SSH_OPTIONS: tuple[str, ...] = (
     "-o", "ServerAliveInterval=15",
     "-o", "ServerAliveCountMax=2",
     "-o", "ControlMaster=auto",
-    "-o", "ControlPath=/tmp/omicsclaw-mux-%C",
+    "-o", f"ControlPath=/tmp/omicsclaw-mux-{_mux_token()}-%C",
     "-o", "ControlPersist=60",
 )
 """Every ``ssh``/``sftp`` invocation this package makes carries these.
@@ -71,7 +94,9 @@ SSH_OPTIONS: tuple[str, ...] = (
 does not inherit the right to sign further SSH sessions.
 ``ControlMaster``/``ControlPersist`` reuse one multiplexed connection
 per host so the second call pays no handshake; ``%C`` hashes the
-destination so two hosts never share a socket.
+destination so two hosts never share a socket, and the uid ahead of it
+(see :func:`_mux_token`) so two local users of one machine never share
+one either.
 
 Notably absent: anything about ``StrictHostKeyChecking`` or
 ``UserKnownHostsFile``. Host verification falls through to the user's
@@ -92,6 +117,28 @@ class RemoteHostRefused(ValueError):
     A ``ValueError`` because it is a caller's mistake, caught before any
     process starts; the tool layer reports the same condition to the
     model as a correctable :exc:`ToolArgumentError`.
+    """
+
+
+class RemotePathRefused(ValueError):
+    """A path argument would leave the boundary it was promised to.
+
+    The same ruling as :class:`RemoteHostRefused`, aimed one argument
+    over: an upload whose ``src`` is not inside the workspace, a ``dst``
+    that would climb out of the remote work directory, a fetch ``dest``
+    resolving outside the workspace. A ``ValueError`` because the model
+    can fix it by sending different arguments, and raised before any
+    byte moves.
+    """
+
+
+class RemoteTransferError(RuntimeError):
+    """An SFTP transfer did not succeed, and will not be reported as if
+    it had.
+
+    Carries the transport's own output (stderr included — the spawner
+    merges them) so the failure the model reads is the failure the
+    transfer had, not a generic one.
     """
 
 
@@ -328,6 +375,8 @@ async def run_ssh(
 __all__ = [
     "RemoteHostRefused",
     "RemoteHostUnreachable",
+    "RemotePathRefused",
+    "RemoteTransferError",
     "SSH_EXIT_HOST_UNREACHABLE",
     "SSH_OPTIONS",
     "SshSpawner",

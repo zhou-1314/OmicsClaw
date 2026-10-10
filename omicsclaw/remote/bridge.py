@@ -95,12 +95,25 @@ class RemoteJobsBridge:
         scheduler = inputs.get("scheduler", "auto")
         if scheduler not in ("auto", "slurm", "none"):
             raise ValueError(f"invalid_scheduler:{scheduler}")
-        for key in ("inputs", "outputs"):
-            items = inputs.get(key, [])
-            if not isinstance(items, list) or not all(
-                isinstance(item, str) for item in items
-            ):
-                raise ValueError(f"invalid_{key}: expected a list of file names")
+        upload_items = inputs.get("inputs", [])
+        if not isinstance(upload_items, list) or not all(
+            isinstance(item, dict)
+            and isinstance(item.get("src"), str)
+            and isinstance(item.get("dst"), str)
+            and item["src"].strip()
+            and item["dst"].strip()
+            for item in upload_items
+        ):
+            raise ValueError(
+                "invalid_inputs: expected a list of {src, dst} objects — "
+                "src inside the session workspace, dst inside the job's "
+                "work directory"
+            )
+        outputs = inputs.get("outputs", [])
+        if not isinstance(outputs, list) or not all(
+            isinstance(item, str) for item in outputs
+        ):
+            raise ValueError("invalid_outputs: expected a list of file names")
 
     async def __call__(self, record: Any, ctx: Any) -> None:
         """Submit, poll, stream the log, and land on the remote verdict.
@@ -114,7 +127,11 @@ class RemoteJobsBridge:
         outcome = await self._plane.submit(
             alias,
             command,
-            inputs=tuple(str(i) for i in record.inputs.get("inputs", [])),
+            inputs=tuple(
+                (str(item["src"]), str(item["dst"]))
+                for item in record.inputs.get("inputs", [])
+                if isinstance(item, dict)
+            ),
             outputs=tuple(str(o) for o in record.inputs.get("outputs", [])),
             scheduler=str(record.inputs.get("scheduler") or "auto"),
             label=f"desktop job {record.id}",
