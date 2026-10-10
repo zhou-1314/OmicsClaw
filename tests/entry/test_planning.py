@@ -17,6 +17,7 @@ from typing import Any, AsyncIterator, Sequence
 
 import pytest
 
+from omicsclaw.context import ContextBudget, compact, estimate_messages_tokens
 from omicsclaw.entry import assembly
 from omicsclaw.entry.assembly import build_app
 from omicsclaw.entry.config import AppConfig, resolve_app_config
@@ -24,8 +25,11 @@ from omicsclaw.entry.planning import build_injector, build_plan_book
 from omicsclaw.entry.turn import run_turn
 from omicsclaw.planning import (
     PLAN_WRITE_TOOL_NAME,
+    PLANNING_GATE_TEXT,
     INJECTION_HEADER,
     PlanArchiveError,
+    PlanBook,
+    PlanInjector,
     PlanItem,
     PlanStatus,
 )
@@ -557,3 +561,59 @@ def test_the_session_registry_path_writes_and_injects(tmp_path, monkeypatch):
     assert provider.seen[1][-1].content.startswith(INJECTION_HEADER)
     assert "load the matrix" in provider.seen[1][-1].content
     assert (tmp_path / ".omicsclaw" / "plans" / "sess-T.json").is_file()
+
+
+# ---- the gate behind a degraded compaction -------------------------------
+
+
+class _Raising:
+    async def summarize(self, prompt: str, *, system: str) -> str:
+        raise RuntimeError("provider down")
+
+
+def _reads(tag: str, count: int) -> list[Message]:
+    """*count* read-only rounds, each one ``read_file`` call and its result."""
+    out: list[Message] = []
+    for index in range(count):
+        call = ToolCall(id=f"{tag}{index}", name="read_file")
+        out.append(Message.assistant("", tool_calls=(call,)))
+        out.append(
+            Message.tool(tool_call_id=call.id, name="read_file", content="o" * 40)
+        )
+    return out
+
+
+@pytest.mark.parametrize("ratio", [0.75, 0.88], ids=["soft", "full"])
+def test_the_gate_counts_only_this_exchange_after_a_degraded_compaction(ratio):
+    """The view a failed summarization leaves does not trip the gate early.
+
+    The earlier exchange has nine read-only rounds and this one four.
+    The compactor's fallback keeps this exchange's request, so the gate
+    counts four turns and stays quiet.
+    """
+    messages = [
+        Message.system("sys"),
+        Message.user("first request"),
+        *_reads("a", 9),
+        Message.assistant("answer"),
+        Message.user("second request"),
+        *_reads("b", 4),
+    ]
+    usable = int(estimate_messages_tokens(messages) / ratio) + 1
+    budget = ContextBudget(
+        context_tokens=usable,
+        reserve_output_tokens=0,
+        reserve_tool_tokens=0,
+        safety_ratio=0.0,
+    )
+    view, record, _ = asyncio.run(
+        compact(messages, budget, summarizer=_Raising(), pinned=1)
+    )
+    assert record.degraded and len(view) < len(messages)
+
+    injector = PlanInjector(PlanBook().for_session("s"), gate_turns=8)
+    appended = asyncio.run(injector.augment(view, ()))
+
+    assert not any(m.content == PLANNING_GATE_TEXT for m in appended), (
+        "four read-only turns in this exchange are not eight"
+    )

@@ -622,7 +622,11 @@ async def compact(
     :func:`~omicsclaw.context.transcript.fit_to_budget` trimmed to one
     declared tier below the applied one, and the reason goes into
     :attr:`CompactionRecord.degraded`. So does a result that came out
-    larger than ``budget.usable_tokens``, whatever produced it. On SOFT
+    larger than ``budget.usable_tokens``, whatever produced it. The
+    fallback drops the oldest messages first. It keeps every compaction
+    summary, the system messages the head opens on, the request in
+    flight and the tool round the tail finishes, and an earlier request
+    goes with its last assistant reply. On SOFT
     and FULL the *extractor*, when given, reads the summarized messages
     as they were before offloading, concurrently with the summarizer; a
     failure there, or in the store, is recorded in

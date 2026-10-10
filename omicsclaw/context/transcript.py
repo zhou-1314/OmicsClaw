@@ -15,9 +15,9 @@ list is the same bug in a different spelling: one ``append`` and two
 conversations are one conversation.
 
 **Nothing here truncates a message.** Capacity is solved at the
-granularity of whole messages — :func:`fit_to_budget` peels them off the
-front, :func:`emergency_fit` skips the ones that do not fit — never by
-shortening one. In particular
+granularity of whole messages — :func:`fit_to_budget` drops the oldest
+ones first, :func:`emergency_fit` skips the ones that do not fit — never
+by shortening one. In particular
 :attr:`~omicsclaw.schema.ToolCall.arguments` is never rewritten: ADR
 0077 requires it to stay the unparsed JSON text the model emitted, byte
 for byte, because prompt-prefix caching and replay evidence both read
@@ -38,6 +38,7 @@ from typing import Sequence
 from omicsclaw.schema import Message, Role, ToolCall
 
 from .budget import ContextBudget
+from .summary import is_summary_message
 from .tokens import (
     TokenCounter,
     estimate_message_tokens,
@@ -263,16 +264,77 @@ def fit_to_budget(
     counter: TokenCounter | None = None,
     target_tokens: int | None = None,
 ) -> tuple[Message, ...]:
-    """Peel messages off the front until the rest fits, then repair.
+    """Drop the oldest messages of the head until the rest fits, then repair.
 
-    Ported from ``compaction.go:95-132``. The oldest compactible message
-    goes first and one at a time, so the result keeps as much history as
-    the budget allows rather than jumping to a fixed window.
+    :func:`split_head_tail` cuts the conversation into the pinned
+    prefix, the head and the tail. The prefix and the tail are never
+    dropped. The head loses its oldest droppable message, the result is
+    measured, and this repeats until it fits, so what is left is the
+    newest end of the conversation and as much of it as the target
+    allows.
 
-    Returns the input unchanged when it already fits, and when there is
-    no head to peel — both of those are the harness's, and both matter:
-    a function that rebuilds the conversation on every call would churn
-    the prompt prefix for nothing.
+    **The input comes back as it is**, neither rebuilt nor repaired,
+    when it is empty, already fits, has no head, or has a head in which
+    nothing can be dropped. A function that rebuilt the conversation on
+    every call would churn the prompt prefix for nothing.
+
+    **Never dropped**, besides the prefix and the tail:
+
+    * the system messages the head opens on, however many there are.
+      They are in the head when ``pinned`` does not cover them, as with
+      ``pinned=0``.
+    * every compaction summary, which is a user message that
+      :func:`~omicsclaw.context.summary.is_summary_message` accepts.
+    * the last user message in the head, unless the tail itself opens on
+      a user message. It is the request in flight when the tail holds
+      no request, and otherwise the request whose replies the tail
+      opens on.
+    * the tool round the tail finishes. When the tail opens on tool
+      results and one of them answers the call the head ends on, that
+      call stays together with the results it already has in the head,
+      so the results in the tail keep the call they answer. The call is
+      the last message of the head that is not a tool result, and only
+      the unbroken run of tool results the tail opens on is read.
+
+    **An earlier request goes with its last assistant reply.** It stays
+    while an assistant message of its exchange is left, and it is
+    dropped in the same step as the last one. A tool result does not
+    keep it: once the call is dropped its results are orphans and the
+    repair deletes them. A request with no assistant reply behind it is
+    dropped when its turn comes. A system message in the middle of the
+    conversation counts as a reply.
+
+    **The result can be over the target.** When everything droppable is
+    gone the result is the prefix, the messages listed above and the
+    tail, whatever they add up to. The target is also checked before
+    :func:`repair_tool_pairs` runs: an orphaned result the repair is
+    about to delete is counted, and a placeholder it is about to add is
+    not.
+
+    **A cut in the head makes no placeholder.** Dropping from the oldest
+    end can leave tool results whose call is gone, and the repair
+    deletes them. It cannot leave a call whose results are gone. A
+    placeholder in the result stands for a call the input itself left
+    unanswered, except in the first case below.
+
+    **A pinned prefix that reaches into the conversation** has two cases
+    this function does not guard:
+
+    * A prefix that stops inside a tool round, on the call or on some of
+      its results, leaves the rest of that round's results as the oldest
+      messages of the head. Every truncation drops them first and the
+      repair answers the call with placeholders. A placeholder can be
+      larger than the small result it replaces, so the result can be
+      larger than the input. A prefix that stops between rounds does not
+      meet this.
+    * A prefix that ends on a request keeps the request, and its replies
+      in the head are dropped like any others. The request can then
+      stand in the result with no reply to it. Such a prefix already
+      stops between rounds, so stopping between rounds does not avoid
+      this.
+
+    A prefix that covers only the system prompt meets neither. The
+    entry layer calls with ``pinned=1`` over one system message.
 
     **``target_tokens`` is what "fits" means**, and it defaults to
     ``budget.usable_tokens``. The harness has the same two numbers and
@@ -288,14 +350,6 @@ def fit_to_budget(
     :func:`~omicsclaw.context.compaction.compact` therefore passes a
     target drawn from :class:`~omicsclaw.context.budget.ContextBudget`'s
     own declared tier thresholds rather than from a fresh literal.
-
-    The replaced layer cut differently: it was block-aware, and an
-    assistant turn was never separated from the tool results answering
-    it. That is gone. **The cost is real** — peeling the front off can
-    orphan a tool result, which :func:`repair_tool_pairs` then deletes,
-    and can strand a tool call, which it then answers with a
-    placeholder. Content that the block-aware cut would have kept is
-    lost. The harness accepts this; so does this layer.
     """
     usable = budget.usable_tokens if target_tokens is None else target_tokens
     if not messages:
@@ -307,12 +361,100 @@ def fit_to_budget(
     if not head:
         return tuple(messages)
 
-    for head_end in range(len(head), 0, -1):
-        candidate = (*kept, *head[:head_end], *tail)
+    held = _held(head, tail)
+    if len(held) == len(head):
+        return tuple(messages)
+    candidate: tuple[Message, ...] = ()
+    for cut in range(1, len(head) + 1):
+        if cut - 1 in held:
+            continue
+        staying = held | _request_of_oldest_reply(head, held, cut)
+        survivors = (*(head[i] for i in range(cut) if i in staying), *head[cut:])
+        candidate = (*kept, *survivors, *tail)
         if estimate_messages_tokens(candidate, counter=counter) <= usable:
-            return repair_tool_pairs(candidate)
+            break
+    return repair_tool_pairs(candidate)
 
-    return repair_tool_pairs((*kept, *tail))
+
+def _held(head: tuple[Message, ...], tail: tuple[Message, ...]) -> frozenset[int]:
+    """Positions in *head* that a truncation never drops.
+
+    The system messages the head opens on, every compaction summary, and
+    the last user message in the head unless the tail itself opens on a
+    user message. That last one is the request in flight when the tail
+    holds no request, and otherwise the request whose replies the tail
+    opens on. The tool round the tail finishes is held too, so the
+    results the tail opens on keep the call they answer.
+    """
+    held: set[int] = set()
+    for index, message in enumerate(head):
+        if message.role != Role.SYSTEM:
+            break
+        held.add(index)
+    held.update(
+        index
+        for index, message in enumerate(head)
+        if message.role == Role.USER and is_summary_message(message)
+    )
+    if not (tail and tail[0].role == Role.USER):
+        for index in range(len(head) - 1, -1, -1):
+            if head[index].role == Role.USER:
+                held.add(index)
+                break
+    held.update(_round_the_tail_finishes(head, tail))
+    return frozenset(held)
+
+
+def _round_the_tail_finishes(
+    head: tuple[Message, ...], tail: tuple[Message, ...]
+) -> range:
+    """Positions in *head* of a tool round whose results run on into *tail*.
+
+    The call is the assistant message in front of the tool results the
+    head ends on, and the round counts when one of the tool results the
+    tail opens on answers it. Pairing is by adjacency, the way
+    :func:`repair_tool_pairs` reads it. A call that sits in the pinned
+    prefix is not looked for.
+    """
+    start = len(head)
+    while start and head[start - 1].role == Role.TOOL:
+        start -= 1
+    if start == 0:
+        return range(0)
+    caller = head[start - 1]
+    if caller.role != Role.ASSISTANT or not caller.tool_calls:
+        return range(0)
+    asked = {call.id for call in caller.tool_calls}
+    for message in tail:
+        if message.role != Role.TOOL:
+            break
+        if message.tool_call_id in asked:
+            return range(start - 1, len(head))
+    return range(0)
+
+
+def _request_of_oldest_reply(
+    head: tuple[Message, ...], held: frozenset[int], cut: int
+) -> frozenset[int]:
+    """The request that stays because a reply to it does.
+
+    Everything from *cut* on survives. Tool results are passed over:
+    the ones standing at the cut have lost their call to it and the
+    repair is about to delete them, so they keep no request. When the
+    oldest survivor that is neither held nor a tool result is a reply,
+    the nearest user message before it is its request, and the two stay
+    together.
+    """
+    for index in range(cut, len(head)):
+        if index in held or head[index].role == Role.TOOL:
+            continue
+        if head[index].role == Role.USER:
+            return frozenset()
+        for owner in range(index - 1, -1, -1):
+            if head[owner].role == Role.USER:
+                return frozenset({owner})
+        return frozenset()
+    return frozenset()
 
 
 def emergency_fit(

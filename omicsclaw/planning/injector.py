@@ -184,10 +184,10 @@ class PlanInjector:
         ``Role.TOOL`` messages and do not end it. A history with no user
         message is counted whole.
 
-        A compaction that truncates without summarizing can drop the
-        request and leave no summary. That is an emergency truncation, or
-        the fallback the soft and full tiers take when the summarizer
-        fails. The count then reaches back to an older user message.
+        An emergency truncation drops messages without summarizing and
+        can drop the request with them. The count then reaches back to
+        an older user message. The fallback the soft and full tiers take
+        when the summarizer fails keeps the request.
 
         Four conditions, and the first three are all ways of saying "this
         would be noise":

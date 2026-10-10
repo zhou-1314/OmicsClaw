@@ -18,6 +18,7 @@ import pathlib
 import pytest
 
 from omicsclaw.context.budget import ContextBudget
+from omicsclaw.context.summary import COMPACTION_MARKER
 from omicsclaw.context.tokens import estimate_message_tokens, estimate_messages_tokens
 from omicsclaw.context.transcript import (
     MISSING_TOOL_RESULT,
@@ -843,6 +844,64 @@ def test_a_conversation_with_no_system_message_is_split_all_the_same():
 
 # --- fit_to_budget --------------------------------------------------------
 
+_ROOMY = ContextBudget(
+    context_tokens=10_000,
+    reserve_output_tokens=0,
+    reserve_tool_tokens=0,
+    safety_ratio=0.0,
+)
+"""A window no fixture below fills. The tests that use it pass a target."""
+
+
+def _rounds(tag: str, count: int, *, size: int = 400) -> list[Message]:
+    """*count* tool rounds of one call each, with ids ``<tag>0``, ``<tag>1``."""
+    out: list[Message] = []
+    for index in range(count):
+        call = ToolCall(id=f"{tag}{index}", name="bash")
+        out.append(Message.assistant("working", tool_calls=(call,)))
+        out.append(Message.tool(tool_call_id=call.id, content="o" * size))
+    return out
+
+
+def _exchange(tag: str, count: int, *, size: int = 400) -> list[Message]:
+    """A request, *count* tool rounds and a final answer."""
+    return [
+        Message.user(f"request {tag}"),
+        *_rounds(tag, count, size=size),
+        Message.assistant(f"answer {tag}"),
+    ]
+
+
+def _wide(tag: str, width: int, *, size: int = 300) -> list[Message]:
+    """One round of *width* parallel calls, then their results."""
+    calls = tuple(ToolCall(id=f"{tag}{j}", name="bash") for j in range(width))
+    return [
+        Message.assistant(f"{width} at once", tool_calls=calls),
+        *[Message.tool(tool_call_id=c.id, content="o" * size) for c in calls],
+    ]
+
+
+def _summary() -> Message:
+    return Message.user(
+        f"{COMPACTION_MARKER}\n## Anchors\n\n### User Intent\nx\n\n## Summary\n"
+        + "m" * 400
+    )
+
+
+def _plain(message: Message) -> Message:
+    """The same message with a plain string role, as a session row has it."""
+    return dataclasses.replace(message, role=str(message.role.value))
+
+
+def _is_in(message: Message, messages) -> bool:
+    return any(m is message for m in messages)
+
+
+def _fit(messages, target: int, *, pinned: int = 1, min_tail: int = 6):
+    return fit_to_budget(
+        messages, _ROOMY, pinned=pinned, min_tail=min_tail, target_tokens=target
+    )
+
 
 def test_a_history_that_already_fits_is_returned_unchanged():
     messages = [Message.user("short"), *_turn(0, size=4)]
@@ -916,23 +975,28 @@ def test_fit_to_budget_trims_against_an_explicit_target_when_given_one():
     assert trimmed[0] is messages[0]
 
 
-def test_the_oldest_compactible_message_goes_first_and_one_at_a_time():
-    """``compaction.go:117-125``: peel, do not jump to a fixed window.
-
-    The result keeps as much history as the budget allows, so the test
-    asserts both halves — it fits, *and* it did not throw away more than
-    it had to.
-    """
-    messages = [Message.system("sys")]
-    for index in range(8):
-        messages.extend(_turn(index))
-    budget = _budget(900)
+def test_the_oldest_rounds_go_first_and_one_message_at_a_time():
+    """What stays behind the request is the newest end, as much as fits."""
+    request = Message.user("the task")
+    messages = [Message.system("sys"), request, *_rounds("c", 8)]
+    budget = _budget(700)
+    assert estimate_messages_tokens(messages) > budget.usable_tokens, (
+        "the fixture has to need a trim"
+    )
 
     result = fit_to_budget(messages, budget, pinned=1, min_tail=4)
 
     assert estimate_messages_tokens(result) <= budget.usable_tokens
-    assert result[0] is messages[0]
-    assert len(result) > 5, "peeling one at a time keeps more than the tail"
+    assert result[0] is messages[0] and result[1] is request
+    kept = len(result) - 2
+    assert all(a is b for a, b in zip(result[2:], messages[-kept:])), (
+        "what survives behind the request is the newest end of the conversation"
+    )
+    assert kept > 4, "peeling one at a time keeps more than the tail"
+    one_more_round = (*result[:2], *messages[-kept - 2 :])
+    assert estimate_messages_tokens(one_more_round) > budget.usable_tokens, (
+        "and one more round would not have fitted"
+    )
 
 
 def test_a_conversation_with_no_system_message_is_still_compacted():
@@ -951,32 +1015,568 @@ def test_a_conversation_with_no_system_message_is_still_compacted():
     assert estimate_messages_tokens(result) <= budget.usable_tokens
 
 
-def test_peeling_the_head_strands_a_tool_call_and_the_repair_papers_over_it():
-    """The cost of dropping block-aware trimming, made visible.
+def test_a_truncation_never_fabricates_a_tool_result():
+    """A cut between a call and its results leaves orphans, never a placeholder.
 
-    The replaced layer never separated an assistant turn from the tool
-    results answering it. The harness peels first and repairs after, and
-    that is what this layer does: here the 2,000-character tool result
-    is peeled off while the call that asked for it survives, so the
-    output the model had is **gone** and what it sees instead is a
-    placeholder saying so. The old cut would have kept it. This is the
-    accepted price, not an accident.
+    Dropping the call and its first result is enough to fit. The other
+    two results then answer a call that is gone, and the repair deletes
+    them.
     """
+    request = Message.user("the task")
+    parallel = _wide("p", 3, size=800)
+    later = _rounds("c", 4, size=40)
+    messages = [Message.system("sys"), request, *parallel, *later]
+    target = estimate_messages_tokens(messages) - estimate_messages_tokens(
+        parallel[:2]
+    )
+
+    result = _fit(messages, target)
+
+    assert not any(m.content == MISSING_TOOL_RESULT for m in result)
+    assert all(_is_in(m, messages) for m in result), "nothing in the view was invented"
+    assert result == (messages[0], request, *later), (
+        "the orphaned results went with their call"
+    )
+
+
+def test_the_request_in_flight_survives_a_truncation_that_drops_earlier_exchanges():
+    """Three exchanges: the last request is still there after the cut."""
+    request = Message.user("request three")
     messages = [
         Message.system("sys"),
-        Message.assistant("call", tool_calls=(ToolCall(id="c0", name="bash"),)),
-        Message.tool(tool_call_id="c0", content="o" * 2_000),
-        *[Message.user("x" * 200) for _ in range(6)],
+        *_exchange("a", 4),
+        *_exchange("b", 4),
+        request,
+        *_rounds("c", 5),
     ]
-    budget = _budget(400)
 
-    result = fit_to_budget(messages, budget, pinned=1, min_tail=3)
+    result = _fit(messages, int(estimate_messages_tokens(messages) * 0.8))
 
-    assert estimate_messages_tokens(result) <= budget.usable_tokens
-    assert not any("o" * 100 in m.content for m in result), "the output is lost"
-    stand_ins = [m for m in result if m.role is Role.TOOL]
-    assert [m.content for m in stand_ins] == [MISSING_TOOL_RESULT]
-    assert [c.id for m in result for c in m.tool_calls] == ["c0"]
+    assert len(result) < len(messages)
+    assert _is_in(request, result), (
+        "the model must still be able to read what it was asked"
+    )
+
+
+def test_the_request_is_kept_even_when_it_alone_misses_the_target():
+    """A request larger than the target stays, and the result is over the target."""
+    request = Message.user("request " + "q" * 4_000)
+    messages = [Message.system("sys"), request, *_rounds("c", 6, size=40)]
+
+    result = _fit(messages, 500)
+
+    assert result == (messages[0], request, *messages[-6:])
+    assert estimate_messages_tokens(result) > 500, (
+        "over the target, and still the right answer"
+    )
+
+
+def test_a_compaction_summary_survives_a_truncation():
+    """A summary in front of the request stays, directly behind the system message."""
+    summary, request = _summary(), Message.user("request two")
+    messages = [
+        Message.system("sys"),
+        summary,
+        *_rounds("a", 3),
+        Message.assistant("answer one"),
+        request,
+        *_rounds("b", 8),
+    ]
+
+    result = _fit(messages, int(estimate_messages_tokens(messages) * 0.75))
+
+    assert len(result) < len(messages)
+    assert _is_in(summary, result) and _is_in(request, result)
+    assert result[1] is summary
+
+
+def test_an_earlier_request_stays_as_long_as_one_of_its_replies_does():
+    """The oldest exchange goes whole; the next keeps its request and newest rounds.
+
+    The target has room for everything but the first exchange and the
+    first two rounds of the second.
+    """
+    first, second = _exchange("a", 3), _exchange("b", 4)
+    request = Message.user("request three")
+    current = _rounds("c", 4)
+    messages = [Message.system("sys"), *first, *second, request, *current]
+    target = estimate_messages_tokens(messages) - estimate_messages_tokens(
+        (*first, *second[1:5])
+    )
+
+    result = _fit(messages, target)
+
+    assert result == (messages[0], second[0], *second[5:], request, *current), (
+        "the oldest exchange went whole; the next one lost its oldest rounds "
+        "and kept its request"
+    )
+
+
+def test_a_request_stays_while_a_later_call_of_its_exchange_does():
+    """An exchange with no final answer keeps its request while a call is left.
+
+    The target has room for everything but the first call, so the cut
+    stops between that call and its result. The result is an orphan and
+    is deleted; the two rounds behind it keep the request.
+    """
+    unfinished = [Message.user("request one"), *_rounds("a", 3)]
+    request = Message.user("request two")
+    current = _rounds("b", 4)
+    messages = [Message.system("sys"), *unfinished, request, *current]
+    target = estimate_messages_tokens(
+        (messages[0], unfinished[0], *unfinished[2:], request, *current)
+    )
+
+    result = _fit(messages, target)
+
+    assert result == (
+        messages[0],
+        unfinished[0],
+        *unfinished[3:],
+        request,
+        *current,
+    ), "two calls of the first exchange are still there, so its request is"
+
+
+def test_an_earlier_request_goes_with_its_last_reply():
+    """A target with room for the first request alone does not keep it alone."""
+    first, second = _exchange("a", 2), _exchange("b", 2)
+    request = Message.user("request three")
+    current = _rounds("c", 4)
+    messages = [Message.system("sys"), *first, *second, request, *current]
+    without_first = estimate_messages_tokens((messages[0], *second, request, *current))
+    target = without_first + estimate_messages_tokens(first[:1])
+    assert target < without_first + estimate_messages_tokens((first[0], first[-1]))
+
+    result = _fit(messages, target)
+
+    assert result == (messages[0], *second, request, *current), (
+        "a request is not kept once nothing answers it"
+    )
+
+
+def test_every_earlier_request_goes_with_its_last_reply():
+    """The same for an exchange that is not the oldest one.
+
+    The target has room for the second request alone, and not for it
+    together with its answer.
+    """
+    first, second = _exchange("a", 2), _exchange("b", 2)
+    request = Message.user("request three")
+    current = _rounds("c", 4)
+    messages = [Message.system("sys"), *first, *second, request, *current]
+    without_both = estimate_messages_tokens((messages[0], request, *current))
+    target = without_both + estimate_messages_tokens(second[:1])
+    assert target < without_both + estimate_messages_tokens((second[0], second[-1]))
+
+    result = _fit(messages, target)
+
+    assert result == (messages[0], request, *current), (
+        "the second exchange's request left with its answer, as the first one's did"
+    )
+
+
+def test_a_request_nothing_answers_goes_when_its_turn_comes():
+    """A request followed directly by another request is dropped like a reply."""
+    unanswered = Message.user("request one, sent too early")
+    resent = [
+        Message.user("request one, again"),
+        *_rounds("a", 3),
+        Message.assistant("answer one"),
+    ]
+    request = Message.user("request two")
+    current = _rounds("b", 4)
+    messages = [Message.system("sys"), unanswered, *resent, request, *current]
+
+    result = _fit(messages, estimate_messages_tokens(messages) - 1)
+
+    assert result == (messages[0], *resent, request, *current), (
+        "it is the oldest droppable message and has no reply to wait for"
+    )
+    starved = _fit(messages, 10)
+    assert starved == (messages[0], request, *current[-6:]), (
+        "and it is not kept at the floor either"
+    )
+
+
+@pytest.mark.parametrize("spelling", ["enum roles", "plain string roles"])
+def test_a_request_does_not_outlive_its_last_call(spelling):
+    """A tool result whose call is gone keeps no request.
+
+    The earlier exchange ran out of turns and has no answer. The target
+    has room for its last result and not for the call in front of it.
+    """
+    unfinished = [Message.user("request one"), *_rounds("a", 3)]
+    if spelling == "plain string roles":
+        unfinished = [_plain(m) for m in unfinished]
+    request = Message.user("request two")
+    current = _rounds("b", 4)
+    messages = [Message.system("sys"), *unfinished, request, *current]
+    target = estimate_messages_tokens(
+        (messages[0], unfinished[0], unfinished[-1], request, *current)
+    )
+    with_the_call = (messages[0], unfinished[0], *unfinished[-2:], request, *current)
+    assert estimate_messages_tokens(with_the_call) > target
+
+    result = _fit(messages, target)
+
+    assert result == (messages[0], request, *current), (
+        "a result whose call is gone is deleted by the repair, so it keeps no request"
+    )
+
+
+def test_a_request_does_not_stay_behind_half_a_round_of_orphans():
+    """The same when the cut stops between two results of a wide last round."""
+    wide = _wide("w", 4)
+    unfinished = [Message.user("request one"), *_rounds("a", 2), *wide]
+    request = Message.user("request two")
+    current = _rounds("b", 4)
+    messages = [Message.system("sys"), *unfinished, request, *current]
+    target = estimate_messages_tokens(
+        (messages[0], unfinished[0], *wide[3:], request, *current)
+    )
+
+    result = _fit(messages, target)
+
+    assert result == (messages[0], request, *current)
+
+
+def test_a_request_in_front_of_the_tail_does_not_outlive_its_last_call():
+    """The same at the head's end, when the tail opens on the request in flight."""
+    unfinished = [Message.user("request one"), *_rounds("a", 3)]
+    tail = [Message.user("request two"), *_rounds("b", 2), Message.assistant("so far")]
+    messages = [Message.system("sys"), *unfinished, *tail]
+    assert messages[-6:] == tail
+    target = estimate_messages_tokens(
+        (messages[0], unfinished[0], unfinished[-1], *tail)
+    )
+
+    result = _fit(messages, target)
+
+    assert result == (messages[0], *tail)
+
+
+def test_a_wide_parallel_call_keeps_its_results():
+    """Six parallel calls in the newest round: the oldest round goes instead."""
+    earlier = _exchange("a", 4)
+    request = Message.user("request two")
+    wide = _wide("w", 6)
+    messages = [Message.system("sys"), *earlier, request, *_rounds("b", 2), *wide]
+
+    result = _fit(messages, estimate_messages_tokens(messages) - 60)
+
+    assert all(_is_in(m, result) for m in wide), (
+        "the newest round is not the first thing to go"
+    )
+    assert not _is_in(earlier[1], result), "the oldest round is"
+
+
+def test_a_conversation_with_no_user_message_is_still_peeled_one_message_at_a_time():
+    """With no request to keep, the newest end survives and more than the tail."""
+    messages = [Message.system("sys"), *_rounds("c", 10)]
+    budget = _budget(int(estimate_messages_tokens(messages) * 0.7))
+
+    result = fit_to_budget(messages, budget, pinned=1, min_tail=4)
+
+    kept = len(result) - 1
+    assert 4 < kept < len(messages) - 1
+    assert all(a is b for a, b in zip(result[1:], messages[-kept:]))
+
+
+def test_a_head_with_nothing_droppable_is_handed_back_untouched():
+    """A head that is one summary comes back as the input, not as a rebuild.
+
+    The tail carries a result nothing asked for. A rebuild would run
+    the repair and delete it.
+    """
+    summary = _summary()
+    orphan = Message.tool(tool_call_id="never-called", content="x" * 40)
+    messages = [
+        Message.system("sys"),
+        summary,
+        orphan,
+        *_rounds("c", 2),
+        Message.assistant("so far"),
+    ]
+
+    result = _fit(messages, 10)
+
+    assert len(result) == len(messages)
+    assert all(a is b for a, b in zip(result, messages)), "handed back, not rebuilt"
+
+
+def test_a_tail_that_opens_on_a_reply_keeps_the_request_it_answers():
+    """The request in flight is in the tail, and the tail opens on an older answer."""
+    earlier = _exchange("a", 6)
+    messages = [
+        Message.system("sys"),
+        *earlier,
+        Message.user("request two"),
+        *_rounds("b", 2),
+    ]
+    tail = messages[-6:]
+    assert tail[0] is earlier[-1], "the tail opens on the earlier exchange's answer"
+
+    result = _fit(messages, 200)
+
+    assert result == (messages[0], earlier[0], *tail)
+
+
+def test_a_tail_that_opens_on_the_request_in_flight_keeps_no_earlier_request():
+    """When the tail's first message is the request, no older request is kept."""
+    earlier = _exchange("a", 6)
+    request = Message.user("request two")
+    in_flight = [*_wide("x", 2, size=40), *_rounds("b", 1, size=40)]
+    messages = [Message.system("sys"), *earlier, request, *in_flight]
+    assert messages[-6] is request
+
+    result = _fit(messages, 10)
+
+    assert result == (messages[0], request, *in_flight)
+
+
+def test_a_system_message_outside_the_pinned_prefix_is_kept():
+    """With ``pinned=0`` the system message and the request both stay."""
+    request = Message.user("the task")
+    messages = [Message.system("s" * 800), request, *_rounds("c", 8)]
+
+    result = _fit(messages, int(estimate_messages_tokens(messages) * 0.7), pinned=0)
+
+    assert result[0] is messages[0] and result[1] is request
+    kept = len(result) - 2
+    assert 6 < kept < 16
+    assert all(a is b for a, b in zip(result[2:], messages[-kept:]))
+
+
+def test_every_system_message_that_opens_the_head_is_kept():
+    """Two system messages in front and ``pinned=0``: both stay."""
+    request = Message.user("the task")
+    messages = [
+        Message.system("s" * 400),
+        Message.system("t" * 400),
+        request,
+        *_rounds("c", 8),
+    ]
+
+    result = _fit(messages, int(estimate_messages_tokens(messages) * 0.7), pinned=0)
+
+    assert result[0] is messages[0] and result[1] is messages[1], (
+        "both system messages are still in front"
+    )
+    assert result[2] is request
+    kept = len(result) - 3
+    assert 6 < kept < 16
+    assert all(a is b for a, b in zip(result[3:], messages[-kept:]))
+
+
+def test_a_message_that_only_quotes_the_marker_is_dropped_like_any_other():
+    """An assistant message that starts with the marker is not a summary."""
+    request = Message.user("the task")
+    quoting = Message.assistant(
+        f"{COMPACTION_MARKER} is what the compactor writes, the file says"
+    )
+    old, new = _rounds("a", 3), _rounds("b", 6)
+    messages = [Message.system("sys"), request, *old, quoting, *new]
+    target = estimate_messages_tokens(messages) - estimate_messages_tokens(
+        (*old, quoting)
+    )
+
+    result = _fit(messages, target)
+
+    assert result == (messages[0], request, *new)
+
+
+def test_a_request_whose_role_arrives_as_a_plain_string_is_still_a_request():
+    """Requests are recognised when every role is a plain string.
+
+    The earlier request stays with the replies that are left, and the
+    request in flight is not dropped.
+    """
+    earlier = [_plain(m) for m in _exchange("a", 6)]
+    request = _plain(Message.user("request two"))
+    current = _rounds("b", 4)
+    messages = [_plain(Message.system("sys")), *earlier, request, *current]
+    target = estimate_messages_tokens(messages) - estimate_messages_tokens(
+        earlier[1:7]
+    )
+
+    result = _fit(messages, target)
+
+    assert result == (messages[0], earlier[0], *earlier[7:], request, *current), (
+        "the earlier request is recognised and stays with the replies that are left"
+    )
+    starved = _fit(messages, 10)
+    assert starved == (messages[0], request, *current[-6:]), (
+        "and so is the request in flight"
+    )
+
+
+@pytest.mark.parametrize("spelling", ["enum roles", "plain string roles"])
+def test_a_round_the_tail_finishes_is_kept_whole(spelling):
+    """Six results fill the tail and their call ends the head: the call stays."""
+    earlier = _exchange("a", 4)
+    request = Message.user("request two")
+    wide = _wide("w", 6)
+    if spelling == "plain string roles":
+        wide = [_plain(m) for m in wide]
+    messages = [Message.system("sys"), *earlier, request, *_rounds("b", 4), *wide]
+    assert messages[-6:] == wide[1:], (
+        "the six results are the whole tail and their call is the last head message"
+    )
+
+    result = _fit(messages, 10)
+
+    assert result == (messages[0], request, *wide), "the call stays, so its results do"
+    assert not any(m.content == MISSING_TOOL_RESULT for m in result)
+
+
+@pytest.mark.parametrize("spelling", ["enum roles", "plain string roles"])
+def test_the_round_the_tail_finishes_keeps_its_results_in_the_head(spelling):
+    """A round with one result in the head and two in the tail stays whole."""
+    earlier = _exchange("a", 3)
+    request = Message.user("request two")
+    cut = _wide("p", 3, size=1200)
+    if spelling == "plain string roles":
+        cut = [_plain(m) for m in cut]
+    after = _rounds("d", 2)
+    messages = [
+        Message.system("sys"),
+        *earlier,
+        request,
+        *_rounds("b", 2),
+        *cut,
+        *after,
+    ]
+    assert messages[-6] is cut[2], (
+        "one result of the round is in the head, two open the tail"
+    )
+
+    result = _fit(messages, 10)
+
+    assert result == (messages[0], request, *cut, *after)
+    assert all(_is_in(m, messages) for m in result), (
+        "no result of the round was replaced by a placeholder"
+    )
+    assert estimate_messages_tokens(result) > 10, (
+        "over the target, and still the right answer"
+    )
+
+
+def test_only_results_that_answer_the_call_hold_it():
+    """Any result in the run the tail opens on counts, if it answers the call.
+
+    In the first conversation the tail opens on a result nothing asked
+    for and the next two answer the call the head ends on. In the second
+    none of the results the tail opens on answers it.
+    """
+    request = Message.user("the task")
+    stray = Message.tool(tool_call_id="never-called", content="x" * 40)
+    cut = _wide("p", 2)
+    closing = [*_rounds("d", 1), Message.assistant("so far")]
+    messages = [
+        Message.system("sys"),
+        *_exchange("a", 2),
+        request,
+        *_rounds("b", 2),
+        cut[0],
+        stray,
+        *cut[1:],
+        *closing,
+    ]
+    assert messages[-6] is stray
+
+    result = _fit(messages, 10)
+
+    assert result == (messages[0], request, *cut, *closing), (
+        "a stray result in front does not hide the round the tail finishes"
+    )
+
+    unanswered = Message.assistant(
+        "asks and is never answered", tool_calls=(ToolCall(id="u0", name="bash"),)
+    )
+    strays = [
+        Message.tool(tool_call_id=f"never-called-{j}", content="x" * 40)
+        for j in range(2)
+    ]
+    tail = [*strays, *_rounds("e", 2)]
+    messages = [Message.system("sys"), request, *_rounds("b", 3), unanswered, *tail]
+    assert messages[-6:] == tail
+
+    result = _fit(messages, 10)
+
+    assert result == (messages[0], request, *tail[2:]), (
+        "results that answer nothing do not hold the call in front of them"
+    )
+
+
+def test_a_call_further_back_in_the_head_is_not_the_round_the_tail_finishes():
+    """A message between the call and the tail's results breaks the round."""
+    request = Message.user("the task")
+    far = _wide("p", 2)
+    note = Message.assistant("thinking aloud")
+    late = [Message.tool(tool_call_id=f"p{j}", content="x" * 40) for j in range(2)]
+    tail = [*late, *_rounds("e", 2)]
+    messages = [Message.system("sys"), request, *_rounds("b", 2), *far, note, *tail]
+    assert messages[-6:] == tail
+
+    result = _fit(messages, 10)
+
+    assert result == (messages[0], request, *tail[2:]), (
+        "results cut off from their call by another message are orphans; "
+        "they hold nothing"
+    )
+
+
+def test_a_call_id_reused_by_a_later_round_does_not_hold_an_earlier_one():
+    """Every round uses the same call id and the tail opens on a call.
+
+    Some backends number their calls afresh on every turn. A result
+    further into the tail that carries the id answers a later call, so
+    the head's last round is dropped like any other.
+    """
+    request = Message.user("the task")
+    rounds = []
+    for _ in range(8):
+        call = ToolCall(id="call_0", name="bash")
+        rounds.append(Message.assistant("working", tool_calls=(call,)))
+        rounds.append(Message.tool(tool_call_id="call_0", content="o" * 400))
+    messages = [Message.system("sys"), request, *rounds]
+    tail = messages[-6:]
+    assert tail[0].role == Role.ASSISTANT, (
+        "the tail opens on a call, so it finishes no round of the head"
+    )
+
+    result = _fit(messages, 10)
+
+    assert result == (messages[0], request, *tail)
+
+
+def test_the_target_is_checked_before_the_repair():
+    """A placeholder the repair adds is not counted against the target.
+
+    The tail holds a call the input never answered. The target is the
+    size of the view with two rounds dropped, before any placeholder.
+    """
+    request = Message.user("the task")
+    unanswered = Message.assistant(
+        "asks", tool_calls=(ToolCall(id="u0", name="bash"),)
+    )
+    tail = [*_rounds("e", 2), unanswered, Message.assistant("gives up")]
+    messages = [Message.system("sys"), request, *_rounds("b", 4), *tail]
+    assert messages[-6:] == tail
+    kept = (messages[0], request, *messages[6:])
+    target = estimate_messages_tokens(kept)
+
+    result = _fit(messages, target)
+
+    placeholders = [m for m in result if m.content == MISSING_TOOL_RESULT]
+    assert len(placeholders) == 1
+    assert [m for m in result if m.content != MISSING_TOOL_RESULT] == list(kept), (
+        "the candidate that fits before the repair is the one returned"
+    )
+    assert estimate_messages_tokens(result) == target + estimate_messages_tokens(
+        placeholders
+    )
 
 
 # --- emergency_fit --------------------------------------------------------
