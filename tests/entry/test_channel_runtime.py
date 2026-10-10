@@ -782,6 +782,11 @@ WITH_TEXT = {
         {},
         "SECOND ANSWER.",
     ),
+    "text beside a tool call, then an answer": (
+        (saying("Let me look."), Message.assistant("SECOND ANSWER.")),
+        {},
+        "SECOND ANSWER.",
+    ),
     "text beside a tool call, then an empty reply": (
         (saying("Let me look."), Message.assistant("")),
         {},
@@ -862,6 +867,20 @@ def test_an_exchange_delivers_the_last_text_it_wrote(tmp_path, shape):
     transport, _ = run(conversation(tmp_path, provider, 2, **overrides))
 
     assert transport.sent == [FIRST_ANSWER, answer]
+
+
+def test_a_reply_of_only_whitespace_is_sent_as_it_is(tmp_path):
+    """What the pump does today, pinned so that changing it is deliberate.
+
+    Any non-empty content counts as text, so a reply of a blank and a
+    newline is delivered unchanged. Whether such a reply should count as
+    no text has not been decided.
+    """
+    provider = Ending(Message.assistant(FIRST_ANSWER), Message.assistant(" \n"))
+
+    transport, _ = run(conversation(tmp_path, provider, 2))
+
+    assert transport.sent == [FIRST_ANSWER, " \n"]
 
 
 class Halting(Scripted):
