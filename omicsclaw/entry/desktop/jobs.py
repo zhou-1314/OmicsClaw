@@ -160,6 +160,12 @@ def mount_jobs_routes(
                     raise DesktopIngressError("code_required", status_code=422)
                 bag = dict(inputs) if isinstance(inputs, dict) else {}
                 bag["code"] = code
+                # The kernel language rides at the top level with the
+                # code ("python" | "r"); the runner validates the value.
+                language = document.get("language", "python")
+                if language is not None and not isinstance(language, str):
+                    raise DesktopIngressError("invalid_language", status_code=422)
+                bag["language"] = language
                 inputs = bag
             record = await jobs.create_job(
                 kind=kind,

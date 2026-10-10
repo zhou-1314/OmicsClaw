@@ -927,6 +927,13 @@ class CodeRunRunner:
         adata_path = inputs.get("adata_path")
         if adata_path is not None and not isinstance(adata_path, str):
             raise JobError("invalid_adata_path")
+        language = inputs.get("language", "python")
+        if language not in ("python", "r"):
+            raise JobError("invalid_language")
+        if adata_path and language != "python":
+            # The h5ad bridge injects python (sc.read_h5ad); an R cell
+            # cannot consume it — refuse at the door, not mid-flight.
+            raise JobError("adata_bridge_is_python_only")
 
     async def __call__(self, record: JobRecord, ctx: JobExecutionContext) -> Any:
         from omicsclaw.kernel import KernelCallbacks, format_cell_summary
@@ -935,9 +942,13 @@ class CodeRunRunner:
         code = str(record.inputs["code"])
         adata_path = record.inputs.get("adata_path")
         adata_path = adata_path.strip() if isinstance(adata_path, str) else None
+        language = str(record.inputs.get("language", "python"))
         session_id = record.session_id or ("job-" + record.id[:12])
-        ctx.tool_started("python", json.dumps({"code": code[:400]}, ensure_ascii=False))
-        self._protect(manager, session_id, record)
+        ctx.tool_started(
+            "python" if language == "python" else "r",
+            json.dumps({"code": code[:400]}, ensure_ascii=False),
+        )
+        self._protect(manager, session_id, record, language=language)
 
         def _on_stream(name: str, text: str) -> None:
             if name == "stdout" and text:
@@ -957,6 +968,7 @@ class CodeRunRunner:
                 session_id,
                 code,
                 origin="agent",
+                language=language,
                 callbacks=KernelCallbacks(
                     on_stream=_on_stream,
                     on_idle=_on_idle,
@@ -966,7 +978,7 @@ class CodeRunRunner:
                 job_id=record.id,
             )
         finally:
-            self._unprotect(manager, session_id, record)
+            self._unprotect(manager, session_id, record, language=language)
         for ref in result.figures:
             if ref.artifact_id:
                 ctx.emit(
@@ -998,16 +1010,20 @@ class CodeRunRunner:
         await self._scan_artifacts(record, ctx)
         return summary
 
-    def _protect(self, manager: Any, session_id: str, record: JobRecord) -> None:
+    def _protect(
+        self, manager: Any, session_id: str, record: JobRecord, *, language: str = "python"
+    ) -> None:
         """Keep the reaper away while this job owns the session's kernel."""
         try:
-            manager.protect(session_id, "job:" + record.id)
+            manager.protect(session_id, "job:" + record.id, language=language)
         except Exception:  # noqa: BLE001 - protection is best-effort
             _log.exception("kernel protection failed for job %s", record.id)
 
-    def _unprotect(self, manager: Any, session_id: str, record: JobRecord) -> None:
+    def _unprotect(
+        self, manager: Any, session_id: str, record: JobRecord, *, language: str = "python"
+    ) -> None:
         try:
-            manager.unprotect(session_id, "job:" + record.id)
+            manager.unprotect(session_id, "job:" + record.id, language=language)
         except Exception:  # noqa: BLE001
             pass
 

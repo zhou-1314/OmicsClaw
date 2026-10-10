@@ -74,6 +74,7 @@ from omicsclaw.entry.session import (
 )
 from omicsclaw.entry.stream import ObserverCapacityError, TurnObservation
 from omicsclaw.entry.turn import TurnHandle
+from omicsclaw.kernel.session import r_available
 from omicsclaw.memory.artifacts import ArtifactStore
 from omicsclaw.version import __version__, build_identity
 
@@ -385,7 +386,7 @@ def health_payload(app: AgentApp) -> dict[str, Any]:
         "version": __version__,
         "backend_process_epoch": BACKEND_PROCESS_EPOCH,
         "connection_epoch": CONNECTION_EPOCH,
-        "capabilities": dict(DESKTOP_CAPABILITIES),
+        "capabilities": {**DESKTOP_CAPABILITIES, "kernel_r": r_available()},
         "build": dict(build_identity()),
         "provider": app.provider.name,
         "model": effective_model(app),

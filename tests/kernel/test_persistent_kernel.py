@@ -480,3 +480,102 @@ def test_cancel_returns_promptly_when_the_cell_ignores_sigint(workspace):
     assert elapsed < 30.0, elapsed
     assert result.status == "dead", result.status
     assert marker.read_text(encoding="utf-8").count("once") == 1
+
+
+# ---- R over the same channel (P4 acceptance; IRkernel installed) -------------
+
+
+def _requires_r():
+    from omicsclaw.kernel.session import r_available
+
+    return pytest.mark.skipif(not r_available(), reason="IRkernel not installed")
+
+
+@_requires_r()
+def test_r_kernel_runs_cells_through_the_manager(workspace):
+    """The primitive is language-agnostic in production wiring: stdout,
+    a persistent namespace, and the same error shape — through the
+    manager, not a hand-rolled loop."""
+    import asyncio as _asyncio
+
+    async def scenario():
+        manager = make_manager(workspace)
+        try:
+            first = await manager.execute(
+                "r-s1", 'writeLines("hello from R"); x <- 41', language="r", timeout_s=240
+            )
+            second = await manager.execute(
+                "r-s1", "print(x + 1)", language="r", timeout_s=240
+            )
+            third = await manager.execute(
+                "r-s1", "stop('deliberate')", language="r", timeout_s=240
+            )
+            return first, second, third
+        finally:
+            await manager.aclose()
+
+    first, second, third = _asyncio.run(_asyncio.wait_for(scenario(), 300))
+    assert first.status == "ok", first.status
+    assert "hello from R" in first.stdout
+    assert second.status == "ok" and "42" in second.stdout
+    assert third.status == "error", third.status
+    assert "deliberate" in (third.error or {}).get("evalue", "")
+
+
+@_requires_r()
+def test_r_figure_lands_in_figures_with_seeding(workspace):
+    """R plots arrive as display_data image/png, so the capture path and
+    the per-kernel numbering work unchanged for R."""
+    import asyncio as _asyncio
+
+    async def scenario():
+        manager = make_manager(workspace)
+        try:
+            await manager.execute("r-fig", "plot(1:10)", language="r", timeout_s=240)
+            await manager.execute("r-fig", "plot(10:1)", language="r", timeout_s=240)
+        finally:
+            await manager.aclose()
+        return sorted((workspace / "figures").glob("kernel_r-fig_*.png"))
+
+    files = _asyncio.run(_asyncio.wait_for(scenario(), 300))
+    assert len(files) == 2, files
+    assert len({f.name for f in files}) == 2, files
+
+
+@_requires_r()
+def test_python_and_r_are_separate_namespaces_for_one_session(workspace):
+    import asyncio as _asyncio
+
+    async def scenario():
+        manager = make_manager(workspace)
+        try:
+            await manager.execute("mixed", "y <- 1", timeout_s=240)
+            r = await manager.execute("mixed", "print(y)", language="r", timeout_s=240)
+            return r
+        finally:
+            await manager.aclose()
+
+    r = _asyncio.run(_asyncio.wait_for(scenario(), 300))
+    # R cannot see the python variable: same session id, separate kernels.
+    assert r.status == "error", r.status
+
+
+def test_execute_rejects_unknown_language_and_r_adata(workspace):
+    import asyncio as _asyncio
+
+    async def scenario():
+        manager = make_manager(workspace)
+        try:
+            for kwargs in (
+                {"language": "julia"},
+                {"language": "r", "adata_in": "whatever.h5ad"},
+            ):
+                try:
+                    await manager.execute("bad", "pass", **kwargs)
+                except ValueError:
+                    continue
+                raise AssertionError(f"accepted: {kwargs}")
+        finally:
+            await manager.aclose()
+
+    _asyncio.run(_asyncio.wait_for(scenario(), 60))

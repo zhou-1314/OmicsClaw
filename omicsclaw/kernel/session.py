@@ -51,6 +51,7 @@ import signal
 import sys
 import time
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Final
 
@@ -191,6 +192,34 @@ def figure_basename(session_id: str, number: int) -> str:
     return f"kernel_{_session_slug(session_id)}_{number}.png"
 
 
+def _r_spec_manager() -> Any:
+    """The default-dirs spec manager, which is where ``installspec()``
+    put the ``ir`` spec (user or system location). Refused loudly when
+    it is not there, with the enablement steps in the message."""
+    from jupyter_client.kernelspec import KernelSpecManager
+
+    manager = KernelSpecManager()
+    if "ir" not in manager.find_kernel_specs():
+        raise RuntimeError(
+            "language 'r' needs the IRkernel kernelspec; enable it with "
+            "R -e 'install.packages(\"IRkernel\", "
+            "repos=\"https://cloud.r-project.org\")' followed by "
+            "R -e 'IRkernel::installspec()'"
+        )
+    return manager
+
+
+@lru_cache(maxsize=1)
+def r_available() -> bool:
+    """Whether an ``ir`` kernelspec is installed (cached for /health)."""
+    try:
+        from jupyter_client.kernelspec import KernelSpecManager
+
+        return "ir" in KernelSpecManager().find_kernel_specs()
+    except Exception:  # noqa: BLE001 - health must never raise
+        return False
+
+
 class SessionKernel:
     """One persistent ipykernel owned by one session.
 
@@ -208,6 +237,7 @@ class SessionKernel:
         limits: OutputLimits | None = None,
         on_figure: Callable[[Path, str], tuple[str, str]] | None = None,
         startup_timeout: float = 120.0,
+        language: str = "python",
     ) -> None:
         self.session_id = session_id
         self.workspace = Path(workspace)
@@ -215,6 +245,7 @@ class SessionKernel:
         self.limits = limits or OutputLimits()
         self._on_figure = on_figure
         self._startup_timeout = startup_timeout
+        self.language = language
         self._km: Any = None
         self._kc: Any = None
         self._scratch: Path | None = None
@@ -240,7 +271,12 @@ class SessionKernel:
             return False
 
     def start(self) -> None:
-        """Launch the kernel; block until it is ready. Idempotent-refusing."""
+        """Launch the kernel; block until it is ready. Idempotent-refusing.
+
+        ``language="r"`` starts the installed ``ir`` (IRkernel) spec on
+        the same client and the same polling loop — the primitive is
+        language-agnostic; only the process differs.
+        """
         if self._km is not None:
             raise RuntimeError("kernel already started")
         from jupyter_client.kernelspec import KernelSpecManager
@@ -250,47 +286,58 @@ class SessionKernel:
             r"[^0-9A-Za-z_.-]", "-", self.session_id
         )[:48].strip("-") or "session"
         scratch.mkdir(parents=True, exist_ok=True)
-        spec_dir = scratch / "kernels" / KERNEL_NAME
-        spec_dir.mkdir(parents=True, exist_ok=True)
-        (spec_dir / "kernel.json").write_text(
-            json.dumps(
-                {
-                    "argv": [
-                        self.python,
-                        "-m",
-                        "ipykernel_launcher",
-                        "-f",
-                        "{connection_file}",
-                        "--HistoryManager.enabled=False",
-                    ],
-                    "display_name": "OmicsClaw session",
-                    "language": "python",
-                }
-            ),
-            encoding="utf-8",
-        )
-        isolated = {
-            "IPYTHONDIR": str(scratch / "ipython"),
-            "JUPYTER_RUNTIME_DIR": str(scratch / "runtime"),
-            "JUPYTER_DATA_DIR": str(scratch / "data"),
-            "JUPYTER_CONFIG_DIR": str(scratch / "config"),
-        }
-        for folder in isolated.values():
-            Path(folder).mkdir(parents=True, exist_ok=True)
+        # The connection file lives here for both languages; the python
+        # branch used to get it via the isolated JUPYTER_RUNTIME_DIR, the
+        # R branch has no such env, so it is created unconditionally.
+        (scratch / "runtime").mkdir(parents=True, exist_ok=True)
         env = {
             name: value
             for name, value in os.environ.items()
             if name.upper() != "OMICSCLAW_REMOTE_AUTH_TOKEN"
         }
-        env.update(isolated)
-        spec_manager = KernelSpecManager(
-            kernel_dirs=[str(scratch / "kernels")], ensure_native_kernel=False
-        )
-        manager = KernelManager(
-            kernel_name=KERNEL_NAME,
-            kernel_spec_manager=spec_manager,
-            connection_file=str(scratch / "runtime" / "kernel.json"),
-        )
+        if self.language == "r":
+            manager = KernelManager(
+                kernel_name="ir",
+                kernel_spec_manager=_r_spec_manager(),
+                connection_file=str(scratch / "runtime" / "kernel.json"),
+            )
+        else:
+            spec_dir = scratch / "kernels" / KERNEL_NAME
+            spec_dir.mkdir(parents=True, exist_ok=True)
+            (spec_dir / "kernel.json").write_text(
+                json.dumps(
+                    {
+                        "argv": [
+                            self.python,
+                            "-m",
+                            "ipykernel_launcher",
+                            "-f",
+                            "{connection_file}",
+                            "--HistoryManager.enabled=False",
+                        ],
+                        "display_name": "OmicsClaw session",
+                        "language": "python",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            isolated = {
+                "IPYTHONDIR": str(scratch / "ipython"),
+                "JUPYTER_RUNTIME_DIR": str(scratch / "runtime"),
+                "JUPYTER_DATA_DIR": str(scratch / "data"),
+                "JUPYTER_CONFIG_DIR": str(scratch / "config"),
+            }
+            for folder in isolated.values():
+                Path(folder).mkdir(parents=True, exist_ok=True)
+            env.update(isolated)
+            spec_manager = KernelSpecManager(
+                kernel_dirs=[str(scratch / "kernels")], ensure_native_kernel=False
+            )
+            manager = KernelManager(
+                kernel_name=KERNEL_NAME,
+                kernel_spec_manager=spec_manager,
+                connection_file=str(scratch / "runtime" / "kernel.json"),
+            )
         manager.start_kernel(env=env, cwd=str(self.workspace))
         client = manager.client()
         client.start_channels()

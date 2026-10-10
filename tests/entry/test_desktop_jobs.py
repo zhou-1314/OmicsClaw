@@ -692,3 +692,49 @@ def test_code_run_interrupted_is_not_a_success(tmp_path):
         last = frames[-1][1]
         assert last["type"] == "job.done"
         assert last["data"]["status"] == "interrupted"
+
+
+def test_code_run_accepts_language_r(tmp_path):
+    """P4 acceptance over HTTP: an R cell on the same jobs plane, same
+    event vocabulary, same figure tray."""
+    manager, http = code_run_client(tmp_path)
+    with http as client:
+        created = client.post(
+            "/jobs",
+            json={
+                "kind": "code_run",
+                "code": 'writeLines("hello from R"); plot(1:10)',
+                "language": "r",
+                "session_id": "p4-r1",
+            },
+        )
+        job_id = created.json()["job_id"]
+        record = wait_terminal(client, job_id)
+        assert record["status"] == "succeeded", record
+        frames = drain_sse(client, "/jobs/" + job_id + "/events")
+        types = [envelope["type"] for _, envelope in frames]
+        assert "tool_started" in types
+        started = next(e for _, e in frames if e["type"] == "tool_started")
+        assert started["data"]["tool"] == "r"
+        assert any(t == "artifact.created" for t in types), types
+
+
+def test_code_run_refuses_a_bad_language_and_r_with_adata(tmp_path):
+    manager, http = code_run_client(tmp_path)
+    with http as client:
+        for inputs, detail in (
+            ({"kind": "code_run", "code": "1", "language": "julia"}, "invalid_language"),
+            (
+                {
+                    "kind": "code_run",
+                    "code": "1",
+                    "language": "r",
+                    "inputs": {"adata_path": "a.h5ad"},
+                },
+                "adata_bridge_is_python_only",
+            ),
+        ):
+            inputs["kind"] = "code_run"
+            refused = client.post("/jobs", json=inputs)
+            assert refused.status_code == 422, refused.text
+            assert refused.json()["detail"] == detail

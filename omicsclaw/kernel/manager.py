@@ -119,6 +119,7 @@ class SessionState:
     """The manager-side record of one session's kernel."""
 
     session_id: str
+    language: str = "python"
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     kernel: SessionKernel | None = None
     obituary: str = ""
@@ -140,6 +141,7 @@ class SessionState:
     def snapshot(self) -> dict[str, Any]:
         return {
             "session_id": self.session_id,
+            "language": self.language,
             "alive": bool(self.kernel is not None and self.kernel.is_alive()),
             "executing": self.executing,
             "protected": sorted(self.protected),
@@ -170,30 +172,36 @@ class PersistentKernelManager:
         self.cell_timeout_s = float(cell_timeout_s)
         self.python = python
         self.handles = HandleRegistry()
-        self.states: dict[str, SessionState] = {}
+        self.states: dict[tuple[str, str], SessionState] = {}
         self._on_figure = on_figure
         self._reaper = reaper or KernelReaper(self)
         self._reaper_task: asyncio.Task[None] | None = None
 
     # ---- session bookkeeping ----
 
-    def state_for(self, session_id: str) -> SessionState:
-        state = self.states.get(session_id)
+    def state_for(self, session_id: str, *, language: str = "python") -> SessionState:
+        """The state of one session's *language* kernel. A session may
+        hold a python kernel and an R kernel at once — separate
+        namespaces, separate lifecycles, the same session id."""
+        key = (session_id, language)
+        state = self.states.get(key)
         if state is None:
-            state = SessionState(session_id=session_id)
-            self.states[session_id] = state
+            state = SessionState(session_id=session_id, language=language)
+            self.states[key] = state
         return state
 
     def snapshot(self) -> list[dict[str, Any]]:
         return [state.snapshot() for state in self.states.values()]
 
-    def protect(self, session_id: str, reason: str) -> None:
-        """Add *session_id* to the reaper's protection set (e.g. a pending
-        approval). Idempotent per reason."""
-        self.state_for(session_id).protected.add(reason)
+    def protect(self, session_id: str, reason: str, *, language: str = "python") -> None:
+        """Add *session_id*'s kernel to the reaper's protection set (e.g.
+        a pending approval). Idempotent per reason."""
+        self.state_for(session_id, language=language).protected.add(reason)
 
-    def unprotect(self, session_id: str, reason: str) -> None:
-        state = self.states.get(session_id)
+    def unprotect(
+        self, session_id: str, reason: str, *, language: str = "python"
+    ) -> None:
+        state = self.states.get((session_id, language))
         if state is not None:
             state.protected.discard(reason)
 
@@ -205,6 +213,7 @@ class PersistentKernelManager:
         code: str,
         *,
         origin: str = "agent",
+        language: str = "python",
         callbacks: KernelCallbacks | None = None,
         timeout_s: float | None = None,
         adata_in: str | None = None,
@@ -215,13 +224,21 @@ class PersistentKernelManager:
 
         *origin* records who asked (``"agent"`` everywhere this round; the
         ``origin == "user"`` screenshot semantics are a documented TODO).
-        *adata_in* is an optional host h5ad path run through
+        *language* picks the session's kernel for that language —
+        ``"python"`` (the ``python`` tool and the default) or ``"r"``
+        (the installed IRkernel spec; needs ``r_available()``). The two
+        kernels of one session are separate namespaces. *adata_in* is an
+        optional host h5ad path run through
         :meth:`HandleRegistry.sync_in` under the session lock, with the
         resident object additionally bound to *adata_binding* in the cell's
-        namespace — the job face's input contract.
+        namespace — the job face's input contract, python only.
         """
+        if language not in ("python", "r"):
+            raise ValueError(f"unsupported kernel language: {language!r}")
+        if adata_in and language != "python":
+            raise ValueError("the adata h5ad bridge is python-only")
         self._ensure_reaper()
-        state = self.state_for(session_id)
+        state = self.state_for(session_id, language=language)
         async with state.lock:
             state.executing = True
             state.protected.add("executing")
@@ -378,6 +395,7 @@ class PersistentKernelManager:
             python=self.python,
             limits=self.limits,
             on_figure=_on_figure,
+            language=state.language,
         )
         await asyncio.to_thread(kernel.start)
         state.kernel = kernel
@@ -397,10 +415,19 @@ class PersistentKernelManager:
         a handover notice. ``"dead"``/``"idle"`` — there was nothing to
         interrupt, or nothing answered even the tier-4 ``pass`` probe.
         """
-        state = self.state_for(session_id)
-        kernel = state.kernel
-        if kernel is None:
+        # A session may hold one kernel per language; cancel reaches
+        # whichever exists (state_for is deliberately not used — it would
+        # conjure an empty python state for an R-only session).
+        live = [
+            s
+            for s in self.states.values()
+            if s.session_id == session_id and s.kernel is not None
+        ]
+        if not live:
             return "idle"
+        live.sort(key=lambda s: not s.executing)  # an executing kernel first
+        state = live[0]
+        kernel = state.kernel
         await asyncio.to_thread(kernel.interrupt)
         deadline = time.monotonic() + CANCEL_GRACE_S
         while state.executing and time.monotonic() < deadline:
@@ -474,11 +501,16 @@ class PersistentKernelManager:
     async def _recycle_locked(
         self, state: SessionState, *, reason: str, with_summary: bool
     ) -> None:
-        """Planned recycle: summary cell first, then the kill."""
+        """Planned recycle: summary cell first, then the kill. The summary
+        cell is python — an R kernel gets the honest no-summary notice
+        instead of a cell it cannot run."""
         summary: str | None = None
         kernel = state.kernel
-        if with_summary and kernel is not None and await asyncio.to_thread(
-            kernel.is_alive
+        if (
+            with_summary
+            and state.language == "python"
+            and kernel is not None
+            and await asyncio.to_thread(kernel.is_alive)
         ):
             try:
                 outcome = await asyncio.to_thread(
