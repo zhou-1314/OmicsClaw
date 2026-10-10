@@ -1199,3 +1199,42 @@ def test_an_active_telemetry_wraps_the_passed_provider(tmp_path):
         assert _unwrapped_task_runner(app)._provider is app.provider
     finally:
         asyncio.run(app.aclose())
+
+
+# ---- C3: the remote kernel runtime and the python tool's location flag -------
+
+
+def test_remote_off_leaves_the_kernel_binding_the_p4_object(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        assembly, "provider_from_env", lambda provider, model: _ScriptedProvider()
+    )
+    app = build_app(_config(tmp_path))
+    try:
+        # the off contract, at the composition root: no runtime, no
+        # location argument, byte-identical P4 tool surface
+        assert app.kernels.manager.remote_runtime is None
+        python = app.registry.get("python")
+        assert "location" not in python.definition().input_schema["properties"]
+    finally:
+        asyncio.run(app.aclose())
+
+
+def test_remote_on_binds_the_runtime_and_mounts_the_location_flag(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        assembly, "provider_from_env", lambda provider, model: _ScriptedProvider()
+    )
+    app = build_app(_config(tmp_path, remote_execution=True))
+    try:
+        runtime = app.kernels.manager.remote_runtime
+        assert runtime is not None
+        # the one-time consent card is the composition root's own — the
+        # runtime must never hold a default that skips the person
+        assert runtime._consent is assembly._consent_remote_kernel_env
+        python = app.registry.get("python")
+        schema = python.definition().input_schema
+        assert "location" in schema["properties"]
+        assert "remote:" in schema["properties"]["location"]["description"]
+    finally:
+        asyncio.run(app.aclose())

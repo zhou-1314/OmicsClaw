@@ -738,3 +738,59 @@ def test_code_run_refuses_a_bad_language_and_r_with_adata(tmp_path):
             refused = client.post("/jobs", json=inputs)
             assert refused.status_code == 422, refused.text
             assert refused.json()["detail"] == detail
+
+
+# ---- C3: kind="code_run" with a kernel location ------------------------------
+
+
+def test_code_run_refuses_malformed_or_incompatible_locations(tmp_path):
+    manager, http = code_run_client(tmp_path)
+    with http as client:
+        for document, detail in (
+            ({"code": "1", "location": "gpu-lab"}, "invalid_location"),
+            ({"code": "1", "location": "remote:"}, "invalid_location"),
+            ({"code": "1", "location": "remote:two words"}, "invalid_location"),
+            (
+                {"code": "1", "location": "remote:gpu-lab", "language": "r"},
+                "remote_kernels_are_python_only",
+            ),
+            (
+                {
+                    "code": "1",
+                    "location": "remote:gpu-lab",
+                    "inputs": {"adata_path": "a.h5ad"},
+                },
+                "adata_bridge_is_local_only",
+            ),
+        ):
+            document["kind"] = "code_run"
+            refused = client.post("/jobs", json=document)
+            assert refused.status_code == 422, refused.text
+            assert refused.json()["detail"] == detail, document
+
+
+def test_code_run_remote_location_on_a_local_deployment_fails_at_setup(tmp_path):
+    """The route folds the field, the runner validates it, and the
+    manager refuses it — a deployment that never bound a remote kernel
+    runtime must fail the job with the reason rather than run the cell
+    locally (a caller that asked for the remote host and got this
+    process would be worse than an error)."""
+    manager, http = code_run_client(tmp_path)
+    assert manager.kernels.manager.remote_runtime is None  # the off pin
+    with http as client:
+        created = client.post(
+            "/jobs",
+            json={
+                "kind": "code_run",
+                "code": "x = 1",
+                "session_id": "c3-loc",
+                "location": "remote:gpu-lab",
+            },
+        )
+        assert created.status_code == 200, created.text
+        record = wait_terminal(client, created.json()["job_id"])
+        assert record["status"] == "failed"
+        assert "remote kernel locations are not enabled" in record["error"]
+        frames = drain_sse(client, "/jobs/" + created.json()["job_id"] + "/events")
+        failed = frames[-1][1]
+        assert failed["data"]["phase"] == "setup"

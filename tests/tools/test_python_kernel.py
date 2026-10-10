@@ -4,6 +4,11 @@ The tool is a leaf: what it owns is argument validation, the approval
 gate, the session id it reads from the tool context, and the streaming
 hop from the runner's worker thread to the progress channel. The kernel
 itself belongs to ``tests/kernel``; nothing here starts a process.
+
+C3 adds the ``location`` argument's mounting rule: absent unless the
+tool was built ``allow_remote`` (the off contract — the schema is
+byte-identical to P4's), validated when present, and passed through to
+the runner with the host named on the approval card.
 """
 
 from __future__ import annotations
@@ -18,8 +23,11 @@ from omicsclaw.tools.builtin.python_kernel import (
     DEFAULT_TIMEOUT,
     ENGINE_TIMEOUT_MARGIN,
     PYTHON_SCHEMA,
+    TOOL_NAME,
     PythonKernelTool,
+    _DESCRIPTION as PYTHON_SCHEMA_DESCRIPTION,
 )
+from omicsclaw.tools.function_tool import ToolArgumentError
 from omicsclaw.tools.context import (
     ApprovalDecision,
     ApprovalRequest,
@@ -36,13 +44,14 @@ class _RecordingRunner:
         self.outputs: list[str] = []
 
     async def run_python(self, code, *, description, session_id, on_output=None,
-                         timeout_s=None) -> str:
+                         timeout_s=None, location="local") -> str:
         self.calls.append(
             {
                 "code": code,
                 "description": description,
                 "session_id": session_id,
                 "timeout_s": timeout_s,
+                "location": location,
             }
         )
         if on_output is not None:
@@ -70,6 +79,7 @@ def test_the_tool_passes_code_session_and_stream_to_the_runner():
             "description": "",
             "session_id": "tool-s1",
             "timeout_s": None,
+            "location": "local",
         }
     ]
     assert runner.outputs == ["streamed line\n"]
@@ -150,3 +160,82 @@ def test_the_schema_declares_only_the_three_arguments():
     assert set(PYTHON_SCHEMA["properties"]) == {"code", "description", "timeout_secs"}
     assert PYTHON_SCHEMA["required"] == ["code"]
     assert PYTHON_SCHEMA["additionalProperties"] is False
+
+
+# ---- C3: the location argument's mounting rule ------------------------------
+
+
+def test_off_by_default_the_schema_has_no_location_argument():
+    tool = PythonKernelTool(runner=_RecordingRunner())
+    schema = tool.definition().input_schema
+    assert "location" not in schema["properties"]
+    # and the description is the P4 text, byte for byte — the off
+    # contract is not just "no remote tool": nothing prompt-facing moves
+    assert tool.definition().description == PYTHON_SCHEMA_DESCRIPTION
+
+
+def test_allow_remote_mounts_the_location_argument():
+    tool = PythonKernelTool(runner=_RecordingRunner(), allow_remote=True)
+    schema = tool.definition().input_schema
+    assert "location" in schema["properties"]
+    assert "remote:" in schema["properties"]["location"]["description"]
+    assert tool.definition().description.endswith(
+        "environment, with approval)."
+    )
+
+
+def test_a_location_on_an_off_tool_cannot_exist():
+    # additionalProperties: False is what makes the off contract airtight:
+    # a model sending location to a P4-shaped tool is a schema error
+    # before this tool's code ever runs
+    tool = PythonKernelTool(runner=_RecordingRunner())
+    assert tool.definition().input_schema["additionalProperties"] is False
+
+
+def test_a_remote_location_travels_to_the_runner_and_names_the_host():
+    runner = _RecordingRunner()
+    tool = PythonKernelTool(runner=runner, allow_remote=True)
+    approvals: list[ApprovalRequest] = []
+
+    def record(request: ApprovalRequest) -> ApprovalDecision:
+        approvals.append(request)
+        return ApprovalDecision(approved=True, reason="")
+
+    async def scenario() -> str:
+        with use_tool_context(approval=record, values={"session_id": "loc-s1"}):
+            return await tool.execute(json.dumps(
+                {"code": "x = 1", "location": "remote:gpu-lab"}
+            ))
+
+    assert asyncio.run(scenario()) == "ran"
+    assert runner.calls[0]["location"] == "remote:gpu-lab"
+    # the approval card names the host: "on gpu-lab" and "on this
+    # machine" are different decisions for the person clicking
+    assert "gpu-lab" in approvals[0].reason
+
+
+@pytest.mark.parametrize("bad", ["local machine", "remote:", "remote:lab;rm",
+                                 "REMOTE:lab", "remote:-x"])
+def test_a_bad_location_is_a_correctable_argument_error(bad):
+    tool = PythonKernelTool(runner=_RecordingRunner(), allow_remote=True)
+
+    async def scenario():
+        with use_tool_context(approval=_auto_approve, values={"session_id": "s"}):
+            return await tool.execute(
+                json.dumps({"code": "x = 1", "location": bad})
+            )
+
+    with pytest.raises(ToolArgumentError, match="location"):
+        asyncio.run(scenario())
+
+
+def test_local_is_the_default_even_when_the_field_is_mounted():
+    runner = _RecordingRunner()
+    tool = PythonKernelTool(runner=runner, allow_remote=True)
+
+    async def scenario() -> str:
+        with use_tool_context(approval=_auto_approve, values={"session_id": "s"}):
+            return await tool.execute(json.dumps({"code": "x = 1"}))
+
+    asyncio.run(scenario())
+    assert runner.calls[0]["location"] == "local"

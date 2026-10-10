@@ -914,8 +914,9 @@ class SkillApiRunner:
 class CodeRunRunner:
     """``kind="code_run"``: Python on the session's persistent kernel.
 
-    P4's job face. The payload is ``inputs.code`` (folded from the top
-    level by the route) plus an optional ``inputs.adata_path`` naming an
+    P4's job face, C3's location riding beside P4's language. The
+    payload is ``inputs.code`` (folded from the top level by the route)
+    plus an optional ``inputs.adata_path`` naming an
     h5ad on the workspace — the input the handle bridge exists for:
     :meth:`~omicsclaw.kernel.PersistentKernelManager.execute` runs it
     through the revision-gated ``sync_in`` and binds the resident object
@@ -954,10 +955,27 @@ class CodeRunRunner:
         language = inputs.get("language", "python")
         if language not in ("python", "r"):
             raise JobError("invalid_language")
+        location = inputs.get("location", "local")
+        if location is None:
+            location = "local"
+        if not isinstance(location, str):
+            raise JobError("invalid_location")
+        if location != "local" and not (
+            location.startswith("remote:") and valid_host(location[len("remote:"):])
+        ):
+            raise JobError("invalid_location")
+        if location != "local" and language != "python":
+            # Remote kernels are python this round; the language seam
+            # carries an IRkernel remote when that lands.
+            raise JobError("remote_kernels_are_python_only")
         if adata_path and language != "python":
             # The h5ad bridge injects python (sc.read_h5ad); an R cell
             # cannot consume it — refuse at the door, not mid-flight.
             raise JobError("adata_bridge_is_python_only")
+        if adata_path and location != "local":
+            # The bridge reads a file on this machine into the kernel;
+            # with the kernel remote the file is not where it reads.
+            raise JobError("adata_bridge_is_local_only")
 
     async def __call__(self, record: JobRecord, ctx: JobExecutionContext) -> Any:
         from omicsclaw.kernel import KernelCallbacks, format_cell_summary
@@ -967,12 +985,25 @@ class CodeRunRunner:
         adata_path = record.inputs.get("adata_path")
         adata_path = adata_path.strip() if isinstance(adata_path, str) else None
         language = str(record.inputs.get("language", "python"))
+        location = str(record.inputs.get("location") or "local")
+        if location != "local" and getattr(manager, "remote_runtime", None) is None:
+            # The door-check the chat face gets from its schema flag: a
+            # job that asked for a remote kernel on a deployment without
+            # the runtime fails at setup with the reason, not mid-flight
+            # with a manager ValueError the wire cannot phrase.
+            raise JobFailure(
+                "remote kernel locations are not enabled on this"
+                " deployment (no remote kernel runtime bound)",
+                phase="setup",
+            )
         session_id = record.session_id or ("job-" + record.id[:12])
         ctx.tool_started(
             "python" if language == "python" else "r",
-            json.dumps({"code": code[:400]}, ensure_ascii=False),
+            json.dumps(
+                {"code": code[:400], "location": location}, ensure_ascii=False
+            ),
         )
-        self._protect(manager, session_id, record, language=language)
+        self._protect(manager, session_id, record, language=language, location=location)
 
         def _on_stream(name: str, text: str) -> None:
             if name == "stdout" and text:
@@ -993,6 +1024,7 @@ class CodeRunRunner:
                 code,
                 origin="agent",
                 language=language,
+                location=location,
                 callbacks=KernelCallbacks(
                     on_stream=_on_stream,
                     on_idle=_on_idle,
@@ -1002,7 +1034,9 @@ class CodeRunRunner:
                 job_id=record.id,
             )
         finally:
-            self._unprotect(manager, session_id, record, language=language)
+            self._unprotect(
+                manager, session_id, record, language=language, location=location
+            )
         for ref in result.figures:
             if ref.artifact_id:
                 ctx.emit(
@@ -1035,19 +1069,35 @@ class CodeRunRunner:
         return summary
 
     def _protect(
-        self, manager: Any, session_id: str, record: JobRecord, *, language: str = "python"
+        self,
+        manager: Any,
+        session_id: str,
+        record: JobRecord,
+        *,
+        language: str = "python",
+        location: str = "local",
     ) -> None:
         """Keep the reaper away while this job owns the session's kernel."""
         try:
-            manager.protect(session_id, "job:" + record.id, language=language)
+            manager.protect(
+                session_id, "job:" + record.id, language=language, location=location
+            )
         except Exception:  # noqa: BLE001 - protection is best-effort
             _log.exception("kernel protection failed for job %s", record.id)
 
     def _unprotect(
-        self, manager: Any, session_id: str, record: JobRecord, *, language: str = "python"
+        self,
+        manager: Any,
+        session_id: str,
+        record: JobRecord,
+        *,
+        language: str = "python",
+        location: str = "local",
     ) -> None:
         try:
-            manager.unprotect(session_id, "job:" + record.id, language=language)
+            manager.unprotect(
+                session_id, "job:" + record.id, language=language, location=location
+            )
         except Exception:  # noqa: BLE001
             pass
 

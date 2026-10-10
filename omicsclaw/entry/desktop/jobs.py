@@ -180,6 +180,13 @@ def mount_jobs_routes(
                 if language is not None and not isinstance(language, str):
                     raise DesktopIngressError("invalid_language", status_code=422)
                 bag["language"] = language
+                # C3's location rides with it ("local" |
+                # "remote:<ssh alias>"), the same layer the language
+                # chose: one kernel per (session, language, location).
+                location = document.get("location", "local")
+                if location is not None and not isinstance(location, str):
+                    raise DesktopIngressError("invalid_location", status_code=422)
+                bag["location"] = location
                 inputs = bag
             record = await jobs.create_job(
                 kind=kind,
