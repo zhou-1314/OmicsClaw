@@ -120,13 +120,14 @@ from rich.cells import cell_len, set_cell_size
 from rich.text import Text
 
 from omicsclaw.context import CompactionRecord, is_summary_message
+from omicsclaw.engine import StopReason
 from omicsclaw.entry.assembly import AgentApp
 from omicsclaw.entry.display import approval_body_note, inert_line, inert_prose
 from omicsclaw.entry.events import TurnEvent, TurnEventType
 from omicsclaw.entry.question import QUESTION_TIMEOUT_REASON, read_reply
 from omicsclaw.entry.render import TextRenderer
 from omicsclaw.entry.session import Session, SubmissionRefused, new_turn_id
-from omicsclaw.entry.turn import TurnHandle
+from omicsclaw.entry.turn import TurnHandle, TurnOutcome
 from omicsclaw.planning import PLAN_WRITE_TOOL_NAME, PlanItem, PlanStatus
 from omicsclaw.schema import Message, Role
 from omicsclaw.tools.context import (
@@ -554,6 +555,50 @@ def _compaction_verdict(record: CompactionRecord | None) -> str:
         f"({1 - record.compression_ratio:.0%} smaller), "
         f"{record.msgs_before} -> {record.msgs_after} messages."
     )
+
+
+_CUT_OFF_NOTICE = (
+    "The reply was cut off at the output limit and is incomplete. "
+    "Ask for a shorter answer, or for it in parts."
+)
+"""Printed under a reply that the output limit cut off and that held no
+tool call."""
+
+_CUT_OFF_CALLS_NOTICE = (
+    "The reply was cut off at the output limit, so the tool calls in it "
+    "were not run: {names}. Ask for the work in smaller pieces."
+)
+"""Printed when the reply that was cut off held tool calls.
+
+None of them ran, the complete ones included. *names* has one name per
+call, in the order the model wrote them.
+
+Both forms open with the same words, ``The reply was cut off at the
+output limit``. ``oc cli --prompt`` prints this line on standard output
+and still exits 0, so those words are what a script can match. Treat a
+change to them as a change to an interface."""
+
+
+def _cut_off_notice(outcome: TurnOutcome | None) -> str:
+    """The line for an exchange the output limit cut off, or ``""``.
+
+    ``""`` for every other ending: an exchange that finished on its own,
+    one that hit the turn ceiling, and one that was cancelled or failed
+    and so has no outcome.
+
+    Only the reply that was cut decides which form is used. The calls of
+    an earlier model call in the same exchange ran, and are not named. A
+    name is made inert for the terminal, and an empty or blank one is
+    shown as ``?``.
+    """
+    if outcome is None or outcome.result.stop_reason is not StopReason.TRUNCATED:
+        return ""
+    final = outcome.result.final_message
+    calls = final.tool_calls if final is not None else ()
+    if not calls:
+        return _CUT_OFF_NOTICE
+    names = ", ".join(inert_line(call.name).strip() or "?" for call in calls)
+    return _CUT_OFF_CALLS_NOTICE.format(names=names)
 
 
 class Repl:
@@ -1196,6 +1241,9 @@ class Repl:
         what they submit: everything from the first frame onwards —
         rendering, approvals, reaping the questions the exchange outlived
         — is the same for a compaction as for a question.
+
+        A reply the output limit cut off gets one more line under it,
+        from :func:`_cut_off_notice`.
         """
         self._running = handle
         try:
@@ -1209,6 +1257,12 @@ class Repl:
         finally:
             self._running = None
             await self._reap_asking()
+        # Once the cards are taken down: the line of a prompt the exchange
+        # left open would otherwise land between this one and the next prompt.
+        notice = _cut_off_notice(handle.outcome)
+        if notice:
+            # ``Text``, not markup: a tool name may hold square brackets.
+            self._screen.print(Text(notice, style="yellow"))
         return handle
 
     async def _pump(self, handle: TurnHandle) -> None:
