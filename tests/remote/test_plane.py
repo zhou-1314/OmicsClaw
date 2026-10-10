@@ -228,6 +228,38 @@ class TestInputUploads:
         with pytest.raises(RemotePathRefused, match="no workspace"):
             run(bare.submit("hpc1", "x", inputs=(("a", "a"),)))
 
+    def test_an_input_over_the_size_ceiling_is_refused(
+        self, plane, spawner, tmp_path, monkeypatch
+    ):
+        # The ceiling is read at call time from the module, so a test
+        # lowers it instead of writing a gigabyte.
+        monkeypatch.setattr(
+            "omicsclaw.remote.plane.MAX_INPUT_FILE_BYTES", 4
+        )
+        (tmp_path / "big.csv").write_text("12345678")  # 8 bytes
+        with pytest.raises(RemotePathRefused) as caught:
+            run(plane.submit(
+                "hpc1", "x", inputs=(("big.csv", "big.csv"),)
+            ))
+        assert "8 bytes" in str(caught.value)  # the actual size travels
+        assert spawner.calls == []  # refused before any remote side effect
+
+    def test_inputs_over_the_total_ceiling_are_refused(
+        self, plane, spawner, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "omicsclaw.remote.plane.MAX_INPUT_TOTAL_BYTES", 4
+        )
+        (tmp_path / "a.csv").write_text("1234")
+        (tmp_path / "b.csv").write_text("5678")
+        with pytest.raises(RemotePathRefused, match="total"):
+            run(plane.submit(
+                "hpc1",
+                "x",
+                inputs=(("a.csv", "a.csv"), ("b.csv", "b.csv")),
+            ))
+        assert spawner.calls == []
+
 
 class TestFetchDestAnchoring:
     """The review's probe (b): dest resolves inside the workspace."""

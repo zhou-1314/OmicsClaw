@@ -116,6 +116,53 @@ class TestRemoteExec:
         assert "rm -rf /data/junk; echo done" in request.reason
         assert "on h" in request.reason
 
+
+class TestSubmitApprovalTransparency:
+    """The files that will leave the machine appear on the card."""
+
+    def _submit_payload(self, count: int) -> str:
+        import json
+
+        inputs = [
+            {"src": f"data/f{i}.csv", "dst": f"f{i}.csv"} for i in range(count)
+        ]
+        return json.dumps(
+            {
+                "host": "h",
+                "command": "python train.py",
+                "intent": "train on counts",
+                "inputs": inputs,
+            }
+        )
+
+    def test_the_approval_lists_the_files_that_will_travel(self):
+        plane = FakePlane()
+        recorder = _Recorder()
+        with _context(recorder):
+            run(RemoteSubmitTool(plane).execute(self._submit_payload(9)))
+        reason = recorder.approvals[0].reason
+        assert "Files travelling to the host:" in reason
+        assert "data/f0.csv -> f0.csv" in reason
+        assert "data/f7.csv -> f7.csv" in reason
+        assert "data/f8.csv" not in reason  # folded, not listed
+        assert "…and 1 more" in reason
+
+    def test_a_short_list_is_not_folded(self):
+        plane = FakePlane()
+        recorder = _Recorder()
+        with _context(recorder):
+            run(RemoteSubmitTool(plane).execute(self._submit_payload(2)))
+        reason = recorder.approvals[0].reason
+        assert "data/f0.csv -> f0.csv" in reason
+        assert "…and" not in reason
+
+    def test_the_sixty_fifth_input_is_refused(self):
+        with _context(_Recorder()):
+            with pytest.raises(ToolArgumentError, match="64"):
+                run(RemoteSubmitTool(FakePlane()).execute(
+                    self._submit_payload(65)
+                ))
+
     def test_a_declined_approval_runs_nothing(self):
         plane = FakePlane()
         recorder = _Recorder()

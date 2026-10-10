@@ -103,6 +103,15 @@ threshold implies."""
 OUTPUTS_FILE = "_omicsclaw_outputs"
 """Where a submit's declared output names live, inside the workdir."""
 
+MAX_INPUT_FILE_BYTES = 1024 * 1024 * 1024
+"""One input file's ceiling (1 GiB). A submission is a job's inputs, not
+a dataset transfer; anything this size wants a path that was staged on
+the host (or remote:// references) rather than an SFTP put."""
+
+MAX_INPUT_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
+"""Ceiling on all of one submission's inputs together (2 GiB). Bounds
+the batch even when every file individually fits."""
+
 
 class RemoteExecutor:
     """Every SSH conversation with one host.
@@ -554,6 +563,7 @@ class RemotePlaneBinding:
                 "which files may travel"
             )
         pairs: list[tuple[str, str]] = []
+        total_bytes = 0
         for src, dst in inputs:
             root = self._workspace
             candidate = Path(src)
@@ -568,6 +578,22 @@ class RemotePlaneBinding:
                 raise RemotePathRefused(
                     f"input src {src!r} is not a file inside the workspace "
                     f"({local} does not exist or is not a regular file)"
+                )
+            size = local.stat().st_size
+            if size > MAX_INPUT_FILE_BYTES:
+                raise RemotePathRefused(
+                    f"input src {src!r} is {size} bytes, over the "
+                    f"{MAX_INPUT_FILE_BYTES}-byte single-file ceiling; data "
+                    "this size belongs where it already is — reference it "
+                    "remotely or stage it on the host"
+                )
+            total_bytes += size
+            if total_bytes > MAX_INPUT_TOTAL_BYTES:
+                raise RemotePathRefused(
+                    f"the declared inputs total {total_bytes} bytes, over "
+                    f"the {MAX_INPUT_TOTAL_BYTES}-byte ceiling for one "
+                    "submission; send the job to the data instead of the "
+                    "data to the job"
                 )
             if not dst.strip():
                 raise RemotePathRefused(

@@ -101,6 +101,18 @@ DEFAULT_FETCH_MAX_MB = 100.0
 """The fetch threshold, from the plan: results larger than this stay on
 the remote host as a ``remote://`` reference rather than travelling."""
 
+MAX_INPUT_ITEMS = 64
+"""How many input files one ``remote_submit`` may declare. The plane
+enforces a byte ceiling as well (:data:`MAX_INPUT_FILE_BYTES` there);
+this one bounds the batch's *shape* — a model that names a thousand
+files has confused the tool for a dataset transfer."""
+
+INPUTS_SUMMARY_ITEMS = 8
+"""How many ``src -> dst`` lines the approval card lists before folding
+the rest into a count. The card has to be readable by a person deciding
+in seconds; eight lines is what fits that decision, and the fold says
+the rest without hiding that there is a rest."""
+
 SCHEDULERS = ("auto", "slurm", "none")
 
 
@@ -328,20 +340,58 @@ so an offline deployment can refuse the family on a claim rather than a
 hunch."""
 
 
-def _remote_reason(intent: str, host: str, command: str, timeout: float) -> str:
+def _inputs_summary(inputs: tuple[tuple[str, str], ...]) -> str:
+    """The files a submit will carry out, as the approval card shows them.
+
+    One ``src -> dst`` line each, at most :data:`INPUTS_SUMMARY_ITEMS`
+    of them, the rest folded into a count — a person approving in
+    seconds sees what leaves the machine without reading a directory
+    listing. The whole block is clamped to :data:`MAX_OUTPUT_CHARS`
+    with the head kept: the first lines are the file names, which is
+    the part worth reading, and a cut tail loses only the fold count.
+    """
+    if not inputs:
+        return ""
+    lines = [
+        f"  {src} -> {dst}" for src, dst in inputs[:INPUTS_SUMMARY_ITEMS]
+    ]
+    hidden = len(inputs) - INPUTS_SUMMARY_ITEMS
+    if hidden > 0:
+        lines.append(f"  …and {hidden} more")
+    block = "Files travelling to the host:\n" + "\n".join(lines)
+    if len(block) > MAX_OUTPUT_CHARS:
+        block = block[: MAX_OUTPUT_CHARS - 1] + "…"
+    return block
+
+
+def _remote_reason(
+    intent: str,
+    host: str,
+    command: str,
+    timeout: float,
+    *,
+    inputs: tuple[tuple[str, str], ...] = (),
+) -> str:
     """What the human is told they are approving.
 
     The **whole** command, the host by name, and the model's own
     ``intent`` title — the three things a person needs to decide, and
-    the reason ``intent`` exists as an argument at all.
+    the reason ``intent`` exists as an argument at all. A submit adds
+    the fourth: the files that will leave this machine, because "run a
+    command" and "run a command and ship my data there" are different
+    decisions even when the command is identical.
     """
     title = intent.strip() or "unnamed remote command"
-    return (
+    reason = (
         f"{title}: run a shell command over SSH on {host}, with a "
         f"{timeout:g}s limit, as the remote user with their credentials. "
         "It can read, change or delete anything that user can reach there:\n"
         f"{command}"
     )
+    summary = _inputs_summary(inputs)
+    if summary:
+        reason += "\n" + summary
+    return reason
 
 
 # ---- remote_exec -----------------------------------------------------------
@@ -517,6 +567,12 @@ class RemoteSubmitTool:
                 "names a file inside the workspace, dst names where it "
                 "lands inside the job's work directory"
             )
+        if len(raw_inputs) > MAX_INPUT_ITEMS:
+            raise ToolArgumentError(
+                f"input.inputs names at most {MAX_INPUT_ITEMS} files "
+                f"({len(raw_inputs)} given); stage a directory or an "
+                "archive instead of listing a dataset file by file"
+            )
         inputs = tuple(
             (str(item["src"]), str(item["dst"])) for item in raw_inputs
         )
@@ -535,7 +591,9 @@ class RemoteSubmitTool:
             self.name,
             arguments,
             policy=self.policy,
-            reason=_remote_reason(intent, host, command, timeout),
+            reason=_remote_reason(
+                intent, host, command, timeout, inputs=inputs
+            ),
             reason_shows_call=True,
         )
         outcome = await self._plane.submit(
@@ -579,6 +637,7 @@ REMOTE_SUBMIT_SCHEMA: dict[str, Any] = {
         },
         "inputs": {
             "type": "array",
+            "maxItems": MAX_INPUT_ITEMS,
             "items": {
                 "type": "object",
                 "properties": {
@@ -604,7 +663,9 @@ REMOTE_SUBMIT_SCHEMA: dict[str, Any] = {
             "description": (
                 "Workspace files to upload into the job's work directory "
                 "before it starts, as {src, dst} pairs: src inside the "
-                "workspace, dst inside the work directory."
+                "workspace, dst inside the work directory. At most "
+                f"{MAX_INPUT_ITEMS} files; a directory or archive is the "
+                "shape for anything bigger."
             ),
         },
         "outputs": {
