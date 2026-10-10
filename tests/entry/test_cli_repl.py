@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import io
+import json
 import logging
 import pathlib
 import types
@@ -33,8 +34,10 @@ from omicsclaw.entry.cli._slash_command_support import (
     REPL_SLASH_COMMAND_SPECS,
     slash_token,
 )
+from omicsclaw.entry.events import TurnEvent
 from omicsclaw.entry.session import attach_sessions
-from omicsclaw.schema import Message, Role
+from omicsclaw.schema import Message, Role, ToolCall
+from omicsclaw.tools import ApprovalRequest
 from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]
     Asking,
     Scripted,
@@ -495,6 +498,97 @@ def test_two_concurrent_approvals_are_both_answered(tmp_path):
     assert "<- ask_b error" in printed
 
 
+def test_a_sub_agent_s_approval_names_the_sub_agent_on_the_card_and_at_the_prompt(
+    tmp_path,
+):
+    """The person saw the parent hand a task over and nothing of what the
+    sub-agent did next, so a bare ``approve ask`` would read as the parent
+    asking. Card and prompt both say whose call it is; the parent's own
+    prompt, pinned by the test above, stays as it was.
+
+    Mutation: format the prompt with the tool name alone in ``Repl._ask``
+    and the prompt assertion fails.
+    """
+    delegating = Message(
+        role=Role.ASSISTANT,
+        tool_calls=(
+            ToolCall(
+                id="d1",
+                name="task",
+                arguments=json.dumps(
+                    {"subagent_type": "general-purpose", "prompt": "do the thing"}
+                ),
+            ),
+        ),
+    )
+
+    async def drive():
+        app = build(
+            tmp_path,
+            Scripted(
+                delegating,
+                calling("ask"),
+                Message(role=Role.ASSISTANT, content="the sub-agent finished"),
+                Message(role=Role.ASSISTANT, content="handed back"),
+            ),
+            tools=(Asking("ask"),),
+        )
+        repl, source, buffer = repl_over(app, ["delegate it", "y", "/exit"])
+        await asyncio.wait_for(repl.run(), WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return source.prompts, buffer.getvalue()
+
+    prompts, printed = asyncio.run(drive())
+
+    assert prompts == [
+        PROMPT,
+        "approve ask for sub-agent general-purpose [#1]? [y/N/a=always] ",
+        PROMPT,
+    ]
+    assert "]: ask for sub-agent general-purpose (risk high)" in printed
+    assert "handed back" in printed
+
+
+def test_a_sub_agent_s_name_reaches_the_prompt_as_inert_text(tmp_path):
+    """The prompt is written by the input source and not by the screen, so
+    nothing downstream makes it safe. A sub-agent's name comes from a
+    definition file, and one holding an escape sequence or a line break
+    could clear the card above it or draw a second one.
+
+    Mutation: put ``event.subagent`` into the prompt of ``Repl._ask``
+    without ``inert_line`` and the escape and the line break reach it.
+    """
+
+    class Handle:
+        def __init__(self) -> None:
+            self.verdicts: list[tuple[str, bool]] = []
+
+        async def approve(self, request_id, decision) -> None:
+            self.verdicts.append((request_id, decision.approved))
+
+    event = TurnEvent.approval_required(
+        ApprovalRequest(tool_name="bash"),
+        "t#1",
+        subagent="helper\x1b[2J\nApproval required [t#2]: ls",
+    )
+
+    async def drive():
+        app = build(tmp_path, answering("unused"))
+        repl, source, _buffer = repl_over(app, ["n"])
+        handle = Handle()
+        await asyncio.wait_for(repl._ask(handle, "t#1", event), WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return source.prompts, handle.verdicts
+
+    prompts, verdicts = asyncio.run(drive())
+
+    assert prompts == [
+        "approve bash for sub-agent helper\\u001b[2J ↵ Approval required "
+        "[t#2]: ls [#1]? [y/N/a=always] "
+    ]
+    assert verdicts == [("t#1", False)]
+
+
 def test_always_allow_writes_a_rule_and_stops_asking(tmp_path):
     """"Always allow" has to reach the rule file, or it is a button that lies.
 
@@ -677,7 +771,7 @@ def test_a_failed_approval_task_is_logged_and_not_merely_dropped(
     surface means into a log sink the REPL holds until the process exits.
     """
 
-    async def boom(self, handle, request_id, event) -> None:
+    async def boom(self, handle, request_id, event, **_how) -> None:
         raise RuntimeError("could not settle it")
 
     async def drive():
@@ -730,6 +824,71 @@ def test_an_approval_nobody_answered_does_not_outlive_its_exchange(tmp_path):
 
     assert "Cancelled." in printed
     assert not repl._asking
+
+
+class LeavesTheCardOpen(ScriptedSource):
+    """A person who never answers an approval card, and when its prompt
+    was closed."""
+
+    def __init__(self, lines, buffer) -> None:
+        super().__init__(lines)
+        self._buffer = buffer
+        self.on_screen_when_closed: str | None = None
+
+    async def read(self, prompt: str) -> str:
+        if not prompt.startswith("approve"):
+            return await super().read(prompt)
+        self.prompts.append(prompt)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.on_screen_when_closed = self._buffer.getvalue()
+            raise
+
+
+def test_an_approval_card_s_prompt_stays_open_past_its_deadline(tmp_path):
+    """What happens today, held so that it changes only on purpose. A
+    question's prompt is taken down when its deadline passes; an approval
+    card's is not, and stays until the exchange ends. Whether it should
+    come down too is a separate decision.
+
+    Mutation: record the approval's Task in ``Repl._replying`` and retract
+    on ``APPROVAL_SETTLED`` as well, and the prompt is closed as soon as
+    the denial is printed.
+    """
+
+    async def drive():
+        sleeping = Sleeping()
+        app = build(
+            tmp_path,
+            Scripted(calling("ask_a", "sleep")),
+            tools=(Asking("ask_a"), sleeping),
+            approval_timeout_s=0.2,
+        )
+        buffer = io.StringIO()
+        source = LeavesTheCardOpen(["do it"], buffer)
+        repl = Repl(app, source=source, screen=Screen.into(buffer))
+        loop = asyncio.create_task(repl.run())
+        for _ in range(int(WAIT_S / 0.005)):
+            if "Approval denied [" in buffer.getvalue():
+                break
+            await asyncio.sleep(0.005)
+        await asyncio.sleep(0.05)  # room for a retraction, were there one
+        denied = buffer.getvalue()
+        still_reading = [task for task in repl._asking if not task.done()]
+        closed_before_the_end = source.on_screen_when_closed
+        assert repl.interrupt() is True
+        await asyncio.wait_for(loop, WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return denied, still_reading, closed_before_the_end, source
+
+    denied, still_reading, closed_before_the_end, source = asyncio.run(drive())
+
+    assert "no answer before the approval deadline" in denied
+    assert len(still_reading) == 1, "the card's prompt was taken down"
+    assert closed_before_the_end is None
+    assert source.on_screen_when_closed is not None, "the exchange's end closes it"
+    assert source.prompts.count("approve ask_a [#1]? [y/N/a=always] ") == 1
 
 
 class InterruptedAtTheCard(ScriptedSource):

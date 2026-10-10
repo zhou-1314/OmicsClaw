@@ -110,6 +110,11 @@ exists so plan 0028 §5's "must have a one-for-one replacement" is true
 rather than aspirational. It is deliberately untyped: this layer must not
 learn what a ``surface`` is.
 
+**A third channel carries a question to the person.**
+:attr:`ToolContext.question` is bound the way the approval channel is and
+read by :func:`ask_question`, which raises :exc:`QuestionUnavailable` when
+none is bound.
+
 **A human's thinking time is no longer charged to the tool's timeout.**
 ``engine/executor.py::_execute`` wraps ``executor.execute(call)`` in
 ``asyncio.timeout(config.tool_timeout)`` — sixty seconds by default —
@@ -155,6 +160,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
+from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, TypeAlias
 
@@ -252,6 +258,72 @@ is one ``lambda``.
 ProgressSink = Callable[[ProgressUpdate], Any]
 """What a surface binds so tools can report progress. May be async."""
 
+
+class QuestionUnavailable(RuntimeError):
+    """A tool had a question for the person and no channel to put it through.
+
+    Raised by :func:`ask_question`; the registry reports it to the model as
+    an ``is_error`` Observation.
+    """
+
+
+class AnswerStatus(StrEnum):
+    """How a question to the person ended."""
+
+    ANSWERED = "answered"
+    """The person replied."""
+
+    DECLINED = "declined"
+    """The person saw the question and chose not to answer it."""
+
+    NO_ANSWER = "no_answer"
+    """Nobody replied: the deadline passed, the exchange ended, or the
+    question could not be put. :attr:`QuestionAnswer.reason` says which."""
+
+
+@dataclass(frozen=True, slots=True)
+class QuestionOption:
+    """One answer a question offers."""
+
+    label: str
+    """The answer itself, short enough to read in a list."""
+    description: str = ""
+    """What choosing it means, where the label does not say."""
+
+
+@dataclass(frozen=True, slots=True)
+class QuestionRequest:
+    """One question for the person, as the channel is given it."""
+
+    question: str
+    options: tuple[QuestionOption, ...] = ()
+    """Answers to choose among. Empty for an open question; the person may
+    answer in their own words either way."""
+    multi_select: bool = False
+    """Whether more than one option may be chosen."""
+
+
+@dataclass(frozen=True, slots=True)
+class QuestionAnswer:
+    """The channel's answer to a :class:`QuestionRequest`."""
+
+    status: AnswerStatus
+    reply: str = ""
+    """What the person typed, as they typed it."""
+    selected: tuple[str, ...] = ()
+    """The labels of the options the reply chose, as the surface read it.
+    Empty when the reply was in the person's own words."""
+    reason: str = ""
+    """Why there is no answer, on :attr:`AnswerStatus.NO_ANSWER`."""
+
+
+QuestionChannel = Callable[[QuestionRequest], Any]
+"""What a surface binds so a tool can ask the person a question.
+
+Returns a :class:`QuestionAnswer`, directly or as an awaitable. ``None`` is
+read as no answer.
+"""
+
 _EMPTY_VALUES: Mapping[str, Any] = MappingProxyType({})
 
 
@@ -280,6 +352,10 @@ class ToolContext:
     **Always a read-only view over a private copy**, whichever way the
     context was bound — see :meth:`__post_init__`.
     """
+
+    question: QuestionChannel | None = None
+    """Where :func:`ask_question` puts a question to the person. ``None``
+    means nobody can be asked."""
 
     def __post_init__(self) -> None:
         """Copy :attr:`values` and seal it, here rather than at one binder.
@@ -345,6 +421,7 @@ def use_tool_context(
     approval: ApprovalChannel | None = None,
     progress: ProgressSink | None = None,
     values: Mapping[str, Any] | None = None,
+    question: QuestionChannel | None = None,
 ) -> Iterator[ToolContext]:
     """Bind a context for the duration of a block, then restore it.
 
@@ -359,6 +436,9 @@ def use_tool_context(
         with use_tool_context(approval=outer.approval, values=extra):
             ...
 
+    *question* follows the same rule: left out, the block has no question
+    channel, whatever the outer context had.
+
     Restores on the way out however the block ends, so an exception
     escaping a turn cannot leave a stale channel bound to a pooled Task.
     """
@@ -366,6 +446,7 @@ def use_tool_context(
         approval=approval,
         progress=progress,
         values=values if values is not None else _EMPTY_VALUES,
+        question=question,
     )
     token = _CONTEXT.set(context)
     try:
@@ -718,6 +799,47 @@ def _as_decision(outcome: Any) -> ApprovalDecision:
     )
 
 
+async def ask_question(request: QuestionRequest) -> QuestionAnswer:
+    """Put *request* to the bound question channel and return its answer.
+
+    The wait runs inside :func:`pause_tool_timeout`, so the time the person
+    takes is not charged to the tool's timeout. The pause does not bound
+    the wait: the channel owns its deadline and answers
+    :attr:`AnswerStatus.NO_ANSWER` when it passes.
+
+    Args:
+        request: The question to ask.
+
+    Returns:
+        The channel's answer. A channel that returns ``None`` is read as
+        :attr:`AnswerStatus.NO_ANSWER`.
+
+    Raises:
+        QuestionUnavailable: No question channel is bound.
+        TypeError: The channel returned something other than a
+            :class:`QuestionAnswer` or ``None``.
+    """
+    channel = current_context().question
+    if channel is None:
+        raise QuestionUnavailable("nobody can be asked in this session")
+
+    with pause_tool_timeout():
+        outcome = channel(request)
+        if inspect.isawaitable(outcome):
+            outcome = await outcome
+
+    if isinstance(outcome, QuestionAnswer):
+        return outcome
+    if outcome is None:
+        return QuestionAnswer(
+            AnswerStatus.NO_ANSWER, reason="the question channel returned no answer"
+        )
+    raise TypeError(
+        "a question channel must return QuestionAnswer or None; "
+        f"got {type(outcome).__name__}"
+    )
+
+
 UsageSink: TypeAlias = Callable[[Any], Any]
 """Receives the token usage of model calls made on a caller's behalf. May be async."""
 
@@ -764,6 +886,7 @@ async def report_usage(usage: Any) -> bool:
 
 
 __all__ = [
+    "AnswerStatus",
     "ApprovalChannel",
     "ApprovalDecision",
     "ApprovalDenied",
@@ -771,9 +894,15 @@ __all__ = [
     "ApprovalUnavailable",
     "ProgressSink",
     "ProgressUpdate",
+    "QuestionAnswer",
+    "QuestionChannel",
+    "QuestionOption",
+    "QuestionRequest",
+    "QuestionUnavailable",
     "TimeoutPause",
     "ToolContext",
     "UsageSink",
+    "ask_question",
     "context_value",
     "current_context",
     "effective_policy",

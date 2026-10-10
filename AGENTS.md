@@ -582,8 +582,85 @@ oc cli --session <id>           # continue a stored conversation
 
 `oc cli --help` lists the REPL's own flags. The deployment flags (provider,
 model, workspace, `--permission-mode`, `--skills-index`, `--memory`,
-`--subagents`) are read by `omicsclaw.entry.resolve_app_config`; run it with
-an unknown one to see the list it refuses.
+`--subagents`, `--ask-user`) are read by `omicsclaw.entry.resolve_app_config`;
+run it with an unknown one to see the list it refuses.
+
+The `ask_user` tool lets the agent stop and put one question to the person.
+The REPL prints a card, `Question [<id>]: …` with numbered options, and reads
+one line at `answer [#n]> `: an option number (several, separated by commas,
+when the card allows it), an option's label, or anything in the person's own
+words. A line that starts with `/` is an answer there and runs no command;
+`y`, `s` and `a` typed at that prompt grant nothing. An empty line skips the
+question and Ctrl-C cancels the exchange. Answers go into
+`~/.config/omicsclaw/history` like every other line typed. Only the REPL at a
+terminal asks: `--prompt` / `--prompt-file`, piped stdin, `oc desktop` and
+`oc channel` run without the tool (`surface_config` in `launch/_surfaces.py`),
+and sub-agents never get it. `--ask-user false` or `OMICSCLAW_ASK_USER=false`
+removes it. Set that for a session started under `/auto` and left alone: a
+question has no deadline unless `--approval-timeout` sets one, so the exchange
+stops at the first one asked. With a deadline set, a question nobody answers
+is settled as `no_answer` when it passes and its prompt is taken down:
+`No answer [<id>]` starts on a line of its own, and a reply typed after that
+is no longer this question's.
+
+A card, approval or question, takes only what is typed after its prompt
+opens. Input typed earlier is discarded when the prompt opens: a `y` typed
+while a tool was still running, a reply typed after a question's prompt was
+taken down and before the next card is up, or a second line typed at one card
+before the next card's prompt is up. The card then prints
+`input typed before this prompt was discarded` above its prompt and waits.
+With `prompt_toolkit`, a line left half typed is discarded whole: the card
+prints a second notice, and what is typed at it up to the next Enter is
+thrown away as well, so `ye` before the card and `s`, Enter at it grant
+nothing. Half a word typed at a question's prompt that its deadline then took
+down is such a line, and the next card to open treats it the same way. A
+report the terminal sends by itself, a focus change for one, is not a line
+begun. Without `prompt_toolkit`, the line reader that `oc cli` falls back
+to drops the half line without a notice and cannot tell that there was one.
+The `s`, Enter typed at the card is then its answer, and at an approval card
+`s` allows the tool for the rest of the conversation. That reader also needs
+`termios` to drop anything.
+
+The rule goes by when a key was pressed. Whatever is typed once a card is
+open answers it, whether or not the person had looked at the screen. For
+that reason a call that needs approval is refused, with nobody asked, when it
+follows in the same model message a question whose deadline passed: its card
+would open as the question's prompt came down, and a `yes` typed a moment
+late for the question would approve it. The model reads
+`nobody was asked, because the question earlier in the same message got no answer; …`
+in the tool's result and may make the call again in a later message, where
+the card opens as usual. A card after a question that was answered or
+skipped opens as before, and so does a sub-agent's. A call that opens no
+prompt is unaffected: one that needs no approval, one the mode or a rule
+allows, and a tool already allowed with `s`. One case stays open on both
+input sources: a `yes` typed some seconds after `No answer`, once a later
+message's card is already up. Half a word typed at the question's own prompt
+before its deadline, whose other half is then typed at such a card, is caught
+with `prompt_toolkit` and stays open without it.
+
+An approval card keeps its prompt on the screen after its own deadline has
+passed, until one line is read there or the exchange ends. A later card is
+printed meanwhile, and its prompt opens only once that line has been read, so
+a line typed at the sight of the later card goes to the earlier prompt. That
+line allows nothing: the request is settled already, `s` records no grant,
+`a` writes no rule, and the REPL prints
+`<tool> [#n] was already settled: this line changed nothing.` before the later
+card's prompt opens. `/auto` typed there is a command and still switches the
+mode. It settles neither the card past its deadline nor a later card already
+printed, which is still answered at its own prompt. At a card that is always
+asked about, `/auto` is not the last line read: that card's legend is printed
+again and its prompt comes back, after the prompt of any card already waiting
+for the terminal. The line read there next gets the same notice. Meanwhile the
+old card's legend sits right above the later card's prompt, and it says
+`y or s = allow it once`, while `s` at an ordinary later card allows the whole
+tool.
+
+The REPL's own `❯` prompt is not a card: a line typed early or late with no
+card open is read there and sent as the next message. Piped input
+(`oc cli < script.txt`) has no earlier and later, so its lines answer
+approval cards in the order they were written. A pseudo-terminal is a
+terminal: a script that drives `oc cli` through one and writes an answer
+before the card's prompt is up has that answer discarded, and the card waits.
 
 `--permission-mode read-only` turns delegation off as a side effect, and
 that is user-visible rather than internal: `task` cannot honestly declare

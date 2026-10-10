@@ -229,7 +229,11 @@ class AppConfig:
     ``None`` suits a CLI, where a person is present and a prompt can sit.
     A channel surface **must** set a number: plan 0031 Q12, and
     ``omicsclaw/tools/context.py``'s own note that "a surface that asks a
-    human still owes a deadline". Expiry denies — fail closed."""
+    human still owes a deadline". Expiry denies — fail closed.
+
+    The same deadline applies to a question asked through ``ask_user``. A
+    question that expires is answered ``no_answer``, and the rest of that
+    exchange asks no more."""
 
     turn_timeout_s: float | None = None
     """Wall clock for one exchange, independent of per-tool ceilings.
@@ -292,6 +296,22 @@ class AppConfig:
 
     On by default. Off is a deployment that wants every tool call to
     happen in the one conversation a person is watching."""
+
+    ask_user: bool = True
+    """Whether the agent may put a question to the person mid-exchange.
+
+    One switch: it mounts or unmounts the ``ask_user`` tool, and decides
+    whether an exchange binds the question channel that tool asks through.
+    A deployment that passes its own ``tools`` mounts what it passes.
+
+    On by default, and in effect only where a person can answer. Of the
+    entry points of :mod:`omicsclaw.launch`, the terminal REPL keeps it;
+    one exchange from a prompt, a piped standard input, Desktop and
+    Channel run with it off whatever is set here. An app assembled
+    directly with this on must answer ``QUESTION_ASKED`` frames through
+    :meth:`~omicsclaw.entry.turn.TurnHandle.answer`, or set
+    :attr:`approval_timeout_s`: without either, a question waits until the
+    exchange ends."""
 
     memory: bool = True
     """Whether this deployment remembers anything across sessions.
@@ -862,6 +882,7 @@ _OPTIONS: tuple[_Option, ...] = (
         _as_int,
     ),
     _Option("subagents", "--subagents", ("OMICSCLAW_SUBAGENTS",), _as_bool),
+    _Option("ask_user", "--ask-user", ("OMICSCLAW_ASK_USER",), _as_bool),
     _Option("skill_env", "--skill-env", ("OMICSCLAW_SKILL_ENV",), _as_skill_env),
     _Option("skill_env_dir", "--skill-env-dir", ("OMICSCLAW_SKILL_ENV_DIR",), _as_optional_path),
     _Option(

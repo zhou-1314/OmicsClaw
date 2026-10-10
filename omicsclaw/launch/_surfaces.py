@@ -49,6 +49,7 @@ the only thing a supervisor can read. The CLI uses the same class for
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import os
 import signal
@@ -56,9 +57,10 @@ import stat
 import sys
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Literal, Mapping, Sequence, get_args
 
 from omicsclaw.entry import (
+    AppConfig,
     AppConfigError,
     attach_sessions,
     fields_set_by_argv,
@@ -76,6 +78,7 @@ from omicsclaw.entry.cli import (
     CLI_PERMISSION_MODE_VARIABLE,
     Repl,
     Screen,
+    is_interactive,
     missing_credential_hint,
     open_prompt_source,
     run_configuration_wizard,
@@ -395,6 +398,57 @@ class MissingSurfaceDependency(RuntimeError):
     """
 
 
+# ---- what each entry point runs a configuration as ------------------------
+
+
+SurfaceName = Literal["repl", "once", "piped", "desktop", "channel"]
+"""The entry points a configuration can be run by.
+
+``repl`` is ``oc cli`` at a terminal, ``once`` is ``oc cli`` given a
+prompt or a prompt file, and ``piped`` is ``oc cli`` reading something
+other than a terminal. ``desktop`` and ``channel`` are the other two
+commands.
+"""
+
+_ASKING_SURFACES: frozenset[str] = frozenset({"repl"})
+"""Entry points that show a question to a person and read the answer back."""
+
+
+def surface_config(config: AppConfig, surface: SurfaceName) -> AppConfig:
+    """*config* as the entry point *surface* runs it.
+
+    The one place a resolved configuration is changed because of which
+    entry point is about to run it. ``ask_user`` is switched off unless
+    *surface* is in :data:`_ASKING_SURFACES`, and an INFO record says so
+    whenever that changes the value. No flag and no environment variable
+    is read.
+
+    Args:
+        config: What :func:`~omicsclaw.entry.resolve_app_config` returned.
+        surface: The entry point about to run it.
+
+    Returns:
+        *config* itself when nothing had to change, a changed copy
+        otherwise.
+
+    Raises:
+        ValueError: *surface* is not one of :data:`SurfaceName`'s values.
+    """
+    if surface not in get_args(SurfaceName):
+        raise ValueError(
+            f"unknown surface {surface!r}; expected one of "
+            f"{', '.join(get_args(SurfaceName))}"
+        )
+    if config.ask_user and surface not in _ASKING_SURFACES:
+        logger.info(
+            "ask_user is off for this run: the %s entry point cannot put a "
+            "question to a person and read the answer back",
+            surface,
+        )
+        return dataclasses.replace(config, ask_user=False)
+    return config
+
+
 # ---- the CLI surface --------------------------------------------------
 
 
@@ -598,6 +652,10 @@ def start_cli(
     the deployment side being discarded by a surface flag that returns
     ``0`` first —— is still refused, and
     ``test_a_claimed_flag_cannot_turn_a_refusal_into_a_start`` pins it.
+
+    Standard input is tested once, here. The answer chooses which of
+    :func:`surface_config`'s CLI entry points this run is, and is what the
+    REPL's prompt source is opened with.
     """
     deployment, claimed = _claim_surface_flags(deployment, CLI_FLAGS)
     options = ReplOptions.parse([*claimed, *surface])
@@ -612,6 +670,10 @@ def start_cli(
         )
         return EXIT_OK
     _report_a_missing_credential(env)
+    interactive = is_interactive()
+    config = surface_config(
+        config, "once" if options.prompt else "repl" if interactive else "piped"
+    )
 
     records: Any = None
     try:
@@ -623,6 +685,7 @@ def start_cli(
                         options,
                         dotenv_path=dotenv_target(),
                         permission_mode_source=source,
+                        interactive=interactive,
                     )
                 )
             except (KeyboardInterrupt, asyncio.CancelledError):
@@ -715,8 +778,14 @@ async def _run_cli(
     *,
     dotenv_path: Path | None = None,
     permission_mode_source: str = "",
+    interactive: bool | None = None,
 ) -> int:
     """Assemble, run one of the two paths, release everything, report.
+
+    *interactive* says whether standard input is a terminal, and is handed
+    to :func:`~omicsclaw.entry.cli.open_prompt_source` so that the REPL
+    reads from the kind of source the caller already decided on. ``None``
+    lets that function test standard input itself.
 
     Three properties that a plain ``try``/``finally`` did not have:
 
@@ -772,7 +841,7 @@ async def _run_cli(
                 converged = handle is not None and handle.terminal == "converged"
                 code = EXIT_OK if converged else EXIT_FAILED
             else:
-                source = open_prompt_source()
+                source = open_prompt_source(interactive=interactive)
                 try:
                     repl = Repl(
                         app,
@@ -1147,6 +1216,7 @@ def start_desktop(
     _refuse_an_open_unauthenticated_bind(options.host, token)
     server_module = _asgi_server_module()
     settings = _desktop_settings(env)
+    config = surface_config(config, "desktop")
     return asyncio.run(_serve_desktop(config, options, token, server_module, settings))
 
 
@@ -1374,6 +1444,7 @@ def start_channel(
         level=logging.DEBUG if options.verbose else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    config = surface_config(config, "channel")
     try:
         return asyncio.run(_serve_channels(config, options, env))
     except ImportError as exc:

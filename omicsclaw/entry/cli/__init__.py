@@ -78,6 +78,7 @@ from ._input import (
     PromptToolkitSource,
     ScriptedSource,
     StreamSource,
+    is_interactive,
     open_prompt_source,
 )
 from ._markdown import MarkdownStreamFormatter
@@ -107,6 +108,7 @@ __all__ = [
     "SlashCommandMatch",
     "SlashCommandSpec",
     "StreamSource",
+    "is_interactive",
     "missing_credential_hint",
     "open_prompt_source",
     "parse_slash_command",

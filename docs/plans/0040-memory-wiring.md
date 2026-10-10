@@ -299,7 +299,7 @@ harness9 在这一点上仍然与本实现不同：它会把那条超长记忆�
 | 3 | `state_dir()` 指向别处 | `test_the_database_and_the_precis_sit_beside_the_other_state` |
 | 4 | `build_app` 不挂记忆工具 | `test_the_memory_tools_reach_the_registry` |
 | 5 | 同上（权限普查） | `test_permission_wiring.py::test_every_mounted_tool_is_gated` |
-| 6 | 工具插在列表前面而不是追加 | `test_the_memory_tools_are_mounted_after_everything_else` |
+| 6 | 工具插在列表前面而不是追加 | `test_the_memory_tools_follow_the_tools_mounted_without_memory` |
 | 7 | `memory_write` 不声明 policy | `test_neither_memory_tool_stops_to_ask_a_human` |
 | 8 | `memory_search` 声明 `read_only=True` | `test_memory_search_does_not_claim_to_be_read_only` |
 | 9 | `memory_write` 的 add 不重生成精华 | `test_memory_write_stores_an_entry_and_rewrites_the_precis` |

@@ -36,6 +36,7 @@ from omicsclaw.engine.config import EngineConfig
 from omicsclaw.engine.executor import execute_tool_calls
 from omicsclaw.schema import ToolCall, ToolResult
 from omicsclaw.tools import (
+    AnswerStatus,
     ApprovalDecision,
     ApprovalDenied,
     ApprovalMode,
@@ -43,10 +44,14 @@ from omicsclaw.tools import (
     ApprovalUnavailable,
     FunctionTool,
     ProgressUpdate,
+    QuestionAnswer,
+    QuestionRequest,
+    QuestionUnavailable,
     RiskLevel,
     ToolContext,
     ToolPolicy,
     ToolRegistry,
+    ask_question,
     context_value,
     current_context,
     report_progress,
@@ -231,6 +236,68 @@ def test_binding_replaces_rather_than_inheriting_the_surrounding_context():
             assert current_context().approval is None
             assert context_value("session_id") == "s2"
         assert current_context().approval is channel
+
+
+def test_a_question_channel_is_replaced_like_the_approval_channel():
+    """Rebinding the approval channel alone leaves nobody to ask.
+
+    A scope that carries the outer approval channel inwards, which is what
+    a delegation does, has to name the question channel as well or go
+    without one. Inheriting it would let a sub-agent's question reach a
+    person who never saw the sub-agent's work.
+    """
+
+    async def approve(_: ApprovalRequest) -> bool:
+        return True
+
+    async def answer(_: QuestionRequest) -> QuestionAnswer:
+        return QuestionAnswer(AnswerStatus.DECLINED)
+
+    assert ToolContext().question is None
+    with use_tool_context(approval=approve, question=answer):
+        outer = current_context()
+        assert outer.question is answer
+        with use_tool_context(approval=outer.approval):
+            assert current_context().approval is approve
+            assert current_context().question is None
+        assert current_context().question is answer
+
+
+def test_asking_with_no_question_channel_raises_rather_than_answering():
+    async def main() -> None:
+        with use_tool_context(approval=lambda request: True):
+            await ask_question(QuestionRequest(question="which?"))
+
+    with pytest.raises(QuestionUnavailable, match="nobody can be asked"):
+        _run(main())
+
+
+def test_the_question_channel_s_answer_is_returned_as_it_is():
+    answer = QuestionAnswer(AnswerStatus.ANSWERED, reply="2", selected=("b",))
+    asked: list[QuestionRequest] = []
+
+    def channel(request: QuestionRequest) -> QuestionAnswer:
+        asked.append(request)
+        return answer
+
+    async def main() -> QuestionAnswer:
+        with use_tool_context(question=channel):
+            return await ask_question(QuestionRequest(question="which?"))
+
+    assert _run(main()) is answer
+    assert asked == [QuestionRequest(question="which?")]
+
+
+def test_a_question_channel_answering_nothing_is_no_answer_and_a_stranger_is_refused():
+    async def main(outcome: Any) -> QuestionAnswer:
+        with use_tool_context(question=lambda request: outcome):
+            return await ask_question(QuestionRequest(question="which?"))
+
+    silent = _run(main(None))
+    assert silent.status is AnswerStatus.NO_ANSWER
+    assert silent.reason == "the question channel returned no answer"
+    with pytest.raises(TypeError, match="got bool"):
+        _run(main(True))
 
 
 def test_the_raw_bind_and_reset_pair_works_for_a_surface_that_owns_its_task():
@@ -801,6 +868,42 @@ def test_a_slow_human_is_not_charged_to_the_tool_timeout():
     assert results[0].is_error is False
     assert results[0].output == "the irreversible thing"
     assert elapsed >= 2.0, "the human's two seconds really were spent"
+
+
+def test_a_person_slow_to_answer_a_question_is_not_charged_to_the_tool_timeout():
+    """The same nesting as the approval above, for :func:`ask_question`:
+    the person takes three times ``tool_timeout`` and the tool still
+    returns their answer, through the engine's real scheduler.
+
+    Mutation: wait for the channel outside ``pause_tool_timeout()`` and the
+    result is ``tool 'asks' timed out``.
+    """
+
+    async def slow_person(request: QuestionRequest) -> QuestionAnswer:
+        await asyncio.sleep(0.6)
+        return QuestionAnswer(AnswerStatus.ANSWERED, reply="the second one")
+
+    async def asks() -> str:
+        answer = await ask_question(QuestionRequest(question="which?"))
+        await asyncio.sleep(0.02)
+        return answer.reply
+
+    registry = ToolRegistry([FunctionTool("asks", "d", asks, policy=_PARALLEL)])
+    calls = [ToolCall(id="c0", name="asks", arguments="{}")]
+
+    async def main() -> list[ToolResult | None]:
+        results: list[ToolResult | None] = []
+        with use_tool_context(question=slow_person):
+            async for _ in execute_tool_calls(
+                registry, calls, EngineConfig(tool_timeout=0.2), results
+            ):
+                pass
+        return results
+
+    results = _run(main())
+
+    assert results[0].is_error is False, results[0].output
+    assert results[0].output == "the second one"
 
 
 def _gated_registry(channel_target: list[asyncio.Future]) -> ToolRegistry:

@@ -36,6 +36,7 @@ the conversation to keep and the compaction state to pass in next time.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -71,6 +72,7 @@ from omicsclaw.schema import Message, Role
 from omicsclaw.tools.context import (
     ApprovalDecision,
     ProgressUpdate,
+    QuestionAnswer,
     current_context,
     use_tool_context,
     use_usage_sink,
@@ -81,6 +83,7 @@ from .assembly import AgentApp
 from .compaction import PINNED_SYSTEM_MESSAGES, build_compactor
 from .events import Terminal, TurnEvent
 from .nudges import build_augmentor
+from .question import QuestionBroker
 from .stream import DEFAULT_RING_SIZE, TurnObservation, TurnStream
 from .subagent import DelegatedUsage
 
@@ -385,13 +388,14 @@ def _session_bound(session_id: str) -> Iterator[None]:
     to do it: that function *replaces* rather than merges, so binding a
     bare ``values`` here would silently unbind an approval channel a
     caller had set around this call, and every gated tool would start
-    failing closed.
+    failing closed. The question channel is carried inwards the same way.
     """
     outer = current_context()
     with use_tool_context(
         approval=outer.approval,
         progress=outer.progress,
         values={**outer.values, "session_id": session_id},
+        question=outer.question,
     ):
         yield
 
@@ -517,6 +521,7 @@ class TurnRunner:
         "_compaction",
         "_force",
         "_history",
+        "_questions",
         "_shortfall_reported",
         "_stream",
         "_user_text",
@@ -541,6 +546,7 @@ class TurnRunner:
         user_text: str = "",
         values: Mapping[str, object] | None = None,
         approval: ApprovalBroker | None = None,
+        questions: QuestionBroker | None = None,
         force_compaction: bool = False,
         delegated: DelegatedUsage | None = None,
     ) -> None:
@@ -555,6 +561,12 @@ class TurnRunner:
         two things a bare callable cannot give: an outstanding question
         that can be answered **by id** from another Task, and a way to
         fail every outstanding question closed when the exchange ends.
+
+        *questions* is the broker tools reach through
+        :func:`~omicsclaw.tools.ask_question`. It is bound only when
+        :attr:`~omicsclaw.entry.config.AppConfig.ask_user` is on, and
+        whatever it still has outstanding when the exchange ends is settled
+        as unanswered.
         """
         self._app = app
         self._stream = stream
@@ -565,6 +577,7 @@ class TurnRunner:
         self._user_text = user_text
         self._values = dict(values or {})
         self._approval = approval
+        self._questions = questions
         self._force = force_compaction
         self._shortfall_reported = False
         self.terminal: Terminal = "failed"
@@ -610,6 +623,7 @@ class TurnRunner:
                 approval=self._approval,
                 progress=self._on_progress,
                 values=self.turn_values(),
+                question=self._questions if self._app.config.ask_user else None,
             ):
                 outcome = await self._deadline()
             self.outcome = outcome
@@ -624,6 +638,8 @@ class TurnRunner:
         finally:
             if self._approval is not None:
                 self._approval.abandon()
+            if self._questions is not None:
+                self._questions.abandon()
             self._publish(
                 TurnEvent.exchange_end(
                     self.terminal,
@@ -799,6 +815,7 @@ class TurnHandle:
     __slots__ = (
         "_grace_s",
         "_had_observer",
+        "_numbering",
         "_settled",
         "_task",
         "_timer",
@@ -807,6 +824,7 @@ class TurnHandle:
         "delegated",
         "error",
         "outcome",
+        "questions",
         "session_id",
         "state",
         "stream",
@@ -881,7 +899,15 @@ class TurnHandle:
             ),
             on_observer_change=self._observers_changed,
         )
-        self.approvals = ApprovalBroker(self.stream, timeout_s=approval_timeout_s)
+        # The ``n`` of every ``<turn id>#<n>`` request id of this exchange,
+        # shared by everything that asks the person something.
+        self._numbering = itertools.count(1)
+        self.approvals = ApprovalBroker(
+            self.stream, timeout_s=approval_timeout_s, numbering=self._numbering
+        )
+        self.questions = QuestionBroker(
+            self.stream, timeout_s=approval_timeout_s, numbering=self._numbering
+        )
 
     def observe(self, *, after_seq: int = 0) -> TurnObservation:
         """Open a cursor over this exchange. May be called many times.
@@ -893,7 +919,7 @@ class TurnHandle:
         """
         return self.stream.observe(after_seq=after_seq)
 
-    async def approve(self, request_id: str, decision: ApprovalDecision) -> None:
+    async def approve(self, request_id: str, decision: ApprovalDecision) -> bool:
         """Answer one of this exchange's outstanding approval requests.
 
         An unknown or already-settled ``request_id`` is a **no-op and not
@@ -906,11 +932,34 @@ class TurnHandle:
         coroutine is the shape that stays right when that answer has to
         travel. The blocking work is elsewhere by construction — the
         exchange's own Task is what resumes.
+
+        :returns: whether *decision* settled the request. ``False`` means
+            it changed nothing: the id is unknown, or the request had been
+            settled already, by an earlier answer or by its deadline. A
+            surface that keeps a record of what a person allowed (a grant
+            for the conversation, a rule on disk) writes it only on
+            ``True``.
         """
         if self.approvals.settle(request_id, decision):
-            return
+            return True
         _log.debug(
             "approval %s on turn %s had nothing to settle",
+            request_id,
+            self.turn_id,
+        )
+        return False
+
+    async def answer(self, request_id: str, answer: QuestionAnswer) -> None:
+        """Answer one of this exchange's outstanding questions.
+
+        An unknown or already-answered ``request_id`` changes nothing and
+        raises nothing, as with :meth:`approve`: an answer that arrives
+        after the deadline or after a cancellation is ordinary input.
+        """
+        if self.questions.settle(request_id, answer):
+            return
+        _log.debug(
+            "answer to %s on turn %s had nothing to settle",
             request_id,
             self.turn_id,
         )

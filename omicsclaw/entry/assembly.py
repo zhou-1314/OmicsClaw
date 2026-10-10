@@ -130,6 +130,7 @@ from omicsclaw.skills import SkillIndex, load_skills, use_skill_tool
 from omicsclaw.subagent import TaskTool
 from omicsclaw.tools import (
     ApprovalRequest,
+    AskUserTool,
     BashTool,
     EditTool,
     Tool,
@@ -332,6 +333,9 @@ def foundation_tools(
     the end costs a cached prefix nothing, a pair inserted in the middle
     moves every tool after it.
 
+    ``ask_user`` is mounted after the memory pair when
+    :attr:`AppConfig.ask_user` is on, and left out otherwise.
+
     *skill_env* gives ``use_skill`` its environment-check callback, which
     changes what that tool returns and not which tools there are; when it
     carries ``install_skill_deps`` (``skill_env=install`` with ``bash`` on this
@@ -358,6 +362,8 @@ def foundation_tools(
         tools = (*tools, plan_write_tool(plans))
     if memory is not None:
         tools = (*tools, *memory_tools(memory))
+    if config.ask_user:
+        tools = (*tools, AskUserTool())
     if skill_env is not None and skill_env.tool is not None:
         tools = (*tools, skill_env.tool)
     return tools

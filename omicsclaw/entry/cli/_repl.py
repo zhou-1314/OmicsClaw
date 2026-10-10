@@ -44,6 +44,19 @@ return is that **a question that cannot be put is still answered**:
 approval deadline and an unsettled request is an exchange that never
 ends.
 
+**A question from ``ask_user`` is read the same way.** The pump prints
+the card and starts a Task (:meth:`Repl._ask_question`) that reads one
+line at an ``answer [#n]> `` prompt. The line is the answer, whatever it
+is: an empty one skips the question and Ctrl-C cancels the exchange.
+
+**A card takes only what is typed after its prompt opens.** A terminal
+keeps what is typed while nothing reads it, so a ``y`` typed while a tool
+ran, or the late reply to a question whose prompt was taken down, would
+otherwise answer the next card to open. :meth:`Repl._read_at_card` asks
+the source for a fresh line and says so on screen when input was thrown
+away. The loop's own prompt reads whatever is waiting, as before: a line
+typed while an answer was printing is the next message.
+
 **What this loop does not do.** Part of the ported catalogue (see
 :data:`~omicsclaw.entry.cli._slash_command_support.REPL_SLASH_COMMAND_SPECS`),
 because the skill runner, the research pipeline and the memory commands
@@ -110,12 +123,19 @@ from omicsclaw.context import CompactionRecord, is_summary_message
 from omicsclaw.entry.assembly import AgentApp
 from omicsclaw.entry.display import approval_body_note, inert_line, inert_prose
 from omicsclaw.entry.events import TurnEvent, TurnEventType
+from omicsclaw.entry.question import QUESTION_TIMEOUT_REASON, read_reply
 from omicsclaw.entry.render import TextRenderer
 from omicsclaw.entry.session import Session, SubmissionRefused, new_turn_id
 from omicsclaw.entry.turn import TurnHandle
 from omicsclaw.planning import PLAN_WRITE_TOOL_NAME, PlanItem, PlanStatus
 from omicsclaw.schema import Message, Role
-from omicsclaw.tools.context import ApprovalDecision, ApprovalRequest
+from omicsclaw.tools.context import (
+    AnswerStatus,
+    ApprovalDecision,
+    ApprovalRequest,
+    QuestionAnswer,
+    QuestionRequest,
+)
 
 from omicsclaw.permission import PermissionMode
 
@@ -129,7 +149,7 @@ from ._auto import (
     saved_cli_mode,
 )
 from ._constants import WELCOME_SLOGANS
-from ._input import ChoiceSource, PromptSource
+from ._input import ChoiceSource, FreshSource, PromptSource
 from ._markdown import MarkdownStreamFormatter
 from ._reasoning import ReasoningStreamWriter
 from ._screen import Screen
@@ -179,6 +199,9 @@ tool twice, ``web_fetch`` over two URLs being what the model does with
 reader at a time), so the name alone leaves two identical questions in a
 row and no way to tell which is being answered.
 
+*name* is the tool, followed by `` for sub-agent <agent>`` when the call
+that asks belongs to a sub-agent's run.
+
 *card* is the request id's within-exchange suffix, the ``#1`` of the
 ``[<turn id>#1]`` the approval card was printed with, so the prompt and
 the card that explains it carry the same label. The turn id itself is
@@ -190,8 +213,58 @@ terminal, which costs more than it tells.
 (:func:`~omicsclaw.entry.display.approval_body_note`) when the body has
 one: its line and character counts, and what was folded or cut."""
 
+_QUESTION_PROMPT = "answer [{card}]> "
+"""The prompt under a question card. *card* is the ``#n`` of the request
+id, as in :data:`_APPROVAL_PROMPT`, and approvals and questions of one
+exchange are numbered from the same count."""
+
+_QUESTION_LEGEND = "  empty line skips · Ctrl-C cancels the request"
+"""Printed between a question card and its prompt: the two things a reply
+cannot say. Everything else typed is the answer, a line that starts with
+``/`` included."""
+
+_TYPED_EARLY_NOTICE = "  input typed before this prompt was discarded"
+"""Printed above a card's prompt when the source threw input away.
+
+A card takes only what is typed after its prompt opens. Somebody who typed
+``y`` while a tool was still running sees the card waiting all the same,
+and this line is why."""
+
+_HALF_LINE_NOTICE = (
+    "  its last line had no Enter: what is typed up to the next Enter is "
+    "discarded too"
+)
+"""Printed under :data:`_TYPED_EARLY_NOTICE` when the input thrown away
+ended in a line nobody had finished.
+
+What is typed next would finish that line. ``ye`` before the card and
+``s`` after it is one ``yes``, and the ``s`` alone would be read as a
+grant for the rest of the conversation. The source drops it with the
+rest, and this line is why the first Enter at the card settles nothing."""
+
 _INTERRUPTED_REASON = "interrupted at the terminal"
 """The reason a card is settled with when Ctrl-C is pressed at it."""
+
+_NOBODY_ASKED_REASON = (
+    "nobody was asked, because the question earlier in the same message got "
+    "no answer; make the call again in a later message if it is still needed"
+)
+"""The reason an approval is refused with, unasked, after a question of
+the same model message passed its deadline.
+
+The model reads it in the tool's result. It says that no person refused
+and that the call may be made again, which a bare denial would not."""
+
+_SETTLED_ALREADY_NOTICE = (
+    "{name} [{card}] was already settled: this line changed nothing."
+)
+"""Printed under an approval prompt when its card had been settled before
+the line typed at it was read.
+
+An approval card's prompt stays open after the card's deadline, and a
+later card queues behind it. A line typed there, perhaps at the sight of
+the later card, approves nothing and records nothing, whatever it says.
+*name* is the tool the old card was about and *card* its ``#n``."""
 
 _NO_OPERATOR_REASON = "no operator at the terminal"
 """The reason a card is settled with when the input ended or the Task
@@ -326,6 +399,22 @@ def _card(request_id: str) -> str:
     """
     _turn, hash_mark, index = request_id.rpartition("#")
     return f"#{index}" if hash_mark else request_id
+
+
+def _passed_its_deadline(event: TurnEvent) -> bool:
+    """Whether *event* settles a question because its deadline passed.
+
+    True for a ``QUESTION_SETTLED`` frame whose answer is ``no_answer``
+    with the broker's deadline reason. A question that was answered or
+    skipped has another status. One that was cancelled, ended with its
+    exchange or could not be put has another reason.
+    """
+    answer = event.answer
+    return (
+        answer is not None
+        and answer.status is AnswerStatus.NO_ANSWER
+        and answer.reason == QUESTION_TIMEOUT_REASON
+    )
 
 
 def _task_lines(items: Sequence[PlanItem]) -> list[Text]:
@@ -488,6 +577,7 @@ class Repl:
         "_heartbeat_s",
         "_permission_mode_source",
         "_plan_shown",
+        "_replying",
         "_running",
         "_screen",
         "_shell_records",
@@ -533,6 +623,8 @@ class Repl:
         self._shell_timeout_s = shell_timeout_s
         self._running: TurnHandle | None = None
         self._asking: set[asyncio.Task[None]] = set()
+        # The Task reading the reply to each open question, by request id.
+        self._replying: dict[str, asyncio.Task[None]] = {}
         self._granted: set[tuple[str, str]] = set()
         """``(session id, tool name)`` a person said "for this
         conversation" about. Keyed by the *tool*, so it grants more than
@@ -1152,6 +1244,10 @@ class Repl:
         streaming = False
         answering = False
         wrote_lines = False
+        # A question of the model message now being carried out passed
+        # its deadline. Until that message's TURN_END, no approval prompt
+        # is opened for a call of that message: see ``_ask``.
+        unanswered = False
         try:
             async with handle.observe() as observation:
                 async for event in observation:
@@ -1197,12 +1293,26 @@ class Repl:
                         streaming = False
                         answering = False
                         activity.release()
+                    if event.type is TurnEventType.QUESTION_SETTLED:
+                        # Before the erase below: a tick can paint while
+                        # this waits for the prompt to come down.
+                        await self._retract_question(event.request_id)
+                        if _passed_its_deadline(event):
+                            unanswered = True
                     # Whatever is printed below starts at column 0.
                     activity.clear()
                     self._note_activity(event, activity)
                     if event.type is TurnEventType.APPROVAL_REQUIRED:
-                        self._ask_human(handle, event)
+                        # A sub-agent's call is not one of that message's:
+                        # its card opens a model call later, as the card
+                        # of the next message does.
+                        self._ask_human(
+                            handle, event, unasked=unanswered and not event.subagent
+                        )
+                    if event.type is TurnEventType.QUESTION_ASKED:
+                        self._ask_question(handle, event)
                     if event.type is TurnEventType.TURN_END:
+                        unanswered = False
                         self._count(event)
                     if event.type is TurnEventType.EXCHANGE_END:
                         if event.terminal == "converged":
@@ -1377,19 +1487,23 @@ class Repl:
 
     # ---- approvals -------------------------------------------------------
 
-    def _ask_human(self, handle: TurnHandle, event: TurnEvent) -> None:
+    def _ask_human(
+        self, handle: TurnHandle, event: TurnEvent, *, unasked: bool = False
+    ) -> None:
         """Start asking, and return to the pump immediately (trap 1).
 
         The hold is taken **here** rather than inside :meth:`_ask`, so
         that it is in force before the new Task has had a chance to run:
         a tick landing between ``create_task`` and the prompt would paint
         a spinner that ``prompt_toolkit`` is about to draw over.
+
+        *unasked* is passed on to :meth:`_ask`.
         """
         activity = self._activity
         if activity is not None:
             activity.hold()
         task = asyncio.create_task(
-            self._answer(handle, event.request_id, event, activity),
+            self._answer(handle, event.request_id, event, activity, unasked),
             name=f"omicsclaw-cli-approval-{event.request_id}",
         )
         self._asking.add(task)
@@ -1401,6 +1515,7 @@ class Repl:
         request_id: str,
         event: TurnEvent,
         activity: ActivityLine | None,
+        unasked: bool = False,
     ) -> None:
         """Ask, and give the live line back however the question ends.
 
@@ -1411,7 +1526,7 @@ class Repl:
         which is the defect this mechanism exists to remove.
         """
         try:
-            await self._ask(handle, request_id, event)
+            await self._ask(handle, request_id, event, unasked=unasked)
         finally:
             if activity is not None:
                 activity.release()
@@ -1433,6 +1548,37 @@ class Repl:
         failure = task.exception()
         if failure is not None:
             _log.error("approval task failed: %r", failure)
+
+    async def _read_at_card(self, prompt: str) -> str:
+        """One line typed at a card's prompt, after the prompt opened.
+
+        A terminal source throws away what was typed before the prompt,
+        and when it says it did, :data:`_TYPED_EARLY_NOTICE` is printed
+        above the prompt. When it also says that the last line of it was
+        unfinished, :data:`_HALF_LINE_NOTICE` is printed under that, and
+        the source drops what is typed up to the next Enter before it
+        reads the line returned here. A source that cannot tell earlier
+        from later (a script, a pipe) hands over its next line.
+
+        :param prompt: the card's prompt line.
+        :returns: the line typed.
+        """
+        source = self._source
+        if isinstance(source, FreshSource):
+            return await source.read_fresh(
+                prompt,
+                discarded=self._say_typed_early,
+                unfinished=self._say_half_line,
+            )
+        return await source.read(prompt)
+
+    def _say_typed_early(self) -> None:
+        """Print :data:`_TYPED_EARLY_NOTICE`."""
+        self._screen.print(Text(_TYPED_EARLY_NOTICE, style="dim"))
+
+    def _say_half_line(self) -> None:
+        """Print :data:`_HALF_LINE_NOTICE`."""
+        self._screen.print(Text(_HALF_LINE_NOTICE, style="dim"))
 
     async def _read_card(
         self,
@@ -1468,7 +1614,7 @@ class Repl:
         :raises Exception: whatever *refuse* raises.
         """
         try:
-            return await self._source.read(prompt)
+            return await self._read_at_card(prompt)
         except KeyboardInterrupt:
             try:
                 await refuse(_INTERRUPTED_REASON)
@@ -1492,7 +1638,12 @@ class Repl:
         return None
 
     async def _ask(
-        self, handle: TurnHandle, request_id: str, event: TurnEvent
+        self,
+        handle: TurnHandle,
+        request_id: str,
+        event: TurnEvent,
+        *,
+        unasked: bool = False,
     ) -> None:
         """Put one question to the person and send back what they said.
 
@@ -1506,6 +1657,22 @@ class Repl:
         A card that gets no answer — Ctrl-C at it, the input ending, the
         Task being cancelled, the source failing — denies the request (see
         :meth:`_read_card`); Ctrl-C also cancels the exchange.
+
+        With *unasked* the request is denied with
+        :data:`_NOBODY_ASKED_REASON` and no prompt is opened. The pump
+        sets it for a call of the agent's own that follows, in the same
+        model message, a question whose deadline passed: the prompt would
+        open as the question's came down, and a reply typed a moment late
+        for the question would be read as the answer to it. A tool already
+        allowed for this conversation is not asked about at all, so it
+        runs whatever *unasked* says.
+
+        ``s`` and ``a`` are acted on only when the answer settled the
+        request. The prompt stays open after the request's deadline, and
+        a line read there later settles nothing: no grant is recorded, no
+        rule is written, and :data:`_SETTLED_ALREADY_NOTICE` is printed.
+        ``/auto`` typed there still switches the mode, because it is a
+        command and not an answer to this card.
         """
         request = event.approval
         name = inert_line(request.tool_name) if request is not None else "a tool"
@@ -1515,9 +1682,19 @@ class Repl:
             )
             await handle.approve(request_id, ApprovalDecision(True, ""))
             return
+        if unasked:
+            await handle.approve(
+                request_id, ApprovalDecision(False, _NOBODY_ASKED_REASON)
+            )
+            return
         note = approval_body_note(request) if request is not None else ""
+        asker = (
+            f"{name} for sub-agent {inert_line(event.subagent)}"
+            if event.subagent
+            else name
+        )
         prompt = _APPROVAL_PROMPT.format(
-            name=name,
+            name=asker,
             card=inert_line(_card(request_id)),
             size=f" {note}" if note else "",
         )
@@ -1561,6 +1738,28 @@ class Repl:
         always = verdict in _ALWAYS
         for_session = verdict in _FOR_THIS_SESSION
         approved = always or for_session or verdict in _YES
+        reason = answer.strip()
+        if reason.startswith("/"):
+            # A command typed at the wrong prompt is not a message for the
+            # model; sending "/usage" as the reason a call was refused would
+            # be a refusal it cannot act on.
+            reason = "denied at the terminal"
+        settled = await handle.approve(
+            request_id,
+            ApprovalDecision(approved, "" if approved else reason),
+        )
+        if not settled:
+            # The card's prompt outlives the card's deadline, and the line
+            # may have been typed at the sight of a later card.
+            self._screen.print(
+                Text(
+                    _SETTLED_ALREADY_NOTICE.format(
+                        name=name, card=inert_line(_card(request_id))
+                    ),
+                    style="dim",
+                )
+            )
+            return
         if always and request is not None:
             if rememberable:
                 self._remember(request)
@@ -1591,16 +1790,100 @@ class Repl:
                         style="dim",
                     )
                 )
-        reason = answer.strip()
-        if reason.startswith("/"):
-            # A command typed at the wrong prompt is not a message for the
-            # model; sending "/usage" as the reason a call was refused would
-            # be a refusal it cannot act on.
-            reason = "denied at the terminal"
-        await handle.approve(
-            request_id,
-            ApprovalDecision(approved, "" if approved else reason),
+
+    # ---- questions -------------------------------------------------------
+
+    def _ask_question(self, handle: TurnHandle, event: TurnEvent) -> None:
+        """Start reading the reply to a question, and return to the pump at once.
+
+        As :meth:`_ask_human` does for an approval: the live line is held
+        before the Task that reads the reply exists, and that Task is
+        tracked in :attr:`_asking` so that an exchange which ends first
+        takes it down.
+        """
+        activity = self._activity
+        if activity is not None:
+            activity.hold()
+        task = asyncio.create_task(
+            self._answer_question(handle, event, activity),
+            name=f"omicsclaw-cli-question-{event.request_id}",
         )
+        self._asking.add(task)
+        task.add_done_callback(self._forget_asking)
+        request_id = event.request_id
+        self._replying[request_id] = task
+        task.add_done_callback(lambda _done: self._replying.pop(request_id, None))
+
+    def _withdraw_prompt(self, _reading: "asyncio.Task[None]") -> None:
+        """Have the source take down the prompt its cancelled read left open.
+
+        The done callback of a reading Task that :meth:`_retract_question`
+        cancelled. A source that is not a
+        :class:`~omicsclaw.entry.cli._input.FreshSource` has nothing to
+        take down.
+        """
+        source = self._source
+        if isinstance(source, FreshSource):
+            source.withdraw()
+
+    async def _retract_question(self, request_id: str) -> None:
+        """Take down the prompt of a question that has been settled.
+
+        A question whose deadline passes is settled while its prompt is
+        still open. The Task reading the reply is cancelled and awaited,
+        and as it ends the source takes the prompt down
+        (:meth:`_withdraw_prompt`). So the caller prints below the prompt,
+        the live line is given back, and a line typed later is not read as
+        the reply. A question the reply settled has no prompt left, and
+        nothing happens.
+
+        :param request_id: the question that was settled.
+        """
+        task = self._replying.pop(request_id, None)
+        if task is None or task.done():
+            return
+        task.add_done_callback(self._withdraw_prompt)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def _answer_question(
+        self,
+        handle: TurnHandle,
+        event: TurnEvent,
+        activity: ActivityLine | None,
+    ) -> None:
+        """Read the reply, and give the live line back however that ends."""
+        try:
+            await self._question(handle, event.request_id, event)
+        finally:
+            if activity is not None:
+                activity.release()
+
+    async def _question(
+        self, handle: TurnHandle, request_id: str, event: TurnEvent
+    ) -> None:
+        """Read one line at a question's prompt and answer the question with it.
+
+        The card itself was printed by the pump. Whatever is typed is the
+        answer, read by :func:`~omicsclaw.entry.question.read_reply`: an
+        empty line skips the question, and a line that starts with ``/``
+        is an answer like any other, not a command. A prompt that yields
+        no line settles the question as unanswered (see
+        :meth:`_read_card`); Ctrl-C also cancels the exchange.
+        """
+        request = event.question or QuestionRequest(question="")
+        self._screen.print(Text(_QUESTION_LEGEND, style="dim"))
+        line = await self._read_card(
+            _QUESTION_PROMPT.format(card=inert_line(_card(request_id))),
+            subject="the question",
+            settled_as="Not answered",
+            refuse=lambda reason: handle.answer(
+                request_id, QuestionAnswer(AnswerStatus.NO_ANSWER, reason=reason)
+            ),
+        )
+        if line is None:
+            return
+        await handle.answer(request_id, read_reply(request, line))
 
     def _approval_legend(self, always_asked: bool, rememberable: bool = True) -> str:
         """The grants, and ``/auto`` where it would stop cards like this one.

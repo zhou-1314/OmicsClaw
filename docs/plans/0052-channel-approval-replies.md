@@ -4,6 +4,8 @@
 
 **2026-10-07 核对**：本计划的任务都还没有实现。
 
+**2026-10-08 交付**：T1（`Rendezvous`、S-attr、`expires_at`）与 §4.7 的显示层前置步（`inert_body`、`width`、`WRAP_PREFIX`，删除 `inert_block`）已实现，提交在本地分支 `feat/ask-user`，待独立审核与 owner 过目。T0、T2、T3 和第二阶段按钮未做，`entry/channel/` 没有改动。`SurfaceName` 与 `surface_config` 已由 0054 任务 B 以 §4.12 的名字和签名建立，目前只处理 `ask_user`；T0 的 channel 超时默认值与校验仍待做。验收证据见 [0054 交付记录](0054-ask-user-tool-delivery.md)；本文正文未改。
+
 **前置**：0031（entry 层，Q6 / Q12 / Q18 / Q22、陷阱 10）、0038 §8.3、0044（channel
 全平台接入与 conformance）、0046 §7.1、0049（`s` 覆盖整个工具、`ask_every_time`）、
 0050、0051（已实施）；缺陷修复 D3（`Repl._read_card`）、D4（`tools/preview.py`），均已在

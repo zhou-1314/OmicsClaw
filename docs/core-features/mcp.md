@@ -338,7 +338,7 @@ WARNING MCP server lab-lims failed: HTTP 401 from https://lims.example.org/mcp
 WARNING MCP server lab-lims: skipped get_run_metadata: named in 'tools' but not offered
 ```
 
-工具表顺序是：foundation 工具（`read_file`、`write_file`、`edit_file`、`bash`、`web_fetch`、`web_search`，可选的 `use_skill`、`plan_write`、`memory_*`）→ MCP 工具 → `task`（最后追加，见 `sub-agent.md`）。MCP 工具与调用方通过 `tools=` 传入的工具重名时，注册表抛 `ToolAlreadyRegistered`，**启动失败**。只有部署自己传入 `mcp__` 前缀的工具时才会遇到。
+工具表顺序是：foundation 工具（`read_file`、`write_file`、`edit_file`、`bash`、`web_fetch`、`web_search`，可选的 `use_skill`、`plan_write`、`memory_*`、`ask_user`）→ MCP 工具 → `task`（最后追加，见 `sub-agent.md`）。MCP 工具与调用方通过 `tools=` 传入的工具重名时，注册表抛 `ToolAlreadyRegistered`，**启动失败**。只有部署自己传入 `mcp__` 前缀的工具时才会遇到。
 
 子代理从父注册表继承工具，所以默认也能调用 MCP 工具，审批仍然送到父 turn 的审批通道。
 

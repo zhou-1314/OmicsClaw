@@ -273,3 +273,43 @@ def test_no_tool_argument_ever_reaches_the_log(caplog):
     written = "\n".join(record.getMessage() for record in caplog.records)
     assert "approval requested" in written, "the probe must have logged something"
     assert SECRET not in written
+
+
+def test_the_log_tells_an_abandoned_question_from_an_answered_one(caplog):
+    """Both end as a denial on the stream. The log is where somebody looks
+    for why a tool was refused, and "abandoned" says the exchange ended
+    under the card where "settled" says a person or the deadline answered.
+
+    Mutation: leave ``_abandoning`` false in ``ApprovalBroker.abandon``
+    and the first line reads ``approval settled``.
+    """
+    stream = _stream()
+    broker = ApprovalBroker(stream)
+
+    async def drive():
+        with caplog.at_level(logging.INFO, logger="omicsclaw.entry.approval"):
+            abandoned = asyncio.create_task(broker(_request()))
+            await asyncio.sleep(0)
+            broker.abandon()
+            await asyncio.wait_for(abandoned, WAIT_S)
+
+            answered = asyncio.create_task(broker(_request()))
+            await asyncio.sleep(0)
+            second = _frames(stream, TurnEventType.APPROVAL_REQUIRED)[1].request_id
+            broker.settle(second, ApprovalDecision(approved=False, reason="no"))
+            await asyncio.wait_for(answered, WAIT_S)
+
+    asyncio.run(drive())
+
+    first, second = (
+        frame.request_id for frame in _frames(stream, TurnEventType.APPROVAL_REQUIRED)
+    )
+    endings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith(("approval abandoned", "approval settled"))
+    ]
+    assert endings == [
+        f"approval abandoned: request={first}",
+        f"approval settled: request={second} approved=False",
+    ]

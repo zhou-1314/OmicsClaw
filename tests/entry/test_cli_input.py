@@ -18,14 +18,26 @@ a hang with no timeout plugin is a test run that never finishes.
 from __future__ import annotations
 
 import asyncio
+import gc
 import io
+import logging
+import os
 import queue
+import select
+import sys
 import threading
 import time
 
 import pytest
 
-from omicsclaw.entry.cli._input import PromptToolkitSource, StreamSource
+from omicsclaw.entry.cli import _input
+from omicsclaw.entry.cli._input import (
+    FreshSource,
+    PromptToolkitSource,
+    ScriptedSource,
+    StreamSource,
+    is_interactive,
+)
 
 WAIT_S = 10.0
 
@@ -439,3 +451,1292 @@ def test_keys_go_to_the_question_asked_first():
             return answer, await asyncio.wait_for(picked, WAIT_S)
 
     assert asyncio.run(drive()) == ("hello", 1)
+
+
+# ---- what was typed before a prompt opened --------------------------------
+#
+# A card reads with ``read_fresh``. The terminal tests below type through
+# ``prompt_toolkit``'s pipe input or a real pseudo-terminal, so what is
+# held is the kernel's and the library's behaviour and not a double's.
+
+SETTLE_S = 0.2
+"""Long enough for a prompt to read what is already waiting for it, and
+longer than ``_HANDOVER_S``."""
+
+
+def test_both_terminal_sources_read_fresh_and_a_script_does_not():
+    """A script's lines were all written before anything was asked. A
+    source that dropped them would leave every scripted card unanswered.
+
+    Mutation: give ``ScriptedSource`` a ``read_fresh`` and the REPL's
+    cards stop taking a test's lines.
+    """
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit.input import create_pipe_input
+
+    with create_pipe_input() as keys:
+        assert isinstance(_picker_source(keys), FreshSource)
+    assert isinstance(StreamSource(io.StringIO("")), FreshSource)
+    assert not isinstance(ScriptedSource(()), FreshSource)
+
+
+def _fresh_at_the_terminal(typed_before: str, *typed_after: str):
+    """Type *typed_before*, open a fresh read, then type each of *typed_after*.
+
+    :returns: whether the read was still waiting before each of
+        *typed_after*, the line it returned, and what it reported and
+        showed, in order: ``"discarded"`` and ``"unfinished"`` for the
+        two reports and the prompt string for each prompt.
+    """
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit.input import create_pipe_input
+
+    async def drive():
+        with create_pipe_input() as keys:
+            source = _picker_source(keys)
+            seen = _record_prompts(source)
+            keys.send_text(typed_before)
+            reading = asyncio.create_task(
+                source.read_fresh(
+                    "approve? ",
+                    discarded=lambda: seen.append("discarded"),
+                    unfinished=lambda: seen.append("unfinished"),
+                )
+            )
+            waiting = []
+            for typed in typed_after:
+                await asyncio.sleep(SETTLE_S)
+                waiting.append(not reading.done())
+                keys.send_text(typed)
+            return waiting, await asyncio.wait_for(reading, WAIT_S), seen
+
+    return asyncio.run(drive())
+
+
+def _record_prompts(source: PromptToolkitSource) -> list[str]:
+    """Have *source*'s session note each prompt it shows, in the list returned."""
+    session = source._session
+    shown: list[str] = []
+    show = session.prompt_async
+
+    async def noting(prompt: str) -> str:
+        shown.append(prompt)
+        return await show(prompt)
+
+    session.prompt_async = noting
+    return shown
+
+
+@pytest.mark.parametrize(
+    ("typed_before", "typed_after", "line", "reports"),
+    [
+        pytest.param("yes\r", "n\r", "n", 1, id="a whole line"),
+        pytest.param("yes\n", "n\r", "n", 1, id="a line ended by a line feed"),
+        pytest.param("a\rb\r", "n\r", "n", 1, id="two lines"),
+        pytest.param("x" * 3000 + "\r", "n\r", "n", 1, id="more than one read holds"),
+        pytest.param("\x1b", "y\r", "y", 1, id="an Escape on its own"),
+        pytest.param("\x1b[A", "y\r", "y", 1, id="an arrow key"),
+        pytest.param("", "y\r", "y", 0, id="nothing"),
+        pytest.param("\x1b[12;1R", "y\r", "y", 0, id="the terminal's own report"),
+        pytest.param("\x1b[I", "y\r", "y", 0, id="a focus report"),
+        pytest.param("\x1b[O\x1b[I", "y\r", "y", 0, id="focus lost and regained"),
+        pytest.param("\x1b[?62;22c", "y\r", "y", 0, id="a device report"),
+        pytest.param("yes\r\x1b[I", "n\r", "n", 1, id="a line, then a focus report"),
+    ],
+)
+def test_a_fresh_read_at_the_terminal_takes_only_what_is_typed_after_it_opens(
+    typed_before, typed_after, line, reports
+):
+    """``yes`` and Enter typed while a tool was running would otherwise
+    answer the approval card that opens next. The report is made once
+    however much was dropped, and not at all when nothing was typed: a
+    cursor position report that arrives late is the terminal's and nobody
+    typed it. None of these left a line unfinished, so the first line
+    typed at the prompt is the one returned. A terminal in its line mode
+    stores Enter as a line feed, which ends a line as a carriage return
+    does, and a key that puts no text on the line begins none.
+
+    A terminal with focus reporting left on sends ``ESC [ I`` when its
+    window is clicked. The library does not know that sequence and hands
+    it over as an Escape and two characters. Nobody typed them: read as
+    the start of a line, they would cost the person who then answers the
+    card their first answer.
+
+    Mutations: skip the reads in ``_drop_keys`` and the first three cases
+    return what was typed before; read once instead of ``_DRAIN_READS``
+    times and the 3000-character case returns its tail; leave out
+    ``flush_keys`` and the Escape joins the ``y`` typed at the prompt;
+    call *discarded* unconditionally and the ``nothing`` case reports;
+    count every key press and the last case reports; take only a carriage
+    return for Enter and the line-feed case drops the ``n``; take any key
+    for the start of a line and the Escape and arrow cases drop the ``y``;
+    keep the control sequences the library did not recognise among the
+    key presses and the three report cases drop the ``y`` and report.
+    """
+    waiting, read, seen = _fresh_at_the_terminal(typed_before, typed_after)
+
+    assert waiting == [True], "the read was answered by what was typed before it"
+    assert read == line
+    assert seen == ["discarded"] * reports + ["approve? "]
+
+
+@pytest.mark.parametrize(
+    ("typed_before", "rest"),
+    [
+        pytest.param("ye", "s\r", id="half a word"),
+        pytest.param("y", "\r", id="all but the Enter"),
+        pytest.param("a\rb\rc", "d\r", id="two lines and a half"),
+        pytest.param("y\x7f", "y\r", id="a letter and a backspace"),
+        pytest.param("\x1b[200~ye\x1b[201~", "s\r", id="a paste"),
+        pytest.param("ye\x1b[I", "s\r", id="half a word, then a focus report"),
+        pytest.param("\x1b[20;", "1Ry\r", id="a cursor report cut short"),
+    ],
+)
+def test_a_line_half_typed_before_a_fresh_read_is_dropped_up_to_its_enter(
+    typed_before, rest
+):
+    """``ye`` before the prompt and ``s`` after it is one ``yes``. Read on
+    its own the ``s`` means something else, and at an approval card it
+    allows the tool for the rest of the conversation. The rest of the line
+    goes with its start, Enter included, and the read waits on for a line
+    typed after that. Both reports are made, once each, and the prompt is
+    shown a second time for the line that counts.
+
+    A cursor position report that was cut short is kept as the start of a
+    line on purpose. Its last bytes are still to come, and they reach the
+    prompt as characters: ``1R`` in front of whatever is typed next.
+
+    Mutations: return what the first prompt read in
+    ``PromptToolkitSource.read_fresh`` and the read returns the rest of
+    the line; do not call *unfinished*, or call it first, and what was
+    seen differs; treat a line as finished unless its last key is a
+    character and the backspace case returns ``y``; leave a paste out of
+    what starts a line and the paste case returns ``s``; drop a control
+    sequence that has no final byte yet and the last case returns
+    ``1Ry``.
+    """
+    waiting, read, seen = _fresh_at_the_terminal(typed_before, rest, "n\r")
+
+    assert waiting == [True, True], "the rest of the line answered the read"
+    assert read == "n"
+    assert seen == ["discarded", "unfinished", "approve? ", "approve? "]
+
+
+def test_ctrl_c_ends_a_fresh_read_that_is_waiting_out_a_half_line():
+    """Ctrl-C at a card cancels the request. It does while the card is
+    still waiting for the Enter of a line begun before it.
+
+    The lines sent afterwards bound the test: a read that took Ctrl-C for
+    part of the line to drop would return one of them.
+    """
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit.input import create_pipe_input
+
+    async def drive():
+        with create_pipe_input() as keys:
+            source = _picker_source(keys)
+            loop = asyncio.get_running_loop()
+            keys.send_text("ye")
+            loop.call_later(SETTLE_S, keys.send_text, "\x03")
+            loop.call_later(2 * SETTLE_S, keys.send_text, "one\r")
+            loop.call_later(3 * SETTLE_S, keys.send_text, "two\r")
+            try:
+                return await source.read_fresh("approve? ")
+            except KeyboardInterrupt:
+                return None
+
+    assert asyncio.run(drive()) is None
+
+
+@pytest.mark.parametrize(
+    ("sent", "kept"),
+    [
+        pytest.param("\x1b[I", "", id="a focus report"),
+        pytest.param("\x1b[@", "", id="the lowest final byte"),
+        pytest.param("\x1b[99~", "", id="the highest final byte"),
+        pytest.param("\x1b[0 q", "", id="the lowest intermediate byte"),
+        pytest.param("\x1b[?1;2c", "", id="the highest parameter byte"),
+        pytest.param("\x1b[I\x1b[20;1R", "", id="a focus report and a cursor report"),
+        pytest.param("a\x1b[Ib", "ab", id="text on both sides"),
+        pytest.param("\x1b[20;", "\x1b[20;", id="cut short"),
+        pytest.param("\x1b[", "\x1b[", id="cut short at the bracket"),
+        pytest.param("\x1by", "\x1by", id="an Escape and a letter"),
+        pytest.param("\x1bye", "\x1bye", id="an Escape and two letters"),
+        pytest.param("a[1m", "a[1m", id="a bracket with no Escape before it"),
+        pytest.param("\x1b[\x7fI", "\x1b[\x7fI", id="a key in the middle"),
+        pytest.param("\x1b[好I", "\x1b[好I", id="a character out of range"),
+    ],
+)
+def test_what_the_terminal_sent_by_itself_is_not_what_a_person_pressed(sent, kept):
+    """``prompt_toolkit`` hands a control sequence it does not know over
+    as an Escape, a ``[`` and one key press for each byte after it. A
+    whole one, parameter and intermediate bytes and then a final byte, is
+    the terminal's and is left out. Anything else stays: a sequence with
+    no final byte yet, an Escape followed by a letter (Alt and that
+    letter), and one with a key or a character in it that no control
+    sequence has.
+
+    Mutations: move either end of the final-byte range, or of the range
+    before it, in ``_control_sequence_end`` and one of the first five
+    cases keeps its bytes; take a sequence for complete when the key
+    presses run out and the two cut-short cases are dropped; do not ask
+    for the Escape and ``a[1m`` is dropped as a sequence; do not ask for
+    the ``[`` and Alt-y followed by ``e`` is dropped as one.
+    """
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit.input import create_pipe_input
+
+    with create_pipe_input() as keys:
+        keys.send_text(sent)
+        presses = list(keys.read_keys()) + list(keys.flush_keys())
+
+    pressed = _input._pressed_by_a_person(presses)
+
+    assert "".join(press.data for press in pressed) == kept
+
+
+def test_the_line_typed_after_the_discarded_one_is_the_answer():
+    """What is dropped ends at the Enter of the line begun early. A line
+    typed after that Enter is typed at the card, whose prompt has been
+    open all along, and it is the answer even when it comes in the same
+    burst. Dropping it too would make a card ignore, without a word, what
+    is typed at its own open prompt.
+
+    Mutation: drop the waiting keys once more after the rest of the line
+    has been read in ``PromptToolkitSource.read_fresh`` and the read
+    never returns ``y``.
+    """
+    waiting, read, seen = _fresh_at_the_terminal("ye", "s\ry\r")
+
+    assert waiting == [True]
+    assert read == "y"
+    assert seen == ["discarded", "unfinished", "approve? ", "approve? "]
+
+
+# ---- a prompt taken down with a line begun at it ---------------------------
+#
+# A question's prompt is cancelled when the question's deadline passes. Text
+# typed at it and not entered goes with the prompt, and the person may type
+# the rest of the word at the card that opens later.
+
+
+async def _taken_down(
+    source: PromptToolkitSource, keys, typed: str, how: str = "read_fresh"
+) -> list[str]:
+    """Open a read, type *typed* at it without Enter, and cancel it.
+
+    *how* names the method that reads: ``read_fresh`` for a card's
+    prompt, ``read`` for the ordinary one.
+
+    :returns: the list in which *source* notes what it shows from now on.
+    """
+    reading = asyncio.create_task(getattr(source, how)("answer> "))
+    await asyncio.sleep(0.05)
+    keys.send_text(typed)
+    await asyncio.sleep(SETTLE_S)
+    reading.cancel()
+    await asyncio.wait({reading})
+    assert reading.cancelled(), "the read did not end as a cancelled one"
+    source.withdraw()
+    return _record_prompts(source)
+
+
+async def _card_after(source: PromptToolkitSource, keys, seen: list[str], *typed: str):
+    """Read fresh at ``approve? `` and type each of *typed* at it.
+
+    :returns: whether the read was still waiting before each of *typed*,
+        and the line it returned.
+    """
+    reading = asyncio.create_task(
+        source.read_fresh(
+            "approve? ",
+            discarded=lambda: seen.append("discarded"),
+            unfinished=lambda: seen.append("unfinished"),
+        )
+    )
+    waiting = []
+    for line in typed:
+        await asyncio.sleep(SETTLE_S)
+        waiting.append(not reading.done())
+        keys.send_text(line)
+    return waiting, await asyncio.wait_for(reading, WAIT_S)
+
+
+def _after_a_prompt_was_taken_down(typed_at_it: str, between, *typed_at_the_card: str):
+    """Take a prompt down with *typed_at_it* in it, run *between*, then
+    read fresh and type *typed_at_the_card*.
+
+    *between* is an async function of the source and its keys, for what
+    happens while no card is open.
+    """
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit.input import create_pipe_input
+
+    async def drive():
+        with create_pipe_input() as keys:
+            source = _picker_source(keys)
+            seen = await _taken_down(source, keys, typed_at_it)
+            if between is not None:
+                await between(source, keys)
+                del seen[:]
+            waiting, line = await _card_after(source, keys, seen, *typed_at_the_card)
+            return waiting, line, seen
+
+    return asyncio.run(drive())
+
+
+@pytest.mark.parametrize(
+    "how",
+    [
+        pytest.param("read_fresh", id="a card's prompt"),
+        pytest.param("read", id="the ordinary prompt"),
+    ],
+)
+def test_a_line_begun_at_a_prompt_that_was_taken_down_is_dropped_up_to_its_enter(how):
+    """``ye`` typed at a question's prompt, the prompt cancelled at the
+    deadline, ``s`` and Enter typed at the approval card that opens next.
+    The card reports both things, reads the rest of the line away and
+    waits for a line typed after it. A line begun at the ordinary prompt
+    is treated the same way when that prompt is the one taken down.
+
+    The line is over once its Enter has been read: the card after that
+    one takes the first line typed at it.
+
+    Mutations: do not remember that the cancelled prompt held text in
+    ``PromptToolkitSource`` and the card returns ``s``; keep the mark
+    after a card has acted on it and the second card throws ``y`` away;
+    call ``prompt_async`` directly in ``PromptToolkitSource.read`` and the
+    card after the ordinary prompt returns ``s``; swallow the cancellation
+    in ``PromptToolkitSource._prompt`` and the read that was cancelled
+    returns instead.
+    """
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit.input import create_pipe_input
+
+    async def drive():
+        with create_pipe_input() as keys:
+            source = _picker_source(keys)
+            seen = await _taken_down(source, keys, "ye", how)
+            first = await _card_after(source, keys, seen, "s\r", "n\r")
+            at_the_first = list(seen)
+            del seen[:]
+            second = await _card_after(source, keys, seen, "y\r")
+            return first, at_the_first, second, seen
+
+    first, at_the_first, second, at_the_second = asyncio.run(drive())
+
+    assert first == ([True, True], "n"), "the rest of the word answered the card"
+    assert at_the_first == ["discarded", "unfinished", "approve? ", "approve? "]
+    assert second == ([True], "y")
+    assert at_the_second == ["approve? "]
+
+
+def test_a_prompt_taken_down_with_nothing_typed_leaves_the_next_card_alone():
+    """Mutation: take every cancelled prompt for one that held a line and
+    the first answer typed at the next card is thrown away."""
+    waiting, line, seen = _after_a_prompt_was_taken_down("", None, "y\r")
+
+    assert (waiting, line, seen) == ([True], "y", ["approve? "])
+
+
+def test_a_blank_typed_at_a_prompt_that_was_taken_down_is_a_line_begun():
+    """A space is a key a person pressed, and the line it begins is as
+    unfinished as one with letters in it. ``s`` and Enter typed at the
+    next card finish that line and are read away with it.
+
+    Mutation: strip the text before asking whether the cancelled prompt
+    held any in ``_holds_text`` and the card returns ``s``.
+    """
+    waiting, line, seen = _after_a_prompt_was_taken_down(" ", None, "s\r", "n\r")
+
+    assert (waiting, line) == ([True, True], "n")
+    assert seen == ["discarded", "unfinished", "approve? ", "approve? "]
+
+
+def test_an_enter_typed_before_the_next_card_finishes_the_line_begun_earlier():
+    """The rest of the word and its Enter are typed while no prompt is
+    open. The line is over: the card drops what was typed before it,
+    says so once, and takes the first line typed at it.
+
+    Mutation: let the line begun at the earlier prompt outlast an Enter
+    in ``_drop_keys`` and the ``y`` is read away as the rest of it.
+    """
+
+    async def the_rest(source, keys):
+        keys.send_text("s\r")
+
+    waiting, line, seen = _after_a_prompt_was_taken_down("ye", the_rest, "y\r")
+
+    assert (waiting, line, seen) == ([True], "y", ["discarded", "approve? "])
+
+
+def test_a_line_read_at_the_ordinary_prompt_ends_the_line_begun_earlier():
+    """No card opens before the exchange ends, and the REPL's own prompt
+    reads the rest of the word as the next message, as it always did. A
+    card of a later exchange has nothing to do with that line.
+
+    Mutation: keep the mark through an ordinary read in
+    ``PromptToolkitSource.read`` and the card of the next exchange throws
+    away the first answer typed at it.
+    """
+
+    async def the_next_message(source, keys):
+        keys.send_text("s\r")
+        assert await asyncio.wait_for(source.read("> "), WAIT_S) == "s"
+
+    waiting, line, seen = _after_a_prompt_was_taken_down("ye", the_next_message, "y\r")
+
+    assert (waiting, line, seen) == ([True], "y", ["approve? "])
+
+
+def test_a_card_taken_down_while_it_waits_out_a_half_line_leaves_it_unfinished():
+    """Half a word is typed while a tool runs, and the card that opens is
+    a question. It waits for the Enter of that line, nothing is typed, and
+    its deadline takes the prompt down empty. The line is as unfinished
+    as before, and the approval card that opens later treats it so.
+
+    Mutation: go by the text in the cancelled prompt alone in
+    ``PromptToolkitSource._prompt`` and the later card returns ``s``.
+    """
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit.input import create_pipe_input
+
+    async def drive():
+        with create_pipe_input() as keys:
+            source = _picker_source(keys)
+            keys.send_text("ye")
+            seen = await _taken_down(source, keys, "")
+            waiting, line = await _card_after(source, keys, seen, "s\r", "n\r")
+            return waiting, line, seen
+
+    waiting, line, seen = asyncio.run(drive())
+
+    assert waiting == [True, True]
+    assert line == "n"
+    assert seen == ["discarded", "unfinished", "approve? ", "approve? "]
+
+
+def test_a_read_cancelled_while_it_was_queued_leaves_no_line_behind():
+    """A question queued behind another prompt is taken down before its
+    own prompt ever opened. The text on the terminal then belongs to the
+    prompt that is still open, and is entered there.
+
+    Mutation: look at the session's text whenever a read is withdrawn,
+    whoever was holding the terminal, and the card that opens after both
+    throws away the first answer typed at it.
+    """
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit.input import create_pipe_input
+
+    async def drive():
+        with create_pipe_input() as keys:
+            source = _picker_source(keys)
+            open_prompt = asyncio.create_task(source.read_fresh("approve first? "))
+            await asyncio.sleep(0.05)
+            keys.send_text("ye")
+            queued = asyncio.create_task(source.read_fresh("answer> "))
+            await asyncio.sleep(SETTLE_S)
+            queued.cancel()
+            await asyncio.wait({queued})
+            source.withdraw()
+            keys.send_text("s\r")
+            entered = await asyncio.wait_for(open_prompt, WAIT_S)
+            seen = _record_prompts(source)
+            waiting, line = await _card_after(source, keys, seen, "y\r")
+            return entered, waiting, line, seen
+
+    assert asyncio.run(drive()) == ("yes", [True], "y", ["approve? "])
+
+
+def _two_lines_in_one_write(second: str):
+    """Answer one prompt with two lines sent together, then read again.
+
+    ``prompt_toolkit`` reads both lines in one chunk, accepts the first
+    and keeps the second for its next prompt. *second* names the method
+    the next read uses.
+    """
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit.input import create_pipe_input
+
+    async def drive():
+        with create_pipe_input() as keys:
+            source = _picker_source(keys)
+            keys.send_text("one\rtwo\r")
+            first = await asyncio.wait_for(source.read("> "), WAIT_S)
+            reading = asyncio.create_task(getattr(source, second)("> "))
+            await asyncio.sleep(SETTLE_S)
+            waiting = not reading.done()
+            keys.send_text("three\r")
+            return first, waiting, await asyncio.wait_for(reading, WAIT_S)
+
+    return asyncio.run(drive())
+
+
+def test_keys_the_library_kept_from_the_last_prompt_do_not_answer_a_fresh_read():
+    """The second of two pasted lines is in ``prompt_toolkit``'s own
+    type-ahead store, not in the terminal, by the time the next prompt
+    opens.
+
+    Mutation: drop ``get_typeahead`` from ``_drop_keys`` and the fresh
+    read returns ``two``.
+    """
+    assert _two_lines_in_one_write("read_fresh") == ("one", True, "three")
+
+
+def test_an_ordinary_read_still_gets_what_was_typed_ahead():
+    """The REPL's own prompt keeps type-ahead: a line typed while the
+    last answer was still printing is the next message."""
+    first, _waiting, second = _two_lines_in_one_write("read")
+
+    assert (first, second) == ("one", "two")
+
+
+def test_half_a_line_the_library_kept_is_dropped_up_to_its_enter_too():
+    """``one``, Enter and ``tw`` arrive together at an open prompt. The
+    library accepts ``one`` and keeps ``tw`` for its next prompt, where
+    the ``o`` and Enter typed later would finish it.
+
+    Mutation: look for an unfinished line only in what ``read_keys``
+    returned in ``_drop_keys`` and the fresh read returns ``o``.
+    """
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit.input import create_pipe_input
+
+    async def drive():
+        with create_pipe_input() as keys:
+            source = _picker_source(keys)
+            cut: list[int] = []
+            keys.send_text("one\rtw")
+            first = await asyncio.wait_for(source.read("> "), WAIT_S)
+            reading = asyncio.create_task(
+                source.read_fresh("> ", unfinished=lambda: cut.append(1))
+            )
+            await asyncio.sleep(SETTLE_S)
+            keys.send_text("o\r")
+            await asyncio.sleep(SETTLE_S)
+            waiting = not reading.done()
+            keys.send_text("three\r")
+            return first, waiting, await asyncio.wait_for(reading, WAIT_S), len(cut)
+
+    assert asyncio.run(drive()) == ("one", True, "three", 1)
+
+
+def test_a_reader_queued_behind_a_half_line_waits_for_the_line_that_counts():
+    """The card that opened on a half line shows its prompt twice, and
+    holds the terminal from the first showing until it is answered. The
+    card queued behind it drops what was typed only after that, so a
+    second line sent with the first card's answer does not answer it.
+
+    Mutation: let go of the lock between the two prompts in
+    ``PromptToolkitSource.read_fresh`` and the queued read does its
+    dropping before the first card is answered. It then returns ``two``.
+    """
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit.input import create_pipe_input
+
+    async def drive():
+        with create_pipe_input() as keys:
+            source = _picker_source(keys)
+            keys.send_text("ye")
+            first = asyncio.create_task(source.read_fresh("first? "))
+            await asyncio.sleep(0.05)
+            second = asyncio.create_task(source.read_fresh("second? "))
+            await asyncio.sleep(0.05)
+            keys.send_text("s\r")
+            await asyncio.sleep(SETTLE_S)
+            waiting = not first.done() and not second.done()
+            keys.send_text("one\rtwo\r")
+            answered = await asyncio.wait_for(first, WAIT_S)
+            await asyncio.sleep(SETTLE_S)
+            still_waiting = not second.done()
+            keys.send_text("three\r")
+            return waiting, answered, still_waiting, await asyncio.wait_for(second, WAIT_S)
+
+    assert asyncio.run(drive()) == (True, "one", True, "three")
+
+
+def test_a_queued_fresh_read_drops_what_was_typed_until_its_own_prompt_opens():
+    """Two cards queue on the terminal. What is typed while the first
+    prompt is open, past the line that answers it, was typed before the
+    second prompt and does not answer the second card.
+
+    Mutation: call ``_drop_keys`` before taking the lock in
+    ``PromptToolkitSource.read_fresh`` and the second read returns
+    ``two``.
+    """
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit.input import create_pipe_input
+
+    async def drive():
+        with create_pipe_input() as keys:
+            source = _picker_source(keys)
+            first = asyncio.create_task(source.read_fresh("first? "))
+            await asyncio.sleep(0.05)
+            second = asyncio.create_task(source.read_fresh("second? "))
+            await asyncio.sleep(0.05)
+            keys.send_text("one\rtwo\r")
+            answered = await asyncio.wait_for(first, WAIT_S)
+            await asyncio.sleep(SETTLE_S)
+            waiting = not second.done()
+            keys.send_text("three\r")
+            return answered, waiting, await asyncio.wait_for(second, WAIT_S)
+
+    assert asyncio.run(drive()) == ("one", True, "three")
+
+
+def test_a_closed_terminal_source_refuses_a_fresh_read():
+    """Mutation: skip the session check in ``read_fresh`` and this is an
+    :exc:`AttributeError` from ``None.input``, which a card reports as a
+    terminal that could not ask rather than as nobody being there."""
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit.input import create_pipe_input
+
+    async def drive():
+        with create_pipe_input() as keys:
+            source = _picker_source(keys)
+            source.close()
+            await source.read_fresh("approve? ")
+
+    with pytest.raises(EOFError):
+        asyncio.run(drive())
+
+
+class _Pty:
+    """A pseudo-terminal: the stream a source reads and a way to type at it.
+
+    The secondary end is a real terminal in its default line mode, so
+    ``isatty``, the input queue and the half-typed line are the kernel's.
+    """
+
+    def __init__(self) -> None:
+        self._primary, secondary = os.openpty()
+        self.stream = os.fdopen(secondary, "r", encoding="utf-8")
+
+    def type(self, text: str) -> None:
+        """Type *text*, and return once the terminal has taken it in.
+
+        The kernel hands what is written here to the terminal on a worker
+        of its own, a moment later. The terminal echoes each character as
+        it takes it, so the echo coming back says the text has arrived.
+        A person's typing is in that state long before the next prompt
+        opens; a test that reads straight after writing is not.
+        """
+        typed = text.encode("utf-8")
+        os.write(self._primary, typed)
+        awaited = len(typed.replace(b"\n", b"\r\n"))
+        deadline = time.monotonic() + WAIT_S
+        while awaited > 0:
+            ready, _, _ = select.select(
+                [self._primary], [], [], max(0.0, deadline - time.monotonic())
+            )
+            assert ready, f"the terminal never echoed {text!r}"
+            awaited -= len(os.read(self._primary, 4096))
+
+    def close(self) -> None:
+        """Hang up first, so a ``readline`` still waiting returns and
+        lets go of the stream it is reading."""
+        os.close(self._primary)
+        try:
+            self.stream.close()
+        except OSError:
+            pass
+
+
+@pytest.fixture
+def terminal():
+    pytest.importorskip("termios")
+    opened = _Pty()
+    try:
+        yield opened
+    finally:
+        opened.close()
+
+
+def test_keys_waiting_at_a_real_terminal_are_read_in_raw_mode(terminal):
+    """Between prompts the terminal is in its line mode, where a read is
+    given nothing of a line until Enter. ``_drop_keys`` reads in raw mode,
+    which is what lets it take a half-typed line out of the terminal and
+    see that it is unfinished.
+
+    Mutation: read without ``keys.raw_mode()`` in ``_drop_keys`` and the
+    half line is neither reported nor dropped: the line read afterwards
+    is ``yes``.
+    """
+    pytest.importorskip("prompt_toolkit")
+    from prompt_toolkit.input.vt100 import Vt100Input
+
+    terminal.type("ye")
+    dropped = _input._drop_keys(Vt100Input(terminal.stream))
+    terminal.type("s\n")
+
+    assert dropped == (True, True)
+    assert terminal.stream.readline() == "s\n"
+
+
+PATIENT_S = 2.0
+"""A wait for a leftover ``readline`` that a busy machine cannot outlast.
+It ends as soon as the thread reports, so a test only spends it when the
+thread has nothing to say."""
+
+
+@pytest.fixture
+def patient(monkeypatch):
+    """Give a leftover ``readline`` :data:`PATIENT_S` to report.
+
+    For tests that hold what happens once it has reported. How long the
+    source itself waits is held by a test that does not use this.
+    """
+    monkeypatch.setattr(_input, "_HANDOVER_S", PATIENT_S)
+
+
+async def _echoed(echo: io.StringIO, prompt: str) -> None:
+    """Wait until *prompt* has been written to *echo*: its read has the
+    stream, has dropped what it drops, and is now waiting for a line."""
+    deadline = time.monotonic() + WAIT_S
+    while prompt not in echo.getvalue():
+        assert time.monotonic() < deadline, f"{prompt!r} was never shown"
+        await asyncio.sleep(0.001)
+
+
+def _new_readers(known: set[threading.Thread]) -> int:
+    """How many ``readline`` threads are alive that are not in *known*."""
+    return sum(
+        1
+        for thread in threading.enumerate()
+        if thread.name == "omicsclaw-stdin" and thread not in known
+    )
+
+
+@pytest.mark.parametrize(
+    ("typed_before", "typed_after", "line", "reports"),
+    [
+        pytest.param("yes\n", "n\n", "n", 1, id="a whole line"),
+        pytest.param("a\nb\n", "n\n", "n", 1, id="two lines"),
+        pytest.param("ye", "s\n", "s", 0, id="half a line"),
+        pytest.param("", "y\n", "y", 0, id="nothing"),
+    ],
+)
+def test_a_fresh_read_of_a_terminal_stream_takes_only_what_is_typed_after_it_opens(
+    terminal, typed_before, typed_after, line, reports
+):
+    """The source used when ``prompt_toolkit`` is not installed. The
+    terminal holds a half-typed line back until Enter, so that case is
+    dropped without a report. For the same reason this source cannot tell
+    that a line was left unfinished: it never reports one, and the ``s``
+    typed after ``ye`` is returned as the line.
+
+    Mutation: skip ``termios.tcflush`` in ``_flush_typed`` and the first
+    three cases return what was typed before.
+    """
+
+    async def drive():
+        echo = io.StringIO()
+        source = StreamSource(terminal.stream, echo=echo)
+        dropped: list[int] = []
+        cut: list[int] = []
+        terminal.type(typed_before)
+        reading = asyncio.create_task(
+            source.read_fresh(
+                "approve? ",
+                discarded=lambda: dropped.append(1),
+                unfinished=lambda: cut.append(1),
+            )
+        )
+        await _echoed(echo, "approve? ")
+        await asyncio.sleep(SETTLE_S)
+        waiting = not reading.done()
+        terminal.type(typed_after)
+        line = await asyncio.wait_for(reading, WAIT_S)
+        return waiting, line, len(dropped), len(cut)
+
+    waiting, read, reported, cut = asyncio.run(drive())
+
+    assert waiting, "the read was answered by what was typed before it"
+    assert read == line
+    assert (reported, cut) == (reports, 0)
+
+
+def test_a_queued_fresh_read_of_a_terminal_stream_drops_until_its_own_prompt_opens(
+    terminal,
+):
+    """As for the ``prompt_toolkit`` source: the second of two lines typed
+    at the first card's prompt is still in the terminal's queue when the
+    second card gets the stream, and does not answer it.
+
+    Mutation: drop what was typed before taking the lock in
+    ``StreamSource._read`` and the second read returns ``two``.
+    """
+
+    async def drive():
+        echo = io.StringIO()
+        source = StreamSource(terminal.stream, echo=echo)
+        first = asyncio.create_task(source.read_fresh("first? "))
+        await _echoed(echo, "first? ")
+        second = asyncio.create_task(source.read_fresh("second? "))
+        await asyncio.sleep(0.05)  # the second reader is now on the lock
+        terminal.type("one\ntwo\n")
+        answered = await asyncio.wait_for(first, WAIT_S)
+        await _echoed(echo, "second? ")
+        await asyncio.sleep(0.05)
+        waiting = not second.done()
+        terminal.type("three\n")
+        return answered, waiting, await asyncio.wait_for(second, WAIT_S)
+
+    assert asyncio.run(drive()) == ("one", True, "three")
+
+
+def _after_a_cancelled_read(terminal, late: str, second: str):
+    """Cancel a read, type *late*, then read with the method *second* names
+    and, once that read's prompt is up, type ``y``.
+
+    :returns: whether the second read was still waiting when its prompt
+        came up, the line it returned, how often it reported dropping
+        input, and how many ``readline`` threads the source had alive.
+    """
+
+    async def drive():
+        known = set(threading.enumerate())
+        echo = io.StringIO()
+        source = StreamSource(terminal.stream, echo=echo)
+        dropped: list[int] = []
+        first = asyncio.create_task(source.read("answer> "))
+        await _echoed(echo, "answer> ")
+        first.cancel()
+        await asyncio.wait({first})
+        terminal.type(late)
+        await asyncio.sleep(0.05)
+        if second == "read_fresh":
+            reading = asyncio.create_task(
+                source.read_fresh("approve? ", discarded=lambda: dropped.append(1))
+            )
+        else:
+            reading = asyncio.create_task(source.read("approve? "))
+        await _echoed(echo, "approve? ")
+        await asyncio.sleep(0.05)
+        waiting, readers = not reading.done(), _new_readers(known)
+        terminal.type("y\n")
+        return waiting, await asyncio.wait_for(reading, WAIT_S), len(dropped), readers
+
+    return asyncio.run(drive())
+
+
+def test_a_line_a_cancelled_read_already_took_does_not_answer_a_fresh_read(
+    terminal, patient
+):
+    """A question's prompt is taken down at its deadline and its
+    ``readline`` stays behind. The reply typed too late is read by that
+    thread, out of the terminal's queue, before the approval card opens.
+
+    Mutation: keep the ``readline`` that reported as the pending one in
+    ``StreamSource._drop_typed`` and the fresh read returns ``late``.
+    """
+    waiting, read, reported, _readers = _after_a_cancelled_read(
+        terminal, "late\n", "read_fresh"
+    )
+
+    assert waiting, "the read was answered by the line typed before it"
+    assert (read, reported) == ("y", 1)
+
+
+def test_an_ordinary_read_still_gets_the_line_a_cancelled_read_took(terminal):
+    """With no card open, the late line goes to the REPL's own prompt."""
+    _waiting, read, reported, _readers = _after_a_cancelled_read(
+        terminal, "late\n", "read"
+    )
+
+    assert (read, reported) == ("late", 0)
+
+
+def test_a_fresh_read_reuses_a_readline_that_is_still_waiting(terminal):
+    """Nothing was typed after the cancelled read, so its ``readline`` is
+    still waiting and what it returns next was typed after the prompt. A
+    second ``readline`` beside it would race it for the line.
+
+    Mutation: forget the pending ``readline`` whether or not it reported
+    and two threads are alive on one stream.
+    """
+    waiting, read, reported, readers = _after_a_cancelled_read(
+        terminal, "", "read_fresh"
+    )
+
+    assert waiting
+    assert (read, reported) == ("y", 0)
+    assert readers == 1, "a second readline was started on the same stream"
+
+
+def test_a_line_the_cancelled_read_has_not_reported_yet_is_dropped_too(
+    terminal, patient
+):
+    """The ``readline`` thread has taken the line out of the terminal and
+    the loop has not heard of it when the fresh read starts. The queue is
+    already empty, so only waiting for the thread to report tells this
+    line from one typed at the prompt.
+
+    Mutation: look at the pending ``readline`` without waiting for it in
+    ``StreamSource._drop_typed`` and the fresh read returns ``late``.
+    """
+
+    async def drive():
+        echo = io.StringIO()
+        source = StreamSource(terminal.stream, echo=echo)
+        dropped: list[int] = []
+        first = asyncio.create_task(source.read("answer> "))
+        await _echoed(echo, "answer> ")
+        first.cancel()
+        await asyncio.wait({first})
+        reading = asyncio.create_task(
+            source.read_fresh("approve? ", discarded=lambda: dropped.append(1))
+        )
+        terminal.type("late\n")
+        time.sleep(0.05)  # the thread takes the line; the loop has not run
+        await _echoed(echo, "approve? ")
+        await asyncio.sleep(0.05)
+        waiting = not reading.done()
+        terminal.type("y\n")
+        return waiting, await asyncio.wait_for(reading, WAIT_S), len(dropped)
+
+    assert asyncio.run(drive()) == (True, "y", 1)
+
+
+def _queued(stream) -> int:
+    """How many characters of finished lines wait in *stream*'s terminal."""
+    import fcntl
+    import struct
+    import termios
+
+    counted = fcntl.ioctl(stream.fileno(), termios.FIONREAD, struct.pack("i", 0))
+    return struct.unpack("i", counted)[0]
+
+
+def test_a_line_the_cancelled_read_took_is_dropped_while_another_still_waits(
+    terminal, patient
+):
+    """Two replies are typed too late. The ``readline`` left behind takes
+    the first out of the terminal and the second stays in the queue.
+    Emptying the queue finds a line to drop, and the first is still to be
+    collected from the thread.
+
+    Mutation: skip the wait for the leftover ``readline`` when the queue
+    already gave a line to drop in ``StreamSource._drop_typed`` and the
+    fresh read returns ``late``.
+    """
+
+    async def drive():
+        echo = io.StringIO()
+        source = StreamSource(terminal.stream, echo=echo)
+        dropped: list[int] = []
+        first = asyncio.create_task(source.read("answer> "))
+        await _echoed(echo, "answer> ")
+        first.cancel()
+        await asyncio.wait({first})
+        terminal.type("late\nlater\n")
+        deadline = time.monotonic() + WAIT_S
+        while _queued(terminal.stream) != len("later\n"):
+            assert time.monotonic() < deadline, "the first line was never taken"
+            await asyncio.sleep(0.001)
+        reading = asyncio.create_task(
+            source.read_fresh("approve? ", discarded=lambda: dropped.append(1))
+        )
+        await _echoed(echo, "approve? ")
+        await asyncio.sleep(0.05)
+        waiting = not reading.done()
+        terminal.type("y\n")
+        return waiting, await asyncio.wait_for(reading, WAIT_S), len(dropped)
+
+    assert asyncio.run(drive()) == (True, "y", 1)
+
+
+def test_a_leftover_readline_is_given_longer_than_a_switch_interval_to_report(
+    terminal,
+):
+    """The thread that holds a line reports it once it has the
+    interpreter, and on a busy loop it can wait a whole switch interval
+    for that. The fresh read waits longer than that before it shows its
+    prompt, or a line taken just before the prompt would pass for one
+    typed at it.
+
+    Mutation: set ``_HANDOVER_S`` to zero and the prompt is shown at once.
+    """
+
+    async def drive():
+        echo = io.StringIO()
+        source = StreamSource(terminal.stream, echo=echo)
+        first = asyncio.create_task(source.read("answer> "))
+        await _echoed(echo, "answer> ")
+        first.cancel()
+        await asyncio.wait({first})
+        started = time.monotonic()
+        reading = asyncio.create_task(source.read_fresh("approve? "))
+        await _echoed(echo, "approve? ")
+        waited = time.monotonic() - started
+        terminal.type("y\n")
+        return waited, await asyncio.wait_for(reading, WAIT_S)
+
+    waited, line = asyncio.run(drive())
+
+    assert line == "y"
+    assert waited > 2 * sys.getswitchinterval(), f"the prompt was shown after {waited:.4f}s"
+
+
+class _FailsOnceAtATerminal:
+    """A terminal stand-in whose first ``readline`` fails once released."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.asked = threading.Event()
+        self.release = threading.Event()
+
+    def isatty(self) -> bool:
+        return True
+
+    def readline(self) -> str:
+        self.calls += 1
+        if self.calls > 1:
+            return "y\n"
+        self.asked.set()
+        self.release.wait(WAIT_S)
+        raise OSError(5, "Input/output error")
+
+
+def test_a_failure_a_cancelled_read_left_behind_is_dropped_with_its_line(
+    caplog, patient
+):
+    """The ``readline`` left running fails before the fresh read starts.
+    Its failure belongs to the earlier prompt: the fresh read does not
+    raise it, and it is not left for the event loop to report when the
+    future is collected.
+
+    Mutation: do not read the dropped future's exception in
+    ``StreamSource._drop_typed`` and the loop logs it as never retrieved.
+    """
+
+    async def drive():
+        stream = _FailsOnceAtATerminal()
+        source = StreamSource(stream)
+        dropped: list[int] = []
+        first = asyncio.ensure_future(source.read("answer> "))
+        while not stream.asked.is_set():
+            await asyncio.sleep(0.01)
+        first.cancel()
+        await asyncio.wait({first})
+        stream.release.set()
+        line = await asyncio.wait_for(
+            source.read_fresh("approve? ", discarded=lambda: dropped.append(1)),
+            WAIT_S,
+        )
+        return line, len(dropped)
+
+    with caplog.at_level(logging.ERROR):
+        result = asyncio.run(drive())
+        gc.collect()
+
+    assert result == ("y", 1)
+    assert "never retrieved" not in caplog.text
+
+
+def test_a_stream_that_is_not_a_terminal_hands_a_fresh_read_its_lines_in_order():
+    """``oc cli < script.txt``: the file's author wrote the answer to a
+    card on the line after the request that raises it. Dropping it would
+    leave every card in a piped run unanswered.
+
+    Mutation: drop the ``is_interactive`` test from ``StreamSource._read``
+    and the line a cancelled read left behind is dropped.
+    """
+
+    async def drive():
+        dropped: list[int] = []
+        report = lambda: dropped.append(1)  # noqa: E731
+        piped = StreamSource(io.StringIO("do it\ny\n"))
+        lines = [await piped.read("> "), await piped.read_fresh("approve? ", discarded=report)]
+
+        stream = Typist()
+        source = StreamSource(stream)
+        first = asyncio.ensure_future(source.read("q1"))
+        while not stream.asked.is_set():
+            await asyncio.sleep(0.01)
+        first.cancel()
+        await asyncio.wait({first})
+        stream.type("written before the card\n")
+        await asyncio.sleep(0.05)
+        lines.append(
+            await asyncio.wait_for(source.read_fresh("approve? ", discarded=report), WAIT_S)
+        )
+        return lines, dropped
+
+    assert asyncio.run(drive()) == (["do it", "y", "written before the card"], [])
+
+
+def test_withdrawing_ends_the_prompt_s_line_and_drops_what_was_half_typed(terminal):
+    """A question's deadline passes with ``Lou`` typed and no Enter. The
+    cursor is still after the prompt, and the terminal still holds
+    ``Lou``, which would join the next line typed.
+
+    Mutations: do not write the newline and the echo ends at the prompt;
+    do not flush in ``withdraw`` and the next read returns ``Lou``; do not
+    clear ``_left_open`` and the second call writes a second newline.
+    """
+
+    async def drive():
+        echo = io.StringIO()
+        source = StreamSource(terminal.stream, echo=echo)
+        reading = asyncio.create_task(source.read_fresh("answer [#1]> "))
+        await _echoed(echo, "answer [#1]> ")
+        terminal.type("Lou")
+        await asyncio.sleep(0.05)
+        reading.cancel()
+        await asyncio.wait({reading})
+        source.withdraw()
+        source.withdraw()
+        shown = echo.getvalue()
+        terminal.type("\n")
+        return shown, await asyncio.wait_for(source.read("> "), WAIT_S)
+
+    assert asyncio.run(drive()) == ("answer [#1]> \n", "")
+
+
+def test_withdrawing_does_nothing_when_no_prompt_was_left_open():
+    """After an answered read the person's own Enter ended the line. A
+    read cancelled while it was queued never showed its prompt, and the
+    one on screen belongs to the reader ahead of it. A source that echoes
+    nothing has no line to end.
+
+    Mutations: set ``_left_open`` on any cancellation and the queued case
+    gains a newline; do not clear it when a prompt is echoed and the
+    answered case does.
+    """
+
+    async def drive():
+        answered_echo = io.StringIO()
+        answered = StreamSource(io.StringIO("a\n"), echo=answered_echo)
+        await answered.read("> ")
+        answered.withdraw()
+
+        stream = HeldStream("first\n")
+        queued_echo = io.StringIO()
+        queued = StreamSource(stream, echo=queued_echo)
+        first = asyncio.ensure_future(queued.read("first> "))
+        while not stream.asked.is_set():
+            await asyncio.sleep(0.01)
+        second = asyncio.ensure_future(queued.read("second> "))
+        await asyncio.sleep(0)  # the second reader is now on the lock
+        second.cancel()
+        await asyncio.wait({second})
+        queued.withdraw()
+        stream.release.set()
+        await asyncio.wait_for(first, WAIT_S)
+
+        silent_stream = Typist()
+        silent = StreamSource(silent_stream)
+        reading = asyncio.ensure_future(silent.read("> "))
+        while not silent_stream.asked.is_set():
+            await asyncio.sleep(0.01)
+        reading.cancel()
+        await asyncio.wait({reading})
+        silent.withdraw()
+        silent_stream.type("")  # let the waiting thread finish
+        return answered_echo.getvalue(), queued_echo.getvalue()
+
+    assert asyncio.run(drive()) == ("> ", "first> ")
+
+
+def test_a_cancelled_and_reopened_prompt_is_withdrawn_only_while_it_is_open():
+    """The flag follows the last prompt echoed: a prompt answered after an
+    earlier one was abandoned leaves nothing to take down.
+
+    Mutation: do not clear ``_left_open`` in ``StreamSource._read`` and
+    the withdrawal after the answered read writes a newline.
+    """
+
+    async def drive():
+        stream = Typist()
+        echo = io.StringIO()
+        source = StreamSource(stream, echo=echo)
+        first = asyncio.ensure_future(source.read("answer> "))
+        while not stream.asked.is_set():
+            await asyncio.sleep(0.01)
+        first.cancel()
+        await asyncio.wait({first})
+        stream.type("next message\n")
+        line = await asyncio.wait_for(source.read("> "), WAIT_S)
+        source.withdraw()
+        return line, echo.getvalue()
+
+    assert asyncio.run(drive()) == ("next message", "answer> > ")
+
+
+class _Terminal(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+def test_a_terminal_with_no_descriptor_is_read_without_flushing():
+    """A stand-in that says it is a terminal and has no file descriptor,
+    as an embedded console does. The fresh read reads; it does not fail.
+
+    Mutation: let ``fileno``'s error out of ``_flush_typed`` and the read
+    raises :exc:`io.UnsupportedOperation`.
+    """
+
+    async def drive():
+        source = StreamSource(_Terminal("y\n"))
+        return await asyncio.wait_for(source.read_fresh("approve? "), WAIT_S)
+
+    assert asyncio.run(drive()) == "y"
+
+
+@pytest.mark.parametrize("failure", ["termios.error", "OSError"])
+def test_a_queue_that_could_not_be_emptied_is_not_reported_as_dropped(
+    terminal, monkeypatch, failure
+):
+    """``tcflush`` can fail, for one on a terminal that has gone away.
+    Nothing was thrown away then. Reporting a drop would print the notice
+    above a card that the waiting line goes on to answer.
+
+    Mutation: return ``True`` when ``tcflush`` fails in ``_flush_typed``.
+    """
+    import termios
+
+    def refuse(descriptor: int, queue: int) -> None:
+        raise {"termios.error": termios.error, "OSError": OSError}[failure](
+            5, "Input/output error"
+        )
+
+    monkeypatch.setattr(termios, "tcflush", refuse)
+    terminal.type("yes\n")
+
+    assert _input._flush_typed(terminal.stream) is False
+    assert terminal.stream.readline() == "yes\n"
+
+
+def _closed() -> io.StringIO:
+    stream = io.StringIO()
+    stream.close()
+    return stream
+
+
+@pytest.mark.parametrize(
+    ("stream", "expected"),
+    [
+        pytest.param(_Terminal(), True, id="a terminal"),
+        pytest.param(io.StringIO("piped\n"), False, id="a pipe"),
+        pytest.param(_closed(), False, id="a closed stream"),
+        pytest.param(object(), False, id="a stream with no isatty"),
+    ],
+)
+def test_only_a_stream_that_says_it_is_a_terminal_is_interactive(stream, expected):
+    """A closed stream raises :exc:`ValueError` from ``isatty`` and a
+    stand-in for stdin may have no ``isatty`` at all. Neither has a person
+    typing at it, and a surface told otherwise would wait at a question
+    nobody can answer.
+
+    Mutation: answer ``True`` from the ``except`` in ``is_interactive``
+    and the last two cases fail.
+    """
+    assert is_interactive(stream) is expected
+
+
+def test_a_process_with_no_stdin_is_not_interactive(monkeypatch):
+    """``sys.stdin`` is ``None`` in a process started without one."""
+    monkeypatch.setattr("sys.stdin", None)
+
+    assert is_interactive() is False

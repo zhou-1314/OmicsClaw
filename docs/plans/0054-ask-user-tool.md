@@ -4,6 +4,8 @@
 
 **2026-10-07 核对**：本计划的任务都还没有实现。
 
+**2026-10-08 交付（第一阶段）**：任务 A、B、C 已实现，提交在本地分支 `feat/ask-user`，待独立审核与 owner 过目。任务 D（Channel）留给第二阶段，`surface_config` 的 `channel` 行仍为关。0052 的 T1 与显示层前置步在同一分支交付。按当前代码核对的结果、验收证据和与本文的差异见 [交付记录](0054-ask-user-tool-delivery.md)；本文正文未改，行号仍是 2026-09-23 的。
+
 **依赖**：A 随时可做。**B 依赖 0052 T1**（抽出会合原语 `Rendezvous` 到 `entry/rendezvous.py`、
 `TurnHandle` 持有审批与提问共用的编号计数器、加 `TurnEvent.subagent`；本计划字段追加其后，裁定
 10）与缺陷修复 E1（`entry/display.py`，函数已在工作树）。C 依赖 B 与已扩展的 `Repl._read_card`

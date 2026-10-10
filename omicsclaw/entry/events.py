@@ -14,6 +14,10 @@ three reasons that are all structural rather than stylistic:
     ``ApprovalChannel`` is this one, so the layer that can say so is this
     one (plan 0031 Q5).
 
+``QUESTION_ASKED`` / ``QUESTION_SETTLED``
+    The same arrangement for a question a tool puts to the person through
+    the question channel this layer binds.
+
 ``CONTEXT`` / ``COMPACTION``
     Both come from the compactor the engine consults before each model
     call, not from the engine: the engine does not know what a budget or
@@ -60,7 +64,13 @@ from typing import Final, Literal
 from omicsclaw.context.budget import BudgetReport
 from omicsclaw.context.compaction import CompactionRecord
 from omicsclaw.engine.types import EngineEvent, EngineEventType
-from omicsclaw.tools.context import ApprovalDecision, ApprovalRequest, ProgressUpdate
+from omicsclaw.tools.context import (
+    ApprovalDecision,
+    ApprovalRequest,
+    ProgressUpdate,
+    QuestionAnswer,
+    QuestionRequest,
+)
 
 
 class TurnEventType(StrEnum):
@@ -118,6 +128,14 @@ class TurnEventType(StrEnum):
     APPROVAL_SETTLED = "approval_settled"
     """The question was answered, timed out, or the exchange ended
     without it being answered."""
+
+    QUESTION_ASKED = "question_asked"
+    """A tool put a question to the person and is waiting for the answer.
+    Never dropped, for :attr:`APPROVAL_REQUIRED`'s reason."""
+
+    QUESTION_SETTLED = "question_settled"
+    """The question was answered or declined, its deadline passed, or the
+    exchange ended first."""
 
     TURN_END = "turn_end"
     """Pass-through. **One model call** finished — *N* per exchange, not
@@ -220,8 +238,10 @@ class TurnEvent:
         PROGRESS          -> progress
         TOOL_START        -> engine
         TOOL_RESULT       -> engine
-        APPROVAL_REQUIRED -> approval, request_id
+        APPROVAL_REQUIRED -> approval, request_id, subagent
         APPROVAL_SETTLED  -> request_id, decision
+        QUESTION_ASKED    -> question, request_id
+        QUESTION_SETTLED  -> request_id, answer
         TURN_END          -> engine
         GAP               -> gap
         EXCHANGE_END      -> terminal, error
@@ -296,6 +316,18 @@ class TurnEvent:
     approval whose outcome cannot be read renders as "something was
     decided", which is not a thing a Surface can show anyone.
     """
+
+    subagent: str = ""
+    """On ``APPROVAL_REQUIRED``, the sub-agent whose run the asking tool
+    call belongs to; ``""`` when the parent agent asks."""
+
+    question: QuestionRequest | None = None
+    """The question on a ``QUESTION_ASKED`` frame. :attr:`request_id`
+    correlates it with ``QUESTION_SETTLED`` and with
+    ``TurnHandle.answer(request_id, ...)``."""
+
+    answer: QuestionAnswer | None = None
+    """How the question ended, on a ``QUESTION_SETTLED`` frame."""
 
     # ---- constructors ---------------------------------------------------
     #
@@ -414,6 +446,7 @@ class TurnEvent:
         seq: int = 0,
         session_id: str = "",
         turn_id: str = "",
+        subagent: str = "",
     ) -> TurnEvent:
         return cls(
             type=TurnEventType.APPROVAL_REQUIRED,
@@ -422,6 +455,7 @@ class TurnEvent:
             turn_id=turn_id,
             approval=request,
             request_id=request_id,
+            subagent=subagent,
         )
 
     @classmethod
@@ -441,6 +475,44 @@ class TurnEvent:
             turn_id=turn_id,
             request_id=request_id,
             decision=decision,
+        )
+
+    @classmethod
+    def question_asked(
+        cls,
+        request: QuestionRequest,
+        request_id: str,
+        *,
+        seq: int = 0,
+        session_id: str = "",
+        turn_id: str = "",
+    ) -> TurnEvent:
+        return cls(
+            type=TurnEventType.QUESTION_ASKED,
+            seq=seq,
+            session_id=session_id,
+            turn_id=turn_id,
+            request_id=request_id,
+            question=request,
+        )
+
+    @classmethod
+    def question_settled(
+        cls,
+        request_id: str,
+        answer: QuestionAnswer,
+        *,
+        seq: int = 0,
+        session_id: str = "",
+        turn_id: str = "",
+    ) -> TurnEvent:
+        return cls(
+            type=TurnEventType.QUESTION_SETTLED,
+            seq=seq,
+            session_id=session_id,
+            turn_id=turn_id,
+            request_id=request_id,
+            answer=answer,
         )
 
     @classmethod
