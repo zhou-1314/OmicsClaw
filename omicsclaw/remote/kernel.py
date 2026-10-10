@@ -41,6 +41,15 @@ enforces that invariant: it refuses to run on the event loop, because
 ``asyncio.run`` cannot nest — the one P4 call site that used to kill
 from the loop thread (``_park_with_obituary``) now offloads to a thread
 so the remote kill can pay its SSH round trip off-loop.
+
+**Two seams deliberately untouched.** The ``X-OmicsClaw-Runtime``
+response header (P3's routing seam) is not spoken here: it answers
+*where an HTTP request's backend lives*, and a remote kernel is reached
+by a tool argument or a job body, not by a wire route — widening it to
+mean two things would cost the header its one meaning. And ``bash``
+stays location-blind: remote shell-shaped work is C1's ``remote_exec``
+family's trade, and a location-dispatching ``bash`` would be a second
+shell seam with none of the kernel's persistent state to offer.
 """
 
 from __future__ import annotations
@@ -172,6 +181,19 @@ tunnel forwards them."""
 _LAUNCH_CONN_MARKER = "===OMICSCLAW_KERNEL_CONN==="
 _LAUNCH_PID_MARKER = "===OMICSCLAW_KERNEL_PID==="
 _LAUNCH_LOG_MARKER = "===OMICSCLAW_KERNEL_LOG==="
+
+
+def _valid_pid(pid: Any) -> bool:
+    """Whether *pid* names one process a signal may be aimed at.
+
+    Zero and the negatives are not "no process" in ``os.kill``'s
+    language — ``-1`` is *every process the caller may signal* — so the
+    check lives in one place and every site that splices a pid into a
+    command or hands one to a syscall asks it: the parse, the cleanup
+    command, the interrupt, the liveness probe, and the group kill. The
+    incident that taught this: a test double's ``pid = -1`` reached
+    ``os.kill(-1, SIGKILL)`` and broadcast across the host."""
+    return isinstance(pid, int) and pid > 0
 
 
 def _remote_path(path: str) -> str:
@@ -516,6 +538,14 @@ def parse_launch_output(text: str) -> tuple[dict[str, Any], int]:
         raise RemoteKernelLaunchError(
             f"the remote kernel recorded no usable pid ({pid_text!r})"
         ) from exc
+    if not _valid_pid(pid):
+        # a pid of zero or less is a broadcast id to kill, not a
+        # process; a launch that reports one is refused whole rather
+        # than spliced into a cleanup command later
+        raise RemoteKernelLaunchError(
+            f"the remote kernel recorded pid {pid!r}, which names no"
+            " one process; refusing the launch"
+        )
     return info, pid
 
 
@@ -557,7 +587,15 @@ def build_remote_cleanup_command(pid: int, session_dir: str) -> str:
     Only ever addresses the pid this launch recorded and the directory
     this launch created — never a name match, never a pkill. The ``;``
     separators, not ``&&``: a kernel that already died must not stop the
-    directory from being cleaned."""
+    directory from being cleaned. A pid of zero or less is refused
+    outright — it would splice into ``kill -KILL`` as a broadcast.
+
+    :raises ValueError: *pid* does not name one process."""
+    if not _valid_pid(pid):
+        raise ValueError(
+            f"refusing to build a kill command for pid {pid!r}: zero"
+            " and negative pids are broadcast ids, not processes"
+        )
     return (
         f"kill -KILL {int(pid)} 2>/dev/null; "
         f"rm -rf -- {_remote_path(session_dir)} 2>/dev/null; true"
@@ -768,6 +806,9 @@ class RemoteSessionKernel(SessionKernel):
         conn_path.write_text(
             json.dumps(local_info, indent=1), encoding="utf-8"
         )
+        # the file carries the session key: the same 0600 the remote
+        # side's umask gave its copy, so no other local user may read it
+        conn_path.chmod(0o600)
         self._local_conn = conn_path
         try:
             self._start_tunnel(local_info)
@@ -798,14 +839,12 @@ class RemoteSessionKernel(SessionKernel):
                     return True
             except Exception:  # noqa: BLE001 - a broken client is not a verdict
                 pass
-        if self.remote_pid is None:
-            return False
         return self._remote_pid_alive()
 
     def interrupt(self) -> None:
         """Tier 1 over ssh: SIGINT the recorded pid. Safe from any
         thread (the driver enforces the worker-thread one)."""
-        if self._km is None or self.remote_pid is None:
+        if self._km is None or not _valid_pid(self.remote_pid):
             return
         try:
             self._driver(f"kill -INT {self.remote_pid}", timeout=15.0)
@@ -920,13 +959,17 @@ class RemoteSessionKernel(SessionKernel):
             )
             self._reattach()
             result = super().execute(code, timeout_s=timeout_s, callbacks=callbacks)
-            result.notice = (
-                "note: the ssh tunnel to the remote kernel dropped"
-                " mid-cell; the cell was re-run on the same kernel and"
-                " may have partially executed once — side effects may"
-                " have happened twice"
-            )
-            result.stderr = result.notice + "\n" + result.stderr
+            if result.status != "dead":
+                result.notice = (
+                    "note: the ssh tunnel to the remote kernel dropped"
+                    " mid-cell; the cell was re-run on the same kernel"
+                    " and may have partially executed once — side"
+                    " effects may have happened twice"
+                )
+                result.stderr = result.notice + "\n" + result.stderr
+            # a retry that died too is returned as the dead cell it is:
+            # dressing it as a retry would hide the failure, and the
+            # manager's own mid-cell-death handling takes it from here
         return result
 
     # ---- resource probes (the remote /proc) ----
@@ -935,7 +978,7 @@ class RemoteSessionKernel(SessionKernel):
         """The remote kernel's high-water RSS, over ssh. ``None`` on any
         failure — a probe that cannot answer must not fail the cell."""
         pid = self.remote_pid
-        if pid is None or self._torn_down:
+        if not _valid_pid(pid) or self._torn_down:
             return None
         try:
             outcome = self._driver(
@@ -947,7 +990,7 @@ class RemoteSessionKernel(SessionKernel):
 
     def cpu_seconds(self) -> float | None:
         pid = self.remote_pid
-        if pid is None or self._torn_down:
+        if not _valid_pid(pid) or self._torn_down:
             return None
         try:
             outcome = self._driver(
@@ -1069,7 +1112,7 @@ class RemoteSessionKernel(SessionKernel):
             pass
 
     def _remote_pid_alive(self) -> bool:
-        if self.remote_pid is None:
+        if not _valid_pid(self.remote_pid):
             return False
         try:
             outcome = self._driver(
@@ -1096,8 +1139,9 @@ def _kill_process_group(pid: int) -> None:
     as *every process the caller may signal*, and a test double (or a
     torn-down wrapper) handing one in must not become a broadcast. The
     guard is here rather than at the call sites because this is the one
-    function whose whole job is aiming a signal."""
-    if not pid or pid <= 0:
+    function whose whole job is aiming a signal; it is
+    :func:`_valid_pid`, shared with every splice site."""
+    if not _valid_pid(pid):
         return
     try:
         os.killpg(os.getpgid(pid), signal.SIGKILL)

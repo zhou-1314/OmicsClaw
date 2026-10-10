@@ -169,6 +169,9 @@ def test_off_by_default_the_schema_has_no_location_argument():
     tool = PythonKernelTool(runner=_RecordingRunner())
     schema = tool.definition().input_schema
     assert "location" not in schema["properties"]
+    # the whole schema dict, not just the one property: nothing else
+    # moved either — the off contract is byte-for-byte
+    assert schema == PYTHON_SCHEMA
     # and the description is the P4 text, byte for byte — the off
     # contract is not just "no remote tool": nothing prompt-facing moves
     assert tool.definition().description == PYTHON_SCHEMA_DESCRIPTION

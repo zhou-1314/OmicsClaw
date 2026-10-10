@@ -287,7 +287,8 @@ def build_status_command(handle: RemoteJobHandle) -> str:
         )
     return (
         f"cd -- {quoted} && "
-        f"if kill -0 -- -{handle.pgid} 2>/dev/null; then echo {_RUNNING_MARK}; "
+        f"if kill -0 -- -{_nohup_pgid(handle)} 2>/dev/null;"
+        f" then echo {_RUNNING_MARK}; "
         f"elif [ -f ./{_EXIT_FILE} ]; then cat ./{_EXIT_FILE}; "
         f"else echo {_LOST_MARK}; fi"
     )
@@ -333,11 +334,30 @@ def parse_status(kind: str, output: str) -> tuple[str, int | None]:
     return UNKNOWN, None
 
 
+def _nohup_pgid(handle: RemoteJobHandle) -> int:
+    """The nohup handle's pgid, or a refusal. Pure.
+
+    A pgid of zero or less spliced into ``kill -- -{pgid}`` is a
+    broadcast (``-1``) or the caller's own group (``0``) on the remote
+    host — a corrupt handle row must fail the poll loudly here, before
+    any command is built, not aim a signal at everything the user may
+    kill. SLURM handles never reach this; the pgid a live submission
+    records is always positive (:func:`parse_submit_output` refuses
+    anything else)."""
+    pgid = handle.pgid
+    if not isinstance(pgid, int) or pgid <= 0:
+        raise ValueError(
+            f"a nohup handle carries no usable pgid ({pgid!r}); refusing"
+            " to build a group-signal command from it"
+        )
+    return pgid
+
+
 def build_cancel_command(handle: RemoteJobHandle) -> str:
     """Stop the job the way its kind stops: ``scancel`` or group SIGTERM."""
     if handle.kind == KIND_SLURM:
         return f"scancel {handle.job_id}"
-    return f"kill -TERM -- -{handle.pgid}"
+    return f"kill -TERM -- -{_nohup_pgid(handle)}"
 
 
 def build_size_command(paths: list[str]) -> str:

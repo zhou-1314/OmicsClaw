@@ -126,6 +126,10 @@ class FakeClient:
         self.shutdown_requested = False
         self.beating = True
         self.executed: list[str] = []
+        self.sent: list[str] = []
+        self.channel_boom = False
+        """Raised-from flag: when set, the iopub channel is dead and
+        every read raises — the mid-cell channel-death scenario."""
 
     def start_channels(self) -> None:
         self.started_channels = True
@@ -145,11 +149,14 @@ class FakeClient:
 
     def execute(self, code: str) -> str:
         self.executed.append(code)
+        self.sent.append(code)
         return "msg-1"
 
     def get_iopub_msg(self, timeout: float = 1.0):
         from queue import Empty
 
+        if self.channel_boom:
+            raise ValueError("the channel closed under us")
         if self.executed and not self.stopped:
             code = self.executed.pop(0)
             frames = [
@@ -179,16 +186,21 @@ class FakeClient:
 
 
 class FakeAttach:
-    """The attach double: answers the fake pair, records the file."""
+    """The attach double: hands out its clients in order, records files.
 
-    def __init__(self, client: FakeClient) -> None:
-        self.client = client
+    One client is the common case; the mid-cell retry path wants a
+    second, healthier one to be handed to the re-attach."""
+
+    def __init__(self, *clients: FakeClient) -> None:
+        self.clients = list(clients)
         self.files: list[str] = []
 
     def __call__(self, connection_file: str, timeout: float):
         self.files.append(connection_file)
-        self.client.start_channels()  # the attach contract
-        return object(), self.client
+        index = min(len(self.files) - 1, len(self.clients) - 1)
+        client = self.clients[index]
+        client.start_channels()  # the attach contract
+        return object(), client
 
 
 def _kernel(tmp_path: pathlib.Path, driver: FakeDriver, client: FakeClient,
@@ -433,3 +445,157 @@ def test_a_dead_tunnel_between_cells_is_respawned_not_a_death(
     assert result.status == "ok"
     assert len(tunnels) == 2  # a second forward was raised
     assert kernel.remote_pid == 4242  # the same kernel, never restarted
+
+
+# ---- the pid guard: no signal, command or syscall, from a bad pid -------------
+#
+# The review's probe semantics, inverted into regressions: a pid of
+# zero or less must be refused everywhere it is spliced, and the refusal
+# must cost zero kill signals.
+
+
+def test_the_group_kill_refuses_nonpositive_pids(monkeypatch):
+    """Probe 1, formalised: _kill_process_group with -1/0/None fires
+    nothing — not even getpgid."""
+    import os as _os
+
+    from omicsclaw.remote.kernel import _kill_process_group
+
+    fired: list[tuple] = []
+    monkeypatch.setattr(_os, "kill", lambda *a: fired.append(("kill", a)))
+    monkeypatch.setattr(_os, "killpg", lambda *a: fired.append(("killpg", a)))
+    monkeypatch.setattr(
+        _os, "getpgid", lambda p: (_ for _ in ()).throw(
+            AssertionError("getpgid reached for a nonpositive pid")
+        )
+    )
+    for bad in (-1, 0, None, "4242"):
+        _kill_process_group(bad)  # type: ignore[arg-type]
+    assert fired == []
+
+
+def test_parse_launch_output_refuses_nonpositive_pids():
+    """Half of probe 2, inverted: a launch that reports -1 (or 0) is
+    refused whole, so the pid never reaches a cleanup command."""
+    for bad in ("-1", "0"):
+        text = (
+            "===OMICSCLAW_KERNEL_CONN===\n"
+            + json.dumps(CONN)
+            + f"\n===OMICSCLAW_KERNEL_PID===\n{bad}\n"
+        )
+        with pytest.raises(RemoteKernelLaunchError, match="names no one process"):
+            parse_launch_output(text)
+
+
+def test_the_cleanup_command_refuses_nonpositive_pids():
+    """The other half of probe 2: 'kill -KILL -1' can no longer be
+    built, by anyone, from any pid."""
+    from omicsclaw.remote.kernel import build_remote_cleanup_command
+
+    for bad in (-1, 0, None):
+        with pytest.raises(ValueError, match="broadcast ids"):
+            build_remote_cleanup_command(bad, "~/.omicsclaw/kernel-sessions/s")
+
+
+def test_a_corrupted_pid_reaches_no_signal_and_no_probe(tmp_path):
+    """A started kernel whose pid goes bad (the fields are plain
+    attributes) must issue no kill, no kill -0, no /proc read — and its
+    own teardown still cleans the local half."""
+    driver, client = FakeDriver(), FakeClient()
+    kernel, _, tunnels = _kernel(tmp_path, driver, client)
+    kernel.start()
+    kernel.remote_pid = -1  # the corrupted record under test
+    client.beating = False  # so liveness must fall through to the pid
+    kernel.interrupt()
+    assert not any(c.startswith("kill -INT") for c in driver.commands())
+    assert kernel.is_alive() is False
+    assert not any(c.startswith("kill -0") for c in driver.commands())
+    assert kernel.peak_rss_kb() is None
+    assert not any("/proc/" in c for c in driver.commands())
+    kernel.kill()
+    assert tunnels[0].killed  # the local teardown still happened
+    # and nothing that starts like a kill command was ever sent (the
+    # launch command embeds its own self-clean text and does not count)
+    assert not any(c.startswith("kill") for c in driver.commands())
+
+
+# ---- the mid-cell channel death: re-attach, retry once, disclose --------------
+
+
+def test_a_mid_cell_channel_death_reattaches_and_retries_the_cell(
+    tmp_path: pathlib.Path,
+):
+    driver, healthy = FakeDriver(), FakeClient()
+    broken = FakeClient()
+    broken.channel_boom = True  # the iopub channel dies under the cell
+    made: list[FakeTunnelProcess] = []
+
+    def factory(argv: list[str]):
+        process = FakeTunnelProcess()
+        process.argv = list(argv)
+        made.append(process)
+        return process
+
+    attach = FakeAttach(broken, healthy)
+    kernel = RemoteSessionKernel(
+        "sess-retry",
+        host="lab1",
+        workspace=tmp_path,
+        python="/opt/envs/k/bin/python",
+        driver=driver.on(
+            "ipykernel_launcher",
+            ExecOutcome(output=_launch_output(pid=4242), exit_code=0),
+        ).on("kill -0 4242", ExecOutcome(exit_code=0)),  # the kernel lives
+        tunnel_factory=factory,
+        attach=attach,
+        port_open=lambda port: True,
+    )
+    kernel.start()
+    result = kernel.execute("marker = 1\nprint('retry me')", timeout_s=30.0)
+    assert result.status == "ok", result.stderr
+    assert "retry me" in result.stdout
+    # the cell was sent twice — once into the dead channel, once on the
+    # re-attached one — and both sends are disclosed as one retry
+    assert len(broken.sent) == 1 and len(healthy.sent) == 1
+    assert "tunnel to the remote kernel dropped mid-cell" in result.notice
+    assert result.stderr.startswith("note:")
+    # a fresh tunnel was raised and a fresh attach was made
+    assert len(made) == 2 and len(attach.files) == 2
+    assert kernel.remote_pid == 4242  # the same kernel, never relaunched
+
+
+def test_the_mid_cell_retry_happens_once_never_twice(tmp_path: pathlib.Path):
+    """Both clients dead: the retry itself dies and is reported as-is —
+    no third send, no loop, no notice dressing up a dead cell."""
+    driver = FakeDriver()
+    broken_one, broken_two = FakeClient(), FakeClient()
+    broken_one.channel_boom = True
+    broken_two.channel_boom = True
+    made: list[FakeTunnelProcess] = []
+
+    def factory(argv: list[str]):
+        process = FakeTunnelProcess()
+        process.argv = list(argv)
+        made.append(process)
+        return process
+
+    attach = FakeAttach(broken_one, broken_two)
+    kernel = RemoteSessionKernel(
+        "sess-once",
+        host="lab1",
+        workspace=tmp_path,
+        python="/opt/envs/k/bin/python",
+        driver=driver.on(
+            "ipykernel_launcher",
+            ExecOutcome(output=_launch_output(pid=4242), exit_code=0),
+        ).on("kill -0 4242", ExecOutcome(exit_code=0)),
+        tunnel_factory=factory,
+        attach=attach,
+        port_open=lambda port: True,
+    )
+    kernel.start()
+    result = kernel.execute("print('never lands')", timeout_s=30.0)
+    assert result.status == "dead"
+    assert len(broken_one.sent) == 1 and len(broken_two.sent) == 1
+    assert len(attach.files) == 2  # the original attach and one re-attach
+    assert result.notice == ""  # a dead cell is not dressed as a retry

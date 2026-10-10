@@ -200,3 +200,28 @@ class TestHandle:
         nohup = RemoteJobHandle(kind=KIND_NOHUP, host="h", workdir="/w", pgid=31)
         assert slurm.identity() == "9"
         assert nohup.identity() == "31"
+
+
+# ---- the pgid guard: no group signal from a corrupt handle -------------------
+
+
+@pytest.mark.parametrize("bad", [-1, 0, None])
+def test_group_signal_commands_refuse_a_nonpositive_pgid(bad):
+    """A pgid of zero or less spliced into ``kill -- -{pgid}`` is a
+    broadcast on the remote host; a corrupt handle row must fail the
+    build loudly, not aim a signal at everything the user may kill."""
+    handle = RemoteJobHandle(kind=KIND_NOHUP, host="h", workdir="/w", pgid=bad)
+    with pytest.raises(ValueError, match="no usable pgid"):
+        build_cancel_command(handle)
+    with pytest.raises(ValueError, match="no usable pgid"):
+        build_status_command(handle)
+
+
+def test_a_positive_pgid_still_builds_the_group_commands():
+    handle = RemoteJobHandle(kind=KIND_NOHUP, host="h", workdir="/w", pgid=4242)
+    assert "kill -0 -- -4242" in build_status_command(handle)
+    assert build_cancel_command(handle) == "kill -TERM -- -4242"
+    # slurm handles never take the group path, whatever their pgid says
+    slurm = RemoteJobHandle(kind=KIND_SLURM, host="h", workdir="/w",
+                            job_id="7", pgid=None)
+    assert build_cancel_command(slurm) == "scancel 7"
