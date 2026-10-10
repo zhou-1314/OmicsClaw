@@ -139,11 +139,18 @@ def desktop_jobs_contract() -> dict[str, int]:
     """The P1 jobs plane contract: versioned additive-only, like the chat one.
 
     Version 1 is ``POST /jobs`` (``{kind, skill, inputs, workspace?,
-    session_id?}``), ``GET /jobs?session_id=&status=&limit=``,
+    session_id?, runtime?}``), ``GET /jobs?session_id=&status=&limit=``,
     ``GET /jobs/{id}``, the ``GET /jobs/{id}/events`` SSE stream whose
     frames carry the unified event vocabulary, an ``id:`` sequence number
     per frame, ``Last-Event-ID`` resume and ``heartbeat`` frames,
     ``POST /jobs/{id}/cancel`` and ``POST /jobs/{id}/approval/{call_id}``.
+
+    ``runtime`` (C2) is additive within version 1: omitted or ``local``
+    is the behaviour every v1 client already knows; ``remote:<ssh
+    alias>`` executes ``inputs.command`` on that host through the remote
+    plane and speaks the same event vocabulary, and is refused with
+    ``remote_runtime_unavailable`` where no plane is bound. The job
+    payload answers ``runtime`` back, and ``job.created`` carries it.
     """
 
     return {

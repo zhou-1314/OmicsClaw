@@ -314,6 +314,27 @@ class AppConfig:
     :attr:`approval_timeout_s`: without either, a question waits until the
     exchange ends."""
 
+    remote_execution: bool = False
+    """Whether the agent may run work on remote hosts over SSH.
+
+    One switch with one meaning, following :attr:`ask_user`: it mounts or
+    unmounts the ``remote_exec`` / ``remote_submit`` / ``remote_status`` /
+    ``remote_cancel`` / ``remote_fetch`` / ``ask_about_host`` family, and
+    adds or removes the scheduling-rules section of the system prompt
+    that tells the model when to use them. The two halves move together
+    — a prompt instructing the model to submit remotely with no tool to
+    submit with costs turns, the same asymmetry :attr:`planning` refuses.
+
+    **Off by default, deliberately.** The remote plane spawns the
+    system ``ssh`` against hosts named by the model and approved by the
+    user, writes a small SQLite store under
+    ``<workspace>/.omicsclaw/remote.db``, and changes what the agent
+    can reach from "this machine" to "any host in the user's SSH
+    config". A deployment that means that turns it on here (or with
+    ``OMICSCLAW_REMOTE_EXECUTION=1`` / ``--remote-execution``); one that
+    does not keeps the previous behaviour byte for byte — no tool, no
+    prompt section, no socket opened on the plane's behalf."""
+
     memory: bool = True
     """Whether this deployment remembers anything across sessions.
 
@@ -884,6 +905,12 @@ _OPTIONS: tuple[_Option, ...] = (
     ),
     _Option("subagents", "--subagents", ("OMICSCLAW_SUBAGENTS",), _as_bool),
     _Option("ask_user", "--ask-user", ("OMICSCLAW_ASK_USER",), _as_bool),
+    _Option(
+        "remote_execution",
+        "--remote-execution",
+        ("OMICSCLAW_REMOTE_EXECUTION",),
+        _as_bool,
+    ),
     _Option("skill_env", "--skill-env", ("OMICSCLAW_SKILL_ENV",), _as_skill_env),
     _Option("skill_env_dir", "--skill-env-dir", ("OMICSCLAW_SKILL_ENV_DIR",), _as_optional_path),
     _Option(

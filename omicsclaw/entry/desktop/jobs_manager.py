@@ -64,7 +64,9 @@ from typing import Any, Final
 
 from omicsclaw.memory.artifacts import ArtifactStore
 from omicsclaw.memory.database import Database
+from omicsclaw.remote import RemoteJobsBridge, refresh_in_flight
 from omicsclaw.skills.frontmatter import parse_frontmatter
+from omicsclaw.tools.builtin.remote import valid_host
 from omicsclaw.tools.context import (
     ApprovalDecision,
     ApprovalRequest,
@@ -139,6 +141,14 @@ class JobRecord:
     kind: str = "skill_run"
     skill: str = ""
     inputs: Mapping[str, Any] = field(default_factory=dict)
+    runtime: str = "local"
+    """``local``, or ``remote:<alias>`` — where this job's work runs.
+
+    Persisted (the ``jobs`` column of the same name) because it decides
+    which runner a *restarted* backend would need too: a remote job is
+    not this process's asyncio task, so the start-up sweep that marks
+    orphans interrupted leaves it alone and the reconciler settles it
+    from the handle row instead."""
     status: str = "queued"
     error: str = ""
     created_at: float = 0.0
@@ -152,6 +162,7 @@ class JobRecord:
             "kind": self.kind,
             "skill": self.skill,
             "inputs": dict(self.inputs),
+            "runtime": self.runtime,
             "status": self.status,
             "error": self.error,
             "created_at": self.created_at,
@@ -182,14 +193,15 @@ class JobStore:
         self._db.run(
             lambda conn: conn.execute(
                 "INSERT INTO jobs (id, session_id, kind, skill, inputs_json,"
-                " status, error, created_at, started_at, finished_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " runtime, status, error, created_at, started_at, finished_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record.id,
                     record.session_id,
                     record.kind,
                     record.skill,
                     json.dumps(dict(record.inputs), ensure_ascii=False, default=str),
+                    record.runtime,
                     record.status,
                     record.error,
                     record.created_at,
@@ -200,7 +212,10 @@ class JobStore:
         )
 
     def update_job(self, job_id: str, **changes: Any) -> None:
-        allowed = ("status", "error", "started_at", "finished_at", "session_id")
+        allowed = (
+            "status", "error", "started_at", "finished_at",
+            "session_id", "runtime",
+        )
         columns = [name for name in changes if name in allowed]
         if not columns:
             return
@@ -215,8 +230,9 @@ class JobStore:
     def get_job(self, job_id: str) -> JobRecord | None:
         rows = self._db.run(
             lambda conn: conn.execute(
-                "SELECT id, session_id, kind, skill, inputs_json, status, error,"
-                " created_at, started_at, finished_at FROM jobs WHERE id = ?",
+                "SELECT id, session_id, kind, skill, inputs_json, runtime,"
+                " status, error, created_at, started_at, finished_at"
+                " FROM jobs WHERE id = ?",
                 (job_id,),
             ).fetchall()
         )
@@ -241,28 +257,32 @@ class JobStore:
         params.append(max(1, min(limit, 500)))
         rows = self._db.run(
             lambda conn: conn.execute(
-                "SELECT id, session_id, kind, skill, inputs_json, status, error,"
-                " created_at, started_at, finished_at FROM jobs " + where
-                + " ORDER BY created_at DESC, id DESC LIMIT ?",
+                "SELECT id, session_id, kind, skill, inputs_json, runtime,"
+                " status, error, created_at, started_at, finished_at FROM jobs "
+                + where + " ORDER BY created_at DESC, id DESC LIMIT ?",
                 tuple(params),
             ).fetchall()
         )
         return [_row_to_record(row) for row in rows]
 
     def interrupt_orphans(self) -> int:
-        """Mark every non-terminal job ``interrupted``; called at start-up.
+        """Mark every non-terminal **local** job ``interrupted``; start-up.
 
-        A job is an asyncio task of this process; nothing survives a
-        restart, and a row still saying ``running`` would be a lie the
+        A local job is an asyncio task of this process; nothing survives
+        a restart, and a row still saying ``running`` would be a lie the
         event ring cannot even support, because the ring is in the same
-        file as the row.
+        file as the row. A **remote** job (``runtime`` ``remote:<alias>``)
+        is not this process's task — it is the host's or the scheduler's —
+        so it is left non-terminal here for
+        :meth:`JobsManager.reconcile_remote_jobs` to settle from its
+        persisted handle, which is the whole reason that method exists.
         """
         return self._db.run(
             lambda conn: conn.execute(
                 "UPDATE jobs SET status = 'interrupted',"
                 " error = 'backend restarted before this job finished',"
                 " finished_at = ? WHERE status IN ('queued', 'running',"
-                " 'cancel_requested')",
+                " 'cancel_requested') AND runtime = 'local'",
                 (time.time(),),
             ).rowcount
         )
@@ -332,6 +352,10 @@ def _row_to_record(row: Any) -> JobRecord:
         kind=str(row["kind"] or ""),
         skill=str(row["skill"] or ""),
         inputs=inputs,
+        # A row written before the column existed answers NULL, which
+        # means the same thing "local" does — that job ran in the
+        # process that wrote it.
+        runtime=str(row["runtime"] or "local"),
         status=str(row["status"] or "queued"),
         error=str(row["error"] or ""),
         created_at=float(row["created_at"] or 0.0),
@@ -908,7 +932,10 @@ class JobsManager:
 
     One instance per desktop app. Constructing it sweeps the store: jobs
     a previous process left non-terminal are marked ``interrupted``,
-    because the tasks that were running them are gone.
+    because the tasks that were running them are gone — except remote
+    jobs, whose work never was a task of this process; those wait for
+    :meth:`reconcile_remote_jobs`, and a manager constructed with a
+    *remote_runtime* bridge is the manager that has one.
     """
 
     def __init__(
@@ -919,6 +946,7 @@ class JobsManager:
         artifact_store: ArtifactStore | None = None,
         default_timeout_s: float = DEFAULT_JOB_TIMEOUT_S,
         max_concurrent: int = MAX_CONCURRENT_JOBS,
+        remote_runtime: RemoteJobsBridge | None = None,
     ) -> None:
         self._app = app
         if store is None:
@@ -931,6 +959,7 @@ class JobsManager:
         self._runners: dict[str, Any] = {}
         self._live: dict[str, _LiveJob] = {}
         self._seq: dict[str, int] = {}
+        self._remote_runtime = remote_runtime
         self._approval_timeout_s = getattr(app.config, "approval_timeout_s", None)
         try:
             interrupted = self.store.interrupt_orphans()
@@ -971,11 +1000,22 @@ class JobsManager:
         inputs: Any = None,
         session_id: str = "",
         workspace: str = "",
+        runtime: str = "local",
     ) -> JobRecord:
         """Validate, persist and start one job. Returns its record.
 
-        :raises JobError: the kind is unknown, or the runner ``validate``
-            refused the skill or inputs.
+        *runtime* is C2's routing field: ``"local"`` (the default, and
+        the only form before the field existed) runs the kind's runner;
+        ``"remote:<alias>"`` runs the remote bridge, which submits
+        ``inputs.command`` on that SSH alias and streams its log back as
+        vocabulary events. A remote runtime with no bridge bound is
+        ``remote_runtime_unavailable`` (409) rather than a silent local
+        fallback — a client that asked for a GPU node and got this
+        process would be worse than a client that got an error.
+
+        :raises JobError: the kind is unknown, the runtime is malformed,
+        no remote bridge is bound, or the runner ``validate`` refused the
+        skill or inputs.
         """
         runner = self._runners.get(kind)
         if runner is None:
@@ -984,6 +1024,12 @@ class JobsManager:
             inputs = {}
         if not isinstance(inputs, dict):
             raise JobError("inputs_must_be_object")
+        if runtime != "local":
+            alias = runtime[len("remote:"):] if runtime.startswith("remote:") else ""
+            if not alias or not valid_host(alias):
+                raise JobError("invalid_runtime")
+            if self._remote_runtime is None:
+                raise JobError("remote_runtime_unavailable", status_code=409)
         declared_workspace = str(getattr(self._app.config, "workspace", ""))
         if workspace and workspace.strip():
             try:
@@ -996,15 +1042,42 @@ class JobsManager:
                 raise JobError(
                     "workspace_does_not_match_backend_runtime", status_code=409
                 )
-        validate = getattr(runner, "validate", None)
+        validate = (
+            self._remote_runtime.validate
+            if runtime != "local"
+            else getattr(runner, "validate", None)
+        )
         if callable(validate):
-            validate(skill, inputs)
+            try:
+                validate(skill, inputs)
+            except JobError:
+                raise
+            except ValueError as exc:
+                # The remote bridge validates with plain ValueErrors —
+                # it cannot import this module's error type without a
+                # dependency pointing the wrong way — so the boundary
+                # where the wire's vocabulary lives is where they become
+                # JobErrors, at 422 like every other refused request.
+                raise JobError(str(exc)) from exc
+        if runtime != "local":
+            # The query-time half of C2's re-estimation: before adding a
+            # job to the in-flight set, ask the ones already in it what
+            # they are doing, so a backend that was away while jobs ran
+            # catches up on the same request that proves it has a working
+            # remote runtime. Guarded because reconciliation is
+            # housekeeping, not a precondition — a host that will not
+            # answer must not block a submission to a different one.
+            try:
+                await self.reconcile_remote_jobs()
+            except Exception:  # noqa: BLE001 - reconcile is best-effort here
+                _log.debug("pre-create remote reconcile failed", exc_info=True)
         record = JobRecord(
             id=secrets.token_hex(16),
             session_id=str(session_id or ""),
             kind=kind,
             skill=str(skill or ""),
             inputs=inputs,
+            runtime=runtime,
             status="queued",
             created_at=time.time(),
         )
@@ -1012,7 +1085,12 @@ class JobsManager:
         self._emit(
             record.id,
             "job.created",
-            {"job_id": record.id, "kind": kind, "skill": record.skill},
+            {
+                "job_id": record.id,
+                "kind": kind,
+                "skill": record.skill,
+                "runtime": runtime,
+            },
         )
         live = _LiveJob(task=None, gate=self._make_gate(record.id))
         self._live[record.id] = live
@@ -1020,6 +1098,37 @@ class JobsManager:
             self._run(record.id), name="omicsclaw-job-" + record.id
         )
         return record
+
+    async def reconcile_remote_jobs(self) -> dict[str, int]:
+        """Re-estimate every in-flight remote handle; move local rows with it.
+
+        The start-up/query-time half of C2. The remote rows are asked
+        through the plane (unreachable hosts answer ``unknown`` and keep
+        their rows); a job the desktop started gets its local row settled
+        too, which is what makes "the backend restarted mid-job" mean
+        "the status caught up" instead of "interrupted, and the remote
+        job's eventual finish is never recorded".
+
+        A no-op answer, not an error, when no bridge is bound: there are
+        no remote rows to ask about.
+        """
+        if self._remote_runtime is None:
+            return {"checked": 0, "still_in_flight": 0, "terminal": 0, "unknown": 0}
+
+        def on_status(local_job_id: str, alias: str, state: str) -> None:
+            settled = {
+                "done": "succeeded",
+                "failed": "failed",
+                "canceled": "canceled",
+            }.get(state)
+            if settled is not None:
+                self.store.update_job(
+                    local_job_id, status=settled, finished_at=time.time()
+                )
+
+        return await refresh_in_flight(
+            self._remote_runtime.plane, on_remote_status=on_status
+        )
 
     def cancel(self, job_id: str) -> str:
         """Cancel one job. Answers ``"canceled"``, ``"unknown"`` or ``"finished"``.
@@ -1110,7 +1219,15 @@ class JobsManager:
         live = self._live.get(job_id)
         if record is None or live is None:
             return
-        runner = self._runners.get(record.kind)
+        # C2's dispatch: a remote job runs the bridge whatever its kind
+        # says, because "where" outranks "what" — the same body carries
+        # either. Everything after the choice is shared: the semaphore,
+        # the timeout, the vocabulary, the gate.
+        runner: Any = (
+            self._remote_runtime if record.runtime != "local" else None
+        )
+        if runner is None:
+            runner = self._runners.get(record.kind)
         gate = live.gate
         ctx = JobExecutionContext(
             record,

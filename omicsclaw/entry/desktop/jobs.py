@@ -38,6 +38,7 @@ import json
 import logging
 from typing import Any, Callable, Final
 
+from omicsclaw.tools.builtin.remote import valid_host
 from omicsclaw.tools.context import ApprovalDecision
 
 from .jobs_manager import (
@@ -59,12 +60,17 @@ will read. Inputs are form-shaped, not datasets: a path string, not the
 matrix it names."""
 
 RUNTIME_HEADER: Final = "X-OmicsClaw-Runtime"
-"""P3: how a client says which runtime it wants the work to run on.
+"""P3: how a client names the runtime a request came through.
 
-``local`` or ``remote:<connId>``. This backend serves one process on one
-machine and routes nothing, so the header is tolerated, logged, and
-echoed back on the jobs responses — a deployment that gains routing
-later has a seam already named."""
+``local`` or ``remote:<connId>``. The header stays the *connection-level*
+seam it has always been — tolerated, logged, echoed on the responses —
+because it names which backend served a request, which the direct-url
+mode needs. C2 added the *job-level* routing form, which is different:
+an optional ``runtime`` field in the ``POST /jobs`` body (``local`` or
+``remote:<ssh alias>``) that this process itself acts on, executing the
+job through the remote plane instead of a local runner. A remote
+``runtime`` with no plane bound answers ``remote_runtime_unavailable``;
+a ``local`` job is exactly what it was before the field existed."""
 
 
 def _note_runtime_header(header: str | None) -> None:
@@ -148,12 +154,21 @@ def mount_jobs_routes(
             workspace = document.get("workspace", "")
             if workspace is not None and not isinstance(workspace, str):
                 raise DesktopIngressError("invalid_workspace", status_code=422)
+            runtime = document.get("runtime", "local")
+            if runtime is not None and not isinstance(runtime, str):
+                raise DesktopIngressError("invalid_runtime", status_code=422)
+            runtime = runtime or "local"
+            if runtime != "local" and not (
+                runtime.startswith("remote:") and valid_host(runtime[7:])
+            ):
+                raise DesktopIngressError("invalid_runtime", status_code=422)
             record = await jobs.create_job(
                 kind=kind,
                 skill=skill or "",
                 inputs=document.get("inputs"),
                 session_id=session_id or "",
                 workspace=workspace or "",
+                runtime=runtime,
             )
         except DesktopIngressError as exc:
             return _refused(exc)

@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     kind        TEXT NOT NULL DEFAULT 'skill_run',
     skill       TEXT NOT NULL DEFAULT '',
     inputs_json TEXT NOT NULL DEFAULT '{}',
+    runtime     TEXT NOT NULL DEFAULT 'local',
     status      TEXT NOT NULL DEFAULT 'queued',
     error       TEXT NOT NULL DEFAULT '',
     created_at  REAL NOT NULL,
@@ -118,7 +119,43 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_session
 -- save_artifact sink) racing on the same (job_id, path).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_job_path
     ON artifacts (job_id, path);
+
+CREATE TABLE IF NOT EXISTS remote_hosts (
+    alias         TEXT PRIMARY KEY,
+    probed_json   TEXT NOT NULL DEFAULT '{}',
+    last_probed_at REAL NOT NULL DEFAULT 0,
+    notes_json    TEXT NOT NULL DEFAULT '[]'
+);
+
+CREATE TABLE IF NOT EXISTS remote_jobs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_alias   TEXT NOT NULL,
+    kind         TEXT NOT NULL,
+    job_id       TEXT,
+    pgid         INTEGER,
+    workdir      TEXT NOT NULL,
+    submitted_at REAL NOT NULL,
+    last_seen    REAL,
+    status       TEXT NOT NULL DEFAULT 'pending',
+    local_job_id TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_remote_jobs_local
+    ON remote_jobs (local_job_id);
 """
+"""The schema of every :class:`Database`, on open, forever additive.
+
+``artifacts`` is P2's results tray (one row per registered artifact,
+its kind and checksum, and the ``(job_id, path)`` uniqueness the
+scanner's idempotency leans on). ``remote_hosts`` and ``remote_jobs``
+are the remote execution plane's (C1/C2): one row per probed SSH alias
+— its probe JSON, when, and the answers ``ask_about_host`` collected —
+and one row per submitted remote job, the durable handle a restarted
+backend re-estimates from. The ``jobs.runtime`` column (``local`` |
+``remote:<alias>``) is carried by the same additive rule: new files get
+it from this script, and old ones get it from :func:`_migrate`, the
+first column addition this schema has needed — ``CREATE TABLE IF NOT
+EXISTS`` creates, it does not alter."""
 
 
 BUSY_TIMEOUT_S = 15.0
@@ -171,6 +208,7 @@ class Database:
                 pass
             self._conn.executescript(SCHEMA)
             self._conn.commit()
+            _migrate(self._conn)
         if created:
             for suffix in ("-wal", "-shm"):
                 try:
@@ -215,6 +253,32 @@ class Database:
 
     def __exit__(self, *exc: Any) -> None:
         self.close()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Bring a database written by an older schema up to this one.
+
+    The additive-column case ``CREATE TABLE IF NOT EXISTS`` cannot cover:
+    a file that already has ``jobs`` keeps its old shape, so a column
+    this schema now declares is added by ``ALTER TABLE`` with the same
+    default the script would have given it. Checking ``PRAGMA
+    table_info`` first keeps the common path (fresh file, column
+    present) a no-op, and the whole function is idempotent — two
+    processes racing to open the same old file each see the column
+    missing and each add it, and SQLite serialises the second ``ALTER``
+    into the duplicate-column error it swallows here.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+    if "runtime" in columns:
+        return
+    try:
+        conn.execute(
+            "ALTER TABLE jobs ADD COLUMN runtime TEXT NOT NULL DEFAULT 'local'"
+        )
+        conn.commit()
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" not in str(exc).lower():
+            raise
 
 
 def _create_private(path: str) -> bool:
