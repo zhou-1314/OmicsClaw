@@ -659,14 +659,16 @@ class ChannelRuntime:
         compaction left in its place. Tool results are ``Role.TOOL``
         messages and do not stop the search. The answer is the last
         assistant message with text in that span, whichever turn of the
-        exchange wrote it. An exchange that wrote no text returns ``""``,
-        and no answer is sent for it.
+        exchange wrote it. With no text in that span the result is ``""``
+        and no answer is sent: the exchange wrote none, or a compaction
+        has since replaced the turns that had some.
 
         An emergency truncation can drop the request and leave no summary.
         The search then runs past where the request was. It stops at an
         older user message, or at a summary written later in the same
         exchange with an earlier answer still behind it, and an exchange
-        that wrote no text can return that earlier answer.
+        with no text left in the trajectory can return that earlier
+        answer.
         """
         outcome = await handle.wait()
         if outcome is None or handle.terminal != _CONVERGED:
