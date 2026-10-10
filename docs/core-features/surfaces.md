@@ -112,6 +112,9 @@
 
 ### 3.3 2026-10-10：`TurnOutcome.reply` 只取本次 exchange 新增的消息
 
+这一节记的是 2026-10-10 的修复。同一天做过独立审核，结论是通过，没有合并前必须改的缺陷；审核留下的四条发现和
+各自的处理记在本节末尾的"独立审核"里。
+
 #### 现象
 
 `TurnOutcome.reply` 有两个读者：eval Runner 把它记作 `Result.final_output`（`omicsclaw/evals/runner.py`），
@@ -203,7 +206,8 @@ exchange 从哪里开始。本次没有文字时，找到的就是历史里的�
 
 #### 测试与验证
 
-测试在 `tests/entry/test_turn_reply.py`，72 条，经真实的组合根和脚本化的 provider：
+测试在 `tests/entry/test_turn_reply.py`，修复时 72 条，独立审核之后补到 74 条（见本节末尾），经真实的组合根和
+脚本化的 provider：
 
 - 没有文字的六种形状，各作为第一次和第二次 exchange；有文字的六种形状；只有空白的回复。形状表和 §9.8 的
   Channel 测试共用，每种形状在 `run_turn` 和会话里的 `TurnRunner` 两条路径上各跑一遍。
@@ -232,7 +236,11 @@ handle 不是 `converged` 时也发答案，那一行判断这次没有改，仓
 `TurnOutcome.reply` 和 `ChannelRuntime._answer` 与真值不一致 0 次。同样的种子上，修复前的找法取到更早的回答
 4,547 次，往回找到 user 消息就停的做法 410 次。其间 5,442 次仅压缩的 exchange 的 `reply` 都是空串。
 
-按 `SPEC.md` 第 3 档验证，基线是 `bd5dde25`：
+这次回放的脚本和三次的日志留在实现方的工作目录里，没有放进仓库，上面这组数字只能对着那里的日志核对，从仓库里
+重跑不出来。独立审核另写了一份回放，脚本和日志在审核方的工作目录里，同样不在仓库里，它的数字见本节末尾。
+
+按 `SPEC.md` 第 3 档验证，基线是 `bd5dde25`。每一行都带 `-o addopts=""` 跑，`pyproject.toml` 里默认的
+`-m 'not slow and not demo and not eval and not skill_example'` 没有生效，带这些标记的用例也在范围里：
 
 | 范围 | 基线 | 修复后 |
 |---|---|---|
@@ -243,16 +251,29 @@ handle 不是 `converged` 时也发答案，那一行判断这次没有改，仓
 | 顶层 `tests/test_*.py` | 225 passed、8 skipped、1 xpassed | 224 passed、9 skipped、1 xpassed |
 | `tests/entry/test_desktop_*.py`（装了 fastapi 的 OmicsClaw 环境） | 569 passed、3 skipped | 569 passed、3 skipped |
 
-多出的 72 条和 3 条是新加的用例。30 条脚本化数据集用例没有一条依赖旧行为。顶层那一行少的一条是
-`tests/test_setup_env_script.py` 里要联网的 `conda search`，这一次等了 60 秒超时后跳过，单独重跑时 27 条全过。
+多出的 72 条和 3 条是新加的用例。30 条脚本化数据集用例没有一条依赖旧行为。顶层那一行两边差的一条是
+`tests/test_setup_env_script.py::test_conda_forge_wrmisc_builds_do_not_target_r43`。它带 `slow` 标记，联网跑
+`conda search`，60 秒内没有结果就跳过：基线那次它通过，修复后那次超时跳过，随后单独重跑这个文件时 27 条全过。
+这一条的结果取决于网络，和这次改动无关。
+
+默认选项下，`slow` 的那一条被 `-m` 排除，顶层 234 条里跑 233 条，独立审核在基线和修复后跑出来的都是
+224 passed、8 skipped、1 deselected、1 xpassed。`tests/evals` 一行里跳过的 26 条带 `eval` 标记，没有设
+`OMICSCLAW_EVAL_LIVE=1` 时跳过；默认选项下它们是 26 deselected，通过数和表里相同。
 
 #### 没验证和没改的部分
 
-- 没有请求真实模型，没有在真实聊天平台上收发。测试和回放里的 provider 都是脚本化的。
-- provider 把以前返回过的消息对象再返回一次，压缩又正好丢掉了历史里的那一次出现，这时留下的那一次会被算成
-  历史，`reply` 取不到它。内置的两个 provider 适配器每次调用都新建消息对象，走不到这里，测试替身才会。
+- 修复时没有请求真实模型，测试和回放里的 provider 都是脚本化的。独立审核用真实的 DeepSeek 跑过一次
+  EMERGENCY 截断丢掉请求的情形，只有一个样本（见"独立审核"）。真实的聊天平台没有收发过。
+- provider 把以前返回过的消息对象再返回一次，写回的压缩又丢掉了历史里它的某一次出现，这时本次新增的那一次
+  会被算成历史，`reply` 是空串，Channel 少发一条答案。修复前的找法不区分历史和新增，这种情形下取到的是对的，
+  所以这是相对修复前的退步。内置的两个 provider 适配器每次调用都新建消息对象，走不到这里；走得到的是重放同一个
+  对象的测试替身，`tests/entry/test_turn_runner.py` 的 `Scripted` 和 `Finishing`。行为没有改，`_reply` 和这两个
+  替身的 docstring 里写了这一点（"独立审核"发现 1）。
 - "有文字"的判定没有改，只有空白的回复仍然算文字，原样返回。别处各有各的判定：CLI 的回顾行把空白折叠后
   为空就跳过，子代理的 `_last_text` 用 `strip()`。
+- provider 返回的消息带纯字符串角色（`Message(role="assistant", ...)`）时 `reply` 是空串，因为 `_reply` 用
+  `is Role.ASSISTANT` 判断角色。修复前的找法也这样判断，结果相同；两个内置适配器给的都是枚举类型的角色。
+  没有改，留待决定（"独立审核"发现 3）。
 - CLI 恢复会话时的回顾行（`entry/cli/_repl.py` 的 `_recap`）没有改。它读的是存下来的历史，各取最后一条提问和
   最后一条有文字的回答：最后一次 exchange 没有文字时显示的是本次的提问和上一次的回答；本次请求被 EMERGENCY
   截断丢掉时显示的是更早的提问和本次的回答。存下来的历史里没有 exchange 的边界，这里的办法用不上。
@@ -261,6 +282,56 @@ handle 不是 `converged` 时也发答案，那一行判断这次没有改，仓
 - `RunResult.messages` 和 `TurnOutcome.history` 没有变，轨迹仍然含历史。直接在轨迹里找回答的代码会遇到同样的
   问题，应当读 `reply`。
 - eval 的 `OutputExcludes` 在输出为空时通过。followup 没有文字、又只有排除类断言的用例会通过。
+
+#### 独立审核（2026-10-10）
+
+审核的是 `bd5dde25..f85acfc4`，结论是通过，没有合并前必须改的缺陷。探针和日志在审核方的工作目录里，不在仓库里，
+这一小节里审核的数字都出自那些日志。发现 1 和发现 2 里标着"收尾时"的结果是处理这两条时在分支上跑出来的，
+日志同样不在仓库里。
+
+它核实了这些：
+
+- 两个缺陷在 `bd5dde25` 上都能复现，在 `f85acfc4` 上都不再出现。eval 一侧，followup 是空回复，或者一次工具调用
+  之后空回复时，基线的 `final_output` 是第一次的回答，修复后是空串。Channel 一侧，第二条消息被 EMERGENCY 截断
+  丢掉、本次又没有文字时，基线把第一次的回答发了两遍，修复后只发一遍。
+- 按对象身份界定在生产路径上成立。直接驱动真实的 `compact()` 3,000 轮，覆盖 WARN、SOFT、FULL、EMERGENCY 各档
+  以及降级和强制压缩，输出里不是输入对象的消息有 50,582 条：49,377 条 `Role.TOOL` 消息，1,205 条摘要，
+  assistant 消息 0 条。两个内置的 provider 适配器在阻塞和流式两条路径上各调用三次，每次返回的都是新的消息对象。
+- 端到端的随机回放用每次调用都新建消息的脚本化 provider，4 个种子各 1,500 个会话，共 17,838 次 exchange，
+  分别经 `run_turn`、会话（内存存储，以及中途重启的 SQLite 存储）和 `ChannelRuntime`。`reply` 与真值不一致 0 次，
+  Channel 发出的内容不是本次的文字 0 次。
+- 审核方自选了 24 处变异，22 处有测试转红。活下来的两处在修复时的变异里也活着：`_answer` 不检查
+  `handle.terminal`，今天的代码里不是 `converged` 的 handle 都没有 outcome，和原写法等价；`_reply` 里角色改用
+  `==` 比较，对枚举类型的角色等价。
+
+审核留下四条发现，前三条定为低，第四条是文档小处。各自的处理：
+
+- 发现 1，相对基线的退步，生产路径走不到。provider 把同一个消息对象返回不止一次，写回的压缩又丢掉了历史里它的
+  某一次出现时，`reply` 是空串，Channel 少发一条答案；基线上这种情形是对的。用 `Scripted` 每次返回同一个对象跑
+  14 次 exchange，编号 8、10、12 的三次（从 0 数起，各有一次写回的 SOFT 摘要）`reply` 为空，Channel 这三次没有
+  发答案；换成每次新建消息的 provider，14 次都对。收尾时在分支上重跑，结果相同，`Finishing` 也一样。行为没有改，
+  `_reply` 的 docstring 和 `tests/entry/test_turn_runner.py` 里 `Scripted`、`Finishing` 的 docstring 各加了说明。
+- 发现 2，测试缺口，已补。把 `_reply` 换成"跳过 system 消息和历史的条数，再往后找"的写法，
+  `tests/entry/test_turn_reply.py`、`tests/entry/test_channel_runtime.py`、`tests/evals/test_runner.py` 的 135 条里
+  只有 1 条转红，那一条（`test_a_reply_that_repeats_a_summarized_answer_word_for_word_is_the_reply`）是为逐字重复
+  的回答写的。补了 `test_an_answer_given_after_a_summary_was_written_back_is_the_reply`，SOFT、FULL 各一个参数：
+  长历史在唯一一次模型调用之前被摘要写回，轨迹比带进来的历史短，本次给出的回答是 `reply`。收尾时它在分支上
+  通过；换成上面那种写法时两个参数都转红，三个文件 137 条里红 3 条；恢复之后通过。换回修复前的找法时这两条
+  也通过，它们钉的是不该变的行为。
+- 发现 3，沿袭基线，没有改，留待决定。provider 返回纯字符串角色的消息时 `reply` 是空串，原因和现状写在上面
+  "没验证和没改的部分"里。
+- 发现 4，文档小处，已改。`docs/plans/0067-agent-evals.md` 里 `TurnOutcome.reply` 的行号引用对不上，改成不带
+  行号的说法。上面验证表的顶层一行和审核方跑出来的数字不同，是两边的 pytest 选项不同，表前和表后已经写明。
+  随机回放的脚本不在分支里，那一段已经写明脚本和日志在哪里。
+
+另有两条不在这次修复的范围里，审核方只做了记录，代码没有改：
+
+- EMERGENCY 截断丢掉本次请求之后，模型收到的对话以上一次的回答结尾。审核方用真实的 DeepSeek 经
+  `ChannelRuntime` 跑了一次，共两次请求，只有这一个样本：第二次调用里模型把上一次的回答原样又说了一遍。
+  这段文字是本次 exchange 写的，照常作为答案发出，用户看到的仍然是同一段回答出现两次（§10 第 11 条）。
+- CLI 恢复会话时的回顾行会把不属于同一次 exchange 的提问和回答配成一对，基线和修复后一样。两种情形都复现了：
+  最后一次 exchange 没有文字时配的是本次的提问和上一次的回答，本次请求被 EMERGENCY 截断丢掉时配的是更早的提问和
+  本次的回答。
 
 ---
 
@@ -800,7 +871,8 @@ Channel 拒绝空消息，`/compact` 不经过回复泵，所以走到 `_answer`
     它自己超过约 80% 的可用窗口（截断的目标是 `usable_tokens × full_at`，还要减去 system 消息和第一条）；
     或者截断发生在 exchange 中途，轮到它时剩下的预算小于它的大小。第一种情况下，模型收到的对话以上一次的
     assistant 回答结尾，用户刚发的内容不在里面，它这时写下的文字照常作为本次的答案发出。这样的对话容易得到
-    什么样的回复，没有用真实模型验证过。2026-10-10 之前，这种情形下本次又没有文字时 Channel 会把更早的回答
+    什么样的回复，只有独立审核取过的一个真实模型样本：模型把上一次的回答原样又说了一遍（§3.3）。
+    2026-10-10 之前，这种情形下本次又没有文字时 Channel 会把更早的回答
     再发一遍；`TurnOutcome.reply` 改按对象身份判断之后不再重发，没有文字就不发答案（§3.3）。
     SOFT、FULL 档的降级截断不写回轨迹，用户输入不会因此丢掉。
 12. **会话存储保存失败时，Channel 既不发答案也不发失败提示**：`SessionStore.save` 抛错时终止帧已经是 `converged`，
