@@ -48,7 +48,6 @@ from omicsclaw.entry.ingress import Acceptance, InboundMessage
 from omicsclaw.entry.render import TextRenderer
 from omicsclaw.entry.session import QueueFull, RegistryClosed, SubmissionRefused
 from omicsclaw.entry.turn import TurnHandle
-from omicsclaw.schema import Role
 from omicsclaw.tools.context import ApprovalDecision
 
 from .base import chunk_text
@@ -652,37 +651,19 @@ class ChannelRuntime:
         limit end ``converged`` like any other, and the text they wrote is
         delivered as it is.
 
-        Only the messages this exchange added are read. The trajectory
-        starts with the history the exchange was given, so the search runs
-        from the end back to the nearest user message and stops there. That
-        message is the request that opened the exchange, or the summary a
-        compaction left in its place. Tool results are ``Role.TOOL``
-        messages and do not stop the search. The answer is the last
-        assistant message with text in that span, whichever turn of the
-        exchange wrote it. With no text in that span the result is ``""``
-        and no answer is sent: the exchange wrote none, or a compaction
-        has since replaced the turns that had some.
-
-        An emergency truncation can drop the request and leave no summary.
-        The search then runs past where the request was. It stops at an
-        older user message, or at a summary written later in the same
-        exchange with an earlier answer still behind it, and an exchange
-        with no text left in the trajectory can return that earlier
-        answer.
+        The answer is :attr:`~omicsclaw.entry.turn.TurnOutcome.reply`, the
+        last text the assistant wrote in this exchange, whichever turn
+        wrote it. The trajectory starts with the history the exchange was
+        given, and an answer in that history is never returned, whatever
+        a compaction did to the request in between. When ``reply`` is
+        ``""`` no answer is sent: the exchange wrote no text, or a
+        compaction has since summarized or dropped the turns that had
+        some.
         """
         outcome = await handle.wait()
         if outcome is None or handle.terminal != _CONVERGED:
             return ""
-        for message in reversed(outcome.result.messages):
-            if message.role == Role.USER:
-                # Everything in front of this is history the exchange was
-                # given, an earlier exchange's answer included. Compared
-                # with ``==`` as the context layer does: a caller or a
-                # session store may supply roles as plain strings.
-                break
-            if message.role is Role.ASSISTANT and message.content:
-                return message.content
-        return ""
+        return outcome.reply
 
     async def _send(
         self,

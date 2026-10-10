@@ -36,10 +36,16 @@ from omicsclaw.entry.turn import run_turn
 from omicsclaw.schema import Message, Role, ToolCall
 from omicsclaw.tools import FunctionTool, ToolPolicy
 from omicsclaw.tools.base import ApprovalMode, RiskLevel
+from tests.entry.test_channel_ingress import (  # type: ignore[import-not-found]
+    Transport,
+)
 from tests.entry.test_channel_runtime import (  # type: ignore[import-not-found]
     FIRST_ANSWER,
     WITH_TEXT,
     WITHOUT_TEXT,
+    message as inbound,
+    started,
+    until,
 )
 from tests.entry.test_compaction_in_loop import (  # type: ignore[import-not-found]
     Failing,
@@ -498,6 +504,51 @@ def test_an_emergency_truncation_that_drops_the_request(tmp_path, shape):
 
     _check_the_request_was_dropped(outcome)
     assert outcome.reply == reply
+
+
+@pytest.mark.parametrize("shape", AFTER_AN_OVERSIZED_REQUEST)
+def test_a_channel_sends_no_earlier_answer_after_the_request_was_dropped(
+    tmp_path, shape
+):
+    """The same truncation, through ``ChannelRuntime`` and its reply pump.
+
+    The first message is answered. The second is too large for the
+    window, so the truncation drops it and keeps the first answer. The
+    chat is sent what the second exchange wrote, and the first answer
+    once.
+    """
+    replies, reply = AFTER_AN_OVERSIZED_REQUEST[shape]
+    provider = Finishing(Message.assistant(FIRST_ANSWER), *replies)
+
+    async def scenario():
+        transport = Transport()
+        app = attach_sessions(
+            _sized(
+                tmp_path,
+                provider,
+                room=10_000,
+                summarizer=Canned(),
+                approval_timeout_s=WAIT_S,
+            ),
+            store=InMemorySessionStore(),
+        )
+        runtime = await started(app, transport)
+        for index, text in enumerate(("question 0", OVERSIZED)):
+            result = await runtime.submit(inbound(text, request=f"r{index}"))
+            handle = result.handle
+            assert handle is not None
+            await handle.wait()
+            await until(
+                lambda: handle.turn_id not in runtime._replies, timeout=WAIT_S
+            )
+        await runtime.close(WAIT_S)
+        return transport, handle
+
+    transport, last = _run(scenario())
+
+    assert last.terminal == "converged"
+    _check_the_request_was_dropped(last.outcome)
+    assert transport.sent == [FIRST_ANSWER, *([reply] if reply else [])]
 
 
 def test_an_emergency_truncation_mid_exchange_with_placeholders(tmp_path):
