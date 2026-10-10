@@ -403,7 +403,12 @@ def _reply(trajectory: Sequence[Message], given: Sequence[Message]) -> str:
     One object can occur in *trajectory* more often than in *given*, when
     a provider hands back a message object it has returned before. Each
     occurrence in *given* accounts for one in *trajectory*, earliest
-    first, and a further occurrence was added by the exchange.
+    first, and a further occurrence was added by the exchange. The count
+    misses the reply when a compaction that is written back has dropped
+    one of the occurrences in *given*: the one the exchange added is then
+    counted as history and its text is not returned. Both built-in
+    provider adapters build a new message for every call, so only a
+    provider that returns one object more than once is affected.
 
     Returns ``""`` when the exchange added no assistant message with
     text. Any non-empty content counts as text.
