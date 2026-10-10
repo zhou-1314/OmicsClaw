@@ -500,3 +500,173 @@ def test_human_tool_description_summarises_arguments():
         "bash", json.dumps({"command": "rm -rf /tmp/x\nsleep 5"})
     )
     assert bash_like.startswith("run bash rm -rf /tmp/x")
+
+
+# ---- P4: kind="code_run" over the persistent kernel -------------------------
+
+
+def code_run_client(tmp_path: pathlib.Path):
+    """The jobs client with jupyter_client present, else skipped.
+
+    Same construction as :func:`jobs_client` — the app is the real
+    composition root's, so ``app.kernels`` is the binding the ``python``
+    tool would use, and the code_run runner shares it.
+    """
+    importorskip = pytest.importorskip
+    importorskip("jupyter_client", reason="code_run needs jupyter_client")
+    importorskip("ipykernel", reason="code_run needs ipykernel")
+    plant_fake_skill(tmp_path)
+    app = attach_sessions(
+        make_app(tmp_path, Scripted(Message(role=Role.ASSISTANT, content="ok"))),
+        abandon_grace_s=None,
+    )
+    # A file-backed store, unlike jobs_client()'s in-memory one, because the
+    # kernel binding registers figures on <workspace>/.omicsclaw/jobs.db —
+    # the same file production shares between the jobs plane and the tool.
+    (tmp_path / ".omicsclaw").mkdir(exist_ok=True)
+    manager = JobsManager(
+        app,
+        store=JobStore(Database(tmp_path / ".omicsclaw" / "jobs.db")),
+        default_timeout_s=120.0,
+    )
+    return manager, testclient.TestClient(create_desktop_app(app, jobs_manager=manager))
+
+
+def wait_terminal(client, job_id: str, timeout_s: float = 90.0):
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        record = client.get("/jobs/" + job_id).json()["job"]
+        if record["status"] in ("succeeded", "failed", "canceled", "interrupted"):
+            return record
+        time.sleep(0.2)
+    raise AssertionError("job did not finish: " + repr(record))
+
+
+def test_code_run_job_streams_the_p1_vocabulary(tmp_path):
+    manager, http = code_run_client(tmp_path)
+    with http as client:
+        created = client.post(
+            "/jobs",
+            json={
+                "kind": "code_run",
+                "code": "import sys\nprint('cell one', file=sys.stdout)",
+                "session_id": "p4-j1",
+            },
+        )
+        assert created.status_code == 200, created.text
+        job_id = created.json()["job_id"]
+        record = wait_terminal(client, job_id)
+        assert record["status"] == "succeeded", record
+        frames = drain_sse(client, "/jobs/" + job_id + "/events")
+        types = [envelope["type"] for _, envelope in frames]
+        assert types[0] == "job.created"
+        assert types[1] == "job.started"
+        assert "tool_started" in types
+        assert "tool_output_chunk" in types
+        assert types[-1] == "job.done"
+        started = next(
+            envelope["data"] for _, envelope in frames
+            if envelope["type"] == "tool_started"
+        )
+        assert started["tool"] == "python"
+        assert started["human_description"]
+        usage = [
+            envelope["data"] for _, envelope in frames
+            if envelope["type"] == "usage"
+        ]
+        assert usage and usage[0]["wall_s"] >= 0
+
+
+def test_code_run_persists_variables_across_jobs_on_one_session(tmp_path):
+    manager, http = code_run_client(tmp_path)
+    with http as client:
+        first = client.post(
+            "/jobs",
+            json={"kind": "code_run", "code": "shared_v = 11", "session_id": "p4-j2"},
+        )
+        assert first.status_code == 200
+        assert wait_terminal(client, first.json()["job_id"])["status"] == "succeeded"
+        second = client.post(
+            "/jobs",
+            json={
+                "kind": "code_run",
+                "code": "print('sees', shared_v + 1)",
+                "session_id": "p4-j2",
+            },
+        )
+        job_id = second.json()["job_id"]
+        assert wait_terminal(client, job_id)["status"] == "succeeded"
+        frames = drain_sse(client, "/jobs/" + job_id + "/events")
+        chunks = "".join(
+            envelope["data"].get("text", "")
+            for _, envelope in frames
+            if envelope["type"] == "tool_output_chunk"
+        )
+        assert "sees 12" in chunks
+
+
+def test_code_run_failure_is_a_job_failure_with_the_error(tmp_path):
+    manager, http = code_run_client(tmp_path)
+    with http as client:
+        created = client.post(
+            "/jobs",
+            json={"kind": "code_run", "code": "1/0", "session_id": "p4-j3"},
+        )
+        job_id = created.json()["job_id"]
+        record = wait_terminal(client, job_id)
+        assert record["status"] == "failed"
+        frames = drain_sse(client, "/jobs/" + job_id + "/events")
+        last = frames[-1][1]
+        assert last["type"] == "job.failed"
+        assert "ZeroDivisionError" in last["data"]["error"]
+        assert last["data"]["phase"] == "run"
+
+
+def test_code_run_requires_code(tmp_path):
+    manager, http = code_run_client(tmp_path)
+    with http as client:
+        refused = client.post("/jobs", json={"kind": "code_run"})
+        assert refused.status_code == 422
+        assert refused.json()["detail"] == "code_required"
+        blank = client.post("/jobs", json={"kind": "code_run", "code": "   "})
+        assert blank.status_code == 422
+        assert blank.json()["detail"] == "code_required"
+
+
+def test_code_run_figure_lands_in_the_artifact_tray(tmp_path):
+    manager, http = code_run_client(tmp_path)
+    with http as client:
+        created = client.post(
+            "/jobs",
+            json={
+                "kind": "code_run",
+                "code": (
+                    "import matplotlib.pyplot as plt\n"
+                    "plt.plot([1, 2], [1, 2])\n"
+                    "plt.show()\n"
+                ),
+                "session_id": "p4-j4",
+            },
+        )
+        job_id = created.json()["job_id"]
+        record = wait_terminal(client, job_id)
+        assert record["status"] == "succeeded", record
+        frames = drain_sse(client, "/jobs/" + job_id + "/events")
+        created_frames = [
+            envelope["data"] for _, envelope in frames
+            if envelope["type"] == "artifact.created"
+        ]
+        assert created_frames, "the figure must arrive as an artifact.created frame"
+        figure = created_frames[0]
+        assert figure["kind"] == "figure"
+        assert pathlib.Path(figure["path"]).is_file()
+        row = client.get("/artifacts/" + figure["artifact_id"]).json()["artifact"]
+        assert row["job_id"] == job_id
+        assert row["meta"]["capture"] == "kernel"
+
+
+def test_health_declares_the_kernel_capability(tmp_path):
+    _, http = jobs_client(tmp_path)
+    with http as client:
+        payload = client.get("/health").json()
+    assert payload["capabilities"]["kernel"] is True

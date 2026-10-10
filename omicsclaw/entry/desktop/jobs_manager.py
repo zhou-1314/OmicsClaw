@@ -76,6 +76,7 @@ __all__ = [
     "DEFAULT_JOB_TIMEOUT_S",
     "JOB_EVENTS_RETAINED",
     "HEARTBEAT_INTERVAL_S",
+    "CodeRunRunner",
     "JobError",
     "JobExecutionContext",
     "JobFailure",
@@ -877,6 +878,165 @@ class SkillApiRunner:
             raise JobFailure(type(exc).__name__ + ": " + str(exc), phase="run") from exc
 
 
+class CodeRunRunner:
+    """``kind="code_run"``: Python on the session's persistent kernel.
+
+    P4's job face. The payload is ``inputs.code`` (folded from the top
+    level by the route) plus an optional ``inputs.adata_path`` naming an
+    h5ad on the workspace — the input the handle bridge exists for:
+    :meth:`~omicsclaw.kernel.PersistentKernelManager.execute` runs it
+    through the revision-gated ``sync_in`` and binds the resident object
+    to ``adata`` in the cell's namespace, so a second job over an
+    unchanged file is a zero-copy skip rather than another full read.
+
+    The session is the request's ``session_id`` (the same id the chat
+    face's ``python`` tool keys on — one kernel per session, whichever
+    surface asked), or ``job-<id>`` when none came: a job without a
+    session still gets a kernel, just a private one.
+
+    Events are the P1 vocabulary, no new types: ``tool_started`` with
+    ``tool="python"``, stdout as ``tool_output_chunk`` frames as iopub
+    streams them, ``cell_idle_notice`` when a running cell goes output-
+    silent, ``usage`` with the per-cell wall/cpu/peak_rss the manager
+    probes, and one ``artifact.created`` per kernel-captured figure
+    (registered inline with ``capture="kernel"`` — the chat face inserts
+    the same rows with no event, having no job stream to speak on).
+
+    ``skill_run`` and ``code_run`` share this whole lifecycle framework —
+    the semaphore, the timeout, the approval gate, the ring — because a
+    job is a job; only the runner differs.
+    """
+
+    def __init__(self, kernels: Any, *, artifact_store: Any = None) -> None:
+        self._binding = kernels
+        self._artifact_store = artifact_store
+
+    def validate(self, skill: str, inputs: Any) -> None:
+        code = inputs.get("code") if isinstance(inputs, dict) else None
+        if not isinstance(code, str) or not code.strip():
+            raise JobError("code_required")
+        adata_path = inputs.get("adata_path")
+        if adata_path is not None and not isinstance(adata_path, str):
+            raise JobError("invalid_adata_path")
+
+    async def __call__(self, record: JobRecord, ctx: JobExecutionContext) -> Any:
+        from omicsclaw.kernel import KernelCallbacks, format_cell_summary
+
+        manager = self._binding.manager
+        code = str(record.inputs["code"])
+        adata_path = record.inputs.get("adata_path")
+        adata_path = adata_path.strip() if isinstance(adata_path, str) else None
+        session_id = record.session_id or ("job-" + record.id[:12])
+        ctx.tool_started("python", json.dumps({"code": code[:400]}, ensure_ascii=False))
+        self._protect(manager, session_id, record)
+
+        def _on_stream(name: str, text: str) -> None:
+            if name == "stdout" and text:
+                ctx.tool_output(text)
+
+        def _on_idle(seconds_idle: float, last_label: str) -> None:
+            ctx.emit(
+                "cell_idle_notice",
+                {"seconds_idle": int(seconds_idle), "last_label": last_label},
+            )
+
+        def _on_usage(usage: dict[str, Any]) -> None:
+            ctx.emit("usage", dict(usage))
+
+        try:
+            result = await manager.execute(
+                session_id,
+                code,
+                origin="agent",
+                callbacks=KernelCallbacks(
+                    on_stream=_on_stream,
+                    on_idle=_on_idle,
+                    on_usage=_on_usage,
+                ),
+                adata_in=adata_path or None,
+                job_id=record.id,
+            )
+        finally:
+            self._unprotect(manager, session_id, record)
+        for ref in result.figures:
+            if ref.artifact_id:
+                ctx.emit(
+                    "artifact.created",
+                    {
+                        "artifact_id": ref.artifact_id,
+                        "kind": "figure",
+                        "title": Path(ref.path).stem,
+                        "path": ref.path,
+                    },
+                )
+        summary = format_cell_summary(result)
+        if result.status == "error" and result.error is not None:
+            raise JobFailure(
+                str(result.error.get("ename", "Error"))
+                + ": "
+                + str(result.error.get("evalue", "")),
+                phase="run",
+            )
+        if result.status == "timeout":
+            raise JobFailure("the cell exceeded its wall-clock limit", phase="run")
+        if result.status == "dead":
+            raise JobFailure("the kernel died mid-cell; retry to cold-start", phase="run")
+        ctx.tool_output(summary)
+        await self._scan_artifacts(record, ctx)
+        return summary
+
+    def _protect(self, manager: Any, session_id: str, record: JobRecord) -> None:
+        """Keep the reaper away while this job owns the session's kernel."""
+        try:
+            manager.protect(session_id, "job:" + record.id)
+        except Exception:  # noqa: BLE001 - protection is best-effort
+            _log.exception("kernel protection failed for job %s", record.id)
+
+    def _unprotect(self, manager: Any, session_id: str, record: JobRecord) -> None:
+        try:
+            manager.unprotect(session_id, "job:" + record.id)
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def _scan_artifacts(
+        self, record: JobRecord, ctx: JobExecutionContext
+    ) -> None:
+        """P2's capture channel ②, reused: the fallback scan after a good end.
+
+        A ``code_run`` has no output contract, so the scanner's safety net
+        is the whole of it — the conventional ``figures/``/``tables/``
+        directories, attributed by mtime from this job's creation. Figures
+        the kernel captured inline are already rows (``capture="kernel"``)
+        and the store's ``(job_id, path)`` check keeps this scan from
+        double-registering them; what it adds is everything else the cell
+        wrote by hand.
+        """
+        if self._artifact_store is None:
+            return
+        try:
+            from .artifacts_manager import register_job_artifacts
+
+            await asyncio.to_thread(
+                register_job_artifacts,
+                self._artifact_store,
+                job_id=record.id,
+                session_id=record.session_id,
+                skill_directory=Path(ctx.workspace) / ".omicsclaw" / "no-skill",
+                workspace=Path(ctx.workspace),
+                emit=lambda event_type, payload: ctx.emit(event_type, payload),
+                since=record.created_at,
+            )
+        except Exception:  # noqa: BLE001 - never fail a done job over the tray
+            _log.exception("artifact scan failed for job %s", record.id)
+
+    def bind_artifact_store(self, store: Any) -> None:
+        """Give the runner the jobs plane's shared store, for the scan."""
+        self._artifact_store = store
+
+
+
+
+
 def _summarize_result(result: Any) -> str:
     if result is None:
         return "done"
@@ -919,6 +1079,7 @@ class JobsManager:
         artifact_store: ArtifactStore | None = None,
         default_timeout_s: float = DEFAULT_JOB_TIMEOUT_S,
         max_concurrent: int = MAX_CONCURRENT_JOBS,
+        kernels: Any = None,
     ) -> None:
         self._app = app
         if store is None:
@@ -940,6 +1101,21 @@ class JobsManager:
             _log.info("marked %d orphaned job(s) interrupted at start-up", interrupted)
         self.register_runner(
             "skill_run", SkillApiRunner(app, artifacts=self.artifacts)
+        )
+        # P4's code_run rides the same lifecycle on the deployment's
+        # persistent kernels: the binding build_app mounted behind the
+        # ``python`` tool when there is one (one manager, shared session
+        # kernels between the faces), else a private one for this manager.
+        if kernels is None:
+            kernels = getattr(app, "kernels", None)
+        if kernels is None:
+            from ..assembly import WorkspaceKernelBinding
+
+            kernels = WorkspaceKernelBinding(app.config.workspace)
+        self.kernels = kernels
+        self.register_runner(
+            "code_run",
+            CodeRunRunner(kernels, artifact_store=self.artifacts),
         )
 
     # ---- construction and lookup ----

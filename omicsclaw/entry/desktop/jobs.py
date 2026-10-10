@@ -148,10 +148,23 @@ def mount_jobs_routes(
             workspace = document.get("workspace", "")
             if workspace is not None and not isinstance(workspace, str):
                 raise DesktopIngressError("invalid_workspace", status_code=422)
+            inputs = document.get("inputs")
+            # P4's code_run carries its payload at the top level
+            # (``{kind, code, inputs?{adata_path?}}``, the shape the plan
+            # spells) rather than inside ``inputs``: the code is the job,
+            # not an argument to a skill. Folded into ``inputs`` here so
+            # the runner reads one bag; a skill_run body is untouched.
+            if kind == "code_run":
+                code = document.get("code")
+                if not isinstance(code, str) or not code.strip():
+                    raise DesktopIngressError("code_required", status_code=422)
+                bag = dict(inputs) if isinstance(inputs, dict) else {}
+                bag["code"] = code
+                inputs = bag
             record = await jobs.create_job(
                 kind=kind,
                 skill=skill or "",
-                inputs=document.get("inputs"),
+                inputs=inputs,
                 session_id=session_id or "",
                 workspace=workspace or "",
             )
