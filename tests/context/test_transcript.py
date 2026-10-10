@@ -1287,7 +1287,8 @@ def test_a_head_with_nothing_droppable_is_handed_back_untouched():
     """A head that is one summary comes back as the input, not as a rebuild.
 
     The tail carries a result nothing asked for. A rebuild would run
-    the repair and delete it.
+    the repair and delete it. What comes back is a tuple of the same
+    messages and never the caller's own list.
     """
     summary = _summary()
     orphan = Message.tool(tool_call_id="never-called", content="x" * 40)
@@ -1301,6 +1302,7 @@ def test_a_head_with_nothing_droppable_is_handed_back_untouched():
 
     result = _fit(messages, 10)
 
+    assert isinstance(result, tuple), "a tuple on this path too, like every return"
     assert len(result) == len(messages)
     assert all(a is b for a, b in zip(result, messages)), "handed back, not rebuilt"
 
