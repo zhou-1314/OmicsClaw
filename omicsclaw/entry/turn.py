@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
+from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import (
@@ -128,6 +129,23 @@ class TurnOutcome:
     """The render this turn used. Holds ``section_stats``, which is the
     only way to answer "which block is eating the window"."""
 
+    reply: str
+    """The last text the assistant wrote in this exchange, or ``""``.
+
+    Only the messages this exchange added are read. ``result.messages``
+    starts with the history the exchange was given, and an answer in that
+    history is never the reply. An exchange that wrote no text has
+    ``""``: an empty reply, reasoning without text, a run that ended on
+    tool calls or was cut off before any text. Text written beside a tool
+    call counts, and the last turn that has any is the reply. Any
+    non-empty content is text, whitespace included.
+
+    The trajectory is read as the exchange left it. Text of this exchange
+    that a compaction has since summarized or dropped is no longer in it
+    and is not returned. A compaction-only exchange runs no model turn
+    and has ``""``.
+    """
+
     state: CompactionState = field(default_factory=CompactionState)
     """Summary and anchors so far. Pass back in so a second compaction
     extends the first summary instead of starting over."""
@@ -138,14 +156,6 @@ class TurnOutcome:
     compactions: tuple[CompactionRecord, ...] = ()
     """Every compaction of this exchange, oldest first — one model call
     may compact, and a long run may compact several times."""
-
-    @property
-    def reply(self) -> str:
-        """The assistant's final text, or ``""`` if the run produced none."""
-        for message in reversed(self.result.messages):
-            if message.role is Role.ASSISTANT and message.content:
-                return message.content
-        return ""
 
     @property
     def hit_the_turn_ceiling(self) -> bool:
@@ -228,7 +238,8 @@ class _Carried:
 
     history: tuple[Message, ...] = ()
     """What this exchange starts from, free of a system message (Q3) and
-    of tool calls that no tool result answers."""
+    of tool calls that no tool result answers. The engine is handed these
+    message objects, and :func:`_reply` recognizes history by them."""
 
     committed: tuple[Message, ...] | None = None
     """What the engine handed back, or ``None`` if it never got that far."""
@@ -360,16 +371,51 @@ def _outcome(result: RunResult, exchange: _Exchange) -> TurnOutcome:
     relying on whatever default that engine was built with — a test's
     hand-built engine has none, and this layer's contract is that
     :attr:`TurnOutcome.prompt` is always a render.
+
+    The reply is read from the trajectory against the history the engine
+    was handed, which has unanswered tool calls already left out.
     """
     compactor = exchange.compactor
     return TurnOutcome(
         result=result,
         history=exchange.conversation.carried,
         prompt=cast(AssembledPrompt, result.prompt),
+        reply=_reply(result.messages, exchange.conversation.history),
         state=compactor.state,
         compaction=compactor.last_record,
         compactions=compactor.records,
     )
+
+
+def _reply(trajectory: Sequence[Message], given: Sequence[Message]) -> str:
+    """The last assistant text in *trajectory* that *given* did not supply.
+
+    *given* is the history an exchange started from, and *trajectory* is
+    what the engine handed back: that history as compaction left it, with
+    the messages of the exchange behind it. A message of *trajectory* is
+    history when it is one of the objects in *given*. Identity is enough
+    for assistant messages because nothing between the two rebuilds one:
+    compaction keeps or drops whole messages, writes its summary as a
+    user message, and otherwise builds only tool results. The request is
+    not a boundary to search back to, since an emergency truncation can
+    drop it.
+
+    One object can occur in *trajectory* more often than in *given*, when
+    a provider hands back a message object it has returned before. Each
+    occurrence in *given* accounts for one in *trajectory*, earliest
+    first, and a further occurrence was added by the exchange.
+
+    Returns ``""`` when the exchange added no assistant message with
+    text. Any non-empty content counts as text.
+    """
+    owed = Counter(id(message) for message in given)
+    reply = ""
+    for message in trajectory:
+        if owed[id(message)]:
+            owed[id(message)] -= 1
+        elif message.role is Role.ASSISTANT and message.content:
+            reply = message.content
+    return reply
 
 
 @contextmanager
@@ -754,7 +800,8 @@ class TurnRunner:
         """Summarize the session now; keep the result only if written back.
 
         *messages* is what :func:`compose` returned, so the history
-        handed back has no unanswered tool call in either case.
+        handed back has no unanswered tool call in either case. No model
+        turn runs, so the outcome has no reply.
         """
         compacted, record = await compactor.force(messages, self._app.tools_snapshot)
         kept = compacted if record.written_back else messages
@@ -762,6 +809,7 @@ class TurnRunner:
             result=RunResult(messages=kept, stop_reason=StopReason.CONVERGED),
             history=tuple(kept[PINNED_SYSTEM_MESSAGES:]),
             prompt=prompt,
+            reply="",
             state=compactor.state,
             compaction=record,
             compactions=compactor.records,
