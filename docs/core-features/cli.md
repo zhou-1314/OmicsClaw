@@ -180,7 +180,7 @@ while self.state.running:
 （`slash_token`）。
 
 `ask` 通过 `app.sessions.submit(session_id, text)` 提交，拿到 `TurnHandle`，再由 `_drive` → `_pump` 把事件流画到屏幕，
-最后 `await handle.wait()` 等注册表完成持久化，避免下一个提示与保存赛跑。
+最后 `await handle.wait()` 等注册表完成持久化，避免下一个提示与保存赛跑。回复被输出上限截断时，`_drive` 在这之后再打印一行（§9.2）。
 
 **Ctrl-C 取消的是本次 exchange，不是进程**：`Repl.interrupt()` 取消正在运行的 handle，注册表发布
 `EXCHANGE_END(terminal="cancelled")`，循环回到提示符；对话历史保持**逐字节不变**（取消的 exchange 不保留半截轨迹）。
@@ -491,7 +491,7 @@ approve bash [#2]? [y/N/a=always]
 | `PROGRESS` | 更新活动行的细节 |
 | `CONTEXT` / `COMPACTION` / `QUEUED` / `APPROVAL_SETTLED` / `QUESTION_SETTLED` / `GAP` | `TextRenderer` 的一行控制文本；已回答的提问不出字。`QUESTION_SETTLED` 到达时提示符还开着的话先收回它（§7.4） |
 | `TURN_END` | 累加 usage 供 `/usage`（`usage=None` 跳过，零值照加）。子代理的轮次不在这条流里，它们的用量在 exchange 结束后从 `TurnHandle.delegated` 读一次 |
-| `EXCHANGE_END` | `converged` 不打印（每个回答下面一行 "Done." 是噪音）；`cancelled` / `failed` 打印 |
+| `EXCHANGE_END` | `converged` 不打印（每个回答下面一行 "Done." 是噪音）；`cancelled` / `failed` 打印。被输出上限截断的 exchange 也是 `converged`，它的说明在帧流结束后由 `_drive` 打印（§9.2） |
 
 `TextRenderer`（`omicsclaw/entry/render.py`）在 CLI 以 `batched=False` 使用：token 一到就上屏。它从不渲染工具参数或输出的原始载荷
 （审批行例外，展示给做决定的人，且不写日志）；工具耗时带 `ELAPSED_INCLUDES_APPROVAL_WAIT` 后缀——这个时间包含人思考审批的时间。
@@ -506,6 +506,50 @@ approve bash [#2]? [y/N/a=always]
 - 模型调用期间也显示（不只工具期间）——一个只返回 tool call 的模型不产生任何 `TEXT_DELTA`。
 - 非终端（管道、文件）不做动画，而是在同一活动持续 `HEARTBEAT_S = 30.0` 秒后追加一行纯文本心跳；短的 `oc cli --prompt ... > answer.txt` 不会出现心跳。
 - 刻意不显示 token 计数（plan 0041 裁定：`/usage` 按需打印即为最终答案）。
+
+### 9.2 回复被输出上限截断时的一行
+
+模型的回复撞到输出上限时，引擎把这次 exchange 的停止原因记为 `truncated`（[agent-loop.md](agent-loop.md) §4.1）。`terminal` 仍是 `converged`，
+事件帧不带停止原因，所以 `_pump` 看不到。`Repl._drive` 在 `handle.wait()` 之后读 `handle.outcome.result.stop_reason`，是 `truncated` 就用黄字打印一行
+（`_cut_off_notice`）。这一行在回复和 `Turn N done` 之后、下一个提示符之前。exchange 留下的卡片提示符先收掉再打印，一次 exchange 至多一行，后面不补空行。
+
+原文有两种，看被截断的那条回复带不带工具调用：
+
+```
+The reply was cut off at the output limit and is incomplete. Ask for a shorter answer, or for it in parts.
+The reply was cut off at the output limit, so the tool calls in it were not run: write_file. Ask for the work in smaller pieces.
+```
+
+- 不带调用（只有文字，或只有推理）用第一种。
+- 带调用用第二种，`write_file` 的位置是调用名的列表：每个调用一个名字，按模型写的顺序，用 `, ` 隔开，同名的不合并。名字过 `inert_line`，空的或只含空白的显示成 `?`。
+- 被截断的回复里的工具调用一个都没有执行，参数完整的也没有。工具调用在执行前才上屏，所以用户只能从这一行知道模型本来要调什么。
+  同一次 exchange 里更早的模型调用带的工具已经执行，不在列表里。
+- 照建议再发一条消息时，没执行的调用已经在开场被去掉（[context-engineering.md](context-engineering.md) §7），请求能正常发出去。
+
+一次性执行（`--prompt`、`--prompt-file`）走同一个 `_drive`，这一行在标准输出上，跟在被截断的回答后面，退出码仍是 0。
+
+两种形式都以 `The reply was cut off at the output limit` 开头。这个开头是脚本匹配的事实接口，改这几个字要当接口改，
+`tests/entry/test_cli_repl.py::test_the_two_forms_read_as_agreed_and_open_with_the_same_words` 把两句原文和这个开头都写死了。
+脚本判断"这次回复被截断了"时匹配行首的这个开头，不要比整句：这一行按 rich 探到的宽度折行，宽度小于整句的长度时整句不在一行上，折出来的行有的行尾带空格。
+
+- 宽度从哪里来：设了 `COLUMNS`（正整数）就用它，不再看终端。没设时 rich 依次问 stdin、stdout、stderr，用第一个连着终端的流的宽度；三个都不连终端才是 80 列。
+  所以 stdout 进了文件或管道，折行位置也不一定是 80 列。在终端里敲 `oc cli --prompt … > answer.txt` 时 stdin 和 stderr 还连着终端，用的是那个终端的宽度。
+- 宽度放得下整句时不折行。第一种形式 106 个字符；第二种带一个 `write_file` 时 128 个字符，名字越多越长。
+- 宽度太小时开头也会被折断，按行首匹配就找不到它：第一种形式在宽度小于 41 列时，第二种在宽度小于 42 列时（`limit` 后面的逗号和它不分行）。
+- 要稳妥，调用时设一个比整句长的 `COLUMNS`，如 `COLUMNS=1000 oc cli --prompt … > answer.txt`。整句在一行上，行首就是这个开头。回答的正文不按这个宽度折行（`MarkdownStreamFormatter` 用 `soft_wrap` 写），不受这个值影响。
+
+这些是在 Linux 上用 rich 14.2.0 和 15.0.0 量到的，Windows 上没有量。
+
+下面这些场合不出这一行：
+
+| 场合 | 现在的行为 |
+|---|---|
+| 子代理的回复被截断 | 父代理的 exchange 没有被截断，不出这一行。子代理写了文字时，`task` 的结果以 `[<name>] was cut off at the output limit; …` 开头，结果预览里看得到；没写文字时 `task` 报错 |
+| 摘要调用被截断（自动压缩、`/compact`） | 没有提示。摘要器只取回复的文字，被截断的摘要按完整的写回 |
+| 到达轮数上限（`--max-turns`） | 没有提示 |
+| `length`、`max_tokens` 之外的中断（如 `content_filter`） | 引擎不算截断，不出这一行 |
+| 取消、失败 | 只有 `Cancelled.` 或 `Failed: <类型名>` |
+| Desktop、Channel | 不经过 `_drive`，没有这一行 |
 
 ---
 
@@ -625,7 +669,7 @@ workspace 默认是启动时的当前目录（`--workspace` / `OMICSCLAW_WORKSPA
 | `omicsclaw/launch/_surfaces.py` | `CLI_USAGE`、`CLI_FLAGS`、`ReplOptions`、`start_cli`、`_run_cli`、`_release`、`_interrupts`、`_replay`；Desktop/Channel 启动 |
 | `omicsclaw/entry/config.py` | `AppConfig`、`resolve_app_config`、全部部署 flag |
 | `omicsclaw/entry/cli/__init__.py` | 包说明与公开符号 |
-| `omicsclaw/entry/cli/_repl.py` | `Repl`、`run_once`、审批、提问卡片、`/sessions` `/resume` `/compact` 等 |
+| `omicsclaw/entry/cli/_repl.py` | `Repl`、`run_once`、审批、提问卡片、截断提示（`_cut_off_notice`）、`/sessions` `/resume` `/compact` 等 |
 | `omicsclaw/entry/question.py` | `QuestionBroker`、`question_card`、`reply_hint`、`read_reply` |
 | `omicsclaw/entry/cli/_slash_command_support.py`、`_constants.py` | 命令目录、`REPL_SLASH_COMMAND_SPECS`、`slash_token` |
 | `omicsclaw/entry/cli/_activity.py` | `ActivityLine` 活动行 |
