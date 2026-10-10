@@ -11,6 +11,7 @@ each importable without the one above it::
     store      remote_hosts / remote_jobs over the memory Database
     plane      RemotePlaneBinding: the tool layer's injected plane
     bridge     the P1 jobs-plane runner for runtime="remote:<alias>"
+    kernel     C3's remote persistent kernel: env supply + the tunnel
     reconcile  re-estimate in-flight handles after a restart
 
 The tool family itself lives in the leaf layer
@@ -30,6 +31,12 @@ from __future__ import annotations
 
 from .bridge import RemoteJobsBridge
 from .jobs import RemoteJobHandle
+from .kernel import (
+    RemoteKernelEnv,
+    RemoteKernelEnvError,
+    RemoteKernelRuntime,
+    RemoteSessionKernel,
+)
 from .plane import RemoteExecutor, RemotePlaneBinding
 from .probe import HostProbe, parse_probe_output
 from .reconcile import refresh_in_flight
@@ -51,7 +58,11 @@ __all__ = [
     "RemoteJobRow",
     "RemoteJobStore",
     "RemoteJobsBridge",
+    "RemoteKernelEnv",
+    "RemoteKernelEnvError",
+    "RemoteKernelRuntime",
     "RemotePlaneBinding",
+    "RemoteSessionKernel",
     "SshSpawner",
     "SystemSshSpawner",
     "parse_probe_output",

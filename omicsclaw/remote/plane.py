@@ -340,6 +340,14 @@ class RemotePlaneBinding:
         self._spawner = spawner if spawner is not None else SystemSshSpawner()
         self._workspace = Path(workspace).resolve() if workspace is not None else None
 
+    @property
+    def spawner(self) -> SshSpawner:
+        """The transport every remote operation of this deployment
+        shares — what the C3 kernel runtime is handed so its kernels,
+        its environment probes and the remote tools ride one
+        ControlMaster pool per host."""
+        return self._spawner
+
     def close(self) -> None:
         """Close the database this binding was constructed over.
 
