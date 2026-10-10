@@ -1,6 +1,6 @@
 # 计划 0039 — `omicsclaw/planning/`：Agent 原生的执行计划层
 
-**状态**：已实现，两轮独立只读审核已完成，返工已合入（见 §8）。2026-10-08 的规划闸门修正见 §9。
+**状态**：已实现，两轮独立只读审核已完成，返工已合入（见 §8）。2026-10-08 的规划闸门修正见 §9。2026-10-10 让闸门在 `ask_user` 之后重新计数，见 §10，待独立审核和 owner 过目。
 **参考实现**：harness9 `internal/planning/`、`internal/tools/plan_write.go`、
 `internal/engine/loop_phases.go`（4b''/4c/checkpointPlan/savePlan）、
 `internal/hooks/plan_writer.go`。
@@ -151,6 +151,7 @@ Desktop 的计划面板）复用而不需要绕道工具。
    不足 K 条，此时不触发——参考实现的计数器会照常触发。这个差异是可接受的：
    压缩刚发生意味着模型刚拿到一份新摘要，那一轮不是催规划的好时机。
    2026-10-08 补充：这 K 条只在本次交换的轮次里数，见 §9。
+   2026-10-10 补充：调用了 `ask_user` 的那一轮之后重新数，见 §10。
 5. **`cancelled → completed` 的拒绝措辞带上恢复路径**，与参考实现一致；
    但"一次最多 1 个直接完成"的阈值**连同它的理由一起**抄进了 docstring：
    阈值取 1 而非 0 是为了保住"真干完了一件事就直接标完成"的正常用法。
@@ -400,3 +401,128 @@ CLI、Desktop、channel 都拒绝空消息，compaction-only 的交换不调模�
     触发。降级截断的结果不写回历史。
 - 真实会话只在 DeepSeek 和 CLI 上跑过。Desktop 和 channel 没有跑真实会话；它们和 CLI
   一样走 `SessionRegistry` 到 `TurnRunner`，脚本化 eval 覆盖的是这一段共用路径。
+
+## 10. 2026-10-10：调用 `ask_user` 之后重新计数
+
+分支 `fix/planning-gate-ask-user`，基线 `main` 的 `4d6c473d`，待独立审核和 owner 过目。
+
+### 10.1 裁定和现状
+
+owner 2026-10-08 的裁定：规划闸门把 `ask_user` 的轮次当作用户说话，调用了 `ask_user`
+的那一轮起重新计数，不区分对方是否作答。
+
+`ask_user`（`docs/plans/0054-ask-user-tool-delivery.md`）让模型在一次交换中途向人提问，
+回答作为这次工具调用的结果回到模型手里，历史里没有新的 user 消息。§9 的计数只在 user
+消息处停下，提问那一轮和它之前的轮次于是连着数。
+
+在 `4d6c473d` 上用脚本化的模型复现：真实的 `AgentApp` 和 `SessionRegistry`，提问经
+`TurnHandle.answer` 作答，`gate_turns` 取默认的 8。右边一列是改动之后同一份脚本的结果。
+
+| 模型走的轮次 | 带闸门文本的模型调用，改前 | 改后 |
+|---|---|---|
+| 12 轮只读，不提问 | 第 9 次 | 第 9 次 |
+| 5 轮只读，提问，6 轮只读 | 第 9 次，回答之后只读了 2 轮 | 没有 |
+| 7 轮只读，提问，3 轮只读 | 第 9 次，就是带着回答的那一次调用 | 没有 |
+| 提问，9 轮只读 | 第 9 次 | 第 10 次 |
+| 5 轮只读，提问，9 轮只读 | 第 9 次 | 第 15 次 |
+| 7 轮只读，提问被空行跳过，3 轮只读 | 第 9 次 | 没有 |
+| 7 轮只读，提问到期无人作答，3 轮只读 | 第 9 次 | 没有 |
+| 7 轮只读，一条消息里 `read_file` 加 `ask_user`，3 轮只读 | 第 9 次 | 没有 |
+| 3 轮只读，提问，3 轮只读，提问，3 轮只读 | 第 9 次，带着第二个回答的那一次调用 | 没有 |
+
+### 10.2 规则和边界的取法
+
+`_gate_fires` 往回数时，遇到调用了 `ask_user` 的 assistant 消息就返回不触发，和遇到 user
+消息一样。代码是循环里多一个按工具名的判断，和 `plan_write`、进展工具走同一个返回。
+
+裁定只有一句话，下面几处是实现方定的。
+
+| 问题 | 取法 | 理由 |
+|---|---|---|
+| 提问那一轮自己算第几轮 | 不计入。提问之后的第一轮是第 1 轮，再连续只读 `gate_turns` 轮才提醒 | 人的回答是这次调用的结果，位置相当于交换开头的 user 消息，而 user 消息之后的第一轮是第 1 轮。提问那一轮发生在回答之前，相当于上一次交换结尾那条向用户发问的答复，新的交换不数它。写过文件的那一轮在原有代码里也是这样：窗口里有写入就不触发，等价于从它的下一轮数起。提醒的文字说的是"只读不改的轮次"，提问那一轮不在其中 |
+| 靠什么判定 | assistant 消息的 `tool_calls` 里有名字等于 `ask_user` 的调用，名字从 `omicsclaw.tools.builtin.ask_user.TOOL_NAME` 导入。不看结果，没有给消息或事件帧加字段 | 裁定要求不区分是否作答。结果会被 offload 和压缩改写，会被压缩补成占位，调用的名字不变。闸门对 `plan_write` 和进展工具也只看调用的名字，被拒的写入同样让它不触发 |
+| 被回答、被跳过、到期、没有问出去 | 都一样。包括 `answered`、`declined`、`no_answer`（到期，或者同一次交换里前一个提问到期之后不再等待）、出错的结果（deny 规则拒绝、没有提问通道、参数不合格） | 同上。参数不合格时人没有看到问题，也按提问算：要分辨就得读结果，而模型通常下一轮就改好参数重新问 |
+| 被取消 | 不用处理。在提问卡上 Ctrl-C 取消的是整次交换，这次交换的轮次不进历史，下一次交换从自己的 user 消息数起 | 既有行为，补了一条测试 |
+| 同一条消息里还有别的调用 | 整条消息是一轮，这一轮是边界。`ask_user` 排在别的调用前面、后面、中间都一样，一条消息里两个 `ask_user` 也只是一个边界 | 计数的单位是轮（§9.4：并行调用算一轮）。排在提问后面的调用是模型在回答之前决定的 |
+| 一次交换里问了几次 | 从最近的一次提问数起 | 往回数时先遇到最近的一次 |
+| 提醒过之后再提问 | 不再提醒，每次交换至多一次的约束不因提问重置 | 裁定说的是计数。重置会让一次交换出现第二次提醒，这条裁定要的是少打扰 |
+| 子代理 | 没有这种情况。子代理拿不到 `ask_user`（`entry/subagent.py` 的 `_WITHHELD_FROM_SUB_AGENTS`），子代理的交换也不带 augmentor。父代理的历史里只有 `task` 调用和它的结果，这一轮照旧算一轮 | 两处都是既有行为 |
+| 更早的交换里的提问 | 不影响本次交换，本次交换的 user 消息先让计数停下 | §9 |
+
+在 `ask_user` 的结果（`Role.TOOL` 消息）处停下的做法没有采用：闸门要去配对调用和结果，
+结果不在历史里时也不成立。
+
+阈值、提醒的文字、`ask_user` 工具都没有改。别的提醒核实过：`MemoryNudge`
+（`omicsclaw/context/nudge.py`）数的是整段对话里最后一次 `memory_write` 之后的 assistant
+消息，按计划 0055 §3.4 有意跨交换累计，user 消息不让它清零，这次没有动它，要不要让提问
+影响它留给 owner 定。计划 0055 的 `ClosingGate` 和 `StallNudge` 没有实现，代码里按轮次
+追加提醒的只有规划闸门和记忆提醒两处。
+
+### 10.3 改动
+
+- `omicsclaw/planning/injector.py`：`_gate_fires` 多一个判断，docstring 写明规则。
+- `omicsclaw/entry/config.py`：`planning_gate_turns` 的 docstring 补一句。
+- `tests/planning/test_injector.py`：24 个新用例，辅助函数拆出 `_turns`。
+- `tests/entry/test_planning.py`：4 个新用例，真实的 `ask_user` 经 `SessionRegistry` 走一次交换。
+- 文档：本节，`docs/core-features/planning.md` §8、§12、§13、§14，`docs/FRAMEWORK-REBUILD.md`
+  里说窗口终点的一句。`docs/core-features/cli.md` §7.4 没有讲闸门计数的句子，没有改。
+- 没有新增脚本化 eval。eval 的 Runner 不回答提问，`eval_config` 关着 `ask_user`；
+  `tests/entry/test_planning.py` 的新用例走的是同一条 `SessionRegistry` 到 `TurnRunner` 的路径。
+
+### 10.4 验证
+
+- 先红后绿。28 个新用例里 17 个在 `4d6c473d` 的代码上是红的：单元 14 个（六种结束方式各
+  一个、提问之后逐次调用、提问在交换开头、两次提问、同一条消息里还有别的调用的三种排法、
+  一条消息里两个提问、没有 user 消息的历史），接线 3 个（回答、跳过、到期，提醒从第 4 次
+  调用移到第 7 次）。其余 11 个改前改后都是绿的，钉住的是不该变的行为：提问之后读满
+  `gate_turns` 轮仍然提醒（六种结束方式）、提醒过的交换不因提问再提醒、名字里带
+  `ask_user` 的别的工具不算、`task` 照旧算一轮、更早交换里的提问不影响、取消之后下一次
+  交换从头数。
+- 变异。`_gate_fires` 上 30 处定点变异，每处跑 `tests/planning/test_injector.py`、
+  `tests/entry/test_planning.py`、`tests/evals/dataset/test_planning.py`，全部有测试转红，
+  每次变异后文件按 SHA-256 核对恢复。其中 16 处针对新规则：去掉判断；跳过提问那一轮但
+  接着往前数；把提问那一轮算作第 1 轮；按子串、前缀、后缀匹配名字；只看一条消息的第一个、
+  最后一个调用，或只在它是唯一调用时才算；改成在结果处停下，以及结果出错时不停；只认
+  最近一轮里的提问；认错名字；交换里问过一次就永不提醒；更早交换里的提问也算；提问之后
+  允许第二次提醒。另外 14 处是 §9.4 的 13 处加并行调用按调用数计，因为测试的辅助函数改过，
+  重跑了一遍。
+- 档位。按 `SPEC.md` 取第 3 档：代码只动了 `omicsclaw/planning/` 一个包，但它改变的是提醒
+  什么时候进入发给模型的内容，两档都沾时取高的。契约文本和 `tests/entry/golden/` 没有变。
+  跑的是 `tests/planning`、`tests/entry`、`tests/engine`、`tests/evals`、各层的分层守卫、
+  `tests/sdk/test_boundary.py`、`tests/sdk/test_public_surface.py`、顶层 `tests/test_*.py`。
+  `4d6c473d`：3523 passed、48 skipped、3 xfailed、1 xpassed。`5fa3a6b3`：3552 passed、
+  47 skipped、3 xfailed、1 xpassed，没有失败。多出的 29 条是 28 个新用例，加上
+  `tests/test_setup_env_script.py` 里依赖网络的 `conda search` 用例在基线那次跳过、这次
+  跑了。13 个 `tests/entry/test_desktop_*.py` 在 OmicsClaw 环境里另跑，两边都是 569 passed、
+  3 skipped。全量测试和 CI 的工作流没有跑。
+- 真实模型。DeepSeek（`deepseek-v4-flash`），伪终端里的 `python -m omicsclaw cli`，
+  `--planning-gate-turns 4`、`--permission-mode auto-approve`、`--memory false`。请求是先
+  逐个读三个样本文件，文件里没写哪一组是对照就用 `ask_user` 问，回答之后再看两个文件作答。
+  闸门文本只进发送副本，所以每次请求体由进程内的一个记录器落盘，记录里带 import 到的
+  `omicsclaw/planning/injector.py` 路径。驱动脚本先在一个脚本化的本地端点上调通：改前
+  带着回答的那次请求有闸门文本，改后没有。
+  - `4d6c473d`：读 3 轮，第 4 轮提问，在提问卡上作答。第 5 次请求在 `ask_user` 的结果后面
+    紧跟着闸门文本。模型这一次的思考开头是 "The system now asks me to write a plan. Let me
+    do that."，没有去读下一个文件，调用了 `plan_write`。这次交换共 11 轮，其中 4 轮是
+    `plan_write`；12 次请求，其中一次连接出错，随后重发。
+  - `5fa3a6b3`，同一句请求：7 轮，7 次请求，没有一次带闸门文本。带着回答的那一次请求
+    之后模型直接读了下一个文件，正文是 "You said G1. Now the two remaining files, one per
+    message."
+  - 两次的最终答复都对（G1 是 S1 和 S3，均值 5.0）。
+  - 第一次尝试用的是分步写得更细的一句请求，模型第一轮就写了计划，有计划的会话闸门不
+    触发，这一次（8 次请求，`4d6c473d`）不能用来比较，换了说法重跑。三次合计 27 次请求。
+
+### 10.5 已知边角和没验证的部分
+
+- 判定只看名字。模型每隔不到 `gate_turns` 轮就调用一次 `ask_user` 的话，这次交换里闸门
+  不会提醒，每次调用都失败也一样。`ask_user` 只在终端里的 REPL 挂载；工具说明要求模型在
+  `declined` 或 `no_answer` 之后不再问同一个问题，提问到期之后同一次交换里的提问不再等待。
+- MCP 服务器自己的 `ask_user` 注册名是 `mcp__<server>__ask_user`，不算提问。
+- 库调用方用 `run_turn(app, history)` 续跑、历史末尾是一条没有结果的 `ask_user` 调用时
+  （被输出上限截断的回复会留下这种形状），entry 层在交换开场就把没被回答的调用去掉了，
+  闸门看不到这次提问，那一轮剩下的文字照旧算一轮。实测 `gate_turns=3`、前面两轮只读时，
+  续跑的第一次调用就带闸门文本。三个 surface 走不到这里。
+- §9.5 的截断边角还在：计数越过本次交换的开头之后，遇到更早交换里的提问也会停下。
+- 真实模型只有 DeepSeek 和 CLI，改前改后各一个样本，阈值用的是 4 而不是默认的 8。模型
+  收到提醒后去写计划是这一个样本里的反应，换一次不一定相同。Desktop 和 channel 不挂载
+  `ask_user`，没有跑。

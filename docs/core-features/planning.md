@@ -306,8 +306,9 @@ PROGRESS_TOOL_NAMES = frozenset({"write_file", "edit_file"})
 1. 本 exchange 尚未提醒过，且 `gate_turns > 0`；
 2. 计划为空（`store.is_empty`）——有计划的会话每轮都已被告知计划，再催它写计划既错又乱；这也覆盖了从上一个会话恢复的计划；
 3. 只数本 exchange 的模型轮次。从视图末尾往前数，遇到第一条 user 消息就停：它是开启本 exchange 的用户输入，或者是压缩留在它位置上的摘要。工具结果是 `Role.TOOL` 消息，不会让计数停下；视图里没有 user 消息时整段都数；
-4. 这段里**最近 `gate_turns` 条 assistant 消息**都没有调用 `plan_write` 或 `PROGRESS_TOOL_NAMES` 中的工具。不带工具调用的 assistant 消息也算一轮；
-5. 这段里的 assistant 消息少于 `gate_turns` 条时不触发。
+4. 调用了 `ask_user` 的那一轮和 user 消息一样让计数停下，这一轮自己不计入，提问之后的第一轮是第 1 轮。只看调用的名字：提问被回答、被跳过、到期无人作答、没有问出去，处理都一样；同一条消息里还有别的调用时整条消息是一轮；问过几次就从最近的一次数起；
+5. 这段里**最近 `gate_turns` 条 assistant 消息**都没有调用 `plan_write` 或 `PROGRESS_TOOL_NAMES` 中的工具。不带工具调用的 assistant 消息也算一轮；
+6. 这段里的 assistant 消息少于 `gate_turns` 条时不触发。
 
 对组学分析的含义：**`bash` 不算进展**。它既是跑 skill 脚本的方式，也是 `grep` / `ls` 的方式，算作进展会让只在探索的模型永远不被提醒。因此同一个 exchange 里连续 8 个 turn 只用 `bash` 查看 `.h5ad`、跑 `--help`、读 SKILL.md 而没有写计划，会被提醒一次。
 
@@ -315,6 +316,7 @@ PROGRESS_TOOL_NAMES = frozenset({"write_file", "edit_file"})
 
 闸门看的是**窗口**，不是计数器：
 - 窗口不跨 exchange。之前的 exchange 读过多少轮、答过多少句都不计入，所以一串一句话问答的会话不会被提醒；
+- 窗口不跨提问。模型在 exchange 中途用 `ask_user` 问过人之后，提问之前读过的轮次不再计入，带着回答的那一次模型调用不会收到提醒。提问之后再连续只读 `gate_turns` 轮才提醒。提问之前已经提醒过的 exchange 不再提醒第二次（plan 0039 §10）；
 - 压缩把尾部换掉后可见的 assistant 消息可能不足 8 条，此时不触发。接受这一点：刚压缩意味着模型刚拿到新摘要，那一轮不是追加指令的好时机；
 - 同一个 exchange 里 20 个 turn 前编辑过文件、之后一直在读的模型，仍会被提醒；每 exchange 至多一次的约束防止它变成重复骚扰。
 
@@ -494,7 +496,7 @@ plan_write [{a, completed}, {b, completed}]            （两者先前都是 pen
 | 配置 | 命令行 / 环境变量 | 默认 | 说明 |
 |------|------------------|------|------|
 | `AppConfig.planning` | `--planning` / `OMICSCLAW_PLANNING` | `True` | 一个开关三件事：挂载 `plan_write`、加 `## Planning` 段、注入计划块 |
-| `AppConfig.planning_gate_turns` | `--planning-gate-turns` / `OMICSCLAW_PLANNING_GATE_TURNS` | `DEFAULT_GATE_TURNS = 8` | 规划闸门窗口，按单个 exchange 内的模型轮次计；`0` 关闭闸门但保留其余规划功能。提高 `max_turns` 时应同步提高 |
+| `AppConfig.planning_gate_turns` | `--planning-gate-turns` / `OMICSCLAW_PLANNING_GATE_TURNS` | `DEFAULT_GATE_TURNS = 8` | 规划闸门窗口，按单个 exchange 内的模型轮次计，调用 `ask_user` 之后重新数；`0` 关闭闸门但保留其余规划功能。提高 `max_turns` 时应同步提高 |
 | `AppConfig.plans_root()` | 不可单独配置 | `<workspace>/.omicsclaw/plans` | 与卸载结果、压缩记录同一个状态目录 |
 | `MAX_DIRECT_COMPLETIONS` | 常量 | `1` | 一次写入允许的直接完成数 |
 | `EngineConfig.max_turns` | — | `50` | 闸门阈值的推导依据 |
@@ -517,6 +519,7 @@ plan_write [{a, completed}, {b, completed}]            （两者先前都是 pen
 10. **`active_count()` 是无消费者的接缝**，保留给未来想展示进度的 surface。
 11. **`entry/planning.py: build_injector` 的 docstring 与现行为有出入**：它说 `app.plans` 只在规划关闭时为 `None`，但 `build_app` 在调用方自带工具且未挂 `plan_write` 时也会置 `None`（`AgentApp.plans` 的 docstring 是准确的）。
 12. **部分更新会裁剪省略的 pending 条目。** 这是设计而非缺陷，但模型若误以为"只发变化条目"是安全的，就会丢掉尚未开始的步骤；防线只有工具描述与准则里的说明。
+13. **规划闸门只按工具名认提问。** 历史里出现名为 `ask_user` 的调用就重新计数，不看这个问题有没有问出去。模型每隔不到 `gate_turns` 轮就调用一次 `ask_user` 时，这个 exchange 里不会提醒，每次调用都失败也一样。MCP 服务器自己的 `ask_user` 注册名是 `mcp__<server>__ask_user`，不算提问（plan 0039 §10.5）。
 
 ---
 
@@ -527,12 +530,12 @@ plan_write [{a, completed}, {b, completed}]            （两者先前都是 pen
 | `tests/planning/test_plan.py` | `PlanStore` 读写、restore 不触发 sink、`active_count`、并发 |
 | `tests/planning/test_rules.py` | 防作弊阈值、`cancelled → completed`、合并保留 / 裁剪、顺序稳定、重复 id |
 | `tests/planning/test_tool.py` | 读 / 写模式、`steps=[]` 为读、参数错误带下标、会话解析、policy |
-| `tests/planning/test_injector.py` | 注入块与闸门的条件、顺序、至多一次、只数本 exchange 的轮次 |
+| `tests/planning/test_injector.py` | 注入块与闸门的条件、顺序、至多一次、只数本 exchange 的轮次、`ask_user` 之后重新计数 |
 | `tests/planning/test_render.py` | `format_plan` 只含活跃条目、`render_document` 四种标记 |
 | `tests/planning/test_archive.py` | 原子写（在 `os.replace` 注入失败）、JSON 先于 Markdown、坏文件整体拒绝 |
 | `tests/planning/test_book.py` | 每会话隔离、首次恢复、空 id 不持久化、错误 sink |
 | `tests/planning/test_planning_is_a_leaf_layer.py` | 分层守卫 |
-| `tests/entry/test_planning.py` | 接线：开关、prompt 段、`--planning-gate-turns`、三条 exchange 路径的会话绑定 |
+| `tests/entry/test_planning.py` | 接线：开关、prompt 段、`--planning-gate-turns`、三条 exchange 路径的会话绑定、真实 `ask_user` 之后闸门落在哪一次调用 |
 
 ---
 
