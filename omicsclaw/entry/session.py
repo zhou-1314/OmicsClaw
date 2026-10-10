@@ -412,6 +412,36 @@ class SessionRegistry:
             session_id, "", values=None, source_request_id="", compaction_only=True
         )
 
+    async def clear(self, session_id: str) -> TurnHandle:
+        """Queue emptying *session_id*'s conversation, and return its handle.
+
+        Runs in the session's lane like any exchange. The exchanges
+        accepted before it finish with the history they were given, and
+        the first one accepted after it starts with none. When its turn
+        comes, the history and the carried summary are emptied in memory
+        and written to the store, so the conversation stays empty across
+        a restart. A session held only in the store is emptied there and
+        is not brought into memory.
+
+        The handle ends ``converged`` once the store holds the empty
+        session. It also ends ``converged`` when no session by that id
+        was ever saved, and nothing is created for it. It ends ``failed``
+        when the store cannot be written, and the session is then as it
+        was. No model is called and the handle has no outcome.
+
+        :raises QueueFull: this session already has
+            ``max_queued_per_session`` exchanges waiting.
+        :raises RegistryClosed: :meth:`shutdown` has begun.
+        """
+        return self._enqueue(
+            session_id,
+            "",
+            values=None,
+            source_request_id="",
+            compaction_only=False,
+            clear_only=True,
+        )
+
     def _enqueue(
         self,
         session_id: str,
@@ -420,6 +450,7 @@ class SessionRegistry:
         values: Mapping[str, object] | None,
         source_request_id: str,
         compaction_only: bool,
+        clear_only: bool = False,
     ) -> TurnHandle:
         if self._closed:
             raise RegistryClosed("this registry is shutting down")
@@ -451,6 +482,7 @@ class SessionRegistry:
             approval_timeout_s=self._app.config.approval_timeout_s,
             abandon_grace_s=self._grace_s,
             compaction_only=compaction_only,
+            clear_only=clear_only,
         )
         ahead = (1 if lane.running is not None else 0) + len(lane.waiting)
         lane.waiting.append(handle)
@@ -760,6 +792,10 @@ class SessionRegistry:
             handle._end_unstarted()
             return
 
+        if handle.clear_only:
+            await self._clear_session(handle)
+            return
+
         session = await self._session(handle.session_id)
         if handle.terminal == "cancelled":
             # Cancelled *during* that load. Until ``_start`` adopts a
@@ -823,6 +859,29 @@ class SessionRegistry:
         session.updated_at = time.time()
         await self._store.save(session)
         handle._settle(terminal, error, outcome)
+
+    async def _clear_session(self, handle: TurnHandle) -> None:
+        """Empty one conversation in memory and in the store, then settle.
+
+        A session nobody saved is left alone, so that asking to clear a
+        conversation does not create one. When the store refuses the
+        write, the history, the summary and the timestamp are put back
+        before the error goes on to :meth:`_run`, which ends the handle
+        ``failed``.
+        """
+        session = await self.load_session(handle.session_id)
+        if session is not None:
+            kept = (session.history, session.compaction, session.updated_at)
+            session.history = ()
+            session.compaction = CompactionState()
+            session.updated_at = time.time()
+            try:
+                await self._store.save(session)
+            except BaseException:
+                session.history, session.compaction, session.updated_at = kept
+                raise
+        handle._publish_terminal("converged")
+        handle._settle("converged")
 
     # ---- internals -------------------------------------------------------
 

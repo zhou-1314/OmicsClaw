@@ -36,7 +36,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from omicsclaw.context import CompactionRecord, CompactionState
+from omicsclaw.context import CompactionRecord
 
 from ...project import recent_modules
 from ...session import SubmissionRefused
@@ -82,36 +82,38 @@ def _output_dir(ctx: SlashCommandContext) -> Path:
 # ---- conversation lifecycle -----------------------------------------
 
 
-def _clear(ctx: SlashCommandContext) -> str | None:
+async def _clear(ctx: SlashCommandContext) -> str | None:
     """Drop one conversation's history and its carried summary.
 
-    Returns a refusal sentence, or ``None`` when it worked.
+    Returns a refusal sentence, or ``None`` once the conversation is empty
+    in memory and in the session store. A conversation that was never saved
+    counts as empty.
 
-    Both fields go together: keeping
-    :attr:`~omicsclaw.entry.session.Session.compaction` over a cleared history
-    would leave the next exchange summarising a conversation that no longer
-    exists, and the summary is the part the model would believe.
+    The work is :meth:`~omicsclaw.entry.session.SessionRegistry.clear`'s,
+    which runs in the conversation's lane. An exchange that is running or
+    waiting there finishes first, so this returns, and the command is
+    answered, only after that exchange has ended.
 
-    The store is written on the next exchange, not here — the registry saves a
-    session after it runs one, and reaching around it to save now would race
-    the exchange that may be running in this very session.
+    :raises SubmissionRefused: the conversation's queue is full, or the
+        registry is shutting down.
+    :raises RuntimeError: the clear did not finish, for instance because the
+        store could not be written. The conversation is then as it was.
     """
     if ctx.app is None or ctx.app.sessions is None:
         return _NO_APP
     if not ctx.session_id:
         return _NO_SESSION
-    session = ctx.app.sessions.session(ctx.session_id)
-    if session is None:
-        return None
-    session.history = ()
-    session.compaction = CompactionState()
+    handle = await ctx.app.sessions.clear(ctx.session_id)
+    await handle.wait()
+    if handle.terminal != "converged":
+        raise RuntimeError(f"the clear ended {handle.terminal}") from handle.error
     return None
 
 
 @register("/clear")
 async def _cmd_clear(ctx: SlashCommandContext) -> str:
     """Clear conversation history for this chat."""
-    refused = _clear(ctx)
+    refused = await _clear(ctx)
     return refused or "Conversation history cleared."
 
 
@@ -156,7 +158,7 @@ async def _cmd_compact(ctx: SlashCommandContext) -> str:
 @register("/new")
 async def _cmd_new(ctx: SlashCommandContext) -> str:
     """Same effect as ``/clear``; phrased as a "new conversation" intent."""
-    refused = _clear(ctx)
+    refused = await _clear(ctx)
     return refused or "New conversation started."
 
 

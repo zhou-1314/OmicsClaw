@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from omicsclaw.context import CompactionState
 from omicsclaw.entry.channel.base import Channel
 from omicsclaw.entry.channel.commands import (
@@ -23,13 +25,20 @@ from omicsclaw.entry.channel.commands import (
     dispatch,
     registered_commands,
 )
+from omicsclaw.entry.channel.config import BaseChannelConfig
 from omicsclaw.entry.channel.runtime import VALUE_REPLY_TARGET
 from omicsclaw.entry.ingress import InboundMessage
+from omicsclaw.entry.session import InMemorySessionStore, attach_sessions
+from omicsclaw.schema import Message, Role
 from tests.entry.test_channel_ingress import (  # type: ignore[import-not-found]
     OWNER,
     Transport,
     binding_for,
     deployment,
+)
+from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]
+    Scripted,
+    make_app,
 )
 from omicsclaw.entry.channel.runtime import ChannelRuntime
 
@@ -210,6 +219,270 @@ def test_clear_without_a_conversation_says_so(tmp_path):
         return await dispatch(context(app, text="/clear", session_id=""))
 
     assert "not in one" in run(scenario())
+
+
+# ---- /clear and /new against the store, a restart and a busy lane -------
+
+
+CLEARING = [
+    ("/clear", "Conversation history cleared."),
+    ("/new", "New conversation started."),
+]
+
+
+class Gated(Scripted):
+    """``Scripted`` whose call number *hold* waits to be released."""
+
+    def __init__(self, *replies: Message, hold: int = 0) -> None:
+        super().__init__(*replies)
+        self.hold = hold
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def generate(self, messages, tools=None):
+        if self.calls == self.hold:
+            self.entered.set()
+            await self.release.wait()
+        return await super().generate(messages, tools)
+
+
+class ReadOnly(InMemorySessionStore):
+    """A store that can be told to refuse every save."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.refusing = False
+
+    async def save(self, session) -> None:
+        if self.refusing:
+            raise OSError("database is locked")
+        await super().save(session)
+
+
+def inbound(text: str, request: str, *, surface: str = "feishu") -> InboundMessage:
+    return InboundMessage(
+        text=text,
+        session_id=f"{surface}:c1",
+        source_request_id=request,
+        sender=OWNER,
+        surface=surface,
+        values={VALUE_REPLY_TARGET: {"adapter": surface, "destination_id": "c1"}},
+    )
+
+
+async def exchange(app, text: str, request: str, *, surface: str = "feishu"):
+    """One message through a runtime of its own, waited to its end."""
+    runtime = ChannelRuntime(app, [binding_for(Transport(), adapter=surface)])
+    await runtime.start()
+    result = await runtime.submit(inbound(text, request, surface=surface))
+    assert result.handle is not None
+    await result.handle.wait()
+    await runtime.close(WAIT_S)
+    return result.handle
+
+
+def asked(messages) -> list[str]:
+    """The user messages of one model call, in order."""
+    return [m.content for m in messages if m.role is Role.USER]
+
+
+def answers(messages) -> list[str]:
+    """The assistant messages of one model call, in order."""
+    return [m.content for m in messages if m.role is Role.ASSISTANT]
+
+
+@pytest.mark.parametrize("verb, reply", CLEARING)
+def test_clear_reaches_a_conversation_saved_before_this_process_started(
+    tmp_path, verb, reply
+):
+    """After a restart the conversation is in the database and not in memory.
+
+    Two apps over one workspace stand in for the two processes. The
+    second has not loaded the conversation when the command arrives.
+    """
+
+    async def scenario():
+        earlier = deployment(tmp_path, Scripted(Message.assistant("FIRST ANSWER.")))[0]
+        await exchange(earlier, "first question", "r0")
+        await earlier.aclose()
+
+        provider = Scripted(Message.assistant("SECOND ANSWER."))
+        app = deployment(tmp_path, provider)[0]
+        assert app.sessions.session("feishu:c1") is None
+        said = await dispatch(context(app, text=verb))
+        await exchange(app, "second question", "r1")
+        await app.aclose()
+        return said, provider.seen[-1]
+
+    said, seen = run(scenario())
+
+    assert said == reply
+    assert asked(seen) == ["second question"]
+    assert answers(seen) == []
+
+
+@pytest.mark.parametrize("verb, reply", CLEARING)
+def test_a_cleared_conversation_is_still_empty_after_a_restart(tmp_path, verb, reply):
+    """The command writes the store itself.
+
+    Left to the next exchange's save, a process that stops between the
+    command and the next message brings the old history back.
+    """
+
+    async def scenario():
+        earlier = deployment(tmp_path, Scripted(Message.assistant("FIRST ANSWER.")))[0]
+        await exchange(earlier, "first question", "r0")
+        said = await dispatch(context(earlier, text=verb))
+        await earlier.aclose()
+
+        provider = Scripted(Message.assistant("SECOND ANSWER."))
+        app = deployment(tmp_path, provider)[0]
+        await exchange(app, "second question", "r1")
+        await app.aclose()
+        return said, provider.seen[-1]
+
+    said, seen = run(scenario())
+
+    assert said == reply
+    assert asked(seen) == ["second question"]
+    assert answers(seen) == []
+
+
+@pytest.mark.parametrize("verb, reply", CLEARING)
+def test_clear_is_answered_after_the_exchange_that_was_running(tmp_path, verb, reply):
+    """A running exchange writes its history back when it ends.
+
+    The command waits for it. The exchange keeps the context it was
+    given, and the first message after the command starts with none.
+    """
+
+    async def scenario():
+        provider = Gated(
+            Message.assistant("FIRST ANSWER."),
+            Message.assistant("SECOND ANSWER."),
+            Message.assistant("THIRD ANSWER."),
+            hold=1,
+        )
+        app = deployment(tmp_path, provider)[0]
+        await exchange(app, "first question", "r0")
+        runtime = ChannelRuntime(app, [binding_for(Transport())])
+        await runtime.start()
+        second = await runtime.submit(inbound("second question", "r1"))
+        await asyncio.wait_for(provider.entered.wait(), WAIT_S)
+
+        command = asyncio.ensure_future(dispatch(context(app, text=verb)))
+        for _ in range(10):
+            await asyncio.sleep(0)
+        early = command.done()
+        provider.release.set()
+        said = await command
+        finished = second.handle.done
+        third = await runtime.submit(inbound("third question", "r2"))
+        await third.handle.wait()
+        await runtime.close(WAIT_S)
+        await app.aclose()
+        return early, said, finished, provider.seen
+
+    early, said, finished, seen = run(scenario())
+
+    assert not early, "the command answered while the exchange was running"
+    assert said == reply
+    assert finished, "the command answered before the exchange ahead of it ended"
+    assert asked(seen[1]) == ["first question", "second question"]
+    assert asked(seen[2]) == ["third question"]
+    assert answers(seen[2]) == []
+
+
+def test_clear_on_a_conversation_nobody_saved_stores_nothing(tmp_path):
+    """The command answers as it does for an empty conversation."""
+
+    async def scenario():
+        app, spy = deployment(tmp_path)
+        said = await dispatch(context(app, text="/clear"))
+        listed = await spy.inner.list_sessions()
+        await app.aclose()
+        return said, listed
+
+    said, listed = run(scenario())
+
+    assert said == "Conversation history cleared."
+    assert list(listed) == []
+
+
+def owned_channel(app, transport):
+    """A runtime, and a real ``Channel`` bound to it whose owner may run commands."""
+    runtime = ChannelRuntime(app, [binding_for(transport, adapter="stub")])
+    channel = _StubChannel(BaseChannelConfig(allowed_senders={OWNER}))
+    channel.bind_control_runtime(runtime)
+    return runtime, channel
+
+
+TARGET = {"adapter": "stub", "destination_id": "c1"}
+
+
+@pytest.mark.parametrize("verb", ["/clear", "/new"])
+def test_a_clear_the_store_cannot_save_is_answered_as_a_failed_command(tmp_path, verb):
+    """The command must not say the history is gone when the store kept it.
+
+    The conversation is left as it was, so the next message still has
+    its context.
+    """
+
+    async def scenario():
+        store = ReadOnly()
+        provider = Scripted(
+            Message.assistant("FIRST ANSWER."), Message.assistant("SECOND ANSWER.")
+        )
+        app = attach_sessions(
+            make_app(tmp_path, provider, tools=(), approval_timeout_s=WAIT_S),
+            store=store,
+        )
+        await exchange(app, "first question", "r0", surface="stub")
+        transport = Transport()
+        runtime, channel = owned_channel(app, transport)
+        await runtime.start()
+        store.refusing = True
+        handled = await channel.answer_slash_command(TARGET, "c1", OWNER, verb)
+        await runtime.close(WAIT_S)
+        store.refusing = False
+        await exchange(app, "second question", "r1", surface="stub")
+        return handled, transport.sent, provider.seen[-1]
+
+    handled, said, seen = run(scenario())
+
+    assert handled is True
+    assert said == ["That command failed."]
+    assert asked(seen) == ["first question", "second question"]
+
+
+def test_a_clear_the_queue_has_no_room_for_is_answered_as_a_failed_command(tmp_path):
+    """A full queue refuses the command as it refuses a message."""
+
+    async def scenario():
+        provider = Gated(Message.assistant("ANSWER."))
+        app = attach_sessions(
+            make_app(
+                tmp_path,
+                provider,
+                tools=(),
+                approval_timeout_s=WAIT_S,
+                max_queued_per_session=1,
+            )
+        )
+        transport = Transport()
+        runtime, channel = owned_channel(app, transport)
+        await runtime.start()
+        await runtime.submit(inbound("first question", "r0", surface="stub"))
+        await asyncio.wait_for(provider.entered.wait(), WAIT_S)
+        await runtime.submit(inbound("second question", "r1", surface="stub"))
+        await channel.answer_slash_command(TARGET, "c1", OWNER, "/clear")
+        said = [text for text in transport.sent if not text.startswith("Queued")]
+        provider.release.set()
+        await runtime.close(WAIT_S)
+        await app.aclose()
+        return said
+
+    assert run(scenario()) == ["That command failed."]
 
 
 def test_files_and_outputs_answer_rather_than_raise_on_an_empty_workspace(tmp_path):
