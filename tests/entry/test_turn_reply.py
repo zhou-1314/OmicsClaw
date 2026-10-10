@@ -416,6 +416,36 @@ def test_a_summary_that_keeps_the_earlier_answer_does_not_make_it_the_reply(
     assert outcome.reply == ""
 
 
+@pytest.mark.parametrize("tier", TIERS)
+def test_an_answer_given_after_a_summary_was_written_back_is_the_reply(
+    tmp_path, tier
+):
+    """The same summary, with an answer after it: the answer is the reply.
+
+    Written back, the summary leaves the trajectory shorter than the
+    history the exchange was given. The answer is the last message, at
+    an index below the length of that history, so a search that skips as
+    many messages as the history held finds nothing.
+    """
+    pressure, at = TIERS[tier]
+    history = _earlier(pairs=20)
+    app = _sized(
+        tmp_path,
+        Finishing(Message.assistant("SECOND ANSWER.")),
+        room=_room_for(history, at=at),
+        summarizer=Canned(),
+    )
+
+    outcome = _exchange(app, history)
+
+    (record,) = outcome.compactions
+    assert record.pressure is pressure
+    assert record.summarized and record.written_back and not record.degraded
+    assert len(outcome.result.messages) < len(history)
+    assert _has(outcome, FIRST_ANSWER)
+    assert outcome.reply == "SECOND ANSWER."
+
+
 def test_a_reply_that_repeats_a_summarized_answer_word_for_word_is_the_reply(
     tmp_path,
 ):
