@@ -12,7 +12,12 @@ import pytest
 
 from omicsclaw.memory.database import Database
 from omicsclaw.remote.plane import OUTPUTS_FILE, RemotePlaneBinding
-from omicsclaw.remote.ssh import RemoteHostUnreachable
+from omicsclaw.remote.ssh import (
+    RemoteHostUnreachable,
+    RemotePathRefused,
+    RemoteTransferError,
+)
+from omicsclaw.tools.builtin.remote import ExecOutcome
 
 from tests.remote._fakes import PROBE_OK, FakeSpawner, run
 
@@ -32,8 +37,10 @@ def spawner() -> FakeSpawner:
 
 
 @pytest.fixture()
-def plane(spawner: FakeSpawner) -> RemotePlaneBinding:
-    return RemotePlaneBinding(Database(":memory:"), spawner=spawner)
+def plane(spawner: FakeSpawner, tmp_path) -> RemotePlaneBinding:
+    return RemotePlaneBinding(
+        Database(":memory:"), spawner=spawner, workspace=tmp_path
+    )
 
 
 def test_submit_probes_then_lands_under_the_scratch(plane, spawner):
@@ -164,3 +171,110 @@ def test_note_answer_lands_in_the_knowledge_base(plane):
     card = plane.host_card("hpc1")
     assert card is not None
     assert card.notes[0]["answer"] == "gpu-long"
+
+
+class TestInputUploads:
+    """The review's probe (a): declared inputs must really travel."""
+
+    def test_declared_inputs_appear_in_the_sftp_batch(self, plane, spawner, tmp_path):
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / "counts.csv").write_text("a,b\n1,2\n")
+        outcome = run(plane.submit(
+            "hpc1",
+            "python train.py",
+            inputs=(("data/counts.csv", "counts.csv"),),
+        ))
+        batch = spawner.sftp_batches()[-1]
+        assert (
+            f'put -- "{tmp_path / "data" / "counts.csv"}" '
+            f'"{outcome.workdir}/counts.csv"' in batch
+        )
+
+    def test_an_input_src_outside_the_workspace_is_refused_before_anything(
+        self, plane, spawner
+    ):
+        with pytest.raises(RemotePathRefused, match="outside the workspace"):
+            run(plane.submit(
+                "hpc1", "x", inputs=(("../../etc/passwd", "passwd"),)
+            ))
+        # Refused before even the probe ran: zero remote side effects.
+        assert spawner.calls == []
+
+    def test_an_absolute_src_outside_the_workspace_is_refused(self, plane):
+        with pytest.raises(RemotePathRefused, match="outside the workspace"):
+            run(plane.submit(
+                "hpc1", "x", inputs=(("/etc/passwd", "passwd"),)
+            ))
+
+    def test_a_missing_src_is_refused(self, plane):
+        with pytest.raises(RemotePathRefused, match="not a file"):
+            run(plane.submit(
+                "hpc1", "x", inputs=(("data/not-there.csv", "x.csv"),)
+            ))
+
+    def test_a_dst_that_escapes_the_workdir_is_refused(self, plane, spawner, tmp_path):
+        (tmp_path / "ok.txt").write_text("x")
+        for bad in ("../evil", "a/../../evil", "/etc/evil"):
+            with pytest.raises(RemotePathRefused, match="work directory"):
+                run(plane.submit(
+                    "hpc1", "x", inputs=(("ok.txt", bad),)
+                ))
+        # Nothing was created or uploaded for the refused attempts.
+        assert not any("mkdir" in c for c in spawner.ssh_commands())
+        assert spawner.sftp_batches() == []
+
+    def test_a_plane_without_a_workspace_refuses_uploads(self, spawner):
+        bare = RemotePlaneBinding(Database(":memory:"), spawner=spawner)
+        with pytest.raises(RemotePathRefused, match="no workspace"):
+            run(bare.submit("hpc1", "x", inputs=(("a", "a"),)))
+
+
+class TestFetchDestAnchoring:
+    """The review's probe (b): dest resolves inside the workspace."""
+
+    @pytest.mark.parametrize("dest", ["../elsewhere", "/tmp", "/etc"])
+    def test_a_dest_outside_the_workspace_is_refused(self, plane, dest):
+        # dest is resolved first, so an unknown job_ref changes nothing.
+        with pytest.raises(RemotePathRefused, match="outside the workspace"):
+            run(plane.fetch("7", dest))
+
+    def test_a_relative_dest_resolves_against_the_workspace_root(
+        self, plane, spawner, tmp_path
+    ):
+        outcome = run(plane.submit("hpc1", "echo hi", outputs=("out.txt",)))
+        result = run(plane.fetch(outcome.job_ref, "artifacts/remote"))
+        assert result.downloaded == (str(tmp_path / "artifacts/remote" / "out.txt"),)
+
+    def test_a_plane_without_a_workspace_refuses_fetches(self, spawner):
+        bare = RemotePlaneBinding(Database(":memory:"), spawner=spawner)
+        with pytest.raises(RemotePathRefused, match="no workspace"):
+            run(bare.fetch("7", "artifacts/remote"))
+
+
+class TestTransferFailures:
+    """The review's probe (f): a failed transfer is an error, not a
+    silently shorter list of downloaded files."""
+
+    def test_a_failed_download_raises_instead_of_reporting_downloaded(
+        self, plane, spawner, tmp_path
+    ):
+        outcome = run(plane.submit("hpc1", "echo hi", outputs=("out.txt",)))
+        spawner.on(
+            "get --",
+            ExecOutcome(output="sftp> get ...\nnot found\n", exit_code=1),
+        )
+        with pytest.raises(RemoteTransferError) as caught:
+            run(plane.fetch(outcome.job_ref, str(tmp_path)))
+        assert "exited 1" in str(caught.value)
+        assert "not found" in str(caught.value)  # the transport's own words
+        assert not (tmp_path / "out.txt").exists()
+
+    def test_a_size_the_host_could_not_answer_refuses_to_fetch(
+        self, plane, spawner, tmp_path
+    ):
+        outcome = run(plane.submit("hpc1", "echo hi", outputs=("out.txt",)))
+        spawner.on("stat -c %s", "-1")
+        with pytest.raises(RemoteTransferError, match="out.txt"):
+            run(plane.fetch(outcome.job_ref, str(tmp_path)))
+        # nothing travelled
+        assert len(spawner.sftp_batches()) == 1  # the upload only

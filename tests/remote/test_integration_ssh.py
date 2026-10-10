@@ -48,8 +48,13 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture(scope="module")
-def plane() -> RemotePlaneBinding:
-    return RemotePlaneBinding(Database(":memory:"), spawner=SystemSshSpawner())
+def plane(tmp_path_factory) -> RemotePlaneBinding:
+    workspace = tmp_path_factory.mktemp("omicsclaw-remote-ws")
+    return RemotePlaneBinding(
+        Database(":memory:"),
+        spawner=SystemSshSpawner(),
+        workspace=workspace,
+    )
 
 
 def test_the_spawner_runs_a_real_command(plane):
@@ -69,7 +74,8 @@ def test_the_probe_reads_this_machine(plane):
     assert set(card.commands) >= {"sbatch", "conda", "module", "uv", "sinfo"}
 
 
-def test_a_real_nohup_job_runs_to_completion_and_fetches(plane, tmp_path):
+def test_a_real_nohup_job_runs_to_completion_and_fetches(plane):
+    results = plane._workspace / "results"
     outcome = run(plane.submit(
         HOST,
         "printf 'hello-from-remote\\n' > out.txt && sleep 0.3",
@@ -86,13 +92,14 @@ def test_a_real_nohup_job_runs_to_completion_and_fetches(plane, tmp_path):
         time.sleep(0.5)
     assert state == "done", f"job ended as {state}"
 
-    fetched = run(plane.fetch(outcome.job_ref, str(tmp_path), 100.0))
+    fetched = run(plane.fetch(outcome.job_ref, str(results), 100.0))
     assert fetched.downloaded
-    downloaded = tmp_path / "out.txt"
+    downloaded = results / "out.txt"
     assert downloaded.read_text().strip() == "hello-from-remote"
 
 
-def test_an_over_limit_fetch_stays_remote(plane, tmp_path):
+def test_an_over_limit_fetch_stays_remote(plane):
+    results = plane._workspace / "results"
     outcome = run(plane.submit(
         HOST,
         "head -c 4096 /dev/zero | tr '\\0' 'x' > big.txt",
@@ -103,10 +110,10 @@ def test_an_over_limit_fetch_stays_remote(plane, tmp_path):
         if run(plane.status(outcome.job_ref)).state == "done":
             break
         time.sleep(0.5)
-    result = run(plane.fetch(outcome.job_ref, str(tmp_path), max_mb=0.000001))
+    result = run(plane.fetch(outcome.job_ref, str(results), max_mb=0.000001))
     assert result.downloaded == ()
     assert result.remote_ref and result.remote_ref.startswith("remote://localhost/")
-    assert not (tmp_path / "big.txt").exists()
+    assert not (results / "big.txt").exists()
 
 
 def test_a_real_cancel_stops_the_job(plane):
@@ -119,3 +126,37 @@ def test_a_real_cancel_stops_the_job(plane):
         time.sleep(0.2)
     report = run(plane.cancel(outcome.job_ref))
     assert report.state == "canceled"
+
+
+def test_declared_inputs_really_travel(plane, tmp_path):
+    # The end-to-end half of the review's probe (a): the file is read
+    # back through the remote command that consumed it.
+    workspace = plane._workspace
+    (workspace / "data").mkdir(exist_ok=True)
+    (workspace / "data" / "greet.txt").write_text("hello-input\n")
+    outcome = run(plane.submit(
+        HOST,
+        "cat greet.txt > echoed.txt",
+        inputs=(("data/greet.txt", "greet.txt"),),
+        outputs=("echoed.txt",),
+    ))
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        if run(plane.status(outcome.job_ref)).state == "done":
+            break
+        time.sleep(0.5)
+    fetched = run(plane.fetch(
+        outcome.job_ref, str(workspace / "results"), 100.0
+    ))
+    assert fetched.downloaded
+    echoed = workspace / "results" / "echoed.txt"
+    assert echoed.read_text() == "hello-input\n"
+
+
+def test_a_fetch_dest_outside_the_workspace_is_refused(plane, tmp_path):
+    from omicsclaw.remote.ssh import RemotePathRefused
+
+    with pytest.raises(RemotePathRefused):
+        run(plane.fetch("remote://" + HOST + "//root/whatever", str(tmp_path)))
+    with pytest.raises(RemotePathRefused):
+        run(plane.fetch("remote://" + HOST + "//root/whatever", "../outside"))

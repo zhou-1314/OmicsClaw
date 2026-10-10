@@ -181,6 +181,35 @@ class TestRemoteSubmit:
                     ' "scheduler": "pbs"}'
                 ))
 
+    def test_inputs_travel_as_src_dst_pairs(self):
+        plane = FakePlane()
+        with _context(_Recorder()):
+            run(RemoteSubmitTool(plane).execute(
+                '{"host": "h", "command": "python train.py", "intent": "i",'
+                ' "inputs": [{"src": "data/counts.csv", "dst": "counts.csv"}]}'
+            ))
+        assert plane.calls[0][1][2]["inputs"] == (
+            ("data/counts.csv", "counts.csv"),
+        )
+
+    @pytest.mark.parametrize(
+        "inputs_json",
+        [
+            '["data/counts.csv"]',
+            '[{"src": "data/counts.csv"}]',
+            '[{"src": "", "dst": "counts.csv"}]',
+            '[{"src": "a", "dst": "b", "extra": 1}]',
+            '"data/counts.csv"',
+        ],
+    )
+    def test_inputs_must_be_src_dst_objects(self, inputs_json):
+        with _context(_Recorder()):
+            with pytest.raises(ToolArgumentError):
+                run(RemoteSubmitTool(FakePlane()).execute(
+                    '{"host": "h", "command": "x", "intent": "i",'
+                    f' "inputs": {inputs_json}}}'
+                ))
+
 
 class TestStatusAndCancel:
     def test_status_renders_state_and_exit_code(self):

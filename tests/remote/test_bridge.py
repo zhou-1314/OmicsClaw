@@ -83,8 +83,10 @@ class _ScriptedExecutor:
 class _ScriptedPlane(RemotePlaneBinding):
     """A real plane over a fake transport, with knob-turnable status."""
 
-    def __init__(self, spawner: FakeSpawner):
-        super().__init__(Database(":memory:"), spawner=spawner)
+    def __init__(self, spawner: FakeSpawner, workspace=None):
+        super().__init__(
+            Database(":memory:"), spawner=spawner, workspace=workspace
+        )
         self.state = "running"
         self._scripted = _ScriptedExecutor(self)
 
@@ -98,7 +100,9 @@ class _ScriptedPlane(RemotePlaneBinding):
 
 
 def _manager(spawner: FakeSpawner, tmp_path, *, plane: _ScriptedPlane | None = None):
-    scripted = plane if plane is not None else _ScriptedPlane(spawner)
+    scripted = plane if plane is not None else _ScriptedPlane(
+        spawner, workspace=tmp_path
+    )
     manager = JobsManager(
         _App(str(tmp_path)),
         store=JobStore(Database(":memory:")),
@@ -244,6 +248,51 @@ class TestValidationAndRefusal:
         with pytest.raises(JobError) as caught:
             run(main())
         assert "command" in caught.value.code
+
+    @pytest.mark.parametrize(
+        "declared",
+        [
+            ["data/counts.csv"],                      # bare strings, not pairs
+            [{"src": "data/counts.csv"}],             # no dst
+            [{"src": "a", "dst": ""}],                # empty dst
+            ["not-a-list"],
+        ],
+    )
+    def test_remote_inputs_must_be_src_dst_objects(self, spawner, tmp_path, declared):
+        async def main():
+            manager = _manager(spawner, tmp_path)
+            await manager.create_job(
+                inputs={"command": "x", "inputs": declared},
+                runtime="remote:hpc1",
+            )
+
+        with pytest.raises(JobError) as caught:
+            run(main())
+        assert caught.value.code.startswith("invalid_inputs")
+
+    def test_remote_inputs_are_forwarded_as_pairs(self, spawner, tmp_path):
+        async def main():
+            manager = _manager(spawner, tmp_path)
+            seen = {}
+            original = manager.plane.submit
+
+            async def spying(host, command, **kwargs):
+                seen.update(kwargs)
+                return await original(host, command, **kwargs)
+
+            manager.plane.submit = spying  # type: ignore[method-assign]
+            record = await manager.create_job(
+                inputs={
+                    "command": "x",
+                    "inputs": [{"src": "data/counts.csv", "dst": "counts.csv"}],
+                },
+                runtime="remote:hpc1",
+            )
+            manager.plane.state = "done"
+            await _terminal(manager, record.id)
+            return seen.get("inputs")
+
+        assert run(main()) == (("data/counts.csv", "counts.csv"),)
 
     def test_local_jobs_still_run_the_local_runner(self, spawner, tmp_path):
         async def main():

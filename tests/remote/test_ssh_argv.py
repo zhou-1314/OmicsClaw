@@ -9,6 +9,7 @@ of paths this package splices — is pinned without a network.
 from __future__ import annotations
 
 import base64
+import os
 
 import pytest
 
@@ -45,6 +46,16 @@ class TestSshArgv:
         flat = build_ssh_argv("h", "true")
         assert "BatchMode=yes" in flat
         assert "ForwardAgent=no" in flat
+
+    def test_control_path_carries_the_local_user_token(self):
+        # /tmp is shared: without the uid, two local users multiplexing
+        # to one destination collide on a 0600 socket and the second
+        # reads the collision as "connection failed".
+        flat = build_ssh_argv("h", "true")
+        control = next(
+            item for item in flat if item.startswith("ControlPath=")
+        )
+        assert control == f"ControlPath=/tmp/omicsclaw-mux-u{os.getuid()}-%C"
 
     @pytest.mark.parametrize(
         "host",
