@@ -494,10 +494,13 @@ def test_a_question_brings_no_second_nudge_in_the_same_exchange():
 
 
 def test_only_a_call_to_ask_user_restarts_the_count():
-    """Tools whose names begin or end with ``ask_user``, an MCP server's
-    own ``ask_user`` among them, and a result that quotes the name are
-    an ordinary turn each."""
-    injector = PlanInjector(_store(), gate_turns=3)
+    """Five turns with the gate at five, so every one of them is read.
+
+    Tools whose names begin or end with ``ask_user``, an MCP server's own
+    ``ask_user`` among them, the name in another case or behind a space,
+    and a result that quotes the name are an ordinary turn each.
+    """
+    injector = PlanInjector(_store(), gate_turns=5)
     quoting = (
         _acted("read_file"),
         Message.tool(
@@ -507,7 +510,12 @@ def test_only_a_call_to_ask_user_restarts_the_count():
         ),
     )
     history = (
-        *_exchange(_acted("mcp__lab__ask_user"), _acted("ask_user_group")),
+        *_exchange(
+            _acted("mcp__lab__ask_user"),
+            _acted("ask_user_group"),
+            _acted("Ask_User"),
+            _acted(" ask_user"),
+        ),
         *quoting,
     )
 
