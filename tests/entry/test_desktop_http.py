@@ -97,7 +97,11 @@ def text_of(frames: list[dict]) -> str:
 def test_health_publishes_contract_v3_and_the_served_paths(tmp_path: pathlib.Path):
     payload = client(tmp_path).get("/health").json()
     assert payload["status"] == "ok"
-    assert set(payload["contracts"]) == {"desktop_chat", "desktop_jobs"}
+    assert set(payload["contracts"]) == {
+        "desktop_chat",
+        "desktop_jobs",
+        "desktop_artifacts",
+    }
     chat = payload["contracts"]["desktop_chat"]
     assert chat["sse_schema_version"] == 3
     assert chat["request_schema_version"] == 3
@@ -959,6 +963,7 @@ def test_health_advertises_optional_capabilities_without_changing_v3(tmp_path):
     assert payload['capabilities'] == {
         'files_tree': True,
         'files_serve': True,
+        'artifacts': True,
     }
     assert payload['contracts']['desktop_chat']['request_schema_version'] == 3
     assert payload['contracts']['desktop_chat']['sse_schema_version'] == 3

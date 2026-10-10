@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_session
     ON jobs (session_id, created_at);
 
+
 CREATE TABLE IF NOT EXISTS job_events (
     job_id       TEXT NOT NULL,
     seq          INTEGER NOT NULL,
@@ -87,6 +88,32 @@ CREATE TABLE IF NOT EXISTS job_events (
     PRIMARY KEY (job_id, seq),
     FOREIGN KEY (job_id) REFERENCES jobs (id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS artifacts (
+    id              TEXT PRIMARY KEY,
+    job_id          TEXT,
+    session_id      TEXT,
+    kind            TEXT NOT NULL DEFAULT 'other',
+    path            TEXT NOT NULL,
+    title           TEXT NOT NULL DEFAULT '',
+    mime            TEXT,
+    thumb_path      TEXT,
+    sha256          TEXT NOT NULL DEFAULT '',
+    size            INTEGER NOT NULL DEFAULT 0,
+    produced_by     TEXT,
+    parent_ids_json TEXT,
+    meta_json       TEXT,
+    created_at      REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_artifacts_job
+    ON artifacts (job_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_artifacts_session
+    ON artifacts (session_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_artifacts_job_path
+    ON artifacts (job_id, path);
 """
 
 

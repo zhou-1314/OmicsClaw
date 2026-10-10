@@ -75,8 +75,10 @@ import asyncio
 import logging
 import platform
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import date
+from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
 from omicsclaw.context import (
@@ -103,6 +105,13 @@ from omicsclaw.mcp import (
     StatusListener,
     load_mcp_config,
 )
+from omicsclaw.memory.artifacts import (
+    ArtifactRecord,
+    ArtifactStore,
+    hash_and_size,
+    new_artifact_id,
+)
+from omicsclaw.memory.database import Database
 from omicsclaw.observability import Telemetry, build_telemetry
 from omicsclaw.permission import (
     GatedTool,
@@ -126,6 +135,7 @@ from omicsclaw.provider import (
 )
 from omicsclaw.sandbox import ChangeListener
 from omicsclaw.schema import Message, Role, ToolDefinition
+from omicsclaw.schema.artifacts import kind_and_mime_for
 from omicsclaw.skills import SkillIndex, load_skills, use_skill_tool
 from omicsclaw.subagent import TaskTool
 from omicsclaw.tools import (
@@ -142,6 +152,7 @@ from omicsclaw.tools import (
     read_tool,
 )
 from omicsclaw.tools.builtin.bash import BashEnvironment
+from omicsclaw.tools.builtin.save_artifact import SaveArtifactTool
 
 from .config import AppConfig, SkillsIndex
 from .memory import (
@@ -367,6 +378,65 @@ def foundation_tools(
     if skill_env is not None and skill_env.tool is not None:
         tools = (*tools, skill_env.tool)
     return tools
+
+
+class WorkspaceArtifactSink:
+    """The ``save_artifact`` tool's registrar, over the workspace's store.
+
+    The bridge the leaf rule forces: the tool speaks the
+    :class:`~omicsclaw.tools.builtin.save_artifact.ArtifactSink` seam and
+    this adapter answers it on the memory layer's
+    :class:`~omicsclaw.memory.artifacts.ArtifactStore`. The store is
+    opened lazily on first save against ``<workspace>/.omicsclaw/jobs.db``
+    — the same file the desktop jobs plane's manager opens — so a
+    deployment that never saves an artifact pays no second connection,
+    and one that does reaches the same rows the scanner wrote.
+    """
+
+    def __init__(self, workspace: Workspace | Path | str) -> None:
+        # isinstance rather than getattr: a pathlib Path also has a
+        # .root (its anchor, "/" for an absolute path), so duck-typing
+        # the Workspace would send the store to the filesystem root.
+        self._root = (
+            Path(workspace.root)
+            if isinstance(workspace, Workspace)
+            else Path(workspace)
+        )
+        self._store: ArtifactStore | None = None
+
+    def _ensure(self) -> ArtifactStore:
+        if self._store is None:
+            self._store = ArtifactStore(
+                Database(self._root / ".omicsclaw" / "jobs.db")
+            )
+        return self._store
+
+    def save(self, *, path: str, kind: str, title: str, session_id: str) -> str:
+        store = self._ensure()
+        target = Path(path)
+        sha256, size = hash_and_size(target)
+        record = ArtifactRecord(
+            id=new_artifact_id(),
+            job_id="",
+            session_id=session_id,
+            kind=kind,
+            path=path,
+            title=title,
+            mime=kind_and_mime_for(target.name)[1],
+            sha256=sha256,
+            size=size,
+            produced_by="save_artifact",
+            meta={"capture": "tool"},
+            created_at=time.time(),
+        )
+        if store.insert_artifact(record) is None:
+            existing = store.latest_for_path(path)
+            who = existing.id if existing is not None else "an earlier call"
+            return f"Already saved as artifact {who} ({kind}): {path}"
+        return (
+            f"Saved artifact {record.id} ({record.kind}, {record.size} "
+            f"bytes): {record.title} — {record.path}"
+        )
 
 
 def build_permission_gate(config: AppConfig) -> PermissionGate:
@@ -1156,13 +1226,27 @@ def build_app(
     remembering = open_memory(config)
     try:
         if tools is None:
-            mounted: Sequence[Tool] = foundation_tools(
-                config,
-                skills=skills,
-                bash_environment=binding.environment,
-                plans=plans,
-                memory=remembering,
-                skill_env=checking,
+            mounted: Sequence[Tool] = (
+                *foundation_tools(
+                    config,
+                    skills=skills,
+                    bash_environment=binding.environment,
+                    plans=plans,
+                    memory=remembering,
+                    skill_env=checking,
+                ),
+                # P2's save_artifact closes the foundation set: nothing
+                # the foundation mounted moves, and the only tools after
+                # it are the deployment-dependent tails (MCP, ``task``),
+                # whose positions the wiring tests pin — this is the one
+                # slot that satisfies them all. The sink is the
+                # entry-layer adapter over the workspace's artifact
+                # store; the tools layer is a leaf and cannot reach the
+                # memory layer itself.
+                SaveArtifactTool(
+                    Workspace(config.workspace),
+                    sink=WorkspaceArtifactSink(config.workspace),
+                ),
             )
         else:
             mounted = tools

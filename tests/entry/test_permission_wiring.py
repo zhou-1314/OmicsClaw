@@ -58,6 +58,7 @@ MOUNTED = (
     "memory_search",
     "memory_write",
     "ask_user",
+    "save_artifact",
     "task",
 )
 

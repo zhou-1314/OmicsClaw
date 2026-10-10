@@ -160,7 +160,9 @@ def test_with_install_the_mounted_list_gains_one_gated_tool(tmp_path, offline):
     app = assembly.build_app(config)
     try:
         names = tuple(app.registry.names())
-        assert names == (*MOUNTED[:-1], "install_skill_deps", "task")
+        # install_skill_deps inserts after ``ask_user``; P2's
+        # save_artifact and ``task`` stay the tail.
+        assert names == (*MOUNTED[:-2], "install_skill_deps", *MOUNTED[-2:])
         assert isinstance(app.registry.get("install_skill_deps"), GatedTool)
     finally:
         if app.memory is not None:

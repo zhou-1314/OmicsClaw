@@ -52,6 +52,7 @@ DESKTOP_CHAT_REQUEST_SCHEMA_VERSION: Final = 3
 DESKTOP_CHAT_SSE_SCHEMA_VERSION: Final = 3
 DESKTOP_CHAT_INTERRUPT_SCHEMA_VERSION: Final = 1
 DESKTOP_JOBS_SCHEMA_VERSION: Final = 1
+DESKTOP_ARTIFACTS_SCHEMA_VERSION: Final = 1
 
 CONNECTION_EPOCH: Final = int(time.time())
 """P3: the epoch every SSE frame of this process carries, and ``/health``
@@ -69,6 +70,7 @@ frame, so it is defined here beside the numbers a client compares."""
 DESKTOP_CAPABILITIES: Final = {
     "files_tree": True,
     "files_serve": True,
+    "artifacts": True,
 }
 
 
@@ -93,6 +95,8 @@ SERVED_PATHS: Final[tuple[str, ...]] = (
     "/jobs/{job_id}/events",
     "/jobs/{job_id}/cancel",
     "/jobs/{job_id}/approval/{call_id}",
+    "/artifacts",
+    "/artifacts/{artifact_id}",
 )
 """The routes :func:`~omicsclaw.entry.desktop.server.create_desktop_app`
 mounts, templated paths spelled as FastAPI spells them. ``/workspace``
@@ -147,14 +151,35 @@ def desktop_jobs_contract() -> dict[str, int]:
     }
 
 
+def desktop_artifacts_contract() -> dict[str, int]:
+    """The P2 artifacts plane contract: versioned additive-only, like the
+    jobs one.
+
+    Version 1 is ``GET /artifacts?job_id=&session_id=&kind=&limit=``
+    (newest first, kind one of ``figure | table | h5ad | rds | report |
+    pdf | other``) and ``GET /artifacts/{id}`` returning the record plus
+    ``lineage: {job, parents}``. Byte content is served by the existing
+    ``/files/serve`` on the artifact's ``path`` — no content route in
+    this contract. Events: the job stream gained the ``artifact.created``
+    frame type ``{artifact_id, kind, title, path}``, which is additive
+    within the jobs contract's event vocabulary.
+    """
+
+    return {
+        "artifacts_schema_version": DESKTOP_ARTIFACTS_SCHEMA_VERSION,
+    }
+
+
 __all__ = [
     "CONNECTION_EPOCH",
+    "DESKTOP_ARTIFACTS_SCHEMA_VERSION",
     "DESKTOP_CAPABILITIES",
     "DESKTOP_CHAT_INTERRUPT_SCHEMA_VERSION",
     "DESKTOP_CHAT_REQUEST_SCHEMA_VERSION",
     "DESKTOP_CHAT_SSE_SCHEMA_VERSION",
     "DESKTOP_JOBS_SCHEMA_VERSION",
     "SERVED_PATHS",
+    "desktop_artifacts_contract",
     "desktop_chat_contract",
     "desktop_jobs_contract",
 ]

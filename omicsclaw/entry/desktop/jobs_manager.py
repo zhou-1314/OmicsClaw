@@ -14,13 +14,16 @@ frame, shared with the chat stream where both exist)::
     job.created -> job.started ->
       llm_chunk | tool_started{tool, human_description} |
       tool_output_chunk | progress{label, percent} | heartbeat{state} |
-      tool_approval_request{call_id, risk, summary} | usage{tokens} ->
+      tool_approval_request{call_id, risk, summary} | usage{tokens} |
+      artifact.created{artifact_id, kind, title, path} ->
     job.done{status} | job.failed{error, phase}
 
 ``human_description`` is the one-line plain-language summary of what a
 tool call does ("run spatial_domains clustering (n=12)"), generated from
 the tool name and its arguments by :func:`human_tool_description`.
-``artifact.created`` belongs to P2 and is deliberately absent.
+``artifact.created`` is P2's: the output-contract scanner
+(:mod:`~omicsclaw.entry.desktop.artifacts_manager`) emits one frame per
+artifact it registers for a finished job, before the terminal event.
 
 Every event is persisted to the ``job_events`` ring (most recent
 :data:`JOB_EVENTS_RETAINED` per job) *before* it is broadcast, so a
@@ -59,6 +62,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from omicsclaw.memory.artifacts import ArtifactStore
 from omicsclaw.memory.database import Database
 from omicsclaw.skills.frontmatter import parse_frontmatter
 from omicsclaw.tools.context import (
@@ -167,6 +171,12 @@ class JobStore:
 
     def __init__(self, database: Database) -> None:
         self._db = database
+
+    @property
+    def database(self) -> Database:
+        """The connection this store runs on, so another store (P2's
+        artifacts) can share one file and one lock with it."""
+        return self._db
 
     def insert_job(self, record: JobRecord) -> None:
         self._db.run(
@@ -634,8 +644,9 @@ class SkillApiRunner:
     staring at a generated form.
     """
 
-    def __init__(self, app: Any) -> None:
+    def __init__(self, app: Any, *, artifacts: ArtifactStore | None = None) -> None:
         self._app = app
+        self._artifacts = artifacts
         self._modules: dict[str, Any] = {}
 
     def validate(self, skill: str, inputs: Any) -> None:
@@ -682,9 +693,39 @@ class SkillApiRunner:
         result = await asyncio.to_thread(self._call_entry, function, arguments)
         ctx.progress(skill + " finished in " + f"{time.time() - started:.1f}s", 100.0)
         ctx.tool_output(_summarize_result(result))
-        # TODO(P2): scan the skill output_contract directories and emit
-        # artifact.created frames for what the run produced.
+        await self._register_artifacts(record, ctx, found.directory)
         return result
+
+    async def _register_artifacts(
+        self, record: JobRecord, ctx: JobExecutionContext, skill_directory: Path
+    ) -> None:
+        """P2 capture channel ②: scan the skill's output contract.
+
+        Runs only on the good path — a job that raised does not get its
+        half-written files promoted to the results tray — and a scan that
+        itself fails is logged and swallowed: artifacts are a view of a
+        finished job, never a reason a finished job reports failure.
+        Off the event loop (``to_thread``): the walk and the sha256
+        streams are exactly the blocking kind. Idempotent by the store's
+        ``(job_id, path)`` check, however many times a scan lands.
+        """
+        if self._artifacts is None:
+            return
+        try:
+            from .artifacts_manager import register_job_artifacts
+
+            await asyncio.to_thread(
+                register_job_artifacts,
+                self._artifacts,
+                job_id=record.id,
+                session_id=record.session_id,
+                skill_directory=skill_directory,
+                workspace=Path(ctx.workspace),
+                emit=lambda event_type, payload: ctx.emit(event_type, payload),
+                since=record.created_at,
+            )
+        except Exception:  # noqa: BLE001 - never fail a done job over the tray
+            _log.exception("artifact scan failed for job %s", record.id)
 
     def _import_module(self, skill_directory: Path, name: str) -> Any:
         """Import ``_api.py`` by path, with the skills root parent importable.
@@ -875,6 +916,7 @@ class JobsManager:
         app: Any,
         *,
         store: JobStore | None = None,
+        artifact_store: ArtifactStore | None = None,
         default_timeout_s: float = DEFAULT_JOB_TIMEOUT_S,
         max_concurrent: int = MAX_CONCURRENT_JOBS,
     ) -> None:
@@ -883,6 +925,7 @@ class JobsManager:
             workspace = Path(app.config.workspace)
             store = JobStore(Database(workspace / ".omicsclaw" / "jobs.db"))
         self.store = store
+        self.artifacts = artifact_store or ArtifactStore(store.database)
         self.default_timeout_s = float(default_timeout_s)
         self._semaphore = asyncio.Semaphore(max(1, max_concurrent))
         self._runners: dict[str, Any] = {}
@@ -895,7 +938,9 @@ class JobsManager:
             interrupted = 0
         if interrupted:
             _log.info("marked %d orphaned job(s) interrupted at start-up", interrupted)
-        self.register_runner("skill_run", SkillApiRunner(app))
+        self.register_runner(
+            "skill_run", SkillApiRunner(app, artifacts=self.artifacts)
+        )
 
     # ---- construction and lookup ----
 

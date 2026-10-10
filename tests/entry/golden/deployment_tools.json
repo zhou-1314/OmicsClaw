@@ -319,6 +319,40 @@
   }
  },
  {
+  "name": "save_artifact",
+  "description": "Register a file you produced as a named analysis artifact, so it appears in the desktop results tray with a type icon or thumbnail and stays traceable to this session. The file must already exist inside the workspace — this tool does not create or modify anything, it records the file (path, kind, size, sha256) in the artifact registry. `path` is relative to the workspace root. `kind` is one of figure | table | h5ad | rds | report | pdf | other and defaults to the extension's natural kind. `title` defaults to the file name. Use it for results a person will want to look at, not for intermediates.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "File to register, relative to the workspace root, e.g. 'figures/umap.png'. Required; it must already exist."
+    },
+    "kind": {
+     "type": "string",
+     "enum": [
+      "figure",
+      "h5ad",
+      "other",
+      "pdf",
+      "rds",
+      "report",
+      "table"
+     ],
+     "description": "Artifact kind; defaults to the extension's kind (png/svg/jpg -> figure, csv/tsv -> table, h5ad -> h5ad, rds -> rds, html/md -> report, pdf -> pdf, else other)."
+    },
+    "title": {
+     "type": "string",
+     "description": "Human-facing title; defaults to the file name."
+    }
+   },
+   "required": [
+    "path"
+   ],
+   "additionalProperties": false
+  }
+ },
+ {
   "name": "task",
   "description": "Hand a self-contained sub-task to a specialised agent that runs with its own context and its own narrowed tool set, and return only its conclusion.\nUse it when a sub-task is well defined and its intermediate steps are noise for this conversation — a wide search, a survey of many files, a self-checking analysis. Do not use it for a step you can do in one or two tool calls yourself.\nThe sub-agent cannot see this conversation, cannot ask you anything, and reports once when it is done. Available sub-agents:\n- general-purpose: General-purpose agent for open-ended sub-tasks: researching a question across many files, running a multi-step analysis to a conclusion, or any search where you are not confident the first few attempts will find the answer. Runs on the same model as the main agent with every tool except task, which would let a sub-agent start sub-agents of its own; plan_write, which acts on the calling conversation's plan; memory_write, which writes memory that every later conversation reads; ask_user, which asks a person, and a sub-agent has nobody to ask.\n- module-reviewer: Only when the user requests independent review (the review button in Desktop). Reviews one analysis module after it has been replayed and before the user accepts it: reads its step files, outputs, manifest and report, and returns VERDICT: APPROVE or VERDICT: REVISE with findings. Read-only.",
   "input_schema": {

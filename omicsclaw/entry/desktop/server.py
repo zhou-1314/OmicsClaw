@@ -74,6 +74,7 @@ from omicsclaw.entry.session import (
 )
 from omicsclaw.entry.stream import ObserverCapacityError, TurnObservation
 from omicsclaw.entry.turn import TurnHandle
+from omicsclaw.memory.artifacts import ArtifactStore
 from omicsclaw.version import __version__, build_identity
 
 from .catalog import mcp_servers, skill_catalog, skill_detail
@@ -93,6 +94,7 @@ from .interactions import (
     answer_permission,
     change_permission_profile,
 )
+from .artifacts import mount_artifacts_routes
 from .jobs import mount_jobs_routes
 from .jobs_manager import JobsManager
 from .providers import SettingsFile, provider_listing, save_provider, test_provider
@@ -109,6 +111,7 @@ from .wire_contract import (
     DESKTOP_CAPABILITIES,
     SERVED_PATHS,
     desktop_chat_contract,
+    desktop_artifacts_contract,
     desktop_jobs_contract,
 )
 
@@ -399,6 +402,7 @@ def health_payload(app: AgentApp) -> dict[str, Any]:
                 )
             ),
             "desktop_jobs": desktop_jobs_contract(),
+            "desktop_artifacts": desktop_artifacts_contract(),
         },
     }
 
@@ -488,6 +492,7 @@ def create_desktop_app(
     interactions: DesktopInteractions | None = None,
     settings: SettingsFile | None = None,
     jobs_manager: JobsManager | None = None,
+    artifacts_store: ArtifactStore | None = None,
 ) -> Any:
     """Build the FastAPI application serving :data:`SERVED_PATHS`.
 
@@ -518,6 +523,7 @@ def create_desktop_app(
     api = FastAPI(title="OmicsClaw Desktop", version=__version__)
     shared = interactions if interactions is not None else DesktopInteractions(app)
     jobs = jobs_manager if jobs_manager is not None else JobsManager(app)
+    artifacts = artifacts_store if artifacts_store is not None else jobs.artifacts
 
     def _authorized(request: Request) -> bool:
         if not bearer_token:
@@ -794,6 +800,7 @@ def create_desktop_app(
         return health_payload(app)
 
     mount_jobs_routes(api, jobs, authorized=_authorized)
+    mount_artifacts_routes(api, artifacts, jobs=jobs, authorized=_authorized)
 
     return api
 
