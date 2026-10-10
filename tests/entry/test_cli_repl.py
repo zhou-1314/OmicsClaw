@@ -1398,6 +1398,31 @@ def test_the_line_is_not_repeated_by_compact_or_by_the_next_answer(tmp_path):
     assert "spatial autocorrelation." in printed
 
 
+def test_a_second_cut_off_reply_in_the_same_repl_is_reported_too(tmp_path):
+    """Each exchange is judged by itself.
+
+    Two cuts are two lines, each in the form of its own reply, and the
+    ordinary answer after them gets none.
+    """
+    provider = Finishing(
+        (says("Moran's I measures spatial autocorre"), "length"),
+        (writes("Shorter, and written down.", "write_file"), "length"),
+        says("Moran's I measures spatial autocorrelation."),
+    )
+
+    _source, printed = run_repl(
+        tmp_path,
+        provider,
+        ["what is Moran's I?", "shorter please", "once more", "/exit"],
+    )
+
+    assert lines_that_open_with_it(printed) == [
+        _repl._CUT_OFF_NOTICE,
+        _repl._CUT_OFF_CALLS_NOTICE.format(names="write_file"),
+    ]
+    assert printed.rindex(OPENS_WITH) < printed.index("spatial autocorrelation.")
+
+
 def test_a_single_shot_run_reports_the_cut_and_still_converges(tmp_path):
     """Same line, same screen; the verdict the exit code reads is unchanged."""
 
