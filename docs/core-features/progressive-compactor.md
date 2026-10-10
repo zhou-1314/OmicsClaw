@@ -466,6 +466,8 @@ async def force(history, tools=()) -> tuple[tuple[Message, ...], CompactionRecor
 
 `SessionRegistry.compact(session_id)` 把它作为一个 `compaction_only` exchange 放进该会话的串行车道，不会与正在进行的 exchange 竞争同一段历史（排满时抛 `QueueFull`，关闭中抛 `RegistryClosed`）。`TurnRunner` 走 `_compact_only`：`compose(app, history, "")` → `compactor.force(messages, app.tools_snapshot)` → 写回时用压缩结果、否则保留原对话 → `TurnOutcome(history=kept[1:], state=compactor.state, compaction=record)`。这条路径不调用主模型、不注入计划块。
 
+`compose` 交出的对话里没有未答的工具调用（`drop_unanswered_calls`，见 [context-engineering.md](context-engineering.md) §7），压缩器拿到的是清理过的历史。摘要成功时，被输出上限截断的调用后面不会再补一条 `MISSING_TOOL_RESULT` 占位。没有写回时，上面说的"原对话"也是清理过的那一份，所以 `/compact` 即使没有写回，也会把这些调用从会话历史里去掉。
+
 ### 9.3 各入口
 
 | 入口 | 代码 | 行为 |
@@ -526,6 +528,7 @@ async def force(history, tools=()) -> tuple[tuple[Message, ...], CompactionRecor
 - **没有 session_id 时共用目录**：`run_turn` / `prepare` 不传 `session_id` 时，文件落在 `tool_results/default/` 与 `compaction_records/default.jsonl`；`prepare()` 作为预览也会写文件。
 - **没有清理入口**：`FileOffloadStore.purge`、`JsonlCompactionLog.purge` 无调用方，offload 文件与日志只增不减；`JsonlCompactionLog.list` 也没有被任何 surface 读取。
 - **没有执行期 offload**：超大工具输出在进入历史时不拦截，要等到下一次压缩（WARN 起）才被移出；各工具自带的输出截断是唯一的源头防线。
+- **`/compact` 的回话不知道清理的事**：会话历史里有没被回答的工具调用时，`/compact` 开场就把它们去掉了（§9.2），而 CLI 的 `_compaction_verdict` 和 Channel 的 `_describe_compaction` 读的是压缩记录。短会话上它们仍然说 `Nothing to compact…`，摘要失败时仍然说 `…the conversation was left as it was`。Desktop 的 `status` 帧出自同一条记录：这两种情形下 `written_back` 是 `false`，`msgs_before` 和 `msgs_after` 是在清理过的对话上数的，两个数相等，帧里看不出会话历史少了调用，或者少了一整轮。
 - **图片不计成本**：见 [context-engineering.md](context-engineering.md) §12。
 
 ---
@@ -538,7 +541,7 @@ async def force(history, tools=()) -> tuple[tuple[Message, ...], CompactionRecor
 | `omicsclaw/context/compaction.py` | `compact`、`plan_compaction`、`apply_compaction`、`build_summary_prompt`、`collect_references`、`CompactionPlan`、`CompactionRecord`、`CompactionState`、`MemoryExtractor`、`DEFAULT_MIN_TAIL` |
 | `omicsclaw/context/summary.py` | `Anchors`、`parse_anchors_and_summary`、`build_compaction_message`、`COMPACTION_MARKER`、`FIRST_TEMPLATE`、`INCREMENTAL_TEMPLATE`、`OFFLOAD_RULE`、`SUMMARY_SYSTEM_PROMPT`、`Summarizer` |
 | `omicsclaw/context/offload.py` | `Offloader`、`OffloadStore`、`offload_messages`、`offload_key`、占位符与引用段的渲染/解析 |
-| `omicsclaw/context/transcript.py` | `repair_tool_pairs`、`split_head_tail`、`fit_to_budget`、`emergency_fit`、`render_for_summary` |
+| `omicsclaw/context/transcript.py` | `repair_tool_pairs`、`drop_unanswered_calls`、`split_head_tail`、`fit_to_budget`、`emergency_fit`、`render_for_summary` |
 | `omicsclaw/context/budget.py` | `ContextBudget`、`Pressure`、`at_least`、`measure` |
 | `omicsclaw/engine/compactor.py` | `HistoryCompactor` 协议 |
 | `omicsclaw/engine/loop.py` | `_kernel` 中每 Turn 调用压缩器与写回 |

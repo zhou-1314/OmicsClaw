@@ -137,6 +137,7 @@ from .tokens import (
 )
 from .transcript import (
     MISSING_TOOL_RESULT,
+    drop_unanswered_calls,
     emergency_fit,
     fit_to_budget,
     render_for_summary,
@@ -186,6 +187,7 @@ __all__ = [
     "build_summary_prompt",
     "collect_references",
     "compact",
+    "drop_unanswered_calls",
     "emergency_fit",
     "estimate_message_tokens",
     "estimate_messages_tokens",

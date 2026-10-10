@@ -23,13 +23,19 @@ shortening one. In particular
 for byte, because prompt-prefix caching and replay evidence both read
 those bytes. A truncated argument payload is also an *invalid* one,
 which the model will be handed and will retry against forever.
+
+:func:`drop_unanswered_calls` is the one function here that edits a
+message. It takes whole tool calls off a turn when no tool result
+answers them, and it leaves the text and the arguments of what it keeps
+as they were. A tool result with no call, and an answered call whose
+arguments do not parse, are still there afterwards.
 """
 
 from __future__ import annotations
 
 from typing import Sequence
 
-from omicsclaw.schema import Message, Role
+from omicsclaw.schema import Message, Role, ToolCall
 
 from .budget import ContextBudget
 from .tokens import (
@@ -40,6 +46,7 @@ from .tokens import (
 
 __all__ = [
     "MISSING_TOOL_RESULT",
+    "drop_unanswered_calls",
     "emergency_fit",
     "fit_to_budget",
     "render_for_summary",
@@ -150,6 +157,64 @@ def repair_tool_pairs(
             repaired.append(found)
         index = run_end
     return tuple(repaired)
+
+
+def drop_unanswered_calls(messages: Sequence[Message]) -> tuple[Message, ...]:
+    """Remove every tool call that no tool result answers.
+
+    The results that can answer a turn's calls are the ``Role.TOOL``
+    messages directly behind it, the same adjacency
+    :func:`repair_tool_pairs` pairs by. One result answers one call:
+    each call, in the order the turn lists them, takes one result that
+    carries its id, and a call left without one is unanswered. Ids are
+    compared as they are, the empty id included, and a result marked as
+    an error answers its call like any other.
+
+    An unanswered call is taken off its turn. The turn keeps its text,
+    its reasoning and its answered calls, unedited. If that leaves the
+    turn with no call and no text other than whitespace (what
+    ``str.strip`` removes), the whole turn is removed. A turn that lost
+    no call is never touched, whatever it holds.
+
+    No result is written in a removed call's place.
+    :func:`repair_tool_pairs` would write a placeholder that says the
+    result was compacted away, which is false of a call that never ran.
+    The call's arguments may also be cut off inside the JSON, and the
+    Anthropic adapter refuses to encode those.
+
+    A run that the output ceiling cuts off inside a tool call ends on
+    such a turn: the engine records the turn and runs none of its calls.
+    DeepSeek answers a request that carries one with a 400, and the
+    Anthropic Messages API documents the same requirement.
+
+    The result is a new tuple. With nothing to remove it holds the same
+    message objects in the same order. A tool result whose call is
+    missing is left for :func:`repair_tool_pairs`. Roles are compared
+    with ``==`` for the reason given there.
+    """
+    kept: list[Message] = []
+    index = 0
+    total = len(messages)
+    while index < total:
+        message = messages[index]
+        index += 1
+        if message.role != Role.ASSISTANT or not message.tool_calls:
+            kept.append(message)
+            continue
+        run_end = index
+        while run_end < total and messages[run_end].role == Role.TOOL:
+            run_end += 1
+        unclaimed = [answer.tool_call_id for answer in messages[index:run_end]]
+        calls: list[ToolCall] = []
+        for call in message.tool_calls:
+            if call.id in unclaimed:
+                unclaimed.remove(call.id)
+                calls.append(call)
+        if len(calls) == len(message.tool_calls):
+            kept.append(message)
+        elif calls or message.content.strip():
+            kept.append(message.replace(tool_calls=calls))
+    return tuple(kept)
 
 
 def split_head_tail(
