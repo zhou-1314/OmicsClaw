@@ -134,6 +134,7 @@ from omicsclaw.provider import (
     provider_from_env,
     resolve_config,
 )
+from omicsclaw.kernel import PersistentKernelManager, format_cell_summary
 from omicsclaw.remote import RemotePlaneBinding
 from omicsclaw.sandbox import ChangeListener
 from omicsclaw.schema import Message, Role, ToolDefinition
@@ -154,6 +155,7 @@ from omicsclaw.tools import (
     read_tool,
 )
 from omicsclaw.tools.builtin.bash import BashEnvironment
+from omicsclaw.tools.builtin.python_kernel import PythonKernelTool
 from omicsclaw.tools.builtin.remote import RemotePlane, remote_tools
 from omicsclaw.tools.builtin.save_artifact import SaveArtifactTool
 
@@ -480,6 +482,100 @@ class WorkspaceArtifactSink:
             f"Saved artifact {record.id} ({record.kind}, {record.size} "
             f"bytes): {record.title} — {record.path}"
         )
+
+
+class WorkspaceKernelBinding:
+    """The ``python`` tool's kernel seam and the figure registrar over one
+    workspace.
+
+    The P4 adapter in the ``WorkspaceArtifactSink`` pattern: the tool
+    speaks the :class:`~omicsclaw.tools.builtin.python_kernel.KernelRunner`
+    Protocol and this binding answers it on the kernel package's
+    :class:`~omicsclaw.kernel.PersistentKernelManager` — one manager per
+    deployment, the same instance the desktop jobs plane reaches through
+    :attr:`AgentApp.kernels`, so a session's kernel is one process
+    whichever surface asked for the cell. The manager starts kernels
+    lazily, so constructing this costs nothing until a cell actually
+    runs. Figures the kernel captures are registered on the workspace's
+    shared artifact store with ``capture="kernel"`` (chat face: row
+    only; the jobs runner emits the ``artifact.created`` frame for the
+    ones its job produced).
+    """
+
+    def __init__(self, workspace: Workspace | Path | str) -> None:
+        root = (
+            Path(workspace.root)
+            if isinstance(workspace, Workspace)
+            else Path(workspace)
+        )
+        self.manager = PersistentKernelManager(root, on_figure=self._register_figure)
+        self._root = root
+        self._store: ArtifactStore | None = None
+
+    def _ensure_store(self) -> ArtifactStore:
+        if self._store is None:
+            self._store = ArtifactStore(
+                Database(self._root / ".omicsclaw" / "jobs.db")
+            )
+        return self._store
+
+    def _register_figure(
+        self, path: Path, mime: str, session_id: str, job_id: str
+    ) -> str:
+        """Insert one kernel-captured figure row; answers its artifact id.
+
+        Never raises into the cell (the manager already guards the call);
+        the id is what lets the jobs runner emit ``artifact.created`` for
+        figures its own job produced, instead of a second scan.
+        """
+        target = Path(path)
+        sha256, size = hash_and_size(target)
+        record = ArtifactRecord(
+            id=new_artifact_id(),
+            job_id=job_id,
+            session_id=session_id,
+            kind="figure",
+            path=str(target),
+            title=target.stem,
+            mime=mime or kind_and_mime_for(target.name)[1],
+            sha256=sha256,
+            size=size,
+            produced_by="kernel_display",
+            meta={"capture": "kernel"},
+            created_at=time.time(),
+        )
+        inserted = self._ensure_store().insert_artifact(record)
+        if inserted is not None:
+            return inserted.id
+        existing = self._ensure_store().latest_for_path(str(target))
+        return existing.id if existing is not None else record.id
+
+    async def run_python(
+        self,
+        code: str,
+        *,
+        description: str,
+        session_id: str,
+        on_output=None,
+        timeout_s: float | None = None,
+    ) -> str:
+        """The ``KernelRunner`` seam: one cell, one summary string."""
+        from omicsclaw.kernel import KernelCallbacks
+
+        def _stream(name: str, text: str) -> None:
+            if on_output is not None and name == "stdout":
+                on_output(text)
+
+        result = await self.manager.execute(
+            session_id,
+            code,
+            origin="agent",  # TODO(P4): distinguish user cells when the
+            # desktop chat surface starts sending them; the screenshot
+            # semantics of CS's origin=="user" hang off this flag.
+            callbacks=KernelCallbacks(on_stream=_stream),
+            timeout_s=timeout_s,
+        )
+        return format_cell_summary(result)
 
 
 def build_permission_gate(config: AppConfig) -> PermissionGate:
@@ -1045,6 +1141,17 @@ class AgentApp:
     Closed by :meth:`aclose`, after everything that might still be
     producing spans."""
 
+    kernels: "WorkspaceKernelBinding | None" = None
+    """P4's persistent-kernel binding, or ``None`` in an app constructed
+    directly. Holds the one
+    :class:`~omicsclaw.kernel.PersistentKernelManager` per deployment —
+    the same object the ``python`` tool runs cells through — so the
+    desktop jobs plane's ``code_run`` and the chat tool share session
+    kernels instead of each paying for its own. Its kernels are started
+    lazily and all killed by :meth:`aclose`, after the sessions drained
+    (a cell still finishing inside the grace keeps its kernel until it
+    finishes)."""
+
     permission: PermissionGate | None = None
     """The gate in front of every tool in :attr:`registry`.
 
@@ -1178,18 +1285,28 @@ class AgentApp:
                         await self.sandbox.aclose()
                 finally:
                     try:
-                        if self.memory is not None:
-                            self.memory.close()
+                        if self.kernels is not None:
+                            # P4: kill every session kernel and stop the
+                            # reaper, after the sessions drained — a cell
+                            # still running inside the grace keeps its
+                            # kernel to finish on — and before the memory
+                            # closes, because a finishing cell may still be
+                            # registering artifacts.
+                            await self.kernels.manager.aclose()
                     finally:
                         try:
-                            if self.remote is not None:
-                                self.remote.close()
+                            if self.memory is not None:
+                                self.memory.close()
                         finally:
-                            # Last, and after the sessions drained: a tool
-                            # still finishing inside the grace period is still
-                            # writing spans, and a backend shut down before it
-                            # loses exactly the records of the shutdown.
-                            await self.telemetry.aclose()
+                            try:
+                                if self.remote is not None:
+                                    self.remote.close()
+                            finally:
+                                # Last, and after the sessions drained: a tool
+                                # still finishing inside the grace period is still
+                                # writing spans, and a backend shut down before it
+                                # loses exactly the records of the shutdown.
+                                await self.telemetry.aclose()
 
 
 def open_remote_plane(config: AppConfig) -> RemotePlaneBinding | None:
@@ -1210,8 +1327,8 @@ def open_remote_plane(config: AppConfig) -> RemotePlaneBinding | None:
 
     The workspace root travels in with the database: uploads and
     downloads are anchored to it (a ``src`` outside it, a ``dest``
-    resolving away from it, are refused), and a plane without one is a
-    plane that refuses both rather than guessing.
+    resolving away from it, are refused), and a plane without one is
+    a plane that refuses both rather than guessing.
     """
     if not config.remote_execution:
         return None
@@ -1343,6 +1460,12 @@ def build_app(
     # that name tools nothing answers.
     remote_plane = open_remote_plane(config)
     try:
+        # P4's kernel binding is built before the tool list so both of its
+        # consumers mount the same object: the ``python`` tool below, and
+        # :attr:`AgentApp.kernels` (the desktop jobs plane's code_run runner
+        # reads it back). Lazy kernels keep this cheap for deployments that
+        # never run a cell.
+        kernels = WorkspaceKernelBinding(config.workspace)
         if tools is None:
             mounted: Sequence[Tool] = (
                 *foundation_tools(
@@ -1354,18 +1477,19 @@ def build_app(
                     skill_env=checking,
                     remote=remote_plane,
                 ),
-                # P2's save_artifact closes the foundation set: nothing
-                # the foundation mounted moves, and the only tools after
-                # it are the deployment-dependent tails (MCP, ``task``),
-                # whose positions the wiring tests pin — this is the one
-                # slot that satisfies them all. The sink is the
-                # entry-layer adapter over the workspace's artifact
-                # store; the tools layer is a leaf and cannot reach the
-                # memory layer itself.
+                # P2's save_artifact and P4's python close the foundation
+                # set: nothing the foundation mounted moves, and the only
+                # tools after them are the deployment-dependent tails (MCP,
+                # ``task``), whose positions the wiring tests pin — appending
+                # here is the one slot that satisfies them all. Both speak
+                # entry-layer adapters (the sink, the kernel runner) over
+                # workspace infrastructure; the tools layer is a leaf and
+                # cannot reach the memory or kernel layers itself.
                 SaveArtifactTool(
                     Workspace(config.workspace),
                     sink=WorkspaceArtifactSink(config.workspace),
                 ),
+                PythonKernelTool(runner=kernels),
             )
         else:
             mounted = tools
@@ -1494,6 +1618,7 @@ def build_app(
         skill_env=checking,
         remote=remote_plane,
         telemetry=observing,
+        kernels=kernels,
     )
 
 

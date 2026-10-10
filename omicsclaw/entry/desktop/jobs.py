@@ -162,10 +162,29 @@ def mount_jobs_routes(
                 runtime.startswith("remote:") and valid_host(runtime[7:])
             ):
                 raise DesktopIngressError("invalid_runtime", status_code=422)
+            inputs = document.get("inputs")
+            # P4's code_run carries its payload at the top level
+            # (``{kind, code, language?, inputs?{adata_path?}}``, the shape
+            # the plan spells) rather than inside ``inputs``: the code is the
+            # job, not an argument to a skill. Folded into ``inputs`` here so
+            # the runner reads one bag; a skill_run body is untouched.
+            if kind == "code_run":
+                code = document.get("code")
+                if not isinstance(code, str) or not code.strip():
+                    raise DesktopIngressError("code_required", status_code=422)
+                bag = dict(inputs) if isinstance(inputs, dict) else {}
+                bag["code"] = code
+                # The kernel language rides at the top level with the
+                # code ("python" | "r"); the runner validates the value.
+                language = document.get("language", "python")
+                if language is not None and not isinstance(language, str):
+                    raise DesktopIngressError("invalid_language", status_code=422)
+                bag["language"] = language
+                inputs = bag
             record = await jobs.create_job(
                 kind=kind,
                 skill=skill or "",
-                inputs=document.get("inputs"),
+                inputs=inputs,
                 session_id=session_id or "",
                 workspace=workspace or "",
                 runtime=runtime,

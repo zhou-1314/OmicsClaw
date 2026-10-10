@@ -71,6 +71,11 @@ DESKTOP_CAPABILITIES: Final = {
     "files_tree": True,
     "files_serve": True,
     "artifacts": True,
+    # P4: session-scoped persistent analysis kernels are served — the
+    # ``python`` tool on the chat face and ``kind:"code_run"`` on the jobs
+    # face run cells on them. Additive within the same health payload:
+    # a client that does not know the key ignores it.
+    "kernel": True,
 }
 
 

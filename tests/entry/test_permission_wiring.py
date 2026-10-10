@@ -59,6 +59,7 @@ MOUNTED = (
     "memory_write",
     "ask_user",
     "save_artifact",
+    "python",
     "task",
 )
 
