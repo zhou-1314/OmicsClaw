@@ -1,6 +1,6 @@
 # 计划 0081：回复被输出上限截断时，CLI 显示一句话
 
-状态：定稿，第 2 版（2026-10-09）。第 1 版（提交 `83c245b9`）经独立审核，结论是"可以交 owner 批准"。owner 2026-10-09 批准了计划并作了裁定（§9）。这一版把裁定和审核意见并进正文，没有再审一轮。实现还没有派发：按裁定要等 `feat/ask-user-r4` 和计划 0080 的实现都合入 `main`，从合入后的 `main` 开分支。本计划没有改生产代码和测试。
+状态：已实现，待独立审核和 owner 过目（2026-10-10）。实现在分支 `feat/truncation-notice` 上，从 `feat/ask-user-r4` 和计划 0080 的实现都已合入的 `main`（`4d6c473d`）开出，没有合并，没有 push；提交、与计划的差异和验证结果见 §13。计划是定稿的第 2 版（2026-10-09）：第 1 版（提交 `83c245b9`）经独立审核，结论是"可以交 owner 批准"，owner 2026-10-09 批准了计划并作了裁定（§9），这一版把裁定和审核意见并进正文，没有再审一轮。§0 至 §12 是派发实现之前写的，没有随实现改动。
 
 基线：行号以 `main` 的 `5daf5482` 为准。实现开工时的 `main` 会比它新，按符号名重新定位，三处改动在合并后的树上落在哪里见 §10。
 
@@ -438,3 +438,151 @@ owner 2026-10-09 批准了计划，并作了下面的裁定，由派发方转述
 第 1 版的原型、草稿测试、变异和合并试验（`proto/`、`prototype.diff`、`proposed/`、`mutate.py`、`merge_r4.sh` 和不带 `r2_` 的日志）都还在，对应提交 `83c245b9` 里的数字。
 
 `RV81` 下引用到的：`RV81/logs/` 里的 `facts_base.log`、`mutations_reviewer.log`、`mutation_r8_on_screen.log`、`notice_shapes.log`、`pty_*.log`、`bench_regex_on_proto_stdout.log`、`merge_trials.log`、`channel_replay_base.log`、`session_with_prompt.log`、`oneshot_session_resumed_in_repl.log`、`t_level2_proto.log`、`t_bench_contract_{base,proto}.log`，以及 `RV81/probes/rv_mutate.py`。
+
+## 13. 实施记录
+
+2026-10-10，实现方写。分支 `feat/truncation-notice` 从 `main` 的 `4d6c473d` 开出，`feat/ask-user-r4`（`662771ab`）和 0080 的实现（`19b413cf`）那时都已合入。计划分支的 tip `95ef274e` 用 `--no-ff` 合了进来，计划随实现一起落地。脚本和日志在 `SCR` 同级的 `impl-0081/`，下面记作 `IMP`，日志在 `IMP/logs/`。`SCR` 和 `RV81` 只读使用，探针复制到 `IMP/probes/` 再跑。每个探针和 pty 进程都把这个 worktree 放在 `PYTHONPATH` 最前面，日志里打了 `omicsclaw.__file__`。模型都是脚本化的替身，没有对真实模型发请求。
+
+### 13.1 提交和文件
+
+| 提交 | 内容 |
+|---|---|
+| `22e12d80` `Merge branch 'docs/plan-0081-truncation-notice' into feat/truncation-notice` | 本文件的 §0 至 §12 |
+| `becd10c9` `feat(cli): say so when the output limit cuts a reply off` | §2.3 的三处改动，14 条测试（19 个用例），`cli.md` 的 §9.2 和三处指向它的短句，`agent-loop.md` §11 的半句 |
+| 本提交 | 这一节和状态行 |
+
+动过的文件：
+
+- 生产代码：`omicsclaw/entry/cli/_repl.py`，新增 55 行、改 1 行。
+- 测试：`tests/entry/test_cli_repl.py`，新增 328 行。
+- 文档：`docs/core-features/cli.md`、`docs/core-features/agent-loop.md`，和本文件。
+
+§5 列为不改的文件都没有动，`tests/entry/golden/` 没有重录。`CHANGELOG.md` 没有写，留给合并时。
+
+### 13.2 与计划的差异
+
+1. 代码照抄 §2.3。函数体、两句原文、`_drive` 里的五行和两处注释都没有改。不同的只有两处 docstring：`_CUT_OFF_NOTICE` 的那一句改成 "Printed under a reply that the output limit cut off and that held no tool call."，原句两个定语叠在一起，读起来有歧义；`_CUT_OFF_CALLS_NOTICE` 的末尾加了一句 "Treat a change to them as a change to an interface."。所以是新增 55 行，比 §0 写的 52 行多 3 行。
+2. 三处落点按符号找，和 §10 说的一致：import 段，`_compaction_verdict` 之后、`class Repl` 之前，`Repl._drive` 的 `finally` 之后。
+3. 测试落地时和草稿不一样的地方：
+   - 按 §10 删掉了自带的 `Finishing` 和打印 `omicsclaw.__file__` 的那一条。`Finishing`、`Exploding`、`Reporting` 从 `tests.entry.test_turn_runner` import。
+   - 草稿自己的 `CUT` 常量没有带过来，用的是 `test_turn_runner.py` 里文字相同的 `CUT_ARGUMENTS`。
+   - docstring 里没有写 T 编号，编号和测试名的对应以 §6.1 的表为准。T4 的 docstring 原来写的是它在改动前后的红绿，改成了它测的内容。
+   - 函数和常量仍然经模块属性取（`_repl._cut_off_notice`），没有按这个仓库别处的惯例直接 import。这样在没有这三个名字的树上文件照常收集，每条测试各自失败，§13.3 的红绿可以直接量。节首的注释写了这一点。
+   - T9 改了两处，原因在 §13.5：被截断的那条消息里第一个调用的参数换成完整的 JSON，另加一条九个调用的断言。
+   - T2 的 `parametrize` 折成三行，草稿里那一行有 89 列。
+4. 文档和 §5 写的不一样的地方：
+   - `cli.md` 的这一段写成了小节 §9.2，放在 §9.1 之后，没有紧跟事件表。它有两句原文、一个列表和一张表，放在事件表和讲 `TextRenderer` 的那一段之间，会把两段说 `_pump` 的话隔开。§5 要求写到的六件事都在里面。
+   - 另加了三处指向 §9.2 的短句：§5 讲 `_drive` 的那一段，§9 事件表的 `EXCHANGE_END` 一行，§15 文件索引里 `_repl.py` 的一行。
+   - 不显示的场合那张表比 §5 列的多两行：`length`、`max_tokens` 之外的中断，取消和失败。前一行是 §8 的事实，后一行是规则 1。
+   - `docs/core-features/agent-loop.md` §11 里"`TRUNCATED` 的轨迹以没被回答的工具调用结尾"那一行，§5 没有列。它原来以"清理不告诉模型和用户上一轮被截断过"结尾。落地后 CLI 的用户在被截断的那次交换结束时看得到一行，所以在句尾补了半句：指向 `cli.md` §9.2，写明 Desktop 和 Channel 没有，模型在哪个界面都不知道。
+5. 规则、原文和测试表之间没有发现互相矛盾的地方。规则 3 有两点 §6.1 的测试没有钉住，见 §13.5。
+
+### 13.3 先红后绿
+
+| 步骤 | 结果 | 日志 |
+|---|---|---|
+| 草稿并进测试文件，生产代码没改（`22e12d80`） | `tests/entry/test_cli_repl.py` 的 75 个用例里 15 failed、60 passed。60 个里 56 个是原有的，4 个是 T4 的四个护栏。红的 15 个里 13 个是 `_repl` 没有那个属性，T5 是这一行出现了 0 次，T7 是找不到这一行 | `red_first.log` |
+| 改了 `_repl.py` 之后 | 75 passed | `green_after.log` |
+| `becd10c9` 的测试文件，配 `22e12d80` 的 `_repl.py`（在 `IMP/mut/` 的副本上） | 15 failed、60 passed，红绿的是同一批 | `red_first_committed.log` |
+| `becd10c9` 上把 19 个新用例连跑 10 遍 | 190 passed | `new_tests_x10.log` |
+
+和 §6.1 写的 15 红 4 绿一致。第一行是在 T9 改动之前量的，第三行是提交后的测试文件。
+
+### 13.4 第 2 档的两条命令
+
+同一个 worktree，改前是 `22e12d80`（比 `main` 只多计划文件），改后是 `becd10c9`。命令是 §6.3 的两条，加了 `-p no:cacheprovider -o addopts=""`。
+
+| 命令 | 改前 `22e12d80` | 改后 `becd10c9` |
+|---|---|---|
+| `tests/entry tests/launch` | 2489 passed、7 skipped、3 xfailed，139 秒 | 2508 passed、7 skipped、3 xfailed，121 秒 |
+| bench 的两个文件 | 60 passed | 60 passed |
+
+多出来的 19 个就是新增的用例。改前的 2489 比 §6.3 合并树的 2481 多 8 个：那棵树用的是两条分支当时的 tip（`b2e73358`、`daa04fd7`），它们之后各自还有提交。`test_cli_question.py::test_a_question_nobody_answered_does_not_outlive_its_exchange` 和 `test_cli_repl.py::test_an_approval_nobody_answered_does_not_outlive_its_exchange` 靠时序，机器负载高时偶发失败过，这两次都过了。日志是 `level2_entry_launch_before.log`、`level2_bench_before.log`、`level2_entry_launch_after_becd10c9.log`、`level2_bench_after_becd10c9.log`。
+
+### 13.5 变异
+
+变异在 worktree 的一份副本上做（`IMP/mut/`，`omicsclaw/` 和 `tests/` 的拷贝），不在 worktree 里做，脚本是 `IMP/mutate.py`。每处变异跑整个 `tests/entry/test_cli_repl.py`。
+
+计划的 23 处在 `becd10c9` 上重做：22 处有测试转红，R7 没有，和 §6.2 一致。每处转红的新测试和 §6.2 的表逐行相同。M7 另外让 10 条原有的审批测试转红，那一次跑了 101 秒：它在画帧之前先等交换结束，审批卡没有机会被回答，测试等到超时。
+
+自选的 15 处：
+
+| 编号 | 变异 | 转红的测试 |
+|---|---|---|
+| O1 | 轮数上限也出这一行 | T4、T8 |
+| O2 | `outcome` 是 `None` 时不挡 | T4、T8，另有 4 条原有的取消测试 |
+| O3 | 名字用 `; ` 隔开 | T9、T10、T12 |
+| O4 | 空名字显示成 `(unnamed)` | T10 |
+| O5 | 样式换成 `bold yellow` | T13 |
+| O6 | 绕过 `Screen.print`，直接打到 console | T13 |
+| O7 | 这一行后面补一个空行 | 没有 |
+| O8 | 名字倒序 | T9、T10、T12 |
+| O9 | 名字按字母排序 | T10、T12 |
+| O10 | 这一行后面不换行 | T1、T2、T3、T11、T12 |
+| O11 | 被截断的回复没有文字时不出这一行 | T2、T9、T10、T12 |
+| O12 | 最多列三个名字 | T9 |
+| O13 | 只列参数不是完整 JSON 的调用 | T9 |
+| O14 | 只有一个调用时用第一种形式 | T2、T3 |
+| O15 | 取消或失败的交换出第一种形式 | T4、T8 |
+
+O12 和 O13 在草稿测试上全绿（`mutations_draft_tests.log`）。两处都违反规则 3：参数完整的调用也要列，每个调用一个名字，§3.2 写的是"列了几个就是几个调用没有执行"。草稿里 T9 的三个调用参数都是被截断的，带调用的用例最多三个调用。所以 T9 改了两处：第一个调用的参数换成完整的 JSON，另加一条九个调用的断言。改后两处都由 T9 转红。
+
+O7 没有测试转红。它是 §3.2 定下不钉的那一条：这一行后面补不补空行，留给以后和 `/compact` 的结论行一起定。
+
+38 处里存活 2 处，R7 和 O7，都是计划决定不钉的。日志是 `mutations_draft_tests.log`（草稿测试，T9 改动之前）和 `mutations_on_becd10c9.log`。前一份日志里还有一处 O16，把判断里的 `is not` 换成和字符串比的 `!=`，行为不变，不算变异，之后从脚本里删了。
+
+### 13.6 真实终端
+
+§6.4 的两个探针在 `becd10c9` 上重跑（`out_02_oneshot.log`、`out_09_repl_pty.log`）。一次性执行时这一行在 `stdout.txt` 的末尾，`stderr.txt` 只有探针自己打的那一行，退出码 0。pty 里两种形式都是 `\e[33m`，在回复之后、下一个提示符之前。除了路径和 token 数，两份输出和 `SCR/logs/r2_out_02_oneshot_combo.log`、`r2_out_09_repl_pty_combo.log` 逐行相同。
+
+另外用审核方的 pty 驱动（`RV81/probes/rv_pty.py`，屏幕用 pyte 模拟）跑了 24 个情形，日志是 `IMP/logs/pty_*.log`，汇总在 `pty_all_summary.log`：
+
+| 情形 | 屏幕上 |
+|---|---|
+| 只有文字，40、80、120 列 | 第一种形式，黄色，分别折成 3 行、2 行、1 行，后面紧跟提示符 |
+| 带调用：有文字（40 和 80 列）、只有推理、什么都没有 | 第二种形式，列出 `write_file` |
+| 五个调用，一个名字被截成 `write_fi`，一个名字为空 | `read_file, write_file, bash, write_fi, ?` |
+| 只有推理、没有调用的截断 | 第一种形式 |
+| 第二次模型调用被截 | 一行，在第一次的工具结果和 `Turn 2 done` 之后 |
+| 审批卡答了 `y`，之后的回复带调用被截 | 第一次的 `write_file` 执行了，这一行列的是没执行的那一个 |
+| 审批卡过了期限还开着（`--approval-timeout 3`），之后的回复只有文字被截 | 留下的 `approve write_file [#1]? [y/N/a=always]` 一行在前，这一行在后，再后是提示符 |
+| 提问卡答了 `2`，之后的回复带调用被截 | 第二种形式，在 `Turn 2 done` 之后 |
+| 提问卡过了期限（提示符到期时已经收回），之后的回复只有文字被截 | 第一种形式，前面没有残留的提示符 |
+| 模型还没回复时按 Ctrl-C；文字流出一半时按 Ctrl-C | 只有 `Cancelled.` |
+| 后端报错；轮数上限 | 只有 `Failed: RuntimeError`；什么都没有 |
+| 截断后 `/compact` | 这一行只在被截断的那次出现，`/compact` 打印自己的结论 |
+| 连续两次截断，第三次正常 | 出现两次，第三次没有 |
+| 一次性执行：只有文字、带调用、失败 | 前两种各一行，退出码 0；失败时没有这一行，退出码 1 |
+
+一次性执行另外把标准输出和标准错误写进两个文件，看了六种结束方式（`once_files.log`）。只有文字、带调用、没有文字只有调用时，这一行在 `stdout.txt` 末尾，退出码 0；正常回答和轮数上限没有这一行，退出码 0；失败没有这一行，退出码 1。`stderr.txt` 都只有探针自己的那一行。
+
+管道输入的 REPL（`oc cli < questions.txt`，`out_08_piped_repl.log`）也出这一行，在标准输出上，夹在两次回答之间。
+
+照建议再说一句。§2.4 说本计划探针里的替身不校验调用配对，这一段在今天的树上单独核实了两遍：
+
+- pty 里用会拒绝未答调用的替身（`rv_child.py` 的 `follow_advice`，遇到没有结果的调用就报 DeepSeek 那句 400）：带调用的截断，出第二种形式，再输入 "write it in smaller pieces"，第二次交换正常回答，没有 `Failed`（`pty_follow_advice_80.log`）。
+- 进程内（`IMP/probes/probe_07_follow_advice.py`，`out_07_follow_advice.log`）：被截断的回复有文字和没有文字各一遍。第二次请求里都没有未答调用，`assert_both_dialects_accept` 对它通过，存回去的历史里也没有。
+
+`probe_03_subagent_and_summary.py` 也重跑了（`out_03_subagent.log`），除了 token 数，输出和 `SCR/logs/r2_out_03_subagent_r2_proto.log` 相同：子代理被截断时父代理不出这一行，父代理自己随后被截断时出一次，摘要调用被截断时不出。
+
+`pty_compact_80.log` 第一次跑时驱动记了一句 "child still alive at the end"，退出码是 0。再跑三遍没有出现，`RV81/logs/pty_later_cut_80_proto.log` 里也有同样的一句。驱动在 pty 读到结束之后、进程被回收之前查了一次存活，CLI 是正常退出的。
+
+### 13.7 没有跑的
+
+- 全量测试。按 `SPEC.md` 第 2 档不需要。
+- PR 上的 `Eval CI`。分支没有 push，没有开 PR。
+- 真实模型，理由在 §6.4。
+- Desktop 和 Channel 的进程，`probe_05_channel_answer.py`。这次没有改它们经过的代码。
+- 没有 `termios` 的平台。
+- black 和 ruff。跑测试的环境里没有，新代码是手工按 88 列排的。
+
+### 13.8 实施中看到的、计划没有写的
+
+1. `agent-loop.md` §11 的那半句（§13.2 第 4 条）。
+2. 规则 3 没钉住的两点（§13.5）。
+3. 同一次交换里先执行过一个同名的工具时，屏幕上先有 `<- write_file ok`，后有 "the tool calls in it were not run: write_file"（`pty_approve_then_cut_80.log`）。两句都对，"in it" 指被截断的那条回复，用户要读到这两个词才分得清。
+4. 审批卡过了期限还开着时，交换结束后残留的 `approve … [#1]? [y/N/a=always]` 一行在这一行的上面，这一行贴着下一个提示符。位置和 §2.3 说的一样。那一行残留是 `test_an_approval_card_s_prompt_stays_open_past_its_deadline` 钉住的现状，这次没有动。
+5. 照建议再说一句时，模型看到的历史里没有截断的痕迹。被截断的回复有文字时，那一轮只剩文字；没有文字时，那一轮整条被 0080 的清理去掉，请求里是连续两条用户消息（`out_07_follow_advice.log`）。模型会不会把活拆小，取决于用户那句话怎么说。这是 §8 里"给模型的截断提示"不做的后果；第二种形式的后半句让用户更容易走到这里。
+6. §4 的表只写了交互式 REPL 和一次性执行。管道输入的 REPL 也经过 `_drive`，这一行同样进标准输出（§13.6）。
+7. `CLI_USAGE`、`cli.md` §3 和 `quick-start.md` 写着 `> answer.txt` 只写答案，§8 已经记了前两处的这句话不准。落地后被截断的那次又多一行不是答案的东西。这三处文字没有改。
+8. 40 列的终端里第一种形式占三行。
