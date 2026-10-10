@@ -35,6 +35,7 @@ from __future__ import annotations
 from typing import Sequence
 
 from omicsclaw.schema import Message, Role, ToolDefinition
+from omicsclaw.tools.builtin.ask_user import TOOL_NAME as ASK_USER_TOOL_NAME
 
 from .plan import PlanStore
 from .render import format_plan
@@ -184,10 +185,21 @@ class PlanInjector:
         ``Role.TOOL`` messages and do not end it. A history with no user
         message is counted whole.
 
+        A turn that called ``ask_user`` ends the count as a user message
+        does, because the person's reply arrives as that call's result.
+        The turn itself is left out, so the first turn after the
+        question is turn one. The call's name is all that is read: the
+        count ends there whether the question was answered, skipped,
+        left without an answer or refused before anyone saw it, and
+        wherever the call sits among the message's other calls. With
+        several questions in one exchange the count runs from the
+        latest. A nudge sent before a question is not sent again after
+        it.
+
         A compaction that truncates without summarizing can drop the
         request and leave no summary. That is an emergency truncation, or
         the fallback the soft and full tiers take when the summarizer
-        fails. The count then reaches back to an older user message.
+        fails. The count then runs on into an earlier exchange.
 
         Four conditions, and the first three are all ways of saying "this
         would be noise":
@@ -236,6 +248,10 @@ class PlanInjector:
                 if call.name == PLAN_WRITE_TOOL_NAME:
                     return False
                 if call.name in PROGRESS_TOOL_NAMES:
+                    return False
+                if call.name == ASK_USER_TOOL_NAME:
+                    # The person was asked in this turn. Turns are
+                    # counted from the one after it.
                     return False
             seen += 1
             if seen >= self._gate_turns:

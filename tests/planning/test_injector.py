@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from omicsclaw.planning import (
     DEFAULT_GATE_TURNS,
     INJECTION_HEADER,
@@ -45,13 +47,10 @@ def _said(text: str = "thinking") -> Message:
     return Message(role=Role.ASSISTANT, content=text)
 
 
-def _exchange(*turns: Message, ask: str = "do the analysis") -> tuple[Message, ...]:
-    """One exchange as the engine records it.
-
-    The user's message, then each model turn followed by one
-    ``Role.TOOL`` result for every call the turn made.
-    """
-    messages: list[Message] = [Message.user(ask)]
+def _turns(*turns: Message) -> tuple[Message, ...]:
+    """Model turns as the engine records them, each followed by one
+    ``Role.TOOL`` result for every call it made."""
+    messages: list[Message] = []
     for turn in turns:
         messages.append(turn)
         messages.extend(
@@ -61,6 +60,12 @@ def _exchange(*turns: Message, ask: str = "do the analysis") -> tuple[Message, .
     return tuple(messages)
 
 
+def _exchange(*turns: Message, ask: str = "do the analysis") -> tuple[Message, ...]:
+    """One exchange as the engine records it: the user's message, then
+    the model's turns with their results."""
+    return (Message.user(ask), *_turns(*turns))
+
+
 def _reads(count: int) -> tuple[Message, ...]:
     return tuple(_acted("read_file") for _ in range(count))
 
@@ -68,6 +73,67 @@ def _reads(count: int) -> tuple[Message, ...]:
 def _read_only_turns(count: int) -> tuple[Message, ...]:
     """One exchange in which the model read a file *count* times."""
     return _exchange(*_reads(count))
+
+
+ASK = "ask_user"
+
+ENDINGS: dict[str, tuple[str, bool] | None] = {
+    "answered": (
+        '{"status": "answered", "question": "Which group is the control?",'
+        ' "selected": ["group A"], "reply": "1"}',
+        False,
+    ),
+    "skipped": (
+        '{"status": "declined", "question": "Which group is the control?",'
+        ' "note": "The person chose not to answer."}',
+        False,
+    ),
+    "deadline passed": (
+        '{"status": "no_answer", "question": "Which group is the control?",'
+        ' "reason": "nobody answered in time", "note": "Nobody answered."}',
+        False,
+    ),
+    "refused": ("ask_user: nobody can be asked here", True),
+    "result compacted away": (
+        "[tool result unavailable: the context was compacted]",
+        False,
+    ),
+    "no result recorded": None,
+}
+"""How a question can end, as the history shows it: the result's text and
+whether it is an error. ``None`` leaves the call without a result."""
+
+
+def _question(
+    ending: str = "answered",
+    *,
+    before: tuple[str, ...] = (),
+    after: tuple[str, ...] = (),
+) -> tuple[Message, ...]:
+    """One turn that called ``ask_user``, with what the history holds after it.
+
+    *before* and *after* name other tools the same message called, ahead
+    of the question and behind it.
+    """
+    turn = _acted(*before, ASK, *after)
+    result = ENDINGS[ending]
+    messages = [turn]
+    for call in turn.tool_calls:
+        if call.name != ASK:
+            content, is_error = "…output…", False
+        elif result is not None:
+            content, is_error = result
+        else:
+            continue
+        messages.append(
+            Message.tool(
+                tool_call_id=call.id,
+                name=call.name,
+                content=content,
+                is_error=is_error,
+            )
+        )
+    return tuple(messages)
 
 
 # ---- the plan block ------------------------------------------------------
@@ -306,6 +372,175 @@ def test_turns_after_a_compaction_summary_are_counted():
     kept = _read_only_turns(3)[1:]
 
     assert _augment(injector, (summary, *kept)) != ()
+
+
+# ---- a question to the person --------------------------------------------
+
+
+@pytest.mark.parametrize("ending", ENDINGS)
+def test_a_question_restarts_the_count_however_it_ended(ending):
+    """Two turns read, one asked, two more read.
+
+    Only the two after the question are counted, whatever the history
+    holds as the question's result.
+    """
+    injector = PlanInjector(_store(), gate_turns=3)
+    history = (*_exchange(*_reads(2)), *_question(ending), *_turns(*_reads(2)))
+
+    assert _augment(injector, history) == ()
+
+
+@pytest.mark.parametrize("ending", ENDINGS)
+def test_enough_read_only_turns_after_a_question_fire_the_gate(ending):
+    injector = PlanInjector(_store(), gate_turns=3)
+    history = (*_exchange(*_reads(2)), *_question(ending), *_turns(*_reads(3)))
+
+    appended = _augment(injector, history)
+
+    assert [m.content for m in appended] == [PLANNING_GATE_TEXT]
+
+
+def test_the_calls_after_a_question_one_by_one():
+    """The question is the third turn of the exchange, where the count
+    would have been complete.
+
+    The call that carries the answer has no nudge, and neither have the
+    two after it. The fourth has, with three turns of reading behind it,
+    and the fifth has none because the exchange has had its one.
+    """
+    injector = PlanInjector(_store(), gate_turns=3)
+    history = [*_exchange(*_reads(2)), *_question()]
+
+    nudged = []
+    for _ in range(5):
+        nudged.append(bool(_augment(injector, history)))
+        history.extend(_turns(_acted("read_file")))
+
+    assert nudged == [False, False, False, True, False]
+
+
+def test_a_question_that_opens_the_exchange_is_not_a_turn_of_reading():
+    """The turn that asked is counted no more than the user's message is:
+    the first turn after either one is turn one."""
+    asked_first = (Message.user("compare the two groups"), *_question())
+
+    short = (*asked_first, *_turns(*_reads(2)))
+    enough = (*asked_first, *_turns(*_reads(3)))
+
+    assert _augment(PlanInjector(_store(), gate_turns=3), short) == ()
+    assert _augment(PlanInjector(_store(), gate_turns=3), enough) != ()
+
+
+def test_the_count_runs_from_the_latest_question():
+    """Three turns of reading follow the first question and two follow
+    the second."""
+    history = (
+        Message.user("compare the two groups"),
+        *_question(),
+        *_turns(*_reads(3)),
+        *_question("skipped"),
+        *_turns(*_reads(2)),
+    )
+
+    assert _augment(PlanInjector(_store(), gate_turns=3), history) == ()
+    assert (
+        _augment(
+            PlanInjector(_store(), gate_turns=3),
+            (*history, *_turns(_acted("read_file"))),
+        )
+        != ()
+    )
+
+
+@pytest.mark.parametrize(
+    "others",
+    [
+        {"before": ("read_file",)},
+        {"after": ("read_file",)},
+        {"before": ("bash",), "after": ("read_file", "read_file")},
+    ],
+    ids=["a call before it", "a call after it", "calls on both sides"],
+)
+def test_a_message_that_asked_and_called_other_tools_restarts_the_count(others):
+    """The whole message is one turn, wherever the question sits in it."""
+    asked = (*_exchange(*_reads(2)), *_question(**others))
+
+    short = (*asked, *_turns(*_reads(2)))
+    enough = (*asked, *_turns(*_reads(3)))
+
+    assert _augment(PlanInjector(_store(), gate_turns=3), short) == ()
+    assert _augment(PlanInjector(_store(), gate_turns=3), enough) != ()
+
+
+def test_two_questions_in_one_message_restart_the_count_once():
+    asked = (*_exchange(*_reads(2)), *_turns(_acted(ASK, ASK)))
+
+    short = (*asked, *_turns(*_reads(2)))
+    enough = (*asked, *_turns(*_reads(3)))
+
+    assert _augment(PlanInjector(_store(), gate_turns=3), short) == ()
+    assert _augment(PlanInjector(_store(), gate_turns=3), enough) != ()
+
+
+def test_a_question_brings_no_second_nudge_in_the_same_exchange():
+    """One nudge to an exchange, also when the model asks after it."""
+    injector = PlanInjector(_store(), gate_turns=3)
+    before = _read_only_turns(3)
+    assert _augment(injector, before) != ()
+
+    after = (*before, *_question(), *_turns(*_reads(3)))
+
+    assert _augment(injector, after) == ()
+
+
+def test_only_a_call_to_ask_user_restarts_the_count():
+    """Tools whose names begin or end with ``ask_user``, an MCP server's
+    own ``ask_user`` among them, and a result that quotes the name are
+    an ordinary turn each."""
+    injector = PlanInjector(_store(), gate_turns=3)
+    quoting = (
+        _acted("read_file"),
+        Message.tool(
+            tool_call_id="c0",
+            name="read_file",
+            content='ask_user returned {"status": "answered"}',
+        ),
+    )
+    history = (
+        *_exchange(_acted("mcp__lab__ask_user"), _acted("ask_user_group")),
+        *quoting,
+    )
+
+    assert _augment(injector, history) != ()
+
+
+def test_a_delegation_is_one_turn_like_any_other():
+    """A sub-agent's turns are not in this history. The ``task`` call and
+    its result are all the gate sees of them."""
+    delegated = _acted("task")
+
+    short = _exchange(delegated, delegated)
+    enough = _exchange(delegated, delegated, delegated)
+
+    assert _augment(PlanInjector(_store(), gate_turns=3), short) == ()
+    assert _augment(PlanInjector(_store(), gate_turns=3), enough) != ()
+
+
+def test_a_question_in_an_earlier_exchange_changes_nothing_here():
+    earlier = (*_exchange(*_reads(1)), *_question(), _said("group A it is"))
+
+    short = (*earlier, *_read_only_turns(2))
+    enough = (*earlier, *_read_only_turns(3))
+
+    assert _augment(PlanInjector(_store(), gate_turns=3), short) == ()
+    assert _augment(PlanInjector(_store(), gate_turns=3), enough) != ()
+
+
+def test_a_history_with_no_user_message_is_counted_back_to_a_question():
+    injector = PlanInjector(_store(), gate_turns=3)
+    kept = (*_turns(*_reads(4)), *_question(), *_turns(*_reads(2)))
+
+    assert _augment(injector, kept) == ()
 
 
 def test_zero_turns_disables_the_gate_and_leaves_the_block():
