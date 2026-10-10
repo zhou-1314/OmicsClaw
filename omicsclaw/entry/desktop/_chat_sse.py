@@ -42,12 +42,20 @@ def _payload_text(data: Any) -> str:
     return str(data)
 
 
-def _raw_frame(event_type: str, payload: str, prefix: str = "") -> str:
+def _raw_frame(
+    event_type: str, payload: str, prefix: str = "", epoch: int | None = None
+) -> str:
+    envelope: dict[str, Any] = {"type": event_type, "data": payload}
+    if epoch is not None:
+        # P3: additive. A consumer that ignores the epoch keeps parsing the
+        # two keys it always read; one that compares it can tell the frames
+        # of a restarted backend from the ones it already consumed.
+        envelope["epoch"] = epoch
     return (
         prefix
         + "data: "
         + json.dumps(
-            {"type": event_type, "data": payload},
+            envelope,
             # ASCII JSON guarantees the ASGI bytes are valid UTF-8 even if an
             # external tool returns a Python string containing lone surrogates.
             ensure_ascii=True,
@@ -97,7 +105,9 @@ def _media_exceeds_projection_budget(media: Any) -> bool:
     return False
 
 
-def _bounded_tool_result(data: dict[str, Any], prefix: str) -> str:
+def _bounded_tool_result(
+    data: dict[str, Any], prefix: str, epoch: int | None = None
+) -> str:
     content = str(data.get("content") or "")
     content_size = utf8_size(content)
     media = data.get("media")
@@ -107,7 +117,7 @@ def _bounded_tool_result(data: dict[str, Any], prefix: str) -> str:
     # Avoid serialising a known-oversized scientific result only to reject it.
     if content_size <= CHAT_SSE_MAX_FRAME_BYTES:
         if not media_preemptively_omitted:
-            candidate = _raw_frame("tool_result", _payload_text(data), prefix)
+            candidate = _raw_frame("tool_result", _payload_text(data), prefix, epoch)
             if _fits(candidate):
                 return candidate
 
@@ -137,7 +147,7 @@ def _bounded_tool_result(data: dict[str, Any], prefix: str) -> str:
     }
     if data.get("is_error") is True:
         projection["is_error"] = True
-    frame = _raw_frame("tool_result", _payload_text(projection), prefix)
+    frame = _raw_frame("tool_result", _payload_text(projection), prefix, epoch)
     if _fits(frame):
         return frame
 
@@ -153,6 +163,7 @@ def _bounded_tool_result(data: dict[str, Any], prefix: str) -> str:
             }
         ),
         prefix,
+        epoch,
     )
     return fallback
 
@@ -166,13 +177,24 @@ def _id_line(event_id: int | None) -> str:
 
 
 def render_chat_sse_frame(
-    event_type: str, data: Any, *, event_id: int | None = None
+    event_type: str,
+    data: Any,
+    *,
+    event_id: int | None = None,
+    epoch: int | None = None,
 ) -> str:
     """Render one bounded Desktop Chat SSE frame.
 
     *event_id*, when given, is written as the frame's ``id:`` line: the
     sequence number of the event the frame came from. The line counts
     towards the 4 MiB bound, and an oversized frame's projection keeps it.
+
+    *epoch*, when given, is the P3 ``connection_epoch`` of the process
+    rendering the frame, added to the envelope beside ``type`` and
+    ``data``. ``None`` — the default, and what every existing caller
+    passes — renders the exact bytes this function rendered before the
+    field existed, which is what keeps an un-upgraded consumer and this
+    module's own pinned tests byte-identical.
 
     Non-terminal oversized events become an explicit ``event_omitted`` frame.
     An oversized terminal error remains an ``error`` so consumers do not
@@ -184,14 +206,14 @@ def render_chat_sse_frame(
     prefix = _id_line(event_id)
     normalized_type = str(event_type)
     if normalized_type == "tool_result" and isinstance(data, dict):
-        return _bounded_tool_result(data, prefix)
+        return _bounded_tool_result(data, prefix, epoch)
 
     payload = _payload_text(data)
     # A payload larger than the complete frame cannot possibly fit.  Avoid the
     # outer JSON allocation in that common oversized case.
     payload_size = utf8_size(payload)
     if payload_size <= CHAT_SSE_MAX_FRAME_BYTES:
-        candidate = _raw_frame(normalized_type, payload, prefix)
+        candidate = _raw_frame(normalized_type, payload, prefix, epoch)
         if _fits(candidate):
             return candidate
 
@@ -201,6 +223,7 @@ def render_chat_sse_frame(
             f"Error payload omitted because it exceeds the 4 MiB frame limit "
             f"({payload_size} UTF-8 bytes).",
             prefix,
+            epoch,
         )
     else:
         candidate = _raw_frame(
@@ -213,6 +236,7 @@ def render_chat_sse_frame(
                 }
             ),
             prefix,
+            epoch,
         )
     if not _fits(candidate):  # pragma: no cover - fixed literals are tiny
         raise RuntimeError("bounded Desktop Chat SSE projection exceeded its limit")

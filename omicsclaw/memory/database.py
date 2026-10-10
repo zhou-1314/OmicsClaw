@@ -61,6 +61,32 @@ CREATE TABLE IF NOT EXISTS long_term_memories (
 
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
     USING fts5(id UNINDEXED, title, content);
+
+CREATE TABLE IF NOT EXISTS jobs (
+    id          TEXT PRIMARY KEY,
+    session_id  TEXT NOT NULL DEFAULT '',
+    kind        TEXT NOT NULL DEFAULT 'skill_run',
+    skill       TEXT NOT NULL DEFAULT '',
+    inputs_json TEXT NOT NULL DEFAULT '{}',
+    status      TEXT NOT NULL DEFAULT 'queued',
+    error       TEXT NOT NULL DEFAULT '',
+    created_at  REAL NOT NULL,
+    started_at  REAL,
+    finished_at REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_session
+    ON jobs (session_id, created_at);
+
+CREATE TABLE IF NOT EXISTS job_events (
+    job_id       TEXT NOT NULL,
+    seq          INTEGER NOT NULL,
+    type         TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at   REAL NOT NULL,
+    PRIMARY KEY (job_id, seq),
+    FOREIGN KEY (job_id) REFERENCES jobs (id) ON DELETE CASCADE
+);
 """
 
 

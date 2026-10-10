@@ -121,6 +121,11 @@ def test_served_paths_names_the_routes_the_app_mounts():
         "/chat/title",
         "/files/tree",
         "/files/serve",
+        "/jobs",
+        "/jobs/{job_id}",
+        "/jobs/{job_id}/events",
+        "/jobs/{job_id}/cancel",
+        "/jobs/{job_id}/approval/{call_id}",
     )
 
 
@@ -178,7 +183,10 @@ def test_health_publishes_only_the_chat_contract(tmp_path):
     """The client gates on ``contracts.desktop_chat.sse_schema_version``."""
     payload = health_payload(_app_for_health(tmp_path))
 
-    assert payload["contracts"] == {"desktop_chat": CHAT_CONTRACT_V3}
+    assert payload["contracts"]["desktop_chat"] == CHAT_CONTRACT_V3
+    assert payload["contracts"]["desktop_jobs"] == {
+        "jobs_schema_version": 1
+    }
     assert payload["served_paths"] == list(wire_contract.SERVED_PATHS)
 
 

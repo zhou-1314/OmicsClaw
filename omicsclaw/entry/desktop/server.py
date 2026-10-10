@@ -93,6 +93,8 @@ from .interactions import (
     answer_permission,
     change_permission_profile,
 )
+from .jobs import mount_jobs_routes
+from .jobs_manager import JobsManager
 from .providers import SettingsFile, provider_listing, save_provider, test_provider
 from .title import generate_title
 from .turn_observation import KEEPALIVE_INTERVAL_S, DesktopChatSSEBody
@@ -102,11 +104,18 @@ from .turn_submission import (
     decode_chat_stream_request,
     parse_chat_stream_document,
 )
-from .wire_contract import DESKTOP_CAPABILITIES, SERVED_PATHS, desktop_chat_contract
+from .wire_contract import (
+    CONNECTION_EPOCH,
+    DESKTOP_CAPABILITIES,
+    SERVED_PATHS,
+    desktop_chat_contract,
+    desktop_jobs_contract,
+)
 
 __all__ = [
     "BACKEND_PROCESS_EPOCH",
     "COMPACT_COMMAND",
+    "CONNECTION_EPOCH",
     "CONTROL_MAX_REQUEST_BYTES",
     "SSE_HEADERS",
     "ChatStream",
@@ -170,6 +179,7 @@ async def open_chat_stream(
     after_seq: int = 0,
     keepalive_s: float | None = KEEPALIVE_INTERVAL_S,
     interactions: DesktopInteractions | None = None,
+    epoch: int | None = None,
 ) -> ChatStream:
     """Admit one parsed request and return the stream of its frames.
 
@@ -246,7 +256,7 @@ async def open_chat_stream(
             session_id=handle.session_id,
             resumed=True,
             body=_observed_body(
-                app, handle, after_seq, keepalive_s, interactions
+                app, handle, after_seq, keepalive_s, interactions, epoch
             ),
         )
 
@@ -269,7 +279,9 @@ async def open_chat_stream(
         turn_id=handle.turn_id,
         session_id=handle.session_id,
         resumed=known == handle.turn_id,
-        body=_observed_body(app, handle, after_seq, keepalive_s, interactions),
+        body=_observed_body(
+            app, handle, after_seq, keepalive_s, interactions, epoch
+        ),
     )
 
 
@@ -292,6 +304,7 @@ def _observed_body(
     after_seq: int,
     keepalive_s: float | None,
     interactions: DesktopInteractions,
+    epoch: int | None = None,
 ) -> DesktopChatSSEBody:
     """A new SSE body over *handle*, observed from *after_seq*.
 
@@ -317,6 +330,7 @@ def _observed_body(
         provider=app.provider.name,
         model=effective_model(app),
         compaction=compaction,
+        epoch=epoch,
     )
 
 
@@ -367,6 +381,7 @@ def health_payload(app: AgentApp) -> dict[str, Any]:
         "status": "ok",
         "version": __version__,
         "backend_process_epoch": BACKEND_PROCESS_EPOCH,
+        "connection_epoch": CONNECTION_EPOCH,
         "capabilities": dict(DESKTOP_CAPABILITIES),
         "build": dict(build_identity()),
         "provider": app.provider.name,
@@ -382,7 +397,8 @@ def health_payload(app: AgentApp) -> dict[str, Any]:
                 abandon_grace_s=(
                     app.sessions.abandon_grace_s if app.sessions is not None else None
                 )
-            )
+            ),
+            "desktop_jobs": desktop_jobs_contract(),
         },
     }
 
@@ -471,6 +487,7 @@ def create_desktop_app(
     keepalive_s: float | None = KEEPALIVE_INTERVAL_S,
     interactions: DesktopInteractions | None = None,
     settings: SettingsFile | None = None,
+    jobs_manager: JobsManager | None = None,
 ) -> Any:
     """Build the FastAPI application serving :data:`SERVED_PATHS`.
 
@@ -500,6 +517,7 @@ def create_desktop_app(
 
     api = FastAPI(title="OmicsClaw Desktop", version=__version__)
     shared = interactions if interactions is not None else DesktopInteractions(app)
+    jobs = jobs_manager if jobs_manager is not None else JobsManager(app)
 
     def _authorized(request: Request) -> bool:
         if not bearer_token:
@@ -574,6 +592,7 @@ def create_desktop_app(
                 after_seq=after_seq,
                 keepalive_s=keepalive_s,
                 interactions=shared,
+                epoch=CONNECTION_EPOCH,
             )
         except DesktopIngressError as exc:
             return _refused(exc)
@@ -771,9 +790,25 @@ def create_desktop_app(
             return unauthenticated_health_payload(app.config.launch_id)
         if not _authorized(request):
             return _unauthorized()
+        _note_runtime_header(request.headers.get("X-OmicsClaw-Runtime"))
         return health_payload(app)
 
+    mount_jobs_routes(api, jobs, authorized=_authorized)
+
     return api
+
+
+def _note_runtime_header(header: str | None) -> None:
+    """P3: tolerate and log the runtime routing header. Never refuse it.
+
+    ``X-OmicsClaw-Runtime: local | remote:<connId>`` is the one header a
+    client sends for the unified local/remote routing the plan defers to a
+    later phase. This backend serves one process and routes nothing, so
+    the header changes nothing here — logging it keeps a misconfigured
+    client visible to an operator without breaking it.
+    """
+    if header:
+        _log.debug("X-OmicsClaw-Runtime: %s", header)
 
 
 def _after_seq(document: Mapping[str, Any]) -> int:

@@ -43,6 +43,7 @@ not versioned.
 
 from __future__ import annotations
 
+import time
 from typing import Final
 
 from ._chat_sse import CHAT_SSE_MAX_FRAME_BYTES
@@ -50,6 +51,19 @@ from ._chat_sse import CHAT_SSE_MAX_FRAME_BYTES
 DESKTOP_CHAT_REQUEST_SCHEMA_VERSION: Final = 3
 DESKTOP_CHAT_SSE_SCHEMA_VERSION: Final = 3
 DESKTOP_CHAT_INTERRUPT_SCHEMA_VERSION: Final = 1
+DESKTOP_JOBS_SCHEMA_VERSION: Final = 1
+
+CONNECTION_EPOCH: Final = int(time.time())
+"""P3: the epoch every SSE frame of this process carries, and ``/health``
+publishes as ``connection_epoch``.
+
+A wall-clock integer minted once at import, so it moves forward across a
+restart: a client that comes back after the backend was replaced drops
+frames whose ``epoch`` is not the one its fresh ``/health`` named, which
+is what stops "the backend restarted mid-stream" from becoming "the new
+process's frames answer the old process's conversation". It is a fact
+about the running process (like ``abandon_grace_s``), but it rides every
+frame, so it is defined here beside the numbers a client compares."""
 
 
 DESKTOP_CAPABILITIES: Final = {
@@ -74,6 +88,11 @@ SERVED_PATHS: Final[tuple[str, ...]] = (
     "/chat/title",
     "/files/tree",
     "/files/serve",
+    "/jobs",
+    "/jobs/{job_id}",
+    "/jobs/{job_id}/events",
+    "/jobs/{job_id}/cancel",
+    "/jobs/{job_id}/approval/{call_id}",
 )
 """The routes :func:`~omicsclaw.entry.desktop.server.create_desktop_app`
 mounts, templated paths spelled as FastAPI spells them. ``/workspace``
@@ -112,11 +131,30 @@ def desktop_chat_contract(
     }
 
 
+def desktop_jobs_contract() -> dict[str, int]:
+    """The P1 jobs plane contract: versioned additive-only, like the chat one.
+
+    Version 1 is ``POST /jobs`` (``{kind, skill, inputs, workspace?,
+    session_id?}``), ``GET /jobs?session_id=&status=&limit=``,
+    ``GET /jobs/{id}``, the ``GET /jobs/{id}/events`` SSE stream whose
+    frames carry the unified event vocabulary, an ``id:`` sequence number
+    per frame, ``Last-Event-ID`` resume and ``heartbeat`` frames,
+    ``POST /jobs/{id}/cancel`` and ``POST /jobs/{id}/approval/{call_id}``.
+    """
+
+    return {
+        "jobs_schema_version": DESKTOP_JOBS_SCHEMA_VERSION,
+    }
+
+
 __all__ = [
+    "CONNECTION_EPOCH",
     "DESKTOP_CAPABILITIES",
     "DESKTOP_CHAT_INTERRUPT_SCHEMA_VERSION",
     "DESKTOP_CHAT_REQUEST_SCHEMA_VERSION",
     "DESKTOP_CHAT_SSE_SCHEMA_VERSION",
+    "DESKTOP_JOBS_SCHEMA_VERSION",
     "SERVED_PATHS",
     "desktop_chat_contract",
+    "desktop_jobs_contract",
 ]

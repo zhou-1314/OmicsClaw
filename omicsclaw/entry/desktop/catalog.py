@@ -44,6 +44,7 @@ from typing import Any, Final, Mapping
 
 from omicsclaw.skills import Skill
 
+from .jobs_manager import skill_inputs_declaration
 from .turn_submission import DesktopIngressError
 
 __all__ = [
@@ -127,6 +128,7 @@ def skill_detail(app: Any, domain: str, name: str) -> dict[str, Any]:
         body: str | None = index.get_full_content(name)
     except (OSError, UnicodeDecodeError):
         body = None
+    entry, inputs_schema = skill_inputs_declaration(skill.directory)
     return {
         "name": skill.name,
         "domain": _domain_of(skill),
@@ -135,6 +137,8 @@ def skill_detail(app: Any, domain: str, name: str) -> dict[str, Any]:
         "script_path": None,
         "tags": list(skill.tags),
         "skill_md": body,
+        "entry": entry,
+        "inputs_schema": inputs_schema,
         "resources": [
             {"path": path, "kind": _resource_kind(path)}
             for path in _resource_paths(skill.directory)

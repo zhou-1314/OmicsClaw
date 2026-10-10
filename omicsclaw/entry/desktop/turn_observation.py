@@ -304,6 +304,7 @@ class DesktopChatSSEBody:
     __slots__ = (
         "_approvals",
         "_closed",
+        "_epoch",
         "_compaction",
         "_compaction_seen",
         "_interactions",
@@ -327,6 +328,7 @@ class DesktopChatSSEBody:
         provider: str = "",
         model: str = "",
         compaction: TurnHandle | None = None,
+        epoch: int | None = None,
     ) -> None:
         """*after_seq* is remembered, not applied.
 
@@ -349,6 +351,9 @@ class DesktopChatSSEBody:
         resumed body reports the calls an earlier body read; without it,
         from the calls this body read.
 
+        *epoch* is the P3 ``connection_epoch`` stamped on every rendered
+        frame, or ``None`` to render the pre-P3 bytes exactly.
+
         *compaction* is the handle of the observed exchange when it is a
         ``/compact``. A compaction that changed nothing publishes no
         ``COMPACTION`` event, so when the exchange converged without one
@@ -366,6 +371,7 @@ class DesktopChatSSEBody:
         self._ledger: TurnUsage | None = None
         self._compaction = compaction
         self._compaction_seen = False
+        self._epoch = epoch
         self.last_seq = after_seq
 
     async def __aenter__(self) -> DesktopChatSSEBody:
@@ -421,7 +427,9 @@ class DesktopChatSSEBody:
                 frame = desktop_chat_frame(event)
             if frame is None:
                 continue
-            return render_chat_sse_frame(*frame, event_id=event.seq)
+            return render_chat_sse_frame(
+                *frame, event_id=event.seq, epoch=self._epoch
+            )
 
     def result(self) -> dict[str, Any]:
         """The ``result`` frame's data, for an exchange whose last event
@@ -530,7 +538,9 @@ class DesktopChatSSEBody:
             raise
 
     def _queue(self, frames: tuple[tuple[str, Any], ...]) -> None:
-        self._pending.extend(render_chat_sse_frame(*frame) for frame in frames)
+        self._pending.extend(
+            render_chat_sse_frame(*frame, epoch=self._epoch) for frame in frames
+        )
 
     async def aclose(self) -> None:
         """Detach this observation. Idempotent; never cancels the exchange.

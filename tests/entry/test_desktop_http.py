@@ -27,7 +27,10 @@ pytest.importorskip("fastapi", reason="the Desktop HTTP adapter needs it")
 testclient = pytest.importorskip("fastapi.testclient")
 
 from omicsclaw.entry.desktop import create_desktop_app  # noqa: E402
-from omicsclaw.entry.desktop.wire_contract import SERVED_PATHS  # noqa: E402
+from omicsclaw.entry.desktop.wire_contract import (  # noqa: E402
+    CONNECTION_EPOCH,
+    SERVED_PATHS,
+)
 from omicsclaw.entry.session import attach_sessions  # noqa: E402
 from omicsclaw.schema import Message, Role  # noqa: E402
 from tests.entry.test_turn_runner import (  # noqa: E402
@@ -94,7 +97,7 @@ def text_of(frames: list[dict]) -> str:
 def test_health_publishes_contract_v3_and_the_served_paths(tmp_path: pathlib.Path):
     payload = client(tmp_path).get("/health").json()
     assert payload["status"] == "ok"
-    assert set(payload["contracts"]) == {"desktop_chat"}
+    assert set(payload["contracts"]) == {"desktop_chat", "desktop_jobs"}
     chat = payload["contracts"]["desktop_chat"]
     assert chat["sse_schema_version"] == 3
     assert chat["request_schema_version"] == 3
@@ -166,7 +169,11 @@ def test_the_right_token_opens_every_kind_of_route(tmp_path: pathlib.Path):
     stream = http.post("/chat/stream", json=body(), headers=auth)
     assert stream.status_code == 200
     assert stream.headers["content-type"].startswith("text/event-stream")
-    assert frames_of(stream.text)[-1] == {"type": "done", "data": ""}
+    assert frames_of(stream.text)[-1] == {
+        "type": "done",
+        "data": "",
+        "epoch": CONNECTION_EPOCH,
+    }
 
     assert http.get("/files/tree", headers=auth).status_code == 200
     served_file = http.get("/files/serve", params={"path": "notes.txt"}, headers=auth)
@@ -270,7 +277,7 @@ def test_chat_stream_returns_sse_with_the_turn_id(tmp_path: pathlib.Path):
     assert response.headers["X-OmicsClaw-Turn-Id"]
     frames = frames_of(response.text)
     assert [frame["type"] for frame in frames[-2:]] == ["result", "done"]
-    assert frames[-1] == {"type": "done", "data": ""}
+    assert frames[-1] == {"type": "done", "data": "", "epoch": CONNECTION_EPOCH}
 
 
 @pytest.mark.parametrize(
@@ -303,7 +310,7 @@ def test_frames_carry_ids_and_the_ending_does_not(tmp_path: pathlib.Path):
     response = client(tmp_path).post("/chat/stream", json=body())
     frames = framed(response.text)
     assert frames[-2][0] is None and frames[-2][1]["type"] == "result"
-    assert frames[-1] == (None, {"type": "done", "data": ""})
+    assert frames[-1] == (None, {"type": "done", "data": "", "epoch": CONNECTION_EPOCH})
     ids = [event_id for event_id, frame in frames if frame["type"] == "text"]
     assert ids and all(isinstance(event_id, int) and event_id > 0 for event_id in ids)
 
@@ -859,8 +866,8 @@ def test_a_real_server_answers_a_card_and_stops_a_tool_mid_stream(
 
     assert stopped["ok"] is True and stopped["state"] == "cancelling"
     assert halted[-2:] == [
-        {"type": "error", "data": "cancelled"},
-        {"type": "done", "data": ""},
+        {"type": "error", "data": "cancelled", "epoch": CONNECTION_EPOCH},
+        {"type": "done", "data": "", "epoch": CONNECTION_EPOCH},
     ]
     assert elapsed < 2.0
 
