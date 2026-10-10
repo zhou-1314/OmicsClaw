@@ -43,7 +43,7 @@ from enum import StrEnum
 from typing import Any, Awaitable, Callable, Final, Mapping, Sequence
 
 from omicsclaw.entry.assembly import AgentApp
-from omicsclaw.entry.events import TurnEventType
+from omicsclaw.entry.events import TurnEvent, TurnEventType
 from omicsclaw.entry.ingress import Acceptance, InboundMessage
 from omicsclaw.entry.render import TextRenderer
 from omicsclaw.entry.session import QueueFull, RegistryClosed, SubmissionRefused
@@ -593,10 +593,23 @@ class ChannelRuntime:
         ``__anext__`` has no ``break`` hook), so without this the grace period
         that abandons an unwatched exchange would never start and the Task
         running it would leak. This is the one place that obligation lands.
+
+        A message that does not land is handled by what it carried. A
+        notice is a message of its own, so the pump logs the loss, stays
+        on the exchange and still sends the answer. Leaving would also
+        detach the only observer, and the registry cancels an exchange
+        nobody has watched for its grace period. An approval card that
+        did not land leaves its request open until the approval deadline,
+        where it is denied as it is when nobody answers. A piece of the
+        answer that does not land stops the pump (see :meth:`_send`). In
+        a deployment that streams the answer, text the renderer is still
+        holding is sent in front of the next notice, and that message
+        counts as a piece of the answer.
         """
         renderer = TextRenderer(batched=True, batch_chars=binding.text_chunk_limit)
         sent = 0
         streamed = False
+        unsent_text = False
         async with handle.observe() as observation:
             async for event in observation:
                 if event.type not in self._delivered_types:
@@ -608,13 +621,20 @@ class ChannelRuntime:
                         # indistinguishable from an answer still being
                         # written.
                         continue
+                unsent_text = unsent_text or event.type is TurnEventType.TEXT_DELTA
                 text = renderer.feed(event)
                 if not text:
                     continue
                 streamed = streamed or event.type is TurnEventType.TEXT_DELTA
-                landed = await self._send(binding, reply_target, text, handle, sent)
+                # Every emission empties the renderer, so the streamed text
+                # fed since the last one is in this message.
+                notice = None if unsent_text else event
+                unsent_text = False
+                landed = await self._send(
+                    binding, reply_target, text, handle, sent, notice=notice
+                )
                 sent += 1
-                if not landed:
+                if not landed and notice is None:
                     return
         tail = renderer.flush()
         if tail:
@@ -691,12 +711,22 @@ class ChannelRuntime:
         text: str,
         handle: TurnHandle,
         ordinal: int,
+        *,
+        notice: TurnEvent | None = None,
     ) -> bool:
         """Chunk one rendered message out, and say whether it landed.
 
-        ``False`` stops the pump. Pushing the rest of an answer at a
-        transport that just refused, or that may have taken a copy already,
-        turns one undelivered paragraph into an unreadable conversation.
+        *notice* is the frame the message renders when it is a notice with
+        no answer text in it, and ``None`` when it is answer text. It
+        chooses the warning logged for a message that did not land, and
+        the caller decides what happens next. The warning names the
+        exchange and the kind of message and leaves the text out, because
+        an approval card quotes the call it asks about.
+
+        Answer text that does not land stops the pump. Pushing the rest of
+        an answer at a transport that just refused, or that may have taken
+        a copy already, turns one undelivered paragraph into an unreadable
+        conversation.
         """
         if not reply_target:
             return False
@@ -713,11 +743,26 @@ class ChannelRuntime:
         )
         if result.acceptance is Acceptance.ACCEPTED:
             return True
-        _log.warning(
-            "reply for %s ended %s; not sending the rest of it",
-            handle.turn_id,
-            result.acceptance.value,
-        )
+        if notice is None:
+            _log.warning(
+                "reply for %s ended %s; not sending the rest of it",
+                handle.turn_id,
+                result.acceptance.value,
+            )
+        elif notice.type is TurnEventType.APPROVAL_REQUIRED:
+            _log.warning(
+                "approval card %s ended %s; the request stays open until its "
+                "deadline, and what follows is still sent",
+                notice.request_id,
+                result.acceptance.value,
+            )
+        else:
+            _log.warning(
+                "%s notice for %s ended %s; what follows is still sent",
+                notice.type.value,
+                handle.turn_id,
+                result.acceptance.value,
+            )
         return False
 
     # ---- internals -------------------------------------------------------

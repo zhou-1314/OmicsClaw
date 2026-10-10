@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import logging
 import pathlib
 import subprocess
 import sys
@@ -38,7 +39,10 @@ from omicsclaw.entry.channel.runtime import (
     VALUE_REPLY_TARGET,
     ChannelRuntime,
 )
-from omicsclaw.entry.channel.delivery import DeliveryAttemptOutcome
+from omicsclaw.entry.channel.delivery import (
+    DeliveryAdapterResult,
+    DeliveryAttemptOutcome,
+)
 from omicsclaw.entry.events import TurnEventType
 from omicsclaw.entry.ingress import InboundMessage
 from omicsclaw.entry.session import attach_sessions
@@ -156,6 +160,71 @@ class Holding(Scripted):
         return await super().generate(messages, tools)
 
 
+class Pausing:
+    """A backend that streams its text, then waits before it ends the reply.
+
+    While it waits the text is already on the stream and the exchange is
+    still running.
+    """
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    @property
+    def name(self) -> str:
+        return "pausing"
+
+    async def generate(self, messages, tools=None):
+        return Completion(message=Message(role=Role.ASSISTANT, content=self.text))
+
+    async def _stream(self, messages, tools=None):
+        yield StreamChunk(type=StreamChunkType.TEXT_DELTA, delta=self.text)
+        self.entered.set()
+        await self.release.wait()
+        yield StreamChunk(
+            type=StreamChunkType.DONE,
+            message=Message(role=Role.ASSISTANT, content=self.text),
+        )
+
+    def generate_stream(self, messages, tools=None):
+        return self._stream(messages, tools)
+
+    def bind(self, **overrides):
+        return self
+
+
+class Choosy(Transport):
+    """A transport that turns away the messages *refuses* picks out.
+
+    ``sent`` holds every attempt, as it does on :class:`Transport`, and
+    ``accepted`` holds the messages the platform took.
+    """
+
+    def __init__(
+        self,
+        refuses,
+        outcome: DeliveryAttemptOutcome = DeliveryAttemptOutcome.REJECTED_PERMANENT,
+    ) -> None:
+        super().__init__()
+        self.refuses = refuses
+        self.refusal = outcome
+        self.accepted: list[str] = []
+
+    async def __call__(self, request) -> DeliveryAdapterResult:
+        self.requests.append(request)
+        self.sent.append(request.text)
+        if self.refuses(request.text):
+            return DeliveryAdapterResult(outcome=self.refusal)
+        self.accepted.append(request.text)
+        return DeliveryAdapterResult(outcome=DeliveryAttemptOutcome.ACCEPTED)
+
+
+STREAMING = DEFAULT_DELIVERED_TYPES | {TurnEventType.TEXT_DELTA}
+"""The delivered set of a deployment that streams the answer as it is written."""
+
+
 def deployment(tmp_path, provider=None, **overrides):
     overrides.setdefault("approval_timeout_s", WAIT_S)
     tools = overrides.pop("tools", ())
@@ -226,43 +295,59 @@ def test_a_finished_reply_leaves_no_observer_attached(tmp_path):
     assert handle.stream.sealed
 
 
-def test_a_pump_that_stops_early_detaches_while_the_exchange_runs(tmp_path):
-    """The path ``async with`` exists for: leaving by ``break``.
+async def turned_away_mid_stream(tmp_path):
+    """A streamed piece of the answer is refused while the exchange runs.
 
-    A transport that refuses stops the pump partway. The exchange is still
-    running, so if the observation were left attached the count would stay
-    at one and the "last observer left" grace period could never fire —
-    which is exactly the leak nobody sees, because a leaked Task looks
-    like a busy agent.
+    Returns the observer count and the exchange's state at the moment the
+    pump had left, and the transport once the exchange has ended.
     """
+    transport = Transport(DeliveryAttemptOutcome.REJECTED_PERMANENT)
+    provider = Pausing("x" * 200)
+    app = deployment(tmp_path, provider)
+    runtime = ChannelRuntime(
+        app,
+        [binding_for(transport, text_chunk_limit=100)],
+        delivered_types=STREAMING,
+    )
+    await runtime.start()
+    result = await runtime.submit(message())
+    handle = result.handle
+    assert handle is not None
+    await asyncio.wait_for(provider.entered.wait(), WAIT_S)
+    await until(lambda: transport.sent and handle.turn_id not in runtime._replies)
+    detached = handle.stream.observer_count()
+    state = handle.state
 
-    async def scenario():
-        transport = Transport(DeliveryAttemptOutcome.REJECTED_PERMANENT)
-        provider = Holding()
-        app = deployment(tmp_path, provider)
-        runtime = await started(app, transport)
+    provider.release.set()
+    await asyncio.wait_for(handle.wait(), WAIT_S)
+    await runtime.close(WAIT_S)
+    return detached, state, transport
 
-        first = await runtime.submit(message(request="a"))
-        await asyncio.wait_for(provider.entered.wait(), WAIT_S)
-        # The second exchange is queued behind the first, so its QUEUED
-        # frame is published before it runs: a deliverable frame, refused
-        # by the transport, which stops its pump mid-exchange.
-        second = await runtime.submit(message(request="b"))
-        assert second.handle is not None
-        await until(lambda: transport.sent and second.handle.state != "terminal")
-        detached = second.handle.stream.observer_count()
-        running = second.handle.state
 
-        provider.release.set()
-        await asyncio.wait_for(first.handle.wait(), WAIT_S)
-        await asyncio.wait_for(second.handle.wait(), WAIT_S)
-        await runtime.close(WAIT_S)
-        return detached, running
+def test_a_pump_that_stops_early_detaches_while_the_exchange_runs(tmp_path):
+    """The path ``async with`` exists for: leaving the loop before its end.
 
-    detached, running = run(scenario())
+    In a deployment that streams the answer, a piece of it the platform
+    turns away stops the pump partway. The exchange is still running, so
+    if the observation were left attached the count would stay at one and
+    the "last observer left" grace period could never fire. A Task leaked
+    that way looks like a busy agent, so nobody notices it.
+    """
+    detached, state, _transport = run(turned_away_mid_stream(tmp_path))
 
-    assert running == "queued", "the exchange had not finished when the pump left"
-    assert detached == 0, "breaking out of the loop must still detach"
+    assert state == "running", "the exchange had not finished when the pump left"
+    assert detached == 0, "leaving the loop early must still detach"
+
+
+def test_streamed_text_the_platform_turns_away_stops_the_rest_of_the_reply(tmp_path):
+    """One refused piece of the answer, and nothing after it.
+
+    Sending the later pieces would put the end of an answer in front of a
+    person who never got its beginning.
+    """
+    _detached, _state, transport = run(turned_away_mid_stream(tmp_path))
+
+    assert len(transport.requests) == 1
 
 
 def test_the_pump_opens_its_observation_with_a_context_manager(tmp_path):
@@ -937,6 +1022,289 @@ def test_an_exchange_with_no_result_sends_its_notice_and_no_answer(
     assert transport.sent[0] == FIRST_ANSWER
     assert notice in transport.sent[1]
     assert FIRST_ANSWER not in transport.sent[1]
+
+
+# ---- a notice that does not land ---------------------------------------
+
+
+SECOND_ANSWER = "SECOND ANSWER."
+
+
+async def queued_behind(tmp_path, transport):
+    """Two messages to one chat, the second accepted while the first runs.
+
+    The second therefore gets a queue notice. Returns its handle once
+    both exchanges have ended and both replies have been pumped.
+    """
+    provider = Holding(
+        Message.assistant(FIRST_ANSWER), Message.assistant(SECOND_ANSWER)
+    )
+    app = deployment(tmp_path, provider)
+    runtime = await started(app, transport)
+    first = await runtime.submit(message("question 0", request="r0"))
+    assert first.handle is not None
+    await asyncio.wait_for(provider.entered.wait(), WAIT_S)
+    second = await runtime.submit(message("question 1", request="r1"))
+    assert second.handle is not None
+    await until(lambda: any(text.startswith("Queued") for text in transport.sent))
+    provider.release.set()
+    await asyncio.wait_for(second.handle.wait(), WAIT_S)
+    await runtime.close(WAIT_S)
+    return second.handle
+
+
+async def asking_once(tmp_path, transport):
+    """One exchange whose tool asks for approval and gets no answer.
+
+    The approval expires after 50 ms and the model then answers. Returns
+    the exchange's handle once its reply has been pumped.
+    """
+    provider = Scripted(calling("ask"), Message.assistant("ANSWER AFTER THE TOOL."))
+    app = deployment(tmp_path, provider, tools=(Asking(),), approval_timeout_s=0.05)
+    runtime = await started(app, transport)
+    result = await runtime.submit(message())
+    assert result.handle is not None
+    await asyncio.wait_for(result.handle.wait(), WAIT_S)
+    await runtime.close(WAIT_S)
+    return result.handle
+
+
+def runtime_warnings(caplog) -> list[str]:
+    """The warnings the channel runtime logged, as text."""
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "omicsclaw.entry.channel.runtime"
+        and record.levelno == logging.WARNING
+    ]
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        DeliveryAttemptOutcome.REJECTED_PERMANENT,
+        DeliveryAttemptOutcome.ACCEPTANCE_UNKNOWN,
+    ],
+    ids=["refused", "unknown"],
+)
+def test_a_queue_notice_that_does_not_land_does_not_cost_the_answer(tmp_path, outcome):
+    """The notice and the answer are separate messages.
+
+    Losing "Queued behind 1" costs the person one sentence. The exchange
+    still runs, and what it wrote is still sent.
+    """
+    transport = Choosy(lambda text: text.startswith("Queued"), outcome)
+
+    handle = run(queued_behind(tmp_path, transport))
+
+    assert handle.terminal == "converged"
+    assert transport.accepted == [FIRST_ANSWER, SECOND_ANSWER]
+
+
+@pytest.mark.parametrize(
+    "turned_away",
+    ["Approval required", "Approval denied"],
+    ids=["the card", "the verdict"],
+)
+def test_an_approval_notice_that_does_not_land_does_not_cost_the_answer(
+    tmp_path, turned_away
+):
+    transport = Choosy(lambda text: text.startswith(turned_away))
+
+    handle = run(asking_once(tmp_path, transport))
+
+    assert handle.terminal == "converged"
+    assert len(transport.accepted) == 2, "the other notice, then the answer"
+    assert transport.accepted[-1] == "ANSWER AFTER THE TOOL."
+
+
+@pytest.mark.parametrize(
+    "way_back", [True, False], ids=["a refused notice", "no reply target"]
+)
+def test_an_exchange_is_not_abandoned_when_its_notice_does_not_land(
+    tmp_path, way_back
+):
+    """The pump stays on the exchange after a notice that went nowhere.
+
+    A pump that left would take the only observer with it, and the
+    registry cancels an exchange nobody has watched for the grace
+    period. The grace here is 50 ms and the queued exchange waits six
+    times that before the one ahead of it is released.
+    """
+
+    async def scenario():
+        provider = Holding(
+            Message.assistant(FIRST_ANSWER), Message.assistant(SECOND_ANSWER)
+        )
+        app = attach_sessions(
+            make_app(tmp_path, provider, tools=(), approval_timeout_s=WAIT_S),
+            abandon_grace_s=0.05,
+        )
+        transport = Choosy(lambda text: text.startswith("Queued"))
+        runtime = await started(app, transport)
+        target = {VALUE_REPLY_TARGET: {"adapter": "feishu", "destination_id": "c1"}}
+
+        def to_the_chat(text: str, request: str) -> InboundMessage:
+            return InboundMessage(
+                text=text,
+                session_id="feishu:c1",
+                source_request_id=request,
+                sender=OWNER,
+                surface="feishu",
+                values=target if way_back else {},
+            )
+
+        first = await runtime.submit(to_the_chat("question 0", "r0"))
+        assert first.handle is not None
+        await asyncio.wait_for(provider.entered.wait(), WAIT_S)
+        second = await runtime.submit(to_the_chat("question 1", "r1"))
+        assert second.handle is not None
+        await asyncio.sleep(0.3)
+        watched = second.handle.stream.observer_count()
+        provider.release.set()
+        await asyncio.wait_for(second.handle.wait(), WAIT_S)
+        await runtime.close(WAIT_S)
+        return watched, second.handle, transport
+
+    watched, handle, transport = run(scenario())
+
+    assert watched == 1, "the pump left the exchange it was watching"
+    assert handle.terminal == "converged"
+    if way_back:
+        assert transport.accepted == [FIRST_ANSWER, SECOND_ANSWER]
+
+
+def test_an_approval_card_that_does_not_land_is_left_to_its_deadline(
+    tmp_path, caplog
+):
+    """Nobody saw the card, so the request ends the way an ignored one does.
+
+    It stays open until the approval deadline and is denied there. The
+    warning names the request, and leaves out the card's text, which
+    quotes the call being approved.
+    """
+    transport = Choosy(lambda text: text.startswith("Approval required"))
+
+    with caplog.at_level(logging.WARNING, logger="omicsclaw.entry.channel.runtime"):
+        handle = run(asking_once(tmp_path, transport))
+
+    settled = [
+        frame
+        for frame in handle.stream.retained()
+        if frame.type is TurnEventType.APPROVAL_SETTLED
+    ]
+    assert len(settled) == 1
+    assert settled[0].decision is not None
+    assert settled[0].decision.approved is False
+    assert settled[0].decision.reason == TIMEOUT_REASON
+    warnings = runtime_warnings(caplog)
+    assert any(
+        settled[0].request_id in line and "deadline" in line for line in warnings
+    ), warnings
+    assert not any("tool policy" in line for line in warnings)
+
+
+def test_a_notice_that_does_not_land_is_logged_as_a_notice(tmp_path, caplog):
+    """The warning says which kind of frame was lost and for which exchange.
+
+    It does not say the rest of the reply is held back, because the rest
+    is sent, and it does not quote the notice.
+    """
+    transport = Choosy(lambda text: text.startswith("Queued"))
+
+    with caplog.at_level(logging.WARNING, logger="omicsclaw.entry.channel.runtime"):
+        handle = run(queued_behind(tmp_path, transport))
+
+    warnings = runtime_warnings(caplog)
+    assert any(
+        handle.turn_id in line and "queued notice" in line for line in warnings
+    ), warnings
+    assert not any("not sending the rest" in line for line in warnings)
+    assert not any("Queued behind" in line for line in warnings)
+
+
+def test_an_answer_that_does_not_land_is_still_logged_as_the_reply(tmp_path, caplog):
+    """The warning for an answer says the rest of the reply is not sent."""
+
+    async def scenario():
+        transport = Choosy(lambda text: True)
+        app = deployment(tmp_path)
+        runtime = await started(app, transport)
+        result = await runtime.submit(message())
+        assert result.handle is not None
+        await asyncio.wait_for(result.handle.wait(), WAIT_S)
+        await runtime.close(WAIT_S)
+        return result.handle
+
+    with caplog.at_level(logging.WARNING, logger="omicsclaw.entry.channel.runtime"):
+        handle = run(scenario())
+
+    warnings = runtime_warnings(caplog)
+    assert any(
+        handle.turn_id in line and "not sending the rest" in line for line in warnings
+    ), warnings
+
+
+def test_a_notice_with_streamed_text_in_front_of_it_stops_the_pump_too(tmp_path):
+    """In a deployment that streams the answer, a notice can carry text.
+
+    Text still waiting in the batch is sent in front of the next notice,
+    in one message. When the platform turns that message away, a piece of
+    the answer is lost with it, and the pump stops as it does for any
+    other piece of the answer.
+    """
+
+    async def scenario():
+        beside = Message.assistant(
+            "Let me check.", tool_calls=(ToolCall(id="c0", name="ask", arguments="{}"),)
+        )
+        provider = Scripted(beside, Message.assistant("done"))
+        app = deployment(tmp_path, provider, tools=(Asking(),), approval_timeout_s=0.05)
+        transport = Transport(DeliveryAttemptOutcome.REJECTED_PERMANENT)
+        runtime = await started(app, transport, delivered_types=STREAMING)
+        result = await runtime.submit(message())
+        assert result.handle is not None
+        await asyncio.wait_for(result.handle.wait(), WAIT_S)
+        await runtime.close(WAIT_S)
+        return transport
+
+    transport = run(scenario())
+
+    assert len(transport.sent) == 1
+    assert transport.sent[0].startswith("Let me check.\nApproval required")
+
+
+def test_a_notice_after_streamed_text_has_gone_out_is_only_a_notice(tmp_path):
+    """Once a batch has been sent, the next notice carries no text.
+
+    Losing that notice does not stop the stream: the verdict and the
+    rest of the answer still go out.
+    """
+
+    async def scenario():
+        beside = Message.assistant(
+            "x" * 200, tool_calls=(ToolCall(id="c0", name="ask", arguments="{}"),)
+        )
+        provider = Scripted(beside, Message.assistant("done"))
+        app = deployment(tmp_path, provider, tools=(Asking(),), approval_timeout_s=0.05)
+        transport = Choosy(lambda text: text.startswith("Approval required"))
+        runtime = ChannelRuntime(
+            app,
+            [binding_for(transport, text_chunk_limit=100)],
+            delivered_types=STREAMING,
+        )
+        await runtime.start()
+        result = await runtime.submit(message())
+        assert result.handle is not None
+        await asyncio.wait_for(result.handle.wait(), WAIT_S)
+        await runtime.close(WAIT_S)
+        return transport
+
+    transport = run(scenario())
+
+    assert transport.accepted[:2] == ["x" * 100, "x" * 100]
+    assert any(text.startswith("Approval denied") for text in transport.accepted)
+    assert transport.accepted[-1] == "done"
 
 
 # ---- Q6: two conversations, two pumps ----------------------------------
