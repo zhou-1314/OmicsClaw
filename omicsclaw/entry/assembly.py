@@ -74,9 +74,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import platform
+import sqlite3
 import sys
 from dataclasses import dataclass, field
 from datetime import date
+from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
 from omicsclaw.context import (
@@ -124,6 +126,8 @@ from omicsclaw.provider import (
     provider_from_env,
     resolve_config,
 )
+from omicsclaw.memory.database import Database
+from omicsclaw.remote import RemotePlaneBinding
 from omicsclaw.sandbox import ChangeListener
 from omicsclaw.schema import Message, Role, ToolDefinition
 from omicsclaw.skills import SkillIndex, load_skills, use_skill_tool
@@ -142,6 +146,7 @@ from omicsclaw.tools import (
     read_tool,
 )
 from omicsclaw.tools.builtin.bash import BashEnvironment
+from omicsclaw.tools.builtin.remote import RemotePlane, remote_tools
 
 from .config import AppConfig, SkillsIndex
 from .memory import (
@@ -170,6 +175,7 @@ __all__ = [
     "AgentApp",
     "CONTRACT_FILE",
     "LOGGER_NAME",
+    "REMOTE_SCHEDULING_RULES",
     "SAFETY_RULES",
     "SHUTDOWN_GRACE_S",
     "TOOL_GUIDANCE",
@@ -259,6 +265,33 @@ what a definition cannot say: the relationship *between* tools, and that
 the sandbox refuses rather than clamps.
 """
 
+REMOTE_SCHEDULING_RULES = """\
+- Send work to a remote host with remote_submit only when one of these \
+holds: it needs a GPU; it would take more than about 10 minutes of local \
+CPU; it needs more memory than this machine has; the data it reads \
+already sits on that host; or the user named a host for it.
+- Keep parsing, plotting, format conversion and other lightweight work \
+local — do not ship it over SSH.
+- Use remote_exec for short bounded checks only (a path, a module, a \
+queue) and remote_submit for anything that should keep running after \
+the call returns; never park a long command in remote_exec.
+- Results larger than the fetch threshold stay on the remote host as a \
+remote:// reference; fetch them only when the user asks.
+- When the probe cannot tell you a host's partition, account or module \
+activation, ask the user with ask_about_host rather than guessing."""
+"""When work goes remote — the remote runtime plan's §2.4 rules.
+
+The Claude-Science scheduling text, adapted: the split this section
+exists to draw is *task-level*, not session-level — a session with a
+remote host attached still does its light work locally, and only the
+work that genuinely needs the far side travels. Rendered only when
+:attr:`~omicsclaw.entry.config.AppConfig.remote_execution` is on and a
+plane was bound, because rules naming tools that are not mounted cost
+turns on capabilities the deployment does not have (the same ruling
+``plan_tool`` follows)."""
+
+REMOTE_SECTION_HEADING = "## Remote execution"
+
 
 def build_skill_index(config: AppConfig) -> SkillIndex:
     """Scan the workspace's skills once.
@@ -293,6 +326,7 @@ def foundation_tools(
     plans: PlanBook | None = None,
     memory: MemoryBinding | None = None,
     skill_env: SkillEnvBinding | None = None,
+    remote: RemotePlane | None = None,
 ) -> tuple[Tool, ...]:
     """The six foundation tools, sharing one workspace, plus ``use_skill``.
 
@@ -336,6 +370,15 @@ def foundation_tools(
     ``ask_user`` is mounted after the memory pair when
     :attr:`AppConfig.ask_user` is on, and left out otherwise.
 
+    *remote* mounts the six-tool remote family over one injected
+    :class:`~omicsclaw.tools.builtin.remote.RemotePlane`, when
+    :attr:`AppConfig.remote_execution` is on; ``None`` (or the switch
+    off) leaves it out. Appended at the very end, after
+    ``install_skill_deps``, for the same byte-stability reason as every
+    other latecomer — and with both halves of the feature gated on the
+    same argument, so the tools and the scheduling-rules section of
+    :func:`default_sections` appear and disappear together.
+
     *skill_env* gives ``use_skill`` its environment-check callback, which
     changes what that tool returns and not which tools there are; when it
     carries ``install_skill_deps`` (``skill_env=install`` with ``bash`` on this
@@ -364,6 +407,8 @@ def foundation_tools(
         tools = (*tools, *memory_tools(memory))
     if config.ask_user:
         tools = (*tools, AskUserTool())
+    if config.remote_execution and remote is not None:
+        tools = (*tools, *remote_tools(remote))
     if skill_env is not None and skill_env.tool is not None:
         tools = (*tools, skill_env.tool)
     return tools
@@ -531,6 +576,7 @@ def default_sections(
     sandbox: SandboxBinding | None = None,
     plan_tool: bool = True,
     memory: MemoryBinding | None = None,
+    remote: bool = False,
 ) -> tuple[Section, ...]:
     """The sections of the default system prompt, in render order.
 
@@ -578,6 +624,15 @@ def default_sections(
     — and the last block is the one whose edit invalidates the least of
     a cached prefix.
 
+    Pass *remote* ``True`` to add the "Remote execution" scheduling
+    rules after the execution-sandbox block, before the skills catalogue
+    — static text like the planning block, so it sits with the other
+    static text and ahead of the blocks that vary. The caller passes
+    whether a plane was actually *bound*, not what the config asked for:
+    rules naming ``remote_submit`` with no such tool mounted are the
+    same cost as a planning block with no ``plan_write`` (see
+    *plan_tool* above).
+
     A missing file yields ``""`` and takes its whole section with it
     (``text_from_file``), so a deployment with no ``OMICSCLAW.md`` beside
     its skill tree gets a prompt with no contract section.
@@ -593,6 +648,16 @@ def default_sections(
     described = sandbox_section(sandbox) if sandbox is not None else None
     if described is not None:
         execution = (described,)
+
+    remote_rules: tuple[Section, ...] = ()
+    if remote:
+        remote_rules = (
+            Section(
+                "remote",
+                REMOTE_SECTION_HEADING,
+                static(REMOTE_SCHEDULING_RULES),
+            ),
+        )
 
     planning: tuple[Section, ...] = ()
     if config.planning and plan_tool:
@@ -614,6 +679,7 @@ def default_sections(
         Section("tools", "## Tool guidance", static(TOOL_GUIDANCE)),
         *planning,
         *execution,
+        *remote_rules,
         *catalogue,
         _environment_source(config),
         *remembered,
@@ -888,6 +954,17 @@ class AgentApp:
     """The environment check behind ``use_skill``'s note, or ``None`` when it is
     off, when ``skills_index`` is off, or when the caller supplied its own tools."""
 
+    remote: RemotePlaneBinding | None = None
+    """The remote execution plane, or ``None`` when the deployment is
+    local-only.
+
+    Set by :func:`build_app` exactly when
+    :attr:`~omicsclaw.entry.config.AppConfig.remote_execution` is on and
+    the plane's store opened; it is what the six ``remote_*`` /
+    ``ask_about_host`` tools run over, and what a surface with jobs of
+    its own hands :class:`~omicsclaw.remote.RemoteJobsBridge`. Its
+    database is closed by :meth:`aclose`."""
+
     telemetry: Telemetry = field(default_factory=Telemetry)
     """This deployment's recorder. **Never ``None``.**
 
@@ -1036,11 +1113,41 @@ class AgentApp:
                         if self.memory is not None:
                             self.memory.close()
                     finally:
-                        # Last, and after the sessions drained: a tool
-                        # still finishing inside the grace period is still
-                        # writing spans, and a backend shut down before it
-                        # loses exactly the records of the shutdown.
-                        await self.telemetry.aclose()
+                        try:
+                            if self.remote is not None:
+                                self.remote.close()
+                        finally:
+                            # Last, and after the sessions drained: a tool
+                            # still finishing inside the grace period is still
+                            # writing spans, and a backend shut down before it
+                            # loses exactly the records of the shutdown.
+                            await self.telemetry.aclose()
+
+
+def open_remote_plane(config: AppConfig) -> RemotePlaneBinding | None:
+    """Open the remote execution plane's store, or answer ``None``.
+
+    ``None`` is the off answer and it has two roads to it: the config
+    never asked, or the store under
+    ``<workspace>/.omicsclaw/remote.db`` could not be opened — a
+    workspace a SQLite file cannot live in is a deployment that cannot
+    honour ``remote_execution`` anyway, and halting the whole app over
+    an optional feature's database would be the tail wagging the dog.
+    The warning is logged rather than swallowed, because "I set the
+    flag and the tools are not there" is a question this line answers.
+
+    The one thing this function never does is probe: opening the plane
+    costs a local file, and a probe costs an SSH round-trip a
+    deployment that never submits anything should not pay at start-up.
+    """
+    if not config.remote_execution:
+        return None
+    try:
+        database = Database(Path(config.workspace) / ".omicsclaw" / "remote.db")
+    except (OSError, sqlite3.Error) as exc:
+        _log.warning("remote execution disabled: %s", exc)
+        return None
+    return RemotePlaneBinding(database)
 
 
 def build_app(
@@ -1154,6 +1261,14 @@ def build_app(
     # A second open would be a second connection to the same file, and
     # nothing would close it.
     remembering = open_memory(config)
+    # The remote plane is the one other thing built before the try, and
+    # for the same reason as the memory database: its SQLite store is a
+    # connection something must close, and the two halves of the feature
+    # (tools here, prompt section below) read the same binding so they
+    # cannot disagree. A plane that cannot be opened turns the feature
+    # off whole — tools and rules together — rather than mounting rules
+    # that name tools nothing answers.
+    remote_plane = open_remote_plane(config)
     try:
         if tools is None:
             mounted: Sequence[Tool] = foundation_tools(
@@ -1163,6 +1278,7 @@ def build_app(
                 plans=plans,
                 memory=remembering,
                 skill_env=checking,
+                remote=remote_plane,
             )
         else:
             mounted = tools
@@ -1227,6 +1343,7 @@ def build_app(
                 sandbox=binding,
                 plan_tool=plans is not None,
                 memory=remembering,
+                remote=remote_plane is not None,
             )
             if sections is None
             else sections
@@ -1251,6 +1368,8 @@ def build_app(
     except BaseException:
         if remembering is not None:
             remembering.close()
+        if remote_plane is not None:
+            remote_plane.close()
         raise
 
     _log.info(
@@ -1286,6 +1405,7 @@ def build_app(
         permission=gate,
         memory=remembering,
         skill_env=checking,
+        remote=remote_plane,
         telemetry=observing,
     )
 
@@ -1449,6 +1569,8 @@ async def _swept(app: AgentApp) -> AgentApp:
     except BaseException:
         if app.memory is not None:
             app.memory.close()
+        if app.remote is not None:
+            app.remote.close()
         raise
     return app
 
