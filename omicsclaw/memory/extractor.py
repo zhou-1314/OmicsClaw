@@ -19,6 +19,13 @@ EXTRACTION_SYSTEM_PROMPT = (
     "reusable procedures. Leave out anything tied to this session — file "
     "paths for one run, intermediate results, what the assistant is about "
     "to do next.\n\n"
+    "What NOT to save: anything the system can already derive. Artifacts, "
+    "their versions, lineage and status are recorded by the artifact "
+    "scanner; remote hosts and their configuration live in the host "
+    "registry; this conversation and everything compacted out of it stay "
+    "in the session history and the compaction archive. Before saving a "
+    "fact, ask whether one of those records already answers it — if so, "
+    "leave it out. Prefer what is surprising or non-obvious.\n\n"
     "Answer with a JSON array and nothing else. Each element is "
     '{"title", "content", "category", "importance"}, where category is one '
     "of knowledge, preference, task, skill, and importance is an integer "

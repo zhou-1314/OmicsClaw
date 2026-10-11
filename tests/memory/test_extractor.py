@@ -251,3 +251,14 @@ def test_repeated_extraction_of_the_same_fact_stays_one_entry() -> None:
 
     assert first.stored == second.stored
     assert len(stored) == 1
+
+
+def test_the_prompt_names_what_the_system_already_derives() -> None:
+    """The negative list: artifacts, remote hosts, the session history and
+    the compaction archive are recorded elsewhere, so facts answerable
+    from them must not enter the précis."""
+    from omicsclaw.memory.extractor import EXTRACTION_SYSTEM_PROMPT
+
+    assert "already derive" in EXTRACTION_SYSTEM_PROMPT
+    assert "compaction archive" in EXTRACTION_SYSTEM_PROMPT
+    assert "surprising or non-obvious" in EXTRACTION_SYSTEM_PROMPT
