@@ -450,6 +450,51 @@ def test_the_catalogue_can_be_switched_off_and_its_section_goes(tmp_path):
     )
 
 
+def test_the_memory_section_leaves_with_the_precis_migration(tmp_path):
+    """``precis_in_prompt=False`` drops the remembered block, nothing else.
+
+    The précis migrated to the TurnAugmentor channel; a prompt that kept
+    the section would send the same text twice. The default keeps the
+    block where it always was.
+    """
+    from omicsclaw.entry.memory import MEMORY_SECTION_KEY, open_memory
+
+    config = _config(tmp_path)
+    memory = open_memory(config)
+    assert memory is not None
+    try:
+        migrated = tuple(
+            s.key
+            for s in default_sections(
+                config, memory=memory, precis_in_prompt=False
+            )
+        )
+        stayed = tuple(
+            s.key for s in default_sections(config, memory=memory)
+        )
+    finally:
+        memory.close()
+
+    assert MEMORY_SECTION_KEY not in migrated
+    assert migrated == (
+        "contract",
+        "safety",
+        "tools",
+        "planning",
+        "skills",
+        "environment",
+    )
+    assert stayed == (
+        "contract",
+        "safety",
+        "tools",
+        "planning",
+        "skills",
+        "environment",
+        MEMORY_SECTION_KEY,
+    )
+
+
 def test_planning_off_takes_its_section_with_it(tmp_path):
     """One switch, and the prompt half of it.
 

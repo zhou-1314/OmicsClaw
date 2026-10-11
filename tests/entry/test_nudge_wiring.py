@@ -14,6 +14,7 @@ from omicsclaw.context import (
     DEFAULT_MEMORY_NUDGE_TURNS,
     MEMORY_NUDGE_TEXT,
     MemoryNudge,
+    VolatileBlock,
 )
 from omicsclaw.engine import AgentEngine, TurnAugmentor
 from omicsclaw.entry import assembly, nudges
@@ -548,3 +549,128 @@ def test_the_discovery_switches_default_on_and_three(tmp_path):
 
     assert config.skills_discovery is True
     assert config.skills_discovery_top_k == 3
+
+
+# ---- the precis block ------------------------------------------------------
+
+
+def test_the_precis_block_sits_between_the_reminder_and_discovery(
+    tmp_path, monkeypatch
+):
+    """Nudge first, precis after it, discovery next, the plan last —
+    the block is advice from outside the conversation, and the plan
+    block must stay the last thing the model reads."""
+    _skills_tree(tmp_path)
+    app = _app_with(
+        tmp_path, monkeypatch, _ScriptedProvider(), precis_via_augmentor=True
+    )
+    injector = _Member("the plan")
+    monkeypatch.setattr(
+        nudges, "build_injector", lambda app, *, session_id="": injector
+    )
+
+    augmentor = build_augmentor(app, session_id="sess-1")
+
+    assert isinstance(augmentor, AugmentorChain)
+    first, second, third, fourth = augmentor._members
+    assert isinstance(first, MemoryNudge)
+    assert isinstance(second, VolatileBlock)
+    assert isinstance(third, SkillDiscovery)
+    assert fourth is injector
+
+
+def test_the_default_chain_keeps_exactly_its_pre_migration_members(
+    tmp_path, monkeypatch
+):
+    """Off by default: nudge, discovery, plan — the precis stays in the
+    prompt and no new member appears."""
+    _skills_tree(tmp_path)
+    app = _app_with(tmp_path, monkeypatch, _ScriptedProvider())
+    injector = _Member("the plan")
+    monkeypatch.setattr(
+        nudges, "build_injector", lambda app, *, session_id="": injector
+    )
+
+    members = build_augmentor(app, session_id="sess-1")._members
+
+    assert [type(member) for member in members] == [
+        MemoryNudge,
+        SkillDiscovery,
+        type(injector),
+    ]
+    assert members[-1] is injector
+
+
+def test_without_memory_there_is_no_precis_block(tmp_path, monkeypatch):
+    app = _app_with(
+        tmp_path,
+        monkeypatch,
+        _ScriptedProvider(),
+        memory=False,
+        precis_via_augmentor=True,
+    )
+    injector = _Member("the plan")
+    monkeypatch.setattr(
+        nudges, "build_injector", lambda app, *, session_id="": injector
+    )
+
+    # No memory, no discovery index: the injector is the only member, so
+    # any précis block in the chain would be it and it is not.
+    assert build_augmentor(app, session_id="s") is injector
+
+
+def test_a_memory_write_reaches_the_block_on_the_very_next_call(
+    tmp_path, monkeypatch
+):
+    """The write rewrites the précis mid-exchange; the block re-reads it
+    per call, so the call right after the write carries the new text and
+    the call after that carries nothing — the diff, working live. The
+    first call carries nothing because the précis starts empty, and an
+    empty render sends nothing."""
+    provider = _ScriptedProvider(
+        replies=[
+            _calls(MEMORY_WRITE_TOOL_NAME, action="add", content="用 leiden 聚类"),
+            _searches(),
+            _says("done"),
+        ]
+    )
+    app = _app_with(
+        tmp_path, monkeypatch, provider, precis_via_augmentor=True
+    )
+
+    _run(run_turn(app, [], "remember leiden", session_id="s"))
+
+    blocks = [
+        [
+            message
+            for message in sent
+            if message.content.startswith("<long_term_memory>")
+        ]
+        for sent in provider.seen
+    ]
+    # Empty précis before the write: nothing to send on the first call.
+    # The write's rewrite makes the second call's render differ, so it
+    # sends the block once; the third render repeats it and sends nothing.
+    assert blocks[0] == []
+    assert len(blocks[1]) == 1
+    assert "用 leiden" in blocks[1][0].content
+    assert blocks[2] == []
+
+
+def test_the_precis_switch_reads_from_the_command_line_and_environment(tmp_path):
+    config = resolve_app_config(
+        argv=["--precis-via-augmentor", "true"],
+        env={"OMICSCLAW_WORKSPACE": str(tmp_path)},
+    )
+    assert config.precis_via_augmentor is True
+
+    config = resolve_app_config(
+        argv=[],
+        env={
+            "OMICSCLAW_WORKSPACE": str(tmp_path),
+            "OMICSCLAW_PRECIS_VIA_AUGMENTOR": "1",
+        },
+    )
+    assert config.precis_via_augmentor is True
+
+    assert AppConfig(workspace=tmp_path).precis_via_augmentor is False

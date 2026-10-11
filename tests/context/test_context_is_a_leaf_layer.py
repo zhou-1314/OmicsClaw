@@ -480,7 +480,9 @@ def test_the_public_surface_is_exactly_what_plan_0030_delivered():
     constants. Widened once more with ``drop_unanswered_calls``, which
     the entry layer calls when an exchange opens. Widened once more with
     ``CompactionArchiver`` — the seam the entry layer hands the removed
-    messages through — when the compaction archive landed.
+    messages through — when the compaction archive landed, and with
+    ``VolatileBlock``, the diffing shell the entry layer builds the
+    précis block over.
 
     Seven modules' worth of names, and the shape of the list is the
     argument: every Protocol on it (``TokenCounter``, ``Summarizer``)
@@ -528,6 +530,7 @@ def test_the_public_surface_is_exactly_what_plan_0030_delivered():
         "SectionSource",
         "Summarizer",
         "TokenCounter",
+        "VolatileBlock",
         "apply_compaction",
         "assemble",
         "at_least",

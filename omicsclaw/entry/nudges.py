@@ -11,9 +11,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Sequence
 
-from omicsclaw.context import MemoryNudge
+from omicsclaw.context import MemoryNudge, VolatileBlock
 from omicsclaw.engine import TurnAugmentor
-from omicsclaw.schema import Message, ToolDefinition
+from omicsclaw.schema import Message, Role, ToolDefinition
 from omicsclaw.skills import SkillDiscovery
 
 from .memory import MEMORY_WRITE_TOOL_NAME
@@ -78,13 +78,16 @@ def chain(*members: TurnAugmentor | None) -> TurnAugmentor | None:
 def build_augmentor(app: "AgentApp", *, session_id: str = "") -> TurnAugmentor | None:
     """The augmentor for one main-agent exchange of *session_id*, or ``None``.
 
-    The memory reminder comes first, the skill discovery block after it,
-    and the plan injector last, so the plan block stays the last thing
-    the model reads. Building it restores the session's plan, as
-    :func:`~omicsclaw.entry.planning.build_injector` does.
+    The memory reminder comes first, then the long-term memory précis
+    block (when :attr:`~omicsclaw.entry.config.AppConfig.
+    precis_via_augmentor` moved it out of the system prompt), then the
+    skill discovery block, and the plan injector last, so the plan block
+    stays the last thing the model reads. Building it restores the
+    session's plan, as :func:`~omicsclaw.entry.planning.build_injector`
+    does.
 
     Sub-agent exchanges do not go through here and get no memory
-    reminder and no discovery block.
+    reminder, no précis block and no discovery block.
 
     :param app: The deployment the exchange runs in.
     :param session_id: The session whose plan is injected.
@@ -93,9 +96,39 @@ def build_augmentor(app: "AgentApp", *, session_id: str = "") -> TurnAugmentor |
     """
     return chain(
         _memory_nudge(app),
+        _precis_block(app),
         _skill_discovery(app),
         build_injector(app, session_id=session_id),
     )
+
+
+def _precis_block(app: "AgentApp") -> VolatileBlock | None:
+    """The long-term memory précis, restated only while it changes, or ``None``.
+
+    The text is the précis file the prompt's memory section renders, moved
+    to the augmentor channel when the switch is on: ``memory_write``
+    rewrites that file mid-session, and an edited block on the sent copy
+    costs one exchange's message where an edited prompt section cost the
+    whole cached prompt prefix. The block re-reads the file on every
+    model call, so a write is visible to the very next one; the text is
+    compared against what it last sent, so an unchanged précis sends
+    nothing.
+
+    :returns: ``None`` when
+        :attr:`~omicsclaw.entry.config.AppConfig.precis_via_augmentor` is
+        off — the précis stays the prompt's last section — or when the
+        deployment keeps no memory database to hold a précis.
+    """
+    if not app.config.precis_via_augmentor or app.memory is None:
+        return None
+
+    def wrap(text: str) -> Message:
+        return Message(
+            role=Role.USER,
+            content=f"<long_term_memory>\n{text}\n</long_term_memory>",
+        )
+
+    return VolatileBlock(render=app.memory.precis.read, wrap=wrap)
 
 
 def _skill_discovery(app: "AgentApp") -> SkillDiscovery | None:

@@ -848,6 +848,7 @@ def default_sections(
     memory: MemoryBinding | None = None,
     remote: bool = False,
     archive: bool = False,
+    precis_in_prompt: bool = True,
 ) -> tuple[Section, ...]:
     """The sections of the default system prompt, in render order.
 
@@ -894,6 +895,13 @@ def default_sections(
     mid-session, where the environment block only turns over at midnight
     — and the last block is the one whose edit invalidates the least of
     a cached prefix.
+
+    Pass *precis_in_prompt* ``False`` to leave the memory block out even
+    though *memory* is bound. The caller passes
+    ``not config.precis_via_augmentor``: when the précis migrated to the
+    TurnAugmentor channel it is restated per model call instead of
+    living in the prompt, and a deployment with the block in both places
+    would send it twice.
 
     Pass *remote* ``True`` to add the "Remote execution" scheduling
     rules after the execution-sandbox block, before the skills catalogue
@@ -951,7 +959,7 @@ def default_sections(
         )
 
     remembered: tuple[Section, ...] = ()
-    if memory is not None:
+    if memory is not None and precis_in_prompt:
         remembered = (memory_section(memory),)
 
     compaction: tuple[Section, ...] = ()
@@ -1758,6 +1766,7 @@ def build_app(
                 memory=remembering,
                 remote=remote_plane is not None,
                 archive=config.compaction_archive and remembering is not None,
+                precis_in_prompt=not config.precis_via_augmentor,
             )
             if sections is None
             else sections

@@ -136,6 +136,7 @@ from .tokens import (
     estimate_tool_tokens,
     format_token_count,
 )
+from .volatile import VolatileBlock
 from .transcript import (
     MISSING_TOOL_RESULT,
     drop_unanswered_calls,
@@ -182,6 +183,7 @@ __all__ = [
     "SectionSource",
     "Summarizer",
     "TokenCounter",
+    "VolatileBlock",
     "apply_compaction",
     "assemble",
     "at_least",

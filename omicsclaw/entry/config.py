@@ -308,6 +308,17 @@ class AppConfig:
     as well. ``0`` turns the reminder off. It is never given when
     :attr:`memory` is false."""
 
+    precis_via_augmentor: bool = False
+    """Whether the long-term memory précis rides the TurnAugmentor channel.
+
+    Off by default: the précis stays the system prompt's last section,
+    as it always has. When on, that section leaves the prompt and the
+    précis is re-rendered into the sent copy of each model call only
+    while its text changes — ``memory_write`` stops invalidating the
+    cached prompt prefix, at the cost of one extra message per exchange
+    boundary. The mechanism ships first; flipping the default is a
+    separate, measured decision."""
+
     subagents: bool = True
     """Whether the agent may delegate a sub-task to a sub-agent.
 
@@ -993,6 +1004,12 @@ _OPTIONS: tuple[_Option, ...] = (
         "--memory-nudge-turns",
         ("OMICSCLAW_MEMORY_NUDGE_TURNS",),
         _as_int,
+    ),
+    _Option(
+        "precis_via_augmentor",
+        "--precis-via-augmentor",
+        ("OMICSCLAW_PRECIS_VIA_AUGMENTOR",),
+        _as_bool,
     ),
     _Option("subagents", "--subagents", ("OMICSCLAW_SUBAGENTS",), _as_bool),
     _Option("ask_user", "--ask-user", ("OMICSCLAW_ASK_USER",), _as_bool),
