@@ -659,13 +659,15 @@ def test_the_desktop_frame_names_are_the_clients_and_not_invented() -> None:
         "keep_alive",
         "done",
         "error",
-        # P6 item 4: published by this backend in sse_schema_version 3 as
-        # an additive frame (see desktop/turn_observation.py), and consumed
-        # by the App's stream switch as an unknown-type-dropped frame.
-        "shadow_review",
     }
     assert set(DESKTOP_CHAT_FRAME_TYPE) <= set(TurnEventType)
-    assert set(DESKTOP_CHAT_FRAME_TYPE.values()) <= published
+    # P6 item 4: "shadow_review" is backend-internal — the frame carries
+    # an automatic reviewer's verdict and the client drops unknown types,
+    # so it is deliberately NOT in the client-literal set above. The
+    # verdict's delivery channel is the next-turn nudge; a GUI may
+    # surface the frame later, which is the moment the client literal
+    # joins this pin.
+    assert set(DESKTOP_CHAT_FRAME_TYPE.values()) - {"shadow_review"} <= published
     assert TurnEventType.EXCHANGE_END not in DESKTOP_CHAT_FRAME_TYPE
 
 

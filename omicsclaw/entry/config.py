@@ -966,6 +966,24 @@ _OPTIONS: tuple[_Option, ...] = (
         ("OMICSCLAW_MEMORY_NUDGE_TURNS",),
         _as_int,
     ),
+    _Option(
+        "shadow_review",
+        "--shadow-review",
+        ("OMICSCLAW_SHADOW_REVIEW",),
+        _as_bool,
+    ),
+    _Option(
+        "shadow_review_model",
+        "--shadow-review-model",
+        ("OMICSCLAW_SHADOW_REVIEW_MODEL",),
+        _as_str,
+    ),
+    _Option(
+        "shadow_review_timeout_s",
+        "--shadow-review-timeout",
+        ("OMICSCLAW_SHADOW_REVIEW_TIMEOUT_S",),
+        _as_float,
+    ),
     _Option("subagents", "--subagents", ("OMICSCLAW_SUBAGENTS",), _as_bool),
     _Option("ask_user", "--ask-user", ("OMICSCLAW_ASK_USER",), _as_bool),
     _Option(

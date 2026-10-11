@@ -90,7 +90,23 @@ _MAX_ARTIFACT_LINE_CHARS = 200
 _MAX_HISTORY_EXCERPT_CHARS = 4000
 _MAX_TOKENS = 256
 
-_VERDICT_LINE = re.compile(r"\AVERDICT:\s*(PASS|WARN|FAIL)\b")
+_VERDICT_LINE = re.compile(
+    r"\A\s*(?:\*\*)?VERDICT\s*:\s*(PASS|WARN|FAIL)(?:\*\*)?(?=\s|$)",
+    re.IGNORECASE,
+)
+"""How the first line of a reviewer answer is read.
+
+Lenient on purpose: a reviewer wraps the word in ``**``, lowercases it,
+or indents it, and none of that is a reason to read the answer as a
+silent pass. Everything after the word is the note."""
+
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def _strip_controls(text: str) -> str:
+    """*text* without the control characters a hostile or broken answer
+    could smuggle into a message the main model is then shown."""
+    return _CONTROL_CHARS.sub("", text)
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +115,9 @@ class ShadowReviewVerdict:
 
     ``verdict`` is ``"pass"``, ``"warn"`` or ``"fail"``; anything the
     reviewer wrote that is not recognisably one of those is read as
-    ``"pass"`` — a garbled review is not a reason to interrupt anyone.
+    ``"pass"`` — and logged, so a garbled review is noticed rather than
+    silently eaten — because a garbled review is not a reason to
+    interrupt anyone.
     """
 
     verdict: str
@@ -110,14 +128,26 @@ def parse_verdict(text: str) -> ShadowReviewVerdict:
     """Read a reviewer answer as a verdict, quietly.
 
     The first line must start with ``VERDICT: PASS|WARN|FAIL`` (the same
-    ``VERDICT:`` convention the module-review archive uses); the rest of
-    the answer is the note, capped at :data:`MAX_REVIEW_NOTE_CHARS`.
+    ``VERDICT:`` convention the module-review archive uses), with
+    optional ``**`` marks around the word and any case; the rest of the
+    answer is the note, control characters stripped and capped at
+    :data:`MAX_REVIEW_NOTE_CHARS`. An answer that cannot be read is
+    ``pass`` — but a non-empty one is logged, because a reviewer that
+    keeps sending unreadable answers is a configuration worth seeing.
     """
-    match = _VERDICT_LINE.match(str(text or "").lstrip())
+    raw = str(text or "")
+    match = _VERDICT_LINE.match(raw)
     if match is None:
+        if raw.strip():
+            _log.info(
+                "shadow review: unreadable reviewer answer (%r)", raw[:120]
+            )
         return ShadowReviewVerdict("pass")
-    note = str(text).split("\n", 1)[1].strip() if "\n" in str(text) else ""
-    return ShadowReviewVerdict(match[1].lower(), note[:MAX_REVIEW_NOTE_CHARS])
+    note = raw.split("\n", 1)[1].strip() if "\n" in raw else ""
+    return ShadowReviewVerdict(
+        match[1].lower(),
+        _strip_controls(note)[:MAX_REVIEW_NOTE_CHARS],
+    )
 
 
 @dataclass(slots=True)
@@ -132,6 +162,13 @@ class ShadowReviewCheckpoint:
     returning and resetting the batch — when the batch holds
     :data:`SHADOW_REVIEW_ARTIFACT_THRESHOLD` records or when any one of
     them has a structured kind.
+
+    **The window is bounded by the caller.** The store is asked for the
+    newest :data:`_REVIEW_LOOKBACK` records per evaluation. When every
+    row that read returned is newer than the watermark, at least one more
+    batch of new rows fell off the window's older edge unseen — the
+    overflow guard below fires the count trigger rather than let the
+    watermark jump past rows that never counted.
     """
 
     session_id: str
@@ -144,7 +181,8 @@ class ShadowReviewCheckpoint:
         """Fold *records* (newest first, as the store returns them) into
         the window and answer the batch a trigger fires, if any.
 
-        :param records: The store's newest rows for this session.
+        :param records: The store's newest rows for this session, capped
+            at :data:`_REVIEW_LOOKBACK` by the caller.
         :returns: The accumulated new records when this call crossed a
             trigger — the batch the reviewer should be shown, cleared by
             this call — or ``[]``.
@@ -156,6 +194,11 @@ class ShadowReviewCheckpoint:
             self._watermark = newest
             return []
         new = [r for r in records if _newer(r, self._watermark)]
+        # Overflow guard: a full window of all-new rows means at least
+        # _REVIEW_LOOKBACK artifacts arrived between evaluations, which
+        # crosses the count trigger by construction — fire with what this
+        # window can see rather than advance the watermark silently.
+        overflow = len(records) >= _REVIEW_LOOKBACK and len(new) == len(records)
         self._watermark = newest
         if not new:
             return []
@@ -165,7 +208,11 @@ class ShadowReviewCheckpoint:
         structured = any(
             record.kind in STRUCTURED_ARTIFACT_KINDS for record in new
         )
-        if structured or len(self._batch) >= SHADOW_REVIEW_ARTIFACT_THRESHOLD:
+        if (
+            overflow
+            or structured
+            or len(self._batch) >= SHADOW_REVIEW_ARTIFACT_THRESHOLD
+        ):
             fired = self._batch
             self._batch = []
             return fired

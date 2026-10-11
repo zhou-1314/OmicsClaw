@@ -262,6 +262,66 @@ def test_build_app_mounts_the_binding_only_when_switched_on(tmp_path):
     assert isinstance(on.shadow_review, ShadowReview)
 
 
+def test_the_verdict_line_accepts_markdown_marks_case_and_blank_lead():
+    assert parse_verdict("**VERDICT: WARN**").verdict == "warn"
+    assert parse_verdict("**VERDICT: FAIL** redo it").verdict == "fail"
+    assert parse_verdict("verdict: fail").verdict == "fail"
+    assert parse_verdict("Verdict: Pass").verdict == "pass"
+    assert parse_verdict("\n\nVERDICT: WARN\nrecheck").verdict == "warn"
+    assert parse_verdict("  VERDICT: PASS").verdict == "pass"
+
+
+def test_an_unreadable_but_nonempty_answer_is_logged_and_read_as_pass(caplog):
+    with caplog.at_level("INFO", logger="omicsclaw.entry.shadow_review"):
+        verdict = parse_verdict("the reviewer exploded mid-sentence")
+    assert verdict.verdict == "pass"
+    assert any("unreadable reviewer answer" in line for line in caplog.text.splitlines())
+
+
+def test_the_note_is_stripped_of_control_characters():
+    # ESC and BEL are control characters; the printable "[8m" of the ANSI
+    # sequence is not and survives — the strip removes only what the main
+    # model should never be shown.
+    verdict = parse_verdict("VERDICT: WARN\nwatch \x1b[8mthis\x07.")
+    assert verdict.note == "watch [8mthis."
+    assert "\x1b" not in verdict.note and "\x07" not in verdict.note
+    verdict = parse_verdict("VERDICT: WARN\nclean\nnote")
+    assert verdict.note == "cleannote"
+
+
+def test_a_full_window_of_new_rows_fires_the_count_trigger():
+    # The store reads at most _REVIEW_LOOKBACK newest rows. When all of
+    # them are new, at least one more batch fell off the window's older
+    # edge — the checkpoint fires rather than let the watermark jump past
+    # rows that never counted, and the fired batch is everything it saw.
+    from omicsclaw.entry.shadow_review import _REVIEW_LOOKBACK
+
+    checkpoint = ShadowReviewCheckpoint("s1")
+    checkpoint.evaluate(records(1))
+    window = [artifact(index=index) for index in range(2, _REVIEW_LOOKBACK + 2)]
+    fired = checkpoint.evaluate(list(reversed(window)))
+    assert len(fired) == _REVIEW_LOOKBACK
+    # The oldest row of the window is in the batch: nothing was skipped.
+    assert fired[-1].id == window[0].id
+    assert checkpoint.evaluate(records(1, 2)) == []
+
+
+def test_the_review_prompt_is_bounded_by_construction():
+    from omicsclaw.entry.shadow_review import _review_prompt
+    from omicsclaw.schema import Message
+
+    bulky = [
+        artifact(index=index, kind="report", session_id="s1")
+        for index in range(60)
+    ]
+    history = [
+        Message(role=Role.ASSISTANT, content="z" * 20_000),
+    ]
+    prompt = _review_prompt("s1", bulky, history)
+    assert len(prompt.encode("utf-8")) < 16_000
+    assert len(history[0].content) > len(prompt)
+
+
 def test_an_unbound_binding_changes_no_stream_bytes(tmp_path):
     # The detector's only observable is the artifact store; without one
     # it answers [] and the stream vocabulary is untouched by default.

@@ -11,16 +11,16 @@ than a guess. The CLI cannot know the port a *running* desktop server
 was bound to; what it can say is the port both sides default to —
 :data:`DEFAULT_HANDOFF_PORT` mirrors ``omicsclaw.launch._surfaces.
 DESKTOP_PORT`` (8765), which the OmicsClaw App also spawns its backend
-with (``src/lib/backend-contract.ts``). The App therefore treats the
-field as a sanity hint — a mismatch between the URL and its configured
-backend port is worth a warning, but routing always goes through the
-App's own backend. ``/handoff <port>`` lets a user who serves on a
-non-default port say so.
+with (``src/lib/backend-contract.ts``). The App parses the field and
+carries it in state for diagnostics, but never uses it for connection:
+routing always goes through the App's own configured backend, and
+adoption is by session id through the shared workspace database.
+``/handoff <port>`` lets a user who serves on a non-default port say so.
 """
 
 from __future__ import annotations
 
-import re
+from omicsclaw.entry.session import HANDOFF_SESSION_ID
 
 __all__ = [
     "DEFAULT_HANDOFF_PORT",
@@ -33,12 +33,13 @@ DEFAULT_HANDOFF_PORT = 8765
 """The port the URL names when the user gives none. See the module
 docstring for why this number and why the field is advisory."""
 
-HANDOFF_SESSION_ID = re.compile(r"\A[0-9A-Za-z._-]{1,64}\Z")
-"""The closed charset a session id must fit to enter a handoff URL.
-
-The CLI's own ids are 8 hex characters and the desktop's are 32; the
-wider set is the one the backend's ``_session_slug`` already tolerates,
-and the length cap keeps the URL from carrying an unbounded payload."""
+# HANDOFF_SESSION_ID is re-exported rather than defined here: the closed
+# charset a session id must fit is one contract, and its canonical
+# definition lives in ``omicsclaw/entry/session.py`` beside the id
+# vocabulary. The OmicsClaw-App repo keeps its own copy of the same
+# pattern in ``src/lib/deep-link.ts`` (HANDOFF_SESSION_ID_PATTERN) — the
+# two repos cannot import each other, so the copies must be edited
+# together and this comment names the counterpart.
 
 
 def handoff_url(session_id: str, port: int = DEFAULT_HANDOFF_PORT) -> str:
