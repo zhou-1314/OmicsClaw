@@ -1,9 +1,9 @@
 ---
 name: proteomics-quantification
-description: Load when computing per-protein abundance from a peptide / PSM table via LFQ (intensity summation),
-  iBAQ (intensity / tryptic peptide count), or spectral counting (PSMs per protein). Skip when the input
-  is already protein-level (use proteomics-ms-qc); label-based TMT / iTRAQ workflows (search upstream
-  first).
+description: Load when computing per-protein abundance from a peptide / PSM table via LFQ (intensity
+  summation), iBAQ (intensity / tryptic peptides), or spectral counting. Skip when the input is
+  already protein-level (use proteomics-ms-qc); label-based TMT / iTRAQ workflows (search
+  upstream first).
 trigger: protein quantification, LFQ, TMT, DIA, DIA-NN, Skyline
 tags:
 - proteomics

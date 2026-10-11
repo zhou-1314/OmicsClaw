@@ -1,9 +1,9 @@
 ---
 name: proteomics-data-import
-description: Load when ingesting a MaxQuant `proteinGroups.txt`, FragPipe `combined_protein.tsv`, DIA-NN
-  report, or generic CSV / TSV protein-quantification table — normalises columns to a standard schema,
-  emits `tables/proteins.csv`. Skip when raw spectra are the input (run the search engine first); the
-  file is already OmicsClaw schema.
+description: Load when ingesting a MaxQuant `proteinGroups.txt`, FragPipe `combined_protein.tsv`,
+  DIA-NN report, or generic CSV / TSV protein table — normalises columns to a standard schema.
+  Skip when raw spectra are the input (run the search engine first); the file is already in
+  OmicsClaw schema.
 trigger: data import, convert proteomics, format conversion
 tags:
 - proteomics
