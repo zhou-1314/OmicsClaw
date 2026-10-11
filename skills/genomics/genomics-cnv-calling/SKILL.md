@@ -1,9 +1,9 @@
 ---
 name: genomics-cnv-calling
-description: Load when calling CNV segments via CBS-style segmentation on a bin-level log2-ratio CSV from
-  exome / WGS coverage — emits per-segment 5-class CN state (`amplification` / `gain` / `neutral` / `loss`
-  / `deep_deletion`), per-chromosome summary, genome-fraction-altered. Skip when working with single-cell
-  / spatial CNV (use spatial-cnv).
+description: Load when calling CNV segments via CBS-style segmentation on a bin-level log2-ratio CSV
+  from exome / WGS coverage — emits 5-class CN state (`amplification` / `gain` / `neutral` /
+  `loss`) and genome-fraction summary. Skip when working with single-cell / spatial CNV (use
+  spatial-cnv).
 trigger: CNV, copy number, amplification, deletion, CNVkit
 tags:
 - genomics

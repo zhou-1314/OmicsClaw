@@ -1,8 +1,9 @@
 ---
 name: genomics-qc
-description: Load when running pre-alignment FASTQ quality control — Phred quality scores, Q20/Q30 rates,
-  GC / N content, read-length distribution, adapter-contamination detection. Skip when working with already-aligned
-  BAMs (use genomics-alignment); peak / variant files are the input (use the relevant downstream skill).
+description: Load when running pre-alignment FASTQ quality control — Phred scores, Q20/Q30 rates, GC /
+  N content, read-length distribution, adapter detection. Skip when working with already-aligned
+  BAMs (use genomics-alignment); peak or variant files are the input (use the relevant
+  downstream skill).
 trigger: sequencing QC, FastQC, read quality, adapter trimming, fastp
 tags:
 - genomics

@@ -1,9 +1,9 @@
 ---
 name: genomics-variant-annotation
-description: Load when summarising functional impact of an annotated variant CSV — per-IMPACT counts (HIGH
-  / MODERATE / LOW / MODIFIER), top consequences, gene-affected count. Skip when input is a raw VCF (convert
-  with `bcftools +split-vep` first); calling raw variants (use genomics-variant-calling); filtering VCFs
-  (use genomics-vcf-operations).
+description: Load when summarising functional impact of an annotated CSV — per-IMPACT counts (HIGH /
+  MODERATE / LOW), top consequences. Skip when the input is a raw VCF (convert with `bcftools
+  +split-vep` first); calling variants (use genomics-variant-calling); filtering VCFs (use
+  genomics-vcf-operations).
 trigger: variant annotation, VEP, snpEff, ANNOVAR, functional effect
 tags:
 - genomics
