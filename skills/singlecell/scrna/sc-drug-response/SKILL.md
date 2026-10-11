@@ -1,8 +1,9 @@
 ---
 name: sc-drug-response
-description: Load when scoring drug sensitivity per cluster on an annotated scRNA AnnData via simple-correlation
-  against drug-target signatures or via CaDRReS-Sc pretrained models (GDSC / PRISM). Skip when the AnnData
-  has no cluster labels yet (use sc-clustering); predicting genetic-perturbation effects (use sc-in-silico-perturbation).
+description: Load when scoring drug sensitivity per cluster on an annotated scRNA AnnData via
+  drug-target signature correlation or CaDRReS-Sc models (GDSC / PRISM). Skip when the AnnData
+  has no cluster labels (use sc-clustering); predicting genetic-perturbation effects (use
+  sc-in-silico-perturbation).
 tags:
 - singlecell
 - scrna

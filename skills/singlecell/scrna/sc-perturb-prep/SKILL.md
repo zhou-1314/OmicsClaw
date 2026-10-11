@@ -1,9 +1,9 @@
 ---
 name: sc-perturb-prep
-description: Load when attaching cell-barcode → sgRNA assignments from a mapping TSV/CSV onto a Perturb-seq
-  expression AnnData, producing standardised perturbation / sgRNA / target-gene obs columns. Skip when
-  the AnnData already has perturbation labels (use sc-perturb); raw guide-calling from FASTQ (use upstream
-  demuxlet / cellranger guide pipelines).
+description: Load when attaching cell-barcode → sgRNA assignments onto a Perturb-seq AnnData, producing
+  standardised perturbation / sgRNA / target-gene columns. Skip when the AnnData already has
+  perturbation labels (use sc-perturb); guide-calling from FASTQ (run demuxlet / cellranger
+  upstream).
 tags:
 - singlecell
 - scrna
