@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from omicsclaw.entry.config import SkillsIndex
 from omicsclaw.evals import Result, ScriptedProvider, ScriptedTurn, run_case, tool_call
 from omicsclaw.evals.case import SkillRun
 from omicsclaw.evals.live import (
@@ -408,3 +409,60 @@ def test_a_step_ledger_names_the_executed_skill_and_its_keyword_arguments(tmp_pa
     verdict = judge(make_result(workspace=tmp_path, skill_runs=runs), seed, [_reply("sc-cell-annotation")], [])
     assert verdict.executed_skill == "sc-cell-annotation" and verdict.outcome == "correct"
     assert verdict.args_ok is True
+
+
+# ---- the prompt shapes ------------------------------------------------------
+
+
+def test_the_full_shape_is_the_baseline_configuration():
+    from omicsclaw.evals.live import shape_config
+
+    assert shape_config("full") == {"skills_index": SkillsIndex.FULL, "skills_discovery": False}
+
+
+def test_the_compact_shape_pairs_the_map_with_the_block():
+    from omicsclaw.evals.live import shape_config
+
+    assert shape_config("compact+discovery") == {
+        "skills_index": SkillsIndex.COMPACT,
+        "skills_discovery": True,
+    }
+
+
+def test_an_unknown_shape_names_the_ones_that_exist():
+    from omicsclaw.evals.live import shape_config
+
+    with pytest.raises(ValueError) as caught:
+        shape_config("tiny")
+
+    assert "compact+discovery" in str(caught.value)
+
+
+def test_a_case_carries_its_shape_into_the_app_config(tmp_path):
+    from omicsclaw.evals.live import PROMPT_SHAPE_COMPACT, live_case
+
+    seed = Seed("bulkrna__deseq2", "bulkrna", "Compare two conditions.", ("bulkrna-de",), "route",
+                inputs=("data/counts.csv",))
+    case, _ = live_case(seed, lambda: None, tmp_path / "ws", skill_index(),
+                        shape=PROMPT_SHAPE_COMPACT)
+
+    assert case.config["skills_index"] is SkillsIndex.COMPACT
+    assert case.config["skills_discovery"] is True
+
+
+def test_an_explicit_config_key_beats_the_shape(tmp_path):
+    seed = Seed("bulkrna__deseq2", "bulkrna", "Compare two conditions.", ("bulkrna-de",), "route",
+                inputs=("data/counts.csv",))
+    case, _ = live_case(seed, lambda: None, tmp_path / "ws", skill_index(),
+                        config={"skills_discovery": True})
+
+    assert case.config["skills_discovery"] is True
+    assert case.config["skills_index"] is SkillsIndex.FULL
+
+
+def test_the_report_metadata_records_the_shape():
+    from omicsclaw.evals.live import run_meta
+
+    meta = run_meta("p", "m", "u", 0.0, 3, shape="compact+discovery")
+
+    assert meta["prompt_shape"] == "compact+discovery"

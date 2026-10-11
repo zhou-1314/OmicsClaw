@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from omicsclaw.entry.config import SkillEnvMode
+from omicsclaw.entry.config import SkillEnvMode, SkillsIndex
 from omicsclaw.entry.project import STEP_RUNNER
 from omicsclaw.permission.gate import DOTENV_NAME
 from omicsclaw.provider import Completion, LLMProvider, ProviderError
@@ -53,6 +53,9 @@ from .stubs import REPO_ROOT, StubResult, _git_commit, find_skill_run
 __all__ = [
     "CATEGORY",
     "FALLBACK_STUB",
+    "PROMPT_SHAPE_COMPACT",
+    "PROMPT_SHAPE_FULL",
+    "PROMPT_SHAPES",
     "SEED_FILE",
     "Denial",
     "LiveReport",
@@ -74,6 +77,39 @@ __all__ = [
 CATEGORY = "live_routing"
 SEED_FILE = REPO_ROOT / "tests" / "evals" / "fixtures" / "live_routing_seed.json"
 LIVE_MAX_TURNS = 6
+
+PROMPT_SHAPE_FULL = "full"
+"""The baseline shape: the full catalogue in the prompt, no discovery block.
+
+Discovery is switched off here rather than left to its default because a
+baseline must be the *before* numbers — a full catalogue with a
+discovery block riding on it is a third configuration nobody asked to
+measure."""
+
+PROMPT_SHAPE_COMPACT = "compact+discovery"
+"""The candidate shape: the domain map, the search tool, the per-turn block."""
+
+PROMPT_SHAPES = (PROMPT_SHAPE_FULL, PROMPT_SHAPE_COMPACT)
+
+
+def shape_config(shape: str) -> dict[str, object]:
+    """The :class:`~omicsclaw.entry.AppConfig` overrides that realize *shape*.
+
+    Two keys, the ones the two layers of the coordination change read:
+    ``skills_index`` for the static catalogue and ``skills_discovery``
+    for the per-turn block. Everything else — provider, model, trials,
+    seeds — is shared, which is what makes two runs of different shapes
+    comparable: the prompt is the only thing that moved.
+
+    :raises ValueError: *shape* is not one of :data:`PROMPT_SHAPES`,
+        naming the ones that exist rather than guessing.
+    """
+    if shape == PROMPT_SHAPE_FULL:
+        return {"skills_index": SkillsIndex.FULL, "skills_discovery": False}
+    if shape == PROMPT_SHAPE_COMPACT:
+        return {"skills_index": SkillsIndex.COMPACT, "skills_discovery": True}
+    known = ", ".join(PROMPT_SHAPES)
+    raise ValueError(f"{shape!r} is not a prompt shape (known: {known})")
 
 FALLBACK_STUB = StubResult(
     stdout="[eval] {skill} run recorded; outputs in {output}",
@@ -507,6 +543,7 @@ def live_case(
     trial: int = 0,
     stubs: Mapping[str, StubResult] | None = None,
     config: Mapping[str, object] | None = None,
+    shape: str = PROMPT_SHAPE_FULL,
 ) -> tuple[Case, list[Denial]]:
     """The case for one trial of *seed*, and the list its policy records denials in.
 
@@ -523,11 +560,13 @@ def live_case(
     :param trial: The trial number, part of the case id.
     :param stubs: Recorded stubs by skill name.
     :param config: :class:`~omicsclaw.entry.AppConfig` overrides, applied
-        over ``skill_env=probe``; the real ``provider`` and ``model``
-        belong here.
+        over ``skill_env=probe`` and *shape*; the real ``provider`` and
+        ``model`` belong here, and an explicit key beats the shape's.
+    :param shape: Which prompt shape the case runs under, as one of
+        :data:`PROMPT_SHAPES`; see :func:`shape_config`.
     """
     denials: list[Denial] = []
-    fields: dict[str, object] = {"skill_env": SkillEnvMode.PROBE}
+    fields: dict[str, object] = {"skill_env": SkillEnvMode.PROBE, **shape_config(shape)}
     fields.update(config or {})
     case = Case(
         id=f"{CATEGORY}/{seed.id}-t{trial}",
@@ -774,8 +813,19 @@ def build_report(meta: Mapping[str, Any], seeds: Sequence[SeedReport]) -> LiveRe
     return LiveReport(meta=stamped, seeds=tuple(seeds))
 
 
-def run_meta(provider: str, model: str, base_url: str, temperature: float, trials: int) -> dict[str, Any]:
-    """The metadata a report records about the run."""
+def run_meta(
+    provider: str,
+    model: str,
+    base_url: str,
+    temperature: float,
+    trials: int,
+    shape: str = PROMPT_SHAPE_FULL,
+) -> dict[str, Any]:
+    """The metadata a report records about the run.
+
+    *shape* lands in the report as ``prompt_shape`` so a comparison of
+    two shapes can be told apart from a comparison of two models.
+    """
     return {
         "git_commit": _git_commit(),
         "provider": provider,
@@ -783,6 +833,7 @@ def run_meta(provider: str, model: str, base_url: str, temperature: float, trial
         "base_url": base_url,
         "temperature": temperature,
         "trials": trials,
+        "prompt_shape": shape,
         "seed_file_sha256": seed_digest(),
     }
 
@@ -962,7 +1013,7 @@ def compare(old: Mapping[str, Any], new: Mapping[str, Any]) -> str:
     model or base_url differ, since the numbers are then not comparable.
     """
     lines: list[str] = []
-    keys = ("provider", "model", "base_url")
+    keys = ("provider", "model", "base_url", "prompt_shape")
     changed = [
         f"{key}: {old['meta'].get(key)!r} -> {new['meta'].get(key)!r}"
         for key in keys
