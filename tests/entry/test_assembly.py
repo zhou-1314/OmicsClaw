@@ -431,6 +431,7 @@ def test_the_default_prompt_is_contract_then_safety_then_guidance_in_this_order(
         "contract",
         "safety",
         "tools",
+        "follow-ups",
         "planning",
         "skills",
         "environment",
@@ -445,6 +446,7 @@ def test_the_catalogue_can_be_switched_off_and_its_section_goes(tmp_path):
         "contract",
         "safety",
         "tools",
+        "follow-ups",
         "planning",
         "environment",
     )

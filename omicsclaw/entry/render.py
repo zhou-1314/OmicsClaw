@@ -92,6 +92,7 @@ truth and the client's vocabulary is the Desktop Surface's to speak.
 
 from __future__ import annotations
 
+import json
 import math
 from typing import Any, Final
 
@@ -147,6 +148,7 @@ DESKTOP_CHAT_FRAME_TYPE: Final[dict[TurnEventType, str]] = {
     TurnEventType.TOOL_RESULT: "tool_result",
     TurnEventType.PROGRESS: "tool_output",
     TurnEventType.APPROVAL_REQUIRED: "permission_request",
+    TurnEventType.SUGGESTIONS: "suggestions",
 }
 """``/chat/stream`` frame names for the types the published contract has
 one for.
@@ -170,6 +172,57 @@ not a lookup.
 """
 
 _WIRE_SCHEMA_VERSION: Final = 1
+
+HUMAN_DESCRIPTION_CHARS: Final = 160
+"""Ceiling for one human-readable summary line. Generous for a sentence,
+small for a payload: the summary is a lead line on a card, not the
+card's body."""
+
+
+def human_tool_description(tool: str, arguments: str = "") -> str:
+    """One plain-language line for a tool call, from its name and arguments.
+
+    The cheap half of the approval-card experience win (P6 item 1, on
+    the precedent P1 set for ``tool_started`` frames): a card that says
+    "run spatial_domains clustering (n=12)" instead of a JSON blob.
+    Never raises — an unparseable payload degrades to the tool's name.
+    Lives in this layer because both planes that need it — the chat
+    approval frame here, and the jobs plane's ``tool_started`` /
+    ``tool_approval_request`` events — sit at or above it.
+
+    Deliberately reads only the handful of argument keys a decision
+    needs (command, method, name, skill, file, path and small numeric
+    knobs). Everything else the payload carries — a credential a caller
+    passed, a long data blob — never reaches the summary, so the line
+    cannot show more than the raw ``arguments`` beside it already do.
+    """
+
+    label = tool.rsplit("/", 1)[-1].replace("_", " ").strip() or tool
+    try:
+        decoded = json.loads(arguments) if arguments else {}
+    except (TypeError, ValueError):
+        decoded = {}
+    if not isinstance(decoded, dict):
+        decoded = {}
+    facts: list[str] = []
+    command = decoded.get("command")
+    if isinstance(command, str) and command.strip():
+        facts.append(command.strip().splitlines()[0].strip())
+    for key in ("method", "name", "skill", "file", "path"):
+        value = decoded.get(key)
+        if isinstance(value, str) and value.strip():
+            facts.append(value.strip())
+    for key in ("n", "n_domains", "count", "resolution", "epochs"):
+        value = decoded.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            facts.append(key + "=" + str(value))
+    summary = " ".join(facts)[:HUMAN_DESCRIPTION_CHARS]
+    verb = "run"
+    for candidate in ("delete", "remove", "write", "read"):
+        if candidate in tool.lower():
+            verb = candidate
+            break
+    return ("{verb} {label} {summary}".format(verb=verb, label=label, summary=summary)).strip()
 
 
 class TextRenderer:
@@ -290,6 +343,8 @@ class TextRenderer:
             return _tool_result_line(event)
         if kind is TurnEventType.APPROVAL_REQUIRED:
             return _approval_line(event)
+        if kind is TurnEventType.SUGGESTIONS:
+            return _suggestions_line(event)
         if kind is TurnEventType.APPROVAL_SETTLED:
             return _settled_line(event)
         if kind is TurnEventType.QUESTION_ASKED:
@@ -393,6 +448,20 @@ def _approval_line(event: TurnEvent) -> str:
     )
     body, _cut = approval_body(request)
     return f"{header} - {body}" if body else header
+
+
+def _suggestions_line(event: TurnEvent) -> str | None:
+    """The chips a terminal surface cannot render as chips.
+
+    The Desktop client gets the structured frame; this line is for the
+    CLI and the Channels, where the questions are still useful as text.
+    ``None`` when the frame carries none — the kernel does not publish
+    an empty one, and a stray must not print a bare heading.
+    """
+    questions = event.suggestions
+    if not questions:
+        return None
+    return "Follow-ups: " + " | ".join(inert_line(q) for q in questions)
 
 
 def _settled_line(event: TurnEvent) -> str:
@@ -528,6 +597,8 @@ def _payload(event: TurnEvent) -> dict[str, Any]:
         return _compaction_payload(event)
     if kind is TurnEventType.APPROVAL_REQUIRED:
         return _approval_payload(event)
+    if kind is TurnEventType.SUGGESTIONS:
+        return {"suggestions": list(event.suggestions)}
     if kind is TurnEventType.APPROVAL_SETTLED:
         decision = event.decision
         return {
@@ -645,6 +716,14 @@ def _approval_payload(event: TurnEvent) -> dict[str, Any]:
         "reason": request.reason,
         "risk_level": request.risk_level.value,
         "approval_mode": request.approval_mode.value,
+        # P6 item 1: the one-line plain-language lead for the card,
+        # additive beside the raw arguments (an older client that does
+        # not know the field ignores it). The tool's own reason, when it
+        # wrote one, beats the derived line — same ruling the jobs plane
+        # makes for its approval events.
+        "summary": (request.reason or human_tool_description(request.tool_name, request.arguments))[
+            :HUMAN_DESCRIPTION_CHARS
+        ],
     }
 
 
@@ -663,9 +742,11 @@ __all__ = [
     "BATCH_CHARS",
     "DESKTOP_CHAT_FRAME_TYPE",
     "ELAPSED_INCLUDES_APPROVAL_WAIT",
+    "HUMAN_DESCRIPTION_CHARS",
     "REASONING_PREFIX",
     "USAGE_UNREPORTED",
     "USAGE_ZERO",
     "TextRenderer",
+    "human_tool_description",
     "to_wire",
 ]

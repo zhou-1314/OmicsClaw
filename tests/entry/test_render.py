@@ -193,6 +193,9 @@ def _one_of_every_type() -> dict[TurnEventType, TurnEvent]:
             QuestionAnswer(AnswerStatus.NO_ANSWER, reason=QUESTION_TIMEOUT_REASON),
             seq=13,
         ),
+        TurnEventType.SUGGESTIONS: TurnEvent.suggestions_offered(
+            ("What clustering resolution?", "Show the marker heatmap?"), seq=14
+        ),
         TurnEventType.TURN_END: _turn_end(Usage(input_tokens=10, output_tokens=4)),
         TurnEventType.GAP: TurnEvent.gap_at(8, 11, session_id="s", turn_id="t"),
         TurnEventType.EXCHANGE_END: TurnEvent.exchange_end(
@@ -411,6 +414,8 @@ def test_an_approval_prompt_shows_the_arguments_that_will_actually_run() -> None
     assert wire["arguments"] == _ARGUMENTS
     assert wire["risk_level"] == "high"
     assert wire["request_id"] == "req-1"
+    # P6: the reason the tool wrote is the card's summary line, verbatim.
+    assert wire["summary"] == "delete 412 files under /data/run-7"
 
 
 def _approval_by(subagent: str) -> TurnEvent:
@@ -639,7 +644,8 @@ def test_the_desktop_frame_names_are_the_clients_and_not_invented() -> None:
     """Q24: ``/chat/stream``'s vocabulary belongs to the external client
     (``server.py:2006-2020``, and the matching literals in the App's
     ``api/chat/route.ts``). Types with no published name are absent rather
-    than given one here."""
+    than given one here. ``suggestions`` (P6) publishes the name in the
+    same stroke the App's ``useSSEStream`` gains its ``case``."""
     published = {
         "status",
         "mode_changed",
@@ -652,6 +658,7 @@ def test_the_desktop_frame_names_are_the_clients_and_not_invented() -> None:
         "permission_request",
         "ask_user_question",
         "task_update",
+        "suggestions",
         "result",
         "keep_alive",
         "done",

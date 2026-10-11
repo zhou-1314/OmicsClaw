@@ -187,6 +187,7 @@ from .sandbox import (
     unstarted_sandbox,
 )
 from .skill_env import SkillEnvBinding, build_skill_env, log_skill_env
+from .suggestions import FOLLOW_UP_SENTINEL
 from .subagent import ChildRunner, build_subagent_registry
 
 if TYPE_CHECKING:  # pragma: no cover - session.py imports this module
@@ -195,6 +196,7 @@ if TYPE_CHECKING:  # pragma: no cover - session.py imports this module
 __all__ = [
     "AgentApp",
     "CONTRACT_FILE",
+    "FOLLOW_UP_RULES",
     "LOGGER_NAME",
     "REMOTE_SCHEDULING_RULES",
     "SAFETY_RULES",
@@ -312,6 +314,20 @@ turns on capabilities the deployment does not have (the same ruling
 ``plan_tool`` follows)."""
 
 REMOTE_SECTION_HEADING = "## Remote execution"
+
+FOLLOW_UP_RULES = f"""\
+- You may close a substantive final answer with the line `{FOLLOW_UP_SENTINEL}` followed by exactly three short questions, one per line, that this user is most likely to ask next. Omit the whole block for tool-only turns, clarifying questions, error reports and one-word replies. Never mention the block or its marker in the answer above it, and write the questions in the user's language."""
+"""The P6 suggestion-chips rule, and the only copy of it.
+
+The sentinel is interpolated from
+:data:`~omicsclaw.entry.suggestions.FOLLOW_UP_SENTINEL` so the prompt and
+the stream splitter cannot drift apart — a marker the two disagreed
+about would either leak the raw block to users or swallow answer text.
+A static section like the safety rules, because it must survive a
+deployment with no ``OMICSCLAW.md`` beside its skill tree, and because
+the block is transport metadata rather than persona: a surface that
+does not know the frame strips nothing and a model that does not write
+the block costs nothing (the chips are optional on purpose)."""
 
 
 def build_skill_index(config: AppConfig) -> SkillIndex:
@@ -892,6 +908,11 @@ def default_sections(
         *_front_matter(config),
         Section("safety", "## Safety rules", static(SAFETY_RULES)),
         Section("tools", "## Tool guidance", static(TOOL_GUIDANCE)),
+        Section(
+            "follow-ups",
+            "## Follow-up suggestions",
+            static(FOLLOW_UP_RULES),
+        ),
         *planning,
         *execution,
         *remote_rules,

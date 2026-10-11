@@ -39,9 +39,10 @@ from omicsclaw.tools.context import (
 )
 
 
-def test_the_vocabulary_is_the_sixteen_members_the_plans_froze() -> None:
-    """Plan 0031's fourteen, and plan 0054's two for a question to the
-    person, placed after the approval pair they resemble."""
+def test_the_vocabulary_is_the_plans_members_plus_the_answer_extras() -> None:
+    """Plan 0031's fourteen, plan 0054's two for a question to the
+    person, and P6's one for follow-up suggestions — placed after the
+    question pair they follow an answer besides."""
     assert [member.value for member in TurnEventType] == [
         "exchange_start",
         "queued",
@@ -56,6 +57,7 @@ def test_the_vocabulary_is_the_sixteen_members_the_plans_froze() -> None:
         "approval_settled",
         "question_asked",
         "question_settled",
+        "suggestions",
         "turn_end",
         "gap",
         "exchange_end",
@@ -84,6 +86,7 @@ def test_only_increments_are_droppable() -> None:
         TurnEventType.APPROVAL_SETTLED,
         TurnEventType.QUESTION_ASKED,
         TurnEventType.QUESTION_SETTLED,
+        TurnEventType.SUGGESTIONS,
         TurnEventType.TURN_END,
         TurnEventType.GAP,
         TurnEventType.EXCHANGE_END,

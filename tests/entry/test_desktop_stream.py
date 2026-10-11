@@ -722,6 +722,8 @@ def test_a_permission_request_frame_carries_the_v2_fields():
         "reason": "run: echo hi",
         "risk_level": "high",
         "approval_mode": "ask",
+        # P6: the one-line summary, additive beside the raw arguments.
+        "summary": "run: echo hi",
         "reason_shows_call": True,
         "ask_every_time": True,
         "can_remember": False,
