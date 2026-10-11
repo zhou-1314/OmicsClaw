@@ -1,9 +1,9 @@
 ---
 name: spatial-microenvironment-subset
-description: Load when extracting a niche / microenvironment subset around a center cell-type by spatial
-  radius from a labelled spatial AnnData, producing a smaller AnnData of centers + their within-radius
-  neighbours. Skip when running global tissue-domain detection (use spatial-domains); cross-condition
-  comparison (use spatial-condition).
+description: Load when extracting a niche / microenvironment subset around a center cell type by radius
+  from a labelled spatial AnnData, producing a smaller AnnData of centers + neighbours. Skip
+  when running global tissue-domain detection (use spatial-domains); cross-condition comparison
+  (use spatial-condition).
 trigger: microenvironment, neighborhood subset, spatial radius, neighboring cells, nearby cells, tumor microenvironment, extract cells within 50 microns
 tags:
 - spatial

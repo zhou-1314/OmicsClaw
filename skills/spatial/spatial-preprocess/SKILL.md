@@ -1,9 +1,9 @@
 ---
 name: spatial-preprocess
-description: Load when running the foundational spatial transcriptomics QC + filtering + normalisation
-  + HVG + PCA + neighbour-graph + Leiden pipeline on a Visium / Xenium / generic spatial AnnData. Skip
-  when raw FASTQs need converting first (use spatial-raw-processing); tissue-domain detection on already-preprocessed
-  data (use spatial-domains).
+description: Load when running the foundational spatial QC + filtering + normalisation + HVG + PCA +
+  neighbour-graph + Leiden pipeline on a Visium / Xenium / generic AnnData. Skip when raw FASTQs
+  need converting first (use spatial-raw-processing); domain detection on preprocessed data (use
+  spatial-domains).
 trigger: preprocess, spatial preprocessing, spatial QC, normalize, visium, xenium, merfish, slide-seq, load spatial data, leiden, umap
 tags:
 - spatial

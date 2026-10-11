@@ -1,9 +1,9 @@
 ---
 name: spatial-cnv
-description: Load when inferring copy-number variation per spot on a preprocessed spatial AnnData with
-  chromosome-annotated genes via infercnvpy (default — log-ratio sliding-window) or Numbat (R, allele-aware
-  clone deconvolution). Skip when `var["chromosome"]` / `var["start"]` / `var["end"]` gene-coord metadata
-  is missing; no normal-reference subset can be defined.
+description: Load when inferring copy-number variation on a preprocessed spatial AnnData with gene
+  coordinates in `var` via infercnvpy (sliding-window) or Numbat (R). Skip when
+  `var["chromosome"]` / `var["start"]` / `var["end"]` metadata is missing; no normal-reference
+  subset can be defined.
 trigger: copy number variation, CNV, inferCNV, infercnvpy, Numbat, aneuploidy, chromosomal aberration, tumor clone
 tags:
 - spatial

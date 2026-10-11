@@ -1,9 +1,9 @@
 ---
 name: spatial-domains
-description: Load when detecting tissue domains / niches on a preprocessed spatial AnnData via Leiden
-  / Louvain (spatial-weighted) or graph-neural backends (SpaGCN / STAGATE / GraphST / BANKSY / CellCharter).
-  Skip when ranking spatially variable genes (use spatial-genes); spot-level cell-type annotation (use
-  spatial-annotate).
+description: Load when detecting tissue domains / niches on a preprocessed spatial AnnData via
+  spatial-weighted Leiden / Louvain or graph-neural backends (SpaGCN / STAGATE / GraphST). Skip
+  when ranking spatially variable genes (use spatial-genes); spot-level cell-type annotation
+  (use spatial-annotate).
 trigger: spatial domain, tissue region, niche, spatial niche, niche identification, niche detection, SpaGCN, STAGATE, CellCharter
 tags:
 - spatial

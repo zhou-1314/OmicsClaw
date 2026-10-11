@@ -1,9 +1,9 @@
 ---
 name: spatial-velocity
-description: Load when estimating RNA velocity on a spatial AnnData with `layers["spliced"]` + `layers["unspliced"]`
-  via scVelo (stochastic / deterministic / dynamical) or veloVI (deep generative). Skip when input lacks
-  the spliced/unspliced layers (must be quantified upstream by velocyto / kb-python / STARsolo); non-spatial
-  scRNA velocity (use sc-velocity).
+description: Load when estimating RNA velocity on a spatial AnnData with `layers["spliced"]` +
+  `layers["unspliced"]` via scVelo (stochastic / deterministic / dynamical) or veloVI. Skip when
+  input lacks the spliced/unspliced layers (quantify upstream first); non-spatial scRNA velocity
+  (use sc-velocity).
 trigger: RNA velocity, cellular dynamics, scVelo, VELOVI, latent time, spliced unspliced
 tags:
 - spatial
