@@ -11,16 +11,18 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Sequence
 
 from omicsclaw.context import (
     BudgetReport,
+    CompactionArchiver,
     CompactionRecord,
     CompactionState,
     Offloader,
     ProgressiveCompactor,
 )
-from omicsclaw.memory import FileOffloadStore, JsonlCompactionLog
+from omicsclaw.memory import FileOffloadStore, JsonlCompactionLog, SqliteCompactionArchive
+from omicsclaw.schema import Message
 
 from .config import STATE_DIRNAME, AppConfig
 from .memory import build_memory_extractor
@@ -73,6 +75,58 @@ def compaction_log(config: AppConfig) -> JsonlCompactionLog:
     return JsonlCompactionLog(_state_dir(config) / RECORDS_DIRNAME)
 
 
+class _SessionArchiver:
+    """One session's :class:`CompactionArchiver` over the memory database.
+
+    Adapts :class:`~omicsclaw.memory.SqliteCompactionArchive.append` to
+    the protocol the context layer calls: it keeps the session's
+    compaction number itself, seeded from the rows that are already
+    there and raised by one per archived batch, so two compactions of
+    one exchange never share a number even though ``compact()`` has no
+    state to hand one down. ``seq_hint`` — where in the history the
+    removed run began — is forwarded as the batch's start position,
+    which is what it is a hint of.
+    """
+
+    def __init__(self, store: SqliteCompactionArchive, session_id: str) -> None:
+        self._store = store
+        self._session_id = session_id
+        self._next: int | None = None
+
+    async def archive(
+        self, messages: Sequence[Message], *, seq_hint: int
+    ) -> object:
+        if self._next is None:
+            self._next = await self._store.next_seq(self._session_id)
+        seq = self._next
+        self._next += 1
+        written = await self._store.append(
+            self._session_id, seq, messages, start_position=seq_hint
+        )
+        _log.info(
+            "compaction.archived session=%s seq=%d rows=%d",
+            self._session_id or "-",
+            seq,
+            written,
+        )
+        return written
+
+
+def _compaction_archiver(app: "AgentApp", session_id: str) -> CompactionArchiver | None:
+    """The archiver one exchange's compactions write through, or ``None``.
+
+    ``None`` when :attr:`AppConfig.compaction_archive` is off or the
+    deployment keeps no memory database — the switch owns the table
+    writes, the tools and the prompt section together, so a deployment
+    that turns it off sees none of the three.
+    """
+    if not app.config.compaction_archive or app.memory is None:
+        return None
+    return _SessionArchiver(
+        SqliteCompactionArchive(app.memory.database), session_id
+    )
+
+
 def build_compactor(
     app: "AgentApp",
     *,
@@ -85,7 +139,9 @@ def build_compactor(
 
     Compacts from :attr:`AppConfig.compact_at` upwards, keeps the system
     message, offloads into :func:`offload_store`, hands summarized-away
-    messages to an extractor when there is one, and logs every compaction
+    messages to an extractor when there is one, archives what each
+    compaction removes into the memory database when
+    :attr:`AppConfig.compaction_archive` is on, and logs every compaction
     that changed the conversation or failed to :func:`compaction_log`. A
     listener that raises or a log that cannot be written costs a log
     line, never the exchange or the other.
@@ -109,6 +165,7 @@ def build_compactor(
     extractor = app.memory_extractor
     if extractor is None:
         extractor = build_memory_extractor(app.memory, app.summarizer)
+    archiver = _compaction_archiver(app, session_id)
 
     async def record(entry: CompactionRecord) -> None:
         if on_compact is not None:
@@ -141,6 +198,7 @@ def build_compactor(
         summarizer=app.summarizer,
         offloader=Offloader(offload_store(config, session_id)),
         extractor=extractor,
+        archiver=archiver,
         state=state,
         pinned=PINNED_SYSTEM_MESSAGES,
         trigger=config.compact_at,

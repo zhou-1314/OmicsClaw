@@ -23,6 +23,7 @@ from omicsclaw.schema import Message, ToolDefinition
 from .budget import BudgetReport, ContextBudget, Pressure, at_least, measure
 from .compaction import (
     DEFAULT_MIN_TAIL,
+    CompactionArchiver,
     CompactionRecord,
     CompactionState,
     MemoryExtractor,
@@ -75,6 +76,8 @@ class ProgressiveCompactor:
     :param offloader: Moves oversized tool results out of the head.
         ``None`` disables offloading.
     :param extractor: Reads messages before a summary replaces them.
+    :param archiver: Reads the messages a compaction removes, after the
+        result has been measured. ``None`` archives nothing.
     :param state: Summary and anchors carried over from earlier runs.
     :param pinned: Leading messages never compacted — ``1`` for a system
         prompt at index 0.
@@ -96,6 +99,7 @@ class ProgressiveCompactor:
         summarizer: Summarizer | None = None,
         offloader: Offloader | None = None,
         extractor: MemoryExtractor | None = None,
+        archiver: CompactionArchiver | None = None,
         state: CompactionState | None = None,
         pinned: int = 0,
         min_tail: int = DEFAULT_MIN_TAIL,
@@ -108,6 +112,7 @@ class ProgressiveCompactor:
         self._summarizer = summarizer
         self._offloader = offloader
         self._extractor = extractor
+        self._archiver = archiver
         self._state = state if state is not None else CompactionState()
         self._pinned = pinned
         self._min_tail = min_tail
@@ -181,6 +186,7 @@ class ProgressiveCompactor:
             counter=self._counter,
             offloader=self._offloader,
             extractor=self._extractor,
+            archiver=self._archiver,
             floor=floor,
         )
         kept = should_write_back(record)

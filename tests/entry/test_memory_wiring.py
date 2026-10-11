@@ -47,6 +47,7 @@ from omicsclaw.entry.assembly import (
     foundation_tools,
     open_app,
 )
+from omicsclaw.entry.archive import ARCHIVE_READ_TOOL_NAME, ARCHIVE_SEARCH_TOOL_NAME
 from omicsclaw.entry.compaction import build_compactor
 from omicsclaw.entry.config import AppConfig
 from omicsclaw.entry.memory import (
@@ -196,7 +197,9 @@ def test_the_memory_tools_follow_the_tools_mounted_without_memory(tmp_path, offl
 
     ``ask_user`` is switched off here because it is mounted behind the
     memory pair, as ``install_skill_deps`` is;
-    ``tests/entry/test_question_wiring.py`` pins that order.
+    ``tests/entry/test_question_wiring.py`` pins that order. The archive
+    pair rides the same ``memory is not None`` gate as the memory pair,
+    so it follows that pair here.
     """
     config = _config(tmp_path, ask_user=False)
     memory = open_memory(config)
@@ -213,6 +216,8 @@ def test_the_memory_tools_follow_the_tools_mounted_without_memory(tmp_path, offl
     assert with_memory[len(names) :] == [
         MEMORY_SEARCH_TOOL_NAME,
         MEMORY_WRITE_TOOL_NAME,
+        ARCHIVE_SEARCH_TOOL_NAME,
+        ARCHIVE_READ_TOOL_NAME,
     ]
 
 

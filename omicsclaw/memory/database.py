@@ -142,6 +142,33 @@ CREATE TABLE IF NOT EXISTS remote_jobs (
 
 CREATE INDEX IF NOT EXISTS idx_remote_jobs_local
     ON remote_jobs (local_job_id);
+
+CREATE TABLE IF NOT EXISTS compaction_archives (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id   TEXT NOT NULL,
+    seq          INTEGER NOT NULL,   -- which compaction of the session
+    position     INTEGER NOT NULL,   -- index in the history before compaction
+    role         TEXT NOT NULL,
+    content      TEXT NOT NULL DEFAULT '',
+    tool_calls   TEXT NOT NULL DEFAULT '',   -- JSON as written, byte-preserved
+    tool_call_id TEXT NOT NULL DEFAULT '',
+    name         TEXT NOT NULL DEFAULT '',
+    content_hash TEXT NOT NULL,
+    created_at   REAL NOT NULL
+);
+
+-- Content-level dedup, not batch-level: a retried compaction replays the
+-- same messages, and (session_id, content_hash) folds the replay away
+-- where a (session, seq) key would not. seq/position locate, they do not
+-- identify.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_compaction_archives_dedup
+    ON compaction_archives (session_id, content_hash);
+
+CREATE INDEX IF NOT EXISTS idx_compaction_archives_session
+    ON compaction_archives (session_id, seq, position);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS compaction_archive_fts
+    USING fts5(id UNINDEXED, content);
 """
 """The schema of every :class:`Database`, on open, forever additive.
 
@@ -155,7 +182,15 @@ backend re-estimates from. The ``jobs.runtime`` column (``local`` |
 ``remote:<alias>``) is carried by the same additive rule: new files get
 it from this script, and old ones get it from :func:`_migrate`, the
 first column addition this schema has needed — ``CREATE TABLE IF NOT
-EXISTS`` creates, it does not alter."""
+EXISTS`` creates, it does not alter.
+
+``compaction_archives`` is the compaction plane's read-back half: one
+row per message a compaction removed, session-scoped and deleted with
+its session, searchable through ``compaction_archive_fts`` the way
+``memories_fts`` covers ``long_term_memories``. No foreign key on
+purpose, the ``jobs``/``remote_jobs`` precedent: archive rows are
+written from a compaction, which may run in a deployment whose
+sessions never save, and an FK would refuse exactly that write."""
 
 
 BUSY_TIMEOUT_S = 15.0

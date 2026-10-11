@@ -325,7 +325,11 @@ def test_a_failed_compact_leaves_the_session_as_it_was(tmp_path):
     """Tight enough that the truncating fallback really removes messages,
     so keeping it and not keeping it are distinguishable."""
     provider = Scripted(Message.assistant("done"))
-    tight = int(estimate_messages_tokens(_bulk()) / 0.72)
+    # The divisor sits the composed conversation (system prompt included)
+    # in the FULL tier: 0.72 crossed into EMERGENCY once the compaction
+    # contract grew the prompt, and EMERGENCY writes its truncation back
+    # whatever the summary does.
+    tight = int(estimate_messages_tokens(_bulk()) / 0.70)
     app = attach_sessions(
         _app(tmp_path, provider, Table().tool(), tokens=tight, summarizer=Failing())
     )

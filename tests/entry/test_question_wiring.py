@@ -159,8 +159,10 @@ def test_the_switch_is_on_by_default_and_both_spellings_turn_it_off(tmp_path):
 def test_ask_user_is_mounted_after_the_memory_tools_only_when_the_switch_is_on(
     tmp_path,
 ):
-    """Behind the memory pair and ahead of MCP and ``task``, which are
-    appended after the foundation tools."""
+    """Behind the memory and archive pairs and ahead of MCP and ``task``,
+    which are appended after the foundation tools."""
+    from omicsclaw.entry.archive import ARCHIVE_READ_TOOL_NAME
+
     off = make_app(tmp_path, Scripted(), ask_user=False)
     on = make_app(tmp_path, Scripted(), ask_user=True)
     try:
@@ -172,9 +174,9 @@ def test_ask_user_is_mounted_after_the_memory_tools_only_when_the_switch_is_on(
 
     assert ASK_USER not in without
     assert with_it == [
-        *without[: without.index("memory_write") + 1],
+        *without[: without.index(ARCHIVE_READ_TOOL_NAME) + 1],
         ASK_USER,
-        *without[without.index("memory_write") + 1 :],
+        *without[without.index(ARCHIVE_READ_TOOL_NAME) + 1 :],
     ]
     assert with_it[-1] == TASK_TOOL_NAME
 

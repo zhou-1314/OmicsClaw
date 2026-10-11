@@ -449,6 +449,23 @@ class AppConfig:
     ``False``. Whoever compares this field against a report must map the
     tiers to an order first (plan 0031 trap 0)."""
 
+    compaction_archive: bool = True
+    """Whether compacted messages are archived and searchable.
+
+    One switch with one meaning, following :attr:`planning`: it mounts or
+    unmounts the ``search_archive`` and ``read_archive`` tools, adds or
+    removes the compaction-contract section of the system prompt, and
+    turns the archiver itself on or off — three halves that move
+    together, because a prompt telling the model to search an archive
+    that is not being written, or an archive being written that nothing
+    can read, are each worse than neither.
+
+    On by default: this is a read-side facility, not a behaviour change
+    — compaction itself does exactly what it did, and the removed
+    messages merely survive somewhere a tool can reach them. In effect
+    only where :attr:`memory` opened the database they live in. The
+    archive is session-scoped and deleted with its session."""
+
     max_queued_per_session: int = 2
     """Exchanges that may wait behind a running one before submission is
     refused outright. Plan 0031 Q7: a bounded queue that says no is a
@@ -1019,6 +1036,12 @@ _OPTIONS: tuple[_Option, ...] = (
         _as_positive_float,
     ),
     _Option("compact_at", "--compact-at", ("OMICSCLAW_COMPACT_AT",), _as_pressure),
+    _Option(
+        "compaction_archive",
+        "--compaction-archive",
+        ("OMICSCLAW_COMPACTION_ARCHIVE",),
+        _as_bool,
+    ),
     _Option(
         "max_queued_per_session",
         "--max-queued-per-session",

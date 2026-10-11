@@ -58,6 +58,8 @@ MOUNTED = (
     "plan_write",
     "memory_search",
     "memory_write",
+    "search_archive",
+    "read_archive",
     "ask_user",
     "save_artifact",
     "python",

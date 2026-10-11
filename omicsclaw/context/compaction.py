@@ -80,6 +80,7 @@ from .transcript import (
 )
 
 __all__ = [
+    "CompactionArchiver",
     "CompactionPlan",
     "CompactionRecord",
     "CompactionState",
@@ -170,6 +171,29 @@ class MemoryExtractor(Protocol):
 
     async def extract(self, messages: Sequence[Message]) -> object:
         """Read *messages* and keep whatever outlives them."""
+        ...
+
+
+@runtime_checkable
+class CompactionArchiver(Protocol):
+    """Reads the messages a compaction is about to remove.
+
+    Called at the end of a compaction that is about to take effect — a
+    summary that stood in for its head, or an emergency truncation —
+    with the removed messages, already excluding anything the offloader
+    moved to a file. Its return value is ignored and an exception it
+    raises is recorded in :attr:`CompactionRecord.advisories`; it cannot
+    change or fail the compaction.
+
+    *seq_hint* is the history index the removed run started at: a
+    positioning hint the archiver may keep or ignore, not an identity —
+    an archiver that needs a stable compaction number maintains its own.
+    """
+
+    async def archive(
+        self, messages: Sequence[Message], *, seq_hint: int
+    ) -> object:
+        """Read *messages* and keep them findable after they are gone."""
         ...
 
 
@@ -601,6 +625,7 @@ async def compact(
     counter: TokenCounter | None = None,
     offloader: Offloader | None = None,
     extractor: MemoryExtractor | None = None,
+    archiver: CompactionArchiver | None = None,
     floor: Pressure = Pressure.NONE,
 ) -> tuple[tuple[Message, ...], CompactionRecord, CompactionState]:
     """Offload, grade, summarize if it is worth it, and report.
@@ -627,6 +652,16 @@ async def compact(
     as they were before offloading, concurrently with the summarizer; a
     failure there, or in the store, is recorded in
     :attr:`CompactionRecord.advisories` and changes nothing else.
+
+    The *archiver*, when given, receives the messages this compaction is
+    removing — after the result has been measured and only when the
+    removal is taking effect: a summary that stood in for its head, or an
+    emergency truncation. A degraded compaction does not archive: its
+    result is not written back, so the "removed" messages are still the
+    conversation. Messages the offloader already moved to a file are
+    excluded — they have their own read-back path. An archiver that
+    raises is recorded in :attr:`CompactionRecord.advisories` and changes
+    nothing else.
 
     :exc:`asyncio.CancelledError` propagates untouched. No timeout is
     imposed on the summarizer or the store: a summarizer that never
@@ -746,6 +781,18 @@ async def compact(
             reasons.append(_STILL_OVER_REASON)
 
     originals = {id(message) for message in original}
+    # Read after the fallback block above on purpose: `summarized` is 0
+    # again by then on every degraded path, so a summary that was not
+    # kept archives nothing — its head never left the conversation.
+    if archiver is not None and (
+        summarized > 0 or plan.pressure is Pressure.EMERGENCY
+    ):
+        failure = await _archive_removed(
+            archiver, original, working, result, plan, pinned, summarized
+        )
+        if failure is not None:
+            notes.append(failure)
+
     record = CompactionRecord(
         pressure=plan.pressure,
         tokens_before=tokens_before,
@@ -764,6 +811,54 @@ async def compact(
         forced=floor is not Pressure.NONE,
     )
     return result, record, new_state
+
+
+async def _archive_removed(
+    archiver: CompactionArchiver,
+    original: tuple[Message, ...],
+    working: tuple[Message, ...],
+    result: tuple[Message, ...],
+    plan: CompactionPlan,
+    pinned: int,
+    summarized: int,
+) -> str | None:
+    """Hand the archiver what this compaction is removing, or say why not.
+
+    The batch is computed by identity against the input. Offloading
+    replaced messages one for one, so an index where ``original[i]`` is
+    not ``working[i]`` is a message the offloader already moved to a file
+    — it has a read-back path of its own and archiving it would be the
+    same large text stored twice. What is left:
+
+    * a summary that stood in for its head — the same slice
+      ``before_offload`` computed for the extractor, minus those
+      offloaded positions;
+    * an emergency truncation — the input messages the result no longer
+      holds by identity, minus the same positions.
+
+    :returns: ``None`` when the archiver ran (or had nothing to do), or
+        the advisory sentence for the exception it raised.
+    """
+    offloaded = {i for i, m in enumerate(original) if m is not working[i]}
+    if summarized > 0:
+        span = range(pinned, pinned + len(plan.head))
+        batch = [(i, original[i]) for i in span if i not in offloaded]
+    else:
+        kept = {id(message) for message in result}
+        batch = [
+            (i, message)
+            for i, message in enumerate(original)
+            if i not in offloaded and id(message) not in kept
+        ]
+    if not batch:
+        return None
+    try:
+        await archiver.archive(
+            tuple(message for _, message in batch), seq_hint=batch[0][0]
+        )
+    except Exception as error:  # noqa: BLE001 - same tolerance as the extractor
+        return f"the compaction archiver raised {error!r}"
+    return None
 
 
 async def _summarize_and_extract(

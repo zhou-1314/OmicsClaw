@@ -113,7 +113,15 @@ class SqliteSessionStore:
         return await self._db.arun(lambda c: self._list(c, limit))
 
     async def delete(self, session_id: str) -> bool:
-        """Remove one session and its messages.
+        """Remove one session, its messages and its compaction archive.
+
+        The archive is session-scoped — rows born from this
+        conversation's compactions — so it goes when the conversation
+        goes. Written as SQL rather than through
+        :class:`~omicsclaw.memory.archive.SqliteCompactionArchive`
+        because that module imports this one's serialiser; the
+        statements are the same ones its ``purge`` runs, in the same
+        transaction as the delete that occasions them.
 
         :param session_id: Identifier to delete.
         :returns: ``True`` if a session was removed.
@@ -218,6 +226,16 @@ class SqliteSessionStore:
     @staticmethod
     def _delete(conn: sqlite3.Connection, session_id: str) -> bool:
         conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+        # The archive's FTS rows first, by the ids the main table still
+        # knows; deleting the main rows first would orphan them.
+        conn.execute(
+            "DELETE FROM compaction_archive_fts WHERE id IN "
+            "(SELECT id FROM compaction_archives WHERE session_id = ?)",
+            (session_id,),
+        )
+        conn.execute(
+            "DELETE FROM compaction_archives WHERE session_id = ?", (session_id,)
+        )
         cur = conn.execute(
             "DELETE FROM sessions WHERE session_id = ?", (session_id,)
         )

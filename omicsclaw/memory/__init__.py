@@ -37,6 +37,7 @@ Nothing here imports :mod:`omicsclaw.entry` — the dependency arrow points
 one way, and the protocol is what keeps it pointing that way.
 """
 
+from .archive import ArchivedMessage, SqliteCompactionArchive
 from .compaction_log import JsonlCompactionLog, LoggedCompaction, record_from_dict
 from .database import SCHEMA, Database
 from .extractor import (
@@ -60,6 +61,7 @@ from .sessions import SqliteSessionStore
 from .store import STALE_AFTER_DAYS, STALE_MAX_IMPORTANCE, LongTermStore
 
 __all__ = [
+    "ArchivedMessage",
     "EXTRACTION_SYSTEM_PROMPT",
     "PRECIS_MAX_BYTES",
     "PRECIS_MAX_ENTRIES",
@@ -76,6 +78,7 @@ __all__ = [
     "MemoryEntry",
     "MemoryExtractor",
     "Precis",
+    "SqliteCompactionArchive",
     "SqliteSessionStore",
     "StoredSession",
     "normalize",

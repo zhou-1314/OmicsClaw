@@ -298,6 +298,44 @@
   }
  },
  {
+  "name": "search_archive",
+  "description": "Look through the messages compaction removed from this conversation. Compaction summaries deliberately omit exact values, so before writing a path, identifier, parameter or error text that earlier conversation contained, search for it here and read the original with `read_archive`. A query wrapped in double quotes matches that phrase exactly anywhere in a message.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "query": {
+     "type": "string",
+     "description": "Words to look for in the archived messages. Any word may match. Wrap the query in double quotes to find that exact phrase as a substring."
+    },
+    "limit": {
+     "type": "integer",
+     "description": "Greatest number of rows to return, up to 20. Defaults to 5."
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "additionalProperties": false
+  }
+ },
+ {
+  "name": "read_archive",
+  "description": "Read one archived message in full, by the `id` a `search_archive` result reported. Offloaded tool results are not here — read those back with `read_file` from the reference in the placeholder.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "id": {
+     "type": "integer",
+     "description": "The row id `search_archive` reported for the message."
+    }
+   },
+   "required": [
+    "id"
+   ],
+   "additionalProperties": false
+  }
+ },
+ {
   "name": "ask_user",
   "description": "Ask the person you are working for one question, and wait for the answer.\n\nUse it only when you cannot do the task well without something only they know or decide: which group is the control, which organism or genome build, whether to overwrite an existing report, which of two defensible analyses they want. Look first: a question the data, the files, the metadata or a SKILL.md can answer is not a question for the person.\n\nDo not use it to ask whether you may run a tool (tools that need consent ask for it themselves), to ask whether to continue, or to confirm a plan you could simply carry out. Do not ask about parameters or thresholds a skill's methodology already fixes. Never ask for a password, API key, token or other secret.\n\nOffer 2 to 6 options when the choice is among known alternatives, with a short label each and a description where the label is not enough. Put the option you recommend first and say so in its description. Set multi_select when more than one may apply. The person can always answer in their own words instead.\n\nOne question per call. Calls placed after this one in the same message wait for the answer but were decided before it; put anything that depends on the answer in a later message.\n\nThe result is JSON with status answered, declined or no_answer, and repeats the question. After declined or no_answer, do not ask the same question again in this request.",
   "input_schema": {

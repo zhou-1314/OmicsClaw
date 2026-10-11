@@ -478,7 +478,9 @@ def test_the_public_surface_is_exactly_what_plan_0030_delivered():
     (``PRESSURE_ORDER`` / ``at_least``) moved down from the entry layer.
     Widened again for the memory reminder: ``MemoryNudge`` and its two
     constants. Widened once more with ``drop_unanswered_calls``, which
-    the entry layer calls when an exchange opens.
+    the entry layer calls when an exchange opens. Widened once more with
+    ``CompactionArchiver`` — the seam the entry layer hands the removed
+    messages through — when the compaction archive landed.
 
     Seven modules' worth of names, and the shape of the list is the
     argument: every Protocol on it (``TokenCounter``, ``Summarizer``)
@@ -495,6 +497,7 @@ def test_the_public_surface_is_exactly_what_plan_0030_delivered():
         "AssembledPrompt",
         "BudgetReport",
         "COMPACTION_MARKER",
+        "CompactionArchiver",
         "CompactionPlan",
         "CompactionRecord",
         "CompactionState",

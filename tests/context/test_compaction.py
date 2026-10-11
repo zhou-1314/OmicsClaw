@@ -38,6 +38,7 @@ from omicsclaw.context.compaction import (
     compact,
     plan_compaction,
 )
+from omicsclaw.context.offload import Offloader
 from omicsclaw.context.prompt import PromptAssembler, assemble
 from omicsclaw.context.sections import Section, static
 from omicsclaw.context.summary import Anchors, COMPACTION_MARKER, is_summary_message
@@ -1030,3 +1031,267 @@ def test_the_default_min_tail_is_the_harness_figure_and_is_declared():
     calibration can replace it.
     """
     assert DEFAULT_MIN_TAIL == 6
+
+
+# --- the archiver sees what the compaction removed -----------------------
+
+
+class _RecordingArchiver:
+    """A stand-in archiver that records batches, and may explode."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.batches: list[tuple[tuple[Message, ...], int]] = []
+        self.fail = fail
+
+    async def archive(self, messages, *, seq_hint: int):
+        self.batches.append((tuple(messages), seq_hint))
+        if self.fail:
+            raise RuntimeError("archive unavailable")
+        return None
+
+
+class _MemoryOffloadStore:
+    """The smallest OffloadStore the Offloader will take."""
+
+    def __init__(self) -> None:
+        self.files: dict[str, str] = {}
+
+    async def put(self, key: str, content: str) -> str:
+        self.files[key] = content
+        return f".omicsclaw/tool_results/s1/{key}.txt"
+
+
+def _history_with_tool_result(turns: int = 24, *, size: int = 400, big: int = 4000):
+    """A system prompt, user turns, and one oversized tool result in the head."""
+    messages: list[Message] = [Message.system("you are OmicsClaw")]
+    messages.append(Message.user("what is in that file"))
+    messages.append(
+        Message(
+            role=Role.TOOL,
+            content="y" * big,
+            tool_call_id="call_big",
+            name="read_file",
+        )
+    )
+    for index in range(turns):
+        messages.append(Message.user(f"q{index} " + "x" * size))
+    return messages
+
+
+def test_a_successful_summary_hands_the_archiver_the_head():
+    """The head as it was before offloading — minus nothing, here.
+
+    Offloading replaced messages one for one, so the archived slice and
+    the extractor's ``before_offload`` slice are the same positions of
+    the input; this conversation has no oversized results, so every
+    message of the head is in the batch.
+    """
+    messages = _history()
+    archiver = _RecordingArchiver()
+
+    _, record, _ = asyncio.run(
+        compact(
+            messages,
+            _budget_at(messages, 0.75),
+            summarizer=_Canned(),
+            pinned=1,
+            archiver=archiver,
+        )
+    )
+
+    assert record.summarized > 0
+    assert len(archiver.batches) == 1
+    batch, seq_hint = archiver.batches[0]
+    assert [m.content for m in batch] == [m.content for m in messages[1:10]]
+    assert seq_hint == 1  # where the removed run began, not a count
+
+
+def test_an_archived_batch_excludes_what_the_offloader_already_moved():
+    """Double storage is the one thing the exclusion rule exists to stop.
+
+    The oversized tool result has a read-back path of its own
+    (``read_file`` on the placeholder's reference); archiving it again
+    would put the same large bytes in the database for nothing. Every
+    other message of the head still goes. The budget is sized past the
+    conversation so the post-offload tier stays at FULL — at 0.75 the
+    offload alone brings the ratio below the trigger, and the summary
+    (with it, the archiver) never runs.
+    """
+    messages = _history_with_tool_result()
+    store = _MemoryOffloadStore()
+    archiver = _RecordingArchiver()
+
+    result, record, _ = asyncio.run(
+        compact(
+            messages,
+            _budget_at(messages, 1.15),
+            summarizer=_Canned(),
+            pinned=1,
+            offloader=Offloader(store, min_tokens=0),
+            archiver=archiver,
+        )
+    )
+
+    assert record.offloaded, "the fixture must actually offload something"
+    assert record.summarized > 0
+    assert len(archiver.batches) == 1
+    batch, seq_hint = archiver.batches[0]
+    assert seq_hint == 1  # where the removed run began, not a count
+    assert "y" * 100 not in "".join(m.content for m in batch)
+    # The exclusion is by identity against the input: the archive got
+    # exactly the messages the result no longer holds by identity, except
+    # the one the offloader replaced (index 2, the oversized result).
+    removed = {id(m) for m in messages if not any(m is r for r in result)}
+    assert {id(m) for m in batch} | {id(messages[2])} == removed
+
+
+def test_a_degraded_summary_archives_nothing():
+    """The fallback result is not written back, so nothing left.
+
+    A degraded compaction serves one call while the history keeps the
+    original — archiving here would both duplicate on the retry and
+    suggest content is only findable in the archive while it is still in
+    the conversation. The gate reads ``summarized`` after the reset.
+    """
+    messages = _history()
+    archiver = _RecordingArchiver()
+
+    _, record, _ = asyncio.run(
+        compact(
+            messages,
+            _budget_at(messages, 0.75),
+            summarizer=None,  # "no summarizer was supplied" -> fallback
+            pinned=1,
+            archiver=archiver,
+        )
+    )
+
+    assert record.degraded
+    assert record.summarized == 0
+    assert archiver.batches == []
+
+
+def test_an_emergency_truncation_hands_the_archiver_what_it_dropped():
+    """The tier that never spends a model round trip still archives.
+
+    EMERGENCY is exactly the tier whose loss is least recoverable —
+    truncation without a summary — so the removed messages are handed
+    over even though ``summarized`` is zero.
+    """
+    messages = _history()
+    archiver = _RecordingArchiver()
+
+    result, record, _ = asyncio.run(
+        compact(
+            messages,
+            _budget_at(messages, 1.8),
+            summarizer=_Canned(),
+            pinned=1,
+            archiver=archiver,
+        )
+    )
+
+    assert record.pressure is Pressure.EMERGENCY
+    assert record.summarized == 0
+    assert len(archiver.batches) == 1
+    batch, _ = archiver.batches[0]
+    survivors = {id(m) for m in result}
+    assert [m.content for m in batch] == [
+        m.content for m in messages if id(m) not in survivors
+    ]
+
+
+def test_an_offload_only_warning_archives_nothing():
+    """WARN with an offloader moves text out without a summary.
+
+    The moved results are files with their own read-back path and their
+    own reference list; archiving them is the double storage the
+    exclusion rule refuses, and there is no summary to stand in for
+    anything.
+    """
+    messages = _history_with_tool_result()
+    # The oversized result alone decides the tier: grade it so the
+    # conversation sits at WARN once the big result has been offloaded.
+    budget = ContextBudget(
+        context_tokens=int(estimate_messages_tokens(messages) / 0.65),
+        reserve_output_tokens=0,
+        reserve_tool_tokens=0,
+        safety_ratio=0.0,
+    )
+    store = _MemoryOffloadStore()
+    archiver = _RecordingArchiver()
+
+    result, record, _ = asyncio.run(
+        compact(
+            messages,
+            budget,
+            summarizer=_Canned(),
+            pinned=1,
+            offloader=Offloader(store, min_tokens=0),
+            archiver=archiver,
+        )
+    )
+
+    assert record.offloaded
+    assert record.summarized == 0
+    assert record.pressure is not Pressure.EMERGENCY
+    assert archiver.batches == []
+    assert result  # the conversation continues, only lighter
+
+
+def test_an_archiver_that_raises_is_an_advisory_and_nothing_else():
+    """The same tolerance the extractor gets, verbatim in spirit.
+
+    An archive that cannot be written must not fail the compaction that
+    was about to succeed — the summary stands, the record says what
+    happened, and the next compaction tries again.
+    """
+    messages = _history()
+    archiver = _RecordingArchiver(fail=True)
+
+    result, record, _ = asyncio.run(
+        compact(
+            messages,
+            _budget_at(messages, 0.75),
+            summarizer=_Canned(),
+            pinned=1,
+            archiver=archiver,
+        )
+    )
+
+    assert record.summarized > 0
+    assert record.degraded == ""
+    assert any(
+        "the compaction archiver raised" in note for note in record.advisories
+    )
+    assert any(is_summary_message(m) for m in result)
+    quiet, quiet_record, _ = asyncio.run(
+        compact(
+            messages,
+            _budget_at(messages, 0.75),
+            summarizer=_Canned(),
+            pinned=1,
+        )
+    )
+    assert [m.content for m in result] == [m.content for m in quiet]
+    assert quiet_record.summarized == record.summarized
+
+
+def test_a_quiet_compaction_never_consults_the_archiver():
+    """Below the trigger nothing is removed, so there is nothing to keep."""
+    messages = _history()
+    archiver = _RecordingArchiver()
+
+    result, record, _ = asyncio.run(
+        compact(
+            messages,
+            _budget_at(messages, 0.30),
+            summarizer=_Canned(),
+            pinned=1,
+            archiver=archiver,
+        )
+    )
+
+    assert record.pressure is Pressure.NONE
+    assert archiver.batches == []
+    assert [a is b for a, b in zip(result, messages)]

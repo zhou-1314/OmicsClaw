@@ -78,6 +78,7 @@ from .budget import (
     measure,
 )
 from .compaction import (
+    CompactionArchiver,
     CompactionPlan,
     CompactionRecord,
     CompactionState,
@@ -150,6 +151,7 @@ __all__ = [
     "AssembledPrompt",
     "BudgetReport",
     "COMPACTION_MARKER",
+    "CompactionArchiver",
     "CompactionPlan",
     "CompactionRecord",
     "CompactionState",
