@@ -1,8 +1,9 @@
 ---
 name: metabolomics-pathway-enrichment
-description: Load when running metabolite-name ORA against an explicit local pathway reference with BH-FDR;
-  bundled pathway sets are for explicit demonstrations only. Skip m/z annotation (use metabolomics-annotation)
-  and topology analysis or online pathway retrieval (use external mummichog / FELLA or database tools).
+description: Load when running metabolite-name ORA against an explicit local pathway reference with
+  BH-FDR; bundled pathway sets are for explicit demonstrations only. Skip m/z annotation (use
+  metabolomics-annotation) and topology analysis or online pathway retrieval (use external
+  mummichog / FELLA).
 trigger: metabolomics pathway, KEGG, MetaboAnalyst, enrichment, mummichog
 tags:
 - metabolomics

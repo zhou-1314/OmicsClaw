@@ -1,6 +1,8 @@
 ---
 name: metabolomics-xcms-preprocessing
-description: Load when exercising the CLI and replay pipeline with a synthetic LC-MS peak table. Skip real mzML preprocessing (run XCMS externally); table peak picking belongs to metabolomics-peak-detection.
+description: Load when exercising the CLI and replay pipeline with a synthetic LC-MS peak table. Skip
+  real mzML preprocessing (run XCMS externally); table peak picking (use
+  metabolomics-peak-detection).
 trigger: xcms demo, synthetic metabolomics peaks
 tags:
 - metabolomics

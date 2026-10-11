@@ -1,8 +1,9 @@
 ---
 name: metabolomics-peak-detection
-description: Load when running per-sample peak picking on a feature × intensity table via `scipy.signal.find_peaks`
-  — emits per-(sample, feature) detected peaks with prominence and width. Skip when working with mz /
-  RT raw scans (use metabolomics-xcms-preprocessing); only normalising / quantifying (use metabolomics-quantification).
+description: Load when running per-sample peak picking on a feature × intensity table via
+  `scipy.signal.find_peaks` — emits per-(sample, feature) peaks with prominence and width. Skip
+  when working with mz / RT raw scans (use metabolomics-xcms-preprocessing); only normalising
+  (use metabolomics-quantification).
 trigger: peak detection, feature detection, XCMS, MZmine, MS-DIAL, peak picking
 tags:
 - metabolomics
