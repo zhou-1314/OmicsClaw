@@ -19,6 +19,7 @@ _ANCHOR_FIELDS = (
     "key_decisions",
     "tried_solutions",
     "next_steps",
+    "load_bearing_keys",
 )
 
 

@@ -92,6 +92,26 @@ def test_compaction_state_survives_the_round_trip() -> None:
     assert got.compaction.anchors.next_steps == "cluster"
 
 
+def test_anchor_json_from_before_the_keys_field_loads_quietly() -> None:
+    """A row written before ``load_bearing_keys`` existed.
+
+    ``_load_anchors`` reads the missing key as ``""`` — which merges
+    like ``N/A``, never overwriting what an older compaction knew — so
+    old sessions round-trip without a migration.
+    """
+    from omicsclaw.memory.sessions import _load_anchors
+
+    anchors = _load_anchors(
+        '{"user_intent": "QC a Visium slide", "next_steps": "cluster"}'
+    )
+
+    assert anchors.user_intent == "QC a Visium slide"
+    assert anchors.load_bearing_keys == ""
+    assert Anchors(load_bearing_keys="- data/pbmc3k_raw.h5ad").merge(
+        anchors
+    ).load_bearing_keys == "- data/pbmc3k_raw.h5ad"
+
+
 def test_json_representable_values_survive_the_round_trip() -> None:
     db, s = store()
     values = {"chat_id": 7, "surface": "telegram", "flags": ["a", "b"],

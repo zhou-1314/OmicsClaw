@@ -70,14 +70,14 @@ def test_a_model_that_ignores_the_format_does_not_raise(label: str, text: str):
 
     A parser that raised would turn every bout of model disobedience
     into a crashed run. Missing sections come back as ``"N/A"`` and
-    there are always exactly five, so every consumer downstream can read
-    all five fields without asking whether they are there.
+    there are always exactly six, so every consumer downstream can read
+    all six fields without asking whether they are there.
     """
     anchors, summary = parse_anchors_and_summary(text)
 
     assert isinstance(anchors, Anchors)
     assert isinstance(summary, str)
-    assert len([f for f in Anchors.__dataclass_fields__]) == 5
+    assert len([f for f in Anchors.__dataclass_fields__]) == 6
 
 
 def test_a_misspelled_heading_loses_its_content_rather_than_misfiling_it():
@@ -219,12 +219,13 @@ def test_an_anchor_renders_as_the_headings_the_parser_looks_for():
         key_decisions="c",
         tried_solutions="d",
         next_steps="e",
+        load_bearing_keys="- data/x.h5ad",
     )
 
     rendered = anchors.render()
 
     assert rendered.splitlines()[0] == "### User Intent"
-    assert rendered.endswith("### Next Steps\ne")
+    assert rendered.endswith("### Load-bearing Keys\n- data/x.h5ad")
     assert parse_anchors_and_summary(rendered)[0] == anchors
 
 
@@ -252,7 +253,8 @@ def test_the_rendered_anchors_keep_a_blank_line_between_blocks():
         "### Execution Progress\nb\n\n"
         "### Key Decisions\nc\n\n"
         "### Tried Solutions\nd\n\n"
-        "### Next Steps\ne"
+        "### Next Steps\ne\n\n"
+        "### Load-bearing Keys\nN/A"
     )
     assert not rendered.endswith("\n"), "the trailing blank line is stripped"
 
@@ -261,7 +263,9 @@ def test_anchors_render_in_one_fixed_order():
     """``anchor.go:21-24``: the order *is* the contract.
 
     A compacted history that reshuffles its own anchors between turns
-    changes the prompt prefix for no reason anybody can see.
+    changes the prompt prefix for no reason anybody can see. The keys
+    anchor was appended behind the original five, which keep their
+    places.
     """
     rendered = Anchors().render()
 
@@ -271,4 +275,5 @@ def test_anchors_render_in_one_fixed_order():
         "### Key Decisions",
         "### Tried Solutions",
         "### Next Steps",
+        "### Load-bearing Keys",
     ]

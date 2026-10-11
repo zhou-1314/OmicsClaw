@@ -196,7 +196,16 @@ def test_a_summary_mid_run_is_written_back(tmp_path):
     assert outcome.history[0].content.startswith(COMPACTION_MARKER)
     assert outcome.state.summary == "they discussed it at length"
     summarized = [record for record in outcome.compactions if record.summarized]
-    assert all(record.written_back for record in summarized)
+    assert summarized
+    # A summary that actually removed messages is written back. The one
+    # exception is the residual edge case should_write_back documents: a
+    # summary whose head was a single message and whose stand-in came out
+    # no smaller removed nothing, so it is not kept.
+    assert all(
+        record.written_back
+        for record in summarized
+        if record.msgs_after < record.msgs_before
+    )
 
 
 def test_a_failed_summary_is_sent_once_and_not_kept(tmp_path):

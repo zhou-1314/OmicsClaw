@@ -101,6 +101,7 @@ def test_the_first_template_asks_for_the_headings_the_parser_reads():
         "### Key Decisions",
         "### Tried Solutions",
         "### Next Steps",
+        "### Load-bearing Keys",
         "## Summary",
     ):
         assert heading in filled
@@ -125,6 +126,9 @@ def test_the_incremental_template_carries_the_previous_compaction():
     assert "<previous-compaction>" in filled
     assert "</previous-compaction>" in filled
     assert "### User Intent\nannotate" in filled
+    assert "Load-bearing Keys forward" in filled, (
+        "the incremental merge must carry the keys across compactions"
+    )
     assert "[user]: and now?" in filled
 
 
@@ -150,3 +154,53 @@ def test_the_system_prompt_asks_for_no_preamble():
     discards it and every anchor comes back ``N/A``.
     """
     assert "no preamble" in SUMMARY_SYSTEM_PROMPT
+
+
+# --- the sixth anchor: load-bearing keys ---------------------------------
+
+
+def test_a_keys_section_parses_into_the_sixth_anchor():
+    """Present fills the field; absent reads as ``N/A``, never a refusal.
+
+    The keys section is one more anchor: same scan, same ``_MISSING``
+    default, same "a gap is a gap" semantics as the five. Deliberately
+    nothing more — no length check, no fidelity re-check, no degraded
+    note: the removed gates forbid inventing any quality judgement, and
+    this field must not become one.
+    """
+    anchors, summary = parse_anchors_and_summary(
+        "## Anchors\n\n### User Intent\nannotate\n\n"
+        "### Load-bearing Keys\n- data/pbmc3k_raw.h5ad\n- leiden res=1.0\n\n"
+        "## Summary\nwork\n"
+    )
+    assert anchors.user_intent == "annotate"
+    assert anchors.load_bearing_keys == "- data/pbmc3k_raw.h5ad\n- leiden res=1.0"
+    assert summary == "work"
+
+    without, _ = parse_anchors_and_summary(
+        "## Anchors\n\n### User Intent\nannotate\n\n## Summary\nwork\n"
+    )
+    assert without.user_intent == "annotate"
+    assert without.load_bearing_keys == "N/A"
+
+
+def test_merge_reads_a_keys_gap_as_do_not_overwrite():
+    """``N/A`` on the sixth field obeys the same merge rule as the five.
+
+    A newer compaction that dropped the keys section is a gap in the
+    newer one, not a retraction of the keys the older one recorded.
+    """
+    older = Anchors(load_bearing_keys="- data/pbmc3k_raw.h5ad")
+    merged = older.merge(Anchors(user_intent="annotate"))
+
+    assert merged.load_bearing_keys == "- data/pbmc3k_raw.h5ad"
+    assert merged.user_intent == "annotate"
+
+
+def test_the_compaction_message_renders_the_keys_heading():
+    """The sixth anchor rides the same render loop, in its fixed place."""
+    message = build_compaction_message(
+        Anchors(load_bearing_keys="- data/pbmc3k_raw.h5ad"), "body"
+    )
+
+    assert "### Load-bearing Keys\n- data/pbmc3k_raw.h5ad" in message.content

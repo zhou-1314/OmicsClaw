@@ -75,12 +75,15 @@ _ANCHOR_HEADERS: tuple[tuple[str, str], ...] = (
     ("key_decisions", "Key Decisions"),
     ("tried_solutions", "Tried Solutions"),
     ("next_steps", "Next Steps"),
+    ("load_bearing_keys", "Load-bearing Keys"),
 )
 """Field name to Markdown heading, in the one order everything uses.
 
 ``anchor.go:21-33``. A tuple rather than a dict because the order *is*
 the contract: parse, merge and render all walk this list, so a compacted
-history reads the same way on every turn.
+history reads the same way on every turn. ``load_bearing_keys`` is the
+sixth and last member — the first five keep their places, so anything
+written against the original five-anchor order stays true.
 """
 
 COMPACTION_MARKER = "[Context Compaction]"
@@ -131,13 +134,19 @@ class Summarizer(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class Anchors:
-    """The five facts a compaction refuses to lose.
+    """The five facts a compaction refuses to lose, plus one lead.
 
     Ported from ``anchor.go:12-33``. Fixed set, fixed order: a summary
     is free-form and will drift, but "what was the user asking for" and
     "what has already been tried" have to survive every round of
     compaction in a recognisable place, which is what makes them worth
     naming separately from the prose.
+
+    ``load_bearing_keys`` was appended after those five, in the same
+    order contract: exact paths, identifiers and parameters the summary
+    would otherwise drop, written as search queries. Like every other
+    anchor it defaults to ``N/A`` when the model had nothing to put
+    there — a missing keys section is a gap, never a refusal.
     """
 
     user_intent: str = _MISSING
@@ -145,6 +154,7 @@ class Anchors:
     key_decisions: str = _MISSING
     tried_solutions: str = _MISSING
     next_steps: str = _MISSING
+    load_bearing_keys: str = _MISSING
 
     def merge(self, newer: Anchors) -> Anchors:
         """Fold *newer* over this one. ``"N/A"`` does not overwrite.
@@ -316,6 +326,9 @@ conversation in this exact format:
 ### Next Steps
 - <pending task>
 
+### Load-bearing Keys
+- <exact path, identifier or parameter, written as a search query>
+
 ## Summary
 <supplementary context not captured in anchors>
 
@@ -345,7 +358,9 @@ present in the conversation."""
 
 INCREMENTAL_TEMPLATE = """Update the existing compaction by merging in new \
 conversation content. Output the merged compaction in the same format - no \
-preamble.
+preamble. Carry the Load-bearing Keys forward, merged: a key that still \
+names something the conversation depends on stays, whatever compaction it \
+first appeared in.
 
 <previous-compaction>
 {previous}
