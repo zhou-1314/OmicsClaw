@@ -1,9 +1,9 @@
 ---
 name: proteomics-de
-description: Load when computing two-group differential protein abundance (group2 vs group1, log2FC +
-  p-value + BH-adjusted FDR) via Welch t-test, equal-variance t-test, or Mann-Whitney on a wide protein
-  × sample CSV. Skip when you need multi-condition DE (run pairwise contrasts manually); label-based TMT
-  linear-mixed models.
+description: Load when computing two-group differential protein abundance (log2FC + p-value +
+  BH-adjusted FDR) via Welch t-test, equal-variance t-test, or Mann-Whitney on a wide protein ×
+  sample CSV. Skip when you need multi-condition DE (run pairwise contrasts manually);
+  label-based TMT linear-mixed models.
 trigger: differential abundance, protein expression, MSstats, limma, volcano
 tags:
 - proteomics

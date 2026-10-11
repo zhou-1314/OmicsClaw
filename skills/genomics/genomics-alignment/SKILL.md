@@ -1,9 +1,9 @@
 ---
 name: genomics-alignment
-description: Load when computing alignment QC metrics (mapping rate, MAPQ distribution, insert size, duplicate
-  rate, proper-pair rate) from a text SAM file produced by any short-/long-read aligner (BWA / Bowtie2
-  / Minimap2); convert a BAM with samtools view -h first. Skip when running the alignment step itself;
-  only FASTQ-level QC is needed (use genomics-qc).
+description: Load when computing alignment QC metrics (mapping rate, MAPQ, insert size, duplicates,
+  proper pairs) from a text SAM file (BWA / Bowtie2 / Minimap2); convert a BAM with samtools
+  view -h first. Skip when running the alignment itself; only FASTQ-level QC is needed (use
+  genomics-qc).
 trigger: alignment, BWA, Bowtie2, Minimap2, map reads
 tags:
 - genomics

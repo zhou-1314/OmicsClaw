@@ -1,8 +1,8 @@
 ---
 name: literature
 description: Load when extracting GEO accessions, dataset metadata, and downloadable references from a
-  scientific paper (PDF / URL / DOI / PubMed ID / raw text) for downstream omics analysis. Skip when the
-  dataset is already in hand; the paper names no dataset to fetch.
+  scientific paper (PDF / URL / DOI / PubMed ID / raw text) for downstream omics analysis. Skip
+  when the dataset is already in hand or the paper names no dataset to fetch.
 trigger: parse paper, literature, GEO accession, download dataset, PDF extract, PubMed, DOI
 tags:
 - literature

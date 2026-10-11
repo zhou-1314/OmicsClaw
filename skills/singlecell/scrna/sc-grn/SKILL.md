@@ -1,9 +1,9 @@
 ---
 name: sc-grn
-description: Load when inferring TF → target gene regulatory networks on a normalised scRNA AnnData via
-  pySCENIC (GRNBoost2 + cisTarget + AUCell) or correlation-based GRN fallback (when arboreto is unavailable,
-  in --demo, or with --allow-simplified-grn). Skip when computing ligand-receptor cell-cell signalling
-  (use sc-cell-communication); predicting genetic-KO effects (use sc-in-silico-perturbation).
+description: Load when inferring TF→target gene regulatory networks on a normalised scRNA AnnData via
+  pySCENIC (GRNBoost2, cisTarget, AUCell) or correlation GRNs. Skip when computing
+  ligand-receptor cell-cell signalling (use sc-cell-communication); predicting genetic-KO
+  effects (use sc-in-silico-perturbation).
 trigger: grn, gene regulatory, scenic, pyscenic, regulon, transcription factor, grnboost
 tags:
 - singlecell

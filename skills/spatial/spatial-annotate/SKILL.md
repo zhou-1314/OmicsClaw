@@ -1,8 +1,8 @@
 ---
 name: spatial-annotate
 description: Load when assigning per-spot cell-type labels on a spatial AnnData via marker-gene scoring
-  or scRNA-reference mapping (Tangram / scANVI / CellAssign). Skip when computing spot-level cell-type
-  proportions for multi-cell-per-spot platforms (use spatial-deconv); tissue-domain detection (use spatial-domains).
+  or scRNA-reference mapping (Tangram / scANVI / CellAssign). Skip when computing spot-level
+  cell-type proportions (use spatial-deconv); tissue-domain detection (use spatial-domains).
 trigger: cell type annotation, annotate cell types, Tangram, scANVI, CellAssign, marker genes, label transfer, spatial annotation
 tags:
 - spatial

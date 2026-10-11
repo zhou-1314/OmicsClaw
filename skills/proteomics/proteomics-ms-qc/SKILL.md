@@ -1,8 +1,9 @@
 ---
 name: proteomics-ms-qc
-description: Load when computing protein-table QC — proteins × samples count, missing-value rate, intensity
-  CV (median + mean) — from a MaxQuant / FragPipe / DIA-NN protein-quantification CSV. Skip when raw mzML
-  / RAW spectra are the input (run a search engine first); peptide-level QC is needed (use proteomics-identification).
+description: Load when computing protein-table QC — proteins × samples count, missing-value rate,
+  intensity CV — from a MaxQuant / FragPipe / DIA-NN protein CSV. Skip when raw mzML / RAW
+  spectra are the input (run a search engine first); peptide-level QC is needed (use
+  proteomics-identification).
 trigger: MS QC, mass spec QC, PTXQC, rawTools
 tags:
 - proteomics

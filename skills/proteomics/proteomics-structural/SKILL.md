@@ -1,9 +1,8 @@
 ---
 name: proteomics-structural
 description: Load when summarising cross-linking MS (XL-MS) results — intra/inter-protein link split,
-  optional FDR filtering, distance-constraint validation against a per-crosslinker (DSS / BS3 / EDC /
-  DSSO / DSBU) max distance. Skip when raw spectra are the input (run XlinkX / pLink / xiSEARCH first);
-  no XL-MS experiment was performed.
+  optional FDR filtering, distance-constraint validation against a per-crosslinker max distance.
+  Skip when raw spectra are the input (run XlinkX / pLink / xiSEARCH); no XL-MS experiment ran.
 trigger: structural proteomics, cross-linking MS, XL-MS, XlinkX, pLink, xiSEARCH
 tags:
 - proteomics

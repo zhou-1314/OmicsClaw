@@ -1,9 +1,9 @@
 ---
 name: genomics-variant-calling
-description: Load when summarising small variants (SNVs / indels) from a VCF or computing demo-pattern
-  variant statistics (Ti/Tv ratio, per-chromosome distribution, SNP / indel split). Skip when filtering
-  / merging VCFs (use genomics-vcf-operations); calling structural variants (use genomics-sv-detection);
-  adding functional annotations (use genomics-variant-annotation).
+description: Load when summarising small variants (SNVs / indels) from a VCF or computing variant
+  statistics like Ti/Tv. Skip when filtering or merging VCFs (use genomics-vcf-operations);
+  calling structural variants (use genomics-sv-detection); annotating variants (use
+  genomics-variant-annotation).
 trigger: variant calling, SNV, indel, GATK, DeepVariant, FreeBayes, Mutect2, VQSR
 tags:
 - genomics

@@ -1,9 +1,8 @@
 ---
 name: proteomics-identification
-description: Load when summarising peptide identifications (PSM count, unique peptide count, distinct
-  protein count, score / charge distributions) from a peptide-level CSV produced by MaxQuant / FragPipe
-  / DIA-NN. Skip when raw spectra are the input (run a search engine first); working with protein-quantification
-  tables (use proteomics-ms-qc).
+description: Load when summarising peptide identifications (PSM counts, unique peptides, score / charge
+  distributions) of a peptide-level CSV from MaxQuant / FragPipe / DIA-NN. Skip when raw spectra
+  are the input (run the search engine); protein-quantification tables (use proteomics-ms-qc).
 trigger: peptide identification, database search, MaxQuant, MS-GF+, Comet, Mascot
 tags:
 - proteomics

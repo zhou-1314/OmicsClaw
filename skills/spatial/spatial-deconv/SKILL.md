@@ -1,8 +1,8 @@
 ---
 name: spatial-deconv
-description: Load when deconvolving spot-level cell-type proportions on a Visium-style spatial AnnData
-  using a labelled scRNA reference (FlashDeconv / Cell2location / RCTD / DestVI / Tangram / others). Skip
-  when each spot is a single cell already (Xenium / MERFISH) (use spatial-annotate); tissue-domain detection
+description: Load when deconvolving spot-level cell-type proportions on a Visium-style AnnData using a
+  labelled scRNA reference (FlashDeconv / Cell2location / RCTD / DestVI / Tangram). Skip when
+  each spot is a single cell (Xenium / MERFISH) (use spatial-annotate); tissue-domain detection
   (use spatial-domains).
 trigger: cell type deconvolution, spatial deconvolution, cell proportion, cell type proportion, cell2location, RCTD, DestVI, Stereoscope, Tangram, SPOTlight, CARD
 tags:

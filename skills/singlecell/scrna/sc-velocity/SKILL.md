@@ -1,9 +1,9 @@
 ---
 name: sc-velocity
-description: Load when computing RNA velocity vectors on a scRNA AnnData with spliced / unspliced layers
-  via scVelo (stochastic / dynamical / steady-state); dynamical mode additionally exports latent time.
-  Skip when input lacks spliced+unspliced layers (use sc-velocity-prep); trajectory pseudotime ordering
-  (use sc-pseudotime).
+description: Load when computing RNA velocity vectors on scRNA AnnData with spliced / unspliced layers
+  via scVelo (stochastic / dynamical); dynamical mode exports latent time. Skip when input lacks
+  spliced+unspliced layers (use sc-velocity-prep); trajectory pseudotime ordering (use
+  sc-pseudotime).
 trigger: rna velocity, velocity, scvelo, spliced unspliced, cellular dynamics, velovi, velocity pseudotime
 tags:
 - singlecell

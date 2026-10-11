@@ -1,9 +1,9 @@
 ---
 name: spatial-trajectory
-description: Load when inferring pseudotime / lineage trajectories on a preprocessed spatial AnnData via
-  DPT (default — diffusion pseudotime), CellRank (terminal-state + fate-probability), or Palantir (waypoint
-  branch probabilities). Skip when the data has spliced/unspliced layers and you want velocity-driven
-  dynamics (use spatial-velocity); non-spatial scRNA pseudotime (use sc-pseudotime).
+description: Load when inferring pseudotime / lineage trajectories on a preprocessed spatial AnnData
+  via DPT (default), CellRank, or Palantir. Skip when wanting velocity-driven dynamics from
+  spliced/unspliced layers (use spatial-velocity); non-spatial scRNA pseudotime (use
+  sc-pseudotime).
 trigger: trajectory, pseudotime, diffusion pseudotime, DPT, CellRank, Palantir, cell fate, lineage
 tags:
 - spatial

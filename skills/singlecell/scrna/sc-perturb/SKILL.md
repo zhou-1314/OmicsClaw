@@ -1,8 +1,9 @@
 ---
 name: sc-perturb
-description: Load when classifying perturbed vs non-perturbed cells in a Perturb-seq / CRISPR-screen scRNA
-  AnnData via the pertpy Mixscape workflow. Skip when guide labels are not yet attached to the expression
-  object (use sc-perturb-prep); in-silico KO predictions on unperturbed data (use sc-in-silico-perturbation).
+description: Load when classifying perturbed vs non-perturbed cells in a Perturb-seq / CRISPR-screen
+  AnnData via the pertpy Mixscape workflow. Skip when guide labels are not yet attached (use
+  sc-perturb-prep); in-silico KO predictions on unperturbed data (use
+  sc-in-silico-perturbation).
 tags:
 - singlecell
 - scrna

@@ -1,8 +1,9 @@
 ---
 name: bulkrna-deconvolution
 description: Load when estimating cell-type proportions in bulk RNA-seq samples from a single-cell or
-  signature-matrix reference. Skip when the data is already single-cell (no deconvolution needed); spatial
-  deconvolution (use spatial-deconv).
+  signature-matrix reference. Skip when the data is already single-cell (no deconvolution
+  needed); spatial deconvolution (use spatial-deconv); pseudotime placement of bulk samples (use
+  bulkrna-trajblend).
 trigger: bulk deconvolution, cell type proportion, NNLS, CIBERSORTx, bulk deconv, cell fraction
 tags:
 - bulkrna

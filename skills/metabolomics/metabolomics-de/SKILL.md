@@ -1,8 +1,9 @@
 ---
 name: metabolomics-de
 description: Load when running two-group metabolomics DE (t-test + log2FC + BH-FDR + PCA) on a feature
-  × sample CSV using `--group-a-prefix` / `--group-b-prefix` (default `ctrl` / `treat`). Skip when needing
-  tunable test backends (use metabolomics-statistics); raw spectra.
+  × sample CSV using group-prefix matching (default `ctrl` / `treat`). Skip when needing tunable
+  test backends (use metabolomics-statistics); raw spectra are the input (use
+  metabolomics-xcms-preprocessing).
 trigger: metabolomics differential, PLS-DA, volcano plot, biomarker, OPLS-DA
 tags:
 - metabolomics

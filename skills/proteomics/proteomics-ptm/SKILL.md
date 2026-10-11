@@ -1,9 +1,9 @@
 ---
 name: proteomics-ptm
-description: Load when summarising PTM sites (phosphorylation, acetylation, ubiquitination, etc.) from
-  a per-site CSV — site-class assignment (Olsen et al. Class I/II/III by `localization_probability`),
-  per-PTM-type counts, amino-acid distribution, sites-per-protein. Skip when raw spectra are the input;
-  you only need protein-level abundance (use proteomics-quantification).
+description: Load when summarising PTM sites (phosphorylation, acetylation, ubiquitination) from a
+  per-site CSV — site-class assignment (Olsen I/II/III `localization_probability`), per-PTM-type
+  counts. Skip when raw spectra are the input; only protein-level abundance is needed (use
+  proteomics-quantification).
 trigger: PTM, phosphorylation, acetylation, ubiquitination, modification, motif
 tags:
 - proteomics
