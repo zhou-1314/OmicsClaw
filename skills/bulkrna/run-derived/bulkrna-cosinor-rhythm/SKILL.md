@@ -1,8 +1,8 @@
 ---
 name: bulkrna-cosinor-rhythm
 description: Load when the user needs Deterministic fixed-period 24-hour single-component cosinor OLS
-  rhythm analysis for a bulk RNA time-course CSV. Skip when an existing bulkrna skill already covers the
-  request.
+  rhythm analysis for a bulk RNA time-course CSV. Skip when the question is not fixed-period
+  24-hour rhythm analysis; placing bulk samples on a pseudotime axis (use bulkrna-trajblend).
 trigger: cosinor, circadian rhythmicity, 24-hour rhythm, bulk RNA time course
 tags:
 - bulkrna

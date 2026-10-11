@@ -20,11 +20,11 @@ Bulk RNA-seq: FASTQ QC, alignment, count QC, DE (DESeq2), enrichment, splicing, 
   triggers: batch correction, ComBat, batch effect, harmonize, multi-cohort, batch removal
 - `bulkrna-coexpression` — Load when discovering bulk gene co-expression modules and hub genes with R WGCNA. Skip direct expression contrasts (use bulkrna-de), existing-gene-list PPI lookup (use bulkrna-ppi-network), or single-cell networks (use sc-grn).
   triggers: coexpression, WGCNA, gene network, co-expression modules, hub genes, gene modules
-- `bulkrna-cosinor-rhythm` — Load when the user needs Deterministic fixed-period 24-hour single-component cosinor OLS rhythm analysis for a bulk RNA time-course CSV. Skip when an existing bulkrna skill already covers the request.
+- `bulkrna-cosinor-rhythm` — Load when the user needs Deterministic fixed-period 24-hour single-component cosinor OLS rhythm analysis for a bulk RNA time-course CSV. Skip when the question is not fixed-period 24-hour rhythm analysis; placing bulk samples on a pseudotime axis (use bulkrna-trajblend).
   triggers: cosinor, circadian rhythmicity, 24-hour rhythm, bulk RNA time course
 - `bulkrna-de` — Load when comparing gene expression between two conditions in bulk RNA-seq count data. Skip when the data is single-cell (use sc-de); spatial (use spatial-de); you need exon-level alternative splicing (use bulkrna-splicing).
   triggers: differential expression, DE analysis, DESeq2, volcano plot, fold change, DEGs, bulk DE
-- `bulkrna-deconvolution` — Load when estimating cell-type proportions in bulk RNA-seq samples from a single-cell or signature-matrix reference. Skip when the data is already single-cell (no deconvolution needed); spatial deconvolution (use spatial-deconv).
+- `bulkrna-deconvolution` — Load when estimating cell-type proportions in bulk RNA-seq samples from a single-cell or signature-matrix reference. Skip when the data is already single-cell (no deconvolution needed); spatial deconvolution (use spatial-deconv); pseudotime placement of bulk samples (use bulkrna-trajblend).
   triggers: bulk deconvolution, cell type proportion, NNLS, CIBERSORTx, bulk deconv, cell fraction
 - `bulkrna-enrichment` — Load when running pathway / GO term enrichment on a bulk RNA-seq DE result list. Skip when the input is single-cell (use sc-enrichment); the input is spatial (use spatial-enrichment); metabolite pathways (use metabolomics-pathway-enrichment).
   triggers: bulk enrichment, pathway analysis, GSEA, ORA, GO enrichment, KEGG, bulk pathway
