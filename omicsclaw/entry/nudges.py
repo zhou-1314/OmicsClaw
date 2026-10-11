@@ -11,8 +11,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Sequence
 
-from omicsclaw.context import MemoryNudge, VolatileBlock
+from omicsclaw.context import MemoryNudge, VolatileBlock, is_summary_message
 from omicsclaw.engine import TurnAugmentor
+from omicsclaw.memory import SCRATCH_KIND_TRIED_SOLUTIONS, SessionScratch
 from omicsclaw.schema import Message, Role, ToolDefinition
 from omicsclaw.skills import SkillDiscovery
 
@@ -81,22 +82,24 @@ def build_augmentor(app: "AgentApp", *, session_id: str = "") -> TurnAugmentor |
     The memory reminder comes first, then the long-term memory précis
     block (when :attr:`~omicsclaw.entry.config.AppConfig.
     precis_via_augmentor` moved it out of the system prompt), then the
-    skill discovery block, and the plan injector last, so the plan block
-    stays the last thing the model reads. Building it restores the
-    session's plan, as :func:`~omicsclaw.entry.planning.build_injector`
-    does.
+    session scratch block, then the skill discovery block, and the plan
+    injector last, so the plan block stays the last thing the model
+    reads. Building it restores the session's plan, as
+    :func:`~omicsclaw.entry.planning.build_injector` does.
 
     Sub-agent exchanges do not go through here and get no memory
-    reminder, no précis block and no discovery block.
+    reminder, no précis block, no scratch block and no discovery block.
 
     :param app: The deployment the exchange runs in.
-    :param session_id: The session whose plan is injected.
+    :param session_id: The session whose plan is injected and whose
+        scratch is read.
     :returns: What the engine should consult before each model call of
         the exchange, or ``None`` when the deployment has nothing to add.
     """
     return chain(
         _memory_nudge(app),
         _precis_block(app),
+        _scratch_block(app, session_id=session_id),
         _skill_discovery(app),
         build_injector(app, session_id=session_id),
     )
@@ -129,6 +132,79 @@ def _precis_block(app: "AgentApp") -> VolatileBlock | None:
         )
 
     return VolatileBlock(render=app.memory.precis.read, wrap=wrap)
+
+
+_SCRATCH_WARNING = (
+    "these paths are known dead ends; do not retry them without a new idea"
+)
+
+
+class ScratchBlock:
+    """The session scratch, sent only while the anchors are out of sight.
+
+    The ``tried_solutions`` anchor normally rides the compaction
+    message; an emergency truncation drops that message, and this block
+    is what keeps the dead ends in front of the model until the next
+    summary restates them. It gates a :class:`VolatileBlock` on the
+    history: while any compaction message is in it, the anchor is still
+    visible and the block stays silent.
+    """
+
+    __slots__ = ("_block",)
+
+    def __init__(self, block: VolatileBlock) -> None:
+        self._block = block
+
+    async def augment(
+        self,
+        history: Sequence[Message],
+        tools: Sequence[ToolDefinition] = (),
+    ) -> tuple[Message, ...]:
+        """The scratch block, when no compaction message carries anchors.
+
+        :param history: The conversation this call will be sent, after
+            compaction.
+        :param tools: The tool definitions this call will carry.
+        :returns: The inner block's messages, or an empty tuple.
+        """
+        if any(is_summary_message(message) for message in history):
+            return ()
+        return await self._block.augment(history, tools)
+
+
+def _scratch_block(app: "AgentApp", *, session_id: str) -> TurnAugmentor | None:
+    """The session scratch for *session_id*, or ``None`` without memory.
+
+    The block re-reads the scratch's ``tried_solutions`` rows per model
+    call and sends them — with the dead-end warning — only while they
+    changed and no compaction message in the history already carries the
+    anchors. In the normal run the compaction message carries them, so
+    the block costs nothing; after an emergency truncation dropped the
+    message, the block takes over.
+
+    :param app: The deployment the exchange runs in.
+    :param session_id: The session whose scratch is read.
+    :returns: A block over the scratch rows, or ``None`` when the
+        deployment keeps no memory database.
+    """
+    if app.memory is None:
+        return None
+    scratch = SessionScratch(app.memory.database)
+
+    async def render() -> str:
+        return await scratch.read(session_id, SCRATCH_KIND_TRIED_SOLUTIONS)
+
+    def wrap(text: str) -> Message:
+        return Message(
+            role=Role.USER,
+            content=(
+                "<session_scratch>\n"
+                f"{text}\n\n{_SCRATCH_WARNING}\n"
+                "</session_scratch>"
+            ),
+        )
+
+    return ScratchBlock(VolatileBlock(render=render, wrap=wrap))
 
 
 def _skill_discovery(app: "AgentApp") -> SkillDiscovery | None:

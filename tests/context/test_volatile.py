@@ -113,3 +113,19 @@ def test_history_and_tools_are_ignored():
     sent = _run(block.augment((), ()))
 
     assert [m.content for m in sent] == ["<block>\nthe précis\n</block>"]
+
+
+def test_an_awaitable_render_is_awaited() -> None:
+    """Sources that read through an async store pass a coroutine function."""
+    state: list[str] = ["first"]
+
+    async def render() -> str:
+        return state[0]
+
+    block = VolatileBlock(render=render, wrap=_wrap)
+
+    _run(block.augment(HISTORY, TOOLS))
+    state[0] = "second"
+    sent = _run(block.augment(HISTORY, TOOLS))
+
+    assert [m.content for m in sent] == ["<block>\nsecond\n</block>"]

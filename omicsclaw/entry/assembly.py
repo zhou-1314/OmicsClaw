@@ -73,6 +73,7 @@ environment, and the optional long-term memory block;
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import platform
@@ -86,6 +87,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Protocol, Sequence, runtime_checkable
 
 from omicsclaw.context import (
+    AssembledPrompt,
     ContextBudget,
     MemoryExtractor,
     PromptAssembler,
@@ -1005,6 +1007,49 @@ def build_prompt(sections: Sequence[Section]) -> PromptAssembler:
     return assembler
 
 
+_UNSEEN_PROMPT = object()
+
+
+class RecordingPromptSource:
+    """A PromptSource that logs whenever the rendered prompt changes.
+
+    Wraps the app's assembler so every render is hashed; a render whose
+    system prompt differs from the previous one logs one line carrying
+    the hash, the total token estimate and the per-section stats. The
+    log is the cached-prefix telemetry: "which section changed, and what
+    the whole prompt cost" is exactly what the stability measurement
+    reads offline — one line per invalidation, cost and culprit
+    together. The first render always logs.
+
+    Structural, like the assembler itself: ``render()`` returns the
+    inner :class:`~omicsclaw.context.AssembledPrompt` untouched, so no
+    caller can tell the wrapper from the wrapped.
+    """
+
+    __slots__ = ("_last", "_source")
+
+    def __init__(self, source: PromptAssembler) -> None:
+        self._source = source
+        self._last: object | str = _UNSEEN_PROMPT
+
+    def render(self) -> AssembledPrompt:
+        prompt = self._source.render()
+        digest = hashlib.sha256(prompt.system_prompt.encode("utf-8")).hexdigest()[:16]
+        if digest != self._last:
+            total = prompt.total_estimated_tokens
+            stats = ",".join(
+                f"{key}={tokens}" for key, tokens in prompt.section_stats
+            )
+            _log.info(
+                "prompt.render changed hash=%s tokens=%d sections=%s",
+                digest,
+                total,
+                stats,
+            )
+            self._last = digest
+        return prompt
+
+
 def build_budget(
     model: str,
     tools: Sequence[ToolDefinition],
@@ -1772,17 +1817,19 @@ def build_app(
             else sections
         )
 
-        app_prompt = build_prompt(chosen)
+        app_prompt = RecordingPromptSource(build_prompt(chosen))
         budget = build_budget(model, snapshot)
         summarizer = build_summarizer(provider, config)
         # The registry goes in as itself — see build_registry on why nothing
         # may wrap it without forwarding both optional Protocols.
         #
-        # The assembler goes in as the engine's default PromptSource, which
-        # it satisfies structurally: ``render()`` returning an object with a
-        # ``system_prompt``, no adapter, nothing dropped. It is a default and
-        # not a binding — one engine serves every session this process runs,
-        # and ``entry/turn.py`` passes the same assembler per call — but a
+        # The recording prompt source goes in as the engine's default
+        # PromptSource, which it satisfies structurally: ``render()``
+        # returning an object with a ``system_prompt``, no adapter,
+        # nothing dropped — the log line it writes per change is the only
+        # difference from the bare assembler. It is a default and not a
+        # binding — one engine serves every session this process runs,
+        # and ``entry/turn.py`` passes the same source per call — but a
         # caller reaching for ``app.engine.exchange`` directly gets this
         # deployment's prompt rather than none.
         engine = AgentEngine(

@@ -169,6 +169,19 @@ CREATE INDEX IF NOT EXISTS idx_compaction_archives_session
 
 CREATE VIRTUAL TABLE IF NOT EXISTS compaction_archive_fts
     USING fts5(id UNINDEXED, content);
+
+CREATE TABLE IF NOT EXISTS session_scratch (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT 'tried_solutions',
+    content     TEXT NOT NULL,
+    created_at  REAL NOT NULL
+);
+
+-- The same content-level dedup as the archive: merging the same anchor
+-- text again writes nothing rather than a second copy.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_scratch_dedup
+    ON session_scratch (session_id, kind, content);
 """
 """The schema of every :class:`Database`, on open, forever additive.
 
@@ -190,7 +203,13 @@ its session, searchable through ``compaction_archive_fts`` the way
 ``memories_fts`` covers ``long_term_memories``. No foreign key on
 purpose, the ``jobs``/``remote_jobs`` precedent: archive rows are
 written from a compaction, which may run in a deployment whose
-sessions never save, and an FK would refuse exactly that write."""
+sessions never save, and an FK would refuse exactly that write.
+
+``session_scratch`` is the session-domain draft store: one row per line
+of the ``tried_solutions`` anchor a written-back compaction recorded, so
+the dead ends stay findable after an emergency truncation drops the
+compaction message that used to carry them. Session-scoped and deleted
+with its session, no foreign key for the same reason as the archive."""
 
 
 BUSY_TIMEOUT_S = 15.0

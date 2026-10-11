@@ -237,6 +237,11 @@ class SqliteSessionStore:
         conn.execute(
             "DELETE FROM compaction_archives WHERE session_id = ?", (session_id,)
         )
+        # The scratch goes with the session too — its rows exist only so
+        # this conversation can re-read its own dead ends.
+        conn.execute(
+            "DELETE FROM session_scratch WHERE session_id = ?", (session_id,)
+        )
         cur = conn.execute(
             "DELETE FROM sessions WHERE session_id = ?", (session_id,)
         )

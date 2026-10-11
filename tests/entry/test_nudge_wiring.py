@@ -24,6 +24,7 @@ from omicsclaw.entry.memory import MEMORY_SEARCH_TOOL_NAME, MEMORY_WRITE_TOOL_NA
 from omicsclaw.entry.nudges import AugmentorChain, build_augmentor, chain
 from omicsclaw.entry.session import attach_sessions
 from omicsclaw.entry.turn import _assemble, run_turn
+from omicsclaw.memory import SCRATCH_KIND_TRIED_SOLUTIONS, SessionScratch
 from omicsclaw.planning import INJECTION_HEADER, PlanInjector, PlanItem, PlanStatus
 from omicsclaw.provider import Completion
 from omicsclaw.schema import (
@@ -256,9 +257,10 @@ def test_a_default_deployment_reminds_before_it_restates_the_plan(
     augmentor = build_augmentor(app, session_id="sess-1")
 
     assert isinstance(augmentor, AugmentorChain)
-    first, second = augmentor._members
+    first, second, third = augmentor._members
     assert isinstance(first, MemoryNudge)
-    assert second is injector
+    assert isinstance(second, nudges.ScratchBlock)
+    assert third is injector
 
 
 def test_the_reminder_follows_the_configured_interval(tmp_path, monkeypatch):
@@ -305,7 +307,10 @@ def test_an_interval_of_zero_turns_the_reminder_off(tmp_path, monkeypatch):
     app = _app_with(tmp_path, monkeypatch, provider, memory_nudge_turns=0)
 
     assert app.memory is not None
-    assert isinstance(build_augmentor(app, session_id="s"), PlanInjector)
+    augmentor = build_augmentor(app, session_id="s")
+    assert isinstance(augmentor, AugmentorChain)
+    assert isinstance(augmentor._members[0], nudges.ScratchBlock)
+    assert isinstance(augmentor._members[-1], PlanInjector)
     _run(run_turn(app, [], "hello", session_id="s"))
     assert _reminded(provider) == []
 
@@ -313,7 +318,10 @@ def test_an_interval_of_zero_turns_the_reminder_off(tmp_path, monkeypatch):
 def test_without_planning_the_engine_gets_the_reminder_itself(tmp_path, monkeypatch):
     app = _app_with(tmp_path, monkeypatch, _ScriptedProvider(), planning=False)
 
-    assert isinstance(build_augmentor(app, session_id="s"), MemoryNudge)
+    augmentor = build_augmentor(app, session_id="s")
+    assert isinstance(augmentor, AugmentorChain)
+    assert isinstance(augmentor._members[0], MemoryNudge)
+    assert isinstance(augmentor._members[1], nudges.ScratchBlock)
 
 
 def test_a_deployment_that_did_not_mount_memory_write_is_never_reminded(
@@ -343,7 +351,9 @@ def test_a_deployment_that_did_not_mount_memory_write_is_never_reminded(
 
     assert app.memory is not None
     assert MEMORY_WRITE_TOOL_NAME not in app.registry.names()
-    assert isinstance(build_augmentor(app, session_id="s"), MemoryNudge)
+    augmentor = build_augmentor(app, session_id="s")
+    assert isinstance(augmentor, AugmentorChain)
+    assert isinstance(augmentor._members[0], MemoryNudge)
     _run(run_turn(app, [], "hello", session_id="s"))
     assert len(provider.seen) == 3
     assert _reminded(provider) == []
@@ -483,8 +493,9 @@ def _skills_tree(tmp_path):
 
 
 def test_discovery_sits_between_the_reminder_and_the_plan(tmp_path, monkeypatch):
-    """Memory first, discovery after it, the plan last: the block the model
-    reads last is the plan, and the discovery block is advice, not state."""
+    """Memory first, the scratch after it, discovery next, the plan last:
+    the block the model reads last is the plan, and the discovery block
+    is advice, not state."""
     _skills_tree(tmp_path)
     provider = _ScriptedProvider()
     app = _app_with(tmp_path, monkeypatch, provider)
@@ -494,10 +505,11 @@ def test_discovery_sits_between_the_reminder_and_the_plan(tmp_path, monkeypatch)
     augmentor = build_augmentor(app, session_id="sess-1")
 
     assert isinstance(augmentor, AugmentorChain)
-    first, second, third = augmentor._members
+    first, second, third, fourth = augmentor._members
     assert isinstance(first, MemoryNudge)
-    assert isinstance(second, SkillDiscovery)
-    assert third is injector
+    assert isinstance(second, nudges.ScratchBlock)
+    assert isinstance(third, SkillDiscovery)
+    assert fourth is injector
 
 
 def test_discovery_is_off_with_the_switch(tmp_path, monkeypatch):
@@ -557,9 +569,9 @@ def test_the_discovery_switches_default_on_and_three(tmp_path):
 def test_the_precis_block_sits_between_the_reminder_and_discovery(
     tmp_path, monkeypatch
 ):
-    """Nudge first, precis after it, discovery next, the plan last —
-    the block is advice from outside the conversation, and the plan
-    block must stay the last thing the model reads."""
+    """Nudge first, precis after it, scratch next, discovery after that,
+    the plan last — the block is advice from outside the conversation,
+    and the plan block must stay the last thing the model reads."""
     _skills_tree(tmp_path)
     app = _app_with(
         tmp_path, monkeypatch, _ScriptedProvider(), precis_via_augmentor=True
@@ -572,18 +584,19 @@ def test_the_precis_block_sits_between_the_reminder_and_discovery(
     augmentor = build_augmentor(app, session_id="sess-1")
 
     assert isinstance(augmentor, AugmentorChain)
-    first, second, third, fourth = augmentor._members
+    first, second, third, fourth, fifth = augmentor._members
     assert isinstance(first, MemoryNudge)
     assert isinstance(second, VolatileBlock)
-    assert isinstance(third, SkillDiscovery)
-    assert fourth is injector
+    assert isinstance(third, nudges.ScratchBlock)
+    assert isinstance(fourth, SkillDiscovery)
+    assert fifth is injector
 
 
-def test_the_default_chain_keeps_exactly_its_pre_migration_members(
+def test_the_default_chain_adds_only_the_scratch_block(
     tmp_path, monkeypatch
 ):
-    """Off by default: nudge, discovery, plan — the precis stays in the
-    prompt and no new member appears."""
+    """Precis off by default: the chain is nudge, scratch, discovery,
+    plan — the precis stays in the prompt and no precis block appears."""
     _skills_tree(tmp_path)
     app = _app_with(tmp_path, monkeypatch, _ScriptedProvider())
     injector = _Member("the plan")
@@ -595,6 +608,7 @@ def test_the_default_chain_keeps_exactly_its_pre_migration_members(
 
     assert [type(member) for member in members] == [
         MemoryNudge,
+        nudges.ScratchBlock,
         SkillDiscovery,
         type(injector),
     ]
@@ -674,3 +688,77 @@ def test_the_precis_switch_reads_from_the_command_line_and_environment(tmp_path)
     assert config.precis_via_augmentor is True
 
     assert AppConfig(workspace=tmp_path).precis_via_augmentor is False
+
+
+# ---- the session scratch block ---------------------------------------------
+
+
+def _scratch_member(app):
+    from omicsclaw.entry import nudges as nudges_module
+
+    augmentor = build_augmentor(app, session_id="s")
+    for member in augmentor._members:  # type: ignore[union-attr]
+        if isinstance(member, nudges_module.ScratchBlock):
+            return member
+    raise AssertionError("no scratch block in the chain")
+
+
+def test_the_scratch_sits_between_the_precis_and_the_discovery(
+    tmp_path, monkeypatch
+):
+    """Chain order: nudge, precis, scratch, discovery, plan — the plan
+    stays the last thing the model reads."""
+    _skills_tree(tmp_path)
+    app = _app_with(
+        tmp_path, monkeypatch, _ScriptedProvider(), precis_via_augmentor=True
+    )
+    injector = _Member("the plan")
+    monkeypatch.setattr(
+        nudges, "build_injector", lambda app, *, session_id="": injector
+    )
+
+    augmentor = build_augmentor(app, session_id="sess-1")
+
+    assert isinstance(augmentor, AugmentorChain)
+    first, second, third, fourth, fifth = augmentor._members
+    assert isinstance(first, MemoryNudge)
+    assert isinstance(second, VolatileBlock)
+    assert isinstance(third, nudges.ScratchBlock)
+    assert isinstance(fourth, SkillDiscovery)
+    assert fifth is injector
+
+
+def test_the_scratch_speaks_only_without_a_summary_message(tmp_path, monkeypatch):
+    """The anchor rides the compaction message; the block takes over only
+    once that message is gone — the emergency-truncation window."""
+    app = _app_with(tmp_path, monkeypatch, _ScriptedProvider())
+    assert app.memory is not None
+    _run(
+        SessionScratch(app.memory.database).merge(
+            "s", SCRATCH_KIND_TRIED_SOLUTIONS, "- louvain: too slow"
+        )
+    )
+    block = _scratch_member(app)
+
+    with_summary = _run(
+        block.augment(
+            (Message.user("[Context Compaction]\n## Anchors\n\n## Summary\nx"),), ()
+        )
+    )
+    without_summary = _run(block.augment((Message.user("carry on"),), ()))
+
+    assert with_summary == ()
+    assert [m.content for m in without_summary] == [
+        "<session_scratch>\n- louvain: too slow\n\n"
+        "these paths are known dead ends; do not retry them without a new idea\n"
+        "</session_scratch>"
+    ]
+
+
+def test_an_empty_scratch_sends_nothing_even_without_a_summary(tmp_path, monkeypatch):
+    app = _app_with(tmp_path, monkeypatch, _ScriptedProvider())
+    block = _scratch_member(app)
+
+    sent = _run(block.augment((Message.user("carry on"),), ()))
+
+    assert sent == ()

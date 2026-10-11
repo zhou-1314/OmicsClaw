@@ -21,7 +21,13 @@ from omicsclaw.context import (
     Offloader,
     ProgressiveCompactor,
 )
-from omicsclaw.memory import FileOffloadStore, JsonlCompactionLog, SqliteCompactionArchive
+from omicsclaw.memory import (
+    FileOffloadStore,
+    JsonlCompactionLog,
+    SCRATCH_KIND_TRIED_SOLUTIONS,
+    SessionScratch,
+    SqliteCompactionArchive,
+)
 from omicsclaw.schema import Message
 
 from .config import STATE_DIRNAME, AppConfig
@@ -141,10 +147,11 @@ def build_compactor(
     message, offloads into :func:`offload_store`, hands summarized-away
     messages to an extractor when there is one, archives what each
     compaction removes into the memory database when
-    :attr:`AppConfig.compaction_archive` is on, and logs every compaction
-    that changed the conversation or failed to :func:`compaction_log`. A
-    listener that raises or a log that cannot be written costs a log
-    line, never the exchange or the other.
+    :attr:`AppConfig.compaction_archive` is on, merges a written-back
+    compaction's ``tried_solutions`` anchor into the session scratch,
+    and logs every compaction that changed the conversation or failed
+    to :func:`compaction_log`. A listener that raises or a log that
+    cannot be written costs a log line, never the exchange or the other.
 
     **The extractor is built here, from the app, on every call**, rather
     than held on the app. It needs a model and a store, and the model is
@@ -166,6 +173,9 @@ def build_compactor(
     if extractor is None:
         extractor = build_memory_extractor(app.memory, app.summarizer)
     archiver = _compaction_archiver(app, session_id)
+    scratch = (
+        SessionScratch(app.memory.database) if app.memory is not None else None
+    )
 
     async def record(entry: CompactionRecord) -> None:
         if on_compact is not None:
@@ -184,6 +194,20 @@ def build_compactor(
             "" if entry.written_back else " (not kept)",
             f" (degraded: {entry.degraded})" if entry.degraded else "",
         )
+        if scratch is not None:
+            tried = entry.anchors.tried_solutions
+            if entry.written_back and tried not in ("", "N/A"):
+                try:
+                    await scratch.merge(
+                        session_id, SCRATCH_KIND_TRIED_SOLUTIONS, tried
+                    )
+                except Exception as error:  # noqa: BLE001 - like the log below
+                    _log.warning(
+                        "could not merge tried_solutions into the scratch "
+                        "of session %s: %s",
+                        session_id or "-",
+                        error,
+                    )
         try:
             await log.append(session_id, entry)
         except OSError as error:

@@ -16,13 +16,16 @@ nothing, a change sends the whole block.
 
 from __future__ import annotations
 
-from typing import Callable, Sequence
+import inspect
+from typing import Awaitable, Callable, Sequence, Union
 
 from omicsclaw.schema import Message, ToolDefinition
 
 __all__ = ["VolatileBlock"]
 
 _UNSENT = object()
+
+_RenderResult = Union[str, Awaitable[str]]
 
 
 class VolatileBlock:
@@ -36,7 +39,9 @@ class VolatileBlock:
     accumulates — every call starts from the current render.
 
     :param render: Called on every :meth:`augment`, so an edit made
-        mid-exchange is visible to the very next model call.
+        mid-exchange is visible to the very next model call. May answer
+        directly or return an awaitable — sources that read through an
+        async store pass a coroutine function.
     :param wrap: Turns the rendered text into the message the model
         reads. Called only for a non-empty text that changed.
     """
@@ -46,7 +51,7 @@ class VolatileBlock:
     def __init__(
         self,
         *,
-        render: Callable[[], str],
+        render: Callable[[], _RenderResult],
         wrap: Callable[[str], Message],
     ) -> None:
         self._render = render
@@ -66,6 +71,8 @@ class VolatileBlock:
         :returns: One message, or an empty tuple.
         """
         text = self._render()
+        if inspect.isawaitable(text):
+            text = await text
         if text == self._last:
             return ()
         self._last = text

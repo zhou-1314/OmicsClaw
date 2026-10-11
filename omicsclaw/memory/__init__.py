@@ -57,6 +57,7 @@ from .precis import (
     truncate_utf8,
 )
 from .record import StoredSession
+from .scratch import SCRATCH_KIND_TRIED_SOLUTIONS, SessionScratch
 from .sessions import SqliteSessionStore
 from .store import STALE_AFTER_DAYS, STALE_MAX_IMPORTANCE, LongTermStore
 
@@ -66,6 +67,7 @@ __all__ = [
     "PRECIS_MAX_BYTES",
     "PRECIS_MAX_ENTRIES",
     "SCHEMA",
+    "SCRATCH_KIND_TRIED_SOLUTIONS",
     "STALE_AFTER_DAYS",
     "STALE_MAX_IMPORTANCE",
     "Category",
@@ -78,6 +80,7 @@ __all__ = [
     "MemoryEntry",
     "MemoryExtractor",
     "Precis",
+    "SessionScratch",
     "SqliteCompactionArchive",
     "SqliteSessionStore",
     "StoredSession",

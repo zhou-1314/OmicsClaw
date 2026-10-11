@@ -1283,3 +1283,37 @@ def test_remote_on_binds_the_runtime_and_mounts_the_location_flag(
         assert "remote:" in schema["properties"]["location"]["description"]
     finally:
         asyncio.run(app.aclose())
+
+
+def test_the_recording_prompt_source_logs_each_change_once(tmp_path, caplog):
+    """One line per invalidation: the hash, the total, and the section
+    stats — what the cached-prefix stability measurement reads offline."""
+    from omicsclaw.entry.assembly import RecordingPromptSource
+
+    prompt_file = tmp_path / "PROMPT.md"
+    prompt_file.write_text("You are OmicsClaw.\n", encoding="utf-8")
+    config = _config(tmp_path, system_prompt_files=(prompt_file,))
+    source = RecordingPromptSource(build_prompt(default_sections(config)))
+
+    with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
+        first = source.render()
+        again = source.render()
+    lines = [
+        record.message
+        for record in caplog.records
+        if "prompt.render changed" in record.message
+    ]
+    assert first.system_prompt == again.system_prompt
+    assert len(lines) == 1
+    assert "planning=" in lines[0]
+
+    # The prompt file changing changes the prompt: the next render logs.
+    prompt_file.write_text("You are OmicsClaw, rewritten.\n", encoding="utf-8")
+    with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
+        source.render()
+    lines = [
+        record.message
+        for record in caplog.records
+        if "prompt.render changed" in record.message
+    ]
+    assert len(lines) == 2
