@@ -28,6 +28,7 @@ from omicsclaw.evals import (
     run_case,
     tool_call,
 )
+from omicsclaw.entry.config import SkillsIndex
 from omicsclaw.evals.hermetic import NETWORK_DISABLED, hermetic_env
 from omicsclaw.evals.runner import headroom_budget
 
@@ -165,7 +166,7 @@ def test_a_compaction_the_case_did_not_expect_fails_it(tmp_path):
         ),
         assertions=(),
         files={f"t{k}.tsv": big for k in range(10)},
-        config={"model": "deepseek-v3", "memory": False},
+        config={"model": "deepseek-v3", "memory": False, "skills_index": SkillsIndex.FULL},
     )
     result = run_case(case, tmp_path)
     assert result.compactions

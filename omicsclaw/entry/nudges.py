@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Sequence
 from omicsclaw.context import MemoryNudge
 from omicsclaw.engine import TurnAugmentor
 from omicsclaw.schema import Message, ToolDefinition
+from omicsclaw.skills import SkillDiscovery
 
 from .memory import MEMORY_WRITE_TOOL_NAME
 from .planning import build_injector
@@ -78,13 +79,13 @@ def chain(*members: TurnAugmentor | None) -> TurnAugmentor | None:
 def build_augmentor(app: "AgentApp", *, session_id: str = "") -> TurnAugmentor | None:
     """The augmentor for one main-agent exchange of *session_id*, or ``None``.
 
-    The memory reminder comes first and the plan injector last, so the
-    plan block stays the last thing the model reads. Building it restores
-    the session's plan, as
+    The memory reminder comes first, the skill discovery block after it,
+    the shadow-review verdict after that, and the plan injector last, so
+    the plan block stays the last thing the model reads. Building it restores the session's plan, as
     :func:`~omicsclaw.entry.planning.build_injector` does.
 
     Sub-agent exchanges do not go through here and get no memory
-    reminder.
+    reminder and no discovery block.
 
     :param app: The deployment the exchange runs in.
     :param session_id: The session whose plan is injected.
@@ -93,6 +94,7 @@ def build_augmentor(app: "AgentApp", *, session_id: str = "") -> TurnAugmentor |
     """
     return chain(
         _memory_nudge(app),
+        _skill_discovery(app),
         _shadow_review_nudge(app, session_id),
         build_injector(app, session_id=session_id),
     )
@@ -107,6 +109,22 @@ def _shadow_review_nudge(
     if reviewer is None:
         return None
     return reviewer.nudge_for(session_id)
+def _skill_discovery(app: "AgentApp") -> SkillDiscovery | None:
+    """The per-turn skill discovery block for *app*, or ``None``.
+
+    :returns: ``None`` when
+        :attr:`~omicsclaw.entry.config.AppConfig.skills_discovery` is
+        off, when the index is empty, or when ``skills_index=off`` left
+        :attr:`AgentApp.skills` empty — a discovery augmentor over
+        nothing is a call per turn that can only ever answer nothing.
+    """
+    if not app.config.skills_discovery or app.skills.is_empty:
+        return None
+    return SkillDiscovery(
+        app.skills,
+        top_k=app.config.skills_discovery_top_k,
+        tracer=app.telemetry.tracer,
+    )
 
 
 def _memory_nudge(app: "AgentApp") -> MemoryNudge | None:

@@ -4,10 +4,15 @@ The provider comes from the repository's ``.env`` merged over
 ``os.environ``: ``tests/conftest.py`` clears the ``.env`` keys from the
 process environment before every test, so the file is read here.
 ``OMICSCLAW_EVAL_LIVE_PROVIDER`` and ``OMICSCLAW_EVAL_LIVE_MODEL``
-override it, and ``OMICSCLAW_EVAL_LIVE_TRIALS`` sets the trials per seed
-(default 3). At the end of the session ``live_report.json`` and
+override it, ``OMICSCLAW_EVAL_LIVE_TRIALS`` sets the trials per seed
+(default 3), and ``OMICSCLAW_EVAL_LIVE_SHAPE`` picks the prompt shape
+(``full``, the baseline, or ``compact+discovery``, the candidate —
+``omicsclaw.evals.live.shape_config`` is the authority on what each
+sets). At the end of the session ``live_report.json`` and
 ``live_report.md`` are written to ``OMICSCLAW_EVAL_REPORT_DIR``
-(default ``build/live-eval``).
+(default ``build/live-eval``); run one shape per report directory and
+``python -m omicsclaw.evals.live compare`` the two reports for the
+before/after table.
 """
 
 from __future__ import annotations
@@ -19,7 +24,14 @@ from pathlib import Path
 import pytest
 
 from omicsclaw.evals import StubResult
-from omicsclaw.evals.live import build_report, run_meta, write_json, write_markdown
+from omicsclaw.evals.live import (
+    PROMPT_SHAPE_FULL,
+    build_report,
+    run_meta,
+    shape_config,
+    write_json,
+    write_markdown,
+)
 from omicsclaw.evals.stubs import REPO_ROOT
 
 _SEEDS = pytest.StashKey[list]()
@@ -29,11 +41,13 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "skill_runs"
 
 @dataclass(frozen=True)
 class LiveSetup:
-    """What every live trial shares: the resolved provider config, stubs and trial count."""
+    """What every live trial shares: the resolved provider config, stubs, trial
+    count and the prompt shape the session runs under."""
 
     config: object
     trials: int
     stubs: dict
+    shape: str = PROMPT_SHAPE_FULL
 
     def provider(self):
         """A fresh provider for one trial."""
@@ -44,7 +58,11 @@ class LiveSetup:
     @property
     def app_config(self) -> dict:
         """The :class:`~omicsclaw.entry.AppConfig` overrides that make the window the production one."""
-        return {"provider": self.config.provider, "model": self.config.model}
+        return {
+            "provider": self.config.provider,
+            "model": self.config.model,
+            **shape_config(self.shape),
+        }
 
 
 def _environment() -> dict[str, str]:
@@ -70,7 +88,12 @@ def live_setup(request) -> LiveSetup:
         env=env,
     )
     stubs = {path.stem: StubResult.load(path) for path in sorted(FIXTURES.glob("*.json"))}
-    setup = LiveSetup(config=config, trials=int(env.get("OMICSCLAW_EVAL_LIVE_TRIALS", "3")), stubs=stubs)
+    setup = LiveSetup(
+        config=config,
+        trials=int(env.get("OMICSCLAW_EVAL_LIVE_TRIALS", "3")),
+        stubs=stubs,
+        shape=env.get("OMICSCLAW_EVAL_LIVE_SHAPE", PROMPT_SHAPE_FULL),
+    )
     request.config.stash[_SETUP] = setup
     return setup
 
@@ -87,7 +110,14 @@ def pytest_sessionfinish(session, exitstatus):
     if not seeds or setup is None:
         return
     config = setup.config
-    meta = run_meta(config.provider, config.model, config.base_url, config.temperature, setup.trials)
+    meta = run_meta(
+        config.provider,
+        config.model,
+        config.base_url,
+        config.temperature,
+        setup.trials,
+        shape=setup.shape,
+    )
     report = build_report(meta, seeds)
     directory = Path(os.environ.get("OMICSCLAW_EVAL_REPORT_DIR") or "build/live-eval")
     write_json(report, directory / "live_report.json")

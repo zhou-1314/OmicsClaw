@@ -3,7 +3,8 @@
 Skills are the third source the prompt composer draws on, after the
 engine's own minimal core and the workspace's ``AGENTS.md``. They are
 disclosed progressively: the system prompt carries one line per skill,
-and the ``use_skill`` tool loads a body when the model needs one. Over
+the ``search_skills`` tool queries that catalogue by keyword, and the
+``use_skill`` tool loads a body when the model needs one. Over
 this repository's 96 skills that is roughly 8.5k tokens of index against
 125k tokens of instructions.
 
@@ -40,16 +41,27 @@ a subprocess and inspecting what was actually imported.
 
 from __future__ import annotations
 
+from .discovery import (
+    DEFAULT_SKILL_DISCOVERY_TOP_K,
+    SKILL_DISCOVERY_MIN_SCORE,
+    SPAN_SKILL_DISCOVERY,
+    SkillDiscovery,
+)
 from .frontmatter import Frontmatter, parse_frontmatter
 from .index import SkillIndex, SkillNotFound, SkipReason, SkippedSkill
 from .loader import SKILL_FILENAME, SkillLoadError, load_skills
 from .skill import Skill
+from .search_skill import SEARCH_SKILL_SCHEMA, SEARCH_SKILL_TOOL_NAME, search_skill_tool
 from .use_skill import USE_SKILL_SCHEMA, USE_SKILL_TOOL_NAME, use_skill_tool
 
 __all__ = [
+    "DEFAULT_SKILL_DISCOVERY_TOP_K",
     "Frontmatter",
+    "SEARCH_SKILL_SCHEMA",
+    "SEARCH_SKILL_TOOL_NAME",
     "SKILL_FILENAME",
     "Skill",
+    "SkillDiscovery",
     "SkillIndex",
     "SkillLoadError",
     "SkillNotFound",
@@ -59,5 +71,6 @@ __all__ = [
     "USE_SKILL_TOOL_NAME",
     "load_skills",
     "parse_frontmatter",
+    "search_skill_tool",
     "use_skill_tool",
 ]

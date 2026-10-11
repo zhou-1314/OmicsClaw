@@ -263,14 +263,16 @@ import sys
 import tempfile
 
 from omicsclaw.skills import (
+    SkillDiscovery,
     SkillIndex,
     SkillNotFound,
     load_skills,
     parse_frontmatter,
+    search_skill_tool,
     use_skill_tool,
 )
 from omicsclaw.tools import ToolRegistry
-from omicsclaw.schema import ToolCall
+from omicsclaw.schema import Message, Role, ToolCall, ToolDefinition
 
 
 def tree(root):
@@ -313,6 +315,14 @@ async def main():
 
         assert parse_frontmatter("no header").body == "no header"
 
+        discovery = SkillDiscovery(index)
+        block = await discovery.augment(
+            [Message(role=Role.USER,
+                     content="analyze the spatial slide against the singlecell reference")],
+            (ToolDefinition(name="use_skill", description="", input_schema={}),),
+        )
+        assert any("spatial-de" in m.content for m in block), block
+
         registry = ToolRegistry()
         registry.register(use_skill_tool(index))
         result = await registry.execute(
@@ -321,6 +331,15 @@ async def main():
         )
         assert not result.is_error, result.output
         assert "Skill directory" in result.output
+
+        registry.register(search_skill_tool(index))
+        result = await registry.execute(
+            ToolCall(id="2", name="search_skills", arguments=json.dumps(
+                {"query": "DE"}))
+        )
+        assert not result.is_error, result.output
+        assert "spatial-de" in result.output
+        assert "load with use_skill" in result.output
 
 
 asyncio.run(main())
@@ -356,9 +375,13 @@ def test_the_public_surface_is_deliberate():
     import omicsclaw.skills as skills
 
     assert skills.__all__ == [
+        "DEFAULT_SKILL_DISCOVERY_TOP_K",
         "Frontmatter",
+        "SEARCH_SKILL_SCHEMA",
+        "SEARCH_SKILL_TOOL_NAME",
         "SKILL_FILENAME",
         "Skill",
+        "SkillDiscovery",
         "SkillIndex",
         "SkillLoadError",
         "SkillNotFound",
@@ -368,6 +391,7 @@ def test_the_public_surface_is_deliberate():
         "USE_SKILL_TOOL_NAME",
         "load_skills",
         "parse_frontmatter",
+        "search_skill_tool",
         "use_skill_tool",
     ]
     assert all(hasattr(skills, name) for name in skills.__all__)

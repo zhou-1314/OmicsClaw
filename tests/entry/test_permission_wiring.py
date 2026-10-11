@@ -54,6 +54,7 @@ MOUNTED = (
     "web_fetch",
     "web_search",
     "use_skill",
+    "search_skills",
     "plan_write",
     "memory_search",
     "memory_write",

@@ -171,7 +171,9 @@ class SkillIndex:
 
         A sentence naming the ``use_skill`` tool followed by the index —
         :meth:`summary` by default, :meth:`domain_summary` when *compact*.
-        Returns ``""`` for an empty index.
+        The compact form also names ``search_skills``: names alone carry
+        no descriptions, so the model has to be told how to look behind
+        them. Returns ``""`` for an empty index.
 
         The heading is not included, so the caller owns it::
 
@@ -183,8 +185,15 @@ class SkillIndex:
         if self.is_empty:
             return ""
         index = self.domain_summary() if compact else self.summary()
+        finding = (
+            "Search the catalogue by keyword with the `search_skills` "
+            "tool. "
+            if compact
+            else ""
+        )
         return (
-            "Load a skill's full instructions with the `use_skill` tool "
+            finding
+            + "Load a skill's full instructions with the `use_skill` tool "
             "when you need them.\n\n" + index
         )
 

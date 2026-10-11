@@ -8,6 +8,7 @@
 ## Tool guidance
 
 - Prefer the tool that answers a question exactly: read a file with read_file rather than `cat` under bash.
+- For a complex multi-step analysis, find the domain guidance first: search the skill catalogue with `search_skills`, load the matching skill with `use_skill`, then write code.
 - Every path is resolved inside the workspace sandbox; a path that leaves it is refused, not clamped.
 - A tool that asks for approval is waiting on a person. Its reported duration includes that wait.
 - A failed tool call is information, not an ending: read the error and correct the call.
@@ -28,9 +29,9 @@ For a task with several steps — a multi-stage analysis, work that has to be ex
 
 ## Available skills
 
-Load a skill's full instructions with the `use_skill` tool when you need them.
+Search the catalogue by keyword with the `search_skills` tool. Load a skill's full instructions with the `use_skill` tool when you need them.
 
-- fake-domains: Test fixture for the golden deployment in tests/entry. Load never; it has no script.
+- spatial (1 skills): fake-domains
 
 
 ## Environment

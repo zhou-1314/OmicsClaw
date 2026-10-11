@@ -75,7 +75,7 @@ def test_every_check_line_is_in_its_fixture():
 def test_the_routing_seed_names_skills_that_still_exist():
     seed = json.loads((FIXTURES / "live_routing_seed.json").read_text(encoding="utf-8"))
     index = skill_index()
-    assert len(seed["cases"]) == 26
+    assert len(seed["cases"]) == 45
     for case in seed["cases"]:
         if not case["expected_skills"]:
             assert case["decision"] == "no_skill", case["id"]

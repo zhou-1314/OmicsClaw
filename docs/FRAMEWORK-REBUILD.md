@@ -698,14 +698,17 @@ Measured on this repository, at `--skills-index full`:
 | project (`CLAUDE.md`) | 4,163 |
 | safety | 133 |
 | tool guidance | 104 |
-| **skills (96 of them)** | **7,523** |
+| **skills (88 of them)** | **6,629** |
 | environment | 31 |
 | **total** | **12,277** |
 
-`--skills-index compact` renders the same catalogue at 547 tokens
-(5,301 total) and `off` restores the five-section prompt and unmounts
-`use_skill` — one switch with one meaning, because a fetch tool for a
-catalogue the model was never shown is a tool it cannot name an argument
+`--skills-index compact` renders the same catalogue at 508 tokens over
+the current 88 skills (the sentence that names `search_skills` — the
+model's way past names-only — included), is the default since the
+discovery layer landed, and `off`
+restores the five-section prompt and unmounts `use_skill` and
+`search_skills` — one switch with one meaning, because a fetch tool for
+a catalogue the model was never shown is a tool it cannot name an argument
 for. `OMICSCLAW_SKILLS_DIR` moves the scan.
 
 **One scan, two consumers.** `build_app` calls `build_skill_index` once

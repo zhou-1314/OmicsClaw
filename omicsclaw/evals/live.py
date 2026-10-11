@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from omicsclaw.entry.config import SkillEnvMode
+from omicsclaw.entry.config import SkillEnvMode, SkillsIndex
 from omicsclaw.entry.project import STEP_RUNNER
 from omicsclaw.permission.gate import DOTENV_NAME
 from omicsclaw.provider import Completion, LLMProvider, ProviderError
@@ -53,6 +53,9 @@ from .stubs import REPO_ROOT, StubResult, _git_commit, find_skill_run
 __all__ = [
     "CATEGORY",
     "FALLBACK_STUB",
+    "PROMPT_SHAPE_COMPACT",
+    "PROMPT_SHAPE_FULL",
+    "PROMPT_SHAPES",
     "SEED_FILE",
     "Denial",
     "LiveReport",
@@ -74,6 +77,39 @@ __all__ = [
 CATEGORY = "live_routing"
 SEED_FILE = REPO_ROOT / "tests" / "evals" / "fixtures" / "live_routing_seed.json"
 LIVE_MAX_TURNS = 6
+
+PROMPT_SHAPE_FULL = "full"
+"""The baseline shape: the full catalogue in the prompt, no discovery block.
+
+Discovery is switched off here rather than left to its default because a
+baseline must be the *before* numbers — a full catalogue with a
+discovery block riding on it is a third configuration nobody asked to
+measure."""
+
+PROMPT_SHAPE_COMPACT = "compact+discovery"
+"""The candidate shape: the domain map, the search tool, the per-turn block."""
+
+PROMPT_SHAPES = (PROMPT_SHAPE_FULL, PROMPT_SHAPE_COMPACT)
+
+
+def shape_config(shape: str) -> dict[str, object]:
+    """The :class:`~omicsclaw.entry.AppConfig` overrides that realize *shape*.
+
+    Two keys, the ones the two layers of the coordination change read:
+    ``skills_index`` for the static catalogue and ``skills_discovery``
+    for the per-turn block. Everything else — provider, model, trials,
+    seeds — is shared, which is what makes two runs of different shapes
+    comparable: the prompt is the only thing that moved.
+
+    :raises ValueError: *shape* is not one of :data:`PROMPT_SHAPES`,
+        naming the ones that exist rather than guessing.
+    """
+    if shape == PROMPT_SHAPE_FULL:
+        return {"skills_index": SkillsIndex.FULL, "skills_discovery": False}
+    if shape == PROMPT_SHAPE_COMPACT:
+        return {"skills_index": SkillsIndex.COMPACT, "skills_discovery": True}
+    known = ", ".join(PROMPT_SHAPES)
+    raise ValueError(f"{shape!r} is not a prompt shape (known: {known})")
 
 FALLBACK_STUB = StubResult(
     stdout="[eval] {skill} run recorded; outputs in {output}",
@@ -507,6 +543,7 @@ def live_case(
     trial: int = 0,
     stubs: Mapping[str, StubResult] | None = None,
     config: Mapping[str, object] | None = None,
+    shape: str = PROMPT_SHAPE_FULL,
 ) -> tuple[Case, list[Denial]]:
     """The case for one trial of *seed*, and the list its policy records denials in.
 
@@ -523,11 +560,13 @@ def live_case(
     :param trial: The trial number, part of the case id.
     :param stubs: Recorded stubs by skill name.
     :param config: :class:`~omicsclaw.entry.AppConfig` overrides, applied
-        over ``skill_env=probe``; the real ``provider`` and ``model``
-        belong here.
+        over ``skill_env=probe`` and *shape*; the real ``provider`` and
+        ``model`` belong here, and an explicit key beats the shape's.
+    :param shape: Which prompt shape the case runs under, as one of
+        :data:`PROMPT_SHAPES`; see :func:`shape_config`.
     """
     denials: list[Denial] = []
-    fields: dict[str, object] = {"skill_env": SkillEnvMode.PROBE}
+    fields: dict[str, object] = {"skill_env": SkillEnvMode.PROBE, **shape_config(shape)}
     fields.update(config or {})
     case = Case(
         id=f"{CATEGORY}/{seed.id}-t{trial}",
@@ -774,8 +813,19 @@ def build_report(meta: Mapping[str, Any], seeds: Sequence[SeedReport]) -> LiveRe
     return LiveReport(meta=stamped, seeds=tuple(seeds))
 
 
-def run_meta(provider: str, model: str, base_url: str, temperature: float, trials: int) -> dict[str, Any]:
-    """The metadata a report records about the run."""
+def run_meta(
+    provider: str,
+    model: str,
+    base_url: str,
+    temperature: float,
+    trials: int,
+    shape: str = PROMPT_SHAPE_FULL,
+) -> dict[str, Any]:
+    """The metadata a report records about the run.
+
+    *shape* lands in the report as ``prompt_shape`` so a comparison of
+    two shapes can be told apart from a comparison of two models.
+    """
     return {
         "git_commit": _git_commit(),
         "provider": provider,
@@ -783,6 +833,7 @@ def run_meta(provider: str, model: str, base_url: str, temperature: float, trial
         "base_url": base_url,
         "temperature": temperature,
         "trials": trials,
+        "prompt_shape": shape,
         "seed_file_sha256": seed_digest(),
     }
 
@@ -798,6 +849,7 @@ def to_dict(report: LiveReport) -> dict[str, Any]:
     confusion: Counter[tuple[str, str]] = Counter()
     denials: list[dict[str, Any]] = []
     totals = Counter()
+    noise = 0
     for entry in report.seeds:
         scored = len(entry.trials) - entry.errors
         bucket = domains.setdefault(entry.seed.domain, [0, 0])
@@ -806,6 +858,8 @@ def to_dict(report: LiveReport) -> dict[str, Any]:
         trials = []
         for trial in entry.trials:
             verdict = trial.verdict
+            if not entry.seed.expected_skills and verdict.chosen is not None:
+                noise += 1
             if verdict.outcome in ("wrong_skill", "no_skill_called"):
                 expected = "|".join(entry.seed.expected_skills) or "(none)"
                 confusion[(expected, verdict.chosen or "(none)")] += 1
@@ -852,6 +906,7 @@ def to_dict(report: LiveReport) -> dict[str, Any]:
         ],
         "denials": denials,
         "tokens": dict(totals),
+        "noise": noise,
     }
 
 
@@ -887,6 +942,7 @@ def markdown(report: LiveReport) -> str:
         f"- trials per seed: {meta.get('trials', '')} (with 3 trials a seed can only score 0%, 33%, 67% or 100%)",
         f"- run at {meta.get('run_at', '')}, commit `{meta.get('git_commit', '')}`",
         f"- overall pass rate: {_percent(data['pass_rate'])}",
+        f"- noise: {data.get('noise', 0)} no_skill trials loaded a skill",
         f"- tokens: input {data['tokens'].get('input_tokens', 0)}, "
         f"cache hits {data['tokens'].get('cache_read_tokens', 0)}, "
         f"output {data['tokens'].get('output_tokens', 0)}, "
@@ -956,13 +1012,16 @@ def write_markdown(report: LiveReport, path: Path) -> None:
 
 
 def compare(old: Mapping[str, Any], new: Mapping[str, Any]) -> str:
-    """How each seed's pass rate and choices changed from *old* to *new*.
+    """How each seed's pass rate, choices and no_skill noise changed.
 
     Both are :func:`to_dict` forms. The first line warns when provider,
     model or base_url differ, since the numbers are then not comparable.
+    The noise line counts no_skill trials that loaded a skill anyway —
+    the answer may still have been right, but the catalogue was
+    consulted where it had no business being.
     """
     lines: list[str] = []
-    keys = ("provider", "model", "base_url")
+    keys = ("provider", "model", "base_url", "prompt_shape")
     changed = [
         f"{key}: {old['meta'].get(key)!r} -> {new['meta'].get(key)!r}"
         for key in keys
@@ -971,6 +1030,13 @@ def compare(old: Mapping[str, Any], new: Mapping[str, Any]) -> str:
     if changed:
         lines.append("WARNING: different runs, not comparable: " + "; ".join(changed))
     lines.append(f"overall: {_percent(old.get('pass_rate'))} -> {_percent(new.get('pass_rate'))}")
+    old_noise = old.get('noise')
+    new_noise = new.get('noise')
+    lines.append(
+        "noise (no_skill trials that loaded a skill): "
+        f"{old_noise if old_noise is not None else 'n/a'} -> "
+        f"{new_noise if new_noise is not None else 'n/a'}"
+    )
     before = {seed["id"]: seed for seed in old["seeds"]}
     for seed in new["seeds"]:
         previous = before.pop(seed["id"], None)
