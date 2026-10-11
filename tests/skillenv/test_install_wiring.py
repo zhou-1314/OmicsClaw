@@ -162,10 +162,13 @@ def test_the_tool_comes_before_every_mcp_tool(tmp_path, offline):
     _, config = _golden_install(tmp_path)
     app = assembly.build_app(config, mcp=_FakeMCP())
     try:
-        assert _names(app)[-5:] == [
+        # The gated install tool still comes before every MCP tool;
+        # P4's python joined the tail after save_artifact.
+        assert _names(app)[-6:] == [
             "ask_user",
             "install_skill_deps",
             "save_artifact",
+            "python",
             "mcp__demo__echo",
             "task",
         ]
