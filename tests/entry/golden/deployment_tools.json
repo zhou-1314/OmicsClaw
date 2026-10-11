@@ -162,6 +162,27 @@
   }
  },
  {
+  "name": "search_skills",
+  "description": "Search the skill catalogue by keyword and get back each match's name, domain and description. Call this before carrying out a domain task when the catalogue in the system prompt does not make the right skill obvious: a keyword, a method name or a domain term is enough. Load the full instructions of a result with `use_skill`.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "query": {
+     "type": "string",
+     "description": "Keywords to look for in each skill's name, domain, tags and triggers. An empty string lists the whole catalogue."
+    },
+    "domain": {
+     "type": "string",
+     "description": "Restrict the results to one domain, as spelled in the skill catalogue (for example `spatial`). Omit to search every domain."
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "additionalProperties": false
+  }
+ },
+ {
   "name": "plan_write",
   "description": "Create or update the execution plan for the current task — the authoritative record of what you are doing. Pass `steps` to update it; omit `steps` to read it back.\nUse it for any task that takes more than a couple of steps: write the plan first, mark an item `in_progress` before you start it, and `completed` as soon as it is actually done. A write that marks more than one never-started item `completed`, or marks a `cancelled` item `completed`, is refused and changes nothing. The outstanding items are shown to you again before every reply, so the plan survives a context compaction and a resumed session — work from it.\nYou may send only the items you are still working on: anything already `in_progress` or `completed` is kept, in its original position. Omitting an item drops it only if it was never started; to abandon one deliberately, send it with status `cancelled`.",
   "input_schema": {

@@ -61,8 +61,9 @@ call has no queues — :meth:`AgentApp.aclose` has nothing to drain and
 
 **Skills.** This module imports :mod:`omicsclaw.skills`:
 :func:`foundation_tools` appends :func:`~omicsclaw.skills.use_skill_tool`
-and :func:`default_sections` adds a skill catalogue section.
-``AppConfig.skills_index`` is the switch, and ``off`` drops both. The
+and :func:`~omicsclaw.skills.search_skill_tool`, and
+:func:`default_sections` adds a skill catalogue section.
+``AppConfig.skills_index`` is the switch, and ``off`` drops all three. The
 prompt is the contract, safety rules and tool guidance, then the
 optional planning, execution sandbox and skills sections, the
 environment, and the optional long-term memory block;
@@ -146,7 +147,12 @@ from omicsclaw.remote import RemoteKernelRuntime, RemotePlaneBinding
 from omicsclaw.sandbox import ChangeListener
 from omicsclaw.schema import Message, Role, ToolDefinition
 from omicsclaw.schema.artifacts import kind_and_mime_for
-from omicsclaw.skills import SkillIndex, load_skills, use_skill_tool
+from omicsclaw.skills import (
+    SkillIndex,
+    load_skills,
+    search_skill_tool,
+    use_skill_tool,
+)
 from omicsclaw.subagent import TaskTool
 from omicsclaw.tools import (
     ApprovalRequest,
@@ -272,6 +278,9 @@ prompt: a renamed heading or a missing file cannot drop it.
 TOOL_GUIDANCE = """\
 - Prefer the tool that answers a question exactly: read a file with \
 read_file rather than `cat` under bash.
+- For a complex multi-step analysis, find the domain guidance first: \
+search the skill catalogue with `search_skills`, load the matching \
+skill with `use_skill`, then write code.
 - Every path is resolved inside the workspace sandbox; a path that \
 leaves it is refused, not clamped.
 - A tool that asks for approval is waiting on a person. Its reported \
@@ -283,7 +292,9 @@ correct the call."""
 Short because the tool definitions carry their own descriptions and
 repeating them here would be two sources for one fact. What is here is
 what a definition cannot say: the relationship *between* tools, and that
-the sandbox refuses rather than clamps.
+the sandbox refuses rather than clamps — which is also why the skills
+line is phrased as an order (search, load, then code) rather than a
+list of two tools the model might call in either sequence.
 """
 
 REMOTE_SCHEDULING_RULES = """\
@@ -364,10 +375,14 @@ def foundation_tools(
     ``max_timeout`` is that construction argument, so this call is what
     lets the model request the longer runs a deconvolution needs.
 
-    ``use_skill`` is mounted last and only when the catalogue is actually
-    advertised: it is the half of progressive disclosure that fetches,
-    and a fetch tool for an index nobody was shown is a tool the model
-    cannot name an argument for. Pass *skills* to share one scan with
+    ``use_skill`` is mounted only when the catalogue is actually
+    advertised, with ``search_skills`` right after it — a fetch tool for
+    an index nobody was shown is a tool the model cannot name an
+    argument for, and a search tool without the same gate would outlive
+    the catalogue it queries. Appended directly after ``use_skill``
+    rather than at the very end so the pair switches on and off as one;
+    the tools after them are themselves latecomers appended in their own
+    order. Pass *skills* to share one scan with
     :func:`default_sections`; ``None`` scans again.
 
     *bash_environment* is where ``bash`` runs — a started sandbox's
@@ -421,7 +436,7 @@ def foundation_tools(
     if config.skills_index is not SkillsIndex.OFF:
         index = build_skill_index(config) if skills is None else skills
         annotate = skill_env.annotate if skill_env is not None else None
-        tools = (*tools, use_skill_tool(index, annotate=annotate))
+        tools = (*tools, use_skill_tool(index, annotate=annotate), search_skill_tool(index))
     if plans is not None:
         tools = (*tools, plan_write_tool(plans))
     if memory is not None:

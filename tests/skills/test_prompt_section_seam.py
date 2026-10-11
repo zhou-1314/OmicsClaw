@@ -126,3 +126,19 @@ def test_the_compact_index_is_the_cheaper_section(tmp_path):
     assert compact.total_estimated_tokens < full.total_estimated_tokens / 4
     assert "Skip when" not in compact.system_prompt
     assert "spatial-0" in compact.system_prompt
+
+
+def test_the_compact_index_names_the_search_tool(tmp_path):
+    """Compact carries names only, so it has to say how to look behind them.
+
+    The full form already routes on descriptions and needs no such
+    sentence; adding one there would grow the rendering this repository
+    keeps byte-stable for the cached prefix.
+    """
+    index = build(tmp_path)
+
+    body = index.prompt_body(compact=True)
+
+    assert "`search_skills`" in body
+    assert "`use_skill`" in body
+    assert "`search_skills`" not in index.prompt_body()

@@ -703,9 +703,11 @@ Measured on this repository, at `--skills-index full`:
 | **total** | **12,277** |
 
 `--skills-index compact` renders the same catalogue at 547 tokens
-(5,301 total) and `off` restores the five-section prompt and unmounts
-`use_skill` — one switch with one meaning, because a fetch tool for a
-catalogue the model was never shown is a tool it cannot name an argument
+(5,301 total; 508 over the current 88 skills, the sentence that names
+`search_skills` — the model's way past names-only — included) and `off`
+restores the five-section prompt and unmounts `use_skill` and
+`search_skills` — one switch with one meaning, because a fetch tool for
+a catalogue the model was never shown is a tool it cannot name an argument
 for. `OMICSCLAW_SKILLS_DIR` moves the scan.
 
 **One scan, two consumers.** `build_app` calls `build_skill_index` once

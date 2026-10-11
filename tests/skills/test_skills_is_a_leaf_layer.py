@@ -267,6 +267,7 @@ from omicsclaw.skills import (
     SkillNotFound,
     load_skills,
     parse_frontmatter,
+    search_skill_tool,
     use_skill_tool,
 )
 from omicsclaw.tools import ToolRegistry
@@ -322,6 +323,15 @@ async def main():
         assert not result.is_error, result.output
         assert "Skill directory" in result.output
 
+        registry.register(search_skill_tool(index))
+        result = await registry.execute(
+            ToolCall(id="2", name="search_skills", arguments=json.dumps(
+                {"query": "DE"}))
+        )
+        assert not result.is_error, result.output
+        assert "spatial-de" in result.output
+        assert "load with use_skill" in result.output
+
 
 asyncio.run(main())
 print(sorted(
@@ -357,6 +367,8 @@ def test_the_public_surface_is_deliberate():
 
     assert skills.__all__ == [
         "Frontmatter",
+        "SEARCH_SKILL_SCHEMA",
+        "SEARCH_SKILL_TOOL_NAME",
         "SKILL_FILENAME",
         "Skill",
         "SkillIndex",
@@ -368,6 +380,7 @@ def test_the_public_surface_is_deliberate():
         "USE_SKILL_TOOL_NAME",
         "load_skills",
         "parse_frontmatter",
+        "search_skill_tool",
         "use_skill_tool",
     ]
     assert all(hasattr(skills, name) for name in skills.__all__)

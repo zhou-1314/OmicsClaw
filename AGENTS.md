@@ -151,7 +151,8 @@ OmicsClaw/
 │   │                   read_file, write_file, edit_file, bash, web_*.
 │   ├── context/        Prompt assembly, token budget, progressive compaction.
 │   ├── skills/         Skill **loader** (plural). Reads skills/*/SKILL.md into
-│   │                   a catalogue; `use_skill` fetches one body on demand.
+│   │                   a catalogue; `search_skills` queries it and `use_skill`
+│   │                   fetches one body on demand.
 │   ├── memory/         Session store + long-term recall + MEMORY.md precis.
 │   ├── mcp/            MCP client: .mcp.json, stdio + Streamable HTTP.
 │   ├── planning/       The execution plan the agent keeps outside the chat.
@@ -251,10 +252,10 @@ inert — it is neither validated nor shown to anyone.
 
 | Key | Required | Read by |
 |---|---|---|
-| `name` | yes | the prompt index, `use_skill` |
+| `name` | yes | the prompt index, `search_skills`, `use_skill` |
 | `description` | yes | the prompt index — this is what the model routes on |
-| `trigger` | no | `/skills <query>` search only; **never** auto-fires a skill |
-| `tags` | no | `/skills <query>` search only |
+| `trigger` | no | `/skills` and the `search_skills` tool; **never** auto-fires a skill |
+| `tags` | no | `/skills` and the `search_skills` tool |
 
 A header missing `name` or `description` is **skipped**, not indexed, and
 the reason lands in `SkillIndex.skipped` as data rather than a log line.
@@ -339,7 +340,9 @@ uncapped, GPUs only with `--sandbox-gpus`.
 ### Reaching a skill's instructions
 
 The model chooses. The system prompt carries one `- name: description`
-line per skill instead of the full bodies, and
+line per skill instead of the full bodies, `search_skills` finds skills
+by keyword when the catalogue alone does not make the match obvious
+(under `--skills-index compact` it is the only way past the names), and
 `use_skill` fetches one body on demand. The tool also returns the skill's
 **directory**, which is how the model finds the script beside a body that
 rarely names its own path.

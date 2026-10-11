@@ -14,7 +14,7 @@ All processing happens locally. No genetic or spatial data leaves the machine.
 - **AnnData (`.h5ad`)**: The universal file format for passing data between skills.
 - **SpatialSession**: A JSON state tracker for multi-skill workflows (stored in `profiles/`).
 - **omicsclaw.py**: The central CLI runner that registers skills, filters flags, and dispatches subprocesses.
-- **Progressive disclosure**: the system prompt carries one line per skill; `use_skill` fetches one body on demand.
+- **Progressive disclosure**: the system prompt carries one line per skill; `search_skills` queries the catalogue by keyword and `use_skill` fetches one body on demand.
 - **README.md**: The repository's living memory for project context, milestones, and contributor-visible decisions.
 - **SPEC.md**: The repository maintenance and AI development contract for coding agents.
 
@@ -173,8 +173,8 @@ python skills/bulkrna/bulkrna-de/bulkrna_de.py --demo --output /tmp/de_demo
 ```
 
 A skill's own `SKILL.md` documents its exact flags; `--help` works on every
-primary script. An agent reaches a body with the `use_skill` tool, which
-also returns the skill's directory.
+primary script. An agent searches the catalogue with the `search_skills` tool and
+reaches a body with `use_skill`, which also returns the skill's directory.
 
 **Routing is not a skill.** The `orchestrator` and `omics-skill-builder`
 skills, their named pipelines and their keyword-routing table were deleted
