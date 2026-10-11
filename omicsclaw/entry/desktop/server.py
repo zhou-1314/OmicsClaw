@@ -539,7 +539,9 @@ def create_desktop_app(
 
     api = FastAPI(title="OmicsClaw Desktop", version=__version__)
     shared = interactions if interactions is not None else DesktopInteractions(app)
-    jobs = jobs_manager if jobs_manager is not None else JobsManager(app)
+    jobs = jobs_manager if jobs_manager is not None else JobsManager(
+        app, remote_runtime=_remote_runtime_bridge(app)
+    )
     artifacts = artifacts_store if artifacts_store is not None else jobs.artifacts
 
     def _authorized(request: Request) -> bool:
@@ -823,6 +825,30 @@ def create_desktop_app(
     mount_artifacts_routes(api, artifacts, jobs=jobs, authorized=_authorized)
 
     return api
+
+
+def _remote_runtime_bridge(app: AgentApp) -> Any:
+    """The C2 binding this adapter owes the jobs plane: the app's remote
+    plane, mounted as the manager's remote runtime.
+
+    ``None`` — and therefore a manager with no remote runtime, exactly
+    as before the binding existed — on a deployment whose
+    ``remote_execution`` is off or whose plane store never opened. A
+    ``jobs_manager`` passed in explicitly brings its own; this function
+    only equips the default one.
+
+    ``RemoteJobsBridge`` is imported here rather than at module scope
+    for the same reason ``fastapi`` is: the adapter module stays
+    importable where the remote plane is not installed, and the import
+    is free either way (``omicsclaw.remote`` imports nothing from this
+    package, so no cycle opens).
+    """
+    plane = getattr(app, "remote", None)
+    if plane is None:
+        return None
+    from omicsclaw.remote.bridge import RemoteJobsBridge
+
+    return RemoteJobsBridge(plane)
 
 
 def _note_runtime_header(header: str | None) -> None:
