@@ -579,3 +579,40 @@ def test_execute_rejects_unknown_language_and_r_adata(workspace):
             await manager.aclose()
 
     _asyncio.run(_asyncio.wait_for(scenario(), 60))
+
+
+# ---- review hardening: a broken provisioner pid signals nothing ---------------
+
+
+def test_kill_manager_refuses_nonpositive_pids_and_pgids(monkeypatch):
+    """The os.kill(-1, SIGKILL) shape, refused: a provisioner that
+    reports a pid or pgid of zero or less is broken, and the honest
+    response is to signal nothing — never the broadcast a negative id
+    means to the kernel."""
+    import os
+    import signal
+
+    from omicsclaw.kernel.session import SessionKernel
+
+    sent: list[tuple] = []
+    monkeypatch.setattr(os, "kill", lambda pid, sig: sent.append((pid, sig)))
+    monkeypatch.setattr(
+        os, "killpg", lambda pgid, sig: sent.append(("pg", pgid, sig))
+    )
+
+    class _Prov:
+        def __init__(self, pid, pgid):
+            self.pid = pid
+            self.pgid = pgid
+
+    class _Manager:
+        def __init__(self, pid, pgid):
+            self.provisioner = _Prov(pid, pgid)
+
+    for pid, pgid in ((-1, None), (0, None), (None, -1), (None, 0), (-1, -1)):
+        SessionKernel._kill_manager(_Manager(pid, pgid))
+    assert sent == [], "a nonpositive id reached a signal call"
+
+    # the positive control: a real pid still gets its SIGKILL
+    SessionKernel._kill_manager(_Manager(4242, None))
+    assert sent == [(4242, signal.SIGKILL)]

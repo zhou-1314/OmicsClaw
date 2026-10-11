@@ -161,8 +161,8 @@ def test_with_install_the_mounted_list_gains_one_gated_tool(tmp_path, offline):
     try:
         names = tuple(app.registry.names())
         # install_skill_deps inserts after ``ask_user``; P2's
-        # save_artifact and ``task`` stay the tail.
-        assert names == (*MOUNTED[:-2], "install_skill_deps", *MOUNTED[-2:])
+        # save_artifact, P4's ``python`` and ``task`` stay the tail.
+        assert names == (*MOUNTED[:-3], "install_skill_deps", *MOUNTED[-3:])
         assert isinstance(app.registry.get("install_skill_deps"), GatedTool)
     finally:
         if app.memory is not None:

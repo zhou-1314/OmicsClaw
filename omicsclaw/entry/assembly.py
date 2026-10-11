@@ -72,6 +72,7 @@ environment, and the optional long-term memory block;
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import platform
 import sqlite3
@@ -80,7 +81,8 @@ import time
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING, Sequence
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Protocol, Sequence, runtime_checkable
 
 from omicsclaw.context import (
     ContextBudget,
@@ -134,8 +136,13 @@ from omicsclaw.provider import (
     provider_from_env,
     resolve_config,
 )
-from omicsclaw.kernel import PersistentKernelManager, format_cell_summary
-from omicsclaw.remote import RemotePlaneBinding
+from omicsclaw.kernel import (
+    OutputLimits,
+    PersistentKernelManager,
+    SessionKernel,
+    format_cell_summary,
+)
+from omicsclaw.remote import RemoteKernelRuntime, RemotePlaneBinding
 from omicsclaw.sandbox import ChangeListener
 from omicsclaw.schema import Message, Role, ToolDefinition
 from omicsclaw.schema.artifacts import kind_and_mime_for
@@ -154,6 +161,7 @@ from omicsclaw.tools import (
     WriteTool,
     read_tool,
 )
+from omicsclaw.tools.base import ApprovalMode, RiskLevel, ToolPolicy
 from omicsclaw.tools.builtin.bash import BashEnvironment
 from omicsclaw.tools.builtin.python_kernel import PythonKernelTool
 from omicsclaw.tools.builtin.remote import RemotePlane, remote_tools
@@ -484,6 +492,30 @@ class WorkspaceArtifactSink:
         )
 
 
+@runtime_checkable
+class RemoteKernelStarter(Protocol):
+    """What the kernel binding hands the manager as its remote half.
+
+    The runtime's one-method seam, structural: the shipped
+    :class:`~omicsclaw.remote.kernel.RemoteKernelRuntime` satisfies it
+    without the binding importing the remote layer, the same
+    direction-everything-faces rule the ``KernelRunner`` Protocol the
+    ``python`` tool speaks enforces one layer down. The answer is a
+    :class:`~omicsclaw.kernel.session.SessionKernel` subclass; the
+    manager holds it by that face and never learns where it runs."""
+
+    async def start(
+        self,
+        session_id: str,
+        *,
+        host: str,
+        workspace: Path | str,
+        limits: OutputLimits | None = None,
+        on_figure: Callable[[Path, str], tuple[str, str]] | None = None,
+        language: str = "python",
+    ) -> SessionKernel: ...
+
+
 class WorkspaceKernelBinding:
     """The ``python`` tool's kernel seam and the figure registrar over one
     workspace.
@@ -502,13 +534,24 @@ class WorkspaceKernelBinding:
     ones its job produced).
     """
 
-    def __init__(self, workspace: Workspace | Path | str) -> None:
+    def __init__(
+        self,
+        workspace: Workspace | Path | str,
+        *,
+        remote_runtime: RemoteKernelStarter | None = None,
+    ) -> None:
+        """*remote_runtime* (C3) is the remote kernel half or ``None`` —
+        ``None`` is the off answer: the manager then refuses remote
+        locations at the door and this binding is behaviourally the P4
+        object, which a test pins."""
         root = (
             Path(workspace.root)
             if isinstance(workspace, Workspace)
             else Path(workspace)
         )
-        self.manager = PersistentKernelManager(root, on_figure=self._register_figure)
+        self.manager = PersistentKernelManager(
+            root, on_figure=self._register_figure, remote_runtime=remote_runtime
+        )
         self._root = root
         self._store: ArtifactStore | None = None
 
@@ -558,8 +601,13 @@ class WorkspaceKernelBinding:
         session_id: str,
         on_output=None,
         timeout_s: float | None = None,
+        location: str = "local",
     ) -> str:
-        """The ``KernelRunner`` seam: one cell, one summary string."""
+        """The ``KernelRunner`` seam: one cell, one summary string.
+
+        *location* is C3's routing argument, passed through to the
+        manager verbatim — the refusals (no runtime, bad shape) are the
+        manager's, so both faces answer them identically."""
         from omicsclaw.kernel import KernelCallbacks
 
         def _stream(name: str, text: str) -> None:
@@ -572,6 +620,7 @@ class WorkspaceKernelBinding:
             origin="agent",  # TODO(P4): distinguish user cells when the
             # desktop chat surface starts sending them; the screenshot
             # semantics of CS's origin=="user" hang off this flag.
+            location=location,
             callbacks=KernelCallbacks(on_stream=_stream),
             timeout_s=timeout_s,
         )
@@ -1340,6 +1389,47 @@ def open_remote_plane(config: AppConfig) -> RemotePlaneBinding | None:
     return RemotePlaneBinding(database, workspace=config.workspace)
 
 
+async def _consent_remote_kernel_env(host: str) -> None:
+    """The one-time card for a host's first remote kernel.
+
+    Called by the runtime the moment a host needs its kernel environment
+    built — before any install command runs. It travels through the
+    caller's tool context, so the chat face answers it with the
+    conversation's approval card and a job answers it with a
+    ``tool_approval_request`` frame: the same channel, whatever surface
+    asked for the cell. A denial (or a timeout) raises
+    :exc:`~omicsclaw.tools.context.ApprovalDenied`, which surfaces as
+    the failed call it is — the environment is never built on a no.
+
+    The policy is declared here rather than buried in the runtime
+    because this is the composition root's opinion: installing software
+    on a remote host is ``HIGH``/``ASK`` whatever face triggered it —
+    the same claim ``remote_exec`` makes for one command.
+    """
+    from omicsclaw.tools.context import require_approval
+
+    await require_approval(
+        "remote_kernel_env",
+        json.dumps({"host": host}, ensure_ascii=False),
+        policy=ToolPolicy(
+            risk_level=RiskLevel.HIGH,
+            approval_mode=ApprovalMode.ASK,
+            prompts_for_itself=True,
+            read_only=False,
+            concurrency_safe=False,
+            writes_workspace=False,
+            touches_network=True,
+            tags=frozenset({"remote", "kernel", "mutation"}),
+        ),
+        reason=(
+            f"set up the OmicsClaw kernel environment on {host}"
+            " (first use only): a uv venv at ~/.omicsclaw/kernel-env with"
+            " ipykernel and the scanpy core stack"
+            " (scanpy, anndata, pandas, matplotlib, leidenalg)"
+        ),
+    )
+
+
 def build_app(
     config: AppConfig,
     *,
@@ -1459,13 +1549,22 @@ def build_app(
     # off whole — tools and rules together — rather than mounting rules
     # that name tools nothing answers.
     remote_plane = open_remote_plane(config)
+    # C3 rides the plane's switch: a deployment that turned remote
+    # execution on gets remote *kernels* possible too (each first use on
+    # a host still asks), and one that left it off gets the P4 object
+    # graph byte for byte — one switch, no second knob to document.
+    remote_kernels = (
+        RemoteKernelRuntime(remote_plane.spawner, consent=_consent_remote_kernel_env)
+        if remote_plane is not None
+        else None
+    )
     try:
         # P4's kernel binding is built before the tool list so both of its
         # consumers mount the same object: the ``python`` tool below, and
         # :attr:`AgentApp.kernels` (the desktop jobs plane's code_run runner
         # reads it back). Lazy kernels keep this cheap for deployments that
         # never run a cell.
-        kernels = WorkspaceKernelBinding(config.workspace)
+        kernels = WorkspaceKernelBinding(config.workspace, remote_runtime=remote_kernels)
         if tools is None:
             mounted: Sequence[Tool] = (
                 *foundation_tools(
@@ -1489,7 +1588,10 @@ def build_app(
                     Workspace(config.workspace),
                     sink=WorkspaceArtifactSink(config.workspace),
                 ),
-                PythonKernelTool(runner=kernels),
+                PythonKernelTool(
+                    runner=kernels,
+                    allow_remote=remote_kernels is not None,
+                ),
             )
         else:
             mounted = tools

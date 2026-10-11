@@ -31,12 +31,29 @@ session is marked for recycling-before-next-cell only when **both** the
 cell count and the peak RSS have crossed their thresholds, probed after
 every cell via ``/proc`` (:meth:`SessionKernel.peak_rss_kb`) — the same
 usage probe whose numbers ride the ``usage`` event.
+
+**A session's kernel also has a location** (C3): ``"local"`` (the whole
+of P4, and the default) or ``"remote:<ssh alias>"``. The state key grows
+a third component, so one session may hold a local python kernel and a
+remote one at once — separate namespaces, separate lifecycles, the same
+id. The manager knows the location *shape* and nothing more: a remote
+kernel is built by the injected *remote_runtime* (an async
+``start(session_id, host=..., ...) -> kernel`` plus its own environment
+provisioning, living in :mod:`omicsclaw.remote.kernel` — this package
+imports nothing of it, the way ``jobs_manager`` holds its planes). With
+no runtime bound, a remote location is refused at the door: a deployment
+that never asked for remote kernels behaves exactly as before, which a
+test pins. The reaper, the cancel ladder and the obituary notices serve
+remote kernels identically — only ``_start_locked`` and the park's kill
+(which now runs on a worker thread, so a remote kill can pay its ssh
+round trip without blocking the loop) know where a kernel lives.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -52,12 +69,36 @@ __all__ = [
     "SessionState",
     "SUMMARY_CELL_CODE",
     "format_cell_summary",
+    "normalize_location",
 ]
 
 _log = logging.getLogger(__name__)
 
 CANCEL_GRACE_S = 10.0
 """Tier 2 of the cancel ladder: how long an interrupt is given to land."""
+
+_LOCATION_SHAPE: re.Pattern[str] = re.compile(r"\Aremote:[A-Za-z0-9._-]+\Z")
+
+
+def normalize_location(location: str) -> str:
+    """``"local"`` or ``"remote:<alias>"``, or refused.
+
+    The shape check only — one ``remote:`` prefix and one closed-alphabet
+    word, no leading dash — because this package cannot import the
+    remote layer's validator (the dependency points the other way). The
+    runtime, the tool faces and the ingress route all re-check the alias
+    with the real validator; this is the first lock, not the only one.
+    """
+    text = "local" if location is None else str(location)
+    if text == "local":
+        return text
+    if _LOCATION_SHAPE.match(text) and not text[7:].startswith("-"):
+        return text
+    raise ValueError(
+        f"unsupported kernel location {location!r}: expected 'local' or"
+        " 'remote:<ssh alias>' (one word of letters, digits, dots,"
+        " dashes, underscores)"
+    )
 
 DEFAULT_CELL_TIMEOUT_S = 1800.0
 """The retained default cell ceiling — 30 min, per the plan's explicit
@@ -120,6 +161,10 @@ class SessionState:
 
     session_id: str
     language: str = "python"
+    location: str = "local"
+    """``local`` or ``remote:<alias>`` — where this kernel's namespace
+    lives. Part of the state key, so the same session may hold one
+    kernel per (language, location) combination."""
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     kernel: SessionKernel | None = None
     obituary: str = ""
@@ -142,6 +187,7 @@ class SessionState:
         return {
             "session_id": self.session_id,
             "language": self.language,
+            "location": self.location,
             "alive": bool(self.kernel is not None and self.kernel.is_alive()),
             "executing": self.executing,
             "protected": sorted(self.protected),
@@ -166,42 +212,76 @@ class PersistentKernelManager:
         on_figure: Callable[[Path, str, str, str], Any] | None = None,
         reaper: KernelReaper | None = None,
         python: str | None = None,
+        remote_runtime: Any = None,
     ) -> None:
         self.workspace = Path(workspace)
         self.limits = limits or OutputLimits()
         self.cell_timeout_s = float(cell_timeout_s)
         self.python = python
+        self.remote_runtime = remote_runtime
+        """The remote half, or ``None`` (the default — remote kernel
+        locations then raise at the door). Anything with an async
+        ``start(session_id, *, host, workspace, limits, on_figure,
+        language) -> kernel``; the shipped one is
+        :class:`omicsclaw.remote.kernel.RemoteKernelRuntime`. Typed as
+        ``Any`` because this package sits below the remote layer and
+        imports nothing from it."""
         self.handles = HandleRegistry()
-        self.states: dict[tuple[str, str], SessionState] = {}
+        self.states: dict[tuple[str, str, str], SessionState] = {}
         self._on_figure = on_figure
         self._reaper = reaper or KernelReaper(self)
         self._reaper_task: asyncio.Task[None] | None = None
 
     # ---- session bookkeeping ----
 
-    def state_for(self, session_id: str, *, language: str = "python") -> SessionState:
-        """The state of one session's *language* kernel. A session may
-        hold a python kernel and an R kernel at once — separate
-        namespaces, separate lifecycles, the same session id."""
-        key = (session_id, language)
+    def state_for(
+        self,
+        session_id: str,
+        *,
+        language: str = "python",
+        location: str = "local",
+    ) -> SessionState:
+        """The state of one session's *language* kernel *at a location*.
+        A session may hold a python kernel and an R kernel at once, and
+        a local kernel beside a remote one — separate namespaces,
+        separate lifecycles, the same session id."""
+        key = (session_id, language, normalize_location(location))
         state = self.states.get(key)
         if state is None:
-            state = SessionState(session_id=session_id, language=language)
+            state = SessionState(
+                session_id=session_id, language=language, location=key[2]
+            )
             self.states[key] = state
         return state
 
     def snapshot(self) -> list[dict[str, Any]]:
         return [state.snapshot() for state in self.states.values()]
 
-    def protect(self, session_id: str, reason: str, *, language: str = "python") -> None:
+    def protect(
+        self,
+        session_id: str,
+        reason: str,
+        *,
+        language: str = "python",
+        location: str = "local",
+    ) -> None:
         """Add *session_id*'s kernel to the reaper's protection set (e.g.
         a pending approval). Idempotent per reason."""
-        self.state_for(session_id, language=language).protected.add(reason)
+        self.state_for(
+            session_id, language=language, location=location
+        ).protected.add(reason)
 
     def unprotect(
-        self, session_id: str, reason: str, *, language: str = "python"
+        self,
+        session_id: str,
+        reason: str,
+        *,
+        language: str = "python",
+        location: str = "local",
     ) -> None:
-        state = self.states.get((session_id, language))
+        state = self.states.get(
+            (session_id, language, normalize_location(location))
+        )
         if state is not None:
             state.protected.discard(reason)
 
@@ -214,6 +294,7 @@ class PersistentKernelManager:
         *,
         origin: str = "agent",
         language: str = "python",
+        location: str = "local",
         callbacks: KernelCallbacks | None = None,
         timeout_s: float | None = None,
         adata_in: str | None = None,
@@ -227,18 +308,39 @@ class PersistentKernelManager:
         *language* picks the session's kernel for that language —
         ``"python"`` (the ``python`` tool and the default) or ``"r"``
         (the installed IRkernel spec; needs ``r_available()``). The two
-        kernels of one session are separate namespaces. *adata_in* is an
-        optional host h5ad path run through
+        kernels of one session are separate namespaces. *location* picks
+        where that namespace lives — ``"local"`` (the whole of P4) or
+        ``"remote:<ssh alias>"`` (C3; needs a *remote_runtime*, python
+        only, and no ``adata_in`` — the h5ad bridge reads a file on this
+        machine into the kernel, so the file must sit where the kernel
+        runs). *adata_in* is an optional host h5ad path run through
         :meth:`HandleRegistry.sync_in` under the session lock, with the
         resident object additionally bound to *adata_binding* in the cell's
         namespace — the job face's input contract, python only.
         """
         if language not in ("python", "r"):
             raise ValueError(f"unsupported kernel language: {language!r}")
+        location = normalize_location(location)
+        if location != "local":
+            if self.remote_runtime is None:
+                raise ValueError(
+                    "remote kernel locations are not enabled on this"
+                    " deployment (no remote kernel runtime bound)"
+                )
+            if language != "python":
+                raise ValueError(
+                    "remote kernels are python-only this round; R over"
+                    " IRkernel rides the language seam when it lands"
+                )
         if adata_in and language != "python":
             raise ValueError("the adata h5ad bridge is python-only")
+        if adata_in and location != "local":
+            raise ValueError(
+                "the adata h5ad bridge needs the kernel beside the file;"
+                " run the cell locally or move the data to the host"
+            )
         self._ensure_reaper()
-        state = self.state_for(session_id, language=language)
+        state = self.state_for(session_id, language=language, location=location)
         async with state.lock:
             state.executing = True
             state.protected.add("executing")
@@ -259,7 +361,7 @@ class PersistentKernelManager:
                         # The kernel died between cells (killed externally,
                         # or it crashed after the last cell): announce, then
                         # cold-start beneath this same call.
-                        self._park_with_obituary(
+                        await self._park_with_obituary(
                             state,
                             summary=None,
                             reason="the previous kernel died before this cell",
@@ -295,7 +397,7 @@ class PersistentKernelManager:
                         # never retried (the caller asked for the opposite).
                         # The retry is disclosed below: a cell that already
                         # had side effects may have run them twice.
-                        self._park_with_obituary(
+                        await self._park_with_obituary(
                             state,
                             summary=None,
                             reason="the previous kernel died mid-cell",
@@ -327,7 +429,7 @@ class PersistentKernelManager:
                     if result.status == "timeout":
                         # Unknown kernel state after a timeout: reset now so
                         # the notice is ready for the next call.
-                        self._park_with_obituary(
+                        await self._park_with_obituary(
                             state,
                             summary=None,
                             reason="the previous kernel was reset after a cell timeout",
@@ -389,15 +491,29 @@ class PersistentKernelManager:
                     _log.exception("figure registration failed: %s", path)
             return artifact_id, "figure"
 
-        kernel = SessionKernel(
-            state.session_id,
-            workspace=self.workspace,
-            python=self.python,
-            limits=self.limits,
-            on_figure=_on_figure,
-            language=state.language,
-        )
-        await asyncio.to_thread(kernel.start)
+        if state.location != "local":
+            # The remote half owns everything a far-away process needs —
+            # the environment, the launch, the tunnel, the attach — and
+            # raises on a host that refuses; a refusal here is a failed
+            # cell, never a quiet fallback to a local kernel.
+            kernel = await self.remote_runtime.start(
+                state.session_id,
+                host=state.location[len("remote:"):],
+                workspace=self.workspace,
+                limits=self.limits,
+                on_figure=_on_figure,
+                language=state.language,
+            )
+        else:
+            kernel = SessionKernel(
+                state.session_id,
+                workspace=self.workspace,
+                python=self.python,
+                limits=self.limits,
+                on_figure=_on_figure,
+                language=state.language,
+            )
+            await asyncio.to_thread(kernel.start)
         state.kernel = kernel
         state.born_at = time.time()
         state.cells = 0
@@ -452,7 +568,7 @@ class PersistentKernelManager:
             # returned, which is exactly when the flag has done its job.
             state.resetting = False
             if state.kernel is kernel:
-                self._park_with_obituary(
+                await self._park_with_obituary(
                     state,
                     summary=None,
                     reason="the kernel was reset after an unresponsive interrupt",
@@ -474,14 +590,20 @@ class PersistentKernelManager:
 
     # ---- recycling and death ----
 
-    def _park_with_obituary(
+    async def _park_with_obituary(
         self, state: SessionState, *, summary: str | None, reason: str
     ) -> None:
-        """Kill (if anything is left) and leave an obituary for the next cell."""
+        """Kill (if anything is left) and leave an obituary for the next cell.
+
+        The kill runs on a worker thread: a local kill is an instant
+        ``os.killpg``, but a remote kill is an ssh round trip, and this
+        method is reached from the event loop (execute, the cancel
+        ladder, the reaper) — the one place a blocking subprocess must
+        never run."""
         kernel = state.kernel
         if kernel is not None:
             try:
-                kernel.kill()
+                await asyncio.to_thread(kernel.kill)
             finally:
                 state.kernel = None
         dropped = self.handles.drop_session(state.session_id)
@@ -519,7 +641,7 @@ class PersistentKernelManager:
                 summary = outcome.stdout.strip()[:4000] or None
             except Exception:  # noqa: BLE001 - the summary is best-effort
                 _log.exception("namespace summary failed for %s", state.session_id)
-        self._park_with_obituary(state, summary=summary, reason=reason)
+        await self._park_with_obituary(state, summary=summary, reason=reason)
         _log.info("recycled kernel of session %s (%s)", state.session_id, reason)
 
     # ---- shutdown ----

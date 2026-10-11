@@ -32,6 +32,7 @@ from omicsclaw.entry.desktop.wire_contract import (  # noqa: E402
     SERVED_PATHS,
 )
 from omicsclaw.entry.session import attach_sessions  # noqa: E402
+from omicsclaw.kernel.session import r_available  # noqa: E402
 from omicsclaw.schema import Message, Role  # noqa: E402
 from tests.entry.test_turn_runner import (  # noqa: E402
     Asking,  # type: ignore[import-not-found]
@@ -964,6 +965,8 @@ def test_health_advertises_optional_capabilities_without_changing_v3(tmp_path):
         'files_tree': True,
         'files_serve': True,
         'artifacts': True,
+        'kernel': True,
+        'kernel_r': r_available(),
     }
     assert payload['contracts']['desktop_chat']['request_schema_version'] == 3
     assert payload['contracts']['desktop_chat']['sse_schema_version'] == 3

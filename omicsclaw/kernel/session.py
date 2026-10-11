@@ -418,10 +418,15 @@ class SessionKernel:
         provisioner = getattr(manager, "provisioner", None)
         pid = getattr(provisioner, "pid", None)
         pgid = getattr(provisioner, "pgid", None)
+        # A pid of zero or less is a broadcast id to os.kill, not a
+        # process: ``os.kill(-1, SIGKILL)`` signals everything the caller
+        # may. A provisioner reporting one is broken, and the honest
+        # response is to signal nothing — the same refusal the remote
+        # kernel's _valid_pid makes at every one of its splice sites.
         try:
-            if pgid and pgid != os.getpgrp():
+            if pgid and pgid > 0 and pgid != os.getpgrp():
                 os.killpg(pgid, signal.SIGKILL)
-            elif pid:
+            elif pid and pid > 0:
                 os.kill(pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
             pass

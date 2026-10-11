@@ -492,6 +492,19 @@ def test_conda_forge_wrmisc_builds_do_not_target_r43():
     assert "r-wrmisc" not in dependencies
 
 
+def _script_env():
+    """os.environ minus the conda variables that would point the
+    script's candidate_env_dirs at the *host's* real environments —
+    CONDA_ROOT/CONDA_ENVS_PATH are honoured inputs of 0_setup_env.sh,
+    and a test run under ``conda run`` inherits the host's CONDA_ROOT,
+    which finds a real same-named prefix and flips the script into
+    update-by-prefix mode the stubs do not speak."""
+    env = os.environ.copy()
+    env.pop("CONDA_ROOT", None)
+    env.pop("CONDA_ENVS_PATH", None)
+    return env
+
+
 def test_setup_env_falls_back_when_mamba_env_listing_is_broken(tmp_path):
     repo_root = Path(__file__).resolve().parents[1]
     fake_bin = tmp_path / "bin"
@@ -581,7 +594,7 @@ def test_setup_env_falls_back_when_mamba_env_listing_is_broken(tmp_path):
     (fake_bin / "mamba").chmod(0o755)
     (fake_bin / "conda").chmod(0o755)
 
-    env = os.environ.copy()
+    env = _script_env()
     env.update(
         {
             "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
@@ -684,7 +697,7 @@ def test_setup_env_uses_private_conda_package_cache_by_default(tmp_path):
     (fake_bin / "mamba").chmod(0o755)
     (fake_bin / "conda").chmod(0o755)
 
-    env = os.environ.copy()
+    env = _script_env()
     env.update(
         {
             "HOME": str(fake_home),
@@ -793,7 +806,7 @@ def test_setup_env_allows_upstream_spagcn_sklearn_placeholder(tmp_path):
     (fake_bin / "mamba").chmod(0o755)
     (fake_bin / "conda").chmod(0o755)
 
-    env = os.environ.copy()
+    env = _script_env()
     env.update(
         {
             "HOME": str(fake_home),
@@ -916,7 +929,7 @@ def test_setup_env_updates_existing_named_prefix_missing_from_env_list(tmp_path)
     (fake_bin / "mamba").chmod(0o755)
     (fake_bin / "conda").chmod(0o755)
 
-    env = os.environ.copy()
+    env = _script_env()
     env.update(
         {
             "HOME": str(fake_home),
@@ -1046,7 +1059,7 @@ def test_setup_env_updates_anonymous_env_list_prefix(tmp_path):
     (fake_bin / "mamba").chmod(0o755)
     (fake_bin / "conda").chmod(0o755)
 
-    env = os.environ.copy()
+    env = _script_env()
     env.update(
         {
             "HOME": str(fake_home),
@@ -1224,7 +1237,7 @@ def _write_torch_backend_setup_fakes(
     (fake_bin / "conda").chmod(0o755)
     (fake_bin / "nvidia-smi").chmod(0o755)
 
-    env = os.environ.copy()
+    env = _script_env()
     env.update(
         {
             "HOME": str(fake_home),
