@@ -8,10 +8,13 @@ that closed that gap, and the questions it asks are the ones a diff
 cannot answer on its own:
 
 *Does a memory survive the round trip?* ``test_a_compaction_reaches_the_
-next_system_prompt`` drives one compaction with a scripted summarizer and
-then re-renders the prompt. Every assertion before it can be green while
-the loop is open at one joint — the store never written, the précis never
-rebuilt, the section holding a snapshot taken before either.
+next_model_call`` drives one compaction with a scripted summarizer and
+then asks the augmentor block for the next call's copy. Every assertion
+before it can be green while the loop is open at one joint — the store
+never written, the précis never rebuilt, the block holding a snapshot
+taken before either. ``test_a_compaction_reaches_the_prompt_when_the_
+switch_is_off`` pins the same loop through the system prompt for a
+deployment that kept the section.
 
 *Do the summarizer and the extractor stay the same decision?* They are
 two fields of one app and the extractor needs the first. Building it once
@@ -39,7 +42,7 @@ from typing import Sequence
 
 import pytest
 
-from omicsclaw.context import Pressure
+from omicsclaw.context import Pressure, VolatileBlock
 from omicsclaw.entry import assembly
 from omicsclaw.entry.assembly import (
     build_app,
@@ -50,6 +53,7 @@ from omicsclaw.entry.assembly import (
 from omicsclaw.entry.archive import ARCHIVE_READ_TOOL_NAME, ARCHIVE_SEARCH_TOOL_NAME
 from omicsclaw.entry.compaction import build_compactor
 from omicsclaw.entry.config import AppConfig
+from omicsclaw.entry.nudges import build_augmentor
 from omicsclaw.entry.memory import (
     MEMORY_SEARCH_TOOL_NAME,
     MEMORY_SECTION_KEY,
@@ -634,13 +638,38 @@ def test_the_memory_block_is_the_last_section_of_the_prompt(tmp_path, offline):
 
 
 def test_the_memory_block_is_re_read_on_every_render(tmp_path, offline):
-    """The section source is a closure, not a snapshot.
+    """The précis source is a closure, not a snapshot — in either channel.
 
-    A snapshot taken when the app was assembled would show the agent the
-    file as it was before the ``memory_write`` it just made — it would
-    reason from the version it had already replaced.
+    By default the précis rides the augmentor: the prompt never carries
+    it, and the block re-reads the file per model call, so the write
+    below is visible to the very next one.
     """
     app = build_app(_config(tmp_path))
+    try:
+        assert "## Long-term memory" not in app.prompt.render().system_prompt
+
+        memory = app.memory
+        assert memory is not None
+        _run(memory.store.add(MemoryEntry(title="t", content="leiden", importance=9)))
+        _run(memory.precis.regenerate())
+
+        (precis,) = [
+            member
+            for member in build_augmentor(app, session_id="s")._members
+            if isinstance(member, VolatileBlock)
+        ]
+        sent = _run(precis.augment((), ()))
+        assert len(sent) == 1
+        assert "leiden" in sent[0].content
+        assert "## Long-term memory" not in app.prompt.render().system_prompt
+    finally:
+        _run(_aclose(app))
+
+
+def test_an_explicitly_off_switch_keeps_the_precis_in_the_prompt(tmp_path, offline):
+    """``precis_via_augmentor=False`` restores the original layout: the
+    section re-reads the file on every render, ``memory_write`` included."""
+    app = build_app(_config(tmp_path, precis_via_augmentor=False))
     try:
         assert "## Long-term memory" not in app.prompt.render().system_prompt
 
@@ -751,13 +780,48 @@ def test_extraction_without_memory_is_simply_off(tmp_path, offline):
 # ---- the whole loop -----------------------------------------------------
 
 
-def test_a_compaction_reaches_the_next_system_prompt(tmp_path, offline):
+def test_a_compaction_reaches_the_next_model_call(tmp_path, offline):
     """The only assertion that proves the loop is closed rather than wired.
 
-    Store written, précis rebuilt, section re-read: each of the three can
+    Store written, précis rebuilt, block re-read: each of the three can
     be broken on its own with every other test in this file still green.
+    The précis rides the augmentor by default, so the next call's sent
+    copy — not the system prompt — is where the extracted fact surfaces.
     """
     app = build_app(_config(tmp_path))
+    app = dataclasses.replace(
+        app,
+        summarizer=_Summarizer(
+            {
+                "title": "域识别默认",
+                "content": "这个项目一律用 leiden 做域识别",
+                "category": "preference",
+                "importance": 9,
+            }
+        ),
+    )
+    (precis,) = [
+        member
+        for member in build_augmentor(app, session_id="s")._members
+        if isinstance(member, VolatileBlock)
+    ]
+    before = _run(precis.augment((), ()))
+    try:
+        _run(build_compactor(app).force(_history(), app.tools_snapshot))
+        after = _run(precis.augment((), ()))
+        prompt = app.prompt.render().system_prompt
+    finally:
+        _run(_aclose(app))
+
+    assert before == ()
+    assert "这个项目一律用 leiden 做域识别" in after[0].content
+    assert "这个项目一律用 leiden 做域识别" not in prompt
+
+
+def test_a_compaction_reaches_the_prompt_when_the_switch_is_off(tmp_path, offline):
+    """``precis_via_augmentor=False`` keeps the PR3 loop: the extracted
+    fact lands in the system prompt's memory section."""
+    app = build_app(_config(tmp_path, precis_via_augmentor=False))
     app = dataclasses.replace(
         app,
         summarizer=_Summarizer(
@@ -876,7 +940,9 @@ def test_open_app_sweeps_a_memory_left_by_an_earlier_process(tmp_path, offline):
     and the extractor do — so a process that ended between the two leaves
     a store the file does not describe. Starting up is when that is
     reconciled, and until it is the agent is shown the previous
-    process's idea of what it knows.
+    process's idea of what it knows. The précis rides the augmentor by
+    default, so the block's next send — not the system prompt — is where
+    the swept fact surfaces.
     """
     first = build_app(_config(tmp_path))
     assert first.memory is not None
@@ -886,9 +952,18 @@ def test_open_app_sweeps_a_memory_left_by_an_earlier_process(tmp_path, offline):
 
     app = _run(open_app(_config(tmp_path)))
     try:
-        assert "leiden" in app.prompt.render().system_prompt
+        (precis,) = [
+            member
+            for member in build_augmentor(app, session_id="s")._members
+            if isinstance(member, VolatileBlock)
+        ]
+        sent = _run(precis.augment((), ()))
+        prompt = app.prompt.render().system_prompt
     finally:
         _run(_aclose(app))
+
+    assert "leiden" in sent[0].content
+    assert "leiden" not in prompt
 
 
 def test_a_broken_memory_does_not_stop_the_process_starting(tmp_path, offline):
@@ -1019,7 +1094,7 @@ def test_an_index_that_cannot_be_brought_up_to_date_does_not_stop_start_up(
         patch.setattr(LongTermStore, broken, staticmethod(fail))
         app = _run(open_app(config))
         try:
-            prompt = app.prompt.render().system_prompt
+            precis = app.memory.precis.read()
             by_han = _search(app, "域识别")
             by_word = _search(app, "leiden")
         finally:
@@ -1036,7 +1111,7 @@ def test_an_index_that_cannot_be_brought_up_to_date_does_not_stop_start_up(
     assert len(warnings) == 1
     assert type(error).__name__ in warnings[0]
     assert str(error) not in warnings[0]
-    assert LEGACY_NOTE[0] in prompt
+    assert LEGACY_NOTE[0] in precis
     assert by_han == []
     assert by_word == [LEGACY_NOTE[0]]
     assert retried == [LEGACY_NOTE[0]]
@@ -1050,14 +1125,14 @@ def test_a_corrupt_index_does_not_stop_start_up(tmp_path, offline, caplog):
 
     app = _run(open_app(config))
     try:
-        prompt = app.prompt.render().system_prompt
+        precis = app.memory.precis.read()
         stored = _run(app.memory.store.list())
     finally:
         _run(_aclose(app))
 
     (warning,) = _index_warnings(caplog)
     assert "DatabaseError SQLITE_CORRUPT" in warning
-    assert LEGACY_NOTE[0] in prompt
+    assert LEGACY_NOTE[0] in precis
     assert [entry.title for entry in stored] == [LEGACY_NOTE[0]]
 
 

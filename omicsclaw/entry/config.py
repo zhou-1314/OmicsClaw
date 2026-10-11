@@ -308,16 +308,15 @@ class AppConfig:
     as well. ``0`` turns the reminder off. It is never given when
     :attr:`memory` is false."""
 
-    precis_via_augmentor: bool = False
+    precis_via_augmentor: bool = True
     """Whether the long-term memory précis rides the TurnAugmentor channel.
 
-    Off by default: the précis stays the system prompt's last section,
-    as it always has. When on, that section leaves the prompt and the
-    précis is re-rendered into the sent copy of each model call only
-    while its text changes — ``memory_write`` stops invalidating the
-    cached prompt prefix, at the cost of one extra message per exchange
-    boundary. The mechanism ships first; flipping the default is a
-    separate, measured decision."""
+    On by default: the précis leaves the system prompt's last section
+    and is re-rendered into the sent copy of each model call only while
+    its text changes — ``memory_write`` stops invalidating the cached
+    prompt prefix, at the cost of one extra message per exchange
+    boundary. Off restores the original layout: the précis returns to
+    the prompt's last section and the augmentor block disappears."""
 
     subagents: bool = True
     """Whether the agent may delegate a sub-task to a sub-agent.

@@ -454,8 +454,10 @@ def test_the_memory_section_leaves_with_the_precis_migration(tmp_path):
     """``precis_in_prompt=False`` drops the remembered block, nothing else.
 
     The précis migrated to the TurnAugmentor channel; a prompt that kept
-    the section would send the same text twice. The default keeps the
-    block where it always was.
+    the section would send the same text twice. The section-level default
+    stays ``True`` — :func:`build_app` passes the negation of the switch,
+    which defaults on, so a default deployment drops the block and an
+    explicitly off one keeps it.
     """
     from omicsclaw.entry.memory import MEMORY_SECTION_KEY, open_memory
 
@@ -493,6 +495,49 @@ def test_the_memory_section_leaves_with_the_precis_migration(tmp_path):
         "environment",
         MEMORY_SECTION_KEY,
     )
+
+
+def test_the_default_deployment_wires_the_precis_out_of_the_prompt(
+    tmp_path, monkeypatch
+):
+    """The switch defaults on: the default deployment's prompt has no
+    memory section even once the précis holds entries, and an explicitly
+    off deployment keeps the section — the PR3 layout."""
+    from omicsclaw.entry.memory import MEMORY_SECTION_KEY
+    from omicsclaw.memory import MemoryEntry
+
+    monkeypatch.setattr(
+        assembly, "provider_from_env", lambda provider, model: _ScriptedProvider()
+    )
+
+    async def remember(app: AgentApp) -> None:
+        assert app.memory is not None
+        await app.memory.store.add(
+            MemoryEntry(title="t", content="leiden", importance=9)
+        )
+        await app.memory.precis.regenerate()
+
+    migrated = build_app(_config(tmp_path / "migrated"))
+    try:
+        asyncio.run(remember(migrated))
+        assert migrated.config.precis_via_augmentor is True
+        assert MEMORY_SECTION_KEY not in dict(
+            migrated.prompt.render().section_stats
+        )
+        assert "leiden" not in migrated.prompt.render().system_prompt
+    finally:
+        asyncio.run(migrated.aclose())
+
+    restored = build_app(
+        _config(tmp_path / "restored", precis_via_augmentor=False)
+    )
+    try:
+        asyncio.run(remember(restored))
+        assert restored.config.precis_via_augmentor is False
+        assert MEMORY_SECTION_KEY in dict(restored.prompt.render().section_stats)
+        assert "leiden" in restored.prompt.render().system_prompt
+    finally:
+        asyncio.run(restored.aclose())
 
 
 def test_planning_off_takes_its_section_with_it(tmp_path):
