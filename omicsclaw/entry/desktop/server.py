@@ -23,7 +23,11 @@ Routes (see :data:`~omicsclaw.entry.desktop.wire_contract.SERVED_PATHS`):
 * ``POST /chat/title`` — a title for a session's first message
   (:mod:`~omicsclaw.entry.desktop.title`);
 * ``GET /files/tree`` and ``GET /files/serve`` — read-only views of the
-  workspace's files (:mod:`~omicsclaw.entry.desktop.files`).
+  workspace's files (:mod:`~omicsclaw.entry.desktop.files`);
+* ``GET``/``POST /remote/hosts`` and ``DELETE /remote/hosts/{alias}`` —
+  the remote-execution host knowledge base
+  (:mod:`~omicsclaw.entry.desktop.remote_hosts`), answering
+  ``503 remote_execution_disabled`` on a deployment with no plane bound.
 
 A ``/chat/stream`` message whose content is exactly ``/compact`` compacts
 the session's history instead of being sent to the model. A
@@ -97,6 +101,7 @@ from .interactions import (
 )
 from .artifacts import mount_artifacts_routes
 from .jobs import mount_jobs_routes
+from .remote_hosts import mount_remote_host_routes
 from .jobs_manager import JobsManager
 from .providers import SettingsFile, provider_listing, save_provider, test_provider
 from .title import generate_title
@@ -386,7 +391,18 @@ def health_payload(app: AgentApp) -> dict[str, Any]:
         "version": __version__,
         "backend_process_epoch": BACKEND_PROCESS_EPOCH,
         "connection_epoch": CONNECTION_EPOCH,
-        "capabilities": {**DESKTOP_CAPABILITIES, "kernel_r": r_available()},
+        "capabilities": {
+            **DESKTOP_CAPABILITIES,
+            "kernel_r": r_available(),
+            # C1's product switch, as this process actually runs it: the
+            # plane exists exactly when ``remote_execution`` was on and the
+            # store opened (``build_app`` binds ``app.remote``), so this is
+            # "the remote tools, the remote jobs runtime and the
+            # ``/remote/hosts`` face are all live" — the same per-app fact
+            # ``kernel_r`` is, and additive in the health payload the same
+            # way: a client that does not know the key ignores it.
+            "remote_execution": getattr(app, "remote", None) is not None,
+        },
         "build": dict(build_identity()),
         "provider": app.provider.name,
         "model": effective_model(app),
@@ -801,6 +817,9 @@ def create_desktop_app(
         return health_payload(app)
 
     mount_jobs_routes(api, jobs, authorized=_authorized)
+    mount_remote_host_routes(
+        api, getattr(app, "remote", None), authorized=_authorized
+    )
     mount_artifacts_routes(api, artifacts, jobs=jobs, authorized=_authorized)
 
     return api

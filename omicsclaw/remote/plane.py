@@ -542,6 +542,23 @@ class RemotePlaneBinding:
         """The handle store — the reconciler's and the bridge's entry point."""
         return self._jobs
 
+    def host_store(self) -> RemoteHostStore:
+        """The host knowledge base — the REST face's read/delete entry point."""
+        return self._hosts
+
+    def list_host_cards(self) -> list[HostCard]:
+        """Every stored host as a card, alias-ordered. Reads only.
+
+        The synchronous twin of :meth:`probe_card`: a list view is
+        answered from what the knowledge base already holds, so it never
+        opens a socket on an event loop's behalf — the same line
+        :meth:`host_card` draws.
+        """
+        return [
+            self._card_from_record(record)
+            for record in self._hosts.list_records()
+        ]
+
     def executor_for(self, host_alias: str) -> RemoteExecutor:
         """An executor for a stored alias; the reconciler's transport."""
         return RemoteExecutor(host_alias, self._spawner)
